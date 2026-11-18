@@ -22,15 +22,16 @@ import (
 type deletionCall struct {
 	tenant, token string
 	at            time.Time
+	incarnation   uint64
 }
 type deletionFake struct {
 	calls []deletionCall
 	err   error
 }
 
-func (f *deletionFake) CancelDeletedDeviceCommands(ctx context.Context, token string, at time.Time) (int64, error) {
+func (f *deletionFake) CancelDeletedDeviceCommands(ctx context.Context, token string, incarnation uint64, at time.Time) (int64, error) {
 	tenant, _ := core.TenantFromContext(ctx)
-	f.calls = append(f.calls, deletionCall{tenant, token, at})
+	f.calls = append(f.calls, deletionCall{tenant, token, at, incarnation})
 	return 3, f.err
 }
 
@@ -41,6 +42,7 @@ func TestDeletionConsumerAppliesDeviceFactsAndSettlesPoison(t *testing.T) {
 		kind          entity.Type
 		token         string
 		at            time.Time
+		incarnation   uint64
 		poison, fail  bool
 		calls, acks   int
 	}{
@@ -58,7 +60,7 @@ func TestDeletionConsumerAppliesDeviceFactsAndSettlesPoison(t *testing.T) {
 				api.err = errors.New("database is down")
 			}
 			rc := NewDeletionConsumer(&core.Microservice{InstanceId: "inst", FunctionalArea: "command-delivery"}, nil, core.NewNoOpLifecycleCallbacks(), api, nil)
-			payload, err := entityevent.MarshalEntityDeletedEvent(&entityevent.EntityDeletedEvent{EntityType: tc.kind, EntityToken: tc.token, DeletedTime: tc.at})
+			payload, err := entityevent.MarshalEntityDeletedEvent(&entityevent.EntityDeletedEvent{EntityType: tc.kind, EntityId: 17, EntityToken: tc.token, DeletedTime: tc.at})
 			require.NoError(t, err)
 			if tc.poison {
 				payload = []byte("not-proto\xff")
@@ -68,7 +70,7 @@ func TestDeletionConsumerAppliesDeviceFactsAndSettlesPoison(t *testing.T) {
 			assert.Equal(t, tc.acks, ack.n)
 			require.Len(t, api.calls, tc.calls)
 			if tc.calls > 0 {
-				assert.Equal(t, deletionCall{"acme", tc.token, tc.at}, api.calls[0])
+				assert.Equal(t, deletionCall{"acme", tc.token, tc.at, 17}, api.calls[0])
 			}
 		})
 	}

@@ -66,15 +66,15 @@ type gate struct {
 	refuse *model.EnqueueRejected
 }
 
-func (g gate) ValidateEnqueue(_ context.Context, device, _ string, _ []byte) ([]string, error) {
+func (g gate) ValidateEnqueue(_ context.Context, device, _ string, _ []byte) ([]string, uint64, error) {
 	anchors, ok := g.owners[device]
 	if !ok {
-		return nil, &model.EnqueueRejected{Code: "DEVICE_NOT_FOUND", Reason: fmt.Sprintf("device %q does not exist", device)}
+		return nil, 0, &model.EnqueueRejected{Code: "DEVICE_NOT_FOUND", Reason: fmt.Sprintf("device %q does not exist", device)}
 	}
 	if g.refuse != nil {
-		return append([]string{}, anchors...), g.refuse
+		return append([]string{}, anchors...), 0, g.refuse
 	}
-	return append([]string{}, anchors...), nil
+	return append([]string{}, anchors...), 0, nil
 }
 
 // scopeFixture: tenant A with an Acme device, a Globex device and a device both own; and a

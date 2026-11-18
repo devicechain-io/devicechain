@@ -219,18 +219,65 @@ func TestUnclassifiedAlarmsAreWithheld(t *testing.T) {
 
 // TestClassifierMatchesTheMigration: the service's classifier and the migration's literal copy
 // are one statement. The migration names the area's tables schema-qualified and the service relies
-// on search_path; with that qualifier removed they must agree, word for word. The control: a copy
-// with any token changed must NOT agree, so the comparison is not vacuous.
+// on search_path; with that qualifier removed they must agree, word for word. The copy compared is
+// the stamping one (migration_alarm_position_stamp.go), the latest the service runs. The control: a
+// copy with any token changed must NOT agree, so the comparison is not vacuous, and the earlier,
+// unstamped copy must not agree either, so a service that dropped the stamp would be seen.
 func TestClassifierMatchesTheMigration(t *testing.T) {
-	service, migration := normalizeClassifierSQL(classifyAlarmsSQL), normalizeClassifierSQL(schema.AlarmPositionClassifySQL)
+	service, migration := normalizeClassifierSQL(classifyAlarmsSQL), normalizeClassifierSQL(schema.AlarmPositionClassifyStampedSQL)
 	if service != migration {
 		t.Fatalf("the classifier and the migration diverged:\nservice:   %s\nmigration: %s", service, migration)
 	}
-	if !strings.Contains(migration, "v.snapshot -> 'rules'") || !strings.Contains(migration, "s.found = 0") {
+	if !strings.Contains(migration, "v.snapshot -> 'rules'") || !strings.Contains(migration, "s.found = 0") ||
+		!strings.Contains(migration, "position_classified_version = a.contributor_version") {
 		t.Fatalf("the comparison must cover the statement's body: %s", migration)
 	}
-	altered := strings.Replace(schema.AlarmPositionClassifySQL, "s.found = 0", "s.found = 1", 1)
+	altered := strings.Replace(schema.AlarmPositionClassifyStampedSQL, "s.found = 0", "s.found = 1", 1)
 	if normalizeClassifierSQL(altered) == service {
 		t.Fatalf("normalizing must not erase a real difference")
 	}
+	if normalizeClassifierSQL(schema.AlarmPositionClassifySQL) == service {
+		t.Fatalf("the service must run the stamping classifier, not the one the column's migration ran")
+	}
+}
+
+// TestClassificationIsStampedWithItsContributorVersion: every verdict the integrator writes says
+// which contributor set it was decided for, a false verdict on the edge carries a current stamp
+// forward with the fold, and a stamp that is already behind (an older replica folded in between,
+// bumping the version without knowing the stamp) stays behind rather than being refreshed by the
+// next fold, so the database's stale-false trigger still sees it.
+func TestClassificationIsStampedWithItsContributorVersion(t *testing.T) {
+	api := newWithholdingTestApi(t)
+	ctx := core.WithTenant(context.Background(), "t1")
+	stampOf := func(key string) (uint, *uint) {
+		t.Helper()
+		a := loadAlarm(t, api, ctx, key)
+		return a.ContributorVersion, a.PositionClassifiedVersion
+	}
+	requireStamp := func(key string, want uint) {
+		t.Helper()
+		v, s := stampOf(key)
+		if s == nil || *s != want {
+			t.Fatalf("%s: stamp = %v at contributor version %d, want %d", key, s, v, want)
+		}
+	}
+
+	raiseWithPosition(t, api, "k", "p/temp", 10, verdict(false))
+	requireStamp("k", 1)
+	raiseWithPosition(t, api, "k", "p/temp2", 11, verdict(false))
+	requireStamp("k", 2)
+
+	// What a replica older than the stamp writes on a fold: the set and the version, nothing else.
+	if err := api.RDB.DB(ctx).Exec(`UPDATE alarms SET contributor_version = contributor_version + 1 WHERE alarm_key = 'k'`).Error; err != nil {
+		t.Fatalf("simulate an older replica's fold: %v", err)
+	}
+	raiseWithPosition(t, api, "k", "p/temp3", 12, verdict(false))
+	if v, s := stampOf("k"); s == nil || *s != 2 || v != 4 {
+		t.Fatalf("a stamp behind the version must stay behind: stamp %v at version %d", s, v)
+	}
+
+	raiseWithPosition(t, api, "fence", "p/fence", 10, verdict(true))
+	requireStamp("fence", 1)
+	raiseWithPosition(t, api, "fence", "p/temp", 11, verdict(true))
+	requireStamp("fence", 2)
 }

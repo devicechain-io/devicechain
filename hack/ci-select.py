@@ -513,6 +513,11 @@ class Selection:
         self.migrations = True
         self.migrations_why = "runs: everything runs"
         self.draft = False
+        # The race step's scope on a pull request: {module: set of package dirs to race}, a module
+        # missing from it racing nothing; None races every leg in full. See race_select.
+        self.race = None
+        self.race_full = {}        # module -> why its legs race in full anyway (doubt)
+        self.race_why = "full: everything runs"
 
     def everything(self, why):
         self.full = True
@@ -693,6 +698,114 @@ def migrations_verdict(s, files, graph):
     s.migrations_why = "skipped: no changed file reaches the %d packages migration-diff.sh compiles, or its operand image" % len(closure)
 
 
+# ---------------------------------------------------------------------------------------------
+# The race step on a pull request: which packages it covers
+# ---------------------------------------------------------------------------------------------
+# The race detector was 59% of every Go leg's minutes, and on pull requests only 21% of those
+# minutes were in a module with a changed Go file at all: a change to core raced every module that
+# requires it, whole, on every pull request. On a pull request the race step therefore covers
+# only the packages that hold a changed file and the packages that DIRECTLY import one of them
+# (through their code or their tests), across modules. The plain `go test` step is untouched: it
+# still runs every package of every selected leg. Every other event races everything, and the
+# main run is the net for a race this narrower scope does not reach.
+#
+# 🔴 WHY ONE LEVEL OF IMPORTERS AND NOT THE CLOSURE. Replayed over 80 merged pull requests (70
+# of them narrowable) with the measured per-leg race minutes, direct importers cut the race minutes
+# by at least 30% (partial legs at full cost; ~42% scaling them by the share of packages raced),
+# and the full reverse-import closure by at least 23% (~32%): the closure of a core package reaches
+# most of the workspace. A race lives in code that runs
+# concurrently, and the tests most likely to drive a changed package's code concurrently are its
+# own and those of the packages written against its API, its direct importers. A race reachable
+# only through a deeper chain surfaces on main's full run instead: that is the tradeoff the
+# maintainer accepted, for this step only. Widening to the closure is a change to race_select's
+# importer loop alone.
+#
+# A package whose tests READ a changed file through a READERS row races too, wherever it sits.
+#
+# FAIL SAFE, per module: a changed non-Go file (an embed, a fixture, a golden file, a Go file
+# under testdata/) races its module in full, because any package of the module can read it
+# through a relative path no graph records; so does a Go file in a directory that is no package
+# of this tree (a package was deleted or moved). A full selection, no package graph, or any
+# exception in here races everything.
+_IGNORED_DIR = re.compile(r"(^|/)(testdata|vendor|node_modules)(/|$)|(^|/)[._][^/]*(/|$)")
+
+
+def race_select(ws, s, files, graph):
+    """Sets s.race ({module: set of package dirs}, or None for everything) and s.race_full."""
+    s.race, s.race_full = None, {}
+    if s.full:
+        s.race_why = "full: everything runs"
+        return
+    if graph is None:
+        s.race_why = "full: no package graph to decide from"
+        return
+    try:
+        changed = set()
+        readers = set()
+        for f in files:
+            # A package whose tests READ the file (a READERS row) races, whether or not its module
+            # runs whole and whatever leg (a shard included) carries it: no import edge shows it.
+            for module, pkg, globs, excl, _ in READERS:
+                if match(f, globs) and not match(f, excl):
+                    readers.add(module if norm_pkg(pkg) == "." else module + "/" + norm_pkg(pkg))
+            owner = ws.owner(f)
+            if not owner:
+                continue
+            d = os.path.dirname(f)
+            if not f.endswith(".go") or _IGNORED_DIR.search("" if d == owner else os.path.relpath(d, owner).replace("\\", "/") + "/"):
+                # A non-Go file (or a Go file go ignores, under testdata/ and the like): an embed,
+                # a fixture or a golden file can be read by ANY package of its module, through a
+                # relative path no graph records (dc-edge-agent's agent tests read ../dashboards).
+                s.race_full.setdefault(owner, "%s is not Go source, and no graph says which tests read it" % f)
+                continue
+            if d not in graph.pkgs:
+                s.race_full.setdefault(owner, "%s is in no package of this tree (a deleted or moved package?)" % f)
+                continue
+            changed.add(d)
+        importers = set()
+        for p, (imps, timps) in graph.pkgs.items():
+            if changed & (imps | timps):
+                importers.add(p)
+        race = {}
+        for p in changed | importers | readers:
+            m = ws.owner(p)
+            if m:
+                race.setdefault(m, set()).add(p)
+        s.race = race
+        s.race_changed = changed
+        s.race_why = "changed: %d changed package(s), %d direct importer(s), %d reader package(s), in %d module(s); %d module(s) in full" % (
+            len(changed), len(importers - changed), len(readers - changed - importers), len(race), len(s.race_full))
+    except Exception as e:  # noqa: BLE001 - doubt races everything
+        s.race, s.race_full = None, {}
+        s.race_why = "full: the race selection failed (%s: %s)" % (type(e).__name__, e)
+
+
+def apply_race(s, go):
+    """Annotate each go leg with race_scope (all | changed | none) and race_pkgs."""
+    for leg in go:
+        leg["race_scope"], leg["race_pkgs"] = "all", ""
+        if s.race is None or s.full:
+            continue
+        m = leg["module"]
+        if m in s.race_full or leg["leg"] == "readers":
+            # Doubt, or a reader leg: its packages were selected because a file their tests read
+            # changed, which no import edge describes. Its packages are few; race them all.
+            continue
+        mine = s.race.get(m, set())
+        rel = {"." if p == m else os.path.relpath(p, m).replace("\\", "/") for p in mine}
+        if leg["shard"]:
+            # A shard runs one split package (its share of the tests): all of it, or none.
+            if leg["pkgs"] not in {pkg_arg(r) for r in rel}:
+                leg["race_scope"] = "none"
+            continue
+        split = {norm_pkg(p) for p in SPLITS.get(m, {})}
+        want = sorted(r for r in rel if r not in split)
+        if not want:
+            leg["race_scope"] = "none"
+        else:
+            leg["race_scope"], leg["race_pkgs"] = "changed", " ".join(pkg_arg(r) for r in want)
+
+
 def select(ws, changed_files, graph=None):
     s = Selection()
     files = [f.strip().replace("\\", "/") for f in changed_files if f.strip()]
@@ -733,6 +846,7 @@ def select(ws, changed_files, graph=None):
         if m in whole:
             del s.readers[m]
     migrations_verdict(s, files, graph)
+    race_select(ws, s, files, graph)
     return s
 
 
@@ -979,6 +1093,7 @@ def plan(ws, s, integration_plan, smoke_all=(), files=()):
             go.extend(legs_for(m))
         elif m in s.readers:
             go.extend(legs_for(m, list(s.readers[m])))
+    apply_race(s, go)
     integ_modules = set(s.modules)
     for m, pkgs in s.readers.items():
         if any(has_integration(m, p) for p in pkgs):
@@ -1019,7 +1134,11 @@ def report(ws, s, go, integ, integration_plan, smoke=(), smoke_all=(), out=sys.s
                 p("  SKIPPED  %-45s no changed file is in it, in a module it requires, or read by its tests" % m)
     p("go legs: %d" % len(go))
     for g in go:
-        p("  %-45s %-24s static=%s %s%s" % (g["module"], g["leg"] or "-", str(g["static"]).lower(), g["pkgs"] or "./...", (" minus " + g["exclude"]) if g["exclude"] else ""))
+        p("  %-45s %-24s static=%s %s%s  race=%s%s" % (g["module"], g["leg"] or "-", str(g["static"]).lower(), g["pkgs"] or "./...", (" minus " + g["exclude"]) if g["exclude"] else "",
+                                                      g.get("race_scope", "all"), (" " + g["race_pkgs"]) if g.get("race_pkgs") else ""))
+    p("race: " + s.race_why)
+    for m, why in sorted(s.race_full.items()):
+        p("  full     %-45s %s" % (m, why))
     kept = {l["name"] for l in integ}
     p("integration legs: %d of %d" % (len(integ), len(integration_plan)))
     for l in integration_plan:
@@ -1078,6 +1197,8 @@ def cmd_plan():
         raise RuntimeError("a full run planned %d integration legs of %d" % (len(integ), len(integration_plan)))
     if s.full and not s.draft and smoke != smoke_all:
         raise RuntimeError("a full run planned %d image-smoke legs of %d" % (len(smoke), len(smoke_all)))
+    if (s.full or event != "pull_request") and any(g["race_scope"] != "all" for g in go):
+        raise RuntimeError("a %s run narrowed the race step" % ("full" if s.full else event))
     if event != "pull_request" and s.draft:
         raise RuntimeError("a %s run was planned as a draft" % event)
     report(ws, s, go, integ, integration_plan, smoke, smoke_all)
@@ -1238,6 +1359,8 @@ def cmd_replay(shas):
             print("  reader packages: %s" % (", ".join("%s:%s" % (m.split("/")[-1], ",".join(sorted(p))) for m, p in sorted(s.readers.items())) or "-"))
         print("  go legs: %d   integration legs: %d of %d (%s)   frontend: %s" % (
             len(go), len(integ), len(integration_plan), " ".join(l["name"] for l in integ) or "-", "run" if s.frontend else "skip"))
+        scopes = [g["race_scope"] for g in go]
+        print("  race: %s; legs all=%d changed=%d none=%d" % (s.race_why, scopes.count("all"), scopes.count("changed"), scopes.count("none")))
         print("  image-smoke legs: %d of %d (%s)" % (len(smoke), len(smoke_all), " ".join(m.split("/")[-1] for m in smoke) or "-"))
         print("  migrations: %s   codeql: %s" % (
             "run" if s.migrations else "skip",
@@ -1385,6 +1508,80 @@ def self_test():
                        "...across modules, up to the main that links it: %s" % cqp("backend/core/rdb/sub/sub.go"))
                 expect(cqp("backend/services/svc-a/x.go") == {"backend/services/svc-a": ["."]}, "a package nothing imports builds alone")
                 expect(codeql_select(ws, ["backend/core/gone/x.go"], g)[1] is None, "a Go file in no package (deleted?) analyzes everything")
+                # THE RACE SCOPE on a pull request: changed packages plus their DIRECT importers,
+                # plus the packages whose tests read a changed file. One reader row, on a SPLIT
+                # package of a module that also runs whole, is all the race cases below see.
+                saved_readers = READERS
+                READERS = [("backend/core", "messaging", ["docs/nats.md"], [], "t"),
+                           ("backend/core", "leaf", ["docs/l*"], ["docs/lx.md"], "t")]
+                def race(*fs):
+                    sel = select(ws, list(fs), g)
+                    return None if sel.race is None else {m: sorted(v) for m, v in sel.race.items()}, sel.race_full
+                expect(race("backend/core/leaf/l.go") == ({"backend/core": ["backend/core/leaf", "backend/core/sqlnull"]}, {}),
+                       "a changed package races with its direct importer, not the importer's importers: %s" % (race("backend/core/leaf/l.go"),))
+                expect(race("backend/core/testonly/t.go")[0] == {"backend/core": ["backend/core/rdb", "backend/core/testonly"]},
+                       "an importer through its TESTS counts: %s" % (race("backend/core/testonly/t.go"),))
+                expect(race("backend/core/rdb/sub/sub.go")[0] == {"backend/core": ["backend/core/rdb/sub"], "backend/tools/tool": ["backend/tools/tool"]},
+                       "importers are followed across modules: %s" % (race("backend/core/rdb/sub/sub.go"),))
+                expect("backend/core" in race("backend/core/rdb/testdata/fixture.sql")[1],
+                       "a fixture races its module in full: any package may read it by a relative path")
+                expect(race("backend/core/rdb/testdata/gen.go")[1].get("backend/core", "").endswith("is not Go source, and no graph says which tests read it"),
+                       "so does a Go file go ignores (testdata), as an input rather than a deleted package")
+                expect(race("docs/ly.md")[0] == {"backend/core": ["backend/core/leaf"]} and race("docs/lx.md") == ({}, {}),
+                       "a reader row's exclusions hold for the race scope too")
+                expect("backend/core" in race("backend/core/rdb/schema.graphql")[1], "so does a non-Go file inside a package (an embed)")
+                expect(race("docs/nats.md") == ({"backend/core": ["backend/core/messaging"]}, {}),
+                       "a file a package's tests READ races that package: %s" % (race("docs/nats.md"),))
+                expect(race("docs/nats.md", "backend/core/leaf/l.go")[0] == {"backend/core": ["backend/core/leaf", "backend/core/messaging", "backend/core/sqlnull"]},
+                       "...also when its module runs whole for another change")
+                expect(race("backend/core/deep/d_test.go")[0] == {"backend/core": ["backend/core/deep", "backend/core/sqlnull"]},
+                       "a changed test file races its package and the packages whose tests import it")
+                expect(race("docs/x.md", "frontend/a.ts") == ({}, {}), "a change outside every module that no package reads races nothing")
+                expect(race("backend/core/gone/x.go")[1].get("backend/core", "").startswith("backend/core/gone/x.go is in no package"),
+                       "a Go file in no package (deleted?) races its module in full: %s" % (race("backend/core/gone/x.go")[1],))
+                expect("backend/core" in race("backend/core/NOTES.txt")[1], "a module-level non-Go file races its module in full")
+                expect(race("hack/x.sh") == (None, {}), "a full selection races everything")
+                expect(select(ws, ["backend/core/leaf/l.go"]).race is None, "no package graph races everything")
+                # Each layer refuses a narrowed full run on its own, not only through the other.
+                full = full_selection(ws, "push")
+                race_select(ws, full, ["backend/core/leaf/l.go"], g)
+                expect(full.race is None, "race_select on a full selection races everything, whatever changed")
+                full.race = {}
+                expect(all(x["race_scope"] == "all" for x in plan(ws, full, [])[0]), "apply_race never narrows a full selection")
+                broken = select(ws, ["backend/core/leaf/l.go"], g)
+                race_select(ws, broken, ["backend/core/leaf/l.go"], object())  # a graph that raises
+                expect(broken.race is None and broken.race_why.startswith("full: the race selection failed"),
+                       "a race selection that raises races everything: %s" % broken.race_why)
+                SPLITS = {"backend/core": {"messaging": 3}}
+                sc = {(x["module"], x["leg"]): x["race_scope"] for x in plan(ws, select(ws, ["docs/nats.md", "backend/core/leaf/l.go"], g), [])[0]}
+                expect([sc[("backend/core", "messaging %d/3" % i)] for i in (1, 2, 3)] == ["all"] * 3,
+                       "the shards of a split READER package race when a file it reads changes: %s" % sc)
+                def scopes(*fs):
+                    go_, _, _ = plan(ws, select(ws, list(fs), g), [])
+                    return {(x["module"], x["leg"]): (x["race_scope"], x["race_pkgs"]) for x in go_}
+                sc = scopes("backend/core/messaging/m.go")
+                expect([sc[("backend/core", "messaging %d/3" % i)][0] for i in (1, 2, 3)] == ["all"] * 3 and sc[("backend/core", "rest")] == ("none", ""),
+                       "a changed split package races every shard of it and not the catch-all: %s" % sc)
+                expect(sc[("backend/services/svc-a", "")] == ("none", "") and sc[("backend/cli", "")] == ("none", ""),
+                       "a module selected only for REQUIRING a changed one races nothing: %s" % sc)
+                sc = scopes("backend/core/leaf/l.go")
+                expect([sc[("backend/core", "messaging %d/3" % i)][0] for i in (1, 2, 3)] == ["none"] * 3
+                       and sc[("backend/core", "rest")] == ("changed", "./leaf/ ./sqlnull/"),
+                       "the catch-all races exactly the changed packages and their importers, minus the split ones: %s" % sc)
+                sc = scopes("backend/services/svc-a/x.go")
+                expect(sc[("backend/services/svc-a", "")] == ("changed", ".") and sc[("backend/services/svc-b", "")] == ("none", ""),
+                       "a module-root package races as '.', and its dependant module, importing nothing of it, races nothing: %s" % sc)
+                sc = scopes("backend/core/gone/x.go", "backend/services/svc-a/x.go")
+                expect(all(v == ("all", "") for (m, _), v in sc.items() if m == "backend/core") and sc[("backend/services/svc-a", "")] == ("changed", "."),
+                       "doubt is per module: core races in full, svc-a only what changed: %s" % sc)
+                READERS = saved_readers
+                sc = scopes("docs/docs/x.md")
+                expect(sc.get(("backend/cli", "readers")) == ("all", ""), "a readers leg races its packages in full: %s" % sc)
+                sc = {k: v for k, v in scopes("hack/x.sh").items()}
+                expect(sc and all(v == ("all", "") for v in sc.values()), "a full selection races every leg in full")
+                s_full = full_selection(ws, "push")
+                expect(all(x["race_scope"] == "all" for x in plan(ws, s_full, [])[0]), "a non-pull-request plan races every leg in full")
+                SPLITS = {"backend/core": {"messaging": 3}}
                 # A deleted package that a root still imports: unknown, so they run.
                 with open(os.path.join(tmp, "backend/core/leaf/l2.go"), "w", encoding="utf-8") as fh:
                     fh.write('package leaf\n\nimport "example.com/core/gone"\n')

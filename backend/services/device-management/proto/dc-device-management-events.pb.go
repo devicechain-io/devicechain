@@ -582,12 +582,16 @@ func (x *PDeviceAttributeEvent) GetUpdatedAt() string {
 // harmless. An empty set means the device is owned by nobody. The tenant travels on the
 // per-tenant subject, not in the payload. At-most-once, like the other control facts.
 type PDeviceOwnershipChangedEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	DeviceToken   string                 `protobuf:"bytes,1,opt,name=device_token,json=deviceToken,proto3" json:"device_token,omitempty"`
-	Anchors       []string               `protobuf:"bytes,2,rep,name=anchors,proto3" json:"anchors,omitempty"`
-	ChangedTime   string                 `protobuf:"bytes,3,opt,name=changed_time,json=changedTime,proto3" json:"changed_time,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	DeviceToken string                 `protobuf:"bytes,1,opt,name=device_token,json=deviceToken,proto3" json:"device_token,omitempty"`
+	Anchors     []string               `protobuf:"bytes,2,rep,name=anchors,proto3" json:"anchors,omitempty"`
+	ChangedTime string                 `protobuf:"bytes,3,opt,name=changed_time,json=changedTime,proto3" json:"changed_time,omitempty"`
+	// device_incarnation is device-management's row id of the device, so device-state applies
+	// the fact only to the live view of that device and not to a successor at the same token.
+	// 0 means unknown (a fact from a producer that predates the field).
+	DeviceIncarnation uint64 `protobuf:"varint,4,opt,name=device_incarnation,json=deviceIncarnation,proto3" json:"device_incarnation,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *PDeviceOwnershipChangedEvent) Reset() {
@@ -639,6 +643,13 @@ func (x *PDeviceOwnershipChangedEvent) GetChangedTime() string {
 		return x.ChangedTime
 	}
 	return ""
+}
+
+func (x *PDeviceOwnershipChangedEvent) GetDeviceIncarnation() uint64 {
+	if x != nil {
+		return x.DeviceIncarnation
+	}
+	return 0
 }
 
 var File_proto_dc_device_management_events_proto protoreflect.FileDescriptor
@@ -699,11 +710,12 @@ const file_proto_dc_device_management_events_proto_rawDesc = "" +
 	"\x05value\x18\x04 \x01(\x01R\x05value\x12\x18\n" +
 	"\aremoved\x18\x05 \x01(\bR\aremoved\x12\x1d\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\tR\tupdatedAt\"~\n" +
+	"updated_at\x18\x06 \x01(\tR\tupdatedAt\"\xad\x01\n" +
 	"\x1cPDeviceOwnershipChangedEvent\x12!\n" +
 	"\fdevice_token\x18\x01 \x01(\tR\vdeviceToken\x12\x18\n" +
 	"\aanchors\x18\x02 \x03(\tR\aanchors\x12!\n" +
-	"\fchanged_time\x18\x03 \x01(\tR\vchangedTimeB\bZ\x06/protob\x06proto3"
+	"\fchanged_time\x18\x03 \x01(\tR\vchangedTime\x12-\n" +
+	"\x12device_incarnation\x18\x04 \x01(\x04R\x11deviceIncarnationB\bZ\x06/protob\x06proto3"
 
 var (
 	file_proto_dc_device_management_events_proto_rawDescOnce sync.Once

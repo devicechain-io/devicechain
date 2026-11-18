@@ -38,14 +38,14 @@ var peerAnswers = peerDown
 
 type failingEnqueueValidator struct{}
 
-func (failingEnqueueValidator) ValidateEnqueue(context.Context, string, string, []byte) ([]string, error) {
-	return nil, peerAnswers
+func (failingEnqueueValidator) ValidateEnqueue(context.Context, string, string, []byte) ([]string, uint64, error) {
+	return nil, 0, peerAnswers
 }
 
 type failingBatchValidator struct{}
 
-func (failingBatchValidator) ValidateEnqueueBatch(context.Context, []string, string, []byte) ([]BatchDeviceRefusal, error) {
-	return nil, peerAnswers
+func (failingBatchValidator) ValidateEnqueueBatch(context.Context, []string, string, []byte) ([]BatchDeviceRefusal, map[string]uint64, error) {
+	return nil, nil, peerAnswers
 }
 
 type failingScheduler struct{}
@@ -56,8 +56,8 @@ func (failingScheduler) ScheduleDispatch(context.Context, []string, string, sql.
 
 type passingEnqueueValidator struct{}
 
-func (passingEnqueueValidator) ValidateEnqueue(context.Context, string, string, []byte) ([]string, error) {
-	return nil, nil
+func (passingEnqueueValidator) ValidateEnqueue(context.Context, string, string, []byte) ([]string, uint64, error) {
+	return nil, 0, nil
 }
 
 func assertUnavailable(t *testing.T, err error) {

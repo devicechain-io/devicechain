@@ -256,3 +256,107 @@ func TestPositionWithholdingOnPostgres(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res.Results, 1, "a scoped member without location:read does not")
 }
+
+// olderReplicaFold folds a contributor into an alarm as a device-management replica of the previous
+// release does: the contributor set and contributor_version under the version CAS, and nothing
+// about the position classification, which that release does not know.
+func olderReplicaFold(t *testing.T, db *gorm.DB, tenant, key, contributor string) {
+	t.Helper()
+	res := db.Exec(`UPDATE "device-management".alarms
+		   SET contributors = contributors || ?::jsonb, contributor_version = contributor_version + 1, updated_at = now()
+		 WHERE tenant_id = ? AND alarm_key = ? AND state = 'ACTIVE'`,
+		fmt.Sprintf(`{%q:{"tier":"MAJOR","active":true}}`, contributor), tenant, key)
+	require.NoError(t, res.Error)
+	require.EqualValues(t, 1, res.RowsAffected)
+}
+
+func stampOf(t *testing.T, db *gorm.DB, tenant, key string) (version int64, stamp sql.NullInt64) {
+	t.Helper()
+	require.NoError(t, db.Raw(`SELECT contributor_version, position_classified_version FROM "device-management".alarms WHERE tenant_id = ? AND alarm_key = ?`,
+		tenant, key).Row().Scan(&version, &stamp))
+	return version, stamp
+}
+
+// TestAnOlderReplicasFoldIntoAFalseAlarmIsHealed: during a rolling upgrade a replica of the
+// previous release folds a geofence rule's edge into an alarm this release already classified
+// false. The fold is withheld the moment it is written (the stale-false trigger), and one
+// classification pass marks it. Controls: an older replica's fold of a rule that tests no fence is
+// withheld only until that pass and is then false again; this release's own false fold is not
+// withheld at all; and with the trigger dropped the same geofence fold stays false through the
+// pass, which is the defect this guards.
+func TestAnOlderReplicasFoldIntoAFalseAlarmIsHealed(t *testing.T) {
+	mgr := newPostgresRdbManager(t)
+	db := mgr.Database
+	tenant := fmt.Sprintf("or-%d", time.Now().UnixNano())
+	positionRig(t, db, tenant, tenant+"-other")
+	api := NewApi(mgr)
+	ctx := core.WithTenant(context.Background(), tenant)
+	v := 1.0
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	no := false
+	for _, key := range []string{"shared", "control", "unguarded"} {
+		require.NoError(t, api.ApplyAlarmContributorEdge(ctx, 1, key, "", "tracker/temp", AlarmEdgeRaised,
+			string(AlarmSeverityMajor), &v, at, &no))
+		got := positionOf(t, db, tenant, key)
+		require.True(t, got != nil && !*got, "%s: precondition: classified false, got %v", key, got)
+	}
+
+	olderReplicaFold(t, db, tenant, "shared", "tracker/fence")
+	require.Nil(t, positionOf(t, db, tenant, "shared"), "the older replica's fold must be withheld as it is written")
+	olderReplicaFold(t, db, tenant, "control", "tracker/old-temp")
+	require.Nil(t, positionOf(t, db, tenant, "control"), "any older replica's fold re-opens a false: it cannot be judged in the write")
+
+	_, err := api.ClassifyUnclassifiedAlarms(context.Background())
+	require.NoError(t, err)
+	got := positionOf(t, db, tenant, "shared")
+	require.True(t, got != nil && *got, "one pass must mark the alarm a geofence rule now contributes to, got %v", got)
+	got = positionOf(t, db, tenant, "control")
+	require.True(t, got != nil && !*got, "an alarm no geofence rule contributes to is false again after the pass, got %v", got)
+	for _, key := range []string{"shared", "control"} {
+		version, stamp := stampOf(t, db, tenant, key)
+		require.True(t, stamp.Valid && stamp.Int64 == version, "%s: the pass stamps what it decides: stamp %v at version %d", key, stamp, version)
+	}
+
+	// This release's own fold with a false verdict carries a current stamp: never withheld.
+	require.NoError(t, api.ApplyAlarmContributorEdge(ctx, 1, "control", "", "tracker/temp", AlarmEdgeRaised,
+		string(AlarmSeverityMajor), &v, at.Add(time.Second), &no))
+	got = positionOf(t, db, tenant, "control")
+	require.True(t, got != nil && !*got, "a current false folded with a false verdict stays readable, got %v", got)
+
+	// Negative control: without the trigger the defect is back. Inside a transaction that is
+	// rolled back, so the trigger is restored for everything else.
+	tx := db.Begin()
+	require.NoError(t, tx.Error)
+	defer tx.Rollback()
+	require.NoError(t, tx.Exec(`DROP TRIGGER alarm_position_stale ON "device-management".alarms`).Error)
+	olderReplicaFold(t, tx, tenant, "unguarded", "tracker/fence")
+	require.NoError(t, tx.Exec(classifyAlarmsSQL).Error)
+	got = positionOf(t, tx, tenant, "unguarded")
+	require.True(t, got != nil && !*got, "control: with no trigger a geofence fold by an older replica stays false through the pass, got %v", got)
+}
+
+// TestPositionStampMigrationReopensUnstampedFalse: the stamp migration re-decides every false
+// verdict made before the stamp existed, which covers a fold an older replica made between the
+// column's migration and this one, and is re-runnable.
+func TestPositionStampMigrationReopensUnstampedFalse(t *testing.T) {
+	db := newPostgresRdbManager(t).Database
+	tenant := fmt.Sprintf("sm-%d", time.Now().UnixNano())
+	positionRig(t, db, tenant, tenant+"-other")
+	// Classified false before the stamp existed, then folded by an older replica: a fence rule now
+	// contributes. And a false that is still right.
+	rawAlarm(t, db, tenant, "gap", `{"tracker/temp":{"active":true},"tracker/fence":{"active":true}}`)
+	rawAlarm(t, db, tenant, "still-false", `{"tracker/temp":{"active":true}}`)
+	require.NoError(t, db.Exec(`UPDATE "device-management".alarms SET position_derived = false, position_classified_version = NULL WHERE tenant_id = ?`, tenant).Error)
+
+	for i := 0; i < 2; i++ {
+		require.NoError(t, schema.NewAlarmPositionStampSchema().Migrate(db))
+	}
+	got := positionOf(t, db, tenant, "gap")
+	require.True(t, got != nil && *got, "gap: got %v", got)
+	got = positionOf(t, db, tenant, "still-false")
+	require.True(t, got != nil && !*got, "still-false: got %v", got)
+	for _, key := range []string{"gap", "still-false"} {
+		version, stamp := stampOf(t, db, tenant, key)
+		require.True(t, stamp.Valid && stamp.Int64 == version, "%s: stamp %v at version %d", key, stamp, version)
+	}
+}

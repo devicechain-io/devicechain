@@ -4,39 +4,12 @@ section: whats-new
 
 ## en
 
-Adds `devicechain_svcclient_queries_total{result="ok|error"}` and
-`devicechain_svcclient_query_duration_seconds` for calls after the scoped-caller gate,
-including validation and token acquisition. `devicechain_svcclient_service_token_mint_duration_seconds`
-measures actual mint attempts, including failures, excluding cache hits and single-flight waiters.
-`devicechain_userclient_logins_total{result="ok|error|mfa_challenge"}` counts login
-exchanges; MFA verification and tenant selection are separate operations and are not counted.
-`devicechain_userclient_refreshes_total{result="ok|error"}` counts refresh exchanges
-before any login fallback. All new series start at zero and carry no tenant, credential,
-query, or endpoint labels. Rolling upgrades need no configuration or database changes;
-these metrics appear as each process upgrades.
+- **Cross-service query, service-token and sign-in metrics.** `devicechain_svcclient_queries_total{result}` (`ok` or `error`) and `devicechain_svcclient_query_duration_seconds` cover cross-service calls past the scoped-caller gate, including validation and token acquisition. Service-token mints are counted by result in `devicechain_svcclient_service_token_mints_total{result}` (`ok` or `error`, including HTTP, transport and invalid-response failures) and timed by `devicechain_svcclient_service_token_mint_duration_seconds`; neither counts cache hits or callers waiting on the same mint, and the count excludes refusals before minting. `devicechain_userclient_logins_total{result}` (`ok`, `error` or `mfa_challenge`) counts login exchanges, not MFA verification or tenant selection, and `devicechain_userclient_refreshes_total{result}` (`ok` or `error`) counts refresh exchanges before any login fallback. Every series starts at zero and carries no tenant, identity, credential, query, endpoint or URL label. No configuration or database change is needed; during the rolling upgrade only upgraded pods expose them.
 
 ## es
 
-Añade `devicechain_svcclient_queries_total{result="ok|error"}` y
-`devicechain_svcclient_query_duration_seconds` para llamadas posteriores al control de
-alcance, incluidas la validación y la obtención del token.
-`devicechain_svcclient_service_token_mint_duration_seconds` mide los intentos reales de
-emisión, incluidos los fallidos, sin contar la caché ni quienes esperan una emisión compartida.
-`devicechain_userclient_logins_total{result="ok|error|mfa_challenge"}` cuenta los
-intercambios de login; la verificación MFA y la selección de tenant son operaciones separadas
-y no se cuentan. `devicechain_userclient_refreshes_total{result="ok|error"}` cuenta
-las renovaciones antes de recurrir al login. Todas las series nuevas empiezan en cero y
-no incluyen etiquetas de tenant, credenciales, consulta ni endpoint. La actualización gradual
-no requiere cambios de configuración ni de base de datos; las métricas aparecen al actualizar cada proceso.
+- **Métricas de consultas entre servicios, de tokens de servicio y de inicio de sesión.** `devicechain_svcclient_queries_total{result}` (`ok` o `error`) y `devicechain_svcclient_query_duration_seconds` cubren las llamadas entre servicios posteriores al control de alcance del llamante, incluidas la validación y la obtención del token. Las emisiones de tokens de servicio se cuentan por resultado en `devicechain_svcclient_service_token_mints_total{result}` (`ok` o `error`, incluidos los errores HTTP, de transporte y de respuesta inválida) y se miden con `devicechain_svcclient_service_token_mint_duration_seconds`; ninguna de las dos cuenta los aciertos de caché ni a quienes esperan la misma emisión, y el contador excluye los rechazos previos a la emisión. `devicechain_userclient_logins_total{result}` (`ok`, `error` o `mfa_challenge`) cuenta los intercambios de login, no la verificación MFA ni la selección de tenant, y `devicechain_userclient_refreshes_total{result}` (`ok` o `error`) cuenta las renovaciones antes de recurrir al login. Todas las series empiezan en cero y no llevan etiquetas de tenant, identidad, credencial, consulta, endpoint ni URL. No requiere cambios de configuración ni de base de datos; durante la actualización gradual solo los pods actualizados las exponen.
 
 ## zh-CN
 
-新增 `devicechain_svcclient_queries_total{result="ok|error"}` 和
-`devicechain_svcclient_query_duration_seconds`，统计通过调用者范围检查后的调用，
-包括本地校验和获取令牌的时间。`devicechain_svcclient_service_token_mint_duration_seconds`
-统计实际服务令牌签发尝试的耗时，包括失败，不计缓存命中或等待共享签发的调用者。
-`devicechain_userclient_logins_total{result="ok|error|mfa_challenge"}` 统计 login
-交换；MFA 验证和租户选择是独立操作，不计入该指标。
-`devicechain_userclient_refreshes_total{result="ok|error"}` 统计刷新交换，
-在回退到 login 之前记录结果。所有新增序列从零开始，不含租户、凭据、查询或端点标签。
-滚动升级无需修改配置或数据库；各进程升级后即可提供这些指标。
+- **跨服务查询、服务令牌和登录指标。** `devicechain_svcclient_queries_total{result}`（`ok` 或 `error`）和 `devicechain_svcclient_query_duration_seconds` 统计通过调用者范围检查后的跨服务调用，包括本地校验和获取令牌的时间。服务令牌签发按结果计入 `devicechain_svcclient_service_token_mints_total{result}`（`ok` 或 `error`，包括 HTTP、传输和无效响应错误），并由 `devicechain_svcclient_service_token_mint_duration_seconds` 计时；两者都不统计缓存命中或等待同一次签发的调用方，计数也不包括签发前的拒绝。`devicechain_userclient_logins_total{result}`（`ok`、`error` 或 `mfa_challenge`）统计 login 交换，不包括 MFA 验证和租户选择；`devicechain_userclient_refreshes_total{result}`（`ok` 或 `error`）统计回退到 login 之前的刷新交换。所有序列均从零开始，不含租户、身份、凭据、查询、端点或 URL 标签。无需更改配置或数据库；滚动升级期间仅已升级的 Pod 提供这些指标。

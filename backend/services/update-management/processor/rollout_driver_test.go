@@ -6,6 +6,7 @@ package processor
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-update-management/model"
@@ -47,4 +48,10 @@ func TestRolloutMetricsRecordWhatAStepDid(t *testing.T) {
 
 func TestTheRolloutDriverRefusesANonPositiveInterval(t *testing.T) {
 	require.Panics(t, func() { NewRolloutDriver(nil, 0, nil) })
+}
+
+func TestTheRolloutDriverRefusesMissingPassMetrics(t *testing.T) {
+	require.PanicsWithValue(t, "processor.NewRolloutDriver: pass metrics are required", func() {
+		NewRolloutDriver(nil, time.Minute, nil)
+	})
 }
