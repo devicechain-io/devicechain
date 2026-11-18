@@ -20,7 +20,6 @@ import (
 	"github.com/devicechain-io/dc-device-management/processor"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -58,7 +57,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevEffects := AgentEffectsDrain
 	prevDeletion := EntityDeletionDrain
 	prevCallout, prevBackoff, prevKickDrain, prevTenants := CalloutResponder, MqttStoreBackoff, SessionKickDrain, ProvisioningTenants
-	prevReaper, prevClassifier := AgentProposalReaper, AlarmPositionClassifier
+	prevReaper, prevClassifier, prevMarkerHeal := AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal
 	prevPeers := servicePeers
 	prevPin := IssuerPin
 	ProvisioningTenants = nil
@@ -71,7 +70,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		AgentEffectsDrain = prevEffects
 		EntityDeletionDrain = prevDeletion
 		CalloutResponder, MqttStoreBackoff, SessionKickDrain = prevCallout, prevBackoff, prevKickDrain
-		AgentProposalReaper, AlarmPositionClassifier = prevReaper, prevClassifier
+		AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal = prevReaper, prevClassifier, prevMarkerHeal
 	})
 
 	issuer, err := nkeys.CreateAccount()
@@ -102,7 +101,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
 	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
-	safetyGates = governance.NewSafetyGates(Microservice)
+	safetyGates = service.FromManagers(Microservice, service.Managers{}).SafetyGates()
 
 	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{})...)
 	RdbManager = &rdb.RdbManager{Database: db}
@@ -134,6 +133,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 				return err
 			}
 			if err = initAlarmPositionClassifier(); err != nil {
+				return err
+			}
+			if err = initCreateEnrollMarkerHeal(); err != nil {
 				return err
 			}
 			if err = initDecodeAccounting(); err != nil {

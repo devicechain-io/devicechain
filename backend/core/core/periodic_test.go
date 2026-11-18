@@ -75,7 +75,7 @@ func TestAnUncancelledPassIsClassifiedByItsError(t *testing.T) {
 	}
 }
 
-// newTaskMetrics builds the three signals on a registry the test can read back.
+// newTaskMetrics builds the four signals on a registry the test can read back.
 func newTaskMetrics(t *testing.T, name string) (*PeriodicTaskMetrics, *prometheus.Registry) {
 	t.Helper()
 	reg := prometheus.NewRegistry()
@@ -691,6 +691,38 @@ func TestPeriodicTaskPassCounterExistsBeforeAnyPass(t *testing.T) {
 		}
 	}
 	t.Fatal("_passes_total is not exported before the first pass")
+}
+
+// Construction and initialization must not advertise a task that never starts.
+func TestPassIntervalIsDeclaredOnlyAtStart(t *testing.T) {
+	m, reg := newTaskMetrics(t, "declared")
+	const interval = 1500 * time.Millisecond
+	task := NewPeriodicTask("test-area", "declared", interval,
+		func(context.Context) error { return nil }, NewNoOpLifecycleCallbacks(), m)
+	read := func() float64 {
+		t.Helper()
+		families, err := reg.Gather()
+		require.NoError(t, err)
+		for _, family := range families {
+			if family.GetName() == "devicechain_testarea_declared_pass_interval_seconds" {
+				require.Len(t, family.Metric, 1)
+				assert.Empty(t, family.Metric[0].Label)
+				return family.Metric[0].GetGauge().GetValue()
+			}
+		}
+		t.Fatal("declared interval gauge is not registered")
+		return 0
+	}
+	require.True(t, math.IsNaN(read()), "constructed but never started")
+	require.NoError(t, task.Initialize(context.Background()))
+	require.True(t, math.IsNaN(read()), "initialized but never started")
+	require.NoError(t, task.Start(context.Background()))
+	t.Cleanup(func() { require.NoError(t, task.Stop(context.Background())) })
+	assert.Equal(t, 1.5, read())
+	copy := m.WithOwnFailureLog()
+	copy.SetInterval(2250 * time.Millisecond)
+	assert.Equal(t, 2.25, read(), "failure-log copies share the interval gauge")
+	assert.NotPanics(t, func() { (*PeriodicTaskMetrics)(nil).SetInterval(time.Second) })
 }
 
 func TestNilPeriodicTaskMetricsAreRefused(t *testing.T) {

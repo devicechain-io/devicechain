@@ -118,7 +118,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  func(context.Context) error { return nil },
@@ -149,9 +149,6 @@ func parseConfiguration() error {
 var safetyGates *governance.SafetyGates
 
 func afterMicroserviceInitialized(ctx context.Context) error {
-	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
-	// registration panics, and the gates below are decided in callbacks that can run again.
-	safetyGates = governance.NewSafetyGates(Microservice)
 	if err := parseConfiguration(); err != nil {
 		return err
 	}
@@ -170,8 +167,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// goroutine on the first message; NewWriter only needs the JS context, so it is
 	// safe (and correct) to build the writer now and pass it in by value.
 	Svc = service.New(Microservice, service.Spec{
-		Nats: &service.NatsSpec{OnCreate: func(*messaging.NatsManager) error { return nil }},
+		GovernanceRefreshes: true,
+		Nats:                &service.NatsSpec{OnCreate: func(*messaging.NatsManager) error { return nil }},
 	})
+	safetyGates = Svc.SafetyGates()
 	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}

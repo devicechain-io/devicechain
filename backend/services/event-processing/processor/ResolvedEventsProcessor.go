@@ -1715,6 +1715,7 @@ func (rp *ResolvedEventsProcessor) run() {
 	// Always cancel and join the pump on the way out (including a panic unwind).
 	defer func() { rp.pcancel(); <-pumpDone }()
 
+	rp.metrics.setTickInterval(rp.cfg.TickInterval)
 	ticker := time.NewTicker(rp.cfg.TickInterval)
 	defer ticker.Stop()
 

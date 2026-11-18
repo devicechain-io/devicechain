@@ -82,7 +82,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -451,9 +451,6 @@ func wireHeldCeilingResolver(infra mscfg.InfrastructureConfiguration, peers *svc
 var safetyGates *governance.SafetyGates
 
 func afterMicroserviceInitialized(ctx context.Context) error {
-	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
-	// registration panics, and the gates below are decided in callbacks that can run again.
-	safetyGates = governance.NewSafetyGates(Microservice)
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
 	servicePeers = peers
@@ -483,6 +480,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// see nats_start_wiring_test.go, which pins the dependency that makes it load-bearing.
 	// core/service is where the order now lives.
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Migrations: model.Migrations,
@@ -572,6 +570,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			},
 		},
 	})
+	safetyGates = Svc.SafetyGates()
 	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}

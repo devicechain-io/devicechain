@@ -110,6 +110,16 @@ type Alarm struct {
 	// column, or folded from an edge whose producer predates the flag. NULL is withheld like true
 	// and classified by position_classify.go. Only the integrator and the classifier write it.
 	PositionDerived *bool
+
+	// PositionClassifiedVersion is the ContributorVersion at which PositionDerived was last
+	// decided. false is a verdict about a contributor SET, so it holds only while the set it was
+	// decided for is the set the row carries: a fold that bumps the version without carrying the
+	// stamp forward (a replica older than this column, during a rolling upgrade) leaves a false
+	// that is no longer known to be right. The database turns such a false back into NULL in the
+	// same write (trigger alarm_position_stale, schema/migration_alarm_position_stamp.go), and
+	// the classifier decides it again. NULL is "never stamped". Only the integrator and the
+	// classifier write it.
+	PositionClassifiedVersion *uint
 }
 
 // DefaultOrder implements rdb.Sortable. An alarm does not follow the registry default:

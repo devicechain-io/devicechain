@@ -152,6 +152,7 @@ type PeriodicTaskMetrics struct {
 	passes      *prometheus.CounterVec
 	duration    prometheus.Histogram
 	lastSuccess prometheus.Gauge
+	interval    prometheus.Gauge
 
 	// failLog rate-limits the failure log line so a sustained outage logs once, not once a pass.
 	failLog failStreak
@@ -205,7 +206,7 @@ func (f *failStreak) recovered() (was bool, suppressed int) {
 	return was, suppressed
 }
 
-// WithOwnFailureLog returns metrics that file onto the same three series as m but keep their
+// WithOwnFailureLog returns metrics that file onto the same four signals as m but keep their
 // own failure-log streak. Nil-safe: nil gives nil.
 //
 // 🔴 THE STREAK BELONGS TO THE VALUE, NOT TO THE SERIES, so one value shared by several
@@ -217,10 +218,10 @@ func (m *PeriodicTaskMetrics) WithOwnFailureLog() *PeriodicTaskMetrics {
 	if m == nil {
 		return nil
 	}
-	return &PeriodicTaskMetrics{passes: m.passes, duration: m.duration, lastSuccess: m.lastSuccess}
+	return &PeriodicTaskMetrics{passes: m.passes, duration: m.duration, lastSuccess: m.lastSuccess, interval: m.interval}
 }
 
-// NewPeriodicTaskMetrics builds the three signals under this service's namespace.
+// NewPeriodicTaskMetrics builds the four signals under this service's namespace.
 func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics {
 	sub, name := ms.requireMetricName("NewPeriodicTaskMetrics", name)
 	auto := promauto.With(ms.MetricsRegisterer())
@@ -239,6 +240,11 @@ func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics
 			// "how long does this take" with "more than ten seconds" forever.
 			Buckets: []float64{.1, .5, 1, 5, 15, 60, 300, 900, 3600},
 		}),
+		interval: auto.NewGauge(prometheus.GaugeOpts{
+			Namespace: METRICS_NAMESPACE, Subsystem: sub,
+			Name: name + "_pass_interval_seconds",
+			Help: "Declared gap between passes of the " + name + " task in seconds; NaN until started.",
+		}),
 		lastSuccess: auto.NewGauge(prometheus.GaugeOpts{
 			Namespace: METRICS_NAMESPACE, Subsystem: sub,
 			Name: name + "_last_success_timestamp_seconds",
@@ -254,6 +260,7 @@ func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics
 	// give operators. NaN propagates through the subtraction and compares false, so the rule
 	// stays silent until there is something true to say.
 	m.lastSuccess.Set(math.NaN())
+	m.interval.Set(math.NaN())
 	// 🔑 PRE-CREATED AT ZERO: a CounterVec exports no series until a child exists, so without
 	// this _passes_total is absent from the registry (and from a scrape) until the first pass
 	// lands. rate() over an absent series is empty rather than zero, and a wiring test that asks
@@ -262,6 +269,14 @@ func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics
 		m.passes.WithLabelValues(outcome)
 	}
 	return m
+}
+
+// SetInterval declares the gap between passes. NaN until called. Nil-safe.
+func (m *PeriodicTaskMetrics) SetInterval(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.interval.Set(d.Seconds())
 }
 
 // record files one pass. Nil-safe.
@@ -359,6 +374,7 @@ func (t *PeriodicTask) ExecuteInitialize(ctx context.Context) error {
 func (t *PeriodicTask) Start(ctx context.Context) error { return t.lifecycle.Start(ctx) }
 
 func (t *PeriodicTask) ExecuteStart(context.Context) error {
+	t.metrics.SetInterval(t.interval)
 	t.wg.Add(1)
 	go t.loop()
 	return nil
