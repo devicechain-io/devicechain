@@ -37,6 +37,7 @@ func cloneMemberships(in *[]GroupMembership) *[]GroupMembership {
 
 func cloneRelationshipResults(in *EntityRelationshipSearchResults) *EntityRelationshipSearchResults {
 	out := *in
+	out.Pagination.HasMore = clonePtr(in.Pagination.HasMore)
 	if in.Results != nil {
 		out.Results = make([]EntityRelationship, len(in.Results))
 		for i := range in.Results {

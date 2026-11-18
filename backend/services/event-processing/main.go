@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/config"
@@ -40,7 +42,7 @@ const singletonPartition = "singleton"
 // durables it gates. See processor.TermGate.
 var DetectTermGate *processor.TermGate
 
-var stopStreamSharding func()
+var stopStreamSharding context.CancelFunc
 
 var (
 	Microservice  *core.Microservice
@@ -164,6 +166,12 @@ func buildMetrics() {
 }
 
 func createNatsComponents(nmgr *messaging.NatsManager, peers *svcclient.Peers) error {
+	// No production bypass: the package-private group worker hook is for tests only.
+	// S2b fact routing and S3/S7 are required before resolved-events can be activated.
+	shardCfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
+	if shardCfg != nil && slices.Contains(shardCfg.Suffixes, streams.ResolvedEvents) {
+		return fmt.Errorf("event-processing: resolved-events shard workers are test-only until S2b fact routing and S7 activation; production startup refused")
+	}
 	stop, err := shardgroups.Enable(nmgr)
 	if err != nil {
 		return err
@@ -869,7 +877,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
 	// that actually closes handles, and which the processor above still precedes.
-	return Svc.Terminate(ctx)
+	err := Svc.Terminate(ctx)
+	if stopStreamSharding != nil {
+		stopStreamSharding()
+	}
+	return err
 }
 
 // appliedGuardEnabled is whether live DETECT runs its duplicate-event guard: it exists for event
