@@ -16,6 +16,7 @@ var sanctionedFinalDeliveryCallers = map[deliveryCapSite]string{
 	{"backend/services/outbound-connectors/processor/consumer.go", "DispatchConsumer.retryOrDeadLetter"}: "The deadLetter helper owns the tenant decision.",
 	{"backend/services/outbound-connectors/processor/consumer.go", "DispatchConsumer.deadLetter"}:        "Bounds write attempts on the final delivery.",
 	{"backend/services/event-sources/processor/gateway_jetstream.go", "GatewayJetStreamSource.settler"}:  "The gateway's give-up protocol may leave poison unacked.",
+	{"backend/services/outbound-connectors/lpwan/adapter.go", "Adapter.handle"}:                          "No handling error: a cancelled capacity wait refuses the command as unsent on the final delivery.",
 }
 
 var sanctionedDisposeCallers = map[deliveryCapSite]string{
@@ -31,6 +32,9 @@ var sanctionedDisposeCallers = map[deliveryCapSite]string{
 	{"backend/services/event-management/processor/persist_batch.go", "EventPersistenceWorker.dispose"}:                     "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/notification-management/processor/NotificationProcessor.go", "NotificationProcessor.dispatchOne"}:   "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/user-management/deadletters/consumer.go", "Consumer.handle"}:                                        "Owns the handling error and consumer-specific acknowledgement effects.",
+	{"backend/services/command-delivery/processor/DeletionConsumer.go", "DeletionConsumer.retryOrDrop"}:                    "Owns the handling error and consumer-specific acknowledgement effects.",
+	{"backend/services/device-state/processor/deletion_processor.go", "DeletionProcessor.handle"}:                          "Owns the handling error and consumer-specific acknowledgement effects.",
+	{"backend/services/update-management/processor/deletion_consumer.go", "DeletionConsumer.retryOrDrop"}:                  "Owns the handling error and consumer-specific acknowledgement effects.",
 }
 
 func checkDeliveryCapRepo(t *testing.T, kind string, ledger map[deliveryCapSite]string) {
