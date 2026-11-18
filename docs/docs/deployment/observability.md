@@ -17,7 +17,7 @@ boards are implemented and validated end-to-end: an instance overview and seven 
 boards, described in [Grafana boards](./grafana-boards.md), with alert rules alongside them.
 :::
 
-Metrics (`/metrics`) and health probes (`/healthz`, `/readyz`) use port 8083 (`ops`) on each area's pods and Service. Public `/api/<area>/...` routes target only the API port (`graphql`, 8080); they cannot reach these operational endpoints. When supplying your own ingress controller, route the API to `graphql` and never to `ops`.
+Metrics (`/metrics`) and health probes (`/healthz`, `/readyz`) use port 8083 (`ops`) on each area's pods and Service. Public `/api/<area>/...` routes target only the API port (`graphql`, 8080); they cannot reach these operational endpoints. When supplying your own ingress controller, route the API to `graphql` and never to `ops`. [Production hardening](./production-hardening.md#public-port) lists what each port serves and how to check the public edge from outside.
 
 ## Distributed tracing (OpenTelemetry)
 
