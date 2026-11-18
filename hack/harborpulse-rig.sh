@@ -446,7 +446,10 @@ cmd_down() {
       fail "kind cluster $cluster exists but is not in $kubeconfig: not this rig's; refusing to delete it"
     local uid
     uid="$(k get ns kube-system -o jsonpath='{.metadata.uid}')"
-    [[ -x "$dcctl" ]] && "$dcctl" destroy local "$instance" --yes || true
+    # --kube-context pins the destroy to this rig's cluster: without it dcctl falls back to the
+    # cluster recorded at bootstrap, and a record from another run of the same instance name could
+    # point elsewhere. dcctl refuses a context that differs from its record, which is the point.
+    [[ -x "$dcctl" ]] && "$dcctl" destroy local "$instance" --yes --kube-context "$kube_context" || true
     kind delete cluster --name "$cluster" --kubeconfig "$kubeconfig"
     [[ -n "$uid" && "$uid" != */* ]] && rm -rf "${HOME:?}/.devicechain/clusters/$uid"
   fi
@@ -460,9 +463,11 @@ cmd_down() {
 # starts; `setsid` is not in Git Bash) and is stopped as a group. Killing only a port-forward
 # loop's bash leaves its foreground kubectl listening, which a later run's readiness probe then
 # takes for its own forward. Sims and verifiers are stopped before the tenants are destroyed; the
-# forwards, which the destroy goes through, after.
-bg_pids=()  # sims and verifiers
-fwd_pids=() # port-forward loops
+# forwards, which the destroy goes through, after. The exit trap keeps that order, so a run that
+# fails part-way still removes the tenants it created (unless DC_HPRIG_KEEP=1).
+bg_pids=()      # sims and verifiers
+fwd_pids=()     # port-forward loops
+created_sims=() # every sim this run asked dcctl to create, whose tenant it must destroy
 last_bg=""
 start_bg() { # start_bg <log> <command...>; leaves the pid (= its process group) in last_bg
   local log="$1"
@@ -485,8 +490,19 @@ stop_forwards() {
   ((${#fwd_pids[@]} == 0)) || stop_group "${fwd_pids[@]}"
   fwd_pids=()
 }
+destroy_sims() { # destroy every sim's tenant this run created, once; a failure is noted, not fatal
+  local sname
+  if [[ "${DC_HPRIG_KEEP:-0}" != 1 ]]; then
+    for sname in ${created_sims[@]+"${created_sims[@]}"}; do
+      "$dcctl" sim destroy "$sname" -i "$instance" -s "localhost:$http_port" --kube-context "$kube_context" \
+        >"$state_dir/$sname.destroy.log" 2>&1 || note "could not destroy $sname (see its destroy log)"
+    done
+  fi
+  created_sims=()
+}
 stop_all() {
   stop_procs
+  destroy_sims
   stop_forwards
 }
 trap stop_all EXIT
@@ -541,6 +557,8 @@ cmd_run() {
     i=$((i + 1))
     local sname="hprig-$name-$stamp"
     say "sim $sname${flags:+ ($flags)}"
+    # Registered before the create: a create that fails part-way can still leave its tenant.
+    created_sims+=("$sname")
     "$dcctl" sim create "$sname" -i "$instance" -s "localhost:$http_port" --kube-context "$kube_context" \
       --ingress "http://localhost:$ingest_port" --mqtt-broker "ssl://localhost:$mqtt_port" \
       --manifest harborpulse --control-addr "http://127.0.0.1:$port" >"$state_dir/$sname.create.log" 2>&1 ||
@@ -600,12 +618,7 @@ cmd_run() {
   done
 
   stop_procs
-  if [[ "${DC_HPRIG_KEEP:-0}" != 1 ]]; then
-    for s in "${sims[@]}"; do
-      "$dcctl" sim destroy "${s%%|*}" -i "$instance" -s "localhost:$http_port" --kube-context "$kube_context" \
-        >"$state_dir/${s%%|*}.destroy.log" 2>&1 || note "could not destroy ${s%%|*} (see its destroy log)"
-    done
-  fi
+  destroy_sims
   stop_forwards
   ((bad == 0)) || fail "the harborpulse rig is red"
   say "ALL CHECKS PASSED"
