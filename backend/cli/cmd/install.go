@@ -372,7 +372,9 @@ the cluster, with one exception: the connection budget may be raised.`,
 		}
 
 		if !installSkipPreflight {
-			if d := runDoctor(args[0], doctorOptsFor(installKubeContext, installCluster, installBuild)); d.fails > 0 {
+			doctorOptions := doctorOptsFor(installKubeContext, installCluster, installBuild)
+			doctorOptions.FullSizeInstall = !installCompact
+			if d := runDoctor(args[0], doctorOptions); d.fails > 0 {
 				return fmt.Errorf("%d preflight check(s) failed — fix the items above, or re-run with --skip-preflight", d.fails)
 			}
 		}
