@@ -51,6 +51,11 @@ message PAlarmStateChangeEvent {
     string device_token = 17;
     string device_name = 18;
     string device_type_token = 19;
+    // clear_reason says why a CLEARED event ended the alarm when that was not the alarm's own
+    // condition clearing: "ORIGINATOR_DELETED" when the device or other entity the alarm was
+    // raised on was deleted. Empty otherwise, and then absent from the wire, so every other
+    // event's bytes are unchanged; an older consumer ignores it and ends the alarm on CLEARED.
+    string clear_reason = 20;
 }
 
 /**

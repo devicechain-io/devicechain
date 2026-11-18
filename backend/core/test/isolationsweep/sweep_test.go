@@ -255,3 +255,94 @@ func TestTheSweepCatchesAMessageOnlyOracle(t *testing.T) {
 		t.Fatalf("a resolver whose refusal differed from a miss only in wording passed: %v", rec.errors)
 	}
 }
+
+// Two doors, only one seeded: a global positive control must not hide the empty
+// door. The optional-argument variant is a separate path needing its own control.
+type twoDoorRoot struct{ seeded, refused, optionalSeeded bool }
+
+func (r *twoDoorRoot) Seeded(ctx context.Context) *string {
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		return nil
+	}
+	marker := "globex"
+	return &marker
+}
+
+func (r *twoDoorRoot) Unseeded(ctx context.Context, args struct{ Verbose *bool }) (*string, error) {
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		if r.refused {
+			return nil, auth.ErrForbidden
+		}
+		return nil, nil
+	}
+	if r.seeded || (r.optionalSeeded && args.Verbose != nil) {
+		marker := "globex"
+		return &marker, nil
+	}
+	return nil, nil
+}
+
+func TestEveryQueryNeedsItsOwnControlOrExplicitSeedDebt(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		root       twoDoorRoot
+		debt       map[string]string
+		wantErrors []string
+	}{
+		{name: "one seeded door cannot cover another", wantErrors: []string{
+			"NEGATIVE CONTROL FAILED for query unseeded:",
+			"NEGATIVE CONTROL FAILED for query unseeded (all arguments):",
+		}},
+		{name: "explicit debt", debt: map[string]string{
+			"query unseeded":                 "no rows seeded yet",
+			"query unseeded (all arguments)": "no filtered rows seeded yet",
+		}},
+		{name: "both seeded", root: twoDoorRoot{seeded: true}},
+		{name: "refused door needs no seed", root: twoDoorRoot{refused: true}},
+		{name: "optional control cannot cover required path", root: twoDoorRoot{optionalSeeded: true},
+			wantErrors: []string{"NEGATIVE CONTROL FAILED for query unseeded:"}},
+		{name: "required exception cannot cover optional path", debt: map[string]string{
+			"query unseeded": "no rows seeded yet",
+		}, wantErrors: []string{"NEGATIVE CONTROL FAILED for query unseeded (all arguments):"}},
+		{name: "new seed makes debt stale", root: twoDoorRoot{seeded: true}, debt: map[string]string{
+			"query unseeded": "formerly empty",
+		}, wantErrors: []string{"stale NothingSeeded entry for query unseeded:"}},
+		{name: "refusal makes debt stale", root: twoDoorRoot{refused: true}, debt: map[string]string{
+			"query unseeded": "formerly empty",
+		}, wantErrors: []string{"stale NothingSeeded entry for query unseeded:"}},
+		{name: "removed query makes debt stale", root: twoDoorRoot{seeded: true}, debt: map[string]string{
+			"query removed": "removed door",
+		}, wantErrors: []string{"stale NothingSeeded entry for query removed: no such query"}},
+		{name: "blank reason is not an exception", debt: map[string]string{
+			"query unseeded":                 " \t",
+			"query unseeded (all arguments)": "no filtered rows seeded yet",
+		}, wantErrors: []string{"NEGATIVE CONTROL FAILED for query unseeded:"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config(&sweepRoot{})
+			cfg.Schema = gqlcore.MustParseSchema(`
+				type Query { seeded: String unseeded(verbose: Boolean): String }
+			`, &tc.root)
+			cfg.NothingSeeded = tc.debt
+			rec, out := runRecorded(cfg)
+			if len(rec.fatals) != 0 || len(rec.errors) != len(tc.wantErrors) {
+				t.Fatalf("errors = %v, fatals = %v; want errors %v", rec.errors, rec.fatals, tc.wantErrors)
+			}
+			for i, want := range tc.wantErrors {
+				if !strings.Contains(rec.errors[i], want) {
+					t.Errorf("error = %q, want %q", rec.errors[i], want)
+				}
+			}
+			for _, name := range []string{"query seeded", "query unseeded", "query unseeded (all arguments)"} {
+				o, ok := OutcomeOf(out, name)
+				wantMarker := ""
+				if name == "query seeded" || tc.root.seeded || (tc.root.optionalSeeded && strings.HasSuffix(name, " (all arguments)")) {
+					wantMarker = "globex"
+				}
+				if !ok || o.ControlMarker != wantMarker {
+					t.Errorf("%s outcome = %+v, found = %v; want control marker %q", name, o, ok, wantMarker)
+				}
+			}
+		})
+	}
+}

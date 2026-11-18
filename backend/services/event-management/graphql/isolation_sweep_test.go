@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"testing"
 	"time"
 
@@ -40,11 +41,16 @@ func TestIsolationSweep(t *testing.T) {
 	const tenant = "tenant1"
 	write := core.WithTenant(context.Background(), tenant)
 	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	hidden := []string{"globex"}
 	for _, owner := range []string{"acme", "globex"} {
 		device := owner + "-pump"
 		event := model.Event{DeviceToken: device, EventType: eventtype.Measurement, OccurredTime: at,
 			ProcessedTime: at, Source: "mqtt"}
 		event.EventId = model.DeriveEventId(tenant, &event, nil)
+		if owner == "globex" {
+			// Formula samples identify their source by event ID, not device token.
+			hidden = append(hidden, hex.EncodeToString(event.EventId))
+		}
 		require.NoError(t, db.WithContext(write).Create(&event).Error)
 		require.NoError(t, db.WithContext(write).Create(&model.EventAnchor{EventId: event.EventId,
 			DeviceToken: device, EventType: eventtype.Measurement, OccurredTime: at,
@@ -54,6 +60,25 @@ func TestIsolationSweep(t *testing.T) {
 		require.NoError(t, db.WithContext(write).Create(&model.MeasurementEvent{EventId: event.EventId,
 			PayloadId: []byte(owner + "-temp"), DeviceToken: device, EventType: eventtype.Measurement,
 			OccurredTime: at, Name: "temp", Value: sql.NullFloat64{Float64: 21.5, Valid: true}}).Error)
+		for _, kind := range []eventtype.EventType{eventtype.Location, eventtype.Alert} {
+			parent := model.Event{DeviceToken: device, EventType: kind, OccurredTime: at,
+				ProcessedTime: at, Source: "mqtt"}
+			parent.EventId = model.DeriveEventId(tenant, &parent, nil)
+			require.NoError(t, db.WithContext(write).Create(&parent).Error)
+			require.NoError(t, db.WithContext(write).Create(&model.EventAnchor{EventId: parent.EventId,
+				DeviceToken: device, EventType: kind, OccurredTime: at,
+				AnchorType: "customer", AnchorToken: owner}).Error)
+			if kind == eventtype.Location {
+				require.NoError(t, db.WithContext(write).Create(&model.LocationEvent{EventId: parent.EventId,
+					PayloadId: []byte(owner + "-location"), DeviceToken: device, EventType: kind, OccurredTime: at,
+					Latitude:  sql.NullFloat64{Float64: 41.5, Valid: true},
+					Longitude: sql.NullFloat64{Float64: -87.5, Valid: true}}).Error)
+			} else {
+				require.NoError(t, db.WithContext(write).Create(&model.AlertEvent{EventId: parent.EventId,
+					PayloadId: []byte(owner + "-alert"), DeviceToken: device, EventType: kind, OccurredTime: at,
+					Type: "diagnostic", Level: 50, Message: owner + " alert", Source: "mqtt"}).Error)
+			}
+		}
 	}
 
 	authorities := []string{string(auth.EventRead), string(auth.LocationRead)}
@@ -62,7 +87,7 @@ func TestIsolationSweep(t *testing.T) {
 		Scoped:   scopedCtx(api, tenant, []string{"customer:acme"}, authorities...),
 		Unscoped: scopedCtx(api, tenant, nil, authorities...),
 		Probe:    "globex-pump",
-		Hidden:   []string{"globex"},
+		Hidden:   hidden,
 		// calculatedEvents' formula, input and range cannot be guessed from their types; with
 		// these the sweep reaches its read rather than stopping at the compile.
 		Literals: map[string]string{
