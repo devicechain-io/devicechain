@@ -156,7 +156,9 @@ DeviceChain 的命令是**双向且持久化**的。发出的命令会根据设�
 | `POST .../commands/{command}/ack` | 命令已到达设备。请在执行命令**之前**发送。 | `204`。 |
 | `POST .../commands/{command}/response` | 设备做了什么：`{"success": true, "payload": ..., "error": "..."}`。 | `204`。 |
 
-`200` 的正文和响应的正文发布为 [command-pull.schema.json](pathname:///schema/device/command-pull.schema.json) 和 [command-pull-response.schema.json](pathname:///schema/device/command-pull-response.schema.json)。`401` 表示令牌未被接受，`403` 表示令牌属于另一台设备或该设备的类型未启用此通道，`404` 表示该命令不属于此设备，`409` 表示该命令并不在等待这个请求，`429` 表示租户保持打开的请求已达上限（请在 `Retry-After` 之后重试）或来源地址的请求过多。`503` 表示请重试。
+`200` 的正文和响应的正文发布为 [command-pull.schema.json](pathname:///schema/device/command-pull.schema.json) 和 [command-pull-response.schema.json](pathname:///schema/device/command-pull-response.schema.json)。`401` 表示令牌未被接受，`403` 表示令牌属于另一台设备或该设备的类型未启用此通道，`404` 表示该命令不属于此设备，`409` 表示该命令并不在等待这个请求，`429` 表示租户或设备保持打开的请求已达上限（请在 `Retry-After` 即 5 秒之后重试）或来源地址的请求过多。`503` 表示请重试。
+
+每台设备在每个副本上最多只能保持两个等待中的轮询：它自己的一个，再加上一个留给重连的名额，用于服务器尚未察觉其先前连接已关闭的情况。同一设备的第三个等待中的轮询会被拒绝，返回 `429` 和 `Retry-After: 5`，即使其租户仍有余量也是如此，因此请一次只保持一个轮询。`wait=0` 的请求从不保持打开，因此设备的上限和租户的上限都不计入它。
 
 一次拉取交出的每条命令都由该次拉取领取，因此两个请求、两个副本或一次重试永远不会收到同一条命令。保持打开的请求每隔几秒向平台询问设备的命令，所以设备轮询期间下发的命令会在几秒内到达。
 

@@ -18,9 +18,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
-// bearerPrefix is the Authorization scheme carrying the access token.
-const bearerPrefix = "Bearer "
-
 type ContextKey string
 
 const (
@@ -264,37 +261,24 @@ func (h *HttpHandler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// token is required, which tier it is validated as, and whether its tenant is
 	// stamped into context (see authPolicy). A *present* token is always verified
 	// — an invalid one is rejected with 401, never silently ignored.
-	token, ok := bearerToken(r)
-	if !ok {
-		if h.policy.required {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
-			return
-		}
-		// Data plane: run unauthenticated so open entry points (the login
-		// mutation) stay reachable; tenant-scoped operations fail closed at the DB.
-		h.serveExec(w, r)
-		return
-	}
-
-	validator := h.validator()
-	if validator == nil {
-		http.Error(w, "authentication is not available", http.StatusUnauthorized)
-		return
-	}
-	claims, tenant, err := h.policy.authenticate(validator, token, r.Header.Get)
+	result, err := bearerAuth(h.policy, h.Gate, h.plane).Authenticate(r)
 	if err != nil {
-		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+		msg := "invalid or expired token"
+		switch err.(*auth.BearerError).Reason {
+		case auth.BearerMissing:
+			if !h.policy.required {
+				h.serveExec(w, r)
+				return
+			}
+			msg = "authentication required"
+		case auth.BearerUnavailable:
+			msg = "authentication is not available"
+		}
+		http.Error(w, msg, http.StatusUnauthorized)
 		return
 	}
-	// 🔴 AFTER authenticate, NEVER BEFORE: the audience rule runs on a token whose signature,
-	// expiry and type have been verified, so a forged token is a plain 401 that never reaches
-	// it and the counters cannot be driven by one. A refusal writes the same 401 as an
-	// invalid token, so a caller cannot tell the two apart. The validator is non-nil here, so
-	// the gate is too.
-	if err := h.Gate.AudiencePolicy().Admit(claims, h.plane); err != nil {
-		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
-		return
-	}
+	claims, tenant, token := result.Claims, result.Tenant, result.Token
+
 	ctx := r.Context()
 	if tenant != "" {
 		ctx = core.WithTenant(ctx, tenant)
@@ -367,16 +351,21 @@ func (h *HttpHandler) serveExec(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
-// bearerToken extracts the access token from the Authorization header. It
-// returns ("", false) when there is no Bearer credential to verify.
-func bearerToken(r *http.Request) (string, bool) {
-	header := r.Header.Get("Authorization")
-	if len(header) <= len(bearerPrefix) || !strings.EqualFold(header[:len(bearerPrefix)], bearerPrefix) {
-		return "", false
-	}
-	token := strings.TrimSpace(header[len(bearerPrefix):])
-	if token == "" {
-		return "", false
-	}
-	return token, true
+// bearerAuth preserves the data/identity tier policy across HTTP and WS.
+func bearerAuth(policy authPolicy, gate *core.ReadinessGate, plane auth.Plane) auth.BearerAuth {
+	return auth.BearerAuth{Plane: plane, Policy: func() *auth.PlanePolicy {
+		if gate == nil {
+			return nil
+		}
+		return gate.AudiencePolicy()
+	}, Verify: func(token string, header func(string) string) (*auth.Claims, string, error) {
+		var v *auth.Validator
+		if gate != nil {
+			v = gate.Validator()
+		}
+		if v == nil {
+			return nil, "", auth.ErrValidatorUnavailable
+		}
+		return policy.authenticate(v, token, header)
+	}}
 }
