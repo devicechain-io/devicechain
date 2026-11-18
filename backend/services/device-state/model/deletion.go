@@ -79,7 +79,11 @@ func (api *Api) OrphanPage(ctx context.Context, after uint, limit int) ([]Device
 }
 
 // ReconcileDeviceState rechecks the scanned row under lock before deleting or stamping it.
-// The current row's stamp and timestamps decide the action, never stale page contents.
+// An in-place reset keeps the ID, so an incarnation change in the scan-to-lock window
+// or an older authority answer must leave the row unchanged until the next sweep.
+// A NULL (pre-incarnation) row has no stamp to compare: a replacement's events fold into
+// it in place, and a fresh answer would delete it by created_at just as a stale one does,
+// so the stale answer loses nothing a current one would keep.
 func (api *Api) ReconcileDeviceState(ctx context.Context, scanned DeviceState, liveID int64, createdAt time.Time) (deleted, stamped bool, err error) {
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		var row DeviceState
@@ -90,7 +94,10 @@ func (api *Api) ReconcileDeviceState(ctx context.Context, scanned DeviceState, l
 		if e != nil {
 			return e
 		}
-		if row.ID != scanned.ID {
+		if row.ID != scanned.ID || row.Incarnation.Valid != scanned.Incarnation.Valid || row.Incarnation.Int64 != scanned.Incarnation.Int64 {
+			return nil
+		}
+		if liveID != 0 && row.Incarnation.Valid && liveID < row.Incarnation.Int64 {
 			return nil
 		}
 		if liveID == 0 || (row.Incarnation.Valid && row.Incarnation.Int64 != liveID) || (!row.Incarnation.Valid && row.CreatedAt.Before(createdAt)) {
