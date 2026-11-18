@@ -6,6 +6,7 @@
 // routing policies (to tell whether an alarm severity reaches anyone), list the delivery channels
 // (to pick one), and create a policy. Policies route by SEVERITY ONLY — they cannot be limited to
 // one rule or one device type — so everything here speaks in severities.
+import { listAll } from './list-all';
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/notification-management';
 import type {
@@ -52,12 +53,12 @@ const NOTIFICATION_POLICIES = graphql(`
   }
 `);
 
-/** Every policy of the tenant (one large page: a tenant has a handful). */
+/** Every policy of the tenant, or a clear refusal if the complete list cannot load. */
 export async function listNotificationPolicies(): Promise<NotificationPolicy[]> {
-  const data = await gql('notification-management', NOTIFICATION_POLICIES, {
-    criteria: { pageNumber: 1, pageSize: 1000 },
-  });
-  return data.notificationPolicies.results;
+  return (await listAll(async page => {
+    const data = await gql('notification-management', NOTIFICATION_POLICIES, { criteria: { ...page } });
+    return data.notificationPolicies;
+  })).results;
 }
 
 const NOTIFICATION_CHANNELS = graphql(`
@@ -69,16 +70,17 @@ const NOTIFICATION_CHANNELS = graphql(`
         channelType
         enabled
       }
+      pagination { totalRecords }
     }
   }
 `);
 
 /** The tenant's enabled delivery channels. */
 export async function listNotificationChannels(): Promise<NotificationChannel[]> {
-  const data = await gql('notification-management', NOTIFICATION_CHANNELS, {
-    criteria: { pageNumber: 1, pageSize: 1000, enabled: true },
-  });
-  return data.notificationChannels.results;
+  return (await listAll(async page => {
+    const data = await gql('notification-management', NOTIFICATION_CHANNELS, { criteria: { ...page, enabled: true } });
+    return data.notificationChannels;
+  })).results;
 }
 
 const CREATE_NOTIFICATION_POLICY = graphql(`

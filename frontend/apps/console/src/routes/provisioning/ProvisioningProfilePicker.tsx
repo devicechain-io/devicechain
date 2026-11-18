@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { listAll } from '@/lib/api/list-all';
 import '@/routes/trust-anchors/catalog';
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -34,8 +35,8 @@ export function ProvisioningProfilePicker({
   id?: string;
 }) {
   const { t } = useTranslation('provisioning');
-  const { data, loading } = useQuery(
-    () => listProvisioningProfiles({ pageNumber: 1, pageSize: 1000, deviceType: deviceTypeToken || undefined }),
+  const { current: data, loading, error } = useQuery(
+    () => listAll(page => listProvisioningProfiles({ ...page, deviceType: deviceTypeToken || undefined })),
     [deviceTypeToken],
   );
   const options: ComboboxOption[] = (data?.results ?? []).map((p) => ({
@@ -61,6 +62,7 @@ export function ProvisioningProfilePicker({
         selectedIsCertificate ? t('trustAnchors:earmarkDerivedHint', { prefix: DERIVED_TOKEN_PREFIX }) : t('earmarkHelp')
       }
     >
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <Combobox
         id={id}
         value={value}
@@ -68,7 +70,7 @@ export function ProvisioningProfilePicker({
         options={options}
         placeholder={t('earmarkNone')}
         emptyMessage={t('earmarkEmpty')}
-        disabled={disabled}
+        disabled={disabled || loading || !!error}
       />
     </FormField>
   );
