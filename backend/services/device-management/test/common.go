@@ -460,3 +460,8 @@ func (api *MockApi) DeviceClaimByDeviceToken(ctx context.Context, deviceToken st
 	args := api.Mock.Called()
 	return args.Get(0).(*model.DeviceClaim), args.Error(1)
 }
+
+func (api *MockApi) AlarmLifecycles(ctx context.Context, tokens []string) ([]model.AlarmLifecycle, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]model.AlarmLifecycle), args.Error(1)
+}
