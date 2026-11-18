@@ -742,3 +742,65 @@ func TestSuppressionCurrentTargetScopeAfterTransfer(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, visible, "every target must be currently within scope")
 }
+
+func TestSuppressionEndIsIdempotent(t *testing.T) {
+	api, ctx, id := newSuppressionTestApi(t)
+	now := time.Now().UTC()
+	start, end := now.Add(-2*time.Hour), now.Add(time.Hour)
+	w := suppressionTestWindow()
+	w.StartTime, w.EndTime = &start, &end
+	_, err := api.CreateAlarmSuppressionWindow(ctx, &w)
+	require.NoError(t, err)
+	first, err := api.EndAlarmSuppressionWindow(ctx, w.Token)
+	require.NoError(t, err)
+	// Store T1 in the past so both historical sides can be checked without sleeping.
+	t1 := now.Add(-time.Hour)
+	require.NoError(t, api.RDB.DB(ctx).Model(first).Update("ended_at", t1).Error)
+	first, err = api.AlarmSuppressionWindowByToken(ctx, w.Token)
+	require.NoError(t, err)
+	_, err = api.EndAlarmSuppressionWindow(auth.WithClaims(ctx, &auth.Claims{Tenant: "acme"}), w.Token)
+	require.ErrorIs(t, err, auth.ErrForbidden, "an ended window still requires authorization")
+	second, err := api.EndAlarmSuppressionWindow(suppressionCaller(ctx, false), w.Token)
+	require.NoError(t, err)
+	require.Equal(t, first.EndedAt, second.EndedAt)
+	require.Equal(t, first.EndedBy, second.EndedBy)
+	require.Equal(t, first.Version, second.Version)
+	stored, err := api.AlarmSuppressionWindowByToken(ctx, w.Token)
+	require.NoError(t, err)
+	require.Equal(t, first, stored, "a repeated end must not write the row")
+	for _, at := range []time.Time{t1.Add(-time.Second), t1, t1.Add(time.Minute)} {
+		match, err := api.SuppressionFor(ctx, id, "hot", "MINOR", at)
+		require.NoError(t, err)
+		require.Equal(t, at.Before(t1), match != nil)
+	}
+}
+
+func TestSuppressionReviveRespectsCap(t *testing.T) {
+	api, ctx, _ := newSuppressionTestApi(t)
+	now := time.Now().UTC()
+	start, expiredEnd, liveEnd := now.Add(-2*time.Hour), now.Add(-time.Hour), now.Add(time.Hour)
+	w := suppressionTestWindow()
+	w.StartTime, w.EndTime = &start, &expiredEnd
+	expired, err := api.CreateAlarmSuppressionWindow(ctx, &w)
+	require.NoError(t, err)
+	for i := 0; i < 500; i++ {
+		live := suppressionTestWindow()
+		live.Token = fmt.Sprintf("live-%d", i)
+		live.StartTime, live.EndTime = &start, &liveEnd
+		require.NoError(t, api.RDB.DB(ctx).Create(&live).Error)
+	}
+	liveEndPtr := &liveEnd
+	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{EndTime: &liveEndPtr})
+	require.ErrorIs(t, err, ErrInvalidAlarmSuppression)
+	require.EqualError(t, err, suppressionInvalid("at most 500 live windows per tenant").Error())
+	stored, err := api.AlarmSuppressionWindowByToken(ctx, w.Token)
+	require.NoError(t, err)
+	require.Equal(t, expired.Version, stored.Version)
+	require.True(t, stored.EndTime.Equal(expiredEnd))
+	reason := "edited at cap"
+	updated, err := api.UpdateAlarmSuppressionWindow(ctx, "live-0", &AlarmSuppressionUpdateRequest{Reason: &reason})
+	require.NoError(t, err)
+	require.Equal(t, reason, updated.Reason)
+	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Reason: &reason})
+	require.NoError(t, err, "an expired window that stays expired consumes no capacity")
+}

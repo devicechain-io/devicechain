@@ -41,22 +41,8 @@ func (api *Api) CreateAlarmSuppressionWindow(ctx context.Context, input *AlarmSu
 	}
 	w.ScopeAnchors = anchors
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		tenant, err := ctxTenant(ctx)
-		if err != nil {
+		if err := checkSuppressionCapacity(ctx, tx, time.Now().UTC()); err != nil {
 			return err
-		}
-		if tx.Dialector.Name() == "postgres" {
-			if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", tenant+":alarm-suppression").Error; err != nil {
-				return err
-			}
-		}
-		var count int64
-		// Count the entire tenant, including windows invisible to a scoped creator.
-		if err := tx.WithContext(suppressionFactContext(ctx)).Model(&AlarmSuppressionWindow{}).Scopes(suppressionLiveAt(time.Now().UTC())).Count(&count).Error; err != nil {
-			return err
-		}
-		if count >= 500 {
-			return suppressionInvalid("at most 500 live windows per tenant")
 		}
 		return tx.Create(&w).Error
 	})
@@ -65,6 +51,34 @@ func (api *Api) CreateAlarmSuppressionWindow(ctx context.Context, input *AlarmSu
 	}
 	api.invalidateSuppressionWindows(ctx)
 	return &w, nil
+}
+
+// checkSuppressionCapacity must run in the transaction that adds a live window.
+func checkSuppressionCapacity(ctx context.Context, tx *gorm.DB, at time.Time) error {
+	tenant, err := ctxTenant(ctx)
+	if err != nil {
+		return err
+	}
+	if tx.Dialector.Name() == "postgres" {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", tenant+":alarm-suppression").Error; err != nil {
+			return err
+		}
+	}
+	var count int64
+	// Count the entire tenant, including windows invisible to a scoped creator.
+	if err := tx.WithContext(suppressionFactContext(ctx)).Model(&AlarmSuppressionWindow{}).Scopes(suppressionLiveAt(at)).Count(&count).Error; err != nil {
+		return err
+	}
+	if count >= 500 {
+		return suppressionInvalid("at most 500 live windows per tenant")
+	}
+	return nil
+}
+
+func suppressionWindowLiveAt(w *AlarmSuppressionWindow, at time.Time) bool {
+	return (w.EndedAt == nil || w.EndedAt.After(at)) &&
+		(w.EndTime == nil || w.EndTime.After(at)) &&
+		(w.ValidUntil == nil || w.ValidUntil.After(at))
 }
 
 func (api *Api) AlarmSuppressionWindowByToken(ctx context.Context, token string) (*AlarmSuppressionWindow, error) {
@@ -148,6 +162,9 @@ func (api *Api) mutateSuppression(ctx context.Context, token string, change func
 		}
 	}
 	if ending {
+		if existing.EndedAt != nil {
+			return &existing, nil
+		}
 		now := time.Now().UTC()
 		claims, _ := auth.ClaimsFromContext(ctx)
 		result.EndedAt = &now
@@ -161,13 +178,31 @@ func (api *Api) mutateSuppression(ctx context.Context, token string, change func
 	if _, scoped := auth.ScopeFromContext(ctx); scoped {
 		omit = append(omit, "scope_anchors")
 	}
-	q := api.RDB.DB(ctx).Model(&existing).Where("id = ? AND version = ?", existing.ID, existing.Version).
-		Select("*").Omit(omit...).Updates(&result)
-	if q.Error != nil {
-		return nil, q.Error
+	write := func(tx *gorm.DB) error {
+		q := tx.Model(&existing).Where("id = ? AND version = ?", existing.ID, existing.Version).
+			Select("*").Omit(omit...).Updates(&result)
+		if q.Error != nil {
+			return q.Error
+		}
+		if q.RowsAffected == 0 {
+			return &SuppressionConflictError{Token: token}
+		}
+		return nil
 	}
-	if q.RowsAffected == 0 {
-		return nil, &SuppressionConflictError{Token: token}
+	now := time.Now().UTC()
+	var err error
+	if !ending && !deleting && !suppressionWindowLiveAt(&existing, now) && suppressionWindowLiveAt(&result, now) {
+		err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := checkSuppressionCapacity(ctx, tx, now); err != nil {
+				return err
+			}
+			return write(tx)
+		})
+	} else {
+		err = write(api.RDB.DB(ctx))
+	}
+	if err != nil {
+		return nil, err
 	}
 	api.invalidateSuppressionWindows(ctx)
 	return &result, nil
