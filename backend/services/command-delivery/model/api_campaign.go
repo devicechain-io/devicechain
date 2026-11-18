@@ -15,11 +15,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/maintwindow"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/schedule"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -673,11 +676,11 @@ func (api *Api) tickTenant(ctx context.Context, now time.Time, pass string) erro
 func (api *Api) planOrRecord(ctx context.Context, c *Campaign, now time.Time, state *campaignPlanState) error {
 	trigger, err := DecodeTrigger(c.Trigger)
 	if err != nil {
-		return api.recordCampaignError(ctx, c, fmt.Errorf("stored trigger no longer validates: %w", err))
+		return api.recordCampaignError(ctx, c, &campaignConfigurationError{fmt.Errorf("stored trigger no longer validates: %w", err)})
 	}
 	steps, err := DecodeSteps(c.Steps)
 	if err != nil || len(steps) == 0 {
-		return api.recordCampaignError(ctx, c, fmt.Errorf("stored steps are unreadable"))
+		return api.recordCampaignError(ctx, c, &campaignConfigurationError{fmt.Errorf("stored steps are unreadable")})
 	}
 	if err := api.planCampaign(ctx, c, trigger, steps, now, state); err != nil {
 		if errors.Is(err, errCampaignPlanBudget) || errors.Is(err, errCampaignResolutionTimeout) || ctx.Err() != nil {
@@ -692,10 +695,40 @@ func (api *Api) planOrRecord(ctx context.Context, c *Campaign, now time.Time, st
 	return nil
 }
 
+// campaignConfigurationError marks validation at a known tenant-configuration boundary.
+// Ordinary dependency and database errors must never acquire this marker.
+type campaignConfigurationError struct{ error }
+
+func (e *campaignConfigurationError) Unwrap() error { return e.error }
+
+// campaignLogger is the logger the campaign scheduler's errors are written to: the
+// injected one when set, else the global logger.
+func (api *Api) campaignLogger() *zerolog.Logger {
+	if api.campaignLog != nil {
+		return api.campaignLog
+	}
+	return &log.Logger
+}
+
 func (api *Api) recordCampaignError(ctx context.Context, c *Campaign, cause error) error {
-	msg := cause.Error()
+	tenant, _ := core.TenantFromContext(ctx)
+	api.campaignLogger().Error().Err(cause).Str("tenant", tenant).Str("campaign", c.Token).
+		Msg("Campaign planning or membership check failed.")
+	msg := "planning failed because of an internal error; it will be retried"
+	var configuration *campaignConfigurationError
+	var refusal *EnqueueRejected
+	switch {
+	case errors.As(cause, &configuration):
+		msg = configuration.Error()
+	case errors.As(cause, &refusal):
+		msg = refusal.Reason
+	}
 	if len(msg) > 500 {
-		msg = msg[:500]
+		end := 500
+		for !utf8.RuneStart(msg[end]) {
+			end--
+		}
+		msg = msg[:end]
 	}
 	_ = api.RDB.DB(ctx).Model(c).Where("id = ?", c.ID).
 		Update("last_error", sql.NullString{String: msg, Valid: true}).Error
@@ -728,6 +761,9 @@ func (api *Api) planCampaign(ctx context.Context, c *Campaign, trigger *schedule
 	}
 	cycles, err := trigger.Cycles(from, horizon)
 	if err != nil {
+		if errors.Is(err, schedule.ErrInvalid) {
+			return &campaignConfigurationError{err}
+		}
 		return err
 	}
 	through := horizon
@@ -955,7 +991,7 @@ var campaignCreateHook func()
 func (api *Api) fireCampaign(ctx context.Context, c *Campaign, now time.Time, pass string) error {
 	steps, err := DecodeSteps(c.Steps)
 	if err != nil || len(steps) == 0 {
-		return api.recordCampaignError(ctx, c, fmt.Errorf("stored steps are unreadable"))
+		return api.recordCampaignError(ctx, c, &campaignConfigurationError{fmt.Errorf("stored steps are unreadable")})
 	}
 	db := api.RDB.DB(ctx)
 	var errs []error
