@@ -78,6 +78,8 @@ Quiet hours are not [maintenance windows](/guides/maintenance-windows). A mainte
 to a device type and holds disruptive commands; quiet hours belong to a notification policy and hold
 its pages.
 
+The scheduler serves up to four tenants concurrently in rotating order. Releases and escalations stop starting new alarms after a tenant has spent twice the whole-dispatch budget (80 seconds by default) while another tenant is waiting for a worker, leaving the remainder due next tick; a tenant nobody is waiting behind keeps going. Already-started alarms keep their full dispatch budget, and clear announcements run in the same tenant job under a separate budget. A slow channel therefore cannot hold every tenant behind its entire backlog. Within one tenant job, a channel that exhausts its timeout attempts is skipped for the remaining deliveries; healthy channels still receive mixed-channel alarms. Escalations routed only to skipped channels keep their tier and are probed again next tick. The first failed probe can still consume a tier. Slice exhaustion is reported by `devicechain_notificationmanagement_tenant_slice_exhausted_total`, without a tenant label; the log identifies the tenant.
+
 ## Related
 
 - [Quiet hours](/guides/notification-channels#quiet-hours), for what is held and released, time

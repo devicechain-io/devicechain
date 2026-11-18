@@ -579,7 +579,7 @@ describe('DecoderPanel: health and recent failures', () => {
       PayloadDecoderHealth: () => ({ payloadDecoderHealth: { decoded: 10, ignored: 0, failed: 20, suppressed: 5 } }),
     });
     renderPanel();
-    expect((await screen.findByRole('status')).textContent).toContain('not recorded');
+    expect((await screen.findByText(/not recorded/)).closest('[role="status"]')).toBeTruthy();
   });
 
   it('lists the kept failures and links to the failed events filtered to decoder failures', async () => {

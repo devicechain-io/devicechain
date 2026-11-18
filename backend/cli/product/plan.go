@@ -13,6 +13,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/credbinding"
+	"github.com/devicechain-io/dc-microservice/userclient"
 )
 
 func sortStrings(s []string) { sort.Strings(s) }
@@ -60,7 +63,7 @@ type Options struct {
 	Getenv func(string) string
 	// RotateSecrets re-sends every connector credential whose handle resolves, even to a
 	// connector that already holds one. The server never reveals a stored credential, so
-	// without this a credential is only ever sent to a connector that has none.
+	// without this a credential is sent only when absent or when its destination changes.
 	RotateSecrets bool
 	// NoPublish converges drafts and stops there.
 	NoPublish bool
@@ -378,6 +381,15 @@ func (pl *planner) connector(d Connector, live *LiveConnector) {
 		return
 	}
 	changed, names := diffInputs(d.input(), live.input())
+	// Re-supply on a type/config edit when the manifest's handle resolves. Topic/QoS
+	// changes alone do not move the credential recipient.
+	if d.Credential != nil && secret == nil && connectorRecipientChanged(d, live) {
+		if value, ok := pl.secretFor(d); ok {
+			secret = &value
+			pl.p.Notes = append(pl.p.Notes, fmt.Sprintf("connector %q: re-supplying credential from %s for its changed destination", d.Token, d.Credential.Handle))
+		}
+	}
+
 	if secret != nil {
 		changed["secret"] = *secret
 		names = append(names, "credential")
@@ -394,6 +406,9 @@ func (pl *planner) connector(d Connector, live *LiveConnector) {
 				}
 				vars := map[string]any{"token": d.Token, "request": changed, "expectedUpdatedAt": live.UpdatedAt}
 				if err := pl.c.Query(ctx, pl.ep.Connectors, mUpdateConnector, vars, &out); err != nil {
+					if d.Credential != nil && userclient.AllHaveCode(err, credbinding.Code) {
+						return fmt.Errorf("connector %q: set %s and re-run: %w", d.Token, d.Credential.Handle, err)
+					}
 					return err
 				}
 				return pl.maybePublish(ctx, publish, deref(out.C.UpdatedAt))

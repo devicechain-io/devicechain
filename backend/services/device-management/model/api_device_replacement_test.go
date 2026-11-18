@@ -59,11 +59,11 @@ func replacementTestApi(t *testing.T) (*Api, context.Context) {
 	// deleteEdgeEntity removes relationship edges, entity attributes, alarms and group
 	// memberships before the cascade closure runs, so a fixture missing any of them
 	// fails the delete for the wrong reason and hides the one under test.
-	require.NoError(t, db.AutoMigrate(
+	require.NoError(t, db.AutoMigrate(&EntityGroupFacetRef{},
 		&DeviceType{}, &Device{}, &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{},
 		&DeviceConfigurationRevision{}, &DeviceConfigurationState{},
 		&AssetType{}, &Asset{},
-		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{},
+		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{},
 		&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupMembership{},
 	), "migrate")
 	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {

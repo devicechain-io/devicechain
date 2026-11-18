@@ -8,6 +8,7 @@
 // rejection. An error boundary cannot contain an infinite loop or hostile same-page code;
 // trusted package installation remains the operator's responsibility.
 
+import { sharedStrings } from './shared-strings';
 import { Component, createContext, useCallback, useContext, useState, type ReactNode } from 'react';
 
 import { WidgetFrame } from '@devicechain/widget-sdk';
@@ -82,10 +83,10 @@ class WidgetErrorBoundary extends Component<BoundaryProps, BoundaryState> {
           <div style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">
             ⚠
           </div>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>This widget failed to render</div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{sharedStrings().renderFailed}</div>
           <div style={{ fontSize: 11, opacity: 0.8, wordBreak: 'break-word' }}>{error.message}</div>
           <button type="button" style={BUTTON_STYLE} onClick={this.reset}>
-            Reset widget
+            {sharedStrings().reset}
           </button>
         </div>
       </WidgetFrame>
@@ -133,7 +134,7 @@ export function WidgetContainment({ title, resetKey, children }: WidgetContainme
           }}
         >
           <span style={{ flex: 1, wordBreak: 'break-word' }}>{messages.join(' · ')}</span>
-          <button type="button" aria-label="Dismiss" onClick={clear} style={{ cursor: 'pointer' }}>
+          <button type="button" aria-label={sharedStrings().dismiss} onClick={clear} style={{ cursor: 'pointer' }}>
             ×
           </button>
         </div>

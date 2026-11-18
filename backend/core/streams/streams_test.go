@@ -394,3 +394,18 @@ func TestMaxDeliveriesCaptureDeclaration(t *testing.T) {
 		t.Error("advisory-shaped and undeclared streams must not be captured")
 	}
 }
+
+func TestUpdateManagementDurablyReadsEntityDeletions(t *testing.T) {
+	for _, stream := range All {
+		if stream.Suffix != EntityDeleted {
+			continue
+		}
+		for _, reader := range stream.Readers {
+			if reader == (Reader{"update-management", ReadDurable}) {
+				return
+			}
+		}
+		t.Fatal("update-management has no durable entity-deleted reader")
+	}
+	t.Fatal("entity-deleted stream is missing")
+}

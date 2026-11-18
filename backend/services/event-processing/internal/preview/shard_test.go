@@ -23,6 +23,9 @@ import (
 
 type previewShardRouter struct{}
 
+// Ready reports a placement is always adoptable: this router places every tenant statically.
+func (previewShardRouter) Ready() error { return nil }
+
 func (previewShardRouter) ShardGroup(tenant string) (int, error) { return 1, nil }
 
 // legacyBrokerSource hides the concrete manager, preserving the parent's exact
