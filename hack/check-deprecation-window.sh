@@ -5,7 +5,7 @@
 # May the removals declared against the last release actually be removed? Only when each element
 # was marked deprecated early enough for a client to have moved.
 #
-#   hack/check-deprecation-window.sh                 # baseline: nearest stable tag reachable from HEAD
+#   hack/check-deprecation-window.sh                 # baseline: hack/api-baseline.sh's rule
 #   hack/check-deprecation-window.sh v1.4.0          # baseline: the tag given
 #   hack/check-deprecation-window.sh --enforce       # fail even before 1.0.0
 #   hack/check-deprecation-window.sh --self-test     # prove the check can fail, through this script
