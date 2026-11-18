@@ -30,7 +30,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/proto"
 	"github.com/devicechain-io/dc-microservice/storehold"
-	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -331,9 +330,6 @@ func (rez *EventResolver) resolveProfile(ctx context.Context, api model.DeviceMa
 	return res, 0, nil
 }
 
-// relationshipTokenNamespace namespaces the derived tokens of relationships created from events.
-var relationshipTokenNamespace = uuid.MustParse("6f1c3a52-8d0e-5b7a-9c41-2e5d7a9b1c30")
-
 // Create a new relationship based on an inbound event. The source is the
 // originating device; the target is a uniform (type, token) reference (ADR-013).
 func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, device *model.Device,
@@ -351,8 +347,7 @@ func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, devic
 		return nil, reason, err
 	}
 	tenant, _ := core.TenantFromContext(ctx)
-	token := uuid.NewSHA1(relationshipTokenNamespace, []byte(strings.Join([]string{
-		tenant, string(entity.TypeDevice), device.Token, relcreate.TargetType, relcreate.Target, relcreate.RelationshipType}, "\x00"))).String()
+	token := model.DeviceAuthoredRelationshipToken(tenant, device.Token, relcreate.TargetType, relcreate.Target, relcreate.RelationshipType)
 	if found, ferr := rez.Api.EntityRelationshipsByToken(ctx, []string{token}); ferr != nil {
 		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), ferr
 	} else if len(found) > 0 && found[0] != nil {

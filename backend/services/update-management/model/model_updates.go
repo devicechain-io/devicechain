@@ -48,6 +48,10 @@ type UpdateAssignment struct {
 	// from before the column — is invisible to every scoped member. Appended by a later
 	// migration, so it is last.
 	ScopeAnchors rdb.Anchors `gorm:"type:text[]"`
+
+	// DeviceIncarnation binds the assignment to one device-management row. NULL marks
+	// legacy assignments and permits writes from older pods during rolling upgrades.
+	DeviceIncarnation sql.NullInt64 `gorm:"type:bigint"`
 }
 
 // ScopedBy admits members limited to part of the tenant (ADR-081) to READ the assignments

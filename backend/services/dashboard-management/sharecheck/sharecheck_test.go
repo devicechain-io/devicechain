@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -67,5 +68,29 @@ func TestAnUnansweredLookupIsAnError(t *testing.T) {
 	} {
 		_, err := New(tc.q, "u").Missing(context.Background(), "t1", tc.kind, []string{"north"})
 		require.Error(t, err, name)
+	}
+}
+
+func TestMalformedResponseTokensFailClosed(t *testing.T) {
+	for _, kind := range []string{"customer", "group"} {
+		list := "customersByToken"
+		if kind == "group" {
+			list = "entityGroupsByToken"
+		}
+		for name, entities := range map[string]string{
+			"empty":       `{"token":""}`,
+			"unrequested": `{"token":"other"}`,
+			"duplicate":   `{"token":"acme"},{"token":"acme"}`,
+		} {
+			t.Run(kind+"/"+name, func(t *testing.T) {
+				// Reject malformed tokens even on non-access groups.
+				entities = strings.ReplaceAll(entities, `}`, `,"accessScope":false}`)
+				q := &fakeQuerier{answer: `{"` + list + `":[` + entities + `]}`}
+				checker := New(q, "u")
+				missing, err := checker.Missing(context.Background(), "t1", kind, []string{"acme"})
+				require.Error(t, err)
+				require.Nil(t, missing)
+			})
+		}
 	}
 }

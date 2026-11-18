@@ -95,6 +95,7 @@ var tunableValues = []string{
 	// setting the volume cannot hold is refused by name rather than crash-looping a service.
 	// The ones dcctl itself presets (the compact profile's ceilings and the design rate) are in
 	// presetDefaults, which is what lets an overlay replace them.
+	"instance.config.infrastructure.nats.shardGroups",
 	"instance.config.infrastructure.nats.streamDesignRate",
 	"instance.config.infrastructure.nats.streamRunwayMinutes",
 	"instance.config.infrastructure.nats.streamMaxBytes",
@@ -441,6 +442,9 @@ func refuseCarriedObserveValues(values map[string]interface{}, source, command s
 // then values.schema.json over the chart's own defaults with the overlay on top. It reads
 // nothing from a cluster, so it runs before anything exists to change.
 func ValidateValuesOverlay(overlay map[string]interface{}) error {
+	if _, err := shardGroupsFromValues(overlay); err != nil {
+		return err
+	}
 	if err := refuseObserveValues(overlay, "the values overlay"); err != nil {
 		return err
 	}
@@ -538,6 +542,12 @@ func deepCopyValues(m map[string]interface{}) map[string]interface{} {
 // then refuses, or the reverse.
 func authoringValues(st *State) map[string]interface{} {
 	vals := helmValues(st)
+	if st.ShardGroups != nil && !st.ValuesOverlayIntent {
+		b, _ := json.Marshal(st.ShardGroups)
+		var raw interface{}
+		_ = json.Unmarshal(b, &raw)
+		mergeOverlay(vals, shardGroupsValues(raw))
+	}
 	if overlay := effectiveOverlay(st); len(overlay) > 0 {
 		// Keep the recorded choice without changing the stored tuning overlay; fresh
 		// conflicts are refused earlier by checkDeviceUplinksOverlay.

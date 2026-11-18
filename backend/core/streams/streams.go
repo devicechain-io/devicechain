@@ -1095,7 +1095,7 @@ var All = []Stream{
 	// At-least-once and idempotent.
 	// Window: device-management publishes from a transactional outbox, at least once,
 	// with Nats-Msg-Id entdel/<tenant>/<type>/<id>; a retry within the window is stored once.
-	{Suffix: EntityDeleted, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "a deletion fan-out in flight; device-management re-publishes a deletion until the broker acknowledges it, but one acknowledged just before the restore point may not have reached every consumer", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"dashboard-management", ReadDurable}, {"event-management", ReadDurable}, {"event-processing", ReadDurable}, {"command-delivery", ReadDurable}, {"device-state", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
+	{Suffix: EntityDeleted, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "a deletion fan-out in flight; device-management re-publishes a deletion until the broker acknowledges it, but one acknowledged just before the restore point may not have reached every consumer", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"dashboard-management", ReadDurable}, {"event-management", ReadDurable}, {"event-processing", ReadDurable}, {"command-delivery", ReadDurable}, {"device-state", ReadDurable}, {"update-management", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
 
 	// ADR-081. Emitted post-commit by device-management whenever a device's tracked
 	// relationships may have changed (an edge created or removed, a claim redeemed or
@@ -1396,6 +1396,20 @@ func AppliesBackpressure(suffix string) bool {
 // "" when it forwards nowhere that applies backpressure. See Stream.Forwards.
 func ForwardsInto(suffix, area string) string {
 	return bySuffix[suffix].Forwards[area]
+}
+
+// ForwardersInto returns the areas declared to forward from any stream into suffix.
+func ForwardersInto(suffix string) []string {
+	var areas []string
+	for _, stream := range All {
+		for area, downstream := range stream.Forwards {
+			if downstream == suffix && !slices.Contains(areas, area) {
+				areas = append(areas, area)
+			}
+		}
+	}
+	slices.Sort(areas)
+	return areas
 }
 
 // IsDeclared reports whether a suffix names a declared stream.

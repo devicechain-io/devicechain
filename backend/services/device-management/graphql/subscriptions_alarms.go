@@ -16,11 +16,48 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	util "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
+
+// Factories are test seams, replaced only before creating a hub.
+var alarmLiveOpener = func(nmgr *messaging.NatsManager) messaging.LiveOpener {
+	return func(ctx context.Context, tenant string) (<-chan messaging.Message, error) {
+		return nmgr.SubscribeLive(ctx, tenant, streams.AlarmEvents)
+	}
+}
+var alarmDecode = decodeAlarms
+var alarmDropHook func()
+
+// InitLiveSubscriptionMetrics runs once during process initialization, never per connection.
+func InitLiveSubscriptionMetrics(ms *core.Microservice) {
+	counter := ms.NewCounterVec("live_subscription_dropped_total", "Live values dropped for slow subscribers.", []string{"suffix"}).WithLabelValues(streams.AlarmEvents)
+	alarmDropHook = counter.Inc
+}
+
+func alarmHub(nmgr *messaging.NatsManager) *messaging.LiveHub[*model.AlarmStateChangeEvent] {
+	return messaging.SharedLiveHub(nmgr, streams.AlarmEvents, func() *messaging.LiveHub[*model.AlarmStateChangeEvent] {
+		hub := messaging.NewLiveHub(streams.AlarmEvents, alarmLiveOpener(nmgr), alarmDecode, messaging.DefaultMaxLiveSubscribersPerTenant)
+		hub.OnDrop(alarmDropHook)
+		return hub
+	})
+}
+
+func alarmOriginatorKey(originatorType string, id uint) string {
+	return fmt.Sprintf("%s:%d", originatorType, id)
+}
+
+func decodeAlarms(msg messaging.Message, _ string) []messaging.Keyed[*model.AlarmStateChangeEvent] {
+	ev, err := dmproto.UnmarshalAlarmStateChangeEvent(msg.Value)
+	if err != nil {
+		log.Debug().Err(err).Msg("alarm subscription: skipping undecodable alarm event")
+		return nil
+	}
+	return []messaging.Keyed[*model.AlarmStateChangeEvent]{{Key: alarmOriginatorKey(ev.OriginatorType, ev.OriginatorId), Value: ev}}
+}
 
 // alarmEventFilter is the set of narrowing predicates for an alarm subscription,
 // resolved once at subscribe time. Every field is optional and they AND together;
@@ -40,6 +77,11 @@ type alarmEventFilter struct {
 	// query applies in the database (Alarm.ScopedBy), applied here to the live feed, which
 	// never touches the database. An unstamped alarm matches no scope.
 	scope auth.Scope
+	// position is set for a subscriber without location:read: an event of an alarm a geofence
+	// rule raised is withheld, as every alarm read withholds it (model/position_withholding.go)
+	// and as detectionStream withholds the rule's detections. nil for a subscriber holding it.
+	// Judged last, after every predicate that needs no store read.
+	position *positionGate
 }
 
 // matches reports whether an alarm event passes every set predicate.
@@ -65,7 +107,76 @@ func (f alarmEventFilter) matches(ev *model.AlarmStateChangeEvent) bool {
 	if f.scope.IsScoped() && !sharesAnchor(f.scope.Anchors(), ev.ScopeAnchors) {
 		return false
 	}
+	if f.position != nil && !f.position.allows(ev.AlarmToken) {
+		return false
+	}
 	return true
+}
+
+// maxWithheldAlarms bounds a subscription's memory of withheld alarms.
+const maxWithheldAlarms = 1024
+
+// positionGate decides, for a subscriber without location:read, whether an alarm's events may
+// be pushed. The event does not say whether its alarm is position-derived, so the gate reads the
+// alarm's classification. Only an alarm classified NOT position-derived is delivered; a
+// position-derived one, one not classified yet, one that cannot be read and one that no longer
+// exists are withheld (fail closed).
+//
+// Only a position-derived verdict is remembered. That verdict is sticky (never cleared), so it
+// never goes stale; every other answer can change (a visible alarm can become position-derived
+// when a geofence rule first contributes to it, an unclassified one is classified within a
+// minute), so it is asked again on the alarm's next event. A failed read is not remembered either,
+// so a store error does not silence an alarm for the rest of the subscription. The memory is
+// bounded (FIFO); an evicted alarm is simply read again.
+//
+// One gate per subscription, used from that subscription's goroutine only.
+type positionGate struct {
+	derived  func(token string) (derived *bool, found bool, err error)
+	withheld map[string]struct{}
+	order    []string
+	next     int
+}
+
+// positionGateFor returns the gate for a subscriber, or nil for one holding location:read, which
+// receives every event its other predicates pass. derived is Api.AlarmPositionDerived.
+func positionGateFor(ctx context.Context, derived func(context.Context, string) (*bool, bool, error)) *positionGate {
+	if model.CallerHoldsLocationRead(ctx) {
+		return nil
+	}
+	return &positionGate{derived: func(token string) (*bool, bool, error) { return derived(ctx, token) }}
+}
+
+func (g *positionGate) allows(token string) bool {
+	if _, ok := g.withheld[token]; ok {
+		return false
+	}
+	derived, found, err := g.derived(token)
+	if err != nil {
+		log.Debug().Err(err).Str("alarm", token).Msg("alarm subscription: alarm unreadable; withholding event")
+		return false
+	}
+	if !found || derived == nil {
+		return false
+	}
+	if !*derived {
+		return true
+	}
+	g.remember(token)
+	return false
+}
+
+func (g *positionGate) remember(token string) {
+	if g.withheld == nil {
+		g.withheld = make(map[string]struct{})
+	}
+	if len(g.withheld) == maxWithheldAlarms {
+		delete(g.withheld, g.order[g.next])
+		g.order[g.next] = token
+		g.next = (g.next + 1) % maxWithheldAlarms
+	} else {
+		g.order = append(g.order, token)
+	}
+	g.withheld[token] = struct{}{}
 }
 
 // sharesAnchor reports whether the two anchor lists have one in common.
@@ -123,7 +234,7 @@ func newAlarmEventFilter(ctx context.Context, scope auth.Scope, args alarmStream
 // happen (ADR-041 / ADR-037). It taps the live alarm-events feed for the caller's
 // tenant and pushes each event — the same envelope the alarm integrator and operator API
 // emit (2.D) — optionally narrowed to one originator/state/severity/alarm key. The
-// feed is torn down when the client unsubscribes or disconnects (ctx cancelled).
+// shared feed is torn down when its last client disconnects (ctx cancelled).
 // Named distinctly from the alarm queries because both resolve off the one root
 // resolver; unlike a query it streams from subscribe time onward with no backfill.
 func (r *SchemaResolver) AlarmStream(ctx context.Context, args alarmStreamArgs) (<-chan *AlarmEventResolver, error) {
@@ -143,6 +254,7 @@ func (r *SchemaResolver) AlarmStream(ctx context.Context, args alarmStreamArgs) 
 	if err != nil {
 		return nil, err
 	}
+	filter.position = positionGateFor(ctx, r.GetApi(ctx).AlarmPositionDerived)
 	// Resolve an originator token to its id once, at subscribe time, so per-event
 	// filtering is a cheap int compare (mirrors the Alarms query criteria). An
 	// unresolvable originator is a client error surfaced now, not a silently empty
@@ -163,7 +275,11 @@ func (r *SchemaResolver) AlarmStream(ctx context.Context, args alarmStreamArgs) 
 		filter.originatorId = &id
 	}
 
-	live, err := r.GetNats(ctx).SubscribeLive(ctx, tenant, streams.AlarmEvents)
+	var keys []string
+	if filter.originatorId != nil {
+		keys = []string{alarmOriginatorKey(*args.OriginatorType, *filter.originatorId)}
+	}
+	live, err := alarmHub(r.GetNats(ctx)).Subscribe(ctx, tenant, keys)
 	if err != nil {
 		return nil, err
 	}
@@ -171,19 +287,16 @@ func (r *SchemaResolver) AlarmStream(ctx context.Context, args alarmStreamArgs) 
 	out := make(chan *AlarmEventResolver)
 	go func() {
 		defer close(out)
-		for msg := range live {
-			ev, err := dmproto.UnmarshalAlarmStateChangeEvent(msg.Value)
-			if err != nil {
-				log.Debug().Err(err).Msg("alarm subscription: skipping undecodable alarm event")
-				continue
-			}
-			if !filter.matches(ev) {
-				continue
-			}
-			select {
-			case out <- &AlarmEventResolver{E: ev, S: r, C: ctx}:
-			case <-ctx.Done():
-				return
+		for batch := range live {
+			for _, ev := range batch {
+				if !filter.matches(ev) {
+					continue
+				}
+				select {
+				case out <- &AlarmEventResolver{E: ev, S: r, C: ctx}:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -194,6 +307,8 @@ func (r *SchemaResolver) AlarmStream(ctx context.Context, args alarmStreamArgs) 
 // AlarmEvent resolver
 // -----------------
 
+// AlarmEventResolver and all field resolvers treat E (including pointer fields)
+// as read-only: the decoded event is shared across live subscribers.
 type AlarmEventResolver struct {
 	E *model.AlarmStateChangeEvent
 	S *SchemaResolver

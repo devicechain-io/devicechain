@@ -194,21 +194,19 @@ rowLoop:
 	return len(done), pubErr
 }
 
+// entityDeletionDrainLockName names the drain's advisory lock. Its key is shared by old
+// and new replicas during a rolling upgrade, so the name must never change.
+const entityDeletionDrainLockName = "device-management-entity-deletion-drain"
+
 // DrainEntityDeletionsLocked runs one pass under a process-independent advisory lock.
 // Other replicas skip rather than publish the same queued facts concurrently.
 func (api *Api) DrainEntityDeletionsLocked(ctx context.Context) error {
 	var res EntityDeletionDrainResult
-	ran, err := api.RDB.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey("device-management-entity-deletion-drain"), func() error {
+	err := api.RDB.SingletonPass(ctx, entityDeletionDrainLockName, func() error {
 		var err error
 		res, err = api.DrainEntityDeletions(ctx, EntityDeletionDrainPageSize)
 		return err
 	})
-	if !ran {
-		if err != nil {
-			return fmt.Errorf("acquiring the entity-deletion-drain lock: %w", err)
-		}
-		return core.ErrPassSkipped
-	}
 	if res.Published > 0 {
 		log.Debug().Int("tenants", res.Tenants).Int("published", res.Published).Msg("Published queued entity deletions")
 	}

@@ -170,6 +170,24 @@ Broker、卷以及预写日志的额度：
 
 现有卷是此顺序的例外。如果已知卷的实际大小，`dcctl` 会将其作为 `nats_jetstream_storage` 和 `timescale_storage` 传入，即使你通过环境变量或 tfvars 文件提供了不同的值。这两个变量仅在卷尚不存在的初次创建时，才由你的值优先于规格预设。对于其他规格预设的 OpenTofu 变量，`dcctl` 会省略你已声明的变量，使你的值优先。`dcctl bootstrap` 打印的那一行会写明所应用的规格。
 
+代理的拓扑是另一个例外。`dcctl` 总是自己传入 `ha` 和 `nats_cluster_replicas`，因此你为其中任何一个声明的值都会被覆盖。服务器数量和每个流的副本数由 `--ha` 一起设定（不带它时为一台服务器、一个副本，带它时为三台、三个）。分片组会把服务器数量提高到至少三台，并且每组至少一台。这样可以避免集群中所有流都只有一个副本、却在为不保存任何副本的服务器付费。使用 `dcctl` 无法构建一个多服务器、单副本流且没有分片组的代理。当你声明了其中任何一个变量时，`dcctl bootstrap` 和 `dcctl upgrade` 会打印一条说明，指出该值已被覆盖。
+
 ## 更改运行中实例的规格 {#changing}
 
 实例保留其 bootstrap 时的规格。把现有实例换到另一个规格不属于本版本；在此之前，请把想要的设置写进覆盖文件，它优先于任何规格。无论哪种规格，`dcctl` 都无法扩容 JetStream 卷，操作步骤见[事件流能等待多久才扛过一次中断](./observability.md#outage-runway)。
+
+## GKE 备份存储 {#gke-backup-storage}
+
+在 GKE 上，新建的集群内备份卷使用专用 CSI StorageClass
+`dc-object-store-standard`，磁盘类型为 `pd-standard`，回收策略为 `Retain`。
+批量备份不需要 SSD。GKE 内置的 `standard-rwo` 使用 `pd-balanced`，仍然消耗
+SSD 配额。JetStream 和数据库的存储类保持不变。无法挂载 `pd-standard` 磁盘的机器系列（例如 C3、C4 和 N4）
+需要将 `backup_object_store_storage_class` 设为其节点支持的存储类。`perf-20k` 的备份卷沿用集群默认值
+`160Gi`；该预设将 JetStream 设为 `40Gi`，事件存储设为 `260Gi`。
+
+可通过集群 OpenTofu 变量 `backup_object_store_storage_class` 为**新卷**指定其他
+存储类。其他提供商继续使用集群默认存储类。`dcctl install` 根据集群 StorageClass 中的
+GKE 持久磁盘 CSI 驱动识别 GKE，并设置 `backup_object_store_gke_standard_disk`；如果自行
+应用集群根配置，请在 GKE 上设置该变量。显式指定的存储类优先。重新运行 `dcctl install` 或升级时，已有 PVC 保留原有容量和存储类，
+即使修改此变量也不会改变。这不会自动迁移已有 SSD 备份；迁移需要单独规划数据搬迁。
+如果原存储类支持扩容，可用 `kubectl patch` 扩大已有卷。

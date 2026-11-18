@@ -865,7 +865,7 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 		return RolloutStepResult{}, err
 	}
 	for _, v := range toPublish {
-		api.publishAssignment(ctx, v)
+		api.publishCurrentAssignment(ctx, v)
 	}
 	if lookupErr != nil {
 		return res, lookupErr
@@ -906,12 +906,12 @@ func (api *Api) dispatchOne(ctx context.Context, tx *gorm.DB, artifact *Artifact
 		if res.RowsAffected == 0 {
 			return errTargetTaken
 		}
-		assignmentID, err := api.adoptCurrent(sp, c.target.DeviceToken, artifact)
+		assignmentID, err := api.adoptCurrent(sp, c.target.DeviceToken, artifact, c.facts)
 		if err != nil {
 			return err
 		}
 		if assignmentID == 0 {
-			v, err := api.assignInTx(ctx, sp, c.target.DeviceToken, artifact, c.facts.Anchors)
+			v, err := api.assignInTx(ctx, sp, c.target.DeviceToken, artifact, c.facts)
 			if err != nil {
 				return err
 			}
@@ -973,13 +973,13 @@ func (api *Api) markSkipped(tx *gorm.DB, target UpdateRolloutTarget, code, detai
 // adoptCurrent returns the id of the device's current assignment for the artifact's component when
 // it already names THIS artifact and is either still live or ended UPDATED: the device is already
 // on (or on its way to) the rollout's target, so no second assignment is made. 0 means none.
-func (api *Api) adoptCurrent(tx *gorm.DB, deviceToken string, artifact *Artifact) (uint, error) {
+func (api *Api) adoptCurrent(tx *gorm.DB, deviceToken string, artifact *Artifact, facts DeviceFacts) (uint, error) {
 	var current []UpdateAssignment
 	if err := tx.Where("device_token = ? AND component = ? AND superseded_at IS NULL", deviceToken, artifact.Component).
 		Limit(1).Find(&current).Error; err != nil {
 		return 0, err
 	}
-	if len(current) == 0 || current[0].ArtifactId != artifact.ID {
+	if len(current) == 0 || !assignmentIsForDevice(current[0], facts) || current[0].ArtifactId != artifact.ID {
 		return 0, nil
 	}
 	var at []UpdateAttempt

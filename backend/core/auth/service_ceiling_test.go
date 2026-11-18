@@ -100,17 +100,19 @@ func TestCheckServiceCeiling(t *testing.T) {
 func TestServiceCeilingTableIsPinned(t *testing.T) {
 	want := map[string][]string{
 		"ai-inference":            {"tenant:read"},
-		"command-delivery":        {"device:read", "state:read", "tenant:read"},
+		"command-delivery":        {"device:read", "location:installed:read", "state:read", "tenant:read"},
 		"dashboard-management":    {"device:read", "tenant:read"},
 		"device-management":       {"device:read", "tenant:read"},
-		"event-management":        {"device:read"},
+		"device-state":            {"device:read", "tenant:read"},
+		"event-management":        {"device:read", "tenant:read"},
 		"event-processing":        {"ai:infer", "command:write", "device:read", "tenant:read"},
-		"event-sources":           {"command:wake", "device:read", "state:read", "tenant:read"},
+		"event-sources":           {"command:claim", "command:wake", "device:read", "state:read", "tenant:read"},
 		"lwm2m-ingest":            {"command:claim", "command:park", "command:read", "device:read", "device:write", "state:read", "tenant:read"},
 		"notification-management": {"tenant:read"},
-		"outbound-connectors":     {"tenant:read"},
+		"outbound-connectors":     {"command:claim", "device:read", "tenant:read"},
 		"sparkplug-ingest":        {"command:claim", "command:park", "command:read", "device:read", "device:write", "state:read", "tenant:read"},
 		"update-management":       {"device:read", "tenant:read"},
+		"user-management":         {"tenant:read"},
 	}
 	got := map[string][]string{}
 	for _, name := range ServiceCallerNames() {

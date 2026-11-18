@@ -96,13 +96,20 @@ if (typeof Element !== 'undefined') {
 }
 
 // Tests keep every catalog resident and synchronous. In production only English is bundled and the
-// other locales load on demand (src/i18n/config.ts); here the Spanish namespaces are registered up
+// other locales load on demand (src/i18n/config.ts); here every shipped locale is registered up
 // front so `changeLanguage('es')` has nothing to fetch and the suites that switch language assert
 // synchronously, exactly as they did when every catalog was bundled. Dynamic imports, not static
 // ones: config.ts reads localStorage while initializing, so it has to run after the storage
 // install above (static imports are hoisted above it).
 {
-  const { default: i18n } = await import('@/i18n/config');
-  const { default: es } = await import('@/i18n/locales/es');
-  for (const [ns, catalog] of Object.entries(es)) i18n.addResourceBundle('es', ns, catalog, true, true);
+  const { default: i18n, DEFAULT_LOCALE, SUPPORTED_LOCALES } = await import('@/i18n/config');
+  const { LOADERS } = await import('@/i18n/catalogLoaders');
+  for (const { code } of SUPPORTED_LOCALES) {
+    if (code === DEFAULT_LOCALE) continue;
+    const catalogs = await LOADERS[code]();
+    if (!catalogs) throw new Error(`No test catalogs loaded for ${code}`);
+    for (const [ns, catalog] of Object.entries(catalogs.default)) {
+      i18n.addResourceBundle(code, ns, catalog, true, true);
+    }
+  }
 }

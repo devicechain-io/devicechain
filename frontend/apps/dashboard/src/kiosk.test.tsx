@@ -431,10 +431,42 @@ describe('access-token refresh', () => {
     expect(screen.getByTestId('board')).toBeTruthy();
   });
 
-  it('an outage that outlasts the access token ends the session when the token expires, not before', async () => {
+  it('an outage that outlasts the access token keeps the session, and it recovers when the server returns', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     landOn('?dashboard=wall&kiosk=1');
-    signedInWith(300);
+    signedInWith(300); // the refresh token has a day left
+    let down = true;
+    const next = { accessToken: jwt(900), refreshToken: jwt(86400) };
+    serve({
+      refresh: () => {
+        if (down) throw new GraphQLRequestError('Request failed (503)', 503);
+        return { refresh: next };
+      },
+    });
+    render(<App />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // Twenty minutes down: four lifetimes of the access token.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_200_000);
+    });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByTestId('board')).toBeTruthy();
+
+    down = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000); // the capped backoff
+    });
+    expect(await h.getter!()).toBe(next.accessToken);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByTestId('board')).toBeTruthy();
+  });
+
+  it('an outage ends the session only when the refresh token lapses, not before', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    landOn('?dashboard=wall&kiosk=1');
+    signedInWith(300, 900);
     serve({
       refresh: () => {
         throw new GraphQLRequestError('Request failed (503)', 503);
@@ -445,13 +477,13 @@ describe('access-token refresh', () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(297_000); // 3 s of life left, every retry failed
+      await vi.advanceTimersByTimeAsync(899_000); // the access token is long gone
     });
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(screen.getByTestId('board')).toBeTruthy();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.advanceTimersByTimeAsync(1_000);
     });
     expect(screen.getByRole('alertdialog')).toBeTruthy();
     expect(screen.queryByTestId('board')).toBeNull();
