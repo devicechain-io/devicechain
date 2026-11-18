@@ -162,12 +162,9 @@ curl --cacert instance-ca.pem https://<host>/
 
 The authority lasts ten years. Renewing the host certificate keeps it, and the chart pins its private key (`rotationPolicy: Never`), so even a re-issued authority still verifies what the old one signed. Only deleting the authority's own Secret (`devicechain-tls-ca`) creates a new one, and clients must then fetch `ca.crt` again. An instance upgraded from an earlier chart keeps its previous self-signed certificate until it next renews; delete the `devicechain-tls` Secret to have it reissued from the authority at once. An instance that has moved to the Gateway serves `devicechain-tls-gateway` for good, a new leaf from the same authority, so fetch `ca.crt` from that Secret instead.
 
-The flags are listed under [Install flags](#install-flags). On a laptop:
-
-```bash
-dcctl install local --dev
-dcctl bootstrap local devicechain --dev
-```
+The flags are listed under [Install flags](#install-flags). For a laptop, follow the
+[quickstart recipe](../quickstart/first-device.md#1-bring-up-an-instance), including its
+[CPU, memory and Windows shell prerequisites](../quickstart/first-device.md#prerequisites).
 
 `dcctl bootstrap` refuses on a cluster where `dcctl install` has not completed, and the
 refusal names the install command to run. `dcctl upgrade` refuses in the same case.
@@ -184,8 +181,9 @@ docker rm -f kind-registry   # the local image registry, if you used --build
 ```
 
 kind knows nothing about `~/.devicechain/clusters/`, so deleting the cluster this way leaves
-its directory behind. The next `dcctl destroy` of an instance that was on that cluster finds
-the cluster gone and removes the directory along with the instance's own local state — see
+its directory behind. The next `dcctl destroy` of an instance recorded on that cluster removes
+the directory along with the instance's own local state only if the recorded context no longer
+answers — see
 [Removing an instance](#destroy). Or remove it by hand, once its `cluster.json` has confirmed
 which cluster it belonged to.
 
@@ -349,8 +347,7 @@ The cluster install sets up one ingress controller and every instance gets its r
 at the edge is a security control: the service-token mint and the signing-key set are served by
 `user-management` on an internal port that no ingress route targets, so the public port answers 404
 for them behind any controller. The mint is protected by the shared service secret, compared in constant time.
-The chart's routes carry no configuration snippet. `ingress-nginx`, on a cluster that still runs it, still accepts
-snippets in this release, because instances not yet upgraded rely on them.
+The chart's routes carry no configuration snippet. On a cluster that retains `ingress-nginx`, `dcctl install` disables snippets and restores the controller's default annotations risk level. It first refuses while any Ingress of that controller's class carries a `*-snippet` annotation, naming each one: upgrade its owning instance with `dcctl upgrade`, or remove the annotation, then re-run `dcctl install`. See [the v1.6.0 upgrade notes](./releases-and-upgrades.md#v160-nginx-snippets-off).
 
 If you bring your own controller, route the chart's five ingresses. A controller that implements the Gateway API can serve the Gateway and HTTPRoutes the chart renders instead (`ingress.controller: gateway`; the chart's README lists what such a controller must do):
 
@@ -552,16 +549,14 @@ Lengthening a window keeps more in the backup store: see below.
 
 #### Backup store size {#backup-store-size}
 
-The default store is 160 GiB, sized from the default event store so that, under sustained
-ingest, the event store's volume fills first. While an instance is quiet, the write-ahead log it
-archives costs almost nothing. Under sustained ingest the log grows with the write rate: measured
-on Google Kubernetes Engine, up to about 1.9 KB per ingested event for both databases together,
-against about 1 KB per event of stored data. (This page used to give about 1 KB per event for
-the archive; that figure was low.) 160 GiB holds the archive of a full 32 GiB event store, plus
-one full base backup of each database, with more than a third of the store still free. So the
-backup store's own alerts stay quiet, and the event store's alerts name the cause.
+The default backup store is 160 GiB. Under sustained ingest, archived write-ahead logs grow
+with the write rate. An earlier GKE measurement found up to about 1.9 KB of archived WAL per
+ingested event for both databases together; this is an archive sizing allowance, distinct from
+[756 bytes per stored event](./tuning-an-instance.md#event-store-sizing) in the event store.
+Allow space for archived WAL and full base backups of both databases, and measure actual usage
+to check that the event-store volume fills before the backup store.
 
-That holds for one instance whose event store fills within about a day. It does not hold:
+The backup store may fill first in these cases:
 
 - **for several instances that ingest continuously.** The store belongs to the cluster, and each
   instance adds its own archive. Add about 160 GiB for each such instance, or send backups to an
@@ -596,7 +591,7 @@ log on its own volume until that fills too and the database stops.
 Each database compresses the log it archives with zstd. The 1.9 KB figure, and the 100 and 35
 events per second worked out from it above, were measured before this release compressed the event
 store's log, gave it time-led keys and archived with zstd, while the archive was compressed with
-gzip, so they err large: in the release benchmark the event store's archive took about 0.47 KB per
+gzip, so they err large: in the release benchmark the event store's archive took about 0.47 KB of archived WAL per
 stored event. The relational database's share was not measured again. On the same log, zstd's output was 2% to 16% smaller than
 gzip's, so the switch does not make the archive larger. A segment closed early on a quiet
 database is about 16 KiB, or about 32 KiB on a database that still archives with gzip.
@@ -708,8 +703,8 @@ The alerts for snapshots are described under
 - **OpenTofu 1.10 or later** (the `tofu` binary; `terraform` 1.10 or later also works) on your
   `PATH`. `dcctl` drives it to provision infrastructure. Install it from
   [opentofu.org](https://opentofu.org). Run `dcctl preflight local` to check that it is there,
-  and the rest of your environment, up front. The preflight does not check its version; an older
-  one fails when it loads the infrastructure configuration.
+  and the rest of your environment, up front. The preflight also refuses a version older than
+  1.10, so an old binary stops the run before anything is created.
 - **`kubectl`** on your `PATH`, and **`docker`** and **`kind`** for the `local`
   provider. The preflight check fails if any the run needs is missing. Docker is needed only for a
   local kind cluster or for `--build`: an install into a cluster you name with `--kube-context`,
@@ -1748,14 +1743,12 @@ measured on the three-node cluster of the first four rows.
 #### Event store volume {#event-store-volume}
 
 Each event-store instance has a 32Gi volume, so three of them under `--ha` (4Gi each under
-`--compact`). A stored measurement costs about 1.05 KB, and the database's write-ahead log takes
-about 1.1 GB more while backups keep up with it, so 32Gi holds about 27 million events: about
-seven hours of one tenant sending at its full default ceiling.
+`--compact`). Using [756 bytes per stored event](./tuning-an-instance.md#event-store-sizing)
+and about 1.1 GB for resident WAL while backups keep up, 32Gi holds about 44 million events
+before working headroom: about 12 hours at one tenant's default ceiling of 1,000 events/s.
 
-A measurement row measured about 600 bytes on disk, indexes included and before compression, in a later
-benchmark (51 million rows filled 31 GB), so the figure above is the cautious one. How to size the
-volume for your traffic, with calculated metrics and retention, and how to expand it online, is in
-[Sizing the event store](./tuning-an-instance.md#event-store-sizing).
+Size the volume for your traffic, extra measurement rows from calculated metrics, retention and
+WAL headroom: see [Sizing the event store](./tuning-an-instance.md#event-store-sizing).
 
 The event store compresses the page images in its write-ahead log (`wal_compression = lz4`).
 After each checkpoint, the first change to a page writes the whole page into the log, and on this
@@ -1767,7 +1760,7 @@ by about the same proportion (from 5.8 to 3.2 per million events stored). It doe
 this volume holds: the log on it still takes about 1.1 GB while backups keep up with it, so the
 figure above stands. The [backup store sizing](#backup-store-size) was measured before this
 compression, the time-led keys and zstd archiving, so it errs large: in the release benchmark the
-event store's archive took about 0.47 KB per stored event, against the 1.9 KB that sizing assumes
+event store's archive took about 0.47 KB of archived WAL per stored event, against the 1.9 KB archive allowance
 for both databases; the relational database's share was not re-measured. The relational store does not compress its log.
 
 With the [default backup store](#backup-store-size) and one instance, this volume is what fills
@@ -1989,8 +1982,11 @@ bootstrapping it again under the same name is how you recreate an instance. An i
 by an older release, before `dcctl install` existed, is the exception: its cluster has to be
 recreated too — see [Releases & Upgrades](./releases-and-upgrades.md#pre-declaration-recreate).
 
-If the kind cluster itself is already gone — deleted with `kind delete cluster` — destroy has
-nothing to uninstall and says so, clearing local state only. That is the instance's directory,
+If the kind cluster itself is already gone — deleted with `kind delete cluster` — destroy
+clears local state only when the instance has a record of its cluster and the recorded
+context no longer answers. A guess is never evidence that the cluster is gone. Without a
+record, the normal uninstall runs and fails if the cluster cannot be reached; pass
+`--kube-context`, or remove the instance's directory by hand if its cluster is really gone. That is the instance's directory,
 and the cluster's own directory under `~/.devicechain/clusters/<cluster-uid>/`, which
 `dcctl install` created and `kind delete cluster` left behind (see
 [Install the cluster](#install)). As it does, it prints:

@@ -17,6 +17,8 @@ están implementados y validados de extremo a extremo: un resumen de la instanci
 descritos en [Paneles de Grafana](./grafana-boards.md), con reglas de alerta incluidas.
 :::
 
+Las métricas (`/metrics`) y las sondas de salud (`/healthz`, `/readyz`) usan el puerto 8083 (`ops`) de los pods y del Service de cada área. Las rutas públicas `/api/<area>/...` apuntan únicamente al puerto de la API (`graphql`, 8080) y no permiten acceder a estos endpoints operativos. Si utilizas tu propio controlador de entrada, dirige la API a `graphql`, nunca a `ops`.
+
 ## Trazado distribuido (OpenTelemetry)
 
 El trazado está **desactivado de forma predeterminada**. Al activarlo, las solicitudes GraphQL
@@ -47,13 +49,13 @@ e `insecure: true`; para TLS, use una URL `https://` e `insecure: false`.
 El receptor se despliega por separado; DeviceChain no lo instala.
 
 Un endpoint HTTP sin ruta publica en `/v1/traces`; indique una ruta (para un receptor tras un
-prefijo) y se usa tal cual. El exportador sigue leyendo las variables est�ndar
+prefijo) y se usa tal cual. El exportador sigue leyendo las variables estándar
 `OTEL_EXPORTER_OTLP_*`, por lo que, si las define en un pod, pueden anular estos valores.
 
 El muestreo respeta al padre entre servicios de DeviceChain: una traza muestreada en el primer
 servicio sigue muestreada en el resto del flujo. El `traceparent` de un dispositivo o de quien
 llama a la API nunca decide el muestreo: la solicitud inicia una traza local nueva enlazada a la
-del llamante. Los eventos que fallan la resoluci�n y van a la cola de errores, y los eventos
+del llamante. Los eventos que fallan la resolución y van a la cola de errores, y los eventos
 republicados para reintento, inician una traza nueva en lugar de continuar la original.
 Si se omite `samplingRatio`, se muestrea el 10 % de las nuevas trazas raíz. El valor explícito
 `0` no muestrea nuevas raíces y `1` las muestrea todas. Empiece con un valor bajo en flotas
@@ -537,6 +539,13 @@ los que ese consumidor aún no ha leído.
   techo, cualquier inquilino en un clúster más pequeño y un cliente que publica por HTTP con muchos
   nombres de inquilino, porque un nombre se mide antes de comprobar su credencial. Entonces la
   compuerta rechaza a todos.
+- En una instancia con grupos de fragmentos de NATS, cada grupo tiene su propia copia de un flujo
+  fragmentado y su propia compuerta, así que "todos los inquilinos" significa todos los inquilinos
+  asignados a ese grupo. Una publicación HTTP se admite contra el grupo de su propio inquilino, así
+  que una cola en un grupo no rechaza a un inquilino asignado a un grupo sano. Un lector que reenvía
+  a un flujo fragmentado desde un flujo que no lo está, como `event-sources` al leer el flujo de
+  captura MQTT, puede enviar a cualquier grupo, así que deja de leer mientras cualquiera de ellos
+  esté rechazando.
 - El broker sigue descartando el mensaje más antiguo cuando un flujo está lleno, así que aún se
   puede perder un evento sin leer en tres casos. Los servicios que escriben en el flujo pueden
   gastar, entre dos de sus mediciones, más historial procesado del que se vio descartar al flujo en
@@ -2029,7 +2038,7 @@ réplica, reenvía al pod que quieres por su nombre (`kubectl port-forward pod/<
 
 `profiler.address` fija dónde escucha el listener. Debe ser una dirección IP y un puerto, por
 ejemplo `0.0.0.0:6060` para un perfilador que recoge datos desde otros pods. El servicio se niega a
-arrancar con un nombre de host, sin puerto o con su propio puerto 8080.
+arrancar con un nombre de host, sin puerto o con su propio puerto 8080 o 8083.
 
 :::warning Cualquier dirección que no sea loopback queda abierta a la red del clúster
 El listener no tiene autenticación, y el chart no genera ninguna network policy que limite quién

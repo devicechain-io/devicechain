@@ -35,11 +35,11 @@ var (
 
 // provisioningTenantLimiter is the shared ceiling, built on first use if the endpoint has not
 // been wired yet.
-func provisioningTenantLimiter(infra mscfg.InfrastructureConfiguration) *core.TenantRateLimiter {
+func provisioningTenantLimiter(_ mscfg.InfrastructureConfiguration) *core.TenantRateLimiter {
 	provisioningTenantsMu.Lock()
 	defer provisioningTenantsMu.Unlock()
 	if ProvisioningTenants == nil {
-		ProvisioningTenants = buildProvisioningTenantLimiter(infra)
+		ProvisioningTenants = buildProvisioningTenantLimiter(servicePeers)
 	}
 	return ProvisioningTenants
 }
@@ -104,8 +104,12 @@ func wireProvisioningEndpoint() error {
 
 // provisioningTenantGate builds the lifecycle gate that refuses a tenant being deleted. It is a
 // variable only so that the wiring test can stand a gate in and prove the endpoint consults it.
-var provisioningTenantGate = func(infra mscfg.InfrastructureConfiguration) func(string) bool {
-	return governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", safetyGates)
+var provisioningTenantGate = func(_ mscfg.InfrastructureConfiguration) func(string) bool {
+	return provisioningLifecycleGate(servicePeers)
+}
+
+func provisioningLifecycleGate(peers *svcclient.Peers) func(string) bool {
+	return governance.NewTenantLifecycleGateFor(peers, safetyGates)
 }
 
 // buildProvisioningTenantLimiter is the per-tenant registration ceiling. With no service
@@ -114,16 +118,14 @@ var provisioningTenantGate = func(infra mscfg.InfrastructureConfiguration) func(
 // from user-management's tenantGovernance, failing open to the default and never to
 // unlimited. The tenant it is charged for is authenticated, so it always gets an allowance of
 // its own.
-func buildProvisioningTenantLimiter(infra mscfg.InfrastructureConfiguration) *core.TenantRateLimiter {
+func buildProvisioningTenantLimiter(peers *svcclient.Peers) *core.TenantRateLimiter {
 	counted := core.WithUnresolvedAdmissions(ProvisioningUnresolvedAdmissions)
 	def := governance.DefaultProvisioningLimits()
-	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+	seam, err := peers.UserManagement(auth.TenantRead)
+	if err != nil {
 		log.Warn().Float64("registrationsPerSecond", def.RatePerSecond).Int("burst", def.Burst).
 			Msg("Service secret or user-management endpoint not configured — the per-tenant self-registration ceiling is the platform default for every tenant.")
 		return core.NewTenantRateLimiter(core.StaticCeiling(def.RatePerSecond, def.Burst), counted)
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
-		[]string{string(auth.TenantRead)})
-	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-	return core.NewTenantRateLimiter(governance.NewProvisioningLimitResolver(client, umURL).Ceiling, counted)
+	return core.NewTenantRateLimiter(governance.NewProvisioningLimitResolver(seam.Client, seam.URL).Ceiling, counted)
 }

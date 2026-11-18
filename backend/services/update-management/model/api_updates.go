@@ -59,6 +59,10 @@ const casRetries = 6
 
 // DeviceFacts is what update-management asks device-management about a device.
 type DeviceFacts struct {
+	// Incarnation is the non-zero device-management row id, never reused after deletion.
+	Incarnation uint64
+	// CreatedAt is required in device-management answers to fence legacy assignments.
+	CreatedAt time.Time
 	// Profile is the token of the device-profile the device resolves through, empty for a device
 	// whose type has none.
 	Profile string
@@ -92,30 +96,37 @@ const DisabledCacheTTL = 5 * time.Second
 const maxDisabledCache = 50_000
 
 type disabledEntry struct {
-	disabled bool
-	at       time.Time
+	facts DeviceFacts
+	found bool
+	at    time.Time
 }
 
-// disabledCache remembers, per (tenant, device), whether the device was disabled when last asked.
-// Both answers are kept for DisabledCacheTTL; a failed lookup is never kept.
+// disabledCache remembers existence, incarnation, creation time and quarantine per tenant/device.
+// Successful answers are kept for DisabledCacheTTL; a failed lookup is never kept.
 type disabledCache struct {
 	mu sync.Mutex
 	m  map[string]disabledEntry
+	// A cache-wide epoch bounds invalidation bookkeeping even for unseen devices.
+	epoch uint64
 }
 
-func (c *disabledCache) get(key string, now time.Time) (disabled, ok bool) {
+func (c *disabledCache) get(key string, now time.Time) (facts DeviceFacts, found, ok bool, generation uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, hit := c.m[key]
 	if !hit || now.Sub(e.at) >= DisabledCacheTTL || now.Before(e.at) {
-		return false, false
+		return DeviceFacts{}, false, false, c.epoch
 	}
-	return e.disabled, true
+	return e.facts, e.found, true, c.epoch
 }
 
-func (c *disabledCache) put(key string, disabled bool, now time.Time) {
+func (c *disabledCache) put(key string, facts DeviceFacts, found bool, now time.Time, generation uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Any forget fences earlier lookups, conservatively including other keys.
+	if c.epoch != generation {
+		return
+	}
 	if c.m == nil {
 		c.m = map[string]disabledEntry{}
 	}
@@ -129,12 +140,13 @@ func (c *disabledCache) put(key string, disabled bool, now time.Time) {
 			return
 		}
 	}
-	c.m[key] = disabledEntry{disabled: disabled, at: now}
+	c.m[key] = disabledEntry{facts: facts, found: found, at: now}
 }
 
 func (c *disabledCache) forget(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.epoch++
 	delete(c.m, key)
 }
 
@@ -176,42 +188,59 @@ func (api *Api) DeviceRosterChanged(ctx context.Context, deviceToken string, ena
 	return nil
 }
 
-// refuseIfDisabled is the quarantine gate of the device-facing operations. A device an operator
-// has disabled keeps whatever session it had open, so the broker cannot be what cuts it off here:
-// every report, sync answer and download grant asks device-management (through a cache no staler
-// than DisabledCacheTTL) and refuses with ErrDeviceDisabled. Enabling takes effect within the same
-// bound, because only the answer is remembered, never a decision. A device device-management does
-// not have is not refused here: it has no assignment, and the operation answers that on its own.
-//
-// It FAILS CLOSED everywhere it cannot answer: a lookup that errors (not cached) and a service
-// with no lookup wired both return an error and the message is retried, then dead-lettered. Assignments
-// outlive a restart, so "nothing is assigned without a lookup" is not a premise this can lean on.
-func (api *Api) refuseIfDisabled(ctx context.Context, deviceToken string) error {
+// deviceGate checks existence, identity and quarantine through a bounded cache. Assignments
+// outlive hard-deleted devices, so a token alone never proves ownership of an assignment.
+// Lookup failures are not cached and fail closed.
+// CurrentUpdates and ApplyReport have exposure bounded by DisabledCacheTTL; no firmware
+// bytes are released without the uncached check in GrantDownload and ResolveDownload.
+func (api *Api) deviceGate(ctx context.Context, deviceToken string) (DeviceFacts, bool, error) {
+	return api.checkDevice(ctx, deviceToken, true)
+}
+
+func (api *Api) freshDeviceGate(ctx context.Context, deviceToken string) (DeviceFacts, bool, error) {
+	return api.checkDevice(ctx, deviceToken, false)
+}
+
+func (api *Api) checkDevice(ctx context.Context, deviceToken string, cached bool) (DeviceFacts, bool, error) {
 	if api.Devices == nil {
-		return refuse(CodeDeviceLookupUnavailable,
-			"device-facing update traffic is refused: devices cannot be looked up, because the device-management endpoint or service secret is not configured")
+		return DeviceFacts{}, false, refuse(CodeDeviceLookupUnavailable, "device-facing update traffic requires a device lookup")
 	}
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
-		return errors.New("a device-facing update operation requires a tenant")
+		return DeviceFacts{}, false, errors.New("a device-facing update operation requires a tenant")
 	}
 	key := tenant + "/" + deviceToken
-	if disabled, hit := api.disabled.get(key, api.now()); hit {
-		if disabled {
-			return ErrDeviceDisabled
+	var facts DeviceFacts
+	var found, hit bool
+	var generation uint64
+	if cached {
+		facts, found, hit, generation = api.disabled.get(key, api.now())
+	}
+	if !hit {
+		var err error
+		facts, found, err = api.Devices.DeviceOf(ctx, tenant, deviceToken)
+		if err != nil {
+			return DeviceFacts{}, false, fmt.Errorf("checking device %q: %w", deviceToken, err)
 		}
-		return nil
+		if cached {
+			api.disabled.put(key, facts, found, api.now(), generation)
+		}
 	}
-	facts, found, err := api.Devices.DeviceOf(ctx, tenant, deviceToken)
-	if err != nil {
-		return fmt.Errorf("checking whether device %q is disabled: %w", deviceToken, err)
+	if found && facts.Disabled {
+		return facts, found, ErrDeviceDisabled
 	}
-	disabled := found && facts.Disabled
-	api.disabled.put(key, disabled, api.now())
-	if disabled {
-		return ErrDeviceDisabled
+	return facts, found, nil
+}
+
+// assignmentIsForDevice also fences legacy rows, whose incarnation was never stamped.
+// Remaining rolling-upgrade exposure: a v1.6 writer can look up the old device, then insert
+// a NULL-incarnation row after delete and re-create, newer than the new device. This window
+// closes when the last v1.6 update-management pod is replaced.
+func assignmentIsForDevice(asg UpdateAssignment, facts DeviceFacts) bool {
+	if asg.DeviceIncarnation.Valid {
+		return asg.DeviceIncarnation.Int64 > 0 && uint64(asg.DeviceIncarnation.Int64) == facts.Incarnation
 	}
-	return nil
+	return !facts.CreatedAt.IsZero() && !asg.CreatedAt.Before(facts.CreatedAt)
 }
 
 // DesiredPublisher puts one encoded message on a device's desired-state channel. The tenant comes
@@ -509,19 +538,19 @@ func (api *Api) AssignArtifact(ctx context.Context, deviceToken, artifactToken s
 
 	var view *UpdateAssignmentView
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		v, err := api.assignInTx(ctx, tx, deviceToken, artifact, facts.Anchors)
+		v, err := api.assignInTx(ctx, tx, deviceToken, artifact, facts)
 		view = v
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	api.publishAssignment(ctx, view)
+	api.publishCurrentAssignment(ctx, view)
 	return view, nil
 }
 
 func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string, artifact *Artifact,
-	anchors []string) (*UpdateAssignmentView, error) {
+	facts DeviceFacts) (*UpdateAssignmentView, error) {
 	now := api.now()
 	var current []UpdateAssignment
 	if err := tx.Where("device_token = ? AND component = ? AND superseded_at IS NULL", deviceToken, artifact.Component).
@@ -537,7 +566,7 @@ func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string,
 		if len(at) == 0 {
 			return nil, fmt.Errorf("update assignment %q has no attempt row", cur.Token)
 		}
-		if !ota.State(at[0].State).Terminal() {
+		if assignmentIsForDevice(cur, facts) && !ota.State(at[0].State).Terminal() {
 			if cur.ArtifactId == artifact.ID {
 				v := &UpdateAssignmentView{Assignment: cur, Attempt: at[0], Artifact: *artifact}
 				if cur.SignatureId.Valid {
@@ -590,7 +619,8 @@ func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string,
 				"(updates.allowUnverifiedArtifacts)", artifact.Token)
 	}
 	asg := UpdateAssignment{Token: asgTok, DeviceToken: deviceToken, Component: artifact.Component,
-		ArtifactId: artifact.ID, Actor: actorOf(ctx), ScopeAnchors: rdb.Anchors(anchors)}
+		ArtifactId: artifact.ID, Actor: actorOf(ctx), ScopeAnchors: rdb.Anchors(facts.Anchors),
+		DeviceIncarnation: sql.NullInt64{Int64: int64(facts.Incarnation), Valid: true}}
 	if pin != nil {
 		asg.SignatureId = sql.NullInt64{Int64: int64(pin.Signature.ID), Valid: true}
 	}
@@ -672,6 +702,18 @@ func (api *Api) CancelUpdate(ctx context.Context, assignmentToken string) (*Upda
 	if api.Desired == nil {
 		return nil, refuse(CodeDeviceChannelUnwired, "the device channel is not available, so a cancel cannot be delivered")
 	}
+	view, err := api.AssignmentByToken(ctx, assignmentToken)
+	if err != nil {
+		return nil, err
+	}
+	if view == nil {
+		return nil, refuse(CodeAssignmentNotFound, "no update assignment with token %q", assignmentToken)
+	}
+	return api.cancelAssignment(ctx, view.Assignment)
+}
+
+func (api *Api) cancelAssignment(ctx context.Context, asg UpdateAssignment) (*UpdateAssignmentView, error) {
+	assignmentToken := asg.Token
 	for range casRetries {
 		view, err := api.AssignmentByToken(ctx, assignmentToken)
 		if err != nil {
@@ -755,6 +797,23 @@ func (api *Api) AbandonUnknown(ctx context.Context, assignmentToken, reason stri
 	return nil, fmt.Errorf("update %q changed too often to abandon; try again", assignmentToken)
 }
 
+// publishCurrentAssignment revalidates a committed write before its best-effort publication.
+// A failed check must never fail the write that already committed.
+func (api *Api) publishCurrentAssignment(ctx context.Context, saved *UpdateAssignmentView) {
+	facts, found, err := api.freshDeviceGate(ctx, saved.Assignment.DeviceToken)
+	if err != nil || !found {
+		log.Debug().Err(err).Str("assignment", saved.Assignment.Token).Msg("Skipping assignment publication: device lookup refused.")
+		return
+	}
+	v, err := api.AssignmentByToken(ctx, saved.Assignment.Token)
+	if err != nil || v == nil || v.Assignment.SupersededAt.Valid || ota.State(v.Attempt.State).Terminal() ||
+		!v.Assignment.DeviceIncarnation.Valid || !assignmentIsForDevice(v.Assignment, facts) {
+		log.Debug().Err(err).Str("assignment", saved.Assignment.Token).Msg("Skipping assignment publication: assignment is no longer current for the device.")
+		return
+	}
+	api.publishAssignment(ctx, v)
+}
+
 func (api *Api) publishAssignment(ctx context.Context, v *UpdateAssignmentView) {
 	if v.Attempt.CancelRequested || ota.State(v.Attempt.State).Terminal() {
 		return
@@ -832,18 +891,22 @@ func (api *Api) PublishCancelFor(ctx context.Context, deviceToken, attemptToken,
 // with the core reducer, and stores the result when the reducer applied it. The device is the one
 // the subject named; a report can only ever reach that device's own assignments.
 func (api *Api) ApplyReport(ctx context.Context, deviceToken string, rep ota.Report) (ota.Verdict, error) {
-	if err := api.refuseIfDisabled(ctx, deviceToken); err != nil {
+	facts, found, err := api.deviceGate(ctx, deviceToken)
+	if err != nil {
 		return "", err
 	}
+	if !found {
+		return VerdictUnknownAssignment, nil
+	}
 	if rep.Kind == ota.KindInventory {
-		return api.applyInventory(ctx, deviceToken, rep)
+		return api.applyInventory(ctx, deviceToken, rep, facts)
 	}
 	for range casRetries {
 		asg, err := api.assignmentByToken(ctx, deviceToken, rep.AssignmentID)
 		if err != nil {
 			return "", err
 		}
-		if asg == nil {
+		if asg == nil || !assignmentIsForDevice(*asg, facts) {
 			return VerdictUnknownAssignment, nil
 		}
 		row, err := api.attemptOf(ctx, asg.ID)
@@ -871,14 +934,14 @@ func (api *Api) ApplyReport(ctx context.Context, deviceToken string, rep ota.Rep
 // applyInventory reconciles a device's current attempt for the reported component, if that attempt
 // is UNKNOWN. An inventory is attempt-independent truth: with nothing to reconcile it changes
 // nothing and says so.
-func (api *Api) applyInventory(ctx context.Context, deviceToken string, rep ota.Report) (ota.Verdict, error) {
+func (api *Api) applyInventory(ctx context.Context, deviceToken string, rep ota.Report, facts DeviceFacts) (ota.Verdict, error) {
 	for range casRetries {
 		var current []UpdateAssignment
 		if err := api.RDB.DB(ctx).Where("device_token = ? AND component = ? AND superseded_at IS NULL",
 			deviceToken, rep.Component).Limit(1).Find(&current).Error; err != nil {
 			return "", err
 		}
-		if len(current) == 0 {
+		if len(current) == 0 || !assignmentIsForDevice(current[0], facts) {
 			return VerdictUnknownAssignment, nil
 		}
 		row, err := api.attemptOf(ctx, current[0].ID)
@@ -915,10 +978,23 @@ func (api *Api) CurrentUpdates(ctx context.Context, deviceToken string) ([]Updat
 		return nil, nil
 	}
 	// Asked only now that there is something to answer with: a sync with nothing to say costs no lookup.
-	if err := api.refuseIfDisabled(ctx, deviceToken); err != nil {
+	facts, found, err := api.deviceGate(ctx, deviceToken)
+	if err != nil {
 		return nil, err
 	}
-	views, err := api.viewsOf(ctx, current)
+	if !found {
+		return nil, nil
+	}
+	owned := current[:0]
+	for _, asg := range current {
+		if assignmentIsForDevice(asg, facts) {
+			owned = append(owned, asg)
+		}
+	}
+	if len(owned) == 0 {
+		return nil, nil
+	}
+	views, err := api.viewsOf(ctx, owned)
 	if err != nil {
 		return nil, err
 	}
@@ -981,14 +1057,15 @@ func (api *Api) GrantDownload(ctx context.Context, deviceToken, assignmentToken 
 	if !ok {
 		return nil, errors.New("a download grant requires a tenant")
 	}
-	if err := api.refuseIfDisabled(ctx, deviceToken); err != nil {
+	facts, found, err := api.freshDeviceGate(ctx, deviceToken)
+	if err != nil {
 		return nil, err
 	}
 	asg, err := api.assignmentByToken(ctx, deviceToken, assignmentToken)
 	if err != nil {
 		return nil, err
 	}
-	if asg == nil {
+	if asg == nil || !found || !assignmentIsForDevice(*asg, facts) {
 		return nil, &GrantRefusal{Reason: GrantUnknownAssignment, Stale: true}
 	}
 	row, err := api.attemptOf(ctx, asg.ID)
@@ -1089,11 +1166,15 @@ func (api *Api) ResolveDownload(ctx context.Context, c *Capability) (*DownloadTa
 	}
 	// After the cheap staleness checks, so a stale request costs no lookup. A capability minted
 	// before the device was disabled does not outlive the quarantine.
-	if err := api.refuseIfDisabled(ctx, c.DeviceToken); err != nil {
+	facts, found, err := api.freshDeviceGate(ctx, c.DeviceToken)
+	if err != nil {
 		if errors.Is(err, ErrDeviceDisabled) {
 			return nil, ErrDownloadDisabled
 		}
 		return nil, err
+	}
+	if !found || !assignmentIsForDevice(*asg, facts) {
+		return nil, ErrDownloadStale
 	}
 	artifact, err := api.artifactByID(ctx, asg.ArtifactId)
 	if err != nil {
@@ -1132,6 +1213,8 @@ type SweepResult struct {
 	Examined int
 	TimedOut int
 	Unknown  int
+	Failed   int
+	LastErr  error
 }
 
 // maxSweepPages bounds how many pages one pass walks looking for work. A pass that finds nothing to
@@ -1199,6 +1282,8 @@ func (api *Api) SweepDeadlines(ctx context.Context, limit int) (SweepResult, err
 			}
 			out, err := api.tickOne(core.WithTenant(ctx, d.TenantId), d.ID)
 			if err != nil {
+				res.Failed++
+				res.LastErr = err
 				log.Warn().Err(err).Str("attempt", d.Token).Msg("An update attempt deadline could not be applied; it is retried at the next pass.")
 				continue
 			}

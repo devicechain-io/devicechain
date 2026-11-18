@@ -5,7 +5,11 @@ package rdb
 
 import (
 	"context"
+	"math"
+	"strconv"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 // The envelope ListOf reports must describe the page it actually returned.
@@ -125,5 +129,110 @@ func TestPageSliceMatchesTheListOfContract(t *testing.T) {
 				t.Errorf("reported %d total records, want %d", pag.TotalRecords, total)
 			}
 		})
+	}
+}
+
+func TestClampTotal(t *testing.T) {
+	for _, tc := range []struct {
+		in   int64
+		want int32
+	}{
+		{0, 0}, {42, 42}, {math.MaxInt32, math.MaxInt32},
+		{1 << 31, math.MaxInt32}, {(1 << 31) + 5, math.MaxInt32},
+		{3_000_000_000, math.MaxInt32}, {-1, 0},
+	} {
+		if got := clampTotal(tc.in); got != tc.want {
+			t.Errorf("clampTotal(%d) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestListTotalsSaturate(t *testing.T) {
+	rdb := newSortableDB(t)
+	countCalls := 0
+	// GORM's existing callback seam replaces only the COUNT destination after
+	// SQLite has executed it, without a production hook or billions of rows.
+	if err := rdb.Database.Callback().Query().After("gorm:query").Register("test:large_count", func(q *gorm.DB) {
+		if count, ok := q.Statement.Dest.(*int64); ok && q.Error == nil {
+			*count = 3_000_000_000
+			countCalls++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	query, pag := rdb.ListOf(context.Background(), &sortableRow{}, nil, Pagination{PageNumber: 2, PageSize: 100})
+	var rows []sortableRow
+	if err := query.Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if countCalls != 1 || pag.TotalRecords != math.MaxInt32 || pag.PageStart != 101 || pag.PageEnd != 200 {
+		t.Fatalf("COUNT calls=%d, pagination=%+v, want 101-200 of MaxInt32", countCalls, pag)
+	}
+	// Both endpoints exceed MaxInt32 before saturation: first=2,999,999,901,
+	// last=3,000,000,000. A plain int32(last) cast would wrap here.
+	query, pag = rdb.ListOf(context.Background(), &sortableRow{}, nil, Pagination{PageNumber: 30_000_000, PageSize: 100})
+	if err := query.Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if countCalls != 2 || pag.PageStart != math.MaxInt32 || pag.PageEnd != math.MaxInt32 || pag.TotalRecords != math.MaxInt32 {
+		t.Fatalf("COUNT calls=%d, pagination=%+v, want MaxInt32-MaxInt32 of MaxInt32", countCalls, pag)
+	}
+	query, pag = rdb.ListAllOf(context.Background(), &sortableRow{}, nil)
+	if err := query.Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if countCalls != 3 || len(rows) != 4 || pag.PageStart != 1 || pag.PageEnd != math.MaxInt32 || pag.TotalRecords != math.MaxInt32 {
+		t.Fatalf("COUNT calls=%d, rows=%d, pagination=%+v", countCalls, len(rows), pag)
+	}
+}
+
+func TestListOfLargePageAndRealCount(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		count              int
+		page, size         int32
+		wantRows           int
+		wantStart, wantEnd int32
+	}{
+		{"largest page", 5, math.MaxInt32, 100, 0, math.MaxInt32, 5},
+		{"ordinary real count", 42, 2, 10, 10, 11, 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rdb := newSortableDB(t)
+			for i := 4; i < tc.count; i++ {
+				if err := rdb.Database.Create(&sortableRow{Token: "extra"}).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			query, pag := rdb.ListOf(context.Background(), &sortableRow{}, nil, Pagination{PageNumber: tc.page, PageSize: tc.size})
+			var rows []sortableRow
+			if err := query.Find(&rows).Error; err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != tc.wantRows || pag.TotalRecords != int32(tc.count) || pag.PageStart != tc.wantStart || pag.PageEnd != tc.wantEnd {
+				t.Fatalf("rows=%d, pagination=%+v, want %d rows and %d-%d of %d", len(rows), pag, tc.wantRows, tc.wantStart, tc.wantEnd, tc.count)
+			}
+		})
+	}
+}
+
+func TestPageSliceLargestPageSaturates(t *testing.T) {
+	rows, pag := PageSlice([]int{1, 2, 3, 4, 5}, Pagination{PageNumber: math.MaxInt32, PageSize: 100})
+	if len(rows) != 0 || pag.PageStart != math.MaxInt32 || pag.PageEnd != 5 || pag.TotalRecords != 5 {
+		t.Fatalf("rows=%v, pagination=%+v", rows, pag)
+	}
+}
+
+func TestPageSliceTotalsAndEndpointsSaturate(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("a slice with 3,000,000,000 elements requires a 64-bit int")
+	}
+	// A nonconstant length lets this compile on 32-bit systems; zero-sized
+	// elements need no backing memory even with three billion entries.
+	total := int64(3_000_000_000)
+	items := make([]struct{}, total)
+	rows, pag := PageSlice(items, Pagination{PageNumber: 30_000_000, PageSize: 100})
+	if len(rows) != 100 || pag.PageStart != math.MaxInt32 || pag.PageEnd != math.MaxInt32 || pag.TotalRecords != math.MaxInt32 {
+		t.Fatalf("rows=%d, pagination=%+v, want 100 rows and MaxInt32-MaxInt32 of MaxInt32", len(rows), pag)
 	}
 }

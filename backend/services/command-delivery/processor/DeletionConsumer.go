@@ -20,7 +20,7 @@ import (
 
 // DeletionApi is the write needed to apply an entity-deleted fact.
 type DeletionApi interface {
-	CancelDeletedDeviceCommands(ctx context.Context, deviceToken string, deletedTime time.Time) (int64, error)
+	CancelDeletedDeviceCommands(ctx context.Context, deviceToken string, incarnation uint64, deletedTime time.Time) (int64, error)
 }
 
 // DeletionConsumer applies retained deletion facts before acknowledging them.
@@ -111,7 +111,7 @@ func (rc *DeletionConsumer) handle(ctx context.Context, msg messaging.Message) {
 	}
 	var cancelled int64
 	err = rc.Hold.RunCtx(ctx, msgctx, []messaging.Message{msg}, func(c context.Context) (e error) {
-		cancelled, e = rc.Api.CancelDeletedDeviceCommands(c, ev.EntityToken, ev.DeletedTime)
+		cancelled, e = rc.Api.CancelDeletedDeviceCommands(c, ev.EntityToken, uint64(ev.EntityId), ev.DeletedTime)
 		return e
 	})
 	if err != nil {

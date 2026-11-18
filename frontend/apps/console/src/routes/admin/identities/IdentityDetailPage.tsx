@@ -36,6 +36,14 @@ import {
 import { StatusBadge, errMessage, useReload } from '@/routes/common';
 import { CopyToken } from '@/components/ui/copy-token';
 import { IdentityMfaPanel } from '@/routes/admin/identities/IdentityMfaPanel';
+import { serverErrorCode } from '@/i18n/signInError';
+
+// The code the server refuses an edit with when the membership is managed by an identity
+// provider connection that still serves the tenant: the next sign-in through that provider
+// would undo the change, so the server refuses changing its roles, disabling and removing it.
+// The admin API does not say up front which memberships those are, so the row learns it from
+// the first refusal and then stops offering the three edits.
+const MANAGED_BY_IDP = 'MANAGED_BY_IDP';
 
 // toOptions turns a token+name record (tenant or role) into combobox options:
 // the token is the value, a friendlier name is the label, and the raw token is
@@ -50,8 +58,9 @@ function toOptions(items: { token: string; name?: string | null }[] | null | und
 
 export default function IdentityDetailPage() {
   const { t } = useTranslation('identities');
-  const { email: rawEmail } = useParams<{ email: string }>();
-  const email = decodeURIComponent(rawEmail ?? '');
+  // The router hands the param over already decoded. Decoding it again turned an email
+  // holding a '%' into a different address, or threw on one such as "a%zz@example.com".
+  const email = useParams<{ email: string }>().email ?? '';
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
@@ -293,6 +302,7 @@ function MembershipRow({
   const { t } = useTranslation('identities');
   const { toast } = useToast();
   const [roles, setRoles] = useState<string[]>(membership.roles);
+  const [managed, setManaged] = useState(false);
 
   const run = async (fn: () => Promise<unknown>, ok: string) => {
     try {
@@ -300,49 +310,68 @@ function MembershipRow({
       toast(ok);
       onChanged();
     } catch (err) {
+      if (serverErrorCode(err) === MANAGED_BY_IDP) {
+        setManaged(true);
+        setRoles(membership.roles);
+        return;
+      }
       toast(errMessage(err), 'error');
     }
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background px-3 py-2">
-      <span className="min-w-24 font-medium">{membership.tenant}</span>
-      <StatusBadge enabled={membership.enabled} />
-      <MultiSelect
-        className="max-w-xs flex-1"
-        options={roleOptions}
-        value={roles}
-        onChange={setRoles}
-        placeholder={t('selectRolesPlaceholder')}
-        searchPlaceholder={t('filterRolesPlaceholder')}
-        emptyMessage={t('noTenantRolesMessage')}
-      />
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => run(() => setMembershipRoles(email, membership.tenant, roles), t('rolesUpdatedToast'))}
-      >
-        {t('saveRolesButton')}
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() =>
-          run(
-            () => setMembershipEnabled(email, membership.tenant, !membership.enabled),
-            membership.enabled ? t('membershipDisabledToast') : t('membershipEnabledToast'),
-          )
-        }
-      >
-        {membership.enabled ? t('disable') : t('enable')}
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => run(() => removeMembership(email, membership.tenant), t('membershipRemovedToast'))}
-      >
-        <X size={14} /> {t('removeButton')}
-      </Button>
+    <div className="rounded-md border border-border bg-background px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="min-w-24 font-medium">{membership.tenant}</span>
+        <StatusBadge enabled={membership.enabled} />
+        <MultiSelect
+          className="max-w-xs flex-1"
+          options={roleOptions}
+          value={roles}
+          onChange={setRoles}
+          placeholder={t('selectRolesPlaceholder')}
+          searchPlaceholder={t('filterRolesPlaceholder')}
+          emptyMessage={t('noTenantRolesMessage')}
+          disabled={managed}
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={managed}
+          title={managed ? t('managedByIdpShort') : undefined}
+          onClick={() => run(() => setMembershipRoles(email, membership.tenant, roles), t('rolesUpdatedToast'))}
+        >
+          {t('saveRolesButton')}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={managed}
+          title={managed ? t('managedByIdpShort') : undefined}
+          onClick={() =>
+            run(
+              () => setMembershipEnabled(email, membership.tenant, !membership.enabled),
+              membership.enabled ? t('membershipDisabledToast') : t('membershipEnabledToast'),
+            )
+          }
+        >
+          {membership.enabled ? t('disable') : t('enable')}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={managed}
+          title={managed ? t('managedByIdpShort') : undefined}
+          onClick={() => run(() => removeMembership(email, membership.tenant), t('membershipRemovedToast'))}
+        >
+          <X size={14} /> {t('removeButton')}
+        </Button>
+      </div>
+      {managed && (
+        <p role="status" className="mt-2 text-sm text-muted-foreground">
+          {t('managedByIdpNotice')}
+        </p>
+      )}
     </div>
   );
 }

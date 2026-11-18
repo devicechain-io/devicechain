@@ -36,19 +36,19 @@ Calcula unos 45 minutos una vez que haya una instancia en marcha.
   ```
 
 Tres ajustes indican dónde está tu instancia. Cada uno tiene un valor por defecto que coincide con un
-`dcctl install local` normal seguido de `dcctl bootstrap local tour --host localhost --no-tls`, y cada
+`dcctl install local` normal seguido de `dcctl bootstrap local devicechain --host localhost --no-tls`, y cada
 uno puede sustituirse desde el entorno:
 
 | Variable | Valor por defecto | Defínela cuando |
 | --- | --- | --- |
 | `DC_URL` | `http://localhost` | La consola se sirve en otro host o puerto. |
-| `INSTANCE` | `tour` | Tu instancia de `dcctl` tiene otro nombre. Da nombre al namespace `dci-<instance>`, del que los scripts leen la autoridad certificadora del broker y la contraseña del superusuario. |
+| `INSTANCE` | `devicechain` | Tu instancia de `dcctl` tiene otro nombre. Da nombre al namespace `dci-<instance>`, del que los scripts leen la autoridad certificadora del broker y la contraseña del superusuario. |
 | `MQTT_HOST` | `devicechain-control-plane` | Tu clúster de kind no se llama `devicechain`. Es el nombre del contenedor del nodo del clúster, `<cluster>-control-plane`. |
 
 Si tu `kubectl` tiene más de un contexto, define también `KUBE_CONTEXT`.
 
 ```bash
-export DC_URL=http://localhost INSTANCE=devicechain MQTT_HOST=devicechain-control-plane
+export DC_URL=http://localhost MQTT_HOST=devicechain-control-plane
 ```
 
 Los dispositivos simulados son contenedores de la red de Docker `kind`, así que llegan al puerto de
@@ -243,7 +243,7 @@ recorrido pueda ejecutarse sin supervisión.
 Inicia sesión como `ops@acme.example` (la contraseña está en `.state/tour-a/customer-password`). El
 usuario ve:
 
-- una barra lateral con **Dashboards**, **Alarms** y **Devices**, y nada más;
+- una barra lateral con **Home**, **Dashboards**, **Alarms** y **Devices**, y nada más;
 - un dispositivo, `coldroom-a1`;
 - un panel, `tour-a-customer`, con lecturas en vivo y la alarma de su propia cámara;
 - ninguna señal de `coldroom-a2`, de sus lecturas, de sus alarmas ni del tablero del operador.
@@ -260,9 +260,11 @@ PASS  createCommand boost-cooling was accepted (QUEUED), not rejected
 PASS  your own command reached SUCCESSFUL (the device answered; last status: SUCCESSFUL)
 PASS  the operator sees both devices (2)
 PASS  the operator sees alarms on both devices (2 devices with alarms)
+PASS  the operator sees both dashboards (2)
 PASS  the customer sees exactly coldroom-a1 (saw: coldroom-a1)
 PASS  the customer sees alarms for coldroom-a1 only (saw: coldroom-a1)
 PASS  the customer reads no state of coldroom-a2 (0 measurements)
+PASS  the customer reads coldroom-a1's latest readings (2)
 PASS  the customer lists only the board shared with them (saw: tour-a-customer)
 PASS  the operator's board is invisible to the customer
 PASS  the read-only customer user cannot send a command (refused: FORBIDDEN)

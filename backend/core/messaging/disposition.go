@@ -51,10 +51,18 @@ func (d Disposition) String() string {
 // layer to recognise one of its errors.
 type tenantErased interface{ TenantErased() bool }
 
+// FinalDelivery reports whether this is the last delivery JetStream will make of msg.
+// It is the ONE spelling of the cap. Use Dispose when you hold the handling error;
+// use this only where there is no error to classify or the consumer's give-up is not
+// "ack" (each caller is ledgered in core/test).
+func FinalDelivery(msg Message) bool { return msg.NumDelivered >= MaxDeliver }
+
 // Dispose decides what a consumer does with msg after its handling failed with err:
 //
 //   - Retry, on ANY delivery, when err is (or wraps) ErrHoldReleased: shutdown ended a store hold
 //     and the message was never judged.
+//   - Retry, on ANY delivery, when err is (or wraps) ErrUnplacedTenant: placement is
+//     unavailable, so this is not a failure of the message.
 //   - TenantErased, on ANY delivery, when err is (or wraps) the erasure fence's refusal. It
 //     comes first, so the final delivery of an erased tenant's message is not lettered either.
 //   - Exhausted on the final delivery (NumDelivered >= MaxDeliver).
@@ -73,11 +81,11 @@ func Dispose(msg Message, err error) Disposition {
 	}
 	var erased tenantErased
 	switch {
-	case errors.Is(err, ErrHoldReleased):
+	case errors.Is(err, ErrHoldReleased), errors.Is(err, ErrUnplacedTenant):
 		return Retry
 	case errors.As(err, &erased) && erased.TenantErased():
 		return TenantErased
-	case msg.NumDelivered >= MaxDeliver:
+	case FinalDelivery(msg):
 		return Exhausted
 	default:
 		return Retry

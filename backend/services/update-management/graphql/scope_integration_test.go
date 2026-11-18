@@ -41,7 +41,7 @@ type ownedDevices map[string][]string
 
 func (o ownedDevices) DeviceOf(_ context.Context, _ string, device string) (model.DeviceFacts, bool, error) {
 	anchors, ok := o[device]
-	return model.DeviceFacts{Profile: "gateway", Anchors: anchors}, ok, nil
+	return model.DeviceFacts{Incarnation: 1, Profile: "gateway", Anchors: anchors}, ok, nil
 }
 
 func pgPlane(t *testing.T) *plane {

@@ -21,6 +21,31 @@ import (
 
 const permInstance = "inst1"
 
+func TestInboundAdaptersHaveReadOnlyPlacementGrants(t *testing.T) {
+	for _, area := range []string{"device-state", "sparkplug-ingest", "lwm2m-ingest"} {
+		t.Run(area, func(t *testing.T) {
+			p, err := AreaPermissions(permInstance, area)
+			require.NoError(t, err)
+			bucket := permInstance + "_" + kv.BucketPartitionPlacement
+			stream := messaging.KvStreamName(bucket)
+			for _, api := range []string{
+				"STREAM.INFO." + stream,
+				"STREAM.MSG.GET." + stream,
+				"DIRECT.GET." + stream,
+				"CONSUMER.CREATE." + stream + ".watch",
+				"CONSUMER.INFO." + stream + ".watch",
+				"CONSUMER.DELETE." + stream + ".watch",
+			} {
+				require.True(t, p.publishes("$JS.API."+api), api)
+			}
+			require.False(t, p.publishes("$KV."+bucket+".table"))
+			for _, verb := range []string{"CREATE", "UPDATE", "DELETE", "PURGE"} {
+				require.False(t, p.publishes("$JS.API.STREAM."+verb+"."+stream), verb)
+			}
+		})
+	}
+}
+
 // subjectMatches is NATS subject matching for a literal subject against a permission pattern:
 // tokens equal, "*" for one token, ">" for the rest.
 func subjectMatches(pattern, subject string) bool {
@@ -245,6 +270,21 @@ func TestOnlyDeclaredWritersCanWriteABucket(t *testing.T) {
 	for area, p := range all {
 		require.Equal(t, area == "device-management", p.publishes("$KV."+byToken+".k"), area)
 	}
+}
+
+func TestEventProcessingHasReadOnlyPlacementGrants(t *testing.T) {
+	p, err := AreaPermissions(permInstance, "event-processing")
+	require.NoError(t, err)
+	b, ok := kv.Lookup(kv.BucketPartitionPlacement)
+	require.True(t, ok)
+	names := messaging.KvBucketNames(permInstance, b, "event-processing")
+	require.Len(t, names, 1)
+	stream := messaging.KvStreamName(names[0])
+	require.True(t, p.publishes("$JS.API.STREAM.MSG.GET."+stream))
+	require.True(t, p.publishes("$JS.API.CONSUMER.CREATE."+stream+".watch"))
+	require.False(t, p.publishes("$KV."+names[0]+".key"))
+	require.False(t, p.publishes("$JS.API.STREAM.PURGE."+stream))
+	require.False(t, p.publishes("$JS.API.STREAM.DELETE."+stream))
 }
 
 // 🔑 R3: a durable consumer is named exactly, so one area cannot rewrite, steal from or ack

@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, ChevronsUpDown, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { FIELD_POPOVER_WIDTH } from './popover-width';
+import { useFormFieldId, useFormFieldLabelId } from './form-field-context';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { filterOptions, optionLabel, type ComboboxOption } from '@/components/ui/combobox';
 
@@ -40,6 +41,9 @@ export function MultiSelect({
   disabled,
   className,
 }: MultiSelectProps) {
+  const triggerId = useFormFieldId(id);
+  const fieldLabelId = useFormFieldLabelId(triggerId);
+  const valueId = triggerId ? `${triggerId}-value` : undefined;
   const { t } = useTranslation('common');
   const placeholderText = placeholder ?? t('select');
   const searchPlaceholderText = searchPlaceholder ?? t('search');
@@ -65,7 +69,8 @@ export function MultiSelect({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        id={id}
+        id={triggerId}
+        aria-labelledby={fieldLabelId ? `${fieldLabelId} ${valueId}` : undefined}
         data-shot="combobox"
         type="button"
         disabled={disabled}
@@ -75,9 +80,9 @@ export function MultiSelect({
         )}
       >
         {value.length === 0 ? (
-          <span className="text-muted-foreground">{placeholderText}</span>
+          <span id={valueId} className="text-muted-foreground">{placeholderText}</span>
         ) : (
-          <span className="flex flex-wrap gap-1">
+          <span id={valueId} className="flex flex-wrap gap-1">
             {value.map((v) => (
               <span
                 key={v}

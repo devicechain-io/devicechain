@@ -80,6 +80,43 @@ func (api *Api) hardDeleteByToken(ctx context.Context, model interface{}, token 
 	return result.RowsAffected > 0, nil
 }
 
+// hardDeleteKeyedByToken keeps each removed row's key and label in the journal.
+func hardDeleteKeyedByToken[T any](ctx context.Context, api *Api, token string) (bool, error) {
+	deleted := false
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		var rows []T
+		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("token = ?", token).Find(&rows).Error; err != nil {
+			return err
+		}
+		for i := range rows {
+			result := tx.Unscoped().Where("token = ?", token).Delete(&rows[i])
+			if result.Error != nil {
+				return result.Error
+			}
+			deleted = deleted || result.RowsAffected > 0
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
+
+// deleteProfileChildrenByKey preserves one attributable journal row per child.
+func deleteProfileChildrenByKey[T any](tx *gorm.DB, profileID uint) error {
+	var rows []T
+	if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("device_profile_id = ?", profileID).Find(&rows).Error; err != nil {
+		return err
+	}
+	for i := range rows {
+		if err := tx.Unscoped().Where("device_profile_id = ?", profileID).Delete(&rows[i]).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // countReferencing counts rows of refModel whose column equals id. The count is
 // Unscoped so it includes soft-deleted children — matching what a database
 // foreign key constraint sees — but remains tenant-scoped via the query callback.
@@ -332,13 +369,13 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 		if err != nil {
 			return err
 		}
-		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&MetricDefinition{}).Error; err != nil {
+		if err := deleteProfileChildrenByKey[MetricDefinition](tx, dp.ID); err != nil {
 			return err
 		}
-		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&CommandDefinition{}).Error; err != nil {
+		if err := deleteProfileChildrenByKey[CommandDefinition](tx, dp.ID); err != nil {
 			return err
 		}
-		if err := tx.Unscoped().Where("device_profile_id = ?", dp.ID).Delete(&DetectionRule{}).Error; err != nil {
+		if err := deleteProfileChildrenByKey[DetectionRule](tx, dp.ID); err != nil {
 			return err
 		}
 		// The profile's published version history (ADR-045 slice c) goes with it.
@@ -355,7 +392,7 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 		if err := tx.Where("device_profile_id = ?", dp.ID).Delete(&DeviceProfileActivation{}).Error; err != nil {
 			return err
 		}
-		return tx.Unscoped().Where("token = ?", token).Delete(&DeviceProfile{}).Error
+		return tx.Unscoped().Delete(dp).Error
 	})
 	if err != nil {
 		return false, mapAutomationReviewGuard(err)
@@ -712,12 +749,12 @@ func (api *Api) RemoveEntityRelationship(ctx context.Context, token string) (boo
 
 // DeleteMetricDefinition deletes a single metric definition by token (ADR-016).
 func (api *Api) DeleteMetricDefinition(ctx context.Context, token string) (bool, error) {
-	return api.hardDeleteByToken(ctx, &MetricDefinition{}, token)
+	return hardDeleteKeyedByToken[MetricDefinition](ctx, api, token)
 }
 
 // DeleteCommandDefinition deletes a single command definition by token (ADR-043).
 func (api *Api) DeleteCommandDefinition(ctx context.Context, token string) (bool, error) {
-	return api.hardDeleteByToken(ctx, &CommandDefinition{}, token)
+	return hardDeleteKeyedByToken[CommandDefinition](ctx, api, token)
 }
 
 // DeleteDetectionRule deletes a single detection rule by token (ADR-051 slice 4b). Deleting a
@@ -726,7 +763,7 @@ func (api *Api) DeleteCommandDefinition(ctx context.Context, token string) (bool
 // draft simply drops out of the next snapshot. The published-reference row (if this rule was
 // live) is GC'd when its profile's active version is re-synced, or on profile delete.
 func (api *Api) DeleteDetectionRule(ctx context.Context, token string) (bool, error) {
-	return api.hardDeleteByToken(ctx, &DetectionRule{}, token)
+	return hardDeleteKeyedByToken[DetectionRule](ctx, api, token)
 }
 
 // DeleteProvisioningProfile deletes a single provisioning profile by token (ADR-012), and

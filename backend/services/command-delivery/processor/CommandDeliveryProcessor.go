@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -161,6 +162,9 @@ type CommandDeliveryProcessor struct {
 	CommandResponsesReader   messaging.MessageReader
 	DeviceCommandsWriter     messaging.MessageWriter
 	Api                      model.CommandDeliveryApi
+
+	// Nil uses the API's advisory lock; tests can run the pass on SQLite.
+	reconcileLock func(context.Context, func() error) (bool, error)
 
 	// Hold keeps a command RESPONSE unacked, outside its delivery budget, while the relational
 	// store cannot take writes (core/storehold). A response is the device's only copy of what it
@@ -816,9 +820,8 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 	// did not filter — or a compromised one — read every command in the tenant,
 	// payloads included. The subject now carries the device, and the broker grant is
 	// narrowed to match, so the isolation is enforced rather than requested.
-	// Claim first. A lost claim means another dispatcher got there — benign, and now
-	// COUNTED rather than silent: while nothing wrote HELD this could not happen at all,
-	// so a standing rate here is the signal that two dispatch paths are overlapping.
+	// Claim first. A refusal can mean another dispatcher got there, expiry, or a gate
+	// closing since the read. None may publish; the existing counters record refusals.
 	nonce, claimed, err := cproc.Api.MarkSent(tenantCtx, cmd.ID)
 	if err != nil {
 		return err
@@ -832,7 +835,7 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 		}
 		incrLabel(cproc.ClaimsLost, string(path))
 		log.Debug().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
-			Msg("Another dispatcher claimed this command first; not publishing it again.")
+			Msg("Command is no longer claimable; not publishing it.")
 		return nil
 	}
 
@@ -887,7 +890,7 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 }
 
 // refusedForDisabled reports whether a refused claim was refused because the command's device is
-// now disabled, rather than lost to another dispatcher. MarkSent folds the disabled record into
+// now disabled, rather than expired or lost to another dispatcher. MarkSent folds the disabled record into
 // its own predicate and cannot say which predicate refused, so the record is asked afterwards.
 //
 // It is a classification for the log and the counters only, never a decision: nothing is
@@ -895,6 +898,10 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 // refusal as the lost claim it was always reported as. The read runs only on a refused claim,
 // so a healthy sweep pays nothing for it.
 func (cproc *CommandDeliveryProcessor) refusedForDisabled(ctx context.Context, cmd *model.Command) bool {
+	// An expired command belongs to the expiry sweep even if its device is disabled too.
+	if cmd.ExpiresAt.Valid && cmd.ExpiresAt.Time.Before(time.Now()) {
+		return false
+	}
 	reader := cproc.gateReader()
 	if reader == nil {
 		return false
@@ -1246,17 +1253,7 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) error {
 		}
 		return delivered
 	})
-	// 🔴 `ran` IS READ BEFORE `err`, BECAUSE TryAdvisoryLock RETURNS `true, fn()` — so a
-	// non-nil error means the LOCK failed only when the body never ran. Labelling every
-	// error as a lock-acquisition failure was harmless while the body always returned nil,
-	// and became wrong the moment the body started reporting its own failures.
-	if !ran {
-		if err != nil {
-			return fmt.Errorf("acquiring the command sweep lock: %w", err)
-		}
-		return core.ErrPassSkipped
-	}
-	if err != nil {
+	if err := rdb.SingletonResult(ran, err, "command-delivery-sweep"); err != nil {
 		return err
 	}
 	if expiryErr != nil {
@@ -1279,7 +1276,9 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) error {
 // while the ticker was built from the package default would have scored exactly the same,
 // which is the shape where a helper is certified and its one caller is not.
 func (cproc *CommandDeliveryProcessor) runSweepTicker(ctx context.Context) {
-	ticker := time.NewTicker(cproc.sweepInterval())
+	interval := cproc.sweepInterval()
+	cproc.DeliveryMetrics.CommandSweep.SetInterval(interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -1299,7 +1298,9 @@ func (cproc *CommandDeliveryProcessor) runSweepTicker(ctx context.Context) {
 // latency, and a walk of the accumulated withheld set has no business running at that
 // rate. Its own ticker also means a slow reconcile pass cannot delay a delivery pass.
 func (cproc *CommandDeliveryProcessor) runHoldReconcileTicker(ctx context.Context) {
-	ticker := time.NewTicker(cproc.holdReconcileInterval())
+	interval := cproc.holdReconcileInterval()
+	cproc.DeliveryMetrics.HoldReconcile.SetInterval(interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -1319,7 +1320,9 @@ func (cproc *CommandDeliveryProcessor) runHoldReconcileTicker(ctx context.Contex
 // row is not eligible here until it has been abandoned for StrandedSentGrace, so this
 // pass has nothing to gain from running at either of the other two cadences.
 func (cproc *CommandDeliveryProcessor) runStrandedReconcileTicker(ctx context.Context) {
-	ticker := time.NewTicker(cproc.strandedReconcileInterval())
+	interval := cproc.strandedReconcileInterval()
+	cproc.DeliveryMetrics.StrandedReconcile.SetInterval(interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {

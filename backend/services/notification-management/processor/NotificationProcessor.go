@@ -136,6 +136,9 @@ type NotifyMetrics struct {
 	// PolicyNotifier.
 	quietHours *prometheus.CounterVec
 
+	// tenantSliceExhausted counts jobs that left alarms due after their slice.
+	tenantSliceExhausted prometheus.Counter
+
 	// ledgerWrites counts delivery-ledger writes by outcome (see the ledger* constants):
 	// written, failed, dropped (in-flight cap reached) or purged (tenant deleted). Read by
 	// the AttemptLedger; LedgerWrites exposes it to the wiring.
@@ -157,6 +160,8 @@ func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
 	return NotifyMetrics{
 		escalationLookupErrors: ms.NewCounter("escalation_lookup_errors_total", "Errored alarm backstop lookups; escalation deliberately fails open."),
 		metrics:                ms.NewProcessorMetrics("notify"),
+		tenantSliceExhausted: ms.NewCounter("tenant_slice_exhausted_total",
+			"Tenant jobs that exhausted their scheduling slice, leaving unstarted alarms due for the next tick."),
 		deadLettered: ms.NewCounter("notifications_dead_lettered_total",
 			"Alarms written to the dead-letter stream after every delivery attempt failed, so an "+
 				"operator can see which pages were never sent (ADR-024)."),

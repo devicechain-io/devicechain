@@ -281,7 +281,7 @@ A database volume is over 75% full
 
 An event-store volume will be full within a day at its current rate
 
-**What it means and what to do.** ‹persistentvolumeclaim› is on course to run out of space within 24 hours at the rate it has filled over the last two. When it fills, PostgreSQL stops and the platform can no longer store events. Events are held in the message broker meanwhile and new ingest is refused once the broker's backlog limit is reached, but a store that stays stopped for longer than the broker can hold loses data (see EventStoreRefusingWrites). Act now, with a day in hand: grow the volume (spec.storage.size on the Cluster; the volume expands online where the storage class allows it), shorten the data retention, or check that compression is acting (an uncompressed row is about 600 bytes). Size it against stored rows, which calculated metrics multiply by (1 + the formulas that apply to the profile).
+**What it means and what to do.** ‹persistentvolumeclaim› is on course to run out of space within 24 hours at the rate it has filled over the last two. When it fills, PostgreSQL stops and the platform can no longer store events. Events are held in the message broker meanwhile and new ingest is refused once the broker's backlog limit is reached, but a store that stays stopped for longer than the broker can hold loses data (see EventStoreRefusingWrites). Act now, with a day in hand: grow the volume (spec.storage.size on the Cluster; the volume expands online where the storage class allows it), shorten the data retention, or check that compression is acting. Size base event data at 756 bytes per stored event (https://docs.devicechain.io/deployment/tuning-an-instance#event-store-sizing); add calculated metrics' extra measurement rows and WAL space separately.
 
 ## `devicechain.dead-letter`
 
@@ -997,6 +997,14 @@ The device capture reader dropped messages that no device published
 
 **What it means and what to do.** Durable ‹durable› on stream ‹stream› was handed messages stored under a subject it does not read, and dropped them without passing them on: ‹value› in the last 15 minutes. Its broker-side consumer reads the whole stream unfiltered, so the reader itself keeps only the subjects devices publish telemetry on. Device publishes never land there under another subject, so a dropped message was put into the stream some other way, most likely by a push consumer on another stream whose delivery subject is a device telemetry subject. Nothing was forwarded and no device event is missing, but whoever can create such a consumer is writing into device intake: look for push consumers with a device telemetry delivery subject (nats consumer ls on each stream) and at which login created them. The reader logs the subject and sequence of the first message it drops.
 
+### JetStreamShardPlacementUnavailable {#jetstreamshardplacementunavailable}
+
+**Severity:** `warning` · **Rule group:** `devicechain.jetstream-delivery`
+
+A service has no usable shard placement table and is holding ingest forwarding
+
+**What it means and what to do.** Pod ‹pod› of ‹job› has had no usable shard placement table for two minutes: the table in its KV mirror is missing, cannot be adopted, or names a shard group at or above nats.shardGroups.count. Ingest forwarding into the sharded streams is held; these messages are not dead-lettered. Check user-management's placement mirror and its placement_mirror pass alert, and the affected service's logs. Restore a compatible placement table or raise nats.shardGroups.count to include every group the table names so forwarding can resume.
+
 ### JetStreamStreamNearFull {#jetstreamstreamnearfull}
 
 **Severity:** `info` · **Rule group:** `devicechain.jetstream-delivery`
@@ -1045,7 +1053,7 @@ A consumer ran out of delivery attempts because it could not save its checkpoint
 
 The NATS broker is clustered but nothing on it is replicated
 
-**What it means and what to do.** This instance is connected to a CLUSTERED NATS broker while every stream and KV bucket is configured for a single replica, so it is paying for a multi-server cluster and surviving zero node losses. Both halves of the toggle have to move together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the replica factor is the chart's (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets both from one value. If the single-server topology is what you intended, scale the NATS cluster back down rather than leaving it running unused.
+**What it means and what to do.** This instance is connected to a CLUSTERED NATS broker while every stream and KV bucket is configured for a single replica, so it is paying for a multi-server cluster and surviving zero node losses. Both halves of the toggle have to move together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the replica factor is the chart's (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets both from one value. If the single-server topology is what you intended, scale the NATS cluster back down rather than leaving it running unused. (An instance with NATS shard groups runs a multi-server, single-replica broker on purpose, and does not raise this.)
 
 ### JetStreamLeaseBucketNotReplicated {#jetstreamleasebucketnotreplicated}
 
@@ -1233,7 +1241,7 @@ Nothing is reporting whether tenant deletions are progressing
 
 A client is asking for tokens bound to a resource this instance does not serve
 
-**What it means and what to do.** For at least an hour, ‹job› has been receiving token or authorization requests that name a resource this instance does not serve. This compatibility alert can only fire on a v1.2/v1.3 instance running observe; v1.4 refuses that configuration and always enforces token audiences. Those older instances count these requests as would_reject. Enforce mode refuses them (invalid_target, or invalid_grant on a refresh). Find the client from the rate-limited 'OAuth resource' warning in the user-management log, which names its client_id and the grant, and have it leave the resource out or use one this instance serves. See the v1.3 upgrade notes: https://docs.devicechain.io/deployment/releases-and-upgrades#v130-token-audience
+**What it means and what to do.** For at least an hour, ‹job› has been receiving token or authorization requests that name a resource this instance does not serve. This compatibility alert can only fire on a v1.2/v1.3 instance running observe; v1.4 refuses that configuration and always enforces token audiences. Those older instances count these requests as would_reject. Enforce mode refuses them (invalid_target, or invalid_grant on a refresh). Find the client from the rate-limited 'OAuth resource' warning in the user-management log, which names its client_id and the grant, and have it leave the resource out or use one this instance serves. See the v1.3 upgrade notes: https://github.com/devicechain-io/devicechain/blob/v1.3.0/docs/docs/deployment/releases-and-upgrades.md#v130-token-audience
 
 ### TokenAudienceWouldReject {#tokenaudiencewouldreject}
 
@@ -1241,7 +1249,7 @@ A client is asking for tokens bound to a resource this instance does not serve
 
 A client is sending tokens that enforce mode would refuse
 
-**What it means and what to do.** For at least an hour, ‹job› has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). This compatibility alert can only fire on a v1.2/v1.3 instance running observe; v1.4 refuses that configuration and always enforces token audiences. Those older instances count these requests as would_reject. Enforce mode refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls before upgrading to v1.4. See the v1.3 upgrade notes: https://docs.devicechain.io/deployment/releases-and-upgrades#v130-token-audience
+**What it means and what to do.** For at least an hour, ‹job› has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). This compatibility alert can only fire on a v1.2/v1.3 instance running observe; v1.4 refuses that configuration and always enforces token audiences. Those older instances count these requests as would_reject. Enforce mode refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls before upgrading to v1.4. See the v1.3 upgrade notes: https://github.com/devicechain-io/devicechain/blob/v1.3.0/docs/docs/deployment/releases-and-upgrades.md#v130-token-audience
 
 ## `devicechain.update-management`
 

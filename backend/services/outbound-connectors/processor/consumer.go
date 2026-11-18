@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-outbound-connectors/internal/tenantflight"
 	"github.com/rs/zerolog/log"
 )
 
@@ -42,7 +43,7 @@ const maxSend = time.Duration(connectorwire.MaxTimeoutMs) * time.Millisecond
 //
 // Idempotency rides in each message (the content-addressed key), so an at-least-once redelivery or a
 // DETECT replay collapses downstream to one execution (an endpoint honoring X-DC-Idempotency-Key);
-// the consumer therefore never needs cross-message state and scales out as a queue group.
+// the consumer scales out as a queue group. Its per-tenant in-flight counts are local to each pool.
 type DispatchConsumer struct {
 	reader   messaging.MessageReader
 	dead     messaging.MessageWriter
@@ -67,7 +68,7 @@ type DispatchConsumer struct {
 	waitBudget time.Duration
 
 	// tenantDeleted answers the ADR-077 lifecycle question for one tenant. NIL means the gate is
-	// unconfigured (governance.NewTenantLifecycleGate returns nil when user-management is not
+	// unconfigured (governance.NewTenantLifecycleGateFor returns nil when user-management is not
 	// reachable) and every dispatch is admitted, which is the behaviour this service had before the
 	// gate existed. Read through the tenantIsDeleted accessor, never directly.
 	tenantDeleted func(string) bool
@@ -94,6 +95,7 @@ type DispatchConsumer struct {
 	readerWG   sync.WaitGroup
 	workerWG   sync.WaitGroup
 	workers    int
+	inFlight   *tenantflight.Limit
 	stopOnce   sync.Once
 }
 
@@ -166,6 +168,7 @@ func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageW
 		tenantDeleted: tenantDeleted,
 		readPacer:     readPacer,
 		workers:       workers,
+		inFlight:      tenantflight.New(workers),
 		// A non-nil default so a shutdown-aware wait (deadLetter's retry backoff) never dereferences a
 		// nil context before Start runs; Start replaces it with the cancelable process context.
 		procCtx: context.Background(),
@@ -356,6 +359,17 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 		return
 	}
 
+	// Keep the current delivery alive while waiting, including on MaxDeliver.
+	if !c.inFlight.TryAcquire(tenant) {
+		c.metrics.recordOutcome(action, outcomeThrottled)
+		if err := c.inFlight.Wait(c.procCtx, tenant, msg.InProgress); err != nil {
+			c.retryOrDeadLetter(tctx, msg, req.RuleID, tenant, action, err)
+			return
+		}
+	}
+	defer c.inFlight.Release(tenant)
+	tctx = messaging.WithAckDeadline(tctx, msg)
+
 	// Per-tenant egress rate gate (ADR-060 SD-3), applied BEFORE the expensive secret-resolve + send.
 	//
 	// IT METERS THE TIME REACT METERED. The dispatch carries triggeredAt, the time the triggering
@@ -459,7 +473,7 @@ var errTooLateToSend = errors.New("cannot send before the message's redelivery d
 // in ~1.4ms inside an outage (ADR-030); at the cap no redelivery follows, so it is dead-lettered
 // rather than stranded.
 func (c *DispatchConsumer) retryOrDeadLetter(tctx context.Context, msg messaging.Message, rule, tenant, action string, cause error) {
-	if msg.NumDelivered >= messaging.MaxDeliver {
+	if messaging.FinalDelivery(msg) {
 		log.Error().Err(cause).Str("rule", rule).Str("tenant", tenant).Int("attempts", msg.NumDelivered).
 			Msg("Connector dispatch dead-lettered on its final delivery.")
 		c.deadLetter(tctx, msg, rule, action, outcomeDead)
@@ -528,7 +542,7 @@ func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Messag
 	dead := messaging.Message{Value: msg.Value, Headers: map[string]string{deadletter.HeaderDeadReason: outcome},
 		DedupID: deadletter.OriginID(msg)}.
 		WithCorrelationID(msg.CorrelationID())
-	finalDelivery := msg.NumDelivered >= messaging.MaxDeliver
+	finalDelivery := messaging.FinalDelivery(msg)
 
 	var err error
 	attempts := 1

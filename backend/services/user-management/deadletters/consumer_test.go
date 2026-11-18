@@ -6,6 +6,11 @@ package deadletters
 import (
 	"context"
 	"errors"
+	"fmt"
+	dctest "github.com/devicechain-io/dc-microservice/test"
+	"gorm.io/gorm"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -231,4 +236,51 @@ func TestASweepThatFailsDoesNotPanic(t *testing.T) {
 	sw := &Sweeper{store: s, retention: time.Hour}
 	assert.NotPanics(t, func() { sw.RunOnce(context.Background()) })
 	_ = errors.New("")
+}
+
+func TestDeliveryCapDispositionEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		err             error
+		delivered, acks int
+		exhausted       bool
+	}{
+		{"exhausted", errors.New("db down"), messaging.MaxDeliver, 1, true},
+		{"erased final", fmt.Errorf("write: %w", rdb.ErrTenantPurged), messaging.MaxDeliver, 1, false},
+		{"erased early", rdb.ErrTenantPurged, 1, 1, false},
+		{"hold released", fmt.Errorf("write: %w", messaging.ErrHoldReleased), messaging.MaxDeliver, 0, false},
+		{"retry", errors.New("db down"), messaging.MaxDeliver - 1, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := logSink.Capture(t)
+			s := testStore(t)
+			require.NoError(t, s.db(context.Background()).Callback().Create().Before("gorm:create").Register("test:storage_error", func(db *gorm.DB) { db.AddError(tc.err) }))
+			c := testConsumer(t, s)
+			ack := &recordingAck{}
+			c.handle(letterMsg(t, "inst.acme.dead-letters", envelope(deadletter.KindNotification, "a", time.Now().UTC()), tc.delivered, ack))
+			assert.Equal(t, tc.acks, ack.acks)
+			wantLoss := float64(0)
+			if tc.exhausted {
+				wantLoss = 1
+			}
+			assert.Equal(t, wantLoss, counterOf(t, c.unstored))
+			assert.Zero(t, counterOf(t, c.stored))
+			assert.Zero(t, counterOf(t, c.unstorable))
+			if got := strings.Contains(logs.String(), "LOST a dead letter: every delivery attempt failed to store it, and the failure it recorded is now recorded nowhere."); got != tc.exhausted {
+				t.Errorf("exhausted log = %v; logs: %s", got, logs.String())
+			}
+			if tc.err == rdb.ErrTenantPurged || strings.HasPrefix(tc.name, "erased") {
+				if !strings.Contains(logs.String(), `"level":"debug"`) || !strings.Contains(logs.String(), "Dropping message for an erased tenant") {
+					t.Errorf("missing erased debug log: %s", logs.String())
+				}
+			}
+		})
+	}
+}
+
+var logSink *dctest.LogSink
+
+func TestMain(m *testing.M) {
+	logSink = dctest.InstallLogSink()
+	os.Exit(m.Run())
 }
