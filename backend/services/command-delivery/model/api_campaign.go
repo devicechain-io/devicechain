@@ -21,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/maintwindow"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/schedule"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -700,9 +701,18 @@ type campaignConfigurationError struct{ error }
 
 func (e *campaignConfigurationError) Unwrap() error { return e.error }
 
+// campaignLogger is the logger the campaign scheduler's errors are written to: the
+// injected one when set, else the global logger.
+func (api *Api) campaignLogger() *zerolog.Logger {
+	if api.campaignLog != nil {
+		return api.campaignLog
+	}
+	return &log.Logger
+}
+
 func (api *Api) recordCampaignError(ctx context.Context, c *Campaign, cause error) error {
 	tenant, _ := core.TenantFromContext(ctx)
-	log.Error().Err(cause).Str("tenant", tenant).Str("campaign", c.Token).
+	api.campaignLogger().Error().Err(cause).Str("tenant", tenant).Str("campaign", c.Token).
 		Msg("Campaign planning or membership check failed.")
 	msg := "planning failed because of an internal error; it will be retried"
 	var configuration *campaignConfigurationError

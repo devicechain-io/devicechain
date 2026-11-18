@@ -12,7 +12,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -31,10 +30,9 @@ func TestCampaignPlanningLastError(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs bytes.Buffer
-			previous := log.Logger
-			log.Logger = zerolog.New(&logs)
-			t.Cleanup(func() { log.Logger = previous })
 			api := newCampaignTestApi(t)
+			captured := zerolog.New(&logs)
+			api.campaignLog = &captured
 			ctx := tenantCtx()
 			c, err := api.CreateCampaign(ctx, solarRequest("error-test", "lamps"))
 			if err != nil {
