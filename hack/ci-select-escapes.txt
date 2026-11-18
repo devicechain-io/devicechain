@@ -125,6 +125,7 @@ backend/services/event-sources/processor/http_integration_test.go
 backend/services/event-sources/processor/integration_marks_test.go
 backend/services/lwm2m-ingest/downlink/documents_test.go
 backend/services/mcp/server/documents_test.go
+backend/services/notification-management/processor/alarm_lookup_wire_test.go
 backend/services/outbound-connectors/connectorspec/downlinktemplate.go
 backend/services/outbound-connectors/lpwan/chirpstack_test.go
 backend/services/outbound-connectors/lpwan/documents_test.go
