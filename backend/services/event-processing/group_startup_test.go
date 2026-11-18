@@ -16,5 +16,5 @@ func TestResolvedGroupStartupRefusesUntilFactRouting(t *testing.T) {
 	ms := &core.Microservice{InstanceId: "group-refusal", FunctionalArea: "event-processing"}
 	ms.InstanceConfiguration.Infrastructure.Nats.ShardGroups = &mscfg.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.ResolvedEvents}}
 	nm := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), nil)
-	require.ErrorContains(t, createNatsComponents(nm), "S2b fact routing")
+	require.ErrorContains(t, createNatsComponents(nm, nil), "S2b fact routing")
 }

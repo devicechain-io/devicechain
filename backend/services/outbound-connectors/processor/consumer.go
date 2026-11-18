@@ -68,7 +68,7 @@ type DispatchConsumer struct {
 	waitBudget time.Duration
 
 	// tenantDeleted answers the ADR-077 lifecycle question for one tenant. NIL means the gate is
-	// unconfigured (governance.NewTenantLifecycleGate returns nil when user-management is not
+	// unconfigured (governance.NewTenantLifecycleGateFor returns nil when user-management is not
 	// reachable) and every dispatch is admitted, which is the behaviour this service had before the
 	// gate existed. Read through the tenantIsDeleted accessor, never directly.
 	tenantDeleted func(string) bool

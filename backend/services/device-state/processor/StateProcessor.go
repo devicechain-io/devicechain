@@ -594,6 +594,7 @@ func (sp *StateProcessor) admitStarted(ctx context.Context, msg messaging.Messag
 	update := model.ProjectionUpdate{
 		Tenant:      tenant,
 		DeviceToken: event.SourceDeviceToken,
+		Incarnation: event.DeviceIncarnation,
 		OccurredAt:  event.OccurredTime,
 		Presence:    pt,
 		Identity: model.DeviceIdentity{ExternalId: event.ExternalId, Source: event.Source,
@@ -710,8 +711,9 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 	}
 }
 
-// mergeAdmitted is the per-message path: the originating device's live state, then its
-// latest values or position, each in a transaction of its own, and the A3 disposition of the
+// mergeAdmitted is the per-message path: stamped events use the atomic projection merge
+// so their children cannot race an incarnation reset. Older producers keep the state and
+// latest-value transactions below, with the A3 disposition of the
 // outcome. A message takes it when the batch it was in (a batch of one included) gave up on it,
 // or when it is merged alone (mergeOne).
 //
@@ -723,6 +725,19 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 // accepted rather than paid for with a read to decide whether to write.
 func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 	msg, event, u := p.msg, p.event, p.update
+
+	if u.Incarnation != 0 {
+		if err := sp.retryOnConflict(p.ctx, func() error {
+			return sp.Api.MergeProjectionBatch(p.ctx, []model.ProjectionUpdate{u})
+		}); err != nil {
+			sp.dispose(p, err, fmt.Sprintf("device projection update for device %s", u.DeviceToken))
+			return
+		}
+		sp.metrics.committed(1)
+		msg.Ack()
+		p.done(core.ResultOK)
+		return
+	}
 
 	// Update the originating device's live connectivity projection for every event.
 	if err := sp.retryOnConflict(p.ctx, func() error {

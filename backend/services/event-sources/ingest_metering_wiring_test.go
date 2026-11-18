@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
@@ -52,7 +53,7 @@ func buildInMeteringMode(t *testing.T, mode IngestMetering) {
 	GatewaySource, StoreSource, LagCredit = nil, nil, nil
 	IngestMeteringMode = mode
 	buildTestRateLimiters(t)
-	require.NoError(t, buildEventSources())
+	require.NoError(t, buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")))
 	require.NotNil(t, GatewaySource, "a source pointed at the platform broker is the gateway source")
 	require.NotNil(t, StoreSource, "with its twin over the MQTT message store")
 }
