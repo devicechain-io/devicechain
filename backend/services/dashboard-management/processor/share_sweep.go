@@ -33,19 +33,16 @@ func NewShareSweep(ms *core.Microservice, api *model.Api) *core.PeriodicTask {
 		s.Changes.WithLabelValues(action).Add(0)
 	}
 	return core.NewPeriodicTask(ms.FunctionalArea, "share-sweep", ShareSweepInterval, s.Run,
-		core.NewNoOpLifecycleCallbacks(), core.WithPassMetrics(ms.NewPeriodicTaskMetrics("share_sweep")))
+		core.NewNoOpLifecycleCallbacks(), ms.NewPeriodicTaskMetrics("share_sweep"))
 }
+
+// shareSweepLockName names the sweep's advisory lock. Its key is shared by old and
+// new replicas during a rolling upgrade, so the name must never change.
+const shareSweepLockName = "dashboard-management-share-sweep"
 
 // Run permits one replica to sweep at a time.
 func (s *ShareSweep) Run(ctx context.Context) error {
-	held, err := s.API.RDB.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey("dashboard-management-share-sweep"), func() error { return s.sweep(ctx) })
-	if err != nil {
-		return err
-	}
-	if !held {
-		return core.ErrPassSkipped
-	}
-	return nil
+	return s.API.RDB.SingletonPass(ctx, shareSweepLockName, func() error { return s.sweep(ctx) })
 }
 
 func (s *ShareSweep) sweep(ctx context.Context) error {
