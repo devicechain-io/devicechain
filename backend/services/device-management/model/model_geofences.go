@@ -345,6 +345,9 @@ type GeoFenceSetSnapshot struct {
 // a rule computes, and freezing them would make a typo fix mint a version that changes
 // no answer.
 type GeoFenceSnapshotRef struct {
+	// FenceID is the frozen GeoFence.id, independent of its reusable token. Empty
+	// means unknown in snapshots written by older pods; never infer it from live rows.
+	FenceID  string          `json:"fenceId,omitempty"`
 	Token    string          `json:"token"`
 	Geometry json.RawMessage `json:"geometry"`
 }
@@ -498,11 +501,12 @@ type storedGeoFenceSetSnapshot struct {
 	PositionSum *int `json:"positionSum,omitempty"`
 }
 
-// storedGeoFenceRef is one fence as of a version, on disk: the token a rule names it by
-// and the content address of the geometry it was frozen with.
+// storedGeoFenceRef freezes a fence row identity, its reusable rule token, and the
+// content address of its geometry. Legacy entries have no known row identity.
 type storedGeoFenceRef struct {
-	Token string `json:"token"`
-	Hash  string `json:"hash"`
+	FenceID string `json:"fenceId,omitempty"`
+	Token   string `json:"token"`
+	Hash    string `json:"hash"`
 }
 
 // Data required to create or update a geofence. Geometry is the GeoFenceGeometry JSON

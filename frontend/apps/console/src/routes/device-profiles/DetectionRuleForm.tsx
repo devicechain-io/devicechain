@@ -371,6 +371,7 @@ export function DetectionRuleForm({
   const [scopeGroupToken, setScopeGroupToken] = useState<string>(entity?.entityGroupToken ?? '');
   const [scopeGroupVersion, setScopeGroupVersion] = useState<number | null>(entity?.entityGroupVersion ?? null);
   const [scopeGroups, setScopeGroups] = useState<ScopeGroup[]>([]);
+  const [scopeGroupsError, setScopeGroupsError] = useState<string | null>(null);
   const [scopeVersions, setScopeVersions] = useState<ScopeGroupVersion[]>([]);
   const [scopeVersionsStatus, setScopeVersionsStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
   const [scopeCount, setScopeCount] = useState<
@@ -600,12 +601,13 @@ export function DetectionRuleForm({
   useEffect(() => {
     if (!scoped || scopeGroups.length > 0) return;
     let cancelled = false;
+    setScopeGroupsError(null);
     listScopeGroups()
       .then((gs) => {
         if (!cancelled) setScopeGroups(gs);
       })
-      .catch(() => {
-        /* the picker just stays empty; the field is optional */
+      .catch((err) => {
+        if (!cancelled) setScopeGroupsError(errMessage(err));
       });
     return () => {
       cancelled = true;
@@ -929,8 +931,10 @@ export function DetectionRuleForm({
                   setScopeGroupVersion(null);
                 }}
                 options={scopeGroupOptions}
+                disabled={!!scopeGroupsError}
                 placeholder={scopeGroups.length === 0 ? t('ruleScopeGroupPlaceholderEmpty') : t('ruleScopeGroupPlaceholderSelect')}
               />
+              {scopeGroupsError && <p role="alert" className="text-sm text-destructive">{scopeGroupsError}</p>}
             </FormField>
             {scopeGroupToken && (
               <FormField

@@ -6,13 +6,9 @@ package identity
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 )
-
-// bearerPrefix is the RFC 6750 Authorization scheme the userinfo endpoint accepts.
-const bearerPrefix = "Bearer "
 
 // userinfoResponse is the OIDC-style claims document the userinfo endpoint returns
 // (ADR-047 SSO). It is derived entirely from the presented access token — no DB
@@ -57,32 +53,26 @@ func UserinfoHandler(validate func(tokenString string) (*auth.Claims, error), po
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		token, ok := bearerToken(r)
-		if !ok {
-			// No credential presented at all → a bare Bearer challenge (RFC 6750 §3).
-			w.Header().Set("WWW-Authenticate", `Bearer`)
-			http.Error(w, "missing bearer token", http.StatusUnauthorized)
-			return
-		}
-		claims, err := validate(token)
+		result, err := (auth.BearerAuth{Plane: auth.PlaneUserinfo, Policy: policy,
+			Verify: func(token string, _ func(string) string) (*auth.Claims, string, error) {
+				c, err := validate(token)
+				if err != nil {
+					return nil, "", err
+				}
+				return c, c.Tenant, nil
+			},
+		}).Authenticate(r)
 		if err != nil {
-			// An invalid/expired token → invalid_token challenge (RFC 6750 §3.1). Never
-			// echo the parse error (no oracle about why the token failed).
-			w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
-			http.Error(w, "invalid token", http.StatusUnauthorized)
+			msg, challenge := "invalid token", `Bearer error="invalid_token"`
+			switch err.(*auth.BearerError).Reason {
+			case auth.BearerMissing:
+				msg, challenge = "missing bearer token", "Bearer"
+			}
+			w.Header().Set("WWW-Authenticate", challenge)
+			http.Error(w, msg, http.StatusUnauthorized)
 			return
 		}
-		// 🔴 AFTER validate, NEVER BEFORE: a forged token must not reach the counters. A
-		// refusal answers exactly like an invalid token, so the two cannot be told apart.
-		var p *auth.PlanePolicy
-		if policy != nil {
-			p = policy()
-		}
-		if err := p.Admit(claims, auth.PlaneUserinfo); err != nil {
-			w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
-			http.Error(w, "invalid token", http.StatusUnauthorized)
-			return
-		}
+		claims := result.Claims
 
 		// sub is the stable subject (the registered "sub"/Subject, which the issuer
 		// sets to the identity's email); fall back to the email claim defensively.
@@ -99,17 +89,6 @@ func UserinfoHandler(validate func(tokenString string) (*auth.Claims, error), po
 			Amr:               claims.Amr,
 		})
 	}), MaxSmallBodyBytes)
-}
-
-// bearerToken extracts the access token from the Authorization header, returning
-// ("", false) when there is no non-empty Bearer credential.
-func bearerToken(r *http.Request) (string, bool) {
-	header := r.Header.Get("Authorization")
-	if len(header) <= len(bearerPrefix) || !strings.EqualFold(header[:len(bearerPrefix)], bearerPrefix) {
-		return "", false
-	}
-	token := strings.TrimSpace(header[len(bearerPrefix):])
-	return token, token != ""
 }
 
 // writeJSON renders v as a no-store JSON body (userinfo is per-user + token-bound,

@@ -4,8 +4,10 @@ go 1.26.0
 
 require (
 	github.com/devicechain-io/dc-device-management v0.0.1
+	github.com/devicechain-io/dc-device-state v0.0.1
 	github.com/devicechain-io/dc-event-sources v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-microservice v0.0.1
+	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -33,7 +35,6 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/eclipse/paho.mqtt.golang v1.5.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/friendsofgo/graphiql v0.2.2 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
@@ -92,6 +93,8 @@ require (
 )
 
 replace github.com/devicechain-io/dc-device-management => ../device-management
+
+replace github.com/devicechain-io/dc-device-state => ../device-state
 
 replace github.com/devicechain-io/dc-event-sources => ../event-sources
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/devicechain-io/dc-microservice/actiongate"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/automationreview"
@@ -37,8 +38,9 @@ import (
 )
 
 var (
-	stopStreamSharding context.CancelFunc
-	Microservice       *core.Microservice
+	membershipEnrollmentOnce sync.Once
+	stopStreamSharding       context.CancelFunc
+	Microservice             *core.Microservice
 	// servicePeers is built once on initialization; each wiring site creates its own client.
 	servicePeers  *svcclient.Peers
 	Configuration *config.DeviceManagementConfiguration
@@ -1109,6 +1111,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Svc = service.New(Microservice, service.Spec{
 		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
+			AppendOnly: []any{&model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{},
+				&model.DeviceProfileVersion{}, &model.DeviceProfileActivation{}, &model.EntityGroupVersion{}, &model.AssetTypeVersion{},
+				&model.DeviceConfigurationRevision{}},
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Migrations: schema.Migrations,
 			Config:     Configuration.RdbConfiguration,
@@ -1172,20 +1177,6 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initDecodeAccounting(); err != nil {
 				return err
 			}
-
-			// Report the size of this schema's append-only history tables (ADR-023). Every one of
-			// them only grows — nothing prunes a version history short of purging the whole tenant —
-			// so the instance's storage floor rises with authoring activity and nothing today says
-			// how fast. This is the measurement that has to exist before any ceiling on it can be
-			// chosen honestly; it enforces nothing. The audit journal is added by the collector
-			// itself, since core owns that table in every schema.
-			//
-			// Registered directly rather than through Microservice.NewGauge because a failed read
-			// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
-			prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
-				&model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{},
-				&model.DeviceProfileVersion{}, &model.DeviceProfileActivation{}, &model.EntityGroupVersion{}, &model.AssetTypeVersion{},
-				&model.DeviceConfigurationRevision{}))
 
 			// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
 			// its draft rules against event-processing and fails closed on an uncompilable one.
@@ -1257,6 +1248,18 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := Svc.Start(ctx); err != nil {
 		return err
 	}
+
+	// Post-migration, insert-only backstop. Run in the background so a large
+	// tenant or a peer holding the startup lock never delays readiness. Partial
+	// failures are logged and retried at the next process start, never fatal.
+	membershipEnrollmentOnce.Do(func() {
+		api := Api
+		go func() {
+			if err := api.ReconcileMembershipEnrollment(ctx); err != nil {
+				log.Error().Err(err).Msg("Membership enrollment startup reconcile could not run; continuing startup")
+			}
+		}()
+	})
 
 	// Start inbound events processor.
 	err := InboundEventsProcessor.Start(ctx)

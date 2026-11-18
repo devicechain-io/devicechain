@@ -15,7 +15,10 @@ import { Button } from '@/components/ui/button';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { LoadingState } from '@/components/ui/loading-state';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
+import { Pagination } from '@/components/ui/pagination';
 import { useQuery } from '@/lib/hooks/use-query';
+import { listAll } from '@/lib/api/list-all';
 import { useToast } from '@/components/ui/toast';
 import { useReload, errMessage } from '@/routes/common';
 import { listGroupMembers, addGroupMembers, removeGroupMembers } from '@/lib/api/relationships';
@@ -25,7 +28,11 @@ interface Candidate {
   name?: string | null;
 }
 
-export function MembershipPanel({
+export function MembershipPanel(props: Parameters<typeof MembershipContent>[0]) {
+  return <MembershipContent key={JSON.stringify([props.groupType, props.groupToken, props.memberType])} {...props} />;
+}
+
+function MembershipContent({
   groupType,
   groupToken,
   memberType,
@@ -51,12 +58,23 @@ export function MembershipPanel({
   const [version, reload] = useReload();
   const [selected, setSelected] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [pageNumber, setPageNumber] = useState(1);
+  const pageSize = 50;
 
-  const { data: members, loading } = useQuery(
-    () => listGroupMembers(groupType, groupToken, { pageNumber: 1, pageSize: 1000 }),
-    [groupType, groupToken, version],
+  const { current: members, loading, error } = useQuery(
+    () => listGroupMembers(groupType, groupToken, { pageNumber, pageSize }),
+    [groupType, groupToken, pageNumber, version],
   );
-  const { data: candidates } = useQuery(loadCandidates, [memberType]);
+  // Exclusion must cover every member, including those on another displayed page.
+  // A failed complete read disables adding, while the paged member list still works.
+  const { current: candidateData, loading: candidatesLoading, error: candidatesError } = useQuery(async () => {
+    const [candidates, allMembers] = await Promise.all([
+      loadCandidates(),
+      listAll(page => listGroupMembers(groupType, groupToken, page)),
+    ]);
+    return { candidates, memberTokens: new Set(allMembers.results.map(edge => edge.target.token)) };
+  }, [groupType, groupToken, memberType, version]);
+  const candidates = candidateData?.candidates;
 
   const memberEdges = members?.results ?? [];
 
@@ -65,13 +83,13 @@ export function MembershipPanel({
     return (token: string) => m.get(token) ?? token;
   }, [candidates]);
 
-  const memberTokens = useMemo(() => new Set(memberEdges.map((e) => e.target.token)), [memberEdges]);
+  const memberTokens = candidateData?.memberTokens;
 
   // Add-picker options: member-type instances that aren't already in the group.
   const options = useMemo(
     () =>
       (candidates ?? [])
-        .filter((c) => !memberTokens.has(c.token))
+        .filter((c) => !memberTokens?.has(c.token))
         .map((c) => ({
           value: c.token,
           label: c.name || c.token,
@@ -87,6 +105,7 @@ export function MembershipPanel({
       const n = await addGroupMembers(groupType, groupToken, memberType, selected);
       toast(e('AddedCount', { count: n }));
       setSelected([]);
+      setPageNumber(1);
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -99,6 +118,7 @@ export function MembershipPanel({
     try {
       await removeGroupMembers([edgeToken]);
       toast(t('common:removedItem', { label }));
+      if (memberEdges.length === 1 && pageNumber > 1) setPageNumber(pageNumber - 1);
       reload();
     } catch (err) {
       toast(errMessage(err), 'error');
@@ -109,22 +129,26 @@ export function MembershipPanel({
     // Untitled: this renders inside the detail page's "Members" tab, which labels it.
     <SectionPanel>
       <div className="space-y-4">
+        {candidatesError && <ErrorState description={candidatesError} />}
         <div className="flex items-end gap-2">
           <div className="min-w-0 flex-1">
             <MultiSelect
               options={options}
               value={selected}
               onChange={setSelected}
+              disabled={candidatesLoading || !!candidatesError || !members}
               placeholder={e('AddPlaceholder')}
             />
           </div>
-          <Button onClick={add} loading={busy} disabled={busy || selected.length === 0}>
+          <Button onClick={add} loading={busy} disabled={busy || selected.length === 0 || !candidates || !members}>
             {t('common:add')}
           </Button>
         </div>
 
         {loading ? (
           <LoadingState description={t('common:loading')} />
+        ) : error ? (
+          <ErrorState description={error} />
         ) : memberEdges.length === 0 ? (
           <EmptyState description={e('EmptyInGroup')} />
         ) : (
@@ -151,6 +175,7 @@ export function MembershipPanel({
             ))}
           </ul>
         )}
+        {members && <Pagination pageNumber={pageNumber} pageSize={pageSize} pagination={members.pagination} onPageChange={setPageNumber} />}
       </div>
     </SectionPanel>
   );

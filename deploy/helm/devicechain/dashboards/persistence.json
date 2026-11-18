@@ -3488,8 +3488,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "topk(10, max by (table) ({__name__=~\"devicechain_[a-z0-9]+_append_only_table_bytes\", namespace=\"$namespace\"}))",
-          "legendFormat": "{{table}}"
+          "expr": "topk(10, max by (job, table) ({__name__=~\"devicechain_[a-z0-9]+_append_only_table_bytes\", namespace=\"$namespace\"}))",
+          "legendFormat": "{{job}} / {{table}}"
         }
       ],
       "fieldConfig": {
@@ -3543,8 +3543,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "topk(10, max by (table) ({__name__=~\"devicechain_[a-z0-9]+_append_only_table_rows_estimate\", namespace=\"$namespace\"}))",
-          "legendFormat": "{{table}}"
+          "expr": "topk(10, max by (job, table) ({__name__=~\"devicechain_[a-z0-9]+_append_only_table_rows_estimate\", namespace=\"$namespace\"}))",
+          "legendFormat": "{{job}} / {{table}}"
         }
       ],
       "fieldConfig": {

@@ -76,5 +76,6 @@ var (
 		NewPendingEntityDeletionsSchema(),
 		NewAlarmPositionDerivedSchema(),
 		NewAlarmPositionStampSchema(),
+		NewDeletionAlarmCascadeSchema(),
 	}
 )

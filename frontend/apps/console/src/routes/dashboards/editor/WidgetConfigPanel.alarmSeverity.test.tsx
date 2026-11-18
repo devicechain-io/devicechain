@@ -36,6 +36,7 @@ beforeEach(() => {
 
 // Open the picker inside `scope` and choose the option for `token`.
 async function pickType(scope: HTMLElement, token: string, label: string) {
+  await waitFor(() => expect(scope.querySelector('button')!.hasAttribute('disabled')).toBe(false));
   fireEvent.click(scope.querySelector('button')!);
   await waitFor(() => expect(document.querySelector(`[data-shot-value="${token}"]`)).toBeTruthy());
   fireEvent.click(document.querySelector(`[data-shot-value="${token}"]`)!);

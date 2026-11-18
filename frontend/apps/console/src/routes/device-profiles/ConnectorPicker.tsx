@@ -10,6 +10,7 @@
 // connectors (the publish-time existence check is not the compiler's); an unknown or stale current
 // value is shown rather than silently dropped, labelled as not found.
 
+import { listAll } from '@/lib/api/list-all';
 import { Link } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { Select, SelectItem } from '@/components/ui/select';
@@ -19,7 +20,7 @@ import '@/i18n/lazy/deviceProfiles';
 
 export function ConnectorPicker({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
   const { t } = useTranslation('deviceProfiles');
-  const { data, loading, error } = useQuery(() => listConnectors({ pageNumber: 1, pageSize: 100 }), []);
+  const { current: data, loading, error } = useQuery(() => listAll(page => listConnectors({ ...page })), []);
   const connectors = data?.results ?? [];
   const known = connectors.some((c) => c.token === value);
   // Only show the "no connectors" hint when there's also nothing selected — a stale/deleted
@@ -33,7 +34,7 @@ export function ConnectorPicker({ id, value, onChange }: { id: string; value: st
   }
   return (
     <div className="space-y-1.5">
-      <Select id={id} value={value} onChange={onChange}>
+      <Select disabled={loading || !!error} id={id} value={value} onChange={onChange}>
         <SelectItem value="">{loading ? t('common:loading') : t('inspectorSelectConnectorPlaceholder')}</SelectItem>
         {/* Show a "(not found)" row for a value not in the list — but only once loaded without
             error, so a valid ref doesn't flash as not-found while the query is in flight or when
