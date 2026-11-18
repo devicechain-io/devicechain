@@ -42,7 +42,7 @@ type CampaignScheduler struct {
 func NewCampaignScheduler(ms *core.Microservice, api *model.Api, callbacks core.LifecycleCallbacks) *CampaignScheduler {
 	s := &CampaignScheduler{Api: api}
 	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "campaign-scheduler", CampaignTickInterval,
-		s.runOnce, callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("campaign_scheduler")))
+		s.runOnce, callbacks, ms.NewPeriodicTaskMetrics("campaign_scheduler"))
 	return s
 }
 

@@ -51,6 +51,12 @@ func deleteLiveProjection(tx *gorm.DB, token string, parent bool, cutoff time.Ti
 		}
 		n += res.RowsAffected
 	}
+	children, err := deleteProjectionChildren(tx, token, parent, cutoff)
+	return n+children > 0, err
+}
+
+func deleteProjectionChildren(tx *gorm.DB, token string, parent bool, cutoff time.Time) (int64, error) {
+	var n int64
 	for _, child := range []any{&LatestMeasurement{}, &LatestLocation{}, &DroppedMeasurement{}} {
 		q := tx.Unscoped().Where("device_token = ?", token)
 		if !parent {
@@ -58,11 +64,11 @@ func deleteLiveProjection(tx *gorm.DB, token string, parent bool, cutoff time.Ti
 		}
 		res := q.Delete(child)
 		if res.Error != nil {
-			return false, res.Error
+			return n, res.Error
 		}
 		n += res.RowsAffected
 	}
-	return n > 0, nil
+	return n, nil
 }
 
 // OrphanPage walks all projections, including soft-deleted rows, within the context's tenant.

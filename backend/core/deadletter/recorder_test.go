@@ -24,6 +24,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
 // These tests drive the recorder end to end on a real embedded broker, because what they
@@ -391,7 +392,7 @@ func TestConnectorDispatchRecorderWritesTheVerbatimCopy(t *testing.T) {
 // GUARD: a letter is not filed for a tenant already deleted — the purge would have to chase it.
 func TestDeletedTenantIsNotLettered(t *testing.T) {
 	prev := tenantLifecycleGate
-	tenantLifecycleGate = func(config.UserManagementConfiguration, string, string, *governance.SafetyGates) func(string) bool {
+	tenantLifecycleGate = func(*svcclient.Peers, *governance.SafetyGates) func(string) bool {
 		return func(tenant string) bool { return tenant == "acme" }
 	}
 	t.Cleanup(func() { tenantLifecycleGate = prev })

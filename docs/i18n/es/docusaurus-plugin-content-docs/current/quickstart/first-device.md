@@ -114,6 +114,20 @@ hasta que la instalación agota su tiempo. En una máquina con recursos de sobra
 monitorización y copias de seguridad. La elección es del clúster y no puede cambiarse mientras se
 ejecute una instancia en él. Consulta [`--compact`](../deployment/bootstrap.md#--compact).
 
+:::tip Conservar las copias de seguridad en un portátil
+Si el portátil tiene sitio para un almacén de copias de seguridad de 20Gi, instala con
+`--no-tls=false` para conservar cert-manager, y con él las copias de seguridad de la base de datos,
+en un clúster compacto:
+
+```bash
+dcctl install local --compact --no-tls=false
+```
+
+El comando de bootstrap no cambia: su `--no-tls` sirve solo esta instancia por HTTP sin cifrar.
+La custodia de la clave raíz no depende de esta elección. La receta de arriba ya la conserva, salvo
+que pases `--no-escrow` o `--dev`.
+:::
+
 :::note En un script o un trabajo de CI
 `dcctl bootstrap` pide una frase de contraseña para sellar el artefacto de custodia de la clave raíz. Sin un terminal donde preguntarla se detiene con `no escrow passphrase and no terminal to ask at`. Facilítala sin interacción, con un archivo o con una variable de entorno:
 

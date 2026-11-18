@@ -127,8 +127,7 @@ func NewWorker(ms *core.Microservice, rdbm *rdb.RdbManager, roster Roster, cfg C
 		pacer: newPacer(cfg.RowsPerSecond), now: time.Now,
 		dmDownSince: map[string]time.Time{}, failures: map[string]int{},
 	}
-	w.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, lockName, passInterval, w.RunOnce, callbacks,
-		core.WithPassMetrics(metrics.Pass))
+	w.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, lockName, passInterval, w.RunOnce, callbacks, metrics.Pass)
 	return w
 }
 

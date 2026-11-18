@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/processor"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -49,7 +50,7 @@ func TestTheConfiguredListenerBoundsReachTheSource(t *testing.T) {
 	}
 
 	buildTestRateLimiters(t)
-	if err := buildEventSources(); err != nil {
+	if err := buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")); err != nil {
 		t.Fatalf("buildEventSources: %v", err)
 	}
 	if len(EventSources) != 1 {
@@ -96,7 +97,7 @@ func TestTheEarlyCloseCounterIsWiredToTheSource(t *testing.T) {
 		}},
 	}
 	buildTestRateLimiters(t)
-	if err := buildEventSources(); err != nil {
+	if err := buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")); err != nil {
 		t.Fatalf("buildEventSources: %v", err)
 	}
 	source := EventSources[0].(*processor.HttpEventSource)
@@ -169,5 +170,5 @@ func buildTestRateLimiters(t *testing.T) {
 		ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter = savedRLive, savedRBacklog, savedRHTTP
 		ingestGate, readingGate = savedIngest, savedReading
 	})
-	buildRateLimiter()
+	buildRateLimiter(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources"))
 }

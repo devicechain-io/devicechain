@@ -48,9 +48,13 @@ var deviceStateColumns = []rdb.Column[DeviceState]{
 	rdb.TimeColumn("created_at", func(r *DeviceState) time.Time { return r.CreatedAt }),
 	rdb.TimeColumn("updated_at", func(r *DeviceState) time.Time { return r.UpdatedAt }),
 	rdb.TextColumn("device_token", func(r *DeviceState) string { return r.DeviceToken }),
-	// Inserts start unstamped; conflict arms never assign incarnation. The sweep alone
-	// learns this identity, even if a folded input happens to carry a stamp.
-	rdb.NullInt64Column("incarnation", func(*DeviceState) *int64 { return nil }),
+	// Conflict arms never assign incarnation; resets update it explicitly under lock.
+	rdb.NullInt64Column("incarnation", func(r *DeviceState) *int64 {
+		if !r.Incarnation.Valid {
+			return nil
+		}
+		return &r.Incarnation.Int64
+	}),
 	rdb.TextColumn("external_id", func(r *DeviceState) string { return r.ExternalId }),
 	rdb.TextColumn("source", func(r *DeviceState) string { return r.Source }),
 	rdb.BoolColumn("active", func(r *DeviceState) bool { return r.Active }),
@@ -96,8 +100,8 @@ var deviceStateFolded = rdb.NewColumnUpsert(deviceStateTenant, deviceStateKey,
 		rdb.SetTo("updated_at", "excluded.updated_at"),
 	}}, deviceStateColumns...)
 
-// heartbeatGuard is the DO UPDATE's WHERE: it EXCLUDES the one row a plain data event cannot
-// be folded into in SQL — an INFERRED, inactive device the event is fresh for, which the
+// heartbeatGuard is the DO UPDATE's WHERE: it excludes stamped incarnation mismatches
+// and the row a plain data event cannot fold in SQL — an INFERRED, inactive device which the
 // event resurrects (Active, LastConnectTime and InactivityAlarmTime change, and which event
 // supplies LastConnectTime depends on arrival order). The condition is applyEvent's test, in
 // SQL: `fresh` is "no activity recorded, or the event is NOT OLDER" (>=, the frozen-clock
@@ -109,7 +113,8 @@ var deviceStateFolded = rdb.NewColumnUpsert(deviceStateTenant, deviceStateKey,
 // A row this excludes is still LOCKED by the conflict arm, and is not counted in the rows
 // written: that shortfall is how mergeHeartbeats finds the rows it must fold in Go.
 const heartbeatGuard = "NOT (t.presence_source <> '" + PresenceSourceAsserted + "' AND NOT t.active AND " +
-	"(t.last_activity_time IS NULL OR excluded.last_activity_time >= t.last_activity_time))"
+	"(t.last_activity_time IS NULL OR excluded.last_activity_time >= t.last_activity_time)) AND " +
+	"(excluded.incarnation IS NULL OR t.incarnation IS NULL OR excluded.incarnation = t.incarnation)"
 
 // ownersNewer is applyOwners' test in SQL: the batch carries a stamp, and the stored row has
 // none or an older one.
