@@ -35,5 +35,6 @@ var (
 		NewProjectionStorageSchema(),
 		NewInactivityAlarmTimeRestoreSchema(),
 		NewInactivityAlarmTimeRestoreFinalPassSchema(),
+		NewDeviceStateIncarnationSchema(),
 	}
 )

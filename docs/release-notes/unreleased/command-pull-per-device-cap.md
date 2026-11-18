@@ -1,5 +1,5 @@
 ---
-section: whats-new
+section: before-upgrade
 ---
 ## en
 - **HTTP command polling per device.** Each device can hold at most two waiting command polls per replica (one, plus a reconnect whose earlier connection the server has not yet seen close). Further waiting polls receive HTTP 429 with `Retry-After`, leaving capacity for other devices. Keep one waiting poll per device and retry as directed; `wait=0` requests and the tenant cap are unchanged.

@@ -141,6 +141,8 @@ Once saved, the group appears under **Saved dynamic groups** for that family, wi
 selector. Click **Members** to see who belongs to it right now; the list is worked out from the
 selector each time you open it.
 
+A negated selector such as `!("retired" in attr)` includes entities with no attributes from the moment they are created, including enrollment when the group is in use by a detection rule or as an access scope.
+
 ## Related
 
 - [Facets and dynamic groups](/concepts/domain-model#facets-and-dynamic-groups)

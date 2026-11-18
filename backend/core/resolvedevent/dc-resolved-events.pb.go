@@ -182,6 +182,10 @@ type PResolvedAnchor struct {
 	AnchorType     string                 `protobuf:"bytes,1,opt,name=anchor_type,json=anchorType,proto3" json:"anchor_type,omitempty"`
 	AnchorToken    string                 `protobuf:"bytes,2,opt,name=anchor_token,json=anchorToken,proto3" json:"anchor_token,omitempty"`
 	RelationshipId uint64                 `protobuf:"varint,3,opt,name=relationship_id,json=relationshipId,proto3" json:"relationship_id,omitempty"`
+	// anchor_entity_id is device-management's row id of the anchor entity (the relationship's
+	// target), so a consumer can tell a deleted anchor from one re-created at the same token.
+	// 0 means unknown.
+	AnchorEntityId uint64 `protobuf:"varint,4,opt,name=anchor_entity_id,json=anchorEntityId,proto3" json:"anchor_entity_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -233,6 +237,13 @@ func (x *PResolvedAnchor) GetAnchorToken() string {
 func (x *PResolvedAnchor) GetRelationshipId() uint64 {
 	if x != nil {
 		return x.RelationshipId
+	}
+	return 0
+}
+
+func (x *PResolvedAnchor) GetAnchorEntityId() uint64 {
+	if x != nil {
+		return x.AnchorEntityId
 	}
 	return 0
 }
@@ -364,9 +375,15 @@ type PResolvedEvent struct {
 	// records who carried it, so a stored event can be traced to the gateway that vouched for
 	// it. Empty for every event that did not come through a gateway, and then absent from the
 	// wire, so those events' bytes are exactly what they were.
-	GatewayToken  string `protobuf:"bytes,19,opt,name=gateway_token,json=gatewayToken,proto3" json:"gateway_token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	GatewayToken string `protobuf:"bytes,19,opt,name=gateway_token,json=gatewayToken,proto3" json:"gateway_token,omitempty"`
+	// device_incarnation is device-management's row id of the reporting device when the event was
+	// resolved. Ids come from a sequence and deletes are hard, so a device re-created at the same
+	// token always has a strictly larger id: a consumer that stamps it on what it stores can tell
+	// the deleted device's data from its successor's. 0 means unknown (an event resolved before the
+	// field existed), and proto3 omits it from the wire, so such events' bytes are unchanged.
+	DeviceIncarnation uint64 `protobuf:"varint,20,opt,name=device_incarnation,json=deviceIncarnation,proto3" json:"device_incarnation,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *PResolvedEvent) Reset() {
@@ -516,6 +533,13 @@ func (x *PResolvedEvent) GetGatewayToken() string {
 		return x.GatewayToken
 	}
 	return ""
+}
+
+func (x *PResolvedEvent) GetDeviceIncarnation() uint64 {
+	if x != nil {
+		return x.DeviceIncarnation
+	}
+	return 0
 }
 
 // *
@@ -1244,16 +1268,17 @@ const file_resolvedevent_dc_resolved_events_proto_rawDesc = "" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x18\n" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12\x18\n" +
-	"\apayload\x18\x05 \x01(\fR\apayload\"~\n" +
+	"\apayload\x18\x05 \x01(\fR\apayload\"\xa8\x01\n" +
 	"\x0fPResolvedAnchor\x12\x1f\n" +
 	"\vanchor_type\x18\x01 \x01(\tR\n" +
 	"anchorType\x12!\n" +
 	"\fanchor_token\x18\x02 \x01(\tR\vanchorToken\x12'\n" +
-	"\x0frelationship_id\x18\x03 \x01(\x04R\x0erelationshipId\"M\n" +
+	"\x0frelationship_id\x18\x03 \x01(\x04R\x0erelationshipId\x12(\n" +
+	"\x10anchor_entity_id\x18\x04 \x01(\x04R\x0eanchorEntityId\"M\n" +
 	"\x10PScopeMembership\x12\x1f\n" +
 	"\vgroup_token\x18\x01 \x01(\tR\n" +
 	"groupToken\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\x05R\aversion\"\x8a\a\n" +
+	"\aversion\x18\x02 \x01(\x05R\aversion\"\xb9\a\n" +
 	"\x0ePResolvedEvent\x12\x16\n" +
 	"\x06source\x18\x01 \x01(\tR\x06source\x12\x1a\n" +
 	"\x06alt_id\x18\x02 \x01(\tH\x00R\x05altId\x88\x01\x01\x12.\n" +
@@ -1274,7 +1299,8 @@ const file_resolvedevent_dc_resolved_events_proto_rawDesc = "" +
 	"\x16source_device_disabled\x18\x10 \x01(\bR\x14sourceDeviceDisabled\x12\x1f\n" +
 	"\boccurred\x18\x11 \x01(\x10H\x04R\boccurred\x88\x01\x01\x12!\n" +
 	"\tprocessed\x18\x12 \x01(\x10H\x05R\tprocessed\x88\x01\x01\x12#\n" +
-	"\rgateway_token\x18\x13 \x01(\tR\fgatewayTokenB\t\n" +
+	"\rgateway_token\x18\x13 \x01(\tR\fgatewayToken\x12-\n" +
+	"\x12device_incarnation\x18\x14 \x01(\x04R\x11deviceIncarnationB\t\n" +
 	"\a_alt_idB\x14\n" +
 	"\x12_device_type_tokenB\x18\n" +
 	"\x16_profile_version_tokenB\x0e\n" +

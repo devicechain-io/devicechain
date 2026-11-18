@@ -18,7 +18,7 @@ import (
 
 // This file implements the ADR-062 S2 membership subsystem inside device-management:
 // the maintenance of the entity_group_membership read-model + the entity_group_facet_ref
-// reverse index. It has three entry points:
+// reverse index. It has four entry points:
 //
 //   - RegisterGroupVersionForScoping / DeregisterGroupVersionForScoping — enroll or GC a
 //     frozen group@version (called by S4 when a rule first references / last un-references
@@ -28,6 +28,7 @@ import (
 //     calls: re-evaluate the one changed entity against exactly the group@versions whose
 //     selector references the changed facet key (reverse-index bounded), upserting/deleting
 //     its membership rows.
+//   - enrollNewEntitiesOnTx - the create hook for selectors matching no attributes.
 //   - MembershipsForEntity — the hot read the resolver (S3) stamps onto an event.
 //
 // Everything runs against the FROZEN version selector (EntityGroupVersion.Selector), never
@@ -92,7 +93,7 @@ func (api *Api) isMemberBySelector(ctx context.Context, db *gorm.DB, memberType,
 // Taken by each Register/Deregister and by every eligible (SHARED-scope, anchor-able)
 // attribute-write recompute — which now acquires it BEFORE reading the reverse index (see
 // recomputeMembershipForAttr), so an eligible write pays an uncontended lock even absent scoped
-// groups. A tenant doing no scoped registration and no eligible attribute write never pays.
+// groups. Entity creation takes it too, before reading the empty-match sentinel refs.
 func (api *Api) lockMembershipFamily(ctx context.Context, tx *gorm.DB, memberType string) error {
 	if tx.Dialector.Name() != "postgres" {
 		return nil
@@ -439,6 +440,82 @@ func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, ent
 	return change, nil
 }
 
+// enrollNewEntitiesOnTx enrolls newly inserted, attribute-free entities. All create
+// requests (including templates, provisioning and import) carry metadata/properties,
+// not EntityAttributes; those documents are not selector attributes.
+func (api *Api) enrollNewEntitiesOnTx(ctx context.Context, tx *gorm.DB, entityType string, ids []uint) (membershipChange, error) {
+	// Lock BEFORE the indexed ref read: uncommitted registration refs are invisible
+	// to MVCC (see recomputeMembershipForAttr). Accept one uncontended advisory lock
+	// per create even without groups on Postgres; SQLite's lock is a no-op.
+	// Creators insert first, retaining their existing locks before this lock. This
+	// cannot deadlock with Register: a family-lock holder never waits on a row lock
+	// held by another creator; registration reads member rows without locking them.
+	// Ownership queuing must remain LAST, after enrollment and all other locks.
+	if err := api.lockMembershipFamily(ctx, tx, entityType); err != nil {
+		return membershipChange{}, err
+	}
+	var refs []EntityGroupFacetRef
+	if err := tx.Where("facet_key = ? AND member_type = ?", createEnrollFacetKey, entityType).Find(&refs).Error; err != nil {
+		return membershipChange{}, err
+	}
+	if len(refs) == 0 {
+		return membershipChange{}, nil
+	}
+	change := membershipChange{touched: true}
+	var access map[uint]accessGroup
+	if entityType == string(entity.TypeDevice) {
+		var err error
+		if access, err = accessGroupsOnDB(tx); err != nil {
+			return membershipChange{}, err
+		}
+	}
+	for _, ref := range refs {
+		var frozen EntityGroupVersion
+		err := tx.Where("entity_group_id = ? AND version = ?", ref.GroupId, ref.SelectorVersion).First(&frozen).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue // the group went away mid-flight; its teardown removes the ref
+		}
+		if err != nil {
+			return membershipChange{}, err
+		}
+		// The marker is a hint, not a verdict: evaluate the frozen selector against the new
+		// entities, so a selector that names the reserved key itself (which writes the same
+		// ref through Keys()) cannot enroll a non-member, and a create that ever does carry
+		// attributes is still judged by what it carries. One set query per group.
+		members, err := api.membersAmongOnTx(ctx, tx, &frozen, ids)
+		if err != nil {
+			return membershipChange{}, err
+		}
+		for _, id := range members {
+			moved, err := api.upsertMembership(tx, entityType, id, ref.GroupId, ref.SelectorVersion, ref.GroupToken)
+			if err != nil {
+				return membershipChange{}, err
+			}
+			if g, ok := access[ref.GroupId]; ok && moved > 0 && g.Version == ref.SelectorVersion {
+				change.access = true
+			}
+		}
+	}
+	return change, nil
+}
+
+// membersAmongOnTx returns which of ids satisfy a frozen version's selector, in one query on
+// the caller's transaction.
+func (api *Api) membersAmongOnTx(ctx context.Context, tx *gorm.DB, frozen *EntityGroupVersion, ids []uint) ([]uint, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	frag, args, table, err := api.lowerSelectorSource(ctx, frozen.MemberType, frozen.Selector)
+	if err != nil {
+		return nil, err
+	}
+	memberModel, _, _ := memberModelAndTable(frozen.MemberType)
+	matched := make([]uint, 0, len(ids))
+	err = tx.Model(memberModel).Where(table+".id IN ?", ids).Where(frag, args...).
+		Order(table+".id").Pluck(table+".id", &matched).Error
+	return matched, err
+}
+
 // upsertMembership inserts a positive membership row on the given db handle, treating a
 // duplicate as success via ON CONFLICT DO NOTHING (the entity was already a member —
 // recompute is idempotent, and the insert is race-safe on its own even independent of the
@@ -563,7 +640,8 @@ func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, e
 // affected entities' cache keys post-commit so a stale stamp is never served: the attribute
 // set/delete recompute (writeAttrThenRecompute / DeleteEntityAttribute — per entity), entity
 // delete (deleteEdgeEntity), and RegisterGroupVersionForScoping / DeregisterGroupVersionForScoping
-// / DeleteEntityGroup (which evict every affected member). The TTL is a self-healing backstop.
+// / DeleteEntityGroup (which evict every affected member), and entity creation
+// (enrollNewEntitiesOnTx). The TTL is a self-healing backstop.
 func (api *Api) MembershipsForEntity(ctx context.Context, entityType string, entityId uint) ([]GroupMembership, error) {
 	rows := make([]EntityGroupMembership, 0)
 	if err := api.RDB.DB(ctx).

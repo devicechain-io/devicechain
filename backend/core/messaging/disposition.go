@@ -51,6 +51,12 @@ func (d Disposition) String() string {
 // layer to recognise one of its errors.
 type tenantErased interface{ TenantErased() bool }
 
+// FinalDelivery reports whether this is the last delivery JetStream will make of msg.
+// It is the ONE spelling of the cap. Use Dispose when you hold the handling error;
+// use this only where there is no error to classify or the consumer's give-up is not
+// "ack" (each caller is ledgered in core/test).
+func FinalDelivery(msg Message) bool { return msg.NumDelivered >= MaxDeliver }
+
 // Dispose decides what a consumer does with msg after its handling failed with err:
 //
 //   - Retry, on ANY delivery, when err is (or wraps) ErrHoldReleased: shutdown ended a store hold
@@ -79,7 +85,7 @@ func Dispose(msg Message, err error) Disposition {
 		return Retry
 	case errors.As(err, &erased) && erased.TenantErased():
 		return TenantErased
-	case msg.NumDelivered >= MaxDeliver:
+	case FinalDelivery(msg):
 		return Exhausted
 	default:
 		return Retry
