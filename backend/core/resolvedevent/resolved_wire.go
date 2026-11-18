@@ -73,10 +73,12 @@ const (
 	resolvedOccurred             = protowire.Number(17)
 	resolvedProcessed            = protowire.Number(18)
 	resolvedGatewayToken         = protowire.Number(19)
+	resolvedDeviceIncarnation    = protowire.Number(20)
 
 	anchorType           = protowire.Number(1)
 	anchorToken          = protowire.Number(2)
 	anchorRelationshipId = protowire.Number(3)
+	anchorEntityId       = protowire.Number(4)
 
 	membershipGroupToken = protowire.Number(1)
 	membershipVersion    = protowire.Number(2)
@@ -242,6 +244,7 @@ func marshalResolvedEvent(event *ResolvedEvent, format eventtime.WireFormat) ([]
 		out = appendString(out, anchorType, a.AnchorType)
 		out = appendString(out, anchorToken, a.AnchorToken)
 		out = appendUint(out, anchorRelationshipId, uint64(a.RelationshipId))
+		out = appendUint(out, anchorEntityId, uint64(a.EntityId))
 	}
 	out = occurred.appendString(out, resolvedOccurredTime, times)
 	out = processed.appendString(out, resolvedProcessedTime, times)
@@ -273,6 +276,7 @@ func marshalResolvedEvent(event *ResolvedEvent, format eventtime.WireFormat) ([]
 	out = occurred.appendCount(out, resolvedOccurred)
 	out = processed.appendCount(out, resolvedProcessed)
 	out = appendString(out, resolvedGatewayToken, event.GatewayToken)
+	out = appendUint(out, resolvedDeviceIncarnation, event.DeviceIncarnation)
 
 	// The sizing and writing passes read the same event, so they agree unless it changed
 	// between them, which only a caller mutating it concurrently could do. That is a
@@ -316,12 +320,15 @@ func sizeResolvedEnvelope(event *ResolvedEvent, occurred, processed wireInstant)
 		processed.stringSize() + processed.countSize(envelopeNanosSize)
 	size += uintSize(uint64(event.EventType)) + uintSize(uint64(event.FenceSetVersion)) +
 		disabledSize(event.SourceDeviceDisabled)
+	if event.DeviceIncarnation != 0 {
+		size += 2 + protowire.SizeVarint(event.DeviceIncarnation)
+	}
 	return size, nil
 }
 
 // anchorSize is the encoded size of one PResolvedAnchor's body.
 func anchorSize(a *ResolvedAnchor) int {
-	return stringSize(a.AnchorType) + stringSize(a.AnchorToken) + uintSize(uint64(a.RelationshipId))
+	return stringSize(a.AnchorType) + stringSize(a.AnchorToken) + uintSize(uint64(a.RelationshipId)) + uintSize(uint64(a.EntityId))
 }
 
 // membershipSize is the encoded size of one PScopeMembership's body.

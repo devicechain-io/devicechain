@@ -227,11 +227,11 @@ func (p *ResolvedStateChangePayload) Claim() (presence.Claim, bool) {
 // relationships merged onto it as a set of anchors (ADR-013). The set is empty
 // when the device has no tracked relationship (it still resolves and persists).
 // The source device is carried as its stable per-tenant token (ADR-044): the
-// numeric row id is internal to device-management and never crosses the seam to
-// event-management / device-state.
+// numeric row id accompanies it as the incarnation, distinguishing reused tokens.
 type ResolvedEvent struct {
 	Source            string
 	AltId             *string
+	DeviceIncarnation uint64
 	SourceDeviceToken string
 	Anchors           []ResolvedAnchor
 	// DeviceTypeToken and ProfileVersionToken denormalize the device's rule-scoping
@@ -314,6 +314,7 @@ type ResolvedAnchor struct {
 	AnchorType     string
 	AnchorToken    string
 	RelationshipId uint
+	EntityId       uint
 }
 
 // Captures failure information for events that could not be processed.

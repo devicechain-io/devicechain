@@ -4,14 +4,22 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/devicechain-io/dc-command-delivery/model"
+	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,14 +72,14 @@ func TestPresenceReaderRecordsItsDecision(t *testing.T) {
 		gates, read := gateReading(t, "command-delivery")
 		infra := fullInfra()
 		mutate(&infra)
-		assert.Nil(t, presenceReader(infra, gates), name)
+		assert.Nil(t, presenceReader(infra, svcclient.NewPeers(infra, "command-delivery"), gates), name)
 		v, ok := read(governance.GatePresence)
 		assert.True(t, ok, "%s: an OFF gate must be a present series", name)
 		assert.Equal(t, 0.0, v, name)
 	}
 
 	gates, read := gateReading(t, "command-delivery")
-	assert.NotNil(t, presenceReader(fullInfra(), gates))
+	assert.NotNil(t, presenceReader(fullInfra(), svcclient.NewPeers(fullInfra(), "command-delivery"), gates))
 	v, ok := read(governance.GatePresence)
 	assert.True(t, ok)
 	assert.Equal(t, 1.0, v)
@@ -142,14 +150,51 @@ func TestTenantLifecycleGateRecordsItsDecision(t *testing.T) {
 	infra := fullInfra()
 	infra.UserManagement.Hostname = ""
 	gates, read := gateReading(t, "command-delivery")
-	assert.Nil(t, tenantLifecycleGate(infra, gates))
+	assert.Nil(t, tenantLifecycleGate(svcclient.NewPeers(infra, "command-delivery"), gates))
 	v, ok := read(governance.GateTenantLifecycle)
 	assert.True(t, ok, "an OFF gate must be a present series")
 	assert.Equal(t, 0.0, v)
 
 	gates, read = gateReading(t, "command-delivery")
-	assert.NotNil(t, tenantLifecycleGate(fullInfra(), gates))
+	assert.NotNil(t, tenantLifecycleGate(svcclient.NewPeers(fullInfra(), "command-delivery"), gates))
 	v, ok = read(governance.GateTenantLifecycle)
 	assert.True(t, ok)
 	assert.Equal(t, 1.0, v)
+}
+
+// Exercise the real wiring rather than a separately constructed verify client: solar planning
+// must ask for its newer authority on its own credential, minted on the internal listener.
+func TestSiteWiringMintsItsOwnAuthorities(t *testing.T) {
+	requests := make(chan auth.ServiceTokenRequest, 1)
+	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, auth.ServiceTokenPath, r.URL.Path)
+		assert.Equal(t, "s3cret", r.Header.Get(auth.ServiceSecretHeader))
+		var request auth.ServiceTokenRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		} else {
+			requests <- request
+		}
+		// Like an old replica, refuse the new authority. No device query should follow.
+		http.Error(w, "authority unavailable", http.StatusForbidden)
+	}))
+	defer mint.Close()
+	addr := mint.Listener.Addr().(*net.TCPAddr)
+	infra := fullInfra()
+	infra.UserManagement.Hostname = addr.IP.String()
+	infra.UserManagement.Port = 1 // The public listener must never receive the mint.
+	infra.UserManagement.InternalPort = uint32(addr.Port)
+	infra.DeviceManagement.Hostname, infra.DeviceManagement.Port = addr.IP.String(), uint32(addr.Port)
+	prevApi := Api
+	t.Cleanup(func() { Api = prevApi })
+	Api = &model.Api{}
+	ms := &core.Microservice{FunctionalArea: "command-delivery"}
+	wireDeviceManagementGates(infra, svcclient.NewPeers(infra, ms.FunctionalArea))
+	ctx := core.WithTenant(context.Background(), "tenant")
+	_, err := Api.SiteResolver.DeviceSites(ctx, []string{"device"})
+	require.Error(t, err)
+	require.Len(t, requests, 1, "site resolver must mint its own credential")
+	request := <-requests
+	assert.Equal(t, ms.FunctionalArea, request.Subject)
+	assert.Equal(t, []string{string(auth.DeviceRead), string(auth.LocationInstalledRead)}, request.Authorities)
 }
