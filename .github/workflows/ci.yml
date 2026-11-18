@@ -170,6 +170,12 @@ jobs:
       - name: changelog base self-test
         run: hack/changelog-base.sh --self-test
 
+      # Every compatibility check picks its baseline in hack/api-baseline.sh, by a rule that
+      # reads tags AND branch topology (main is compared with a minor tagged on a release branch
+      # main never contains), so it is proven on planted histories, not on whatever tags exist.
+      - name: compatibility baseline self-test
+        run: hack/api-baseline.sh --self-test
+
       # The chart stamp runs only on a tag; a broken flag mislabels a release in Artifact Hub.
       # The self-test is the part that runs on every PR, before a release needs the stamp.
       - name: chart prerelease stamp self-test
@@ -3238,6 +3244,10 @@ jobs:
         run: hack/check-chart-pins.sh
         working-directory: .
 
+      - name: chart version pins self-test
+        run: bash hack/check-chart-pins.sh --self-test
+        working-directory: .
+
       # The broker image is built on one nats-server library version, and the nats chart,
       # every module's requirement and the documented upstream rollback image must name the
       # same one. Dependabot moves the go.mod lines and nothing else, so the bump that
@@ -3503,8 +3513,9 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # API compatibility: does this change break a client written against the last
-  # release? Every served GraphQL schema is compared with the same schema at the
-  # nearest stable release tag reachable from HEAD; a breaking change fails unless it
+  # release? Every served GraphQL schema is compared with the same schema at the last
+  # release on HEAD's line (hack/api-baseline.sh: on main, the newest minor, though it
+  # was tagged on a release branch main never contains); a breaking change fails unless it
   # is declared in backend/tools/docsgql/sdlcompat/breaks.txt with a reason, and every
   # @deprecated must carry a reason that names the replacement. The same comparison
   # runs for the dcctl command tree (commands, aliases, flags), the device wire contract

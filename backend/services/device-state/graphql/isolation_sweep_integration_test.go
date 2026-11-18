@@ -21,6 +21,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/test/isolationsweep"
 	"github.com/stretchr/testify/require"
 )
@@ -62,7 +63,7 @@ func sweepFixture(t *testing.T) context.Context {
 		}
 	})
 	sys := mgr.Database.WithContext(core.WithSystemContext(context.Background()))
-	for _, table := range []string{"device_states", "latest_measurements", "latest_locations"} {
+	for _, table := range []string{"device_states", "latest_measurements", "latest_locations", "dropped_measurements"} {
 		require.NoError(t, sys.Exec(fmt.Sprintf(`TRUNCATE TABLE "device-state".%q`, table)).Error)
 	}
 	api := model.NewApi(mgr)
@@ -72,6 +73,9 @@ func sweepFixture(t *testing.T) context.Context {
 		_, err := api.MergeDeviceState(ctx, device, at, nil, model.DeviceIdentity{ExternalId: device,
 			Source: "mqtt1", Owners: model.Owners{Anchors: []string{owner}, At: at}})
 		require.NoError(t, err)
+		require.NoError(t, api.MergeDroppedMeasurements(ctx, device, []model.DroppedMeasurementInput{{
+			Name: device + "-status", Reason: resolvedevent.DropUndeclaredNonNumeric,
+			Value: device + "-discarded", OccurredTime: at}}))
 		require.NoError(t, api.MergeLatestMeasurements(ctx, device, []model.LatestMeasurementInput{{
 			Name: device + "-temp", Value: sql.NullFloat64{Float64: 21.5, Valid: true}, OccurredTime: at}}))
 		require.NoError(t, api.MergeLatestLocations(ctx, device, []model.LatestLocationInput{{
@@ -111,7 +115,7 @@ func TestIsolationSweep(t *testing.T) {
 	})
 	// The opted-in reads answered data rather than a refusal...
 	for _, name := range []string{"query deviceStates", "query deviceStatesByDeviceToken", "query deviceStatesByExternalId",
-		"query latestMeasurements", "query latestLocation", "query latestLocations"} {
+		"query latestMeasurements", "query latestLocation", "query latestLocations", "query droppedMeasurements"} {
 		if o, ok := isolationsweep.OutcomeOf(out, name); !ok || !o.Data {
 			t.Errorf("%s: %+v (reached=%v), want data for acme's member", name, o, ok)
 		}
@@ -130,6 +134,7 @@ func TestIsolationSweep(t *testing.T) {
 		`query { deviceStatesByExternalId(externalIds: ["acme-1", "globex-1"]) { deviceToken externalId } }`,
 		`query { deviceStates(criteria: {pageNumber: 1, pageSize: 50}) { results { deviceToken } } }`,
 		`query { latestMeasurements(deviceToken: "acme-1") { name } }`,
+		`query { droppedMeasurements(deviceToken: "acme-1") { name lastValue } }`,
 		`query { latestLocations(deviceTokens: ["acme-1", "globex-1"]) { deviceToken } }`,
 	} {
 		res := schema.Exec(scoped, q, "", nil)

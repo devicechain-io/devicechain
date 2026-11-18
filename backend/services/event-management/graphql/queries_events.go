@@ -24,18 +24,20 @@ type EventAnchorInput struct {
 
 // GraphQL representation of the event search criteria input.
 type EventSearchCriteriaInput struct {
-	PageNumber  int32
-	PageSize    int32
-	DeviceToken *string
-	EventTypes  *[]int32
-	StartTime   *string
-	EndTime     *string
-	Anchor      *EventAnchorInput
+	IncludeTotal *bool
+	PageNumber   int32
+	PageSize     int32
+	DeviceToken  *string
+	EventTypes   *[]int32
+	StartTime    *string
+	EndTime      *string
+	Anchor       *EventAnchorInput
 }
 
 // Convert a GraphQL criteria input into the model search criteria.
 func toEventSearchCriteria(in EventSearchCriteriaInput) (model.EventSearchCriteria, error) {
 	criteria := model.EventSearchCriteria{
+		IncludeTotal: in.IncludeTotal,
 		Pagination: rdb.Pagination{
 			PageNumber: in.PageNumber,
 			PageSize:   in.PageSize,

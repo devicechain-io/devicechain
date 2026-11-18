@@ -60,7 +60,8 @@ func (nmgr *NatsManager) AdmitPublish(tenant, suffix string) error {
 // ErrShardRoutingNotEnabled refuses read and write handles on instance-sharded streams without routing.
 var ErrShardRoutingNotEnabled = errors.New("messaging: shard-group routing is not enabled")
 
-// ShardGroupRouter holds an adoptable placement. An error never means group zero.
+// ShardGroupRouter is satisfied by partition.Router; it holds an adoptable placement. An
+// error never means group zero.
 type ShardGroupRouter interface {
 	ShardGroup(tenant string) (int, error)
 	// Ready returns nil when routing has an adoptable placement.
@@ -146,6 +147,29 @@ func (nmgr *NatsManager) tenantSuffix(tenant, suffix string) (string, error) {
 		return "", fmt.Errorf("%w: tenant %q has group %d outside [0,%d)", ErrUnplacedTenant, tenant, g, s.cfg.Count)
 	}
 	return GroupSuffix(suffix, g), nil
+}
+
+// TenantShardGroup resolves a tenant's current group without creating a handle.
+// Unsharded suffixes retain group zero; configured but unenabled routing refuses.
+func (nmgr *NatsManager) TenantShardGroup(tenant, suffix string) (int, error) {
+	if err := nmgr.refuseUnroutedRead(suffix); err != nil {
+		return 0, err
+	}
+	if tenant == "" {
+		return 0, core.ErrNoTenant
+	}
+	s := nmgr.streamSharding()
+	if !s.selects(suffix) {
+		return 0, nil
+	}
+	g, err := s.router.ShardGroup(tenant)
+	if err != nil {
+		return 0, fmt.Errorf("%w: tenant %q: %w", ErrUnplacedTenant, tenant, err)
+	}
+	if g < 0 || g >= s.cfg.Count {
+		return 0, fmt.Errorf("%w: tenant %q has group %d outside [0,%d)", ErrUnplacedTenant, tenant, g, s.cfg.Count)
+	}
+	return g, nil
 }
 
 // declaredSuffix recognizes only group names enabled by this manager's configuration.

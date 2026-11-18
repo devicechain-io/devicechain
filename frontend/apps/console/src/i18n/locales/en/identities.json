@@ -65,5 +65,5 @@
   "mfaNewPasswordLabel": "New password",
   "mfaResetWithPassword": "Reset and set password",
   "managedByIdpShort": "Managed by the identity provider",
-  "managedByIdpNotice": "The identity provider manages this membership, and the person's next sign-in through it would undo a change made here, so its roles cannot be changed and it cannot be disabled or removed here. To change it, change the person's groups at the identity provider. To revoke access, disable the identity, remove the person from the provider's groups, or stop the provider's connection serving this tenant."
+  "managedByIdpNotice": "The identity provider manages this membership, and the person's next sign-in through it would undo a change made here, so its roles cannot be changed and it cannot be enabled, disabled or removed here. To change it, change the person's groups at the identity provider: a person in no group it maps to a role here is disabled at their next sign-in, and enabled again once they are. To revoke access, disable the identity, remove the person from the provider's groups, or stop the provider's connection serving this tenant."
 }

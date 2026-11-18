@@ -4,6 +4,10 @@
 package graphql
 
 import (
+	"context"
+	gql "github.com/graph-gophers/graphql-go"
+	"github.com/stretchr/testify/require"
+	"regexp"
 	"testing"
 	"time"
 
@@ -108,4 +112,38 @@ func TestAlarmEventResolverFields(t *testing.T) {
 		bare.LastValue() != nil || bare.RaisedTime() != nil {
 		t.Errorf("expected nils on a bare event, got %+v", bare)
 	}
+}
+
+func TestAlarmEventClearReasonNullable(t *testing.T) {
+	r := &AlarmEventResolver{E: &model.AlarmStateChangeEvent{}}
+	if r.ClearReason() != nil {
+		t.Fatal("ordinary clear must have null reason")
+	}
+	r.E.ClearReason = model.AlarmClearReasonOriginatorDeleted
+	if r.ClearReason() == nil || *r.ClearReason() != "ORIGINATOR_DELETED" {
+		t.Fatal("deletion reason missing")
+	}
+}
+
+type alarmReasonQuery struct{ event *AlarmEventResolver }
+
+func (q *alarmReasonQuery) Event() *AlarmEventResolver { return q.event }
+
+func TestAlarmClearReasonOnGraphQLWire(t *testing.T) {
+	// Use the served definitions, so removing or making the field non-null fails here.
+	definitions := "type Query { event: AlarmEvent! }\n"
+	for _, pattern := range []string{`(?s)enum AlarmClearReason \{.*?\}`, `(?s)type AlarmEvent \{.*?\}`} {
+		definition := regexp.MustCompile(pattern).FindString(SchemaContent)
+		require.NotEmpty(t, definition)
+		definitions += definition + "\n"
+	}
+	root := &alarmReasonQuery{event: &AlarmEventResolver{E: &model.AlarmStateChangeEvent{}}}
+	schema := gql.MustParseSchema(definitions, root)
+	result := schema.Exec(context.Background(), `{ event { clearReason } }`, "", nil)
+	require.Empty(t, result.Errors)
+	require.JSONEq(t, `{"event":{"clearReason":null}}`, string(result.Data))
+	root.event.E.ClearReason = model.AlarmClearReasonOriginatorDeleted
+	result = schema.Exec(context.Background(), `{ event { clearReason } }`, "", nil)
+	require.Empty(t, result.Errors)
+	require.JSONEq(t, `{"event":{"clearReason":"ORIGINATOR_DELETED"}}`, string(result.Data))
 }
