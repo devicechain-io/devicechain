@@ -201,6 +201,7 @@ READERS = [
     ], [], "processor/broker_assertion_test.go:218, integration_marks_test.go:159, connect_snippet_golden_test.go:288-289"),
     ("backend/services/event-sources", "integration", ["backend/services/device-management/graphql/**"], [], "integration/backend_test.go:32"),
     ("backend/services/mcp", "server", [SDL], [], "server/documents_test.go:35"),
+    ("backend/services/notification-management", "processor", ["backend/services/device-management/graphql/**"], [], "processor/alarm_lookup_wire_test.go:25"),
     # Each peer client's recorded documents, validated against the SDL its target serves
     # (documents_test.go validateDocuments: ../../<target>/graphql).
     ("backend/services/ai-inference", "inference", ["backend/services/user-management/graphql/**"], [], "inference/documents_test.go"),
