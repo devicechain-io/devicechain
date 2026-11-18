@@ -193,8 +193,9 @@ func jobCycle(o Observations, j sim.ScenarioJob) (*Campaign, time.Time, []Elemen
 	return c, fire, o.S4.Elements[elementsKey(j.Campaign, cycles[0].Key)], nil
 }
 
-// nightDim: the night dim fired once, for exactly East Quay's lights, each command succeeded, and
-// each of those lamps then reported the dimmed level while no other lamp did.
+// nightDim: the night dim delivered once to each observed group member, each command succeeded,
+// and each member reported the dimmed level while no other lamp did. groupsResolve alone judges
+// whether the observed membership matches the layout.
 func nightDim(o Observations) error {
 	j, err := jobOf(o, sim.HarborpulseJobNightDim)
 	if err != nil {
@@ -207,7 +208,10 @@ func nightDim(o Observations) error {
 	if c.GroupToken != sim.HarborpulseEastLightsGroup {
 		return fmt.Errorf("campaign %s targets group %s, not %s", c.Token, c.GroupToken, sim.HarborpulseEastLightsGroup)
 	}
-	east := sim.HarborpulseGroupMembers()[sim.HarborpulseEastLightsGroup]
+	east := o.S4.Groups[sim.HarborpulseEastLightsGroup]
+	if len(east) == 0 {
+		return fmt.Errorf("cannot judge the night dim: observed membership of %s is missing or empty", sim.HarborpulseEastLightsGroup)
+	}
 	var devices []string
 	var problems []string
 	counts := map[string]int{}
@@ -226,8 +230,12 @@ func nightDim(o Observations) error {
 			problems = append(problems, fmt.Sprintf("%s: %d elements, want one", device, counts[device]))
 		}
 	}
-	targeted := setOf(devices)
-	for _, lamp := range fleetOf(sim.HarborpulseLightType, "") {
+	targeted := setOf(east)
+	lamps := setOf(fleetOf(sim.HarborpulseLightType, ""))
+	for _, lamp := range east {
+		lamps[lamp] = true
+	}
+	for _, lamp := range sortedKeys(lamps) {
 		dimmed := false
 		for _, r := range readingsOf(o, lamp, sim.HarborpulseDimKey, fire, fire.Add(dimWithin)) {
 			dimmed = dimmed || r.Value == sim.HarborpulseNightDimPct
