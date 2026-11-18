@@ -42,7 +42,7 @@ func (rp *ResolvedEventsProcessor) duplicateEvent(t time.Time, tenant string, ev
 // messageAtOrAfter is the first message the stream holds at or after seq, and false when it
 // holds none.
 func (rp *ResolvedEventsProcessor) messageAtOrAfter(seq uint64) (messaging.Message, bool, error) {
-	reader, _, err := rp.Replay.NewReplayReader(rp.cfg.Suffix, seq)
+	reader, _, err := rp.openReplay(seq)
 	if err != nil {
 		return messaging.Message{}, false, fmt.Errorf("open a read at seq %d: %w", seq, err)
 	}
@@ -132,7 +132,7 @@ func (rp *ResolvedEventsProcessor) primeApplied() error {
 	if boundary := last + 1 - min(last+1, uint64(rp.applied.MaxEntries())); lo < boundary {
 		lo, capBound = boundary, true
 	}
-	reader, _, err := rp.Replay.NewReplayReader(rp.cfg.Suffix, max(lo, 1))
+	reader, _, err := rp.openReplay(max(lo, 1))
 	if err != nil {
 		return fmt.Errorf("open the duplicate-guard priming read from seq %d: %w", lo, err)
 	}
