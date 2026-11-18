@@ -21,12 +21,12 @@ import (
 var dynamicCatalogUses = map[string][]string{
 	// The store forwarder: one writer per forwarded kind, built in a loop over a table.
 	"event-sources/mqtt_failclosed.go#NewWriter": {streams.CommandResponses, streams.DeviceReports},
-	// DETECT's replay, live-gap fill and rule preview read the stream their configuration
-	// names, and event-processing's main sets it to resolved-events (main.go, Suffix:).
-	"event-processing/processor/ResolvedEventsProcessor.go#NewReplayReader": {streams.ResolvedEvents},
-	// The duplicate guard's priming reads the same stream (processor/applied_guard.go).
-	"event-processing/processor/applied_guard.go#NewReplayReader":          {streams.ResolvedEvents},
-	"event-processing/processor/live_gap.go#NewRangeReader":                {streams.ResolvedEvents},
+	// DETECT's replay, the duplicate guard's priming and the live-gap fill all open their
+	// reader through group_worker.go: either the stream the configuration names, which
+	// event-processing's main sets to resolved-events (main.go, Suffix:), or a group
+	// worker's replay source, which NewGroupReplaySource builds over resolved-events.
+	"event-processing/processor/group_worker.go#NewReplayReader":           {streams.ResolvedEvents},
+	"event-processing/processor/group_worker.go#NewRangeReader":            {streams.ResolvedEvents},
 	"event-processing/internal/preview/preview.go#NewReplayReaderFromTime": {streams.ResolvedEvents},
 	// The automation change review reads the same stream; the comparison resolver passes it.
 	"event-processing/internal/review/run.go#NewReplayReaderFromTime": {streams.ResolvedEvents},

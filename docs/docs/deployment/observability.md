@@ -522,6 +522,12 @@ read yet.
   replica. Tenants together still can, and so can a tenant whose tier raises its ceiling, any
   tenant on a smaller cluster, and a client posting over HTTP under many tenant names, since a
   name is metered before its credential is checked. The gate then refuses everyone.
+- On an instance that runs NATS shard groups, each group has its own copy of a sharded stream
+  and its own gate, so "every tenant" means every tenant placed in that group. An HTTP post is
+  admitted against its own tenant's group, so a backlog in one group does not refuse a tenant
+  placed in a healthy one. A reader that forwards into a sharded stream from a stream that is not
+  sharded, such as `event-sources` reading the MQTT capture stream, can send into any group, so
+  it stops reading while any one of them is refusing.
 - The broker still discards the oldest message when a stream is full, so an unread event can
   still be lost in three cases. The services writing to the stream can, between two of their
   measurements, use up more processed history than the stream was seen to discard in the

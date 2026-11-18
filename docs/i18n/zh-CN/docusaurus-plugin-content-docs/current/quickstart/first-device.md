@@ -24,7 +24,7 @@ import YouTubeLite from '@site/src/components/YouTubeLite';
 
 `dcctl install` 和 `dcctl bootstrap` 都会先运行预检。如果这四个工具中有任何一个缺失，命令就会**停止**。这样你只会花十秒发现缺失，而不是等上十分钟。
 
-- **OpenTofu 1.10 或更高版本。** 预检会确认 `tofu`（或 `terraform`）存在，但不检查其版本；较旧的版本会在 `dcctl install` 加载基础设施配置时中途失败。`tofu version` 会打印你的版本。
+- **OpenTofu 1.10 或更高版本。** 预检会确认 `tofu`（或 `terraform`）存在，并拒绝早于 1.10 的版本，因此旧的二进制文件会在创建任何资源之前就让运行停止。`tofu version` 会打印你的版本。
 - **足够的集群资源。** 当 Docker 的 CPU 少于 4 个或内存少于 8 GiB 时，预检会发出警告；镜像和数据库卷需要 40 GiB 可用磁盘。在 Docker Desktop 中，可在 **Settings → Resources** 中设置。第 1 步使用 `--compact` 安装，它会降低每个 Pod 的资源请求，使实例能在笔记本电脑上运行。
 - 不需要 `helm` 命令。`dcctl` 自带 Chart，并通过 Helm 的 Go 库安装，预检不会检查这个二进制文件。
 - 缺少 `ko` 和 `cloud-provider-kind` 只会产生警告。只有从源码构建镜像（`--build`）时才需要 `ko`。
@@ -350,7 +350,7 @@ curl -s -X POST http://localhost/api/command-delivery/graphql \
 
   然后使用 `dcctl sim status demo`、`dcctl sim stop demo` 和 `dcctl sim start demo` 控制它。模拟器访问的是同一个接入端点，因此同样需要第 5 步的端口转发。
 
-  `demo` 模拟运行的是默认场景，它会发送读数，但没有声明任何检测规则，因此不会产生告警。若想要会产生告警的场景，请用 `dcctl sim create building --manifest buildingpulse` 创建第二个模拟，并用 `dcctl sim run building` 运行：十二个温控器的温度会升到 30 以上再回落，在租户 `sim-building` 的 **Monitor → Alarms** 中产生并清除 `bp-over-temp` 告警。以 `building@sim.devicechain.local` 和 `~/.devicechain/sims/building.json` 中的 `simPassword` 登录即可查看。启动第二个 `dcctl sim run` 之前，请先中断第一个（Ctrl+C），因为两者使用同一个控制端口。
+  `demo` 模拟运行的是默认场景，它会发送读数，但没有声明任何检测规则，因此不会产生告警。若想要会产生告警的场景，请用 `dcctl sim create building --manifest buildingpulse` 创建第二个模拟，并用 `dcctl sim run building` 运行：十二个温控器的温度会升到 30 以上再回落，在租户 `sim-building` 的 **Monitor → Alarms** 中产生并清除 `bp-over-temp` 告警。以 `building@sim.devicechain.local` 和 `~/.devicechain/sims/building.json` 中的 `simPassword` 登录即可查看。
 
 - **[功能导览](./feature-tour.md)**：从这里继续，依次完成仪表板、会触发告警并下发命令的规则、设备对命令的应答，以及只能看到自己设备的客户用户，然后以第二个租户再运行一遍同样的导览。
 
