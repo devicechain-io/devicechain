@@ -119,7 +119,7 @@ func pagerDutyEvent(routingKey, action string, cfg *model.PagerDutyConfig, msg *
 		"event_action": action,
 		"dedup_key":    trunc(a.AlarmToken, 255),
 	}
-	if action != pdTrigger {
+	if action != pdTrigger && !(a.EventType == "CLEARED" && a.ClearReason == "ORIGINATOR_DELETED") {
 		return ev
 	}
 	details := map[string]any{
@@ -127,6 +127,9 @@ func pagerDutyEvent(routingKey, action string, cfg *model.PagerDutyConfig, msg *
 		"alarmKey":   a.AlarmKey,
 		"state":      a.State,
 		"eventType":  a.EventType,
+	}
+	if a.ClearReason != "" {
+		details["clearReason"] = a.ClearReason
 	}
 	if a.Originator != "" {
 		details["source"] = a.Originator

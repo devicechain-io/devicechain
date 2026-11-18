@@ -30,7 +30,7 @@ var frontendDocumentGroups = []struct {
 	{"packages/dashboards/src/internal/command-doc.ts", "command-delivery", "COMMANDS_QUERY CREATE_COMMAND"},
 	{"packages/dashboards/src/internal/location-doc.ts", "device-state", "LATEST_LOCATIONS_QUERY"},
 	{"packages/dashboards/src/internal/presence-doc.ts", "device-state", "DEVICE_PRESENCE_QUERY"},
-	{"packages/dashboards/src/internal/measurement-doc.ts", "event-management", "MEASUREMENT_STREAM"},
+	{"packages/dashboards/src/internal/measurement-doc.ts", "event-management", "MEASUREMENT_STREAM MEASUREMENT_STREAM_MULTI"},
 	{"apps/dashboard/src/queries.ts", "user-management", "LOGIN VERIFY_MFA SELECT_TENANT REFRESH BEGIN_SSO COMPLETE_SSO LOGOUT TENANT_BASEMAP"},
 	{"apps/dashboard/src/queries.ts", "dashboard-management", "PUBLISHED_DASHBOARD DASHBOARDS"},
 }

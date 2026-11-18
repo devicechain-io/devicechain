@@ -272,6 +272,32 @@ func TestOnlyDeclaredWritersCanWriteABucket(t *testing.T) {
 	}
 }
 
+// event-processing routes now: shardgroups.Enable, called at startup, watches the placement
+// mirror when stream sharding is configured, so the area is a declared reader of the bucket and
+// its login holds the read grant and nothing that writes. (Before it routed it held no grant at
+// all; a grant without that use would be a role nothing uses.)
+func TestEventProcessingHasReadOnlyPlacementGrantsNowThatItRoutes(t *testing.T) {
+	p, err := AreaPermissions(permInstance, "event-processing")
+	require.NoError(t, err)
+	b, ok := kv.Lookup(kv.BucketPartitionPlacement)
+	require.True(t, ok)
+	require.Contains(t, b.Readers, "event-processing")
+	require.NotContains(t, b.Writers, "event-processing")
+	names := messaging.KvBucketNames(permInstance, b, "event-processing")
+	require.Len(t, names, 1)
+	stream := messaging.KvStreamName(names[0])
+	require.True(t, p.publishes("$JS.API.STREAM.MSG.GET."+stream))
+	require.True(t, p.publishes("$JS.API.CONSUMER.CREATE."+stream+".watch"))
+	require.False(t, p.publishes("$KV."+names[0]+".key"))
+	require.False(t, p.publishes("$JS.API.STREAM.PURGE."+stream))
+	require.False(t, p.publishes("$JS.API.STREAM.DELETE."+stream))
+	// The control: the bucket's writer holds the put on this same bucket name, so the refusal
+	// above is event-processing not being a writer, not the subject failing to match.
+	writer, err := AreaPermissions(permInstance, "user-management")
+	require.NoError(t, err)
+	require.True(t, writer.publishes("$KV."+names[0]+".key"))
+}
+
 // 🔑 R3: a durable consumer is named exactly, so one area cannot rewrite, steal from or ack
 // another's. The one wildcard-named grant is the ephemeral reader's, on its own stream, and it
 // is the residue the stream-administration step removes.

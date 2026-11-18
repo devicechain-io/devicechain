@@ -82,7 +82,7 @@ frontend/                     npm workspace (React 19 + Vite + Tailwind + shadcn
                               external embedder with its own login) + packages/{client,dashboards,widgets}
                               (SDK, dashboard runtime + slot/binding-manifest model, ECharts widgets; ADR-039)
 docs/                         Docusaurus site
-hack/                         license headers, dev scripts, and the six VALIDATION RIGS — `ha-rig.sh`
+hack/                         license headers, dev scripts, and the seven VALIDATION RIGS — `ha-rig.sh`
                               (ADR-020 messaging HA), `dr-rig.sh` (ADR-028 root-key restore),
                               `tofu-rerun-rig.sh` (a failed install recovers on re-run; run it when
                               the kubernetes provider pin moves — needs kind, no DeviceChain images),
@@ -106,7 +106,11 @@ hack/                         license headers, dev scripts, and the six VALIDATI
                               off and on another device's topic, decoded exactly, over-cap and
                               no-decoder payloads on failed-decode, and a hanging device-management
                               not stalling ordinary events, each with a planted defect; run it
-                              whenever the decoder pipeline, its streams or the device grant change).
+                              whenever the decoder pipeline, its streams or the device grant change)
+                              and `harborpulse-rig.sh` (one compressed harborpulse sim day judged by
+                              cmd/scenario-verify, beside six planted defects that must each turn their
+                              own invariant red; run it whenever the scenario, its rules or the verifier
+                              change).
                               All are manual, all need a real cluster, and all carry a NEGATIVE
                               CONTROL: a check is worth nothing until it has been shown to fail
 _legacy/                      archived pre-migration SiteWhere code — NOT in the workspace, not built; do not edit

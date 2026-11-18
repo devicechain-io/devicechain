@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/devicechain-io/dc-event-processing/connectorwire"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -68,7 +69,8 @@ func fallbackCount(t *testing.T, reg *prometheus.Registry, source string) float6
 
 // Metering on trigger time does not let a flood through: 2000 dispatches triggered within one
 // second are admitted as a live flood would be — the burst, the rate over that second, and the
-// rate over the wait budget — and every other one is shed to the dead-letter subject.
+// rate over the wait budget — and every other one is shed, lettered within budget
+// or counted without a letter beyond it.
 func TestTheSinkShedsAFloodAsLive(t *testing.T) {
 	const n, rate, burst = 2000, 10.0, 20
 	const budget = time.Second
@@ -84,9 +86,15 @@ func TestTheSinkShedsAFloodAsLive(t *testing.T) {
 	start := time.Now().Add(-time.Second)
 	for i := 0; i < n; i++ {
 		at := start.Add(time.Duration(i) * time.Second / n)
-		c.handle(context.Background(), timedDispatch(t, srv.URL, fmt.Sprintf("k%04d", i), at, time.Time{}, &fakeAck{}))
+		ack := &fakeAck{}
+		c.handle(context.Background(), timedDispatch(t, srv.URL, fmt.Sprintf("k%04d", i), at, time.Time{}, ack))
+		if !ack.acked {
+			t.Fatalf("dispatch %d was left unacked", i)
+		}
 	}
-	admitted, shed := int(hits.Load()), len(dead.written())
+	admitted := int(hits.Load())
+	shed := int(testutil.ToFloat64(c.metrics.dispatched.WithLabelValues("httpCall", outcomeRateLimited)))
+	unlettered := int(testutil.ToFloat64(c.metrics.unlettered.WithLabelValues("httpCall", outcomeRateLimited)))
 	// burst + rate·1s at no wait, then up to rate·budget more that each waited inside the budget.
 	lo, hi := burst+int(rate), burst+int(rate*(1+budget.Seconds()))+2
 	if admitted < lo || admitted > hi {
@@ -94,6 +102,9 @@ func TestTheSinkShedsAFloodAsLive(t *testing.T) {
 	}
 	if admitted+shed != n {
 		t.Fatalf("admitted %d + shed %d != %d", admitted, shed, n)
+	}
+	if len(dead.written())+unlettered != shed {
+		t.Fatalf("lettered %d + unlettered %d != shed %d", len(dead.written()), unlettered, shed)
 	}
 }
 

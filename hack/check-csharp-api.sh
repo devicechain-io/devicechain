@@ -4,7 +4,7 @@
 #
 # Does the public C# SDK still expose everything it exposed at the last release?
 #
-#   hack/check-csharp-api.sh                 # baseline: nearest stable tag reachable from HEAD
+#   hack/check-csharp-api.sh                 # baseline: hack/api-baseline.sh's rule
 #   hack/check-csharp-api.sh v0.24.0         # baseline: the tag given
 #   hack/check-csharp-api.sh --self-test     # prove the check can fail, through this script
 #   hack/check-csharp-api.sh --promote       # release step: fold Unshipped into Shipped

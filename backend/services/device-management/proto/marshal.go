@@ -21,6 +21,7 @@ import (
 // "absent" from a zero value.
 func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, error) {
 	pbevent := &PAlarmStateChangeEvent{
+		ClearReason:    event.ClearReason,
 		EventType:      string(event.EventType),
 		AlarmToken:     event.AlarmToken,
 		OriginatorType: event.OriginatorType,
@@ -69,6 +70,7 @@ func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEven
 	}
 
 	event := &model.AlarmStateChangeEvent{
+		ClearReason:    pbevent.ClearReason,
 		EventType:      model.AlarmEventType(pbevent.EventType),
 		AlarmToken:     pbevent.AlarmToken,
 		OriginatorType: pbevent.OriginatorType,

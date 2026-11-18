@@ -44,6 +44,17 @@ func TestIsolationSweep(t *testing.T) {
 		// before an answer is read.
 		Probe:  "dev-globex",
 		Hidden: []string{assignment["dev-globex"], "customer:globex"},
+		// Every query must surface globex unscoped, or be refused to the member. The
+		// by-token read is aimed at globex's assignment itself, and the all-arguments
+		// search names the fixture artifact's component, so both controls find globex
+		// rather than answering empty over a probe that names no assignment.
+		Literals: map[string]string{
+			"token":     `"` + assignment["dev-globex"] + `"`,
+			"component": `"firmware"`,
+		},
+		NothingSeeded: map[string]string{
+			"query updateManagementInfo": "Service metadata (name, version) carries no tenant rows to hide.",
+		},
 	})
 	counts := map[string]int{}
 	for _, o := range out {
