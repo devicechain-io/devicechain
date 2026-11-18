@@ -29,9 +29,9 @@ written for a bash shell; on Windows, run them in Git Bash or WSL.
 `dcctl install` and `dcctl bootstrap` each run a preflight first, and **stop** if one of the four
 tools is missing. A gap costs you the first ten seconds rather than ten minutes.
 
-- **OpenTofu 1.10 or later.** The preflight checks that `tofu` (or `terraform`) is there, but not
-  its version, and an older one fails part-way through `dcctl install`, when it loads the
-  infrastructure configuration. `tofu version` prints yours.
+- **OpenTofu 1.10 or later.** The preflight checks that `tofu` (or `terraform`) is there and
+  refuses a version older than 1.10, so an old binary stops the run before anything is created.
+  `tofu version` prints yours.
 - **Room for the cluster.** The preflight warns when Docker has fewer than 4 CPUs or less than
   8 GiB of memory, and needs 40 GiB of free disk for images and database volumes. On Docker
   Desktop, set these under **Settings → Resources**. Step 1 installs with `--compact`, which
@@ -481,8 +481,7 @@ curl -s -X POST http://localhost/api/command-delivery/graphql \
   twelve thermostats whose temperature rises above and falls back below 30, raising and clearing
   `bp-over-temp` alarms under **Monitor → Alarms** in the tenant `sim-building`. Sign in as
   `building@sim.devicechain.local`, with the `simPassword` from `~/.devicechain/sims/building.json`,
-  to see them. Interrupt the first `dcctl sim run` (Ctrl+C) before you start the second, since both
-  serve the same control port.
+  to see them.
 
 - **[Feature tour](./feature-tour.md)**: carry on from here to a dashboard, a rule that raises an
   alarm and sends a command, the device's answer, and a customer user who sees only their own
