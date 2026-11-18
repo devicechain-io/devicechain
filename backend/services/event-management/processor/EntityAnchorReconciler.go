@@ -143,7 +143,12 @@ func (r *EntityAnchorReconciler) handle(ctx context.Context, msg messaging.Messa
 	// token's buffered telemetry even when its device timestamp predates deletion.
 	removed, err := r.Api.DeleteAnchorsForEntity(tctx, string(event.EntityType), event.EntityToken, event.DeletedTime)
 	if err != nil {
-		if msg.NumDelivered >= messaging.MaxDeliver {
+		switch messaging.Dispose(msg, err) {
+		case messaging.TenantErased:
+			log.Debug().Err(err).Msg("Dropping message for an erased tenant")
+			_ = msg.Ack()
+			return
+		case messaging.Exhausted:
 			log.Error().Err(err).Str("entity", event.EntityToken).Int("delivered", msg.NumDelivered).
 				Msg("Giving up on entity-deleted event after max delivery attempts")
 			_ = msg.Ack()
