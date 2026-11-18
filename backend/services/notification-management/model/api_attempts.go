@@ -125,16 +125,6 @@ func (api *Api) ChannelHealthByToken(ctx context.Context, channelToken string) (
 	return health, nil
 }
 
-// DistinctAttemptTenants lists the tenants that currently have ledger rows. It runs under
-// a system context (the retention sweep's cross-tenant loop); the per-tenant prune that
-// follows is tenant-scoped.
-func (api *Api) DistinctAttemptTenants(ctx context.Context) ([]string, error) {
-	var tenants []string
-	err := api.RDB.DB(ctx).Model(&NotificationAttempt{}).
-		Distinct().Order("tenant_id").Pluck("tenant_id", &tenants).Error
-	return tenants, err
-}
-
 // PruneNotificationAttempts deletes the caller tenant's ledger rows created before the
 // cutoff. The ledger holds recipients, which are personal data, so it is kept for a
 // window rather than for the life of the instance.

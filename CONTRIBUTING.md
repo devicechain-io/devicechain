@@ -344,7 +344,8 @@ TypeScript because the compiler the frontend pins has no API to read declaration
 The pull request cannot know which version ships it, so two rules apply at release time.
 
 - **The release must say so.** `hack/check-release-highlights.sh <tag>` (the release workflow's first
-  job) lists every declaration still live against the nearest stable tag before the release
+  job) lists every declaration still live against the release's baseline, the highest stable tag
+  below it by semver (`hack/changelog-base.sh`, the same baseline the compatibility checks use)
   (`hack/api-declared-breaks.sh`, every surface above). Before 1.0.0 a live declaration needs
   `"breaking": true` in `.github/release-highlights.json`. From 1.0.0 it is refused unless the release
   is a new major.
@@ -370,6 +371,9 @@ The pull request cannot know which version ships it, so two rules apply at relea
 - **The license header** on every new source file (see [License headers](#license-headers)).
 - **Docs, when behavior changes.** User-visible changes update the page under `docs/docs` that
   describes them. Docs are published in three languages, so see the next section.
+- **A release-notes fragment, when operators should hear about it.** Do not edit
+  `docs/docs/deployment/releases-and-upgrades.md` or its translations; add one new file under
+  `docs/release-notes/unreleased/` instead (see [Release notes](#release-notes)).
 - **A focused diff.** One logical change per PR, with a description that says why.
 - **No private references in public text.** Do not cite internal design-decision numbers in
   anything the docs site, the npm or NuGet package descriptions, the Helm chart listing or console
@@ -399,6 +403,47 @@ cd docs && npm ci && npm run build
 hack/check-docs-adr-refs.sh
 hack/check-docs-locale-parity.sh
 ```
+
+### Release notes
+
+The in-development version's notes are not written into the release-notes page by each pull
+request: when every pull request edits the same two headings in three files, every merge makes
+every other open pull request conflict. Instead, a pull request adds **one new file**,
+`docs/release-notes/unreleased/<slug>.md`, with the target heading and the text in all three
+languages:
+
+```markdown
+---
+section: before-upgrade
+---
+
+## en
+
+- **The thing.** What changed, and what an operator does about it.
+
+## es
+
+- **La cosa.** Qué cambió y qué hace el operador al respecto.
+
+## zh-CN
+
+- **该事项。** 发生了什么变化，以及运维人员需要做什么。
+```
+
+`section` is `before-upgrade` (action or knowledge needed before or during the upgrade) or
+`whats-new` (everything else). The full rules are in
+[`docs/release-notes/unreleased/README.md`](docs/release-notes/unreleased/README.md). Check a
+fragment with:
+
+```bash
+python3 hack/assemble-release-notes.py --check
+```
+
+The docs CI job runs the same check and refuses a fragment with a missing language, an unknown
+section, front matter that does not parse or a reference to an internal design-decision number.
+Before a release, the release-notes pull request runs `python3 hack/assemble-release-notes.py`,
+which inserts every fragment into the page in all three languages, in file-name order, and deletes
+the fragments.
 
 ## Reporting security issues
 

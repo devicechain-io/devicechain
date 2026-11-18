@@ -37,7 +37,9 @@ function RoleDetail() {
   const { t } = useTranslation('roles');
   const { scope: rawScope, token: rawToken } = useParams<{ scope: string; token: string }>();
   const scope = (rawScope ?? '') as 'system' | 'tenant';
-  const token = decodeURIComponent(rawToken ?? '');
+  // The router hands the param over already decoded. Decoding it again turned a token
+  // holding a '%' into a different token, or threw on one such as "a%zz".
+  const token = rawToken ?? '';
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();

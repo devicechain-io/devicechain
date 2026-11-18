@@ -1,0 +1,255 @@
+{
+  "canvas": {
+    "breakpoints": {
+      "base": 0
+    },
+    "grid": {
+      "columns": 12,
+      "gutter": 8,
+      "minCellSize": 56,
+      "padding": 0
+    },
+    "sizing": "fill"
+  },
+  "schemaVersion": 3,
+  "slots": {
+    "meter": {
+      "defaultBinding": {
+        "deviceToken": "hp-meter-quayside-lofts",
+        "kind": "device"
+      },
+      "label": "Meter",
+      "type": "device"
+    },
+    "owner": {
+      "defaultBinding": {
+        "anchor": {
+          "relationship": "assigned",
+          "targetToken": "hp-quayside-lofts",
+          "targetType": "customer"
+        },
+        "kind": "anchor"
+      },
+      "label": "Building",
+      "type": "anchor"
+    }
+  },
+  "timeRange": {
+    "defaultSeconds": 3600
+  },
+  "title": "Quayside Lofts",
+  "widgets": [
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "kw"
+        ],
+        "slot": "meter"
+      },
+      "id": "hp-lofts-kw",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 3,
+          "mode": "grid",
+          "row": 0,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "kw",
+        "precision": 0,
+        "sparkline": true,
+        "stat": "last",
+        "title": "Demand now",
+        "unit": "kW"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "kw"
+        ],
+        "slot": "meter"
+      },
+      "id": "hp-lofts-kw-max",
+      "layout": {
+        "base": {
+          "col": 3,
+          "cols": 3,
+          "mode": "grid",
+          "row": 0,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "kw",
+        "precision": 0,
+        "stat": "max",
+        "title": "Peak demand",
+        "unit": "kW"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "kwh"
+        ],
+        "slot": "meter"
+      },
+      "id": "hp-lofts-kwh",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 3,
+          "mode": "grid",
+          "row": 0,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "kwh",
+        "precision": 0,
+        "stat": "last",
+        "title": "Energy",
+        "unit": "kWh"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "meter"
+      },
+      "id": "hp-lofts-status",
+      "layout": {
+        "base": {
+          "col": 9,
+          "cols": 3,
+          "mode": "grid",
+          "row": 0,
+          "rows": 3
+        }
+      },
+      "options": {
+        "staleAfterSeconds": 45,
+        "title": "Meter status"
+      },
+      "type": "device-status"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "kw"
+        ],
+        "slot": "meter"
+      },
+      "id": "hp-lofts-trend",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 9,
+          "mode": "grid",
+          "row": 3,
+          "rows": 4
+        }
+      },
+      "options": {
+        "title": "Demand",
+        "unit": "kW"
+      },
+      "type": "timeseries-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "owner"
+      },
+      "id": "hp-lofts-severity",
+      "layout": {
+        "base": {
+          "col": 9,
+          "cols": 3,
+          "mode": "grid",
+          "row": 3,
+          "rows": 3
+        }
+      },
+      "options": {
+        "state": "ACTIVE",
+        "title": "Active alarms"
+      },
+      "type": "alarm-severity"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "owner"
+      },
+      "id": "hp-lofts-alarms",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 12,
+          "mode": "grid",
+          "row": 7,
+          "rows": 4
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "maxRows": 25,
+        "precision": 1,
+        "selectionTarget": "meter",
+        "state": "ACTIVE",
+        "title": "Alarms"
+      },
+      "type": "alarm-table"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "meter"
+      },
+      "id": "hp-lofts-history",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 12,
+          "mode": "grid",
+          "row": 11,
+          "rows": 5
+        }
+      },
+      "options": {
+        "columns": [
+          {
+            "label": "Demand",
+            "measurement": "kw",
+            "precision": 1,
+            "unit": "kW"
+          },
+          {
+            "label": "Energy",
+            "measurement": "kwh",
+            "precision": 0,
+            "unit": "kWh"
+          }
+        ],
+        "pageSize": 10,
+        "title": "Meter history"
+      },
+      "type": "history-table"
+    }
+  ]
+}

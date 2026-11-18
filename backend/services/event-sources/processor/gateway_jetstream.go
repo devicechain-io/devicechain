@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel/trace"
 
@@ -142,7 +143,8 @@ type GatewayJetStreamSource struct {
 	workersDone   chan struct{}
 	submitterDone chan struct{}
 	// poison is the current start's failed-decode routes; see poisonRoutes.
-	poison *poisonRoutes
+	poison               *poisonRoutes
+	placementUnavailable prometheus.Counter
 
 	// envelopes is UseEnvelopes' setting (nil: events are published one message each), and ce
 	// the current start's machinery built from it.
@@ -851,6 +853,12 @@ func (es *GatewayJetStreamSource) dedupID(tenant string, msg messaging.Message) 
 	return DedupID(tenant, msg.StreamSeq)
 }
 
+// UsePlacementUnavailableCounter counts in-flight messages left unacked when placement is lost.
+// Call before starting the source. The counter is shared by the capture and message-store paths.
+func (es *GatewayJetStreamSource) UsePlacementUnavailableCounter(counter prometheus.Counter) {
+	es.placementUnavailable = counter
+}
+
 // settler returns the completion handler for a captured message: it acknowledges
 // the capture stream only once the payload has been durably forwarded.
 //
@@ -859,6 +867,7 @@ func (es *GatewayJetStreamSource) dedupID(tenant string, msg messaging.Message) 
 // and acked. Without that terminal step a message that can never be published
 // would be redelivered until the broker gave up on it, taking the diagnostic with
 // it — the same shape as the drop trap above, one level down.
+// Placement failures are left unacked on every delivery; they do not judge the payload.
 func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string) func(error) {
 	poison := es.poison
 	return func(handleErr error) {
@@ -873,14 +882,17 @@ func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string) 
 			}
 			return
 		}
-		if errors.Is(handleErr, messaging.ErrRoundWalkStopped) || errors.Is(handleErr, messaging.ErrTenantGone) {
+		if errors.Is(handleErr, messaging.ErrUnplacedTenant) && es.placementUnavailable != nil {
+			es.placementUnavailable.Inc()
+		}
+		if errors.Is(handleErr, messaging.ErrRoundWalkStopped) || errors.Is(handleErr, messaging.ErrTenantGone) || errors.Is(handleErr, messaging.ErrUnplacedTenant) {
 			// A shutdown cancelled the walk before it knew the outcome (the pod stopping, not the
 			// message failing), or the tenant is being erased and routing its payload to
-			// failed-decode would store it again: even on its last delivery it is left unacked,
-			// never dead-lettered as poison.
+			// failed-decode would store it again, or placement is unavailable. Even on its last
+			// delivery it is left unacked, never dead-lettered as poison.
 			return
 		}
-		if msg.NumDelivered >= messaging.MaxDeliver {
+		if messaging.FinalDelivery(msg) {
 			// The worker may have ALREADY tried the failed-decode route and failed —
 			// that is what ErrDeadLetterUnavailable marks. Re-attempting a route that
 			// has just failed would publish the same payload again to a stream that is

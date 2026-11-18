@@ -159,6 +159,9 @@ func (nmgr *NatsManager) NewOrderedWriter(suffix string, writer PublishWriter, w
 
 func (nmgr *NatsManager) newOrderedWriter(suffix string, writer PublishWriter, window int, async bool) (OrderedWriter, error) {
 	nmgr.freezeStreamRouting()
+	if err := nmgr.refuseUnroutedWrite(suffix); err != nil {
+		return nil, err
+	}
 	if !async {
 		if err := nmgr.requireForwarder(suffix); err != nil {
 			return nil, err

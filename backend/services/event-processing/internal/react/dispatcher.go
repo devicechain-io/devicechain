@@ -35,6 +35,7 @@ package react
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -157,6 +158,11 @@ type AlarmRequest struct {
 	// (threshold/repeating crossing sample, deltaRate/aggregate computed scalar) carries a real value.
 	// A resolved edge carries no value (the condition ceased, not a reading).
 	Value *float64
+	// RequiresPosition is set, on both edges, when the rule's condition tests geofence
+	// containment (rules.CompiledRule.RequiresPosition). device-management marks the alarm with it
+	// and withholds the alarm from a caller without location:read, on the same judgement that
+	// withholds the rule's live detections from that caller (graphql/detection_position_filter.go).
+	RequiresPosition bool
 }
 
 // AlarmSink raises/escalates or clears/de-escalates an alarm contributor for a device (ADR-041 /
@@ -414,6 +420,12 @@ type Dispatcher struct {
 	// legitimately mean two different programs, and sharing the map would hand an alarm key a program
 	// built against the wider guard env.
 	alarmKeys sync.Map // alarm-key template source string → *rules.CompiledAlarmKeyTemplate
+
+	// positions caches whether a rule tests geofence containment (AlarmRequest.RequiresPosition),
+	// keyed by the rule's whole encoded definition WITH its id, so a rule id reused for a different
+	// definition (a profile deleted and created again) can never be answered from the old one. Same
+	// publish-gated, monotonic growth as the caches above.
+	positions sync.Map // encoded rule → bool
 }
 
 // NewDispatcher builds a REACT dispatcher over a rule resolver and its action sinks. Any sink may be
@@ -673,16 +685,17 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		}
 		contributorID := stableContributorID(ev.RuleID)
 		req := AlarmRequest{
-			Tenant:       ev.Tenant,
-			Token:        alarmToken(ev, a),
-			DeviceToken:  ev.Series,
-			AlarmKey:     alarmKey,
-			MetricKey:    ruleMetric(rule),
-			Severity:     string(rule.Severity),
-			RuleID:       contributorID,
-			Edge:         edgeOrRaised(ev.Edge),
-			OccurredTime: ev.OccurredTime,
-			Value:        ev.Value,
+			RequiresPosition: d.requiresPosition(ev, rule),
+			Tenant:           ev.Tenant,
+			Token:            alarmToken(ev, a),
+			DeviceToken:      ev.Series,
+			AlarmKey:         alarmKey,
+			MetricKey:        ruleMetric(rule),
+			Severity:         string(rule.Severity),
+			RuleID:           contributorID,
+			Edge:             edgeOrRaised(ev.Edge),
+			OccurredTime:     ev.OccurredTime,
+			Value:            ev.Value,
 		}
 		if err := d.alarms.Dispatch(ctx, req); err != nil {
 			res.Failed = append(res.Failed, FailedAction{Kind: action, Token: req.Token})
@@ -901,6 +914,32 @@ func stableContributorID(ruleID string) string {
 		return stable
 	}
 	return ruleID
+}
+
+// requiresPosition reports whether the rule's condition tests geofence containment, by the same
+// compiler that decided it at publish (rules.CompiledRule.RequiresPosition). It fails CLOSED: a rule
+// that cannot be encoded or compiled here is answered true, so the alarm it raises is withheld from a
+// caller without location:read rather than shown. Such a rule was compiled at publish, so this is a
+// defect path, not a routine one.
+func (d *Dispatcher) requiresPosition(ev runtime.DerivedEvent, rule rules.Rule) bool {
+	rule.ID = ev.RuleID
+	key, err := json.Marshal(rule)
+	if err != nil {
+		d.log.Error().Err(err).Str("rule", ev.RuleID).
+			Msg("REACT: a rule could not be encoded to judge its position dependency; treating its alarm as position-derived.")
+		return true
+	}
+	if v, ok := d.positions.Load(string(key)); ok {
+		return v.(bool)
+	}
+	compiled, err := rules.Compile(rule, rules.DefaultLimits())
+	if err != nil {
+		d.log.Error().Err(err).Str("rule", ev.RuleID).
+			Msg("REACT: a rule did not compile while judging its position dependency; treating its alarm as position-derived.")
+		return true
+	}
+	d.positions.Store(string(key), compiled.RequiresPosition)
+	return compiled.RequiresPosition
 }
 
 // resolveAlarmKey returns the alarm key this raiseAlarm action files under, and ok=true. A literal

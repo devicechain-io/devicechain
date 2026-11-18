@@ -281,7 +281,7 @@ A database volume is over 75% full
 
 An event-store volume will be full within a day at its current rate
 
-**Qué significa y qué hacer.** ‹persistentvolumeclaim› is on course to run out of space within 24 hours at the rate it has filled over the last two. When it fills, PostgreSQL stops and the platform can no longer store events. Events are held in the message broker meanwhile and new ingest is refused once the broker's backlog limit is reached, but a store that stays stopped for longer than the broker can hold loses data (see EventStoreRefusingWrites). Act now, with a day in hand: grow the volume (spec.storage.size on the Cluster; the volume expands online where the storage class allows it), shorten the data retention, or check that compression is acting (an uncompressed row is about 600 bytes). Size it against stored rows, which calculated metrics multiply by (1 + the formulas that apply to the profile).
+**Qué significa y qué hacer.** ‹persistentvolumeclaim› is on course to run out of space within 24 hours at the rate it has filled over the last two. When it fills, PostgreSQL stops and the platform can no longer store events. Events are held in the message broker meanwhile and new ingest is refused once the broker's backlog limit is reached, but a store that stays stopped for longer than the broker can hold loses data (see EventStoreRefusingWrites). Act now, with a day in hand: grow the volume (spec.storage.size on the Cluster; the volume expands online where the storage class allows it), shorten the data retention, or check that compression is acting. Size base event data at 756 bytes per stored event (https://docs.devicechain.io/deployment/tuning-an-instance#event-store-sizing); add calculated metrics' extra measurement rows and WAL space separately.
 
 ## `devicechain.dead-letter`
 
@@ -997,6 +997,14 @@ The device capture reader dropped messages that no device published
 
 **Qué significa y qué hacer.** Durable ‹durable› on stream ‹stream› was handed messages stored under a subject it does not read, and dropped them without passing them on: ‹value› in the last 15 minutes. Its broker-side consumer reads the whole stream unfiltered, so the reader itself keeps only the subjects devices publish telemetry on. Device publishes never land there under another subject, so a dropped message was put into the stream some other way, most likely by a push consumer on another stream whose delivery subject is a device telemetry subject. Nothing was forwarded and no device event is missing, but whoever can create such a consumer is writing into device intake: look for push consumers with a device telemetry delivery subject (nats consumer ls on each stream) and at which login created them. The reader logs the subject and sequence of the first message it drops.
 
+### JetStreamShardPlacementUnavailable {#jetstreamshardplacementunavailable}
+
+**Gravedad:** `warning` · **Grupo de reglas:** `devicechain.jetstream-delivery`
+
+A service has no usable shard placement table and is holding ingest forwarding
+
+**Qué significa y qué hacer.** Pod ‹pod› of ‹job› has had no usable shard placement table for two minutes: the table in its KV mirror is missing, cannot be adopted, or names a shard group at or above nats.shardGroups.count. Ingest forwarding into the sharded streams is held; these messages are not dead-lettered. Check user-management's placement mirror and its placement_mirror pass alert, and the affected service's logs. Restore a compatible placement table or raise nats.shardGroups.count to include every group the table names so forwarding can resume.
+
 ### JetStreamStreamNearFull {#jetstreamstreamnearfull}
 
 **Gravedad:** `info` · **Grupo de reglas:** `devicechain.jetstream-delivery`
@@ -1045,7 +1053,7 @@ A consumer ran out of delivery attempts because it could not save its checkpoint
 
 The NATS broker is clustered but nothing on it is replicated
 
-**Qué significa y qué hacer.** This instance is connected to a CLUSTERED NATS broker while every stream and KV bucket is configured for a single replica, so it is paying for a multi-server cluster and surviving zero node losses. Both halves of the toggle have to move together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the replica factor is the chart's (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets both from one value. If the single-server topology is what you intended, scale the NATS cluster back down rather than leaving it running unused.
+**Qué significa y qué hacer.** This instance is connected to a CLUSTERED NATS broker while every stream and KV bucket is configured for a single replica, so it is paying for a multi-server cluster and surviving zero node losses. Both halves of the toggle have to move together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the replica factor is the chart's (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets both from one value. If the single-server topology is what you intended, scale the NATS cluster back down rather than leaving it running unused. (An instance with NATS shard groups runs a multi-server, single-replica broker on purpose, and does not raise this.)
 
 ### JetStreamLeaseBucketNotReplicated {#jetstreamleasebucketnotreplicated}
 

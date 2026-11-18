@@ -359,6 +359,17 @@ mosquitto_sub \
   -t "devicechain/acme/device-commands/sensor-001"
 ```
 
+That is the `MQTT_BASIC` shape: a username and a password. An `ACCESS_TOKEN` credential has **no password**. The token is the second half of the username, and `-P` is left out entirely. The broker reads a connect that carries a password as `MQTT_BASIC`, so an access token sent with any password, even a placeholder, is refused:
+
+```bash
+mosquitto_sub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001:sub' \
+  -u 'acme:<accessToken>' \
+  -t "devicechain/acme/device-commands/sensor-001"
+```
+
 Each message is a JSON envelope:
 
 ```json
@@ -389,6 +400,18 @@ mosquitto_pub \
   -h <mqtt-host> -p 1883 \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
+  -t "devicechain/acme/command-responses/sensor-001" \
+  -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
+```
+
+With an `ACCESS_TOKEN` credential, connect the same way as for the subscription, without `-P`:
+
+```bash
+mosquitto_pub \
+  --cafile instance-ca.crt \
+  -h <mqtt-host> -p 1883 \
+  -i 'devicechain:acme:sensor-001' \
+  -u 'acme:<accessToken>' \
   -t "devicechain/acme/command-responses/sensor-001" \
   -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
 ```
@@ -523,6 +546,8 @@ The platform answers on `device-desired` with a URL that works, with no other cr
 ```
 
 Download it with an HTTP `GET`. The endpoint answers `Range` requests, so an interrupted download resumes from the bytes you hold; when the grant expires, send the same `download.request` again for a new one. If the assignment is no longer current, the answer is an `update.cancel` instead of a grant.
+
+Download requests are budgeted per device: the platform answers five at once, then one a second. A request over that budget is dropped without any answer, neither a grant nor an `update.cancel`, and the device is not told. So never wait for an answer indefinitely: if none has arrived after a bounded wait, such as ten seconds, send the same `download.request` again.
 
 Report each stage on `device-reports` with `update.progress`:
 

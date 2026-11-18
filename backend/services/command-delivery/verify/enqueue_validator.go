@@ -73,11 +73,18 @@ const validateCommandEnqueue = `query($deviceToken: String!, $deviceTokens: [Str
 // availability failure comes back as a plain error, on which the caller fails
 // closed. If both arrived as errors, an outage would be indistinguishable from a
 // bad command.
-func (v *EnqueueValidator) ValidateEnqueue(ctx context.Context, deviceToken string, commandKey string, payload []byte) ([]string, error) {
+func (v *EnqueueValidator) ValidateEnqueue(ctx context.Context, deviceToken string, commandKey string, payload []byte) ([]string, uint64, error) {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("verify: no tenant in context")
+		return nil, 0, fmt.Errorf("verify: no tenant in context")
 	}
+	ids, err := readEnqueueIdentities([]string{deviceToken}, func(document string, vars map[string]any, out any) error {
+		return v.client.QueryOnBehalfOfScopedCaller(ctx, v.url, tenant, document, vars, out)
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	incarnation := ids[deviceToken]
 	// Allowed is a *bool, not a bool, so a response that omits the field is
 	// distinguishable from an explicit false. The schema declares it non-null, so an
 	// absent value means a broken or intercepted response rather than a verdict —
@@ -111,13 +118,13 @@ func (v *EnqueueValidator) ValidateEnqueue(ctx context.Context, deviceToken stri
 		vars["payload"] = nil
 	}
 	if err := v.client.QueryOnBehalfOfScopedCaller(ctx, v.url, tenant, validateCommandEnqueue, vars, &out); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if out.ValidateCommandEnqueue.Allowed == nil {
-		return nil, fmt.Errorf("verify: device-management returned no enqueue verdict")
+		return nil, 0, fmt.Errorf("verify: device-management returned no enqueue verdict")
 	}
 	if out.DeviceScopeAnchors == nil {
-		return nil, fmt.Errorf("verify: device-management returned no device anchors")
+		return nil, 0, fmt.Errorf("verify: device-management returned no device anchors")
 	}
 	var anchors []string
 	for _, d := range *out.DeviceScopeAnchors {
@@ -141,7 +148,7 @@ func (v *EnqueueValidator) ValidateEnqueue(ctx context.Context, deviceToken stri
 		if out.ValidateCommandEnqueue.Code != nil {
 			code = model.RejectionCode(*out.ValidateCommandEnqueue.Code)
 		}
-		return anchors, &model.EnqueueRejected{Code: code, Reason: reason}
+		return anchors, incarnation, &model.EnqueueRejected{Code: code, Reason: reason}
 	}
-	return anchors, nil
+	return anchors, incarnation, nil
 }

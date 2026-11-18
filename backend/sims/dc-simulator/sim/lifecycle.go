@@ -314,6 +314,11 @@ type statusResponse struct {
 	// version each runs, which stage they are in, and the injected faults that fired. Omitted when
 	// the sim runs no update devices, so an ordinary sim's /status is unchanged.
 	Updates *otafleet.Report `json:"updates,omitempty"`
+
+	// Scenario is a story scenario's compressed day (harborpulse): the sim time, the beat in
+	// progress, and what a verifier needs to map a beat to the wall clock. Omitted for a scenario
+	// with no day, so every other sim's /status is unchanged.
+	Scenario *ScenarioClock `json:"scenario,omitempty"`
 }
 
 // ControlServer exposes the ADR-035 control-API seam (bootstrap/start/stop/
@@ -349,6 +354,9 @@ func (c *ControlServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	resp.CommandFarEnd = c.lc.commandFarEndStatus()
 	resp.ExternalDevicePlane = c.rt.ExternalDevicePlane
 	resp.Updates = c.lc.updateFleetStatus()
+	if r, ok := c.lc.sim.(ScenarioClockReporter); ok {
+		resp.Scenario = r.ScenarioClock(now)
+	}
 	resp.Tenant = c.rt.Tenant
 	resp.InstanceId = c.rt.InstanceId
 	resp.DeviceCount = len(c.rt.Devices)

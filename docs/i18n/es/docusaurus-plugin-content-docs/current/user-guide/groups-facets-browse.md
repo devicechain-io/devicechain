@@ -78,7 +78,10 @@ Haz clic en **Nueva faceta**. El panel pide:
 
 Haz clic en **Guardar faceta**. No hay una pantalla de edición aparte: para cambiar el tipo, los
 valores o la etiqueta de una faceta, vuelve a declararla con la misma familia y la misma clave, y la
-nueva declaración sustituye a la anterior.
+nueva declaración sustituye a la anterior. El cambio de **tipo** es la excepción: se rechaza mientras
+haya atributos compartidos que aún guarden valores del tipo anterior para esa familia y esa clave,
+así que antes borra esos valores o mígralos al nuevo tipo. Cambiar solo los valores o la etiqueta
+no se ve afectado.
 
 **Eliminar** solo quita la declaración. Los valores guardados en las entidades no se tocan, y
 cualquier grupo dinámico guardado que use la faceta sigue funcionando.
@@ -148,6 +151,8 @@ La plataforma vuelve a comprobar el selector al guardar y rechaza uno que no pue
 eficiente. Una vez guardado, el grupo aparece en **Grupos dinámicos guardados** de esa familia, con su
 token, su nombre y su selector. Haz clic en **Miembros** para ver quién pertenece a él ahora mismo; la
 lista se calcula a partir del selector cada vez que la abres.
+
+Un selector negado como `!("retired" in attr)` incluye las entidades sin atributos desde el momento en que se crean, incluida su incorporación cuando el grupo se usa en una regla de detección o como ámbito de acceso.
 
 ## Relacionado
 

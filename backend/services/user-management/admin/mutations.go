@@ -33,6 +33,8 @@ var (
 	// grant the provider made into a permanent manual one. Remove it and add a membership on
 	// purpose instead.
 	ErrMembershipOrphaned = errors.New("this membership was managed by an identity provider connection that no longer exists or no longer serves this tenant; remove it and add a new membership instead of enabling it")
+	// ErrMembershipManagedByIdp refuses edits that the next SSO sign-in would undo.
+	ErrMembershipManagedByIdp = refuse(CodeManagedByIdp, "this membership is managed by an identity provider; to revoke access, disable the identity, remove the person from the provider's groups, or stop the connection serving the tenant")
 )
 
 // CreateIdentityInput is the data to create a global identity (ADR-033). Password
@@ -227,6 +229,9 @@ func (s *Service) SetMembershipRoles(ctx context.Context, email, tenant string, 
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkMembershipEditable(ctx, mem); err != nil {
+		return nil, err
+	}
 	roles, err := s.iam.AssignableRolesByTokens(ctx, tenant, roleTokens)
 	if err != nil {
 		return nil, err
@@ -239,26 +244,25 @@ func (s *Service) SetMembershipRoles(ctx context.Context, email, tenant string, 
 
 // SetMembershipEnabled enables or disables a membership (a disabled membership
 // cannot be selected for a tenant token).
+//
+// Neither direction is open on a membership a live connection manages for this tenant
+// (MANAGED_BY_IDP): every SSO sign-in recomputes it, enabled exactly when the person's groups
+// map to a role here, so the provider decides whether it is active. An operator's disable
+// would be undone at the next sign-in, and an operator's enable would either be undone or
+// contradict the provider until then, granting a tenant the provider has withheld.
 func (s *Service) SetMembershipEnabled(ctx context.Context, email, tenant string, enabled bool) (*iam.Identity, error) {
 	id, mem, err := s.loadMembership(ctx, email, tenant)
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkMembershipEditable(ctx, mem); err != nil {
+		return nil, err
+	}
+	// Past the check, a managed membership is orphaned: its connection is gone or no longer
+	// serves the tenant, so nothing would ever recompute it, and enabling it would turn the
+	// provider's grant into a permanent manual one. Disabling it stays open.
 	if enabled && mem.ManagedBy != nil {
-		if _, err := s.iam.IdpConnectionByID(ctx, *mem.ManagedBy); errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrMembershipOrphaned
-		} else if err != nil {
-			return nil, err
-		}
-		// A connection that no longer serves the tenant never recomputes the membership
-		// either, so enabling it would be the same permanent grant.
-		served, err := s.iam.ConnectionTenants(ctx, *mem.ManagedBy)
-		if err != nil {
-			return nil, err
-		}
-		if !slices.Contains(served, mem.TenantId) {
-			return nil, ErrMembershipOrphaned
-		}
+		return nil, ErrMembershipOrphaned
 	}
 	if err := s.iam.SetMembershipEnabled(ctx, mem, enabled); err != nil {
 		return nil, err
@@ -274,10 +278,34 @@ func (s *Service) RemoveMembership(ctx context.Context, email, tenant string) (*
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkMembershipEditable(ctx, mem); err != nil {
+		return nil, err
+	}
 	if err := s.iam.RemoveMembership(ctx, mem); err != nil {
 		return nil, err
 	}
 	return s.loadIdentity(ctx, id.Email)
+}
+
+// checkMembershipEditable permits manual and orphaned grants. A live connection
+// serving this tenant would overwrite an operator's edit on the next SSO sign-in.
+func (s *Service) checkMembershipEditable(ctx context.Context, mem *iam.Membership) error {
+	if mem.ManagedBy == nil {
+		return nil
+	}
+	if _, err := s.iam.IdpConnectionByID(ctx, *mem.ManagedBy); errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	served, err := s.iam.ConnectionTenants(ctx, *mem.ManagedBy)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(served, mem.TenantId) {
+		return ErrMembershipManagedByIdp
+	}
+	return nil
 }
 
 // loadIdentity resolves the identity an administrator names (iam.Store.IdentityForAdmin:

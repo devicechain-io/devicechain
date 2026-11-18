@@ -4,6 +4,8 @@
 package model
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -439,4 +441,75 @@ func TestFailedEventRetentionIsIndependentOfTheUniformWindow(t *testing.T) {
 func TestFailedEventsHypertableIsGoverned(t *testing.T) {
 	assert.Contains(t, LifecycleHypertables, FailedEventsHypertable)
 	assert.Equal(t, "failed_event_records", FailedEventsHypertable)
+}
+
+func TestRollupRetentionStatements(t *testing.T) {
+	assert.Equal(t, `SELECT add_retention_policy('"event-management"."measurement_rollups"'::regclass, make_interval(days => ?))`, addRetentionPolicyStmt(RollupAggregate))
+	assert.Equal(t, `SELECT remove_retention_policy('"event-management"."measurement_rollups"'::regclass, if_exists => true)`, removeRetentionPolicyStmt(RollupAggregate))
+	assert.NotContains(t, LifecycleHypertables, RollupAggregate)
+}
+
+func TestRollupRetentionDays(t *testing.T) {
+	for _, tc := range []struct{ retention, hours, want int }{
+		{0, 24, 0}, {-1, 24, 0}, {30, 24, 31}, {30, 1, 31},
+		{30, 25, 32}, {30, 48, 32}, {30, 0, 31}, {30, -1, 31},
+	} {
+		t.Run(fmt.Sprintf("retention=%d/hours=%d", tc.retention, tc.hours), func(t *testing.T) {
+			p := DataLifecyclePolicy{RetentionDays: tc.retention, ChunkIntervalHours: tc.hours,
+				LocationRetentionDays: intPtr(99), FailedEventRetentionDays: 7}
+			assert.Equal(t, tc.want, p.RollupRetentionDays())
+		})
+	}
+}
+
+func TestApplyRollupRetention(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			var captured []capturedExec
+			db := dryRunDB(t, &captured)
+			p := DataLifecyclePolicy{ChunkIntervalHours: 24}
+			if enabled {
+				p.RetentionDays = 30
+			}
+			require.NoError(t, applyRollupRetention(db, p))
+			want := []capturedExec{{sql: removeRetentionPolicyStmt(RollupAggregate)}}
+			if enabled {
+				want = append(want, capturedExec{sql: addRetentionPolicyStmt(RollupAggregate), vars: []interface{}{31}})
+			}
+			require.Len(t, captured, len(want))
+			for i := range want {
+				assert.Equal(t, want[i].sql, captured[i].sql)
+				if len(want[i].vars) == 0 {
+					assert.Empty(t, captured[i].vars)
+				} else {
+					assert.Equal(t, want[i].vars, captured[i].vars)
+				}
+			}
+		})
+	}
+}
+
+func TestApplyRollupRetentionFailure(t *testing.T) {
+	for _, days := range []int{0, 30} {
+		t.Run(fmt.Sprintf("days=%d", days), func(t *testing.T) {
+			var captured []capturedExec
+			db := dryRunDB(t, &captured)
+			injected := errors.New("injected retention removal failure")
+			require.NoError(t, db.Callback().Raw().Before("gorm:raw").Register("test:fail-remove", func(tx *gorm.DB) {
+				if tx.Statement.SQL.String() == removeRetentionPolicyStmt(RollupAggregate) {
+					tx.AddError(injected)
+				}
+			}))
+			err := applyRollupRetention(db, DataLifecyclePolicy{RetentionDays: days, ChunkIntervalHours: 24})
+			if days == 0 {
+				require.ErrorIs(t, err, injected)
+				assert.Contains(t, err.Error(), "while retention is disabled")
+				assert.Contains(t, err.Error(), RollupAggregate)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, captured, 2)
+				assert.Equal(t, addRetentionPolicyStmt(RollupAggregate), captured[1].sql)
+			}
+		})
+	}
 }

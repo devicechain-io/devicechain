@@ -35,7 +35,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -81,6 +80,8 @@ type Handler struct {
 	window func(size int64) time.Duration
 	// slots bounds the uploads this process streams at once: one token per upload in flight.
 	slots chan struct{}
+	// tenants bounds how many of those slots one tenant holds at once.
+	tenants *tenantShare
 }
 
 // New builds the handler. api carries the object store and the catalogue, and
@@ -91,7 +92,8 @@ func New(api *model.Api, validator ValidatorSource, policy PolicySource, maxConc
 		panic("upload.New: maxConcurrent must be positive")
 	}
 	return &Handler{api: api, validator: validator, policy: policy, idle: idleTimeout,
-		window: model.UploadWindow, slots: make(chan struct{}, maxConcurrent)}
+		window: model.UploadWindow, slots: make(chan struct{}, maxConcurrent),
+		tenants: newTenantShare(maxConcurrent)}
 }
 
 // Register mounts the handler on mux.
@@ -152,9 +154,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Admission, still before the body: a bounded number of uploads per process, then one
-	// per artifact across every replica. Both refuse with the connection closed, so
-	// neither costs a byte of the body that was on its way.
+	// Admission, still before the body: at most half the process's uploads per tenant, a
+	// bounded number per process, then one per artifact across every replica. All refuse with
+	// the connection closed, so none costs a byte of the body that was on its way.
+	if !h.tenants.acquire(claims.Tenant) {
+		w.Header().Set("Retry-After", "5")
+		refuse(w, r, http.StatusServiceUnavailable, "this tenant already holds its share of "+
+			strconv.Itoa(h.tenants.limit)+" concurrent uploads on this replica; retry shortly")
+		return
+	}
+	defer h.tenants.release(claims.Tenant)
 	select {
 	case h.slots <- struct{}{}:
 		defer func() { <-h.slots }()
@@ -163,7 +172,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(w, r, http.StatusServiceUnavailable, "too many uploads are in progress; retry shortly")
 		return
 	}
-	if err := h.api.ClaimUpload(ctx, artifact); err != nil {
+	stamp, err := h.api.ClaimUpload(ctx, artifact)
+	if err != nil {
 		var re *model.RefusalError
 		if errors.As(err, &re) {
 			refuse(w, r, http.StatusConflict, re.Msg)
@@ -173,7 +183,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(w, r, http.StatusInternalServerError, "internal error")
 		return
 	}
-	defer h.release(artifact)
+	defer h.release(artifact, stamp)
 
 	// 3. Stream.
 	rc := http.NewResponseController(w)
@@ -224,7 +234,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 5. Commit.
-	if err := h.api.CompleteUpload(ctx, artifact, ref); err != nil {
+	if err := h.api.CompleteUpload(ctx, artifact, stamp, ref); err != nil {
 		h.discard(ref, token)
 		var re *model.RefusalError
 		if errors.As(err, &re) {
@@ -248,11 +258,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // request for the same reason discard does: the usual reason to be here with a dead request
 // is a client that went away, and the lease must still be freed so a retry is not made to
 // wait out its expiry.
-func (h *Handler) release(a *model.Artifact) {
+func (h *Handler) release(a *model.Artifact, stamp time.Time) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), cleanupBudget)
 	defer cancel()
 	ctx = core.WithTenant(ctx, a.TenantId)
-	if err := h.api.ReleaseUpload(ctx, a); err != nil {
+	if err := h.api.ReleaseUpload(ctx, a, stamp); err != nil {
 		log.Warn().Err(err).Str("artifact", a.Token).Msg("could not release an artifact upload lease; it expires on its own")
 	}
 }
@@ -273,34 +283,20 @@ func (h *Handler) discard(ref blob.Ref, token string) {
 // authenticate verifies a tenant ACCESS token (never a service token) and returns its
 // claims, writing the refusal itself on any failure.
 func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (*auth.Claims, bool) {
-	const prefix = "Bearer "
-	authz := r.Header.Get("Authorization")
-	if len(authz) <= len(prefix) || !strings.EqualFold(authz[:len(prefix)], prefix) {
-		refuse(w, r, http.StatusUnauthorized, "missing bearer token")
-		return nil, false
-	}
-	v := h.validator()
-	if v == nil {
-		refuse(w, r, http.StatusUnauthorized, "authentication is not available")
-		return nil, false
-	}
-	claims, err := v.Validate(authz[len(prefix):])
+	result, err := (auth.BearerAuth{Plane: auth.PlaneUpload, Verify: auth.AccessVerifier(h.validator), Policy: h.policy}).Authenticate(r)
 	if err != nil {
-		refuse(w, r, http.StatusUnauthorized, "invalid token")
+		msg := "invalid token"
+		switch err.(*auth.BearerError).Reason {
+		case auth.BearerMissing:
+			msg = "missing bearer token"
+		case auth.BearerUnavailable:
+			msg = "authentication is not available"
+		}
+		refuse(w, r, http.StatusUnauthorized, msg)
 		return nil, false
 	}
-	// 🔴 AFTER Validate, NEVER BEFORE: the audience rule runs on a token whose signature,
-	// expiry and type were verified, so a forged token never reaches it and cannot drive
-	// the counters. It runs before anything reads the body. A refusal is the same 401 an
-	// invalid token gets, so a caller cannot tell the two apart.
-	var p *auth.PlanePolicy
-	if h.policy != nil {
-		p = h.policy()
-	}
-	if err := p.Admit(claims, auth.PlaneUpload); err != nil {
-		refuse(w, r, http.StatusUnauthorized, "invalid token")
-		return nil, false
-	}
+	claims := result.Claims
+
 	return claims, true
 }
 
