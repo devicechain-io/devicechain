@@ -24,6 +24,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/sourcelimit"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
 )
 
@@ -253,7 +254,12 @@ func (es *HttpEventSource) handleDeviceUplink(w http.ResponseWriter, r *http.Req
 			log.Warn().Err(err).Msg("Device decoder lookup failed; refusing the uplink")
 			rt.result(DeviceUplinkPlanUnavail)
 		}
-		w.Header().Set("Retry-After", retryAfterSeconds)
+		retry := retryAfterSeconds
+		var gqlErr *svcclient.GraphQLError
+		if errors.As(err, &gqlErr) && gqlErr.RetryAfterSeconds > 0 {
+			retry = strconv.Itoa(gqlErr.RetryAfterSeconds)
+		}
+		w.Header().Set("Retry-After", retry)
 		http.Error(w, "decoder lookup is unavailable; retry later", http.StatusServiceUnavailable)
 		return
 	}

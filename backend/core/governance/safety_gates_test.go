@@ -57,7 +57,7 @@ func labelOf(m *dto.Metric, name string) string {
 func TestAnUnconfiguredLifecycleGateReportsZero(t *testing.T) {
 	gates, reg := gatesFixture(t)
 
-	gate := NewTenantLifecycleGate(config.UserManagementConfiguration{}, "", "command-delivery", gates)
+	gate := NewTenantLifecycleGateFor(lifecyclePeersFixture(t, config.UserManagementConfiguration{}, ""), gates)
 
 	assert.Nil(t, gate)
 	v, ok := gateValue(t, reg, GateTenantLifecycle)
@@ -69,7 +69,7 @@ func TestAnUnconfiguredLifecycleGateReportsZero(t *testing.T) {
 func TestAConfiguredLifecycleGateReportsOne(t *testing.T) {
 	gates, reg := gatesFixture(t)
 
-	gate := NewTenantLifecycleGate(config.UserManagementConfiguration{Hostname: "um", Port: 8080, InternalPort: 8080}, "s3cret", "command-delivery", gates)
+	gate := NewTenantLifecycleGateFor(lifecyclePeersFixture(t, config.UserManagementConfiguration{Hostname: "um", Port: 8080, InternalPort: 8080}, "s3cret"), gates)
 
 	require.NotNil(t, gate)
 	v, ok := gateValue(t, reg, GateTenantLifecycle)
@@ -88,7 +88,7 @@ func TestTheSameGatesHandleSurvivesASecondStart(t *testing.T) {
 	user := config.UserManagementConfiguration{Hostname: "um", Port: 8080, InternalPort: 8080}
 
 	for start := 0; start < 2; start++ {
-		NewTenantLifecycleGate(user, "s3cret", "command-delivery", gates)
+		NewTenantLifecycleGateFor(lifecyclePeersFixture(t, user, "s3cret"), gates)
 		gates.Set(GatePresence, start == 1)
 	}
 	if v, _ := gateValue(t, reg, GateTenantLifecycle); v != 1 {

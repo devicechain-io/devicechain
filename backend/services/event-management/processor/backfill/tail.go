@@ -111,6 +111,9 @@ type TailSweeper struct {
 	cycleDone map[time.Time]struct{}
 	// afterWindow runs after a window's lock is released, for tests.
 	afterWindow func()
+	// Replace catalog reads and locked refreshes in pass-outcome tests.
+	readWindows   func(context.Context, time.Time, time.Time) ([]chunkWindow, error)
+	refreshLocked func(context.Context, chunkWindow) (bool, error)
 }
 
 type tailBackoff struct {
@@ -133,11 +136,24 @@ func newTailSweeper(ms *core.Microservice, rdbm *rdb.RdbManager, cfg Config, met
 	// The first pass is due from CONSTRUCTION, not from the first tick: the task's first tick is a
 	// tick after start, and counting the delay from there would double it.
 	s.nextPass = now().Add(tailFirstDelay + s.jitter())
-	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "rollup-tail", tailTick, s.RunOnce, callbacks)
+	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "rollup-tail", tailTick, s.RunOnce, callbacks, ms.NewPeriodicTaskMetrics("rollup_tail"))
 	return s
 }
 
 // RunOnce runs a pass if one is due.
+//
+// Situation                                      Outcome
+// Not yet due                                    ErrPassSkipped (keep the scheduled delay)
+// No windows due                                 nil (an empty sweep is working)
+// All due windows refreshed                      nil
+// No refreshes or failures; lock/backoff/budget    ErrPassSkipped
+// Some refreshed; others failed or left due      wraps ErrPassPartial
+// One attempted refresh, which failed             wraps ErrPassPartial (PassResult)
+// At least two attempted, all failed              plain failure (PassResult)
+// Catalog/lock acquisition error or cancellation  underlying error
+//
+// A later lock decline preserves the tally of earlier refresh failures. The
+// completion flag controls scheduling independently of the reported outcome.
 func (s *TailSweeper) RunOnce(ctx context.Context) error {
 	now := s.now()
 	if s.nextPass.IsZero() {
@@ -180,13 +196,36 @@ func (s *TailSweeper) sweep(ctx context.Context) (complete bool, err error) {
 	// (below, in refreshWindow). This service issues no statement that selects or writes a tenant row:
 	// the refresh itself recomputes the view inside the database over the window, for every tenant at
 	// once (the view groups by tenant_id, so values never mix), and returns nothing to the caller.
-	windows, err := chunkWindows(s.rdb.DB(core.WithSystemContext(ctx)), s.floor(now), reach)
+	readWindows := s.readWindows
+	if readWindows == nil {
+		readWindows = func(ctx context.Context, from, to time.Time) ([]chunkWindow, error) {
+			return chunkWindows(s.rdb.DB(core.WithSystemContext(ctx)), from, to)
+		}
+	}
+	windows, err := readWindows(ctx, s.floor(now), reach)
 	if err != nil {
 		return false, err
 	}
 	deadline := now.Add(tailBudget)
-	var failed int
+	var attempted, refreshed, failed int
+	var deferred bool
 	var lastErr error
+	result := func() error {
+		if failed > 0 {
+			return core.PassResult(attempted, failed, lastErr)
+		}
+		if deferred {
+			if refreshed == 0 {
+				return core.ErrPassSkipped
+			}
+			return fmt.Errorf("windows left due: %w", core.ErrPassPartial)
+		}
+		return nil
+	}
+	refreshLocked := s.refreshLocked
+	if refreshLocked == nil {
+		refreshLocked = s.refreshWithLock
+	}
 	for _, w := range windows { // newest first
 		if ctx.Err() != nil {
 			return false, ctx.Err()
@@ -198,18 +237,16 @@ func (s *TailSweeper) sweep(ctx context.Context) (complete bool, err error) {
 			continue
 		}
 		if b, ok := s.backoff[w.Start]; ok && s.now().Before(b.until) {
+			deferred = true
 			s.metrics.TailSkipped.WithLabelValues(tailSkipBackoff).Inc()
 			continue
 		}
 		if s.now().After(deadline) {
 			log.Info().Msg("Rollup tail sweep reached its time budget; the rest is left for the next tick.")
-			return false, core.PassResult(len(windows), failed, lastErr)
+			deferred = true
+			return false, result()
 		}
-		ran, rerr := s.rdb.TryAdvisoryLockSession(ctx, rdb.AdvisoryLockKey(lockName), func(db *gorm.DB) error {
-			defer func() { _ = db.WithContext(context.Background()).Exec(`RESET statement_timeout`).Error }()
-			// Same sanction as above: refreshWindow issues only set_config and refresh_continuous_aggregate.
-			return s.refreshWindow(ctx, db.WithContext(core.WithSystemContext(ctx)), w)
-		})
+		ran, rerr := refreshLocked(ctx, w)
 		if s.afterWindow != nil {
 			s.afterWindow()
 		}
@@ -218,8 +255,10 @@ func (s *TailSweeper) sweep(ctx context.Context) (complete bool, err error) {
 				return false, fmt.Errorf("acquiring the rollup tail lock: %w", rerr)
 			}
 			// A backfill (or another replica's window) holds it. Left for the next tick.
-			return false, nil
+			deferred = true
+			return false, result()
 		}
+		attempted++
 		if rerr != nil {
 			if ctx.Err() != nil {
 				return false, ctx.Err()
@@ -229,11 +268,20 @@ func (s *TailSweeper) sweep(ctx context.Context) (complete bool, err error) {
 			s.skip(w, rerr)
 			continue
 		}
+		refreshed++
 		delete(s.backoff, w.Start)
 		s.cycleDone[w.Start] = struct{}{}
 	}
 	s.cycleDone = map[time.Time]struct{}{}
-	return true, core.PassResult(len(windows), failed, lastErr)
+	return true, result()
+}
+
+func (s *TailSweeper) refreshWithLock(ctx context.Context, w chunkWindow) (bool, error) {
+	return s.rdb.TryAdvisoryLockSession(ctx, rdb.AdvisoryLockKey(lockName), func(db *gorm.DB) error {
+		defer func() { _ = db.WithContext(context.Background()).Exec(`RESET statement_timeout`).Error }()
+		// Same sanction as above: refreshWindow issues only set_config and refresh_continuous_aggregate.
+		return s.refreshWindow(ctx, db.WithContext(core.WithSystemContext(ctx)), w)
+	})
 }
 
 // skip records a failed window: its reason, a doubled backoff, a log line.

@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/processor"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/prometheus/client_golang/prometheus"
@@ -93,7 +94,7 @@ func TestOnlyOnePodConnectsToAnExternalBroker(t *testing.T) {
 			Decoder: config.EventDecoder{Type: processor.DECODER_TYPE_JSON},
 		}}}
 		buildTestRateLimiters(t)
-		require.NoError(t, buildEventSources())
+		require.NoError(t, buildEventSources(svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, "event-sources")))
 		require.Len(t, EventSources, 1)
 		require.IsType(t, &processor.OwnedMqttSource{}, EventSources[0],
 			"main built an external source that is not owned, so every pod would read it")

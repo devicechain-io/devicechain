@@ -98,6 +98,24 @@ export function setIdentityTokenGetter(getter: (() => Promise<string | null>) | 
   identityTokenGetter = getter;
 }
 
+/** Opt-in HTTP 401 recovery. Anonymous requests never invoke these callbacks. */
+export interface UnauthorizedHandler {
+  /**
+   * Return a refreshed token for one replay, or null when recovery is unavailable or was refused
+   * (onEnd then runs). Throw when the refresh failed transiently: the request fails with that
+   * error and onEnd does not run, so the session is kept.
+   */
+  refresh: (token: string, identity: boolean) => Promise<string | null>;
+  /** Recovery failed or the replay was refused. Only end the session owning this token. */
+  onEnd: (error: GraphQLRequestError, token: string, identity: boolean) => void;
+}
+
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  unauthorizedHandler = handler;
+}
+
 // resolveAuthToken returns the current access token (refreshing via the getter),
 // or null. Internal to the SDK — the ws subscribe path (subscribe.ts) reuses it
 // so subscriptions authenticate with the same token as queries.
@@ -176,28 +194,54 @@ export async function gql<TResult, TVariables>(
     : [variables: TVariables, options?: RequestOptions]
 ): Promise<TResult> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const useIdentity = options?.identity ?? isIdentityArea(area);
+  const handler = unauthorizedHandler;
+  let token: string | null = null;
 
   if (!options?.anonymous) {
-    const useIdentity = options?.identity ?? isIdentityArea(area);
     const getter = useIdentity ? identityTokenGetter : tokenGetter;
     if (getter) {
-      const token = await getter();
+      token = await getter();
       if (token) headers['Authorization'] = `Bearer ${token}`;
     }
   }
 
-  let res: Response;
-  try {
-    res = await fetch(areaPath(area), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ query: document.toString(), variables }),
-    });
-  } catch (err) {
-    throw new GraphQLRequestError(
-      err instanceof Error ? err.message : 'Network request failed',
-      0,
-    );
+  const bodyText = JSON.stringify({ query: document.toString(), variables });
+  const send = async (): Promise<Response> => {
+    try {
+      return await fetch(areaPath(area), {
+        method: 'POST',
+        headers: { ...headers },
+        body: bodyText,
+      });
+    } catch (err) {
+      throw new GraphQLRequestError(
+        err instanceof Error ? err.message : 'Network request failed',
+        0,
+      );
+    }
+  };
+
+  let res = await send();
+  if (res.status === 401 && token && handler && !options?.anonymous) {
+    const rejectedToken = token;
+    // The refresh call must be anonymous, so it cannot recursively recover itself.
+    // A refresh that THROWS could not be completed right now (a network failure, a 5xx or a
+    // 429): nothing was refused, so the session is kept, onEnd is not called, and this request
+    // fails with that error. Only a null (a definitive refusal, or no recovery for this token)
+    // or a second 401 ends the session.
+    token = await handler.refresh(rejectedToken, useIdentity);
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+      res = await send();
+    }
+    if (res.status === 401) {
+      handler.onEnd(
+        new GraphQLRequestError('Request failed (401)', 401),
+        token ?? rejectedToken,
+        useIdentity,
+      );
+    }
   }
 
   if (!res.ok) {
