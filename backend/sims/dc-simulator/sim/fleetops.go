@@ -19,10 +19,10 @@ import (
 // relationships, maintenance windows and campaigns.
 //
 // Like everything in bootstrap.go each is a check-then-create-or-converge step keyed by token, so
-// a re-run is a no-op except for what is missing or changed. Two of them are not editable on the
-// platform and are converged by replacing them: a campaign (delete and create; the platform has no
-// update), and a group's published version (a changed selector is a new version, never an edit
-// of the old one, so a rule pinned to it moves only when the profile republishes).
+// a re-run is a no-op except for what is missing or changed. Campaigns and typed relationships
+// have no update and are converged by deleting and creating them. A group's published version
+// is also replaced: a changed selector is a new version, never an edit of the old one, so a rule
+// pinned to it moves only when the profile republishes.
 
 // EntityGroupSpec is one DYNAMIC group of devices: a CEL selector over the devices' SHARED
 // attributes, published so that a rule can be scoped to it and a campaign can target it.
@@ -387,6 +387,14 @@ const (
 	mutationSetInstalledPosition = `mutation($family:PositionFamily!,$token:String!,$position:InstalledPositionInput!){` +
 		`setInstalledPosition(family:$family,token:$token,position:$position){latitude longitude}}`
 
+	// positionLookupBatch is the most tokens one devicesByToken read carries: the server's
+	// lookup-key ceiling (core rdb.MaxLookupKeys).
+	positionLookupBatch = 1000
+
+	mutationClearInstalledPosition = `mutation($family:PositionFamily!,$token:String!){clearInstalledPosition(family:$family,token:$token)}`
+
+	mutationRemoveEntityRelationship = `mutation($token:String!){removeEntityRelationship(token:$token)}`
+
 	queryAssetParent = `query($token:String!){assetParent(token:$token){token}}`
 
 	mutationSetAssetParent = `mutation($child:String!,$parent:String!){setAssetParent(childToken:$child,parentToken:$parent){token}}`
@@ -572,38 +580,54 @@ func ensureDeviceAttributes(ctx context.Context, rt *Runtime, devices []DeviceIn
 	return nil
 }
 
-// ensureInstalledPositions records each declared installed position that is missing or moved.
+// ensureInstalledPositions converges installed positions, clearing those no longer declared.
 func ensureInstalledPositions(ctx context.Context, rt *Runtime, devices []DeviceInstance) error {
 	var tokens []string
 	for _, d := range devices {
-		if d.Position != nil {
-			tokens = append(tokens, d.Token)
-		}
+		tokens = append(tokens, d.Token)
 	}
 	if len(tokens) == 0 {
 		return nil
 	}
 	url := rt.Endpoints.DeviceMgmtGraphQL
-	var out struct {
-		DevicesByToken []struct {
-			Token             string `json:"token"`
-			InstalledPosition *struct {
-				Latitude  float64 `json:"latitude"`
-				Longitude float64 `json:"longitude"`
-			} `json:"installedPosition"`
-		} `json:"devicesByToken"`
-	}
-	if err := rt.Session.Query(ctx, url, queryInstalledPositions, map[string]any{"tokens": tokens}, &out); err != nil {
-		return fmt.Errorf("devicesByToken (installed positions): %w", err)
-	}
+	// Every device is read, not only those declaring a position, so a fleet larger than one
+	// lookup must be read in batches: devicesByToken refuses more than positionLookupBatch keys.
 	have := map[string]PositionSpec{}
-	for _, d := range out.DevicesByToken {
-		if d.InstalledPosition != nil {
-			have[d.Token] = PositionSpec{Latitude: d.InstalledPosition.Latitude, Longitude: d.InstalledPosition.Longitude}
+	for start := 0; start < len(tokens); start += positionLookupBatch {
+		batch := tokens[start:min(start+positionLookupBatch, len(tokens))]
+		var out struct {
+			DevicesByToken []struct {
+				Token             string `json:"token"`
+				InstalledPosition *struct {
+					Latitude  float64 `json:"latitude"`
+					Longitude float64 `json:"longitude"`
+				} `json:"installedPosition"`
+			} `json:"devicesByToken"`
+		}
+		if err := rt.Session.Query(ctx, url, queryInstalledPositions, map[string]any{"tokens": batch}, &out); err != nil {
+			return fmt.Errorf("devicesByToken (installed positions): %w", err)
+		}
+		for _, d := range out.DevicesByToken {
+			if d.InstalledPosition != nil {
+				have[d.Token] = PositionSpec{Latitude: d.InstalledPosition.Latitude, Longitude: d.InstalledPosition.Longitude}
+			}
 		}
 	}
 	for _, d := range devices {
 		if d.Position == nil {
+			if _, ok := have[d.Token]; ok {
+				var cleared struct {
+					ClearInstalledPosition bool `json:"clearInstalledPosition"`
+				}
+				if err := rt.Session.Query(ctx, url, mutationClearInstalledPosition,
+					map[string]any{"family": positionFamilyDevice, "token": d.Token}, &cleared); err != nil {
+					return fmt.Errorf("clearInstalledPosition %s: %w", d.Token, err)
+				}
+				if !cleared.ClearInstalledPosition {
+					return fmt.Errorf("clearInstalledPosition %s refused", d.Token)
+				}
+				log.Info().Str("device", d.Token).Msg("cleared installed position")
+			}
 			continue
 		}
 		if h, ok := have[d.Token]; ok && math.Abs(h.Latitude-d.Position.Latitude) < 1e-9 && math.Abs(h.Longitude-d.Position.Longitude) < 1e-9 {
@@ -682,8 +706,8 @@ func ensureRelationshipType(ctx context.Context, rt *Runtime, t RelationshipType
 	return nil
 }
 
-// ensureRelationships creates every declared relationship that is missing, in one batch. A
-// relationship's token names both of its ends, so an edge that moved is a new token.
+// ensureRelationships creates missing edges in one batch and replaces edges whose declared
+// type or endpoints changed, keeping their tokens stable across scenario defects and reruns.
 func ensureRelationships(ctx context.Context, rt *Runtime, rels []RelationshipSpec) error {
 	if len(rels) == 0 {
 		return nil
@@ -695,20 +719,38 @@ func ensureRelationships(ctx context.Context, rt *Runtime, rels []RelationshipSp
 	}
 	var existing struct {
 		EntityRelationshipsByToken []struct {
-			Token string `json:"token"`
+			Token            string                 `json:"token"`
+			SourceType       string                 `json:"sourceType"`
+			TargetType       string                 `json:"targetType"`
+			Source           struct{ Token string } `json:"source"`
+			Target           struct{ Token string } `json:"target"`
+			RelationshipType struct{ Token string } `json:"relationshipType"`
 		} `json:"entityRelationshipsByToken"`
 	}
 	if err := rt.Session.Query(ctx, url, queryEntityRelationshipsByToken, map[string]any{"tokens": tokens}, &existing); err != nil {
 		return fmt.Errorf("entityRelationshipsByToken: %w", err)
 	}
-	have := map[string]bool{}
+	have := map[string]RelationshipSpec{}
 	for _, r := range existing.EntityRelationshipsByToken {
-		have[r.Token] = true
+		have[r.Token] = RelationshipSpec{Token: r.Token, Type: r.RelationshipType.Token,
+			SourceType: r.SourceType, Source: r.Source.Token, TargetType: r.TargetType, Target: r.Target.Token}
 	}
 	var requests []map[string]any
 	for _, r := range rels {
-		if have[r.Token] {
-			continue
+		if h, ok := have[r.Token]; ok {
+			if h == r {
+				continue
+			}
+			var removed struct {
+				RemoveEntityRelationship bool `json:"removeEntityRelationship"`
+			}
+			if err := rt.Session.Query(ctx, url, mutationRemoveEntityRelationship,
+				map[string]any{"token": r.Token}, &removed); err != nil {
+				return fmt.Errorf("removeEntityRelationship %s: %w", r.Token, err)
+			}
+			if !removed.RemoveEntityRelationship {
+				return fmt.Errorf("removeEntityRelationship %s refused", r.Token)
+			}
 		}
 		requests = append(requests, map[string]any{"token": r.Token, "sourceType": r.SourceType, "source": r.Source,
 			"targetType": r.TargetType, "target": r.Target, "relationshipType": r.Type})

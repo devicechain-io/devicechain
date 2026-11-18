@@ -1316,7 +1316,7 @@ func ensureGeoFence(ctx context.Context, rt *Runtime, g GeoFenceSpec) error {
 // --- assignments (tracked EntityRelationships) ----------------------------------
 
 const queryEntityRelationshipsByToken = `query($tokens:[String!]!){` +
-	`entityRelationshipsByToken(tokens:$tokens){token}}`
+	`entityRelationshipsByToken(tokens:$tokens){token relationshipType{token} sourceType source{token} targetType target{token}}}`
 
 const mutationCreateEntityRelationships = `mutation($requests:[EntityRelationshipCreateRequest!]!){` +
 	`createEntityRelationships(requests:$requests){token}}`

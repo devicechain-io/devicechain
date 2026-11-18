@@ -39,6 +39,10 @@ func TestTheFleetOpsDocumentsValidateAgainstTheServedSchemas(t *testing.T) {
 		{"devicesByToken positions", "device-management", queryInstalledPositions, map[string]any{"tokens": []string{"hp-light-east-1"}}},
 		{"setInstalledPosition", "device-management", mutationSetInstalledPosition, map[string]any{"family": positionFamilyDevice,
 			"token": "hp-light-east-1", "position": map[string]any{"latitude": 49.8, "longitude": -12.2, "source": positionSourceSurvey}}},
+		{"clearInstalledPosition", "device-management", mutationClearInstalledPosition, map[string]any{
+			"family": positionFamilyDevice, "token": "hp-light-east-1"}},
+		{"entityRelationshipsByToken", "device-management", queryEntityRelationshipsByToken, map[string]any{"tokens": []string{"hp-feeds-hp-light-east-1"}}},
+		{"removeEntityRelationship", "device-management", mutationRemoveEntityRelationship, map[string]any{"token": "hp-feeds-hp-light-east-1"}},
 		{"assetParent", "device-management", queryAssetParent, map[string]any{"token": HarborpulseLoftsBuilding}},
 		{"setAssetParent", "device-management", mutationSetAssetParent, map[string]any{"child": HarborpulseLoftsBuilding, "parent": HarborpulseDistrictAsset}},
 		{"entityRelationshipTypesByToken", "device-management", queryRelationshipTypesByToken, map[string]any{"tokens": []string{HarborpulseFeedsType}}},
