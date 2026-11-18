@@ -10,7 +10,6 @@ import (
 
 	"github.com/devicechain-io/dc-device-state/model"
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -36,16 +35,13 @@ type OrphanSweep struct {
 	Deleted, Stamped prometheus.Counter
 }
 
+// orphanSweepLockName names the sweep's advisory lock. Its key is shared by old and
+// new replicas during a rolling upgrade, so the name must never change.
+const orphanSweepLockName = "device-state-orphan-sweep"
+
 // Run permits one replica to reconcile at a time. All projection access is tenant scoped.
 func (s *OrphanSweep) Run(ctx context.Context) error {
-	held, err := s.Api.RDB.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey("device-state-orphan-sweep"), func() error { return s.Sweep(ctx) })
-	if err != nil {
-		return err
-	}
-	if !held {
-		return core.ErrPassSkipped
-	}
-	return nil
+	return s.Api.RDB.SingletonPass(ctx, orphanSweepLockName, func() error { return s.Sweep(ctx) })
 }
 
 // Sweep lists tenants through the authority, then isolates failures to their tenant.
