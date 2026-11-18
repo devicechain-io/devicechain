@@ -350,16 +350,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const stepUp = useCallback(async (code: string) => {
-    // Finish any ordinary refresh before taking the refresh-token snapshot.
-    if (!(await session.getAccessToken())) throw new Error('session unavailable');
-    const held = tokensRef.current;
-    if (!held) throw new Error('session unavailable');
-    const pair = await apiStepUp(held.refreshToken, code);
-    // A sign-out or tenant switch while the dialog was waiting must win.
-    if (tokensRef.current !== held) throw new Error('session changed');
-    session.reset();
-    applyTokens({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
-  }, [session, applyTokens]);
+    // Step-up SPENDS the refresh token, as a refresh does, and the server honours only one use
+    // of it. 🔴 Waiting for an ordinary refresh first was not enough: a forced refresh after a
+    // 401 starts while the access token is still valid, so it could spend the same token
+    // alongside step-up, and the loser's refusal signed the user out after a correct code. The
+    // session coordinator runs the step-up as the one in-flight use: it waits out a refresh
+    // already running, every refresh asked for meanwhile takes the step-up's pair, and a
+    // sign-out or tenant switch while the dialog was waiting still wins (the pair is dropped,
+    // 'session changed').
+    await session.exchange(async (refreshToken) => {
+      const pair = await apiStepUp(refreshToken, code);
+      return { accessToken: pair.accessToken, refreshToken: pair.refreshToken };
+    });
+  }, [session]);
 
   const logout = useCallback(async () => {
     // Both tokens name the same sign-in when they came from one login; send each that is

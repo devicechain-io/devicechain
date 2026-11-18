@@ -30,6 +30,13 @@
 //     🔴 #2752 made 'throw' the only behaviour. getAccessToken is a published export and a
 //     v1.6 caller checks for null, so a promise that now rejected was a contract change in a
 //     minor: it became the opt-in.
+//   - exchange() runs a host operation that SPENDS the refresh token for its own reasons (the
+//     console's step-up trades it, with a second-factor code, for an elevated pair) through the
+//     same coordinator: it waits for a refresh already running, and while it runs, a refresh
+//     anyone asks for (a due token, a 401, the auto-refresh timer) waits for it and takes the
+//     pair it yields instead of spending the same token again. 🔴 Before it, a forced refresh
+//     after a 401 and a step-up could spend one refresh token together: the server honours only
+//     one, the loser's refusal ended the session, and the user was signed out after verifying.
 //   - startAutoRefresh() refreshes ahead of expiry without waiting for a caller, and
 //     retries a transient failure with jittered exponential backoff for as long as the
 //     refresh token is valid. A display that only holds a websocket makes no request that
@@ -113,6 +120,23 @@ export interface SessionTokens {
 /** What `createSessionTokens` returns: a `SessionTokens` whose `forceRefresh` is always present. */
 export interface ManagedSessionTokens extends SessionTokens {
   forceRefresh: (rejectedToken?: string) => Promise<string | null>;
+  /**
+   * Run a host operation that spends the held refresh token and returns the pair that replaces
+   * it (a step-up, say), serialized with every refresh, so the two never spend one refresh
+   * token between them. It first makes sure there is a usable access token (refreshing if due)
+   * and waits out any refresh already running; while `spend` runs, a refresh anyone asks for
+   * waits for it and shares the pair it yields. The pair is applied like a refreshed one.
+   *
+   * Resolves to the new access token. Rejects with `spend`'s error when it fails (the session
+   * is kept, and refreshes then go ahead as usual), and with an Error when the session is
+   * signed out, has ended, or was replaced while `spend` ran (its pair is then dropped).
+   *
+   * While `spend` runs, the held access token is handed out without waiting as long as it has
+   * not expired, because `spend`'s own request asks for one. A `forceRefresh` naming that access
+   * token as rejected (a 401, which may be `spend`'s own request) rejects with a 401 error and
+   * keeps the session rather than waiting on `spend`; a later 401 recovers as usual.
+   */
+  exchange: (spend: (refreshToken: string) => Promise<TokenPair>) => Promise<string>;
 }
 
 const DEFAULT_SKEW_SECONDS = 30;
@@ -148,7 +172,8 @@ type Outcome =
   | { kind: 'ok'; token: string }
   | { kind: 'stale' } // the session was cleared or replaced while the refresh ran
   | { kind: 'ended' }
-  | { kind: 'transient'; err: unknown };
+  | { kind: 'transient'; err: unknown }
+  | { kind: 'declined'; err: unknown }; // an exchange's spend failed; it applied nothing
 
 function expiryMs(token: string): number | undefined {
   const exp = decodeToken(token)?.exp;
@@ -164,6 +189,9 @@ export function createSessionTokens(opts: SessionTokensOptions): ManagedSessionT
   }
   const throwTransient = mode === 'throw';
   let inFlight: Promise<Outcome> | null = null;
+  // While an exchange's spend runs: the access token held when it started, which its own
+  // request is sent with. Null otherwise.
+  let exchanging: string | null = null;
   let lastRefresh: { from: string; pair: TokenPair } | null = null;
 
   // The skew for one access token: the configured one, or half its lifetime if that is less.
@@ -179,31 +207,60 @@ export function createSessionTokens(opts: SessionTokensOptions): ManagedSessionT
     opts.onEnd(err);
   };
 
-  // One refresh of `current`, shared by every caller that asks while it runs.
-  const refreshShared = (current: TokenPair): Promise<Outcome> => {
-    if (!inFlight) {
-      inFlight = (async (): Promise<Outcome> => {
-        try {
-          const pair = await opts.refresh(current.refreshToken);
-          // A promise cannot be cancelled, so guard here: if the live session is no
-          // longer the one this refresh started from, drop the result.
-          if (opts.read() !== current) return { kind: 'stale' };
-          const next = { accessToken: pair.accessToken, refreshToken: pair.refreshToken };
-          opts.apply(next);
-          lastRefresh = { from: current.accessToken, pair: next };
-          return { kind: 'ok', token: pair.accessToken };
-        } catch (err) {
-          // Only end the session this refresh belonged to, not one since replaced.
-          if (opts.read() !== current) return { kind: 'stale' };
-          if (isTransientRefreshError(err)) return { kind: 'transient', err };
-          end(err);
-          return { kind: 'ended' };
-        } finally {
+  // Spend `current`'s refresh token through `spend` (the host's refresh, or an exchange), as the
+  // one in-flight use of it that every caller shares.
+  const run = (
+    current: TokenPair,
+    spend: (refreshToken: string) => Promise<TokenPair>,
+    isExchange: boolean,
+  ): Promise<Outcome> => {
+    // A spend that throws synchronously settles this before the assignment below, so it is
+    // never left behind as the in-flight use; and a use reset() forgot never clears its successor.
+    // An exchange marks `exchanging` before this runs: spend's own request asks for a token
+    // synchronously, before the in-flight use is registered.
+    let settled = false;
+    let p: Promise<Outcome> | undefined = undefined;
+    p = (async (): Promise<Outcome> => {
+      try {
+        const pair = await spend(current.refreshToken);
+        // A promise cannot be cancelled, so guard here: if the live session is no
+        // longer the one this refresh started from, drop the result.
+        if (opts.read() !== current) return { kind: 'stale' };
+        const next = { accessToken: pair.accessToken, refreshToken: pair.refreshToken };
+        opts.apply(next);
+        lastRefresh = { from: current.accessToken, pair: next };
+        return { kind: 'ok', token: pair.accessToken };
+      } catch (err) {
+        // An exchange that failed is its caller's error, not a verdict on the session: a
+        // wrong step-up code refuses the code, not the refresh token.
+        if (isExchange) return { kind: 'declined', err };
+        // Only end the session this refresh belonged to, not one since replaced.
+        if (opts.read() !== current) return { kind: 'stale' };
+        if (isTransientRefreshError(err)) return { kind: 'transient', err };
+        end(err);
+        return { kind: 'ended' };
+      } finally {
+        // Settled synchronously (p unset): nothing else can have started meanwhile.
+        settled = true;
+        if (p === undefined || inFlight === p) {
           inFlight = null;
+          exchanging = null;
         }
-      })();
+      }
+    })();
+    if (!settled) inFlight = p;
+    return p;
+  };
+
+  // One refresh of `current`, shared by every caller that asks while it runs. A caller that
+  // finds an exchange running takes its pair; when the exchange failed it applied nothing, so
+  // the held pair is refreshed as it would have been.
+  const refreshShared = async (current: TokenPair): Promise<Outcome> => {
+    for (;;) {
+      const out = await (inFlight ?? run(current, opts.refresh, false));
+      if (out.kind !== 'declined') return out;
+      if (opts.read() !== current) return { kind: 'stale' };
     }
-    return inFlight;
   };
 
   const getAccessToken = async (): Promise<string | null> => {
@@ -214,6 +271,9 @@ export function createSessionTokens(opts: SessionTokensOptions): ManagedSessionT
       return null;
     }
     if (!due(current.accessToken)) return current.accessToken;
+    // An exchange is spending the refresh token, and its own request asks for an access token:
+    // waiting on the exchange from inside it would never finish. The held token is still good.
+    if (exchanging !== null && !isExpired(current.accessToken, 0)) return current.accessToken;
 
     const out = await refreshShared(current);
     if (out.kind === 'ok') return out.token;
@@ -310,6 +370,13 @@ export function createSessionTokens(opts: SessionTokensOptions): ManagedSessionT
         end();
         return null;
       }
+      // The access token an exchange is being sent with was rejected. This 401 may be the
+      // exchange's own request, which cannot wait for the exchange it is part of; and a refresh
+      // now would spend the token the exchange is spending. Fail this request and keep the
+      // session: once the exchange settles, a later 401 recovers as usual.
+      if (exchanging !== null && rejectedToken === exchanging) {
+        throw new GraphQLRequestError('Request failed (401)', 401);
+      }
       const out = await refreshShared(current);
       if (out.kind === 'ok') return out.token;
       if (out.kind !== 'transient') return null;
@@ -318,8 +385,28 @@ export function createSessionTokens(opts: SessionTokensOptions): ManagedSessionT
       // failure refused nothing, so the session is kept and the caller gets the outage it hit.
       throw out.err;
     },
+    exchange: async (spend) => {
+      // A usable access token first: spend's own request needs one, and a refresh it would
+      // otherwise trigger mid-exchange could not run.
+      if (!(await getAccessToken())) throw new Error('session unavailable');
+      // Then wait out a refresh already spending the token (a forced one after a 401 starts
+      // whatever the access token's expiry), and take the pair it leaves.
+      while (inFlight) await inFlight;
+      const current = opts.read();
+      if (!current) throw new Error('session unavailable');
+      if (isExpired(current.refreshToken, 0)) {
+        end();
+        throw new Error('session unavailable');
+      }
+      exchanging = current.accessToken;
+      const out = await run(current, spend, true);
+      if (out.kind === 'ok') return out.token;
+      if (out.kind === 'declined') throw out.err;
+      throw new Error('session changed');
+    },
     reset: () => {
       inFlight = null;
+      exchanging = null;
       lastRefresh = null;
     },
     startAutoRefresh,

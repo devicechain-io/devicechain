@@ -147,6 +147,24 @@ Unregister with `setUnauthorizedHandler(null)` on teardown. Without a handler,
 the existing `GraphQLRequestError` with status 401 is unchanged. A replay that
 fails with a network error or another HTTP status follows ordinary error handling.
 
+Refresh tokens rotate, and the server honours each one once. An operation of your own
+that spends the refresh token, such as a step-up that trades it with a second-factor code
+for an elevated pair, must go through `session.exchange(spend)` rather than reading the
+token and calling the server itself; otherwise a refresh running at the same moment (a
+forced one after a 401 starts whatever the access token's expiry) spends it too, and the
+loser's refusal ends the session:
+
+```ts
+await session.exchange((refreshToken) => stepUp(refreshToken, code)); // resolves to the new access token
+```
+
+`exchange` waits for a refresh already running and spends the token it left; while
+`spend` runs, every refresh asked for waits for it and takes the pair it yields, which is
+applied like a refreshed one. If `spend` fails, it rejects with that error and the session
+is kept. While it runs, `getAccessToken` hands out the held token without waiting (spend's
+own request needs one), and a `forceRefresh` naming that token as rejected throws a 401
+error and keeps the session instead of waiting on it.
+
 ## Subscriptions
 
 ```ts

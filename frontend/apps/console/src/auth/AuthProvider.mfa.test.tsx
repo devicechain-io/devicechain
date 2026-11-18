@@ -314,4 +314,61 @@ describe('in-session stepUp', () => {
     expect(auth.isAuthenticated).toBe(true);
     expect(h.logout).not.toHaveBeenCalled();
   });
+
+  // 🔴 A 401 forces a refresh with refresh token R while the access token is still valid; the
+  // user then submits a correct code. Refresh tokens rotate, and the server honours one use of
+  // R. Step-up used to wait only for an ordinary refresh, so it spent R alongside the forced
+  // one: the forced refresh was refused, which ended the session, and the step-up's pair then
+  // arrived for a session that was gone. Signed out after a correct code.
+  it('shares the refresh token with a forced refresh after a 401, and stays signed in', async () => {
+    const live = new Set([REFRESH]);
+    let n = 0;
+    const issue = (rt: string) => {
+      if (!live.delete(rt)) {
+        throw new GraphQLRequestError('invalid refresh token', 200, [{ message: 'invalid refresh token' }]);
+      }
+      n++;
+      const next = { accessToken: jwt({ tenant: 'acme', exp: future, jti: `a${n}` }),
+        refreshToken: jwt({ tenant: 'acme', exp: future, jti: `r${n}` }) };
+      live.add(next.refreshToken);
+      return next;
+    };
+    let openRefresh!: () => void;
+    const refreshGate = new Promise<void>((r) => (openRefresh = r));
+    let openStepUp!: () => void;
+    const stepUpGate = new Promise<void>((r) => (openStepUp = r));
+    // The forced refresh is slow to reach the server; the step-up is claimed there at once and
+    // slow to answer, so the refusal of whichever loses arrives first.
+    h.refresh.mockImplementation(async (rt: string) => { await refreshGate; return issue(rt); });
+    h.stepUp.mockImplementation(async (rt: string) => { const pair = issue(rt); await stepUpGate; return pair; });
+    const query = 'query { test }' as unknown as TypedDocument<{ test: boolean }, Record<string, never>>;
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 401 }))
+      .mockResolvedValue(new Response(JSON.stringify({ data: { test: true } }))));
+    mount();
+
+    let request!: Promise<unknown>;
+    let stepped!: Promise<unknown>;
+    await act(async () => {
+      request = gql('device-management', query);
+      await vi.waitFor(() => expect(h.refresh).toHaveBeenCalledTimes(1));
+      stepped = auth.stepUp('123456');
+      await Promise.resolve();
+      openRefresh();
+      await vi.waitFor(() => expect(h.stepUp).toHaveBeenCalled());
+      openStepUp();
+      await Promise.allSettled([request, stepped]);
+    });
+
+    await expect(stepped).resolves.toBeUndefined();
+    await expect(request).resolves.toEqual({ test: true });
+    expect(h.refresh).toHaveBeenCalledExactlyOnceWith(REFRESH);
+    // The step-up spent the token the forced refresh left, never R a second time.
+    expect(h.stepUp).toHaveBeenCalledTimes(1);
+    expect(h.stepUp.mock.calls[0][0]).not.toBe(REFRESH);
+    expect(auth.isAuthenticated).toBe(true);
+    expect(consumeSessionExpired()).toBeNull();
+    expect(live.has(stored('dc-auth').refreshToken)).toBe(true);
+    expect(stored('dc-auth').accessToken).toBe(jwt({ tenant: 'acme', exp: future, jti: 'a2' }));
+  });
 });
