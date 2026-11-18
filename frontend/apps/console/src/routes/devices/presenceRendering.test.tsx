@@ -158,6 +158,7 @@ async function renderDetail(
   presenceSource: string,
   active: boolean,
   transitions: Array<{ state: string; reason: string | null; sessionId: string; occurredTime: string }> = [],
+  pagination = { totalRecords: transitions.length as number | null, hasMore: false },
 ) {
   gqlMock.mockImplementation((service: string) => {
     if (service === 'device-management') {
@@ -172,10 +173,13 @@ async function renderDetail(
     }
     if (service === 'event-management') {
       return Promise.resolve({
-        events: { results: [], pagination: {} },
+        events: {
+          results: [{ id: 'event-1', deviceToken: 'dev-1', eventType: 2, occurredTime: '2026-08-12T12:00:00Z', source: 'test' }],
+          pagination,
+        },
         stateChangeEvents: {
           results: transitions.map((tr) => ({ deviceToken: 'dev-1', ...tr })),
-          pagination: { totalRecords: transitions.length },
+          pagination,
         },
       });
     }
@@ -261,5 +265,26 @@ describe('the device detail connectivity panel', () => {
   ] as const)('does not show the callout when %s', async (_name, source, active) => {
     await renderDetail(source, active);
     expect(screen.queryByText(CALLOUT)).toBeNull();
+  });
+});
+
+describe('event history more affordances', () => {
+  it.each([
+    [true, null],
+    [false, 100],
+  ] as const)('uses hasMore=%s with totalRecords=%s for both histories', async (hasMore, totalRecords) => {
+    await renderDetail('INFERRED', true, [
+      { state: 'CONNECTED', reason: null, sessionId: '7', occurredTime: '2026-08-12T12:00:00Z' },
+    ], { hasMore, totalRecords });
+    await screen.findByTestId('presence-timeline');
+    const i18n = (await import('i18next')).default;
+    const presenceMore = i18n.t('devices:showingRecentTransitions');
+    expect(screen.queryByText(presenceMore) !== null).toBe(hasMore);
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Events' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Events' }));
+    await screen.findByText('test');
+    const eventsMore = i18n.t('devices:showingRecentEvents');
+    expect(screen.queryByText(eventsMore) !== null).toBe(hasMore);
   });
 });

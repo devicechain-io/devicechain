@@ -218,14 +218,28 @@ export type EventsQueryVariables = Exact<{
 }>;
 
 
-export type EventsQuery = { events: { results: Array<{ id: string, deviceToken: string, eventType: number, occurredTime: string | null, source: string }>, pagination: { totalRecords: number | null } } };
+export type EventsQuery = { events: { results: Array<{ id: string, deviceToken: string, eventType: number, occurredTime: string | null, source: string }>, pagination: { hasMore: boolean | null, totalRecords: number | null } } };
+
+export type EventsLegacyQueryVariables = Exact<{
+  criteria: EventSearchCriteria;
+}>;
+
+
+export type EventsLegacyQuery = { events: { results: Array<{ id: string, deviceToken: string, eventType: number, occurredTime: string | null, source: string }>, pagination: { pageEnd: number | null, totalRecords: number | null } } };
 
 export type StateChangeEventsQueryVariables = Exact<{
   criteria: EventSearchCriteria;
 }>;
 
 
-export type StateChangeEventsQuery = { stateChangeEvents: { results: Array<{ deviceToken: string, occurredTime: string | null, state: string, reason: string | null, sessionId: string }>, pagination: { totalRecords: number | null } } };
+export type StateChangeEventsQuery = { stateChangeEvents: { results: Array<{ deviceToken: string, occurredTime: string | null, state: string, reason: string | null, sessionId: string }>, pagination: { hasMore: boolean | null, totalRecords: number | null } } };
+
+export type StateChangeEventsLegacyQueryVariables = Exact<{
+  criteria: EventSearchCriteria;
+}>;
+
+
+export type StateChangeEventsLegacyQuery = { stateChangeEvents: { results: Array<{ deviceToken: string, occurredTime: string | null, state: string, reason: string | null, sessionId: string }>, pagination: { pageEnd: number | null, totalRecords: number | null } } };
 
 export type CalculatedEventsQueryVariables = Exact<{
   deviceToken: string;
@@ -328,11 +342,29 @@ export const EventsDocument = new TypedDocumentString(`
       source
     }
     pagination {
+      hasMore
       totalRecords
     }
   }
 }
     `) as unknown as TypedDocumentString<EventsQuery, EventsQueryVariables>;
+export const EventsLegacyDocument = new TypedDocumentString(`
+    query EventsLegacy($criteria: EventSearchCriteria!) {
+  events(criteria: $criteria) {
+    results {
+      id
+      deviceToken
+      eventType
+      occurredTime
+      source
+    }
+    pagination {
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<EventsLegacyQuery, EventsLegacyQueryVariables>;
 export const StateChangeEventsDocument = new TypedDocumentString(`
     query StateChangeEvents($criteria: EventSearchCriteria!) {
   stateChangeEvents(criteria: $criteria) {
@@ -344,11 +376,29 @@ export const StateChangeEventsDocument = new TypedDocumentString(`
       sessionId
     }
     pagination {
+      hasMore
       totalRecords
     }
   }
 }
     `) as unknown as TypedDocumentString<StateChangeEventsQuery, StateChangeEventsQueryVariables>;
+export const StateChangeEventsLegacyDocument = new TypedDocumentString(`
+    query StateChangeEventsLegacy($criteria: EventSearchCriteria!) {
+  stateChangeEvents(criteria: $criteria) {
+    results {
+      deviceToken
+      occurredTime
+      state
+      reason
+      sessionId
+    }
+    pagination {
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<StateChangeEventsLegacyQuery, StateChangeEventsLegacyQueryVariables>;
 export const CalculatedEventsDocument = new TypedDocumentString(`
     query CalculatedEvents($deviceToken: String!, $expression: String!, $dataType: String!, $inputs: [CalculatedInput!]!, $minValue: Float, $maxValue: Float, $constants: [CalculatedConstant!], $from: String!, $to: String!) {
   calculatedEvents(

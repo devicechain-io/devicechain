@@ -53,8 +53,8 @@ function install(metadata: string | null) {
     if (d.includes('query MetricDefinitions')) {
       return Promise.resolve({
         metricDefinitions: {
-          results: [{ metricKey: 'voltage', dataType: 'DOUBLE', calculated: false, expression: null }],
-          pagination: {},
+          results: [{ token: 'voltage', metricKey: 'voltage', dataType: 'DOUBLE', calculated: false, expression: null }],
+          pagination: { totalRecords: 1 },
         },
       });
     }

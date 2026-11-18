@@ -117,11 +117,12 @@ READERS = [
         "docs/**", "README.md", "**/go.mod", SDL,
         "backend/services/event-management/model/analytics.go",
     ], [], "cmd/docs_*_test.go"),
-    # bootstrap: deployment docs (fence/backupsizing/diskbudget/size_docs), every service's non-test
+    # bootstrap: README.md and deployment docs (fence/backupsizing/diskbudget/size_docs), every service's non-test
     # source (install_test.go:432), service configs (sizing/sparkplug), user-management go.mod
     # (breakglass), core/rdb/postgres.go (install_test.go:473), the broker's main.go/go.mod
     # (brokerimage_test via kube.go repoRoot). deploy/** is the deploy module, which cli requires.
     ("backend/cli", "bootstrap", DOCS_DEPLOY + [
+        "README.md",
         "backend/services/**/*.go",
         "backend/services/user-management/go.mod",
         "backend/core/rdb/postgres.go",
@@ -138,7 +139,11 @@ READERS = [
         "backend/**/*.go",
         "docs/**/disaster-recovery.md",
     ], NONTEST, "backupset/backupset_test.go:120,248"),
-    ("backend/core", "graphql/schemaplane", [SDL], [], "graphql/schemaplane/schemaplane_test.go:19"),
+    ("backend/core", "graphql/schemaplane", [
+        SDL,
+        "frontend/packages/dashboards/src/**",
+        "frontend/apps/dashboard/src/**",
+    ], [], "graphql/schemaplane/schemaplane_test.go:19, frontend_documents_test.go:85"),
     ("backend/core", "rdb/partialupdatetest", ["backend/services/*/model/*.go"], NONTEST, "rdb/partialupdatetest/savescan_test.go:133"),
     ("backend/core", "config", [
         "deploy/opentofu/modules/traefik/main.tf",
@@ -151,6 +156,9 @@ READERS = [
         "deploy/opentofu/modules/nats/main.tf",
     ], [], "messaging/rebalanceable_streams_test.go:32, dedup_window_test.go:443"),
     ("backend/core", "semantic", ["NOTICE"], [], "semantic/semantic_test.go:487"),
+    # core/core: the production-hardening page (hardening_docs_test.go:19); functionalareas*.go
+    # name ".." only in a comment about os.ReadDir.
+    ("backend/core", "core", ["docs/docs/deployment/production-hardening.md"], [], "core/hardening_docs_test.go:19"),
     # functionalarea: the services list, release.yml's ko modules and their RUNBOOK.md, the operator,
     # the chart helpers and Chart.yaml, the local image build, the nats module, the broker image.
     ("backend/k8s", "functionalarea", [
@@ -176,17 +184,47 @@ READERS = [
         "backend/sims/dc-simulator/sim/fleetpulse_speed_limit_schema.json",
     ], [], "model/authored_sim_*_test.go"),
     ("backend/services/device-management", "processor", ["frontend/testdata/connect-snippets/**"], [], "processor/connect_snippet_golden_test.go:32"),
+    # graphql: the console picker documents (console_picker_documents_test.go:27); its other
+    # escaping file only names "../x" as a refused-key fixture.
+    ("backend/services/device-management", "graphql", ["frontend/apps/console/src/lib/api/**"], [], "graphql/console_picker_documents_test.go:27"),
     ("backend/services/event-management", "model", ["docs/**/releases-and-upgrades.md"], [], "model/upgrade_notes_bounds_test.go:34"),
     ("backend/services/event-management", "processor/backfill", ["backend/services/device-management/graphql/**"], [], "processor/backfill/*_test.go"),
     ("backend/services/event-processing", "graphql", ["backend/testdata/authored-rules/**"], [], "graphql/authored_sim_rules_test.go:39"),
-    # event-sources/processor walks every non-test .go file under backend/.
+    # event-sources/processor walks every non-test .go file under backend/; the connect snippet
+    # golden test also reads both templates that publish the external MQTT port.
     ("backend/services/event-sources", "processor", [
         "backend/**/*.go",
         "frontend/testdata/connect-snippets/**",
         "backend/core/integrationcodec/testdata/**",
-    ], [], "processor/broker_assertion_test.go:218, integration_marks_test.go:159"),
+        "deploy/helm/devicechain/templates/mqtt-exposure.yaml",
+        "deploy/helm/devicechain/templates/gateway.yaml",
+    ], [], "processor/broker_assertion_test.go:218, integration_marks_test.go:159, connect_snippet_golden_test.go:288-289"),
     ("backend/services/event-sources", "integration", ["backend/services/device-management/graphql/**"], [], "integration/backend_test.go:32"),
     ("backend/services/mcp", "server", [SDL], [], "server/documents_test.go:35"),
+    # Each peer client's recorded documents, validated against the SDL its target serves
+    # (documents_test.go validateDocuments: ../../<target>/graphql).
+    ("backend/services/ai-inference", "inference", ["backend/services/user-management/graphql/**"], [], "inference/documents_test.go"),
+    ("backend/services/event-sources", "adapter", [
+        "backend/services/device-management/graphql/**",
+        "backend/services/device-state/graphql/**",
+    ], [], "adapter/documents_test.go"),
+    ("backend/services/event-sources", "commandpull", [
+        "backend/services/device-management/graphql/**",
+        "backend/services/command-delivery/graphql/**",
+    ], [], "commandpull/documents_test.go"),
+    ("backend/services/event-sources", "credcheck", ["backend/services/device-management/graphql/**"], [], "credcheck/documents_test.go"),
+    ("backend/services/event-sources", "presence", [
+        "backend/services/user-management/graphql/**",
+        "backend/services/device-state/graphql/**",
+        "backend/services/command-delivery/graphql/**",
+    ], [], "presence/documents_test.go"),
+    ("backend/services/lwm2m-ingest", "downlink", [
+        "backend/services/command-delivery/graphql/**",
+        "backend/services/device-management/graphql/**",
+    ], [], "downlink/documents_test.go"),
+    # lpwan: also "../etc/passwd" and "../x" as refused-id fixtures (chirpstack_test.go, tts_test.go).
+    ("backend/services/outbound-connectors", "lpwan", ["backend/services/device-management/graphql/**"], [], "lpwan/documents_test.go"),
+    ("backend/services/update-management", "profilecheck", ["backend/services/device-management/graphql/**"], [], "profilecheck/documents_test.go"),
     ("backend/services/sparkplug-ingest", "downlink", ["frontend/apps/console/src/routes/devices/sparkplugCommands.ts"], [], "downlink/reasons_test.go:89"),
     ("backend/services/update-management", "model", ["deploy/opentofu/modules/traefik/**"], [], "model/edge_lockstep_test.go:31"),
     ("backend/services/user-management", "basemap", ["frontend/apps/console/src/components/basemap/catalog.json"], [], "basemap/catalog_test.go:32"),
@@ -260,13 +298,13 @@ IN_MODULE = {
     ("backend/tools/redlines", "."): "temp fixtures only",
     ("examples/ota-device", "internal/testutil"): "runtime.Caller root is its own module",
     ("backend/core", "test/frontend"): "build-tagged `frontend`, so the go job never compiles it; the frontend job runs the same vitest suites",
-    ("backend/core", "core"): "\"..\" appears only in a comment about os.ReadDir",
     ("backend/core", "replication"): "\"..\" appears only in a comment",
     ("backend/core", "webhooksig"): "\"..\" is a refused path segment",
     ("backend/k8s", "api/v1beta1"): "reads ../../config/crd inside backend/k8s",
     ("backend/services/command-delivery", "processor"): "reads ../contract inside its own module",
     ("backend/services/event-processing", "internal/review"): "reads ../replayinput inside its own module",
     ("backend/services/device-management", "graphql"): "\"../x\" is a refused-key fixture",
+    ("backend/services/outbound-connectors", "connectorspec"): "\"..\" is a refused template path segment",
     ("backend/services/outbound-connectors", "lpwan"): "\"../etc/passwd\" and \"../x\" are refused-id fixtures",
     ("deploy", "."):"\"../modules/<x>\" appears only in comments; the embed is in-module",
 }
@@ -1401,6 +1439,23 @@ def self_test():
         print(("  ok: " if cond else "  FAIL: ") + what)
         if not cond:
             fails.append(what)
+
+    print("==> repository reader regressions")
+    reader_ws = Workspace(
+        ["backend/cli", "backend/services/event-sources", "deploy"],
+        {"backend/cli": {"deploy"}, "backend/services/event-sources": set(), "deploy": set()},
+    )
+    for path, module, pkg in [
+        ("deploy/helm/devicechain/templates/mqtt-exposure.yaml", "backend/services/event-sources", "processor"),
+        ("deploy/helm/devicechain/templates/gateway.yaml", "backend/services/event-sources", "processor"),
+        ("README.md", "backend/cli", "bootstrap"),
+    ]:
+        s = select(reader_ws, [path])
+        expect(not s.full and pkg in s.readers.get(module, {}),
+               "%s alone selects %s/%s" % (path, module, pkg))
+        legs = plan(reader_ws, s, [])[0]
+        expect(any(leg["module"] == module and "./%s/" % pkg in leg["pkgs"].split() for leg in legs),
+               "%s alone plans the %s tests" % (path, pkg))
 
     saved = (READERS, SPLITS)
     READERS = [

@@ -22,6 +22,7 @@
 // disagree with it come back as per-device refusals on the batch record. The screen says
 // so rather than implying the whole fleet was checked.
 
+import { listAll } from '@/lib/api/list-all';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Send } from 'lucide-react';
@@ -72,7 +73,6 @@ import '@/i18n/lazy/commandBatches';
 // cannot tell is missing — which is also why the device picker is PAIRED with a paste
 // box below rather than relied on alone: the service's ceiling is far past any page size
 // worth loading, and only pasted text can express a target set that large.
-const optionPageSize = 1000;
 
 type TargetKind = 'devices' | 'group';
 
@@ -143,11 +143,11 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
   // until the service decides; a changed request represents a new intent.
   const pendingAttempt = useRef<{ body: string; token: string } | null>(null);
 
-  const { data: devices } = useQuery(
-    () => listDevices({ pageNumber: 1, pageSize: optionPageSize }).then((r) => r.results),
+  const { current: devices, error: devicesError } = useQuery(
+    () => listAll(page => listDevices({ ...page })).then((r) => r.results),
     [],
   );
-  const { data: groups } = useQuery(() => listDeviceGroupTargets(), []);
+  const { current: groups, error: groupsError } = useQuery(() => listDeviceGroupTargets(), []);
 
   const deviceOptions: ComboboxOption[] = (devices ?? []).map((d) => ({
     value: d.token,
@@ -418,6 +418,7 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
           <FormField label={t('groupLabel')} description={t('groupHint')}>
             <Combobox
               options={groupOptions}
+              disabled={!groups}
               value={groupToken}
               onChange={setGroupToken}
               placeholder={t('groupPlaceholder')}
@@ -546,6 +547,8 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
         {allowPartial === null && <HintText size="md" className="mt-1">{t('partialUnsetHint')}</HintText>}
       </div>
 
+      {groupsError && <p role="alert" className="text-sm text-destructive">{groupsError}</p>}
+      {devicesError && <p role="alert" className="text-sm text-destructive">{devicesError}</p>}
       {formError && <p className="text-sm text-destructive">{formError}</p>}
 
       {rejection && <RejectionPanel rejection={rejection} />}

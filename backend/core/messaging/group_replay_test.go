@@ -158,3 +158,28 @@ func TestGroupReplayRefusesConfiguredButUnroutedManager(t *testing.T) {
 	_, err = m.NewGroupReplaySource(streams.ResolvedEvents, 0)
 	require.ErrorIs(t, err, ErrShardRoutingNotEnabled)
 }
+
+func TestTenantShardGroupReadOnly(t *testing.T) {
+	m := n1Manager(t, true)
+	for tenant, want := range map[string]int{"tenant-a": 0, "tenant-b": 1} {
+		got, err := m.TenantShardGroup(tenant, streams.ResolvedEvents)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+	for _, tenant := range []string{"unplaced", "too-high", "negative"} {
+		_, err := m.TenantShardGroup(tenant, streams.ResolvedEvents)
+		require.ErrorIs(t, err, ErrUnplacedTenant)
+	}
+	_, err := m.TenantShardGroup("", streams.ResolvedEvents)
+	require.ErrorIs(t, err, core.ErrNoTenant)
+	// Lookup must not freeze construction; Enable is still allowed afterward.
+	legacy := n1Manager(t, false)
+	got, err := legacy.TenantShardGroup("tenant-b", streams.ResolvedEvents)
+	require.NoError(t, err)
+	require.Zero(t, got)
+	require.NoError(t, legacy.EnableStreamSharding(shardRouterFunc(n1Router), n1Config(streams.ResolvedEvents)))
+	unrouted := n1Manager(t, false)
+	unrouted.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups = n1Config(streams.ResolvedEvents)
+	_, err = unrouted.TenantShardGroup("tenant-b", streams.ResolvedEvents)
+	require.ErrorIs(t, err, ErrShardRoutingNotEnabled)
+}

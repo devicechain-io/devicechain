@@ -22,6 +22,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
 
 var (
@@ -117,7 +118,7 @@ func buildInferenceResolver() *inference.Resolver {
 			Msg("External-routing consent, tenant tier + per-tenant inference rate read from user-management tenantGovernance (fail-closed, ADR-056/065).")
 	}
 
-	rate := buildRateLimiter(def, infra, client, governance.NewUnresolvedAdmissions(Microservice, governance.AIInference))
+	rate := buildRateLimiter(def, infra, client, governance.NewUnresolvedAdmissions(Microservice, governance.AIInference), RdbManager.Database)
 	return inference.NewResolver(Api, facts, rate, bounds, nil)
 }
 
@@ -127,15 +128,15 @@ func buildInferenceResolver() *inference.Resolver {
 // from user-management's tenantGovernance, failing open to the default. unresolved counts the
 // admissions made at the default for want of a tenant's own ceiling. A tenant here comes from
 // an authenticated caller's token, so it always gets an allowance of its own.
+// Admission state is shared through the service database, failing closed on store errors.
 func buildRateLimiter(def governance.Limits, infra mscfg.InfrastructureConfiguration, client *svcclient.Client,
-	unresolved func(core.CeilingSource)) *core.TenantRateLimiter {
-	counted := core.WithUnresolvedAdmissions(unresolved)
+	unresolved func(core.CeilingSource), db *gorm.DB) inference.RateGate {
 	if client == nil {
-		return core.NewTenantRateLimiter(core.StaticCeiling(def.RatePerSecond, def.Burst), counted)
+		return &sharedInferenceLimiter{db: db, resolve: core.StaticCeiling(def.RatePerSecond, def.Burst), unresolved: unresolved}
 	}
 	umURL := infra.UserManagement.Endpoint().GraphQLURL()
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.AIInference)
-	return core.NewTenantRateLimiter(resolver.Ceiling, counted)
+	return &sharedInferenceLimiter{db: db, resolve: resolver.Ceiling, unresolved: unresolved}
 }
 
 // afterMicroserviceInitialized initializes components after the microservice is up.
@@ -156,6 +157,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		// advisory lock. It is initialized before the secret store, which reads from the
 		// same database.
 		Rdb: &service.RdbSpec{
+			AppendOnly: nil, // Audit journal only.
 			Migrations: schema.Migrations,
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Config:     Configuration.RdbConfiguration,

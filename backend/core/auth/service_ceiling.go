@@ -56,7 +56,7 @@ var serviceCallers = map[string][]Authority{
 	"event-processing":        {CommandWrite, TenantRead, DeviceRead, AIInfer},
 	"event-sources":           {DeviceRead, TenantRead, StateRead, CommandWake, CommandClaim},
 	"lwm2m-ingest":            {DeviceRead, DeviceWrite, StateRead, TenantRead, CommandRead, CommandClaim, CommandPark},
-	"notification-management": {TenantRead},
+	"notification-management": {TenantRead, AlarmRead},
 	"outbound-connectors":     {TenantRead, CommandClaim, DeviceRead},
 	"sparkplug-ingest":        {TenantRead, DeviceRead, DeviceWrite, StateRead, CommandRead, CommandClaim, CommandPark},
 	"update-management":       {DeviceRead, TenantRead},

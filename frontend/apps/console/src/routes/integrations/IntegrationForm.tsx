@@ -5,6 +5,7 @@
 // and hands it straight to `onCreated` without keeping it; an edit is a PARTIAL update that names
 // only the fields the operator changed (integrationForm.ts). The type is fixed at creation.
 
+import { listAll } from '@/lib/api/list-all';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -69,8 +70,8 @@ export function IntegrationForm({
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<IntegrationDraft>) => setDraft((d) => ({ ...d, ...patch }));
 
-  const { data: types } = useQuery(
-    () => listDeviceTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results),
+  const { current: types, error: typesError } = useQuery(
+    () => listAll(page => listDeviceTypes({ ...page })).then((r) => r.results),
     [],
   );
   const typeOptions: ComboboxOption[] = (types ?? []).map((ty) => ({
@@ -116,6 +117,7 @@ export function IntegrationForm({
 
   return (
     <div className="space-y-4">
+      {typesError && <p role="alert" className="text-sm text-destructive">{typesError}</p>}
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
       <FormField
         label={t('integrations:typeLabel')}

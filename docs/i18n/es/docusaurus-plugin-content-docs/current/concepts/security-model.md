@@ -12,6 +12,11 @@ Para notificar una vulnerabilidad, siga el proceso de la
 
 ## Límites de confianza de un vistazo {#boundaries}
 
+Las métricas y las sondas de salud responden sin autenticación, por lo que se sirven en un puerto
+de operaciones separado al que no llega ninguna ruta pública; el puerto público sirve GraphQL,
+cuyas operaciones aplican su propia autenticación y permisos. [Endurecimiento de producción](../deployment/production-hardening.md)
+enumera qué sirve cada puerto y cómo comprobar el perímetro público antes de abrir la instancia a Internet.
+
 | Límite | Qué separa ambos lados | Quién lo hace cumplir |
 | --- | --- | --- |
 | Inquilino frente a inquilino | Cada fila de un inquilino y cada asunto de mensaje lleva el inquilino | Un ámbito de base de datos en cada consulta y asuntos por inquilino en el broker |

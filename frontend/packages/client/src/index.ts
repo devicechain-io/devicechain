@@ -43,6 +43,7 @@ export { subscribe, disposeSubscriptions, type SubscriptionSink } from './subscr
 
 export {
   createSessionTokens,
+  type ManagedSessionTokens,
   type SessionTokens,
   type SessionTokensOptions,
   type TokenPair,
