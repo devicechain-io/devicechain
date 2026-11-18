@@ -77,6 +77,12 @@ type Config struct {
 	// With no entry the probe is used; the operation is reached either way, but the path
 	// behind the discriminator is not.
 	Literals map[string]string
+	// ArgumentSubsets adds named documents to an operation ("subscription stream"):
+	// each subset supplies only its listed arguments plus every required argument.
+	// Values use Literals and the probe as usual; input objects fill required fields.
+	// Outcomes are named "subscription stream (label)" and judged normally. Unknown
+	// operations or arguments, empty labels and the reserved "all arguments" label fail.
+	ArgumentSubsets map[string]map[string][]string
 }
 
 // Reporter is the slice of testing.TB the sweep reports through (*testing.T satisfies it).
@@ -107,7 +113,10 @@ func Run(t Reporter, cfg Config) []Outcome {
 		cfg.SubscriptionWait = 300 * time.Millisecond
 	}
 	schema := cfg.Schema.Inspect()
-	ops := operations(schema, placeholder, cfg.Literals)
+	ops, err := operations(schema, placeholder, cfg.Literals, cfg.ArgumentSubsets)
+	if err != nil {
+		t.Fatalf("isolationsweep: %v", err)
+	}
 	if len(ops) == 0 {
 		t.Fatalf("isolationsweep: the schema declares no operations, so the sweep reached nothing")
 	}
@@ -193,9 +202,11 @@ func contains(list []string, s string) bool {
 
 // operations builds one document per root field of every operation type with its required
 // arguments, and a second, "(all arguments)", for every field whose arguments or input
-// fields include an optional one.
-func operations(s *introspection.Schema, probe string, lits map[string]string) []operation {
+// fields include an optional one. Configured argument subsets add documents without
+// changing either existing document.
+func operations(s *introspection.Schema, probe string, lits map[string]string, subsets map[string]map[string][]string) ([]operation, error) {
 	var out []operation
+	seen := make(map[string]bool)
 	for _, root := range []struct {
 		kind string
 		typ  *introspection.Type
@@ -207,10 +218,26 @@ func operations(s *introspection.Schema, probe string, lits map[string]string) [
 			if f.Name() == "__typename" {
 				continue
 			}
-			document := func(all bool) string {
+			name := root.kind + " " + f.Name()
+			seen[name] = true
+			var argNames []string
+			for _, a := range f.Args(&struct{ IncludeDeprecated bool }{true}) {
+				argNames = append(argNames, a.Name())
+			}
+			for label, args := range subsets[name] {
+				if strings.TrimSpace(label) == "" || label == "all arguments" {
+					return nil, fmt.Errorf("invalid argument subset label %q for %s", label, name)
+				}
+				for _, arg := range args {
+					if !contains(argNames, arg) {
+						return nil, fmt.Errorf("unknown argument %q in %s (%s)", arg, name, label)
+					}
+				}
+			}
+			document := func(all bool, subset []string) string {
 				var args []string
 				for _, a := range f.Args(&struct{ IncludeDeprecated bool }{true}) {
-					if a.Type().Kind() != "NON_NULL" && !all {
+					if a.Type().Kind() != "NON_NULL" && !all && !contains(subset, a.Name()) {
 						continue
 					}
 					args = append(args, a.Name()+": "+literal(a.Name(), a.Type(), probe, 0, all, lits))
@@ -221,15 +248,23 @@ func operations(s *introspection.Schema, probe string, lits map[string]string) [
 				}
 				return doc + selection(f.Type(), 0) + " }"
 			}
-			required, all := document(false), document(true)
+			required, all := document(false, nil), document(true, nil)
 			out = append(out, operation{kind: root.kind, name: root.kind + " " + f.Name(), document: required})
 			if all != required {
 				out = append(out, operation{kind: root.kind, name: root.kind + " " + f.Name() + " (all arguments)", document: all})
 			}
+			for label, args := range subsets[name] {
+				out = append(out, operation{kind: root.kind, name: name + " (" + label + ")", document: document(false, args)})
+			}
+		}
+	}
+	for name := range subsets {
+		if !seen[name] {
+			return nil, fmt.Errorf("unknown operation %q in argument subsets", name)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
-	return out
+	return out, nil
 }
 
 func fieldsOf(t *introspection.Type) []*introspection.Field {

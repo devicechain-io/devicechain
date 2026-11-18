@@ -255,3 +255,53 @@ func TestTheSweepCatchesAMessageOnlyOracle(t *testing.T) {
 		t.Fatalf("a resolver whose refusal differed from a miss only in wording passed: %v", rec.errors)
 	}
 }
+
+func TestArgumentSubsetsAreGeneratedAndJudged(t *testing.T) {
+	for _, leaky := range []bool{false, true} {
+		cfg := config(&sweepRoot{leakyCustomers: leaky})
+		cfg.ArgumentSubsets = map[string]map[string][]string{
+			"query customers":    {"owners": {}},
+			"query device":       {"verbose": {"verbose"}},
+			"subscription watch": {"token": {"token"}},
+		}
+		rec, out := runRecorded(cfg)
+		if len(rec.fatals) != 0 {
+			t.Fatalf("subset configuration failed: %v", rec.fatals)
+		}
+		for _, name := range []string{"query customers (owners)", "query device (verbose)", "subscription watch (token)"} {
+			o, ok := OutcomeOf(out, name)
+			if !ok {
+				t.Fatalf("missing subset document %s", name)
+			}
+			if name == "query customers (owners)" && (o.Leak != "") != leaky {
+				t.Errorf("subset leak check: %+v, leaky=%v", o, leaky)
+			}
+			if name != "query customers (owners)" && (len(o.Codes) == 0 || o.Leak != "") {
+				t.Errorf("subset must retain the required token and judge the refusal: %+v", o)
+			}
+		}
+		if !leaky && len(rec.errors) != 0 {
+			t.Fatalf("correct subsets failed: %v", rec.errors)
+		}
+		if leaky && !strings.Contains(strings.Join(rec.errors, "|"), "query customers (owners)") {
+			t.Fatalf("subset leak was not reported: %v", rec.errors)
+		}
+	}
+}
+
+func TestArgumentSubsetsRejectUnknownEntries(t *testing.T) {
+	for _, subsets := range []map[string]map[string][]string{
+		{"query retired": {"token": {"token"}}},
+		{"query retired": {}},
+		{"query device": {"stale": {"retiredArgument"}}},
+		{"query device": {"": {"verbose"}}},
+		{"query device": {"all arguments": {"verbose"}}},
+	} {
+		cfg := config(&sweepRoot{})
+		cfg.ArgumentSubsets = subsets
+		rec, _ := runRecorded(cfg)
+		if len(rec.fatals) == 0 {
+			t.Fatalf("unknown subset entry passed: %v", subsets)
+		}
+	}
+}
