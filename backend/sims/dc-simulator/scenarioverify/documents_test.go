@@ -44,6 +44,7 @@ func verifierDocuments() []struct {
 		name, area, doc string
 		vars            map[string]any
 	}{
+		{"queryCalculatedJob", "event-management", queryCalculatedJob, map[string]any{"token": "job"}},
 		{"queryAlarms", "device-management", queryAlarms, map[string]any{
 			"c": map[string]any{"pageNumber": 1, "pageSize": alarmPageSize},
 		}},
@@ -62,13 +63,23 @@ func verifierDocuments() []struct {
 				"start": "2026-11-16T12:00:00Z", "end": "2026-11-16T12:05:00Z",
 			},
 		}},
+		{"mutationRotateSigning", "outbound-connectors", mutationRotateSigning, map[string]any{"handle": "harborpulse/flood-emergency"}},
+		{"mutationEndSigningRotation", "outbound-connectors", mutationEndSigningRotation, map[string]any{"handle": "harborpulse/flood-emergency"}},
+		{"queryNotificationAttempts", "notification-management", queryNotificationAttempts, map[string]any{
+			"c": map[string]any{"pageNumber": 1, "pageSize": attemptPageSize, "alarmToken": "a1"},
+		}},
+		{"mutationAcknowledgeAlarm", "device-management", mutationAcknowledgeAlarm, map[string]any{"token": "a1"}},
+		{"queryDecoderHealth", "device-management", queryDecoderHealth, map[string]any{"profile": "hp-lora-gauge-profile", "minutes": 30}},
+		{"queryFailedEvents", "event-management", queryFailedEvents, map[string]any{
+			"c": map[string]any{"pageNumber": 1, "pageSize": failedPageSize, "reason": failedReasonDecode, "deviceToken": "hp-legacy-gauge-basin"},
+		}},
 	}
 }
 
 func TestEveryVerifierDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 	docs := verifierDocuments()
-	if len(docs) != 4 {
-		t.Fatalf("%d documents listed; the verifier sends 4 — a new one must be listed here", len(docs))
+	if len(docs) != 11 {
+		t.Fatalf("%d documents listed; the verifier sends 11 — a new one must be listed here", len(docs))
 	}
 	for _, d := range docs {
 		if errs := servedSchema(t, d.area).ValidateWithVariables(d.doc, d.vars); len(errs) > 0 {

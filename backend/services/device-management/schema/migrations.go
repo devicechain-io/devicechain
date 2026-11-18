@@ -77,5 +77,6 @@ var (
 		NewAlarmPositionDerivedSchema(),
 		NewAlarmPositionStampSchema(),
 		NewDeletionAlarmCascadeSchema(),
+		NewAlarmSuppressionSchema(),
 	}
 )

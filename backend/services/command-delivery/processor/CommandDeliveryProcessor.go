@@ -1299,7 +1299,10 @@ func (cproc *CommandDeliveryProcessor) runSweepTicker(ctx context.Context) {
 // rate. Its own ticker also means a slow reconcile pass cannot delay a delivery pass.
 func (cproc *CommandDeliveryProcessor) runHoldReconcileTicker(ctx context.Context) {
 	interval := cproc.holdReconcileInterval()
-	cproc.DeliveryMetrics.HoldReconcile.SetInterval(interval)
+	// A configured-off task must leave its interval undeclared.
+	if cproc.Presence != nil || cproc.gateReader() != nil {
+		cproc.DeliveryMetrics.HoldReconcile.SetInterval(interval)
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -1321,7 +1324,10 @@ func (cproc *CommandDeliveryProcessor) runHoldReconcileTicker(ctx context.Contex
 // pass has nothing to gain from running at either of the other two cadences.
 func (cproc *CommandDeliveryProcessor) runStrandedReconcileTicker(ctx context.Context) {
 	interval := cproc.strandedReconcileInterval()
-	cproc.DeliveryMetrics.StrandedReconcile.SetInterval(interval)
+	// A configured-off task must leave its interval undeclared.
+	if cproc.Presence != nil {
+		cproc.DeliveryMetrics.StrandedReconcile.SetInterval(interval)
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

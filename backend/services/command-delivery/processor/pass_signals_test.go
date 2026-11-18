@@ -162,3 +162,42 @@ func (a *cancellingLockApi) TrySweepLock(ctx context.Context, fn func() error) (
 	<-ctx.Done()
 	return true, ctx.Err()
 }
+
+func TestConfiguredOffReconcilersLeaveIntervalUndeclared(t *testing.T) {
+	for _, task := range []string{"hold_reconcile", "stranded_reconcile"} {
+		for _, mode := range []string{"off", "presence", "disabled-record"} {
+			t.Run(task+"/"+mode, func(t *testing.T) {
+				m, reg := passMetrics(t, task)
+				proc := &CommandDeliveryProcessor{Api: &fakeApi{}, DeliveryMetrics: DeliveryMetrics{HoldReconcile: m, StrandedReconcile: m}}
+				if mode == "presence" {
+					proc.Presence = &scriptedReader{}
+				}
+				if mode == "disabled-record" {
+					proc.Api = &model.Api{}
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				if task == "hold_reconcile" {
+					proc.runHoldReconcileTicker(ctx)
+				} else {
+					proc.runStrandedReconcileTicker(ctx)
+				}
+				families, err := reg.Gather()
+				require.NoError(t, err)
+				found := false
+				for _, f := range families {
+					if f.GetName() == "devicechain_commanddelivery_"+task+"_pass_interval_seconds" {
+						found = true
+						value := f.Metric[0].GetGauge().GetValue()
+						if mode == "presence" || (task == "hold_reconcile" && mode == "disabled-record") {
+							assert.Greater(t, value, 0.0, "configured task did not declare an interval")
+						} else {
+							assert.True(t, math.IsNaN(value), "configured-off task declared an interval")
+						}
+					}
+				}
+				require.True(t, found)
+			})
+		}
+	}
+}

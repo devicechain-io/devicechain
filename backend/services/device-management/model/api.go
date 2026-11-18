@@ -73,6 +73,7 @@ type GeoFenceCapRefusalCounter interface {
 }
 
 type Api struct {
+	suppressionCache suppressionCache
 	// DeviceCredentialChecker shares password backoff between HTTP uplinks and MQTT connects.
 	DeviceCredentialChecker *credential.Checker
 

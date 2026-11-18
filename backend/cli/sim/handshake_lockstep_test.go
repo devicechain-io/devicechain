@@ -193,7 +193,7 @@ func TestEveryHandshakeFieldTheSimulatorReadsIsOneDcctlWrites(t *testing.T) {
 // The Endpoints shapes ARE equal, so their field count is pinned too: a field removed
 // from both sides at once is symmetric drift that the equality check cannot see.
 func TestTheEndpointsContractHasNotSilentlyShrunk(t *testing.T) {
-	const knownEndpoints = 10
+	const knownEndpoints = 13
 	if got := len(jsonTagsOfLocalStruct(t, Endpoints{})); got != knownEndpoints {
 		t.Errorf("the handshake declares %d endpoints; this contract has carried %d. If that is a deliberate change, update this number in the same commit — otherwise a field dropped from BOTH sides at once passes the lockstep check unnoticed",
 			got, knownEndpoints)

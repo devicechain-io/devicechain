@@ -10,6 +10,14 @@
     },
     {
       "producer": "harborpulse",
+      "ruleToken": "hp-attribute-well",
+      "profileToken": "hp-pump-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MINOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"attribute-well-high\"},\"type\":\"raiseAlarm\"}],\"name\":\"Harborpulse shared well alarm\",\"severity\":\"minor\",\"type\":\"threshold\",\"when\":{\"metric\":\"wet_well_m\",\"op\":\"gt\",\"thresholdAttr\":\"well_alarm_m\"}}"
+    },
+    {
+      "producer": "harborpulse",
       "ruleToken": "hp-charger-offline",
       "profileToken": "hp-charger-profile",
       "enabled": true,
@@ -23,6 +31,14 @@
       "enabled": true,
       "alarmSeverityWire": "MAJOR",
       "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"connector-hot\"},\"type\":\"raiseAlarm\"},{\"sendCommand\":{\"command\":\"derate\",\"expiresAfter\":\"10m\",\"payload\":\"{\\\"max_kw\\\":11}\"},\"type\":\"sendCommand\"}],\"agg\":\"avg\",\"metric\":\"connector_temp_c\",\"name\":\"Harborpulse connector hot\",\"op\":\"gt\",\"severity\":\"major\",\"threshold\":70,\"type\":\"aggregate\",\"window\":\"1m0s\",\"windowMode\":\"sliding\"}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-flood-bulletin",
+      "profileToken": "hp-gauge-profile",
+      "enabled": true,
+      "alarmSeverityWire": "",
+      "definition": "{\"actions\":[{\"publish\":{\"connectorRef\":\"hp-bulletin-mqtt\",\"payloadTemplate\":\"'{\\\"device\\\":\\\"' + series + '\\\"}'\"},\"type\":\"publish\"}],\"name\":\"Harborpulse flood bulletin\",\"type\":\"threshold\",\"when\":{\"metric\":\"water_level_m\",\"op\":\"gt\",\"threshold\":1.8}}"
     },
     {
       "producer": "harborpulse",
@@ -47,6 +63,14 @@
       "enabled": true,
       "alarmSeverityWire": "MINOR",
       "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"flood-level\"},\"type\":\"raiseAlarm\"}],\"name\":\"Harborpulse flood level minor\",\"severity\":\"minor\",\"type\":\"threshold\",\"when\":{\"metric\":\"water_level_m\",\"op\":\"gt\",\"threshold\":1.4}}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-flood-webhook",
+      "profileToken": "hp-gauge-profile",
+      "enabled": true,
+      "alarmSeverityWire": "",
+      "definition": "{\"actions\":[{\"httpCall\":{\"bodyTemplate\":\"'{\\\"device\\\":\\\"' + series + '\\\"}'\",\"signingSecretRef\":\"harborpulse/flood-emergency\",\"url\":\"http://hp-sink.harborpulse-sinks.svc.cluster.local:8080/hooks/flood-emergency\"},\"type\":\"httpCall\"}],\"name\":\"Harborpulse flood emergency webhook\",\"type\":\"threshold\",\"when\":{\"metric\":\"water_level_m\",\"op\":\"gt\",\"threshold\":2.2}}"
     },
     {
       "producer": "harborpulse",
@@ -95,6 +119,14 @@
       "enabled": true,
       "alarmSeverityWire": "WARNING",
       "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"surge-rising\"},\"type\":\"raiseAlarm\"}],\"metric\":\"water_level_m\",\"name\":\"Harborpulse surge rising\",\"op\":\"gt\",\"rate\":true,\"severity\":\"warning\",\"threshold\":0.01,\"type\":\"deltaRate\",\"when\":{}}"
+    },
+    {
+      "producer": "harborpulse",
+      "ruleToken": "hp-truck-in-flood-plain",
+      "profileToken": "hp-truck-profile",
+      "enabled": true,
+      "alarmSeverityWire": "WARNING",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"truck-in-flood-plain\"},\"type\":\"raiseAlarm\"}],\"name\":\"Harborpulse truck in the flood plain\",\"severity\":\"warning\",\"type\":\"threshold\",\"when\":{\"cel\":\"geo.inFence(\\\"hp-flood-plain\\\")\"}}"
     },
     {
       "producer": "harborpulse",

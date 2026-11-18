@@ -46,6 +46,7 @@ type CommandSpec struct {
 	CommandKey      string
 	Name            string
 	ParameterSchema string
+	Encoder         string
 }
 
 // DetectionRuleSpec is one DETECT rule authored on a profile (ADR-051/057).
@@ -74,6 +75,12 @@ type DetectionRuleSpec struct {
 	Definition string
 	Metric     string
 	Enabled    bool
+	// ReadsNoMetric states that the rule's predicate reads no measurement at all: a geofence
+	// rule tests a device's POSITION, which arrives on a location event that carries none. It
+	// is declared, never inferred from an empty Metric, because an empty Metric is otherwise
+	// the typo Validate exists to refuse. Validate holds a rule that says so to it: Metric must
+	// be empty and the definition must name no metric where Validate looks.
+	ReadsNoMetric bool
 }
 
 // ProfileSpec is a static-singleton device profile (+ its metric definitions,
@@ -91,6 +98,11 @@ type ProfileSpec struct {
 	Metrics        []MetricSpec
 	Commands       []CommandSpec
 	DetectionRules []DetectionRuleSpec
+	// Decoder is the profile's payload decoder document (a CEL decoder, as
+	// setDeviceProfileDecoder takes it), or "" for none. It is profile-version content: it is
+	// saved to the draft before the publish and frozen by it, so a device of this profile
+	// whose uplink arrives through an inbound integration is decoded by it.
+	Decoder string
 }
 
 // EnabledDetectionRuleCount is how many ENABLED detection rules this manifest publishes
@@ -287,6 +299,16 @@ type InstanceSpec struct {
 	// calculated metric's formula reads as `device.name`. Written as the device's metadata
 	// JSON at create, and converged on a re-run.
 	Constants map[string]float64
+	// Aliases are the names a sender knows the device by (a LoRaWAN DevEUI): an inbound
+	// integration resolves an uplink to the device holding the alias. Written at create and
+	// converged on a re-run.
+	Aliases []AliasSpec
+}
+
+// AliasSpec is one device alias: a scheme (lorawan.deveui) and the value in it.
+type AliasSpec struct {
+	Scheme string
+	Value  string
 }
 
 // CustomerUserSpec is a person who belongs to one customer: a tenant member limited to the
@@ -327,6 +349,8 @@ type DeviceInstance struct {
 	// Metadata is the device's metadata JSON: the numbers a calculated metric reads as
 	// `device.name`. Empty for a device that carries none.
 	Metadata string
+	// Aliases are the device's aliases (see InstanceSpec.Aliases).
+	Aliases []AliasSpec
 }
 
 // CommandFarEndMode says WHO answers a scenario's commands. It is a mode rather
@@ -474,6 +498,17 @@ type SimManifest struct {
 	Dashboards    []DashboardSpec
 	// CustomerUsers are the customer-scoped members the scenario provisions.
 	CustomerUsers []CustomerUserSpec
+	// The REACT and notification destinations (see outbound.go): webhook signing handles a
+	// rule's httpCall signs with, outbound connectors a rule's publish names, and the
+	// notification channels and policies that page people about alarms.
+	WebhookSigningHandles []string
+	Connectors            []ConnectorSpec
+	NotificationChannels  []NotificationChannelSpec
+	NotificationPolicies  []NotificationPolicySpec
+	// Integrations are the inbound integrations a network server posts this scenario's
+	// LoRaWAN devices' uplinks through.
+	Integrations []IntegrationSpec
+	Attributes   []AttributeSpec
 }
 
 // placeholderPattern matches "{n}" or "{n:0Wd}" (W one or more digits). The
@@ -610,6 +645,7 @@ func (m SimManifest) Expand(seed int64) []DeviceInstance {
 					CredentialId:    credId,
 					Assignments:     m.renderInstanceAssignments(in),
 					Metadata:        constantsMetadata(in.Constants),
+					Aliases:         in.Aliases,
 				})
 			}
 			continue
@@ -810,6 +846,20 @@ func (m SimManifest) Validate() error {
 			if !json.Valid([]byte(r.Definition)) {
 				return fmt.Errorf("detection rule %q has a definition that is not valid JSON", r.Token)
 			}
+			if err := m.validateRuleDestinations(r); err != nil {
+				return err
+			}
+			if r.ReadsNoMetric {
+				// A position rule: it says it reads no measurement, so hold it to that.
+				if r.Metric != "" {
+					return fmt.Errorf("detection rule %q says it reads no metric but names %q", r.Token, r.Metric)
+				}
+				if reads := ruleReadMetrics(r.Definition); len(reads) > 0 {
+					return fmt.Errorf("detection rule %q says it reads no metric but its definition reads %q",
+						r.Token, strings.Join(reads, ", "))
+				}
+				continue
+			}
 			// The seam this check exists for: a rule reading a metric the profile
 			// does not declare is accepted by the platform and never fires, so the
 			// scenario provisions cleanly and produces no alarms at all.
@@ -875,6 +925,9 @@ func (m SimManifest) Validate() error {
 				}
 			}
 		}
+		if p.Decoder != "" && !json.Valid([]byte(p.Decoder)) {
+			return fmt.Errorf("profile %q has a decoder that is not valid JSON", p.Token)
+		}
 		for _, mx := range p.Metrics {
 			if mx.Expression != "" {
 				// The platform checks a formula when the profile is published; these are the
@@ -928,6 +981,10 @@ func (m SimManifest) Validate() error {
 				return fmt.Errorf("population for %q has unsupported distributeAcross value %q (only \"area\" is implemented)", pop.OfType, da)
 			}
 		}
+	}
+
+	if err := m.validateOutbound(typeTokens); err != nil {
+		return err
 	}
 
 	for _, u := range m.CustomerUsers {
@@ -1015,6 +1072,9 @@ func (m SimManifest) Validate() error {
 			return fmt.Errorf("rendered credential token: %w", err)
 		}
 		if err := validateAssignments(d, areaTokens, assetTokens, customerTokens); err != nil {
+			return err
+		}
+		if err := m.validateAliases(d); err != nil {
 			return err
 		}
 	}

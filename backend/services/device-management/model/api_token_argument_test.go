@@ -62,15 +62,15 @@ func TestEveryUpdateTakesADedicatedUpdateRequest(t *testing.T) {
 	putest.AssertEveryUpdateTakesADedicatedRequest(t, putest.UpdateSurface[*Api]{
 		Families: partialUpdateFamilies(),
 
-		// 🔴 THERE ARE NO EXEMPTIONS LEFT IN THIS SERVICE, and the empty map is
-		// deliberate rather than an omission. The last one was UpdateDeviceProfile,
-		// whose payload token was a RENAME CHANNEL — which is why it could not be
-		// converted mechanically. The rename did not evaporate: it moved to
-		// Api.RenameDeviceProfile, where the new token can mean only one thing, and the
-		// update input then lost its token like every other. The guard fails on an
-		// exemption that matches nothing, so this map cannot quietly regrow an entry
-		// describing a state of the world that has ended.
-		Exempt: map[string]string{},
+		// Suppression slice 1 is an INTERNAL Go API, with no GraphQL input or null
+		// packer yet. Its nullable Go fields carry omitted/set/clear, and its kind
+		// switch couples more than two schedule fields, outside this wire harness.
+		// alarm_suppression_test.go drives merged updates, nullable fields, refusal
+		// atomicity and reach authorization against storage. Slice 3 must register
+		// the served three-state request here when it exposes the mutation.
+		Exempt: map[string]string{
+			"UpdateAlarmSuppressionWindow": "AlarmSuppressionUpdateRequest",
+		},
 
 		// The anti-vacuity floor. Reflection over a renamed or embedded receiver could
 		// find nothing at all, and a loop over nothing reports success.

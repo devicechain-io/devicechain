@@ -244,15 +244,20 @@ func StartDelayFor(reason TapOffReason, jitter time.Duration) time.Duration {
 	return jitter
 }
 
-// RunDemoteLoop drains on a slow ticker until ctx ends.
+// RunDemoteLoop drains on a slow ticker until ctx ends. declareInterval is true only when a
+// drain is configured, rather than a broker recheck alone.
 //
 // 🔑 THE FIRST PASS RUNS AFTER THE START DELAY AND THEN IMMEDIATELY, not after a full
 // interval. The interval here is the reconciler's, measured in minutes, and it is the
 // right pace for a repair that never finishes; it is the wrong pace for the first look at
 // a fleet that is frozen right now.
 func RunDemoteLoop(ctx context.Context, d DemoteRunner, interval, startDelay time.Duration,
-	now func() time.Time, metrics *core.PeriodicTaskMetrics) {
-	metrics.SetInterval(interval)
+	now func() time.Time, metrics *core.PeriodicTaskMetrics, declareInterval bool) {
+	// A recheck-only runner has no configured drain to complete: its passes are recorded but
+	// its interval stays undeclared, so the generic stall alert does not read it as stalled.
+	if declareInterval {
+		metrics.SetInterval(interval)
+	}
 	if now == nil {
 		now = time.Now
 	}

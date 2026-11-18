@@ -38,6 +38,12 @@ type Endpoints struct {
 	CommandMgmtGraphQL     string `json:"commandMgmtGraphQL"`
 	DeviceStateGraphQL     string `json:"deviceStateGraphQL"`
 	MqttBroker             string `json:"mqttBroker"`
+	// The opt-in and edge endpoints a scenario's outbound REACT, notifications and inbound
+	// integrations use. Optional in dc-simulator's handshake; required there only by a scenario
+	// that declares one of them.
+	OutboundConnectorsGraphQL string `json:"outboundConnectorsGraphQL,omitempty"`
+	NotificationMgmtGraphQL   string `json:"notificationMgmtGraphQL,omitempty"`
+	Integrations              string `json:"integrations,omitempty"`
 }
 
 // Record is dcctl's local record for one sim. It is written verbatim as the
@@ -365,15 +371,20 @@ func ResolveEndpoints(server, ingress, mqttBroker string, tls bool) Endpoints {
 		mqttBroker = DefaultMqttBroker(server)
 	}
 	return Endpoints{
-		UserGraphQL:            fmt.Sprintf("%s://%s/api/user-management/graphql", h, server),
-		DeviceMgmtGraphQL:      DeviceManagementURL(server, tls) + "/graphql",
-		DashboardMgmtGraphQL:   fmt.Sprintf("%s://%s/api/dashboard-management/graphql", h, server),
-		Ingress:                ingress,
-		EventMgmtWS:            fmt.Sprintf("%s://%s/api/event-management/graphql", ws, server),
-		EventProcessingWS:      fmt.Sprintf("%s://%s/api/event-processing/graphql", ws, server),
-		EventProcessingGraphQL: fmt.Sprintf("%s://%s/api/event-processing/graphql", h, server),
-		CommandMgmtGraphQL:     fmt.Sprintf("%s://%s/api/command-delivery/graphql", h, server),
-		DeviceStateGraphQL:     fmt.Sprintf("%s://%s/api/device-state/graphql", h, server),
-		MqttBroker:             mqttBroker,
+		UserGraphQL:               fmt.Sprintf("%s://%s/api/user-management/graphql", h, server),
+		DeviceMgmtGraphQL:         DeviceManagementURL(server, tls) + "/graphql",
+		DashboardMgmtGraphQL:      fmt.Sprintf("%s://%s/api/dashboard-management/graphql", h, server),
+		Ingress:                   ingress,
+		EventMgmtWS:               fmt.Sprintf("%s://%s/api/event-management/graphql", ws, server),
+		EventProcessingWS:         fmt.Sprintf("%s://%s/api/event-processing/graphql", ws, server),
+		EventProcessingGraphQL:    fmt.Sprintf("%s://%s/api/event-processing/graphql", h, server),
+		CommandMgmtGraphQL:        fmt.Sprintf("%s://%s/api/command-delivery/graphql", h, server),
+		DeviceStateGraphQL:        fmt.Sprintf("%s://%s/api/device-state/graphql", h, server),
+		MqttBroker:                mqttBroker,
+		OutboundConnectorsGraphQL: fmt.Sprintf("%s://%s/api/outbound-connectors/graphql", h, server),
+		NotificationMgmtGraphQL:   fmt.Sprintf("%s://%s/api/notification-management/graphql", h, server),
+		// The chart routes /api/integrations to event-sources' /integrations, where a sender
+		// posts /{tenant}/{integration}.
+		Integrations: fmt.Sprintf("%s://%s/api/integrations", h, server),
 	}
 }

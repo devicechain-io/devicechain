@@ -33,6 +33,7 @@ backend/cli/bootstrap/sizing_test.go
 backend/cli/bootstrap/sparkplug_test.go
 backend/cli/bootstrap/steps_test.go
 backend/cli/bootstrap/tofu.go
+backend/cli/bootstrap/valuesoverlay_test.go
 backend/cli/cmd/backup_test.go
 backend/cli/cmd/destroy.go
 backend/cli/cmd/destroy_test.go
@@ -138,6 +139,7 @@ backend/services/user-management/identity/sso_signout_test.go
 backend/sims/dc-simulator/cmd/nightshift-capture/main.go
 backend/sims/dc-simulator/loadtest/authored_rules_fixture_test.go
 backend/sims/dc-simulator/loadtest/documents_test.go
+backend/sims/dc-simulator/scenariosink/sink.go
 backend/sims/dc-simulator/scenarioverify/documents_test.go
 backend/sims/dc-simulator/sim/command_widget_types_test.go
 backend/sims/dc-simulator/sim/customeruser_ownership_test.go
