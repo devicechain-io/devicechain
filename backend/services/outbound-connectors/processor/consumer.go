@@ -70,7 +70,7 @@ type DispatchConsumer struct {
 	waitBudget time.Duration
 
 	// tenantDeleted answers the ADR-077 lifecycle question for one tenant. NIL means the gate is
-	// unconfigured (governance.NewTenantLifecycleGate returns nil when user-management is not
+	// unconfigured (governance.NewTenantLifecycleGateFor returns nil when user-management is not
 	// reachable) and every dispatch is admitted, which is the behaviour this service had before the
 	// gate existed. Read through the tenantIsDeleted accessor, never directly.
 	tenantDeleted func(string) bool
@@ -483,7 +483,7 @@ var errTooLateToSend = errors.New("cannot send before the message's redelivery d
 // in ~1.4ms inside an outage (ADR-030); at the cap no redelivery follows, so it is dead-lettered
 // rather than stranded.
 func (c *DispatchConsumer) retryOrDeadLetter(tctx context.Context, msg messaging.Message, rule, tenant, action string, cause error) {
-	if msg.NumDelivered >= messaging.MaxDeliver {
+	if messaging.FinalDelivery(msg) {
 		log.Error().Err(cause).Str("rule", rule).Str("tenant", tenant).Int("attempts", msg.NumDelivered).
 			Msg("Connector dispatch dead-lettered on its final delivery.")
 		c.deadLetter(tctx, msg, rule, action, outcomeDead)
@@ -552,7 +552,7 @@ func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Messag
 	dead := messaging.Message{Value: msg.Value, Headers: map[string]string{deadletter.HeaderDeadReason: outcome},
 		DedupID: deadletter.OriginID(msg)}.
 		WithCorrelationID(msg.CorrelationID())
-	finalDelivery := msg.NumDelivered >= messaging.MaxDeliver
+	finalDelivery := messaging.FinalDelivery(msg)
 
 	var err error
 	attempts := 1

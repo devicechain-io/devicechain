@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
@@ -70,7 +71,7 @@ func main() {
 		},
 		Stopper: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceStopped,
-			Postprocess: governance.StopRefreshes,
+			Postprocess: func(ctx context.Context) error { return Svc.StopRefreshes(ctx) },
 		},
 		Terminator: core.LifecycleCallback{
 			Preprocess:  beforeMicroserviceTerminated,
@@ -187,9 +188,6 @@ func newAlarmEventsReader(nmgr *messaging.NatsManager) (messaging.MessageReader,
 var safetyGates *governance.SafetyGates
 
 func afterMicroserviceInitialized(ctx context.Context) error {
-	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
-	// registration panics, and the gates below are decided in callbacks that can run again.
-	safetyGates = governance.NewSafetyGates(Microservice)
 	// Parse configuration.
 	if err := parseConfiguration(); err != nil {
 		return err
@@ -210,6 +208,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// which store, which migrations, which oncreate callback, which schema, and the wiring
 	// in AfterRdb that has to happen between two of the constructions.
 	Svc = service.New(Microservice, service.Spec{
+		GovernanceRefreshes: true,
 		Rdb: &service.RdbSpec{
 			// The per-tenant channels, policies, and per-alarm notification state are
 			// served from the relational store.
@@ -261,9 +260,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// counts refused deliveries) and the NATS manager that consume them. This callback
 			// runs once, in the initialize phase, which is what makes it the safe place.
 			buildMetrics()
+			peers := svcclient.NewPeers(infra, Microservice.FunctionalArea)
 			Notifier = processor.NewPolicyNotifier(Api, secretStore, Configuration.DeliveryAttempts,
 				Configuration.DeliveryTimeout(),
-				governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management", safetyGates),
+				governance.NewTenantLifecycleGateFor(peers, safetyGates),
 				egressGuard, NotifyMetrics)
 			// The scheduler's release path writes state after a page; hold that write through a
 			// store outage rather than dropping it.
@@ -313,6 +313,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			},
 		},
 	})
+	safetyGates = Svc.SafetyGates()
 	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}

@@ -91,6 +91,11 @@ func recordEverything(t *testing.T) []recordedCall {
 	apply(t, f, dir, o)
 	out := filepath.Join(t.TempDir(), "out")
 	export(t, f, out)
+	for token := range f.integrations {
+		if _, err := RotateIntegrationToken(context.Background(), f, ep(), token); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := Export(context.Background(), f, ep(), mustKinds(t, "connectors"), false, filepath.Join(t.TempDir(), "c"), ""); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +138,7 @@ var allDocuments = []string{
 	mCreateDeviceType, mUpdateDeviceType, mCreateProfile, mUpdateProfile, mSetConfigDecl, mSetDecoder, mClearDecoder,
 	mPublishProfile, mCreateMetric, mUpdateMetric, mDeleteMetric, mCreateCommand, mUpdateCommand, mDeleteCommand,
 	mCreateRule, mUpdateRule, mDeleteRule, mCreateIntegration, mUpdateIntegration, mCreateConnector, mUpdateConnector,
-	mPublishConnector, mCreateDashboard, mUpdateDashboard, mPublishDashboard,
+	mPublishConnector, mCreateDashboard, mUpdateDashboard, mPublishDashboard, mRotateIntegrationToken,
 }
 
 // NEGATIVE CONTROL: the validator must reject a misnamed field and a misnamed input key, and

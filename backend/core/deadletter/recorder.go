@@ -18,7 +18,7 @@ import (
 
 // tenantLifecycleGate builds the recorder's tenant-deletion gate. A variable only so a test
 // can stand in for user-management; production never reassigns it.
-var tenantLifecycleGate = governance.NewTenantLifecycleGate
+var tenantLifecycleGate = governance.NewTenantLifecycleGateFor
 
 // noOutcomeSummary is the fixed sentence on every letter the recorder writes.
 const noOutcomeSummary = "delivery attempts exhausted with no outcome recorded by the consumer"

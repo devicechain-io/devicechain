@@ -356,7 +356,14 @@ done
     running must survive), and a later major **appends** the drop. A new column is added nullable or with a
     default so the old pods' writes still succeed. There is no downgrade.
   - **Every deprecation gets an upgrade-notes line** in that release's section of
-    `docs/docs/deployment/releases-and-upgrades.md`.
+    `docs/docs/deployment/releases-and-upgrades.md` — written as a fragment (next bullet).
+- **Release notes go in a FRAGMENT, never in the page.** A PR adds one new file
+  `docs/release-notes/unreleased/<slug>.md` (`section: before-upgrade|whats-new` front matter, then
+  `## en`, `## es`, `## zh-CN` bodies; format in that directory's `README.md`) and does **not** edit
+  `releases-and-upgrades.md` or its es/zh-CN mirrors — every such edit conflicts every other open PR,
+  and each refresh costs a full CI run. Only the release-notes PR before the freeze runs
+  `hack/assemble-release-notes.py`, which folds the fragments into all three pages and deletes them.
+  `--check` (in the `docs` CI job) refuses a missing locale, an unknown section or an ADR reference.
   - Unserved internals (unexported code, in-process types, anything no covered interface exposes) are still
     free to cut over decisively; do not add compat shims for a shape nothing outside the process sees.
 - **Fail closed:** typed config rejects unknown/invalid keys at startup; the DB tenant-scope callback

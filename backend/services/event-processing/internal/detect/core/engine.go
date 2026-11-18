@@ -1490,6 +1490,72 @@ func (e *Engine) resolveAt(r Rule, key SeriesKey, at time.Time, latched bool) {
 	e.out = append(e.out, e.stamp(Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at, Edge: EdgeResolved}))
 }
 
+// CarryRaised moves raised keys without emitting edges. Successors already latched keep
+// their own state. Keys with pending output at either end are left intact by skip.
+// Eligible obsolete keys are removed. Collect first so a map walk
+// cannot visit newly inserted keys and accidentally carry them again.
+func (e *Engine) CarryRaised(successor map[string]string, skip func(SeriesKey) bool) int {
+	entries := e.takeRaised(successor, skip)
+	for _, x := range entries {
+		e.putRaised(x)
+	}
+	return len(entries)
+}
+
+type carriedRaised struct {
+	key        SeriesKey
+	at, newest time.Time
+}
+
+func (e *Engine) takeRaised(successor map[string]string, skip func(SeriesKey) bool) []carriedRaised {
+	var out []carriedRaised
+	for key, at := range e.raised {
+		id, ok := successor[key.Rule]
+		if !ok || id == key.Rule {
+			continue
+		}
+		if skip != nil && (skip(key) || skip(SeriesKey{Rule: id, Series: key.Series})) {
+			continue
+		}
+		out = append(out, carriedRaised{SeriesKey{Rule: id, Series: key.Series}, at, e.newest[key]})
+		delete(e.raised, key)
+		delete(e.newest, key)
+	}
+	// Several retained versions can converge on one successor. Prefer the most
+	// recent raise deterministically when none was already latched there.
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].at.Equal(out[j].at) {
+			return out[i].at.After(out[j].at)
+		}
+		return out[i].newest.After(out[j].newest)
+	})
+	return out
+}
+
+func (e *Engine) putRaised(x carriedRaised) {
+	if _, exists := e.raised[x.key]; exists {
+		return
+	}
+	e.raised[x.key] = x.at
+	if !x.newest.IsZero() {
+		e.newest[x.key] = x.newest
+	}
+}
+
+// IsRaised reports the current two-edge latch without changing it.
+func (e *Engine) IsRaised(key SeriesKey) bool {
+	_, ok := e.raised[key]
+	return ok
+}
+
+// ClearRaisedIfNotAfter settles only the episode represented by an edge at at.
+// A newer raise may already exist when a concurrent engine's output is collected.
+func (e *Engine) ClearRaisedIfNotAfter(key SeriesKey, at time.Time) {
+	if raised, ok := e.raised[key]; ok && !raised.After(at) {
+		e.ClearRaised(key)
+	}
+}
+
 // ClearRaised drops the two-edge latch for a series WITHOUT emitting a Resolved — the escape hatch
 // for the runtime when it TERMINALLY drops a Raised detection (a stale-roster absence, an orphan/
 // backstop reject, a marshal failure) after emit already latched it. Without it the latch would

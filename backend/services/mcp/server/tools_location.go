@@ -47,7 +47,7 @@ import (
 type QueryLocationsInput struct {
 	DeviceToken string `json:"deviceToken" jsonschema:"the device whose position history to query"`
 	StartTime   string `json:"startTime,omitempty" jsonschema:"inclusive RFC3339 start time (optional)"`
-	EndTime     string `json:"endTime,omitempty" jsonschema:"exclusive RFC3339 end time (optional)"`
+	EndTime     string `json:"endTime,omitempty" jsonschema:"inclusive RFC3339 end time (optional)"`
 	PageNumber  int    `json:"pageNumber,omitempty" jsonschema:"1-based page number (default 1)"`
 	PageSize    int    `json:"pageSize,omitempty" jsonschema:"positions per page (default 25, max 100). Use 1 to ask only where the device is now"`
 }

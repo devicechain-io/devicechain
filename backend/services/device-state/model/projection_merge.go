@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"reflect"
 	"sort"
@@ -51,10 +52,11 @@ const upsertChunk = 500
 // write-back), and therefore the columns the write-back never rewrites. One definition for every use.
 var deviceStateKey = []string{"tenant_id", "device_token"}
 
-// notFolded is what foldedStateColumns has and the fold never reads or writes: the row's
-// soft-delete marker (not touched by applyEvent or newDeviceState), and updated_at, which a
-// write stamps rather than folds.
-var notFolded = map[string]bool{"deleted_at": true, "updated_at": true}
+// notFolded excludes columns from the batch conflict arm: the soft-delete marker,
+// updated_at (stamped separately), and incarnation (inserted or explicitly reset under
+// lock). foldSelect reads incarnation separately so an ordinary write-back cannot stamp
+// a pre-existing NULL row or overwrite an identity learned by the sweep.
+var notFolded = map[string]bool{"deleted_at": true, "updated_at": true, "incarnation": true}
 
 // foldedStateColumns is every column of device_states a batch may write over a row it has
 // folded: all of them but the row's identity — its primary key, created_at, and
@@ -107,7 +109,8 @@ func foldColumns(db *gorm.DB) ([]string, error) {
 }
 
 // foldSelect is the lock read's column list: foldColumns, the key the rows are matched on, and
-// the primary key. The column-array write-back omits id, so each row it writes draws a value
+// the primary key, plus incarnation to decide whether to drop or reset under lock.
+// The column-array write-back omits id, so each row it writes draws a value
 // from device_states' bigint sequence even though it always conflicts; that costs a gap in the
 // sequence and nothing else.
 func foldSelect(db *gorm.DB) ([]string, error) {
@@ -115,7 +118,7 @@ func foldSelect(db *gorm.DB) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append([]string{"id", "device_token"}, cols...), nil
+	return append([]string{"id", "device_token", "incarnation"}, cols...), nil
 }
 
 // zeroUnderDefault names the first written column in which a row holds its type's zero while
@@ -293,6 +296,7 @@ func (api *Api) MergeLatestLocations(ctx context.Context, deviceToken string, in
 
 // ProjectionUpdate is everything one resolved event contributes to the projection.
 type ProjectionUpdate struct {
+	Incarnation  uint64
 	Tenant       string
 	DeviceToken  string
 	OccurredAt   time.Time
@@ -419,6 +423,9 @@ func mergeTenantBatch(tdb *gorm.DB, devices map[string][]int, updates []Projecti
 	for tok, idx := range devices {
 		tokens = append(tokens, tok)
 		for _, i := range idx {
+			if updates[i].Incarnation != updates[idx[0]].Incarnation {
+				claims = true // mixed incarnations must fold in arrival order
+			}
 			if updates[i].Presence != nil {
 				claims = true
 			}
@@ -468,7 +475,7 @@ func writeLatest(tdb *gorm.DB, tokens []string, devices map[string][]int, update
 // mergeWithLocks is mergeTenantBatch's locked path (steps 1-4 above), for a tenant batch that
 // carries a presence claim. tokens is sorted.
 func mergeWithLocks(tdb *gorm.DB, tokens []string, devices map[string][]int, updates []ProjectionUpdate) error {
-	if err := lockOrCreate(tdb, tokens); err != nil {
+	if err := lockOrCreateInputs(tdb, tokens, devices, updates); err != nil {
 		return err
 	}
 	sel, err := foldSelect(tdb)
@@ -487,9 +494,17 @@ func mergeWithLocks(tdb *gorm.DB, tokens []string, devices map[string][]int, upd
 			len(rows), len(tokens))
 	}
 	for i := range rows {
-		foldInto(&rows[i], devices[rows[i].DeviceToken], updates)
+		if err := foldIncarnations(tdb, &rows[i], devices, updates); err != nil {
+			return err
+		}
 	}
-	if err := writeFoldedStates(tdb, rows); err != nil {
+	kept := rows[:0]
+	for _, row := range rows {
+		if len(devices[row.DeviceToken]) > 0 {
+			kept = append(kept, row)
+		}
+	}
+	if err := writeFoldedStates(tdb, kept); err != nil {
 		return err
 	}
 	return writeLatest(tdb, tokens, devices, updates)
@@ -506,9 +521,19 @@ func mergeWithLocks(tdb *gorm.DB, tokens []string, devices map[string][]int, upd
 // The blank row is never committed as it is: the caller folds the device's events into it and
 // writes it back in the same transaction, and no other transaction can see it before then.
 func lockOrCreate(tdb *gorm.DB, tokens []string) error {
+	devices := make(map[string][]int, len(tokens))
+	updates := make([]ProjectionUpdate, len(tokens))
+	for i, tok := range tokens {
+		devices[tok] = []int{i}
+	}
+	return lockOrCreateInputs(tdb, tokens, devices, updates)
+}
+
+func lockOrCreateInputs(tdb *gorm.DB, tokens []string, devices map[string][]int, updates []ProjectionUpdate) error {
 	rows := make([]DeviceState, len(tokens))
 	for i, tok := range tokens {
 		rows[i] = *blankDeviceState(tok)
+		rows[i].Incarnation = eventIncarnation(updates[devices[tok][0]].Incarnation)
 	}
 	_, err := upsertDeviceStates(tdb, deviceStateLock, rows)
 	return err
@@ -522,11 +547,53 @@ func foldInto(row *DeviceState, idx []int, updates []ProjectionUpdate) {
 	}
 }
 
+func eventIncarnation(e uint64) sql.NullInt64 {
+	return sql.NullInt64{Int64: int64(e), Valid: e != 0}
+}
+
+// foldIncarnations runs only after ALL parent locks have been acquired. Filter the
+// child inputs too: a stale event must leave no reading, fix or drop record behind.
+func foldIncarnations(tdb *gorm.DB, row *DeviceState, devices map[string][]int, updates []ProjectionUpdate) error {
+	var accepted []int
+	for _, i := range devices[row.DeviceToken] {
+		u := updates[i]
+		if u.Incarnation != 0 && row.Incarnation.Valid {
+			if u.Incarnation < uint64(row.Incarnation.Int64) {
+				continue
+			}
+			if u.Incarnation > uint64(row.Incarnation.Int64) {
+				// A late event after deletion can create a row stamped 17. The
+				// next device's event (23) resets it, even if its clock is older;
+				// the sweep also deletes 17 when the token is free or holds 23.
+				if _, err := deleteProjectionChildren(tdb, row.DeviceToken, true, time.Time{}); err != nil {
+					return err
+				}
+				blank := blankDeviceState(row.DeviceToken)
+				blank.Model, blank.TenantId = row.Model, row.TenantId
+				blank.Incarnation = eventIncarnation(u.Incarnation)
+				*row = *blank
+				// Conflict arms never change a stamp. This is the sole event
+				// reset path, protected by the parent's existing row lock.
+				if err := tdb.Model(&DeviceState{}).Where("device_token = ?", row.DeviceToken).
+					UpdateColumn("incarnation", row.Incarnation).Error; err != nil {
+					return err
+				}
+				accepted = nil // earlier updates in this batch belonged to the old row
+			}
+		}
+		applyEvent(row, storedTime(u.OccurredAt), storedTransition(u.Presence), u.Identity)
+		accepted = append(accepted, i)
+	}
+	devices[row.DeviceToken] = accepted
+	return nil
+}
+
 // foldNew is the row a device with no row ends up with: its first update creates it
 // (newDeviceState) and the rest fold into it (applyEvent).
 func foldNew(tok string, idx []int, updates []ProjectionUpdate) *DeviceState {
 	first := updates[idx[0]]
 	row := newDeviceState(tok, storedTime(first.OccurredAt), storedTransition(first.Presence), first.Identity)
+	row.Incarnation = eventIncarnation(first.Incarnation)
 	foldInto(row, idx[1:], updates)
 	return row
 }
@@ -547,11 +614,9 @@ func foldNew(tok string, idx []int, updates []ProjectionUpdate) *DeviceState {
 // advance is monotone and the identity already equal).
 //
 // When the statement wrote fewer rows than it was given, some device was excluded: it is an
-// inferred-dead device a data event brings back. Those rows are already locked by this
-// transaction, so reading them takes no new lock; the read takes every inactive inferred row
-// of the batch — a superset of the excluded ones, harmlessly, because folding a row the SQL
-// already handled changes nothing (nothing in it is fresh) — and folds their events with
-// applyEvent and writes them back. That costs two statements, once per device that was swept.
+// inferred-dead device or an incarnation mismatch. All batch parents are already locked
+// by this transaction. The fallback reads all of them, filters stale updates and resets
+// older incarnations before folding. Re-folding rows SQL already handled is idempotent.
 //
 // A soft-deleted row would be updated and left deleted, as the latest-value upserts would;
 // nothing soft-deletes these rows.
@@ -578,8 +643,9 @@ func mergeHeartbeats(tdb *gorm.DB, tokens []string, devices map[string][]int, up
 	return writeLatest(tdb, tokens, devices, updates)
 }
 
-// foldSkipped is mergeHeartbeats' fallback: lock-read the batch's inactive INFERRED rows (the
-// only ones heartbeatGuard excludes), fold their events, and write them back.
+// foldSkipped is mergeHeartbeats' fallback for resurrection and incarnation mismatches.
+// Read all batch parents, already held by the upsert, so this acquires no new locks.
+// The filtered device indexes also govern writeLatest: stale events write no children.
 func foldSkipped(tdb *gorm.DB, tokens []string, devices map[string][]int, updates []ProjectionUpdate) error {
 	sel, err := foldSelect(tdb)
 	if err != nil {
@@ -587,12 +653,20 @@ func foldSkipped(tdb *gorm.DB, tokens []string, devices map[string][]int, update
 	}
 	var skipped []DeviceState
 	if err := tdb.Clauses(clause.Locking{Strength: "UPDATE"}).Select(sel).
-		Where("device_token IN ? AND active = ? AND presence_source <> ?", tokens, false, PresenceSourceAsserted).
+		Where("device_token IN ?", tokens).
 		Order("device_token").Find(&skipped).Error; err != nil {
 		return err
 	}
 	for i := range skipped {
-		foldInto(&skipped[i], devices[skipped[i].DeviceToken], updates)
+		if err := foldIncarnations(tdb, &skipped[i], devices, updates); err != nil {
+			return err
+		}
 	}
-	return writeFoldedStates(tdb, skipped)
+	kept := skipped[:0]
+	for _, row := range skipped {
+		if len(devices[row.DeviceToken]) > 0 {
+			kept = append(kept, row)
+		}
+	}
+	return writeFoldedStates(tdb, kept)
 }

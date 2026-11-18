@@ -511,7 +511,7 @@ func (rd *ReactDispatcher) dispatch(msg messaging.Message, behind func() int) {
 	// event cannot redeliver forever. Giving up now means DEAD-LETTERING (ADR-024): the
 	// event's actions are recorded where they can be inspected rather than vanishing into
 	// a log line and a counter.
-	if msg.NumDelivered >= messaging.MaxDeliver {
+	if messaging.FinalDelivery(msg) {
 		log.Error().Str("rule", ev.RuleID).Str("series", ev.Series).Int("attempts", msg.NumDelivered).
 			Str("undispatched", undispatchedDetail(res)).
 			Msg("Dead-lettering derived event after the redelivery cap; the actions it names failed on the final attempt.")
