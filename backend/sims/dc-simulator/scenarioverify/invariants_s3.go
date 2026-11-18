@@ -265,7 +265,31 @@ func gaugePagedAndEscalated(o Observations, g string) error {
 	case sent["ESCALATION"] == 0:
 		return fmt.Errorf("%s: paged but never escalated (attempts: %s)", g, strings.Join(statuses, ", "))
 	}
-	return nil
+	// A page on another token cannot start this alarm's escalation clock. Allow two seconds
+	// of clock skew, but require a full policy interval after its earliest SENT page.
+	var timing []string
+	for _, t := range floodTokens(o, g) {
+		var first time.Time
+		for _, a := range watchedAttempts(o, t) {
+			if a.Status == "SENT" && a.Trigger == "ALARM" && (first.IsZero() || a.At.Before(first)) {
+				first = a.At
+			}
+		}
+		for _, a := range watchedAttempts(o, t) {
+			if a.Status != "SENT" || a.Trigger != "ESCALATION" {
+				continue
+			}
+			if !first.IsZero() && !a.At.Before(first.Add(sim.HarborpulseEscalateAfter-2*time.Second)) {
+				return nil
+			}
+			if first.IsZero() {
+				timing = append(timing, fmt.Sprintf("token %s: ESCALATION at %s has no SENT ALARM in the watched window", t, a.At.Format(time.RFC3339)))
+			} else {
+				timing = append(timing, fmt.Sprintf("token %s: ESCALATION at %s is too early after ALARM at %s", t, a.At.Format(time.RFC3339), first.Format(time.RFC3339)))
+			}
+		}
+	}
+	return fmt.Errorf("%s: no escalation waited for the policy interval (%s)", g, strings.Join(timing, "; "))
 }
 
 // The duty mail, as notification-management renders it: a page names the alarm on its first line
@@ -444,6 +468,10 @@ func truckFence(o Observations) error {
 	}
 	var tokens []string
 	for _, a := range samples(o, o.at(WatchFrom), o.end(), func(a AlarmSample) bool { return a.Key == sim.HarborpulseTruckFenceAlarmKey }) {
+		// Poll skew at either transition must not hide a clear while the truck stays inside.
+		if a.State != sim.AlarmStateActiveWire && inWindow(a.At, first.Add(maxPollGap), leaves.Add(-maxPollGap)) {
+			return fmt.Errorf("%s: truck-in-flood-plain seen %s at %s; first active at %s, the truck leaves the plain at %s", a.Device, a.State, a.At.Format(time.RFC3339), first.Format(time.RFC3339), leaves.Format(time.RFC3339))
+		}
 		if a.State == sim.AlarmStateActiveWire && a.At.After(o.at(sim.HarborpulseTruckInPlainTo+0.75)) {
 			return fmt.Errorf("truck-in-flood-plain still active at %s; the truck left the plain at %s", a.At.Format(time.RFC3339), leaves.Format(time.RFC3339))
 		}
@@ -481,11 +509,16 @@ func wellFill(o Observations) error {
 		for _, r := range readingsOf(o, p, sim.HarborpulseWetWellKey, from, to) {
 			wet[r.At.UnixMicro()] = r.Value
 		}
-		paired, wrong := 0, 0
+		paired, wrong, unmatched := 0, 0, 0
+		var unpairedAt time.Time
 		var example string
 		for _, r := range readingsOf(o, p, sim.HarborpulseWellFillKey, from, to) {
 			w, ok := wet[r.At.UnixMicro()]
 			if !ok {
+				unmatched++
+				if unpairedAt.IsZero() {
+					unpairedAt = r.At
+				}
 				continue
 			}
 			paired++
@@ -495,6 +528,10 @@ func wellFill(o Observations) error {
 					example = fmt.Sprintf("%.3f m stored %.3f %%, want %.3f %%", w, r.Value, want)
 				}
 			}
+		}
+		// A calculated value without its input cannot establish that the calculation was right.
+		if unmatched > 0 {
+			problems = append(problems, fmt.Sprintf("%s: %d calculated well fill readings without a wet well reading at the same instant (for example %s)", p, unmatched, unpairedAt.Format(time.RFC3339)))
 		}
 		switch {
 		case paired < minPaired:
@@ -517,7 +554,8 @@ const minUplinks = 20
 const loraTolerance = 0.011
 
 // loraDecoded: each LoRaWAN gauge on the current decoder had its uplinks decoded and stored, every
-// stored level is the one the gauge encoded, and its profile's decoder failed nothing.
+// stored level is the one the gauge encoded, and its profile's decoder failed or ignored nothing.
+// HarborpulseLoraDecoder has no ignore section: an ignored uplink is a gauge frame that stored nothing.
 func loraDecoded(o Observations) error {
 	var problems []string
 	for _, g := range sim.HarborpulseLoraGauges() {
@@ -548,8 +586,8 @@ func loraDecoded(o Observations) error {
 		}
 	}
 	h := o.S3.Health[sim.HarborpulseLoraGaugeProfile]
-	if h.Decoded < 1 || h.Failed > 0 {
-		problems = append(problems, fmt.Sprintf("the current decoder's health: %.0f decoded, %.0f failed (%s)", h.Decoded, h.Failed, h.LastError))
+	if h.Decoded < 1 || h.Failed > 0 || h.Ignored > 0 {
+		problems = append(problems, fmt.Sprintf("the current decoder's health: %.0f decoded, %.0f failed, %.0f ignored (%s)", h.Decoded, h.Failed, h.Ignored, h.LastError))
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("%s", strings.Join(problems, "; "))
