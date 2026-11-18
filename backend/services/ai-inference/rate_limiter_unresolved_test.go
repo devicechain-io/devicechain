@@ -76,7 +76,7 @@ func TestBuildRateLimiterCountsUnresolvedAdmissions(t *testing.T) {
 	unresolved := governance.NewUnresolvedAdmissions(ms, governance.AIInference)
 
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "ai-inference", []string{string(auth.TenantRead)})
-	limiter := buildRateLimiter(governance.Limits{RatePerSecond: 1, Burst: 1000}, infra, client, unresolved)
+	limiter := buildRateLimiter(governance.Limits{RatePerSecond: 1, Burst: 1000}, infra, client, unresolved, limiterDB(t))
 
 	const series = "devicechain_aiinference_governance_unresolved_admissions_total"
 	require.Equal(t, float64(0), unreachableAdmissions(t, reg, series, "ai-inference"),
@@ -89,4 +89,15 @@ func TestBuildRateLimiterCountsUnresolvedAdmissions(t *testing.T) {
 	}
 	require.Equal(t, float64(1), unreachableAdmissions(t, reg, series, "ai-inference"),
 		"exactly the one admission made after the failure")
+}
+
+func TestServiceResolvedLimitersShareTheirFallbackBudget(t *testing.T) {
+	infra := failingUserManagement(t)
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "ai-inference", []string{string(auth.TenantRead)})
+	db := limiterDB(t)
+	def := governance.Limits{RatePerSecond: 0.000001, Burst: 1}
+	a := buildRateLimiter(def, infra, client, nil, db)
+	b := buildRateLimiter(def, infra, client, nil, db)
+	require.True(t, a.Allow("acme"))
+	require.False(t, b.Allow("acme"), "pending or unreachable ceilings must still share admission state")
 }

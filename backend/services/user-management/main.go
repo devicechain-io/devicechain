@@ -155,6 +155,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err := RdbManager.Initialize(ctx); err != nil {
 		return err
 	}
+	rdb.RegisterStorageGrowth(Microservice, RdbManager.Database)
 
 	// The instance secret store (ADR-059), which holds the private half of the active
 	// JWT signing key. It is built HERE, after RdbManager.Initialize, because building

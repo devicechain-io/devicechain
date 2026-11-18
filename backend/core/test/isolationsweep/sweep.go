@@ -15,8 +15,8 @@
 // because it judges the ANSWER.
 //
 // 🔴 ITS NEGATIVE CONTROL IS NOT OPTIONAL. The same queries run UNSCOPED must surface the
-// hidden customer's data at least once, or the fixture holds nothing to leak and every
-// scoped assertion passed vacuously. Run refuses to report clean in that case.
+// hidden customer's data for each query that is not refused to the scoped caller, or
+// that query needs a named NothingSeeded exception. Stale exceptions fail the sweep.
 //
 // How an operation is called: every required argument is filled with a value of its type
 // — every String and ID-like scalar with the hidden customer's device token (Config.Probe),
@@ -77,6 +77,11 @@ type Config struct {
 	// With no entry the probe is used; the operation is reached either way, but the path
 	// behind the discriminator is not.
 	Literals map[string]string
+	// NothingSeeded maps exact query names (including " (all arguments)" variants) to
+	// reasons why the fixture has no hidden data for that read yet. Remove an entry
+	// when its control becomes positive or its scoped call is refused; stale entries
+	// and names absent from the schema fail, so this debt can only shrink unnoticed.
+	NothingSeeded map[string]string
 }
 
 // Reporter is the slice of testing.TB the sweep reports through (*testing.T satisfies it).
@@ -89,10 +94,11 @@ type Reporter interface {
 
 // Outcome is how one operation answered the scoped caller.
 type Outcome struct {
-	Operation string // "query devices", "mutation clearAlarm", ...
-	Codes     []string
-	Data      bool // answered with data and no error
-	Leak      string
+	Operation     string // "query devices", "mutation clearAlarm", ...
+	Codes         []string
+	Data          bool // answered with data and no error
+	Leak          string
+	ControlMarker string // hidden marker surfaced by this query's unscoped control
 }
 
 // Run sweeps every operation of cfg.Schema and fails t on any leak, or when the negative
@@ -113,15 +119,16 @@ func Run(t Reporter, cfg Config) []Outcome {
 	}
 
 	// The negative control: unscoped, the queries must surface the hidden customer.
+	controls := map[string]string{}
 	controlSaw := ""
 	for _, op := range ops {
 		if op.kind != "query" {
 			continue
 		}
 		resp := cfg.Schema.Exec(cfg.Unscoped, op.with(cfg.Probe), "", nil)
-		if m := markerIn(answerText(resp), cfg.Hidden); m != "" {
+		controls[op.name] = markerIn(answerText(resp), cfg.Hidden)
+		if m := controls[op.name]; m != "" {
 			controlSaw = op.name + " (" + m + ")"
-			break
 		}
 	}
 	if controlSaw == "" {
@@ -142,6 +149,17 @@ func Run(t Reporter, cfg Config) []Outcome {
 			} else {
 				o = judge(op, cfg)
 			}
+			if op.kind == "query" {
+				o.ControlMarker = controls[op.name]
+				needsSeed := o.ControlMarker == "" && len(o.Codes) == 0
+				reason, allowed := cfg.NothingSeeded[op.name]
+				if needsSeed && (!allowed || strings.TrimSpace(reason) == "") {
+					t.Errorf("isolationsweep: NEGATIVE CONTROL FAILED for %s: query was neither refused nor control-positive; seed hidden data or name a NothingSeeded reason", op.name)
+				}
+				if allowed && !needsSeed {
+					t.Errorf("isolationsweep: stale NothingSeeded entry for %s: query is refused or control-positive; remove it", op.name)
+				}
+			}
 			if o.Leak != "" {
 				t.Errorf("isolationsweep: %s answered a scoped caller with %q (codes %v)", o.Operation, o.Leak, o.Codes)
 			}
@@ -151,6 +169,11 @@ func Run(t Reporter, cfg Config) []Outcome {
 	// Reads first, then streams, then writes, so a scoped write that did land cannot
 	// change what the reads were judged against.
 	run("query")
+	for name := range cfg.NothingSeeded {
+		if _, ok := controls[name]; !ok {
+			t.Errorf("isolationsweep: stale NothingSeeded entry for %s: no such query", name)
+		}
+	}
 	run("subscription")
 	if !cfg.SkipMutations {
 		run("mutation")

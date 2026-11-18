@@ -458,7 +458,7 @@ func TestApplyRevocationUnrepresentableSerialIsUnknown(t *testing.T) {
 	leaf := issue(t, root, spec{cn: "zero-serial", mutate: func(c *x509.Certificate) { c.SerialNumber = big.NewInt(0) }})
 	v, err := VerifyClientChain(root.cert, chainOf(leaf), testNow)
 	if err != nil {
-		t.Skipf("the verifier refuses a zero serial before revocation sees it: %v", err)
+		t.Fatalf("the verifier refuses a zero serial before revocation sees it: %v", err)
 	}
 	if len(v.RevocationKeys().Serials) != 0 {
 		t.Fatal("a zero serial produced a serial key")

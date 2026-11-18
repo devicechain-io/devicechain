@@ -19,6 +19,7 @@ import (
 // class (e.g. "customer") and the token is that entity's stable per-tenant token.
 // The device is likewise named by its token, not a device-management row id.
 type EventSearchCriteria struct {
+	IncludeTotal *bool
 	rdb.Pagination
 	DeviceToken *string
 	EventTypes  []eventtype.EventType
