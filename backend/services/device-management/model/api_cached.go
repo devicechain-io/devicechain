@@ -243,7 +243,9 @@ func (capi *CachedApi) EvictFenceSetVersion(ctx context.Context) {
 		return
 	}
 	capi.evictAfterCommit(ctx, "fence-set-version", func(ctx context.Context) {
-		typeIds, err := capi.Api.deviceTypeIdsForTenant(ctx)
+		rctx, cancel := context.WithTimeout(ctx, evictionReadTimeout)
+		typeIds, err := capi.Api.deviceTypeIdsForTenant(rctx)
+		cancel()
 		if err != nil {
 			log.Warn().Err(err).Str("tenant", tenant).
 				Msg("Could not list the tenant's device types to evict their cached profile resolutions; " +
@@ -796,7 +798,9 @@ func (capi *CachedApi) evictProfileResolution(ctx context.Context, profileId uin
 		return
 	}
 	capi.evictAfterCommit(ctx, "profile-resolution", func(ctx context.Context) {
-		typeIds, err := capi.Api.deviceTypeIdsForProfile(ctx, profileId)
+		rctx, cancel := context.WithTimeout(ctx, evictionReadTimeout)
+		typeIds, err := capi.Api.deviceTypeIdsForProfile(rctx, profileId)
+		cancel()
 		if err != nil {
 			log.Warn().Err(err).Str("tenant", tenant).Uint("profileId", profileId).
 				Msg("Could not list the device types adopting a profile to evict their cached profile " +

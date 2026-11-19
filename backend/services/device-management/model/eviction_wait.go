@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"runtime/debug"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -18,6 +19,21 @@ import (
 // and without this bound a delete made while the service was cut off from the broker held its
 // caller for the sum of them and answered an error for a change that had been saved.
 const DefaultEvictionWait = 2 * time.Second
+
+// maxDetachedEvictions bounds the evictions running at once in this process. A healthy eviction
+// takes milliseconds, so the bound is reached only while the broker does not answer, when each one
+// can run for as long as its bucket deletes time out (5 s per entry, and a fan-out deletes many).
+// Past it an eviction is not started at all: its entries are served until their time to live, the
+// same bound a failed bucket delete leaves, and a long outage cannot pile up goroutines.
+const maxDetachedEvictions = 256
+
+// evictionSlots admits the evictions maxDetachedEvictions allows.
+var evictionSlots = make(chan struct{}, maxDetachedEvictions)
+
+// evictionReadTimeout bounds the database read an eviction makes to learn what to evict (the
+// device types of a profile or a tenant). The eviction runs on a context its caller cannot
+// cancel, so without this a stalled read would hold it for good.
+const evictionReadTimeout = 30 * time.Second
 
 // evictAfterCommit runs evict, the cache evictions a committed write owes, and waits for it at
 // most capi.evictionWait. Past that the write answers and the eviction carries on by itself:
@@ -33,12 +49,21 @@ const DefaultEvictionWait = 2 * time.Second
 // that made a change still drops its own copy before the change is answered.
 func (capi *CachedApi) evictAfterCommit(ctx context.Context, what string, evict func(context.Context)) {
 	ctx = context.WithoutCancel(ctx)
+	select {
+	case evictionSlots <- struct{}{}:
+	default:
+		log.Warn().Str("eviction", what).Int("running", maxDetachedEvictions).
+			Msg("Too many cache evictions are still running (the broker is not answering them), so this one was " +
+				"not started; the entries it would have removed are served until their time to live.")
+		return
+	}
 	done := make(chan struct{})
 	go func() {
+		defer func() { <-evictionSlots }()
 		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
-				log.Error().Interface("panic", r).Str("eviction", what).
+				log.Error().Interface("panic", r).Str("eviction", what).Str("stack", string(debug.Stack())).
 					Msg("A cache eviction owed by a committed change panicked; the entries expire at their time to live.")
 			}
 		}()

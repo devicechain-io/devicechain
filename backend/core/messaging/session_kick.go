@@ -182,20 +182,21 @@ func (r *SessionKickRequester) KickDeviceSessions(ctx context.Context, tenant, r
 				return fmt.Errorf("%w: %v", ErrSessionKickUnavailable, errors.Join(last, ctx.Err()))
 			case <-time.After(r.Backoff):
 			}
+			// 🔴 A CALLER IS WAITING ON THIS. A write that withdrew a device's authority has
+			// already committed, and its caller is held until this returns. With the connection
+			// still down after the backoff every further attempt would wait out its whole timeout
+			// for a reply that cannot come (three attempts held a device delete for a minute, past
+			// the ingress's own timeout, so the caller saw a gateway error instead of being told
+			// the change was saved). The debt is recorded with the write, and the background
+			// drain asks again once the broker is back. A connection that came back during the
+			// backoff (a blip) is asked again as usual.
+			if errors.Is(last, errKickBrokerDown) && !r.nc.IsConnected() {
+				break
+			}
 		}
 		last = r.once(ctx, body)
 		if last == nil {
 			return nil
-		}
-		// 🔴 A CALLER IS WAITING ON THIS. A write that withdrew a device's authority has already
-		// committed, and its caller is held until this returns. With the connection down every
-		// further attempt would wait out its whole timeout for a reply that cannot come (three
-		// attempts held a device delete for a minute, past the ingress's own timeout, so the
-		// caller saw a gateway error instead of being told the change was saved). The debt is
-		// recorded with the write, and the background drain asks again once the broker is back.
-		// A connection that dropped and is already back (a blip) is asked again as usual.
-		if errors.Is(last, errKickBrokerDown) && !r.nc.IsConnected() {
-			break
 		}
 	}
 	return fmt.Errorf("%w: %v", ErrSessionKickUnavailable, last)
@@ -218,13 +219,23 @@ func (r *SessionKickRequester) once(ctx context.Context, body []byte) error {
 	}
 	var dropped atomic.Bool
 	go func() {
-		select {
-		case _, ok := <-down:
-			if ok {
-				dropped.Store(true)
-				cancel()
+		for {
+			select {
+			case _, ok := <-down:
+				if !ok {
+					return
+				}
+				// An event is acted on only while the connection is still down when it is read:
+				// one queued by a drop the connection has already recovered from would otherwise
+				// abandon a request made on the recovered connection.
+				if !r.nc.IsConnected() {
+					dropped.Store(true)
+					cancel()
+					return
+				}
+			case <-ctx.Done():
+				return
 			}
-		case <-ctx.Done():
 		}
 	}()
 	msg, err := r.nc.RequestWithContext(ctx, SessionKickSubject(r.instanceID), body)

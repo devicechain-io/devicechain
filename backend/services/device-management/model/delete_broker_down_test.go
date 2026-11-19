@@ -126,3 +126,27 @@ func TestEvictAfterCommitOutlivesItsCaller(t *testing.T) {
 		t.Fatal("the eviction never finished after its caller returned")
 	}
 }
+
+// 🔴 A LONG OUTAGE CANNOT PILE UP EVICTIONS. While maxDetachedEvictions are still running, a new
+// one is not started (its entries expire at their time to live), so the caller is not held and no
+// goroutine is added.
+func TestEvictAfterCommitStartsNoEvictionPastTheBound(t *testing.T) {
+	for i := 0; i < maxDetachedEvictions; i++ {
+		evictionSlots <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for i := 0; i < maxDetachedEvictions; i++ {
+			<-evictionSlots
+		}
+	})
+	capi := &CachedApi{evictionWait: 5 * time.Second}
+	var ran atomic.Bool
+	start := time.Now()
+	capi.evictAfterCommit(context.Background(), "test", func(context.Context) { ran.Store(true) })
+	if ran.Load() {
+		t.Fatal("an eviction past the bound was started")
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("evictAfterCommit held its caller %s past the bound, want it to return at once", took)
+	}
+}
