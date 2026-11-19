@@ -55,6 +55,14 @@ func (t *Tools) enrichAlarmSuppression(ctx context.Context, token string, alarms
 			matches[status.AlarmToken] = status.Suppression
 		}
 	}
+	// The status query omits alarms it cannot see or no longer knows (deleted or hidden between
+	// the base read and this one). Such an alarm's suppression is unknown, not "none", so the
+	// whole result says so rather than presenting a missing row as a negative answer.
+	for i := range alarms {
+		if _, ok := matches[alarms[i].Token]; !ok {
+			return true
+		}
+	}
 	// Commit only after every chunk succeeds: a failed lookup has no partial overlay.
 	for i := range alarms {
 		alarms[i].Suppression = matches[alarms[i].Token]

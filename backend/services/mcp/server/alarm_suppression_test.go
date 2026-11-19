@@ -427,3 +427,28 @@ func TestSuppressionFailedLaterChunkDoesNotReturnPartialOverlay(t *testing.T) {
 		t.Fatalf("calls=%d", calls.Load())
 	}
 }
+
+// The status query omits an alarm it cannot see or no longer knows. That alarm's suppression is
+// unknown, so the result must say so instead of reporting it as not suppressed.
+func TestSuppressionMissingStatusRowMarksUnknown(t *testing.T) {
+	tools := suppressionUpstream(t, false, "caller-missing", func(w http.ResponseWriter, req suppressionRequest) {
+		if baseSuppressionData(w, req, []alarmRaw{{Token: "a1"}, {Token: "a2"}}) {
+			return
+		}
+		suppressionData(w, map[string]any{"alarmSuppressionStatus": []any{
+			map[string]any{"alarmToken": "a1", "suppression": AlarmSuppression{WindowToken: "w1", Until: "2026-11-19T20:00:00Z"}},
+		}})
+	})
+	_, list, err := tools.ListAlarms(context.Background(), authedReq("caller-missing"), ListAlarmsInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !list.SuppressionUnavailable {
+		t.Fatal("a missing status row must mark suppression unknown")
+	}
+	for _, a := range list.Alarms {
+		if a.Suppression != nil {
+			t.Fatalf("partial overlay on %s", a.Token)
+		}
+	}
+}
