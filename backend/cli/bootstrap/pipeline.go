@@ -174,6 +174,9 @@ type State struct {
 	// Sharding is the instance's sharding level ("scale"), or "" for off. The instance's own setting,
 	// like Size. See shardlevel.go.
 	Sharding string
+	// ShardingGiven says this run named a level (--sharding, off included), as opposed to following
+	// the declaration's. Set by CheckShardingAgainstCluster.
+	ShardingGiven bool
 	// HA applies the ADR-020 messaging topology (haTopology). The cluster's setting,
 	// read back from the install record like NoMonitoring.
 	HA bool

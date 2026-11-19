@@ -168,6 +168,7 @@ const FinalizerInstance = "core.devicechain.io/instance"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.objectStore) || has(self.objectStore)",message="objectStore cannot be removed: the logos and artifacts on it would be stranded, and the volume deleted with the declaration that named it"
 // +kubebuilder:validation:XValidation:rule="!has(self.mqttExposure) || self.mqttExposure == 'none' || (has(self.mqttHost) && size(self.mqttHost) > 0)",message="mqttHost is required when mqttExposure is gateway or loadbalancer: devices dial it and the broker's certificate must carry it"
 // +kubebuilder:validation:XValidation:rule="!has(self.shardGroups) || !has(self.ha) || !self.ha",message="shardGroups requires R1 streams and cannot be combined with ha"
+// +kubebuilder:validation:XValidation:rule="has(self.sharding) == has(oldSelf.sharding) && (!has(self.sharding) || self.sharding == oldSelf.sharding)",message="sharding is immutable: an instance's tenants are placed into its shard groups when it is installed, and nothing moves them, so the level cannot be changed, added or removed"
 type InstanceSpec struct {
 	// ShardGroups is absent by default; opt in after all pods have rolled.
 	// +optional
@@ -235,6 +236,16 @@ type InstanceSpec struct {
 	// +kubebuilder:validation:MaxLength=32
 	// +optional
 	Size string `json:"size,omitempty"`
+
+	// Sharding names the sharding level the instance was installed with ("scale"); absent is off,
+	// or custom when shardGroups is set by hand. Like size it is a NAME, rendered by the dcctl
+	// release that applies it, but a level's shard shape (group count, streams, placement, seed) is
+	// fixed per name, and the level itself is fixed at install: a rule on the spec refuses
+	// changing, adding or removing it.
+	//
+	// +kubebuilder:validation:MaxLength=32
+	// +optional
+	Sharding string `json:"sharding,omitempty"`
 
 	// Monitoring reports whether the observability stack is part of this instance.
 	//

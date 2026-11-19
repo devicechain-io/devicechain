@@ -91,7 +91,8 @@ var dispositions = map[string]disposition{
 
 	// --size is the instance's size preset, recorded as spec.size (a name, never a number) and
 	// applied again by every upgrade.
-	"size": declared,
+	"size":     declared,
+	"sharding": declared,
 
 	// --- properties of the run ---
 	"dry-run":                 runScoped,

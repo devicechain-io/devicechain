@@ -62,6 +62,7 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 		HA:            st.HA,
 		Compact:       st.Compact,
 		Size:          recordedSize(st),
+		Sharding:      recordedSharding(st),
 		Monitoring:    !st.NoMonitoring,
 		CNPG:          !st.NoCNPG,
 		Host:          host,
@@ -138,6 +139,9 @@ func ValidateInstanceSpec(spec dcv1beta1.InstanceSpec) error {
 			"tell which kind of cluster this instance lives in")
 	}
 	if err := validateRecordedSize(spec); err != nil {
+		return err
+	}
+	if err := validateRecordedSharding(spec); err != nil {
 		return err
 	}
 	if spec.RestoredAt != nil && !spec.Restored {

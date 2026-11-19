@@ -212,3 +212,19 @@ func TestEveryShippedProfileIsClassifiedForCompact(t *testing.T) {
 		}
 	}
 }
+
+// The command layer judges --sharding with the cluster's shape: scale is refused today, off passes.
+func TestFollowClusterShapeJudgesTheShardingLevel(t *testing.T) {
+	st := &bootstrap.State{Profile: "default", Size: bootstrap.SizePerf20k, Sharding: bootstrap.ShardingScale}
+	err := followClusterShape(changedSet(), st)
+	if err == nil || !strings.Contains(err.Error(), "not yet available") {
+		t.Fatalf("--sharding scale was not refused as not yet available: %v", err)
+	}
+	st = &bootstrap.State{Profile: "default", Sharding: bootstrap.ShardingOff}
+	if err := followClusterShape(changedSet(), st); err != nil {
+		t.Fatalf("--sharding off was refused: %v", err)
+	}
+	if st.Sharding != "" || !st.ShardingGiven {
+		t.Fatalf("--sharding off normalised to %q (given %v), want no level, given", st.Sharding, st.ShardingGiven)
+	}
+}

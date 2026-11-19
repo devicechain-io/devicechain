@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -413,4 +414,69 @@ func TestShardGroupsCRDValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The sharding level is fixed at install: an instance's tenants were placed into its groups then, and
+// nothing moves them. A field-level `self == oldSelf` would let it be removed and re-set in two
+// edits (the cluster binding's lesson), so the rule is on the spec and every quadrant is pinned.
+func TestTheAPIServerRefusesToChangeTheShardingLevel(t *testing.T) {
+	c := withAPIServer(t)
+	ctx := context.Background()
+	update := func(t *testing.T, name string, mutate func(*dcv1beta1.Instance)) error {
+		t.Helper()
+		live := &dcv1beta1.Instance{}
+		if err := c.Get(ctx, client.ObjectKey{Name: name}, live); err != nil {
+			t.Fatal(err)
+		}
+		mutate(live)
+		return c.Update(ctx, live)
+	}
+	create := func(t *testing.T, name, level string) {
+		t.Helper()
+		if err := c.Create(ctx, newInstance(name, func(i *dcv1beta1.Instance) { i.Spec.Sharding = level })); err != nil {
+			t.Fatalf("creating %s with sharding %q: %v", name, level, err)
+		}
+	}
+
+	t.Run("a level cannot be changed", func(t *testing.T) {
+		create(t, "level-change", "scale")
+		err := update(t, "level-change", func(i *dcv1beta1.Instance) { i.Spec.Sharding = "heavy" })
+		if !apierrors.IsInvalid(err) {
+			t.Fatalf("the level was changed in place: %v", err)
+		}
+	})
+	t.Run("a level cannot be removed", func(t *testing.T) {
+		create(t, "level-remove", "scale")
+		err := update(t, "level-remove", func(i *dcv1beta1.Instance) { i.Spec.Sharding = "" })
+		if !apierrors.IsInvalid(err) {
+			t.Fatalf("the level was removed, which is half of a change: %v", err)
+		}
+	})
+	t.Run("a level cannot be added to an instance installed without one", func(t *testing.T) {
+		create(t, "level-add", "")
+		err := update(t, "level-add", func(i *dcv1beta1.Instance) { i.Spec.Sharding = "scale" })
+		if !apierrors.IsInvalid(err) {
+			t.Fatalf("a level was added after install: %v", err)
+		}
+	})
+	// The controls: an instance that keeps its level, or never had one, can still be re-run. A rule
+	// that refused every update would pass the three above.
+	t.Run("an instance keeping its level can be updated", func(t *testing.T) {
+		create(t, "level-keep", "scale")
+		if err := update(t, "level-keep", func(i *dcv1beta1.Instance) { i.Spec.Profile = "full" }); err != nil {
+			t.Fatalf("an update that kept the level was refused: %v", err)
+		}
+	})
+	t.Run("an instance without a level can be updated", func(t *testing.T) {
+		create(t, "level-none", "")
+		if err := update(t, "level-none", func(i *dcv1beta1.Instance) { i.Spec.Profile = "full" }); err != nil {
+			t.Fatalf("an update of an instance with no level was refused: %v", err)
+		}
+	})
+	t.Run("a level longer than 32 characters is refused", func(t *testing.T) {
+		err := c.Create(ctx, newInstance("level-long", func(i *dcv1beta1.Instance) { i.Spec.Sharding = strings.Repeat("x", 33) }))
+		if !apierrors.IsInvalid(err) {
+			t.Fatalf("a 33-character level was accepted: %v", err)
+		}
+	})
 }
