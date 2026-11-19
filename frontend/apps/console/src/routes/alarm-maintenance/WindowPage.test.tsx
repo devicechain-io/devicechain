@@ -53,4 +53,11 @@ describe('saved maintenance actions', () => {
     fireEvent.click(end);
     await waitFor(() => expect(h.gql.mock.calls.some(call => String(call[1]).includes('mutation AlarmMaintenanceEnd'))).toBe(true));
   });
+  it('keeps End disabled without alarm:write', async () => {
+    h.authorities = ['alarm:read', 'notification:write'];
+    renderPage();
+    const end = await screen.findByRole('button', { name: 'End now' }) as HTMLButtonElement;
+    await waitFor(() => expect(h.gql).toHaveBeenCalled());
+    expect(end.disabled).toBe(true);
+  });
 });

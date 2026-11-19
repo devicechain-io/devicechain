@@ -43,6 +43,8 @@ describe('maintenance banner on a broad window', () => {
     show();
     const extend = await enabled('Extend +1 h') as HTMLButtonElement;
     await waitFor(() => expect(extend.disabled).toBe(false));
+    fireEvent.click(extend);
+    await waitFor(() => expect(h.gql.mock.calls.some(call => String(call[1]).includes('mutation AlarmMaintenanceUpdate') && call[2].token === 'weekly')).toBe(true));
   });
   it('refuses End without alarm:write', async () => {
     h.authorities = ['alarm:read', 'notification:write'];
