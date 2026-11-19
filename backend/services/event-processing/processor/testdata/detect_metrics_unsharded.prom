@@ -48,6 +48,9 @@ devicechain_eventprocessing_detect_checkpoint_duration_seconds_count 0
 devicechain_eventprocessing_detect_checkpoint_failures_total{stage="publish"} 0
 devicechain_eventprocessing_detect_checkpoint_failures_total{stage="save"} 0
 devicechain_eventprocessing_detect_checkpoint_failures_total{stage="serialize"} 0
+# HELP devicechain_eventprocessing_detect_checkpoint_min_spacing_seconds Minimum spacing between count-triggered DETECT checkpoints, based on the last committed snapshot cost.
+# TYPE devicechain_eventprocessing_detect_checkpoint_min_spacing_seconds gauge
+devicechain_eventprocessing_detect_checkpoint_min_spacing_seconds 0
 # HELP devicechain_eventprocessing_detect_checkpoint_save_seconds Time each committed snapshot spent being written to the database: the second part of detect_checkpoint_duration_seconds.
 # TYPE devicechain_eventprocessing_detect_checkpoint_save_seconds histogram
 devicechain_eventprocessing_detect_checkpoint_save_seconds_bucket{le="0.001"} 0
@@ -394,6 +397,9 @@ devicechain_eventprocessing_detect_tick_pass_duration_seconds_bucket{le="3600"} 
 devicechain_eventprocessing_detect_tick_pass_duration_seconds_bucket{le="+Inf"} 0
 devicechain_eventprocessing_detect_tick_pass_duration_seconds_sum 0
 devicechain_eventprocessing_detect_tick_pass_duration_seconds_count 0
+# HELP devicechain_eventprocessing_detect_tick_pass_interval_seconds Declared gap between passes of the detect_tick task in seconds; NaN until started.
+# TYPE devicechain_eventprocessing_detect_tick_pass_interval_seconds gauge
+devicechain_eventprocessing_detect_tick_pass_interval_seconds NaN
 # HELP devicechain_eventprocessing_detect_tick_passes_total Passes made by the detect_tick task, by outcome.
 # TYPE devicechain_eventprocessing_detect_tick_passes_total counter
 devicechain_eventprocessing_detect_tick_passes_total{outcome="cancelled"} 0
@@ -421,6 +427,9 @@ devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_bucket{le="3
 devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_bucket{le="+Inf"} 0
 devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_sum 0
 devicechain_eventprocessing_rule_health_flush_pass_duration_seconds_count 0
+# HELP devicechain_eventprocessing_rule_health_flush_pass_interval_seconds Declared gap between passes of the rule_health_flush task in seconds; NaN until started.
+# TYPE devicechain_eventprocessing_rule_health_flush_pass_interval_seconds gauge
+devicechain_eventprocessing_rule_health_flush_pass_interval_seconds NaN
 # HELP devicechain_eventprocessing_rule_health_flush_passes_total Passes made by the rule_health_flush task, by outcome.
 # TYPE devicechain_eventprocessing_rule_health_flush_passes_total counter
 devicechain_eventprocessing_rule_health_flush_passes_total{outcome="cancelled"} 0

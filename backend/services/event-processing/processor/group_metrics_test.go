@@ -41,20 +41,20 @@ func metricText(t *testing.T, r *prometheus.Registry) []byte {
 	return rec.Body.Bytes()
 }
 
-// The fixture was captured with the S2a production sources, not this constructor.
+// The fixture was captured with main's production sources before this change, not this constructor.
 // Re-registration is part of the same contract: retrying initialization must leave
 // the original unsharded exposition byte-identical.
 func TestDetectMetricsLegacyRegistration(t *testing.T) {
 	ms, reg := metricService()
 	m := NewDetectMetrics(ms)
 	m.bindShards(2)
-	want, err := os.ReadFile("testdata/detect_metrics_s2a.prom")
+	want, err := os.ReadFile("testdata/detect_metrics_unsharded.prom")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want = bytes.TrimPrefix(want, []byte(metricFixtureHeader))
 	if got := metricText(t, reg); !bytes.Equal(got, want) {
-		t.Fatal("unsharded metrics differ from S2a")
+		t.Fatal("unsharded metrics differ from the pre-sharding exposition")
 	}
 	if NewDetectMetrics(ms) != m {
 		t.Fatal("registration did not return the process-owned set")
