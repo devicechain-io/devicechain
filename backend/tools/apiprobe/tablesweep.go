@@ -225,8 +225,12 @@ var tableSweepExemptions = map[string]string{
 	"device-management.alarms": "alarm objects are RAISED by the REACT pipeline when a rule fires. " +
 		"Nothing fires in a drill that sends no telemetry, and creating one by hand would assert " +
 		"the row rather than the engine that produces it.",
-	"device-management.alarm_suppression_windows": "no GraphQL writer yet in this release slice; written by the suppression mutations from slice 3.",
-	"device-management.alarm_cycle_suppressions":  "no GraphQL writer yet in this release slice; written by the alarm cycle-start transaction from slice 3.",
+	"device-management.alarm_cycle_suppressions": "the suppression stamp on one alarm cycle, written only by " +
+		"the alarm cycle-start transaction when an alarm is raised while a window matches. No alarm is raised " +
+		"in a drill that sends no telemetry (see device-management.alarms), so there is no cycle to stamp, " +
+		"and stamping a hand-made alarm would assert the row rather than the path that writes it. The window " +
+		"itself is seeded (alarm-suppression-window); the stamp's transaction, reads and withholding are " +
+		"proved by device-management's model and Postgres tests.",
 	"device-management.alarm_dispositions": "an operator's label on one alarm cycle, written by " +
 		"setAlarmDisposition on an alarm that exists. No alarm is raised in a drill that sends no " +
 		"telemetry (see device-management.alarms), so there is nothing to label, and labelling a hand-made " +

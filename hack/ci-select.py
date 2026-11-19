@@ -206,6 +206,7 @@ READERS = [
     # Each peer client's recorded documents, validated against the SDL its target serves
     # (documents_test.go validateDocuments: ../../<target>/graphql).
     ("backend/services/ai-inference", "inference", ["backend/services/user-management/graphql/**"], [], "inference/documents_test.go"),
+    ("backend/services/notification-management", "processor", ["backend/services/device-management/graphql/**"], [], "processor/documents_test.go"),
     ("backend/services/event-sources", "adapter", [
         "backend/services/device-management/graphql/**",
         "backend/services/device-state/graphql/**",

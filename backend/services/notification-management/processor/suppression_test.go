@@ -221,9 +221,18 @@ func TestSuppressionReleaseExplanation(t *testing.T) {
 			e := eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)
 			if kind == "window" {
 				e = suppressedEvent(clock, clock.Add(time.Hour))
-				e.SuppressionWindowToken = "<window>\n&"
+				e.SuppressionWindowToken = "window-1"
 			}
 			require.NoError(t, n.Notify(ctx, e))
+			if kind == "window" {
+				// Old persisted audits may predate token validation. Preserve the
+				// transport escaping checks without accepting malformed new holds.
+				e.SuppressionWindowToken = "<window>\n&"
+				rows := heldRows(t, api, ctx)
+				require.Len(t, rows, 1)
+				require.NoError(t, api.RDB.DB(ctx).Model(rows[0]).
+					Update("held_by_window", e.SuppressionWindowToken).Error)
+			}
 			if kind != "ordinary" {
 				clock = quietEnds
 				require.NoError(t, n.ReleaseHeld(ctx, enabledPolicies(t, api, ctx), clock))
@@ -256,6 +265,24 @@ func TestSuppressionReleaseExplanation(t *testing.T) {
 			require.Contains(t, slack, "Suppressed")
 			require.False(t, strings.Contains(msg.TextBody, "<window>\n"))
 		})
+	}
+}
+
+func TestSuppressionWindowTokenCharset(t *testing.T) {
+	for _, token := range []string{"", "with space", "with/slash", "with\nnewline", "with\x00nul", "ventana-ñ", "窗口", "-leading", "_leading", strings.Repeat("w", 129)} {
+		t.Run(token, func(t *testing.T) {
+			require.False(t, validWindowToken(token))
+			clock := outsideQuiet
+			n, api, fa, ctx := quietFixture(t, "", "", "", &clock)
+			e := suppressedEvent(clock, clock.Add(time.Hour))
+			e.SuppressionWindowToken = token
+			require.NoError(t, n.Notify(ctx, e))
+			require.Equal(t, 1, fa.calls, "invalid suppression metadata must page")
+			require.Empty(t, heldRows(t, api, ctx))
+		})
+	}
+	for _, token := range []string{"Window_1-valid", strings.Repeat("w", 128)} {
+		require.True(t, validWindowToken(token))
 	}
 }
 
