@@ -312,7 +312,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 		}
 		if model.SeverityAtOrAbove(severity, "INDETERMINATE") {
 			if event.Severity != severity {
-				event.EventType = dmmodel.AlarmEventRaised
+				event.EventType = dmcontract.AlarmEventRaised
 			}
 			event.Severity = severity
 			event.PreviousSeverity = ""

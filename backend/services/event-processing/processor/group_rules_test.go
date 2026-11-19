@@ -231,7 +231,7 @@ func TestGroupPublishRefusesAMoveMidPass(t *testing.T) {
 	router := &movingRuleRouter{}
 	r := newGroupRig(t, router)
 	p0, _ := routedRuleFixture(t, r)
-	compiled, failures := runtime.CompilePublishedRules("other", "p@1", []dmmodel.PublishedDetectionRule{{Token: "r", Definition: deadRule}})
+	compiled, failures := runtime.CompilePublishedRules("other", "p@1", []dmcontract.PublishedDetectionRule{{Token: "r", Definition: deadRule}})
 	require.Zero(t, failures)
 	require.NoError(t, p0.restore(context.Background()))
 	p0.applyRuleUpdate(ruleUpdate{upserts: compiled})
