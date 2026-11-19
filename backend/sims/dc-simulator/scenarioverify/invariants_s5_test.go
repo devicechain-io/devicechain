@@ -363,6 +363,8 @@ func TestS5NorthFailureRequiresVerificationCode(t *testing.T) {
 func TestS5BackfillRejectsInventedReadingOutsideTakenSpan(t *testing.T) {
 	evaluateOneRed(t, InvBackfillStored, "never took", func(d *day) {
 		b := &d.backfill[0]
-		b.Stored = append(b.Stored, at(sim.HarborpulseOutageFrom).Add(time.Microsecond))
+		// After the last log entry, before the feeder returns. (A row within ingressStampSlack of
+		// the failure is the pre-failure reading stamped at send, and excused.)
+		b.Stored = append(b.Stored, at(sim.HarborpulseOutageTo).Add(-time.Microsecond))
 	})
 }

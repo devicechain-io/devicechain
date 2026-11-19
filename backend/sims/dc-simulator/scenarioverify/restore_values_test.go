@@ -82,6 +82,8 @@ func TestAPreFailureReadingStampedAtSendIsNotABackfillRow(t *testing.T) {
 			for _, m := range []string{sim.HarborpulseChargerPowerKey, sim.HarborpulseSessionKey, sim.HarborpulseConnectorKey, sim.HarborpulseMaxKwKey} {
 				b.Rows = append(b.Rows, Reading{Name: m, At: at, Value: 31.9})
 			}
+			// Live, the same row also reaches backfill-stored's own timestamp list.
+			b.Stored = append(b.Stored, at)
 		}
 	}
 	d := cleanDay()

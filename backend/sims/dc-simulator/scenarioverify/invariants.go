@@ -559,7 +559,9 @@ func backfillStored(o Observations) error {
 				continue
 			}
 			stored[t.UnixMicro()] = true
-			if !taken[t.UnixMicro()] {
+			// Off the log grid within ingressStampSlack of the failure: the last pre-failure
+			// reading, stamped at send (see restoreRows). Excused here as there.
+			if !taken[t.UnixMicro()] && !t.Before(o.at(sim.HarborpulseOutageFrom).Add(ingressStampSlack)) {
 				extra = append(extra, t.UTC().Format(time.RFC3339Nano))
 			}
 		}
