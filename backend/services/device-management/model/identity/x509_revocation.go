@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package model
+package identity
 
 import (
 	"fmt"
@@ -172,4 +172,12 @@ func (a *DeviceTrustAnchor) RevocationStaleGraceOf(defaultGrace time.Duration) (
 // reads as "has rows" (the fast path that skips the query must never be reached by a bad count).
 func (a *DeviceTrustAnchor) HasRevocationRows() bool {
 	return a.RevocationRows.Valid && a.RevocationRows.Int64 != 0
+}
+
+// AuditLabel is the issuer's key hash: public, and what an auditor looks the list up by.
+func (l DeviceRevocationList) AuditLabel() string { return l.IssuerKey }
+
+// DefaultOrder implements rdb.Sortable: newest first, id as the unique tiebreak.
+func (DeviceRevokedCertificate) DefaultOrder() string {
+	return "device_revoked_certificates.revoked_at DESC, device_revoked_certificates.id DESC"
 }

@@ -132,6 +132,13 @@ func loadSavescanAllowlist(t *testing.T) map[string]string {
 func TestNoWholeRowSaveInUpdateMethods(t *testing.T) {
 	root := filepath.Join("..", "..", "..", "services")
 	files, err := filepath.Glob(filepath.Join(root, "*", "model", "*.go"))
+	if err == nil {
+		// A model package carved into sub-packages (device-management's model/identity) keeps
+		// its update methods under this guard: one level down is scanned too.
+		var nested []string
+		nested, err = filepath.Glob(filepath.Join(root, "*", "model", "*", "*.go"))
+		files = append(files, nested...)
+	}
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no model sources found under %s (err=%v): the guard would pass vacuously", root, err)
 	}
