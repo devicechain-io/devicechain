@@ -1,5 +1,5 @@
 ---
-section: improvements
+section: whats-new
 ---
 
 ## en
