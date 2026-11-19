@@ -1128,7 +1128,7 @@ var All = []Stream{
 	// alarm-event-<tenant>-<id> as Nats-Msg-Id (agent effects and deletion cascades carry
 	// their own ids), so a re-publish inside the window is dropped. There is no ordering
 	// across those producers, nor against a pre-outbox replica during a rolling upgrade.
-	{Suffix: AlarmEvents, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "device-management re-publishes an alarm transition until the broker accepts it, but one accepted just before the restore point may not have reached notification", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
+	{Suffix: AlarmEvents, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "an alarm transition in flight; device-management re-publishes it until the broker acknowledges it, but one acknowledged just before the restore point may not have reached notification", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
 
 	// ADR-051 5c / ADR-054, carrying a JSON RaiseAlarmRequest. AT-LEAST-once, and
 	// safe as such: ApplyAlarmContributorEdge (ADR-057) is an idempotent

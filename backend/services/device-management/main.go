@@ -394,6 +394,21 @@ func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
 	return DeadLetters.NewSink(w), nil
 }
 
+// newAlarmEventDeadLetter indexes a committed quarantine in the operator dead-letter list.
+// Nil when no dead-letter stream is configured: the quarantine itself is durable without it.
+func newAlarmEventDeadLetter(deadLetters *deadletter.Sink) func(context.Context, string, []byte, error) error {
+	if deadLetters == nil {
+		return nil
+	}
+	return func(ctx context.Context, reference string, payload []byte, cause error) error {
+		return deadLetters.Write(ctx, deadletter.Envelope{
+			Kind: deadletter.KindNotification, Reason: deadletter.ReasonUnprocessable,
+			Reference: reference, Payload: payload, Detail: cause.Error(),
+			Summary: "Stored alarm event cannot be relayed", OccurredAt: time.Now().UTC(),
+		})
+	}
+}
+
 // newInboundEventsProcessor assembles the inbound processor from this service's globals (the
 // inbound readers createInboundReaders built among them), its resolver pool sized by the
 // loaded configuration. It is a function of its own so
@@ -663,7 +678,11 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Ordinary transitions always enqueue first; this writer serves the durable relays.
 	// Through the setter: on a broker restart this runs again while relay passes may be running.
 	Api.SetAlarmPublisher(processor.NewAlarmEventWriter(AlarmEventsWriter, deadLetters,
-		AlarmEventMetrics))
+		AlarmEventMetrics).WithConnected(func() bool {
+		conn := nmgr.Conn()
+		return conn != nil && conn.IsConnected()
+	}))
+	Api.SetAlarmEventDeadLetter(newAlarmEventDeadLetter(deadLetters))
 
 	// Add the entity-deleted writer and inject a publisher over it into the shared
 	// Api (ADR-044): the outbox drain publishes committed deletions so cross-service

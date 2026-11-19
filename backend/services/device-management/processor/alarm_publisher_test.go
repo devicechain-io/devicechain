@@ -6,11 +6,15 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -78,3 +82,39 @@ func gatheredCounter(t *testing.T, reg *prometheus.Registry, name string) float6
 }
 
 const deviceManagementLost = "devicechain_devicemanagement_dead_letter_lost_total"
+
+func TestAlarmEventWriterClassifiesUnavailable(t *testing.T) {
+	ev := &model.AlarmStateChangeEvent{AlarmToken: "alarm", EventType: model.AlarmEventRaised}
+	refusal := errors.New("tenant permission denied")
+	for _, test := range []struct {
+		name                   string
+		cause                  error
+		connected, unavailable bool
+	}{
+		{"refusal", refusal, true, false},
+		{"connection down", refusal, false, true},
+		{"deadline", context.DeadlineExceeded, true, true},
+		{"nats timeout", nats.ErrTimeout, true, true},
+		{"no responders", nats.ErrNoResponders, true, true},
+		{"closed", nats.ErrConnectionClosed, true, true},
+		{"disconnected", nats.ErrDisconnected, true, true},
+		{"reconnecting", nats.ErrConnectionReconnecting, true, true},
+		{"legacy stream timeout", nats.ErrNoStreamResponse, true, true},
+		{"stream timeout", jetstream.ErrNoStreamResponse, true, true},
+		{"network timeout", os.ErrDeadlineExceeded, true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := &alarmEventRecorder{err: fmt.Errorf("publish: %w", test.cause)}
+			writer := NewAlarmEventWriter(recorder, nil, AlarmEventMetrics{}).WithConnected(func() bool { return test.connected })
+			err := writer.PublishAlarmEventDedup(context.Background(), ev, "id")
+			require.ErrorIs(t, err, test.cause)
+			require.Equal(t, test.unavailable, errors.Is(err, model.ErrAlarmEventBrokerUnavailable))
+			require.NotErrorIs(t, err, model.ErrAlarmEventUnpublishable)
+			writer.marshal = func(*model.AlarmStateChangeEvent) ([]byte, error) { return nil, refusal }
+			err = writer.PublishAlarmEventDedup(context.Background(), ev, "id")
+			require.ErrorIs(t, err, model.ErrAlarmEventUnpublishable)
+			require.NotErrorIs(t, err, model.ErrAlarmEventBrokerUnavailable)
+			require.Len(t, recorder.messages, 1, "encoding failure must not publish")
+		})
+	}
+}

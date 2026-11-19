@@ -119,8 +119,11 @@ type Api struct {
 	// pass: transitions still owed to the broker, how long the oldest has waited, and how many
 	// are quarantined. Wired to the service gauges.
 	AlarmEventObserver func(pending int, oldest time.Duration, quarantined int)
+	// AlarmEventDeadLetter indexes a committed quarantine by reference with its raw payload.
+	// Nil skips indexing; replacements use SetAlarmEventDeadLetter.
+	AlarmEventDeadLetter func(ctx context.Context, reference string, payload []byte, cause error) error
 	// The post-commit relay (alarm_event_wait.go). alarmEventMu guards every field below and
-	// AlarmPublisher's replacement.
+	// replacements of AlarmPublisher and AlarmEventDeadLetter.
 	alarmEventMu      sync.Mutex
 	alarmEventRunning bool
 	alarmEventPending chan struct{}

@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/require"
@@ -265,7 +267,7 @@ func TestAlarmOutboxOrderingFailureAndPoison(t *testing.T) {
 	third := alarmOutboxQueue(t, api, core.WithTenant(context.Background(), "zeta"), "third")
 	require.NoError(t, api.RDB.DB(ctx).Model(&PendingAlarmEvent{}).Where("id = ?", poison.ID).Update("payload", []byte(`not-json`)).Error)
 	var calls []string
-	failure := errors.New("broker down")
+	failure := fmt.Errorf("broker down: %w", ErrAlarmEventBrokerUnavailable)
 	api.AlarmPublisher = alarmOutboxPublisher(func(pubCtx context.Context, ev *AlarmStateChangeEvent, id string) error {
 		require.False(t, core.IsSystemContext(pubCtx))
 		tenant, _ := core.TenantFromContext(pubCtx)
@@ -315,20 +317,19 @@ func TestAlarmOutboxOrderingFailureAndPoison(t *testing.T) {
 
 func TestAlarmOutboxInvalidAndUnpublishableQuarantine(t *testing.T) {
 	api, ctx := alarmOutboxRig(t)
-	for i, payload := range []string{`{}`, `{"AlarmToken":"a","EventType":"future"}`, `{"AlarmToken":"a","EventType":"RAISED"}`} {
+	for _, payload := range []string{`{}`, `{"AlarmToken":"a","EventType":"RAISED"}`} {
 		row := PendingAlarmEvent{TenantId: "acme", Payload: []byte(payload), CreatedAt: tsec(10)}
 		require.NoError(t, api.RDB.DB(ctx).Create(&row).Error)
-		_ = i
 	}
 	api.AlarmPublisher = alarmOutboxPublisher(func(context.Context, *AlarmStateChangeEvent, string) error {
 		return fmt.Errorf("encoding failed: %w", ErrAlarmEventUnpublishable)
 	})
 	res, err := api.DrainAlarmEvents(context.Background(), 10)
 	require.NoError(t, err)
-	require.Equal(t, 3, res.Quarantined)
+	require.Equal(t, 2, res.Quarantined)
 	require.Zero(t, res.Published)
 	rows := alarmOutboxRows(t, api, ctx)
-	require.Len(t, rows, 3)
+	require.Len(t, rows, 2)
 	for _, row := range rows {
 		require.NotNil(t, row.QuarantinedAt)
 		require.NotNil(t, row.LastError)
@@ -575,4 +576,188 @@ func TestAlarmOutboxPassKeepsItsPublisherWhenItIsReplaced(t *testing.T) {
 	_, err = api.DrainAlarmEvents(context.Background(), AlarmEventDrainPageSize)
 	require.NoError(t, err)
 	require.Equal(t, []string{"original", "original", "replacement"}, by)
+}
+
+func TestAlarmOutboxUnknownTypeStaysUntouched(t *testing.T) {
+	api, ctx := alarmOutboxRig(t)
+	row := PendingAlarmEvent{TenantId: "acme", Payload: []byte(`{"AlarmToken":"future","EventType":"FUTURE"}`), CreatedAt: tsec(10)}
+	require.NoError(t, api.RDB.DB(ctx).Create(&row).Error)
+	alarmOutboxQueue(t, api, ctx, "later")
+	var calls []string
+	api.AlarmPublisher = alarmOutboxPublisher(func(_ context.Context, ev *AlarmStateChangeEvent, _ string) error {
+		calls = append(calls, ev.AlarmToken)
+		return nil
+	})
+	api.AlarmEventDeadLetter = func(context.Context, string, []byte, error) error {
+		t.Fatal("unknown type was dead-lettered")
+		return nil
+	}
+	res, err := api.DrainAlarmEvents(context.Background(), 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Skipped)
+	require.Equal(t, 1, res.Published)
+	require.Zero(t, res.Quarantined)
+	require.Equal(t, []string{"later"}, calls)
+	rows := alarmOutboxRows(t, api, ctx)
+	require.Len(t, rows, 1)
+	require.Equal(t, row, rows[0])
+}
+
+func TestAlarmOutboxStoredJSONKeys(t *testing.T) {
+	by, value, derived, until := "operator", 42.0, true, tsec(30)
+	ev := AlarmStateChangeEvent{
+		ClearReason: "reason", EventType: AlarmEventEscalated, AlarmToken: "alarm",
+		OriginatorType: "device", OriginatorId: 1, AlarmKey: "key", MetricKey: "metric",
+		State: "ACTIVE", Severity: "CRITICAL", Acknowledged: true, PreviousSeverity: "MAJOR",
+		AcknowledgedBy: &by, LastValue: &value, RaisedTime: tsec(10), OccurredTime: tsec(20),
+		ScopeAnchors: []string{"anchor"}, DeviceToken: "device", DeviceName: "name", DeviceTypeToken: "type",
+		PositionDerived: &derived, SuppressedUntil: &until, SuppressionWindowToken: "window",
+		RaisedDuringSuppressionToken: "raised-window",
+	}
+	payload, err := json.Marshal(ev)
+	require.NoError(t, err)
+	var stored map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(payload, &stored))
+	keys := make([]string, 0, len(stored))
+	for key := range stored {
+		keys = append(keys, key)
+	}
+	require.ElementsMatch(t, []string{
+		"ClearReason", "EventType", "AlarmToken", "OriginatorType", "OriginatorId", "AlarmKey", "MetricKey",
+		"State", "Severity", "Acknowledged", "PreviousSeverity", "AcknowledgedBy", "LastValue", "RaisedTime",
+		"OccurredTime", "ScopeAnchors", "DeviceToken", "DeviceName", "DeviceTypeToken", "PositionDerived",
+		"SuppressedUntil", "SuppressionWindowToken", "RaisedDuringSuppressionToken",
+	}, keys)
+}
+
+func TestAlarmOutboxTenantFailureIsolation(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		t.Run(fmt.Sprint(unavailable), func(t *testing.T) {
+			api, ctx := alarmOutboxRig(t)
+			alarmOutboxQueue(t, api, ctx, "a")
+			alarmOutboxQueue(t, api, ctx, "a-later")
+			zctx := core.WithTenant(context.Background(), "zeta")
+			alarmOutboxQueue(t, api, zctx, "b")
+			cause := errors.New("tenant refused")
+			if unavailable {
+				cause = fmt.Errorf("disconnected: %w", ErrAlarmEventBrokerUnavailable)
+			}
+			var calls []string
+			api.AlarmPublisher = alarmOutboxPublisher(func(_ context.Context, ev *AlarmStateChangeEvent, _ string) error {
+				calls = append(calls, ev.AlarmToken)
+				if ev.AlarmToken == "a" {
+					return cause
+				}
+				return nil
+			})
+			res, err := api.DrainAlarmEvents(context.Background(), 10)
+			require.ErrorIs(t, err, cause)
+			require.Equal(t, 1, res.Failed)
+			require.Len(t, alarmOutboxRows(t, api, ctx), 2)
+			if unavailable {
+				require.Equal(t, []string{"a"}, calls)
+				require.Zero(t, res.Published)
+				require.Len(t, alarmOutboxRows(t, api, zctx), 1)
+			} else {
+				require.Equal(t, []string{"a", "b"}, calls)
+				require.Equal(t, 1, res.Published)
+				require.Empty(t, alarmOutboxRows(t, api, zctx))
+			}
+		})
+	}
+}
+
+func TestAlarmOutboxEmptyTenantConstraintAndDiscovery(t *testing.T) {
+	api, ctx := alarmOutboxRig(t)
+	sys := api.RDB.DB(core.WithSystemContext(context.Background()))
+	row := PendingAlarmEvent{Payload: []byte(`{}`), CreatedAt: tsec(10)}
+	require.Error(t, sys.Create(&row).Error, "the live model must reject an empty tenant")
+	// Simulate a legacy malformed row while retaining the real constraint for ordinary writes.
+	require.NoError(t, sys.Exec("PRAGMA ignore_check_constraints = ON").Error)
+	require.NoError(t, sys.Create(&row).Error)
+	require.NoError(t, sys.Exec("PRAGMA ignore_check_constraints = OFF").Error)
+	alarmOutboxQueue(t, api, ctx, "valid")
+	calls := 0
+	api.AlarmPublisher = alarmOutboxPublisher(func(context.Context, *AlarmStateChangeEvent, string) error { calls++; return nil })
+	res, err := api.DrainAlarmEvents(context.Background(), 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+	require.Equal(t, 1, res.Published)
+}
+
+func TestAlarmOutboxPeriodicObserverRunsBeforePublisher(t *testing.T) {
+	api, ctx := alarmOutboxRig(t)
+	row := alarmOutboxQueue(t, api, ctx, "queued")
+	require.NoError(t, api.RDB.DB(ctx).Model(&PendingAlarmEvent{}).Where("id = ?", row.ID).Update("created_at", tsec(10)).Error)
+	observations := 0
+	api.AlarmEventObserver = func(n int, age time.Duration, q int) {
+		observations++
+		require.Equal(t, 1, n)
+		require.Greater(t, age, time.Second)
+		require.Zero(t, q)
+	}
+	api.SetAlarmPublisher(nil)
+	require.ErrorIs(t, api.DrainAlarmEventsLocked(context.Background()), ErrNoAlarmEventPublisher)
+	require.Equal(t, 1, observations)
+	api.SetAlarmPublisher(alarmOutboxPublisher(func(context.Context, *AlarmStateChangeEvent, string) error {
+		require.Equal(t, 2, observations, "observe before publishing, outside the singleton pass")
+		return nil
+	}))
+	require.NoError(t, api.DrainAlarmEventsLocked(context.Background()))
+	require.Equal(t, 2, observations)
+	// Post-commit passes must not perform the aggregate reads.
+	require.NoError(t, api.drainAlarmEventsLocked(context.Background(), false))
+	require.Equal(t, 2, observations)
+}
+
+func TestAlarmOutboxQuarantineDeadLetterOnceAfterCommit(t *testing.T) {
+	for _, failLetter := range []bool{false, true} {
+		t.Run(fmt.Sprint(failLetter), func(t *testing.T) {
+			api, ctx := alarmOutboxRig(t)
+			payloads := []string{`not-json`, `{"AlarmToken":"bad","EventType":42}`, `{}`, `{"AlarmToken":"alarm","EventType":"RAISED"}`}
+			var rows []PendingAlarmEvent
+			for _, payload := range payloads {
+				row := PendingAlarmEvent{TenantId: "acme", Payload: []byte(payload), CreatedAt: tsec(10)}
+				require.NoError(t, api.RDB.DB(ctx).Create(&row).Error)
+				rows = append(rows, row)
+			}
+			longError := fmt.Errorf("%s: %w", strings.Repeat("\u754c", 3000), ErrAlarmEventUnpublishable)
+			api.SetAlarmPublisher(alarmOutboxPublisher(func(context.Context, *AlarmStateChangeEvent, string) error { return longError }))
+			letters := 0
+			api.SetAlarmEventDeadLetter(func(letterCtx context.Context, reference string, payload []byte, cause error) error {
+				i := letters
+				letters++
+				require.False(t, core.IsSystemContext(letterCtx))
+				tenant, _ := core.TenantFromContext(letterCtx)
+				require.Equal(t, "acme", tenant)
+				expected := fmt.Sprintf("pending-alarm-event-acme-%d", rows[i].ID)
+				if i == 3 {
+					expected = "alarm"
+				}
+				require.Equal(t, expected, reference)
+				require.Equal(t, []byte(payloads[i]), payload)
+				// A fresh DB read sees quarantine before the callback, even if indexing fails.
+				var stored PendingAlarmEvent
+				require.NoError(t, api.RDB.DB(ctx).First(&stored, rows[i].ID).Error)
+				require.NotNil(t, stored.QuarantinedAt)
+				require.Equal(t, *stored.LastError, cause.Error())
+				if i == 3 {
+					require.True(t, utf8.ValidString(*stored.LastError))
+					require.Equal(t, 2048, utf8.RuneCountInString(*stored.LastError))
+					require.Equal(t, strings.Repeat("\u754c", 2048), *stored.LastError)
+				}
+				if failLetter {
+					return errors.New("dead-letter broker down")
+				}
+				return nil
+			})
+			res, err := api.DrainAlarmEvents(context.Background(), 10)
+			require.NoError(t, err, "a dead-letter failure must not fail the relay")
+			require.Equal(t, 4, res.Quarantined)
+			require.Equal(t, 4, letters)
+			_, err = api.DrainAlarmEvents(context.Background(), 10)
+			require.NoError(t, err)
+			require.Equal(t, 4, letters, "quarantined rows are never retried")
+		})
+	}
 }

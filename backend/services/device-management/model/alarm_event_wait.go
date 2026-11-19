@@ -133,3 +133,10 @@ func (api *Api) StopAlarmEventRelay(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
+
+// SetAlarmEventDeadLetter replaces the best-effort quarantine index sink on broker restart.
+func (api *Api) SetAlarmEventDeadLetter(letter func(context.Context, string, []byte, error) error) {
+	api.alarmEventMu.Lock()
+	defer api.alarmEventMu.Unlock()
+	api.AlarmEventDeadLetter = letter
+}

@@ -26,8 +26,8 @@ import (
 // until pending rows drain when rolling back. Stored payloads use the additive event
 // JSON contract; evolve readers before writers when introducing new event types.
 type PendingAlarmEvent struct {
-	ID            uint64         `gorm:"primaryKey;autoIncrement;index:idx_pending_alarm_events_tenant_id,priority:2"`
-	TenantId      string         `gorm:"not null;size:128;index:idx_pending_alarm_events_tenant_id,priority:1"`
+	ID            uint64         `gorm:"primaryKey;autoIncrement;index:idx_pending_alarm_events_tenant_id,priority:2,where:quarantined_at IS NULL"`
+	TenantId      string         `gorm:"not null;size:128;index:idx_pending_alarm_events_tenant_id,priority:1,where:quarantined_at IS NULL;check:chk_pending_alarm_events_tenant_id,tenant_id <> ''"`
 	Payload       datatypes.JSON `gorm:"not null"`
 	CreatedAt     time.Time      `gorm:"not null"`
 	QuarantinedAt *time.Time
@@ -42,9 +42,14 @@ var ErrNoAlarmEventPublisher = errors.New("no alarm event publisher is wired")
 // ErrAlarmEventUnpublishable marks permanent encoding failures, never broker faults.
 var ErrAlarmEventUnpublishable = errors.New("alarm event cannot be published")
 
+// ErrAlarmEventBrokerUnavailable marks transport failures shared by all tenants.
+var ErrAlarmEventBrokerUnavailable = errors.New("alarm event broker unavailable")
+
+const alarmEventLastErrorRunes = 2048
+
 const AlarmEventDrainPageSize = rdb.MaxLookupKeys
 
-type AlarmEventDrainResult struct{ Tenants, Failed, Published, Quarantined int }
+type AlarmEventDrainResult struct{ Tenants, Failed, Published, Quarantined, Skipped int }
 
 func alarmEventDedupID(tenant string, id uint64) string {
 	return fmt.Sprintf("alarm-event-%s-%d", tenant, id)
@@ -99,6 +104,9 @@ func (api *Api) DrainAlarmEvents(ctx context.Context, pageSize int) (AlarmEventD
 // The publisher is read once, so a broker restart that replaces it mid-pass does not race the pass.
 func (api *Api) drainAlarmEvents(ctx context.Context, pageSize int, observe bool) (AlarmEventDrainResult, error) {
 	var res AlarmEventDrainResult
+	if observe {
+		defer api.observeAlarmEvents(ctx)
+	}
 	pub := api.alarmPublisher()
 	if pub == nil {
 		return res, ErrNoAlarmEventPublisher
@@ -127,44 +135,27 @@ func (api *Api) drainAlarmEvents(ctx context.Context, pageSize int, observe bool
 	var lastErr error
 	for _, tenant := range tenants {
 		if tenant == "" {
-			return res, errors.New("queued alarm event has no tenant")
+			log.Error().Msg("Skipping queued alarm events with no tenant")
+			continue
 		}
-		published, poison, err := api.drainTenantAlarmEvents(core.WithTenant(base, tenant), pub, pageSize)
+		published, poison, skipped, err := api.drainTenantAlarmEvents(core.WithTenant(base, tenant), pub, pageSize)
 		res.Published += published
 		res.Quarantined += poison
+		res.Skipped += skipped
 		if err != nil {
 			res.Failed++
-			lastErr = err
+			lastErr = errors.Join(lastErr, err)
 			log.Warn().Err(err).Str("tenant", tenant).Msg("Alarm events stay queued for the next relay pass")
 		}
-		var shared *alarmEventPublishError
-		if errors.As(err, &shared) {
-			break // the broker refused: every later tenant would wait on it too
+		if errors.Is(err, ErrAlarmEventBrokerUnavailable) {
+			break // a transport failure would hold every later tenant too
 		}
 	}
-	if observe && api.AlarmEventObserver != nil {
-		// Three reads per pass, whatever the number of tenants: two counts and the oldest ready
-		// row by primary key (ids follow insertion, closely enough to date the backlog).
-		var pending, quarantined int64
-		var oldest []PendingAlarmEvent
-		err := sys.Model(&PendingAlarmEvent{}).Where("quarantined_at IS NULL").Count(&pending).Error
-		if err == nil {
-			err = sys.Model(&PendingAlarmEvent{}).Where("quarantined_at IS NOT NULL").Count(&quarantined).Error
-		}
-		if err == nil && pending > 0 {
-			err = sys.Select("created_at").Where("quarantined_at IS NULL").Order("id").Limit(1).Find(&oldest).Error
-		}
-		if err != nil {
-			return res, errors.Join(lastErr, err)
-		}
-		var age time.Duration
-		if len(oldest) > 0 {
-			age = max(0, time.Since(oldest[0].CreatedAt))
-		}
-		api.AlarmEventObserver(int(pending), age, int(quarantined))
+	if res.Skipped > 0 {
+		log.Warn().Int("skipped", res.Skipped).Msg("Unknown alarm event types stay queued for a newer relay")
 	}
-	var shared *alarmEventPublishError
-	if errors.As(lastErr, &shared) {
+	var publishErr *alarmEventPublishError
+	if errors.As(lastErr, &publishErr) {
 		return res, lastErr
 	}
 	return res, core.PassResult(res.Tenants, res.Failed, lastErr)
@@ -175,20 +166,25 @@ type alarmEventPublishError struct{ err error }
 func (e *alarmEventPublishError) Error() string { return "publishing alarm event: " + e.err.Error() }
 func (e *alarmEventPublishError) Unwrap() error { return e.err }
 
-func (api *Api) drainTenantAlarmEvents(ctx context.Context, pub AlarmEventPublisher, pageSize int) (int, int, error) {
+func (api *Api) drainTenantAlarmEvents(ctx context.Context, pub AlarmEventPublisher, pageSize int) (int, int, int, error) {
 	db := api.RDB.DB(ctx)
 	var rows []PendingAlarmEvent
 	if err := db.Where("quarantined_at IS NULL").Order("id").Limit(pageSize).Find(&rows).Error; err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	done := make([]uint64, 0, len(rows))
-	quarantined := 0
+	quarantined, skipped := 0, 0
 	var passErr error
 	for _, row := range rows {
 		var ev AlarmStateChangeEvent
 		err := json.Unmarshal(row.Payload, &ev)
-		if err == nil && (ev.AlarmToken == "" || !ev.EventType.Valid()) {
-			err = errors.New("invalid alarm token or event type")
+		decoded := err == nil
+		if err == nil && ev.AlarmToken == "" {
+			err = errors.New("empty alarm token")
+		}
+		if err == nil && !ev.EventType.Valid() {
+			skipped++
+			continue // version skew: a newer binary can relay this unchanged row
 		}
 		if err == nil {
 			err = pub.PublishAlarmEventDedup(ctx, &ev, alarmEventDedupID(row.TenantId, row.ID))
@@ -198,13 +194,32 @@ func (api *Api) drainTenantAlarmEvents(ctx context.Context, pub AlarmEventPublis
 			}
 		}
 		if err != nil {
-			detail := err.Error()
-			if len(detail) > 2048 {
-				detail = string([]rune(detail)[:min(512, len([]rune(detail)))])
+			runes := []rune(err.Error())
+			if len(runes) > alarmEventLastErrorRunes {
+				runes = runes[:alarmEventLastErrorRunes]
 			}
-			if e := db.Model(&PendingAlarmEvent{}).Where("id = ?", row.ID).Updates(map[string]any{"quarantined_at": time.Now().UTC(), "last_error": detail}).Error; e != nil {
-				passErr = e
+			detail := string(runes)
+			updated := db.Model(&PendingAlarmEvent{}).Where("id = ? AND quarantined_at IS NULL", row.ID).
+				Updates(map[string]any{"quarantined_at": time.Now().UTC(), "last_error": detail})
+			if updated.Error != nil {
+				passErr = updated.Error
 				break
+			}
+			if updated.RowsAffected == 0 {
+				continue
+			}
+			// The UPDATE has committed before this best-effort operator index write.
+			api.alarmEventMu.Lock()
+			letter := api.AlarmEventDeadLetter
+			api.alarmEventMu.Unlock()
+			if letter != nil {
+				reference := ev.AlarmToken
+				if reference == "" || !decoded {
+					reference = fmt.Sprintf("pending-alarm-event-%s-%d", row.TenantId, row.ID)
+				}
+				if e := letter(ctx, reference, row.Payload, errors.New(detail)); e != nil {
+					log.Warn().Err(e).Uint64("id", row.ID).Msg("Unable to dead-letter quarantined alarm event")
+				}
 			}
 			quarantined++
 			log.Error().Err(err).Uint64("id", row.ID).Str("tenant", row.TenantId).Msg("Quarantined alarm event; inspect stored payload and repair before replay")
@@ -215,10 +230,10 @@ func (api *Api) drainTenantAlarmEvents(ctx context.Context, pub AlarmEventPublis
 	// Immutable rows: remove only IDs whose publication was acknowledged.
 	if len(done) > 0 {
 		if err := db.Where("id IN ?", done).Delete(&PendingAlarmEvent{}).Error; err != nil {
-			return len(done), quarantined, errors.Join(passErr, err)
+			return len(done), quarantined, skipped, errors.Join(passErr, err)
 		}
 	}
-	return len(done), quarantined, passErr
+	return len(done), quarantined, skipped, passErr
 }
 
 // Stable across rolling upgrades; do not change the name.
@@ -236,10 +251,41 @@ func (api *Api) DrainAlarmEventsLocked(ctx context.Context) error {
 // and publish while this pass finishes its page. Delivery is at least once either way, and in
 // that window two passes can publish one tenant's events out of id order.
 func (api *Api) drainAlarmEventsLocked(ctx context.Context, observe bool) error {
-	pass := func() error { _, err := api.drainAlarmEvents(ctx, AlarmEventDrainPageSize, observe); return err }
+	if observe {
+		api.observeAlarmEvents(ctx)
+	}
+	pass := func() error { _, err := api.drainAlarmEvents(ctx, AlarmEventDrainPageSize, false); return err }
 	// SQLite, the unit-test engine, has no pg_try_advisory_lock and runs in one process.
 	if api.RDB.DB(ctx).Dialector.Name() != "postgres" {
 		return pass()
 	}
 	return api.RDB.SingletonPass(ctx, alarmEventDrainLockName, pass)
+}
+
+// observeAlarmEvents runs on every replica, outside the singleton pass.
+func (api *Api) observeAlarmEvents(ctx context.Context) {
+	if api.AlarmEventObserver == nil {
+		return
+	}
+	sys := api.RDB.DB(core.WithSystemContext(ctx))
+	// Three reads per pass, whatever the number of tenants: two counts and the oldest ready
+	// row by primary key (ids follow insertion, closely enough to date the backlog).
+	var pending, quarantined int64
+	var oldest []PendingAlarmEvent
+	err := sys.Model(&PendingAlarmEvent{}).Where("quarantined_at IS NULL").Count(&pending).Error
+	if err == nil {
+		err = sys.Model(&PendingAlarmEvent{}).Where("quarantined_at IS NOT NULL").Count(&quarantined).Error
+	}
+	if err == nil && pending > 0 {
+		err = sys.Select("created_at").Where("quarantined_at IS NULL").Order("id").Limit(1).Find(&oldest).Error
+	}
+	if err != nil {
+		log.Warn().Err(err).Msg("Unable to observe pending alarm events")
+		return
+	}
+	var age time.Duration
+	if len(oldest) > 0 {
+		age = max(0, time.Since(oldest[0].CreatedAt))
+	}
+	api.AlarmEventObserver(int(pending), age, int(quarantined))
 }

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,10 +23,16 @@ import (
 func TestAlarmOutboxMigrationAndConcurrentPostgresDrains(t *testing.T) {
 	api, ctx, _ := ownershipPgRig(t, 1)
 	require.True(t, api.RDB.DB(ctx).Migrator().HasTable(&PendingAlarmEvent{}))
+	require.True(t, api.RDB.DB(ctx).Migrator().HasConstraint(&PendingAlarmEvent{}, "chk_pending_alarm_events_tenant_id"))
+	var indexDef string
+	require.NoError(t, api.RDB.DB(ctx).Raw(`SELECT indexdef FROM pg_indexes WHERE schemaname = 'device-management' AND indexname = 'idx_pending_alarm_events_tenant_id'`).Scan(&indexDef).Error)
+	require.Contains(t, indexDef, "WHERE (quarantined_at IS NULL)")
 	require.True(t, api.RDB.DB(ctx).Migrator().HasColumn(&PendingAlarmEvent{}, "quarantined_at"))
 	require.True(t, api.RDB.DB(ctx).Migrator().HasColumn(&PendingAlarmEvent{}, "last_error"))
 	row := alarmOutboxQueue(t, api, ctx, "outbox-integration")
 	tenant, _ := core.TenantFromContext(ctx)
+	var observations atomic.Int32
+	api.AlarmEventObserver = func(int, time.Duration, int) { observations.Add(1) }
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
@@ -66,6 +73,7 @@ func TestAlarmOutboxMigrationAndConcurrentPostgresDrains(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("concurrent drain waited instead of skipping")
 	}
+	require.EqualValues(t, 2, observations.Load(), "the replica skipping the lock must also observe")
 	unblock()
 	select {
 	case err := <-first:

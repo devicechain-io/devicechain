@@ -5,20 +5,25 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 // AlarmEventWriter publishes once per relay attempt. Durable outboxes own retries.
 type AlarmEventWriter struct {
-	writer  messaging.MessageWriter
-	marshal func(*model.AlarmStateChangeEvent) ([]byte, error)
+	writer    messaging.MessageWriter
+	connected func() bool
+	marshal   func(*model.AlarmStateChangeEvent) ([]byte, error)
 	AlarmEventMetrics
 }
 
@@ -41,5 +46,23 @@ func (w *AlarmEventWriter) PublishAlarmEventDedup(ctx context.Context, event *mo
 	if err != nil {
 		return fmt.Errorf("%w: %w", model.ErrAlarmEventUnpublishable, err)
 	}
-	return w.writer.WriteMessages(ctx, messaging.Message{Value: payload, DedupID: dedupID})
+	err = w.writer.WriteMessages(ctx, messaging.Message{Value: payload, DedupID: dedupID})
+	if err != nil {
+		var timeout net.Error
+		if (w.connected != nil && !w.connected()) ||
+			errors.Is(err, context.DeadlineExceeded) || errors.Is(err, nats.ErrTimeout) ||
+			errors.Is(err, nats.ErrNoResponders) || errors.Is(err, nats.ErrConnectionClosed) ||
+			errors.Is(err, nats.ErrDisconnected) || errors.Is(err, nats.ErrConnectionReconnecting) ||
+			errors.Is(err, nats.ErrNoStreamResponse) || errors.Is(err, jetstream.ErrNoStreamResponse) ||
+			(errors.As(err, &timeout) && timeout.Timeout()) {
+			return fmt.Errorf("%w: %w", model.ErrAlarmEventBrokerUnavailable, err)
+		}
+	}
+	return err
+}
+
+// WithConnected supplies the live connection state for classifying publication failures.
+func (w *AlarmEventWriter) WithConnected(connected func() bool) *AlarmEventWriter {
+	w.connected = connected
+	return w
 }

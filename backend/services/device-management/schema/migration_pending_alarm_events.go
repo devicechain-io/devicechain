@@ -24,8 +24,8 @@ import (
 //
 // The table carries tenant_id, so the catalog-driven tenant purge erases it.
 type pendingAlarmEvent struct {
-	ID            uint64         `gorm:"primaryKey;autoIncrement;index:idx_pending_alarm_events_tenant_id,priority:2"`
-	TenantId      string         `gorm:"not null;size:128;index:idx_pending_alarm_events_tenant_id,priority:1"`
+	ID            uint64         `gorm:"primaryKey;autoIncrement;index:idx_pending_alarm_events_tenant_id,priority:2,where:quarantined_at IS NULL"`
+	TenantId      string         `gorm:"not null;size:128;index:idx_pending_alarm_events_tenant_id,priority:1,where:quarantined_at IS NULL;check:chk_pending_alarm_events_tenant_id,tenant_id <> ''"`
 	Payload       datatypes.JSON `gorm:"not null"`
 	CreatedAt     time.Time      `gorm:"not null"`
 	QuarantinedAt *time.Time
@@ -43,7 +43,7 @@ type pendingAlarmEvent struct {
 // # Re-runnability
 //
 // Migrations run with UseTransaction:false and replay after a failure. AutoMigrate creates
-// the table and its index only when absent, so replay is safe.
+// the table, its index and its check constraint only when absent, so replay is safe.
 func NewPendingAlarmEventsSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID:       "20261219120000",

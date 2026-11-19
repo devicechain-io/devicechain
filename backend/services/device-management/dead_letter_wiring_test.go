@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -72,17 +73,18 @@ func TestADeadLetterLandsOnThePlatformStreamWithThisServiceAsSource(t *testing.T
 	})
 	require.NotNil(t, sink)
 
-	require.NoError(t, sink.Write(core.WithTenant(context.Background(), "acme"), deadletter.Envelope{
-		Kind:       deadletter.KindNotification,
-		Reason:     deadletter.ReasonExhausted,
-		Summary:    "wiring test letter",
-		OccurredAt: time.Now(),
-	}))
+	payload := []byte(`{"AlarmToken":"alarm","EventType":"RAISED"}`)
+	require.NoError(t, newAlarmEventDeadLetter(sink)(core.WithTenant(context.Background(), "acme"),
+		"alarm", payload, errors.New("cannot encode alarm")))
 
 	subject, letter := msgtest.OnlyDeadLetter(t, nmgr.Conn(), instance)
 	require.Equal(t, messaging.ScopedSubject(instance, "acme", streams.DeadLetters), subject,
 		"the letter was not stored on the tenant's dead-letter subject")
 	require.Equal(t, "device-management", letter.Source, "the letter does not name this service as its source")
 	require.Equal(t, deadletter.KindNotification, letter.Kind)
-	require.Equal(t, "wiring test letter", letter.Summary)
+	require.Equal(t, deadletter.ReasonUnprocessable, letter.Reason)
+	require.Equal(t, "alarm", letter.Reference)
+	require.Equal(t, payload, letter.Payload)
+	require.Equal(t, "cannot encode alarm", letter.Detail)
+	require.Equal(t, "Stored alarm event cannot be relayed", letter.Summary)
 }

@@ -500,7 +500,7 @@ CREATE INDEX idx_entity_rel_target ON "device-management".entity_relationships U
 CREATE INDEX idx_facet_keys_deleted_at ON "device-management".facet_keys USING btree (deleted_at);
 CREATE INDEX idx_facet_keys_member_type ON "device-management".facet_keys USING btree (member_type);
 CREATE INDEX idx_facet_keys_tenant_id ON "device-management".facet_keys USING btree (tenant_id);
-CREATE INDEX idx_pending_alarm_events_tenant_id ON "device-management".pending_alarm_events USING btree (tenant_id, id);
+CREATE INDEX idx_pending_alarm_events_tenant_id ON "device-management".pending_alarm_events USING btree (tenant_id, id) WHERE (quarantined_at IS NULL);
 CREATE INDEX idx_pending_entity_deletions_tenant_id ON "device-management".pending_entity_deletions USING btree (tenant_id, id);
 CREATE INDEX idx_profile_decoder_samples_profile_created ON "device-management".profile_decoder_samples USING btree (tenant_id, device_profile_id, created_at DESC);
 CREATE INDEX idx_provisioning_profiles_trust_anchor ON "device-management".provisioning_profiles USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
@@ -1746,7 +1746,8 @@ CREATE TABLE "device-management".pending_alarm_events (
  payload jsonb NOT NULL,
  created_at timestamp with time zone NOT NULL,
  quarantined_at timestamp with time zone,
- last_error text
+ last_error text,
+ CONSTRAINT chk_pending_alarm_events_tenant_id CHECK (((tenant_id)::text <> ''::text))
 );
 CREATE TABLE "device-management".pending_attribute_repairs (
  id bigint NOT NULL,
