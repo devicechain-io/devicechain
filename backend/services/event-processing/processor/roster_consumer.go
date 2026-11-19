@@ -230,10 +230,14 @@ func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message
 	// The live consumer also tells the loop to forget the device's keyed detection state (latches,
 	// runs, windows), whose series is the device token: a recreated device reuses the token and would
 	// otherwise inherit the deleted one's "already raised" latch, so its first matching reading would
-	// raise nothing. It is signalled before the projection teardowns so it does not depend on their
-	// stores being wired; the catch-up path (signal=false) runs before the engine is restored.
-	if signal && ev.EntityType == entity.TypeDevice && ev.EntityToken != "" &&
-		validRosterToken(ev.EntityToken) && !ev.DeletedTime.IsZero() {
+	// raise nothing. The loop decides what to drop by re-reading the device's roster row, so with
+	// a roster store it is signalled only AFTER the tombstone is persisted: signalled first, the
+	// loop could read the still-live row, drop nothing, and leave the latch to the next
+	// incarnation. Without a roster store the drop does not read one, and is signalled here.
+	// The catch-up path (signal=false) runs before the engine is restored.
+	dropSeries := signal && ev.EntityType == entity.TypeDevice && ev.EntityToken != "" &&
+		validRosterToken(ev.EntityToken) && !ev.DeletedTime.IsZero()
+	if dropSeries && rp.RosterStore == nil {
 		if !rp.signalSeriesDrop(tenant, ev.EntityToken) {
 			return false // shutdown mid-send: leave unacked; the deletion redelivers next start
 		}
@@ -253,6 +257,9 @@ func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message
 				if !rp.persistBeforeAck("roster-delete "+tenant+"/"+ev.EntityToken,
 					func() error { return rp.RosterStore.Delete(rp.pctx(), tenant, ev.EntityToken, deletedTime) }) {
 					return false // shutdown mid-retry: leave unacked; the deletion redelivers next start
+				}
+				if dropSeries && !rp.signalSeriesDrop(tenant, ev.EntityToken) {
+					return false // shutdown mid-send: leave unacked; the deletion redelivers next start
 				}
 				// Signal the loop to re-check membership: it re-reads the projection (a tombstone
 				// disarms; a stale delete the monotonic guard rejected leaves the row live, so the

@@ -219,11 +219,16 @@ func TestMainResolvedGroupWorkersRouteEveryFact(t *testing.T) {
 		require.NoError(t, err)
 		publish(tenant, streams.EntityDeleted, raw)
 		require.Eventually(t, func() bool {
+			// The teardown changes engine state on the control plane, which no resolved event
+			// accompanies; a profile-free probe gives the worker a checkpoint to commit it in.
+			raw, err := resolvedevent.MarshalResolvedEvent(&resolvedevent.ResolvedEvent{Source: "mqtt", SourceDeviceToken: "probe", OccurredTime: base, ProcessedTime: base, EventType: eventtype.Measurement, Payload: &resolvedevent.ResolvedMeasurementsPayload{}})
+			require.NoError(t, err)
+			publish(tenant, physical, raw)
 			s, ok := readSnapshot(g)
 			if !ok || len(s.Raised) != 0 || len(s.Expected) != 1 {
 				return false
 			}
 			return s.Expected[0].Rule == tenant+"/p@1/dead" && s.Expected[0].Series == "never"
-		}, 10*time.Second, 20*time.Millisecond, "worker %d did not erase its deleted device", g)
+		}, 10*time.Second, 100*time.Millisecond, "worker %d did not erase its deleted device", g)
 	}
 }
