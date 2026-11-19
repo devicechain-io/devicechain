@@ -269,6 +269,10 @@ runs=(
   "flush-ungated|--scenario-defect flush-ungated|window-holds-flush"
   "lofts-under-basin|--scenario-defect lofts-under-basin|asset-hierarchy"
   "feeder-miswired|--scenario-defect feeder-miswired|feeder-blast-radius"
+  "ota-signature-omitted|--scenario-defect ota-signature-omitted|ota-artifact-trusted"
+  "ota-group-missing-charger|--scenario-defect ota-group-missing-charger|ota-targets-exact"
+  "ota-cap-three|--scenario-defect ota-cap-three|ota-concurrency"
+  "ota-failure-disabled|--scenario-defect ota-failure-disabled|ota-outcomes"
 )
 
 # ---------------------------------------------------------------------------

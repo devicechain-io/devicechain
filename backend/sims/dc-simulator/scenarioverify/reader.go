@@ -66,6 +66,7 @@ type Reader struct {
 // NewReader signs in as the handshake's sim identity.
 func NewReader(hs *sim.Handshake, httpc *http.Client) (*Reader, error) {
 	for name, v := range map[string]string{
+		"updateMgmtGraphQL": hs.Endpoints.UpdateMgmtGraphQL,
 		"deviceMgmtGraphQL": hs.Endpoints.DeviceMgmtGraphQL, "commandMgmtGraphQL": hs.Endpoints.CommandMgmtGraphQL,
 		"eventProcessingGraphQL": hs.Endpoints.EventProcessingGraphQL, "eventMgmtWS": hs.Endpoints.EventMgmtWS,
 	} {

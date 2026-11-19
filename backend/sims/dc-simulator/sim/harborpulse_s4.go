@@ -164,6 +164,11 @@ func harborCritical(quay string) bool { return quay == HarborpulseEastQuay || qu
 // harborFleetOps is the S4 part of a device's InstanceSpec.
 func (s *harborpulse) harborFleetOps(d harborDevice, in *InstanceSpec) {
 	switch d.kind {
+	case harborCharger:
+		in.Attributes = []AttributeSpec{{Key: HarborpulseQuayAttr, ValueType: "STRING", Value: quayName(d.quay)}}
+		if !(s.defects.otaGroupMissingCharger && d.token == HarborpulseMissingCharger) {
+			in.Attributes = append(in.Attributes, AttributeSpec{Key: HarborpulseRoleAttr, ValueType: "STRING", Value: harborRoleCharger})
+		}
 	case harborLight:
 		quay := quayName(d.quay)
 		if s.defects.eastLampMislabelled && d.token == harborMislabelledLamp {
@@ -214,6 +219,7 @@ func harborpulseGroups() []EntityGroupSpec {
 	light := attr(HarborpulseRoleAttr) + ` == "` + harborRoleLight + `"`
 	pump := attr(HarborpulseRoleAttr) + ` == "` + harborRolePump + `"`
 	return []EntityGroupSpec{
+		{Token: HarborpulseAllChargersGroup, Name: "All EV chargers", Description: "Every charger on the waterfront.", Selector: attr(HarborpulseRoleAttr) + ` == "` + harborRoleCharger + `"`},
 		{Token: HarborpulseAllLightsGroup, Name: "All street lights", Description: "Every street light on the waterfront.",
 			Selector: light},
 		{Token: HarborpulseEastLightsGroup, Name: "East Quay street lights", Description: "The street lights on East Quay.",

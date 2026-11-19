@@ -67,6 +67,7 @@ type harborpulse struct {
 	jobs      []ScenarioJob
 
 	s3b harborS3bState
+	s5  harborS5State
 }
 
 // NewHarborpulse returns the harborpulse Sim seeded from the handshake. Prefer NewSim.
@@ -119,7 +120,8 @@ func HarborpulseDefects() []string {
 		HarborpulseDefectFeederMiswired, HarborpulseDefectFloodClearBetweenTiers, HarborpulseDefectFloodSplitKey,
 		HarborpulseDefectFlushUngated, HarborpulseDefectHolidayDropped, HarborpulseDefectLampUnsited,
 		HarborpulseDefectLegacyDecoderFixed, HarborpulseDefectLoftsUnderBasin, HarborpulseDefectLoraWrongScale,
-		HarborpulseDefectMQTTUnreachable, HarborpulseDefectNightDimAllLights, HarborpulseDefectRefuseDerate,
+		HarborpulseDefectMQTTUnreachable, HarborpulseDefectNightDimAllLights,
+		HarborpulseDefectOTACapThree, HarborpulseDefectOTAFailureDisabled, HarborpulseDefectOTAGroupMissingCharger, HarborpulseDefectOTASignatureOmitted, HarborpulseDefectRefuseDerate,
 		HarborpulseDefectSilenceNorthLamp, HarborpulseDefectTruckStaysHome, HarborpulseDefectUnscopedWatch,
 		HarborpulseDefectUnsignedWebhook, HarborpulseDefectWrongWellDepth,
 	}
@@ -139,13 +141,14 @@ const HarborpulseMinDayLength = harborpulseDayLength
 const HarborpulseMaxDayLength = 24 * time.Hour
 
 type harborDefects struct {
-	floodSplitKey, refuseDerate, airLockBasin, silenceNorthLamp, dropBackfill bool
-	unsignedWebhook, mqttUnreachable, truckStaysHome, wrongWellDepth          bool
-	loraWrongScale, legacyDecoderFixed, floodClearBetweenTiers                bool
-	eastLampMislabelled, unscopedWatch, nightDimAllLights, lampUnsited        bool
-	holidayDropped, flushUngated, loftsUnderBasin, feederMiswired             bool
-	attributeNotUpdated, downlinkNack, backfillWrongWindow                    bool
-	names                                                                     []string
+	floodSplitKey, refuseDerate, airLockBasin, silenceNorthLamp, dropBackfill    bool
+	unsignedWebhook, mqttUnreachable, truckStaysHome, wrongWellDepth             bool
+	loraWrongScale, legacyDecoderFixed, floodClearBetweenTiers                   bool
+	eastLampMislabelled, unscopedWatch, nightDimAllLights, lampUnsited           bool
+	holidayDropped, flushUngated, loftsUnderBasin, feederMiswired                bool
+	attributeNotUpdated, downlinkNack, backfillWrongWindow                       bool
+	otaSignatureOmitted, otaGroupMissingCharger, otaCapThree, otaFailureDisabled bool
+	names                                                                        []string
 }
 
 // ConfigureScenario applies --day-length and --scenario-defect.
@@ -174,6 +177,14 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 	d := harborDefects{names: names}
 	for _, n := range names {
 		switch n {
+		case HarborpulseDefectOTASignatureOmitted:
+			d.otaSignatureOmitted = true
+		case HarborpulseDefectOTAGroupMissingCharger:
+			d.otaGroupMissingCharger = true
+		case HarborpulseDefectOTACapThree:
+			d.otaCapThree = true
+		case HarborpulseDefectOTAFailureDisabled:
+			d.otaFailureDisabled = true
 		case HarborpulseDefectAttributeNotUpdated:
 			d.attributeNotUpdated = true
 		case HarborpulseDefectDownlinkNack:
@@ -280,6 +291,7 @@ func (s *harborpulse) ScenarioClock(now time.Time) *ScenarioClock {
 		c.Backfill = model.backfillLedger()
 	}
 	c.Jobs = s.jobLedger()
+	c.S5 = s.s5Ledger()
 	return c
 }
 
@@ -819,11 +831,20 @@ func harborpulseDutyPolicy() NotificationPolicySpec {
 }
 
 func (s *harborpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
+	if strings.TrimSpace(rt.Endpoints.UpdateMgmtGraphQL) == "" {
+		return fmt.Errorf("harborpulse requires endpoints.updateMgmtGraphQL; re-create the sim with a current dcctl")
+	}
+	if rt.UpdateFleet != nil {
+		return fmt.Errorf("harborpulse declares its own update population; --ota cannot also be given")
+	}
 	if err := Provision(ctx, rt, s.Manifest()); err != nil {
 		return err
 	}
 	// The campaigns an earlier run created as its days ran would still fire into this one.
-	return deleteCampaignsWithPrefix(ctx, rt, HarborpulseNightDimPrefix, HarborpulseFlushPrefix)
+	if err := deleteCampaignsWithPrefix(ctx, rt, HarborpulseNightDimPrefix, HarborpulseFlushPrefix); err != nil {
+		return err
+	}
+	return s.provisionChargerOTA(ctx, rt)
 }
 
 func (s *harborpulse) ensureModel() *harborModel {
@@ -848,7 +869,7 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	elapsed := now.Sub(s.started)
 	s.mu.Unlock()
 
-	beatErr := s.s3bBeats(ctx, rt, elapsed, now)
+	beatErr := errors.Join(s.s3bBeats(ctx, rt, elapsed, now), s.s5Beats(ctx, rt, now))
 	if beatErr != nil {
 		log.Error().Err(beatErr).Msg("run harborpulse beats failed; retrying next tick")
 	}

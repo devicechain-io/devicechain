@@ -264,6 +264,12 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 		return noVerdict{err}
 	}
 
+	// Watch the rollout before the potentially lengthy telemetry read-back.
+	s5Clock, err := watchS5(ctx, cfg, reader, &obs)
+	if err != nil {
+		return noVerdict{err}
+	}
+
 	// The read-back.
 	for _, p := range fleetOf(sim.HarborpulsePumpType, "") {
 		if err := readDevice(ctx, reader, &obs, p, obs.at(stormFrom).Add(-responseWithin), obs.at(pumpTo).Add(responseWithin)); err != nil {
@@ -350,6 +356,10 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 	if err := readS4(ctx, reader, &obs, final.Scenario.Jobs); err != nil {
 		return noVerdict{err}
 	}
+	if err := readS5(ctx, reader, &obs, s5Clock.S5); err != nil {
+		return noVerdict{err}
+	}
+	rep.WatchTo = time.Now()
 	rep.Invariants = Evaluate(obs)
 	return nil
 }

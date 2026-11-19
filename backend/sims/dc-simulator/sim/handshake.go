@@ -101,6 +101,8 @@ type Endpoints struct {
 	// the integration token: a network server posts "{Integrations}/{tenant}/{integration}".
 	// Optional like the two above.
 	Integrations string `json:"integrations,omitempty"`
+	// UpdateMgmtGraphQL is the signed artifact catalogue and rollout API.
+	UpdateMgmtGraphQL string `json:"updateMgmtGraphQL,omitempty"`
 }
 
 // Handshake is the local sim record dcctl (Lane B) writes and dc-simulator (Lane

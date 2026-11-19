@@ -44,6 +44,11 @@ func verifierDocuments() []struct {
 		name, area, doc string
 		vars            map[string]any
 	}{
+		{"queryS5Artifact", "update-management", queryS5Artifact, map[string]any{"token": "a"}},
+		{"queryS5Signer", "update-management", queryS5Signer, map[string]any{"token": "s"}},
+		{"queryS5Rollout", "update-management", queryS5Rollout, map[string]any{"token": "r"}},
+		{"queryS5Targets", "update-management", queryS5Targets, map[string]any{"token": "r", "c": map[string]any{"pageNumber": 1, "pageSize": 100}}},
+		{"queryS5Assignment", "update-management", queryS5Assignment, map[string]any{"token": "a"}},
 		{"queryCalculatedJob", "event-management", queryCalculatedJob, map[string]any{"token": "job"}},
 		{"queryAlarms", "device-management", queryAlarms, map[string]any{
 			"c": map[string]any{"pageNumber": 1, "pageSize": alarmPageSize},
@@ -94,8 +99,8 @@ func verifierDocuments() []struct {
 
 func TestEveryVerifierDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 	docs := verifierDocuments()
-	if len(docs) != 20 {
-		t.Fatalf("%d documents listed; the verifier sends 20 — a new one must be listed here", len(docs))
+	if len(docs) != 25 {
+		t.Fatalf("%d documents listed; the verifier sends 25 â€” a new one must be listed here", len(docs))
 	}
 	for _, d := range docs {
 		if errs := servedSchema(t, d.area).ValidateWithVariables(d.doc, d.vars); len(errs) > 0 {

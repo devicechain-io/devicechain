@@ -54,7 +54,8 @@ func ConfigureScenario(s Sim, o ScenarioOptions) error {
 // 🔴 THE JSON TAGS ARE THE CONTRACT with cmd/scenario-verify, which maps a beat's sim time to wall
 // time as StartedAt + ((Day*24 + hour) - StartHour) / 24 * DayLength.
 type ScenarioClock struct {
-	Name string `json:"name"`
+	S5   *ScenarioS5 `json:"s5,omitempty"`
+	Name string      `json:"name"`
 	// Started is false until the first tick, which is the instant the day is measured from.
 	Started bool `json:"started"`
 	// StartedAt is that first tick, RFC 3339 with nanoseconds; empty until Started.

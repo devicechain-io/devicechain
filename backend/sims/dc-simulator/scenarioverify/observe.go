@@ -137,6 +137,7 @@ type Observations struct {
 	// S4 is what was read for the fleet operations: groups, campaigns, the maintenance window,
 	// the asset hierarchy and the relationship graph.
 	S4 S4 `json:"-"`
+	S5 S5 `json:"-"`
 }
 
 // The watch: from before the first judged beat to after the last one clears, sim hours.
