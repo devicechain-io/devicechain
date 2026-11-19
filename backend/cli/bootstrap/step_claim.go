@@ -289,6 +289,7 @@ func applyDeclaration(st *State, spec dcv1beta1.InstanceSpec) {
 	st.HA = spec.HA
 	st.Compact = spec.Compact
 	st.Size = sizeFromSpec(spec)
+	st.Sharding = spec.Sharding
 	st.NoMonitoring = !spec.Monitoring
 	st.NoCNPG = !spec.CNPG
 	st.IngressHost = spec.Host

@@ -154,6 +154,11 @@ func shardGroupAreas(profile string, extra []string) ([]string, error) {
 // An upgrade must never convert a data-bearing standalone JetStream server.
 // Read the existing broker, including for --skip-infrastructure.
 func precheckShardGroupsUpgrade(ctx context.Context, st *State) error {
+	// A level instance is judged against its frozen shape first; custom and off pass through to
+	// the rules below, unchanged.
+	if err := judgeShardingUpgrade(ctx, st); err != nil {
+		return err
+	}
 	vals := authoringValues(st)
 	cfg, err := shardGroupsFromValues(vals)
 	if err != nil || cfg == nil {

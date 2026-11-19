@@ -284,6 +284,12 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	if err := validateRecordedSize(inst.Spec); err != nil {
 		return err
 	}
+	// Likewise a sharding level this build does not know, or a recorded block that is not the
+	// level's own: read back as custom or off, the upgrade would render the instance's groups
+	// from something other than its level.
+	if err := validateRecordedSharding(inst.Spec); err != nil {
+		return err
+	}
 	applyDeclaration(st, inst.Spec)
 	// 🔴 THE BINDING'S FACTS COME FROM THE DECLARATION, which bootstrap wrote from the very
 	// binding it rendered with (InstanceSpecFrom) and which ValidateInstanceSpecChange
