@@ -224,3 +224,22 @@ func TestGroupRuleSupervisorLiveFacts(t *testing.T) {
 		}
 	}
 }
+
+// A placement move observed while a checkpoint's detections are being published ends the
+// term before anything more is sent for the moved tenant, and the snapshot does not commit.
+func TestGroupPublishRefusesAMoveMidPass(t *testing.T) {
+	router := &movingRuleRouter{}
+	r := newGroupRig(t, router)
+	p0, _ := routedRuleFixture(t, r)
+	compiled, failures := runtime.CompilePublishedRules("other", "p@1", []dmcontract.PublishedDetectionRule{{Token: "r", Definition: deadRule}})
+	require.Zero(t, failures)
+	require.NoError(t, p0.restore(context.Background()))
+	p0.applyRuleUpdate(ruleUpdate{upserts: compiled})
+	require.NoError(t, p0.ownsRuleTenant("other"), "fixture: g0 owns the tenant")
+	p0.pendingDets = pending([]detectcore.Detection{{RuleID: "other/p@1/r", Series: "device", Kind: detectcore.Absence, Edge: detectcore.EdgeRaised}})
+	router.other.Store(1)
+	require.False(t, p0.publishPending(context.Background()), "a moved tenant's detections must not be sent")
+	require.Error(t, p0.pctx().Err(), "the move must end the shared term")
+	require.Len(t, p0.pendingDets, 1)
+	require.Equal(t, outputNew, p0.pendingDets[0].state, "nothing may have been sent")
+}

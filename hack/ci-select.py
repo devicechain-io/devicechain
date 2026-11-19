@@ -206,6 +206,7 @@ READERS = [
     # Each peer client's recorded documents, validated against the SDL its target serves
     # (documents_test.go validateDocuments: ../../<target>/graphql).
     ("backend/services/ai-inference", "inference", ["backend/services/user-management/graphql/**"], [], "inference/documents_test.go"),
+    ("backend/services/notification-management", "processor", ["backend/services/device-management/graphql/**"], [], "processor/documents_test.go"),
     ("backend/services/event-sources", "adapter", [
         "backend/services/device-management/graphql/**",
         "backend/services/device-state/graphql/**",
@@ -250,7 +251,8 @@ READERS = [
         "backend/services/event-processing/graphql/**",
     ], [], "scenarioverify/documents_test.go:21"),
     ("backend/sims/dc-simulator", "updater", ["backend/core/ota/testdata/**"], [], "updater/*_test.go"),
-    ("backend/tools/apiprobe", ".", [SDL], [], "baseline_test.go, readsweep_test.go, documents_test.go"),
+    # signer_baseline_test.go:24 loads ../../services as a baseline tree: each area's served graphql SDL.
+    ("backend/tools/apiprobe", ".", [SDL], [], "baseline_test.go, readsweep_test.go, documents_test.go, signer_baseline_test.go:24"),
     ("backend/tools/docsgql", ".", ["docs/**", SDL], [], "docsgql_test.go:241"),
     ("backend/tools/docsgql", "decoderfuncs", ["docs/**/decoder-functions.md"], [], "decoderfuncs/decoderfuncs_test.go:19"),
     ("backend/tools/docsgql", "sdlcompat", [SDL], [], "sdlcompat/sdlcompat_test.go:17"),

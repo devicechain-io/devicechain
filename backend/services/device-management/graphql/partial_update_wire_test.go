@@ -79,6 +79,7 @@ var partialUpdateMutations = []partialUpdateMutation{
 	{mutation: "updateMetricDefinition", input: "MetricDefinitionUpdateRequest"},
 	{mutation: "updateCommandDefinition", input: "CommandDefinitionUpdateRequest"},
 	{mutation: "updateMaintenanceWindow", input: "MaintenanceWindowUpdateRequest"},
+	{mutation: "updateAlarmSuppressionWindow", input: "AlarmSuppressionWindowUpdateRequest", forbidden: []string{"createdBy", "endedBy", "endedAt", "creatorScope", "version"}},
 	{mutation: "updateDetectionRule", input: "DetectionRuleUpdateRequest"},
 	{mutation: "updateGeoFence", input: "GeoFenceUpdateRequest"},
 	{

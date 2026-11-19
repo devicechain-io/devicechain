@@ -17,16 +17,18 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// SuppressionLookup returns live suppression windows, omitting unsuppressed alarms.
+// SuppressionLookup returns current facts for every returned alarm, including unsuppressed alarms.
 // Implementations report lookup failures as errors; callers must fail toward paging
 // by treating a failed lookup as though no alarm were suppressed.
 type SuppressionLookup interface {
 	LookupSuppressions(context.Context, []string) (map[string]SuppressionStatus, error)
 }
 
-// SuppressionStatus identifies the window and deadline of a live suppression.
+// SuppressionStatus carries current alarm facts and an optional live suppression.
 // An empty window token or an expired deadline must never prevent a page.
 type SuppressionStatus struct {
+	Severity    string
+	State       string
 	WindowToken string
 	Until       time.Time
 }
@@ -39,7 +41,7 @@ const suppressionUnsupportedFor = 2 * time.Minute
 // silent and fails toward paging until the concrete lookup probes again.
 var ErrSuppressionUnsupported = errors.New("suppression status is not served")
 
-const alarmSuppressionStatusDocument = `query AlarmSuppressionStatus($tokens: [String!]!) { alarmSuppressionStatus(tokens: $tokens) { alarmToken suppression { windowToken until } } }`
+const alarmSuppressionStatusDocument = `query AlarmSuppressionStatus($tokens: [String!]!) { alarmSuppressionStatus(tokens: $tokens) { alarmToken severity state suppression { windowToken until } } }`
 
 type suppressionLookup struct {
 	client           *svcclient.Client
@@ -86,6 +88,8 @@ func (s *suppressionLookup) LookupSuppressions(ctx context.Context, tokens []str
 		var out struct {
 			Statuses *[]struct {
 				AlarmToken  string `json:"alarmToken"`
+				Severity    string
+				State       string
 				Suppression *struct {
 					WindowToken string
 					Until       string
@@ -118,13 +122,17 @@ func (s *suppressionLookup) LookupSuppressions(ctx context.Context, tokens []str
 			requested[token] = true
 		}
 		for _, a := range *out.Statuses {
-			if !requested[a.AlarmToken] || a.Suppression == nil || a.Suppression.WindowToken == "" {
+			if !requested[a.AlarmToken] {
 				continue
 			}
-			until, err := time.Parse(time.RFC3339Nano, a.Suppression.Until)
-			if err == nil && until.After(s.now()) {
-				found[a.AlarmToken] = SuppressionStatus{WindowToken: a.Suppression.WindowToken, Until: until}
+			status := SuppressionStatus{Severity: a.Severity, State: a.State}
+			if a.State != "CLEARED" && a.Suppression != nil && a.Suppression.WindowToken != "" {
+				until, err := time.Parse(time.RFC3339Nano, a.Suppression.Until)
+				if err == nil && until.After(s.now()) {
+					status.WindowToken, status.Until = a.Suppression.WindowToken, until
+				}
 			}
+			found[a.AlarmToken] = status
 		}
 	}
 	return found, nil
@@ -149,7 +157,22 @@ func unsupportedSuppression(err error) bool {
 // Shared by all notifier instances in this process; uncached errors count every call.
 var suppressionLastWarning atomic.Int64
 
+// lookupSuppressions retains the hold-only map contract for dispatch and escalation.
 func (n *PolicyNotifier) lookupSuppressions(ctx context.Context, tokens []string, now time.Time, timeout time.Duration) map[string]SuppressionStatus {
+	found := n.lookupSuppressionStatuses(ctx, tokens, timeout)
+	for token, status := range found {
+		if !status.suppressedAt(now) {
+			delete(found, token)
+		}
+	}
+	return found
+}
+
+func (s SuppressionStatus) suppressedAt(now time.Time) bool {
+	return s.State != "CLEARED" && validWindowToken(s.WindowToken) && s.Until.After(now)
+}
+
+func (n *PolicyNotifier) lookupSuppressionStatuses(ctx context.Context, tokens []string, timeout time.Duration) map[string]SuppressionStatus {
 	found := make(map[string]SuppressionStatus)
 	if n.SuppressionLookup == nil {
 		return found
@@ -178,9 +201,7 @@ func (n *PolicyNotifier) lookupSuppressions(ctx context.Context, tokens []string
 			return map[string]SuppressionStatus{}
 		}
 		for token, status := range rows {
-			if validWindowToken(status.WindowToken) && status.Until.After(now) {
-				found[token] = status
-			}
+			found[token] = status
 		}
 	}
 	return found
@@ -217,11 +238,12 @@ func (n *PolicyNotifier) escalationSuppressed(ctx context.Context, token string,
 // maxWindowTokenLength is the width of notification_deferrals.held_by_window.
 const maxWindowTokenLength = 128
 
-// validWindowToken reports whether a window token can be honoured: non-empty, and short
-// enough to be recorded as the hold's audit. A token that could not be stored would make
+// validWindowToken requires core's token grammar (an ASCII letter or digit followed by
+// letters, digits, hyphens or underscores) and the hold audit column's length bound.
+// A token that could not be stored would make
 // the hold's write fail, and a write that fails before any send turns into redelivery and
 // then a dead letter, so a page would be lost to an optional field. It is read as NOT
 // suppressed instead, which pages.
 func validWindowToken(token string) bool {
-	return token != "" && len(token) <= maxWindowTokenLength
+	return core.ValidateToken(token) == nil && len(token) <= maxWindowTokenLength
 }

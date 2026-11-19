@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
 	"gorm.io/datatypes"
@@ -41,10 +42,10 @@ func TestSuppressionPostgresScopeAndCycleCascade(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, visible)
 	targets := []AlarmSuppressionTarget{{"DEVICE", "globex-pump"}}
-	_, err = r.api.UpdateAlarmSuppressionWindow(member, w.Token, &AlarmSuppressionUpdateRequest{Targets: &targets})
+	_, err = r.api.UpdateAlarmSuppressionWindow(member, w.Token, &AlarmSuppressionUpdateRequest{Targets: OptionalAlarmSuppressionTargets{Set: true, Value: targets}})
 	require.ErrorIs(t, err, auth.ErrForbidden)
 	reason := "extended work"
-	updated, err := r.api.UpdateAlarmSuppressionWindow(member, w.Token, &AlarmSuppressionUpdateRequest{Reason: &reason})
+	updated, err := r.api.UpdateAlarmSuppressionWindow(member, w.Token, &AlarmSuppressionUpdateRequest{Reason: dcgraphql.OptionalStringOf(reason)})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, updated.Version)
 	_, err = r.api.EndAlarmSuppressionWindow(member, w.Token)
@@ -118,7 +119,7 @@ func TestSuppressionPostgresScopedMutationSingleConnection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(r.member("customer:acme"), 3*time.Second)
 	defer cancel()
 	reason := "scoped edit"
-	_, err = r.api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Reason: &reason})
+	_, err = r.api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Reason: dcgraphql.OptionalStringOf(reason)})
 	require.NoError(t, err)
 }
 
