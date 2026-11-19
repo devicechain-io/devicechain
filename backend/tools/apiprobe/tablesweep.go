@@ -302,6 +302,7 @@ var tableSweepExemptions = map[string]string{
 		"one, so the writer is exercised; empty afterwards is the drain having caught up. A row still " +
 		"here a few seconds after the seed means ownership facts are not reaching the broker, which is " +
 		"a finding this bucket should report.",
+	"device-management.pending_alarm_events": "alarm transitions awaiting broker acknowledgement or retained in quarantine; inspect relay health and alarm_events_quarantined if rows remain on a healthy instance.",
 	"device-management.pending_entity_deletions": "the deletion outbox: a row is written in the transaction " +
 		"of an entity delete and removed once device-management's drain, which runs every second, has had " +
 		"the deletion fact acknowledged by the broker. No API call leaves a row behind on a healthy instance: " +

@@ -31,7 +31,7 @@ import (
 // these tests can tell a delivered eviction from something else (a re-read, an expiry).
 
 func evictionTables() []any {
-	return append(credentialTables(), &model.DeviceReplacement{}, &model.DeviceAlias{}, &model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{},
+	return append(credentialTables(), &model.DeviceReplacement{}, &model.DeviceAlias{}, &model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{},
 		&model.EntityRelationshipType{}, &model.EntityAttribute{}, &model.Alarm{},
 		&model.EntityGroupMembership{}, &model.GeoFence{}, &model.Area{}, &model.GeoFenceSetVersion{},
 		&model.GeoFenceGeometryBlob{},

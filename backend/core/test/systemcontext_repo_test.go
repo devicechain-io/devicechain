@@ -67,6 +67,8 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/ownership_outbox.go":      {"Api.DrainOwnershipFacts"},
 	// The entity-deletion drain lists the tenants that have queued deletion facts (no row is read), then publishes and deletes each tenant's rows under core.WithTenant.
 	"backend/services/device-management/model/deletion_outbox.go": {"Api.DrainEntityDeletions"},
+	// Alarm relay discovers only tenant IDs; all payload reads and effects use a fresh non-system tenant context.
+	"backend/services/device-management/model/alarm_event_outbox.go": {"Api.DrainAlarmEvents"},
 	// The create-enrollment marker healer reads only (tenant, group, version) keys of registered group versions across tenants (no row content), then judges and rebuilds each one under that row's own core.WithTenant.
 	"backend/services/device-management/model/api_group_enroll_marker.go": {"CreateEnrollMarkerHealer.Pass"},
 	// The startup enrollment reconcile lists the tenants that have groups, facet refs or rule pins (no row is read), then repairs each tenant's groups under core.WithTenant.

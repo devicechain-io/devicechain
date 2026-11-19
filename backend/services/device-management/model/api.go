@@ -7,6 +7,7 @@ import (
 	"context"
 	"github.com/devicechain-io/dc-microservice/actiongate"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -109,13 +110,18 @@ type Api struct {
 	// disables it.
 	ceilings *ceilingMetrics
 
-	// AlarmPublisher emits alarm state-change events (ADR-041). It is injected at
-	// wiring time (the concrete publisher owns a NATS writer, so it cannot be built
-	// until the messaging layer exists) and may be nil — in tests, or before wiring —
-	// in which case emission is disabled. Both the DETECT edge integrator and the operator
-	// API mutate alarms through this shared *Api, so setting it here gives one uniform
-	// event stream for every transition.
-	AlarmPublisher AlarmEventPublisher
+	// AlarmPublisher acknowledges immutable snapshots from the durable relay. Nil
+	// retains queued events and makes the drain fail closed.
+	AlarmPublisher     AlarmEventPublisher
+	AlarmEventObserver func(pending int, oldest time.Duration, quarantined int)
+	alarmEventMu       sync.Mutex
+	alarmEventRunning  bool
+	alarmEventPending  chan struct{}
+	alarmEventWait     time.Duration
+	// suppressAlarmEventKickForTest simulates a crash immediately after commit.
+	suppressAlarmEventKickForTest bool
+	// afterAlarmEventEnqueueForTest can fail after enqueue to prove atomic rollback.
+	afterAlarmEventEnqueueForTest func(*gorm.DB) error
 
 	// EntityDeletedPublisher acknowledges deletion facts from the transactional outbox.
 	// Injected at wiring time; a nil publisher makes the drain fail and retain its rows.
@@ -325,24 +331,12 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 	return api
 }
 
-// emitAlarmEvent publishes only after the caller has committed the transition.
-// DEVICE RAISED/ESCALATED events get a bounded, wall-time suppression evaluation
-// immediately before publication. Evaluation failures still publish toward paging.
-// A nil publisher disables both enrichment and publication.
-func (api *Api) emitAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent) {
-	if api.AlarmPublisher != nil {
-		api.describeAlarmDevice(ctx, event)
-		api.suppressAlarmEvent(ctx, event)
-		api.AlarmPublisher.PublishAlarmEvent(ctx, event)
-	}
-}
-
 // alarmDeviceLookupTimeout bounds the device read that names an alarm event.
 const alarmDeviceLookupTimeout = 500 * time.Millisecond
 
 // describeAlarmDevice names the originating device on the event (token, name, type token) so
 // a subscriber such as notification-management can show a person which device it is. It is
-// best effort and never blocks the page: the transition is already committed, so a failed read
+// best effort before the transition transaction, so a failed read
 // publishes the event without the names rather than not at all.
 func (api *Api) describeAlarmDevice(ctx context.Context, event *AlarmStateChangeEvent) {
 	if event.OriginatorType != string(entity.TypeDevice) || event.OriginatorId == 0 {

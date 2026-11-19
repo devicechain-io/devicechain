@@ -99,12 +99,14 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	prevDrain, prevKickDrain, prevReaper := OwnershipDrain, SessionKickDrain, AgentProposalReaper
 	prevDeletion, prevClassifier, prevMarkerHeal := EntityDeletionDrain, AlarmPositionClassifier, CreateEnrollMarkerHeal
 	prevEffects, prevKills := AgentEffectsDrain, AgentKillConsumer
+	prevAlarmEvents := AlarmEventDrain
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, Svc = prevMs, prevGql, prevNats, prevSvc
 		InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer = prevIep, prevRac, prevCallout, prevDrc
 		OwnershipDrain, SessionKickDrain, AgentProposalReaper = prevDrain, prevKickDrain, prevReaper
 		EntityDeletionDrain, AlarmPositionClassifier, CreateEnrollMarkerHeal = prevDeletion, prevClassifier, prevMarkerHeal
 		AgentEffectsDrain, AgentKillConsumer = prevEffects, prevKills
+		AlarmEventDrain = prevAlarmEvents
 	})
 
 	area := fmt.Sprintf("device-management-shutdown-%d", time.Now().UnixNano())
@@ -165,6 +167,9 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	EntityDeletionDrain = core.NewPeriodicTask(area, "entity-deletion-drain", time.Hour,
 		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("entity_deletion_drain"))
 	require.NoError(t, EntityDeletionDrain.Initialize(context.Background()))
+	AlarmEventDrain = core.NewPeriodicTask(area, "alarm-event-drain", time.Hour,
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("alarm_event_drain"))
+	require.NoError(t, AlarmEventDrain.Initialize(context.Background()))
 	AgentKillConsumer = processor.NewAgentKillConsumer(Microservice, nil, nil, model.NewKillFeed(0, nil), nil)
 	require.NoError(t, AgentKillConsumer.Initialize(context.Background()))
 	SessionKickDrain = core.NewPeriodicTask(area, "session-kick-drain", time.Hour,

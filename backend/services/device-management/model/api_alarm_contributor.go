@@ -194,11 +194,31 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 	if anyActive {
 		match = api.cycleStartSuppression(ctx, deviceId, alarmKey, severity, occurredTime)
 	}
+	var prepared *AlarmStateChangeEvent
+	if anyActive {
+		prepared = api.prepareAlarmEvent(ctx, created, AlarmEventRaised)
+	}
 	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(created).Error; err != nil {
 			return err
 		}
-		return insertCycleSuppression(tx, created, match)
+		if err := insertCycleSuppression(tx, created, match); err != nil {
+			return err
+		}
+		if anyActive {
+			event := newAlarmStateChangeEvent(created, AlarmEventRaised, "", occurredTime)
+			copyAlarmEventPreparation(event, prepared)
+			if match != nil {
+				event.RaisedDuringSuppressionToken = match.WindowToken
+			}
+			if err := queueAlarmEventOnTx(ctx, tx, created, event); err != nil {
+				return err
+			}
+			if api.afterAlarmEventEnqueueForTest != nil {
+				return api.afterAlarmEventEnqueueForTest(tx)
+			}
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -206,11 +226,7 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 		api.classifyAlarm(ctx, created.ID)
 	}
 	if anyActive {
-		event := newAlarmStateChangeEvent(created, AlarmEventRaised, "", occurredTime)
-		if match != nil {
-			event.RaisedDuringSuppressionToken = match.WindowToken
-		}
-		api.emitAlarmEvent(ctx, event)
+		api.relayAlarmEvents(ctx)
 	}
 	return nil
 }
@@ -341,6 +357,12 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 		cycle.RaisedTime = updates["raised_time"].(time.Time)
 		cycle.ScopeAnchors = updates["scope_anchors"].(rdb.Anchors)
 	}
+	var prepared *AlarmStateChangeEvent
+	if mutate != nil {
+		snapshot := *existing
+		snapshot.Severity = severity
+		prepared = api.prepareAlarmEvent(ctx, &snapshot, etype)
+	}
 	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		res := tx.Model(existing).
 			Where("state = ? AND contributor_version = ?", prevState, prevVersion).Updates(updates)
@@ -350,29 +372,43 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 		if res.RowsAffected == 0 {
 			return errAlarmContributorConflict
 		}
-		return insertCycleSuppression(tx, &cycle, match)
+		if err := insertCycleSuppression(tx, &cycle, match); err != nil {
+			return err
+		}
+		switch {
+		case requiresPosition != nil && *requiresPosition:
+			marked := true
+			existing.PositionDerived = &marked
+		case reclassify:
+			existing.PositionDerived = nil
+		}
+		if mutate != nil {
+			mutate()
+			prev := prevSeverity
+			if etype != AlarmEventEscalated && etype != AlarmEventDeescalated {
+				prev = ""
+			}
+			event := newAlarmStateChangeEvent(existing, etype, prev, occurredTime)
+			copyAlarmEventPreparation(event, prepared)
+			if etype == AlarmEventRaised && match != nil {
+				event.RaisedDuringSuppressionToken = match.WindowToken
+			}
+			if err := queueAlarmEventOnTx(ctx, tx, existing, event); err != nil {
+				return err
+			}
+			if api.afterAlarmEventEnqueueForTest != nil {
+				return api.afterAlarmEventEnqueueForTest(tx)
+			}
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
-	switch {
-	case requiresPosition != nil && *requiresPosition:
-		marked := true
-		existing.PositionDerived = &marked
-	case reclassify:
-		existing.PositionDerived = nil
+	if reclassify {
 		api.classifyAlarm(ctx, existing.ID)
 	}
 	if mutate != nil {
-		mutate()
-		prev := prevSeverity
-		if etype != AlarmEventEscalated && etype != AlarmEventDeescalated {
-			prev = "" // previousSeverity is meaningful only on a severity move
-		}
-		event := newAlarmStateChangeEvent(existing, etype, prev, occurredTime)
-		if etype == AlarmEventRaised && match != nil {
-			event.RaisedDuringSuppressionToken = match.WindowToken
-		}
-		api.emitAlarmEvent(ctx, event)
+		api.relayAlarmEvents(ctx)
 	}
 	return nil
 }
