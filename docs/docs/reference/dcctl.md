@@ -354,9 +354,57 @@ Operate on the message broker an instance runs on.
 ### SEE ALSO
 
 * [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl broker facts](#dcctl-broker-facts)	 - List the deletion facts the platform announced
 * [dcctl broker permissions](#dcctl-broker-permissions)	 - Print the broker permissions every platform login is held to
 * [dcctl broker rebalance](#dcctl-broker-rebalance)	 - Even out which message broker server leads which streams and consumers
 * [dcctl broker reconcile](#dcctl-broker-reconcile)	 - Create and reconcile the instance's message broker streams and buckets
+
+## dcctl broker facts {#dcctl-broker-facts}
+
+List the deletion facts the platform announced
+
+### Synopsis
+
+List the deletion facts on an instance's message broker: what was announced, and when.
+
+When an entity (a device, an asset, a group, ...) is deleted, device-management announces it on the
+broker so that every service holding a reference to it can remove that reference. This answers "was
+the deletion of X announced, and when?" from the broker itself. For each fact it prints the stream
+sequence, the time the broker stored it, the tenant, the entity's type, id and token, the time it
+was deleted, and the message id the announcement was published under (entdel/\<tenant>/\<type>/\<id>
+deduplicates a re-announcement).
+
+It connects through a port-forward to a broker pod as the broker administrator, and only reads: that
+login may read these messages but cannot remove them, and nothing is created on the broker. A fact
+is listed while the stream still holds it, so an old deletion may no longer be there. An instance
+installed or last upgraded by a release without this command has to be upgraded before its broker
+lets the administrator read the facts.
+
+```
+dcctl broker facts <instance> [flags]
+```
+
+### Examples
+
+```
+  dcctl broker facts devicechain
+  dcctl broker facts devicechain --tenant acme --token sensor-17
+  dcctl broker facts devicechain --since 24h
+```
+
+### Options
+
+```
+  -h, --help                  help for facts
+      --kube-context string   kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
+      --since duration        list only the facts stored within this long before now, for example 24h (default: every fact the stream holds)
+      --tenant string         list only this tenant's facts (default: every tenant)
+      --token string          list only the facts about the entity with this token
+```
+
+### SEE ALSO
+
+* [dcctl broker](#dcctl-broker)	 - Message broker operations
 
 ## dcctl broker permissions {#dcctl-broker-permissions}
 

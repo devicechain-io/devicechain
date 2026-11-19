@@ -4,6 +4,7 @@
 package natsauth
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -68,15 +69,55 @@ func TestTheAdministratorCanReadTheEnvelopeStreamsAndNoOthers(t *testing.T) {
 	for _, c := range carriers {
 		isCarrier[c] = true
 	}
+	// The deletion facts are read the same way, by dcctl broker facts; see
+	// TestTheAdministratorCanReadTheDeletionFactsButNeverRemoveThem.
+	readable := map[string]bool{}
+	for _, c := range streams.OperatorReadable() {
+		readable[c] = true
+	}
 	for _, st := range streams.All {
 		name := messaging.StreamName(permInstance, st.Suffix)
 		for _, verb := range []string{"STREAM.MSG.GET.", "DIRECT.GET."} {
 			got := p.publishes("$JS.API." + verb + name)
-			if isCarrier[st.Suffix] {
+			switch {
+			case isCarrier[st.Suffix]:
 				require.True(t, got, "the administrator cannot %s%s, so dcctl's envelope guard times out", verb, name)
-			} else {
-				require.False(t, got, "the administrator can read messages of %s, which carries no envelope", name)
+			case readable[st.Suffix]:
+				require.True(t, got, "the administrator cannot %s%s, so dcctl broker facts is refused", verb, name)
+			default:
+				require.False(t, got, "the administrator can read messages of %s, which carries no envelope and is not operator-readable", name)
 			}
+		}
+	}
+}
+
+// `dcctl broker facts` reads the deletion facts the platform announced, as the broker
+// administrator. The grant is the two READ verbs, on exactly the streams the table declares
+// OperatorReadable (today the deletion facts and nothing else), derived from the table. It must
+// never become a way to REMOVE a fact: no purge, no message delete, no consumer, no publish
+// into the stream. And only a stream the platform itself writes may be declared readable: a
+// device's own messages are not the operator's to read off the broker.
+//
+// GUARD: kills an administrator without the read on the deletion facts, one granted a
+// destructive verb on them, and a table that declares a device-written stream readable.
+func TestTheAdministratorCanReadTheDeletionFactsButNeverRemoveThem(t *testing.T) {
+	p, err := AdminPermissions(permInstance)
+	require.NoError(t, err)
+	require.Equal(t, []string{streams.EntityDeleted}, streams.OperatorReadable(),
+		"the operator-readable streams changed: the administrator's read grant follows them, so decide it on purpose")
+	for _, suffix := range streams.OperatorReadable() {
+		require.True(t, streams.PlatformAuthoredFor(suffix),
+			"%s is operator-readable but not PlatformAuthored: a device's messages would be readable by the operator plane", suffix)
+		name := messaging.StreamName(permInstance, suffix)
+		require.True(t, p.publishes("$JS.API.STREAM.MSG.GET."+name), "no STREAM.MSG.GET on %s", name)
+		require.True(t, p.publishes("$JS.API.DIRECT.GET."+name), "no DIRECT.GET on %s", name)
+		for _, verb := range []string{"STREAM.MSG.DELETE.", "STREAM.PURGE.", "STREAM.DELETE.", "STREAM.RESTORE.",
+			"CONSUMER.CREATE.", "CONSUMER.DURABLE.CREATE.", "CONSUMER.DELETE.", "CONSUMER.MSG.NEXT."} {
+			require.False(t, p.publishes("$JS.API."+verb+name), "the administrator may %s%s: a deletion fact could be removed", verb, name)
+			require.False(t, p.publishes("$JS.API."+verb+name+".c"), "the administrator may %s%s.c", verb, name)
+		}
+		for _, subject := range messaging.StreamSubjects(permInstance, suffix) {
+			require.False(t, p.publishes(strings.ReplaceAll(subject, "*", "x")), "the administrator may publish into %s", subject)
 		}
 	}
 }

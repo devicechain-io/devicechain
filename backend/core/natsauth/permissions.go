@@ -502,6 +502,14 @@ func AdminPermissions(instanceId string) (Permissions, error) {
 		name := messaging.StreamName(instanceId, suffix)
 		g.api("STREAM.MSG.GET."+name, "DIRECT.GET."+name)
 	}
+	// `dcctl broker facts` reads the platform's own announcements (the deletion facts) the same
+	// way, one stored message at a time. The same two READ verbs, on exactly the streams the table
+	// declares OperatorReadable: never a purge, a message delete or a consumer, so the operator
+	// plane can read what the platform announced but never remove it.
+	for _, suffix := range streams.OperatorReadable() {
+		name := messaging.StreamName(instanceId, suffix)
+		g.api("STREAM.MSG.GET."+name, "DIRECT.GET."+name)
+	}
 	for _, b := range kv.All {
 		if b.Account != kv.App {
 			// The identity account is entered by its own login; the administrator never is.
