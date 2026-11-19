@@ -16,27 +16,35 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/backupset"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/durability"
-	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/nats-io/nats.go"
 )
 
 // Create exports declared checkpoint-preserved streams (including consumers) and
 // the instance blob store. Callers must freeze writers for a consistent cut.
 // Destination must not exist. A failed export never publishes manifest.json.
-// enabledAreas, when supplied, is the resolved installation set. Omission keeps
-// the legacy behavior of requiring every declared checkpoint stream.
-func Create(ctx context.Context, nc *nats.Conn, instance, destination string, blobs func(context.Context, io.Writer) error, enabledAreas ...[]string) error {
+// shards is the deployed shardGroups block (nil when the instance shards nothing):
+// every group stream it declares is exported like its base stream, a missing or
+// unreadable one fails the export, and a group stream on the broker that it does
+// not declare fails it too. enabledAreas, when supplied, is the resolved
+// installation set. Omission keeps the legacy behavior of requiring every
+// declared checkpoint stream.
+func Create(ctx context.Context, nc *nats.Conn, instance, destination string, blobs func(context.Context, io.Writer) error, shards *config.NatsShardGroupsConfiguration, enabledAreas ...[]string) error {
 	if instance == "" || filepath.Base(instance) != instance || instance == "." || instance == ".." || destination == "" || blobs == nil {
 		return fmt.Errorf("instance, new destination and blob exporter are required")
 	}
 	if err := backupset.ValidateBackupPolicy(); err != nil {
 		return err
 	}
+	recorded, err := recordShards(shards)
+	if err != nil {
+		return err
+	}
 	if err := os.Mkdir(destination, 0o700); err != nil {
 		return err
 	}
-	m := Manifest{Version: ManifestVersion, Instance: instance, Tenant: "*"}
+	m := Manifest{Version: ManifestVersion, Instance: instance, Tenant: "*", ShardGroups: recorded}
 	if len(enabledAreas) > 1 {
 		return fmt.Errorf("one enabled area set required")
 	}
@@ -76,19 +84,20 @@ func Create(ctx context.Context, nc *nats.Conn, instance, destination string, bl
 	if err != nil {
 		return err
 	}
-	for _, item := range backupset.Items() {
+	expected := map[string]bool{}
+	for _, t := range inventory(recorded) {
+		item := t.item
 		if item.BackupClass != durability.BackupRequired && item.BackupClass != durability.BackupCheckpoint {
 			continue
 		}
 		if item.Kind == backupset.KindObjectStore {
 			continue
 		}
-		name := item.Name
-		if item.Kind == backupset.KindStream {
-			name = messaging.StreamName(instance, name)
-		} else if item.Kind != backupset.KindGatewayStream {
+		if item.Kind != backupset.KindStream && item.Kind != backupset.KindGatewayStream {
 			return fmt.Errorf("unsupported preserved kind %q", item.Kind)
 		}
+		_, name := t.resource(instance)
+		expected[name] = true
 		_, err := js.StreamInfo(name, nats.Context(ctx))
 		if err == nats.ErrStreamNotFound && item.Kind == backupset.KindStream && m.EnabledAreas != nil && !streamEnabled(item.Name, m.EnabledAreas) {
 			m.DisabledStreams = append(m.DisabledStreams, name)
@@ -106,6 +115,9 @@ func Create(ctx context.Context, nc *nats.Conn, instance, destination string, bl
 		if err := write("stream", name, item.BackupClass, func(w io.Writer) error { return streamBundle(ctx, nc, name, w) }); err != nil {
 			return err
 		}
+	}
+	if err := refuseUndeclaredGroups(ctx, nc, instance, expected); err != nil {
+		return err
 	}
 	if err := write("object-store", backupset.ObjectStoreName, durability.BackupRequired, func(w io.Writer) error { return blobs(ctx, w) }); err != nil {
 		return err
