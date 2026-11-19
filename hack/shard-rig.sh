@@ -224,20 +224,20 @@ cmd_down() {
 # placement
 # ---------------------------------------------------------------------------
 
-# psql_um runs SQL in the relational store as its superuser, in the database that holds
-# user-management's schema.
+# The relational store is shared by the cluster's instances and lives in dc-system, behind the
+# dc-postgresql service (which points at the primary); each instance has a database of its own.
 rdb_pod() {
   local pod
-  pod="$(kn get pods -l cnpg.io/instanceRole=primary -o name 2>/dev/null | grep -m1 rdb || true)"
-  [[ -n "$pod" ]] || pod="$(kn get pods -o name | grep -m1 -E 'dc-rdb-1|postgres' || true)"
-  [[ -n "$pod" ]] || fail "no relational Postgres pod found in $namespace"
-  printf '%s' "${pod#pod/}"
+  pod="$(k -n dc-system get endpointslices -l kubernetes.io/service-name=dc-postgresql -o json |
+    jq -r 'first(.items[].endpoints[] | select(.conditions.ready != false) | .targetRef.name // empty)')"
+  [[ -n "$pod" ]] || fail "no ready relational Postgres pod behind dc-system/dc-postgresql"
+  printf '%s' "$pod"
 }
-psql_in() { kn exec "$(rdb_pod)" -c postgres -- psql -U postgres -d "$1" -v ON_ERROR_STOP=1 -tA -c "$2"; }
+psql_in() { MSYS_NO_PATHCONV=1 k -n dc-system exec "$(rdb_pod)" -c postgres -- psql -q -U postgres -d "$1" -v ON_ERROR_STOP=1 -tA -c "$2"; }
 um_db() {
   local d
   for d in $(psql_in postgres "SELECT datname FROM pg_database WHERE NOT datistemplate"); do
-    if [[ "$(psql_in "$d" "SELECT to_regclass('\"user-management\".iam_vpartition_assignments') IS NOT NULL")" == t ]]; then
+    if [[ "$(psql_in "$d" "SELECT to_regclass('\"user-management\".iam_vpartition_assignments') IS NOT NULL" 2>/dev/null)" == t ]]; then
       printf '%s' "$d"; return
     fi
   done
@@ -464,9 +464,15 @@ cmd_test() {
   say "3. NEGATIVE CONTROL: with event-processing stopped, a new group-1 device produces no detection"
   ep_restore_to="$(kn get deploy event-processing -o jsonpath='{.spec.replicas}')"
   kn scale deploy/event-processing --replicas=0 >/dev/null
-  kn wait --for=delete pod -l app.kubernetes.io/name=event-processing --timeout=180s >/dev/null 2>&1 || true
-  add_device "$tb" dev-b2 70B3D57ED0B00002
-  send "$tb" 70B3D57ED0B00002 3 >/dev/null
+  kn wait --for=delete pod -l devicechain.io/functional-area=event-processing --timeout=180s >/dev/null 2>&1 || true
+  [[ -z "$(kn get pods -l devicechain.io/functional-area=event-processing -o name)" ]] ||
+    fail "event-processing pods are still present after scaling to zero"
+  # A device new to this run: the rule is edge-triggered, so a device that already fired cannot.
+  local nc_dev nc_eui
+  nc_eui="$(printf '70B3D57E%08X' "$(( $(date +%s) % 4294967296 ))")"
+  nc_dev="dev-b-${nc_eui: -8}"
+  add_device "$tb" "$nc_dev" "$nc_eui"
+  send "$tb" "$nc_eui" 3 >/dev/null
   if got="$(wait_derived "$tb" $((before + 1)) 45)"; then
     fail "a detection appeared with event-processing stopped ($got): the check does not depend on DETECT"
   fi
@@ -477,8 +483,8 @@ cmd_test() {
   got="$(wait_derived "$tb" $((before + 1)) 180)" || fail "the group-1 detection never arrived after event-processing returned (got $got)"
   sleep 20
   got="$(derived_count "$tb")"
-  [[ "$got" == $((before + 1)) ]] || fail "expected exactly one new detection for dev-b2, got $((got - before))"
-  note "green again: exactly one detection for dev-b2, read from resolved-events-g1 after restart"
+  [[ "$got" == $((before + 1)) ]] || fail "expected exactly one new detection for $nc_dev, got $((got - before))"
+  note "green again: exactly one detection for $nc_dev, read from resolved-events-g1 after restart"
 
   say "4. NEGATIVE CONTROL: dcctl refuses to change the group count of the sharded instance"
   local out
