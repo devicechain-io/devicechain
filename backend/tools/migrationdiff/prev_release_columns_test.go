@@ -21,7 +21,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const prevRelease = "v1.6.0"
+const prevRelease = "v1.7.0"
 
 var (
 	prevMigrateOnce sync.Once
@@ -71,7 +71,7 @@ var prevColumnLine = regexp.MustCompile(`^\s+("(?:[^"]|"")+"|[a-z_][a-z_0-9]*)\s
 
 // This is deliberately an allowlist of pg_dump's type grammar in this release.
 // A new/unrecognized spelling must fail, never be silently mistaken for a column.
-var prevType = regexp.MustCompile(`^(?:bigint|integer|smallint|boolean|bytea|jsonb|date|text|character varying\([0-9]+\)|numeric(?:\([0-9]+,\s*[0-9]+\))?|timestamp with time zone)(?:\[\])?$`)
+var prevType = regexp.MustCompile(`^(?:bigint|integer|smallint|boolean|bytea|jsonb|date|text|character varying\([0-9]+\)|numeric(?:\([0-9]+,\s*[0-9]+\))?|double precision|timestamp with time zone)(?:\[\])?$`)
 
 func prevIdent(s string) string {
 	if strings.HasPrefix(s, `"`) {

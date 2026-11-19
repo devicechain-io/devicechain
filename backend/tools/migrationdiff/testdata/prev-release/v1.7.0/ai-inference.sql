@@ -9,6 +9,8 @@ ALTER TABLE ONLY "ai-inference".ai_function_assignments
 ALTER TABLE ONLY "ai-inference".ai_function_assignments
  ADD CONSTRAINT fk_ai_function_assignments_provider FOREIGN KEY (provider_id) REFERENCES "ai-inference".ai_providers(id) ON DELETE RESTRICT;
 ALTER TABLE ONLY "ai-inference".ai_function_assignments ALTER COLUMN id SET DEFAULT nextval('"ai-inference".ai_function_assignments_id_seq'::regclass);
+ALTER TABLE ONLY "ai-inference".ai_inference_buckets
+ ADD CONSTRAINT ai_inference_buckets_pkey PRIMARY KEY (tenant_id);
 ALTER TABLE ONLY "ai-inference".ai_inference_migrations
  ADD CONSTRAINT ai_inference_migrations_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "ai-inference".ai_provider_tenant_grants
@@ -88,6 +90,12 @@ CREATE TABLE "ai-inference".ai_function_assignments (
  tenant_id character varying(128) NOT NULL,
  function character varying(64) NOT NULL,
  provider_id bigint NOT NULL
+);
+CREATE TABLE "ai-inference".ai_inference_buckets (
+ tenant_id text NOT NULL,
+ tokens double precision NOT NULL,
+ updated_at double precision NOT NULL,
+ revision bigint NOT NULL
 );
 CREATE TABLE "ai-inference".ai_inference_migrations (
  id character varying(255) NOT NULL
