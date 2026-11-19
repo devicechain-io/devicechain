@@ -6,6 +6,8 @@ ALTER TABLE ONLY "event-processing".detect_rules
  ADD CONSTRAINT detect_rules_pkey PRIMARY KEY (rule_id);
 ALTER TABLE ONLY "event-processing".detect_snapshots
  ADD CONSTRAINT detect_snapshots_pkey PRIMARY KEY (partition_id);
+ALTER TABLE ONLY "event-processing".detect_stream_topology
+ ADD CONSTRAINT detect_stream_topology_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "event-processing".device_attribute_deletions
  ADD CONSTRAINT device_attribute_deletions_pkey PRIMARY KEY (tenant, device_token);
 ALTER TABLE ONLY "event-processing".device_attributes
@@ -63,6 +65,14 @@ CREATE TABLE "event-processing".detect_snapshots (
  watermark timestamp with time zone NOT NULL,
  payload bytea NOT NULL,
  updated_at timestamp with time zone
+);
+CREATE TABLE "event-processing".detect_stream_topology (
+ id character varying(32) NOT NULL,
+ base_suffix character varying(128) NOT NULL,
+ group_count integer NOT NULL,
+ created_at timestamp with time zone NOT NULL,
+ format_version integer NOT NULL,
+ CONSTRAINT detect_stream_topology_singleton CHECK (((id)::text = 'singleton'::text))
 );
 CREATE TABLE "event-processing".device_attribute_deletions (
  tenant character varying(256) NOT NULL,

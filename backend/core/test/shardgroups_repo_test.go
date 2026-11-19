@@ -46,9 +46,9 @@ func checkShardGroupEnable(path string, src any) error {
 }
 
 func TestShardableStreamAreasEnableRouting(t *testing.T) {
-	allow := map[string]string{
-		"event-processing": "resolved-events reads need per-group ack floors, snapshots and replay",
-	}
+	// Every area that reads or writes a shardable stream enables routing. An entry
+	// here would need a reason; there is none left.
+	allow := map[string]string{}
 	areas := map[string]bool{}
 	for _, s := range streams.All {
 		if s.Suffix != streams.InboundEvents && s.Suffix != streams.ResolvedEvents {

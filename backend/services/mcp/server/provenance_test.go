@@ -395,6 +395,7 @@ func TestDeviceNameArrivesUntrusted(t *testing.T) {
 		{"aggregate_measurements", map[string]any{"deviceToken": "d1", "startTime": "2026-11-05T00:00:00Z", "intervalSeconds": 3600}, q(`{"data":{"bucketedMeasurements":[{"bucketStart":"2026-11-05T00:00:00Z","name":"INJ","avg":1,"min":1,"max":1,"sum":1,"count":1}]}}`), &AggregateMeasurementsOutput{}, 1},
 		{"list_alarms", nil, q(`{"data":{"alarms":{"results":[{"token":"a1","originatorToken":"d1","alarmKey":"INJ","metricKey":"INJ","state":"ACTIVE","severity":"MAJOR","acknowledged":true,"acknowledgedBy":"INJ"}],"pagination":{"totalRecords":1}}}}`), &ListAlarmsOutput{}, 3},
 		{"get_alarm", map[string]any{"tokens": []string{"a1"}}, q(`{"data":{"alarmsByToken":[{"token":"a1","alarmKey":"INJ","metricKey":"INJ","state":"ACTIVE","severity":"MAJOR","acknowledged":true,"acknowledgedBy":"INJ"}]}}`), &GetAlarmOutput{}, 3},
+		{"list_suppression_windows", nil, q(`{"data":{"alarmSuppressionWindows":{"results":[{"token":"w1","name":"INJ","description":"INJ","reason":"INJ","kind":"ONE_SHOT","status":"ACTIVE","targets":[{"type":"DEVICE","token":"d1"}],"alarmKeys":["INJ"],"createdBy":"INJ"}],"pagination":{"totalRecords":1}}}}`), &ListSuppressionWindowsOutput{}, 5},
 		{"list_commands", nil, q(`{"data":{"commands":{"results":[{"token":"c1","deviceToken":"d1","name":"INJ","status":"FAILED","error":"INJ"}],"pagination":{"totalRecords":1}}}}`), &ListCommandsOutput{}, 2},
 	}
 	for _, c := range cases {

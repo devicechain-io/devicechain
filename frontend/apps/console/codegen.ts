@@ -43,6 +43,15 @@ const config: CodegenConfig = {
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },
     },
+    // Optional API documents have a separate artifact module: sharing the legacy
+    // device-management module would pull their strings into the initial download.
+    './src/gql/alarm-maintenance/': {
+      schema: '../../../backend/services/device-management/graphql/schema.graphql',
+      documents: ['src/lib/api/alarm-maintenance.ts'],
+      preset: 'client',
+      presetConfig: { fragmentMasking: false },
+      config: { documentMode: 'string' },
+    },
     './src/gql/dashboard-management/': {
       schema: '../../../backend/services/dashboard-management/graphql/schema.graphql',
       documents: ['src/lib/api/dashboards.ts'],

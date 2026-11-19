@@ -36,7 +36,6 @@ func GroupSnapshotPartition(group int) string { return groupPartition(group) }
 // ConfigureGroupWorkers binds fresh processors to their immutable replay sources
 // and installs the singleton fact router. The caller constructs group readers with
 // NewReadersWith and supplies the same durable projections to every processor.
-// Production activation remains refused by main until the S7 support-guard lift.
 func (rp *ResolvedEventsProcessor) ConfigureGroupWorkers(nmgr *messaging.NatsManager, children ...*ResolvedEventsProcessor) error {
 	cfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
 	workers := append([]*ResolvedEventsProcessor{rp}, children...)
@@ -80,9 +79,8 @@ func (rp *ResolvedEventsProcessor) openRange(first, last uint64) (messaging.Repl
 	return rp.Replay.NewRangeReader(rp.cfg.Suffix, first, last)
 }
 
-// groupInputs is deliberately private: S2 has no production activation switch.
-// Package tests can construct fresh group workers here. Main uses NewReadersWith
-// and ConfigureGroupWorkers behind its S3/S7 startup refusal.
+// groupInputs constructs isolated group workers for processor tests. Main uses
+// NewReadersWith and ConfigureGroupWorkers with the durable topology check.
 func groupInputs(nmgr *messaging.NatsManager, store committedSeqLoader, gate *TermGate) ([]workerIdentity, []messaging.MessageReader, error) {
 	cfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
 	if cfg == nil || gate == nil {
@@ -112,6 +110,11 @@ func (rp *ResolvedEventsProcessor) termWorkers() []*ResolvedEventsProcessor {
 // buildWorkers builds serially to bound restore/replay pressure. Any worker failure ends
 // the common term; none of the children acquires a lease or opens/closes the gate.
 func (rp *ResolvedEventsProcessor) buildWorkers(ctx context.Context) error {
+	if rp.ValidateTopology != nil {
+		if err := rp.ValidateTopology(ctx); err != nil {
+			return err
+		}
+	}
 	if rp.ruleRouting != nil {
 		rp.ruleRouting.termReady = make(chan struct{})
 	}

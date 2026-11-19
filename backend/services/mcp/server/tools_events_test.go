@@ -14,14 +14,16 @@ import (
 	"testing"
 )
 
-// captureClient records the request body of the single downstream call so a test
+// captureClient records the request body of the first downstream call so a test
 // can assert what criteria were sent, and returns a canned body.
 func toolsCapturing(t *testing.T, respBody string) (*Tools, *map[string]any, func()) {
 	t.Helper()
 	captured := map[string]any{}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &captured)
+		if len(captured) == 0 {
+			_ = json.Unmarshal(raw, &captured)
+		}
 		_, _ = w.Write([]byte(respBody))
 	}))
 	return NewTools(testClient(ts.URL)), &captured, ts.Close
