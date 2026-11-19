@@ -41,6 +41,22 @@ func ShardingOf(spec dcv1beta1.InstanceSpec) string {
 	}
 }
 
+// shardingOfRun is the word a run reports for the instance it renders: the level, custom for a raw
+// block with no level (from --values or recorded), off otherwise. custom is derived, never written.
+func shardingOfRun(st *State) (string, error) {
+	if st.Sharding != "" {
+		return st.Sharding, nil
+	}
+	cfg, err := shardGroupsFromValues(authoringValues(st))
+	if err != nil {
+		return "", err
+	}
+	if cfg != nil {
+		return ShardingCustom, nil
+	}
+	return ShardingOff, nil
+}
+
 // CheckShardingAgainstCluster judges this run's --sharding once the cluster's shape (compact, HA)
 // and the size are settled, and normalises it: off becomes the absence of a level, remembered as
 // given. It runs again after a re-run has adopted the declaration (checkSharding from the claim

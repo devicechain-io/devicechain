@@ -211,6 +211,23 @@ func TestShardingReRunAdoptsTheRecordedLevel(t *testing.T) {
 	}
 }
 
+// The word a run reports: custom is derived from a raw block, from --values or recorded.
+func TestShardingOfRunReportsCustom(t *testing.T) {
+	for name, tc := range map[string]struct {
+		st   *State
+		want string
+	}{
+		"off":             {&State{Instance: "prod", Profile: "default", Values: map[string]string{}}, ShardingOff},
+		"scale":           {scaleRun(), ShardingScale},
+		"custom overlay":  {&State{Instance: "prod", Profile: "default", Values: map[string]string{}, ValuesOverlay: shardGroupsValues(shardBlock())}, ShardingCustom},
+		"custom recorded": {&State{Instance: "prod", Profile: "default", Values: map[string]string{}, ShardGroups: &dcv1beta1.ShardGroupsSpec{Count: 3, Suffixes: []string{"inbound-events"}}}, ShardingCustom},
+	} {
+		got, err := shardingOfRun(tc.st)
+		require.NoError(t, err, name)
+		require.Equal(t, tc.want, got, name)
+	}
+}
+
 // The record: off writes nothing, a level writes its name and its own block, and the read-back
 // judge refuses a pruned field.
 func TestShardingIsRecordedAndVerified(t *testing.T) {
