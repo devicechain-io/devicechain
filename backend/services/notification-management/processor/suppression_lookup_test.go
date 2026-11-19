@@ -51,7 +51,7 @@ func TestSuppressionLookupOldSchemaKeepsBackstop(t *testing.T) {
 	})
 	n.AlarmLookup = NewAlarmLookup(client, url)
 	n.SuppressionLookup = NewSuppressionLookup(client, url)
-	statuses := n.lookupSuppressions(ctx, []string{"a1"}, n.clock())
+	statuses := n.lookupSuppressions(ctx, []string{"a1"}, n.clock(), 5*time.Second)
 	require.Empty(t, statuses)
 	states, err := api.OpenNotificationStates(ctx)
 	require.NoError(t, err)
@@ -132,12 +132,12 @@ func TestSuppressionLookupMalformedUntilPages(t *testing.T) {
 
 func TestSuppressionLookupTimeoutAndNilWiring(t *testing.T) {
 	n := &PolicyNotifier{}
-	require.Empty(t, n.lookupSuppressions(context.Background(), []string{"a"}, time.Now()))
+	require.Empty(t, n.lookupSuppressions(context.Background(), []string{"a"}, time.Now(), 5*time.Second))
 	n.SuppressionLookup = suppressionFunc(func(ctx context.Context, _ []string) (map[string]SuppressionStatus, error) {
 		deadline, ok := ctx.Deadline()
 		require.True(t, ok)
 		require.LessOrEqual(t, time.Until(deadline), 5*time.Second)
 		return nil, context.DeadlineExceeded
 	})
-	require.Empty(t, n.lookupSuppressions(context.Background(), []string{"a"}, time.Now()))
+	require.Empty(t, n.lookupSuppressions(context.Background(), []string{"a"}, time.Now(), 5*time.Second))
 }

@@ -5,7 +5,10 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,12 +33,20 @@ type SuppressionStatus struct {
 
 const suppressionBatch = 200
 const suppressionRecheck = 60 * time.Second
+const suppressionUnsupportedFor = 2 * time.Minute
+
+// ErrSuppressionUnsupported indicates a cached schema validation failure. It is
+// silent and fails toward paging until the concrete lookup probes again.
+var ErrSuppressionUnsupported = errors.New("suppression status is not served")
+
 const alarmSuppressionStatusDocument = `query AlarmSuppressionStatus($tokens: [String!]!) { alarmSuppressionStatus(tokens: $tokens) { alarmToken suppression { windowToken until } } }`
 
 type suppressionLookup struct {
-	client *svcclient.Client
-	url    string
-	now    func() time.Time
+	client           *svcclient.Client
+	url              string
+	now              func() time.Time
+	mu               sync.Mutex
+	unsupportedUntil time.Time
 }
 
 // NewSuppressionLookup builds a bounded, batched lookup independent of alarm lifecycles.
@@ -62,6 +73,12 @@ func (s *suppressionLookup) LookupSuppressions(ctx context.Context, tokens []str
 	if !ok || tenant == "" {
 		return nil, core.ErrNoTenant
 	}
+	s.mu.Lock()
+	unsupported := s.now().Before(s.unsupportedUntil)
+	s.mu.Unlock()
+	if unsupported {
+		return nil, ErrSuppressionUnsupported
+	}
 	found := make(map[string]SuppressionStatus)
 	tokens = distinctSuppressionTokens(tokens)
 	for start := 0; start < len(tokens); start += suppressionBatch {
@@ -79,6 +96,18 @@ func (s *suppressionLookup) LookupSuppressions(ctx context.Context, tokens []str
 		err := s.client.Query(qctx, s.url, tenant, alarmSuppressionStatusDocument, map[string]any{"tokens": tokens[start:end]}, &out)
 		cancel()
 		if err != nil {
+			if unsupportedSuppression(err) {
+				s.mu.Lock()
+				// Concurrent probes report only the first detection as a failure.
+				cached := s.now().Before(s.unsupportedUntil)
+				if !cached {
+					s.unsupportedUntil = s.now().Add(suppressionUnsupportedFor)
+				}
+				s.mu.Unlock()
+				if cached {
+					return nil, ErrSuppressionUnsupported
+				}
+			}
 			return nil, err
 		}
 		if out.Statuses == nil {
@@ -101,10 +130,26 @@ func (s *suppressionLookup) LookupSuppressions(ctx context.Context, tokens []str
 	return found, nil
 }
 
-// Shared by all notifier instances in this process; errors still count on every call.
+// Only validation errors exclusively naming the added field establish incompatibility.
+func unsupportedSuppression(err error) bool {
+	var gqlErr *svcclient.GraphQLError
+	if !errors.As(err, &gqlErr) || len(gqlErr.Messages) == 0 {
+		return false
+	}
+	for _, message := range gqlErr.Messages {
+		m := strings.ToLower(message)
+		if !(strings.Contains(m, "cannot query field") || strings.Contains(m, "unknown field")) ||
+			!strings.Contains(m, "alarmsuppressionstatus") {
+			return false
+		}
+	}
+	return true
+}
+
+// Shared by all notifier instances in this process; uncached errors count every call.
 var suppressionLastWarning atomic.Int64
 
-func (n *PolicyNotifier) lookupSuppressions(ctx context.Context, tokens []string, now time.Time) map[string]SuppressionStatus {
+func (n *PolicyNotifier) lookupSuppressions(ctx context.Context, tokens []string, now time.Time, timeout time.Duration) map[string]SuppressionStatus {
 	found := make(map[string]SuppressionStatus)
 	if n.SuppressionLookup == nil {
 		return found
@@ -112,11 +157,18 @@ func (n *PolicyNotifier) lookupSuppressions(ctx context.Context, tokens []string
 	tokens = distinctSuppressionTokens(tokens)
 	for start := 0; start < len(tokens); start += suppressionBatch {
 		end := min(start+suppressionBatch, len(tokens))
-		lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		lctx, cancel := context.WithTimeout(ctx, timeout)
 		rows, err := n.SuppressionLookup.LookupSuppressions(lctx, tokens[start:end])
 		cancel()
 		if err != nil {
+			if errors.Is(err, ErrSuppressionUnsupported) {
+				return map[string]SuppressionStatus{}
+			}
 			n.countSuppression("lookup_failed", 1)
+			if unsupportedSuppression(err) {
+				log.Info().Err(err).Msg("Device-management does not serve suppression status yet; suppression is off until it does")
+				return map[string]SuppressionStatus{}
+			}
 			wall := time.Now().UnixNano()
 			last := suppressionLastWarning.Load()
 			if (last == 0 || wall-last >= int64(time.Minute)) && suppressionLastWarning.CompareAndSwap(last, wall) {
@@ -152,11 +204,11 @@ func (n *PolicyNotifier) escalationSuppressed(ctx context.Context, token string,
 	if pass := passFromContext(ctx); pass != nil {
 		statuses = pass.suppressions
 	} else {
-		statuses = n.lookupSuppressions(ctx, []string{token}, now)
+		statuses = n.lookupSuppressions(ctx, []string{token}, now, 5*time.Second)
 	}
 	status, ok := statuses[token]
 	if ok && validWindowToken(status.WindowToken) && status.Until.After(now) {
-		n.countSuppression("rechecked", 1)
+		n.countSuppression("escalation_skipped", 1)
 		return true
 	}
 	return false

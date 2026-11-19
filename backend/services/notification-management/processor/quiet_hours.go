@@ -188,7 +188,7 @@ func (n *PolicyNotifier) ReleaseHeld(ctx context.Context, policies []*model.Noti
 		}
 		groups[d.AlarmToken] = append(groups[d.AlarmToken], d)
 	}
-	suppressions := n.lookupSuppressions(ctx, order, now)
+	suppressions := n.lookupSuppressions(ctx, order, now, 2*time.Second)
 	var lastErr error
 	for _, alarm := range order {
 		if err := ctx.Err(); err != nil {
@@ -281,7 +281,9 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 		// Leased, but the policies route this severity nowhere any more (a rule was
 		// edited, a channel disabled). Nobody to page.
 		n.finish(ctx, alarm, claimed)
-		n.countQuiet(quietDroppedPolicy, len(claimed))
+		for _, d := range claimed {
+			n.countHeld(d, quietDroppedPolicy, 1)
+		}
 		return nil
 	}
 
@@ -290,7 +292,9 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 		// Unreadable is permanent; putting it back would fail the same way forever.
 		err = fmt.Errorf("decoding held alarm event: %w", err)
 		n.finish(ctx, alarm, claimed)
-		n.countQuiet(quietDroppedExhausted, len(claimed))
+		for _, d := range claimed {
+			n.countHeld(d, quietDroppedExhausted, 1)
+		}
 		n.deadLetterHeld(ctx, latest, deadletter.ReasonUnprocessable, err)
 		return err
 	}
@@ -307,11 +311,8 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 	tally := n.deliverAll(rctx, deliveries, message, alarm, model.AttemptTriggerQuietHoursRelease)
 	if tally.delivered > 0 {
 		n.finish(ctx, alarm, claimed)
-		n.countQuiet(quietReleased, len(claimed))
 		for _, d := range claimed {
-			if d.HeldByWindow.Valid {
-				n.countSuppression("released", 1)
-			}
+			n.countHeld(d, quietReleased, 1)
 		}
 		// Settled, not logged-and-dropped: the page is out and its deferral rows are deleted, so
 		// this write is the only record that it happened. Without it the alarm has no throttle
@@ -340,7 +341,9 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 		// Every channel refused it; a retry cannot change a refusal. The ordinary dispatch
 		// acks this case too, and deliveries_refused_total has already counted it.
 		n.finish(ctx, alarm, claimed)
-		n.countQuiet(quietDroppedExhausted, len(claimed))
+		for _, d := range claimed {
+			n.countHeld(d, quietDroppedExhausted, 1)
+		}
 		return nil
 	}
 	failure := fmt.Errorf("all %d deliveries failed releasing held notifications for alarm %q",
@@ -348,7 +351,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 	for _, d := range claimed {
 		if d.Attempts+1 >= maxReleaseAttempts {
 			n.finish(ctx, alarm, []*model.NotificationDeferral{d})
-			n.countQuiet(quietDroppedExhausted, 1)
+			n.countHeld(d, quietDroppedExhausted, 1)
 			log.Error().Str("alarm", alarm).Uint("policy", d.PolicyId).Int("attempts", d.Attempts+1).
 				Msg("Dead-lettering a held notification: every release attempt reached no channel, " +
 					"so nobody was paged about it")
@@ -443,10 +446,7 @@ func (n *PolicyNotifier) drop(ctx context.Context, d *model.NotificationDeferral
 		return fmt.Errorf("dropping held notification: %w", err)
 	}
 	if won {
-		n.countQuiet(outcome, 1)
-		if outcome == quietDroppedResolved && d.HeldByWindow.Valid {
-			n.countSuppression("dropped_resolved", 1)
-		}
+		n.countHeld(d, outcome, 1)
 	}
 	return nil
 }
@@ -490,4 +490,13 @@ func (n *PolicyNotifier) settle(ctx context.Context, op func(ctx context.Context
 		return op(ctx)
 	}
 	return n.Hold.SettleWith(ctx, op)
+}
+
+// countHeld partitions each held row by its persisted window audit for every outcome.
+func (n *PolicyNotifier) countHeld(d *model.NotificationDeferral, outcome string, by int) {
+	if d.HeldByWindow.Valid {
+		n.countSuppression(outcome, by)
+	} else {
+		n.countQuiet(outcome, by)
+	}
 }

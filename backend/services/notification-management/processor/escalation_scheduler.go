@@ -226,9 +226,11 @@ func (s *EscalationScheduler) serveTenant(ctx context.Context, tenant string, co
 			// due escalations interleaves lookups with paging under the same slice check,
 			// rather than spending its whole slice on lookups before the first page.
 			var due []int
-			for i, state := range states {
-				if len(s.Notifier.planEscalation(state, policies, now, s.defaultMax)) > 0 {
-					due = append(due, i)
+			if s.Notifier.SuppressionLookup != nil {
+				for i, state := range states {
+					if s.Notifier.escalationCandidate(state, policies, now, s.defaultMax) {
+						due = append(due, i)
+					}
 				}
 			}
 			pass.suppressions = make(map[string]SuppressionStatus)
@@ -249,7 +251,7 @@ func (s *EscalationScheduler) serveTenant(ctx context.Context, tenant string, co
 						for _, j := range due[nextDue:end] {
 							tokens = append(tokens, states[j].AlarmToken)
 						}
-						for token, status := range s.Notifier.lookupSuppressions(tctx, tokens, now) {
+						for token, status := range s.Notifier.lookupSuppressions(tctx, tokens, now, 5*time.Second) {
 							pass.suppressions[token] = status
 						}
 					}

@@ -159,8 +159,8 @@ type NotifyMetrics struct {
 // callback is entered again — which any start retried after a failed one does — and
 // MustRegister panics on the duplicate.
 func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
-	suppression := ms.NewCounterVec("suppression_total", "Alarm suppression outcomes: held, rechecked, released, dropped_resolved or lookup_failed.", []string{"outcome"})
-	for _, outcome := range []string{"held", "rechecked", "released", "dropped_resolved", "lookup_failed"} {
+	suppression := ms.NewCounterVec("suppression_total", "Alarm suppression outcomes: held, rechecked, escalation_skipped, released, superseded, dropped_resolved, dropped_policy, dropped_exhausted or lookup_failed.", []string{"outcome"})
+	for _, outcome := range []string{"held", "rechecked", "escalation_skipped", "released", "superseded", "dropped_resolved", "dropped_policy", "dropped_exhausted", "lookup_failed"} {
 		suppression.WithLabelValues(outcome).Add(0)
 	}
 	return NotifyMetrics{

@@ -355,7 +355,7 @@ func (n *PolicyNotifier) resolveHeld(ctx context.Context, event *dmmodel.AlarmSt
 	if err != nil {
 		return fmt.Errorf("dropping held notifications for a resolved alarm: %w", err)
 	}
-	n.countQuiet(quietDroppedResolved, int(dropped))
+	n.countQuiet(quietDroppedResolved, int(dropped)-suppressed)
 	n.countSuppression("dropped_resolved", suppressed)
 	return nil
 }
@@ -580,18 +580,20 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	// severity, which the escalation that follows would then page at.
 	if ids := n.pagingPolicyIDs(event, sendNow, state); len(ids) > 0 {
 		var superseded int64
+		var suppressed int
 		if err := storehold.Settle(ctx, func(c context.Context) error {
 			rctx, rcancel := context.WithTimeout(c, recordTimeout)
 			defer rcancel()
 			var err error
-			superseded, err = n.api.SupersedeNotificationDeferrals(rctx, event.AlarmToken, ids, event.OccurredTime)
+			superseded, suppressed, err = n.api.SupersedeNotificationDeferralsWithAudit(rctx, event.AlarmToken, ids, event.OccurredTime)
 			return err
 		}); err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
 				Msg("Paged, but could not drop what quiet hours held about the alarm; it will be " +
 					"sent again when released")
 		}
-		n.countQuiet(quietSuperseded, int(superseded))
+		n.countQuiet(quietSuperseded, int(superseded)-suppressed)
+		n.countSuppression(quietSuperseded, suppressed)
 	}
 	n.announceLateClear(ctx, event, recorded)
 	return nil
@@ -903,6 +905,31 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 			len(deliveries), state.AlarmToken)
 	}
 	return nil
+}
+
+// escalationCandidate checks whether a state merits a suppression lookup without
+// planning deliveries: planning logs and counts refusals, even for unvisited alarms.
+func (n *PolicyNotifier) escalationCandidate(state *model.NotificationState,
+	policies []*model.NotificationPolicy, now time.Time, defaultMax int) bool {
+	for _, p := range policies {
+		if p.DeviceTypeToken.Valid && p.DeviceTypeToken.String != "" || !escalationDue(state, p, now, defaultMax) {
+			continue
+		}
+		if q, err := p.QuietHours(); err == nil {
+			if held, _ := q.Holds(state.Severity, now); held {
+				continue
+			}
+		}
+		for _, rule := range p.Rules {
+			if !severityMatches(rule.Severity, state.Severity) || rule.Channel == nil || !rule.Channel.Enabled {
+				continue
+			}
+			if _, ok := n.adapters[rule.Channel.ChannelType]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // planEscalation resolves the enabled policies to the deduplicated channel deliveries

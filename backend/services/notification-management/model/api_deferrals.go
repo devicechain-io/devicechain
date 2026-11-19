@@ -140,13 +140,28 @@ func (api *Api) ResolveNotificationDeferrals(ctx context.Context, alarmToken str
 // second time with the older event.
 func (api *Api) SupersedeNotificationDeferrals(ctx context.Context, alarmToken string, policyIDs []uint,
 	at time.Time) (int64, error) {
+	total, _, err := api.SupersedeNotificationDeferralsWithAudit(ctx, alarmToken, policyIDs, at)
+	return total, err
+}
+
+// SupersedeNotificationDeferralsWithAudit also reports the window-held subset
+// actually deleted, preserving the same event-time and policy guards.
+func (api *Api) SupersedeNotificationDeferralsWithAudit(ctx context.Context, alarmToken string, policyIDs []uint,
+	at time.Time) (int64, int, error) {
 	if len(policyIDs) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
-	result := api.RDB.DB(ctx).
+	var rows []*NotificationDeferral
+	result := api.RDB.DB(ctx).Clauses(clause.Returning{}).
 		Where("alarm_token = ? AND policy_id IN ? AND occurred_time <= ?", alarmToken, policyIDs, at).
-		Delete(&NotificationDeferral{})
-	return result.RowsAffected, result.Error
+		Delete(&rows)
+	suppressed := 0
+	for _, d := range rows {
+		if d.HeldByWindow.Valid {
+			suppressed++
+		}
+	}
+	return result.RowsAffected, suppressed, result.Error
 }
 
 // RescheduleNotificationDeferral moves a deferral's release to `at`: the policy is quiet

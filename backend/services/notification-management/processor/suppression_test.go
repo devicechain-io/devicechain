@@ -81,6 +81,7 @@ func TestSuppressionHoldRechecksQuietHours(t *testing.T) {
 
 func TestSuppressionSkipsBeforeClaimEscalation(t *testing.T) {
 	n, rec, api, ctx := pagedThenDue(t, namedAlarm())
+	suppressionMetrics(n)
 	policies := enabledPolicies(t, api, ctx)
 	suppressed := true
 	n.SuppressionLookup = suppressionFunc(func(context.Context, []string) (map[string]SuppressionStatus, error) {
@@ -111,6 +112,8 @@ func TestSuppressionSkipsBeforeClaimEscalation(t *testing.T) {
 		require.Zero(t, states[0].EscalationLevel)
 	}
 	require.Len(t, rec.sent, 1)
+	require.Equal(t, float64(3), testutil.ToFloat64(n.suppression.WithLabelValues("escalation_skipped")))
+	require.Zero(t, testutil.ToFloat64(n.suppression.WithLabelValues("rechecked")))
 	suppressed = false
 	states, err := api.OpenNotificationStates(ctx)
 	require.NoError(t, err)
@@ -296,14 +299,14 @@ func TestSuppressionMetricsSeededAndOldestDueAcrossTenants(t *testing.T) {
 	for _, family := range families {
 		if family.GetName() == "devicechain_notificationmanagement_suppression_total" {
 			seeded = true
-			require.Len(t, family.Metric, 5, "all outcomes must exist before any notification")
+			require.Len(t, family.Metric, 9, "all outcomes must exist before any notification")
 			for _, metric := range family.Metric {
 				require.Zero(t, metric.GetCounter().GetValue())
 			}
 		}
 	}
 	require.True(t, seeded)
-	for _, outcome := range []string{"held", "rechecked", "released", "dropped_resolved", "lookup_failed"} {
+	for _, outcome := range []string{"held", "rechecked", "escalation_skipped", "released", "superseded", "dropped_resolved", "dropped_policy", "dropped_exhausted", "lookup_failed"} {
 		require.Zero(t, testutil.ToFloat64(m.suppression.WithLabelValues(outcome)))
 	}
 	clock := outsideQuiet
