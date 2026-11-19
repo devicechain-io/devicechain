@@ -26,7 +26,7 @@ func restoreServer(t *testing.T) (*nats.Conn, *nats.Conn) {
 	s, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true, JetStream: true, StoreDir: t.TempDir(), Users: []*server.User{
 		{Username: "seed", Password: "seed"},
 		{Username: "plan", Password: "plan", Permissions: &server.Permissions{
-			Publish:   &server.SubjectPermission{Allow: []string{"$JS.API.STREAM.INFO.>"}},
+			Publish:   &server.SubjectPermission{Allow: []string{"$JS.API.STREAM.INFO.>", "$JS.API.STREAM.NAMES"}},
 			Subscribe: &server.SubjectPermission{Allow: []string{"_INBOX.>"}},
 		}},
 	}})

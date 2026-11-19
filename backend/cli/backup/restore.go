@@ -280,6 +280,19 @@ func (p *RestorePlan) Plan(ctx context.Context, nc *nats.Conn, blobs func(contex
 		}
 		out = append(out, a)
 	}
+	// The target broker must hold no group stream its configuration leaves out
+	// (a leftover of another layout): the plan would neither list it nor check it
+	// for newer data.
+	expected := map[string]bool{}
+	for _, t := range inventory(targetShards) {
+		if t.item.Kind == backupset.KindStream {
+			_, name := t.resource(p.instance)
+			expected[name] = true
+		}
+	}
+	if err := refuseUndeclaredGroups(ctx, nc, p.instance, expected); err != nil {
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

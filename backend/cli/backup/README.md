@@ -9,7 +9,8 @@ stream (`<stream>-g1` .. `-g<count-1>`) is exported like its base stream and the
 layout is recorded as `shard_groups`; a missing or unreadable configured group
 stream, or a group stream on the broker the configuration does not declare,
 fails the export. `restore --plan` lists every group stream and refuses a target
-whose shard-group layout differs from the backup's. It resolves
+whose shard-group layout differs from the backup's, or whose broker holds a
+group stream that layout does not declare. It resolves
 the installed instance, broker admin credentials and TLS material exactly as
 `dcctl ha verify` does; `--kube-context` and `--nats-url` select context and an
 optional direct broker connection. The installed broker must have the snapshot
