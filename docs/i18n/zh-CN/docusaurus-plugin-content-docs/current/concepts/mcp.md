@@ -41,6 +41,7 @@ title: AI 访问（MCP）
 
 - `list_alarms`：列出告警，支持按状态和实体筛选。
 - `get_alarm`：获取单条告警详情。
+- `list_suppression_windows`：列出你可见的维护窗口，可按状态（已计划、生效中或已结束）或目标筛选。两个告警工具也会说明告警是否处于维护窗口内以及持续到何时。如果无法完成该检查，结果会用 `suppressionUnavailable` 标明，而不是把告警报告为未被抑制。你无权查看的窗口以窗口令牌 `restricted` 显示。
 
 **命令**
 

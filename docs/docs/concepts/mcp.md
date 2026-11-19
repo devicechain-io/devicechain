@@ -41,6 +41,7 @@ The server exposes eleven **read** tools. Each one is a query against the same G
 
 - `list_alarms` — alarms, with filtering by state and entity.
 - `get_alarm` — a single alarm's details.
+- `list_suppression_windows` — the maintenance windows you can see, filtered by status (scheduled, active or ended) or by a target. Both alarm tools also say when an alarm is under a maintenance window and until when. If that check could not be made, the result says so with `suppressionUnavailable` instead of reporting the alarm as not suppressed. A window you cannot see appears with the window token `restricted`.
 
 **Commands**
 

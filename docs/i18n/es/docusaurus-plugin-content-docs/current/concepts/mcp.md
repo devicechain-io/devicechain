@@ -41,6 +41,7 @@ El servidor expone once herramientas de **lectura**. Cada una es una consulta co
 
 - `list_alarms` — alarmas, con filtrado por estado y entidad.
 - `get_alarm` — los detalles de una sola alarma.
+- `list_suppression_windows` — las ventanas de mantenimiento que puedes ver, filtradas por estado (programada, activa o finalizada) o por un objetivo. Las dos herramientas de alarmas también indican cuándo una alarma está bajo una ventana de mantenimiento y hasta cuándo. Si esa comprobación no se pudo hacer, el resultado lo indica con `suppressionUnavailable` en lugar de presentar la alarma como no suprimida. Una ventana que no puedes ver aparece con el token de ventana `restricted`.
 
 **Comandos**
 
