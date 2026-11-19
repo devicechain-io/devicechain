@@ -97,6 +97,25 @@ func TestPostgresCampaignReplicasDispatchOneCycleOnce(t *testing.T) {
 	assertReplicaDispatch(t, a, members, 1)
 }
 
+func TestPostgresRecoveredCampaignClaimsRecheckMembership(t *testing.T) {
+	a, b, members := postgresCampaignReplicas(t)
+	tick(t, a, at("2026-06-21T22:00:00Z"), "plan")
+	token := failCampaignBatchCreation(t, a, "replicas", campaignReplicaDue, members)
+	// Recovery uses an independent pool, after membership changed during the outage.
+	b.GroupTargetResolver = &campaignConcurrentGroups{resolver: pagingResolver{members: members[1:]}}
+	tick(t, b, campaignReplicaDue.Add(campaignClaimStale+time.Second), "recover")
+	require.Zero(t, commandsFor(t, b, members[0]))
+	e := elementOf(t, b, "replicas", members[0])
+	require.Equal(t, string(ElementSkipped), e.Status)
+	require.Equal(t, SkipNotInGroup, e.Reason.String)
+	for _, d := range members[1:] {
+		require.Equal(t, 1, commandsFor(t, b, d))
+		e := elementOf(t, b, "replicas", d)
+		require.Equal(t, string(ElementDispatched), e.Status)
+		require.Equal(t, token, e.BatchToken.String)
+	}
+}
+
 // The campaign is stopped while the pass owns tokened claims but has not yet
 // acquired the batch lock. Both operations must win against that stale pass.
 func TestPostgresCampaignStoppedWithClaimsCreatesNoBatch(t *testing.T) {

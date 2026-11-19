@@ -114,13 +114,16 @@ func perChannelWorstCase(attempts int, timeout time.Duration) time.Duration {
 // attempted (so a redelivery can never double-send a channel that already
 // succeeded).
 type PolicyNotifier struct {
-	AlarmLookup  AlarmLookup
-	lookupErrors prometheus.Counter
-	api          *model.Api
-	store        secrets.SecretStore
-	adapters     map[string]ChannelAdapter
-	attempts     int
-	timeout      time.Duration
+	SuppressionLookup SuppressionLookup
+	suppression       *prometheus.CounterVec
+	oldestDue         prometheus.Gauge
+	AlarmLookup       AlarmLookup
+	lookupErrors      prometheus.Counter
+	api               *model.Api
+	store             secrets.SecretStore
+	adapters          map[string]ChannelAdapter
+	attempts          int
+	timeout           time.Duration
 
 	// budget is the whole-dispatch deadline one alarm is worth, defaulted from
 	// dispatchBudget by the constructor. It is a FIELD rather than the constant read
@@ -241,6 +244,8 @@ func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, 
 		refused:        metrics.deliveriesRefused,
 		lookupErrors:   metrics.escalationLookupErrors,
 		quiet:          metrics.quietHours,
+		suppression:    metrics.suppression,
+		oldestDue:      metrics.deferralOldestDue,
 		sliceExhausted: metrics.tenantSliceExhausted,
 	}
 }
@@ -346,11 +351,12 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmcontract.AlarmStat
 // lifecycle transition can also be stale for the row and change nothing). The held row is
 // what knows about that cycle, so it is resolved here directly, by event time.
 func (n *PolicyNotifier) resolveHeld(ctx context.Context, event *dmcontract.AlarmStateChangeEvent) error {
-	dropped, err := n.api.ResolveNotificationDeferrals(ctx, event.AlarmToken, event.OccurredTime)
+	dropped, suppressed, err := n.api.ResolveNotificationDeferralsWithAudit(ctx, event.AlarmToken, event.OccurredTime)
 	if err != nil {
 		return fmt.Errorf("dropping held notifications for a resolved alarm: %w", err)
 	}
-	n.countQuiet(quietDroppedResolved, int(dropped))
+	n.countQuiet(quietDroppedResolved, int(dropped)-suppressed)
+	n.countSuppression("dropped_resolved", suppressed)
 	return nil
 }
 
@@ -472,9 +478,15 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmcontract.AlarmSt
 		if err := n.api.DeferNotifications(dctx, held); err != nil {
 			return fmt.Errorf("holding notification for quiet hours: %w", err)
 		}
-		n.countQuiet(quietHeld, len(held))
+		for _, d := range held {
+			if d.HeldByWindow.Valid {
+				n.countSuppression("held", 1)
+			} else {
+				n.countQuiet(quietHeld, 1)
+			}
+		}
 		log.Debug().Str("tenant", tenant).Str("alarm", event.AlarmToken).Int("policies", len(held)).
-			Msg("Holding the notification for quiet hours; it is sent when the quiet stretch ends")
+			Msg("Holding the notification for quiet hours or an alarm suppression window; it is sent when the hold ends")
 	}
 
 	deliveries := n.plan(event, sendNow, state)
@@ -568,18 +580,20 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmcontract.AlarmSt
 	// severity, which the escalation that follows would then page at.
 	if ids := n.pagingPolicyIDs(event, sendNow, state); len(ids) > 0 {
 		var superseded int64
+		var suppressed int
 		if err := storehold.Settle(ctx, func(c context.Context) error {
 			rctx, rcancel := context.WithTimeout(c, recordTimeout)
 			defer rcancel()
 			var err error
-			superseded, err = n.api.SupersedeNotificationDeferrals(rctx, event.AlarmToken, ids, event.OccurredTime)
+			superseded, suppressed, err = n.api.SupersedeNotificationDeferralsWithAudit(rctx, event.AlarmToken, ids, event.OccurredTime)
 			return err
 		}); err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
 				Msg("Paged, but could not drop what quiet hours held about the alarm; it will be " +
 					"sent again when released")
 		}
-		n.countQuiet(quietSuperseded, int(superseded))
+		n.countQuiet(quietSuperseded, int(superseded)-suppressed)
+		n.countSuppression(quietSuperseded, suppressed)
 	}
 	n.announceLateClear(ctx, event, recorded)
 	return nil
@@ -820,6 +834,9 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 	if len(deliveries) == 0 {
 		return nil
 	}
+	if n.escalationSuppressed(ctx, state.AlarmToken, now) {
+		return nil
+	}
 	// Do not burn a tier when every destination already exhausted its timeout
 	// attempts in this tenant job. A new job probes again; no memo is persisted.
 	if pass := passFromContext(ctx); pass != nil {
@@ -888,6 +905,31 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 			len(deliveries), state.AlarmToken)
 	}
 	return nil
+}
+
+// escalationCandidate checks whether a state merits a suppression lookup without
+// planning deliveries: planning logs and counts refusals, even for unvisited alarms.
+func (n *PolicyNotifier) escalationCandidate(state *model.NotificationState,
+	policies []*model.NotificationPolicy, now time.Time, defaultMax int) bool {
+	for _, p := range policies {
+		if p.DeviceTypeToken.Valid && p.DeviceTypeToken.String != "" || !escalationDue(state, p, now, defaultMax) {
+			continue
+		}
+		if q, err := p.QuietHours(); err == nil {
+			if held, _ := q.Holds(state.Severity, now); held {
+				continue
+			}
+		}
+		for _, rule := range p.Rules {
+			if !severityMatches(rule.Severity, state.Severity) || rule.Channel == nil || !rule.Channel.Enabled {
+				continue
+			}
+			if _, ok := n.adapters[rule.Channel.ChannelType]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // planEscalation resolves the enabled policies to the deduplicated channel deliveries

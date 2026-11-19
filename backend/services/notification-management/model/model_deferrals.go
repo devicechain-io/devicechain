@@ -4,6 +4,7 @@
 package model
 
 import (
+	"database/sql"
 	"time"
 
 	"gorm.io/datatypes"
@@ -47,4 +48,8 @@ type NotificationDeferral struct {
 	// Attempts counts releases that reached no channel and were put back for another try.
 	Attempts int
 	Event    datatypes.JSON `gorm:"not null"`
+	// HeldByWindow records the last suppression window for audit and release explanations.
+	// Every release checks live suppression regardless of this value; a missing audit
+	// token never prevents a page when the live lookup fails.
+	HeldByWindow sql.NullString `gorm:"size:128"`
 }

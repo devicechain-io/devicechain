@@ -29,6 +29,12 @@ import (
 // reconcile rebuild arming). The persist already committed the row, so a recheck is never lost to a
 // dropped in-memory signal — at worst it is re-derived by reconcile.
 func (rp *ResolvedEventsProcessor) signalArmRecheck(tenant, deviceToken string) bool {
+	owner, err := rp.ruleWorker(tenant)
+	if err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
+	rp = owner
 	if rp.armer == nil {
 		return true
 	}
@@ -132,6 +138,10 @@ func (rp *ResolvedEventsProcessor) handleRosterFact(msg messaging.Message, signa
 		rp.ackFact(msg, "device-roster")
 		return true
 	}
+	if _, err := rp.ruleWorker(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
 	if reason, bad := rosterFactPoison(ev); bad {
 		log.Warn().Str("device", ev.DeviceToken).Str("subject", msg.Subject).Str("reason", reason).
 			Msg("Dropping malformed device-roster fact.")
@@ -209,6 +219,10 @@ func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message
 		rp.ackFact(msg, "entity-deleted")
 		return true
 	}
+	if _, err := rp.ruleWorker(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
 	// Only a device deletion touches these projections; every other entity type (groups, assets,
 	// relationships, anchors) is consumed elsewhere (event-management) and ignored here.
 	// DeletedTime is the lifecycle clock both teardowns are ordered on, so a stale redelivered
@@ -216,10 +230,14 @@ func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message
 	// The live consumer also tells the loop to forget the device's keyed detection state (latches,
 	// runs, windows), whose series is the device token: a recreated device reuses the token and would
 	// otherwise inherit the deleted one's "already raised" latch, so its first matching reading would
-	// raise nothing. It is signalled before the projection teardowns so it does not depend on their
-	// stores being wired; the catch-up path (signal=false) runs before the engine is restored.
-	if signal && ev.EntityType == entity.TypeDevice && ev.EntityToken != "" &&
-		validRosterToken(ev.EntityToken) && !ev.DeletedTime.IsZero() {
+	// raise nothing. The loop decides what to drop by re-reading the device's roster row, so with
+	// a roster store it is signalled only AFTER the tombstone is persisted: signalled first, the
+	// loop could read the still-live row, drop nothing, and leave the latch to the next
+	// incarnation. Without a roster store the drop does not read one, and is signalled here.
+	// The catch-up path (signal=false) runs before the engine is restored.
+	dropSeries := signal && ev.EntityType == entity.TypeDevice && ev.EntityToken != "" &&
+		validRosterToken(ev.EntityToken) && !ev.DeletedTime.IsZero()
+	if dropSeries && rp.RosterStore == nil {
 		if !rp.signalSeriesDrop(tenant, ev.EntityToken) {
 			return false // shutdown mid-send: leave unacked; the deletion redelivers next start
 		}
@@ -239,6 +257,9 @@ func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message
 				if !rp.persistBeforeAck("roster-delete "+tenant+"/"+ev.EntityToken,
 					func() error { return rp.RosterStore.Delete(rp.pctx(), tenant, ev.EntityToken, deletedTime) }) {
 					return false // shutdown mid-retry: leave unacked; the deletion redelivers next start
+				}
+				if dropSeries && !rp.signalSeriesDrop(tenant, ev.EntityToken) {
+					return false // shutdown mid-send: leave unacked; the deletion redelivers next start
 				}
 				// Signal the loop to re-check membership: it re-reads the projection (a tombstone
 				// disarms; a stale delete the monotonic guard rejected leaves the row live, so the
@@ -273,6 +294,12 @@ func (rp *ResolvedEventsProcessor) handleEntityDeletedFact(msg messaging.Message
 // signalSeriesDrop marshals a deleted device's detection-state teardown onto the single-writer loop.
 // Returns false ONLY on shutdown mid-send.
 func (rp *ResolvedEventsProcessor) signalSeriesDrop(tenant, deviceToken string) bool {
+	owner, err := rp.ruleWorker(tenant)
+	if err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
+	rp = owner
 	if rp.seriesDrops == nil { // scaffold path: no loop to tell
 		return true
 	}
