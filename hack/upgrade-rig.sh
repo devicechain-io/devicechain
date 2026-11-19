@@ -530,6 +530,26 @@ idp_baseline_supported() {
   esac
 }
 
+# signer_baseline_supported succeeds when a seed against the baseline's tree SIGNS the
+# artifact it assigns, i.e. when the baseline serves the signer registry. Then the seed's
+# update-assignment runs on the instance exactly as installed, and the rig makes no
+# allow_unverified_artifacts edit. apiprobe answers from the SAME plan the seed makes, so this
+# cannot disagree with what the seed then does. An answer that is neither word is a failure
+# of the instrument, never "no".
+signer_baseline_supported() {
+  local answer
+  answer="$("$apiprobe" signerbaseline --baseline-schemas "$baseline_src/backend/services")" ||
+    fail "apiprobe could not say whether a seed against $baseline_tag signs the artifact it assigns"
+  case "$answer" in
+    supported) return 0 ;;
+    unsupported:*)
+      note "a seed against $baseline_tag cannot sign the artifact it assigns (${answer#unsupported: })"
+      return 1
+      ;;
+    *) fail "apiprobe signerbaseline answered '$answer', which is neither 'supported' nor 'unsupported: <reason>'" ;;
+  esac
+}
+
 # idp_stub_up stands the stub provider up and lets the instance's user-management reach
 # and trust it. Idempotent: the certificate is minted once per run, the manifests apply
 # over themselves, and the patches converge.
@@ -1233,11 +1253,13 @@ allow_unverified_artifacts_doc() {
 }
 
 # allow_unverified_artifacts is a RIG-ONLY edit: it lets THIS instance's update-management
-# assign an unverified artifact, which the seed's update-assignment row needs.
+# assign an unverified artifact, which the seed's update-assignment row needs ONLY against a
+# baseline older than the signer registry (signer_baseline_supported). Against any newer
+# release the seed signs the artifact it assigns, and the instance runs at the shipped default.
 #
-# 🔴 WHY IT IS AN EDIT AND NOT A FLAG. Every artifact is UNVERIFIED today, and with
-# updates.allowUnverifiedArtifacts at its default (false) NO artifact can be assigned, so
-# the seed's update-assignment is refused by name. dcctl has no flag for it; it is chart
+# 🔴 WHY IT IS AN EDIT AND NOT A FLAG. Such a baseline cannot sign, and with
+# updates.allowUnverifiedArtifacts at its default (false) an unsigned artifact cannot be
+# assigned, so the seed's update-assignment is refused by name. dcctl has no flag for it; it is chart
 # configuration (functionalAreas.update-management.config.updates), and the area's own
 # documentation says a development instance sets it. apiprobe deliberately REFUSES rather
 # than skips the row on an instance that does not allow it (publishes.go): a skip would be
@@ -1245,8 +1267,9 @@ allow_unverified_artifacts_doc() {
 # going uncovered with every check green.
 #
 # Applied the way the stub provider's edits are: where the row is created, never early "to
-# be safe". The upgrade re-renders the ConfigMap and reverts it, which is why the table
-# sweep applies it again before its own seed. The pods read the document only at start,
+# be safe". The upgrade re-renders the ConfigMap and reverts it, and the table sweep's seed
+# needs no edit, because it runs against the release under test, which signs. The pods read
+# the document only at start,
 # so the Deployment is rolled with a stamp that always changes (see sso_stub_trust_and_egress
 # for why a stamp and not a hash), and the edit is complete only when no old pod is left
 # to answer.
@@ -1378,8 +1401,12 @@ cmd_up() {
   fi
 
   wait_for_every_api
-  allow_unverified_artifacts
-  wait_for_every_api
+  # The seed signs the artifact it assigns wherever the baseline can, so only a baseline
+  # older than the signer registry needs the rig-only edit (see allow_unverified_artifacts).
+  if ! signer_baseline_supported; then
+    allow_unverified_artifacts
+    wait_for_every_api
+  fi
 
   say "seeding one of every entity $baseline_tag can express"
   # --baseline-schemas is what makes this possible at all: apiprobe's table is
@@ -2308,9 +2335,9 @@ cmd_tablesweep() {
   # it does. See "a stub identity provider" above for what is stood up and why it is here.
   say "standing up the stub identity provider the sweep tenant's single sign-on connection is seeded against"
   idp_stub_up
-  # The upgrade re-rendered update-management's configuration, so the rig-only edit the
-  # baseline seed needed is gone; this seed assigns an artifact too.
-  allow_unverified_artifacts
+  # No unverified-artifact edit here: this seed runs against the release under test, which
+  # serves the signer registry, so it signs the artifact it assigns and the instance stays at
+  # the shipped default (the upgrade re-rendered away any edit the baseline seed needed).
   wait_for_every_api
   local idp_args=()
   mapfile -t idp_args < <(idp_seed_args)
@@ -3404,8 +3431,34 @@ STUB
     idp_baseline_supported; echo \"returned \$?\"" 2>/dev/null | grep -o 'returned [0-9]*' || true)"
   [[ -z "$got" ]] ||
     fail "SELF-TEST FAILED: idp_baseline_supported read a FAILED apiprobe (exit 1) as an answer ('$got')"
+  # signer_baseline_supported fails both ways: an answer read as "yes" leaves a baseline that
+  # cannot sign at the default, and its seed is refused by name; one read as "no" makes the
+  # edit the shipped default does not need. So it gets the same exact-word contract.
+  local signer_stub="$stub_dir/signerbaseline"
+  cat > "$signer_stub" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1 $2" == "signerbaseline --baseline-schemas" ]] || { echo "unexpected argv: $*" >&2; exit 64; }
+printf '%s\n' "$STUB_ANSWER"
+exit "${STUB_EXIT:-0}"
+STUB
+  chmod +x "$signer_stub"
+  apiprobe="$signer_stub"
+  for answer in "supported|returned 0" "unsupported: no signer registry|returned 1" \
+    "Supported|ENDED" "unsupported|ENDED" "|ENDED" "supported, mostly|ENDED"; do
+    want="${answer#*|}"
+    got="$(STUB_ANSWER="${answer%%|*}" bash -c "$(declare -f fail_code fail say note signer_baseline_supported)
+      $(declare -p apiprobe baseline_src baseline_tag)
+      signer_baseline_supported; echo \"returned \$?\"" 2>/dev/null | grep -o 'returned [0-9]*' || true)"
+    [[ "${got:-ENDED}" == "$want" ]] ||
+      fail "SELF-TEST FAILED: signer_baseline_supported over the answer '${answer%%|*}' gave '${got:-ENDED}', want '$want'"
+  done
+  got="$(STUB_ANSWER=supported STUB_EXIT=1 bash -c "$(declare -f fail_code fail say note signer_baseline_supported)
+    $(declare -p apiprobe baseline_src baseline_tag)
+    signer_baseline_supported; echo \"returned \$?\"" 2>/dev/null | grep -o 'returned [0-9]*' || true)"
+  [[ -z "$got" ]] ||
+    fail "SELF-TEST FAILED: signer_baseline_supported read a FAILED apiprobe (exit 1) as an answer ('$got')"
   baseline_src="$saved_src"
-  note "only the exact word 'supported' stands the stub provider up for the baseline; an unreadable answer ends the run"
+  note "only the exact word 'supported' stands the stub provider up for the baseline, and only 'unsupported: ...' makes the assignment edit; an unreadable answer ends the run"
 
   apiprobe="$saved_apiprobe"
   baseline_tag="$saved"
@@ -3710,14 +3763,15 @@ install_target: $line"
   body="$(declare -f cmd_up)"
   [[ "$body" == *choose_cluster_target*load_cluster_target*'_dcctl" '*' local '* ]] ||
     fail "SELF-TEST FAILED: cmd_up does not choose and load the cluster target before it installs"
-  local name
-  for name in cmd_up cmd_tablesweep; do
-    body="$(declare -f "$name")"
-    [[ "$body" == *allow_unverified_artifacts*'" seed '* ]] ||
-      fail "SELF-TEST FAILED: $name does not let update-management assign an unverified artifact before it
-seeds, so the seed's update-assignment is refused on every baseline that ships the area"
-  done
-  note "every dcctl install, bootstrap and upgrade names the cluster as recorded, and both seeds follow the assignment edit"
+  body="$(declare -f cmd_up)"
+  [[ "$body" == *'if ! signer_baseline_supported'*allow_unverified_artifacts*'" seed '* ]] ||
+    fail "SELF-TEST FAILED: cmd_up does not let update-management assign an unverified artifact before it
+seeds a baseline that cannot sign, so the seed's update-assignment is refused on such a baseline"
+  body="$(declare -f cmd_tablesweep)"
+  [[ "$body" != *allow_unverified_artifacts* ]] ||
+    fail "SELF-TEST FAILED: cmd_tablesweep allows unverified artifacts, although its seed signs the artifact it
+assigns: the sweep would run against a deviation from the shipped default in the area under test"
+  note "every dcctl install, bootstrap and upgrade names the cluster as recorded, and only a baseline that cannot sign gets the assignment edit"
 
   # The document edit keeps what was there and adds the one setting. The empty document
   # is the real case (the chart renders "{}" for an area with no override); the second

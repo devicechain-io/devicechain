@@ -164,6 +164,7 @@ backend/tools/apiprobe/baseline_test.go
 backend/tools/apiprobe/documents_test.go
 backend/tools/apiprobe/entities_test.go
 backend/tools/apiprobe/readsweep_test.go
+backend/tools/apiprobe/signer_baseline_test.go
 backend/tools/apiprobe/sso_receipt_test.go
 backend/tools/apiprobe/sso_test.go
 backend/tools/apiprobe/tenant_admin_rows_test.go
