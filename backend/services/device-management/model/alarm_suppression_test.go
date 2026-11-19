@@ -442,6 +442,11 @@ func TestSuppressionLoadErrorsPropagate(t *testing.T) {
 	api, ctx, id := newSuppressionTestApi(t)
 	_, err := api.SuppressionFor(context.Background(), id, "hot", "MINOR", time.Now())
 	require.Error(t, err)
+	w := suppressionTestWindow()
+	start, end := time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(time.Hour)
+	w.StartTime, w.EndTime = &start, &end
+	_, err = api.CreateAlarmSuppressionWindow(ctx, &w)
+	require.NoError(t, err)
 	require.NoError(t, api.RDB.Database.Migrator().DropTable(&EntityRelationship{}))
 	_, err = api.SuppressionFor(ctx, id, "hot", "MINOR", time.Now())
 	require.Error(t, err)

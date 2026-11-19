@@ -33,7 +33,7 @@ import (
 // raise-alarm consumer, every background worker) and a system context are untouched, so the
 // integrator always sees the alarm it folds into.
 //
-// It covers two tables: alarms, and alarm_dispositions, whose rows name a cycle's raise time
+// It covers alarms, alarm_dispositions and alarm_cycle_suppressions, whose rows name a cycle's raise time
 // and would otherwise list the cycles of a withheld alarm. Like the scope callback it does not
 // cover a raw Exec or a JOINed table; no alarm read uses either.
 
@@ -53,8 +53,9 @@ func RegisterPositionWithholding(db *gorm.DB) error {
 }
 
 var (
-	alarmModelType            = reflect.TypeOf(Alarm{})
-	alarmDispositionModelType = reflect.TypeOf(AlarmDisposition{})
+	alarmModelType                 = reflect.TypeOf(Alarm{})
+	alarmDispositionModelType      = reflect.TypeOf(AlarmDisposition{})
+	alarmCycleSuppressionModelType = reflect.TypeOf(AlarmCycleSuppression{})
 )
 
 // CallerHoldsLocationRead reports whether the context's caller holds location:read. It asks
@@ -84,7 +85,7 @@ func withholdPositionDerived(db *gorm.DB) {
 		return
 	}
 	typ := db.Statement.Schema.ModelType
-	if typ != alarmModelType && typ != alarmDispositionModelType {
+	if typ != alarmModelType && typ != alarmDispositionModelType && typ != alarmCycleSuppressionModelType {
 		return
 	}
 	if !callerWithoutLocation(db) {
