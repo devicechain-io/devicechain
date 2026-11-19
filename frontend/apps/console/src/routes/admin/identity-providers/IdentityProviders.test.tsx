@@ -441,8 +441,12 @@ describe('server refusals reach the screen', () => {
     await waitFor(() => expect(api.toast).toHaveBeenCalled());
     // The re-read returns the same connection (it already had a secret), so nothing
     // remounts: only the explicit clear keeps the old keystrokes out of the next Replace.
-    fireEvent.click(await screen.findByRole('button', { name: 'Replace' }));
-    expect((screen.getByLabelText('Client secret') as HTMLInputElement).value).toBe('');
+    // Replace is disabled while the re-read is in flight, and a click on a disabled button
+    // does nothing, so wait for it to be enabled rather than for it merely to exist.
+    const replace = await screen.findByRole('button', { name: 'Replace' });
+    await waitFor(() => expect((replace as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(replace);
+    expect(((await screen.findByLabelText('Client secret')) as HTMLInputElement).value).toBe('');
   });
 
   it('enable and disable', async () => {
