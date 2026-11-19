@@ -17,6 +17,12 @@ import (
 // repaired by event-processing's reconcile against this service (DeviceRosterPage, at the
 // start of its DETECT term and every five minutes). Implementations must be safe for
 // concurrent use.
+//
+// The error is that of a publish the broker did not accept (nil for a delivered fact, and for
+// a fact the implementation dropped for a reason particular to it, such as a marshal failure).
+// It is never surfaced to the caller of the device write; it exists so a fan-out that sends one
+// fact per device (a type re-point, a bulk create, an import) stops at the first refusal instead
+// of waiting out one publish ceiling per device while the broker is unreachable.
 type DeviceRosterPublisher interface {
-	PublishDeviceRoster(ctx context.Context, event *DeviceRosterEvent)
+	PublishDeviceRoster(ctx context.Context, event *DeviceRosterEvent) error
 }

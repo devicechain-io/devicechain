@@ -627,30 +627,52 @@ func (api *Api) emitDeviceRosterBatch(ctx context.Context, devices []*Device) {
 		for _, d := range devices[start:end] {
 			ids = append(ids, d.ID)
 		}
-		api.emitRosterEntries(ctx, false, func(q *gorm.DB) *gorm.DB { return q.Where("devices.id IN ?", ids) },
-			"devices", fmt.Sprintf("%d created devices", len(ids)))
+		if !api.emitRosterEntries(ctx, false, func(q *gorm.DB) *gorm.DB { return q.Where("devices.id IN ?", ids) },
+			"devices", fmt.Sprintf("%d created devices", len(ids))) {
+			if skipped := len(devices) - end; skipped > 0 {
+				log.Warn().Int("skipped", skipped).
+					Msg("Not announcing the rest of a bulk create on the roster after a refused publish; the detection engine's reconcile rosters them.")
+			}
+			return
+		}
 	}
 }
 
 // emitRosterEntries reads roster entries back through rosterEntries — the query the detection
 // engine's reconcile reads, so the fact and the repair cannot disagree — and emits one fact per
 // device. A read error is logged and swallowed (what names the skipped devices for the log).
-func (api *Api) emitRosterEntries(ctx context.Context, enabledTransition bool, where func(*gorm.DB) *gorm.DB, key, what string) {
+//
+// 🔴 IT STOPS AT THE FIRST PUBLISH THE BROKER REFUSES, and reports false. The facts are sent one
+// after another on the caller's request, and each publish the broker does not answer waits out
+// the publish ceiling (5 s). A type re-point or a bulk create of a thousand devices made while
+// the broker was unreachable therefore held its caller for over an hour, for facts the broker was
+// refusing anyway. The devices not announced are the ones the reconcile repairs, exactly as it
+// repairs the refused one: event-processing reads the same roster entries at the start of its
+// term and every five minutes. Stopping costs only the facts that would have followed a refusal;
+// a read error still reports true, since nothing was refused.
+func (api *Api) emitRosterEntries(ctx context.Context, enabledTransition bool, where func(*gorm.DB) *gorm.DB, key, what string) bool {
 	entries, err := api.rosterEntries(ctx, where)
 	if err != nil {
 		log.Error().Err(err).Str(key, what).
 			Msg("Unable to read device roster entries; skipping roster emit (the detection engine's reconcile repairs it).")
-		return
+		return true
 	}
-	for _, e := range entries {
-		api.emitDeviceRoster(ctx, &DeviceRosterEvent{
+	for i, e := range entries {
+		if err := api.emitDeviceRoster(ctx, &DeviceRosterEvent{
 			DeviceToken:   e.DeviceToken,
 			ProfileToken:  e.ProfileToken,
 			ExpectedSince: e.ExpectedSince,
 			Disabled:      e.Disabled,
 			Enabled:       enabledTransition && !e.Disabled,
-		})
+		}); err != nil {
+			if skipped := len(entries) - i - 1; skipped > 0 {
+				log.Warn().Err(err).Str(key, what).Int("skipped", skipped).
+					Msg("Not announcing the remaining devices on the roster after a refused publish; the detection engine's reconcile rosters them.")
+			}
+			return false
+		}
 	}
+	return true
 }
 
 // CreateDevicesFromTemplate renders a bulk request's templates into concrete

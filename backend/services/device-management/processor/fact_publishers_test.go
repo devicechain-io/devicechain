@@ -53,3 +53,17 @@ func TestDetectionFactWritersCountEveryRefusedPublish(t *testing.T) {
 		c.publish(&captureFactWriter{refuse: errors.New("nats: timeout")}, nil)
 	}
 }
+
+// The roster writer hands back a refused publish so a per-device fan-out can stop at it
+// (model.emitRosterEntries), and answers nil for a delivered one.
+func TestTheRosterWriterReturnsARefusedPublish(t *testing.T) {
+	ctx := context.Background()
+	ev := &model.DeviceRosterEvent{DeviceToken: "d1", ExpectedSince: time.Now()}
+	refusal := errors.New("nats: timeout")
+	if err := NewDeviceRosterWriter(&captureFactWriter{refuse: refusal}, nil).PublishDeviceRoster(ctx, ev); !errors.Is(err, refusal) {
+		t.Fatalf("a refused publish answered %v; want the refusal", err)
+	}
+	if err := NewDeviceRosterWriter(&captureFactWriter{}, nil).PublishDeviceRoster(ctx, ev); err != nil {
+		t.Fatalf("a delivered publish answered %v; want nil", err)
+	}
+}
