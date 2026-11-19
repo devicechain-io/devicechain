@@ -6,7 +6,7 @@ package processor
 import (
 	"context"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 )
 
 // DeviceManagementFacts is the OFF-LOOP seam onto device-management's authoritative state, of
@@ -23,9 +23,9 @@ type DeviceManagementFacts interface {
 	Tenants(ctx context.Context) ([]string, error)
 	// ActiveProfiles returns every published profile of the tenant with its active version,
 	// that version's activation instant and its enabled rules.
-	ActiveProfiles(ctx context.Context, tenant string) ([]dmmodel.ActiveProfileRules, error)
+	ActiveProfiles(ctx context.Context, tenant string) ([]dmcontract.ActiveProfileRules, error)
 	// Roster returns every device of the tenant with its profile and membership instant.
-	Roster(ctx context.Context, tenant string) ([]dmmodel.DeviceRosterEntry, error)
+	Roster(ctx context.Context, tenant string) ([]dmcontract.DeviceRosterEntry, error)
 	// ThresholdAttributes returns every attribute of the tenant a dynamic threshold can read.
-	ThresholdAttributes(ctx context.Context, tenant string) ([]dmmodel.DeviceThresholdAttribute, error)
+	ThresholdAttributes(ctx context.Context, tenant string) ([]dmcontract.DeviceThresholdAttribute, error)
 }

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-device-management/contract"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -19,7 +19,7 @@ import (
 // consistent with the row and lets two same-tick transitions order. The optional scalar
 // fields map to protobuf's optional (pointer) encoding so a subscriber can distinguish
 // "absent" from a zero value.
-func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, error) {
+func MarshalAlarmStateChangeEvent(event *contract.AlarmStateChangeEvent) ([]byte, error) {
 	pbevent := &PAlarmStateChangeEvent{
 		ClearReason:    event.ClearReason,
 		EventType:      string(event.EventType),
@@ -55,7 +55,7 @@ func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, e
 }
 
 // Unmarshal an encoded alarm state-change event.
-func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEvent, error) {
+func UnmarshalAlarmStateChangeEvent(encoded []byte) (*contract.AlarmStateChangeEvent, error) {
 	pbevent := &PAlarmStateChangeEvent{}
 	if err := proto.Unmarshal(encoded, pbevent); err != nil {
 		return nil, err
@@ -70,9 +70,9 @@ func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEven
 		return nil, err
 	}
 
-	event := &model.AlarmStateChangeEvent{
+	event := &contract.AlarmStateChangeEvent{
 		ClearReason:    pbevent.ClearReason,
-		EventType:      model.AlarmEventType(pbevent.EventType),
+		EventType:      contract.AlarmEventType(pbevent.EventType),
 		AlarmToken:     pbevent.AlarmToken,
 		OriginatorType: pbevent.OriginatorType,
 		OriginatorId:   uint(pbevent.OriginatorId),
@@ -99,7 +99,7 @@ func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEven
 }
 
 // Marshal a detection-rules-published event to protobuf bytes (ADR-051 slice 4b-3).
-func MarshalDetectionRulesPublishedEvent(event *model.DetectionRulesPublishedEvent) ([]byte, error) {
+func MarshalDetectionRulesPublishedEvent(event *contract.DetectionRulesPublishedEvent) ([]byte, error) {
 	rules := make([]*PPublishedDetectionRule, 0, len(event.Rules))
 	for _, r := range event.Rules {
 		rules = append(rules, &PPublishedDetectionRule{
@@ -117,14 +117,14 @@ func MarshalDetectionRulesPublishedEvent(event *model.DetectionRulesPublishedEve
 }
 
 // Unmarshal an encoded detection-rules-published event (consumed by event-processing).
-func UnmarshalDetectionRulesPublishedEvent(encoded []byte) (*model.DetectionRulesPublishedEvent, error) {
+func UnmarshalDetectionRulesPublishedEvent(encoded []byte) (*contract.DetectionRulesPublishedEvent, error) {
 	pbevent := &PDetectionRulesPublishedEvent{}
 	if err := proto.Unmarshal(encoded, pbevent); err != nil {
 		return nil, err
 	}
-	rules := make([]model.PublishedDetectionRule, 0, len(pbevent.Rules))
+	rules := make([]contract.PublishedDetectionRule, 0, len(pbevent.Rules))
 	for _, r := range pbevent.Rules {
-		rules = append(rules, model.PublishedDetectionRule{
+		rules = append(rules, contract.PublishedDetectionRule{
 			Token:              r.Token,
 			Definition:         r.Definition,
 			EntityGroupToken:   r.EntityGroupToken,
@@ -135,7 +135,7 @@ func UnmarshalDetectionRulesPublishedEvent(encoded []byte) (*model.DetectionRule
 	if err != nil {
 		return nil, err
 	}
-	return &model.DetectionRulesPublishedEvent{
+	return &contract.DetectionRulesPublishedEvent{
 		ProfileVersionToken: pbevent.ProfileVersionToken,
 		Rules:               rules,
 		PublishedAt:         publishedAt,
@@ -143,7 +143,7 @@ func UnmarshalDetectionRulesPublishedEvent(encoded []byte) (*model.DetectionRule
 }
 
 // Marshal a device-roster event to protobuf bytes (ADR-051 slice 4c-2).
-func MarshalDeviceRosterEvent(event *model.DeviceRosterEvent) ([]byte, error) {
+func MarshalDeviceRosterEvent(event *contract.DeviceRosterEvent) ([]byte, error) {
 	return proto.Marshal(&PDeviceRosterEvent{
 		DeviceToken:   event.DeviceToken,
 		ProfileToken:  event.ProfileToken,
@@ -154,7 +154,7 @@ func MarshalDeviceRosterEvent(event *model.DeviceRosterEvent) ([]byte, error) {
 }
 
 // Unmarshal an encoded device-roster event (consumed by event-processing).
-func UnmarshalDeviceRosterEvent(encoded []byte) (*model.DeviceRosterEvent, error) {
+func UnmarshalDeviceRosterEvent(encoded []byte) (*contract.DeviceRosterEvent, error) {
 	pbevent := &PDeviceRosterEvent{}
 	if err := proto.Unmarshal(encoded, pbevent); err != nil {
 		return nil, err
@@ -163,7 +163,7 @@ func UnmarshalDeviceRosterEvent(encoded []byte) (*model.DeviceRosterEvent, error
 	if err != nil {
 		return nil, err
 	}
-	return &model.DeviceRosterEvent{
+	return &contract.DeviceRosterEvent{
 		DeviceToken:   pbevent.DeviceToken,
 		ProfileToken:  pbevent.ProfileToken,
 		ExpectedSince: expectedSince,
@@ -173,7 +173,7 @@ func UnmarshalDeviceRosterEvent(encoded []byte) (*model.DeviceRosterEvent, error
 }
 
 // Marshal a device-attribute event to protobuf bytes (ADR-051 slice 4c-3).
-func MarshalDeviceAttributeEvent(event *model.DeviceAttributeEvent) ([]byte, error) {
+func MarshalDeviceAttributeEvent(event *contract.DeviceAttributeEvent) ([]byte, error) {
 	return proto.Marshal(&PDeviceAttributeEvent{
 		DeviceToken: event.DeviceToken,
 		AttrKey:     event.AttrKey,
@@ -185,7 +185,7 @@ func MarshalDeviceAttributeEvent(event *model.DeviceAttributeEvent) ([]byte, err
 }
 
 // Unmarshal an encoded device-attribute event (consumed by event-processing).
-func UnmarshalDeviceAttributeEvent(encoded []byte) (*model.DeviceAttributeEvent, error) {
+func UnmarshalDeviceAttributeEvent(encoded []byte) (*contract.DeviceAttributeEvent, error) {
 	pbevent := &PDeviceAttributeEvent{}
 	if err := proto.Unmarshal(encoded, pbevent); err != nil {
 		return nil, err
@@ -194,7 +194,7 @@ func UnmarshalDeviceAttributeEvent(encoded []byte) (*model.DeviceAttributeEvent,
 	if err != nil {
 		return nil, err
 	}
-	return &model.DeviceAttributeEvent{
+	return &contract.DeviceAttributeEvent{
 		DeviceToken: pbevent.DeviceToken,
 		AttrKey:     pbevent.AttrKey,
 		Scope:       pbevent.Scope,
@@ -225,7 +225,7 @@ func parseOptionalTime(s string) (time.Time, error) {
 }
 
 // MarshalDeviceOwnershipChangedEvent encodes a device ownership-changed fact (ADR-081).
-func MarshalDeviceOwnershipChangedEvent(event *model.DeviceOwnershipChangedEvent) ([]byte, error) {
+func MarshalDeviceOwnershipChangedEvent(event *contract.DeviceOwnershipChangedEvent) ([]byte, error) {
 	return proto.Marshal(&PDeviceOwnershipChangedEvent{
 		DeviceIncarnation: event.DeviceIncarnation,
 		DeviceToken:       event.DeviceToken,
@@ -238,7 +238,7 @@ func MarshalDeviceOwnershipChangedEvent(event *model.DeviceOwnershipChangedEvent
 // with no device token, or with an anchor that is not "<kind>:<token>", is refused: a
 // consumer overwrites its projection with what this returns, so a malformed fact must
 // not be read as "owned by nobody".
-func UnmarshalDeviceOwnershipChangedEvent(encoded []byte) (*model.DeviceOwnershipChangedEvent, error) {
+func UnmarshalDeviceOwnershipChangedEvent(encoded []byte) (*contract.DeviceOwnershipChangedEvent, error) {
 	pbevent := &PDeviceOwnershipChangedEvent{}
 	if err := proto.Unmarshal(encoded, pbevent); err != nil {
 		return nil, err
@@ -258,7 +258,7 @@ func UnmarshalDeviceOwnershipChangedEvent(encoded []byte) (*model.DeviceOwnershi
 		}
 		anchors = append(anchors, a)
 	}
-	return &model.DeviceOwnershipChangedEvent{
+	return &contract.DeviceOwnershipChangedEvent{
 		DeviceIncarnation: pbevent.DeviceIncarnation,
 		DeviceToken:       pbevent.DeviceToken,
 		Anchors:           anchors,

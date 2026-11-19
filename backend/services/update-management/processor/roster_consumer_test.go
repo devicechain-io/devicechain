@@ -8,7 +8,7 @@ import (
 	"errors"
 	"testing"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -38,7 +38,7 @@ func rosterConsumerOver(api RosterApi) *RosterConsumer {
 
 func rosterFact(t *testing.T, device string, enabled bool) []byte {
 	t.Helper()
-	b, err := dmproto.MarshalDeviceRosterEvent(&dmmodel.DeviceRosterEvent{DeviceToken: device, Enabled: enabled, Disabled: !enabled})
+	b, err := dmproto.MarshalDeviceRosterEvent(&dmcontract.DeviceRosterEvent{DeviceToken: device, Enabled: enabled, Disabled: !enabled})
 	require.NoError(t, err)
 	return b
 }

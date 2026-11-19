@@ -7,7 +7,7 @@ import (
 	"context"
 	"strings"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
@@ -42,10 +42,10 @@ func (s *StoreRuleSource) Load(ctx context.Context) ([]runtime.ScopedRule, error
 	// Group rows by (tenant, profile-version) so the shared compile path composes ids and
 	// scopes exactly as the live fact path does.
 	type scope struct{ tenant, pvt string }
-	grouped := map[scope][]dmmodel.PublishedDetectionRule{}
+	grouped := map[scope][]dmcontract.PublishedDetectionRule{}
 	for _, r := range rows {
 		k := scope{r.Tenant, r.ProfileVersionToken}
-		grouped[k] = append(grouped[k], dmmodel.PublishedDetectionRule{
+		grouped[k] = append(grouped[k], dmcontract.PublishedDetectionRule{
 			Token:              r.RuleToken,
 			Definition:         r.Definition,
 			EntityGroupToken:   r.EntityGroupToken,
@@ -68,7 +68,7 @@ func (s *StoreRuleSource) Load(ctx context.Context) ([]runtime.ScopedRule, error
 // per-tenant subject) and payload. ok is false when the message is unusable (no parseable
 // tenant, or an unmarshalable payload) — dropped, not fatal. The tenant travels on the
 // subject, never the payload.
-func decodePublishedRuleFact(ctx context.Context, msg messaging.Message) (string, *dmmodel.DetectionRulesPublishedEvent, bool) {
+func decodePublishedRuleFact(ctx context.Context, msg messaging.Message) (string, *dmcontract.DetectionRulesPublishedEvent, bool) {
 	_, tenant, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
@@ -88,7 +88,7 @@ func decodePublishedRuleFact(ctx context.Context, msg messaging.Message) (string
 // runtime id with the SAME helper the compile path uses so the persisted id and the running
 // id can never drift. Rules with an empty version or rule token are dropped (a malformed/
 // forged fact; the compile path drops them too).
-func factRuleRows(tenant string, ev *dmmodel.DetectionRulesPublishedEvent) []model.DetectRule {
+func factRuleRows(tenant string, ev *dmcontract.DetectionRulesPublishedEvent) []model.DetectRule {
 	rows := make([]model.DetectRule, 0, len(ev.Rules))
 	seen := make(map[string]int, len(ev.Rules))
 	for _, r := range ev.Rules {
@@ -128,7 +128,7 @@ func factRuleRows(tenant string, ev *dmmodel.DetectionRulesPublishedEvent) []mod
 // token (an empty or "@"-less version token — a malformed/forged fact; factRuleRows drops such
 // rules too, so the two projections stay symmetric). The profile-token grammar excludes "@"
 // (ADR-042), so a single Cut is unambiguous.
-func profileActiveFromFact(tenant string, ev *dmmodel.DetectionRulesPublishedEvent) (*model.ProfileActive, bool) {
+func profileActiveFromFact(tenant string, ev *dmcontract.DetectionRulesPublishedEvent) (*model.ProfileActive, bool) {
 	profileToken, version, ok := strings.Cut(ev.ProfileVersionToken, "@")
 	if !ok || profileToken == "" || version == "" {
 		return nil, false

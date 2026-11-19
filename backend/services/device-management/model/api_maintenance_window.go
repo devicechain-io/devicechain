@@ -225,12 +225,6 @@ func (api *Api) resolveMaintenanceWindowId(ctx context.Context, token *string) (
 	return &id, nil
 }
 
-// RejectWindowAfterExpiry: the command is held for the device type's maintenance window and
-// the next opening comes after the command's own expiry, so it could only expire unsent.
-// It is refused at enqueue rather than accepted to lapse. Permanent for this expiry: a later
-// expiresAt, or a window that opens sooner, would be accepted.
-const RejectWindowAfterExpiry EnqueueRejectionCode = "WINDOW_AFTER_EXPIRY"
-
 // CommandDispatchHold binds a device's command to one opening of its device type's
 // maintenance window WindowToken: it may START in [DispatchAfter, DispatchUntil) and at no
 // other time. When the window is open at enqueue DispatchAfter is already past, so the command

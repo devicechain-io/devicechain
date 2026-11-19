@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -61,8 +61,8 @@ func quietFixture(t *testing.T, tz, slots, bypass string, clock *time.Time) (*Po
 	return n, api, fa, ctx
 }
 
-func eventAt(eventType dmmodel.AlarmEventType, severity string, occurred time.Time) *dmmodel.AlarmStateChangeEvent {
-	return &dmmodel.AlarmStateChangeEvent{
+func eventAt(eventType dmcontract.AlarmEventType, severity string, occurred time.Time) *dmcontract.AlarmStateChangeEvent {
+	return &dmcontract.AlarmStateChangeEvent{
 		EventType: eventType, AlarmToken: "a1", AlarmKey: "k", OriginatorType: "device", OriginatorId: 1,
 		Severity: severity, State: "ACTIVE", RaisedTime: occurred, OccurredTime: occurred,
 	}
@@ -92,7 +92,7 @@ func TestDispatchHoldsANotificationInsideQuietHours(t *testing.T) {
 	clock := insideQuiet
 	n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "CRITICAL", &clock)
 
-	if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
+	if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	if fa.calls != 0 {
@@ -117,7 +117,7 @@ func TestDispatchHoldsANotificationInsideQuietHours(t *testing.T) {
 func TestBypassSeverityPagesInsideQuietHours(t *testing.T) {
 	clock := insideQuiet
 	n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "CRITICAL", &clock)
-	if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "CRITICAL", clock)); err != nil {
+	if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "CRITICAL", clock)); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	if fa.calls != 1 || len(heldRows(t, api, ctx)) != 0 {
@@ -128,7 +128,7 @@ func TestBypassSeverityPagesInsideQuietHours(t *testing.T) {
 func TestOutsideQuietHoursPagesNow(t *testing.T) {
 	clock := outsideQuiet
 	n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
-	if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MINOR", clock)); err != nil {
+	if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MINOR", clock)); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	if fa.calls != 1 || len(heldRows(t, api, ctx)) != 0 {
@@ -155,7 +155,7 @@ func TestQuietHoursAreThePolicysOwn(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
+	if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	if fa.calls != 1 {
@@ -175,7 +175,7 @@ func TestAThrottledNotificationIsNotHeld(t *testing.T) {
 	p.ThrottleSeconds.Int64, p.ThrottleSeconds.Valid = 3600, true
 	state := &model.NotificationState{AlarmToken: "a1"}
 	state.LastNotifiedAt.Time, state.LastNotifiedAt.Valid = clock.Add(-time.Minute), true
-	sendNow, held := n.holdQuiet(eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock),
+	sendNow, held := n.holdQuiet(eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock),
 		[]*model.NotificationPolicy{p}, state, clock)
 	if len(held) != 0 || len(sendNow) != 1 {
 		t.Fatalf("throttled: held=%d sendNow=%d, want 0 and 1 (plan then throttles it)", len(held), len(sendNow))
@@ -187,7 +187,7 @@ func TestAThrottledNotificationIsNotHeld(t *testing.T) {
 func TestReleaseSendsAtTheEndOfQuietHours(t *testing.T) {
 	clock := insideQuiet
 	n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
-	if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
+	if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -242,7 +242,7 @@ func TestReleaseDropsWhatWasResolvedWhileHeld(t *testing.T) {
 		t.Run(tc.name+" while held", func(t *testing.T) {
 			clock := insideQuiet
 			n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
-			if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
+			if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)); err != nil {
 				t.Fatal(err)
 			}
 			// The held raise's own cycle (eventAt raises at clock).
@@ -268,7 +268,7 @@ func TestReleaseDropsWhatWasResolvedWhileHeld(t *testing.T) {
 			if err := tc.resolve(api, ctx, clock.Add(-2*time.Hour), clock.Add(-time.Hour)); err != nil {
 				t.Fatal(err)
 			}
-			if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
+			if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)); err != nil {
 				t.Fatal(err)
 			}
 			if err := n.ReleaseHeld(ctx, enabledPolicies(t, api, ctx), quietEnds); err != nil {
@@ -291,7 +291,7 @@ func TestOneHeldNotificationPerAlarmAndPolicy(t *testing.T) {
 	n.adapters[model.ChannelTypeSMTP] = fa2
 	for i, sev := range []string{"MINOR", "MAJOR", "MINOR"} {
 		at := clock.Add(time.Duration(i) * 10 * time.Minute)
-		if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventEscalated, sev, at)); err != nil {
+		if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventEscalated, sev, at)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -315,7 +315,7 @@ func TestPolicyEditsReachHeldNotifications(t *testing.T) {
 	t.Run("quiet hours removed: sent on the next pass", func(t *testing.T) {
 		clock := insideQuiet
 		n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
-		if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
+		if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)); err != nil {
 			t.Fatal(err)
 		}
 		req := &model.NotificationPolicyUpdateRequest{}
@@ -334,7 +334,7 @@ func TestPolicyEditsReachHeldNotifications(t *testing.T) {
 	t.Run("still quiet: held again to the new end", func(t *testing.T) {
 		clock := insideQuiet
 		n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
-		if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
+		if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)); err != nil {
 			t.Fatal(err)
 		}
 		// Due now, but the policy is quiet for it at the pass: it is moved, not sent.
@@ -358,7 +358,7 @@ func TestPolicyEditsReachHeldNotifications(t *testing.T) {
 	t.Run("disabled: dropped", func(t *testing.T) {
 		clock := insideQuiet
 		n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
-		if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
+		if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)); err != nil {
 			t.Fatal(err)
 		}
 		off := false
@@ -385,7 +385,7 @@ func TestAFailedReleaseIsRetriedThenDropped(t *testing.T) {
 	n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
 	fa.failTimes = 1 << 30
 	n.attempts = 1
-	if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
+	if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)); err != nil {
 		t.Fatal(err)
 	}
 	at := quietEnds
@@ -441,7 +441,7 @@ func TestEscalationWaitsForQuietHoursToEnd(t *testing.T) {
 func TestSchedulerReleasesForATenantWithNoNotificationState(t *testing.T) {
 	clock := insideQuiet
 	n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
-	if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
+	if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)); err != nil {
 		t.Fatal(err)
 	}
 	if states, _ := api.NotificationStatesByAlarmToken(ctx, []string{"a1"}); len(states) != 0 {
@@ -492,7 +492,7 @@ func TestAPolicyThatWouldSendNothingHoldsNothing(t *testing.T) {
 	js := datatypes.JSON(quietSlots)
 	p.QuietHoursSlots = &js
 	n := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: &fakeAdapter{}})
-	_, held := n.holdQuiet(eventAt(dmmodel.AlarmEventRaised, "MINOR", insideQuiet),
+	_, held := n.holdQuiet(eventAt(dmcontract.AlarmEventRaised, "MINOR", insideQuiet),
 		[]*model.NotificationPolicy{p}, nil, insideQuiet)
 	if len(held) != 0 {
 		t.Fatalf("held %d notification(s) for a policy with no rule for MINOR", len(held))
@@ -508,7 +508,7 @@ func TestStoredQuietHoursThatDoNotValidatePage(t *testing.T) {
 	js := datatypes.JSON(quietSlots)
 	p.QuietHoursSlots = &js
 	n := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: &fakeAdapter{}})
-	sendNow, held := n.holdQuiet(eventAt(dmmodel.AlarmEventRaised, "MINOR", insideQuiet),
+	sendNow, held := n.holdQuiet(eventAt(dmcontract.AlarmEventRaised, "MINOR", insideQuiet),
 		[]*model.NotificationPolicy{p}, nil, insideQuiet)
 	if len(held) != 0 || len(sendNow) != 1 {
 		t.Fatalf("unvalidatable quiet hours: held=%d sendNow=%d, want 0 and 1", len(held), len(sendNow))

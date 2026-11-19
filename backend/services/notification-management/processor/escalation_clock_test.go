@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/storehold/holdtest"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/stretchr/testify/assert"
@@ -38,7 +38,7 @@ func TestEscalationWindowUsesDispatchClock(t *testing.T) {
 			n.api, n.store = api, &fakeSecretStore{}
 			n.now = func() time.Time { return clock }
 			eventAt := sent.Add(tc.skew)
-			require.NoError(t, n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, eventAt, eventAt)))
+			require.NoError(t, n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, eventAt, eventAt)))
 			require.Equal(t, 1, fa.calls)
 			clock = sent.Add(tc.tick)
 			s := &EscalationScheduler{Api: api, Notifier: n, defaultMax: 5}
@@ -75,15 +75,15 @@ func TestEscalationWindowRestartsAfterClear(t *testing.T) {
 	n.api, n.store = api, &fakeSecretStore{}
 	n.now = func() time.Time { return clock }
 	cycle := sent.Add(-2 * time.Hour)
-	require.NoError(t, n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, cycle, cycle)))
+	require.NoError(t, n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, cycle, cycle)))
 	scheduler := &EscalationScheduler{Api: api, Notifier: n, defaultMax: 5}
 	clock = sent.Add(31 * time.Minute)
 	require.NoError(t, scheduler.runOnce(context.Background()))
 	require.Equal(t, 2, fa.calls)
-	require.NoError(t, n.Notify(ctx, cycleEvent(dmmodel.AlarmEventCleared, cycle, cycle.Add(time.Minute))))
+	require.NoError(t, n.Notify(ctx, cycleEvent(dmcontract.AlarmEventCleared, cycle, cycle.Add(time.Minute))))
 	clock = sent.Add(time.Hour)
 	cycle = cycle.Add(2 * time.Minute)
-	require.NoError(t, n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, cycle, cycle)))
+	require.NoError(t, n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, cycle, cycle)))
 	require.Equal(t, 3, fa.calls)
 	clock = sent.Add(61 * time.Minute)
 	require.NoError(t, scheduler.runOnce(context.Background()))
@@ -121,7 +121,7 @@ func TestEscalationWindowKeepsPageTimeThroughStoreHold(t *testing.T) {
 		clock = pagedAt.Add(2 * time.Hour)
 		return faults.probe(c)
 	})
-	ack, run := alarmMessage(t, cycleEvent(dmmodel.AlarmEventRaised, pagedAt, pagedAt))
+	ack, run := alarmMessage(t, cycleEvent(dmcontract.AlarmEventRaised, pagedAt, pagedAt))
 	run(np)
 	require.Positive(t, faults.failed.Load(), "the state write must have failed before recovery")
 	require.False(t, faults.armed.Load(), "the store must have recovered")

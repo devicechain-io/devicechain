@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"gorm.io/gorm"
@@ -65,7 +65,7 @@ func pickupRig(t *testing.T, hang string, tokens []string, oldRecipient map[stri
 			}
 		}
 		raised := time.Now().UTC().Add(time.Second)
-		ev := cycleEvent(dmmodel.AlarmEventRaised, raised, raised)
+		ev := cycleEvent(dmcontract.AlarmEventRaised, raised, raised)
 		ev.AlarmToken = tok
 		if err := n.Notify(ctx, ev); err != nil {
 			t.Fatal(err)
@@ -120,7 +120,7 @@ func TestPickupBudgetSpentAfterHardFailureStaysHard(t *testing.T) {
 	n.attempts = 1
 	delivered, timedOut := 0, false
 	n.adapters[model.ChannelTypeSMTP] = adapterFunc(func(c context.Context, msg *RenderedNotification) error {
-		if msg.Alarm.EventType != string(dmmodel.AlarmEventCleared) {
+		if msg.Alarm.EventType != string(dmcontract.AlarmEventCleared) {
 			return nil
 		}
 		switch msg.Alarm.AlarmToken {
@@ -218,13 +218,13 @@ func TestSchedulerWithDeliveredAndTimedOutChannelsIsPartial(t *testing.T) {
 			delivered := 0
 			timedOut := make(chan struct{})
 			healthy := adapterFunc(func(_ context.Context, msg *RenderedNotification) error {
-				if msg.Alarm.EventType != string(dmmodel.AlarmEventRaised) {
+				if msg.Alarm.EventType != string(dmcontract.AlarmEventRaised) {
 					delivered++
 				}
 				return nil
 			})
 			hanging := adapterFunc(func(c context.Context, msg *RenderedNotification) error {
-				if msg.Alarm.EventType != string(dmmodel.AlarmEventRaised) {
+				if msg.Alarm.EventType != string(dmcontract.AlarmEventRaised) {
 					<-c.Done()
 					close(timedOut)
 					return c.Err()
@@ -240,7 +240,7 @@ func TestSchedulerWithDeliveredAndTimedOutChannelsIsPartial(t *testing.T) {
 			n.attempts, n.timeout, n.budget = 1, tc.timeout, 400*time.Millisecond
 			n.now = func() time.Time { return time.Now().Add(10 * time.Minute) }
 			raised := time.Now().UTC().Add(time.Second)
-			if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+			if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 				t.Fatal(err)
 			}
 			// Let the full window since dispatch elapse before testing timed delivery.

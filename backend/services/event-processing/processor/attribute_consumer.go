@@ -6,7 +6,7 @@ package processor
 import (
 	"math"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -34,7 +34,7 @@ import (
 //     instead), so a set carrying one is forged; persisting it would poison a CEL comparison (always
 //     false against NaN), silently disabling the rule for that device.
 //   - a zero UpdatedAt: it would defeat the monotonic guard and the deletion fence.
-func attributeFactPoison(ev *dmmodel.DeviceAttributeEvent) (string, bool) {
+func attributeFactPoison(ev *dmcontract.DeviceAttributeEvent) (string, bool) {
 	switch {
 	case ev.DeviceToken == "" || !validRosterToken(ev.DeviceToken):
 		return "empty or over-long device token", true
@@ -53,7 +53,7 @@ func attributeFactPoison(ev *dmmodel.DeviceAttributeEvent) (string, bool) {
 // validAttributeScope reports whether a fact's scope is one of the two platform-set scopes the
 // dynamic-threshold projection tracks. CLIENT and any forged/junk value are rejected.
 func validAttributeScope(scope string) bool {
-	return scope == string(dmmodel.AttributeScopeShared) || scope == string(dmmodel.AttributeScopeServer)
+	return scope == string(dmcontract.AttributeScopeShared) || scope == string(dmcontract.AttributeScopeServer)
 }
 
 // signalAttrRecheck marshals a device dynamic-threshold RECHECK onto the single-writer loop (ADR-051
@@ -145,7 +145,7 @@ func (rp *ResolvedEventsProcessor) handleAttributeFact(msg messaging.Message) bo
 // decodeAttributeFact unmarshals one device-attribute fact into its owning tenant (from the
 // per-tenant subject) and payload, with the same drop-not-fatal contract as decodeRosterFact. The
 // tenant travels on the subject, never the payload.
-func decodeAttributeFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmmodel.DeviceAttributeEvent, bool) {
+func decodeAttributeFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmcontract.DeviceAttributeEvent, bool) {
 	_, tenant, ok := messaging.TenantContextFromSubject(rp.pctx(), msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).

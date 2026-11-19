@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -37,7 +37,7 @@ func TestEditingAPolicyDoesNotDropAPendingClear(t *testing.T) {
 
 	time.Sleep(30 * time.Millisecond)
 	raised := time.Now().UTC()
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatal(err)
 	}
 	cleared := raised.Add(time.Millisecond)
@@ -88,7 +88,7 @@ func TestABudgetSpentWithProgressIsAPartialPass(t *testing.T) {
 	n.timeout = 5 * time.Second
 	for i := 0; i < 12; i++ {
 		raised := time.Now().UTC().Add(time.Second)
-		ev := cycleEvent(dmmodel.AlarmEventRaised, raised, raised)
+		ev := cycleEvent(dmcontract.AlarmEventRaised, raised, raised)
 		ev.AlarmToken = "c" + string(rune('a'+i))
 		if err := n.Notify(ctx, ev); err != nil {
 			t.Fatal(err)
@@ -123,14 +123,14 @@ func TestAFailedOpenStatesReadStillPicksUpClears(t *testing.T) {
 	n.store = &fakeSecretStore{}
 	n.now = func() time.Time { return time.Now().Add(10 * time.Minute) }
 	raised := time.Now().UTC().Add(time.Second)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatal(err)
 	}
 	if err := api.MarkCleared(ctx, "a1", "k", "CRITICAL", raised, raised.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	// A second alarm that is still open, so the tenant has states to enumerate and escalate.
-	open := cycleEvent(dmmodel.AlarmEventRaised, raised, raised)
+	open := cycleEvent(dmcontract.AlarmEventRaised, raised, raised)
 	open.AlarmToken = "open"
 	if err := n.Notify(ctx, open); err != nil {
 		t.Fatal(err)

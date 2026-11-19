@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-notification-management/model"
 )
 
@@ -49,7 +49,7 @@ func TestAStalledClearChannelDoesNotDelayEscalation(t *testing.T) {
 
 	// One open alarm paged an hour ago, due to escalate.
 	old := time.Now().UTC().Add(-time.Hour)
-	esc := cycleEvent(dmmodel.AlarmEventRaised, old, old)
+	esc := cycleEvent(dmcontract.AlarmEventRaised, old, old)
 	esc.AlarmToken = "esc"
 	if err := n.Notify(ctx, esc); err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestAStalledClearChannelDoesNotDelayEscalation(t *testing.T) {
 	// Five alarms paged, then stamped cleared with nobody announcing them.
 	for i := 0; i < 5; i++ {
 		raised := time.Now().UTC().Add(time.Second)
-		ev := cycleEvent(dmmodel.AlarmEventRaised, raised, raised)
+		ev := cycleEvent(dmcontract.AlarmEventRaised, raised, raised)
 		ev.AlarmToken = "c" + string(rune('1'+i))
 		if err := n.Notify(ctx, ev); err != nil {
 			t.Fatal(err)
@@ -110,7 +110,7 @@ func TestTurningOnNotifyOnClearDoesNotAnnounceOlderClears(t *testing.T) {
 	n.store = &fakeSecretStore{}
 	// Paged and cleared well before the policy was (just now) saved.
 	raised := time.Now().UTC().Add(-10 * time.Minute)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatal(err)
 	}
 	if err := api.MarkCleared(ctx, "a1", "k", "CRITICAL", raised, raised.Add(time.Minute)); err != nil {
@@ -129,8 +129,8 @@ func TestTurningOnNotifyOnClearDoesNotAnnounceOlderClears(t *testing.T) {
 // A clear the scheduler rebuilds from the state row does not know its originator, and says so by
 // omission rather than by sending "" and 0.
 func TestAClearWithoutAnOriginatorOmitsItsKeys(t *testing.T) {
-	r := renderNotification(&dmmodel.AlarmStateChangeEvent{
-		EventType: dmmodel.AlarmEventCleared, AlarmToken: "a", AlarmKey: "k", Severity: "MAJOR", State: "CLEARED",
+	r := renderNotification(&dmcontract.AlarmStateChangeEvent{
+		EventType: dmcontract.AlarmEventCleared, AlarmToken: "a", AlarmKey: "k", Severity: "MAJOR", State: "CLEARED",
 	})
 	for _, k := range []string{"originatorType", "originatorId", "deviceToken", "deviceName"} {
 		if _, ok := r.Payload[k]; ok {
