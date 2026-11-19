@@ -153,16 +153,21 @@ func upper(s string) string {
 // never puts the fictional town on a real one. (The first coordinates sat on a real harbour town.)
 // Keep any new coordinate within a few kilometres of these.
 //
-// Both sites stand BEHIND EAST QUAY, as the fence's name says: north of the promenade, inland of
-// East Quay's lamps (longitudes -12.170 to -12.152), the depot further inland than the plain. The
-// truck drives due south from the depot into the plain and back, and it crosses the plain's
-// northern edge three quarters of the way out, which is HarborpulseTruckInPlainFrom.
-// TestHarborpulseSitesStandBehindEastQuay holds all of that.
+// Both sites stand BEHIND EAST QUAY, as the fence's name says. The harbour water is north of the
+// promenade the lights stand along and the town is south of it (the 3D scene's literal frame draws
+// it so), so behind is SOUTH: inland of East Quay's lamps (longitudes -12.170 to -12.152), the
+// depot further inland than the plain. The truck drives due north from the depot into the plain
+// and back, and it crosses the plain's southern edge three quarters of the way out, which is
+// HarborpulseTruckInPlainFrom. TestHarborpulseSitesStandBehindEastQuay holds all of that.
+//
+// At 17:45 and 21:45 exactly the fix lies on the edge (the same float64 as the ring's latitude).
+// The platform's containment is boundary-inclusive with geodesic edges, so its transition is
+// within a fraction of a second of the cue; the verifier's poll tolerance absorbs that.
 const (
-	harborDepotLat, harborDepotLon = 49.8100, -12.1610
-	harborPlainLat, harborPlainLon = 49.8040, -12.1610
-	// harborPlainHalfLat and harborPlainHalfLon are the plain fence's half extents: its northern
-	// edge (49.8055) is a quarter of the depot-to-plain leg short of the plain's centre.
+	harborDepotLat, harborDepotLon = 49.7940, -12.1610
+	harborPlainLat, harborPlainLon = 49.8000, -12.1610
+	// harborPlainHalfLat and harborPlainHalfLon are the plain fence's half extents: its southern
+	// edge (49.7985) is a quarter of the depot-to-plain leg short of the plain's centre.
 	harborPlainHalfLat, harborPlainHalfLon = 0.0015, 0.0045
 	harborDepotHalfLat, harborDepotHalfLon = 0.0004, 0.0006
 )

@@ -102,7 +102,8 @@ func TestHarborpulseSceneLayoutIsTheManifestFleet(t *testing.T) {
 
 // TestHarborpulseSitesStandBehindEastQuay: the flood plain the fence is named for, and the depot
 // the truck leaves from, stand behind East Quay in the manifest's own coordinates. Behind is
-// inland (north of the promenade the lights stand along); East Quay is the span of its own lights.
+// inland: SOUTH of the promenade the lights stand along, the harbour water being north of it.
+// East Quay is the span of its own lights.
 // The console's map draws these coordinates, so a fence named for East Quay that sat anywhere else
 // would show a viewer two different harbours.
 func TestHarborpulseSitesStandBehindEastQuay(t *testing.T) {
@@ -134,9 +135,9 @@ func TestHarborpulseSitesStandBehindEastQuay(t *testing.T) {
 		t.Fatalf("fences %v; want the flood plain and the depot", rings)
 	}
 	pMinLon, pMaxLon, pMinLat, pMaxLat := bounds(rings[HarborpulseFloodPlainFence])
-	dMinLon, dMaxLon, dMinLat, _ := bounds(rings[HarborpulseDepotFence])
-	if !(pMinLat > harborPromenadeLat) || !(dMinLat > harborPromenadeLat) {
-		t.Errorf("the plain (from lat %.4f) and the depot (from lat %.4f) must both stand inland of the promenade (lat %.4f)", pMinLat, dMinLat, harborPromenadeLat)
+	dMinLon, dMaxLon, _, dMaxLat := bounds(rings[HarborpulseDepotFence])
+	if !(pMaxLat < harborPromenadeLat) || !(dMaxLat < harborPromenadeLat) {
+		t.Errorf("the plain (to lat %.4f) and the depot (to lat %.4f) must both stand inland (south) of the promenade (lat %.4f)", pMaxLat, dMaxLat, harborPromenadeLat)
 	}
 	if c := (pMinLon + pMaxLon) / 2; c < eastLo || c > eastHi {
 		t.Errorf("the plain's centre lon %.4f is not behind East Quay's lights [%.4f, %.4f]", c, eastLo, eastHi)
@@ -147,8 +148,8 @@ func TestHarborpulseSitesStandBehindEastQuay(t *testing.T) {
 	if c := (dMinLon + dMaxLon) / 2; c < eastLo || c > eastHi {
 		t.Errorf("the depot's centre lon %.4f is not behind East Quay's lights [%.4f, %.4f]", c, eastLo, eastHi)
 	}
-	if !(dMinLat > pMaxLat) {
-		t.Errorf("the depot (from lat %.4f) must stand further inland than the plain (to lat %.4f)", dMinLat, pMaxLat)
+	if !(dMaxLat < pMinLat) {
+		t.Errorf("the depot (to lat %.4f) must stand further inland than the plain (from lat %.4f)", dMaxLat, pMinLat)
 	}
 }
 
@@ -178,6 +179,10 @@ func TestHarborpulseSceneCuesAreTheTruck(t *testing.T) {
 	}
 	if len(l.TruckRoute) < 2 || l.TruckRoute[0] != l.Depot {
 		t.Fatalf("route %+v does not start at the depot %+v", l.TruckRoute, l.Depot)
+	}
+	parked := harborTruckFix((harborTruckParked + harborTruckReturn) / 2)
+	if end := l.TruckRoute[len(l.TruckRoute)-1]; end != (HarborScenePoint{Lat: parked.Latitude, Lon: parked.Longitude}) {
+		t.Fatalf("route ends at %+v; the truck parks at (%v, %v)", end, parked.Latitude, parked.Longitude)
 	}
 	for h := 0.0; h < 24; h += 0.05 {
 		f := harborTruckFix(h)
@@ -240,10 +245,15 @@ func TestHarborpulseStatusLayoutDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var wire struct {
-		LayoutDigest string `json:"layoutDigest"`
+	// exact keys: a struct would match a missing tag's "LayoutDigest" case-insensitively
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(b, &keys); err != nil {
+		t.Fatal(err)
 	}
-	if err := json.Unmarshal(b, &wire); err != nil {
+	var wire struct{ LayoutDigest string }
+	if raw, ok := keys["layoutDigest"]; !ok {
+		t.Fatalf("/status has no exact \"layoutDigest\" key: %s", b)
+	} else if err := json.Unmarshal(raw, &wire.LayoutDigest); err != nil {
 		t.Fatal(err)
 	}
 	committed, err := os.ReadFile(harborSceneFixture)
@@ -254,7 +264,7 @@ func TestHarborpulseStatusLayoutDigest(t *testing.T) {
 	if want := hex.EncodeToString(sum[:]); wire.LayoutDigest != want {
 		t.Fatalf("/status layoutDigest %q; the committed layout's is %q", wire.LayoutDigest, want)
 	}
-	if b, _ := json.Marshal(ScenarioClock{Name: "other"}); strings.Contains(string(b), "layoutDigest") {
+	if b, _ := json.Marshal(ScenarioClock{Name: "other"}); strings.Contains(strings.ToLower(string(b)), "layoutdigest") {
 		t.Fatalf("a scenario with no layout must omit layoutDigest: %s", b)
 	}
 }

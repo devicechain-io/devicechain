@@ -69,7 +69,11 @@ namespace DeviceChain.Harborpulse.Model
                     Alarm(d, d.Kind == DeviceKind.Light ? "light-silent" : "charger-offline", "MAJOR", h < 21.25, h < 21.25 ? 19.75 + 45 * 24 / layout.DayLengthSeconds : 21.25);
                 // The stand-in alarm tracks the fault through the paging hold, just as it does after the hold ends.
                 if (d.Token == lamp && h >= 11 + 10.0 / 60) Alarm(d, "lamp-flicker", "MAJOR", h < 12 + 50.0 / 60, h < 12 + 50.0 / 60 ? 11 + 10.0 / 60 : 12 + 50.0 / 60);
-                if (d.Kind == DeviceKind.Truck && h >= 18) Alarm(d, "truck-in-flood-plain", "WARNING", h < 21.5, h < 21.5 ? 18 : 21.5);
+                if (d.Kind == DeviceKind.Truck && h >= layout.Cues.TruckInPlainSim)
+                {
+                    var inPlain = h < layout.Cues.TruckOutPlainSim;
+                    Alarm(d, "truck-in-flood-plain", "WARNING", inPlain, inPlain ? layout.Cues.TruckInPlainSim : layout.Cues.TruckOutPlainSim);
+                }
             }
             Alarms = alarms.AsReadOnly(); Commands = commands.AsReadOnly();
             Suppressions = new[] { new SuppressionEvidence { Token = "preview-lamp-window", Status = h >= 10.75 && h < 11.5 ? "ACTIVE" : h < 10.75 ? "SCHEDULED" : "ENDED",

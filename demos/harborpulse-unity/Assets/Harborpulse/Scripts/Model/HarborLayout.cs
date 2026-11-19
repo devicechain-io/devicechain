@@ -244,10 +244,15 @@ namespace DeviceChain.Harborpulse.Model
                 };
                 if (!(l.Cues.TruckDepartSim < l.Cues.TruckInPlainSim && l.Cues.TruckInPlainSim < l.Cues.TruckOutPlainSim && l.Cues.TruckOutPlainSim < l.Cues.TruckHomeSim))
                     throw new FormatException("harbor layout: the truck cues are not in order (depart, in, out, home)");
+                if (!(l.Cues.LampServiceFromSim < l.Cues.LampServiceToSim) || !(l.Cues.AirLockFromSim < l.Cues.AirLockToSim))
+                    throw new FormatException("harbor layout: a cue window ends before it starts");
+                if (!(l.Cues.SilenceS > 0) || !(l.Cues.AirLockHoldS > 0) || !(l.Cues.EscalateAfterS > 0))
+                    throw new FormatException("harbor layout: a cue's wall duration is not positive");
 
                 var route = new List<LatLon>();
                 foreach (var p in Arr(root, "truckRoute", "")) route.Add(Point(p, "truckRoute[]"));
                 if (route.Count < 2) throw new FormatException("harbor layout: the truck route needs at least two waypoints");
+                if (route[0].Lat != l.Depot.Lat || route[0].Lon != l.Depot.Lon) throw new FormatException("harbor layout: the truck route does not start at the depot");
                 l.TruckRoute = route;
 
                 var frame = new List<LatLon>();
@@ -255,6 +260,15 @@ namespace DeviceChain.Harborpulse.Model
                 if (frame.Count != 4 || frame[0].Lat != frame[1].Lat || frame[2].Lat != frame[3].Lat || frame[0].Lon != frame[3].Lon || frame[1].Lon != frame[2].Lon ||
                     !(frame[2].Lat > frame[0].Lat) || !(frame[1].Lon > frame[0].Lon))
                     throw new FormatException("harbor layout: the control frame is not a rectangle, south-west corner first and anticlockwise");
+                void Inside(LatLon p, string what)
+                {
+                    if (!(p.Lat > frame[0].Lat && p.Lat < frame[2].Lat && p.Lon > frame[0].Lon && p.Lon < frame[1].Lon))
+                        throw new FormatException("harbor layout: " + what + " " + p + " is not strictly inside the control frame");
+                }
+                foreach (var d in devices) if (d.Position.HasValue) Inside(d.Position.Value, d.ExternalId);
+                foreach (var f in fences) foreach (var p in f.Ring) Inside(p, "fence " + f.Token);
+                Inside(l.Depot, "the depot");
+                foreach (var p in route) Inside(p, "a truck route waypoint");
                 l.ControlFrame = frame;
                 return l;
             }

@@ -209,7 +209,9 @@ namespace DeviceChain.Harborpulse.Tests
             var plain = layout.TruckRoute[layout.TruckRoute.Count - 1];
             var fix = new HarborLocation(plain.Lat, plain.Lon, 180, 8, Now);
             var t = TruckTrack.From(plan, fix, false, Now);
-            Assert.That(t.At.Z, Is.EqualTo(plan.Frame.ToGround(plain).Z).Within(1e-8)); Assert.That(t.At.Z, Is.GreaterThan(0));
+            // the plain and the depot are on land: south of the quay wall, the town's side (the water is north of it)
+            Assert.That(t.At.Z, Is.EqualTo(plan.Frame.ToGround(plain).Z).Within(1e-8)); Assert.That(t.At.Z, Is.LessThan(plan.WallZ - 30));
+            Assert.That(plan.Depot.Z, Is.LessThan(t.At.Z));
             Assert.That(t.At.X, Is.InRange(plan.MinX, plan.MaxX)); Assert.That(t.At.Z, Is.InRange(plan.MinZ, plan.MaxZ)); Assert.That(t.LightBar, Is.True);
             Assert.That(TruckTrack.From(plan, fix, false, Now.AddSeconds(11)).Stale, Is.True);
             var no = TruckTrack.From(plan, null, false, Now); Assert.That(no.Note, Is.EqualTo("no fix")); Assert.That(no.At.X, Is.EqualTo(plan.Depot.X));

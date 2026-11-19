@@ -4,7 +4,7 @@ section: whats-new
 
 ## en
 
-- **The waterfront scenario's flood plain is where its name says.** In a `harborpulse` sim, the "East Quay flood plain" geofence and the works depot now stand behind East Quay, inland of its street lights, so the console's map shows them where the scenario describes them. The truck still enters the flood plain at 17:45 and leaves at 21:45. An existing sim moves both geofences the next time it provisions. The 3D scene's layout file now also carries the scenario's planned cue times, the truck's route and a bounding frame, and the simulator's `/status` reports `scenario.layoutDigest`, the SHA-256 of the layout it generates.
+- **The waterfront scenario's flood plain is where its name says.** In a `harborpulse` sim, the "East Quay flood plain" geofence and the works depot now stand behind East Quay, inland of its street lights on the town side, so the console's map shows them where the scenario describes them. The truck still enters the flood plain at 17:45 and leaves at 21:45. An existing sim moves both geofences the next time it provisions. The 3D scene's layout file now also carries the scenario's planned cue times, the truck's route and a bounding frame, and the simulator's `/status` reports `scenario.layoutDigest`, the SHA-256 of the layout it generates.
 
 ## es
 
