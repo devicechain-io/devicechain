@@ -51,6 +51,10 @@ func TestChartSchemaRefusesAMalformedSeed(t *testing.T) {
 		map[string]interface{}{"weights": []interface{}{22, 21, 21}, "typo": 1},
 		map[string]interface{}{},
 		[]interface{}{22, 21, 21},
+		// Shapes the schema alone cannot see: the template holds them to the block.
+		map[string]interface{}{"weights": []interface{}{32, 32}},
+		map[string]interface{}{"weights": []interface{}{21, 21, 21}},
+		map[string]interface{}{"weights": []interface{}{22, 22, 21}},
 	} {
 		st := scaleState()
 		vals := renderOnlyAuthoring(st)
