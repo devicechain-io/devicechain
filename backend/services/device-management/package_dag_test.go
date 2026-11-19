@@ -44,6 +44,7 @@ var frozenPackages = []string{
 	"graphql",
 	"internal/selector",
 	"model",
+	"model/identity",
 	"processor",
 	"proto",
 	"provisioning",
@@ -72,6 +73,7 @@ var frozenPackageEdges = []string{
 	"model -> config",
 	"model -> contract",
 	"model -> internal/selector",
+	"model -> model/identity",
 	"processor -> config",
 	"processor -> model",
 	"processor -> proto",
@@ -88,6 +90,8 @@ var mustNotImport = map[string]string{
 	"contract -> *": "contract is the wire contract other services import; importing any package of " +
 		"device-management would hand them that package too",
 	"proto -> model": "proto is imported by other services; it encodes contract, never model",
+	"model/identity -> *": "identity is carved leaf first: it may import nothing of this module until a " +
+		"later step of the carve says otherwise, so model stays the only way in",
 }
 
 const dagModulePath = "github.com/devicechain-io/dc-device-management"

@@ -215,11 +215,6 @@ type DeviceRevokedCertificateSearchResults struct {
 	Pagination rdb.SearchResultsPagination
 }
 
-// DefaultOrder implements rdb.Sortable: newest first, id as the unique tiebreak.
-func (DeviceRevokedCertificate) DefaultOrder() string {
-	return "device_revoked_certificates.revoked_at DESC, device_revoked_certificates.id DESC"
-}
-
 var revocationReasonNames = map[string]x509trust.RevocationReason{
 	"UNSPECIFIED":            x509trust.RevocationUnspecified,
 	"KEY_COMPROMISE":         x509trust.RevocationKeyCompromise,
