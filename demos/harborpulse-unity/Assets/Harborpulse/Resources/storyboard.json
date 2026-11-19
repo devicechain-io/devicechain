@@ -1,0 +1,3830 @@
+{
+  "version": 1,
+  "pages": [
+    {
+      "id": "0",
+      "priority": 1,
+      "windowSim": [
+        6,
+        27
+      ],
+      "plannedSim": 6,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": false,
+      "cutsOnly": true,
+      "watch": null,
+      "trigger": null,
+      "terminal": null,
+      "shots": [
+        {
+          "id": "0a",
+          "from": "pose:storm-home",
+          "to": "pose:storm-home",
+          "moveS": 0,
+          "holdMinS": 3,
+          "holdMaxS": 40,
+          "cueSim": 19,
+          "until": null,
+          "captions": [],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "0b",
+          "from": "pose:home",
+          "to": "pose:home",
+          "moveS": 0,
+          "holdMinS": 5,
+          "holdMaxS": 40,
+          "cueSim": 6,
+          "until": null,
+          "captions": [
+            "title",
+            "disclosure"
+          ],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "title",
+          "kind": "pre",
+          "source": "PLATFORM",
+          "slot": "title",
+          "lines": [
+            "One harbour, one day, one platform."
+          ],
+          "needs": null,
+          "holdS": 3
+        },
+        {
+          "id": "disclosure",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "disclosure",
+          "lines": [
+            "A simulated day on a live DeviceChain",
+            "instance, recorded and sped up"
+          ],
+          "needs": null,
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [],
+        "links": []
+      }
+    },
+    {
+      "id": "1",
+      "priority": 10,
+      "windowSim": [
+        6,
+        8.25
+      ],
+      "plannedSim": 6,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": false,
+      "cutsOnly": false,
+      "watch": null,
+      "trigger": null,
+      "terminal": null,
+      "shots": [
+        {
+          "id": "1a",
+          "from": "pose:home",
+          "to": "pose:home",
+          "moveS": 0,
+          "holdMinS": 8,
+          "holdMaxS": 40,
+          "cueSim": 6,
+          "until": null,
+          "captions": [
+            "baseline"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "1b",
+          "from": "pose:north-quay:promenade",
+          "to": "pose:north-quay:promenade",
+          "moveS": 1,
+          "holdMinS": 7,
+          "holdMaxS": 40,
+          "cueSim": 7.5,
+          "until": null,
+          "captions": [
+            "quiet"
+          ],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "baseline",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "baseline",
+          "lines": [
+            "Port Alder's waterfront.",
+            "{n} devices, one platform."
+          ],
+          "needs": {
+            "binding": {
+              "fields": {
+                "freshDevices": "37"
+              },
+              "bind": {
+                "n": "freshDevices"
+              },
+              "maxAgeS": 60,
+              "status": "READY"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "quiet",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "quiet",
+          "lines": [
+            "A quiet morning raises nothing."
+          ],
+          "needs": {
+            "all": [
+              {
+                "alarm": {
+                  "count": 0,
+                  "stream": "alarms",
+                  "fromSim": 6,
+                  "toSim": 8.25
+                }
+              },
+              {
+                "coverage": {
+                  "stream": "alarms",
+                  "fromSim": 6,
+                  "toSim": 8.25
+                }
+              }
+            ]
+          },
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [],
+        "links": []
+      }
+    },
+    {
+      "id": "1b",
+      "priority": 30,
+      "windowSim": [
+        8.5,
+        9.75
+      ],
+      "plannedSim": null,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": false,
+      "cutsOnly": false,
+      "watch": null,
+      "trigger": {
+        "alarm": {
+          "device": "hp-meter-ferry-terminal",
+          "key": "peak-demand",
+          "status": "RAISED"
+        }
+      },
+      "terminal": null,
+      "shots": [
+        {
+          "id": "1b-1",
+          "from": "pose:terminal:wide",
+          "to": "pose:terminal:close",
+          "moveS": 1,
+          "holdMinS": 11,
+          "holdMaxS": 40,
+          "cueSim": 8.5,
+          "until": null,
+          "captions": [
+            "peak",
+            "peak-clear"
+          ],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "peak",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "peak",
+          "lines": [
+            "The terminal runs over its power cap."
+          ],
+          "needs": {
+            "alarm": {
+              "device": "hp-meter-ferry-terminal",
+              "key": "peak-demand",
+              "status": "RAISED"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "peak-clear",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "peak-clear",
+          "lines": [
+            "Back under. The alarm clears itself."
+          ],
+          "needs": {
+            "alarm": {
+              "device": "hp-meter-ferry-terminal",
+              "key": "peak-demand",
+              "status": "CLEARED"
+            }
+          },
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [],
+        "links": []
+      }
+    },
+    {
+      "id": "2",
+      "priority": 50,
+      "windowSim": [
+        10.75,
+        12.1
+      ],
+      "plannedSim": 10.75,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": false,
+      "cutsOnly": false,
+      "watch": null,
+      "trigger": {
+        "alarm": {
+          "device": "hp-light-east-3",
+          "key": "lamp-flicker",
+          "status": "RAISED"
+        }
+      },
+      "terminal": null,
+      "shots": [
+        {
+          "id": "2a",
+          "from": "pose:lamp-east:wide",
+          "to": "pose:lamp-east:wide",
+          "moveS": 0,
+          "holdMinS": 7,
+          "holdMaxS": 40,
+          "cueSim": 10.75,
+          "until": null,
+          "captions": [
+            "work"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "2b",
+          "from": "pose:lamp-east:close",
+          "to": "pose:lamp-east:close",
+          "moveS": 0,
+          "holdMinS": 9,
+          "holdMaxS": 40,
+          "cueSim": 11,
+          "until": null,
+          "captions": [],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "2c",
+          "from": "pose:lamp-east:wide",
+          "to": "pose:lamp-east:wide",
+          "moveS": 0,
+          "holdMinS": 9,
+          "holdMaxS": 40,
+          "cueSim": 11.1,
+          "until": null,
+          "captions": [
+            "fault",
+            "fault-only",
+            "none-work"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "2d",
+          "from": "pose:lamp-east:wide",
+          "to": "pose:lamp-east:wide",
+          "moveS": 0,
+          "holdMinS": 9,
+          "holdMaxS": 40,
+          "cueSim": 11.5,
+          "until": null,
+          "captions": [
+            "work-sent"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "2e",
+          "from": "pose:lamp-east:insert",
+          "to": "pose:lamp-east:insert",
+          "moveS": 0,
+          "holdMinS": 4,
+          "holdMaxS": 40,
+          "cueSim": 11.65,
+          "until": null,
+          "captions": [],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "work",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "work",
+          "lines": [
+            "Planned work on one street light."
+          ],
+          "needs": null,
+          "holdS": 3
+        },
+        {
+          "id": "fault",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "fault",
+          "lines": [
+            "The fault is still detected."
+          ],
+          "needs": {
+            "alarm": {
+              "device": "hp-light-east-3",
+              "key": "lamp-flicker",
+              "status": "RAISED",
+              "fields": {
+                "raisedDuringSuppression": "true",
+                "suppressionWindowToken": "$window.identity"
+              },
+              "cycle": "$trigger.cycle"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "fault-only",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "fault",
+          "lines": [
+            "The fault is detected."
+          ],
+          "needs": {
+            "alarm": {
+              "device": "hp-light-east-3",
+              "key": "lamp-flicker",
+              "status": "RAISED",
+              "cycle": "$trigger.cycle"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "none-work",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "none-work",
+          "lines": [
+            "No notification while the work is on."
+          ],
+          "needs": {
+            "all": [
+              {
+                "window": {
+                  "device": "hp-light-east-3",
+                  "key": "lamp-flicker",
+                  "status": "ACTIVE"
+                }
+              },
+              {
+                "attempt": {
+                  "count": 0,
+                  "stream": "notifications",
+                  "fromSim": 10.75,
+                  "toSim": 11.5,
+                  "device": "hp-light-east-3",
+                  "key": "lamp-flicker"
+                }
+              }
+            ]
+          },
+          "holdS": 3
+        },
+        {
+          "id": "work-sent",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "work-sent",
+          "lines": [
+            "Window over, fault still there:",
+            "the crew is notified."
+          ],
+          "needs": {
+            "attempt": {
+              "fields": {
+                "policy": "hp-duty-escalation",
+                "afterClose": "true",
+                "alarmActive": "true"
+              },
+              "device": "hp-light-east-3",
+              "key": "lamp-flicker",
+              "status": "SENT"
+            }
+          },
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [
+          {
+            "id": "work",
+            "family": "other",
+            "label": "Planned work on lamp E3",
+            "source": "SCENARIO",
+            "needs": {
+              "window": {
+                "source": "SCENARIO",
+                "device": "hp-light-east-3"
+              }
+            }
+          },
+          {
+            "id": "fault",
+            "family": "other",
+            "label": "Fault detected, during maintenance",
+            "source": "PLATFORM",
+            "needs": {
+              "alarm": {
+                "device": "hp-light-east-3",
+                "key": "lamp-flicker",
+                "status": "RAISED",
+                "fields": {
+                  "raisedDuringSuppression": "true",
+                  "suppressionWindowToken": "$window.identity"
+                },
+                "cycle": "$trigger.cycle"
+              }
+            }
+          },
+          {
+            "id": "none",
+            "family": "other",
+            "label": "No notification during the window",
+            "source": "PLATFORM",
+            "needs": {
+              "all": [
+                {
+                  "window": {
+                    "device": "hp-light-east-3",
+                    "key": "lamp-flicker",
+                    "status": "ACTIVE"
+                  }
+                },
+                {
+                  "attempt": {
+                    "count": 0,
+                    "stream": "notifications",
+                    "fromSim": 10.75,
+                    "toSim": 11.5,
+                    "device": "hp-light-east-3",
+                    "key": "lamp-flicker"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "closed",
+            "family": "other",
+            "label": "Window over",
+            "source": "PLATFORM",
+            "needs": {
+              "window": {
+                "device": "hp-light-east-3",
+                "status": "ENDED"
+              }
+            }
+          },
+          {
+            "id": "sent",
+            "family": "other",
+            "label": "Notification sent",
+            "source": "PLATFORM",
+            "needs": {
+              "attempt": {
+                "fields": {
+                  "policy": "hp-duty-escalation",
+                  "afterClose": "true",
+                  "alarmActive": "true"
+                },
+                "device": "hp-light-east-3",
+                "key": "lamp-flicker",
+                "status": "SENT"
+              }
+            }
+          }
+        ],
+        "links": [
+          [
+            "work",
+            "fault"
+          ],
+          [
+            "fault",
+            "none"
+          ],
+          [
+            "none",
+            "closed"
+          ],
+          [
+            "closed",
+            "sent"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "3",
+      "priority": 60,
+      "windowSim": [
+        12.5,
+        13
+      ],
+      "plannedSim": 12.5,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": true,
+      "cutsOnly": false,
+      "watch": null,
+      "trigger": {
+        "replacement": {
+          "device": "hp-gauge-north-3",
+          "status": "RECORDED"
+        }
+      },
+      "terminal": {
+        "replacement": {
+          "device": "hp-gauge-north-3",
+          "status": "RECORDED"
+        }
+      },
+      "shots": [
+        {
+          "id": "3a",
+          "from": "pose:gauge-north:close",
+          "to": "pose:gauge-north:close",
+          "moveS": 0,
+          "holdMinS": 7,
+          "holdMaxS": 40,
+          "cueSim": 12.5,
+          "until": null,
+          "captions": [
+            "new-hardware"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "3b",
+          "from": "pose:gauge-north:wide",
+          "to": "pose:gauge-north:wide",
+          "moveS": 0,
+          "holdMinS": 7,
+          "holdMaxS": 40,
+          "cueSim": 12.6,
+          "until": null,
+          "captions": [
+            "same"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "3c",
+          "from": "pose:gauge-north:insert",
+          "to": "pose:gauge-north:insert",
+          "moveS": 0,
+          "holdMinS": 6,
+          "holdMaxS": 40,
+          "cueSim": 12.7,
+          "until": null,
+          "captions": [
+            "disabled"
+          ],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "new-hardware",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "new-hardware",
+          "lines": [
+            "New hardware, same gauge."
+          ],
+          "needs": {
+            "replacement": {
+              "device": "hp-gauge-north-3",
+              "status": "RECORDED"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "same",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "same",
+          "lines": [
+            "Same device, same history."
+          ],
+          "needs": {
+            "all": [
+              {
+                "replacement": {
+                  "device": "hp-gauge-north-3",
+                  "status": "RECORDED"
+                }
+              },
+              {
+                "measure": {
+                  "fields": {
+                    "afterReplacement": "true"
+                  },
+                  "device": "hp-gauge-north-3",
+                  "key": "water_level_m"
+                }
+              }
+            ]
+          },
+          "holdS": 3
+        },
+        {
+          "id": "disabled",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "disabled",
+          "lines": [
+            "The old unit's credentials",
+            "are disabled."
+          ],
+          "needs": {
+            "all": [
+              {
+                "replacement": {
+                  "device": "hp-gauge-north-3",
+                  "status": "RECORDED"
+                }
+              },
+              {
+                "set": {
+                  "observed": {
+                    "credential": {
+                      "fields": {
+                        "enabled": "false"
+                      },
+                      "device": "hp-gauge-north-3"
+                    }
+                  },
+                  "expected": {
+                    "replacement": {
+                      "device": "hp-gauge-north-3",
+                      "status": "RECORDED"
+                    }
+                  },
+                  "field": "identity",
+                  "expectedField": "disabledCredentials",
+                  "stream": "credentials",
+                  "fromSim": 12.5,
+                  "toSim": 12.75
+                }
+              }
+            ]
+          },
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [
+          {
+            "id": "swapped",
+            "family": "other",
+            "label": "Gauge swapped",
+            "source": "SCENARIO",
+            "needs": {
+              "replacement": {
+                "source": "SCENARIO",
+                "device": "hp-gauge-north-3"
+              }
+            }
+          },
+          {
+            "id": "journal",
+            "family": "other",
+            "label": "Replacement recorded",
+            "source": "PLATFORM",
+            "needs": {
+              "replacement": {
+                "device": "hp-gauge-north-3",
+                "status": "RECORDED"
+              }
+            }
+          },
+          {
+            "id": "same",
+            "family": "other",
+            "label": "Same device reporting",
+            "source": "PLATFORM",
+            "needs": {
+              "all": [
+                {
+                  "replacement": {
+                    "device": "hp-gauge-north-3",
+                    "status": "RECORDED"
+                  }
+                },
+                {
+                  "measure": {
+                    "fields": {
+                      "afterReplacement": "true"
+                    },
+                    "device": "hp-gauge-north-3",
+                    "key": "water_level_m"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "disabled",
+            "family": "other",
+            "label": "Old credentials disabled",
+            "source": "PLATFORM",
+            "needs": {
+              "all": [
+                {
+                  "replacement": {
+                    "device": "hp-gauge-north-3",
+                    "status": "RECORDED"
+                  }
+                },
+                {
+                  "set": {
+                    "observed": {
+                      "credential": {
+                        "fields": {
+                          "enabled": "false"
+                        },
+                        "device": "hp-gauge-north-3"
+                      }
+                    },
+                    "expected": {
+                      "replacement": {
+                        "device": "hp-gauge-north-3",
+                        "status": "RECORDED"
+                      }
+                    },
+                    "field": "identity",
+                    "expectedField": "disabledCredentials",
+                    "stream": "credentials",
+                    "fromSim": 12.5,
+                    "toSim": 12.75
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "links": [
+          [
+            "swapped",
+            "journal"
+          ],
+          [
+            "journal",
+            "same"
+          ],
+          [
+            "same",
+            "disabled"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "3b",
+      "priority": 60,
+      "windowSim": [
+        14,
+        15.5
+      ],
+      "plannedSim": 14,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": false,
+      "cutsOnly": false,
+      "watch": null,
+      "trigger": {
+        "alarm": {
+          "device": "hp-charger-basin-2",
+          "key": "connector-hot",
+          "status": "RAISED"
+        }
+      },
+      "terminal": null,
+      "shots": [
+        {
+          "id": "3b-1",
+          "from": "pose:chargers-basin:close",
+          "to": "pose:chargers-basin:close",
+          "moveS": 0,
+          "holdMinS": 8,
+          "holdMaxS": 40,
+          "cueSim": 14,
+          "until": null,
+          "captions": [
+            "derate"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "3b-2",
+          "from": "pose:chargers-basin:insert",
+          "to": "pose:chargers-basin:insert",
+          "moveS": 0,
+          "holdMinS": 8,
+          "holdMaxS": 40,
+          "cueSim": 14.5,
+          "until": null,
+          "captions": [
+            "cool",
+            "hot-only"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "3b-3",
+          "from": "pose:chargers-basin:wide",
+          "to": "pose:chargers-basin:wide",
+          "moveS": 0,
+          "holdMinS": 6,
+          "holdMaxS": 40,
+          "cueSim": 15,
+          "until": null,
+          "captions": [
+            "cool",
+            "hot-only"
+          ],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "derate",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "derate",
+          "lines": [
+            "Running hot. The platform",
+            "tells it to derate."
+          ],
+          "needs": {
+            "command": {
+              "fields": {
+                "max_kw": "11"
+              },
+              "device": "hp-charger-basin-2",
+              "key": "derate",
+              "status": "SUCCESSFUL"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "cool",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "cool",
+          "lines": [
+            "Cooler now. Alarm cleared."
+          ],
+          "needs": {
+            "all": [
+              {
+                "command": {
+                  "fields": {
+                    "max_kw": "11"
+                  },
+                  "device": "hp-charger-basin-2",
+                  "key": "derate",
+                  "status": "SUCCESSFUL"
+                }
+              },
+              {
+                "measure": {
+                  "fields": {
+                    "value": "11"
+                  },
+                  "device": "hp-charger-basin-2",
+                  "key": "max_kw"
+                }
+              },
+              {
+                "alarm": {
+                  "device": "hp-charger-basin-2",
+                  "key": "connector-hot",
+                  "status": "CLEARED"
+                }
+              }
+            ]
+          },
+          "holdS": 3
+        },
+        {
+          "id": "hot-only",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "cool",
+          "lines": [
+            "Running hot. Alarm raised."
+          ],
+          "needs": {
+            "alarm": {
+              "device": "hp-charger-basin-2",
+              "key": "connector-hot",
+              "status": "RAISED"
+            }
+          },
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [],
+        "links": []
+      }
+    },
+    {
+      "id": "4",
+      "priority": 90,
+      "windowSim": [
+        16,
+        18.6
+      ],
+      "plannedSim": 16,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": false,
+      "cutsOnly": false,
+      "watch": {
+        "measure": {
+          "gte": 2.2,
+          "device": "hp-pump-north",
+          "key": "wet_well_m"
+        }
+      },
+      "trigger": {
+        "alarm": {
+          "device": "hp-pump-north",
+          "key": "wet-well-high",
+          "status": "RAISED"
+        }
+      },
+      "terminal": null,
+      "shots": [
+        {
+          "id": "4a",
+          "from": "pose:storm-home",
+          "to": "pose:storm-home",
+          "moveS": 0,
+          "holdMinS": 6,
+          "holdMaxS": 40,
+          "cueSim": 16,
+          "until": null,
+          "captions": [
+            "storm"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "4b",
+          "from": "pose:gauge-east:close",
+          "to": "pose:gauge-east:close",
+          "moveS": 1,
+          "holdMinS": 7,
+          "holdMaxS": 40,
+          "cueSim": 17,
+          "until": null,
+          "captions": [
+            "flood"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "4c",
+          "from": "pose:depot:wide",
+          "to": "pose:depot:wide",
+          "moveS": 0,
+          "holdMinS": 4,
+          "holdMaxS": 40,
+          "cueSim": 17,
+          "until": null,
+          "captions": [],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "4d",
+          "from": "pose:pump-north:kiosk-ext",
+          "to": "pose:pump-north:well",
+          "moveS": 3,
+          "holdMinS": 3,
+          "holdMaxS": 40,
+          "cueSim": 17.2,
+          "until": null,
+          "captions": [
+            "well"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "4e",
+          "from": "pose:pump-north:well-locked",
+          "to": "pose:pump-north:well-locked",
+          "moveS": 0,
+          "holdMinS": 15,
+          "holdMaxS": 40,
+          "cueSim": 17.5,
+          "until": {
+            "chip": {
+              "device": "hp-pump-north",
+              "status": "PLATFORM"
+            }
+          },
+          "captions": [
+            "platform-start",
+            "float",
+            "before-float"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "4f",
+          "from": "pose:pump-north:close",
+          "to": "pose:pump-north:close",
+          "moveS": 0,
+          "holdMinS": 5,
+          "holdMaxS": 40,
+          "cueSim": 17.65,
+          "until": null,
+          "captions": [],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "4g",
+          "from": "pose:storm-home",
+          "to": "pose:storm-home",
+          "moveS": 1,
+          "holdMinS": 5,
+          "holdMaxS": 40,
+          "cueSim": 17.7,
+          "until": null,
+          "captions": [],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "storm",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "storm",
+          "lines": [
+            "Evening. A storm and a king tide."
+          ],
+          "needs": null,
+          "holdS": 3
+        },
+        {
+          "id": "flood",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "flood",
+          "lines": [
+            "One flood alarm per gauge,",
+            "rising with the water."
+          ],
+          "needs": {
+            "alarm": {
+              "device": "hp-gauge-east-1",
+              "key": "flood-level",
+              "status": "ESCALATED"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "well",
+          "kind": "pre",
+          "source": "PLATFORM",
+          "slot": "well",
+          "lines": [
+            "The pump's well is filling?"
+          ],
+          "needs": null,
+          "holdS": 3
+        },
+        {
+          "id": "platform-start",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "start",
+          "lines": [
+            "The platform starts the pump."
+          ],
+          "needs": {
+            "chip": {
+              "device": "hp-pump-north",
+              "status": "PLATFORM",
+              "cycle": "$trigger.cycle"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "float",
+          "kind": "fallback",
+          "source": "PLATFORM",
+          "slot": "start",
+          "lines": [
+            "The well reached the float level."
+          ],
+          "needs": {
+            "chip": {
+              "device": "hp-pump-north",
+              "status": "FLOAT-CONSISTENT",
+              "cycle": "$trigger.cycle"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "before-float",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "before-float",
+          "lines": [
+            "Before its own float switch would."
+          ],
+          "needs": {
+            "all": [
+              {
+                "chip": {
+                  "device": "hp-pump-north",
+                  "status": "PLATFORM",
+                  "cycle": "$trigger.cycle"
+                }
+              },
+              {
+                "measure": {
+                  "allBelow": 3.2,
+                  "until": "chip.runningAt",
+                  "stream": "pump",
+                  "fromSim": 17,
+                  "toSim": 17.6,
+                  "device": "hp-pump-north",
+                  "key": "wet_well_m"
+                }
+              }
+            ]
+          },
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [
+          {
+            "id": "well",
+            "family": "pump",
+            "label": "Well sensor above high level",
+            "source": "PLATFORM",
+            "needs": {
+              "measure": {
+                "gte": 2.5,
+                "device": "hp-pump-north",
+                "key": "wet_well_m"
+              }
+            }
+          },
+          {
+            "id": "command",
+            "family": "pump",
+            "label": "start-pump sent",
+            "source": "PLATFORM",
+            "needs": {
+              "command": {
+                "device": "hp-pump-north",
+                "key": "start-pump",
+                "status": "SENT",
+                "cycle": "$trigger.cycle"
+              }
+            }
+          },
+          {
+            "id": "running",
+            "family": "pump",
+            "label": "Pump running (platform first)",
+            "source": "PLATFORM",
+            "needs": {
+              "chip": {
+                "device": "hp-pump-north",
+                "status": "PLATFORM",
+                "cycle": "$trigger.cycle"
+              }
+            }
+          },
+          {
+            "id": "falling",
+            "family": "pump",
+            "label": "Well falling",
+            "source": "PLATFORM",
+            "needs": {
+              "measure": {
+                "fields": {
+                  "falling": "true"
+                },
+                "device": "hp-pump-north",
+                "key": "wet_well_m"
+              }
+            }
+          },
+          {
+            "id": "water",
+            "family": "gauge",
+            "label": "Water rising",
+            "source": "PLATFORM",
+            "needs": {
+              "measure": {
+                "fields": {
+                  "rising": "true"
+                },
+                "device": "hp-gauge-east-1",
+                "key": "water_level_m"
+              }
+            }
+          },
+          {
+            "id": "flood",
+            "family": "gauge",
+            "label": "One flood alarm per gauge",
+            "source": "PLATFORM",
+            "needs": {
+              "alarm": {
+                "device": "hp-gauge-east-1",
+                "key": "flood-level",
+                "status": "ESCALATED"
+              }
+            }
+          }
+        ],
+        "links": [
+          [
+            "well",
+            "command"
+          ],
+          [
+            "command",
+            "running"
+          ],
+          [
+            "running",
+            "falling"
+          ],
+          [
+            "water",
+            "flood"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "5",
+      "priority": 70,
+      "windowSim": [
+        17.7,
+        18.1
+      ],
+      "plannedSim": 17.75,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": false,
+      "cutsOnly": false,
+      "watch": null,
+      "trigger": {
+        "alarm": {
+          "device": "hp-truck-1",
+          "key": "truck-in-flood-plain",
+          "status": "RAISED"
+        }
+      },
+      "terminal": null,
+      "shots": [
+        {
+          "id": "5a",
+          "from": "pose:plain:wide",
+          "to": "pose:plain:wide",
+          "moveS": 0,
+          "holdMinS": 8,
+          "holdMaxS": 40,
+          "cueSim": 17.75,
+          "until": null,
+          "captions": [
+            "truck"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "5b",
+          "from": "pose:truck:chase",
+          "to": "pose:truck:chase",
+          "moveS": 0,
+          "holdMinS": 4,
+          "holdMaxS": 40,
+          "cueSim": 17.8,
+          "until": null,
+          "captions": [],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "truck",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "truck",
+          "lines": [
+            "The truck enters the flood plain.",
+            "A geofence rule records it."
+          ],
+          "needs": {
+            "alarm": {
+              "device": "hp-truck-1",
+              "key": "truck-in-flood-plain",
+              "status": "RAISED"
+            }
+          },
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [],
+        "links": []
+      }
+    },
+    {
+      "id": "4b",
+      "priority": 95,
+      "windowSim": [
+        19,
+        20.55
+      ],
+      "plannedSim": 19,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": false,
+      "cutsOnly": false,
+      "watch": null,
+      "trigger": {
+        "alarm": {
+          "key": "pump-air-lock",
+          "status": "RAISED"
+        }
+      },
+      "terminal": null,
+      "shots": [
+        {
+          "id": "4b-1",
+          "from": "pose:pump-east:well",
+          "to": "pose:pump-east:well",
+          "moveS": 0,
+          "holdMinS": 12,
+          "holdMaxS": 40,
+          "cueSim": 19.5,
+          "until": null,
+          "captions": [
+            "air"
+          ],
+          "followDeviceFromTrigger": "device"
+        }
+      ],
+      "captions": [
+        {
+          "id": "air",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "air",
+          "lines": [
+            "Running, but moving nothing.",
+            "Critical."
+          ],
+          "needs": {
+            "alarm": {
+              "key": "pump-air-lock",
+              "status": "RAISED"
+            }
+          },
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [],
+        "links": []
+      }
+    },
+    {
+      "id": "6",
+      "priority": 85,
+      "windowSim": [
+        19.75,
+        21.2
+      ],
+      "plannedSim": 19.75,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": false,
+      "cutsOnly": false,
+      "watch": null,
+      "trigger": {
+        "any": [
+          {
+            "alarm": {
+              "key": "light-silent",
+              "status": "RAISED"
+            }
+          },
+          {
+            "alarm": {
+              "key": "charger-offline",
+              "status": "RAISED"
+            }
+          }
+        ]
+      },
+      "terminal": null,
+      "shots": [
+        {
+          "id": "6a",
+          "from": "pose:east-quay:mouth-wide",
+          "to": "pose:east-quay:mouth-wide",
+          "moveS": 0,
+          "holdMinS": 6,
+          "holdMaxS": 40,
+          "cueSim": 19.75,
+          "until": null,
+          "captions": [
+            "outage"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "6b",
+          "from": "pose:lamp-east:wide",
+          "to": "pose:lamp-east:wide",
+          "moveS": 0,
+          "holdMinS": 8,
+          "holdMaxS": 40,
+          "cueSim": 20.08,
+          "until": null,
+          "captions": [],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "6c",
+          "from": "pose:lamp-east:wide",
+          "to": "pose:lamp-east:wide",
+          "moveS": 0,
+          "holdMinS": 10,
+          "holdMaxS": 40,
+          "cueSim": 20.5,
+          "until": null,
+          "captions": [
+            "silence"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "6d",
+          "from": "pose:east-quay:mouth-wide",
+          "to": "pose:east-quay:mouth-wide",
+          "moveS": 0,
+          "holdMinS": 6,
+          "holdMaxS": 40,
+          "cueSim": 20.55,
+          "until": null,
+          "captions": [
+            "exact",
+            "silence-only"
+          ],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "outage",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "outage",
+          "lines": [
+            "East Quay loses power."
+          ],
+          "needs": null,
+          "holdS": 3
+        },
+        {
+          "id": "silence",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "silence",
+          "lines": [
+            "The platform notices the silence."
+          ],
+          "needs": {
+            "any": [
+              {
+                "alarm": {
+                  "key": "light-silent",
+                  "status": "RAISED"
+                }
+              },
+              {
+                "alarm": {
+                  "key": "charger-offline",
+                  "status": "RAISED"
+                }
+              }
+            ]
+          },
+          "holdS": 3
+        },
+        {
+          "id": "exact",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "absence",
+          "lines": [
+            "Exactly the six that went quiet."
+          ],
+          "needs": {
+            "set": {
+              "observed": {
+                "any": [
+                  {
+                    "alarm": {
+                      "key": "light-silent",
+                      "status": "RAISED"
+                    }
+                  },
+                  {
+                    "alarm": {
+                      "key": "charger-offline",
+                      "status": "RAISED"
+                    }
+                  }
+                ]
+              },
+              "expected": {
+                "membership": {
+                  "identity": "east-absence"
+                }
+              },
+              "field": "device",
+              "expectedField": "tokens",
+              "stream": "alarms",
+              "fromSim": 19.75,
+              "toSim": 20.55
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "silence-only",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "absence",
+          "lines": [
+            "Silence detected."
+          ],
+          "needs": {
+            "any": [
+              {
+                "alarm": {
+                  "key": "light-silent",
+                  "status": "RAISED"
+                }
+              },
+              {
+                "alarm": {
+                  "key": "charger-offline",
+                  "status": "RAISED"
+                }
+              }
+            ]
+          },
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [
+          {
+            "id": "outage",
+            "family": "other",
+            "label": "East Quay loses power",
+            "source": "SCENARIO",
+            "needs": {
+              "window": {
+                "source": "SCENARIO",
+                "key": "feeder-outage",
+                "status": "ACTIVE"
+              }
+            }
+          },
+          {
+            "id": "absence",
+            "family": "other",
+            "label": "Absence alarms",
+            "source": "PLATFORM",
+            "needs": {
+              "set": {
+                "observed": {
+                  "any": [
+                    {
+                      "alarm": {
+                        "key": "light-silent",
+                        "status": "RAISED"
+                      }
+                    },
+                    {
+                      "alarm": {
+                        "key": "charger-offline",
+                        "status": "RAISED"
+                      }
+                    }
+                  ]
+                },
+                "expected": {
+                  "membership": {
+                    "identity": "east-absence"
+                  }
+                },
+                "field": "device",
+                "expectedField": "tokens",
+                "stream": "alarms",
+                "fromSim": 19.75,
+                "toSim": 20.55
+              }
+            }
+          },
+          {
+            "id": "notify",
+            "family": "other",
+            "label": "Notification sent",
+            "source": "PLATFORM",
+            "needs": {
+              "attempt": {
+                "key": "absence",
+                "status": "SENT"
+              }
+            }
+          },
+          {
+            "id": "escalated",
+            "family": "other",
+            "label": "still unacknowledged: re-notified",
+            "source": "PLATFORM",
+            "needs": {
+              "attempt": {
+                "fields": {
+                  "trigger": "ESCALATION"
+                },
+                "key": "absence",
+                "status": "SENT"
+              }
+            }
+          }
+        ],
+        "links": [
+          [
+            "outage",
+            "absence"
+          ],
+          [
+            "absence",
+            "notify"
+          ],
+          [
+            "notify",
+            "escalated"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "7",
+      "priority": 80,
+      "windowSim": [
+        21.25,
+        22.1
+      ],
+      "plannedSim": 21.25,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": false,
+      "cutsOnly": false,
+      "watch": null,
+      "trigger": null,
+      "terminal": null,
+      "shots": [
+        {
+          "id": "7a",
+          "from": "pose:east-quay:mouth-wide",
+          "to": "pose:east-quay:mouth-wide",
+          "moveS": 0,
+          "holdMinS": 4,
+          "holdMaxS": 40,
+          "cueSim": 21.25,
+          "until": null,
+          "captions": [
+            "power-back"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "7b",
+          "from": "pose:chargers-east:pair",
+          "to": "pose:chargers-east:pair",
+          "moveS": 0,
+          "holdMinS": 9,
+          "holdMaxS": 40,
+          "cueSim": 21.28,
+          "until": null,
+          "captions": [
+            "backdated"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "7c",
+          "from": "pose:chargers-east:insert",
+          "to": "pose:chargers-east:insert",
+          "moveS": 0,
+          "holdMinS": 5,
+          "holdMaxS": 40,
+          "cueSim": 21.35,
+          "until": null,
+          "captions": [
+            "pace"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "7d",
+          "from": "pose:chargers-east:pair",
+          "to": "pose:chargers-east:pair",
+          "moveS": 0,
+          "holdMinS": 6,
+          "holdMaxS": 40,
+          "cueSim": 21.55,
+          "until": null,
+          "captions": [
+            "all-buffered",
+            "arriving"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "7e",
+          "from": "pose:east-quay:mouth-wide",
+          "to": "pose:east-quay:mouth-wide",
+          "moveS": 0,
+          "holdMinS": 4,
+          "holdMaxS": 40,
+          "cueSim": 21.6,
+          "until": null,
+          "captions": [],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "7f",
+          "from": "pose:truck:chase",
+          "to": "pose:truck:chase",
+          "moveS": 0,
+          "holdMinS": 4,
+          "holdMaxS": 40,
+          "cueSim": 21.75,
+          "until": null,
+          "captions": [
+            "truck-out"
+          ],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "power-back",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "power-back",
+          "lines": [
+            "Power is back."
+          ],
+          "needs": null,
+          "holdS": 3
+        },
+        {
+          "id": "backdated",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "backdated",
+          "lines": [
+            "Buffered readings arrive",
+            "with their original timestamps."
+          ],
+          "needs": {
+            "measure": {
+              "fields": {
+                "backdated": "true"
+              },
+              "key": "backfill"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "pace",
+          "kind": "claim",
+          "source": "DEVICE-SIDE",
+          "slot": "pace",
+          "lines": [
+            "The platform asks them to slow down;",
+            "they retry."
+          ],
+          "needs": {
+            "ledger": {
+              "gte": 1,
+              "source": "DEVICE-SIDE",
+              "key": "restore"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "all-buffered",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "tally",
+          "lines": [
+            "Every buffered reading,",
+            "stored at the time it was taken."
+          ],
+          "needs": {
+            "set": {
+              "observed": {
+                "measure": {
+                  "key": "backfill"
+                }
+              },
+              "expected": {
+                "ledger": {
+                  "source": "SCENARIO",
+                  "key": "backfill"
+                }
+              },
+              "field": "readingIdentity",
+              "expectedField": "times",
+              "stream": "measurements",
+              "fromSim": 19.75,
+              "toSim": 21.6
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "arriving",
+          "kind": "fallback",
+          "source": "PLATFORM",
+          "slot": "tally",
+          "lines": [
+            "Readings arriving."
+          ],
+          "needs": null,
+          "holdS": 3
+        },
+        {
+          "id": "truck-out",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "truck-out",
+          "lines": [
+            "Out again. Cleared."
+          ],
+          "needs": {
+            "alarm": {
+              "device": "hp-truck-1",
+              "key": "truck-in-flood-plain",
+              "status": "CLEARED"
+            }
+          },
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [
+          {
+            "id": "power",
+            "family": "other",
+            "label": "Power back",
+            "source": "SCENARIO",
+            "needs": {
+              "window": {
+                "source": "SCENARIO",
+                "key": "feeder-outage",
+                "status": "ENDED"
+              }
+            }
+          },
+          {
+            "id": "back",
+            "family": "other",
+            "label": "Readings arriving with original times",
+            "source": "PLATFORM",
+            "needs": {
+              "measure": {
+                "fields": {
+                  "backdated": "true"
+                },
+                "key": "backfill"
+              }
+            }
+          },
+          {
+            "id": "paced",
+            "family": "other",
+            "label": "Asked to slow down",
+            "source": "DEVICE-SIDE",
+            "needs": {
+              "ledger": {
+                "gte": 1,
+                "source": "DEVICE-SIDE",
+                "key": "restore"
+              }
+            }
+          },
+          {
+            "id": "stored",
+            "family": "other",
+            "label": "All buffered readings stored",
+            "source": "PLATFORM",
+            "needs": {
+              "set": {
+                "observed": {
+                  "measure": {
+                    "key": "backfill"
+                  }
+                },
+                "expected": {
+                  "ledger": {
+                    "source": "SCENARIO",
+                    "key": "backfill"
+                  }
+                },
+                "field": "readingIdentity",
+                "expectedField": "times",
+                "stream": "measurements",
+                "fromSim": 19.75,
+                "toSim": 21.6
+              }
+            }
+          },
+          {
+            "id": "clear",
+            "family": "other",
+            "label": "Alarms cleared",
+            "source": "PLATFORM",
+            "needs": {
+              "alarm": {
+                "key": "charger-offline",
+                "status": "CLEARED"
+              }
+            }
+          }
+        ],
+        "links": [
+          [
+            "power",
+            "back"
+          ],
+          [
+            "back",
+            "paced"
+          ],
+          [
+            "paced",
+            "stored"
+          ],
+          [
+            "stored",
+            "clear"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "8",
+      "priority": 75,
+      "windowSim": [
+        26,
+        27
+      ],
+      "plannedSim": 26,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": true,
+      "cutsOnly": false,
+      "watch": null,
+      "trigger": {
+        "rollout": {
+          "status": "RUNNING"
+        }
+      },
+      "terminal": {
+        "rollout": {
+          "status": "TERMINAL"
+        }
+      },
+      "shots": [
+        {
+          "id": "8a",
+          "from": "pose:night-home",
+          "to": "pose:night-home",
+          "moveS": 0,
+          "holdMinS": 8,
+          "holdMaxS": 40,
+          "cueSim": 26,
+          "until": null,
+          "captions": [
+            "signed",
+            "unsigned"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "8b",
+          "from": "pose:chargers-east:pair",
+          "to": "pose:chargers-east:pair",
+          "moveS": 0,
+          "holdMinS": 11,
+          "holdMaxS": 40,
+          "cueSim": 26.15,
+          "until": null,
+          "captions": [
+            "few"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "8c",
+          "from": "pose:north-quay:close",
+          "to": "pose:north-quay:close",
+          "moveS": 0,
+          "holdMinS": 11,
+          "holdMaxS": 40,
+          "cueSim": 26.3,
+          "until": null,
+          "captions": [
+            "refused",
+            "failed",
+            "working"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "8d",
+          "from": "pose:night-home",
+          "to": "pose:night-home",
+          "moveS": 0,
+          "holdMinS": 8,
+          "holdMaxS": 40,
+          "cueSim": 26.6,
+          "until": null,
+          "captions": [
+            "done",
+            "ota-summary"
+          ],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "signed",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "firmware",
+          "lines": [
+            "Overnight: a signed firmware update."
+          ],
+          "needs": {
+            "artifact": {
+              "status": "VERIFIED",
+              "present": [
+                "signer"
+              ]
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "unsigned",
+          "kind": "fallback",
+          "source": "PLATFORM",
+          "slot": "firmware",
+          "lines": [
+            "Overnight: a firmware update."
+          ],
+          "needs": null,
+          "holdS": 3
+        },
+        {
+          "id": "few",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "few",
+          "lines": [
+            "A few chargers at a time."
+          ],
+          "needs": {
+            "target": {
+              "status": "SUCCEEDED"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "refused",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "failure",
+          "lines": [
+            "One download fails its check.",
+            "The charger refuses it."
+          ],
+          "needs": {
+            "attempt": {
+              "fields": {
+                "code": "VERIFICATION_FAILED",
+                "platform": "false"
+              },
+              "device": "hp-charger-north-1",
+              "status": "FAILED"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "failed",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "failure",
+          "lines": [
+            "One update fails."
+          ],
+          "needs": {
+            "attempt": {
+              "device": "hp-charger-north-1",
+              "status": "FAILED"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "working",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "working",
+          "lines": [
+            "It keeps working.",
+            "The failure is recorded."
+          ],
+          "needs": {
+            "all": [
+              {
+                "attempt": {
+                  "fields": {
+                    "code": "VERIFICATION_FAILED",
+                    "platform": "false"
+                  },
+                  "device": "hp-charger-north-1",
+                  "status": "FAILED"
+                }
+              },
+              {
+                "measure": {
+                  "fields": {
+                    "afterFailure": "true"
+                  },
+                  "maxAgeS": 60,
+                  "device": "hp-charger-north-1",
+                  "key": "power_kw"
+                }
+              }
+            ]
+          },
+          "holdS": 3
+        },
+        {
+          "id": "done",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "done",
+          "lines": [
+            "Rollout done. Nothing hidden."
+          ],
+          "needs": {
+            "rollout": {
+              "status": "TERMINAL"
+            }
+          },
+          "holdS": 3
+        },
+        {
+          "id": "ota-summary",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "ota-summary",
+          "lines": [
+            "{updated} updated ? {refused} refused",
+            "concurrency limit {cap}"
+          ],
+          "needs": {
+            "rollout": {
+              "bind": {
+                "updated": "updated",
+                "refused": "refused",
+                "cap": "maxInFlight"
+              },
+              "status": "TERMINAL"
+            }
+          },
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [
+          {
+            "id": "signed",
+            "family": "other",
+            "label": "Signed update",
+            "source": "PLATFORM",
+            "needs": {
+              "artifact": {
+                "status": "VERIFIED",
+                "present": [
+                  "signer"
+                ]
+              }
+            }
+          },
+          {
+            "id": "cap",
+            "family": "other",
+            "label": "Concurrency limit",
+            "source": "PLATFORM",
+            "needs": {
+              "rollout": {
+                "status": "RUNNING"
+              }
+            }
+          },
+          {
+            "id": "updated",
+            "family": "other",
+            "label": "Updated targets",
+            "source": "PLATFORM",
+            "needs": {
+              "target": {
+                "status": "SUCCEEDED"
+              }
+            }
+          },
+          {
+            "id": "refused",
+            "family": "other",
+            "label": "Refused by its own check",
+            "source": "PLATFORM",
+            "needs": {
+              "attempt": {
+                "fields": {
+                  "code": "VERIFICATION_FAILED",
+                  "platform": "false"
+                },
+                "device": "hp-charger-north-1",
+                "status": "FAILED"
+              }
+            }
+          }
+        ],
+        "links": [
+          [
+            "signed",
+            "cap"
+          ],
+          [
+            "cap",
+            "updated"
+          ],
+          [
+            "updated",
+            "refused"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "9",
+      "priority": 1,
+      "windowSim": [
+        26.7,
+        30
+      ],
+      "plannedSim": 26.7,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": false,
+      "cutsOnly": false,
+      "watch": null,
+      "trigger": null,
+      "terminal": null,
+      "shots": [
+        {
+          "id": "9a",
+          "from": "pose:night-home",
+          "to": "pose:night-home",
+          "moveS": 0,
+          "holdMinS": 10,
+          "holdMaxS": 40,
+          "cueSim": 26.7,
+          "until": null,
+          "captions": [
+            "bridge",
+            "tagline",
+            "subline",
+            "fiction",
+            "positions"
+          ],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "bridge",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "bridge",
+          "lines": [
+            "Every rule you saw was written and",
+            "published by a person."
+          ],
+          "needs": null,
+          "holdS": 3
+        },
+        {
+          "id": "tagline",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "tagline",
+          "lines": [
+            "Agents read the fleet.",
+            "People approve the action."
+          ],
+          "needs": null,
+          "holdS": 3
+        },
+        {
+          "id": "subline",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "subline",
+          "lines": [
+            "DeviceChain: open-source IoT platform,",
+            "ready for AI agents."
+          ],
+          "needs": null,
+          "holdS": 3
+        },
+        {
+          "id": "fiction",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "fiction",
+          "lines": [
+            "Port Alder is fictional.",
+            "The district is drawn compact;"
+          ],
+          "needs": null,
+          "holdS": 3
+        },
+        {
+          "id": "positions",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "positions",
+          "lines": [
+            "the platform holds each device's",
+            "own position."
+          ],
+          "needs": null,
+          "holdS": 3
+        }
+      ],
+      "chain": {
+        "nodes": [],
+        "links": []
+      }
+    }
+  ],
+  "cuts": [
+    {
+      "id": "c300",
+      "targetS": 300,
+      "segments": [
+        {
+          "page": "0",
+          "shot": "0a",
+          "durS": 3,
+          "moveS": 0,
+          "recordedWallFromS": 780,
+          "recordedWallToS": 786,
+          "borrowed": "later that day",
+          "captions": [],
+          "nodes": []
+        },
+        {
+          "page": "0",
+          "shot": "0b",
+          "durS": 5,
+          "moveS": 0,
+          "recordedWallFromS": 0,
+          "recordedWallToS": 6,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "title",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        },
+        {
+          "page": "1",
+          "shot": "1a",
+          "durS": 8,
+          "moveS": 0,
+          "recordedWallFromS": 6,
+          "recordedWallToS": 14,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "baseline",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        },
+        {
+          "page": "1",
+          "shot": "1b",
+          "durS": 8,
+          "moveS": 1,
+          "recordedWallFromS": 90.0,
+          "recordedWallToS": 98.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "quiet",
+              "atS": 1,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        },
+        {
+          "page": "1b",
+          "shot": "1b-1",
+          "durS": 12,
+          "moveS": 1,
+          "recordedWallFromS": 150.0,
+          "recordedWallToS": 162.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "peak",
+              "atS": 1,
+              "holdS": 3
+            },
+            {
+              "id": "peak-clear",
+              "atS": 4,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        },
+        {
+          "page": "2",
+          "shot": "2a",
+          "durS": 7,
+          "moveS": 0,
+          "recordedWallFromS": 285.0,
+          "recordedWallToS": 292.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "work",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "work",
+            "fault",
+            "none",
+            "closed",
+            "sent"
+          ]
+        },
+        {
+          "page": "2",
+          "shot": "2b",
+          "durS": 9,
+          "moveS": 0,
+          "recordedWallFromS": 300,
+          "recordedWallToS": 309,
+          "borrowed": "none",
+          "captions": [],
+          "nodes": [
+            "work",
+            "fault",
+            "none",
+            "closed",
+            "sent"
+          ]
+        },
+        {
+          "page": "2",
+          "shot": "2c",
+          "durS": 9,
+          "moveS": 0,
+          "recordedWallFromS": 309,
+          "recordedWallToS": 318.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "fault",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "fault-only",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "none-work",
+              "atS": 3,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "work",
+            "fault",
+            "none",
+            "closed",
+            "sent"
+          ]
+        },
+        {
+          "page": "2",
+          "shot": "2d",
+          "durS": 9,
+          "moveS": 0,
+          "recordedWallFromS": 330.0,
+          "recordedWallToS": 339.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "work-sent",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "work",
+            "fault",
+            "none",
+            "closed",
+            "sent"
+          ]
+        },
+        {
+          "page": "2",
+          "shot": "2e",
+          "durS": 4,
+          "moveS": 0,
+          "recordedWallFromS": 339.0,
+          "recordedWallToS": 345.0,
+          "borrowed": "none",
+          "captions": [],
+          "nodes": [
+            "work",
+            "fault",
+            "none",
+            "closed",
+            "sent"
+          ]
+        },
+        {
+          "page": "3",
+          "shot": "3a",
+          "durS": 7,
+          "moveS": 0,
+          "recordedWallFromS": 390.0,
+          "recordedWallToS": 397.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "new-hardware",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "swapped",
+            "journal",
+            "same",
+            "disabled"
+          ]
+        },
+        {
+          "page": "3",
+          "shot": "3b",
+          "durS": 7,
+          "moveS": 0,
+          "recordedWallFromS": 397.0,
+          "recordedWallToS": 404.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "same",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "swapped",
+            "journal",
+            "same",
+            "disabled"
+          ]
+        },
+        {
+          "page": "3",
+          "shot": "3c",
+          "durS": 6,
+          "moveS": 0,
+          "recordedWallFromS": 404.0,
+          "recordedWallToS": 410.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "disabled",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "swapped",
+            "journal",
+            "same",
+            "disabled"
+          ]
+        },
+        {
+          "page": "3b",
+          "shot": "3b-1",
+          "durS": 8,
+          "moveS": 0,
+          "recordedWallFromS": 480,
+          "recordedWallToS": 488,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "derate",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        },
+        {
+          "page": "3b",
+          "shot": "3b-2",
+          "durS": 8,
+          "moveS": 0,
+          "recordedWallFromS": 510.0,
+          "recordedWallToS": 518.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "cool",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "hot-only",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        },
+        {
+          "page": "3b",
+          "shot": "3b-3",
+          "durS": 6,
+          "moveS": 0,
+          "recordedWallFromS": 540,
+          "recordedWallToS": 546,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "cool",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "hot-only",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        },
+        {
+          "page": "4",
+          "shot": "4a",
+          "durS": 6,
+          "moveS": 0,
+          "recordedWallFromS": 600,
+          "recordedWallToS": 606,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "storm",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "well",
+            "command",
+            "running",
+            "falling",
+            "water",
+            "flood"
+          ]
+        },
+        {
+          "page": "4",
+          "shot": "4b",
+          "durS": 8,
+          "moveS": 1,
+          "recordedWallFromS": 660,
+          "recordedWallToS": 668,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "flood",
+              "atS": 1,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "well",
+            "command",
+            "running",
+            "falling",
+            "water",
+            "flood"
+          ]
+        },
+        {
+          "page": "4",
+          "shot": "4c",
+          "durS": 4,
+          "moveS": 0,
+          "recordedWallFromS": 668,
+          "recordedWallToS": 674,
+          "borrowed": "none",
+          "captions": [],
+          "nodes": [
+            "well",
+            "command",
+            "running",
+            "falling",
+            "water",
+            "flood"
+          ]
+        },
+        {
+          "page": "4",
+          "shot": "4d",
+          "durS": 6,
+          "moveS": 3,
+          "recordedWallFromS": 674,
+          "recordedWallToS": 680.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "well",
+              "atS": 3,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "well",
+            "command",
+            "running",
+            "falling",
+            "water",
+            "flood"
+          ]
+        },
+        {
+          "page": "4",
+          "shot": "4e",
+          "durS": 15,
+          "moveS": 0,
+          "recordedWallFromS": 690.0,
+          "recordedWallToS": 705.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "platform-start",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "float",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "before-float",
+              "atS": 3,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "well",
+            "command",
+            "running",
+            "falling",
+            "water",
+            "flood"
+          ]
+        },
+        {
+          "page": "4",
+          "shot": "4f",
+          "durS": 5,
+          "moveS": 0,
+          "recordedWallFromS": 705.0,
+          "recordedWallToS": 711.0,
+          "borrowed": "none",
+          "captions": [],
+          "nodes": [
+            "well",
+            "command",
+            "running",
+            "falling",
+            "water",
+            "flood"
+          ]
+        },
+        {
+          "page": "4",
+          "shot": "4g",
+          "durS": 6,
+          "moveS": 1,
+          "recordedWallFromS": 711.0,
+          "recordedWallToS": 717.0,
+          "borrowed": "none",
+          "captions": [],
+          "nodes": [
+            "well",
+            "command",
+            "running",
+            "falling",
+            "water",
+            "flood"
+          ]
+        },
+        {
+          "page": "5",
+          "shot": "5a",
+          "durS": 8,
+          "moveS": 0,
+          "recordedWallFromS": 717.0,
+          "recordedWallToS": 725.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "truck",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        },
+        {
+          "page": "5",
+          "shot": "5b",
+          "durS": 4,
+          "moveS": 0,
+          "recordedWallFromS": 725.0,
+          "recordedWallToS": 731.0,
+          "borrowed": "none",
+          "captions": [],
+          "nodes": []
+        },
+        {
+          "page": "4b",
+          "shot": "4b-1",
+          "durS": 12,
+          "moveS": 0,
+          "recordedWallFromS": 810.0,
+          "recordedWallToS": 822.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "air",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        },
+        {
+          "page": "6",
+          "shot": "6a",
+          "durS": 6,
+          "moveS": 0,
+          "recordedWallFromS": 825.0,
+          "recordedWallToS": 831.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "outage",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "outage",
+            "absence",
+            "notify",
+            "escalated"
+          ]
+        },
+        {
+          "page": "6",
+          "shot": "6b",
+          "durS": 8,
+          "moveS": 0,
+          "recordedWallFromS": 844.8,
+          "recordedWallToS": 852.8,
+          "borrowed": "none",
+          "captions": [],
+          "nodes": [
+            "outage",
+            "absence",
+            "notify",
+            "escalated"
+          ]
+        },
+        {
+          "page": "6",
+          "shot": "6c",
+          "durS": 10,
+          "moveS": 0,
+          "recordedWallFromS": 870.0,
+          "recordedWallToS": 880.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "silence",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "outage",
+            "absence",
+            "notify",
+            "escalated"
+          ]
+        },
+        {
+          "page": "6",
+          "shot": "6d",
+          "durS": 6,
+          "moveS": 0,
+          "recordedWallFromS": 880.0,
+          "recordedWallToS": 886.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "exact",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "silence-only",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "outage",
+            "absence",
+            "notify",
+            "escalated"
+          ]
+        },
+        {
+          "page": "7",
+          "shot": "7a",
+          "durS": 4,
+          "moveS": 0,
+          "recordedWallFromS": 915.0,
+          "recordedWallToS": 921.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "power-back",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "power",
+            "back",
+            "paced",
+            "stored",
+            "clear"
+          ]
+        },
+        {
+          "page": "7",
+          "shot": "7b",
+          "durS": 9,
+          "moveS": 0,
+          "recordedWallFromS": 921.0,
+          "recordedWallToS": 930.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "backdated",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "power",
+            "back",
+            "paced",
+            "stored",
+            "clear"
+          ]
+        },
+        {
+          "page": "7",
+          "shot": "7c",
+          "durS": 5,
+          "moveS": 0,
+          "recordedWallFromS": 930.0,
+          "recordedWallToS": 936.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "pace",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "power",
+            "back",
+            "paced",
+            "stored",
+            "clear"
+          ]
+        },
+        {
+          "page": "7",
+          "shot": "7d",
+          "durS": 6,
+          "moveS": 0,
+          "recordedWallFromS": 936.0,
+          "recordedWallToS": 942.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "all-buffered",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "arriving",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "power",
+            "back",
+            "paced",
+            "stored",
+            "clear"
+          ]
+        },
+        {
+          "page": "7",
+          "shot": "7e",
+          "durS": 4,
+          "moveS": 0,
+          "recordedWallFromS": 942.0,
+          "recordedWallToS": 948.0,
+          "borrowed": "none",
+          "captions": [],
+          "nodes": [
+            "power",
+            "back",
+            "paced",
+            "stored",
+            "clear"
+          ]
+        },
+        {
+          "page": "7",
+          "shot": "7f",
+          "durS": 4,
+          "moveS": 0,
+          "recordedWallFromS": 948.0,
+          "recordedWallToS": 954.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "truck-out",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "power",
+            "back",
+            "paced",
+            "stored",
+            "clear"
+          ]
+        },
+        {
+          "page": "8",
+          "shot": "8a",
+          "durS": 8,
+          "moveS": 0,
+          "recordedWallFromS": 1200,
+          "recordedWallToS": 1208,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "signed",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "unsigned",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "signed",
+            "cap",
+            "updated",
+            "refused"
+          ]
+        },
+        {
+          "page": "8",
+          "shot": "8b",
+          "durS": 11,
+          "moveS": 0,
+          "recordedWallFromS": 1209.0,
+          "recordedWallToS": 1220.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "few",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "signed",
+            "cap",
+            "updated",
+            "refused"
+          ]
+        },
+        {
+          "page": "8",
+          "shot": "8c",
+          "durS": 11,
+          "moveS": 0,
+          "recordedWallFromS": 1220.0,
+          "recordedWallToS": 1231.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "refused",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "failed",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "working",
+              "atS": 3,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "signed",
+            "cap",
+            "updated",
+            "refused"
+          ]
+        },
+        {
+          "page": "8",
+          "shot": "8d",
+          "durS": 8,
+          "moveS": 0,
+          "recordedWallFromS": 1236.0,
+          "recordedWallToS": 1244.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "done",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "ota-summary",
+              "atS": 3,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "signed",
+            "cap",
+            "updated",
+            "refused"
+          ]
+        },
+        {
+          "page": "9",
+          "shot": "9a",
+          "durS": 10,
+          "moveS": 0,
+          "recordedWallFromS": 1244.0,
+          "recordedWallToS": 1254.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "bridge",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "tagline",
+              "atS": 3,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        }
+      ]
+    },
+    {
+      "id": "c90",
+      "targetS": 90,
+      "segments": [
+        {
+          "page": "0",
+          "shot": "0a",
+          "durS": 2,
+          "moveS": 0,
+          "recordedWallFromS": 780,
+          "recordedWallToS": 786,
+          "borrowed": "later that day",
+          "captions": [],
+          "nodes": []
+        },
+        {
+          "page": "0",
+          "shot": "0b",
+          "durS": 3,
+          "moveS": 0,
+          "recordedWallFromS": 0,
+          "recordedWallToS": 6,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "title",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        },
+        {
+          "page": "1",
+          "shot": "1a",
+          "durS": 5,
+          "moveS": 0,
+          "recordedWallFromS": 6,
+          "recordedWallToS": 12,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "baseline",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        },
+        {
+          "page": "4",
+          "shot": "4a",
+          "durS": 4,
+          "moveS": 0,
+          "recordedWallFromS": 600,
+          "recordedWallToS": 606,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "storm",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "well",
+            "command",
+            "running",
+            "falling"
+          ]
+        },
+        {
+          "page": "4",
+          "shot": "4d",
+          "durS": 5,
+          "moveS": 2,
+          "recordedWallFromS": 672.0,
+          "recordedWallToS": 678.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "well",
+              "atS": 2,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "well",
+            "command",
+            "running",
+            "falling"
+          ]
+        },
+        {
+          "page": "4",
+          "shot": "4e",
+          "durS": 12,
+          "moveS": 0,
+          "recordedWallFromS": 690.0,
+          "recordedWallToS": 702.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "platform-start",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "float",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "before-float",
+              "atS": 3,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "well",
+            "command",
+            "running",
+            "falling"
+          ]
+        },
+        {
+          "page": "4",
+          "shot": "4f",
+          "durS": 5,
+          "moveS": 0,
+          "recordedWallFromS": 702.0,
+          "recordedWallToS": 708.0,
+          "borrowed": "none",
+          "captions": [],
+          "nodes": [
+            "well",
+            "command",
+            "running",
+            "falling"
+          ]
+        },
+        {
+          "page": "6",
+          "shot": "6a",
+          "durS": 4,
+          "moveS": 0,
+          "recordedWallFromS": 825.0,
+          "recordedWallToS": 831.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "outage",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "outage",
+            "absence",
+            "notify",
+            "escalated"
+          ]
+        },
+        {
+          "page": "6",
+          "shot": "6b",
+          "durS": 3,
+          "moveS": 0,
+          "recordedWallFromS": 844.8,
+          "recordedWallToS": 850.8,
+          "borrowed": "none",
+          "captions": [],
+          "nodes": [
+            "outage",
+            "absence",
+            "notify",
+            "escalated"
+          ]
+        },
+        {
+          "page": "6",
+          "shot": "6c",
+          "durS": 4,
+          "moveS": 0,
+          "recordedWallFromS": 870.0,
+          "recordedWallToS": 876.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "silence",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "outage",
+            "absence",
+            "notify",
+            "escalated"
+          ]
+        },
+        {
+          "page": "6",
+          "shot": "6d",
+          "durS": 3,
+          "moveS": 0,
+          "recordedWallFromS": 876.0,
+          "recordedWallToS": 882.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "exact",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "silence-only",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "outage",
+            "absence",
+            "notify",
+            "escalated"
+          ]
+        },
+        {
+          "page": "7",
+          "shot": "7a",
+          "durS": 3,
+          "moveS": 0,
+          "recordedWallFromS": 915.0,
+          "recordedWallToS": 921.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "power-back",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "power",
+            "back",
+            "paced",
+            "stored",
+            "clear"
+          ]
+        },
+        {
+          "page": "7",
+          "shot": "7b",
+          "durS": 5,
+          "moveS": 0,
+          "recordedWallFromS": 921.0,
+          "recordedWallToS": 927.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "backdated",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "power",
+            "back",
+            "paced",
+            "stored",
+            "clear"
+          ]
+        },
+        {
+          "page": "7",
+          "shot": "7c",
+          "durS": 3,
+          "moveS": 0,
+          "recordedWallFromS": 927.0,
+          "recordedWallToS": 933.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "pace",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "power",
+            "back",
+            "paced",
+            "stored",
+            "clear"
+          ]
+        },
+        {
+          "page": "7",
+          "shot": "7d",
+          "durS": 3,
+          "moveS": 0,
+          "recordedWallFromS": 933.0,
+          "recordedWallToS": 939.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "all-buffered",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "arriving",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "power",
+            "back",
+            "paced",
+            "stored",
+            "clear"
+          ]
+        },
+        {
+          "page": "8",
+          "shot": "8a",
+          "durS": 3,
+          "moveS": 0,
+          "recordedWallFromS": 1200,
+          "recordedWallToS": 1206,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "signed",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "unsigned",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "signed",
+            "cap",
+            "updated",
+            "refused"
+          ]
+        },
+        {
+          "page": "8",
+          "shot": "8b",
+          "durS": 3,
+          "moveS": 0,
+          "recordedWallFromS": 1209.0,
+          "recordedWallToS": 1215.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "few",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "signed",
+            "cap",
+            "updated",
+            "refused"
+          ]
+        },
+        {
+          "page": "8",
+          "shot": "8c",
+          "durS": 8,
+          "moveS": 0,
+          "recordedWallFromS": 1218.0,
+          "recordedWallToS": 1226.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "refused",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "failed",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "working",
+              "atS": 3,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "signed",
+            "cap",
+            "updated",
+            "refused"
+          ]
+        },
+        {
+          "page": "8",
+          "shot": "8d",
+          "durS": 4,
+          "moveS": 0,
+          "recordedWallFromS": 1236.0,
+          "recordedWallToS": 1242.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "done",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "signed",
+            "cap",
+            "updated",
+            "refused"
+          ]
+        },
+        {
+          "page": "9",
+          "shot": "9a",
+          "durS": 8,
+          "moveS": 0,
+          "recordedWallFromS": 1242.0,
+          "recordedWallToS": 1250.0,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "bridge",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "tagline",
+              "atS": 3,
+              "holdS": 3
+            }
+          ],
+          "nodes": []
+        }
+      ]
+    }
+  ]
+}

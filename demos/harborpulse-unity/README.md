@@ -9,7 +9,7 @@ A 3D scene of the `harborpulse` simulator's waterfront: the fictional Port Alder
 gauges, street lights, pump stations, EV chargers, two metered buildings and the flood-response truck, through
 the scenario's compressed day with its storm and king tide.
 
-**Status: U1 scene and evidence views.** The waterfront builds itself in code from the manifest's surveyed
+**Status: U1 scene and evidence views, plus the engine-free U2a director model.** The existing scene builds itself in code from the manifest's surveyed
 layout. It includes stone quays and jetties, an enclosed Basin with a ferry berth, cut-away pump wells,
 gauge variants, chargers and parked hatchbacks, lamps, the utility truck, metered buildings and the town.
 Named rig nodes keep geometry refinements separate from the evidence views.
@@ -254,3 +254,62 @@ The OFFLINE PREVIEW remains a deterministic stand-in, **not platform data**. It 
 sequence (including a North Quay float-consistent case), East Quay flood escalation and outage alarms,
 lamp service, charger heat/derate and next-night OTA, truck route and gauge replacement. Every existing
 preview banner and still stamp remains in place.
+
+## U2a director model
+
+`Scripts/Model/Director/` adds the compact presentation map, strict storyboard, evidence predicates,
+deterministic live scheduler, free-roam ownership model and NDJSON recorder. This slice supplies model
+APIs and offline tests; the existing scene and live observer are not wired to them yet.
+
+- `PresentationMap` owns manifest-to-presentation conversion. Its constrained mesh splits the manifest
+  frame on each control coordinate, with Steiner vertices at intersections, and triangulates every
+  resulting rectangle. Fence edges are chains of triangle edges. The authored strip maps are monotone;
+  `Validate()` reports inverted triangles. Non-rectilinear fence constraints fail explicitly. Device
+  anchors, quay polygons, water, breakwaters, road and named camera poses are exposed in metres.
+  Pass recorded platform area membership to apply M2 and inspect `ReadinessWarnings` before directing.
+- `Storyboard.Parse(json, map)` loads `Resources/storyboard.json`. Caption alternatives share a slot;
+  the first satisfied claim wins, then pre/scenario/fallback text. Captions retain authored line breaks.
+  Cut segments have absolute recorded wall spans, independent move durations, caption slots and allowed
+  chain nodes. The short cut excludes the flood rail as well as the extra pages.
+- `Observation` identities include run, kind, device, alarm key/cycle, command, attempt, status and
+  source. The read-only observer adapter must supply real record identities and exact platform states.
+  Measurement identities include their occurred instant. Derived adapter fields such as `afterFailure`
+  and `afterReplacement` must be established from the named records, never from scenario cues.
+  `$trigger.cycle` binds proof to the active alarm cycle. Numeric caption placeholders bind to explicitly
+  declared evidence fields. A scenario ledger supplies an expected set, never proof of platform storage.
+- Positive coverage and gaps both go into `ObservationStore`. Exact-set and absence predicates require
+  positive coverage over the whole interval and reject any overlapping gap. A reconnect snapshot retains
+  the original event identities, so the scheduler's per-run consumed set prevents a second trigger.
+- Call `Scheduler.Tick` with an absolute sim hour (26 means the following night's 02:00), monotonic
+  seconds, clock freshness, digest agreement and defects. Its returned events carry page states, shots,
+  caption text and evidence keys. A stale clock freezes decisions; digest disagreement turns direction
+  off. `FreeRoam` separately reports a continuous director blend weight and remains available then.
+- Supply four caller-owned writers to `Recorder`: observed, world, director and checkpoints. Call
+  `Observe`, `World`, `Decision`, `Coverage`, and `Consumption(scheduler.Consumed)` as inputs arrive, and
+  `Advance` every frame, including idle frames. Checkpoints fall on exact 60-second recording boundaries.
+  `RecordingReader.Seek` reconstructs the observed state and recorded decisions; `SeekCut` maps show
+  time to the recording and silently consumes skipped events. It does not rerun a live scheduler or
+  invent missing observations. `RecordedState.Hash()` is stable across dictionary and token-set order.
+
+Authoring resolutions: the source timing table and individual shots disagree in several places. The
+file keeps page budgets at exactly 90 and 300 seconds, and gives every caption at least three seconds.
+The short cold open therefore uses two seconds of storm plus a three-second title; the short well
+entry uses a two-second move plus a three-second caption. Restore shots sum to 32 seconds and OTA
+shots to 38 seconds in the longer cut. The platform-verb fallbacks “The fault is detected.” and
+“Silence detected.” are gated claims. “A firmware update” is treated as a noun phrase by the lint.
+All end-card wording is retained in the page definition; its bridge/tagline are the cut's timed
+caption cards, with the disclosure and sub-line available for the later end-card layout.
+
+Windows verification with cached NuGet packages (redirects every project's intermediate/output files
+under this demo, and avoids inaccessible user SDK/config directories):
+
+```powershell
+cd demos/harborpulse-unity/Dotnet~
+powershell -NoProfile -ExecutionPolicy Bypass -File Verify-Director.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File Verify-Director.ps1 -CompileCheck
+python verify_director_mutants.py
+```
+
+The mutation runner changes one production expression at a time, requires a named failing NUnit test
+(compiler errors do not count), and restores the original bytes in `finally`. Logs, TRX results and the
+mutation summary are in ignored `Dotnet~/.build/`.
