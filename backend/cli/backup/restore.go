@@ -20,6 +20,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/backupset"
 	"github.com/devicechain-io/dc-microservice/blob"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/durability"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/nats-io/nats.go"
@@ -71,11 +72,12 @@ func PrepareRestore(dir, instance string, forceForeign bool) (*RestorePlan, erro
 		}
 		absent[name] = true
 	}
-	for _, item := range backupset.Items() {
+	for _, t := range inventory(m.ShardGroups) {
+		item := t.item
 		if !preserved(item) {
 			continue
 		}
-		kind, name := resource(item, m.Instance)
+		kind, name := t.resource(m.Instance)
 		key := kind + "/" + name
 		if item.Kind == backupset.KindGatewayStream {
 			gateways[name] = true
@@ -185,11 +187,20 @@ func resource(item backupset.Item, instance string) (string, string) {
 // Plan queries StreamInfo and reads the blob export only. It does not reconcile,
 // create consumers, subscribe to application data, or mutate target storage.
 // All actions are returned together only after every refusal check succeeds.
+// shards is the target's deployed shardGroups block: the backup must record the
+// same layout, and every group stream is planned like its base stream.
 // enabledAreas describes the target declaration. Without it, an area-disabled
 // source omission cannot be proven safe and is refused.
-func (p *RestorePlan) Plan(ctx context.Context, nc *nats.Conn, blobs func(context.Context, io.Writer) error, enabledAreas ...[]string) ([]Action, error) {
+func (p *RestorePlan) Plan(ctx context.Context, nc *nats.Conn, blobs func(context.Context, io.Writer) error, shards *config.NatsShardGroupsConfiguration, enabledAreas ...[]string) ([]Action, error) {
 	if p == nil || p.manifest == nil || blobs == nil {
 		return nil, fmt.Errorf("verified plan and target blob reader required")
+	}
+	targetShards, err := recordShards(shards)
+	if err != nil {
+		return nil, fmt.Errorf("target shard groups: %w", err)
+	}
+	if !p.manifest.ShardGroups.equal(targetShards) {
+		return nil, fmt.Errorf("backup shard groups (%s) do not match the target instance's (%s): a backup restores only into the same shard-group layout", p.manifest.ShardGroups, targetShards)
 	}
 	if len(enabledAreas) > 1 {
 		return nil, fmt.Errorf("one target enabled area set required")
@@ -204,8 +215,9 @@ func (p *RestorePlan) Plan(ctx context.Context, nc *nats.Conn, blobs func(contex
 		return nil, err
 	}
 	var out []Action
-	for _, item := range backupset.Items() {
-		kind, name := resource(item, p.instance)
+	for _, t := range inventory(targetShards) {
+		item := t.item
+		kind, name := t.resource(p.instance)
 		a := Action{Kind: kind, Name: name}
 		if !preserved(item) {
 			a.Action, a.Reason = "skip", string(item.BackupClass)+": "+item.Why
@@ -238,7 +250,7 @@ func (p *RestorePlan) Plan(ctx context.Context, nc *nats.Conn, blobs func(contex
 			out = append(out, a)
 			continue
 		}
-		_, source := resource(item, p.manifest.Instance)
+		_, source := t.resource(p.manifest.Instance)
 		saved, included := p.streams[source]
 		live, err := js.StreamInfo(name, nats.Context(ctx))
 		if err != nil && !errors.Is(err, nats.ErrStreamNotFound) {

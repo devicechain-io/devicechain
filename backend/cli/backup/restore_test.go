@@ -90,7 +90,7 @@ func restoreSet(t *testing.T) (string, string) {
 		}
 	}
 	dir := filepath.Join(t.TempDir(), "set")
-	if err := Create(context.Background(), seed, "sample", dir, blobFixture(t)); err != nil {
+	if err := Create(context.Background(), seed, "sample", dir, blobFixture(t), nil); err != nil {
 		t.Fatal(err)
 	}
 	return dir, name
@@ -123,7 +123,7 @@ func TestRestoreEmptyTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	actions, err := plan.Plan(context.Background(), reader, emptyBlobs(t))
+	actions, err := plan.Plan(context.Background(), reader, emptyBlobs(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestRestorePopulatedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	actions, err := plan.Plan(context.Background(), reader, blobFixture(t))
+	actions, err := plan.Plan(context.Background(), reader, blobFixture(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestRestoreRefusesNewerStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	actions, err := plan.Plan(context.Background(), reader, emptyBlobs(t))
+	actions, err := plan.Plan(context.Background(), reader, emptyBlobs(t), nil)
 	if err == nil || !strings.Contains(err.Error(), "newer data") || actions != nil {
 		t.Fatalf("newer target accepted: %+v %v", actions, err)
 	}
@@ -278,7 +278,7 @@ func TestRestoreRefusesDivergentObject(t *testing.T) {
 	}
 	actions, err := plan.Plan(context.Background(), reader, func(ctx context.Context, w io.Writer) error {
 		return ExportBlobs(ctx, blob.Config{Directory: root}, "sample", w)
-	})
+	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "newer data") || actions != nil {
 		t.Fatalf("newer object accepted: %+v %v", actions, err)
 	}
@@ -303,7 +303,7 @@ func TestRestoreRefusesMissingGateway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	actions, err := plan.Plan(context.Background(), reader, emptyBlobs(t))
+	actions, err := plan.Plan(context.Background(), reader, emptyBlobs(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestRestoreRefusesMissingGateway(t *testing.T) {
 		t.Fatal("missing gateway skip reason")
 	}
 	seedRestoreStreams(t, seed)
-	actions, err = plan.Plan(context.Background(), reader, emptyBlobs(t))
+	actions, err = plan.Plan(context.Background(), reader, emptyBlobs(t), nil)
 	if err == nil || !strings.Contains(err.Error(), "missing checkpoint") || actions != nil {
 		t.Fatalf("missing gateway accepted: %+v %v", actions, err)
 	}
@@ -336,7 +336,7 @@ func TestRestoreForeignOverride(t *testing.T) {
 	}
 	actions, err := plan.Plan(context.Background(), reader, func(ctx context.Context, w io.Writer) error {
 		return ExportBlobs(ctx, blob.Config{Directory: root}, "other", w)
-	})
+	}, nil)
 	if err != nil || len(actions) == 0 || actions[0].Name != messaging.StreamName("other", backupset.Items()[0].Name) {
 		t.Fatalf("foreign override: %+v %v", actions, err)
 	}
