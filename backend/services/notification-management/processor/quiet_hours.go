@@ -188,7 +188,7 @@ func (n *PolicyNotifier) ReleaseHeld(ctx context.Context, policies []*model.Noti
 		}
 		groups[d.AlarmToken] = append(groups[d.AlarmToken], d)
 	}
-	suppressions := n.lookupSuppressions(ctx, order, now, 2*time.Second)
+	suppressions := n.lookupSuppressionStatuses(ctx, order, 2*time.Second)
 	var lastErr error
 	for _, alarm := range order {
 		if err := ctx.Err(); err != nil {
@@ -242,7 +242,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 			}
 			continue
 		}
-		if status, ok := suppressions[alarm]; ok {
+		if status, ok := suppressions[alarm]; ok && status.suppressedAt(now) {
 			if err := n.api.RescheduleSuppressedNotificationDeferral(ctx, d, suppressionReleaseAt(status.Until, now), status.WindowToken); err != nil {
 				return fmt.Errorf("re-holding suppressed notification: %w", err)
 			}
@@ -301,6 +301,23 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 
 	rctx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
 	defer cancel()
+	// Routes above use the held severity. Window release content uses live alarm facts,
+	// then a known same-cycle state, then the held event. Missing/failed lookups keep
+	// the held event, so an optional status lookup adds no failure mode.
+	if status, ok := suppressions[alarm]; latest.HeldByWindow.Valid && ok {
+		severity := status.Severity
+		if !model.SeverityAtOrAbove(severity, "INDETERMINATE") && state != nil && state.CycleRaisedAt.Valid &&
+			!event.RaisedTime.IsZero() && state.SameCycleAs(event.RaisedTime) {
+			severity = state.Severity
+		}
+		if model.SeverityAtOrAbove(severity, "INDETERMINATE") {
+			if event.Severity != severity {
+				event.EventType = dmcontract.AlarmEventRaised
+			}
+			event.Severity = severity
+			event.PreviousSeverity = ""
+		}
+	}
 	message := renderNotification(&event)
 	for _, d := range claimed {
 		if d.HeldByWindow.Valid {

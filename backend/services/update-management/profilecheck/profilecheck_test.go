@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -230,4 +232,82 @@ func TestDeviceOfRejectsAnAnswerWithNoId(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, found)
 	require.Zero(t, facts.Incarnation)
+}
+
+func TestDeviceIncarnationsBatchesAndValidatesIdentity(t *testing.T) {
+	var tokens []string
+	for i := range 205 {
+		tokens = append(tokens, fmt.Sprintf("dev-%d", i))
+	}
+	calls := 0
+	q := &fakeQuerier{respond: func(v map[string]any) (string, error) {
+		calls++
+		chunk := v["tokens"].([]string)
+		require.LessOrEqual(t, len(chunk), 100)
+		var rows []map[string]string
+		for _, token := range chunk {
+			if token == "dev-1" {
+				continue
+			} // confirmed absent
+			rows = append(rows, map[string]string{"token": token, "id": "17"})
+		}
+		b, err := json.Marshal(map[string]any{"devicesByToken": rows})
+		return string(b), err
+	}}
+	ids, err := New(q, "http://dm/graphql").DeviceIncarnations(context.Background(), "acme", tokens)
+	require.NoError(t, err)
+	require.Equal(t, 3, calls, "one devicesByToken query per chunk, never one query per token")
+	require.Len(t, ids, 204)
+	require.NotContains(t, ids, "dev-1")
+	require.Equal(t, uint64(17), ids["dev-204"])
+	require.Equal(t, "acme", q.tenant)
+	require.Equal(t, "http://dm/graphql", q.url)
+	require.Contains(t, deviceIncarnations, "devicesByToken(tokens: $tokens) { id token }")
+}
+
+func TestDeviceIncarnationsRefusesInvalidAnswersAndPartialFailure(t *testing.T) {
+	for _, id := range []string{"", "0", "bad", "-1", "9223372036854775808"} {
+		t.Run("id="+id, func(t *testing.T) {
+			q := &fakeQuerier{respond: func(map[string]any) (string, error) {
+				b, err := json.Marshal(map[string]any{"devicesByToken": []map[string]string{{"token": "d", "id": id}}})
+				return string(b), err
+			}}
+			ids, err := New(q, "u").DeviceIncarnations(context.Background(), "acme", []string{"d"})
+			require.Error(t, err)
+			require.Nil(t, ids, "an invalid returned id must never become an absent token")
+		})
+	}
+	for _, answer := range []string{`{}`, `{"devicesByToken":null}`, `{"devicesByToken":[{"token":"other","id":"17"}]}`,
+		`{"devicesByToken":[{"token":"d","id":"17"},{"token":"d","id":"23"}]}`} {
+		t.Run(answer, func(t *testing.T) {
+			q := &fakeQuerier{respond: func(map[string]any) (string, error) { return answer, nil }}
+			ids, err := New(q, "u").DeviceIncarnations(context.Background(), "acme", []string{"d"})
+			require.Error(t, err)
+			require.Nil(t, ids)
+		})
+	}
+	calls := 0
+	q := &fakeQuerier{respond: func(v map[string]any) (string, error) {
+		calls++
+		if calls == 2 {
+			return "", errors.New("second chunk unavailable")
+		}
+		var rows []map[string]string
+		for _, token := range v["tokens"].([]string) {
+			rows = append(rows, map[string]string{"token": token, "id": "17"})
+		}
+		b, err := json.Marshal(map[string]any{"devicesByToken": rows})
+		return string(b), err
+	}}
+	var tokens []string
+	for i := range 101 {
+		tokens = append(tokens, fmt.Sprint(i))
+	}
+	ids, err := New(q, "u").DeviceIncarnations(context.Background(), "acme", tokens)
+	require.ErrorContains(t, err, "second chunk unavailable")
+	require.Nil(t, ids)
+	require.Equal(t, 2, calls)
+	_, err = New(q, "u").DeviceIncarnations(context.Background(), "acme", strings.Fields(strings.Repeat("d ", 10001)))
+	require.ErrorContains(t, err, "bound")
+	require.Equal(t, 2, calls, "over-bound requests do no network I/O")
 }

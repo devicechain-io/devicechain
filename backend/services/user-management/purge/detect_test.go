@@ -46,6 +46,78 @@ const (
 	detectTenant = "acme-corp"
 )
 
+// The groups owed an answer are the ones event-processing RECORDED when it activated
+// sharding, not the ones a configuration names: before activation no group answers.
+func TestDetectExpectedPartitionsFollowTheRecordedTopology(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		topology int // 0: the table does not exist; -1: it exists with no row
+		want     []string
+	}{
+		{"no-topology-table", 0, []string{"singleton", "retired-partition"}},
+		{"not-activated", -1, []string{"singleton", "retired-partition"}},
+		{"activated", 3, []string{"singleton", "resolved-events-g1", "resolved-events-g2", "retired-partition"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := detectCatalog(t, true, "singleton", "retired-partition")
+			if tc.topology != 0 {
+				withDetectTopology(t, db, tc.topology)
+			}
+			ids, err := NewDetect(detectConn{}, db, detectInstance).checkpointedPartitions(context.Background())
+			require.NoError(t, err)
+			require.ElementsMatch(t, tc.want, ids)
+		})
+	}
+	// The reported case: only g0 has ever checkpointed, and g1 holds state in memory.
+	db := detectCatalog(t, true, "singleton")
+	withDetectTopology(t, db, 2)
+	ids, err := NewDetect(detectConn{}, db, detectInstance).checkpointedPartitions(context.Background())
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"singleton", "resolved-events-g1"}, ids)
+}
+
+func TestDetectUncheckpointedGroupFailureDefersUntilRetry(t *testing.T) {
+	url := detectRig(t)
+	runEngine(t, detectDial(t, url), answersWith(messaging.DetectPurgeReply{PartitionId: "singleton"}))
+	runEngine(t, detectDial(t, url), func(pass int) []messaging.DetectPurgeReply {
+		// g0 answers first, which must not finish the gather before g1's answer.
+		time.Sleep(50 * time.Millisecond)
+		reply := messaging.DetectPurgeReply{PartitionId: "resolved-events-g1"}
+		if pass == 1 {
+			reply.Error = "g1 eviction unavailable"
+		}
+		return []messaging.DetectPurgeReply{reply}
+	})
+	db := detectCatalog(t, true, "singleton")
+	withDetectTopology(t, db, 2)
+	d := configuredDetectStore(t, detectConn{detectDial(t, url)}, db)
+	for _, retry := range []bool{false, true} {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		out, err := d.Erase(ctx, detectTenant, time.Now())
+		cancel()
+		require.NoError(t, err)
+		if retry {
+			require.True(t, out.Clean(), out.Reason())
+		} else {
+			require.False(t, out.Clean(), "g0 cannot complete erasure while g1 still holds state")
+			require.Contains(t, out.Reason(), "g1 eviction unavailable")
+			require.Contains(t, out.Reason(), "resolved-events-g1")
+		}
+	}
+}
+
+func configuredDetectStore(t *testing.T, conn messaging.Connection, db Database) *Detect {
+	t.Helper()
+	for _, store := range DefaultStores(nil, nil, conn, detectInstance, nil, nil, nil) {
+		if d, ok := store.(*Detect); ok {
+			d.db = db
+			return d
+		}
+	}
+	t.Fatal("DefaultStores omitted DETECT")
+	return nil
+}
+
 // detectRig starts a plain broker — no JetStream, because the eviction is core NATS
 // request/reply — and returns its client URL. Port -1 lets the server pick a free one, the
 // same way core/messaging's own detect rig does.
@@ -198,6 +270,7 @@ func detectCatalog(t *testing.T, deployed bool, partitions ...string) Database {
 
 	require.NoError(t, db.Exec(`CREATE TABLE pg_namespace (nspname text)`).Error)
 	require.NoError(t, db.Exec(`INSERT INTO pg_namespace (nspname) VALUES ('public')`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE pg_tables (schemaname text, tablename text)`).Error)
 	if !deployed {
 		return detectDB{db}
 	}
@@ -210,6 +283,18 @@ func detectCatalog(t *testing.T, deployed bool, partitions ...string) Database {
 			`INSERT INTO "`+detectSchema+`"."detect_snapshots" (partition_id) VALUES (?)`, p).Error)
 	}
 	return detectDB{db}
+}
+
+// withDetectTopology creates event-processing's stream topology table, as its migration
+// does, and records an activated topology of count groups (none when count is negative).
+func withDetectTopology(t *testing.T, db Database, count int) {
+	t.Helper()
+	g := db.DB(context.Background())
+	require.NoError(t, g.Exec(`INSERT INTO pg_tables (schemaname, tablename) VALUES (?, 'detect_stream_topology')`, detectSchema).Error)
+	require.NoError(t, g.Exec(`CREATE TABLE "`+detectSchema+`"."detect_stream_topology" (id text, group_count integer)`).Error)
+	if count > 0 {
+		require.NoError(t, g.Exec(`INSERT INTO "`+detectSchema+`"."detect_stream_topology" (id, group_count) VALUES ('singleton', ?)`, count).Error)
+	}
 }
 
 // detectStore builds the store the way DefaultStores does.

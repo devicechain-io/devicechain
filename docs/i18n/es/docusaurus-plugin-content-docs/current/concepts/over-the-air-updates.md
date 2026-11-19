@@ -196,7 +196,10 @@ un número limitado a la vez, y se puede pausar, reanudar y abortar.
    a `RUNNING`. Un dispositivo que se una al grupo después no forma parte del despliegue, y uno que salga
    sigue siendo destino; inicia un despliegue nuevo para llegar a los recién llegados. Un grupo dinámico
    se resuelve desde su versión publicada, que el despliegue registra. Un grupo de más de 10.000
-   dispositivos se rechaza (`ROLLOUT_TOO_LARGE`) en lugar de recortarse.
+   dispositivos se rechaza (`ROLLOUT_TOO_LARGE`) en lugar de recortarse. El despliegue registra qué
+   dispositivo es cada miembro, no solo su token: un dispositivo eliminado mientras espera se omite
+   (`DEVICE_NOT_FOUND`), y un dispositivo creado más tarde con el mismo token es un dispositivo distinto,
+   que se omite con `DEVICE_REPLACED` aunque esté en el grupo.
 3. Después el servicio asigna el artefacto a los dispositivos en orden, sin dejar nunca que más de
    `maxInFlight` tengan una actualización sin terminar. Cada dispositivo pasa por las mismas reglas que
    `assignArtifact`: un dispositivo que no existe, está deshabilitado, tiene un perfil incompatible o

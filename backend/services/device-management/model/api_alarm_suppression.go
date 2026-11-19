@@ -6,14 +6,16 @@ package model
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
 
-// CreateAlarmSuppressionWindow is internal only; no transport or alarm path calls it.
+// CreateAlarmSuppressionWindow validates and authorizes the complete window.
 // Server-owned fields on the input are ignored.
 func (api *Api) CreateAlarmSuppressionWindow(ctx context.Context, input *AlarmSuppressionWindow) (*AlarmSuppressionWindow, error) {
 	if err := ValidateAlarmSuppression(input); err != nil {
@@ -128,6 +130,14 @@ func (e *SuppressionConflictError) Error() string {
 	return fmt.Sprintf("suppression window %q changed concurrently", e.Token)
 }
 
+// Preserve the window-specific error while exposing the shared stale-write refusal.
+func (e *SuppressionConflictError) Unwrap() error {
+	return rdb.NewStaleWriteError("suppression window")
+}
+func (e *SuppressionConflictError) Extensions() map[string]any {
+	return rdb.NewStaleWriteError("suppression window").Extensions()
+}
+
 // mutateSuppression authorizes without holding a transaction or pooled connection.
 // The version predicate makes the eventual write atomic against concurrent changes.
 func (api *Api) mutateSuppression(ctx context.Context, token string, change func(*AlarmSuppressionWindow) error, ending, deleting bool) (*AlarmSuppressionWindow, error) {
@@ -212,61 +222,17 @@ func (api *Api) UpdateAlarmSuppressionWindow(ctx context.Context, token string, 
 	if r == nil {
 		return nil, suppressionInvalid("update is required")
 	}
-	return api.mutateSuppression(ctx, token, func(w *AlarmSuppressionWindow) error {
-		if r.Name != nil {
-			w.Name = *r.Name
-		}
-		if r.Description != nil {
-			w.Description = *r.Description
-		}
-		if r.Metadata != nil {
-			w.Metadata = *r.Metadata
-		}
-		if r.Reason != nil {
-			w.Reason = *r.Reason
-		}
-		if r.Targets != nil {
-			w.Targets = *r.Targets
-		}
-		if r.AlarmKeys != nil {
-			w.AlarmKeys = *r.AlarmKeys
-		}
-		if r.BypassSeverity != nil {
-			w.BypassSeverity = *r.BypassSeverity
-		}
-		if r.Kind != nil {
-			w.Kind = *r.Kind
-		}
-		if r.StartTime != nil {
-			w.StartTime = *r.StartTime
-		}
-		if r.EndTime != nil {
-			w.EndTime = *r.EndTime
-		}
-		if r.Timezone != nil {
-			w.Timezone = *r.Timezone
-		}
-		if r.Slots != nil {
-			w.Slots = *r.Slots
-		}
-		if r.ValidFrom != nil {
-			w.ValidFrom = *r.ValidFrom
-		}
-		if r.ValidUntil != nil {
-			w.ValidUntil = *r.ValidUntil
-		}
-		return nil
-	}, false, false)
+	return api.mutateSuppression(ctx, token, r.apply, false, false)
 }
 
 func (api *Api) EndAlarmSuppressionWindow(ctx context.Context, token string) (*AlarmSuppressionWindow, error) {
-	return api.mutateSuppression(ctx, token, nil, true, false)
+	return api.retrySuppressionMutation(ctx, token, true)
 }
 
 func (api *Api) DeleteAlarmSuppressionWindow(ctx context.Context, token string) (*AlarmSuppressionWindow, error) {
 	// Soft deletion is an authorized update, allowing the same scoped end/delete
 	// policy while retaining the row and increasing its version in the audit journal.
-	return api.mutateSuppression(ctx, token, nil, false, true)
+	return api.retrySuppressionMutation(ctx, token, false)
 }
 
 func (api *Api) invalidateSuppressionWindows(ctx context.Context) {
@@ -277,4 +243,18 @@ func (api *Api) invalidateSuppressionWindows(ctx context.Context) {
 	api.suppressionCache.Lock()
 	delete(api.suppressionCache.tenants, tenant)
 	api.suppressionCache.Unlock()
+}
+
+// End/delete operate on the freshly read state; user edits remain single-attempt.
+func (api *Api) retrySuppressionMutation(ctx context.Context, token string, ending bool) (*AlarmSuppressionWindow, error) {
+	var result *AlarmSuppressionWindow
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		result, err = api.mutateSuppression(ctx, token, nil, ending, !ending)
+		var conflict *SuppressionConflictError
+		if !errors.As(err, &conflict) {
+			return result, err
+		}
+	}
+	return result, err
 }

@@ -32,6 +32,7 @@ import (
 // It is first-classed instead as the consumerPending/consumerAckPending gauges below,
 // read from the resolved-events durable's broker-reported backlog.
 type DetectMetrics struct {
+	groups *groupMetricSet
 	// tickPass and ruleStatFlushPass file the loop's tick arm and the rule-health interval
 	// flush on the shared maintenance-pass series (duration, outcome, last success).
 	tickPass            *core.PeriodicTaskMetrics
@@ -206,13 +207,22 @@ var waitBuckets = []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01,
 // NewDetectMetrics registers the checkpoint-loop metrics under the service's
 // Prometheus namespace/subsystem.
 //
-// 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE, AND PASS THE RESULT TO
-// NewResolvedEventsProcessor. The processor is built inside the NATS manager's oncreate
-// callback — it has to be, because it holds a reader bound to the connection — and that
-// callback runs on EVERY start. These ~27 collectors built there would be registered
-// again whenever that callback is entered again — which any start retried after a
-// failed one does — and MustRegister panics on the first duplicate.
+// Initialize owns this set and passes it to processors built on each NATS start.
+// Repeated calls for the same service return the same set, without registering
+// collectors again. Group workers must use ForGroup to isolate their gauges and
+// shard sampling cursors while sharing process counters and distributions.
 func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
+	detectMetricsCache.Lock()
+	defer detectMetricsCache.Unlock()
+	if m := detectMetricsCache.byService[ms]; m != nil {
+		return m
+	}
+	m := newDetectMetrics(ms)
+	detectMetricsCache.byService[ms] = m
+	return m
+}
+
+func newDetectMetrics(ms *core.Microservice) *DetectMetrics {
 	m := &DetectMetrics{
 		tickPass:            ms.NewPeriodicTaskMetrics("detect_tick"),
 		ruleStatFlushPass:   ms.NewPeriodicTaskMetrics("rule_health_flush"),
@@ -368,6 +378,7 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 	for _, o := range gapSeqOutcomes {
 		m.gapSequences.WithLabelValues(o).Add(0)
 	}
+	m.groups = &groupMetricSet{ms: ms, legacy: m}
 	return m
 }
 

@@ -254,7 +254,8 @@ CREATE TABLE "update-management".update_rollout_targets (
  assignment_id bigint,
  dispatched_at timestamp with time zone,
  skip_code character varying(64) NOT NULL,
- skip_detail character varying(512) NOT NULL
+ skip_detail character varying(512) NOT NULL,
+ device_incarnation bigint
 );
 CREATE TABLE "update-management".update_rollouts (
  id bigint NOT NULL,

@@ -13,7 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
-// DeviceDeleted voids only assignments covered by this deletion, including retained
+// DeviceDeleted retires pending targets and voids assignments covered by this deletion, including retained
 // facts replayed after a token was reused. It is safe to redeliver and to reorder.
 func (api *Api) DeviceDeleted(ctx context.Context, token string, incarnation uint64, deletedTime time.Time) error {
 	tenant, ok := core.TenantFromContext(ctx)
@@ -25,6 +25,23 @@ func (api *Api) DeviceDeleted(ctx context.Context, token string, incarnation uin
 		return nil
 	}
 	ctx = rdb.WithAuditActor(ctx, "device deleted")
+	// A legacy target is covered by the rollout's freeze time, never the target row's creation
+	// time. Explicit tenant scoping also fences the subquery. NULL StartedAt cannot prove coverage.
+	started := api.RDB.DB(ctx).Model(&UpdateRollout{}).Select("id").
+		Where("tenant_id = ? AND started_at <= ?", tenant, deletedTime)
+	pending := api.RDB.DB(ctx).Model(&UpdateRolloutTarget{}).
+		Where("device_token = ? AND status = ?", token, TargetPending)
+	if incarnation > 0 {
+		pending = pending.Where("(device_incarnation <= ? OR (device_incarnation IS NULL AND rollout_id IN (?)))", incarnation, started)
+	} else {
+		pending = pending.Where("device_incarnation IS NULL AND rollout_id IN (?)", started)
+	}
+	// Reuse DEVICE_NOT_FOUND: the frozen device no longer exists. CAS keeps redelivery
+	// idempotent and leaves already-dispatched or terminal targets to their existing path.
+	if err := pending.Updates(map[string]any{"status": TargetSkipped, "skip_code": CodeDeviceNotFound,
+		"skip_detail": "the frozen device was deleted", "updated_at": api.now()}).Error; err != nil {
+		return err
+	}
 	q := api.RDB.DB(ctx).Where("device_token = ?", token)
 	if incarnation > 0 {
 		q = q.Where("(device_incarnation <= ? OR (device_incarnation IS NULL AND created_at <= ?))", incarnation, deletedTime)

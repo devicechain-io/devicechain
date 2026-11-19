@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // captureAlarmPublisher records emitted alarm state-change events for assertion.
@@ -26,14 +27,14 @@ func (c *captureAlarmPublisher) PublishAlarmEvent(_ context.Context, e *AlarmSta
 
 func newContributorTestApi(t *testing.T) (*Api, *captureAlarmPublisher) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&Alarm{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &EntityRelationshipType{}, &EntityGroup{}, &EntityGroupMembership{}); err != nil {
+	if err := db.AutoMigrate(&Alarm{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &EntityRelationshipType{}, &EntityGroup{}, &EntityGroupMembership{}, &AlarmSuppressionWindow{}, &AlarmCycleSuppression{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	api := NewApi(&rdb.RdbManager{Database: db})

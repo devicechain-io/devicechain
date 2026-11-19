@@ -303,3 +303,17 @@ func TestUpdateManagementInfoSaysWhetherAnObjectStoreIsConfigured(t *testing.T) 
 	require.JSONEq(t, `{"updateManagementInfo":{"objectStoreConfigured":false}}`, string(resp.Data),
 		"a plane with no store must say so, not default to working")
 }
+
+func (d devices) DeviceIncarnations(ctx context.Context, tenant string, tokens []string) (map[string]uint64, error) {
+	out := map[string]uint64{}
+	for _, token := range tokens {
+		facts, found, err := d.DeviceOf(ctx, tenant, token)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			out[token] = facts.Incarnation
+		}
+	}
+	return out, nil
+}

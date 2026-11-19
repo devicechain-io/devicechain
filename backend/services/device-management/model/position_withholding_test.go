@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
@@ -280,4 +281,26 @@ func TestClassificationIsStampedWithItsContributorVersion(t *testing.T) {
 	requireStamp("fence", 1)
 	raiseWithPosition(t, api, "fence", "p/temp", 11, verdict(true))
 	requireStamp("fence", 2)
+}
+
+func TestCycleStampsPositionWithholding(t *testing.T) {
+	r := newSuppressionCycleRig(t)
+	require.NoError(t, r.edge(r.now, "r", AlarmEdgeRaised, "MINOR"))
+	alarm := r.alarm(t)
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(alarm).Update("position_derived", true).Error)
+	viewer := suppressionCaller(r.ctx, false)
+	stamps, err := r.api.AlarmCycleSuppressionsFor(viewer, []Alarm{*alarm})
+	require.NoError(t, err)
+	require.Empty(t, stamps)
+	var direct []AlarmCycleSuppression
+	require.NoError(t, r.api.RDB.DB(viewer).Find(&direct).Error)
+	require.Empty(t, direct)
+	locator := auth.WithClaims(r.ctx, &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: "acme", Authorities: []string{string(auth.AlarmRead), string(auth.LocationRead)}})
+	stamps, err = r.api.AlarmCycleSuppressionsFor(locator, []Alarm{*alarm})
+	require.NoError(t, err)
+	require.Equal(t, r.window.Token, stamps[alarm.ID])
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(alarm).Update("position_derived", nil).Error)
+	stamps, err = r.api.AlarmCycleSuppressionsFor(viewer, []Alarm{*alarm})
+	require.NoError(t, err)
+	require.Empty(t, stamps, "unclassified alarms are withheld too")
 }
