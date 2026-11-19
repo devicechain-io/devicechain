@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	nats "github.com/nats-io/nats.go"
@@ -115,6 +116,12 @@ type SessionKickReply struct {
 // that was open at the time is still publishing, and the caller must say so.
 var ErrSessionKickUnavailable = errors.New("the device's live broker sessions could not be confirmed ended")
 
+// errKickBrokerDown is an attempt that was not made, or was abandoned, because this
+// service's own connection to the broker is not up. Asking again cannot help until it is,
+// so the requester stops at once instead of waiting out its remaining attempts.
+var errKickBrokerDown = errors.New("this service's connection to the broker is down, so no request could reach " +
+	"the service that ends sessions")
+
 // ValidateSessionKick checks a request on both sides of the wire.
 func ValidateSessionKick(req SessionKickRequest) error {
 	if err := core.ValidateToken(req.Tenant); err != nil {
@@ -180,6 +187,16 @@ func (r *SessionKickRequester) KickDeviceSessions(ctx context.Context, tenant, r
 		if last == nil {
 			return nil
 		}
+		// 🔴 A CALLER IS WAITING ON THIS. A write that withdrew a device's authority has already
+		// committed, and its caller is held until this returns. With the connection down every
+		// further attempt would wait out its whole timeout for a reply that cannot come (three
+		// attempts held a device delete for a minute, past the ingress's own timeout, so the
+		// caller saw a gateway error instead of being told the change was saved). The debt is
+		// recorded with the write, and the background drain asks again once the broker is back.
+		// A connection that dropped and is already back (a blip) is asked again as usual.
+		if errors.Is(last, errKickBrokerDown) && !r.nc.IsConnected() {
+			break
+		}
 	}
 	return fmt.Errorf("%w: %v", ErrSessionKickUnavailable, last)
 }
@@ -190,7 +207,30 @@ func (r *SessionKickRequester) once(ctx context.Context, body []byte) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.AttemptTimeout)
 	defer cancel()
+	// A request made while the connection is reconnecting is buffered and waits out its whole
+	// timeout, and one in flight when the connection drops does the same. So the attempt is
+	// not made while the connection is down, and is abandoned the moment it goes down. The
+	// listener is registered BEFORE the status is read, so a drop between the two is seen.
+	down := r.nc.StatusChanged(nats.DISCONNECTED, nats.RECONNECTING, nats.CLOSED)
+	defer r.nc.RemoveStatusListener(down)
+	if !r.nc.IsConnected() {
+		return errKickBrokerDown
+	}
+	var dropped atomic.Bool
+	go func() {
+		select {
+		case _, ok := <-down:
+			if ok {
+				dropped.Store(true)
+				cancel()
+			}
+		case <-ctx.Done():
+		}
+	}()
 	msg, err := r.nc.RequestWithContext(ctx, SessionKickSubject(r.instanceID), body)
+	if err != nil && dropped.Load() {
+		return fmt.Errorf("%w (%v)", errKickBrokerDown, err)
+	}
 	if err != nil {
 		if errors.Is(err, nats.ErrNoResponders) {
 			return errors.New("no service is answering session-kick requests; event-sources needs the NATS " +
