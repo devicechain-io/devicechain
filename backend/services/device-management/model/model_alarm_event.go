@@ -114,6 +114,17 @@ type AlarmStateChangeEvent struct {
 	DeviceTypeToken string
 	// PositionDerived carries the alarm row's verdict; nil means unknown.
 	PositionDerived *bool
+
+	// SuppressedUntil and SuppressionWindowToken are LIVE suppression, evaluated at emission
+	// wall time: the alarm matched the named alarm suppression window, which suppresses it
+	// until SuppressedUntil. A notification consumer holds its page until then and re-checks.
+	// Nil means not suppressed, or that the producer could not tell (evaluation failed, or it
+	// predates these fields), and the consumer then pages as it always did.
+	SuppressedUntil        *time.Time `json:",omitempty"`
+	SuppressionWindowToken string     `json:",omitempty"`
+	// RaisedDuringSuppressionToken is HISTORY, carried on RAISED only: the window the cycle
+	// began under, evaluated at the cycle's event time. It never changes how a page is sent.
+	RaisedDuringSuppressionToken string `json:",omitempty"`
 }
 
 // AlarmEventPublisher publishes alarm state-change events (ADR-041). Emission is

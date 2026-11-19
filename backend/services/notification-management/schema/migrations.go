@@ -35,5 +35,6 @@ var (
 		NewStateSourceSchema(),
 		NewEscalationBaseSchema(),
 		NewPositionDerivedSchema(),
+		NewSuppressionHoldSchema(),
 	}
 )

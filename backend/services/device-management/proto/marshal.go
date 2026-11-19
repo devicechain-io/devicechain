@@ -41,6 +41,12 @@ func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, e
 		DeviceName:      event.DeviceName,
 		DeviceTypeToken: event.DeviceTypeToken,
 		PositionDerived: event.PositionDerived,
+
+		SuppressionWindowToken:       event.SuppressionWindowToken,
+		RaisedDuringSuppressionToken: event.RaisedDuringSuppressionToken,
+	}
+	if event.SuppressedUntil != nil {
+		pbevent.SuppressedUntil = event.SuppressedUntil.Format(time.RFC3339Nano)
 	}
 	if event.PreviousSeverity != "" {
 		ps := event.PreviousSeverity
@@ -91,9 +97,21 @@ func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEven
 		DeviceName:      pbevent.DeviceName,
 		DeviceTypeToken: pbevent.DeviceTypeToken,
 		PositionDerived: pbevent.PositionDerived,
+
+		RaisedDuringSuppressionToken: pbevent.RaisedDuringSuppressionToken,
 	}
 	if pbevent.PreviousSeverity != nil {
 		event.PreviousSeverity = *pbevent.PreviousSeverity
+	}
+	// Live suppression is optional, and decoded leniently: a deadline that does not parse
+	// (or arrives without the window that set it) is read as NOT suppressed, and the event
+	// still decodes. Rejecting the whole event would lose its page, which is the one outcome
+	// a suppression field must never cause.
+	if pbevent.SuppressedUntil != "" && pbevent.SuppressionWindowToken != "" {
+		if until, err := time.Parse(time.RFC3339Nano, pbevent.SuppressedUntil); err == nil {
+			event.SuppressedUntil = &until
+			event.SuppressionWindowToken = pbevent.SuppressionWindowToken
+		}
 	}
 	return event, nil
 }
