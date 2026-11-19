@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-k8s/functionalarea"
 	"github.com/devicechain-io/dc-microservice/config"
@@ -24,6 +25,10 @@ var (
 	brokerPermissionsProfile   string
 	brokerPermissionsAreas     []string
 	brokerPermissionsShared    bool
+	brokerFactsKubeContext     string
+	brokerFactsTenant          string
+	brokerFactsToken           string
+	brokerFactsSince           time.Duration
 )
 
 // brokerCmd is the parent for the message broker's operator commands.
@@ -148,7 +153,47 @@ so their imbalance clears at the next broker roll, or on its own.`,
 	SilenceUsage: true,
 }
 
+// brokerFactsCmd lists the deletion facts the platform announced.
+var brokerFactsCmd = &cobra.Command{
+	Use:   "facts <instance>",
+	Short: "List the deletion facts the platform announced",
+	Long: `List the deletion facts on an instance's message broker: what was announced, and when.
+
+When an entity (a device, an asset, a group, ...) is deleted, device-management announces it on the
+broker so that every service holding a reference to it can remove that reference. This answers "was
+the deletion of X announced, and when?" from the broker itself. For each fact it prints the stream
+sequence, the time the broker stored it, the tenant, the entity's type, id and token, the time it
+was deleted, and the message id the announcement was published under (entdel/<tenant>/<type>/<id>
+deduplicates a re-announcement).
+
+It connects through a port-forward to a broker pod as the broker administrator, and only reads: the
+grant it needs is read-only (it adds no right to delete, purge or publish a message, or to open a
+consumer), and nothing is created on the broker. A fact
+is listed while the stream still holds it, so an old deletion may no longer be there. An instance
+installed or last upgraded by a release without this command has to be upgraded before its broker
+lets the administrator read the facts.`,
+	Example: `  dcctl broker facts devicechain
+  dcctl broker facts devicechain --tenant acme --token sensor-17
+  dcctl broker facts devicechain --since 24h`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return bootstrap.BrokerFacts(cmd.Context(), bootstrap.BrokerFactsOptions{
+			Options: bootstrap.Options{Instance: args[0], KubeContext: brokerFactsKubeContext},
+			Tenant:  brokerFactsTenant,
+			Token:   brokerFactsToken,
+			Since:   brokerFactsSince,
+			Out:     cmd.OutOrStdout(),
+		})
+	},
+	SilenceUsage: true,
+}
+
 func init() {
+	brokerFactsCmd.Flags().StringVar(&brokerFactsKubeContext, "kube-context", "", "kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)")
+	brokerFactsCmd.Flags().StringVar(&brokerFactsTenant, "tenant", "", "list only this tenant's facts (default: every tenant)")
+	brokerFactsCmd.Flags().StringVar(&brokerFactsToken, "token", "", "list only the facts about the entity with this token")
+	brokerFactsCmd.Flags().DurationVar(&brokerFactsSince, "since", 0, "list only the facts stored within this long before now, for example 24h (default: every fact the stream holds)")
+	brokerCmd.AddCommand(brokerFactsCmd)
 	brokerRebalanceCmd.Flags().StringVar(&brokerRebalanceKubeContext, "kube-context", "", "kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)")
 	brokerCmd.AddCommand(brokerRebalanceCmd)
 	brokerReconcileCmd.Flags().StringVar(&brokerReconcileKubeContext, "kube-context", "", "kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)")
