@@ -3,7 +3,13 @@
 
 `dcctl backup <instance> --destination <new-directory>` exports every declared
 checkpoint-preserved platform stream, including empty streams and consumers,
-and `$MQTT_msgs` when present. Missing platform streams fail closed. It resolves
+and `$MQTT_msgs` when present. Missing platform streams fail closed. With
+`infrastructure.nats.shardGroups` deployed, every group stream of a sharded
+stream (`<stream>-g1` .. `-g<count-1>`) is exported like its base stream and the
+layout is recorded as `shard_groups`; a missing or unreadable configured group
+stream, or a group stream on the broker the configuration does not declare,
+fails the export. `restore --plan` lists every group stream and refuses a target
+whose shard-group layout differs from the backup's. It resolves
 the installed instance, broker admin credentials and TLS material exactly as
 `dcctl ha verify` does; `--kube-context` and `--nats-url` select context and an
 optional direct broker connection. The installed broker must have the snapshot
