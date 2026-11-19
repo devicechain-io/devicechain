@@ -197,11 +197,15 @@ func TestS5WatchSamplesUntilTerminalAndRejectsUncoveredStuckRollout(t *testing.T
 			defer status.Close()
 			o := Observations{Clock: Clock{StartedAt: started, DayLength: 24 * time.Minute, StartHour: 6}, Day: 0}
 			_, err := watchS5(context.Background(), Config{SimURL: status.URL, StatusHTTP: status.Client()}, r, &o)
-			if !stuck && err != nil {
+			if err != nil {
 				t.Fatal(err)
 			}
-			if stuck && err == nil {
+			// An uncovered interval loses the samples' own claim, not the day: the sweep still judges.
+			if stuck && o.S5.SampleCoverage == "" {
 				t.Fatal("uncovered seven-minute interval claimed a sample verdict")
+			}
+			if !stuck && o.S5.SampleCoverage != "" {
+				t.Fatalf("covered rollout reported a coverage gap: %s", o.S5.SampleCoverage)
 			}
 			if !o.S5.LiveSampled || len(o.S5.Samples) == 0 {
 				t.Fatal("running rollout was not sampled")
@@ -213,5 +217,29 @@ func TestS5WatchSamplesUntilTerminalAndRejectsUncoveredStuckRollout(t *testing.T
 				t.Fatal("stuck but answering rollout did not fail")
 			}
 		})
+	}
+}
+
+// TestS5GappySamplesStillJudgeOnTheSweep is the live finding from the rig: with every control
+// sim polling at once, the one-second samples had five-second gaps. That must not void the
+// day — the platform's dispatch/terminal sweep is complete evidence — while a sampled value
+// above the cap still fails, gaps or not.
+func TestS5GappySamplesStillJudgeOnTheSweep(t *testing.T) {
+	d := cleanDay()
+	s := d.s5
+	start := time.Now().Add(-time.Minute)
+	s.LiveSampled = true
+	s.Rollout.StartedAt = start.Format(time.RFC3339Nano)
+	s.SampleTo = start.Add(30 * time.Second)
+	s.Samples = []OTASample{{At: start, InFlight: 2}, {At: start.Add(20 * time.Second), InFlight: 1}, {At: start.Add(30 * time.Second), InFlight: 0}}
+	if S5Coverage(s) == nil {
+		t.Fatal("a 20 s gap claimed coverage")
+	}
+	if err := otaConcurrency(Observations{S5: s}); err != nil {
+		t.Fatalf("gappy samples voided a sweep that holds: %v", err)
+	}
+	s.Samples[1].InFlight = 3
+	if otaConcurrency(Observations{S5: s}) == nil {
+		t.Fatal("a sampled inFlight of 3 passed because the samples were gappy")
 	}
 }

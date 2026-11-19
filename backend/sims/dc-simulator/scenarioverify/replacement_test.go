@@ -49,8 +49,13 @@ func TestEachS5ReplacementControlModelsLiveEvidence(t *testing.T) {
 		// Retiring the original gauge and moving its stream also moves its flood
 		// alarm, MQTT bulletins and duty pages. The East-only correlation/webhook
 		// and the acknowledged north-2 control retain their evidence.
-		evaluateRed(t, InvReplacementIdentity, "records", []string{InvFloodEscalates, InvMQTTBulletin, InvNotifyEscalates}, func(d *day) {
+		// The live rig (2026-11-19) also showed both quay-flooding previews answering partially
+		// ("history before the earliest retained event is unavailable") once a second logical
+		// gauge joined the profile mid-day, so the correlation pair is red too.
+		evaluateRed(t, InvReplacementIdentity, "records", []string{InvFloodEscalates, InvMQTTBulletin, InvNotifyEscalates, InvCorrelationFires, InvCorrelationControl}, func(d *day) {
 			old, next := sim.HarborpulseReplacementDevice, sim.HarborpulseReplacementSeparateDevice
+			const partial = "history before the earliest retained event is unavailable; previewing from the earliest retained event"
+			d.corr.Degraded, d.control.Degraded = partial, partial
 			d.s5.Replacement.Records = nil
 			// The new logical device did not exist before the replacement beat.
 			d.s5.Replacement.Readings = d.s5.Replacement.Readings[1:]
@@ -172,5 +177,23 @@ func TestReplacementVerifierDocuments(t *testing.T) {
 		if errs := schema.ValidateWithVariables(doc.q, doc.v); len(errs) > 0 {
 			t.Fatal(errs)
 		}
+	}
+}
+
+// TestReplacementInstantIsComparedAsAnInstant is the live finding from the rig: replaceDevice
+// answers occurredTime with the server clock's nanoseconds and the stored record reads back at
+// the store's microseconds, so the two strings of ONE replacement differ. That is not a second
+// replacement; an instant a whole second away is.
+func TestReplacementInstantIsComparedAsAnInstant(t *testing.T) {
+	d := cleanDay()
+	stored := at(12.5).Add(123456 * time.Microsecond)
+	d.s5.Replacement.Records[0].OccurredTime = stored.Format(time.RFC3339Nano)
+	d.s5.Ledger.Replacement.At = stored.Add(789 * time.Nanosecond).In(time.FixedZone("x", 3600)).Format(time.RFC3339Nano)
+	if err := replacementIdentity(d.observe()); err != nil {
+		t.Fatalf("one replacement at two precisions judged different: %v", err)
+	}
+	d.s5.Ledger.Replacement.At = stored.Add(time.Second).Format(time.RFC3339Nano)
+	if replacementIdentity(d.observe()) == nil {
+		t.Fatal("a declared instant a second away passed")
 	}
 }

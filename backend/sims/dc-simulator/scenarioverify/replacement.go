@@ -61,12 +61,24 @@ func replacementIdentity(o Observations) error {
 		return fmt.Errorf("replacement records for this run=%d, want exactly one", len(s.Records))
 	}
 	r := s.Records[0]
-	if r.Device != *s.Device || r.UnitIdentifier != sim.HarborpulseReplacementUnit(o.S3.Seed) || l.Device != s.Device.Token || l.UnitIdentifier != r.UnitIdentifier || l.At != r.OccurredTime {
-		return fmt.Errorf("replacement identity or unitIdentifier differs")
+	switch {
+	case r.Device != *s.Device:
+		return fmt.Errorf("the replacement record names device %+v, the logical gauge is %+v", r.Device, *s.Device)
+	case r.UnitIdentifier != sim.HarborpulseReplacementUnit(o.S3.Seed) || l.UnitIdentifier != r.UnitIdentifier:
+		return fmt.Errorf("replacement unitIdentifier %q (declared %q)", r.UnitIdentifier, l.UnitIdentifier)
+	case l.Device != s.Device.Token:
+		return fmt.Errorf("the run declared replacing %s, not %s", l.Device, s.Device.Token)
+	}
+	// The instant is compared as an instant: the mutation's answer carries the server clock's
+	// precision and the stored record the store's (microseconds, rounded), so the two strings
+	// of one replacement can differ in their last digits — a live run showed it.
+	at, err := time.Parse(time.RFC3339Nano, r.OccurredTime)
+	declared, derr := time.Parse(time.RFC3339Nano, l.At)
+	if err != nil || derr != nil || at.Sub(declared).Abs() > time.Millisecond {
+		return fmt.Errorf("replacement occurredTime %q is not the declared %q", r.OccurredTime, l.At)
 	}
 	beat := o.Clock.At(0, sim.HarborpulseReplacementHour)
-	at, err := time.Parse(time.RFC3339Nano, r.OccurredTime)
-	if err != nil || at.Before(beat) || at.After(beat.Add(30*time.Second)) {
+	if at.Before(beat) || at.After(beat.Add(30*time.Second)) {
 		return fmt.Errorf("replacement outside its scheduled beat")
 	}
 	// Every half simulated hour through the judged watch must retain readings under

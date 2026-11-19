@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/devicechain-io/dc-simulator/sim"
 )
 
@@ -24,6 +26,10 @@ type S5 struct {
 	Samples              []OTASample
 	LiveSampled          bool // false when the rollout completed before this watch
 	SampleFrom, SampleTo time.Time
+	// SampleCoverage is why the live samples cannot claim the bound on their own (a poll gap
+	// under load, a missed beginning or end), empty when they can. The platform timeline sweep
+	// still judges ota-concurrency; a sample above the cap is a violation whatever the coverage.
+	SampleCoverage string
 }
 
 type OTASigner struct{ Token, KeyID, State string }
@@ -295,7 +301,10 @@ func watchS5(ctx context.Context, cfg Config, r *Reader, o *Observations) (*sim.
 		}
 	}
 	if err := S5Coverage(o.S5); err != nil {
-		return nil, err
+		// Not a void day: the sweep over the platform's own dispatch and terminal instants is
+		// complete evidence, so sparse samples only lose their own claim (never invent one).
+		o.S5.SampleCoverage = err.Error()
+		log.Warn().Err(err).Msg("OTA live samples do not cover the rollout; ota-concurrency rests on the platform timeline")
 	}
 	return last, nil
 }

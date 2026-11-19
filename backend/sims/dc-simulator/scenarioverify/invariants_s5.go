@@ -348,9 +348,8 @@ func otaConcurrency(o Observations) error {
 	if peak != 2 {
 		return fmt.Errorf("platform dispatch timeline peaked at %d, want exactly 2", peak)
 	}
-	if err := S5Coverage(s); err != nil {
-		return err
-	} // Run promotes unavailable sample coverage to no verdict
+	// Every sample is checked whatever the coverage: one reading above the cap is positive
+	// evidence. Coverage only decides whether the samples ALSO claim the bound (S5Coverage).
 	for _, sample := range s.Samples {
 		if sample.InFlight < 0 || sample.InFlight > 2 {
 			return fmt.Errorf("live progress.inFlight=%d at %s", sample.InFlight, sample.At.Format(time.RFC3339Nano))
