@@ -8,6 +8,11 @@ title: Versiones y actualizaciones
 # Un comentario en un bloque no es un encabezado.
 ```
 
+## Líneas de versiones {#release-lines}
+
+- **[v1.7](#v170-upgrade)**: [v1.7.0](#v170-upgrade)
+- **[v1.6](#v160-upgrade)**: [v1.6.0](#v160-upgrade)
+
 ## Versiones recientes {#recent-releases}
 
 ### v1.7.0 — en desarrollo {#v170-upgrade}
@@ -29,3 +34,7 @@ title: Versiones y actualizaciones
 #### Antes de actualizar a v1.6.0 {#v160-before-upgrade}
 
 - Sin cambios.
+
+## Versiones anteriores {#older-releases}
+
+### v1.5.0 — un resumen {#v150-upgrade}

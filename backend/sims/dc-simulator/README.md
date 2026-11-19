@@ -579,7 +579,8 @@ plays one **compressed day** on a loop, 24 sim hours in 24 minutes, starting at 
 | Sim time | What happens | What the platform does |
 | --- | --- | --- |
 | 08:30-09:45 | The Ferry Terminal's demand passes its cap | `hp-peak-demand` (1-minute sliding average) raises MINOR |
-| 11:00-12:00 | One East Quay lamp's driver reports intermittent faults | `hp-lamp-flicker` (repeating, 3 in a minute) raises MINOR |
+| 10:45-11:30 | East Quay lamp driver replacement on `hp-light-east-3` | A ONE_SHOT alarm suppression window holds its `lamp-flicker` page until service ends |
+| 11:00-12:00 | East Quay and North Quay lamps report intermittent faults, with one off reading at 11:20 | `hp-lamp-flicker` (repeating, 3 in a wall minute) raises MAJOR near 11:10; North Quay pages promptly and East Quay pages after 11:30 |
 | 14:00-15:30 | A Basin charger's connector overheats | `hp-connector-hot` (sliding average) raises MAJOR and sends `derate {max_kw: 11}`; the charger obeys and cools |
 | 17:00-18:30 | Storm surge: every gauge rises fast | `hp-surge-rising` (rate of change) raises WARNING |
 | 17:00-21:00 | The king tide and the surge | three thresholds share the alarm key `flood-level`: each gauge's ONE alarm escalates MINOR to MAJOR, and to CRITICAL on East Quay only, then eases |
@@ -599,7 +600,16 @@ threshold, window, hold, count and timeout, with the commands obeyed and, as a c
 
 Each pump's `well_fill_pct` is a **calculated metric**, its wet well level over the well's depth,
 a constant (`well_depth_m`, 4 m) the pump carries. A calculated metric needs a tier that allows
-one, so `dcctl sim create --manifest harborpulse` packages the tenant at the tier `hp-showcase`.
+one, so `dcctl sim create --manifest harborpulse` packages the tenant at `hp-governed`:
+one calculated metric per profile, 40 ingest readings per second and a burst of 256.
+Ordinary five-second ticks fit with at least 25% rate headroom. Each East Quay charger
+logs 90 outage entries at outage-duration/90 (one second at the default day), independent
+of the emit interval. The restore offers 720 metric readings against the limiter's
+effective burst of 256 and catches up in about a minute. The verifier allows twice
+the drain time at the tier's net headroom plus two ticks (about 96 seconds); the log
+size and deadline remain valid at a 24-hour day. Offered/accepted ledger counters count entries.
+A manually created sim must be packaged at this governed tier for a clean verifier verdict.
+Tier convergence raises floors only: use a fresh tier/tenant if an existing tier has higher ceilings.
 
 The **LoRaWAN gauges** (`hp-lora-gauge-north`, `-east`, `-basin` and `hp-legacy-gauge-basin`)
 initially send one uplink each per tick through the ChirpStack v4 integration `hp-chirpstack`, a raw frame
@@ -618,7 +628,9 @@ needs the sink's ClusterIP allowed (`dcctl bootstrap|upgrade --dev-allow-egress 
 cluster) and the `outbound-connectors` area (`--enable-area outbound-connectors`). Without them the
 scenario still provisions and runs, and every delivery is refused rather than sent. A handshake
 written by an older dcctl lacks the outbound-connectors, notification and integration endpoints and
-is refused at bootstrap: re-create the sim.
+is refused at bootstrap: re-create the sim. Older records missing only the update-management
+endpoint derive it from the chart's `/api/device-management/graphql` route; custom
+device-management routes must supply `updateMgmtGraphQL` explicitly.
 
 **Fleet operations.** The district is also run as a fleet:
 
@@ -637,7 +649,17 @@ is refused at bootstrap: re-create the sim.
 - **Maintenance window.** `flush-well` is DISRUPTIVE, and the pump controllers' type carries the
   window `hp-pump-service-window`, so the 14:00 flush is held until the crew's slot opens at 15:00
   and runs inside it. The window gates when a disruptive command may START; it does not silence
-  alarms (the platform has no alarm-suppression window).
+  alarms. The separate alarm suppression window below holds pages.
+- **Lamp maintenance.** Before sim 10:45, each day's `hp-lamp-service-<run>-d<day>` ONE_SHOT
+  window is created over `hp-light-east-3`, for `lamp-flicker` only, named "East Quay
+  lamp driver replacement". Its exact wall instants correspond to sim 10:45 and 11:30, without
+  minute rounding. Alarms continue tracking the fault. The held page is released by the
+  notification scheduler after 11:30 while the alarm remains active; `hp-light-north-3` has the
+  identical fault and pages at once. `/status` lists the window and device in `scenario.jobs`.
+  `maintenance-holds-page` judges the platform's cycle stamp, attempts and optional sink mail;
+  `maintenance-control-pages` proves the unwindowed lamp pages promptly and fails the hold check.
+  `--scenario-defect suppression-wrong-device` aims the window at `hp-light-east-2`, which never
+  flickers, and turns exactly `maintenance-holds-page` red because east-3 pages early.
 - **Hierarchy and graph.** Assets `hp-waterfront` > one site per quay > its pump station, its
   feeder and its buildings (`hp-bldg-quayside-lofts` on North Quay, `hp-bldg-ferry-terminal` on the
   Basin). The customer meters are assigned to their buildings and the pumps to their stations. A
@@ -645,7 +667,9 @@ is refused at bootstrap: re-create the sim.
   graph names the East Quay outage's blast radius before it happens.
 
 🔴 **Real time is not compressed.** A campaign trigger and a maintenance window are wall-clock
-schedules, at a resolution of one minute. The CALENDAR jobs and the window's slot are written as
+schedules. Campaign triggers and command-maintenance slots have a resolution of one minute;
+alarm suppression ONE_SHOT windows accept exact instants. The CALENDAR jobs and the window's
+slot are written as
 each sim day runs, at the first whole wall minute after their sim time (a sim hour is a wall minute
 at the default day), and `/status` lists them under `scenario.jobs`. Real sunset and sunrise cannot
 happen inside a 24-minute day: the SOLAR campaigns fire at the real dusk and dawn of wherever the
@@ -704,6 +728,8 @@ alarm ten seconds after it reaches MAJOR, as the escalation's control.
 | `solar-wave` | for the dusk and dawn campaigns, every lamp's planned instant is the sunset (sunrise) at the position the platform holds for it, and the lamps run east to west | `--scenario-defect lamp-unsited` (one lamp has no position: NO_SITE) |
 | `holiday-skipped` | the dusk campaign declares the day after it was created a holiday, has planned past it, and planned no cycle for it, while the dawn campaign planned it | `--scenario-defect holiday-dropped` |
 | `window-holds-flush` | the day's `flush-well` was queued at 14:00, carries the pump window, was sent only once the window opened and before it closed, and succeeded | `--scenario-defect flush-ungated` (the pump type has no window) |
+| `maintenance-holds-page` | East Quay lamp-flicker was raised under the exact lamp-service window, sent no early page, and released a page after the window ended; optional sink mail agrees | `--scenario-defect suppression-wrong-device` (window targets the neighbouring lamp) |
+| `maintenance-control-pages` | the identical North Quay flicker has no suppression stamp, pages promptly before the window ends, and fails the same hold check | the unwindowed North Quay lamp is the control of `maintenance-holds-page` |
 | `asset-hierarchy` | each meter is assigned to its building and each pump to its station, each under its own quay's site under the waterfront | `--scenario-defect lofts-under-basin` |
 | `feeder-blast-radius` | each feeder feeds exactly its quay's lights and chargers, and every device the failed feeder feeds went silent in the outage | `--scenario-defect feeder-miswired` (one East Quay lamp on the North Quay feeder) |
 
@@ -714,8 +740,51 @@ as omitted. `hack/harborpulse-rig.sh` runs the clean day and every planted defec
 on a cluster of its own and fails if the clean day is not green or a control does not turn its own
 invariant red. The defects exist only for that: never run a demonstration with one.
 
-The features the scenario does not drive yet (groups, campaigns, OTA, MQTT and X.509 devices,
-desired configuration) are planned follow-ups.
+### Harborpulse signed rollout, governed restore and replacement (S5)
+
+The handshake includes optional `endpoints.updateMgmtGraphQL`. Older records derive it
+from the chart's `/api/device-management/graphql` endpoint; custom routes require an explicit URL. The default local
+instance provides update-management, an object store and downloads. The scenario owns six
+charger update clients; combining it with `--ota` fails bootstrap.
+
+Before its first tick, harborpulse uploads a deterministic 48 KiB synthetic firmware payload,
+signs it with a process-local ECDSA key, and waits for AVAILABLE/SIGNED and the clients' broker
+subscriptions. This demonstrates a version change from 2.4.0 to 2.4.1, using synthetic bytes.
+At day 0 12:30 it replaces the physical unit behind `hp-gauge-north-3` for water ingress:
+the token and `PAW-GAUGE-NORTH-3` external ID survive, its old credential is retired, and the
+once-returned new credential is installed before telemetry and its command subscription resume.
+Reset keeps that credential in this process. A fresh process cannot recover it and fails that
+gauge loudly. `/status` records credential tokens only, never access tokens or private keys.
+
+At every 21:15 restore, a bounded queue sends the East chargers' original timestamps and values.
+It keeps refused/ambiguous entries, honours Retry-After, waits for the next completed ordinary
+tick, and records a loud dead letter on bounded retry exhaustion. At day 0 26:00 (02:00 the next
+night), it starts one rollout over `hp-all-chargers`, with maxInFlight=2 and failureThreshold=2.
+North-1 deliberately fails verification; the other five chargers update. This rollout and the
+physical replacement happen once per run, rather than daily.
+
+The verifier reads platform truth for eight S5 invariants:
+
+| Invariant | Planted defect |
+| --- | --- |
+| `ota-artifact-trusted` | `ota-signature-omitted` |
+| `ota-targets-exact` | `ota-group-missing-charger` |
+| `ota-concurrency` | `ota-cap-three` |
+| `ota-outcomes` | `ota-failure-disabled` |
+| `burst-rate-limited` | `burst-unthrottled` (rig packages this control at `hp-showcase`) |
+| `burst-caught-up` | `burst-drop-on-429` |
+| `replacement-identity` | `replacement-new-device` |
+| `replacement-credential` | `replacement-old-credential-left-live` |
+
+The watch continues through the following night's rollout, sampling in-flight counts each
+second. Historical completed rollouts use their complete platform dispatch/terminal timeline;
+missing live coverage produces no verdict. Replacement checks read the operation history,
+credential states and stored readings, and send a battery-only probe through the real ingress
+with the original credential (401 required; 429 retried). The left-live control's accepted
+probe is also read back from storage. An unsigned artifact is refused, so that control also
+fails targets, concurrency and outcomes. Moving the gauge to a separate logical device also
+fails flood escalation, MQTT bulletins and notification escalation, which require the original
+gauge identity. Offline fixtures explicitly model those unavoidable collateral failures.
 
 ### Harborpulse shared thresholds, downlinks and calculated backfill (S3b)
 

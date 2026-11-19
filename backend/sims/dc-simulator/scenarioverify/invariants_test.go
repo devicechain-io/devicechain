@@ -66,6 +66,8 @@ type day struct {
 	backfill []Backfill
 	s3       S3
 	s4       S4
+	s5       S5
+	maint    Maintenance
 	// gaps are spans, by alarm token, in which the alarm is cleared and then reactivated under the
 	// same token, as the platform does.
 	gaps map[string][][2]float64
@@ -119,6 +121,8 @@ func cleanDay() *day {
 	d.control = Preview{OK: true}
 	d.cleanS3()
 	d.cleanS4()
+	d.cleanS5()
+	d.cleanMaintenance()
 	return d
 }
 
@@ -142,8 +146,8 @@ func (d *day) pumpStarted(p string, h float64) {
 }
 
 func backfillOf(device string) Backfill {
-	b := Backfill{Device: device, First: at(19.75).Add(time.Second)}
-	for t := b.First; t.Before(at(21.25)); t = t.Add(5 * time.Second) {
+	b := Backfill{Device: device, First: at(19.75)}
+	for t := b.First; t.Before(at(21.25)); t = t.Add(at(21.25).Sub(at(19.75)) / 90) {
 		b.Buffered++
 		b.Last = t
 		b.Taken = append(b.Taken, t)
@@ -154,7 +158,7 @@ func backfillOf(device string) Backfill {
 
 func (d *day) observe() Observations {
 	o := Observations{Clock: testClock, Day: 0, Commands: d.commands, Readings: d.readings,
-		Correlation: d.corr, CorrelationControl: d.control, Backfill: d.backfill, S3: d.s3, S4: d.s4}
+		Correlation: d.corr, CorrelationControl: d.control, Backfill: d.backfill, S3: d.s3, S4: d.s4, S5: d.s5, Maint: d.maint}
 	for t := at(WatchFrom); !t.After(at(WatchTo).Add(20 * time.Second)); t = t.Add(2 * time.Second) {
 		o.Polls = append(o.Polls, t)
 		for _, l := range d.alarms {
@@ -335,17 +339,26 @@ func TestEachControlTurnsExactlyItsInvariantRed(t *testing.T) {
 				for i := range d.backfill {
 					st := d.backfill[i].Stored
 					for j := 1; j < len(st)-1; j++ {
-						st[j] = st[j].Add(time.Second)
+						if !restoreRefused(d.observe(), d.backfill[i].Device)[st[j].UnixMicro()] {
+							st[j] = st[j].Add(time.Microsecond)
+						}
 					}
 				}
 			},
 		},
 		{
 			name: "backfill stamped with its arrival time", defect: "(none: the platform defect the check exists for)", want: InvBackfillStored,
-			because: "0 stored",
+			because: "missing",
 			mutate: func(d *day) {
 				for i := range d.backfill {
-					d.backfill[i].Stored = []time.Time{at(21.3)}
+					b := &d.backfill[i]
+					var kept []time.Time
+					for _, stamp := range b.Stored {
+						if restoreRefused(d.observe(), b.Device)[stamp.UnixMicro()] {
+							kept = append(kept, stamp)
+						}
+					}
+					b.Stored = append(kept, at(21.3))
 				}
 			},
 		},
@@ -404,7 +417,7 @@ func TestEveryNamedDefectIsOneTheSimulatorKnows(t *testing.T) {
 	}
 	for inv, ctl := range Controls {
 		if inv == InvCorrelationFires || inv == InvCorrelationControl || inv == InvWebhookControl ||
-			inv == InvNotifyEscalates || inv == InvNotifyAckControl {
+			inv == InvNotifyEscalates || inv == InvNotifyAckControl || inv == InvMaintenanceControlPages {
 			continue // their controls are run by the verifier itself, in the same day
 		}
 		for _, c := range strings.Split(ctl, ",") {

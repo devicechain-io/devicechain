@@ -53,9 +53,9 @@ func (m Manifest) validateDisabledStreams() error {
 		return err
 	}
 	allowed, present := map[string]bool{}, map[string]bool{}
-	for _, item := range backupset.Items() {
-		if item.Kind == backupset.KindStream && preserved(item) && !streamEnabled(item.Name, m.EnabledAreas) {
-			_, name := resource(item, m.Instance)
+	for _, t := range inventory(m.ShardGroups) {
+		if t.item.Kind == backupset.KindStream && preserved(t.item) && !streamEnabled(t.item.Name, m.EnabledAreas) {
+			_, name := t.resource(m.Instance)
 			allowed[name] = true
 		}
 	}

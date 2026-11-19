@@ -228,7 +228,12 @@ func TestAlarmSuppressionWireAuthorityMatrix(t *testing.T) {
 				if strings.HasPrefix(op, "end") {
 					selection = "{token}"
 				}
-				suppressionRefused(t, serve(t, narrow, fmt.Sprintf("mutation{%s(token:%q)%s}", op, token, selection), nil), "FORBIDDEN")
+				response := serve(t, narrow, fmt.Sprintf("mutation{%s(token:%q)%s}", op, token, selection), nil)
+				if strings.HasPrefix(op, "end") {
+					requireServed(t, response, "alarm:write can end a broad visible window")
+				} else {
+					suppressionRefused(t, response, "FORBIDDEN")
+				}
 			}
 		})
 	}

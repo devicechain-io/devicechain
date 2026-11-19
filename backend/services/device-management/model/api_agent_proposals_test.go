@@ -94,7 +94,7 @@ func newProposalRig(t *testing.T) *proposalRig {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&Alarm{}, &AgentProposal{}, &AgentActuationFence{}, &AgentEffectOutbox{}, &rdb.AuditEvent{}))
+	require.NoError(t, db.AutoMigrate(&Alarm{}, &PendingAlarmEvent{}, &AgentProposal{}, &AgentActuationFence{}, &AgentEffectOutbox{}, &rdb.AuditEvent{}))
 	require.NoError(t, rdb.RegisterAuditJournal(db))
 	d := &fakeDecider{act: approveOne()}
 	api := NewApi(&rdb.RdbManager{Database: db})

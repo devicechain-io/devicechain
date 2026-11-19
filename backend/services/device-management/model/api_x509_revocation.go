@@ -11,17 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"gorm.io/gorm"
 )
-
-// MaxManualRevocationsPerTenant is the default bound on the manual revocation entries one tenant
-// holds (RevocationLimits.MaxManualEntriesPerTenant, fixed configuration
-// callout.revocation.maxManualEntriesPerTenant).
-const MaxManualRevocationsPerTenant = 100_000
 
 // maxRevocationLookupKeys bounds the identities one connect asks about. A verified path holds at
 // most x509trust.MaxPresentedCerts certificates, and a device can steer only how many verified
@@ -191,113 +187,6 @@ func recheckRevocationLocked(tx *gorm.DB, tenant string, anchor *DeviceTrustAnch
 
 // ─── manual revocation ──────────────────────────────────────────────────────
 
-// DeviceCertificateRevokeRequest revokes one certificate by DeviceChain's own word.
-type DeviceCertificateRevokeRequest struct {
-	AnchorToken string
-	// CertificatePem or FingerprintSha256, exactly one. With a certificate the fingerprint is
-	// computed. The certificate may be a leaf or an intermediate, registered or not.
-	CertificatePem    *string
-	FingerprintSha256 *string
-	// Reason is the GraphQL enum name; nil is UNSPECIFIED.
-	Reason *string
-}
-
-// DeviceRevokedCertificateSearchCriteria is the search of a revocation store's entries.
-type DeviceRevokedCertificateSearchCriteria struct {
-	rdb.Pagination
-	// Kind restricts to MANUAL or CRL entries.
-	Kind *string
-}
-
-// DeviceRevokedCertificateSearchResults is a page of revoked certificates.
-type DeviceRevokedCertificateSearchResults struct {
-	Results    []DeviceRevokedCertificate
-	Pagination rdb.SearchResultsPagination
-}
-
-// DefaultOrder implements rdb.Sortable: newest first, id as the unique tiebreak.
-func (DeviceRevokedCertificate) DefaultOrder() string {
-	return "device_revoked_certificates.revoked_at DESC, device_revoked_certificates.id DESC"
-}
-
-var revocationReasonNames = map[string]x509trust.RevocationReason{
-	"UNSPECIFIED":            x509trust.RevocationUnspecified,
-	"KEY_COMPROMISE":         x509trust.RevocationKeyCompromise,
-	"CA_COMPROMISE":          x509trust.RevocationCACompromise,
-	"AFFILIATION_CHANGED":    x509trust.RevocationAffiliationChanged,
-	"SUPERSEDED":             x509trust.RevocationSuperseded,
-	"CESSATION_OF_OPERATION": x509trust.RevocationCessationOfOperation,
-	"CERTIFICATE_HOLD":       x509trust.RevocationCertificateHold,
-	"PRIVILEGE_WITHDRAWN":    x509trust.RevocationPrivilegeWithdrawn,
-	"AA_COMPROMISE":          x509trust.RevocationAACompromise,
-}
-
-// RevocationReasonFromEnum maps the GraphQL enum name to the stored reason; ok is false for a
-// name outside the vocabulary.
-func RevocationReasonFromEnum(name string) (x509trust.RevocationReason, bool) {
-	r, ok := revocationReasonNames[name]
-	return r, ok
-}
-
-// RevocationReasonEnum is the GraphQL enum name of a stored reason. A stored value outside the
-// vocabulary reads as UNSPECIFIED rather than failing a listing.
-func RevocationReasonEnum(reason string) string {
-	for name, r := range revocationReasonNames {
-		if string(r) == reason {
-			return name
-		}
-	}
-	return "UNSPECIFIED"
-}
-
-// validFingerprint is whether s is the lowercase hex of a SHA-256.
-func validFingerprint(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for _, c := range s {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return false
-		}
-	}
-	return true
-}
-
-// revokeFingerprint is the fingerprint a revoke names: exactly one of a certificate and a
-// fingerprint, the certificate parsed and hashed.
-func revokeFingerprint(req *DeviceCertificateRevokeRequest) (string, error) {
-	hasCert := req.CertificatePem != nil && strings.TrimSpace(*req.CertificatePem) != ""
-	hasFp := req.FingerprintSha256 != nil && strings.TrimSpace(*req.FingerprintSha256) != ""
-	switch {
-	case hasCert == hasFp:
-		return "", invalidAnchor("name the certificate to revoke with exactly one of certificatePem and fingerprintSha256")
-	case hasFp:
-		fp := strings.ToLower(strings.TrimSpace(*req.FingerprintSha256))
-		if !validFingerprint(fp) {
-			return "", invalidAnchor("fingerprintSha256 must be 64 hexadecimal characters")
-		}
-		return fp, nil
-	}
-	_, certs, err := x509trust.ParseCertificates(*req.CertificatePem)
-	if err != nil {
-		return "", invalidAnchor("certificatePem: %v", err)
-	}
-	if len(certs) != 1 {
-		return "", invalidAnchor("certificatePem must hold exactly one certificate")
-	}
-	return x509trust.Fingerprint(certs[0]), nil
-}
-
-// revokesACA is whether the revoke names a certificate (PEM) that is a CA. A bare fingerprint says
-// nothing about what it fingerprints, so it is not.
-func revokesACA(req *DeviceCertificateRevokeRequest) bool {
-	if req.CertificatePem == nil || strings.TrimSpace(*req.CertificatePem) == "" {
-		return false
-	}
-	_, certs, err := x509trust.ParseCertificates(*req.CertificatePem)
-	return err == nil && len(certs) == 1 && certs[0].BasicConstraintsValid && certs[0].IsCA
-}
-
 // bumpRevocationRows adds delta to the anchor's revocation_rows counter. The caller holds the
 // anchor FOR UPDATE.
 func bumpRevocationRows(tx *gorm.DB, anchorId uint, delta int64) error {
@@ -328,23 +217,23 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 	if err != nil {
 		return nil, err
 	}
-	fp, err := revokeFingerprint(req)
+	fp, err := identity.RevokeFingerprint(req)
 	if err != nil {
 		return nil, err
 	}
-	isCA := revokesACA(req)
+	isCA := identity.RevokesACA(req)
 	bareFingerprint := req.CertificatePem == nil || strings.TrimSpace(*req.CertificatePem) == ""
 	reason := x509trust.RevocationUnspecified
 	if req.Reason != nil {
 		r, ok := RevocationReasonFromEnum(*req.Reason)
 		if !ok {
-			return nil, invalidAnchor("reason %q is not a certificate revocation reason", *req.Reason)
+			return nil, identity.InvalidAnchor("reason %q is not a certificate revocation reason", *req.Reason)
 		}
 		reason = r
 	}
 	token := strings.TrimSpace(req.AnchorToken)
 	if token == "" {
-		return nil, invalidAnchor("anchorToken is required")
+		return nil, identity.InvalidAnchor("anchorToken is required")
 	}
 	// The credentials recorded before chain links existed get their depth-0 link now, so the
 	// session targeting below finds them (see prepareRevocationKicks).
@@ -365,7 +254,7 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 		}
 		anchorId = anchor.ID
 		if fp == anchor.FingerprintSha256 {
-			return invalidAnchor("that is the trust anchor's own certificate; disable the anchor instead")
+			return identity.InvalidAnchor("that is the trust anchor's own certificate; disable the anchor instead")
 		}
 		if err := refuseIfEnforcedUnderOtherAnchors(tx, tenant, anchor, fp); err != nil {
 			return err
@@ -499,12 +388,12 @@ func (api *Api) UnrevokeDeviceCertificate(ctx context.Context, anchorToken, fing
 		return false, err
 	}
 	fp := strings.ToLower(strings.TrimSpace(fingerprint))
-	if !validFingerprint(fp) {
-		return false, invalidAnchor("fingerprintSha256 must be 64 hexadecimal characters")
+	if !identity.ValidFingerprint(fp) {
+		return false, identity.InvalidAnchor("fingerprintSha256 must be 64 hexadecimal characters")
 	}
 	token := strings.TrimSpace(anchorToken)
 	if token == "" {
-		return false, invalidAnchor("anchorToken is required")
+		return false, identity.InvalidAnchor("anchorToken is required")
 	}
 	removed := false
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -552,7 +441,7 @@ func (api *Api) DeviceRevokedCertificates(ctx context.Context, anchorToken strin
 		return nil, err
 	}
 	if criteria.Kind != nil && *criteria.Kind != RevokedKindManual && *criteria.Kind != RevokedKindCRL {
-		return nil, invalidAnchor("kind must be %s or %s", RevokedKindManual, RevokedKindCRL)
+		return nil, identity.InvalidAnchor("kind must be %s or %s", RevokedKindManual, RevokedKindCRL)
 	}
 	results := make([]DeviceRevokedCertificate, 0)
 	db, pag := api.RDB.ListOf(ctx, &DeviceRevokedCertificate{}, func(result *gorm.DB) *gorm.DB {
@@ -628,6 +517,6 @@ func refuseIfEnforcedUnderOtherAnchors(tx *gorm.DB, tenant string, anchor *Devic
 	for _, a := range anchors {
 		tokens = append(tokens, strconv.Quote(a.Token))
 	}
-	return invalidAnchor("this certificate is used under trust anchor(s) %s, not under %q, and a revocation is enforced only "+
+	return identity.InvalidAnchor("this certificate is used under trust anchor(s) %s, not under %q, and a revocation is enforced only "+
 		"under the anchor it is recorded for; revoke it under %s", strings.Join(tokens, ", "), anchor.Token, strings.Join(tokens, " or "))
 }

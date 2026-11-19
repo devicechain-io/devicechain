@@ -8,6 +8,11 @@ title: Releases & Upgrades
 # A comment in a fence is not a heading.
 ```
 
+## Release lines {#release-lines}
+
+- **[v1.7](#v170-upgrade)**: [v1.7.0](#v170-upgrade)
+- **[v1.6](#v160-upgrade)**: [v1.6.0](#v160-upgrade)
+
 ## Recent releases {#recent-releases}
 
 ### v1.7.0 — in development {#v170-upgrade}
@@ -29,3 +34,7 @@ title: Releases & Upgrades
 #### Before you upgrade to v1.6.0 {#v160-before-upgrade}
 
 - Untouched.
+
+## Older releases {#older-releases}
+
+### v1.5.0 — a stub {#v150-upgrade}

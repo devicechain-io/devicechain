@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/stretchr/testify/assert"
@@ -261,9 +262,9 @@ func TestCredentialTypeVocabulary(t *testing.T) {
 
 // X509Info is nil for anything that is not a readable certificate credential, never a made-up one.
 func TestX509InfoIsNilWithoutACertificate(t *testing.T) {
-	assert.Nil(t, (&DeviceCredential{CredentialType: string(CredentialAccessToken)}).X509Info())
-	assert.Nil(t, (&DeviceCredential{CredentialType: string(CredentialX509Certificate)}).X509Info())
-	bad := &DeviceCredential{CredentialType: string(CredentialX509Certificate)}
+	assert.Nil(t, (&DeviceCredential{DeviceCredential: identity.DeviceCredential{CredentialType: string(CredentialAccessToken)}}).X509Info())
+	assert.Nil(t, (&DeviceCredential{DeviceCredential: identity.DeviceCredential{CredentialType: string(CredentialX509Certificate)}}).X509Info())
+	bad := &DeviceCredential{DeviceCredential: identity.DeviceCredential{CredentialType: string(CredentialX509Certificate)}}
 	bad.CertificatePem.String, bad.CertificatePem.Valid = "-----BEGIN CERTIFICATE-----\n!!\n-----END CERTIFICATE-----\n", true
 	assert.Nil(t, bad.X509Info())
 }

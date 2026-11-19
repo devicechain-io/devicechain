@@ -231,13 +231,184 @@ class RefusalTest(Base):
             f.write(text.encode("utf-8"))
         with self.assertRaises(arn.Refusal) as ctx:
             arn.check(self.root)
-        self.assertIn("{#v170-whats-new}", str(ctx.exception))
+        self.assertIn("no in-development section", str(ctx.exception))
 
     def test_missing_fragment_directory(self):
         shutil.rmtree(self.frags)
         with self.assertRaises(arn.Refusal) as ctx:
             arn.check(self.root)
         self.assertIn("fragment directory not found", str(ctx.exception))
+
+
+class LayoutTest(Base):
+    """The page layout --check holds, and --open-line, which keeps it."""
+
+    def text(self, locale="en"):
+        return read_bytes(arn.page_path(self.root, locale)).decode("utf-8").lstrip("﻿")
+
+    def edit(self, old, new, locales=arn.LOCALES):
+        for locale in locales:
+            path = arn.page_path(self.root, locale)
+            data = read_bytes(path).decode("utf-8")
+            self.assertIn(old, data)
+            with open(path, "wb") as f:
+                f.write(data.replace(old, new, 1).encode("utf-8"))
+
+    def freeze(self, versions, anchors=None):
+        with open(os.path.join(self.root, "docs", "versions.json"), "w", encoding="utf-8") as f:
+            f.write("[" + ", ".join(f'"{v}"' for v in versions) + "]")
+        for v in versions:
+            anchor = (anchors or {}).get(v, "v%s0-upgrade" % v.replace(".", ""))
+            for locale in arn.LOCALES:
+                path = (os.path.join(self.root, "docs", "versioned_docs", f"version-{v}",
+                                     arn.PAGE_REL) if locale == "en" else
+                        os.path.join(self.root, "docs", "i18n", locale,
+                                     "docusaurus-plugin-content-docs", f"version-{v}", arn.PAGE_REL))
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(f"### v{v}.0 {{#{anchor}}}\n")
+
+    def test_open_minor_adds_a_line_without_retiring_below_three(self):
+        arn.open_line(self.root, "v1.8.0")
+        en = self.text()
+        self.assertIn("- **[v1.8](#v180-upgrade)**: [v1.8.0](#v180-upgrade)\n"
+                      "- **[v1.7](#v170-upgrade)**", en)
+        self.assertLess(en.index("{#v180-upgrade}"), en.index("{#v170-upgrade}"))
+        fragments, pages = arn.check(self.root)
+        self.assertEqual({p.prefix for p in pages}, {"v180"})
+        self.assertIn("{#v180-whats-new}", self.text("zh-CN"))
+        self.assertTrue(read_bytes(arn.page_path(self.root, "es")).startswith(arn.BOM))
+
+    def test_open_minor_stubs_the_fourth_line_keeping_its_anchors(self):
+        self.freeze(["1.7", "1.6"])
+        arn.open_line(self.root, "v1.8.0")
+        before = {l: self.text(l) for l in arn.LOCALES}
+        arn.open_line(self.root, "v1.9.0")
+        for locale in arn.LOCALES:
+            text = self.text(locale)
+            self.assertEqual(arn.anchors_lost(before[locale], text), [])
+            recent = text[text.index("{#recent-releases}"):text.index("{#older-releases}")]
+            older = text[text.index("{#older-releases}"):]
+            self.assertNotIn("v160", recent)
+            self.assertNotIn("v1.6", text[:text.index("{#recent-releases}")])
+            self.assertIn('<a id="v160-before-upgrade"></a>', older)
+            self.assertIn("(/1.6/deployment/releases-and-upgrades#v160-upgrade)", older)
+            self.assertIn("[v1.6.0](https://github.com/devicechain-io/devicechain/releases/tag/"
+                          "v1.6.0)", older)
+            self.assertLess(older.index("{#v160-upgrade}"), older.index("{#v150-upgrade}"))
+        self.assertIn("### v1.6.0 — publicada {#v160-upgrade}", self.text("es"))
+        arn.check(self.root)
+
+    def test_the_newest_snapshot_is_linked_at_the_site_root(self):
+        self.freeze(["1.6"])
+        arn.open_line(self.root, "v1.8.0")
+        arn.open_line(self.root, "v1.9.0")
+        self.assertIn("(/deployment/releases-and-upgrades#v160-upgrade)", self.text())
+
+    def test_a_line_without_a_snapshot_links_github_only(self):
+        arn.open_line(self.root, "v1.8.0")
+        arn.open_line(self.root, "v1.9.0")
+        self.assertIn("GitHub release: [v1.6.0](", self.text())
+        self.assertNotIn("documentation](", self.text())
+
+    def test_a_snapshot_without_the_anchor_is_refused(self):
+        self.freeze(["1.6"], anchors={"1.6": "v160-other"})
+        arn.open_line(self.root, "v1.8.0")
+        before = self.pages()
+        with self.assertRaises(arn.Refusal) as ctx:
+            arn.open_line(self.root, "v1.9.0")
+        self.assertIn("has no {#v160-upgrade}", str(ctx.exception))
+        self.assertEqual(self.pages(), before)
+
+    def test_open_patch_joins_its_line(self):
+        arn.open_line(self.root, "v1.6.1")
+        en = self.text()
+        self.assertIn("- **[v1.6](#v160-upgrade)**: [v1.6.1](#v161-upgrade) · "
+                      "[v1.6.0](#v160-upgrade)", en)
+        self.assertLess(en.index("{#v170-upgrade}"), en.index("{#v161-upgrade}"))
+        self.assertLess(en.index("{#v161-upgrade}"), en.index("{#v160-upgrade}"))
+        # The newest release with both targets is still the one fragments land in.
+        _, pages = arn.check(self.root)
+        self.assertEqual({p.prefix for p in pages}, {"v170"})
+
+    def test_a_copied_patch_without_targets_does_not_capture_fragments(self):
+        # A v1.7.1 section pasted from a release branch, above the line in development.
+        self.edit("[v1.7.0](#v170-upgrade)\n", "[v1.7.1](#v171-upgrade) · [v1.7.0](#v170-upgrade)\n")
+        self.edit("### v1.7.0", "### v1.7.1 — a patch {#v171-upgrade}\n\n- Fixed.\n\n### v1.7.0")
+        _, pages = arn.check(self.root)
+        self.assertEqual({p.prefix for p in pages}, {"v170"})
+        arn.assemble(self.root)
+        en = self.text()
+        at = en.index("**First bullet.**")
+        self.assertLess(en.index("{#v170-whats-new}"), at)
+        self.assertLess(en.index("{#v171-upgrade}"), en.index("{#v170-upgrade}"))
+
+    def test_an_index_link_to_the_wrong_anchor_is_refused(self):
+        self.edit("[v1.7.0](#v170-upgrade)\n", "[v1.7.0](#v999-upgrade)\n")
+        with self.assertRaises(arn.Refusal) as ctx:
+            arn.check(self.root)
+        self.assertIn("links v1.7.0 to #v999-upgrade", str(ctx.exception))
+
+    def test_a_fragment_reusing_a_stub_anchor_is_refused(self):
+        # A retired line keeps its sub-anchors as <a id>s; a fragment may not take one.
+        self.edit("### v1.5.0", "<a id=\"v150-kept\"></a>\n\n### v1.5.0", locales=arn.LOCALES)
+        body = (GOOD.replace("- Good.", "#### T {#v150-kept}\n\n- Good.")
+                    .replace("- Bueno.", "#### T {#v150-kept}\n\n- Bueno.")
+                    .replace("- 好。", "#### T {#v150-kept}\n\n- 好。"))
+        self.assertRefused("x.md", body, "already on the en page")
+
+    def test_a_patch_missing_from_the_index_is_refused(self):
+        self.edit("### v1.7.0", "### v1.7.1 — a patch {#v171-upgrade}\n\n### v1.7.0")
+        with self.assertRaises(arn.Refusal) as ctx:
+            arn.check(self.root)
+        self.assertIn("the release-lines index lists", str(ctx.exception))
+
+    def test_four_lines_in_full_are_refused(self):
+        arn.open_line(self.root, "v1.8.0")
+        self.edit("[v1.6.0](#v160-upgrade)\n",
+                  "[v1.6.0](#v160-upgrade)\n- **[v1.4](#v140-upgrade)**: [v1.4.0](#v140-upgrade)\n",
+                  locales=["en"])
+        self.edit("\n## Older releases", "\n### v1.4.0 — x {#v140-upgrade}\n\n## Older releases",
+                  locales=["en"])
+        with self.assertRaises(arn.Refusal) as ctx:
+            arn.check(self.root)
+        self.assertIn("4 release lines are documented in full", str(ctx.exception))
+
+    def test_open_refusals_write_nothing(self):
+        for version in ("v1.7.0", "v1.6.5", "v1.5.1", "v1.7", "1.8.0", "v1.6.0"):
+            before = self.pages()
+            with self.assertRaises(arn.Refusal, msg=version):
+                arn.open_line(self.root, version)
+            self.assertEqual(self.pages(), before, version)
+
+    def test_anchors_lost_sees_a_dropped_anchor(self):
+        # The negative control for the guard --open-line refuses on.
+        text = self.text()
+        self.assertEqual(arn.anchors_lost(text, text), [])
+        self.assertEqual(arn.anchors_lost(text, text.replace(" {#v160-before-upgrade}", "")),
+                         ["v160-before-upgrade"])
+        self.assertEqual(arn.anchors_lost("```\n{#in-a-fence}\n```\n", ""), [])
+
+    def test_open_line_refuses_when_a_stub_would_lose_an_anchor(self):
+        arn.open_line(self.root, "v1.8.0")
+        real = arn.all_anchors
+        # Mutate the anchor collection the stub is built from, not the guard's own view.
+        calls = {"n": 0}
+
+        def lossy(text):
+            calls["n"] += 1
+            out = real(text)
+            return [a for a in out if a != "v160-before-upgrade"] if "### v1.6.0" in text and \
+                "{#recent-releases}" not in text else out
+        arn.all_anchors = lossy
+        try:
+            before = self.pages()
+            with self.assertRaises(arn.Refusal) as ctx:
+                arn.open_line(self.root, "v1.9.0")
+            self.assertIn("would lose the anchor(s) ['v160-before-upgrade']", str(ctx.exception))
+            self.assertEqual(self.pages(), before)
+        finally:
+            arn.all_anchors = real
 
 
 class CommandLineTest(Base):

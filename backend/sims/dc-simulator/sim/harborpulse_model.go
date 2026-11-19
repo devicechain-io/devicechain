@@ -239,8 +239,18 @@ func harborGaugeLevel(seed int64, d harborDevice, h float64, sample int64) float
 
 func harborLampOn(h float64) bool { return h < 6.5 || h >= 18 }
 
+// harborLampFault holds across the maintenance window's end on two lamps. At the default
+// five-second cadence (five sim minutes), count-3 in a one-minute WALL trailing window raises
+// at about 11:10, twenty wall seconds before maintenance closes at 11:30. The single off reading
+// at 11:20 makes the fault intermittent without clearing it. The third-last match at about
+// 11:45 leaves the half-open trailing minute at about 12:45 (cadence phase can shift this toward
+// 12:50). Thus it remains active past the worst default scheduler pass, about 12:31, and the
+// held page can release; notification-management drops a held page whose alarm already cleared.
 func harborLampFault(token string, h float64) bool {
-	return token == harborFlickerLamp && h >= 11 && h < 12 && int(math.Floor(h*60/10))%2 == 0
+	// harborHourOf uses floating-point hours: an exact 11:20 tick can be a few ulps below
+	// 11+20/60. Normalize to nanosecond sim minutes so the single off reading is not lost.
+	minute := math.Round(h*60*1e9) / 1e9
+	return (token == harborFlickerLamp || token == HarborpulseControlLamp) && minute >= 660 && minute < 720 && !(minute >= 680 && minute < 685)
 }
 
 // harborAmbient is the air temperature a charger's connector starts from.
@@ -358,6 +368,8 @@ type harborModel struct {
 	// lastMeter is when each meter last read, for its energy integral.
 	lastMeter map[string]time.Duration
 	buffers   map[string][]harborBuffered
+	// outageNext is the next device-local outage log sample, independent of emit ticks.
+	outageNext map[string]time.Duration
 	// uplinks counts each LoRaWAN gauge's uplinks: its frame counter, which also alternates the
 	// frame layout it sends.
 	uplinks map[string]int
@@ -387,7 +399,7 @@ func newHarborModelWith(seed int64, dayLength time.Duration, defects harborDefec
 	m := &harborModel{
 		seed: seed, dayLength: dayLength, defects: defects, devices: map[string]harborDevice{}, pumps: map[string]*harborPumpState{},
 		cap: map[string]float64{}, dim: map[string]float64{}, flushes: map[string]int{}, kwh: map[string]float64{}, lastMeter: map[string]time.Duration{},
-		buffers: map[string][]harborBuffered{}, ledger: map[harborLedgerKey]*ScenarioBackfill{}, uplinks: map[string]int{},
+		buffers: map[string][]harborBuffered{}, outageNext: map[string]time.Duration{}, ledger: map[harborLedgerKey]*ScenarioBackfill{}, uplinks: map[string]int{},
 		bufferCap: harborBufferCapFor(dayLength, DefaultEmitInterval),
 		tier:      map[string]int{}, dipUntil: map[string]time.Duration{},
 	}
@@ -507,6 +519,7 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 			HarborpulseDimKey:       m.dim[token],
 		}
 	case harborCharger:
+		m.logOutage(d, elapsed, at)
 		power := math.Min(harborChargerDemand(d, h), m.cap[token])
 		values := map[string]float64{
 			HarborpulseChargerPowerKey: round3(power),
@@ -515,12 +528,6 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 			HarborpulseMaxKwKey:        m.cap[token],
 		}
 		if harborOutage(d.quay, h) {
-			m.recordBuffered(token, harborDayOf(elapsed, m.dayLength), at)
-			buf := append(m.buffers[token], harborBuffered{at: at, values: values})
-			if len(buf) > m.bufferCap {
-				buf = buf[len(buf)-m.bufferCap:]
-			}
-			m.buffers[token] = buf
 			return nil
 		}
 		return values
@@ -649,7 +656,7 @@ func (m *harborModel) airLocked(token string, h float64) bool {
 }
 
 // recordBuffered files one buffered reading in the outage ledger. Caller holds m.mu.
-func (m *harborModel) recordBuffered(token string, day int, at time.Time) {
+func (m *harborModel) recordBuffered(token string, day int, at time.Time, values map[string]float64) {
 	k := harborLedgerKey{token: token, day: day}
 	e := m.ledger[k]
 	stamp := at.UTC().Format(time.RFC3339Nano)
@@ -660,13 +667,65 @@ func (m *harborModel) recordBuffered(token string, day int, at time.Time) {
 	e.Buffered++
 	e.Last = stamp
 	e.Times = append(e.Times, stamp)
+	e.PowerKW = append(e.PowerKW, values[HarborpulseChargerPowerKey])
+	e.Values = append(e.Values, values)
 }
 
-// harborBufferNeed is how many readings one charger buffers through one feeder outage of a day of
-// dayLength, at one reading per interval (the ticker drops a tick rather than doubling up).
+// Each charger logs 90 entries during an outage, at outage-duration/90, even
+// between uplinks. Scaling with the day keeps the restore bounded at every day length.
+func harborOutageCadence(dayLength time.Duration) time.Duration {
+	return time.Duration((harborOutageTo-harborOutageFrom)/24*float64(dayLength)) / 90
+}
+
 func harborBufferNeed(dayLength, interval time.Duration) int {
 	outage := time.Duration((harborOutageTo - harborOutageFrom) / 24 * float64(dayLength))
-	return int((outage+interval-1)/interval) + 1
+	cadence := harborOutageCadence(dayLength)
+	return int((outage + cadence - 1) / cadence)
+}
+
+// logOutage materializes the charger's local log through elapsed. The uplink
+// ticker merely collects it; a slow or missed tick does not lose outage samples.
+// Caller holds m.mu. Values are immutable once recorded.
+func (m *harborModel) logOutage(d harborDevice, elapsed time.Duration, at time.Time) {
+	if d.quay != HarborpulseEastQuay {
+		return
+	}
+	from := time.Duration((harborOutageFrom - harborpulseStartHour) / 24 * float64(m.dayLength))
+	next, ok := m.outageNext[d.token]
+	if !ok {
+		next = from
+	}
+	cadence := harborOutageCadence(m.dayLength)
+	for next <= elapsed {
+		day := int((next - from) / m.dayLength)
+		end := from + time.Duration(day)*m.dayLength + 90*cadence
+		if next >= end {
+			next = from + time.Duration(day+1)*m.dayLength
+			continue
+		}
+		h := harborHourOf(next, m.dayLength)
+		power := math.Min(harborChargerDemand(d, h), m.cap[d.token])
+		values := map[string]float64{
+			HarborpulseChargerPowerKey: round3(power), HarborpulseSessionKey: boolNum(power > 1),
+			HarborpulseConnectorKey: round3(harborConnectorTemp(d.token, h, power) + harborNoise(m.seed, d.token, int64(next/time.Second), 0.3)),
+			HarborpulseMaxKwKey:     m.cap[d.token],
+		}
+		instant := at.Add(next - elapsed).UTC()
+		stamp := instant.Truncate(time.Microsecond)
+		if stamp.Before(instant) {
+			// Round into the outage window: the platform stores microseconds,
+			// while the scenario's independently known boundary can have nanoseconds.
+			stamp = stamp.Add(time.Microsecond)
+		}
+		m.recordBuffered(d.token, day, stamp, values)
+		buf := append(m.buffers[d.token], harborBuffered{at: stamp, values: values})
+		if len(buf) > m.bufferCap {
+			buf = buf[len(buf)-m.bufferCap:]
+		}
+		m.buffers[d.token] = buf
+		next += cadence
+	}
+	m.outageNext[d.token] = next
 }
 
 // harborBufferCapFor sizes a charger's buffer for the day: twice one outage, since readings the
@@ -716,6 +775,14 @@ func (m *harborModel) backfillLedger() []ScenarioBackfill {
 	for _, e := range m.ledger {
 		c := *e
 		c.Times = append([]string(nil), e.Times...)
+		c.PowerKW = append([]float64(nil), e.PowerKW...)
+		c.Values = make([]map[string]float64, len(e.Values))
+		for i, values := range e.Values {
+			c.Values[i] = make(map[string]float64, len(values))
+			for key, value := range values {
+				c.Values[i][key] = value
+			}
+		}
 		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool {

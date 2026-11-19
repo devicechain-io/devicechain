@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"gorm.io/gorm"
+
+	"github.com/devicechain-io/dc-device-management/model/identity"
 )
 
 // The connect lookup fills exactly the credential fields the password check reads —
@@ -50,8 +52,15 @@ func TestTheConnectLookupFillsOnlyTheConnectFields(t *testing.T) {
 // ErrRecordNotFound, since the credential does exist and the store is what is wrong.
 func TestBothCredentialFindersRefuseAnAmbiguousMatch(t *testing.T) {
 	f := newSQLiteCredentialFixture(t)
-	dup := &DeviceCredential{DeviceId: f.devId, CredentialType: string(CredentialMqttBasic),
-		CredentialId: "cred-1", SecretDigest: testDigest("other"), Enabled: true}
+	dup := &DeviceCredential{
+		DeviceCredential: identity.DeviceCredential{
+			DeviceId:       f.devId,
+			CredentialType: string(CredentialMqttBasic),
+			CredentialId:   "cred-1",
+			SecretDigest:   testDigest("other"),
+			Enabled:        true,
+		},
+	}
 	dup.Token = "c-dup"
 	mustExec(t, f.api.RDB.DB(f.ctx).Create(dup))
 
