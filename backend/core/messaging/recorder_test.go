@@ -483,3 +483,39 @@ func TestUncapturedReaderDoesNotStartRecorder(t *testing.T) {
 	}
 	require.NoError(t, nmgr.startRecorder(context.Background()))
 }
+
+// The premise of event-sources' final-delivery placement hold, against the pinned broker: a
+// FINAL delivery kept alive with InProgress is not given up on while it is beaten, however many
+// AckWaits pass, and acking it afterwards records nothing. Without the beats the same delivery is
+// exhausted and recorded (TestAdvisoryWaitsForTheNextPull is that control).
+func TestAFinalDeliveryKeptInProgressIsNotExhausted(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	rec := &capturedDeliveries{}
+	nmgr, readers := recorderRig(t, srv, uniqueArea("final-held"), rec.build, streams.RaiseAlarm)
+	_, err := nmgr.js.Publish(ScopedSubject(nmgr.Microservice.InstanceId, "acme", streams.RaiseAlarm), []byte(`{"n":1}`))
+	require.NoError(t, err)
+	var final Message
+	for i := 1; i <= MaxDeliver; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		msg, err := readers[0].ReadMessage(ctx)
+		cancel()
+		require.NoError(t, err, "delivery %d never arrived", i)
+		require.Equal(t, i, msg.NumDelivered)
+		final = msg
+	}
+	require.True(t, FinalDelivery(final))
+	// A live replica keeps pulling: the broker gives up on an expired final delivery at the next
+	// pull, so without a puller this test could not fail.
+	keepPulling(t, readers[0])
+	// Held for three AckWaits (one second each in this rig), beaten at a third of AckWait.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		require.NoError(t, final.InProgress())
+		time.Sleep(300 * time.Millisecond)
+	}
+	require.Empty(t, rec.all(), "a beaten final delivery must not be given up on")
+	require.NoError(t, final.Ack())
+	time.Sleep(2500 * time.Millisecond)
+	require.Empty(t, rec.all(), "an acked final delivery is not recorded")
+	require.Zero(t, captureHeld(t, nmgr))
+}
