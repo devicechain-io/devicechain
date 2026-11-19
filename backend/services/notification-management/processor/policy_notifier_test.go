@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -66,9 +66,9 @@ func policy(token string, rules ...model.NotificationRule) *model.NotificationPo
 	return p
 }
 
-func raisedEvent(severity string) *dmmodel.AlarmStateChangeEvent {
-	return &dmmodel.AlarmStateChangeEvent{
-		EventType: dmmodel.AlarmEventRaised, AlarmToken: "a1", AlarmKey: "k",
+func raisedEvent(severity string) *dmcontract.AlarmStateChangeEvent {
+	return &dmcontract.AlarmStateChangeEvent{
+		EventType: dmcontract.AlarmEventRaised, AlarmToken: "a1", AlarmKey: "k",
 		Severity: severity, State: "ACTIVE", OccurredTime: time.Now().UTC(),
 	}
 }
@@ -167,7 +167,7 @@ func TestThrottled(t *testing.T) {
 
 	// ESCALATED bypasses the throttle (worsening is a new fact).
 	esc := raisedEvent("CRITICAL")
-	esc.EventType = dmmodel.AlarmEventEscalated
+	esc.EventType = dmcontract.AlarmEventEscalated
 	esc.OccurredTime = now
 	if n.throttled(esc, p, recent) {
 		t.Fatal("ESCALATED should bypass throttle")

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"gorm.io/gorm"
 )
@@ -62,15 +62,15 @@ func TestADeescalatedAlarmIsClearedOnTheChannelThatPagedIt(t *testing.T) {
 	n, paging, chat := twoChannelNotifier(t, api)
 	raised := time.Now().UTC().Add(-time.Hour)
 
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatal(err)
 	}
-	de := cycleEvent(dmmodel.AlarmEventDeescalated, raised, raised.Add(time.Minute))
+	de := cycleEvent(dmcontract.AlarmEventDeescalated, raised, raised.Add(time.Minute))
 	de.Severity = "MAJOR"
 	if err := n.Notify(ctx, de); err != nil {
 		t.Fatal(err)
 	}
-	clr := cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(2*time.Minute))
+	clr := cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(2*time.Minute))
 	clr.Severity = "MAJOR"
 	if err := n.Notify(ctx, clr); err != nil {
 		t.Fatal(err)
@@ -90,11 +90,11 @@ func TestAPolicyThatNeverPagedStaysSilentOnClear(t *testing.T) {
 	seedRoute(t, api, ctx, "early", true, model.SeverityAny, "paging", model.ChannelTypeSMTP)
 	n, paging, late := twoChannelNotifier(t, api)
 	raised := time.Now().UTC().Add(-time.Hour)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatal(err)
 	}
 	seedRoute(t, api, ctx, "late", true, model.SeverityAny, "late-hook", model.ChannelTypeWebhook)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(time.Minute))); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(time.Minute))); err != nil {
 		t.Fatal(err)
 	}
 	if got := paging.types(); len(got) != 2 {
@@ -116,7 +116,7 @@ func TestATransientStampFailureDoesNotResendTheClear(t *testing.T) {
 	n.api = api
 	n.store = &fakeSecretStore{}
 	raised := time.Now().UTC().Add(-time.Hour)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -129,7 +129,7 @@ func TestATransientStampFailureDoesNotResendTheClear(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	clr := cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(time.Minute))
+	clr := cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(time.Minute))
 	if err := n.Notify(ctx, clr); err == nil {
 		t.Fatal("the failed stamp must be returned for redelivery")
 	}
@@ -151,14 +151,14 @@ func TestATransientStampFailureDoesNotResendTheClear(t *testing.T) {
 func TestAClearThatOvertookItsPageIsStillAnnounced(t *testing.T) {
 	n, ra, ctx := clearHarness(t, true)
 	raised := time.Now().UTC().Add(-time.Hour)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(time.Minute))); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(time.Minute))); err != nil {
 		t.Fatal(err)
 	}
 	if len(ra.sent) != 0 {
 		t.Fatalf("nothing was paged yet, got %v", ra.types())
 	}
 	for i := 0; i < 2; i++ {
-		if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+		if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -179,10 +179,10 @@ func TestAClearThatOvertookItsPageIsStillAnnounced(t *testing.T) {
 func TestNoEscalationFollowsTheClear(t *testing.T) {
 	n, ra, ctx := clearHarness(t, true)
 	raised := time.Now().UTC().Add(-time.Hour)
-	_ = n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised))
-	_ = n.Notify(ctx, cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(time.Minute)))
+	_ = n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised))
+	_ = n.Notify(ctx, cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(time.Minute)))
 	before := len(ra.sent)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventEscalated, raised, raised.Add(2*time.Minute))); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventEscalated, raised, raised.Add(2*time.Minute))); err != nil {
 		t.Fatal(err)
 	}
 	if len(ra.sent) != before {
@@ -204,11 +204,11 @@ func TestAFailedClearIsStampedThenRetried(t *testing.T) {
 	n.api = api
 	n.store = &fakeSecretStore{}
 	raised := time.Now().UTC().Add(-time.Hour)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatalf("raise: %v", err)
 	}
 	fa.failTimes = 1 << 20
-	clr := cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(time.Minute))
+	clr := cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(time.Minute))
 	if err := n.Notify(ctx, clr); err == nil {
 		t.Fatal("a clear no channel took must be returned for redelivery")
 	}

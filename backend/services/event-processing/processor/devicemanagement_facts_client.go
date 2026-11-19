@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
@@ -133,10 +133,10 @@ type activeProfileRulesResponse struct {
 // page and retries the same cursor, down to a single profile; a single profile too large to
 // carry is an error naming where the walk stood. The page size returns to the maximum after a
 // page that fits.
-func (c *deviceManagementFactsClient) ActiveProfiles(ctx context.Context, tenant string) ([]dmmodel.ActiveProfileRules, error) {
-	var all []dmmodel.ActiveProfileRules
+func (c *deviceManagementFactsClient) ActiveProfiles(ctx context.Context, tenant string) ([]dmcontract.ActiveProfileRules, error) {
+	var all []dmcontract.ActiveProfileRules
 	var cursor *string
-	limit := dmmodel.MaxActiveProfileRulesPageSize
+	limit := dmcontract.MaxActiveProfileRulesPageSize
 	for {
 		var out activeProfileRulesResponse
 		err := c.exec(ctx, factDeviceManagement, tenant, activeProfileRulesQuery,
@@ -157,11 +157,11 @@ func (c *deviceManagementFactsClient) ActiveProfiles(ctx context.Context, tenant
 			if err != nil {
 				return nil, fmt.Errorf("profile %q: unreadable activeSince %q: %w", e.ProfileToken, e.ActiveSince, err)
 			}
-			rules := make([]dmmodel.PublishedDetectionRule, 0, len(e.Rules))
+			rules := make([]dmcontract.PublishedDetectionRule, 0, len(e.Rules))
 			for _, r := range e.Rules {
-				rules = append(rules, dmmodel.PublishedDetectionRule(r))
+				rules = append(rules, dmcontract.PublishedDetectionRule(r))
 			}
-			all = append(all, dmmodel.ActiveProfileRules{
+			all = append(all, dmcontract.ActiveProfileRules{
 				ProfileToken: e.ProfileToken, VersionToken: e.VersionToken, ActiveSince: since, Rules: rules,
 			})
 		}
@@ -169,7 +169,7 @@ func (c *deviceManagementFactsClient) ActiveProfiles(ctx context.Context, tenant
 			return all, nil
 		}
 		cursor = out.ActiveProfileRules.NextCursor
-		limit = dmmodel.MaxActiveProfileRulesPageSize
+		limit = dmcontract.MaxActiveProfileRulesPageSize
 	}
 }
 
@@ -194,13 +194,13 @@ type deviceRosterPageResponse struct {
 }
 
 // Roster walks every page of the tenant's device roster.
-func (c *deviceManagementFactsClient) Roster(ctx context.Context, tenant string) ([]dmmodel.DeviceRosterEntry, error) {
-	var all []dmmodel.DeviceRosterEntry
+func (c *deviceManagementFactsClient) Roster(ctx context.Context, tenant string) ([]dmcontract.DeviceRosterEntry, error) {
+	var all []dmcontract.DeviceRosterEntry
 	var cursor *string
 	for {
 		var out deviceRosterPageResponse
 		if err := c.exec(ctx, factDeviceManagement, tenant, deviceRosterPageQuery,
-			map[string]any{"afterId": cursor, "limit": dmmodel.MaxRosterPageSize}, &out); err != nil {
+			map[string]any{"afterId": cursor, "limit": dmcontract.MaxRosterPageSize}, &out); err != nil {
 			return nil, classifyFactsError(err)
 		}
 		for _, e := range out.DeviceRosterPage.Entries {
@@ -208,7 +208,7 @@ func (c *deviceManagementFactsClient) Roster(ctx context.Context, tenant string)
 			if err != nil {
 				return nil, fmt.Errorf("device %q: unreadable expectedSince %q: %w", e.DeviceToken, e.ExpectedSince, err)
 			}
-			all = append(all, dmmodel.DeviceRosterEntry{
+			all = append(all, dmcontract.DeviceRosterEntry{
 				DeviceToken: e.DeviceToken, ProfileToken: e.ProfileToken, ExpectedSince: since,
 			})
 		}
@@ -242,13 +242,13 @@ type deviceThresholdAttributePageResponse struct {
 }
 
 // ThresholdAttributes walks every page of the tenant's threshold attributes.
-func (c *deviceManagementFactsClient) ThresholdAttributes(ctx context.Context, tenant string) ([]dmmodel.DeviceThresholdAttribute, error) {
-	var all []dmmodel.DeviceThresholdAttribute
+func (c *deviceManagementFactsClient) ThresholdAttributes(ctx context.Context, tenant string) ([]dmcontract.DeviceThresholdAttribute, error) {
+	var all []dmcontract.DeviceThresholdAttribute
 	var cursor *string
 	for {
 		var out deviceThresholdAttributePageResponse
 		if err := c.exec(ctx, factDeviceManagement, tenant, deviceThresholdAttributePageQuery,
-			map[string]any{"afterId": cursor, "limit": dmmodel.MaxThresholdAttributePageSize}, &out); err != nil {
+			map[string]any{"afterId": cursor, "limit": dmcontract.MaxThresholdAttributePageSize}, &out); err != nil {
 			return nil, classifyFactsError(err)
 		}
 		for _, e := range out.DeviceThresholdAttributePage.Entries {
@@ -256,7 +256,7 @@ func (c *deviceManagementFactsClient) ThresholdAttributes(ctx context.Context, t
 			if err != nil {
 				return nil, fmt.Errorf("device %q attribute %q: unreadable updatedAt %q: %w", e.DeviceToken, e.Key, e.UpdatedAt, err)
 			}
-			all = append(all, dmmodel.DeviceThresholdAttribute{
+			all = append(all, dmcontract.DeviceThresholdAttribute{
 				DeviceToken: e.DeviceToken, Scope: e.Scope, AttrKey: e.Key, Value: e.Value, UpdatedAt: at,
 			})
 		}

@@ -4,7 +4,7 @@
 package runtime
 
 import (
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/rs/zerolog/log"
@@ -41,7 +41,7 @@ func PublishedRuleID(tenant, profileVersionToken, ruleToken string) string {
 // rolling upgrade) — the offending rule does not
 // run (fail-closed) while every other rule in the fact still loads. The returned count of
 // such failures lets the caller surface the anomaly.
-func CompilePublishedRules(tenant, profileVersionToken string, published []dmmodel.PublishedDetectionRule) ([]ScopedRule, int) {
+func CompilePublishedRules(tenant, profileVersionToken string, published []dmcontract.PublishedDetectionRule) ([]ScopedRule, int) {
 	limits := rules.DefaultLimits()
 	scoped := make([]ScopedRule, 0, len(published))
 	failed := 0

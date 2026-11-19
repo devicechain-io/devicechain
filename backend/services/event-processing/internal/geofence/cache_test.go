@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 )
 
 // ngonDocument is a stored POLYGON_2D envelope for a regular n-gon centred on (lonCentre, 0). It
@@ -654,7 +654,7 @@ func TestTheAddressIsDerivedTheWayTheArchiveDerivesIt(t *testing.T) {
 	}
 	cache := NewGeometryCache(0)
 	for i, doc := range docs {
-		theirs := dmmodel.GeoFenceGeometryHash(doc)
+		theirs := dmcontract.GeoFenceGeometryHash(doc)
 		if ours := addr(doc); ours != theirs {
 			t.Errorf("document %d: this test's address %s does not match device-management's %s", i, ours, theirs)
 		}

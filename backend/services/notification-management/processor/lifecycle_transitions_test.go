@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -31,8 +31,8 @@ import (
 // supposed to prevent.
 
 // lifecycleEvent builds one state-only transition of the given type.
-func lifecycleEvent(t dmmodel.AlarmEventType) *dmmodel.AlarmStateChangeEvent {
-	return &dmmodel.AlarmStateChangeEvent{
+func lifecycleEvent(t dmcontract.AlarmEventType) *dmcontract.AlarmStateChangeEvent {
+	return &dmcontract.AlarmStateChangeEvent{
 		EventType: t, AlarmToken: "a1", AlarmKey: "k", Severity: "CRITICAL",
 		State: "ACTIVE", OccurredTime: time.Now().UTC(),
 	}
@@ -41,10 +41,10 @@ func lifecycleEvent(t dmmodel.AlarmEventType) *dmmodel.AlarmStateChangeEvent {
 // lifecycleEventTypes is the set under test — every Notify branch that writes without
 // paging. Enumerated rather than spot-checked because the defect was per-branch: fixing
 // one and not its two siblings would look identical from any single-case test.
-var lifecycleEventTypes = []dmmodel.AlarmEventType{
-	dmmodel.AlarmEventAcknowledged,
-	dmmodel.AlarmEventCleared,
-	dmmodel.AlarmEventDeescalated,
+var lifecycleEventTypes = []dmcontract.AlarmEventType{
+	dmcontract.AlarmEventAcknowledged,
+	dmcontract.AlarmEventCleared,
+	dmcontract.AlarmEventDeescalated,
 }
 
 // TestLifecycleTransitionsRefuseADeletedTenantBeforeWriting pins the gap: each of the
@@ -291,7 +291,7 @@ func TestALiveTenantsLifecycleWriteLands(t *testing.T) {
 	n.api = api
 	ctx := tenantScoped()
 
-	if err := n.Notify(ctx, lifecycleEvent(dmmodel.AlarmEventCleared)); err != nil {
+	if err := n.Notify(ctx, lifecycleEvent(dmcontract.AlarmEventCleared)); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 	states, err := api.NotificationStatesByAlarmToken(ctx, []string{"a1"})

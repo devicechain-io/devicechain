@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
@@ -57,7 +57,7 @@ func (s *mainGroupFences) CurrentFenceSet(context.Context, string) (*geofence.Fe
 func (s *mainGroupFences) FenceSetAt(_ context.Context, _ string, version int32) (*geofence.FenceSet, error) {
 	return s.sets[version], nil
 }
-func (s *mainGroupFences) ResolveManifest(_ context.Context, _ string, m *dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error) {
+func (s *mainGroupFences) ResolveManifest(_ context.Context, _ string, m *dmcontract.GeoFenceSetManifest) (*geofence.FenceSet, error) {
 	return s.sets[m.Version], nil
 }
 
@@ -135,8 +135,8 @@ func TestMainResolvedGroupWorkersRouteEveryFact(t *testing.T) {
 	}
 	base := time.Now().UTC().Add(-time.Minute)
 	for _, tenant := range []string{"g0", "g1"} {
-		raw, err := dmproto.MarshalDetectionRulesPublishedEvent(&dmmodel.DetectionRulesPublishedEvent{
-			ProfileVersionToken: "p@1", PublishedAt: base, Rules: []dmmodel.PublishedDetectionRule{
+		raw, err := dmproto.MarshalDetectionRulesPublishedEvent(&dmcontract.DetectionRulesPublishedEvent{
+			ProfileVersionToken: "p@1", PublishedAt: base, Rules: []dmcontract.PublishedDetectionRule{
 				{Token: "dead", Definition: `{"name":"dead","type":"absence","timeout":"1h"}`},
 				{Token: "views", Definition: `{"name":"views","type":"threshold","when":{"cel":"has(attr.limit) && attr.limit > 10.0 && geo.inFence(\"yard\")"}}`},
 			},
@@ -144,7 +144,7 @@ func TestMainResolvedGroupWorkersRouteEveryFact(t *testing.T) {
 		require.NoError(t, err)
 		publish(tenant, streams.DetectionRulesPublished, raw)
 		for _, device := range []string{"never", "live"} {
-			raw, err := dmproto.MarshalDeviceRosterEvent(&dmmodel.DeviceRosterEvent{DeviceToken: device, ProfileToken: "p", ExpectedSince: base})
+			raw, err := dmproto.MarshalDeviceRosterEvent(&dmcontract.DeviceRosterEvent{DeviceToken: device, ProfileToken: "p", ExpectedSince: base})
 			require.NoError(t, err)
 			publish(tenant, streams.DeviceRoster, raw)
 		}
@@ -185,10 +185,10 @@ func TestMainResolvedGroupWorkersRouteEveryFact(t *testing.T) {
 	}
 	// Live facts enter through main's singleton consumers and wake their owners.
 	for g, tenant := range []string{"g0", "g1"} {
-		raw, err := dmproto.MarshalDeviceAttributeEvent(&dmmodel.DeviceAttributeEvent{DeviceToken: "live", Scope: "SHARED", AttrKey: "limit", Value: 42, UpdatedAt: base.Add(time.Second)})
+		raw, err := dmproto.MarshalDeviceAttributeEvent(&dmcontract.DeviceAttributeEvent{DeviceToken: "live", Scope: "SHARED", AttrKey: "limit", Value: 42, UpdatedAt: base.Add(time.Second)})
 		require.NoError(t, err)
 		publish(tenant, streams.DeviceAttribute, raw)
-		raw, err = dmmodel.MarshalGeoFenceSetManifest(&dmmodel.GeoFenceSetManifest{Version: 2})
+		raw, err = dmcontract.MarshalGeoFenceSetManifest(&dmcontract.GeoFenceSetManifest{Version: 2})
 		require.NoError(t, err)
 		publish(tenant, streams.GeoFenceSetManifest, raw)
 		// Repeated event probes avoid assuming channel selection order across facts.

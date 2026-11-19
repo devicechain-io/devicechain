@@ -6,7 +6,7 @@ package processor
 import (
 	"context"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -138,7 +138,7 @@ func (c *fenceSetClient) CurrentFenceSet(ctx context.Context, tenant string) (*g
 // road must agree about what an unresolvable fence becomes, and two implementations of that
 // rule would be two chances to make an unresolved fence silently absent on one of them.
 func (c *fenceSetClient) ResolveManifest(ctx context.Context, tenant string,
-	manifest *dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error) {
+	manifest *dmcontract.GeoFenceSetManifest) (*geofence.FenceSet, error) {
 	return c.assemble(ctx, tenant, manifest)
 }
 

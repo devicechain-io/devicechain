@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 )
@@ -19,11 +19,11 @@ import (
 // SERVER-over-SHARED precedence (every dynamic threshold would fall back to shared or vanish) with no
 // compile error. This guard turns that drift into a test failure.
 func TestAttributeScopeVocabularyMatches(t *testing.T) {
-	if runtime.AttrScopeServer != string(dmmodel.AttributeScopeServer) {
-		t.Errorf("AttrScopeServer %q != device-management %q", runtime.AttrScopeServer, dmmodel.AttributeScopeServer)
+	if runtime.AttrScopeServer != string(dmcontract.AttributeScopeServer) {
+		t.Errorf("AttrScopeServer %q != device-management %q", runtime.AttrScopeServer, dmcontract.AttributeScopeServer)
 	}
-	if runtime.AttrScopeShared != string(dmmodel.AttributeScopeShared) {
-		t.Errorf("AttrScopeShared %q != device-management %q", runtime.AttrScopeShared, dmmodel.AttributeScopeShared)
+	if runtime.AttrScopeShared != string(dmcontract.AttributeScopeShared) {
+		t.Errorf("AttrScopeShared %q != device-management %q", runtime.AttrScopeShared, dmcontract.AttributeScopeShared)
 	}
 }
 
@@ -150,14 +150,14 @@ func TestAttributeConsumerSignalsViewRecheck(t *testing.T) {
 	rp.attrUpdates = make(chan attrUpdate, 8)
 
 	// A set fact: persist + signal, then the driven recheck lands 50 in the view.
-	feedAttrFact(t, rp, &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "lim", Scope: "SERVER", Value: 50, UpdatedAt: testBase})
+	feedAttrFact(t, rp, &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "lim", Scope: "SERVER", Value: 50, UpdatedAt: testBase})
 	rp.applyAttrRecheck(drainAttrUpdate(t, rp))
 	if got := rp.attrView.For("acme", "d1")["lim"]; got != 50 {
 		t.Fatalf("after the set fact + recheck, view lim = %v, want 50", got)
 	}
 
 	// A removal fact (strictly newer): the recheck now reads no live rows and drops the device.
-	feedAttrFact(t, rp, &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "lim", Scope: "SERVER", Removed: true, UpdatedAt: testBase.Add(1)})
+	feedAttrFact(t, rp, &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "lim", Scope: "SERVER", Removed: true, UpdatedAt: testBase.Add(1)})
 	rp.applyAttrRecheck(drainAttrUpdate(t, rp))
 	if m := rp.attrView.For("acme", "d1"); m != nil {
 		t.Fatalf("after the removal fact + recheck, the device must drop from the view, got %v", m)
@@ -168,7 +168,7 @@ func TestAttributeConsumerSignalsViewRecheck(t *testing.T) {
 // then it blocks until cancel), returning after the fact is persisted-and-acked and its recheck is
 // queued on attrUpdates. Running one fact per invocation keeps the caller's post-fact assertion
 // race-free (the consumer cannot run ahead to a later fact).
-func feedAttrFact(t *testing.T, rp *ResolvedEventsProcessor, ev *dmmodel.DeviceAttributeEvent) {
+func feedAttrFact(t *testing.T, rp *ResolvedEventsProcessor, ev *dmcontract.DeviceAttributeEvent) {
 	t.Helper()
 	ack := &fakeAck{acked: make(chan struct{}, 1)}
 	rp.AttributeReader = &fakeReader{results: []readResult{{msg: attrMsg(t, "acme", ev, ack)}}}
