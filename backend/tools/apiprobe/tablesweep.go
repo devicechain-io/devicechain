@@ -302,6 +302,7 @@ var tableSweepExemptions = map[string]string{
 		"one, so the writer is exercised; empty afterwards is the drain having caught up. A row still " +
 		"here a few seconds after the seed means ownership facts are not reaching the broker, which is " +
 		"a finding this bucket should report.",
+	"device-management.pending_alarm_events": "alarm transitions awaiting broker acknowledgement or retained in quarantine; inspect relay health and alarm_events_quarantined if rows remain on a healthy instance.",
 	"device-management.pending_entity_deletions": "the deletion outbox: a row is written in the transaction " +
 		"of an entity delete and removed once device-management's drain, which runs every second, has had " +
 		"the deletion fact acknowledged by the broker. No API call leaves a row behind on a healthy instance: " +
@@ -355,6 +356,11 @@ var tableSweepExemptions = map[string]string{
 		"instance sentinel. Nothing in user-management writes a tenant-scoped secret, so no " +
 		"tenant can own a row here. The table carries tenant_id only because it is core's shared " +
 		"secret-store table, which the other secret-store areas do fill per tenant.",
+	"ai-inference.secrets": "ai-inference's secret store holds only INSTANCE-scoped rows — an AI " +
+		"provider's write-only API key, keyed by AIProviderSecretRef (scope instance, tenant_id the " +
+		"empty instance sentinel). Providers are instance-wide, operator-managed records; nothing in " +
+		"ai-inference writes a tenant-scoped secret, so no tenant can own a row here. The table " +
+		"carries tenant_id only because it is core's shared secret-store table.",
 
 	// ---- runtime state of a delivery mechanism -------------------------------
 	"notification-management.notification_states": "escalation state for a notification the policy has " +

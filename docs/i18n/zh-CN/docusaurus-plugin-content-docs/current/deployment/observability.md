@@ -998,6 +998,8 @@ chart 覆盖链条各环节：
 | `ProvisioningRateLimited` | warning | 连续 15 分钟，自注册请求以 `429` 被拒绝的速率超过每十秒一次。`result` 标签说明是哪个限制：`rate_limited_source` 表示某个客户端地址用完了配额，`rate_limited_tenant` 表示租户每秒注册数已达其治理上限。设备会等待收到的 `Retry-After` 后重试。 | 对于 `rate_limited_source`，确认 `infrastructure.http.trustedProxies` 列出了 ingress 控制器，并且控制器保留了客户端地址。否则所有设备共用同一份配额。对于 `rate_limited_tenant`，请提高租户的注册上限，或把产线批次错开。 |
 | `ProvisioningMisconfigured` | warning | 最近 10 分钟内至少有一个请求被一个无法工作的配置拒绝：其设备类型已被删除、其策略不是平台已知的策略，或其签发的凭据类型不受此构建支持。使用该配置的所有设备都会被拒绝，直到修复为止。 | 在服务日志中找到该配置（令牌以 `ERROR` 级别记录），然后修复或重建。 |
 | `ProvisioningSessionKickUnconfirmed` | warning | 配置的撤销或重置已撤回某设备的凭据，但平台超过 10 分钟（并持续 5 分钟）无法确认该设备已打开的 MQTT 会话已被结束。设备无法重新连接，但已打开的会话可继续发布数据，直到其令牌过期（默认 12 小时）。 | 平台每 30 秒重试一次，因此负责结束会话的组件（event-sources）已停止或无法访问：请检查它是否在运行，以及其 MQTT 认证调用是否正常。它恢复响应后，待处理的结束请求会自行清除，也可以重复执行撤销或重置。 |
+| `AlarmEventQuarantined` | critical | 已存储事件无法解码或编码，已隔离且不会重试。 | 检查数据库行及死信；修复 payload 后将 `quarantined_at` 设为 NULL，或记录内容后删除该行。参阅[操作手册](./alert-runbook.md#alarmeventquarantined)。 |
+| `AlarmEventRelayStalled` | warning | 最早待发送事件的等待时间超过 120 秒并持续 5 分钟，告警通知已延迟。 | 检查 relay 错误、broker 连接与权限及数据库健康状态。恢复后确认队列归零。 |
 
 ## 证书连接 {#certificate-alerts}
 

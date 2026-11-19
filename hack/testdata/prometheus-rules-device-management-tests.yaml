@@ -978,3 +978,83 @@ tests:
     - eval_time: 20m
       alertname: X509OcspUnavailableAllowed
       exp_alerts: []
+
+  # AlarmEventQuarantined: firing and threshold / namespace negative controls.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_alarm_events_quarantined{namespace="dci-devicechain"}'
+        values: '1+0x15'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: AlarmEventQuarantined
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#alarmeventquarantined"
+              summary: "A stored alarm event is quarantined"
+              description: "A stored alarm event cannot be decoded or encoded and is quarantined in pending_alarm_events. It is not retried, so its alarm notification needs operator attention. Inspect it with SELECT id, tenant_id, created_at, last_error FROM \"device-management\".pending_alarm_events WHERE quarantined_at IS NOT NULL; inspect the raw payload in that table and the best-effort notification dead letter in the operator dead-letter list. Repair the payload and set quarantined_at to NULL to retry, or delete the row after recording what it was."
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_alarm_events_quarantined{namespace="dci-devicechain"}'
+        values: '0+0x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AlarmEventQuarantined
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_alarm_events_quarantined{namespace="other-instance"}'
+        values: '1+0x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AlarmEventQuarantined
+        exp_alerts: []
+
+  # AlarmEventRelayStalled: firing and threshold / namespace negative controls.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_alarm_event_oldest_age_seconds{namespace="dci-devicechain"}'
+        values: '180+0x15'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AlarmEventRelayStalled
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: AlarmEventRelayStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#alarmeventrelaystalled"
+              summary: "Alarm notifications are delayed by the outbox relay"
+              description: "For 5m, the oldest queued alarm event has waited more than 120 seconds. Severity is warning because alarm notifications are delayed while committed events remain queued for retry. Check device-management relay errors, broker connectivity and permissions, and database health. Restore the failing dependency and verify alarm_events_pending and alarm_event_oldest_age_seconds return to zero. Unknown event types need a newer relay binary; check version skew during rolling upgrades."
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_alarm_event_oldest_age_seconds{namespace="dci-devicechain"}'
+        values: '119+0x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AlarmEventRelayStalled
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_alarm_event_oldest_age_seconds{namespace="other-instance"}'
+        values: '180+0x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AlarmEventRelayStalled
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_alarm_event_oldest_age_seconds{namespace="dci-devicechain"}'
+        values: '0+0x5 180+0x3 0+0x6'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: AlarmEventRelayStalled
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: AlarmEventRelayStalled
+        exp_alerts: []

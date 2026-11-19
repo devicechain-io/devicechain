@@ -20,7 +20,7 @@ func scopeAnchorsApi(t *testing.T) *Api {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&Device{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &EntityRelationshipType{}, &EntityGroup{}, &EntityGroupMembership{}))
+	require.NoError(t, db.AutoMigrate(&Device{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &EntityRelationshipType{}, &EntityGroup{}, &EntityGroupMembership{}))
 	return NewApi(&rdb.RdbManager{Database: db})
 }
 

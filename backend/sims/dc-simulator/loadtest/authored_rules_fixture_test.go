@@ -233,7 +233,7 @@ var mirroredAlarmSeverityWire = map[string]string{
 	mirrorKey("harborpulse", sim.HarborpulseAttributeRule):      sim.AlarmSeverityMinorWire,
 	mirrorKey("harborpulse", sim.HarborpulseWetWellRule):        sim.AlarmSeverityMajorWire,
 	mirrorKey("harborpulse", sim.HarborpulseAirLockRule):        sim.AlarmSeverityCriticalWire,
-	mirrorKey("harborpulse", sim.HarborpulseFlickerRule):        sim.AlarmSeverityMinorWire,
+	mirrorKey("harborpulse", sim.HarborpulseFlickerRule):        sim.AlarmSeverityMajorWire,
 	mirrorKey("harborpulse", sim.HarborpulseLightSilentRule):    sim.AlarmSeverityMajorWire,
 	mirrorKey("harborpulse", sim.HarborpulseChargerOfflineRule): sim.AlarmSeverityMajorWire,
 	mirrorKey("harborpulse", sim.HarborpulseConnectorHotRule):   sim.AlarmSeverityMajorWire,

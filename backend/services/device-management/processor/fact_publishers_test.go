@@ -53,3 +53,28 @@ func TestDetectionFactWritersCountEveryRefusedPublish(t *testing.T) {
 		c.publish(&captureFactWriter{refuse: errors.New("nats: timeout")}, nil)
 	}
 }
+
+// The roster writer hands back a refused publish so a per-device fan-out can stop at it
+// (model.emitRosterEntries), and answers nil for a delivered one.
+func TestTheRosterWriterReturnsARefusedPublish(t *testing.T) {
+	ctx := context.Background()
+	ev := &model.DeviceRosterEvent{DeviceToken: "d1", ExpectedSince: time.Now()}
+	refusal := errors.New("nats: timeout")
+	if err := NewDeviceRosterWriter(&captureFactWriter{refuse: refusal}, nil).PublishDeviceRoster(ctx, ev); !errors.Is(err, refusal) {
+		t.Fatalf("a refused publish answered %v; want the refusal", err)
+	}
+	if errors.Is(NewDeviceRosterWriter(&captureFactWriter{refuse: refusal}, nil).PublishDeviceRoster(ctx, ev), model.ErrRosterBrokerUnreachable) {
+		t.Fatal("a writer that cannot tell the connection state reported the broker unreachable")
+	}
+	up := NewDeviceRosterWriter(&captureFactWriter{refuse: refusal}, nil).WithConnected(func() bool { return true })
+	if err := up.PublishDeviceRoster(ctx, ev); !errors.Is(err, refusal) || errors.Is(err, model.ErrRosterBrokerUnreachable) {
+		t.Fatalf("a refusal on a live connection answered %v; want the plain refusal", err)
+	}
+	down := NewDeviceRosterWriter(&captureFactWriter{refuse: refusal}, nil).WithConnected(func() bool { return false })
+	if err := down.PublishDeviceRoster(ctx, ev); !errors.Is(err, refusal) || !errors.Is(err, model.ErrRosterBrokerUnreachable) {
+		t.Fatalf("a refusal with the connection down answered %v; want it marked unreachable", err)
+	}
+	if err := NewDeviceRosterWriter(&captureFactWriter{}, nil).WithConnected(func() bool { return false }).PublishDeviceRoster(ctx, ev); err != nil {
+		t.Fatalf("a delivered publish answered %v; want nil", err)
+	}
+}
