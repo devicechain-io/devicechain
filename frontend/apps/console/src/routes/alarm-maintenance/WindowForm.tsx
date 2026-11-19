@@ -16,8 +16,9 @@ import type { AlarmSuppressionKind } from '@/gql/alarm-maintenance/graphql';
 import { errMessage } from '@/routes/common';
 import { SlotEditor } from '@/routes/maintenance-windows/SlotEditor';
 import { newSlot, parseSlots, serializeSlots, slotProblems, slotsEqual, timeZoneChoices } from '@/routes/maintenance-windows/slots';
-import { editable, partialUpdate, isBroad, splitKeys, localTime, isoTime, TARGET_TYPES, HOUR, type Target } from './rules';
+import { editable, partialUpdate, isBroad, validKeys, localTime, isoTime, TARGET_TYPES, HOUR, type Target } from './rules';
 import { SeverityField } from './SeverityField';
+import { AlarmKeysEditor } from './AlarmKeysEditor';
 
 export function WindowForm({ entity, onDone }: { entity?: MaintenanceWindow; onDone: (token: string) => void }) {
   const { t, i18n } = useTranslation('alarmMaintenance');
@@ -27,7 +28,7 @@ export function WindowForm({ entity, onDone }: { entity?: MaintenanceWindow; onD
   const [reason, setReason] = useState(entity?.reason ?? '');
   const [description, setDescription] = useState(entity?.description ?? '');
   const [targets, setTargets] = useState<Target[]>(entity?.targets.map(({ type, token }) => ({ type, token })) ?? [{ type: 'DEVICE', token: '' }]);
-  const [keys, setKeys] = useState(entity?.alarmKeys.join(', ') ?? '');
+  const [keys, setKeys] = useState<string[]>(entity?.alarmKeys ?? []);
   const [bypass, setBypass] = useState(entity?.bypassSeverity ?? (entity ? '' : 'CRITICAL'));
   const [kind, setKind] = useState<AlarmSuppressionKind>(entity?.kind ?? 'ONE_SHOT');
   const [start, setStart] = useState(localTime(entity?.startTime ?? new Date().toISOString()));
@@ -42,13 +43,13 @@ export function WindowForm({ entity, onDone }: { entity?: MaintenanceWindow; onD
   const recurring = kind === 'RECURRING';
   const unreadable = entity?.kind === 'RECURRING' && parseSlots(entity.slots) === null;
   const valid = !unreadable && !!reason.trim() && targets.length >= 1 && targets.length <= 20 &&
-    targets.every(target => target.type === 'TENANT' || target.token?.trim()) && splitKeys(keys).length <= 20 &&
+    targets.every(target => target.type === 'TENANT' || target.token?.trim()) && validKeys(keys) &&
     (recurring ? !!timezone && slotProblems(slots).ok && (!validFrom || !validUntil || Date.parse(validUntil) > Date.parse(validFrom)) :
       Date.parse(end) > Date.parse(start) && Date.parse(end) - Date.parse(start) <= 31 * 24 * HOUR);
   const request: AlarmSuppressionWindowUpdateRequest = {
     name: name.trim() || null, reason: reason.trim(), description: description.trim() || null,
     targets: targets.map(({ type, token }) => type === 'TENANT' ? { type } : { type, token: token?.trim() }),
-    alarmKeys: splitKeys(keys), bypassSeverity: bypass || null, kind,
+    alarmKeys: keys, bypassSeverity: bypass || null, kind,
     startTime: recurring ? null : isoTime(start), endTime: recurring ? null : isoTime(end),
     timezone: recurring ? timezone : null, slots: recurring && slotProblems(slots).ok ? serializeSlots(slots) : null,
     validFrom: recurring ? isoTime(validFrom) : null, validUntil: recurring ? isoTime(validUntil) : null,
@@ -97,7 +98,7 @@ export function WindowForm({ entity, onDone }: { entity?: MaintenanceWindow; onD
       </div>)}
       <Button variant="outline" disabled={targets.length >= 20} onClick={() => setTargets([...targets, { type: 'DEVICE', token: '' }])}>{t('addTarget')}</Button>
     </fieldset>
-    <FormField label={t('alarmKeys')} description={t('keysHint')} htmlFor="am-keys"><Input id="am-keys" value={keys} onChange={e => setKeys(e.target.value)} /></FormField>
+    <AlarmKeysEditor keys={keys} onChange={setKeys} />
     <SeverityField value={bypass} onChange={setBypass} />
     <FormField label={t('kind')}><Combobox value={kind} allowClear={false} onChange={value => setKind(value as AlarmSuppressionKind)}
       options={[{ value: 'ONE_SHOT', label: t('oneShot') }, { value: 'RECURRING', label: t('recurring') }]} /></FormField>

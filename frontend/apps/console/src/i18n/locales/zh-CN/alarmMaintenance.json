@@ -14,7 +14,7 @@
   "presetcustom": "自定义结束时间",
   "reason": "原因（必填）",
   "alarmKeys": "告警键",
-  "keysHint": "用逗号分隔，最多 20 个。留空表示所有告警。",
+  "keysHint": "每行一个键，最多 20 个不重复的键，每个键最多 256 个字符。留空表示所有告警。",
   "bypass": "绕过维护的严重程度",
   "noBypass": "不绕过",
   "narrow": "需要 alarm:write。服务器会检查权限和访问范围。",
@@ -86,5 +86,10 @@
   "maintenanceWindowDay.THURSDAY": "星期四",
   "maintenanceWindowDay.FRIDAY": "星期五",
   "maintenanceWindowDay.SATURDAY": "星期六",
-  "maintenanceWindowDay.SUNDAY": "星期日"
+  "maintenanceWindowDay.SUNDAY": "星期日",
+  "alarmKeyRow": "告警键 {{index}}",
+  "addKey": "添加告警键",
+  "removeKey": "移除告警键",
+  "historyMark": "维护期间触发",
+  "historyUnavailable": "维护历史不可用，请重试导出。"
 }

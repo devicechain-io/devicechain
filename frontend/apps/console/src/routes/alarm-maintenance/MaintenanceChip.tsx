@@ -5,12 +5,19 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { useQuery } from '@/lib/hooks/use-query';
-import { suppressionStatus, type Suppression } from '@/lib/api/alarm-maintenance';
+import { suppressionStatus, suppressionHistoryMarks, type Suppression } from '@/lib/api/alarm-maintenance';
 
 export function useSuppressions(tokens: string[], revision?: unknown) {
   const key = JSON.stringify(tokens);
-  const query = useQuery(() => suppressionStatus(tokens), [key, revision], [key]);
-  return new Map((query.error ? [] : query.data ?? []).map(r => [r.alarmToken, r.suppression]));
+  const query = useQuery(async () => {
+    const [status, marks] = await Promise.all([suppressionStatus(tokens), suppressionHistoryMarks(tokens)]);
+    return { status, marks };
+  }, [key, revision], [key]);
+  const data = query.error ? null : query.data;
+  return {
+    suppressions: new Map((data?.status ?? []).map(r => [r.alarmToken, r.suppression])),
+    historyMarks: new Map((data?.marks ?? []).map(r => [r.token, r.raisedDuringSuppression])),
+  };
 }
 export function MaintenanceChip({ suppression }: { suppression?: Suppression | null }) {
   const { t, i18n } = useTranslation('alarmMaintenance');
@@ -21,4 +28,10 @@ export function MaintenanceChip({ suppression }: { suppression?: Suppression | n
   return <Badge variant="secondary" title={title} data-shot="alarm-maintenance-chip">
     {visible ? <Link to={`/alarm-maintenance/${encodeURIComponent(suppression.window!.token)}`}>{label}</Link> : label}
   </Badge>;
+}
+
+/** Cycle history remains visible after clearing or the maintenance window ending. */
+export function MaintenanceHistoryMark({ stamp }: { stamp?: string | null }) {
+  const { t } = useTranslation('alarmMaintenance');
+  return stamp == null ? null : <Badge variant="outline">{t('historyMark')}</Badge>;
 }

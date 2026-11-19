@@ -127,6 +127,13 @@ export type AlarmMaintenanceStatusQueryVariables = Exact<{
 
 export type AlarmMaintenanceStatusQuery = { alarmSuppressionStatus: Array<{ alarmToken: string, suppression: { windowToken: string, until: string, window: { token: string, name: string | null, reason: string } | null } | null }> };
 
+export type AlarmMaintenanceHistoryMarksQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type AlarmMaintenanceHistoryMarksQuery = { alarmsByToken: Array<{ token: string, raisedDuringSuppression: string | null }> };
+
 export type AlarmMaintenanceCreateMutationVariables = Exact<{
   request: AlarmSuppressionWindowCreateRequest;
 }>;
@@ -333,6 +340,14 @@ export const AlarmMaintenanceStatusDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AlarmMaintenanceStatusQuery, AlarmMaintenanceStatusQueryVariables>;
+export const AlarmMaintenanceHistoryMarksDocument = new TypedDocumentString(`
+    query AlarmMaintenanceHistoryMarks($tokens: [String!]!) {
+  alarmsByToken(tokens: $tokens) {
+    token
+    raisedDuringSuppression
+  }
+}
+    `) as unknown as TypedDocumentString<AlarmMaintenanceHistoryMarksQuery, AlarmMaintenanceHistoryMarksQueryVariables>;
 export const AlarmMaintenanceCreateDocument = new TypedDocumentString(`
     mutation AlarmMaintenanceCreate($request: AlarmSuppressionWindowCreateRequest!) {
   createAlarmSuppressionWindow(request: $request) {

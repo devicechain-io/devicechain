@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { hasAuthority } from '@devicechain/client';
-import { MaintenanceChip, useSuppressions } from '@/routes/alarm-maintenance/MaintenanceChip';
+import { MaintenanceChip, MaintenanceHistoryMark, useSuppressions } from '@/routes/alarm-maintenance/MaintenanceChip';
 import { useAuth } from '@/auth/AuthProvider';
 import { formatTime } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -129,7 +129,7 @@ export default function AlarmsPage() {
       { replace: true },
     );
   const capability = useQuery(() => listWindows({ pageNumber: 1, pageSize: 1 }));
-  const history = !capability.error && capability.data ? fromAddress(HISTORY_PARAM, ['true', 'false']) : '';
+  const history = fromAddress(HISTORY_PARAM, ['true', 'false']);
   const [version, bumpVersion] = useReload();
   // Refreshes for the same filters must let the current read land. Remember just one trailing
   // refresh, regardless of how many events, reconnects or actions arrive while it is running.
@@ -173,11 +173,14 @@ export default function AlarmsPage() {
       if (history) {
         const filtered = await listHistoryAlarms(options, history === 'true');
         if (filtered) return filtered;
+        setFilter(HISTORY_PARAM)('');
         capability.refetch();
+        return null;
       }
       return listAlarms(options);
     },
     [pageNumber, state, severity, ack, history, version],
+    [state, severity, ack, history],
   );
 
   // Drain only after useQuery has published the result (or error). Starting in the loader's
@@ -300,7 +303,7 @@ export default function AlarmsPage() {
   ];
 
   const results: Alarm[] = data?.results ?? [];
-  const suppressions = useSuppressions(results.map(a => a.token), data);
+  const { suppressions, historyMarks } = useSuppressions(results.map(a => a.token), data);
   const unitOf = useMetricUnits(results.map((a) => (a.originatorType.toLowerCase() === 'device' ? a.originatorToken : null)));
   const selectable = results.filter(canAcknowledge);
   // What the bar acts on is the ticks that still belong to an acknowledgeable row: a live
@@ -386,7 +389,10 @@ export default function AlarmsPage() {
                 severity: severity || undefined,
                 acknowledged,
               };
-              return history ? await listHistoryAlarms(options, history === 'true') ?? listAlarms(options) : listAlarms(options);
+              if (!history) return listAlarms(options);
+              const page = await listHistoryAlarms(options, history === 'true');
+              if (!page) throw new Error(t('alarmMaintenance:historyUnavailable'));
+              return page;
             }}
           />
         </div>
@@ -453,6 +459,7 @@ export default function AlarmsPage() {
                   <DataTableCell>
                     <AlarmStatusBadge state={a.state} acknowledged={a.acknowledged} />
                     <MaintenanceChip suppression={suppressions.get(a.token)} />
+                    <MaintenanceHistoryMark stamp={historyMarks.get(a.token)} />
                   </DataTableCell>
                   <DataTableCell className="font-mono text-xs text-foreground">
                     <OriginatorLink alarm={a} />

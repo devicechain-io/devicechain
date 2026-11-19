@@ -20,6 +20,7 @@ type Documents = {
     "\n  query AlarmMaintenanceByToken($tokens: [String!]!) {\n    alarmSuppressionWindowsByToken(tokens: $tokens) { ...AlarmMaintenanceWindow }\n  }\n": typeof types.AlarmMaintenanceByTokenDocument,
     "\n  query AlarmMaintenanceForDevice($deviceToken: String!) {\n    alarmSuppressionsForDevice(deviceToken: $deviceToken) { ...AlarmMaintenanceWindow }\n  }\n": typeof types.AlarmMaintenanceForDeviceDocument,
     "\n  query AlarmMaintenanceStatus($tokens: [String!]!) {\n    alarmSuppressionStatus(tokens: $tokens) {\n      alarmToken suppression { windowToken until window { token name reason } }\n    }\n  }\n": typeof types.AlarmMaintenanceStatusDocument,
+    "\n  query AlarmMaintenanceHistoryMarks($tokens: [String!]!) {\n    alarmsByToken(tokens: $tokens) { token raisedDuringSuppression }\n  }\n": typeof types.AlarmMaintenanceHistoryMarksDocument,
     "\n  mutation AlarmMaintenanceCreate($request: AlarmSuppressionWindowCreateRequest!) {\n    createAlarmSuppressionWindow(request: $request) { token }\n  }\n": typeof types.AlarmMaintenanceCreateDocument,
     "\n  mutation AlarmMaintenanceUpdate($token: String!, $request: AlarmSuppressionWindowUpdateRequest!) {\n    updateAlarmSuppressionWindow(token: $token, request: $request) { token }\n  }\n": typeof types.AlarmMaintenanceUpdateDocument,
     "\n  mutation AlarmMaintenanceEnd($token: String!) {\n    endAlarmSuppressionWindow(token: $token) { token }\n  }\n": typeof types.AlarmMaintenanceEndDocument,
@@ -32,6 +33,7 @@ const documents: Documents = {
     "\n  query AlarmMaintenanceByToken($tokens: [String!]!) {\n    alarmSuppressionWindowsByToken(tokens: $tokens) { ...AlarmMaintenanceWindow }\n  }\n": types.AlarmMaintenanceByTokenDocument,
     "\n  query AlarmMaintenanceForDevice($deviceToken: String!) {\n    alarmSuppressionsForDevice(deviceToken: $deviceToken) { ...AlarmMaintenanceWindow }\n  }\n": types.AlarmMaintenanceForDeviceDocument,
     "\n  query AlarmMaintenanceStatus($tokens: [String!]!) {\n    alarmSuppressionStatus(tokens: $tokens) {\n      alarmToken suppression { windowToken until window { token name reason } }\n    }\n  }\n": types.AlarmMaintenanceStatusDocument,
+    "\n  query AlarmMaintenanceHistoryMarks($tokens: [String!]!) {\n    alarmsByToken(tokens: $tokens) { token raisedDuringSuppression }\n  }\n": types.AlarmMaintenanceHistoryMarksDocument,
     "\n  mutation AlarmMaintenanceCreate($request: AlarmSuppressionWindowCreateRequest!) {\n    createAlarmSuppressionWindow(request: $request) { token }\n  }\n": types.AlarmMaintenanceCreateDocument,
     "\n  mutation AlarmMaintenanceUpdate($token: String!, $request: AlarmSuppressionWindowUpdateRequest!) {\n    updateAlarmSuppressionWindow(token: $token, request: $request) { token }\n  }\n": types.AlarmMaintenanceUpdateDocument,
     "\n  mutation AlarmMaintenanceEnd($token: String!) {\n    endAlarmSuppressionWindow(token: $token) { token }\n  }\n": types.AlarmMaintenanceEndDocument,
@@ -59,6 +61,10 @@ export function graphql(source: "\n  query AlarmMaintenanceForDevice($deviceToke
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query AlarmMaintenanceStatus($tokens: [String!]!) {\n    alarmSuppressionStatus(tokens: $tokens) {\n      alarmToken suppression { windowToken until window { token name reason } }\n    }\n  }\n"): typeof import('./graphql').AlarmMaintenanceStatusDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query AlarmMaintenanceHistoryMarks($tokens: [String!]!) {\n    alarmsByToken(tokens: $tokens) { token raisedDuringSuppression }\n  }\n"): typeof import('./graphql').AlarmMaintenanceHistoryMarksDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

@@ -14,7 +14,7 @@
   "presetcustom": "Custom end",
   "reason": "Reason (required)",
   "alarmKeys": "Alarm keys",
-  "keysHint": "Comma-separated keys, up to 20. Leave empty for all alarms.",
+  "keysHint": "One key per row, up to 20 unique keys of 256 characters. Leave empty for all alarms.",
   "bypass": "Bypass severity",
   "noBypass": "No bypass",
   "narrow": "Requires alarm:write. The server checks permissions and scope.",
@@ -86,5 +86,10 @@
   "maintenanceWindowDay.THURSDAY": "Thursday",
   "maintenanceWindowDay.FRIDAY": "Friday",
   "maintenanceWindowDay.SATURDAY": "Saturday",
-  "maintenanceWindowDay.SUNDAY": "Sunday"
+  "maintenanceWindowDay.SUNDAY": "Sunday",
+  "alarmKeyRow": "Alarm key {{index}}",
+  "addKey": "Add alarm key",
+  "removeKey": "Remove alarm key",
+  "historyMark": "Raised during maintenance",
+  "historyUnavailable": "Maintenance history is unavailable. Please retry the export."
 }

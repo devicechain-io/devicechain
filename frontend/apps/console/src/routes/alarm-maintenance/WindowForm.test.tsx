@@ -52,6 +52,21 @@ describe('alarm window editor', () => {
     await waitFor(() => expect(h.gql).toHaveBeenCalledTimes(1));
     expect(h.gql.mock.calls[0][2]).toEqual({ token: stored.token, request: { name: 'Updated name' } });
   });
+  it('preserves comma keys on a name-only save and appends a new key verbatim', async () => {
+    render(<WindowForm entity={{ ...stored, alarmKeys: ['pressure,high'] }} onDone={vi.fn()} />);
+    expect((screen.getByLabelText('Alarm key 1') as HTMLInputElement).value).toBe('pressure,high');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(h.gql).toHaveBeenCalledTimes(1));
+    expect(h.gql.mock.calls[0][2].request).toEqual({ name: 'New name' });
+    fireEvent.click(screen.getByRole('button', { name: 'Add alarm key' }));
+    fireEvent.change(screen.getByLabelText('Alarm key 2'), { target: { value: ' temperature,high ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(h.gql).toHaveBeenCalledTimes(2));
+    expect(h.gql.mock.calls[1][2].request).toEqual({ alarmKeys: ['pressure,high', ' temperature,high '] });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove alarm key' })[1]);
+    expect(screen.queryByLabelText('Alarm key 2')).toBeNull();
+  });
 });
 describe('reach and partial updates', () => {
   it('treats recurring, populations and >24h intervals as broad', () => {

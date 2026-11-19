@@ -11,6 +11,16 @@ afterEach(cleanup);
 beforeEach(() => { h.authorities = ['alarm:write']; h.gql.mockReset().mockResolvedValue({ createAlarmSuppressionWindow: { token: 'new' } }); });
 const submit = () => screen.getByRole('button', { name: 'Start maintenance' }) as HTMLButtonElement;
 describe('quick maintenance declaration', () => {
+  it('sends each entered key verbatim, including commas', async () => {
+    const done = vi.fn();
+    render(<StartMaintenanceDialog target={{ type: 'DEVICE', token: 'pump' }} onClose={vi.fn()} onDone={done} />);
+    fireEvent.change(screen.getByLabelText('Reason (required)'), { target: { value: 'Service' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add alarm key' }));
+    fireEvent.change(screen.getByLabelText('Alarm key 1'), { target: { value: 'pressure,high' } });
+    fireEvent.click(submit());
+    await waitFor(() => expect(done).toHaveBeenCalled());
+    expect(h.gql.mock.calls[0][2].request.alarmKeys).toEqual(['pressure,high']);
+  });
   it('defaults to a narrow one-hour ONE_SHOT with critical bypass and sends the page target', async () => {
     const done = vi.fn();
     render(<StartMaintenanceDialog target={{ type: 'DEVICE', token: 'pump-1' }} onClose={vi.fn()} onDone={done} />);

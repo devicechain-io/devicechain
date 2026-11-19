@@ -6,6 +6,7 @@ import { optionalSuppression } from '@/lib/optional-suppression';
 import type {
   AlarmMaintenanceWindowFragment,
   AlarmMaintenanceStatusQuery,
+  AlarmMaintenanceHistoryMarksQuery,
   AlarmSuppressionWindowCreateRequest,
   AlarmSuppressionWindowUpdateRequest,
   AlarmSuppressionWindowSearchCriteria,
@@ -62,6 +63,20 @@ export const suppressionStatus = (tokens: string[]) => optionalSuppression(async
   const rows: AlarmMaintenanceStatusQuery['alarmSuppressionStatus'] = [];
   for (let i = 0; i < unique.length; i += 200) {
     rows.push(...(await gql('device-management', STATUS, { tokens: unique.slice(i, i + 200) })).alarmSuppressionStatus);
+  }
+  return rows;
+});
+const HISTORY_MARKS = graphql(`
+  query AlarmMaintenanceHistoryMarks($tokens: [String!]!) {
+    alarmsByToken(tokens: $tokens) { token raisedDuringSuppression }
+  }
+`);
+/** Separate optional document; keep batches bounded like the live status read. */
+export const suppressionHistoryMarks = (tokens: string[]) => optionalSuppression(async () => {
+  const unique = [...new Set(tokens)];
+  const rows: AlarmMaintenanceHistoryMarksQuery['alarmsByToken'] = [];
+  for (let i = 0; i < unique.length; i += 200) {
+    rows.push(...(await gql('device-management', HISTORY_MARKS, { tokens: unique.slice(i, i + 200) })).alarmsByToken);
   }
   return rows;
 });

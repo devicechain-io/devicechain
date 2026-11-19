@@ -4,8 +4,8 @@ import { GraphQLRequestError } from '@devicechain/client';
 
 /** Only validation refusals prove that the serving pod predates this optional API. */
 export function isSuppressionUnavailable(error: unknown): boolean {
-  return error instanceof GraphQLRequestError && !!error.errors?.some(({ message }) =>
-    /Cannot query field "alarmSuppression\w*" on type "Query"|Unknown type "AlarmSuppression\w*"|Field "raisedDuringSuppression" is not defined by type "AlarmSearchCriteria"/.test(message),
+  return error instanceof GraphQLRequestError && !!error.errors?.length && error.errors.every(({ message }) =>
+    /Cannot query field "alarmSuppression\w*" on type "Query"|Cannot query field "raisedDuringSuppression" on type "Alarm"|Unknown type "AlarmSuppression\w*"|Field "raisedDuringSuppression" is not defined by type "AlarmSearchCriteria"/.test(message),
   );
 }
 

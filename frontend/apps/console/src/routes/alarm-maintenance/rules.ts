@@ -28,7 +28,8 @@ export function editable(window: MaintenanceWindow): Update {
     validFrom: window.validFrom ?? null, validUntil: window.validUntil ?? null,
   };
 }
-export const splitKeys = (text: string) => [...new Set(text.split(',').map(k => k.trim()).filter(Boolean))];
+export const validKeys = (keys: string[]) => keys.length <= 20 && new Set(keys).size === keys.length &&
+  keys.every(key => key.trim().length > 0 && key.length <= 256);
 export function localTime(iso?: string | null): string {
   if (!iso) return '';
   const date = new Date(iso);

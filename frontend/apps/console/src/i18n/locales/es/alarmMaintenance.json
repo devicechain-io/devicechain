@@ -14,7 +14,7 @@
   "presetcustom": "Fin personalizado",
   "reason": "Motivo (obligatorio)",
   "alarmKeys": "Claves de alarma",
-  "keysHint": "Claves separadas por comas, hasta 20. Déjalo vacío para incluir todas las alarmas.",
+  "keysHint": "Una clave por fila, hasta 20 claves únicas de 256 caracteres. Déjalo vacío para incluir todas las alarmas.",
   "bypass": "Severidad que omite el mantenimiento",
   "noBypass": "Sin excepciones por severidad",
   "narrow": "Requiere alarm:write. El servidor comprueba los permisos y el alcance.",
@@ -86,5 +86,10 @@
   "maintenanceWindowDay.THURSDAY": "Jueves",
   "maintenanceWindowDay.FRIDAY": "Viernes",
   "maintenanceWindowDay.SATURDAY": "Sábado",
-  "maintenanceWindowDay.SUNDAY": "Domingo"
+  "maintenanceWindowDay.SUNDAY": "Domingo",
+  "alarmKeyRow": "Clave de alarma {{index}}",
+  "addKey": "Añadir clave de alarma",
+  "removeKey": "Eliminar clave de alarma",
+  "historyMark": "Activada durante el mantenimiento",
+  "historyUnavailable": "El historial de mantenimiento no está disponible. Vuelve a intentar la exportación."
 }

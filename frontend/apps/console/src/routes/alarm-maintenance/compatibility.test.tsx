@@ -18,7 +18,9 @@ const alarm = { id: 'a', token: 'a', originatorType: 'device', originatorToken: 
 beforeEach(() => {
   h.gql.mockReset().mockImplementation((_service, doc) => {
     if (String(doc).includes('query AlarmMaintenance')) {
-      const message = 'Cannot query field "alarmSuppressionStatus" on type "Query".';
+      const message = String(doc).includes('query AlarmMaintenanceHistoryMarks')
+        ? 'Cannot query field "raisedDuringSuppression" on type "Alarm".'
+        : 'Cannot query field "alarmSuppressionStatus" on type "Query".';
       return Promise.reject(new GraphQLRequestError(message, 200, [{ message }]));
     }
     return Promise.resolve({ alarms: { results: [alarm], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } } });
@@ -30,6 +32,8 @@ describe('optional maintenance reads on an old server', () => {
     render(<MemoryRouter><ToastProvider>{view === 'list' ? <AlarmsPage /> : <DeviceAlarmsPanel deviceToken="pump" />}</ToastProvider></MemoryRouter>);
     expect(await screen.findByText('overheat')).toBeTruthy();
     await waitFor(() => expect(h.gql.mock.calls.some(call => String(call[1]).includes('query AlarmMaintenanceStatus'))).toBe(true));
+    await waitFor(() => expect(h.gql.mock.calls.some(call => String(call[1]).includes('query AlarmMaintenanceHistoryMarks'))).toBe(true));
+    expect(screen.queryByText('Raised during maintenance')).toBeNull();
     expect(screen.queryByText(/Maintenance.*until/)).toBeNull();
     expect(screen.queryByRole('combobox', { name: /Raised during maintenance/ })).toBeNull();
     expect(screen.queryByText(/Failed to load/)).toBeNull();
