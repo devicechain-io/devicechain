@@ -4,6 +4,7 @@
 package scenarioverify
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,14 +14,16 @@ import (
 
 const testLampWindow = "hp-lamp-service-1-d0"
 
-// cleanMaintenance models both current cycles and ALL their pages while still active, including
-// the escalation after release. The same duty policy pages both lamps at MAJOR, max one escalation.
+// cleanMaintenance models the default 60s sweep and 30s/max-one escalation policy.
+// East releases at close+43s, then clears at +75s before the next sweep at +103s.
+// North pages at raise+3s and escalates one whole sweep later, on the same pass as
+// the East release. Both cycles are still active on that pass.
 func (d *day) cleanMaintenance() {
 	opens, closes := at(sim.HarborpulseLampServiceFrom), at(sim.HarborpulseLampServiceTo)
 	d.s4.Jobs = append(d.s4.Jobs, sim.ScenarioJob{Day: 0, Name: sim.HarborpulseJobLampService,
 		Window: testLampWindow, Device: sim.HarborpulseMaintenanceLamp,
 		WindowOpens: opens.Format(time.RFC3339Nano), WindowCloses: closes.Format(time.RFC3339Nano)})
-	d.maint = Maintenance{Window: &AlarmWindow{Token: testLampWindow, Start: opens, End: closes,
+	d.maint = Maintenance{Window: &AlarmWindow{Token: testLampWindow, Start: opens.Truncate(time.Microsecond), End: closes.Truncate(time.Microsecond),
 		Targets: []AlarmWindowTarget{{Type: "DEVICE", Token: sim.HarborpulseMaintenanceLamp}}}, Lamps: map[string]*LampCycle{}}
 	for _, device := range []string{sim.HarborpulseMaintenanceLamp, sim.HarborpulseControlLamp} {
 		token := "f-" + device
@@ -28,11 +31,11 @@ func (d *day) cleanMaintenance() {
 		stamp := ""
 		first, trigger := raised.Add(3*time.Second), "ALARM"
 		if device == sim.HarborpulseMaintenanceLamp {
-			stamp, first, trigger = testLampWindow, closes.Add(25*time.Second), "QUIET_HOURS_RELEASE"
+			stamp, first, trigger = testLampWindow, closes.Add(43*time.Second), "QUIET_HOURS_RELEASE"
 		}
 		d.maint.Lamps[device] = &LampCycle{Token: token, Device: device, Key: sim.HarborpulseFlickerAlarmKey,
 			State: sim.AlarmStateClearedWire, Raised: raised, Stamp: stamp}
-		d.alarms = append(d.alarms, lifecycle{token, device, sim.HarborpulseFlickerAlarmKey, []step{{11 + 10.0/60, major}}, 12 + 50.0/60})
+		d.alarms = append(d.alarms, lifecycle{token, device, sim.HarborpulseFlickerAlarmKey, []step{{11 + 10.0/60, major}}, 12 + 45.0/60})
 		d.lampPages(device, first, trigger)
 	}
 }
@@ -41,7 +44,16 @@ func (d *day) lampPages(device string, first time.Time, trigger string) {
 	a := d.maint.Lamps[device]
 	d.s3.Attempts[a.Token] = []Attempt{
 		{At: first, AlarmToken: a.Token, Trigger: trigger, Status: "SENT", Channel: sim.HarborpulseDutyChannel},
-		{At: first.Add(45 * time.Second), AlarmToken: a.Token, Trigger: "ESCALATION", Status: "SENT", Channel: sim.HarborpulseDutyChannel},
+	}
+	// A release restarts the escalation clock. The next sweep is 60s later, by which
+	// time the default East cycle has cleared; extended-lifetime fixtures can escalate.
+	for _, alarm := range d.alarms {
+		if alarm.token == a.Token && first.Add(60*time.Second).Before(at(alarm.clear)) {
+			d.s3.Attempts[a.Token] = append(d.s3.Attempts[a.Token], Attempt{
+				At: first.Add(60 * time.Second), AlarmToken: a.Token, Trigger: "ESCALATION",
+				Status: "SENT", Channel: sim.HarborpulseDutyChannel,
+			})
+		}
 	}
 	if d.s3.Sink == nil {
 		return
@@ -79,6 +91,9 @@ func TestMaintenanceNegativeEvidence(t *testing.T) {
 		mutate        func(*day)
 	}{
 		{"late release", "no SENT QUIET_HOURS_RELEASE within 150s", func(d *day) {
+			// A release after the default clear would be dropped. Keep this cycle active
+			// through the late release and its next escalation sweep.
+			d.lampClearsAt(sim.HarborpulseMaintenanceLamp, 11.5+280.0/60)
 			d.lampPages(sim.HarborpulseMaintenanceLamp, d.maint.Window.End.Add(200*time.Second), "QUIET_HOURS_RELEASE")
 		}},
 		{"early SENT", "early page", func(d *day) {
@@ -111,7 +126,7 @@ func TestMaintenanceControlRejectsHeldNorth(t *testing.T) {
 	evaluateOneRed(t, InvMaintenanceControlPages, "unwindowed control was also held", func(d *day) {
 		a := d.maint.Lamps[sim.HarborpulseControlLamp]
 		a.Stamp = testLampWindow
-		d.lampPages(sim.HarborpulseControlLamp, d.maint.Window.End.Add(25*time.Second), "QUIET_HOURS_RELEASE")
+		d.lampPages(sim.HarborpulseControlLamp, d.maint.Window.End.Add(43*time.Second), "QUIET_HOURS_RELEASE")
 	})
 }
 
@@ -135,5 +150,92 @@ func TestMaintenanceStillJudgedWithoutSink(t *testing.T) {
 	wrongMaintenanceDevice(d)
 	if maintenanceHoldsPage(d.observe()) == nil {
 		t.Fatal("platform attempts must reject early page without sink")
+	}
+}
+
+// lampClearsAt extends a fixture's actual lifecycle, rather than inventing pages after clear.
+func (d *day) lampClearsAt(device string, hour float64) {
+	for i := range d.alarms {
+		if d.alarms[i].token == d.maint.Lamps[device].Token {
+			d.alarms[i].clear = hour
+		}
+	}
+}
+
+func TestMaintenanceReleaseWithAndWithoutEscalation(t *testing.T) {
+	for _, escalate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("escalate=%t", escalate), func(t *testing.T) {
+			d := cleanDay()
+			device := sim.HarborpulseMaintenanceLamp
+			if escalate {
+				d.lampClearsAt(device, 11.5+120.0/60)
+				d.lampPages(device, d.maint.Window.End.Add(43*time.Second), "QUIET_HOURS_RELEASE")
+			}
+			want := 1
+			if escalate {
+				want = 2
+			}
+			if got := len(d.s3.Attempts[d.maint.Lamps[device].Token]); got != want {
+				t.Fatalf("got %d attempts, want %d", got, want)
+			}
+			if failures := failing(Evaluate(d.observe())); len(failures) != 0 {
+				t.Fatal(failures)
+			}
+		})
+	}
+}
+
+func TestMaintenanceWindowMicrosecondPrecision(t *testing.T) {
+	for _, dayNumber := range []int{0, 2} {
+		t.Run(fmt.Sprintf("day=%d", dayNumber), func(t *testing.T) {
+			o := cleanDay().observe()
+			o.Day = dayNumber
+			// Preserve the other beats' shared fixtures; this run starts between microseconds.
+			nanos := 123456789 * time.Nanosecond
+			o.Clock.StartedAt = o.Clock.StartedAt.Add(nanos)
+			shift := time.Duration(dayNumber)*o.Clock.DayLength + nanos
+			w := o.Maint.Window
+			w.Token = fmt.Sprintf("hp-lamp-service-1-d%d", dayNumber)
+			w.Start, w.End = w.Start.Add(shift).Truncate(time.Microsecond), w.End.Add(shift).Truncate(time.Microsecond)
+			for _, a := range o.Maint.Lamps {
+				a.Raised = a.Raised.Add(shift).Truncate(time.Microsecond)
+				if a.Stamp != "" {
+					a.Stamp = w.Token
+				}
+			}
+			for token, attempts := range o.S3.Attempts {
+				for i := range attempts {
+					attempts[i].At = attempts[i].At.Add(shift).Truncate(time.Microsecond)
+				}
+				o.S3.Attempts[token] = attempts
+			}
+			for i := range o.S3.Sink.Mail {
+				o.S3.Sink.Mail[i].At = o.S3.Sink.Mail[i].At.Add(shift)
+			}
+			for i := range o.Polls {
+				o.Polls[i] = o.Polls[i].Add(shift)
+			}
+			opens, closes := maintenanceSpan(o)
+			o.S4.Jobs = []sim.ScenarioJob{{Day: dayNumber, Name: sim.HarborpulseJobLampService,
+				Window: w.Token, Device: sim.HarborpulseMaintenanceLamp,
+				WindowOpens: opens.Format(time.RFC3339Nano), WindowCloses: closes.Format(time.RFC3339Nano)}}
+			if opens.Nanosecond() != 123456789 || w.Start.Equal(opens) || w.End.Equal(closes) {
+				t.Fatal("fixture must retain ledger nanoseconds and truncate platform instants")
+			}
+			if err := maintenanceHoldsPage(o); err != nil {
+				t.Fatal(err)
+			}
+			if err := maintenanceControlPages(o); err != nil {
+				t.Fatal(err)
+			}
+			for _, boundary := range []*time.Time{&w.Start, &w.End} {
+				saved := *boundary
+				*boundary = boundary.Add(time.Microsecond)
+				if err := maintenanceHoldsPage(o); err == nil || !strings.Contains(err.Error(), "exact judged day's") {
+					t.Fatalf("a whole microsecond drift must fail: %v", err)
+				}
+				*boundary = saved
+			}
+		})
 	}
 }

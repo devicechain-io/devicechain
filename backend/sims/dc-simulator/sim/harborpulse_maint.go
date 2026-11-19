@@ -5,10 +5,12 @@ package sim
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/userclient"
 	"github.com/rs/zerolog/log"
 )
 
@@ -130,6 +132,11 @@ func deleteHarborLampWindows(ctx context.Context, rt *Runtime) error {
 // scheduleMaintenance has its own per-day state: the campaign deadline is hours too late for
 // this beat. A failed create leaves the day retryable; Tick still emits all of its telemetry.
 func (s *harborpulse) scheduleMaintenance(ctx context.Context, rt *Runtime, now time.Time) error {
+	s.jobsMu.Lock()
+	defer s.jobsMu.Unlock()
+	if s.maintenanceUnavailable {
+		return nil
+	}
 	s.mu.Lock()
 	started := s.started
 	s.mu.Unlock()
@@ -140,8 +147,20 @@ func (s *harborpulse) scheduleMaintenance(ctx context.Context, rt *Runtime, now 
 		return fmt.Errorf("lamp maintenance needs deviceMgmtGraphQL")
 	}
 	day := harborDayOf(now.Sub(started), s.dayLength)
-	s.jobsMu.Lock()
-	defer s.jobsMu.Unlock()
+	// Prune on every pass, including already-scheduled and skipped days. Failed deletes stay
+	// retryable, and <= catches windows whose exact day-3 pass was missed.
+	if s.maintenancePruned == nil {
+		s.maintenancePruned = map[string]bool{}
+	}
+	for _, old := range s.jobs {
+		if old.Day <= day-3 && old.Window != "" && !s.maintenancePruned[old.Window] {
+			if err := deleteLampWindow(ctx, rt, old.Window); err != nil && !userclient.AllHaveCode(err, "NOT_FOUND") {
+				log.Warn().Err(err).Msg("prune old lamp window failed; retrying next tick")
+			} else {
+				s.maintenancePruned[old.Window] = true
+			}
+		}
+	}
 	if s.maintenanceScheduled == nil {
 		s.maintenanceScheduled = map[int]bool{}
 	}
@@ -177,13 +196,38 @@ func (s *harborpulse) scheduleMaintenance(ctx context.Context, rt *Runtime, now 
 	}
 	s.maintenanceScheduled[day] = true
 	s.jobs = append(s.jobs, job)
-	for _, old := range s.jobs {
-		if old.Day == day-3 && old.Window != "" {
-			if err := deleteLampWindow(ctx, rt, old.Window); err != nil {
-				log.Warn().Err(err).Msg("prune old lamp window failed")
-			}
-		}
-	}
 	log.Info().Int("day", day).Str("window", job.Window).Str("opens", job.WindowOpens).Str("closes", job.WindowCloses).Msg("scheduled lamp maintenance")
 	return nil
+}
+
+// bootstrapMaintenance keeps telemetry available on instances predating suppression windows.
+// Other cleanup failures remain fatal: a stale window could silently hold this run's pages.
+func (s *harborpulse) bootstrapMaintenance(ctx context.Context, rt *Runtime) error {
+	err := deleteHarborLampWindows(ctx, rt)
+	if err != nil && !lampWindowsUnsupported(err) {
+		return err
+	}
+	s.jobsMu.Lock()
+	s.maintenanceUnavailable = err != nil
+	s.jobsMu.Unlock()
+	if err != nil {
+		log.Error().Err(err).Msg("lamp-maintenance beat is unavailable on this instance: alarm suppression windows are unsupported; continuing telemetry without scheduling windows")
+	}
+	return nil
+}
+
+func lampWindowsUnsupported(err error) bool {
+	// Reuse the client's typed GraphQL refusal classification; transport/status errors and
+	// resolver failures mentioning suppression are not evidence of an older schema.
+	var gql *userclient.GraphQLError
+	if !errors.As(err, &gql) || len(gql.Messages) == 0 {
+		return false
+	}
+	for _, message := range gql.Messages {
+		if !strings.HasPrefix(message, `Cannot query field "alarmSuppressionWindows" on type `) &&
+			!strings.HasPrefix(message, `Unknown type "AlarmSuppressionWindowSearchCriteria"`) {
+			return false
+		}
+	}
+	return true
 }

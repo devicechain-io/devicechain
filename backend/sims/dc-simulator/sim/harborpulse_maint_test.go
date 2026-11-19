@@ -6,6 +6,7 @@ package sim
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -112,6 +113,14 @@ func TestHarborLampMaintenanceTiming(t *testing.T) {
 
 func lampTestRuntime(t *testing.T, dispatch func(string, map[string]any) map[string]any) *Runtime {
 	t.Helper()
+	return lampTestRuntimeReply(t, func(q string, v map[string]any) map[string]any {
+		return map[string]any{"data": dispatch(q, v)}
+	})
+}
+
+// lampTestRuntimeReply also permits wire-level GraphQL errors and broken transports.
+func lampTestRuntimeReply(t *testing.T, dispatch func(string, map[string]any) map[string]any) *Runtime {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Query     string         `json:"query"`
@@ -132,7 +141,8 @@ func lampTestRuntime(t *testing.T, dispatch func(string, map[string]any) map[str
 			}
 			data = map[string]any{field: map[string]any{"accessToken": "access", "refreshToken": "refresh", "expiresAt": "2099-01-01T00:00:00Z"}}
 		} else {
-			data = dispatch(req.Query, req.Variables)
+			_ = json.NewEncoder(w).Encode(dispatch(req.Query, req.Variables))
+			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
 	}))
@@ -225,5 +235,120 @@ func TestHarborLampWindowCleanup(t *testing.T) {
 		if token == "operator-window" {
 			t.Fatal("deleted operator window")
 		}
+	}
+}
+
+func TestHarborLampMaintenanceBootstrap(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		messages    []string
+		transport   bool
+		unavailable bool
+	}{
+		{"missing field", []string{`Cannot query field "alarmSuppressionWindows" on type "Query".`}, false, true},
+		{"unknown type", []string{`Unknown type "AlarmSuppressionWindowSearchCriteria".`}, false, true},
+		{"old schema", []string{`Unknown type "AlarmSuppressionWindowSearchCriteria".`, `Cannot query field "alarmSuppressionWindows" on type "Query".`}, false, true},
+		{"transport", nil, true, false},
+		{"resolver", []string{"alarmSuppressionWindows: database unavailable"}, false, false},
+		{"unrelated validation", []string{`Cannot query field "campaigns" on type "Query".`}, false, false},
+		{"mixed failures", []string{`Cannot query field "alarmSuppressionWindows" on type "Query".`, "permission denied"}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := harborWith(t)
+			calls := 0
+			rt := lampTestRuntimeReply(t, func(q string, _ map[string]any) map[string]any {
+				calls++
+				if q != queryLampWindows {
+					t.Errorf("unexpected query: %s", q)
+				}
+				if tc.transport {
+					panic(http.ErrAbortHandler) // close the connection without an HTTP response
+				}
+				var failures []map[string]any
+				for _, message := range tc.messages {
+					failures = append(failures, map[string]any{"message": message})
+				}
+				return map[string]any{"errors": failures}
+			})
+			err := s.bootstrapMaintenance(context.Background(), rt)
+			if tc.unavailable {
+				if err != nil || !s.maintenanceUnavailable {
+					t.Fatalf("older instance must allow telemetry bootstrap: unavailable=%t err=%v", s.maintenanceUnavailable, err)
+				}
+				s.started = time.Now()
+				before := calls
+				for _, elapsed := range []time.Duration{0, 5 * time.Second, s.dayLength} {
+					if err := s.scheduleMaintenance(context.Background(), rt, s.started.Add(elapsed)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if calls != before || len(s.jobs) != 0 {
+					t.Fatalf("unsupported windows retried: calls=%d before=%d jobs=%v", calls, before, s.jobs)
+				}
+			} else {
+				if err == nil || s.maintenanceUnavailable {
+					t.Fatalf("real cleanup failure must stop bootstrap: unavailable=%t err=%v", s.maintenanceUnavailable, err)
+				}
+				if tc.transport {
+					var gql *userclient.GraphQLError
+					if errors.As(err, &gql) {
+						t.Fatalf("transport fixture returned a GraphQL error: %v", err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestHarborLampServicePruningRetries(t *testing.T) {
+	s := harborWith(t)
+	s.started = time.Date(2026, 11, 16, 12, 0, 17, 123456789, time.UTC)
+	for _, day := range []int{0, 1, 2} {
+		job, _ := s.lampService(s.started, day)
+		s.jobs = append(s.jobs, job)
+	}
+	attempts := map[string]int{}
+	oldest, absent, recent := s.jobs[0].Window, s.jobs[1].Window, s.jobs[2].Window
+	rt := lampTestRuntimeReply(t, func(q string, v map[string]any) map[string]any {
+		if q != mutationDeleteLampWindow {
+			t.Errorf("unexpected query: %s", q)
+		}
+		token := v["token"].(string)
+		attempts[token]++
+		if token == oldest && attempts[token] == 1 {
+			return map[string]any{"errors": []any{map[string]any{"message": "database unavailable"}}}
+		}
+		if token == absent {
+			return map[string]any{"errors": []any{map[string]any{
+				"message": "record not found", "extensions": map[string]any{"code": "NOT_FOUND"},
+			}}}
+		}
+		return map[string]any{"data": map[string]any{"deleteAlarmSuppressionWindow": true}}
+	})
+	// Missed day 3 entirely. Day 4 is too late to create a window, but must prune both
+	// eligible days, once each. Only the failed delete should be retried next tick.
+	now := harborWall(s.started, s.dayLength, 4, 11)
+	if err := s.scheduleMaintenance(context.Background(), rt, now); err != nil {
+		t.Fatal(err)
+	}
+	if attempts[oldest] != 1 || attempts[absent] != 1 || attempts[recent] != 0 ||
+		s.maintenancePruned[oldest] || !s.maintenancePruned[absent] {
+		t.Fatalf("first prune: attempts=%v pruned=%v", attempts, s.maintenancePruned)
+	}
+	for i := 1; i <= 2; i++ {
+		if err := s.scheduleMaintenance(context.Background(), rt, now.Add(time.Duration(i)*5*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if attempts[oldest] != 2 || attempts[absent] != 1 || attempts[recent] != 0 || !s.maintenancePruned[oldest] {
+		t.Fatalf("retry/idempotence: attempts=%v pruned=%v", attempts, s.maintenancePruned)
+	}
+	// A previously scheduled day still prunes a newly eligible ledger window.
+	s.maintenanceScheduled[5] = true
+	if err := s.scheduleMaintenance(context.Background(), rt, harborWall(s.started, s.dayLength, 5, 6)); err != nil {
+		t.Fatal(err)
+	}
+	if attempts[recent] != 1 || !s.maintenancePruned[recent] {
+		t.Fatalf("already scheduled day skipped pruning: attempts=%v pruned=%v", attempts, s.maintenancePruned)
 	}
 }

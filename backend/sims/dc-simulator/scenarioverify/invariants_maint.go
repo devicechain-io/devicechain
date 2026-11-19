@@ -85,7 +85,8 @@ func lampHeld(o Observations, device string) error {
 	if w == nil {
 		problems = append(problems, "no platform suppression window for the judged day's lamp-service job")
 	} else {
-		if w.Token == "" || !w.Start.Equal(opens) || !w.End.Equal(closes) {
+		// PostgreSQL stores microseconds; the sim's wall-clock ledger retains nanoseconds.
+		if w.Token == "" || !w.Start.Truncate(time.Microsecond).Equal(opens.Truncate(time.Microsecond)) || !w.End.Truncate(time.Microsecond).Equal(closes.Truncate(time.Microsecond)) {
 			problems = append(problems, "platform window does not have the exact judged day's 10:45-11:30 instants")
 		}
 		if len(w.Targets) != 1 || w.Targets[0].Type != "DEVICE" || w.Targets[0].Token != device {

@@ -63,10 +63,12 @@ type harborpulse struct {
 	now     func() time.Time
 
 	// jobsMu guards the sim days whose jobs are scheduled and the ledger of them (S4).
-	jobsMu               sync.Mutex
-	scheduled            map[int]bool
-	maintenanceScheduled map[int]bool
-	jobs                 []ScenarioJob
+	jobsMu                 sync.Mutex
+	scheduled              map[int]bool
+	maintenanceScheduled   map[int]bool
+	maintenancePruned      map[string]bool
+	maintenanceUnavailable bool
+	jobs                   []ScenarioJob
 
 	s3b harborS3bState
 }
@@ -832,7 +834,7 @@ func (s *harborpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
 	if err := deleteCampaignsWithPrefix(ctx, rt, HarborpulseNightDimPrefix, HarborpulseFlushPrefix); err != nil {
 		return err
 	}
-	return deleteHarborLampWindows(ctx, rt)
+	return s.bootstrapMaintenance(ctx, rt)
 }
 
 func (s *harborpulse) ensureModel() *harborModel {
