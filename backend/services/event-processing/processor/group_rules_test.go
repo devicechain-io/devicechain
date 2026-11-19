@@ -29,6 +29,8 @@ func (r *movingRuleRouter) ShardGroup(tenant string) (int, error) {
 	return 0, nil
 }
 
+func (*movingRuleRouter) Ready() error { return nil }
+
 func routedRuleFixture(t *testing.T, r *groupRig) (*ResolvedEventsProcessor, *ResolvedEventsProcessor) {
 	t.Helper()
 	p0, p1 := r.worker(t, 0), r.worker(t, 1)
