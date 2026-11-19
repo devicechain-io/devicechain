@@ -334,10 +334,10 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 		if err != nil {
 			return noVerdict{err}
 		}
-		if len(b.Times) != b.Buffered || len(b.PowerKW) != b.Buffered {
+		if len(b.Times) != b.Buffered || len(b.Values) != b.Buffered {
 			return noVerdictf("the sim's backfill ledger for %s counts %d buffered readings but carries %d times", b.Device, b.Buffered, len(b.Times))
 		}
-		bf := Backfill{Device: b.Device, Buffered: b.Buffered, First: first, Last: last, PowerKW: b.PowerKW}
+		bf := Backfill{Device: b.Device, Buffered: b.Buffered, First: first, Last: last, PowerKW: b.PowerKW, Values: b.Values, Rows: readings}
 		for _, s := range b.Times {
 			t, err := time.Parse(time.RFC3339Nano, s)
 			if err != nil {

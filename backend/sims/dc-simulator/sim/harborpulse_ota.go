@@ -111,8 +111,8 @@ func readHarborArtifact(ctx context.Context, rt *Runtime, token string) (*harbor
 // provisionChargerOTA retains only a process-local private key. A retry reads back every write,
 // including a registration whose response was lost, before trying it again.
 func (s *harborpulse) provisionChargerOTA(ctx context.Context, rt *Runtime) error {
-	if strings.TrimSpace(rt.Endpoints.UpdateMgmtGraphQL) == "" {
-		return errors.New("harborpulse requires endpoints.updateMgmtGraphQL; re-create the sim with a current dcctl")
+	if err := rt.Endpoints.ResolveUpdateManagement(); err != nil {
+		return err
 	}
 	if rt.UpdateFleet != nil {
 		return errors.New("harborpulse declares its own update population; --ota cannot also be given")

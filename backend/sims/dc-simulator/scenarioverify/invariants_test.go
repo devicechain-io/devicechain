@@ -144,8 +144,8 @@ func (d *day) pumpStarted(p string, h float64) {
 }
 
 func backfillOf(device string) Backfill {
-	b := Backfill{Device: device, First: at(19.75).Add(time.Second)}
-	for t := b.First; t.Before(at(21.25)); t = t.Add(5 * time.Second) {
+	b := Backfill{Device: device, First: at(19.75)}
+	for t := b.First; t.Before(at(21.25)); t = t.Add(at(21.25).Sub(at(19.75)) / 90) {
 		b.Buffered++
 		b.Last = t
 		b.Taken = append(b.Taken, t)
@@ -338,7 +338,7 @@ func TestEachControlTurnsExactlyItsInvariantRed(t *testing.T) {
 					st := d.backfill[i].Stored
 					for j := 1; j < len(st)-1; j++ {
 						if !restoreRefused(d.observe(), d.backfill[i].Device)[st[j].UnixMicro()] {
-							st[j] = st[j].Add(time.Second)
+							st[j] = st[j].Add(time.Microsecond)
 						}
 					}
 				}

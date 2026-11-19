@@ -32,7 +32,7 @@ stored password in sync with the identity).
 A scenario that needs more than the default tier allows gets its own. towerpulse and
 harborpulse publish calculated metrics, which are off in every platform tier, so create
 ensures a tier of the scenario's own (tp-showcase: calculated metrics on, ingest sized
-for the scenario; hp-governed: calculated metrics on, 32 readings/s and burst 150,
+for the scenario; hp-governed: calculated metrics on, 40 readings/s and burst 256,
 so ordinary ticks fit and the restore burst is rate limited) before creating the tenant. It is
 created if absent and only RAISED if present, never lowered, and sim destroy leaves it
 in place because it is shared by every sim of that scenario. Pass

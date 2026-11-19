@@ -44,19 +44,85 @@ func (d *day) cleanS5() {
 }
 
 func (d *day) cleanRestore() {
-	l := sim.ScenarioRestoreDrain{Day: 0, Refused429: 2, FirstRefusalAt: at(21.25).Add(time.Second).Format(time.RFC3339Nano), CaughtUpAt: at(21.25).Add(25 * time.Second).Format(time.RFC3339Nano)}
+	d.modelRestore(false, false, false)
+}
+
+// Model the real limiter: a full effective bucket, ordinary HTTP ticks every
+// five seconds, then four-reading entries drained immediately after each tick.
+// Refusals consume no tokens and pause the FIFO until the next ordinary tick.
+func (d *day) modelRestore(dropBackfill, drop429, unthrottled bool) {
+	l := sim.ScenarioRestoreDrain{Day: 0}
+	type entry struct{ b, j int }
+	var pending []entry
 	for i := range d.backfill {
 		b := &d.backfill[i]
+		b.PowerKW, b.PowerStored, b.Values, b.Rows, b.Stored = nil, nil, nil, nil, nil
 		for j, taken := range b.Taken {
 			value := 3.7 + float64(j)/100
 			b.PowerKW = append(b.PowerKW, value)
-			b.PowerStored = append(b.PowerStored, Reading{Name: sim.HarborpulseChargerPowerKey, At: taken, Value: value})
+			b.Values = append(b.Values, map[string]float64{sim.HarborpulseChargerPowerKey: value, sim.HarborpulseSessionKey: 1, sim.HarborpulseConnectorKey: 30 + float64(j)/100, sim.HarborpulseMaxKwKey: 22})
+			_ = taken
+			if !dropBackfill || (j+1)%5 != 0 {
+				pending = append(pending, entry{i, j})
+				l.Offered++
+			}
 		}
-		// The HTTP tick spends 108, leaving 42/150 tokens. Ten four-value
-		// restores fit; the eleventh receives a real 429 and is retried next tick.
-		l.Refused = append(l.Refused, sim.ScenarioRestoreRefused{Device: b.Device, Times: []string{b.Taken[10].Format(time.RFC3339Nano)}})
-		l.Offered += b.Buffered
-		l.Accepted += b.Buffered
+	}
+	rate, burst := 40.0, 256.0 // max(tier burst, governance's 256 floor)
+	if unthrottled {
+		rate, burst = 1000, 2000
+	}
+	tokens := burst
+	dropped := false
+	for tick := 0; len(pending) > 0; tick++ {
+		now := at(21.25).Add(time.Duration(tick) * sim.DefaultEmitInterval)
+		if tick > 0 {
+			tokens = min(burst, tokens+rate*sim.DefaultEmitInterval.Seconds())
+		}
+		if tokens < 108 {
+			panic("fixture sheds ordinary HTTP tick")
+		}
+		tokens -= 108
+		for len(pending) > 0 {
+			e := pending[0]
+			b := &d.backfill[e.b]
+			stamp := b.Taken[e.j]
+			if tokens < 4 {
+				l.Refused429++
+				if l.FirstRefusalAt == "" {
+					l.FirstRefusalAt = now.Format(time.RFC3339Nano)
+				}
+				found := false
+				for i := range l.Refused {
+					if l.Refused[i].Device == b.Device {
+						l.Refused[i].Times = append(l.Refused[i].Times, stamp.Format(time.RFC3339Nano))
+						found = true
+					}
+				}
+				if !found {
+					l.Refused = append(l.Refused, sim.ScenarioRestoreRefused{Device: b.Device, Times: []string{stamp.Format(time.RFC3339Nano)}})
+				}
+				if drop429 && !dropped {
+					pending = pending[1:]
+					dropped = true
+				}
+				break
+			}
+			tokens -= 4
+			l.Accepted++
+			b.Stored = append(b.Stored, stamp)
+			for metric, value := range b.Values[e.j] {
+				row := Reading{Name: metric, At: stamp, Value: value}
+				b.Rows = append(b.Rows, row)
+				if metric == sim.HarborpulseChargerPowerKey {
+					b.PowerStored = append(b.PowerStored, row)
+				}
+			}
+			pending = pending[1:]
+		}
+		if len(pending) == 0 {
+			l.CaughtUpAt = now.Format(time.RFC3339Nano)
+		}
 	}
 	d.s5.Ledger.RestoreDrains = []sim.ScenarioRestoreDrain{l}
 }
@@ -64,43 +130,17 @@ func (d *day) cleanRestore() {
 func TestEachS5BurstControlModelsLiveEvidence(t *testing.T) {
 	t.Run(sim.HarborpulseDefectBurstUnthrottled, func(t *testing.T) {
 		evaluateOneRed(t, InvBurstRateLimited, "no real ingress 429", func(d *day) {
-			l := &d.s5.Ledger.RestoreDrains[0]
-			l.Refused429 = 0
-			l.FirstRefusalAt = ""
-			l.Refused = nil
-			l.CaughtUpAt = at(21.25).Add(time.Second).Format(time.RFC3339Nano)
+			d.modelRestore(false, false, true)
 		})
 	})
 	t.Run(sim.HarborpulseDefectBurstDropOn429, func(t *testing.T) {
 		evaluateOneRed(t, InvBurstCaughtUp, "stored 0 times", func(d *day) {
-			// Only the FIRST 429 entry of the day's whole drain is discarded.
-			b := &d.backfill[0]
-			b.Stored = append(b.Stored[:10], b.Stored[11:]...)
-			b.PowerStored = append(b.PowerStored[:10], b.PowerStored[11:]...)
-			d.s5.Ledger.RestoreDrains[0].Accepted--
+			d.modelRestore(false, true, false)
 		})
 	})
 	t.Run(sim.HarborpulseDefectDropBackfill, func(t *testing.T) {
 		evaluateOneRed(t, InvBackfillStored, "missing", func(d *day) {
-			l := &d.s5.Ledger.RestoreDrains[0]
-			for i := range d.backfill {
-				b := &d.backfill[i]
-				var stored []time.Time
-				var rows []Reading
-				for j, stamp := range b.Stored {
-					if (j+1)%5 != 0 {
-						stored = append(stored, stamp)
-						rows = append(rows, b.PowerStored[j])
-					} else {
-						l.Offered--
-						l.Accepted--
-					}
-				}
-				b.Stored, b.PowerStored = stored, rows
-				// Its first ten offers now skip the lost fifth/tenth samples;
-				// the eleventh offer is original sample 13, which was retained.
-				l.Refused[i].Times = []string{b.Taken[12].Format(time.RFC3339Nano)}
-			}
+			d.modelRestore(true, false, false)
 		})
 	})
 }
@@ -109,12 +149,26 @@ func TestS5BurstStoreDeadlineAndRateGuards(t *testing.T) {
 	for name, mutate := range map[string]func(*day){
 		"duplicate": func(d *day) {
 			b := &d.backfill[0]
-			b.Stored = append(b.Stored, b.Stored[0])
-			b.PowerStored = append(b.PowerStored, b.PowerStored[0])
+			refused := restoreRefused(d.observe(), b.Device)
+			for _, row := range b.Rows {
+				if refused[row.At.UnixMicro()] {
+					b.Rows = append(b.Rows, row)
+					break
+				}
+			}
 		},
-		"wrong value": func(d *day) { d.backfill[0].PowerStored[10].Value = 99 },
+		"wrong value": func(d *day) {
+			b := &d.backfill[0]
+			refused := restoreRefused(d.observe(), b.Device)
+			for i := range b.Rows {
+				if refused[b.Rows[i].At.UnixMicro()] {
+					b.Rows[i].Value = 99
+					break
+				}
+			}
+		},
 		"late": func(d *day) {
-			d.s5.Ledger.RestoreDrains[0].CaughtUpAt = at(21.25).Add(restoreDeadline + time.Second).Format(time.RFC3339Nano)
+			d.s5.Ledger.RestoreDrains[0].CaughtUpAt = at(21.25).Add(restoreDeadline(d.observe()) + time.Second).Format(time.RFC3339Nano)
 		},
 		"dead letter": func(d *day) { d.s5.Ledger.RestoreDrains[0].DeadLettered = 1 },
 	} {

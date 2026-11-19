@@ -205,6 +205,9 @@ func (l *Lifecycle) Stop() error {
 	if done != nil {
 		<-done
 	}
+	if worker, ok := l.sim.(interface{ StopRun() }); ok {
+		worker.StopRun()
+	}
 	// Freeze only after the loop has genuinely exited, so the elapsed window
 	// covers every emit that counted toward it.
 	l.rt.Stats.Freeze(time.Now())

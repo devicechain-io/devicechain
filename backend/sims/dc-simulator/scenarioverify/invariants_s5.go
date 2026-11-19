@@ -46,10 +46,19 @@ func s5Checks() []struct {
 	}
 }
 
-// Two wall minutes allow 24 retry opportunities at the default cadence. The measured
-// burst needs about five ordinary-tick headrooms to drain, leaving ample room for
-// ingress latency without silently accepting a queue stuck for the rest of the day.
-const restoreDeadline = 2 * time.Minute
+// Size from the offered metric readings and the governed tier's conservative net
+// headroom (all transports counted): 40 - 116/5 = 16.8 readings/s. Twice the
+// fluid drain time plus two ticks allows tick quantization and ingress latency.
+// At 720 readings this is 96s; outage-duration/90 keeps it valid at a 24h day too.
+func restoreDeadline(o Observations) time.Duration {
+	entries := 0
+	if l := restoreDay(o); l != nil {
+		entries = l.Offered
+	}
+	b := sim.HarborpulseDefaultIngestBaseline()
+	headroom := 40 - float64(b.MaxTick)/sim.DefaultEmitInterval.Seconds()
+	return time.Duration(2*float64(entries*4)/headroom*float64(time.Second)) + 2*sim.DefaultEmitInterval
+}
 
 func restoreDay(o Observations) *sim.ScenarioRestoreDrain {
 	if o.S5.Ledger != nil {
@@ -119,8 +128,8 @@ func burstCaughtUp(o Observations) error {
 	}
 	end := o.at(sim.HarborpulseOutageTo)
 	caught, err := time.Parse(time.RFC3339Nano, l.CaughtUpAt)
-	if err != nil || caught.Before(end) || caught.After(end.Add(restoreDeadline)) {
-		return fmt.Errorf("restore did not catch up by %s (caughtUpAt=%q)", end.Add(restoreDeadline).Format(time.RFC3339Nano), l.CaughtUpAt)
+	if err != nil || caught.Before(end) || caught.After(end.Add(restoreDeadline(o))) {
+		return fmt.Errorf("restore did not catch up by %s (caughtUpAt=%q)", end.Add(restoreDeadline(o)).Format(time.RFC3339Nano), l.CaughtUpAt)
 	}
 	for _, device := range fleetOf(sim.HarborpulseChargerType, sim.HarborpulseOutageQuay) {
 		var b *Backfill
@@ -133,40 +142,64 @@ func burstCaughtUp(o Observations) error {
 		if b == nil {
 			return fmt.Errorf("no taken/store evidence for %s", device)
 		}
-		counts := map[int64]int{}
-		for _, at := range b.Stored {
-			if at.Before(o.at(sim.HarborpulseOutageFrom)) || !at.Before(end) {
-				continue
-			}
-			counts[at.UnixMicro()]++
-			if counts[at.UnixMicro()] > 1 {
-				return fmt.Errorf("%s duplicate stored power_kw at %s", device, at.Format(time.RFC3339Nano))
-			}
-		}
 		refused := restoreRefused(o, device)
 		for us := range refused {
-			index := -1
-			for i, taken := range b.Taken {
-				if taken.UnixMicro() == us {
-					index = i
-					break
-				}
+			found := false
+			for _, taken := range b.Taken {
+				found = found || taken.UnixMicro() == us
 			}
-			if index < 0 || len(b.PowerKW) != len(b.Taken) {
+			if !found {
 				return fmt.Errorf("%s refused entry has no taken value at %d", device, us)
 			}
-			if counts[us] != 1 {
-				return fmt.Errorf("%s refused entry at %d stored %d times, want exactly once", device, us, counts[us])
+		}
+		if err := restoreRows(o, *b, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Each invariant owns one partition, selected by whether ingress ever refused
+// the entry. Compare multisets of (device, microsecond, metric, value), including
+// unexpected metrics/values and duplicates, rather than counting timestamps.
+func restoreRows(o Observations, b Backfill, refusedPartition bool) error {
+	if len(b.Values) != len(b.Taken) {
+		return fmt.Errorf("%s missing declared metric values", b.Device)
+	}
+	type key struct {
+		us     int64
+		metric string
+		value  float64
+	}
+	want, got := map[key]int{}, map[key]int{}
+	refused := restoreRefused(o, b.Device)
+	for i, taken := range b.Taken {
+		if refused[taken.UnixMicro()] != refusedPartition {
+			continue
+		}
+		values := b.Values[i]
+		for _, metric := range []string{sim.HarborpulseChargerPowerKey, sim.HarborpulseSessionKey, sim.HarborpulseConnectorKey, sim.HarborpulseMaxKwKey} {
+			value, ok := values[metric]
+			if !ok || len(values) != 4 {
+				return fmt.Errorf("%s missing declared metric %s", b.Device, metric)
 			}
-			matches := 0
-			for _, r := range b.PowerStored {
-				if r.At.UnixMicro() == us && r.Value == b.PowerKW[index] {
-					matches++
-				}
-			}
-			if matches != 1 {
-				return fmt.Errorf("%s refused power_kw at %d differs from taken value %v", device, us, b.PowerKW[index])
-			}
+			want[key{taken.UnixMicro(), metric, value}]++
+		}
+	}
+	for _, row := range b.Rows {
+		if row.At.Before(o.at(sim.HarborpulseOutageFrom)) || !row.At.Before(o.at(sim.HarborpulseOutageTo)) || refused[row.At.UnixMicro()] != refusedPartition {
+			continue
+		}
+		got[key{row.At.UnixMicro(), row.Name, row.Value}]++
+	}
+	for k, n := range want {
+		if got[k] != n {
+			return fmt.Errorf("%s missing or duplicate %s at %d value %v: stored %d times, want %d", b.Device, k.metric, k.us, k.value, got[k], n)
+		}
+	}
+	for k, n := range got {
+		if want[k] != n {
+			return fmt.Errorf("%s stored %s at a time/value it never took (%d, %v), multiplicity %d", b.Device, k.metric, k.us, k.value, n)
 		}
 	}
 	return nil

@@ -397,7 +397,7 @@ func TestHarborpulseS5DefectsAndNamedPopulation(t *testing.T) {
 
 func TestHarborpulseS5ReadinessFailsLoudly(t *testing.T) {
 	s := harborWith(t)
-	if err := s.Bootstrap(context.Background(), &Runtime{}); err == nil || !strings.Contains(err.Error(), "re-create the sim with a current dcctl") {
+	if err := s.Bootstrap(context.Background(), &Runtime{}); err == nil || !strings.Contains(err.Error(), "cannot derive it") {
 		t.Fatalf("old handshake error %v", err)
 	}
 	f, rt := hpOTASetup(t)

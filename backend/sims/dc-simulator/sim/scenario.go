@@ -95,6 +95,8 @@ type ScenarioBackfill struct {
 	Times []string `json:"times"`
 	// PowerKW parallels Times: the value TAKEN, before any delivery or retry.
 	PowerKW []float64 `json:"powerKw"`
+	// Values parallels Times and declares every metric taken before delivery.
+	Values []map[string]float64 `json:"values"`
 }
 
 // ScenarioClockReporter is a Sim with a compressed day to report on /status.

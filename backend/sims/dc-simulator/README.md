@@ -600,8 +600,13 @@ threshold, window, hold, count and timeout, with the commands obeyed and, as a c
 Each pump's `well_fill_pct` is a **calculated metric**, its wet well level over the well's depth,
 a constant (`well_depth_m`, 4 m) the pump carries. A calculated metric needs a tier that allows
 one, so `dcctl sim create --manifest harborpulse` packages the tenant at `hp-governed`:
-one calculated metric per profile, 32 ingest readings per second and a burst of 150.
-Ordinary five-second ticks fit; the East Quay restore exceeds the burst and is retried.
+one calculated metric per profile, 40 ingest readings per second and a burst of 256.
+Ordinary five-second ticks fit with at least 25% rate headroom. Each East Quay charger
+logs 90 outage entries at outage-duration/90 (one second at the default day), independent
+of the emit interval. The restore offers 720 metric readings against the limiter's
+effective burst of 256 and catches up in about a minute. The verifier allows twice
+the drain time at the tier's net headroom plus two ticks (about 96 seconds); the log
+size and deadline remain valid at a 24-hour day. Offered/accepted ledger counters count entries.
 A manually created sim must be packaged at this governed tier for a clean verifier verdict.
 Tier convergence raises floors only: use a fresh tier/tenant if an existing tier has higher ceilings.
 
@@ -622,7 +627,9 @@ needs the sink's ClusterIP allowed (`dcctl bootstrap|upgrade --dev-allow-egress 
 cluster) and the `outbound-connectors` area (`--enable-area outbound-connectors`). Without them the
 scenario still provisions and runs, and every delivery is refused rather than sent. A handshake
 written by an older dcctl lacks the outbound-connectors, notification and integration endpoints and
-is refused at bootstrap: re-create the sim.
+is refused at bootstrap: re-create the sim. Older records missing only the update-management
+endpoint derive it from the chart's `/api/device-management/graphql` route; custom
+device-management routes must supply `updateMgmtGraphQL` explicitly.
 
 **Fleet operations.** The district is also run as a fleet:
 
@@ -720,8 +727,8 @@ invariant red. The defects exist only for that: never run a demonstration with o
 
 ### Harborpulse signed rollout, governed restore and replacement (S5)
 
-The handshake now includes optional `endpoints.updateMgmtGraphQL`. Harborpulse requires it
-and asks you to re-create the sim with a current dcctl if it is absent. The default local
+The handshake includes optional `endpoints.updateMgmtGraphQL`. Older records derive it
+from the chart's `/api/device-management/graphql` endpoint; custom routes require an explicit URL. The default local
 instance provides update-management, an object store and downloads. The scenario owns six
 charger update clients; combining it with `--ota` fails bootstrap.
 

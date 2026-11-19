@@ -172,8 +172,7 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 		s.dayLength = o.DayLength
 	}
 	if need := harborBufferNeed(s.dayLength, s.load.Interval()); need > harborMaxBufferCap {
-		return fmt.Errorf("--day-length %s at a %s cadence buffers %d readings per charger through the feeder outage, "+
-			"more than the %d a charger can hold: lengthen the cadence or shorten the day", s.dayLength, s.load.Interval(), need, harborMaxBufferCap)
+		return fmt.Errorf("--day-length %s at an outage log cadence of %s buffers %d entries per charger, more than the %d a charger can hold", s.dayLength, harborOutageCadence(s.dayLength), need, harborMaxBufferCap)
 	}
 	names, err := parseDefects(o.Defects, HarborpulseDefects())
 	if err != nil {
@@ -842,8 +841,8 @@ func harborpulseDutyPolicy() NotificationPolicySpec {
 }
 
 func (s *harborpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
-	if strings.TrimSpace(rt.Endpoints.UpdateMgmtGraphQL) == "" {
-		return fmt.Errorf("harborpulse requires endpoints.updateMgmtGraphQL; re-create the sim with a current dcctl")
+	if err := rt.Endpoints.ResolveUpdateManagement(); err != nil {
+		return err
 	}
 	if rt.UpdateFleet != nil {
 		return fmt.Errorf("harborpulse declares its own update population; --ota cannot also be given")
@@ -897,7 +896,7 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 		if d.Token == HarborpulseReplacementSeparateDevice {
 			d.Token = HarborpulseReplacementDevice
 		}
-		return model.reading(d.Token, elapsed, stamp)
+		return model.reading(d.Token, elapsed, now)
 	})
 	if measErr != nil {
 		log.Error().Err(measErr).Msg("emit harborpulse measurements failed")

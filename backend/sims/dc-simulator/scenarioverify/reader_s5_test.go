@@ -170,7 +170,7 @@ func TestS5WatchHistoricalRolloutDoesNotInventSamples(t *testing.T) {
 
 }
 
-func TestS5WatchSamplesUntilTerminalAndReturnsStuckForJudgment(t *testing.T) {
+func TestS5WatchSamplesUntilTerminalAndRejectsUncoveredStuckRollout(t *testing.T) {
 	for _, stuck := range []bool{false, true} {
 		t.Run(fmt.Sprint(stuck), func(t *testing.T) {
 			fixture := cleanDay().s5
@@ -196,8 +196,12 @@ func TestS5WatchSamplesUntilTerminalAndReturnsStuckForJudgment(t *testing.T) {
 			}))
 			defer status.Close()
 			o := Observations{Clock: Clock{StartedAt: started, DayLength: 24 * time.Minute, StartHour: 6}, Day: 0}
-			if _, err := watchS5(context.Background(), Config{SimURL: status.URL, StatusHTTP: status.Client()}, r, &o); err != nil {
+			_, err := watchS5(context.Background(), Config{SimURL: status.URL, StatusHTTP: status.Client()}, r, &o)
+			if !stuck && err != nil {
 				t.Fatal(err)
+			}
+			if stuck && err == nil {
+				t.Fatal("uncovered seven-minute interval claimed a sample verdict")
 			}
 			if !o.S5.LiveSampled || len(o.S5.Samples) == 0 {
 				t.Fatal("running rollout was not sampled")

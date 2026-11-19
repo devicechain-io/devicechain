@@ -57,11 +57,13 @@ var HarborpulseShowcaseTier = TierSpec{
 
 // HarborpulseGovernedTier fits ordinary ticks but deliberately sheds the restore burst.
 // HarborpulseDefaultIngestBaseline measures 90..116 readings/tick (116 at restore),
-// and 144 restore readings at the default 5s cadence. 150 >= 1.25*116;
-// 32*5 >= 150; 144 > (150-116)+32*1s. The simulator test parses these literals.
+// and 720 restore readings (90 local log entries per East charger, four metrics).
+// R*interval = 40*5 = 200 >= 1.25*116. Effective burst is max(256,256),
+// and 720 >= 2*256 forces throttling. Net headroom >= 40-116/5 = 16.8/s
+// drains 720 readings in about a minute, allowing tick boundaries and latency.
 // event-sources' limiters are process-local, with separate buckets for HTTP and
 // integrations, not distributed across replicas. The baseline conservatively counts
-// both; HTTP alone offers 108 at restore and 144 > (150-108)+32*1s as well.
+// both; HTTP alone offers 108 at restore and the restore exceeds its remaining bucket.
 // The rig uses a compact, single-replica instance.
 var HarborpulseGovernedTier = TierSpec{
 	Token:       "hp-governed",
@@ -69,8 +71,8 @@ var HarborpulseGovernedTier = TierSpec{
 	Description: "Created by dcctl sim create for harborpulse: ordinary traffic fits; restore is rate limited and retried.",
 	Config: map[string]int{
 		"calculatedMetricsPerProfile": 1,
-		"ingestReadingsPerSecond":     32,
-		"ingestBurst":                 150,
+		"ingestReadingsPerSecond":     40,
+		"ingestBurst":                 256,
 	},
 }
 

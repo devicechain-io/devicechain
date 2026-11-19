@@ -196,6 +196,14 @@ func S5Coverage(s S5) error {
 	if len(s.Samples) == 0 {
 		return fmt.Errorf("OTA live sampling was requested but no samples answered")
 	}
+	if s.Rollout == nil {
+		return fmt.Errorf("OTA sample coverage has no platform rollout")
+	}
+	started, err := time.Parse(time.RFC3339Nano, s.Rollout.StartedAt)
+	if err != nil || s.SampleTo.IsZero() || s.SampleTo.Before(started) {
+		return fmt.Errorf("OTA sample coverage has no valid platform start or observation end")
+	}
+	s.SampleFrom = started
 	if s.Samples[0].At.After(s.SampleFrom.Add(otaSampleGap)) || s.Samples[len(s.Samples)-1].At.Before(s.SampleTo.Add(-otaSampleGap)) {
 		return fmt.Errorf("OTA live samples do not cover the running interval")
 	}
@@ -254,6 +262,10 @@ func watchS5(ctx context.Context, cfg Config, r *Reader, o *Observations) (*sim.
 			}
 		}
 		if rollout != nil {
+			o.S5.Rollout = rollout
+			// The observation ends when this platform read answers, independently
+			// of the last sample's request instant. Slow reads leave visible gaps.
+			o.S5.SampleTo = time.Now()
 			terminal := rollout.State == "COMPLETED" || rollout.State == "ABORTED"
 			if terminal && o.Day == 0 && !o.S5.LiveSampled {
 				return nil, fmt.Errorf("day 0 rollout finished before live sampling began")
@@ -261,10 +273,9 @@ func watchS5(ctx context.Context, cfg Config, r *Reader, o *Observations) (*sim.
 			if o.S5.LiveSampled || !terminal {
 				if !o.S5.LiveSampled {
 					o.S5.LiveSampled = true
-					o.S5.SampleFrom = now
+					o.S5.SampleFrom, _ = time.Parse(time.RFC3339Nano, rollout.StartedAt)
 				}
 				o.S5.Samples = append(o.S5.Samples, OTASample{At: now, InFlight: rollout.Progress.InFlight})
-				o.S5.SampleTo = now
 			}
 			if terminal {
 				break

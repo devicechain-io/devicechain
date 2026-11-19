@@ -541,6 +541,9 @@ func backfillStored(o Observations) error {
 			problems = append(problems, b.Device+": buffered nothing")
 			continue
 		}
+		if err := restoreRows(o, b, false); err != nil {
+			problems = append(problems, err.Error())
+		}
 		if len(b.Taken) != b.Buffered {
 			problems = append(problems, fmt.Sprintf("%s: the ledger counts %d buffered readings but carries %d times", b.Device, b.Buffered, len(b.Taken)))
 			continue

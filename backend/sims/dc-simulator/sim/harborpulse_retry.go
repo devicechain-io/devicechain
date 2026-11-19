@@ -35,6 +35,7 @@ type harborRestoreEntry struct {
 type harborRestoreQueue struct {
 	mu             sync.Mutex
 	started        bool
+	cancel         context.CancelFunc
 	wake           chan struct{}
 	done           chan struct{}
 	entries        []*harborRestoreEntry
@@ -89,11 +90,16 @@ func (q *harborRestoreQueue) signal() {
 func (q *harborRestoreQueue) enqueue(ctx context.Context, s *harborpulse, rt *Runtime, pending []harborBackfill, day int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if !q.started && len(pending) > 0 {
+	if !q.started && (len(pending) > 0 || len(q.entries) > 0) {
 		q.started = true
 		q.wake, q.done = make(chan struct{}, 1), make(chan struct{})
-		q.dropped = map[int]bool{}
-		go q.run(ctx, s, rt)
+		if q.dropped == nil {
+			q.dropped = map[int]bool{}
+		}
+		workerCtx, cancel := context.WithCancel(ctx)
+		q.cancel = cancel
+		q.waitTick = q.tick
+		go q.run(workerCtx, s, rt)
 	}
 	devices := map[string]DeviceInstance{}
 	counts := map[string]int{}
@@ -126,6 +132,22 @@ func (q *harborRestoreQueue) enqueue(ctx context.Context, s *harborpulse, rt *Ru
 			counts[p.token]++
 		}
 	}
+}
+
+// StopRun joins all restore accounting before Lifecycle freezes the run's stats.
+// Entries, refusal history and per-day defect state survive Stop/Start and Reset.
+func (s *harborpulse) StopRun() {
+	q := &s.restore
+	q.mu.Lock()
+	cancel, done := q.cancel, q.done
+	q.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		<-done
+	}
+	q.mu.Lock()
+	q.started, q.cancel = false, nil
+	q.mu.Unlock()
 }
 
 func (q *harborRestoreQueue) run(ctx context.Context, s *harborpulse, rt *Runtime) {

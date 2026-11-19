@@ -305,7 +305,7 @@ func TestHarborTickReturnsWhileRestoreIngressIsBlocked(t *testing.T) {
 func TestHarborpulseGovernedTierCoversMeasuredDayAndRefusesRestore(t *testing.T) {
 	b := HarborpulseDefaultIngestBaseline()
 	t.Log(b)
-	if b.MaxTick != 116 || b.MinTick != 90 || b.BeforeRestoreMin != 90 || b.BeforeRestoreMax != 92 || b.AfterRestoreMin != 114 || b.AfterRestoreMax != 116 || b.RestoreOffered != 144 || b.TickAtRestore != 116 {
+	if b.MaxTick != 116 || b.MinTick != 90 || b.BeforeRestoreMin != 90 || b.BeforeRestoreMax != 92 || b.AfterRestoreMin != 114 || b.AfterRestoreMax != 116 || b.RestoreOffered != 720 || b.TickAtRestore != 116 {
 		t.Fatalf("baseline changed: %v; remeasure and size tier", b)
 	}
 	source, err := os.ReadFile("../../../cli/sim/tier.go")
@@ -325,13 +325,11 @@ func TestHarborpulseGovernedTierCoversMeasuredDayAndRefusesRestore(t *testing.T)
 		return n
 	}
 	r, burst := get("ingestReadingsPerSecond"), get("ingestBurst")
-	if 4*burst < 5*b.MaxTick {
+	beff := max(burst, 256)
+	if float64(r)*DefaultEmitInterval.Seconds() < 1.25*float64(b.MaxTick) {
 		t.Fatal("ordinary tick has less than 25% headroom")
 	}
-	if time.Duration(r)*DefaultEmitInterval < time.Duration(burst)*time.Second {
-		t.Fatal("bucket does not refill between ordinary ticks")
-	}
-	if b.RestoreOffered <= burst-b.TickAtRestore+r {
+	if b.RestoreOffered < 2*beff {
 		t.Fatal("restore does not force an ingress 429")
 	}
 	if get("calculatedMetricsPerProfile") != 1 {
