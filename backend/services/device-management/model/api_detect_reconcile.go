@@ -16,7 +16,7 @@ import (
 
 // This file implements the three read-only doors event-processing reconciles its detection
 // projections against — the published rules and active versions, the device roster, and the
-// threshold attributes (shapes in model_detect_reconcile.go). Each door is built from the SAME
+// threshold attributes (shapes in contract/detect_reconcile.go). Each door is built from the SAME
 // code as the fact it stands in for, so a repair reproduces what the lost fact would have said:
 // the rules from enabledSnapshotRulesStrict and resolveActiveSince, the roster from
 // rosterEntries, the attributes from thresholdAttributeScopes/numericAttributeValue.

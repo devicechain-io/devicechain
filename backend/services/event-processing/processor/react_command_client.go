@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
@@ -51,20 +51,20 @@ const createCommandMutation = `mutation($request: CommandCreateRequest!) {
 // would quietly demote those rejections back to retry-to-poison-cap.
 var permanentRejectionCodes = map[string]bool{
 	// Answered by device-management's enqueue gate, the owner of the device and its vocabulary.
-	string(dmmodel.RejectDeviceNotFound):         true,
-	string(dmmodel.RejectCommandNotInVocabulary): true,
-	string(dmmodel.RejectPayloadSchemaViolation): true,
+	string(dmcontract.RejectDeviceNotFound):         true,
+	string(dmcontract.RejectCommandNotInVocabulary): true,
+	string(dmcontract.RejectPayloadSchemaViolation): true,
 	// A disabled device accepts no command while it stays disabled, and a rule firing at a
 	// quarantined device would otherwise spend its whole retry budget on each detection.
-	string(dmmodel.RejectDeviceDisabled): true,
+	string(dmcontract.RejectDeviceDisabled): true,
 	// The device type's next maintenance window opens only after the command's expiresAt. A REACT
 	// command carries an expiresAt only when its rule sets expiresAfter, and the author's bound
 	// is measured from the enqueue, so a later retry could only enqueue a command past the wait
 	// the rule allowed. Dropping it is the honest verdict; retrying spends the redelivery budget
 	// and then poison-drops it as if command-delivery were down.
-	string(dmmodel.RejectWindowAfterExpiry): true,
+	string(dmcontract.RejectWindowAfterExpiry): true,
 	// A raw Factory Reset is refused identically every time; the rule would otherwise retry it.
-	string(dmmodel.RejectCommandDestructiveRefused): true,
+	string(dmcontract.RejectCommandDestructiveRefused): true,
 	// Answered by command-delivery itself, on the request as written.
 	"PAYLOAD_NOT_JSON":   true,
 	"METADATA_NOT_JSON":  true,

@@ -15,7 +15,7 @@ import (
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/stretchr/testify/require"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
@@ -121,7 +121,7 @@ type ackDeadlineRecordingNotifier struct {
 	had      bool
 }
 
-func (r *ackDeadlineRecordingNotifier) Notify(ctx context.Context, _ *dmmodel.AlarmStateChangeEvent) error {
+func (r *ackDeadlineRecordingNotifier) Notify(ctx context.Context, _ *dmcontract.AlarmStateChangeEvent) error {
 	r.calls++
 	r.deadline, r.had = messaging.AckDeadlineFrom(ctx)
 	return nil

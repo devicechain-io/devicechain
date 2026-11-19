@@ -8,6 +8,7 @@
 //
 // The flags it draws are HINTS (see slots.ts); the server decides what is valid.
 
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -31,14 +32,18 @@ export function SlotEditor({
   onChange,
   disabled,
   help,
+  translate,
 }: {
   slots: SlotDraft[];
   onChange: (next: SlotDraft[]) => void;
   disabled?: boolean;
   /** Replaces the default helper text, for a caller whose slots mean something other than a window. */
   help?: string;
+  /** Reuse the editor with a feature-specific translated catalog. */
+  translate?: TFunction;
 }) {
-  const { t } = useTranslation('entities');
+  const { t: defaultT } = useTranslation('entities');
+  const t = translate ?? defaultT;
   const hints = slotProblems(slots);
 
   const patch = (i: number, change: Partial<SlotDraft>) =>

@@ -88,6 +88,10 @@ export interface RegistryResource<T> {
   idOf: (item: T) => string;
   tokenOf: (item: T) => string;
 
+  /** Entity-owned header actions and a notice above the tabs. */
+  renderHeaderAction?: (item: T) => ReactNode;
+  renderDetailNotice?: (item: T) => ReactNode;
+
   // ── Presentation ──
   columns: RegistryColumn<T>[];
   /** Detail-page primary title (the entity's name). Falls back to the token. */

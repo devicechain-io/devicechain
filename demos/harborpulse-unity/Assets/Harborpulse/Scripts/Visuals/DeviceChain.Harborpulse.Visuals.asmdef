@@ -1,0 +1,24 @@
+{
+    "name": "DeviceChain.Harborpulse.Visuals",
+    "rootNamespace": "DeviceChain.Harborpulse.Visuals",
+    "references": [
+        "DeviceChain.Harborpulse.Model",
+        "DeviceChain.Harborpulse.Live",
+        "DeviceChain.Demos.Core",
+        "DeviceChain.Demos.Platform",
+        "DeviceChain.Sdk.Unity"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "DeviceChain.Sdk.dll",
+        "System.Text.Json.dll",
+        "Microsoft.Bcl.AsyncInterfaces.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

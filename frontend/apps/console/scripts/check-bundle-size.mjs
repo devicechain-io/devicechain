@@ -112,6 +112,8 @@ export function check(measured, budget) {
 // string literals, because minification renames everything else.
 export function lazyBoundaries() {
   return [
+    { what: 'the optional alarm maintenance API', chunk: 'alarm-maintenance', markers: ['alarmSuppressionStatus'] },
+    { what: 'the start maintenance dialog', chunk: 'StartMaintenanceDialog', markers: ['am-custom'] },
     // The chart engine: ECharts and zrender, fetched by the first chart to mount.
     { what: 'the chart engine (ECharts + zrender)', chunk: 'echart-engine', markers: ['_echarts_instance_', 'data-zr-dom-id'] },
     // The registry families (device types, assets, areas...) with their forms, and the automation

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-device-state/model"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
@@ -100,7 +100,7 @@ func TestAnOwnershipFactOnTheBrokerRestampsTheLiveView(t *testing.T) {
 	// subject, carrying the device's whole current set.
 	writer, err := NatsManager.NewWriter(streams.DeviceOwnership)
 	require.NoError(t, err)
-	fact, err := dmproto.MarshalDeviceOwnershipChangedEvent(&dmmodel.DeviceOwnershipChangedEvent{
+	fact, err := dmproto.MarshalDeviceOwnershipChangedEvent(&dmcontract.DeviceOwnershipChangedEvent{
 		DeviceToken: "pump-1", Anchors: []string{"customer:globex"}, ChangedTime: t0.Add(time.Minute)})
 	require.NoError(t, err)
 	require.NoError(t, writer.WriteMessages(tenant, messaging.Message{Key: []byte("pump-1"), Value: fact}))

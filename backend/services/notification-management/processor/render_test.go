@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-notification-management/model"
 )
 
@@ -20,8 +20,8 @@ func floatPtr(v float64) *float64 { return &v }
 func TestRenderNotificationRaised(t *testing.T) {
 	raised := time.Date(2026, 7, 6, 11, 58, 0, 0, time.UTC)
 	occurred := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
-	event := &dmmodel.AlarmStateChangeEvent{
-		EventType:      dmmodel.AlarmEventRaised,
+	event := &dmcontract.AlarmStateChangeEvent{
+		EventType:      dmcontract.AlarmEventRaised,
 		AlarmToken:     "alarm-1",
 		OriginatorType: "device",
 		OriginatorId:   42,
@@ -62,8 +62,8 @@ func TestRenderNotificationRaised(t *testing.T) {
 
 // Optional fields absent → no stray keys / lines.
 func TestRenderNotificationMinimal(t *testing.T) {
-	event := &dmmodel.AlarmStateChangeEvent{
-		EventType:        dmmodel.AlarmEventEscalated,
+	event := &dmcontract.AlarmStateChangeEvent{
+		EventType:        dmcontract.AlarmEventEscalated,
 		AlarmToken:       "alarm-2",
 		OriginatorType:   "device",
 		OriginatorId:     7,
@@ -125,8 +125,8 @@ func TestRenderEscalation(t *testing.T) {
 // A key or a line added (or re-added) without updating this test fails it; asserting
 // only that one retired key is ABSENT would pass over anything else.
 func TestRenderNotificationPayloadKeys(t *testing.T) {
-	event := &dmmodel.AlarmStateChangeEvent{
-		EventType:        dmmodel.AlarmEventEscalated,
+	event := &dmcontract.AlarmStateChangeEvent{
+		EventType:        dmcontract.AlarmEventEscalated,
 		AlarmToken:       "alarm-1",
 		OriginatorType:   "device",
 		OriginatorId:     42,

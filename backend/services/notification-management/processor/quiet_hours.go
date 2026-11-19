@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -72,7 +72,7 @@ func quietHold(p *model.NotificationPolicy, severity string, now time.Time) (boo
 // suppressed, not held for the morning), and at least one of its rules matches the alarm's
 // severity. Everything else passes through to plan unchanged, which applies the same
 // filters to the policies it is given.
-func (n *PolicyNotifier) holdQuiet(event *dmmodel.AlarmStateChangeEvent, policies []*model.NotificationPolicy,
+func (n *PolicyNotifier) holdQuiet(event *dmcontract.AlarmStateChangeEvent, policies []*model.NotificationPolicy,
 	state *model.NotificationState, now time.Time) ([]*model.NotificationPolicy, []*model.NotificationDeferral) {
 	sendNow := make([]*model.NotificationPolicy, 0, len(policies))
 	var held []*model.NotificationDeferral
@@ -287,7 +287,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 		return nil
 	}
 
-	var event dmmodel.AlarmStateChangeEvent
+	var event dmcontract.AlarmStateChangeEvent
 	if err := json.Unmarshal(latest.Event, &event); err != nil {
 		// Unreadable is permanent; putting it back would fail the same way forever.
 		err = fmt.Errorf("decoding held alarm event: %w", err)
@@ -312,7 +312,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 		}
 		if model.SeverityAtOrAbove(severity, "INDETERMINATE") {
 			if event.Severity != severity {
-				event.EventType = dmmodel.AlarmEventRaised
+				event.EventType = dmcontract.AlarmEventRaised
 			}
 			event.Severity = severity
 			event.PreviousSeverity = ""
@@ -478,7 +478,7 @@ func heldForEarlierCycle(state *model.NotificationState, d *model.NotificationDe
 	if state == nil || !state.CycleRaisedAt.Valid {
 		return false
 	}
-	var held dmmodel.AlarmStateChangeEvent
+	var held dmcontract.AlarmStateChangeEvent
 	if err := json.Unmarshal(d.Event, &held); err != nil {
 		return false
 	}

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -31,7 +31,7 @@ func (f *funcAdapter) Deliver(_ context.Context, _ *model.NotificationChannel, _
 // holdOne dispatches one MAJOR raise inside quiet hours and checks it was held.
 func holdOne(t *testing.T, n *PolicyNotifier, api *model.Api, ctx context.Context, at time.Time) {
 	t.Helper()
-	if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", at)); err != nil {
+	if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", at)); err != nil {
 		t.Fatal(err)
 	}
 	if held := heldRows(t, api, ctx); len(held) != 1 {
@@ -107,10 +107,10 @@ func TestAReleaseInFlightIsNotSentByAnotherReplica(t *testing.T) {
 func TestASecondCycleResolvedWhileHeldIsNotPaged(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		kind dmmodel.AlarmEventType
+		kind dmcontract.AlarmEventType
 	}{
-		{"cleared", dmmodel.AlarmEventCleared},
-		{"acknowledged", dmmodel.AlarmEventAcknowledged},
+		{"cleared", dmcontract.AlarmEventCleared},
+		{"acknowledged", dmcontract.AlarmEventAcknowledged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clock := insideQuiet
@@ -147,7 +147,7 @@ func TestAResolutionDoesNotDropALaterCyclesHeldPage(t *testing.T) {
 	n, api, _, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
 	holdOne(t, n, api, ctx, clock)
 	// A clear that occurred BEFORE the held raise, delivered late (the pool is unordered).
-	if err := n.Notify(ctx, eventAt(dmmodel.AlarmEventCleared, "MAJOR", clock.Add(-time.Minute))); err != nil {
+	if err := n.Notify(ctx, eventAt(dmcontract.AlarmEventCleared, "MAJOR", clock.Add(-time.Minute))); err != nil {
 		t.Fatal(err)
 	}
 	if held := heldRows(t, api, ctx); len(held) != 1 {
@@ -164,7 +164,7 @@ func TestAFreshPageSupersedesWhatWasHeld(t *testing.T) {
 	holdOne(t, n, api, ctx, clock)
 
 	clock = quietEnds.Add(5 * time.Second)
-	if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventEscalated, "CRITICAL", clock)); err != nil {
+	if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventEscalated, "CRITICAL", clock)); err != nil {
 		t.Fatal(err)
 	}
 	if fa.calls != 1 {
@@ -254,7 +254,7 @@ func TestAnExhaustedReleaseIsDeadLettered(t *testing.T) {
 func TestAHeldReleaseDoesNotRegressANewerSource(t *testing.T) {
 	clock := insideQuiet
 	n, api, _, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
-	event := eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)
+	event := eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)
 	event.DeviceName = "Old"
 	if err := n.dispatch(ctx, event); err != nil {
 		t.Fatal(err)

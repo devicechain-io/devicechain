@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package model
+package contract
 
 import (
 	"encoding/json"
@@ -11,7 +11,7 @@ import (
 // AlarmEdgeRaised / AlarmEdgeResolved are the canonical RaiseAlarmRequest.Edge tokens (ADR-057) —
 // the SHARED wire vocabulary both the producer (event-processing's alarmClient) and this consumer bind
 // to. They live here, in the wire struct's own package, because it is the one package both modules
-// import (event-processing imports dc-device-management/model; it cannot import event-processing's
+// import (event-processing imports dc-device-management/contract; it cannot import event-processing's
 // internal/runtime across the module boundary). A hardcoded literal on either side would drift
 // FAIL-OPEN — a mis-spelled resolved token falls through to the raise path — so both sides reference
 // these constants and the producer maps its internal edge onto them explicitly.

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/prometheus/client_golang/prometheus"
@@ -25,8 +25,8 @@ func (f suppressionFunc) LookupSuppressions(ctx context.Context, tokens []string
 	return f(ctx, tokens)
 }
 
-func suppressedEvent(at, until time.Time) *dmmodel.AlarmStateChangeEvent {
-	e := eventAt(dmmodel.AlarmEventRaised, "MAJOR", at)
+func suppressedEvent(at, until time.Time) *dmcontract.AlarmStateChangeEvent {
+	e := eventAt(dmcontract.AlarmEventRaised, "MAJOR", at)
 	e.SuppressedUntil, e.SuppressionWindowToken = &until, "window-1"
 	return e
 }
@@ -129,15 +129,15 @@ func TestDeescalatedNeverHolds(t *testing.T) {
 	clock := outsideQuiet
 	n, api, fa, ctx := quietFixture(t, "", "", "", &clock)
 	e := suppressedEvent(clock, clock.Add(time.Hour))
-	e.EventType = dmmodel.AlarmEventDeescalated
+	e.EventType = dmcontract.AlarmEventDeescalated
 	require.NoError(t, n.Notify(ctx, e))
 	require.Empty(t, heldRows(t, api, ctx))
 	require.Zero(t, fa.calls)
 	// An existing hold must keep the event and severity of its last raise/escalation.
-	e.EventType = dmmodel.AlarmEventRaised
+	e.EventType = dmcontract.AlarmEventRaised
 	require.NoError(t, n.Notify(ctx, e))
 	before := heldRows(t, api, ctx)[0]
-	e.EventType, e.Severity, e.OccurredTime = dmmodel.AlarmEventDeescalated, "MINOR", clock.Add(time.Second)
+	e.EventType, e.Severity, e.OccurredTime = dmcontract.AlarmEventDeescalated, "MINOR", clock.Add(time.Second)
 	require.NoError(t, n.Notify(ctx, e))
 	after := heldRows(t, api, ctx)[0]
 	require.Equal(t, before.Event, after.Event)
@@ -152,7 +152,7 @@ func TestSuppressionLookupFailureFailsOpen(t *testing.T) {
 	n.SuppressionLookup = suppressionFunc(func(context.Context, []string) (map[string]SuppressionStatus, error) {
 		return nil, errors.New("old schema")
 	})
-	require.NoError(t, n.Notify(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)))
+	require.NoError(t, n.Notify(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)))
 	require.Equal(t, 1, fa.calls)
 	require.Empty(t, heldRows(t, api, ctx))
 	e := suppressedEvent(clock.Add(time.Minute), clock.Add(time.Hour))
@@ -178,7 +178,7 @@ func TestSuppressionThrottleFirst(t *testing.T) {
 	n, api, fa, ctx := quietFixture(t, "", "", "", &clock)
 	policies := enabledPolicies(t, api, ctx)
 	require.NoError(t, api.RDB.DB(ctx).Model(&model.NotificationPolicy{}).Where("id = ?", policies[0].ID).Update("throttle_seconds", 3600).Error)
-	require.NoError(t, n.Notify(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)))
+	require.NoError(t, n.Notify(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)))
 	clock = clock.Add(time.Minute)
 	require.NoError(t, n.Notify(ctx, suppressedEvent(clock, clock.Add(time.Hour))))
 	require.Equal(t, 1, fa.calls)
@@ -186,7 +186,7 @@ func TestSuppressionThrottleFirst(t *testing.T) {
 }
 
 func TestSuppressionHeldResolvedNeverPages(t *testing.T) {
-	for _, kind := range []dmmodel.AlarmEventType{dmmodel.AlarmEventCleared, dmmodel.AlarmEventAcknowledged} {
+	for _, kind := range []dmcontract.AlarmEventType{dmcontract.AlarmEventCleared, dmcontract.AlarmEventAcknowledged} {
 		t.Run(kind.String(), func(t *testing.T) {
 			clock := outsideQuiet
 			n, api, fa, ctx := quietFixture(t, "", "", "", &clock)
@@ -218,7 +218,7 @@ func TestSuppressionReleaseExplanation(t *testing.T) {
 			n, api, _, ctx := quietFixture(t, tz, slots, "", &clock)
 			rec := &msgRecorder{}
 			n.adapters[model.ChannelTypeSMTP] = rec
-			e := eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)
+			e := eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)
 			if kind == "window" {
 				e = suppressedEvent(clock, clock.Add(time.Hour))
 				e.SuppressionWindowToken = "window-1"

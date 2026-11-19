@@ -23,6 +23,24 @@ namespace DeviceChain.Demos.Platform
         public const int MaxAlarmPages = 10;
         public const int CommandPage = 100;
 
+        /// <summary>
+        /// The most root fields the platform runs in one query (its GraphQL work limit refuses more). The per-device snapshot reads one
+        /// aliased root field per device, so a fleet larger than this is read in chunks of at most this many.
+        /// </summary>
+        public const int MaxRootFields = 20;
+
+        /// <summary>The tokens in consecutive chunks of at most <paramref name="size"/>, in order.</summary>
+        public static IEnumerable<IReadOnlyList<string>> Chunks(IReadOnlyList<string> tokens, int size = MaxRootFields)
+        {
+            if (size < 1) throw new ArgumentOutOfRangeException(nameof(size), size, "a chunk holds at least one token");
+            for (var start = 0; start < tokens.Count; start += size)
+            {
+                var chunk = new List<string>(Math.Min(size, tokens.Count - start));
+                for (var i = start; i < tokens.Count && i < start + size; i++) chunk.Add(tokens[i]);
+                yield return chunk;
+            }
+        }
+
         public const string MeasurementSubscription = "subscription { measurementStream { deviceToken name value occurredTime } }";
 
         public const string AlarmSubscription =

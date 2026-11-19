@@ -20,18 +20,6 @@ import (
 // alarm stamp at raise, and the ownership-changed fact — so neither can drift from the
 // other.
 
-// DeviceOwnershipChangedEvent is the device ownership-changed fact: a device's COMPLETE
-// current anchor set — its tracked relationships and the access scopes it is in — read after
-// the write that may have changed it. A consumer
-// overwrites what it holds with it; an empty Anchors means the device is owned by nobody.
-// The tenant travels on the per-tenant subject.
-type DeviceOwnershipChangedEvent struct {
-	DeviceIncarnation uint64
-	DeviceToken       string
-	Anchors           []string
-	ChangedTime       time.Time
-}
-
 // DeviceOwnershipPublisher publishes ownership-changed facts for the ownership drain
 // (ownership_outbox.go). Unlike the other fact publishers it REPORTS a failure: the drain
 // deletes a queued fact only once it has been published, so a failure it was not told of

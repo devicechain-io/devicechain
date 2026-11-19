@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -131,13 +131,13 @@ func scriptedClient(t *testing.T,
 
 // docHash is the content address of a geometry document — device-management's own function, so
 // a test can never disagree with the archive about what an address is.
-func docHash(document string) string { return dmmodel.GeoFenceGeometryHash([]byte(document)) }
+func docHash(document string) string { return dmcontract.GeoFenceGeometryHash([]byte(document)) }
 
 // manifestData builds a manifest "data" object for whichever manifest door is being answered.
-func manifestData(t *testing.T, field string, version int32, entries ...dmmodel.GeoFenceManifestEntry) string {
+func manifestData(t *testing.T, field string, version int32, entries ...dmcontract.GeoFenceManifestEntry) string {
 	t.Helper()
 	if entries == nil {
-		entries = []dmmodel.GeoFenceManifestEntry{}
+		entries = []dmcontract.GeoFenceManifestEntry{}
 	}
 	raw, err := json.Marshal(map[string]any{
 		field: map[string]any{"version": version, "fences": entries},
@@ -215,7 +215,7 @@ func TestAGeometryFetchFailureResolvesToNothing(t *testing.T) {
 			return "", boom
 		}
 		return manifestData(t, "currentGeoFenceSetManifest", 4,
-			dmmodel.GeoFenceManifestEntry{Token: "yard", Hash: docHash(yard)}), nil
+			dmcontract.GeoFenceManifestEntry{Token: "yard", Hash: docHash(yard)}), nil
 	})
 
 	set, err := c.CurrentFenceSet(context.Background(), "acme")
@@ -243,9 +243,9 @@ func TestAGeometryFetchFailureResolvesToNothing(t *testing.T) {
 // to survive: rows written before MaxGeoFenceGeometryBytes existed can be larger than the bound.
 func TestARefusedGeometryBatchIsSplitDownToOneAddress(t *testing.T) {
 	docs := []string{fenceBox(0, 0, 1, 1), fenceBox(2, 2, 3, 3), fenceBox(4, 4, 5, 5), fenceBox(6, 6, 7, 7)}
-	entries := make([]dmmodel.GeoFenceManifestEntry, 0, len(docs))
+	entries := make([]dmcontract.GeoFenceManifestEntry, 0, len(docs))
 	for i, d := range docs {
-		entries = append(entries, dmmodel.GeoFenceManifestEntry{
+		entries = append(entries, dmcontract.GeoFenceManifestEntry{
 			Token: fmt.Sprintf("f%d", i), Hash: docHash(d)})
 	}
 	byHash := map[string]string{}
@@ -299,7 +299,7 @@ func TestAGeometryTooLargeForOneResponseOnItsOwnIsAnError(t *testing.T) {
 			return "", tooLarge()
 		}
 		return manifestData(t, "geoFenceSetManifest", 3,
-			dmmodel.GeoFenceManifestEntry{Token: "yard", Hash: hash}), nil
+			dmcontract.GeoFenceManifestEntry{Token: "yard", Hash: hash}), nil
 	})
 
 	_, err := c.FenceSetAt(context.Background(), "acme", 3)
@@ -327,8 +327,8 @@ func TestAGeometryFetchDoesNotSplitOnAnUnrelatedError(t *testing.T) {
 			return "", boom
 		}
 		return manifestData(t, "geoFenceSetManifest", 3,
-			dmmodel.GeoFenceManifestEntry{Token: "a", Hash: docHash(doc)},
-			dmmodel.GeoFenceManifestEntry{Token: "b", Hash: docHash(fenceBox(2, 2, 3, 3))}), nil
+			dmcontract.GeoFenceManifestEntry{Token: "a", Hash: docHash(doc)},
+			dmcontract.GeoFenceManifestEntry{Token: "b", Hash: docHash(fenceBox(2, 2, 3, 3))}), nil
 	})
 
 	_, err := c.FenceSetAt(context.Background(), "acme", 3)
@@ -372,12 +372,12 @@ func TestTheGeometryReadStopsAtItsRequestBudget(t *testing.T) {
 			"stop it exists to test", chunks*requestsPerRefusedChunk, maxGeometryRequests)
 	}
 
-	entries := make([]dmmodel.GeoFenceManifestEntry, 0, n)
+	entries := make([]dmcontract.GeoFenceManifestEntry, 0, n)
 	byHash := map[string]string{}
 	for i := 0; i < n; i++ {
 		doc := fenceBox(float64(i), 0, float64(i)+1, 1)
 		byHash[docHash(doc)] = doc
-		entries = append(entries, dmmodel.GeoFenceManifestEntry{
+		entries = append(entries, dmcontract.GeoFenceManifestEntry{
 			Token: fmt.Sprintf("f%03d", i), Hash: docHash(doc)})
 	}
 	c, x := scriptedClient(t, func(_ int, query string, vars map[string]any) (string, error) {
@@ -424,7 +424,7 @@ func TestTheGeometryReadStopsAtItsRequestBudget(t *testing.T) {
 func TestADocumentThatDoesNotMatchItsAddressIsFatalAndCounted(t *testing.T) {
 	yard := fenceBox(0, 0, 1, 1)
 	impostor := fenceBox(10, 10, 11, 11)
-	entry := dmmodel.GeoFenceManifestEntry{Token: "yard", Hash: docHash(yard)}
+	entry := dmcontract.GeoFenceManifestEntry{Token: "yard", Hash: docHash(yard)}
 
 	serve := impostor
 	c, x := scriptedClient(t, func(_ int, query string, _ map[string]any) (string, error) {
@@ -498,7 +498,7 @@ func TestAPeerThatDoesNotServeTheManifestDoorsIsReportedAsVersionSkew(t *testing
 					return "", &svcclient.GraphQLError{Messages: []string{fmt.Sprintf(`Cannot query field %q on type "Query".`, tc.missing)}}
 				}
 				return manifestData(t, "currentGeoFenceSetManifest", 4,
-					dmmodel.GeoFenceManifestEntry{Token: "yard", Hash: docHash(yard)}), nil
+					dmcontract.GeoFenceManifestEntry{Token: "yard", Hash: docHash(yard)}), nil
 			})
 
 			set, err := c.CurrentFenceSet(context.Background(), "acme")
@@ -559,7 +559,7 @@ func TestVersionSkewIsCountedOnEveryDoor(t *testing.T) {
 					name = "geoFenceSetManifest"
 				}
 				return manifestData(t, name, 4,
-					dmmodel.GeoFenceManifestEntry{Token: "yard", Hash: docHash(yard)}), nil
+					dmcontract.GeoFenceManifestEntry{Token: "yard", Hash: docHash(yard)}), nil
 			})
 
 			if err := tc.call(c, c); !errors.Is(err, errArchiveSkew) {
@@ -630,10 +630,10 @@ func TestAManifestEntryMissingATokenOrAnAddressIsAFault(t *testing.T) {
 	doc := fenceBox(0, 0, 1, 1)
 	for _, tc := range []struct {
 		name  string
-		entry dmmodel.GeoFenceManifestEntry
+		entry dmcontract.GeoFenceManifestEntry
 	}{
-		{"no address", dmmodel.GeoFenceManifestEntry{Token: "yard"}},
-		{"no token", dmmodel.GeoFenceManifestEntry{Hash: docHash(doc)}},
+		{"no address", dmcontract.GeoFenceManifestEntry{Token: "yard"}},
+		{"no token", dmcontract.GeoFenceManifestEntry{Hash: docHash(doc)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := scriptedClient(t, func(int, string, map[string]any) (string, error) {
@@ -668,7 +668,7 @@ func TestAManifestEntryMissingATokenOrAnAddressIsAFault(t *testing.T) {
 func TestAFenceWhoseBodyTheArchiveDoesNotHoldIsInstalledCarryingItsError(t *testing.T) {
 	yard := fenceBox(0, 0, 1, 1)
 	dock := fenceBox(10, 10, 11, 11)
-	entries := []dmmodel.GeoFenceManifestEntry{
+	entries := []dmcontract.GeoFenceManifestEntry{
 		{Token: "yard", Hash: docHash(yard)},
 		{Token: "dock", Hash: docHash(dock)},
 	}
@@ -732,7 +732,7 @@ func TestAFenceWhoseBodyTheArchiveDoesNotHoldIsInstalledCarryingItsError(t *test
 func TestAMissingBodyIsNotRememberedSoTheNextResolveRepairsIt(t *testing.T) {
 	ctx := context.Background()
 	dock := fenceBox(10, 10, 11, 11)
-	entry := dmmodel.GeoFenceManifestEntry{Token: "dock", Hash: docHash(dock)}
+	entry := dmcontract.GeoFenceManifestEntry{Token: "dock", Hash: docHash(dock)}
 
 	holds := false
 	c, _ := scriptedClient(t, func(_ int, query string, _ map[string]any) (string, error) {
@@ -775,7 +775,7 @@ func TestAMissingBodyIsNotRememberedSoTheNextResolveRepairsIt(t *testing.T) {
 type nilManifestResolver struct{ calls int }
 
 func (r *nilManifestResolver) ResolveManifest(context.Context, string,
-	*dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error) {
+	*dmcontract.GeoFenceSetManifest) (*geofence.FenceSet, error) {
 	r.calls++
 	return nil, nil
 }
@@ -787,7 +787,7 @@ type failingManifestResolver struct {
 }
 
 func (r *failingManifestResolver) ResolveManifest(context.Context, string,
-	*dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error) {
+	*dmcontract.GeoFenceSetManifest) (*geofence.FenceSet, error) {
 	r.calls++
 	return nil, r.err
 }
@@ -985,10 +985,10 @@ func TestAnUnparseableManifestFactIsDroppedAndAcked(t *testing.T) {
 // fence, so resolving the rest evicts it before its turn comes.
 func TestAnEntryEvictedAfterThePlanIsRefetchedNotReportedAbsent(t *testing.T) {
 	rings := []string{fenceBox(0, 0, 1, 1), fenceBox(10, 10, 11, 11), fenceBox(20, 20, 21, 21)}
-	entries := make([]dmmodel.GeoFenceManifestEntry, 0, len(rings))
+	entries := make([]dmcontract.GeoFenceManifestEntry, 0, len(rings))
 	docs := make([]geometryDoc, 0, len(rings))
 	for i, r := range rings {
-		entries = append(entries, dmmodel.GeoFenceManifestEntry{
+		entries = append(entries, dmcontract.GeoFenceManifestEntry{
 			Token: fmt.Sprintf("fence-%d", i), Hash: docHash(r)})
 		docs = append(docs, held(r))
 	}

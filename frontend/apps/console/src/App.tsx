@@ -34,6 +34,8 @@ const DashboardDetailPage = lazy(() => import('@/routes/dashboards/DashboardDeta
 const ApprovalsPage = lazy(() => import('@/routes/approvals/ApprovalsPage'));
 const ApprovalDetailPage = lazy(() => import('@/routes/approvals/ApprovalDetailPage'));
 const AutomationReviewPage = lazy(() => import('@/routes/automation-reviews/AutomationReviewPage'));
+const AlarmMaintenancePage = lazy(() => import('@/routes/alarm-maintenance/WindowsPage'));
+const AlarmMaintenanceWindowPage = lazy(() => import('@/routes/alarm-maintenance/WindowPage'));
 const AlarmsPage = lazy(() => import('@/routes/alarms/AlarmsPage'));
 const SignersPage = lazy(() => import('@/routes/updates/SignersPage'));
 const CommandBatchesPage = lazy(() => import('@/routes/command-batches/CommandBatchesPage'));
@@ -135,6 +137,9 @@ export default function App() {
           <Route path="integrations/:token" element={<IntegrationDetailPage />} />
           <Route path="dashboards" element={<DashboardsPage />} />
           <Route path="dashboards/:token" element={<DashboardDetailPage />} />
+          <Route path="alarm-maintenance" element={<AlarmMaintenancePage />} />
+          <Route path="alarm-maintenance/new" element={<AlarmMaintenanceWindowPage />} />
+          <Route path="alarm-maintenance/:token" element={<AlarmMaintenanceWindowPage />} />
           <Route path="alarms" element={<AlarmsPage />} />
           <Route path="approvals" element={<ApprovalsPage />} />
           <Route path="approvals/:token" element={<ApprovalDetailPage />} />
