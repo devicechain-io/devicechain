@@ -397,10 +397,14 @@ func (api *Api) emitDetectionRulesPublished(ctx context.Context, event *Detectio
 // no-op otherwise (ADR-051 slice 4c-2). Like the other emit helpers it is best-effort
 // and must be called AFTER the device write has committed: the create/update paths emit
 // only once their write returns nil, so the fact never fires for a rolled-back write.
-func (api *Api) emitDeviceRoster(ctx context.Context, event *DeviceRosterEvent) {
+//
+// It returns the publisher's error so a fan-out can stop at the first refused publish
+// (emitRosterEntries); a single-device caller has nothing to do with it.
+func (api *Api) emitDeviceRoster(ctx context.Context, event *DeviceRosterEvent) error {
 	if api.DeviceRosterPublisher != nil {
-		api.DeviceRosterPublisher.PublishDeviceRoster(ctx, event)
+		return api.DeviceRosterPublisher.PublishDeviceRoster(ctx, event)
 	}
+	return nil
 }
 
 // emitDeviceAttribute publishes a device-attribute event when a publisher is wired, and

@@ -22,8 +22,9 @@ type captureRoster struct {
 	events []*DeviceRosterEvent
 }
 
-func (c *captureRoster) PublishDeviceRoster(_ context.Context, e *DeviceRosterEvent) {
+func (c *captureRoster) PublishDeviceRoster(_ context.Context, e *DeviceRosterEvent) error {
 	c.events = append(c.events, e)
+	return nil
 }
 
 func newRosterEmitTestApi(t *testing.T) *Api {
