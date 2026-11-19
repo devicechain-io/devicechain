@@ -77,6 +77,8 @@ func s4Checks() []struct {
 		{InvSolarWave, solarWave},
 		{InvHolidaySkipped, holidaySkipped},
 		{InvWindowHoldsFlush, windowHoldsFlush},
+		{InvMaintenanceHoldsPage, maintenanceHoldsPage},
+		{InvMaintenanceControlPages, maintenanceControlPages},
 		{InvAssetHierarchy, assetHierarchy},
 		{InvFeederBlastRadius, feederBlastRadius},
 	}

@@ -77,8 +77,8 @@
       "ruleToken": "hp-lamp-flicker",
       "profileToken": "hp-light-profile",
       "enabled": true,
-      "alarmSeverityWire": "MINOR",
-      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"lamp-flicker\"},\"type\":\"raiseAlarm\"}],\"count\":3,\"name\":\"Harborpulse lamp flicker\",\"severity\":\"minor\",\"type\":\"repeating\",\"when\":{\"metric\":\"lamp_fault\",\"op\":\"gt\",\"threshold\":0.5},\"window\":\"1m0s\"}"
+      "alarmSeverityWire": "MAJOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"lamp-flicker\"},\"type\":\"raiseAlarm\"}],\"count\":3,\"name\":\"Harborpulse lamp flicker\",\"severity\":\"major\",\"type\":\"repeating\",\"when\":{\"metric\":\"lamp_fault\",\"op\":\"gt\",\"threshold\":0.5},\"window\":\"1m0s\"}"
     },
     {
       "producer": "harborpulse",
