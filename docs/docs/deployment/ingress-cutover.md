@@ -235,5 +235,5 @@ the edge:
 ## Related {#ingress-cutover-related}
 
 - [`dcctl install`](../reference/dcctl.md) and [`dcctl upgrade`](../reference/dcctl.md) list every flag used here.
-- [Releases & upgrades](./releases-and-upgrades.md#v0260-upgrade) has the notes for the release that
+- [Releases & upgrades](/1.0/deployment/releases-and-upgrades#v0260-upgrade) has the notes for the release that
   ships this change.
