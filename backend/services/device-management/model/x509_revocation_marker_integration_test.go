@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -283,7 +284,7 @@ func TestRevocationMarkerLockHoldMeasurement(t *testing.T) {
 			lockHold := func(inLock func(tx *gorm.DB) error) time.Duration {
 				var held time.Duration
 				require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
-					if _, err := lockTrustAnchorByToken(tx, "maker"); err != nil {
+					if _, err := identity.LockTrustAnchorByToken(tx, "maker"); err != nil {
 						return err
 					}
 					start := time.Now()

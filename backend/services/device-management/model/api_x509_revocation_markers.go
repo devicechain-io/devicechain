@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/x509trust"
@@ -133,13 +134,13 @@ func writeRevocationMarkerOnTx(tx *gorm.DB, m PendingRevocationExpansion) error 
 	return nil
 }
 
-// stashCrlRevocationSerials copies the serials the upload newly revoked (crlNewTable) into the
+// stashCrlRevocationSerials copies the serials the upload newly revoked (identity.CrlNewTable) into the
 // durable table under a fresh generation and returns it. It runs BEFORE the anchor row is locked:
 // a row costs index work, and the lock must cover only the marker.
 func stashCrlRevocationSerials(tx *gorm.DB, tenant string, anchorId uint) (int64, error) {
 	gen := rand.Int64()
 	if err := tx.Exec("INSERT INTO pending_revocation_expansion_serials (tenant_id, trust_anchor_id, generation, serial) "+
-		"SELECT ?, ?, ?, n.serial FROM "+crlNewTable+" n", tenant, anchorId, gen).Error; err != nil {
+		"SELECT ?, ?, ?, n.serial FROM "+identity.CrlNewTable+" n", tenant, anchorId, gen).Error; err != nil {
 		return 0, fmt.Errorf("recording the serials a CRL newly revokes: %w", err)
 	}
 	return gen, nil
@@ -295,17 +296,6 @@ func (api *Api) tenantsOwingMarkers(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return tenants, nil
-}
-
-// lockTrustAnchorShareByID locks the anchor row FOR SHARE to the commit. An anchor already deleted
-// is not an error: there is no revocation of it to race.
-func lockTrustAnchorShareByID(tx *gorm.DB, id uint) error {
-	var a DeviceTrustAnchor
-	err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ?", id).Take(&a).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil
-	}
-	return err
 }
 
 // queueOwedRevocationKicksOnTx queues, in tx, the revocation-origin kick of the given devices of the

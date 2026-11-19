@@ -19,7 +19,7 @@ import (
 //
 // 🔴 EVERY ROW HANGS OFF A TENANT ANCHOR and is read with an explicit `tenant_id = ? AND
 // trust_anchor_id = ?`, not only the rdb tenant callback (which covers neither raw SQL nor a
-// projection destination): see readRevocationState.
+// projection destination): see ReadRevocationState.
 
 // Sources of a stored list, and kinds of a revoked-certificate row.
 const (
