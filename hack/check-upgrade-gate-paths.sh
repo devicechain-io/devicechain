@@ -122,6 +122,10 @@ GATE_PATHS=(
   # other services decode, moved out of model/model_*.go with their tags intact. A tag edit
   # here moves bytes old pods still read mid-upgrade.
   'backend/services/*/contract/**'
+  # A model package carved into sub-packages (device-management's model/identity): the
+  # entities that move there are stored shapes exactly as model_*.go's are. Matched one level
+  # down, which also takes the code moved beside them; running the drill is the safe error.
+  'backend/services/*/model/*/*.go'
   # The migration runner and the tenant-scope callback every read goes through.
   'backend/core/rdb/**'
   # Envelope-encrypted secrets are stored rows sealed under the instance root key, and
@@ -542,6 +546,11 @@ PY
 ' | match_changed 2>/dev/null)"
   [ "$out" = "run=true" ] || { echo "SELF-TEST FAILED: a changed wire-contract file did not run the drill (got '$out')" >&2; return 1; }
   echo "    a changed wire-contract file RUNS the drill"
+
+  out="$(printf 'backend/services/device-management/model/identity/trust_anchors.go
+' | match_changed 2>/dev/null)"
+  [ "$out" = "run=true" ] || { echo "SELF-TEST FAILED: a changed entity in a model sub-package did not run the drill (got '$out')" >&2; return 1; }
+  echo "    a changed entity in a model sub-package RUNS the drill"
 
   # Each added class must RUN as itself (one file per call, so nothing else can carry it).
   local f

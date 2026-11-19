@@ -1,12 +1,13 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package model
+package identity
 
 import (
 	"crypto/x509"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -130,4 +131,26 @@ type DeviceTrustAnchorSearchCriteria struct {
 type DeviceTrustAnchorSearchResults struct {
 	Results    []DeviceTrustAnchor
 	Pagination rdb.SearchResultsPagination
+}
+
+// OcspModeOf is the anchor's OCSP mode: OFF when none is stored. A stored value outside the
+// vocabulary is an ERROR, never a default: a mode this build does not know is refused rather than
+// guessed (an unknown mode that read as OFF would silently stop checking).
+func (a *DeviceTrustAnchor) OcspModeOf() (x509trust.OCSPMode, error) {
+	if !a.OcspMode.Valid {
+		return x509trust.OCSPOff, nil
+	}
+	if m := x509trust.OCSPMode(a.OcspMode.String); m.Valid() {
+		return m, nil
+	}
+	return "", fmt.Errorf("trust anchor %q stores the unknown OCSP mode %q", a.Token, a.OcspMode.String)
+}
+
+// OcspResponderUrlOf is the anchor's own (tenant-set) responder URL, "" when it has none (each
+// certificate's own Authority Information Access entry is used).
+func (a *DeviceTrustAnchor) OcspResponderUrlOf() string {
+	if !a.OcspResponderUrl.Valid {
+		return ""
+	}
+	return a.OcspResponderUrl.String
 }

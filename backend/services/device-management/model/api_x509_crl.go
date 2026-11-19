@@ -548,9 +548,6 @@ func (api *Api) DeviceRevocationListsOf(ctx context.Context, anchorId uint) ([]D
 	return lists, nil
 }
 
-// AuditLabel is the issuer's key hash: public, and what an auditor looks the list up by.
-func (l DeviceRevocationList) AuditLabel() string { return l.IssuerKey }
-
 // ─── freshness ──────────────────────────────────────────────────────────────
 
 // Freshness of a stored list, worst first in severity order for an anchor.
