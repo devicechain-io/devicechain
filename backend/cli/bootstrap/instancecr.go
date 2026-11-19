@@ -157,21 +157,9 @@ func ValidateInstanceSpec(spec dcv1beta1.InstanceSpec) error {
 	// somewhere in the chart, minutes in, rather than here. ResolveEnabledAreas is
 	// the same function the command layer runs over the same two values, so a
 	// declaration that passes here is one dcctl can act on.
-	areas, err := ResolveEnabledAreas(spec.Profile, spec.ExtraFunctionalAreas)
-	if err != nil {
+	if _, err := ResolveEnabledAreas(spec.Profile, spec.ExtraFunctionalAreas); err != nil {
 		return fmt.Errorf("the instance declaration names an area set this build cannot "+
 			"deploy: %w", err)
-	}
-	if spec.ShardGroups != nil {
-		if len(areas) == 0 {
-			areas, err = shardGroupAreas(spec.Profile, spec.ExtraFunctionalAreas)
-			if err != nil {
-				return err
-			}
-		}
-		if err := validateShardGroupReaders(spec.ShardGroups.Suffixes, areas); err != nil {
-			return err
-		}
 	}
 	return nil
 }
