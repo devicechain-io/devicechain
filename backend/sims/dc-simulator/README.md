@@ -579,7 +579,8 @@ plays one **compressed day** on a loop, 24 sim hours in 24 minutes, starting at 
 | Sim time | What happens | What the platform does |
 | --- | --- | --- |
 | 08:30-09:45 | The Ferry Terminal's demand passes its cap | `hp-peak-demand` (1-minute sliding average) raises MINOR |
-| 11:00-12:00 | One East Quay lamp's driver reports intermittent faults | `hp-lamp-flicker` (repeating, 3 in a minute) raises MINOR |
+| 10:45-11:30 | East Quay lamp driver replacement on `hp-light-east-3` | A ONE_SHOT alarm suppression window holds its `lamp-flicker` page until service ends |
+| 11:00-12:00 | East Quay and North Quay lamps report intermittent faults, with one off reading at 11:20 | `hp-lamp-flicker` (repeating, 3 in a wall minute) raises MAJOR near 11:10; North Quay pages promptly and East Quay pages after 11:30 |
 | 14:00-15:30 | A Basin charger's connector overheats | `hp-connector-hot` (sliding average) raises MAJOR and sends `derate {max_kw: 11}`; the charger obeys and cools |
 | 17:00-18:30 | Storm surge: every gauge rises fast | `hp-surge-rising` (rate of change) raises WARNING |
 | 17:00-21:00 | The king tide and the surge | three thresholds share the alarm key `flood-level`: each gauge's ONE alarm escalates MINOR to MAJOR, and to CRITICAL on East Quay only, then eases |
@@ -637,7 +638,17 @@ is refused at bootstrap: re-create the sim.
 - **Maintenance window.** `flush-well` is DISRUPTIVE, and the pump controllers' type carries the
   window `hp-pump-service-window`, so the 14:00 flush is held until the crew's slot opens at 15:00
   and runs inside it. The window gates when a disruptive command may START; it does not silence
-  alarms (the platform has no alarm-suppression window).
+  alarms. The separate alarm suppression window below holds pages.
+- **Lamp maintenance.** Before sim 10:45, each day's `hp-lamp-service-<run>-d<day>` ONE_SHOT
+  window is created over `hp-light-east-3`, for `lamp-flicker` only, named "East Quay
+  lamp driver replacement". Its exact wall instants correspond to sim 10:45 and 11:30, without
+  minute rounding. Alarms continue tracking the fault. The held page is released by the
+  notification scheduler after 11:30 while the alarm remains active; `hp-light-north-3` has the
+  identical fault and pages at once. `/status` lists the window and device in `scenario.jobs`.
+  `maintenance-holds-page` judges the platform's cycle stamp, attempts and optional sink mail;
+  `maintenance-control-pages` proves the unwindowed lamp pages promptly and fails the hold check.
+  `--scenario-defect suppression-wrong-device` aims the window at `hp-light-east-2`, which never
+  flickers, and turns exactly `maintenance-holds-page` red because east-3 pages early.
 - **Hierarchy and graph.** Assets `hp-waterfront` > one site per quay > its pump station, its
   feeder and its buildings (`hp-bldg-quayside-lofts` on North Quay, `hp-bldg-ferry-terminal` on the
   Basin). The customer meters are assigned to their buildings and the pumps to their stations. A
@@ -645,7 +656,9 @@ is refused at bootstrap: re-create the sim.
   graph names the East Quay outage's blast radius before it happens.
 
 🔴 **Real time is not compressed.** A campaign trigger and a maintenance window are wall-clock
-schedules, at a resolution of one minute. The CALENDAR jobs and the window's slot are written as
+schedules. Campaign triggers and command-maintenance slots have a resolution of one minute;
+alarm suppression ONE_SHOT windows accept exact instants. The CALENDAR jobs and the window's
+slot are written as
 each sim day runs, at the first whole wall minute after their sim time (a sim hour is a wall minute
 at the default day), and `/status` lists them under `scenario.jobs`. Real sunset and sunrise cannot
 happen inside a 24-minute day: the SOLAR campaigns fire at the real dusk and dawn of wherever the
@@ -704,6 +717,8 @@ alarm ten seconds after it reaches MAJOR, as the escalation's control.
 | `solar-wave` | for the dusk and dawn campaigns, every lamp's planned instant is the sunset (sunrise) at the position the platform holds for it, and the lamps run east to west | `--scenario-defect lamp-unsited` (one lamp has no position: NO_SITE) |
 | `holiday-skipped` | the dusk campaign declares the day after it was created a holiday, has planned past it, and planned no cycle for it, while the dawn campaign planned it | `--scenario-defect holiday-dropped` |
 | `window-holds-flush` | the day's `flush-well` was queued at 14:00, carries the pump window, was sent only once the window opened and before it closed, and succeeded | `--scenario-defect flush-ungated` (the pump type has no window) |
+| `maintenance-holds-page` | East Quay lamp-flicker was raised under the exact lamp-service window, sent no early page, and released a page after the window ended; optional sink mail agrees | `--scenario-defect suppression-wrong-device` (window targets the neighbouring lamp) |
+| `maintenance-control-pages` | the identical North Quay flicker has no suppression stamp, pages promptly before the window ends, and fails the same hold check | the unwindowed North Quay lamp is the control of `maintenance-holds-page` |
 | `asset-hierarchy` | each meter is assigned to its building and each pump to its station, each under its own quay's site under the waterfront | `--scenario-defect lofts-under-basin` |
 | `feeder-blast-radius` | each feeder feeds exactly its quay's lights and chargers, and every device the failed feeder feeds went silent in the outage | `--scenario-defect feeder-miswired` (one East Quay lamp on the North Quay feeder) |
 

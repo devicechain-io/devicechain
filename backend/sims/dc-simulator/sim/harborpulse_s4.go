@@ -377,17 +377,19 @@ func (s *harborpulse) harborpulseWellWatch() DetectionRuleSpec {
 
 // ---- The jobs each sim day carries ------------------------------------------------------------
 
-// ScenarioJob is one job the sim scheduled for a sim day: a campaign it created and, for the
-// flush, the maintenance window's opening. A verifier reads the campaign and the window back from
-// the platform; this only tells it which ones belong to the day it judges.
+// ScenarioJob identifies a sim day's fleet operation: a campaign and its command-maintenance
+// slot, or an alarm suppression window on a lamp. A verifier reads the platform back; the ledger
+// only tells it which campaign or window belongs to the day it judges.
 type ScenarioJob struct {
 	Day      int    `json:"day"`
 	Name     string `json:"name"`
 	Campaign string `json:"campaign"`
+	Window   string `json:"window,omitempty"`
+	Device   string `json:"device,omitempty"`
 	Group    string `json:"group"`
 	// FireAt is the campaign's CALENDAR instant, RFC 3339.
 	FireAt string `json:"fireAt"`
-	// WindowOpens and WindowCloses are the maintenance window's opening for the flush job.
+	// WindowOpens and WindowCloses are the job's window bounds (RFC3339Nano for lamp service).
 	WindowOpens  string `json:"windowOpens,omitempty"`
 	WindowCloses string `json:"windowCloses,omitempty"`
 }
@@ -494,7 +496,7 @@ func (s *harborpulse) scheduleDay(ctx context.Context, rt *Runtime, now time.Tim
 	// The day before yesterday's campaigns have long fired; their record is kept by the platform
 	// against the cycle, and deleting the definition cancels nothing that was sent.
 	for _, j := range s.jobs {
-		if j.Day == d-3 {
+		if j.Day == d-3 && j.Campaign != "" {
 			_ = deleteCampaign(ctx, rt, j.Campaign)
 		}
 	}

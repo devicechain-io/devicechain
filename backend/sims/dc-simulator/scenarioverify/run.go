@@ -526,7 +526,9 @@ func readS4(ctx context.Context, r *Reader, obs *Observations, ledger []sim.Scen
 	}
 	campaigns := []string{sim.HarborpulseDuskCampaign, sim.HarborpulseDawnCampaign}
 	for _, j := range s.Jobs {
-		campaigns = append(campaigns, j.Campaign)
+		if j.Campaign != "" {
+			campaigns = append(campaigns, j.Campaign)
+		}
 	}
 	for _, token := range campaigns {
 		c, err := r.CampaignByToken(ctx, token)
@@ -614,5 +616,5 @@ func readS4(ctx context.Context, r *Reader, obs *Observations, ledger []sim.Scen
 		}
 	}
 	obs.S4 = s
-	return nil
+	return readMaintenance(ctx, r, obs)
 }

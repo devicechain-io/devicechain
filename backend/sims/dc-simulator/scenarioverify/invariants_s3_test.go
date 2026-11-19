@@ -182,7 +182,15 @@ func TestEachS3ControlTurnsExactlyItsInvariantRed(t *testing.T) {
 			d.s3.Attempts[tok] = d.s3.Attempts[tok][:1]
 		}},
 		{"pages the sink never received", "(none)", InvNotifyEscalates, "the sink received", func(d *day) {
-			d.s3.Sink.Mail = d.s3.Sink.Mail[:3]
+			// Drop flood pages, preserving the earlier maintenance beat's live mail.
+			kept := append(d.s3.Sink.Mail[:0:0], d.s3.Sink.Mail[:3]...)
+			for _, m := range d.s3.Sink.Mail[3:] {
+				_, key, _, _ := dutyMail(m.Data)
+				if key == sim.HarborpulseFlickerAlarmKey {
+					kept = append(kept, m)
+				}
+			}
+			d.s3.Sink.Mail = kept
 		}},
 		// One gauge's escalation mail lost, every other mail kept: the acknowledged gauge's page and
 		// the other alarms' mail to the same recipient must not make up for it.
