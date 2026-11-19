@@ -64,12 +64,13 @@ export function MaintenanceBanner({ target }: { target: Target }) {
       const until = windowUntil(w);
       if (!until || Date.parse(until) <= Date.now()) return null;
       const extension = new Date(Date.parse(until) + HOUR).toISOString();
-      const canWrite = alarmWrite && (!isBroad(w) || notificationWrite);
-      const canExtend = canWrite && (!isBroad({ ...w, endTime: extension }) || notificationWrite);
+      // End only restores paging: alarm:write plus seeing the window. Extending widens suppression and still needs reach.
+      const canEnd = alarmWrite;
+      const canExtend = alarmWrite && (!isBroad({ ...w, endTime: extension }) || notificationWrite);
       const fresh = !!query.current?.some(row => row.token === w.token);
       return <div key={w.token} className="flex flex-wrap items-center gap-3 rounded-md border bg-muted p-3" data-shot="alarm-maintenance-banner">
         <span>{t('banner', { time: new Date(until).toLocaleString(i18n.language), reason: w.reason || w.name })}</span>
-        <Button size="sm" variant="outline" disabled={!canWrite || !fresh || busy} onClick={() => act(() => endWindow(w.token))}>{t('end')}</Button>
+        <Button size="sm" variant="outline" disabled={!canEnd || !fresh || busy} onClick={() => act(() => endWindow(w.token))}>{t('end')}</Button>
         {w.kind === 'ONE_SHOT' && <Button size="sm" variant="outline" disabled={!canExtend || !fresh || busy} onClick={() => act(() => updateWindow(w.token, { endTime: extension }))}>{t('extend')}</Button>}
       </div>;
     })}
