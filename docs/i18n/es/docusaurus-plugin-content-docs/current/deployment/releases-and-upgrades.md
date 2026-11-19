@@ -28,7 +28,7 @@ solo después a una versión posterior. Consulte
 
 Cada versión menor inicia una línea de versiones, y sus versiones de parche pertenecen a esa línea. Las tres líneas más recientes tienen sus notas completas más abajo, de la más nueva a la más antigua. Las líneas anteriores tienen una entrada breve en [Versiones anteriores](#older-releases).
 
-- **[v1.7](#v170-upgrade)**: [v1.7.0](#v170-upgrade)
+- **[v1.7](#v170-upgrade)**: [v1.7.1](#v171-upgrade) · [v1.7.0](#v170-upgrade)
 - **[v1.6](#v160-upgrade)**: [v1.6.0](#v160-upgrade)
 - **[v1.5](#v150-upgrade)**: [v1.5.0](#v150-upgrade)
 
@@ -808,6 +808,35 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 ## Versiones recientes {#recent-releases}
 
 Las tres líneas de versiones más recientes se documentan completas, de la más nueva a la más antigua. Dentro de una línea, las notas de una versión de parche van antes que las de la versión que corrige.
+
+### v1.7.1 — las actualizaciones y los comandos de campaña llegan solo a los dispositivos a los que iban dirigidos {#v171-upgrade}
+
+`v1.7.1` es una versión de parche y una actualización en el lugar desde `v1.7.0`: `dcctl install` para el clúster y luego un `dcctl upgrade` por cada instancia, como se describe en [Actualizaciones continuas](#rolling-upgrades), con el `dcctl` de v1.7.1 y `--version v1.7.1`. `update-management` añade una migración en su primer arranque. Añade una columna que puede quedar vacía, de modo que los pods de `v1.7.0` siguen funcionando mientras avanza la actualización. Como en toda versión, no hay vuelta atrás a la versión anterior.
+
+```bash
+dcctl install local --version v1.7.1
+dcctl upgrade local devicechain --version v1.7.1 --dry-run
+dcctl upgrade local devicechain --version v1.7.1
+```
+
+Esta versión no cambia ninguna interfaz cubierta. Añade un código de rechazo y de omisión, `DEVICE_REPLACED`, al vocabulario de códigos existente.
+
+#### Antes de actualizar a v1.7.1 {#v171-before-upgrade}
+
+- Mientras los pods antiguos y los nuevos coexisten durante la actualización continua, un pod de `v1.7.0` todavía puede avanzar un despliegue en curso a la manera antigua hasta que se sustituya. Termine la actualización antes de eliminar y volver a crear dispositivos a los que apunta un despliegue en curso.
+- Un despliegue iniciado antes de la actualización registró solo los tokens de sus dispositivos. Para esos despliegues, `update-management` compara cuándo se creó cada dispositivo con cuándo empezó el despliegue (consulte [Los despliegues apuntan a los dispositivos con los que empezaron](#v171-rollout-identity)). Un dispositivo creado en los cinco minutos anteriores o posteriores al inicio del despliegue queda **retenido**: no se le indica que se actualice y el despliegue sigue en `RUNNING`. Si un despliegue sigue en curso con dispositivos en espera, abórtelo e inicie uno nuevo.
+
+#### Novedades de v1.7.1 {#v171-whats-new}
+
+- **La actualización asignada a un dispositivo recreado se mantiene.** Una solicitud de asignación que consultó un dispositivo antes de que este se eliminara y se volviera a crear con el mismo token ahora se rechaza con `DEVICE_REPLACED`. Ya no sustituye la actualización del nuevo dispositivo. Antes, al nuevo dispositivo se le dejaba de ofrecer su actualización hasta que se le asignaba de nuevo.
+- **Los comandos de campaña vuelven a comprobar el grupo cuando se reintentan.** Cuando la creación del lote de una campaña falla por un motivo pasajero, los comandos se reintentan más tarde. Ahora se comprueban primero contra el grupo de la campaña: un dispositivo que salió del grupo entretanto se registra como `NOT_IN_GROUP` y no recibe ningún comando. Si no se puede leer el grupo, los comandos esperan; si siguen esperando después del margen de retraso de la campaña, se registran como no enviados a tiempo.
+- **Las copias de seguridad de instancias particionadas incluyen todos los streams de grupo.** En una instancia con `infrastructure.nats.shardGroups` configurado, `dcctl backup` exporta ahora cada stream de grupo de un stream particionado (`<stream>-g1`, `<stream>-g2`, etc.) junto con su stream base y registra la distribución en el manifiesto. Un stream de grupo configurado que falta o no se puede leer, o un stream de grupo que la configuración desplegada no declara, hace fallar la exportación en lugar de producir una copia parcial. `dcctl restore --plan` enumera cada stream de grupo y rechaza un destino cuya distribución de grupos difiere de la de la copia. Las copias de una instancia particionada tomadas con un dcctl anterior contienen solo los streams base (grupo cero), no los streams de grupo; tome una copia nueva tras actualizar dcctl. Las instancias sin grupos de particiones no se ven afectadas y sus manifiestos no cambian.
+
+#### Los despliegues apuntan a los dispositivos con los que empezaron {#v171-rollout-identity}
+
+- `startUpdateRollout` ahora registra qué dispositivo es cada miembro del grupo, no solo su token. Un dispositivo creado más tarde con el mismo token es un dispositivo distinto: se omite con `DEVICE_REPLACED`, aunque esté en el grupo, y nunca se le indica que se actualice. Un miembro que sale del grupo mientras se inicia el despliegue no forma parte de él.
+- Cuando se elimina un dispositivo, un destino del despliegue que todavía espera a ese dispositivo se omite con `DEVICE_NOT_FOUND`.
+- Despliegues iniciados antes de v1.7.1: un dispositivo creado más de cinco minutos después del inicio del despliegue se omite con `DEVICE_REPLACED`, uno creado más de cinco minutos antes se actualiza como de costumbre y uno creado entre ambos queda retenido, como se describe en [Antes de actualizar a v1.7.1](#v171-before-upgrade).
 
 ### v1.7.0 — las eliminaciones llegan a todos los servicios y las sesiones resisten las interrupciones {#v170-upgrade}
 
