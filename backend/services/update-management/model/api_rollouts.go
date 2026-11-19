@@ -818,7 +818,7 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 		var pending []UpdateRolloutTarget
 		after := uint(0)
 		if v, ok := api.rolloutTargetAfter.Load(id); ok {
-			after = v.(uint)
+			after = v.(rolloutCursor).after
 		}
 		// Rotate even when the window holds or fails lookup. At most want <= 50 lookups per
 		// step, and at most MaxRolloutTargets rows per circuit; a held prefix cannot starve
@@ -834,7 +834,7 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 			after = 0
 		}
 		if len(pending) > 0 {
-			api.rolloutTargetAfter.Store(id, pending[len(pending)-1].ID)
+			api.rolloutTargetAfter.Store(id, rolloutCursor{tenant: tenant, after: pending[len(pending)-1].ID})
 		}
 		var lastErr error
 		for _, t := range pending {
@@ -1168,33 +1168,44 @@ func (api *Api) AdvanceRollouts(ctx context.Context) (AdvanceResult, error) {
 	return out, api.pruneRolloutTargetAfter(ctx)
 }
 
+// rolloutCursor is one rollout's lookup-window position, with the tenant that owns the rollout so
+// pruning can ask about it under that tenant's own isolation instead of across all tenants.
+type rolloutCursor struct {
+	tenant string
+	after  uint
+}
+
 // pruneRolloutTargetAfter retires advisory cursors even when another replica ended the rollout.
 // Query cached IDs, not just this pass's bounded page; an off-page RUNNING rollout must keep its
 // cursor so held targets cannot starve later ones. A failed query proves nothing: keep all entries.
 func (api *Api) pruneRolloutTargetAfter(ctx context.Context) error {
-	var ids []uint
-	api.rolloutTargetAfter.Range(func(key, _ any) bool {
-		ids = append(ids, key.(uint))
+	byTenant := map[string][]uint{}
+	api.rolloutTargetAfter.Range(func(key, value any) bool {
+		c := value.(rolloutCursor)
+		byTenant[c.tenant] = append(byTenant[c.tenant], key.(uint))
 		return true
 	})
-	if len(ids) == 0 {
-		return nil
-	}
-	var running []uint
-	if err := api.RDB.DB(core.WithSystemContext(ctx)).Model(&UpdateRollout{}).
-		Where("id IN ? AND state = ?", ids, RolloutRunning).Pluck("id", &running).Error; err != nil {
-		return err
-	}
-	live := make(map[uint]bool, len(running))
-	for _, id := range running {
-		live[id] = true
-	}
-	for _, id := range ids {
-		if !live[id] {
-			api.rolloutTargetAfter.Delete(id)
+	// Each tenant's cursors are checked under that tenant, never across tenants: the rollout ids
+	// came from that tenant's own steps, and a failed query keeps its cursors (advisory state).
+	var errs []error
+	for tenant, ids := range byTenant {
+		var running []uint
+		if err := api.RDB.DB(core.WithTenant(ctx, tenant)).Model(&UpdateRollout{}).
+			Where("id IN ? AND state = ?", ids, RolloutRunning).Pluck("id", &running).Error; err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		live := make(map[uint]bool, len(running))
+		for _, id := range running {
+			live[id] = true
+		}
+		for _, id := range ids {
+			if !live[id] {
+				api.rolloutTargetAfter.Delete(id)
+			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // rolloutTargetIdentity applies the rolling-upgrade rule to a found device before any write.
