@@ -58,15 +58,13 @@
     "site is a separate repository and nothing here reads its prose. Answering \"no site",
     "impact\" is a fine answer; not asking is not."
   ],
-  "version": "v1.7.0",
-  "theme": "deletions reach every service, and sessions ride out outages",
+  "version": "v1.7.1",
+  "theme": "updates and campaign commands reach only the devices they were meant for",
   "breaking": false,
   "highlights": [
-    "Upgrade in place from v1.6.0 with the v1.7.0 dcctl: install with your cluster settings, then upgrade each instance. Use OpenTofu 1.10 or later, and review the new refusals and limits in the upgrade notes first, including geofence alarms that now need location:read.",
-    "Deleting a device, customer, area, asset or group is announced reliably, and each service acts on it: undelivered commands are cancelled, live state and pending updates are removed, alarms end and stop escalating, and dashboard shares naming a deleted customer or group are removed.",
-    "A network outage no longer signs anyone out of the console or /dash, live subscriptions reconnect after a token-refresh outage, and @devicechain/client can recover from an HTTP 401 with one forced refresh.",
-    "Instances with NATS shard groups hold and retry ingest when a group backs up or the placement is unusable, and HTTP ingest is admitted per tenant with a retryable 503.",
-    "MCP sessions and requests, live subscriptions, OTA uploads and download requests, and AI inference rate limits gain per-tenant, per-device or per-pod bounds.",
-    "Stale saves answer with a STALE_WRITE code, the console formats dates and numbers in its own language and translates more screens into Simplified Chinese, and a waterfront simulator scenario checks itself end to end."
+    "Upgrade in place from v1.7.0 with the v1.7.1 dcctl. update-management adds one migration; finish the upgrade before you start rollouts, and read the upgrade notes on rollouts started before it.",
+    "An update assigned to a device that was deleted and re-created with the same token is no longer replaced by a request that looked up the old device; that request is refused with DEVICE_REPLACED.",
+    "A rollout records which device each member is: a device later created with the same token, in the group or not, is skipped with DEVICE_REPLACED and never told to update.",
+    "Campaign commands retried after a passing failure re-check the campaign's group first, so a device that left the group in the meantime gets no command."
   ]
 }

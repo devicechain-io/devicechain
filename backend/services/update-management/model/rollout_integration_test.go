@@ -97,10 +97,38 @@ func newPGRollouts(t *testing.T, n int) *pgRollouts {
 
 func (e *pgRollouts) ctx() context.Context { return tenantCtx(e.tenant) }
 
+func TestRolloutPendingDeletionCannotTargetReplacementOnPostgres(t *testing.T) {
+	e := newPGRollouts(t, 2)
+	a := e.replica()
+	e.devices.incarnations = map[string]uint64{e.tenant + "/dev-1": 17}
+	id := e.start(t, a, "r1", 1)
+	var target UpdateRolloutTarget
+	require.NoError(t, a.RDB.DB(e.ctx()).Where("rollout_id = ? AND device_token = ?", id, "dev-1").First(&target).Error)
+	require.Equal(t, TargetPending, target.Status)
+	delete(e.devices.profiles, e.tenant+"/dev-1")
+	require.NoError(t, a.DeviceDeleted(e.ctx(), "dev-1", 17, time.Now()))
+	e.devices.profiles[e.tenant+"/dev-1"] = "gateway"
+	e.devices.incarnations[e.tenant+"/dev-1"] = 23
+	e.groups.set(e.tenant, "fleet", "dev-0")
+	for _, attempt := range e.inFlightAttempts(t, a) {
+		require.NoError(t, a.RDB.DB(e.ctx()).Model(&UpdateAttempt{}).Where("id = ?", attempt.ID).
+			Update("state", string(ota.StateUpdated)).Error)
+	}
+	_, err := a.StepRollout(e.ctx(), id)
+	require.NoError(t, err)
+	var count int64
+	require.NoError(t, a.RDB.DB(e.ctx()).Model(&UpdateAssignment{}).Where("device_token = ?", "dev-1").Count(&count).Error)
+	require.Zero(t, count, "the replacement outside the group must have no assignment")
+	require.NoError(t, a.RDB.DB(e.ctx()).Where("id = ?", target.ID).First(&target).Error)
+	require.Equal(t, TargetSkipped, target.Status)
+	require.Contains(t, []string{CodeDeviceNotFound, "DEVICE_REPLACED"}, target.SkipCode)
+}
+
 // replica is one service replica: its own Api over the shared database.
 func (e *pgRollouts) replica() *Api {
 	a := NewApi(e.mgr, e.store, Limits{MaxArtifactBytes: 1 << 20, ConfiguredMaxArtifactBytes: 1 << 20, MaxTenantArtifactBytes: 1 << 30})
 	a.Devices, a.Groups, a.Desired = e.devices, e.groups, e.desired
+	a.Incarnations = e.devices
 	a.Policy, a.AllowUnverified = testPolicy, true
 	return a
 }

@@ -112,7 +112,7 @@ func TestCreateRoundTrip(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "backup")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := Create(ctx, nc, "sample", dir, blobFixture(t)); err != nil {
+	if err := Create(ctx, nc, "sample", dir, blobFixture(t), nil); err != nil {
 		t.Fatal(err)
 	}
 	m, err := Inspect(dir)
@@ -132,7 +132,7 @@ func TestCreateRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	withoutGateway := filepath.Join(t.TempDir(), "backup")
-	if err := Create(ctx, nc, "sample", withoutGateway, blobFixture(t)); err != nil {
+	if err := Create(ctx, nc, "sample", withoutGateway, blobFixture(t), nil); err != nil {
 		t.Fatal(err)
 	}
 	second, err := Inspect(withoutGateway)
@@ -269,7 +269,7 @@ func TestCreateFailsClosed(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := Create(ctx, conn, "sample", dir, export); err == nil {
+			if err := Create(ctx, conn, "sample", dir, export, nil); err == nil {
 				t.Fatal("export failure accepted")
 			}
 			if _, err := os.Stat(filepath.Join(dir, "manifest.json")); !os.IsNotExist(err) {

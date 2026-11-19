@@ -512,6 +512,42 @@ dcctl bootstrap local devicechain
 
 最近三个次要版本（`v1.7`、`v1.6` 和 `v1.5`）按从新到旧的顺序提供完整说明。下方还保留了 `v0.27.0` 至 `v0.24.0` 的详细说明。
 
+### v1.7.1 — 更新和活动命令只送达其目标设备 {#v171-upgrade}
+
+`v1.7.1` 是补丁版本，可从 `v1.7.0` 原地升级：先对集群执行 `dcctl install`，再对每个实例执行一次 `dcctl upgrade`，如[滚动升级](#rolling-upgrades)所述，并使用 v1.7.1 的 `dcctl` 和 `--version v1.7.1`。`update-management` 在首次启动时追加一个迁移。该迁移添加一个可以为空的列，因此在升级滚动进行期间 `v1.7.0` 的 Pod 仍可正常工作。与每个版本一样，不支持降级。
+
+```bash
+dcctl install local --version v1.7.1
+dcctl upgrade local devicechain --version v1.7.1 --dry-run
+dcctl upgrade local devicechain --version v1.7.1
+```
+
+适用[版本与升级策略](./versioning-policy.md)。此版本不更改任何受保障的接口。它在现有代码词汇中新增一个拒绝与跳过代码 `DEVICE_REPLACED`。
+
+- [升级到 v1.7.1 之前](#v171-before-upgrade)
+- [v1.7.1 新增内容](#v171-whats-new)
+- [发布针对其启动时的设备](#v171-rollout-identity)
+
+#### 升级到 v1.7.1 之前 {#v171-before-upgrade}
+
+- **请先完成升级，再启动发布，或删除并重新创建正在运行的发布所针对的设备。** 在滚动升级期间新旧 Pod 并存时，`v1.7.0` 的 Pod 在被替换之前仍可能按旧方式启动或推进发布。
+- `update-management` 追加一个迁移，用于记录每个发布目标是哪一台设备。升级前启动的发布没有这项记录。对于这些发布的设备，`update-management` 会比较每个设备的创建时间与发布的开始时间（参见[发布针对其启动时的设备](#v171-rollout-identity)）。创建时间与发布开始时间相差在五分钟以内的设备会被**暂缓**：不会通知它更新，发布保持 `RUNNING`。如果某个发布一直处于运行状态且有设备在等待，请中止它并启动一个新的发布。
+
+#### v1.7.1 新增内容 {#v171-whats-new}
+
+- **分配给重新创建的设备的更新保持不变。** 假设某个分配请求先查询了设备，随后该设备被删除并以相同令牌重新创建。该请求现在会以 `DEVICE_REPLACED` 被拒绝，不再替换新设备的更新。此前，新设备会不再获得其更新，直到再次为其分配。
+- **活动命令在重试时会重新检查分组。** 当活动的批次因暂时性原因创建失败时，这些命令会在稍后重试。现在重试前会先对照活动的分组进行检查：期间已离开分组的设备记录为 `NOT_IN_GROUP`，不会收到命令。如果无法读取分组，命令会等待。如果超过活动的延迟上限仍在等待，则记录为错过。
+- **分片实例的备份包含所有分片组流。** 在配置了 `infrastructure.nats.shardGroups` 的实例上，`dcctl backup` 现在会将分片流的每个分片组流（`<stream>-g1`、`<stream>-g2` 等）与其基础流一起导出，并在清单中记录分片布局。已配置的分片组流缺失或无法读取，或存在已部署配置未声明的分片组流时，导出会失败。`dcctl restore --plan` 会列出每个分片组流，并拒绝分片布局与备份不同的目标。使用较早版本 `dcctl` 为分片实例创建的备份只包含基础流（第 0 组），不包含分片组流：升级后请使用 v1.7.1 的 `dcctl` 重新创建备份。未配置分片组的实例不受影响，其清单也保持不变。
+
+#### 发布针对其启动时的设备 {#v171-rollout-identity}
+
+- `startUpdateRollout` 现在会记录分组中每个成员是哪一台设备，而不仅是其令牌。之后以相同令牌创建的设备是另一台设备：即使它在分组中，也会以 `DEVICE_REPLACED` 跳过，并且永远不会通知它更新。在发布启动期间离开分组的成员不属于该发布。
+- 删除设备时，仍在等待该设备的发布目标会以 `DEVICE_NOT_FOUND` 跳过。
+- 对于 v1.7.1 之前启动的发布：
+  - 在发布开始五分钟之后创建的设备以 `DEVICE_REPLACED` 跳过；
+  - 在发布开始五分钟之前创建的设备照常更新；
+  - 在两者之间创建的设备会被暂缓，如[升级到 v1.7.1 之前](#v171-before-upgrade)所述。
+
 ### v1.7.0 — 删除会传达到每个服务，会话可安然度过中断 {#v170-upgrade}
 
 `v1.7.0` 可从 `v1.6.0` 原地升级：先为集群运行 `dcctl install`，再为每个实例运行一次 `dcctl upgrade`，详见[滚动升级](#rolling-upgrades)。**两个命令都使用 v1.7.0 的 `dcctl`**，配合 OpenTofu 或 Terraform 1.10 及以上版本，并向 `dcctl install` 提供集群设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。`device-management`、`ai-inference` 和 `update-management` 会在首次启动时执行新增的迁移，升级只能向前：无法回退到 `v1.6.0`。若从 `v1.5.x` 或更早版本升级，请先逐个升级经过每个中间的次版本（包括 `v1.6.x`），并按各版本的说明使用该版本自己的 `dcctl` 和 `--version`：跳过次版本不是经过测试的路径（参见[支持的升级路径](./versioning-policy.md#upgrade-paths)）。`v1.6.0` 的说明见 [`v1.6.0` 说明](#v160-upgrade)。

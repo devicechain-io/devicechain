@@ -86,6 +86,7 @@ func TestDirectPublicationRechecksCommittedAssignmentAndDevice(t *testing.T) {
 			t.Run(path+"/"+change, func(t *testing.T) {
 				e := newRolloutEnv(t, 1)
 				ctx := tenantCtx("acme")
+				e.devices.incarnations = map[string]uint64{"acme/dev-0": 17}
 				e.create(t, "r1", 1, nil)
 				lookups := 0
 				e.api.Devices = deviceLookupFunc(func(context.Context, string, string) (DeviceFacts, bool, error) {

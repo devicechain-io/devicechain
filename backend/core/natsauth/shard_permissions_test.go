@@ -34,6 +34,10 @@ func TestShardPermissionsOffAndExactGroups(t *testing.T) {
 		require.True(t, dm.publishes("$JS.API.CONSUMER.MSG.NEXT."+stream+"."+durable))
 		require.True(t, dm.publishes("$JS.ACK."+stream+"."+durable+".1.1.1.1.1"))
 		require.True(t, admin.publishes("$JS.API.STREAM.CREATE."+stream))
+		// dcctl backup snapshots every group stream as the administrator.
+		require.True(t, admin.publishes("$JS.API.STREAM.SNAPSHOT."+stream))
+		require.True(t, admin.publishes("$JS.SNAPSHOT.ACK."+stream+".token.1.1024"))
+		require.True(t, admin.publishes("$JS.API.STREAM.SNAPSHOT."+messaging.StreamName("prod", messaging.GroupSuffix("resolved-events", group))))
 		require.False(t, source.publishes("$JS.API.STREAM.CREATE."+stream))
 		require.False(t, source.publishes("$JS.API.CONSUMER.MSG.NEXT."+stream+"."+durable))
 	}
