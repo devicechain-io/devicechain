@@ -1259,7 +1259,7 @@ A client is sending tokens that enforce mode would refuse
 
 A maintenance task is not completing successful passes
 
-**Qué significa y qué hacer.** No replica of this job and task has succeeded within three declared pass intervals plus five minutes, or the task has never succeeded and a replica declaring its interval has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task.
+**Qué significa y qué hacer.** No replica of this job and task has succeeded within three declared pass intervals plus five minutes (a task that completes less often than it polls declares its expected success interval, and that longer interval is used), or the task has never succeeded and a replica declaring its interval has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task.
 
 ### ProcessorLoopDropping {#processorloopdropping}
 

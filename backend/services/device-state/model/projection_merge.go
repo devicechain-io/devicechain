@@ -562,9 +562,10 @@ func foldIncarnations(tdb *gorm.DB, row *DeviceState, devices map[string][]int, 
 				continue
 			}
 			if u.Incarnation > uint64(row.Incarnation.Int64) {
-				// A late event after deletion can create a row stamped 17. The
-				// next device's event (23) resets it, even if its clock is older;
-				// the sweep also deletes 17 when the token is free or holds 23.
+				// A late event after deletion can create a row stamped 17. An
+				// event stamped 23 resets it even if its clock is older. IDs are
+				// not commit-ordered; the sweep repairs any mismatch, including
+				// when the live device has a smaller ID whose events are dropped.
 				if _, err := deleteProjectionChildren(tdb, row.DeviceToken, true, time.Time{}); err != nil {
 					return err
 				}

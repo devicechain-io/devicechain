@@ -54,8 +54,8 @@ func (d *day) cleanS3b() {
 		kept = append(kept, Reading{sim.HarborpulseWaterLevelKey, t, v})
 	}
 	d.readings[sim.HarborpulseSamplingGauge] = kept
-	d.s3.Jobs = []CalculatedJob{{Token: "backfill-id", Status: "SUCCEEDED", ProfileToken: sim.HarborpulsePumpProfile, From: at(sim.HarborpulseGapFrom), To: at(sim.HarborpulseGapTo), Samples: 7, Written: 7}}
-	for t := at(sim.HarborpulseGapFrom); !t.After(at(sim.HarborpulseGapTo)); t = t.Add(5 * time.Second) {
+	d.s3.Jobs = []CalculatedJob{{Token: "backfill-id", Status: "SUCCEEDED", ProfileToken: sim.HarborpulsePumpProfile, From: at(sim.HarborpulseGapFrom), To: at(sim.HarborpulseGapTo), Samples: 6, Written: 6}}
+	for t := at(sim.HarborpulseGapFrom); t.Before(at(sim.HarborpulseGapTo)); t = t.Add(5 * time.Second) {
 		r := Reading{sim.HarborpulseWetWellKey, t, 0.8}
 		d.s3.GapBefore = append(d.s3.GapBefore, r)
 		d.readings[p] = append(d.readings[p], r, Reading{sim.HarborpulseWellFillKey, t, 20})
@@ -76,19 +76,28 @@ func TestEachS3bControlTurnsExactlyItsInvariantRed(t *testing.T) {
 					d.commands[i].Status = "FAILED"
 				}
 			}
+			before := len(d.readings[sim.HarborpulseSamplingGauge])
 			var rs []Reading
 			for tick := at(WatchFrom).Add(time.Second); tick.Before(at(WatchTo)); tick = tick.Add(5 * time.Second) {
 				value, _ := sim.HarborpulseLoraLevelAt(1, sim.HarborpulseSamplingGauge, tick.Sub(testClock.StartedAt), testClock.DayLength)
 				rs = append(rs, Reading{sim.HarborpulseWaterLevelKey, tick, value})
 			}
 			d.readings[sim.HarborpulseSamplingGauge] = rs
+			// Every additional uplink still decodes successfully; the profile's health grows too.
+			h := d.s3.Health[sim.HarborpulseLoraGaugeProfile]
+			h.Decoded += float64(len(rs) - before)
+			d.s3.Health[sim.HarborpulseLoraGaugeProfile] = h
 		}},
 		{sim.HarborpulseDefectBackfillWrongWindow, InvBackfillCompletes, "missing span", func(d *day) {
-			d.s3.Jobs[0].From = at(13)
-			d.s3.Jobs[0].To = at(13.5)
+			// s3bBeats requests [gapFrom - 2 minutes, gapFrom - 1 minute), not a
+			// shifted half-hour of sim time. The restored constant lets that whole minute
+			// fill (twelve five-second samples), leaving the intended gap untouched.
+			d.s3.Jobs[0].From = at(sim.HarborpulseGapFrom).Add(-2 * time.Minute)
+			d.s3.Jobs[0].To = at(sim.HarborpulseGapFrom).Add(-time.Minute)
+			d.s3.Jobs[0].Samples, d.s3.Jobs[0].Written = 12, 12
 			var kept []Reading
 			for _, r := range d.readings[sim.HarborpulseBasinPump] {
-				if r.Name != sim.HarborpulseWellFillKey || !inWindow(r.At, at(14), at(14.5)) {
+				if r.Name != sim.HarborpulseWellFillKey || r.At.Before(at(sim.HarborpulseGapFrom)) || !r.At.Before(at(sim.HarborpulseGapTo)) {
 					kept = append(kept, r)
 				}
 			}
@@ -101,6 +110,26 @@ func TestEachS3bControlTurnsExactlyItsInvariantRed(t *testing.T) {
 				t.Fatal("control not registered")
 			}
 			evaluateOneRed(t, c.want, c.because, c.mutate)
+			d := cleanDay()
+			c.mutate(d)
+			switch c.defect {
+			case sim.HarborpulseDefectDownlinkNack:
+				clean := cleanDay()
+				delta := len(d.readings[sim.HarborpulseSamplingGauge]) - len(clean.readings[sim.HarborpulseSamplingGauge])
+				if delta <= 0 || d.s3.Health[sim.HarborpulseLoraGaugeProfile].Decoded != clean.s3.Health[sim.HarborpulseLoraGaugeProfile].Decoded+float64(delta) {
+					t.Fatal("NACK must keep faster uplinks and increase decoded health by the extra uplinks")
+				}
+			case sim.HarborpulseDefectBackfillWrongWindow:
+				j := d.s3.Jobs[0]
+				if !j.From.Equal(at(12)) || !j.To.Equal(at(13)) || j.Samples != 12 || j.Written != 12 || j.Status != "SUCCEEDED" {
+					t.Fatalf("wrong-window job does not model the sim's earlier minute: %+v", j)
+				}
+				from, to := at(sim.HarborpulseGapFrom), at(sim.HarborpulseGapTo).Add(-time.Microsecond)
+				if len(readingsOf(d.observe(), sim.HarborpulseBasinPump, sim.HarborpulseWellFillKey, from, to)) != 0 ||
+					len(readingsOf(d.observe(), sim.HarborpulseBasinPump, sim.HarborpulseWetWellKey, from, to)) != len(d.s3.GapBefore) {
+					t.Fatal("wrong-window job must leave the intended gap's inputs and no calculated rows")
+				}
+			}
 		})
 	}
 }
@@ -212,5 +241,21 @@ func TestBackfillCompletesWithMicrosecondJobBounds(t *testing.T) {
 	o.S3.Jobs[0].To = o.at(sim.HarborpulseGapTo).Truncate(time.Microsecond)
 	if err := backfillCompletes(o); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Backfill ranges are half-open. The clean fixture must not pretend the job wrote its upper
+// boundary, or retain counters for rows outside the requested range.
+func TestBackfillFixtureUsesHalfOpenWindow(t *testing.T) {
+	d := cleanDay()
+	j := d.s3.Jobs[0]
+	o := Observations{Readings: d.readings}
+	wet := readingsOf(o, sim.HarborpulseBasinPump, sim.HarborpulseWetWellKey, j.From, j.To.Add(-time.Microsecond))
+	fill := readingsOf(o, sim.HarborpulseBasinPump, sim.HarborpulseWellFillKey, j.From, j.To.Add(-time.Microsecond))
+	if len(d.s3.GapBefore) != len(wet) || j.Samples != float64(len(wet)) || j.Written != float64(len(fill)) {
+		t.Fatalf("backfill counters/input snapshot exceed half-open range: %+v, wet=%d fill=%d before=%d", j, len(wet), len(fill), len(d.s3.GapBefore))
+	}
+	if len(readingsOf(o, sim.HarborpulseBasinPump, sim.HarborpulseWellFillKey, j.To, j.To)) != 0 {
+		t.Fatal("backfill wrote its excluded upper boundary")
 	}
 }

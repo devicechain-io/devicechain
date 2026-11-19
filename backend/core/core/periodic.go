@@ -42,13 +42,14 @@ import (
 type PeriodicTask struct {
 	lifecycle LifecycleManager
 
-	name      string
-	interval  time.Duration
-	run       func(context.Context) error
-	immediate bool
-	jitter    float64
-	detached  bool
-	metrics   *PeriodicTaskMetrics
+	name            string
+	interval        time.Duration
+	run             func(context.Context) error
+	immediate       bool
+	jitter          float64
+	detached        bool
+	successInterval time.Duration
+	metrics         *PeriodicTaskMetrics
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -154,6 +155,10 @@ type PeriodicTaskMetrics struct {
 	lastSuccess prometheus.Gauge
 	interval    prometheus.Gauge
 
+	// success is shared by every WithOwnFailureLog copy and registers its gauge only once.
+	// Tasks without WithSuccessInterval export no expected-success-interval series at all.
+	success *successGauge
+
 	// failLog rate-limits the failure log line so a sustained outage logs once, not once a pass.
 	failLog failStreak
 }
@@ -218,7 +223,10 @@ func (m *PeriodicTaskMetrics) WithOwnFailureLog() *PeriodicTaskMetrics {
 	if m == nil {
 		return nil
 	}
-	return &PeriodicTaskMetrics{passes: m.passes, duration: m.duration, lastSuccess: m.lastSuccess, interval: m.interval}
+	return &PeriodicTaskMetrics{
+		passes: m.passes, duration: m.duration, lastSuccess: m.lastSuccess,
+		interval: m.interval, success: m.success,
+	}
 }
 
 // NewPeriodicTaskMetrics builds the four signals under this service's namespace.
@@ -226,6 +234,7 @@ func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics
 	sub, name := ms.requireMetricName("NewPeriodicTaskMetrics", name)
 	auto := promauto.With(ms.MetricsRegisterer())
 	m := &PeriodicTaskMetrics{
+		success: &successGauge{registerer: ms.MetricsRegisterer(), sub: sub, name: name},
 		passes: auto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: METRICS_NAMESPACE, Subsystem: sub,
 			Name: name + "_passes_total",
@@ -277,6 +286,47 @@ func (m *PeriodicTaskMetrics) SetInterval(d time.Duration) {
 		return
 	}
 	m.interval.Set(d.Seconds())
+}
+
+// successGauge is the expected-success-interval gauge, created only by a task that declares one
+// (WithSuccessInterval). 🔑 AN UNDECLARED TASK EXPORTS NO SUCH SERIES AT ALL, which is why it is
+// lazy rather than a NaN gauge every task carries: the alert reads "whichever interval series
+// exist", and absence is the honest answer for a task with no cooldown. With no registry the
+// gauge is built unregistered, like every other collector here.
+type successGauge struct {
+	registerer prometheus.Registerer
+	sub, name  string
+	once       sync.Once
+	gauge      prometheus.Gauge
+}
+
+// declareSuccessInterval creates and registers the gauge once, NaN until the task starts.
+// Nil-safe; a nil registerer leaves the gauge unregistered.
+func (m *PeriodicTaskMetrics) declareSuccessInterval() {
+	if m == nil || m.success == nil {
+		return
+	}
+	g := m.success
+	g.once.Do(func() {
+		gauge := promauto.With(g.registerer).NewGauge(prometheus.GaugeOpts{
+			Namespace: METRICS_NAMESPACE, Subsystem: g.sub,
+			Name: g.name + "_expected_success_interval_seconds",
+			Help: "Declared gap between successful passes of the " + g.name + " task in seconds, for a task that " +
+				"polls more often than it completes; NaN until started.",
+		})
+		gauge.Set(math.NaN())
+		g.gauge = gauge
+	})
+}
+
+// setSuccessInterval publishes the declared success cadence. Nil-safe; a no-op until declared.
+func (m *PeriodicTaskMetrics) setSuccessInterval(d time.Duration) {
+	if m == nil || m.success == nil {
+		return
+	}
+	if m.success.gauge != nil {
+		m.success.gauge.Set(d.Seconds())
+	}
 }
 
 // record files one pass. Nil-safe.
@@ -333,6 +383,20 @@ func WithDetachedContext() PeriodicTaskOption {
 	return func(t *PeriodicTask) { t.detached = true }
 }
 
+// WithSuccessInterval declares how long a HEALTHY task goes between successful passes, for a
+// task that polls more often than it completes: its intervening passes return ErrPassSkipped,
+// which does not move the last-success gauge, so the polling interval understates the gap an
+// operator should expect between successes. The generic PeriodicTaskStalled alert measures
+// staleness against the larger of this and the polling interval. It exports
+// <name>_expected_success_interval_seconds; a task that does not call this exports no such
+// series. It panics on a non-positive d.
+func WithSuccessInterval(d time.Duration) PeriodicTaskOption {
+	if d <= 0 {
+		panic(fmt.Sprintf("core: success interval must be positive, got %s", d))
+	}
+	return func(t *PeriodicTask) { t.successInterval = d }
+}
+
 // NewPeriodicTask builds a task that calls run every interval. name is used for the lifecycle
 // component name and in log lines; the metric names come from PeriodicTaskMetrics.
 // It panics if interval is non-positive or metrics is nil.
@@ -356,6 +420,9 @@ func NewPeriodicTask(area, name string, interval time.Duration, run func(context
 	for _, opt := range opts {
 		opt(t)
 	}
+	if t.successInterval > 0 {
+		t.metrics.declareSuccessInterval()
+	}
 	t.lifecycle = NewLifecycleManager(fmt.Sprintf("%s-%s", area, name), t, callbacks)
 	return t
 }
@@ -375,6 +442,7 @@ func (t *PeriodicTask) Start(ctx context.Context) error { return t.lifecycle.Sta
 
 func (t *PeriodicTask) ExecuteStart(context.Context) error {
 	t.metrics.SetInterval(t.interval)
+	t.metrics.setSuccessInterval(t.successInterval)
 	t.wg.Add(1)
 	go t.loop()
 	return nil

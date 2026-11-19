@@ -79,8 +79,11 @@ func (api *Api) OrphanPage(ctx context.Context, after uint, limit int) ([]Device
 }
 
 // ReconcileDeviceState rechecks the scanned row under lock before deleting or stamping it.
-// An in-place reset keeps the ID, so an incarnation change in the scan-to-lock window
-// or an older authority answer must leave the row unchanged until the next sweep.
+// The authority answer postdates the scan, and the ID/incarnation guard proves the locked
+// row still has the scanned identity (its contents may have moved on). Stamps only move up
+// and device-management never undeletes, so a stamp the answer does not name is orphaned.
+// IDs are not commit-ordered: their size says nothing about age, so a smaller answer is
+// acted on like any other. No further authority lookup is needed while holding the lock.
 // A NULL (pre-incarnation) row has no stamp to compare: a replacement's events fold into
 // it in place, and a fresh answer would delete it by created_at just as a stale one does,
 // so the stale answer loses nothing a current one would keep.
@@ -95,9 +98,6 @@ func (api *Api) ReconcileDeviceState(ctx context.Context, scanned DeviceState, l
 			return e
 		}
 		if row.ID != scanned.ID || row.Incarnation.Valid != scanned.Incarnation.Valid || row.Incarnation.Int64 != scanned.Incarnation.Int64 {
-			return nil
-		}
-		if liveID != 0 && row.Incarnation.Valid && liveID < row.Incarnation.Int64 {
 			return nil
 		}
 		if liveID == 0 || (row.Incarnation.Valid && row.Incarnation.Int64 != liveID) || (!row.Incarnation.Valid && row.CreatedAt.Before(createdAt)) {
