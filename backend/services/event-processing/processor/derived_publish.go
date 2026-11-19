@@ -264,6 +264,17 @@ func (p *publishPass) buildLanes() {
 func (p *publishPass) admit() {
 	rp := p.rp
 	for !p.stopped && p.inFlight < p.cfg.MaxInFlight && len(p.ready) > 0 {
+		if rp.ruleRouting != nil {
+			// Placement is frozen while resolved-events is sharded. A move observed mid-pass
+			// ends the term like a lost lease: nothing more is sent for any tenant, and the
+			// checkpoint does not commit. (Unsharded workers carry no routing.)
+			tenant, _ := runtime.RuleTenant(rp.pendingDets[p.ready[0]].RuleID)
+			if err := rp.ownsRuleTenant(tenant); err != nil {
+				rp.refuseRulePlacement(err)
+				p.stopped, p.leaseLost = true, true
+				return
+			}
+		}
 		if rp.leadershipEnabled() && !rp.heldNow() {
 			// Lost the partition mid-pass: send nothing more. What is in flight cannot be
 			// recalled; it settles, and anything stored is the successor's replay to collapse.

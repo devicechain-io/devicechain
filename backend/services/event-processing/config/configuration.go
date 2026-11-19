@@ -167,6 +167,11 @@ type EventProcessingConfiguration struct {
 	// Above 1 each shard is applied on its own goroutine (core.ConcurrentSharded), so the engine's
 	// own work can use more than one core. The loop that reads, decodes and plans messages stays
 	// single, so the gain is bounded by it and by the CPU the pod is given.
+	// Resolved-event groups share a process ceiling N*K=64 (16 groups allow K<=4).
+	// Each group's fact channels use floor(legacy capacity/N): process totals <=
+	// 64 rule, 256 arm, 256 attribute, 256 series-drop and 32 fence entries.
+	// Each of its K operation queues uses floor(1024/N) slots: <=65,536 slots
+	// process-wide. These are entry bounds, not payload-byte or retained-state bounds.
 	DetectShards int
 
 	// IdleAdvanceGuardSeconds is how long the resolved stream must be quiet before DETECT

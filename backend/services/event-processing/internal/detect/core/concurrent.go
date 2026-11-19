@@ -116,8 +116,9 @@ type Pipelined interface {
 
 // ShardStat is one shard's load.
 type ShardStat struct {
-	QueueDepth int
-	BusyNanos  uint64
+	QueueDepth    int
+	QueueCapacity int
+	BusyNanos     uint64
 }
 
 var (
@@ -176,27 +177,33 @@ type shardWorker struct {
 
 // NewConcurrentSharded builds an empty K-way engine with a goroutine per shard. K is clamped to
 // [1, MaxShards] and allowedLateness has the meaning it has for NewEngine.
-func NewConcurrentSharded(k int, rules []Rule, allowedLateness time.Duration) *ConcurrentSharded {
-	return wrapConcurrent(newSharded(k, 0, rules, allowedLateness))
+// An optional queueDepth reduces each shard's bounded operation queue; omitted,
+// it preserves ShardQueueDepth. Group workers divide that capacity across groups.
+func NewConcurrentSharded(k int, rules []Rule, allowedLateness time.Duration, queueDepth ...int) *ConcurrentSharded {
+	return wrapConcurrent(newSharded(k, 0, rules, allowedLateness), queueDepth...)
 }
 
 // RestoreConcurrentSharded rebuilds a K-way concurrent engine from a snapshot written by an engine
 // of ANY shard count, or by the plain Engine.
-func RestoreConcurrentSharded(k int, rules []Rule, allowedLateness time.Duration, data []byte) (*ConcurrentSharded, error) {
+func RestoreConcurrentSharded(k int, rules []Rule, allowedLateness time.Duration, data []byte, queueDepth ...int) (*ConcurrentSharded, error) {
 	s, err := restoreSharded(k, 0, rules, allowedLateness, data)
 	if err != nil {
 		return nil, err
 	}
-	return wrapConcurrent(s), nil
+	return wrapConcurrent(s, queueDepth...), nil
 }
 
-func wrapConcurrent(s *Sharded) *ConcurrentSharded {
+func wrapConcurrent(s *Sharded, queueDepth ...int) *ConcurrentSharded {
+	depth := ShardQueueDepth
+	if len(queueDepth) > 0 {
+		depth = max(1, min(ShardQueueDepth, queueDepth[0]))
+	}
 	c := &ConcurrentSharded{s: s, lastSeq: s.shards[0].LastSeq(), sent: make([]uint64, len(s.shards))}
 	c.evPool.New = func() any { b := make([]Event, 0, 8); return &b }
 	c.workers = make([]*shardWorker, len(s.shards))
 	for i, e := range s.shards {
 		e.trackOrd = true
-		w := &shardWorker{idx: i, e: e, ch: make(chan shardOp, ShardQueueDepth), done: make(chan struct{}, 1), c: c}
+		w := &shardWorker{idx: i, e: e, ch: make(chan shardOp, depth), done: make(chan struct{}, 1), c: c}
 		c.workers[i] = w
 		c.wg.Add(1)
 		go w.run()
@@ -623,7 +630,7 @@ func (c *ConcurrentSharded) HeartbeatAbsenceKeys() []SeriesKey {
 func (c *ConcurrentSharded) ShardStats() []ShardStat {
 	out := make([]ShardStat, len(c.workers))
 	for i, w := range c.workers {
-		out[i] = ShardStat{QueueDepth: len(w.ch), BusyNanos: w.busy.Load()}
+		out[i] = ShardStat{QueueDepth: len(w.ch), QueueCapacity: cap(w.ch), BusyNanos: w.busy.Load()}
 	}
 	return out
 }
