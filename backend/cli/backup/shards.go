@@ -126,9 +126,29 @@ func refuseUndeclaredGroups(ctx context.Context, nc *nats.Conn, instance string,
 }
 
 // streamNames pages $JS.API.STREAM.NAMES itself: nats.go's StreamNames closes
-// its channel on an error, which would read as a short list.
+// its channel on an error, which would read as a short list. The server rebuilds
+// its sorted inventory for every page, so a stream created or deleted between
+// pages (another instance shares the account) can shift a name past the pages
+// read; the listing is therefore taken twice and must agree, and each page must
+// agree on the total and answer the offset asked for.
 func streamNames(ctx context.Context, nc *nats.Conn) ([]string, error) {
+	first, err := streamNamesOnce(ctx, nc)
+	if err != nil {
+		return nil, err
+	}
+	second, err := streamNamesOnce(ctx, nc)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Equal(first, second) {
+		return nil, fmt.Errorf("the stream list changed while it was read; freeze stream creation and deletion and retry")
+	}
+	return first, nil
+}
+
+func streamNamesOnce(ctx context.Context, nc *nats.Conn) ([]string, error) {
 	var out []string
+	total := -1
 	for {
 		req, _ := json.Marshal(map[string]int{"offset": len(out)})
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -139,6 +159,7 @@ func streamNames(ctx context.Context, nc *nats.Conn) ([]string, error) {
 		}
 		var resp struct {
 			Total   int      `json:"total"`
+			Offset  int      `json:"offset"`
 			Streams []string `json:"streams"`
 			Error   *struct {
 				Description string `json:"description"`
@@ -150,12 +171,19 @@ func streamNames(ctx context.Context, nc *nats.Conn) ([]string, error) {
 		if resp.Error != nil {
 			return nil, fmt.Errorf("%s", resp.Error.Description)
 		}
+		if total >= 0 && resp.Total != total || resp.Offset != len(out) {
+			return nil, fmt.Errorf("the stream list changed while it was read (total %d then %d, offset %d for %d); freeze stream creation and deletion and retry", total, resp.Total, resp.Offset, len(out))
+		}
+		total = resp.Total
 		out = append(out, resp.Streams...)
-		if len(out) >= resp.Total {
+		if len(out) > total {
+			return nil, fmt.Errorf("stream listing returned %d names for a total of %d", len(out), total)
+		}
+		if len(out) == total {
 			return out, nil
 		}
 		if len(resp.Streams) == 0 {
-			return nil, fmt.Errorf("stream listing stopped at %d of %d", len(out), resp.Total)
+			return nil, fmt.Errorf("stream listing stopped at %d of %d", len(out), total)
 		}
 	}
 }

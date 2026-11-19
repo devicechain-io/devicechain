@@ -269,4 +269,67 @@ func TestStreamNamesFailsOnAnyPage(t *testing.T) {
 	if err := refuseUndeclaredGroups(ctx, nc, "sample", map[string]bool{}); err == nil || !strings.Contains(err.Error(), "sample_inbound-events-g1") {
 		t.Fatalf("undeclared group on a later page passed: %v", err)
 	}
+
+	// A stream deleted between pages shrinks the total: the name that shifted
+	// below the offset already read must not go unseen.
+	pages[1] = `{"total":2,"offset":1,"limit":1,"streams":[]}`
+	if names, err := streamNames(ctx, nc); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("a listing that shrank between pages read as %v, %v", names, err)
+	}
+	// A page that answers another offset is refused too.
+	pages[1] = `{"total":3,"offset":0,"limit":2,"streams":["sample_resolved-events","sample_inbound-events-g1"]}`
+	if _, err := streamNames(ctx, nc); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("a page at the wrong offset accepted: %v", err)
+	}
+	// Two consistent but different listings are refused.
+	calls := 0
+	_ = sub.Unsubscribe()
+	sub, err = nc.Subscribe("$JS.API.STREAM.NAMES", func(m *nats.Msg) {
+		calls++
+		if calls == 1 {
+			_ = m.Respond([]byte(`{"total":1,"offset":0,"limit":1,"streams":["sample_inbound-events"]}`))
+			return
+		}
+		_ = m.Respond([]byte(`{"total":1,"offset":0,"limit":1,"streams":["sample_inbound-events-g1"]}`))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := streamNames(ctx, nc); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("two different listings accepted: %v", err)
+	}
+}
+
+// A target broker that still holds a group stream its configuration does not
+// declare (a leftover of another layout) is refused by the restore plan.
+func TestShardedRestorePlanRefusesLeftoverGroups(t *testing.T) {
+	areas := profileAreas(t, "default")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	two := &config.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.InboundEvents, streams.ResolvedEvents}}
+	nc := shardedBroker(t, areas, two)
+	dir := filepath.Join(t.TempDir(), "set")
+	if err := Create(ctx, nc, "sample", dir, emptyBlobs(t), two, areas); err != nil {
+		t.Fatal(err)
+	}
+	p, err := PrepareRestore(dir, "sample", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Control: the matching broker plans.
+	if _, err := p.Plan(ctx, nc, emptyBlobs(t), two, areas); err != nil {
+		t.Fatal(err)
+	}
+	js, _ := nc.JetStream()
+	for _, leftover := range []string{"sample_inbound-events-g2", "sample_resolved-events-g3"} {
+		if _, err := js.AddStream(&nats.StreamConfig{Name: leftover, Subjects: []string{"leftover." + leftover}, Storage: nats.FileStorage}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.Plan(ctx, nc, emptyBlobs(t), two, areas); err == nil || !strings.Contains(err.Error(), leftover) {
+			t.Fatalf("target leftover %q accepted: %v", leftover, err)
+		}
+		if err := js.DeleteStream(leftover); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
