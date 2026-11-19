@@ -171,6 +171,7 @@ var purgeSeedExemptions = map[string]string{
 	"event-processing.audit_events":                              sharedJournal,
 	"event-processing.detect_rules":                              representedTenantPredicate,
 	"event-processing.detect_snapshots":                          indirectTable,
+	"event-processing.detect_stream_topology":                    indirectTable,
 	"event-processing.device_attribute_deletions":                representedTenantPredicate,
 	"event-processing.device_attributes":                         representedTenantPredicate,
 	"event-processing.event_processing_migrations":               migrationTable,

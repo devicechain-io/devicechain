@@ -129,15 +129,17 @@ function ResourceDetail<T>({ resource }: { resource: RegistryResource<T> }) {
           </div>
         ) : undefined
       }
-      action={
+      action={<>
+        {resource.renderHeaderAction?.(item)}
         <Button variant="destructive" size="sm" onClick={remove}>
           <Trash2 size={14} /> {t('common:delete')}
         </Button>
-      }
+      </>}
     >
       {/* The form always lives under a "Basic" tab; any labelled extras (a group's
           Members, a profile's Metrics/Commands/Alarm Rules/Versions) become tabs
           beside it. */}
+      {resource.renderDetailNotice?.(item)}
       <QueryBoundary query={query}>
       <Tabs defaultValue="basic">
         <TabsList>

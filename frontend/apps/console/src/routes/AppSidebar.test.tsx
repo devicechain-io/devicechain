@@ -254,7 +254,7 @@ describe('a scoped member', () => {
   // Whatever the scope names — a customer, a group of devices, or both — the cut is the same.
   const SCOPES: string[][][] = [[['customer:acme']], [['group:north']], [['customer:acme', 'group:north']]];
 
-  it.each(SCOPES)('sees only Home, Dashboards, Alarms and Devices, even holding every authority (scope %j)', (anchors) => {
+  it.each(SCOPES)('sees Home, Dashboards, Alarms, Devices and Alarm maintenance, even holding every authority (scope %j)', (anchors) => {
     scope.value = anchors;
     renderWith(EVERYTHING, '/devices');
 
@@ -278,7 +278,6 @@ describe('a scoped member', () => {
       'Audit',
       'Connectors',
       'Notification Policies',
-      'Settings',
       'Updates',
       'Connect',
       'Organization',
@@ -350,7 +349,7 @@ describe('section visibility', () => {
   it.each<[string[], string[]]>([
     [[], []],
     [['dashboard:read'], ['Monitor']],
-    [['alarm:read'], ['Monitor']],
+    [['alarm:read'], ['Monitor', 'Settings']],
     [['notification:read'], ['Monitor']],
     [['device:read'], ['Devices', 'Connect', 'Organization']],
     [['command:read'], ['Devices']],
@@ -387,16 +386,19 @@ describe('section visibility', () => {
   });
 
   // The customer-scoped member: Home, Monitor (Dashboards, Alarms) and Devices (Devices), and nothing else.
-  it.each([[['customer:acme']], [['group:north']]])('a scoped member (%j) sees Home, Monitor and Devices only', (anchors) => {
+  it.each([[['customer:acme']], [['group:north']]])('a scoped member (%j) sees Home, Monitor, Devices and Alarm maintenance', (anchors) => {
     scope.value = anchors;
     renderWith(['*'], '/');
 
-    expect(sectionHeaders()).toEqual(['Monitor', 'Devices']);
+    expect(sectionHeaders()).toEqual(['Monitor', 'Devices', 'Settings']);
     expect(link('Home')).toBeTruthy();
     const monitor = within(header('Monitor')!.closest('li') as HTMLElement);
     expect(monitor.getAllByRole('link').map((a) => a.textContent)).toEqual(['Dashboards', 'Alarms']);
     const devices = within(header('Devices')!.closest('li') as HTMLElement);
     expect(devices.getAllByRole('link').map((a) => a.textContent)).toEqual(['Devices']);
+    fireEvent.click(header('Settings')!);
+    const settings = within(header('Settings')!.closest('li') as HTMLElement);
+    expect(settings.getAllByRole('link').map((a) => a.textContent)).toEqual(['Alarm maintenance']);
   });
 });
 
