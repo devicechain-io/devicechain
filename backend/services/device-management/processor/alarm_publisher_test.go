@@ -6,85 +6,66 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"testing"
-	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
 )
 
-// alarmEventRecorder stands in for the alarm-events writer. It fails the first
-// failures calls and records everything it is handed, including the tenant on the
-// context — the real writer scopes its subject from that and is fail-closed without
-// one, so a publish made under the wrong context writes nothing while looking
-// identical to one that succeeded.
 type alarmEventRecorder struct {
-	failures int
+	messages []messaging.Message
 	err      error
-	calls    int
-	payloads [][]byte
-	tenants  []string
 }
 
-func (w *alarmEventRecorder) WriteMessages(ctx context.Context, msgs ...messaging.Message) error {
-	w.calls++
-	tenant, _ := core.TenantFromContext(ctx)
-	w.tenants = append(w.tenants, tenant)
-	if w.calls <= w.failures {
-		return w.err
-	}
-	for _, m := range msgs {
-		w.payloads = append(w.payloads, m.Value)
-	}
-	return nil
+func (w *alarmEventRecorder) WriteMessages(_ context.Context, messages ...messaging.Message) error {
+	w.messages = append(w.messages, messages...)
+	return w.err
 }
-
-func (w *alarmEventRecorder) WriteToDevice(ctx context.Context, _ string, msgs ...messaging.Message) error {
-	return w.WriteMessages(ctx, msgs...)
+func (w *alarmEventRecorder) WriteToDevice(ctx context.Context, _ string, messages ...messaging.Message) error {
+	return w.WriteMessages(ctx, messages...)
 }
 func (w *alarmEventRecorder) HandleResponse(error) {}
 
-// refusingDeadWriter is a dead-letter stream that is down too — the case where the
-// transition can be recorded nowhere at all.
-type refusingDeadWriter struct{ calls int }
-
-func (d *refusingDeadWriter) WriteMessages(context.Context, ...messaging.Message) error {
-	d.calls++
-	return errors.New("the dead-letter stream is away as well")
-}
-
-// alarmWriterFor builds the publisher through its REAL constructor, so the counters and
-// the sink are wired the way main.go wires them rather than by hand: the metrics from
-// NewAlarmEventMetrics and the sink from a dead-letter producer on the same Microservice.
-func alarmWriterFor(t *testing.T, w messaging.MessageWriter, dead deadletter.Writer) *AlarmEventWriter {
-	t.Helper()
-	pub, _ := alarmWriterWithRegistry(t, w, dead)
-	return pub
-}
-
-// alarmWriterWithRegistry is alarmWriterFor over a Microservice with a registry, for the
-// tests that read a counter back by the name it EXPORTS under — which is what the alert
-// selects on, and which a read through a handle would never see.
-func alarmWriterWithRegistry(t *testing.T, w messaging.MessageWriter,
-	dead deadletter.Writer) (*AlarmEventWriter, *prometheus.Registry) {
-	t.Helper()
+func TestAlarmEventDedupEncodingAndBrokerFailures(t *testing.T) {
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
-	producer := deadletter.NewProducer(ms)
-	var sink *deadletter.Sink
-	if dead != nil {
-		sink = producer.NewSink(dead)
+	recorder := &alarmEventRecorder{}
+	writer := NewAlarmEventWriter(recorder, nil, NewAlarmEventMetrics(ms))
+	ev := &model.AlarmStateChangeEvent{AlarmToken: "alarm", EventType: model.AlarmEventRaised}
+	ctx := core.WithTenant(context.Background(), "acme")
+	require.NoError(t, writer.PublishAlarmEventDedup(ctx, ev, "alarm-event-acme-7"))
+	require.Equal(t, "alarm-event-acme-7", recorder.messages[0].DedupID)
+	recorder.err = errors.New("broker down")
+	// A broker refusal must stay retryable: the relay quarantines anything marked unpublishable.
+	refused := writer.PublishAlarmEventDedup(ctx, ev, "id")
+	require.ErrorIs(t, refused, recorder.err)
+	require.NotErrorIs(t, refused, model.ErrAlarmEventUnpublishable)
+	cause := errors.New("marshal failed")
+	writer.marshal = func(*model.AlarmStateChangeEvent) ([]byte, error) { return nil, cause }
+	err := writer.PublishAlarmEventDedup(ctx, ev, "id")
+	require.ErrorIs(t, err, model.ErrAlarmEventUnpublishable)
+	require.ErrorIs(t, err, cause)
+	require.Len(t, recorder.messages, 2)
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	found := false
+	for _, family := range families {
+		if family.GetName() == "devicechain_devicemanagement_alarm_event_dead_lettered_total" {
+			found = true
+			require.Zero(t, family.Metric[0].Counter.GetValue())
+		}
 	}
-	return NewAlarmEventWriter(w, sink, NewAlarmEventMetrics(ms)), reg
+	require.True(t, found, "documented dead letter metric must remain registered")
 }
 
-// gatheredCounter reads a plain counter off reg by its full exported name.
 func gatheredCounter(t *testing.T, reg *prometheus.Registry, name string) float64 {
 	t.Helper()
 	families, err := reg.Gather()
@@ -102,244 +83,38 @@ func gatheredCounter(t *testing.T, reg *prometheus.Registry, name string) float6
 
 const deviceManagementLost = "devicechain_devicemanagement_dead_letter_lost_total"
 
-func alarmEvent() *model.AlarmStateChangeEvent {
-	return &model.AlarmStateChangeEvent{
-		EventType:      model.AlarmEventRaised,
-		AlarmToken:     "alarm-1",
-		OriginatorType: "device",
-		OriginatorId:   42,
-		AlarmKey:       "acme/p@1/r1",
-		MetricKey:      "temperature",
-		State:          "ACTIVE",
-		Severity:       "CRITICAL",
-		RaisedTime:     time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC),
-		OccurredTime:   time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC),
-	}
-}
-
-// 🔴 THIS IS THE LAST HOP OF THE ALARM FLOW, AND UNTIL NOW IT WAS THE ONLY ONE THAT
-// ANSWERED "I could not pass this on" WITH SILENCE. The hop before it — the raise-alarm
-// consumer — retries and then dead-letters, because a lost edge is a genuine loss for an
-// edge-triggered producer. The consequence here is strictly worse: the alarm row has
-// already transitioned, so a swallowed publish leaves an alarm ACTIVE in the database
-// that nobody is paged about and that no counter, letter or later event mentions.
-//
-// It cannot be recovered downstream either. notification-management reads alarm-events
-// through a durable whose cursor only ever advances over messages that were actually
-// published, and nothing walks alarm rows for transitions the stream never carried — so
-// "the subscriber can re-query" is not available for an event that was never written.
-func TestAnAlarmEventThatCannotBePublishedIsDeadLetteredAndCounted(t *testing.T) {
-	pub := &alarmEventRecorder{failures: alarmPublishAttempts, err: errors.New("the broker is away")}
-	dead := &deadRecorder{}
-	w, reg := alarmWriterWithRegistry(t, pub, dead)
-	ctx := core.WithTenant(context.Background(), "acme")
-
-	w.PublishAlarmEvent(ctx, alarmEvent())
-
-	if pub.calls != alarmPublishAttempts {
-		t.Fatalf("the publish was attempted %d times, want %d: nothing else will ever retry "+
-			"this event, so the local retry is the only attempt it gets", pub.calls, alarmPublishAttempts)
-	}
-	if len(dead.msgs) != 1 {
-		t.Fatalf("wrote %d dead letters for an alarm transition that reached no subscriber, want 1",
-			len(dead.msgs))
-	}
-	e, err := deadletter.Unmarshal(dead.msgs[0].Value)
-	if err != nil {
-		t.Fatalf("the written letter does not read back: %v", err)
-	}
-	if e.Kind != deadletter.KindNotification || e.Reason != deadletter.ReasonExhausted {
-		t.Fatalf("the letter does not say what it is or why: kind=%q reason=%q", e.Kind, e.Reason)
-	}
-	if e.Source != "device-management" {
-		t.Fatalf("source = %q: the letter must name the hop that gave up, since the same kind "+
-			"is written by notification-management one hop later", e.Source)
-	}
-	if e.Reference != "alarm-1" {
-		t.Fatalf("reference = %q, want the alarm token — it is the only thing that lets an "+
-			"operator find the transition nobody was paged about", e.Reference)
-	}
-	if e.Attempts != alarmPublishAttempts {
-		t.Fatalf("attempts = %d, want %d", e.Attempts, alarmPublishAttempts)
-	}
-	// The payload is the wire bytes, so the letter carries the event itself rather than a
-	// description of it: an operator can decode exactly what the subscriber never saw.
-	want, err := proto.MarshalAlarmStateChangeEvent(alarmEvent())
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if string(e.Payload) != string(want) {
-		t.Fatalf("the letter does not carry the event that was lost (%d payload bytes, want %d)",
-			len(e.Payload), len(want))
-	}
-	if dead.tenants[0] != "acme" {
-		t.Fatalf("the letter was written under tenant %q; the real writer is fail-closed "+
-			"without one and would have written nothing", dead.tenants[0])
-	}
-	if got := testutil.ToFloat64(w.deadLettered); got != 1 {
-		t.Fatalf("alarm_event_dead_lettered_total = %v, want 1", got)
-	}
-	if got := gatheredCounter(t, reg, deviceManagementLost); got != 0 {
-		t.Fatalf("%s = %v, want 0: the letter was written", deviceManagementLost, got)
-	}
-}
-
-// The counterweight. Recording a give-up is only worth anything while a publish that
-// worked stays a publish that worked — a hop that filed a letter every time would bury
-// the one an operator has to act on.
-func TestAPublishedAlarmEventIsNotDeadLettered(t *testing.T) {
-	pub := &alarmEventRecorder{}
-	dead := &deadRecorder{}
-	w := alarmWriterFor(t, pub, dead)
-
-	w.PublishAlarmEvent(core.WithTenant(context.Background(), "acme"), alarmEvent())
-
-	if pub.calls != 1 || len(pub.payloads) != 1 {
-		t.Fatalf("a successful publish must happen exactly once: calls=%d payloads=%d",
-			pub.calls, len(pub.payloads))
-	}
-	if pub.tenants[0] != "acme" {
-		t.Fatalf("the event was published under tenant %q", pub.tenants[0])
-	}
-	if len(dead.msgs) != 0 {
-		t.Fatalf("wrote %d dead letters for an event that was published", len(dead.msgs))
-	}
-	if got := testutil.ToFloat64(w.deadLettered); got != 0 {
-		t.Fatalf("alarm_event_dead_lettered_total = %v, want 0", got)
-	}
-	back, err := proto.UnmarshalAlarmStateChangeEvent(pub.payloads[0])
-	if err != nil {
-		t.Fatalf("what reached the stream does not decode: %v", err)
-	}
-	if back.AlarmToken != "alarm-1" || back.EventType != model.AlarmEventRaised {
-		t.Fatalf("the published event is not the one that was handed in: %+v", back)
-	}
-}
-
-// A broker blip is not a give-up. The retry exists to turn one into a publish rather than
-// into a letter, and a letter written for a transient fault that resolved on the next
-// attempt would be a false report of an alarm nobody was paged about.
-func TestAnAlarmEventThatSucceedsOnRetryIsNotDeadLettered(t *testing.T) {
-	pub := &alarmEventRecorder{failures: alarmPublishAttempts - 1, err: errors.New("no responders")}
-	dead := &deadRecorder{}
-	w := alarmWriterFor(t, pub, dead)
-
-	w.PublishAlarmEvent(core.WithTenant(context.Background(), "acme"), alarmEvent())
-
-	if len(pub.payloads) != 1 {
-		t.Fatalf("the event never reached the stream after %d attempts", pub.calls)
-	}
-	if len(dead.msgs) != 0 {
-		t.Fatalf("wrote %d dead letters for an event that was published on a retry", len(dead.msgs))
-	}
-}
-
-// 🔴 UNPROCESSABLE, NOT EXHAUSTED, AND STILL RECORDED. An event that will not marshal
-// cannot be made to marshal by trying again, so retrying it would only burn the caller's
-// time — but the transition still happened and still reached nobody, which is the same
-// operator-visible outcome as a broker that refused it.
-func TestAnAlarmEventThatCannotBeMarshalledIsDeadLetteredAsUnprocessable(t *testing.T) {
-	pub := &alarmEventRecorder{}
-	dead := &deadRecorder{}
-	w := alarmWriterFor(t, pub, dead)
-	w.marshal = func(*model.AlarmStateChangeEvent) ([]byte, error) {
-		return nil, errors.New("this event cannot be rendered")
-	}
-
-	w.PublishAlarmEvent(core.WithTenant(context.Background(), "acme"), alarmEvent())
-
-	if pub.calls != 0 {
-		t.Fatalf("an unmarshallable event was published %d times", pub.calls)
-	}
-	if len(dead.msgs) != 1 {
-		t.Fatalf("wrote %d dead letters, want 1", len(dead.msgs))
-	}
-	e, err := deadletter.Unmarshal(dead.msgs[0].Value)
-	if err != nil {
-		t.Fatalf("the written letter does not read back: %v", err)
-	}
-	if e.Reason != deadletter.ReasonUnprocessable {
-		t.Fatalf("reason = %q, want %q: nothing was retried, so nothing was exhausted",
-			e.Reason, deadletter.ReasonUnprocessable)
-	}
-	if len(e.Payload) != 0 {
-		t.Fatalf("the letter carries %d payload bytes; the bytes are what failed to exist",
-			len(e.Payload))
-	}
-	if got := testutil.ToFloat64(w.deadLettered); got != 1 {
-		t.Fatalf("alarm_event_dead_lettered_total = %v, want 1", got)
-	}
-}
-
-// 🔴 THE LOSS COUNTER IS THE ONE AN OPERATOR ALERTS ON, so it must move on the one
-// outcome it names: the transition could be neither published nor filed. Counting it
-// here rather than off the sink's returned error is what keeps the counter from drifting
-// away from the condition it claims to measure.
-func TestAnAlarmEventThatCanBeNeitherPublishedNorFiledIsCountedAsLost(t *testing.T) {
-	pub := &alarmEventRecorder{failures: alarmPublishAttempts, err: errors.New("the broker is away")}
-	dead := &refusingDeadWriter{}
-	w, reg := alarmWriterWithRegistry(t, pub, dead)
-
-	w.PublishAlarmEvent(core.WithTenant(context.Background(), "acme"), alarmEvent())
-
-	if dead.calls == 0 {
-		t.Fatal("no attempt was made to file the letter")
-	}
-	if got := gatheredCounter(t, reg, deviceManagementLost); got != 1 {
-		t.Fatalf("%s = %v, want 1", deviceManagementLost, got)
-	}
-	if got := testutil.ToFloat64(w.deadLettered); got != 0 {
-		t.Fatalf("alarm_event_dead_lettered_total = %v, want 0: no letter was written", got)
-	}
-}
-
-// 🔴 A CANCELLED CALLER IS NOT A REASON TO STOP RECORDING. The transition committed
-// before the publish was attempted, so an operator whose request was cancelled — or a
-// consumer being shut down mid-rollout — still leaves an alarm that reached nobody. The
-// retry stops (further attempts under a dead context would fail on the cancellation
-// rather than on the broker), the arm files the letter under a detached context, and the
-// attempt count on the letter says how far it actually got rather than the cap.
-func TestACancelledCallerStopsTheRetryButStillFilesTheLetter(t *testing.T) {
-	pub := &alarmEventRecorder{failures: alarmPublishAttempts, err: errors.New("the broker is away")}
-	dead := &deadRecorder{}
-	w := alarmWriterFor(t, pub, dead)
-	ctx, cancel := context.WithCancel(core.WithTenant(context.Background(), "acme"))
-	cancel()
-
-	w.PublishAlarmEvent(ctx, alarmEvent())
-
-	if pub.calls != 1 {
-		t.Fatalf("the publish was attempted %d times under a cancelled context, want 1", pub.calls)
-	}
-	if len(dead.msgs) != 1 {
-		t.Fatalf("wrote %d dead letters, want 1: the cancellation belongs to the caller, not "+
-			"to the record of an alarm nobody was paged about", len(dead.msgs))
-	}
-	e, err := deadletter.Unmarshal(dead.msgs[0].Value)
-	if err != nil {
-		t.Fatalf("the written letter does not read back: %v", err)
-	}
-	if e.Attempts != 1 {
-		t.Fatalf("attempts = %d, want 1: the letter must say how far the publish actually "+
-			"got, not that it spent the whole retry budget", e.Attempts)
-	}
-	if dead.tenants[0] != "acme" {
-		t.Fatalf("the letter was written under tenant %q; the sink detaches the caller's "+
-			"cancellation but must keep its tenant, which is what scopes the subject",
-			dead.tenants[0])
-	}
-}
-
-// A publisher wired without a dead-letter stream must still publish, and must not panic
-// on the failure path — that is the pre-wiring default, and the nil sink is the thing
-// standing between it and a crash in the one moment the arm exists for.
-func TestAnAlarmPublisherWithNoDeadLetterStreamStillPublishes(t *testing.T) {
-	pub := &alarmEventRecorder{failures: alarmPublishAttempts, err: errors.New("the broker is away")}
-	w := alarmWriterFor(t, pub, nil)
-
-	w.PublishAlarmEvent(core.WithTenant(context.Background(), "acme"), alarmEvent())
-
-	if pub.calls != alarmPublishAttempts {
-		t.Fatalf("attempts = %d, want %d", pub.calls, alarmPublishAttempts)
+func TestAlarmEventWriterClassifiesUnavailable(t *testing.T) {
+	ev := &model.AlarmStateChangeEvent{AlarmToken: "alarm", EventType: model.AlarmEventRaised}
+	refusal := errors.New("tenant permission denied")
+	for _, test := range []struct {
+		name                   string
+		cause                  error
+		connected, unavailable bool
+	}{
+		{"refusal", refusal, true, false},
+		{"connection down", refusal, false, true},
+		{"deadline", context.DeadlineExceeded, true, true},
+		{"nats timeout", nats.ErrTimeout, true, true},
+		{"no responders", nats.ErrNoResponders, true, true},
+		{"closed", nats.ErrConnectionClosed, true, true},
+		{"disconnected", nats.ErrDisconnected, true, true},
+		{"reconnecting", nats.ErrConnectionReconnecting, true, true},
+		{"legacy stream timeout", nats.ErrNoStreamResponse, true, true},
+		{"stream timeout", jetstream.ErrNoStreamResponse, true, true},
+		{"network timeout", os.ErrDeadlineExceeded, true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := &alarmEventRecorder{err: fmt.Errorf("publish: %w", test.cause)}
+			writer := NewAlarmEventWriter(recorder, nil, AlarmEventMetrics{}).WithConnected(func() bool { return test.connected })
+			err := writer.PublishAlarmEventDedup(context.Background(), ev, "id")
+			require.ErrorIs(t, err, test.cause)
+			require.Equal(t, test.unavailable, errors.Is(err, model.ErrAlarmEventBrokerUnavailable))
+			require.NotErrorIs(t, err, model.ErrAlarmEventUnpublishable)
+			writer.marshal = func(*model.AlarmStateChangeEvent) ([]byte, error) { return nil, refusal }
+			err = writer.PublishAlarmEventDedup(context.Background(), ev, "id")
+			require.ErrorIs(t, err, model.ErrAlarmEventUnpublishable)
+			require.NotErrorIs(t, err, model.ErrAlarmEventBrokerUnavailable)
+			require.Len(t, recorder.messages, 1, "encoding failure must not publish")
+		})
 	}
 }

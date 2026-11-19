@@ -319,6 +319,22 @@ Agent action executions are failing steadily
 
 **Qué significa y qué hacer.** For 10m, agent action executions have failed because the execution transaction could not complete (database or statement timeout, policy service or kill feed unavailable). A lock conflict on the proposal or its alarms is refused as a concurrent approval and counted as refused. Check device-management logs and the Agent actions (preview) row on the Platform board. Dependency changes, policy refusals, a closed kill fence and approver refusals are separate results and do not raise this alert.
 
+### AlarmEventQuarantined {#alarmeventquarantined}
+
+**Gravedad:** `critical` · **Grupo de reglas:** `devicechain.device-management`
+
+A stored alarm event is quarantined
+
+**Qué significa y qué hacer.** A stored alarm event cannot be decoded or encoded and is quarantined in pending_alarm_events. It is not retried, so its alarm notification needs operator attention. Inspect it with SELECT id, tenant_id, created_at, last_error FROM "device-management".pending_alarm_events WHERE quarantined_at IS NOT NULL; inspect the raw payload in that table and the best-effort notification dead letter in the operator dead-letter list. Repair the payload and set quarantined_at to NULL to retry, or delete the row after recording what it was.
+
+### AlarmEventRelayStalled {#alarmeventrelaystalled}
+
+**Gravedad:** `warning` · **Grupo de reglas:** `devicechain.device-management`
+
+Alarm notifications are delayed by the outbox relay
+
+**Qué significa y qué hacer.** For 5m, the oldest queued alarm event has waited more than 120 seconds. Severity is warning because alarm notifications are delayed while committed events remain queued for retry. Check device-management relay errors, broker connectivity and permissions, and database health. Restore the failing dependency and verify alarm_events_pending and alarm_event_oldest_age_seconds return to zero. Unknown event types need a newer relay binary; check version skew during rolling upgrades.
+
 ### DeviceCalloutLatencyHigh {#devicecalloutlatencyhigh}
 
 **Gravedad:** `warning` · **Grupo de reglas:** `devicechain.device-management`

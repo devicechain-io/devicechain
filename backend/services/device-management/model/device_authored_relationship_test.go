@@ -11,7 +11,7 @@ import (
 func TestCreateEntityRelationshipDeviceAuthoredOwnership(t *testing.T) {
 	for _, kind := range []string{"assigned", "tenant-ownership"} {
 		t.Run(kind, func(t *testing.T) {
-			api := newPartialUpdateApi(t, &Device{}, &Customer{}, &EntityRelationship{}, &EntityRelationshipType{}, &PendingOwnershipFact{}, &PendingEntityDeletion{})
+			api := newPartialUpdateApi(t, &Device{}, &Customer{}, &EntityRelationship{}, &EntityRelationshipType{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{})
 			ctx := partialUpdateCtx()
 			device := &Device{}
 			device.Token = "device"

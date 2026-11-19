@@ -1485,7 +1485,7 @@ func entityRelationshipTypeFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "entityRelationshipType",
 		Token:   "ert-1",
-		Migrate: []any{&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &SemanticContext{}},
+		Migrate: []any{&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &SemanticContext{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			seedSemanticContext(t, api, ctx)
 			if _, err := api.CreateEntityRelationshipType(ctx, &EntityRelationshipTypeCreateRequest{

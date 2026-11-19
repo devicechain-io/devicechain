@@ -30,7 +30,7 @@ func alarmAckTestCtx(t *testing.T) (context.Context, *model.Api) {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Alarm{}); err != nil {
+	if err := db.AutoMigrate(&model.Alarm{}, &model.PendingAlarmEvent{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
