@@ -172,5 +172,5 @@ Additions, which need no change:
   (`useWidgetTimeRange`) and the hub connection (`useHubConnectionState`, `HubConnectionBadge`).
 
 `SDK_API_VERSION` is unchanged. See
-[If you build against the npm packages](https://github.com/devicechain-io/devicechain/blob/v0.22.0/docs/docs/deployment/releases-and-upgrades.md#v0220-packages)
+[If you build against the npm packages](https://github.com/devicechain-io/devicechain/blob/v0.22.0/docs/docs/deployment/releases-and-upgrades.md#if-you-build-against-the-npm-packages-v0220-packages)
 in the release's upgrade guide.

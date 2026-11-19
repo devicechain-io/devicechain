@@ -343,6 +343,20 @@ class LayoutTest(Base):
         self.assertLess(en.index("{#v170-whats-new}"), at)
         self.assertLess(en.index("{#v171-upgrade}"), en.index("{#v170-upgrade}"))
 
+    def test_an_index_link_to_the_wrong_anchor_is_refused(self):
+        self.edit("[v1.7.0](#v170-upgrade)\n", "[v1.7.0](#v999-upgrade)\n")
+        with self.assertRaises(arn.Refusal) as ctx:
+            arn.check(self.root)
+        self.assertIn("links v1.7.0 to #v999-upgrade", str(ctx.exception))
+
+    def test_a_fragment_reusing_a_stub_anchor_is_refused(self):
+        # A retired line keeps its sub-anchors as <a id>s; a fragment may not take one.
+        self.edit("### v1.5.0", "<a id=\"v150-kept\"></a>\n\n### v1.5.0", locales=arn.LOCALES)
+        body = (GOOD.replace("- Good.", "#### T {#v150-kept}\n\n- Good.")
+                    .replace("- Bueno.", "#### T {#v150-kept}\n\n- Bueno.")
+                    .replace("- 好。", "#### T {#v150-kept}\n\n- 好。"))
+        self.assertRefused("x.md", body, "already on the en page")
+
     def test_a_patch_missing_from_the_index_is_refused(self):
         self.edit("### v1.7.0", "### v1.7.1 — a patch {#v171-upgrade}\n\n### v1.7.0")
         with self.assertRaises(arn.Refusal) as ctx:

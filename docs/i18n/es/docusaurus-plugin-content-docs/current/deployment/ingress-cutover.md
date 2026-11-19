@@ -239,5 +239,5 @@ el borde:
 ## Relacionado {#ingress-cutover-related}
 
 - [`dcctl install`](../reference/dcctl.md) y [`dcctl upgrade`](../reference/dcctl.md) listan todos los flags usados aquí.
-- [Versiones y actualizaciones](https://github.com/devicechain-io/devicechain/blob/v0.26.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0260-upgrade) contiene las notas de la versión
+- [Versiones y actualizaciones](/1.0/deployment/releases-and-upgrades#v0260-upgrade) contiene las notas de la versión
   que incluye este cambio.

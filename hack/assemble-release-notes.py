@@ -389,7 +389,8 @@ class Page:
         self.text = text
         self.lines = text.split("\n")
         self.heads = list(headings(self.lines))
-        self.anchors = {a for _, _, a in self.heads if a}
+        # Every id on the page, including the <a id>s a stub keeps for a retired line.
+        self.anchors = set(all_anchors(text))
         self.parse_layout()
 
         version = None
@@ -472,6 +473,11 @@ class Page:
                 line = (int(m.group(1)), int(m.group(2)))
                 links = [tuple(int(g) for g in l.group(1, 2, 3))
                          for l in INDEX_LINK_RE.finditer(m.group(4))]
+                for l in INDEX_LINK_RE.finditer(m.group(4)):
+                    v = tuple(int(g) for g in l.group(1, 2, 3))
+                    if l.group(4) != anchor_of(v):
+                        raise Refusal(f"{where}: the release-lines index links {vstr(v)} to "
+                                      f"#{l.group(4)}, not #{anchor_of(v)}")
                 self.index_items.append((i, line, m.group(3), links))
         rows = [i for i, _, _, _ in self.index_items]
         if rows and rows != list(range(rows[0], rows[0] + len(rows))):

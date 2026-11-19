@@ -139,8 +139,8 @@
       "translationSha256": "0e4e73a9e3780c5da77cb4109a163b95136bbd379b383c0de6c83c44ebfd2df9"
     },
     "deployment/ingress-cutover.md": {
-      "sourceSha256": "8e9ba6a02d0ae56c33777ab1f5878fbcad45dd60a7283a49179b9990f1f0a58c",
-      "translationSha256": "c5bba00bc069be39da0e23b2632aa2156570662f533b376fd9e0f84a9fba92b5"
+      "sourceSha256": "3a8e38ea4c130b9dde95ddc0d192fc0b9a35c8c57e5ca2225a0d48c58f20e063",
+      "translationSha256": "f6820681c86d5a41ab342180019f511969a3088c0e7543fe8a9cda496f3e1775"
     },
     "deployment/kubernetes-operator.md": {
       "sourceSha256": "54fd4acbd6f808c7b1ada281f16f4832ec60cf483d3500b8698676a0f81f41b4",
