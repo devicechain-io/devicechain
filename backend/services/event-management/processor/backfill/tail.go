@@ -136,7 +136,8 @@ func newTailSweeper(ms *core.Microservice, rdbm *rdb.RdbManager, cfg Config, met
 	// The first pass is due from CONSTRUCTION, not from the first tick: the task's first tick is a
 	// tick after start, and counting the delay from there would double it.
 	s.nextPass = now().Add(tailFirstDelay + s.jitter())
-	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "rollup-tail", tailTick, s.RunOnce, callbacks, ms.NewPeriodicTaskMetrics("rollup_tail"))
+	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "rollup-tail", tailTick, s.RunOnce, callbacks, ms.NewPeriodicTaskMetrics("rollup_tail"),
+		core.WithSuccessInterval(tailInterval+tailJitter))
 	return s
 }
 

@@ -6,6 +6,7 @@ package backfill
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,4 +146,26 @@ func TestTailPassOutcomes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The task polls every five minutes but completes hourly, so it must declare the hourly
+// cadence the generic stalled-task alert measures against.
+func TestTailDeclaresItsSuccessInterval(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ms := &core.Microservice{FunctionalArea: "event-management"}
+	ms.UseMetricsRegistry(reg)
+	s := newTailSweeper(ms, nil, Config{ChunkInterval: 24 * time.Hour}, NewMetrics(ms), core.NewNoOpLifecycleCallbacks(), time.Now)
+	require.NoError(t, s.Initialize(context.Background()))
+	require.NoError(t, s.Start(context.Background()))
+	t.Cleanup(func() { require.NoError(t, s.Stop(context.Background())) })
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	got := map[string]float64{}
+	for _, f := range families {
+		if strings.HasPrefix(f.GetName(), "devicechain_eventmanagement_rollup_tail_") && len(f.Metric) == 1 && f.Metric[0].Gauge != nil {
+			got[f.GetName()] = f.Metric[0].GetGauge().GetValue()
+		}
+	}
+	require.Equal(t, tailTick.Seconds(), got["devicechain_eventmanagement_rollup_tail_pass_interval_seconds"])
+	require.Equal(t, (tailInterval + tailJitter).Seconds(), got["devicechain_eventmanagement_rollup_tail_expected_success_interval_seconds"])
 }

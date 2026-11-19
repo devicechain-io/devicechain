@@ -417,7 +417,9 @@ HELPER_FAMILIES = {
         ("_messages_total", "counter"), ("_duration_seconds", "histogram"), ("_inflight", "gauge")),
     "NewPeriodicTaskMetrics": (
         ("_passes_total", "counter"), ("_pass_duration_seconds", "histogram"),
-        ("_last_success_timestamp_seconds", "gauge"), ("_pass_interval_seconds", "gauge")),
+        ("_last_success_timestamp_seconds", "gauge"), ("_pass_interval_seconds", "gauge"),
+        # registered only by a task that calls core.WithSuccessInterval
+        ("_expected_success_interval_seconds", "gauge")),
 }
 COMMENT_LINE = re.compile(r"^[ \t]*//.*$", re.M)
 kinds = {}  # area directory -> {registered name: {histogram|summary|counter|gauge}}
