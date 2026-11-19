@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ota"
@@ -53,6 +55,8 @@ const (
 	maxBarrenGroupPages = 5
 	// maxRolloutsPerPass bounds how many RUNNING rollouts one driver pass steps.
 	maxRolloutsPerPass = 200
+	// legacyFreezeSkew allows for independent service clocks when no incarnation was frozen.
+	legacyFreezeSkew = 5 * time.Minute
 )
 
 // GroupTargetPage is one keyset page of a group's device members, as device-management answers it.
@@ -76,6 +80,12 @@ type GroupTargetPage struct {
 type GroupResolver interface {
 	ResolveGroupTargets(ctx context.Context, groupToken string, version *int32, afterCursor string,
 		limit int) (*GroupTargetPage, error)
+}
+
+// DeviceIncarnationLookup resolves bounded token sets to device-management row ids in batches.
+// Omitted tokens are absent devices; an unknown or invalid identity must return an error.
+type DeviceIncarnationLookup interface {
+	DeviceIncarnations(ctx context.Context, tenant string, tokens []string) (map[string]uint64, error)
 }
 
 // RolloutStepResult is what one step of one rollout did.
@@ -205,11 +215,10 @@ func (api *Api) CreateRollout(ctx context.Context, req RolloutCreateRequest) (*U
 
 // resolveRolloutGroup walks a group to its complete device set by keyset cursor (see command
 // delivery's batch resolver, whose contract this follows): a device that stays in the group for
-// the whole walk is visited exactly once, and what the walk saw is the frozen target set.
-func (api *Api) resolveRolloutGroup(ctx context.Context, groupToken string) ([]string, *int32, error) {
+// the whole walk is visited exactly once. A non-nil version pins even the first page.
+func (api *Api) resolveRolloutGroup(ctx context.Context, groupToken string, version *int32) ([]string, *int32, error) {
 	seen := map[string]struct{}{}
 	var tokens []string
-	var version *int32
 	cursor, barren := "", 0
 	for barren < maxBarrenGroupPages {
 		// The first page resolves the group's ACTIVE published version; every later page is asked
@@ -283,6 +292,9 @@ func (api *Api) StartRollout(ctx context.Context, token string) (*UpdateRolloutV
 		return nil, refuse(CodeRolloutGroupUnavailable,
 			"groups cannot be resolved: the device-management endpoint or service secret is not configured")
 	}
+	if api.Incarnations == nil {
+		return nil, refuse(CodeRolloutGroupUnavailable, "device incarnations cannot be resolved: the lookup is not configured")
+	}
 	r, err := api.rolloutByToken(api.RDB.DB(ctx), token)
 	if err != nil {
 		return nil, err
@@ -303,12 +315,48 @@ func (api *Api) StartRollout(ctx context.Context, token string) (*UpdateRolloutV
 	if err := api.artifactAssignable(artifact); err != nil {
 		return nil, err
 	}
-	devices, version, err := api.resolveRolloutGroup(ctx, r.GroupToken)
+	devices, version, err := api.resolveRolloutGroup(ctx, r.GroupToken, nil)
 	if err != nil {
 		return nil, err
 	}
 	if len(devices) == 0 {
 		return nil, refuse(CodeInvalidRollout, "group %q has no devices", r.GroupToken)
+	}
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return nil, errors.New("starting a rollout requires a tenant")
+	}
+	identities, err := api.Incarnations.DeviceIncarnations(ctx, tenant, devices)
+	if err != nil {
+		return nil, refuse(CodeRolloutGroupUnavailable, "device incarnations could not be resolved: %v", err)
+	}
+	if identities == nil {
+		return nil, refuse(CodeRolloutGroupUnavailable, "device incarnation lookup returned no answer")
+	}
+	// Validate before opening the write transaction, including responses from alternate lookups.
+	for _, d := range devices {
+		if id, found := identities[d]; found && (id == 0 || id > math.MaxInt64) {
+			return nil, refuse(CodeRolloutGroupUnavailable, "device %q has an invalid incarnation %d", d, id)
+		}
+	}
+	confirmed, confirmedVersion, err := api.resolveRolloutGroup(ctx, r.GroupToken, version)
+	if err != nil {
+		return nil, err
+	}
+	if (version == nil) != (confirmedVersion == nil) {
+		return nil, refuse(CodeRolloutGroupUnavailable, "group %q changed version during rollout freeze; retry the start", r.GroupToken)
+	}
+	// A token in R2 after the incarnation lookup L is a member under whatever device holds it
+	// at R2. If that is not the device L saw, its incarnation is newer than the frozen one and
+	// dispatch skips it as DEVICE_REPLACED, so no non-member can be frozen. Tokens in R1 but
+	// not R2 left during the start and are not targets. Keep the intersection in R1 order.
+	members := make(map[string]bool, len(confirmed))
+	for _, d := range confirmed {
+		members[d] = true
+	}
+	devices = slices.DeleteFunc(devices, func(d string) bool { return !members[d] })
+	if len(devices) == 0 {
+		return nil, refuse(CodeInvalidRollout, "group %q has no devices throughout rollout freeze", r.GroupToken)
 	}
 	now := api.now()
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -321,7 +369,14 @@ func (api *Api) StartRollout(ctx context.Context, token string) (*UpdateRolloutV
 		}
 		targets := make([]UpdateRolloutTarget, 0, len(devices))
 		for _, d := range devices {
-			targets = append(targets, UpdateRolloutTarget{RolloutId: r.ID, DeviceToken: d, Status: TargetPending})
+			t := UpdateRolloutTarget{RolloutId: r.ID, DeviceToken: d, Status: TargetPending}
+			if id, found := identities[d]; found {
+				t.DeviceIncarnation = sql.NullInt64{Int64: int64(id), Valid: true}
+			} else {
+				t.Status, t.SkipCode, t.SkipDetail = TargetSkipped, CodeDeviceNotFound,
+					fmt.Sprintf("no device with token %q at rollout freeze", d)
+			}
+			targets = append(targets, t)
 		}
 		if err := tx.CreateInBatches(&targets, 500).Error; err != nil {
 			return err
@@ -509,6 +564,7 @@ func (api *Api) AbortRollout(ctx context.Context, token string) (*UpdateRolloutV
 			Updates(map[string]any{"status": TargetCancelled, "updated_at": api.now()}).Error; err != nil {
 			return nil, err
 		}
+		api.rolloutTargetAfter.Delete(r.ID)
 		return map[string]any{"state": RolloutAborted, "pause_reason": "", "finished_at": api.now()}, nil
 	})
 	if err != nil {
@@ -707,6 +763,9 @@ type candidate struct {
 // errTargetTaken: another writer moved the target out of PENDING first.
 var errTargetTaken = errors.New("the rollout target is no longer pending")
 
+// errTargetHeld is an undecidable identity, not a dispatch or a rollout failure.
+var errTargetHeld = errors.New("the rollout target identity is not yet known")
+
 // StepRollout advances one rollout by one step. ctx carries the rollout's tenant.
 //
 //  1. Outside any lock: read the rollout and some of its PENDING targets, and look each device up
@@ -737,6 +796,7 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 		return res, err
 	}
 	if len(pre) == 0 || pre[0].State != RolloutRunning {
+		api.rolloutTargetAfter.Delete(id)
 		return res, nil
 	}
 	p, err := api.progressIn(api.RDB.DB(ctx), id)
@@ -756,9 +816,25 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 	var lookupErr error
 	if want > 0 {
 		var pending []UpdateRolloutTarget
-		if err := api.RDB.DB(ctx).Where("rollout_id = ? AND status = ?", id, TargetPending).
-			Order("id ASC").Limit(want).Find(&pending).Error; err != nil {
-			return res, err
+		after := uint(0)
+		if v, ok := api.rolloutTargetAfter.Load(id); ok {
+			after = v.(uint)
+		}
+		// Rotate even when the window holds or fails lookup. At most want <= 50 lookups per
+		// step, and at most MaxRolloutTargets rows per circuit; a held prefix cannot starve
+		// later targets. A replica restart merely starts a new circuit from the oldest row.
+		for {
+			if err := api.RDB.DB(ctx).Where("rollout_id = ? AND status = ? AND id > ?", id, TargetPending, after).
+				Order("id ASC").Limit(want).Find(&pending).Error; err != nil {
+				return res, err
+			}
+			if len(pending) != 0 || after == 0 {
+				break
+			}
+			after = 0
+		}
+		if len(pending) > 0 {
+			api.rolloutTargetAfter.Store(id, pending[len(pending)-1].ID)
 		}
 		var lastErr error
 		for _, t := range pending {
@@ -827,9 +903,9 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 			if slots == 0 {
 				break
 			}
-			v, skipCode, _, err := api.dispatchOne(ctx, tx, artifact, compatible, c)
+			v, skipCode, _, err := api.dispatchOne(ctx, tx, artifact, compatible, c, r.StartedAt)
 			switch {
-			case errors.Is(err, errTargetTaken):
+			case errors.Is(err, errTargetTaken), errors.Is(err, errTargetHeld):
 				continue
 			case err != nil:
 				var re *RefusalError
@@ -864,6 +940,9 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 	if err != nil {
 		return RolloutStepResult{}, err
 	}
+	if res.Transition == RolloutCompleted {
+		api.rolloutTargetAfter.Delete(id)
+	}
 	for _, v := range toPublish {
 		api.publishCurrentAssignment(ctx, v)
 	}
@@ -881,9 +960,21 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 // (UPDATE … WHERE status = PENDING), so the lock order is the rollout row, the target row, then the
 // assignment plane's rows.
 func (api *Api) dispatchOne(ctx context.Context, tx *gorm.DB, artifact *Artifact, compatible []string,
-	c candidate) (*UpdateAssignmentView, string, string, error) {
+	c candidate, startedAt sql.NullTime) (*UpdateAssignmentView, string, string, error) {
 	skip := func(code, detail string) (*UpdateAssignmentView, string, string, error) {
 		return nil, code, detail, api.markSkipped(tx, c.target, code, detail)
+	}
+	if c.found {
+		code, detail, hold := rolloutTargetIdentity(c.target, c.facts, startedAt)
+		if hold {
+			log.Warn().Str("device", c.target.DeviceToken).Uint("rollout", c.target.RolloutId).
+				Uint64("liveIncarnation", c.facts.Incarnation).Int64("frozenIncarnation", c.target.DeviceIncarnation.Int64).
+				Msg("A rollout target identity is unknown or older than frozen; holding PENDING for retry.")
+			return nil, "", "", errTargetHeld
+		}
+		if code != "" {
+			return skip(code, detail)
+		}
 	}
 	switch {
 	case !c.found:
@@ -1063,5 +1154,67 @@ func (api *Api) AdvanceRollouts(ctx context.Context) (AdvanceResult, error) {
 			log.Warn().Uint("rollout", r.ID).Str("reason", res.Reason).Msg("A rollout paused itself.")
 		}
 	}
-	return out, nil
+	return out, api.pruneRolloutTargetAfter(ctx)
+}
+
+// pruneRolloutTargetAfter retires advisory cursors even when another replica ended the rollout.
+// Query cached IDs, not just this pass's bounded page; an off-page RUNNING rollout must keep its
+// cursor so held targets cannot starve later ones. A failed query proves nothing: keep all entries.
+func (api *Api) pruneRolloutTargetAfter(ctx context.Context) error {
+	var ids []uint
+	api.rolloutTargetAfter.Range(func(key, _ any) bool {
+		ids = append(ids, key.(uint))
+		return true
+	})
+	if len(ids) == 0 {
+		return nil
+	}
+	var running []uint
+	if err := api.RDB.DB(core.WithSystemContext(ctx)).Model(&UpdateRollout{}).
+		Where("id IN ? AND state = ?", ids, RolloutRunning).Pluck("id", &running).Error; err != nil {
+		return err
+	}
+	live := make(map[uint]bool, len(running))
+	for _, id := range running {
+		live[id] = true
+	}
+	for _, id := range ids {
+		if !live[id] {
+			api.rolloutTargetAfter.Delete(id)
+		}
+	}
+	return nil
+}
+
+// rolloutTargetIdentity applies the rolling-upgrade rule to a found device before any write.
+// A valid frozen incarnation must match the live incarnation: newer means DEVICE_REPLACED;
+// older or zero means HOLD. Invalid non-NULL frozen identities also HOLD.
+// For legacy NULL targets (including targets inserted by old pods during the rolling upgrade),
+// unknown/zero DeviceFacts.CreatedAt or NULL/zero rollout StartedAt means HOLD. With independent
+// service clocks, CreatedAt after StartedAt+legacyFreezeSkew (5 minutes) is SKIPPED as
+// DEVICE_REPLACED; CreatedAt before StartedAt-legacyFreezeSkew may proceed. Within that margin,
+// including either boundary, HOLD leaves the target PENDING without writes for a later retry.
+// A held legacy target keeps the rollout RUNNING; an operator may abort it and start a new rollout.
+func rolloutTargetIdentity(target UpdateRolloutTarget, facts DeviceFacts, startedAt sql.NullTime) (code, detail string, hold bool) {
+	if target.DeviceIncarnation.Valid {
+		if target.DeviceIncarnation.Int64 <= 0 || facts.Incarnation == 0 {
+			return "", "", true
+		}
+		frozen := uint64(target.DeviceIncarnation.Int64)
+		if facts.Incarnation == frozen {
+			return "", "", false
+		}
+		if facts.Incarnation > frozen {
+			return CodeDeviceReplaced, fmt.Sprintf("device %q incarnation %d replaced frozen incarnation %d", target.DeviceToken, facts.Incarnation, frozen), false
+		}
+		return "", "", true
+	}
+	if facts.CreatedAt.IsZero() || !startedAt.Valid || startedAt.Time.IsZero() {
+		return "", "", true
+	}
+	if facts.CreatedAt.After(startedAt.Time.Add(legacyFreezeSkew)) {
+		return CodeDeviceReplaced, fmt.Sprintf("device %q was created at %s after rollout freeze at %s", target.DeviceToken,
+			facts.CreatedAt.UTC().Format(time.RFC3339Nano), startedAt.Time.UTC().Format(time.RFC3339Nano)), false
+	}
+	return "", "", !facts.CreatedAt.Before(startedAt.Time.Add(-legacyFreezeSkew))
 }

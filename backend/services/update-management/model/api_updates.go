@@ -29,6 +29,7 @@ import (
 // Refusal codes of the assignment plane (extensions.code on the GraphQL plane).
 const (
 	CodeDeviceNotFound          = "DEVICE_NOT_FOUND"
+	CodeDeviceReplaced          = "DEVICE_REPLACED"
 	CodeIncompatibleProfile     = "INCOMPATIBLE_PROFILE"
 	CodeDeviceLookupUnavailable = "DEVICE_LOOKUP_UNAVAILABLE"
 	CodeDeviceChannelUnwired    = "DEVICE_CHANNEL_UNAVAILABLE"
