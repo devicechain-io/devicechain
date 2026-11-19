@@ -48,6 +48,7 @@ ALTER SEQUENCE "device-management".integrations_id_seq OWNED BY "device-manageme
 ALTER SEQUENCE "device-management".maintenance_windows_id_seq OWNED BY "device-management".maintenance_windows.id;
 ALTER SEQUENCE "device-management".metric_definitions_id_seq OWNED BY "device-management".metric_definitions.id;
 ALTER SEQUENCE "device-management".pending_attribute_repairs_id_seq OWNED BY "device-management".pending_attribute_repairs.id;
+ALTER SEQUENCE "device-management".pending_entity_deletions_id_seq OWNED BY "device-management".pending_entity_deletions.id;
 ALTER SEQUENCE "device-management".profile_decoder_healths_id_seq OWNED BY "device-management".profile_decoder_healths.id;
 ALTER SEQUENCE "device-management".profile_decoder_samples_id_seq OWNED BY "device-management".profile_decoder_samples.id;
 ALTER SEQUENCE "device-management".provisioning_profiles_id_seq OWNED BY "device-management".provisioning_profiles.id;
@@ -266,6 +267,9 @@ ALTER TABLE ONLY "device-management".metric_definitions ALTER COLUMN id SET DEFA
 ALTER TABLE ONLY "device-management".pending_attribute_repairs
  ADD CONSTRAINT pending_attribute_repairs_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".pending_attribute_repairs ALTER COLUMN id SET DEFAULT nextval('"device-management".pending_attribute_repairs_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".pending_entity_deletions
+ ADD CONSTRAINT pending_entity_deletions_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".pending_entity_deletions ALTER COLUMN id SET DEFAULT nextval('"device-management".pending_entity_deletions_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".pending_ownership_facts
  ADD CONSTRAINT pending_ownership_facts_pkey PRIMARY KEY (tenant_id, device_id);
 ALTER TABLE ONLY "device-management".pending_revocation_expansion_serials
@@ -301,6 +305,13 @@ BEGIN
  IF TG_OP = 'INSERT' THEN
  IF current_setting('transaction_isolation') <> 'read committed' THEN
  RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: changing device profiles, their versions or bindings requires READ COMMITTED isolation';
+CREATE FUNCTION "device-management".alarm_position_stale() RETURNS trigger
+ LANGUAGE plpgsql
+ AS $$
+BEGIN
+ IF NEW.position_derived IS FALSE
+ AND NEW.position_classified_version IS DISTINCT FROM NEW.contributor_version THEN
+ NEW.position_derived := NULL;
 CREATE FUNCTION "device-management".automation_review_guard() RETURNS trigger
  LANGUAGE plpgsql
  AS $$
@@ -447,6 +458,7 @@ CREATE INDEX "idx_device-management_semantic_contexts_tenant_id" ON "device-mana
 CREATE INDEX idx_alarm_dispositions_alarm ON "device-management".alarm_dispositions USING btree (alarm_id);
 CREATE INDEX idx_alarm_dispositions_tenant_alarm_token ON "device-management".alarm_dispositions USING btree (tenant_id, alarm_token);
 CREATE INDEX idx_alarm_dispositions_tenant_raised ON "device-management".alarm_dispositions USING btree (tenant_id, raised_time);
+CREATE INDEX idx_alarms_position_unclassified ON "device-management".alarms USING btree (id) WHERE (position_derived IS NULL);
 CREATE INDEX idx_alarms_scope_anchors ON "device-management".alarms USING gin (scope_anchors);
 CREATE INDEX idx_areas_boundary_fence ON "device-management".areas USING btree (tenant_id, boundary_fence_token) WHERE (boundary_fence_token IS NOT NULL);
 CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btree (tenant_id, occurred_time DESC);
@@ -470,6 +482,7 @@ CREATE INDEX idx_entity_rel_target ON "device-management".entity_relationships U
 CREATE INDEX idx_facet_keys_deleted_at ON "device-management".facet_keys USING btree (deleted_at);
 CREATE INDEX idx_facet_keys_member_type ON "device-management".facet_keys USING btree (member_type);
 CREATE INDEX idx_facet_keys_tenant_id ON "device-management".facet_keys USING btree (tenant_id);
+CREATE INDEX idx_pending_entity_deletions_tenant_id ON "device-management".pending_entity_deletions USING btree (tenant_id, id);
 CREATE INDEX idx_profile_decoder_samples_profile_created ON "device-management".profile_decoder_samples USING btree (tenant_id, device_profile_id, created_at DESC);
 CREATE INDEX idx_provisioning_profiles_trust_anchor ON "device-management".provisioning_profiles USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
 CREATE INDEX ix_device_credential_chain_links_fingerprint ON "device-management".device_credential_chain_links USING btree (tenant_id, trust_anchor_id, fingerprint);
@@ -786,6 +799,12 @@ CREATE SEQUENCE "device-management".pending_attribute_repairs_id_seq
  NO MINVALUE
  NO MAXVALUE
  CACHE 1;
+CREATE SEQUENCE "device-management".pending_entity_deletions_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
 CREATE SEQUENCE "device-management".profile_decoder_healths_id_seq
  START WITH 1
  INCREMENT BY 1
@@ -898,7 +917,9 @@ CREATE TABLE "device-management".alarms (
  last_value numeric,
  contributors jsonb,
  contributor_version bigint DEFAULT 0 NOT NULL,
- scope_anchors text[]
+ scope_anchors text[],
+ position_derived boolean,
+ position_classified_version bigint
 );
 CREATE TABLE "device-management".area_types (
  id bigint NOT NULL,
@@ -1650,6 +1671,15 @@ CREATE TABLE "device-management".pending_attribute_repairs (
  attr_key text,
  created_at timestamp with time zone
 );
+CREATE TABLE "device-management".pending_entity_deletions (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ entity_type character varying(64) NOT NULL,
+ entity_id bigint NOT NULL,
+ entity_token character varying(255) NOT NULL,
+ deleted_time timestamp with time zone NOT NULL,
+ cascade jsonb
+);
 CREATE TABLE "device-management".pending_ownership_facts (
  tenant_id character varying(128) NOT NULL,
  device_id bigint NOT NULL,
@@ -1754,6 +1784,7 @@ CREATE TABLE "device-management".semantic_contexts (
  custom_prefixes jsonb NOT NULL,
  pack_versions jsonb NOT NULL
 );
+CREATE TRIGGER alarm_position_stale BEFORE UPDATE OF contributor_version ON "device-management".alarms FOR EACH ROW EXECUTE FUNCTION "device-management".alarm_position_stale();
 CREATE TRIGGER automation_review_guard_device_update BEFORE UPDATE OF device_type_id ON "device-management".devices FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
 CREATE TRIGGER automation_review_guard_profile_delete BEFORE DELETE ON "device-management".device_profiles FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
 CREATE TRIGGER automation_review_guard_profile_update BEFORE UPDATE ON "device-management".device_profiles FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
@@ -1821,6 +1852,9 @@ CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_token ON "device-management
 CREATE UNIQUE INDEX uix_semantic_contexts_tenant ON "device-management".semantic_contexts USING btree (tenant_id) WHERE (deleted_at IS NULL);
 END
 $$;
+END
+$$;
+END IF;
 END IF;
 END IF;
 END IF;
@@ -1911,6 +1945,7 @@ IF p IS NOT NULL THEN
 PERFORM 1 FROM "device-management".device_profiles WHERE id = NEW.device_profile_id FOR NO KEY UPDATE;
 PERFORM 1 FROM "device-management".device_profiles WHERE id = p FOR SHARE;
 PERFORM 1 FROM "device-management".device_profiles WHERE id IN (OLD.device_profile_id, NEW.device_profile_id) FOR SHARE;
+RETURN NEW;
 RETURN NEW;
 RETURN NEW;
 RETURN NEW;

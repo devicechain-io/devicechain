@@ -15,10 +15,10 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
-const prevRelease = "v1.6.0"
+const prevRelease = "v1.7.0"
 
-// Source commit: d5b2e7b42758f15e5bd4873f484801a1525aad45 (all v1.6.0 citations below).
-// Frozen from v1.6.0:backend/core/cmddownlink/wire.go:ResponseEnvelope.
+// Source commit: dcb6c34a05806b3b9c7b426b8445758f2b71b778 (all v1.7.0 citations below).
+// Frozen from v1.7.0:backend/core/cmddownlink/wire.go:ResponseEnvelope.
 // Field order and tags are verbatim; PublishResponseContext marshals this struct.
 type responseEnvelopePrev struct {
 	CommandToken string  `json:"commandToken"`
@@ -52,34 +52,42 @@ const (
 // fPort, HTTP 400 with no gRPC name, and the egress guard's ErrBlocked.
 // Re-generated from the source commit above by invoking Adapter.handle/awaitAck,
 // AckFeed.handle/Sweep and capturing ResponseWriter message bytes in a disposable
-// lpwan test. All 23 cases compared byte for byte unchanged; none added or removed.
+// lpwan test. All 23 existing cases compared byte for byte unchanged. Added the confirmed
+// webhook correlation refusal and final-delivery capacity-wait refusal; none removed.
 // HTTP 400 used ChirpStack.Enqueue; the blocked error used classifyTransport.
 // Their text originates in adapter.go, params.go:ParamError.Error/ParseParams and
 // chirpstack.go:ChirpStack.Enqueue/classifyTransport in the same tag.
+// Producers: v1.7.0:backend/services/outbound-connectors/lpwan/adapter.go:
+// Adapter.handle/refuse/finish/awaitAck; v1.7.0:backend/services/outbound-connectors/lpwan/ackfeed.go:
+// AckFeed.handle/respond/Sweep; v1.7.0:backend/core/cmddownlink/wire.go:PublishResponseContext.
+// Added concrete inputs: a confirmed webhook with no correlation template, and
+// a final delivery cancelled while waiting for tenant capacity (context canceled).
 const (
-	wire_pre_NO_ROUTE                      = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_ROUTE\"}","error":"the command carries no integration for the device, so it cannot be routed to a network server","reach":"UNSENT","dispatchNonce":"N1"}`
-	wire_pre_EXPIRED                       = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"EXPIRED\"}","error":"the command expired before it could be sent","reach":"UNSENT","dispatchNonce":"N1"}`
-	wire_pre_INVALID_PARAMETERS_definition = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"INVALID_PARAMETERS\"}","error":"the command definition is invalid","reach":"UNSENT","dispatchNonce":"N1"}`
-	wire_pre_INVALID_PARAMETERS_parse      = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"INVALID_PARAMETERS\"}","error":"parameter \"fPort\": must be 1 to 223","reach":"UNSENT","dispatchNonce":"N1"}`
-	wire_pre_UNSUPPORTED_no_ack_feed       = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"UNSUPPORTED\"}","error":"confirmed downlinks are not available in this build: it has no acknowledgement feed; send the command unconfirmed","reach":"UNSENT","dispatchNonce":"N1"}`
-	wire_pre_NO_NETWORK_SERVER_LINK        = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_NETWORK_SERVER_LINK\"}","error":"no lorawan_downlink connector names this device's integration; create and publish one","reach":"UNSENT","dispatchNonce":"N1"}`
-	wire_pre_AMBIGUOUS_NETWORK_SERVER_LINK = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"AMBIGUOUS_NETWORK_SERVER_LINK\"}","error":"more than one lorawan_downlink connector names this device's integration; keep one","reach":"UNSENT","dispatchNonce":"N1"}`
-	wire_pre_NETWORK_SERVER_LINK_INVALID   = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NETWORK_SERVER_LINK_INVALID\"}","error":"the network-server link for this device's integration is not usable: lpwan: the network-server link is not usable","reach":"UNSENT","dispatchNonce":"N1"}`
-	wire_pre_NO_DEVICE_ID                  = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_DEVICE_ID\"}","error":"the device has no tts.device-id alias","reach":"UNSENT","dispatchNonce":"N1"}`
-	wire_pre_NO_DEVEUI                     = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_DEVEUI\"}","error":"the device has no lorawan.deveui alias","reach":"UNSENT","dispatchNonce":"N1"}`
-	wire_pre_RATE_LIMITED                  = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"RATE_LIMITED\"}","error":"the tenant is over its outbound call ceiling; retry shortly","reach":"UNSENT","dispatchNonce":"N1"}`
-	wire_post_queued                       = `{"commandToken":"cmd-1","success":true,"payload":"{\"queueItemId\":\"queue-1\",\"stage\":\"queued\"}","reach":"UNANSWERED","dispatchNonce":"N2"}`
-	wire_post_EXPIRED                      = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"EXPIRED\"}","error":"the command expired before it could be sent","reach":"UNSENT","dispatchNonce":"N2"}`
-	wire_post_NETWORK_SERVER_REFUSED       = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NETWORK_SERVER_REFUSED\"}","error":"the network server refused the downlink (HTTP 400)","reach":"UNSENT","dispatchNonce":"N2"}`
-	wire_post_EGRESS_BLOCKED               = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"EGRESS_BLOCKED\"}","error":"the platform egress policy refused the network server's address","reach":"UNSENT","dispatchNonce":"N2"}`
-	wire_post_unclassified                 = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NETWORK_SERVER_REFUSED\"}","error":"the downlink could not be completed","reach":"UNANSWERED","dispatchNonce":"N2"}`
-	wire_post_ACK_UNTRACKED                = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"ACK_UNTRACKED\"}","error":"the network server queued the confirmed downlink but the platform could not track its acknowledgement","reach":"UNANSWERED","dispatchNonce":"N2"}`
-	wire_ack_acknowledged                  = `{"commandToken":"cmd-1","success":true,"payload":"{\"fCntDown\":42,\"queueItemId\":\"queue-1\",\"stage\":\"acknowledged\"}","dispatchNonce":"N2"}`
-	wire_ack_NOT_ACKNOWLEDGED              = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NOT_ACKNOWLEDGED\"}","error":"the network server reported the confirmed downlink was not acknowledged by the device in time; the device may have received it","reach":"UNANSWERED","dispatchNonce":"N2"}`
-	wire_ack_DOWNLINK_FAILED               = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"DOWNLINK_FAILED\"}","error":"the network server reported it dropped the downlink before transmitting it","reach":"UNSENT","dispatchNonce":"N2"}`
-	wire_ack_DOWNLINK_FAILED_MAYBE_SENT    = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"DOWNLINK_FAILED_MAYBE_SENT\"}","error":"the network server reported the downlink failed, and it cannot be shown that it was never transmitted; the device may have received it","reach":"UNANSWERED","dispatchNonce":"N2"}`
-	wire_deadline_not_transmitted          = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_ACKNOWLEDGEMENT\"}","error":"the network server reported no outcome for the confirmed downlink in time; it may still be queued or may have been delivered","reach":"UNANSWERED","dispatchNonce":"N2"}`
-	wire_deadline_transmitted              = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_ACKNOWLEDGEMENT\"}","error":"a gateway transmitted the confirmed downlink but no acknowledgement was reported in time; the device may have received it","reach":"UNANSWERED","dispatchNonce":"N2"}`
+	wire_pre_NO_ROUTE                        = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_ROUTE\"}","error":"the command carries no integration for the device, so it cannot be routed to a network server","reach":"UNSENT","dispatchNonce":"N1"}`
+	wire_pre_EXPIRED                         = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"EXPIRED\"}","error":"the command expired before it could be sent","reach":"UNSENT","dispatchNonce":"N1"}`
+	wire_pre_INVALID_PARAMETERS_definition   = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"INVALID_PARAMETERS\"}","error":"the command definition is invalid","reach":"UNSENT","dispatchNonce":"N1"}`
+	wire_pre_INVALID_PARAMETERS_parse        = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"INVALID_PARAMETERS\"}","error":"parameter \"fPort\": must be 1 to 223","reach":"UNSENT","dispatchNonce":"N1"}`
+	wire_pre_UNSUPPORTED_no_ack_feed         = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"UNSUPPORTED\"}","error":"confirmed downlinks are not available in this build: it has no acknowledgement feed; send the command unconfirmed","reach":"UNSENT","dispatchNonce":"N1"}`
+	wire_pre_NO_NETWORK_SERVER_LINK          = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_NETWORK_SERVER_LINK\"}","error":"no lorawan_downlink connector names this device's integration; create and publish one","reach":"UNSENT","dispatchNonce":"N1"}`
+	wire_pre_AMBIGUOUS_NETWORK_SERVER_LINK   = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"AMBIGUOUS_NETWORK_SERVER_LINK\"}","error":"more than one lorawan_downlink connector names this device's integration; keep one","reach":"UNSENT","dispatchNonce":"N1"}`
+	wire_pre_NETWORK_SERVER_LINK_INVALID     = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NETWORK_SERVER_LINK_INVALID\"}","error":"the network-server link for this device's integration is not usable: lpwan: the network-server link is not usable","reach":"UNSENT","dispatchNonce":"N1"}`
+	wire_pre_NO_DEVICE_ID                    = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_DEVICE_ID\"}","error":"the device has no tts.device-id alias","reach":"UNSENT","dispatchNonce":"N1"}`
+	wire_pre_NO_DEVEUI                       = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_DEVEUI\"}","error":"the device has no lorawan.deveui alias","reach":"UNSENT","dispatchNonce":"N1"}`
+	wire_pre_RATE_LIMITED                    = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"RATE_LIMITED\"}","error":"the tenant is over its outbound call ceiling; retry shortly","reach":"UNSENT","dispatchNonce":"N1"}`
+	wire_post_queued                         = `{"commandToken":"cmd-1","success":true,"payload":"{\"queueItemId\":\"queue-1\",\"stage\":\"queued\"}","reach":"UNANSWERED","dispatchNonce":"N2"}`
+	wire_post_EXPIRED                        = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"EXPIRED\"}","error":"the command expired before it could be sent","reach":"UNSENT","dispatchNonce":"N2"}`
+	wire_post_NETWORK_SERVER_REFUSED         = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NETWORK_SERVER_REFUSED\"}","error":"the network server refused the downlink (HTTP 400)","reach":"UNSENT","dispatchNonce":"N2"}`
+	wire_post_EGRESS_BLOCKED                 = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"EGRESS_BLOCKED\"}","error":"the platform egress policy refused the network server's address","reach":"UNSENT","dispatchNonce":"N2"}`
+	wire_post_unclassified                   = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NETWORK_SERVER_REFUSED\"}","error":"the downlink could not be completed","reach":"UNANSWERED","dispatchNonce":"N2"}`
+	wire_post_ACK_UNTRACKED                  = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"ACK_UNTRACKED\"}","error":"the network server queued the confirmed downlink but the platform could not track its acknowledgement","reach":"UNANSWERED","dispatchNonce":"N2"}`
+	wire_ack_acknowledged                    = `{"commandToken":"cmd-1","success":true,"payload":"{\"fCntDown\":42,\"queueItemId\":\"queue-1\",\"stage\":\"acknowledged\"}","dispatchNonce":"N2"}`
+	wire_ack_NOT_ACKNOWLEDGED                = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NOT_ACKNOWLEDGED\"}","error":"the network server reported the confirmed downlink was not acknowledged by the device in time; the device may have received it","reach":"UNANSWERED","dispatchNonce":"N2"}`
+	wire_ack_DOWNLINK_FAILED                 = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"DOWNLINK_FAILED\"}","error":"the network server reported it dropped the downlink before transmitting it","reach":"UNSENT","dispatchNonce":"N2"}`
+	wire_ack_DOWNLINK_FAILED_MAYBE_SENT      = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"DOWNLINK_FAILED_MAYBE_SENT\"}","error":"the network server reported the downlink failed, and it cannot be shown that it was never transmitted; the device may have received it","reach":"UNANSWERED","dispatchNonce":"N2"}`
+	wire_deadline_not_transmitted            = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_ACKNOWLEDGEMENT\"}","error":"the network server reported no outcome for the confirmed downlink in time; it may still be queued or may have been delivered","reach":"UNANSWERED","dispatchNonce":"N2"}`
+	wire_deadline_transmitted                = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"NO_ACKNOWLEDGEMENT\"}","error":"a gateway transmitted the confirmed downlink but no acknowledgement was reported in time; the device may have received it","reach":"UNANSWERED","dispatchNonce":"N2"}`
+	wire_pre_DOWNLINK_FAILED_capacity        = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"DOWNLINK_FAILED\"}","error":"could not wait for downlink capacity: context canceled","reach":"UNSENT","dispatchNonce":"N1"}`
+	wire_pre_UNSUPPORTED_webhook_correlation = `{"commandToken":"cmd-1","success":false,"payload":"{\"reason\":\"UNSUPPORTED\"}","error":"a confirmed downlink needs {{correlationId}} in the link's templates so the acknowledgement can be matched","reach":"UNSENT","dispatchNonce":"N1"}`
 )
 
 type responseCasePrev struct {
@@ -113,6 +121,8 @@ var responseCasesPrev = []responseCasePrev{
 	{"ack_DOWNLINK_FAILED_MAYBE_SENT", ackHandle, "N2", wire_ack_DOWNLINK_FAILED_MAYBE_SENT, false, `{"reason":"DOWNLINK_FAILED_MAYBE_SENT"}`, "the network server reported the downlink failed, and it cannot be shown that it was never transmitted; the device may have received it", "UNANSWERED", "TIMEOUT", "UNKNOWN"},
 	{"deadline_not_transmitted", ackSweep, "N2", wire_deadline_not_transmitted, false, `{"reason":"NO_ACKNOWLEDGEMENT"}`, "the network server reported no outcome for the confirmed downlink in time; it may still be queued or may have been delivered", "UNANSWERED", "TIMEOUT", "UNKNOWN"},
 	{"deadline_transmitted", ackSweep, "N2", wire_deadline_transmitted, false, `{"reason":"NO_ACKNOWLEDGEMENT"}`, "a gateway transmitted the confirmed downlink but no acknowledgement was reported in time; the device may have received it", "UNANSWERED", "TIMEOUT", "UNKNOWN"},
+	{"pre_DOWNLINK_FAILED_capacity", adapterHandle, "N1", wire_pre_DOWNLINK_FAILED_capacity, false, `{"reason":"DOWNLINK_FAILED"}`, "could not wait for downlink capacity: context canceled", "UNSENT", "FAILED", "NOT_DELIVERED"},
+	{"pre_UNSUPPORTED_webhook_correlation", adapterHandle, "N1", wire_pre_UNSUPPORTED_webhook_correlation, false, `{"reason":"UNSUPPORTED"}`, "a confirmed downlink needs {{correlationId}} in the link's templates so the acknowledgement can be matched", "UNSENT", "FAILED", "NOT_DELIVERED"},
 }
 
 // Use the existing SQLite realApi harness and the real dispatch/publish path.
