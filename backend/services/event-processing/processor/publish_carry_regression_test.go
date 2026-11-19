@@ -115,7 +115,7 @@ func TestPublishPendingDynamicThresholdKeepsRaiseAndClear(t *testing.T) {
 	}
 }
 
-func TestPublishCrashReplayPreservesThresholdLatch(t *testing.T) {
+func TestPublishCrashReplayAllowsFreshSuccessorRaise(t *testing.T) {
 	for _, k := range []int{1, 4} {
 		t.Run(fmt.Sprint(k), func(t *testing.T) {
 			v1 := handoffRule(t, "v1", rules.TypeThreshold, false)
@@ -145,11 +145,12 @@ func TestPublishCrashReplayPreservesThresholdLatch(t *testing.T) {
 			require.Len(t, replayed.events, 1, "actual replay must republish the old raise idempotently")
 			require.Equal(t, w.ids, replayed.ids, "replay dedup ids must be stable")
 			require.NoError(t, restarted.reconcileDeadmanArming(context.Background()))
-			require.True(t, restarted.engine.IsRaised(dc.SeriesKey{Rule: v2.Compiled.ID, Series: "dev1"}))
-			handoffApply(t, restarted, handoffMessage(t, 2, "v2", "dev1", "20", ""))
+			require.False(t, restarted.engine.IsRaised(dc.SeriesKey{Rule: v2.Compiled.ID, Series: "dev1"}))
+			// Replay preserves the old publication; it cannot prove a live handoff.
+			handoffApply(t, restarted, handoffMessage(t, 2, "v2", "dev1", "90", ""))
 			require.True(t, restarted.checkpoint(context.Background()))
 			require.Len(t, replayed.events, 2)
-			require.Equal(t, runtime.EdgeResolved, replayed.events[1].Edge)
+			require.Equal(t, runtime.EdgeRaised, replayed.events[1].Edge)
 		})
 	}
 }

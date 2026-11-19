@@ -192,11 +192,19 @@ func TestPublishCarryRestart(t *testing.T) {
 			actives := []runtime.ActiveEntry{{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: testBase.Add(20 * time.Second)}}
 			rp.armer.LoadMembership(rosters, actives)
 			// Reconcile is post-replay, including when replay has no messages.
-			rp.armer.Reconcile(rosters, actives, nil)
+			rp.armer.Reconcile(rosters, actives)
 			carryReading(rp, 2, "v2", 21, true)
 			carryFlush(t, rp, 21)
-			if len(sink.sent) != 1 || len(w.edges) != 1 {
-				t.Fatalf("restart re-fired: %+v", w.edges)
+			want := 1
+			if !checkpoint {
+				// A pre-handoff snapshot cannot establish continuity after restart.
+				want = 2
+			}
+			if len(sink.sent) != want || len(w.edges) != want {
+				t.Fatalf("restart commands=%d edges=%+v, want %d", len(sink.sent), w.edges, want)
+			}
+			if !checkpoint && w.edges[1].Edge != runtime.EdgeRaised {
+				t.Fatalf("pre-handoff restart must allow a fresh raise: %+v", w.edges)
 			}
 		})
 	}
@@ -208,7 +216,7 @@ func TestReplayPreHandoffResolveStillPublished(t *testing.T) {
 	carryFlush(t, rp, 1)
 	rosters := []runtime.RosterEntry{{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}}
 	actives := []runtime.ActiveEntry{{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: testBase.Add(20 * time.Second)}}
-	// Startup knows v2 membership BEFORE replay, but must not move the v1 latch yet.
+	// Startup knows v2 membership BEFORE replay, but must not move the v1 latch.
 	sr := absScopedProc("acme", "p1@v2", "acme/p1@v2/r1")
 	sr.Compiled.Core.Kind = dc.Threshold
 	sr.Compiled.Type = "threshold"
@@ -220,7 +228,7 @@ func TestReplayPreHandoffResolveStillPublished(t *testing.T) {
 	if len(w.edges) != 2 || w.edges[1].Edge != runtime.EdgeResolved {
 		t.Fatalf("replay lost old-version clear: %+v", w.edges)
 	}
-	rp.armer.Reconcile(rosters, actives, nil)
+	rp.armer.Reconcile(rosters, actives)
 	carryReading(rp, 3, "v2", 21, true)
 	carryFlush(t, rp, 21)
 	if len(w.edges) != 3 || w.edges[2].Edge != runtime.EdgeRaised {

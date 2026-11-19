@@ -328,7 +328,7 @@ func TestArmerReconcileRebuildsAndSweeps(t *testing.T) {
 	d := NewDeadmanArmer(reg, fe)
 	d.Reconcile(
 		[]RosterEntry{{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(50)}},
-		[]ActiveEntry{{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}}, nil,
+		[]ActiveEntry{{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}},
 	)
 	live := core.SeriesKey{Rule: ComposeRuleID("t1", "p1@v1/r1"), Series: "dev"}
 	if got := fe.armedKeys(); len(got) != 1 || got[0] != live {
@@ -444,7 +444,7 @@ func TestReconcileSweepsHeartbeatAbsenceTimers(t *testing.T) {
 	d := NewDeadmanArmer(reg, fe)
 	d.Reconcile(
 		[]RosterEntry{{Tenant: "t1", DeviceToken: "live", ProfileToken: "p1", ExpectedSince: ts(50)}},
-		[]ActiveEntry{{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}}, nil,
+		[]ActiveEntry{{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)}},
 	)
 	var goneSwept, liveSwept bool
 	for _, k := range fe.rms {

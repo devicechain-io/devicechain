@@ -102,9 +102,6 @@ type DeadmanArmer struct {
 	// Inverse of the current threshold pairing, including every retained old
 	// version. Built on membership changes, not on the per-detection hot path.
 	thresholdPredecessors map[profKey]map[string][]string
-	// Replay publications fence the once-only post-replay carry. These are
-	// transient; the carry bookkeeping changes no snapshot or rolling-upgrade wire.
-	replayThresholdEdges map[core.SeriesKey]core.EdgeKind
 }
 
 // NewDeadmanArmer builds an empty armer over the rule registry and the engine.
@@ -170,7 +167,9 @@ func (d *DeadmanArmer) ApplyDeviceMembership(e RosterEntry, present bool) {
 // post-merge ProfileActive row after a published-rule fact, AFTER the fact's rules are installed
 // in the registry so AbsenceRulesFor can see them). It records the active version, disarms a
 // superseded version's dead-men across the profile's fleet, then arms every rostered device of the
-// profile under the new active version. It returns the number of moved latches.
+// profile under the new active version. Latches carry only from a known immediately
+// previous active version, paired by stable identity and kind. It returns the number
+// of moved latches.
 func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry, skip func(core.SeriesKey) bool) int {
 	pk := profKey{a.Tenant, a.ProfileToken}
 	prev, had := d.active[pk]
@@ -180,9 +179,16 @@ func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry, skip func(core.SeriesKe
 	// Redelivered active facts must not start a fresh handoff for historical
 	// threshold latches created after the actual version transition.
 	moved := 0
-	if !had || prev.version != a.ActiveVersionToken {
+	if had && prev.version != a.ActiveVersionToken {
 		d.invalidateDeferredThresholds()
-		moved = d.carryHandoff(pairs, skip, nil)
+		// Only the immediately previous active version proves continuity. Older
+		// retained latches may precede a removed, disabled or differently kinded rule.
+		for old := range pairs {
+			if sr, ok := d.reg.Lookup(old); !ok || sr.ProfileVersionToken != prev.version {
+				delete(pairs, old)
+			}
+		}
+		moved = d.carryHandoff(pairs, skip)
 	}
 	if had && prev.version != a.ActiveVersionToken {
 		for dev := range d.byProfile[pk] {
@@ -265,9 +271,9 @@ func (d *DeadmanArmer) AbsenceLive(key core.SeriesKey) bool {
 	return a.version == sr.ProfileVersionToken
 }
 
-// successors pairs Threshold and Absence rules in retained non-active versions
-// with the active version by stable identity AND kind. Edits to predicates, actions or severity do not create
-// a rising edge. Unknown identities are left alone, toward the previous duplicate.
+// successors pairs retained Threshold and Absence rules with the active version
+// by stable identity AND kind. Cleanup and publish gates may use all these pairs;
+// a live carry must restrict them to the immediately previous active version.
 func (d *DeadmanArmer) successors(tenant, profile string) map[string]string {
 	out := map[string]string{}
 	a, ok := d.active[profKey{tenant, profile}]
@@ -446,11 +452,6 @@ func (d *DeadmanArmer) RemoveTenant(tenant string) int {
 			delete(d.deferredThresholds, old)
 		}
 	}
-	for key := range d.replayThresholdEdges {
-		if t, ok := RuleTenant(key.Rule); ok && t == tenant {
-			delete(d.replayThresholdEdges, key)
-		}
-	}
 	n := 0
 	for k := range d.active {
 		if k.tenant == tenant {
@@ -484,24 +485,13 @@ func (d *DeadmanArmer) RemoveTenant(tenant string) int {
 // restored rule set no longer holds — AND every heartbeat-armed absence timer whose device left the
 // rule's scope is swept (HeartbeatAbsenceKeys, which the ExpectedKeys sweep above cannot see). It runs
 // once, on the startup goroutine, before the live loop.
-func (d *DeadmanArmer) Reconcile(rosters []RosterEntry, actives []ActiveEntry, skip func(core.SeriesKey) bool) {
+func (d *DeadmanArmer) Reconcile(rosters []RosterEntry, actives []ActiveEntry) {
 	d.reset()
 	d.loadMembership(rosters, actives)
-	// Carry only POST-replay: a pre-replay move would discard a pre-handoff
-	// resolve already published by the original run, leaving a cleared alarm latched.
-	// Keep the replay fence as well as successor-edge cleanup: an old recovery
-	// followed by an old re-raise must still prevent carrying that replay episode.
+	// Restored historical latches cannot prove an unfinished handoff: older
+	// writers retain them after successor recovery, and replay may emit no edge.
+	// Preserve restored latch ownership; uncertainty may duplicate the next raise.
 	d.deferredThresholds = nil
-	for pk := range d.active {
-		pairs := d.successors(pk.tenant, pk.profileToken)
-		d.carryHandoff(pairs, skip, func(old, next core.SeriesKey) bool {
-			// Replayed successor edges or an old recovery settle this episode;
-			// neither is a pending-output deferral that may be retried later.
-			_, successorPublished := d.replayThresholdEdges[next]
-			return successorPublished || d.replayThresholdEdges[old] == core.EdgeResolved
-		})
-	}
-	d.replayThresholdEdges = nil
 	desired := make(map[core.SeriesKey]struct{})
 	for _, e := range rosters {
 		a, ok := d.active[profKey{e.Tenant, e.ProfileToken}]
@@ -539,15 +529,12 @@ func (d *DeadmanArmer) Reconcile(rosters []RosterEntry, actives []ActiveEntry, s
 // carryHandoff records the exact threshold pairs left behind by this handoff's
 // pending-output fence. CarryRaised calls the predicate on latched old keys;
 // do not enumerate retained latches again after publication.
-func (d *DeadmanArmer) carryHandoff(pairs map[string]string, skip func(core.SeriesKey) bool, invalid func(core.SeriesKey, core.SeriesKey) bool) int {
+func (d *DeadmanArmer) carryHandoff(pairs map[string]string, skip func(core.SeriesKey) bool) int {
 	return d.engine.CarryRaised(pairs, func(key core.SeriesKey) bool {
 		if id, ok := pairs[key.Rule]; ok {
 			next := core.SeriesKey{Rule: id, Series: key.Series}
 			sr, found := d.reg.Lookup(key.Rule)
 			threshold := found && sr.Compiled.Core.Kind == core.Threshold
-			if threshold && invalid != nil && invalid(key, next) {
-				return true
-			}
 			if skip != nil && (skip(key) || skip(next)) {
 				if threshold {
 					if d.deferredThresholds == nil {
@@ -592,9 +579,8 @@ func (d *DeadmanArmer) ThresholdEmitted(det core.Detection) {
 	}
 }
 
-// ThresholdPublished also fences Reconcile against successor edges published
-// during replay. An old Resolved stays invalidating even if it later re-raises.
-func (d *DeadmanArmer) ThresholdPublished(det core.Detection, replay bool) {
+// ThresholdPublished settles deferred pairs represented by a published edge.
+func (d *DeadmanArmer) ThresholdPublished(det core.Detection) {
 	if det.Kind == core.Threshold {
 		key := core.SeriesKey{Rule: det.RuleID, Series: det.Series}
 		for old, next := range d.deferredThresholds {
@@ -603,20 +589,30 @@ func (d *DeadmanArmer) ThresholdPublished(det core.Detection, replay bool) {
 			}
 		}
 	}
-	if !replay || det.Kind != core.Threshold {
+}
+
+// SuccessorEvaluated cancels deferred handoffs before an event is submitted to
+// the engine, including healthy evaluations that emit no edge. It runs on the
+// processor loop, never a shard worker, and costs O(1) without deferred pairs.
+func (d *DeadmanArmer) SuccessorEvaluated(tenant, version, device string) {
+	if len(d.deferredThresholds) == 0 {
 		return
 	}
-	if d.replayThresholdEdges == nil {
-		d.replayThresholdEdges = map[core.SeriesKey]core.EdgeKind{}
-	}
-	key := core.SeriesKey{Rule: det.RuleID, Series: det.Series}
-	if d.replayThresholdEdges[key] != core.EdgeResolved {
-		d.replayThresholdEdges[key] = det.Edge
+	for old, next := range d.deferredThresholds {
+		if next.Series != device {
+			continue
+		}
+		if sr, ok := d.reg.Lookup(next.Rule); ok && sr.Tenant == tenant && sr.ProfileVersionToken == version {
+			delete(d.deferredThresholds, old)
+		}
 	}
 }
 
 // invalidateDeferredThresholds runs after the active view changes, before a
-// handoff can record new deferrals. A rollback must never retain an old pairing.
+// handoff can record new deferrals. Records already prove one observed transition;
+// only that same active destination may remain eligible. A later transition (even
+// through an empty version) discards the record rather than rebuilding it from
+// retained historical latches. A rollback must never retain an old pairing.
 func (d *DeadmanArmer) invalidateDeferredThresholds() {
 	for old, next := range d.deferredThresholds {
 		if current, paired := d.CarriedSuccessor(old); !paired || current != next {

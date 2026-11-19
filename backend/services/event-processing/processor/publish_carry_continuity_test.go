@@ -130,9 +130,13 @@ func TestReplayHealthySuccessorPreventsPostReplayCarry(t *testing.T) {
 // a threshold r1 back under the original token. Its first breach is a new episode.
 func TestCarryDoesNotBridgeDiscontinuousIntermediateVersion(t *testing.T) {
 	intermediates := map[string]func(*testing.T) []runtime.ScopedRule{
-		"removed":  func(t *testing.T) []runtime.ScopedRule { return []runtime.ScopedRule{continuityRule(t, "v2", "r2", rules.TypeThreshold)} },
+		"removed": func(t *testing.T) []runtime.ScopedRule {
+			return []runtime.ScopedRule{continuityRule(t, "v2", "r2", rules.TypeThreshold)}
+		},
 		"disabled": func(*testing.T) []runtime.ScopedRule { return nil },
-		"absence":  func(t *testing.T) []runtime.ScopedRule { return []runtime.ScopedRule{continuityRule(t, "v2", "r1", rules.TypeAbsence)} },
+		"absence": func(t *testing.T) []runtime.ScopedRule {
+			return []runtime.ScopedRule{continuityRule(t, "v2", "r1", rules.TypeAbsence)}
+		},
 	}
 	for name, v2 := range intermediates {
 		for _, k := range []int{1, 4} {

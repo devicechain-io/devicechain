@@ -78,8 +78,8 @@ func TestPublishDeferredThresholdCheckpointRestart(t *testing.T) {
 					rp, w = restartCarryCheckpoint(t, rp, k, seq+1, replay...)
 					require.Len(t, w.events, 4)
 					require.Equal(t, runtime.EdgeResolved, w.events[3].Edge)
-					// The replay fence alone prevents a carry on this restart. A
-					// second restart must also be safe, with that fence forgotten.
+					// Reconcile never carries restored latches. A second restart
+					// must also preserve the recovered successor state.
 					snap, found, err = rp.Store.Load(ctx, "singleton")
 					require.NoError(t, err)
 					require.True(t, found)
@@ -100,7 +100,7 @@ func TestPublishDeferredThresholdCheckpointRestart(t *testing.T) {
 	}
 }
 
-func TestPublishPreHandoffCheckpointStillCarries(t *testing.T) {
+func TestPublishPreHandoffCheckpointAllowsFreshRaise(t *testing.T) {
 	for _, k := range []int{1, 4} {
 		t.Run(fmt.Sprint(k), func(t *testing.T) {
 			rp, w := handoffProcessor(t, k, handoffRule(t, "v1", rules.TypeThreshold, true))
@@ -112,7 +112,9 @@ func TestPublishPreHandoffCheckpointStillCarries(t *testing.T) {
 			rp, w = restartCarryCheckpoint(t, rp, k, 1)
 			handoffApply(t, rp, handoffMessage(t, 2, "v2", "dev1", "90", ""))
 			require.True(t, rp.checkpoint(context.Background()))
-			require.Empty(t, w.events, "the genuine pre-handoff latch must still carry without another action")
+			require.Len(t, w.events, 1, "an uncertain restored handoff must allow another action")
+			require.Equal(t, runtime.EdgeRaised, w.events[0].Edge)
+			require.Equal(t, "acme/p1@v2/r1", w.events[0].RuleID)
 		})
 	}
 }

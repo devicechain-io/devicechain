@@ -1293,7 +1293,7 @@ func (rp *ResolvedEventsProcessor) reconcileDeadmanArming(ctx context.Context) e
 	}
 	// A failed final replay checkpoint can leave unpublished edges in the buffer.
 	rp.syncDetector()
-	rp.armer.Reconcile(toRosterEntries(rosters), toActiveEntries(actives), rp.pendingOutputKeys())
+	rp.armer.Reconcile(toRosterEntries(rosters), toActiveEntries(actives))
 	log.Info().Int("rostered", len(rosters)).Int("profiles", len(actives)).
 		Msg("Reconciled DETECT dead-man arming from the roster + active-version projections.")
 	return nil
@@ -2190,6 +2190,9 @@ func (rp *ResolvedEventsProcessor) applyEvent(msg messaging.Message, tenant stri
 	descoped := false
 	rp.phases.enter(phaseApply)
 	rp.tagNext(triggerTime(msg, event), true)
+	if rp.armer != nil {
+		rp.armer.SuccessorEvaluated(tenant, event.ProfileVersionToken, event.SourceDeviceToken)
+	}
 	if msg.StreamSeq > prev {
 		for _, d := range plan.Descopes {
 			if rp.engine.Descope(d.RuleID, d.Series, d.At) {
@@ -2565,7 +2568,8 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 	if rp.armer != nil && upd.active != nil {
 		if rp.armer.ApplyActiveVersion(*upd.active, rp.pendingOutputKeys()) > 0 {
 			// The normal checkpoint persists this move. A crash before it can duplicate
-			// an action: accepted at-least-once delivery, without forcing a checkpoint.
+			// one action on the successor's next breach: accepted at-least-once
+			// delivery, without forcing a checkpoint.
 			rp.dirty = true
 		}
 	}
@@ -3529,7 +3533,7 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 		case d.Kind == detectcore.Threshold && d.Edge == detectcore.EdgeRaised && !rp.replaying:
 			// A late threshold raise is redundant only while the paired successor
 			// is currently raised. Replay raises must pass idempotently so their
-			// latches survive for the post-replay carry. On uncertainty, publish.
+			// original actions remain replayable. On uncertainty, publish.
 			next, paired := rp.armer.CarriedSuccessor(key)
 			drop = paired && rp.armer.VersionSuperseded(key) && rp.armer.CarriedForward(key) && rp.engine.IsRaised(next)
 		}

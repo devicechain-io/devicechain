@@ -13,6 +13,8 @@ Los formatos de escenario y de archivo de prueba llevan la versión `devicechain
 
 Antes de publicar, consulta [qué hace una publicación con los dispositivos que ya están en alarma](../concepts/event-processing.md#publish-keeps-alarms): las reglas de umbral y el traspaso existente de ausencia conservan el estado de alarma, así que prueba una recuperación seguida de un nuevo incumplimiento para comprobar las acciones modificadas. Los demás tipos de regla pueden repetir sus acciones al publicar mientras el dispositivo siga incumpliendo la condición.
 
+El traspaso solo abarca una transición observada desde la versión activa inmediatamente anterior. Una regla eliminada, deshabilitada o de otro tipo en una versión intermedia rompe la continuidad. Al iniciar se restauran los estados guardados sin transferir estados históricos a la versión activa. Un fallo antes de guardar el traspaso puede repetir una acción en el siguiente incumplimiento de la nueva versión; la entrega sigue siendo al menos una vez. Una lectura de la nueva versión cancela un traspaso pendiente de publicación, lo que también puede repetir una acción. Incluye estos casos al probar la entrega de acciones.
+
 ## Qué comprueba una prueba {#what-a-test-checks}
 
 Una prueba se compone de dos archivos.

@@ -9,7 +9,26 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 )
 
-func TestCarryPairsAllRetainedVersionsByKind(t *testing.T) {
+// Retained rules and latches alone do not establish an observed transition.
+func TestCarryWithoutPreviousActiveVersionAllowsFreshRaise(t *testing.T) {
+	old := thrScoped("acme", "p@v1", "r")
+	next := thrScoped("acme", "p@v2", "r")
+	reg := NewRuleRegistry([]ScopedRule{old, next})
+	e := core.NewEngine(reg.Cores(), 0)
+	d := NewDeadmanArmer(reg, e)
+	key := core.SeriesKey{Rule: old.Compiled.ID, Series: "dev"}
+	e.ProcessEvent(core.Event{Seq: 1, Key: key, Time: ts(1), Match: true})
+	e.Drain()
+	if n := d.ApplyActiveVersion(ActiveEntry{Tenant: "acme", ProfileToken: "p", ActiveVersionToken: "p@v2", PublishedAt: ts(2)}, nil); n != 0 {
+		t.Fatalf("carry without a previous active version moved %d latches", n)
+	}
+	e.ProcessEvent(core.Event{Seq: 2, Key: core.SeriesKey{Rule: next.Compiled.ID, Series: "dev"}, Time: ts(3), Match: true})
+	if got := e.Drain(); len(got) != 1 || got[0].Edge != core.EdgeRaised || got[0].RuleID != next.Compiled.ID {
+		t.Fatalf("unknown continuity must allow a fresh successor raise: %+v", got)
+	}
+}
+
+func TestCarryPairsOnlyPreviousActiveVersionByKind(t *testing.T) {
 	v1 := thrScoped("acme", "p@v1", "r")
 	v2 := thrScoped("acme", "p@v2", "r")
 	v3 := thrScoped("acme", "p@v3", "r")
@@ -23,13 +42,14 @@ func TestCarryPairsAllRetainedVersionsByKind(t *testing.T) {
 	reg := NewRuleRegistry([]ScopedRule{v1, v2, v3, other, changed, changedNew, malformed})
 	e := core.NewSharded(4, reg.Cores(), 0)
 	d := NewDeadmanArmer(reg, e)
+	d.LoadMembership(nil, []ActiveEntry{{Tenant: "acme", ProfileToken: "p", ActiveVersionToken: "p@v2"}})
 	for i, sr := range []ScopedRule{v1, v2, other} {
 		e.ProcessEvent(core.Event{Seq: uint64(i + 1), Key: core.SeriesKey{Rule: sr.Compiled.ID, Series: []string{"a", "b", "c"}[i]}, Time: ts(i + 1), Match: true})
 	}
 	e.Drain()
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "acme", DeviceToken: "a", ProfileToken: "p", ExpectedSince: ts(0)}, true)
-	if n := d.ApplyActiveVersion(ActiveEntry{Tenant: "acme", ProfileToken: "p", ActiveVersionToken: "p@v3", PublishedAt: ts(20)}, nil); n != 2 {
-		t.Fatalf("skipped-version carry moved %d, want 2", n)
+	if n := d.ApplyActiveVersion(ActiveEntry{Tenant: "acme", ProfileToken: "p", ActiveVersionToken: "p@v3", PublishedAt: ts(20)}, nil); n != 1 {
+		t.Fatalf("previous-version carry moved %d, want 1", n)
 	}
 	for _, sr := range []ScopedRule{changed, malformed, other} {
 		if _, ok := d.successors("acme", "p")[sr.Compiled.ID]; ok {
@@ -45,8 +65,8 @@ func TestCarryPairsAllRetainedVersionsByKind(t *testing.T) {
 	for i, dev := range []string{"a", "b"} {
 		e.ProcessEvent(core.Event{Seq: uint64(i + 4), Key: core.SeriesKey{Rule: v3.Compiled.ID, Series: dev}, Time: ts(21 + i), Match: true})
 	}
-	if got := e.Drain(); len(got) != 0 {
-		t.Fatalf("skipped version was not carried: %+v", got)
+	if got := e.Drain(); len(got) != 1 || got[0].Edge != core.EdgeRaised || got[0].Series != "a" {
+		t.Fatalf("only the previous version may suppress a fresh raise: %+v", got)
 	}
 	e.ProcessEvent(core.Event{Seq: 6, Key: core.SeriesKey{Rule: other.Compiled.ID, Series: "c"}, Time: ts(24), Match: false})
 	if got := e.Drain(); len(got) != 1 || got[0].Edge != core.EdgeResolved {
@@ -85,7 +105,7 @@ func TestThresholdEdgesClearRetainedPredecessors(t *testing.T) {
 			e.Drain()
 			det := core.Detection{RuleID: v3.Compiled.ID, Series: "dev", Kind: core.Threshold, Edge: core.EdgeResolved, At: ts(20)}
 			if published {
-				d.ThresholdPublished(det, true)
+				d.ThresholdPublished(det)
 			} else {
 				d.ThresholdEmitted(det)
 			}
