@@ -126,6 +126,7 @@ backend/services/event-sources/processor/integration_marks_test.go
 backend/services/lwm2m-ingest/downlink/documents_test.go
 backend/services/mcp/server/documents_test.go
 backend/services/notification-management/processor/alarm_lookup_wire_test.go
+backend/services/notification-management/processor/documents_test.go
 backend/services/outbound-connectors/connectorspec/downlinktemplate.go
 backend/services/outbound-connectors/lpwan/chirpstack_test.go
 backend/services/outbound-connectors/lpwan/documents_test.go
@@ -163,6 +164,7 @@ backend/tools/apiprobe/baseline_test.go
 backend/tools/apiprobe/documents_test.go
 backend/tools/apiprobe/entities_test.go
 backend/tools/apiprobe/readsweep_test.go
+backend/tools/apiprobe/signer_baseline_test.go
 backend/tools/apiprobe/sso_receipt_test.go
 backend/tools/apiprobe/sso_test.go
 backend/tools/apiprobe/tenant_admin_rows_test.go

@@ -78,6 +78,8 @@ export type AlarmSearchCriteria = {
   originatorType?: string | null | undefined;
   pageNumber: number;
   pageSize: number;
+  /** True selects current cycles raised under suppression; false selects cycles without a stamp. Omit for either. */
+  raisedDuringSuppression?: boolean | null | undefined;
   severity?: string | null | undefined;
   /**
    * Only alarms active at some point at or after this instant (inclusive), as an RFC 3339

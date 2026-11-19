@@ -710,7 +710,7 @@ input CommandCreateRequest { token: String! }
 	}
 }
 
-// A release that predates the signer registry cannot express the three signer rows, and must skip
+// A release that predates the signer registry cannot express the four signer rows, and must skip
 // them AS A GROUP: the signer row is a leaf (its token is computed, not recorded), and its
 // dependents carry the same Requires, so none is left writing against a registry that is not there.
 // Every other row stays supported.
@@ -749,7 +749,8 @@ func TestAReleaseWithoutTheSignerRegistrySkipsTheSignerGroupTogether(t *testing.
 			dropped, len(gone)+1)
 	}
 
-	group := map[string]bool{"artifact-signer": true, "artifact-signed": true, "artifact-signature": true}
+	group := map[string]bool{"artifact-signer": true, "artifact-available-signature": true,
+		"artifact-signed": true, "artifact-signature": true}
 	seen := 0
 	for _, e := range allEntities() {
 		write, reason, err := plan(e, b)

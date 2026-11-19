@@ -9,9 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAssignmentIncarnationMigrationIsNullableRerunnableAndLast(t *testing.T) {
-	require.Equal(t, AssignmentIncarnationID, Migrations[len(Migrations)-1].ID)
-	for _, m := range Migrations[:len(Migrations)-1] {
+func TestAssignmentIncarnationMigrationIsNullableRerunnableAndOrdered(t *testing.T) {
+	require.Equal(t, AssignmentIncarnationID, Migrations[9].ID)
+	for _, m := range Migrations[:9] {
 		require.Greater(t, AssignmentIncarnationID, m.ID)
 	}
 	db := openDB(t)

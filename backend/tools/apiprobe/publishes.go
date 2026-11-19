@@ -395,13 +395,17 @@ var afterPublish = []entity{
 		// The content is a fixed literal so its digest is a constant the declaration and
 		// the upload agree on. The upload is the one step GraphQL cannot express, which is
 		// what After is for.
+		//
+		// trustStatus is NOT selected here: artifact-available-signature signs this artifact
+		// after it is recorded, so the trust it reads at verify is not the trust it had when
+		// it was written. That row selects it instead.
 		Name:     "artifact-available",
 		Area:     "update-management",
 		Mutation: "createArtifact",
 		Input:    "ArtifactCreateRequest!",
 		Read:     "artifact",
 		Single:   true,
-		Fields:   "token kind name version component sizeBytes digest mediaType compatibleProfiles trustStatus state",
+		Fields:   "token kind name version component sizeBytes digest mediaType compatibleProfiles state",
 		Vars: func(s *state) map[string]any {
 			return map[string]any{"req": map[string]any{
 				"token":              s.tok("artifact-available"),
@@ -423,43 +427,6 @@ var afterPublish = []entity{
 				return fmt.Errorf("state is %q, want AVAILABLE", s)
 			}
 			return nil
-		},
-	},
-	{
-		// Depends on: device, artifact-available.
-		//
-		// 🔑 THIS WRITE IS WHAT CREATES update_assignments AND update_attempts: assigning an
-		// artifact stores the append-only assignment row and the attempt the update state
-		// machine will drive. The token is minted by the platform, so the receipt records
-		// the one the response returned and the read-back is keyed by it.
-		//
-		// The attempt is read back QUEUED and stays QUEUED: nothing here is a device, so
-		// nothing reports, and the deadline that would move it is a day away. Only stored
-		// values are selected; the timestamps that move are not.
-		//
-		// ⚠️ IT NEEDS THE INSTANCE TO ALLOW UNVERIFIED ARTIFACTS
-		// (updates.allowUnverifiedArtifacts), because every artifact is UNVERIFIED today. An
-		// instance that does not refuses this seed, by name, rather than skipping it: a
-		// silent skip would be coverage that quietly stops existing. The upgrade rig sets the
-		// flag on its own instance before each seed that writes this row
-		// (allow_unverified_artifacts in hack/upgrade-rig.sh), and installs a baseline that
-		// ships the area with the object store the artifact rows need.
-		Name:     "update-assignment",
-		Area:     "update-management",
-		Mutation: "assignArtifact",
-		Params: []param{
-			{Name: "deviceToken", Type: "String!"},
-			{Name: "artifactToken", Type: "String!"},
-		},
-		Read:   "updateAssignment",
-		Single: true,
-		Fields: "token deviceToken component current actor artifact{token state digest} " +
-			"attempt{token state targetVersion targetDigest requiresReboot cancelRequested reconciled}",
-		Vars: func(s *state) map[string]any {
-			return map[string]any{
-				"deviceToken":   s.tokens["device"],
-				"artifactToken": s.tok("artifact-available"),
-			}
 		},
 	},
 	{
@@ -487,11 +454,88 @@ var afterPublish = []entity{
 		Requires: probeSignerGroup,
 	},
 	{
+		// Depends on: artifact-signer, artifact-available.
+		//
+		// 🔑 THIS SIGNATURE IS WHAT LETS THE SEED ASSIGN ON A DEFAULT INSTANCE. An artifact is
+		// assigned only when it is signed by an ACTIVE signer, unless the instance sets
+		// updates.allowUnverifiedArtifacts, which dcctl refuses in an overlay and the default
+		// leaves off. So the probe signer signs the artifact the seed assigns (the same digest
+		// artifact-signed carries, so the same signature), and update-assignment and
+		// update-rollout then run against the shipped default. Its read-back is the derived
+		// trust, selected here rather than on artifact-available, which is recorded before this
+		// row signs it: SIGNED, and verify fails if an upgrade loses the signature.
+		//
+		// It is a member of the signer group (probeSignerGroup): a baseline older than the
+		// registry skips it with the other three, and only there does update-assignment still
+		// need the instance to allow unverified artifacts.
+		Name:     "artifact-available-signature",
+		Area:     "update-management",
+		Requires: probeSignerGroup,
+		Mutation: "addArtifactSignature",
+		Params: []param{
+			{Name: "artifactToken", Type: "String!"},
+			{Name: "signerToken", Type: "String!"},
+			{Name: "signature", Type: "String!"},
+		},
+		Read:   "artifact",
+		Single: true,
+		Fields: "token digest state trustStatus",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{
+				"artifactToken": s.tok("artifact-available"),
+				"signerToken":   probeSignerToken(),
+				"signature":     probeArtifactSignature(),
+			}
+		},
+	},
+	{
+		// Depends on: device, artifact-available, artifact-available-signature.
+		//
+		// 🔑 THIS WRITE IS WHAT CREATES update_assignments AND update_attempts: assigning an
+		// artifact stores the append-only assignment row and the attempt the update state
+		// machine will drive. The token is minted by the platform, so the receipt records
+		// the one the response returned and the read-back is keyed by it.
+		//
+		// The attempt is read back QUEUED and stays QUEUED: nothing here is a device, so
+		// nothing reports, and the deadline that would move it is a day away. Only stored
+		// values are selected; the timestamps that move are not.
+		//
+		// The artifact is SIGNED by the probe signer (artifact-available-signature), so this
+		// runs against an instance at the shipped default, which assigns only a signed
+		// artifact. The read-back selects the artifact's derived trust, so verify fails if an
+		// upgrade loses the signature behind the assignment.
+		//
+		// ⚠️ A BASELINE OLDER THAN THE SIGNER REGISTRY cannot sign it, and there the artifact is
+		// UNVERIFIED: an instance that does not allow unverified artifacts
+		// (updates.allowUnverifiedArtifacts) refuses this seed, by name, rather than skipping it,
+		// because a silent skip would be coverage that quietly stops existing. The upgrade rig
+		// asks `apiprobe signerbaseline` and allows unverified artifacts on its instance only for
+		// such a baseline (hack/upgrade-rig.sh), and installs a baseline that ships the area
+		// with the object store the artifact rows need.
+		Name:     "update-assignment",
+		Area:     "update-management",
+		Mutation: "assignArtifact",
+		Params: []param{
+			{Name: "deviceToken", Type: "String!"},
+			{Name: "artifactToken", Type: "String!"},
+		},
+		Read:   "updateAssignment",
+		Single: true,
+		Fields: "token deviceToken component current actor artifact{token state digest trustStatus} " +
+			"attempt{token state targetVersion targetDigest requiresReboot cancelRequested reconciled}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{
+				"deviceToken":   s.tokens["device"],
+				"artifactToken": s.tok("artifact-available"),
+			}
+		},
+	},
+	{
 		// Depends on: device-profile.
 		//
-		// The artifact the signature is attached to. Declared only (UPLOADING, no bytes): a
-		// signature is over the declared digest, so nothing is gained by uploading, and keeping it
-		// apart from artifact-available leaves that row's trust UNVERIFIED for its assignment.
+		// An artifact signed while it is only declared (UPLOADING, no bytes): a signature is over
+		// the declared digest, so a signature attaches before any upload, and this row proves the
+		// signature and the trust it derives survive on an artifact that never became AVAILABLE.
 		Name:     "artifact-signed",
 		Area:     "update-management",
 		Requires: probeSignerGroup,
@@ -573,8 +617,8 @@ var afterPublish = []entity{
 		},
 	},
 	{
-		// Depends on: artifact-available, entity-group-dynamic, entity-group-version,
-		// update-assignment.
+		// Depends on: artifact-available, artifact-available-signature, entity-group-dynamic,
+		// entity-group-version, update-assignment.
 		//
 		// 🔑 THIS ROW CREATES update_rollouts, AND ITS START CREATES update_rollout_targets. A group
 		// rollout is declared DRAFT over GraphQL; starting it (the After step) freezes the dynamic
@@ -584,8 +628,9 @@ var afterPublish = []entity{
 		//
 		// Only stored values are selected: targetCount is written once by the start; state and
 		// progress move as the device's attempt does (its deadline is a day away) and are left out.
-		// It needs updates.allowUnverifiedArtifacts for the same reason update-assignment does, and
-		// a release without rollouts skips it by the field it was written for; nothing reads its token.
+		// It assigns the same signed artifact update-assignment does (so it needs
+		// updates.allowUnverifiedArtifacts only where that row does), and a release without
+		// rollouts skips it by the field it was written for; nothing reads its token.
 		Name:     "update-rollout",
 		Area:     "update-management",
 		Mutation: "createUpdateRollout",
@@ -857,8 +902,9 @@ func allEntities() []entity {
 	return append(out, afterPublish...)
 }
 
-// probeSignerGroup gates the three signer rows (artifact-signer, artifact-signed,
-// artifact-signature) as ONE group on a field only a release with the signer registry declares.
+// probeSignerGroup gates the four signer rows (artifact-signer, artifact-available-signature,
+// artifact-signed, artifact-signature) as ONE group on a field only a release with the signer
+// registry declares.
 //
 // 🔑 THE TOKEN IS COMPUTED, NOT RECORDED. A row that feeds the shared state cannot be skipped by a
 // baseline (plan refuses it, because its dependents would send an empty token), and a release

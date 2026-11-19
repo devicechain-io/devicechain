@@ -765,6 +765,7 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 	if registry == nil {
 		registry = runtime.NewRuleRegistry(nil)
 	}
+	groups := max(1, configuredWorkerGroups(ms))
 	rp := &ResolvedEventsProcessor{
 		Microservice:         ms,
 		ResolvedEventsReader: reader,
@@ -776,17 +777,17 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		metrics:              metrics,
 		// Buffered so a burst of published-rule facts does not block the fact consumer on the
 		// loop between resolved-event batches; the loop drains it promptly (rule updates are rare).
-		ruleUpdates: make(chan ruleUpdate, 64),
+		ruleUpdates: make(chan ruleUpdate, 64/groups),
 		// Buffered generously: device create/delete/re-type facts can arrive in bursts (a fleet
 		// provisioning run), and the loop drains one per resolved-event-batch iteration.
-		armUpdates: make(chan armUpdate, 256),
+		armUpdates: make(chan armUpdate, 256/groups),
 		// Buffered generously for the same reason as armUpdates: an attribute config push across a
 		// fleet bursts, and the loop drains one recheck per resolved-event-batch iteration.
-		attrUpdates: make(chan attrUpdate, 256),
-		seriesDrops: make(chan seriesDrop, 256),
+		attrUpdates: make(chan attrUpdate, 256/groups),
+		seriesDrops: make(chan seriesDrop, 256/groups),
 		// Buffered modestly: a fence edit is a human authoring action, so these arrive at
 		// authoring rates rather than at fleet rates, and the loop drains one per iteration.
-		fenceUpdates: make(chan fenceUpdate, 32),
+		fenceUpdates: make(chan fenceUpdate, 32/groups),
 		// Unbuffered on purpose, unlike the three fact channels. A sender here is a request
 		// waiting for an answer, so buffering would only let it queue behind other purges
 		// while its own deadline ran down; the responder already bounds its wait on the
@@ -815,6 +816,9 @@ func (rp *ResolvedEventsProcessor) Initialize(ctx context.Context) error {
 
 // ExecuteInitialize sets up the cancelable loop context.
 func (rp *ResolvedEventsProcessor) ExecuteInitialize(ctx context.Context) error {
+	if err := rp.validateWorkerResources(); err != nil {
+		return err
+	}
 	rp.supCtx, rp.supCancel = context.WithCancel(ctx)
 	rp.stopBegun, rp.signalStop = context.WithCancel(context.Background())
 	rp.newTermContext()
@@ -1596,7 +1600,7 @@ func (rp *ResolvedEventsProcessor) newDetector() detectcore.Detector {
 	if rp.cfg.Shards <= 1 {
 		return detectcore.NewEngine(rp.registry.Cores(), rp.cfg.Lateness)
 	}
-	return rp.observed(detectcore.NewConcurrentSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness))
+	return rp.observed(detectcore.NewConcurrentSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness, rp.shardQueueDepth()))
 }
 
 // restoreDetector rebuilds the live engine from a committed snapshot at the CONFIGURED shard
@@ -1608,7 +1612,7 @@ func (rp *ResolvedEventsProcessor) restoreDetector(payload []byte) (detectcore.D
 	if rp.cfg.Shards <= 1 {
 		return detectcore.Restore(rp.registry.Cores(), rp.cfg.Lateness, payload)
 	}
-	c, err := detectcore.RestoreConcurrentSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness, payload)
+	c, err := detectcore.RestoreConcurrentSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness, payload, rp.shardQueueDepth())
 	if err != nil {
 		return nil, err
 	}
@@ -3104,6 +3108,11 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	published := rp.publishPending(pubCtx)
 	pubCancel()
 	if !published {
+		return false
+	}
+	// The publish can outlast a placement move; the snapshot must not commit across one.
+	if err := rp.checkRulePlacement(); err != nil {
+		rp.refuseRulePlacement(err)
 		return false
 	}
 	if rp.dirty {

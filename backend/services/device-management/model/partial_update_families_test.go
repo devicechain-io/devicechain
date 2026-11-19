@@ -54,6 +54,8 @@ func partialUpdateFamilies() []putest.Family[*Api] {
 		metricDefinitionFamily(),
 		commandDefinitionFamily(),
 		maintenanceWindowFamily(),
+		suppressionWindowFamily(false),
+		suppressionWindowFamily(true),
 		detectionRuleFamily(),
 		geoFenceFamily(),
 		entityGroupFamily(),

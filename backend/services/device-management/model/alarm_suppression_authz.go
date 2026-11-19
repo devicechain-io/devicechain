@@ -25,6 +25,7 @@ func suppressionNarrow(w *AlarmSuppressionWindow) bool {
 	return true
 }
 
+// Narrow-window alarmKeys and bypass edits deliberately require only alarm:write.
 // authorizeSuppressionWrite checks both sides of a partial update, including end/delete.
 func (api *Api) authorizeSuppressionWrite(ctx context.Context, existing, result *AlarmSuppressionWindow) error {
 	scope, err := auth.AuthorizeScoped(ctx, auth.AlarmWrite)
@@ -142,4 +143,53 @@ func intersectSuppressionAnchors(a, b []string) rdb.Anchors {
 		}
 	}
 	return out
+}
+
+// Batch DEVICE ownership under the caller's claims; the whole-window predicate
+// is identical to write authorization, including rejection of broad targets.
+func (api *Api) filterSuppressionWindowsInScope(ctx context.Context, rows []AlarmSuppressionWindow) ([]AlarmSuppressionWindow, error) {
+	scope, scoped := auth.ScopeFromContext(ctx)
+	if !scoped {
+		return rows, nil
+	}
+	tokens := []string{}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		for _, target := range row.Targets {
+			if target.Type == "DEVICE" && !seen[target.Token] {
+				seen[target.Token] = true
+				tokens = append(tokens, target.Token)
+			}
+		}
+	}
+	visible := map[string]bool{}
+	for start := 0; start < len(tokens); start += rdb.MaxLookupKeys {
+		found, err := api.DevicesByToken(ctx, tokens[start:min(start+rdb.MaxLookupKeys, len(tokens))])
+		if err != nil {
+			return nil, err
+		}
+		for _, device := range found {
+			visible[device.Token] = true
+		}
+	}
+	out := make([]AlarmSuppressionWindow, 0, len(rows))
+	for _, row := range rows {
+		allowed := true
+		for _, target := range row.Targets {
+			switch target.Type {
+			case "DEVICE":
+				allowed = allowed && visible[target.Token]
+			case "CUSTOMER":
+				allowed = allowed && slices.Contains(scope.Anchors(), "customer:"+target.Token)
+			case "ENTITY_GROUP":
+				allowed = allowed && slices.Contains(scope.Anchors(), "group:"+target.Token)
+			default:
+				allowed = false
+			}
+		}
+		if allowed {
+			out = append(out, row)
+		}
+	}
+	return out, nil
 }

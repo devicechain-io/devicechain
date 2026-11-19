@@ -141,6 +141,7 @@ func (Alarm) DefaultOrder() string {
 // Search criteria for locating alarms. All facets are optional and AND together;
 // OriginatorToken restricts to a single entity by its (type, token).
 type AlarmSearchCriteria struct {
+	RaisedDuringSuppression *bool
 	rdb.Pagination
 	OriginatorType  *string // entity type of the originator (e.g. "device")
 	OriginatorToken *string // originator entity token (resolved to OriginatorId)

@@ -510,6 +510,10 @@ var timestampFieldsThatRoundTrip = map[string]string{
 		"provisioning profile, and the platform defaults none.",
 	"cancelledAt": "null on both sides: nothing cancels a drill batch. The entry's own " +
 		"comment says so beside the selection.",
+	"startTime": "selected only by alarm-suppression-window, whose interval the probe SENDS as whole " +
+		"UTC seconds: there is no sub-microsecond part to lose, so the create response and the stored row " +
+		"print the same instant.",
+	"endTime": "selected only by alarm-suppression-window; client-supplied whole UTC seconds, as startTime.",
 	"updatedAt": "selected ONLY by semantic-context (TestOnlyTheSemanticContextSelectsUpdatedAt " +
 		"holds that), whose presence is judged by it: setSemanticContext answers with the row " +
 		"re-read after the write, so the response carries the stored microsecond value.",
