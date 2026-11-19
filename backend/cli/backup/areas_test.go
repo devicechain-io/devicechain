@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-k8s/functionalarea"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -38,6 +39,13 @@ func profileAreas(t *testing.T, profile string) []string {
 // fixture that creates every checkpoint stream regardless of deployment.
 func profileBroker(t *testing.T, areas []string) *nats.Conn {
 	t.Helper()
+	return shardedBroker(t, areas, nil)
+}
+
+// shardedBroker reconciles the profile with shardGroups configured, so the group
+// streams are the ones the broker administrator really creates.
+func shardedBroker(t *testing.T, areas []string, shards *config.NatsShardGroupsConfiguration) *nats.Conn {
+	t.Helper()
 	s, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true, JetStream: true, StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +61,7 @@ func profileBroker(t *testing.T, areas []string) *nats.Conn {
 	n := &ms.InstanceConfiguration.Infrastructure.Nats
 	n.Hostname, n.Port = addr.IP.String(), uint32(addr.Port)
 	n.StreamMaxBytes, n.StreamMaxBytesCold, n.KvStateMaxBytes, n.KvCacheMaxBytes = 16<<20, 4<<20, 4<<20, 2<<20
+	n.ShardGroups = shards
 	admin := messaging.NewBrokerAdmin(ms)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -80,7 +89,7 @@ func TestProfileBackupAndRestore(t *testing.T) {
 			defer cancel()
 			blobs := emptyBlobs(t)
 			dir := filepath.Join(t.TempDir(), "set")
-			if err := Create(ctx, nc, "sample", dir, blobs, areas); err != nil {
+			if err := Create(ctx, nc, "sample", dir, blobs, nil, areas); err != nil {
 				t.Fatal(err)
 			}
 			m, err := Inspect(dir)
@@ -108,7 +117,7 @@ func TestProfileBackupAndRestore(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			actions, err := p.Plan(ctx, nc, blobs, areas)
+			actions, err := p.Plan(ctx, nc, blobs, nil, areas)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -121,7 +130,7 @@ func TestProfileBackupAndRestore(t *testing.T) {
 			}
 			// A smaller target must still plan every included snapshot, even for
 			// streams its areas no longer open (they may contain a backlog).
-			smaller, err := p.Plan(ctx, nc, blobs, profileAreas(t, "ingest-only"))
+			smaller, err := p.Plan(ctx, nc, blobs, nil, profileAreas(t, "ingest-only"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -141,19 +150,19 @@ func TestProfileBackupAndRestore(t *testing.T) {
 			}
 			// Refuse even if the target's newly enabled streams have not been
 			// reconciled yet: target intent alone establishes missing coverage.
-			if _, err := p.Plan(ctx, nc, blobs, profileAreas(t, "full")); err == nil || !strings.Contains(err.Error(), "backup has no data") {
+			if _, err := p.Plan(ctx, nc, blobs, nil, profileAreas(t, "full")); err == nil || !strings.Contains(err.Error(), "backup has no data") {
 				t.Fatalf("larger target accepted: %v", err)
 			}
 			js, _ := nc.JetStream()
 			if _, err := js.AddStream(&nats.StreamConfig{Name: dead, Subjects: []string{"leftover.connector"}, Storage: nats.FileStorage}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := p.Plan(ctx, nc, blobs, areas); err == nil {
+			if _, err := p.Plan(ctx, nc, blobs, nil, areas); err == nil {
 				t.Fatal("target with unattested leftover accepted")
 			}
 			// Disabled does not mean disposable: export leftover data too.
 			leftover := filepath.Join(t.TempDir(), "set")
-			if err := Create(ctx, nc, "sample", leftover, blobs, areas); err != nil {
+			if err := Create(ctx, nc, "sample", leftover, blobs, nil, areas); err != nil {
 				t.Fatal(err)
 			}
 			left, err := Inspect(leftover)
@@ -166,7 +175,7 @@ func TestProfileBackupAndRestore(t *testing.T) {
 			if err := js.DeleteStream(capture); err != nil {
 				t.Fatal(err)
 			}
-			if err := Create(ctx, nc, "sample", filepath.Join(t.TempDir(), "set"), blobs, areas); err == nil || !strings.Contains(err.Error(), capture) {
+			if err := Create(ctx, nc, "sample", filepath.Join(t.TempDir(), "set"), blobs, nil, areas); err == nil || !strings.Contains(err.Error(), capture) {
 				t.Fatalf("missing enabled capture accepted: %v", err)
 			}
 			// Both inspect and restore reject forged absence of an enabled stream.

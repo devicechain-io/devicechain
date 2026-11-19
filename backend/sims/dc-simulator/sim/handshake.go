@@ -6,6 +6,7 @@ package sim
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -101,6 +102,23 @@ type Endpoints struct {
 	// the integration token: a network server posts "{Integrations}/{tenant}/{integration}".
 	// Optional like the two above.
 	Integrations string `json:"integrations,omitempty"`
+	// UpdateMgmtGraphQL is the signed artifact catalogue and rollout API.
+	UpdateMgmtGraphQL string `json:"updateMgmtGraphQL,omitempty"`
+}
+
+// ResolveUpdateManagement preserves older records using dcctl's chart endpoint
+// convention. Custom routes must supply an explicit update-management endpoint.
+func (e *Endpoints) ResolveUpdateManagement() error {
+	if strings.TrimSpace(e.UpdateMgmtGraphQL) != "" {
+		return nil
+	}
+	u, err := url.Parse(e.DeviceMgmtGraphQL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "/api/device-management/graphql" || u.RawPath != "" {
+		return fmt.Errorf("endpoints.updateMgmtGraphQL is required: cannot derive it from deviceMgmtGraphQL; supply the update-management GraphQL URL")
+	}
+	u.Path = "/api/update-management/graphql"
+	e.UpdateMgmtGraphQL = u.String()
+	return nil
 }
 
 // Handshake is the local sim record dcctl (Lane B) writes and dc-simulator (Lane

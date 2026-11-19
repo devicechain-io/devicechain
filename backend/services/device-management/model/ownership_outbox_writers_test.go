@@ -41,7 +41,7 @@ func TestADeviceLeavingByADeletedAttributeIsAnnounced(t *testing.T) {
 // of an access scope: the restore's move is announced like any other.
 func TestARestoreThatMovesADeviceIntoAnAccessScopeIsAnnounced(t *testing.T) {
 	api, ctx := configTestApi(t)
-	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(ctx)).AutoMigrate(&EntityRelationshipType{}))
+	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(ctx)).AutoMigrate(&EntityRelationshipType{}, &AlarmSuppressionWindow{}))
 	pub := &captureOwnership{api: api, t: t}
 	api.DeviceOwnershipPublisher = pub
 	seedDeclaredDevice(t, api, ctx, "prof", "dev", []ConfigurationKey{{Key: "climate", ValueType: "STRING"}})

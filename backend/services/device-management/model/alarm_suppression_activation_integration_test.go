@@ -147,3 +147,25 @@ func TestSuppressionPostgresStatusAndWindowPaginationVisibility(t *testing.T) {
 	_, err = r.api.AlarmSuppressionsForDevice(member, "globex-pump", now)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
+
+// Exercise Postgres's jsonb candidate query through the real outbox and APIs.
+func TestSuppressionPostgresOwnershipRefresh(t *testing.T) {
+	r, _ := newSuppressionPostgresRig(t)
+	pub := &captureOwnership{}
+	r.api.DeviceOwnershipPublisher = pub
+	_, err := r.api.RemoveEntityRelationship(r.operator, "acme-pump-to-acme")
+	require.NoError(t, err)
+	r.assign(t, "acme-pump", "globex")
+	_, err = r.api.DrainOwnershipFacts(context.Background(), OwnershipDrainPageSize)
+	require.NoError(t, err)
+	rows, err := r.api.AlarmSuppressionWindows(r.member("customer:globex"))
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	_, err = r.api.AlarmSuppressionWindowByToken(r.member("customer:globex"), "service")
+	require.NoError(t, err)
+	rows, err = r.api.AlarmSuppressionWindows(r.member("customer:acme"))
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	_, err = r.api.AlarmSuppressionWindowByToken(r.member("customer:acme"), "service")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}

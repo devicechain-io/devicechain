@@ -205,6 +205,9 @@ func (l *Lifecycle) Stop() error {
 	if done != nil {
 		<-done
 	}
+	if worker, ok := l.sim.(interface{ StopRun() }); ok {
+		worker.StopRun()
+	}
 	// Freeze only after the loop has genuinely exited, so the elapsed window
 	// covers every emit that counted toward it.
 	l.rt.Stats.Freeze(time.Now())
@@ -359,9 +362,9 @@ func (c *ControlServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Tenant = c.rt.Tenant
 	resp.InstanceId = c.rt.InstanceId
-	resp.DeviceCount = len(c.rt.Devices)
+	resp.DeviceCount = len(c.rt.deviceSnapshot())
 	resp.EmitIntervalMs = c.rt.Load.Interval().Milliseconds()
-	resp.TargetRate = c.rt.Load.TargetRate(len(c.rt.Devices))
+	resp.TargetRate = c.rt.Load.TargetRate(resp.DeviceCount)
 	writeJSON(w, http.StatusOK, resp)
 }
 

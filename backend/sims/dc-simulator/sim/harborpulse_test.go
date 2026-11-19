@@ -497,8 +497,12 @@ func TestHarborpulseChargersFlushTheirOutageReadingsOnRestore(t *testing.T) {
 	}
 	for _, c := range harborTokens(harborCharger, "") {
 		east := m.devices[c].quay == HarborpulseEastQuay
-		if east != (silentTicks[c] > 0) || len(flushed[c]) != silentTicks[c] {
-			t.Errorf("%s: silent %d ticks, flushed %d readings; every silent reading must come back, and only East Quay's go silent",
+		want := 0
+		if east {
+			want = harborBufferNeed(harborpulseDayLength, harborCadence)
+		}
+		if east != (silentTicks[c] > 0) || len(flushed[c]) != want {
+			t.Errorf("%s: silent %d network ticks, flushed %d local log entries; every outage entry must come back, and only East Quay's go silent",
 				c, silentTicks[c], len(flushed[c]))
 		}
 		for i, r := range flushed[c] {

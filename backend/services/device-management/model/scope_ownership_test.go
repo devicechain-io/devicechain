@@ -85,7 +85,7 @@ func ownershipFixture(t *testing.T) (*Api, context.Context, *captureOwnership) {
 	ctx := auth.WithClaims(tenantCtx, &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: "acme",
 		Authorities: []string{"*"}})
 	// The customer-delete cascade's tables, which the hierarchy store does not carry.
-	require.NoError(t, api.RDB.Database.AutoMigrate(&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &EntityGroupMembership{}))
+	require.NoError(t, api.RDB.Database.AutoMigrate(&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &EntityGroupMembership{}, &AlarmSuppressionWindow{}))
 	if err := rdb.CreatePartialUniqueIndex(api.RDB.Database, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
 		t.Fatal(err)
 	}

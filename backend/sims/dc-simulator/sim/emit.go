@@ -102,6 +102,8 @@ func EmitAll(ctx context.Context, rt *Runtime, workers int, metrics MetricsFunc)
 // can reconcile rather than as anything that looks like a bug here.
 func emitEach(ctx context.Context, rt *Runtime, workers int,
 	emit func(i int, d DeviceInstance) (offered bool, err error)) error {
+	rt.devicesMu.RLock()
+	defer rt.devicesMu.RUnlock()
 	devices := rt.Devices
 	if len(devices) == 0 {
 		return nil
@@ -123,6 +125,13 @@ func emitEach(ctx context.Context, rt *Runtime, workers int,
 		go func() {
 			defer wg.Done()
 			for i := range idx {
+				if rt.pausedDevices[devices[i].Token] {
+					mu.Lock()
+					failed++
+					firstErr = fmt.Errorf("device %s paused: replacement credential unavailable or reconnect pending", devices[i].Token)
+					mu.Unlock()
+					continue
+				}
 				offered, err := emit(i, devices[i])
 				if !offered {
 					continue
@@ -228,6 +237,12 @@ func emitMeasurementsAt(ctx context.Context, rt *Runtime, d DeviceInstance, now 
 		return fmt.Errorf("build measurement payload: %w", err)
 	}
 	return postEvent(ctx, rt, d, "Measurement", now, payload)
+}
+
+// HTTPMeasurementBody is the real HTTP ingress shape, also used by credential probes.
+func HTTPMeasurementBody(d DeviceInstance, at time.Time, values map[string]string) ([]byte, error) {
+	stamp := at.UTC().Format(time.RFC3339Nano)
+	return httpEventBody(d, "Measurement", stamp, map[string]interface{}{"entries": []any{map[string]any{"measurements": values, "occurredTime": stamp}}})
 }
 
 // ---- Location -------------------------------------------------------------------
@@ -515,7 +530,7 @@ func postEvent(ctx context.Context, rt *Runtime, d DeviceInstance,
 		// Anything else (a reset, a timeout, a failed read) may have happened after the
 		// request was written, so the store may hold this event: ambiguous, never refused.
 		rt.Identity.Record(OutcomeAmbiguous, d.Token, eventType, occurredTime)
-		return fmt.Errorf("post to ingress %s: %w", url, err)
+		return &ingressOutcomeError{outcome: OutcomeAmbiguous, cause: fmt.Errorf("post to ingress %s: %w", url, err)}
 	}
 	defer resp.Body.Close()
 
@@ -531,9 +546,30 @@ func postEvent(ctx context.Context, rt *Runtime, d DeviceInstance,
 	if refusal != nil {
 		// A governed shed (429) or a backpressure 503: wrapped so EmitAll routes it to
 		// Stats.Shed or Stats.Backpressured rather than Stats.Failed.
-		return fmt.Errorf("ingress %s returned %d (%s): %w", url, resp.StatusCode, strings.TrimSpace(string(raw)), refusal)
+		return &ingressOutcomeError{outcome: outcome, retryAfter: ingressRetryAfter(resp.Header.Get("Retry-After"), time.Now()), cause: fmt.Errorf("ingress %s returned %d (%s): %w", url, resp.StatusCode, strings.TrimSpace(string(raw)), refusal)}
 	}
-	return fmt.Errorf("ingress %s returned %d: %s", url, resp.StatusCode, strings.TrimSpace(string(raw)))
+	return &ingressOutcomeError{outcome: outcome, cause: fmt.Errorf("ingress %s returned %d: %s", url, resp.StatusCode, strings.TrimSpace(string(raw)))}
+}
+
+// ingressOutcomeError preserves postEvent's classification and the server's backoff for
+// callers that retry. Error text and sentinel wrapping remain the ordinary emit contract.
+type ingressOutcomeError struct {
+	outcome    EmitOutcome
+	retryAfter time.Duration
+	cause      error
+}
+
+func (e *ingressOutcomeError) Error() string { return e.cause.Error() }
+func (e *ingressOutcomeError) Unwrap() error { return e.cause }
+
+func ingressRetryAfter(value string, now time.Time) time.Duration {
+	if seconds, err := strconv.Atoi(value); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		return max(0, at.Sub(now))
+	}
+	return time.Second
 }
 
 // jsonRoundTrip marshals v and unmarshals it back into a map[string]interface{}

@@ -13,7 +13,7 @@
 # LoRaWAN gauges decoded by tenant decoders, a signed webhook, an MQTT connector, an escalating
 # mail notification, dynamic groups with a group-scoped rule, CALENDAR and SOLAR campaigns with a
 # holiday, a maintenance window, an asset hierarchy and a typed relationship graph through one
-# 24-minute sim day. scenario-verify reads the platform back over the
+# 24-minute sim day and the following night's rollout. scenario-verify reads the platform back over the
 # tenant GraphQL APIs as the sim's own identity, and the in-cluster sink's record, and judges:
 #
 #   flood-escalates             one flood alarm per gauge, raised at MINOR, escalating in place to
@@ -29,6 +29,14 @@
 #   outage-blast-radius         light-silent / charger-offline for exactly the East Quay devices
 #   backfill-stored             every reading a charger buffered in the outage is stored at the
 #                               time it was taken, and nothing else in the outage: the exact set
+#   ota-artifact-trusted        exact signed synthetic charger firmware and pinned ACTIVE signer
+#   ota-targets-exact           rollout freezes exactly the six chargers in hp-all-chargers
+#   ota-concurrency             platform limit and dispatch timeline peak at two; live samples <= 2
+#   ota-outcomes                north-1 fails verification; every other frozen target updates
+#   burst-rate-limited          real restore HTTP 429s while ordinary traffic fits hp-governed
+#   burst-caught-up             refused entries are retried and stored exactly with original values
+#   replacement-identity       one physical replacement preserves logical identity and readings
+#   replacement-credential     retired credentials disabled and refused by ingress; new one enabled
 #   truck-fence                 truck-in-flood-plain while the truck is in the flood plain fence
 #   well-fill-calculated        each pump's calculated well fill is its level over its well's depth
 #   lora-decoded                each LoRaWAN gauge's uplinks decoded to exactly the level it sent
@@ -84,6 +92,14 @@
 #   wrong-well-depth    --scenario-defect wrong-well-depth  well-fill-calculated
 #   lora-wrong-scale    --scenario-defect lora-wrong-scale  lora-decoded
 #   legacy-decoder-fixed --scenario-defect legacy-decoder-fixed decoder-failure-visible
+#   ota-signature-omitted --scenario-defect ota-signature-omitted ota-artifact-trusted
+#   ota-group-missing-charger --scenario-defect ota-group-missing-charger ota-targets-exact
+#   ota-cap-three       --scenario-defect ota-cap-three       ota-concurrency
+#   ota-failure-disabled --scenario-defect ota-failure-disabled ota-outcomes
+#   burst-unthrottled   --scenario-defect burst-unthrottled (hp-showcase tier) burst-rate-limited
+#   burst-drop-on-429   --scenario-defect burst-drop-on-429   burst-caught-up
+#   replacement-new-device --scenario-defect replacement-new-device replacement-identity
+#   replacement-old-credential-left-live --scenario-defect replacement-old-credential-left-live replacement-credential
 #   attribute-not-updated --scenario-defect attribute-not-updated attribute-threshold-moves
 #   downlink-nack       --scenario-defect downlink-nack       downlink-acknowledged
 #   backfill-wrong-window --scenario-defect backfill-wrong-window backfill-completes
@@ -125,13 +141,13 @@
 # fabricated reports.
 #
 # Knobs: DC_HPRIG_CONTROLS=none runs the clean day alone, or a comma list of control names runs
-# those (all control sims at once is a lot for a laptop); DC_HPRIG_KEEP=1 keeps the sims' tenants
+# those (all control sims at once is a lot for a laptop: with the 34 runs S5 brings, a --compact instance answers previewRule late or partially and every day loses its verdict, so run it in batches, e.g. the eight S5 controls, then the rest); DC_HPRIG_KEEP=1 keeps the sims' tenants
 # afterwards; DC_HPRIG_SIM_PORT is the first sim's control port (the rest follow);
 # DC_HPRIG_SINK_PORT is the loopback port-forward to the sink.
 #
 # Requires: kind, kubectl, docker, jq, curl, go and ko (ko builds the sink image).
-# A run takes about 40 minutes: a sim day is 24 minutes and the verifier waits for the next whole
-# one.
+# A run can take about 50 minutes: the verifier waits for a complete watch, continues through
+# 02:00 the following night and then watches the once-per-run rollout (up to six more minutes).
 
 set -euo pipefail
 
@@ -245,7 +261,7 @@ guard_live() {
 
 guard_not_shared
 
-# The runs: name | simulator flags | the invariant it must turn red ("" for the clean day).
+# The runs: name | simulator flags | invariant (empty for clean) | optional tier | tier config.
 runs=(
   "clean||"
   "attribute-not-updated|--scenario-defect attribute-not-updated|attribute-threshold-moves"
@@ -273,6 +289,14 @@ runs=(
   "lofts-under-basin|--scenario-defect lofts-under-basin|asset-hierarchy"
   "feeder-miswired|--scenario-defect feeder-miswired|feeder-blast-radius"
   "suppression-wrong-device|--scenario-defect suppression-wrong-device|maintenance-holds-page"
+  "ota-signature-omitted|--scenario-defect ota-signature-omitted|ota-artifact-trusted"
+  "ota-group-missing-charger|--scenario-defect ota-group-missing-charger|ota-targets-exact"
+  "ota-cap-three|--scenario-defect ota-cap-three|ota-concurrency"
+  "ota-failure-disabled|--scenario-defect ota-failure-disabled|ota-outcomes"
+  'burst-unthrottled|--scenario-defect burst-unthrottled|burst-rate-limited|hp-showcase|{"calculatedMetricsPerProfile":1}'
+  "burst-drop-on-429|--scenario-defect burst-drop-on-429|burst-caught-up"
+  "replacement-new-device|--scenario-defect replacement-new-device|replacement-identity"
+  "replacement-old-credential-left-live|--scenario-defect replacement-old-credential-left-live|replacement-credential"
 )
 
 # ---------------------------------------------------------------------------
@@ -308,7 +332,7 @@ judge() {
 offline_controls() {
   say "offline controls (no cluster)"
   (cd "$repo_root/backend/sims/dc-simulator" &&
-    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestEachS3bControlTurnsExactlyItsInvariantRed|TestEachS4ControlTurnsExactlyItsInvariantRed|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures|TestFoldedGrowthOfOne|TestNotificationAttemptsAreJudgedOnTheWatchedDayOnly|TestDutyMailIsAttributed|TestMaintenance|TestHarborLamp' ./scenarioverify/ ./sim/ >/dev/null &&
+    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestEachS3bControlTurnsExactlyItsInvariantRed|TestEachS4ControlTurnsExactlyItsInvariantRed|TestEachS5OTAControlModelsLiveEvidence|TestEachS5BurstControlModelsLiveEvidence|TestEachS5ReplacementControlModelsLiveEvidence|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures|TestFoldedGrowthOfOne|TestNotificationAttemptsAreJudgedOnTheWatchedDayOnly|TestDutyMailIsAttributed|TestMaintenance|TestHarborLamp' ./scenarioverify/ ./sim/ >/dev/null &&
     go test -count=1 ./scenariosink/ >/dev/null) ||
     fail "the verifier's or the sink's own controls failed (go test ./scenarioverify/ ./scenariosink/ in backend/sims/dc-simulator)"
   pass "the verifier: a clean day passes, each planted defect turns exactly its invariant red"
@@ -447,6 +471,10 @@ EOF
   note "sink at $ip; the instance admits it with --dev-allow-egress"
   # The chart derives command-delivery routing and event-sources' acknowledgement feed
   # from the outbound adapter switch. Never hand-set those derived flags.
+  # The default profile includes update-management. On this managed kind cluster,
+  # bootstrap supplies the shared filesystem object store (colocated pods) and
+  # the ingress-derived download base automatically.
+  # --compact changes resource sizing, not those area/storage/download defaults.
   # The default profile and --compact keep the service pool at 20 and writers at 10:
   # 10 writers + 1 backfill worker + 4 spare connections fit without a pool overlay.
   cat >"$state_dir/harborpulse-values.yaml" <<'VALUES'
@@ -577,10 +605,10 @@ cmd_run() {
   forward forward-ingest.log "$namespace" svc/event-sources "$ingest_port:8081"
   forward forward-sink.log "$sink_ns" svc/hp-sink "$sink_port:8080"
 
-  local stamp r name flags want port i=0 sims=() hs
+  local stamp r name flags want port i=0 sims=() hs tier tier_config
   stamp="$(date -u +%H%M%S)"
   for r in "${runs[@]}"; do
-    IFS='|' read -r name flags want <<<"$r"
+    IFS='|' read -r name flags want tier tier_config <<<"$r"
     selected "$name" || continue
     port=$((sim_port + i))
     i=$((i + 1))
@@ -588,9 +616,13 @@ cmd_run() {
     say "sim $sname${flags:+ ($flags)}"
     # Registered before the create: a create that fails part-way can still leave its tenant.
     created_sims+=("$sname")
+    local tier_flags=()
+    if [[ -n "$tier" ]]; then
+      tier_flags=(--tier "$tier" --tier-config "$tier_config")
+    fi
     "$dcctl" sim create "$sname" -i "$instance" -s "localhost:$http_port" --kube-context "$kube_context" \
       --ingress "http://localhost:$ingest_port" --mqtt-broker "ssl://localhost:$mqtt_port" \
-      --manifest harborpulse --control-addr "http://127.0.0.1:$port" >"$state_dir/$sname.create.log" 2>&1 ||
+      --manifest harborpulse "${tier_flags[@]}" --control-addr "http://127.0.0.1:$port" >"$state_dir/$sname.create.log" 2>&1 ||
       { tail -5 "$state_dir/$sname.create.log" >&2; fail "dcctl sim create $sname failed"; }
     hs="$(winpath "$HOME/.devicechain/sims/$sname.json")"
     # shellcheck disable=SC2086 # the flags are words on purpose
