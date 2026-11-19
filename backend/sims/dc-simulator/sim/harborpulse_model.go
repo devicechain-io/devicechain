@@ -515,7 +515,7 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 			HarborpulseMaxKwKey:        m.cap[token],
 		}
 		if harborOutage(d.quay, h) {
-			m.recordBuffered(token, harborDayOf(elapsed, m.dayLength), at)
+			m.recordBuffered(token, harborDayOf(elapsed, m.dayLength), at, values[HarborpulseChargerPowerKey])
 			buf := append(m.buffers[token], harborBuffered{at: at, values: values})
 			if len(buf) > m.bufferCap {
 				buf = buf[len(buf)-m.bufferCap:]
@@ -649,7 +649,7 @@ func (m *harborModel) airLocked(token string, h float64) bool {
 }
 
 // recordBuffered files one buffered reading in the outage ledger. Caller holds m.mu.
-func (m *harborModel) recordBuffered(token string, day int, at time.Time) {
+func (m *harborModel) recordBuffered(token string, day int, at time.Time, powerKW float64) {
 	k := harborLedgerKey{token: token, day: day}
 	e := m.ledger[k]
 	stamp := at.UTC().Format(time.RFC3339Nano)
@@ -660,6 +660,7 @@ func (m *harborModel) recordBuffered(token string, day int, at time.Time) {
 	e.Buffered++
 	e.Last = stamp
 	e.Times = append(e.Times, stamp)
+	e.PowerKW = append(e.PowerKW, powerKW)
 }
 
 // harborBufferNeed is how many readings one charger buffers through one feeder outage of a day of
@@ -716,6 +717,7 @@ func (m *harborModel) backfillLedger() []ScenarioBackfill {
 	for _, e := range m.ledger {
 		c := *e
 		c.Times = append([]string(nil), e.Times...)
+		c.PowerKW = append([]float64(nil), e.PowerKW...)
 		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool {

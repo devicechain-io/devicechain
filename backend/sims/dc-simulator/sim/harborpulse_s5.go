@@ -37,13 +37,22 @@ type ScenarioOTA struct {
 
 // ScenarioRestoreDrain holds per-day accounting, never a platform success numerator.
 type ScenarioRestoreDrain struct {
-	Day           int    `json:"day"`
-	Device        string `json:"device"`
-	Buffered      int    `json:"buffered"`
-	Accepted      int    `json:"accepted"`
-	Shed          int    `json:"shed"`
-	Backpressured int    `json:"backpressured"`
-	Ambiguous     int    `json:"ambiguous"`
+	Day            int                      `json:"day"`
+	Offered        int                      `json:"offered"`
+	Accepted       int                      `json:"accepted"`
+	Refused429     int                      `json:"refused429"`
+	Backpressured  int                      `json:"backpressured"`
+	Ambiguous      int                      `json:"ambiguous"`
+	DeadLettered   int                      `json:"deadLettered"`
+	OrdinaryShed   int64                    `json:"ordinaryShed"`
+	FirstRefusalAt string                   `json:"firstRefusalAt,omitempty"`
+	CaughtUpAt     string                   `json:"caughtUpAt,omitempty"`
+	Refused        []ScenarioRestoreRefused `json:"refused,omitempty"`
+}
+
+type ScenarioRestoreRefused struct {
+	Device string   `json:"device"`
+	Times  []string `json:"times"`
 }
 
 type ScenarioReplacement struct {
@@ -70,6 +79,12 @@ func (s *harborpulse) s5Ledger() *ScenarioS5 {
 	}
 	out := *s.s5.ledger
 	out.RestoreDrains = append([]ScenarioRestoreDrain(nil), out.RestoreDrains...)
+	for i := range out.RestoreDrains {
+		out.RestoreDrains[i].Refused = append([]ScenarioRestoreRefused(nil), out.RestoreDrains[i].Refused...)
+		for j := range out.RestoreDrains[i].Refused {
+			out.RestoreDrains[i].Refused[j].Times = append([]string(nil), out.RestoreDrains[i].Refused[j].Times...)
+		}
+	}
 	if out.Replacement != nil {
 		r := *out.Replacement
 		r.RetiredCredentialTokens = append([]string(nil), r.RetiredCredentialTokens...)
@@ -89,7 +104,7 @@ func (s *harborpulse) s5Beats(ctx context.Context, rt *Runtime, now time.Time) e
 	if s.s5.rolloutDone {
 		return nil
 	}
-	if s.s5.ledger == nil {
+	if s.s5.ledger == nil || s.s5.ledger.OTA.Artifact == "" {
 		return nil
 	} // unit-driven telemetry without bootstrap has no OTA population
 	if err := s.rolloutChargers(ctx, rt, started); err != nil {

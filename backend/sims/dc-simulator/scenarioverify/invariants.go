@@ -520,10 +520,10 @@ func outageBlastRadius(o Observations) error {
 	return nil
 }
 
-// backfillStored: every reading an East Quay charger buffered through the outage is stored, at
+// backfillStored: every never-refused reading an East Quay charger buffered is stored, at
 // the time it was TAKEN, and nothing else is stored in the outage. The window [First, Last] holds
 // no live reading (the charger sent nothing live while its feeder was down), so the times stored
-// there must be EXACTLY the ledger's times: a platform that stamped the arrival time stores none
+// there must be ledger times. Refused entries belong to burst-caught-up. A platform that stamped the arrival time stores none
 // there, one that lost a reading stores one fewer, and one that rewrote a time stores one the
 // ledger does not have — at the same count.
 func backfillStored(o Observations) error {
@@ -552,7 +552,7 @@ func backfillStored(o Observations) error {
 		stored := map[int64]bool{}
 		var extra []string
 		for _, t := range b.Stored {
-			if t.Before(b.First.Add(-time.Millisecond)) || t.After(b.Last.Add(time.Millisecond)) {
+			if t.Before(o.at(sim.HarborpulseOutageFrom)) || !t.Before(o.at(sim.HarborpulseOutageTo)) {
 				continue
 			}
 			stored[t.UnixMicro()] = true
@@ -561,8 +561,9 @@ func backfillStored(o Observations) error {
 			}
 		}
 		missing := 0
+		refused := restoreRefused(o, b.Device)
 		for us := range taken {
-			if !stored[us] {
+			if !refused[us] && !stored[us] {
 				missing++
 			}
 		}

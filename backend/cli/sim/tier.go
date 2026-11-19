@@ -44,11 +44,8 @@ var TowerpulseShowcaseTier = TierSpec{
 	},
 }
 
-// manifestTiers maps a manifest id to the tier it needs. A manifest absent here is packaged at
-// DefaultTenantTier.
-// HarborpulseShowcaseTier is the tier dcctl sim create packages a harborpulse sim at: each pump's
-// well fill is a calculated metric, so the pump profile needs one. Ingest stays at the platform
-// default, which the 37 devices are well under.
+// HarborpulseShowcaseTier is the ordinary-tier control for burst-unthrottled, selected
+// explicitly by the rig with --tier/--tier-config. Each pump needs one calculated metric.
 var HarborpulseShowcaseTier = TierSpec{
 	Token:       "hp-showcase",
 	Name:        "Harborpulse showcase",
@@ -58,9 +55,29 @@ var HarborpulseShowcaseTier = TierSpec{
 	},
 }
 
+// HarborpulseGovernedTier fits ordinary ticks but deliberately sheds the restore burst.
+// HarborpulseDefaultIngestBaseline measures 90..116 readings/tick (116 at restore),
+// and 144 restore readings at the default 5s cadence. 150 >= 1.25*116;
+// 32*5 >= 150; 144 > (150-116)+32*1s. The simulator test parses these literals.
+// event-sources' limiters are process-local, with separate buckets for HTTP and
+// integrations, not distributed across replicas. The baseline conservatively counts
+// both; HTTP alone offers 108 at restore and 144 > (150-108)+32*1s as well.
+// The rig uses a compact, single-replica instance.
+var HarborpulseGovernedTier = TierSpec{
+	Token:       "hp-governed",
+	Name:        "Harborpulse governed restore",
+	Description: "Created by dcctl sim create for harborpulse: ordinary traffic fits; restore is rate limited and retried.",
+	Config: map[string]int{
+		"calculatedMetricsPerProfile": 1,
+		"ingestReadingsPerSecond":     32,
+		"ingestBurst":                 150,
+	},
+}
+
+// manifestTiers maps a manifest id to its required tier, otherwise DefaultTenantTier.
 var manifestTiers = map[string]TierSpec{
 	"towerpulse":  TowerpulseShowcaseTier,
-	"harborpulse": HarborpulseShowcaseTier,
+	"harborpulse": HarborpulseGovernedTier,
 }
 
 // CustomTier builds the TierSpec for an operator-named tier from a JSON object of integer

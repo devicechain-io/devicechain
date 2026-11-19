@@ -66,8 +66,9 @@ type harborpulse struct {
 	scheduled map[int]bool
 	jobs      []ScenarioJob
 
-	s3b harborS3bState
-	s5  harborS5State
+	s3b     harborS3bState
+	s5      harborS5State
+	restore harborRestoreQueue
 }
 
 // NewHarborpulse returns the harborpulse Sim seeded from the handshake. Prefer NewSim.
@@ -116,6 +117,7 @@ const (
 func HarborpulseDefects() []string {
 	return []string{
 		HarborpulseDefectAirLockBasin, HarborpulseDefectAttributeNotUpdated, HarborpulseDefectBackfillWrongWindow,
+		HarborpulseDefectBurstDropOn429, HarborpulseDefectBurstUnthrottled,
 		HarborpulseDefectDownlinkNack, HarborpulseDefectDropBackfill, HarborpulseDefectEastLampMislabelled,
 		HarborpulseDefectFeederMiswired, HarborpulseDefectFloodClearBetweenTiers, HarborpulseDefectFloodSplitKey,
 		HarborpulseDefectFlushUngated, HarborpulseDefectHolidayDropped, HarborpulseDefectLampUnsited,
@@ -148,6 +150,7 @@ type harborDefects struct {
 	holidayDropped, flushUngated, loftsUnderBasin, feederMiswired                bool
 	attributeNotUpdated, downlinkNack, backfillWrongWindow                       bool
 	otaSignatureOmitted, otaGroupMissingCharger, otaCapThree, otaFailureDisabled bool
+	burstDropOn429                                                               bool
 	names                                                                        []string
 }
 
@@ -177,6 +180,8 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 	d := harborDefects{names: names}
 	for _, n := range names {
 		switch n {
+		case HarborpulseDefectBurstDropOn429:
+			d.burstDropOn429 = true
 		case HarborpulseDefectOTASignatureOmitted:
 			d.otaSignatureOmitted = true
 		case HarborpulseDefectOTAGroupMissingCharger:
@@ -876,6 +881,8 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	model.advanceTo(elapsed)
 	workers := rt.Load.Workers(len(rt.Devices))
 	stamp := now.UTC().Truncate(time.Microsecond)
+	s.restore.beginTick()
+	shedBefore := rt.Stats.Shed.Load()
 
 	measErr := EmitAll(ctx, rt, workers, func(_ int, d DeviceInstance) map[string]float64 {
 		return model.reading(d.Token, elapsed, stamp)
@@ -889,14 +896,12 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	if locErr != nil {
 		log.Error().Err(locErr).Msg("emit harborpulse locations failed")
 	}
-	backErr := s.flushBackfill(ctx, rt, model, elapsed)
-	if backErr != nil {
-		log.Error().Err(backErr).Msg("flush harborpulse buffered readings failed")
-	}
 	loraErr := s.sendLoraUplinks(ctx, rt, model, elapsed, stamp)
 	if loraErr != nil {
 		log.Error().Err(loraErr).Msg("send harborpulse LoRaWAN uplinks failed")
 	}
+	backErr := s.flushBackfill(ctx, rt, model, elapsed)
+	s.restore.completeTick(s, harborDayOf(elapsed, s.dayLength), rt.Stats.Shed.Load()-shedBefore)
 	jobErr := s.scheduleDay(ctx, rt, now)
 	if jobErr != nil {
 		log.Error().Err(jobErr).Msg("schedule the harborpulse day's jobs failed; retrying next tick")
@@ -911,37 +916,10 @@ func (s *harborpulse) startedAt() time.Time {
 	return s.started
 }
 
-// flushBackfill sends the readings chargers buffered while their feeder was down, oldest first,
-// each with the time it was TAKEN. A reading the ingress did not accept goes back on the
-// device's buffer, as a store-and-forward device keeps what it has not delivered.
+// flushBackfill only transfers ownership to the bounded restore queue. Tick never sends it.
 func (s *harborpulse) flushBackfill(ctx context.Context, rt *Runtime, model *harborModel, elapsed time.Duration) error {
-	pending := model.takeBackfill(elapsed)
-	if len(pending) == 0 {
-		return nil
-	}
-	byToken := make(map[string]DeviceInstance, len(rt.Devices))
-	for _, d := range rt.Devices {
-		byToken[d.Token] = d
-	}
-	var errs []error
-	for _, p := range pending {
-		token, readings := p.token, p.readings
-		d, ok := byToken[token]
-		if !ok {
-			continue
-		}
-		for i, r := range readings {
-			err := emitMeasurementsAt(ctx, rt, d, r.at.Format(time.RFC3339Nano), wireMeasurements(r.values))
-			if err != nil {
-				rt.Stats.Failed.Add(1)
-				model.requeue(token, readings[i:])
-				errs = append(errs, fmt.Errorf("%s: %w", token, err))
-				break
-			}
-			rt.Stats.Emitted.Add(1)
-		}
-	}
-	return errors.Join(errs...)
+	s.restore.enqueue(ctx, s, rt, model.takeBackfill(elapsed), harborDayOf(elapsed, s.dayLength))
+	return nil
 }
 
 // CommandHandler is the device side of every command the district is sent: each one is applied

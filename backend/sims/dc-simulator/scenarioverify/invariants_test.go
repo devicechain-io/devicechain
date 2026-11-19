@@ -337,17 +337,26 @@ func TestEachControlTurnsExactlyItsInvariantRed(t *testing.T) {
 				for i := range d.backfill {
 					st := d.backfill[i].Stored
 					for j := 1; j < len(st)-1; j++ {
-						st[j] = st[j].Add(time.Second)
+						if !restoreRefused(d.observe(), d.backfill[i].Device)[st[j].UnixMicro()] {
+							st[j] = st[j].Add(time.Second)
+						}
 					}
 				}
 			},
 		},
 		{
 			name: "backfill stamped with its arrival time", defect: "(none: the platform defect the check exists for)", want: InvBackfillStored,
-			because: "0 stored",
+			because: "missing",
 			mutate: func(d *day) {
 				for i := range d.backfill {
-					d.backfill[i].Stored = []time.Time{at(21.3)}
+					b := &d.backfill[i]
+					var kept []time.Time
+					for _, stamp := range b.Stored {
+						if restoreRefused(d.observe(), b.Device)[stamp.UnixMicro()] {
+							kept = append(kept, stamp)
+						}
+					}
+					b.Stored = append(kept, at(21.3))
 				}
 			},
 		},

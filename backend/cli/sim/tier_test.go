@@ -197,7 +197,7 @@ func TestOnlyScenariosThatNeedATierAreMapped(t *testing.T) {
 	if spec, ok := TierForManifest("towerpulse"); !ok || spec.Token != "tp-showcase" {
 		t.Fatalf("towerpulse: %v %v", spec, ok)
 	}
-	if spec, ok := TierForManifest("harborpulse"); !ok || spec.Token != "hp-showcase" || spec.Config["calculatedMetricsPerProfile"] < 1 {
+	if spec, ok := TierForManifest("harborpulse"); !ok || spec.Token != "hp-governed" || spec.Config["calculatedMetricsPerProfile"] != 1 || spec.Config["ingestReadingsPerSecond"] != 32 || spec.Config["ingestBurst"] != 150 {
 		t.Fatalf("harborpulse: %v %v", spec, ok)
 	}
 	for _, id := range KnownManifestIds {

@@ -18,6 +18,8 @@ const (
 	InvOTATargetsExact    = "ota-targets-exact"
 	InvOTAConcurrency     = "ota-concurrency"
 	InvOTAOutcomes        = "ota-outcomes"
+	InvBurstRateLimited   = "burst-rate-limited"
+	InvBurstCaughtUp      = "burst-caught-up"
 )
 
 func init() {
@@ -25,6 +27,8 @@ func init() {
 	Controls[InvOTATargetsExact] = sim.HarborpulseDefectOTAGroupMissingCharger
 	Controls[InvOTAConcurrency] = sim.HarborpulseDefectOTACapThree
 	Controls[InvOTAOutcomes] = sim.HarborpulseDefectOTAFailureDisabled
+	Controls[InvBurstRateLimited] = sim.HarborpulseDefectBurstUnthrottled
+	Controls[InvBurstCaughtUp] = sim.HarborpulseDefectBurstDropOn429
 }
 
 func s5Checks() []struct {
@@ -37,7 +41,134 @@ func s5Checks() []struct {
 	}{
 		{InvOTAArtifactTrusted, otaArtifactTrusted}, {InvOTATargetsExact, otaTargetsExact},
 		{InvOTAConcurrency, otaConcurrency}, {InvOTAOutcomes, otaOutcomes},
+		{InvBurstRateLimited, burstRateLimited}, {InvBurstCaughtUp, burstCaughtUp},
 	}
+}
+
+// Two wall minutes allow 24 retry opportunities at the default cadence. The measured
+// burst needs about five ordinary-tick headrooms to drain, leaving ample room for
+// ingress latency without silently accepting a queue stuck for the rest of the day.
+const restoreDeadline = 2 * time.Minute
+
+func restoreDay(o Observations) *sim.ScenarioRestoreDrain {
+	if o.S5.Ledger != nil {
+		for i := range o.S5.Ledger.RestoreDrains {
+			if o.S5.Ledger.RestoreDrains[i].Day == o.Day {
+				return &o.S5.Ledger.RestoreDrains[i]
+			}
+		}
+	}
+	return nil
+}
+
+func restoreRefused(o Observations, device string) map[int64]bool {
+	out := map[int64]bool{}
+	if l := restoreDay(o); l != nil {
+		for _, d := range l.Refused {
+			if d.Device == device {
+				for _, stamp := range d.Times {
+					if at, err := time.Parse(time.RFC3339Nano, stamp); err == nil {
+						out[at.UnixMicro()] = true
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+func burstRateLimited(o Observations) error {
+	l := restoreDay(o)
+	if l == nil {
+		return fmt.Errorf("no restore drain ledger for sim day %d", o.Day)
+	}
+	if l.OrdinaryShed != 0 {
+		return fmt.Errorf("ordinaryShed=%d: tier is mis-sized and sheds ordinary traffic", l.OrdinaryShed)
+	}
+	if l.Refused429 < 1 {
+		return fmt.Errorf("no real ingress 429: refused429=%d, backpressured=%d (503s are separate), ambiguous=%d", l.Refused429, l.Backpressured, l.Ambiguous)
+	}
+	return nil
+}
+
+func burstCaughtUp(o Observations) error {
+	l := restoreDay(o)
+	if l == nil {
+		return fmt.Errorf("no restore drain ledger for sim day %d", o.Day)
+	}
+	if l.DeadLettered != 0 {
+		return fmt.Errorf("restore deadLettered=%d", l.DeadLettered)
+	}
+	if l.Offered < 1 {
+		return fmt.Errorf("restore offered no entries")
+	}
+	if err := validateRestoreLedger(o.S5.Ledger); err != nil {
+		return err
+	}
+	known := setOf(fleetOf(sim.HarborpulseChargerType, sim.HarborpulseOutageQuay))
+	refusedCount := 0
+	for _, d := range l.Refused {
+		if !known[d.Device] {
+			return fmt.Errorf("refused entry for unexpected device %s", d.Device)
+		}
+		refusedCount += len(d.Times)
+	}
+	if l.Refused429 > 0 && refusedCount == 0 {
+		return fmt.Errorf("429 drain has no refused taken times")
+	}
+	end := o.at(sim.HarborpulseOutageTo)
+	caught, err := time.Parse(time.RFC3339Nano, l.CaughtUpAt)
+	if err != nil || caught.Before(end) || caught.After(end.Add(restoreDeadline)) {
+		return fmt.Errorf("restore did not catch up by %s (caughtUpAt=%q)", end.Add(restoreDeadline).Format(time.RFC3339Nano), l.CaughtUpAt)
+	}
+	for _, device := range fleetOf(sim.HarborpulseChargerType, sim.HarborpulseOutageQuay) {
+		var b *Backfill
+		for i := range o.Backfill {
+			if o.Backfill[i].Device == device {
+				b = &o.Backfill[i]
+				break
+			}
+		}
+		if b == nil {
+			return fmt.Errorf("no taken/store evidence for %s", device)
+		}
+		counts := map[int64]int{}
+		for _, at := range b.Stored {
+			if at.Before(o.at(sim.HarborpulseOutageFrom)) || !at.Before(end) {
+				continue
+			}
+			counts[at.UnixMicro()]++
+			if counts[at.UnixMicro()] > 1 {
+				return fmt.Errorf("%s duplicate stored power_kw at %s", device, at.Format(time.RFC3339Nano))
+			}
+		}
+		refused := restoreRefused(o, device)
+		for us := range refused {
+			index := -1
+			for i, taken := range b.Taken {
+				if taken.UnixMicro() == us {
+					index = i
+					break
+				}
+			}
+			if index < 0 || len(b.PowerKW) != len(b.Taken) {
+				return fmt.Errorf("%s refused entry has no taken value at %d", device, us)
+			}
+			if counts[us] != 1 {
+				return fmt.Errorf("%s refused entry at %d stored %d times, want exactly once", device, us, counts[us])
+			}
+			matches := 0
+			for _, r := range b.PowerStored {
+				if r.At.UnixMicro() == us && r.Value == b.PowerKW[index] {
+					matches++
+				}
+			}
+			if matches != 1 {
+				return fmt.Errorf("%s refused power_kw at %d differs from taken value %v", device, us, b.PowerKW[index])
+			}
+		}
+	}
+	return nil
 }
 
 func missingRollout(s S5) error {

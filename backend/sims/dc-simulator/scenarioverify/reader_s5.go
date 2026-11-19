@@ -83,6 +83,9 @@ func readS5(ctx context.Context, r *Reader, o *Observations, ledger *sim.Scenari
 	if ledger == nil {
 		return fmt.Errorf("the sim's /status carries no S5 ledger")
 	}
+	if err := validateRestoreLedger(ledger); err != nil {
+		return err
+	}
 	l := ledger.OTA
 	var artifact struct{ Artifact *OTAArtifact }
 	if err := r.session.Query(ctx, r.endpoints.UpdateMgmtGraphQL, queryS5Artifact, map[string]any{"token": l.Artifact}, &artifact); err != nil {
@@ -126,6 +129,29 @@ func readS5(ctx context.Context, r *Reader, o *Observations, ledger *sim.Scenari
 			}
 		}
 		o.S5.Assignments[target.AssignmentToken] = got.UpdateAssignment
+	}
+	return nil
+}
+
+// Bad declaration timestamps cannot silently turn a refused entry into an unrefused
+// one. They are unavailable evidence, like an unreadable platform response.
+func validateRestoreLedger(ledger *sim.ScenarioS5) error {
+	for _, l := range ledger.RestoreDrains {
+		for _, stamp := range []string{l.FirstRefusalAt, l.CaughtUpAt} {
+			if stamp != "" {
+				if _, err := time.Parse(time.RFC3339Nano, stamp); err != nil {
+					return fmt.Errorf("restore ledger timestamp: %w", err)
+				}
+			}
+		}
+		for _, d := range l.Refused {
+			for _, stamp := range d.Times {
+				at, err := time.Parse(time.RFC3339Nano, stamp)
+				if err != nil || at.Nanosecond()%1000 != 0 {
+					return fmt.Errorf("restore refused time %q is not a microsecond instant", stamp)
+				}
+			}
+		}
 	}
 	return nil
 }

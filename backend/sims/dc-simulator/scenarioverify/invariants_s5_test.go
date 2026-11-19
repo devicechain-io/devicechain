@@ -39,6 +39,88 @@ func (d *day) cleanS5() {
 	s.Ledger.OTA.StartedAt = at(26).Format(time.RFC3339Nano)
 	s.Rollout.StartedAt = s.Ledger.OTA.StartedAt
 	d.s5 = s
+	d.cleanRestore()
+}
+
+func (d *day) cleanRestore() {
+	l := sim.ScenarioRestoreDrain{Day: 0, Refused429: 2, FirstRefusalAt: at(21.25).Add(time.Second).Format(time.RFC3339Nano), CaughtUpAt: at(21.25).Add(25 * time.Second).Format(time.RFC3339Nano)}
+	for i := range d.backfill {
+		b := &d.backfill[i]
+		for j, taken := range b.Taken {
+			value := 3.7 + float64(j)/100
+			b.PowerKW = append(b.PowerKW, value)
+			b.PowerStored = append(b.PowerStored, Reading{Name: sim.HarborpulseChargerPowerKey, At: taken, Value: value})
+		}
+		// The HTTP tick spends 108, leaving 42/150 tokens. Ten four-value
+		// restores fit; the eleventh receives a real 429 and is retried next tick.
+		l.Refused = append(l.Refused, sim.ScenarioRestoreRefused{Device: b.Device, Times: []string{b.Taken[10].Format(time.RFC3339Nano)}})
+		l.Offered += b.Buffered
+		l.Accepted += b.Buffered
+	}
+	d.s5.Ledger.RestoreDrains = []sim.ScenarioRestoreDrain{l}
+}
+
+func TestEachS5BurstControlModelsLiveEvidence(t *testing.T) {
+	t.Run(sim.HarborpulseDefectBurstUnthrottled, func(t *testing.T) {
+		evaluateOneRed(t, InvBurstRateLimited, "no real ingress 429", func(d *day) {
+			l := &d.s5.Ledger.RestoreDrains[0]
+			l.Refused429 = 0
+			l.FirstRefusalAt = ""
+			l.Refused = nil
+			l.CaughtUpAt = at(21.25).Add(time.Second).Format(time.RFC3339Nano)
+		})
+	})
+	t.Run(sim.HarborpulseDefectBurstDropOn429, func(t *testing.T) {
+		evaluateOneRed(t, InvBurstCaughtUp, "stored 0 times", func(d *day) {
+			// Only the FIRST 429 entry of the day's whole drain is discarded.
+			b := &d.backfill[0]
+			b.Stored = append(b.Stored[:10], b.Stored[11:]...)
+			b.PowerStored = append(b.PowerStored[:10], b.PowerStored[11:]...)
+			d.s5.Ledger.RestoreDrains[0].Accepted--
+		})
+	})
+	t.Run(sim.HarborpulseDefectDropBackfill, func(t *testing.T) {
+		evaluateOneRed(t, InvBackfillStored, "missing", func(d *day) {
+			l := &d.s5.Ledger.RestoreDrains[0]
+			for i := range d.backfill {
+				b := &d.backfill[i]
+				var stored []time.Time
+				var rows []Reading
+				for j, stamp := range b.Stored {
+					if (j+1)%5 != 0 {
+						stored = append(stored, stamp)
+						rows = append(rows, b.PowerStored[j])
+					} else {
+						l.Offered--
+						l.Accepted--
+					}
+				}
+				b.Stored, b.PowerStored = stored, rows
+				// Its first ten offers now skip the lost fifth/tenth samples;
+				// the eleventh offer is original sample 13, which was retained.
+				l.Refused[i].Times = []string{b.Taken[12].Format(time.RFC3339Nano)}
+			}
+		})
+	})
+}
+
+func TestS5BurstStoreDeadlineAndRateGuards(t *testing.T) {
+	for name, mutate := range map[string]func(*day){
+		"duplicate": func(d *day) {
+			b := &d.backfill[0]
+			b.Stored = append(b.Stored, b.Stored[0])
+			b.PowerStored = append(b.PowerStored, b.PowerStored[0])
+		},
+		"wrong value": func(d *day) { d.backfill[0].PowerStored[10].Value = 99 },
+		"late": func(d *day) {
+			d.s5.Ledger.RestoreDrains[0].CaughtUpAt = at(21.25).Add(restoreDeadline + time.Second).Format(time.RFC3339Nano)
+		},
+		"dead letter": func(d *day) { d.s5.Ledger.RestoreDrains[0].DeadLettered = 1 },
+	} {
+		t.Run(name, func(t *testing.T) { evaluateOneRed(t, InvBurstCaughtUp, "", mutate) })
+	}
+	evaluateOneRed(t, InvBurstRateLimited, "mis-sized", func(d *day) { d.s5.Ledger.RestoreDrains[0].OrdinaryShed = 1 })
+	evaluateOneRed(t, InvBurstRateLimited, "backpressured=9", func(d *day) { l := &d.s5.Ledger.RestoreDrains[0]; l.Refused429 = 0; l.Backpressured = 9 })
 }
 
 // evaluateRed models unavoidable collateral without weakening evaluateOneRed.
@@ -209,4 +291,23 @@ func TestS5StuckRolloutFailsAndProgressMustMatch(t *testing.T) {
 	if err := otaOutcomes(Observations{S5: s}); err == nil {
 		t.Fatal("inconsistent progress passed")
 	}
+}
+
+func TestS5NorthFailureRequiresVerificationCode(t *testing.T) {
+	s := cleanDay().s5
+	for _, a := range s.Assignments {
+		if a.DeviceToken == sim.HarborpulseFailedCharger {
+			a.Attempt.Failure.Code = "OTHER_FAILURE"
+		}
+	}
+	if err := otaOutcomes(Observations{S5: s}); err == nil {
+		t.Fatal("north-1 failure code was not checked")
+	}
+}
+
+func TestS5BackfillRejectsInventedReadingOutsideTakenSpan(t *testing.T) {
+	evaluateOneRed(t, InvBackfillStored, "never took", func(d *day) {
+		b := &d.backfill[0]
+		b.Stored = append(b.Stored, at(sim.HarborpulseOutageFrom).Add(time.Microsecond))
+	})
 }

@@ -93,6 +93,8 @@ type ScenarioBackfill struct {
 	// Times is when each buffered reading was taken, oldest first, RFC 3339 with nanoseconds: the
 	// exact set a verifier holds the stored readings in [First, Last] to.
 	Times []string `json:"times"`
+	// PowerKW parallels Times: the value TAKEN, before any delivery or retry.
+	PowerKW []float64 `json:"powerKw"`
 }
 
 // ScenarioClockReporter is a Sim with a compressed day to report on /status.
