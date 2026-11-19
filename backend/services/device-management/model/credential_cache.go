@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/config"
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
@@ -261,11 +262,13 @@ func (c *CredentialCache) fill(key credentialKey, presentedType string, cred *De
 		key: key,
 		dev: deviceKey{tenant: cred.TenantId, deviceId: cred.DeviceId},
 		cred: DeviceCredential{
-			DeviceId:       cred.DeviceId,
-			CredentialType: cred.CredentialType,
-			SecretDigest:   cred.SecretDigest,
-			Enabled:        true,
-			ExpiresAt:      cred.ExpiresAt,
+			DeviceCredential: identity.DeviceCredential{
+				DeviceId:       cred.DeviceId,
+				CredentialType: cred.CredentialType,
+				SecretDigest:   cred.SecretDigest,
+				Enabled:        true,
+				ExpiresAt:      cred.ExpiresAt,
+			},
 		},
 		device:  cloneDevice(cred.Device),
 		expires: expires,

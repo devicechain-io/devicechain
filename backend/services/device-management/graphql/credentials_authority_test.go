@@ -85,13 +85,14 @@ func seedAccessTokenCredential(t *testing.T, ctx context.Context) *model.DeviceC
 		t.Fatalf("seed device: %v", err)
 	}
 
-	cred := &model.DeviceCredential{
-		DeviceId:       device.ID,
-		CredentialType: string(model.CredentialAccessToken),
-		CredentialId:   "the-bearer-5f989616",
-		SecretDigest:   sql.NullString{String: dmtest.SecretDigest("acme", "stored-secret"), Valid: true},
-		Enabled:        true,
-	}
+	// The row's fields are set one by one: a composite literal would have to name the embedded
+	// identity.DeviceCredential, and this package has no other reason to import identity.
+	cred := &model.DeviceCredential{}
+	cred.DeviceId = device.ID
+	cred.CredentialType = string(model.CredentialAccessToken)
+	cred.CredentialId = "the-bearer-5f989616"
+	cred.SecretDigest = sql.NullString{String: dmtest.SecretDigest("acme", "stored-secret"), Valid: true}
+	cred.Enabled = true
 	cred.Token = "dozer-01-cred"
 	if err := api.RDB.DB(ctx).Create(cred).Error; err != nil {
 		t.Fatalf("seed credential: %v", err)

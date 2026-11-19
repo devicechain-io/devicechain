@@ -2,13 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package identity is device identity and credentials, being carved out of package model:
-// trust anchors, the x509 revocation store, and (in later steps) credentials, provisioning,
-// claims and session kicks.
+// trust anchors, the x509 revocation store, the device credential row and its vocabulary, the
+// pure x509 checks and rules, and (in later steps) provisioning, claims and session kicks.
 //
-// The carve goes leaf first. This step moves the trust-anchor and revocation-store entities,
-// which depend on nothing else in model. The code that works on them through model's *Api stays
-// in model for now. model re-exports every name here as an alias, so the rest of the service
-// is unchanged, and the tables, encodings and served shapes are the same types as before.
+// The carve goes leaf first. The entities moved so far depend on nothing else in model. The
+// code that works on them through model's *Api stays in model for now. model re-exports every
+// name here as an alias, so the rest of the service is unchanged, and the tables, encodings and
+// served shapes are the same types as before. The one exception is the credential: its row is
+// here, and model.DeviceCredential is a struct that embeds it and adds the Device association,
+// which belongs to the registry. GORM flattens the embedding, so the table and its columns are
+// unchanged.
 //
 // 🔴 IT IMPORTS NOTHING OF device-management. model imports it, so an import back would be a
 // cycle, and any other edge would make this a second way into the domain.

@@ -5,23 +5,10 @@ package model
 
 import (
 	"database/sql"
-	"net/url"
-	"strings"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 )
-
-// MaxOcspResponderUrlLength bounds an anchor's responder URL (the column is varchar(2048)).
-const MaxOcspResponderUrlLength = 2048
-
-// OcspPolicy is the instance-wide part of the OCSP check, from the fixed configuration. The zero
-// value is the safe one: nothing may be switched on.
-type OcspPolicy struct {
-	// Enabled is the master switch (deviceManagement.callout.ocsp.enabled).
-	Enabled bool
-	// AllowRequireCurrent additionally lets an anchor use REQUIRE_CURRENT.
-	AllowRequireCurrent bool
-}
 
 // SetOcspPolicy installs the policy. It is called once while the service wires itself.
 func (api *Api) SetOcspPolicy(p OcspPolicy) { api.ocspPolicy.Store(&p) }
@@ -32,37 +19,6 @@ func (api *Api) OcspPolicy() OcspPolicy {
 		return *p
 	}
 	return OcspPolicy{}
-}
-
-// ocspModeFromEnum is the mode for a GraphQL enum name.
-func ocspModeFromEnum(name string) (x509trust.OCSPMode, bool) {
-	if m := x509trust.OCSPMode(name); m.Valid() {
-		return m, true
-	}
-	return "", false
-}
-
-// validateOcspResponderUrl refuses a URL that cannot be a responder: http or https only, a host,
-// no userinfo, no fragment. It is advice at write time; the egress guard at dial time is the
-// boundary (a host that resolves to a private address passes here and is refused there).
-func validateOcspResponderUrl(raw string) error {
-	if len(raw) > MaxOcspResponderUrlLength {
-		return invalidAnchor("ocspResponderUrl is at most %d characters", MaxOcspResponderUrlLength)
-	}
-	if strings.TrimSpace(raw) != raw || raw == "" {
-		return invalidAnchor("ocspResponderUrl must be an http or https URL with no surrounding space")
-	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-		return invalidAnchor("ocspResponderUrl must be an http or https URL with a host")
-	}
-	if u.User != nil {
-		return invalidAnchor("ocspResponderUrl must not carry credentials")
-	}
-	if strings.Contains(raw, "#") {
-		return invalidAnchor("ocspResponderUrl must not carry a fragment")
-	}
-	return nil
 }
 
 // applyOcspSettings folds the OCSP mode and responder URL of an anchor update onto the locked
@@ -86,20 +42,20 @@ func (api *Api) applyOcspSettings(locked *DeviceTrustAnchor, request *DeviceTrus
 	respUrl := locked.OcspResponderUrlOf()
 	if request.OcspMode.Set {
 		if request.OcspMode.Value == nil {
-			return invalidAnchor("ocspMode cannot be cleared: send OFF, ENFORCE_KNOWN or REQUIRE_CURRENT")
+			return identity.InvalidAnchor("ocspMode cannot be cleared: send OFF, ENFORCE_KNOWN or REQUIRE_CURRENT")
 		}
-		m, ok := ocspModeFromEnum(*request.OcspMode.Value)
+		m, ok := identity.OcspModeFromEnum(*request.OcspMode.Value)
 		if !ok {
-			return invalidAnchor("ocspMode must be OFF, ENFORCE_KNOWN or REQUIRE_CURRENT")
+			return identity.InvalidAnchor("ocspMode must be OFF, ENFORCE_KNOWN or REQUIRE_CURRENT")
 		}
 		if m != x509trust.OCSPOff && m != mode {
 			policy := api.OcspPolicy()
 			if !policy.Enabled {
-				return invalidAnchor("ocspMode %s is refused: OCSP is switched off on this instance "+
+				return identity.InvalidAnchor("ocspMode %s is refused: OCSP is switched off on this instance "+
 					"(deviceManagement.callout.ocsp.enabled), so no responder would ever be asked", m)
 			}
 			if m == x509trust.OCSPRequireCurrent && !policy.AllowRequireCurrent {
-				return invalidAnchor("ocspMode REQUIRE_CURRENT is refused: this instance does not allow it " +
+				return identity.InvalidAnchor("ocspMode REQUIRE_CURRENT is refused: this instance does not allow it " +
 					"(deviceManagement.callout.ocsp.allowRequireCurrent). It refuses every certificate whose status cannot be " +
 					"confirmed, which is only safe once the answer cache is kept warm")
 			}
@@ -112,7 +68,7 @@ func (api *Api) applyOcspSettings(locked *DeviceTrustAnchor, request *DeviceTrus
 			respUrl = ""
 			locked.OcspResponderUrl = sql.NullString{}
 		} else {
-			if err := validateOcspResponderUrl(*request.OcspResponderUrl.Value); err != nil {
+			if err := identity.ValidateOcspResponderUrl(*request.OcspResponderUrl.Value); err != nil {
 				return err
 			}
 			respUrl = *request.OcspResponderUrl.Value
@@ -120,7 +76,7 @@ func (api *Api) applyOcspSettings(locked *DeviceTrustAnchor, request *DeviceTrus
 		}
 	}
 	if mode == x509trust.OCSPRequireCurrent && respUrl == "" {
-		return invalidAnchor("ocspMode REQUIRE_CURRENT needs ocspResponderUrl: with only the certificates' own " +
+		return identity.InvalidAnchor("ocspMode REQUIRE_CURRENT needs ocspResponderUrl: with only the certificates' own " +
 			"entries there is no way to know a responder exists for them")
 	}
 	return nil

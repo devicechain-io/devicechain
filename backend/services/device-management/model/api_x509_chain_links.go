@@ -7,8 +7,8 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
-	"errors"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -25,33 +25,10 @@ import (
 // credential created through one cross-signed path may connect through another. The connect path
 // never reads them.
 
-// chainLinksOf builds the links of a credential from the verified path it was created through.
-// The tenant is stamped by the create callback from the context, as for every tenant-scoped row.
-func chainLinksOf(credentialId, anchorId uint, chain []*x509.Certificate) ([]DeviceCredentialChainLink, error) {
-	path, ok := x509trust.PathLinks(chain)
-	if !ok {
-		return nil, errors.New("a credential's chain links need a verified path")
-	}
-	out := make([]DeviceCredentialChainLink, 0, len(path))
-	for depth, l := range path {
-		if !l.SerialOK {
-			// A serial no CRL can name (zero or negative) has no link to match on; the
-			// fingerprint-keyed manual entries still apply to the certificate itself.
-			continue
-		}
-		key := l.Issuer.Key
-		out = append(out, DeviceCredentialChainLink{
-			CredentialId: credentialId, Depth: int16(depth), TrustAnchorId: anchorId,
-			Fingerprint: l.Fingerprint, IssuerKey: &key, IssuerName: l.Issuer.Name, Serial: l.Serial,
-		})
-	}
-	return out, nil
-}
-
 // writeChainLinks records the links of a credential just inserted, in the credential's own
 // transaction. It is idempotent on (credential, depth).
 func writeChainLinks(tx *gorm.DB, credentialId, anchorId uint, chain []*x509.Certificate) error {
-	links, err := chainLinksOf(credentialId, anchorId, chain)
+	links, err := identity.ChainLinksOf(credentialId, anchorId, chain)
 	if err != nil {
 		return err
 	}
@@ -185,7 +162,7 @@ func legacyLinkOf(c DeviceCredential) (DeviceCredentialChainLink, bool) {
 // certificate credential's id IS the leaf's fingerprint), and an issuer and serial nothing matches.
 func unlinkableLink(c DeviceCredential) DeviceCredentialChainLink {
 	fp := c.CredentialId
-	if !validFingerprint(fp) {
+	if !identity.ValidFingerprint(fp) {
 		fp = unlinkableIssuerName
 	}
 	return DeviceCredentialChainLink{

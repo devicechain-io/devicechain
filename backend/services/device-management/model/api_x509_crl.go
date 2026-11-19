@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"gorm.io/gorm"
@@ -23,40 +24,6 @@ import (
 // under a trust anchor. Parsing and verifying a CRL (signature, issuer chain, every acceptance
 // rule of x509trust.ParseRevocationList) happens HERE, on the operator's authenticated write
 // path, never on the connect path.
-
-// RevocationLimits are the fixed-configuration bounds of the store (deviceManagement.callout.
-// revocation). Zero fields are not "unbounded": SetRevocationLimits refuses them.
-type RevocationLimits struct {
-	// MaxCrlBytes bounds a CRL as submitted (PEM or DER), checked before any parsing.
-	MaxCrlBytes int
-	// MaxCrlEntries bounds the revoked certificates one CRL lists.
-	MaxCrlEntries int
-	// MaxListsPerAnchor bounds the current lists one trust anchor holds.
-	MaxListsPerAnchor int
-	// MaxManualEntriesPerTenant bounds a tenant's manual revocations.
-	MaxManualEntriesPerTenant int
-	// DefaultStaleGrace is the grace an anchor that sets none gets.
-	DefaultStaleGrace time.Duration
-	// MaxGraphqlCrlBytes bounds the CRL the GraphQL mutation accepts, as DER; the mutation's PEM
-	// text is held to GraphqlCrlTextBound of it.
-	MaxGraphqlCrlBytes int
-	// MaxConcurrentWrites bounds the CRL uploads one replica works on at once.
-	MaxConcurrentWrites int
-}
-
-// DefaultRevocationLimits are the limits an Api runs with until SetRevocationLimits says otherwise;
-// they equal the configuration's defaults.
-func DefaultRevocationLimits() RevocationLimits {
-	return RevocationLimits{
-		MaxCrlBytes:               2 << 20,
-		MaxCrlEntries:             100_000,
-		MaxListsPerAnchor:         16,
-		MaxManualEntriesPerTenant: MaxManualRevocationsPerTenant,
-		DefaultStaleGrace:         DefaultRevocationStaleGrace,
-		MaxGraphqlCrlBytes:        2 << 20,
-		MaxConcurrentWrites:       1,
-	}
-}
 
 type revocationConfig struct {
 	limits RevocationLimits
@@ -158,15 +125,6 @@ type RevocationListPutResult struct {
 	SessionsEnded bool
 }
 
-// listRefused is the refusal of a CRL the store (as opposed to the parser) will not take.
-func listRefused(rule string, format string, args ...any) error {
-	msg := "revocation list refused: " + rule
-	if format != "" {
-		msg += " (" + fmt.Sprintf(format, args...) + ")"
-	}
-	return invalidAnchor("%s", msg)
-}
-
 // crlEntryRow is DeviceRevokedCertificate for the bulk materialisation of a CRL's entries: the
 // same table, but it opts OUT of the audit journal, so hundreds of thousands of derived rows are
 // not journaled one by one. The list row carries the CRL's hash and entry count and IS journaled.
@@ -203,7 +161,7 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 	}
 	token := strings.TrimSpace(req.AnchorToken)
 	if token == "" {
-		return nil, invalidAnchor("anchorToken is required")
+		return nil, identity.InvalidAnchor("anchorToken is required")
 	}
 	lim := api.revocationLimits()
 	maxBytes := lim.MaxCrlBytes
@@ -212,13 +170,13 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 	}
 	// The size bound comes before any other work, the slot included.
 	if len(req.Crl) > maxBytes {
-		return nil, listRefused(string(x509trust.RuleTooLarge), "at most %d bytes", maxBytes)
+		return nil, identity.ListRefused(string(x509trust.RuleTooLarge), "at most %d bytes", maxBytes)
 	}
 	if len(req.Crl) == 0 {
-		return nil, listRefused(string(x509trust.RuleMalformed), "empty")
+		return nil, identity.ListRefused(string(x509trust.RuleMalformed), "empty")
 	}
 	if len(req.IssuerChainPem) > maxIssuerChainBytes {
-		return nil, invalidAnchor("issuerChainPem is larger than %d bytes", maxIssuerChainBytes)
+		return nil, identity.InvalidAnchor("issuerChainPem is larger than %d bytes", maxIssuerChainBytes)
 	}
 	release, err := api.acquireRevocationWrite(ctx)
 	if err != nil {
@@ -238,7 +196,7 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 	if strings.TrimSpace(req.IssuerChainPem) != "" {
 		_, certs, cerr := x509trust.ParseCertificates(req.IssuerChainPem)
 		if cerr != nil {
-			return nil, invalidAnchor("issuerChainPem: %v", cerr)
+			return nil, identity.InvalidAnchor("issuerChainPem: %v", cerr)
 		}
 		chain = certs
 	}
@@ -247,9 +205,9 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 		x509trust.CRLLimits{MaxBytes: maxBytes, MaxEntries: lim.MaxCrlEntries})
 	if err != nil {
 		if rule := x509trust.ListRuleOf(err); rule != "" {
-			return nil, listRefused(string(rule), "")
+			return nil, identity.ListRefused(string(rule), "")
 		}
-		return nil, invalidAnchor("revocation list refused")
+		return nil, identity.InvalidAnchor("revocation list refused")
 	}
 
 	// Before any lock: the legacy credentials' links, so the kick can find them (see
@@ -288,7 +246,7 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 			return err
 		}
 		if present == 0 {
-			return invalidAnchor("trust anchor %q changed while the list was being checked; upload it again", token)
+			return identity.InvalidAnchor("trust anchor %q changed while the list was being checked; upload it again", token)
 		}
 		// The parsed entries are released as soon as they are staged: nothing below is
 		// proportional to them.
@@ -327,7 +285,7 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 			return err
 		}
 		if locked.ID != anchor.ID || locked.FingerprintSha256 != anchor.FingerprintSha256 {
-			return invalidAnchor("trust anchor %q changed while the list was being checked; upload it again", token)
+			return identity.InvalidAnchor("trust anchor %q changed while the list was being checked; upload it again", token)
 		}
 		if newList {
 			if err := bumpRevocationRows(tx, locked.ID, 1); err != nil {
@@ -388,7 +346,7 @@ func storeRevocationList(tx *gorm.DB, tenant string, anchor *DeviceTrustAnchor, 
 		case sameKey && sameName:
 			issuer = is
 		case sameKey || sameName:
-			return nil, false, listRefused(RuleConflictingIssuer, "this anchor already holds a list for a CA that shares only its key or only its name with this signer")
+			return nil, false, identity.ListRefused(RuleConflictingIssuer, "this anchor already holds a list for a CA that shares only its key or only its name with this signer")
 		}
 	}
 
@@ -416,7 +374,7 @@ func storeRevocationList(tx *gorm.DB, tenant string, anchor *DeviceTrustAnchor, 
 			return nil, false, fmt.Errorf("a stored CRL-number high-water mark is not a number")
 		}
 		if rl.Number.Cmp(hw) <= 0 {
-			return nil, false, listRefused(RuleCrlNumberNotNewer, "this issuer's highest accepted CRL number is %s, this list is %s",
+			return nil, false, identity.ListRefused(RuleCrlNumberNotNewer, "this issuer's highest accepted CRL number is %s, this list is %s",
 				hw.String(), rl.Number.String())
 		}
 	}
@@ -424,7 +382,7 @@ func storeRevocationList(tx *gorm.DB, tenant string, anchor *DeviceTrustAnchor, 
 		return nil, false, limit.Exceeded("revocation lists per trust anchor", len(active)+1, lim.MaxListsPerAnchor)
 	}
 	if issuer == nil && len(issuers) >= lim.MaxListsPerAnchor*issuerRowsPerListFactor {
-		return nil, false, listRefused(RuleTooManyIssuers, "this anchor has recorded %d issuers; delete lists you no longer need only if they are not coming back", len(issuers))
+		return nil, false, identity.ListRefused(RuleTooManyIssuers, "this anchor has recorded %d issuers; delete lists you no longer need only if they are not coming back", len(issuers))
 	}
 
 	number := rl.Number.String()
@@ -482,11 +440,11 @@ func (api *Api) DeleteDeviceRevocationList(ctx context.Context, anchorToken, iss
 	}
 	token := strings.TrimSpace(anchorToken)
 	if token == "" {
-		return false, invalidAnchor("anchorToken is required")
+		return false, identity.InvalidAnchor("anchorToken is required")
 	}
 	key, name := strings.ToLower(strings.TrimSpace(issuerKey)), strings.ToLower(strings.TrimSpace(issuerName))
-	if !validFingerprint(key) || !validFingerprint(name) {
-		return false, invalidAnchor("issuerKey and issuerName must each be 64 hexadecimal characters")
+	if !identity.ValidFingerprint(key) || !identity.ValidFingerprint(name) {
+		return false, identity.InvalidAnchor("issuerKey and issuerName must each be 64 hexadecimal characters")
 	}
 	deleted := false
 	named, err := api.trustAnchorByToken(ctx, token)
@@ -506,7 +464,7 @@ func (api *Api) DeleteDeviceRevocationList(ctx context.Context, anchorToken, iss
 			return err
 		}
 		if anchor.ID != named.ID {
-			return invalidAnchor("trust anchor %q was replaced while the delete was waiting; repeat it", token)
+			return identity.InvalidAnchor("trust anchor %q was replaced while the delete was waiting; repeat it", token)
 		}
 		var lists []DeviceRevocationList
 		if err := tx.Where("tenant_id = ? AND trust_anchor_id = ? AND issuer_key = ? AND issuer_name = ?",
@@ -548,65 +506,9 @@ func (api *Api) DeviceRevocationListsOf(ctx context.Context, anchorId uint) ([]D
 	return lists, nil
 }
 
-// ─── freshness ──────────────────────────────────────────────────────────────
-
-// Freshness of a stored list, worst first in severity order for an anchor.
-const (
-	RevocationStatusNone     = "NONE"
-	RevocationStatusFresh    = "FRESH"
-	RevocationStatusExpiring = "EXPIRING"
-	RevocationStatusStale    = "STALE"
-)
-
-// RevocationListStatus is a list's freshness at now. STALE means the list is past nextUpdate plus
-// the grace (the instant REQUIRE_CURRENT stops counting it as current); EXPIRING means three
-// quarters of its validity have passed (the instant the operator should have pushed the next one);
-// otherwise FRESH.
-func RevocationListStatus(l *DeviceRevocationList, grace time.Duration, now time.Time) string {
-	if now.After(l.NextUpdate.Add(grace)) {
-		return RevocationStatusStale
-	}
-	validity := l.NextUpdate.Sub(l.ThisUpdate)
-	if validity > 0 && !now.Before(l.ThisUpdate.Add(validity/4*3)) {
-		return RevocationStatusExpiring
-	}
-	return RevocationStatusFresh
-}
-
-// RevocationAnchorStatus is the worst status over the anchor's lists, NONE when it has none.
-func RevocationAnchorStatus(lists []DeviceRevocationList, grace time.Duration, now time.Time) string {
-	rank := map[string]int{RevocationStatusNone: 0, RevocationStatusFresh: 1, RevocationStatusExpiring: 2, RevocationStatusStale: 3}
-	worst := RevocationStatusNone
-	for i := range lists {
-		if s := RevocationListStatus(&lists[i], grace, now); rank[s] > rank[worst] {
-			worst = s
-		}
-	}
-	return worst
-}
-
 // ─── mode and grace ─────────────────────────────────────────────────────────
-
-// revocationModeName is the stored mode for a GraphQL enum name.
-func revocationModeFromEnum(name string) (x509trust.Mode, bool) {
-	switch m := x509trust.Mode(name); m {
-	case x509trust.ModeEntries, x509trust.ModeRequireCurrent:
-		return m, true
-	}
-	return "", false
-}
-
-// parseRevocationGrace reads a Go duration for an anchor's grace: whole seconds, 0 to the maximum.
-func parseRevocationGrace(s string) (time.Duration, error) {
-	d, err := time.ParseDuration(strings.TrimSpace(s))
-	if err != nil {
-		return 0, invalidAnchor("revocationStaleGrace must be a duration such as \"24h\" or \"90m\"")
-	}
-	if d < 0 || d > MaxRevocationStaleGrace || d%time.Second != 0 {
-		return 0, invalidAnchor("revocationStaleGrace must be a whole number of seconds between 0s and %s", MaxRevocationStaleGrace)
-	}
-	return d, nil
-}
+//
+// The freshness rules and the enum and grace parsers are in identity (x509_revocation_rules.go).
 
 // maxUncoveredIssuersReported is how many uncovered issuers a refusal names.
 const maxUncoveredIssuersReported = 5
@@ -629,7 +531,7 @@ func requireCurrentCoverage(tx *gorm.DB, tenant string, anchor *DeviceTrustAncho
 		}
 	}
 	if len(current) == 0 {
-		return invalidAnchor("revocationMode REQUIRE_CURRENT is refused: trust anchor %q holds no current revocation list, "+
+		return identity.InvalidAnchor("revocationMode REQUIRE_CURRENT is refused: trust anchor %q holds no current revocation list, "+
 			"so every certificate under it would be refused (revocation_unknown). Upload the CA's CRL first", anchor.Token)
 	}
 
@@ -656,7 +558,7 @@ func requireCurrentCoverage(tx *gorm.DB, tenant string, anchor *DeviceTrustAncho
 		if len(missing) > maxUncoveredIssuersReported {
 			missing = append(missing[:maxUncoveredIssuersReported], "…")
 		}
-		return invalidAnchor("revocationMode REQUIRE_CURRENT is refused: registered certificates under trust anchor %q "+
+		return identity.InvalidAnchor("revocationMode REQUIRE_CURRENT is refused: registered certificates under trust anchor %q "+
 			"were issued by CAs with no current revocation list (issuer name hash %s), and would be refused (revocation_unknown). "+
 			"Upload their CRLs first", anchor.Token, strings.Join(missing, ", "))
 	}
@@ -682,11 +584,11 @@ func (api *Api) applyRevocationSettings(tx *gorm.DB, locked *DeviceTrustAnchor, 
 	mode, grace := oldMode, oldGrace
 	if request.RevocationMode.Set {
 		if request.RevocationMode.Value == nil {
-			return invalidAnchor("revocationMode cannot be cleared: send ENTRIES or REQUIRE_CURRENT")
+			return identity.InvalidAnchor("revocationMode cannot be cleared: send ENTRIES or REQUIRE_CURRENT")
 		}
-		m, ok := revocationModeFromEnum(*request.RevocationMode.Value)
+		m, ok := identity.RevocationModeFromEnum(*request.RevocationMode.Value)
 		if !ok {
-			return invalidAnchor("revocationMode must be ENTRIES or REQUIRE_CURRENT")
+			return identity.InvalidAnchor("revocationMode must be ENTRIES or REQUIRE_CURRENT")
 		}
 		mode = m
 		locked.RevocationMode = sql.NullString{String: string(m), Valid: true}
@@ -696,7 +598,7 @@ func (api *Api) applyRevocationSettings(tx *gorm.DB, locked *DeviceTrustAnchor, 
 			locked.RevocationStaleGrace = sql.NullInt64{}
 			grace = defaultGrace
 		} else {
-			g, err := parseRevocationGrace(*request.RevocationStaleGrace.Value)
+			g, err := identity.ParseRevocationGrace(*request.RevocationStaleGrace.Value)
 			if err != nil {
 				return err
 			}
@@ -708,10 +610,4 @@ func (api *Api) applyRevocationSettings(tx *gorm.DB, locked *DeviceTrustAnchor, 
 		return requireCurrentCoverage(tx, locked.TenantId, locked, grace, time.Now())
 	}
 	return nil
-}
-
-// CrlTooLargeRefusal is the refusal of a CRL over a size bound, for a door that checks the size
-// before it hands the CRL on.
-func CrlTooLargeRefusal(bound int) error {
-	return listRefused(string(x509trust.RuleTooLarge), "at most %d bytes", bound)
 }

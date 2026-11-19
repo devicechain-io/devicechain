@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -111,10 +112,10 @@ func TestARepeatedRevokeStillOwesItsKickAfterAnotherProfilesRevoke(t *testing.T)
 	dev := f.deviceByExternal("SN-1")
 	// The device also holds a credential pp-2 issued.
 	pp2 := f.profileID("pp-2")
-	require.NoError(t, f.api.RDB.DB(f.ctx).Create(&DeviceCredential{
+	require.NoError(t, f.api.RDB.DB(f.ctx).Create(&DeviceCredential{DeviceCredential: identity.DeviceCredential{
 		DeviceId: dev.ID, TokenReference: rdb.TokenReference{Token: "cred-2"}, CredentialType: "ACCESS_TOKEN", CredentialId: "second-credential", Enabled: true,
 		ProvisioningProfileId: &pp2,
-	}).Error)
+	}}).Error)
 
 	_, err = f.api.RevokeProvisionedDevices(f.ctx, "pp-1")
 	require.ErrorIs(t, err, ErrSessionsNotEnded)

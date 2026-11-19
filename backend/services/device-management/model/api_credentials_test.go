@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
@@ -74,7 +75,7 @@ func TestDeviceCredentialsOrderLeadsWithMostRunway(t *testing.T) {
 		token     string
 		expiresAt *time.Time
 	}{{"soon", &soon}, {"never", nil}, {"far", &far}} {
-		row := DeviceCredential{DeviceId: device.ID, CredentialType: "ACCESS_TOKEN", CredentialId: c.token, Enabled: true}
+		row := DeviceCredential{DeviceCredential: identity.DeviceCredential{DeviceId: device.ID, CredentialType: "ACCESS_TOKEN", CredentialId: c.token, Enabled: true}}
 		row.Token = c.token
 		row.TenantId = "acme"
 		if c.expiresAt != nil {

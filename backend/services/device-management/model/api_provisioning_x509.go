@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/x509trust"
@@ -221,15 +222,17 @@ func insertCertificateCredential(tx *gorm.DB, profile *ProvisioningProfile, devi
 		return err
 	}
 	cred := &DeviceCredential{
-		MetadataEntity:        rdb.MetadataEntity{Metadata: metadata},
-		DeviceId:              device.ID,
-		CredentialType:        string(CredentialX509Certificate),
-		CredentialId:          x509trust.Fingerprint(reg.Leaf),
-		TrustAnchorId:         &anchorId,
-		CertificatePem:        sql.NullString{String: leafPEM, Valid: true},
-		Enabled:               true,
-		ExpiresAt:             sql.NullTime{Time: reg.NotAfter, Valid: true},
-		ProvisioningProfileId: &profileId,
+		DeviceCredential: identity.DeviceCredential{
+			MetadataEntity:        rdb.MetadataEntity{Metadata: metadata},
+			DeviceId:              device.ID,
+			CredentialType:        string(CredentialX509Certificate),
+			CredentialId:          x509trust.Fingerprint(reg.Leaf),
+			TrustAnchorId:         &anchorId,
+			CertificatePem:        sql.NullString{String: leafPEM, Valid: true},
+			Enabled:               true,
+			ExpiresAt:             sql.NullTime{Time: reg.NotAfter, Valid: true},
+			ProvisioningProfileId: &profileId,
+		},
 	}
 	cred.Token = core.DeriveDeviceToken(request.ExternalId, provisionedCredentialTokenPrefix)
 	if err := tx.Omit("Device").Create(cred).Error; err != nil {
