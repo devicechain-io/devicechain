@@ -2007,7 +2007,7 @@ type Alarm implements Model & TokenReference & MetadataEntity {
     disposition: AlarmDisposition
     """Live suppression now; null for cleared alarms, non-device originators or alarms with no matching window."""
     suppression: AlarmSuppression
-    """Window token stamped when the current cycle began, or null. Preserved even after the window ends or is deleted."""
+    """Window token stamped when the current cycle began, or null. "restricted" for scoped humans when the window is hidden or deleted."""
     raisedDuringSuppression: String
 }
 
@@ -7673,9 +7673,9 @@ type AlarmEvent {
     occurredTime: String!
     """Live suppression deadline carried by the event, as RFC 3339; null when absent."""
     suppressedUntil: String
-    """Live window token carried by the event; null when absent."""
+    """Live window token carried by the event; null when absent, "restricted" for scoped humans when hidden or deleted."""
     suppressionWindowToken: String
-    """Window token stamped at this cycle's raise; null when absent."""
+    """Window token stamped at this cycle's raise; null when absent, "restricted" for scoped humans when hidden or deleted."""
     raisedDuringSuppression: String
 }
 
@@ -7793,7 +7793,7 @@ type AlarmSuppressionWindow implements Model & TokenReference & NamedEntity & Me
 type AlarmSuppression {
     """The window, or null when it is deleted or outside the caller's whole-window visibility."""
     window: AlarmSuppressionWindow
-    """Window token, available for a visible alarm even when the window object is hidden."""
+    """Window token; "restricted" for scoped humans when the window is hidden or deleted. Service tokens receive the real token."""
     windowToken: String!
     """Exclusive live deadline, as an RFC 3339 timestamp."""
     until: String!
@@ -7888,7 +7888,7 @@ input AlarmSuppressionWindowSearchCriteria {
 type AlarmSuppressionWindowSearchResults {
     """Windows on this page."""
     results: [AlarmSuppressionWindow!]!
-    """Page bounds and total visible matching records."""
+    """Page bounds and total visible matching records. For scoped callers, totalRecords counts whole-window-visible matches among the first 10,000 storage-visible candidates; pages remain available beyond that count bound."""
     pagination: SearchResultsPagination!
 }
 

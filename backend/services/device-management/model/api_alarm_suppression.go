@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -225,13 +226,13 @@ func (api *Api) UpdateAlarmSuppressionWindow(ctx context.Context, token string, 
 }
 
 func (api *Api) EndAlarmSuppressionWindow(ctx context.Context, token string) (*AlarmSuppressionWindow, error) {
-	return api.mutateSuppression(ctx, token, nil, true, false)
+	return api.retrySuppressionMutation(ctx, token, true)
 }
 
 func (api *Api) DeleteAlarmSuppressionWindow(ctx context.Context, token string) (*AlarmSuppressionWindow, error) {
 	// Soft deletion is an authorized update, allowing the same scoped end/delete
 	// policy while retaining the row and increasing its version in the audit journal.
-	return api.mutateSuppression(ctx, token, nil, false, true)
+	return api.retrySuppressionMutation(ctx, token, false)
 }
 
 func (api *Api) invalidateSuppressionWindows(ctx context.Context) {
@@ -242,4 +243,18 @@ func (api *Api) invalidateSuppressionWindows(ctx context.Context) {
 	api.suppressionCache.Lock()
 	delete(api.suppressionCache.tenants, tenant)
 	api.suppressionCache.Unlock()
+}
+
+// End/delete operate on the freshly read state; user edits remain single-attempt.
+func (api *Api) retrySuppressionMutation(ctx context.Context, token string, ending bool) (*AlarmSuppressionWindow, error) {
+	var result *AlarmSuppressionWindow
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		result, err = api.mutateSuppression(ctx, token, nil, ending, !ending)
+		var conflict *SuppressionConflictError
+		if !errors.As(err, &conflict) {
+			return result, err
+		}
+	}
+	return result, err
 }

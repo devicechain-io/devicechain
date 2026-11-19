@@ -352,13 +352,29 @@ func TestAlarmSuppressionStatusVisibilityAndLimits(t *testing.T) {
 	require.Len(t, status, 1)
 }
 
-func TestAlarmSuppressionStatusEvaluationErrorIsNotNilMatch(t *testing.T) {
+func TestAlarmSuppressionStatusEvaluationErrorFailsTowardPaging(t *testing.T) {
 	r := newSuppressionCycleRig(t)
 	require.NoError(t, r.edge(r.now, "r", AlarmEdgeRaised, "MINOR"))
 	require.NoError(t, r.api.RDB.Database.Migrator().DropTable(&Device{}))
+	before := testutil.ToFloat64(suppressionEvaluationFailures.WithLabelValues("status"))
 	status, err := r.api.AlarmSuppressionStatus(r.ctx, []string{r.alarm(t).Token})
-	require.Error(t, err)
-	require.Nil(t, status)
+	require.NoError(t, err)
+	require.Len(t, status, 1)
+	require.Nil(t, status[0].Match)
+	require.Equal(t, before+1, testutil.ToFloat64(suppressionEvaluationFailures.WithLabelValues("status")))
+}
+
+func TestAlarmSuppressionStatusLoadErrorsFailBatch(t *testing.T) {
+	for _, table := range []any{&Alarm{}, &AlarmSuppressionWindow{}} {
+		r := newSuppressionCycleRig(t)
+		require.NoError(t, r.edge(r.now, "r", AlarmEdgeRaised, "MINOR"))
+		token := r.alarm(t).Token
+		r.api.invalidateSuppressionWindows(r.ctx)
+		require.NoError(t, r.api.RDB.Database.Migrator().DropTable(table))
+		status, err := r.api.AlarmSuppressionStatus(r.ctx, []string{token})
+		require.Error(t, err)
+		require.Nil(t, status)
+	}
 }
 
 func TestSuppressionZeroWindowsReadsNoDeviceFacts(t *testing.T) {

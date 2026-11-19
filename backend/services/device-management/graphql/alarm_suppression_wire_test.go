@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,6 +86,9 @@ func TestAlarmSuppressionWireCRUDAndReadSurfaces(t *testing.T) {
 	require.Nil(t, first["endedBy"])
 	require.Equal(t, "ACTIVE", first["status"])
 	require.Len(t, first["openings"], 1)
+	nullLimit := serve(t, ctx, "{alarmSuppressionWindowsByToken(tokens:[\"work\"]){openings(limit:null){start end}}}", nil)
+	requireServed(t, nullLimit, "null openings limit uses default")
+	require.Len(t, nullLimit.data["alarmSuppressionWindowsByToken"].([]any)[0].(map[string]any)["openings"], 1)
 	require.Empty(t, first["alarmKeys"])
 	for _, query := range []string{
 		"{ alarmSuppressionWindowsByToken(tokens:[\"work\",\"unknown\"]) { token targets { type token } } }",
@@ -255,7 +259,7 @@ func TestAlarmSuppressionWireScopeAndHiddenWindow(t *testing.T) {
 	require.Equal(t, []string{"own"}, tokensAt(t, list.data, "alarmSuppressionWindowsByToken"))
 	require.EqualValues(t, 1, list.data["alarmSuppressionWindows"].(map[string]any)["pagination"].(map[string]any)["totalRecords"])
 	// The visible alarm is held by a window that also names another customer's
-	// device. Scalars remain visible, but the whole window must be null.
+	// device. Hidden window tokens are opaque and the whole window is null.
 	requireServed(t, serve(t, operator, "mutation{endAlarmSuppressionWindow(token:\"own\"){token}}", nil), "end own")
 	devices, err := f.api.DevicesByToken(operator, []string{"acme-pump"})
 	require.NoError(t, err)
@@ -266,12 +270,52 @@ func TestAlarmSuppressionWireScopeAndHiddenWindow(t *testing.T) {
 	hidden := serve(t, member, "{alarmsByToken(tokens:[\"visible-alarm\"]){suppression{windowToken until window{token targets{token}}}}}", nil)
 	requireServed(t, hidden, "hidden window")
 	suppression := hidden.data["alarmsByToken"].([]any)[0].(map[string]any)["suppression"].(map[string]any)
-	require.Equal(t, "mixed", suppression["windowToken"])
+	require.Equal(t, "restricted", suppression["windowToken"])
 	require.NotEmpty(t, suppression["until"])
 	require.Nil(t, suppression["window"])
 	control := serve(t, operator, "{alarmsByToken(tokens:[\"visible-alarm\"]){suppression{window{token}}}}", nil)
 	requireServed(t, control, "operator window")
 	require.Contains(t, fmt.Sprint(control.data), "mixed")
+	require.NoError(t, f.db.WithContext(operator).Create(&model.AlarmCycleSuppression{AlarmId: alarm.ID, AlarmToken: alarm.Token, RaisedTime: alarm.RaisedTime, WindowToken: "mixed", ScopeAnchors: alarm.ScopeAnchors}).Error)
+	service := f.withClaims(&auth.Claims{TokenType: auth.TokenTypeService, Tenant: scopeTenant, Authorities: []string{string(auth.AlarmRead)}})
+	for _, caller := range []struct {
+		ctx  context.Context
+		want string
+	}{{member, "restricted"}, {operator, "mixed"}, {service, "mixed"}} {
+		out := serve(t, caller.ctx, notificationSuppressionDocument, map[string]any{"tokens": []any{alarm.Token}})
+		requireServed(t, out, "status token visibility")
+		got := out.data["alarmSuppressionStatus"].([]any)[0].(map[string]any)["suppression"].(map[string]any)
+		require.Equal(t, caller.want, got["windowToken"], "service status must always preserve the real token for notification-management")
+		if caller.ctx == service {
+			continue
+		}
+		out = serve(t, caller.ctx, "{alarmsByToken(tokens:[\"visible-alarm\"]){raisedDuringSuppression}}", nil)
+		requireServed(t, out, "history token visibility")
+		require.Equal(t, caller.want, out.data["alarmsByToken"].([]any)[0].(map[string]any)["raisedDuringSuppression"])
+	}
+	sdl := strings.Replace(SchemaContent, "query: Query", "query: SuppressionEventQuery", 1)
+	sdl = strings.Replace(sdl, "mutation: Mutation", "", 1)
+	sdl = strings.Replace(sdl, "subscription: Subscription", "", 1)
+	sdl += "\ntype SuppressionEventQuery { event: AlarmEvent! }"
+	for _, caller := range []struct {
+		ctx  context.Context
+		want string
+	}{{member, "restricted"}, {operator, "mixed"}, {service, "mixed"}} {
+		event := &model.AlarmStateChangeEvent{SuppressionWindowToken: "mixed", RaisedDuringSuppressionToken: "mixed"}
+		schema := gql.MustParseSchema(sdl, &suppressionEventRoot{E: &AlarmEventResolver{E: event, S: &SchemaResolver{}, C: caller.ctx}})
+		out := schema.Exec(caller.ctx, "{event{suppressionWindowToken raisedDuringSuppression}}", "", nil)
+		require.Empty(t, out.Errors)
+		var data struct{ Event map[string]string }
+		require.NoError(t, json.Unmarshal(out.Data, &data))
+		require.Equal(t, caller.want, data.Event["suppressionWindowToken"])
+		require.Equal(t, caller.want, data.Event["raisedDuringSuppression"])
+		require.Equal(t, "mixed", event.SuppressionWindowToken, "subscriber redaction must not mutate shared events")
+	}
+	require.NoError(t, f.db.WithContext(operator).Where("token = ?", "mixed").Delete(&model.AlarmSuppressionWindow{}).Error)
+	out := serve(t, member, "{alarmsByToken(tokens:[\"visible-alarm\"]){raisedDuringSuppression}}", nil)
+	requireServed(t, out, "deleted window history")
+	require.Equal(t, "restricted", out.data["alarmsByToken"].([]any)[0].(map[string]any)["raisedDuringSuppression"])
+
 }
 func TestAlarmSuppressionWireStatusHistoryAndSearch(t *testing.T) {
 	f := suppressionWireFixture(t)
@@ -513,4 +557,79 @@ func TestAlarmSuppressionWireVersionRaceIsStaleWrite(t *testing.T) {
 	var stale *rdb.StaleWriteError
 	require.ErrorAs(t, err, &conflict)
 	require.ErrorAs(t, err, &stale)
+}
+
+func TestAlarmSuppressionListQueryCountBounded(t *testing.T) {
+	f := suppressionWireFixture(t)
+	ctx := suppressionWireCaller(f, true, true)
+	suppressionCreate(t, ctx, suppressionWireInput("work", "DEVICE", "acme-pump"))
+	devices, err := f.api.DevicesByToken(ctx, []string{"acme-pump"})
+	require.NoError(t, err)
+	var count atomic.Int32
+	counter := func(*gorm.DB) { count.Add(1) }
+	require.NoError(t, f.db.Callback().Query().Before("gorm:query").Register("test:bounded", counter))
+	require.NoError(t, f.db.Callback().Row().Before("gorm:row").Register("test:bounded", counter))
+	t.Cleanup(func() {
+		_ = f.db.Callback().Query().Remove("test:bounded")
+		_ = f.db.Callback().Row().Remove("test:bounded")
+	})
+	var first int32
+	for _, n := range []int{1, 20} {
+		for i := 0; i < n; i++ {
+			a := model.Alarm{TokenReference: rdb.TokenReference{Token: fmt.Sprintf("count-%d-%d", n, i)}, OriginatorType: "device", OriginatorId: devices[0].ID, AlarmKey: fmt.Sprintf("count-%d-%d", n, i), State: "ACTIVE", Severity: "MINOR", RaisedTime: time.Now().UTC(), PositionDerived: new(bool)}
+			require.NoError(t, f.db.WithContext(ctx).Create(&a).Error)
+			require.NoError(t, f.db.WithContext(ctx).Create(&model.AlarmCycleSuppression{AlarmId: a.ID, RaisedTime: a.RaisedTime, AlarmToken: a.Token, WindowToken: "work"}).Error)
+		}
+		count.Store(0)
+		out := serve(t, ctx, "{alarms(criteria:{pageNumber:1,pageSize:100}){results{suppression{windowToken until} raisedDuringSuppression}}}", nil)
+		requireServed(t, out, "bounded list")
+		rows := out.data["alarms"].(map[string]any)["results"].([]any)
+		if n == 1 {
+			require.Len(t, rows, 1)
+		} else {
+			require.Len(t, rows, 21)
+		}
+		for _, raw := range rows {
+			row := raw.(map[string]any)
+			require.Equal(t, "work", row["suppression"].(map[string]any)["windowToken"])
+			require.Equal(t, "work", row["raisedDuringSuppression"])
+		}
+		if n == 1 {
+			first = count.Load()
+		} else {
+			require.LessOrEqual(t, count.Load(), first, "queries must not grow with alarm count")
+		}
+	}
+}
+
+func TestAlarmSuppressionWireStatusDeviceFailureIsolated(t *testing.T) {
+	f := suppressionWireFixture(t)
+	ctx := suppressionWireCaller(f, true, true)
+	suppressionCreate(t, ctx, suppressionWireInput("work", "DEVICE", "acme-pump"))
+	devices, err := f.api.DevicesByToken(ctx, []string{"acme-pump", "globex-pump"})
+	require.NoError(t, err)
+	tokens := []any{}
+	goodToken := ""
+	for _, device := range devices {
+		a := model.Alarm{TokenReference: rdb.TokenReference{Token: "status-" + device.Token}, OriginatorType: "device", OriginatorId: device.ID, AlarmKey: "status-" + device.Token, State: "ACTIVE", Severity: "MINOR", RaisedTime: time.Now().UTC(), PositionDerived: new(bool)}
+		require.NoError(t, f.db.WithContext(ctx).Create(&a).Error)
+		tokens = append(tokens, a.Token)
+		if device.Token == "acme-pump" {
+			goodToken = a.Token
+		} else {
+			require.NoError(t, f.db.WithContext(ctx).Delete(device).Error)
+		}
+	}
+	out := serve(t, ctx, notificationSuppressionDocument, map[string]any{"tokens": tokens})
+	requireServed(t, out, "isolated status evaluation failure")
+	rows := out.data["alarmSuppressionStatus"].([]any)
+	require.Len(t, rows, 2)
+	for _, raw := range rows {
+		row := raw.(map[string]any)
+		if row["alarmToken"] == goodToken {
+			require.NotNil(t, row["suppression"])
+		} else {
+			require.Nil(t, row["suppression"])
+		}
+	}
 }

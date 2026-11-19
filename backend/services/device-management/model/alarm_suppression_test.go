@@ -499,7 +499,7 @@ func TestSuppressionCacheReplicaTTLAndTenantIsolation(t *testing.T) {
 	w.StartTime, w.EndTime = &start, &end
 	_, err := api.CreateAlarmSuppressionWindow(ctx, &w)
 	require.NoError(t, err)
-	// A higher-version unrelated window masks changes to max(version).
+	// An unrelated high version must not mask an edit to a lower version.
 	high := suppressionTestWindow()
 	high.StartTime, high.EndTime = &start, &end
 	high.Token, high.Version = "unrelated", 100
@@ -511,8 +511,13 @@ func TestSuppressionCacheReplicaTTLAndTenantIsolation(t *testing.T) {
 	require.NotNil(t, match)
 	require.Empty(t, match.WindowName)
 	require.NoError(t, api.RDB.DB(ctx).Model(&AlarmSuppressionWindow{}).Where("token = ?", w.Token).Updates(map[string]any{"name": "new name", "version": 2}).Error)
-	// Advance the entry's age instead of sleeping; TTL must refresh even with the
-	// same count and maximum version. Fresh facts are never part of this cache.
+	match, err = replica.SuppressionFor(ctx, id, "hot", "MINOR", *w.StartTime)
+	require.NoError(t, err)
+	require.NotNil(t, match)
+	require.Equal(t, "new name", match.WindowName, "sum(version) detects the edit before the TTL")
+	require.NoError(t, api.RDB.DB(ctx).Model(&AlarmSuppressionWindow{}).Where("token = ?", w.Token).Update("name", "TTL name").Error)
+	// TTL still refreshes writes whose signature is unchanged. Fresh device facts
+	// are never part of this tenant cache.
 	replica.suppressionCache.Lock()
 	entry := replica.suppressionCache.tenants["acme"]
 	entry.loaded = time.Now().Add(-5 * time.Second)
@@ -521,7 +526,7 @@ func TestSuppressionCacheReplicaTTLAndTenantIsolation(t *testing.T) {
 	match, err = replica.SuppressionFor(ctx, id, "hot", "MINOR", *w.StartTime)
 	require.NoError(t, err)
 	require.NotNil(t, match)
-	require.Equal(t, "new name", match.WindowName)
+	require.Equal(t, "TTL name", match.WindowName)
 	other := core.WithTenant(ctx, "other")
 	otherID := seedAnchorDevice(t, api, other, "other", "pump")
 	match, err = replica.SuppressionFor(other, otherID, "hot", "MINOR", *w.StartTime)
@@ -801,4 +806,44 @@ func TestSuppressionReviveRespectsCap(t *testing.T) {
 	require.Equal(t, reason, updated.Reason)
 	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Reason: dcgraphql.OptionalStringOf(reason)})
 	require.NoError(t, err, "an expired window that stays expired consumes no capacity")
+}
+
+func TestSuppressionNegativeCacheIsTenantLocalAndInvalidated(t *testing.T) {
+	api, ctx, _ := newSuppressionTestApi(t)
+	count := 0
+	counter := func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "alarm_suppression_windows" {
+			count++
+		}
+	}
+	db := api.RDB.Database
+	require.NoError(t, db.Callback().Row().Before("gorm:row").Register("test:negative", counter))
+	t.Cleanup(func() { _ = db.Callback().Row().Remove("test:negative") })
+	_, err := api.suppressionWindows(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+	_, err = api.suppressionWindows(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, count, "empty tenant needs no repeat database query")
+	_, err = api.suppressionWindows(core.WithTenant(ctx, "other"))
+	require.NoError(t, err)
+	require.Equal(t, 4, count, "negative cache is tenant-local")
+	w := suppressionTestWindow()
+	_, err = api.CreateAlarmSuppressionWindow(ctx, &w)
+	require.NoError(t, err)
+	api.suppressionCache.Lock()
+	_, exists := api.suppressionCache.tenants["acme"]
+	api.suppressionCache.Unlock()
+	require.False(t, exists, "local creation invalidates the negative cache")
+	_, err = api.suppressionWindows(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 6, count)
+	api.suppressionCache.Lock()
+	entry := api.suppressionCache.tenants["other"]
+	entry.loaded = time.Now().Add(-5 * time.Second)
+	api.suppressionCache.tenants["other"] = entry
+	api.suppressionCache.Unlock()
+	_, err = api.suppressionWindows(core.WithTenant(ctx, "other"))
+	require.NoError(t, err)
+	require.Equal(t, 8, count, "negative cache expires at five seconds")
 }

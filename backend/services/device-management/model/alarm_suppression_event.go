@@ -22,7 +22,7 @@ var suppressionEvaluationFailures = promauto.NewCounterVec(prometheus.CounterOpt
 }, []string{"phase"})
 
 func init() {
-	for _, phase := range []string{"cycle_start", "live"} {
+	for _, phase := range []string{"cycle_start", "live", "status"} {
 		suppressionEvaluationFailures.WithLabelValues(phase).Add(0)
 	}
 }
@@ -44,7 +44,9 @@ func suppressionEvaluationFailed(err error, phase string) {
 }
 
 func (api *Api) cycleStartSuppression(ctx context.Context, deviceId uint, key, severity string, at time.Time) *SuppressionMatch {
-	match, err := api.evaluateSuppression(ctx, deviceId, key, severity, at)
+	rctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	match, err := api.evaluateSuppression(rctx, deviceId, key, severity, at)
 	if err != nil {
 		suppressionEvaluationFailed(err, "cycle_start")
 		return nil

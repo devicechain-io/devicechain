@@ -404,17 +404,27 @@ func (r *AlarmEventResolver) SuppressedUntil() *string {
 	}
 	return util.FormatTime(*r.E.SuppressedUntil)
 }
-func (r *AlarmEventResolver) SuppressionWindowToken() *string {
+func (r *AlarmEventResolver) SuppressionWindowToken(ctx context.Context) (*string, error) {
 	if r.E.SuppressionWindowToken == "" {
-		return nil
+		return nil, nil
 	}
-	token := r.E.SuppressionWindowToken
-	return &token
+	return r.visibleSuppressionToken(ctx, r.E.SuppressionWindowToken)
 }
-func (r *AlarmEventResolver) RaisedDuringSuppression() *string {
+func (r *AlarmEventResolver) RaisedDuringSuppression(ctx context.Context) (*string, error) {
 	if r.E.RaisedDuringSuppressionToken == "" {
-		return nil
+		return nil, nil
 	}
-	token := r.E.RaisedDuringSuppressionToken
-	return &token
+	return r.visibleSuppressionToken(ctx, r.E.RaisedDuringSuppressionToken)
+}
+
+// Resolve with each subscriber's context, never mutating the shared event.
+func (r *AlarmEventResolver) visibleSuppressionToken(ctx context.Context, token string) (*string, error) {
+	if _, scoped := auth.ScopeFromContext(ctx); !scoped {
+		return &token, nil
+	}
+	visible, err := r.S.GetApi(ctx).VisibleSuppressionWindowToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	return &visible, nil
 }

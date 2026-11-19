@@ -151,13 +151,21 @@ func (api *Api) suppressionWindows(ctx context.Context) ([]compiledWindow, error
 		return nil, err
 	}
 	now := time.Now()
+	api.suppressionCache.Lock()
+	negative, found := api.suppressionCache.tenants[tenant]
+	api.suppressionCache.Unlock()
+	// An empty tenant is checked at most every five seconds. Replica-created
+	// windows may be missed for this bounded interval, failing toward paging.
+	if found && negative.count == 0 && now.Sub(negative.loaded) < 5*time.Second {
+		return negative.windows, nil
+	}
 	db := api.RDB.DB(suppressionFactContext(ctx)).Scopes(suppressionLiveAt(now.Add(-10 * time.Minute)))
 	var signature struct {
 		Count   int64
 		Version int64
 	}
 	if err := db.Session(&gorm.Session{}).Model(&AlarmSuppressionWindow{}).
-		Select("count(*) AS count, COALESCE(max(version), 0) AS version").Scan(&signature).Error; err != nil {
+		Select("count(*) AS count, COALESCE(sum(version), 0) AS version").Scan(&signature).Error; err != nil {
 		return nil, err
 	}
 	api.suppressionCache.Lock()
@@ -306,9 +314,11 @@ func (api *Api) suppressionDeviceFacts(ctx context.Context, device *Device, wind
 			}
 		}
 		if len(staticIDs) > 0 {
+			// The tenant equality makes the joined table tenant-safe by the query
+			// itself (hack/check-raw-joins.sh).
 			var members []EntityRelationship
 			if err := api.RDB.DB(ctx).
-				Joins("JOIN entity_relationship_types rt ON rt.id = entity_relationships.relationship_type_id").
+				Joins("JOIN entity_relationship_types rt ON rt.id = entity_relationships.relationship_type_id AND rt.tenant_id = entity_relationships.tenant_id").
 				Where("rt.token = ?", MembershipRelationshipType).
 				Where("entity_relationships.source_type = ? AND entity_relationships.source_id IN ?", string(entity.TypeGroup), staticIDs).
 				Where("entity_relationships.target_type = ? AND entity_relationships.target_id = ?", string(entity.TypeDevice), device.ID).

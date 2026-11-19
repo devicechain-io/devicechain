@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -76,11 +77,15 @@ func (r *AlarmSuppressionWindowResolver) Targets() []*AlarmSuppressionTargetReso
 func (r *AlarmSuppressionWindowResolver) Status() string {
 	return model.AlarmSuppressionWindowStatus(r.M, time.Now().UTC())
 }
-func (r *AlarmSuppressionWindowResolver) Openings(args struct{ Limit int32 }) ([]*AlarmSuppressionIntervalResolver, error) {
-	if args.Limit < 1 {
+func (r *AlarmSuppressionWindowResolver) Openings(args struct{ Limit gql.NullInt }) ([]*AlarmSuppressionIntervalResolver, error) {
+	limit := int32(5)
+	if args.Limit.Value != nil {
+		limit = *args.Limit.Value
+	}
+	if limit < 1 {
 		return nil, fmt.Errorf("%w: openings limit must be positive", model.ErrInvalidAlarmSuppression)
 	}
-	intervals := model.AlarmSuppressionWindowOpenings(r.M, time.Now().UTC(), int(args.Limit))
+	intervals := model.AlarmSuppressionWindowOpenings(r.M, time.Now().UTC(), int(limit))
 	out := make([]*AlarmSuppressionIntervalResolver, 0, len(intervals))
 	for _, iv := range intervals {
 		out = append(out, &AlarmSuppressionIntervalResolver{M: iv})
@@ -116,6 +121,9 @@ type AlarmSuppressionResolver struct {
 func (r *AlarmSuppressionResolver) WindowToken() string { return r.M.WindowToken }
 func (r *AlarmSuppressionResolver) Until() string       { return r.M.Until.UTC().Format(time.RFC3339Nano) }
 func (r *AlarmSuppressionResolver) Window(ctx context.Context) (*AlarmSuppressionWindowResolver, error) {
+	if r.M.WindowToken == model.RestrictedSuppressionWindowToken {
+		return nil, nil
+	}
 	w, err := r.S.GetApi(ctx).AlarmSuppressionWindowByToken(ctx, r.M.WindowToken)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
@@ -282,17 +290,47 @@ func (r *SchemaResolver) DeleteAlarmSuppressionWindow(ctx context.Context, args 
 	return err == nil, err
 }
 func (r *AlarmResolver) Suppression(ctx context.Context) (*AlarmSuppressionResolver, error) {
-	match, err := r.S.GetApi(ctx).AlarmSuppression(ctx, &r.M, time.Time{})
+	if r.M.State != string(model.AlarmStateActive) || r.M.OriginatorType != "device" {
+		return nil, nil
+	}
+	page := r.suppressionPage
+	if page == nil {
+		page = &alarmSuppressionPage{alarms: []model.Alarm{r.M}}
+	}
+	page.loadMatches(ctx, r.S)
+	match, err := page.matches[r.M.ID], page.matchErrors[r.M.ID]
 	if err != nil {
 		return nil, err
 	}
 	return suppressionResolver(match, r.S), nil
 }
 
-// History is lazy per alarm, like Disposition. There is no request-wide loader
-// on standalone alarm resolvers; the model still keys every read by current cycle.
+// History is lazy and batched for every alarm on the page, keyed by current cycle.
 func (r *AlarmResolver) RaisedDuringSuppression(ctx context.Context) (*string, error) {
-	stamps, err := r.S.GetApi(ctx).AlarmCycleSuppressionsFor(ctx, []model.Alarm{r.M})
+	page := r.suppressionPage
+	if page == nil {
+		page = &alarmSuppressionPage{alarms: []model.Alarm{r.M}}
+	}
+	page.historyOnce.Do(func() {
+		api := r.S.GetApi(ctx)
+		page.stamps, page.historyErr = api.AlarmCycleSuppressionsFor(ctx, page.alarms)
+		if page.historyErr != nil {
+			return
+		}
+		tokens := []string{}
+		for _, token := range page.stamps {
+			tokens = append(tokens, token)
+		}
+		visible, err := api.VisibleSuppressionWindowTokens(ctx, tokens)
+		if err != nil {
+			page.historyErr = err
+			return
+		}
+		for id, token := range page.stamps {
+			page.stamps[id] = visible[token]
+		}
+	})
+	stamps, err := page.stamps, page.historyErr
 	if err != nil {
 		return nil, err
 	}
@@ -301,4 +339,47 @@ func (r *AlarmResolver) RaisedDuringSuppression(ctx context.Context) (*string, e
 		return nil, nil
 	}
 	return &token, nil
+}
+
+// Like dispositionPageAlarms, a page owns lazy, concurrency-safe request reads.
+type alarmSuppressionPage struct {
+	alarms      []model.Alarm
+	once        sync.Once
+	matchesOnce sync.Once
+	matches     map[uint]*model.SuppressionMatch
+	matchErrors map[uint]error
+	reader      *model.AlarmSuppressionReader
+	historyOnce sync.Once
+	stamps      map[uint]string
+	historyErr  error
+}
+
+func (p *alarmSuppressionPage) init(ctx context.Context, s *SchemaResolver) {
+	p.once.Do(func() { p.reader = s.GetApi(ctx).NewAlarmSuppressionReader(time.Time{}) })
+}
+
+func (p *alarmSuppressionPage) loadMatches(ctx context.Context, s *SchemaResolver) {
+	p.init(ctx, s)
+	p.matchesOnce.Do(func() {
+		p.matches, p.matchErrors = map[uint]*model.SuppressionMatch{}, map[uint]error{}
+		tokens := []string{}
+		for i := range p.alarms {
+			a := &p.alarms[i]
+			match, err := p.reader.Match(ctx, a)
+			p.matches[a.ID], p.matchErrors[a.ID] = match, err
+			if match != nil {
+				tokens = append(tokens, match.WindowToken)
+			}
+		}
+		visible, err := s.GetApi(ctx).VisibleSuppressionWindowTokens(ctx, tokens)
+		for id, match := range p.matches {
+			if match != nil {
+				if err != nil {
+					p.matchErrors[id] = err
+					continue
+				}
+				match.WindowToken = visible[match.WindowToken]
+			}
+		}
+	})
 }

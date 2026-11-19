@@ -59,7 +59,7 @@ title: 指标参考
 | 指标 | 含义 |
 | --- | --- |
 | `suppression_invalid_windows_total` | 计数器。评估时跳过的无效已存储告警抑制窗口；继续发送告警通知。 |
-| `suppression_evaluation_failures_total{phase}` | 计数器。告警抑制评估失败次数，按 `phase` 区分：`cycle_start`（周期开始时的记录评估）或 `live`（当前抑制评估）。当前评估失败时允许发送通知。 |
+| `suppression_evaluation_failures_total{phase}` | 计数器。告警抑制评估失败次数，按 `phase` 区分：`cycle_start`（周期开始时的记录评估）或 `live`（当前抑制评估）。当前评估失败时允许发送通知。 `status`：单个告警状态评估失败时允许通知，批次中的其他告警继续返回。 |
 | `agent_proposals_total{kind, outcome}` | Preview（代理操作）。非试运行的提案调用数，按类型（`ALARM_ACK`、`ALARM_CLEAR`、`unknown`）和结果（`created`、`existing`、`refused`）区分；错误计为 `refused`。 |
 | `agent_approvals_total{outcome}` | Preview（代理操作）。审批调用数，按最终结果（`recorded`、`executed`、`refused`、`concurrent`、`step_up_required`、`forbidden`、`fence_closed`）区分，内部重试仅计一次。没有更具体结果的错误计为 `refused`。 |
 | `agent_executions_total{kind, result}` | Preview（代理操作）。最终审批执行数，按类型（`ALARM_ACK`、`ALARM_CLEAR`、`unknown`）和结果（`executed`、`dependency_changed`、`policy_refused`、`fence_closed`、`refused`、`failed`）区分，每次执行仅计一次，包括重新启用围栏后的重试。`failed` 表示事务未能完成（数据库或语句超时、策略服务或停用事件流不可用）；锁冲突作为并发审批计为 `refused`。 |
