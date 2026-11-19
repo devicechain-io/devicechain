@@ -1,0 +1,25 @@
+{
+  "count": 3,
+  "placementTags": {
+    "0": [
+      "dc-nats-0"
+    ],
+    "1": [
+      "dc-nats-1"
+    ],
+    "2": [
+      "dc-nats-2"
+    ]
+  },
+  "seed": {
+    "weights": [
+      22,
+      21,
+      21
+    ]
+  },
+  "suffixes": [
+    "inbound-events",
+    "resolved-events"
+  ]
+}

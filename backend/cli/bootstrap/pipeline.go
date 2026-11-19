@@ -171,6 +171,9 @@ type State struct {
 	// SizeGiven says this run named a size (--size, base included), as opposed to following the
 	// declaration's. Set by CheckSizeAgainstCluster.
 	SizeGiven bool
+	// Sharding is the instance's sharding level ("scale"), or "" for off. The instance's own setting,
+	// like Size. See shardlevel.go.
+	Sharding string
 	// HA applies the ADR-020 messaging topology (haTopology). The cluster's setting,
 	// read back from the install record like NoMonitoring.
 	HA bool
