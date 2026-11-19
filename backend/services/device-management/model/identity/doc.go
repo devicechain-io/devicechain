@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package identity is device identity and credentials, being carved out of package model:
-// trust anchors, the x509 revocation store, the device credential row and its vocabulary,
-// and (in later steps) provisioning, claims and session kicks.
+// trust anchors, the x509 revocation store, the device credential row and its vocabulary, the
+// pure x509 checks and rules, and (in later steps) provisioning, claims and session kicks.
 //
 // The carve goes leaf first. The entities moved so far depend on nothing else in model. The
 // code that works on them through model's *Api stays in model for now. model re-exports every

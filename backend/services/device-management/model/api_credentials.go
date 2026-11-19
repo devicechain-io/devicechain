@@ -44,12 +44,12 @@ func buildDeviceCredential(key *credential.DeviceSecretKey, device *Device, requ
 	// Validate credential type against the known vocabulary. A certificate credential is built
 	// by createX509Credential, which resolves the trust anchor; this function does no I/O.
 	if CredentialType(request.CredentialType) == CredentialX509Certificate {
-		return nil, refuseX509Elsewhere()
+		return nil, identity.RefuseX509Elsewhere()
 	}
 	if !CredentialType(request.CredentialType).Valid() {
 		return nil, fmt.Errorf("invalid credential type: %s", request.CredentialType)
 	}
-	if err := refuseX509Fields(request); err != nil {
+	if err := identity.RefuseX509Fields(request); err != nil {
 		return nil, err
 	}
 
@@ -302,11 +302,11 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// device holds it.
 	if CredentialType(updated.CredentialType) == CredentialX509Certificate &&
 		(request.CredentialType.Set || request.CredentialId.Set || request.CredentialValue.Set || request.ExpiresAt.Set) {
-		return nil, invalidAnchor("a %s credential's type, id, secret and expiry come from its certificate and cannot be edited; "+
+		return nil, identity.InvalidAnchor("a %s credential's type, id, secret and expiry come from its certificate and cannot be edited; "+
 			"create a new credential for a new certificate", CredentialX509Certificate)
 	}
 	if request.CredentialType.Set && CredentialType(credentialType) == CredentialX509Certificate {
-		return nil, refuseX509Elsewhere()
+		return nil, identity.RefuseX509Elsewhere()
 	}
 	credentialId, err := request.CredentialId.ApplyToRequired("credentialId", updated.CredentialId)
 	if err != nil {
@@ -436,7 +436,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 				return err
 			}
 			if n >= MaxX509CredentialsPerDevice {
-				return invalidAnchor("device %q already holds %d certificate credentials, the most it may hold; remove one first",
+				return identity.InvalidAnchor("device %q already holds %d certificate credentials, the most it may hold; remove one first",
 					device.Token, n)
 			}
 		}
