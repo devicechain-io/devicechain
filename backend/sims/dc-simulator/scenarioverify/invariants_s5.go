@@ -159,6 +159,13 @@ func burstCaughtUp(o Observations) error {
 	return nil
 }
 
+// ingressStampSlack is how far into the outage an ordinary reading taken before the failure
+// may be stamped: one default emit interval. The sim stamps an ordinary reading when it SENDS
+// it, so a tick a moment before the failure whose post waits on a loaded ingress carries a
+// stamp just after it (the live rig saw 0.2 s). Only rows off the declared log grid are
+// excused; a declared entry inside the slack is judged like any other.
+const ingressStampSlack = 5 * time.Second
+
 // Each invariant owns one partition, selected by whether ingress ever refused
 // the entry. Compare multisets of (device, microsecond, metric, value), including
 // unexpected metrics/values and duplicates, rather than counting timestamps.
@@ -186,8 +193,17 @@ func restoreRows(o Observations, b Backfill, refusedPartition bool) error {
 			want[key{taken.UnixMicro(), metric, value}]++
 		}
 	}
+	declared := map[int64]bool{}
+	for _, taken := range b.Taken {
+		declared[taken.UnixMicro()] = true
+	}
 	for _, row := range b.Rows {
 		if row.At.Before(o.at(sim.HarborpulseOutageFrom)) || !row.At.Before(o.at(sim.HarborpulseOutageTo)) || refused[row.At.UnixMicro()] != refusedPartition {
+			continue
+		}
+		if !declared[row.At.UnixMicro()] && row.At.Before(o.at(sim.HarborpulseOutageFrom).Add(ingressStampSlack)) {
+			// The last reading taken BEFORE the feeder failed, stamped when it was SENT
+			// (EmitMeasurements stamps at send), lands just inside the outage under load.
 			continue
 		}
 		got[key{row.At.UnixMicro(), row.Name, row.Value}]++

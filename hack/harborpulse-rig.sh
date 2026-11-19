@@ -138,7 +138,7 @@
 # fabricated reports.
 #
 # Knobs: DC_HPRIG_CONTROLS=none runs the clean day alone, or a comma list of control names runs
-# those (all control sims at once is a lot for a laptop); DC_HPRIG_KEEP=1 keeps the sims' tenants
+# those (all control sims at once is a lot for a laptop: with the 34 runs S5 brings, a --compact instance answers previewRule late or partially and every day loses its verdict, so run it in batches, e.g. the eight S5 controls, then the rest); DC_HPRIG_KEEP=1 keeps the sims' tenants
 # afterwards; DC_HPRIG_SIM_PORT is the first sim's control port (the rest follow);
 # DC_HPRIG_SINK_PORT is the loopback port-forward to the sink.
 #

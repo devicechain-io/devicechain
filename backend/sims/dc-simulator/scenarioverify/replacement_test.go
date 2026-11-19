@@ -49,13 +49,8 @@ func TestEachS5ReplacementControlModelsLiveEvidence(t *testing.T) {
 		// Retiring the original gauge and moving its stream also moves its flood
 		// alarm, MQTT bulletins and duty pages. The East-only correlation/webhook
 		// and the acknowledged north-2 control retain their evidence.
-		// The live rig (2026-11-19) also showed both quay-flooding previews answering partially
-		// ("history before the earliest retained event is unavailable") once a second logical
-		// gauge joined the profile mid-day, so the correlation pair is red too.
-		evaluateRed(t, InvReplacementIdentity, "records", []string{InvFloodEscalates, InvMQTTBulletin, InvNotifyEscalates, InvCorrelationFires, InvCorrelationControl}, func(d *day) {
+		evaluateRed(t, InvReplacementIdentity, "records", []string{InvFloodEscalates, InvMQTTBulletin, InvNotifyEscalates}, func(d *day) {
 			old, next := sim.HarborpulseReplacementDevice, sim.HarborpulseReplacementSeparateDevice
-			const partial = "history before the earliest retained event is unavailable; previewing from the earliest retained event"
-			d.corr.Degraded, d.control.Degraded = partial, partial
 			d.s5.Replacement.Records = nil
 			// The new logical device did not exist before the replacement beat.
 			d.s5.Replacement.Readings = d.s5.Replacement.Readings[1:]
