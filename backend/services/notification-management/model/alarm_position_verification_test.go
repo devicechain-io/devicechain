@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 type positionOracleFunc func(context.Context, []string) (map[string]bool, error)
@@ -146,7 +147,7 @@ func TestPositionVerificationChunksDistinctTokens(t *testing.T) {
 		}
 		return visible, nil
 	})
-	result, err := verifiedHistory(ctx, api, func() ([]string, error) { return tokens, nil }, func(rows []string) ([]string, error) { return rows, nil })
+	result, err := verifiedHistory(ctx, api, func(*gorm.DB) ([]string, error) { return tokens, nil }, func(_ *gorm.DB, rows []string) ([]string, error) { return rows, nil })
 	require.NoError(t, err)
 	require.Equal(t, tokens, result)
 	require.Equal(t, 2, calls)

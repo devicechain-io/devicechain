@@ -48,19 +48,18 @@ func (api *Api) NotificationAttempts(ctx context.Context, criteria NotificationA
 		}
 		return result
 	}
-	return verifiedHistory(ctx, api, func() (*NotificationAttemptSearchResults, error) {
+	return verifiedHistory(ctx, api, func(base *gorm.DB) (*NotificationAttemptSearchResults, error) {
 		results := make([]NotificationAttempt, 0)
-		db, pag := api.RDB.ListOf(ctx, &NotificationAttempt{}, filter, criteria.Pagination)
+		db, pag := api.RDB.ListOfDB(base, &NotificationAttempt{}, filter, criteria.Pagination)
 		if err := db.Find(&results).Error; err != nil {
 			return nil, err
 		}
 		return &NotificationAttemptSearchResults{Results: results, Pagination: pag}, nil
-	}, func(result *NotificationAttemptSearchResults) ([]string, error) {
+	}, func(base *gorm.DB, result *NotificationAttemptSearchResults) ([]string, error) {
 		var tokens []string
-		err := filter(api.RDB.DB(ctx).Model(&NotificationAttempt{})).
+		err := filter(base.Model(&NotificationAttempt{})).
 			Distinct("alarm_token").Limit(maxHistoryVerificationTokens+1).Pluck("alarm_token", &tokens).Error
-		// Another reader may downgrade the cache between the page and distinct
-		// queries. Verify the loaded page too so those rows cannot escape review.
+		// Also verify the loaded page so every returned row receives a verdict.
 		for _, row := range result.Results {
 			tokens = append(tokens, row.AlarmToken)
 		}

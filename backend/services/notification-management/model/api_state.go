@@ -20,8 +20,10 @@ import (
 // raised alarms by their alarm tokens. Returns an empty slice when none exist
 // (the dispatcher has not yet notified about the alarm).
 func (api *Api) NotificationStatesByAlarmToken(ctx context.Context, alarmTokens []string) ([]*NotificationState, error) {
-	return verifiedHistory(ctx, api, func() ([]*NotificationState, error) { return api.notificationStatesByAlarmToken(ctx, alarmTokens) },
-		func(result []*NotificationState) ([]string, error) {
+	return verifiedHistory(ctx, api, func(db *gorm.DB) ([]*NotificationState, error) {
+		return api.notificationStatesByAlarmToken(db, alarmTokens)
+	},
+		func(_ *gorm.DB, result []*NotificationState) ([]string, error) {
 			tokens := []string{}
 			for _, row := range result {
 				tokens = append(tokens, row.AlarmToken)
@@ -30,9 +32,9 @@ func (api *Api) NotificationStatesByAlarmToken(ctx context.Context, alarmTokens 
 		})
 }
 
-func (api *Api) notificationStatesByAlarmToken(ctx context.Context, alarmTokens []string) ([]*NotificationState, error) {
+func (api *Api) notificationStatesByAlarmToken(db *gorm.DB, alarmTokens []string) ([]*NotificationState, error) {
 	found := make([]*NotificationState, 0)
-	if err := rdb.FindByKeys(notificationHistoryRead(api.RDB.DB(ctx), false), &found, "alarm_token", alarmTokens); err != nil {
+	if err := rdb.FindByKeys(notificationHistoryRead(db, false), &found, "alarm_token", alarmTokens); err != nil {
 		return nil, err
 	}
 	return found, nil
@@ -52,19 +54,18 @@ func (api *Api) NotificationStates(ctx context.Context, criteria NotificationSta
 		}
 		return result
 	}
-	return verifiedHistory(ctx, api, func() (*NotificationStateSearchResults, error) {
+	return verifiedHistory(ctx, api, func(base *gorm.DB) (*NotificationStateSearchResults, error) {
 		results := make([]NotificationState, 0)
-		db, pag := api.RDB.ListOf(ctx, &NotificationState{}, filter, criteria.Pagination)
+		db, pag := api.RDB.ListOfDB(base, &NotificationState{}, filter, criteria.Pagination)
 		if err := db.Find(&results).Error; err != nil {
 			return nil, err
 		}
 		return &NotificationStateSearchResults{Results: results, Pagination: pag}, nil
-	}, func(result *NotificationStateSearchResults) ([]string, error) {
+	}, func(base *gorm.DB, result *NotificationStateSearchResults) ([]string, error) {
 		var tokens []string
-		err := filter(api.RDB.DB(ctx).Model(&NotificationState{})).
+		err := filter(base.Model(&NotificationState{})).
 			Distinct("alarm_token").Limit(maxHistoryVerificationTokens+1).Pluck("alarm_token", &tokens).Error
-		// Another reader may downgrade the cache between the page and distinct
-		// queries. Verify the loaded page too so those rows cannot escape review.
+		// Also verify the loaded page so every returned row receives a verdict.
 		for _, row := range result.Results {
 			tokens = append(tokens, row.AlarmToken)
 		}

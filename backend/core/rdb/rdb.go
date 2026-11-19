@@ -82,11 +82,10 @@ func clampTotal(n int64) int32 {
 // whether a LIMIT is applied. While the all-rows read was a branch INSIDE ListOf,
 // everything above that branch was shared by accident of layout rather than by
 // construction, and the ordering note below had to claim the sharing in prose.
-func (rdb *RdbManager) countAndOrder(ctx context.Context, mdl Sortable,
+func (rdb *RdbManager) countAndOrder(base *gorm.DB, mdl Sortable,
 	filters func(db *gorm.DB) *gorm.DB) (*gorm.DB, int64) {
-	// Bind the context once (so the tenant-scope callbacks see it) and reuse it
-	// for both the count and data queries; each Model(...) clones a fresh stmt.
-	base := rdb.DB(ctx)
+	// Reuse the supplied session (including its context and transaction) for
+	// both queries; each Model(...) clones a fresh statement.
 
 	// Execute count query.
 	count := int64(0)
@@ -142,12 +141,19 @@ func (rdb *RdbManager) orderedDataQuery(base *gorm.DB, mdl Sortable,
 // inherited it; it is gone, and a caller that needs every row calls ListAllOf instead
 // and is legible as having done so.
 func (rdb *RdbManager) ListOf(ctx context.Context, mdl Sortable, filters func(db *gorm.DB) *gorm.DB, pag Pagination) (*gorm.DB, SearchResultsPagination) {
+	return rdb.ListOfDB(rdb.DB(ctx), mdl, filters, pag)
+}
+
+// ListOfDB is ListOf on a caller-supplied session, allowing COUNT and the page
+// query to share a transaction. Obtain base through DB(ctx) so tenant callbacks
+// retain the caller's context, and execute the returned query before closing it.
+func (rdb *RdbManager) ListOfDB(base *gorm.DB, mdl Sortable, filters func(db *gorm.DB) *gorm.DB, pag Pagination) (*gorm.DB, SearchResultsPagination) {
 	// Sanity check page number.
 	if pag.PageNumber < 1 {
 		pag.PageNumber = 1
 	}
 
-	result, total := rdb.countAndOrder(ctx, mdl, filters)
+	result, total := rdb.countAndOrder(base, mdl, filters)
 	result.Scopes(Paginate(pag))
 
 	// Use the effective (defaulted/clamped) page size so the reported span matches
@@ -223,7 +229,7 @@ func TrimPage[T any](rows []T, w PageWindow) ([]T, PageWindow) {
 // that grows with the tenant.
 func (rdb *RdbManager) ListAllOf(ctx context.Context, mdl Sortable,
 	filters func(db *gorm.DB) *gorm.DB) (*gorm.DB, SearchResultsPagination) {
-	result, total := rdb.countAndOrder(ctx, mdl, filters)
+	result, total := rdb.countAndOrder(rdb.DB(ctx), mdl, filters)
 	return result, SearchResultsPagination{
 		PageStart:    1,
 		PageEnd:      clampTotal(total),
