@@ -1,0 +1,35 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  The Harborpulse model, compiled from the SAME .cs files Unity compiles through
+  DeviceChain.Harborpulse.Model.asmdef (no engine references): the layout, the site plan, the
+  scenario clock, the sky, the waves and the readings boards. Unity gets System.Text.Json from the
+  SDK package's plugin folder; here it is the framework's on net8.0 and the package on
+  netstandard2.1.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+    <RootNamespace>DeviceChain.Harborpulse.Model</RootNamespace>
+    <AssemblyName>DeviceChain.Harborpulse.Model</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.1'">
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../../shared/io.devicechain.demo-platform/Dotnet~/DeviceChain.Demos.Core/DeviceChain.Demos.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Assets/Harborpulse/Scripts/Model/**/*.cs" />
+  </ItemGroup>
+
+</Project>
