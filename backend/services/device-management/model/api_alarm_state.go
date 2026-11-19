@@ -158,6 +158,9 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 	results := make([]Alarm, 0)
 	db, pag := api.RDB.ListOf(ctx, &Alarm{}, func(result *gorm.DB) *gorm.DB {
 		result = atAnchor(ofType(filter(result)))
+		if criteria.RaisedDuringSuppression != nil {
+			result = alarmCycleSuppressionFilter(result, *criteria.RaisedDuringSuppression)
+		}
 		// Overlap, not containment: an alarm raised before the range and still active (or cleared
 		// inside it) was present during the range. A re-raise nulls cleared_time, so NULL means
 		// active. No index is added for these: the caller that sends a range (a chart's event

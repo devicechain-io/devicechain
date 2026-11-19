@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -72,7 +72,7 @@ func quietHold(p *model.NotificationPolicy, severity string, now time.Time) (boo
 // suppressed, not held for the morning), and at least one of its rules matches the alarm's
 // severity. Everything else passes through to plan unchanged, which applies the same
 // filters to the policies it is given.
-func (n *PolicyNotifier) holdQuiet(event *dmmodel.AlarmStateChangeEvent, policies []*model.NotificationPolicy,
+func (n *PolicyNotifier) holdQuiet(event *dmcontract.AlarmStateChangeEvent, policies []*model.NotificationPolicy,
 	state *model.NotificationState, now time.Time) ([]*model.NotificationPolicy, []*model.NotificationDeferral) {
 	sendNow := make([]*model.NotificationPolicy, 0, len(policies))
 	var held []*model.NotificationDeferral
@@ -188,7 +188,7 @@ func (n *PolicyNotifier) ReleaseHeld(ctx context.Context, policies []*model.Noti
 		}
 		groups[d.AlarmToken] = append(groups[d.AlarmToken], d)
 	}
-	suppressions := n.lookupSuppressions(ctx, order, now, 2*time.Second)
+	suppressions := n.lookupSuppressionStatuses(ctx, order, 2*time.Second)
 	var lastErr error
 	for _, alarm := range order {
 		if err := ctx.Err(); err != nil {
@@ -242,7 +242,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 			}
 			continue
 		}
-		if status, ok := suppressions[alarm]; ok {
+		if status, ok := suppressions[alarm]; ok && status.suppressedAt(now) {
 			if err := n.api.RescheduleSuppressedNotificationDeferral(ctx, d, suppressionReleaseAt(status.Until, now), status.WindowToken); err != nil {
 				return fmt.Errorf("re-holding suppressed notification: %w", err)
 			}
@@ -287,7 +287,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 		return nil
 	}
 
-	var event dmmodel.AlarmStateChangeEvent
+	var event dmcontract.AlarmStateChangeEvent
 	if err := json.Unmarshal(latest.Event, &event); err != nil {
 		// Unreadable is permanent; putting it back would fail the same way forever.
 		err = fmt.Errorf("decoding held alarm event: %w", err)
@@ -301,6 +301,23 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 
 	rctx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
 	defer cancel()
+	// Routes above use the held severity. Window release content uses live alarm facts,
+	// then a known same-cycle state, then the held event. Missing/failed lookups keep
+	// the held event, so an optional status lookup adds no failure mode.
+	if status, ok := suppressions[alarm]; latest.HeldByWindow.Valid && ok {
+		severity := status.Severity
+		if !model.SeverityAtOrAbove(severity, "INDETERMINATE") && state != nil && state.CycleRaisedAt.Valid &&
+			!event.RaisedTime.IsZero() && state.SameCycleAs(event.RaisedTime) {
+			severity = state.Severity
+		}
+		if model.SeverityAtOrAbove(severity, "INDETERMINATE") {
+			if event.Severity != severity {
+				event.EventType = dmcontract.AlarmEventRaised
+			}
+			event.Severity = severity
+			event.PreviousSeverity = ""
+		}
+	}
 	message := renderNotification(&event)
 	for _, d := range claimed {
 		if d.HeldByWindow.Valid {
@@ -461,7 +478,7 @@ func heldForEarlierCycle(state *model.NotificationState, d *model.NotificationDe
 	if state == nil || !state.CycleRaisedAt.Valid {
 		return false
 	}
-	var held dmmodel.AlarmStateChangeEvent
+	var held dmcontract.AlarmStateChangeEvent
 	if err := json.Unmarshal(d.Event, &held); err != nil {
 		return false
 	}

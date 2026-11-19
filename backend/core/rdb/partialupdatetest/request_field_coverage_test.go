@@ -33,3 +33,21 @@ func TestRequestFieldCoverageAcceptsEveryExportedField(t *testing.T) {
 	// toy requests, including case-insensitive Go field / declaration matching.
 	everyRequestFieldIsDeclared(t, demoSuite(false))
 }
+
+type conditionalCoverageRequest struct {
+	Name        dcgraphql.OptionalString
+	Conditional dcgraphql.OptionalString
+}
+
+func conditionalCoverageSuite() Suite[*demoApi] {
+	s := requestCoverageSuite()
+	s.Families[0].NewRequest = func() any { return new(conditionalCoverageRequest) }
+	s.Families[0].FieldLimitations = map[string]string{
+		"conditional": "Only applicable under another discriminator; the complementary fixture drives it.",
+	}
+	return s
+}
+
+func TestRequestFieldCoverageAcceptsConditionalLimitation(t *testing.T) {
+	everyRequestFieldIsDeclared(t, conditionalCoverageSuite())
+}

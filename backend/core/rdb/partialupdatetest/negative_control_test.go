@@ -40,6 +40,27 @@ const brokenModeEnv = "DC_PARTIALUPDATETEST_MUTANT"
 // mutants are the deliberately broken runs. Each returns nothing and is EXPECTED TO FAIL
 // the *testing.T it is given — except "healthy", which is the no-op control.
 var mutants = map[string]func(t *testing.T){
+	"blankFieldLimitation": func(t *testing.T) {
+		s := conditionalCoverageSuite()
+		s.Families[0].FieldLimitations["conditional"] = " "
+		everyRequestFieldIsDeclared(t, s)
+	},
+	"staleFieldLimitation": func(t *testing.T) {
+		s := conditionalCoverageSuite()
+		s.Families[0].FieldLimitations["missing"] = "No longer a request field."
+		everyRequestFieldIsDeclared(t, s)
+	},
+	"contradictoryFieldLimitation": func(t *testing.T) {
+		s := conditionalCoverageSuite()
+		s.Families[0].FieldLimitations["name"] = "Already driven."
+		everyRequestFieldIsDeclared(t, s)
+	},
+	"wholeFamilyLimitation": func(t *testing.T) {
+		s := conditionalCoverageSuite()
+		s.Families[0].Fields = nil
+		s.Families[0].FieldLimitations["name"] = "Would skip the entire family."
+		everyRequestFieldIsDeclared(t, s)
+	},
 	"duplicateRequestField": func(t *testing.T) {
 		s := requestCoverageSuite()
 		duplicate := s.Families[0].Fields[0]
@@ -265,6 +286,10 @@ func TestNegativeControls(t *testing.T) {
 		want string
 	}{
 		{mutant: "healthy", wantPass: true},
+		{mutant: "blankFieldLimitation", want: "needs a reason and complementary coverage"},
+		{mutant: "staleFieldLimitation", want: "matches no exported request field"},
+		{mutant: "contradictoryFieldLimitation", want: "both declared and limited"},
+		{mutant: "wholeFamilyLimitation", want: "a whole family cannot be limited"},
 		{mutant: "duplicateRequestField", want: "declares field \"NAME\" more than once"},
 		{mutant: "staleRequestField", want: "declares field \"renamedAway\", but no exported request field matches it"},
 		{mutant: "privateRequestFieldDeclared", want: "declares field \"private\", but no exported request field matches it"},

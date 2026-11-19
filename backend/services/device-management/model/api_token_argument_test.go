@@ -62,16 +62,6 @@ func TestEveryUpdateTakesADedicatedUpdateRequest(t *testing.T) {
 	putest.AssertEveryUpdateTakesADedicatedRequest(t, putest.UpdateSurface[*Api]{
 		Families: partialUpdateFamilies(),
 
-		// Suppression slice 1 is an INTERNAL Go API, with no GraphQL input or null
-		// packer yet. Its nullable Go fields carry omitted/set/clear, and its kind
-		// switch couples more than two schedule fields, outside this wire harness.
-		// alarm_suppression_test.go drives merged updates, nullable fields, refusal
-		// atomicity and reach authorization against storage. Slice 3 must register
-		// the served three-state request here when it exposes the mutation.
-		Exempt: map[string]string{
-			"UpdateAlarmSuppressionWindow": "AlarmSuppressionUpdateRequest",
-		},
-
 		// The anti-vacuity floor. Reflection over a renamed or embedded receiver could
 		// find nothing at all, and a loop over nothing reports success.
 		//

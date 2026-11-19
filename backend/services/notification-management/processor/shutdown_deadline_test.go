@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -68,7 +68,7 @@ func TestNotificationShutdownPartialClearDoesNotSendAgain(t *testing.T) {
 	require.NoError(t, db.Create(&r).Error)
 	n.adapters[model.ChannelTypeWebhook] = adapterFunc(func(context.Context, *RenderedNotification) error { return nil })
 	raised := time.Now().UTC().Add(-time.Hour)
-	require.NoError(t, n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)))
+	require.NoError(t, n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)))
 
 	gate := newShutdownNotifier()
 	var sent atomic.Int32
@@ -84,7 +84,7 @@ func TestNotificationShutdownPartialClearDoesNotSendAgain(t *testing.T) {
 	// Only Stop may expire this dispatch; the adapter's ordinary timeout must
 	// not satisfy the cancellation assertion on its own.
 	n.budget, n.timeout, n.attempts = time.Hour, time.Hour, 1
-	clear := cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(time.Minute))
+	clear := cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(time.Minute))
 	value, err := dmproto.MarshalAlarmStateChangeEvent(clear)
 	require.NoError(t, err)
 	ack := &recordingAck{}
@@ -154,7 +154,7 @@ func newShutdownNotifier() *shutdownNotifier {
 
 func (n *shutdownNotifier) unblock() { n.releaseOnce.Do(func() { close(n.release) }) }
 
-func (n *shutdownNotifier) Notify(ctx context.Context, _ *dmmodel.AlarmStateChangeEvent) error {
+func (n *shutdownNotifier) Notify(ctx context.Context, _ *dmcontract.AlarmStateChangeEvent) error {
 	close(n.active)
 	select {
 	case <-ctx.Done():

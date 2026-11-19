@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -100,7 +100,7 @@ func TestAHeldPageOfTheCurrentCycleIsReleased(t *testing.T) {
 	if err := api.RecordNotification(ctx, "a1", "k", "MAJOR", raised.Truncate(time.Microsecond), clock.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	ev := eventAt(dmmodel.AlarmEventEscalated, "MAJOR", raised)
+	ev := eventAt(dmcontract.AlarmEventEscalated, "MAJOR", raised)
 	if err := n.dispatch(ctx, ev); err != nil {
 		t.Fatal(err)
 	}

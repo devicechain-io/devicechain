@@ -12,6 +12,7 @@ import (
 	"hash/fnv"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -150,6 +151,8 @@ type Api struct {
 	// Groups resolves an entity group to its devices in device-management, for a rollout's start.
 	// Nil means it is not wired, and starting a rollout is REFUSED.
 	Groups GroupResolver
+	// Incarnations freezes device identity before a rollout writes any targets. Nil refuses start.
+	Incarnations DeviceIncarnationLookup
 	// OnRolloutStep observes every rollout step (the driver's and the inline one after a start or
 	// resume): the service records its metrics through it. Nil observes nothing.
 	OnRolloutStep func(res RolloutStepResult, err error)
@@ -168,6 +171,9 @@ type Api struct {
 	// rollouts (the last id the previous pass reached; 0 starts over), so a pass bounded to
 	// maxRolloutsPerPass rollouts still reaches every one of them in turn.
 	rolloutPassAfter atomic.Uint64
+	// rolloutTargetAfter rotates each running rollout's bounded lookup window, including held
+	// targets. It is advisory per-replica state (uint rollout id -> uint target id); CAS owns writes.
+	rolloutTargetAfter sync.Map
 	// rolloutsPerPass overrides maxRolloutsPerPass when positive. A seam for the fairness test.
 	rolloutsPerPass int
 }

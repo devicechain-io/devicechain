@@ -42,6 +42,7 @@ export const NAV_SECTION_KEY: Record<string, string> = {
   'maintenance-windows': 'maintenanceWindows',
   dashboards: 'dashboards',
   alarms: 'alarms',
+  'alarm-maintenance': 'alarmMaintenance',
   approvals: 'approvals',
   'notification-policies': 'notificationPolicies',
   'notification-channels': 'notificationChannels',

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-notification-management/model"
 )
 
@@ -18,17 +18,17 @@ import (
 func TestAClearWithAFutureEventTimeIsAnnouncedOnce(t *testing.T) {
 	n, ra, ctx := clearHarness(t, true)
 	raised := time.Now().UTC().Add(-time.Hour)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatal(err)
 	}
-	clr := cycleEvent(dmmodel.AlarmEventCleared, raised, time.Now().UTC().Add(300*time.Second))
+	clr := cycleEvent(dmcontract.AlarmEventCleared, raised, time.Now().UTC().Add(300*time.Second))
 	for i := 0; i < 3; i++ {
 		if err := n.Notify(ctx, clr); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// A late-path dispatch of the same cycle must not announce it again either.
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatal(err)
 	}
 	clears := 0
@@ -54,7 +54,7 @@ func TestExactlyOneConcurrentClaimantWinsTheClearAnnouncement(t *testing.T) {
 	}
 	pool.SetMaxOpenConns(1)
 	raised := time.Now().UTC().Add(-time.Hour)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatal(err)
 	}
 	// Stamp the clear without announcing it, so the claim is what is contended.
@@ -100,16 +100,16 @@ func TestAStalePreviousCycleClaimDoesNotSuppressTheNewCycle(t *testing.T) {
 	n, ra, ctx := clearHarness(t, true)
 	c1 := time.Now().UTC().Add(-3 * time.Hour)
 	c2 := time.Now().UTC().Add(-time.Hour)
-	_ = n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, c1, c1))
-	_ = n.Notify(ctx, cycleEvent(dmmodel.AlarmEventCleared, c1, c1.Add(time.Minute)))
-	_ = n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, c2, c2))
+	_ = n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, c1, c1))
+	_ = n.Notify(ctx, cycleEvent(dmcontract.AlarmEventCleared, c1, c1.Add(time.Minute)))
+	_ = n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, c2, c2))
 	// An older pod moved the row to cycle two and cleared what it knew, leaving cycle one's claim.
 	db := stateDB(n.api).WithContext(ctx)
 	if err := db.Model(&model.NotificationState{}).Where("alarm_token = ?", "a1").
 		Update("clear_notified_at", time.Now().UTC().Add(time.Hour)).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventCleared, c2, c2.Add(time.Minute))); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventCleared, c2, c2.Add(time.Minute))); err != nil {
 		t.Fatal(err)
 	}
 	got := ra.types()
@@ -123,7 +123,7 @@ func TestAStalePreviousCycleClaimDoesNotSuppressTheNewCycle(t *testing.T) {
 func TestARenamedChannelStillGetsTheClear(t *testing.T) {
 	n, ra, ctx := clearHarness(t, true)
 	raised := time.Now().UTC().Add(-time.Hour)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatal(err)
 	}
 	db := stateDB(n.api).WithContext(ctx)
@@ -131,7 +131,7 @@ func TestARenamedChannelStillGetsTheClear(t *testing.T) {
 		Update("token", "smtp-renamed").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(time.Minute))); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(time.Minute))); err != nil {
 		t.Fatal(err)
 	}
 	if got := ra.types(); len(got) != 2 || got[1] != "CLEARED" {
@@ -154,7 +154,7 @@ func TestTheSchedulerAnnouncesAPendingClearOnce(t *testing.T) {
 	// later tick, past the backoff.
 	raised := time.Now().UTC().Add(time.Second)
 	later := time.Now().Add(10 * time.Minute)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatal(err)
 	}
 	// Stamped cleared with nobody announcing it.

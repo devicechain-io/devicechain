@@ -151,13 +151,21 @@ func (api *Api) suppressionWindows(ctx context.Context) ([]compiledWindow, error
 		return nil, err
 	}
 	now := time.Now()
+	api.suppressionCache.Lock()
+	negative, found := api.suppressionCache.tenants[tenant]
+	api.suppressionCache.Unlock()
+	// An empty tenant is checked at most every five seconds. Replica-created
+	// windows may be missed for this bounded interval, failing toward paging.
+	if found && negative.count == 0 && now.Sub(negative.loaded) < 5*time.Second {
+		return negative.windows, nil
+	}
 	db := api.RDB.DB(suppressionFactContext(ctx)).Scopes(suppressionLiveAt(now.Add(-10 * time.Minute)))
 	var signature struct {
 		Count   int64
 		Version int64
 	}
 	if err := db.Session(&gorm.Session{}).Model(&AlarmSuppressionWindow{}).
-		Select("count(*) AS count, COALESCE(max(version), 0) AS version").Scan(&signature).Error; err != nil {
+		Select("count(*) AS count, COALESCE(sum(version), 0) AS version").Scan(&signature).Error; err != nil {
 		return nil, err
 	}
 	api.suppressionCache.Lock()
@@ -221,12 +229,7 @@ func loadSuppressionWindows(db *gorm.DB) ([]compiledWindow, error) {
 }
 
 // SuppressionFor evaluates the current device, never the alarm's historical scope stamp.
-// The evaluator is internal and unused by production paths in this slice.
 func (api *Api) SuppressionFor(ctx context.Context, deviceId uint, alarmKey, severity string, at time.Time) (*SuppressionMatch, error) {
-	var device Device
-	if err := api.RDB.DB(suppressionFactContext(ctx)).First(&device, deviceId).Error; err != nil {
-		return nil, err
-	}
 	var windows []compiledWindow
 	var err error
 	if at.Before(time.Now().Add(-10 * time.Minute)) {
@@ -237,6 +240,18 @@ func (api *Api) SuppressionFor(ctx context.Context, deviceId uint, alarmKey, sev
 		windows, err = api.suppressionWindows(ctx)
 	}
 	if err != nil {
+		return nil, err
+	}
+	return api.suppressionForWindows(ctx, deviceId, alarmKey, severity, at, windows)
+}
+
+// suppressionForWindows reuses a single window snapshot for a batched status read.
+func (api *Api) suppressionForWindows(ctx context.Context, deviceId uint, alarmKey, severity string, at time.Time, windows []compiledWindow) (*SuppressionMatch, error) {
+	if len(windows) == 0 {
+		return nil, nil
+	}
+	var device Device
+	if err := api.RDB.DB(suppressionFactContext(ctx)).First(&device, deviceId).Error; err != nil {
 		return nil, err
 	}
 	facts, err := api.suppressionDeviceFacts(suppressionFactContext(ctx), &device, windows)
@@ -270,35 +285,69 @@ func (api *Api) suppressionDeviceFacts(ctx context.Context, device *Device, wind
 			}
 		}
 	}
+	tokens := make([]string, 0, len(named))
 	for token := range named {
-		var g EntityGroup
-		err := api.RDB.DB(ctx).Where("token = ?", token).First(&g).Error
-		if err == gorm.ErrRecordNotFound {
-			continue
-		}
-		if err != nil {
+		tokens = append(tokens, token)
+	}
+	const batchSize = 200
+	for start := 0; start < len(tokens); start += batchSize {
+		var groups []EntityGroup
+		if err := api.RDB.DB(ctx).Where("token IN ?", tokens[start:min(start+batchSize, len(tokens))]).Find(&groups).Error; err != nil {
 			return facts, err
 		}
-		if g.MemberType != string(entity.TypeDevice) {
-			continue
-		}
-		var member bool
-		if MembershipMode(g.MembershipMode) == MembershipDynamic {
-			if !g.ActiveVersion.Valid {
+		staticIDs := []uint{}
+		staticTokens := map[uint]string{}
+		pairs := [][]any{}
+		dynamic := map[uint]EntityGroup{}
+		for _, g := range groups {
+			if g.MemberType != string(entity.TypeDevice) {
 				continue
 			}
-			var version EntityGroupVersion
-			if err := api.RDB.DB(ctx).Where("entity_group_id = ? AND version = ?", g.ID, g.ActiveVersion.Int32).First(&version).Error; err != nil {
+			if MembershipMode(g.MembershipMode) == MembershipDynamic {
+				if g.ActiveVersion.Valid {
+					pairs = append(pairs, []any{g.ID, g.ActiveVersion.Int32})
+					dynamic[g.ID] = g
+				}
+			} else {
+				staticIDs = append(staticIDs, g.ID)
+				staticTokens[g.ID] = g.Token
+			}
+		}
+		if len(staticIDs) > 0 {
+			// The tenant equality makes the joined table tenant-safe by the query
+			// itself (hack/check-raw-joins.sh).
+			var members []EntityRelationship
+			if err := api.RDB.DB(ctx).
+				Joins("JOIN entity_relationship_types rt ON rt.id = entity_relationships.relationship_type_id AND rt.tenant_id = entity_relationships.tenant_id").
+				Where("rt.token = ?", MembershipRelationshipType).
+				Where("entity_relationships.source_type = ? AND entity_relationships.source_id IN ?", string(entity.TypeGroup), staticIDs).
+				Where("entity_relationships.target_type = ? AND entity_relationships.target_id = ?", string(entity.TypeDevice), device.ID).
+				Find(&members).Error; err != nil {
 				return facts, err
 			}
-			member, err = api.isMemberBySelector(ctx, api.RDB.DB(ctx), version.MemberType, version.Selector, device.ID)
-		} else {
-			member, err = api.IsGroupMember(ctx, &g, device.ID)
+			for _, member := range members {
+				facts.groupTokens[staticTokens[member.SourceId]] = true
+			}
 		}
-		if err != nil {
-			return facts, err
+		if len(pairs) > 0 {
+			var versions []EntityGroupVersion
+			if err := api.RDB.DB(ctx).Where("(entity_group_id, version) IN ?", pairs).Find(&versions).Error; err != nil {
+				return facts, err
+			}
+			if len(versions) != len(pairs) {
+				return facts, gorm.ErrRecordNotFound
+			}
+			for _, version := range versions {
+				if version.MemberType != string(entity.TypeDevice) {
+					continue
+				}
+				member, err := api.isMemberBySelector(ctx, api.RDB.DB(ctx), version.MemberType, version.Selector, device.ID)
+				if err != nil {
+					return facts, err
+				}
+				facts.groupTokens[dynamic[version.EntityGroupId].Token] = member
+			}
 		}
-		facts.groupTokens[token] = member
 	}
 	return facts, nil
 }

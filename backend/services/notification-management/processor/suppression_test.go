@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/prometheus/client_golang/prometheus"
@@ -25,8 +25,8 @@ func (f suppressionFunc) LookupSuppressions(ctx context.Context, tokens []string
 	return f(ctx, tokens)
 }
 
-func suppressedEvent(at, until time.Time) *dmmodel.AlarmStateChangeEvent {
-	e := eventAt(dmmodel.AlarmEventRaised, "MAJOR", at)
+func suppressedEvent(at, until time.Time) *dmcontract.AlarmStateChangeEvent {
+	e := eventAt(dmcontract.AlarmEventRaised, "MAJOR", at)
 	e.SuppressedUntil, e.SuppressionWindowToken = &until, "window-1"
 	return e
 }
@@ -129,15 +129,15 @@ func TestDeescalatedNeverHolds(t *testing.T) {
 	clock := outsideQuiet
 	n, api, fa, ctx := quietFixture(t, "", "", "", &clock)
 	e := suppressedEvent(clock, clock.Add(time.Hour))
-	e.EventType = dmmodel.AlarmEventDeescalated
+	e.EventType = dmcontract.AlarmEventDeescalated
 	require.NoError(t, n.Notify(ctx, e))
 	require.Empty(t, heldRows(t, api, ctx))
 	require.Zero(t, fa.calls)
 	// An existing hold must keep the event and severity of its last raise/escalation.
-	e.EventType = dmmodel.AlarmEventRaised
+	e.EventType = dmcontract.AlarmEventRaised
 	require.NoError(t, n.Notify(ctx, e))
 	before := heldRows(t, api, ctx)[0]
-	e.EventType, e.Severity, e.OccurredTime = dmmodel.AlarmEventDeescalated, "MINOR", clock.Add(time.Second)
+	e.EventType, e.Severity, e.OccurredTime = dmcontract.AlarmEventDeescalated, "MINOR", clock.Add(time.Second)
 	require.NoError(t, n.Notify(ctx, e))
 	after := heldRows(t, api, ctx)[0]
 	require.Equal(t, before.Event, after.Event)
@@ -152,7 +152,7 @@ func TestSuppressionLookupFailureFailsOpen(t *testing.T) {
 	n.SuppressionLookup = suppressionFunc(func(context.Context, []string) (map[string]SuppressionStatus, error) {
 		return nil, errors.New("old schema")
 	})
-	require.NoError(t, n.Notify(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)))
+	require.NoError(t, n.Notify(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)))
 	require.Equal(t, 1, fa.calls)
 	require.Empty(t, heldRows(t, api, ctx))
 	e := suppressedEvent(clock.Add(time.Minute), clock.Add(time.Hour))
@@ -178,7 +178,7 @@ func TestSuppressionThrottleFirst(t *testing.T) {
 	n, api, fa, ctx := quietFixture(t, "", "", "", &clock)
 	policies := enabledPolicies(t, api, ctx)
 	require.NoError(t, api.RDB.DB(ctx).Model(&model.NotificationPolicy{}).Where("id = ?", policies[0].ID).Update("throttle_seconds", 3600).Error)
-	require.NoError(t, n.Notify(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)))
+	require.NoError(t, n.Notify(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)))
 	clock = clock.Add(time.Minute)
 	require.NoError(t, n.Notify(ctx, suppressedEvent(clock, clock.Add(time.Hour))))
 	require.Equal(t, 1, fa.calls)
@@ -186,7 +186,7 @@ func TestSuppressionThrottleFirst(t *testing.T) {
 }
 
 func TestSuppressionHeldResolvedNeverPages(t *testing.T) {
-	for _, kind := range []dmmodel.AlarmEventType{dmmodel.AlarmEventCleared, dmmodel.AlarmEventAcknowledged} {
+	for _, kind := range []dmcontract.AlarmEventType{dmcontract.AlarmEventCleared, dmcontract.AlarmEventAcknowledged} {
 		t.Run(kind.String(), func(t *testing.T) {
 			clock := outsideQuiet
 			n, api, fa, ctx := quietFixture(t, "", "", "", &clock)
@@ -218,12 +218,21 @@ func TestSuppressionReleaseExplanation(t *testing.T) {
 			n, api, _, ctx := quietFixture(t, tz, slots, "", &clock)
 			rec := &msgRecorder{}
 			n.adapters[model.ChannelTypeSMTP] = rec
-			e := eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)
+			e := eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)
 			if kind == "window" {
 				e = suppressedEvent(clock, clock.Add(time.Hour))
-				e.SuppressionWindowToken = "<window>\n&"
+				e.SuppressionWindowToken = "window-1"
 			}
 			require.NoError(t, n.Notify(ctx, e))
+			if kind == "window" {
+				// Old persisted audits may predate token validation. Preserve the
+				// transport escaping checks without accepting malformed new holds.
+				e.SuppressionWindowToken = "<window>\n&"
+				rows := heldRows(t, api, ctx)
+				require.Len(t, rows, 1)
+				require.NoError(t, api.RDB.DB(ctx).Model(rows[0]).
+					Update("held_by_window", e.SuppressionWindowToken).Error)
+			}
 			if kind != "ordinary" {
 				clock = quietEnds
 				require.NoError(t, n.ReleaseHeld(ctx, enabledPolicies(t, api, ctx), clock))
@@ -256,6 +265,24 @@ func TestSuppressionReleaseExplanation(t *testing.T) {
 			require.Contains(t, slack, "Suppressed")
 			require.False(t, strings.Contains(msg.TextBody, "<window>\n"))
 		})
+	}
+}
+
+func TestSuppressionWindowTokenCharset(t *testing.T) {
+	for _, token := range []string{"", "with space", "with/slash", "with\nnewline", "with\x00nul", "ventana-ñ", "窗口", "-leading", "_leading", strings.Repeat("w", 129)} {
+		t.Run(token, func(t *testing.T) {
+			require.False(t, validWindowToken(token))
+			clock := outsideQuiet
+			n, api, fa, ctx := quietFixture(t, "", "", "", &clock)
+			e := suppressedEvent(clock, clock.Add(time.Hour))
+			e.SuppressionWindowToken = token
+			require.NoError(t, n.Notify(ctx, e))
+			require.Equal(t, 1, fa.calls, "invalid suppression metadata must page")
+			require.Empty(t, heldRows(t, api, ctx))
+		})
+	}
+	for _, token := range []string{"Window_1-valid", strings.Repeat("w", 128)} {
+		require.True(t, validWindowToken(token))
 	}
 }
 

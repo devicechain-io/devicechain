@@ -106,6 +106,10 @@ type Family[A any] struct {
 	// Fields is the family's field table. Every exported field of the request type must
 	// appear here; EveryRequestFieldIsDeclared is what enforces it.
 	Fields []Field
+	// FieldLimitations names conditional fields this fixture cannot populate and
+	// drive independently. Each reason must point to complementary coverage.
+	// Other fields still run every property; whole-family exemptions are not allowed.
+	FieldLimitations map[string]string
 }
 
 // Suite is everything one service supplies to Run.
@@ -568,12 +572,29 @@ func everyRequestFieldIsDeclared[A any](t *testing.T, s Suite[A]) {
 				declared[key] = f
 			}
 			exported := map[string]bool{}
+			limited := map[string]string{}
+			for name, why := range fam.FieldLimitations {
+				key := strings.ToLower(name)
+				if strings.TrimSpace(why) == "" {
+					t.Errorf("field limitation %q needs a reason and complementary coverage", name)
+				}
+				if _, exists := limited[key]; exists {
+					t.Errorf("duplicate field limitation %q", name)
+				}
+				if _, exists := declared[key]; exists {
+					t.Errorf("field %q is both declared and limited", name)
+				}
+				limited[key] = why
+			}
 			for i := 0; i < rt.NumField(); i++ {
 				sf := rt.Field(i)
 				if sf.PkgPath != "" {
 					continue // unexported: not reachable from the wire
 				}
 				exported[strings.ToLower(sf.Name)] = true
+				if _, ok := limited[strings.ToLower(sf.Name)]; ok {
+					continue
+				}
 				f, ok := declared[strings.ToLower(sf.Name)]
 				if !ok {
 					t.Errorf("%s.%s is a field callers can send, but no Field declares it — "+
@@ -593,6 +614,14 @@ func everyRequestFieldIsDeclared[A any](t *testing.T, s Suite[A]) {
 				if !exported[strings.ToLower(f.Name)] {
 					t.Errorf("%s declares field %q, but no exported request field matches it", rt.Name(), f.Name)
 				}
+			}
+			for name := range limited {
+				if !exported[name] {
+					t.Errorf("limitation %q matches no exported request field", name)
+				}
+			}
+			if len(fam.Fields) == 0 {
+				t.Error("a whole family cannot be limited: declare fields to drive")
 			}
 		})
 	}

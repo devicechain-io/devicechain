@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, HelpCircle, Trash2, Wifi, WifiOff } from 'lucide-react';
+import { StartMaintenanceAction, MaintenanceBanner } from '@/routes/alarm-maintenance/EntityMaintenance';
 import { PageShell } from '@/components/ui/page-shell';
 import { DeviceRejectedNotice } from './DeviceRejectedNotice';
 import { CopyToken } from '@/components/ui/copy-token';
@@ -88,21 +89,21 @@ export default function DeviceDetailPage() {
   const updates = useUpdateAccess();
 
   const [version, reload] = useReload();
-  const { data: device, loading, error } = useQuery(() => getDevice(token), [token, version]);
+  const { data: device, loading, error } = useQuery(() => getDevice(token), [token, version], [token]);
   // The keys the platform discards from this device's messages. Read once, for the notice above
   // the tabs and the table on the Connectivity tab. A role without state:read, or any failure,
   // yields no notice (see DroppedMeasurementsNotice) rather than breaking the page.
   const { current: dropped } = useQuery(() => getDroppedMeasurements(token), [token, version]);
   const [tab, setTab] = useState('basic');
 
-  if (loading) {
+  if (loading && !device) {
     return (
       <PageShell title={token} banner="devices">
         <LoadingState description={t('loadingDevice')} />
       </PageShell>
     );
   }
-  if (error) {
+  if (error && !device) {
     return (
       <PageShell title={token} banner="devices">
         <ErrorState description={error} />
@@ -159,17 +160,19 @@ export default function DeviceDetailPage() {
           )}
         </div>
       }
-      action={
-        scoped ? undefined : (
-          <div className="flex flex-wrap items-center gap-2">
+      action={<>
+        <StartMaintenanceAction target={{ type: 'DEVICE', token: device.token }} />
+        {scoped ? undefined : (
+          <>
             <DeviceEnabledAction device={device} onChanged={reload} />
             <Button variant="destructive" size="sm" onClick={remove}>
               <Trash2 size={14} /> {t('delete')}
             </Button>
-          </div>
-        )
-      }
+          </>
+        )}
+      </>}
     >
+      <MaintenanceBanner target={{ type: 'DEVICE', token: device.token }} />
       <DroppedMeasurementsNotice rows={dropped} onShowDetails={() => setTab(CONNECTIVITY_TAB)} />
       {/* Connectivity + events sit in their own tabs, so they load only when
           opened and the page stays digestible. */}

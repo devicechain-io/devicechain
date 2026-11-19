@@ -325,19 +325,14 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 	return api
 }
 
-// emitAlarmEvent publishes an alarm state-change event when a publisher is wired,
-// and is a no-op otherwise. A transition never depends on the event reaching the
-// stream — the publisher returns nothing and handles its own failures, retrying and
-// then dead-lettering so a page that was never sent is recorded rather than lost.
-//
-// It assumes the caller has already committed the transition: the alarm write paths
-// run on the autocommit connection (rdb.DB(ctx) carries no transaction), so the emit
-// is post-commit and never fires for a rolled-back change. If a future caller wraps a
-// transition in an explicit transaction, it must emit after the commit, not from
-// inside the closure.
+// emitAlarmEvent publishes only after the caller has committed the transition.
+// DEVICE RAISED/ESCALATED events get a bounded, wall-time suppression evaluation
+// immediately before publication. Evaluation failures still publish toward paging.
+// A nil publisher disables both enrichment and publication.
 func (api *Api) emitAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent) {
 	if api.AlarmPublisher != nil {
 		api.describeAlarmDevice(ctx, event)
+		api.suppressAlarmEvent(ctx, event)
 		api.AlarmPublisher.PublishAlarmEvent(ctx, event)
 	}
 }

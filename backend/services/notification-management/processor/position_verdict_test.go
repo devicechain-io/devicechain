@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/stretchr/testify/require"
@@ -22,7 +22,7 @@ func TestAlarmEventPositionVerdictIsStoredAndSticky(t *testing.T) {
 	n.api, n.store = api, &fakeSecretStore{}
 	at := time.Now().UTC()
 	for i, flag := range []string{"true", "false", "null"} {
-		e := cycleEvent(dmmodel.AlarmEventRaised, at, at.Add(time.Duration(i)*time.Second))
+		e := cycleEvent(dmcontract.AlarmEventRaised, at, at.Add(time.Duration(i)*time.Second))
 		require.NoError(t, json.Unmarshal([]byte(`{"PositionDerived":`+flag+`}`), e))
 		wire, err := dmproto.MarshalAlarmStateChangeEvent(e)
 		require.NoError(t, err)

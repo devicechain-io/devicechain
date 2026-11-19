@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/egress"
@@ -293,10 +293,10 @@ var ErrUnknownAlarmEventType = errors.New("alarm event type is not one this serv
 // the three write-only branches used to call straight through to the api, so they were
 // the one door into this service that neither consulted the ADR-077 lifecycle gate nor
 // recognized the erasure fence's refusal.
-func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
+func (n *PolicyNotifier) Notify(ctx context.Context, event *dmcontract.AlarmStateChangeEvent) error {
 	switch event.EventType {
-	case dmmodel.AlarmEventRaised, dmmodel.AlarmEventEscalated, dmmodel.AlarmEventAcknowledged,
-		dmmodel.AlarmEventCleared, dmmodel.AlarmEventDeescalated:
+	case dmcontract.AlarmEventRaised, dmcontract.AlarmEventEscalated, dmcontract.AlarmEventAcknowledged,
+		dmcontract.AlarmEventCleared, dmcontract.AlarmEventDeescalated:
 		if err := n.applyLifecycle(ctx, event.AlarmToken, "position classification", func(c context.Context) error {
 			return n.api.RecordAlarmPosition(c, event.AlarmToken, event.PositionDerived)
 		}); err != nil {
@@ -304,7 +304,7 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 		}
 	}
 	switch event.EventType {
-	case dmmodel.AlarmEventAcknowledged:
+	case dmcontract.AlarmEventAcknowledged:
 		// Idempotent tombstone upsert; a DB error is safe to retry (no side effects).
 		return n.applyLifecycle(ctx, event.AlarmToken, "acknowledgement", func(c context.Context) error {
 			if err := n.api.MarkAcknowledged(c, event.AlarmToken, event.AlarmKey, event.Severity,
@@ -313,7 +313,7 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 			}
 			return n.resolveHeld(c, event)
 		})
-	case dmmodel.AlarmEventCleared:
+	case dmcontract.AlarmEventCleared:
 		// Stamp the clear FIRST: that is what stops escalation. Announcing it (to the policies
 		// that opted in) comes after, claimed separately so it is sent once; see announceClear.
 		if err := n.applyLifecycle(ctx, event.AlarmToken, "clear", func(c context.Context) error {
@@ -329,11 +329,11 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 			return nil
 		}
 		return n.announceClear(ctx, event, false, false)
-	case dmmodel.AlarmEventDeescalated:
+	case dmcontract.AlarmEventDeescalated:
 		return n.applyLifecycle(ctx, event.AlarmToken, "de-escalation", func(c context.Context) error {
 			return n.api.TouchSeverity(c, event.AlarmToken, event.Severity)
 		})
-	case dmmodel.AlarmEventRaised, dmmodel.AlarmEventEscalated:
+	case dmcontract.AlarmEventRaised, dmcontract.AlarmEventEscalated:
 		return n.dispatch(ctx, event)
 	default:
 		// Not a silent ack: an event type this build cannot route is a notification nobody
@@ -350,7 +350,7 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 // far is held has never been recorded there (nothing was sent, so nothing was written; a
 // lifecycle transition can also be stale for the row and change nothing). The held row is
 // what knows about that cycle, so it is resolved here directly, by event time.
-func (n *PolicyNotifier) resolveHeld(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
+func (n *PolicyNotifier) resolveHeld(ctx context.Context, event *dmcontract.AlarmStateChangeEvent) error {
 	dropped, suppressed, err := n.api.ResolveNotificationDeferralsWithAudit(ctx, event.AlarmToken, event.OccurredTime)
 	if err != nil {
 		return fmt.Errorf("dropping held notifications for a resolved alarm: %w", err)
@@ -404,7 +404,7 @@ func (n *PolicyNotifier) applyLifecycle(ctx context.Context, alarm, transition s
 }
 
 // dispatch evaluates policies and delivers a RAISED/ESCALATED transition.
-func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
+func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmcontract.AlarmStateChangeEvent) error {
 	tenant, _ := core.TenantFromContext(ctx)
 
 	// ADR-077: a deleted tenant is not paged. Refused here, at the top, rather than left
@@ -461,7 +461,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 
 	// An escalation that arrives after its alarm cleared (the pool is unordered) would page
 	// "worse" about an alarm that is over.
-	if event.EventType == dmmodel.AlarmEventEscalated && state != nil && state.ClearedAt.Valid &&
+	if event.EventType == dmcontract.AlarmEventEscalated && state != nil && state.ClearedAt.Valid &&
 		state.SameCycleAs(event.RaisedTime) {
 		log.Debug().Str("tenant", tenant).Str("alarm", event.AlarmToken).
 			Msg("Not paging an escalation: the alarm has already cleared")
@@ -601,7 +601,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 
 // pagingPolicyIDs is the ids of the policies plan routed this event through: the same
 // filters plan applies (not scoped, not throttled, a rule matching the severity).
-func (n *PolicyNotifier) pagingPolicyIDs(event *dmmodel.AlarmStateChangeEvent,
+func (n *PolicyNotifier) pagingPolicyIDs(event *dmcontract.AlarmStateChangeEvent,
 	policies []*model.NotificationPolicy, state *model.NotificationState) []uint {
 	var ids []uint
 	for _, p := range policies {
@@ -728,7 +728,7 @@ type delivery struct {
 // this event. It matches each rule by severity, drops rules whose channel is missing,
 // disabled, or has no adapter, and collapses duplicate (channel, recipients) targets
 // so two policies routing to the same place send once.
-func (n *PolicyNotifier) plan(event *dmmodel.AlarmStateChangeEvent,
+func (n *PolicyNotifier) plan(event *dmcontract.AlarmStateChangeEvent,
 	policies []*model.NotificationPolicy, state *model.NotificationState) []delivery {
 	seen := make(map[string]bool)
 	out := make([]delivery, 0)
@@ -771,9 +771,9 @@ func (n *PolicyNotifier) plan(event *dmmodel.AlarmStateChangeEvent,
 // per-cycle fields but NOT LastNotifiedAt (see NotificationState.CycleRaisedAt). A
 // re-raise the throttle suppresses records nothing, so its cycle is not escalated either:
 // escalation follows up a page, and that cycle was never paged.
-func (n *PolicyNotifier) throttled(event *dmmodel.AlarmStateChangeEvent,
+func (n *PolicyNotifier) throttled(event *dmcontract.AlarmStateChangeEvent,
 	p *model.NotificationPolicy, state *model.NotificationState) bool {
-	if event.EventType == dmmodel.AlarmEventEscalated {
+	if event.EventType == dmcontract.AlarmEventEscalated {
 		return false
 	}
 	if state == nil || !state.LastNotifiedAt.Valid || !p.ThrottleSeconds.Valid {

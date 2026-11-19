@@ -6,7 +6,7 @@ package processor
 import (
 	"errors"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -272,7 +272,7 @@ func (rp *ResolvedEventsProcessor) handleFenceSetFact(msg messaging.Message) boo
 // unavailable peer on the broker's schedule, while the five-minute reconcile sweep already
 // exists to repair a version the view never received and retries forever. Acking also keeps a
 // persistently unreadable version from parking the stream behind it.
-func (rp *ResolvedEventsProcessor) resolveFenceManifest(tenant string, manifest *dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error) {
+func (rp *ResolvedEventsProcessor) resolveFenceManifest(tenant string, manifest *dmcontract.GeoFenceSetManifest) (*geofence.FenceSet, error) {
 	if rp.FenceManifests == nil {
 		return nil, errNoFenceSetArchive
 	}
@@ -314,14 +314,14 @@ var errFenceSetArchiveEmpty = errors.New("the fence-set archive returned no set 
 // subject) and payload, with the same drop-not-fatal contract as decodeRosterFact. The tenant
 // travels on the subject, never the payload — which is what makes one tenant's fences unreachable
 // through another tenant's projection entry however the payload is shaped.
-func decodeFenceSetFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmmodel.GeoFenceSetManifest, bool) {
+func decodeFenceSetFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmcontract.GeoFenceSetManifest, bool) {
 	_, tenant, ok := messaging.TenantContextFromSubject(rp.pctx(), msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping geofence-set fact with no parseable tenant in subject %q", msg.Subject)
 		return "", nil, false
 	}
-	manifest, err := dmmodel.UnmarshalGeoFenceSetManifest(msg.Value)
+	manifest, err := dmcontract.UnmarshalGeoFenceSetManifest(msg.Value)
 	if err != nil {
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping geofence-set fact that could not be parsed from subject %q", msg.Subject)

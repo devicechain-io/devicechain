@@ -18,7 +18,8 @@ import (
 func TestAStepWhoseEveryDeviceLookupFailedIsAFailedStep(t *testing.T) {
 	e := newRolloutEnv(t, 3)
 	e.create(t, "r1", 2, nil)
-	e.devices.err = errors.New("device-management is down")
+	lookupErr := errors.New("device-management is down")
+	e.api.Devices = &syncDevices{err: lookupErr} // freeze stays healthy; dispatch lookup is down
 	// Start steps inline; the failure is only logged there, and the observer sees it.
 	var observed []error
 	e.api.OnRolloutStep = func(_ RolloutStepResult, err error) { observed = append(observed, err) }
@@ -29,10 +30,10 @@ func TestAStepWhoseEveryDeviceLookupFailedIsAFailedStep(t *testing.T) {
 
 	_, err = e.api.StepRollout(tenantCtx("acme"), e.rollout(t, "r1").Rollout.ID)
 	require.ErrorContains(t, err, "could be read from device-management")
-	require.ErrorIs(t, err, e.devices.err)
+	require.ErrorIs(t, err, lookupErr)
 
 	// Counterweight: with device-management back, the same rollout steps cleanly and dispatches.
-	e.devices.err = nil
+	e.api.Devices = e.devices
 	res := e.step(t, "r1")
 	require.Equal(t, 2, res.Dispatched)
 }

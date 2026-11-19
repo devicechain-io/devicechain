@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 )
 
-func namedEvent() *dmmodel.AlarmStateChangeEvent {
+func namedEvent() *dmcontract.AlarmStateChangeEvent {
 	at := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
-	return &dmmodel.AlarmStateChangeEvent{
-		EventType: dmmodel.AlarmEventRaised, AlarmToken: "alarm-1", AlarmKey: "over-temp",
+	return &dmcontract.AlarmStateChangeEvent{
+		EventType: dmcontract.AlarmEventRaised, AlarmToken: "alarm-1", AlarmKey: "over-temp",
 		OriginatorType: "device", OriginatorId: 42, State: "ACTIVE", Severity: "CRITICAL",
 		RaisedTime: at, OccurredTime: at,
 		DeviceToken: "boiler-7", DeviceName: "Boiler 7", DeviceTypeToken: "boiler",
@@ -66,7 +66,7 @@ func TestRenderOmitsWhatTheEventDidNotName(t *testing.T) {
 // An event serialised by an older pod (a held quiet-hours deferral is stored as JSON) decodes
 // with empty names and renders unnamed.
 func TestAnEventWithoutNamesDecodesAndRenders(t *testing.T) {
-	var e dmmodel.AlarmStateChangeEvent
+	var e dmcontract.AlarmStateChangeEvent
 	if err := json.Unmarshal([]byte(`{"EventType":"RAISED","AlarmToken":"a","OriginatorType":"device","OriginatorId":9,"Severity":"MAJOR"}`), &e); err != nil {
 		t.Fatal(err)
 	}

@@ -6,7 +6,7 @@ package processor
 import (
 	"context"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/rs/zerolog/log"
 )
@@ -62,7 +62,7 @@ import (
 // dead-lettering it, including on the final delivery. A partial delivery must still
 // return nil (or core.ErrPassPartial) so channels that succeeded are not sent again.
 type Notifier interface {
-	Notify(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error
+	Notify(ctx context.Context, event *dmcontract.AlarmStateChangeEvent) error
 }
 
 // LogNotifier is the first-slice Notifier: it records the notification the service
@@ -77,7 +77,7 @@ func NewLogNotifier() *LogNotifier { return &LogNotifier{} }
 
 // Notify logs the alarm transition that would be delivered. The tenant is read from
 // the scoped context the processor built from the message subject.
-func (n *LogNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
+func (n *LogNotifier) Notify(ctx context.Context, event *dmcontract.AlarmStateChangeEvent) error {
 	tenant, _ := core.TenantFromContext(ctx)
 	ev := log.Info().
 		Str("tenant", tenant).

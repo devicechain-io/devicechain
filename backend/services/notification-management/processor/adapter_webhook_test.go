@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"gorm.io/datatypes"
 )
@@ -40,7 +40,7 @@ func TestWebhookTextExcludesDeviceName(t *testing.T) {
 				case "CLEARED":
 					// A scheduler clear recovers its source from the persisted state.
 					e.DeviceName, e.DeviceToken = "", ""
-					e.EventType, e.State = dmmodel.AlarmEventCleared, "CLEARED"
+					e.EventType, e.State = dmcontract.AlarmEventCleared, "CLEARED"
 					applyStateSource(e, state)
 					msg = renderNotification(e)
 				}
