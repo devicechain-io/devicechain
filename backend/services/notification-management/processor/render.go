@@ -41,6 +41,8 @@ type RenderedNotification struct {
 // stream's name for it (RAISED, ESCALATED, DEESCALATED, CLEARED, ACKNOWLEDGED) or
 // RENOTIFIED for a timed re-page of an unchanged alarm.
 type AlarmFacts struct {
+	SuppressedBy     string
+	ReleasedAt       time.Time
 	ClearReason      string
 	EventType        string
 	AlarmToken       string
@@ -357,4 +359,17 @@ func yesNo(v bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+// explainSuppressionRelease is called only for a claimed window-held release. Ordinary
+// pages and quiet-hours-only releases retain their original rendering byte for byte.
+func explainSuppressionRelease(msg *RenderedNotification, window string, now time.Time) {
+	msg.TextBody += fmt.Sprintf("Suppressed: held by alarm suppression window %s; released %s; active since %s\n", oneLine(window), formatTime(now), formatTime(msg.Alarm.RaisedTime))
+	msg.Payload["suppressedBy"] = window
+	msg.Payload["releasedAt"] = formatTime(now)
+	msg.Alarm.SuppressedBy, msg.Alarm.ReleasedAt = window, now
+}
+
+func (a AlarmFacts) suppressionExplanation() string {
+	return fmt.Sprintf("held by alarm suppression window %s; released %s; active since %s", oneLine(a.SuppressedBy), formatTime(a.ReleasedAt), formatTime(a.RaisedTime))
 }

@@ -31,6 +31,12 @@ import (
 // fact redelivers next start and, failing that, the startup reconcile re-seeds the current version
 // from device-management's archive.
 func (rp *ResolvedEventsProcessor) signalFenceSet(tenant string, set *geofence.FenceSet) bool {
+	owner, err := rp.ruleWorker(tenant)
+	if err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
+	rp = owner
 	if rp.fenceView == nil {
 		return true
 	}
@@ -232,6 +238,10 @@ func (rp *ResolvedEventsProcessor) handleFenceSetFact(msg messaging.Message) boo
 			Msg("Dropping malformed geofence-set manifest (non-positive fence-set version).")
 		rp.ackFact(msg, "geofence-set-manifest")
 		return true
+	}
+	if _, err := rp.ruleWorker(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return false
 	}
 	set, err := rp.resolveFenceManifest(tenant, manifest)
 	if err != nil {

@@ -882,6 +882,12 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 // assignment plane's rows.
 func (api *Api) dispatchOne(ctx context.Context, tx *gorm.DB, artifact *Artifact, compatible []string,
 	c candidate) (*UpdateAssignmentView, string, string, error) {
+	// Unknown identity cannot justify either adoption or a permanent skip; retry without writes.
+	if c.found && c.facts.Incarnation == 0 {
+		log.Warn().Str("device", c.target.DeviceToken).Uint("rollout", c.target.RolloutId).
+			Msg("A rollout target has no known incarnation; it is tried again at the next step.")
+		return nil, "", "", errTargetTaken
+	}
 	skip := func(code, detail string) (*UpdateAssignmentView, string, string, error) {
 		return nil, code, detail, api.markSkipped(tx, c.target, code, detail)
 	}
@@ -974,8 +980,13 @@ func (api *Api) markSkipped(tx *gorm.DB, target UpdateRolloutTarget, code, detai
 // it already names THIS artifact and is either still live or ended UPDATED: the device is already
 // on (or on its way to) the rollout's target, so no second assignment is made. 0 means none.
 func (api *Api) adoptCurrent(tx *gorm.DB, deviceToken string, artifact *Artifact, facts DeviceFacts) (uint, error) {
+	q := tx
+	if tx.Dialector.Name() == "postgres" {
+		// Wait for a concurrent supersede and recheck currentness before binding the target.
+		q = tx.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
 	var current []UpdateAssignment
-	if err := tx.Where("device_token = ? AND component = ? AND superseded_at IS NULL", deviceToken, artifact.Component).
+	if err := q.Where("device_token = ? AND component = ? AND superseded_at IS NULL", deviceToken, artifact.Component).
 		Limit(1).Find(&current).Error; err != nil {
 		return 0, err
 	}

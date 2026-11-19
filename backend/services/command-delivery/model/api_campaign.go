@@ -999,9 +999,13 @@ func (api *Api) fireCampaign(ctx context.Context, c *Campaign, now time.Time, pa
 	if err := api.supersedeOlderFirings(ctx, c, now); err != nil {
 		return err
 	}
-	blocked, err := api.recheckDueMembership(ctx, c, now)
+	resolveMembership := api.campaignMembershipResolver(ctx, c)
+	membershipErrorRecorded := false
+	blocked, err := api.recheckDueMembershipWith(ctx, c, now, resolveMembership)
 	if err != nil {
 		errs = append(errs, api.recordCampaignError(ctx, c, err))
+		// Recovery shares this lookup, so its failure must be recorded only once.
+		membershipErrorRecorded = true
 	}
 
 	q := db.Model(&CampaignElement{}).
@@ -1033,9 +1037,10 @@ func (api *Api) fireCampaign(ctx context.Context, c *Campaign, now time.Time, pa
 	}
 
 	// Everything claimed by this pass, plus claims a dead replica left behind.
+	staleBefore := api.campaignClock().Add(-campaignClaimStale)
 	var claimed []CampaignElement
 	if err := db.Where("campaign_id = ? AND status = ? AND (claimed_by = ? OR claimed_at < ?)",
-		c.ID, string(ElementClaimed), pass, api.campaignClock().Add(-campaignClaimStale)).
+		c.ID, string(ElementClaimed), pass, staleBefore).
 		Order("cycle_id ASC, step ASC, id ASC").Find(&claimed).Error; err != nil {
 		return errors.Join(append(errs, err)...)
 	}
@@ -1127,12 +1132,72 @@ func (api *Api) fireCampaign(ctx context.Context, c *Campaign, now time.Time, pa
 			}
 		}
 	}
-	for _, token := range order {
+	loadMembers := func(token string) ([]CampaignElement, error) {
 		var members []CampaignElement
-		if err := db.Where("campaign_id = ? AND batch_token = ? AND status = ?", c.ID, token,
-			string(ElementClaimed)).Order("id ASC").Find(&members).Error; err != nil {
+		err := db.Where("campaign_id = ? AND batch_token = ? AND status = ?", c.ID, token,
+			string(ElementClaimed)).Order("id ASC").Find(&members).Error
+		return members, err
+	}
+	isRecovered := func(e CampaignElement) bool {
+		return e.ClaimedBy.String != pass || !e.ClaimedAt.Valid || e.ClaimedAt.Time.Before(staleBefore)
+	}
+	for _, token := range order {
+		members, err := loadMembers(token)
+		if err != nil {
 			errs = append(errs, err)
 			continue
+		}
+		recovered := false
+		for _, m := range members {
+			recovered = recovered || isRecovered(m)
+		}
+		if recovered {
+			// An old check cannot authorize a new send after recovery. A committed
+			// batch is evidence of a send, and needs no new membership decision.
+			if err := api.settleTokenedClaims(ctx, c.ID, token, "", nil, now); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			members, err = loadMembers(token)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if len(members) == 0 {
+				continue
+			}
+			current, membershipErr := resolveMembership()
+			if membershipErr != nil {
+				if !membershipErrorRecorded {
+					errs = append(errs, api.recordCampaignError(ctx, c, membershipErr))
+					membershipErrorRecorded = true
+				}
+				// Resolution may have overlapped another replica committing the batch.
+				// Settling that send is safe even while new sends must be held.
+				if err := api.settleTokenedClaims(ctx, c.ID, token, "", nil, now); err != nil {
+					errs = append(errs, err)
+				}
+				continue
+			}
+			var gone []uint
+			for _, m := range members {
+				if _, in := current[m.DeviceToken]; !in && isRecovered(m) {
+					gone = append(gone, m.ID)
+				}
+			}
+			// The batch lock orders the skip against a replica still creating this
+			// token: an already committed batch must win over NOT_IN_GROUP.
+			if len(gone) > 0 {
+				if err := api.settleTokenedClaims(ctx, c.ID, token, SkipNotInGroup, idsIn(gone), now); err != nil {
+					errs = append(errs, err)
+					continue
+				}
+			}
+			members, err = loadMembers(token)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
 		}
 		if len(members) == 0 {
 			continue // settled by another replica in the meantime
@@ -1267,6 +1332,46 @@ func (api *Api) supersedeOlderFirings(ctx context.Context, c *Campaign, now time
 // A device that JOINED the group after planning is not added to a cycle already planned; it is
 // in the next cycle planned. That is a documented limitation.
 func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.Time) ([]uint, error) {
+	return api.recheckDueMembershipWith(ctx, c, now, api.campaignMembershipResolver(ctx, c))
+}
+
+// Share resolutions briefly across pending work and recovered tokens: a stalled pass
+// must not authorize sends from stale inclusion. Failures use the same bound to avoid
+// hammering an unavailable group while allowing a later retry within a long pass.
+func (api *Api) campaignMembershipResolver(ctx context.Context, c *Campaign) func() (map[string]struct{}, error) {
+	var resolved bool
+	var resolvedAt time.Time
+	var members map[string]struct{}
+	var resolutionErr error
+	return func() (map[string]struct{}, error) {
+		now := api.campaignClock()
+		if resolved && now.Sub(resolvedAt) <= campaignMembershipFreshness {
+			return members, resolutionErr
+		}
+		resolved = true
+		// Age from lookup start, so time spent resolving also consumes freshness.
+		resolvedAt = now
+		members, resolutionErr = nil, nil
+		if api.GroupTargetResolver == nil {
+			resolutionErr = errors.New("cannot re-check the group before firing: group resolution is unavailable")
+			return nil, resolutionErr
+		}
+		group := c.GroupToken
+		targets, err := api.resolveGroupTargetsUpTo(ctx, &CommandBatchCreateRequest{GroupToken: &group}, MaxCampaignTargets)
+		if err != nil {
+			resolutionErr = fmt.Errorf("re-checking the group before firing: %w", err)
+			return nil, resolutionErr
+		}
+		members = make(map[string]struct{}, len(targets.deviceTokens))
+		for _, d := range targets.deviceTokens {
+			members[d] = struct{}{}
+		}
+		return members, nil
+	}
+}
+
+func (api *Api) recheckDueMembershipWith(ctx context.Context, c *Campaign, now time.Time,
+	resolve func() (map[string]struct{}, error)) ([]uint, error) {
 	db := api.RDB.DB(ctx)
 	var cycleIDs []uint
 	if err := db.Model(&CampaignElement{}).
@@ -1303,17 +1408,9 @@ func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.
 	if len(unchecked) == 0 {
 		return nil, nil
 	}
-	if api.GroupTargetResolver == nil {
-		return unchecked, errors.New("cannot re-check the group before firing: group resolution is unavailable")
-	}
-	group := c.GroupToken
-	targets, err := api.resolveGroupTargetsUpTo(ctx, &CommandBatchCreateRequest{GroupToken: &group}, MaxCampaignTargets)
+	members, err := resolve()
 	if err != nil {
-		return unchecked, fmt.Errorf("re-checking the group before firing: %w", err)
-	}
-	members := make(map[string]struct{}, len(targets.deviceTokens))
-	for _, d := range targets.deviceTokens {
-		members[d] = struct{}{}
+		return unchecked, err
 	}
 	checkedAt := api.campaignClock()
 	// This check answers for every element the trigger above will not re-check: those due no
