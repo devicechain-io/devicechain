@@ -67,6 +67,12 @@ func validAttributeScope(scope string) bool {
 // rebuild the view). The persist already committed, so a recheck is never lost to a dropped signal —
 // at worst it is re-derived by reconcile.
 func (rp *ResolvedEventsProcessor) signalAttrRecheck(tenant, deviceToken string) bool {
+	owner, err := rp.ruleWorker(tenant)
+	if err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
+	rp = owner
 	if rp.attrView == nil {
 		return true
 	}
@@ -96,11 +102,20 @@ func (rp *ResolvedEventsProcessor) runAttributeConsumer() {
 // should carry on. It returns false only for shutdown part-way through, which leaves the
 // fact unacked so it redelivers on the next start.
 func (rp *ResolvedEventsProcessor) handleAttributeFact(msg messaging.Message) bool {
+	return rp.handleAttributeProjection(msg, true)
+}
+
+// Startup catch-up persists without signaling loops that have not been built yet.
+func (rp *ResolvedEventsProcessor) handleAttributeProjection(msg messaging.Message, signal bool) bool {
 	tenant, ev, ok := decodeAttributeFact(rp, msg)
 	if !ok {
 		// Unparseable/poison: redelivery cannot fix it. Ack so it stops redelivering forever.
 		rp.ackFact(msg, "device-attribute")
 		return true
+	}
+	if _, err := rp.ruleWorker(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return false
 	}
 	if reason, bad := attributeFactPoison(ev); bad {
 		// A malformed/forged fact: dropping-and-acking rather than persisting it or wedging the
@@ -134,7 +149,7 @@ func (rp *ResolvedEventsProcessor) handleAttributeFact(msg messaging.Message) bo
 		// Refresh the live view for this device (a no-op when the view is disabled). Signal AFTER
 		// the persist so the loop's re-read sees this fact's row; on shutdown mid-send leave the
 		// fact unacked so it redelivers and the restart reconcile rebuilds the view.
-		if !rp.signalAttrRecheck(tenant, ev.DeviceToken) {
+		if signal && !rp.signalAttrRecheck(tenant, ev.DeviceToken) {
 			return false
 		}
 	}
