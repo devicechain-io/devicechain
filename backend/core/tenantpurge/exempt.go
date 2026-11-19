@@ -223,15 +223,10 @@ var exemptions = []Exemption{
 	},
 
 	// ---- event-processing: the DETECT engine's own state --------------------
-	// detect_stream_topology does not exist yet. It is listed one release AHEAD of the
-	// migration that creates it, so a user-management pod from this release, still running
-	// beside a newer event-processing during a rolling upgrade, classifies the table instead
-	// of refusing every tenant purge with ErrUnclassified. Until the table exists the entry
-	// is inert: an exemption only ever excuses a table the catalog finds.
-	{
-		Schema: "event-processing", Name: "detect_stream_topology", Class: ClassExempt,
-		Reason: "Instance-wide stream suffix, group count and format version only; no tenant data or checkpoint partitions.",
-	},
+	// detect_stream_topology was listed one release AHEAD of the migration that creates it,
+	// so a user-management pod from the previous release, still running beside a newer
+	// event-processing during a rolling upgrade, classifies the table instead of refusing
+	// every tenant purge with ErrUnclassified. Keep it: removing it would undo that.
 	{
 		Schema: "event-processing", Name: "detect_stream_topology", Class: ClassExempt,
 		Reason: "Instance-wide stream suffix, group count and format version only; no tenant data or checkpoint partitions.",

@@ -14,6 +14,7 @@ import (
 
 	"github.com/devicechain-io/dc-k8s/functionalarea"
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/streams"
 )
 
 const shardGroupsValuesPath = "instance.config.infrastructure.nats.shardGroups"
@@ -61,34 +62,30 @@ func shardGroupsFromValues(vals map[string]interface{}) (*config.NatsShardGroups
 		cfg.PlacementTags[group] = []string{want}
 	}
 
-	// An overlay alone does not carry the deployment's area set. Authoring values
-	// do, and must refuse consumers N2 has not wired to group readers yet.
-	var areas []string
+	return &cfg, nil
+}
+
+// shardGroupValuesAreas is the area set the authoring values deploy. An overlay
+// alone does not carry it; the authoring values do.
+func shardGroupValuesAreas(vals map[string]interface{}) ([]string, error) {
 	if explicit, ok := vals["enabledFunctionalAreas"]; ok {
 		b, err := json.Marshal(explicit)
 		if err != nil {
 			return nil, err
 		}
+		var areas []string
 		if err := json.Unmarshal(b, &areas); err != nil {
 			return nil, err
 		}
-		if len(areas) == 0 {
-			areas, err = shardGroupAreas("", nil)
-			if err != nil {
-				return nil, err
-			}
+		if len(areas) > 0 {
+			return areas, nil
 		}
-	} else if profile, ok := vals["profile"].(string); ok {
-		var err error
-		areas, err = shardGroupAreas(profile, nil)
-		if err != nil {
-			return nil, err
-		}
+		return shardGroupAreas("", nil)
 	}
-	if err := validateShardGroupReaders(cfg.Suffixes, areas); err != nil {
-		return nil, err
+	if profile, ok := vals["profile"].(string); ok {
+		return shardGroupAreas(profile, nil)
 	}
-	return &cfg, nil
+	return nil, nil
 }
 
 func writeShardGroupsVarFile(rootdir string, st *State) error {
@@ -114,14 +111,25 @@ func shardGroupsValues(raw interface{}) map[string]interface{} {
 	return map[string]interface{}{"instance": map[string]interface{}{"config": map[string]interface{}{"infrastructure": map[string]interface{}{"nats": map[string]interface{}{"shardGroups": raw}}}}}
 }
 
-func validateShardGroupReaders(suffixes, areas []string) error {
-	if !slices.Contains(suffixes, "resolved-events") {
+// refuseResolvedEventsReshape keeps resolved-events sharding a decision made when the
+// instance is installed, while event-processing runs. event-processing keeps each
+// group's detection state (open windows, timers, raised alarms, absence deadlines) in
+// that group's own checkpoint, so an instance that already has detection history
+// cannot start sharding the stream, and a sharded one cannot change its group count:
+// either would need that state split or merged at one exact point in the stream, which
+// nothing does. event-processing refuses both at startup too; refusing here means the
+// upgrade stops before anything is written, instead of rolling into pods that refuse.
+func refuseResolvedEventsReshape(prev, cfg *config.NatsShardGroupsConfiguration, areas []string) error {
+	if cfg == nil || !slices.Contains(cfg.Suffixes, streams.ResolvedEvents) || !slices.Contains(areas, "event-processing") {
 		return nil
 	}
-	for _, area := range []string{"device-state", "event-processing"} {
-		if slices.Contains(areas, area) {
-			return fmt.Errorf("shardGroups: resolved-events cannot be sharded while %s is deployed; its group readers are not wired yet (select inbound-events only)", area)
-		}
+	if prev == nil || !slices.Contains(prev.Suffixes, streams.ResolvedEvents) {
+		return fmt.Errorf("dcctl refuses to start sharding resolved-events on an existing instance while event-processing is deployed: " +
+			"its detection state cannot be split between groups. Shard resolved-events when the instance is first installed. Nothing has been changed")
+	}
+	if prev.Count != cfg.Count {
+		return fmt.Errorf("dcctl refuses to change shardGroups.count from %d to %d while resolved-events is sharded and event-processing is deployed: "+
+			"each group's detection state stays in that group. Nothing has been changed", prev.Count, cfg.Count)
 	}
 	return nil
 }
@@ -181,13 +189,19 @@ func checkShardGroupsRemoval(st *State, recorded map[string]interface{}) error {
 	if !st.ValuesOverlayIntent {
 		return nil
 	}
-	_, inOverlay := lookupPath(recorded, splitPath(shardGroupsValuesPath))
-	if st.ShardGroups == nil && !inOverlay {
-		return nil
-	}
-	cfg, err := shardGroupsFromValues(authoringValues(st))
+	vals := authoringValues(st)
+	cfg, err := shardGroupsFromValues(vals)
 	if err != nil {
 		return err
+	}
+	areas, err := shardGroupValuesAreas(vals)
+	if err != nil {
+		return err
+	}
+	_, inOverlay := lookupPath(recorded, splitPath(shardGroupsValuesPath))
+	if st.ShardGroups == nil && !inOverlay {
+		// Nothing recorded: the block, if any, is new to this instance.
+		return refuseResolvedEventsReshape(nil, cfg, areas)
 	}
 	if cfg == nil {
 		return fmt.Errorf("dcctl refuses to drop recorded shardGroups: existing groups may hold data. Preserve shardGroups in the replacement --values file; --reset-values cannot remove it")
@@ -204,7 +218,10 @@ func checkShardGroupsRemoval(st *State, recorded map[string]interface{}) error {
 	if prev == nil && st.ShardGroups != nil {
 		prev = &config.NatsShardGroupsConfiguration{Count: st.ShardGroups.Count, Suffixes: st.ShardGroups.Suffixes}
 	}
-	return refuseShardGroupsNarrowing(prev, cfg)
+	if err := refuseShardGroupsNarrowing(prev, cfg); err != nil {
+		return err
+	}
+	return refuseResolvedEventsReshape(prev, cfg, areas)
 }
 
 func refuseShardGroupsNarrowing(prev, cfg *config.NatsShardGroupsConfiguration) error {

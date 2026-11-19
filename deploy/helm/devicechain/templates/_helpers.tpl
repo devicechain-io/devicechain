@@ -1727,8 +1727,25 @@ the filtered document by accident.
 {{- if hasKey $nats "shardGroups" -}}
   {{- $shards := get $nats "shardGroups" -}}
   {{- $areas := splitList "," (include "devicechain.enabledAreas" .) -}}
-  {{- if and (has "resolved-events" $shards.suffixes) (or (has "device-state" $areas) (has "event-processing" $areas)) -}}
-    {{- fail "resolved-events shardGroups requires group readers in every deployed consumer; device-state and event-processing are not wired yet (select inbound-events only)" -}}
+  {{- /* resolved-events sharding is decided at install while event-processing runs: each
+  group's detection state lives in that group's checkpoint, so an existing instance cannot
+  start sharding the stream or change its group count. The instance's current document is
+  read back from this chart's own Secret, which exists only once the instance is installed.
+  Where it cannot be read (a first install, helm template, a client-side dry run,
+  instance.existingSecret) nothing is judged here, and event-processing still refuses an
+  instance with detection history, or a changed group count, at startup. */ -}}
+  {{- if and (has "resolved-events" $shards.suffixes) (has "event-processing" $areas) (not .Values.instance.existingSecret) -}}
+    {{- $prior := lookup "v1" "Secret" (include "devicechain.instanceNamespace" .) (include "devicechain.instanceConfigSecret" .) -}}
+    {{- if and $prior (hasKey ($prior.data | default dict) "instance") -}}
+      {{- $prevDoc := index $prior.data "instance" | b64dec | fromJson -}}
+      {{- $prevShards := dig "infrastructure" "nats" "shardGroups" dict $prevDoc -}}
+      {{- if not (has "resolved-events" (get $prevShards "suffixes" | default list)) -}}
+        {{- fail "resolved-events shardGroups cannot be enabled on an existing instance while event-processing is deployed: its detection state cannot be split between groups. Shard resolved-events when the instance is first installed" -}}
+      {{- end -}}
+      {{- if ne (int (get $prevShards "count")) (int $shards.count) -}}
+        {{- fail "shardGroups.count cannot change while resolved-events is sharded and event-processing is deployed: each group's detection state stays in that group" -}}
+      {{- end -}}
+    {{- end -}}
   {{- end -}}
   {{- if ne (int (get $nats "streamReplicas" | default 1)) 1 -}}
     {{- fail "shardGroups placement requires streamReplicas=1" -}}
