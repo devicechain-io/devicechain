@@ -7800,6 +7800,10 @@ type AlarmSuppression {
 }
 """Live suppression for one visible alarm."""
 type AlarmSuppressionStatus {
+    """The alarm's current severity tier."""
+    severity: String!
+    """The alarm's current state: ACTIVE or CLEARED."""
+    state: String!
     """Token of the visible alarm."""
     alarmToken: String!
     """Current suppression, or null when paging is not held."""

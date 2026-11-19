@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var suppressionEvaluationFailures = promauto.NewCounterVec(prometheus.CounterOpts{
@@ -61,7 +62,12 @@ func insertCycleSuppression(tx *gorm.DB, alarm *Alarm, match *SuppressionMatch) 
 		}
 	}
 	// Tenant scoping also fills TenantId on create; copy it explicitly for the immutable history.
-	return tx.Create(&AlarmCycleSuppression{
+	// Two cycles of one alarm raised at the same instant share one disposition
+	// and one suppression stamp. Other insert failures still roll back the edge.
+	return tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "alarm_id"}, {Name: "raised_time"}},
+		DoNothing: true,
+	}).Create(&AlarmCycleSuppression{
 		TenantId: alarm.TenantId, AlarmId: alarm.ID, RaisedTime: alarm.RaisedTime,
 		AlarmToken: alarm.Token, WindowToken: match.WindowToken,
 		WindowName:   sql.NullString{String: match.WindowName, Valid: match.WindowName != ""},

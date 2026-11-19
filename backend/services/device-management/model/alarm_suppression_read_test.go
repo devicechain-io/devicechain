@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func TestSuppressionWindowOpeningsAndStatus(t *testing.T) {
@@ -95,16 +97,67 @@ func TestSuppressionWindowSearchStatusTargetAndBounds(t *testing.T) {
 	require.Empty(t, empty)
 }
 
-func TestSuppressionWindowSearchRefusesOversizedTenant(t *testing.T) {
+func TestSuppressionWindowSearchPaginatesEndedHistory(t *testing.T) {
 	api, ctx, _ := newSuppressionTestApi(t)
 	rows := make([]AlarmSuppressionWindow, 10001)
 	for i := range rows {
 		rows[i] = suppressionTestWindow()
-		rows[i].Token = fmt.Sprintf("w-%d", i)
+		rows[i].Token = fmt.Sprintf("w-%05d", i)
+		rows[i].CreatedAt = time.Now().UTC().Add(time.Duration(i) * time.Second)
 	}
 	require.NoError(t, api.RDB.DB(ctx).CreateInBatches(&rows, 100).Error)
-	_, err := api.AlarmSuppressionWindowsSearch(ctx, AlarmSuppressionWindowSearchCriteria{})
+	for page, token := range map[int32]string{1: "w-10000", 2: "w-09999", 10001: "w-00000"} {
+		result, err := api.AlarmSuppressionWindowsSearch(ctx, AlarmSuppressionWindowSearchCriteria{Pagination: rdb.Pagination{PageNumber: page, PageSize: 1}})
+		require.NoError(t, err)
+		require.EqualValues(t, len(rows), result.Pagination.TotalRecords)
+		require.Len(t, result.Results, 1)
+		require.Equal(t, token, result.Results[0].Token)
+	}
+	status := "ENDED"
+	result, err := api.AlarmSuppressionWindowsSearch(ctx, AlarmSuppressionWindowSearchCriteria{Status: &status})
+	require.NoError(t, err)
+	require.EqualValues(t, len(rows), result.Pagination.TotalRecords)
+	target := "missing"
+	result, err = api.AlarmSuppressionWindowsSearch(ctx, AlarmSuppressionWindowSearchCriteria{TargetToken: &target})
+	require.NoError(t, err)
+	require.Zero(t, result.Pagination.TotalRecords)
+}
+
+func TestSuppressionWindowScopedHistoryIgnoresOtherCustomers(t *testing.T) {
+	api, ctx, device := newSuppressionTestApi(t)
+	suppressionReadSQLiteOverlap(t, api.RDB.Database)
+	oldLimit := suppressionVisibleScanLimit
+	suppressionVisibleScanLimit = 2
+	t.Cleanup(func() { suppressionVisibleScanLimit = oldLimit })
+	rt := seedRelType(t, api, ctx, "acme", "tracks", true)
+	seedEdge(t, api, ctx, "acme", "owner", device, rt, "customer", "A")
+	own := suppressionTestWindow()
+	own.ScopeAnchors = rdb.Anchors{"customer:A"}
+	require.NoError(t, api.RDB.DB(ctx).Create(&own).Error)
+	for i := 0; i < 3; i++ {
+		other := suppressionTestWindow()
+		other.Token = fmt.Sprintf("other-%d", i)
+		other.ScopeAnchors = rdb.Anchors{"customer:B"}
+		other.Targets = []AlarmSuppressionTarget{{Type: "CUSTOMER", Token: "B"}}
+		require.NoError(t, api.RDB.DB(ctx).Create(&other).Error)
+	}
+	caller := suppressionCaller(ctx, false, "customer:A")
+	found, err := api.AlarmSuppressionWindowsSearch(caller, AlarmSuppressionWindowSearchCriteria{})
+	require.NoError(t, err)
+	require.Len(t, found.Results, 1)
+	require.EqualValues(t, 1, found.Pagination.TotalRecords)
+	// Historical preview also ignores all finished windows, irrespective of owner.
+	preview, err := api.AlarmSuppressionsForDevice(caller, "pump", *own.StartTime)
+	require.NoError(t, err)
+	require.Len(t, preview, 1)
+	for i := 0; i < 2; i++ {
+		more := own
+		more.Model, more.Token = gorm.Model{}, fmt.Sprintf("own-%d", i)
+		require.NoError(t, api.RDB.DB(ctx).Create(&more).Error)
+	}
+	_, err = api.AlarmSuppressionWindowsSearch(caller, AlarmSuppressionWindowSearchCriteria{})
 	require.ErrorIs(t, err, ErrInvalidAlarmSuppression)
+	require.Contains(t, err.Error(), "caller-visible")
 }
 
 func TestSuppressionDevicePreviewIgnoresAlarmKeysAndBypass(t *testing.T) {
@@ -164,4 +217,57 @@ func TestLiveSuppressionRequiresPublisherAndDeviceTransition(t *testing.T) {
 	r.api.emitAlarmEvent(r.ctx, &AlarmStateChangeEvent{EventType: AlarmEventRaised, OriginatorType: "asset"})
 	r.api.emitAlarmEvent(r.ctx, &AlarmStateChangeEvent{EventType: AlarmEventDeescalated, OriginatorType: "device", OriginatorId: r.device})
 	require.Zero(t, calls)
+}
+
+// SQLite does not implement PostgreSQL's text[] overlap operator. Keep the real
+// scope callbacks, translating only their generated overlap expression to exact
+// quoted-element membership in rdb.Anchors' array encoding. Production overlap
+// SQL is exercised by the model's Postgres integration suite.
+func suppressionReadSQLiteOverlap(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	var translate func(clause.Expression) clause.Expression
+	translate = func(expr clause.Expression) clause.Expression {
+		switch e := expr.(type) {
+		case clause.Where:
+			for i, v := range e.Exprs {
+				e.Exprs[i] = translate(v)
+			}
+			return e
+		case clause.AndConditions:
+			for i, v := range e.Exprs {
+				e.Exprs[i] = translate(v)
+			}
+			return e
+		case clause.OrConditions:
+			for i, v := range e.Exprs {
+				e.Exprs[i] = translate(v)
+			}
+			return e
+		case clause.NotConditions:
+			for i, v := range e.Exprs {
+				e.Exprs[i] = translate(v)
+			}
+			return e
+		case clause.Expr:
+			if strings.HasPrefix(e.SQL, "? && ARRAY[") {
+				parts := make([]string, 0, len(e.Vars)-1)
+				vars := make([]any, 0, 2*(len(e.Vars)-1))
+				for _, anchor := range e.Vars[1:] {
+					parts = append(parts, "instr(?, ?) > 0")
+					vars = append(vars, e.Vars[0], fmt.Sprintf("%q", anchor))
+				}
+				return clause.Expr{SQL: "(" + strings.Join(parts, " OR ") + ")", Vars: vars}
+			}
+		}
+		return expr
+	}
+	callback := func(tx *gorm.DB) {
+		if where, ok := tx.Statement.Clauses["WHERE"]; ok {
+			where.Expression = translate(where.Expression)
+			tx.Statement.Clauses["WHERE"] = where
+		}
+	}
+	require.NoError(t, db.Callback().Query().After("dc:scope_query").Before("gorm:query").Register("test:suppression_overlap", callback))
+	require.NoError(t, db.Callback().Row().After("dc:scope_row").Before("gorm:row").Register("test:suppression_overlap", callback))
+	require.NoError(t, db.Callback().Update().After("dc:scope_update").Before("gorm:update").Register("test:suppression_overlap", callback))
 }

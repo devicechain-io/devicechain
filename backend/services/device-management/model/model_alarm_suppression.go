@@ -24,7 +24,7 @@ type AlarmSuppressionTarget struct {
 }
 
 // AlarmSuppressionWindow is an operator-declared paging overlay (ADR-085).
-// Targets and keys are whole JSON documents; no SQL predicate inspects their contents.
+// Targets and keys are whole JSON documents; listing filters target tokens in SQL.
 type AlarmSuppressionWindow struct {
 	gorm.Model
 	TenantId string `gorm:"index;not null;size:128;index:idx_suppression_tenant_ended,priority:1"`

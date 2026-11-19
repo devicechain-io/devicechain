@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"time"
 
@@ -52,6 +53,8 @@ func alarmCycleSuppressionFilter(db *gorm.DB, stamped bool) *gorm.DB {
 
 type AlarmSuppressionStatusResult struct {
 	AlarmToken string
+	Severity   string
+	State      string
 	Match      *SuppressionMatch
 }
 
@@ -68,9 +71,18 @@ func (api *Api) AlarmSuppressionStatus(ctx context.Context, tokens []string) ([]
 	if len(tokens) == 0 {
 		return out, nil
 	}
+	// Services need complete tenant status, including position-derived and
+	// unclassified alarms. Human reads retain scope and position withholding.
+	readCtx := ctx
+	if claims, ok := auth.ClaimsFromContext(ctx); ok && claims.TokenType == auth.TokenTypeService {
+		if err := auth.AuthorizeService(ctx, auth.AlarmRead); err != nil {
+			return nil, err
+		}
+		readCtx = auth.WithClaims(ctx, nil)
+	}
 	alarms := make([]*Alarm, 0, len(tokens))
 	for start := 0; start < len(tokens); start += rdb.MaxLookupKeys {
-		found, err := api.AlarmsByToken(ctx, tokens[start:min(start+rdb.MaxLookupKeys, len(tokens))])
+		found, err := api.AlarmsByToken(readCtx, tokens[start:min(start+rdb.MaxLookupKeys, len(tokens))])
 		if err != nil {
 			return nil, err
 		}
@@ -101,7 +113,7 @@ func (api *Api) AlarmSuppressionStatus(ctx context.Context, tokens []string) ([]
 				return nil, err
 			}
 		}
-		out = append(out, AlarmSuppressionStatusResult{AlarmToken: alarm.Token, Match: match})
+		out = append(out, AlarmSuppressionStatusResult{AlarmToken: alarm.Token, Severity: alarm.Severity, State: alarm.State, Match: match})
 	}
 	return out, nil
 }
@@ -142,27 +154,17 @@ type AlarmSuppressionWindowSearchResults struct {
 	Pagination rdb.SearchResultsPagination
 }
 
-// boundedSuppressionWindows refuses oversized tenants before filtering or pagination.
-func (api *Api) boundedSuppressionWindows(ctx context.Context, tokens []string) ([]AlarmSuppressionWindow, error) {
-	var count int64
-	if tokens == nil {
-		if err := api.RDB.DB(suppressionFactContext(ctx)).Model(&AlarmSuppressionWindow{}).Count(&count).Error; err != nil {
-			return nil, err
-		}
-		if count > 10000 {
-			return nil, suppressionInvalid("more than 10000 suppression windows cannot be filtered")
-		}
-	}
-	db := api.RDB.DB(ctx).Order((AlarmSuppressionWindow{}).DefaultOrder())
-	if tokens != nil {
-		db = db.Where("token IN ?", tokens)
-	}
+// Only caller-visible storage rows count toward this whole-window visibility scan.
+// Tests may lower the bound; package tests using this seam must run serially.
+var suppressionVisibleScanLimit = 10000
+
+func (api *Api) visibleSuppressionWindows(ctx context.Context, db *gorm.DB, limit int) ([]AlarmSuppressionWindow, error) {
 	var rows []AlarmSuppressionWindow
-	if err := db.Limit(10001).Find(&rows).Error; err != nil {
+	if err := db.Order((AlarmSuppressionWindow{}).DefaultOrder()).Limit(limit + 1).Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	if len(rows) > 10000 {
-		return nil, suppressionInvalid("more than 10000 suppression windows cannot be filtered")
+	if len(rows) > limit {
+		return nil, suppressionInvalid("too many caller-visible suppression windows to filter (limit %d)", limit)
 	}
 	visible := make([]AlarmSuppressionWindow, 0, len(rows))
 	for _, row := range rows {
@@ -177,44 +179,82 @@ func (api *Api) boundedSuppressionWindows(ctx context.Context, tokens []string) 
 	return visible, nil
 }
 
+func suppressionTargetFilter(token *string) func(*gorm.DB) *gorm.DB {
+	return func(db *gorm.DB) *gorm.DB {
+		if token == nil {
+			return db
+		}
+		if db.Dialector.Name() == "postgres" {
+			target, _ := json.Marshal([]map[string]string{{"token": *token}})
+			return db.Where("targets @> ?::jsonb", string(target))
+		}
+		// SQLite's JSON table function keeps history filtering and pagination in SQL too.
+		return db.Where("EXISTS (SELECT 1 FROM json_each(targets) AS target WHERE json_extract(target.value, '$.token') = ?)", *token)
+	}
+}
+
 func (api *Api) AlarmSuppressionWindowsSearch(ctx context.Context, criteria AlarmSuppressionWindowSearchCriteria) (*AlarmSuppressionWindowSearchResults, error) {
-	if _, err := auth.AuthorizeScoped(ctx, auth.AlarmRead); err != nil {
+	scope, err := auth.AuthorizeScoped(ctx, auth.AlarmRead)
+	if err != nil {
 		return nil, err
 	}
 	if criteria.Status != nil && !slices.Contains([]string{"SCHEDULED", "ACTIVE", "ENDED"}, *criteria.Status) {
 		return nil, suppressionInvalid("unknown suppression window status")
 	}
-	rows, err := api.boundedSuppressionWindows(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
 	now := time.Now().UTC()
-	filtered := make([]AlarmSuppressionWindow, 0, len(rows))
-	for _, row := range rows {
-		if criteria.Status != nil && AlarmSuppressionWindowStatus(row, now) != *criteria.Status {
-			continue
+	if scope.IsScoped() {
+		// Storage's ScopedBy rule runs before LIMIT; another customer's history cannot
+		// consume this budget. Whole-window visibility still checks current targets.
+		rows, err := api.visibleSuppressionWindows(ctx, api.RDB.DB(ctx), suppressionVisibleScanLimit)
+		if err != nil {
+			return nil, err
 		}
-		if criteria.TargetToken != nil {
-			found := false
-			for _, target := range row.Targets {
-				found = found || target.Token == *criteria.TargetToken
-			}
-			if !found {
+		filtered := make([]AlarmSuppressionWindow, 0, len(rows))
+		for _, row := range rows {
+			if criteria.Status != nil && AlarmSuppressionWindowStatus(row, now) != *criteria.Status {
 				continue
 			}
+			if criteria.TargetToken != nil && !slices.ContainsFunc(row.Targets, func(t AlarmSuppressionTarget) bool { return t.Token == *criteria.TargetToken }) {
+				continue
+			}
+			filtered = append(filtered, row)
 		}
-		filtered = append(filtered, row)
+		results, pag := rdb.PageSlice(filtered, criteria.Pagination)
+		return &AlarmSuppressionWindowSearchResults{Results: results, Pagination: pag}, nil
 	}
-	size := int64(criteria.EffectivePageSize())
-	start := max(int64(0), (int64(criteria.PageNumber)-1)*size)
-	end := min(start+size, int64(len(filtered)))
-	pag := rdb.SearchResultsPagination{TotalRecords: int32(len(filtered)), PageStart: int32(min(start+1, int64(1<<31-1))), PageEnd: int32(min((max(int64(criteria.PageNumber), 1))*size, int64(len(filtered))))}
-	results := []AlarmSuppressionWindow{}
-	if start < int64(len(filtered)) {
-		results = filtered[start:end]
-		pag.PageStart, pag.PageEnd = int32(start+1), int32(end)
+	base := api.RDB.DB(ctx).Scopes(suppressionTargetFilter(criteria.TargetToken))
+	if criteria.Status != nil {
+		// Only live candidates need schedule evaluation in Go (bounded by the 500-live cap).
+		var live []AlarmSuppressionWindow
+		if err := base.Session(&gorm.Session{}).Scopes(suppressionLiveAt(now)).Order((AlarmSuppressionWindow{}).DefaultOrder()).Find(&live).Error; err != nil {
+			return nil, err
+		}
+		filtered := make([]AlarmSuppressionWindow, 0, len(live))
+		endedIDs := []uint{}
+		for _, row := range live {
+			status := AlarmSuppressionWindowStatus(row, now)
+			if status == "ENDED" {
+				endedIDs = append(endedIDs, row.ID)
+			}
+			if status == *criteria.Status {
+				filtered = append(filtered, row)
+			}
+		}
+		if *criteria.Status != "ENDED" {
+			results, pag := rdb.PageSlice(filtered, criteria.Pagination)
+			return &AlarmSuppressionWindowSearchResults{Results: results, Pagination: pag}, nil
+		}
+		// A recurrence can have no next opening before its validity bound. Include
+		// those bounded live candidates as well as all expired history. Soft-deleted
+		// windows remain excluded by GORM, as on every other window read.
+		base = base.Where("(ended_at <= ? OR end_time <= ? OR valid_until <= ? OR id IN ?)", now, now, now, endedIDs)
 	}
-	return &AlarmSuppressionWindowSearchResults{Results: results, Pagination: pag}, nil
+	query, pag := api.RDB.ListOfDB(base, &AlarmSuppressionWindow{}, nil, criteria.Pagination)
+	rows := []AlarmSuppressionWindow{}
+	if err := query.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return &AlarmSuppressionWindowSearchResults{Results: rows, Pagination: pag}, nil
 }
 
 func (api *Api) AlarmSuppressionWindowsByTokens(ctx context.Context, tokens []string) ([]AlarmSuppressionWindow, error) {
@@ -227,7 +267,7 @@ func (api *Api) AlarmSuppressionWindowsByTokens(ctx context.Context, tokens []st
 	if len(tokens) == 0 {
 		return []AlarmSuppressionWindow{}, nil
 	}
-	return api.boundedSuppressionWindows(ctx, tokens)
+	return api.visibleSuppressionWindows(ctx, api.RDB.DB(ctx).Where("token IN ?", tokens), 100)
 }
 
 type Interval = maintwindow.Interval
@@ -318,7 +358,7 @@ func (api *Api) AlarmSuppressionsForDevice(ctx context.Context, deviceToken stri
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
-	rows, err := api.boundedSuppressionWindows(ctx, nil)
+	rows, err := api.visibleSuppressionWindows(ctx, api.RDB.DB(ctx).Scopes(suppressionLiveAt(at)), 500)
 	if err != nil {
 		return nil, err
 	}

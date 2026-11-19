@@ -422,3 +422,32 @@ func TestSuppressionCycleKeyPreservesContributorPrecision(t *testing.T) {
 	require.Equal(t, first, r.publisher.events[0].OccurredTime)
 	require.Len(t, r.stamps(t), 1)
 }
+
+func TestCycleStampSameMicrosecondReactivation(t *testing.T) {
+	r := newSuppressionCycleRig(t)
+	require.NoError(t, r.edge(r.now, "r", AlarmEdgeRaised, "MINOR"))
+	require.NoError(t, r.edge(r.now.Add(100*time.Nanosecond), "r", AlarmEdgeResolved, ""))
+	r.publisher.events = nil
+	require.NoError(t, r.edge(r.now.Add(200*time.Nanosecond), "r", AlarmEdgeRaised, "MINOR"))
+	require.Equal(t, string(AlarmStateActive), r.alarm(t).State)
+	require.Len(t, r.stamps(t), 1)
+	require.Len(t, r.publisher.events, 1)
+	require.Equal(t, AlarmEventRaised, r.publisher.events[0].EventType)
+}
+
+func TestAlarmSuppressionStatusServiceIncludesPositionAlarms(t *testing.T) {
+	r := newSuppressionCycleRig(t)
+	require.NoError(t, r.edge(r.now, "r", AlarmEdgeRaised, "MINOR"))
+	alarm := r.alarm(t)
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(alarm).Update("position_derived", true).Error)
+	service := auth.WithClaims(r.ctx, &auth.Claims{TokenType: auth.TokenTypeService, Tenant: "acme", Authorities: []string{string(auth.AlarmRead)}})
+	status, err := r.api.AlarmSuppressionStatus(service, []string{alarm.Token})
+	require.NoError(t, err)
+	require.Len(t, status, 1)
+	require.NotNil(t, status[0].Match)
+	require.Equal(t, "MINOR", status[0].Severity)
+	require.Equal(t, "ACTIVE", status[0].State)
+	status, err = r.api.AlarmSuppressionStatus(suppressionCaller(r.ctx, false), []string{alarm.Token})
+	require.NoError(t, err)
+	require.Empty(t, status)
+}

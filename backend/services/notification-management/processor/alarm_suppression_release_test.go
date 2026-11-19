@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 func suppressionReleaseFixture(t *testing.T, tz, slots, bypass string, clock *time.Time) (*PolicyNotifier, *model.Api, *fakeAdapter, context.Context) {
 	n, api, fa, ctx := quietFixture(t, tz, slots, bypass, clock)
 	n.SuppressionLookup = suppressionFunc(func(context.Context, []string) (map[string]SuppressionStatus, error) {
-		return map[string]SuppressionStatus{}, nil
+		return map[string]SuppressionStatus{"a1": {}}, nil
 	})
 	return n, api, fa, ctx
 }
@@ -257,4 +258,32 @@ func TestReRaiseInsideWindowHoldsNewCycleDropsOld(t *testing.T) {
 			require.Equal(t, float64(1), testutil.ToFloat64(n.suppression.WithLabelValues("released")))
 		})
 	}
+}
+
+func TestSuppressionReleaseRendersLiveSeverityWithoutStateRow(t *testing.T) {
+	clock := outsideQuiet
+	n, api, _, ctx := suppressionReleaseFixture(t, "", "", "", &clock)
+	rec := &msgRecorder{}
+	n.adapters[model.ChannelTypeSMTP] = rec
+	p := enabledPolicies(t, api, ctx)[0]
+	require.NoError(t, api.RDB.DB(ctx).Model(&model.NotificationRule{}).Where("policy_id = ?", p.ID).Update("severity", "MAJOR").Error)
+	e := suppressedEvent(clock, clock.Add(time.Minute))
+	require.NoError(t, n.Notify(ctx, e))
+	down := eventAt(dmmodel.AlarmEventDeescalated, "MINOR", clock.Add(time.Second))
+	down.RaisedTime = e.RaisedTime
+	require.NoError(t, n.Notify(ctx, down))
+	states, err := api.NotificationStatesByAlarmToken(ctx, []string{"a1"})
+	require.NoError(t, err)
+	require.Empty(t, states)
+	client, url := suppressionWire(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"alarmSuppressionStatus":[{"alarmToken":"a1","severity":"MINOR","state":"ACTIVE","suppression":null}]}}`))
+	})
+	n.SuppressionLookup = NewSuppressionLookup(client, url)
+	clock = clock.Add(time.Minute)
+	require.NoError(t, n.ReleaseHeld(ctx, enabledPolicies(t, api, ctx), clock))
+	require.Len(t, rec.sent, 1, "MAJOR-only routing must still deliver")
+	require.Equal(t, "MINOR", rec.sent[0].Alarm.Severity)
+	require.Contains(t, rec.sent[0].Subject, "[MINOR]")
+	require.Equal(t, "MINOR", rec.sent[0].Payload["severity"])
+	require.Empty(t, heldRows(t, api, ctx))
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
 
@@ -126,6 +127,14 @@ type SuppressionConflictError struct{ Token string }
 
 func (e *SuppressionConflictError) Error() string {
 	return fmt.Sprintf("suppression window %q changed concurrently", e.Token)
+}
+
+// Preserve the window-specific error while exposing the shared stale-write refusal.
+func (e *SuppressionConflictError) Unwrap() error {
+	return rdb.NewStaleWriteError("suppression window")
+}
+func (e *SuppressionConflictError) Extensions() map[string]any {
+	return rdb.NewStaleWriteError("suppression window").Extensions()
 }
 
 // mutateSuppression authorizes without holding a transaction or pooled connection.

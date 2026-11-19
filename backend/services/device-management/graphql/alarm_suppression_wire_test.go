@@ -25,7 +25,7 @@ const suppressionCreateDoc = "mutation($request: AlarmSuppressionWindowCreateReq
 const suppressionUpdateDoc = "mutation($token:String!,$request:AlarmSuppressionWindowUpdateRequest!) { updateAlarmSuppressionWindow(token:$token,request:$request) { " + suppressionSelection + " } }"
 
 // Exact document from notification-management/processor/suppression_lookup.go.
-const notificationSuppressionDocument = "query AlarmSuppressionStatus($tokens: [String!]!) { alarmSuppressionStatus(tokens: $tokens) { alarmToken suppression { windowToken until } } }"
+const notificationSuppressionDocument = "query AlarmSuppressionStatus($tokens: [String!]!) { alarmSuppressionStatus(tokens: $tokens) { alarmToken severity state suppression { windowToken until } } }"
 
 func suppressionWireFixture(t *testing.T) scopeFixture {
 	f := newScopeFixture(t)
@@ -289,12 +289,16 @@ func TestAlarmSuppressionWireStatusHistoryAndSearch(t *testing.T) {
 	var decoded struct {
 		AlarmSuppressionStatus []struct {
 			AlarmToken  string
+			Severity    string
+			State       string
 			Suppression *struct{ WindowToken, Until string }
 		}
 	}
 	require.NoError(t, json.Unmarshal(raw, &decoded))
 	require.Len(t, decoded.AlarmSuppressionStatus, 1)
 	require.Equal(t, alarm.Token, decoded.AlarmSuppressionStatus[0].AlarmToken)
+	require.Equal(t, "MINOR", decoded.AlarmSuppressionStatus[0].Severity)
+	require.Equal(t, "ACTIVE", decoded.AlarmSuppressionStatus[0].State)
 	require.Equal(t, "work", decoded.AlarmSuppressionStatus[0].Suppression.WindowToken)
 	until, err := time.Parse(time.RFC3339Nano, decoded.AlarmSuppressionStatus[0].Suppression.Until)
 	require.NoError(t, err)
@@ -478,10 +482,35 @@ func TestAlarmSuppressionWireStatusVisibilityAndAlarmNulls(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.Equal(t, "own-alarm", rows[0].(map[string]any)["alarmToken"])
 	require.NotNil(t, rows[0].(map[string]any)["suppression"])
+	service := f.withClaims(&auth.Claims{TokenType: auth.TokenTypeService, Tenant: scopeTenant, Authorities: []string{string(auth.AlarmRead)}})
+	serviceOut := serve(t, service, notificationSuppressionDocument, map[string]any{"tokens": []any{"position-alarm"}})
+	requireServed(t, serviceOut, "service position status")
+	serviceRows := serviceOut.data["alarmSuppressionStatus"].([]any)
+	require.Len(t, serviceRows, 1)
+	require.NotNil(t, serviceRows[0].(map[string]any)["suppression"])
 	for _, change := range []map[string]any{{"state": "CLEARED"}, {"state": "ACTIVE", "originator_type": "asset"}} {
 		require.NoError(t, f.db.WithContext(ctx).Model(&model.Alarm{}).Where("token = ?", "own-alarm").Updates(change).Error)
 		out = serve(t, ctx, "{alarmsByToken(tokens:[\"own-alarm\"]){suppression{windowToken}}}", nil)
 		requireServed(t, out, "null live alarm suppression")
 		require.Nil(t, out.data["alarmsByToken"].([]any)[0].(map[string]any)["suppression"])
 	}
+}
+
+func TestAlarmSuppressionWireVersionRaceIsStaleWrite(t *testing.T) {
+	f := suppressionWireFixture(t)
+	ctx := suppressionWireCaller(f, true, true)
+	suppressionCreate(t, ctx, suppressionWireInput("race", "DEVICE", "acme-pump"))
+	require.NoError(t, f.db.Callback().Update().Before("gorm:update").Register("test:suppression-version-race", func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "AlarmSuppressionWindow" {
+			tx.Statement.AddClause(clause.Where{Exprs: []clause.Expression{clause.Eq{Column: "version", Value: -1}}})
+		}
+	}))
+	t.Cleanup(func() { _ = f.db.Callback().Update().Remove("test:suppression-version-race") })
+	out := suppressionUpdate(t, ctx, "race", map[string]any{"reason": "race"})
+	suppressionRefused(t, out, "STALE_WRITE")
+	_, err := f.api.UpdateAlarmSuppressionWindow(ctx, "race", &model.AlarmSuppressionUpdateRequest{})
+	var conflict *model.SuppressionConflictError
+	var stale *rdb.StaleWriteError
+	require.ErrorAs(t, err, &conflict)
+	require.ErrorAs(t, err, &stale)
 }

@@ -138,6 +138,8 @@ type AlarmSuppressionStatusResolver struct {
 }
 
 func (r *AlarmSuppressionStatusResolver) AlarmToken() string { return r.M.AlarmToken }
+func (r *AlarmSuppressionStatusResolver) Severity() string   { return r.M.Severity }
+func (r *AlarmSuppressionStatusResolver) State() string      { return r.M.State }
 func (r *AlarmSuppressionStatusResolver) Suppression() *AlarmSuppressionResolver {
 	return suppressionResolver(r.M.Match, r.S)
 }
