@@ -73,17 +73,35 @@ var ErrShardGroupOutsideNatsCount = errors.New("iam: shard group is outside nats
 // the one presented is partition.ErrPChanged, never an update: the caller (the service's start)
 // must fail, because carrying on with a different P would rehash every tenant's lane.
 //
-// It is safe to run on several replicas at once: every insert is DoNothing, and the row that won
-// is re-read and compared before anything is believed.
+// 🔴 THE ASSIGNMENT ROWS ARE WRITTEN ONLY BY THE TRANSACTION THAT CREATED THE CONFIG ROW. That
+// row is the placement's authority: the transaction whose insert of it actually inserted it writes
+// all P assignments, seeded from nats.shardGroups.seed when the instance configuration has one
+// (seedGroups) and in group zero otherwise, and every later start writes nothing. So a seed
+// applies exactly once in an instance's life, before any event exists, and can never move a
+// tenant: on an instance whose table exists, with or without a seed key, the table is read as it
+// stands, and a hole in it is refused (ErrPlacementInvalid, from Placement) rather than filled
+// from whatever the configuration says now. A restored table wins the same way, since its config
+// row exists.
+//
+// It is safe to run on several replicas at once: the config insert is DoNothing, so of two
+// replicas racing the first start exactly one inserts it (the other waits on that row's unique
+// key, then inserts nothing) and only that one writes the assignments; the row that won is
+// re-read and compared before anything is believed.
 func (s *Store) EnsurePlacement(ctx context.Context, p int) (partition.Table, error) {
 	if p < 1 || p > partition.MaxP {
 		return partition.Table{}, fmt.Errorf("iam: P must be between 1 and %d, got %d", partition.MaxP, p)
 	}
+	var seed []int
+	if cfg := s.NatsShardGroups; cfg != nil && cfg.Seed != nil {
+		seed = cfg.Seed.Weights
+	}
 	err := s.sys(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
-			Create(&PartitionConfig{ID: partitionConfigID, P: p}).Error; err != nil {
-			return err
+		res := tx.Clauses(clause.OnConflict{DoNothing: true}).
+			Create(&PartitionConfig{ID: partitionConfigID, P: p})
+		if res.Error != nil {
+			return res.Error
 		}
+		created := res.RowsAffected == 1
 		var cfg PartitionConfig
 		if err := tx.First(&cfg, partitionConfigID).Error; err != nil {
 			return err
@@ -91,9 +109,16 @@ func (s *Store) EnsurePlacement(ctx context.Context, p int) (partition.Table, er
 		if err := partition.CheckP(cfg.P, p); err != nil {
 			return err
 		}
+		if !created {
+			return nil
+		}
+		groups, err := seedGroups(p, seed)
+		if err != nil {
+			return err
+		}
 		rows := make([]VPartitionAssignment, 0, p)
 		for vp := 0; vp < p; vp++ {
-			rows = append(rows, VPartitionAssignment{VPartition: vp})
+			rows = append(rows, VPartitionAssignment{VPartition: vp, ShardGroup: groups[vp]})
 		}
 		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
 	})
@@ -101,6 +126,50 @@ func (s *Store) EnsurePlacement(ctx context.Context, p int) (partition.Table, er
 		return partition.Table{}, err
 	}
 	return s.Placement(ctx)
+}
+
+// ErrSeedInvalid refuses a seed that does not place exactly the table it is asked to seed.
+var ErrSeedInvalid = errors.New("iam: the placement seed does not fit the placement table")
+
+// seedGroups is the shard group of every vpartition of a P-entry table seeded with the given
+// weights, interleaved: vpartition order carries no meaning, so neighbours are spread rather than
+// laid out in runs. No weights is the unseeded table, every vpartition in group zero.
+//
+// It is smooth weighted round-robin: each step adds every group's weight to its credit, takes the
+// group with the most credit (the lowest group on a tie) and charges it the total. Over P steps,
+// with weights summing to P, each group is taken exactly its weight's number of times.
+//
+// 🔴 THE ORDER IS PART OF WHAT A SEEDED INSTANCE IS. It is computed once per instance and stored,
+// so changing it would not move an existing tenant; it would make two installs of the same level
+// lay out differently. TestSeedGroupsLayoutIsFixed pins it.
+func seedGroups(p int, weights []int) ([]int, error) {
+	groups := make([]int, p)
+	if len(weights) == 0 {
+		return groups, nil
+	}
+	total := 0
+	for g, w := range weights {
+		if w < 1 {
+			return nil, fmt.Errorf("%w: group %d has weight %d", ErrSeedInvalid, g, w)
+		}
+		total += w
+	}
+	if total != p {
+		return nil, fmt.Errorf("%w: the weights sum to %d and the table has %d vpartitions", ErrSeedInvalid, total, p)
+	}
+	credit := make([]int, len(weights))
+	for vp := range groups {
+		best := 0
+		for g, w := range weights {
+			credit[g] += w
+			if credit[g] > credit[best] {
+				best = g
+			}
+		}
+		credit[best] -= total
+		groups[vp] = best
+	}
+	return groups, nil
 }
 
 // Placement reads the whole placement table as one consistent value.

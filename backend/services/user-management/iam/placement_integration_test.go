@@ -204,3 +204,83 @@ func TestCompleteTenantPurgeAndClearOverrideDoNotDeadlock(t *testing.T) {
 	require.NoError(t, s.sys(ctx).Model(&TenantVPartitionOverride{}).Where("tenant_token = ?", "dl").Count(&pins).Error)
 	require.Zero(t, pins)
 }
+
+// 🔑 Replicas racing the first start agree, on a real server: exactly one transaction creates the
+// config row, only it lays out the seed, and every replica reads back the one seeded table. Each
+// replica runs with a DIFFERENT seed, so a loser that also wrote rows (or filled behind the winner)
+// would leave a table matching no single seed.
+func TestPlacementSeedIsAppliedOnceUnderRacingFirstStarts(t *testing.T) {
+	base := newPlacementPostgres(t)
+	ctx := context.Background()
+	seeds := [][]int{{22, 21, 21}, {21, 22, 21}, {12, 26, 26}, {1, 1, 62}, {62, 1, 1}, {30, 30, 4}}
+	tables := make([]partition.Table, len(seeds))
+	errs := make([]error, len(seeds))
+	var start, wg sync.WaitGroup
+	start.Add(1)
+	for i, w := range seeds {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s := NewStore(base.db)
+			s.NatsShardGroups = &config.NatsShardGroupsConfiguration{Count: 3, Suffixes: []string{"inbound-events"},
+				Seed: &config.NatsShardGroupsSeed{Weights: w}}
+			start.Wait()
+			tables[i], errs[i] = s.EnsurePlacement(ctx, partition.DefaultP)
+		}()
+	}
+	start.Done()
+	wg.Wait()
+	for i := range seeds {
+		require.NoError(t, errs[i], "replica %d", i)
+		require.Equal(t, tables[0], tables[i], "replica %d read a different table", i)
+	}
+	matched := 0
+	for _, w := range seeds {
+		groups, err := seedGroups(partition.DefaultP, w)
+		require.NoError(t, err)
+		if fmt.Sprint(groups) == fmt.Sprint(tables[0].Groups) {
+			matched++
+		}
+	}
+	require.Equal(t, 1, matched, "the stored table is not exactly one replica's seed: %v", tables[0].Groups)
+	require.Equal(t, uint64(0), tables[0].Generation)
+}
+
+// On a real server: a later start with another seed changes nothing, and a hole is refused rather
+// than filled.
+func TestPlacementSeedNeverReappliesAndHolesAreRefused(t *testing.T) {
+	s := newPlacementPostgres(t)
+	ctx := context.Background()
+	s.NatsShardGroups = &config.NatsShardGroupsConfiguration{Count: 3, Suffixes: []string{"inbound-events"},
+		Seed: &config.NatsShardGroupsSeed{Weights: []int{22, 21, 21}}}
+	first, err := s.EnsurePlacement(ctx, partition.DefaultP)
+	require.NoError(t, err)
+	want, err := seedGroups(partition.DefaultP, []int{22, 21, 21})
+	require.NoError(t, err)
+	require.Equal(t, want, first.Groups)
+
+	s.NatsShardGroups.Seed.Weights = []int{12, 26, 26}
+	again, err := s.EnsurePlacement(ctx, partition.DefaultP)
+	require.NoError(t, err)
+	require.Equal(t, first, again)
+
+	require.NoError(t, s.sys(ctx).Where("vpartition = ?", 5).Delete(&VPartitionAssignment{}).Error)
+	_, err = s.EnsurePlacement(ctx, partition.DefaultP)
+	require.ErrorIs(t, err, ErrPlacementInvalid)
+	var n int64
+	require.NoError(t, s.sys(ctx).Model(&VPartitionAssignment{}).Count(&n).Error)
+	require.Equal(t, int64(partition.DefaultP-1), n, "the hole was filled")
+}
+
+// A custom instance (a shardGroups block with no seed) keeps today's table: every vpartition in
+// group zero.
+func TestPlacementWithoutASeedStartsInGroupZeroOnPostgres(t *testing.T) {
+	s := newPlacementPostgres(t)
+	s.NatsShardGroups = &config.NatsShardGroupsConfiguration{Count: 3, Suffixes: []string{"inbound-events"}}
+	table, err := s.EnsurePlacement(context.Background(), partition.DefaultP)
+	require.NoError(t, err)
+	require.Equal(t, 1, table.S())
+	for vp, g := range table.Groups {
+		require.Zero(t, g, "vpartition %d", vp)
+	}
+}
