@@ -147,6 +147,7 @@ backend/sims/dc-simulator/sim/dash_sample_test.go
 backend/sims/dc-simulator/sim/dashboard_fixture_test.go
 backend/sims/dc-simulator/sim/documents_test.go
 backend/sims/dc-simulator/sim/handshake_mirror_test.go
+backend/sims/dc-simulator/sim/harborpulse_scene_test.go
 backend/sims/dc-simulator/sim/load_test.go
 backend/sims/dc-simulator/sim/nightshift_test.go
 backend/sims/dc-simulator/sim/sitepulse_dashboard_test.go

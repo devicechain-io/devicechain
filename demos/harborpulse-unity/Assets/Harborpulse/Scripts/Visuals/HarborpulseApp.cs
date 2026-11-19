@@ -314,7 +314,8 @@ namespace DeviceChain.Harborpulse.Visuals
             foreach (var q in plan.Quays) sb.Append(TideLine(q)).Append('\n');
             sb.Append("\n<b>Street lights</b>  on ").Append(lamps.Count(LampCondition.On)).Append(" · off ").Append(lamps.Count(LampCondition.Off))
                 .Append(" · silent ").Append(lamps.Count(LampCondition.Silent)).Append(" · unknown ").Append(lamps.Count(LampCondition.Unknown));
-            GUI.Box(new Rect(16, 16, 470, Offline ? 250 : 320), sb.ToString(), panel);
+            var text = sb.ToString();
+            GUI.Box(new Rect(16, 16, 470, panel.CalcHeight(new GUIContent(text), 470)), text, panel);
 
             var shots = rig.Shots;
             sb.Clear();

@@ -45,3 +45,6 @@ mono_crash.*
 
 # Stills rendered by Harborpulse > Render Preview Stills
 /Stills/
+
+# The Dotnet~ sidecar's solution is source, unlike the Editor-generated ones at the root
+!/Dotnet~/*.sln
