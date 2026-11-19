@@ -15,6 +15,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -61,7 +62,7 @@ type ccFixture struct {
 // device, and every table DeleteDevice's cascade and ReplaceDevice's journal write.
 func credentialCacheTables() []any {
 	return append(append([]any{}, deviceProfileTables...), &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{}, &DeviceConfigurationRevision{}, &DeviceConfigurationState{},
-		&EntityRelationship{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{}, &PendingEntityDeletion{})
+		&EntityRelationship{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{}, &PendingEntityDeletion{}, &PendingAlarmEvent{})
 }
 
 func newCredentialCacheFixture(t *testing.T) ccFixture {
@@ -488,7 +489,7 @@ func synthCred(tenant string, deviceId uint, metadataBytes int) *DeviceCredentia
 		m := datatypes.JSON(make([]byte, metadataBytes))
 		d.Metadata = &m
 	}
-	c := &DeviceCredential{DeviceId: deviceId, Device: d, CredentialType: string(CredentialAccessToken), Enabled: true}
+	c := &DeviceCredential{DeviceCredential: identity.DeviceCredential{DeviceId: deviceId, CredentialType: string(CredentialAccessToken), Enabled: true}, Device: d}
 	c.TenantId = tenant
 	return c
 }

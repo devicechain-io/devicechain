@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/limit"
@@ -654,7 +655,7 @@ func TestRequireCurrentNeedsEveryRegisteredIssuerCovered(t *testing.T) {
 		g.mustPut(g.ca.crl(t, crlSpec{number: big.NewInt(1)}))
 		_, err = g.update(&DeviceTrustAnchorUpdateRequest{RevocationMode: modeOf("REQUIRE_CURRENT")})
 		requireInvalid(t, err, "the live credential's intermediate has no list")
-		require.NoError(t, g.api.RDB.DB(g.ctx).Model(&DeviceCredential{Model: cred.Model}).Update("enabled", false).Error)
+		require.NoError(t, g.api.RDB.DB(g.ctx).Model(&DeviceCredential{DeviceCredential: identity.DeviceCredential{Model: cred.Model}}).Update("enabled", false).Error)
 		_, err = g.update(&DeviceTrustAnchorUpdateRequest{RevocationMode: modeOf("REQUIRE_CURRENT")})
 		require.NoError(t, err)
 	})

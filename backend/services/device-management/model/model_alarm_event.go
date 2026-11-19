@@ -8,34 +8,12 @@ import (
 	"time"
 )
 
-// This file is the model side of the alarm state-change event (ADR-041), the envelope
-// re-emitted whenever a raised Alarm transitions: its shape is contract.AlarmStateChangeEvent,
-// and this file holds the small publisher interface the model layer emits through and the
-// code that builds the event from an alarm row. The DETECT edge integrator and the operator API both mutate alarms
-// via the same *Api, so emitting here — through an injected interface — gives one uniform
-// event stream for every transition (integrator raise/escalate/clear and operator
-// ack/clear). It is the substrate for graphql-ws subscriptions (2.E, ADR-037) and
-// notifications (ADR-017).
-//
-// The model layer depends only on the AlarmEventPublisher interface, never on the
-// messaging/proto packages: the concrete NATS-backed publisher lives in the processor
-// layer and is injected at wiring time (dependency inversion). A nil publisher (tests,
-// or before wiring) disables emission.
-
-// AlarmEventPublisher publishes alarm state-change events (ADR-041). Emission is
-// side-band to the alarm write and returns nothing: a broker fault must not fail or
-// retry the DB transition that produced it.
-//
-// 🔴 THAT IS NOT THE SAME AS BEST-EFFORT, AND THE IMPLEMENTATION MUST NOT TREAT IT AS
-// SUCH. The transition is already committed, so an event that never reaches the stream
-// is an alarm nobody is paged about; the subscriber that matters reads a durable whose
-// cursor only advances over messages that were actually published, and no reconciler
-// walks alarm rows for transitions the stream never carried. Swallowing a failure here
-// therefore loses the page silently. An implementation owes the caller no error, but it
-// owes an operator a RECORD — see processor.AlarmEventWriter, which retries and then
-// dead-letters with a counter. Implementations must be safe for concurrent use.
+// AlarmEventPublisher acknowledges alarm snapshots from durable outboxes. Ordinary
+// transitions enqueue atomically; the relay retries broker failures with stable IDs.
+// Agent effects and deletion cascades retain their own outboxes. Implementations
+// must be safe for concurrent use and return ErrAlarmEventUnpublishable for encoding
+// failures so the relay can quarantine the payload without blocking later events.
 type AlarmEventPublisher interface {
-	PublishAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent)
 	PublishAlarmEventDedup(ctx context.Context, event *AlarmStateChangeEvent, dedupID string) error
 }
 

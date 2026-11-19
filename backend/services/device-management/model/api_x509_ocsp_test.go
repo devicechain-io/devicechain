@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
+
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/stretchr/testify/require"
@@ -103,10 +105,10 @@ func TestApplyOcspSettings(t *testing.T) {
 
 func TestValidateOcspResponderUrl(t *testing.T) {
 	for _, ok := range []string{"http://ocsp.example.com", "https://ocsp.example.com:8080/path?x=1", "http://10.0.0.5/ocsp"} {
-		require.NoError(t, validateOcspResponderUrl(ok), ok)
+		require.NoError(t, identity.ValidateOcspResponderUrl(ok), ok)
 	}
 	for _, bad := range []string{"", " http://x", "ftp://x", "ldap://x/y", "http://", "https:///path", "http://user:pw@x/", "http://x/#frag", "//x", "ocsp.example.com",
 		"http://x/" + strings.Repeat("a", MaxOcspResponderUrlLength)} {
-		require.Error(t, validateOcspResponderUrl(bad), bad)
+		require.Error(t, identity.ValidateOcspResponderUrl(bad), bad)
 	}
 }

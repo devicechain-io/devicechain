@@ -130,6 +130,14 @@ var (
 	// may run again after a failed start, and a second registration would panic.
 	OcspMetrics *processor.OcspMetrics
 
+	// AlarmEventDrain relays committed alarm transitions from their outbox until the broker
+	// acknowledges them, one replica at a time (model/alarm_event_outbox.go); the gauges
+	// report its backlog.
+	AlarmEventDrain        *core.PeriodicTask
+	AlarmEventDrainMetrics *core.PeriodicTaskMetrics
+	AlarmEventsPending     prometheus.Gauge
+	AlarmEventOldestAge    prometheus.Gauge
+	AlarmEventsQuarantined prometheus.Gauge
 	// EntityDeletionDrain retries committed deletion facts until the broker acknowledges
 	// them, one replica at a time (model/deletion_outbox.go).
 	EntityDeletionDrain        *core.PeriodicTask
@@ -282,6 +290,15 @@ func buildMetrics() {
 		CredentialMisconfigured.WithLabelValues(path)
 	}
 	OwnershipDrainMetrics = Microservice.NewPeriodicTaskMetrics("ownership_drain")
+	AlarmEventDrainMetrics = Microservice.NewPeriodicTaskMetrics("alarm_event_drain")
+	AlarmEventsPending = Microservice.NewGauge("alarm_events_pending",
+		"Committed alarm transitions whose event the broker has not yet accepted. Normally zero; a "+
+			"growing value means device-management cannot publish to the broker, and notifications are delayed until it can.")
+	AlarmEventOldestAge = Microservice.NewGauge("alarm_event_oldest_age_seconds",
+		"Age of the oldest committed alarm transition still waiting for the broker: how late its notification already is.")
+	AlarmEventsQuarantined = Microservice.NewGauge("alarm_events_quarantined",
+		"Alarm transitions whose stored event can never be published (a payload that does not decode or encode). "+
+			"They are kept in the pending_alarm_events table with the error for an operator to inspect, and are not retried.")
 	EntityDeletionDrainMetrics = Microservice.NewPeriodicTaskMetrics("entity_deletion_drain")
 	AgentEffectsDrainMetrics = Microservice.NewPeriodicTaskMetrics("agent_effects_drain")
 	AgentEffectsExhausted = Microservice.NewCounter("agent_effects_exhausted_total",
@@ -375,6 +392,21 @@ func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
 		return nil, err
 	}
 	return DeadLetters.NewSink(w), nil
+}
+
+// newAlarmEventDeadLetter indexes a committed quarantine in the operator dead-letter list.
+// Nil when no dead-letter stream is configured: the quarantine itself is durable without it.
+func newAlarmEventDeadLetter(deadLetters *deadletter.Sink) func(context.Context, string, []byte, error) error {
+	if deadLetters == nil {
+		return nil
+	}
+	return func(ctx context.Context, reference string, payload []byte, cause error) error {
+		return deadLetters.Write(ctx, deadletter.Envelope{
+			Kind: deadletter.KindNotification, Reason: deadletter.ReasonUnprocessable,
+			Reference: reference, Payload: payload, Detail: cause.Error(),
+			Summary: "Stored alarm event cannot be relayed", OccurredAt: time.Now().UTC(),
+		})
+	}
 }
 
 // newInboundEventsProcessor assembles the inbound processor from this service's globals (the
@@ -633,21 +665,24 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 
-	// Add the alarm-events writer and inject a publisher over it into the shared Api
-	// (ADR-041). CachedApi embeds this same *Api, so both the DETECT edge integrator and
-	// the GraphQL operator mutations emit alarm state-change events through it.
-	//
-	// The publisher carries the ADR-024 arm for the LAST hop of the alarm flow: an alarm
-	// whose state-change event never reaches the stream pages nobody, and the subscriber
-	// cannot notice — notification-management's durable only advances over messages that
-	// were published — so a give-up here is dead-lettered and counted rather than logged.
+	// Add the alarm-events writer for all three durable relays. Ordinary DETECT and
+	// operator transitions enqueue immutable snapshots in their own transactions;
+	// the alarm-event relay retries until the broker acknowledges them. Agent effects
+	// and deletion cascades retain their independent outboxes. Poison is retained in
+	// quarantine for operator repair, without depending on a dead-letter broker write.
 	aevents, err := nmgr.NewWriter(streams.AlarmEvents)
 	if err != nil {
 		return err
 	}
 	AlarmEventsWriter = aevents
-	Api.AlarmPublisher = processor.NewAlarmEventWriter(AlarmEventsWriter, deadLetters,
-		AlarmEventMetrics)
+	// Ordinary transitions always enqueue first; this writer serves the durable relays.
+	// Through the setter: on a broker restart this runs again while relay passes may be running.
+	Api.SetAlarmPublisher(processor.NewAlarmEventWriter(AlarmEventsWriter, deadLetters,
+		AlarmEventMetrics).WithConnected(func() bool {
+		conn := nmgr.Conn()
+		return conn != nil && conn.IsConnected()
+	}))
+	Api.SetAlarmEventDeadLetter(newAlarmEventDeadLetter(deadLetters))
 
 	// Add the entity-deleted writer and inject a publisher over it into the shared
 	// Api (ADR-044): the outbox drain publishes committed deletions so cross-service
@@ -899,6 +934,19 @@ func initAgentEffectsDrain() error {
 		func(ctx context.Context) error { return Api.DrainAgentEffectsLocked(ctx) },
 		core.NewNoOpLifecycleCallbacks(), AgentEffectsDrainMetrics, core.WithImmediateFirstPass())
 	return AgentEffectsDrain.Initialize(context.Background())
+}
+
+// initAlarmEventDrain initializes the immutable alarm snapshot relay once.
+func initAlarmEventDrain() error {
+	Api.AlarmEventObserver = func(pending int, oldest time.Duration, quarantined int) {
+		AlarmEventsPending.Set(float64(pending))
+		AlarmEventOldestAge.Set(oldest.Seconds())
+		AlarmEventsQuarantined.Set(float64(quarantined))
+	}
+	AlarmEventDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "alarm-event-drain", ownershipDrainInterval,
+		func(ctx context.Context) error { return Api.DrainAlarmEventsLocked(ctx) },
+		core.NewNoOpLifecycleCallbacks(), AlarmEventDrainMetrics, core.WithImmediateFirstPass())
+	return AlarmEventDrain.Initialize(context.Background())
 }
 
 // initEntityDeletionDrain initializes the process-owned deletion outbox task.
@@ -1164,6 +1212,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initEntityDeletionDrain(); err != nil {
 				return err
 			}
+			if err = initAlarmEventDrain(); err != nil {
+				return err
+			}
 			if err = initOwnershipDrain(); err != nil {
 				return err
 			}
@@ -1249,7 +1300,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	// injects the alarm-event publisher into the shared Api, and doing it before the HTTP
 	// server accepts traffic establishes happens-before for the resolver goroutines that
 	// read Api.AlarmPublisher — so an early acknowledgeAlarm/clearAlarm mutation neither
-	// races the write nor silently emits no event.
+	// races the write nor leaves its queued event awaiting startup.
 	if err := Svc.Start(ctx); err != nil {
 		return err
 	}
@@ -1293,6 +1344,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 	if err := EntityDeletionDrain.Start(ctx); err != nil {
+		return err
+	}
+	if err := AlarmEventDrain.Start(ctx); err != nil {
 		return err
 	}
 	if err = OwnershipDrain.Start(ctx); err != nil {
@@ -1409,6 +1463,16 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := EntityDeletionDrain.Stop(ctx); err != nil {
 		return err
 	}
+	if err := AlarmEventDrain.Stop(ctx); err != nil {
+		return err
+	}
+	// End post-commit relaying too, before the broker connection and the database close: later
+	// kicks do nothing, and what is queued is relayed by the next replica's periodic drain.
+	if Api != nil {
+		if err := Api.StopAlarmEventRelay(ctx); err != nil {
+			log.Warn().Err(err).Msg("An alarm event relay pass did not finish before shutdown; its events stay queued")
+		}
+	}
 	if err := OwnershipDrain.Stop(ctx); err != nil {
 		return err
 	}
@@ -1476,6 +1540,9 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		return err
 	}
 	if err := EntityDeletionDrain.Terminate(ctx); err != nil {
+		return err
+	}
+	if err := AlarmEventDrain.Terminate(ctx); err != nil {
 		return err
 	}
 	if err := OwnershipDrain.Terminate(ctx); err != nil {

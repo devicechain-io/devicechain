@@ -7,12 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
-	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/x509trust"
@@ -31,12 +30,6 @@ const (
 	// a renewal can overlap the certificate it replaces without the set growing for ever.
 	MaxX509CredentialsPerDevice = 3
 )
-
-// invalidAnchor refuses an X.509 request that cannot be honoured (a trust anchor, a certificate
-// credential, a certificate profile). INVALID_VALUE.
-func invalidAnchor(format string, args ...any) error {
-	return integrity.NewRefusal(integrity.ClassInvalid, fmt.Sprintf(format, args...))
-}
 
 // kickOriginAnchorBase separates the Origin of a trust-anchor kick from a provisioning
 // profile's (a profile id) and from a device reset's (0) in the pending session-kick queue,
@@ -114,15 +107,6 @@ func countX509Credentials(tx *gorm.DB, deviceId uint) (int64, error) {
 	return n, err
 }
 
-// referenceToNotFound turns the foreign-key refusal of an insert that named a trust anchor
-// deleted since it was read into the NOT_FOUND the caller would have had a moment later.
-func referenceToNotFound(err error, anchorToken string) error {
-	if class, ok := integrity.Refused(err); ok && class == integrity.ClassReference {
-		return fmt.Errorf("trust anchor %q: %w", anchorToken, gorm.ErrRecordNotFound)
-	}
-	return err
-}
-
 // trustAnchorByToken reads one anchor of the calling tenant, or gorm.ErrRecordNotFound.
 func (api *Api) trustAnchorByToken(ctx context.Context, token string) (*DeviceTrustAnchor, error) {
 	found, err := api.DeviceTrustAnchorsByToken(ctx, []string{token})
@@ -143,7 +127,7 @@ func (api *Api) trustAnchorByToken(ctx context.Context, token string) (*DeviceTr
 func (api *Api) CreateDeviceTrustAnchor(ctx context.Context, request *DeviceTrustAnchorCreateRequest) (*DeviceTrustAnchor, error) {
 	anchor, err := x509trust.ParseTrustAnchor(request.CertificatePem, time.Now())
 	if err != nil {
-		return nil, invalidAnchor("certificatePem: %v", err)
+		return nil, identity.InvalidAnchor("certificatePem: %v", err)
 	}
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
 	if err != nil {
@@ -353,7 +337,7 @@ func (api *Api) DeleteDeviceTrustAnchor(ctx context.Context, token string) (bool
 		if locked.ID != named.ID {
 			// The token was re-created while this waited for the lock of the anchor it named: the
 			// CRL-writer lock held is not the new anchor's, so touch nothing.
-			return invalidAnchor("trust anchor %q was replaced while the delete was waiting; repeat it", token)
+			return identity.InvalidAnchor("trust anchor %q was replaced while the delete was waiting; repeat it", token)
 		}
 		var creds, profiles int64
 		if err := tx.Unscoped().Model(&DeviceCredential{}).Where("trust_anchor_id = ?", locked.ID).Count(&creds).Error; err != nil {
@@ -394,22 +378,4 @@ func (api *Api) DeleteDeviceTrustAnchor(ctx context.Context, token string) (bool
 		return false, inUseOn(err, fmt.Sprintf("trust anchor %q is still relied on by a credential or a provisioning profile", token))
 	}
 	return deleted, nil
-}
-
-// requireUsableAnchor is the check a write that BINDS something to an anchor makes: the anchor
-// exists in the tenant and is enabled (binding to a withdrawn CA would store a credential that
-// can never authenticate).
-func requireUsableAnchor(anchor *DeviceTrustAnchor) error {
-	if !anchor.Enabled {
-		return invalidAnchor("trust anchor %q is disabled", anchor.Token)
-	}
-	return nil
-}
-
-// trimmedToken is a token argument with surrounding blanks removed; "" means none.
-func trimmedToken(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return strings.TrimSpace(*p)
 }
