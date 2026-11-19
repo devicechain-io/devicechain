@@ -151,26 +151,3 @@ func TestShardGroupsDeclarationRoundTripAndBrokerTopology(t *testing.T) {
 	spec.HA = true
 	require.Error(t, ValidateInstanceSpec(spec))
 }
-
-func TestShardGroupsRefusesUnwiredResolvedReaders(t *testing.T) {
-	block := map[string]interface{}{"count": 2, "suffixes": []interface{}{"resolved-events"}}
-	st := &State{Instance: "prod", Profile: "default", Values: map[string]string{}, ValuesOverlay: shardGroupsValues(block)}
-	_, err := shardGroupsFromValues(authoringValues(st))
-	require.ErrorContains(t, err, "device-state")
-	require.ErrorContains(t, ValidateInstanceSpec(InstanceSpecFrom(st, ClusterBinding{}, "local")), "device-state")
-	ch, err := loadEmbeddedChart()
-	require.NoError(t, err)
-	vals := renderOnlyAuthoring(st)
-	_, err = renderInstanceConfigDocument(t.Context(), ch, vals)
-	require.ErrorContains(t, err, "group readers")
-	st.Profile = "ingest-only"
-	st.EnableAreas = []string{"event-management"}
-	st.EnabledAreas, err = ResolveEnabledAreas(st.Profile, st.EnableAreas)
-	require.NoError(t, err)
-	cfg, err := shardGroupsFromValues(authoringValues(st))
-	require.NoError(t, err)
-	require.Equal(t, []string{"resolved-events"}, cfg.Suffixes)
-	require.NoError(t, ValidateInstanceSpec(InstanceSpecFrom(st, ClusterBinding{}, "local")))
-	_, err = renderInstanceConfigDocument(t.Context(), ch, renderOnlyAuthoring(st))
-	require.NoError(t, err)
-}

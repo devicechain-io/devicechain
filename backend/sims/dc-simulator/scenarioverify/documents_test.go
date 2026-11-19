@@ -44,6 +44,8 @@ func verifierDocuments() []struct {
 		name, area, doc string
 		vars            map[string]any
 	}{
+		{"queryMaintenanceWindow", "device-management", queryMaintenanceWindow, map[string]any{"tokens": []string{"hp-lamp-service-1-d0"}}},
+		{"queryLampCycle", "device-management", queryLampCycle, map[string]any{"c": map[string]any{"pageNumber": 1, "pageSize": 2, "originatorType": "device", "originatorToken": "hp-light-east-3", "alarmKey": "lamp-flicker"}}},
 		{"queryCalculatedJob", "event-management", queryCalculatedJob, map[string]any{"token": "job"}},
 		{"queryAlarms", "device-management", queryAlarms, map[string]any{
 			"c": map[string]any{"pageNumber": 1, "pageSize": alarmPageSize},
@@ -94,8 +96,8 @@ func verifierDocuments() []struct {
 
 func TestEveryVerifierDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 	docs := verifierDocuments()
-	if len(docs) != 20 {
-		t.Fatalf("%d documents listed; the verifier sends 20 — a new one must be listed here", len(docs))
+	if len(docs) != 22 {
+		t.Fatalf("%d documents listed; the verifier sends 22 — a new one must be listed here", len(docs))
 	}
 	for _, d := range docs {
 		if errs := servedSchema(t, d.area).ValidateWithVariables(d.doc, d.vars); len(errs) > 0 {

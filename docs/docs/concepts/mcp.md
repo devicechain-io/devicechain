@@ -9,14 +9,14 @@ You can let an AI assistant — Claude Desktop and Claude Code, Cursor, VS Code 
 The server is built on one principle: **an AI agent can never do more than the person who authorized it.** It is not a broad, over-permissioned gateway. It is a thin, curated layer for reads and proposals over the platform's existing GraphQL API, and it carries the signed-in user's own tenant-scoped token.
 
 :::note Status
-**Available today:** an opt-in `mcp` service with eleven curated read tools, fronted by a full OAuth 2.1 authorization server on `user-management`, and Preview tools for proposing alarm actions for human review. Dynamic client registration (RFC 7591) is planned. This repository is the source of truth for what currently builds.
+**Available today:** an opt-in `mcp` service with twelve curated read tools, fronted by a full OAuth 2.1 authorization server on `user-management`, and Preview tools for proposing alarm actions for human review. Dynamic client registration (RFC 7591) is planned. This repository is the source of truth for what currently builds.
 :::
 
 The authorization server supports the authorization-code flow with PKCE, RFC 8414 metadata, refresh-token rotation and RFC 8707 audience binding. Until dynamic client registration ships, an administrator registers clients.
 
 ## What an assistant can do
 
-The server exposes eleven **read** tools. Each one is a query against the same GraphQL API the console uses, run under the caller's token. A tool therefore returns exactly what that user, in that tenant, is allowed to see, and nothing more.
+The server exposes twelve **read** tools. Each one is a query against the same GraphQL API the console uses, run under the caller's token. A tool therefore returns exactly what that user, in that tenant, is allowed to see, and nothing more.
 
 **Devices**
 
@@ -41,6 +41,7 @@ The server exposes eleven **read** tools. Each one is a query against the same G
 
 - `list_alarms` — alarms, with filtering by state and entity.
 - `get_alarm` — a single alarm's details.
+- `list_suppression_windows` — the maintenance windows you can see, filtered by status (scheduled, active or ended) or by a target. Both alarm tools also say when an alarm is under a maintenance window and until when. If that check could not be made, the result says so with `suppressionUnavailable` instead of reporting the alarm as not suppressed. A window you cannot see appears with the window token `restricted`.
 
 **Commands**
 

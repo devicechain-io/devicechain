@@ -197,3 +197,19 @@ func TestGroupPurgeBeforeFirstCheckpointReportsFailureAndRetries(t *testing.T) {
 	require.True(t, exists)
 	require.NotContains(t, string(snapshot.Payload), "acme/")
 }
+
+// A group worker the supervisor has not built yet holds no term context. The shared gate
+// is already open by then, so a purge reaching it must be refused as no-term-held, not
+// dereference the missing context.
+func TestGroupPurgeBeforeTheWorkerIsBuiltRefusesWithoutPanicking(t *testing.T) {
+	child := newTestProcessor(newTestStore(t), nil, 1)
+	child.procCtx, child.procCancel = nil, nil // as the supervisor leaves an unbuilt child
+	child.supervised = true
+	child.Gate = NewTermGate()
+	child.Gate.Enter(func() bool { return true })
+	require.Nil(t, child.pctx(), "fixture: the child has no term yet")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := child.EvictTenant(ctx, "acme")
+	require.ErrorIs(t, err, errNoTermHeld)
+}

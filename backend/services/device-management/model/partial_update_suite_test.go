@@ -80,6 +80,9 @@ func TestPartialUpdate(t *testing.T) {
 		NewApi:   newPartialUpdateApi,
 		Context:  putest.TenantContext(partialUpdateTenant),
 		Families: partialUpdateFamilies(),
+		ExternallyDriven: map[string]string{
+			"AlarmSuppressionUpdateRequest.kind": "Switching kind requires an atomic schedule edit; TestSuppressionPartialNullableFieldsAndScheduleSwitch and TestAlarmSuppressionWireThreeStatesAndOwnedFields drive it.",
+		},
 
 		// The strictness probe. An entity group is used because it is the cheapest
 		// token-keyed create in this service — its own table and its token ledger, no

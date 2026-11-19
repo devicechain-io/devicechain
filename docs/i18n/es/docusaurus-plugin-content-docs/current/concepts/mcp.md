@@ -9,14 +9,14 @@ Puedes dejar que un asistente de IA — Claude Desktop y Claude Code, Cursor, VS
 El servidor se construye sobre un principio: **un agente de IA nunca puede hacer más que la persona que lo autorizó.** No es una puerta de enlace amplia y con permisos excesivos. Es una capa delgada y curada de lecturas y propuestas sobre la API GraphQL existente de la plataforma, y porta el propio token con alcance de inquilino del usuario que inició sesión.
 
 :::note Estado
-**Disponible hoy:** un servicio `mcp` opcional con once herramientas de lectura curadas, respaldado por un servidor de autorización OAuth 2.1 completo en `user-management`, y herramientas en vista previa para proponer acciones sobre alarmas para revisión humana. El registro dinámico de clientes (RFC 7591) está planeado. Este repositorio es la fuente de verdad de lo que se compila actualmente.
+**Disponible hoy:** un servicio `mcp` opcional con doce herramientas de lectura curadas, respaldado por un servidor de autorización OAuth 2.1 completo en `user-management`, y herramientas en vista previa para proponer acciones sobre alarmas para revisión humana. El registro dinámico de clientes (RFC 7591) está planeado. Este repositorio es la fuente de verdad de lo que se compila actualmente.
 :::
 
 El servidor de autorización admite el flujo de código de autorización con PKCE, metadatos RFC 8414, rotación de tokens de actualización y vinculación de audiencia RFC 8707. Hasta que llegue el registro dinámico de clientes, un administrador registra los clientes.
 
 ## Qué puede hacer un asistente
 
-El servidor expone once herramientas de **lectura**. Cada una es una consulta contra la misma API GraphQL que usa la consola, ejecutada bajo el token del solicitante. Por eso una herramienta devuelve exactamente lo que ese usuario, en ese inquilino, tiene permitido ver, y nada más.
+El servidor expone doce herramientas de **lectura**. Cada una es una consulta contra la misma API GraphQL que usa la consola, ejecutada bajo el token del solicitante. Por eso una herramienta devuelve exactamente lo que ese usuario, en ese inquilino, tiene permitido ver, y nada más.
 
 **Dispositivos**
 
@@ -41,6 +41,7 @@ El servidor expone once herramientas de **lectura**. Cada una es una consulta co
 
 - `list_alarms` — alarmas, con filtrado por estado y entidad.
 - `get_alarm` — los detalles de una sola alarma.
+- `list_suppression_windows` — las ventanas de mantenimiento que puedes ver, filtradas por estado (programada, activa o finalizada) o por un objetivo. Las dos herramientas de alarmas también indican cuándo una alarma está bajo una ventana de mantenimiento y hasta cuándo. Si esa comprobación no se pudo hacer, el resultado lo indica con `suppressionUnavailable` en lugar de presentar la alarma como no suprimida. Una ventana que no puedes ver aparece con el token de ventana `restricted`.
 
 **Comandos**
 

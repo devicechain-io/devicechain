@@ -145,8 +145,8 @@ func TestShardGroupsOverlayCannotNarrowRecordedGroups(t *testing.T) {
 		opts = UpgradeOptions{ValuesOverlay: block(4, "inbound-events")}
 		require.NoError(t, applyUpgradeValuesOverlay(st, inst, opts))
 	}
-	// The default profiles refuse resolved-events outright, so the suffix half is
-	// shown on the comparison itself.
+	// The default profiles deploy event-processing, which refuses resolved-events being
+	// added on upgrade, so the suffix half is shown on the comparison itself.
 	prev := &config.NatsShardGroupsConfiguration{Count: 3, Suffixes: []string{"inbound-events", "resolved-events"}}
 	require.ErrorContains(t, refuseShardGroupsNarrowing(prev, &config.NatsShardGroupsConfiguration{Count: 3, Suffixes: []string{"inbound-events"}}), `stop sharding "resolved-events"`)
 	require.NoError(t, refuseShardGroupsNarrowing(prev, prev))
