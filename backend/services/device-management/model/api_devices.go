@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -642,14 +643,19 @@ func (api *Api) emitDeviceRosterBatch(ctx context.Context, devices []*Device) {
 // engine's reconcile reads, so the fact and the repair cannot disagree — and emits one fact per
 // device. A read error is logged and swallowed (what names the skipped devices for the log).
 //
-// 🔴 IT STOPS AT THE FIRST PUBLISH THE BROKER REFUSES, and reports false. The facts are sent one
-// after another on the caller's request, and each publish the broker does not answer waits out
-// the publish ceiling (5 s). A type re-point or a bulk create of a thousand devices made while
-// the broker was unreachable therefore held its caller for over an hour, for facts the broker was
-// refusing anyway. The devices not announced are the ones the reconcile repairs, exactly as it
-// repairs the refused one: event-processing reads the same roster entries at the start of its
-// term and every five minutes. Stopping costs only the facts that would have followed a refusal;
-// a read error still reports true, since nothing was refused.
+// 🔴 IT STOPS AT THE FIRST PUBLISH REFUSED WHILE THE BROKER CONNECTION IS DOWN
+// (ErrRosterBrokerUnreachable), and reports false. The facts are sent one after another on the
+// caller's request, and each publish the broker does not answer waits out the publish ceiling
+// (5 s). A type re-point or a bulk create of a thousand devices made while the broker was
+// unreachable therefore held its caller for over an hour, for facts the broker was refusing
+// anyway. With the connection down every later publish is refused too, so stopping drops nothing
+// that carrying on would have delivered; what the refused facts would have said is left to
+// event-processing's reconcile, exactly as before. A refusal on a LIVE connection may be
+// transient, so the fan-out carries on past it: skipping the facts after it could drop ones that
+// would have been delivered, and the reconcile does not repair everything a roster fact carries
+// (a re-dated membership under an unchanged profile, or a disabled create seen by a
+// command-delivery that runs with no sync source). A read error reports true, since nothing was
+// refused.
 func (api *Api) emitRosterEntries(ctx context.Context, enabledTransition bool, where func(*gorm.DB) *gorm.DB, key, what string) bool {
 	entries, err := api.rosterEntries(ctx, where)
 	if err != nil {
@@ -664,7 +670,7 @@ func (api *Api) emitRosterEntries(ctx context.Context, enabledTransition bool, w
 			ExpectedSince: e.ExpectedSince,
 			Disabled:      e.Disabled,
 			Enabled:       enabledTransition && !e.Disabled,
-		}); err != nil {
+		}); errors.Is(err, ErrRosterBrokerUnreachable) {
 			if skipped := len(entries) - i - 1; skipped > 0 {
 				log.Warn().Err(err).Str(key, what).Int("skipped", skipped).
 					Msg("Not announcing the remaining devices on the roster after a refused publish; the detection engine's reconcile rosters them.")

@@ -17,15 +17,20 @@ import (
 )
 
 // unansweredRoster stands in for a broker that does not answer: every publish waits out
-// wait (the real writer's ceiling is 5 s) and is refused. It counts the attempts.
+// wait (the real writer's ceiling is 5 s) and is refused, reported as unreachable when down is
+// set (the writer's connection is down) and as a plain refusal otherwise. It counts the attempts.
 type unansweredRoster struct {
 	wait     time.Duration
+	down     bool
 	attempts int
 }
 
 func (u *unansweredRoster) PublishDeviceRoster(context.Context, *DeviceRosterEvent) error {
 	u.attempts++
 	time.Sleep(u.wait)
+	if u.down {
+		return fmt.Errorf("%w: nats: timeout", ErrRosterBrokerUnreachable)
+	}
 	return errors.New("nats: timeout")
 }
 
@@ -50,7 +55,7 @@ func TestATypeRepointStopsAnnouncingTheRosterAtTheFirstRefusedPublish(t *testing
 	ctx := core.WithTenant(context.Background(), "acme")
 	seedRosterFanout(t, api, ctx, 20)
 
-	down := &unansweredRoster{wait: 50 * time.Millisecond}
+	down := &unansweredRoster{wait: 50 * time.Millisecond, down: true}
 	api.DeviceRosterPublisher = down
 	started := time.Now()
 	_, err := api.UpdateDeviceType(ctx, "sensor", &DeviceTypeUpdateRequest{ProfileToken: dcgraphql.OptionalStringOf("profile-b")})
@@ -68,7 +73,7 @@ func TestABulkCreateStopsAnnouncingTheRosterAtTheFirstRefusedPublish(t *testing.
 	ctx := core.WithTenant(context.Background(), "acme")
 	seedType(t, api, ctx, "sensor", "profile-a")
 
-	down := &unansweredRoster{}
+	down := &unansweredRoster{down: true}
 	api.DeviceRosterPublisher = down
 	requests := make([]*DeviceCreateRequest, 0, rosterEmitChunk+3)
 	for i := range rosterEmitChunk + 3 {
@@ -91,4 +96,19 @@ func TestATypeRepointStillAnnouncesEveryDeviceWhenTheBrokerAnswers(t *testing.T)
 	_, err := api.UpdateDeviceType(ctx, "sensor", &DeviceTypeUpdateRequest{ProfileToken: dcgraphql.OptionalStringOf("profile-b")})
 	require.NoError(t, err)
 	assert.Len(t, cap.events, 20)
+}
+
+// A refusal on a live connection may be transient, so the fan-out carries on past it: stopping
+// there could drop facts that would have been delivered, and the reconcile does not repair every
+// one of them (a re-dated membership under an unchanged profile, for one).
+func TestATypeRepointKeepsAnnouncingPastARefusalOnALiveConnection(t *testing.T) {
+	api := newRosterEmitTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	seedRosterFanout(t, api, ctx, 5)
+
+	refusing := &unansweredRoster{}
+	api.DeviceRosterPublisher = refusing
+	_, err := api.UpdateDeviceType(ctx, "sensor", &DeviceTypeUpdateRequest{ProfileToken: dcgraphql.OptionalStringOf("profile-b")})
+	require.NoError(t, err)
+	assert.Equal(t, 5, refusing.attempts, "a transient refusal stopped the fan-out")
 }

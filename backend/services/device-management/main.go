@@ -675,8 +675,13 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
+	// The connection check lets a per-device roster fan-out stop at the first fact refused while
+	// the broker is unreachable, instead of waiting out a publish per device.
 	Api.DeviceRosterPublisher = processor.NewDeviceRosterWriter(rosterpub,
-		FactPublishFails.WithLabelValues(factDeviceRoster))
+		FactPublishFails.WithLabelValues(factDeviceRoster)).WithConnected(func() bool {
+		nc := nmgr.Conn()
+		return nc != nil && nc.IsConnected()
+	})
 
 	// Add the device-ownership writer (ADR-081): every write that may change a device's
 	// tracked relationships publishes the device's complete current anchor set, so a
