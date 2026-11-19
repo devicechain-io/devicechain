@@ -110,14 +110,28 @@ type Api struct {
 	// disables it.
 	ceilings *ceilingMetrics
 
-	// AlarmPublisher acknowledges immutable snapshots from the durable relay. Nil
-	// retains queued events and makes the drain fail closed.
-	AlarmPublisher     AlarmEventPublisher
+	// AlarmPublisher publishes the alarm events the relay takes from their outbox
+	// (alarm_event_outbox.go), and the agent-effect and deletion outboxes' alarm events. Nil
+	// keeps queued events queued and makes the alarm-event drain fail closed. Wiring that may
+	// run while relay passes do (a broker restart) sets it through SetAlarmPublisher.
+	AlarmPublisher AlarmEventPublisher
+	// AlarmEventObserver, when set, is told the backlog on every periodic alarm-event drain
+	// pass: transitions still owed to the broker, how long the oldest has waited, and how many
+	// are quarantined. Wired to the service gauges.
 	AlarmEventObserver func(pending int, oldest time.Duration, quarantined int)
-	alarmEventMu       sync.Mutex
-	alarmEventRunning  bool
-	alarmEventPending  chan struct{}
-	alarmEventWait     time.Duration
+	// The post-commit relay (alarm_event_wait.go). alarmEventMu guards every field below and
+	// AlarmPublisher's replacement.
+	alarmEventMu      sync.Mutex
+	alarmEventRunning bool
+	alarmEventPending chan struct{}
+	alarmEventWait    time.Duration
+	alarmRelayStopped bool
+	alarmRelayCtx     context.Context
+	alarmRelayCancel  context.CancelFunc
+	alarmRelayIdle    chan struct{}
+	// afterAlarmTransitionLockForTest runs after acknowledge or clear has locked and re-read
+	// the alarm row, inside its transaction (tests only).
+	afterAlarmTransitionLockForTest func()
 	// suppressAlarmEventKickForTest simulates a crash immediately after commit.
 	suppressAlarmEventKickForTest bool
 	// afterAlarmEventEnqueueForTest can fail after enqueue to prove atomic rollback.

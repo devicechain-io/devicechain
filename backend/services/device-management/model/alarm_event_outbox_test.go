@@ -306,6 +306,11 @@ func TestAlarmOutboxOrderingFailureAndPoison(t *testing.T) {
 	require.Len(t, alarmOutboxRows(t, api, ctx), 1)
 	require.Zero(t, observedPending)
 	require.Equal(t, 1, observedQ)
+	// A tenant left with only a quarantined row is not visited again, but still observed.
+	res, err = api.DrainAlarmEvents(context.Background(), 10)
+	require.NoError(t, err)
+	require.Zero(t, res.Tenants, "a quarantine-only tenant was visited")
+	require.Equal(t, 1, observedQ)
 }
 
 func TestAlarmOutboxInvalidAndUnpublishableQuarantine(t *testing.T) {
@@ -499,4 +504,75 @@ func TestAlarmOutboxMissingTableRollsBack(t *testing.T) {
 	var fresh Alarm
 	require.NoError(t, api.RDB.DB(ctx).First(&fresh, a.ID).Error)
 	require.False(t, fresh.Acknowledged, "missing outbox must fail the transition closed")
+}
+
+// Shutdown ends the post-commit relay: a running pass is cancelled and joined, a pending
+// follow-up is not run, and later kicks return at once, leaving their rows for the periodic drain.
+func TestAlarmOutboxRelayStopsOnShutdown(t *testing.T) {
+	api, ctx := alarmOutboxRig(t)
+	alarmOutboxQueue(t, api, ctx, "alarm")
+	api.suppressAlarmEventKickForTest = false
+	api.alarmEventWait = 20 * time.Millisecond
+	var calls atomic.Int32
+	entered := make(chan struct{}, 4)
+	api.AlarmPublisher = alarmOutboxPublisher(func(pubCtx context.Context, _ *AlarmStateChangeEvent, _ string) error {
+		calls.Add(1)
+		entered <- struct{}{}
+		<-pubCtx.Done()
+		return pubCtx.Err()
+	})
+	api.relayAlarmEvents(ctx)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("the relay never reached the publisher")
+	}
+	api.relayAlarmEvents(ctx) // a follow-up kick, pending behind the blocked pass
+	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, api.StopAlarmEventRelay(stopCtx), "the running pass was not cancelled and joined")
+	require.EqualValues(t, 1, calls.Load(), "a pending pass ran after shutdown")
+	api.alarmEventMu.Lock()
+	idle := api.alarmRelayIdle
+	api.alarmEventMu.Unlock()
+	api.alarmEventWait = time.Second
+	started := time.Now()
+	api.relayAlarmEvents(ctx)
+	api.alarmEventMu.Lock()
+	require.True(t, idle == api.alarmRelayIdle && !api.alarmEventRunning, "a kick after shutdown started a relay worker")
+	api.alarmEventMu.Unlock()
+	require.Less(t, time.Since(started), 200*time.Millisecond, "a kick after shutdown waited for a pass")
+	require.EqualValues(t, 1, calls.Load(), "a kick after shutdown started a pass")
+	require.Len(t, alarmOutboxRows(t, api, ctx), 1, "the event must stay queued for the periodic drain")
+}
+
+// A pass publishes its whole page through the publisher it started with, so a broker restart
+// that replaces the publisher mid-pass is not raced; the next pass uses the replacement.
+func TestAlarmOutboxPassKeepsItsPublisherWhenItIsReplaced(t *testing.T) {
+	api, ctx := alarmOutboxRig(t)
+	alarmOutboxQueue(t, api, ctx, "one")
+	alarmOutboxQueue(t, api, ctx, "two")
+	var mu sync.Mutex
+	var by []string
+	record := func(name string) { mu.Lock(); by = append(by, name); mu.Unlock() }
+	replacement := alarmOutboxPublisher(func(context.Context, *AlarmStateChangeEvent, string) error {
+		record("replacement")
+		return nil
+	})
+	first := true
+	api.SetAlarmPublisher(alarmOutboxPublisher(func(context.Context, *AlarmStateChangeEvent, string) error {
+		if first {
+			first = false
+			api.SetAlarmPublisher(replacement) // the broker restarted mid-pass
+		}
+		record("original")
+		return nil
+	}))
+	_, err := api.DrainAlarmEvents(context.Background(), AlarmEventDrainPageSize)
+	require.NoError(t, err)
+	require.Equal(t, []string{"original", "original"}, by)
+	alarmOutboxQueue(t, api, ctx, "three")
+	_, err = api.DrainAlarmEvents(context.Background(), AlarmEventDrainPageSize)
+	require.NoError(t, err)
+	require.Equal(t, []string{"original", "original", "replacement"}, by)
 }

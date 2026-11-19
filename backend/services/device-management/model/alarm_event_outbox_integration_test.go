@@ -7,6 +7,8 @@ package model
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -75,4 +77,55 @@ func TestAlarmOutboxMigrationAndConcurrentPostgresDrains(t *testing.T) {
 	defer mu.Unlock()
 	require.Equal(t, 1, calls)
 	require.Empty(t, alarmOutboxRows(t, api, ctx))
+}
+
+// Acknowledge and clear hold the alarm row locked from their re-read to their commit, so the
+// event they queue describes the cycle they changed: a concurrent write to the row (a contributor
+// fold reactivating it, another operator) waits for them. SQLite ignores the lock clause, so
+// only the real engine can show it.
+func TestAlarmTransitionsHoldTheRowFromTheReReadToTheCommit(t *testing.T) {
+	for _, op := range []string{"ack", "clear"} {
+		t.Run(op, func(t *testing.T) {
+			api, ctx, _ := ownershipPgRig(t, 1)
+			api.suppressAlarmEventKickForTest = true
+			a := alarmOutboxSeed(t, api, ctx, fmt.Sprintf("lock-%s-%d", op, time.Now().UnixNano()))
+			locked, release := make(chan struct{}), make(chan struct{})
+			api.afterAlarmTransitionLockForTest = func() {
+				close(locked)
+				<-release
+			}
+			done := make(chan error, 1)
+			go func() {
+				var err error
+				if op == "ack" {
+					_, err = api.AcknowledgeAlarm(ctx, a.Token, nil)
+				} else {
+					_, err = api.ClearAlarm(ctx, a.Token)
+				}
+				done <- err
+			}()
+			select {
+			case <-locked:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the transition never read the row")
+			}
+			// A competing write while the transition holds the row must wait.
+			wctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			defer cancel()
+			err := api.RDB.DB(wctx).Model(&Alarm{}).Where("id = ?", a.ID).Update("raised_time", tsec(500)).Error
+			require.Error(t, err, "a concurrent write to the alarm went through while the transition held it")
+			close(release)
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("the transition did not finish")
+			}
+			rows := alarmOutboxRows(t, api, ctx)
+			require.Len(t, rows, 1)
+			var ev AlarmStateChangeEvent
+			require.NoError(t, json.Unmarshal(rows[0].Payload, &ev))
+			require.True(t, tsec(10).Equal(ev.RaisedTime), "the event does not describe the cycle the transition locked")
+		})
+	}
 }

@@ -356,6 +356,9 @@ func (api *Api) applyAlarmTransition(ctx context.Context, alarm *Alarm, kind Ala
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&fresh, alarm.ID).Error; err != nil {
 			return err
 		}
+		if api.afterAlarmTransitionLockForTest != nil {
+			api.afterAlarmTransitionLockForTest()
+		}
 		event, err := apply(tx, &fresh)
 		if err != nil {
 			return err

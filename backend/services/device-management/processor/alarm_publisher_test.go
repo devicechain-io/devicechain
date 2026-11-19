@@ -40,8 +40,10 @@ func TestAlarmEventDedupEncodingAndBrokerFailures(t *testing.T) {
 	require.NoError(t, writer.PublishAlarmEventDedup(ctx, ev, "alarm-event-acme-7"))
 	require.Equal(t, "alarm-event-acme-7", recorder.messages[0].DedupID)
 	recorder.err = errors.New("broker down")
-	require.ErrorIs(t, writer.PublishAlarmEventDedup(ctx, ev, "id"), recorder.err)
-	require.NotErrorIs(t, recorder.err, model.ErrAlarmEventUnpublishable)
+	// A broker refusal must stay retryable: the relay quarantines anything marked unpublishable.
+	refused := writer.PublishAlarmEventDedup(ctx, ev, "id")
+	require.ErrorIs(t, refused, recorder.err)
+	require.NotErrorIs(t, refused, model.ErrAlarmEventUnpublishable)
 	cause := errors.New("marshal failed")
 	writer.marshal = func(*model.AlarmStateChangeEvent) ([]byte, error) { return nil, cause }
 	err := writer.PublishAlarmEventDedup(ctx, ev, "id")

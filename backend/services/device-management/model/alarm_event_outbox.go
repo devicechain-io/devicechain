@@ -85,12 +85,22 @@ func copyAlarmEventPreparation(event, prepared *AlarmStateChangeEvent) {
 	event.SuppressedUntil, event.SuppressionWindowToken = prepared.SuppressedUntil, prepared.SuppressionWindowToken
 }
 
-// DrainAlarmEvents discovers tenant IDs only under system authority. WithTenant
-// preserves that authority, so refuse system input and use a fresh, non-system base
-// (without request claims/scope) for all tenant work, preserving only cancellation.
+// DrainAlarmEvents runs one relay pass over every tenant and reports the backlog to
+// AlarmEventObserver. See drainAlarmEvents.
 func (api *Api) DrainAlarmEvents(ctx context.Context, pageSize int) (AlarmEventDrainResult, error) {
+	return api.drainAlarmEvents(ctx, pageSize, true)
+}
+
+// drainAlarmEvents publishes a page of each tenant's queued events, in id order. Its only
+// system-context reads are the tenant discovery (tenant IDs with a row ready to publish) and,
+// when observe is set, the backlog counts (numbers, no row content). WithTenant preserves system
+// authority, so a system ctx is refused, and every tenant's reads, publishes and deletes run on a
+// fresh context with no system authority and no request claims, keeping only ctx's cancellation.
+// The publisher is read once, so a broker restart that replaces it mid-pass does not race the pass.
+func (api *Api) drainAlarmEvents(ctx context.Context, pageSize int, observe bool) (AlarmEventDrainResult, error) {
 	var res AlarmEventDrainResult
-	if api.AlarmPublisher == nil {
+	pub := api.alarmPublisher()
+	if pub == nil {
 		return res, ErrNoAlarmEventPublisher
 	}
 	if pageSize < 1 || pageSize > AlarmEventDrainPageSize {
@@ -106,72 +116,53 @@ func (api *Api) DrainAlarmEvents(ctx context.Context, pageSize int) (AlarmEventD
 	if ctx.Err() != nil {
 		cancel()
 	}
+	sys := api.RDB.DB(core.WithSystemContext(base))
 	var tenants []string
-	// Intentional cross-tenant discovery of IDs only; no payload is read under system authority.
-	if err := api.RDB.DB(core.WithSystemContext(ctx)).Model(&PendingAlarmEvent{}).Distinct().Order("tenant_id").Pluck("tenant_id", &tenants).Error; err != nil {
+	// Cross-tenant discovery of tenant IDs only, and only of tenants with a row to publish: a
+	// tenant whose rows are all quarantined is not visited again.
+	if err := sys.Model(&PendingAlarmEvent{}).Where("quarantined_at IS NULL").Distinct().Order("tenant_id").Pluck("tenant_id", &tenants).Error; err != nil {
 		return res, err
 	}
 	res.Tenants = len(tenants)
 	var lastErr error
-
 	for _, tenant := range tenants {
 		if tenant == "" {
 			return res, errors.New("queued alarm event has no tenant")
 		}
-		tenantCtx := core.WithTenant(base, tenant)
-		published, poison, err := api.drainTenantAlarmEvents(tenantCtx, pageSize)
+		published, poison, err := api.drainTenantAlarmEvents(core.WithTenant(base, tenant), pub, pageSize)
 		res.Published += published
 		res.Quarantined += poison
 		if err != nil {
 			res.Failed++
 			lastErr = err
-			log.Warn().Err(err).Str("tenant", tenant).Msg("Alarm events remain queued for the next relay pass")
+			log.Warn().Err(err).Str("tenant", tenant).Msg("Alarm events stay queued for the next relay pass")
 		}
-
 		var shared *alarmEventPublishError
 		if errors.As(err, &shared) {
-			break
+			break // the broker refused: every later tenant would wait on it too
 		}
 	}
-	if api.AlarmEventObserver != nil {
+	if observe && api.AlarmEventObserver != nil {
+		// Three reads per pass, whatever the number of tenants: two counts and the oldest ready
+		// row by primary key (ids follow insertion, closely enough to date the backlog).
 		var pending, quarantined int64
-		var oldest time.Time
-		var observeErr error
-		for _, tenant := range tenants {
-			db := api.RDB.DB(core.WithTenant(base, tenant))
-			var n, q int64
-			if err := db.Model(&PendingAlarmEvent{}).Where("quarantined_at IS NULL").Count(&n).Error; err != nil {
-				observeErr = err
-				break
-			}
-			if err := db.Model(&PendingAlarmEvent{}).Where("quarantined_at IS NOT NULL").Count(&q).Error; err != nil {
-				observeErr = err
-				break
-			}
-			var first []PendingAlarmEvent
-			if n > 0 {
-				if err := db.Select("created_at").Where("quarantined_at IS NULL").Order("created_at").Limit(1).Find(&first).Error; err != nil {
-					observeErr = err
-					break
-				}
-				if len(first) > 0 && (oldest.IsZero() || first[0].CreatedAt.Before(oldest)) {
-					oldest = first[0].CreatedAt
-				}
-			}
-			pending += n
-			quarantined += q
+		var oldest []PendingAlarmEvent
+		err := sys.Model(&PendingAlarmEvent{}).Where("quarantined_at IS NULL").Count(&pending).Error
+		if err == nil {
+			err = sys.Model(&PendingAlarmEvent{}).Where("quarantined_at IS NOT NULL").Count(&quarantined).Error
 		}
-		if observeErr == nil {
-			var age time.Duration
-			if !oldest.IsZero() {
-				age = max(0, time.Since(oldest))
-			}
-			api.AlarmEventObserver(int(pending), age, int(quarantined))
-		} else {
-			return res, errors.Join(lastErr, observeErr)
+		if err == nil && pending > 0 {
+			err = sys.Select("created_at").Where("quarantined_at IS NULL").Order("id").Limit(1).Find(&oldest).Error
 		}
+		if err != nil {
+			return res, errors.Join(lastErr, err)
+		}
+		var age time.Duration
+		if len(oldest) > 0 {
+			age = max(0, time.Since(oldest[0].CreatedAt))
+		}
+		api.AlarmEventObserver(int(pending), age, int(quarantined))
 	}
-
 	var shared *alarmEventPublishError
 	if errors.As(lastErr, &shared) {
 		return res, lastErr
@@ -184,7 +175,7 @@ type alarmEventPublishError struct{ err error }
 func (e *alarmEventPublishError) Error() string { return "publishing alarm event: " + e.err.Error() }
 func (e *alarmEventPublishError) Unwrap() error { return e.err }
 
-func (api *Api) drainTenantAlarmEvents(ctx context.Context, pageSize int) (int, int, error) {
+func (api *Api) drainTenantAlarmEvents(ctx context.Context, pub AlarmEventPublisher, pageSize int) (int, int, error) {
 	db := api.RDB.DB(ctx)
 	var rows []PendingAlarmEvent
 	if err := db.Where("quarantined_at IS NULL").Order("id").Limit(pageSize).Find(&rows).Error; err != nil {
@@ -200,7 +191,7 @@ func (api *Api) drainTenantAlarmEvents(ctx context.Context, pageSize int) (int, 
 			err = errors.New("invalid alarm token or event type")
 		}
 		if err == nil {
-			err = api.AlarmPublisher.PublishAlarmEventDedup(ctx, &ev, alarmEventDedupID(row.TenantId, row.ID))
+			err = pub.PublishAlarmEventDedup(ctx, &ev, alarmEventDedupID(row.TenantId, row.ID))
 			if err != nil && !errors.Is(err, ErrAlarmEventUnpublishable) {
 				passErr = &alarmEventPublishError{err}
 				break
@@ -233,9 +224,20 @@ func (api *Api) drainTenantAlarmEvents(ctx context.Context, pageSize int) (int, 
 // Stable across rolling upgrades; do not change the name.
 const alarmEventDrainLockName = "device-management-alarm-event-drain"
 
+// DrainAlarmEventsLocked is the periodic pass: one replica at a time, under the advisory lock,
+// reporting the backlog.
 func (api *Api) DrainAlarmEventsLocked(ctx context.Context) error {
-	pass := func() error { _, err := api.DrainAlarmEvents(ctx, AlarmEventDrainPageSize); return err }
-	// SQLite unit tests have no pg_try_advisory_lock. Production Postgres uses the singleton.
+	return api.drainAlarmEventsLocked(ctx, true)
+}
+
+// drainAlarmEventsLocked runs a pass under the advisory lock. The lock is held on its own
+// session while the pass works on pooled connections, as the deletion outbox's is: if that
+// session is lost mid-pass (a terminated backend, a failover), another replica can take the lock
+// and publish while this pass finishes its page. Delivery is at least once either way, and in
+// that window two passes can publish one tenant's events out of id order.
+func (api *Api) drainAlarmEventsLocked(ctx context.Context, observe bool) error {
+	pass := func() error { _, err := api.drainAlarmEvents(ctx, AlarmEventDrainPageSize, observe); return err }
+	// SQLite, the unit-test engine, has no pg_try_advisory_lock and runs in one process.
 	if api.RDB.DB(ctx).Dialector.Name() != "postgres" {
 		return pass()
 	}

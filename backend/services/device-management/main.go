@@ -661,8 +661,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	AlarmEventsWriter = aevents
 	// Ordinary transitions always enqueue first; this writer serves the durable relays.
-	Api.AlarmPublisher = processor.NewAlarmEventWriter(AlarmEventsWriter, deadLetters,
-		AlarmEventMetrics)
+	// Through the setter: on a broker restart this runs again while relay passes may be running.
+	Api.SetAlarmPublisher(processor.NewAlarmEventWriter(AlarmEventsWriter, deadLetters,
+		AlarmEventMetrics))
 
 	// Add the entity-deleted writer and inject a publisher over it into the shared
 	// Api (ADR-044): the outbox drain publishes committed deletions so cross-service
@@ -1440,6 +1441,13 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	}
 	if err := AlarmEventDrain.Stop(ctx); err != nil {
 		return err
+	}
+	// End post-commit relaying too, before the broker connection and the database close: later
+	// kicks do nothing, and what is queued is relayed by the next replica's periodic drain.
+	if Api != nil {
+		if err := Api.StopAlarmEventRelay(ctx); err != nil {
+			log.Warn().Err(err).Msg("An alarm event relay pass did not finish before shutdown; its events stay queued")
+		}
 	}
 	if err := OwnershipDrain.Stop(ctx); err != nil {
 		return err
