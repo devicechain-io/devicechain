@@ -280,7 +280,9 @@ func TestAiInferenceSecretsExemptionBothDirections(t *testing.T) {
 // SecretRef. The stale rule only fires once a row exists in the seeded tenant, which
 // a drill may never produce, so this pins the premise at the source: every SecretRef
 // literal in the service is keyed and instance-scoped, nothing names another Scope
-// constant, and nothing assigns a Scope after the fact.
+// constant (under any import alias), nothing aliases SecretRef, and nothing assigns a
+// Scope after the fact. Residual: a ref built by a helper in ANOTHER package is not
+// followed; the service builds none today and a reviewer must keep it that way.
 func TestAiInferenceBuildsOnlyInstanceScopedSecretRefs(t *testing.T) {
 	root := filepath.Join("..", "..", "services", "ai-inference")
 	if _, err := os.Stat(root); err != nil {
@@ -299,8 +301,23 @@ func TestAiInferenceBuildsOnlyInstanceScopedSecretRefs(t *testing.T) {
 		if perr != nil {
 			return perr
 		}
+		// The local name of secrets package in this file, whatever it is imported as.
+		local := ""
+		for _, imp := range file.Imports {
+			if strings.HasSuffix(strings.Trim(imp.Path.Value, `"`), "/secrets") {
+				local = "secrets"
+				if imp.Name != nil {
+					local = imp.Name.Name
+				}
+			}
+		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			switch x := n.(type) {
+			case *ast.TypeSpec:
+				// An alias or defined type over SecretRef would hide literals from this scan.
+				if isSecretRefType(x.Type) {
+					t.Errorf("%s: type %s redefines SecretRef; the ai-inference.secrets guard cannot follow it", fset.Position(x.Pos()), x.Name.Name)
+				}
 			case *ast.CompositeLit:
 				if !isSecretRefType(x.Type) {
 					return true
@@ -310,10 +327,10 @@ func TestAiInferenceBuildsOnlyInstanceScopedSecretRefs(t *testing.T) {
 					t.Errorf("%s: SecretRef literal is not keyed Scope: secrets.ScopeInstance", fset.Position(x.Pos()))
 				}
 			case *ast.SelectorExpr:
-				if id, ok := x.X.(*ast.Ident); ok && id.Name == "secrets" &&
+				if id, ok := x.X.(*ast.Ident); ok && local != "" && id.Name == local &&
 					strings.HasPrefix(x.Sel.Name, "Scope") && x.Sel.Name != "ScopeInstance" {
-					t.Errorf("%s: secrets.%s — the ai-inference.secrets exemption assumes instance scope only",
-						fset.Position(x.Pos()), x.Sel.Name)
+					t.Errorf("%s: %s — the ai-inference.secrets exemption assumes instance scope only",
+						fset.Position(x.Pos()), "secrets."+x.Sel.Name)
 				}
 			case *ast.AssignStmt:
 				for _, lhs := range x.Lhs {
