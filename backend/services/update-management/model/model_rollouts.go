@@ -107,6 +107,8 @@ type UpdateRolloutTarget struct {
 	DispatchedAt sql.NullTime
 	SkipCode     string `gorm:"not null;size:64"`
 	SkipDetail   string `gorm:"not null;size:512"`
+	// DeviceIncarnation freezes device-management's row id; NULL uses the legacy time fence.
+	DeviceIncarnation sql.NullInt64 `gorm:"type:bigint"`
 }
 
 // AuditLabel names the row in the audit journal.
