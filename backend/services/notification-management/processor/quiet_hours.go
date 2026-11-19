@@ -301,6 +301,21 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 
 	rctx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
 	defer cancel()
+	// Window releases describe the current alarm, but the held severity above still
+	// chooses its routes. Keep quiet-hours-only rendering's existing event semantics.
+	// Require a known, equal cycle (at database precision), not SameCycleAs's legacy
+	// unknown-cycle fallback, before borrowing facts from the state row.
+	if latest.HeldByWindow.Valid && state != nil && state.CycleRaisedAt.Valid &&
+		!event.RaisedTime.IsZero() && state.SameCycleAs(event.RaisedTime) &&
+		model.SeverityAtOrAbove(state.Severity, "INDETERMINATE") {
+		if event.Severity != state.Severity {
+			// The held transition no longer describes the current severity change.
+			// Present the active alarm without claiming it just escalated to a lower tier.
+			event.EventType = dmmodel.AlarmEventRaised
+		}
+		event.Severity = state.Severity
+		event.PreviousSeverity = ""
+	}
 	message := renderNotification(&event)
 	for _, d := range claimed {
 		if d.HeldByWindow.Valid {

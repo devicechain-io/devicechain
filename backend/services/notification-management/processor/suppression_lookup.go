@@ -217,11 +217,12 @@ func (n *PolicyNotifier) escalationSuppressed(ctx context.Context, token string,
 // maxWindowTokenLength is the width of notification_deferrals.held_by_window.
 const maxWindowTokenLength = 128
 
-// validWindowToken reports whether a window token can be honoured: non-empty, and short
-// enough to be recorded as the hold's audit. A token that could not be stored would make
+// validWindowToken requires core's token grammar (an ASCII letter or digit followed by
+// letters, digits, hyphens or underscores) and the hold audit column's length bound.
+// A token that could not be stored would make
 // the hold's write fail, and a write that fails before any send turns into redelivery and
 // then a dead letter, so a page would be lost to an optional field. It is read as NOT
 // suppressed instead, which pages.
 func validWindowToken(token string) bool {
-	return token != "" && len(token) <= maxWindowTokenLength
+	return core.ValidateToken(token) == nil && len(token) <= maxWindowTokenLength
 }

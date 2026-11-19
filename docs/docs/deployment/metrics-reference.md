@@ -82,6 +82,8 @@ bus: read them with `dcctl dead-letters`.
 
 | Metric | Means |
 | --- | --- |
+| `suppression_invalid_windows_total` | Counter. Invalid stored alarm suppression windows skipped during evaluation; alarms continue to page. |
+| `suppression_evaluation_failures_total{phase}` | Counter. Alarm suppression evaluations that failed, by `phase`: `cycle_start` (cycle-start stamp evaluation) or `live` (current suppression evaluation). A failed live evaluation allows paging. |
 | `agent_proposals_total{kind, outcome}` | Preview (agent actions). Non-dry-run proposal calls by kind (`ALARM_ACK`, `ALARM_CLEAR`, `unknown`) and outcome (`created`, `existing`, `refused`); errors count as `refused`. |
 | `agent_approvals_total{outcome}` | Preview (agent actions). Approval calls by final outcome (`recorded`, `executed`, `refused`, `concurrent`, `step_up_required`, `forbidden`, `fence_closed`), counted once across internal retries. Errors without a more specific outcome count as `refused`. |
 | `agent_executions_total{kind, result}` | Preview (agent actions). Final-approval executions by kind (`ALARM_ACK`, `ALARM_CLEAR`, `unknown`) and result (`executed`, `dependency_changed`, `policy_refused`, `fence_closed`, `refused`, `failed`), counted once per execution including a fence re-enable retry. `failed` means the transaction could not complete (database or statement timeout, policy service or kill feed unavailable); a lock conflict is `refused` as a concurrent approval. |
@@ -306,10 +308,14 @@ Prefix: `devicechain_notificationmanagement_`.
 Notifications that fail every delivery attempt are written to the dead-letter stream, where
 `dcctl dead-letters` lists them. This counter tells you that pages were never sent.
 
+`quiet_hours_total` and `suppression_total` partition held-row outcomes by the persisted `held_by_window` audit: rows held by a suppression window count under `suppression_total`, including when they later wait for quiet hours; other held rows count under `quiet_hours_total`. Window releases drain within a few scheduler passes, depending on the backlog.
+
 | Metric | Means |
 | --- | --- |
 | `notifications_dead_lettered_total` | Alarms written to the dead-letter stream after every delivery attempt failed, so an operator can see which pages were never sent. |
 | `quiet_hours_total{outcome}` | What quiet hours did to a notification, by outcome: held (held instead of sent), released (sent when the quiet stretch ended), dropped_resolved (dropped because the alarm was acknowledged or cleared), dropped_policy (dropped because the policy was disabled or deleted), dropped_exhausted (dropped and dead-lettered after 5 releases reached no channel) or superseded (dropped because the policy paged a newer event for the same alarm). |
+| `suppression_total{outcome}` | Counter. Alarm suppression outcomes: `held` (page held), `rechecked` (live window still holds it), `escalation_skipped` (suppressed escalation skipped before claiming a tier), `released` (page sent), `superseded` (a newer page answered the hold), `dropped_resolved` (alarm acknowledged, cleared or on a newer cycle), `dropped_policy` (policy missing, disabled or no longer routing), `dropped_exhausted` (release attempts exhausted or permanently refused), `lookup_failed` (status lookup failed; paging continues). All nine outcomes are seeded at zero. |
+| `deferral_oldest_due_seconds` | Gauge. Age in seconds since `release_at` of the oldest due notification deferral across tenants visited in the scheduler pass; zero when no visited tenant has a due row. Includes both quiet-hours and window holds; this measures overdue work, not total time held. |
 | `ledger_writes_total{outcome}` | Delivery-ledger records by outcome: written, failed (the database refused or timed out, so the record is lost), dropped (too many writes already waiting; never attempted) or purged (the tenant has been deleted). The ledger never delays a notification, so a failed or dropped record is a missing record, not a missing notification. |
 
 ## User management {#user-management}
