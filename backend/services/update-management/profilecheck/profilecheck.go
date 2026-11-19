@@ -104,9 +104,9 @@ func (c *Checker) DeviceOf(ctx context.Context, tenant, deviceToken string) (fac
 		if d.Enabled == nil {
 			return model.DeviceFacts{}, false, errors.New("device-management device lookup: the answer carries no enabled flag")
 		}
-		id, err := strconv.ParseUint(d.ID, 10, 63)
-		if err != nil || id == 0 {
-			return model.DeviceFacts{}, false, fmt.Errorf("device-management device lookup: invalid id %q", d.ID)
+		id, err := deviceIncarnation(d.ID)
+		if err != nil {
+			return model.DeviceFacts{}, false, err
 		}
 		facts.Incarnation = id
 		facts.CreatedAt, err = time.Parse(time.RFC3339, d.CreatedAt)
@@ -193,4 +193,57 @@ func (c *Checker) ResolveGroupTargets(ctx context.Context, groupToken string, ve
 		resolved.NextCursor = *page.NextCursor
 	}
 	return resolved, nil
+}
+
+const incarnationChunk = 100
+const deviceIncarnations = `query($tokens: [String!]!) { devicesByToken(tokens: $tokens) { id token } }`
+
+var _ model.DeviceIncarnationLookup = (*Checker)(nil)
+
+func deviceIncarnation(raw string) (uint64, error) {
+	id, err := strconv.ParseUint(raw, 10, 63)
+	if err != nil || id == 0 {
+		return 0, fmt.Errorf("device-management device lookup: invalid id %q", raw)
+	}
+	return id, nil
+}
+
+// DeviceIncarnations freezes identities with one devicesByToken query per bounded chunk.
+// A returned invalid id is an error, never absence; only tokens omitted from a valid list are absent.
+func (c *Checker) DeviceIncarnations(ctx context.Context, tenant string, tokens []string) (map[string]uint64, error) {
+	if len(tokens) > model.MaxRolloutTargets {
+		return nil, errors.New("device incarnation lookup exceeds rollout target bound")
+	}
+	found := make(map[string]uint64, len(tokens))
+	for start := 0; start < len(tokens); start += incarnationChunk {
+		chunk := tokens[start:min(start+incarnationChunk, len(tokens))]
+		var out struct {
+			DevicesByToken *[]struct {
+				Token string `json:"token"`
+				ID    string `json:"id"`
+			} `json:"devicesByToken"`
+		}
+		if err := c.client.Query(ctx, c.url, tenant, deviceIncarnations, map[string]any{"tokens": chunk}, &out); err != nil {
+			return nil, fmt.Errorf("device-management incarnation lookup: %w", err)
+		}
+		if out.DevicesByToken == nil {
+			return nil, errors.New("device-management incarnation lookup: the answer carries no devices list")
+		}
+		requested := make(map[string]bool, len(chunk))
+		for _, token := range chunk {
+			requested[token] = true
+		}
+		for _, d := range *out.DevicesByToken {
+			if !requested[d.Token] {
+				return nil, fmt.Errorf("device-management incarnation lookup: unexpected or duplicate token %q", d.Token)
+			}
+			delete(requested, d.Token)
+			id, err := deviceIncarnation(d.ID)
+			if err != nil {
+				return nil, err
+			}
+			found[d.Token] = id
+		}
+	}
+	return found, nil
 }

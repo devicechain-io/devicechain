@@ -31,6 +31,7 @@ func TestRolloutAdoptionWaitsForConcurrentSupersedeOnPostgres(t *testing.T) {
 	ctx, cancel := context.WithTimeout(e.ctx(), 30*time.Second)
 	defer cancel()
 	staleFacts := DeviceFacts{Incarnation: 17, Profile: "gateway"}
+	e.devices.incarnations = map[string]uint64{e.tenant + "/dev-0": 17} // the rollout freezes the device the stale facts name
 	a.Devices = deviceLookupFunc(func(context.Context, string, string) (DeviceFacts, bool, error) {
 		return staleFacts, true, nil
 	})
