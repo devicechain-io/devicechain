@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-notification-management/model"
 )
 
@@ -68,10 +68,10 @@ func clearHarness(t *testing.T, notifyOnClear bool) (*PolicyNotifier, *msgRecord
 func TestAPolicyThatOptedInIsToldWhenAnAlarmClears(t *testing.T) {
 	n, ra, ctx := clearHarness(t, true)
 	raised := time.Now().UTC().Add(-time.Hour)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatalf("raise: %v", err)
 	}
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(10*time.Minute))); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(10*time.Minute))); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 	if got := ra.types(); len(got) != 2 || got[0] != "RAISED" || got[1] != "CLEARED" {
@@ -84,8 +84,8 @@ func TestAPolicyThatOptedInIsToldWhenAnAlarmClears(t *testing.T) {
 func TestAPolicyThatDidNotOptInStaysSilentOnClear(t *testing.T) {
 	n, ra, ctx := clearHarness(t, false)
 	raised := time.Now().UTC().Add(-time.Hour)
-	_ = n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised))
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(10*time.Minute))); err != nil {
+	_ = n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised))
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(10*time.Minute))); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 	if got := ra.types(); len(got) != 1 || got[0] != "RAISED" {
@@ -98,8 +98,8 @@ func TestAPolicyThatDidNotOptInStaysSilentOnClear(t *testing.T) {
 func TestAClearIsNotAnnouncedTwice(t *testing.T) {
 	n, ra, ctx := clearHarness(t, true)
 	raised := time.Now().UTC().Add(-time.Hour)
-	_ = n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised))
-	clear := cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(10*time.Minute))
+	_ = n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised))
+	clear := cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(10*time.Minute))
 	for i := 0; i < 3; i++ {
 		if err := n.Notify(ctx, clear); err != nil {
 			t.Fatalf("clear %d: %v", i, err)
@@ -115,7 +115,7 @@ func TestAClearIsNotAnnouncedTwice(t *testing.T) {
 func TestAClearForAnAlarmNobodyWasPagedAboutIsSilent(t *testing.T) {
 	n, ra, ctx := clearHarness(t, true)
 	raised := time.Now().UTC().Add(-time.Hour)
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(time.Minute))); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(time.Minute))); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 	if len(ra.sent) != 0 {
@@ -128,7 +128,7 @@ func TestAClearForAnAlarmNobodyWasPagedAboutIsSilent(t *testing.T) {
 func TestAClearDuringQuietHoursIsDroppedNotHeld(t *testing.T) {
 	n, ra, ctx := clearHarness(t, true)
 	raised := time.Now().UTC().Add(-time.Hour)
-	_ = n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised))
+	_ = n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised))
 	n.now = func() time.Time { return insideQuiet }
 	db := stateDB(n.api).WithContext(ctx)
 	if err := db.Model(&model.NotificationPolicy{}).Where("token = ?", "p").Updates(map[string]any{
@@ -136,7 +136,7 @@ func TestAClearDuringQuietHoursIsDroppedNotHeld(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("set quiet hours: %v", err)
 	}
-	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(10*time.Minute))); err != nil {
+	if err := n.Notify(ctx, cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(10*time.Minute))); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 	if got := ra.types(); len(got) != 1 {

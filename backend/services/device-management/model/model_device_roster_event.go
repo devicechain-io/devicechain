@@ -5,40 +5,8 @@ package model
 
 import (
 	"context"
-	"time"
+	"errors"
 )
-
-// DeviceRosterEvent is the envelope emitted post-commit when a device is created or
-// re-typed (ADR-051 slice 4c-2), telling event-processing that a device is EXPECTED
-// to report so its DETECT engine can arm absence for a device that has NEVER reported
-// (the reported-once-then-silent case is already covered by the heartbeat-armed timer).
-//
-// ProfileToken is the STABLE profile identity the device's type adopts (ADR-045) — not
-// the "{profileToken}@{version}" token — so a re-publish that mints a new version never
-// staleness-orphans the roster entry; event-processing cross-references the latest
-// published version at arming time. It is empty when the type has no profile (a roster
-// entry with no resolvable rules, retained so a later re-type re-homes it), and empty
-// while the device is DISABLED: its events are refused at resolution, so it must arm no
-// absence rule. An enable or a disable emits a fact of its own.
-//
-// ExpectedSince is when the device's membership of that profile began — its creation, or the
-// stored instant of its last re-type or its type's last re-point (devices.expected_since) — the
-// base of the dead-man clock for a never-reported device. The tenant is not a field — it travels on the per-tenant NATS
-// subject, exactly like the detection-rules-published and entity-deleted facts.
-type DeviceRosterEvent struct {
-	DeviceToken   string
-	ProfileToken  string
-	ExpectedSince time.Time
-	// Disabled is the explicit statement that an operator has the device disabled. ProfileToken is
-	// empty for the same reason, and event-processing keys on that; Disabled exists so a consumer
-	// that must tell "disabled" from "its type has no profile" (update-management) need not infer
-	// it. It is additive on the wire: a consumer that predates it reads the field as false.
-	Disabled bool
-	// Enabled marks the fact an operator's disabled-to-enabled toggle emits, and no other: a create,
-	// a re-type or a type re-point leave it false. A consumer that must catch a device up on enable
-	// (update-management) acts on it alone; a producer that predates it sends false.
-	Enabled bool
-}
 
 // DeviceRosterPublisher publishes device-roster events (ADR-051 slice 4c-2). Like the
 // detection-rules publisher it is best-effort and side-band to the
@@ -50,6 +18,17 @@ type DeviceRosterEvent struct {
 // repaired by event-processing's reconcile against this service (DeviceRosterPage, at the
 // start of its DETECT term and every five minutes). Implementations must be safe for
 // concurrent use.
+//
+// The error is that of a publish the broker did not accept (nil for a delivered fact, and for
+// a fact the implementation dropped for a reason particular to it, such as a marshal failure).
+// It is never surfaced to the caller of the device write. When it wraps
+// ErrRosterBrokerUnreachable, a fan-out that sends one fact per device (a type re-point, a bulk
+// create, an import) stops there instead of waiting out one publish ceiling per device; any
+// other refusal may be transient, and the fan-out carries on as it always has.
+// ErrRosterBrokerUnreachable marks a roster publish refused while the publisher's broker
+// connection was down: the facts after it in the same fan-out would be refused too.
+var ErrRosterBrokerUnreachable = errors.New("the broker connection is down")
+
 type DeviceRosterPublisher interface {
-	PublishDeviceRoster(ctx context.Context, event *DeviceRosterEvent)
+	PublishDeviceRoster(ctx context.Context, event *DeviceRosterEvent) error
 }

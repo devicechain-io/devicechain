@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/httpsink"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -550,8 +550,8 @@ func TestTruncAndLink(t *testing.T) {
 
 func TestRenderNotificationCarriesTypedAlarmFacts(t *testing.T) {
 	v := 3.5
-	ev := &dmmodel.AlarmStateChangeEvent{
-		EventType: dmmodel.AlarmEventCleared, AlarmToken: "tk", AlarmKey: "key", OriginatorType: "device",
+	ev := &dmcontract.AlarmStateChangeEvent{
+		EventType: dmcontract.AlarmEventCleared, AlarmToken: "tk", AlarmKey: "key", OriginatorType: "device",
 		OriginatorId: 9, Severity: "MINOR", State: "CLEARED", LastValue: &v, MetricKey: "m",
 	}
 	a := renderNotification(ev).Alarm

@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { StartMaintenanceAction, MaintenanceBanner } from '@/routes/alarm-maintenance/EntityMaintenance';
 import { listAll } from '@/lib/api/list-all';
 import { RegistryInstanceForm, tokenColumn, nameColumn, createdColumn, type RegistryResource } from '@/components/registry';
 import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
@@ -26,6 +27,8 @@ export const areaResource: RegistryResource<Area> = {
   tokenOf: (a) => a.token,
   nameOf: (a) => a.name,
   typeOf: (a) => (a.areaType ? appearanceOf(a.areaType) : null),
+  renderHeaderAction: item => <StartMaintenanceAction target={{ type: 'AREA', token: item.token }} />,
+  renderDetailNotice: item => <MaintenanceBanner target={{ type: 'AREA', token: item.token }} />,
   columns: [
     tokenColumn<Area>(),
     nameColumn<Area>(),

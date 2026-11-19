@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
@@ -272,7 +273,7 @@ func replacementCredentialRequest(request *DeviceReplaceRequest, deviceToken str
 		// id for a type that actually exists, so an operator who mistyped the TYPE is
 		// not told to supply an id for it.
 		if CredentialType(credentialType) == CredentialX509Certificate {
-			return nil, refuseX509Elsewhere()
+			return nil, identity.RefuseX509Elsewhere()
 		}
 		if CredentialType(credentialType).Valid() {
 			return nil, fmt.Errorf("%w (%s)", ErrCredentialIdRequired, credentialType)

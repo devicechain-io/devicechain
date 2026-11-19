@@ -223,11 +223,10 @@ var exemptions = []Exemption{
 	},
 
 	// ---- event-processing: the DETECT engine's own state --------------------
-	// detect_stream_topology does not exist yet. It is listed one release AHEAD of the
-	// migration that creates it, so a user-management pod from this release, still running
-	// beside a newer event-processing during a rolling upgrade, classifies the table instead
-	// of refusing every tenant purge with ErrUnclassified. Until the table exists the entry
-	// is inert: an exemption only ever excuses a table the catalog finds.
+	// detect_stream_topology was listed one release AHEAD of the migration that creates it,
+	// so a user-management pod from the previous release, still running beside a newer
+	// event-processing during a rolling upgrade, classifies the table instead of refusing
+	// every tenant purge with ErrUnclassified. Keep it: removing it would undo that.
 	{
 		Schema: "event-processing", Name: "detect_stream_topology", Class: ClassExempt,
 		Reason: "Instance-wide stream suffix, group count and format version only; no tenant data or checkpoint partitions.",
@@ -235,8 +234,8 @@ var exemptions = []Exemption{
 	{
 		Schema: "event-processing", Name: "detect_snapshots", Class: ClassExternal, Store: "detect",
 		Reason: "🔴 HOLDS TENANT DATA THAT THIS SWEEP CANNOT REACH, and is erased by the `detect` " +
-			"store instead. One row per DETECT partition, and GA ships a single partition per " +
-			"instance, so this is one opaque blob containing EVERY tenant's open detection windows " +
+			"store instead. One row per DETECT partition (one per instance, or one per shard group " +
+			"when resolved-events is sharded), each an opaque blob holding EVERY one of its tenants' open detection windows " +
 			"and timers — including buffered event values for the purged tenant. It has no tenant " +
 			"column because the engine keys tenancy inside the payload (on the rule id), which no " +
 			"SQL predicate can address. Deleting the row is not the answer either: it is the " +

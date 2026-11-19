@@ -31,8 +31,12 @@ func (r *SchemaResolver) AlarmsById(ctx context.Context, args struct {
 	}
 
 	result := make([]*AlarmResolver, 0)
+	page := &alarmSuppressionPage{}
 	for _, a := range found {
-		result = append(result, &AlarmResolver{M: *a, S: r, C: ctx})
+		page.alarms = append(page.alarms, *a)
+	}
+	for _, a := range found {
+		result = append(result, &AlarmResolver{M: *a, S: r, C: ctx, suppressionPage: page})
 	}
 	return result, nil
 }
@@ -52,8 +56,12 @@ func (r *SchemaResolver) AlarmsByToken(ctx context.Context, args struct {
 	}
 
 	result := make([]*AlarmResolver, 0)
+	page := &alarmSuppressionPage{}
 	for _, a := range found {
-		result = append(result, &AlarmResolver{M: *a, S: r, C: ctx})
+		page.alarms = append(page.alarms, *a)
+	}
+	for _, a := range found {
+		result = append(result, &AlarmResolver{M: *a, S: r, C: ctx, suppressionPage: page})
 	}
 	return result, nil
 }

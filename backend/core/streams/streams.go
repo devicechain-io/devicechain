@@ -374,6 +374,13 @@ type Stream struct {
 	// (core/deadletter, core/payloadredact). The default is the safe side: forgetting the
 	// flag costs a less detailed letter, never a kept credential.
 	PlatformAuthored bool
+	// OperatorReadable lets the broker administrator, the operator plane's login, read this
+	// stream's stored messages one at a time (STREAM.MSG.GET and DIRECT.GET, by sequence or by
+	// subject): `dcctl broker facts` answers "was this announced, and when?" from them. It grants
+	// READ only, never a purge, a message delete or a consumer, so it adds no way to remove what
+	// the platform announced. Only a PlatformAuthored stream may declare it: what a
+	// device wrote is not the operator's to read off the broker.
+	OperatorReadable bool
 	// DeadLetterKind is the kind (core/deadletter's vocabulary) of a dead letter written
 	// about a message consumed from this stream — by an in-handler arm or by the
 	// platform's max-delivery recorder, which is why it is declared once, here, rather
@@ -1095,7 +1102,11 @@ var All = []Stream{
 	// At-least-once and idempotent.
 	// Window: device-management publishes from a transactional outbox, at least once,
 	// with Nats-Msg-Id entdel/<tenant>/<type>/<id>; a retry within the window is stored once.
-	{Suffix: EntityDeleted, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "a deletion fan-out in flight; device-management re-publishes a deletion until the broker acknowledges it, but one acknowledged just before the restore point may not have reached every consumer", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"dashboard-management", ReadDurable}, {"event-management", ReadDurable}, {"event-processing", ReadDurable}, {"command-delivery", ReadDurable}, {"device-state", ReadDurable}, {"update-management", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
+	//
+	// OperatorReadable: "was the deletion of X announced, and when?" is a support question with
+	// no other operator-plane answer, so `dcctl broker facts` reads this stream as the broker
+	// administrator. The grant is read only: it adds no right to remove a deletion fact.
+	{Suffix: EntityDeleted, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "a deletion fan-out in flight; device-management re-publishes a deletion until the broker acknowledges it, but one acknowledged just before the restore point may not have reached every consumer", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, OperatorReadable: true, Writers: []string{"device-management"}, Readers: []Reader{{"dashboard-management", ReadDurable}, {"event-management", ReadDurable}, {"event-processing", ReadDurable}, {"command-delivery", ReadDurable}, {"device-state", ReadDurable}, {"update-management", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
 
 	// ADR-081. Emitted post-commit by device-management whenever a device's tracked
 	// relationships may have changed (an edge created or removed, a claim redeemed or
@@ -1113,9 +1124,11 @@ var All = []Stream{
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).
-	// Window: device-management publishes it with no Nats-Msg-Id.
-	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: AlarmEvents, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "alarm state is held in the database and notification re-derives from it", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
+	// Window: device-management relays each transition from its outbox with
+	// alarm-event-<tenant>-<id> as Nats-Msg-Id (agent effects and deletion cascades carry
+	// their own ids), so a re-publish inside the window is dropped. There is no ordering
+	// across those producers, nor against a pre-outbox replica during a rolling upgrade.
+	{Suffix: AlarmEvents, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "an alarm transition in flight; device-management re-publishes it until the broker acknowledges it, but one acknowledged just before the restore point may not have reached notification", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
 
 	// ADR-051 5c / ADR-054, carrying a JSON RaiseAlarmRequest. AT-LEAST-once, and
 	// safe as such: ApplyAlarmContributorEdge (ADR-057) is an idempotent
@@ -1375,6 +1388,18 @@ func EnvelopeCarriers() []string {
 	var out []string
 	for _, s := range All {
 		if len(s.ReadBackWriters) > 0 {
+			out = append(out, s.Suffix)
+		}
+	}
+	return out
+}
+
+// OperatorReadable returns the suffixes of the streams the broker administrator may read stored
+// messages of (Stream.OperatorReadable), so its read grant is derived from the table.
+func OperatorReadable() []string {
+	var out []string
+	for _, s := range All {
+		if s.OperatorReadable {
 			out = append(out, s.Suffix)
 		}
 	}

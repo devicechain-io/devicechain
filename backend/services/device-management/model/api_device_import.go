@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -250,7 +251,7 @@ func validateImportRow(row *DeviceImportRow, mode string) (outcome, code, messag
 	ctype := strings.TrimSpace(*row.CredentialType)
 	switch {
 	case CredentialType(ctype) == CredentialX509Certificate:
-		return DeviceImportInvalid, importCodeInvalidValue, refuseX509Elsewhere().Error(), nil
+		return DeviceImportInvalid, importCodeInvalidValue, identity.RefuseX509Elsewhere().Error(), nil
 	case !CredentialType(ctype).Valid():
 		return DeviceImportInvalid, importCodeInvalidValue, "credentialType must be ACCESS_TOKEN or MQTT_BASIC", nil
 	}

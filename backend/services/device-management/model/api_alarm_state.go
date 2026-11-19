@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // This file holds the read + operator API for raised Alarms (ADR-041). Alarms are
@@ -158,6 +159,9 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 	results := make([]Alarm, 0)
 	db, pag := api.RDB.ListOf(ctx, &Alarm{}, func(result *gorm.DB) *gorm.DB {
 		result = atAnchor(ofType(filter(result)))
+		if criteria.RaisedDuringSuppression != nil {
+			result = alarmCycleSuppressionFilter(result, *criteria.RaisedDuringSuppression)
+		}
 		// Overlap, not containment: an alarm raised before the range and still active (or cleared
 		// inside it) was present during the range. A re-raise nulls cleared_time, so NULL means
 		// active. No index is added for these: the caller that sends a range (a chart's event
@@ -318,8 +322,12 @@ func (api *Api) AcknowledgeAlarm(ctx context.Context, token string, by *string) 
 		return nil, gorm.ErrRecordNotFound
 	}
 	alarm := matches[0]
-	if err := api.applyAcknowledgement(ctx, alarm, by); err != nil {
+	changed, err := api.applyAcknowledgement(ctx, alarm, by)
+	if err != nil {
 		return nil, err
+	}
+	if changed {
+		api.relayAlarmEvents(ctx)
 	}
 	return alarm, nil
 }
@@ -332,12 +340,46 @@ func (api *Api) AcknowledgeAlarm(ctx context.Context, token string, by *string) 
 // row without re-reading.
 //
 // Idempotent: an already-acknowledged alarm is a no-op with no event, exactly as before.
-func (api *Api) applyAcknowledgement(ctx context.Context, alarm *Alarm, by *string) error {
-	ev, err := ackAlarmTx(ctx, api.RDB.DB(ctx), alarm, by)
-	if err == nil && ev != nil {
-		api.emitAlarmEvent(ctx, ev)
+func (api *Api) applyAcknowledgement(ctx context.Context, alarm *Alarm, by *string) (bool, error) {
+	return api.applyAlarmTransition(ctx, alarm, AlarmEventAcknowledged, func(tx *gorm.DB, fresh *Alarm) (*AlarmStateChangeEvent, error) {
+		return ackAlarmTx(ctx, tx, fresh, by)
+	})
+}
+
+// applyAlarmTransition locks and re-reads the authoritative cycle inside the write's
+// transaction. The caller's earlier lookup is only an ID, never an event snapshot.
+func (api *Api) applyAlarmTransition(ctx context.Context, alarm *Alarm, kind AlarmEventType, apply func(*gorm.DB, *Alarm) (*AlarmStateChangeEvent, error)) (bool, error) {
+	prepared := api.prepareAlarmEvent(ctx, alarm, kind)
+	var fresh Alarm
+	changed := false
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&fresh, alarm.ID).Error; err != nil {
+			return err
+		}
+		if api.afterAlarmTransitionLockForTest != nil {
+			api.afterAlarmTransitionLockForTest()
+		}
+		event, err := apply(tx, &fresh)
+		if err != nil {
+			return err
+		}
+		if event == nil {
+			return nil
+		}
+		copyAlarmEventPreparation(event, prepared)
+		if err := queueAlarmEventOnTx(ctx, tx, &fresh, event); err != nil {
+			return err
+		}
+		changed = true
+		if api.afterAlarmEventEnqueueForTest != nil {
+			return api.afterAlarmEventEnqueueForTest(tx)
+		}
+		return nil
+	})
+	if err == nil {
+		*alarm = fresh
 	}
-	return err
+	return changed && err == nil, err
 }
 
 // ackAlarmTx applies the shared acknowledgement transition without publishing.
@@ -468,6 +510,12 @@ func (api *Api) AcknowledgeAlarms(ctx context.Context, tokens []string, by *stri
 		}
 	}
 
+	committed := false
+	defer func() {
+		if committed {
+			api.relayAlarmEvents(ctx)
+		}
+	}()
 	for _, token := range ordered {
 		alarm, found := byToken[token]
 		if !found {
@@ -480,9 +528,11 @@ func (api *Api) AcknowledgeAlarms(ctx context.Context, tokens []string, by *stri
 		// was unreachable" is not one. It aborts the whole request so the caller retries rather than
 		// reading a transient outage as "that alarm cannot be acknowledged". Acknowledgment is
 		// idempotent, so the retry re-acknowledges the already-done ones harmlessly.
-		if err := api.applyAcknowledgement(ctx, alarm, by); err != nil {
+		changed, err := api.applyAcknowledgement(ctx, alarm, by)
+		if err != nil {
 			return nil, err
 		}
+		committed = committed || changed
 		result.Acknowledged = append(result.Acknowledged, *alarm)
 	}
 	return result, nil
@@ -503,12 +553,14 @@ func (api *Api) ClearAlarm(ctx context.Context, token string) (*Alarm, error) {
 		return nil, gorm.ErrRecordNotFound
 	}
 	alarm := matches[0]
-	ev, err := clearAlarmTx(ctx, api.RDB.DB(ctx), alarm)
+	changed, err := api.applyAlarmTransition(ctx, alarm, AlarmEventCleared, func(tx *gorm.DB, fresh *Alarm) (*AlarmStateChangeEvent, error) {
+		return clearAlarmTx(ctx, tx, fresh)
+	})
 	if err != nil {
 		return nil, err
 	}
-	if ev != nil {
-		api.emitAlarmEvent(ctx, ev)
+	if changed {
+		api.relayAlarmEvents(ctx)
 	}
 	return alarm, nil
 }

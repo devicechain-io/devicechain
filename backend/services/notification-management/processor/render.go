@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-notification-management/model"
 )
 
@@ -41,6 +41,8 @@ type RenderedNotification struct {
 // stream's name for it (RAISED, ESCALATED, DEESCALATED, CLEARED, ACKNOWLEDGED) or
 // RENOTIFIED for a timed re-page of an unchanged alarm.
 type AlarmFacts struct {
+	SuppressedBy     string
+	ReleasedAt       time.Time
 	ClearReason      string
 	EventType        string
 	AlarmToken       string
@@ -65,9 +67,9 @@ type AlarmFacts struct {
 
 // renderNotification builds the default rendering of an alarm state-change event.
 // eventTime is the transition's occurred time already resolved to the event.
-func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotification {
+func renderNotification(event *dmcontract.AlarmStateChangeEvent) *RenderedNotification {
 	verb := verbForEvent(event.EventType)
-	if event.EventType == dmmodel.AlarmEventCleared && event.ClearReason == dmmodel.AlarmClearReasonOriginatorDeleted {
+	if event.EventType == dmcontract.AlarmEventCleared && event.ClearReason == dmcontract.AlarmClearReasonOriginatorDeleted {
 		verb = "ended because its entity was deleted"
 		if event.OriginatorType == "device" {
 			verb = "ended because its device was deleted"
@@ -178,7 +180,7 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 }
 
 // eventSource is the originator facts of an alarm event, in the form a state row keeps.
-func eventSource(e *dmmodel.AlarmStateChangeEvent) model.AlarmSource {
+func eventSource(e *dmcontract.AlarmStateChangeEvent) model.AlarmSource {
 	return model.AlarmSource{
 		PositionDerived:  e.PositionDerived,
 		PositionObserved: true,
@@ -190,7 +192,7 @@ func eventSource(e *dmmodel.AlarmStateChangeEvent) model.AlarmSource {
 // applyStateSource copies what a state row remembers about the alarm's source onto an event
 // rebuilt from that row, so its rendering names the device like the original did. Nothing is
 // invented: a row that knows nothing leaves the event as it was.
-func applyStateSource(e *dmmodel.AlarmStateChangeEvent, st *model.NotificationState) {
+func applyStateSource(e *dmcontract.AlarmStateChangeEvent, st *model.NotificationState) {
 	src := st.Source()
 	e.OriginatorType, e.OriginatorId = src.OriginatorType, src.OriginatorId
 	e.DeviceToken, e.DeviceName, e.DeviceTypeToken = src.DeviceToken, src.DeviceName, src.DeviceTypeToken
@@ -322,17 +324,17 @@ func oneLine(s string) string {
 }
 
 // verbForEvent renders an event type as a human past-tense verb for the summary.
-func verbForEvent(t dmmodel.AlarmEventType) string {
+func verbForEvent(t dmcontract.AlarmEventType) string {
 	switch t {
-	case dmmodel.AlarmEventRaised:
+	case dmcontract.AlarmEventRaised:
 		return "raised"
-	case dmmodel.AlarmEventEscalated:
+	case dmcontract.AlarmEventEscalated:
 		return "escalated"
-	case dmmodel.AlarmEventDeescalated:
+	case dmcontract.AlarmEventDeescalated:
 		return "de-escalated"
-	case dmmodel.AlarmEventCleared:
+	case dmcontract.AlarmEventCleared:
 		return "cleared"
-	case dmmodel.AlarmEventAcknowledged:
+	case dmcontract.AlarmEventAcknowledged:
 		return "acknowledged"
 	default:
 		return strings.ToLower(t.String())
@@ -357,4 +359,17 @@ func yesNo(v bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+// explainSuppressionRelease is called only for a claimed window-held release. Ordinary
+// pages and quiet-hours-only releases retain their original rendering byte for byte.
+func explainSuppressionRelease(msg *RenderedNotification, window string, now time.Time) {
+	msg.TextBody += fmt.Sprintf("Suppressed: held by alarm suppression window %s; released %s; active since %s\n", oneLine(window), formatTime(now), formatTime(msg.Alarm.RaisedTime))
+	msg.Payload["suppressedBy"] = window
+	msg.Payload["releasedAt"] = formatTime(now)
+	msg.Alarm.SuppressedBy, msg.Alarm.ReleasedAt = window, now
+}
+
+func (a AlarmFacts) suppressionExplanation() string {
+	return fmt.Sprintf("held by alarm suppression window %s; released %s; active since %s", oneLine(a.SuppressedBy), formatTime(a.ReleasedAt), formatTime(a.RaisedTime))
 }

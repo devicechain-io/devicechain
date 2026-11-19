@@ -1,0 +1,16 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Every asset in this project is text: meshes, materials and the sky are built in code, so nothing
+# binary is committed. Images rendered from it (stills) live outside the project.
+*.png binary
+*.jpg binary
+
+# LF on every platform: a CRLF in a script breaks a shebang, and in harbor_layout.json it makes every
+# regeneration a whole-file diff.
+*.json text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.shader text eol=lf
+*.hlsl text eol=lf
+*.cs text eol=lf

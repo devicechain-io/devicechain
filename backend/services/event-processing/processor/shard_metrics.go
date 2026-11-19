@@ -24,6 +24,9 @@ import (
 //	detect_shard_invariant_violations_total  shards that disagreed on the watermark or position at a
 //	                                         snapshot; the snapshot is refused. This pages.
 type shardMetrics struct {
+	// Empty for legacy handles; group zero mirrors the original shard-only series.
+	group      string
+	legacy     *shardMetrics
 	queueDepth *prometheus.GaugeVec
 	busy       *prometheus.CounterVec
 	liveKeys   *prometheus.GaugeVec
@@ -67,9 +70,18 @@ func (m *DetectMetrics) bindShards(k int) {
 	s.lastBusy = make([]uint64, k)
 	for i := 0; i < k; i++ {
 		l := strconv.Itoa(i)
-		s.depth[i] = s.queueDepth.WithLabelValues(l)
-		s.busyCtr[i] = s.busy.WithLabelValues(l)
-		s.live[i] = s.liveKeys.WithLabelValues(l)
+		labels := []string{l}
+		if s.group != "" {
+			labels = []string{s.group, l}
+		}
+		s.depth[i] = s.queueDepth.WithLabelValues(labels...)
+		s.busyCtr[i] = s.busy.WithLabelValues(labels...)
+		s.live[i] = s.liveKeys.WithLabelValues(labels...)
+		if s.legacy != nil {
+			s.depth[i] = mirroredGauge{s.depth[i], s.legacy.queueDepth.WithLabelValues(l)}
+			s.busyCtr[i] = mirroredCounter{s.busyCtr[i], s.legacy.busy.WithLabelValues(l)}
+			s.live[i] = mirroredGauge{s.live[i], s.legacy.liveKeys.WithLabelValues(l)}
+		}
 	}
 }
 
@@ -115,3 +127,17 @@ func (m *DetectMetrics) InvariantViolation() {
 }
 
 var _ detectcore.PipelineObserver = (*DetectMetrics)(nil)
+
+type mirroredGauge struct {
+	prometheus.Gauge
+	legacy prometheus.Gauge
+}
+
+func (g mirroredGauge) Set(v float64) { g.Gauge.Set(v); g.legacy.Set(v) }
+
+type mirroredCounter struct {
+	prometheus.Counter
+	legacy prometheus.Counter
+}
+
+func (c mirroredCounter) Add(v float64) { c.Counter.Add(v); c.legacy.Add(v) }

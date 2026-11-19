@@ -58,12 +58,17 @@ title: 指标参考
 
 | 指标 | 含义 |
 | --- | --- |
+| `suppression_invalid_windows_total` | 计数器。评估时跳过的无效已存储告警抑制窗口；继续发送告警通知。 |
+| `suppression_evaluation_failures_total{phase}` | 计数器。告警抑制评估失败次数，按 `phase` 区分：`cycle_start`（周期开始时的记录评估）或 `live`（当前抑制评估）。当前评估失败时允许发送通知。 `status`：单个告警状态评估失败时允许通知，批次中的其他告警继续返回。 |
 | `agent_proposals_total{kind, outcome}` | Preview（代理操作）。非试运行的提案调用数，按类型（`ALARM_ACK`、`ALARM_CLEAR`、`unknown`）和结果（`created`、`existing`、`refused`）区分；错误计为 `refused`。 |
 | `agent_approvals_total{outcome}` | Preview（代理操作）。审批调用数，按最终结果（`recorded`、`executed`、`refused`、`concurrent`、`step_up_required`、`forbidden`、`fence_closed`）区分，内部重试仅计一次。没有更具体结果的错误计为 `refused`。 |
 | `agent_executions_total{kind, result}` | Preview（代理操作）。最终审批执行数，按类型（`ALARM_ACK`、`ALARM_CLEAR`、`unknown`）和结果（`executed`、`dependency_changed`、`policy_refused`、`fence_closed`、`refused`、`failed`）区分，每次执行仅计一次，包括重新启用围栏后的重试。`failed` 表示事务未能完成（数据库或语句超时、策略服务或停用事件流不可用）；锁冲突作为并发审批计为 `refused`。 |
 | `agent_execution_seconds` | 直方图。Preview（代理操作）。执行最终审批所用的时间，包括拒绝、失败及重新启用围栏后的重试。 |
 | `agent_proposals_expired_total` | Preview（代理操作）。由过期清理任务转为 `EXPIRED` 的提案数。 |
-| `alarm_event_dead_lettered_total` | 无法发布到告警事件流而改写入死信流的告警状态变更事件。每一条都是到达了数据库却没有到达总线的告警转换，因此没有人因此被通知，它对运维人员可见，而不是只写进日志。 |
+| `alarm_event_dead_lettered_total` | 保留此计数器，但自告警事件改由 outbox 转发后不再递增。请参阅 `alarm_events_quarantined`。 |
+| `alarm_events_pending` | Gauge。已提交、等待 broker 确认的告警状态转换数，不包括隔离行。 |
+| `alarm_event_oldest_age_seconds` | Gauge。按 id 排序的最早待发送转换的等待秒数；队列为空时为零，表示通知的延迟。 |
+| `alarm_events_quarantined` | Gauge。无法解码或编码的已存储事件数。事件及错误保留在数据库中，在操作员修复前不会重试。 |
 | `callout_in_flight` | 此刻正在授权的设备认证标注请求。 |
 | `callout_refused_busy_total` | 因达到并发上限而以通用拒绝回应的设备认证标注请求。 |
 | `config_reports_rejected_total{reason}` | device-management 拒绝的 [device-reports 主题](../guides/connecting-a-device.md#reserved-device-topics)消息：`malformed`（无法解码）、`throttled`（在单设备冷却期内的 sync）、`unattributable`（主题中没有租户或设备）、`unknown_device`、`unknown_revision`、`digest_mismatch`、`stale`（比已记录的更旧）和 `device_disabled`（设备已被[停用](../guides/device-credentials.md#disabling-a-device)）。某一批设备持续产生此类拒绝，说明设备端存在缺陷。 |
@@ -261,10 +266,14 @@ title: 指标参考
 
 每次投递尝试都失败的通知会写入死信流，`dcctl dead-letters` 会列出它们。此计数器告诉你有通知从未被发出。
 
+`quiet_hours_total` 与 `suppression_total` 按持久化审计字段 `held_by_window` 划分暂存行的结果：由抑制窗口暂存的行计入 `suppression_total`，即使随后还需等待静默时段结束；其他暂存行计入 `quiet_hours_total`。窗口结束后，通知会根据积压量在几个调度轮次内发出。
+
 | 指标 | 含义 |
 | --- | --- |
 | `notifications_dead_lettered_total` | 每次投递尝试都失败后写入死信流的告警，使运维人员可以看到哪些通知从未被发出。 |
 | `quiet_hours_total{outcome}` | 静默时段对一条通知的处理结果，按 outcome 分类：held（被暂存而未发送）、released（在静默时段结束时发送）、dropped_resolved（因告警已被确认或清除而丢弃）、dropped_policy（因策略被停用或删除而丢弃）、dropped_exhausted（在 5 次发送都未送达任何渠道后丢弃并记录为死信）或 superseded（因策略已针对同一告警的更新事件发出通知而丢弃）。 |
+| `suppression_total{outcome}` | 计数器。告警抑制结果：`held`（暂存通知）、`rechecked`（当前窗口仍在抑制）、`escalation_skipped`（领取升级级别前跳过被抑制的升级）、`released`（通知已发送）、`superseded`（较新通知已替代暂存通知）、`dropped_resolved`（告警已确认、已清除或已进入新周期）、`dropped_policy`（策略不存在、已禁用或不再匹配路由）、`dropped_exhausted`（释放尝试耗尽或被永久拒绝）、`lookup_failed`（状态查询失败，继续发送通知）。九种结果均预置为零。 |
+| `deferral_oldest_due_seconds` | 仪表。调度本轮访问的租户中，最早到期暂存通知距 `release_at` 的秒数；没有到期行时为零。包括静默时段和抑制窗口暂存，衡量到期后的等待时间，而非暂存总时长。 |
 | `ledger_writes_total{outcome}` | 投递记录按结果分类：written（已写入）、failed（数据库拒绝或超时，记录丢失）、dropped（等待写入的记录过多，从未尝试写入）或 purged（租户已被删除）。投递记录绝不会延迟通知，因此 failed 或 dropped 表示缺少一条记录，而不是缺少一次通知。 |
 
 ## 用户管理 {#user-management}

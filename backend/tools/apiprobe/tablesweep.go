@@ -225,8 +225,12 @@ var tableSweepExemptions = map[string]string{
 	"device-management.alarms": "alarm objects are RAISED by the REACT pipeline when a rule fires. " +
 		"Nothing fires in a drill that sends no telemetry, and creating one by hand would assert " +
 		"the row rather than the engine that produces it.",
-	"device-management.alarm_suppression_windows": "no GraphQL writer yet in this release slice; written by the suppression mutations from slice 3.",
-	"device-management.alarm_cycle_suppressions":  "no GraphQL writer yet in this release slice; written by the alarm cycle-start transaction from slice 3.",
+	"device-management.alarm_cycle_suppressions": "the suppression stamp on one alarm cycle, written only by " +
+		"the alarm cycle-start transaction when an alarm is raised while a window matches. No alarm is raised " +
+		"in a drill that sends no telemetry (see device-management.alarms), so there is no cycle to stamp, " +
+		"and stamping a hand-made alarm would assert the row rather than the path that writes it. The window " +
+		"itself is seeded (alarm-suppression-window); the stamp's transaction, reads and withholding are " +
+		"proved by device-management's model and Postgres tests.",
 	"device-management.alarm_dispositions": "an operator's label on one alarm cycle, written by " +
 		"setAlarmDisposition on an alarm that exists. No alarm is raised in a drill that sends no " +
 		"telemetry (see device-management.alarms), so there is nothing to label, and labelling a hand-made " +
@@ -298,6 +302,7 @@ var tableSweepExemptions = map[string]string{
 		"one, so the writer is exercised; empty afterwards is the drain having caught up. A row still " +
 		"here a few seconds after the seed means ownership facts are not reaching the broker, which is " +
 		"a finding this bucket should report.",
+	"device-management.pending_alarm_events": "alarm transitions awaiting broker acknowledgement or retained in quarantine; inspect relay health and alarm_events_quarantined if rows remain on a healthy instance.",
 	"device-management.pending_entity_deletions": "the deletion outbox: a row is written in the transaction " +
 		"of an entity delete and removed once device-management's drain, which runs every second, has had " +
 		"the deletion fact acknowledged by the broker. No API call leaves a row behind on a healthy instance: " +
@@ -351,6 +356,11 @@ var tableSweepExemptions = map[string]string{
 		"instance sentinel. Nothing in user-management writes a tenant-scoped secret, so no " +
 		"tenant can own a row here. The table carries tenant_id only because it is core's shared " +
 		"secret-store table, which the other secret-store areas do fill per tenant.",
+	"ai-inference.secrets": "ai-inference's secret store holds only INSTANCE-scoped rows — an AI " +
+		"provider's write-only API key, keyed by AIProviderSecretRef (scope instance, tenant_id the " +
+		"empty instance sentinel). Providers are instance-wide, operator-managed records; nothing in " +
+		"ai-inference writes a tenant-scoped secret, so no tenant can own a row here. The table " +
+		"carries tenant_id only because it is core's shared secret-store table.",
 
 	// ---- runtime state of a delivery mechanism -------------------------------
 	"notification-management.notification_states": "escalation state for a notification the policy has " +

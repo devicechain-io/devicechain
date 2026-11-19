@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/egress"
@@ -114,13 +114,16 @@ func perChannelWorstCase(attempts int, timeout time.Duration) time.Duration {
 // attempted (so a redelivery can never double-send a channel that already
 // succeeded).
 type PolicyNotifier struct {
-	AlarmLookup  AlarmLookup
-	lookupErrors prometheus.Counter
-	api          *model.Api
-	store        secrets.SecretStore
-	adapters     map[string]ChannelAdapter
-	attempts     int
-	timeout      time.Duration
+	SuppressionLookup SuppressionLookup
+	suppression       *prometheus.CounterVec
+	oldestDue         prometheus.Gauge
+	AlarmLookup       AlarmLookup
+	lookupErrors      prometheus.Counter
+	api               *model.Api
+	store             secrets.SecretStore
+	adapters          map[string]ChannelAdapter
+	attempts          int
+	timeout           time.Duration
 
 	// budget is the whole-dispatch deadline one alarm is worth, defaulted from
 	// dispatchBudget by the constructor. It is a FIELD rather than the constant read
@@ -241,6 +244,8 @@ func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, 
 		refused:        metrics.deliveriesRefused,
 		lookupErrors:   metrics.escalationLookupErrors,
 		quiet:          metrics.quietHours,
+		suppression:    metrics.suppression,
+		oldestDue:      metrics.deferralOldestDue,
 		sliceExhausted: metrics.tenantSliceExhausted,
 	}
 }
@@ -288,10 +293,10 @@ var ErrUnknownAlarmEventType = errors.New("alarm event type is not one this serv
 // the three write-only branches used to call straight through to the api, so they were
 // the one door into this service that neither consulted the ADR-077 lifecycle gate nor
 // recognized the erasure fence's refusal.
-func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
+func (n *PolicyNotifier) Notify(ctx context.Context, event *dmcontract.AlarmStateChangeEvent) error {
 	switch event.EventType {
-	case dmmodel.AlarmEventRaised, dmmodel.AlarmEventEscalated, dmmodel.AlarmEventAcknowledged,
-		dmmodel.AlarmEventCleared, dmmodel.AlarmEventDeescalated:
+	case dmcontract.AlarmEventRaised, dmcontract.AlarmEventEscalated, dmcontract.AlarmEventAcknowledged,
+		dmcontract.AlarmEventCleared, dmcontract.AlarmEventDeescalated:
 		if err := n.applyLifecycle(ctx, event.AlarmToken, "position classification", func(c context.Context) error {
 			return n.api.RecordAlarmPosition(c, event.AlarmToken, event.PositionDerived)
 		}); err != nil {
@@ -299,7 +304,7 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 		}
 	}
 	switch event.EventType {
-	case dmmodel.AlarmEventAcknowledged:
+	case dmcontract.AlarmEventAcknowledged:
 		// Idempotent tombstone upsert; a DB error is safe to retry (no side effects).
 		return n.applyLifecycle(ctx, event.AlarmToken, "acknowledgement", func(c context.Context) error {
 			if err := n.api.MarkAcknowledged(c, event.AlarmToken, event.AlarmKey, event.Severity,
@@ -308,7 +313,7 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 			}
 			return n.resolveHeld(c, event)
 		})
-	case dmmodel.AlarmEventCleared:
+	case dmcontract.AlarmEventCleared:
 		// Stamp the clear FIRST: that is what stops escalation. Announcing it (to the policies
 		// that opted in) comes after, claimed separately so it is sent once; see announceClear.
 		if err := n.applyLifecycle(ctx, event.AlarmToken, "clear", func(c context.Context) error {
@@ -324,11 +329,11 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 			return nil
 		}
 		return n.announceClear(ctx, event, false, false)
-	case dmmodel.AlarmEventDeescalated:
+	case dmcontract.AlarmEventDeescalated:
 		return n.applyLifecycle(ctx, event.AlarmToken, "de-escalation", func(c context.Context) error {
 			return n.api.TouchSeverity(c, event.AlarmToken, event.Severity)
 		})
-	case dmmodel.AlarmEventRaised, dmmodel.AlarmEventEscalated:
+	case dmcontract.AlarmEventRaised, dmcontract.AlarmEventEscalated:
 		return n.dispatch(ctx, event)
 	default:
 		// Not a silent ack: an event type this build cannot route is a notification nobody
@@ -345,12 +350,13 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 // far is held has never been recorded there (nothing was sent, so nothing was written; a
 // lifecycle transition can also be stale for the row and change nothing). The held row is
 // what knows about that cycle, so it is resolved here directly, by event time.
-func (n *PolicyNotifier) resolveHeld(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
-	dropped, err := n.api.ResolveNotificationDeferrals(ctx, event.AlarmToken, event.OccurredTime)
+func (n *PolicyNotifier) resolveHeld(ctx context.Context, event *dmcontract.AlarmStateChangeEvent) error {
+	dropped, suppressed, err := n.api.ResolveNotificationDeferralsWithAudit(ctx, event.AlarmToken, event.OccurredTime)
 	if err != nil {
 		return fmt.Errorf("dropping held notifications for a resolved alarm: %w", err)
 	}
-	n.countQuiet(quietDroppedResolved, int(dropped))
+	n.countQuiet(quietDroppedResolved, int(dropped)-suppressed)
+	n.countSuppression("dropped_resolved", suppressed)
 	return nil
 }
 
@@ -398,7 +404,7 @@ func (n *PolicyNotifier) applyLifecycle(ctx context.Context, alarm, transition s
 }
 
 // dispatch evaluates policies and delivers a RAISED/ESCALATED transition.
-func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
+func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmcontract.AlarmStateChangeEvent) error {
 	tenant, _ := core.TenantFromContext(ctx)
 
 	// ADR-077: a deleted tenant is not paged. Refused here, at the top, rather than left
@@ -455,7 +461,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 
 	// An escalation that arrives after its alarm cleared (the pool is unordered) would page
 	// "worse" about an alarm that is over.
-	if event.EventType == dmmodel.AlarmEventEscalated && state != nil && state.ClearedAt.Valid &&
+	if event.EventType == dmcontract.AlarmEventEscalated && state != nil && state.ClearedAt.Valid &&
 		state.SameCycleAs(event.RaisedTime) {
 		log.Debug().Str("tenant", tenant).Str("alarm", event.AlarmToken).
 			Msg("Not paging an escalation: the alarm has already cleared")
@@ -472,9 +478,15 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		if err := n.api.DeferNotifications(dctx, held); err != nil {
 			return fmt.Errorf("holding notification for quiet hours: %w", err)
 		}
-		n.countQuiet(quietHeld, len(held))
+		for _, d := range held {
+			if d.HeldByWindow.Valid {
+				n.countSuppression("held", 1)
+			} else {
+				n.countQuiet(quietHeld, 1)
+			}
+		}
 		log.Debug().Str("tenant", tenant).Str("alarm", event.AlarmToken).Int("policies", len(held)).
-			Msg("Holding the notification for quiet hours; it is sent when the quiet stretch ends")
+			Msg("Holding the notification for quiet hours or an alarm suppression window; it is sent when the hold ends")
 	}
 
 	deliveries := n.plan(event, sendNow, state)
@@ -568,18 +580,20 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	// severity, which the escalation that follows would then page at.
 	if ids := n.pagingPolicyIDs(event, sendNow, state); len(ids) > 0 {
 		var superseded int64
+		var suppressed int
 		if err := storehold.Settle(ctx, func(c context.Context) error {
 			rctx, rcancel := context.WithTimeout(c, recordTimeout)
 			defer rcancel()
 			var err error
-			superseded, err = n.api.SupersedeNotificationDeferrals(rctx, event.AlarmToken, ids, event.OccurredTime)
+			superseded, suppressed, err = n.api.SupersedeNotificationDeferralsWithAudit(rctx, event.AlarmToken, ids, event.OccurredTime)
 			return err
 		}); err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
 				Msg("Paged, but could not drop what quiet hours held about the alarm; it will be " +
 					"sent again when released")
 		}
-		n.countQuiet(quietSuperseded, int(superseded))
+		n.countQuiet(quietSuperseded, int(superseded)-suppressed)
+		n.countSuppression(quietSuperseded, suppressed)
 	}
 	n.announceLateClear(ctx, event, recorded)
 	return nil
@@ -587,7 +601,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 
 // pagingPolicyIDs is the ids of the policies plan routed this event through: the same
 // filters plan applies (not scoped, not throttled, a rule matching the severity).
-func (n *PolicyNotifier) pagingPolicyIDs(event *dmmodel.AlarmStateChangeEvent,
+func (n *PolicyNotifier) pagingPolicyIDs(event *dmcontract.AlarmStateChangeEvent,
 	policies []*model.NotificationPolicy, state *model.NotificationState) []uint {
 	var ids []uint
 	for _, p := range policies {
@@ -714,7 +728,7 @@ type delivery struct {
 // this event. It matches each rule by severity, drops rules whose channel is missing,
 // disabled, or has no adapter, and collapses duplicate (channel, recipients) targets
 // so two policies routing to the same place send once.
-func (n *PolicyNotifier) plan(event *dmmodel.AlarmStateChangeEvent,
+func (n *PolicyNotifier) plan(event *dmcontract.AlarmStateChangeEvent,
 	policies []*model.NotificationPolicy, state *model.NotificationState) []delivery {
 	seen := make(map[string]bool)
 	out := make([]delivery, 0)
@@ -757,9 +771,9 @@ func (n *PolicyNotifier) plan(event *dmmodel.AlarmStateChangeEvent,
 // per-cycle fields but NOT LastNotifiedAt (see NotificationState.CycleRaisedAt). A
 // re-raise the throttle suppresses records nothing, so its cycle is not escalated either:
 // escalation follows up a page, and that cycle was never paged.
-func (n *PolicyNotifier) throttled(event *dmmodel.AlarmStateChangeEvent,
+func (n *PolicyNotifier) throttled(event *dmcontract.AlarmStateChangeEvent,
 	p *model.NotificationPolicy, state *model.NotificationState) bool {
-	if event.EventType == dmmodel.AlarmEventEscalated {
+	if event.EventType == dmcontract.AlarmEventEscalated {
 		return false
 	}
 	if state == nil || !state.LastNotifiedAt.Valid || !p.ThrottleSeconds.Valid {
@@ -818,6 +832,9 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 
 	deliveries := n.planEscalation(state, policies, now, defaultMax)
 	if len(deliveries) == 0 {
+		return nil
+	}
+	if n.escalationSuppressed(ctx, state.AlarmToken, now) {
 		return nil
 	}
 	// Do not burn a tier when every destination already exhausted its timeout
@@ -888,6 +905,31 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 			len(deliveries), state.AlarmToken)
 	}
 	return nil
+}
+
+// escalationCandidate checks whether a state merits a suppression lookup without
+// planning deliveries: planning logs and counts refusals, even for unvisited alarms.
+func (n *PolicyNotifier) escalationCandidate(state *model.NotificationState,
+	policies []*model.NotificationPolicy, now time.Time, defaultMax int) bool {
+	for _, p := range policies {
+		if p.DeviceTypeToken.Valid && p.DeviceTypeToken.String != "" || !escalationDue(state, p, now, defaultMax) {
+			continue
+		}
+		if q, err := p.QuietHours(); err == nil {
+			if held, _ := q.Holds(state.Severity, now); held {
+				continue
+			}
+		}
+		for _, rule := range p.Rules {
+			if !severityMatches(rule.Severity, state.Severity) || rule.Channel == nil || !rule.Channel.Enabled {
+				continue
+			}
+			if _, ok := n.adapters[rule.Channel.ChannelType]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // planEscalation resolves the enabled policies to the deduplicated channel deliveries

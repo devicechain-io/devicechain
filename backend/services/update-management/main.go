@@ -318,6 +318,7 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 		api.Profiles = checker
 		api.Devices = checker
 		api.Groups = checker
+		api.Incarnations = checker
 		log.Info().Str("deviceManagement", url).Msg("Compatible profiles are validated against device-management.")
 	}
 	return api, nil

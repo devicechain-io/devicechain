@@ -49,6 +49,7 @@ ALTER SEQUENCE "device-management".integration_unregistered_devices_id_seq OWNED
 ALTER SEQUENCE "device-management".integrations_id_seq OWNED BY "device-management".integrations.id;
 ALTER SEQUENCE "device-management".maintenance_windows_id_seq OWNED BY "device-management".maintenance_windows.id;
 ALTER SEQUENCE "device-management".metric_definitions_id_seq OWNED BY "device-management".metric_definitions.id;
+ALTER SEQUENCE "device-management".pending_alarm_events_id_seq OWNED BY "device-management".pending_alarm_events.id;
 ALTER SEQUENCE "device-management".pending_attribute_repairs_id_seq OWNED BY "device-management".pending_attribute_repairs.id;
 ALTER SEQUENCE "device-management".pending_entity_deletions_id_seq OWNED BY "device-management".pending_entity_deletions.id;
 ALTER SEQUENCE "device-management".profile_decoder_healths_id_seq OWNED BY "device-management".profile_decoder_healths.id;
@@ -274,6 +275,9 @@ ALTER TABLE ONLY "device-management".maintenance_windows ALTER COLUMN id SET DEF
 ALTER TABLE ONLY "device-management".metric_definitions
  ADD CONSTRAINT metric_definitions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".metric_definitions ALTER COLUMN id SET DEFAULT nextval('"device-management".metric_definitions_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".pending_alarm_events
+ ADD CONSTRAINT pending_alarm_events_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".pending_alarm_events ALTER COLUMN id SET DEFAULT nextval('"device-management".pending_alarm_events_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".pending_attribute_repairs
  ADD CONSTRAINT pending_attribute_repairs_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".pending_attribute_repairs ALTER COLUMN id SET DEFAULT nextval('"device-management".pending_attribute_repairs_id_seq'::regclass);
@@ -496,6 +500,7 @@ CREATE INDEX idx_entity_rel_target ON "device-management".entity_relationships U
 CREATE INDEX idx_facet_keys_deleted_at ON "device-management".facet_keys USING btree (deleted_at);
 CREATE INDEX idx_facet_keys_member_type ON "device-management".facet_keys USING btree (member_type);
 CREATE INDEX idx_facet_keys_tenant_id ON "device-management".facet_keys USING btree (tenant_id);
+CREATE INDEX idx_pending_alarm_events_tenant_id ON "device-management".pending_alarm_events USING btree (tenant_id, id) WHERE (quarantined_at IS NULL);
 CREATE INDEX idx_pending_entity_deletions_tenant_id ON "device-management".pending_entity_deletions USING btree (tenant_id, id);
 CREATE INDEX idx_profile_decoder_samples_profile_created ON "device-management".profile_decoder_samples USING btree (tenant_id, device_profile_id, created_at DESC);
 CREATE INDEX idx_provisioning_profiles_trust_anchor ON "device-management".provisioning_profiles USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
@@ -815,6 +820,12 @@ CREATE SEQUENCE "device-management".maintenance_windows_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".metric_definitions_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".pending_alarm_events_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -1728,6 +1739,15 @@ CREATE TABLE "device-management".metric_definitions (
  expression text,
  semantic_property text,
  semantic_point_class text
+);
+CREATE TABLE "device-management".pending_alarm_events (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ payload jsonb NOT NULL,
+ created_at timestamp with time zone NOT NULL,
+ quarantined_at timestamp with time zone,
+ last_error text,
+ CONSTRAINT chk_pending_alarm_events_tenant_id CHECK (((tenant_id)::text <> ''::text))
 );
 CREATE TABLE "device-management".pending_attribute_repairs (
  id bigint NOT NULL,

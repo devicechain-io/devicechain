@@ -607,6 +607,39 @@ var entities = []entity{
 		Record: record("device"),
 	},
 	{
+		// Depends on: device. An alarm suppression window over the probe's one device, so the
+		// alarm_suppression_windows table has a row the drill watches across an upgrade. It is
+		// NARROW (a DEVICE target, ONE_SHOT, one hour), the shape alarm:write alone may create.
+		// Its interval is fixed far in the future, so the row is a declared window and never
+		// silences a page a drill might rely on. Targets and alarm keys are stored as JSON
+		// documents; selecting them asserts both survive the upgrade.
+		//
+		// A SKIPPABLE LEAF: a baseline that predates suppression windows does not declare the
+		// request type, so the row is skipped there and runs on a newer one. It does not Record.
+		Name:     "alarm-suppression-window",
+		Area:     "device-management",
+		Mutation: "createAlarmSuppressionWindow",
+		Input:    "AlarmSuppressionWindowCreateRequest!",
+		Read:     "alarmSuppressionWindowsByToken",
+		Requires: []string{"AlarmSuppressionWindowCreateRequest.reason"},
+		Fields:   "token name description reason kind startTime endTime alarmKeys bypassSeverity targets{type token} metadata",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":          s.tok("alarm-suppression-window"),
+				"name":           "apiprobe maintenance",
+				"description":    "Pump service, declared ahead of time.",
+				"reason":         "apiprobe: scheduled pump service",
+				"kind":           "ONE_SHOT",
+				"startTime":      "2099-01-01T00:00:00Z",
+				"endTime":        "2099-01-01T01:00:00Z",
+				"targets":        []any{map[string]any{"type": "DEVICE", "token": s.tokens["device"]}},
+				"alarmKeys":      []any{"apiprobe-alarm"},
+				"bypassSeverity": "CRITICAL",
+				"metadata":       meta("alarm-suppression-window"),
+			}}
+		},
+	},
+	{
 		// Depends on: device-type. The bulk path renders tokens from a template
 		// rather than taking them, so this is the one entry whose tokens the
 		// probe does not choose — which is exactly why every rendered device is
@@ -1734,7 +1767,7 @@ func otherWrites() int {
 	return len(seen)
 }
 
-const tenantCreateMutations = 34
+const tenantCreateMutations = 35
 
 // tenantPublishMutations is the same claim for publishes, measured the same way by
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because

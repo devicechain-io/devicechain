@@ -14,6 +14,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/maintwindow"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -199,7 +200,7 @@ func TestSuppressionLatestUntilAndInvalidStored(t *testing.T) {
 func newSuppressionTestApi(t *testing.T) (*Api, context.Context, uint) {
 	t.Helper()
 	api := scopeAnchorsApi(t)
-	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).AutoMigrate(&DeviceType{}, &Alarm{}, &AlarmDisposition{}, &AlarmSuppressionWindow{}, &AlarmCycleSuppression{}, &EntityGroupVersion{}, &EntityAttribute{}))
+	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).AutoMigrate(&DeviceType{}, &Alarm{}, &PendingAlarmEvent{}, &AlarmDisposition{}, &AlarmSuppressionWindow{}, &AlarmCycleSuppression{}, &EntityGroupVersion{}, &EntityAttribute{}))
 	require.NoError(t, rdb.CreateTenantTokenIndex(api.RDB.Database.WithContext(core.WithSystemContext(context.Background())), &AlarmSuppressionWindow{}))
 	claims := &auth.Claims{TokenType: auth.TokenTypeAccess, Authorities: []string{"*"}, Tenant: "acme"}
 	claims.Subject = "operator"
@@ -316,7 +317,7 @@ func TestSuppressionInternalCRUDCacheAndCap(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, match)
 	reason := "updated"
-	updated, err := api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Reason: &reason})
+	updated, err := api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Reason: dcgraphql.OptionalStringOf(reason)})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, updated.Version)
 	require.Equal(t, w.Kind, updated.Kind)
@@ -442,6 +443,11 @@ func TestSuppressionLoadErrorsPropagate(t *testing.T) {
 	api, ctx, id := newSuppressionTestApi(t)
 	_, err := api.SuppressionFor(context.Background(), id, "hot", "MINOR", time.Now())
 	require.Error(t, err)
+	w := suppressionTestWindow()
+	start, end := time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(time.Hour)
+	w.StartTime, w.EndTime = &start, &end
+	_, err = api.CreateAlarmSuppressionWindow(ctx, &w)
+	require.NoError(t, err)
 	require.NoError(t, api.RDB.Database.Migrator().DropTable(&EntityRelationship{}))
 	_, err = api.SuppressionFor(ctx, id, "hot", "MINOR", time.Now())
 	require.Error(t, err)
@@ -453,15 +459,14 @@ func TestSuppressionPartialUpdateAuthorizesMergedAndExisting(t *testing.T) {
 	_, err := api.CreateAlarmSuppressionWindow(ctx, &w)
 	require.NoError(t, err)
 	end := w.StartTime.Add(25 * time.Hour)
-	endPtr := &end
-	_, err = api.UpdateAlarmSuppressionWindow(suppressionCaller(ctx, false), w.Token, &AlarmSuppressionUpdateRequest{EndTime: &endPtr})
+	_, err = api.UpdateAlarmSuppressionWindow(suppressionCaller(ctx, false), w.Token, &AlarmSuppressionUpdateRequest{EndTime: dcgraphql.OptionalStringOf(end.Format(time.RFC3339Nano))})
 	require.ErrorIs(t, err, auth.ErrForbidden)
 	stored, err := api.AlarmSuppressionWindowByToken(ctx, w.Token)
 	require.NoError(t, err)
 	require.True(t, stored.EndTime.Equal(*w.EndTime))
-	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{EndTime: &endPtr})
+	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{EndTime: dcgraphql.OptionalStringOf(end.Format(time.RFC3339Nano))})
 	require.NoError(t, err)
-	_, err = api.UpdateAlarmSuppressionWindow(suppressionCaller(ctx, false), w.Token, &AlarmSuppressionUpdateRequest{EndTime: &w.EndTime})
+	_, err = api.UpdateAlarmSuppressionWindow(suppressionCaller(ctx, false), w.Token, &AlarmSuppressionUpdateRequest{EndTime: dcgraphql.OptionalStringOf(w.EndTime.Format(time.RFC3339Nano))})
 	require.ErrorIs(t, err, auth.ErrForbidden, "shrinking an existing broad window still needs NotificationWrite")
 	_, err = api.EndAlarmSuppressionWindow(suppressionCaller(ctx, false), w.Token)
 	require.ErrorIs(t, err, auth.ErrForbidden)
@@ -494,7 +499,7 @@ func TestSuppressionCacheReplicaTTLAndTenantIsolation(t *testing.T) {
 	w.StartTime, w.EndTime = &start, &end
 	_, err := api.CreateAlarmSuppressionWindow(ctx, &w)
 	require.NoError(t, err)
-	// A higher-version unrelated window masks changes to max(version).
+	// An unrelated high version must not mask an edit to a lower version.
 	high := suppressionTestWindow()
 	high.StartTime, high.EndTime = &start, &end
 	high.Token, high.Version = "unrelated", 100
@@ -506,8 +511,13 @@ func TestSuppressionCacheReplicaTTLAndTenantIsolation(t *testing.T) {
 	require.NotNil(t, match)
 	require.Empty(t, match.WindowName)
 	require.NoError(t, api.RDB.DB(ctx).Model(&AlarmSuppressionWindow{}).Where("token = ?", w.Token).Updates(map[string]any{"name": "new name", "version": 2}).Error)
-	// Advance the entry's age instead of sleeping; TTL must refresh even with the
-	// same count and maximum version. Fresh facts are never part of this cache.
+	match, err = replica.SuppressionFor(ctx, id, "hot", "MINOR", *w.StartTime)
+	require.NoError(t, err)
+	require.NotNil(t, match)
+	require.Equal(t, "new name", match.WindowName, "sum(version) detects the edit before the TTL")
+	require.NoError(t, api.RDB.DB(ctx).Model(&AlarmSuppressionWindow{}).Where("token = ?", w.Token).Update("name", "TTL name").Error)
+	// TTL still refreshes writes whose signature is unchanged. Fresh device facts
+	// are never part of this tenant cache.
 	replica.suppressionCache.Lock()
 	entry := replica.suppressionCache.tenants["acme"]
 	entry.loaded = time.Now().Add(-5 * time.Second)
@@ -516,7 +526,7 @@ func TestSuppressionCacheReplicaTTLAndTenantIsolation(t *testing.T) {
 	match, err = replica.SuppressionFor(ctx, id, "hot", "MINOR", *w.StartTime)
 	require.NoError(t, err)
 	require.NotNil(t, match)
-	require.Equal(t, "new name", match.WindowName)
+	require.Equal(t, "TTL name", match.WindowName)
 	other := core.WithTenant(ctx, "other")
 	otherID := seedAnchorDevice(t, api, other, "other", "pump")
 	match, err = replica.SuppressionFor(other, otherID, "hot", "MINOR", *w.StartTime)
@@ -536,19 +546,16 @@ func TestSuppressionPartialNullableFieldsAndScheduleSwitch(t *testing.T) {
 	_, err := api.CreateAlarmSuppressionWindow(ctx, &w)
 	require.NoError(t, err)
 	reason := "new reason"
-	updated, err := api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Reason: &reason})
+	updated, err := api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Reason: dcgraphql.OptionalStringOf(reason)})
 	require.NoError(t, err)
 	require.Equal(t, w.Name, updated.Name)
 	require.Equal(t, w.Description, updated.Description)
 	require.Equal(t, string(*w.Metadata), string(*updated.Metadata))
 	require.Equal(t, w.AlarmKeys, updated.AlarmKeys)
 	require.Equal(t, w.BypassSeverity, updated.BypassSeverity)
-	clearString := sql.NullString{}
-	var clearMetadata *datatypes.JSON
-	var clearKeys []string
 	updated, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{
-		Name: &clearString, Description: &clearString, Metadata: &clearMetadata,
-		BypassSeverity: &clearString, AlarmKeys: &clearKeys,
+		Name: dcgraphql.ClearedString(), Description: dcgraphql.ClearedString(), Metadata: dcgraphql.ClearedString(),
+		BypassSeverity: dcgraphql.ClearedString(), AlarmKeys: dcgraphql.ClearedStringList(),
 	})
 	require.NoError(t, err)
 	require.False(t, updated.Name.Valid)
@@ -558,11 +565,10 @@ func TestSuppressionPartialNullableFieldsAndScheduleSwitch(t *testing.T) {
 	require.False(t, updated.BypassSeverity.Valid)
 	name := sql.NullString{String: "replacement", Valid: true}
 	metadata = datatypes.JSON(`{"work":"replacement"}`)
-	metadataPtr := &metadata
 	keys := []string{"cold"}
 	bypass := sql.NullString{String: "CRITICAL", Valid: true}
 	updated, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{
-		Name: &name, Description: &name, Metadata: &metadataPtr, AlarmKeys: &keys, BypassSeverity: &bypass,
+		Name: dcgraphql.OptionalStringOf(name.String), Description: dcgraphql.OptionalStringOf(name.String), Metadata: dcgraphql.OptionalStringOf(string(metadata)), AlarmKeys: dcgraphql.OptionalStringListOf(keys), BypassSeverity: dcgraphql.OptionalStringOf(bypass.String),
 	})
 	require.NoError(t, err)
 	require.Equal(t, name, updated.Name)
@@ -570,28 +576,26 @@ func TestSuppressionPartialNullableFieldsAndScheduleSwitch(t *testing.T) {
 	require.Equal(t, string(metadata), string(*updated.Metadata))
 	require.Equal(t, keys, updated.AlarmKeys)
 	require.Equal(t, bypass, updated.BypassSeverity)
-	var clearTime *time.Time
-	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{StartTime: &clearTime, Name: &clearString})
+	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{StartTime: dcgraphql.ClearedString(), Name: dcgraphql.ClearedString()})
 	require.ErrorIs(t, err, ErrInvalidAlarmSuppression)
 	stored, err := api.AlarmSuppressionWindowByToken(ctx, w.Token)
 	require.NoError(t, err)
 	require.Equal(t, name, stored.Name, "an invalid merged schedule must not write the accompanying name edit")
 	recurring := suppressionRecurringWindow()
 	from, until := *w.StartTime, w.StartTime.Add(7*24*time.Hour)
-	fromPtr, untilPtr := &from, &until
 	updated, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{
-		Kind: &recurring.Kind, StartTime: &clearTime, EndTime: &clearTime,
-		Timezone: &recurring.Timezone, Slots: &recurring.Slots, ValidFrom: &fromPtr, ValidUntil: &untilPtr,
+		Kind: OptionalAlarmSuppressionKind{Set: true, Value: func() *AlarmSuppressionKind { k := AlarmSuppressionKind(recurring.Kind); return &k }()}, StartTime: dcgraphql.ClearedString(), EndTime: dcgraphql.ClearedString(),
+		Timezone: dcgraphql.OptionalStringOf(recurring.Timezone.String), Slots: dcgraphql.OptionalStringOf(string(recurring.Slots)), ValidFrom: dcgraphql.OptionalStringOf(from.Format(time.RFC3339Nano)), ValidUntil: dcgraphql.OptionalStringOf(until.Format(time.RFC3339Nano)),
 	})
 	require.NoError(t, err)
 	require.Equal(t, SuppressionRecurring, updated.Kind)
 	require.Nil(t, updated.StartTime)
 	require.Nil(t, updated.EndTime)
-	updated, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{ValidFrom: &clearTime, ValidUntil: &clearTime})
+	updated, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{ValidFrom: dcgraphql.ClearedString(), ValidUntil: dcgraphql.ClearedString()})
 	require.NoError(t, err)
 	require.Nil(t, updated.ValidFrom)
 	require.Nil(t, updated.ValidUntil)
-	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Timezone: &clearString})
+	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Timezone: dcgraphql.ClearedString()})
 	require.ErrorIs(t, err, ErrInvalidAlarmSuppression)
 }
 
@@ -612,7 +616,7 @@ func TestSuppressionCreatorFullScopeSurvivesTransfer(t *testing.T) {
 		require.Equal(t, owner != "C", match != nil)
 	}
 	reason := "admin edit"
-	updated, err := api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Reason: &reason})
+	updated, err := api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Reason: dcgraphql.OptionalStringOf(reason)})
 	require.NoError(t, err)
 	require.Equal(t, created.CreatorScope, updated.CreatorScope)
 	stored, err := api.AlarmSuppressionWindowByToken(ctx, w.Token)
@@ -665,7 +669,7 @@ func TestSuppressionVersionConflictAndSingleConnection(t *testing.T) {
 	require.EqualValues(t, 2, stored.Version)
 	seedAnchorDevice(t, api, ctx, "acme", "second")
 	targets := []AlarmSuppressionTarget{{"DEVICE", "second"}}
-	_, err = api.UpdateAlarmSuppressionWindow(timed, w.Token, &AlarmSuppressionUpdateRequest{Targets: &targets})
+	_, err = api.UpdateAlarmSuppressionWindow(timed, w.Token, &AlarmSuppressionUpdateRequest{Targets: OptionalAlarmSuppressionTargets{Set: true, Value: targets}})
 	require.NoError(t, err, "anchor computation must not hold the only pooled connection")
 }
 
@@ -789,8 +793,7 @@ func TestSuppressionReviveRespectsCap(t *testing.T) {
 		live.StartTime, live.EndTime = &start, &liveEnd
 		require.NoError(t, api.RDB.DB(ctx).Create(&live).Error)
 	}
-	liveEndPtr := &liveEnd
-	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{EndTime: &liveEndPtr})
+	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{EndTime: dcgraphql.OptionalStringOf(liveEnd.Format(time.RFC3339Nano))})
 	require.ErrorIs(t, err, ErrInvalidAlarmSuppression)
 	require.EqualError(t, err, suppressionInvalid("at most 500 live windows per tenant").Error())
 	stored, err := api.AlarmSuppressionWindowByToken(ctx, w.Token)
@@ -798,9 +801,49 @@ func TestSuppressionReviveRespectsCap(t *testing.T) {
 	require.Equal(t, expired.Version, stored.Version)
 	require.True(t, stored.EndTime.Equal(expiredEnd))
 	reason := "edited at cap"
-	updated, err := api.UpdateAlarmSuppressionWindow(ctx, "live-0", &AlarmSuppressionUpdateRequest{Reason: &reason})
+	updated, err := api.UpdateAlarmSuppressionWindow(ctx, "live-0", &AlarmSuppressionUpdateRequest{Reason: dcgraphql.OptionalStringOf(reason)})
 	require.NoError(t, err)
 	require.Equal(t, reason, updated.Reason)
-	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Reason: &reason})
+	_, err = api.UpdateAlarmSuppressionWindow(ctx, w.Token, &AlarmSuppressionUpdateRequest{Reason: dcgraphql.OptionalStringOf(reason)})
 	require.NoError(t, err, "an expired window that stays expired consumes no capacity")
+}
+
+func TestSuppressionNegativeCacheIsTenantLocalAndInvalidated(t *testing.T) {
+	api, ctx, _ := newSuppressionTestApi(t)
+	count := 0
+	counter := func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "alarm_suppression_windows" {
+			count++
+		}
+	}
+	db := api.RDB.Database
+	require.NoError(t, db.Callback().Row().Before("gorm:row").Register("test:negative", counter))
+	t.Cleanup(func() { _ = db.Callback().Row().Remove("test:negative") })
+	_, err := api.suppressionWindows(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+	_, err = api.suppressionWindows(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, count, "empty tenant needs no repeat database query")
+	_, err = api.suppressionWindows(core.WithTenant(ctx, "other"))
+	require.NoError(t, err)
+	require.Equal(t, 4, count, "negative cache is tenant-local")
+	w := suppressionTestWindow()
+	_, err = api.CreateAlarmSuppressionWindow(ctx, &w)
+	require.NoError(t, err)
+	api.suppressionCache.Lock()
+	_, exists := api.suppressionCache.tenants["acme"]
+	api.suppressionCache.Unlock()
+	require.False(t, exists, "local creation invalidates the negative cache")
+	_, err = api.suppressionWindows(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 6, count)
+	api.suppressionCache.Lock()
+	entry := api.suppressionCache.tenants["other"]
+	entry.loaded = time.Now().Add(-5 * time.Second)
+	api.suppressionCache.tenants["other"] = entry
+	api.suppressionCache.Unlock()
+	_, err = api.suppressionWindows(core.WithTenant(ctx, "other"))
+	require.NoError(t, err)
+	require.Equal(t, 8, count, "negative cache expires at five seconds")
 }

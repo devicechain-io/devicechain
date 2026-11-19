@@ -55,6 +55,9 @@ type CachedApi struct {
 	// fills joins concurrent fills of one per-type resolution on this replica, so a publish
 	// costs one decoder compile per replica rather than one per in-flight event.
 	fills singleflight.Group
+	// evictionWait bounds how long a committed write waits for the evictions it owes
+	// (evictAfterCommit); zero is DefaultEvictionWait. A field only so tests can shorten it.
+	evictionWait time.Duration
 }
 
 // Caches returns the caches this decorator reads from and evicts. It exists for the tests
@@ -131,7 +134,9 @@ func (capi *CachedApi) EvictDeviceByToken(ctx context.Context, token string) {
 	if !ok {
 		return
 	}
-	_ = capi.caches.DeviceByToken.Delete(ctx, deviceByTokenKey(tenant, token))
+	capi.evictAfterCommit(ctx, "device-by-token", func(ctx context.Context) {
+		_ = capi.caches.DeviceByToken.Delete(ctx, deviceByTokenKey(tenant, token))
+	})
 }
 
 // EvictEntityDelete satisfies model.CacheEvictor (ADR-044 F2): it drops the caches
@@ -144,11 +149,13 @@ func (capi *CachedApi) EvictEntityDelete(ctx context.Context, etype entity.Type,
 	if !ok {
 		return
 	}
-	if etype == entity.TypeDevice {
-		_ = capi.caches.DeviceByToken.Delete(ctx, deviceByTokenKey(tenant, token))
-		_ = capi.caches.RelationshipsBySource.Delete(ctx, relationshipsBySourceKey(tenant, id))
-	}
-	capi.evictRelationshipSources(ctx, tenant, trackingSourceDeviceIds)
+	capi.evictAfterCommit(ctx, "entity-delete", func(ctx context.Context) {
+		if etype == entity.TypeDevice {
+			_ = capi.caches.DeviceByToken.Delete(ctx, deviceByTokenKey(tenant, token))
+			_ = capi.caches.RelationshipsBySource.Delete(ctx, relationshipsBySourceKey(tenant, id))
+		}
+		capi.evictRelationshipSources(ctx, tenant, trackingSourceDeviceIds)
+	})
 }
 
 // EvictRelationshipSources drops the cached tracked-relationship set of each given
@@ -160,7 +167,9 @@ func (capi *CachedApi) EvictRelationshipSources(ctx context.Context, sourceDevic
 	if !ok {
 		return
 	}
-	capi.evictRelationshipSources(ctx, tenant, sourceDeviceIds)
+	capi.evictAfterCommit(ctx, "relationship-sources", func(ctx context.Context) {
+		capi.evictRelationshipSources(ctx, tenant, sourceDeviceIds)
+	})
 }
 
 // evictRelationshipSources evicts many sets at once (a relationship type's update touches
@@ -183,9 +192,11 @@ func (capi *CachedApi) EvictMemberships(ctx context.Context, entityType string, 
 	if !ok {
 		return
 	}
-	for _, id := range entityIds {
-		_ = capi.caches.MembershipsByEntity.Delete(ctx, membershipsByEntityKey(tenant, entityType, id))
-	}
+	capi.evictAfterCommit(ctx, "memberships", func(ctx context.Context) {
+		for _, id := range entityIds {
+			_ = capi.caches.MembershipsByEntity.Delete(ctx, membershipsByEntityKey(tenant, entityType, id))
+		}
+	})
 }
 
 // membershipsByEntityKey builds the tenant-scoped cache key for an entity's group
@@ -202,7 +213,9 @@ func (capi *CachedApi) EvictScopedGroupsExist(ctx context.Context) {
 	if !ok {
 		return
 	}
-	_ = capi.caches.ScopedGroupsExist.Delete(ctx, tenant)
+	capi.evictAfterCommit(ctx, "scoped-groups-exist", func(ctx context.Context) {
+		_ = capi.caches.ScopedGroupsExist.Delete(ctx, tenant)
+	})
 }
 
 // EvictFenceSetVersion satisfies model.CacheEvictor (ADR-078): a geofence mutation minted
@@ -229,16 +242,20 @@ func (capi *CachedApi) EvictFenceSetVersion(ctx context.Context) {
 	if !ok {
 		return
 	}
-	typeIds, err := capi.Api.deviceTypeIdsForTenant(ctx)
-	if err != nil {
-		log.Warn().Err(err).Str("tenant", tenant).
-			Msg("Could not list the tenant's device types to evict their cached profile resolutions; " +
-				"they are served until the cache's time to live expires.")
-		return
-	}
-	for _, typeId := range typeIds {
-		capi.dropProfileResolution(ctx, tenant, typeId)
-	}
+	capi.evictAfterCommit(ctx, "fence-set-version", func(ctx context.Context) {
+		rctx, cancel := context.WithTimeout(ctx, evictionReadTimeout)
+		typeIds, err := capi.Api.deviceTypeIdsForTenant(rctx)
+		cancel()
+		if err != nil {
+			log.Warn().Err(err).Str("tenant", tenant).
+				Msg("Could not list the tenant's device types to evict their cached profile resolutions; " +
+					"they are served until the cache's time to live expires.")
+			return
+		}
+		for _, typeId := range typeIds {
+			capi.dropProfileResolution(ctx, tenant, typeId)
+		}
+	})
 }
 
 // AnyScopedGroups serves the resolver's pay-nothing gate (ADR-062 Decision 7) from a
@@ -529,7 +546,9 @@ func (capi *CachedApi) UpdateDeviceTypeWithBreakGlass(ctx context.Context, token
 	}
 	if updated != nil {
 		if tenant, ok := core.TenantFromContext(ctx); ok {
-			capi.dropProfileResolution(ctx, tenant, updated.ID)
+			capi.evictAfterCommit(ctx, "profile-resolution", func(ctx context.Context) {
+				capi.dropProfileResolution(ctx, tenant, updated.ID)
+			})
 		}
 	}
 	return updated, nil
@@ -778,16 +797,20 @@ func (capi *CachedApi) evictProfileResolution(ctx context.Context, profileId uin
 	if !ok {
 		return
 	}
-	typeIds, err := capi.Api.deviceTypeIdsForProfile(ctx, profileId)
-	if err != nil {
-		log.Warn().Err(err).Str("tenant", tenant).Uint("profileId", profileId).
-			Msg("Could not list the device types adopting a profile to evict their cached profile " +
-				"resolutions; they are served until the cache's time to live expires.")
-		return
-	}
-	for _, typeId := range typeIds {
-		capi.dropProfileResolution(ctx, tenant, typeId)
-	}
+	capi.evictAfterCommit(ctx, "profile-resolution", func(ctx context.Context) {
+		rctx, cancel := context.WithTimeout(ctx, evictionReadTimeout)
+		typeIds, err := capi.Api.deviceTypeIdsForProfile(rctx, profileId)
+		cancel()
+		if err != nil {
+			log.Warn().Err(err).Str("tenant", tenant).Uint("profileId", profileId).
+				Msg("Could not list the device types adopting a profile to evict their cached profile " +
+					"resolutions; they are served until the cache's time to live expires.")
+			return
+		}
+		for _, typeId := range typeIds {
+			capi.dropProfileResolution(ctx, tenant, typeId)
+		}
+	})
 }
 
 func (capi *CachedApi) PublishDeviceProfileReviewed(ctx context.Context, token string, label, description *string, publishedBy string, automationReviewToken *string) (*DeviceProfileVersion, error) {

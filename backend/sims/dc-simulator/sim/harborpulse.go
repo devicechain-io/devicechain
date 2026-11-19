@@ -27,7 +27,8 @@ import (
 // The story, one beat per rule (sim hours; one sim day is harborpulseDayLength of wall time):
 //
 //	08:30-09:45 peak-demand     the Ferry Terminal's 1-minute average demand passes its cap (MINOR)
-//	11:00-12:00 lamp-flicker    one East Quay lamp's driver reports intermittent faults (repeating, MINOR)
+//	10:45-11:30 maintenance     East Quay lamp driver replacement holds its flicker page
+//	11:00-12:00 lamp-flicker    East and North Quay lamps report intermittent faults (repeating, MAJOR)
 //	14:00-15:30 connector-hot   a Basin charger's connector overheats under a long session
 //	                            (sliding average, MAJOR) and is sent `derate`; obeying it cools it
 //	17:00-18:30 surge-rising    every gauge rises faster than the rate limit (deltaRate, WARNING)
@@ -62,9 +63,12 @@ type harborpulse struct {
 	now     func() time.Time
 
 	// jobsMu guards the sim days whose jobs are scheduled and the ledger of them (S4).
-	jobsMu    sync.Mutex
-	scheduled map[int]bool
-	jobs      []ScenarioJob
+	jobsMu                 sync.Mutex
+	scheduled              map[int]bool
+	maintenanceScheduled   map[int]bool
+	maintenancePruned      map[string]bool
+	maintenanceUnavailable bool
+	jobs                   []ScenarioJob
 
 	s3b     harborS3bState
 	s5      harborS5State
@@ -125,7 +129,7 @@ func HarborpulseDefects() []string {
 		HarborpulseDefectMQTTUnreachable, HarborpulseDefectNightDimAllLights,
 		HarborpulseDefectOTACapThree, HarborpulseDefectOTAFailureDisabled, HarborpulseDefectOTAGroupMissingCharger, HarborpulseDefectOTASignatureOmitted, HarborpulseDefectRefuseDerate,
 		HarborpulseDefectReplacementNewDevice, HarborpulseDefectReplacementOldCredentialLeftLive,
-		HarborpulseDefectSilenceNorthLamp, HarborpulseDefectTruckStaysHome, HarborpulseDefectUnscopedWatch,
+		HarborpulseDefectSilenceNorthLamp, HarborpulseDefectSuppressionWrongDevice, HarborpulseDefectTruckStaysHome, HarborpulseDefectUnscopedWatch,
 		HarborpulseDefectUnsignedWebhook, HarborpulseDefectWrongWellDepth,
 	}
 }
@@ -153,6 +157,7 @@ type harborDefects struct {
 	otaSignatureOmitted, otaGroupMissingCharger, otaCapThree, otaFailureDisabled bool
 	burstDropOn429                                                               bool
 	replacementNewDevice, replacementOldCredentialLeftLive                       bool
+	suppressionWrongDevice                                                       bool
 	names                                                                        []string
 }
 
@@ -195,6 +200,8 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 			d.otaCapThree = true
 		case HarborpulseDefectOTAFailureDisabled:
 			d.otaFailureDisabled = true
+		case HarborpulseDefectSuppressionWrongDevice:
+			d.suppressionWrongDevice = true
 		case HarborpulseDefectAttributeNotUpdated:
 			d.attributeNotUpdated = true
 		case HarborpulseDefectDownlinkNack:
@@ -256,6 +263,7 @@ var harborBeats = []struct {
 	{"commute", 7.5, 10},
 	{"peak-demand", 8.5, 9.75},
 	{"lamp-flicker", 11, 12},
+	{"lamp-maintenance", 10.75, 11.5},
 	{"connector-hot", 14, harborOverheatTo},
 	{"storm", 16, 22.5},
 	{"air-lock", harborAirLockFrom, harborAirLockTo},
@@ -728,7 +736,7 @@ func harborpulseLightProfile() ProfileSpec {
 			RepeatingAlarmRule{
 				Token: HarborpulseFlickerRule, Name: "Harborpulse lamp flicker", Metric: HarborpulseLampFaultKey,
 				Op: OpGt, Threshold: 0.5, Count: HarborpulseFlickerCount, Window: HarborpulseFlickerWindow,
-				Severity: SeverityMinor, AlarmKey: HarborpulseFlickerAlarmKey, Enabled: true,
+				Severity: SeverityMajor, AlarmKey: HarborpulseFlickerAlarmKey, Enabled: true,
 			}.Spec(),
 			AbsenceAlarmRule{
 				Token: HarborpulseLightSilentRule, Name: "Harborpulse light silent", Metric: HarborpulseLampOnKey,
@@ -857,6 +865,9 @@ func (s *harborpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
 	if err := deleteCampaignsWithPrefix(ctx, rt, HarborpulseNightDimPrefix, HarborpulseFlushPrefix); err != nil {
 		return err
 	}
+	if err := s.bootstrapMaintenance(ctx, rt); err != nil {
+		return err
+	}
 	return s.provisionChargerOTA(ctx, rt)
 }
 
@@ -917,7 +928,11 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	if jobErr != nil {
 		log.Error().Err(jobErr).Msg("schedule the harborpulse day's jobs failed; retrying next tick")
 	}
-	return errors.Join(beatErr, measErr, locErr, backErr, loraErr, jobErr)
+	maintErr := s.scheduleMaintenance(ctx, rt, now)
+	if maintErr != nil {
+		log.Error().Err(maintErr).Msg("schedule lamp maintenance failed; retrying next tick")
+	}
+	return errors.Join(beatErr, measErr, locErr, backErr, loraErr, jobErr, maintErr)
 }
 
 // startedAt is the first tick, the instant the day is measured from.

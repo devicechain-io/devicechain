@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -20,9 +21,11 @@ func strptr(s string) *string { return &s }
 // optional expiry, for exercising evaluateCredential in isolation.
 func credentialRow(ctype CredentialType, value *string, expires *time.Time) *DeviceCredential {
 	cred := &DeviceCredential{
-		CredentialType: string(ctype),
-		CredentialId:   "cred-1",
-		Enabled:        true,
+		DeviceCredential: identity.DeviceCredential{
+			CredentialType: string(ctype),
+			CredentialId:   "cred-1",
+			Enabled:        true,
+		},
 	}
 	cred.TenantId = partialUpdateTenant
 	if value != nil && *value == "" {

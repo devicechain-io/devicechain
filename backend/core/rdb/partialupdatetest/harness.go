@@ -68,8 +68,10 @@ import (
 // every field is covered by 3 or 6, and a family that declares a field in the wrong kind
 // FAILS rather than falling through the gap between them.
 //
-// Two more run alongside them: EveryRequestFieldIsDeclared asks the request TYPE whether
-// the family's table is complete, and FixtureIsAsStrictAsProduction asks whether the
+// Three more run alongside them: EveryRequestFieldIsDeclared asks the request TYPE whether
+// the family's table is complete, EveryRequestFieldIsDriven asks whether the families that
+// share a request type together drive every field of it (a limitation in one family is a
+// claim that another drives the field), and FixtureIsAsStrictAsProduction asks whether the
 // fixture refuses what production refuses.
 //
 // # What the harness deliberately does NOT cover
@@ -106,9 +108,21 @@ type Family[A any] struct {
 	// Fields is the family's field table. Every exported field of the request type must
 	// appear here; EveryRequestFieldIsDeclared is what enforces it.
 	Fields []Field
+	// FieldLimitations names conditional fields this fixture cannot populate and
+	// drive independently. Each reason must point to complementary coverage.
+	// Other fields still run every property; whole-family exemptions are not allowed.
+	FieldLimitations map[string]string
 }
 
 // Suite is everything one service supplies to Run.
+//
+// ExternallyDriven names request fields no harness family can drive, but dedicated
+// tests do. It is suite-level so the reader sees ONE deliberate exemption, rather
+// than N per-family limitations each claiming another family supplies the coverage.
+// Keys are "RequestTypeName.field" (the Go struct name, with a case-insensitive field);
+// reasons must name the tests that drive it. Every family using that request type
+// must limit the field, and none may declare it: an exemption that outlives its gap
+// fails rather than silently hiding coverage that has moved back into the harness.
 type Suite[A any] struct {
 	// NewApi builds a fresh Api over a throwaway database migrated for the given tables.
 	// NewSQLiteDB does the database half; the service wraps it in its own Api type.
@@ -116,7 +130,8 @@ type Suite[A any] struct {
 	// Context is the tenant context the families run under. See TenantContext.
 	Context func() context.Context
 	// Families is the registry. Converting the next family is adding a row to it.
-	Families []Family[A]
+	Families         []Family[A]
+	ExternallyDriven map[string]string
 
 	// CreateWithToken attempts to CREATE some entity of this service's under the given
 	// token, returning the API's error unchanged. It is what FixtureIsAsStrictAsProduction
@@ -154,6 +169,7 @@ func Run[A any](t *testing.T, s Suite[A]) {
 	t.Run("ARequiredFieldRefusesAnExplicitNull", func(t *testing.T) { aRequiredFieldRefusesAnExplicitNull(t, s) })
 	t.Run("UnknownReferenceRefusesTheWholeUpdate", func(t *testing.T) { unknownReferenceRefusesTheWholeUpdate(t, s) })
 	t.Run("EveryRequestFieldIsDeclared", func(t *testing.T) { everyRequestFieldIsDeclared(t, s) })
+	t.Run("EveryRequestFieldIsDriven", func(t *testing.T) { everyRequestFieldIsDriven(t, s) })
 	t.Run("FixtureIsAsStrictAsProduction", func(t *testing.T) { fixtureIsAsStrictAsProduction(t, s) })
 }
 
@@ -568,12 +584,29 @@ func everyRequestFieldIsDeclared[A any](t *testing.T, s Suite[A]) {
 				declared[key] = f
 			}
 			exported := map[string]bool{}
+			limited := map[string]string{}
+			for name, why := range fam.FieldLimitations {
+				key := strings.ToLower(name)
+				if strings.TrimSpace(why) == "" {
+					t.Errorf("field limitation %q needs a reason and complementary coverage", name)
+				}
+				if _, exists := limited[key]; exists {
+					t.Errorf("duplicate field limitation %q", name)
+				}
+				if _, exists := declared[key]; exists {
+					t.Errorf("field %q is both declared and limited", name)
+				}
+				limited[key] = why
+			}
 			for i := 0; i < rt.NumField(); i++ {
 				sf := rt.Field(i)
 				if sf.PkgPath != "" {
 					continue // unexported: not reachable from the wire
 				}
 				exported[strings.ToLower(sf.Name)] = true
+				if _, ok := limited[strings.ToLower(sf.Name)]; ok {
+					continue
+				}
 				f, ok := declared[strings.ToLower(sf.Name)]
 				if !ok {
 					t.Errorf("%s.%s is a field callers can send, but no Field declares it — "+
@@ -593,6 +626,14 @@ func everyRequestFieldIsDeclared[A any](t *testing.T, s Suite[A]) {
 				if !exported[strings.ToLower(f.Name)] {
 					t.Errorf("%s declares field %q, but no exported request field matches it", rt.Name(), f.Name)
 				}
+			}
+			for name := range limited {
+				if !exported[name] {
+					t.Errorf("limitation %q matches no exported request field", name)
+				}
+			}
+			if len(fam.Fields) == 0 {
+				t.Error("a whole family cannot be limited: declare fields to drive")
 			}
 		})
 	}

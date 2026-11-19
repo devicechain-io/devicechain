@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/storehold/holdtest"
@@ -23,7 +23,7 @@ type outageNotifier struct {
 	calls    atomic.Int32
 }
 
-func (o *outageNotifier) Notify(_ context.Context, _ *dmmodel.AlarmStateChangeEvent) error {
+func (o *outageNotifier) Notify(_ context.Context, _ *dmcontract.AlarmStateChangeEvent) error {
 	if o.calls.Add(1) <= o.failures {
 		return o.err
 	}

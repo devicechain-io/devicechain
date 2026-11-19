@@ -1,0 +1,479 @@
+{
+  "version": 1,
+  "scenario": "harborpulse",
+  "dayLengthSeconds": 1440,
+  "startHour": 6,
+  "promenadeLat": 49.802,
+  "quays": [
+    {
+      "token": "hp-north-quay",
+      "name": "North Quay"
+    },
+    {
+      "token": "hp-east-quay",
+      "name": "East Quay"
+    },
+    {
+      "token": "hp-basin",
+      "name": "The Basin"
+    }
+  ],
+  "devices": [
+    {
+      "token": "hp-gauge-north-1",
+      "externalId": "PAW-GAUGE-NORTH-1",
+      "deviceType": "hp-tide-gauge",
+      "kind": "gauge",
+      "quay": "hp-north-quay",
+      "index": 1
+    },
+    {
+      "token": "hp-gauge-north-2",
+      "externalId": "PAW-GAUGE-NORTH-2",
+      "deviceType": "hp-tide-gauge",
+      "kind": "gauge",
+      "quay": "hp-north-quay",
+      "index": 2
+    },
+    {
+      "token": "hp-gauge-north-3",
+      "externalId": "PAW-GAUGE-NORTH-3",
+      "deviceType": "hp-tide-gauge",
+      "kind": "gauge",
+      "quay": "hp-north-quay",
+      "index": 3
+    },
+    {
+      "token": "hp-gauge-east-1",
+      "externalId": "PAW-GAUGE-EAST-1",
+      "deviceType": "hp-tide-gauge",
+      "kind": "gauge",
+      "quay": "hp-east-quay",
+      "index": 1
+    },
+    {
+      "token": "hp-gauge-east-2",
+      "externalId": "PAW-GAUGE-EAST-2",
+      "deviceType": "hp-tide-gauge",
+      "kind": "gauge",
+      "quay": "hp-east-quay",
+      "index": 2
+    },
+    {
+      "token": "hp-gauge-east-3",
+      "externalId": "PAW-GAUGE-EAST-3",
+      "deviceType": "hp-tide-gauge",
+      "kind": "gauge",
+      "quay": "hp-east-quay",
+      "index": 3
+    },
+    {
+      "token": "hp-gauge-basin-1",
+      "externalId": "PAW-GAUGE-BASIN-1",
+      "deviceType": "hp-tide-gauge",
+      "kind": "gauge",
+      "quay": "hp-basin",
+      "index": 1
+    },
+    {
+      "token": "hp-gauge-basin-2",
+      "externalId": "PAW-GAUGE-BASIN-2",
+      "deviceType": "hp-tide-gauge",
+      "kind": "gauge",
+      "quay": "hp-basin",
+      "index": 2
+    },
+    {
+      "token": "hp-gauge-basin-3",
+      "externalId": "PAW-GAUGE-BASIN-3",
+      "deviceType": "hp-tide-gauge",
+      "kind": "gauge",
+      "quay": "hp-basin",
+      "index": 3
+    },
+    {
+      "token": "hp-pump-north",
+      "externalId": "PAW-PUMP-NORTH",
+      "deviceType": "hp-pump-controller",
+      "kind": "pump",
+      "quay": "hp-north-quay",
+      "index": 1
+    },
+    {
+      "token": "hp-pump-east",
+      "externalId": "PAW-PUMP-EAST",
+      "deviceType": "hp-pump-controller",
+      "kind": "pump",
+      "quay": "hp-east-quay",
+      "index": 1
+    },
+    {
+      "token": "hp-pump-basin",
+      "externalId": "PAW-PUMP-BASIN",
+      "deviceType": "hp-pump-controller",
+      "kind": "pump",
+      "quay": "hp-basin",
+      "index": 1
+    },
+    {
+      "token": "hp-light-north-1",
+      "externalId": "PAW-LIGHT-NORTH-1",
+      "deviceType": "hp-street-light",
+      "kind": "light",
+      "quay": "hp-north-quay",
+      "index": 1,
+      "position": {
+        "lat": 49.802,
+        "lon": -12.2
+      }
+    },
+    {
+      "token": "hp-light-north-2",
+      "externalId": "PAW-LIGHT-NORTH-2",
+      "deviceType": "hp-street-light",
+      "kind": "light",
+      "quay": "hp-north-quay",
+      "index": 2,
+      "position": {
+        "lat": 49.802,
+        "lon": -12.193999999999999
+      }
+    },
+    {
+      "token": "hp-light-north-3",
+      "externalId": "PAW-LIGHT-NORTH-3",
+      "deviceType": "hp-street-light",
+      "kind": "light",
+      "quay": "hp-north-quay",
+      "index": 3,
+      "position": {
+        "lat": 49.802,
+        "lon": -12.187999999999999
+      }
+    },
+    {
+      "token": "hp-light-north-4",
+      "externalId": "PAW-LIGHT-NORTH-4",
+      "deviceType": "hp-street-light",
+      "kind": "light",
+      "quay": "hp-north-quay",
+      "index": 4,
+      "position": {
+        "lat": 49.802,
+        "lon": -12.181999999999999
+      }
+    },
+    {
+      "token": "hp-light-east-1",
+      "externalId": "PAW-LIGHT-EAST-1",
+      "deviceType": "hp-street-light",
+      "kind": "light",
+      "quay": "hp-east-quay",
+      "index": 1,
+      "position": {
+        "lat": 49.802,
+        "lon": -12.17
+      }
+    },
+    {
+      "token": "hp-light-east-2",
+      "externalId": "PAW-LIGHT-EAST-2",
+      "deviceType": "hp-street-light",
+      "kind": "light",
+      "quay": "hp-east-quay",
+      "index": 2,
+      "position": {
+        "lat": 49.802,
+        "lon": -12.164
+      }
+    },
+    {
+      "token": "hp-light-east-3",
+      "externalId": "PAW-LIGHT-EAST-3",
+      "deviceType": "hp-street-light",
+      "kind": "light",
+      "quay": "hp-east-quay",
+      "index": 3,
+      "position": {
+        "lat": 49.802,
+        "lon": -12.158
+      }
+    },
+    {
+      "token": "hp-light-east-4",
+      "externalId": "PAW-LIGHT-EAST-4",
+      "deviceType": "hp-street-light",
+      "kind": "light",
+      "quay": "hp-east-quay",
+      "index": 4,
+      "position": {
+        "lat": 49.802,
+        "lon": -12.152
+      }
+    },
+    {
+      "token": "hp-light-basin-1",
+      "externalId": "PAW-LIGHT-BASIN-1",
+      "deviceType": "hp-street-light",
+      "kind": "light",
+      "quay": "hp-basin",
+      "index": 1,
+      "position": {
+        "lat": 49.802,
+        "lon": -12.23
+      }
+    },
+    {
+      "token": "hp-light-basin-2",
+      "externalId": "PAW-LIGHT-BASIN-2",
+      "deviceType": "hp-street-light",
+      "kind": "light",
+      "quay": "hp-basin",
+      "index": 2,
+      "position": {
+        "lat": 49.802,
+        "lon": -12.224
+      }
+    },
+    {
+      "token": "hp-light-basin-3",
+      "externalId": "PAW-LIGHT-BASIN-3",
+      "deviceType": "hp-street-light",
+      "kind": "light",
+      "quay": "hp-basin",
+      "index": 3,
+      "position": {
+        "lat": 49.802,
+        "lon": -12.218
+      }
+    },
+    {
+      "token": "hp-light-basin-4",
+      "externalId": "PAW-LIGHT-BASIN-4",
+      "deviceType": "hp-street-light",
+      "kind": "light",
+      "quay": "hp-basin",
+      "index": 4,
+      "position": {
+        "lat": 49.802,
+        "lon": -12.212
+      }
+    },
+    {
+      "token": "hp-charger-north-1",
+      "externalId": "PAW-CHARGER-NORTH-1",
+      "deviceType": "hp-ev-charger",
+      "kind": "charger",
+      "quay": "hp-north-quay",
+      "index": 1
+    },
+    {
+      "token": "hp-charger-north-2",
+      "externalId": "PAW-CHARGER-NORTH-2",
+      "deviceType": "hp-ev-charger",
+      "kind": "charger",
+      "quay": "hp-north-quay",
+      "index": 2
+    },
+    {
+      "token": "hp-charger-east-1",
+      "externalId": "PAW-CHARGER-EAST-1",
+      "deviceType": "hp-ev-charger",
+      "kind": "charger",
+      "quay": "hp-east-quay",
+      "index": 1
+    },
+    {
+      "token": "hp-charger-east-2",
+      "externalId": "PAW-CHARGER-EAST-2",
+      "deviceType": "hp-ev-charger",
+      "kind": "charger",
+      "quay": "hp-east-quay",
+      "index": 2
+    },
+    {
+      "token": "hp-charger-basin-1",
+      "externalId": "PAW-CHARGER-BASIN-1",
+      "deviceType": "hp-ev-charger",
+      "kind": "charger",
+      "quay": "hp-basin",
+      "index": 1
+    },
+    {
+      "token": "hp-charger-basin-2",
+      "externalId": "PAW-CHARGER-BASIN-2",
+      "deviceType": "hp-ev-charger",
+      "kind": "charger",
+      "quay": "hp-basin",
+      "index": 2
+    },
+    {
+      "token": "hp-meter-quayside-lofts",
+      "externalId": "PAW-METER-LOFTS",
+      "deviceType": "hp-building-meter",
+      "kind": "meter",
+      "quay": "hp-north-quay",
+      "index": 1
+    },
+    {
+      "token": "hp-meter-ferry-terminal",
+      "externalId": "PAW-METER-FERRY",
+      "deviceType": "hp-building-meter",
+      "kind": "meter",
+      "quay": "hp-basin",
+      "index": 2
+    },
+    {
+      "token": "hp-truck-1",
+      "externalId": "PAW-TRUCK-1",
+      "deviceType": "hp-response-truck",
+      "kind": "truck",
+      "quay": "hp-basin",
+      "index": 1
+    },
+    {
+      "token": "hp-lora-gauge-north",
+      "externalId": "PAW-LORA-NORTH",
+      "deviceType": "hp-lora-tide-gauge",
+      "kind": "lora-gauge",
+      "quay": "hp-north-quay",
+      "index": 1
+    },
+    {
+      "token": "hp-lora-gauge-east",
+      "externalId": "PAW-LORA-EAST",
+      "deviceType": "hp-lora-tide-gauge",
+      "kind": "lora-gauge",
+      "quay": "hp-east-quay",
+      "index": 2
+    },
+    {
+      "token": "hp-lora-gauge-basin",
+      "externalId": "PAW-LORA-BASIN",
+      "deviceType": "hp-lora-tide-gauge",
+      "kind": "lora-gauge",
+      "quay": "hp-basin",
+      "index": 3
+    },
+    {
+      "token": "hp-legacy-gauge-basin",
+      "externalId": "PAW-LEGACY-BASIN",
+      "deviceType": "hp-legacy-tide-gauge",
+      "kind": "legacy-gauge",
+      "quay": "hp-basin",
+      "index": 1
+    }
+  ],
+  "fences": [
+    {
+      "token": "hp-flood-plain",
+      "name": "East Quay flood plain",
+      "ring": [
+        [
+          -12.202499999999999,
+          49.8005
+        ],
+        [
+          -12.1975,
+          49.8005
+        ],
+        [
+          -12.1975,
+          49.8035
+        ],
+        [
+          -12.202499999999999,
+          49.8035
+        ],
+        [
+          -12.202499999999999,
+          49.8005
+        ]
+      ]
+    },
+    {
+      "token": "hp-depot",
+      "name": "Works depot",
+      "ring": [
+        [
+          -12.210600000000001,
+          49.7996
+        ],
+        [
+          -12.2094,
+          49.7996
+        ],
+        [
+          -12.2094,
+          49.800399999999996
+        ],
+        [
+          -12.210600000000001,
+          49.800399999999996
+        ],
+        [
+          -12.210600000000001,
+          49.7996
+        ]
+      ]
+    }
+  ],
+  "depot": {
+    "lat": 49.8,
+    "lon": -12.21
+  },
+  "beats": [
+    {
+      "name": "night",
+      "from": 0,
+      "to": 6.5
+    },
+    {
+      "name": "commute",
+      "from": 7.5,
+      "to": 10
+    },
+    {
+      "name": "peak-demand",
+      "from": 8.5,
+      "to": 9.75
+    },
+    {
+      "name": "lamp-flicker",
+      "from": 11,
+      "to": 12
+    },
+    {
+      "name": "lamp-maintenance",
+      "from": 10.75,
+      "to": 11.5
+    },
+    {
+      "name": "connector-hot",
+      "from": 14,
+      "to": 15.5
+    },
+    {
+      "name": "storm",
+      "from": 16,
+      "to": 22.5
+    },
+    {
+      "name": "air-lock",
+      "from": 19,
+      "to": 20.5
+    },
+    {
+      "name": "feeder-outage",
+      "from": 19.75,
+      "to": 21.25
+    }
+  ],
+  "levels": {
+    "floodMinorM": 1.4,
+    "floodMajorM": 1.8,
+    "floodCriticalM": 2.2,
+    "quayFloodingM": 2.1,
+    "wetWellHighM": 2.5
+  }
+}

@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/svcclient"
@@ -31,7 +31,7 @@ import (
 // a smaller one hedged against it. Two numbers that must agree are better as one number named
 // in both places than as a value and a margin nobody re-derives: if they ever drift, the peer
 // REFUSES the request and this errors loudly, which is the failure direction to want.
-const geometryChunkSize = dmmodel.MaxGeoFenceGeometryHashesPerRequest
+const geometryChunkSize = dmcontract.MaxGeoFenceGeometryHashesPerRequest
 
 // maxGeometryRequests bounds the total GraphQL requests one geometry fetch may spend, across
 // every chunk and every split retry, so a peer that keeps refusing cannot spin this goroutine
@@ -196,7 +196,7 @@ func peerLacksQuery(err error, fields ...string) bool {
 }
 
 // fetchManifest reads one version's manifest, or the current one when version is non-positive.
-func (c *fenceSetClient) fetchManifest(ctx context.Context, tenant string, version int32) (*dmmodel.GeoFenceSetManifest, error) {
+func (c *fenceSetClient) fetchManifest(ctx context.Context, tenant string, version int32) (*dmcontract.GeoFenceSetManifest, error) {
 	var fences []entry
 	var got int32
 	if version > 0 {
@@ -220,16 +220,16 @@ func (c *fenceSetClient) fetchManifest(ctx context.Context, tenant string, versi
 		return nil, fmt.Errorf("asked device-management for fence-set version %d and it answered about version %d",
 			version, got)
 	}
-	manifest := &dmmodel.GeoFenceSetManifest{
+	manifest := &dmcontract.GeoFenceSetManifest{
 		Version: got,
-		Fences:  make([]dmmodel.GeoFenceManifestEntry, 0, len(fences)),
+		Fences:  make([]dmcontract.GeoFenceManifestEntry, 0, len(fences)),
 	}
 	for _, f := range fences {
 		if f.Token == "" || f.Hash == "" {
 			return nil, fmt.Errorf("fence-set version %d carries a manifest entry with an empty token or address (%q -> %q)",
 				got, f.Token, f.Hash)
 		}
-		manifest.Fences = append(manifest.Fences, dmmodel.GeoFenceManifestEntry{Token: f.Token, Hash: f.Hash})
+		manifest.Fences = append(manifest.Fences, dmcontract.GeoFenceManifestEntry{Token: f.Token, Hash: f.Hash})
 	}
 	return manifest, nil
 }
@@ -341,7 +341,7 @@ func (g *geometryFetch) chunk(ctx context.Context, hashes []string, into map[str
 				doc.Hash)
 		}
 		raw := json.RawMessage(doc.Geometry)
-		if got := dmmodel.GeoFenceGeometryHash([]byte(doc.Geometry)); got != doc.Hash {
+		if got := dmcontract.GeoFenceGeometryHash([]byte(doc.Geometry)); got != doc.Hash {
 			// Counted here rather than where this error is handled, for the reason
 			// classifyArchiveError records: a counter incremented at the handling site is
 			// only as reachable as that site, and this one must fire wherever a body is
@@ -387,7 +387,7 @@ var errGeometryHashMismatch = errors.New("geofence geometry does not match its c
 // plan costs a document fetched and not needed, and an entry EVICTED after the plan is refetched
 // on its own rather than reported as absent. The second is the one that bites — see the fetch
 // closure below.
-func (c *fenceSetClient) assemble(ctx context.Context, tenant string, manifest *dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error) {
+func (c *fenceSetClient) assemble(ctx context.Context, tenant string, manifest *dmcontract.GeoFenceSetManifest) (*geofence.FenceSet, error) {
 	if len(manifest.Fences) == 0 {
 		return geofence.EmptyFenceSet(manifest.Version), nil
 	}

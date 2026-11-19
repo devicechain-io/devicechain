@@ -165,6 +165,7 @@ func TestEachS4ControlTurnsExactlyItsInvariantRed(t *testing.T) {
 		name, defect, want, because string
 		mutate                      func(*day)
 	}{
+		{"lamp service targets a neighbour", sim.HarborpulseDefectSuppressionWrongDevice, InvMaintenanceHoldsPage, "early page", wrongMaintenanceDevice},
 		{"an East Quay lamp tagged as North Quay's", sim.HarborpulseDefectEastLampMislabelled, InvGroupsResolve, "missing: hp-light-east-2",
 			func(d *day) {
 				d.s4.Groups = map[string][]string{}
@@ -351,7 +352,7 @@ func TestSolarWaveJudgesAgainstThePlatformsPositions(t *testing.T) {
 // A day the sim scheduled no jobs for, or a holiday not yet planned past, says so rather than
 // passing.
 func TestS4MissingDataIsRed(t *testing.T) {
-	evaluateOneRedOf(t, []string{InvNightDim, InvWindowHoldsFlush}, func(d *day) { d.s4.Jobs = nil })
+	evaluateOneRedOf(t, []string{InvNightDim, InvWindowHoldsFlush, InvMaintenanceHoldsPage}, func(d *day) { d.s4.Jobs = nil; d.maint.Window = nil })
 	evaluateOneRed(t, InvHolidaySkipped, "not judged yet", func(d *day) {
 		d.s4.Campaigns[sim.HarborpulseDuskCampaign].PlannedThrough = time.Date(2026, 11, 16, 23, 0, 0, 0, time.UTC)
 	})

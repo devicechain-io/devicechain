@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
@@ -23,9 +23,9 @@ import (
 const validFactRule = `{"name":"n","type":"threshold","when":{"metric":"t","op":"gt","threshold":1}}`
 
 // factMsg builds a consumed published-rule fact message on tenant's scoped subject.
-func factMsg(t *testing.T, seq uint64, tenant, pvt string, ack *fakeAck, rules ...dmmodel.PublishedDetectionRule) messaging.Message {
+func factMsg(t *testing.T, seq uint64, tenant, pvt string, ack *fakeAck, rules ...dmcontract.PublishedDetectionRule) messaging.Message {
 	t.Helper()
-	b, err := dmproto.MarshalDetectionRulesPublishedEvent(&dmmodel.DetectionRulesPublishedEvent{
+	b, err := dmproto.MarshalDetectionRulesPublishedEvent(&dmcontract.DetectionRulesPublishedEvent{
 		ProfileVersionToken: pvt, Rules: rules,
 	})
 	if err != nil {
@@ -86,9 +86,9 @@ func TestStoreRuleSourcePreservesGroupScope(t *testing.T) {
 	store := newTestRuleStore(t)
 	ctx := context.Background()
 	// Persist exactly as the live fact consumer does.
-	rows := factRuleRows("acme", &dmmodel.DetectionRulesPublishedEvent{
+	rows := factRuleRows("acme", &dmcontract.DetectionRulesPublishedEvent{
 		ProfileVersionToken: "prof@1",
-		Rules: []dmmodel.PublishedDetectionRule{
+		Rules: []dmcontract.PublishedDetectionRule{
 			{Token: "scoped", Definition: validFactRule, EntityGroupToken: "arid-areas", EntityGroupVersion: 3},
 			{Token: "wide", Definition: validFactRule},
 		},
@@ -266,7 +266,7 @@ func TestDecodePublishedRuleFactDropsUnusable(t *testing.T) {
 	if _, _, ok := decodePublishedRuleFact(context.Background(), garbage); ok {
 		t.Fatal("a fact with an unparseable payload must be dropped")
 	}
-	good := factMsg(t, 1, "acme", "prof@1", nil, dmmodel.PublishedDetectionRule{Token: "r1", Definition: validFactRule})
+	good := factMsg(t, 1, "acme", "prof@1", nil, dmcontract.PublishedDetectionRule{Token: "r1", Definition: validFactRule})
 	tenant, ev, ok := decodePublishedRuleFact(context.Background(), good)
 	if !ok || tenant != "acme" || ev.ProfileVersionToken != "prof@1" {
 		t.Fatalf("a well-formed fact should decode: ok=%v tenant=%q ev=%+v", ok, tenant, ev)
@@ -396,7 +396,7 @@ func TestRuleConsumerPersistsThenDeliversThenAcks(t *testing.T) {
 	rp.RuleStore = store
 	rp.ruleUpdates = make(chan ruleUpdate, 1)
 	rp.RuleUpdatesReader = &fakeReader{results: []readResult{
-		{msg: factMsg(t, 1, "acme", "prof@1", ack, dmmodel.PublishedDetectionRule{Token: "r1", Definition: validFactRule})},
+		{msg: factMsg(t, 1, "acme", "prof@1", ack, dmcontract.PublishedDetectionRule{Token: "r1", Definition: validFactRule})},
 	}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

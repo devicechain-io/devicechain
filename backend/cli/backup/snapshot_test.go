@@ -116,7 +116,7 @@ func TestCoordinatorSnapshotAPIErrorLeavesNoManifest(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "backup")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err := Create(ctx, nc, "sample", dir, func(context.Context, io.Writer) error { t.Error("blob export ran after snapshot failure"); return nil })
+	err := Create(ctx, nc, "sample", dir, func(context.Context, io.Writer) error { t.Error("blob export ran after snapshot failure"); return nil }, nil)
 	if err == nil || !strings.Contains(err.Error(), "snapshot disk failure") {
 		t.Fatalf("wrong snapshot error: %v", err)
 	}

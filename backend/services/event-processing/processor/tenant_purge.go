@@ -92,12 +92,19 @@ func (rp *ResolvedEventsProcessor) EvictTenant(ctx context.Context, tenant strin
 	if err := rp.termHeldForEviction(); err != nil {
 		return 0, err
 	}
+	// A group worker is handed its term context only when the supervisor builds it, which
+	// is after the shared gate opens (the predecessor wait and the topology check come in
+	// between). Until then it has no term of its own to answer for.
+	term := rp.pctx()
+	if term == nil {
+		return 0, errNoTermHeld
+	}
 	req := tenantPurgeRequest{tenant: tenant, reply: make(chan tenantPurgeResult, 1)}
 	select {
 	case rp.tenantPurges <- req:
 	case <-ctx.Done():
 		return 0, fmt.Errorf("the DETECT loop did not accept the eviction of %q: %w", tenant, ctx.Err())
-	case <-rp.pctx().Done():
+	case <-term.Done():
 		return 0, fmt.Errorf("the DETECT loop is shutting down, so %q was not evicted", tenant)
 	}
 	select {
@@ -105,7 +112,7 @@ func (rp *ResolvedEventsProcessor) EvictTenant(ctx context.Context, tenant strin
 		return res.evicted, res.err
 	case <-ctx.Done():
 		return 0, fmt.Errorf("the DETECT loop did not answer the eviction of %q: %w", tenant, ctx.Err())
-	case <-rp.pctx().Done():
+	case <-term.Done():
 		return 0, fmt.Errorf("the DETECT loop shut down mid-eviction of %q", tenant)
 	}
 }
@@ -376,17 +383,25 @@ type TenantPurgeResponder struct {
 	partition  string
 	evict      func(ctx context.Context, tenant string) (int64, error)
 	sub        *nats.Subscription
+	children   []*TenantPurgeResponder
 }
 
 // NewTenantPurgeResponder wires a responder to a running processor.
 func NewTenantPurgeResponder(conn *nats.Conn, instanceId string,
 	rp *ResolvedEventsProcessor) *TenantPurgeResponder {
-	return &TenantPurgeResponder{
+	r := &TenantPurgeResponder{
 		conn:       conn,
 		instanceId: instanceId,
 		partition:  rp.partitionID(),
 		evict:      rp.EvictTenant,
 	}
+	if len(rp.groupWorkers) > 0 {
+		for _, worker := range rp.groupWorkers {
+			child := NewTenantPurgeResponder(conn, instanceId, worker)
+			r.children = append(r.children, child)
+		}
+	}
+	return r
 }
 
 // Start subscribes to this instance's eviction subject.
@@ -429,6 +444,14 @@ func (r *TenantPurgeResponder) Start() error {
 		return fmt.Errorf("subscribing to the DETECT tenant-eviction subject %q: %w", subject, err)
 	}
 	r.sub = sub
+	// One serial subscription per partition: a slow commit must not prevent an
+	// empty sibling from answering CLEAN. All subscriptions live across terms.
+	for _, child := range r.children {
+		if err := child.Start(); err != nil {
+			_ = r.Stop()
+			return err
+		}
+	}
 	log.Info().Str("subject", subject).Str("partition", r.partition).
 		Msg("DETECT tenant-eviction responder subscribed.")
 	return nil
@@ -436,19 +459,20 @@ func (r *TenantPurgeResponder) Start() error {
 
 // Stop tears down the subscription.
 func (r *TenantPurgeResponder) Stop() error {
-	if r.sub == nil {
-		return nil
+	var err error
+	for _, child := range r.children {
+		err = errors.Join(err, child.Stop())
 	}
-	return r.sub.Unsubscribe()
+	if r.sub == nil {
+		return err
+	}
+	return errors.Join(err, r.sub.Unsubscribe())
 }
 
 // handle evicts one tenant and replies with what happened.
 //
-// It ALWAYS replies when it can, including on failure. Silence and "I hold nothing" are
-// the same observation to a caller that only sees a timeout, and they are opposite facts:
-// the whole reason the reply carries an error field is so a partition that could not
-// commit is recorded as still holding the tenant instead of being counted as one that
-// answered clean.
+// Every partition reports failures explicitly, including before its first checkpoint
+// row exists. Only a successful eviction can answer CLEAN.
 func (r *TenantPurgeResponder) handle(msg *nats.Msg) {
 	if msg.Reply == "" {
 		log.Warn().Msg("Ignoring a DETECT tenant-eviction request with no reply subject.")

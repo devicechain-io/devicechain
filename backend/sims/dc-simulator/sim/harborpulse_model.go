@@ -239,8 +239,18 @@ func harborGaugeLevel(seed int64, d harborDevice, h float64, sample int64) float
 
 func harborLampOn(h float64) bool { return h < 6.5 || h >= 18 }
 
+// harborLampFault holds across the maintenance window's end on two lamps. At the default
+// five-second cadence (five sim minutes), count-3 in a one-minute WALL trailing window raises
+// at about 11:10, twenty wall seconds before maintenance closes at 11:30. The single off reading
+// at 11:20 makes the fault intermittent without clearing it. The third-last match at about
+// 11:45 leaves the half-open trailing minute at about 12:45 (cadence phase can shift this toward
+// 12:50). Thus it remains active past the worst default scheduler pass, about 12:31, and the
+// held page can release; notification-management drops a held page whose alarm already cleared.
 func harborLampFault(token string, h float64) bool {
-	return token == harborFlickerLamp && h >= 11 && h < 12 && int(math.Floor(h*60/10))%2 == 0
+	// harborHourOf uses floating-point hours: an exact 11:20 tick can be a few ulps below
+	// 11+20/60. Normalize to nanosecond sim minutes so the single off reading is not lost.
+	minute := math.Round(h*60*1e9) / 1e9
+	return (token == harborFlickerLamp || token == HarborpulseControlLamp) && minute >= 660 && minute < 720 && !(minute >= 680 && minute < 685)
 }
 
 // harborAmbient is the air temperature a charger's connector starts from.

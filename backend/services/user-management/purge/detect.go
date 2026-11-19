@@ -123,21 +123,65 @@ func (d *Detect) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 	return d.outcome(tenant, partitions, res), nil
 }
 
-// checkpointedPartitions lists the partitions holding a durable checkpoint.
+// checkpointedPartitions requires every durable partition and, once event-processing has
+// activated resolved-events sharding, every group it recorded. A group can hold live state
+// before its first checkpoint row, so the recorded topology, not the rows, names the groups.
 //
-// This is the set an answer is REQUIRED from, and it is derived from the data rather than
-// declared: GA runs one DETECT partition per instance, but the column exists so a sharded
-// fleet can checkpoint per shard, and a store that assumed one would report the whole
-// engine clean the moment the first partition replied. An engine that is running but has
-// never checkpointed is outside this set and is still counted when it answers — it holds
-// state no row names yet, and its first eviction writes the row that names it.
+// 🔴 THE TOPOLOGY RECORD, NOT THE CONFIGURATION. A configuration that shards
+// resolved-events says nothing about whether any group worker has ever run: before
+// event-processing activates it (or on a release that refuses it), no group answers, and
+// requiring one would defer every purge forever over state that does not exist.
+// event-processing writes the record at the start of its first sharded term, before any
+// group admits input, so every group that can hold state is named by it.
 func (d *Detect) checkpointedPartitions(ctx context.Context) ([]string, error) {
+	db := d.db.DB(ctx)
 	var ids []string
-	if err := d.db.DB(ctx).Raw(tenantpurge.DetectPartitionsQuery).Scan(&ids).Error; err != nil {
+	if err := db.Raw(tenantpurge.DetectPartitionsQuery).Scan(&ids).Error; err != nil {
 		return nil, fmt.Errorf("listing the DETECT partitions holding a checkpoint: %w", err)
+	}
+	// pg_tables, not information_schema: the latter hides tables the current role holds no
+	// privilege on, which would read as absent.
+	var tables int64
+	if err := db.Model(&pgTable{}).Where("schemaname = ? AND tablename = ?",
+		tenantpurge.DetectTopologySchema, tenantpurge.DetectTopologyTable).Count(&tables).Error; err != nil {
+		return nil, fmt.Errorf("checking for the DETECT stream topology: %w", err)
+	}
+	if tables == 0 {
+		return ids, nil
+	}
+	var counts []int
+	if err := db.Model(&detectTopologyRow{}).Where("id = ?", "singleton").
+		Pluck("group_count", &counts).Error; err != nil {
+		return nil, fmt.Errorf("reading the DETECT stream topology: %w", err)
+	}
+	for _, count := range counts {
+		for group := 0; group < count; group++ {
+			if id := tenantpurge.DetectGroupPartition(group); !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
 	}
 	return ids, nil
 }
+
+// pgTable is the slice of the pg_tables catalog view the topology check reads. It is a
+// catalog row, not tenant data, so it carries no tenant column.
+type pgTable struct {
+	SchemaName string `gorm:"column:schemaname"`
+	Name       string `gorm:"column:tablename"`
+}
+
+func (pgTable) TableName() string { return "pg_tables" }
+
+// detectTopologyRow is the one column of event-processing's stream topology row this store
+// reads. The row is instance metadata and holds no tenant data (the purge catalog exempts
+// the table), so it carries no tenant column.
+type detectTopologyRow struct {
+	ID         string `gorm:"column:id"`
+	GroupCount int    `gorm:"column:group_count"`
+}
+
+func (detectTopologyRow) TableName() string { return tenantpurge.DetectTopologyQualifiedTable }
 
 // outcome turns the replies into what the ledger records.
 //

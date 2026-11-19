@@ -160,14 +160,16 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 		return err
 	}
 	created := &Alarm{
-		ScopeAnchors:       anchors,
-		TokenReference:     rdb.TokenReference{Token: uuid.New().String()},
-		OriginatorType:     string(entity.TypeDevice),
-		OriginatorId:       deviceId,
-		AlarmKey:           alarmKey,
-		MetricKey:          metricKey,
-		Severity:           severity,
-		RaisedTime:         occurredTime,
+		ScopeAnchors:   anchors,
+		TokenReference: rdb.TokenReference{Token: uuid.New().String()},
+		OriginatorType: string(entity.TypeDevice),
+		OriginatorId:   deviceId,
+		AlarmKey:       alarmKey,
+		MetricKey:      metricKey,
+		Severity:       severity,
+		// PostgreSQL timestamps have microsecond precision. Both cycle rows use
+		// this canonical key, while contributor ordering retains full event time.
+		RaisedTime:         occurredTime.UTC().Truncate(time.Microsecond),
 		LastValue:          lastValue,
 		Contributors:       contributors,
 		ContributorVersion: 1,
@@ -188,14 +190,43 @@ func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 	// A concurrent create loses the per-(originator, alarmKey) partial unique index → a duplicate-key
 	// error → the consumer leaves it unacked and the redelivery folds into the winner's row. So a create race
 	// self-heals; it is the fold-into-an-existing-row race that needs the version CAS below.
-	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
+	var match *SuppressionMatch
+	if anyActive {
+		match = api.cycleStartSuppression(ctx, deviceId, alarmKey, severity, occurredTime)
+	}
+	var prepared *AlarmStateChangeEvent
+	if anyActive {
+		prepared = api.prepareAlarmEvent(ctx, created, AlarmEventRaised)
+	}
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(created).Error; err != nil {
+			return err
+		}
+		if err := insertCycleSuppression(tx, created, match); err != nil {
+			return err
+		}
+		if anyActive {
+			event := newAlarmStateChangeEvent(created, AlarmEventRaised, "", occurredTime)
+			copyAlarmEventPreparation(event, prepared)
+			if match != nil {
+				event.RaisedDuringSuppressionToken = match.WindowToken
+			}
+			if err := queueAlarmEventOnTx(ctx, tx, created, event); err != nil {
+				return err
+			}
+			if api.afterAlarmEventEnqueueForTest != nil {
+				return api.afterAlarmEventEnqueueForTest(tx)
+			}
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	if requiresPosition == nil {
 		api.classifyAlarm(ctx, created.ID)
 	}
 	if anyActive {
-		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(created, AlarmEventRaised, "", occurredTime))
+		api.relayAlarmEvents(ctx)
 	}
 	return nil
 }
@@ -279,7 +310,7 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 		updates["scope_anchors"] = anchors
 		updates["state"] = string(AlarmStateActive)
 		updates["severity"] = severity
-		updates["raised_time"] = occurredTime
+		updates["raised_time"] = occurredTime.UTC().Truncate(time.Microsecond)
 		updates["cleared_time"] = sql.NullTime{}
 		updates["acknowledged"] = false
 		updates["acknowledged_time"] = sql.NullTime{}
@@ -287,7 +318,7 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 		setLastValue()
 		etype = AlarmEventRaised
 		mutate = func() {
-			existing.State, existing.Severity, existing.RaisedTime = string(AlarmStateActive), severity, occurredTime
+			existing.State, existing.Severity, existing.RaisedTime = string(AlarmStateActive), severity, updates["raised_time"].(time.Time)
 			existing.ClearedTime, existing.Acknowledged = sql.NullTime{}, false
 			existing.AcknowledgedTime, existing.AcknowledgedBy = sql.NullTime{}, sql.NullString{}
 			existing.ScopeAnchors = anchors
@@ -319,31 +350,65 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 		// emit no event; the row's visible state is unchanged.
 	}
 
-	res := api.RDB.DB(ctx).Model(existing).
-		Where("state = ? AND contributor_version = ?", prevState, prevVersion).Updates(updates)
-	if res.Error != nil {
-		return res.Error
+	var match *SuppressionMatch
+	cycle := *existing
+	if etype == AlarmEventRaised {
+		match = api.cycleStartSuppression(ctx, existing.OriginatorId, existing.AlarmKey, severity, occurredTime)
+		cycle.RaisedTime = updates["raised_time"].(time.Time)
+		cycle.ScopeAnchors = updates["scope_anchors"].(rdb.Anchors)
 	}
-	if res.RowsAffected == 0 {
-		// The CAS lost: a concurrent fold or operator transition changed (state, contributor_version)
-		// since the read. Retry — do NOT drop the edge (the accumulator would lose it forever).
-		return errAlarmContributorConflict
+	var prepared *AlarmStateChangeEvent
+	if mutate != nil {
+		snapshot := *existing
+		snapshot.Severity = severity
+		prepared = api.prepareAlarmEvent(ctx, &snapshot, etype)
 	}
-	switch {
-	case requiresPosition != nil && *requiresPosition:
-		marked := true
-		existing.PositionDerived = &marked
-	case reclassify:
-		existing.PositionDerived = nil
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(existing).
+			Where("state = ? AND contributor_version = ?", prevState, prevVersion).Updates(updates)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return errAlarmContributorConflict
+		}
+		if err := insertCycleSuppression(tx, &cycle, match); err != nil {
+			return err
+		}
+		switch {
+		case requiresPosition != nil && *requiresPosition:
+			marked := true
+			existing.PositionDerived = &marked
+		case reclassify:
+			existing.PositionDerived = nil
+		}
+		if mutate != nil {
+			mutate()
+			prev := prevSeverity
+			if etype != AlarmEventEscalated && etype != AlarmEventDeescalated {
+				prev = ""
+			}
+			event := newAlarmStateChangeEvent(existing, etype, prev, occurredTime)
+			copyAlarmEventPreparation(event, prepared)
+			if etype == AlarmEventRaised && match != nil {
+				event.RaisedDuringSuppressionToken = match.WindowToken
+			}
+			if err := queueAlarmEventOnTx(ctx, tx, existing, event); err != nil {
+				return err
+			}
+			if api.afterAlarmEventEnqueueForTest != nil {
+				return api.afterAlarmEventEnqueueForTest(tx)
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if reclassify {
 		api.classifyAlarm(ctx, existing.ID)
 	}
 	if mutate != nil {
-		mutate()
-		prev := prevSeverity
-		if etype != AlarmEventEscalated && etype != AlarmEventDeescalated {
-			prev = "" // previousSeverity is meaningful only on a severity move
-		}
-		api.emitAlarmEvent(ctx, newAlarmStateChangeEvent(existing, etype, prev, occurredTime))
+		api.relayAlarmEvents(ctx)
 	}
 	return nil
 }

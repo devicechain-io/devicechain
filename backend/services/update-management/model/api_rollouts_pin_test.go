@@ -38,9 +38,8 @@ func (g *publishingGroup) ResolveGroupTargets(_ context.Context, _ string, versi
 		served = *version
 	}
 	if after == "" {
-		first := g.active
 		g.active = 2 // a publish lands between the first and the second page
-		return &GroupTargetPage{DeviceTokens: []string{"v1-first"}, NextCursor: "1000", ResolvedVersion: &first}, nil
+		return &GroupTargetPage{DeviceTokens: []string{"v1-first"}, NextCursor: "1000", ResolvedVersion: &served}, nil
 	}
 	tok := "v1-last"
 	if served == 2 {
@@ -52,7 +51,7 @@ func (g *publishingGroup) ResolveGroupTargets(_ context.Context, _ string, versi
 func TestResolveRolloutGroupPinsLaterPagesToTheFirstVersion(t *testing.T) {
 	g := &publishingGroup{active: 1}
 	api := &Api{Groups: g}
-	devices, version, err := api.resolveRolloutGroup(context.Background(), "fleet")
+	devices, version, err := api.resolveRolloutGroup(context.Background(), "fleet", nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"v1-first", "v1-last"}, devices)
 	require.NotNil(t, version)
@@ -66,7 +65,7 @@ func TestResolveRolloutGroupPinsLaterPagesToTheFirstVersion(t *testing.T) {
 func TestResolveRolloutGroupRefusesAPageAtAnotherVersion(t *testing.T) {
 	g := &publishingGroup{active: 1, wrongPin: true}
 	api := &Api{Groups: g}
-	_, _, err := api.resolveRolloutGroup(context.Background(), "fleet")
+	_, _, err := api.resolveRolloutGroup(context.Background(), "fleet", nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "changed version")
 }
@@ -78,7 +77,7 @@ func TestResolveRolloutGroupDoesNotPinAStaticGroup(t *testing.T) {
 	e.groups.pageSize = 2
 	var seen []*int32
 	api := &Api{Groups: recordingGroups{inner: e.groups, seen: &seen}}
-	devices, version, err := api.resolveRolloutGroup(tenantCtx("acme"), "fleet")
+	devices, version, err := api.resolveRolloutGroup(tenantCtx("acme"), "fleet", nil)
 	require.NoError(t, err)
 	require.Len(t, devices, 5)
 	require.Nil(t, version)
@@ -102,7 +101,8 @@ func (r recordingGroups) ResolveGroupTargets(ctx context.Context, g string, v *i
 // the first version's members and records that version on the rollout.
 func TestStartRolloutRecordsTheVersionTheTargetsWereResolvedAt(t *testing.T) {
 	e := newRolloutEnv(t, 3)
-	e.api.Groups = &publishingGroup{active: 1}
+	g := &publishingGroup{active: 1}
+	e.api.Groups = g
 	e.create(t, "r1", 10, nil)
 	v, err := e.api.StartRollout(tenantCtx("acme"), "r1")
 	require.NoError(t, err)
@@ -114,4 +114,7 @@ func TestStartRolloutRecordsTheVersionTheTargetsWereResolvedAt(t *testing.T) {
 		tokens = append(tokens, tv.Target.DeviceToken)
 	}
 	require.ElementsMatch(t, []string{"v1-first", "v1-last"}, tokens)
+	require.Len(t, g.requests, 4)
+	require.NotNil(t, g.requests[2], "R2 must pin its first page to R1's version")
+	require.Equal(t, int32(1), *g.requests[2])
 }

@@ -208,6 +208,12 @@ const usage = `apiprobe — write one of every creatable entity, then prove it r
         before the baseline install, so it stands up the stub identity provider only
         when the baseline can use it.
 
+  apiprobe signerbaseline --baseline-schemas <dir>
+        Print "supported" or "unsupported: <reason>": whether a seed against that
+        release signs the artifact it assigns. Only for "unsupported" does the
+        assignment need the instance to allow unverified artifacts, so a rig asks
+        before it makes that edit.
+
   apiprobe areas
         Print the functional areas the table writes to, one per line, so a rig can
         deploy them. Not every one is in the 'default' profile.
@@ -260,6 +266,8 @@ func main() {
 		err = runTamper(ctx, os.Args[2:])
 	case "ssobaseline":
 		err = runSSOBaseline(os.Args[2:])
+	case "signerbaseline":
+		err = runSignerBaseline(os.Args[2:])
 	case "coverage":
 		err = runCoverage(os.Args[2:])
 	case "areas":

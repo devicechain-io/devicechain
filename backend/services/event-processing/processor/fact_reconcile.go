@@ -8,7 +8,7 @@ import (
 	"errors"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -148,6 +148,16 @@ func (rp *ResolvedEventsProcessor) startFactReconcile() {
 func (rp *ResolvedEventsProcessor) runFactReconcile() {
 	defer rp.readerWG.Done()
 	defer rp.factReconciling.Store(false)
+	// Group zero's loop can tick while a child is still restoring. The sweep
+	// signals child channels and reads their armers, just like the shared fact
+	// consumers, so it must wait for the same all-workers-built boundary.
+	if rp.ruleRouting != nil && rp.ruleRouting.termReady != nil {
+		select {
+		case <-rp.ruleRouting.termReady:
+		case <-rp.pctx().Done():
+			return
+		}
+	}
 	rp.reconcileFacts(rp.pctx())
 }
 
@@ -268,7 +278,7 @@ func (rp *ResolvedEventsProcessor) reconcileTenantRules(ctx context.Context, ten
 		}
 		// The rows and the active-version row are built by the SAME code a delivered fact is
 		// persisted through, so a repair writes exactly what the lost fact would have.
-		ev := &dmmodel.DetectionRulesPublishedEvent{ProfileVersionToken: p.VersionToken, Rules: p.Rules, PublishedAt: p.ActiveSince}
+		ev := &dmcontract.DetectionRulesPublishedEvent{ProfileVersionToken: p.VersionToken, Rules: p.Rules, PublishedAt: p.ActiveSince}
 		wantActive, ok := profileActiveFromFact(tenant, ev)
 		if !ok {
 			log.Warn().Str("tenant", tenant).Str("version", p.VersionToken).
@@ -276,7 +286,7 @@ func (rp *ResolvedEventsProcessor) reconcileTenantRules(ctx context.Context, ten
 			continue
 		}
 		held := rulesByVersion[p.VersionToken]
-		var changed []dmmodel.PublishedDetectionRule
+		var changed []dmcontract.PublishedDetectionRule
 		var removed []string
 		wanted := make(map[string]bool)
 		for _, want := range factRuleRows(tenant, ev) {
@@ -334,16 +344,16 @@ func (rp *ResolvedEventsProcessor) reconcileTenantRules(ctx context.Context, ten
 }
 
 // sameRuleRow reports whether a held rule row already says what device-management says: the same
-// rule (dmmodel.SameRuleDefinition — never a byte comparison) under the same group scope.
+// rule (dmcontract.SameRuleDefinition — never a byte comparison) under the same group scope.
 func sameRuleRow(held, want model.DetectRule) bool {
-	return dmmodel.SameRuleDefinition(held.Definition, want.Definition) &&
+	return dmcontract.SameRuleDefinition(held.Definition, want.Definition) &&
 		held.EntityGroupToken == want.EntityGroupToken &&
 		held.EntityGroupVersion == want.EntityGroupVersion
 }
 
 // publishedRuleOf turns a projection row back into the rule a fact carries.
-func publishedRuleOf(row model.DetectRule) dmmodel.PublishedDetectionRule {
-	return dmmodel.PublishedDetectionRule{
+func publishedRuleOf(row model.DetectRule) dmcontract.PublishedDetectionRule {
+	return dmcontract.PublishedDetectionRule{
 		Token:              row.RuleToken,
 		Definition:         row.Definition,
 		EntityGroupToken:   row.EntityGroupToken,
@@ -355,7 +365,13 @@ func publishedRuleOf(row model.DetectRule) dmmodel.PublishedDetectionRule {
 // delivered one: fences first, then the compiled rules and the authoritative active version in one
 // ruleUpdate, so applyRuleUpdate installs the rules before it arms against them.
 func (rp *ResolvedEventsProcessor) signalRuleRepair(ctx context.Context, tenant, profileToken, versionToken string,
-	changed []dmmodel.PublishedDetectionRule, removed []string) error {
+	changed []dmcontract.PublishedDetectionRule, removed []string) error {
+	owner, err := rp.ruleWorker(tenant)
+	if err != nil {
+		rp.refuseRulePlacement(err)
+		return err
+	}
+	rp = owner
 	compiled, _ := runtime.CompilePublishedRules(tenant, versionToken, changed)
 	if !rp.seedFencesForPublishedRules(compiled) {
 		return errReconcileShutdown
@@ -397,6 +413,10 @@ func (rp *ResolvedEventsProcessor) signalRuleRepair(ctx context.Context, tenant,
 // Once every replica runs this release, every re-type and re-point stores the instant.
 func (rp *ResolvedEventsProcessor) reconcileTenantRoster(ctx context.Context, tenant string, settledBefore time.Time) (map[reconcileProjection]int, error) {
 	counts := make(map[reconcileProjection]int)
+	if _, err := rp.ruleWorker(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return counts, err
+	}
 	if rp.RosterStore == nil {
 		return counts, nil
 	}
@@ -418,7 +438,7 @@ func (rp *ResolvedEventsProcessor) reconcileTenantRoster(ctx context.Context, te
 		seen[e.DeviceToken] = true
 		// The roster consumer's own drop rule: what the live path refuses, the repair path does
 		// not write.
-		if reason, bad := rosterFactPoison(&dmmodel.DeviceRosterEvent{DeviceToken: e.DeviceToken,
+		if reason, bad := rosterFactPoison(&dmcontract.DeviceRosterEvent{DeviceToken: e.DeviceToken,
 			ProfileToken: e.ProfileToken, ExpectedSince: e.ExpectedSince}); bad {
 			log.Warn().Str("tenant", tenant).Str("device", e.DeviceToken).Str("reason", reason).
 				Msg("Skipping a device-management roster entry the roster consumer would drop.")
@@ -486,6 +506,10 @@ func sameRosterRow(a, b model.DeviceRoster) bool {
 // number is left alone whatever its instant. Each repaired device's view entry is re-read on the
 // loop, as after a delivered fact.
 func (rp *ResolvedEventsProcessor) reconcileTenantAttributes(ctx context.Context, tenant string, settledBefore time.Time) (map[reconcileProjection]int, error) {
+	if _, err := rp.ruleWorker(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return nil, err
+	}
 	counts := make(map[reconcileProjection]int)
 	if rp.AttributeStore == nil {
 		return counts, nil
@@ -509,7 +533,7 @@ func (rp *ResolvedEventsProcessor) reconcileTenantAttributes(ctx context.Context
 		seen[k] = true
 		// The attribute consumer's own drop rule: what the live path refuses, the repair path
 		// does not write.
-		if reason, bad := attributeFactPoison(&dmmodel.DeviceAttributeEvent{DeviceToken: e.DeviceToken,
+		if reason, bad := attributeFactPoison(&dmcontract.DeviceAttributeEvent{DeviceToken: e.DeviceToken,
 			AttrKey: e.AttrKey, Scope: e.Scope, Value: e.Value, UpdatedAt: e.UpdatedAt}); bad {
 			log.Warn().Str("tenant", tenant).Str("device", e.DeviceToken).Str("key", e.AttrKey).Str("reason", reason).
 				Msg("Skipping a device-management threshold attribute the attribute consumer would drop.")

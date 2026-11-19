@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/proto"
@@ -32,6 +33,17 @@ type DeviceRosterWriter struct {
 	writer messaging.MessageWriter
 	// failures counts facts this writer could not put on the wire, for any reason. Nil-safe.
 	failures prometheus.Counter
+	// connected reports whether the broker connection is up (WithConnected). Nil means it is
+	// unknown, and no refusal is reported as model.ErrRosterBrokerUnreachable.
+	connected func() bool
+}
+
+// WithConnected tells the writer how to learn whether its broker connection is up, so a publish
+// refused while it is down is reported as model.ErrRosterBrokerUnreachable and a per-device
+// fan-out stops sending facts that would each wait out the same unanswered publish.
+func (w *DeviceRosterWriter) WithConnected(connected func() bool) *DeviceRosterWriter {
+	w.connected = connected
+	return w
 }
 
 // NewDeviceRosterWriter builds a device-roster publisher over the given writer, counting
@@ -40,18 +52,27 @@ func NewDeviceRosterWriter(writer messaging.MessageWriter, failures prometheus.C
 	return &DeviceRosterWriter{writer: writer, failures: failures}
 }
 
-// PublishDeviceRoster marshals and publishes a device-roster event. It never returns
-// an error (the interface is fire-and-forget); failures are logged and counted.
-func (w *DeviceRosterWriter) PublishDeviceRoster(ctx context.Context, event *model.DeviceRosterEvent) {
+// PublishDeviceRoster marshals and publishes a device-roster event. Failures are logged and
+// counted. It returns the error of a publish the broker did not accept, wrapped in
+// model.ErrRosterBrokerUnreachable when the connection is down at that moment, so a caller
+// sending one fact per device can stop sending facts that would each wait out the publish
+// ceiling. A refusal on a live connection may be transient and is returned unwrapped. A marshal
+// failure is particular to its event, so it is counted and answered as nil.
+func (w *DeviceRosterWriter) PublishDeviceRoster(ctx context.Context, event *model.DeviceRosterEvent) error {
 	bytes, err := proto.MarshalDeviceRosterEvent(event)
 	if err != nil {
 		log.Error().Err(err).Str("device", event.DeviceToken).Msg("Unable to marshal device-roster event")
 		countFactFailure(w.failures)
-		return
+		return nil
 	}
 	if err := w.writer.WriteMessages(ctx, messaging.Message{Value: bytes}); err != nil {
 		log.Error().Err(err).Str("device", event.DeviceToken).Str("profile", event.ProfileToken).
 			Msg("Unable to publish device-roster event; the detection engine picks the change up at its next reconcile against this service.")
 		countFactFailure(w.failures)
+		if w.connected != nil && !w.connected() {
+			return fmt.Errorf("%w: %w", model.ErrRosterBrokerUnreachable, err)
+		}
+		return err
 	}
+	return nil
 }

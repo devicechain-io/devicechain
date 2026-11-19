@@ -408,10 +408,11 @@ func TestTheBrokerAdministratorShapesTheCatalogAndNothingElse(t *testing.T) {
 			}
 		}
 	}
-	// The one message read it holds: the envelope-carrying streams' STREAM.MSG.GET and DIRECT.GET,
-	// by exact name (dcctl's downgrade guard); see TestTheAdministratorCanReadTheEnvelopeStreamsAndNoOthers.
+	// The one message read it holds: STREAM.MSG.GET and DIRECT.GET on the envelope-carrying streams
+	// (dcctl's downgrade guard) and the operator-readable ones (dcctl broker facts), by exact name;
+	// see TestTheAdministratorCanReadTheEnvelopeStreamsAndNoOthers.
 	envelopeReads := map[string]bool{}
-	for _, suffix := range streams.EnvelopeCarriers() {
+	for _, suffix := range append(streams.EnvelopeCarriers(), streams.OperatorReadable()...) {
 		name := messaging.StreamName(permInstance, suffix)
 		envelopeReads["$JS.API.STREAM.MSG.GET."+name] = true
 		envelopeReads["$JS.API.DIRECT.GET."+name] = true

@@ -16,7 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -306,7 +306,7 @@ func newTestRosterConsumer(api *model.Api, proc *CommandDeliveryProcessor) *Rost
 
 func rosterMsg(t *testing.T, device string, disabled, enabled bool) messaging.Message {
 	t.Helper()
-	b, err := dmproto.MarshalDeviceRosterEvent(&dmmodel.DeviceRosterEvent{DeviceToken: device, Disabled: disabled, Enabled: enabled})
+	b, err := dmproto.MarshalDeviceRosterEvent(&dmcontract.DeviceRosterEvent{DeviceToken: device, Disabled: disabled, Enabled: enabled})
 	require.NoError(t, err)
 	return messaging.NewConsumedMessage("inst.acme.device-roster", b, 1, nil, &gateAck{})
 }

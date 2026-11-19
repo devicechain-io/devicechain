@@ -145,7 +145,7 @@ READERS = [
         "frontend/packages/dashboards/src/**",
         "frontend/apps/dashboard/src/**",
     ], [], "graphql/schemaplane/schemaplane_test.go:19, frontend_documents_test.go:85"),
-    ("backend/core", "rdb/partialupdatetest", ["backend/services/*/model/*.go"], NONTEST, "rdb/partialupdatetest/savescan_test.go:133"),
+    ("backend/core", "rdb/partialupdatetest", ["backend/services/*/model/*.go", "backend/services/*/model/*/*.go"], NONTEST, "rdb/partialupdatetest/savescan_test.go:133"),
     ("backend/core", "config", [
         "deploy/opentofu/modules/traefik/main.tf",
         "docs/**/releases-and-upgrades.md",
@@ -201,11 +201,12 @@ READERS = [
         "deploy/helm/devicechain/templates/gateway.yaml",
     ], [], "processor/broker_assertion_test.go:218, integration_marks_test.go:159, connect_snippet_golden_test.go:288-289"),
     ("backend/services/event-sources", "integration", ["backend/services/device-management/graphql/**"], [], "integration/backend_test.go:32"),
-    ("backend/services/mcp", "server", [SDL], [], "server/documents_test.go:35"),
+    ("backend/services/mcp", "server", [SDL], [], "server/documents_test.go:35, alarm_suppression_test.go:27"),
     ("backend/services/notification-management", "processor", ["backend/services/device-management/graphql/**"], [], "processor/alarm_lookup_wire_test.go:25"),
     # Each peer client's recorded documents, validated against the SDL its target serves
     # (documents_test.go validateDocuments: ../../<target>/graphql).
     ("backend/services/ai-inference", "inference", ["backend/services/user-management/graphql/**"], [], "inference/documents_test.go"),
+    ("backend/services/notification-management", "processor", ["backend/services/device-management/graphql/**"], [], "processor/documents_test.go"),
     ("backend/services/event-sources", "adapter", [
         "backend/services/device-management/graphql/**",
         "backend/services/device-state/graphql/**",
@@ -254,7 +255,8 @@ READERS = [
         "backend/services/update-management/graphql/**",
     ], [], "scenarioverify/documents_test.go:21"),
     ("backend/sims/dc-simulator", "updater", ["backend/core/ota/testdata/**"], [], "updater/*_test.go"),
-    ("backend/tools/apiprobe", ".", [SDL], [], "baseline_test.go, readsweep_test.go, documents_test.go"),
+    # signer_baseline_test.go:24 loads ../../services as a baseline tree: each area's served graphql SDL.
+    ("backend/tools/apiprobe", ".", [SDL, "backend/services/ai-inference/**"], [], "baseline_test.go, readsweep_test.go, documents_test.go, signer_baseline_test.go:24, tablesweep_test.go (ai-inference secret-scope guard)"),
     ("backend/tools/docsgql", ".", ["docs/**", SDL], [], "docsgql_test.go:241"),
     ("backend/tools/docsgql", "decoderfuncs", ["docs/**/decoder-functions.md"], [], "decoderfuncs/decoderfuncs_test.go:19"),
     ("backend/tools/docsgql", "sdlcompat", [SDL], [], "sdlcompat/sdlcompat_test.go:17"),

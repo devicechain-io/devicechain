@@ -1,0 +1,417 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package model
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+func TestSuppressionWindowOpeningsAndStatus(t *testing.T) {
+	w := suppressionTestWindow()
+	start, end := *w.StartTime, *w.EndTime
+	require.Equal(t, "SCHEDULED", AlarmSuppressionWindowStatus(w, start.Add(-time.Second)))
+	require.Equal(t, "ACTIVE", AlarmSuppressionWindowStatus(w, start))
+	require.Equal(t, "ENDED", AlarmSuppressionWindowStatus(w, end))
+	require.Empty(t, AlarmSuppressionWindowOpenings(w, end, 5))
+	require.Empty(t, AlarmSuppressionWindowOpenings(w, start, 0))
+	require.Empty(t, AlarmSuppressionWindowOpenings(w, start, -1))
+	ivs := AlarmSuppressionWindowOpenings(w, start, 5)
+	require.Equal(t, []Interval{{Start: start, End: end}}, ivs)
+	ended := start.Add(10 * time.Minute)
+	w.EndedAt = &ended
+	require.Equal(t, ended, AlarmSuppressionWindowOpenings(w, start, 1)[0].End)
+	require.Equal(t, "ENDED", AlarmSuppressionWindowStatus(w, ended))
+	w.DeletedAt = gorm.DeletedAt{Time: start, Valid: true}
+	require.Equal(t, "ENDED", AlarmSuppressionWindowStatus(w, start))
+}
+
+func TestSuppressionWindowOpeningsDSTAndRecurringGap(t *testing.T) {
+	w := suppressionRecurringWindow()
+	from := utcAt(2026, 3, 29, 1, 0)
+	ivs := AlarmSuppressionWindowOpenings(w, from, 2)
+	require.Len(t, ivs, 2)
+	require.Equal(t, from, ivs[0].Start)
+	require.Equal(t, 2*time.Hour, ivs[0].End.Sub(ivs[0].Start))
+	require.True(t, ivs[1].Start.After(ivs[0].End), "advance beyond the previous interval")
+	require.Equal(t, "ACTIVE", AlarmSuppressionWindowStatus(w, from))
+	require.Equal(t, "SCHEDULED", AlarmSuppressionWindowStatus(w, ivs[0].End))
+	require.Len(t, AlarmSuppressionWindowOpenings(w, from), 5)
+	require.Len(t, AlarmSuppressionWindowOpenings(w, from, 100), 20)
+	validFrom, validUntil := from.Add(time.Minute), from.Add(time.Hour)
+	w.ValidFrom, w.ValidUntil = &validFrom, &validUntil
+	ivs = AlarmSuppressionWindowOpenings(w, from, 20)
+	require.Equal(t, []Interval{{Start: validFrom, End: validUntil}}, ivs)
+	require.Equal(t, "SCHEDULED", AlarmSuppressionWindowStatus(w, from))
+	require.Equal(t, "ENDED", AlarmSuppressionWindowStatus(w, validUntil))
+}
+
+func TestSuppressionWindowSearchStatusTargetAndBounds(t *testing.T) {
+	r := newSuppressionCycleRig(t)
+	scheduled := suppressionTestWindow()
+	scheduled.Token = "future"
+	start, end := r.now.Add(2*time.Hour), r.now.Add(3*time.Hour)
+	scheduled.StartTime, scheduled.EndTime = &start, &end
+	_, err := r.api.CreateAlarmSuppressionWindow(r.ctx, &scheduled)
+	require.NoError(t, err)
+	ended := suppressionTestWindow()
+	ended.Token = "past"
+	ended.Targets = []AlarmSuppressionTarget{{Type: "DEVICE", Token: "other-device"}}
+	start, end = r.now.Add(-3*time.Hour), r.now.Add(-2*time.Hour)
+	ended.StartTime, ended.EndTime = &start, &end
+	_, err = r.api.CreateAlarmSuppressionWindow(r.ctx, &ended)
+	require.NoError(t, err)
+	for status, token := range map[string]string{"ACTIVE": r.window.Token, "SCHEDULED": scheduled.Token, "ENDED": ended.Token} {
+		found, err := r.api.AlarmSuppressionWindowsSearch(r.ctx, AlarmSuppressionWindowSearchCriteria{Status: &status})
+		require.NoError(t, err)
+		require.Len(t, found.Results, 1)
+		require.Equal(t, token, found.Results[0].Token)
+		require.EqualValues(t, 1, found.Pagination.TotalRecords)
+	}
+	target := "pump"
+	found, err := r.api.AlarmSuppressionWindowsSearch(r.ctx, AlarmSuppressionWindowSearchCriteria{TargetToken: &target, Pagination: rdb.Pagination{PageNumber: 2, PageSize: 1}})
+	require.NoError(t, err)
+	require.Len(t, found.Results, 1)
+	require.EqualValues(t, 2, found.Pagination.TotalRecords)
+	require.Equal(t, r.window.Token, found.Results[0].Token, "DefaultOrder places the newer scheduled window first")
+	bad := "TYPO"
+	_, err = r.api.AlarmSuppressionWindowsSearch(r.ctx, AlarmSuppressionWindowSearchCriteria{Status: &bad})
+	require.ErrorIs(t, err, ErrInvalidAlarmSuppression)
+	byTokens, err := r.api.AlarmSuppressionWindowsByTokens(r.ctx, []string{r.window.Token, "missing"})
+	require.NoError(t, err)
+	require.Len(t, byTokens, 1)
+	_, err = r.api.AlarmSuppressionWindowsByTokens(r.ctx, make([]string, 101))
+	require.ErrorIs(t, err, ErrInvalidAlarmSuppression)
+	empty, err := r.api.AlarmSuppressionWindowsByTokens(r.ctx, nil)
+	require.NoError(t, err)
+	require.Empty(t, empty)
+}
+
+func TestSuppressionWindowSearchPaginatesEndedHistory(t *testing.T) {
+	api, ctx, _ := newSuppressionTestApi(t)
+	rows := make([]AlarmSuppressionWindow, 10001)
+	for i := range rows {
+		rows[i] = suppressionTestWindow()
+		rows[i].Token = fmt.Sprintf("w-%05d", i)
+		rows[i].CreatedAt = time.Now().UTC().Add(time.Duration(i) * time.Second)
+	}
+	require.NoError(t, api.RDB.DB(ctx).CreateInBatches(&rows, 100).Error)
+	for page, token := range map[int32]string{1: "w-10000", 2: "w-09999", 10001: "w-00000"} {
+		result, err := api.AlarmSuppressionWindowsSearch(ctx, AlarmSuppressionWindowSearchCriteria{Pagination: rdb.Pagination{PageNumber: page, PageSize: 1}})
+		require.NoError(t, err)
+		require.EqualValues(t, len(rows), result.Pagination.TotalRecords)
+		require.Len(t, result.Results, 1)
+		require.Equal(t, token, result.Results[0].Token)
+	}
+	status := "ENDED"
+	result, err := api.AlarmSuppressionWindowsSearch(ctx, AlarmSuppressionWindowSearchCriteria{Status: &status})
+	require.NoError(t, err)
+	require.EqualValues(t, len(rows), result.Pagination.TotalRecords)
+	target := "missing"
+	result, err = api.AlarmSuppressionWindowsSearch(ctx, AlarmSuppressionWindowSearchCriteria{TargetToken: &target})
+	require.NoError(t, err)
+	require.Zero(t, result.Pagination.TotalRecords)
+}
+
+func TestSuppressionWindowScopedHistoryIgnoresOtherCustomers(t *testing.T) {
+	api, ctx, device := newSuppressionTestApi(t)
+	suppressionReadSQLiteOverlap(t, api.RDB.Database)
+	oldLimit := suppressionVisibleScanLimit
+	suppressionVisibleScanLimit = 2
+	t.Cleanup(func() { suppressionVisibleScanLimit = oldLimit })
+	rt := seedRelType(t, api, ctx, "acme", "tracks", true)
+	seedEdge(t, api, ctx, "acme", "owner", device, rt, "customer", "A")
+	own := suppressionTestWindow()
+	own.ScopeAnchors = rdb.Anchors{"customer:A"}
+	require.NoError(t, api.RDB.DB(ctx).Create(&own).Error)
+	for i := 0; i < 3; i++ {
+		other := suppressionTestWindow()
+		other.Token = fmt.Sprintf("other-%d", i)
+		other.ScopeAnchors = rdb.Anchors{"customer:B"}
+		other.Targets = []AlarmSuppressionTarget{{Type: "CUSTOMER", Token: "B"}}
+		require.NoError(t, api.RDB.DB(ctx).Create(&other).Error)
+	}
+	caller := suppressionCaller(ctx, false, "customer:A")
+	found, err := api.AlarmSuppressionWindowsSearch(caller, AlarmSuppressionWindowSearchCriteria{})
+	require.NoError(t, err)
+	require.Len(t, found.Results, 1)
+	require.EqualValues(t, 1, found.Pagination.TotalRecords)
+	// Historical preview also ignores all finished windows, irrespective of owner.
+	preview, err := api.AlarmSuppressionsForDevice(caller, "pump", *own.StartTime)
+	require.NoError(t, err)
+	require.Len(t, preview, 1)
+	for i := 0; i < 2; i++ {
+		more := own
+		more.Model, more.Token = gorm.Model{}, fmt.Sprintf("own-%d", i)
+		require.NoError(t, api.RDB.DB(ctx).Create(&more).Error)
+	}
+	found, err = api.AlarmSuppressionWindowsSearch(caller, AlarmSuppressionWindowSearchCriteria{Pagination: rdb.Pagination{PageNumber: 3, PageSize: 1}})
+	require.NoError(t, err)
+	require.Len(t, found.Results, 1, "history beyond the count bound still serves pages")
+	require.EqualValues(t, 2, found.Pagination.TotalRecords, "total counts only the bounded storage scan")
+}
+
+func TestSuppressionDevicePreviewIgnoresAlarmKeysAndBypass(t *testing.T) {
+	r := newSuppressionCycleRig(t)
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(r.window).Updates(map[string]any{"alarm_keys": `["other"]`, "bypass_severity": "INDETERMINATE"}).Error)
+	windows, err := r.api.AlarmSuppressionsForDevice(r.ctx, "pump", time.Time{})
+	require.NoError(t, err)
+	require.Len(t, windows, 1)
+	windows, err = r.api.AlarmSuppressionsForDevice(r.ctx, "pump", r.now.Add(2*time.Hour))
+	require.NoError(t, err)
+	require.Empty(t, windows)
+	_, err = r.api.AlarmSuppressionsForDevice(r.ctx, "missing", r.now)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	_, err = r.api.AlarmSuppressionsForDevice(auth.WithClaims(context.Background(), nil), "pump", r.now)
+	require.Error(t, err)
+}
+
+func TestSuppressionStatusLoadsWindowsOnce(t *testing.T) {
+	r := newSuppressionCycleRig(t)
+	require.NoError(t, r.edge(r.now, "r", AlarmEdgeRaised, "MINOR"))
+	alarms := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
+		alarm := *r.alarm(t)
+		alarm.Model = gorm.Model{}
+		alarm.Token = fmt.Sprintf("alarm-%d", i)
+		alarm.AlarmKey = alarm.Token
+		require.NoError(t, r.api.RDB.DB(r.ctx).Create(&alarm).Error)
+		alarms = append(alarms, alarm.Token)
+	}
+	count, deviceCount := 0, 0
+	counter := func(db *gorm.DB) {
+		if db.Statement.Schema != nil && db.Statement.Schema.Table == "devices" {
+			deviceCount++
+		}
+		if db.Statement.Schema != nil && db.Statement.Schema.Table == "alarm_suppression_windows" {
+			count++
+		}
+	}
+	require.NoError(t, r.api.RDB.Database.Callback().Query().Before("gorm:query").Register("test:window_snapshot", counter))
+	require.NoError(t, r.api.RDB.Database.Callback().Row().Before("gorm:row").Register("test:window_snapshot", counter))
+	r.api.invalidateSuppressionWindows(r.ctx)
+	status, err := r.api.AlarmSuppressionStatus(r.ctx, alarms)
+	require.NoError(t, err)
+	require.Len(t, status, 3)
+	require.Equal(t, 2, count, "one signature and one load for the entire batch")
+	require.Equal(t, 1, deviceCount, "device facts memoized for the status call")
+}
+
+func TestLiveSuppressionPreparationRequiresDeviceTransition(t *testing.T) {
+	r := newSuppressionCycleRig(t)
+	calls := 0
+	suppressionEvaluationHookForTest = func(context.Context, uint, string, string, time.Time) (*SuppressionMatch, error) {
+		calls++
+		return nil, nil
+	}
+	t.Cleanup(func() { suppressionEvaluationHookForTest = nil })
+	// Preparation is required even before a publisher is wired: the stored payload
+	// must retain transition-time suppression when a fresh process later drains it.
+	r.api.AlarmPublisher = nil
+	r.api.prepareAlarmEvent(r.ctx, &Alarm{OriginatorType: "device", OriginatorId: r.device}, AlarmEventRaised)
+	require.Equal(t, 1, calls)
+	r.api.prepareAlarmEvent(r.ctx, &Alarm{OriginatorType: "asset"}, AlarmEventRaised)
+	r.api.prepareAlarmEvent(r.ctx, &Alarm{OriginatorType: "device", OriginatorId: r.device}, AlarmEventDeescalated)
+	require.Equal(t, 1, calls)
+}
+
+// SQLite does not implement PostgreSQL's text[] overlap operator. Keep the real
+// scope callbacks, translating only their generated overlap expression to exact
+// quoted-element membership in rdb.Anchors' array encoding. Production overlap
+// SQL is exercised by the model's Postgres integration suite.
+func suppressionReadSQLiteOverlap(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	var translate func(clause.Expression) clause.Expression
+	translate = func(expr clause.Expression) clause.Expression {
+		switch e := expr.(type) {
+		case clause.Where:
+			for i, v := range e.Exprs {
+				e.Exprs[i] = translate(v)
+			}
+			return e
+		case clause.AndConditions:
+			for i, v := range e.Exprs {
+				e.Exprs[i] = translate(v)
+			}
+			return e
+		case clause.OrConditions:
+			for i, v := range e.Exprs {
+				e.Exprs[i] = translate(v)
+			}
+			return e
+		case clause.NotConditions:
+			for i, v := range e.Exprs {
+				e.Exprs[i] = translate(v)
+			}
+			return e
+		case clause.Expr:
+			if strings.HasPrefix(e.SQL, "? && ARRAY[") {
+				parts := make([]string, 0, len(e.Vars)-1)
+				vars := make([]any, 0, 2*(len(e.Vars)-1))
+				for _, anchor := range e.Vars[1:] {
+					parts = append(parts, "instr(?, ?) > 0")
+					vars = append(vars, e.Vars[0], fmt.Sprintf("%q", anchor))
+				}
+				return clause.Expr{SQL: "(" + strings.Join(parts, " OR ") + ")", Vars: vars}
+			}
+		}
+		return expr
+	}
+	callback := func(tx *gorm.DB) {
+		if where, ok := tx.Statement.Clauses["WHERE"]; ok {
+			where.Expression = translate(where.Expression)
+			tx.Statement.Clauses["WHERE"] = where
+		}
+	}
+	require.NoError(t, db.Callback().Query().After("dc:scope_query").Before("gorm:query").Register("test:suppression_overlap", callback))
+	require.NoError(t, db.Callback().Row().After("dc:scope_row").Before("gorm:row").Register("test:suppression_overlap", callback))
+	require.NoError(t, db.Callback().Update().After("dc:scope_update").Before("gorm:update").Register("test:suppression_overlap", callback))
+}
+
+func TestSuppressionScopedDeviceTargetsBatch(t *testing.T) {
+	api, ctx, device := newSuppressionTestApi(t)
+	suppressionReadSQLiteOverlap(t, api.RDB.Database)
+	rt := seedRelType(t, api, ctx, "acme", "tracks", true)
+	seedEdge(t, api, ctx, "acme", "owner", device, rt, "customer", "A")
+	for i := 0; i < 20; i++ {
+		w := suppressionTestWindow()
+		w.Token = fmt.Sprintf("batch-%d", i)
+		w.ScopeAnchors = rdb.Anchors{"customer:A"}
+		require.NoError(t, api.RDB.DB(ctx).Create(&w).Error)
+	}
+	count := 0
+	db := api.RDB.Database
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("test:device_batches", func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "devices" {
+			count++
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove("test:device_batches") })
+	result, err := api.AlarmSuppressionWindowsSearch(suppressionCaller(ctx, false, "customer:A"), AlarmSuppressionWindowSearchCriteria{})
+	require.NoError(t, err)
+	require.EqualValues(t, 20, result.Pagination.TotalRecords)
+	require.Equal(t, 1, count, "one DevicesByToken batch for all window targets")
+}
+
+func TestSuppressionStatusDeviceFailureIsolated(t *testing.T) {
+	r := newSuppressionCycleRig(t)
+	require.NoError(t, r.edge(r.now, "r", AlarmEdgeRaised, "MINOR"))
+	good := r.alarm(t)
+	bad := *good
+	bad.Model, bad.Token, bad.OriginatorId = gorm.Model{}, "deleted-device-alarm", r.device+10000
+	require.NoError(t, r.api.RDB.DB(r.ctx).Create(&bad).Error)
+	// Give the bad alarm an actual device, then delete it.
+	var device Device
+	require.NoError(t, r.api.RDB.DB(r.ctx).First(&device, r.device).Error)
+	device.Model, device.Token = gorm.Model{}, "deleted-device"
+	require.NoError(t, r.api.RDB.DB(r.ctx).Create(&device).Error)
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(&bad).Update("originator_id", device.ID).Error)
+	require.NoError(t, r.api.RDB.DB(r.ctx).Delete(&device).Error)
+	before := testutil.ToFloat64(suppressionEvaluationFailures.WithLabelValues("status"))
+	rows, err := r.api.AlarmSuppressionStatus(r.ctx, []string{good.Token, bad.Token})
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	byToken := map[string]*SuppressionMatch{}
+	for _, row := range rows {
+		byToken[row.AlarmToken] = row.Match
+	}
+	require.NotNil(t, byToken[good.Token])
+	require.Nil(t, byToken[bad.Token])
+	require.Equal(t, before+1, testutil.ToFloat64(suppressionEvaluationFailures.WithLabelValues("status")))
+}
+
+func TestSuppressionEndDeleteRetryConflicts(t *testing.T) {
+	for _, ending := range []bool{true, false} {
+		for _, persistent := range []bool{false, true} {
+			t.Run(fmt.Sprintf("end=%t/persistent=%t", ending, persistent), func(t *testing.T) {
+				r := newSuppressionCycleRig(t)
+				attempts := 0
+				db := r.api.RDB.Database
+				require.NoError(t, db.Callback().Update().Before("gorm:update").Register("test:retry_conflict", func(tx *gorm.DB) {
+					if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "AlarmSuppressionWindow" {
+						attempts++
+						if persistent || attempts == 1 {
+							tx.Statement.AddClause(clause.Where{Exprs: []clause.Expression{clause.Eq{Column: "version", Value: -1}}})
+						}
+					}
+				}))
+				t.Cleanup(func() { _ = db.Callback().Update().Remove("test:retry_conflict") })
+				var err error
+				if ending {
+					_, err = r.api.EndAlarmSuppressionWindow(r.ctx, r.window.Token)
+				} else {
+					_, err = r.api.DeleteAlarmSuppressionWindow(r.ctx, r.window.Token)
+				}
+				if persistent {
+					var stale *rdb.StaleWriteError
+					require.ErrorAs(t, err, &stale)
+					require.Equal(t, 3, attempts)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, 2, attempts)
+					if ending {
+						_, err = r.api.EndAlarmSuppressionWindow(r.ctx, r.window.Token)
+						require.NoError(t, err)
+						require.Equal(t, 2, attempts)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestSuppressionCycleStartDeadlineFailsTowardPaging(t *testing.T) {
+	r := newSuppressionCycleRig(t)
+	suppressionEvaluationHookForTest = func(ctx context.Context, _ uint, _, _ string, _ time.Time) (*SuppressionMatch, error) {
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.LessOrEqual(t, time.Until(deadline), 500*time.Millisecond)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	t.Cleanup(func() { suppressionEvaluationHookForTest = nil })
+	before := testutil.ToFloat64(suppressionEvaluationFailures.WithLabelValues("cycle_start"))
+	require.Nil(t, r.api.cycleStartSuppression(r.ctx, r.device, "hot", "MINOR", r.now))
+	require.Equal(t, before+1, testutil.ToFloat64(suppressionEvaluationFailures.WithLabelValues("cycle_start")))
+}
+
+func TestSuppressionPreviewSkipsFutureCandidates(t *testing.T) {
+	r := newSuppressionCycleRig(t)
+	rows := make([]AlarmSuppressionWindow, 501)
+	for i := range rows {
+		rows[i] = *r.window
+		rows[i].Model, rows[i].Token = gorm.Model{}, fmt.Sprintf("future-%03d", i)
+		start, end := r.now.Add(time.Hour), r.now.Add(2*time.Hour)
+		rows[i].StartTime, rows[i].EndTime = &start, &end
+	}
+	require.NoError(t, r.api.RDB.DB(r.ctx).CreateInBatches(rows, 100).Error)
+	found, err := r.api.AlarmSuppressionsForDevice(r.ctx, "pump", r.now)
+	require.NoError(t, err, "future windows must not consume the historical preview budget")
+	require.Len(t, found, 1)
+}
+
+func TestSuppressionQuietAlarmDoesNotQuery(t *testing.T) {
+	r := newSuppressionCycleRig(t)
+	require.NoError(t, r.api.RDB.Database.Callback().Query().Before("gorm:query").Register("test:no_queries", func(tx *gorm.DB) { t.Error("quiet alarm issued a query") }))
+	require.NoError(t, r.api.RDB.Database.Callback().Row().Before("gorm:row").Register("test:no_queries", func(tx *gorm.DB) { t.Error("quiet alarm issued a row query") }))
+	t.Cleanup(func() {
+		_ = r.api.RDB.Database.Callback().Query().Remove("test:no_queries")
+		_ = r.api.RDB.Database.Callback().Row().Remove("test:no_queries")
+	})
+	for _, a := range []Alarm{{State: "CLEARED", OriginatorType: "device"}, {State: "ACTIVE", OriginatorType: "asset"}} {
+		match, err := r.api.AlarmSuppression(r.ctx, &a, time.Time{})
+		require.NoError(t, err)
+		require.Nil(t, match)
+	}
+}

@@ -45,6 +45,11 @@
     <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Recording/**/*.cs" />
     <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Visuals/CampusView.cs" />
     <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Visuals/ShotDirector.cs" />
+    <!-- Harborpulse: the engine-free model, the read-only platform link (shared observer over the SDK), and the visuals, which use only the
+         engine's own modules (meshes, lights, IMGUI). Its URP shaders and the Editor scene builder need the Editor. -->
+    <Compile Include="../../../../demos/harborpulse-unity/Assets/Harborpulse/Scripts/Model/**/*.cs" />
+    <Compile Include="../../../../demos/harborpulse-unity/Assets/Harborpulse/Scripts/Live/**/*.cs" />
+    <Compile Include="../../../../demos/harborpulse-unity/Assets/Harborpulse/Scripts/Visuals/**/*.cs" />
   </ItemGroup>
 
 </Project>

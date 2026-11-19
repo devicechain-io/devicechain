@@ -417,7 +417,7 @@ func TestHarborpulseAirLockHoldsOnTheEastPumpOnly(t *testing.T) {
 	}
 }
 
-func TestHarborpulseFlickerRepeatsOnOneLampOnly(t *testing.T) {
+func TestHarborpulseFlickerRepeatsOnTwoLampsOnly(t *testing.T) {
 	r := harborRules(t)[HarborpulseFlickerRule]
 	need, window, level := int(r.num(t, "count")), r.dur(t, "window"), r.num(t, "when", "threshold")
 	day := simulateHarborDay(t, true)
@@ -435,8 +435,8 @@ func TestHarborpulseFlickerRepeatsOnOneLampOnly(t *testing.T) {
 			}
 		}
 	}
-	if !fired[harborFlickerLamp] || len(fired) != 1 {
-		t.Fatalf("lamp-flicker fires for %v; want %s alone", fired, harborFlickerLamp)
+	if !fired[harborFlickerLamp] || !fired[HarborpulseControlLamp] || len(fired) != 2 {
+		t.Fatalf("lamp-flicker fires for %v; want %s and %s", fired, harborFlickerLamp, HarborpulseControlLamp)
 	}
 }
 

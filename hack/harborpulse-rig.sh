@@ -61,6 +61,8 @@
 #                               to west (judged on the PLANNED cycles: real dusk is not compressed)
 #   holiday-skipped             the dusk campaign planned nothing for its holiday; the dawn one did
 #   window-holds-flush          the DISRUPTIVE flush waited for the pump controllers' maintenance window
+#   maintenance-holds-page     East Quay flicker page held through lamp service and released afterward
+#   maintenance-control-pages  identical North Quay flicker pages promptly, with the hold check red
 #   asset-hierarchy             meters under their buildings, pumps under their stations, each under its quay
 #   feeder-blast-radius         each feeder feeds its own quay; every device the failed one feeds went silent
 #
@@ -109,6 +111,7 @@
 #   flush-ungated       --scenario-defect flush-ungated     window-holds-flush
 #   lofts-under-basin   --scenario-defect lofts-under-basin asset-hierarchy
 #   feeder-miswired     --scenario-defect feeder-miswired   feeder-blast-radius
+#   suppression-wrong-device --scenario-defect suppression-wrong-device maintenance-holds-page
 #
 # The clean day must exit 0. Each control must exit 1 WITH its own invariant red; a control that
 # exits 0 means the invariant cannot fail, and the rig fails. Other invariants a control turns red
@@ -285,6 +288,7 @@ runs=(
   "flush-ungated|--scenario-defect flush-ungated|window-holds-flush"
   "lofts-under-basin|--scenario-defect lofts-under-basin|asset-hierarchy"
   "feeder-miswired|--scenario-defect feeder-miswired|feeder-blast-radius"
+  "suppression-wrong-device|--scenario-defect suppression-wrong-device|maintenance-holds-page"
   "ota-signature-omitted|--scenario-defect ota-signature-omitted|ota-artifact-trusted"
   "ota-group-missing-charger|--scenario-defect ota-group-missing-charger|ota-targets-exact"
   "ota-cap-three|--scenario-defect ota-cap-three|ota-concurrency"
@@ -328,7 +332,7 @@ judge() {
 offline_controls() {
   say "offline controls (no cluster)"
   (cd "$repo_root/backend/sims/dc-simulator" &&
-    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestEachS3bControlTurnsExactlyItsInvariantRed|TestEachS4ControlTurnsExactlyItsInvariantRed|TestEachS5OTAControlModelsLiveEvidence|TestEachS5BurstControlModelsLiveEvidence|TestEachS5ReplacementControlModelsLiveEvidence|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures|TestFoldedGrowthOfOne|TestNotificationAttemptsAreJudgedOnTheWatchedDayOnly|TestDutyMailIsAttributed' ./scenarioverify/ >/dev/null &&
+    go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestEachS3bControlTurnsExactlyItsInvariantRed|TestEachS4ControlTurnsExactlyItsInvariantRed|TestEachS5OTAControlModelsLiveEvidence|TestEachS5BurstControlModelsLiveEvidence|TestEachS5ReplacementControlModelsLiveEvidence|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures|TestFoldedGrowthOfOne|TestNotificationAttemptsAreJudgedOnTheWatchedDayOnly|TestDutyMailIsAttributed|TestMaintenance|TestHarborLamp' ./scenarioverify/ ./sim/ >/dev/null &&
     go test -count=1 ./scenariosink/ >/dev/null) ||
     fail "the verifier's or the sink's own controls failed (go test ./scenarioverify/ ./scenariosink/ in backend/sims/dc-simulator)"
   pass "the verifier: a clean day passes, each planted defect turns exactly its invariant red"

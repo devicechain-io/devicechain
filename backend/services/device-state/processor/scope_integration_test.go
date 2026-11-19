@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	dsgraphql "github.com/devicechain-io/dc-device-state/graphql"
 	"github.com/devicechain-io/dc-device-state/model"
@@ -132,7 +132,7 @@ func ownedEvent(t *testing.T, device string, kind eventtype.EventType, occurred,
 // ownershipFact is a device ownership-changed fact exactly as device-management publishes it.
 func ownershipFact(t *testing.T, device string, changed time.Time, owners ...string) messaging.Message {
 	t.Helper()
-	encoded, err := dmproto.MarshalDeviceOwnershipChangedEvent(&dmmodel.DeviceOwnershipChangedEvent{
+	encoded, err := dmproto.MarshalDeviceOwnershipChangedEvent(&dmcontract.DeviceOwnershipChangedEvent{
 		DeviceToken: device, Anchors: owners, ChangedTime: changed})
 	require.NoError(t, err)
 	return messaging.Message{Subject: scopeOwnersSubj, Value: encoded}

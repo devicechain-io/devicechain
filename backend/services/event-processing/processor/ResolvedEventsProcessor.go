@@ -229,6 +229,7 @@ type Config struct {
 // never fires ahead of an unconsumed backlog during an outage, re-bind, or rolling-update overlap.
 type ResolvedEventsProcessor struct {
 	worker               *workerIdentity
+	ruleRouting          *groupRuleRouting
 	groupWorkers         []*ResolvedEventsProcessor
 	supervised           bool
 	Microservice         *core.Microservice
@@ -262,6 +263,10 @@ type ResolvedEventsProcessor struct {
 	// close over it, and a gate they share instead lets the wiring stay a single pass
 	// with no globals read across goroutines. Required whenever Lease is set.
 	Gate *TermGate
+
+	// ValidateTopology runs under the singleton lease before any term reads state
+	// or admits facts. Main installs the durable fresh-install-only topology check.
+	ValidateTopology func(context.Context) error
 
 	// RuleUpdatesReader is the durable consumer of device-management's published-rule fact
 	// stream (ADR-051 slice 4b-3). When set, a goroutine drains it, persists each fact's rules
@@ -764,6 +769,7 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 	if registry == nil {
 		registry = runtime.NewRuleRegistry(nil)
 	}
+	groups := max(1, configuredWorkerGroups(ms))
 	rp := &ResolvedEventsProcessor{
 		Microservice:         ms,
 		ResolvedEventsReader: reader,
@@ -775,17 +781,17 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		metrics:              metrics,
 		// Buffered so a burst of published-rule facts does not block the fact consumer on the
 		// loop between resolved-event batches; the loop drains it promptly (rule updates are rare).
-		ruleUpdates: make(chan ruleUpdate, 64),
+		ruleUpdates: make(chan ruleUpdate, 64/groups),
 		// Buffered generously: device create/delete/re-type facts can arrive in bursts (a fleet
 		// provisioning run), and the loop drains one per resolved-event-batch iteration.
-		armUpdates: make(chan armUpdate, 256),
+		armUpdates: make(chan armUpdate, 256/groups),
 		// Buffered generously for the same reason as armUpdates: an attribute config push across a
 		// fleet bursts, and the loop drains one recheck per resolved-event-batch iteration.
-		attrUpdates: make(chan attrUpdate, 256),
-		seriesDrops: make(chan seriesDrop, 256),
+		attrUpdates: make(chan attrUpdate, 256/groups),
+		seriesDrops: make(chan seriesDrop, 256/groups),
 		// Buffered modestly: a fence edit is a human authoring action, so these arrive at
 		// authoring rates rather than at fleet rates, and the loop drains one per iteration.
-		fenceUpdates: make(chan fenceUpdate, 32),
+		fenceUpdates: make(chan fenceUpdate, 32/groups),
 		// Unbuffered on purpose, unlike the three fact channels. A sender here is a request
 		// waiting for an answer, so buffering would only let it queue behind other purges
 		// while its own deadline ran down; the responder already bounds its wait on the
@@ -814,6 +820,9 @@ func (rp *ResolvedEventsProcessor) Initialize(ctx context.Context) error {
 
 // ExecuteInitialize sets up the cancelable loop context.
 func (rp *ResolvedEventsProcessor) ExecuteInitialize(ctx context.Context) error {
+	if err := rp.validateWorkerResources(); err != nil {
+		return err
+	}
 	rp.supCtx, rp.supCancel = context.WithCancel(ctx)
 	rp.stopBegun, rp.signalStop = context.WithCancel(context.Background())
 	rp.newTermContext()
@@ -897,13 +906,16 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 // adding state to this type.
 func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	rp.resetForTerm()
+	if err := rp.prepareGroupRules(ctx); err != nil {
+		return err
+	}
 	// Before the replay, which can checkpoint and so publish detections that count as fires.
 	if err := rp.startRuleHealth(); err != nil {
 		return err
 	}
 	// Attach the durables for this term. Doing it here rather than at the END of the
 	// previous term is what keeps a bind failure visible: see bindTermReaders.
-	if rp.leadershipEnabled() {
+	if rp.leadershipEnabled() && !(rp.ruleRouting != nil && !rp.supervised) {
 		if err := rp.bindTermReaders(); err != nil {
 			return fmt.Errorf("event-processing: could not bind DETECT durables for this leadership term: %w", err)
 		}
@@ -946,8 +958,10 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	// purges attributes), so a deleted device's dynamic bound is current too; it does NOT drain the
 	// attribute-SET stream, so a bound CHANGED (not purged) while down still replays against its pre-down
 	// value — the accepted dynamic-threshold non-determinism documented at startAttributeView, unchanged.
-	if err := rp.catchUpFactProjections(); err != nil {
-		return err
+	if rp.ruleRouting == nil {
+		if err := rp.catchUpFactProjections(); err != nil {
+			return err
+		}
 	}
 	// Build the dynamic-threshold view BEFORE replay (ADR-051 slice 4c-3b-2): replayToHead re-feeds
 	// events through applyResolved, which reads attrView to resolve a rule's dynamic bound. If the
@@ -1068,12 +1082,16 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	// The projection is fresh as of here, so start the periodic sweep's clock now rather than
 	// letting a zero value fire one immediately on the first tick.
 	rp.lastFenceReconcile = rp.clock.Now()
-	rp.readerWG.Add(1)
-	go rp.run()
+	// Group loops also launch periodic source repair. None may start until every
+	// sibling has finished initializing its loop-owned views and term channels.
+	if rp.ruleRouting == nil {
+		rp.readerWG.Add(1)
+		go rp.run()
+	}
 	// Launch the live rule-update consumer after the loop is running (so the ruleUpdates
 	// channel has a receiver) and after replay is complete (so the startup rule set is
 	// already in place). Both goroutines stop on procCancel and are joined by readerWG.
-	if rp.RuleUpdatesReader != nil {
+	if rp.RuleUpdatesReader != nil && rp.ruleRouting == nil {
 		rp.readerWG.Add(1)
 		go rp.runRuleConsumer()
 	}
@@ -1083,11 +1101,11 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	// independently of the resolved stream (the roster projection's monotonic ordering resolves
 	// cross-fact races, not the stream order), so they need no ordering against it; each stops on
 	// procCancel and is joined by readerWG.
-	if rp.RosterReader != nil {
+	if rp.RosterReader != nil && rp.ruleRouting == nil {
 		rp.readerWG.Add(1)
 		go rp.runRosterConsumer()
 	}
-	if rp.EntityDeletedReader != nil {
+	if rp.EntityDeletedReader != nil && rp.ruleRouting == nil {
 		rp.readerWG.Add(1)
 		go rp.runEntityDeletedConsumer()
 	}
@@ -1095,7 +1113,7 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	// persisting each fact before acking and then signaling the loop to re-read the device into the
 	// live attrView (slice 4c-3b-2), so a rule's dynamic bound tracks the current value. It stops on
 	// procCancel and is joined by readerWG.
-	if rp.AttributeReader != nil {
+	if rp.AttributeReader != nil && rp.ruleRouting == nil {
 		rp.readerWG.Add(1)
 		go rp.runAttributeConsumer()
 	}
@@ -1103,7 +1121,7 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	// a version and announces its MANIFEST, which this consumer resolves off-loop — fetching only
 	// the geometry it does not already hold — and hands to the loop. It stops on procCancel and is
 	// joined by readerWG.
-	if rp.FenceSetReader != nil {
+	if rp.FenceSetReader != nil && rp.ruleRouting == nil {
 		rp.readerWG.Add(1)
 		go rp.runFenceSetConsumer()
 	}
@@ -1122,6 +1140,14 @@ func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 // running yet); the live consumers, launched after replay, resume from the advanced durable position for
 // incremental updates. Runs on the startup goroutine, before startDeadmanGate + replay.
 func (rp *ResolvedEventsProcessor) catchUpFactProjections() error {
+	// Preserve legacy replay semantics. Group workers load the shared attribute
+	// projection only after the singleton consumer has caught up, without signals.
+	if rp.ruleRouting != nil && rp.AttributeReader != nil {
+		if err := rp.drainFactToHead(rp.AttributeReader, "device-attribute",
+			func(m messaging.Message) bool { return rp.handleAttributeProjection(m, false) }); err != nil {
+			return err
+		}
+	}
 	if rp.RosterReader != nil {
 		if err := rp.drainFactToHead(rp.RosterReader, "device-roster",
 			func(m messaging.Message) bool { return rp.handleRosterFact(m, false) }); err != nil {
@@ -1175,6 +1201,9 @@ func (rp *ResolvedEventsProcessor) drainFactToHead(reader messaging.MessageReade
 		return nil // reader cannot report backlog (scaffold/test): no durable projection to catch up
 	}
 	applied := 0
+	// A group build must read once even if consumer accounting has not yet
+	// observed newly published facts. Keep the unsharded startup path unchanged.
+	initialRead := rp.ruleRouting != nil
 	for {
 		if rp.pctx().Err() != nil {
 			return rp.pctx().Err() // shutdown during catch-up
@@ -1185,7 +1214,7 @@ func (rp *ResolvedEventsProcessor) drainFactToHead(reader messaging.MessageReade
 		if err != nil {
 			return fmt.Errorf("catch-up backlog probe for %s facts: %w", kind, err)
 		}
-		if pending == 0 && ackPending == 0 {
+		if pending == 0 && ackPending == 0 && !initialRead {
 			// Fully drained AND acked: nothing undelivered, nothing in our fetch buffer or in flight.
 			log.Info().Str("kind", kind).Int("applied", applied).Msg("Caught up fact projection to head before replay.")
 			return nil
@@ -1193,6 +1222,7 @@ func (rp *ResolvedEventsProcessor) drainFactToHead(reader messaging.MessageReade
 		// Work remains — undelivered messages, or ones already fetched into our local buffer. Drain
 		// everything currently available in one inner pass (re-probing per message would cost an RPC
 		// each), bounding each read so it cannot block forever.
+		initialRead = false
 		read := 0
 		for {
 			rctx, rcancel := context.WithTimeout(rp.pctx(), factCatchUpReadTimeout)
@@ -1251,6 +1281,10 @@ func (rp *ResolvedEventsProcessor) startDeadmanGate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load active-version projection for dead-man gate: %w", err)
 	}
+	rosters, actives, err = rp.ownedMembership(rosters, actives)
+	if err != nil {
+		return err
+	}
 	rp.armer.LoadMembership(toRosterEntries(rosters), toActiveEntries(actives))
 	return nil
 }
@@ -1289,6 +1323,10 @@ func (rp *ResolvedEventsProcessor) reconcileDeadmanArming(ctx context.Context) e
 	if err != nil {
 		return fmt.Errorf("load active-version projection for dead-man reconcile: %w", err)
 	}
+	rosters, actives, err = rp.ownedMembership(rosters, actives)
+	if err != nil {
+		return err
+	}
 	rp.armer.Reconcile(toRosterEntries(rosters), toActiveEntries(actives))
 	log.Info().Int("rostered", len(rosters)).Int("profiles", len(actives)).
 		Msg("Reconciled DETECT dead-man arming from the roster + active-version projections.")
@@ -1323,6 +1361,10 @@ func (rp *ResolvedEventsProcessor) reconcileRegistry(ctx context.Context) error 
 	scoped, err := NewStoreRuleSource(rp.RuleStore).Load(ctx)
 	if err != nil {
 		return fmt.Errorf("reload rule projection for post-replay registry reconcile: %w", err)
+	}
+	scoped, err = rp.ownedRules(scoped)
+	if err != nil {
+		return err
 	}
 	fresh := make(map[string]struct{}, len(scoped))
 	upserted, changed, removed := 0, 0, 0
@@ -1414,6 +1456,19 @@ func (rp *ResolvedEventsProcessor) reconcileAttributeView(ctx context.Context) e
 	if err != nil {
 		return fmt.Errorf("load device-attribute projection for dynamic-threshold view: %w", err)
 	}
+	if rp.ruleRouting != nil {
+		owned := make([]model.DeviceAttribute, 0, len(rows))
+		for _, row := range rows {
+			owner, err := rp.ruleWorker(row.Tenant)
+			if err != nil {
+				return err
+			}
+			if owner == rp {
+				owned = append(owned, row)
+			}
+		}
+		rows = owned
+	}
 	rp.attrView.Reconcile(toAttrEntries(rows))
 	log.Info().Int("attributes", len(rows)).Msg("Reconciled DETECT dynamic-threshold view from the device-attribute projection.")
 	return nil
@@ -1479,6 +1534,9 @@ func (rp *ResolvedEventsProcessor) reconcileFenceView(ctx context.Context) error
 	tenants := rp.registry.TenantsWithFenceRules()
 	seeded := 0
 	for _, tenant := range tenants {
+		if err := rp.ownsRuleTenant(tenant); err != nil {
+			return err
+		}
 		set, err := rp.FenceSets.CurrentFenceSet(ctx, tenant)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).
@@ -1527,6 +1585,10 @@ func (rp *ResolvedEventsProcessor) hydrateRetainedFenceSets(ctx context.Context,
 // sequence (the view is re-derived from device-management's durable snapshots on restart, never
 // snapshotted here) — so it needs no checkpoint of its own.
 func (rp *ResolvedEventsProcessor) applyFenceSet(fu fenceUpdate) {
+	if err := rp.ownsRuleTenant(fu.tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return
+	}
 	if rp.fenceView == nil {
 		return
 	}
@@ -1542,7 +1604,7 @@ func (rp *ResolvedEventsProcessor) newDetector() detectcore.Detector {
 	if rp.cfg.Shards <= 1 {
 		return detectcore.NewEngine(rp.registry.Cores(), rp.cfg.Lateness)
 	}
-	return rp.observed(detectcore.NewConcurrentSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness))
+	return rp.observed(detectcore.NewConcurrentSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness, rp.shardQueueDepth()))
 }
 
 // restoreDetector rebuilds the live engine from a committed snapshot at the CONFIGURED shard
@@ -1554,7 +1616,7 @@ func (rp *ResolvedEventsProcessor) restoreDetector(payload []byte) (detectcore.D
 	if rp.cfg.Shards <= 1 {
 		return detectcore.Restore(rp.registry.Cores(), rp.cfg.Lateness, payload)
 	}
-	c, err := detectcore.RestoreConcurrentSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness, payload)
+	c, err := detectcore.RestoreConcurrentSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness, payload, rp.shardQueueDepth())
 	if err != nil {
 		return nil, err
 	}
@@ -1579,6 +1641,9 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 		rp.metrics.recordRestore(0, 0)
 		log.Info().Str("partition", rp.partitionID()).Msg("No prior DETECT snapshot; starting from empty engine.")
 		return nil
+	}
+	if err := rp.admitGroupSnapshot(snap.Payload); err != nil {
+		return fmt.Errorf("DETECT snapshot placement for partition %q: %w", rp.partitionID(), err)
 	}
 	engine, err := rp.restoreDetector(snap.Payload)
 	if err != nil {
@@ -1812,6 +1877,10 @@ func (rp *ResolvedEventsProcessor) run() {
 				rp.checkpoint(rp.pctx())
 			}
 		case <-ticker.C:
+			if err := rp.checkRulePlacement(); err != nil {
+				rp.refuseRulePlacement(err)
+				return
+			}
 			tickStarted := time.Now()
 			rp.phases.enter(phaseControl)
 			rp.phases.flush()
@@ -2020,6 +2089,10 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping resolved event with no parseable tenant in subject %q", msg.Subject)
 		return rp.skipPoison(msg.StreamSeq)
+	}
+	if err := rp.ownsRuleTenant(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return false
 	}
 	if msg.IsEnvelope() {
 		return rp.applyEnvelope(msg, tenant)
@@ -2507,6 +2580,25 @@ func (rp *ResolvedEventsProcessor) detectStaleOwner(ctx context.Context) bool {
 // concern is inert; the deferred teardown path (ADR-023/052) that adds removal-driving facts
 // owns making them replay-durable.
 func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
+	if upd.active != nil {
+		if err := rp.ownsRuleTenant(upd.active.Tenant); err != nil {
+			rp.refuseRulePlacement(err)
+			return
+		}
+	}
+	for _, sr := range upd.upserts {
+		if err := rp.ownsRuleTenant(sr.Tenant); err != nil {
+			rp.refuseRulePlacement(err)
+			return
+		}
+	}
+	for _, id := range upd.removals {
+		tenant, _ := runtime.RuleTenant(id)
+		if err := rp.ownsRuleTenant(tenant); err != nil {
+			rp.refuseRulePlacement(err)
+			return
+		}
+	}
 	// Whether a detection may be published early is judged from its rule, at the moment it is
 	// taken into the buffer. A concurrent engine's shards may still hold detections made under the
 	// rule being replaced, so take them in first, as the single engine's per-message drain already has.
@@ -2567,6 +2659,10 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 // The state is serialized, so a drop that removed anything dirties the loop and the next checkpoint
 // captures it; otherwise a restart would replay the dropped latch back to life.
 func (rp *ResolvedEventsProcessor) applySeriesDrop(sd seriesDrop) {
+	if err := rp.ownsRuleTenant(sd.tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return
+	}
 	stale := func(string, time.Time, bool) bool { return true }
 	if rp.RosterStore != nil {
 		rctx, cancel := context.WithTimeout(rp.pctx(), loopReadTimeout)
@@ -2625,6 +2721,10 @@ func (rp *ResolvedEventsProcessor) reconcileDetectionState(ctx context.Context) 
 	if err != nil {
 		return fmt.Errorf("load roster lifecycle for detection-state reconcile: %w", err)
 	}
+	rows, _, err = rp.ownedMembership(rows, nil)
+	if err != nil {
+		return err
+	}
 	type devKey struct{ tenant, token string }
 	byDev := make(map[devKey]model.DeviceRoster, len(rows))
 	for _, r := range rows {
@@ -2667,6 +2767,10 @@ func (rp *ResolvedEventsProcessor) reconcileDetectionState(ctx context.Context) 
 // re-arms — rather than blocking the single-writer loop on a retry. A device with no row (never
 // happens post-persist) or a tombstone reads as not-live and disarms.
 func (rp *ResolvedEventsProcessor) applyArmRecheck(au armUpdate) {
+	if err := rp.ownsRuleTenant(au.tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return
+	}
 	if rp.armer == nil || rp.RosterStore == nil {
 		return
 	}
@@ -2732,6 +2836,10 @@ func (rp *ResolvedEventsProcessor) retryArmRechecks(deadline time.Time) {
 // A transient store error skips the recheck — the projection is durable, and the next fact for the
 // device or the restart reconcile re-reads it — rather than blocking the single-writer loop on a retry.
 func (rp *ResolvedEventsProcessor) applyAttrRecheck(at attrUpdate) {
+	if err := rp.ownsRuleTenant(at.tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return
+	}
 	if rp.attrView == nil || rp.AttributeStore == nil {
 		return
 	}
@@ -2819,6 +2927,12 @@ func (rp *ResolvedEventsProcessor) handleRuleFact(msg messaging.Message, signal 
 		rp.ackRuleFact(msg)
 		return true
 	}
+	owner, err := rp.ruleWorker(tenant)
+	if err != nil {
+		rp.refuseRulePlacement(err)
+		return false // leave the fact unacked; placement is an instance failure
+	}
+	rp = owner // persistence is shared; only this worker's channel receives the update
 	// Persist BEFORE ack (durability): the projection — not the finite-retention stream —
 	// is the restart source of truth. Retry in-process until it commits (or shutdown) so a
 	// DB outage cannot lose the rule to the broker's finite redelivery (MaxDeliver); the
@@ -2945,6 +3059,10 @@ func (rp *ResolvedEventsProcessor) forceCheckpoint(ctx context.Context) bool {
 }
 
 func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool) bool {
+	if err := rp.checkRulePlacement(); err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
 	// 🔴 EVERY NETWORK CALL IN A CHECKPOINT RUNS UNDER A DEADLINE, each phase under its own (the
 	// publish and the Save below). This is the single-writer loop, and these calls are on a
 	// context that otherwise has none: a black-holed database or broker socket would hold the
@@ -2994,6 +3112,11 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	published := rp.publishPending(pubCtx)
 	pubCancel()
 	if !published {
+		return false
+	}
+	// The publish can outlast a placement move; the snapshot must not commit across one.
+	if err := rp.checkRulePlacement(); err != nil {
+		rp.refuseRulePlacement(err)
 		return false
 	}
 	if rp.dirty {
@@ -3139,6 +3262,10 @@ func earlyPublishableKind(kind detectcore.RuleKind, readsAttributes bool) bool {
 // stopped answering costs one bounded attempt per interval and not one per tick; the checkpoint
 // it falls back to retries the same buffer and reports the failure.
 func (rp *ResolvedEventsProcessor) flushDetections(ctx context.Context) {
+	if err := rp.checkRulePlacement(); err != nil {
+		rp.refuseRulePlacement(err)
+		return
+	}
 	if rp.stale || len(rp.pendingDets) == 0 || (!rp.flushFailedAt.IsZero() && !rp.flushFailedAt.Before(rp.lastCheckpoint)) {
 		return
 	}

@@ -7,7 +7,7 @@ import (
 	"context"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/rs/zerolog/log"
@@ -59,7 +59,7 @@ func (f *positionFilter) allow(ctx context.Context, ruleID string) bool {
 		log.Debug().Err(err).Str("rule", ruleID).Msg("detection subscription: rule unavailable; withholding event")
 		return false
 	}
-	compiled, failed := runtime.CompilePublishedRules(row.Tenant, row.ProfileVersionToken, []dmmodel.PublishedDetectionRule{{
+	compiled, failed := runtime.CompilePublishedRules(row.Tenant, row.ProfileVersionToken, []dmcontract.PublishedDetectionRule{{
 		Token: row.RuleToken, Definition: row.Definition,
 		EntityGroupToken: row.EntityGroupToken, EntityGroupVersion: row.EntityGroupVersion,
 	}})

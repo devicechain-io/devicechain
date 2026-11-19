@@ -119,3 +119,72 @@ func TestKickDeviceSessionsRefusesAMalformedRequestWithoutSendingIt(t *testing.T
 	}
 	require.Zero(t, calls.Load())
 }
+
+// kickTestServer is kickTestConn with the server handed back, so a test can take it away.
+func kickTestServer(t *testing.T) (*natsserver.Server, *nats.Conn) {
+	t.Helper()
+	srv, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true})
+	require.NoError(t, err)
+	go srv.Start()
+	require.True(t, srv.ReadyForConnections(10*time.Second))
+	t.Cleanup(srv.Shutdown)
+	nc, err := nats.Connect(srv.ClientURL(), nats.MaxReconnects(-1), nats.ReconnectWait(time.Hour))
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	return srv, nc
+}
+
+// 🔑 A KICK ASKED WHILE THIS SERVICE'S BROKER CONNECTION IS DOWN FAILS AT ONCE. The write
+// that owes it has committed and its caller is waiting: three attempts that each waited out
+// their timeout held a device delete for a minute, past the ingress's own timeout. It is
+// still a failure (nothing was confirmed), and it says why.
+func TestKickDeviceSessionsFailsAtOnceWhileTheConnectionIsDown(t *testing.T) {
+	srv, nc := kickTestServer(t)
+	srv.Shutdown()
+	require.Eventually(t, func() bool { return !nc.IsConnected() }, 10*time.Second, 10*time.Millisecond)
+
+	// The production attempt timeout; more attempts than production, so a requester that kept
+	// trying while the connection stays down is told apart from one that stopped after one backoff.
+	r := NewSessionKickRequester(nc, "inst-1")
+	r.Attempts, r.Backoff = 10, 500*time.Millisecond
+	start := time.Now()
+	err := r.KickDeviceSessions(context.Background(), "acme", SessionKickDeviceDeleted, []string{"d1"})
+	require.ErrorIs(t, err, ErrSessionKickUnavailable)
+	require.Contains(t, err.Error(), "connection to the broker is down")
+	// One backoff (0.5 s) for a blip to recover in, not nine, and no attempt waits out its 20 s timeout.
+	require.Less(t, time.Since(start), 3*time.Second, "a kick with the connection down kept asking for replies that cannot come")
+}
+
+// An attempt in flight when the connection drops is abandoned at the drop, not at its timeout,
+// and no further attempt is made while the connection stays down.
+func TestKickDeviceSessionsAbandonsAnAttemptWhenTheConnectionDrops(t *testing.T) {
+	srv, nc := kickTestServer(t)
+	var asked atomic.Int32
+	first := make(chan struct{}, 1)
+	sub, err := nc.Subscribe(SessionKickSubject("inst-1"), func(*nats.Msg) { // never answers
+		asked.Add(1)
+		select {
+		case first <- struct{}{}:
+		default:
+		}
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+	require.NoError(t, nc.Flush())
+
+	go func() {
+		select {
+		case <-first:
+			srv.Shutdown()
+		case <-time.After(30 * time.Second):
+		}
+	}()
+	r := NewSessionKickRequester(nc, "inst-1")
+	r.Backoff = 5 * time.Millisecond
+	start := time.Now()
+	err = r.KickDeviceSessions(context.Background(), "acme", SessionKickDeviceDeleted, []string{"d1"})
+	require.ErrorIs(t, err, ErrSessionKickUnavailable)
+	require.Contains(t, err.Error(), "connection to the broker is down")
+	require.Less(t, time.Since(start), 15*time.Second, "the attempt waited out its 20 s timeout after the connection dropped")
+	require.EqualValues(t, 1, asked.Load())
+}

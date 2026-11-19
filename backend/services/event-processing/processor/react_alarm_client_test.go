@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 )
@@ -19,15 +19,15 @@ import (
 // than passing the string through) makes any future spelling divergence a test failure, not a silent
 // cross-module drift.
 func TestWireAlarmEdgeMapping(t *testing.T) {
-	if got := wireAlarmEdge(runtime.EdgeResolved); got != dmmodel.AlarmEdgeResolved {
-		t.Fatalf("a resolved edge must map to the shared wire resolved constant; got %q want %q", got, dmmodel.AlarmEdgeResolved)
+	if got := wireAlarmEdge(runtime.EdgeResolved); got != dmcontract.AlarmEdgeResolved {
+		t.Fatalf("a resolved edge must map to the shared wire resolved constant; got %q want %q", got, dmcontract.AlarmEdgeResolved)
 	}
-	if got := wireAlarmEdge(runtime.EdgeRaised); got != dmmodel.AlarmEdgeRaised {
-		t.Fatalf("a raised edge must map to the shared wire raised constant; got %q want %q", got, dmmodel.AlarmEdgeRaised)
+	if got := wireAlarmEdge(runtime.EdgeRaised); got != dmcontract.AlarmEdgeRaised {
+		t.Fatalf("a raised edge must map to the shared wire raised constant; got %q want %q", got, dmcontract.AlarmEdgeRaised)
 	}
 	// An empty/legacy edge normalizes to raised (the DerivedEvent.Edge default), never to resolved —
 	// so an unstamped request can never be dropped as a resolve.
-	if got := wireAlarmEdge(""); got != dmmodel.AlarmEdgeRaised {
+	if got := wireAlarmEdge(""); got != dmcontract.AlarmEdgeRaised {
 		t.Fatalf("an empty edge must default to raised, got %q", got)
 	}
 }
@@ -63,7 +63,7 @@ func TestAlarmClientCarriesThePositionDependency(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
-		got, err := dmmodel.UnmarshalRaiseAlarmRequest(w.payload)
+		got, err := dmcontract.UnmarshalRaiseAlarmRequest(w.payload)
 		if err != nil {
 			t.Fatalf("decode: %v", err)
 		}

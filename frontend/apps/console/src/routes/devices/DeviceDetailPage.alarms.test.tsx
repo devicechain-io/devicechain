@@ -4,6 +4,7 @@
 // The Alarms tab on the device page: offered to a member who may read alarms, left out for one
 // who may not (rather than shown to fail), and it lists this device's alarms when opened.
 import '@/i18n/config';
+import { GraphQLRequestError } from '@devicechain/client';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -138,4 +139,26 @@ describe('moving between devices', () => {
     rerender(view());
     await waitFor(() => expect(screen.queryByText('dev-1-only-alarm')).toBeNull());
   });
+});
+
+
+it('keeps the device and its alarms usable when the suppression API is not deployed yet', async () => {
+  const existing = gqlMock.getMockImplementation()!;
+  gqlMock.mockImplementation((service: string, doc: unknown, variables: unknown) => {
+    if (/query AlarmMaintenance/.test(String(doc))) {
+      const message = 'Cannot query field "alarmSuppressionsForDevice" on type "Query".';
+      return Promise.reject(new GraphQLRequestError(message, 200, [{ message }]));
+    }
+    if (/query\s+Alarms\b/.test(String(doc))) {
+      return Promise.resolve({ alarms: { results: [{ id: 'a', token: 'a', alarmKey: 'pump-overheat', metricKey: 'temperature', state: 'ACTIVE', severity: 'MAJOR', acknowledged: false, raisedTime: '2026-01-01T00:00:00Z' }], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } } });
+    }
+    return existing(service, doc, variables);
+  });
+  renderPage(['device:read', 'alarm:read', 'alarm:write']);
+  const tab = await screen.findByRole('tab', { name: 'Alarms' });
+  fireEvent.mouseDown(tab);
+  fireEvent.click(tab);
+  expect(await screen.findByText('pump-overheat')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Start maintenance' })).toBeNull();
+  expect(screen.queryByText(/Maintenance.*until/)).toBeNull();
 });

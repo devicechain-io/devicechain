@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -115,7 +115,7 @@ func TestOrphanAlarmSweep(t *testing.T) {
 
 func TestDeletedOriginatorClearRendering(t *testing.T) {
 	e := namedAlarm()
-	e.EventType, e.State, e.ClearReason = dmmodel.AlarmEventCleared, "CLEARED", dmmodel.AlarmClearReasonOriginatorDeleted
+	e.EventType, e.State, e.ClearReason = dmcontract.AlarmEventCleared, "CLEARED", dmcontract.AlarmClearReasonOriginatorDeleted
 	m := renderNotification(e)
 	for name, value := range map[string]any{
 		"smtp subject": m.Subject, "smtp body": m.TextBody,
@@ -146,9 +146,9 @@ func TestRepeatedDeletedOriginatorClearIsIdempotent(t *testing.T) {
 	seedRoute(t, api, ctx, "p", true, "CRITICAL", "paging", model.ChannelTypeSMTP)
 	n, paging, _ := twoChannelNotifier(t, api)
 	raised := time.Now().UTC().Add(-time.Hour)
-	require.NoError(t, n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)))
-	clear := cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(time.Minute))
-	clear.ClearReason = dmmodel.AlarmClearReasonOriginatorDeleted
+	require.NoError(t, n.Notify(ctx, cycleEvent(dmcontract.AlarmEventRaised, raised, raised)))
+	clear := cycleEvent(dmcontract.AlarmEventCleared, raised, raised.Add(time.Minute))
+	clear.ClearReason = dmcontract.AlarmClearReasonOriginatorDeleted
 	require.NoError(t, n.Notify(ctx, clear))
 	require.NoError(t, n.Notify(ctx, clear))
 	require.Equal(t, []string{"RAISED", "CLEARED"}, paging.types())

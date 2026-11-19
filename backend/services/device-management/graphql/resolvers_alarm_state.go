@@ -44,6 +44,8 @@ type AlarmResolver struct {
 	// disposition is the current cycle's label when the resolver was built by a write that has
 	// it in hand (setAlarmDisposition), so the field is answered without a read. dispositionKnown
 	// says the value is authoritative; otherwise Disposition reads it.
+	suppressionPage *alarmSuppressionPage
+
 	disposition      *model.AlarmDisposition
 	dispositionKnown bool
 }
@@ -247,8 +249,9 @@ type AlarmSearchResultsResolver struct {
 
 func (r *AlarmSearchResultsResolver) Results() []*AlarmResolver {
 	resolvers := make([]*AlarmResolver, 0)
+	page := &alarmSuppressionPage{alarms: r.M.Results}
 	for _, current := range r.M.Results {
-		resolvers = append(resolvers, &AlarmResolver{M: current, S: r.S, C: r.C})
+		resolvers = append(resolvers, &AlarmResolver{M: current, S: r.S, C: r.C, suppressionPage: page})
 	}
 	return resolvers
 }
