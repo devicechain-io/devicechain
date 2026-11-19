@@ -463,7 +463,7 @@ var afterPublish = []entity{
 		// artifact-signed carries, so the same signature), and update-assignment and
 		// update-rollout then run against the shipped default. Its read-back is the derived
 		// trust, selected here rather than on artifact-available, which is recorded before this
-		// row signs it: VERIFIED, and verify fails if an upgrade loses the signature.
+		// row signs it: SIGNED, and verify fails if an upgrade loses the signature.
 		//
 		// It is a member of the signer group (probeSignerGroup): a baseline older than the
 		// registry skips it with the other three, and only there does update-assignment still
