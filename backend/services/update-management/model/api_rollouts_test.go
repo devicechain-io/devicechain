@@ -25,6 +25,8 @@ type fakeGroups struct {
 	version  *int32
 	err      error
 	pageSize int
+	// afterResolve runs after a page is copied and the lock is released, to model membership churn.
+	afterResolve func()
 }
 
 func (f *fakeGroups) set(tenant, group string, devices ...string) {
@@ -37,6 +39,11 @@ func (f *fakeGroups) set(tenant, group string, devices ...string) {
 }
 
 func (f *fakeGroups) ResolveGroupTargets(ctx context.Context, group string, _ *int32, after string, limit int) (*GroupTargetPage, error) {
+	defer func() {
+		if f.afterResolve != nil {
+			f.afterResolve()
+		}
+	}()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -67,10 +74,12 @@ func (f *fakeGroups) ResolveGroupTargets(ctx context.Context, group string, _ *i
 
 // syncDevices is a concurrency-safe device lookup: every device it knows is a gateway.
 type syncDevices struct {
-	mu       sync.Mutex
-	profiles map[string]string
-	disabled map[string]bool
-	err      error
+	mu           sync.Mutex
+	profiles     map[string]string
+	disabled     map[string]bool
+	err          error
+	incarnations map[string]uint64
+	createdAt    map[string]time.Time
 }
 
 func (s *syncDevices) DeviceOf(_ context.Context, tenant, device string) (DeviceFacts, bool, error) {
@@ -80,7 +89,11 @@ func (s *syncDevices) DeviceOf(_ context.Context, tenant, device string) (Device
 		return DeviceFacts{}, false, s.err
 	}
 	p, ok := s.profiles[tenant+"/"+device]
-	return DeviceFacts{Incarnation: 1, Profile: p, Disabled: s.disabled[tenant+"/"+device], Anchors: []string{}}, ok, nil
+	id := uint64(1)
+	if v, exists := s.incarnations[tenant+"/"+device]; exists {
+		id = v
+	}
+	return DeviceFacts{Incarnation: id, CreatedAt: s.createdAt[tenant+"/"+device], Profile: p, Disabled: s.disabled[tenant+"/"+device], Anchors: []string{}}, ok, nil
 }
 
 type rolloutEnv struct {
@@ -106,6 +119,7 @@ func newRolloutEnv(t *testing.T, n int) *rolloutEnv {
 	e.groups.set("globex", "fleet", "dev-0")
 	e.api.Devices = e.devices
 	e.api.Groups = e.groups
+	e.api.Incarnations = e.devices
 	e.availableArtifact(t, "acme", "fw-2", "2.0.0", []byte("firmware two"))
 	return e
 }
@@ -689,4 +703,18 @@ func TestAPauseDuringTheLookupsStopsTheStep(t *testing.T) {
 	res := e.step(t, "r1")
 	require.Zero(t, res.Dispatched)
 	require.Zero(t, e.assignmentCount(t, "dev-0"), "a paused rollout tells no device")
+}
+
+func (s *syncDevices) DeviceIncarnations(ctx context.Context, tenant string, tokens []string) (map[string]uint64, error) {
+	out := make(map[string]uint64, len(tokens))
+	for _, token := range tokens {
+		facts, found, err := s.DeviceOf(ctx, tenant, token)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			out[token] = facts.Incarnation
+		}
+	}
+	return out, nil
 }

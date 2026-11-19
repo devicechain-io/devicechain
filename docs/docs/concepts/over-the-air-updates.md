@@ -192,7 +192,10 @@ a capped number at a time, and can be paused, resumed and aborted.
    `RUNNING`. A device that joins the group afterwards is not part of the rollout, and one that leaves it
    stays a target; start a new rollout to reach the newcomers. A dynamic group is resolved from its
    published version, which the rollout records. A group of more than 10,000 devices is refused
-   (`ROLLOUT_TOO_LARGE`) rather than cut short.
+   (`ROLLOUT_TOO_LARGE`) rather than cut short. The rollout records which device each member is, not
+   only its token: a device deleted while it waits is skipped (`DEVICE_NOT_FOUND`), and a device later
+   created with the same token is a different device, skipped with `DEVICE_REPLACED` even if it is in
+   the group.
 3. The service then assigns the artifact to the devices in order, never letting more than `maxInFlight`
    of them have an unfinished update. Each device goes through the same rules as `assignArtifact`: a
    device that is missing, disabled, on an incompatible profile, or busy with a different update is
