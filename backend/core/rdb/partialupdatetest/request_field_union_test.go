@@ -8,7 +8,28 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 )
+
+type embeddedCoverageFields struct {
+	Kind dcgraphql.OptionalString
+}
+
+// The promoted Kind is a field callers can send that no enumeration here would see.
+type embeddingCoverageRequest struct {
+	embeddedCoverageFields
+	Name dcgraphql.OptionalString
+}
+
+// otherConditionalCoverageRequest returns a second type named conditionalCoverageRequest.
+func otherConditionalCoverageRequest() any {
+	type conditionalCoverageRequest struct {
+		Name        dcgraphql.OptionalString
+		Conditional dcgraphql.OptionalString
+	}
+	return new(conditionalCoverageRequest)
+}
 
 func siblingCoverageSuite() Suite[*demoApi] {
 	s := conditionalCoverageSuite()
@@ -95,6 +116,22 @@ func TestRequestFieldUnionNegativeControls(t *testing.T) {
 			s.Families[1].Fields = append(s.Families[1].Fields, Field{Name: "CONDITIONAL"})
 			return s
 		}, want: "is stale: family \"second\" declares the field"},
+		{name: "duplicateKey", makeSuite: func() Suite[*demoApi] {
+			s := externallyDrivenCoverageSuite()
+			s.ExternallyDriven["conditionalCoverageRequest.conditional"] = "TestDedicatedConditionalUpdate"
+			return s
+		}, want: "one exemption per field"},
+		{name: "embeddedField", makeSuite: func() Suite[*demoApi] {
+			s := requestCoverageSuite()
+			s.Families[0].NewRequest = func() any { return new(embeddingCoverageRequest) }
+			return s
+		}, want: "embedded request fields are not supported"},
+		{name: "ambiguousType", makeSuite: func() Suite[*demoApi] {
+			// Two distinct types sharing the bare name a key uses, as two packages' would.
+			s := externallyDrivenCoverageSuite()
+			s.Families[1].NewRequest = otherConditionalCoverageRequest
+			return s
+		}, want: "is ambiguous: more than one request type in this suite is named conditionalCoverageRequest"},
 		{name: "notLimitedEverywhere", makeSuite: func() Suite[*demoApi] {
 			s := externallyDrivenCoverageSuite()
 			s.Families[1].FieldLimitations = nil

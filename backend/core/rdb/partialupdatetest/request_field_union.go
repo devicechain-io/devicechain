@@ -27,6 +27,27 @@ func everyRequestFieldIsDriven[A any](t *testing.T, s Suite[A]) {
 		groups[rt] = append(groups[rt], fam)
 	}
 
+	// A bare Go type name is the key, so two request types of one name in different
+	// packages would share an exemption whose tests drive only one of them: refuse it.
+	byName := map[string]reflect.Type{}
+	ambiguous := map[string]bool{}
+	for _, rt := range types {
+		name := rt.Elem().Name()
+		if other, ok := byName[name]; ok && other != rt {
+			ambiguous[name] = true
+		}
+		byName[name] = rt
+		// A promoted field of an embedded struct is a field callers can send, but neither
+		// this check nor EveryRequestFieldIsDeclared enumerates promoted fields: refuse the
+		// shape rather than certify a request with fields nobody looked at.
+		for i := 0; i < rt.Elem().NumField(); i++ {
+			if sf := rt.Elem().Field(i); sf.Anonymous {
+				t.Errorf("%s embeds %s: embedded request fields are not supported by this harness; declare the fields directly",
+					rt.Elem().Name(), sf.Type)
+			}
+		}
+	}
+
 	// Only the field component is case-insensitive; type names are Go names.
 	external := map[string]bool{}
 	keys := make([]string, 0, len(s.ExternallyDriven))
@@ -34,10 +55,20 @@ func everyRequestFieldIsDriven[A any](t *testing.T, s Suite[A]) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	normalized := map[string]string{}
 	for _, key := range keys {
 		typeName, fieldName, _ := strings.Cut(key, ".")
 		fieldName = strings.ToLower(fieldName)
 		valid := true
+		if first, dup := normalized[typeName+"."+fieldName]; dup {
+			t.Errorf("ExternallyDriven %q duplicates %q: one exemption per field", key, first)
+			valid = false
+		}
+		normalized[typeName+"."+fieldName] = key
+		if ambiguous[typeName] {
+			t.Errorf("ExternallyDriven %q is ambiguous: more than one request type in this suite is named %s", key, typeName)
+			valid = false
+		}
 		if strings.TrimSpace(s.ExternallyDriven[key]) == "" {
 			t.Errorf("ExternallyDriven %q needs a non-empty reason naming the dedicated tests", key)
 			valid = false

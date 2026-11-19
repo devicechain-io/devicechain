@@ -68,8 +68,10 @@ import (
 // every field is covered by 3 or 6, and a family that declares a field in the wrong kind
 // FAILS rather than falling through the gap between them.
 //
-// Two more run alongside them: EveryRequestFieldIsDeclared asks the request TYPE whether
-// the family's table is complete, and FixtureIsAsStrictAsProduction asks whether the
+// Three more run alongside them: EveryRequestFieldIsDeclared asks the request TYPE whether
+// the family's table is complete, EveryRequestFieldIsDriven asks whether the families that
+// share a request type together drive every field of it (a limitation in one family is a
+// claim that another drives the field), and FixtureIsAsStrictAsProduction asks whether the
 // fixture refuses what production refuses.
 //
 // # What the harness deliberately does NOT cover
