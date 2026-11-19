@@ -103,6 +103,9 @@ frontend/.api-selftest/
 # hack/decoder-rig.sh: the rig's kubeconfig and state (a cluster credential; never committed)
 /.decoder-rig/
 
+# hack/shard-rig.sh: the rig's kubeconfig and state (a cluster credential; never committed)
+/.shard-rig/
+
 # hack/harborpulse-rig.sh: the rig's kubeconfig, logs and reports (a cluster credential; never committed)
 /.harborpulse-rig/
 

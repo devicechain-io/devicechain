@@ -1,10 +1,13 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import '@/i18n/lazy/alarmMaintenance';
+import { listWindows, listHistoryAlarms } from '@/lib/api/alarm-maintenance';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { hasAuthority } from '@devicechain/client';
+import { MaintenanceChip, MaintenanceHistoryMark, useSuppressions } from '@/routes/alarm-maintenance/MaintenanceChip';
 import { useAuth } from '@/auth/AuthProvider';
 import { formatTime } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -47,6 +50,7 @@ const pageSize = 25;
 const STATE_PARAM = 'state';
 const SEVERITY_PARAM = 'severity';
 const ACK_PARAM = 'ack';
+const HISTORY_PARAM = 'maintenance';
 const EXPORT_STEM = 'alarms';
 
 // Options carry a `labelKey` into the `alarms` catalog (ADR-066), resolved with t()
@@ -100,6 +104,7 @@ export default function AlarmsPage() {
   const stateOptions = STATE_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }));
   const severityOptions = SEVERITY_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }));
   const ackOptions = ACK_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }));
+  const historyOptions = [{ value: 'true', label: t('alarmMaintenance:historyYes') }, { value: 'false', label: t('alarmMaintenance:historyNo') }];
 
   const [pageNumber, setPageNumber] = useState(1);
   // The filters live in the address, so the home page can link here narrowed to a severity and
@@ -123,6 +128,8 @@ export default function AlarmsPage() {
       },
       { replace: true },
     );
+  const capability = useQuery(() => listWindows({ pageNumber: 1, pageSize: 1 }));
+  const history = fromAddress(HISTORY_PARAM, ['true', 'false']);
   const [version, bumpVersion] = useReload();
   // Refreshes for the same filters must let the current read land. Remember just one trailing
   // refresh, regardless of how many events, reconnects or actions arrive while it is running.
@@ -150,21 +157,30 @@ export default function AlarmsPage() {
 
   // Reset to the first page whenever a filter changes so the view never lands on an
   // out-of-range page.
-  useEffect(() => setPageNumber(1), [state, severity, ack]);
-  useEffect(() => setSelected(new Set()), [state, severity, ack, pageNumber]);
+  useEffect(() => setPageNumber(1), [state, severity, ack, history]);
+  useEffect(() => setSelected(new Set()), [state, severity, ack, history, pageNumber]);
 
   const { data, loading, error } = useQuery(
-    () => {
+    async () => {
       reading.current = true;
-      return listAlarms({
+      const options = {
         pageNumber,
         pageSize,
         state: state || undefined,
         severity: severity || undefined,
         acknowledged,
-      });
+      };
+      if (history) {
+        const filtered = await listHistoryAlarms(options, history === 'true');
+        if (filtered) return filtered;
+        setFilter(HISTORY_PARAM)('');
+        capability.refetch();
+        return null;
+      }
+      return listAlarms(options);
     },
-    [pageNumber, state, severity, ack, version],
+    [pageNumber, state, severity, ack, history, version],
+    [state, severity, ack, history],
   );
 
   // Drain only after useQuery has published the result (or error). Starting in the loader's
@@ -287,6 +303,7 @@ export default function AlarmsPage() {
   ];
 
   const results: Alarm[] = data?.results ?? [];
+  const { suppressions, historyMarks } = useSuppressions(results.map(a => a.token), data);
   const unitOf = useMetricUnits(results.map((a) => (a.originatorType.toLowerCase() === 'device' ? a.originatorToken : null)));
   const selectable = results.filter(canAcknowledge);
   // What the bar acts on is the ticks that still belong to an acknowledgeable row: a live
@@ -355,19 +372,28 @@ export default function AlarmsPage() {
             onChange={setFilter(ACK_PARAM)}
             options={ackOptions}
           />
+          {capability.data && !capability.error && <Combobox
+            ariaLabel={t('alarmMaintenance:historyFilter')} placeholder={t('alarmMaintenance:historyAny')}
+            value={history} onChange={setFilter(HISTORY_PARAM)}
+            options={historyOptions}
+          />}
           <ExportCsvButton
             fileStem={EXPORT_STEM}
             columns={exportColumns}
-            scopeKey={`${state}|${severity}|${ack}`}
-            fetchPage={(pageNumber, pageSize) =>
-              listAlarms({
+            scopeKey={`${state}|${severity}|${ack}|${history}`}
+            fetchPage={async (pageNumber, pageSize) => {
+              const options = {
                 pageNumber,
                 pageSize,
                 state: state || undefined,
                 severity: severity || undefined,
                 acknowledged,
-              })
-            }
+              };
+              if (!history) return listAlarms(options);
+              const page = await listHistoryAlarms(options, history === 'true');
+              if (!page) throw new Error(t('alarmMaintenance:historyUnavailable'));
+              return page;
+            }}
           />
         </div>
       }
@@ -432,6 +458,8 @@ export default function AlarmsPage() {
                   </DataTableCell>
                   <DataTableCell>
                     <AlarmStatusBadge state={a.state} acknowledged={a.acknowledged} />
+                    <MaintenanceChip suppression={suppressions.get(a.token)} />
+                    <MaintenanceHistoryMark stamp={historyMarks.get(a.token)} />
                   </DataTableCell>
                   <DataTableCell className="font-mono text-xs text-foreground">
                     <OriginatorLink alarm={a} />

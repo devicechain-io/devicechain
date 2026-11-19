@@ -92,12 +92,19 @@ func (rp *ResolvedEventsProcessor) EvictTenant(ctx context.Context, tenant strin
 	if err := rp.termHeldForEviction(); err != nil {
 		return 0, err
 	}
+	// A group worker is handed its term context only when the supervisor builds it, which
+	// is after the shared gate opens (the predecessor wait and the topology check come in
+	// between). Until then it has no term of its own to answer for.
+	term := rp.pctx()
+	if term == nil {
+		return 0, errNoTermHeld
+	}
 	req := tenantPurgeRequest{tenant: tenant, reply: make(chan tenantPurgeResult, 1)}
 	select {
 	case rp.tenantPurges <- req:
 	case <-ctx.Done():
 		return 0, fmt.Errorf("the DETECT loop did not accept the eviction of %q: %w", tenant, ctx.Err())
-	case <-rp.pctx().Done():
+	case <-term.Done():
 		return 0, fmt.Errorf("the DETECT loop is shutting down, so %q was not evicted", tenant)
 	}
 	select {
@@ -105,7 +112,7 @@ func (rp *ResolvedEventsProcessor) EvictTenant(ctx context.Context, tenant strin
 		return res.evicted, res.err
 	case <-ctx.Done():
 		return 0, fmt.Errorf("the DETECT loop did not answer the eviction of %q: %w", tenant, ctx.Err())
-	case <-rp.pctx().Done():
+	case <-term.Done():
 		return 0, fmt.Errorf("the DETECT loop shut down mid-eviction of %q", tenant)
 	}
 }

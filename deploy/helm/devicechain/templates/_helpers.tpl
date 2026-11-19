@@ -1727,9 +1727,11 @@ the filtered document by accident.
 {{- if hasKey $nats "shardGroups" -}}
   {{- $shards := get $nats "shardGroups" -}}
   {{- $areas := splitList "," (include "devicechain.enabledAreas" .) -}}
-  {{- if and (has "resolved-events" $shards.suffixes) (or (has "device-state" $areas) (has "event-processing" $areas)) -}}
-    {{- fail "resolved-events shardGroups requires group readers in every deployed consumer; device-state and event-processing are not wired yet (select inbound-events only)" -}}
-  {{- end -}}
+  {{- /* resolved-events may be sharded with event-processing deployed, but only when the
+  instance is first installed. The chart cannot tell an install from an upgrade without
+  reading the cluster, which it deliberately never does (every render must match
+  `helm template`), so that rule is enforced by dcctl upgrade, which compares against the
+  deployed configuration, and by event-processing at startup. */ -}}
   {{- if ne (int (get $nats "streamReplicas" | default 1)) 1 -}}
     {{- fail "shardGroups placement requires streamReplicas=1" -}}
   {{- end -}}

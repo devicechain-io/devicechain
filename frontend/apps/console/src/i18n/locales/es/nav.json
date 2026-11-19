@@ -47,5 +47,6 @@
   "organization": "Organización",
   "access": "Acceso",
   "deviceProfilesHint": "reglas, métricas, comandos",
-  "notificationChannels": "Canales de notificación"
+  "notificationChannels": "Canales de notificación",
+  "alarmMaintenance": "Mantenimiento de alarmas"
 }
