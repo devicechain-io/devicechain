@@ -4,7 +4,9 @@
 package bootstrap
 
 import (
+	"context"
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -15,6 +17,7 @@ import (
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/engine"
 	"helm.sh/helm/v3/pkg/releaseutil"
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -172,4 +175,55 @@ func TestChartUpgradeRefusesReshapingResolvedEvents(t *testing.T) {
 	require.NoError(t, renderWithPrior(t, ch, next(resolvedBlock(3, "inbound-events", "resolved-events")), resolved3))
 	require.NoError(t, renderWithPrior(t, ch, next(resolvedBlock(3, "inbound-events", "resolved-events")), nil))
 	require.True(t, strings.Contains(string(resolved3), "resolved-events"))
+}
+
+// Every upgrade, flagless included, is judged against what the cluster RUNS: a recorded
+// overlay edited to add resolved-events is carried without any --values, and must still
+// be refused before anything is written.
+func TestShardGroupsUpgradeJudgesTheDeployedConfiguration(t *testing.T) {
+	originalInfra, originalDeployed := readLiveInfra, readDeployedShardGroups
+	t.Cleanup(func() { readLiveInfra, readDeployedShardGroups = originalInfra, originalDeployed })
+	three := int32(3)
+	readLiveInfra = func(context.Context, string, string) (liveInfra, error) {
+		return liveInfra{Broker: &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{Replicas: &three}}}, nil
+	}
+	for _, tc := range []struct {
+		name     string
+		deployed *config.NatsShardGroupsConfiguration
+		want     string
+	}{
+		{"inbound-only", &config.NatsShardGroupsConfiguration{Count: 3, Suffixes: []string{"inbound-events"}}, "start sharding resolved-events"},
+		{"unsharded", nil, "start sharding resolved-events"},
+		{"other-count", &config.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{"inbound-events", "resolved-events"}}, "change shardGroups.count from 2 to 3"},
+		{"same", &config.NatsShardGroupsConfiguration{Count: 3, Suffixes: []string{"inbound-events", "resolved-events"}}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readDeployedShardGroups = func(context.Context, string, string) (*config.NatsShardGroupsConfiguration, error) {
+				return tc.deployed, nil
+			}
+			// No overlay intent: the block arrives the way a carried record does.
+			st := &State{Instance: "prod", Profile: "default", Values: map[string]string{},
+				ValuesOverlay: shardGroupsValues(resolvedBlock(3, "inbound-events", "resolved-events"))}
+			err := precheckShardGroupsUpgrade(t.Context(), st)
+			if tc.want == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.want)
+			}
+		})
+	}
+	// A deployed configuration that cannot be read is not a fresh instance.
+	readDeployedShardGroups = func(context.Context, string, string) (*config.NatsShardGroupsConfiguration, error) {
+		return nil, fmt.Errorf("forbidden")
+	}
+	st := &State{Instance: "prod", Profile: "default", Values: map[string]string{},
+		ValuesOverlay: shardGroupsValues(resolvedBlock(3, "resolved-events"))}
+	require.ErrorContains(t, precheckShardGroupsUpgrade(t.Context(), st), "forbidden")
+	// Without event-processing the deployed shape is not consulted at all.
+	st = &State{Instance: "prod", Profile: "ingest-only", EnableAreas: []string{"event-management"}, Values: map[string]string{},
+		ValuesOverlay: shardGroupsValues(resolvedBlock(3, "resolved-events"))}
+	var err error
+	st.EnabledAreas, err = ResolveEnabledAreas(st.Profile, st.EnableAreas)
+	require.NoError(t, err)
+	require.NoError(t, precheckShardGroupsUpgrade(t.Context(), st))
 }

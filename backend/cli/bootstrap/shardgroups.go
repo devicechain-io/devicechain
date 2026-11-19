@@ -154,8 +154,12 @@ func shardGroupAreas(profile string, extra []string) ([]string, error) {
 // An upgrade must never convert a data-bearing standalone JetStream server.
 // Read the existing broker, including for --skip-infrastructure.
 func precheckShardGroupsUpgrade(ctx context.Context, st *State) error {
-	cfg, err := shardGroupsFromValues(authoringValues(st))
+	vals := authoringValues(st)
+	cfg, err := shardGroupsFromValues(vals)
 	if err != nil || cfg == nil {
+		return err
+	}
+	if err := precheckResolvedEventsReshape(ctx, st, vals, cfg); err != nil {
 		return err
 	}
 	infra, err := readLiveInfra(ctx, st.KubeContext, st.Instance)
@@ -174,6 +178,39 @@ func precheckShardGroupsUpgrade(ctx context.Context, st *State) error {
 		servers = len(infra.BrokerClaims)
 	}
 	return refuseStandaloneShardGroups(servers, servers > 0)
+}
+
+// readDeployedShardGroups is the shardGroups block of the instance configuration the
+// cluster runs now. Indirected like readLiveInfra, so the decision can be exercised
+// without a cluster.
+var readDeployedShardGroups = func(ctx context.Context, kubeContext, instance string) (*config.NatsShardGroupsConfiguration, error) {
+	doc, err := DeployedInstanceConfig(ctx, kubeContext, instance)
+	if err != nil {
+		return nil, err
+	}
+	if doc == nil {
+		return nil, nil
+	}
+	return doc.Infrastructure.Nats.ShardGroups, nil
+}
+
+// precheckResolvedEventsReshape judges the upgrade's shardGroups against the DEPLOYED
+// configuration, on every upgrade and whatever the run was given. The recorded overlay
+// and declaration are inputs a run can carry or replace; what the services were started
+// with is the only record of what the instance already is.
+func precheckResolvedEventsReshape(ctx context.Context, st *State, vals map[string]interface{}, cfg *config.NatsShardGroupsConfiguration) error {
+	areas, err := shardGroupValuesAreas(vals)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(cfg.Suffixes, streams.ResolvedEvents) || !slices.Contains(areas, "event-processing") {
+		return nil // nothing the deployed shape could refuse
+	}
+	deployed, err := readDeployedShardGroups(ctx, st.KubeContext, st.Instance)
+	if err != nil {
+		return fmt.Errorf("reading the deployed shardGroups to judge this upgrade against: %w", err)
+	}
+	return refuseResolvedEventsReshape(deployed, cfg, areas)
 }
 
 func refuseStandaloneShardGroups(servers int, known bool) error {
