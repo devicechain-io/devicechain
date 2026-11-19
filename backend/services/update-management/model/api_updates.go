@@ -29,6 +29,7 @@ import (
 // Refusal codes of the assignment plane (extensions.code on the GraphQL plane).
 const (
 	CodeDeviceNotFound          = "DEVICE_NOT_FOUND"
+	CodeDeviceReplaced          = "DEVICE_REPLACED"
 	CodeIncompatibleProfile     = "INCOMPATIBLE_PROFILE"
 	CodeDeviceLookupUnavailable = "DEVICE_LOOKUP_UNAVAILABLE"
 	CodeDeviceChannelUnwired    = "DEVICE_CHANNEL_UNAVAILABLE"
@@ -551,6 +552,20 @@ func (api *Api) AssignArtifact(ctx context.Context, deviceToken, artifactToken s
 
 func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string, artifact *Artifact,
 	facts DeviceFacts) (*UpdateAssignmentView, error) {
+	// Without an identity we cannot prove this writer may replace any current assignment.
+	if facts.Incarnation == 0 {
+		return nil, refuse(CodeDeviceLookupUnavailable, "device %q has no known incarnation", deviceToken)
+	}
+	// History fences delayed writers even when this component's current slot is empty.
+	// device_token is indexed; MAX includes every component and ignores legacy NULLs.
+	var latest sql.NullInt64
+	if err := tx.Model(&UpdateAssignment{}).Select("MAX(device_incarnation)").
+		Where("device_token = ?", deviceToken).Scan(&latest).Error; err != nil {
+		return nil, err
+	}
+	if latest.Valid && latest.Int64 > 0 && uint64(latest.Int64) > facts.Incarnation {
+		return nil, refuse(CodeDeviceReplaced, "device %q was replaced after it was looked up", deviceToken)
+	}
 	now := api.now()
 	var current []UpdateAssignment
 	if err := tx.Where("device_token = ? AND component = ? AND superseded_at IS NULL", deviceToken, artifact.Component).
@@ -584,6 +599,8 @@ func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string,
 				"device %q is already working on update %q (%s); cancel it before assigning another",
 				deviceToken, cur.Token, at[0].State)
 		}
+		// A replacement committed after our read makes this row's CAS lose. If our read found
+		// no row, the partial unique index rejects our insert instead; neither overwrites it.
 		res := tx.Model(&UpdateAssignment{ID: cur.ID, Token: cur.Token}).Where("id = ? AND superseded_at IS NULL", cur.ID).
 			Update("superseded_at", now)
 		if res.Error != nil {
