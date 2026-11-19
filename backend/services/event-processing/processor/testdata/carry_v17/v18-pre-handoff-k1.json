@@ -1,0 +1,37 @@
+{
+  "producer": "v1.8",
+  "scenario": "v18-pre-handoff",
+  "shards": 1,
+  "streamSeq": 1,
+  "watermark": "2026-07-09T12:00:01Z",
+  "payload": {
+    "frontier": 1,
+    "watermark": "2026-07-09T12:00:01Z",
+    "lastSeq": 1,
+    "active": [],
+    "durationBreaks": [],
+    "timers": [],
+    "gens": [],
+    "sliding": [],
+    "panes": [],
+    "deltas": [],
+    "counts": [],
+    "sessions": [],
+    "slides": [],
+    "corr": [],
+    "expected": [],
+    "raised": [
+      {
+        "rule": "acme/p1@v1/r1",
+        "series": "dev1",
+        "at": "2026-07-09T12:00:01Z"
+      }
+    ],
+    "presence": [],
+    "pending": [],
+    "newest": []
+  },
+  "events": [
+    "acme/p1@v1/r1 raised"
+  ]
+}

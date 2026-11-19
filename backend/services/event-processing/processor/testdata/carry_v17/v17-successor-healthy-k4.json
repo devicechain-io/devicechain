@@ -1,0 +1,37 @@
+{
+  "producer": "v1.7",
+  "scenario": "v17-successor-healthy",
+  "shards": 4,
+  "streamSeq": 2,
+  "watermark": "2026-07-09T12:00:02Z",
+  "payload": {
+    "frontier": 1,
+    "watermark": "2026-07-09T12:00:02Z",
+    "lastSeq": 2,
+    "active": [],
+    "durationBreaks": [],
+    "timers": [],
+    "gens": [],
+    "sliding": [],
+    "panes": [],
+    "deltas": [],
+    "counts": [],
+    "sessions": [],
+    "slides": [],
+    "corr": [],
+    "expected": [],
+    "raised": [
+      {
+        "rule": "acme/p1@v1/r1",
+        "series": "dev1",
+        "at": "2026-07-09T12:00:01Z"
+      }
+    ],
+    "presence": [],
+    "pending": [],
+    "newest": []
+  },
+  "events": [
+    "acme/p1@v1/r1 raised"
+  ]
+}

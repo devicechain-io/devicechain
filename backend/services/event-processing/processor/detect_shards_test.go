@@ -172,7 +172,8 @@ func shardedProcessor(t testing.TB, ctx context.Context, store *model.SnapshotSt
 		t.Fatalf("restore (k=%d): %v", k, err)
 	}
 	rp.armer = runtime.NewDeadmanArmer(reg, rp.engine)
-	rp.armer.Reconcile(shardedRoster())
+	rosters, actives := shardedRoster()
+	rp.armer.Reconcile(rosters, actives)
 	t.Cleanup(rp.closeDetector) // the shard goroutines end with the test
 	return rp
 }

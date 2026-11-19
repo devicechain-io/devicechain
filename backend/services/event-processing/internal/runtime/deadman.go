@@ -4,6 +4,7 @@
 package runtime
 
 import (
+	"slices"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
@@ -13,6 +14,11 @@ import (
 // enumerates dead-man absence timers (ADR-051 slice 4c-2b-2a). *core.Engine satisfies it; the
 // narrow interface lets the armer's cross-reference logic be unit-tested against a fake.
 type expectedArmer interface {
+	CarryRaised(successor map[string]string, skip func(core.SeriesKey) bool) int
+	ClearRaisedForRules(map[string]struct{}) int
+	IsRaised(core.SeriesKey) bool
+	ClearRaised(core.SeriesKey)
+	ClearRaisedIfNotAfter(core.SeriesKey, time.Time)
 	SetExpected(key core.SeriesKey, since time.Time)
 	RemoveExpected(key core.SeriesKey)
 	ExpectedKeys() []core.SeriesKey
@@ -45,6 +51,14 @@ type ActiveEntry struct {
 // singleton across tenants, so a bare token is not unique).
 type profKey struct{ tenant, profileToken string }
 type devKey struct{ tenant, deviceToken string }
+
+type evaluatedKey struct {
+	profile profKey
+	version string
+	device  string
+}
+
+const maxPreActivationEvaluations = 4096
 
 type activeState struct {
 	version     string // active profileVersionToken
@@ -93,16 +107,29 @@ type DeadmanArmer struct {
 	active    map[profKey]activeState
 	roster    map[devKey]rosterMember
 	byProfile map[profKey]map[string]struct{}
+	// Only handoffs actually deferred for pending output may be retried. Late
+	// historical latches created after a handoff are never retry candidates.
+	deferredThresholds map[core.SeriesKey]core.SeriesKey
+	// Inverse of the current threshold pairing, including every retained old
+	// version. Built on membership changes, not on the per-detection hot path.
+	thresholdPredecessors map[profKey]map[string][]string
+	// At most 4096 distinct non-active (tenant, profile, version, device)
+	// evaluations. Activation consumes its version's records. On overflow, prune
+	// everything and disable carry until reset/Reconcile: forgetting must never
+	// restore eligibility. Late events for arbitrarily old versions stay bounded.
+	preActivationEvaluations map[evaluatedKey]struct{}
+	carryUncertain           bool
 }
 
 // NewDeadmanArmer builds an empty armer over the rule registry and the engine.
 func NewDeadmanArmer(reg *RuleRegistry, engine expectedArmer) *DeadmanArmer {
 	return &DeadmanArmer{
-		reg:       reg,
-		engine:    engine,
-		active:    map[profKey]activeState{},
-		roster:    map[devKey]rosterMember{},
-		byProfile: map[profKey]map[string]struct{}{},
+		reg:                   reg,
+		engine:                engine,
+		active:                map[profKey]activeState{},
+		roster:                map[devKey]rosterMember{},
+		byProfile:             map[profKey]map[string]struct{}{},
+		thresholdPredecessors: map[profKey]map[string][]string{},
 	}
 }
 
@@ -134,34 +161,99 @@ func (d *DeadmanArmer) graceBase(expectedSince, publishedAt time.Time) (since ti
 // it the post-merge roster row after a device-roster or entity-deleted fact, so this method never
 // re-implements the projection's monotonic ordering — it just reflects the resolved truth).
 // present=false means the device is gone (deleted/tombstoned) and must be disarmed. A present
-// device whose profile token differs from what the armer last knew is a re-type: the OLD profile's
-// dead-men are disarmed before the new profile's are armed.
-func (d *DeadmanArmer) ApplyDeviceMembership(e RosterEntry, present bool) {
+// device whose profile token or membership-since changes starts a new membership.
+// The old profile's threshold latches and deferred pairs are cleared without
+// emitting; pending output stays owed. It reports whether membership changed.
+func (d *DeadmanArmer) ApplyDeviceMembership(e RosterEntry, present bool) bool {
 	dk := devKey{e.Tenant, e.DeviceToken}
 	prev, known := d.roster[dk]
-	// Departed, or moved to a different profile: tear down the old scope first.
-	if known && (!present || prev.profileToken != e.ProfileToken) {
+	if known && present && prev.profileToken == e.ProfileToken && prev.expectedSince.Equal(e.ExpectedSince) {
+		return false // authoritative redelivery: no new membership or latch clear
+	}
+	if known {
+		d.clearMembershipThresholds(e.Tenant, prev.profileToken, e.DeviceToken)
 		d.disarmDevice(e.Tenant, e.DeviceToken, prev.profileToken)
 		delete(d.roster, dk)
 		d.removeFromProfile(profKey{e.Tenant, prev.profileToken}, e.DeviceToken)
 	}
 	if !present {
-		return
+		return known
 	}
 	d.roster[dk] = rosterMember{profileToken: e.ProfileToken, expectedSince: e.ExpectedSince}
 	d.addToProfile(profKey{e.Tenant, e.ProfileToken}, e.DeviceToken)
 	d.armDevice(e)
+	return true
+}
+
+// A latch from any retained version of a departed profile cannot establish
+// continuity for a later membership, even if the device returns before publish.
+func (d *DeadmanArmer) clearMembershipThresholds(tenant, profile, device string) {
+	left := map[string]struct{}{}
+	for _, id := range d.reg.IDs() {
+		sr, _ := d.reg.Lookup(id)
+		p, _, parsed := ProfileAndRuleToken(id)
+		if sr.Tenant == tenant && parsed && p == profile && sr.Compiled.Core.Kind == core.Threshold {
+			left[id] = struct{}{}
+			d.engine.ClearRaised(core.SeriesKey{Rule: id, Series: device})
+		}
+	}
+	for old, next := range d.deferredThresholds {
+		_, oldLeft := left[old.Rule]
+		_, nextLeft := left[next.Rule]
+		if old.Series == device && (oldLeft || nextLeft) {
+			delete(d.deferredThresholds, old)
+		}
+	}
 }
 
 // ApplyActiveVersion applies one authoritative active-version change (slice 4c-2b-2b feeds it the
 // post-merge ProfileActive row after a published-rule fact, AFTER the fact's rules are installed
 // in the registry so AbsenceRulesFor can see them). It records the active version, disarms a
 // superseded version's dead-men across the profile's fleet, then arms every rostered device of the
-// profile under the new active version.
-func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry) {
+// profile under the new active version. Latches carry only from a known immediately
+// previous active version, paired by stable identity and kind, for current members.
+// Historical Threshold and Absence latches in the destination are cleared first,
+// without emitting or altering pending output. Only this transition's carry may
+// populate those latches. It returns the number of cleared or moved latches.
+func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry, skip func(core.SeriesKey) bool) int {
 	pk := profKey{a.Tenant, a.ProfileToken}
 	prev, had := d.active[pk]
 	d.active[pk] = activeState{version: a.ActiveVersionToken, publishedAt: a.PublishedAt}
+	pairs := d.successors(a.Tenant, a.ProfileToken)
+	d.indexThresholdPredecessors(pk, pairs)
+	// Redelivered active facts must not start a fresh handoff for historical
+	// threshold latches created after the actual version transition.
+	moved := 0
+	cleared := 0
+	if had && prev.version != a.ActiveVersionToken {
+		d.invalidateDeferredThresholds()
+		// Rollback must not resurrect a latch from an earlier stint of this version.
+		// Clear Absence too: retained state cannot prove continuity for either kind.
+		// Pending edges stay ordered and publish normally; a new breach may duplicate
+		// a raise, but must never be suppressed by uncertain historical state.
+		destination := map[string]struct{}{}
+		for _, sr := range d.reg.RulesFor(a.Tenant, a.ActiveVersionToken) {
+			if sr.Compiled.Core.Kind == core.Threshold || sr.Compiled.Core.Kind == core.Absence {
+				destination[sr.Compiled.ID] = struct{}{}
+			}
+		}
+		cleared = d.engine.ClearRaisedForRules(destination)
+		// Only the immediately previous active version proves continuity. Older
+		// retained latches may precede a removed, disabled or differently kinded rule.
+		for old := range pairs {
+			if sr, ok := d.reg.Lookup(old); !ok || sr.ProfileVersionToken != prev.version {
+				delete(pairs, old)
+			}
+		}
+		moved = d.carryHandoff(pairs, skip)
+	}
+	if !had || prev.version != a.ActiveVersionToken {
+		for key := range d.preActivationEvaluations {
+			if key.profile == pk && key.version == a.ActiveVersionToken {
+				delete(d.preActivationEvaluations, key)
+			}
+		}
+	}
 	if had && prev.version != a.ActiveVersionToken {
 		for dev := range d.byProfile[pk] {
 			for _, sr := range d.reg.AbsenceRulesFor(a.Tenant, prev.version) {
@@ -171,7 +263,7 @@ func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry) {
 	}
 	abs := d.reg.AbsenceRulesFor(a.Tenant, a.ActiveVersionToken)
 	if len(abs) == 0 {
-		return
+		return moved + cleared
 	}
 	for dev := range d.byProfile[pk] {
 		since, ok := d.graceBase(d.roster[devKey{a.Tenant, dev}].expectedSince, a.PublishedAt)
@@ -182,6 +274,7 @@ func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry) {
 			d.engine.SetExpected(core.SeriesKey{Rule: sr.Compiled.ID, Series: dev}, since)
 		}
 	}
+	return moved + cleared
 }
 
 // loadMembership (re)populates the armer's three membership views (active / roster / byProfile) from
@@ -191,6 +284,9 @@ func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry) {
 func (d *DeadmanArmer) loadMembership(rosters []RosterEntry, actives []ActiveEntry) {
 	for _, a := range actives {
 		d.active[profKey{a.Tenant, a.ProfileToken}] = activeState{version: a.ActiveVersionToken, publishedAt: a.PublishedAt}
+	}
+	for pk := range d.active {
+		d.indexThresholdPredecessors(pk, d.successors(pk.tenant, pk.profileToken))
 	}
 	for _, e := range rosters {
 		d.roster[devKey{e.Tenant, e.DeviceToken}] = rosterMember{profileToken: e.ProfileToken, expectedSince: e.ExpectedSince}
@@ -239,15 +335,108 @@ func (d *DeadmanArmer) AbsenceLive(key core.SeriesKey) bool {
 	return a.version == sr.ProfileVersionToken
 }
 
-// AbsenceCarriedForward reports whether an absence key's rule continues under the SAME stable identity in
-// the device's current active version: the rule is registered, the device is rostered, its profile's
-// active version differs from the rule's, and that active version holds an absence rule with the same
-// StableRuleKey. It marks the Resolved a republish emits for a still-in-scope device (ApplyActiveVersion
-// disarms the old version) as a handoff, not a clear — the alarm contributor id is stable across
-// versions, so publishing it would flap a still-silent device's alarm CLEARED then ACTIVE. It is false
-// for a disabled/deleted/re-typed device (the stable key's profile prefix, or the roster, no longer
-// matches) and for a republish that REMOVED the rule, both of which must clear. Deliberately not
-// VersionSuperseded, which is also true for a re-type.
+// successors pairs retained Threshold and Absence rules with the active version
+// by stable identity AND kind. Cleanup and publish gates may use all these pairs;
+// a live carry must restrict them to the immediately previous active version.
+func (d *DeadmanArmer) successors(tenant, profile string) map[string]string {
+	out := map[string]string{}
+	a, ok := d.active[profKey{tenant, profile}]
+	if !ok {
+		return out
+	}
+	type identity struct {
+		stable string
+		kind   core.RuleKind
+	}
+	active := map[identity]string{}
+	for _, nr := range d.reg.RulesFor(tenant, a.version) {
+		// Repeating and Correlation need their windows/member maps as well as the
+		// latch. Carrying their evaluation state is a follow-up. All other kinds
+		// retain their existing publish behaviour; Absence keeps its own handoff.
+		if nr.Compiled.Core.Kind != core.Threshold && nr.Compiled.Core.Kind != core.Absence {
+			continue
+		}
+		stable, ok := StableRuleKey(nr.Compiled.ID)
+		p, _, parsed := ProfileAndRuleToken(nr.Compiled.ID)
+		if ok && parsed && p == profile {
+			active[identity{stable, nr.Compiled.Core.Kind}] = nr.Compiled.ID
+		}
+	}
+	for _, id := range d.reg.IDs() {
+		old, _ := d.reg.Lookup(id)
+		if old.Tenant != tenant || old.ProfileVersionToken == a.version {
+			continue
+		}
+		if stable, ok := StableRuleKey(id); ok {
+			if next, ok := active[identity{stable, old.Compiled.Core.Kind}]; ok {
+				out[id] = next
+			}
+		}
+	}
+	return out
+}
+
+func (d *DeadmanArmer) indexThresholdPredecessors(pk profKey, pairs map[string]string) {
+	previous := map[string][]string{}
+	for old, next := range pairs {
+		if sr, ok := d.reg.Lookup(old); ok && sr.Compiled.Core.Kind == core.Threshold {
+			previous[next] = append(previous[next], old)
+		}
+	}
+	d.thresholdPredecessors[pk] = previous
+}
+
+// CarriedForward reports a same-kind, alarm-compatible successor in the current profile.
+// Missing membership, registry or active-version information never confirms a carry.
+func (d *DeadmanArmer) CarriedForward(key core.SeriesKey) bool {
+	_, ok := d.CarriedSuccessor(key)
+	return ok
+}
+
+// CarriedSuccessor pairs only device-series kinds with compatible alarm actions.
+// An anchor is not a roster device. Pairing does not establish a raised latch.
+func (d *DeadmanArmer) CarriedSuccessor(key core.SeriesKey) (core.SeriesKey, bool) {
+	return d.pairedSuccessor(key, true)
+}
+
+func (d *DeadmanArmer) pairedSuccessor(key core.SeriesKey, compatibleActions bool) (core.SeriesKey, bool) {
+	sr, ok := d.reg.Lookup(key.Rule)
+	if !ok || (sr.Compiled.Core.Kind != core.Threshold && sr.Compiled.Core.Kind != core.Absence) {
+		return core.SeriesKey{}, false
+	}
+	m, ok := d.roster[devKey{sr.Tenant, key.Series}]
+	if !ok {
+		return core.SeriesKey{}, false
+	}
+	a, ok := d.active[profKey{sr.Tenant, m.profileToken}]
+	if !ok || a.version == sr.ProfileVersionToken {
+		return core.SeriesKey{}, false
+	}
+	stable, ok := StableRuleKey(key.Rule)
+	p, _, parsed := ProfileAndRuleToken(key.Rule)
+	if !ok || !parsed || p != m.profileToken {
+		return core.SeriesKey{}, false
+	}
+	for _, nr := range d.reg.RulesFor(sr.Tenant, a.version) {
+		if k, ok := StableRuleKey(nr.Compiled.ID); ok && k == stable && nr.Compiled.Core.Kind == sr.Compiled.Core.Kind && (!compatibleActions || alarmActionsContinue(sr, nr)) {
+			return core.SeriesKey{Rule: nr.Compiled.ID, Series: key.Series}, true
+		}
+	}
+	return core.SeriesKey{}, false
+}
+
+// Pairing is also used by publish-time drop gates. Different alarm destinations
+// must neither inherit a latch nor make an old action look redundant. Unknown
+// compiled action metadata never proves continuity.
+func alarmActionsContinue(old, next *ScopedRule) bool {
+	return old.Compiled.AlarmCarryActions != nil && next.Compiled.AlarmCarryActions != nil &&
+		slices.Equal(old.Compiled.AlarmCarryActions, next.Compiled.AlarmCarryActions)
+}
+
+// AbsenceCarriedForward preserves the existing absence publish gate: a stable
+// absence rule with compatible alarm actions in the device's current active version
+// makes an old disarm a handoff. Missing membership or a removed rule must clear.
+// This differs from VersionSuperseded, which is also true for a re-type.
 func (d *DeadmanArmer) AbsenceCarriedForward(key core.SeriesKey) bool {
 	sr, ok := d.reg.Lookup(key.Rule)
 	if !ok {
@@ -266,7 +455,7 @@ func (d *DeadmanArmer) AbsenceCarriedForward(key core.SeriesKey) bool {
 		return false
 	}
 	for _, nr := range d.reg.AbsenceRulesFor(sr.Tenant, a.version) {
-		if k, ok := StableRuleKey(nr.Compiled.ID); ok && k == stable {
+		if k, ok := StableRuleKey(nr.Compiled.ID); ok && k == stable && alarmActionsContinue(sr, nr) {
 			return true
 		}
 	}
@@ -307,9 +496,12 @@ func (d *DeadmanArmer) reset() {
 	d.active = map[profKey]activeState{}
 	d.roster = map[devKey]rosterMember{}
 	d.byProfile = map[profKey]map[string]struct{}{}
+	d.thresholdPredecessors = map[profKey]map[string][]string{}
+	d.preActivationEvaluations = nil
+	d.carryUncertain = false
 }
 
-// RemoveTenant drops one tenant's three membership views and reports how many entries it
+// RemoveTenant drops one tenant's membership views and transient carry records, and reports how many entries it
 // removed, for the ADR-077 erasure.
 //
 // It does NOT disarm through the engine device by device, and that is worth stating
@@ -327,6 +519,21 @@ func (d *DeadmanArmer) reset() {
 func (d *DeadmanArmer) RemoveTenant(tenant string) int {
 	if tenant == "" {
 		return 0
+	}
+	for key := range d.preActivationEvaluations {
+		if key.profile.tenant == tenant {
+			delete(d.preActivationEvaluations, key)
+		}
+	}
+	for pk := range d.thresholdPredecessors {
+		if pk.tenant == tenant {
+			delete(d.thresholdPredecessors, pk)
+		}
+	}
+	for old := range d.deferredThresholds {
+		if t, ok := RuleTenant(old.Rule); ok && t == tenant {
+			delete(d.deferredThresholds, old)
+		}
 	}
 	n := 0
 	for k := range d.active {
@@ -364,6 +571,10 @@ func (d *DeadmanArmer) RemoveTenant(tenant string) int {
 func (d *DeadmanArmer) Reconcile(rosters []RosterEntry, actives []ActiveEntry) {
 	d.reset()
 	d.loadMembership(rosters, actives)
+	// Restored historical latches cannot prove an unfinished handoff: older
+	// writers retain them after successor recovery, and replay may emit no edge.
+	// Preserve restored latch ownership; uncertainty may duplicate the next raise.
+	d.deferredThresholds = nil
 	desired := make(map[core.SeriesKey]struct{})
 	for _, e := range rosters {
 		a, ok := d.active[profKey{e.Tenant, e.ProfileToken}]
@@ -396,6 +607,191 @@ func (d *DeadmanArmer) Reconcile(rosters []RosterEntry, actives []ActiveEntry) {
 			d.engine.RemoveExpected(key)
 		}
 	}
+}
+
+// carryHandoff records the exact threshold pairs left behind by this handoff's
+// pending-output fence, only for devices currently rostered in the destination
+// profile, just as deferred settlement requires. Any remaining departed-device
+// latch cannot seed a successor that would suppress a raise on return.
+// CarryRaised calls the predicate on latched old keys; do not enumerate retained
+// latches again after publication.
+func (d *DeadmanArmer) carryHandoff(pairs map[string]string, skip func(core.SeriesKey) bool) int {
+	if d.carryUncertain {
+		return 0
+	}
+	return d.engine.CarryRaised(pairs, func(key core.SeriesKey) bool {
+		if id, ok := pairs[key.Rule]; ok {
+			next := core.SeriesKey{Rule: id, Series: key.Series}
+			if sr, found := d.reg.Lookup(id); found {
+				profile, _, _ := ProfileAndRuleToken(id)
+				if _, evaluated := d.preActivationEvaluations[evaluatedKey{profKey{sr.Tenant, profile}, sr.ProfileVersionToken, key.Series}]; evaluated {
+					return true
+				}
+			}
+			if current, paired := d.CarriedSuccessor(key); !paired || current != next {
+				return true
+			}
+			sr, found := d.reg.Lookup(key.Rule)
+			threshold := found && sr.Compiled.Core.Kind == core.Threshold
+			if skip != nil && (skip(key) || skip(next)) {
+				if threshold {
+					if d.deferredThresholds == nil {
+						d.deferredThresholds = map[core.SeriesKey]core.SeriesKey{}
+					}
+					d.deferredThresholds[key] = next
+				}
+				return true
+			}
+		}
+		return skip != nil && skip(key)
+	})
+}
+
+// ThresholdEmitted settles predecessor latches as soon as a successor speaks,
+// even during replay when no deferred-pair record survives. Clearing emits no
+// Resolved: the successor's own edges now represent the alarm. This runs on the
+// processor loop in engine emission order. The conditional clear preserves any
+// newer episode already processed by a concurrent shard.
+func (d *DeadmanArmer) ThresholdEmitted(det core.Detection) {
+	if det.Kind != core.Threshold {
+		return
+	}
+	key := core.SeriesKey{Rule: det.RuleID, Series: det.Series}
+	if sr, ok := d.reg.Lookup(key.Rule); ok {
+		if profile, _, parsed := ProfileAndRuleToken(key.Rule); parsed {
+			for _, old := range d.thresholdPredecessors[profKey{sr.Tenant, profile}][key.Rule] {
+				d.engine.ClearRaisedIfNotAfter(core.SeriesKey{Rule: old, Series: key.Series}, det.At)
+			}
+		}
+	}
+	for old, next := range d.deferredThresholds {
+		if key == next {
+			if current, paired := d.CarriedSuccessor(old); paired && current == next {
+				d.engine.ClearRaisedIfNotAfter(old, det.At)
+			}
+			delete(d.deferredThresholds, old)
+		} else if key == old && det.Edge == core.EdgeResolved {
+			// The old key's own resolve has already unlatched it.
+			delete(d.deferredThresholds, old)
+		}
+	}
+}
+
+// ThresholdPublished settles deferred pairs represented by an acknowledged edge.
+// An old recovery clears the shared contributor, so its active paired latch must
+// also clear. Emission alone is insufficient: a dropped recovery clears nothing.
+func (d *DeadmanArmer) ThresholdPublished(det core.Detection) {
+	if det.Kind == core.Threshold {
+		key := core.SeriesKey{Rule: det.RuleID, Series: det.Series}
+		var recoveryNext core.SeriesKey
+		oldRecovery := false
+		if det.Edge == core.EdgeResolved {
+			if next, paired := d.pairedSuccessor(key, false); paired {
+				// Clear even a newer latch: the acknowledged clear may have removed
+				// its alarm contribution, even if action sets only partially overlap.
+				// Uncertainty must permit another Raised.
+				d.engine.ClearRaised(next)
+				recoveryNext, oldRecovery = next, true
+			}
+		}
+		for old, next := range d.deferredThresholds {
+			// A shared recovery must not be undone by a deferred handoff from
+			// another retained predecessor of this same successor.
+			if key == next || (key == old && det.Edge == core.EdgeResolved) || (oldRecovery && next == recoveryNext) {
+				delete(d.deferredThresholds, old)
+			}
+		}
+	}
+}
+
+// SuccessorEvaluated cancels deferred handoffs before an event is submitted to
+// the engine, including healthy evaluations that emit no edge. It runs on the
+// processor loop, never a shard worker. Active-version events use one registry
+// scope lookup and one active lookup, and allocate nothing without deferrals.
+// Non-active registered versions also fence a future immediate handoff.
+func (d *DeadmanArmer) SuccessorEvaluated(tenant, version, device string) {
+	d.recordPreActivationEvaluation(tenant, version, device)
+	if len(d.deferredThresholds) == 0 {
+		return
+	}
+	for old, next := range d.deferredThresholds {
+		if next.Series != device {
+			continue
+		}
+		if sr, ok := d.reg.Lookup(next.Rule); ok && sr.Tenant == tenant && sr.ProfileVersionToken == version {
+			delete(d.deferredThresholds, old)
+		}
+	}
+}
+
+func (d *DeadmanArmer) recordPreActivationEvaluation(tenant, version, device string) {
+	if d.carryUncertain {
+		return
+	}
+	scoped := d.reg.RulesFor(tenant, version)
+	if len(scoped) == 0 {
+		return // only registered versions can later contribute a carry pair
+	}
+	profile, _, parsed := ProfileAndRuleToken(scoped[0].Compiled.ID)
+	if !parsed {
+		return
+	}
+	pk := profKey{tenant, profile}
+	if a, ok := d.active[pk]; ok && a.version == version {
+		return
+	}
+	key := evaluatedKey{pk, version, device}
+	if _, exists := d.preActivationEvaluations[key]; exists {
+		return
+	}
+	if len(d.preActivationEvaluations) >= maxPreActivationEvaluations {
+		d.preActivationEvaluations = nil
+		d.deferredThresholds = nil
+		d.carryUncertain = true
+		return
+	}
+	if d.preActivationEvaluations == nil {
+		d.preActivationEvaluations = map[evaluatedKey]struct{}{}
+	}
+	d.preActivationEvaluations[key] = struct{}{}
+}
+
+// invalidateDeferredThresholds runs after the active view changes, before a
+// handoff can record new deferrals. Records already prove one observed transition;
+// only that same active destination may remain eligible. A later transition (even
+// through an empty version) discards the record rather than rebuilding it from
+// retained historical latches. A rollback must never retain an old pairing.
+func (d *DeadmanArmer) invalidateDeferredThresholds() {
+	for old, next := range d.deferredThresholds {
+		if current, paired := d.CarriedSuccessor(old); !paired || current != next {
+			delete(d.deferredThresholds, old)
+		}
+	}
+}
+
+// CarryReadyThresholds retries only recorded handoffs after output settlement.
+// An already latched successor, an old recovery, or a changed pairing settles
+// the record without moving any latch. Absence retains its arm/disarm handoff.
+func (d *DeadmanArmer) CarryReadyThresholds(skip func(core.SeriesKey) bool) int {
+	pairs := map[string]string{}
+	allowed := map[core.SeriesKey]bool{}
+	for old, next := range d.deferredThresholds {
+		current, paired := d.CarriedSuccessor(old)
+		if !paired || current != next || !d.engine.IsRaised(old) || d.engine.IsRaised(next) {
+			delete(d.deferredThresholds, old)
+			continue
+		}
+		if skip != nil && (skip(old) || skip(next)) {
+			continue
+		}
+		pairs[old.Rule] = next.Rule
+		allowed[old], allowed[next] = true, true
+		delete(d.deferredThresholds, old)
+	}
+	if len(pairs) == 0 {
+		return 0
+	}
+	return d.engine.CarryRaised(pairs, func(key core.SeriesKey) bool { return !allowed[key] })
 }
 
 // armDevice arms one device under its profile's active version's absence rules, if the active

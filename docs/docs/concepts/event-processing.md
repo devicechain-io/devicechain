@@ -24,6 +24,16 @@ You define detection rules on a **[device profile](./domain-model.md)**, the ver
 
 A rule states a **condition** over the profile's telemetry, declares its **severity**, and lists the **actions** to run when it fires.
 
+### What a publish does to devices already in alarm {#publish-keeps-alarms}
+
+Publishing can preserve an already-raised **threshold rule** when its rule token, condition type and alarm actions remain compatible. The absence-rule handoff uses the same alarm-action check. For a carried episode, publishing does not re-send commands, webhook calls or connector publishes while a device stays in breach; changes to non-alarm actions or severity apply from its next rising edge. Recovery through the successor clears its alarm keys, and a later breach fires its actions. Other rule kinds, including repeating and correlation rules, may repeat actions on a publish. A new rule token or condition type starts independently.
+
+Carry is limited to one observed transition from the immediately previous active version. A removed, disabled or differently kinded rule in an intermediate version breaks continuity. Every transition, including rollback, clears historical threshold and absence latches in the destination before carrying from the previous version. Threshold carry requires uninterrupted membership: deletion, re-typing or a new membership start time cancels deferred carry and clears the previous membership's threshold latches without emitting a recovery.
+
+A reading under a registered, non-active version prevents a later carry into that version for that device. A successor reading also cancels a carry waiting for output publication. An acknowledged old-version threshold recovery, live or replayed, clears the paired active latch so the next breach can raise; a dropped recovery does not clear it. Startup restores checkpointed latches without carrying historical latches into the active version. A crash before the handoff is checkpointed, or uncertainty about continuity, can repeat actions; delivery remains at least once.
+
+Alarm-action compatibility requires the same set of alarm keys, key-template expressions and raise guards. Adding or removing an alarm action, or changing its key, template or guard, prevents carry. Severity and non-alarm action edits may still carry. Changing or removing alarm keys does not migrate existing alarms or guarantee recovery under their previous keys; resolve those alarms separately. Test the first breach after an alarm-action edit, and recovery followed by a fresh breach for a carried episode.
+
 ## Scoping a rule to a group
 
 By default a rule applies to **every device** that resolves to its profile. You can instead **scope a rule to a [dynamic group](./domain-model.md#facets-and-dynamic-groups)**, so it fires only for the devices that are currently members. For example, you can run a stricter heat rule only on *devices in arid areas*. Scoping is optional and set per rule. Absence and area-correlation rules cannot be scoped, and publishing a scoped one is refused.

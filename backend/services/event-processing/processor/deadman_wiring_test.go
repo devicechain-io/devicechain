@@ -23,9 +23,10 @@ func absScopedProc(tenant, pvt, id string) runtime.ScopedRule {
 		Tenant:              tenant,
 		ProfileVersionToken: pvt,
 		Compiled: &rules0.CompiledRule{
-			ID:   id,
-			Type: rules0.TypeAbsence,
-			Core: detectcore.Rule{ID: id, Kind: detectcore.Absence, Timeout: 10 * time.Second},
+			AlarmCarryActions: []string{}, // synthetic rule has no alarm actions
+			ID:                id,
+			Type:              rules0.TypeAbsence,
+			Core:              detectcore.Rule{ID: id, Kind: detectcore.Absence, Timeout: 10 * time.Second},
 		},
 	}
 }
@@ -188,13 +189,13 @@ func TestDropSupersededFrontierDetections(t *testing.T) {
 		[]runtime.ActiveEntry{{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: testBase}},
 	)
 	rp.pendingDets = pending([]detectcore.Detection{
-		{RuleID: v1, Series: "dev", Kind: detectcore.Duration},        // superseded frontier → DROP
-		{RuleID: v1, Series: "dev", Kind: detectcore.DeltaRate},       // superseded held-sample flush → DROP
-		{RuleID: v1, Series: "dev", Kind: detectcore.CountWindow},     // superseded held-sample flush → DROP
-		{RuleID: v1, Series: "dev", Kind: detectcore.SlidingAgg},      // superseded held falling edge → DROP
-		{RuleID: v2, Series: "dev", Kind: detectcore.Duration},        // active version → keep
-		{RuleID: v1, Series: "dev", Kind: detectcore.Threshold},       // superseded but event-driven → keep
-		{RuleID: v1, Series: "unrostered", Kind: detectcore.Duration}, // unrostered → keep (fail toward not-dropping)
+		{RuleID: v1, Series: "dev", Kind: detectcore.Duration},                                 // superseded frontier → DROP
+		{RuleID: v1, Series: "dev", Kind: detectcore.DeltaRate},                                // superseded held-sample flush → DROP
+		{RuleID: v1, Series: "dev", Kind: detectcore.CountWindow},                              // superseded held-sample flush → DROP
+		{RuleID: v1, Series: "dev", Kind: detectcore.SlidingAgg},                               // superseded held falling edge → DROP
+		{RuleID: v2, Series: "dev", Kind: detectcore.Duration},                                 // active version → keep
+		{RuleID: v1, Series: "dev", Kind: detectcore.Threshold, Edge: detectcore.EdgeResolved}, // superseded event-driven clear → keep
+		{RuleID: v1, Series: "unrostered", Kind: detectcore.Duration},                          // unrostered → keep (fail toward not-dropping)
 	})
 	rp.dropSupersededDetections()
 
@@ -281,7 +282,7 @@ func TestRosterConsumerArmsViaLoop(t *testing.T) {
 	rp, eng := armedProcessor(t, id)
 	rp.RosterStore = newProcRosterStore(t)
 	// The profile's active version is already known to the armer (its rule fact arrived earlier).
-	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase})
+	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase}, nil)
 
 	ack := &fakeAck{acked: make(chan struct{}, 1)}
 	rp.RosterReader = &fakeReader{results: []readResult{{msg: rosterMsg(t, "acme", "dev1", "p1", testBase, ack)}}}
@@ -308,7 +309,7 @@ func TestEntityDeletedConsumerDisarmsViaLoop(t *testing.T) {
 	id := runtime.ComposeRuleID("acme", "p1@v1/r1")
 	rp, eng := armedProcessor(t, id)
 	rp.RosterStore = newProcRosterStore(t)
-	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase})
+	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase}, nil)
 	// Seed the device as live + armed (roster row + in-memory arming).
 	ctx0 := context.Background()
 	if err := rp.RosterStore.Upsert(ctx0, &model.DeviceRoster{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}); err != nil {
@@ -369,7 +370,7 @@ func TestArmRecheckConvergesToProjectionTruth(t *testing.T) {
 	id := runtime.ComposeRuleID("acme", "p1@v1/r1")
 	rp, eng := armedProcessor(t, id)
 	rp.RosterStore = newProcRosterStore(t)
-	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase})
+	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase}, nil)
 	ctx := context.Background()
 	rp.procCtx = ctx
 
@@ -420,7 +421,7 @@ func TestArmRecheckRetriesOnError(t *testing.T) {
 	id := runtime.ComposeRuleID("acme", "p1@v1/r1")
 	rp, eng := armedProcessor(t, id)
 	rp.RosterStore = newProcRosterStore(t)
-	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase})
+	rp.armer.ApplyActiveVersion(runtime.ActiveEntry{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase}, nil)
 	ctx := context.Background()
 	if err := rp.RosterStore.Upsert(ctx, &model.DeviceRoster{Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase}); err != nil {
 		t.Fatalf("seed roster: %v", err)

@@ -1,0 +1,46 @@
+{
+  "producer": "v1.7",
+  "scenario": "v17-from-v18",
+  "shards": 4,
+  "streamSeq": 3,
+  "watermark": "2026-07-09T12:00:03Z",
+  "payload": {
+    "frontier": 1,
+    "watermark": "2026-07-09T12:00:03Z",
+    "lastSeq": 3,
+    "active": [],
+    "durationBreaks": [],
+    "timers": [],
+    "gens": [],
+    "sliding": [],
+    "panes": [],
+    "deltas": [],
+    "counts": [],
+    "sessions": [],
+    "slides": [],
+    "corr": [],
+    "expected": [],
+    "raised": [
+      {
+        "rule": "acme/p1@v1/r1",
+        "series": "dev1",
+        "at": "2026-07-09T12:00:01Z"
+      }
+    ],
+    "fell": [
+      {
+        "rule": "acme/p1@v2/r1",
+        "series": "dev1",
+        "at": "2026-07-09T12:00:03Z",
+        "recordedFrontier": "2026-07-09T12:00:03Z"
+      }
+    ],
+    "presence": [],
+    "pending": [],
+    "newest": []
+  },
+  "events": [
+    "acme/p1@v2/r1 raised",
+    "acme/p1@v2/r1 resolved"
+  ]
+}
