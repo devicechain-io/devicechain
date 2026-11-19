@@ -108,12 +108,16 @@ type Preview struct {
 // the first and last, and the time each was taken) and the times of the readings the platform
 // stored inside it.
 type Backfill struct {
-	Device   string      `json:"device"`
-	Buffered int         `json:"buffered"`
-	First    time.Time   `json:"first"`
-	Last     time.Time   `json:"last"`
-	Taken    []time.Time `json:"taken"`
-	Stored   []time.Time `json:"stored"`
+	Device      string               `json:"device"`
+	Buffered    int                  `json:"buffered"`
+	First       time.Time            `json:"first"`
+	Last        time.Time            `json:"last"`
+	Taken       []time.Time          `json:"taken"`
+	Stored      []time.Time          `json:"stored"`
+	PowerKW     []float64            `json:"powerKw"`
+	PowerStored []Reading            `json:"powerStored"`
+	Values      []map[string]float64 `json:"values"`
+	Rows        []Reading            `json:"rows"`
 }
 
 // Observations is everything the verifier read about one sim day.
@@ -137,6 +141,7 @@ type Observations struct {
 	// S4 is what was read for the fleet operations: groups, campaigns, the maintenance window,
 	// the asset hierarchy and the relationship graph.
 	S4    S4          `json:"-"`
+	S5    S5          `json:"-"`
 	Maint Maintenance `json:"-"`
 }
 

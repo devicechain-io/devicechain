@@ -196,3 +196,99 @@ func TestBootstrapWithTheRealUpdateFleet(t *testing.T) {
 		t.Errorf("/status reports %+v", st)
 	}
 }
+
+// selectedUpdateSim declares its own population after its fake Bootstrap provisions credentials.
+type selectedUpdateSim struct {
+	*farEndSim
+	population    *ScenarioUpdateFleet
+	populationErr error
+}
+
+func (s *selectedUpdateSim) UpdatePopulation(*Runtime) (*ScenarioUpdateFleet, error) {
+	return s.population, s.populationErr
+}
+
+func TestScenarioUpdatePopulation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tokens []string
+		ota    bool
+		want   string
+	}{
+		{"selected", []string{"dev-002"}, false, ""},
+		{"flag conflict", []string{"dev-002"}, true, "--ota"},
+		{"unknown device", []string{"not-provisioned"}, false, "provisioned"},
+		{"duplicate", []string{"dev-002", "dev-002"}, false, "unique"},
+		{"empty", nil, false, "no devices"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var opts *otafleet.Options
+			if tc.ota {
+				opts = unsignedFleet
+			}
+			lc, uf := updateFixture(t, opts, nil)
+			lc.sim = &selectedUpdateSim{farEndSim: lc.sim.(*farEndSim), population: &ScenarioUpdateFleet{Tokens: tc.tokens, Options: *unsignedFleet}}
+			err := lc.Bootstrap(context.Background())
+			if tc.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("error %v, want %s", err, tc.want)
+				}
+				if len(uf.attached) != 0 {
+					t.Fatal("invalid population attached clients")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lc.Close()
+			if len(uf.attached) != 1 || uf.attached["dev-002"] != 0 || uf.creds["dev-002"] != "cred-002" {
+				t.Fatalf("attached %+v with %+v", uf.attached, uf.creds)
+			}
+			if err := lc.Reset(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestScenarioUpdatePopulationErrorsAndNilFallback(t *testing.T) {
+	lc, uf := updateFixture(t, unsignedFleet, nil)
+	selected := &selectedUpdateSim{farEndSim: lc.sim.(*farEndSim)}
+	lc.sim = selected
+	if err := lc.Bootstrap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(uf.attached) != 2 {
+		t.Fatal("nil declaration changed --ota")
+	}
+	lc.Close()
+	lc, uf = updateFixture(t, nil, nil)
+	lc.sim = &selectedUpdateSim{farEndSim: lc.sim.(*farEndSim), populationErr: fmt.Errorf("population failed")}
+	if err := lc.Bootstrap(context.Background()); err == nil || !strings.Contains(err.Error(), "population failed") {
+		t.Fatalf("error %v", err)
+	}
+	if len(uf.attached) != 0 {
+		t.Fatal("failed population attached clients")
+	}
+}
+
+func TestScenarioUpdateModesMustNameSelectedDevicesAndValidate(t *testing.T) {
+	for _, mode := range []struct {
+		token string
+		mode  otafleet.Mode
+	}{
+		{"dev-001", otafleet.BadHash}, {"dev-002", otafleet.Mode("unknown")},
+	} {
+		lc, uf := updateFixture(t, nil, nil)
+		opts := *unsignedFleet
+		opts.Modes = map[string]otafleet.Mode{mode.token: mode.mode}
+		lc.sim = &selectedUpdateSim{farEndSim: lc.sim.(*farEndSim), population: &ScenarioUpdateFleet{Tokens: []string{"dev-002"}, Options: opts}}
+		if err := lc.Bootstrap(context.Background()); err == nil {
+			t.Fatal("invalid named mode or unselected mode accepted")
+		}
+		if len(uf.attached) != 0 {
+			t.Fatal("invalid options attached devices")
+		}
+	}
+}

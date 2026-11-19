@@ -31,6 +31,17 @@ type UpdateFleet interface {
 // UpdateFleetFactory builds an UpdateFleet for one instance and tenant against a broker.
 type UpdateFleetFactory func(instanceID, tenant, broker string, tlsConfig *tls.Config, opts otafleet.Options) (UpdateFleet, error)
 
+// ScenarioUpdateFleet is a scenario's explicit update population, in attach order.
+type ScenarioUpdateFleet struct {
+	Tokens  []string
+	Options otafleet.Options
+}
+
+// UpdatePopulationReporter is optional. It is consulted after scenario provisioning.
+type UpdatePopulationReporter interface {
+	UpdatePopulation(*Runtime) (*ScenarioUpdateFleet, error)
+}
+
 func newMqttUpdateFleet(instanceID, tenant, broker string, tlsConfig *tls.Config, opts otafleet.Options) (UpdateFleet, error) {
 	return otafleet.New(instanceID, tenant, broker, tlsConfig, opts)
 }
@@ -76,6 +87,33 @@ func downloadDialAddr(rt *Runtime) (dial, redirect string, err error) {
 // and has none would sit green while a rollout aimed at it waits out its deadlines.
 func (l *Lifecycle) attachUpdateFleet(ctx context.Context) error {
 	opts := l.rt.UpdateFleet
+	devices := l.rt.deviceSnapshot()
+	if scenario, ok := l.sim.(UpdatePopulationReporter); ok {
+		population, err := scenario.UpdatePopulation(l.rt)
+		if err != nil {
+			return err
+		}
+		if population != nil {
+			if opts != nil {
+				return fmt.Errorf("scenario %q declares its own update population; --ota cannot also be given", l.name)
+			}
+			opts = &population.Options
+			byToken := map[string]DeviceInstance{}
+			for _, d := range devices {
+				byToken[d.Token] = d
+			}
+			devices = nil
+			seen := map[string]bool{}
+			for _, token := range population.Tokens {
+				d, provisioned := byToken[token]
+				if !provisioned || seen[token] {
+					return fmt.Errorf("scenario update population: %q is not a unique provisioned device", token)
+				}
+				seen[token] = true
+				devices = append(devices, d)
+			}
+		}
+	}
 	if opts == nil {
 		return nil
 	}
@@ -95,12 +133,27 @@ func (l *Lifecycle) attachUpdateFleet(ctx context.Context) error {
 	if already {
 		return nil
 	}
-	if len(l.rt.Devices) == 0 {
+	if len(devices) == 0 {
 		return fmt.Errorf("scenario %q was asked for update devices but no devices are provisioned", l.name)
 	}
-	if total := opts.Faults.Total(); total > len(l.rt.Devices) {
+	if total := opts.Faults.Total(); total > len(devices) {
 		return fmt.Errorf("scenario %q has %d devices but %d are to misbehave; a fault count the fleet cannot "+
-			"hold would silently inject fewer faults than asked for", l.name, len(l.rt.Devices), total)
+			"hold would silently inject fewer faults than asked for", l.name, len(devices), total)
+	}
+	if err := opts.Validate(); err != nil {
+		return err
+	}
+	for token := range opts.Modes {
+		found := false
+		for _, d := range devices {
+			if d.Token == token {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("update mode names device %q outside the update population", token)
+		}
 	}
 
 	o := *opts
@@ -118,7 +171,7 @@ func (l *Lifecycle) attachUpdateFleet(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("update devices: %w", err)
 	}
-	for i, d := range l.rt.Devices {
+	for i, d := range devices {
 		if err := fleet.Attach(ctx, d.Token, d.CredentialId, i); err != nil {
 			fleet.Close() // half a fleet left connected would leak across a Reset loop
 			return fmt.Errorf("update devices: %w", err)

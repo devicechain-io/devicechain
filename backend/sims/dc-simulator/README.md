@@ -600,7 +600,16 @@ threshold, window, hold, count and timeout, with the commands obeyed and, as a c
 
 Each pump's `well_fill_pct` is a **calculated metric**, its wet well level over the well's depth,
 a constant (`well_depth_m`, 4 m) the pump carries. A calculated metric needs a tier that allows
-one, so `dcctl sim create --manifest harborpulse` packages the tenant at the tier `hp-showcase`.
+one, so `dcctl sim create --manifest harborpulse` packages the tenant at `hp-governed`:
+one calculated metric per profile, 40 ingest readings per second and a burst of 256.
+Ordinary five-second ticks fit with at least 25% rate headroom. Each East Quay charger
+logs 90 outage entries at outage-duration/90 (one second at the default day), independent
+of the emit interval. The restore offers 720 metric readings against the limiter's
+effective burst of 256 and catches up in about a minute. The verifier allows twice
+the drain time at the tier's net headroom plus two ticks (about 96 seconds); the log
+size and deadline remain valid at a 24-hour day. Offered/accepted ledger counters count entries.
+A manually created sim must be packaged at this governed tier for a clean verifier verdict.
+Tier convergence raises floors only: use a fresh tier/tenant if an existing tier has higher ceilings.
 
 The **LoRaWAN gauges** (`hp-lora-gauge-north`, `-east`, `-basin` and `hp-legacy-gauge-basin`)
 initially send one uplink each per tick through the ChirpStack v4 integration `hp-chirpstack`, a raw frame
@@ -619,7 +628,9 @@ needs the sink's ClusterIP allowed (`dcctl bootstrap|upgrade --dev-allow-egress 
 cluster) and the `outbound-connectors` area (`--enable-area outbound-connectors`). Without them the
 scenario still provisions and runs, and every delivery is refused rather than sent. A handshake
 written by an older dcctl lacks the outbound-connectors, notification and integration endpoints and
-is refused at bootstrap: re-create the sim.
+is refused at bootstrap: re-create the sim. Older records missing only the update-management
+endpoint derive it from the chart's `/api/device-management/graphql` route; custom
+device-management routes must supply `updateMgmtGraphQL` explicitly.
 
 **Fleet operations.** The district is also run as a fleet:
 
@@ -729,8 +740,51 @@ as omitted. `hack/harborpulse-rig.sh` runs the clean day and every planted defec
 on a cluster of its own and fails if the clean day is not green or a control does not turn its own
 invariant red. The defects exist only for that: never run a demonstration with one.
 
-The features the scenario does not drive yet (groups, campaigns, OTA, MQTT and X.509 devices,
-desired configuration) are planned follow-ups.
+### Harborpulse signed rollout, governed restore and replacement (S5)
+
+The handshake includes optional `endpoints.updateMgmtGraphQL`. Older records derive it
+from the chart's `/api/device-management/graphql` endpoint; custom routes require an explicit URL. The default local
+instance provides update-management, an object store and downloads. The scenario owns six
+charger update clients; combining it with `--ota` fails bootstrap.
+
+Before its first tick, harborpulse uploads a deterministic 48 KiB synthetic firmware payload,
+signs it with a process-local ECDSA key, and waits for AVAILABLE/SIGNED and the clients' broker
+subscriptions. This demonstrates a version change from 2.4.0 to 2.4.1, using synthetic bytes.
+At day 0 12:30 it replaces the physical unit behind `hp-gauge-north-3` for water ingress:
+the token and `PAW-GAUGE-NORTH-3` external ID survive, its old credential is retired, and the
+once-returned new credential is installed before telemetry and its command subscription resume.
+Reset keeps that credential in this process. A fresh process cannot recover it and fails that
+gauge loudly. `/status` records credential tokens only, never access tokens or private keys.
+
+At every 21:15 restore, a bounded queue sends the East chargers' original timestamps and values.
+It keeps refused/ambiguous entries, honours Retry-After, waits for the next completed ordinary
+tick, and records a loud dead letter on bounded retry exhaustion. At day 0 26:00 (02:00 the next
+night), it starts one rollout over `hp-all-chargers`, with maxInFlight=2 and failureThreshold=2.
+North-1 deliberately fails verification; the other five chargers update. This rollout and the
+physical replacement happen once per run, rather than daily.
+
+The verifier reads platform truth for eight S5 invariants:
+
+| Invariant | Planted defect |
+| --- | --- |
+| `ota-artifact-trusted` | `ota-signature-omitted` |
+| `ota-targets-exact` | `ota-group-missing-charger` |
+| `ota-concurrency` | `ota-cap-three` |
+| `ota-outcomes` | `ota-failure-disabled` |
+| `burst-rate-limited` | `burst-unthrottled` (rig packages this control at `hp-showcase`) |
+| `burst-caught-up` | `burst-drop-on-429` |
+| `replacement-identity` | `replacement-new-device` |
+| `replacement-credential` | `replacement-old-credential-left-live` |
+
+The watch continues through the following night's rollout, sampling in-flight counts each
+second. Historical completed rollouts use their complete platform dispatch/terminal timeline;
+missing live coverage produces no verdict. Replacement checks read the operation history,
+credential states and stored readings, and send a battery-only probe through the real ingress
+with the original credential (401 required; 429 retried). The left-live control's accepted
+probe is also read back from storage. An unsigned artifact is refused, so that control also
+fails targets, concurrency and outcomes. Moving the gauge to a separate logical device also
+fails flood escalation, MQTT bulletins and notification escalation, which require the original
+gauge identity. Offline fixtures explicitly model those unavoidable collateral failures.
 
 ### Harborpulse shared thresholds, downlinks and calculated backfill (S3b)
 

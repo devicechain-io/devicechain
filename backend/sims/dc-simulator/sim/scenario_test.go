@@ -275,8 +275,8 @@ func TestHarborpulseLongDayBuffersTheWholeOutage(t *testing.T) {
 		t.Fatalf("a %s day at the default cadence was refused: %v", day, err)
 	}
 	buffered, delivered := outage(s.ensureModel())
-	if perCharger := buffered / len(harborTokens(harborCharger, HarborpulseEastQuay)); perCharger <= harborBufferCap {
-		t.Fatalf("a %s day buffers %d readings per charger, not more than the floor %d: the test shows nothing", day, perCharger, harborBufferCap)
+	if perCharger := buffered / len(harborTokens(harborCharger, HarborpulseEastQuay)); perCharger != 90 {
+		t.Fatalf("a %s day buffers %d entries per charger, want 90", day, perCharger)
 	}
 	if delivered != buffered {
 		t.Fatalf("a %s day buffered %d readings and delivered %d: the buffer overflowed on a clean day", day, buffered, delivered)
@@ -284,14 +284,17 @@ func TestHarborpulseLongDayBuffersTheWholeOutage(t *testing.T) {
 
 	// The control: the same day with the old fixed buffer loses readings the ledger counted.
 	fixed := newHarborModelWith(1, day, harborDefects{})
-	fixed.bufferCap = harborBufferCap
+	fixed.bufferCap = 45
 	if b, d := outage(fixed); d >= b {
 		t.Fatalf("with a fixed %d-reading buffer a %s day delivered %d of %d: the overflow this test exists for cannot show", harborBufferCap, day, d, b)
 	}
 
-	// A day and cadence whose outage no charger could hold are refused, not run to a red day.
+	// Emit cadence cannot change the size of the device-local outage log.
 	fast := NewHarborpulse(1, Load{EmitInterval: 10 * time.Millisecond})
-	if err := ConfigureScenario(fast, ScenarioOptions{DayLength: day}); err == nil {
-		t.Fatalf("a %s day at a 10ms cadence (%d readings per outage) was accepted", day, harborBufferNeed(day, 10*time.Millisecond))
+	if err := ConfigureScenario(fast, ScenarioOptions{DayLength: day}); err != nil {
+		t.Fatal(err)
+	}
+	if harborBufferNeed(day, 10*time.Millisecond) != 90 {
+		t.Fatal("emit interval changed outage log capacity")
 	}
 }

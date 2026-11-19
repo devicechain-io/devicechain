@@ -54,7 +54,8 @@ func ConfigureScenario(s Sim, o ScenarioOptions) error {
 // 🔴 THE JSON TAGS ARE THE CONTRACT with cmd/scenario-verify, which maps a beat's sim time to wall
 // time as StartedAt + ((Day*24 + hour) - StartHour) / 24 * DayLength.
 type ScenarioClock struct {
-	Name string `json:"name"`
+	S5   *ScenarioS5 `json:"s5,omitempty"`
+	Name string      `json:"name"`
 	// Started is false until the first tick, which is the instant the day is measured from.
 	Started bool `json:"started"`
 	// StartedAt is that first tick, RFC 3339 with nanoseconds; empty until Started.
@@ -92,6 +93,10 @@ type ScenarioBackfill struct {
 	// Times is when each buffered reading was taken, oldest first, RFC 3339 with nanoseconds: the
 	// exact set a verifier holds the stored readings in [First, Last] to.
 	Times []string `json:"times"`
+	// PowerKW parallels Times: the value TAKEN, before any delivery or retry.
+	PowerKW []float64 `json:"powerKw"`
+	// Values parallels Times and declares every metric taken before delivery.
+	Values []map[string]float64 `json:"values"`
 }
 
 // ScenarioClockReporter is a Sim with a compressed day to report on /status.
