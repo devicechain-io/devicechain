@@ -102,10 +102,15 @@ func packageGraph(root string) (packages []string, edges []string, err error) {
 		if err != nil {
 			return err
 		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			// WalkDir does not follow a link, and Go can resolve an import through one, so a
+			// linked directory would be a package this walk never sees. Refused outright.
+			return fmt.Errorf("%s is a symbolic link; the import graph cannot be read through it", p)
+		}
 		if d.IsDir() {
-			// Nothing is pruned but VCS and tool directories: Go lets a package under
-			// testdata or vendor be imported by path, so a pruned directory could hide one.
-			if p != root && strings.HasPrefix(d.Name(), ".") {
+			// Nothing is pruned but .git: Go lets a package under testdata or vendor be
+			// imported by path, so a pruned directory could hide one.
+			if p != root && d.Name() == ".git" {
 				return fs.SkipDir
 			}
 			return nil
@@ -251,6 +256,7 @@ func TestPackageImportGraphGuardRejectsPlantedDefects(t *testing.T) {
 		{"new package", map[string]string{"identity/i.go": `package identity`}, `new package "identity"`},
 		{"package under testdata", map[string]string{"testdata/bridge/b.go": `package bridge; import _ "` + dagModulePath + `/model"`}, `new import edge "testdata/bridge -> model"`},
 		{"import of the module root", map[string]string{"model/bad.go": `package model; import _ "` + dagModulePath + `"`}, `new import edge "model -> ."`},
+		{"package in a dot directory", map[string]string{".bridge/b.go": `package bridge; import _ "` + dagModulePath + `/model"`}, `new import edge ".bridge -> model"`},
 		{"stale edge", map[string]string{"proto/p.go": `package proto`}, `stale import edge "proto -> contract"`},
 		{"stale package", map[string]string{"contract/c.go": "", "model/m.go": `package model`, "proto/p.go": `package proto`}, `stale package "contract"`},
 	} {
@@ -268,6 +274,16 @@ func TestPackageImportGraphGuardRejectsPlantedDefects(t *testing.T) {
 			}
 		})
 	}
+	// A symbolic link anywhere in the module is an error: the walk cannot see through it.
+	t.Run("symbolic link", func(t *testing.T) {
+		root := plant(t, base)
+		if err := os.Symlink(filepath.Join(root, "model"), filepath.Join(root, "bridge")); err != nil {
+			t.Skipf("this platform cannot create a symbolic link here (%v); CI's Linux runners can", err)
+		}
+		if _, _, err := packageGraph(root); err == nil {
+			t.Fatal("a module holding a symbolic link scanned cleanly")
+		}
+	})
 	// An empty tree is an error, never an empty graph that matches an empty ledger.
 	if _, _, err := packageGraph(t.TempDir()); err == nil {
 		t.Fatal("an empty module scanned cleanly")
