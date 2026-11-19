@@ -141,11 +141,18 @@ namespace DeviceChain.Harborpulse.Model
             location = default;
             if (layout.Find(externalId ?? "")?.Kind != DeviceKind.Truck) return false;
             var h = DayClock.Hours(simSeconds);
-            var fraction = h >= 17 && h < 18 ? h - 17 : h >= 18 && h < 21.5 ? 1 : h >= 21.5 && h < 22.5 ? 22.5 - h : 0;
-            var lat = layout.Depot.Lat + fraction * (49.802 - layout.Depot.Lat);
-            var lon = layout.Depot.Lon + fraction * (-12.200 - layout.Depot.Lon);
-            var moving = h >= 17 && h < 18 || h >= 21.5 && h < 22.5;
-            var heading = Math.Atan2((-12.200 - layout.Depot.Lon) * Math.Cos(layout.Depot.Lat * Math.PI / 180), 49.802 - layout.Depot.Lat) * 180 / Math.PI + (h >= 21.5 ? 180 : 0);
+            // the stand-in drives the layout's own route: out over the hour after it departs, parked, then home over the last hour
+            var c = layout.Cues;
+            var from = layout.TruckRoute[0];
+            var to = layout.TruckRoute[layout.TruckRoute.Count - 1];
+            const double legH = 1.0;
+            var outbound = h >= c.TruckDepartSim && h < c.TruckDepartSim + legH;
+            var inbound = h >= c.TruckHomeSim - legH && h < c.TruckHomeSim;
+            var fraction = outbound ? h - c.TruckDepartSim : h >= c.TruckDepartSim + legH && h < c.TruckHomeSim - legH ? 1 : inbound ? c.TruckHomeSim - h : 0;
+            var lat = from.Lat + fraction * (to.Lat - from.Lat);
+            var lon = from.Lon + fraction * (to.Lon - from.Lon);
+            var moving = outbound || inbound;
+            var heading = Math.Atan2((to.Lon - from.Lon) * Math.Cos(from.Lat * Math.PI / 180), to.Lat - from.Lat) * 180 / Math.PI + (inbound ? 180 : 0);
             location = new HarborLocation(lat, lon, (heading + 360) % 360, moving ? 8 : 0, now); return true;
         }
     }

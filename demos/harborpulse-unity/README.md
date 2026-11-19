@@ -117,7 +117,12 @@ starts.
 ### The layout file
 
 `harbor_layout.json` is the manifest's district: every device with its external ID, type and quay, the street
-lights' surveyed positions, the depot, the geofences, the story's beats and the flood levels. The simulator's
+lights' surveyed positions, the depot, the geofences, the story's beats and the flood levels. It also carries
+the scenario's planned cues (`cues`: sim hours ending `Sim`, wall seconds ending `S`), the truck's route
+(`truckRoute`, depot first) and a `controlFrame` rectangle around every position in the file. The cues are hints
+for a director's timing, never evidence. The flood-plain fence and the depot stand behind East Quay, inland of
+its lights, in the manifest's own coordinates. The simulator's `/status` reports `scenario.layoutDigest`, the
+SHA-256 of the layout it generates, so a scene can tell it was built for another layout. The simulator's
 `TestHarborpulseSceneLayoutFixture` holds it equal to what the manifest produces, so a change to the scenario
 that moves a device fails that test until the file is regenerated:
 

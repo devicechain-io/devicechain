@@ -152,10 +152,33 @@ func upper(s string) string {
 // Atlantic water south-west of Ireland, where no settlement is, so a map that draws the scenario
 // never puts the fictional town on a real one. (The first coordinates sat on a real harbour town.)
 // Keep any new coordinate within a few kilometres of these.
+//
+// Both sites stand BEHIND EAST QUAY, as the fence's name says: north of the promenade, inland of
+// East Quay's lamps (longitudes -12.170 to -12.152), the depot further inland than the plain. The
+// truck drives due south from the depot into the plain and back, and it crosses the plain's
+// northern edge three quarters of the way out, which is HarborpulseTruckInPlainFrom.
+// TestHarborpulseSitesStandBehindEastQuay holds all of that.
 const (
-	harborDepotLat, harborDepotLon = 49.8000, -12.2100
-	harborPlainLat, harborPlainLon = 49.8020, -12.2000
+	harborDepotLat, harborDepotLon = 49.8100, -12.1610
+	harborPlainLat, harborPlainLon = 49.8040, -12.1610
+	// harborPlainHalfLat and harborPlainHalfLon are the plain fence's half extents: its northern
+	// edge (49.8055) is a quarter of the depot-to-plain leg short of the plain's centre.
+	harborPlainHalfLat, harborPlainHalfLon = 0.0015, 0.0045
+	harborDepotHalfLat, harborDepotHalfLon = 0.0004, 0.0006
 )
+
+// The truck's day, sim hours: it leaves the depot, parks in the plain, sets off home and is back.
+const (
+	harborTruckDepart = 17.0
+	harborTruckParked = 18.0
+	harborTruckReturn = 21.5
+	harborTruckHome   = 22.5
+)
+
+// harborTruckRoute is the truck's route, depot first: the straight leg it drives out and back.
+func harborTruckRoute() [][2]float64 {
+	return [][2]float64{{harborDepotLon, harborDepotLat}, {harborPlainLon, harborPlainLat}}
+}
 
 func harborBox(lat, lon, dLat, dLon float64) [][2]float64 {
 	return [][2]float64{
@@ -166,9 +189,9 @@ func harborBox(lat, lon, dLat, dLon float64) [][2]float64 {
 func harborpulseGeoFences() []GeoFenceSpec {
 	return []GeoFenceSpec{
 		{Token: HarborpulseFloodPlainFence, Name: "East Quay flood plain", Description: "The low streets behind East Quay that flood first.",
-			Ring: harborBox(harborPlainLat, harborPlainLon, 0.0015, 0.0025)},
+			Ring: harborBox(harborPlainLat, harborPlainLon, harborPlainHalfLat, harborPlainHalfLon)},
 		{Token: HarborpulseDepotFence, Name: "Works depot", Description: "Where the response truck is kept.",
-			Ring: harborBox(harborDepotLat, harborDepotLon, 0.0004, 0.0006)},
+			Ring: harborBox(harborDepotLat, harborDepotLon, harborDepotHalfLat, harborDepotHalfLon)},
 	}
 }
 
@@ -290,13 +313,13 @@ func harborMeterKw(token string, h float64) float64 {
 func harborTruckFix(h float64) Fix {
 	var frac, speed, heading float64
 	switch {
-	case h >= 17 && h < 18:
-		frac, speed = h-17, 8
+	case h >= harborTruckDepart && h < harborTruckParked:
+		frac, speed = (h-harborTruckDepart)/(harborTruckParked-harborTruckDepart), 8
 		heading = canonicalHeading(math.Atan2(harborPlainLon-harborDepotLon, harborPlainLat-harborDepotLat) * 180 / math.Pi)
-	case h >= 18 && h < 21.5:
+	case h >= harborTruckParked && h < harborTruckReturn:
 		frac = 1
-	case h >= 21.5 && h < 22.5:
-		frac, speed = 1-(h-21.5), 8
+	case h >= harborTruckReturn && h < harborTruckHome:
+		frac, speed = 1-(h-harborTruckReturn)/(harborTruckHome-harborTruckReturn), 8
 		heading = canonicalHeading(math.Atan2(harborDepotLon-harborPlainLon, harborDepotLat-harborPlainLat) * 180 / math.Pi)
 	}
 	return Fix{

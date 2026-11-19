@@ -103,6 +103,29 @@ namespace DeviceChain.Harborpulse.Tests
             var text = Kit.LayoutText().Replace("PAW-GAUGE-NORTH-2", "PAW-GAUGE-NORTH-1");
             Assert.That(() => HarborLayout.Parse(text), Throws.TypeOf<FormatException>().With.Message.Contains("twice"));
         }
+
+        [Test]
+        public void TheCuesRouteAndControlFrameAreRead()
+        {
+            var l = Kit.Layout();
+            Assert.That(l.Cues.TruckInPlainSim, Is.EqualTo(17.75));
+            Assert.That(l.Cues.RolloutSim, Is.EqualTo(26));
+            Assert.That(l.Cues.SilenceS, Is.EqualTo(45));
+            Assert.That(l.TruckRoute[0].Lat, Is.EqualTo(l.Depot.Lat));
+            Assert.That(l.TruckRoute[0].Lon, Is.EqualTo(l.Depot.Lon));
+            Assert.That(l.ControlFrame.Count, Is.EqualTo(4));
+        }
+
+        [Test]
+        public void MissingOrMisorderedCuesAreRefused()
+        {
+            Assert.That(() => HarborLayout.Parse(Kit.LayoutText().Replace("\"truckRoute\"", "\"route\"")),
+                Throws.TypeOf<FormatException>().With.Message.Contains("truckRoute"));
+            Assert.That(() => HarborLayout.Parse(Kit.LayoutText().Replace("\"truckInPlainSim\": 17.75", "\"truckInPlainSim\": 23")),
+                Throws.TypeOf<FormatException>().With.Message.Contains("not in order"));
+            Assert.That(() => HarborLayout.Parse(Kit.LayoutText().Replace("\"silenceS\"", "\"silence\"")),
+                Throws.TypeOf<FormatException>().With.Message.Contains("silenceS"));
+        }
     }
 
     public class SitePlanTests
