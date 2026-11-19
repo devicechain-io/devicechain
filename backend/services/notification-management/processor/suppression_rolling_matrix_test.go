@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -134,7 +134,7 @@ func TestSuppressionRollingMatrix(t *testing.T) {
 			if tc.newNM {
 				n.SuppressionLookup = lookup
 			}
-			plain := eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)
+			plain := eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)
 			plain.DeviceToken, plain.DeviceTypeToken, plain.DeviceName = "pump-1", "pump", "Pump"
 			plain.ScopeAnchors = []string{"customer:A"}
 			no := false
@@ -226,7 +226,7 @@ func TestSuppressionRollingMatrix(t *testing.T) {
 		won, err = v17LeaseDeferral(api.RDB.DB(ctx), due[0], clock.Add(time.Minute))
 		require.NoError(t, err)
 		require.False(t, won)
-		var event dmmodel.AlarmStateChangeEvent
+		var event dmcontract.AlarmStateChangeEvent
 		require.NoError(t, json.Unmarshal(due[0].Event, &event))
 		wire, err := dmproto.MarshalAlarmStateChangeEvent(&event)
 		require.NoError(t, err)

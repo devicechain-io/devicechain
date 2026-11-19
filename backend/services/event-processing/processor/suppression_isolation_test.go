@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/stretchr/testify/require"
 )
@@ -48,7 +48,7 @@ func TestSuppressionCannotReachDetectOrReact(t *testing.T) {
 		return nil
 	}))
 	// RaiseAlarmRequest is the actual JSON wire marshalled by alarmClient.Dispatch.
-	for _, typ := range []reflect.Type{reflect.TypeOf(dmmodel.RaiseAlarmRequest{}), reflect.TypeOf(react.AlarmRequest{})} {
+	for _, typ := range []reflect.Type{reflect.TypeOf(dmcontract.RaiseAlarmRequest{}), reflect.TypeOf(react.AlarmRequest{})} {
 		for i := 0; i < typ.NumField(); i++ {
 			f := typ.Field(i)
 			require.NotContains(t, strings.ToLower(f.Name), "suppress", typ.String())
