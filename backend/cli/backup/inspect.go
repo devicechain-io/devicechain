@@ -32,7 +32,11 @@ type Manifest struct {
 	// Missing area metadata retains legacy v1 strict restore coverage.
 	EnabledAreas    []string `json:"enabled_areas,omitempty"`
 	DisabledStreams []string `json:"disabled_streams,omitempty"`
-	Entries         []Entry  `json:"entries"`
+	// ShardGroups is the source's shard-group layout; its group streams are part
+	// of the required inventory. Absent on a manifest of an unsharded instance,
+	// and on every manifest written before backups knew about groups.
+	ShardGroups *ShardGroups `json:"shard_groups,omitempty"`
+	Entries     []Entry      `json:"entries"`
 }
 
 // Entry describes one opaque snapshot. Kind is stream, bucket, or object-store.
@@ -150,6 +154,9 @@ func (m Manifest) validate() error {
 		if err != nil || len(digest) != sha256.Size || strings.ToLower(e.SHA256) != e.SHA256 {
 			return fmt.Errorf("entry %q: sha256 must be 64 lowercase hexadecimal characters", e.Name)
 		}
+	}
+	if err := m.ShardGroups.validate(); err != nil {
+		return err
 	}
 	return m.validateDisabledStreams()
 }

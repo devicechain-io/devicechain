@@ -1124,9 +1124,11 @@ var All = []Stream{
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).
-	// Window: device-management publishes it with no Nats-Msg-Id.
-	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: AlarmEvents, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "alarm state is held in the database and notification re-derives from it", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
+	// Window: device-management relays each transition from its outbox with
+	// alarm-event-<tenant>-<id> as Nats-Msg-Id (agent effects and deletion cascades carry
+	// their own ids), so a re-publish inside the window is dropped. There is no ordering
+	// across those producers, nor against a pre-outbox replica during a rolling upgrade.
+	{Suffix: AlarmEvents, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "an alarm transition in flight; device-management re-publishes it until the broker acknowledges it, but one acknowledged just before the restore point may not have reached notification", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
 
 	// ADR-051 5c / ADR-054, carrying a JSON RaiseAlarmRequest. AT-LEAST-once, and
 	// safe as such: ApplyAlarmContributorEdge (ADR-057) is an idempotent

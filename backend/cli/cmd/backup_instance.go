@@ -140,13 +140,13 @@ func backupInstance(ctx context.Context, opts backupOptions) error {
 		return backup.ExportBlobs(ctx, blob.Config{Backend: bc.Backend, Directory: bc.Directory, Bucket: bc.Bucket, Region: bc.Region, Endpoint: bc.Endpoint, UsePathStyle: bc.UsePathStyle}, opts.InstanceID, w)
 	}
 	if opts.RestorePlan != nil {
-		actions, err := opts.RestorePlan.Plan(ctx, nc, export, areas)
+		actions, err := opts.RestorePlan.Plan(ctx, nc, export, cfg.Infrastructure.Nats.ShardGroups, areas)
 		if err != nil {
 			return err
 		}
 		return backup.WritePlan(opts.PlanOutput, actions)
 	}
-	return backup.Create(ctx, nc, opts.InstanceID, opts.Destination, export, areas)
+	return backup.Create(ctx, nc, opts.InstanceID, opts.Destination, export, cfg.Infrastructure.Nats.ShardGroups, areas)
 }
 
 // Match the diagnostic commands' transport policy: resolve TLS through the

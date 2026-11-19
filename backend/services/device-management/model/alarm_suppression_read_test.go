@@ -208,7 +208,7 @@ func TestSuppressionStatusLoadsWindowsOnce(t *testing.T) {
 	require.Equal(t, 1, deviceCount, "device facts memoized for the status call")
 }
 
-func TestLiveSuppressionRequiresPublisherAndDeviceTransition(t *testing.T) {
+func TestLiveSuppressionPreparationRequiresDeviceTransition(t *testing.T) {
 	r := newSuppressionCycleRig(t)
 	calls := 0
 	suppressionEvaluationHookForTest = func(context.Context, uint, string, string, time.Time) (*SuppressionMatch, error) {
@@ -216,13 +216,14 @@ func TestLiveSuppressionRequiresPublisherAndDeviceTransition(t *testing.T) {
 		return nil, nil
 	}
 	t.Cleanup(func() { suppressionEvaluationHookForTest = nil })
+	// Preparation is required even before a publisher is wired: the stored payload
+	// must retain transition-time suppression when a fresh process later drains it.
 	r.api.AlarmPublisher = nil
-	r.api.emitAlarmEvent(r.ctx, &AlarmStateChangeEvent{EventType: AlarmEventRaised, OriginatorType: "device", OriginatorId: r.device})
-	require.Zero(t, calls)
-	r.api.AlarmPublisher = r.publisher
-	r.api.emitAlarmEvent(r.ctx, &AlarmStateChangeEvent{EventType: AlarmEventRaised, OriginatorType: "asset"})
-	r.api.emitAlarmEvent(r.ctx, &AlarmStateChangeEvent{EventType: AlarmEventDeescalated, OriginatorType: "device", OriginatorId: r.device})
-	require.Zero(t, calls)
+	r.api.prepareAlarmEvent(r.ctx, &Alarm{OriginatorType: "device", OriginatorId: r.device}, AlarmEventRaised)
+	require.Equal(t, 1, calls)
+	r.api.prepareAlarmEvent(r.ctx, &Alarm{OriginatorType: "asset"}, AlarmEventRaised)
+	r.api.prepareAlarmEvent(r.ctx, &Alarm{OriginatorType: "device", OriginatorId: r.device}, AlarmEventDeescalated)
+	require.Equal(t, 1, calls)
 }
 
 // SQLite does not implement PostgreSQL's text[] overlap operator. Keep the real
