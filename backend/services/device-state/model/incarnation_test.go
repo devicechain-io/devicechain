@@ -85,23 +85,21 @@ func TestOrphanReconcileSkipsAnIncarnationResetAfterScan(t *testing.T) {
 	}
 }
 
-func TestOrphanReconcileSkipsAnOlderAuthorityAnswer(t *testing.T) {
-	api := newSQLiteProjectionApi(t, "sweep-older-answer")
+func TestOrphanReconcileDeletesARowTheAuthorityNamesASmallerIdFor(t *testing.T) {
+	api := newSQLiteProjectionApi(t, "sweep-smaller-live-id")
 	ctx := core.WithTenant(context.Background(), "a")
 	at := time.Now().UTC().Add(-time.Hour)
 	require.NoError(t, api.MergeProjectionBatch(ctx, []ProjectionUpdate{withIncarnation(deletionUpdate("a", "d", at), 23)}))
 	var scanned DeviceState
 	require.NoError(t, api.RDB.DB(ctx).First(&scanned).Error)
 	require.Equal(t, eventIncarnation(23), scanned.Incarnation)
+	requireLiveCounts(t, api, "a", "d", 1)
 
 	deleted, stamped, err := api.ReconcileDeviceState(ctx, scanned, 17, at)
 	require.NoError(t, err)
-	require.False(t, deleted)
+	require.True(t, deleted)
 	require.False(t, stamped)
-	requireLiveCounts(t, api, "a", "d", 1)
-	var after DeviceState
-	require.NoError(t, api.RDB.DB(ctx).First(&after).Error)
-	require.Equal(t, scanned, after)
+	requireLiveCounts(t, api, "a", "d", 0)
 }
 
 func TestProjectionIncarnationRules(t *testing.T) {

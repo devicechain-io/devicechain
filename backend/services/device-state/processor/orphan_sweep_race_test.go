@@ -46,6 +46,55 @@ func requireProjection(t *testing.T, api *model.Api, ctx context.Context, token 
 	}
 }
 
+// Device-management sequence allocation is not commit order: the live device can
+// have a smaller ID than a deleted device whose telemetry arrived late.
+func TestOrphanSweepRepairsALateIncarnationWithASmallerLiveId(t *testing.T) {
+	db := sqlitetest.OpenMemory(t, nil)
+	require.NoError(t, rdb.RegisterTenantScoping(db))
+	require.NoError(t, db.AutoMigrate(&model.DeviceState{}, &model.LatestMeasurement{}, &model.LatestLocation{}, &model.DroppedMeasurement{}))
+	api := model.NewApi(&rdb.RdbManager{Database: db})
+	ctx := core.WithTenant(context.Background(), "a")
+	at := time.Now().UTC().Truncate(time.Millisecond).Add(-time.Hour)
+	require.NoError(t, api.MergeProjectionBatch(ctx, []model.ProjectionUpdate{raceUpdate("d", 23, at, 23)}))
+	requireProjection(t, api, ctx, "d", 1)
+	var before model.DeviceState
+	require.NoError(t, api.RDB.DB(ctx).First(&before).Error)
+	require.Equal(t, sql.NullInt64{Int64: 23, Valid: true}, before.Incarnation)
+
+	// Even newer telemetry from the live device is discarded until the sweep
+	// removes the larger stamp; an ordinary event cannot repair this row.
+	require.NoError(t, api.MergeProjectionBatch(ctx, []model.ProjectionUpdate{raceUpdate("d", 17, at.Add(time.Minute), 17)}))
+	var blocked model.DeviceState
+	require.NoError(t, api.RDB.DB(ctx).First(&blocked).Error)
+	require.Equal(t, before, blocked)
+	requireProjection(t, api, ctx, "d", 1)
+	var measurement model.LatestMeasurement
+	require.NoError(t, api.RDB.DB(ctx).First(&measurement).Error)
+	require.Equal(t, float64(23), measurement.Value.Float64)
+	var location model.LatestLocation
+	require.NoError(t, api.RDB.DB(ctx).First(&location).Error)
+	require.Equal(t, float64(23), location.Latitude.Float64)
+	var dropped model.DroppedMeasurement
+	require.NoError(t, api.RDB.DB(ctx).First(&dropped).Error)
+	require.True(t, dropped.LastTime.Equal(at))
+
+	src := &pausingSource{
+		answer:  map[string]LiveDevice{"d": {Token: "d", ID: 17, CreatedAt: at.Add(-time.Hour)}},
+		between: func(context.Context) {},
+	}
+	require.NoError(t, (&OrphanSweep{Api: api, Source: src}).Sweep(context.Background()))
+	requireProjection(t, api, ctx, "d", 0)
+
+	require.NoError(t, api.MergeProjectionBatch(ctx, []model.ProjectionUpdate{raceUpdate("d", 17, at.Add(2*time.Minute), 17)}))
+	requireProjection(t, api, ctx, "d", 1)
+	var rebuilt model.DeviceState
+	require.NoError(t, api.RDB.DB(ctx).First(&rebuilt).Error)
+	require.Equal(t, sql.NullInt64{Int64: 17, Valid: true}, rebuilt.Incarnation)
+	measurement = model.LatestMeasurement{}
+	require.NoError(t, api.RDB.DB(ctx).First(&measurement).Error)
+	require.Equal(t, float64(17), measurement.Value.Float64)
+}
+
 // The sweep scans incarnation 17 and asks device-management about it. Before it takes the
 // row lock, 17 is deleted, 23 is created at the same token, and 23's telemetry resets the
 // row in place (same id). The answer the sweep holds — 17, or no device at all — is about a
