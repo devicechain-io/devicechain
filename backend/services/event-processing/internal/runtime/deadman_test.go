@@ -31,6 +31,7 @@ type armCall struct {
 func (f *fakeArmer) CarryRaised(map[string]string, func(core.SeriesKey) bool) int { return 0 }
 func (f *fakeArmer) ClearRaisedForRules(map[string]struct{}) int                  { return 0 }
 func (f *fakeArmer) IsRaised(core.SeriesKey) bool                                 { return false }
+func (f *fakeArmer) ClearRaised(core.SeriesKey)                                   {}
 func (f *fakeArmer) ClearRaisedIfNotAfter(core.SeriesKey, time.Time)              {}
 
 func newFakeArmer() *fakeArmer { return &fakeArmer{armed: map[core.SeriesKey]time.Time{}} }
@@ -79,9 +80,10 @@ func absScoped(tenant, pvt, ruleKey string) ScopedRule {
 		Tenant:              tenant,
 		ProfileVersionToken: pvt,
 		Compiled: &rules.CompiledRule{
-			ID:   id,
-			Type: rules.TypeAbsence,
-			Core: core.Rule{ID: id, Kind: core.Absence, Timeout: 10 * time.Second},
+			AlarmCarryActions: []string{},
+			ID:                id,
+			Type:              rules.TypeAbsence,
+			Core:              core.Rule{ID: id, Kind: core.Absence, Timeout: 10 * time.Second},
 		},
 	}
 }
@@ -93,9 +95,10 @@ func thrScoped(tenant, pvt, ruleKey string) ScopedRule {
 		Tenant:              tenant,
 		ProfileVersionToken: pvt,
 		Compiled: &rules.CompiledRule{
-			ID:   id,
-			Type: rules.TypeThreshold,
-			Core: core.Rule{ID: id, Kind: core.Threshold},
+			AlarmCarryActions: []string{},
+			ID:                id,
+			Type:              rules.TypeThreshold,
+			Core:              core.Rule{ID: id, Kind: core.Threshold},
 		},
 	}
 }

@@ -223,7 +223,7 @@ type Action struct {
 type RaiseAlarmAction struct {
 	// AlarmKey is the (originator, key) the alarm is keyed on (ADR-041 dec 3): repeated firings
 	// of the same rule escalate ONE alarm in place rather than spawning duplicates. Empty ⇒ the
-	// dispatcher defaults it to the rule's token, so a rule that omits it still keys stably. When
+	// dispatcher defaults it to the version-free profile/rule identity, so it still keys stably. When
 	// set it must satisfy the ADR-042 token grammar.
 	//
 	// It is a LITERAL, never a template: a key an author already published renders to itself

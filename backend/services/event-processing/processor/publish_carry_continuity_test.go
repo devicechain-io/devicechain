@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dc "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	rules "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -282,6 +283,241 @@ func TestRollbackAbsenceHandoffKeepsRecovery(t *testing.T) {
 			require.True(t, rp.checkpoint(context.Background()))
 			require.Len(t, w.events, 2)
 			require.Equal(t, runtime.EdgeResolved, w.events[1].Edge, "the returned version must retain the recovery latch")
+		})
+	}
+}
+
+// An acknowledged old recovery clears the shared contributor, including when
+// replay recreated the old latch. Its active successor must allow another raise.
+func TestReplayOldRecoveryAllowsNextSuccessorRaise(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		for _, liveRecovery := range []bool{false, true} {
+			t.Run(fmt.Sprintf("shards=%d/liveRecovery=%v", k, liveRecovery), func(t *testing.T) {
+				v1 := handoffRule(t, "v1", rules.TypeThreshold, false)
+				v2 := handoffRule(t, "v2", rules.TypeThreshold, false)
+				rp, _ := handoffProcessor(t, k, v1)
+				handoffApply(t, rp, handoffMessage(t, 1, "v1", "dev1", "90", ""))
+				require.True(t, rp.checkpoint(context.Background()))
+				handoffActivate(t, rp, v2)
+				require.True(t, rp.checkpoint(context.Background()))
+				msgs := []messaging.Message{handoffMessage(t, 2, "v1", "dev1", "90", "")}
+				head := uint64(2)
+				if !liveRecovery {
+					msgs = append(msgs, handoffMessage(t, 3, "v1", "dev1", "20", ""))
+					head = 3
+				}
+				rp, w := continuityRestart(t, rp, k, head, []runtime.ScopedRule{v1, v2}, msgs...)
+				if liveRecovery {
+					handoffApply(t, rp, handoffMessage(t, 3, "v1", "dev1", "20", ""))
+					require.True(t, rp.checkpoint(context.Background()))
+				}
+				require.Len(t, w.events, 2, "old raise and recovery must both publish")
+				require.Equal(t, runtime.EdgeResolved, w.events[1].Edge)
+				requireSuccessorRaises(t, rp, w, 4, "v2", "an acknowledged old clear must permit the next active raise")
+			})
+		}
+	}
+}
+
+// Resolution and activation facts may arrive out of order. A retained rollback
+// target can evaluate healthy before its activation reaches this processor.
+func TestHealthyRollbackTargetBeforeActivationCancelsCarry(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		t.Run(fmt.Sprint(k), func(t *testing.T) {
+			v1 := handoffRule(t, "v1", rules.TypeThreshold, false)
+			v2 := handoffRule(t, "v2", rules.TypeThreshold, false)
+			rp, w := handoffProcessor(t, k, v1)
+			handoffApply(t, rp, handoffMessage(t, 1, "v1", "dev1", "90", ""))
+			require.True(t, rp.checkpoint(context.Background()))
+			continuityActivate(t, rp, "v2", 2*time.Second, v2)
+			handoffApply(t, rp, handoffMessage(t, 3, "v2", "dev1", "20", ""))
+			require.True(t, rp.checkpoint(context.Background()))
+			continuityActivate(t, rp, "v1", 4*time.Second, v1)
+			handoffApply(t, rp, handoffMessage(t, 5, "v1", "dev1", "90", ""))
+			require.True(t, rp.checkpoint(context.Background()))
+			handoffApply(t, rp, handoffMessage(t, 6, "v2", "dev1", "20", ""))
+			require.True(t, rp.checkpoint(context.Background()))
+			require.Len(t, w.events, 3, "the early healthy v2 evaluation emits no edge")
+			continuityActivate(t, rp, "v2", 6*time.Second, v2)
+			requireSuccessorRaises(t, rp, w, 7, "v2", "a pre-activation evaluation must prevent a carry into that series")
+		})
+	}
+}
+
+// Persisted membership changes must end the previous membership's episode,
+// including when a departure and return straddle a deferred or immediate carry.
+func TestDeferredCarryDoesNotSurviveMembershipRoundTrip(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		for _, deferred := range []bool{false, true} {
+			for _, change := range []string{"profile", "delete", "since", "redelivery"} {
+				t.Run(fmt.Sprintf("shards=%d/deferred=%v/%s", k, deferred, change), func(t *testing.T) {
+					rp, w := handoffProcessor(t, k, handoffRule(t, "v1", rules.TypeThreshold, true))
+					handoffApply(t, rp, handoffMessage(t, 1, "v1", "dev1", "90", ""))
+					if deferred {
+						handoffActivate(t, rp, handoffRule(t, "v2", rules.TypeThreshold, true))
+					} else {
+						require.True(t, rp.checkpoint(context.Background()))
+					}
+					membership := func(profile string, at time.Duration) {
+						require.NoError(t, rp.RosterStore.Upsert(context.Background(), &model.DeviceRoster{
+							Tenant: "acme", DeviceToken: "dev1", ProfileToken: profile, ExpectedSince: testBase.Add(at)}))
+						rp.applyArmRecheck(armUpdate{tenant: "acme", deviceToken: "dev1"})
+					}
+					switch change {
+					case "profile":
+						membership("p2", 11*time.Second)
+						membership("p1", 12*time.Second)
+					case "delete":
+						require.NoError(t, rp.RosterStore.Delete(context.Background(), "acme", "dev1", testBase.Add(11*time.Second)))
+						rp.applyArmRecheck(armUpdate{tenant: "acme", deviceToken: "dev1"})
+						membership("p1", 12*time.Second)
+					case "since":
+						membership("p1", 12*time.Second)
+					case "redelivery":
+						membership("p1", 0)
+					}
+					if !deferred {
+						continuityActivate(t, rp, "v2", 13*time.Second, handoffRule(t, "v2", rules.TypeThreshold, true))
+					}
+					require.True(t, rp.checkpoint(context.Background()))
+					next := dc.SeriesKey{Rule: "acme/p1@v2/r1", Series: "dev1"}
+					if change == "redelivery" {
+						require.True(t, rp.engine.IsRaised(next), "unchanged membership must preserve carry")
+						handoffApply(t, rp, handoffMessage(t, 14, "v2", "dev1", "90", ""))
+						require.True(t, rp.checkpoint(context.Background()))
+						require.Len(t, w.events, 1, "redelivery must not duplicate the raise")
+					} else {
+						require.False(t, rp.engine.IsRaised(next), "a previous membership must never seed the successor")
+						requireSuccessorRaises(t, rp, w, 14, "v2", "the returning membership must dispatch its first breach")
+					}
+				})
+			}
+		}
+	}
+}
+
+// The production published-rule definition contains the REACT actions. Changing
+// their alarm destinations must allow the first breach to dispatch anew.
+func TestCarryNotAcrossAlarmKeyChange(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		for _, change := range []string{"key", "add", "remove", "template", "guard", "unknown", "severity", "non-alarm", "default", "unchanged-default", "order"} {
+			t.Run(fmt.Sprintf("shards=%d/%s", k, change), func(t *testing.T) {
+				alarm := func(key, template, guard string) rules.Action {
+					return rules.Action{Type: rules.ActionRaiseAlarm, RaiseAlarm: &rules.RaiseAlarmAction{AlarmKey: key, AlarmKeyTemplate: template}, Guard: guard}
+				}
+				oldActions := []rules.Action{alarm("alarm-a", "", "")}
+				newActions := []rules.Action{alarm("alarm-b", "", "")}
+				switch change {
+				case "add":
+					oldActions = nil
+				case "remove":
+					newActions = nil
+				case "template":
+					oldActions = []rules.Action{alarm("", `"alarm-a-" + series`, "")}
+					newActions = []rules.Action{alarm("", `"alarm-b-" + series`, "")}
+				case "guard":
+					oldActions = []rules.Action{alarm("alarm-a", "", "value > 95.0")}
+					newActions = []rules.Action{alarm("alarm-a", "", "")}
+				case "severity", "unknown":
+					newActions = oldActions
+				case "non-alarm":
+					newActions = append([]rules.Action{oldActions[0]}, rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: "fan"}})
+				case "default":
+					oldActions = []rules.Action{alarm("", "", "")}
+					newActions = []rules.Action{alarm("r1", "", "")}
+				case "unchanged-default":
+					oldActions = []rules.Action{alarm("", "", "")}
+					newActions = oldActions
+				case "order":
+					oldActions = []rules.Action{alarm("alarm-a", "", ""), alarm("alarm-b", "", "")}
+					newActions = []rules.Action{oldActions[1], oldActions[0]}
+				}
+				published := func(version string, actions []rules.Action) runtime.ScopedRule {
+					threshold := 80.0
+					severity := rules.SeverityWarning
+					if version == "v2" && change == "severity" {
+						severity = rules.SeverityMajor
+					}
+					body, err := json.Marshal(rules.Rule{Name: "heat", Type: rules.TypeThreshold, Severity: severity,
+						When: rules.Condition{Metric: "temperature", Op: rules.OpGt, Threshold: &threshold}, Actions: actions})
+					require.NoError(t, err)
+					scoped, failed := runtime.CompilePublishedRules("acme", "p1@"+version, []dmmodel.PublishedDetectionRule{{Token: "r1", Definition: string(body)}})
+					require.Zero(t, failed)
+					require.Len(t, scoped, 1)
+					return scoped[0]
+				}
+				v1, v2 := published("v1", oldActions), published("v2", newActions)
+				if change == "unknown" {
+					v2.Compiled.AlarmCarryActions = nil
+				}
+				rp, w := handoffProcessor(t, k, v1)
+				handoffApply(t, rp, handoffMessage(t, 1, "v1", "dev1", "90", ""))
+				require.True(t, rp.checkpoint(context.Background()))
+				handoffActivate(t, rp, v2)
+				switch change {
+				case "severity", "non-alarm", "unchanged-default", "order":
+					handoffApply(t, rp, handoffMessage(t, 11, "v2", "dev1", "90", ""))
+					require.True(t, rp.checkpoint(context.Background()))
+					require.Len(t, w.events, 1, "unchanged alarm destinations may carry")
+					handoffApply(t, rp, handoffMessage(t, 12, "v2", "dev1", "20", ""))
+					require.True(t, rp.checkpoint(context.Background()))
+					require.Len(t, w.events, 2)
+					require.Equal(t, runtime.EdgeResolved, w.events[1].Edge)
+				default:
+					requireSuccessorRaises(t, rp, w, 11, "v2", "changed alarm actions must dispatch on the first v2 breach")
+				}
+			})
+		}
+	}
+}
+
+// Departure clears old latches, but another late event may still legitimately
+// raise the old rule before the handoff. Membership must independently gate carry.
+func TestImmediateCarryExcludesLateDepartedDevice(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		t.Run(fmt.Sprint(k), func(t *testing.T) {
+			rp, w := handoffProcessor(t, k, handoffRule(t, "v1", rules.TypeThreshold, false))
+			require.NoError(t, rp.RosterStore.Upsert(context.Background(), &model.DeviceRoster{
+				Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p2", ExpectedSince: testBase.Add(time.Second)}))
+			rp.applyArmRecheck(armUpdate{tenant: "acme", deviceToken: "dev1"})
+			handoffApply(t, rp, handoffMessage(t, 2, "v1", "dev1", "90", ""))
+			require.True(t, rp.checkpoint(context.Background()))
+			require.Len(t, w.events, 1, "a late old-version event still owes its action")
+			handoffActivate(t, rp, handoffRule(t, "v2", rules.TypeThreshold, false))
+			require.NoError(t, rp.RosterStore.Upsert(context.Background(), &model.DeviceRoster{
+				Tenant: "acme", DeviceToken: "dev1", ProfileToken: "p1", ExpectedSince: testBase.Add(11 * time.Second)}))
+			rp.applyArmRecheck(armUpdate{tenant: "acme", deviceToken: "dev1"})
+			requireSuccessorRaises(t, rp, w, 12, "v2", "late output from a departed membership must not seed the successor")
+		})
+	}
+}
+
+func TestAbsenceHandoffNotAcrossAlarmKeyChange(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		t.Run(fmt.Sprint(k), func(t *testing.T) {
+			published := func(version, key string) runtime.ScopedRule {
+				scoped, failed := runtime.CompilePublishedRules("acme", "p1@"+version, []dmmodel.PublishedDetectionRule{{Token: "r1",
+					Definition: fmt.Sprintf(`{"name":"silent","type":"absence","timeout":"1h","severity":"warning","actions":[{"type":"raiseAlarm","raiseAlarm":{"alarmKey":%q}}]}`, key)}})
+				require.Zero(t, failed)
+				return scoped[0]
+			}
+			v1, v2 := published("v1", "alarm-a"), published("v2", "alarm-b")
+			rp, w := handoffProcessor(t, k, v1)
+			require.NoError(t, rp.reconcileDeadmanArming(context.Background()))
+			rp.engine.Advance(testBase.Add(2 * time.Hour))
+			rp.drainDetections(testBase.Add(2*time.Hour), false)
+			require.True(t, rp.checkpoint(context.Background()))
+			require.Len(t, w.events, 1)
+			continuityActivate(t, rp, "v2", 7201*time.Second, v2)
+			require.True(t, rp.checkpoint(context.Background()))
+			require.Len(t, w.events, 2, "the old alarm key must receive its disarm recovery")
+			require.Equal(t, runtime.EdgeResolved, w.events[1].Edge)
+			rp.engine.Advance(testBase.Add(4 * time.Hour))
+			rp.drainDetections(testBase.Add(4*time.Hour), false)
+			require.True(t, rp.checkpoint(context.Background()))
+			require.Len(t, w.events, 3, "the new absence alarm key must receive a raise")
+			require.Equal(t, runtime.EdgeRaised, w.events[2].Edge)
+			require.Equal(t, v2.Compiled.ID, w.events[2].RuleID)
 		})
 	}
 }

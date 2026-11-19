@@ -23,9 +23,10 @@ func absScopedProc(tenant, pvt, id string) runtime.ScopedRule {
 		Tenant:              tenant,
 		ProfileVersionToken: pvt,
 		Compiled: &rules0.CompiledRule{
-			ID:   id,
-			Type: rules0.TypeAbsence,
-			Core: detectcore.Rule{ID: id, Kind: detectcore.Absence, Timeout: 10 * time.Second},
+			AlarmCarryActions: []string{}, // synthetic rule has no alarm actions
+			ID:                id,
+			Type:              rules0.TypeAbsence,
+			Core:              detectcore.Rule{ID: id, Kind: detectcore.Absence, Timeout: 10 * time.Second},
 		},
 	}
 }

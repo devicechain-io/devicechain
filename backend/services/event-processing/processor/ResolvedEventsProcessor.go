@@ -2717,7 +2717,9 @@ func (rp *ResolvedEventsProcessor) applyArmRecheck(au armUpdate) {
 		entry.ProfileToken = row.ProfileToken
 		entry.ExpectedSince = row.ExpectedSince
 	}
-	rp.armer.ApplyDeviceMembership(entry, live)
+	if rp.armer.ApplyDeviceMembership(entry, live) {
+		rp.dirty = true // persist membership's latch clears even without a new event
+	}
 }
 
 // retryArmRechecks re-attempts every arming recheck a prior RosterStore.Load error deferred, on the

@@ -158,6 +158,12 @@ type CompiledRule struct {
 	// form about detection only.
 	Severity Severity
 
+	// AlarmCarryActions is the sorted set of alarm destinations and raise guards
+	// proven by compilation. Non-alarm actions and severity do not affect carry.
+	// Empty but non-nil means no alarm actions; nil means unknown (do not carry).
+	// This summary is transient; the REACT chain still comes from its projection.
+	AlarmCarryActions []string
+
 	// Core is the keyed-streaming engine rule (Kind + temporal params). Its ID equals ID,
 	// so the engine keys this rule's series state by the same id.
 	Core core.Rule
@@ -325,8 +331,32 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 		return nil, err
 	}
 	cr.Severity = r.Severity
+	cr.AlarmCarryActions = alarmCarryActions(r)
 	cr.Warnings = compileWarnings(pred)
 	return cr, nil
+}
+
+func alarmCarryActions(r Rule) []string {
+	seen := map[string]struct{}{}
+	for _, a := range r.Actions {
+		if a.Type != ActionRaiseAlarm {
+			continue
+		}
+		// Empty key + template denotes REACT's default profile/rule identity.
+		// Stable-rule pairing proves those defaults equal across versions; never
+		// equate the default with an authored literal (such as the rule token).
+		// Templates depend only on series. Equal source proves equal keys for
+		// every device; differing source is conservatively not carried. Guards
+		// also matter: a changed guard can enable a previously skipped raise.
+		identity, _ := json.Marshal([]string{a.RaiseAlarm.AlarmKey, a.RaiseAlarm.AlarmKeyTemplate, a.Guard})
+		seen[string(identity)] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for identity := range seen {
+		out = append(out, identity)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // errFenceAndMetricLeaf refuses a rule whose leaf tests a GEOFENCE and a MEASUREMENT together,
