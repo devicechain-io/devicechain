@@ -848,8 +848,9 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	elapsed := now.Sub(s.started)
 	s.mu.Unlock()
 
-	if err := s.s3bBeats(ctx, rt, elapsed, now); err != nil {
-		return err
+	beatErr := s.s3bBeats(ctx, rt, elapsed, now)
+	if beatErr != nil {
+		log.Error().Err(beatErr).Msg("run harborpulse beats failed; retrying next tick")
 	}
 	model.advanceTo(elapsed)
 	workers := rt.Load.Workers(len(rt.Devices))
@@ -879,7 +880,7 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	if jobErr != nil {
 		log.Error().Err(jobErr).Msg("schedule the harborpulse day's jobs failed; retrying next tick")
 	}
-	return errors.Join(measErr, locErr, backErr, loraErr, jobErr)
+	return errors.Join(beatErr, measErr, locErr, backErr, loraErr, jobErr)
 }
 
 // startedAt is the first tick, the instant the day is measured from.

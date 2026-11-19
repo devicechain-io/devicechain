@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,6 +141,141 @@ func TestHarborpulseS3bBeatsAndDefects(t *testing.T) {
 			beat := status.CalculatedBackfills[0]
 			if !beat.From.Equal(wantFrom) || beat.To.Nanosecond()%1000 != 0 {
 				t.Fatalf("status bounds have wrong precision: %+v", beat)
+			}
+		})
+	}
+}
+
+func TestHarborpulseTickEmitsWhenBackfillBeatFails(t *testing.T) {
+	for _, failure := range []string{"unavailable", "start-error"} {
+		t.Run(failure, func(t *testing.T) {
+			s := NewHarborpulse(1, Load{}).(*harborpulse)
+			s.started = time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+			now := s.started
+			s.now = func() time.Time { return now }
+			type event struct {
+				Device, EventType string
+				Payload           struct {
+					Entries []struct {
+						Measurements        map[string]string
+						Latitude, Longitude string
+					}
+				}
+			}
+			var mu sync.Mutex
+			var events []event
+			attempts, starts, uplinks := 0, 0, 0
+			auth := &fakeProfileServer{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/events"):
+					var e event
+					if err := json.NewDecoder(r.Body).Decode(&e); err != nil {
+						t.Error(err)
+					}
+					if attempts == 0 {
+						t.Error("readings reached ingress before the backfill beat")
+					}
+					events = append(events, e)
+					w.WriteHeader(http.StatusAccepted)
+					return
+				case strings.Contains(r.URL.Path, "/pending/"):
+					_, _ = w.Write([]byte(`[]`))
+					return
+				case r.URL.Query().Get("event") == "up":
+					uplinks++
+					w.WriteHeader(http.StatusAccepted)
+					return
+				}
+				var req struct {
+					Query     string
+					Variables map[string]any
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				data := map[string]any{}
+				switch {
+				case strings.Contains(req.Query, "refresh("):
+					data["refresh"] = map[string]any{"accessToken": "access", "refreshToken": "refresh", "expiresAt": time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}
+				case strings.Contains(req.Query, "entityAttributes("):
+					data["entityAttributes"] = map[string]any{"results": []any{}}
+				case strings.Contains(req.Query, "setEntityAttribute("):
+					data["setEntityAttribute"] = map[string]any{}
+				case strings.Contains(req.Query, "updateDevice("):
+					data["updateDevice"] = map[string]any{"token": HarborpulseBasinPump}
+				case strings.Contains(req.Query, "calculatedMetricBackfillAvailability"):
+					attempts++
+					data["calculatedMetricBackfillAvailability"] = map[string]any{"available": failure != "unavailable", "reason": "worker disabled"}
+				case strings.Contains(req.Query, "startCalculatedMetricBackfill("):
+					starts++
+					_ = json.NewEncoder(w).Encode(map[string]any{"errors": []any{map[string]any{"message": "start refused"}}})
+					return
+				default:
+					var status int
+					data, status = auth.dispatch(req.Query, req.Variables)
+					if status != 0 || data == nil {
+						t.Errorf("unexpected query %s", req.Query)
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+			}))
+			defer server.Close()
+			t.Setenv("DC_SIM_HARBORPULSE_SINK_URL", server.URL)
+			rt := &Runtime{
+				Tenant: "acme", InstanceId: "sim", HTTPClient: server.Client(),
+				Devices: s.Manifest().Expand(1),
+				Endpoints: Endpoints{Ingress: server.URL, DeviceMgmtGraphQL: server.URL, CommandMgmtGraphQL: server.URL,
+					EventMgmtWS: server.URL, Integrations: server.URL + "/ingest"},
+				Session:           userclient.NewTenantSession(server.Client(), server.URL, "sim@example.invalid", "pw", "acme"),
+				IntegrationTokens: map[string]string{HarborpulseIntegration: "integration-token"},
+			}
+			for i, hour := range []float64{16, 18} {
+				now = s.started.Add(time.Duration((hour - harborpulseStartHour) / 24 * float64(s.dayLength)))
+				err := s.Tick(context.Background(), rt)
+				wantError := "worker disabled"
+				if failure == "start-error" {
+					wantError = "start refused"
+				}
+				if err == nil || !strings.Contains(err.Error(), "harborpulse calculated-backfill:") || !strings.Contains(err.Error(), wantError) {
+					t.Fatalf("tick %d: %v, want the refused backfill beat", i, err)
+				}
+				func() {
+					mu.Lock()
+					defer mu.Unlock()
+					wetWells := map[string]bool{}
+					truckLocation := false
+					wantFix := harborTruckFix(hour)
+					for _, e := range events {
+						for _, entry := range e.Payload.Entries {
+							if e.EventType == "Measurement" && entry.Measurements[HarborpulseWetWellKey] != "" {
+								wetWells[e.Device] = true
+							}
+							if e.Device == harborResponseTruck && e.EventType == "Location" &&
+								entry.Latitude == formatFixValue(wantFix.Latitude) && entry.Longitude == formatFixValue(wantFix.Longitude) {
+								truckLocation = true
+							}
+						}
+					}
+					if len(wetWells) != 3 || !truckLocation || uplinks != 4 {
+						t.Errorf("tick %d: wet wells %v, truck location %v, uplinks %d; want all three pumps, truck at %.0fh and four uplinks", i, wetWells, truckLocation, uplinks, hour)
+					}
+					wantStarts := 0
+					if failure == "start-error" {
+						wantStarts = i + 1
+					}
+					if attempts != i+1 || starts != wantStarts {
+						t.Errorf("tick %d: availability checks %d, start requests %d; want %d and %d (retry next tick)", i, attempts, starts, i+1, wantStarts)
+					}
+					events = nil
+					uplinks = 0
+				}()
 			}
 		})
 	}
