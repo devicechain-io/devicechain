@@ -235,5 +235,5 @@ the edge:
 ## Related {#ingress-cutover-related}
 
 - [`dcctl install`](../reference/dcctl.md) and [`dcctl upgrade`](../reference/dcctl.md) list every flag used here.
-- [Releases & upgrades](./releases-and-upgrades.md#v0260-upgrade) has the notes for the release that
+- [Releases & upgrades](https://github.com/devicechain-io/devicechain/blob/v0.26.0/docs/docs/deployment/releases-and-upgrades.md#v0260-upgrade) has the notes for the release that
   ships this change.

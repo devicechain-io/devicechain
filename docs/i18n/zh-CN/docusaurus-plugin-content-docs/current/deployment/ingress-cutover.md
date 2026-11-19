@@ -195,4 +195,4 @@ Gateway 提供与 Ingress 对象相同的主机、路径和后端。变化的是
 ## 相关 {#ingress-cutover-related}
 
 - [`dcctl install`](../reference/dcctl.md) 和 [`dcctl upgrade`](../reference/dcctl.md) 列出了这里用到的全部标志。
-- [发布与升级](./releases-and-upgrades.md#v0260-upgrade)包含附带此变更的版本的说明。
+- [发布与升级](https://github.com/devicechain-io/devicechain/blob/v0.26.0/docs/i18n/zh-CN/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0260-upgrade)包含附带此变更的版本的说明。

@@ -7,6 +7,7 @@ release-notes page, and the release-notes pull request folds them into the page.
     hack/assemble-release-notes.py              # fold every fragment into the page, delete them
     hack/assemble-release-notes.py --check      # validate every fragment; writes nothing
     hack/assemble-release-notes.py --self-test  # prove --check fails on planted bad fragments
+    hack/assemble-release-notes.py --open-line v1.8.0   # open a release; stub the 4th line
     hack/assemble-release-notes.py --root DIR   # act on another tree (tests)
 
 WHY. Nearly every pull request used to add a line to the in-development section of
@@ -38,25 +39,44 @@ explicit {#anchor}; the three locales must then agree on the headings' levels an
 the number of code fences and on the admonitions, because the docs structure-parity check
 requires exactly that of the assembled page.
 
-WHERE IT GOES. The current in-development version is the first `###` section under the page's
-{#recent-releases} heading, `### v1.7.0 — ... {#v170-upgrade}`; its two targets are the headings
-anchored {#v170-before-upgrade} and {#v170-whats-new}, which carry the same anchors in every
-locale. A fragment without headings is a bullet (or paragraph) and goes at the end of the
-target's lead content, before any subsection; a fragment with headings goes at the end of the
-target's region. Fragments are taken in file-name order, bullets before subsections, so the
+WHERE IT GOES. The page lists its release LINES (a minor release and its patches) in an index
+under {#release-lines}, documents the newest three lines in full under {#recent-releases}, newest
+release first, and keeps a short stub for each older line under {#older-releases}. The version a
+fragment lands in is the newest `###` section under {#recent-releases} that carries both target
+headings, anchored {#vNNN-before-upgrade} and {#vNNN-whats-new} with the same anchors in every
+locale; a patch section copied in without them is skipped, so it never captures the fragments of
+the line in development. A fragment without headings is a bullet (or paragraph) and goes at the
+end of the target's lead content, before any subsection; a fragment with headings goes at the end
+of the target's region. Fragments are taken in file-name order, bullets before subsections, so the
 output depends only on the set of fragments.
+
+THE LAYOUT, which --check also holds: every `###` under {#recent-releases} is a version heading
+`### vX.Y.Z ... {#vXYZ-upgrade}`, newest first; at most three lines are there, each with its
+`.0` release; and the index has one item per line, in the same order, listing exactly that line's
+releases:
+
+    - **[v1.7](#v170-upgrade)**: [v1.7.1](#v171-upgrade) · [v1.7.0](#v170-upgrade)
+
+OPENING A RELEASE. `--open-line vX.Y.Z` writes an in-development section for the version, with
+both target headings, in all three locales. A minor (`vX.Y.0`) opens a new line at the top and
+then turns every line beyond the newest three into a stub under {#older-releases}: the line's
+`.0` heading kept verbatim as the stub's heading, every other anchor in the line kept as an
+`<a id>`, a link to that version's frozen docs (docs/versions.json) and to each of its GitHub
+releases. A patch (`vX.Y.Z`, Z > 0) goes at the top of its own line, which must still be in full.
+It refuses, writing nothing, if any anchor on a page would be lost or the result breaks the layout.
 
 REFUSED, all before anything is written: a missing, duplicated or unknown locale; an unknown or
 missing section; front matter that does not parse; an ADR reference (the same pattern as
 hack/check-docs-adr-refs.sh — the assembled text is published); a heading shallower than ####
 or without an anchor; an anchor already on the page or in another fragment; locales whose
 structure differs; a file in the directory that is not a well-named fragment; a page whose
-in-development section cannot be found. Text is read and written as strict UTF-8 with LF line
+in-development section cannot be found; a page whose index and body disagree. Text is read and written as strict UTF-8 with LF line
 endings, and a page's byte-order mark is kept exactly as found.
 
 Standard library only.
 """
 import argparse
+import json
 import os
 import re
 import shutil
@@ -276,44 +296,211 @@ def load_fragments(root):
     return fragments
 
 
-class Page:
-    """One locale's release-notes page and the in-development version's two target headings."""
+MAX_FULL_LINES = 3
+GITHUB_RELEASE = "https://github.com/devicechain-io/devicechain/releases/tag/{tag}"
+GITHUB_RELEASES = "https://github.com/devicechain-io/devicechain/releases"
+VERSION_HEAD_RE = re.compile(r"^###\s+v(\d+)\.(\d+)\.(\d+)\b.*\{#(v\d+-upgrade)\}\s*$")
+INDEX_ITEM_RE = re.compile(r"^- \*\*\[v(\d+)\.(\d+)\]\(#(v\d+-upgrade)\)\*\*: (.+)$")
+INDEX_LINK_RE = re.compile(r"\[v(\d+)\.(\d+)\.(\d+)\]\(#(v\d+-upgrade)\)")
+ANCHOR_ANY_RE = re.compile(r"\{#([^}\s]+)\}|<a id=\"([^\"]+)\"></a>")
 
-    def __init__(self, root, locale):
+# The text --open-line writes. A heading's words may be reworded on the page later; only the
+# anchors are load-bearing.
+TEXT = {
+    "en": {
+        "title": "### {v} — in development {{#{a}}}",
+        "lead": "These notes are for the release in development and grow until it ships.",
+        "before": "#### Before you upgrade to {v} {{#{p}-before-upgrade}}",
+        "new": "#### What is new in {v} {{#{p}-whats-new}}",
+        "docs": "Full notes: [{line} documentation]({url}). GitHub release: {gh}.",
+        "nodocs": "GitHub release: {gh}.",
+    },
+    "es": {
+        "title": "### {v} — en desarrollo {{#{a}}}",
+        "lead": "Estas notas son de la versión en desarrollo y crecen hasta su publicación.",
+        "before": "#### Antes de actualizar a {v} {{#{p}-before-upgrade}}",
+        "new": "#### Novedades de {v} {{#{p}-whats-new}}",
+        "docs": "Notas completas: [documentación de {line}]({url}). Versión en GitHub: {gh}.",
+        "nodocs": "Versión en GitHub: {gh}.",
+    },
+    "zh-CN": {
+        "title": "### {v} — 开发中 {{#{a}}}",
+        "lead": "这些说明针对开发中的版本，会持续补充直到发布。",
+        "before": "#### 升级到 {v} 前 {{#{p}-before-upgrade}}",
+        "new": "#### {v} 新增内容 {{#{p}-whats-new}}",
+        "docs": "完整说明：[{line} 文档]({url})。GitHub 发布：{gh}。",
+        "nodocs": "GitHub 发布：{gh}。",
+    },
+}
+
+
+def vstr(v):
+    return "v%d.%d.%d" % v
+
+
+def anchor_of(v):
+    """The upgrade anchor for a version, as hack/build-release-notes-header.sh derives it."""
+    return "v%d%d%d-upgrade" % v
+
+
+def index_item(line, releases):
+    links = " · ".join(f"[{vstr(v)}](#{anchor_of(v)})" for v in releases)
+    return f"- **[v{line[0]}.{line[1]}](#{anchor_of(line + (0,))})**: {links}"
+
+
+def stub_links(locale, line, releases, docs_url):
+    gh = ", ".join(f"[{vstr(v)}]({GITHUB_RELEASE.format(tag=vstr(v))})" for v in releases)
+    t = TEXT[locale]
+    if docs_url:
+        return t["docs"].format(line=f"v{line[0]}.{line[1]}", url=docs_url, gh=gh)
+    return t["nodocs"].format(gh=gh)
+
+
+def all_anchors(text):
+    """Every id a link can land on outside a code fence: explicit heading ids and <a id>s."""
+    out, fenced = [], False
+    for line in text.split("\n"):
+        if FENCE_RE.match(line):
+            fenced = not fenced
+            continue
+        if not fenced:
+            out += [m.group(1) or m.group(2) for m in ANCHOR_ANY_RE.finditer(line)]
+    return out
+
+
+def anchors_lost(before, after):
+    """The anchors present in `before` and missing from `after`, in page order."""
+    kept = set(all_anchors(after))
+    return [a for a in all_anchors(before) if a not in kept]
+
+
+class Page:
+    """One locale's release-notes page: its layout and the in-development version's targets."""
+
+    def __init__(self, root, locale, text=None):
         self.locale = locale
         self.path = page_path(root, locale)
-        if not os.path.isfile(self.path):
-            raise Refusal(f"{self.path}: release-notes page not found")
-        self.had_bom, text = read_utf8(self.path)
+        if text is None:
+            if not os.path.isfile(self.path):
+                raise Refusal(f"{self.path}: release-notes page not found")
+            self.had_bom, text = read_utf8(self.path)
+        else:
+            self.had_bom = False
+        self.text = text
         self.lines = text.split("\n")
-        heads = list(headings(self.lines))
-        self.anchors = {a for _, _, a in heads if a}
+        self.heads = list(headings(self.lines))
+        self.anchors = {a for _, _, a in self.heads if a}
+        self.parse_layout()
 
-        recent = [i for i, _, a in heads if a == "recent-releases"]
-        if len(recent) != 1:
-            raise Refusal(f"{self.path}: expected one {{#recent-releases}} heading, found "
-                          f"{len(recent)}")
-        version = next(((i, a) for i, lvl, a in heads if i > recent[0] and lvl == 3), None)
-        m = re.fullmatch(r"(v[0-9]+)-upgrade", version[1] or "") if version else None
-        if not m:
-            raise Refusal(f"{self.path}: the first ### under Recent releases is not an "
-                          f"in-development version heading anchored {{#vNNN-upgrade}}")
-        self.prefix = m.group(1)
-        v_idx = version[0]
-        self.version_end = next((i for i, lvl, _ in heads if i > v_idx and lvl <= 3),
-                                len(self.lines))
-        self.targets = {}
-        for section in SECTIONS:
-            anchor = f"{self.prefix}-{section}"
-            found = [i for i, lvl, a in heads if a == anchor]
-            if len(found) != 1 or not v_idx < found[0] < self.version_end:
-                raise Refusal(f"{self.path}: expected one {{#{anchor}}} heading inside the "
-                              f"{self.prefix} section, found {len(found)}")
-            self.targets[section] = found[0]
+        version = None
+        for sec in self.sections:
+            p = sec["anchor"][:-len("-upgrade")]
+            found = {s: [i for i, _, a in self.heads if a == f"{p}-{s}"] for s in SECTIONS}
+            if all(len(found[s]) == 1 and sec["start"] < found[s][0] < sec["end"]
+                   for s in SECTIONS):
+                version = sec
+                break
+        if version is None:
+            raise Refusal(f"{self.path}: no release under Recent releases carries both "
+                          f"{{#vNNN-before-upgrade}} and {{#vNNN-whats-new}} headings, so there "
+                          f"is no in-development section to fold fragments into")
+        self.prefix = version["anchor"][:-len("-upgrade")]
+        self.version_end = version["end"]
+        self.targets = {s: next(i for i, _, a in self.heads if a == f"{self.prefix}-{s}")
+                        for s in SECTIONS}
         if not self.targets["before-upgrade"] < self.targets["whats-new"]:
             raise Refusal(f"{self.path}: {{#{self.prefix}-before-upgrade}} must come before "
                           f"{{#{self.prefix}-whats-new}}")
-        self.heads = heads
+
+    def h2(self, anchor):
+        found = [i for i, lvl, a in self.heads if a == anchor and lvl == 2]
+        if len(found) != 1:
+            raise Refusal(f"{self.path}: expected one ## heading anchored {{#{anchor}}}, found "
+                          f"{len(found)}")
+        start = found[0]
+        end = next((i for i, lvl, _ in self.heads if i > start and lvl <= 2), len(self.lines))
+        return start, end
+
+    def parse_layout(self):
+        """The index, the lines in full and the stubs; refuses a page where they disagree."""
+        where = self.path
+        self.index_region = self.h2("release-lines")
+        self.recent_region = self.h2("recent-releases")
+        self.older_region = self.h2("older-releases")
+        if not self.index_region[0] < self.recent_region[0] < self.older_region[0]:
+            raise Refusal(f"{where}: the sections must come in the order {{#release-lines}}, "
+                          f"{{#recent-releases}}, {{#older-releases}}")
+
+        rs, rend = self.recent_region
+        h3 = [i for i, lvl, _ in self.heads if rs < i < rend and lvl <= 3]
+        self.sections = []
+        for n, i in enumerate(h3):
+            m = VERSION_HEAD_RE.match(self.lines[i])
+            if not m:
+                raise Refusal(f"{where}: '{self.lines[i].strip()}' under Recent releases is not "
+                              f"a version heading '### vX.Y.Z ... {{#vXYZ-upgrade}}'")
+            v = tuple(int(g) for g in m.group(1, 2, 3))
+            if m.group(4) != anchor_of(v):
+                raise Refusal(f"{where}: {vstr(v)} is anchored {{#{m.group(4)}}}, not "
+                              f"{{#{anchor_of(v)}}}")
+            end = h3[n + 1] if n + 1 < len(h3) else rend
+            self.sections.append({"v": v, "anchor": m.group(4), "start": i, "end": end})
+        versions = [s["v"] for s in self.sections]
+        if not versions:
+            raise Refusal(f"{where}: no release under Recent releases")
+        if versions != sorted(set(versions), reverse=True):
+            raise Refusal(f"{where}: the releases under Recent releases are not newest first: "
+                          + ", ".join(vstr(v) for v in versions))
+        self.lines_in_full = []
+        for v in versions:
+            if not self.lines_in_full or self.lines_in_full[-1][0] != v[:2]:
+                self.lines_in_full.append((v[:2], []))
+            self.lines_in_full[-1][1].append(v)
+        for line, releases in self.lines_in_full:
+            if releases[-1][2] != 0:
+                raise Refusal(f"{where}: the v{line[0]}.{line[1]} line has no "
+                              f"v{line[0]}.{line[1]}.0 section under Recent releases")
+        if len(self.lines_in_full) > MAX_FULL_LINES:
+            raise Refusal(f"{where}: {len(self.lines_in_full)} release lines are documented in "
+                          f"full; keep {MAX_FULL_LINES} (--open-line stubs the older ones)")
+
+        s, e = self.index_region
+        self.index_items = []
+        for i in range(s + 1, e):
+            m = INDEX_ITEM_RE.match(self.lines[i])
+            if m:
+                line = (int(m.group(1)), int(m.group(2)))
+                links = [tuple(int(g) for g in l.group(1, 2, 3))
+                         for l in INDEX_LINK_RE.finditer(m.group(4))]
+                self.index_items.append((i, line, m.group(3), links))
+        rows = [i for i, _, _, _ in self.index_items]
+        if rows and rows != list(range(rows[0], rows[0] + len(rows))):
+            raise Refusal(f"{where}: the release-lines index items must be one list, with no "
+                          f"line between them")
+        want = [(line, anchor_of(line + (0,)), releases) for line, releases in self.lines_in_full]
+        got = [(line, a, links) for _, line, a, links in self.index_items]
+        if got != want:
+            def show(items):
+                return "; ".join(f"v{l[0]}.{l[1]}: " + ", ".join(vstr(v) for v in r)
+                                 for l, _, r in items) or "(none)"
+            raise Refusal(f"{where}: the release-lines index lists {show(got)}, but Recent "
+                          f"releases holds {show(want)}. Each line is one item, newest first: "
+                          f"{index_item((1, 7), [(1, 7, 1), (1, 7, 0)])} "
+                          f"(--open-line keeps them in step)")
+
+        os_, oend = self.older_region
+        self.stub_versions = []
+        for i, lvl, _ in self.heads:
+            if os_ < i < oend and lvl == 3:
+                m = VERSION_HEAD_RE.match(self.lines[i])
+                if m:
+                    self.stub_versions.append(tuple(int(g) for g in m.group(1, 2, 3)))
+        oldest_full = self.lines_in_full[-1][0]
+        newer = [v for v in self.stub_versions if v[:2] >= oldest_full]
+        if newer:
+            raise Refusal(f"{where}: Older releases has a stub for "
+                          + ", ".join(vstr(v) for v in newer)
+                          + ", a line still documented in full or newer")
 
     def region(self, section):
         """(heading index, end of lead content, end of region) for one target."""
@@ -342,6 +529,123 @@ class Page:
         if self.lines[-1] == "" and not text.endswith("\n"):
             text += "\n"
         return text
+
+    def opened(self, v, docs_url_for):
+        """This page's text with release `v` opened (and a fourth line stubbed), or a Refusal."""
+        where = self.path
+        line = v[:2]
+        every = [s["v"] for s in self.sections] + self.stub_versions
+        if anchor_of(v) in set(all_anchors(self.text)):
+            raise Refusal(f"{where}: {{#{anchor_of(v)}}} is already on the page")
+        t = TEXT[self.locale]
+        p = anchor_of(v)[:-len("-upgrade")]
+        skeleton = [t["title"].format(v=vstr(v), a=anchor_of(v)), "", t["lead"], "",
+                    t["before"].format(v=vstr(v), p=p), "", t["new"].format(v=vstr(v), p=p), ""]
+        lines_in_full = [(l, list(r)) for l, r in self.lines_in_full]
+        if v[2] == 0:
+            if every and v <= max(every):
+                raise Refusal(f"{where}: {vstr(v)} is not newer than {vstr(max(every))}, the "
+                              f"newest release on the page")
+            at = self.sections[0]["start"]
+            lines_in_full.insert(0, (line, [v]))
+        else:
+            mine = [s for s in self.sections if s["v"][:2] == line]
+            if not mine:
+                raise Refusal(f"{where}: the v{line[0]}.{line[1]} line is not documented in full, "
+                              f"so it takes no patch release here")
+            if v != mine[0]["v"][:2] + (mine[0]["v"][2] + 1,):
+                raise Refusal(f"{where}: {vstr(v)} does not follow {vstr(mine[0]['v'])}, the "
+                              f"newest release of its line")
+            at = mine[0]["start"]
+            for l, r in lines_in_full:
+                if l == line:
+                    r.insert(0, v)
+
+        lines = list(self.lines)
+        retire = lines_in_full[MAX_FULL_LINES:]
+        stubs = []
+        for l, releases in retire:
+            secs = [s for s in self.sections if s["v"][:2] == l]
+            start, end = secs[0]["start"], secs[-1]["end"]
+            block = "\n".join(lines[start:end])
+            head = lines[secs[-1]["start"]].rstrip()
+            keep = [a for a in all_anchors(block) if a != anchor_of(l + (0,))]
+            stub = [head, ""]
+            if keep:
+                stub += ["".join(f'<a id="{a}"></a>' for a in keep), ""]
+            stub += [stub_links(self.locale, l, releases, docs_url_for(self.locale, l)), ""]
+            stubs += stub
+        # Edit bottom-up so earlier indices hold: stubs, then the retired sections, then the new
+        # section, then the index.
+        if stubs:
+            os_, oend = self.older_region
+            first_stub = next((i for i, lvl, _ in self.heads if os_ < i < oend and lvl == 3),
+                              None)
+            if first_stub is None:
+                raise Refusal(f"{where}: Older releases has no stub to place the retired line "
+                              f"before")
+            lines[first_stub:first_stub] = stubs
+            secs = [s for s in self.sections if s["v"][:2] in {l for l, _ in retire}]
+            del lines[secs[0]["start"]:secs[-1]["end"]]
+        lines[at:at] = skeleton
+        items = [i for i, _, _, _ in self.index_items]
+        lines[items[0]:items[-1] + 1] = [index_item(l, r)
+                                         for l, r in lines_in_full[:MAX_FULL_LINES]]
+        text = "\n".join(lines)
+        lost = anchors_lost(self.text, text)
+        if lost:
+            raise Refusal(f"{where}: opening {vstr(v)} would lose the anchor(s) {lost}")
+        return text
+
+
+def docs_url_finder(root):
+    """(locale, line) -> the URL of that line's notes in its frozen docs, or None."""
+    path = os.path.join(root, "docs", "versions.json")
+    versions = []
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            versions = json.load(f)
+
+    def find(locale, line):
+        name = f"{line[0]}.{line[1]}"
+        if name not in versions:
+            return None
+        anchor = anchor_of(line + (0,))
+        if locale == "en":
+            frozen = os.path.join(root, "docs", "versioned_docs", f"version-{name}", PAGE_REL)
+        else:
+            frozen = os.path.join(root, "docs", "i18n", locale, "docusaurus-plugin-content-docs",
+                                  f"version-{name}", PAGE_REL)
+        if not os.path.isfile(frozen) or f"{{#{anchor}}}" not in read_utf8(frozen)[1]:
+            raise Refusal(f"{frozen}: docs/versions.json lists {name}, but its frozen "
+                          f"release-notes page has no {{#{anchor}}} to link the stub to")
+        # The newest snapshot is served at the site root, the others under their name.
+        base = "" if versions[0] == name else f"/{name}"
+        return f"{base}/deployment/releases-and-upgrades#{anchor}"
+    return find
+
+
+def open_line(root, version):
+    m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", version or "")
+    if not m:
+        raise Refusal(f"{version!r} is not a release version vX.Y.Z")
+    v = tuple(int(g) for g in m.groups())
+    pages = load_pages(root)
+    if len({tuple((l, tuple(r)) for l, r in p.lines_in_full) for p in pages}) != 1:
+        raise Refusal("the locales disagree on the releases under Recent releases")
+    find = docs_url_finder(root)
+    rendered = []
+    for page in pages:
+        text = page.opened(v, find)
+        after = Page(root, page.locale, text)   # the result must hold the layout it was built for
+        rendered.append((page, text))
+    for page, text in rendered:
+        write_utf8(page.path, page.had_bom, text)
+    print(f"Opened {vstr(v)} in {len(pages)} page(s).")
+    kept = {l for l, _ in after.lines_in_full}
+    for l, _ in pages[0].lines_in_full:
+        if l not in kept:
+            print(f"  v{l[0]}.{l[1]} moved to Older releases as a stub.")
 
 
 def join_blocks(blocks):
@@ -401,7 +705,8 @@ def assemble(root):
 
 # --------------------------------------------------------------------------------------------
 # --self-test: the negative control. It runs THIS script's --check, as CI does, against a
-# planted tree, and requires a pass on a good fragment and a failure on each planted defect.
+# planted tree, and requires a pass on a good fragment and a failure on each planted defect;
+# then --open-line on the same tree, for a minor, a patch and four versions it must refuse.
 # --------------------------------------------------------------------------------------------
 
 SELF_TEST_PAGE = """---
@@ -410,16 +715,50 @@ title: Releases
 
 # Releases
 
+## Release lines {#release-lines}
+
+- **[v9.2](#v920-upgrade)**: [v9.2.0](#v920-upgrade)
+- **[v9.1](#v910-upgrade)**: [v9.1.1](#v911-upgrade) · [v9.1.0](#v910-upgrade)
+- **[v9.0](#v900-upgrade)**: [v9.0.0](#v900-upgrade)
+
 ## Recent releases {#recent-releases}
 
-### v9.1.0 — in development {#v910-upgrade}
+### v9.2.0 — in development {#v920-upgrade}
 
-#### Before {#v910-before-upgrade}
+#### Before {#v920-before-upgrade}
 
-#### New {#v910-whats-new}
+#### New {#v920-whats-new}
 
-### v9.0.0 {#v900-upgrade}
+### v9.1.1 — a patch {#v911-upgrade}
+
+### v9.1.0 — shipped {#v910-upgrade}
+
+### v9.0.0 — the oldest line in full {#v900-upgrade}
+
+#### Before you upgrade to v9.0.0 {#v900-before-upgrade}
+
+<a id="v900-linked-from-outside"></a>
+
+```bash
+# v9.0.0 {#not-an-anchor}
+```
+
+## Older releases {#older-releases}
+
+### v8.0.0 — a stub {#v800-upgrade}
+
+Releases before v8.0.0 are not listed here.
 """
+
+# Planted page defects --check must refuse, each a one-line edit of SELF_TEST_PAGE.
+BAD_PAGES = {
+    "index-misses-a-patch": ("[v9.1.1](#v911-upgrade) · ", ""),
+    "out-of-order": ("### v9.1.1 — a patch {#v911-upgrade}",
+                     "### v9.0.1 — a patch {#v901-upgrade}"),
+    "no-older-releases": ("## Older releases {#older-releases}", "## Older {#older}"),
+    "stub-of-a-full-line": ("### v8.0.0 — a stub {#v800-upgrade}",
+                            "### v9.0.0 — a stub {#v900-upgrade}"),
+}
 
 GOOD = """---
 section: whats-new
@@ -466,6 +805,13 @@ def self_test():
         return subprocess.run([sys.executable, script, "--check", "--root", tmp],
                               capture_output=True, text=True, encoding="utf-8").returncode
 
+    def run(tmp, *args):
+        return subprocess.run([sys.executable, script, *args, "--root", tmp],
+                              capture_output=True, text=True, encoding="utf-8")
+
+    def page_text(tmp, locale="en"):
+        return read_utf8(page_path(tmp, locale))[1]
+
     failures = []
     tmp = tempfile.mkdtemp(prefix="notes-selftest-")
     try:
@@ -480,6 +826,72 @@ def self_test():
             print(f"  planted {case}: --check exited {rc}")
             if rc != 1:
                 failures.append(f"--check did not refuse a planted {case} fragment (exit {rc})")
+        for case, (old, new) in BAD_PAGES.items():
+            shutil.rmtree(tmp)
+            plant(tmp, "good.md", GOOD)
+            if old not in SELF_TEST_PAGE:
+                failures.append(f"the planted page defect {case} edits nothing")
+            for locale in LOCALES:
+                with open(page_path(tmp, locale), "wb") as f:
+                    f.write(SELF_TEST_PAGE.replace(old, new).encode("utf-8"))
+            rc = run_check(tmp)
+            print(f"  planted page {case}: --check exited {rc}")
+            if rc != 1:
+                failures.append(f"--check did not refuse a planted {case} page (exit {rc})")
+
+        # --open-line: a minor stubs the fourth line, keeping every anchor; a patch joins its line.
+        shutil.rmtree(tmp)
+        plant(tmp, "good.md", GOOD)
+        with open(os.path.join(tmp, "docs", "versions.json"), "w", encoding="utf-8") as f:
+            json.dump(["9.1", "9.0"], f)
+        for locale in LOCALES:
+            frozen = (os.path.join(tmp, "docs", "versioned_docs", "version-9.0", PAGE_REL)
+                      if locale == "en" else
+                      os.path.join(tmp, "docs", "i18n", locale, "docusaurus-plugin-content-docs",
+                                   "version-9.0", PAGE_REL))
+            os.makedirs(os.path.dirname(frozen), exist_ok=True)
+            with open(frozen, "w", encoding="utf-8") as f:
+                f.write("### v9.0.0 {#v900-upgrade}\n")
+        before = page_text(tmp)
+        r = run(tmp, "--open-line", "v9.3.0")
+        after = page_text(tmp)
+        print(f"  --open-line v9.3.0: exited {r.returncode}")
+        if r.returncode != 0:
+            failures.append(f"--open-line v9.3.0 failed: {r.stderr.strip()}")
+        else:
+            older = after[after.index("{#older-releases}"):]
+            recent = after[after.index("{#recent-releases}"):after.index("{#older-releases}")]
+            if anchors_lost(before, after):
+                failures.append(f"--open-line lost anchors {anchors_lost(before, after)}")
+            if "### v9.0.0 — the oldest line in full {#v900-upgrade}" not in older:
+                failures.append("--open-line did not move v9.0 into Older releases as a stub")
+            if '<a id="v900-linked-from-outside"></a>' not in older:
+                failures.append("the v9.0 stub does not keep the line's <a id> anchors")
+            if "(/9.0/deployment/releases-and-upgrades#v900-upgrade)" not in older:
+                failures.append("the v9.0 stub does not link the 9.0 frozen docs")
+            if "v900" in recent or "{#v930-whats-new}" not in recent:
+                failures.append("Recent releases is not v9.3 (in development), v9.2 and v9.1")
+            if "{#not-an-anchor}" in after:
+                failures.append("the retired line's code fence was carried into the stub")
+            if run_check(tmp) != 0:
+                failures.append("--check refused the page --open-line wrote")
+        r = run(tmp, "--open-line", "v9.1.2")
+        print(f"  --open-line v9.1.2: exited {r.returncode}")
+        want = "- **[v9.1](#v910-upgrade)**: [v9.1.2](#v912-upgrade) · [v9.1.1](#v911-upgrade)"
+        if r.returncode != 0 or want not in page_text(tmp, "zh-CN"):
+            failures.append(f"--open-line v9.1.2 did not join the v9.1 line: {r.stderr.strip()}")
+        # Negative controls: each must be refused, and must write nothing.
+        for version in ("v9.2.5", "v9.0.1", "v9.3.0", "9.4.0"):
+            before = page_text(tmp)
+            r = run(tmp, "--open-line", version)
+            print(f"  --open-line {version}: exited {r.returncode} (must refuse)")
+            if r.returncode != 1 or page_text(tmp) != before:
+                failures.append(f"--open-line {version} was not refused cleanly")
+        # The anchor guard itself: a stub that dropped one anchor must be seen.
+        dropped = SELF_TEST_PAGE.replace('<a id="v900-linked-from-outside"></a>', "")
+        if anchors_lost(SELF_TEST_PAGE, dropped) != ["v900-linked-from-outside"]:
+            failures.append("anchors_lost did not see a dropped <a id>")
+
         shutil.rmtree(tmp)
         os.makedirs(tmp)
         if run_check(tmp) == 0:
@@ -490,7 +902,8 @@ def self_test():
         for f in failures:
             print(f"  FAIL: {f}", file=sys.stderr)
         return 1
-    print("==> Self-test passed: --check refuses every planted bad fragment.")
+    print("==> Self-test passed: --check refuses every planted bad fragment and page, and "
+          "--open-line keeps every anchor.")
     return 0
 
 
@@ -499,6 +912,8 @@ def main(argv=None):
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="validate fragments; write nothing")
     mode.add_argument("--self-test", action="store_true", help="prove --check can fail")
+    mode.add_argument("--open-line", metavar="vX.Y.Z",
+                      help="open a release in development; a minor stubs the fourth line")
     ap.add_argument("--root", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                     help="repository root (default: this checkout)")
     args = ap.parse_args(argv)
@@ -509,14 +924,16 @@ def main(argv=None):
     if args.self_test:
         return self_test()
     try:
-        if args.check:
+        if args.open_line:
+            open_line(args.root, args.open_line)
+        elif args.check:
             fragments, pages = check(args.root)
             print(f"==> {len(fragments)} release-notes fragment(s) valid for the "
                   f"{pages[0].prefix} section.")
         else:
             assemble(args.root)
     except Refusal as e:
-        print(f"==> Release-notes fragments refused:\n{e}", file=sys.stderr)
+        print(f"==> Release notes refused:\n{e}", file=sys.stderr)
         return 1
     return 0
 

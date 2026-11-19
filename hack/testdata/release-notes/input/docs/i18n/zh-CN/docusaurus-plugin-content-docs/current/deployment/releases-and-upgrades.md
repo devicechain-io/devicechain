@@ -8,6 +8,11 @@ title: 发布与升级
 # 代码块中的注释不是标题。
 ```
 
+## 发布线 {#release-lines}
+
+- **[v1.7](#v170-upgrade)**: [v1.7.0](#v170-upgrade)
+- **[v1.6](#v160-upgrade)**: [v1.6.0](#v160-upgrade)
+
 ## 近期版本 {#recent-releases}
 
 ### v1.7.0 — 开发中 {#v170-upgrade}
@@ -29,3 +34,7 @@ title: 发布与升级
 #### 升级到 v1.6.0 前 {#v160-before-upgrade}
 
 - 未改动。
+
+## 较早版本 {#older-releases}
+
+### v1.5.0 — 摘要 {#v150-upgrade}

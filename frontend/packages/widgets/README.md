@@ -219,7 +219,7 @@ here requires them.
 - Thirteen widgets are new, so `WidgetChannel` and the widget id unions gained
   members; an exhaustive `switch` over them needs new cases.
 
-See [If you build against the npm packages](https://docs.devicechain.io/deployment/releases-and-upgrades#v0220-packages)
+See [If you build against the npm packages](https://github.com/devicechain-io/devicechain/blob/v0.22.0/docs/docs/deployment/releases-and-upgrades.md#v0220-packages)
 in the release's upgrade guide.
 
 ## Compatibility
