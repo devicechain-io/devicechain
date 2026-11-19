@@ -127,6 +127,30 @@ import "github.com/devicechain-io/dc-device-management/internal/mid"`,
 			"backend/services/device-management/internal/mid/mid.go": `package mid
 import "github.com/devicechain-io/dc-device-management/model"`,
 		}, nil, "proto -> github.com/devicechain-io/dc-device-management/internal/mid -> github.com/devicechain-io/dc-device-management/model"},
+		{"second alias widens a sanctioned file", map[string]string{"backend/services/consumer/sanctioned.go": `package consumer
+import (
+	other "github.com/devicechain-io/dc-device-management/model"
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
+)
+var _ dmmodel.Api
+var _ other.AlarmStateChangeEvent`}, nil, "model names used changed"},
+		{"dot import in a test", map[string]string{"backend/services/consumer/wire_test.go": `package consumer
+import . "github.com/devicechain-io/dc-device-management/model"
+var _ AlarmStateChangeEvent`}, nil, "cannot be audited"},
+		{"blank import in a test", map[string]string{"backend/services/consumer/wire_test.go": `package consumer
+import _ "github.com/devicechain-io/dc-device-management/model"`}, nil, "cannot be audited"},
+		{"model reached through testdata", map[string]string{
+			"backend/services/device-management/proto/p.go": `package proto
+import "github.com/devicechain-io/dc-device-management/testdata/bridge"`,
+			"backend/services/device-management/testdata/bridge/b.go": `package bridge
+import "github.com/devicechain-io/dc-device-management/model"`,
+		}, nil, "testdata/bridge -> github.com/devicechain-io/dc-device-management/model"},
+		{"reached package that cannot be parsed", map[string]string{
+			"backend/services/device-management/proto/p.go": `package proto
+import "github.com/devicechain-io/dc-device-management/testdata/broken"`,
+			"backend/services/device-management/testdata/broken/b.go": `package broken
+import "github.com/devicechain-io/dc-device-management/model" this is not Go`,
+		}, nil, "which the guard cannot follow"},
 		{"contract imports device-management", map[string]string{"backend/services/device-management/contract/bad.go": `package contract
 import "github.com/devicechain-io/dc-device-management/config"`}, nil, "the contract must import nothing of device-management"},
 	} {

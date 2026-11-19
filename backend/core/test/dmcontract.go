@@ -60,7 +60,7 @@ type DMModelSanction struct {
 type dmFile struct {
 	Rel     string // repo-relative, slash-separated
 	Test    bool
-	Imports map[string]string // import path -> local name ("" when blank or dot)
+	Imports map[string][]string // import path -> every local name it is imported under ("" when blank or dot)
 	parsed  *ast.File
 }
 
@@ -68,13 +68,14 @@ type dmFile struct {
 type dmScan struct {
 	Outside         []dmFile            // every .go file outside device-management
 	DMPackages      map[string][]string // DM import path -> its non-test files' DM imports
+	DMUnscanned     map[string]string   // DM import path -> why a file of it could not be scanned
 	ContractExports map[string]bool
 	files           int
 }
 
 // scanDMContractBoundary walks root (a workspace root) once.
 func scanDMContractBoundary(root string) (*dmScan, error) {
-	scan := &dmScan{DMPackages: map[string][]string{}, ContractExports: map[string]bool{}}
+	scan := &dmScan{DMPackages: map[string][]string{}, DMUnscanned: map[string]string{}, ContractExports: map[string]bool{}}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -85,8 +86,12 @@ func scanDMContractBoundary(root string) (*dmScan, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		inDM := rel == dmModuleDir || strings.HasPrefix(rel, dmModuleDir+"/")
 		if d.IsDir() {
-			if p != root && skipDirInScan(d.Name()) {
+			// Inside device-management NOTHING is pruned: Go lets a package under testdata
+			// or vendor be imported by path, so a pruned directory could hide the hop a
+			// chain to model runs through.
+			if p != root && !inDM && skipDirInScan(d.Name()) {
 				return fs.SkipDir
 			}
 			return nil
@@ -96,10 +101,16 @@ func scanDMContractBoundary(root string) (*dmScan, error) {
 		}
 		f, err := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
 		if err != nil {
+			if inDM && !strings.HasSuffix(p, "_test.go") {
+				// A fixture that is not valid Go is not a package anything imports; it is
+				// recorded, and reported only if a chain from outside reaches it.
+				scan.DMUnscanned[dmPackageOf(rel)] = err.Error()
+				return nil
+			}
 			return err
 		}
 		scan.files++
-		file := dmFile{Rel: rel, Test: strings.HasSuffix(p, "_test.go"), Imports: map[string]string{}, parsed: f}
+		file := dmFile{Rel: rel, Test: strings.HasSuffix(p, "_test.go"), Imports: map[string][]string{}, parsed: f}
 		for _, im := range f.Imports {
 			ip, _ := strconv.Unquote(im.Path.Value)
 			name := path.Base(ip)
@@ -109,9 +120,8 @@ func scanDMContractBoundary(root string) (*dmScan, error) {
 					name = ""
 				}
 			}
-			file.Imports[ip] = name
+			file.Imports[ip] = append(file.Imports[ip], name)
 		}
-		inDM := rel == dmModuleDir || strings.HasPrefix(rel, dmModuleDir+"/")
 		if !inDM {
 			scan.Outside = append(scan.Outside, file)
 			return nil
@@ -119,11 +129,7 @@ func scanDMContractBoundary(root string) (*dmScan, error) {
 		if file.Test {
 			return nil
 		}
-		pkgDir := path.Dir(strings.TrimPrefix(rel, dmModuleDir+"/"))
-		pkg := dmModulePrefix
-		if pkgDir != "." && rel != dmModuleDir {
-			pkg += "/" + pkgDir
-		}
+		pkg := dmPackageOf(rel)
 		deps := scan.DMPackages[pkg]
 		for ip := range file.Imports {
 			if ip == dmModulePrefix || strings.HasPrefix(ip, dmModulePrefix+"/") {
@@ -131,7 +137,7 @@ func scanDMContractBoundary(root string) (*dmScan, error) {
 			}
 		}
 		scan.DMPackages[pkg] = deps
-		if pkgDir == dmContractSubdir {
+		if pkg == dmModulePrefix+"/"+dmContractSubdir {
 			for _, decl := range f.Decls {
 				for _, n := range declaredNames(decl) {
 					if ast.IsExported(n) {
@@ -156,6 +162,18 @@ func scanDMContractBoundary(root string) (*dmScan, error) {
 	}
 	return scan, nil
 }
+
+// dmPackageOf is the import path of the device-management package a repo-relative file is in.
+func dmPackageOf(rel string) string {
+	dir := path.Dir(strings.TrimPrefix(rel, dmModuleDir+"/"))
+	if dir == "." {
+		return dmModulePrefix
+	}
+	return dmModulePrefix + "/" + dir
+}
+
+// dmUnauditable is what modelNames reports for an import that cannot be audited by name.
+const dmUnauditable = "<blank or dot import>"
 
 // declaredNames lists the package-level names a declaration introduces.
 func declaredNames(decl ast.Decl) []string {
@@ -184,17 +202,21 @@ func declaredNames(decl ast.Decl) []string {
 // is imported under. A blank or dot import yields a sentinel instead, because neither can
 // be audited name by name.
 func (f dmFile) modelNames() []string {
-	local, ok := f.Imports[dmModelImport]
-	if !ok {
-		return nil
+	locals := map[string]bool{}
+	for _, local := range f.Imports[dmModelImport] {
+		if local == "" {
+			// Every alias is audited together; one that cannot be is the whole answer.
+			return []string{dmUnauditable}
+		}
+		locals[local] = true
 	}
-	if local == "" {
-		return []string{"<blank or dot import>"}
+	if len(locals) == 0 {
+		return nil
 	}
 	set := map[string]bool{}
 	ast.Inspect(f.parsed, func(n ast.Node) bool {
 		if sel, ok := n.(*ast.SelectorExpr); ok {
-			if id, ok := sel.X.(*ast.Ident); ok && id.Name == local {
+			if id, ok := sel.X.(*ast.Ident); ok && locals[id.Name] {
 				set[sel.Sel.Name] = true
 			}
 		}
@@ -228,7 +250,13 @@ func dmContractBoundaryErrors(scan *dmScan, ledger map[string]DMModelSanction) [
 		}
 		names := f.modelNames()
 		if f.Test {
-			// Check 3: a fixture is fine; a test that needs only contract names is not.
+			// Check 3: a fixture is fine; a test that needs only contract names is not. A
+			// blank or dot import cannot be told apart from either, so it is refused.
+			if len(names) == 1 && names[0] == dmUnauditable {
+				issues = append(issues, fmt.Sprintf("%s: a blank or dot import of %s cannot be audited; import it by name",
+					f.Rel, dmModelImport))
+				continue
+			}
 			needsModel := false
 			for _, n := range names {
 				if !scan.ContractExports[n] {
@@ -284,7 +312,17 @@ func dmContractBoundaryErrors(scan *dmScan, ledger map[string]DMModelSanction) [
 				strings.Join(chain, " -> ")))
 			break
 		}
-		deps := append([]string(nil), scan.DMPackages[p]...)
+		deps, scanned := scan.DMPackages[p]
+		if !scanned {
+			why := "no non-test Go file of it was found"
+			if reason, ok := scan.DMUnscanned[p]; ok {
+				why = "it could not be parsed: " + reason
+			}
+			issues = append(issues, fmt.Sprintf("production code outside device-management reaches %s, which the guard cannot follow: %s",
+				p, why))
+			continue
+		}
+		deps = append([]string(nil), deps...)
 		sort.Strings(deps)
 		for _, d := range deps {
 			if _, ok := via[d]; !ok {
