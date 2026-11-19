@@ -53,7 +53,27 @@ namespace DeviceChain.Harborpulse.Visuals
                 {
                     Name = "Promenade", Position = new Vector3((float)lamp.At.X - 60, 6, wall - 4), Target = new Vector3((float)lamp.At.X + 500, 3, (float)lamp.At.Z), Fov = 50,
                 });
+            AddClose(plan, "PAW-PUMP-NORTH", "North Quay pump", new Vector3(15, 6.5f, 15), new Vector3(9, -2.2f, 6), 46);
+            AddClose(plan, "PAW-PUMP-BASIN", "Basin pump", new Vector3(15, 6.5f, 15), new Vector3(9, -2.2f, 6), 46);
+            AddClose(plan, "PAW-CHARGER-NORTH-1", "North Quay chargers", new Vector3(7, 4, 12), new Vector3(3, 1, 2), 48);
+            AddClose(plan, "PAW-GAUGE-NORTH-3", "North Quay gauge 3", new Vector3(6, 4, 10), new Vector3(0, 1, 0), 42);
+            AddClose(plan, "PAW-LIGHT-EAST-3", "East lamp 3", new Vector3(13, 8, 17), new Vector3(0, 4, 0), 44);
+            foreach (var p in plan.Placements) if (p.Device.Kind == DeviceKind.Truck) AddClose(plan, p.Device.ExternalId, "Truck", new Vector3(10, 6, 13), Vector3.up, 45);
             Select(0, true);
+        }
+
+        void AddClose(SitePlan plan, string id, string name, Vector3 offset, Vector3 targetOffset, float fov)
+        {
+            var p = plan.Find(id);
+            if (p == null) throw new System.InvalidOperationException("shot device not in layout: " + id);
+            var at = new Vector3((float)p.At.X, (float)SitePlan.DeckHeightM, (float)p.At.Z);
+            shots.Add(new Shot { Name = name, Position = at + offset, Target = at + targetOffset, Fov = fov });
+        }
+        public void FollowTruck(TruckTrack truck)
+        {
+            var s = shots[shots.Count - 1];
+            var at = new Vector3((float)truck.At.X, (float)SitePlan.DeckHeightM, (float)truck.At.Z);
+            s.Position = at + new Vector3(10, 6, 13); s.Target = at + Vector3.up;
         }
 
         public IReadOnlyList<Shot> Shots => shots;
@@ -80,6 +100,10 @@ namespace DeviceChain.Harborpulse.Visuals
             {
                 Select(e.keyCode - KeyCode.Alpha0, false);
                 e.Use();
+            }
+            else if (e.type == EventType.KeyDown && (e.keyCode == KeyCode.F1 || e.keyCode == KeyCode.F2))
+            {
+                Select(e.keyCode == KeyCode.F1 ? 10 : 11, false); e.Use();
             }
             else if (e.type == EventType.MouseDrag && (e.button == 0 || e.button == 1))
             {

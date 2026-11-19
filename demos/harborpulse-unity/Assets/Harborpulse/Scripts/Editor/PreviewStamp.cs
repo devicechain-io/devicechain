@@ -53,9 +53,51 @@ namespace DeviceChain.Harborpulse.EditorTools
             { ':', new[] { "00000", "00100", "00100", "00000", "00100", "00100", "00000" } },
             { '-', new[] { "00000", "00000", "00000", "11111", "00000", "00000", "00000" } },
             { '.', new[] { "00000", "00000", "00000", "00000", "00000", "00100", "00100" } },
+            { '_', new[] { "00000", "00000", "00000", "00000", "00000", "00000", "11111" } },
+            { '/', new[] { "00001", "00010", "00010", "00100", "01000", "01000", "10000" } },
+            { '%', new[] { "11001", "11010", "00010", "00100", "01000", "01011", "10011" } },
+            { '(', new[] { "00010", "00100", "01000", "01000", "01000", "00100", "00010" } },
+            { ')', new[] { "01000", "00100", "00010", "00010", "00010", "00100", "01000" } },
             { ',', new[] { "00000", "00000", "00000", "00000", "00100", "00100", "01000" } },
             { ' ', new[] { "00000", "00000", "00000", "00000", "00000", "00000", "00000" } },
         };
+
+        /// <summary>Camera.Render does not draw IMGUI. Burn the same evidence card into the PNG.</summary>
+        public static int Card(Texture2D tex, string text, int left, int top, int width)
+        {
+            var scale = tex.width >= 1000 ? 2 : 1;
+            width = Mathf.Min(width, tex.width - 24); left = Mathf.Max(12, left);
+            var columns = Mathf.Max(12, (width - 16) / (6 * scale));
+            var rows = new List<string>();
+            foreach (var line in text.Replace("\u00b7", "-").Replace("\u00b0", " DEG").Split('\n'))
+            {
+                var remaining = line;
+                while (remaining.Length > columns)
+                {
+                    var cut = remaining.LastIndexOf(' ', columns);
+                    if (cut < columns / 2) cut = columns;
+                    rows.Add(remaining.Substring(0, cut)); remaining = remaining.Substring(cut).TrimStart();
+                }
+                rows.Add(remaining);
+            }
+            var height = rows.Count * 9 * scale + 12;
+            if (top + height > tex.height - 12) return top; // never obscure the preview stamp or write outside the image
+            for (var y = top; y < top + height; y++) for (var x = left; x < left + width; x++)
+                tex.SetPixel(x, tex.height - 1 - y, new Color(0.035f, 0.055f, 0.08f));
+            for (var row = 0; row < rows.Count; row++)
+            {
+                var pen = left + 8;
+                foreach (var raw in rows[row].ToUpperInvariant())
+                {
+                    if (!Glyphs.TryGetValue(raw, out var glyph)) glyph = Glyphs[' '];
+                    for (var y = 0; y < 7; y++) for (var x = 0; x < 5; x++) if (glyph[y][x] == '1')
+                        for (var dy = 0; dy < scale; dy++) for (var dx = 0; dx < scale; dx++)
+                            tex.SetPixel(pen + x * scale + dx, tex.height - 1 - (top + 6 + row * 9 * scale + y * scale + dy), new Color(0.86f, 0.91f, 0.95f));
+                    pen += 6 * scale;
+                }
+            }
+            tex.Apply(); return top + height + 8;
+        }
 
         /// <summary>Draws <paramref name="text"/> in black on an amber bar across the top of <paramref name="tex"/>.</summary>
         public static void Stamp(Texture2D tex, string text, int scale = 3)

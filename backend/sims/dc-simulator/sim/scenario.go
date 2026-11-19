@@ -47,6 +47,13 @@ func ConfigureScenario(s Sim, o ScenarioOptions) error {
 	return c.ConfigureScenario(o)
 }
 
+// ScenarioBeat is one declared story window, in sim hours.
+type ScenarioBeat struct {
+	Name string  `json:"name"`
+	From float64 `json:"from"`
+	To   float64 `json:"to"`
+}
+
 // ScenarioClock is the /status view of a story scenario's compressed day: where in the day the
 // run is, and what a verifier needs to map a sim time to the wall clock. It is additive JSON on
 // the sim's own control API, which only dcctl, scripts and the scenario verifier read.
@@ -70,7 +77,8 @@ type ScenarioClock struct {
 	// SimTime is SimHour as HH:MM.
 	SimTime string `json:"simTime"`
 	// Beat names the story beats in progress, comma separated, or "quiet".
-	Beat string `json:"beat"`
+	Beat  string         `json:"beat"`
+	Beats []ScenarioBeat `json:"beats,omitempty"`
 	// Defects are the planted defects this run carries; omitted when it carries none.
 	Defects []string `json:"defects,omitempty"`
 	// Backfill is what each store-and-forward device buffered in each outage so far.

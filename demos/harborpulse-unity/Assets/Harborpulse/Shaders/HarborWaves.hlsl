@@ -63,4 +63,12 @@ void HarborWaves(float2 xz, float ampScale, out float3 offset, out float3 normal
     normal = normalize(cross(binormal, tangent));
 }
 
+// Shared lighting for the harbour and the reflection-free wet wells.
+float3 HarborWaterLight(float3 body, float3 normal, float3 view, float3 lightDir, float3 lightColour, float3 ambient)
+{
+    float diffuse = saturate(dot(normal, lightDir));
+    float spec = pow(saturate(dot(reflect(-view, normal), lightDir)), 90.0);
+    return body * (ambient + lightColour * diffuse * 0.4) + lightColour * spec * 0.4;
+}
+
 #endif

@@ -44,15 +44,29 @@ namespace DeviceChain.Harborpulse.Visuals
             Slate = Matte(Make("slate", new Color(0.22f, 0.24f, 0.27f), 0.3f));
             Glass = Make("glass", new Color(0.20f, 0.28f, 0.32f), 0.9f, 0.2f);
             GaugeBoard = Make("gauge-board", new Color(0.92f, 0.92f, 0.88f), 0.4f);
-            Minor = Make("level-minor", new Color(0.95f, 0.78f, 0.10f), 0.4f);
-            Major = Make("level-major", new Color(0.95f, 0.45f, 0.08f), 0.4f);
-            Critical = Make("level-critical", new Color(0.85f, 0.10f, 0.08f), 0.4f);
+            Minor = Emissive("level-minor", new Color(0.95f, 0.78f, 0.10f), 2f);
+            Major = Emissive("level-major", new Color(0.95f, 0.45f, 0.08f), 3f);
+            Critical = Emissive("level-critical", new Color(1f, 0.32f, 0.02f), 4f);
             Safety = Make("safety-yellow", new Color(0.95f, 0.72f, 0.08f), 0.45f);
             BuoyRed = Make("buoy-red", new Color(0.75f, 0.10f, 0.08f), 0.5f);
             BuoyGreen = Make("buoy-green", new Color(0.08f, 0.50f, 0.20f), 0.5f);
             Charger = Make("charger", new Color(0.18f, 0.42f, 0.62f), 0.5f);
             Grass = Matte(Make("grass", new Color(0.24f, 0.36f, 0.20f), 0.1f));
 
+            Flow = Emissive("flow", new Color(0.1f, 0.55f, 1f), 2f);
+            WorldCue = Emissive("world-cue", new Color(0.55f, 0.75f, 0.88f), 1.8f);
+            Failed = Emissive("failed", new Color(1f, 0.32f, 0.25f), 2f);
+            EastWindows = Emissive("east-windows", new Color(1f, 0.78f, 0.48f), 0);
+            WellGlass = Make("well-glass", new Color(0.55f, 0.8f, 0.85f, 0.12f), 0.85f);
+            WellGlass.SetFloat("_Surface", 1);
+            WellGlass.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            WellGlass.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            WellGlass.SetFloat("_ZWrite", 0);
+            WellGlass.SetFloat("_Cull", 0);
+            WellGlass.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            WellGlass.renderQueue = 3000;
+            for (var i = 0; i < 6; i++)
+                Courses[i] = Matte(Make("stone-course-" + i, new Color(0.43f + i * 0.025f, 0.42f + i * 0.023f, 0.39f + i * 0.022f), 0.2f));
             LampOn = Emissive("lamp-on", new Color(1.0f, 0.86f, 0.62f), 10f);
             LampHalo = Emissive("lamp-halo", new Color(1.0f, 0.80f, 0.55f), 3.0f);
             LampOff = Make("lamp-off", new Color(0.30f, 0.30f, 0.28f), 0.6f);
@@ -62,6 +76,23 @@ namespace DeviceChain.Harborpulse.Visuals
             WindowsDark = Make("windows-dark", new Color(0.10f, 0.12f, 0.15f), 0.85f);
             StatusGreen = Emissive("status-green", new Color(0.15f, 0.95f, 0.35f), 2.5f);
             Beacon = Emissive("beacon-amber", new Color(1.0f, 0.55f, 0.05f), 4f);
+        }
+
+        public Material Flow { get; }
+        public Material WorldCue { get; }
+        public Material Failed { get; }
+        public Material EastWindows { get; }
+        public Material WellGlass { get; }
+        public Material[] Courses { get; } = new Material[6];
+        public Material Jet { get; private set; }
+        public Material WetWell { get; private set; }
+        public void CreateWetWell(Shader shader)
+        {
+            if (shader == null) throw new InvalidOperationException("Harborpulse/WetWellWater shader missing");
+            WetWell = new Material(shader) { name = "Harbor/wet-well" };
+            byName.Add("wet-well", WetWell);
+            Jet = new Material(shader) { name = "Harbor/flow-streaks" }; Jet.SetFloat("_Streak", 1);
+            byName.Add("flow-streaks", Jet);
         }
 
         public Material Ground { get; }
@@ -106,10 +137,12 @@ namespace DeviceChain.Harborpulse.Visuals
         }
 
         /// <summary>Lights the town's windows: 0 by day, full at night.</summary>
-        public void SetNight(float night)
+        public void SetNight(float night, float outage = 0)
         {
             var w = new Color(1.0f, 0.78f, 0.48f) * Mathf.Lerp(0.0f, 1.3f, Mathf.SmoothStep(0, 1, night));
             Windows.SetColor(EmissionColor, w);
+            EastWindows.SetColor(EmissionColor, w * (1 - outage));
+            EastWindows.SetColor(BaseColor, Color.Lerp(new Color(0.10f, 0.12f, 0.15f), new Color(0.55f, 0.45f, 0.30f), night * (1 - outage)));
             Windows.SetColor(BaseColor, Color.Lerp(new Color(0.16f, 0.20f, 0.24f), new Color(0.55f, 0.45f, 0.30f), night));
         }
 

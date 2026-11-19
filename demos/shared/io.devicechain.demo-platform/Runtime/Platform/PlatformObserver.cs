@@ -50,8 +50,20 @@ namespace DeviceChain.Demos.Platform
             Version++;
         }
 
-        internal void SetPoll(string name, bool ok, string reason)
+        public DateTimeOffset? CommandsHealthySince { get; private set; }
+        public DateTimeOffset? CommandsLastOk { get; private set; }
+
+        internal void SetPoll(string name, bool ok, string reason, DateTimeOffset at)
         {
+            if (name == "commands")
+            {
+                if (ok)
+                {
+                    if (!CommandsHealthySince.HasValue || !CommandsLastOk.HasValue || at - CommandsLastOk.Value > TimeSpan.FromSeconds(3)) CommandsHealthySince = at;
+                    CommandsLastOk = at;
+                }
+                else CommandsHealthySince = null;
+            }
             if (ok)
             {
                 if (pollErrors.Remove(name)) Version++;
@@ -279,7 +291,8 @@ namespace DeviceChain.Demos.Platform
                 LogEvery(name, $"observer {name} poll failed: {reason}");
             }, clock, (d, c) => Task.Delay(d, c), ct);
 
-        // the last result a poll posted, so a poll that keeps succeeding says nothing more than once
+        // Command polls also post each success: coverage needs a positive timestamp even for an empty page.
+        // Other polls post only when their result changes.
         readonly Dictionary<string, string> pollSaid = new Dictionary<string, string>(StringComparer.Ordinal);
 
         void PostPoll(string name, bool ok, string reason)
@@ -287,7 +300,7 @@ namespace DeviceChain.Demos.Platform
             var said = ok ? "ok" : reason;
             lock (pollSaid)
             {
-                if (pollSaid.TryGetValue(name, out var last) && last == said) return;
+                if (name != "commands" && pollSaid.TryGetValue(name, out var last) && last == said) return;
                 pollSaid[name] = said;
             }
 
@@ -473,7 +486,7 @@ namespace DeviceChain.Demos.Platform
                 return;
             }
 
-            status.SetPoll(st.Source, st.State == "ok", st.Reason);
+            status.SetPoll(st.Source, st.State == "ok", st.Reason, st.At);
         }
     }
 }
