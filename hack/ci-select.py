@@ -241,13 +241,17 @@ READERS = [
         "backend/services/event-processing/internal/review/testdata/**",
         "demos/**",
     ], [], "sim/*_test.go"),
-    # scenarioverify/documents_test.go:21 reads the served SDL of the four areas the verifier queries
-    # (documents_test.go:47-59: device-management, command-delivery, event-management, event-processing).
+    # scenarioverify/documents_test.go:21 reads the served SDL of every area the verifier queries
+    # (verifierDocuments: device-management, command-delivery, event-management, event-processing,
+    # outbound-connectors, notification-management, update-management).
     ("backend/sims/dc-simulator", "scenarioverify", [
         "backend/services/device-management/graphql/**",
         "backend/services/command-delivery/graphql/**",
         "backend/services/event-management/graphql/**",
         "backend/services/event-processing/graphql/**",
+        "backend/services/outbound-connectors/graphql/**",
+        "backend/services/notification-management/graphql/**",
+        "backend/services/update-management/graphql/**",
     ], [], "scenarioverify/documents_test.go:21"),
     ("backend/sims/dc-simulator", "updater", ["backend/core/ota/testdata/**"], [], "updater/*_test.go"),
     ("backend/tools/apiprobe", ".", [SDL], [], "baseline_test.go, readsweep_test.go, documents_test.go"),

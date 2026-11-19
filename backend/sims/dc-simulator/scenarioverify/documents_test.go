@@ -49,6 +49,10 @@ func verifierDocuments() []struct {
 		{"queryS5Rollout", "update-management", queryS5Rollout, map[string]any{"token": "r"}},
 		{"queryS5Targets", "update-management", queryS5Targets, map[string]any{"token": "r", "c": map[string]any{"pageNumber": 1, "pageSize": 100}}},
 		{"queryS5Assignment", "update-management", queryS5Assignment, map[string]any{"token": "a"}},
+		{"queryReplacementDevice", "device-management", queryReplacementDevice, map[string]any{"tokens": []string{"hp-gauge-north-3"}}},
+		{"queryReplacements", "device-management", queryReplacements, map[string]any{
+			"c": map[string]any{"pageNumber": 1, "pageSize": 100, "device": "hp-gauge-north-3"}}},
+		{"queryReplacementCredentials", "device-management", queryReplacementCredentials, map[string]any{"tokens": []string{"hp-gauge-north-3-cred"}}},
 		{"queryCalculatedJob", "event-management", queryCalculatedJob, map[string]any{"token": "job"}},
 		{"queryAlarms", "device-management", queryAlarms, map[string]any{
 			"c": map[string]any{"pageNumber": 1, "pageSize": alarmPageSize},
@@ -99,8 +103,8 @@ func verifierDocuments() []struct {
 
 func TestEveryVerifierDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 	docs := verifierDocuments()
-	if len(docs) != 25 {
-		t.Fatalf("%d documents listed; the verifier sends 25 â€” a new one must be listed here", len(docs))
+	if len(docs) != 28 {
+		t.Fatalf("%d documents listed; the verifier sends 28 — a new one must be listed here", len(docs))
 	}
 	for _, d := range docs {
 		if errs := servedSchema(t, d.area).ValidateWithVariables(d.doc, d.vars); len(errs) > 0 {
