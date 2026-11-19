@@ -258,7 +258,7 @@
                             "type": "integer", "minimum": 2, "maximum": 5
                           },
                           "suffixes": {
-                            "description": "Per-event streams to split into groups: inbound-events, resolved-events, or both. resolved-events is refused while device-state or event-processing is deployed, since those consumers read only group zero. A stream cannot be removed on upgrade.",
+                            "description": "Per-event streams to split into groups: inbound-events, resolved-events, or both. With event-processing deployed, resolved-events can be sharded only when the instance is first installed, and its group count then stays fixed. A stream cannot be removed on upgrade.",
                             "type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "enum": ["inbound-events", "resolved-events"]}
                           },
                           "placementTags": {

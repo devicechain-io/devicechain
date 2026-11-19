@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -35,7 +35,7 @@ func newProcAttributeStore(t *testing.T) *model.DeviceAttributeStore {
 }
 
 // attrMsg builds a consumed device-attribute fact on tenant's scoped subject.
-func attrMsg(t *testing.T, tenant string, ev *dmmodel.DeviceAttributeEvent, ack *fakeAck) messaging.Message {
+func attrMsg(t *testing.T, tenant string, ev *dmcontract.DeviceAttributeEvent, ack *fakeAck) messaging.Message {
 	t.Helper()
 	b, err := dmproto.MarshalDeviceAttributeEvent(ev)
 	if err != nil {
@@ -67,7 +67,7 @@ func TestAttributeConsumerPersistsSetThenAcks(t *testing.T) {
 	rp := newTestProcessor(newTestStore(t), nil, 1)
 	rp.AttributeStore = store
 	rp.AttributeReader = &fakeReader{results: []readResult{
-		{msg: attrMsg(t, "acme", &dmmodel.DeviceAttributeEvent{
+		{msg: attrMsg(t, "acme", &dmcontract.DeviceAttributeEvent{
 			DeviceToken: "d1", AttrKey: "maxTemp", Scope: "SHARED", Value: 100, UpdatedAt: testBase}, ack)},
 	}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -96,7 +96,7 @@ func TestAttributeConsumerPersistsRemoval(t *testing.T) {
 	rp := newTestProcessor(newTestStore(t), nil, 1)
 	rp.AttributeStore = store
 	rp.AttributeReader = &fakeReader{results: []readResult{
-		{msg: attrMsg(t, "acme", &dmmodel.DeviceAttributeEvent{
+		{msg: attrMsg(t, "acme", &dmcontract.DeviceAttributeEvent{
 			DeviceToken: "d1", AttrKey: "k", Scope: "SHARED", Removed: true, UpdatedAt: testBase.Add(time.Hour)}, ack)},
 	}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -121,7 +121,7 @@ func TestAttributeConsumerDropsMalformed(t *testing.T) {
 	rp := newTestProcessor(newTestStore(t), nil, 1)
 	rp.AttributeStore = store
 	rp.AttributeReader = &fakeReader{results: []readResult{
-		{msg: attrMsg(t, "acme", &dmmodel.DeviceAttributeEvent{
+		{msg: attrMsg(t, "acme", &dmcontract.DeviceAttributeEvent{
 			DeviceToken: "d1", AttrKey: "k", Scope: "", Value: 1, UpdatedAt: testBase}, ack)},
 	}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -218,26 +218,26 @@ func TestEntityDeletedConsumerBothStores(t *testing.T) {
 // well-formed fact. This covers the arms the consumer-level drop test does not exercise directly.
 func TestAttributeFactPoison(t *testing.T) {
 	long := string(make([]byte, 300)) // over core.MaxTokenLen (128) and over the scope bound (64)
-	ok := &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SHARED", Value: 1, UpdatedAt: testBase}
+	ok := &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SHARED", Value: 1, UpdatedAt: testBase}
 	cases := []struct {
 		name string
-		ev   *dmmodel.DeviceAttributeEvent
+		ev   *dmcontract.DeviceAttributeEvent
 		bad  bool
 	}{
 		{"well-formed set", ok, false},
-		{"well-formed server removal", &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SERVER", Removed: true, UpdatedAt: testBase}, false},
-		{"empty device", &dmmodel.DeviceAttributeEvent{DeviceToken: "", AttrKey: "k", Scope: "SHARED", UpdatedAt: testBase}, true},
-		{"over-long device", &dmmodel.DeviceAttributeEvent{DeviceToken: long, AttrKey: "k", Scope: "SHARED", UpdatedAt: testBase}, true},
-		{"empty key", &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "", Scope: "SHARED", UpdatedAt: testBase}, true},
-		{"over-long key", &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: long, Scope: "SHARED", UpdatedAt: testBase}, true},
-		{"empty scope", &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "", UpdatedAt: testBase}, true},
-		{"over-long scope", &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: long, UpdatedAt: testBase}, true},
-		{"client scope (device-set)", &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "CLIENT", UpdatedAt: testBase}, true},
-		{"junk scope", &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SHART", UpdatedAt: testBase}, true},
-		{"NaN value on set", &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SHARED", Value: math.NaN(), UpdatedAt: testBase}, true},
-		{"Inf value on set", &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SHARED", Value: math.Inf(1), UpdatedAt: testBase}, true},
-		{"NaN tolerated on removal", &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SHARED", Value: math.NaN(), Removed: true, UpdatedAt: testBase}, false},
-		{"zero updated-at", &dmmodel.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SHARED", UpdatedAt: time.Time{}}, true},
+		{"well-formed server removal", &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SERVER", Removed: true, UpdatedAt: testBase}, false},
+		{"empty device", &dmcontract.DeviceAttributeEvent{DeviceToken: "", AttrKey: "k", Scope: "SHARED", UpdatedAt: testBase}, true},
+		{"over-long device", &dmcontract.DeviceAttributeEvent{DeviceToken: long, AttrKey: "k", Scope: "SHARED", UpdatedAt: testBase}, true},
+		{"empty key", &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "", Scope: "SHARED", UpdatedAt: testBase}, true},
+		{"over-long key", &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: long, Scope: "SHARED", UpdatedAt: testBase}, true},
+		{"empty scope", &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "", UpdatedAt: testBase}, true},
+		{"over-long scope", &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: long, UpdatedAt: testBase}, true},
+		{"client scope (device-set)", &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "CLIENT", UpdatedAt: testBase}, true},
+		{"junk scope", &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SHART", UpdatedAt: testBase}, true},
+		{"NaN value on set", &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SHARED", Value: math.NaN(), UpdatedAt: testBase}, true},
+		{"Inf value on set", &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SHARED", Value: math.Inf(1), UpdatedAt: testBase}, true},
+		{"NaN tolerated on removal", &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SHARED", Value: math.NaN(), Removed: true, UpdatedAt: testBase}, false},
+		{"zero updated-at", &dmcontract.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "k", Scope: "SHARED", UpdatedAt: time.Time{}}, true},
 	}
 	for _, c := range cases {
 		if _, bad := attributeFactPoison(c.ev); bad != c.bad {
@@ -256,7 +256,7 @@ func TestDecodeAttributeFactDropsUnusable(t *testing.T) {
 	if _, _, ok := decodeAttributeFact(rp, messaging.NewConsumedMessage("dc.acme.device-attribute", []byte("not-proto\xff"), 0, nil, nil)); ok {
 		t.Fatal("an attribute fact with an unparseable payload must be dropped")
 	}
-	tenant, ev, ok := decodeAttributeFact(rp, attrMsg(t, "acme", &dmmodel.DeviceAttributeEvent{
+	tenant, ev, ok := decodeAttributeFact(rp, attrMsg(t, "acme", &dmcontract.DeviceAttributeEvent{
 		DeviceToken: "d1", AttrKey: "k", Scope: "SERVER", Value: 3, UpdatedAt: testBase}, nil))
 	if !ok || tenant != "acme" || ev.DeviceToken != "d1" || ev.Scope != "SERVER" || ev.Value != 3 {
 		t.Fatalf("a well-formed attribute fact should decode: ok=%v tenant=%q ev=%+v", ok, tenant, ev)

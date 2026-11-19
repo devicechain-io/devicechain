@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -52,7 +52,7 @@ func (r *recordingApplier) ApplyDeviceOwnership(ctx context.Context, device stri
 
 func factMessage(t *testing.T, subject string, delivered int, ack *factAck) messaging.Message {
 	t.Helper()
-	b, err := dmproto.MarshalDeviceOwnershipChangedEvent(&dmmodel.DeviceOwnershipChangedEvent{DeviceToken: "pump-1", DeviceIncarnation: 23,
+	b, err := dmproto.MarshalDeviceOwnershipChangedEvent(&dmcontract.DeviceOwnershipChangedEvent{DeviceToken: "pump-1", DeviceIncarnation: 23,
 		Anchors: []string{"customer:globex", "area:north"}, ChangedTime: time.Date(2026, 10, 16, 9, 1, 0, 0, time.UTC)})
 	require.NoError(t, err)
 	return messaging.NewConsumedMessage(subject, b, delivered, nil, ack)

@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	dccore "github.com/devicechain-io/dc-microservice/core"
@@ -15,15 +15,15 @@ import (
 )
 
 // wireAlarmEdge maps the dispatcher's internal edge token (runtime vocabulary) onto the SHARED wire
-// vocabulary (dmmodel), so the device-management wire binds only to dmmodel's constants on BOTH ends —
+// vocabulary (dmcontract), so the device-management wire binds only to dmcontract's constants on BOTH ends —
 // the producer here and the consumer's `req.Edge == model.AlarmEdgeResolved`. Making the translation
 // explicit (rather than passing the string through) means a change to either module's edge spelling is
 // a compile-visible mapping edit, not a silent fail-open drift into the raise path.
 func wireAlarmEdge(edge string) string {
 	if edge == runtime.EdgeResolved {
-		return dmmodel.AlarmEdgeResolved
+		return dmcontract.AlarmEdgeResolved
 	}
-	return dmmodel.AlarmEdgeRaised
+	return dmcontract.AlarmEdgeRaised
 }
 
 // alarmClient is the REACT dispatcher's raise-alarm sink (ADR-051 slice 5c): it publishes a
@@ -56,7 +56,7 @@ func NewAlarmClient(writer messaging.MessageWriter) react.AlarmSink {
 // device-management then leaves the alarm's last value NULL rather than writing a fabricated 0.
 func (c *alarmClient) Dispatch(ctx context.Context, req react.AlarmRequest) error {
 	requiresPosition := req.RequiresPosition
-	payload, err := dmmodel.MarshalRaiseAlarmRequest(&dmmodel.RaiseAlarmRequest{
+	payload, err := dmcontract.MarshalRaiseAlarmRequest(&dmcontract.RaiseAlarmRequest{
 		DeviceToken:  req.DeviceToken,
 		AlarmKey:     req.AlarmKey,
 		RuleID:       req.RuleID,

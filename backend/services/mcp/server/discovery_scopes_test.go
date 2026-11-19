@@ -87,6 +87,9 @@ func TestDiscoveryOffersGrantableScopes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if !slices.Contains(toolNames(list.Tools), "list_suppression_windows") {
+				t.Error("read-only discovery omitted suppression windows")
+			}
 			for _, tool := range []string{"propose_alarm_action", "get_proposal", "list_my_proposals"} {
 				if got := slices.Contains(toolNames(list.Tools), tool); got != enabled {
 					t.Errorf("%s offered=%v want %v", tool, got, enabled)

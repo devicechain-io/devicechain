@@ -12,7 +12,8 @@ namespace DeviceChain.Demos.Platform
 {
     /// <summary>
     /// Reads what the platform last observed for each device (device-state's
-    /// <c>latestMeasurements</c>) in one aliased query, so a machine can resume from it. The parse is
+    /// <c>latestMeasurements</c>) in aliased queries of at most <see cref="ObserverQueries.MaxRootFields"/>
+    /// devices each (the platform refuses a query with more root fields), so a machine can resume from it. The parse is
     /// pure over the response text. A device the platform has nothing for is simply absent from the
     /// result, and a query that fails returns no state at all (and says why) rather than guessing.
     /// </summary>
@@ -59,8 +60,14 @@ namespace DeviceChain.Demos.Platform
             if (deviceTokens.Count == 0) return none;
             try
             {
-                var data = await query(Build(deviceTokens), Variables(deviceTokens), ct);
-                return Parse(deviceTokens, data);
+                var all = new Dictionary<string, IReadOnlyDictionary<string, double>>(StringComparer.Ordinal);
+                foreach (var chunk in ObserverQueries.Chunks(deviceTokens))
+                {
+                    var data = await query(Build(chunk), Variables(chunk), ct);
+                    foreach (var pair in Parse(chunk, data)) all[pair.Key] = pair.Value;
+                }
+
+                return all;
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception e)

@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -41,7 +41,7 @@ import (
 // giving the claim back, so the durable consumer redelivers; a clear that reached at least one
 // channel, or that was refused, is final. Delivery is at-most-once past the claim: a crash
 // between claiming and sending loses the clear rather than repeating it.
-func (n *PolicyNotifier) announceClear(ctx context.Context, clear *dmmodel.AlarmStateChangeEvent, fresh, cutoff bool) error {
+func (n *PolicyNotifier) announceClear(ctx context.Context, clear *dmcontract.AlarmStateChangeEvent, fresh, cutoff bool) error {
 	_, err := n.announceClearReporting(ctx, clear, fresh, cutoff)
 	// A partial delivery is final for the consumer: retrying would repeat the clear
 	// on the channel that received it. The scheduler still needs the partial outcome.
@@ -54,7 +54,7 @@ func (n *PolicyNotifier) announceClear(ctx context.Context, clear *dmmodel.Alarm
 // announceClearReporting is announceClear that also says whether a clear was actually DELIVERED to
 // a channel. nil error is not that: a lost claim, a clear with nothing routed, and a clear every
 // channel refused all return nil having sent nothing.
-func (n *PolicyNotifier) announceClearReporting(ctx context.Context, clear *dmmodel.AlarmStateChangeEvent, fresh, cutoff bool) (bool, error) {
+func (n *PolicyNotifier) announceClearReporting(ctx context.Context, clear *dmcontract.AlarmStateChangeEvent, fresh, cutoff bool) (bool, error) {
 	tenant, _ := core.TenantFromContext(ctx)
 
 	// fresh: the caller is not this clear's own message (a RAISED that finished first, or the
@@ -161,8 +161,8 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 			break
 		}
 		sent++
-		clear := &dmmodel.AlarmStateChangeEvent{
-			EventType: dmmodel.AlarmEventCleared, AlarmToken: st.AlarmToken, AlarmKey: st.AlarmKey,
+		clear := &dmcontract.AlarmStateChangeEvent{
+			EventType: dmcontract.AlarmEventCleared, AlarmToken: st.AlarmToken, AlarmKey: st.AlarmKey,
 			Severity: st.Severity, State: "CLEARED",
 			RaisedTime: st.CycleRaisedAt.Time, OccurredTime: st.ClearedAt.Time,
 		}
@@ -186,7 +186,7 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 	return lastErr
 }
 
-func (n *PolicyNotifier) announceClearIn(ctx context.Context, tenant string, clear *dmmodel.AlarmStateChangeEvent, cutoff bool) (bool, error) {
+func (n *PolicyNotifier) announceClearIn(ctx context.Context, tenant string, clear *dmcontract.AlarmStateChangeEvent, cutoff bool) (bool, error) {
 	states, err := n.api.NotificationStatesByAlarmToken(ctx, []string{clear.AlarmToken})
 	if err != nil {
 		return false, fmt.Errorf("loading notification state: %w", err)
@@ -311,14 +311,14 @@ func pagedTargets(ds []delivery) []model.PagedTarget {
 // already stamped cleared and the clear is still unannounced, the announcement is owed now.
 // Errors are logged, not returned: the page that led here has gone out, and returning would
 // resend it. The scheduler (AnnouncePendingClears) picks up what this could not send.
-func (n *PolicyNotifier) announceLateClear(ctx context.Context, event *dmmodel.AlarmStateChangeEvent,
+func (n *PolicyNotifier) announceLateClear(ctx context.Context, event *dmcontract.AlarmStateChangeEvent,
 	recorded *model.NotificationState) {
 	if recorded == nil || !recorded.ClearedAt.Valid || recorded.ClearAnnounced() ||
 		!recorded.SameCycleAs(event.RaisedTime) {
 		return
 	}
 	clear := *event
-	clear.EventType = dmmodel.AlarmEventCleared
+	clear.EventType = dmcontract.AlarmEventCleared
 	clear.State = "CLEARED"
 	clear.OccurredTime = recorded.ClearedAt.Time
 	if err := n.announceClear(ctx, &clear, true, false); err != nil {

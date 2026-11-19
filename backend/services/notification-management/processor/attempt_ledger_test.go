@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -284,7 +284,7 @@ func TestADispatchedAlarmIsInTheLedger(t *testing.T) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	n.Ledger = NewAttemptLedger(api, ledgerCounter())
-	if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
+	if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)); err != nil {
 		t.Fatal(err)
 	}
 	n.Ledger.Wait(context.Background())

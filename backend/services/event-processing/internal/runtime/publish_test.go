@@ -6,7 +6,7 @@ package runtime
 import (
 	"testing"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 )
 
 const validRuleDef = `{"name":"n","type":"threshold","when":{"metric":"t","op":"gt","threshold":1}}`
@@ -14,7 +14,7 @@ const validRuleDef = `{"name":"n","type":"threshold","when":{"metric":"t","op":"
 // CompilePublishedRules composes the runtime id "{tenant}/{profileVersionToken}/{ruleToken}"
 // and scopes each compiled rule to its owning tenant + version.
 func TestCompilePublishedRulesComposesIdAndScope(t *testing.T) {
-	scoped, failed := CompilePublishedRules("acme", "prof@3", []dmmodel.PublishedDetectionRule{
+	scoped, failed := CompilePublishedRules("acme", "prof@3", []dmcontract.PublishedDetectionRule{
 		{Token: "hot", Definition: validRuleDef},
 	})
 	if failed != 0 {
@@ -39,7 +39,7 @@ func TestCompilePublishedRulesComposesIdAndScope(t *testing.T) {
 // An uncompilable rule is skipped and counted, never fatal — the rest of the fact still loads
 // (defense-in-depth behind the publish gate that should have rejected it).
 func TestCompilePublishedRulesSkipsUncompilable(t *testing.T) {
-	scoped, failed := CompilePublishedRules("acme", "prof@1", []dmmodel.PublishedDetectionRule{
+	scoped, failed := CompilePublishedRules("acme", "prof@1", []dmcontract.PublishedDetectionRule{
 		{Token: "ok", Definition: validRuleDef},
 		{Token: "garbage", Definition: `{"type":`}, // undecodable
 		{Token: "no-hold", Definition: `{"name":"nh","type":"duration","when":{"metric":"t","op":"gt","threshold":1}}`}, // duration needs a positive hold
@@ -62,7 +62,7 @@ func TestCompilePublishedRulesEmpty(t *testing.T) {
 
 // The group scope (ADR-062 S4) rides the fact onto the ScopedRule so Plan can set-test it.
 func TestCompilePublishedRulesCarriesGroupScope(t *testing.T) {
-	scoped, failed := CompilePublishedRules("acme", "prof@1", []dmmodel.PublishedDetectionRule{
+	scoped, failed := CompilePublishedRules("acme", "prof@1", []dmcontract.PublishedDetectionRule{
 		{Token: "hot", Definition: validRuleDef, EntityGroupToken: "arid-areas", EntityGroupVersion: 4},
 		{Token: "wide", Definition: validRuleDef}, // unscoped
 	})
@@ -86,7 +86,7 @@ func TestCompilePublishedRulesCarriesGroupScope(t *testing.T) {
 func TestCompilePublishedRulesRejectsScopeOnUnsupportedKind(t *testing.T) {
 	absence := `{"name":"gone","type":"absence","timeout":"5m"}`
 	correlation := `{"name":"co","type":"correlation","anchorType":"site","count":3,"window":"100s"}`
-	scoped, failed := CompilePublishedRules("acme", "prof@1", []dmmodel.PublishedDetectionRule{
+	scoped, failed := CompilePublishedRules("acme", "prof@1", []dmcontract.PublishedDetectionRule{
 		{Token: "ok", Definition: validRuleDef, EntityGroupToken: "arid-areas", EntityGroupVersion: 1},
 		{Token: "abs", Definition: absence, EntityGroupToken: "arid-areas", EntityGroupVersion: 1},
 		{Token: "corr", Definition: correlation, EntityGroupToken: "arid-areas", EntityGroupVersion: 1},
@@ -104,7 +104,7 @@ func TestCompilePublishedRulesRejectsScopeOnUnsupportedKind(t *testing.T) {
 func TestCompilePublishedRulesAllowsUnscopedAbsenceCorrelation(t *testing.T) {
 	absence := `{"name":"gone","type":"absence","timeout":"5m"}`
 	correlation := `{"name":"co","type":"correlation","anchorType":"site","count":3,"window":"100s"}`
-	scoped, failed := CompilePublishedRules("acme", "prof@1", []dmmodel.PublishedDetectionRule{
+	scoped, failed := CompilePublishedRules("acme", "prof@1", []dmcontract.PublishedDetectionRule{
 		{Token: "abs", Definition: absence},
 		{Token: "corr", Definition: correlation},
 	})

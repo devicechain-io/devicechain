@@ -22,6 +22,7 @@ export const SCOPED_ROUTES: readonly RegExp[] = [
   /^\/devices$/,
   /^\/devices\/[^/]+$/,
   /^\/alarms$/,
+  /^\/alarm-maintenance(?:\/[^/]+)?$/,
   /^\/dashboards$/,
   /^\/dashboards\/[^/]+$/,
 ];

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -65,7 +65,7 @@ func newProcActiveStore(t *testing.T) *model.ProfileActiveStore {
 // rosterMsg builds a consumed device-roster fact on tenant's scoped subject.
 func rosterMsg(t *testing.T, tenant, device, profile string, since time.Time, ack *fakeAck) messaging.Message {
 	t.Helper()
-	b, err := dmproto.MarshalDeviceRosterEvent(&dmmodel.DeviceRosterEvent{
+	b, err := dmproto.MarshalDeviceRosterEvent(&dmcontract.DeviceRosterEvent{
 		DeviceToken: device, ProfileToken: profile, ExpectedSince: since,
 	})
 	if err != nil {
@@ -130,7 +130,7 @@ func TestRosterConsumerStillKeysOnTheEmptyProfileForADisabledDevice(t *testing.T
 	store := newProcRosterStore(t)
 	rp := newTestProcessor(newTestStore(t), nil, 1)
 	rp.RosterStore = store
-	b, err := dmproto.MarshalDeviceRosterEvent(&dmmodel.DeviceRosterEvent{
+	b, err := dmproto.MarshalDeviceRosterEvent(&dmcontract.DeviceRosterEvent{
 		DeviceToken: "dev1", ProfileToken: "", ExpectedSince: testBase, Disabled: true,
 	})
 	if err != nil {
@@ -227,10 +227,10 @@ func TestRuleConsumerMaintainsProfileActive(t *testing.T) {
 	activeStore := newProcActiveStore(t)
 	published := testBase.Add(-2 * time.Hour)
 
-	b, err := dmproto.MarshalDetectionRulesPublishedEvent(&dmmodel.DetectionRulesPublishedEvent{
+	b, err := dmproto.MarshalDetectionRulesPublishedEvent(&dmcontract.DetectionRulesPublishedEvent{
 		ProfileVersionToken: "prof@3",
 		PublishedAt:         published,
-		Rules:               []dmmodel.PublishedDetectionRule{{Token: "r1", Definition: validFactRule}},
+		Rules:               []dmcontract.PublishedDetectionRule{{Token: "r1", Definition: validFactRule}},
 	})
 	if err != nil {
 		t.Fatalf("marshal fact: %v", err)
@@ -295,12 +295,12 @@ func TestDecodeRosterAndEntityDeletedDropUnusable(t *testing.T) {
 // profileActiveFromFact splits the stable profile token off the version token and skips a
 // token that does not split into a non-empty profile + version.
 func TestProfileActiveFromFact(t *testing.T) {
-	a, ok := profileActiveFromFact("acme", &dmmodel.DetectionRulesPublishedEvent{ProfileVersionToken: "prof@3", PublishedAt: testBase})
+	a, ok := profileActiveFromFact("acme", &dmcontract.DetectionRulesPublishedEvent{ProfileVersionToken: "prof@3", PublishedAt: testBase})
 	if !ok || a.ProfileToken != "prof" || a.ActiveVersionToken != "prof@3" || a.Tenant != "acme" || !a.PublishedAt.Equal(testBase) {
 		t.Fatalf("well-formed token should split: ok=%v a=%+v", ok, a)
 	}
 	for _, bad := range []string{"", "prof", "@3", "prof@"} {
-		if _, ok := profileActiveFromFact("acme", &dmmodel.DetectionRulesPublishedEvent{ProfileVersionToken: bad}); ok {
+		if _, ok := profileActiveFromFact("acme", &dmcontract.DetectionRulesPublishedEvent{ProfileVersionToken: bad}); ok {
 			t.Fatalf("malformed version token %q must be skipped", bad)
 		}
 	}

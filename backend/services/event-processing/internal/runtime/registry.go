@@ -6,7 +6,7 @@ package runtime
 import (
 	"context"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/rs/zerolog/log"
@@ -107,12 +107,12 @@ func NewRuleRegistry(scoped []ScopedRule) *RuleRegistry {
 // is a sibling field, not part of the definition JSON) still means the rule now covers a
 // different membership set, so grafting the old series' held state onto it would mis-fire.
 //
-// The definitions are compared as documents (dmmodel.SameRuleDefinition), not as bytes: the same
+// The definitions are compared as documents (dmcontract.SameRuleDefinition), not as bytes: the same
 // rule reaches this service in two byte forms — compact from an older publish, jsonb-rendered from
 // a rollback or the fact reconcile — and a byte comparison would GC a running rule's state over a
 // change nobody made.
 func (sr ScopedRule) DiffersFrom(old *ScopedRule) bool {
-	return !dmmodel.SameRuleDefinition(old.Definition, sr.Definition) ||
+	return !dmcontract.SameRuleDefinition(old.Definition, sr.Definition) ||
 		old.GroupToken != sr.GroupToken ||
 		old.GroupVersion != sr.GroupVersion
 }

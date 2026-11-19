@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
@@ -36,14 +36,14 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-func TestResolvedGroupStartupRefusesUntilSupportGuardLift(t *testing.T) {
-	ms := &core.Microservice{InstanceId: "group-refusal", FunctionalArea: "event-processing"}
+func TestMainDetectWorkerCeiling(t *testing.T) {
+	prev := Configuration
+	t.Cleanup(func() { Configuration = prev })
+	Configuration = &config.EventProcessingConfiguration{DetectShards: 64}
+	ms := &core.Microservice{InstanceId: "group-ceiling", FunctionalArea: "event-processing"}
 	ms.InstanceConfiguration.Infrastructure.Nats.ShardGroups = &mscfg.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.ResolvedEvents}}
 	nm := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), nil)
-	err := createNatsComponents(nm, nil)
-	require.ErrorContains(t, err, "S7 support-guard lift")
-	require.ErrorContains(t, err, "per-partition purge erasure")
-	require.ErrorContains(t, err, "N x K ceiling")
+	require.ErrorIs(t, createNatsComponents(nm, nil), config.ErrDetectWorkerCeiling)
 }
 
 // The archive transport is a fixture; main's source wiring, consumers, worker
@@ -57,27 +57,36 @@ func (s *mainGroupFences) CurrentFenceSet(context.Context, string) (*geofence.Fe
 func (s *mainGroupFences) FenceSetAt(_ context.Context, _ string, version int32) (*geofence.FenceSet, error) {
 	return s.sets[version], nil
 }
-func (s *mainGroupFences) ResolveManifest(_ context.Context, _ string, m *dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error) {
+func (s *mainGroupFences) ResolveManifest(_ context.Context, _ string, m *dmcontract.GeoFenceSetManifest) (*geofence.FenceSet, error) {
 	return s.sets[m.Version], nil
 }
 
 func TestMainResolvedGroupWorkersRouteEveryFact(t *testing.T) {
+	mainGroupStartup(t, "fresh")
+}
+
+func TestMainTopologyStartup(t *testing.T) {
+	for _, scenario := range []string{"history", "count", "suffix", "disable", "legacy"} {
+		t.Run(scenario, func(t *testing.T) { mainGroupStartup(t, scenario) })
+	}
+}
+
+func mainGroupStartup(t *testing.T, scenario string) {
 	host, port := startEmbeddedNats(t)
 	prevMs, prevCfg, prevSvc := Microservice, Configuration, Svc
 	prevDetect, prevReact, prevReader := ResolvedEventsProcessor, ReactDispatcher, ResolvedEventsReader
 	prevSnap, prevRules, prevStats, prevRoster, prevActive, prevAttr, prevReg := SnapshotStore, DetectRuleStore, RuleStatStore, DeviceRosterStore, ProfileActiveStore, DeviceAttributeStore, RuleRegistry
 	prevDM, prevFS, prevCFS, prevFM := DeviceManagementFacts, FenceSets, CurrentFenceSets, FenceManifests
 	prevDetM, prevReM, prevEU, prevDL, prevGate := DetectMetrics, ReactMetrics, EgressUnresolved, DeadLetters, DetectTermGate
-	prevStop, prevRefusal := stopStreamSharding, refuseResolvedEventShards
+	prevStop, prevPurge := stopStreamSharding, TenantPurgeResponder
 	t.Cleanup(func() {
 		Microservice, Configuration, Svc = prevMs, prevCfg, prevSvc
 		ResolvedEventsProcessor, ReactDispatcher, ResolvedEventsReader = prevDetect, prevReact, prevReader
 		SnapshotStore, DetectRuleStore, RuleStatStore, DeviceRosterStore, ProfileActiveStore, DeviceAttributeStore, RuleRegistry = prevSnap, prevRules, prevStats, prevRoster, prevActive, prevAttr, prevReg
 		DeviceManagementFacts, FenceSets, CurrentFenceSets, FenceManifests = prevDM, prevFS, prevCFS, prevFM
 		DetectMetrics, ReactMetrics, EgressUnresolved, DeadLetters, DetectTermGate = prevDetM, prevReM, prevEU, prevDL, prevGate
-		stopStreamSharding, refuseResolvedEventShards = prevStop, prevRefusal
+		stopStreamSharding, TenantPurgeResponder = prevStop, prevPurge
 	})
-	refuseResolvedEventShards = false
 	instance := fmt.Sprintf("maingroups%d", time.Now().UnixNano())
 	Microservice = &core.Microservice{InstanceId: instance, FunctionalArea: "event-processing"}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
@@ -89,6 +98,23 @@ func TestMainResolvedGroupWorkersRouteEveryFact(t *testing.T) {
 	db := sqlitetest.OpenMemory(t, &gorm.Config{Logger: logger.Discard})
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, db.AutoMigrate(&model.DetectSnapshot{}, &model.DetectRule{}, &model.RuleStat{}, &model.DeviceRoster{}, &model.ProfileActive{}, &model.DeviceAttribute{}, &model.DeviceAttributeDeletion{}))
+	require.NoError(t, model.NewDetectStreamTopology().Migrate(db))
+	if scenario == "history" {
+		require.NoError(t, db.Create(&model.DetectSnapshot{PartitionId: singletonPartition, StreamSeq: 42, Watermark: time.Now().UTC(), Payload: []byte(`{"lastSeq":42}`)}).Error)
+	}
+	if scenario == "count" || scenario == "suffix" || scenario == "disable" {
+		suffix, groups := streams.ResolvedEvents, 2
+		if scenario == "count" {
+			groups = 3
+		}
+		if scenario == "suffix" {
+			suffix = "other"
+		}
+		require.NoError(t, db.Create(&model.DetectStreamTopology{ID: "singleton", BaseSuffix: suffix, GroupCount: groups, CreatedAt: time.Now().UTC(), FormatVersion: 1}).Error)
+	}
+	if scenario == "disable" || scenario == "legacy" {
+		Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups = nil
+	}
 	rm := &rdb.RdbManager{Database: db}
 	SnapshotStore, DetectRuleStore, RuleStatStore = model.NewSnapshotStore(rm), model.NewDetectRuleStore(rm), model.NewRuleStatStore(rm)
 	DeviceRosterStore, ProfileActiveStore, DeviceAttributeStore = model.NewDeviceRosterStore(rm), model.NewProfileActiveStore(rm), model.NewDeviceAttributeStore(rm)
@@ -127,6 +153,64 @@ func TestMainResolvedGroupWorkersRouteEveryFact(t *testing.T) {
 		}
 	})
 	require.NoError(t, nm.Start(context.Background()), "the real main N-worker construction")
+	if scenario != "fresh" {
+		// Observe the real main-installed validator from the actual lease supervisor.
+		// This wrapper neither skips validation nor changes its outcome.
+		observed := make(chan error, 10)
+		validate := ResolvedEventsProcessor.ValidateTopology
+		require.NotNil(t, validate)
+		ResolvedEventsProcessor.ValidateTopology = func(ctx context.Context) error {
+			err := validate(ctx)
+			observed <- err
+			return err
+		}
+		dl, err := nm.NewDistributedLease(messaging.DefaultLeaseTTL)
+		require.NoError(t, err)
+		prior, err := dl.Acquire(singletonPartition)
+		require.NoError(t, err)
+		require.NoError(t, prior.ReleaseWithin(context.Background()))
+		require.NoError(t, ResolvedEventsProcessor.Start(context.Background()))
+		t.Cleanup(func() { require.NoError(t, ResolvedEventsProcessor.Stop(context.Background())) })
+		select {
+		case err := <-observed:
+			switch scenario {
+			case "history":
+				require.ErrorIs(t, err, model.ErrShardingDetectionHistory)
+			case "legacy":
+				require.NoError(t, err)
+			default:
+				require.ErrorIs(t, err, model.ErrDetectStreamTopologyMismatch)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("startup never validated topology under the singleton lease")
+		}
+		if scenario == "legacy" {
+			js, err := nm.Conn().JetStream()
+			require.NoError(t, err)
+			at := time.Now().UTC()
+			raw, err := resolvedevent.MarshalResolvedEvent(&resolvedevent.ResolvedEvent{Source: "mqtt", SourceDeviceToken: "probe", OccurredTime: at, ProcessedTime: at, EventType: eventtype.Measurement, Payload: &resolvedevent.ResolvedMeasurementsPayload{}})
+			require.NoError(t, err)
+			_, err = js.Publish(messaging.ScopedSubject(instance, "g0", streams.ResolvedEvents), raw)
+			require.NoError(t, err)
+			require.Eventually(t, func() bool {
+				row, ok, err := SnapshotStore.Load(context.Background(), singletonPartition)
+				return err == nil && ok && row.StreamSeq == 1
+			}, 10*time.Second, 20*time.Millisecond)
+			var count int64
+			require.NoError(t, db.Model(&model.DetectStreamTopology{}).Count(&count).Error)
+			require.Zero(t, count)
+		} else {
+			var rows []model.DetectSnapshot
+			require.NoError(t, db.Find(&rows).Error)
+			if scenario == "history" {
+				require.Len(t, rows, 1)
+				require.Equal(t, int64(42), rows[0].StreamSeq)
+			} else {
+				require.Empty(t, rows)
+			}
+		}
+		return
+	}
 	js, err := nm.Conn().JetStream()
 	require.NoError(t, err)
 	publish := func(tenant, suffix string, raw []byte) {
@@ -135,8 +219,8 @@ func TestMainResolvedGroupWorkersRouteEveryFact(t *testing.T) {
 	}
 	base := time.Now().UTC().Add(-time.Minute)
 	for _, tenant := range []string{"g0", "g1"} {
-		raw, err := dmproto.MarshalDetectionRulesPublishedEvent(&dmmodel.DetectionRulesPublishedEvent{
-			ProfileVersionToken: "p@1", PublishedAt: base, Rules: []dmmodel.PublishedDetectionRule{
+		raw, err := dmproto.MarshalDetectionRulesPublishedEvent(&dmcontract.DetectionRulesPublishedEvent{
+			ProfileVersionToken: "p@1", PublishedAt: base, Rules: []dmcontract.PublishedDetectionRule{
 				{Token: "dead", Definition: `{"name":"dead","type":"absence","timeout":"1h"}`},
 				{Token: "views", Definition: `{"name":"views","type":"threshold","when":{"cel":"has(attr.limit) && attr.limit > 10.0 && geo.inFence(\"yard\")"}}`},
 			},
@@ -144,7 +228,7 @@ func TestMainResolvedGroupWorkersRouteEveryFact(t *testing.T) {
 		require.NoError(t, err)
 		publish(tenant, streams.DetectionRulesPublished, raw)
 		for _, device := range []string{"never", "live"} {
-			raw, err := dmproto.MarshalDeviceRosterEvent(&dmmodel.DeviceRosterEvent{DeviceToken: device, ProfileToken: "p", ExpectedSince: base})
+			raw, err := dmproto.MarshalDeviceRosterEvent(&dmcontract.DeviceRosterEvent{DeviceToken: device, ProfileToken: "p", ExpectedSince: base})
 			require.NoError(t, err)
 			publish(tenant, streams.DeviceRoster, raw)
 		}
@@ -157,6 +241,8 @@ func TestMainResolvedGroupWorkersRouteEveryFact(t *testing.T) {
 	require.NoError(t, prior.ReleaseWithin(context.Background()))
 	require.NoError(t, ResolvedEventsProcessor.Start(context.Background()))
 	t.Cleanup(func() { require.NoError(t, ResolvedEventsProcessor.Stop(context.Background())) })
+	require.NoError(t, TenantPurgeResponder.Start())
+	t.Cleanup(func() { require.NoError(t, TenantPurgeResponder.Stop()) })
 	partitions := []string{singletonPartition, streams.ResolvedEvents + "-g1"}
 	type key struct{ Rule, Series string }
 	type snapshot struct{ Expected, Raised []key }
@@ -185,10 +271,10 @@ func TestMainResolvedGroupWorkersRouteEveryFact(t *testing.T) {
 	}
 	// Live facts enter through main's singleton consumers and wake their owners.
 	for g, tenant := range []string{"g0", "g1"} {
-		raw, err := dmproto.MarshalDeviceAttributeEvent(&dmmodel.DeviceAttributeEvent{DeviceToken: "live", Scope: "SHARED", AttrKey: "limit", Value: 42, UpdatedAt: base.Add(time.Second)})
+		raw, err := dmproto.MarshalDeviceAttributeEvent(&dmcontract.DeviceAttributeEvent{DeviceToken: "live", Scope: "SHARED", AttrKey: "limit", Value: 42, UpdatedAt: base.Add(time.Second)})
 		require.NoError(t, err)
 		publish(tenant, streams.DeviceAttribute, raw)
-		raw, err = dmmodel.MarshalGeoFenceSetManifest(&dmmodel.GeoFenceSetManifest{Version: 2})
+		raw, err = dmcontract.MarshalGeoFenceSetManifest(&dmcontract.GeoFenceSetManifest{Version: 2})
 		require.NoError(t, err)
 		publish(tenant, streams.GeoFenceSetManifest, raw)
 		// Repeated event probes avoid assuming channel selection order across facts.
@@ -231,4 +317,16 @@ func TestMainResolvedGroupWorkersRouteEveryFact(t *testing.T) {
 			return s.Expected[0].Rule == tenant+"/p@1/dead" && s.Expected[0].Series == "never"
 		}, 10*time.Second, 100*time.Millisecond, "worker %d did not erase its deleted device", g)
 	}
+	// The responder was constructed by real main after group assembly.
+	result, err := messaging.PurgeTenantDetect(context.Background(), nm.Conn(), instance, "g1", partitions)
+	require.NoError(t, err)
+	require.Len(t, result.Replies, 2)
+	for _, reply := range result.Replies {
+		require.Empty(t, reply.Error)
+	}
+	var topology model.DetectStreamTopology
+	require.NoError(t, db.Take(&topology).Error)
+	require.Equal(t, 2, topology.GroupCount)
+	require.Equal(t, streams.ResolvedEvents, topology.BaseSuffix)
+
 }

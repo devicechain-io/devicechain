@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/stretchr/testify/require"
 )
@@ -38,12 +38,12 @@ func (s *buildReadinessFacts) Tenants(context.Context) ([]string, error) {
 	return []string{"other"}, nil
 }
 
-func (*buildReadinessFacts) ActiveProfiles(context.Context, string) ([]dmmodel.ActiveProfileRules, error) {
+func (*buildReadinessFacts) ActiveProfiles(context.Context, string) ([]dmcontract.ActiveProfileRules, error) {
 	return nil, nil
 }
 
-func (*buildReadinessFacts) Roster(context.Context, string) ([]dmmodel.DeviceRosterEntry, error) {
-	return []dmmodel.DeviceRosterEntry{{DeviceToken: "lost", ProfileToken: "p", ExpectedSince: testBase}}, nil
+func (*buildReadinessFacts) Roster(context.Context, string) ([]dmcontract.DeviceRosterEntry, error) {
+	return []dmcontract.DeviceRosterEntry{{DeviceToken: "lost", ProfileToken: "p", ExpectedSince: testBase}}, nil
 }
 
 // g1 is blocked before constructing its armer. No reconciliation, and hence no

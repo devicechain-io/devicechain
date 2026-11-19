@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/storehold/holdtest"
@@ -94,7 +94,7 @@ var outageShapes = []outageShape{
 	}},
 }
 
-func alarmMessage(t *testing.T, ev *dmmodel.AlarmStateChangeEvent) (*holdtest.Ack, func(np *NotificationProcessor)) {
+func alarmMessage(t *testing.T, ev *dmcontract.AlarmStateChangeEvent) (*holdtest.Ack, func(np *NotificationProcessor)) {
 	t.Helper()
 	b, err := dmproto.MarshalAlarmStateChangeEvent(ev)
 	if err != nil {
@@ -176,7 +176,7 @@ func TestADeferralAnsweredByAPageIsDroppedAfterAStoreOutage(t *testing.T) {
 				injectWriteFaults(stateDB(api), faults)
 
 				// Inside quiet hours: held, nobody paged.
-				if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
+				if err := n.dispatch(ctx, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)); err != nil {
 					t.Fatal(err)
 				}
 				if held := heldRows(t, api, ctx); len(held) != 1 || fa.calls != 0 {
@@ -190,7 +190,7 @@ func TestADeferralAnsweredByAPageIsDroppedAfterAStoreOutage(t *testing.T) {
 					faults.arm()
 					return nil
 				}}
-				ack, run := alarmMessage(t, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock))
+				ack, run := alarmMessage(t, eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock))
 				np := newTestProcessor(n)
 				if withHold {
 					np.Hold = holdForProbe(faults.probe)

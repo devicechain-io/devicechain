@@ -4,8 +4,6 @@
 package model
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -223,30 +221,6 @@ const (
 	// size rule per-fence delivery still needs.
 	MaxGeoFenceGeometryBytes = 32 << 10
 
-	// MaxGeoFenceGeometryHashesPerRequest bounds how many geometry documents one
-	// GeoFenceGeometryDocuments call may ask for. Over the limit is an ERROR, never a
-	// partial answer: a caller that asked for 40 addresses and silently got 24 cannot tell
-	// that from a tenant holding only 24 of them, and this door's whole contract is that
-	// absence means absence.
-	//
-	// 🔴 IT IS ARITHMETIC, NOT A ROUND NUMBER, AND THE ARITHMETIC IS THE ONLY REASON A
-	// COUNT CAN DEFEND A BYTE CAP AT ALL. A limit counted in documents is a guess about
-	// bytes unless each document has a known byte ceiling — which is exactly what
-	// MaxGeoFenceGeometryBytes provides, applied to the jsonb-rendered form the archive
-	// actually returns. 24 x 32 KiB is 786,432 bytes against svcclient.MaxResponseBytes
-	// (1 MiB), leaving room for the hashes, the field names and the GraphQL envelope's
-	// string escaping. TestGeometryBatchFitsOneResponse measures a worst-case response
-	// rather than trusting that estimate, because two numbers in this tree disagree about
-	// what escaping costs and a comment cannot settle it.
-	//
-	// It does not have to defend against documents already stored ABOVE that ceiling —
-	// rows predating the bound exist — so a client is still expected to split its request
-	// on a too-large response. Splitting is trivial here in a way it was not for the paged
-	// read this replaces: a request names a SET OF ADDRESSES, so half of it is still a
-	// well-formed request, where a (pageNumber, pageSize) offset could not be re-expressed
-	// at a different size and forced the whole walk to restart.
-	MaxGeoFenceGeometryHashesPerRequest = 24
-
 	// MaxGeoFencePositionOrdinates bounds how many numbers one position may carry.
 	//
 	// 🔴 IT IS EXACTLY TWO BECAUSE THE KIND IS EXACTLY 2D, and until it existed the check
@@ -352,57 +326,6 @@ type GeoFenceSnapshotRef struct {
 	Geometry json.RawMessage `json:"geometry"`
 }
 
-// GeoFenceSetManifest names WHICH fences a fence-set version holds and the CONTENT ADDRESS
-// of each one's geometry. It carries no geometry itself, which is the entire point: its
-// size is a function of the fence COUNT and of nothing an author can write.
-//
-// 🔴 THE SIZE PROPERTY IS WHY AN ENTIRE APPARATUS OF BROKER-CEILING MACHINERY IS GONE, so it
-// is MEASURED rather than asserted. A token is bounded by core.MaxTokenLen under a grammar
-// containing no character JSON has to escape, and a hash is exactly 64 hex characters, so an
-// entry has a fixed worst case and a whole manifest has one too — roughly a forty-eighth of the
-// default 1 MiB per-message ceiling at the DEFAULT fence ceiling of 100, and about 82% of it at
-// governance.MaxGeoFenceCeiling, the most any tier may grant. That second figure is the one the
-// startup warning is measured against, because it is what the instance must survive.
-//
-// 🔑 NO BYTE COUNT IS QUOTED HERE ON PURPOSE. MaxGeoFenceSetManifestBytes() builds the worst
-// case and measures it, and that function is the authority; an earlier draft of this comment
-// named a figure derived by hand and was wrong by six bytes within a day of being written. A
-// number in prose cannot be re-derived when a constant moves, which is exactly when it matters.
-//
-// It is ONE type serving two seams — the fence-set fact and the geoFenceSetManifest /
-// currentGeoFenceSetManifest doors — deliberately, and the reasoning is the opposite of the
-// one that keeps GeoFenceSetSnapshot and storedGeoFenceSetSnapshot apart. Those two are
-// separate because they describe the same fence set at DIFFERENT levels of resolution, so a
-// caller could marshal the wrong one and produce a document that looks correct until the
-// archive it should have referenced is needed. A manifest is the same information on both
-// seams; splitting it would create exactly the drift the split is supposed to prevent.
-type GeoFenceSetManifest struct {
-	// Version is the fence-set version this manifest describes. It is what a resolved
-	// location event is stamped with, and the key a consumer files the set under.
-	Version int32 `json:"version"`
-	// Fences names each fence and the content address of its geometry, ordered by token
-	// (the mint path orders them, so a manifest is a function of the fence set alone).
-	Fences []GeoFenceManifestEntry `json:"fences"`
-	// MintedAt is when the change that minted this version committed. It is carried for
-	// operator diagnosis — how old is the set this engine is holding? — and containment
-	// never reads it.
-	MintedAt time.Time `json:"mintedAt"`
-}
-
-// GeoFenceManifestEntry is one fence inside a manifest: the token a rule names it by, and
-// the content address under which its geometry is stored.
-//
-// 🔴 AN ENTRY WHOSE HASH THE HOLDER CANNOT RESOLVE MUST BECOME A FENCE CARRYING AN ERROR,
-// NEVER A FENCE THAT IS ABSENT. Absence is already meaningful — a rule naming a fence the
-// set does not contain is a distinct, reported condition — so a body that failed to arrive,
-// dropped silently, reads downstream as "this fence does not exist here" and containment
-// answers "outside" for a device that is inside. That is the one failure mode splitting the
-// geometry out of the fact introduces, and it is the consumer's job to close.
-type GeoFenceManifestEntry struct {
-	Token string `json:"token"`
-	Hash  string `json:"hash"`
-}
-
 // GeoFenceGeometryDocument is one archived geometry document and the content address it is
 // filed under — what the geoFenceGeometry door answers with, and what a holder of a manifest
 // resolves its entries through.
@@ -444,22 +367,6 @@ type GeoFenceGeometryBlob struct {
 
 	// Document is the canonical geometry envelope (kind + GeoJSON geometry), verbatim.
 	Document datatypes.JSON `gorm:"not null"`
-}
-
-// GeoFenceGeometryHash is the content address of a canonical geometry document.
-//
-// 🔴 HASH WHAT THE DATABASE HANDS BACK, NEVER WHAT THE AUTHOR WROTE. jsonb is not a byte
-// store: it parses each number and reprints it with numeric_out, so the request text and
-// the stored text are different lengths and the difference is unbounded (see
-// MaxGeoFenceGeometryBytes for the measurements). Canonicalising before storing is what
-// makes the stored form stable and predictable, but it does not make it EQUAL to the
-// request text — separator spacing alone differs. The mint path hashes the geometry it
-// just read out of geo_fences, and stores the blob from those same bytes, so an address
-// and the document it names can never disagree. Hashing authored text instead would
-// compute an address nothing is stored at, and the miss would look like a lost fence.
-func GeoFenceGeometryHash(document []byte) string {
-	sum := sha256.Sum256(document)
-	return hex.EncodeToString(sum[:])
 }
 
 // storedGeoFenceSetSnapshot is the ON-DISK shape of GeoFenceSetVersion.Snapshot: fences

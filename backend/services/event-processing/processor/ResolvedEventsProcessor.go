@@ -264,6 +264,10 @@ type ResolvedEventsProcessor struct {
 	// with no globals read across goroutines. Required whenever Lease is set.
 	Gate *TermGate
 
+	// ValidateTopology runs under the singleton lease before any term reads state
+	// or admits facts. Main installs the durable fresh-install-only topology check.
+	ValidateTopology func(context.Context) error
+
 	// RuleUpdatesReader is the durable consumer of device-management's published-rule fact
 	// stream (ADR-051 slice 4b-3). When set, a goroutine drains it, persists each fact's rules
 	// to the durable projection (RuleStore) and marshals the compiled rules onto the

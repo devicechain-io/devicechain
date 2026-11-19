@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -32,7 +32,7 @@ type slowCountingNotifier struct {
 	total  int
 }
 
-func (n *slowCountingNotifier) Notify(_ context.Context, event *dmmodel.AlarmStateChangeEvent) error {
+func (n *slowCountingNotifier) Notify(_ context.Context, event *dmcontract.AlarmStateChangeEvent) error {
 	time.Sleep(n.delay)
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -109,8 +109,8 @@ func TestAlarmBacklogIsDispatchedOnce(t *testing.T) {
 	require.NoError(t, err)
 	tenantCtx := core.WithTenant(context.Background(), "acme")
 	for i := 0; i < alarms; i++ {
-		body, err := dmproto.MarshalAlarmStateChangeEvent(&dmmodel.AlarmStateChangeEvent{
-			EventType: dmmodel.AlarmEventRaised, AlarmToken: fmt.Sprintf("alarm-%03d", i),
+		body, err := dmproto.MarshalAlarmStateChangeEvent(&dmcontract.AlarmStateChangeEvent{
+			EventType: dmcontract.AlarmEventRaised, AlarmToken: fmt.Sprintf("alarm-%03d", i),
 			State: "ACTIVE", Severity: "CRITICAL", OccurredTime: time.Now(), RaisedTime: time.Now(),
 		})
 		require.NoError(t, err)

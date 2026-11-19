@@ -124,6 +124,7 @@ backend/services/event-sources/processor/contract_test.go
 backend/services/event-sources/processor/http_integration_test.go
 backend/services/event-sources/processor/integration_marks_test.go
 backend/services/lwm2m-ingest/downlink/documents_test.go
+backend/services/mcp/server/alarm_suppression_test.go
 backend/services/mcp/server/documents_test.go
 backend/services/notification-management/processor/alarm_lookup_wire_test.go
 backend/services/notification-management/processor/documents_test.go
@@ -148,6 +149,7 @@ backend/sims/dc-simulator/sim/dash_sample_test.go
 backend/sims/dc-simulator/sim/dashboard_fixture_test.go
 backend/sims/dc-simulator/sim/documents_test.go
 backend/sims/dc-simulator/sim/handshake_mirror_test.go
+backend/sims/dc-simulator/sim/harborpulse_scene_test.go
 backend/sims/dc-simulator/sim/load_test.go
 backend/sims/dc-simulator/sim/nightshift_test.go
 backend/sims/dc-simulator/sim/sitepulse_dashboard_test.go

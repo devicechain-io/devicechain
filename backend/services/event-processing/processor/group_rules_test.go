@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
@@ -72,7 +72,7 @@ func TestGroupRuleFacts(t *testing.T) {
 	js, err := r.b.nc.JetStream()
 	require.NoError(t, err)
 	publish := func(tenant, token, def string) {
-		m := factMsg(t, 1, tenant, "p@1", &fakeAck{}, dmmodel.PublishedDetectionRule{Token: token, Definition: def})
+		m := factMsg(t, 1, tenant, "p@1", &fakeAck{}, dmcontract.PublishedDetectionRule{Token: token, Definition: def})
 		_, err := js.Publish(messaging.ScopedSubject(r.b.instance, tenant, streams.DetectionRulesPublished), m.Value)
 		require.NoError(t, err)
 	}
@@ -122,7 +122,7 @@ func TestGroupRuleFacts(t *testing.T) {
 	legacy := newTestProcessor(r.store, nil, 10)
 	legacy.ruleUpdates = make(chan ruleUpdate, 4)
 	for _, tenant := range []string{"other", "acme"} {
-		require.True(t, legacy.handleRuleFact(factMsg(t, 1, tenant, "p@1", &fakeAck{}, dmmodel.PublishedDetectionRule{Token: "r", Definition: validFactRule}), true))
+		require.True(t, legacy.handleRuleFact(factMsg(t, 1, tenant, "p@1", &fakeAck{}, dmcontract.PublishedDetectionRule{Token: "r", Definition: validFactRule}), true))
 		legacy.engine = detectcore.NewEngine(nil, 0)
 		legacy.applyRuleUpdate(receiveRuleUpdate(t, legacy))
 	}
@@ -134,7 +134,7 @@ func TestGroupRulePlacementRefuses(t *testing.T) {
 	router.other.Store(1)
 	r := newGroupRig(t, router)
 	p0, p1 := routedRuleFixture(t, r)
-	compiled, failures := runtime.CompilePublishedRules("other", "p@1", []dmmodel.PublishedDetectionRule{{Token: "r", Definition: deadRule}})
+	compiled, failures := runtime.CompilePublishedRules("other", "p@1", []dmcontract.PublishedDetectionRule{{Token: "r", Definition: deadRule}})
 	require.Zero(t, failures)
 	for _, p := range []*ResolvedEventsProcessor{p0, p1} {
 		require.NoError(t, p.restore(context.Background()))
@@ -152,7 +152,7 @@ func TestGroupRulePlacementRefuses(t *testing.T) {
 	require.Error(t, p0.pctx().Err(), "placement failure must cancel the shared term")
 	require.ErrorContains(t, p1.prepareGroupRules(context.Background()), "frozen placement")
 	a := &fakeAck{}
-	require.False(t, p0.handleRuleFact(factMsg(t, 2, "other", "p@2", a, dmmodel.PublishedDetectionRule{Token: "r", Definition: validFactRule}), true))
+	require.False(t, p0.handleRuleFact(factMsg(t, 2, "other", "p@2", a, dmcontract.PublishedDetectionRule{Token: "r", Definition: validFactRule}), true))
 	require.Zero(t, a.acks, "an ownership refusal must leave the fact unacked")
 	// Mutable views may share only the same durable projection set.
 	p0.ruleRouting, p1.ruleRouting = nil, nil
@@ -180,7 +180,7 @@ func TestGroupRuleSupervisorLiveFacts(t *testing.T) {
 	require.NoError(t, err)
 	// Downtime facts must be installed before replay in BOTH groups, including g0.
 	for g, tenant := range []string{"acme", "other"} {
-		m := factMsg(t, 1, tenant, "p@1", &fakeAck{}, dmmodel.PublishedDetectionRule{Token: "startup", Definition: deadRule})
+		m := factMsg(t, 1, tenant, "p@1", &fakeAck{}, dmcontract.PublishedDetectionRule{Token: "startup", Definition: deadRule})
 		_, err := js.Publish(messaging.ScopedSubject(r.b.instance, tenant, streams.DetectionRulesPublished), m.Value)
 		require.NoError(t, err)
 		ev, err := resolvedevent.UnmarshalResolvedEvent(resolvedBytes(t, testBase))
@@ -202,7 +202,7 @@ func TestGroupRuleSupervisorLiveFacts(t *testing.T) {
 				}
 			}
 			for _, tenant := range []string{"other", "acme"} {
-				m := factMsg(t, 1, tenant, "p@1", &fakeAck{}, dmmodel.PublishedDetectionRule{Token: string(rune('a' + term)), Definition: deadRule})
+				m := factMsg(t, 1, tenant, "p@1", &fakeAck{}, dmcontract.PublishedDetectionRule{Token: string(rune('a' + term)), Definition: deadRule})
 				_, err := js.Publish(messaging.ScopedSubject(r.b.instance, tenant, streams.DetectionRulesPublished), m.Value)
 				require.NoError(t, err)
 			}
@@ -231,7 +231,7 @@ func TestGroupPublishRefusesAMoveMidPass(t *testing.T) {
 	router := &movingRuleRouter{}
 	r := newGroupRig(t, router)
 	p0, _ := routedRuleFixture(t, r)
-	compiled, failures := runtime.CompilePublishedRules("other", "p@1", []dmmodel.PublishedDetectionRule{{Token: "r", Definition: deadRule}})
+	compiled, failures := runtime.CompilePublishedRules("other", "p@1", []dmcontract.PublishedDetectionRule{{Token: "r", Definition: deadRule}})
 	require.Zero(t, failures)
 	require.NoError(t, p0.restore(context.Background()))
 	p0.applyRuleUpdate(ruleUpdate{upserts: compiled})

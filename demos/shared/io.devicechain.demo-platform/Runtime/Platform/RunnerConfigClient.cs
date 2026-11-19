@@ -19,14 +19,19 @@ namespace DeviceChain.Demos.Platform
         readonly SynchronizationContext main;
         readonly string runnerUrl;
         readonly LiveSettings expect;
+        readonly RunnerUse use;
 
-        public RunnerConfigClient(LiveSettings settings)
+        public RunnerConfigClient(LiveSettings settings) : this(settings, RunnerUse.DevicePlane) { }
+
+        /// <param name="use">What the player does with the platform; see <see cref="RunnerUse"/>.</param>
+        public RunnerConfigClient(LiveSettings settings, RunnerUse use)
         {
             if (settings == null) throw new ArgumentNullException(nameof(settings));
             main = SynchronizationContext.Current
                    ?? throw new InvalidOperationException("RunnerConfigClient must be constructed on the Unity main thread");
             runnerUrl = settings.RunnerUrl.TrimEnd('/') + "/config.json";
             expect = settings;
+            this.use = use;
         }
 
         /// <summary>GET and validate. A transport failure is a failed result, not an exception.</summary>
@@ -58,7 +63,7 @@ namespace DeviceChain.Demos.Platform
                         if (req.result != UnityWebRequest.Result.Success)
                             tcs.TrySetResult(Parsed<RunnerConfig>.Fail($"cannot reach the runner at {runnerUrl}: {req.error}"));
                         else
-                            tcs.TrySetResult(RunnerConfigParser.Parse(req.downloadHandler.text, expect));
+                            tcs.TrySetResult(RunnerConfigParser.Parse(req.downloadHandler.text, expect, use));
                     }
                     catch (Exception e)
                     {
