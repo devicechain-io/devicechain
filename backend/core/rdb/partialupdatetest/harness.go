@@ -113,6 +113,14 @@ type Family[A any] struct {
 }
 
 // Suite is everything one service supplies to Run.
+//
+// ExternallyDriven names request fields no harness family can drive, but dedicated
+// tests do. It is suite-level so the reader sees ONE deliberate exemption, rather
+// than N per-family limitations each claiming another family supplies the coverage.
+// Keys are "RequestTypeName.field" (the Go struct name, with a case-insensitive field);
+// reasons must name the tests that drive it. Every family using that request type
+// must limit the field, and none may declare it: an exemption that outlives its gap
+// fails rather than silently hiding coverage that has moved back into the harness.
 type Suite[A any] struct {
 	// NewApi builds a fresh Api over a throwaway database migrated for the given tables.
 	// NewSQLiteDB does the database half; the service wraps it in its own Api type.
@@ -120,7 +128,8 @@ type Suite[A any] struct {
 	// Context is the tenant context the families run under. See TenantContext.
 	Context func() context.Context
 	// Families is the registry. Converting the next family is adding a row to it.
-	Families []Family[A]
+	Families         []Family[A]
+	ExternallyDriven map[string]string
 
 	// CreateWithToken attempts to CREATE some entity of this service's under the given
 	// token, returning the API's error unchanged. It is what FixtureIsAsStrictAsProduction
@@ -158,6 +167,7 @@ func Run[A any](t *testing.T, s Suite[A]) {
 	t.Run("ARequiredFieldRefusesAnExplicitNull", func(t *testing.T) { aRequiredFieldRefusesAnExplicitNull(t, s) })
 	t.Run("UnknownReferenceRefusesTheWholeUpdate", func(t *testing.T) { unknownReferenceRefusesTheWholeUpdate(t, s) })
 	t.Run("EveryRequestFieldIsDeclared", func(t *testing.T) { everyRequestFieldIsDeclared(t, s) })
+	t.Run("EveryRequestFieldIsDriven", func(t *testing.T) { everyRequestFieldIsDriven(t, s) })
 	t.Run("FixtureIsAsStrictAsProduction", func(t *testing.T) { fixtureIsAsStrictAsProduction(t, s) })
 }
 
