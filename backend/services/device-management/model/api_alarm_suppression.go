@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// CreateAlarmSuppressionWindow is internal only; no transport or alarm path calls it.
+// CreateAlarmSuppressionWindow validates and authorizes the complete window.
 // Server-owned fields on the input are ignored.
 func (api *Api) CreateAlarmSuppressionWindow(ctx context.Context, input *AlarmSuppressionWindow) (*AlarmSuppressionWindow, error) {
 	if err := ValidateAlarmSuppression(input); err != nil {
@@ -212,51 +212,7 @@ func (api *Api) UpdateAlarmSuppressionWindow(ctx context.Context, token string, 
 	if r == nil {
 		return nil, suppressionInvalid("update is required")
 	}
-	return api.mutateSuppression(ctx, token, func(w *AlarmSuppressionWindow) error {
-		if r.Name != nil {
-			w.Name = *r.Name
-		}
-		if r.Description != nil {
-			w.Description = *r.Description
-		}
-		if r.Metadata != nil {
-			w.Metadata = *r.Metadata
-		}
-		if r.Reason != nil {
-			w.Reason = *r.Reason
-		}
-		if r.Targets != nil {
-			w.Targets = *r.Targets
-		}
-		if r.AlarmKeys != nil {
-			w.AlarmKeys = *r.AlarmKeys
-		}
-		if r.BypassSeverity != nil {
-			w.BypassSeverity = *r.BypassSeverity
-		}
-		if r.Kind != nil {
-			w.Kind = *r.Kind
-		}
-		if r.StartTime != nil {
-			w.StartTime = *r.StartTime
-		}
-		if r.EndTime != nil {
-			w.EndTime = *r.EndTime
-		}
-		if r.Timezone != nil {
-			w.Timezone = *r.Timezone
-		}
-		if r.Slots != nil {
-			w.Slots = *r.Slots
-		}
-		if r.ValidFrom != nil {
-			w.ValidFrom = *r.ValidFrom
-		}
-		if r.ValidUntil != nil {
-			w.ValidUntil = *r.ValidUntil
-		}
-		return nil
-	}, false, false)
+	return api.mutateSuppression(ctx, token, r.apply, false, false)
 }
 
 func (api *Api) EndAlarmSuppressionWindow(ctx context.Context, token string) (*AlarmSuppressionWindow, error) {

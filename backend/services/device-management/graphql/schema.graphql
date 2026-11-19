@@ -2005,6 +2005,10 @@ type Alarm implements Model & TokenReference & MetadataEntity {
     raisedTime, so two cycles of one alarm raised at the same instant share one disposition.
     """
     disposition: AlarmDisposition
+    """Live suppression now; null for cleared alarms, non-device originators or alarms with no matching window."""
+    suppression: AlarmSuppression
+    """Window token stamped when the current cycle began, or null. Preserved even after the window ends or is deleted."""
+    raisedDuringSuppression: String
 }
 
 """
@@ -2108,6 +2112,8 @@ input AlarmAnchor {
 # Criteria used when searching for alarms. All facets are optional and AND together;
 # originator restricts to a single entity by its (originatorType, originatorToken).
 input AlarmSearchCriteria {
+    """True selects current cycles raised under suppression; false selects cycles without a stamp. Omit for either."""
+    raisedDuringSuppression: Boolean
     pageNumber: Int!
     pageSize: Int!
     originatorType: String
@@ -6672,6 +6678,28 @@ type Query {
         """(Preview: may change in a minor release.) The proposal's token."""
         token: String!
     ): AgentProposal!
+    """List whole visible windows with computed status and target filters. Requires alarm:read."""
+    alarmSuppressionWindows(
+        """Filters and pagination."""
+        criteria: AlarmSuppressionWindowSearchCriteria!
+    ): AlarmSuppressionWindowSearchResults!
+    """Read up to one hundred visible windows by token; unknown or hidden tokens are omitted."""
+    alarmSuppressionWindowsByToken(
+        """Window tokens."""
+        tokens: [String!]!
+    ): [AlarmSuppressionWindow!]!
+    """Preview visible windows matching current device facts and time, ignoring alarm keys and bypass severity."""
+    alarmSuppressionsForDevice(
+        """Visible device token."""
+        deviceToken: String!
+        """RFC 3339 instant; omit for now."""
+        at: String
+    ): [AlarmSuppressionWindow!]!
+    """Live suppression for up to two hundred alarm tokens. Requires alarm:read; unknown and hidden alarms are omitted."""
+    alarmSuppressionStatus(
+        """Alarm tokens, at most two hundred."""
+        tokens: [String!]!
+    ): [AlarmSuppressionStatus!]!
 }
 
 # Contains mutations executed against model.
@@ -7579,6 +7607,28 @@ type Mutation {
         """The token of the device or asset."""
         token: String!
     ): Boolean!
+    """Create a window. Requires alarm:write; broad reach additionally requires notification:write."""
+    createAlarmSuppressionWindow(
+        """Window declaration."""
+        request: AlarmSuppressionWindowCreateRequest!
+    ): AlarmSuppressionWindow!
+    """Edit a whole visible window, authorizing both existing and resulting reach."""
+    updateAlarmSuppressionWindow(
+        """Token of the window to edit."""
+        token: String!
+        """Partial edit with omitted, null and value states."""
+        request: AlarmSuppressionWindowUpdateRequest!
+    ): AlarmSuppressionWindow!
+    """End a whole visible window now, recording the caller's subject. Requires the existing window's write authorities."""
+    endAlarmSuppressionWindow(
+        """Token of the window to end."""
+        token: String!
+    ): AlarmSuppressionWindow!
+    """Delete a whole visible window without removing cycle history. Requires the existing window's write authorities."""
+    deleteAlarmSuppressionWindow(
+        """Token of the window to delete."""
+        token: String!
+    ): Boolean!
 }
 
 """Why an alarm ended, when it was cleared for a lifecycle reason."""
@@ -7621,6 +7671,12 @@ type AlarmEvent {
     # The event time that drove the transition (measurement time, or operation time
     # for an operator ack/clear).
     occurredTime: String!
+    """Live suppression deadline carried by the event, as RFC 3339; null when absent."""
+    suppressedUntil: String
+    """Live window token carried by the event; null when absent."""
+    suppressionWindowToken: String
+    """Window token stamped at this cycle's raise; null when absent."""
+    raisedDuringSuppression: String
 }
 
 # Live alarm stream (ADR-037). Pushes each alarm transition to the subscriber as it
@@ -7649,6 +7705,187 @@ type Subscription {
         """
         anchor: AlarmAnchor
     ): AlarmEvent!
+}
+
+"""How a suppression window opens."""
+enum AlarmSuppressionKind {
+    """A single bounded interval."""
+    ONE_SHOT
+    """Weekly openings in an IANA time zone."""
+    RECURRING
+}
+"""One population of devices covered by a window."""
+type AlarmSuppressionTarget {
+    """DEVICE, DEVICE_TYPE, ENTITY_GROUP, AREA, ASSET, CUSTOMER or TENANT."""
+    type: String!
+    """Target token; null only for TENANT."""
+    token: String
+}
+"""One population of devices to cover."""
+input AlarmSuppressionTargetInput {
+    """DEVICE, DEVICE_TYPE, ENTITY_GROUP, AREA, ASSET, CUSTOMER or TENANT."""
+    type: String!
+    """Target token; omit for TENANT."""
+    token: String
+}
+"""A half-open interval in which a window suppresses paging."""
+type AlarmSuppressionInterval {
+    """Inclusive opening instant, as an RFC 3339 timestamp."""
+    start: String!
+    """Exclusive closing instant, as an RFC 3339 timestamp."""
+    end: String!
+}
+"""An operator-declared window that holds paging while alarms continue to track conditions."""
+type AlarmSuppressionWindow implements Model & TokenReference & NamedEntity & MetadataEntity {
+    """Server-assigned numeric identifier."""
+    id: ID!
+    """Stable identifier within the tenant."""
+    token: String!
+    """Human-readable name, or null."""
+    name: String
+    """Free-text description, or null."""
+    description: String
+    """Caller-defined metadata as JSON, or null."""
+    metadata: String
+    """Creation instant, as an RFC 3339 timestamp."""
+    createdAt: String
+    """Last write instant, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """Deletion instant, as an RFC 3339 timestamp; null for live records."""
+    deletedAt: String
+    """Required explanation for holding pages."""
+    reason: String!
+    """Whole target list; windows are visible only when every target is visible."""
+    targets: [AlarmSuppressionTarget!]!
+    """Alarm keys to suppress; an empty list matches every key."""
+    alarmKeys: [String!]!
+    """Alarms at or above this severity bypass the window; null disables bypass."""
+    bypassSeverity: String
+    """Single interval or recurring weekly schedule."""
+    kind: AlarmSuppressionKind!
+    """Inclusive ONE_SHOT start, as an RFC 3339 timestamp."""
+    startTime: String
+    """Exclusive ONE_SHOT end, as an RFC 3339 timestamp."""
+    endTime: String
+    """IANA time zone for RECURRING openings."""
+    timezone: String
+    """Weekly slots as a JSON array of day, start and durationMinutes."""
+    slots: String
+    """Optional inclusive recurrence bound, as an RFC 3339 timestamp."""
+    validFrom: String
+    """Optional exclusive recurrence bound, as an RFC 3339 timestamp."""
+    validUntil: String
+    """Server-recorded early end, as an RFC 3339 timestamp."""
+    endedAt: String
+    """Subject that ended the window, or null."""
+    endedBy: String
+    """Subject that created the window, or null."""
+    createdBy: String
+    """SCHEDULED, ACTIVE or ENDED, computed now. Clients must tolerate new values."""
+    status: String!
+    """Upcoming openings, including the current opening; at most twenty."""
+    openings(
+        """Positive number of intervals to return, capped at twenty."""
+        limit: Int = 5
+    ): [AlarmSuppressionInterval!]!
+}
+"""The live window currently holding an alarm's pages."""
+type AlarmSuppression {
+    """The window, or null when it is deleted or outside the caller's whole-window visibility."""
+    window: AlarmSuppressionWindow
+    """Window token, available for a visible alarm even when the window object is hidden."""
+    windowToken: String!
+    """Exclusive live deadline, as an RFC 3339 timestamp."""
+    until: String!
+}
+"""Live suppression for one visible alarm."""
+type AlarmSuppressionStatus {
+    """Token of the visible alarm."""
+    alarmToken: String!
+    """Current suppression, or null when paging is not held."""
+    suppression: AlarmSuppression
+}
+"""Declare a paging hold. Creator identity and early-end fields are server-owned."""
+input AlarmSuppressionWindowCreateRequest {
+    """Stable identifier for the new window."""
+    token: String!
+    """Human-readable name."""
+    name: String
+    """Free-text description."""
+    description: String
+    """Caller-defined metadata as JSON."""
+    metadata: String
+    """Required explanation for holding pages."""
+    reason: String!
+    """One to twenty target populations."""
+    targets: [AlarmSuppressionTargetInput!]!
+    """Up to twenty alarm keys; empty or omitted matches every key."""
+    alarmKeys: [String!]
+    """Severity at or above which alarms bypass this window."""
+    bypassSeverity: String
+    """Single interval or recurring schedule."""
+    kind: AlarmSuppressionKind!
+    """Inclusive ONE_SHOT start, as an RFC 3339 timestamp."""
+    startTime: String
+    """Exclusive ONE_SHOT end, as an RFC 3339 timestamp; at most thirty-one days after start."""
+    endTime: String
+    """IANA time zone for RECURRING openings."""
+    timezone: String
+    """RECURRING weekly slots as a JSON array of day, start and durationMinutes."""
+    slots: String
+    """Inclusive recurrence bound, as an RFC 3339 timestamp."""
+    validFrom: String
+    """Exclusive recurrence bound, as an RFC 3339 timestamp."""
+    validUntil: String
+}
+"""Partial edit: omit to keep, null to clear nullable fields, value to replace. Required fields refuse null."""
+input AlarmSuppressionWindowUpdateRequest {
+    """Human-readable name; null clears."""
+    name: String
+    """Free-text description; null clears."""
+    description: String
+    """Metadata JSON; null clears."""
+    metadata: String
+    """Required explanation; null is refused."""
+    reason: String
+    """Replace all targets; null and empty lists are refused."""
+    targets: [AlarmSuppressionTargetInput!]
+    """Replace all keys; null or an empty list matches every key."""
+    alarmKeys: [String!]
+    """Bypass severity; null disables bypass."""
+    bypassSeverity: String
+    """Schedule kind; null is refused. Change schedule fields together when switching kinds."""
+    kind: AlarmSuppressionKind
+    """ONE_SHOT start as RFC 3339; null clears only when the merged kind permits it."""
+    startTime: String
+    """ONE_SHOT end as RFC 3339; null clears only when the merged kind permits it."""
+    endTime: String
+    """RECURRING IANA time zone; null clears only when the merged kind permits it."""
+    timezone: String
+    """RECURRING slots JSON; null clears only when the merged kind permits it."""
+    slots: String
+    """Inclusive recurrence bound as RFC 3339; null clears."""
+    validFrom: String
+    """Exclusive recurrence bound as RFC 3339; null clears."""
+    validUntil: String
+}
+"""Search visible whole windows before computing pagination totals."""
+input AlarmSuppressionWindowSearchCriteria {
+    """One-based page number."""
+    pageNumber: Int!
+    """Maximum records per page."""
+    pageSize: Int!
+    """SCHEDULED, ACTIVE or ENDED; omit for every status."""
+    status: String
+    """Match any target naming this token."""
+    targetToken: String
+}
+"""A page of visible suppression windows."""
+type AlarmSuppressionWindowSearchResults {
+    """Windows on this page."""
+    results: [AlarmSuppressionWindow!]!
+    """Page bounds and total visible matching records."""
+    pagination: SearchResultsPagination!
 }
 
 schema {

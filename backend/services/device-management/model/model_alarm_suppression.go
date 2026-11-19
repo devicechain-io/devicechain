@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"time"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -22,7 +23,7 @@ type AlarmSuppressionTarget struct {
 	Token string `json:"token"`
 }
 
-// AlarmSuppressionWindow is an inert, operator-declared paging overlay (ADR-085).
+// AlarmSuppressionWindow is an operator-declared paging overlay (ADR-085).
 // Targets and keys are whole JSON documents; no SQL predicate inspects their contents.
 type AlarmSuppressionWindow struct {
 	gorm.Model
@@ -69,22 +70,21 @@ func (AlarmSuppressionWindow) DefaultOrder() string {
 	return "alarm_suppression_windows.created_at DESC, alarm_suppression_windows.token ASC"
 }
 
-// AlarmSuppressionUpdateRequest is partial: nil fields are omitted; a pointer to a
-// nullable value (including sql.NullString or *time.Time) can explicitly clear it.
+// AlarmSuppressionUpdateRequest carries omitted, null and value separately.
 // Identity, anchors, version and end stamps are never caller input.
 type AlarmSuppressionUpdateRequest struct {
-	Name           *sql.NullString
-	Description    *sql.NullString
-	Metadata       **datatypes.JSON
-	Reason         *string
-	Targets        *[]AlarmSuppressionTarget
-	AlarmKeys      *[]string
-	BypassSeverity *sql.NullString
-	Kind           *string
-	StartTime      **time.Time
-	EndTime        **time.Time
-	Timezone       *sql.NullString
-	Slots          *datatypes.JSON
-	ValidFrom      **time.Time
-	ValidUntil     **time.Time
+	Name           dcgraphql.OptionalString
+	Description    dcgraphql.OptionalString
+	Metadata       dcgraphql.OptionalString
+	Reason         dcgraphql.OptionalString
+	Targets        OptionalAlarmSuppressionTargets
+	AlarmKeys      dcgraphql.OptionalStringList
+	BypassSeverity dcgraphql.OptionalString
+	Kind           OptionalAlarmSuppressionKind
+	StartTime      dcgraphql.OptionalString
+	EndTime        dcgraphql.OptionalString
+	Timezone       dcgraphql.OptionalString
+	Slots          dcgraphql.OptionalString
+	ValidFrom      dcgraphql.OptionalString
+	ValidUntil     dcgraphql.OptionalString
 }

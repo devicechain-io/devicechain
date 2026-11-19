@@ -396,3 +396,25 @@ func (r *AlarmEventResolver) RaisedTime() *string { return util.FormatTime(r.E.R
 func (r *AlarmEventResolver) OccurredTime() string {
 	return r.E.OccurredTime.Format(time.RFC3339Nano)
 }
+
+// SuppressedUntil preserves the precision carried by the event.
+func (r *AlarmEventResolver) SuppressedUntil() *string {
+	if r.E.SuppressedUntil == nil {
+		return nil
+	}
+	return util.FormatTime(*r.E.SuppressedUntil)
+}
+func (r *AlarmEventResolver) SuppressionWindowToken() *string {
+	if r.E.SuppressionWindowToken == "" {
+		return nil
+	}
+	token := r.E.SuppressionWindowToken
+	return &token
+}
+func (r *AlarmEventResolver) RaisedDuringSuppression() *string {
+	if r.E.RaisedDuringSuppressionToken == "" {
+		return nil
+	}
+	token := r.E.RaisedDuringSuppressionToken
+	return &token
+}
