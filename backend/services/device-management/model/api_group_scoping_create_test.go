@@ -100,7 +100,7 @@ func TestCreateEnrollImport(t *testing.T) {
 
 func TestCreateEnrollProvisioning(t *testing.T) {
 	f := newProvFixture(t)
-	require.NoError(t, f.api.RDB.Database.WithContext(core.WithSystemContext(f.ctx)).AutoMigrate(&EntityAttribute{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupFacetRef{}, &EntityGroupMembership{}, &PendingOwnershipFact{}, &EntityRelationship{}, &EntityRelationshipType{}))
+	require.NoError(t, f.api.RDB.Database.WithContext(core.WithSystemContext(f.ctx)).AutoMigrate(&EntityAttribute{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupFacetRef{}, &EntityGroupMembership{}, &PendingOwnershipFact{}, &EntityRelationship{}, &EntityRelationshipType{}, &AlarmSuppressionWindow{}))
 	g, v := registerCreateGroup(t, f.api, f.ctx, "device", `!("retired" in attr)`, true)
 	f.profile("pp", ProvisionAllowNew)
 	result, err := f.register("pp", "SN-fresh", material(1))

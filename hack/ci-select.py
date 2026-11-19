@@ -207,6 +207,8 @@ READERS = [
     # (documents_test.go validateDocuments: ../../<target>/graphql).
     ("backend/services/ai-inference", "inference", ["backend/services/user-management/graphql/**"], [], "inference/documents_test.go"),
     ("backend/services/notification-management", "processor", ["backend/services/device-management/graphql/**"], [], "processor/documents_test.go"),
+    # suppression_rolling_matrix_test.go:77 — the served device-management SDL, with alarmSuppressionStatus cut out to model an old server.
+    ("backend/services/notification-management", "processor", ["backend/services/device-management/graphql/schema.graphql"], [], "processor/suppression_rolling_matrix_test.go:77"),
     ("backend/services/event-sources", "adapter", [
         "backend/services/device-management/graphql/**",
         "backend/services/device-state/graphql/**",
@@ -294,6 +296,7 @@ IN_MODULE = {
     ("backend/services/event-processing", "internal/nldraft"): "reads inside its own module",
     ("backend/services/event-processing", "internal/nightshift"): "runtime.Caller root is its own module",
     ("backend/services/event-processing", "internal/rules"): "\"../../etc/passwd\" and ../replayinput are fixtures/in-module",
+    ("backend/services/event-processing", "processor"): "suppression_isolation_test.go walks \"..\", its own module root",
     ("backend/services/user-management", "identity"): "\"../\" is a refused-redirect fixture",
     ("backend/sims/dc-simulator", "cmd/nightshift-capture"): "a generator run by hand, never by a test",
     ("backend/sims/dc-simulator", "scenariosink"): "\"..\" is SMTP dot-stuffing in a DATA line; it reads no files",
