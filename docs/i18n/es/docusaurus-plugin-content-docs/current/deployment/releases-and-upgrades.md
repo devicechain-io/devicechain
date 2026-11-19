@@ -801,6 +801,41 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 Las tres versiones menores más recientes (`v1.7`, `v1.6` y `v1.5`) se documentan completas, de la más nueva a la más antigua. También se conservan más abajo las notas detalladas de `v0.27.0` a `v0.24.0`.
 
+### v1.7.1 — las actualizaciones y los comandos de campaña llegan solo a los dispositivos a los que iban dirigidos {#v171-upgrade}
+
+`v1.7.1` es una versión de parche y una actualización en el lugar desde `v1.7.0`: `dcctl install` para el clúster y luego un `dcctl upgrade` por cada instancia, como se describe en [Actualizaciones progresivas](#rolling-upgrades), con el `dcctl` de v1.7.1 y `--version v1.7.1`. `update-management` añade una migración en su primer arranque. La migración añade una columna que puede quedar vacía, de modo que los pods de `v1.7.0` siguen funcionando mientras avanza la actualización. Como en toda versión, no es posible volver a la versión anterior.
+
+```bash
+dcctl install local --version v1.7.1
+dcctl upgrade local devicechain --version v1.7.1 --dry-run
+dcctl upgrade local devicechain --version v1.7.1
+```
+
+Se aplica la [política de versiones y actualizaciones](./versioning-policy.md). Esta versión no cambia ninguna interfaz cubierta. Añade un código de rechazo y de omisión, `DEVICE_REPLACED`, al vocabulario de códigos existente.
+
+- [Antes de actualizar a v1.7.1](#v171-before-upgrade)
+- [Novedades de v1.7.1](#v171-whats-new)
+- [Los despliegues apuntan a los dispositivos con los que empezaron](#v171-rollout-identity)
+
+#### Antes de actualizar a v1.7.1 {#v171-before-upgrade}
+
+- **Termine la actualización antes de iniciar despliegues, y antes de eliminar y volver a crear dispositivos a los que apunta un despliegue en curso.** Mientras los pods antiguos y los nuevos coexisten durante la actualización progresiva, un pod de `v1.7.0` todavía puede iniciar o avanzar un despliegue a la manera antigua hasta que se sustituya.
+- `update-management` añade una migración que registra qué dispositivo es cada destino de un despliegue. Los despliegues iniciados antes de la actualización no tienen ese registro. Para sus dispositivos, `update-management` compara cuándo se creó cada dispositivo con cuándo empezó el despliegue (consulte [Los despliegues apuntan a los dispositivos con los que empezaron](#v171-rollout-identity)). Un dispositivo creado en los cinco minutos anteriores o posteriores al inicio del despliegue queda **retenido**: no se le indica que se actualice y el despliegue sigue en `RUNNING`. Si un despliegue sigue en curso con dispositivos en espera, abórtelo e inicie uno nuevo.
+
+#### Novedades de v1.7.1 {#v171-whats-new}
+
+- **La actualización asignada a un dispositivo recreado se mantiene.** Suponga que una solicitud de asignación consulta un dispositivo y que este se elimina después y se vuelve a crear con el mismo token. Esa solicitud ahora se rechaza con `DEVICE_REPLACED` y ya no sustituye la actualización del nuevo dispositivo. Antes, al nuevo dispositivo se le dejaba de ofrecer su actualización hasta que se le asignaba de nuevo.
+- **Los comandos de campaña vuelven a comprobar el grupo cuando se reintentan.** Cuando la creación del lote de una campaña falla por un motivo pasajero, los comandos se reintentan más tarde. Ahora se comprueban primero contra el grupo de la campaña: un dispositivo que salió del grupo entretanto se registra como `NOT_IN_GROUP` y no recibe ningún comando. Si no se puede leer el grupo, los comandos esperan. Si siguen esperando después del margen de retraso de la campaña, se registran como no enviados a tiempo.
+
+#### Los despliegues apuntan a los dispositivos con los que empezaron {#v171-rollout-identity}
+
+- `startUpdateRollout` ahora registra qué dispositivo es cada miembro del grupo, no solo su token. Un dispositivo creado más tarde con el mismo token es un dispositivo distinto: se omite con `DEVICE_REPLACED`, aunque esté en el grupo, y nunca se le indica que se actualice. Un miembro que sale del grupo mientras se inicia el despliegue no forma parte de él.
+- Cuando se elimina un dispositivo, un destino del despliegue que todavía espera a ese dispositivo se omite con `DEVICE_NOT_FOUND`.
+- Para los despliegues iniciados antes de v1.7.1:
+  - un dispositivo creado más de cinco minutos después del inicio del despliegue se omite con `DEVICE_REPLACED`;
+  - uno creado más de cinco minutos antes se actualiza como de costumbre;
+  - uno creado entre ambos momentos queda retenido, como se describe en [Antes de actualizar a v1.7.1](#v171-before-upgrade).
+
 ### v1.7.0 — las eliminaciones llegan a todos los servicios y las sesiones resisten las interrupciones {#v170-upgrade}
 
 `v1.7.0` es una actualización in situ desde `v1.6.0`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de v1.7.0 para ambos comandos** con OpenTofu o Terraform 1.10 o posterior, y proporciona a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. `device-management`, `ai-inference` y `update-management` añaden migraciones en su primer arranque, y la actualización solo avanza: no hay vuelta atrás a `v1.6.0`. Si vienes de `v1.5.x` o anterior, actualiza antes a través de cada versión menor intermedia, incluida `v1.6.x`, siguiendo las notas de cada versión con su propio `dcctl` y su `--version`: saltarse una versión menor no es una ruta probada (consulta [Rutas de actualización admitidas](./versioning-policy.md#upgrade-paths)). Para `v1.6.0`, son las [notas de `v1.6.0`](#v160-upgrade).
