@@ -192,6 +192,11 @@ func TestIntegrationTimeLeadingKeysApplyOverCompressedChunks(t *testing.T) {
 		require.NoError(t, sys.Raw(`SELECT count(*) FROM "event-management".`+table).Scan(&n).Error)
 		return n
 	}
+	// This test stops at the key migration, but the live writer also needs the
+	// watermark table. Apply its own DDL without advancing the chain under test.
+	for _, stmt := range entityDeletionWatermarksDDL {
+		require.NoError(t, sys.Exec(stmt).Error)
+	}
 	// Through the real writer, in the COMPRESSED range: the first delivery of a new event
 	// adds exactly one row to each table (so the "unchanged" below can see a change), and a
 	// redelivery adds nothing.

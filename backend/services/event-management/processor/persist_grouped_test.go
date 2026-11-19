@@ -157,15 +157,15 @@ func TestABatchWritesEachTableOncePerTenant(t *testing.T) {
 		wantE, wantM, wantA int64
 	}{
 		// probe, events, measurement_events, event_anchors; and the fence read.
-		{"one tenant, alternate ids", 64, uniform(64, true, fenceCostTenant), -1, 5, 1, 64, 192, 64},
-		{"one tenant, no alternate ids", 64, uniform(64, false, fenceCostTenant), -1, 4, 1, 64, 192, 64},
-		{"two tenants interleaved", 64, uniform(64, true, fenceCostTenant, "globex"), -1, 10, 2, 64, 192, 64},
+		{"one tenant, alternate ids", 64, uniform(64, true, fenceCostTenant), -1, 6, 1, 64, 192, 64},
+		{"one tenant, no alternate ids", 64, uniform(64, false, fenceCostTenant), -1, 5, 1, 64, 192, 64},
+		{"two tenants interleaved", 64, uniform(64, true, fenceCostTenant, "globex"), -1, 12, 2, 64, 192, 64},
 		// events, location_events, measurement_events, alert_events, event_anchors, fence.
-		{"one tenant, three kinds", 8, mixed(), -1, 6, 1, 8, 9, 8},
+		{"one tenant, three kinds", 8, mixed(), -1, 7, 1, 8, 9, 8},
 		// The batch is refused while its rows are built, before any SQL (0); dev-3 alone
 		// probes and is refused building (1); the other seven are written grouped (5).
-		{"a refused message", 8, uniform(8, true, fenceCostTenant), 3, 6, 1, 7, 21, 7},
-		{"control: a batch of one", 1, uniform(4, true, fenceCostTenant), -1, 20, 4, 4, 12, 4},
+		{"a refused message", 8, uniform(8, true, fenceCostTenant), 3, 7, 1, 7, 21, 7},
+		{"control: a batch of one", 1, uniform(4, true, fenceCostTenant), -1, 24, 4, 4, 12, 4},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newBatchRig(t, tc.maxBatch)
@@ -417,8 +417,8 @@ func TestARefusalInAOneEventGroupNeedsNoSecondPass(t *testing.T) {
 			if got := r.metric(t, metricFallbacks, "", ""); got != tc.wantFallbacks {
 				t.Errorf("fallbacks = %v; want %v", got, tc.wantFallbacks)
 			}
-			if lastAll != 5 {
-				t.Errorf("the seven were written again with %d statements; want 5 (grouped)", lastAll)
+			if lastAll != 6 {
+				t.Errorf("the seven were written again with %d statements; want 6 (grouped)", lastAll)
 			}
 			if got := r.reported(); len(got) != 1 || got[0].device != "dev-3" ||
 				got[0].reason != uint(resolvedevent.FailureReason_Invalid) {

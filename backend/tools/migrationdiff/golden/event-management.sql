@@ -6,6 +6,8 @@ ALTER TABLE ONLY "event-management".audit_events ALTER COLUMN id SET DEFAULT nex
 ALTER TABLE ONLY "event-management".calculated_backfills
  ADD CONSTRAINT calculated_backfills_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "event-management".calculated_backfills ALTER COLUMN id SET DEFAULT nextval('"event-management".calculated_backfills_id_seq'::regclass);
+ALTER TABLE ONLY "event-management".entity_deletion_watermarks
+ ADD CONSTRAINT entity_deletion_watermarks_pkey PRIMARY KEY (tenant_id, entity_type, entity_token);
 ALTER TABLE ONLY "event-management".event_management_migrations
  ADD CONSTRAINT event_management_migrations_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "event-management".events
@@ -34,6 +36,7 @@ CREATE FUNCTION analytics.reader_tenant() RETURNS text
 CREATE INDEX idx_audit_tenant_time ON "event-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_calculated_backfills_status_updated ON "event-management".calculated_backfills USING btree (status, updated_at);
 CREATE INDEX idx_calculated_backfills_tenant_profile ON "event-management".calculated_backfills USING btree (tenant_id, profile_token, created_at DESC);
+CREATE INDEX idx_entity_deletion_watermarks_resweep ON "event-management".entity_deletion_watermarks USING btree (resweep_after) WHERE (resweep_after IS NOT NULL);
 CREATE INDEX idx_event_anchors_lookup ON "event-management".event_anchors USING btree (tenant_id, anchor_type, anchor_token, occurred_time DESC);
 CREATE INDEX idx_events_processed_time_brin ON "event-management".events USING brin (processed_time);
 CREATE INDEX idx_events_tenant_device_time ON "event-management".events USING btree (tenant_id, device_token, occurred_time DESC);
@@ -121,6 +124,13 @@ CREATE TABLE "event-management".calculated_backfills (
  cancel_requested_at timestamp with time zone,
  CONSTRAINT chk_calculated_backfills_phase CHECK ((phase = ANY (ARRAY['FILL'::text, 'REFRESH'::text]))),
  CONSTRAINT chk_calculated_backfills_status CHECK ((status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text, 'SUCCEEDED'::text, 'CANCELLED'::text, 'FAILED'::text])))
+);
+CREATE TABLE "event-management".entity_deletion_watermarks (
+ tenant_id character varying(128) NOT NULL,
+ entity_type character varying(64) NOT NULL,
+ entity_token character varying(128) NOT NULL,
+ deleted_time timestamp with time zone NOT NULL,
+ resweep_after timestamp with time zone
 );
 CREATE TABLE "event-management".event_anchors (
  tenant_id character varying(128) NOT NULL,
