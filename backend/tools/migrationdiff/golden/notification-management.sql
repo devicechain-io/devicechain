@@ -170,7 +170,8 @@ CREATE TABLE "notification-management".notification_deferrals (
  occurred_time timestamp with time zone,
  release_at timestamp with time zone NOT NULL,
  attempts bigint DEFAULT 0 NOT NULL,
- event jsonb NOT NULL
+ event jsonb NOT NULL,
+ held_by_window character varying(128)
 );
 CREATE TABLE "notification-management".notification_management_migrations (
  id character varying(255) NOT NULL

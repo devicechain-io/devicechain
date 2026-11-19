@@ -114,13 +114,16 @@ func perChannelWorstCase(attempts int, timeout time.Duration) time.Duration {
 // attempted (so a redelivery can never double-send a channel that already
 // succeeded).
 type PolicyNotifier struct {
-	AlarmLookup  AlarmLookup
-	lookupErrors prometheus.Counter
-	api          *model.Api
-	store        secrets.SecretStore
-	adapters     map[string]ChannelAdapter
-	attempts     int
-	timeout      time.Duration
+	SuppressionLookup SuppressionLookup
+	suppression       *prometheus.CounterVec
+	oldestDue         prometheus.Gauge
+	AlarmLookup       AlarmLookup
+	lookupErrors      prometheus.Counter
+	api               *model.Api
+	store             secrets.SecretStore
+	adapters          map[string]ChannelAdapter
+	attempts          int
+	timeout           time.Duration
 
 	// budget is the whole-dispatch deadline one alarm is worth, defaulted from
 	// dispatchBudget by the constructor. It is a FIELD rather than the constant read
@@ -241,6 +244,8 @@ func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, 
 		refused:        metrics.deliveriesRefused,
 		lookupErrors:   metrics.escalationLookupErrors,
 		quiet:          metrics.quietHours,
+		suppression:    metrics.suppression,
+		oldestDue:      metrics.deferralOldestDue,
 		sliceExhausted: metrics.tenantSliceExhausted,
 	}
 }
@@ -346,11 +351,12 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 // lifecycle transition can also be stale for the row and change nothing). The held row is
 // what knows about that cycle, so it is resolved here directly, by event time.
 func (n *PolicyNotifier) resolveHeld(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
-	dropped, err := n.api.ResolveNotificationDeferrals(ctx, event.AlarmToken, event.OccurredTime)
+	dropped, suppressed, err := n.api.ResolveNotificationDeferralsWithAudit(ctx, event.AlarmToken, event.OccurredTime)
 	if err != nil {
 		return fmt.Errorf("dropping held notifications for a resolved alarm: %w", err)
 	}
 	n.countQuiet(quietDroppedResolved, int(dropped))
+	n.countSuppression("dropped_resolved", suppressed)
 	return nil
 }
 
@@ -472,9 +478,15 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		if err := n.api.DeferNotifications(dctx, held); err != nil {
 			return fmt.Errorf("holding notification for quiet hours: %w", err)
 		}
-		n.countQuiet(quietHeld, len(held))
+		for _, d := range held {
+			if d.HeldByWindow.Valid {
+				n.countSuppression("held", 1)
+			} else {
+				n.countQuiet(quietHeld, 1)
+			}
+		}
 		log.Debug().Str("tenant", tenant).Str("alarm", event.AlarmToken).Int("policies", len(held)).
-			Msg("Holding the notification for quiet hours; it is sent when the quiet stretch ends")
+			Msg("Holding the notification for quiet hours or an alarm suppression window; it is sent when the hold ends")
 	}
 
 	deliveries := n.plan(event, sendNow, state)
@@ -818,6 +830,9 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 
 	deliveries := n.planEscalation(state, policies, now, defaultMax)
 	if len(deliveries) == 0 {
+		return nil
+	}
+	if n.escalationSuppressed(ctx, state.AlarmToken, now) {
 		return nil
 	}
 	// Do not burn a tier when every destination already exhausted its timeout

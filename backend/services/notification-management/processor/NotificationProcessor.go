@@ -134,7 +134,9 @@ type NotifyMetrics struct {
 	// quietHours counts what quiet hours did, by outcome (see the quietOutcome constants):
 	// a notification held, a held one released, or a held one dropped and why. Read by the
 	// PolicyNotifier.
-	quietHours *prometheus.CounterVec
+	quietHours        *prometheus.CounterVec
+	suppression       *prometheus.CounterVec
+	deferralOldestDue prometheus.Gauge
 
 	// tenantSliceExhausted counts jobs that left alarms due after their slice.
 	tenantSliceExhausted prometheus.Counter
@@ -157,7 +159,13 @@ type NotifyMetrics struct {
 // callback is entered again — which any start retried after a failed one does — and
 // MustRegister panics on the duplicate.
 func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
+	suppression := ms.NewCounterVec("suppression_total", "Alarm suppression outcomes: held, rechecked, released, dropped_resolved or lookup_failed.", []string{"outcome"})
+	for _, outcome := range []string{"held", "rechecked", "released", "dropped_resolved", "lookup_failed"} {
+		suppression.WithLabelValues(outcome).Add(0)
+	}
 	return NotifyMetrics{
+		suppression:            suppression,
+		deferralOldestDue:      ms.NewGauge("deferral_oldest_due_seconds", "Age in seconds of the oldest due notification deferral across tenants visited in the scheduler pass."),
 		escalationLookupErrors: ms.NewCounter("escalation_lookup_errors_total", "Errored alarm backstop lookups; escalation deliberately fails open."),
 		metrics:                ms.NewProcessorMetrics("notify"),
 		tenantSliceExhausted: ms.NewCounter("tenant_slice_exhausted_total",

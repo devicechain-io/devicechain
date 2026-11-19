@@ -26,9 +26,12 @@ func (api *Api) DeferNotifications(ctx context.Context, deferrals []*Notificatio
 	return api.RDB.DB(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "tenant_id"}, {Name: "alarm_token"}, {Name: "policy_id"}},
 		DoUpdates: clause.Assignments(map[string]any{
-			"release_at": clause.Column{Table: "excluded", Name: "release_at"},
-			"updated_at": clause.Column{Table: "excluded", Name: "updated_at"},
-			"attempts":   clause.Column{Table: "excluded", Name: "attempts"},
+			// The audit follows the held event: a newer event replaces it (with NULL when the
+			// newer event was held by quiet hours alone), an older redelivery leaves it alone.
+			"held_by_window": newerOf("held_by_window"),
+			"release_at":     clause.Column{Table: "excluded", Name: "release_at"},
+			"updated_at":     clause.Column{Table: "excluded", Name: "updated_at"},
+			"attempts":       clause.Column{Table: "excluded", Name: "attempts"},
 			// The event columns move together, and only forward in event time.
 			"alarm_key":     newerOf("alarm_key"),
 			"severity":      newerOf("severity"),
@@ -174,4 +177,27 @@ func (api *Api) NotificationDeferralsByAlarmToken(ctx context.Context, alarmToke
 	found := make([]*NotificationDeferral, 0)
 	err := api.RDB.DB(ctx).Where("alarm_token IN ?", alarmTokens).Order("id ASC").Find(&found).Error
 	return found, err
+}
+
+// RescheduleSuppressedNotificationDeferral preserves the reschedule CAS while recording
+// the window responsible for this re-hold. It does not change the held event or a
+// concurrent replacement; callers re-hold only after a successful live suppression lookup.
+func (api *Api) RescheduleSuppressedNotificationDeferral(ctx context.Context, d *NotificationDeferral, at time.Time, window string) error {
+	return api.RDB.DB(ctx).Model(&NotificationDeferral{ID: d.ID}).Where("updated_at = ?", d.UpdatedAt).
+		Updates(map[string]any{"release_at": at, "held_by_window": window}).Error
+}
+
+// ResolveNotificationDeferralsWithAudit returns the window-held subset actually deleted,
+// so a concurrent replacement cannot be counted as resolved. Only events at or before
+// the resolution stamp are removed, preserving pages for a later alarm cycle.
+func (api *Api) ResolveNotificationDeferralsWithAudit(ctx context.Context, alarmToken string, at time.Time) (int64, int, error) {
+	var rows []*NotificationDeferral
+	result := api.RDB.DB(ctx).Clauses(clause.Returning{}).Where("alarm_token = ? AND occurred_time <= ?", alarmToken, at).Delete(&rows)
+	suppressed := 0
+	for _, d := range rows {
+		if d.HeldByWindow.Valid {
+			suppressed++
+		}
+	}
+	return result.RowsAffected, suppressed, result.Error
 }

@@ -169,6 +169,9 @@ func (a AlarmFacts) facts() [][2]string {
 	if !a.RaisedTime.IsZero() {
 		out = append(out, [2]string{"Raised", formatTime(a.RaisedTime)})
 	}
+	if a.SuppressedBy != "" {
+		out = append(out, [2]string{"Suppressed", a.suppressionExplanation()})
+	}
 	return out
 }
 

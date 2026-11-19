@@ -67,8 +67,18 @@ type PAlarmStateChangeEvent struct {
 	// Alarm.PositionDerived: absent means unknown, withheld like true by readers
 	// without location:read. An older producer leaves this absent.
 	PositionDerived *bool `protobuf:"varint,21,opt,name=position_derived,json=positionDerived,proto3,oneof" json:"position_derived,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Live suppression: the alarm matched an alarm suppression window when the event was
+	// EMITTED (wall time), so a notification consumer holds its page until suppressed_until
+	// (RFC3339Nano) and re-checks then. Both empty means not suppressed, or that the producer
+	// could not tell, or predates these fields; a consumer then pages as it always did. A
+	// value that does not parse is read as not suppressed, never as a reason to drop the event.
+	SuppressedUntil        string `protobuf:"bytes,22,opt,name=suppressed_until,json=suppressedUntil,proto3" json:"suppressed_until,omitempty"`
+	SuppressionWindowToken string `protobuf:"bytes,23,opt,name=suppression_window_token,json=suppressionWindowToken,proto3" json:"suppression_window_token,omitempty"`
+	// History, carried on RAISED only: the token of the window the cycle began under,
+	// evaluated at the cycle's event time. It never changes how the event is paged.
+	RaisedDuringSuppressionToken string `protobuf:"bytes,24,opt,name=raised_during_suppression_token,json=raisedDuringSuppressionToken,proto3" json:"raised_during_suppression_token,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
 }
 
 func (x *PAlarmStateChangeEvent) Reset() {
@@ -239,6 +249,27 @@ func (x *PAlarmStateChangeEvent) GetPositionDerived() bool {
 		return *x.PositionDerived
 	}
 	return false
+}
+
+func (x *PAlarmStateChangeEvent) GetSuppressedUntil() string {
+	if x != nil {
+		return x.SuppressedUntil
+	}
+	return ""
+}
+
+func (x *PAlarmStateChangeEvent) GetSuppressionWindowToken() string {
+	if x != nil {
+		return x.SuppressionWindowToken
+	}
+	return ""
+}
+
+func (x *PAlarmStateChangeEvent) GetRaisedDuringSuppressionToken() string {
+	if x != nil {
+		return x.RaisedDuringSuppressionToken
+	}
+	return ""
 }
 
 // *
@@ -678,7 +709,7 @@ var File_proto_dc_device_management_events_proto protoreflect.FileDescriptor
 
 const file_proto_dc_device_management_events_proto_rawDesc = "" +
 	"\n" +
-	"'proto/dc-device-management-events.proto\x12\x1fio.devicechain.devicemanagement\"\xc7\x06\n" +
+	"'proto/dc-device-management-events.proto\x12\x1fio.devicechain.devicemanagement\"\xf3\a\n" +
 	"\x16PAlarmStateChangeEvent\x12\x1d\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\tR\teventType\x12\x1f\n" +
@@ -706,7 +737,10 @@ const file_proto_dc_device_management_events_proto_rawDesc = "" +
 	"deviceName\x12*\n" +
 	"\x11device_type_token\x18\x13 \x01(\tR\x0fdeviceTypeToken\x12!\n" +
 	"\fclear_reason\x18\x14 \x01(\tR\vclearReason\x12.\n" +
-	"\x10position_derived\x18\x15 \x01(\bH\x03R\x0fpositionDerived\x88\x01\x01B\x14\n" +
+	"\x10position_derived\x18\x15 \x01(\bH\x03R\x0fpositionDerived\x88\x01\x01\x12)\n" +
+	"\x10suppressed_until\x18\x16 \x01(\tR\x0fsuppressedUntil\x128\n" +
+	"\x18suppression_window_token\x18\x17 \x01(\tR\x16suppressionWindowToken\x12E\n" +
+	"\x1fraised_during_suppression_token\x18\x18 \x01(\tR\x1craisedDuringSuppressionTokenB\x14\n" +
 	"\x12_previous_severityB\x12\n" +
 	"\x10_acknowledged_byB\r\n" +
 	"\v_last_valueB\x13\n" +

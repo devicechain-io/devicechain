@@ -279,6 +279,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				log.Warn().Err(err).Msg("Alarm backstop is disabled: service secret or device-management/user-management endpoint is not configured; existing orphan alarms may keep escalating")
 			} else {
 				Notifier.AlarmLookup = processor.NewAlarmLookup(seam.Client, seam.URL)
+				Notifier.SuppressionLookup = processor.NewSuppressionLookup(seam.Client, seam.URL)
 			}
 
 			if oracle, err := processor.NewPositionOracle(peers, infra.DeviceManagement.Endpoint()); err != nil {

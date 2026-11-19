@@ -59,6 +59,16 @@ message PAlarmStateChangeEvent {
     // Alarm.PositionDerived: absent means unknown, withheld like true by readers
     // without location:read. An older producer leaves this absent.
     optional bool position_derived = 21;
+    // Live suppression: the alarm matched an alarm suppression window when the event was
+    // EMITTED (wall time), so a notification consumer holds its page until suppressed_until
+    // (RFC3339Nano) and re-checks then. Both empty means not suppressed, or that the producer
+    // could not tell, or predates these fields; a consumer then pages as it always did. A
+    // value that does not parse is read as not suppressed, never as a reason to drop the event.
+    string suppressed_until = 22;
+    string suppression_window_token = 23;
+    // History, carried on RAISED only: the token of the window the cycle began under,
+    // evaluated at the cycle's event time. It never changes how the event is paged.
+    string raised_during_suppression_token = 24;
 }
 
 /**

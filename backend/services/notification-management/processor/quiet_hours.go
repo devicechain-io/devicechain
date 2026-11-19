@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,7 +42,7 @@ const maxReleaseAttempts = 5
 // releaseBatch bounds how many held notifications one tenant releases per pass. The rest
 // stay due and go on the next pass, a tick later; a tenant cannot hold the loop for every
 // tenant behind it with a morning's backlog.
-const releaseBatch = 200
+const releaseBatch = suppressionBatch
 
 // quietHold reports whether policy p holds a notification of the given alarm severity at
 // `now`, and when the quiet stretch it falls in ends.
@@ -82,7 +83,14 @@ func (n *PolicyNotifier) holdQuiet(event *dmmodel.AlarmStateChangeEvent, policie
 			sendNow = append(sendNow, p)
 			continue
 		}
-		hold, until := quietHold(p, event.Severity, now)
+		var window sql.NullString
+		hold, until := false, time.Time{}
+		if event.SuppressedUntil != nil && validWindowToken(event.SuppressionWindowToken) && event.SuppressedUntil.After(now) {
+			hold, until = true, suppressionReleaseAt(*event.SuppressedUntil, now)
+			window = sql.NullString{String: event.SuppressionWindowToken, Valid: true}
+		} else {
+			hold, until = quietHold(p, event.Severity, now)
+		}
 		if !hold {
 			sendNow = append(sendNow, p)
 			continue
@@ -105,6 +113,7 @@ func (n *PolicyNotifier) holdQuiet(event *dmmodel.AlarmStateChangeEvent, policie
 			Severity:     event.Severity,
 			OccurredTime: event.OccurredTime,
 			ReleaseAt:    until,
+			HeldByWindow: window,
 			Event:        encoded,
 		})
 	}
@@ -163,6 +172,9 @@ func (n *PolicyNotifier) ReleaseHeld(ctx context.Context, policies []*model.Noti
 	if len(due) == 0 {
 		return nil
 	}
+	if pass := passFromContext(ctx); pass != nil {
+		pass.oldestDueSeconds = max(pass.oldestDueSeconds, now.Sub(due[0].ReleaseAt).Seconds())
+	}
 	byID := make(map[uint]*model.NotificationPolicy, len(policies))
 	for _, p := range policies {
 		byID[p.ID] = p
@@ -176,6 +188,7 @@ func (n *PolicyNotifier) ReleaseHeld(ctx context.Context, policies []*model.Noti
 		}
 		groups[d.AlarmToken] = append(groups[d.AlarmToken], d)
 	}
+	suppressions := n.lookupSuppressions(ctx, order, now)
 	var lastErr error
 	for _, alarm := range order {
 		if err := ctx.Err(); err != nil {
@@ -187,7 +200,7 @@ func (n *PolicyNotifier) ReleaseHeld(ctx context.Context, policies []*model.Noti
 			}
 			return core.ErrPassPartial
 		}
-		if err := n.releaseAlarm(ctx, alarm, groups[alarm], byID, now); err != nil {
+		if err := n.releaseAlarm(ctx, alarm, groups[alarm], byID, now, suppressions); err != nil {
 			if errors.Is(err, rdb.ErrTenantPurged) {
 				return nil
 			}
@@ -201,7 +214,7 @@ func (n *PolicyNotifier) ReleaseHeld(ctx context.Context, policies []*model.Noti
 
 // releaseAlarm releases one alarm's due deferrals. See ReleaseHeld.
 func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*model.NotificationDeferral,
-	byID map[uint]*model.NotificationPolicy, now time.Time) error {
+	byID map[uint]*model.NotificationPolicy, now time.Time, suppressions map[string]SuppressionStatus) error {
 	states, err := n.api.NotificationStatesByAlarmToken(ctx, []string{alarm})
 	if err != nil {
 		return fmt.Errorf("loading notification state: %w", err)
@@ -227,6 +240,13 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 			if err := n.drop(ctx, d, quietDroppedResolved); err != nil {
 				return err
 			}
+			continue
+		}
+		if status, ok := suppressions[alarm]; ok {
+			if err := n.api.RescheduleSuppressedNotificationDeferral(ctx, d, suppressionReleaseAt(status.Until, now), status.WindowToken); err != nil {
+				return fmt.Errorf("re-holding suppressed notification: %w", err)
+			}
+			n.countSuppression("rechecked", 1)
 			continue
 		}
 		if hold, until := quietHold(p, d.Severity, now); hold {
@@ -277,10 +297,22 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 
 	rctx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
 	defer cancel()
-	tally := n.deliverAll(rctx, deliveries, renderNotification(&event), alarm, model.AttemptTriggerQuietHoursRelease)
+	message := renderNotification(&event)
+	for _, d := range claimed {
+		if d.HeldByWindow.Valid {
+			explainSuppressionRelease(message, d.HeldByWindow.String, now)
+			break
+		}
+	}
+	tally := n.deliverAll(rctx, deliveries, message, alarm, model.AttemptTriggerQuietHoursRelease)
 	if tally.delivered > 0 {
 		n.finish(ctx, alarm, claimed)
 		n.countQuiet(quietReleased, len(claimed))
+		for _, d := range claimed {
+			if d.HeldByWindow.Valid {
+				n.countSuppression("released", 1)
+			}
+		}
 		// Settled, not logged-and-dropped: the page is out and its deferral rows are deleted, so
 		// this write is the only record that it happened. Without it the alarm has no throttle
 		// basis and never escalates. Held on the notifier's own Holder (the scheduler has no
@@ -412,6 +444,9 @@ func (n *PolicyNotifier) drop(ctx context.Context, d *model.NotificationDeferral
 	}
 	if won {
 		n.countQuiet(outcome, 1)
+		if outcome == quietDroppedResolved && d.HeldByWindow.Valid {
+			n.countSuppression("dropped_resolved", 1)
+		}
 	}
 	return nil
 }
