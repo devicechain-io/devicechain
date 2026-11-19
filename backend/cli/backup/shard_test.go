@@ -6,6 +6,7 @@ package backup
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
+	server "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
@@ -218,4 +220,53 @@ func copySet(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// The cross-check's listing must fail on an API error, on any page, rather than
+// read as a short list that hides an undeclared group stream.
+func TestStreamNamesFailsOnAnyPage(t *testing.T) {
+	s, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go s.Start()
+	if !s.ReadyForConnections(5 * time.Second) {
+		t.Fatal("NATS not ready")
+	}
+	t.Cleanup(func() { s.Shutdown(); s.WaitForShutdown() })
+	nc, err := nats.Connect(s.ClientURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(nc.Close)
+	pages := map[int]string{
+		0: `{"total":3,"offset":0,"limit":1,"streams":["sample_inbound-events"]}`,
+		1: `{"error":{"code":500,"description":"listing failed"}}`,
+	}
+	sub, err := nc.Subscribe("$JS.API.STREAM.NAMES", func(m *nats.Msg) {
+		var req struct{ Offset int }
+		_ = json.Unmarshal(m.Data, &req)
+		_ = m.Respond([]byte(pages[req.Offset]))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if names, err := streamNames(ctx, nc); err == nil || !strings.Contains(err.Error(), "listing failed") {
+		t.Fatalf("an error on the second page read as %v, %v", names, err)
+	}
+	if err := refuseUndeclaredGroups(ctx, nc, "sample", map[string]bool{}); err == nil {
+		t.Fatal("a failed listing passed the cross-check")
+	}
+	// Control: the same pages without the error list every name.
+	pages[1] = `{"total":3,"offset":1,"limit":2,"streams":["sample_resolved-events","sample_inbound-events-g1"]}`
+	names, err := streamNames(ctx, nc)
+	if err != nil || !slices.Equal(names, []string{"sample_inbound-events", "sample_resolved-events", "sample_inbound-events-g1"}) {
+		t.Fatalf("listing: %v %v", names, err)
+	}
+	if err := refuseUndeclaredGroups(ctx, nc, "sample", map[string]bool{}); err == nil || !strings.Contains(err.Error(), "sample_inbound-events-g1") {
+		t.Fatalf("undeclared group on a later page passed: %v", err)
+	}
 }
