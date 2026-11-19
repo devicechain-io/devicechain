@@ -257,18 +257,25 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	}, t.QueryLocations)
 	register(s, c, &mcp.Tool{
 		Name:        "list_alarms",
-		Description: "List alarms in the caller's tenant (paged), optionally filtered by originating device token, state, severity, alarm key, or acknowledged flag. Returns each alarm's token, state, severity, acknowledged flag, raised/cleared times, and last value, with its key, metric and acknowledger under `untrusted`.",
+		Description: "List alarms in the caller's tenant (paged), optionally filtered by originating device token, state, severity, alarm key, or acknowledged flag. Returns each alarm's token, state, severity, acknowledged flag, raised/cleared times, and last value, with its key, metric and acknowledger under `untrusted`. Live suppression is best-effort: windowToken may be the opaque literal restricted for scoped callers; suppressionUnavailable means suppression is unknown.",
 	}, ToolRisk{
 		Exposure: ExposureOperational, Scale: ScalePage,
 		Discloses: "a tenant-wide list of what has been going wrong and where, a page at a time, including the value that raised each alarm",
 	}, t.ListAlarms)
 	register(s, c, &mcp.Tool{
 		Name:        "get_alarm",
-		Description: "Look up one or more alarms by token, returning full alarm detail.",
+		Description: "Look up one or more alarms by token, returning full alarm detail. Live suppression is best-effort: windowToken may be the opaque literal restricted for scoped callers; suppressionUnavailable means suppression is unknown.",
 	}, ToolRisk{
 		Exposure: ExposureOperational, Scale: ScaleAddressed,
 		Discloses: "full detail of alarms the caller already names, including the value that raised each one",
 	}, t.GetAlarm)
+	register(s, c, &mcp.Tool{
+		Name:        "list_suppression_windows",
+		Description: "List maintenance suppression windows visible to the caller (paged), optionally filtered by status SCHEDULED, ACTIVE or ENDED and targetToken. Returns targets, alarm keys, severity bypass, schedule bounds, early end and creator; recurring slots are omitted. Operator text is under untrusted. Requires alarm:read; unavailable servers return a tool error.",
+	}, ToolRisk{
+		Exposure: ExposureOperational, Scale: ScalePage,
+		Discloses: "the caller-visible maintenance windows, their target populations, schedules, reasons and creators, a page at a time",
+	}, t.ListSuppressionWindows)
 	register(s, c, &mcp.Tool{
 		Name:        "list_commands",
 		Description: "List dispatched commands in the caller's tenant (paged), optionally filtered by device token or status. Returns each command's token, device, status, and delivery-lifecycle timestamps, with its name and any device error under `untrusted` (payloads are omitted).",

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -49,7 +50,52 @@ func NewGraphQLClient() *GraphQLClient {
 
 // gqlError is one entry of a GraphQL response's errors array.
 type gqlError struct {
-	Message string `json:"message"`
+	Message   string `json:"message"`
+	Locations []struct {
+		Line   int `json:"line"`
+		Column int `json:"column"`
+	} `json:"locations"`
+	Path       []any          `json:"path"`
+	Extensions map[string]any `json:"extensions"`
+}
+
+// graphqlResponseError preserves the wire signals without exposing unmarked peer text.
+type graphqlResponseError struct {
+	area       string
+	errors     []gqlError
+	validation bool
+}
+
+func (e *graphqlResponseError) Error() string {
+	return fmt.Sprintf("%s graphql error: %s", e.area, markedErrorText(e.errors[0].Message))
+}
+
+func isGraphQLValidationError(err error) bool {
+	var response *graphqlResponseError
+	return errors.As(err, &response) && response.validation
+}
+
+// graphql-go does not serialize QueryError.Rule. Request validation errors have
+// locations, no execution path, and no data. Prefer an explicit extension code
+// when present (including peers that encode data:null); an auth/resolver error
+// must not be called an old-server response.
+func validationResponse(data json.RawMessage, errs []gqlError) bool {
+	if len(errs) == 0 || (len(data) != 0 && !bytes.Equal(bytes.TrimSpace(data), []byte("null"))) {
+		return false
+	}
+	for _, e := range errs {
+		if code, ok := e.Extensions["code"].(string); ok {
+			if code != "GRAPHQL_VALIDATION_FAILED" && code != "VALIDATION" {
+				return false
+			}
+		} else if len(data) != 0 || len(e.Locations) == 0 {
+			return false
+		}
+		if len(e.Path) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // document is one GraphQL document MCP sends, together with the area that serves it.
@@ -164,7 +210,7 @@ func (c *GraphQLClient) Query(ctx context.Context, doc document, token string, v
 		return fmt.Errorf("decoding %s graphql response: %w", area, err)
 	}
 	if len(envelope.Errors) > 0 {
-		return fmt.Errorf("%s graphql error: %s", area, markedErrorText(envelope.Errors[0].Message))
+		return &graphqlResponseError{area: area, errors: envelope.Errors, validation: validationResponse(envelope.Data, envelope.Errors)}
 	}
 	if out != nil && len(envelope.Data) > 0 {
 		if err := json.Unmarshal(envelope.Data, out); err != nil {
