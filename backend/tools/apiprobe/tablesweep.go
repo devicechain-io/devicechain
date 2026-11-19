@@ -355,6 +355,11 @@ var tableSweepExemptions = map[string]string{
 		"instance sentinel. Nothing in user-management writes a tenant-scoped secret, so no " +
 		"tenant can own a row here. The table carries tenant_id only because it is core's shared " +
 		"secret-store table, which the other secret-store areas do fill per tenant.",
+	"ai-inference.secrets": "ai-inference's secret store holds only INSTANCE-scoped rows — an AI " +
+		"provider's write-only API key, keyed by AIProviderSecretRef (scope instance, tenant_id the " +
+		"empty instance sentinel). Providers are instance-wide, operator-managed records; nothing in " +
+		"ai-inference writes a tenant-scoped secret, so no tenant can own a row here. The table " +
+		"carries tenant_id only because it is core's shared secret-store table.",
 
 	// ---- runtime state of a delivery mechanism -------------------------------
 	"notification-management.notification_states": "escalation state for a notification the policy has " +

@@ -4,6 +4,12 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -245,4 +251,110 @@ func TestDSNWithoutAPasswordIsAccepted(t *testing.T) {
 			t.Errorf("a password-free DSN was refused: %q -> %v", dsn, err)
 		}
 	}
+}
+
+// ai-inference's secret store can only ever hold instance-scoped rows, so the
+// exemption has to accept the table empty for a tenant and refuse it the moment a
+// tenant owns a row. Both directions are asserted against the REAL exemption entry,
+// not a stand-in: deleting or rewording the entry must turn this red.
+func TestAiInferenceSecretsExemptionBothDirections(t *testing.T) {
+	const table = "ai-inference.secrets"
+	reason, ok := tableSweepExemptions[table]
+	if !ok {
+		t.Fatalf("%s has no exemption; no API sequence can give a tenant a row in it", table)
+	}
+	actionable := []tenantpurge.Entry{entry("ai-inference", "secrets", tenantpurge.ClassDirect)}
+	exempt := map[string]string{table: reason}
+
+	empty := reconcileTableCoverage(actionable, map[string]int64{}, exempt)
+	if len(empty.Exempt) != 1 || len(empty.Uncovered) != 0 || len(empty.Stale) != 0 || !empty.ok() {
+		t.Errorf("an empty ai-inference.secrets for the tenant must be exempt and ok: %+v", empty)
+	}
+	owned := reconcileTableCoverage(actionable, map[string]int64{table: 1}, exempt)
+	if len(owned.Stale) != 1 || len(owned.Covered) != 0 || owned.ok() {
+		t.Errorf("a tenant-owned ai-inference.secrets row must make the exemption stale: %+v", owned)
+	}
+}
+
+// The exemption's premise is that ai-inference never builds a tenant-scoped
+// SecretRef. The stale rule only fires once a row exists in the seeded tenant, which
+// a drill may never produce, so this pins the premise at the source: every SecretRef
+// literal in the service is keyed and instance-scoped, nothing names another Scope
+// constant, and nothing assigns a Scope after the fact.
+func TestAiInferenceBuildsOnlyInstanceScopedSecretRefs(t *testing.T) {
+	root := filepath.Join("..", "..", "services", "ai-inference")
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("cannot find ai-inference to check the exemption's premise: %v", err)
+	}
+	fset := token.NewFileSet()
+	literals := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			return perr
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.CompositeLit:
+				if !isSecretRefType(x.Type) {
+					return true
+				}
+				literals++
+				if !hasInstanceScope(x) {
+					t.Errorf("%s: SecretRef literal is not keyed Scope: secrets.ScopeInstance", fset.Position(x.Pos()))
+				}
+			case *ast.SelectorExpr:
+				if id, ok := x.X.(*ast.Ident); ok && id.Name == "secrets" &&
+					strings.HasPrefix(x.Sel.Name, "Scope") && x.Sel.Name != "ScopeInstance" {
+					t.Errorf("%s: secrets.%s — the ai-inference.secrets exemption assumes instance scope only",
+						fset.Position(x.Pos()), x.Sel.Name)
+				}
+			case *ast.AssignStmt:
+				for _, lhs := range x.Lhs {
+					if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Scope" {
+						t.Errorf("%s: a Scope is assigned after construction", fset.Position(x.Pos()))
+					}
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Vacuity guard: the scan must have seen AIProviderSecretRef's literal.
+	if literals == 0 {
+		t.Fatal("no SecretRef literal found in ai-inference; the scan is not looking at what it claims to")
+	}
+}
+
+func isSecretRefType(e ast.Expr) bool {
+	switch t := e.(type) {
+	case *ast.SelectorExpr:
+		return t.Sel.Name == "SecretRef"
+	case *ast.Ident:
+		return t.Name == "SecretRef"
+	}
+	return false
+}
+
+func hasInstanceScope(lit *ast.CompositeLit) bool {
+	for _, el := range lit.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			return false // an unkeyed literal hides which field is the scope
+		}
+		if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Scope" {
+			sel, ok := kv.Value.(*ast.SelectorExpr)
+			return ok && sel.Sel.Name == "ScopeInstance"
+		}
+	}
+	return false
 }
