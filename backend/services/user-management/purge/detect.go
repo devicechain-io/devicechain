@@ -139,15 +139,19 @@ func (d *Detect) checkpointedPartitions(ctx context.Context) ([]string, error) {
 	if err := db.Raw(tenantpurge.DetectPartitionsQuery).Scan(&ids).Error; err != nil {
 		return nil, fmt.Errorf("listing the DETECT partitions holding a checkpoint: %w", err)
 	}
+	// pg_tables, not information_schema: the latter hides tables the current role holds no
+	// privilege on, which would read as absent.
 	var tables int64
-	if err := db.Raw(tenantpurge.DetectTopologyTableQuery).Scan(&tables).Error; err != nil {
+	if err := db.Model(&pgTable{}).Where("schemaname = ? AND tablename = ?",
+		tenantpurge.DetectTopologySchema, tenantpurge.DetectTopologyTable).Count(&tables).Error; err != nil {
 		return nil, fmt.Errorf("checking for the DETECT stream topology: %w", err)
 	}
 	if tables == 0 {
 		return ids, nil
 	}
 	var counts []int
-	if err := db.Raw(tenantpurge.DetectTopologyGroupsQuery).Scan(&counts).Error; err != nil {
+	if err := db.Model(&detectTopologyRow{}).Where("id = ?", "singleton").
+		Pluck("group_count", &counts).Error; err != nil {
 		return nil, fmt.Errorf("reading the DETECT stream topology: %w", err)
 	}
 	for _, count := range counts {
@@ -159,6 +163,25 @@ func (d *Detect) checkpointedPartitions(ctx context.Context) ([]string, error) {
 	}
 	return ids, nil
 }
+
+// pgTable is the slice of the pg_tables catalog view the topology check reads. It is a
+// catalog row, not tenant data, so it carries no tenant column.
+type pgTable struct {
+	SchemaName string `gorm:"column:schemaname"`
+	Name       string `gorm:"column:tablename"`
+}
+
+func (pgTable) TableName() string { return "pg_tables" }
+
+// detectTopologyRow is the one column of event-processing's stream topology row this store
+// reads. The row is instance metadata and holds no tenant data (the purge catalog exempts
+// the table), so it carries no tenant column.
+type detectTopologyRow struct {
+	ID         string `gorm:"column:id"`
+	GroupCount int    `gorm:"column:group_count"`
+}
+
+func (detectTopologyRow) TableName() string { return tenantpurge.DetectTopologyQualifiedTable }
 
 // outcome turns the replies into what the ledger records.
 //
