@@ -94,7 +94,7 @@ title: 空中（OTA）更新
 **发布（rollout）**把一个制品分配给某个[设备组](../user-guide/groups-facets-browse.md)中的设备，每次只处理有限数量的设备，并且可以暂停、恢复和中止。
 
 1. `createUpdateRollout(request)` 以 `DRAFT` 状态声明发布：制品（必须为 `AVAILABLE` 且可分配，规则与 `assignArtifact` 相同）、设备组、`maxInFlight`（1 到 1000）以及可选的 `failureThreshold`。此时不会解析或发送任何内容。
-2. `startUpdateRollout(token)` **冻结设备组的成员**作为本次发布的设备，并将其转为 `RUNNING`。之后加入该组的设备不属于本次发布，离开该组的设备仍是目标；要覆盖新加入的设备，请新建一次发布。动态组按其已发布版本解析，发布会记录该版本。超过 10,000 台设备的组会被拒绝（`ROLLOUT_TOO_LARGE`），而不是被截断。
+2. `startUpdateRollout(token)` **冻结设备组的成员**作为本次发布的设备，并将其转为 `RUNNING`。之后加入该组的设备不属于本次发布，离开该组的设备仍是目标；要覆盖新加入的设备，请新建一次发布。动态组按其已发布版本解析，发布会记录该版本。超过 10,000 台设备的组会被拒绝（`ROLLOUT_TOO_LARGE`），而不是被截断。发布会记录每个成员是哪一台设备，而不仅是其令牌：在等待期间被删除的设备会被跳过（`DEVICE_NOT_FOUND`），之后以相同令牌创建的设备是另一台设备，即使它在组中也会以 `DEVICE_REPLACED` 跳过。
 3. 随后服务按顺序把制品分配给这些设备，任何时候未完成更新的设备都不超过 `maxInFlight` 台。每台设备都遵循与 `assignArtifact` 相同的规则：不存在、已停用、配置档不兼容或正忙于另一项更新的设备会以该拒绝的代码（`DEVICE_NOT_FOUND`、`DEVICE_DISABLED`、`INCOMPATIBLE_PROFILE`、`UPDATE_IN_PROGRESS`）被**跳过**，且不占用名额。已经在处理同一制品、或已经更新到该制品的设备，会按其现有分配计入，而不会再次通知。
 4. 当没有设备在等待、也没有设备存在未完成的更新时，发布变为 `COMPLETED`。
 

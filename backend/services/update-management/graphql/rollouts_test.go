@@ -33,6 +33,7 @@ const rolloutFields = `token name groupToken groupVersion maxInFlight failureThr
 func rolloutPlane(t *testing.T) (*plane, *sink) {
 	t.Helper()
 	p, out := updatePlane(t, true)
+	p.api.Incarnations = p.api.Devices.(devices)
 	p.api.Groups = groups{"acme/fleet": {"dev-2", "dev-off", "dev-1", "dev-off2"}}
 	p.available("fw-1", []byte("image"))
 	return p, out
