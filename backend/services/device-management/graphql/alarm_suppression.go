@@ -41,7 +41,9 @@ func suppressionTime(t *time.Time) *string {
 	if t == nil {
 		return nil
 	}
-	return util.FormatTime(*t)
+	// UTC, so a create response and a later read print one instant identically whatever
+	// zone the database driver hands back.
+	return util.FormatTime(t.UTC())
 }
 func (r *AlarmSuppressionWindowResolver) StartTime() *string  { return suppressionTime(r.M.StartTime) }
 func (r *AlarmSuppressionWindowResolver) EndTime() *string    { return suppressionTime(r.M.EndTime) }
