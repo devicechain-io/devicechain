@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/streams"
 	nats "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
 
@@ -160,4 +161,41 @@ func TestTenantOfFactSubject(t *testing.T) {
 		require.Equal(t, "?", tenantOfFactSubject("inst", s), s)
 	}
 	require.True(t, strings.HasPrefix(messaging.ScopedSubject("inst", "acme", streams.EntityDeleted), "inst.acme."))
+}
+
+// fakeFactStream answers every read with the next stored message after seq, from a list that may
+// have grown since its bounds were read.
+type fakeFactStream struct {
+	info *jetstream.StreamInfo
+	msgs []*jetstream.RawStreamMsg
+}
+
+func (f *fakeFactStream) CachedInfo() *jetstream.StreamInfo { return f.info }
+
+func (f *fakeFactStream) GetMsg(_ context.Context, seq uint64, _ ...jetstream.GetMsgOpt) (*jetstream.RawStreamMsg, error) {
+	for _, m := range f.msgs {
+		if m.Sequence >= seq {
+			return m, nil
+		}
+	}
+	return nil, jetstream.ErrMsgNotFound
+}
+
+// A fact appended while the walk runs is past the bounds the summary line reports, so it is not
+// listed under them.
+func TestBrokerFactsStopsAtTheBoundsItReports(t *testing.T) {
+	body, err := entityevent.MarshalEntityDeletedEvent(&entityevent.EntityDeletedEvent{
+		EntityType: entity.TypeDevice, EntityId: 1, EntityToken: "d", DeletedTime: time.Now()})
+	require.NoError(t, err)
+	msg := func(seq uint64) *jetstream.RawStreamMsg {
+		return &jetstream.RawStreamMsg{Subject: "inst.acme.entity-deleted", Sequence: seq, Data: body, Time: time.Now()}
+	}
+	s := &fakeFactStream{
+		info: &jetstream.StreamInfo{State: jetstream.StreamState{Msgs: 2, FirstSeq: 1, LastSeq: 2}},
+		msgs: []*jetstream.RawStreamMsg{msg(1), msg(2), msg(3)},
+	}
+	facts, err := collectFacts(context.Background(), s, "inst", factFilter{})
+	require.NoError(t, err)
+	require.Len(t, facts, 2)
+	require.EqualValues(t, 2, facts[1].Seq)
 }
