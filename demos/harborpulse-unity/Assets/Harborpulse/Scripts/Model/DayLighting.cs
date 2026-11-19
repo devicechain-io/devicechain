@@ -74,8 +74,13 @@ namespace DeviceChain.Harborpulse.Model
         {
             var b = layout?.Beat("storm");
             if (b == null) return new Weather(0, 0);
-            var storm = Smooth(b.From, b.From + 1, hourOfDay) * (1 - Smooth(b.To - 1.5, b.To, hourOfDay));
-            var rain = Smooth(b.From + 0.5, b.From + 1.25, hourOfDay) * (1 - Smooth(b.To - 2.5, b.To - 1, hourOfDay));
+            return Window(b.From, b.To, hourOfDay);
+        }
+
+        public static Weather Window(double from, double to, double hourOfDay)
+        {
+            var storm = Smooth(from, from + 1, hourOfDay) * (1 - Smooth(to - 1.5, to, hourOfDay));
+            var rain = Smooth(from + 0.5, from + 1.25, hourOfDay) * (1 - Smooth(to - 2.5, to - 1, hourOfDay));
             return new Weather(storm, rain);
         }
 

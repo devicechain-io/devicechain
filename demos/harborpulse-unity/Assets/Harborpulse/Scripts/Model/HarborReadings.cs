@@ -9,6 +9,9 @@ namespace DeviceChain.Harborpulse.Model
     /// <summary>The scene's metric vocabulary: the harborpulse profiles' metric keys.</summary>
     public static class Metrics
     {
+        public const string WetWell = "wet_well_m", PumpRunning = "pump_running", Flow = "flow_lps", PumpCurrent = "pump_current_a";
+        public const string ChargerPower = "power_kw", MaxKw = "max_kw", SessionActive = "session_active", ConnectorTemp = "connector_temp_c";
+        public const string MeterKw = "kw", MeterKwh = "kwh", Speed = "speed_mps";
         public const string WaterLevel = "water_level_m", Battery = "battery_v";
         public const string LampOn = "lamp_on", LampPower = "power_w", LampFault = "lamp_fault", Dim = "dim_pct";
     }

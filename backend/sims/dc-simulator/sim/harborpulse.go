@@ -300,6 +300,9 @@ func (s *harborpulse) ScenarioClock(now time.Time) *ScenarioClock {
 		c.SimHour = harborHourOf(elapsed, dayLength)
 	}
 	c.SimTime = formatSimTime(c.SimHour)
+	for _, b := range harborBeats {
+		c.Beats = append(c.Beats, ScenarioBeat{Name: b.name, From: b.from, To: b.to})
+	}
 	s.mu.Lock()
 	c.ThresholdChanges = append([]ThresholdChange(nil), s.s3b.Changes...)
 	c.CalculatedBackfills = append([]CalculatedBackfillBeat(nil), s.s3b.Jobs...)

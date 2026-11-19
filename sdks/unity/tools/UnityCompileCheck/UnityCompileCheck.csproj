@@ -25,8 +25,30 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="UnityEngine.Modules" Version="2021.3.33" />
+    <PackageReference Include="UnityEngine.Modules" Version="2021.3.33" Condition="'$(UnityManagedDir)' == ''" />
     <ProjectReference Include="../../../csharp/src/DeviceChain.Sdk/DeviceChain.Sdk.csproj" />
+  </ItemGroup>
+
+  <!-- Optional local URP 17.5 check against an already imported project, without launching the Editor.
+       Defaults retain the portable reference-package gate. No installed assemblies are copied or shipped. -->
+  <PropertyGroup Condition="'$(UnityManagedDir)' != ''">
+    <DefineConstants>$(DefineConstants);UNITY_6000_0_OR_NEWER</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(UnityManagedDir)' != ''">
+    <Reference Include="$(UnityManagedDir)/UnityEngine/UnityEngine*.dll" Exclude="$(UnityManagedDir)/UnityEngine/UnityEngine.dll" />
+    <Reference Include="$(HarborUrpAssembliesDir)/Unity.RenderPipelines.Core.Runtime.dll" />
+    <Reference Include="$(HarborUrpAssembliesDir)/Unity.RenderPipelines.Universal.Runtime.dll" />
+  </ItemGroup>
+
+  <Target Name="UseInstalledUnityReferences" AfterTargets="ResolveLockFileReferences" Condition="'$(UnityManagedDir)' != ''">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Reference.NuGetPackageId)' == 'UnityEngine.Modules'" />
+    </ItemGroup>
+  </Target>
+  <ItemGroup Condition="'$(CompileHarborEditor)' == 'true'">
+    <Reference Include="$(UnityManagedDir)/UnityEditor.dll" />
+    <Reference Include="$(UnityManagedDir)/UnityEngine/UnityEditor*.dll" />
+    <Compile Include="../../../../demos/harborpulse-unity/Assets/Harborpulse/Scripts/Editor/**/*.cs" />
   </ItemGroup>
 
   <ItemGroup>

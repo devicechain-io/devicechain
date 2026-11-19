@@ -1,0 +1,59 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+using DeviceChain.Harborpulse.Model;
+using UnityEngine;
+
+namespace DeviceChain.Harborpulse.Visuals
+{
+    public static class PumpStationBuilder
+    {
+        // wet_well_m is measured from the well FLOOR, independently of harbour datum.
+        public const float WellFloor = -4.4f;
+        public static AssetRig Build(Placement p, Transform parent, HarborMaterials m, float wallZ)
+        {
+            var r = new AssetRig(p, parent);
+            r.Box("Kiosk", new Vector3(-2, 2.2f, -1), new Vector3(8, 4.4f, 7), m.Brick);
+            r.Part("Roof", new MeshKit().Gable(Vector3.zero, 9, 8, 1.5f), m.Slate, new Vector3(-2, 4.4f, -1));
+            r.Box("Door", new Vector3(-3, 1.3f, 2.56f), new Vector3(1.7f, 2.6f, 0.12f), m.DarkSteel);
+            r.Box("ControlCabinet", new Vector3(3.1f, 1.1f, 2), new Vector3(1.4f, 2.2f, 0.6f), m.Steel);
+            r.Part("Ammeter", new MeshKit().Pipe(Vector3.zero, Vector3.forward, 0.38f, 0.04f, 32), m.GaugeBoard, new Vector3(3.1f, 1.55f, 2.33f));
+            var needle = r.Add("CurrentNeedle", new Vector3(3.1f, 1.55f, 2.40f));
+            new MeshKit().Box(new Vector3(0, 0.14f, 0), new Vector3(0.025f, 0.3f, 0.025f)).Spawn("Needle", needle, m.DarkSteel);
+            var c = new Vector3((float)WellFootprint.LocalX, WellFloor, (float)WellFootprint.LocalZ);
+            r.Part("ConcreteWell", new MeshKit().Shell(Vector3.zero, (float)WellFootprint.RadiusM, 4.5f, 0.22f, 180, 360), m.Coping, c);
+            r.Part("GlassSection", new MeshKit().Shell(Vector3.zero, 2.43f, 4.5f, 0.025f, 0, 180), m.WellGlass, c, false);
+            r.Part("WellFloor", new MeshKit().Cylinder(Vector3.zero, 2.4f, 0.12f, 40), m.Coping, c - Vector3.up * 0.12f);
+            r.Part("WellSurface", new MeshKit().Cylinder(Vector3.zero, 2.19f, 0.025f, 48), m.WetWell, c, false);
+            // the cut-away is the scene's one deliberate x-ray, so it carries its own cool work light: without it the well is unreadable at night
+            var wellLight = r.Add("WellLight", c + new Vector3(0, 4.3f, 0.6f)).gameObject.AddComponent<Light>();
+            wellLight.type = LightType.Point; wellLight.range = 7.5f; wellLight.intensity = 5f; wellLight.color = new Color(0.82f, 0.9f, 1f); wellLight.shadows = LightShadows.None;
+            r.Part("Motor", new MeshKit().Cylinder(Vector3.zero, 0.55f, 0.9f, 16), m.Steel, c + new Vector3(0, 0.2f, -0.4f));
+            var impeller = r.Add("Impeller", c + new Vector3(0, 0.35f, 0.85f));
+            var blades = new MeshKit();
+            for (var i = 0; i < 4; i++) blades.Box(Vector3.zero, new Vector3(1.55f, 0.10f, 0.25f), i * 45);
+            blades.Spawn("Blades", impeller, m.Flow);
+            Marker(r, m, "LowCutoff", 0.8f, m.Steel, "low cut-off 0.8 m", 0, new Color(0.62f, 0.68f, 0.74f));
+            Marker(r, m, "HighMarker", 2.5f, m.Major, "wet-well-high 2.5 m (rule)", 0, new Color(1f, 0.62f, 0.2f));
+            Marker(r, m, "FloatMarker", 3.2f, m.GaugeBoard, "float start 3.2 m (pump's own)", 0, new Color(0.92f, 0.92f, 0.88f));
+            Marker(r, m, "AttributeMarker", 0, m.Minor, "well_alarm_m (platform attribute, MINOR rule)", -1.9f, new Color(1f, 0.85f, 0.35f));
+            r["AttributeMarker"].gameObject.SetActive(false);
+            r.Part("Float", new MeshKit().Ball(Vector3.zero, 0.18f), m.WorldCue, c + new Vector3(1.3f, 3.2f, 0));
+            r.Part("FloatChain", new MeshKit().Cylinder(Vector3.zero, 0.025f, 1.2f, 6), m.Steel, c + new Vector3(1.3f, 3.2f, 0));
+            var outZ = wallZ - r.Root.position.z;
+            r.Part("DischargePipe", new MeshKit().Rod(new Vector3(0, -0.6f, -0.4f), new Vector3(0, -0.6f, outZ), 0.4f), m.DarkSteel, Vector3.zero);
+            r.Part("Outfall", new MeshKit().Pipe(Vector3.zero, Vector3.forward, 0.55f, 1.3f, 20), m.Steel, new Vector3(0, -1.0f, outZ));
+            var flap = r.Add("OutfallFlap", new Vector3(0, -0.43f, outZ + 1.31f));
+            new MeshKit().Pipe(new Vector3(0, -0.55f, 0), Vector3.forward, 0.52f, 0.06f, 20).Spawn("HingedFlap", flap, m.DarkSteel);
+            r.Part("OutfallJet", new MeshKit().Pipe(Vector3.zero, new Vector3(0, -0.18f, 1), 0.28f, 1, 10), m.Jet, new Vector3(0, -1, outZ + 1.4f), false);
+            r["Beacon"].localPosition = new Vector3(2, 5.5f, 1);
+            r["CardAnchor"].localPosition = new Vector3(8, 2.2f, 6);
+            return r;
+        }
+        static void Marker(AssetRig r, HarborMaterials m, string name, float level, Material material, string text, float tagX, Color tagColour)
+        {
+            var t = r.Part(name, new MeshKit().Ring(Vector3.zero, 2.24f, 0.06f), material, new Vector3(9, WellFloor + level, 6));
+            AssetRig.Tag(text, t, new Vector3(tagX, 0.08f, 2.5f), 0.10f, tagColour);
+        }
+    }
+}

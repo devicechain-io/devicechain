@@ -99,6 +99,10 @@ namespace DeviceChain.Harborpulse.Model
 
         public Ground Depot { get; private set; }
 
+        public const double CopingInlandM = 1.8, CrewClearanceM = 2.5, CrewFrontExtentM = 3.275;
+        public static Ground GaugeCrewAt(Ground gauge, double wallZ) => new Ground(gauge.X + 4,
+            Math.Min(gauge.Z - 3, wallZ - CopingInlandM - CrewClearanceM - CrewFrontExtentM));
+
         /// <summary>West, east, south and north extent of everything placed, metres.</summary>
         public double MinX { get; private set; }
 

@@ -12,7 +12,7 @@ namespace DeviceChain.Harborpulse.Model
     /// What the runner's <c>GET /status</c> says about the compressed day: the simulator's ScenarioClock, whose JSON names are its contract
     /// with the scenario verifier and with this scene. Only the fields the scene uses are read.
     /// </summary>
-    public sealed class ScenarioStatus
+    public sealed partial class ScenarioStatus
     {
         /// <summary>The runner's lifecycle state: CREATED, BOOTSTRAPPED, RUNNING, STOPPED.</summary>
         public string RunnerState { get; internal set; }
@@ -83,6 +83,7 @@ namespace DeviceChain.Harborpulse.Model
 
                 if (!(s.DayLengthSeconds > 0)) throw new FormatException("/status: scenario.dayLengthSeconds must be positive");
                 if (s.StartHour < 0 || s.StartHour >= 24 || s.SimHour < 0 || s.SimHour >= 24) throw new FormatException("/status: scenario hours must be in [0, 24)");
+                s.ParseMetadata(c);
                 return s;
             }
         }

@@ -31,6 +31,8 @@ namespace DeviceChain.Harborpulse.Live
         }
 
         /// <summary>The last reason a poll failed, or null while they succeed.</summary>
+        public ScenarioStatus Last { get; private set; }
+
         public string Problem { get; private set; }
 
         /// <summary>Main thread, every frame.</summary>
@@ -61,6 +63,7 @@ namespace DeviceChain.Harborpulse.Live
                         return;
                     }
 
+                    Last = status;
                     Problem = null;
                     follower.Observe(status, DateTimeOffset.UtcNow);
                 }

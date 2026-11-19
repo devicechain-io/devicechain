@@ -298,3 +298,39 @@ func TestHarborpulseLongDayBuffersTheWholeOutage(t *testing.T) {
 		t.Fatal("emit interval changed outage log capacity")
 	}
 }
+
+func TestScenarioClockBeatsWire(t *testing.T) {
+	s := NewHarborpulse(1, Load{})
+	c := s.(ScenarioClockReporter).ScenarioClock(time.Now())
+	b, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Beats []struct {
+			Name string  `json:"name"`
+			From float64 `json:"from"`
+			To   float64 `json:"to"`
+		} `json:"beats"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Beats) != len(harborBeats) {
+		t.Fatalf("reported %d beats, want %d", len(wire.Beats), len(harborBeats))
+	}
+	for i, want := range harborBeats {
+		got := wire.Beats[i]
+		if got.Name != want.name || got.From != want.from || got.To != want.to {
+			t.Errorf("beat %d: %+v, want %+v", i, got, want)
+		}
+	}
+	c.Beats[0].Name = "changed"
+	if s.(ScenarioClockReporter).ScenarioClock(time.Now()).Beats[0].Name != harborBeats[0].name {
+		t.Fatal("clock calls share a mutable beat slice")
+	}
+	b, err = json.Marshal(ScenarioClock{Name: "no-beats"})
+	if err != nil || strings.Contains(string(b), "\"beats\"") {
+		t.Fatalf("no beats must be omitted: %s, %v", b, err)
+	}
+}
