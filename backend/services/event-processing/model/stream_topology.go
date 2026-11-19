@@ -30,6 +30,11 @@ type DetectStreamTopology struct {
 
 func (DetectStreamTopology) TableName() string { return "detect_stream_topology" }
 
+// AuditExempt opts the topology record out of the audit journal (ADR-019), as every other
+// DETECT system table is: it is instance metadata written by the engine itself, under no
+// tenant, so a journal row would have no tenant to carry and the write would be refused.
+func (DetectStreamTopology) AuditExempt() bool { return true }
+
 // EnsureStreamTopology must be called under the singleton lease, after the
 // predecessor has stopped and before restoring or consuming any DETECT input.
 // The history check and first topology write commit in one transaction.

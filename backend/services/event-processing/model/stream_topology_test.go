@@ -53,6 +53,10 @@ func TestDetectStreamTopologyTransitions(t *testing.T) {
 		t.Run(map[bool]string{true: "history", false: "fresh"}[history > 0], func(t *testing.T) {
 			db := sqlitetest.OpenMemory(t, &gorm.Config{Logger: logger.Discard})
 			require.NoError(t, rdb.RegisterTenantScoping(db))
+			// The audit journal, as production registers it: the topology write runs under
+			// no tenant, and a journal row for it would be refused with ErrNoTenant.
+			require.NoError(t, db.AutoMigrate(&rdb.AuditEvent{}))
+			require.NoError(t, rdb.RegisterAuditJournal(db))
 			for _, m := range Migrations {
 				require.NoError(t, m.Migrate(db))
 			}
