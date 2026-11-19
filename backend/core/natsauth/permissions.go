@@ -504,8 +504,8 @@ func AdminPermissions(instanceId string) (Permissions, error) {
 	}
 	// `dcctl broker facts` reads the platform's own announcements (the deletion facts) the same
 	// way, one stored message at a time. The same two READ verbs, on exactly the streams the table
-	// declares OperatorReadable: never a purge, a message delete or a consumer, so the operator
-	// plane can read what the platform announced but never remove it.
+	// declares OperatorReadable: never a purge, a message delete or a consumer, so this grant adds
+	// no way to remove what the platform announced.
 	for _, suffix := range streams.OperatorReadable() {
 		name := messaging.StreamName(instanceId, suffix)
 		g.api("STREAM.MSG.GET."+name, "DIRECT.GET."+name)

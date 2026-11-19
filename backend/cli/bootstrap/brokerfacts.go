@@ -27,9 +27,9 @@ import (
 // is on the broker, in the entity-deleted stream device-management publishes from its outbox, and
 // this reads it there as the broker administrator, one stored message at a time.
 //
-// 🔑 IT READS AND NOTHING ELSE. The administrator is granted STREAM.MSG.GET and DIRECT.GET on the
-// streams the table declares OperatorReadable (core/natsauth), and no purge, message delete or
-// consumer: a deletion fact the operator plane could remove would be a fact nobody could rely on.
+// 🔑 IT READS AND NOTHING ELSE. For this the administrator is granted STREAM.MSG.GET and
+// DIRECT.GET on the streams the table declares OperatorReadable (core/natsauth), and no purge,
+// message delete or consumer.
 // The reads are by sequence (and subject), so nothing is created on the broker either.
 
 // factReadTimeout bounds one stored-message read. A variable so a test can shorten it.
@@ -196,6 +196,9 @@ func collectFacts(ctx context.Context, stream factStream, instanceId string, fil
 					name, seq, err, name)
 			}
 			return out, fmt.Errorf("reading %s message %d: %w", name, seq, err)
+		}
+		if m.Sequence > info.State.LastSeq {
+			break // appended after the bounds were read; the summary line names those bounds
 		}
 		seq = m.Sequence + 1
 		f := decodeFact(instanceId, m)

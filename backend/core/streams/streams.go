@@ -377,8 +377,8 @@ type Stream struct {
 	// OperatorReadable lets the broker administrator, the operator plane's login, read this
 	// stream's stored messages one at a time (STREAM.MSG.GET and DIRECT.GET, by sequence or by
 	// subject): `dcctl broker facts` answers "was this announced, and when?" from them. It grants
-	// READ only, never a purge, a message delete or a consumer, so nothing the operator does can
-	// remove what the platform announced. Only a PlatformAuthored stream may declare it: what a
+	// READ only, never a purge, a message delete or a consumer, so it adds no way to remove what
+	// the platform announced. Only a PlatformAuthored stream may declare it: what a
 	// device wrote is not the operator's to read off the broker.
 	OperatorReadable bool
 	// DeadLetterKind is the kind (core/deadletter's vocabulary) of a dead letter written
@@ -1105,7 +1105,7 @@ var All = []Stream{
 	//
 	// OperatorReadable: "was the deletion of X announced, and when?" is a support question with
 	// no other operator-plane answer, so `dcctl broker facts` reads this stream as the broker
-	// administrator. Read only: the operator plane can never remove a deletion fact.
+	// administrator. The grant is read only: it adds no right to remove a deletion fact.
 	{Suffix: EntityDeleted, BackupClass: durability.BackupCheckpoint, Durability: durability.Transient, DurabilityWhy: "a deletion fan-out in flight; device-management re-publishes a deletion until the broker acknowledges it, but one acknowledged just before the restore point may not have reached every consumer", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, OperatorReadable: true, Writers: []string{"device-management"}, Readers: []Reader{{"dashboard-management", ReadDurable}, {"event-management", ReadDurable}, {"event-processing", ReadDurable}, {"command-delivery", ReadDurable}, {"device-state", ReadDurable}, {"update-management", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
 
 	// ADR-081. Emitted post-commit by device-management whenever a device's tracked

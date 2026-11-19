@@ -166,8 +166,9 @@ sequence, the time the broker stored it, the tenant, the entity's type, id and t
 was deleted, and the message id the announcement was published under (entdel/<tenant>/<type>/<id>
 deduplicates a re-announcement).
 
-It connects through a port-forward to a broker pod as the broker administrator, and only reads: that
-login may read these messages but cannot remove them, and nothing is created on the broker. A fact
+It connects through a port-forward to a broker pod as the broker administrator, and only reads: the
+grant it needs is read-only (it adds no right to delete, purge or publish a message, or to open a
+consumer), and nothing is created on the broker. A fact
 is listed while the stream still holds it, so an old deletion may no longer be there. An instance
 installed or last upgraded by a release without this command has to be upgraded before its broker
 lets the administrator read the facts.`,
