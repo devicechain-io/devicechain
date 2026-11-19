@@ -3110,6 +3110,11 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	if !published {
 		return false
 	}
+	// The publish can outlast a placement move; the snapshot must not commit across one.
+	if err := rp.checkRulePlacement(); err != nil {
+		rp.refuseRulePlacement(err)
+		return false
+	}
 	if rp.dirty {
 		// A snapshot that just failed is not rebuilt and re-sent on every tick: serializing the
 		// whole engine and writing it is the expensive part, and a store that is struggling with

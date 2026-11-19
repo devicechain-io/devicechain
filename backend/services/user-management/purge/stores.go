@@ -58,7 +58,7 @@ func DefaultStores(db *rdb.RdbManager, tsdb *rdb.Guest, broker messaging.Connect
 		NewTelemetry(tsdb),
 		NewBroker(broker, instanceId, shardGroups),
 		NewKeyValue(broker, instanceId),
-		NewDetect(broker, db, instanceId, shardGroups),
+		NewDetect(broker, db, instanceId),
 		NewObject(objects, tenants),
 	}
 }

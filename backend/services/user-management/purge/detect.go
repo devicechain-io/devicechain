@@ -10,9 +10,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/tenantpurge"
 	"github.com/rs/zerolog/log"
 )
@@ -56,20 +54,15 @@ const detectSchema = "event-processing"
 // It is the opposite case from the broker's unattributable MQTT sessions, which are
 // counted rather than deferred precisely because no operator action could ever clear them.
 type Detect struct {
-	conn        messaging.Connection
-	db          Database
-	instanceId  string
-	shardGroups *config.NatsShardGroupsConfiguration
+	conn       messaging.Connection
+	db         Database
+	instanceId string
 }
 
 // NewDetect builds the store over the service's NATS connection (how it reaches the
 // engines) and its own database handle (how it learns which partitions exist).
-func NewDetect(conn messaging.Connection, db Database, instanceId string, groups ...*config.NatsShardGroupsConfiguration) *Detect {
-	d := &Detect{conn: conn, db: db, instanceId: instanceId}
-	if len(groups) > 0 {
-		d.shardGroups = groups[0]
-	}
-	return d
+func NewDetect(conn messaging.Connection, db Database, instanceId string) *Detect {
+	return &Detect{conn: conn, db: db, instanceId: instanceId}
 }
 
 func (d *Detect) Name() string { return StoreDetect }
@@ -130,17 +123,36 @@ func (d *Detect) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 	return d.outcome(tenant, partitions, res), nil
 }
 
-// checkpointedPartitions requires every durable partition and, when resolved-events
-// is sharded, every configured group. A group can hold live state before its first row.
+// checkpointedPartitions requires every durable partition and, once event-processing has
+// activated resolved-events sharding, every group it recorded. A group can hold live state
+// before its first checkpoint row, so the recorded topology, not the rows, names the groups.
+//
+// 🔴 THE TOPOLOGY RECORD, NOT THE CONFIGURATION. A configuration that shards
+// resolved-events says nothing about whether any group worker has ever run: before
+// event-processing activates it (or on a release that refuses it), no group answers, and
+// requiring one would defer every purge forever over state that does not exist.
+// event-processing writes the record at the start of its first sharded term, before any
+// group admits input, so every group that can hold state is named by it.
 func (d *Detect) checkpointedPartitions(ctx context.Context) ([]string, error) {
+	db := d.db.DB(ctx)
 	var ids []string
-	if err := d.db.DB(ctx).Raw(tenantpurge.DetectPartitionsQuery).Scan(&ids).Error; err != nil {
+	if err := db.Raw(tenantpurge.DetectPartitionsQuery).Scan(&ids).Error; err != nil {
 		return nil, fmt.Errorf("listing the DETECT partitions holding a checkpoint: %w", err)
 	}
-	if d.shardGroups != nil && slices.Contains(d.shardGroups.Suffixes, streams.ResolvedEvents) {
-		for group := 0; group < d.shardGroups.Count; group++ {
-			id := tenantpurge.DetectGroupPartition(group)
-			if !slices.Contains(ids, id) {
+	var tables int64
+	if err := db.Raw(tenantpurge.DetectTopologyTableQuery).Scan(&tables).Error; err != nil {
+		return nil, fmt.Errorf("checking for the DETECT stream topology: %w", err)
+	}
+	if tables == 0 {
+		return ids, nil
+	}
+	var counts []int
+	if err := db.Raw(tenantpurge.DetectTopologyGroupsQuery).Scan(&counts).Error; err != nil {
+		return nil, fmt.Errorf("reading the DETECT stream topology: %w", err)
+	}
+	for _, count := range counts {
+		for group := 0; group < count; group++ {
+			if id := tenantpurge.DetectGroupPartition(group); !slices.Contains(ids, id) {
 				ids = append(ids, id)
 			}
 		}

@@ -17,9 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/streams"
 )
 
 // The DETECT store, driven over a REAL BROKER against a REAL CATALOG QUERY.
@@ -48,27 +46,32 @@ const (
 	detectTenant = "acme-corp"
 )
 
-func TestDetectExpectedPartitionsIncludeConfiguredGroups(t *testing.T) {
+// The groups owed an answer are the ones event-processing RECORDED when it activated
+// sharding, not the ones a configuration names: before activation no group answers.
+func TestDetectExpectedPartitionsFollowTheRecordedTopology(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		groups *config.NatsShardGroupsConfiguration
-		want   []string
+		name     string
+		topology int // 0: the table does not exist; -1: it exists with no row
+		want     []string
 	}{
-		{"resolved", &config.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.ResolvedEvents}}, []string{"singleton", "resolved-events-g1", "retired-partition"}},
-		{"unsharded", nil, []string{"singleton", "retired-partition"}},
-		{"inbound-only", &config.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.InboundEvents}}, []string{"singleton", "retired-partition"}},
+		{"no-topology-table", 0, []string{"singleton", "retired-partition"}},
+		{"not-activated", -1, []string{"singleton", "retired-partition"}},
+		{"activated", 3, []string{"singleton", "resolved-events-g1", "resolved-events-g2", "retired-partition"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := configuredDetectStore(t, detectConn{}, detectCatalog(t, true, "singleton", "retired-partition"), tc.groups)
-			ids, err := d.checkpointedPartitions(context.Background())
+			db := detectCatalog(t, true, "singleton", "retired-partition")
+			if tc.topology != 0 {
+				withDetectTopology(t, db, tc.topology)
+			}
+			ids, err := NewDetect(detectConn{}, db, detectInstance).checkpointedPartitions(context.Background())
 			require.NoError(t, err)
 			require.ElementsMatch(t, tc.want, ids)
 		})
 	}
-	// The reported case: only g0 has ever checkpointed.
-	d := configuredDetectStore(t, detectConn{}, detectCatalog(t, true, "singleton"),
-		&config.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.ResolvedEvents}})
-	ids, err := d.checkpointedPartitions(context.Background())
+	// The reported case: only g0 has ever checkpointed, and g1 holds state in memory.
+	db := detectCatalog(t, true, "singleton")
+	withDetectTopology(t, db, 2)
+	ids, err := NewDetect(detectConn{}, db, detectInstance).checkpointedPartitions(context.Background())
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"singleton", "resolved-events-g1"}, ids)
 }
@@ -85,8 +88,9 @@ func TestDetectUncheckpointedGroupFailureDefersUntilRetry(t *testing.T) {
 		}
 		return []messaging.DetectPurgeReply{reply}
 	})
-	d := configuredDetectStore(t, detectConn{detectDial(t, url)}, detectCatalog(t, true, "singleton"),
-		&config.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.ResolvedEvents}})
+	db := detectCatalog(t, true, "singleton")
+	withDetectTopology(t, db, 2)
+	d := configuredDetectStore(t, detectConn{detectDial(t, url)}, db)
 	for _, retry := range []bool{false, true} {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		out, err := d.Erase(ctx, detectTenant, time.Now())
@@ -102,9 +106,9 @@ func TestDetectUncheckpointedGroupFailureDefersUntilRetry(t *testing.T) {
 	}
 }
 
-func configuredDetectStore(t *testing.T, conn messaging.Connection, db Database, groups *config.NatsShardGroupsConfiguration) *Detect {
+func configuredDetectStore(t *testing.T, conn messaging.Connection, db Database) *Detect {
 	t.Helper()
-	for _, store := range DefaultStores(nil, nil, conn, detectInstance, nil, nil, groups) {
+	for _, store := range DefaultStores(nil, nil, conn, detectInstance, nil, nil, nil) {
 		if d, ok := store.(*Detect); ok {
 			d.db = db
 			return d
@@ -266,6 +270,7 @@ func detectCatalog(t *testing.T, deployed bool, partitions ...string) Database {
 
 	require.NoError(t, db.Exec(`CREATE TABLE pg_namespace (nspname text)`).Error)
 	require.NoError(t, db.Exec(`INSERT INTO pg_namespace (nspname) VALUES ('public')`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE pg_tables (schemaname text, tablename text)`).Error)
 	if !deployed {
 		return detectDB{db}
 	}
@@ -278,6 +283,18 @@ func detectCatalog(t *testing.T, deployed bool, partitions ...string) Database {
 			`INSERT INTO "`+detectSchema+`"."detect_snapshots" (partition_id) VALUES (?)`, p).Error)
 	}
 	return detectDB{db}
+}
+
+// withDetectTopology creates event-processing's stream topology table, as its migration
+// does, and records an activated topology of count groups (none when count is negative).
+func withDetectTopology(t *testing.T, db Database, count int) {
+	t.Helper()
+	g := db.DB(context.Background())
+	require.NoError(t, g.Exec(`INSERT INTO pg_tables (schemaname, tablename) VALUES (?, 'detect_stream_topology')`, detectSchema).Error)
+	require.NoError(t, g.Exec(`CREATE TABLE "`+detectSchema+`"."detect_stream_topology" (id text, group_count integer)`).Error)
+	if count > 0 {
+		require.NoError(t, g.Exec(`INSERT INTO "`+detectSchema+`"."detect_stream_topology" (id, group_count) VALUES ('singleton', ?)`, count).Error)
+	}
 }
 
 // detectStore builds the store the way DefaultStores does.
