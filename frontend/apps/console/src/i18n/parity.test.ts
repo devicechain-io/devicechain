@@ -129,6 +129,7 @@ describe('the shipped registries carry every namespace', () => {
     ingestFailures: () => import('@/i18n/lazy/ingestFailures'),
     integrations: () => import('@/i18n/lazy/integrations'),
     updates: () => import('@/i18n/lazy/updates'),
+    alarmMaintenance: () => import('@/i18n/lazy/alarmMaintenance'),
   };
 
   it('the English bundle registers every namespace, each wired to its own file', async () => {

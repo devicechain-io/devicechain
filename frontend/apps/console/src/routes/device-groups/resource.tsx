@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { StartMaintenanceAction, MaintenanceBanner } from '@/routes/alarm-maintenance/EntityMaintenance';
 import { listAll } from '@/lib/api/list-all';
 import { RegistryTypeForm, groupColumns, type RegistryResource } from '@/components/registry';
 import { MembershipPanel } from '@/components/MembershipPanel';
@@ -25,6 +26,8 @@ export const deviceGroupResource: RegistryResource<DeviceGroup> = {
   idOf: (g) => g.id,
   tokenOf: (g) => g.token,
   nameOf: (g) => g.name,
+  renderHeaderAction: item => <StartMaintenanceAction target={{ type: 'ENTITY_GROUP', token: item.token }} />,
+  renderDetailNotice: item => <MaintenanceBanner target={{ type: 'ENTITY_GROUP', token: item.token }} />,
   columns: groupColumns<DeviceGroup>(),
   renderForm: (g, onDone) => (
     <RegistryTypeForm

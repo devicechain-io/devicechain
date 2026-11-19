@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { hasAuthority } from '@devicechain/client';
+import { MaintenanceChip, useSuppressions } from '@/routes/alarm-maintenance/MaintenanceChip';
 import { useAuth } from '@/auth/AuthProvider';
 import { acknowledgeAlarm, listAlarms } from '@/lib/api/alarms';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -48,6 +49,7 @@ export function DeviceAlarmsPanel({ deviceToken }: { deviceToken: string }) {
   const { data, loading, error } = useQuery(
     () => listAlarms({ pageNumber, pageSize, originatorType: 'device', originatorToken: deviceToken }),
     [deviceToken, pageNumber, version],
+    [deviceToken],
   );
   useEffect(() => {
     const id = window.setInterval(reload, REFRESH_MS);
@@ -56,6 +58,7 @@ export function DeviceAlarmsPanel({ deviceToken }: { deviceToken: string }) {
   useEffect(() => setPageNumber(1), [deviceToken]);
 
   const results = data?.results ?? [];
+  const suppressions = useSuppressions(results.map(a => a.token), data);
   const unitOf = useMetricUnits(results.length > 0 ? [deviceToken] : []);
 
   const acknowledge = async (token: string) => {
@@ -107,6 +110,7 @@ export function DeviceAlarmsPanel({ deviceToken }: { deviceToken: string }) {
                   </DataTableCell>
                   <DataTableCell>
                     <AlarmStatusBadge state={a.state} acknowledged={a.acknowledged} />
+                    <MaintenanceChip suppression={suppressions.get(a.token)} />
                   </DataTableCell>
                   <DataTableCell>
                     <div className="font-medium text-foreground">{a.alarmKey}</div>
