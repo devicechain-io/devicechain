@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-using System;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Towerpulse.Model
 {
@@ -42,23 +42,22 @@ namespace DeviceChain.Towerpulse.Model
         public override string ToString() { return TimeClock.Format(TimeS) + " " + Kind + " " + Subject + " " + Detail; }
     }
 
+    /// <summary>
+    /// The model's day clock. The convention began here (seconds since midnight of day 0) and now lives in the shared demo platform as
+    /// <see cref="DayClock"/>, which Harborpulse reads too; this class forwards to it and adds only what is Towerpulse's own (the working week).
+    /// </summary>
     public static class TimeClock
     {
-        public const double Day = 86400.0;
+        public const double Day = DayClock.Day;
 
         /// <summary>Seconds into the day, 0..86400.</summary>
-        public static double TimeOfDay(double simS) { return simS - Math.Floor(simS / Day) * Day; }
-        public static int DayIndex(double simS) { return (int)Math.Floor(simS / Day); }
+        public static double TimeOfDay(double simS) { return DayClock.TimeOfDay(simS); }
+        public static int DayIndex(double simS) { return DayClock.DayIndex(simS); }
         /// <summary>Day 0 is a Monday; 5 and 6 are the weekend.</summary>
         public static bool IsWeekday(double simS) { int d = DayIndex(simS) % 7; if (d < 0) d += 7; return d < 5; }
-        public static double Hours(double simS) { return TimeOfDay(simS) / 3600.0; }
-        public static double At(int day, int hour, int minute) { return day * Day + hour * 3600.0 + minute * 60.0; }
+        public static double Hours(double simS) { return DayClock.Hours(simS); }
+        public static double At(int day, int hour, int minute) { return DayClock.At(day, hour, minute); }
 
-        public static string Format(double simS)
-        {
-            double tod = TimeOfDay(simS);
-            int h = (int)(tod / 3600), m = (int)((tod - h * 3600) / 60), s = (int)(tod - h * 3600 - m * 60);
-            return "d" + DayIndex(simS) + " " + h.ToString("00") + ":" + m.ToString("00") + ":" + s.ToString("00");
-        }
+        public static string Format(double simS) { return DayClock.Format(simS); }
     }
 }

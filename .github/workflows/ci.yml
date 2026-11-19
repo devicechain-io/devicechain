@@ -2576,6 +2576,40 @@ jobs:
         run: hack/check-unity-metas.sh demos/towerpulse-unity/Assets/Towerpulse
 
   # ---------------------------------------------------------------------------
+  # Harborpulse model (demos/harborpulse-unity): the engine-free half of the waterfront scene -- the layout
+  # the simulator's manifest generates, the site plan, the scenario clock that follows the runner's /status,
+  # the time-of-day sky, the Gerstner wave set and the tide and street-light boards. Its Dotnet~/ sidecar
+  # compiles the SAME .cs files Unity compiles (Scripts/Model through its asmdef, Tests/EditMode through the
+  # test asmdef) at LangVersion 9 for netstandard2.1 and net8.0 with warnings as errors, and runs the tests
+  # under NUnit. The engine-bound layers are compiled by unity-compile-check; no CI job runs Unity.
+  # ---------------------------------------------------------------------------
+  harborpulse-model:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: demos/harborpulse-unity/Dotnet~
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore --locked-mode
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Test
+        run: dotnet test --no-build -c Release --blame-hang-timeout 2m
+
+      # The project's own assets are imported by the Editor with whatever .meta files are committed.
+      - name: Every Harborpulse asset and folder has a committed .meta
+        working-directory: .
+        run: hack/check-unity-metas.sh demos/harborpulse-unity/Assets/Harborpulse
+
+  # ---------------------------------------------------------------------------
   # Helm chart: lint and template render.
   # ---------------------------------------------------------------------------
   helm:
@@ -3740,6 +3774,7 @@ jobs:
       - sim-traffic
       - demo-platform
       - towerpulse-model
+      - harborpulse-model
       - helm
       - opentofu
       - image-smoke
