@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 
@@ -541,7 +542,7 @@ func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool,
 			// FOR SHARE, as a registration takes it: a revocation either committed before this (its
 			// marker is visible below) or waits for this commit and then finds the credential gone, as
 			// it would have before the marker existed.
-			if err := lockTrustAnchorShareByID(tx, id); err != nil {
+			if err := identity.LockTrustAnchorShareByID(tx, id); err != nil {
 				return err
 			}
 		}

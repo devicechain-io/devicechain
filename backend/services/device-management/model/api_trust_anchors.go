@@ -54,33 +54,6 @@ const kickOriginDeviceDisabled uint = 1 << 62
 // retried by the background drain, and it is never withdrawn: a deleted device does not come back.
 const kickOriginDeviceDeleted uint = 1<<62 + 1
 
-// lockTrustAnchorByToken reads the anchor with this token on tx, locking its row FOR UPDATE.
-// Disable, delete and every write that binds something to an anchor serialize on it. A token
-// that names nothing in the tenant is gorm.ErrRecordNotFound.
-func lockTrustAnchorByToken(tx *gorm.DB, token string) (*DeviceTrustAnchor, error) {
-	var locked DeviceTrustAnchor
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("token = ?", token).First(&locked).Error; err != nil {
-		return nil, err
-	}
-	return &locked, nil
-}
-
-// lockTrustAnchorShareByToken reads the anchor with this token on tx, locking its row FOR SHARE
-// to the commit. A write that BINDS something to an anchor (a credential, a profile) holds it
-// while it re-checks that the anchor is still enabled and then inserts, so a disable or a delete
-// (FOR UPDATE) either finishes first, and the bind sees it, or waits for the bind and sees what
-// it added. An anchor deleted meanwhile is gorm.ErrRecordNotFound.
-func lockTrustAnchorShareByToken(tx *gorm.DB, token string) (*DeviceTrustAnchor, error) {
-	var locked DeviceTrustAnchor
-	if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("token = ?", token).First(&locked).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("trust anchor %q: %w", token, gorm.ErrRecordNotFound)
-		}
-		return nil, err
-	}
-	return &locked, nil
-}
-
 // lockTenantCreates serializes the creates of one tenant rows of a kind for the rest of the
 // transaction, so the count a limit is checked against is the count the insert lands on. On
 // PostgreSQL it is a transaction-scoped advisory lock keyed on the tenant and the kind; anywhere
@@ -240,7 +213,7 @@ func (api *Api) UpdateDeviceTrustAnchor(ctx context.Context, token string, reque
 	)
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		deviceIds = deviceIds[:0]
-		locked, err := lockTrustAnchorByToken(tx, token)
+		locked, err := identity.LockTrustAnchorByToken(tx, token)
 		if err != nil {
 			return err
 		}
@@ -315,7 +288,7 @@ func (api *Api) UpdateDeviceTrustAnchor(ctx context.Context, token string, reque
 func (api *Api) DeleteDeviceTrustAnchor(ctx context.Context, token string) (bool, error) {
 	deleted := false
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		// CRL writers of this anchor are serialised before the anchor row is locked (lockCrlWriters),
+		// CRL writers of this anchor are serialised before the anchor row is locked (identity.LockCrlWriters),
 		// and this delete discards their lists, so it queues behind them the same way.
 		var named DeviceTrustAnchor
 		if err := tx.Select("id", "tenant_id").Where("token = ?", token).First(&named).Error; err != nil {
@@ -324,10 +297,10 @@ func (api *Api) DeleteDeviceTrustAnchor(ctx context.Context, token string) (bool
 			}
 			return err
 		}
-		if err := lockCrlWriters(tx, named.TenantId, named.ID); err != nil {
+		if err := identity.LockCrlWriters(tx, named.TenantId, named.ID); err != nil {
 			return err
 		}
-		locked, err := lockTrustAnchorByToken(tx, token)
+		locked, err := identity.LockTrustAnchorByToken(tx, token)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
 		}
@@ -356,7 +329,7 @@ func (api *Api) DeleteDeviceTrustAnchor(ctx context.Context, token string) (bool
 		// publication, and an anchor with no credential and no profile left has nothing to
 		// enforce it on, so it is discarded with the anchor. Without that, an anchor that ever held
 		// a CRL could never be deleted: the issuer rows are never deleted by any other path.
-		manual, err := manualRevocationRows(tx, locked.ID)
+		manual, err := identity.ManualRevocationRows(tx, locked.ID)
 		if err != nil {
 			return err
 		}
@@ -364,7 +337,7 @@ func (api *Api) DeleteDeviceTrustAnchor(ctx context.Context, token string) (bool
 			return fmt.Errorf("%w: trust anchor %q holds %d manual revocation(s); un-revoke them first",
 				ErrEntityInUse, token, manual)
 		}
-		if err := discardCrlRevocations(tx, locked.TenantId, locked.ID); err != nil {
+		if err := identity.DiscardCrlRevocations(tx, locked.TenantId, locked.ID); err != nil {
 			return err
 		}
 		result := tx.Unscoped().Delete(locked)

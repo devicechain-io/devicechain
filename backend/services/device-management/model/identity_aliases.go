@@ -39,6 +39,7 @@ type (
 	X509CertificateInfo                    = identity.X509CertificateInfo
 	OcspPolicy                             = identity.OcspPolicy
 	RevocationLimits                       = identity.RevocationLimits
+	RevocationListPutResult                = identity.RevocationListPutResult
 	DeviceCertificateRevokeRequest         = identity.DeviceCertificateRevokeRequest
 	DeviceRevokedCertificateSearchCriteria = identity.DeviceRevokedCertificateSearchCriteria
 	DeviceRevokedCertificateSearchResults  = identity.DeviceRevokedCertificateSearchResults
@@ -64,6 +65,10 @@ const (
 	RevocationStatusFresh    = identity.RevocationStatusFresh
 	RevocationStatusExpiring = identity.RevocationStatusExpiring
 	RevocationStatusStale    = identity.RevocationStatusStale
+
+	RuleCrlNumberNotNewer = identity.RuleCrlNumberNotNewer
+	RuleConflictingIssuer = identity.RuleConflictingIssuer
+	RuleTooManyIssuers    = identity.RuleTooManyIssuers
 )
 
 // The pure x509 helpers that callers outside this package use. Each is the moved function

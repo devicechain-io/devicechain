@@ -9,15 +9,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model/identity"
-	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // The CRL half of the revocation store: upload (put), replace and delete of one issuer's list
@@ -68,19 +65,6 @@ func (api *Api) GraphqlCrlTextBound() int {
 // certificates.
 const maxIssuerChainBytes = 64 << 10
 
-// issuerRowsPerListFactor bounds the issuer rows (which are never deleted) an anchor accumulates
-// to a multiple of the current lists it may hold, so deleting and uploading lists of ever-new
-// issuers cannot grow the table without end.
-const issuerRowsPerListFactor = 4
-
-// Closed vocabulary of the rules the store (not the parser) enforces, named in the refusal.
-const (
-	RuleCrlNumberNotNewer     = "crl_number_not_newer"
-	RuleConflictingIssuer     = "conflicting_issuer_identity"
-	RuleTooManyIssuers        = "too_many_issuers"
-	ruleRevocationListMissing = "no_revocation_list"
-)
-
 // acquireRevocationWrite takes one of the replica's CRL-write slots, waiting for it until ctx is done.
 func (api *Api) acquireRevocationWrite(ctx context.Context) (func(), error) {
 	slots := api.revocationCfg().slots
@@ -106,35 +90,6 @@ type RevocationListPutRequest struct {
 	MaxBytes int
 }
 
-// RevocationListPutResult is the outcome of an upload.
-type RevocationListPutResult struct {
-	List DeviceRevocationList
-	// NewlyRevoked counts the certificates the list names that the issuer's previous list did not
-	// (or that no list named before): what a live-session kick will be owed for.
-	NewlyRevoked int
-	// Unchanged is true when the very same CRL (by its SHA-256) was already the current list: nothing
-	// was written.
-	Unchanged bool
-	// Replaced is true when a previous list of the issuer was replaced.
-	Replaced bool
-	// Removed counts entries the previous list held that this one does not (un-revoked, as a
-	// certificate hold released).
-	Removed int
-	// SessionsEnded is false when the live sessions the upload affects could not be confirmed ended
-	// (the upload itself stands, and PutDeviceRevocationList returns ErrSessionsNotEnded with it).
-	SessionsEnded bool
-}
-
-// crlEntryRow is DeviceRevokedCertificate for the bulk materialisation of a CRL's entries: the
-// same table, but it opts OUT of the audit journal, so hundreds of thousands of derived rows are
-// not journaled one by one. The list row carries the CRL's hash and entry count and IS journaled.
-type crlEntryRow DeviceRevokedCertificate
-
-func (crlEntryRow) TableName() string { return "device_revoked_certificates" }
-
-// AuditExempt: a CRL entry is derived from the list the journal records.
-func (crlEntryRow) AuditExempt() bool { return true }
-
 // PutDeviceRevocationList stores a CRL as the current list of its issuer under a trust anchor,
 // replacing the issuer's previous list, and materialises its entries (diffed against the previous
 // list, batched).
@@ -144,7 +99,7 @@ func (crlEntryRow) AuditExempt() bool { return true }
 // re-reads the anchor under its lock and refuses if it is no longer the one the list was verified
 // against.
 //
-// LOCK ORDER: the CRL-writers advisory lock first (lockCrlWriters), then the anchor's issuer rows
+// LOCK ORDER: the CRL-writers advisory lock first (identity.LockCrlWriters), then the anchor's issuer rows
 // FOR UPDATE (the rows that carry the CRL-number high-water mark), the list and its entries, and only
 // then the anchor row FOR UPDATE with its counter and the kick queue rows. The global order and its
 // one invariant are stated at revocationLockOrder (api_x509_revocation_kicks.go).
@@ -225,7 +180,7 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 		// part of an upload (a row costs index and foreign-key work), and a certificate registration
 		// takes the anchor FOR SHARE inside the broker's 5 s authorization timeout, so it must never
 		// wait for it. CRL writers of one anchor are serialised by an advisory lock taken FIRST
-		// (lockCrlWriters), which is what makes the unlocked-anchor part safe: nothing else writes a
+		// (identity.LockCrlWriters), which is what makes the unlocked-anchor part safe: nothing else writes a
 		// list, an issuer row or a list's entries. The anchor row is locked FOR UPDATE only at the
 		// end, for the counter and to re-verify the anchor, so that lock is held for one UPDATE and the
 		// commit. Nothing is visible to anyone before the commit.
@@ -236,7 +191,7 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 		// update or delete) until the upload commits. It does NOT block a certificate registration,
 		// which takes the row FOR SHARE, a mode that coexists with KEY SHARE. For the same reason
 		// nothing here may take the CRL-writers lock while holding the anchor row in any mode.
-		if err := lockCrlWriters(tx, tenant, anchor.ID); err != nil {
+		if err := identity.LockCrlWriters(tx, tenant, anchor.ID); err != nil {
 			return err
 		}
 		// A plain read, taking no lock: an anchor deleted while this upload waited for the writers'
@@ -250,17 +205,17 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 		}
 		// The parsed entries are released as soon as they are staged: nothing below is
 		// proportional to them.
-		if err := stageCrlEntries(tx, rl.Entries); err != nil {
+		if err := identity.StageCrlEntries(tx, rl.Entries); err != nil {
 			return err
 		}
 		entryCount = len(rl.Entries)
 		rl.Entries = nil
 		var newList bool
-		res, newList, err = storeRevocationList(tx, tenant, anchor, rl, entryCount, lim, keepNew)
+		res, newList, err = identity.StoreRevocationList(tx, tenant, anchor, rl, entryCount, lim, keepNew)
 		if err != nil {
 			return err
 		}
-		if err := dropCrlStage(tx); err != nil {
+		if err := identity.DropCrlStage(tx); err != nil {
 			return err
 		}
 		// Before the anchor lock too: the newly revoked serials are copied to the durable table, so the
@@ -270,14 +225,14 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 			if kickGen, err = api.stashCrlKickSerials(tx, tenant, anchor.ID); err != nil {
 				return err
 			}
-			if err := dropCrlNew(tx); err != nil {
+			if err := identity.DropCrlNew(tx); err != nil {
 				return err
 			}
 		}
 		if res.Unchanged {
 			return nil
 		}
-		locked, err := lockTrustAnchorByToken(tx, token)
+		locked, err := identity.LockTrustAnchorByToken(tx, token)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("trust anchor %q: %w", token, gorm.ErrRecordNotFound)
@@ -288,7 +243,7 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 			return identity.InvalidAnchor("trust anchor %q changed while the list was being checked; upload it again", token)
 		}
 		if newList {
-			if err := bumpRevocationRows(tx, locked.ID, 1); err != nil {
+			if err := identity.BumpRevocationRows(tx, locked.ID, 1); err != nil {
 				return err
 			}
 		}
@@ -308,117 +263,6 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 	kerr := api.endRevokedSessions(ctx, tenant, anchor.ID)
 	res.SessionsEnded = kerr == nil
 	return res, kerr
-}
-
-// lockCrlWriters serialises the CRL writes (upload, delete, and the delete of the anchor that
-// discards them) of one anchor for the rest of the transaction. It is taken BEFORE the anchor row,
-// so that an upload can stage and write its entries without holding that row: every writer of the
-// lists, the issuer rows and the list entries passes through it, so none of them races another.
-// A transaction-scoped advisory lock on PostgreSQL; the SQLite unit-test database has one writer
-// at a time and nothing to take.
-func lockCrlWriters(tx *gorm.DB, tenant string, anchorId uint) error {
-	if tx.Dialector.Name() != "postgres" {
-		return nil
-	}
-	return tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", fmt.Sprintf("crl-writers:%s:%d", tenant, anchorId)).Error
-}
-
-// storeRevocationList is the write half of an upload, run in the transaction that holds the
-// anchor's CRL-writer lock (and, deliberately, not yet the anchor row). newList reports that a list
-// was created rather than replaced, which is the caller's counter to bump under the anchor lock.
-func storeRevocationList(tx *gorm.DB, tenant string, anchor *DeviceTrustAnchor, rl *x509trust.RevocationList,
-	entryCount int, lim RevocationLimits, keepNew bool) (res *RevocationListPutResult, newList bool, err error) {
-	// Every issuer row of the anchor, locked: the exact one carries the high-water mark, and the
-	// others decide whether the identity conflicts.
-	var issuers []DeviceRevocationIssuer
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("tenant_id = ? AND trust_anchor_id = ?", tenant, anchor.ID).Order("id").Find(&issuers).Error; err != nil {
-		return nil, false, err
-	}
-	var issuer *DeviceRevocationIssuer
-	for i := range issuers {
-		is := &issuers[i]
-		if is.TenantId != tenant || is.TrustAnchorId != anchor.ID {
-			return nil, false, errors.New("a revocation issuer read for another tenant or anchor")
-		}
-		sameKey, sameName := is.IssuerKey == rl.Issuer.Key, is.IssuerName == rl.Issuer.Name
-		switch {
-		case sameKey && sameName:
-			issuer = is
-		case sameKey || sameName:
-			return nil, false, identity.ListRefused(RuleConflictingIssuer, "this anchor already holds a list for a CA that shares only its key or only its name with this signer")
-		}
-	}
-
-	var active []DeviceRevocationList
-	if err := tx.Where("tenant_id = ? AND trust_anchor_id = ?", tenant, anchor.ID).Order("id").Find(&active).Error; err != nil {
-		return nil, false, err
-	}
-	var current *DeviceRevocationList
-	for i := range active {
-		if active[i].TenantId != tenant || active[i].TrustAnchorId != anchor.ID {
-			return nil, false, errors.New("a revocation list read for another tenant or anchor")
-		}
-		if active[i].IssuerKey == rl.Issuer.Key && active[i].IssuerName == rl.Issuer.Name {
-			current = &active[i]
-		}
-	}
-
-	// The very CRL already in force: nothing to do, whatever the mark says.
-	if current != nil && current.CrlSha256 == rl.SHA256 {
-		return &RevocationListPutResult{List: *current, Unchanged: true}, false, nil
-	}
-	if issuer != nil {
-		hw, ok := new(big.Int).SetString(issuer.HighWaterCrlNumber, 10)
-		if !ok {
-			return nil, false, fmt.Errorf("a stored CRL-number high-water mark is not a number")
-		}
-		if rl.Number.Cmp(hw) <= 0 {
-			return nil, false, identity.ListRefused(RuleCrlNumberNotNewer, "this issuer's highest accepted CRL number is %s, this list is %s",
-				hw.String(), rl.Number.String())
-		}
-	}
-	if current == nil && len(active) >= lim.MaxListsPerAnchor {
-		return nil, false, limit.Exceeded("revocation lists per trust anchor", len(active)+1, lim.MaxListsPerAnchor)
-	}
-	if issuer == nil && len(issuers) >= lim.MaxListsPerAnchor*issuerRowsPerListFactor {
-		return nil, false, identity.ListRefused(RuleTooManyIssuers, "this anchor has recorded %d issuers; delete lists you no longer need only if they are not coming back", len(issuers))
-	}
-
-	number := rl.Number.String()
-	if issuer == nil {
-		issuer = &DeviceRevocationIssuer{TrustAnchorId: anchor.ID, IssuerKey: rl.Issuer.Key,
-			IssuerName: rl.Issuer.Name, HighWaterCrlNumber: number}
-		if err := tx.Create(issuer).Error; err != nil {
-			return nil, false, err
-		}
-	} else if err := tx.Model(issuer).Update("high_water_crl_number", number).Error; err != nil {
-		return nil, false, err
-	}
-
-	list := current
-	replaced := current != nil
-	if list == nil {
-		list = &DeviceRevocationList{TrustAnchorId: anchor.ID, RevocationIssuerId: issuer.ID,
-			IssuerKey: rl.Issuer.Key, IssuerName: rl.Issuer.Name}
-	}
-	list.IssuerCertificatePem = rl.SignerPEM
-	list.IssuerSubject = rl.IssuerSubject
-	list.CrlNumber = number
-	list.ThisUpdate = rl.ThisUpdate
-	list.NextUpdate = rl.NextUpdate
-	list.EntryCount = int32(entryCount)
-	list.CrlSha256 = rl.SHA256
-	list.Source = RevocationSourceUpload
-	if err := tx.Save(list).Error; err != nil {
-		return nil, false, err
-	}
-
-	newly, removed, err := applyStagedEntries(tx, tenant, anchor.ID, list, keepNew)
-	if err != nil {
-		return nil, false, err
-	}
-	return &RevocationListPutResult{List: *list, NewlyRevoked: newly, Replaced: replaced, Removed: removed}, !replaced, nil
 }
 
 // DeleteDeviceRevocationList deletes the issuer's ACTIVE list and every entry it carried. The
@@ -453,10 +297,10 @@ func (api *Api) DeleteDeviceRevocationList(ctx context.Context, anchorToken, iss
 	}
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		deleted = false
-		if err := lockCrlWriters(tx, tenant, named.ID); err != nil {
+		if err := identity.LockCrlWriters(tx, tenant, named.ID); err != nil {
 			return err
 		}
-		anchor, err := lockTrustAnchorByToken(tx, token)
+		anchor, err := identity.LockTrustAnchorByToken(tx, token)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("trust anchor %q: %w", token, gorm.ErrRecordNotFound)
@@ -473,7 +317,7 @@ func (api *Api) DeleteDeviceRevocationList(ctx context.Context, anchorToken, iss
 		}
 		for i := range lists {
 			if err := tx.Where("tenant_id = ? AND trust_anchor_id = ? AND revocation_list_id = ?",
-				tenant, anchor.ID, lists[i].ID).Delete(&crlEntryRow{}).Error; err != nil {
+				tenant, anchor.ID, lists[i].ID).Delete(&identity.CrlEntryRow{}).Error; err != nil {
 				return err
 			}
 			if err := tx.Delete(&lists[i]).Error; err != nil {
@@ -484,7 +328,7 @@ func (api *Api) DeleteDeviceRevocationList(ctx context.Context, anchorToken, iss
 			return nil
 		}
 		deleted = true
-		return bumpRevocationRows(tx, anchor.ID, -int64(len(lists)))
+		return identity.BumpRevocationRows(tx, anchor.ID, -int64(len(lists)))
 	})
 	if err != nil {
 		return false, err
@@ -510,64 +354,9 @@ func (api *Api) DeviceRevocationListsOf(ctx context.Context, anchorId uint) ([]D
 //
 // The freshness rules and the enum and grace parsers are in identity (x509_revocation_rules.go).
 
-// maxUncoveredIssuersReported is how many uncovered issuers a refusal names.
-const maxUncoveredIssuersReported = 5
-
-// requireCurrentCoverage is the guard on switching an anchor to REQUIRE_CURRENT (or shortening its
-// grace while it is): the anchor must hold at least one current list, and every issuer on a chain
-// a live credential is known to have used must be covered by one. Without it one click would
-// refuse every certificate device of the anchor (revocation_unknown). Chains never seen (a new
-// intermediate) are not knowable here and are refused at connect, as designed. Called with the
-// anchor locked FOR UPDATE.
-func requireCurrentCoverage(tx *gorm.DB, tenant string, anchor *DeviceTrustAnchor, grace time.Duration, now time.Time) error {
-	var lists []DeviceRevocationList
-	if err := tx.Where("tenant_id = ? AND trust_anchor_id = ?", tenant, anchor.ID).Find(&lists).Error; err != nil {
-		return err
-	}
-	var current []DeviceRevocationList
-	for _, l := range lists {
-		if !now.After(l.NextUpdate.Add(grace)) {
-			current = append(current, l)
-		}
-	}
-	if len(current) == 0 {
-		return identity.InvalidAnchor("revocationMode REQUIRE_CURRENT is refused: trust anchor %q holds no current revocation list, "+
-			"so every certificate under it would be refused (revocation_unknown). Upload the CA's CRL first", anchor.Token)
-	}
-
-	// The issuers on live credentials' chains that no current list covers, asked of the database
-	// and capped: the answer is only ever "which, up to a handful", so no fleet-sized set is ever
-	// materialised while the anchor is locked. A list covers an issuer link when the name matches and
-	// the key does (a legacy link with no key is matched by name alone). At most MaxListsPerAnchor
-	// lists, so the predicate is bounded too.
-	var links []DeviceCredentialChainLink
-	live := tx.Model(&DeviceCredential{}).Select("id").Where("tenant_id = ? AND enabled = ?", tenant, true)
-	q := tx.Select("issuer_key", "issuer_name").Distinct().
-		Where("tenant_id = ? AND trust_anchor_id = ? AND credential_id IN (?)", tenant, anchor.ID, live)
-	for _, l := range current {
-		q = q.Where("NOT (issuer_name = ? AND (issuer_key IS NULL OR issuer_key = ?))", l.IssuerName, l.IssuerKey)
-	}
-	if err := q.Order("issuer_name").Limit(maxUncoveredIssuersReported + 1).Find(&links).Error; err != nil {
-		return err
-	}
-	var missing []string
-	for _, ln := range links {
-		missing = append(missing, ln.IssuerName[:min(12, len(ln.IssuerName))])
-	}
-	if len(missing) > 0 {
-		if len(missing) > maxUncoveredIssuersReported {
-			missing = append(missing[:maxUncoveredIssuersReported], "…")
-		}
-		return identity.InvalidAnchor("revocationMode REQUIRE_CURRENT is refused: registered certificates under trust anchor %q "+
-			"were issued by CAs with no current revocation list (issuer name hash %s), and would be refused (revocation_unknown). "+
-			"Upload their CRLs first", anchor.Token, strings.Join(missing, ", "))
-	}
-	return nil
-}
-
 // applyRevocationSettings folds the revocation mode and grace of an anchor update onto the locked
 // anchor row (the caller saves it). Switching to REQUIRE_CURRENT, or shortening the grace while in
-// it, runs requireCurrentCoverage first, so the one click that would refuse the fleet is refused.
+// it, runs identity.RequireCurrentCoverage first, so the one click that would refuse the fleet is refused.
 func (api *Api) applyRevocationSettings(tx *gorm.DB, locked *DeviceTrustAnchor, request *DeviceTrustAnchorUpdateRequest) error {
 	if !request.RevocationMode.Set && !request.RevocationStaleGrace.Set {
 		return nil
@@ -607,7 +396,7 @@ func (api *Api) applyRevocationSettings(tx *gorm.DB, locked *DeviceTrustAnchor, 
 		}
 	}
 	if mode == x509trust.ModeRequireCurrent && (oldMode != mode || oldGrace != grace) {
-		return requireCurrentCoverage(tx, locked.TenantId, locked, grace, time.Now())
+		return identity.RequireCurrentCoverage(tx, locked.TenantId, locked, grace, time.Now())
 	}
 	return nil
 }

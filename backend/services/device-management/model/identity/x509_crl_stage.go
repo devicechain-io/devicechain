@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package model
+package identity
 
 import (
 	"time"
@@ -34,10 +34,10 @@ func (crlStageRow) TableName() string { return crlStageTable }
 // AuditExempt: staging is scratch space for a write the journal records through the list row.
 func (crlStageRow) AuditExempt() bool { return true }
 
-// stageCrlEntries copies the CRL's entries into a TEMP table (invisible to every other session,
+// StageCrlEntries copies the CRL's entries into a TEMP table (invisible to every other session,
 // dropped at commit or rollback), in batches. It takes no lock on the anchor. SQLite (the unit
-// tests' database) has no ON COMMIT DROP, so the caller drops it explicitly (dropCrlStage).
-func stageCrlEntries(tx *gorm.DB, entries []x509trust.RevokedEntry) error {
+// tests' database) has no ON COMMIT DROP, so the caller drops it explicitly (DropCrlStage).
+func StageCrlEntries(tx *gorm.DB, entries []x509trust.RevokedEntry) error {
 	if tx.Dialector.Name() == "postgres" {
 		if err := tx.Exec("CREATE TEMP TABLE " + crlStageTable +
 			" (serial varchar(64) PRIMARY KEY, reason varchar(32) NOT NULL, revoked_at timestamptz NOT NULL) ON COMMIT DROP").Error; err != nil {
@@ -80,54 +80,54 @@ func stageCrlEntries(tx *gorm.DB, entries []x509trust.RevokedEntry) error {
 	return nil
 }
 
-func dropCrlStage(tx *gorm.DB) error {
+func DropCrlStage(tx *gorm.DB) error {
 	if tx.Dialector.Name() == "postgres" {
 		return nil // ON COMMIT DROP
 	}
 	return tx.Exec("DROP TABLE IF EXISTS temp." + crlStageTable).Error
 }
 
-// crlNewTable holds, for one transaction, the serials an upload newly revokes (staged and not yet
+// CrlNewTable holds, for one transaction, the serials an upload newly revokes (staged and not yet
 // in the list's stored entries). It exists only when a session kicker is wired, because its one
 // reader is the live-session kick, which runs after the anchor row is locked: matching the links
 // there, and not while the entries were being written, is what keeps a credential registered in
 // between from being missed.
-const crlNewTable = "dc_crl_new"
+const CrlNewTable = "dc_crl_new"
 
-// keepNewSerials copies the staged serials the list does not hold yet into crlNewTable. Called
-// before applyStagedEntries inserts them.
-func keepNewSerials(tx *gorm.DB, tenant string, anchorId uint, list *DeviceRevocationList) error {
+// KeepNewSerials copies the staged serials the list does not hold yet into CrlNewTable. Called
+// before ApplyStagedEntries inserts them.
+func KeepNewSerials(tx *gorm.DB, tenant string, anchorId uint, list *DeviceRevocationList) error {
 	args := []any{tenant, anchorId, list.ID, list.IssuerKey, list.IssuerName}
 	if tx.Dialector.Name() == "postgres" {
-		if err := tx.Exec("CREATE TEMP TABLE "+crlNewTable+" ON COMMIT DROP AS SELECT s.serial FROM "+crlStageTable+
+		if err := tx.Exec("CREATE TEMP TABLE "+CrlNewTable+" ON COMMIT DROP AS SELECT s.serial FROM "+crlStageTable+
 			" s WHERE NOT EXISTS (SELECT 1 FROM device_revoked_certificates e WHERE e.tenant_id = ? AND e.trust_anchor_id = ? AND e.revocation_list_id = ? AND e.kind = 'CRL' AND e.issuer_key = ? AND e.issuer_name = ? AND e.serial = s.serial)",
 			args...).Error; err != nil {
 			return err
 		}
-		return tx.Exec("ANALYZE " + crlNewTable).Error
+		return tx.Exec("ANALYZE " + CrlNewTable).Error
 	}
-	if err := tx.Exec("DROP TABLE IF EXISTS temp." + crlNewTable).Error; err != nil {
+	if err := tx.Exec("DROP TABLE IF EXISTS temp." + CrlNewTable).Error; err != nil {
 		return err
 	}
-	return tx.Exec("CREATE TEMP TABLE "+crlNewTable+" AS SELECT s.serial FROM "+crlStageTable+
+	return tx.Exec("CREATE TEMP TABLE "+CrlNewTable+" AS SELECT s.serial FROM "+crlStageTable+
 		" s WHERE NOT EXISTS (SELECT 1 FROM device_revoked_certificates e WHERE e.tenant_id = ? AND e.trust_anchor_id = ? AND e.revocation_list_id = ? AND e.kind = 'CRL' AND e.issuer_key = ? AND e.issuer_name = ? AND e.serial = s.serial)",
 		args...).Error
 }
 
-func dropCrlNew(tx *gorm.DB) error {
+func DropCrlNew(tx *gorm.DB) error {
 	if tx.Dialector.Name() == "postgres" {
 		return nil // ON COMMIT DROP
 	}
-	return tx.Exec("DROP TABLE IF EXISTS temp." + crlNewTable).Error
+	return tx.Exec("DROP TABLE IF EXISTS temp." + CrlNewTable).Error
 }
 
-// applyStagedEntries makes the stored entries of the list equal the staged ones. Entries the staged
+// ApplyStagedEntries makes the stored entries of the list equal the staged ones. Entries the staged
 // set does not carry (or carries with another reason) are deleted, and staged entries the list does
 // not hold are inserted from the staging table, so only the difference is written. newly counts
 // entries that were not there before at all; a changed reason is not a new revocation. Every
 // statement carries the tenant, the anchor, the list and the issuer identity, so each is also an
 // index lookup of the connect read's own shape.
-func applyStagedEntries(tx *gorm.DB, tenant string, anchorId uint, list *DeviceRevocationList, keepNew bool) (newly, removed int, err error) {
+func ApplyStagedEntries(tx *gorm.DB, tenant string, anchorId uint, list *DeviceRevocationList, keepNew bool) (newly, removed int, err error) {
 	const (
 		scopeE = "e.tenant_id = ? AND e.trust_anchor_id = ? AND e.revocation_list_id = ? AND e.kind = 'CRL' AND e.issuer_key = ? AND e.issuer_name = ?"
 		scope  = "tenant_id = ? AND trust_anchor_id = ? AND revocation_list_id = ? AND kind = 'CRL' AND issuer_key = ? AND issuer_name = ?"
@@ -140,7 +140,7 @@ func applyStagedEntries(tx *gorm.DB, tenant string, anchorId uint, list *DeviceR
 	}
 	newly = int(n)
 	if keepNew && newly > 0 {
-		if err = keepNewSerials(tx, tenant, anchorId, list); err != nil {
+		if err = KeepNewSerials(tx, tenant, anchorId, list); err != nil {
 			return 0, 0, err
 		}
 	}
