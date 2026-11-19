@@ -36,7 +36,7 @@ import (
 // transaction (queueOwnershipOnTx), and the drain (DrainOwnershipFacts), run on a timer by
 // one replica at a time, reads each device's CURRENT anchors, publishes them, and deletes
 // the row only once the broker has acknowledged the publish. A row is never deleted on a
-// failure, so a committed change is announced as many times as it takes — a broker outage
+// publish failure, so a committed change is announced as many times as it takes — a broker outage
 // delays the fact by the length of the outage, not by the length of the device's silence.
 // A rolled-back write leaves no row, so nothing is announced for a change that never was.
 //
@@ -57,7 +57,7 @@ const OwnershipDrainPageSize = rdb.MaxLookupKeys
 
 // PendingOwnershipFact records that a device's owners may have changed and device-state has
 // not yet been told: one row per device, written in the transaction of the change, deleted
-// by the drain once suppression visibility is refreshed and the fact is published.
+// by the drain once the fact is published. Suppression visibility is best-effort.
 //
 // Generation identifies the write that queued the row last. The drain deletes a row only
 // where Generation is still what it read, so a change committed while a fact was being
@@ -253,9 +253,10 @@ func (api *Api) drainTenantOwnership(ctx context.Context, pageSize int) (publish
 	if err != nil {
 		return 0, 0, fmt.Errorf("reading the anchors of %d queued device(s): %w", len(ids), err)
 	}
-	if err := api.refreshSuppressionOwnership(ctx, facts); err != nil {
-		return 0, 0, fmt.Errorf("refreshing suppression ownership: %w", err)
-	}
+	// Refresh failures are logged/counted per window, never a reason to withhold
+	// ownership facts. See refreshSuppressionOwnership for the read-path checks
+	// that make a stale window stamp fail toward invisibility rather than exposure.
+	_ = api.refreshSuppressionOwnership(ctx, facts)
 	byId := make(map[uint]*DeviceOwnershipChangedEvent, len(facts))
 	for _, f := range facts {
 		byId[uint(f.DeviceIncarnation)] = f

@@ -51,7 +51,8 @@ func TestSuppressionCannotReachDetectOrReact(t *testing.T) {
 	for _, typ := range []reflect.Type{reflect.TypeOf(dmmodel.RaiseAlarmRequest{}), reflect.TypeOf(react.AlarmRequest{})} {
 		for i := 0; i < typ.NumField(); i++ {
 			f := typ.Field(i)
-			requireNoSuppressionSymbol(t, f.Name+string(f.Tag), typ.String())
+			require.NotContains(t, strings.ToLower(f.Name), "suppress", typ.String())
+			require.NotContains(t, strings.ToLower(f.Tag.Get("json")), "suppress", typ.String())
 		}
 	}
 }

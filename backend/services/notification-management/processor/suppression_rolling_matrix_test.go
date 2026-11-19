@@ -25,8 +25,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// v1.7.0 knows fields 1-21. Derive its wire view by removing precisely the
-// three additive suppression fields, rather than inventing an old event shape.
+// v1.7.0 ends at field 20. Remove the later position_derived field and its
+// synthetic oneof as well as the three additive suppression fields.
 func suppressionV17Descriptor(t *testing.T) protoreflect.MessageDescriptor {
 	t.Helper()
 	fd := protodesc.ToFileDescriptorProto((&dmproto.PAlarmStateChangeEvent{}).ProtoReflect().Descriptor().ParentFile())
@@ -40,14 +40,21 @@ func suppressionV17Descriptor(t *testing.T) protoreflect.MessageDescriptor {
 	kept := msg.Field[:0]
 	removed := 0
 	for _, f := range msg.Field {
-		if f.GetNumber() >= 22 && f.GetNumber() <= 24 {
+		if f.GetNumber() >= 21 && f.GetNumber() <= 24 {
 			removed++
 			continue
 		}
 		kept = append(kept, f)
 	}
-	require.Equal(t, 3, removed)
+	require.Equal(t, 4, removed)
 	msg.Field = kept
+	oneofs := msg.OneofDecl[:0]
+	for _, o := range msg.OneofDecl {
+		if o.GetName() != "_position_derived" {
+			oneofs = append(oneofs, o)
+		}
+	}
+	msg.OneofDecl = oneofs
 	file, err := protodesc.NewFile(fd, nil)
 	require.NoError(t, err)
 	return file.Messages().ByName("PAlarmStateChangeEvent")
@@ -57,7 +64,7 @@ func suppressionV17Wire(t *testing.T, wire []byte) []byte {
 	t.Helper()
 	old := dynamicpb.NewMessage(suppressionV17Descriptor(t))
 	require.NoError(t, gproto.Unmarshal(wire, old))
-	// An OLD producer cannot emit unknown suppression fields. A decode/re-encode
+	// An OLD producer cannot emit unknown position/suppression fields. A decode/re-encode
 	// without this step would retain them and would not model an old producer.
 	old.SetUnknown(nil)
 	out, err := gproto.Marshal(old)
@@ -162,6 +169,9 @@ func TestSuppressionRollingMatrix(t *testing.T) {
 			}
 			got, err := dmproto.UnmarshalAlarmStateChangeEvent(wire)
 			require.NoError(t, err)
+			if !tc.newDM || !tc.newNM {
+				require.Nil(t, got.PositionDerived, "v1.7.0 producer bytes have no position verdict and must still page")
+			}
 			require.NoError(t, n.Notify(ctx, got))
 			if tc.newNM && tc.newDM {
 				require.Zero(t, fa.calls)
