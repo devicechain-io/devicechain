@@ -69,7 +69,7 @@ func HarborpulseFirmwareIdentity() (token, digest string, size int) {
 	content := HarborpulseFirmware()
 	sum := sha256.Sum256(content)
 	h := hex.EncodeToString(sum[:])
-	return "hp-charger-fw-2.4.1-" + h[:12], "sha256:" + h, len(content)
+	return "hp-charger-fw-2-4-1-" + h[:12], "sha256:" + h, len(content)
 }
 
 type harborArtifact struct {

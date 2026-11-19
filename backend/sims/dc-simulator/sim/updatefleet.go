@@ -87,7 +87,7 @@ func downloadDialAddr(rt *Runtime) (dial, redirect string, err error) {
 // and has none would sit green while a rollout aimed at it waits out its deadlines.
 func (l *Lifecycle) attachUpdateFleet(ctx context.Context) error {
 	opts := l.rt.UpdateFleet
-	devices := l.rt.Devices
+	devices := l.rt.deviceSnapshot()
 	if scenario, ok := l.sim.(UpdatePopulationReporter); ok {
 		population, err := scenario.UpdatePopulation(l.rt)
 		if err != nil {

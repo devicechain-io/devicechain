@@ -363,6 +363,9 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 	if err := readS5(ctx, reader, &obs, final.Scenario.S5); err != nil {
 		return noVerdict{err}
 	}
+	if err := readReplacement(ctx, reader, &obs); err != nil {
+		return noVerdict{err}
+	}
 	rep.WatchTo = time.Now()
 	rep.Invariants = Evaluate(obs)
 	return nil

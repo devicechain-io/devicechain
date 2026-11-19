@@ -359,9 +359,9 @@ func (c *ControlServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Tenant = c.rt.Tenant
 	resp.InstanceId = c.rt.InstanceId
-	resp.DeviceCount = len(c.rt.Devices)
+	resp.DeviceCount = len(c.rt.deviceSnapshot())
 	resp.EmitIntervalMs = c.rt.Load.Interval().Milliseconds()
-	resp.TargetRate = c.rt.Load.TargetRate(len(c.rt.Devices))
+	resp.TargetRate = c.rt.Load.TargetRate(resp.DeviceCount)
 	writeJSON(w, http.StatusOK, resp)
 }
 

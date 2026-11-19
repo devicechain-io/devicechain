@@ -4,7 +4,9 @@
 package sim
 
 import (
+	"context"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -113,6 +115,12 @@ type Stats struct {
 	// endpoint, the presentation page — would silently introduce a data race.
 	sinceNanos  atomic.Int64
 	frozenNanos atomic.Int64
+}
+
+func (rt *Runtime) deviceSnapshot() []DeviceInstance {
+	rt.devicesMu.RLock()
+	defer rt.devicesMu.RUnlock()
+	return append([]DeviceInstance(nil), rt.Devices...)
 }
 
 // Reset zeroes the counters and restarts the clock, so the rate they describe
@@ -247,6 +255,12 @@ type Runtime struct {
 	// bootstrap.go's Provision once every device+credential exists. Tick reads
 	// it; nothing else mutates it after Bootstrap returns.
 	Devices []DeviceInstance
+
+	// devicesMu holds the emitter idle across a physical credential handover.
+	devicesMu           sync.RWMutex
+	credentialOverrides map[string]DeviceInstance // process-local, never serialized
+	pausedDevices       map[string]bool
+	reconnectDevice     func(context.Context, DeviceInstance, DeviceInstance) error
 
 	// Wire, when set, carries every event in place of the HTTP ingress (see EventWire). Nil
 	// in production: the persistent sim and the HTTP load tests POST to the ingress.

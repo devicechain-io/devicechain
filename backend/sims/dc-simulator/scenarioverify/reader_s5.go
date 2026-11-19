@@ -14,6 +14,7 @@ import (
 // S5 separates declarations (the sim ledger) from evidence read from the platform.
 // Later S5 readers add restore and replacement evidence here.
 type S5 struct {
+	Replacement          ReplacementEvidence
 	Ledger               *sim.ScenarioS5
 	Artifact             *OTAArtifact
 	Signer               *OTASigner

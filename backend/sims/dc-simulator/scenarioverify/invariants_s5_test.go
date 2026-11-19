@@ -40,6 +40,7 @@ func (d *day) cleanS5() {
 	s.Rollout.StartedAt = s.Ledger.OTA.StartedAt
 	d.s5 = s
 	d.cleanRestore()
+	d.cleanReplacement()
 }
 
 func (d *day) cleanRestore() {

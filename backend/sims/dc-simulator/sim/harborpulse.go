@@ -124,6 +124,7 @@ func HarborpulseDefects() []string {
 		HarborpulseDefectLegacyDecoderFixed, HarborpulseDefectLoftsUnderBasin, HarborpulseDefectLoraWrongScale,
 		HarborpulseDefectMQTTUnreachable, HarborpulseDefectNightDimAllLights,
 		HarborpulseDefectOTACapThree, HarborpulseDefectOTAFailureDisabled, HarborpulseDefectOTAGroupMissingCharger, HarborpulseDefectOTASignatureOmitted, HarborpulseDefectRefuseDerate,
+		HarborpulseDefectReplacementNewDevice, HarborpulseDefectReplacementOldCredentialLeftLive,
 		HarborpulseDefectSilenceNorthLamp, HarborpulseDefectTruckStaysHome, HarborpulseDefectUnscopedWatch,
 		HarborpulseDefectUnsignedWebhook, HarborpulseDefectWrongWellDepth,
 	}
@@ -151,6 +152,7 @@ type harborDefects struct {
 	attributeNotUpdated, downlinkNack, backfillWrongWindow                       bool
 	otaSignatureOmitted, otaGroupMissingCharger, otaCapThree, otaFailureDisabled bool
 	burstDropOn429                                                               bool
+	replacementNewDevice, replacementOldCredentialLeftLive                       bool
 	names                                                                        []string
 }
 
@@ -180,6 +182,10 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 	d := harborDefects{names: names}
 	for _, n := range names {
 		switch n {
+		case HarborpulseDefectReplacementNewDevice:
+			d.replacementNewDevice = true
+		case HarborpulseDefectReplacementOldCredentialLeftLive:
+			d.replacementOldCredentialLeftLive = true
 		case HarborpulseDefectBurstDropOn429:
 			d.burstDropOn429 = true
 		case HarborpulseDefectOTASignatureOmitted:
@@ -842,6 +848,9 @@ func (s *harborpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
 	if rt.UpdateFleet != nil {
 		return fmt.Errorf("harborpulse declares its own update population; --ota cannot also be given")
 	}
+	if err := s.prepareReplacement(ctx, rt); err != nil {
+		return err
+	}
 	if err := Provision(ctx, rt, s.Manifest()); err != nil {
 		return err
 	}
@@ -874,17 +883,20 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	elapsed := now.Sub(s.started)
 	s.mu.Unlock()
 
-	beatErr := errors.Join(s.s3bBeats(ctx, rt, elapsed, now), s.s5Beats(ctx, rt, now))
+	beatErr := errors.Join(s.s3bBeats(ctx, rt, elapsed, now), s.replacementBeat(ctx, rt, now), s.s5Beats(ctx, rt, now))
 	if beatErr != nil {
 		log.Error().Err(beatErr).Msg("run harborpulse beats failed; retrying next tick")
 	}
 	model.advanceTo(elapsed)
-	workers := rt.Load.Workers(len(rt.Devices))
+	workers := rt.Load.Workers(len(rt.deviceSnapshot()))
 	stamp := now.UTC().Truncate(time.Microsecond)
 	s.restore.beginTick()
 	shedBefore := rt.Stats.Shed.Load()
 
 	measErr := EmitAll(ctx, rt, workers, func(_ int, d DeviceInstance) map[string]float64 {
+		if d.Token == HarborpulseReplacementSeparateDevice {
+			d.Token = HarborpulseReplacementDevice
+		}
 		return model.reading(d.Token, elapsed, stamp)
 	})
 	if measErr != nil {

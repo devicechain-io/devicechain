@@ -97,7 +97,7 @@ func (q *harborRestoreQueue) enqueue(ctx context.Context, s *harborpulse, rt *Ru
 	}
 	devices := map[string]DeviceInstance{}
 	counts := map[string]int{}
-	for _, d := range rt.Devices {
+	for _, d := range rt.deviceSnapshot() {
 		devices[d.Token] = d
 	}
 	for _, e := range q.entries {

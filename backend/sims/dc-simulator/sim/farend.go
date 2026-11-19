@@ -173,7 +173,8 @@ func (l *Lifecycle) attachCommandFarEnd(ctx context.Context) error {
 	// attached:true — a silent no-op of exactly the class this seam exists to kill.
 	// It is how a mis-ordered attach (before Provision, when rt.Devices is still
 	// empty) would look: entirely healthy.
-	if len(l.rt.Devices) == 0 {
+	devices := l.rt.deviceSnapshot()
+	if len(devices) == 0 {
 		return fmt.Errorf("scenario %q declares a command far end but no devices are "+
 			"provisioned, so it would subscribe nothing and still report itself attached", l.name)
 	}
@@ -198,7 +199,7 @@ func (l *Lifecycle) attachCommandFarEnd(ctx context.Context) error {
 		taker.SetHandler(source.CommandHandler())
 	}
 
-	for _, d := range l.rt.Devices {
+	for _, d := range devices {
 		if integrationFarEnd(d) {
 			continue
 		}
@@ -209,6 +210,18 @@ func (l *Lifecycle) attachCommandFarEnd(ctx context.Context) error {
 			return fmt.Errorf("command far end: %w", err)
 		}
 	}
+	l.rt.devicesMu.Lock()
+	l.rt.reconnectDevice = func(ctx context.Context, old, next DeviceInstance) error {
+		disconnect, ok := fe.(interface{ Disconnect(string) error })
+		if !ok {
+			return fmt.Errorf("command far end cannot reconnect replacement device %s", old.Token)
+		}
+		if err := disconnect.Disconnect(old.Token); err != nil {
+			return err
+		}
+		return fe.Subscribe(ctx, next.Token, next.CredentialId)
+	}
+	l.rt.devicesMu.Unlock()
 
 	l.mu.Lock()
 	l.farEnd = fe

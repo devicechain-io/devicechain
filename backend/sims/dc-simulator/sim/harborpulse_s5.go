@@ -64,11 +64,13 @@ type ScenarioReplacement struct {
 }
 
 type harborS5State struct {
-	mu          sync.Mutex
-	ledger      *ScenarioS5
-	key         *ecdsa.PrivateKey // process-local only; never marshalled or logged
-	publicPEM   string
-	rolloutDone bool
+	mu              sync.Mutex
+	ledger          *ScenarioS5
+	key             *ecdsa.PrivateKey // process-local only; never marshalled or logged
+	publicPEM       string
+	rolloutDone     bool
+	replacementDone bool
+	replacementOld  *DeviceInstance
 }
 
 func (s *harborpulse) s5Ledger() *ScenarioS5 {

@@ -42,6 +42,7 @@ func s5Checks() []struct {
 		{InvOTAArtifactTrusted, otaArtifactTrusted}, {InvOTATargetsExact, otaTargetsExact},
 		{InvOTAConcurrency, otaConcurrency}, {InvOTAOutcomes, otaOutcomes},
 		{InvBurstRateLimited, burstRateLimited}, {InvBurstCaughtUp, burstCaughtUp},
+		{InvReplacementIdentity, replacementIdentity}, {InvReplacementCredential, replacementCredential},
 	}
 }
 

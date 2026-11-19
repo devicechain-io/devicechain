@@ -102,6 +102,8 @@ func EmitAll(ctx context.Context, rt *Runtime, workers int, metrics MetricsFunc)
 // can reconcile rather than as anything that looks like a bug here.
 func emitEach(ctx context.Context, rt *Runtime, workers int,
 	emit func(i int, d DeviceInstance) (offered bool, err error)) error {
+	rt.devicesMu.RLock()
+	defer rt.devicesMu.RUnlock()
 	devices := rt.Devices
 	if len(devices) == 0 {
 		return nil
@@ -123,6 +125,13 @@ func emitEach(ctx context.Context, rt *Runtime, workers int,
 		go func() {
 			defer wg.Done()
 			for i := range idx {
+				if rt.pausedDevices[devices[i].Token] {
+					mu.Lock()
+					failed++
+					firstErr = fmt.Errorf("device %s paused: replacement credential unavailable or reconnect pending", devices[i].Token)
+					mu.Unlock()
+					continue
+				}
 				offered, err := emit(i, devices[i])
 				if !offered {
 					continue
@@ -228,6 +237,12 @@ func emitMeasurementsAt(ctx context.Context, rt *Runtime, d DeviceInstance, now 
 		return fmt.Errorf("build measurement payload: %w", err)
 	}
 	return postEvent(ctx, rt, d, "Measurement", now, payload)
+}
+
+// HTTPMeasurementBody is the real HTTP ingress shape, also used by credential probes.
+func HTTPMeasurementBody(d DeviceInstance, at time.Time, values map[string]string) ([]byte, error) {
+	stamp := at.UTC().Format(time.RFC3339Nano)
+	return httpEventBody(d, "Measurement", stamp, map[string]interface{}{"entries": []any{map[string]any{"measurements": values, "occurredTime": stamp}}})
 }
 
 // ---- Location -------------------------------------------------------------------
