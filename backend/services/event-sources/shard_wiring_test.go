@@ -88,6 +88,15 @@ func TestShardGroupServiceWiring(t *testing.T) {
 			stopGatewayFeedback()
 			t.Cleanup(stopGatewayFeedback)
 			require.NoError(t, createNatsComponents(nmgr))
+			savedManager := NatsManager
+			NatsManager = nmgr
+			t.Cleanup(func() { NatsManager = savedManager })
+			if mode == "unplaced" {
+				require.ErrorIs(t, inboundPlacementCheck("tenant-b"), messaging.ErrUnplacedTenant)
+			} else {
+				require.NoError(t, inboundPlacementCheck("tenant-a"))
+				require.NoError(t, inboundPlacementCheck("tenant-b"))
+			}
 			t.Cleanup(stopStreamSharding)
 			readers := peerReaders
 			ordered, err := newGatewayWriter(nmgr)

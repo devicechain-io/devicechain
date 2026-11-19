@@ -145,6 +145,11 @@ type GatewayJetStreamSource struct {
 	// poison is the current start's failed-decode routes; see poisonRoutes.
 	poison               *poisonRoutes
 	placementUnavailable prometheus.Counter
+	// Placement-only readiness and hold timing, configured before starting.
+	placementCheck               func(tenant string) error
+	finalHoldBeat, finalHoldPoll time.Duration
+	placementHeld                prometheus.Gauge
+	finalHolds                   *finalPlacementHolds
 
 	// envelopes is UseEnvelopes' setting (nil: events are published one message each), and ce
 	// the current start's machinery built from it.
@@ -187,9 +192,9 @@ type GatewayJetStreamSource struct {
 	// decision carried in rawMessage.metering. lcStream is the reader stream it is metered as.
 	lc       *LagCreditIngest
 	lcStream int
-	// inHandle is true while handle() is running: the idle probe must not read a loop that is blocked
+	// inHandle counts active handle calls (reader and recovery): the idle probe must not read a loop that is blocked
 	// handing a message on as "caught up".
-	inHandle atomic.Bool
+	inHandle atomic.Int64
 
 	// fromStore makes this the source over the MQTT gateway's message store rather than the
 	// capture stream; see UseMessageStore.
@@ -232,15 +237,17 @@ func NewGatewayJetStreamSource(ms *core.Microservice, id string, decoder Decoder
 		panic("processor.NewGatewayJetStreamSource: a MeterAt is required alongside the ingest gate")
 	}
 	es := &GatewayJetStreamSource{
-		Id:        id,
-		Decoder:   decoder,
-		received:  received,
-		build:     build,
-		failed:    failed,
-		allow:     allow,
-		readings:  readings,
-		meter:     meter,
-		readPacer: core.NewReadPacer(ms, "gateway capture"),
+		Id:            id,
+		Decoder:       decoder,
+		received:      received,
+		build:         build,
+		failed:        failed,
+		allow:         allow,
+		readings:      readings,
+		meter:         meter,
+		readPacer:     core.NewReadPacer(ms, "gateway capture"),
+		finalHoldBeat: messaging.AckWait / 3,
+		finalHoldPoll: time.Second,
 	}
 	es.lifecycle = core.NewLifecycleManager("gateway-jetstream-event-source", es, core.NewNoOpLifecycleCallbacks())
 	return es
@@ -424,6 +431,7 @@ func (es *GatewayJetStreamSource) startPipeline(workers int) {
 	} else {
 		go submitLoop(publishes, es.writer, submitterDone)
 	}
+	es.finalHolds = es.startFinalPlacementHolds()
 }
 
 // submitter returns the workers' DecodedFunc for one start: build the message and hand it
@@ -482,11 +490,17 @@ func submitLoop(publishes <-chan pendingPublish, writer messaging.OrderedWriter,
 // returns, leaving what is unsettled UNACKED, which is the correct outcome: the capture
 // stream redelivers it to whichever pod is running, the capture dedup id stores it once,
 // and at-least-once is exactly the guarantee this source exists to provide.
+// A final-delivery placement hold abandoned at shutdown is already exhausted:
+// its AckWait expiration is recorded by the max-delivery recorder, as in core/storehold.
 func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 	es.runMu.Lock()
 	defer es.runMu.Unlock()
 	if es.cancel != nil {
 		es.cancel()
+	}
+	// Stop recovery before writer drain can refuse one of its pending publishes.
+	if holds := es.finalHolds; holds != nil {
+		holds.cancel()
 	}
 	// The stream is no longer read here: its lag-credit view must stop growing a lag (and crediting every
 	// tenant the full cover) for a reader that no longer exists. Deferred, so the messages still in the
@@ -537,11 +551,22 @@ func (es *GatewayJetStreamSource) stopPipeline(ctx context.Context) bool {
 // stopPipelineLocked resumes a partial stop without closing a channel twice.
 // Only ExecuteStop clears runLive, after this reports that every stage finished.
 func (es *GatewayJetStreamSource) stopPipelineLocked(ctx context.Context) bool {
+	if holds := es.finalHolds; holds != nil {
+		holds.cancel()
+	}
 	es.writer.Draining()
 	if ce := es.ce; ce != nil {
 		// Draining has begun: end the settlement walks now, so none is still retrying (and none can
 		// fire a done) after this returns. What they leave unsettled stays unacked for the next pod.
 		ce.cancel()
+	}
+	// Recovery can still be handing a message to the pipeline. Cancel and JOIN
+	// both hold goroutines before closing messages. Callbacks never take runMu.
+	if holds := es.finalHolds; holds != nil {
+		holds.cancel()
+		if !es.await(ctx, holds.done, "final placement holds") {
+			return false
+		}
 	}
 	if !es.messagesClosed {
 		close(es.messages)
@@ -654,9 +679,18 @@ func (es *GatewayJetStreamSource) readLoop(ctx context.Context, drained chan str
 //
 // This is the defect that reviews walk straight past, because every one of these
 // returns is individually, obviously correct.
-func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
-	es.inHandle.Store(true)
-	defer es.inHandle.Store(false)
+// recovery is present only for the run's single recovery worker. It carries
+// ownership through this same admission/decode/settlement path; broker metadata
+// (delivery count, capture sequence or store dedup id) is never rewritten.
+func (es *GatewayJetStreamSource) handle(msg messaging.Message, recovery ...*finalPlacementHold) {
+	var held *finalPlacementHold
+	if len(recovery) != 0 {
+		held = recovery[0]
+		msg = msg.WithAckCallback(func() { held.owner.finish(held) })
+	}
+
+	es.inHandle.Add(1)
+	defer es.inHandle.Add(-1)
 	// The tenant is the second subject segment. A message whose subject carries no
 	// parseable tenant cannot be published to a tenant-scoped subject, so it is
 	// dropped fail-closed rather than published unscoped.
@@ -737,7 +771,7 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	var meterAt time.Time
 	var metering ingestMeter
 	redelivery := msg.NumDelivered > 1
-	settle, shed := es.answers(msg, tenant, es.settler(msg, tenant))
+	settle, shed := es.answers(msg, tenant, es.settler(msg, tenant, held))
 	if es.lc != nil {
 		// The lag-credited gate (ingestMetering: lagCredit). The composed gate is asked only for the
 		// refusals in front of the metering (the tenant lifecycle, on every delivery); this source then
@@ -810,7 +844,7 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	if tracing.Enabled() {
 		remote = trace.SpanContextFromContext(msg.TraceContext())
 	}
-	es.messages <- rawMessage{
+	raw := rawMessage{
 		remote:     remote,
 		tenant:     tenant,
 		payload:    msg.Value,
@@ -826,6 +860,15 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 		done:       es.settleAndForget(settle, beatRef),
 		shed:       shed,
 	}
+	if held != nil {
+		select {
+		case <-held.owner.ctx.Done():
+			es.beats.Delete(beatRef)
+		case es.messages <- raw:
+		}
+		return
+	}
+	es.messages <- raw
 }
 
 // settleAndForget wraps a message's settler so its beat-table entry (envelope mode) is released
@@ -853,6 +896,18 @@ func (es *GatewayJetStreamSource) dedupID(tenant string, msg messaging.Message) 
 	return DedupID(tenant, msg.StreamSeq)
 }
 
+// UsePlacementCheck installs per-tenant placement-only readiness before Start.
+// Backpressure must not participate: the ordered writer does not refuse it.
+func (es *GatewayJetStreamSource) UsePlacementCheck(check func(tenant string) error) {
+	es.placementCheck = check
+}
+
+// UsePlacementHeldGauge installs the source's held-message gauge before Start.
+// A nil gauge is supported for isolated pipeline tests.
+func (es *GatewayJetStreamSource) UsePlacementHeldGauge(gauge prometheus.Gauge) {
+	es.placementHeld = gauge
+}
+
 // UsePlacementUnavailableCounter counts in-flight messages left unacked when placement is lost.
 // Call before starting the source. The counter is shared by the capture and message-store paths.
 func (es *GatewayJetStreamSource) UsePlacementUnavailableCounter(counter prometheus.Counter) {
@@ -867,92 +922,131 @@ func (es *GatewayJetStreamSource) UsePlacementUnavailableCounter(counter prometh
 // and acked. Without that terminal step a message that can never be published
 // would be redelivered until the broker gave up on it, taking the diagnostic with
 // it — the same shape as the drop trap above, one level down.
-// Placement failures are left unacked on every delivery; they do not judge the payload.
-func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string) func(error) {
+// Placement refusals do not judge the payload. Non-final deliveries wait for
+// broker redelivery; final deliveries are held and beaten until placement returns.
+// An unheld final delivery is exhausted and lettered by the max-delivery recorder.
+func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string, recovery ...*finalPlacementHold) func(error) {
 	poison := es.poison
+	holds := es.finalHolds
+	var held *finalPlacementHold
+	if len(recovery) != 0 {
+		held = recovery[0]
+	}
+	if held != nil {
+		holds = held.owner
+	}
+	var once sync.Once
 	return func(handleErr error) {
-		if handleErr == nil {
-			if err := msg.Ack(); err != nil {
-				// The publish DID succeed, so the event is not lost — but the ack did
-				// not land, so the capture stream will redeliver. The publish carries a
-				// dedup id keyed on this message's capture sequence, so the redelivery
-				// is suppressed at the stream rather than duplicated (ADR-030 I2).
-				log.Warn().Err(err).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
-					Msg("Failed to ack a durably-forwarded captured message; it will redeliver and be deduped.")
-			}
-			return
-		}
-		if errors.Is(handleErr, messaging.ErrUnplacedTenant) && es.placementUnavailable != nil {
-			es.placementUnavailable.Inc()
-		}
-		if errors.Is(handleErr, messaging.ErrRoundWalkStopped) || errors.Is(handleErr, messaging.ErrTenantGone) || errors.Is(handleErr, messaging.ErrUnplacedTenant) {
-			// A shutdown cancelled the walk before it knew the outcome (the pod stopping, not the
-			// message failing), or the tenant is being erased and routing its payload to
-			// failed-decode would store it again, or placement is unavailable. Even on its last
-			// delivery it is left unacked, never dead-lettered as poison.
-			return
-		}
-		if messaging.FinalDelivery(msg) {
-			// The worker may have ALREADY tried the failed-decode route and failed —
-			// that is what ErrDeadLetterUnavailable marks. Re-attempting a route that
-			// has just failed would publish the same payload again to a stream that is
-			// already unavailable, so the message is left unacked instead.
-			if errors.Is(handleErr, ErrDeadLetterUnavailable) {
-				log.Error().Err(handleErr).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
-					Int("attempts", msg.NumDelivered).
-					Msg("Captured message is poison and the failed-decode route is unavailable; leaving it unacked.")
-				return
-			}
-			// The route is a synchronous publish of up to 5 s, and this runs on the
-			// inbound-events writer's settle goroutine, which reports every other
-			// outcome in order behind it. So it runs on its own goroutine, at most
-			// POISON_ROUTE_LIMIT at once. With every slot busy the message is left
-			// UNACKED: this is its last delivery, so the broker terminates it and the
-			// max-delivery recorder letters it — recorded, loudly, rather than holding
-			// back every other message's ack.
-			select {
-			case poison.slots <- struct{}{}:
-			default:
-				log.Error().Err(handleErr).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
-					Int("attempts", msg.NumDelivered).
-					Msg("Captured message is poison and every failed-decode route is busy; leaving it unacked for the max-delivery record.")
-				return
-			}
-			poison.running.Add(1)
-			go func() {
-				defer func() {
-					<-poison.slots
-					poison.running.Done()
-				}()
-				es.routePoison(msg, tenant, handleErr)
+		once.Do(func() {
+			asynchronous := false
+			defer func() {
+				if !errors.Is(handleErr, messaging.ErrUnplacedTenant) && !asynchronous {
+					holds.finish(held)
+				}
 			}()
-			return
-		}
-		// LEFT UNACKED ON PURPOSE — deliberately NOT naked.
-		//
-		// Nak means redeliver IMMEDIATELY, and that turns MaxDeliver from a fuse into
-		// a millisecond-scale one: measured against a real broker, all five delivery
-		// attempts burn roughly 1.4ms after the first Nak, because each redelivery
-		// arrives in about one round trip. The failure that matters here is a
-		// DOWNSTREAM outage — JetStream refusing appends — which is message-
-		// independent and lasts minutes, so retrying at RTT speed exhausts the fuse
-		// INSIDE the outage and then strands or mass-dead-letters everything that
-		// flowed during it. The capture stream's whole hour-long recovery envelope
-		// would never engage, which is the guarantee this slice exists to provide.
-		//
-		// Saying nothing lets AckWait pace the retry instead: redelivery comes after
-		// 60s, so MaxDeliver spans five MINUTES rather than milliseconds, and an
-		// outage shorter than that is ridden out with no message lost and none
-		// diverted. The consumer's unacked messages also stop being fetched once
-		// MaxAckPending fills, which is exactly the right backpressure while the
-		// downstream is refusing writes — better than spinning against it.
-		//
-		// The cost is that a genuinely one-off, message-specific failure now waits
-		// 60s instead of retrying at once. That is an error path, and paying latency
-		// there to keep the outage path correct is the right trade.
-		log.Warn().Err(handleErr).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
-			Int("attempt", msg.NumDelivered).
-			Msg("Captured message not durably forwarded; leaving it unacked for AckWait-paced redelivery.")
+
+			// A draining writer can refuse an already submitted recovery. Its
+			// run has ended: abandon it unacked, rather than judging it poison.
+			// Successful durable forwards still take the normal ack path.
+			if held != nil && holds.ctx.Err() != nil && handleErr != nil {
+				holds.finish(held)
+				return
+			}
+
+			if handleErr == nil {
+				if err := msg.Ack(); err != nil {
+					// The publish DID succeed, so the event is not lost — but the ack did
+					// not land, so the capture stream will redeliver. The publish carries a
+					// dedup id keyed on this message's capture sequence, so the redelivery
+					// is suppressed at the stream rather than duplicated (ADR-030 I2).
+					log.Warn().Err(err).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
+						Msg("Failed to ack a durably-forwarded captured message; it will redeliver and be deduped.")
+				}
+				return
+			}
+			if errors.Is(handleErr, messaging.ErrUnplacedTenant) && es.placementUnavailable != nil {
+				es.placementUnavailable.Inc()
+			}
+			if errors.Is(handleErr, messaging.ErrUnplacedTenant) {
+				if messaging.FinalDelivery(msg) {
+					if es.placementCheck == nil || holds == nil {
+						log.Error().Str("source", es.Id).Str("tenant", tenant).Msg("Final placement refusal has no placement hold wired; leaving it unacked for the max-delivery recorder.")
+					} else {
+						holds.hold(msg, tenant, held)
+					}
+				}
+				return
+			}
+			if errors.Is(handleErr, messaging.ErrRoundWalkStopped) || errors.Is(handleErr, messaging.ErrTenantGone) {
+				// A stopped walk has no outcome; routing an erased tenant's payload would
+				// store it again. Left unacked, these can still be lettered by the recorder
+				// after a final delivery's AckWait expires; they are never routed as poison.
+				return
+			}
+			if messaging.FinalDelivery(msg) {
+				// The worker may have ALREADY tried the failed-decode route and failed —
+				// that is what ErrDeadLetterUnavailable marks. Re-attempting a route that
+				// has just failed would publish the same payload again to a stream that is
+				// already unavailable, so the message is left unacked instead.
+				if errors.Is(handleErr, ErrDeadLetterUnavailable) {
+					log.Error().Err(handleErr).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
+						Int("attempts", msg.NumDelivered).
+						Msg("Captured message is poison and the failed-decode route is unavailable; leaving it unacked.")
+					return
+				}
+				// The route is a synchronous publish of up to 5 s, and this runs on the
+				// inbound-events writer's settle goroutine, which reports every other
+				// outcome in order behind it. So it runs on its own goroutine, at most
+				// POISON_ROUTE_LIMIT at once. With every slot busy the message is left
+				// UNACKED: this is its last delivery, so the broker terminates it and the
+				// max-delivery recorder letters it — recorded, loudly, rather than holding
+				// back every other message's ack.
+				select {
+				case poison.slots <- struct{}{}:
+				default:
+					log.Error().Err(handleErr).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
+						Int("attempts", msg.NumDelivered).
+						Msg("Captured message is poison and every failed-decode route is busy; leaving it unacked for the max-delivery record.")
+					return
+				}
+				poison.running.Add(1)
+				asynchronous = true
+				go func() {
+					defer holds.finish(held)
+					defer func() {
+						<-poison.slots
+						poison.running.Done()
+					}()
+					es.routePoison(msg, tenant, handleErr)
+				}()
+				return
+			}
+			// LEFT UNACKED ON PURPOSE — deliberately NOT naked.
+			//
+			// Nak means redeliver IMMEDIATELY, and that turns MaxDeliver from a fuse into
+			// a millisecond-scale one: measured against a real broker, all five delivery
+			// attempts burn roughly 1.4ms after the first Nak, because each redelivery
+			// arrives in about one round trip. The failure that matters here is a
+			// DOWNSTREAM outage — JetStream refusing appends — which is message-
+			// independent and lasts minutes, so retrying at RTT speed exhausts the fuse
+			// INSIDE the outage and then strands or mass-dead-letters everything that
+			// flowed during it. The capture stream's whole hour-long recovery envelope
+			// would never engage, which is the guarantee this slice exists to provide.
+			//
+			// Saying nothing lets AckWait pace the retry instead: redelivery comes after
+			// 60s, so MaxDeliver spans five MINUTES rather than milliseconds, and an
+			// outage shorter than that is ridden out with no message lost and none
+			// diverted. The consumer's unacked messages also stop being fetched once
+			// MaxAckPending fills, which is exactly the right backpressure while the
+			// downstream is refusing writes — better than spinning against it.
+			//
+			// The cost is that a genuinely one-off, message-specific failure now waits
+			// 60s instead of retrying at once. That is an error path, and paying latency
+			// there to keep the outage path correct is the right trade.
+			log.Warn().Err(handleErr).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
+				Int("attempt", msg.NumDelivered).
+				Msg("Captured message not durably forwarded; leaving it unacked for AckWait-paced redelivery.")
+		})
 	}
 }
 

@@ -214,6 +214,10 @@ func SplitEnvelope(msg Message, subjectTenant string, done func(string), startCl
 		member.slot = nil // the envelope's slot is released when the envelope is acked
 		member.member = &memberInfo{index: r.Index(i)}
 		member.ack = &memberAck{g: g}
+		// The envelope's ack callback (Message.WithAckCallback) belongs to the envelope: it runs
+		// when the LAST member acks the parent (memberGroup.parent keeps it), never when the first
+		// member does.
+		member.onAck = nil
 		clock := func(string) {}
 		switch {
 		case i == 0:
