@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	"gorm.io/gorm"
 )
@@ -378,8 +379,15 @@ func runCredentialLookupControls(t *testing.T, fresh func(t *testing.T) credFixt
 				if err != nil {
 					t.Fatalf("seed foreign device: %v", err)
 				}
-				row := &DeviceCredential{DeviceId: foreign.ID, CredentialType: string(CredentialMqttBasic),
-					CredentialId: "crossed", SecretDigest: testDigest("s3cret-0123456789"), Enabled: true}
+				row := &DeviceCredential{
+					DeviceCredential: identity.DeviceCredential{
+						DeviceId:       foreign.ID,
+						CredentialType: string(CredentialMqttBasic),
+						CredentialId:   "crossed",
+						SecretDigest:   testDigest("s3cret-0123456789"),
+						Enabled:        true,
+					},
+				}
 				row.Token = "c-crossed"
 				mustExec(t, f.api.RDB.DB(f.ctx).Create(row))
 				return basic("crossed", "s3cret-0123456789")

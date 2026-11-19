@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -82,20 +83,22 @@ func buildDeviceCredential(key *credential.DeviceSecretKey, device *Device, requ
 		return nil, err
 	}
 	return &DeviceCredential{
-		TokenReference: rdb.TokenReference{
-			Token: request.Token,
+		DeviceCredential: identity.DeviceCredential{
+			TokenReference: rdb.TokenReference{
+				Token: request.Token,
+			},
+			MetadataEntity: rdb.MetadataEntity{
+				Metadata: metadataJSON,
+			},
+			DeviceId:           device.ID,
+			CredentialType:     request.CredentialType,
+			CredentialId:       storedId,
+			IssuedCredentialId: issued,
+			SecretDigest:       secretDigest,
+			Enabled:            request.Enabled,
+			ExpiresAt:          expiresAt,
 		},
-		MetadataEntity: rdb.MetadataEntity{
-			Metadata: metadataJSON,
-		},
-		DeviceId:           device.ID,
-		Device:             device,
-		CredentialType:     request.CredentialType,
-		CredentialId:       storedId,
-		IssuedCredentialId: issued,
-		SecretDigest:       secretDigest,
-		Enabled:            request.Enabled,
-		ExpiresAt:          expiresAt,
+		Device: device,
 	}, nil
 }
 

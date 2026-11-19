@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"gorm.io/gorm"
@@ -94,16 +95,18 @@ func (api *Api) createX509Credential(ctx context.Context, device *Device, reques
 
 	leafPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: verified.Leaf.Raw}))
 	created := &DeviceCredential{
-		TokenReference: rdb.TokenReference{Token: request.Token},
-		MetadataEntity: rdb.MetadataEntity{Metadata: metadataJSON},
-		DeviceId:       device.ID,
-		Device:         device,
-		CredentialType: string(CredentialX509Certificate),
-		CredentialId:   verified.Fingerprint,
-		TrustAnchorId:  &anchor.ID,
-		CertificatePem: sql.NullString{String: leafPEM, Valid: true},
-		Enabled:        request.Enabled,
-		ExpiresAt:      sql.NullTime{Time: verified.NotAfter, Valid: true},
+		DeviceCredential: identity.DeviceCredential{
+			TokenReference: rdb.TokenReference{Token: request.Token},
+			MetadataEntity: rdb.MetadataEntity{Metadata: metadataJSON},
+			DeviceId:       device.ID,
+			CredentialType: string(CredentialX509Certificate),
+			CredentialId:   verified.Fingerprint,
+			TrustAnchorId:  &anchor.ID,
+			CertificatePem: sql.NullString{String: leafPEM, Valid: true},
+			Enabled:        request.Enabled,
+			ExpiresAt:      sql.NullTime{Time: verified.NotAfter, Valid: true},
+		},
+		Device: device,
 	}
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		// The anchor is held FOR SHARE from here to the commit and re-checked: it was read, and
