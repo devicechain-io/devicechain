@@ -382,6 +382,12 @@ func (c *ConcurrentSharded) CarryRaised(successor map[string]string, skip func(S
 	return directResult(c, func() int { return c.s.CarryRaised(successor, skip) })
 }
 
+// ClearRaisedForRules clears selected latches with all workers idle, like CarryRaised.
+// Previously emitted output stays in the workers' ordered queues.
+func (c *ConcurrentSharded) ClearRaisedForRules(ruleIDs map[string]struct{}) int {
+	return directResult(c, func() int { return c.s.ClearRaisedForRules(ruleIDs) })
+}
+
 // IsRaised reads with all workers idle, like the publish path's other queries.
 func (c *ConcurrentSharded) IsRaised(key SeriesKey) bool {
 	return directResult(c, func() bool { return c.s.IsRaised(key) })

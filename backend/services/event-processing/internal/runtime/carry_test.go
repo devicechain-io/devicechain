@@ -16,6 +16,7 @@ func TestCarryWithoutPreviousActiveVersionAllowsFreshRaise(t *testing.T) {
 	reg := NewRuleRegistry([]ScopedRule{old, next})
 	e := core.NewEngine(reg.Cores(), 0)
 	d := NewDeadmanArmer(reg, e)
+	d.ApplyDeviceMembership(RosterEntry{Tenant: "acme", DeviceToken: "dev", ProfileToken: "p", ExpectedSince: ts(0)}, true)
 	key := core.SeriesKey{Rule: old.Compiled.ID, Series: "dev"}
 	e.ProcessEvent(core.Event{Seq: 1, Key: key, Time: ts(1), Match: true})
 	e.Drain()
@@ -48,6 +49,7 @@ func TestCarryPairsOnlyPreviousActiveVersionByKind(t *testing.T) {
 	}
 	e.Drain()
 	d.ApplyDeviceMembership(RosterEntry{Tenant: "acme", DeviceToken: "a", ProfileToken: "p", ExpectedSince: ts(0)}, true)
+	d.ApplyDeviceMembership(RosterEntry{Tenant: "acme", DeviceToken: "b", ProfileToken: "p", ExpectedSince: ts(0)}, true)
 	if n := d.ApplyActiveVersion(ActiveEntry{Tenant: "acme", ProfileToken: "p", ActiveVersionToken: "p@v3", PublishedAt: ts(20)}, nil); n != 1 {
 		t.Fatalf("previous-version carry moved %d, want 1", n)
 	}

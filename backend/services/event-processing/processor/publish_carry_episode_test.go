@@ -58,7 +58,9 @@ func TestPublishBatchedRecoveryPreservesFreshPredecessorEpisode(t *testing.T) {
 	}
 }
 
-func TestPublishRollbackBeforeDeferredSettlementKeepsActiveLatch(t *testing.T) {
+// Rollback discards the destination's historical latch even with unpublished
+// output. Keep those edges ordered, and allow a fresh active-version raise.
+func TestPublishRollbackBeforeDeferredSettlementAllowsFreshRaise(t *testing.T) {
 	for _, k := range []int{1, 4} {
 		t.Run(fmt.Sprint(k), func(t *testing.T) {
 			ctx := context.Background()
@@ -70,14 +72,18 @@ func TestPublishRollbackBeforeDeferredSettlementKeepsActiveLatch(t *testing.T) {
 			handoffActivate(t, rp, v1)
 			handoffApply(t, rp, handoffMessage(t, 2, "v2", "dev1", "90", ""))
 			old := dc.SeriesKey{Rule: v1.Compiled.ID, Series: "dev1"}
-			require.True(t, rp.engine.IsRaised(old), "in-flight v2 output must not clear active v1 after rollback")
+			require.False(t, rp.engine.IsRaised(old), "rollback must discard v1's historical latch despite pending output")
 			require.True(t, rp.checkpoint(ctx))
-			require.Len(t, w.events, 1, "rolled-back v2 must not publish a duplicate unbalanced raise")
+			require.Len(t, w.events, 2, "both pending raises remain owed; uncertainty permits a duplicate")
 			require.Equal(t, runtime.EdgeRaised, w.events[0].Edge)
-			handoffApply(t, rp, handoffMessage(t, 3, "v1", "dev1", "20", ""))
+			require.Equal(t, v1.Compiled.ID, w.events[0].RuleID)
+			require.Equal(t, runtime.EdgeRaised, w.events[1].Edge)
+			require.Equal(t, "acme/p1@v2/r1", w.events[1].RuleID)
+			requireSuccessorRaises(t, rp, w, 3, "v1", "the active version must dispatch its first breach after rollback")
+			handoffApply(t, rp, handoffMessage(t, 4, "v1", "dev1", "20", ""))
 			require.True(t, rp.checkpoint(ctx))
-			require.Len(t, w.events, 2)
-			require.Equal(t, runtime.EdgeResolved, w.events[1].Edge)
+			require.Len(t, w.events, 4)
+			require.Equal(t, runtime.EdgeResolved, w.events[3].Edge)
 			require.False(t, rp.engine.IsRaised(old))
 		})
 	}

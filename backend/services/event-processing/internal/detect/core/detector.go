@@ -17,6 +17,7 @@ type Detector interface {
 	RemoveRule(id string)
 	// CarryRaised moves latches and their newest cursors to successor rule ids.
 	CarryRaised(successor map[string]string, skip func(SeriesKey) bool) int
+	ClearRaisedForRules(ruleIDs map[string]struct{}) int
 	IsRaised(key SeriesKey) bool
 	RemoveMatching(match func(ruleID string) bool) int
 	Descope(ruleID, series string, at time.Time) bool

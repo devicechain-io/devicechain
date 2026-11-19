@@ -141,6 +141,15 @@ func (s *Sharded) CarryRaised(successor map[string]string, skip func(SeriesKey) 
 	return len(entries)
 }
 
+// ClearRaisedForRules clears selected latches in every owning shard, preserving output.
+func (s *Sharded) ClearRaisedForRules(ruleIDs map[string]struct{}) int {
+	n := 0
+	for _, e := range s.shards {
+		n += e.ClearRaisedForRules(ruleIDs)
+	}
+	return n
+}
+
 // IsRaised asks the owner of the successor key.
 func (s *Sharded) IsRaised(key SeriesKey) bool { return s.owner(key).IsRaised(key) }
 

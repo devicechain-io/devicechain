@@ -1548,6 +1548,22 @@ func (e *Engine) IsRaised(key SeriesKey) bool {
 	return ok
 }
 
+// ClearRaisedForRules clears every selected rule's latch without emitting edges.
+// Output already emitted remains queued in its original order, even when its
+// latch is cleared. A later breach may raise again: a duplicate beats a missed action.
+// For Threshold and Absence, evaluation cursors, timers and expected membership
+// are left intact; other kinds retain ClearRaised's semantics.
+func (e *Engine) ClearRaisedForRules(ruleIDs map[string]struct{}) int {
+	n := 0
+	for key := range e.raised {
+		if _, ok := ruleIDs[key.Rule]; ok {
+			e.ClearRaised(key)
+			n++
+		}
+	}
+	return n
+}
+
 // ClearRaisedIfNotAfter settles only the episode represented by an edge at at.
 // A newer raise may already exist when a concurrent engine's output is collected.
 func (e *Engine) ClearRaisedIfNotAfter(key SeriesKey, at time.Time) {
@@ -1561,7 +1577,9 @@ func (e *Engine) ClearRaisedIfNotAfter(key SeriesKey, at time.Time) {
 // backstop reject, a marshal failure) after emit already latched it. Without it the latch would
 // suppress every later raise for the series even though downstream never saw the first (review
 // H2/F5). Emitting no Resolved is correct: downstream never observed a Raise, so it is owed no
-// Resolve. Called on the single-writer loop.
+// Resolve. A version handoff also uses this to discard historical destination
+// latches: uncertainty must allow a fresh Raised rather than invent a recovery.
+// Already queued output is never altered. Called on the single-writer loop.
 //
 // It also drops a Duration series' open run once its hold timer is spent. The run is kept after its
 // raise (fireDuration), so without this a series whose raise was dropped would sit in an open run

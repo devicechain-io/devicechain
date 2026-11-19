@@ -167,6 +167,125 @@ func TestCarryDoesNotBridgeDiscontinuousIntermediateVersion(t *testing.T) {
 	}
 }
 
+// A version revisited after a kind break must not reuse its earlier carried latch,
+// even when no reading ever evaluated that version during its first stint.
+func TestRollbackAfterKindBreakDoesNotResurrectCarriedThreshold(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		for _, restart := range []bool{false, true} {
+			t.Run(fmt.Sprintf("shards=%d/restart=%v", k, restart), func(t *testing.T) {
+				v1 := continuityRule(t, "v1", "r1", rules.TypeThreshold)
+				v2 := continuityRule(t, "v2", "r1", rules.TypeThreshold)
+				v3 := continuityRule(t, "v3", "r1", rules.TypeAbsence)
+				rp, w := handoffProcessor(t, k, v1)
+				handoffApply(t, rp, handoffMessage(t, 1, "v1", "dev1", "90", ""))
+				require.True(t, rp.checkpoint(context.Background()))
+				continuityActivate(t, rp, "v2", 10*time.Second, v2)
+				require.True(t, rp.checkpoint(context.Background()))
+				require.True(t, rp.engine.IsRaised(dc.SeriesKey{Rule: v2.Compiled.ID, Series: "dev1"}))
+				continuityActivate(t, rp, "v3", 20*time.Second, v3)
+				rp.engine.Advance(testBase.Add(2 * time.Hour))
+				rp.drainDetections(testBase.Add(2*time.Hour), false)
+				require.True(t, rp.checkpoint(context.Background()))
+				require.Len(t, w.events, 2, "v3 absence must raise before recovery")
+				require.Equal(t, runtime.EdgeRaised, w.events[1].Edge)
+				handoffApply(t, rp, handoffMessage(t, 7201, "v3", "dev1", "20", ""))
+				require.True(t, rp.checkpoint(context.Background()))
+				require.Len(t, w.events, 3)
+				require.Equal(t, runtime.EdgeResolved, w.events[2].Edge, "v3 recovery clears the stable alarm")
+				if restart {
+					rp, w = continuityRestart(t, rp, k, 7201, []runtime.ScopedRule{v1, v2, v3})
+					require.Empty(t, w.events, "empty replay after the recovery checkpoint")
+				}
+				continuityActivate(t, rp, "v2", 7202*time.Second, v2)
+				requireSuccessorRaises(t, rp, w, 7203, "v2", "rollback after a kind break must dispatch a fresh v2 breach")
+			})
+		}
+	}
+}
+
+// Both the armer API and the persisted roster consumer path must exclude a device
+// that left p1 before the publish, then returns to p1 under the new version.
+func TestImmediateCarryExcludesDepartedDevice(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		for _, persisted := range []bool{false, true} {
+			t.Run(fmt.Sprintf("shards=%d/persisted=%v", k, persisted), func(t *testing.T) {
+				rp, w := handoffProcessor(t, k, handoffRule(t, "v1", rules.TypeThreshold, false))
+				handoffApply(t, rp, handoffMessage(t, 1, "v1", "dev1", "90", ""))
+				require.True(t, rp.checkpoint(context.Background()))
+				membership := func(profile string, at time.Duration) {
+					e := runtime.RosterEntry{Tenant: "acme", DeviceToken: "dev1", ProfileToken: profile, ExpectedSince: testBase.Add(at)}
+					if persisted {
+						require.NoError(t, rp.RosterStore.Upsert(context.Background(), &model.DeviceRoster{
+							Tenant: e.Tenant, DeviceToken: e.DeviceToken, ProfileToken: e.ProfileToken, ExpectedSince: e.ExpectedSince}))
+						rp.applyArmRecheck(armUpdate{tenant: e.Tenant, deviceToken: e.DeviceToken})
+					} else {
+						rp.armer.ApplyDeviceMembership(e, true)
+					}
+				}
+				membership("p2", 2*time.Second)
+				handoffActivate(t, rp, handoffRule(t, "v2", rules.TypeThreshold, false))
+				membership("p1", 11*time.Second)
+				requireSuccessorRaises(t, rp, w, 12, "v2", "a returning device's first v2 breach must dispatch")
+			})
+		}
+	}
+}
+
+// Clearing a destination latch must preserve its unpublished Raised and leave
+// the next breach free to raise again. A duplicate is safer than a missed action.
+func TestRollbackClearKeepsPendingDestinationOutput(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		t.Run(fmt.Sprint(k), func(t *testing.T) {
+			v2 := handoffRule(t, "v2", rules.TypeThreshold, true)
+			rp, w := handoffProcessor(t, k, handoffRule(t, "v1", rules.TypeThreshold, true))
+			continuityActivate(t, rp, "v2", 10*time.Second, v2)
+			handoffApply(t, rp, handoffMessage(t, 11, "v2", "dev1", "90", ""))
+			require.Len(t, rp.pendingDets, 1)
+			require.False(t, rp.pendingDets[0].early)
+			pending := append([]pendingDetection(nil), rp.pendingDets...)
+			continuityActivate(t, rp, "v3", 20*time.Second)
+			rp.dirty = false
+			continuityActivate(t, rp, "v2", 21*time.Second, v2)
+			require.True(t, rp.dirty, "a destination clear must dirty the checkpoint even without a carry")
+			require.False(t, rp.engine.IsRaised(dc.SeriesKey{Rule: v2.Compiled.ID, Series: "dev1"}))
+			require.Equal(t, pending, rp.pendingDets, "the pending edge and its publication order survive the clear")
+			require.True(t, rp.checkpoint(context.Background()))
+			require.Len(t, w.events, 1, "the unpublished raise is still owed")
+			require.Equal(t, runtime.EdgeRaised, w.events[0].Edge)
+			requireSuccessorRaises(t, rp, w, 22, "v2", "uncertain historical state must allow a duplicate raise")
+			require.True(t, w.events[0].OccurredTime.Before(w.events[1].OccurredTime), "publication order must be preserved")
+		})
+	}
+}
+
+// Destination clearing also covers Absence, but only the current source may
+// repopulate it. A continuous handoff, including rollback, still owes one recovery.
+func TestRollbackAbsenceHandoffKeepsRecovery(t *testing.T) {
+	for _, k := range []int{1, 4} {
+		t.Run(fmt.Sprint(k), func(t *testing.T) {
+			v1 := continuityRule(t, "v1", "r1", rules.TypeAbsence)
+			v2 := continuityRule(t, "v2", "r1", rules.TypeAbsence)
+			rp, w := handoffProcessor(t, k, v1)
+			require.NoError(t, rp.reconcileDeadmanArming(context.Background()))
+			rp.engine.Advance(testBase.Add(2 * time.Hour))
+			rp.drainDetections(testBase.Add(2*time.Hour), false)
+			require.True(t, rp.checkpoint(context.Background()))
+			require.Len(t, w.events, 1)
+			continuityActivate(t, rp, "v2", 7201*time.Second, v2)
+			require.True(t, rp.checkpoint(context.Background()))
+			continuityActivate(t, rp, "v1", 7202*time.Second, v1)
+			rp.engine.Advance(testBase.Add(4 * time.Hour))
+			rp.drainDetections(testBase.Add(4*time.Hour), false)
+			require.True(t, rp.checkpoint(context.Background()))
+			require.Len(t, w.events, 1, "continuous absence handoffs must not repeat actions")
+			handoffApply(t, rp, handoffMessage(t, 14401, "v1", "dev1", "20", ""))
+			require.True(t, rp.checkpoint(context.Background()))
+			require.Len(t, w.events, 2)
+			require.Equal(t, runtime.EdgeResolved, w.events[1].Edge, "the returned version must retain the recovery latch")
+		})
+	}
+}
+
 // --- version-compatibility checkpoints ------------------------------------------------
 //
 // testdata/carry_v17 holds checkpoints written by the ACTUAL v1.7 code (origin/release-1.7)

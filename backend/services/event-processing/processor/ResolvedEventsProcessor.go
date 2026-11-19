@@ -2567,9 +2567,9 @@ func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
 	// token / scaffold) or nil armer skips it.
 	if rp.armer != nil && upd.active != nil {
 		if rp.armer.ApplyActiveVersion(*upd.active, rp.pendingOutputKeys()) > 0 {
-			// The normal checkpoint persists this move. A crash before it can duplicate
-			// one action on the successor's next breach: accepted at-least-once
-			// delivery, without forcing a checkpoint.
+			// The normal checkpoint persists destination clears and the carry.
+			// A crash before the carry is checkpointed can duplicate one action on
+			// the successor's next breach: accepted at-least-once delivery.
 			rp.dirty = true
 		}
 	}

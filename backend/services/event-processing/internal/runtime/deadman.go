@@ -14,6 +14,7 @@ import (
 // narrow interface lets the armer's cross-reference logic be unit-tested against a fake.
 type expectedArmer interface {
 	CarryRaised(successor map[string]string, skip func(core.SeriesKey) bool) int
+	ClearRaisedForRules(map[string]struct{}) int
 	IsRaised(core.SeriesKey) bool
 	ClearRaisedIfNotAfter(core.SeriesKey, time.Time)
 	SetExpected(key core.SeriesKey, since time.Time)
@@ -168,8 +169,10 @@ func (d *DeadmanArmer) ApplyDeviceMembership(e RosterEntry, present bool) {
 // in the registry so AbsenceRulesFor can see them). It records the active version, disarms a
 // superseded version's dead-men across the profile's fleet, then arms every rostered device of the
 // profile under the new active version. Latches carry only from a known immediately
-// previous active version, paired by stable identity and kind. It returns the number
-// of moved latches.
+// previous active version, paired by stable identity and kind, for current members.
+// Historical Threshold and Absence latches in the destination are cleared first,
+// without emitting or altering pending output. Only this transition's carry may
+// populate those latches. It returns the number of cleared or moved latches.
 func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry, skip func(core.SeriesKey) bool) int {
 	pk := profKey{a.Tenant, a.ProfileToken}
 	prev, had := d.active[pk]
@@ -179,8 +182,20 @@ func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry, skip func(core.SeriesKe
 	// Redelivered active facts must not start a fresh handoff for historical
 	// threshold latches created after the actual version transition.
 	moved := 0
+	cleared := 0
 	if had && prev.version != a.ActiveVersionToken {
 		d.invalidateDeferredThresholds()
+		// Rollback must not resurrect a latch from an earlier stint of this version.
+		// Clear Absence too: retained state cannot prove continuity for either kind.
+		// Pending edges stay ordered and publish normally; a new breach may duplicate
+		// a raise, but must never be suppressed by uncertain historical state.
+		destination := map[string]struct{}{}
+		for _, sr := range d.reg.RulesFor(a.Tenant, a.ActiveVersionToken) {
+			if sr.Compiled.Core.Kind == core.Threshold || sr.Compiled.Core.Kind == core.Absence {
+				destination[sr.Compiled.ID] = struct{}{}
+			}
+		}
+		cleared = d.engine.ClearRaisedForRules(destination)
 		// Only the immediately previous active version proves continuity. Older
 		// retained latches may precede a removed, disabled or differently kinded rule.
 		for old := range pairs {
@@ -199,7 +214,7 @@ func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry, skip func(core.SeriesKe
 	}
 	abs := d.reg.AbsenceRulesFor(a.Tenant, a.ActiveVersionToken)
 	if len(abs) == 0 {
-		return moved
+		return moved + cleared
 	}
 	for dev := range d.byProfile[pk] {
 		since, ok := d.graceBase(d.roster[devKey{a.Tenant, dev}].expectedSince, a.PublishedAt)
@@ -210,7 +225,7 @@ func (d *DeadmanArmer) ApplyActiveVersion(a ActiveEntry, skip func(core.SeriesKe
 			d.engine.SetExpected(core.SeriesKey{Rule: sr.Compiled.ID, Series: dev}, since)
 		}
 	}
-	return moved
+	return moved + cleared
 }
 
 // loadMembership (re)populates the armer's three membership views (active / roster / byProfile) from
@@ -527,12 +542,18 @@ func (d *DeadmanArmer) Reconcile(rosters []RosterEntry, actives []ActiveEntry) {
 }
 
 // carryHandoff records the exact threshold pairs left behind by this handoff's
-// pending-output fence. CarryRaised calls the predicate on latched old keys;
-// do not enumerate retained latches again after publication.
+// pending-output fence, only for devices currently rostered in the destination
+// profile, just as deferred settlement requires. Departed devices keep their old
+// latch but cannot seed a successor that would suppress a raise on their return.
+// CarryRaised calls the predicate on latched old keys; do not enumerate retained
+// latches again after publication.
 func (d *DeadmanArmer) carryHandoff(pairs map[string]string, skip func(core.SeriesKey) bool) int {
 	return d.engine.CarryRaised(pairs, func(key core.SeriesKey) bool {
 		if id, ok := pairs[key.Rule]; ok {
 			next := core.SeriesKey{Rule: id, Series: key.Series}
+			if current, paired := d.CarriedSuccessor(key); !paired || current != next {
+				return true
+			}
 			sr, found := d.reg.Lookup(key.Rule)
 			threshold := found && sr.Compiled.Core.Kind == core.Threshold
 			if skip != nil && (skip(key) || skip(next)) {

@@ -5,9 +5,44 @@ package core
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 	"time"
 )
+
+func TestClearRaisedForRulesPreservesPendingOutput(t *testing.T) {
+	rules := []Rule{{ID: "dest", Kind: Threshold}, {ID: "absence", Kind: Absence, Timeout: time.Second}, {ID: "other", Kind: Threshold}}
+	engines := []Detector{NewEngine(rules, 0), NewSharded(4, rules, 0), NewConcurrentSharded(4, rules, 0)}
+	controls := []Detector{NewEngine(rules, 0), NewSharded(4, rules, 0), NewConcurrentSharded(4, rules, 0)}
+	defer engines[2].(*ConcurrentSharded).Close()
+	defer controls[2].(*ConcurrentSharded).Close()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	seed := func(e Detector) {
+		e.ProcessEvent(Event{Seq: 1, Key: SeriesKey{"dest", "a"}, Time: base, Match: true})
+		e.ProcessEvent(Event{Seq: 2, Key: SeriesKey{"dest", "a"}, Time: base.Add(time.Second), Match: false})
+		e.ProcessEvent(Event{Seq: 3, Key: SeriesKey{"dest", "a"}, Time: base.Add(2 * time.Second), Match: true})
+		e.ProcessEvent(Event{Seq: 4, Key: SeriesKey{"dest", "b"}, Time: base.Add(3 * time.Second), Match: true})
+		e.ProcessEvent(Event{Seq: 5, Key: SeriesKey{"other", "a"}, Time: base.Add(4 * time.Second), Match: true})
+		e.SetExpected(SeriesKey{"absence", "a"}, base.Add(4*time.Second))
+		e.Advance(base.Add(6 * time.Second))
+	}
+	for i, e := range engines {
+		// Synchronous shards only promise order within a key. Compare each
+		// implementation with its own output before any latch clear.
+		seed(controls[i])
+		want := controls[i].Drain()
+		seed(e) // leave all output queued, including the destination's raise/resolve/raise
+		if n := e.ClearRaisedForRules(map[string]struct{}{"dest": {}, "absence": {}}); n != 3 {
+			t.Fatalf("cleared %d latches, want 3", n)
+		}
+		if got := e.Drain(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("clearing changed pending output or its order: got %+v, want %+v", got, want)
+		}
+		if e.IsRaised(SeriesKey{"dest", "a"}) || e.IsRaised(SeriesKey{"dest", "b"}) || e.IsRaised(SeriesKey{"absence", "a"}) || !e.IsRaised(SeriesKey{"other", "a"}) {
+			t.Fatal("clear did not select exactly the destination rules' latches")
+		}
+	}
+}
 
 func TestCarryRaisedOwnersAndRestore(t *testing.T) {
 	rules := []Rule{{ID: "old", Kind: Threshold}, {ID: "new", Kind: Threshold}, {ID: "other", Kind: Threshold}}
