@@ -7,6 +7,7 @@ import (
 	"context"
 	"github.com/devicechain-io/dc-microservice/actiongate"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -109,13 +110,35 @@ type Api struct {
 	// disables it.
 	ceilings *ceilingMetrics
 
-	// AlarmPublisher emits alarm state-change events (ADR-041). It is injected at
-	// wiring time (the concrete publisher owns a NATS writer, so it cannot be built
-	// until the messaging layer exists) and may be nil — in tests, or before wiring —
-	// in which case emission is disabled. Both the DETECT edge integrator and the operator
-	// API mutate alarms through this shared *Api, so setting it here gives one uniform
-	// event stream for every transition.
+	// AlarmPublisher publishes the alarm events the relay takes from their outbox
+	// (alarm_event_outbox.go), and the agent-effect and deletion outboxes' alarm events. Nil
+	// keeps queued events queued and makes the alarm-event drain fail closed. Wiring that may
+	// run while relay passes do (a broker restart) sets it through SetAlarmPublisher.
 	AlarmPublisher AlarmEventPublisher
+	// AlarmEventObserver, when set, is told the backlog on every periodic alarm-event drain
+	// pass: transitions still owed to the broker, how long the oldest has waited, and how many
+	// are quarantined. Wired to the service gauges.
+	AlarmEventObserver func(pending int, oldest time.Duration, quarantined int)
+	// AlarmEventDeadLetter indexes a committed quarantine by reference with its raw payload.
+	// Nil skips indexing; replacements use SetAlarmEventDeadLetter.
+	AlarmEventDeadLetter func(ctx context.Context, reference string, payload []byte, cause error) error
+	// The post-commit relay (alarm_event_wait.go). alarmEventMu guards every field below and
+	// replacements of AlarmPublisher and AlarmEventDeadLetter.
+	alarmEventMu      sync.Mutex
+	alarmEventRunning bool
+	alarmEventPending chan struct{}
+	alarmEventWait    time.Duration
+	alarmRelayStopped bool
+	alarmRelayCtx     context.Context
+	alarmRelayCancel  context.CancelFunc
+	alarmRelayIdle    chan struct{}
+	// afterAlarmTransitionLockForTest runs after acknowledge or clear has locked and re-read
+	// the alarm row, inside its transaction (tests only).
+	afterAlarmTransitionLockForTest func()
+	// suppressAlarmEventKickForTest simulates a crash immediately after commit.
+	suppressAlarmEventKickForTest bool
+	// afterAlarmEventEnqueueForTest can fail after enqueue to prove atomic rollback.
+	afterAlarmEventEnqueueForTest func(*gorm.DB) error
 
 	// EntityDeletedPublisher acknowledges deletion facts from the transactional outbox.
 	// Injected at wiring time; a nil publisher makes the drain fail and retain its rows.
@@ -325,24 +348,12 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 	return api
 }
 
-// emitAlarmEvent publishes only after the caller has committed the transition.
-// DEVICE RAISED/ESCALATED events get a bounded, wall-time suppression evaluation
-// immediately before publication. Evaluation failures still publish toward paging.
-// A nil publisher disables both enrichment and publication.
-func (api *Api) emitAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent) {
-	if api.AlarmPublisher != nil {
-		api.describeAlarmDevice(ctx, event)
-		api.suppressAlarmEvent(ctx, event)
-		api.AlarmPublisher.PublishAlarmEvent(ctx, event)
-	}
-}
-
 // alarmDeviceLookupTimeout bounds the device read that names an alarm event.
 const alarmDeviceLookupTimeout = 500 * time.Millisecond
 
 // describeAlarmDevice names the originating device on the event (token, name, type token) so
 // a subscriber such as notification-management can show a person which device it is. It is
-// best effort and never blocks the page: the transition is already committed, so a failed read
+// best effort before the transition transaction, so a failed read
 // publishes the event without the names rather than not at all.
 func (api *Api) describeAlarmDevice(ctx context.Context, event *AlarmStateChangeEvent) {
 	if event.OriginatorType != string(entity.TypeDevice) || event.OriginatorId == 0 {

@@ -38,7 +38,7 @@ func newRuleScopeTestApi(t *testing.T) (*Api, context.Context) {
 		&DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{}, &MetricDefinition{}, &CommandDefinition{},
 		&DetectionRule{}, &DetectionRuleScopeRef{}, &EntityAttribute{},
 		&EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{}, &EntityGroupFacetRef{},
-		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &Alarm{}); err != nil {
+		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &Alarm{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {

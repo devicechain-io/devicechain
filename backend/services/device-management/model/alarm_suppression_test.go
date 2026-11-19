@@ -200,7 +200,7 @@ func TestSuppressionLatestUntilAndInvalidStored(t *testing.T) {
 func newSuppressionTestApi(t *testing.T) (*Api, context.Context, uint) {
 	t.Helper()
 	api := scopeAnchorsApi(t)
-	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).AutoMigrate(&DeviceType{}, &Alarm{}, &AlarmDisposition{}, &AlarmSuppressionWindow{}, &AlarmCycleSuppression{}, &EntityGroupVersion{}, &EntityAttribute{}))
+	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).AutoMigrate(&DeviceType{}, &Alarm{}, &PendingAlarmEvent{}, &AlarmDisposition{}, &AlarmSuppressionWindow{}, &AlarmCycleSuppression{}, &EntityGroupVersion{}, &EntityAttribute{}))
 	require.NoError(t, rdb.CreateTenantTokenIndex(api.RDB.Database.WithContext(core.WithSystemContext(context.Background())), &AlarmSuppressionWindow{}))
 	claims := &auth.Claims{TokenType: auth.TokenTypeAccess, Authorities: []string{"*"}, Tenant: "acme"}
 	claims.Subject = "operator"
