@@ -57,7 +57,7 @@ const OwnershipDrainPageSize = rdb.MaxLookupKeys
 
 // PendingOwnershipFact records that a device's owners may have changed and device-state has
 // not yet been told: one row per device, written in the transaction of the change, deleted
-// by the drain once the fact is published.
+// by the drain once suppression visibility is refreshed and the fact is published.
 //
 // Generation identifies the write that queued the row last. The drain deletes a row only
 // where Generation is still what it read, so a change committed while a fact was being
@@ -252,6 +252,9 @@ func (api *Api) drainTenantOwnership(ctx context.Context, pageSize int) (publish
 	facts, err := api.ownershipFacts(ctx, ids, changed)
 	if err != nil {
 		return 0, 0, fmt.Errorf("reading the anchors of %d queued device(s): %w", len(ids), err)
+	}
+	if err := api.refreshSuppressionOwnership(ctx, facts); err != nil {
+		return 0, 0, fmt.Errorf("refreshing suppression ownership: %w", err)
 	}
 	byId := make(map[uint]*DeviceOwnershipChangedEvent, len(facts))
 	for _, f := range facts {

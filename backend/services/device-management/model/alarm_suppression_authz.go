@@ -26,7 +26,7 @@ func suppressionNarrow(w *AlarmSuppressionWindow) bool {
 }
 
 // Narrow-window alarmKeys and bypass edits deliberately require only alarm:write.
-// authorizeSuppressionWrite checks both sides of a partial update, including end/delete.
+// authorizeSuppressionWrite checks both sides of a partial update, and deletion.
 func (api *Api) authorizeSuppressionWrite(ctx context.Context, existing, result *AlarmSuppressionWindow) error {
 	scope, err := auth.AuthorizeScoped(ctx, auth.AlarmWrite)
 	if err != nil {

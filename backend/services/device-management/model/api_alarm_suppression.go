@@ -146,7 +146,16 @@ func (api *Api) mutateSuppression(ctx context.Context, token string, change func
 		return nil, err
 	}
 	result := existing
-	if ending || deleting {
+	if ending {
+		if _, err := auth.AuthorizeScoped(ctx, auth.AlarmWrite); err != nil {
+			return nil, err
+		}
+		if visible, err := api.suppressionTargetsInScope(ctx, &existing); err != nil {
+			return nil, err
+		} else if !visible {
+			return nil, auth.ErrForbidden
+		}
+	} else if deleting {
 		if err := api.authorizeSuppressionWrite(ctx, &existing, nil); err != nil {
 			return nil, err
 		}
@@ -225,13 +234,14 @@ func (api *Api) UpdateAlarmSuppressionWindow(ctx context.Context, token string, 
 	return api.mutateSuppression(ctx, token, r.apply, false, false)
 }
 
+// EndAlarmSuppressionWindow restores paging and needs alarm:write plus visibility.
 func (api *Api) EndAlarmSuppressionWindow(ctx context.Context, token string) (*AlarmSuppressionWindow, error) {
 	return api.retrySuppressionMutation(ctx, token, true)
 }
 
 func (api *Api) DeleteAlarmSuppressionWindow(ctx context.Context, token string) (*AlarmSuppressionWindow, error) {
-	// Soft deletion is an authorized update, allowing the same scoped end/delete
-	// policy while retaining the row and increasing its version in the audit journal.
+	// Soft deletion retains creation's reach-based authority requirement and
+	// increases the version in the audit journal.
 	return api.retrySuppressionMutation(ctx, token, false)
 }
 
