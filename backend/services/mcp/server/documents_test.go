@@ -82,7 +82,7 @@ func TestEveryMCPDocumentValidatesAgainstTheSchemaItIsSentTo(t *testing.T) {
 	for _, d := range documents {
 		names[operationName(d)] = d.area
 	}
-	for _, want := range []string{"ListAlarms", "GetAlarm"} {
+	for _, want := range []string{"ListAlarms", "GetAlarm", "AlarmSuppressionStatus", "ListSuppressionWindows"} {
 		if names[want] != "device-management" {
 			t.Fatalf("registry has no %s document for device-management (have %v)", want, names)
 		}

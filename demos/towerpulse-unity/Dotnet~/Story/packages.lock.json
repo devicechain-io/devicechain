@@ -2,8 +2,14 @@
   "version": 1,
   "dependencies": {
     ".NETStandard,Version=v2.1": {
-      "devicechain.towerpulse.model": {
+      "devicechain.demos.core": {
         "type": "Project"
+      },
+      "devicechain.towerpulse.model": {
+        "type": "Project",
+        "dependencies": {
+          "DeviceChain.Demos.Core": "[1.0.0, )"
+        }
       },
       "devicechain.towerpulse.plane": {
         "type": "Project",
@@ -19,8 +25,14 @@
         "resolved": "8.0.33",
         "contentHash": "dG9SM/0/zOTIE1UvSrveD1iDyEJjThqPqSnreExgqQWSoGWvze0esDi0faRk3C44IO1kqCeEX6AeCxWmBOppfw=="
       },
-      "devicechain.towerpulse.model": {
+      "devicechain.demos.core": {
         "type": "Project"
+      },
+      "devicechain.towerpulse.model": {
+        "type": "Project",
+        "dependencies": {
+          "DeviceChain.Demos.Core": "[1.0.0, )"
+        }
       },
       "devicechain.towerpulse.plane": {
         "type": "Project",

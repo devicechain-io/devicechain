@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -29,7 +29,7 @@ func suppressionReleaseFixture(t *testing.T, tz, slots, bypass string, clock *ti
 
 func TestSuppressionReleaseRereadsCurrentSeverity(t *testing.T) {
 	for _, window := range []bool{true, false} {
-		for _, kind := range []dmmodel.AlarmEventType{dmmodel.AlarmEventRaised, dmmodel.AlarmEventEscalated} {
+		for _, kind := range []dmcontract.AlarmEventType{dmcontract.AlarmEventRaised, dmcontract.AlarmEventEscalated} {
 			name := "window/" + kind.String()
 			if !window {
 				name = "quiet/" + kind.String()
@@ -54,7 +54,7 @@ func TestSuppressionReleaseRereadsCurrentSeverity(t *testing.T) {
 				require.NoError(t, n.Notify(ctx, e))
 				before := heldRows(t, api, ctx)
 				require.Len(t, before, 1)
-				down := eventAt(dmmodel.AlarmEventDeescalated, "MINOR", clock.Add(time.Second))
+				down := eventAt(dmcontract.AlarmEventDeescalated, "MINOR", clock.Add(time.Second))
 				down.RaisedTime, down.PreviousSeverity = e.RaisedTime, "MAJOR"
 				require.NoError(t, n.Notify(ctx, down))
 				states, err := api.NotificationStatesByAlarmToken(ctx, []string{"a1"})
@@ -210,7 +210,7 @@ func TestReRaiseInsideWindowHoldsNewCycleDropsOld(t *testing.T) {
 			require.NoError(t, n.Notify(ctx, first))
 			old := heldRows(t, api, ctx)
 			require.Len(t, old, 1)
-			clear := eventAt(dmmodel.AlarmEventCleared, "MAJOR", clock.Add(time.Second))
+			clear := eventAt(dmcontract.AlarmEventCleared, "MAJOR", clock.Add(time.Second))
 			clear.RaisedTime, clear.State = first.RaisedTime, "CLEARED"
 			require.NoError(t, n.Notify(ctx, clear))
 			require.Empty(t, heldRows(t, api, ctx))
@@ -226,7 +226,7 @@ func TestReRaiseInsideWindowHoldsNewCycleDropsOld(t *testing.T) {
 			held := heldRows(t, api, ctx)
 			require.Len(t, held, 1)
 			require.Equal(t, priorID, held[0].ID)
-			var stored dmmodel.AlarmStateChangeEvent
+			var stored dmcontract.AlarmStateChangeEvent
 			require.NoError(t, json.Unmarshal(held[0].Event, &stored))
 			require.True(t, second.RaisedTime.Equal(stored.RaisedTime))
 			require.Equal(t, "window-1", held[0].HeldByWindow.String)
@@ -269,7 +269,7 @@ func TestSuppressionReleaseRendersLiveSeverityWithoutStateRow(t *testing.T) {
 	require.NoError(t, api.RDB.DB(ctx).Model(&model.NotificationRule{}).Where("policy_id = ?", p.ID).Update("severity", "MAJOR").Error)
 	e := suppressedEvent(clock, clock.Add(time.Minute))
 	require.NoError(t, n.Notify(ctx, e))
-	down := eventAt(dmmodel.AlarmEventDeescalated, "MINOR", clock.Add(time.Second))
+	down := eventAt(dmcontract.AlarmEventDeescalated, "MINOR", clock.Add(time.Second))
 	down.RaisedTime = e.RaisedTime
 	require.NoError(t, n.Notify(ctx, down))
 	states, err := api.NotificationStatesByAlarmToken(ctx, []string{"a1"})

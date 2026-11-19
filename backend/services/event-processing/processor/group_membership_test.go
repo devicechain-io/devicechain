@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/model"
@@ -147,8 +147,8 @@ func TestGroupMembershipFacts(t *testing.T) {
 		publish(tenant, streams.DeviceRoster, rosterMsg(t, tenant, "late", "p", testBase, &fakeAck{}))
 		p.applyArmRecheck(receiveArmUpdate(t, p))
 		require.Equal(t, []detectcore.SeriesKey{{Rule: tenant + "/p@1/dead", Series: "late"}}, p.engine.ExpectedKeys())
-		b, err := dmproto.MarshalDetectionRulesPublishedEvent(&dmmodel.DetectionRulesPublishedEvent{
-			ProfileVersionToken: "p@2", PublishedAt: testBase.Add(time.Second), Rules: []dmmodel.PublishedDetectionRule{{Token: "dead", Definition: deadRule}},
+		b, err := dmproto.MarshalDetectionRulesPublishedEvent(&dmcontract.DetectionRulesPublishedEvent{
+			ProfileVersionToken: "p@2", PublishedAt: testBase.Add(time.Second), Rules: []dmcontract.PublishedDetectionRule{{Token: "dead", Definition: deadRule}},
 		})
 		require.NoError(t, err)
 		publish(tenant, streams.DetectionRulesPublished, messaging.NewConsumedMessage("", b, 0, nil, &fakeAck{}))
@@ -195,9 +195,9 @@ func TestGroupMembershipPlacementRefuses(t *testing.T) {
 
 func membershipRuleMessage(t *testing.T, tenant string) messaging.Message {
 	t.Helper()
-	b, err := dmproto.MarshalDetectionRulesPublishedEvent(&dmmodel.DetectionRulesPublishedEvent{
+	b, err := dmproto.MarshalDetectionRulesPublishedEvent(&dmcontract.DetectionRulesPublishedEvent{
 		ProfileVersionToken: "p@1", PublishedAt: testBase,
-		Rules: []dmmodel.PublishedDetectionRule{{Token: "dead", Definition: deadRule}},
+		Rules: []dmcontract.PublishedDetectionRule{{Token: "dead", Definition: deadRule}},
 	})
 	require.NoError(t, err)
 	return messaging.NewConsumedMessage("dc."+tenant+".detection-rules-published", b, 0, nil, &fakeAck{})
@@ -334,17 +334,17 @@ func TestGroupMembershipSupervisor(t *testing.T) {
 // two-sweep confirmation of removal. No mutable armer is touched off-loop.
 type membershipRosterSource struct {
 	DeviceManagementFacts
-	rows []dmmodel.DeviceRosterEntry
+	rows []dmcontract.DeviceRosterEntry
 }
 
-func (s *membershipRosterSource) Roster(context.Context, string) ([]dmmodel.DeviceRosterEntry, error) {
+func (s *membershipRosterSource) Roster(context.Context, string) ([]dmcontract.DeviceRosterEntry, error) {
 	return s.rows, nil
 }
 
 func TestGroupMembershipReconcile(t *testing.T) {
 	r := newGroupRig(t)
 	p0, p1 := membershipFixture(t, r)
-	source := &membershipRosterSource{rows: []dmmodel.DeviceRosterEntry{{DeviceToken: "lost", ProfileToken: "p", ExpectedSince: testBase}}}
+	source := &membershipRosterSource{rows: []dmcontract.DeviceRosterEntry{{DeviceToken: "lost", ProfileToken: "p", ExpectedSince: testBase}}}
 	p0.DeviceManagement = source
 	for _, tenant := range []string{"acme", "other"} {
 		require.True(t, p0.handleRuleFact(membershipRuleMessage(t, tenant), false))

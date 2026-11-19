@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -41,7 +41,7 @@ func publishGateAccepts(t *testing.T, def string) bool {
 
 func runtimeConsumerAccepts(t *testing.T, def string) bool {
 	t.Helper()
-	scoped, failed := runtime.CompilePublishedRules("acme", "prof@1", []dmmodel.PublishedDetectionRule{
+	scoped, failed := runtime.CompilePublishedRules("acme", "prof@1", []dmcontract.PublishedDetectionRule{
 		{Token: "slide", Definition: def},
 	})
 	return failed == 0 && len(scoped) == 1

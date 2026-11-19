@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/prometheus/client_golang/prometheus"
@@ -61,7 +61,7 @@ func TestSlowTenantDoesNotBlockOtherTenantWork(t *testing.T) {
 			seedFairTenant(t, api, "aaa", backlog)
 			ctx, p := seedFairTenant(t, api, "bbb", 1)
 			now := time.Now().UTC()
-			ev := cycleEvent(dmmodel.AlarmEventRaised, now.Add(-time.Minute), now.Add(-time.Minute))
+			ev := cycleEvent(dmcontract.AlarmEventRaised, now.Add(-time.Minute), now.Add(-time.Minute))
 			ev.AlarmToken = "cleared"
 			if err := n.Notify(ctx, ev); err != nil {
 				t.Fatal(err)
@@ -214,7 +214,7 @@ func TestTenantSliceLeavesUnclaimedWorkAndStillAnnouncesClears(t *testing.T) {
 		others = append(others, octx)
 	}
 	now := time.Now().UTC()
-	ev := cycleEvent(dmmodel.AlarmEventRaised, now.Add(-time.Minute), now.Add(-time.Minute))
+	ev := cycleEvent(dmcontract.AlarmEventRaised, now.Add(-time.Minute), now.Add(-time.Minute))
 	ev.AlarmToken = "cleared"
 	if err := n.Notify(ctx, ev); err != nil {
 		t.Fatal(err)
@@ -425,7 +425,7 @@ func TestHeldReleaseStopsBeforeLeasingWhenTenantSliceExpires(t *testing.T) {
 	api, n := fairnessRig(t)
 	ctx, p := seedFairTenant(t, api, "aaa", 0)
 	now := time.Now().UTC()
-	ev := cycleEvent(dmmodel.AlarmEventRaised, now.Add(-time.Minute), now.Add(-time.Minute))
+	ev := cycleEvent(dmcontract.AlarmEventRaised, now.Add(-time.Minute), now.Add(-time.Minute))
 	d := &model.NotificationDeferral{AlarmToken: "a1", PolicyId: p.ID, AlarmKey: "k", Severity: "CRITICAL",
 		OccurredTime: ev.OccurredTime, ReleaseAt: now.Add(-time.Second), Event: datatypes.JSON(mustJSON(ev))}
 	if err := stateDB(api).WithContext(ctx).Create(d).Error; err != nil {

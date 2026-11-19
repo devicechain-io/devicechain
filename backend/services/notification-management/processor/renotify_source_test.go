@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-notification-management/model"
 )
 
 // pagedThenDue pages an alarm through Notify and returns a notifier whose clock is past the
 // escalation window, so an Escalate call re-notifies it.
-func pagedThenDue(t *testing.T, ev *dmmodel.AlarmStateChangeEvent) (*PolicyNotifier, *msgRecorder, *model.Api, context.Context) {
+func pagedThenDue(t *testing.T, ev *dmcontract.AlarmStateChangeEvent) (*PolicyNotifier, *msgRecorder, *model.Api, context.Context) {
 	t.Helper()
 	api := fencedApi(t)
 	ctx := tenantScoped()
@@ -35,9 +35,9 @@ func pagedThenDue(t *testing.T, ev *dmmodel.AlarmStateChangeEvent) (*PolicyNotif
 	return n, rec, api, ctx
 }
 
-func namedAlarm() *dmmodel.AlarmStateChangeEvent {
+func namedAlarm() *dmcontract.AlarmStateChangeEvent {
 	raised := time.Now().UTC().Add(-time.Minute)
-	ev := cycleEvent(dmmodel.AlarmEventRaised, raised, raised)
+	ev := cycleEvent(dmcontract.AlarmEventRaised, raised, raised)
 	ev.OriginatorType, ev.OriginatorId = "device", 42
 	ev.DeviceToken, ev.DeviceName, ev.DeviceTypeToken = "boiler-7", "Boiler 7", "boiler"
 	return ev
@@ -80,7 +80,7 @@ func TestARenotificationNamesTheDevice(t *testing.T) {
 // A row that knows no device (written before the columns) renders without one, and invents nothing.
 func TestARenotificationOfARowWithoutASourceOmitsIt(t *testing.T) {
 	at := time.Now().UTC().Add(-time.Minute)
-	n, rec, api, ctx := pagedThenDue(t, cycleEvent(dmmodel.AlarmEventRaised, at, at))
+	n, rec, api, ctx := pagedThenDue(t, cycleEvent(dmcontract.AlarmEventRaised, at, at))
 	states, _ := api.OpenNotificationStates(ctx)
 	pol, _ := api.EnabledNotificationPolicies(ctx)
 	if err := n.Escalate(ctx, states[0], pol, n.clock(), 5); err != nil {
@@ -102,7 +102,7 @@ func TestALaterEventWithoutNamesKeepsTheStoredSource(t *testing.T) {
 	ev := namedAlarm()
 	n, _, api, ctx := pagedThenDue(t, ev)
 	again := *ev
-	again.EventType = dmmodel.AlarmEventEscalated
+	again.EventType = dmcontract.AlarmEventEscalated
 	again.OccurredTime = ev.OccurredTime.Add(time.Second)
 	again.DeviceName, again.DeviceToken, again.DeviceTypeToken = "", "", ""
 	again.OriginatorType, again.OriginatorId = "", 0
@@ -218,7 +218,7 @@ func TestANewerEventUpdatesSourceAfterEscalation(t *testing.T) {
 		t.Fatal(err)
 	}
 	newer := *event
-	newer.EventType = dmmodel.AlarmEventEscalated
+	newer.EventType = dmcontract.AlarmEventEscalated
 	newer.OccurredTime = event.OccurredTime.Add(time.Minute)
 	newer.DeviceName = "New"
 	if err := n.Notify(ctx, &newer); err != nil {

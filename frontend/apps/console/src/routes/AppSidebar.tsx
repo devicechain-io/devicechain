@@ -267,6 +267,7 @@ export const NAV: NavNode[] = [
     labelKey: 'settings',
     icon: SlidersHorizontal,
     items: [
+      { labelKey: 'alarmMaintenance', href: '/alarm-maintenance', icon: CalendarClock, requires: 'alarm:read', scoped: true },
       { labelKey: 'branding', href: '/branding', icon: Palette, requires: 'branding:write' },
       // Labelled "Map", not "Basemap": inside Settings the longer name is redundant,
       // and the page sets the default view (centre/zoom) as well as the tile source,

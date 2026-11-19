@@ -51,6 +51,8 @@ var toolAuthorities = map[string][]coreauth.Authority{
 	// device-management/graphql/queries_alarm_state.go — Alarms, AlarmsByToken
 	"list_alarms": {coreauth.AlarmRead},
 	"get_alarm":   {coreauth.AlarmRead},
+	// device-management/graphql/alarm_suppression.go: AlarmSuppressionWindows.
+	"list_suppression_windows": {coreauth.AlarmRead},
 	// command-delivery/graphql/queries.go — Commands
 	"list_commands": {coreauth.CommandRead},
 	// device-management/graphql: agent proposal resolvers.

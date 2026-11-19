@@ -8,7 +8,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/entityevent"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -177,7 +177,7 @@ func (rp *ResolvedEventsProcessor) handleRosterFact(msg messaging.Message, signa
 //     varchar overflow.
 //   - an over-long profile token, for the varchar reason (empty is valid: "no profile").
 //   - a zero ExpectedSince: it would defeat the monotonic guard.
-func rosterFactPoison(ev *dmmodel.DeviceRosterEvent) (string, bool) {
+func rosterFactPoison(ev *dmcontract.DeviceRosterEvent) (string, bool) {
 	switch {
 	case ev.DeviceToken == "" || !validRosterToken(ev.DeviceToken):
 		return "empty or over-long device token", true
@@ -322,7 +322,7 @@ func (rp *ResolvedEventsProcessor) ackFact(msg messaging.Message, kind string) {
 // decodeRosterFact unmarshals one device-roster fact into its owning tenant (from the per-tenant
 // subject) and payload. ok is false when the message is unusable (no parseable tenant, or an
 // unmarshalable payload) — dropped, not fatal. The tenant travels on the subject, never the payload.
-func decodeRosterFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmmodel.DeviceRosterEvent, bool) {
+func decodeRosterFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmcontract.DeviceRosterEvent, bool) {
 	_, tenant, ok := messaging.TenantContextFromSubject(rp.pctx(), msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).

@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-notification-management/model"
 )
 
 // cycleEvent builds one transition for alarm "a1" in the cycle that began at raised.
-func cycleEvent(et dmmodel.AlarmEventType, raised, occurred time.Time) *dmmodel.AlarmStateChangeEvent {
-	return &dmmodel.AlarmStateChangeEvent{
+func cycleEvent(et dmcontract.AlarmEventType, raised, occurred time.Time) *dmcontract.AlarmStateChangeEvent {
+	return &dmcontract.AlarmStateChangeEvent{
 		EventType: et, AlarmToken: "a1", AlarmKey: "k", Severity: "CRITICAL", State: "ACTIVE",
 		RaisedTime: raised, OccurredTime: occurred,
 	}
@@ -58,7 +58,7 @@ func TestASecondCycleOfTheSameAlarmEscalates(t *testing.T) {
 	n.store = &fakeSecretStore{}
 	clock := now
 	n.now = func() time.Time { return clock }
-	notify := func(e *dmmodel.AlarmStateChangeEvent) {
+	notify := func(e *dmcontract.AlarmStateChangeEvent) {
 		t.Helper()
 		if err := n.Notify(ctx, e); err != nil {
 			t.Fatalf("%s: %v", e.EventType, err)
@@ -71,9 +71,9 @@ func TestASecondCycleOfTheSameAlarmEscalates(t *testing.T) {
 	c1 := now.Add(-2 * time.Hour).Add(123 * time.Nanosecond)
 	c1db := c1.Truncate(time.Microsecond)
 	clock = c1
-	notify(cycleEvent(dmmodel.AlarmEventRaised, c1, c1))
-	notify(cycleEvent(dmmodel.AlarmEventAcknowledged, c1db, c1.Add(time.Minute)))
-	notify(cycleEvent(dmmodel.AlarmEventCleared, c1db, c1.Add(10*time.Minute)))
+	notify(cycleEvent(dmcontract.AlarmEventRaised, c1, c1))
+	notify(cycleEvent(dmcontract.AlarmEventAcknowledged, c1db, c1.Add(time.Minute)))
+	notify(cycleEvent(dmcontract.AlarmEventCleared, c1db, c1.Add(10*time.Minute)))
 	if fa.calls != 1 {
 		t.Fatalf("cycle one paged %d time(s), want 1", fa.calls)
 	}
@@ -81,13 +81,13 @@ func TestASecondCycleOfTheSameAlarmEscalates(t *testing.T) {
 	// Cycle two: re-raised on the same token and paged twenty minutes ago.
 	c2 := now.Add(-20 * time.Minute)
 	clock = c2
-	notify(cycleEvent(dmmodel.AlarmEventRaised, c2, c2))
+	notify(cycleEvent(dmcontract.AlarmEventRaised, c2, c2))
 	if fa.calls != 2 {
 		t.Fatalf("cycle two's RAISED paged %d time(s) in all, want 2", fa.calls)
 	}
 	// Cycle one's acknowledgement and clear, redelivered after cycle two began.
-	notify(cycleEvent(dmmodel.AlarmEventAcknowledged, c1db, c1.Add(time.Minute)))
-	notify(cycleEvent(dmmodel.AlarmEventCleared, c1db, c1.Add(10*time.Minute)))
+	notify(cycleEvent(dmcontract.AlarmEventAcknowledged, c1db, c1.Add(time.Minute)))
+	notify(cycleEvent(dmcontract.AlarmEventCleared, c1db, c1.Add(10*time.Minute)))
 
 	open, err := api.OpenNotificationStates(ctx)
 	if err != nil {
@@ -109,7 +109,7 @@ func TestASecondCycleOfTheSameAlarmEscalates(t *testing.T) {
 	}
 
 	// And cycle two's own acknowledgement still stops it.
-	notify(cycleEvent(dmmodel.AlarmEventAcknowledged, c2, c2.Add(25*time.Minute)))
+	notify(cycleEvent(dmcontract.AlarmEventAcknowledged, c2, c2.Add(25*time.Minute)))
 	if open, err = api.OpenNotificationStates(ctx); err != nil || len(open) != 0 {
 		t.Fatalf("cycle two acknowledged must leave no candidate; got %d (err %v)", len(open), err)
 	}

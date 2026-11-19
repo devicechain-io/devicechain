@@ -1,6 +1,9 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import nav from './nav.json';
+import alarmMaintenance from './alarmMaintenance.json';
+
 // Dashboard widgets and viewer controls, the device screens, the identity directory and the
 // instance system settings; other screens use the English fallback. Each namespace here is
 // listed in config.ts's zh-CN entry.
@@ -9,4 +12,4 @@ import dashboards from './dashboards.json';
 import devices from './devices.json';
 import identities from './identities.json';
 
-export default { adminSettings, dashboards, devices, identities };
+export default { nav, alarmMaintenance, adminSettings, dashboards, devices, identities };

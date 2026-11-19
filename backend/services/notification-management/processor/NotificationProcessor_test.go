@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
@@ -39,11 +39,11 @@ func (r *recordingAck) Ack() error { r.acked++; return nil }
 // fakeNotifier records the events handed to it and can be told to fail.
 type fakeNotifier struct {
 	calls  int
-	events []*dmmodel.AlarmStateChangeEvent
+	events []*dmcontract.AlarmStateChangeEvent
 	err    error
 }
 
-func (f *fakeNotifier) Notify(_ context.Context, e *dmmodel.AlarmStateChangeEvent) error {
+func (f *fakeNotifier) Notify(_ context.Context, e *dmcontract.AlarmStateChangeEvent) error {
 	f.calls++
 	f.events = append(f.events, e)
 	return f.err
@@ -62,8 +62,8 @@ func newTestProcessor(n Notifier) *NotificationProcessor {
 func validEventBytes(t *testing.T) []byte {
 	t.Helper()
 	val := 42.5
-	bytes, err := dmproto.MarshalAlarmStateChangeEvent(&dmmodel.AlarmStateChangeEvent{
-		EventType:      dmmodel.AlarmEventRaised,
+	bytes, err := dmproto.MarshalAlarmStateChangeEvent(&dmcontract.AlarmStateChangeEvent{
+		EventType:      dmcontract.AlarmEventRaised,
 		AlarmToken:     "alarm-1",
 		OriginatorType: "Device",
 		OriginatorId:   7,
@@ -99,7 +99,7 @@ func TestDispatchDeliversAndAcks(t *testing.T) {
 	assert.Equal(t, 1, ack.acked, "delivered event should be acked")
 	if assert.Len(t, n.events, 1) {
 		assert.Equal(t, "alarm-1", n.events[0].AlarmToken)
-		assert.Equal(t, dmmodel.AlarmEventRaised, n.events[0].EventType)
+		assert.Equal(t, dmcontract.AlarmEventRaised, n.events[0].EventType)
 	}
 }
 
@@ -158,8 +158,8 @@ func TestDispatchGivesUpAtMaxDeliver(t *testing.T) {
 // triggers redelivery.
 func TestLogNotifierNeverFails(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "tenant1")
-	err := NewLogNotifier().Notify(ctx, &dmmodel.AlarmStateChangeEvent{
-		EventType:  dmmodel.AlarmEventRaised,
+	err := NewLogNotifier().Notify(ctx, &dmcontract.AlarmStateChangeEvent{
+		EventType:  dmcontract.AlarmEventRaised,
 		AlarmToken: "alarm-1",
 		Severity:   "CRITICAL",
 		State:      "ACTIVE",
@@ -379,7 +379,7 @@ func TestAnUnknownAlarmEventTypeRetriesThenIsDeadLetteredAsUnprocessable(t *test
 	n := &PolicyNotifier{adapters: map[string]ChannelAdapter{}, attempts: 1, timeout: time.Second}
 	np := processorWithDeadLetters(n, dead)
 
-	bytes, err := dmproto.MarshalAlarmStateChangeEvent(&dmmodel.AlarmStateChangeEvent{
+	bytes, err := dmproto.MarshalAlarmStateChangeEvent(&dmcontract.AlarmStateChangeEvent{
 		EventType: "TELEPORTED", AlarmToken: "alarm-1", Severity: "CRITICAL",
 		OccurredTime: time.Unix(1_700_000_000, 0).UTC(),
 	})

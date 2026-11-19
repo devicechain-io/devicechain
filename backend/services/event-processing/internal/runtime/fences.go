@@ -8,7 +8,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"sort"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 )
 
@@ -91,7 +91,7 @@ type CurrentFenceSetSource interface {
 // two roads reinforce rather than duplicate each other — a body fetched for a fact is already
 // held when the next reconcile sweep asks for the same version.
 type FenceManifestResolver interface {
-	ResolveManifest(ctx context.Context, tenant string, manifest *dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error)
+	ResolveManifest(ctx context.Context, tenant string, manifest *dmcontract.GeoFenceSetManifest) (*geofence.FenceSet, error)
 }
 
 // FenceSetView is the loop-owned in-memory projection of tenants' frozen geofence sets, keyed on

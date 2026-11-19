@@ -189,16 +189,17 @@ func (t *Tools) AggregateMeasurements(ctx context.Context, req *mcp.CallToolRequ
 // AlarmSummary is one alarm. The alarm key and metric key come from a rule an operator wrote,
 // and the acknowledger is a person, so they sit under Untrusted.
 type AlarmSummary struct {
-	Token            string          `json:"token" prov:"id"`
-	OriginatorToken  string          `json:"originatorToken,omitempty" prov:"id"`
-	State            string          `json:"state" prov:"platform"`
-	Severity         string          `json:"severity" prov:"platform"`
-	Acknowledged     bool            `json:"acknowledged"`
-	RaisedTime       string          `json:"raisedTime,omitempty" prov:"platform"`
-	ClearedTime      string          `json:"clearedTime,omitempty" prov:"platform"`
-	AcknowledgedTime string          `json:"acknowledgedTime,omitempty" prov:"platform"`
-	LastValue        *float64        `json:"lastValue,omitempty"`
-	Untrusted        *AlarmUntrusted `json:"untrusted,omitempty"`
+	Token            string            `json:"token" prov:"id"`
+	OriginatorToken  string            `json:"originatorToken,omitempty" prov:"id"`
+	State            string            `json:"state" prov:"platform"`
+	Severity         string            `json:"severity" prov:"platform"`
+	Acknowledged     bool              `json:"acknowledged"`
+	RaisedTime       string            `json:"raisedTime,omitempty" prov:"platform"`
+	ClearedTime      string            `json:"clearedTime,omitempty" prov:"platform"`
+	AcknowledgedTime string            `json:"acknowledgedTime,omitempty" prov:"platform"`
+	LastValue        *float64          `json:"lastValue,omitempty"`
+	Suppression      *AlarmSuppression `json:"suppression,omitempty" jsonschema:"live maintenance hold; windowToken may be restricted for scoped callers"`
+	Untrusted        *AlarmUntrusted   `json:"untrusted,omitempty"`
 }
 
 // AlarmUntrusted is the operator-authored text of an alarm.
@@ -257,8 +258,9 @@ type ListAlarmsInput struct {
 }
 
 type ListAlarmsOutput struct {
-	Alarms       []AlarmSummary `json:"alarms"`
-	TotalRecords int            `json:"totalRecords"`
+	SuppressionUnavailable bool           `json:"suppressionUnavailable,omitempty" jsonschema:"true when live suppression could not be checked; absence of suppression then means unknown"`
+	Alarms                 []AlarmSummary `json:"alarms"`
+	TotalRecords           int            `json:"totalRecords"`
 }
 
 var listAlarmsQuery = newDocument("device-management", `query ListAlarms($criteria: AlarmSearchCriteria!) {
@@ -301,6 +303,7 @@ func (t *Tools) ListAlarms(ctx context.Context, req *mcp.CallToolRequest, in Lis
 		return nil, ListAlarmsOutput{}, err
 	}
 	out := ListAlarmsOutput{Alarms: newAlarmSummaries(resp.Alarms.Results), TotalRecords: resp.Alarms.Pagination.TotalRecords}
+	out.SuppressionUnavailable = t.enrichAlarmSuppression(ctx, token, out.Alarms)
 	return provenanceResult(out), out, nil
 }
 
@@ -309,7 +312,8 @@ type GetAlarmInput struct {
 }
 
 type GetAlarmOutput struct {
-	Alarms []AlarmSummary `json:"alarms"`
+	SuppressionUnavailable bool           `json:"suppressionUnavailable,omitempty" jsonschema:"true when live suppression could not be checked; absence of suppression then means unknown"`
+	Alarms                 []AlarmSummary `json:"alarms"`
 }
 
 var getAlarmQuery = newDocument("device-management", `query GetAlarm($tokens: [String!]!) {
@@ -332,6 +336,7 @@ func (t *Tools) GetAlarm(ctx context.Context, req *mcp.CallToolRequest, in GetAl
 		return nil, GetAlarmOutput{}, err
 	}
 	out := GetAlarmOutput{Alarms: newAlarmSummaries(resp.AlarmsByToken)}
+	out.SuppressionUnavailable = t.enrichAlarmSuppression(ctx, token, out.Alarms)
 	return provenanceResult(out), out, nil
 }
 

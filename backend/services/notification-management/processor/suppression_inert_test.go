@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmcontract "github.com/devicechain-io/dc-device-management/contract"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -233,7 +233,7 @@ func TestHeldOutcomesPartitionCounters(t *testing.T) {
 				clock := insideQuiet
 				n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
 				suppressionMetrics(n)
-				event := eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)
+				event := eventAt(dmcontract.AlarmEventRaised, "MAJOR", clock)
 				if window {
 					event = suppressedEvent(clock, clock.Add(time.Hour))
 				}
@@ -246,10 +246,10 @@ func TestHeldOutcomesPartitionCounters(t *testing.T) {
 				outcome := mode
 				switch mode {
 				case "dropped_resolved":
-					event.EventType, event.OccurredTime = dmmodel.AlarmEventAcknowledged, clock
+					event.EventType, event.OccurredTime = dmcontract.AlarmEventAcknowledged, clock
 					require.NoError(t, n.Notify(ctx, event))
 				case "superseded":
-					require.NoError(t, n.Notify(ctx, eventAt(dmmodel.AlarmEventEscalated, "CRITICAL", clock)))
+					require.NoError(t, n.Notify(ctx, eventAt(dmcontract.AlarmEventEscalated, "CRITICAL", clock)))
 				default:
 					switch mode {
 					case "dropped_policy":
