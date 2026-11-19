@@ -104,7 +104,7 @@ disarm_deadman() {
   local pid
   [[ -f "$deadman_pid_file" ]] || return 0
   pid="$(<"$deadman_pid_file")"
-  if [[ "$pid" =~ ^[0-9]+$ ]] && ps -ef | awk -v p="$pid" '$2 == p' | grep -q "kind delete cluster --name '$cluster'"; then
+  if [[ "$pid" =~ ^[0-9]+$ ]] && grep -q "kind delete cluster --name '$cluster'" <<<"$(ps -ef | awk -v p="$pid" '$2 == p')"; then
     kill "$pid" 2>/dev/null || true
   fi
   rm -f "$deadman_pid_file"
