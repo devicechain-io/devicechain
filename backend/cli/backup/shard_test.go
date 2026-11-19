@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -239,6 +240,7 @@ func TestStreamNamesFailsOnAnyPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(nc.Close)
+	var mu sync.Mutex
 	pages := map[int]string{
 		0: `{"total":3,"offset":0,"limit":1,"streams":["sample_inbound-events"]}`,
 		1: `{"error":{"code":500,"description":"listing failed"}}`,
@@ -246,9 +248,15 @@ func TestStreamNamesFailsOnAnyPage(t *testing.T) {
 	sub, err := nc.Subscribe("$JS.API.STREAM.NAMES", func(m *nats.Msg) {
 		var req struct{ Offset int }
 		_ = json.Unmarshal(m.Data, &req)
-		_ = m.Respond([]byte(pages[req.Offset]))
+		mu.Lock()
+		page := pages[req.Offset]
+		mu.Unlock()
+		_ = m.Respond([]byte(page))
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nc.Flush(); err != nil { // the server has the subscription before any request
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sub.Unsubscribe() })
@@ -261,7 +269,9 @@ func TestStreamNamesFailsOnAnyPage(t *testing.T) {
 		t.Fatal("a failed listing passed the cross-check")
 	}
 	// Control: the same pages without the error list every name.
+	mu.Lock()
 	pages[1] = `{"total":3,"offset":1,"limit":2,"streams":["sample_resolved-events","sample_inbound-events-g1"]}`
+	mu.Unlock()
 	names, err := streamNames(ctx, nc)
 	if err != nil || !slices.Equal(names, []string{"sample_inbound-events", "sample_resolved-events", "sample_inbound-events-g1"}) {
 		t.Fatalf("listing: %v %v", names, err)
@@ -272,12 +282,16 @@ func TestStreamNamesFailsOnAnyPage(t *testing.T) {
 
 	// A stream deleted between pages shrinks the total: the name that shifted
 	// below the offset already read must not go unseen.
+	mu.Lock()
 	pages[1] = `{"total":2,"offset":1,"limit":1,"streams":[]}`
+	mu.Unlock()
 	if names, err := streamNames(ctx, nc); err == nil || !strings.Contains(err.Error(), "changed") {
 		t.Fatalf("a listing that shrank between pages read as %v, %v", names, err)
 	}
 	// A page that answers another offset is refused too.
+	mu.Lock()
 	pages[1] = `{"total":3,"offset":0,"limit":2,"streams":["sample_resolved-events","sample_inbound-events-g1"]}`
+	mu.Unlock()
 	if _, err := streamNames(ctx, nc); err == nil || !strings.Contains(err.Error(), "changed") {
 		t.Fatalf("a page at the wrong offset accepted: %v", err)
 	}
@@ -293,6 +307,9 @@ func TestStreamNamesFailsOnAnyPage(t *testing.T) {
 		_ = m.Respond([]byte(`{"total":1,"offset":0,"limit":1,"streams":["sample_inbound-events-g1"]}`))
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nc.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := streamNames(ctx, nc); err == nil || !strings.Contains(err.Error(), "changed") {
