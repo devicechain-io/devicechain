@@ -173,7 +173,7 @@ func createNatsComponents(nmgr *messaging.NatsManager, peers *svcclient.Peers) e
 	shardCfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups
 	grouped := shardCfg != nil && slices.Contains(shardCfg.Suffixes, streams.ResolvedEvents)
 	if grouped && refuseResolvedEventShards {
-		return fmt.Errorf("event-processing: resolved-events sharded startup refused: missing S7 support-guard lift, per-partition purge erasure and N x K ceiling (S3b)")
+		return fmt.Errorf("event-processing: resolved-events sharded startup refused: missing S7 support-guard lift (stream-topology record, N x K ceiling at startup, per-partition purge erasure wiring)")
 	}
 	stop, err := shardgroups.Enable(nmgr)
 	if err != nil {
