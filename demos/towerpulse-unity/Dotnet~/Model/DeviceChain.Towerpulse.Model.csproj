@@ -21,4 +21,9 @@
     <Compile Include="../../Assets/Towerpulse/Scripts/Model/**/*.cs" />
   </ItemGroup>
 
+  <!-- The day clock is the shared demo platform's (DayClock); TimeClock forwards to it. -->
+  <ItemGroup>
+    <ProjectReference Include="../../../shared/io.devicechain.demo-platform/Dotnet~/DeviceChain.Demos.Core/DeviceChain.Demos.Core.csproj" />
+  </ItemGroup>
+
 </Project>

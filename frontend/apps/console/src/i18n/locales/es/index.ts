@@ -1,6 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import alarmMaintenance from './alarmMaintenance.json';
+
 // The Spanish catalogs as ONE module, so the bundler emits them as one on-demand chunk (see
 // ../catalogLoaders.ts) instead of folding ~70 kB gzip into the first download.
 
@@ -45,6 +47,7 @@ import esVersions from './versions.json';
 import esUpdates from './updates.json';
 
 const es = {
+    alarmMaintenance,
     common: esCommon,
     login: esLogin,
     nav: esNav,

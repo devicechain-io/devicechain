@@ -226,8 +226,13 @@ namespace DeviceChain.Demos.Platform
         async Task SnapshotMeasurements(QueryFn state, Action<ObserverItem> post, CancellationToken ct)
         {
             if (deviceTokens.Count == 0) return;
-            var data = await state(ObserverQueries.MeasurementsSnapshotQuery(deviceTokens), ObserverQueries.MeasurementsSnapshotVariables(deviceTokens), ct);
-            foreach (var m in ObserverQueries.ParseMeasurementsSnapshot(deviceTokens, data, clock())) post(m);
+            // one root field per device, and the platform runs at most ObserverQueries.MaxRootFields in a query: a larger fleet's snapshot
+            // in one query is refused whole, which left a late-joining observer with nothing until each device next reported
+            foreach (var chunk in ObserverQueries.Chunks(deviceTokens))
+            {
+                var data = await state(ObserverQueries.MeasurementsSnapshotQuery(chunk), ObserverQueries.MeasurementsSnapshotVariables(chunk), ct);
+                foreach (var m in ObserverQueries.ParseMeasurementsSnapshot(chunk, data, clock())) post(m);
+            }
         }
 
         internal static async Task SnapshotAlarms(QueryFn devices, Action<ObserverItem> post, Func<DateTimeOffset> clock, CancellationToken ct)
