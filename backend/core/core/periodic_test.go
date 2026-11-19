@@ -772,3 +772,56 @@ func TestSuccessIntervalIsExportedOnlyWhenDeclared(t *testing.T) {
 
 	assert.Panics(t, func() { WithSuccessInterval(0) })
 }
+
+// A struct-literal Microservice has no registry; declaring a success interval must build the
+// gauge unregistered, like every other collector, not panic.
+func TestSuccessIntervalWithoutARegistryDoesNotPanic(t *testing.T) {
+	ms := &Microservice{FunctionalArea: "test-area"}
+	require.Nil(t, ms.MetricsRegisterer())
+	m := ms.NewPeriodicTaskMetrics("polled")
+	var task *PeriodicTask
+	require.NotPanics(t, func() {
+		task = NewPeriodicTask("test-area", "polled", time.Minute,
+			func(context.Context) error { return nil }, NewNoOpLifecycleCallbacks(), m,
+			WithSuccessInterval(time.Hour))
+	})
+	require.NoError(t, task.Initialize(context.Background()))
+	require.NoError(t, task.Start(context.Background()))
+	require.NoError(t, task.Stop(context.Background()))
+	require.NotNil(t, m.success.gauge)
+	assert.Equal(t, 3600.0, testutil.ToFloat64(m.success.gauge))
+}
+
+// WithOwnFailureLog copies must share the lazily registered gauge: declared through a copy it
+// is registered once, visible in the registry, and declaring through two copies does not collide.
+func TestSuccessIntervalIsSharedByFailureLogCopies(t *testing.T) {
+	m, reg := newTaskMetrics(t, "polled")
+	a, b := m.WithOwnFailureLog(), m.WithOwnFailureLog()
+	taskA := NewPeriodicTask("test-area", "polled", time.Minute,
+		func(context.Context) error { return nil }, NewNoOpLifecycleCallbacks(), a, WithSuccessInterval(time.Hour))
+	require.NotPanics(t, func() {
+		NewPeriodicTask("test-area", "polled", time.Minute,
+			func(context.Context) error { return nil }, NewNoOpLifecycleCallbacks(), b, WithSuccessInterval(time.Hour))
+		m.declareSuccessInterval()
+	})
+	require.NoError(t, taskA.Initialize(context.Background()))
+	require.NoError(t, taskA.Start(context.Background()))
+	t.Cleanup(func() { require.NoError(t, taskA.Stop(context.Background())) })
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	n := 0
+	for _, f := range families {
+		if f.GetName() == "devicechain_testarea_polled_expected_success_interval_seconds" {
+			n++
+			require.Len(t, f.Metric, 1)
+			assert.Equal(t, 3600.0, f.Metric[0].GetGauge().GetValue())
+		}
+	}
+	assert.Equal(t, 1, n)
+	assert.Equal(t, 3600.0, testutil.ToFloat64(m.success.gauge), "the original shares it too")
+	for _, copy := range []*PeriodicTaskMetrics{m, a, b, m.WithOwnFailureLog()} {
+		copy.setSuccessInterval(2 * time.Hour)
+		assert.Equal(t, 7200.0, testutil.ToFloat64(m.success.gauge), "every copy updates the shared gauge")
+		m.setSuccessInterval(time.Hour)
+	}
+}

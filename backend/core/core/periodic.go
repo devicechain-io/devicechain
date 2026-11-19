@@ -155,12 +155,9 @@ type PeriodicTaskMetrics struct {
 	lastSuccess prometheus.Gauge
 	interval    prometheus.Gauge
 
-	// successInterval is registered only by a task that declares one (WithSuccessInterval), so
-	// the series is ABSENT for every other task rather than NaN: a NaN beside a real
-	// pass-interval series would make the alert's max() over both depend on NaN ordering.
-	successInterval prometheus.Gauge
-	registerer      prometheus.Registerer
-	sub, name       string
+	// success is shared by every WithOwnFailureLog copy and registers its gauge only once.
+	// Tasks without WithSuccessInterval export no expected-success-interval series at all.
+	success *successGauge
 
 	// failLog rate-limits the failure log line so a sustained outage logs once, not once a pass.
 	failLog failStreak
@@ -226,7 +223,10 @@ func (m *PeriodicTaskMetrics) WithOwnFailureLog() *PeriodicTaskMetrics {
 	if m == nil {
 		return nil
 	}
-	return &PeriodicTaskMetrics{passes: m.passes, duration: m.duration, lastSuccess: m.lastSuccess, interval: m.interval}
+	return &PeriodicTaskMetrics{
+		passes: m.passes, duration: m.duration, lastSuccess: m.lastSuccess,
+		interval: m.interval, success: m.success,
+	}
 }
 
 // NewPeriodicTaskMetrics builds the four signals under this service's namespace.
@@ -234,7 +234,7 @@ func (ms *Microservice) NewPeriodicTaskMetrics(name string) *PeriodicTaskMetrics
 	sub, name := ms.requireMetricName("NewPeriodicTaskMetrics", name)
 	auto := promauto.With(ms.MetricsRegisterer())
 	m := &PeriodicTaskMetrics{
-		registerer: ms.MetricsRegisterer(), sub: sub, name: name,
+		success: &successGauge{registerer: ms.MetricsRegisterer(), sub: sub, name: name},
 		passes: auto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: METRICS_NAMESPACE, Subsystem: sub,
 			Name: name + "_passes_total",
@@ -288,29 +288,45 @@ func (m *PeriodicTaskMetrics) SetInterval(d time.Duration) {
 	m.interval.Set(d.Seconds())
 }
 
-// declareSuccessInterval registers the expected-success-interval gauge and leaves it NaN
-// until the task starts. Idempotent.
-func (m *PeriodicTaskMetrics) declareSuccessInterval() {
-	if m.successInterval != nil {
-		return
-	}
-	g := prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: METRICS_NAMESPACE, Subsystem: m.sub,
-		Name: m.name + "_expected_success_interval_seconds",
-		Help: "Declared gap between successful passes of the " + m.name + " task in seconds, for a task that " +
-			"polls more often than it completes; NaN until started.",
-	})
-	g.Set(math.NaN())
-	m.registerer.MustRegister(g)
-	m.successInterval = g
+// successGauge is the expected-success-interval gauge, created only by a task that declares one
+// (WithSuccessInterval). 🔑 AN UNDECLARED TASK EXPORTS NO SUCH SERIES AT ALL, which is why it is
+// lazy rather than a NaN gauge every task carries: the alert reads "whichever interval series
+// exist", and absence is the honest answer for a task with no cooldown. With no registry the
+// gauge is built unregistered, like every other collector here.
+type successGauge struct {
+	registerer prometheus.Registerer
+	sub, name  string
+	once       sync.Once
+	gauge      prometheus.Gauge
 }
 
-// setSuccessInterval publishes the declared success cadence. Nil-safe.
-func (m *PeriodicTaskMetrics) setSuccessInterval(d time.Duration) {
-	if m == nil || m.successInterval == nil {
+// declareSuccessInterval creates and registers the gauge once, NaN until the task starts.
+// Nil-safe; a nil registerer leaves the gauge unregistered.
+func (m *PeriodicTaskMetrics) declareSuccessInterval() {
+	if m == nil || m.success == nil {
 		return
 	}
-	m.successInterval.Set(d.Seconds())
+	g := m.success
+	g.once.Do(func() {
+		gauge := promauto.With(g.registerer).NewGauge(prometheus.GaugeOpts{
+			Namespace: METRICS_NAMESPACE, Subsystem: g.sub,
+			Name: g.name + "_expected_success_interval_seconds",
+			Help: "Declared gap between successful passes of the " + g.name + " task in seconds, for a task that " +
+				"polls more often than it completes; NaN until started.",
+		})
+		gauge.Set(math.NaN())
+		g.gauge = gauge
+	})
+}
+
+// setSuccessInterval publishes the declared success cadence. Nil-safe; a no-op until declared.
+func (m *PeriodicTaskMetrics) setSuccessInterval(d time.Duration) {
+	if m == nil || m.success == nil {
+		return
+	}
+	if m.success.gauge != nil {
+		m.success.gauge.Set(d.Seconds())
+	}
 }
 
 // record files one pass. Nil-safe.
