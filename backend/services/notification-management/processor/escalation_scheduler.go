@@ -78,10 +78,12 @@ const escalationWorkers = 4
 // same pass is still waiting for a worker (contended). A tenant alone with its backlog
 // keeps going rather than idling until the next tick. A nil contended always enforces.
 type tenantPass struct {
-	deadline  time.Time
-	contended func() bool
-	exhausted bool
-	timedOut  map[uint]bool
+	deadline         time.Time
+	contended        func() bool
+	exhausted        bool
+	timedOut         map[uint]bool
+	suppressions     map[string]SuppressionStatus
+	oldestDueSeconds float64
 }
 
 type tenantPassKey struct{}
@@ -101,9 +103,10 @@ func sliceExpired(ctx context.Context) bool {
 }
 
 type tenantOutcome struct {
-	failed  bool
-	partial bool
-	lastErr error
+	failed           bool
+	partial          bool
+	lastErr          error
+	oldestDueSeconds float64
 }
 
 func (o *tenantOutcome) record(err error) {
@@ -140,6 +143,7 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 	var mu sync.Mutex
 	var visited, failed, partial int
 	var lastErr error
+	var oldestDueSeconds float64
 	for i := 0; i < escalationWorkers; i++ {
 		workers.Add(1)
 		go func() {
@@ -149,6 +153,7 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 				outcome := s.serveTenant(ctx, tenant, contended)
 				mu.Lock()
 				visited++
+				oldestDueSeconds = max(oldestDueSeconds, outcome.oldestDueSeconds)
 				if outcome.failed {
 					failed++
 					lastErr = outcome.lastErr
@@ -170,6 +175,9 @@ walk:
 	}
 	close(jobs)
 	workers.Wait()
+	if s.Notifier.oldestDue != nil {
+		s.Notifier.oldestDue.Set(oldestDueSeconds)
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -195,6 +203,7 @@ func (s *EscalationScheduler) serveTenant(ctx context.Context, tenant string, co
 		contended: contended, timedOut: make(map[uint]bool)}
 	tctx := context.WithValue(core.WithTenant(ctx, tenant), tenantPassKey{}, pass)
 	defer func() {
+		out.oldestDueSeconds = pass.oldestDueSeconds
 		if pass.exhausted {
 			if s.Notifier.sliceExhausted != nil {
 				s.Notifier.sliceExhausted.Inc()
@@ -212,7 +221,21 @@ func (s *EscalationScheduler) serveTenant(ctx context.Context, tenant string, co
 		states, err := s.Api.OpenNotificationStates(tctx)
 		out.record(err)
 		if err == nil {
-			for _, state := range states {
+			// Live suppression is asked in batches of the due escalations, and LAZILY: a batch
+			// is looked up when the walk reaches its first alarm, so a tenant with thousands of
+			// due escalations interleaves lookups with paging under the same slice check,
+			// rather than spending its whole slice on lookups before the first page.
+			var due []int
+			if s.Notifier.SuppressionLookup != nil {
+				for i, state := range states {
+					if s.Notifier.escalationCandidate(state, policies, now, s.defaultMax) {
+						due = append(due, i)
+					}
+				}
+			}
+			pass.suppressions = make(map[string]SuppressionStatus)
+			nextDue := 0
+			for i, state := range states {
 				if err := ctx.Err(); err != nil {
 					out.record(err)
 					break
@@ -220,6 +243,19 @@ func (s *EscalationScheduler) serveTenant(ctx context.Context, tenant string, co
 				if sliceExpired(tctx) {
 					out.record(core.ErrPassPartial)
 					break
+				}
+				if nextDue < len(due) && due[nextDue] == i {
+					if nextDue%suppressionBatch == 0 {
+						end := min(nextDue+suppressionBatch, len(due))
+						tokens := make([]string, 0, end-nextDue)
+						for _, j := range due[nextDue:end] {
+							tokens = append(tokens, states[j].AlarmToken)
+						}
+						for token, status := range s.Notifier.lookupSuppressions(tctx, tokens, now, 5*time.Second) {
+							pass.suppressions[token] = status
+						}
+					}
+					nextDue++
 				}
 				if err := s.Notifier.Escalate(tctx, state, policies, now, s.defaultMax); err != nil {
 					log.Warn().Err(err).Str("tenant", tenant).Str("alarm", state.AlarmToken).

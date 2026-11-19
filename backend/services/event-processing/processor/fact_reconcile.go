@@ -148,6 +148,16 @@ func (rp *ResolvedEventsProcessor) startFactReconcile() {
 func (rp *ResolvedEventsProcessor) runFactReconcile() {
 	defer rp.readerWG.Done()
 	defer rp.factReconciling.Store(false)
+	// Group zero's loop can tick while a child is still restoring. The sweep
+	// signals child channels and reads their armers, just like the shared fact
+	// consumers, so it must wait for the same all-workers-built boundary.
+	if rp.ruleRouting != nil && rp.ruleRouting.termReady != nil {
+		select {
+		case <-rp.ruleRouting.termReady:
+		case <-rp.pctx().Done():
+			return
+		}
+	}
 	rp.reconcileFacts(rp.pctx())
 }
 
@@ -356,6 +366,12 @@ func publishedRuleOf(row model.DetectRule) dmcontract.PublishedDetectionRule {
 // ruleUpdate, so applyRuleUpdate installs the rules before it arms against them.
 func (rp *ResolvedEventsProcessor) signalRuleRepair(ctx context.Context, tenant, profileToken, versionToken string,
 	changed []dmcontract.PublishedDetectionRule, removed []string) error {
+	owner, err := rp.ruleWorker(tenant)
+	if err != nil {
+		rp.refuseRulePlacement(err)
+		return err
+	}
+	rp = owner
 	compiled, _ := runtime.CompilePublishedRules(tenant, versionToken, changed)
 	if !rp.seedFencesForPublishedRules(compiled) {
 		return errReconcileShutdown
@@ -397,6 +413,10 @@ func (rp *ResolvedEventsProcessor) signalRuleRepair(ctx context.Context, tenant,
 // Once every replica runs this release, every re-type and re-point stores the instant.
 func (rp *ResolvedEventsProcessor) reconcileTenantRoster(ctx context.Context, tenant string, settledBefore time.Time) (map[reconcileProjection]int, error) {
 	counts := make(map[reconcileProjection]int)
+	if _, err := rp.ruleWorker(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return counts, err
+	}
 	if rp.RosterStore == nil {
 		return counts, nil
 	}
@@ -486,6 +506,10 @@ func sameRosterRow(a, b model.DeviceRoster) bool {
 // number is left alone whatever its instant. Each repaired device's view entry is re-read on the
 // loop, as after a delivered fact.
 func (rp *ResolvedEventsProcessor) reconcileTenantAttributes(ctx context.Context, tenant string, settledBefore time.Time) (map[reconcileProjection]int, error) {
+	if _, err := rp.ruleWorker(tenant); err != nil {
+		rp.refuseRulePlacement(err)
+		return nil, err
+	}
 	counts := make(map[reconcileProjection]int)
 	if rp.AttributeStore == nil {
 		return counts, nil

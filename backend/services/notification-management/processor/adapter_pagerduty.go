@@ -128,6 +128,9 @@ func pagerDutyEvent(routingKey, action string, cfg *model.PagerDutyConfig, msg *
 		"state":      a.State,
 		"eventType":  a.EventType,
 	}
+	if a.SuppressedBy != "" {
+		details["suppression"] = a.suppressionExplanation()
+	}
 	if a.ClearReason != "" {
 		details["clearReason"] = a.ClearReason
 	}
