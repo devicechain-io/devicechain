@@ -97,6 +97,9 @@ const (
 // RoundKey names a bucket of one tenant's sequenced source.
 type RoundKey struct {
 	Tenant string
+	// SourceEpoch separates incarnations of sources whose sequence can reset (the MQTT
+	// WAL's creation time in nanoseconds). Zero preserves existing round ids.
+	SourceEpoch uint64
 	// Bucket is source stream sequence / RoundBucketSize.
 	Bucket uint64
 	// Epoch is the source message's append time (Unix seconds) / RoundBucketSeconds; 0 when the
@@ -404,6 +407,10 @@ func (e *RoundEngine) buildRound(k RoundKey, round uint32, ms []RoundMember) (Me
 		kind = e.cfg.MappedDedupKind
 	}
 	id := EnvelopeDedupID(kind, k.Tenant, k.Source(), round)
+	if k.SourceEpoch != 0 {
+		id = kind + ":" + k.Tenant + ":" + strconv.FormatUint(k.SourceEpoch, 36) + ":" +
+			strconv.FormatUint(k.Source(), 36) + ":" + strconv.FormatUint(uint64(round), 36)
+	}
 	if len(ms) == 1 {
 		m := Message{
 			traceContext: ms[0].TraceContext,

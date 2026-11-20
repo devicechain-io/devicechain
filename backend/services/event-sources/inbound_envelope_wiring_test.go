@@ -74,9 +74,10 @@ func TestHTTPEventsGoThroughTheGroupCommitWhenItIsBuilt(t *testing.T) {
 // GUARD: kills a createNatsComponents that forgets UseEnvelopes or the group commit, or builds
 // them with the setting off.
 func TestCreateNatsComponentsWiresInboundEnvelopesOnlyWhenTheSettingIsOn(t *testing.T) {
-	savedMs, savedCfg, savedGW, savedGC, savedCap := Microservice, Configuration, GatewaySource, HTTPGroupCommit, CaptureReader
+	savedMs, savedCfg, savedGW, savedGC, savedCap, savedStore := Microservice, Configuration, GatewaySource, HTTPGroupCommit, CaptureReader, StoreSource
 	t.Cleanup(func() {
 		Microservice, Configuration, GatewaySource, HTTPGroupCommit, CaptureReader = savedMs, savedCfg, savedGW, savedGC, savedCap
+		StoreSource = savedStore
 	})
 
 	srv, err := natsserver.NewServer(&natsserver.Options{
@@ -92,8 +93,9 @@ func TestCreateNatsComponentsWiresInboundEnvelopesOnlyWhenTheSettingIsOn(t *test
 	port, err := strconv.Atoi(u.Port())
 	require.NoError(t, err)
 
-	for _, on := range []bool{false, true} {
-		t.Run("inbound="+strconv.FormatBool(on), func(t *testing.T) {
+	for _, switches := range []struct{ inbound, wal bool }{{false, false}, {false, true}, {true, false}, {true, true}} {
+		on, wal := switches.inbound, switches.wal
+		t.Run("inbound="+strconv.FormatBool(on)+"/wal="+strconv.FormatBool(wal), func(t *testing.T) {
 			reg := prometheus.NewRegistry()
 			Microservice = &core.Microservice{InstanceId: "envwire", FunctionalArea: "event-sources", Readiness: core.NewReadinessGate()}
 			Microservice.UseMetricsRegistry(reg)
@@ -103,12 +105,17 @@ func TestCreateNatsComponentsWiresInboundEnvelopesOnlyWhenTheSettingIsOn(t *test
 			Microservice.InstanceConfiguration.Infrastructure.Messaging.Envelopes.Inbound = on
 			Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 			require.NoError(t, parseConfiguration())
+			Configuration.Capture.MqttStoreEnvelopes = wal
 			initializeMetrics()
 			HTTPGroupCommit = nil
 
 			GatewaySource = processor.NewGatewayJetStreamSource(Microservice, "gw", processor.NewJsonDecoder(map[string]string{}),
 				onMessageReceived, inboundEventMessage, onEventDecodeFailed, nil,
 				func(string, string, time.Time, bool, processor.Origin, int) bool { return true }, nil)
+			StoreSource = processor.NewGatewayJetStreamSource(Microservice, "wal", processor.NewJsonDecoder(map[string]string{}),
+				onMessageReceived, inboundEventMessage, onEventDecodeFailed, nil,
+				func(string, string, time.Time, bool, processor.Origin, int) bool { return true }, nil)
+			StoreSource.UseMessageStore()
 
 			nmgr := messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
 			nmgr.RecordMaxDeliveries(func(*messaging.NatsManager) (messaging.MaxDeliveryFunc, error) {
@@ -119,6 +126,7 @@ func TestCreateNatsComponentsWiresInboundEnvelopesOnlyWhenTheSettingIsOn(t *test
 			ctx := context.Background()
 			require.NoError(t, nmgr.Initialize(ctx))
 			require.NoError(t, nmgr.Start(ctx))
+			require.NoError(t, configureStoreEnvelopes(nmgr))
 			t.Cleanup(func() {
 				stopHTTPGroupCommit()
 				_ = nmgr.Stop(context.Background())
@@ -126,6 +134,7 @@ func TestCreateNatsComponentsWiresInboundEnvelopesOnlyWhenTheSettingIsOn(t *test
 
 			require.Equal(t, on, GatewaySource.EnvelopesEnabled(), "the gateway source's envelope mode")
 			require.Equal(t, on, HTTPGroupCommit != nil, "the HTTP group commit")
+			require.Equal(t, on && wal, StoreSource.EnvelopesEnabled(), "WAL envelopes require both switches")
 		})
 	}
 }

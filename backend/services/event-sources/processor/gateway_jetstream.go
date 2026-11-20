@@ -826,10 +826,10 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message, recovery ...*fin
 	// A raw payload is published to the uplink stream, not through the envelope engine that settles
 	// inbound-events rounds, so it carries a plain dedup id.
 	_, isUplink := messaging.ParseDeviceUplinkSubject(msg.Subject)
-	if es.ce != nil && !es.fromStore && msg.StreamSeq != 0 && !isUplink {
+	if es.ce != nil && msg.StreamSeq != 0 && !isUplink {
 		// Envelope mode: the decode pipeline carries the message's position to the submitter in
 		// the id it already passes through (see positionToken).
-		if key, _, ok := messaging.RoundKeyOf(tenant, msg.StreamSeq, msg.AppendTime); ok {
+		if key, ok := es.envelopeKey(tenant, msg); ok {
 			beatRef = es.beatRef.Add(1)
 			es.beats.Store(beatRef, func() { _ = msg.InProgress() })
 			dedupID = positionToken(dedupID, key, msg.NumDelivered > 1, beatRef)
@@ -989,7 +989,7 @@ func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string, 
 				}
 				return
 			}
-			if errors.Is(handleErr, messaging.ErrRoundWalkStopped) || errors.Is(handleErr, messaging.ErrTenantGone) {
+			if errors.Is(handleErr, errStoreEnvelopeUnsettled) || errors.Is(handleErr, messaging.ErrRoundWalkStopped) || errors.Is(handleErr, messaging.ErrTenantGone) {
 				// A stopped walk has no outcome; routing an erased tenant's payload would
 				// store it again. Left unacked, these can still be lettered by the recorder
 				// after a final delivery's AckWait expires; they are never routed as poison.

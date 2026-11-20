@@ -280,6 +280,10 @@ func secondsOr(v, fallback int) time.Duration {
 
 // Capture configures the gateway source's publish into inbound-events.
 type Capture struct {
+	// MqttStoreEnvelopes is the v1.9 WAL-envelope prototype, off by default. It also
+	// requires infrastructure.messaging.envelopes.inbound. Enable after all inbound
+	// readers support envelopes and all event-sources pods run this build.
+	MqttStoreEnvelopes bool
 	// PublishWindow is how many inbound-events publishes the gateway source keeps awaiting
 	// their PubAck at once, from 1 to messaging.MaxOrderedWindow. Unset (absent or null)
 	// defaults to DefaultCapturePublishWindow; an explicit 0 is refused, not defaulted, and
