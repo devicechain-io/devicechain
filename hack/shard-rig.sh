@@ -9,6 +9,8 @@
 #                             # with shardGroups {count: 2, suffixes: [inbound-events, resolved-events]}
 #   hack/shard-rig.sh place   # odd vpartitions to group 1 (before any tenant exists), mirrored
 #   hack/shard-rig.sh test    # DETECT fires for a tenant in each group; the negative controls
+#   hack/shard-rig.sh purge   # a tenant of each group is deleted and its DETECT state erased in its
+#                             # group, with no eviction reply refused by the broker; negative control
 #   hack/shard-rig.sh down    # destroy the instance and DELETE the cluster
 #   hack/shard-rig.sh all     # up, place, test, down (down runs even when a step fails)
 #
@@ -336,9 +338,9 @@ print((h % 64) % int(sys.argv[3]))' "$instance" "$1" "$groups" | tr -d '\r'
 }
 
 pick_tenant() {
-  local want="$1" i t
+  local want="$1" prefix="${2:-shard}" i t
   for i in $(seq 1 200); do
-    t="shard-$want-$i"
+    t="$prefix-$want-$i"
     [[ "$(group_of "$t")" == "$want" ]] && { printf '%s' "$t"; return; }
   done
   fail "no tenant token hashes to group $want"
@@ -500,16 +502,129 @@ cmd_test() {
   say "SHARD RIG PASSED"
 }
 
+# ---------------------------------------------------------------------------
+# purge
+# ---------------------------------------------------------------------------
+
+# delete_tenant <tenant>: a tenant with members cannot be deleted, so the rig's own member goes first.
+delete_tenant() {
+  adm 'mutation($e:String!,$t:String!){removeMembership(email:$e,tenant:$t){email}}'     "$(jq -n --arg e "$(member_email "$1")" --arg t "$1" '{e:$e,t:$t}')" >/dev/null || fail "removeMembership for $1"
+  adm 'mutation($t:String!){deleteTenant(token:$t)}' "$(jq -n --arg t "$1" '{t:$t}')" >/dev/null || fail "deleteTenant $1"
+}
+
+# deletion_line <tenant> prints the tenant's in-flight deletion as one JSON line.
+deletion_line() {
+  adm 'query($t:String!){tenantDeletion(token:$t){erased blockedBy stores{store complete retaining}}}' \
+    "$(jq -n --arg t "$1" '{t:$t}')" | jq -c '.tenantDeletion'
+}
+detect_store() { jq -c '[.stores[]? | select(.store == "detect")][0] // {}' <<<"$1"; }
+
+# wait_erased <tenant> <secs>: true once every store, DETECT's included, went clean and settled.
+wait_erased() {
+  local t="$1" secs="$2" line=""
+  for _ in $(seq 1 $((secs / 15))); do
+    # The superuser's identity token outlives a passing run but not this whole wait.
+    line="$(deletion_line "$t" 2>/dev/null)" || { admin_login; line="$(deletion_line "$t")" || line=""; }
+    [[ "$(jq -r '.erased // false' <<<"$line")" == true ]] && { printf '%s' "$line"; return 0; }
+    sleep 15
+  done
+  printf '%s' "$line"
+  return 1
+}
+
+# The broker refuses a reply to user-management's inbox that event-processing's login may not
+# send, and the client logs each refusal it is told about. This counts them since a point in time.
+ep_refusals() {
+  local since="$1" pods p log n=0 c
+  pods="$(kn get pods -l devicechain.io/functional-area=event-processing -o name)" || fail "could not list event-processing pods"
+  [[ -n "$pods" ]] || fail "no event-processing pod to read refusals from"
+  for p in $pods; do
+    log="$(kn logs "$p" --since-time="$since")" || fail "could not read the log of $p"
+    # A container that restarted during the check took its refusals with it into --previous.
+    if [[ "$(kn get "$p" -o jsonpath='{.status.containerStatuses[0].restartCount}')" != 0 ]]; then
+      log+=$'\n'"$(kn logs "$p" --previous --since-time="$since")" || fail "could not read the previous log of $p"
+    fi
+    c="$(grep -c 'Permissions Violation for Publish to "_INBOX_user-management' <<<"$log" || true)"
+    n=$((n + c))
+  done
+  printf '%s' "$n"
+}
+
+# 5. A deleted tenant's DETECT state is erased in BOTH groups. event-processing holds one
+#    partition per group in one process, on one broker connection, and each must answer the
+#    eviction. The broker admits only one reply per connection to a request it delivered, so an
+#    engine that answered once per partition had every answer refused and the deletion never
+#    finished.
+cmd_purge() {
+  need curl; need jq; need kubectl; need go
+  py="$(command -v python3 || command -v python || true)"; [[ -n "$py" ]] || fail "python is required but not on PATH"
+  k get ns "$namespace" >/dev/null 2>&1 || fail "instance $instance is not up; run 'up' first"
+  build_sim
+  kn rollout status deploy/event-processing --timeout=300s >/dev/null || fail "event-processing is not ready"
+  local run ta tb since got line
+  run="p$(date -u +%H%M%S)"
+  ta="$(pick_tenant 0 "$run")"; tb="$(pick_tenant 1 "$run")"
+  say "purge: tenants $ta (group 0) and $tb (group 1), each with live DETECT state"
+  admin_login
+  member_password="$(openssl rand -base64 24 | tr -d '/+=')Aa1"
+  for t in "$ta" "$tb"; do setup_tenant "$t"; setup_model "$t"; done
+  add_device "$ta" dev-pa 70B3D57ED0C00001
+  add_device "$tb" dev-pb 70B3D57ED0D00001
+  sleep 10
+  send "$ta" 70B3D57ED0C00001 2 >/dev/null
+  send "$tb" 70B3D57ED0D00001 2 >/dev/null
+  got="$(wait_derived "$ta" 1 90)" || fail "no detection for $ta (group 0) before the deletion (got $got)"
+  got="$(wait_derived "$tb" 1 90)" || fail "no detection for $tb (group 1) before the deletion (got $got)"
+  sleep 20 # a checkpoint names both groups' partitions
+  since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  say "5a. NEGATIVE CONTROL: with event-processing stopped, the DETECT store holds the deletion"
+  ep_restore_to="$(kn get deploy event-processing -o jsonpath='{.spec.replicas}')"
+  kn scale deploy/event-processing --replicas=0 >/dev/null
+  kn wait --for=delete pod -l devicechain.io/functional-area=event-processing --timeout=180s >/dev/null 2>&1 || true
+  # The defect this step guards produces the same deferral with event-processing RUNNING, so the
+  # control means something only once no engine is left to answer.
+  [[ -z "$(kn get pods -l devicechain.io/functional-area=event-processing -o name)" ]] ||
+    fail "event-processing pods are still present after scaling to zero"
+  delete_tenant "$tb"
+  line=""
+  for _ in $(seq 1 12); do
+    sleep 15
+    line="$(deletion_line "$tb")" || continue
+    grep -q 'no DETECT engine answered' <<<"$(detect_store "$line")" && break
+  done
+  grep -q 'no DETECT engine answered' <<<"$(detect_store "$line")" ||
+    fail "the DETECT store did not hold the deletion with event-processing stopped: $(detect_store "$line")"
+  red "the DETECT store holds $tb's deletion with no engine running: $(detect_store "$line" | cut -c1-200)"
+  kn scale deploy/event-processing --replicas="$ep_restore_to" >/dev/null
+  ep_restore_to=""
+  kn rollout status deploy/event-processing --timeout=300s >/dev/null
+
+  say "5b. both groups answer: the deletions of $tb and $ta finish, with no reply refused"
+  delete_tenant "$ta"
+  for t in "$tb" "$ta"; do
+    line="$(wait_erased "$t" 900)" ||
+      fail "the deletion of $t did not finish; blocked by $(jq -c '.blockedBy' <<<"$line" | cut -c1-400); refused replies: $(ep_refusals "$since")"
+    note "$t erased; detect: $(detect_store "$line")"
+  done
+  got="$(ep_refusals "$since")"
+  [[ "$got" == 0 ]] || fail "the broker refused $got of event-processing's eviction replies"
+  note "no eviction reply was refused"
+  say "SHARD RIG PURGE PASSED"
+}
+
 case "${1:-}" in
   up) cmd_up ;;
   place) cmd_place ;;
   test) cmd_test ;;
+  purge) cmd_purge ;;
   down) cmd_down ;;
   all)
     down_on_exit=1
     cmd_up
     cmd_place
     cmd_test
+    cmd_purge
     ;;
-  *) fail "usage: $0 up|place|test|down|all" ;;
+  *) fail "usage: $0 up|place|test|purge|down|all" ;;
 esac
