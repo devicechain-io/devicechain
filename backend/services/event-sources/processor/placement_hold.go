@@ -170,13 +170,16 @@ func (h *finalPlacementHolds) expire(now time.Time) {
 			delete(h.entries, entry)
 			expired++
 			tenant = entry.tenant
-			if h.gauge != nil {
-				h.gauge.Dec()
-			}
 		}
 	}
 	if expired > 0 {
+		// Count BEFORE the gauge drops, so a scrape never shows a hold gone without its fallback.
 		h.countFallback(placementFallbackExpired, expired)
+		if h.gauge != nil {
+			h.gauge.Sub(float64(expired))
+		}
+	}
+	if expired > 0 {
 		log.Warn().Str("source", h.source).Str("tenant", tenant).Int("expired", expired).Dur("maxAge", h.maxAge).
 			Msg("Final placement holds exceeded their maximum age; leaving the deliveries unacked for the max-delivery recorder.")
 	}

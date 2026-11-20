@@ -4,7 +4,6 @@
 package processor
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -18,8 +17,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
 
@@ -481,6 +478,7 @@ func TestPlacementHoldExpiresAtMaxAgeAndFallsBackUnacked(t *testing.T) {
 	h.source.settler(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, 1, ack), "acme")(messaging.ErrUnplacedTenant)
 	waitHeld(t, gauge, 1)
 	waitHeld(t, gauge, 0)
+	// The counter moves before the gauge drops, so it is already visible here.
 	require.Equal(t, float64(1), testutil.ToFloat64(fallback.WithLabelValues("gw-test", "expired")), "an expired hold is counted, never silent")
 	require.Zero(t, ack.counts(), "the expired message is left unacked for the max-delivery recorder, not acked or dropped")
 	noMoreBeats(t, ack)
@@ -502,10 +500,7 @@ func TestPlacementHoldUnexpiredIsKept(t *testing.T) {
 }
 
 func TestPlacementHoldFullIsCountedAndItsLogRateLimited(t *testing.T) {
-	var buf syncBuffer
-	saved := log.Logger
-	log.Logger = zerolog.New(&buf)
-	t.Cleanup(func() { log.Logger = saved })
+	buf := logSink.Capture(t)
 	h, _, gauge, fallback := holdFallbackHarness(t, time.Hour)
 	ack := &progressAck{}
 	for seq := uint64(1); seq <= finalPlacementHoldLimit; seq++ {
@@ -517,23 +512,6 @@ func TestPlacementHoldFullIsCountedAndItsLogRateLimited(t *testing.T) {
 	}
 	require.Equal(t, float64(50), testutil.ToFloat64(fallback.WithLabelValues("gw-test", "full")))
 	require.Equal(t, 1, strings.Count(buf.String(), "Final placement hold is full"), "one log per interval, not one per refusal")
-}
-
-type syncBuffer struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (s *syncBuffer) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.Write(p)
-}
-
-func (s *syncBuffer) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.String()
 }
 
 func TestPlacementRecoveryCountsInboundOnce(t *testing.T) {
