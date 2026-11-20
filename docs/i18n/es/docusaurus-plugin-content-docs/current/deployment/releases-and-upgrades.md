@@ -809,9 +809,24 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 Las tres líneas de versiones más recientes se documentan completas, de la más nueva a la más antigua. Dentro de una línea, las notas de una versión de parche van antes que las de la versión que corrige.
 
-### v1.8.0 — en desarrollo {#v180-upgrade}
+### v1.8.0 — las ventanas de mantenimiento retienen los avisos de alarma y las entregas resisten las interrupciones {#v180-upgrade}
 
-Estas notas son de la versión en desarrollo y crecen hasta su publicación.
+`v1.8.0` es una actualización in situ desde `v1.7.x`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de v1.8.0 para ambos comandos** con OpenTofu o Terraform 1.10 o posterior, y proporciona a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Se añaden seis migraciones, que se ejecutan en el primer arranque de cada servicio: dos en `device-management`, dos en `notification-management`, una en `event-management` y una en `event-processing`. Cada una puede volver a ejecutarse tras un fallo. Crean tablas y añaden columnas que pueden quedar vacías, y no se añade ninguna clave de configuración, de modo que los pods de `v1.7.x` siguen funcionando junto a los de `v1.8.0` mientras avanza la actualización. La supresión de alarmas solo se aplica por completo cuando `device-management` y `notification-management` han terminado de desplegarse, como se describe en [Antes de actualizar a v1.8.0](#v180-before-upgrade). La actualización solo avanza: no hay vuelta atrás a `v1.7.x`. Si vienes de `v1.7.0`, `update-management` añade también la migración de `v1.7.1`, y también se aplican las [notas de `v1.7.1`](#v171-upgrade). Si vienes de `v1.6.x` o anterior, actualiza antes a través de cada versión menor intermedia, incluida `v1.7.x`, siguiendo las notas de cada versión con su propio `dcctl` y su `--version`: saltarse una versión menor no es una ruta probada (consulta [Rutas de actualización admitidas](./versioning-policy.md#upgrade-paths)). Para `v1.7.0`, son las [notas de `v1.7.0`](#v170-upgrade).
+
+```bash
+dcctl install local --version v1.8.0
+dcctl upgrade local devicechain --version v1.8.0 --dry-run
+dcctl upgrade local devicechain --version v1.8.0
+```
+
+Se aplica la [política de versiones y actualizaciones](./versioning-policy.md). Esta versión añade interfaces cubiertas y no elimina ni declara obsoleta ninguna. Ocultar el historial de notificaciones de las alarmas derivadas de geocercas a los miembros sin `location:read` es una corrección de seguridad permitida por la política; los demás rechazos y cambios de comportamiento nuevos se indican en [Antes de actualizar a v1.8.0](#v180-before-upgrade). Los valores de Helm y la configuración de instancia quedan fuera de la compatibilidad cubierta.
+
+Lo más destacado: las ventanas de mantenimiento de alarmas, declaradas sobre dispositivos, tipos de dispositivo, grupos, áreas, activos, clientes o todo un inquilino, marcan como suprimidas las alarmas generadas bajo ellas y retienen sus avisos hasta que termina la ventana; la consola permite iniciarlas y gestionarlas, y MCP las muestra. La notificación de un cambio de estado de una alarma se registra junto con el propio cambio y se envía desde ese registro en cuanto el broker la acepta, aunque haya una caída del broker o un reinicio de `device-management`, y las eliminaciones de dispositivos y los cambios de autorización responden antes mientras el broker no es accesible. Con los grupos de particiones de NATS, los mensajes capturados esperan a que vuelva la ubicación de particiones, las suscripciones en vivo siguen los cambios de ubicación y `resolved-events` se puede particionar en una instalación nueva. Los eventos almacenados después de eliminar una entidad ya no se vuelven a asociar a una entidad recreada con el mismo token. El escenario de simulador `harborpulse` ejercita ahora entregas salientes, LoRaWAN, campañas de flota, actualizaciones firmadas y una ventana de mantenimiento, y su verificador evalúa cada una.
+
+Novedades:
+
+- [Antes de actualizar a v1.8.0](#v180-before-upgrade)
+- [Novedades de v1.8.0](#v180-whats-new)
 
 #### Antes de actualizar a v1.8.0 {#v180-before-upgrade}
 

@@ -764,9 +764,24 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The three most recent release lines are documented in full, newest first. Within a line, a patch release's notes come before those of the release it patches.
 
-### v1.8.0 — in development {#v180-upgrade}
+### v1.8.0 — maintenance windows hold alarm pages, and deliveries ride out outages {#v180-upgrade}
 
-These notes are for the release in development and grow until it ships.
+`v1.8.0` is an in-place upgrade from `v1.7.x`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the v1.8.0 `dcctl` for both commands** with OpenTofu or Terraform 1.10 or later, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Six migrations are appended and run at each service's first start: two in `device-management`, two in `notification-management`, one in `event-management` and one in `event-processing`. Each can be re-run after a failure. They create tables and add columns that may be empty, and no configuration key is added, so `v1.7.x` pods keep working beside `v1.8.0` pods while the upgrade rolls. Alarm suppression applies in full only once `device-management` and `notification-management` have both finished rolling out, as described under [Before you upgrade to v1.8.0](#v180-before-upgrade). The upgrade is forward-only: there is no downgrade to `v1.7.x`. Coming from `v1.7.0`, `update-management` also appends the `v1.7.1` migration, and the [`v1.7.1` notes](#v171-upgrade) apply too. Coming from `v1.6.x` or earlier, upgrade through each intervening minor first, including `v1.7.x`, following each release's notes with that release's own `dcctl` and `--version`: skipping a minor is not a tested path (see [Supported upgrade paths](./versioning-policy.md#upgrade-paths)). For `v1.7.0`, those are the [`v1.7.0` notes](#v170-upgrade).
+
+```bash
+dcctl install local --version v1.8.0
+dcctl upgrade local devicechain --version v1.8.0 --dry-run
+dcctl upgrade local devicechain --version v1.8.0
+```
+
+The [versioning and upgrade policy](./versioning-policy.md) applies. This release adds covered interfaces and removes or deprecates none. Withholding the notification history of geofence-derived alarms from members without `location:read` is a security fix permitted by the policy; the other new refusals and changes in behaviour are listed under [Before you upgrade to v1.8.0](#v180-before-upgrade). Helm values and instance configuration are outside the covered compatibility surface.
+
+Highlights: alarm maintenance windows, declared over devices, device types, groups, areas, assets, customers or a whole tenant, mark the alarms raised under them as suppressed and hold their pages until the window ends; the console starts and manages them, and MCP shows them. An alarm state change's notification is recorded together with the change and sent from that record once the broker accepts it, through a broker outage or a `device-management` restart, and device deletes and authority changes answer sooner while the broker is unreachable. With NATS shard groups, captured messages wait for placement to return, live subscriptions follow placement moves, and `resolved-events` can be sharded on a new installation. Events stored after an entity's deletion no longer reattach to a re-created entity with the same token. The `harborpulse` simulator scenario now exercises outbound deliveries, LoRaWAN, fleet campaigns, signed updates and a maintenance window, and its verifier judges each.
+
+What is new:
+
+- [Before you upgrade to v1.8.0](#v180-before-upgrade)
+- [What is new in v1.8.0](#v180-whats-new)
 
 #### Before you upgrade to v1.8.0 {#v180-before-upgrade}
 

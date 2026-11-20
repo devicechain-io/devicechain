@@ -520,9 +520,24 @@ dcctl bootstrap local devicechain
 
 最近三条发布线的完整说明按从新到旧排列。同一发布线内，补丁版本的说明位于其所修补版本的说明之前。
 
-### v1.8.0 — 开发中 {#v180-upgrade}
+### v1.8.0 — 维护窗口暂存告警通知，投递可安然度过中断 {#v180-upgrade}
 
-这些说明针对开发中的版本，会持续补充直到发布。
+`v1.8.0` 可从 `v1.7.x` 原地升级：先为集群运行 `dcctl install`，再为每个实例运行一次 `dcctl upgrade`，详见[滚动升级](#rolling-upgrades)。**两个命令都使用 v1.8.0 的 `dcctl`**，配合 OpenTofu 或 Terraform 1.10 及以上版本，并向 `dcctl install` 提供集群设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。本版本新增六个迁移，在各服务首次启动时执行：`device-management` 两个，`notification-management` 两个，`event-management` 一个，`event-processing` 一个。每个迁移在失败后都可以重新执行。这些迁移创建表并添加可为空的列，也没有新增任何配置项，因此在升级滚动进行期间，`v1.7.x` 的 Pod 可与 `v1.8.0` 的 Pod 并存并继续正常工作。告警抑制要等 `device-management` 和 `notification-management` 都完成滚动部署后才会完全生效，详见[升级到 v1.8.0 前](#v180-before-upgrade)。升级只能向前：无法回退到 `v1.7.x`。若从 `v1.7.0` 升级，`update-management` 还会执行 `v1.7.1` 的迁移，[`v1.7.1` 说明](#v171-upgrade)同样适用。若从 `v1.6.x` 或更早版本升级，请先逐个升级经过每个中间的次版本（包括 `v1.7.x`），并按各版本的说明使用该版本自己的 `dcctl` 和 `--version`：跳过次版本不是经过测试的路径（参见[支持的升级路径](./versioning-policy.md#upgrade-paths)）。`v1.7.0` 的说明见 [`v1.7.0` 说明](#v170-upgrade)。
+
+```bash
+dcctl install local --version v1.8.0
+dcctl upgrade local devicechain --version v1.8.0 --dry-run
+dcctl upgrade local devicechain --version v1.8.0
+```
+
+适用[版本与升级策略](./versioning-policy.md)。本版本新增受保障的接口，不移除也不弃用任何接口。对没有 `location:read` 的成员隐藏地理围栏衍生告警的通知历史属于策略允许的安全修复；其他新的拒绝和行为变化列在[升级到 v1.8.0 前](#v180-before-upgrade)。Helm 值和实例配置不在兼容性保障范围内。
+
+要点：告警维护窗口可针对设备、设备类型、组、区域、资产、客户或整个租户声明，窗口内触发的告警会标记为已抑制，其通知暂存至窗口结束；控制台可启动和管理维护窗口，MCP 会显示它们。告警状态变更的通知现在与变更本身一起记录，并从该记录发送，直到 broker 接受为止，即使 broker 中断或 `device-management` 重启也是如此；在 broker 不可达时，删除设备和更改授权也会更快返回。使用 NATS 分片组时，捕获的消息会等待分片放置恢复，实时订阅会跟随放置变更，新安装的实例可以对 `resolved-events` 分片。实体删除后才存储的事件不再重新关联到使用相同令牌重新创建的实体。`harborpulse` 模拟器场景现在覆盖出站投递、LoRaWAN、设备群活动、签名更新和一个维护窗口，并由其验证器逐项判定。
+
+新增内容：
+
+- [升级到 v1.8.0 前](#v180-before-upgrade)
+- [v1.8.0 新增内容](#v180-whats-new)
 
 #### 升级到 v1.8.0 前 {#v180-before-upgrade}
 
