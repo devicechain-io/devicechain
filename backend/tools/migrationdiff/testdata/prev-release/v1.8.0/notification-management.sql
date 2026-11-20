@@ -170,7 +170,8 @@ CREATE TABLE "notification-management".notification_deferrals (
  occurred_time timestamp with time zone,
  release_at timestamp with time zone NOT NULL,
  attempts bigint DEFAULT 0 NOT NULL,
- event jsonb NOT NULL
+ event jsonb NOT NULL,
+ held_by_window character varying(128)
 );
 CREATE TABLE "notification-management".notification_management_migrations (
  id character varying(255) NOT NULL
@@ -234,7 +235,8 @@ CREATE TABLE "notification-management".notification_states (
  device_name text,
  device_type_token text,
  source_at timestamp with time zone,
- escalation_base_at timestamp with time zone
+ escalation_base_at timestamp with time zone,
+ position_derived boolean
 );
 CREATE TABLE "notification-management".purged_tenants (
  token character varying(128) NOT NULL,
