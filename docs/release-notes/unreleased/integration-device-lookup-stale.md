@@ -1,0 +1,15 @@
+---
+section: whats-new
+---
+
+## en
+
+- **Inbound integrations keep accepting uplinks while device-management is briefly unavailable.** event-sources remembers which device an integration's identifier resolved to for five minutes. Before this release, once that answer was older than five minutes, an uplink that arrived while device-management could not be reached was answered `503`. Now the last answer is used for up to 15 minutes after device-management gave it, the same limit the integration's token and payload-decoder lookups already use, and the uplink is accepted and processed when device-management is back. Device-management still checks the integration, the device and its identifier for every event, so a device disabled, deleted or moved to another identifier in the meantime is refused then. An answer that device-management actually gives, such as an identifier that is not registered or an integration that is disabled, is never replaced by an older one. A request served this way is counted under the new `resolve_stale` result of `integration_requests_total`, in addition to its usual result, and event-sources logs a warning.
+
+## es
+
+- **Las integraciones de entrada siguen aceptando mensajes ascendentes mientras device-management no está disponible durante un tiempo breve.** event-sources recuerda durante cinco minutos a qué dispositivo corresponde el identificador de una integración. Antes de esta versión, cuando esa respuesta tenía más de cinco minutos, un mensaje ascendente que llegaba mientras no se podía contactar con device-management se respondía con `503`. Ahora se usa la última respuesta durante un máximo de 15 minutos desde que device-management la dio, el mismo límite que ya usan las consultas del token de la integración y del decodificador de carga útil, y el mensaje se acepta y se procesa cuando device-management vuelve. device-management sigue comprobando la integración, el dispositivo y su identificador en cada evento, de modo que un dispositivo que entretanto se haya deshabilitado, eliminado o asignado a otro identificador se rechaza en ese momento. Una respuesta que device-management realmente da, como un identificador no registrado o una integración deshabilitada, nunca se sustituye por otra anterior. Una solicitud atendida de este modo se cuenta en el nuevo resultado `resolve_stale` de `integration_requests_total`, además de su resultado habitual, y event-sources registra una advertencia.
+
+## zh-CN
+
+- **在 device-management 短暂不可用期间，入站集成会继续接受上行消息。** event-sources 会将集成标识符解析到的设备记住五分钟。在此版本之前，一旦该结果超过五分钟，在无法连接 device-management 时到达的上行消息会得到 `503` 响应。现在，最近一次结果会在 device-management 给出后最多使用 15 分钟（与集成令牌和负载解码器查询已经使用的上限相同），上行消息会被接受，并在 device-management 恢复后处理。device-management 仍会针对每个事件检查集成、设备及其标识符，因此在此期间被禁用、删除或改用其他标识符的设备会在那时被拒绝。device-management 实际给出的结果（例如标识符未注册或集成已禁用）绝不会被较早的结果替代。以这种方式处理的请求会计入 `integration_requests_total` 新增的 `resolve_stale` 结果（同时也计入其通常的结果），并且 event-sources 会记录一条警告。

@@ -529,8 +529,8 @@ func initializeIntegrationMetrics() {
 	IntegrationRequestsCounter = Microservice.NewCounterVec(
 		"integration_requests_total",
 		"Count of requests to the inbound-integration route by integration type and result. A request has "+
-			"one result; precheck_stale is counted in addition to it, for a request answered from a "+
-			"last-known-good authentication because device-management could not be asked",
+			"one result; precheck_stale and resolve_stale are counted in addition to it, for a request answered "+
+			"from a last-known-good authentication or device lookup because device-management could not be asked",
 		[]string{"type", "result"})
 	IntegrationUplinksCounter = Microservice.NewCounterVec(
 		"integration_uplinks_total",
