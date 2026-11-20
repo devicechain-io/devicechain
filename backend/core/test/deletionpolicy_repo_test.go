@@ -33,6 +33,8 @@ var repositoryDeletionPolicies = map[string]deletionPolicy{
 		deletionPurge, "Deleted with the device's live view by ApplyDeviceDeleted, on a higher-incarnation reset in the merge, and by the orphan sweep; a lower-incarnation update writes no position."},
 	"backend/services/device-state/model/model.go:LatestMeasurement": {
 		deletionPurge, "Deleted with the device's live view by ApplyDeviceDeleted, on a higher-incarnation reset in the merge, and by the orphan sweep; a lower-incarnation update writes no reading."},
+	"backend/services/event-management/model/entity_deletion_watermarks.go:EntityDeletionWatermark": {
+		deletionHistory, "The deletion fact itself: a monotone DeletedTime per (tenant, entity type, token), retained so an anchor of an event received before it and stored late is dropped on insert and swept by the resweep. A re-created same-token entity's anchors (received after DeletedTime) pass; the tenant purge erases the rows."},
 	"backend/services/event-management/model/events.go:AlertEvent": {
 		deletionHistory, "Write-time alert payload records OccurredTime and event/payload identity; retained as historical telemetry under DataLifecyclePolicy retention, not a live device projection. Token queries can include old history."},
 	"backend/services/event-management/model/events.go:Event": {

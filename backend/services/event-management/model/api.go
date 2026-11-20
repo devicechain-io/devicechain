@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -655,7 +654,10 @@ func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*
 	// The key is (tenant_id, occurred_time, event_id, anchor_type, anchor_token); ON
 	// CONFLICT infers it by the column SET, so anchorColumns' order need not match it.
 	_, err := anchorColumns.Insert(db.WithContext(ctx), anchors)
-	return err
+	if err != nil {
+		return err
+	}
+	return filterDeletedEntityAnchors(ctx, db, anchors)
 }
 
 // DeleteAnchorsForEntity removes event_anchors rows referencing a deleted entity
@@ -670,34 +672,20 @@ func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*
 // `before` bounds cleanup by the platform's receipt time (events.processed_time),
 // strictly before deletion (ADR-044 decision-4 amendment). A reused token's buffered
 // telemetry may have a device timestamp before the old entity's deletion, but is
-// received after it and must survive a late or replayed deletion fact. Deleted devices
-// cannot resolve new events, so receipt time separates their events from a new owner's.
+// received after it and must survive a late or replayed deletion fact. This is the
+// existing cleanup policy, not proof of incarnation. A nonzero bound first commits
+// a monotonic watermark and arms its resweep before deleting any anchors.
 // A zero `before` means unbounded: the reconciliation sweep passes
 // it because the sweep only deletes when the token resolves to no entity at all, so
 // every matching anchor is a true orphan.
 func (api *Api) DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string, before time.Time) (int64, error) {
-	db := api.RDB.DB(ctx).Model(&EventAnchor{})
-	if entityType == string(entity.TypeDevice) {
-		// A device is always the anchor SOURCE (device_token), but it can ALSO be an
-		// anchor target: a tracked device→device relationship (e.g. gateway→sensor)
-		// records rows with (anchor_type="device", anchor_token=other). Clean both, or
-		// a deleted device leaves dangling target rows on its trackers' events.
-		db = db.Where("device_token = ? OR (anchor_type = ? AND anchor_token = ?)",
-			entityToken, string(entity.TypeDevice), entityToken)
-	} else {
-		// Every other entity type is only ever an anchor target (never a source).
-		db = db.Where("anchor_type = ? AND anchor_token = ?", entityType, entityToken)
-	}
 	if !before.IsZero() {
-		event := api.RDB.DB(ctx).Model(&Event{}).Select("1").
-			Where("events.tenant_id = event_anchors.tenant_id AND events.occurred_time = event_anchors.occurred_time AND events.event_id = event_anchors.event_id")
-		// Probe the full parent key, including the partition time for chunk pruning.
-		// Parent rows can be missing while retention drops each hypertable's chunks
-		// independently (there is no FK). Preserve the occurred-time fallback only
-		// for those orphans; an existing parent's receipt time always takes precedence.
-		db = db.Where("EXISTS (?) OR (NOT EXISTS (?) AND event_anchors.occurred_time < ?)",
-			event.Session(&gorm.Session{}).Where("events.processed_time < ?", before), event, before)
+		var err error
+		before, err = api.recordEntityDeletion(ctx, entityType, entityToken, before)
+		if err != nil {
+			return 0, err
+		}
 	}
-	result := db.Delete(&EventAnchor{})
+	result := anchorCleanupQuery(api.RDB.DB(ctx), entityType, entityToken, before).Delete(&EventAnchor{})
 	return result.RowsAffected, result.Error
 }
