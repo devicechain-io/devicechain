@@ -149,6 +149,8 @@ type GatewayJetStreamSource struct {
 	placementCheck               func(tenant string) error
 	finalHoldBeat, finalHoldPoll time.Duration
 	placementHeld                prometheus.Gauge
+	finalHoldMaxAge              time.Duration
+	placementHoldFallback        *prometheus.CounterVec
 	finalHolds                   *finalPlacementHolds
 
 	// envelopes is UseEnvelopes' setting (nil: events are published one message each), and ce
@@ -838,7 +840,10 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message, recovery ...*fin
 	// counted as both inbound and rate-limited (matches the HTTP path). A message the
 	// reading stage sheds after decode WAS received: it is counted as inbound and on the
 	// reading-shed counters, never on the message stage's rate-limited counter.
-	es.received(es.Id, msg.Value)
+	// A recovery re-run of a held message was counted when it first arrived.
+	if held == nil {
+		es.received(es.Id, msg.Value)
+	}
 
 	var remote trace.SpanContext
 	if tracing.Enabled() {
@@ -906,6 +911,13 @@ func (es *GatewayJetStreamSource) UsePlacementCheck(check func(tenant string) er
 // A nil gauge is supported for isolated pipeline tests.
 func (es *GatewayJetStreamSource) UsePlacementHeldGauge(gauge prometheus.Gauge) {
 	es.placementHeld = gauge
+}
+
+// UsePlacementHoldFallbackCounter installs the counter (labels source, reason) of final
+// deliveries that were not held because the hold was full, or stopped being held because
+// they exceeded the maximum hold age. Call before Start; nil is supported.
+func (es *GatewayJetStreamSource) UsePlacementHoldFallbackCounter(counter *prometheus.CounterVec) {
+	es.placementHoldFallback = counter
 }
 
 // UsePlacementUnavailableCounter counts in-flight messages left unacked when placement is lost.

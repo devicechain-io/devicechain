@@ -4,8 +4,10 @@
 package processor
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +18,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
 
@@ -448,4 +452,126 @@ func TestPlacementHoldShutdownAbandonsPendingRerun(t *testing.T) {
 	_, failed, _, _ := h.counts()
 	require.Zero(t, failed, "a drain refusal must not route held telemetry as poison")
 	noMoreBeats(t, ack)
+}
+
+func holdFallbackHarness(t *testing.T, maxAge time.Duration) (*captureHarness, *atomic.Bool, prometheus.Gauge, *prometheus.CounterVec) {
+	t.Helper()
+	placed := &atomic.Bool{}
+	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "placement_held_messages"})
+	fallback := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "placement_hold_fallback"}, []string{"source", "reason"})
+	h := newCaptureHarnessWith(t, func(s *GatewayJetStreamSource) {
+		s.UsePlacementCheck(func(string) error {
+			if placed.Load() {
+				return nil
+			}
+			return messaging.ErrUnplacedTenant
+		})
+		s.UsePlacementHeldGauge(gauge)
+		s.UsePlacementHoldFallbackCounter(fallback)
+		s.finalHoldBeat, s.finalHoldPoll = 5*time.Millisecond, 5*time.Millisecond
+		s.finalHoldMaxAge = maxAge
+	})
+	h.publishErr = messaging.ErrUnplacedTenant
+	return h, placed, gauge, fallback
+}
+
+func TestPlacementHoldExpiresAtMaxAgeAndFallsBackUnacked(t *testing.T) {
+	h, _, gauge, fallback := holdFallbackHarness(t, 60*time.Millisecond)
+	ack := &progressAck{}
+	h.source.settler(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, 1, ack), "acme")(messaging.ErrUnplacedTenant)
+	waitHeld(t, gauge, 1)
+	waitHeld(t, gauge, 0)
+	require.Equal(t, float64(1), testutil.ToFloat64(fallback.WithLabelValues("gw-test", "expired")), "an expired hold is counted, never silent")
+	require.Zero(t, ack.counts(), "the expired message is left unacked for the max-delivery recorder, not acked or dropped")
+	noMoreBeats(t, ack)
+	// The slot is free again: the tenant that never came back no longer holds capacity.
+	other := &progressAck{}
+	h.source.settler(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, 2, other), "other")(messaging.ErrUnplacedTenant)
+	waitHeld(t, gauge, 1)
+}
+
+func TestPlacementHoldUnexpiredIsKept(t *testing.T) {
+	h, placed, gauge, fallback := holdFallbackHarness(t, time.Hour)
+	ack := &progressAck{}
+	h.source.settler(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, 1, ack), "acme")(messaging.ErrUnplacedTenant)
+	waitHeld(t, gauge, 1)
+	time.Sleep(60 * time.Millisecond)
+	require.Equal(t, float64(1), testutil.ToFloat64(gauge))
+	require.Zero(t, testutil.ToFloat64(fallback.WithLabelValues("gw-test", "expired")))
+	_ = placed
+}
+
+func TestPlacementHoldFullIsCountedAndItsLogRateLimited(t *testing.T) {
+	var buf syncBuffer
+	saved := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = saved })
+	h, _, gauge, fallback := holdFallbackHarness(t, time.Hour)
+	ack := &progressAck{}
+	for seq := uint64(1); seq <= finalPlacementHoldLimit; seq++ {
+		h.source.settler(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, seq, ack), "acme")(messaging.ErrUnplacedTenant)
+	}
+	waitHeld(t, gauge, finalPlacementHoldLimit)
+	for i := 0; i < 50; i++ {
+		h.source.settler(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, uint64(finalPlacementHoldLimit+1+i), &progressAck{}), "other")(messaging.ErrUnplacedTenant)
+	}
+	require.Equal(t, float64(50), testutil.ToFloat64(fallback.WithLabelValues("gw-test", "full")))
+	require.Equal(t, 1, strings.Count(buf.String(), "Final placement hold is full"), "one log per interval, not one per refusal")
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func TestPlacementRecoveryCountsInboundOnce(t *testing.T) {
+	h, placed, gauge := placementHarness(t)
+	ack := &progressAck{}
+	h.source.handle(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, 40, ack))
+	h.quiesce(t, 1)
+	waitHeld(t, gauge, 1)
+	h.mu.Lock()
+	h.publishErr = nil
+	h.mu.Unlock()
+	placed.Store(true)
+	require.True(t, ack.settled(t))
+	waitHeld(t, gauge, 0)
+	_, _, received, _ := h.counts()
+	require.Equal(t, 1, received, "a recovered message is one inbound message, not two")
+}
+
+func TestPlacementHoldExpiryWaitsForAnInFlightRerun(t *testing.T) {
+	h, _, gauge, fallback := holdFallbackHarness(t, time.Hour)
+	ack := &progressAck{}
+	h.source.settler(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, 1, ack), "acme")(messaging.ErrUnplacedTenant)
+	waitHeld(t, gauge, 1)
+	holds := h.source.finalHolds
+	holds.mu.Lock()
+	var entry *finalPlacementHold
+	for e := range holds.entries {
+		entry = e
+	}
+	entry.running = true
+	holds.mu.Unlock()
+	holds.expire(time.Now().Add(2 * time.Hour))
+	require.Equal(t, float64(1), testutil.ToFloat64(gauge), "a queued or re-running entry is not expired out from under its re-run")
+	require.Zero(t, testutil.ToFloat64(fallback.WithLabelValues("gw-test", "expired")))
+	holds.mu.Lock()
+	entry.running = false
+	holds.mu.Unlock()
+	holds.expire(time.Now().Add(2 * time.Hour))
+	require.Zero(t, testutil.ToFloat64(gauge))
+	require.Equal(t, float64(1), testutil.ToFloat64(fallback.WithLabelValues("gw-test", "expired")))
 }
