@@ -141,3 +141,23 @@ func TestDesiredStreamReplicasIsUnclamped(t *testing.T) {
 		t.Error("desired and effective agree on an unclustered broker; the mismatch signal is unreachable")
 	}
 }
+
+// The other half of holding the last observation: a single-server broker seen while connected
+// stays a single-server broker while the connection is down. A create buffered across that
+// server's restart is delivered to the same single server, which refuses more than one replica,
+// so dropping the observation and asking for the configured count would turn a restart into a
+// failed create.
+func TestReplicaClampHoldsAnObservedSingleServerWhileDisconnected(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = 3
+
+	if got := nmgr.effectiveStreamReplicas(); got != 1 {
+		t.Fatalf("effectiveStreamReplicas() = %d against the unclustered embedded broker, want 1", got)
+	}
+	nmgr.nc.Close()
+	if got := nmgr.effectiveStreamReplicas(); got != 1 {
+		t.Errorf("effectiveStreamReplicas() = %d after the connection to a single-server broker closed, "+
+			"want the observed 1", got)
+	}
+}

@@ -284,6 +284,11 @@ type NatsManager struct {
 	// single sampler goroutine, like streamMetrics.warned.
 	warnedClamp bool
 
+	// observedClustering is the broker topology last READ from a CONNECTED connection
+	// (clusteringUnknown until one has been): what the replica clamp answers while the
+	// connection is between servers. See replicaClampClustering.
+	observedClustering atomic.Int32
+
 	// connectedServer remembers the broker URL, because the disconnect callback
 	// cannot ask for it. nats.Conn.ConnectedUrl() returns "" for any status other
 	// than CONNECTED, and by the time DisconnectErrHandler runs the status has
@@ -534,7 +539,67 @@ func (nmgr *NatsManager) desiredStreamReplicas() int {
 // (the A0 Check A suite) — a service that starts clean has not demonstrated that
 // anything is replicated.
 func (nmgr *NatsManager) effectiveStreamReplicas() int {
-	return clampReplicas(nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
+	desired := nmgr.desiredStreamReplicas()
+	clustered, known := nmgr.replicaClampClustering()
+	if !known {
+		// Nothing has been observed, so nothing is clamped: an unknown topology is not
+		// evidence of an unclustered one. A broker that really cannot replicate refuses
+		// the create, and the retry re-evaluates once the connection has answered.
+		return desired
+	}
+	return clampReplicas(desired, clustered)
+}
+
+// The values of observedClustering.
+const (
+	clusteringUnknown int32 = iota
+	clusteringSingle
+	clusteringClustered
+)
+
+// replicaClampClustering is the broker topology the replica clamp decides on: read live
+// while the connection is CONNECTED, and otherwise the answer last read while it was.
+// known is false only before any connected read.
+//
+// 🔴 NOT brokerIsClustered, which answers "not clustered" for a connection that is merely
+// not connected RIGHT NOW. That is right for what wants the live state (the sampler's
+// jetstream_broker_clustered gauge, the leader-affinity incident check), and it was wrong
+// here: the v1.8.0-rc.1 upgrade drill saw a pod whose connection was between servers for
+// three seconds of a rolling broker restart log that the 3-node broker was "NOT clustered"
+// and that every stream and bucket was being created at one replica. Every create reads
+// this clamp (newStreamConfig, the KV create, the MQTT fail-closed store and the signature
+// its holders compare), and a create issued while disconnected is not refused: the
+// client's reconnect buffer holds it and delivers it to the next server, so it lands on
+// the healthy cluster at R1, and no starting pod ever lowers or raises that.
+//
+// This is NOT the cache the comment on brokerIsClustered warns against. That cache held
+// an answer taken before the connection had reached any broker, so "not reached yet" was
+// pinned as "not clustered". Here a disconnected or still-dialling connection records
+// nothing: only a CONNECTED read is kept, and every connected read replaces it, so a broker
+// scaled up or down is read as it is the moment the connection is back.
+func (nmgr *NatsManager) replicaClampClustering() (clustered, known bool) {
+	if nc := nmgr.nc; nc != nil {
+		// ConnectedClusterName reads "" for any status other than CONNECTED, so an empty
+		// name is a single-server broker only if the connection was CONNECTED on both sides
+		// of the read, and on the same connection (no reconnect in between).
+		before, wasConnected := nc.Stats().Reconnects, nc.IsConnected()
+		clustered := nc.ConnectedClusterName() != ""
+		if clustered || (wasConnected && nc.IsConnected() && nc.Stats().Reconnects == before) {
+			observed := clusteringSingle
+			if clustered {
+				observed = clusteringClustered
+			}
+			nmgr.observedClustering.Store(observed)
+			return clustered, true
+		}
+	}
+	switch nmgr.observedClustering.Load() {
+	case clusteringClustered:
+		return true, true
+	case clusteringSingle:
+		return false, true
+	}
+	return false, false
 }
 
 // clampReplicas is the clamp arithmetic, split out from the connection state so the
@@ -548,7 +613,9 @@ func clampReplicas(desired int, clustered bool) int {
 }
 
 // brokerIsClustered reports whether the broker this manager is connected to RIGHT
-// NOW is part of a cluster.
+// NOW is part of a cluster: false whenever the connection is not CONNECTED. The
+// replica clamp does not read it (see replicaClampClustering); the live readers are
+// the sampler's jetstream_broker_clustered gauge and the leader-affinity check.
 //
 // WHERE THE SAFETY ACTUALLY COMES FROM, because an earlier version of this
 // comment got it wrong: it is ConnectedClusterName() itself, which returns "" for
@@ -575,9 +642,9 @@ func clampReplicas(desired int, clustered bool) int {
 // the one lever they had already set correctly. That is precisely the false-HA state
 // this workstream exists to eliminate, reintroduced by the code meant to close it.
 //
-// Reading live instead is self-correcting and needs no invalidation: the create and
-// reconcile paths that consume it either run while connected, or fail on the broker
-// call and are retried, and the retry re-evaluates. It also handles the reverse
+// Reading live instead is self-correcting and needs no invalidation. (The replica
+// clamp keeps the last CONNECTED read across a disconnect, which is not this cache: see
+// replicaClampClustering.) It also handles the reverse
 // order — raising streamReplicas before scaling the NATS cluster — without a
 // reconnect hook, because the next pod roll simply reads the truth.
 func (nmgr *NatsManager) brokerIsClustered() bool {
