@@ -5,6 +5,7 @@ package integration
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
@@ -104,6 +105,10 @@ type Devices struct {
 
 	mu      sync.Mutex
 	entries map[string]deviceEntry
+	// gen moves on every Forget. A flight records it when it starts and stores its answer only if
+	// it has not moved, so a lookup that was in flight when the credential was found not to hold
+	// cannot put back what Forget removed (to be served stale later).
+	gen uint64
 }
 
 type deviceEntry struct {
@@ -133,13 +138,19 @@ func (d *Devices) Resolve(ctx context.Context, tenant, integration, bearer, sche
 	if e, fresh, ok := d.get(key, d.cfg.Now()); ok && fresh {
 		return Lookup{Resolution: e.res, Cached: true}, nil
 	}
-	v, err, _ := d.sf.Do(key, func() (any, error) {
+	gen := d.generation()
+	// The flight is keyed on the bearer, as the decoder lookup's is: device-management answers for
+	// the token it was asked with, and one it rejects must not become the answer of waiters holding
+	// a good one (nor a good one's answer that of a rejected token). It is keyed on the generation
+	// too, so a request after a Forget never joins a flight from before it.
+	flight := key + sep + bearer + sep + strconv.FormatUint(gen, 10)
+	v, err, _ := d.sf.Do(flight, func() (any, error) {
 		res, err := d.backend.Resolve(context.WithoutCancel(ctx), tenant, integration, bearer, scheme, value)
 		if err != nil {
 			return nil, err
 		}
 		if res.Outcome == Resolved || res.Outcome == Unregistered {
-			d.put(key, deviceEntry{res: res, at: d.cfg.Now()})
+			d.put(key, deviceEntry{res: res, at: d.cfg.Now()}, gen)
 		} else {
 			d.drop(key)
 		}
@@ -147,9 +158,13 @@ func (d *Devices) Resolve(ctx context.Context, tenant, integration, bearer, sche
 	})
 	if err != nil {
 		// Read again rather than reuse what was held before the call: a Forget or a definitive
-		// answer that landed meanwhile has dropped it, and must win.
+		// answer that landed meanwhile has dropped it, and must win; and another request may have
+		// refreshed it meanwhile, which is then served as the fresh answer it is.
 		now := d.cfg.Now()
-		if e, _, ok := d.get(key, now); ok && e.res.Outcome == Resolved {
+		if e, fresh, ok := d.get(key, now); ok && e.res.Outcome == Resolved {
+			if fresh {
+				return Lookup{Resolution: e.res, Cached: true}, nil
+			}
 			return Lookup{Resolution: e.res, Cached: true, Stale: true, Age: now.Sub(e.at)}, nil
 		}
 		return Lookup{}, err
@@ -195,9 +210,20 @@ func (d *Devices) drop(key string) {
 	d.mu.Unlock()
 }
 
-func (d *Devices) put(key string, e deviceEntry) {
+func (d *Devices) generation() uint64 {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	return d.gen
+}
+
+// put stores an answer learned by a flight that started at generation gen, unless a Forget has
+// happened since.
+func (d *Devices) put(key string, e deviceEntry, gen uint64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.gen != gen {
+		return
+	}
 	if _, ok := d.entries[key]; !ok && len(d.entries) >= d.cfg.Entries {
 		evictSome(d.entries, d.cfg.Entries/16+1, func(old deviceEntry) bool { return e.at.Sub(old.at) >= d.keep(old.res.Outcome) })
 	}
@@ -210,6 +236,7 @@ func (d *Devices) Forget(tenant, integration string) {
 	prefix := tenant + "\x00" + integration + "\x00"
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.gen++
 	for k := range d.entries {
 		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
 			delete(d.entries, k)

@@ -6,6 +6,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -164,4 +165,121 @@ func evictionKeepsAServablePositiveEntry(t *testing.T) {
 	got, err := resolveStale(t, d)
 	require.NoError(t, err, "the servable positive entry was evicted")
 	require.True(t, got.Stale)
+}
+
+// A hit on a stale entry does not renew it: serving stale twice in an outage still ends at
+// StaleMax, counted from when device-management answered.
+func TestAStaleServeDoesNotRenewTheEntry(t *testing.T) {
+	f, c := newFakeBackend(), newClock()
+	d := NewDevices(f, DeviceConfig{Now: c.now})
+	_, err := resolveStale(t, d)
+	require.NoError(t, err)
+	f.resolve = func(string, string) (Resolution, error) { return Resolution{}, errors.New("connection refused") }
+	for _, step := range []time.Duration{6 * time.Minute, 4 * time.Minute, 4 * time.Minute} {
+		c.advance(step)
+		got, err := resolveStale(t, d)
+		require.NoError(t, err)
+		require.True(t, got.Stale)
+	}
+	c.advance(time.Minute) // 15 minutes after the answer
+	_, err = resolveStale(t, d)
+	require.Error(t, err)
+}
+
+// 🔴 A LOOKUP IN FLIGHT WHEN THE CREDENTIAL WAS FORGOTTEN CANNOT PUT ITS ANSWER BACK. Otherwise
+// an answer learned just before a rotation was found would be served stale for fifteen minutes.
+func TestAFlightThatCrossesAForgetDoesNotRefillTheCache(t *testing.T) {
+	f, c := newFakeBackend(), newClock()
+	d := NewDevices(f, DeviceConfig{Now: c.now})
+	entered, release := make(chan struct{}), make(chan struct{})
+	f.resolve = func(_, value string) (Resolution, error) {
+		close(entered)
+		<-release
+		return Resolution{Outcome: Resolved, DeviceToken: "dev-" + value}, nil
+	}
+	done := make(chan error)
+	go func() {
+		got, err := resolveStale(t, d)
+		if err == nil && got.Outcome != Resolved {
+			err = errors.New("the flight's own caller did not get its answer")
+		}
+		done <- err
+	}()
+	<-entered
+	d.Forget("acme", "cs")
+	close(release)
+	require.NoError(t, <-done)
+
+	c.advance(DefaultPositiveTTL + time.Minute)
+	f.resolve = func(string, string) (Resolution, error) { return Resolution{}, errors.New("connection refused") }
+	_, err := resolveStale(t, d)
+	require.Error(t, err, "the answer of a flight from before the Forget was stored and served stale")
+}
+
+// 🔴 A FLIGHT IS ONE BEARER'S QUESTION. A caller holding a token device-management rejects must
+// not receive the answer a caller with the right token is waiting on, nor the other way round.
+func TestConcurrentLookupsWithDifferentBearersAreSeparateQuestions(t *testing.T) {
+	f, c := newFakeBackend(), newClock()
+	d := NewDevices(f, DeviceConfig{Now: c.now})
+	var mu sync.Mutex
+	asked := map[string]bool{}
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	f.resolveBearer = func(bearer string) (Resolution, error) {
+		mu.Lock()
+		asked[bearer] = true
+		mu.Unlock()
+		entered <- struct{}{}
+		<-release
+		if bearer == "old" {
+			return Resolution{Outcome: Unauthenticated}, nil
+		}
+		return Resolution{Outcome: Resolved, DeviceToken: "dev-x"}, nil
+	}
+	type result struct {
+		bearer string
+		got    Lookup
+		err    error
+	}
+	out := make(chan result, 2)
+	for _, b := range []string{"old", "new"} {
+		go func(b string) {
+			got, err := d.Resolve(context.Background(), "acme", "cs", b, "lorawan.deveui", staleEUI)
+			out <- result{b, got, err}
+		}(b)
+	}
+	<-entered
+	<-entered
+	close(release)
+	for i := 0; i < 2; i++ {
+		r := <-out
+		require.NoError(t, r.err)
+		if r.bearer == "old" {
+			require.Equal(t, Unauthenticated, r.got.Outcome)
+		} else {
+			require.Equal(t, Resolved, r.got.Outcome)
+		}
+	}
+	require.True(t, asked["old"] && asked["new"], "both bearers were asked")
+}
+
+// When a failed lookup's caller reads the entry again and another request has refreshed it
+// meanwhile, it is served as the fresh answer it is, not counted as stale.
+func TestAnEntryRefreshedDuringAFailedLookupIsNotStale(t *testing.T) {
+	f, c := newFakeBackend(), newClock()
+	d := NewDevices(f, DeviceConfig{Now: c.now})
+	_, err := resolveStale(t, d)
+	require.NoError(t, err)
+	c.advance(DefaultPositiveTTL + time.Minute)
+	f.resolve = func(string, string) (Resolution, error) {
+		// Another bearer's request refreshes the entry while this one is failing.
+		f.resolve = nil
+		_, err := d.Resolve(context.Background(), "acme", "cs", "other", "lorawan.deveui", staleEUI)
+		require.NoError(t, err)
+		return Resolution{}, errors.New("connection refused")
+	}
+	got, err := resolveStale(t, d)
+	require.NoError(t, err)
+	require.Equal(t, Resolved, got.Outcome)
+	require.False(t, got.Stale)
 }

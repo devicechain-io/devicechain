@@ -730,12 +730,15 @@ func (es *HttpEventSource) handleDownlinkReports(w http.ResponseWriter, r *http.
 		return
 	}
 	var out []cmddownlink.DownlinkReport
-	staleNoted := false
 	for _, d := range reports {
 		looked, err := rt.Devices.Resolve(r.Context(), tenant, slug, bearer, d.Scheme, d.Identifier)
-		if err == nil && looked.Stale && !staleNoted {
-			staleNoted = true
-			noteStaleDevice(m, typ, slug, looked)
+		// 🔴 A REPORT IS NEVER ACCEPTED ON A STALE DEVICE. An uplink served from a stale lookup is
+		// re-checked by device-management at the event (token, enabled, scope, device, alias); a
+		// report is not: the adapter settles the downlink it matches by queue item, integration and
+		// device token and asks nothing else. A stale answer is therefore what the request is
+		// refused on, exactly as it was before stale answers existed.
+		if err == nil && looked.Stale {
+			err = errStaleForReport
 		}
 		if err != nil {
 			log.Warn().Err(err).Str("integration", slug).Msg("Integration device lookup failed for a downlink report; refusing the request")
@@ -783,6 +786,9 @@ func (es *HttpEventSource) handleDownlinkReports(w http.ResponseWriter, r *http.
 	m.request(typ, ResultAccepted)
 	w.WriteHeader(http.StatusAccepted)
 }
+
+// errStaleForReport refuses a downlink report whose device could only be served stale.
+var errStaleForReport = errors.New("device-management cannot be asked and a downlink report is never accepted on a stale device")
 
 // noteStaleDevice counts and logs a request that was served a device resolved longer ago than the
 // device cache's TTL, because device-management could not be asked. Once per request: an outage

@@ -6,10 +6,12 @@ package processor
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/integration"
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,21 +68,53 @@ func TestAStaleDeviceIsNotServedOverADefinitiveUnregistered(t *testing.T) {
 	h.mu.Unlock()
 }
 
-// A downlink report goes through the same device lookup and is served the same way: the adapter
-// matches it against the downlink it holds by queue item, integration and device token, so a
-// stale device can only fail to match, never settle another device's downlink.
-func TestADownlinkReportIsAcceptedFromAStaleDeviceAndCounted(t *testing.T) {
+// 🔴 A DOWNLINK REPORT IS NEVER ACCEPTED ON A STALE DEVICE. Nothing downstream re-checks a report
+// (the adapter settles the downlink it matches by queue item, integration and device token), so a
+// device that can only be served stale is a 503, as it was before stale answers existed. The paired
+// uplink in the same outage is accepted, so a route that refused everything cannot pass.
+func TestADownlinkReportIsRefusedOnAStaleDevice(t *testing.T) {
 	h := newRouteHarness(t)
 	sink := withReportSink(h)
 	require.Equal(t, http.StatusAccepted, h.post(csPath+"?event=ack", goodBearer, fixtureBody(t, "chirpstack/ack.json")).Code)
+	require.Equal(t, http.StatusAccepted, h.up().Code)
 
 	h.backend.resolve = func(string, string) (integration.Resolution, error) {
 		return integration.Resolution{}, errors.New("connection refused")
 	}
 	h.now = h.now.Add(integration.DefaultPositiveTTL + time.Minute)
 	rec := h.post(csPath+"?event=ack", goodBearer, fixtureBody(t, "chirpstack/ack.json"))
-	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
-	require.Len(t, sink.reports, 2)
-	require.Equal(t, "dev-0101010101010101", sink.reports[1].DeviceToken)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+	require.Len(t, sink.reports, 1, "only the report from before the outage was published")
+	require.Equal(t, 1, h.count("request/CHIRPSTACK_V4/"+ResultResolveUnavailable))
+	require.Zero(t, h.count("request/CHIRPSTACK_V4/"+ResultResolveStale), "a refused report was not served stale")
+
+	require.Equal(t, http.StatusAccepted, h.up().Code, "the uplink in the same outage is accepted")
 	require.Equal(t, 1, h.count("request/CHIRPSTACK_V4/"+ResultResolveStale))
+}
+
+// An outage is one condition: a request whose every uplink was served stale is counted once.
+func TestAStaleServeIsCountedOncePerRequest(t *testing.T) {
+	h := newRouteHarness(t)
+	h.backend.desc = func() integrationcodec.Descriptor {
+		g := `{"idFrom":"pointer:/id","timePointer":"/t"}`
+		return integrationcodec.Descriptor{Type: integrationcodec.GenericJSON, Identity: "ALIAS:custom.pump", Generic: &g}
+	}
+	body := `[{"id":"p1","v":1,"t":"2022-07-18T09:34:00Z"},{"id":"p2","v":2,"t":"2022-07-18T09:34:00Z"},{"id":"p3","v":3,"t":"2022-07-18T09:34:00Z"}]`
+	require.Equal(t, http.StatusAccepted, h.post(csPath, goodBearer, body).Code)
+	h.backend.resolve = func(string, string) (integration.Resolution, error) {
+		return integration.Resolution{}, errors.New("connection refused")
+	}
+	h.now = h.now.Add(integration.DefaultPositiveTTL + time.Minute)
+	later := strings.ReplaceAll(body, "09:34:00Z", "09:40:00Z")
+	require.Equal(t, http.StatusAccepted, h.post(csPath, goodBearer, later).Code)
+	h.mu.Lock()
+	require.Len(t, h.published, 6, "all three uplinks of the stale request were published")
+	h.mu.Unlock()
+	require.Equal(t, 1, h.count("request/GENERIC_JSON/"+ResultResolveStale))
+}
+
+// Every result is exported at zero, the stale serve included, so an alert on it has a series to
+// read before the first outage.
+func TestTheStaleResultIsExportedAtZero(t *testing.T) {
+	require.Contains(t, IntegrationRequestResults, ResultResolveStale)
 }
