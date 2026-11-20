@@ -92,6 +92,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         public IReadOnlyDictionary<string, Ground[]> Quays => regions;
         public IReadOnlyDictionary<string, Ground[]> FenceRings => fences;
         public IReadOnlyList<string> ReadinessWarnings => warnings.AsReadOnly();
+        public string QuayFor(LayoutDevice device) => device.Kind == DeviceKind.Truck ? device.Quay :
+            regions.First(p => Contains(p.Value, anchors[device.Token])).Key;
         public IReadOnlyList<Ground> Road { get; private set; }
         public Ground Depot { get; private set; }
         public Ground[] InnerWater { get; } = Rect(-150, -140, 140, 75);
@@ -199,15 +201,27 @@ namespace DeviceChain.Harborpulse.Model.Director
             var minX = polygon.Min(p => p.X); var maxX = polygon.Max(p => p.X);
             var minZ = polygon.Min(p => p.Z); var maxZ = polygon.Max(p => p.Z);
             var i = Math.Max(1, d.Index);
+            // Each quay has one water-facing wall: North Quay's faces south (z = minZ), East Quay's west (x = minX) and the
+            // Basin's east (x = maxX). A device stands at a fraction along that wall and a depth inland of it. The side
+            // quays keep their devices on the northern two thirds, which HOME holds in frame (their southern ends are
+            // closer to the camera than its frustum is wide there).
+            var north = quay == "hp-north-quay"; var east = quay == "hp-east-quay";
+            Ground At(double fraction, double depth, double nudgeX = 0)
+            {
+                if (north) return new Ground(minX + (maxX - minX) * fraction, minZ + depth);
+                var z = minZ + (maxZ - minZ) * fraction;
+                return east ? new Ground(minX + depth + nudgeX, z) : new Ground(maxX - depth + nudgeX, z);
+            }
             switch (d.Kind)
             {
-                case DeviceKind.Light: return new Ground(minX + (maxX - minX) * i / 5, quay == "hp-north-quay" ? 95 : maxZ - (maxZ - minZ) * i / 5);
-                case DeviceKind.Gauge: return new Ground(minX + (maxX - minX) * i / 4, minZ + 5);
-                case DeviceKind.LoraGauge: return new Ground(minX + 8, minZ + 12);
-                case DeviceKind.LegacyGauge: return new Ground(minX + 16, minZ + 12);
-                case DeviceKind.Pump: return new Ground((minX + maxX) / 2 - 15, (minZ + maxZ) / 2);
-                case DeviceKind.Charger: return new Ground((minX + maxX) / 2 + i * 9, minZ + 18);
-                case DeviceKind.Meter: return new Ground(minX + 20, maxZ - 10);
+                // M3: lamp x strictly follows the manifest's west-to-east order, so on a side quay each lamp steps one metre east.
+                case DeviceKind.Light: return north ? At(i / 5.0, 20) : At(0.35 + 0.13 * (i - 1), 10, i);
+                case DeviceKind.Gauge: return north ? At((2 * i - 1) / 6.0, 3) : At(0.45 + 0.17 * (i - 1), 3);
+                case DeviceKind.LoraGauge: return At(north ? 0.62 : 0.4, 4);
+                case DeviceKind.LegacyGauge: return At(north ? 0.08 : 0.3, 4);
+                case DeviceKind.Pump: return At(north ? 0.43 : 0.62, 28);
+                case DeviceKind.Charger: return north ? At(0.6 + 0.04 * i, 18) : At(0.68 + 0.06 * i, 18);
+                case DeviceKind.Meter: return At(north ? 0.12 : 0.88, 38);
                 default: throw new FormatException("no presentation anchor for " + d.Kind);
             }
         }
@@ -270,14 +284,22 @@ namespace DeviceChain.Harborpulse.Model.Director
         void AddPoses()
         {
             poses.Add("pose:home", new CameraPose(new Point3(0, 110, -420), new Point3(0, 0, 40), 30));
-            poses.Add("pose:home:portrait", new CameraPose(new Point3(0, 160, -330), new Point3(0, 0, 60), 52));
+            // The 9:16 HOME looks east along the horseshoe from over the western town: the harbour's long (x) axis then runs up
+            // the tall frame. The storyboard's first draft, (0, 160, -330) looking north, holds only North Quay at 9:16 (its
+            // horizontal half-angle is about 15 degrees), so 12 of 37 devices were in frame; this pose holds all three quays.
+            poses.Add("pose:home:portrait", new CameraPose(new Point3(-560, 300, -60), new Point3(40, 0, 10), 52));
             poses.Add("pose:night-home", poses["pose:home"]);
             poses.Add("pose:storm-home", poses["pose:home"]);
             foreach (var pair in new[] { ("pump-north", "hp-pump-north"), ("pump-east", "hp-pump-east"), ("pump-basin", "hp-pump-basin"), ("chargers-east", "hp-charger-east-1"), ("chargers-basin", "hp-charger-basin-2"), ("lamp-east", "hp-light-east-3"), ("gauge-north", "hp-gauge-north-3"), ("gauge-east", "hp-gauge-east-1"), ("terminal", "hp-meter-ferry-terminal"), ("north-quay", "hp-light-north-1"), ("charger-north", "hp-charger-north-1") })
                 foreach (var suffix in new[] { "kiosk-ext", "well", "well-locked", "pair", "close", "wide", "promenade", "insert" })
                 {
+                    // Stand off on the device's water side (its quay's wall faces the harbour), so a close pose looks back at
+                    // the device across the quay edge instead of into the ground behind it.
                     var a = anchors[pair.Item2]; var close = suffix == "well" || suffix == "well-locked";
-                    poses.Add("pose:" + pair.Item1 + ":" + suffix, new CameraPose(new Point3(a.X, close ? 8 : 25, a.Z - (close ? 8 : 35)), new Point3(a.X, 1, a.Z), 38));
+                    var quay = QuayFor(layout.Devices.First(d => d.Token == pair.Item2));
+                    var wx = quay == "hp-east-quay" ? -1.0 : quay == "hp-basin" ? 1.0 : 0; var wz = quay == "hp-north-quay" ? -1.0 : 0;
+                    var back = close ? 16 : 38; var up = close ? 10 : 24;
+                    poses.Add("pose:" + pair.Item1 + ":" + suffix, new CameraPose(new Point3(a.X + wx * back, up, a.Z + wz * back), new Point3(a.X, 2, a.Z), close ? 42 : 38));
                 }
             poses.Add("pose:east-quay:mouth-wide", new CameraPose(new Point3(30, 55, -180), new Point3(175, 0, 20), 40));
             var plain = fences[layout.Fences[0].Token];

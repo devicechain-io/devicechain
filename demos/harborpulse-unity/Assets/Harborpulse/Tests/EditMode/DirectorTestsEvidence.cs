@@ -75,7 +75,7 @@ namespace DeviceChain.Harborpulse.Tests
         public void PlaceholderNumberComesFromMatchingRecord()
         {
             var c = DirectorKit.Story().Page("8").Captions.First(x => x.Id == "ota-summary"); var s = new ObservationStore();
-            s.Add(DirectorKit.O("rollout", status: "TERMINAL", sim: 26.6, fields: new Dictionary<string, string> { ["updated"] = "5", ["refused"] = "1", ["maxInFlight"] = "3" }));
+            s.Add(DirectorKit.O("rollout", status: "COUNTS", sim: 26.6, fields: new Dictionary<string, string> { ["updated"] = "5", ["refused"] = "1", ["maxInFlight"] = "3" }));
             Assert.That(c.Render(c.Needs.Evaluate(s, new EvidenceContext("run", 26, 27, 1000, trigger: DirectorKit.O("rollout")))), Does.Contain("limit 3"));
         }
         [TestCase("{\"mystery\":{}}")] [TestCase("{\"alarm\":{\"typo\":1}}")] [TestCase("{\"coverage\":{\"stream\":\"x\",\"fromSim\":1,\"toSim\":2,\"typo\":1}}")]

@@ -3,6 +3,7 @@
 
 using System.Collections.Generic;
 using DeviceChain.Harborpulse.Model;
+using DeviceChain.Harborpulse.Model.Director;
 using UnityEngine;
 
 namespace DeviceChain.Harborpulse.Visuals
@@ -28,52 +29,17 @@ namespace DeviceChain.Harborpulse.Visuals
         Vector3 pos, target;
         float fov;
 
-        public HarborCameraRig(Camera camera, SitePlan plan)
+        public HarborCameraRig(Camera camera, PresentationMap map)
         {
             cam = camera;
-            var wall = (float)plan.WallZ;
-            var cx = (float)(plan.MinX + plan.MaxX) / 2;
-            shots.Add(new Shot { Name = "Overview", Position = new Vector3(cx + 300, 210, wall + 1250), Target = new Vector3(cx, 0, wall - 250), Fov = 55 });
-            foreach (var q in plan.Quays)
-                shots.Add(new Shot
-                {
-                    Name = q.Name, Position = new Vector3((float)q.CenterX + 140, 24, wall + 200), Target = new Vector3((float)q.CenterX, 3, wall - 12), Fov = 45,
-                });
-
-            var g = plan.Find("PAW-GAUGE-EAST-1");
-            if (g != null)
-                shots.Add(new Shot
-                {
-                    Name = "East Quay gauge", Position = new Vector3((float)g.At.X + 16, 5.5f, wall + 26), Target = new Vector3((float)g.At.X, 1.2f, wall), Fov = 40,
-                });
-
-            var lamp = plan.Find("PAW-LIGHT-NORTH-1");
-            if (lamp != null)
-                shots.Add(new Shot
-                {
-                    Name = "Promenade", Position = new Vector3((float)lamp.At.X - 60, 6, wall - 4), Target = new Vector3((float)lamp.At.X + 500, 3, (float)lamp.At.Z), Fov = 50,
-                });
-            AddClose(plan, "PAW-PUMP-NORTH", "North Quay pump", new Vector3(15, 6.5f, 15), new Vector3(9, -2.2f, 6), 46);
-            AddClose(plan, "PAW-PUMP-BASIN", "Basin pump", new Vector3(15, 6.5f, 15), new Vector3(9, -2.2f, 6), 46);
-            AddClose(plan, "PAW-CHARGER-NORTH-1", "North Quay chargers", new Vector3(7, 4, 12), new Vector3(3, 1, 2), 48);
-            AddClose(plan, "PAW-GAUGE-NORTH-3", "North Quay gauge 3", new Vector3(6, 4, 10), new Vector3(0, 1, 0), 42);
-            AddClose(plan, "PAW-LIGHT-EAST-3", "East lamp 3", new Vector3(13, 8, 17), new Vector3(0, 4, 0), 44);
-            foreach (var p in plan.Placements) if (p.Device.Kind == DeviceKind.Truck) AddClose(plan, p.Device.ExternalId, "Truck", new Vector3(10, 6, 13), Vector3.up, 45);
+            var names = new[] { "Overview", "North Quay", "East Quay", "Basin", "East Quay gauge", "Promenade", "North Quay pump", "Basin pump", "North Quay chargers", "North Quay gauge 3", "East lamp 3", "Truck" };
+            var poses = new[] { "pose:home", "pose:north-quay:wide", "pose:east-quay:mouth-wide", "pose:terminal:wide", "pose:gauge-east:close", "pose:north-quay:promenade", "pose:pump-north:well", "pose:pump-basin:well", "pose:charger-north:pair", "pose:gauge-north:close", "pose:lamp-east:close", "pose:truck:chase" };
+            for (var i = 0; i < names.Length; i++)
+            {
+                var p = map.Pose(poses[i]);
+                shots.Add(new Shot { Name = names[i], Position = DirectorCamera.V(p.Camera), Target = DirectorCamera.V(p.Look), Fov = (float)p.VerticalFov });
+            }
             Select(0, true);
-        }
-
-        void AddClose(SitePlan plan, string id, string name, Vector3 offset, Vector3 targetOffset, float fov)
-        {
-            var p = plan.Find(id);
-            if (p == null) throw new System.InvalidOperationException("shot device not in layout: " + id);
-            var at = new Vector3((float)p.At.X, (float)SitePlan.DeckHeightM, (float)p.At.Z);
-            shots.Add(new Shot { Name = name, Position = at + offset, Target = at + targetOffset, Fov = fov });
-        }
-        public void FollowTruck(TruckTrack truck)
-        {
-            var s = shots[shots.Count - 1];
-            var at = new Vector3((float)truck.At.X, (float)SitePlan.DeckHeightM, (float)truck.At.Z);
-            s.Position = at + new Vector3(10, 6, 13); s.Target = at + Vector3.up;
         }
 
         public IReadOnlyList<Shot> Shots => shots;

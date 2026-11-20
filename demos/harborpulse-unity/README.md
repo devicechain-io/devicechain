@@ -9,8 +9,7 @@ A 3D scene of the `harborpulse` simulator's waterfront: the fictional Port Alder
 gauges, street lights, pump stations, EV chargers, two metered buildings and the flood-response truck, through
 the scenario's compressed day with its storm and king tide.
 
-**Status: U1 scene and evidence views, plus the engine-free U2a director model.** The existing scene builds itself in code from the manifest's surveyed
-layout. It includes stone quays and jetties, an enclosed Basin with a ferry berth, cut-away pump wells,
+**Status: U2b scene integration; Editor rendering and live observer wiring remain to verify.** The scene builds itself in code from `PresentationMap` and the committed generated manifest layout. It includes stone quays and jetties, an enclosed Basin with a ferry berth, cut-away pump wells,
 gauge variants, chargers and parked hatchbacks, lamps, the utility truck, metered buildings and the town.
 Named rig nodes keep geometry refinements separate from the evidence views.
 
@@ -31,8 +30,7 @@ coral identifies failures, green identifies confirmations and blue identifies fl
 
 | On screen | Source |
 | --- | --- |
-| Where the street lights stand | the manifest's surveyed positions, 430 m apart, not rescaled |
-| Where every other device stands | the scene's own placement along its quay; the manifest gives them no position |
+| Where devices stand | compact `PresentationMap` anchors; the engineer overlay discloses the manifest positions |
 | The time of day, the sun, the stars, the storm | the runner's `GET /status` (`scenario.startedAt`, `day`, `simHour`), and the storm beat's hours |
 | The water's height on each quay | the median of that quay's tide gauges' `water_level_m`, as the platform reports them, fresh readings only |
 | The waves, foam and rain | visual only, zero-mean; they follow the WORLD storm and never move the tide |
@@ -90,7 +88,7 @@ devices (37 of 37) and the measurement and alarm streams. Within a few seconds e
 its gauges' median and how many contributed, and the lights switch with the platform's reports (off by day,
 on from 18:00, and East Quay's go silent through its feeder outage, 19:45 to 21:15).
 
-Keys: `0` overview, `1`-`3` the quays, `4` an East Quay gauge, `5` the promenade, `6` North Quay pump,
+With the director off (`D`), presets: `0` overview, `1`-`3` the quays, `4` an East Quay gauge, `5` the promenade, `6` North Quay pump,
 `7` Basin pump, `8` North Quay chargers, `9` North Quay gauge 3, `F1` East lamp 3, `F2` the following truck shot.
 Drag to orbit, wheel to dolly. Shot indices for batch stills are 0-11 (`F1` = 10, `F2` = 11).
 
@@ -182,7 +180,10 @@ All platform requests use the runner's operator authority. The scene sends these
 | Update management | `updateRollout` and bounded `updateRolloutTargets` every two seconds after a runner rollout declaration |
 
 The shared observer also checks the active-alarm snapshot every five seconds to detect stream gaps.
-There are no credential queries, mutations, device sessions or command submissions.
+U2b also reads notification attempts by alarm token, alarm suppression stamps/status, the replacement
+journal and retired credentials' tokens and `enabled` flags, artifact trust/signers, rollout targets and
+assignment attempts, quay `anchorDevices`, and bounded measurement history for replacement and restore.
+Credential reads select no secret or credential material. There are no mutations, device sessions or command submissions.
 
 The portable compile checker accepts `--no-restore` when projects have already been restored. For a
 supplemental C# check of URP and Editor code without launching Unity, point it at an installed Editor
@@ -259,7 +260,7 @@ preview banner and still stamp remains in place.
 
 `Scripts/Model/Director/` adds the compact presentation map, strict storyboard, evidence predicates,
 deterministic live scheduler, free-roam ownership model and NDJSON recorder. This slice supplies model
-APIs and offline tests; the existing scene and live observer are not wired to them yet.
+APIs and offline tests. U2b wires the Unity scene to them; the observer is supplied separately through `IDirectorFeed`.
 
 - `PresentationMap` owns manifest-to-presentation conversion. Its constrained mesh splits the manifest
   frame on each control coordinate, with Steiner vertices at intersections, and triangulates every
@@ -336,3 +337,180 @@ The mutation verifier first requires a green complete baseline and confirms ever
 Each mutant receives a unique results directory. A compile failure or absent selected test cannot
 count as a kill. Source restoration is followed by a fresh complete build/test, even on failure.
 SDK and package selection use the caller's environment rather than an account-specific path.
+
+## U2b Unity integration
+
+The scene draws the horseshoe from `PresentationMap`: south-facing North Quay, west-facing East Quay,
+east-facing Basin, mapped truck road and fence rings, depot, breakwater lights, town terraces and ridge.
+Device roots retain the U1 node contract and evidence views, with geometry oriented in quay-local frames.
+Water uses `TideField` rectangle distances on CPU and HLSL, with the exact zero-distance limit on a quay
+and identity vertical metres. Missing readings still use the U1 held value or datum. The continuity grid
+test covers a 0.30 m regional spread; a universal 1 cm bound for arbitrary differences between pinned
+quays is mathematically impossible.
+
+`DirectorHost` owns the store, scheduler, recorder and free-roam state. `HarborpulseApp.DirectorFeedFactory`
+is an optional `Func<IDirectorFeed>` supplied before `Initialize()`. The default live feed is
+`DirectorObserver` over the session's `DirectorReads`; an injected missing feed reports **no observer feed**.
+Offline preview supplies labelled scenario stand-ins and platform-read gaps. The feed receives only
+`DirectorInputs`.
+
+The camera-space uGUI Canvas is in `Scripts/Hud`, with text and visibility rules in engine-free `HudModel`.
+The portable checker excludes this package-dependent renderer, like towerpulse's story UI. It uses
+`LegacyRuntime.ttf`, white captions on a dark scrim, source words and shapes on the rail, and an offline
+preview disclosure that survives still rendering. `E` toggles the U1 engineer readout and cards (initially
+off), `D` toggles direction, and `H` hides the HUD. Drag/wheel, W/A/S/Q, arrows and PageUp navigate.
+Reserved E and D never navigate: PageUp moves up and Right Arrow moves right. After 20 s idle, free roam
+returns over 3 s. With direction off, the U1 number/F-key slots select named map poses. The overlay adds
+the director log tail, presentation-scale disclosure, and millisecond display timestamps.
+
+The local digest is SHA-256 of committed resource bytes after CRLF-to-LF normalization. Missing runner
+digest is a mismatch, with reason `runner reports no layout digest`. A mismatch disables camera direction
+while leaving navigation available. `-hp-layout-digest-override <64 hex digits>` is a labelled CONTROL
+injection. Banner precedence is layout mismatch, reconnecting, then persistent red `TEST CONTROL: <defects>`;
+test-control starts omit the title.
+
+Live recordings go under `-hp-record-dir <root>` (default `Application.persistentDataPath/recordings`),
+in a filesystem-safe run-start/session directory. A changed runner `startedAt` closes the previous
+recording and starts another. Four caller-owned queued writers produce `observed.ndjson`, `world.ndjson`,
+`director.ndjson`, and `checkpoints.ndjson`. The desktop worker flushes each second and drains on teardown;
+IO or queue-full problems are visible. `world` contains typed /status clock/digest/defect samples, not raw
+config or credentials. `sim-hour` director context events associate each scheduler event batch's show
+second with its absolute sim hour without changing the committed U2a codec. The same reader can seek
+these files. A browser player needs an alternative persistence sink before live recording; this player
+target is Windows.
+
+Runtime capture flags:
+
+- `-hp-capture-dir <dir> -hp-capture-every <wall seconds>`: screenshots include the Canvas, sim time,
+  day and active page in the filename.
+- `-hp-quit-after-sim <absolute hour>`: quit at that runner/preview time (26 means next day 02:00).
+- `-hp-resolution 1920x1080`, or `-hp-portrait` for 1080x1920 and `pose:home:portrait`.
+
+Editor batch entry points:
+
+```text
+DeviceChain.Harborpulse.EditorTools.HarborBuild.BuildWindowsPlayer -hp-build-dir <dir>
+DeviceChain.Harborpulse.EditorTools.HarborStills.HomeCheckFromCommandLine -hp-stills-dir <dir>
+DeviceChain.Harborpulse.EditorTools.HarborStills.DirectorContactSheetFromCommandLine -hp-stills-dir <dir>
+```
+
+The HOME check holds offline preview at 12:30, renders beauty and flat URP Unlit masks at 1920x1080 and
+1080x1920, restores materials and render settings, and writes `home-check.json`. Device counts use only
+visible pixels with their own colour, requiring an 8 px bbox height. Water includes the separately
+coloured mapped mouth. All three quays, mouth and ridge require visible pixels. The method exits 1 if
+water exceeds 45%, sky exceeds 25%, fewer than 30 devices qualify, or a required region is absent.
+The contact sheet advances the preview continuously; `-hp-director-hours <comma-separated hours>`
+selects samples. It keeps the preview stamp and renders only evidence the installed feed supplies.
+
+**HOME passes at both aspects.** The side quays keep their devices on the water-facing wall of their
+northern two thirds (their southern ends are nearer the camera than HOME's frustum is wide there), and the
+9:16 HOME looks east along the horseshoe from over the western town, (-560, 300, -60) to (40, 0, 10) at a
+52 degree vertical field of view, because a north-facing 9:16 frame holds only North Quay. The masks check
+at 12:30 gives 36 of 37 devices at 16:9 (water 44 %, sky 0 %; the truck is hidden in its depot) and 36 of
+37 at 9:16 (water 35 %, sky 3 %), with all three quays, the mouth and the ridge visible. The camera-space
+Canvas does not render reliably outside Play mode, so the HOME beauty frame is the scene with its burnt-in
+stamp; HUD-bearing frames come from Play mode or the player's `-hp-capture-dir`.
+
+Verification:
+
+```powershell
+cd demos/harborpulse-unity/Dotnet~
+powershell -NoProfile -ExecutionPolicy Bypass -File Verify-Director.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File Verify-Director.ps1 -CompileCheck
+python verify_u2b_mutants.py
+python check_director_log.py <recording>/director.ndjson
+```
+
+The verification script uses `.build/u2b` and disables MSBuild/compiler-server reuse to avoid cross-user
+cache permissions on Windows. The synthetic clean timeline test exports `clean-director.ndjson` in the
+test work directory, checks rendered caption transitions with C#, and the operator Python checker uses
+the same rendered transitions, including titles, with recording-end or EOF as the final boundary. Mutation logs and named failing tests are under
+`.build/u2b/mutants`. Shader compilation, uGUI and Editor-tool compilation, real masked visibility, player
+build, live probe problems, live control runs, disk flushing under load and capture output need the Editor
+and runner. No scene operation writes to the platform or creates a device session.
+
+Editor review values: deck 2.4 m, flood-plain surface 1.7 m, gauge mast 4.2 m, charger canopy 3.1 m;
+six ridge terraces at heights `22 + 28*i` m and z=`265 + 48*i` m; church spire top 123 m and clock
+roof top 117 m. Verify rig occlusion and staff separation, cut-away apertures, outfalls, the mapped road
+foundation and depot headland, tide-board alignment and CPU/shader water agreement. Verify the 34 px
+caption at 1080p and its >=4.5:1 scrim contrast, camera-space capture, source shapes/words and declared
+arrows, <=4 world tags (2 portrait), 5-node rail cap (2 displayed portrait), 20 s idle + 3 s return,
+reserved keys, and preset selection with direction off. Live review must check missing/mismatched digest,
+TEST CONTROL precedence, stale/reconnecting behavior, observer problems, run rollover, one-second disk
+flushes and teardown drain. Build the Windows player and inspect HUD-bearing captures with sim/page names.
+
+The verification gates cover the engine-free model, desktop and WebGL compilation, and both caption
+checkers. These do not establish an Editor visibility or visual pass.
+
+One U2a bug fix is included: `Scheduler` defers stale-clock caption ends to the three-second visible
+floor, including a reconnect before that deadline, and re-offers the slot for fresh evidence evaluation.
+`StaleCaptionFloorAlsoSurvivesShortReconnect(false/true)` failed against the committed behavior before
+the fix; the failing TRX is retained in `.build/u2b/stale-caption-before.trx`. The review corrections below extend the observer, predicates, storyboard and recording checks.
+
+### U2b observer feed
+
+`HarborLiveSession.DirectorReads` publishes immutable read snapshots from `Live/DirectorReads.cs`.
+Each document has a bind-time operator authorization probe, then scoped polls at a three-second cadence,
+with up to six requests in flight for the per-device reads (alarms, notifications, histories, commands) and one for each fleet-wide read. Pages are bounded at 1000; truncation is a reported failure.
+Unanswered data remains absent with state `waiting`; failed probes stay visible in `Problems` and
+invalidate that read's coverage for the recording. The shared observer tap retains escalation event
+times before the U1 latest-state reducer runs. Reconnect counters preserve gaps even across a frame
+that sees the streams live again.
+
+Construct `new DirectorObserver(layout, () => live.DirectorReads)` once per run and call `Update`
+after building the U1 frame, supplying the run, recording epoch, wall instant, absolute sim hour,
+source and frame through the committed `DirectorInputs` seam. Feed its observations and coverage to
+the recorder/store, and display `Problems`. Layout device identities in the storyboard are translated
+from bound external IDs; alarm tokens/cycles, journal IDs, command tokens and attempt tokens remain
+the platform's identities. Offline preview emits only supplied stand-ins with SCENARIO provenance
+and platform-read gaps. Restore-set identities use the verifier's database microsecond precision;
+unexpected stored times remain in the observed set and prevent an exact tally.
+
+Two storyboard predicate corrections are covered by real-identity regressions: page 6 groups each
+device's own alarm cycle within the outage interval, and page 8 joins a post-failure reading to that
+device's actual attempt, rather than treating a rollout as an attempt shared by all targets.
+
+
+### U2b review corrections
+
+Page 2 now says **"No notification recorded / while the work is on."** Its rail says **"No notification
+recorded in the window"**. This is a wording change the maintainer must approve: the best-effort attempt
+ledger cannot establish that no notification happened. Both caption lines fit the 42-character limit;
+the existing claim lint and cut timing law still apply.
+
+Rollout `TERMINAL` observations do not carry counts. A separate `COUNTS` snapshot is available only
+when complete successful target and relevant assignment reads cover the terminal instant. Updated
+comes from platform `progress.succeeded`; refused counts only reported `VERIFICATION_FAILED` failures
+with `platform=false`. Missing, failed, truncated or older child reads, unresolved targets and missing assignment identities
+withhold counts, report a problem and create an updates gap. Read coverage uses the request start, so a response finishing after a
+transition cannot make an earlier request cover it.
+
+The shared observer tap retains every measurement before latest-state reduction, including intermediate
+well readings, and records them with their platform times. Stream liveness and reconnect counters gate
+coverage on that path. Commands and notification attempts defer their cycle join until a complete alarm
+read covers their own platform instant; later raises cannot re-key unchanged earlier records.
+
+Credential, artifact trust, target outcome and membership reads have no transition timestamp in the
+selected contract. They are snapshots marked with `asOf` (recording seconds at request start), not dated
+transitions. Their numeric occurrence slot equals observation time for wire compatibility, but temporal
+predicates cannot order them; `occurredAtS` is unavailable as a predicate field. Artifact trust is never
+backdated to rollout start. Real alarm, attempt, command and measurement transition timestamps remain
+platform timestamps. Snapshot predicates reduce to current state before testing it.
+
+Every complete membership result, including an empty one, replaces its previous set. Once all quay
+reads succeed, the live scene rebuilds `PresentationMap` with platform membership. Moved anchors rebuild
+the world, ground apertures, views and camera maps. Waiting/failed membership reads and M2 readiness
+warnings remain visible in the HUD problem line and engineer overlay. Missing members are explicitly
+unknown. Recording creation failures have their own persistent problem, cleared only when a recording
+sink is established. Frozen-shot caption opportunities shift across reconnects, including a 60-second
+outage.
+
+`DirectorHost` records `visible-caption`/`visible-caption-end` after the HUD hold queue, including title
+text. Scheduler decisions remain in the log for evidence. Both checkers prefer those rendered
+transitions when present, reject empty acceptance logs and check the last visible caption through
+`recording-end` (written on normal teardown), or EOF after an interrupted recording.
+
+Run `python verify_review_mutants.py` from `Dotnet~` for all ten corrected findings, including both
+implementations of 12. It requires a complete green baseline, a named test failure for each broken guard, byte-for-byte
+source restoration and a complete green final gate. Logs, TRX files, restoration hashes and summary are
+under `.build/u2b/review-mutants/`. The normal verification gate also runs the Python checker regressions.

@@ -145,6 +145,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         public void Coverage(double wallS, CoverageInterval interval) => Append(observed, wallS, "coverage", w => DirectorWire.Coverage(w, interval));
         public void World(double wallS, string statusJson) => Append(world, wallS, "world", w => { using (var d = JsonDocument.Parse(statusJson)) DirectorWire.Canonical(w, d.RootElement); });
         public void Decision(DirectorEvent e) => Append(director, e.ShowS, "director", w => DirectorWire.Event(w, e));
+        public void End() => Decision(new DirectorEvent(lastS, "recording-end", "", ""));
         public void Consumption(double wallS, IEnumerable<string> keys) => Append(director, wallS, "consumed", w => { w.WriteStartArray(); foreach (var key in keys.OrderBy(k => k, StringComparer.Ordinal)) w.WriteStringValue(key); w.WriteEndArray(); });
     }
 

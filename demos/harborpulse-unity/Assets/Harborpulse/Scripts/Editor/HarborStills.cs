@@ -20,7 +20,7 @@ namespace DeviceChain.Harborpulse.EditorTools
     /// Each "hour:shot" renders the scene's camera at that preview hour from that shot (the numbers the scene's own shot keys use). These are
     /// stills of the preview's stand-in values, for checking light and water; they are not, and must not be captioned as, a live run.
     /// </summary>
-    public static class HarborStills
+    public static partial class HarborStills
     {
         public const string DefaultSet = "12.5:0,17.95:7,18.35:7,18.1:6,19.4:4,20.7:10,26.7:8,12.67:9,11.0:10,22.6:5,17.6:11";
 
@@ -48,6 +48,9 @@ namespace DeviceChain.Harborpulse.EditorTools
                     app.WaterTimeOverride = 37.5f;
                     app.Rig.Select(shot, true);
                     app.HoldPreviewAt(hour);
+                    app.Rig.Select(shot, true);
+                    app.RefreshHud();
+                    Canvas.ForceUpdateCanvases();
                     var name = "harborpulse-" + ((int)hour % 24).ToString("00", CultureInfo.InvariantCulture) + "h" + ((int)System.Math.Round((hour - System.Math.Floor(hour)) * 60) % 60).ToString("00", CultureInfo.InvariantCulture) + "-" + app.Rig.Shots[shot].Name.ToLowerInvariant().Replace(' ', '-') + ".png";
                     var stamp = "OFFLINE PREVIEW - STAND-IN VALUES, NOT PLATFORM DATA - " + app.Clock.Label.Substring(app.Clock.Label.IndexOf(' ') + 1, 5) + " - " + app.Rig.Shots[shot].Name;
                     Render(app.sceneCamera, Path.Combine(outDir, name), width, height, stamp, app);
@@ -79,7 +82,7 @@ namespace DeviceChain.Harborpulse.EditorTools
                 tex.ReadPixels(new Rect(0, 0, width, height), 0, 0);
                 tex.Apply();
                 if (string.IsNullOrEmpty(stamp)) throw new ArgumentException("a still of the preview must say so", nameof(stamp));
-                if (app != null)
+                if (app != null && app.EngineerOverlay)
                 {
                     var row = 65;
                     foreach (var card in app.Cards())

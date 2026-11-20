@@ -72,6 +72,9 @@
     <Compile Include="../../../../demos/harborpulse-unity/Assets/Harborpulse/Scripts/Model/**/*.cs" />
     <Compile Include="../../../../demos/harborpulse-unity/Assets/Harborpulse/Scripts/Live/**/*.cs" />
     <Compile Include="../../../../demos/harborpulse-unity/Assets/Harborpulse/Scripts/Visuals/**/*.cs" />
+    <!-- Harborpulse Scripts/Hud uses ugui Text/Image, like Towerpulse StoryUi above.
+         The portable UnityEngine reference assemblies do not carry ugui; the Editor
+         compiles that thin renderer. Its logic in Model/Director/HudModel is checked here. -->
   </ItemGroup>
 
 </Project>

@@ -58,6 +58,8 @@ namespace DeviceChain.Harborpulse.Model
     /// <summary>Where the scene stands one device, and whether that place is the manifest's (surveyed) or the scene's own choice.</summary>
     public sealed class Placement
     {
+        public Placement() { }
+        public Placement(LayoutDevice device, Ground at, double yawDeg = 0) { Device = device; At = at; YawDeg = yawDeg; }
         public LayoutDevice Device { get; internal set; }
         public Ground At { get; internal set; }
 

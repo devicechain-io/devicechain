@@ -51,8 +51,37 @@ namespace DeviceChain.Harborpulse.Model
         public string UnitIdentifier { get; internal set; }
     }
 
+    /// <summary>What one store-and-forward device buffered in one outage, as the runner declares it (SCENARIO, never platform storage).</summary>
+    public sealed class StoryBackfill
+    {
+        public string Device { get; internal set; }
+        public int Day { get; internal set; }
+        public int Buffered { get; internal set; }
+        public DateTimeOffset First { get; internal set; }
+        public DateTimeOffset Last { get; internal set; }
+        /// <summary>When each buffered reading was taken, oldest first, exactly as the runner reports them (RFC 3339, nanoseconds).</summary>
+        public IReadOnlyList<string> Times { get; internal set; }
+    }
+
+    /// <summary>The sender's own count of one day's restore drain (DEVICE-SIDE): never a platform success numerator.</summary>
+    public sealed class StoryRestoreDrain
+    {
+        public int Day { get; internal set; }
+        public int Offered { get; internal set; }
+        public int Accepted { get; internal set; }
+        public int Refused429 { get; internal set; }
+        public DateTimeOffset? FirstRefusalAt { get; internal set; }
+        public DateTimeOffset? CaughtUpAt { get; internal set; }
+    }
+
     public sealed partial class ScenarioStatus
     {
+        /// <summary>The planted defects this run carries (a TEST CONTROL run when non-empty).</summary>
+        public IReadOnlyList<string> Defects { get; private set; } = Array.Empty<string>();
+        /// <summary>The lowercase hex SHA-256 of the layout the runner generates, or null when the runner reports none.</summary>
+        public string LayoutDigest { get; private set; }
+        public IReadOnlyList<StoryBackfill> Backfill { get; private set; } = Array.Empty<StoryBackfill>();
+        public IReadOnlyList<StoryRestoreDrain> RestoreDrains { get; private set; } = Array.Empty<StoryRestoreDrain>();
         public IReadOnlyList<StoryBeat> Beats { get; private set; } = Array.Empty<StoryBeat>();
         public bool BeatsFromRunner { get; private set; }
         public IReadOnlyList<StoryJob> Jobs { get; private set; } = Array.Empty<StoryJob>();
@@ -75,6 +104,38 @@ namespace DeviceChain.Harborpulse.Model
 
         void ParseMetadata(JsonElement c)
         {
+            if (c.TryGetProperty("defects", out var defects))
+            {
+                var list = new List<string>();
+                foreach (var d in Wire.Array(defects, "defects"))
+                {
+                    if (d.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(d.GetString())) throw new FormatException("defects: expected non-empty strings");
+                    list.Add(d.GetString());
+                }
+                Defects = list.AsReadOnly();
+            }
+            if (c.TryGetProperty("layoutDigest", out _))
+            {
+                var digest = Wire.String(c, "layoutDigest");
+                if (digest.Length != 64 || !System.Text.RegularExpressions.Regex.IsMatch(digest, "^[0-9a-f]{64}$")) throw new FormatException("layoutDigest: expected lowercase hex SHA-256");
+                LayoutDigest = digest;
+            }
+            if (c.TryGetProperty("backfill", out var backfill))
+            {
+                var list = new List<StoryBackfill>();
+                foreach (var b in Wire.Array(backfill, "backfill"))
+                {
+                    var times = new List<string>();
+                    foreach (var t in Wire.Array(Wire.Field(b, "times"), "times"))
+                    {
+                        if (t.ValueKind != JsonValueKind.String) throw new FormatException("backfill.times: expected strings");
+                        times.Add(t.GetString());
+                    }
+                    list.Add(new StoryBackfill { Device = Wire.String(b, "device"), Day = Wire.Int(b, "day"), Buffered = Wire.Int(b, "buffered"),
+                        First = Wire.Time(b, "first").Value, Last = Wire.Time(b, "last").Value, Times = times.AsReadOnly() });
+                }
+                Backfill = list.AsReadOnly();
+            }
             if (c.TryGetProperty("beats", out var beats))
             {
                 var list = new List<StoryBeat>();
@@ -110,6 +171,14 @@ namespace DeviceChain.Harborpulse.Model
                     CreatedAt = Wire.Time(o, "createdAt", true), StartedAt = Wire.Time(o, "startedAt", true), RefusalCode = Wire.String(o, "refusalCode", true) };
                 // the runner states the rollout hour from day 0's midnight: 26 is 02:00 on the night after the run starts
                 if (Ota.ScheduleHour < 0 || Ota.ScheduleHour >= 48) throw new FormatException("ota.scheduleHour outside [0,48)");
+            }
+            if (s5.TryGetProperty("restoreDrains", out var drains))
+            {
+                var list = new List<StoryRestoreDrain>();
+                foreach (var d in Wire.Array(drains, "restoreDrains"))
+                    list.Add(new StoryRestoreDrain { Day = Wire.Int(d, "day"), Offered = Wire.Int(d, "offered"), Accepted = Wire.Int(d, "accepted"),
+                        Refused429 = Wire.Int(d, "refused429"), FirstRefusalAt = Wire.Time(d, "firstRefusalAt", true), CaughtUpAt = Wire.Time(d, "caughtUpAt", true) });
+                RestoreDrains = list.AsReadOnly();
             }
             if (s5.TryGetProperty("replacement", out var r))
             {

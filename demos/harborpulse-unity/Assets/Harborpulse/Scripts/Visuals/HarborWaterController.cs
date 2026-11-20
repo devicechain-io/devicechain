@@ -3,6 +3,8 @@
 
 using System.Collections.Generic;
 using DeviceChain.Harborpulse.Model;
+using DeviceChain.Harborpulse.Model.Director;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -23,7 +25,7 @@ namespace DeviceChain.Harborpulse.Visuals
 
         static readonly int WaveA = Shader.PropertyToID("_WaveA"), WaveB = Shader.PropertyToID("_WaveB"), WaveC = Shader.PropertyToID("_WaveC"),
             WaveD = Shader.PropertyToID("_WaveD"), WaveAmp = Shader.PropertyToID("_WaveAmp"), WaveOmega = Shader.PropertyToID("_WaveOmega");
-        static readonly int TideLevels = Shader.PropertyToID("_TideLevels"), TideSpanAB = Shader.PropertyToID("_TideSpanAB"), TideSpanC = Shader.PropertyToID("_TideSpanC");
+        static readonly int TideLevels = Shader.PropertyToID("_TideLevels"), TideRects = Shader.PropertyToID("_TideRects");
 
         /// <summary>The distances over which the shader fades the waves out (its _WaveFadeStart and _WaveFadeEnd defaults).</summary>
         public const float WaveFadeStart = 250, WaveFadeEnd = 680;
@@ -33,7 +35,8 @@ namespace DeviceChain.Harborpulse.Visuals
         static readonly int WellDiscs = Shader.PropertyToID("_HarborWellDiscs"), WellCount = Shader.PropertyToID("_HarborWellCount");
         readonly Transform near, far;
         readonly List<string> quayOrder = new List<string>();
-        readonly double[] xMin = new double[3], xMax = new double[3], levels = new double[3];
+        readonly double[] levels = new double[3];
+        readonly TideField tideField;
         readonly Material nearMat, farMat;
         readonly Mesh nearMesh, farMesh;
         WaveComponent[] waves = GerstnerWaves.For(0);
@@ -41,35 +44,28 @@ namespace DeviceChain.Harborpulse.Visuals
         Vector3 camera;
 
         /// <param name="plan">The district's three quays and pump footprints; the water orders quays west to east.</param>
-        public HarborWaterController(Transform parent, Shader waterShader, SitePlan plan, float farExtent)
+        public HarborWaterController(Transform parent, Shader waterShader, PresentationMap map, HarborWorld world, float farExtent)
         {
-            var quays = plan.Quays;
-            var discs = new Vector4[3];
-            var count = 0;
-            foreach (var p in plan.Placements)
+            var regions = new List<TideField.Region>();
+            var rects = new Vector4[3];
+            var index = 0;
+            foreach (var q in map.Quays.OrderBy(q => q.Key, System.StringComparer.Ordinal))
             {
-                if (p.Device.Kind != DeviceKind.Pump) continue;
-                if (count == discs.Length) throw new System.ArgumentException("water mask supports at most three wells");
-                var well = new WellFootprint(p.At);
-                discs[count++] = new Vector4((float)well.Center.X, (float)well.Center.Z, (float)WellFootprint.RadiusM, 0);
+                quayOrder.Add(q.Key); var r = new TideField.Region(q.Value); regions.Add(r);
+                rects[index++] = new Vector4((float)r.MinX, (float)r.MinZ, (float)r.MaxX, (float)r.MaxZ);
             }
-            Shader.SetGlobalVectorArray(WellDiscs, discs);
-            Shader.SetGlobalInt(WellCount, count);
-            if (quays.Count != 3) throw new System.ArgumentException("the water shader takes exactly three quays; the layout has " + quays.Count);
+            tideField = new TideField(regions);
+            Shader.SetGlobalVectorArray(TideRects, rects);
+            var discs = new Vector4[3]; var count = 0;
+            foreach (var rig in world.Rigs)
+            {
+                if (rig.Placement.Device.Kind != DeviceKind.Pump) continue;
+                var well = rig.Root.TransformPoint(new Vector3(9, 0, 6));
+                discs[count++] = new Vector4(well.x, well.z, (float)WellFootprint.RadiusM, 0);
+            }
+            Shader.SetGlobalVectorArray(WellDiscs, discs); Shader.SetGlobalInt(WellCount, count);
             var shader = waterShader != null ? waterShader : Shader.Find("Harborpulse/Water");
-            if (shader == null) throw new System.InvalidOperationException("the Harborpulse/Water shader is missing from the project");
-            var ordered = new List<QuayPlan>(quays);
-            ordered.Sort((a, b) => a.CenterX.CompareTo(b.CenterX));
-            for (var i = 0; i < 3; i++)
-            {
-                quayOrder.Add(ordered[i].Token);
-                xMin[i] = ordered[i].XMin;
-                xMax[i] = ordered[i].XMax;
-                if (i > 0 && xMin[i] <= xMax[i - 1]) throw new System.ArgumentException("quays " + ordered[i - 1].Token + " and " + ordered[i].Token + " overlap");
-            }
-
-            Shader.SetGlobalVector(TideSpanAB, new Vector4((float)xMin[0], (float)xMax[0], (float)xMin[1], (float)xMax[1]));
-            Shader.SetGlobalVector(TideSpanC, new Vector4((float)xMin[2], (float)xMax[2], 0, 0));
+            if (shader == null) throw new System.InvalidOperationException("Harborpulse/Water shader missing");
 
             nearMat = new Material(shader) { name = "Harbor/water near" };
             nearMat.SetFloat(Displace, 1);
@@ -206,7 +202,7 @@ namespace DeviceChain.Harborpulse.Visuals
         /// </summary>
         public float SurfaceAt(float x, float z)
         {
-            var tide = TideProfile.LevelAt(x, xMin, xMax, levels);
+            var tide = tideField.LevelAt(x, z, levels);
             var dist = Vector2.Distance(new Vector2(x, z), new Vector2(camera.x, camera.z));
             var fade = 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(WaveFadeStart, WaveFadeEnd, dist));
             GerstnerWaves.Displace(waves, x, z, time, out _, out var dy, out _);

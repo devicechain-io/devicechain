@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System.Collections.Generic;
+using System.Linq;
 using DeviceChain.Harborpulse.Model;
 using UnityEngine;
 
@@ -20,7 +21,7 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly HarborMaterials mats;
         readonly Transform feeder, rain;
         TruckView truck;
-        public HarborViews(HarborWorld world, SitePlan plan, HarborMaterials mats)
+        public HarborViews(HarborWorld world, HarborMaterials mats)
         {
             this.mats = mats;
             foreach (var r in world.Rigs)
@@ -32,7 +33,7 @@ namespace DeviceChain.Harborpulse.Visuals
                     case DeviceKind.Charger: chargers.Add(id, new ChargerView(r, mats)); break;
                     case DeviceKind.Light: lamps.Add(id, new LampView(r, mats)); break;
                     case DeviceKind.Truck: truck = new TruckView(r); break;
-                    default: if (DeviceKind.IsGauge(r.Placement.Device.Kind)) gauges.Add(id, new GaugeView(r, mats, plan.WallZ)); break;
+                    default: if (DeviceKind.IsGauge(r.Placement.Device.Kind)) gauges.Add(id, new GaugeView(r, mats, 0)); break;
                 }
             }
             var rainMesh = new MeshKit();
@@ -43,23 +44,29 @@ namespace DeviceChain.Harborpulse.Visuals
                 rainMesh.Rod(a, a + new Vector3(-0.10f, -0.6f, 0), 0.008f);
             }
             rain = rainMesh.Spawn("WORLD Rain", world.Root, mats.WorldCue, false).transform;
-            var eastLamp = plan.Find("PAW-LIGHT-EAST-3");
+            var eastLamp = world.Rigs.First(r => r.Placement.Device.ExternalId == "PAW-LIGHT-EAST-3").Placement;
             var cab = AssetRig.Node("FeederCabinet", world.Root, new Vector3((float)eastLamp.At.X + 5, (float)SitePlan.DeckHeightM, (float)eastLamp.At.Z + 1));
             new MeshKit().Box(Vector3.up * 0.8f, new Vector3(1.1f, 1.6f, 0.6f)).Spawn("Cabinet", cab, mats.Steel);
             feeder = new MeshKit().Ball(Vector3.zero, 0.12f).Spawn("FeederDown", cab, mats.WorldCue, false).transform; feeder.localPosition = new Vector3(0, 1.3f, 0.36f);
             AssetRig.Tag("feeder down (WORLD)", feeder, Vector3.up * 0.3f);
-            foreach (var placement in plan.Placements)
+            foreach (var rig in world.Rigs)
+            {
+                var placement = rig.Placement;
             {
                 if (placement.Device.Kind != DeviceKind.Gauge) continue;
-                var q = plan.Quay(placement.Device.Quay);
+                var localFrame = world.Frames[placement.Device.Quay];
+                var anchor = localFrame.Local(rig.Root.position);
                 var x = (float)placement.At.X;
                 var spray = new MeshKit();
                 for (var i = 0; i < 30; i++) spray.Rod(new Vector3(i * 2, 0, 0), new Vector3(i * 2 - 0.5f, 1 + i % 4 * 0.3f, -0.6f), 0.035f);
                 var t = spray.Spawn("SeawallSpray", world.Root, mats.WorldCue, false).transform;
-                t.position = new Vector3(x - 30, 2.8f, (float)plan.WallZ + 0.6f);
+                t.position = localFrame.World(new Vector3(anchor.x - 10, 2.8f, .6f));
+                t.rotation = localFrame.Rotation;
                 var over = new MeshKit().Box(Vector3.zero, new Vector3(65, 0.04f, 4)).Spawn("ObservedOvertopping", world.Root, mats.Flow, false).transform;
-                over.position = new Vector3(x, (float)SitePlan.DeckHeightM + 0.08f, (float)plan.WallZ - 2);
-                sea.Add((q.Token, t, over));
+                over.position = localFrame.World(new Vector3(anchor.x, (float)SitePlan.DeckHeightM + .08f, -2));
+                over.rotation = localFrame.Rotation;
+                sea.Add((placement.Device.Quay, t, over));
+            }
             }
         }
         public void Apply(HarborFrame f, SkyState sky, Vector3 camera, float dt, float time)

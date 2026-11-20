@@ -9,12 +9,14 @@ namespace DeviceChain.Harborpulse.Visuals
 {
     public static class QuayBuilder
     {
-        public static void Build(SitePlan plan, Transform root, HarborMaterials m)
+        public static void Build(DeviceChain.Harborpulse.Model.Director.PresentationMap map, Transform root, HarborMaterials m)
         {
-            foreach (var q in plan.Quays)
+            foreach (var token in map.Quays.Keys)
             {
-                var t = AssetRig.Node(q.Name, root, Vector3.zero);
-                var wall = (float)plan.WallZ; var deck = (float)SitePlan.DeckHeightM;
+                var frame = new QuayFrame(map, token);
+                var q = new { Token = token, XMin = -frame.Length / 2, XMax = frame.Length / 2, CenterX = 0f };
+                var t = frame.Parent(root, token);
+                var wall = 0f; var deck = (float)SitePlan.DeckHeightM;
                 var kits = new MeshKit[6]; for (var i = 0; i < kits.Length; i++) kits[i] = new MeshKit();
                 for (var row = 0; row < 18; row++)
                 {
@@ -34,7 +36,7 @@ namespace DeviceChain.Harborpulse.Visuals
                     steel.Cylinder(new Vector3(x, deck + 0.5f, wall - 0.9f), 0.28f, 0.65f, 10, 0.35f);
                     timber.Box(new Vector3(x + 14, deck - 1.6f, wall + 0.35f), new Vector3(0.45f, 4.6f, 0.4f));
                 }
-                var jx = (float)q.CenterX + 30; var end = wall + (float)SitePlan.JettyLengthM;
+                var jx = (float)q.CenterX + 30; var end = wall + (float)18;
                 timber.Slab(jx - 2.2f, jx + 2.2f, wall, end + 2, deck - 0.1f, deck + 0.15f);
                 for (var z = wall + 6; z < end + 2; z += 7)
                     for (var s = -1; s <= 1; s += 2) timber.Cylinder(new Vector3(jx + s * 1.9f, -6.5f, z), 0.22f, deck + 7.4f, 8);
@@ -59,9 +61,9 @@ namespace DeviceChain.Harborpulse.Visuals
                     // Enclose the dock with two arms; the opening remains navigable.
                     foreach (var x in new[] { (float)q.XMin, (float)q.XMax })
                     {
-                        new MeshKit().Box(new Vector3(x, -1, wall + 45), new Vector3(5, 7, 90)).Spawn("DockArm", t, m.Stone);
-                        for (var z = wall + 3; z < wall + 90; z += 5) steel.Cylinder(new Vector3(x, deck, z), 0.05f, 1.1f, 6);
-                        steel.Rod(new Vector3(x, deck + 1.1f, wall), new Vector3(x, deck + 1.1f, wall + 90));
+                        new MeshKit().Box(new Vector3(x, -1, wall + 12), new Vector3(3, 7, 24)).Spawn("DockArm", t, m.Stone);
+                        for (var z = wall + 3; z < wall + 24; z += 5) steel.Cylinder(new Vector3(x, deck, z), 0.05f, 1.1f, 6);
+                        steel.Rod(new Vector3(x, deck + 1.1f, wall), new Vector3(x, deck + 1.1f, wall + 24));
                     }
                 }
                 steel.Spawn("BollardsLaddersRailings", t, m.DarkSteel); timber.Spawn("JettyFenders", t, m.Timber);

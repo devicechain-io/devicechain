@@ -425,7 +425,8 @@
           "source": "PLATFORM",
           "slot": "none-work",
           "lines": [
-            "No notification so far during the work."
+            "No notification recorded",
+            "while the work is on."
           ],
           "needs": {
             "all": [
@@ -522,7 +523,7 @@
           {
             "id": "none",
             "family": "other",
-            "label": "No notification during the window",
+            "label": "No notification recorded in the window",
             "source": "PLATFORM",
             "needs": {
               "all": [
@@ -1587,7 +1588,7 @@
     },
     {
       "id": "4b",
-      "priority": 95,
+      "priority": 82,
       "windowSim": [
         19,
         20.55
@@ -1770,16 +1771,14 @@
                 "alarm": {
                   "key": "light-silent",
                   "status": "RAISED",
-                  "mode": "occurred",
-                  "cycle": "$trigger.cycle"
+                  "mode": "occurred"
                 }
               },
               {
                 "alarm": {
                   "key": "charger-offline",
                   "status": "RAISED",
-                  "mode": "occurred",
-                  "cycle": "$trigger.cycle"
+                  "mode": "occurred"
                 }
               }
             ]
@@ -1802,16 +1801,14 @@
                     "alarm": {
                       "key": "light-silent",
                       "status": "RAISED",
-                      "mode": "occurred",
-                      "cycle": "$trigger.cycle"
+                      "mode": "occurred"
                     }
                   },
                   {
                     "alarm": {
                       "key": "charger-offline",
                       "status": "RAISED",
-                      "mode": "occurred",
-                      "cycle": "$trigger.cycle"
+                      "mode": "occurred"
                     }
                   }
                 ]
@@ -1819,8 +1816,7 @@
               "expected": {
                 "membership": {
                   "identity": "east-absence",
-                  "mode": "occurred",
-                  "cycle": "$trigger.cycle"
+                  "mode": "current"
                 }
               },
               "field": "device",
@@ -1848,16 +1844,14 @@
                 "alarm": {
                   "key": "light-silent",
                   "status": "RAISED",
-                  "mode": "occurred",
-                  "cycle": "$trigger.cycle"
+                  "mode": "occurred"
                 }
               },
               {
                 "alarm": {
                   "key": "charger-offline",
                   "status": "RAISED",
-                  "mode": "occurred",
-                  "cycle": "$trigger.cycle"
+                  "mode": "occurred"
                 }
               }
             ]
@@ -1894,16 +1888,14 @@
                       "alarm": {
                         "key": "light-silent",
                         "status": "RAISED",
-                        "mode": "occurred",
-                        "cycle": "$trigger.cycle"
+                        "mode": "occurred"
                       }
                     },
                     {
                       "alarm": {
                         "key": "charger-offline",
                         "status": "RAISED",
-                        "mode": "occurred",
-                        "cycle": "$trigger.cycle"
+                        "mode": "occurred"
                       }
                     }
                   ]
@@ -1911,8 +1903,7 @@
                 "expected": {
                   "membership": {
                     "identity": "east-absence",
-                    "mode": "occurred",
-                    "cycle": "$trigger.cycle"
+                    "mode": "current"
                   }
                 },
                 "field": "device",
@@ -1938,7 +1929,6 @@
                     "device": "hp-light-east-1",
                     "key": "light-silent",
                     "status": "RAISED",
-                    "cycle": "$trigger.cycle",
                     "as": "absence"
                   }
                 },
@@ -1969,7 +1959,6 @@
                     "device": "hp-light-east-1",
                     "key": "light-silent",
                     "status": "RAISED",
-                    "cycle": "$trigger.cycle",
                     "as": "absence"
                   }
                 },
@@ -2466,7 +2455,7 @@
               "present": [
                 "signer"
               ],
-              "mode": "occurred",
+              "mode": "current",
               "cycle": "$trigger.cycle",
               "fields": {
                 "rolloutToken": "$trigger.identity",
@@ -2499,13 +2488,12 @@
           "needs": {
             "target": {
               "status": "SUCCEEDED",
-              "mode": "occurred",
+              "mode": "current",
               "cycle": "$trigger.cycle",
               "fields": {
                 "rolloutToken": "$trigger.identity",
                 "artifactToken": "$trigger.artifactToken"
-              },
-              "attempt": "$trigger.attempt"
+              }
             }
           },
           "holdS": 3
@@ -2530,8 +2518,7 @@
               "device": "hp-charger-north-1",
               "status": "FAILED",
               "mode": "occurred",
-              "cycle": "$trigger.cycle",
-              "attempt": "$trigger.attempt"
+              "cycle": "$trigger.cycle"
             }
           },
           "holdS": 3
@@ -2553,8 +2540,7 @@
               "fields": {
                 "rolloutToken": "$trigger.identity",
                 "artifactToken": "$trigger.artifactToken"
-              },
-              "attempt": "$trigger.attempt"
+              }
             }
           },
           "holdS": 3
@@ -2582,7 +2568,7 @@
                   "status": "FAILED",
                   "mode": "occurred",
                   "cycle": "$trigger.cycle",
-                  "attempt": "$trigger.attempt"
+                  "as": "failure"
                 }
               },
               {
@@ -2597,7 +2583,7 @@
                   "key": "power_kw",
                   "mode": "occurred",
                   "cycle": "$trigger.cycle",
-                  "attempt": "$trigger.attempt"
+                  "attempt": "$match.failure.attempt"
                 }
               }
             ]
@@ -2638,7 +2624,7 @@
                 "refused": "refused",
                 "cap": "maxInFlight"
               },
-              "status": "TERMINAL",
+              "status": "COUNTS",
               "mode": "occurred",
               "cycle": "$trigger.cycle",
               "identity": "$trigger.identity"
@@ -2660,7 +2646,7 @@
                 "present": [
                   "signer"
                 ],
-                "mode": "occurred",
+                "mode": "current",
                 "cycle": "$trigger.cycle",
                 "fields": {
                   "rolloutToken": "$trigger.identity",
@@ -2695,13 +2681,12 @@
             "needs": {
               "target": {
                 "status": "SUCCEEDED",
-                "mode": "occurred",
+                "mode": "current",
                 "cycle": "$trigger.cycle",
                 "fields": {
                   "rolloutToken": "$trigger.identity",
                   "artifactToken": "$trigger.artifactToken"
-                },
-                "attempt": "$trigger.attempt"
+                }
               }
             }
           },
@@ -2721,8 +2706,7 @@
                 "device": "hp-charger-north-1",
                 "status": "FAILED",
                 "mode": "occurred",
-                "cycle": "$trigger.cycle",
-                "attempt": "$trigger.attempt"
+                "cycle": "$trigger.cycle"
               }
             }
           }

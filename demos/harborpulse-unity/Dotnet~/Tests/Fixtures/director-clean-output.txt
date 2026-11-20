@@ -21,9 +21,9 @@
 309|2|shot|2c|
 310|2|caption|The fault is still detected.|3:run5:alarm34:alarm:hp-light-east-3:lamp-flicker15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:6:RAISED8:PLATFORM
 313|2|caption-end|fault|
-313|2|caption|No notification so far during the work.|3:run6:window16:service-this-run15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:6:ACTIVE8:PLATFORM
+313|2|caption|No notification recorded / while the work is on.|3:run6:window16:service-this-run15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:6:ACTIVE8:PLATFORM
 330|2|node|none|3:run6:window16:service-this-run15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:5:ENDED8:PLATFORM
-330|2|node-label|No notification during the window|3:run6:window16:service-this-run15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:5:ENDED8:PLATFORM
+330|2|node-label|No notification recorded in the window|3:run6:window16:service-this-run15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:5:ENDED8:PLATFORM
 330|2|link|fault->none|
 330|2|caption-end|none-work|
 330|2|shot|2d|
@@ -182,7 +182,7 @@
 1236|8|shot|8d|
 1237|8|caption|Rollout done. Nothing hidden.|3:run7:rollout16:rollout-this-run0:0:9:ota-cycle0:11:ota-attempt8:TERMINAL8:PLATFORM
 1240|8|caption-end|done|
-1240|8|caption|5 updated · 1 refused / concurrency limit 2|3:run7:rollout16:rollout-this-run0:0:9:ota-cycle0:11:ota-attempt8:TERMINAL8:PLATFORM
+1240|8|caption|5 updated · 1 refused / concurrency limit 2|3:run7:rollout16:rollout-this-run0:0:9:ota-cycle0:11:ota-attempt6:COUNTS8:PLATFORM
 1244|8|caption-end|ota-summary|
 1245|9|shot|9a|
 1245|9|caption|Every rule you saw was written and / published by a person.|
