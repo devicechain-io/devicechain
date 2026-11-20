@@ -85,10 +85,16 @@ func holdSource(seq uint64, delivery int, ack *beatAck) messaging.Message {
 // startHoldProcessor starts a processor over w whose placement check answers ready().
 func startHoldProcessor(t *testing.T, w messaging.OrderedWriter, ready func(string) error) *InboundEventsProcessor {
 	t.Helper()
+	return startHoldProcessorWith(t, w, ready, ResolveMetrics{})
+}
+
+// startHoldProcessorWith is startHoldProcessor with the given instruments.
+func startHoldProcessorWith(t *testing.T, w messaging.OrderedWriter, ready func(string) error, metrics ResolveMetrics) *InboundEventsProcessor {
+	t.Helper()
 	failed := newPlacementWriter(func(messaging.Message) error { return nil })
 	iproc := NewInboundEventsProcessor(&core.Microservice{InstanceId: "inst", FunctionalArea: "device-management"},
 		[]messaging.MessageReader{&sliceReader{}}, w, failed, core.NewNoOpLifecycleCallbacks(), nil,
-		config.AuthModeOptional, time.Duration(config.DefaultMaxEventFutureSkewSeconds)*time.Second, ResolveMetrics{},
+		config.AuthModeOptional, time.Duration(config.DefaultMaxEventFutureSkewSeconds)*time.Second, metrics,
 		WithPlacementCheck(ready))
 	iproc.placementHoldBeat, iproc.placementHoldPoll = 5*time.Millisecond, 5*time.Millisecond
 	require.NoError(t, iproc.Initialize(context.Background()))

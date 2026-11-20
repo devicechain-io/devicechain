@@ -48,6 +48,49 @@ import (
 // placementHoldLimit bounds the sources one processor run watches.
 const placementHoldLimit = 4096
 
+// defaultPlacementHoldMaxAge bounds how long one source is held, from its FIRST hold. A placement
+// that has not returned by then is not a blip, and a tenant whose placement never returns must
+// not keep spending the placementHoldLimit slots other tenants' final deliveries need. Past it
+// the source falls back to the unheld behaviour: left unacked, then recorded by the max-delivery
+// recorder. A source whose outputs are queued or being re-sent is judged only once idle again.
+const defaultPlacementHoldMaxAge = 15 * time.Minute
+
+// placementErrorLogEvery spaces the hold's "full" and "not wired" errors; what is held back in
+// between is counted and reported with the next one.
+const placementErrorLogEvery = time.Minute
+
+// Reasons, on the fallback counter, that a final delivery was not held or stopped being held. Each
+// is left unacked for the max-delivery recorder.
+const (
+	placementFallbackFull     = "full"     // the hold was full
+	placementFallbackExpired  = "expired"  // held past the maximum age
+	placementFallbackReleased = "released" // a re-send failed for a reason that is not placement
+	placementFallbackShutdown = "shutdown" // the run stopped while it was held
+)
+
+// logLimiter lets one log line through per placementErrorLogEvery and counts the rest.
+type logLimiter struct {
+	mu         sync.Mutex
+	last       time.Time
+	suppressed int
+}
+
+// allow reports whether to log at now, and how many were held back since the last one logged.
+func (l *logLimiter) allow(now time.Time) (bool, int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.last.IsZero() && now.Sub(l.last) < placementErrorLogEvery {
+		l.suppressed++
+		return false, 0
+	}
+	n := l.suppressed
+	l.last, l.suppressed = now, 0
+	return true, n
+}
+
+// unwiredLog limits the "no placement hold is wired" error, which has no hold to keep it on.
+var unwiredLog logLimiter
+
 // heldOutput is a refused output kept for re-sending: its place in the source's fan-out and the
 // resolved event itself.
 type heldOutput struct {
@@ -57,9 +100,10 @@ type heldOutput struct {
 
 // holdEntry is one watched source. idle: every output has settled and some were refused, so it
 // waits for placement; otherwise its outputs are in flight (first attempt, queued, or re-sent).
-// held: it has been refused at least once (the gauge counts it).
+// held: it has been refused at least once (the gauge counts it), first at since.
 type holdEntry struct {
 	idle, held bool
+	since      time.Time
 }
 
 type placementHolds struct {
@@ -71,19 +115,35 @@ type placementHolds struct {
 	entries map[*ackCoord]*holdEntry
 	queue   chan *ackCoord
 
-	check  func(tenant string) error
-	gauge  prometheus.Gauge
-	gaveUp prometheus.Counter
+	check    func(tenant string) error
+	gauge    prometheus.Gauge
+	fallback *prometheus.CounterVec
+	maxAge   time.Duration
+	fullLog  logLimiter
 }
 
-// startPlacementHolds starts the hold of one processor run: a loop that beats and polls, and
-// a worker that re-sends with send. send must return false once it gave up (shutdown).
-func startPlacementHolds(check func(string) error, gauge prometheus.Gauge, gaveUp prometheus.Counter,
-	beat, poll time.Duration, send func(ctx context.Context, item resolvedItem) bool) *placementHolds {
+// placementHoldConfig is a hold's wiring and timing. Zero durations take the defaults: beats every
+// AckWait/3, polls every second, a maximum age of defaultPlacementHoldMaxAge. Nil instruments are
+// supported.
+type placementHoldConfig struct {
+	check      func(tenant string) error
+	gauge      prometheus.Gauge
+	fallback   *prometheus.CounterVec // label: reason
+	beat, poll time.Duration
+	maxAge     time.Duration
+}
+
+// startPlacementHolds starts the hold of one processor run: a loop that beats, expires and polls,
+// and a worker that re-sends with send. send must return false once it gave up (shutdown).
+func startPlacementHolds(cfg placementHoldConfig, send func(ctx context.Context, item resolvedItem) bool) *placementHolds {
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &placementHolds{ctx: ctx, cancel: cancel, done: make(chan struct{}),
 		entries: make(map[*ackCoord]*holdEntry), queue: make(chan *ackCoord, placementHoldLimit),
-		check: check, gauge: gauge, gaveUp: gaveUp}
+		check: cfg.check, gauge: cfg.gauge, fallback: cfg.fallback, maxAge: cfg.maxAge}
+	if h.maxAge <= 0 {
+		h.maxAge = defaultPlacementHoldMaxAge
+	}
+	beat, poll := cfg.beat, cfg.poll
 	if beat <= 0 {
 		beat = messaging.AckWait / 3
 	}
@@ -100,7 +160,14 @@ func startPlacementHolds(check func(string) error, gauge prometheus.Gauge, gaveU
 			case <-ctx.Done():
 				return
 			case c := <-h.queue:
-				h.resend(c, send)
+				// Only a held entry is queued, and only an idle one expires; a queued entry that
+				// is no longer in the table is not re-sent.
+				h.mu.Lock()
+				_, held := h.entries[c]
+				h.mu.Unlock()
+				if held {
+					h.resend(c, send)
+				}
 			}
 		}
 	}()
@@ -115,11 +182,10 @@ func startPlacementHolds(check func(string) error, gauge prometheus.Gauge, gaveU
 				held++
 			}
 		}
+		// Counted before the gauge drops, so the two never disagree.
+		h.countFallback(placementFallbackShutdown, held)
 		if h.gauge != nil {
 			h.gauge.Sub(float64(held))
-		}
-		if h.gaveUp != nil {
-			h.gaveUp.Add(float64(held))
 		}
 		clear(h.entries)
 		h.mu.Unlock()
@@ -152,8 +218,10 @@ func (h *placementHolds) watch(c *ackCoord) {
 // recorder. The caller holds c.mu.
 func (h *placementHolds) hold(c *ackCoord) bool {
 	if h == nil {
-		log.Error().Str("tenant", c.tenant).
-			Msg("A final delivery's resolved event was refused for shard placement and no placement hold is wired; leaving it unacked for the max-delivery recorder.")
+		if ok, suppressed := unwiredLog.allow(time.Now()); ok {
+			log.Error().Str("tenant", c.tenant).Int("suppressed", suppressed).
+				Msg("A final delivery's resolved event was refused for shard placement and no placement hold is wired; leaving it unacked for the max-delivery recorder.")
+		}
 		return false
 	}
 	h.mu.Lock()
@@ -164,10 +232,10 @@ func (h *placementHolds) hold(c *ackCoord) bool {
 	e, ok := h.entries[c]
 	if !ok {
 		if len(h.entries) >= placementHoldLimit {
-			log.Error().Str("tenant", c.tenant).Int("limit", placementHoldLimit).
-				Msg("Resolved-event placement hold is full; leaving the final delivery unacked for the max-delivery recorder.")
-			if h.gaveUp != nil {
-				h.gaveUp.Inc()
+			h.countFallback(placementFallbackFull, 1)
+			if ok, suppressed := h.fullLog.allow(time.Now()); ok {
+				log.Error().Str("tenant", c.tenant).Int("limit", placementHoldLimit).Int("suppressed", suppressed).
+					Msg("Resolved-event placement hold is full; leaving the final delivery unacked for the max-delivery recorder.")
 			}
 			return false
 		}
@@ -178,7 +246,7 @@ func (h *placementHolds) hold(c *ackCoord) bool {
 	}
 	e.idle = true
 	if !e.held {
-		e.held = true
+		e.held, e.since = true, time.Now()
 		if h.gauge != nil {
 			h.gauge.Inc()
 		}
@@ -189,6 +257,18 @@ func (h *placementHolds) hold(c *ackCoord) bool {
 // finish ends c's watch, if it has one, and reports whether c had been held. It is called
 // before the source is acked, so no beat follows the ack.
 func (h *placementHolds) finish(c *ackCoord) bool {
+	return h.end(c, "")
+}
+
+// release ends c's watch on a failure the hold cannot cure, counting a source it had held as
+// fallen back.
+func (h *placementHolds) release(c *ackCoord) {
+	h.end(c, placementFallbackReleased)
+}
+
+// end removes c's entry; a held one is counted under reason (if any) BEFORE the gauge drops, so
+// the two never disagree.
+func (h *placementHolds) end(c *ackCoord, reason string) bool {
 	if h == nil {
 		return false
 	}
@@ -199,17 +279,47 @@ func (h *placementHolds) finish(c *ackCoord) bool {
 		return false
 	}
 	delete(h.entries, c)
-	if e.held && h.gauge != nil {
-		h.gauge.Dec()
+	if e.held {
+		if reason != "" {
+			h.countFallback(reason, 1)
+		}
+		if h.gauge != nil {
+			h.gauge.Dec()
+		}
 	}
 	return e.held
 }
 
-// release ends c's watch on a failure the hold cannot cure, counting a source it had held as
-// given up.
-func (h *placementHolds) release(c *ackCoord) {
-	if h.finish(c) && h.gaveUp != nil {
-		h.gaveUp.Inc()
+func (h *placementHolds) countFallback(reason string, n int) {
+	if h.fallback != nil && n > 0 {
+		h.fallback.WithLabelValues(reason).Add(float64(n))
+	}
+}
+
+// expire gives up on held sources older than maxAge (from their first hold). It drops them from
+// the table, so they are no longer beaten and free their slot, WITHOUT acking: each is left to
+// exhaust and be recorded by the max-delivery recorder, exactly as an unheld one. A source that is
+// not idle (its outputs are queued, being re-sent, or settling) is not expired: the hold stays its
+// heartbeat owner until it settles or is held again, and it is judged on a later poll.
+func (h *placementHolds) expire(now time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	expired := 0
+	var tenant string
+	for c, e := range h.entries {
+		if e.held && e.idle && now.Sub(e.since) >= h.maxAge {
+			delete(h.entries, c)
+			expired++
+			tenant = c.tenant
+			h.countFallback(placementFallbackExpired, 1)
+			if h.gauge != nil {
+				h.gauge.Dec()
+			}
+		}
+	}
+	if expired > 0 {
+		log.Warn().Str("tenant", tenant).Int("expired", expired).Dur("maxAge", h.maxAge).
+			Msg("Resolved-event placement holds exceeded their maximum age; leaving the final deliveries unacked for the max-delivery recorder.")
 	}
 }
 
@@ -230,6 +340,7 @@ func (h *placementHolds) loop(beat, poll time.Duration) {
 			}
 			h.mu.Unlock()
 		case <-polls.C:
+			h.expire(time.Now())
 			h.mu.Lock()
 			var idle []*ackCoord
 			for c, e := range h.entries {

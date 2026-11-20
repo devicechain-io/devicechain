@@ -229,6 +229,7 @@ type InboundEventsProcessor struct {
 	placementCheck                       func(tenant string) error
 	placementHolds                       *placementHolds
 	placementHoldBeat, placementHoldPoll time.Duration
+	placementHoldMaxAge                  time.Duration
 
 	lifecycle core.LifecycleManager
 }
@@ -324,10 +325,10 @@ type ResolveMetrics struct {
 	// placementHeld is how many sources are held because their final delivery's resolved
 	// events were refused for shard placement (placement_hold.go). Nil in a zero ResolveMetrics.
 	placementHeld prometheus.Gauge
-	// placementGaveUp counts held sources the hold could not finish: over its limit, released
-	// by a failure that is not a placement refusal, or abandoned at shutdown. Each is left
-	// unacked on its final delivery, for the max-delivery recorder.
-	placementGaveUp prometheus.Counter
+	// placementFallback counts, by reason, final deliveries refused for placement that the hold
+	// did not take (full) or stopped holding (expired, released by another failure, shutdown).
+	// Each is left unacked on its final delivery, for the max-delivery recorder.
+	placementFallback *prometheus.CounterVec
 }
 
 // NewResolveMetrics builds the inbound resolve loop's instruments.
@@ -376,8 +377,9 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 			"Resolved-envelope rounds a duplicate answer named whose message retention had already evicted, so the walk stepped past them: the stream holds less than one duplicate window of messages"),
 		placementHeld: ms.NewGauge("resolve_placement_held_sources",
 			"Inbound messages on their final delivery held because resolved-events placement is unavailable for their tenant; each is published once placement answers again"),
-		placementGaveUp: ms.NewCounter("resolve_placement_hold_given_up_total",
-			"Inbound messages held for resolved-events placement on their final delivery that the hold could not finish (hold full, another failure, or shutdown); each is left to the max-delivery recorder"),
+		placementFallback: ms.NewCounterVec("resolve_placement_hold_fallback_total",
+			"Inbound final deliveries refused for resolved-events placement that the hold did not take (reason full) or stopped holding (expired, released, shutdown); each is left unacknowledged for the max-delivery recorder",
+			[]string{"reason"}),
 		workers: ms.NewGauge("resolve_workers",
 			"Resolvers this pod runs (resolution.workers). resolve_inflight held at this value means every resolver is busy and inbound events are queueing in front of them."),
 	}
@@ -1247,8 +1249,9 @@ func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
 	// The hold of final deliveries refused for placement re-sends on the resolved channel, which
 	// the resolved loop below drains until ExecuteStop closes it, after joining the hold.
 	if iproc.placementCheck != nil {
-		iproc.placementHolds = startPlacementHolds(iproc.placementCheck, iproc.metrics.placementHeld,
-			iproc.metrics.placementGaveUp, iproc.placementHoldBeat, iproc.placementHoldPoll,
+		iproc.placementHolds = startPlacementHolds(placementHoldConfig{check: iproc.placementCheck,
+			gauge: iproc.metrics.placementHeld, fallback: iproc.metrics.placementFallback,
+			beat: iproc.placementHoldBeat, poll: iproc.placementHoldPoll, maxAge: iproc.placementHoldMaxAge},
 			func(ctx context.Context, item resolvedItem) bool {
 				select {
 				case iproc.resolved <- item:

@@ -118,7 +118,7 @@ func TestStopWhileHeldLeavesTheSourceUnacked(t *testing.T) {
 // max-delivery recorder) rather than grow without limit.
 func TestThePlacementHoldIsBounded(t *testing.T) {
 	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "held"})
-	h := startPlacementHolds(func(string) error { return unplaced() }, gauge, nil, time.Hour, time.Hour,
+	h := startPlacementHolds(placementHoldConfig{check: func(string) error { return unplaced() }, gauge: gauge, beat: time.Hour, poll: time.Hour},
 		func(context.Context, resolvedItem) bool { return false })
 	defer func() { h.cancel(); <-h.done }()
 	coord := func(seq uint64) *ackCoord {
@@ -311,7 +311,7 @@ func TestHeldSourcesKeepTheirIdentity(t *testing.T) {
 // A settle that arrives after the stop began holds nothing (no new work for a run that is
 // ending), while a durable one still acks its source.
 func TestALateSettleAfterStopHoldsNothing(t *testing.T) {
-	h := startPlacementHolds(func(string) error { return nil }, nil, nil, time.Hour, time.Hour,
+	h := startPlacementHolds(placementHoldConfig{check: func(string) error { return nil }, beat: time.Hour, poll: time.Hour},
 		func(context.Context, resolvedItem) bool { return true })
 	h.cancel()
 	<-h.done
@@ -402,7 +402,7 @@ func TestStopWaitsForTheHoldsGoroutines(t *testing.T) {
 // A watched final delivery is renewed the moment it is watched, not at the next beat (AckWait/3
 // in production): it may already have spent most of its AckWait waiting for a resolver.
 func TestAWatchedFinalDeliveryIsRenewedAtOnce(t *testing.T) {
-	h := startPlacementHolds(func(string) error { return nil }, nil, nil, time.Hour, time.Hour,
+	h := startPlacementHolds(placementHoldConfig{check: func(string) error { return nil }, beat: time.Hour, poll: time.Hour},
 		func(context.Context, resolvedItem) bool { return true })
 	defer func() { h.cancel(); <-h.done }()
 	ack := &beatAck{}

@@ -12,11 +12,13 @@ import (
 var knownRawCapChecks = map[deliveryCapSite]string{}
 
 var sanctionedFinalDeliveryCallers = map[deliveryCapSite]string{
-	{"backend/services/event-processing/processor/react_dispatcher.go", "ReactDispatcher.dispatch"}:      "Classifies a react.Result rather than an error.",
-	{"backend/services/outbound-connectors/processor/consumer.go", "DispatchConsumer.retryOrDeadLetter"}: "The deadLetter helper owns the tenant decision.",
-	{"backend/services/outbound-connectors/processor/consumer.go", "DispatchConsumer.deadLetter"}:        "Bounds write attempts on the final delivery.",
-	{"backend/services/event-sources/processor/gateway_jetstream.go", "GatewayJetStreamSource.settler"}:  "The gateway's give-up protocol may leave poison unacked.",
-	{"backend/services/outbound-connectors/lpwan/adapter.go", "Adapter.handle"}:                          "No handling error: a cancelled capacity wait refuses the command as unsent on the final delivery.",
+	{"backend/services/event-processing/processor/react_dispatcher.go", "ReactDispatcher.dispatch"}:       "Classifies a react.Result rather than an error.",
+	{"backend/services/outbound-connectors/processor/consumer.go", "DispatchConsumer.retryOrDeadLetter"}:  "The deadLetter helper owns the tenant decision.",
+	{"backend/services/outbound-connectors/processor/consumer.go", "DispatchConsumer.deadLetter"}:         "Bounds write attempts on the final delivery.",
+	{"backend/services/event-sources/processor/gateway_jetstream.go", "GatewayJetStreamSource.settler"}:   "The gateway's give-up protocol may leave poison unacked.",
+	{"backend/services/outbound-connectors/lpwan/adapter.go", "Adapter.handle"}:                           "No handling error: a cancelled capacity wait refuses the command as unsent on the final delivery.",
+	{"backend/services/device-management/processor/inbound.go", "InboundEventsProcessor.settleResolved"}:  "Holds a final delivery whose resolved fan-out was refused only for shard placement; every other outcome keeps the unacked give-up.",
+	{"backend/services/device-management/processor/inbound.go", "InboundEventsProcessor.OnResolvedEvent"}: "Watches a final delivery for the placement hold before its fan-out is published; it judges no error.",
 }
 
 var sanctionedDisposeCallers = map[deliveryCapSite]string{
