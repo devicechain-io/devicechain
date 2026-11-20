@@ -32,6 +32,8 @@ type fakeBackend struct {
 	failures     atomic.Int64
 	undecoded    []undecodedCall
 	resolve      func(scheme, value string) (Resolution, error)
+	// resolveBearer, when set, answers by the bearer the lookup was asked with.
+	resolveBearer func(bearer string) (Resolution, error)
 }
 
 type undecodedCall struct {
@@ -71,8 +73,11 @@ func (f *fakeBackend) Auth(ctx context.Context, tenant, integration, bearer stri
 	return d, d.Prepare()
 }
 
-func (f *fakeBackend) Resolve(_ context.Context, _, _, _, scheme, value string) (Resolution, error) {
+func (f *fakeBackend) Resolve(_ context.Context, _, _, bearer, scheme, value string) (Resolution, error) {
 	f.resolveCalls.Add(1)
+	if f.resolveBearer != nil {
+		return f.resolveBearer(bearer)
+	}
 	if f.resolve != nil {
 		return f.resolve(scheme, value)
 	}

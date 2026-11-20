@@ -58,8 +58,8 @@ import (
 // can then suspend the webhook for a cooldown and drop traffic that was inside the ceiling.
 
 // Results of an integration request (the result label of integration_requests_total). A request
-// has exactly one, except precheck_stale, which marks a request answered from a last-known-good
-// pre-check and is counted in addition to the result it ended in.
+// has exactly one, except precheck_stale and resolve_stale, which mark a request answered from a
+// last-known-good pre-check or device lookup and are counted in addition to the result it ended in.
 const (
 	ResultAccepted            = "accepted"
 	ResultIgnoredType         = "ignored_type"
@@ -74,8 +74,12 @@ const (
 	ResultPrecheckUnavailable = "precheck_unavailable"
 	ResultDisabled            = "disabled"
 	ResultResolveUnavailable  = "resolve_unavailable"
-	ResultPublishFailed       = "publish_failed"
-	ResultInternalError       = "internal_error"
+	// ResultResolveStale: at least one device in the request was served from a resolution older
+	// than the device cache's TTL, because device-management could not be asked. Counted once per
+	// request, in addition to the result the request ended in.
+	ResultResolveStale  = "resolve_stale"
+	ResultPublishFailed = "publish_failed"
+	ResultInternalError = "internal_error"
 	// ResultSourceLimited: one source address spent its allowance for requests the pre-check
 	// would have to ask device-management about. ResultPrecheckBudget: this replica's budget for
 	// names nobody has vouched for was spent. Neither called device-management.
@@ -112,7 +116,7 @@ var IntegrationRequestResults = []string{
 	ResultAccepted, ResultIgnoredType, ResultBadEnvelope, ResultUnsupportedEncoding, ResultUnauthorized,
 	ResultBadAuthLimited, ResultTooLarge, ResultShedAccepted, ResultBackpressure, ResultPrecheckStale,
 	ResultPrecheckUnavailable, ResultDisabled, ResultResolveUnavailable, ResultPublishFailed, ResultInternalError,
-	ResultSourceLimited, ResultPrecheckBudget,
+	ResultSourceLimited, ResultPrecheckBudget, ResultResolveStale,
 }
 
 // Results of one uplink (the result label of integration_uplinks_total).
@@ -475,9 +479,14 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 	}
 	var out []outgoing
 	seen := make(map[string]struct{}, len(result.Uplinks))
+	staleNoted := false
 	for i := range result.Uplinks {
 		up := &result.Uplinks[i]
 		looked, err := rt.Devices.Resolve(r.Context(), tenant, slug, bearer, up.Scheme, up.Identifier)
+		if err == nil && looked.Stale && !staleNoted {
+			staleNoted = true
+			noteStaleDevice(m, typ, slug, looked)
+		}
 		if err != nil {
 			// Any error at all: an old schema, a service token that cannot be minted, a timeout.
 			// None of it says the sender's token is wrong, and none of it may publish.
@@ -723,6 +732,14 @@ func (es *HttpEventSource) handleDownlinkReports(w http.ResponseWriter, r *http.
 	var out []cmddownlink.DownlinkReport
 	for _, d := range reports {
 		looked, err := rt.Devices.Resolve(r.Context(), tenant, slug, bearer, d.Scheme, d.Identifier)
+		// 🔴 A REPORT IS NEVER ACCEPTED ON A STALE DEVICE. An uplink served from a stale lookup is
+		// re-checked by device-management at the event (token, enabled, scope, device, alias); a
+		// report is not: the adapter settles the downlink it matches by queue item, integration and
+		// device token and asks nothing else. A stale answer is therefore what the request is
+		// refused on, exactly as it was before stale answers existed.
+		if err == nil && looked.Stale {
+			err = errStaleForReport
+		}
 		if err != nil {
 			log.Warn().Err(err).Str("integration", slug).Msg("Integration device lookup failed for a downlink report; refusing the request")
 			m.request(typ, ResultResolveUnavailable)
@@ -768,6 +785,18 @@ func (es *HttpEventSource) handleDownlinkReports(w http.ResponseWriter, r *http.
 	}
 	m.request(typ, ResultAccepted)
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// errStaleForReport refuses a downlink report whose device could only be served stale.
+var errStaleForReport = errors.New("device-management cannot be asked and a downlink report is never accepted on a stale device")
+
+// noteStaleDevice counts and logs a request that was served a device resolved longer ago than the
+// device cache's TTL, because device-management could not be asked. Once per request: an outage
+// is one condition, and a hundred-uplink array is not a hundred of them.
+func noteStaleDevice(m IntegrationMetrics, typ, slug string, looked integration.Lookup) {
+	m.request(typ, ResultResolveStale)
+	log.Warn().Str("integration", slug).Dur("age", looked.Age).
+		Msg("Integration device lookup failed; serving the last resolution device-management gave (it re-checks the device at the event)")
 }
 
 // integrationDedupKey is the identity of one uplink within a request: the device it resolved to
