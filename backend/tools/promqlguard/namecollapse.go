@@ -4,6 +4,7 @@
 package promqlguard
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -38,13 +39,23 @@ import (
 // of its own first (`label_replace(..., "__name__", ...)` inside a subquery), which is
 // what keeps the series distinct once the name is gone.
 //
-// WHAT COUNTS AS ONE NAME PER TARGET. An exact name, obviously. And one regex shape,
-// `devicechain_[a-z0-9]+_<fixed suffix>`: the only variable segment is the service's
-// metrics subsystem, and a DeviceChain process registers its own metrics under exactly
-// one subsystem (core.Microservice.MetricsSubsystem), so on one target the regex can
-// match one name. That is a convention of this codebase, not a property of PromQL, and
-// it is the one assumption this check takes on trust. Anything wider — a variable
-// segment in the suffix, an alternation, a selector with no name at all — is refused.
+// WHAT COUNTS AS ONE NAME PER TARGET. An exact name (or a regex with no metacharacters),
+// obviously. And one regex shape, `devicechain_[a-z0-9]+_<fixed suffix>`: the only
+// variable segment is the metrics subsystem. A DeviceChain service registers its own
+// metrics under one subsystem (core.Microservice.MetricsSubsystem); the shared client
+// libraries register a few under fixed subsystems of their own (`svcclient`,
+// `userclient`) in the same process, and none of their suffixes is one a rule reads
+// under a range function. So on one target such a regex matches one name. That is a
+// convention of this codebase, not a property of PromQL, and it is the one assumption
+// this check takes on trust: a client-library metric registered with a suffix a rule
+// already reads this way would break it. Anything wider — a variable segment in the
+// suffix, an alternation, a selector with no name at all — is refused.
+//
+// WHAT COUNTS AS CARRYING THE NAME. `label_replace(x, "<dst>", "$1", "__name__", "(.+)")`
+// (or `(.*)`, or `${1}`) into a label that is not itself reserved, or `label_join` with
+// `__name__` among its sources. A copy that does not preserve the WHOLE name — a fixed
+// replacement, a partial capture — is not accepted as one. A later transformation that
+// overwrites the copied label again is not tracked; that is a residual this accepts.
 var singleSubsystemName = regexp.MustCompile(`^devicechain_\[a-z0-9\]\+_[a-z0-9_]+$`)
 
 // keepsName lists the range functions that keep `__name__` (the engine exempts them
@@ -56,13 +67,16 @@ var keepsName = map[string]bool{
 	"absent_over_time": true,
 }
 
+// errStop ends the walk once a reason has been found.
+var errStop = errors.New("stop")
+
 // NameCollapse reports why e contains a range function that will collapse several
 // metric names into identical label sets, or "" when it does not.
 func NameCollapse(e parser.Expr) string {
 	var why string
 	parser.Inspect(e, func(node parser.Node, _ []parser.Node) error {
 		if why != "" {
-			return nil
+			return errStop
 		}
 		call, ok := node.(*parser.Call)
 		if !ok || call.Func == nil || keepsName[call.Func.Name] {
@@ -97,6 +111,8 @@ func distinctWithoutName(e parser.Expr) (bool, string) {
 	switch n := e.(type) {
 	case *parser.ParenExpr:
 		return distinctWithoutName(n.Expr)
+	case *parser.UnaryExpr:
+		return distinctWithoutName(n.Expr)
 	case *parser.StepInvariantExpr:
 		return distinctWithoutName(n.Expr)
 	case *parser.MatrixSelector:
@@ -111,6 +127,10 @@ func distinctWithoutName(e parser.Expr) (bool, string) {
 		switch n.Op {
 		case parser.TOPK, parser.BOTTOMK, parser.LIMITK, parser.LIMIT_RATIO:
 			// These select series and keep their labels, the name included.
+			return distinctWithoutName(n.Expr)
+		}
+		if !n.Without && contains(n.Grouping, labels.MetricName) {
+			// `by (__name__, ...)` keeps the name in its groups.
 			return distinctWithoutName(n.Expr)
 		}
 		// Every other aggregation emits one series per grouping, with no name.
@@ -131,6 +151,12 @@ func distinctWithoutName(e parser.Expr) (bool, string) {
 		}
 		return true, ""
 	case *parser.BinaryExpr:
+		if n.Op == parser.LOR && n.VectorMatching != nil && n.VectorMatching.On &&
+			contains(n.VectorMatching.MatchingLabels, labels.MetricName) {
+			// A plain `or` drops a right-hand series whose labels (name aside) match one
+			// on the left, so its union stays distinct. Matching ON the name keeps both.
+			return false, "unions series with `or on(__name__, ...)`, which keeps two names that share every other label"
+		}
 		if ok, what := distinctWithoutName(n.LHS); !ok {
 			return false, what
 		}
@@ -139,22 +165,44 @@ func distinctWithoutName(e parser.Expr) (bool, string) {
 	return false, fmt.Sprintf("is a %T this check does not know how to read", e)
 }
 
-// copiesName reports whether a label_replace / label_join call takes `__name__` as a
-// source label, which is how an expression keeps the name once a range function drops it.
+// copiesName reports whether a label_replace / label_join call copies the WHOLE
+// `__name__` into an ordinary label, which is how an expression keeps the name once a
+// range function drops it.
 func copiesName(call *parser.Call) bool {
-	var sources []parser.Expr
+	str := func(i int) (string, bool) {
+		if i >= len(call.Args) {
+			return "", false
+		}
+		lit, ok := call.Args[i].(*parser.StringLiteral)
+		if !ok {
+			return "", false
+		}
+		return lit.Val, true
+	}
+	dst, ok := str(1)
+	if !ok || dst == "" || strings.HasPrefix(dst, "__") {
+		return false
+	}
 	switch call.Func.Name {
 	case "label_replace":
-		if len(call.Args) == 5 {
-			sources = call.Args[3:4]
-		}
+		repl, ok1 := str(2)
+		src, ok2 := str(3)
+		re, ok3 := str(4)
+		return ok1 && ok2 && ok3 && src == labels.MetricName &&
+			(repl == "$1" || repl == "${1}") && (re == "(.+)" || re == "(.*)")
 	case "label_join":
-		if len(call.Args) > 3 {
-			sources = call.Args[3:]
+		for i := 3; i < len(call.Args); i++ {
+			if v, ok := str(i); ok && v == labels.MetricName {
+				return true
+			}
 		}
 	}
-	for _, s := range sources {
-		if lit, ok := s.(*parser.StringLiteral); ok && lit.Val == labels.MetricName {
+	return false
+}
+
+func contains(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
 			return true
 		}
 	}
@@ -171,7 +219,7 @@ func oneNamePerTarget(vs *parser.VectorSelector) (bool, string) {
 		case labels.MatchEqual:
 			return true, ""
 		case labels.MatchRegexp:
-			if singleSubsystemName.MatchString(m.Value) {
+			if singleSubsystemName.MatchString(m.Value) || regexp.QuoteMeta(m.Value) == m.Value {
 				return true, ""
 			}
 			regexes = append(regexes, m.Value)

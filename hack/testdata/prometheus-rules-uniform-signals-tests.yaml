@@ -410,6 +410,26 @@ tests:
       - eval_time: 30m
         alertname: ProcessorLoopDropping
         exp_alerts: []
+  # A loop's FIRST drop, between its seeded zero and the next scrape, on a 30-second
+  # scrape (the default when the ServiceMonitor names no interval). The subquery must
+  # sample at least as often as the scrape, or it can step over the zero entirely: at a
+  # one-minute step it sees nothing at 0s and 1 from 60s on, and never fires.
+  - name: a first drop right after the seeded zero, on a 30-second scrape
+    interval: 30s
+    input_series:
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="device-management",instance="10.0.0.7:9090",pod="device-management-0",result="dropped"}
+        values: _ 0 0x40
+      - series: devicechain_devicemanagement_raise_alarm_messages_total{namespace="dci-devicechain",job="device-management",instance="10.0.0.7:9090",pod="device-management-0",result="dropped"}
+        values: _ 0 1x40
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ProcessorLoopDropping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: device-management
+            exp_annotations: *id002
   - name: idle installation
     interval: 1m
     input_series: []
