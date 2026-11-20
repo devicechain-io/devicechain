@@ -245,27 +245,53 @@ func TestEveryEdgeDeleteHoldsItsRowWhenItStampsTheDeletion(t *testing.T) {
 
 // 🔴 A GROUP DELETE STILL TAKES THE MEMBERSHIP FAMILY BEFORE THE GROUP ROW. The row lock the
 // stamp waits for is taken where the delete always took the row, after the cascade's family
-// lock. Taken at the top of the transaction instead, it put the row ahead of the family, while
-// an access-scope switch takes the family and then the row: a cycle the engine resolves by
-// failing one of the two. Here the switch starts the moment the delete has stamped, and both
-// must go through.
+// lock. Taken at the top of the transaction instead, it put the row ahead of the family, while an
+// access-scope switch or a pointer move takes the family and then the row: a cycle the engine
+// resolves by failing one of the two. Here a writer in that order holds the family while the
+// delete starts, and takes the group row once the delete is waiting on the family. Both must go
+// through.
 func TestAGroupDeleteKeepsTheFamilyLockAheadOfTheGroupRow(t *testing.T) {
 	api, ctx, _ := ownershipPgRig(t, 1)
-	dynamic, selector := "dynamic", `attr["region"] == "north"`
-	_, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{Token: "north",
-		MemberType: "device", MembershipMode: &dynamic, Selector: &selector})
+	_, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{Token: "north", MemberType: "device"})
 	require.NoError(t, err)
-	_, err = api.PublishEntityGroup(ctx, "north", nil, nil, "tester")
+	groupId, err := api.ResolveEntityToken(ctx, "group", "north")
 	require.NoError(t, err)
 
-	_, writerErr := raceAtTheStamp(t, api, "%pg_advisory_xact_lock%", func() error {
-		_, err := api.SetEntityGroupAccessScope(ctx, "north", true)
-		return err
-	})
-	deleted, err := api.DeleteEntityGroup(ctx, "north")
-	require.NoError(t, err, "the group delete was failed")
-	require.True(t, deleted)
-	werr := writerErr()
-	require.True(t, werr == nil || errors.Is(werr, gorm.ErrRecordNotFound),
-		"the access-scope switch was failed: %v", werr)
+	familyHeld := make(chan struct{})
+	takeRow := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := api.lockMembershipFamily(ctx, tx, "device"); err != nil {
+				return err
+			}
+			close(familyHeld)
+			<-takeRow
+			if err := tx.Exec("SET LOCAL lock_timeout = '5s'").Error; err != nil {
+				return err
+			}
+			var ids []uint
+			return tx.Raw(`SELECT id FROM "entity_groups" WHERE id = ? FOR UPDATE`, groupId).Scan(&ids).Error
+		})
+	}()
+	<-familyHeld
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := api.DeleteEntityGroup(ctx, "north")
+		deleteDone <- err
+	}()
+	// The delete reaches the family lock the writer holds, and waits there.
+	require.Eventually(t, func() bool {
+		var waiting int64
+		err := api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).
+			Raw(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+				AND wait_event_type = 'Lock' AND query ILIKE '%pg_advisory_xact_lock%'
+				AND cardinality(pg_blocking_pids(pid)) > 0`).Scan(&waiting).Error
+		return err == nil && waiting > 0
+	}, 10*time.Second, 20*time.Millisecond, "the group delete never waited on the family lock")
+	close(takeRow)
+
+	require.NoError(t, <-writerDone, "the writer taking the family and then the group row was failed")
+	require.NoError(t, <-deleteDone, "the group delete was failed")
 }
