@@ -1,7 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command promqlguard refuses an alerting rule that can never return nothing.
+// Command promqlguard refuses an alerting rule that can never return nothing, or that
+// cannot be evaluated because a range function collapses several metric names.
 //
 //	promqlguard -min-alerts=34 rule-a.yaml rule-b.yaml
 //
@@ -15,7 +16,8 @@
 // Exit codes are three-valued on purpose:
 //
 //	0  every alert can be false, and enough alerts were read to say so
-//	1  findings — an alert can never be false
+//	1  findings — an alert can never be false, or a range function in it collapses
+//	   several metric names into identical label sets so it can never be evaluated
 //	2  the INSTRUMENT is broken: no files, a file that does not parse, an expression
 //	   that is not PromQL, a file whose two alert counts disagree, fewer alerts than
 //	   the floor, bad arguments
@@ -76,18 +78,33 @@ func main() {
 	}
 
 	if len(findings) > 0 {
+		kinds := map[promqlguard.Kind]int{}
 		for _, f := range findings {
 			fmt.Println(f)
+			kinds[f.Kind]++
 		}
-		fmt.Fprintf(os.Stderr, "\npromqlguard: %d alert(s) out of %d can never return nothing.\n\n"+
-			"An alert fires on the PRESENCE of a sample, not on its value, so an expression with\n"+
-			"no reachable empty state is an alert that is always firing. It parses, it renders,\n"+
-			"promtool accepts it and every series in it is spelled correctly — the defect is in\n"+
-			"where the comparison binds. `>` binds tighter than `or`, so `a or vector(0) > 0`\n"+
-			"parses as `a or (vector(0) > 0)` and leaves a bare `a` with no comparison at all.\n"+
-			"Parenthesise what the comparison is meant to apply to, `(a or vector(0)) > 0`, or\n"+
-			"drop the `or vector(0)`: an alert cannot tell an empty result from a false one.\n",
-			len(findings), checked)
+		if n := kinds[promqlguard.AlwaysFiring]; n > 0 {
+			fmt.Fprintf(os.Stderr, "\npromqlguard: %d alert(s) out of %d can never return nothing.\n\n"+
+				"An alert fires on the PRESENCE of a sample, not on its value, so an expression with\n"+
+				"no reachable empty state is an alert that is always firing. It parses, it renders,\n"+
+				"promtool accepts it and every series in it is spelled correctly — the defect is in\n"+
+				"where the comparison binds. `>` binds tighter than `or`, so `a or vector(0) > 0`\n"+
+				"parses as `a or (vector(0) > 0)` and leaves a bare `a` with no comparison at all.\n"+
+				"Parenthesise what the comparison is meant to apply to, `(a or vector(0)) > 0`, or\n"+
+				"drop the `or vector(0)`: an alert cannot tell an empty result from a false one.\n",
+				n, checked)
+		}
+		if n := kinds[promqlguard.CollapsedNames]; n > 0 {
+			fmt.Fprintf(os.Stderr, "\npromqlguard: %d alert(s) out of %d cannot be evaluated on a real instance.\n\n"+
+				"A range function (increase, rate, *_over_time) drops the metric name. Over a selector\n"+
+				"that can match several names on one scrape target, the series left behind have\n"+
+				"identical label sets and Prometheus refuses the evaluation (\"vector cannot contain\n"+
+				"metrics with the same labelset\"): the rule errors on every evaluation, never fires,\n"+
+				"and PrometheusRuleFailures fires instead. promtool unit tests miss it whenever their\n"+
+				"series carry one metric name per target. Copy the name into a label first, inside a\n"+
+				"subquery: increase(label_replace(<selector>, \"metric\", \"$1\", \"__name__\", \"(.+)\")[15m:1m]).\n",
+				n, checked)
+		}
 		os.Exit(1)
 	}
 

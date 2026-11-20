@@ -8,6 +8,11 @@ A task that polls faster than it completes (its idle passes are skipped, which d
 success) also declares an expected success interval; the allowance is built from the larger of
 that and the polling interval, so a healthy long cooldown is not read as a stall.
 Increase reads raw counters before aggregation. Device-state has its own discard warning.
+ProcessorLoopDropping copies each loop's metric name into a "metric" label inside a
+subquery before increase(), because increase() drops __name__: one service runs several
+loops whose *_messages_total series share every other label, and without the copy
+Prometheus refuses the evaluation ("vector cannot contain metrics with the same labelset")
+and the alert can never fire. hack/check-prometheus-rules.sh (promqlguard) refuses that shape.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -65,8 +70,9 @@ spec:
             description: "No replica of this job and task has succeeded within three declared pass intervals plus five minutes (a task that completes less often than it polls declares its expected success interval, and that longer interval is used), or the task has never succeeded and a replica declaring its interval has been running longer than that allowance. This has persisted for ten minutes. Check the job and task labels, service logs, database and broker health, and distributed lock ownership. A replica that skips a pass because another replica holds the lock is normal; investigate whether any replica is completing the task."
         - alert: ProcessorLoopDropping
           expr: |
-            sum by (job) (increase(
-              {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total",__name__!="devicechain_devicestate_state_messages_total",result="dropped",namespace="{{ $ns }}"}[15m])) > 0
+            sum by (job) (increase(label_replace(
+              {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total",__name__!="devicechain_devicestate_state_messages_total",result="dropped",namespace="{{ $ns }}"},
+              "metric", "$1", "__name__", "(.+)")[15m:1m])) > 0
           labels:
             severity: warning
             devicechain_instance: {{ $id }}

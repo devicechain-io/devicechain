@@ -199,3 +199,14 @@ func CheckExpr(expr string) (string, error) {
 	}
 	return why, nil
 }
+
+// CheckNameCollapse parses expr and reports why a range function in it collapses
+// several metric names into identical label sets, or "" when none does. A parse error
+// is an error, as in CheckExpr.
+func CheckNameCollapse(expr string) (string, error) {
+	e, err := parser.NewParser(parserOptions).ParseExpr(expr)
+	if err != nil {
+		return "", fmt.Errorf("this expression does not parse as PromQL, so nothing can be concluded about it: %w", err)
+	}
+	return NameCollapse(e), nil
+}
