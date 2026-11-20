@@ -120,6 +120,35 @@ type DetectPurgeReply struct {
 	// but failed to commit the checkpoint, or it is a halted split-brain writer. A reply
 	// carrying it is NOT evidence of erasure; the caller must treat it as data still held.
 	Error string `json:"error,omitempty"`
+	// Siblings are the answers of the OTHER partitions the same process holds (the
+	// resolved-events group workers of a sharded engine), carried in this one message.
+	//
+	// 🔴 ONE REPLY PER PROCESS IS A BROKER RULE, NOT A STYLE. The responder holds no publish
+	// grant on the requester's inbox; the broker admits its answer only because its login
+	// received the request (allow_responses), and it counts that allowance per CONNECTION and
+	// reply subject, one message each. Every partition of a process shares the connection, so
+	// answering once per partition spends the allowance and has the answers refused as
+	// permissions violations: the eviction happened, and the requester never hears it. So a
+	// process answers once, for all of its partitions.
+	//
+	// The sender's own answer stays in the fields above, so a requester that predates this
+	// field reads it exactly as before and records the siblings as not having answered: a
+	// deferral, never a false clean. Only one level is read; a sibling's own Siblings are
+	// dropped.
+	Siblings []DetectPurgeReply `json:"siblings,omitempty"`
+}
+
+// Partitions is every partition this reply answers for: the sender's own, then its
+// siblings, none of them carrying a Siblings list.
+func (r DetectPurgeReply) Partitions() []DetectPurgeReply {
+	own := r
+	own.Siblings = nil
+	out := []DetectPurgeReply{own}
+	for _, s := range r.Siblings {
+		s.Siblings = nil
+		out = append(out, s)
+	}
+	return out
 }
 
 // DetectPurgeResult is everything one eviction request learned.
@@ -246,7 +275,20 @@ func PurgeTenantDetect(ctx context.Context, nc *nats.Conn, instanceId, tenant st
 		if err := json.Unmarshal(msg.Data, &reply); err != nil {
 			return res, fmt.Errorf("decoding a DETECT eviction reply for %q: %w", tenant, err)
 		}
-		res.Replies = append(res.Replies, reply)
+		// One message can answer for several partitions (see DetectPurgeReply.Siblings), and
+		// each is weighed below exactly as if it had arrived on its own.
+		clean, satisfied := false, false
+		for _, part := range reply.Partitions() {
+			res.Replies = append(res.Replies, part)
+			if part.Error != "" {
+				continue
+			}
+			clean = true
+			if awaited[part.PartitionId] {
+				delete(awaited, part.PartitionId)
+				satisfied = true
+			}
+		}
 		// 🔴 ONLY A REPLY THAT ERASED SOMETHING SATISFIES THE PARTITION, and this is not
 		// pedantry about error handling — a partition can have TWO responders, and the one
 		// that answers first is the one that did not do the work.
@@ -262,13 +304,10 @@ func PurgeTenantDetect(ctx context.Context, nc *nats.Conn, instanceId, tenant st
 		// ledger would carry "this tenant's windows are still in its checkpoint" about a
 		// partition that had just erased them. A warm standby answers first in the same way,
 		// and it is not a fault at all; see below.
-		if reply.Error == "" && awaited[reply.PartitionId] {
-			delete(awaited, reply.PartitionId)
-			if len(awaited) == 0 {
-				return res, nil // the last partition we were waiting on has committed
-			}
+		if satisfied && len(awaited) == 0 {
+			return res, nil // the last partition we were waiting on has committed
 		}
-		if reply.Error == "" && len(awaited) == 0 && gather == ctx {
+		if clean && len(awaited) == 0 && gather == ctx {
 			// First clean reply WITH NOTHING STILL EXPECTED: something is alive and
 			// answering and no partition we know holds durable state is outstanding, so drop
 			// from the full window to the straggler window. Derived from ctx rather than the
