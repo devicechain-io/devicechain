@@ -182,6 +182,8 @@ Shader "Harborpulse/Water"
             }
 
             // The planar reflection, softened: a small vertical-biased kernel on a blurred mip. blur is in screen UV.
+            // The pass clears to transparent black, so filtering has already weighted each sample's colour by its coverage:
+            // sum the samples as they are and divide by the summed coverage once.
             half4 SoftReflection(float2 uv, float blur, float lod)
             {
                 const float2 taps[7] = { float2(0, 0), float2(0.35, 1.1), float2(-0.35, -1.1), float2(-0.3, 2.3), float2(0.3, -2.3), float2(1.0, 0.2), float2(-1.0, -0.2) };
@@ -190,7 +192,7 @@ Shader "Harborpulse/Water"
                 [unroll] for (int k = 0; k < 7; k++)
                 {
                     half4 c = SAMPLE_TEXTURE2D_LOD(_PlanarReflectionTex, sampler_PlanarReflectionTex, saturate(uv + taps[k] * blur), lod);
-                    sum += half4(c.rgb * c.a, c.a) * weights[k];
+                    sum += c * weights[k];
                 }
                 return half4(sum.rgb / max(sum.a, 1e-3), sum.a);
             }
@@ -235,10 +237,14 @@ Shader "Harborpulse/Water"
                 // the ripple breaks the reflection up; the blur grows with distance, where a pixel spans more water
                 float far = saturate(camDist / 600.0);
                 float2 reflectionUV = GetNormalizedScreenSpaceUV(i.positionCS) + n.xz * (0.03 + 0.03 * _HarborStorm);
-                half4 planar = SoftReflection(reflectionUV, 0.0035 + 0.006 * far, 1.0 + 1.5 * far);
                 float border = saturate(min(min(reflectionUV.x, 1-reflectionUV.x), min(reflectionUV.y, 1-reflectionUV.y)) * 30);
-                float reflected = _PlanarReflectionOn * saturate(planar.a) * border * (1 - smoothstep(300, 1100, camDist)) * _ReflectionStrength;
-                reflection = lerp(reflection, planar.rgb, reflected);
+                float reach = _PlanarReflectionOn * border * (1 - smoothstep(300, 1100, camDist)) * _ReflectionStrength;
+                // beyond the fade (most of the open sea) skip the seven taps altogether
+                UNITY_BRANCH if (reach > 0)
+                {
+                    half4 planar = SoftReflection(reflectionUV, 0.0035 + 0.006 * far, 1.0 + 1.5 * far);
+                    reflection = lerp(reflection, planar.rgb, reach * saturate(planar.a));
+                }
                 float glint = pow(saturate(dot(r, sun.direction)), 900.0) * 18.0 + pow(saturate(dot(r, sun.direction)), 90.0) * 0.6;
                 float3 specular = glint * sun.color * sun.shadowAttenuation * (1.0 - 0.85 * _HarborStorm);
 

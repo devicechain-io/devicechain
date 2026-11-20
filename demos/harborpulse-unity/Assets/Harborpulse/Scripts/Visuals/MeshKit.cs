@@ -38,7 +38,8 @@ namespace DeviceChain.Harborpulse.Visuals
         public void Quad(Vector3 a, Vector3 b, Vector3 c, Vector3 d)
         {
             a = X(a); b = X(b); c = X(c); d = X(d);
-            // both triangles' normals, so a quad with one collapsed edge (a cone's side) still has a normal: a zero normal shades as NaN
+            // both triangles' normals, so a quad with one collapsed edge (a cone's side) still has a normal: a zero normal shades as NaN.
+            // A quad collapsed to a line or a point still has none; nothing here builds one.
             var n = (Vector3.Cross(b - a, c - a) + Vector3.Cross(c - a, d - a)).normalized;
             var i = vertices.Count;
             vertices.Add(a);
@@ -149,6 +150,7 @@ namespace DeviceChain.Harborpulse.Visuals
         /// </summary>
         public MeshKit Ellipsoid(Vector3 center, Vector3 radii, int detail = 1)
         {
+            if (detail < 0 || detail > 1) throw new System.ArgumentOutOfRangeException(nameof(detail), detail, "an ellipsoid has detail 0 or 1");
             Vector3[] o = { Vector3.up, Vector3.forward, Vector3.right, Vector3.back, Vector3.left, Vector3.down };
             int[,] faces = { { 0, 1, 2 }, { 0, 2, 3 }, { 0, 3, 4 }, { 0, 4, 1 }, { 5, 2, 1 }, { 5, 3, 2 }, { 5, 4, 3 }, { 5, 1, 4 } };
             Vector3 P(Vector3 v) => center + Vector3.Scale(v, radii);

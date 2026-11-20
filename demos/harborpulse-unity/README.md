@@ -527,7 +527,8 @@ WORLD scenery: no device stands there and nothing in it reads the platform.
 - **Town.** A seeded plan of eight streets: Main Street climbs inland from the North Quay road between the lofts
   and the north pump and bends as it goes, with side streets off it, Shore Road behind East Quay and a lane on the
   western side land. Lots are laid along each street and kept off the core, the streets, each other, the park,
-  the mapped fences and road, and 30 m round every device anchor and the depot. There are five archetypes: a
+  the mapped fences and road, and 30 m round every device anchor and the depot; every corner is tested against
+  the buildings already placed, the church first. There are five archetypes: a
   clapboard house (one or two storeys, side or front gable, sometimes a porch), a shopfront house, a brick
   commercial block with a cornice, shop windows and an awning, a waterfront shed and an inn with dormers and a
   veranda. One white church with a steeple stands where Church Street leaves Main Street. Windows are on every
@@ -535,16 +536,22 @@ WORLD scenery: no device stands there and nothing in it reads the platform.
   U2b houses were.
 - **Trees and hills.** Low-poly deciduous trees in autumn colours and dark conifers stand in the yards and verges
   and round the park. The hills carry a forest of larger crowns, sparser and coarser with distance, with
-  clearings. Crowns beyond about 620 m use the eight-face ellipsoid and cast no shadow.
+  clearings, every crown wholly over land. Crowns more than 520 m outside the core are baked with the eight-face
+  ellipsoid (a fixed choice, not a camera LOD). No tree casts a shadow, and the trees sit on a code-only layer
+  (29) that the planar reflection leaves out, so the water reflects the town and the hills' ground without a
+  second pass over every crown.
 - **Waterfront.** There is a park lawn at the harbour's north-west corner with a gazebo by the water and a path,
   a boatyard with three sheds and a hauled-out boat behind East Quay, two timber piers on pilings (off East
   Quay's south end and inside the Basin's southern dock), and eight moored boats that ride the water like the
   buoys. The five box "fishing boats" are gone, the flood plain's parked cars have a body and a cabin, the lofts
   are brick with a cornice and the ferry terminal is grey clapboard under a pitched roof.
-- **Batching.** Geometry is batched by material into 300 m tiles (`MeshKit.Place` builds a placed object into a
-  shared kit), so culling and shadow casting work per tile and the town is a few hundred renderers.
+- **Batching.** Geometry is batched by material into 300 m tiles, 900 m for the hills' forest (`MeshKit.Place`
+  builds a placed object into a shared kit), so culling works per tile. The HOME check logs the world's renderer,
+  vertex and shadow-caster counts.
 - **Water.** The planar reflection now has mips, and `HarborWater.shader` samples it soft: a seven-tap,
-  vertically stretched kernel on a blurred mip, blurring more with distance. Stronger ripple distortion breaks
+  vertically stretched kernel on a blurred mip, blurring more with distance. The pass clears to transparent black,
+  so the taps' colours are already weighted by coverage; the kernel divides by the summed coverage once. Beyond the
+  fade the taps are skipped. Stronger ripple distortion breaks
   it up, its strength is 0.62, and it fades out between 300 m and 1100 m. The Fresnel peak is lowered to 0.82,
   so the water keeps its colour at grazing angles. The deep colour is a teal rather than a navy. A turquoise
   shallow tint lies along the quays (75 m wide), lit like the body, and the storm greys the harbour down.
@@ -554,5 +561,6 @@ WORLD scenery: no device stands there and nothing in it reads the platform.
 normal shaded as NaN, which bloom spread across the frame.
 
 HOME still passes at both aspects with every quay, the mouth and the ridge (now the terrain and its forest)
-visible: 16:9 water 43.5 %, sky 0 %, 36/37 devices; 9:16 water 23.0 %, sky 0.8 %, 36/37 (the truck is in its depot).
+visible: 16:9 water 43.5 %, sky 0 %, 36/37 devices (the truck is in its depot); 9:16 water 23.0 %, sky 0.7 %,
+36/37 (East Quay lamp 4 is under the 8 px floor, as it was before U3).
 

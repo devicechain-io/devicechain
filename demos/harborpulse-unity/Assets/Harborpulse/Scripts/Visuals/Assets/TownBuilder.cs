@@ -35,6 +35,8 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly Dictionary<(Material, int, int, bool, bool), MeshKit> kits = new Dictionary<(Material, int, int, bool, bool), MeshKit>();
         readonly List<Street> streets = new List<Street>();
         readonly List<Vector3> footprints = new List<Vector3>(); // x, z, radius
+        readonly List<Vector4> buildings = new List<Vector4>(); // centre x, z, half-width, half-depth (in the building's own frame)
+        readonly List<float> buildingYaw = new List<float>();
         readonly List<Vector2> keepClear;
         readonly Func<Vector2, bool> reserved;
         readonly List<Transform> boats = new List<Transform>();
@@ -93,8 +95,8 @@ namespace DeviceChain.Harborpulse.Visuals
             var b = new TownBuilder(parent, mats, keepClear, reserved);
             b.Streets();
             b.Terrain();
-            b.Lots();
             b.Landmarks();
+            b.Lots();
             b.Waterfront();
             b.Park();
             b.Trees();
@@ -194,13 +196,15 @@ namespace DeviceChain.Harborpulse.Visuals
         static void Ribbon(MeshKit kit, Street s)
         {
             var length = s.Length; Vector3 pl = default, pr = default;
-            for (var d = 0f; d <= length + 0.01f; d += 4)
+            var steps = Mathf.Max(1, Mathf.CeilToInt(length / 4));
+            for (var i = 0; i <= steps; i++)
             {
-                s.At(Mathf.Min(d, length), out var p, out var t);
+                var d = length * i / steps;
+                s.At(d, out var p, out var t);
                 var n = new Vector2(t.y, -t.x) * s.HalfWidth;
                 var l = new Vector3(p.x - n.x, 0, p.y - n.y); l.y = Height(l.x, l.z) + 0.14f;
                 var r = new Vector3(p.x + n.x, 0, p.y + n.y); r.y = Height(r.x, r.z) + 0.14f;
-                if (d > 0) kit.Quad(pl, l, r, pr);
+                if (i > 0) kit.Quad(pl, l, r, pr);
                 pl = l; pr = r;
             }
         }
@@ -209,7 +213,9 @@ namespace DeviceChain.Harborpulse.Visuals
 
         MeshKit Kit(Material mat, Vector3 at, bool shadows = true, bool forest = false)
         {
-            var key = (mat, Mathf.FloorToInt(at.x / Tile), Mathf.FloorToInt(at.z / Tile), shadows, forest);
+            // the hills' forest is batched in tiles three times larger: it is many small crowns seen from far off
+            var tile = forest ? Tile * 3 : Tile;
+            var key = (mat, Mathf.FloorToInt(at.x / tile), Mathf.FloorToInt(at.z / tile), shadows, forest);
             if (!kits.TryGetValue(key, out var kit)) kits[key] = kit = new MeshKit();
             return kit;
         }
@@ -260,6 +266,23 @@ namespace DeviceChain.Harborpulse.Visuals
             return true;
         }
 
+        void Occupy(Vector2 c, float yaw, float w, float d)
+        {
+            buildings.Add(new Vector4(c.x, c.y, w / 2, d / 2)); buildingYaw.Add(yaw);
+        }
+
+        /// <summary>Whether a point stands inside any building's walls, grown by <paramref name="margin"/>.</summary>
+        bool InBuilding(Vector2 p, float margin)
+        {
+            for (var i = 0; i < buildings.Count; i++)
+            {
+                var b = buildings[i];
+                var local = Quaternion.Euler(0, -buildingYaw[i], 0) * new Vector3(p.x - b.x, 0, p.y - b.y);
+                if (Mathf.Abs(local.x) <= b.z + margin && Mathf.Abs(local.z) <= b.w + margin) return true;
+            }
+            return false;
+        }
+
         static bool InPark(Vector2 p, float margin) => p.x > -240 - margin && p.x < -120 + margin && p.y > 72 - margin && p.y < 180 + margin;
 
         enum Kind { House, Shopfront, Commercial, Shed, Inn }
@@ -300,6 +323,8 @@ namespace DeviceChain.Harborpulse.Visuals
                         {
                             Building(kind, new Vector3(c.x, 0, c.y), yaw, w, d);
                             footprints.Add(new Vector3(c.x, c.y, radius * 0.9f));
+                            // porches, awnings and verandas stand up to 3.5 m proud of the front wall
+                            Occupy(c, yaw, w, d + 7);
                         }
                         at += w + (kind == Kind.Commercial || kind == Kind.Shopfront ? 1.5f + (float)random.NextDouble() * 3 : 3.5f + (float)random.NextDouble() * 7);
                     }
@@ -307,13 +332,16 @@ namespace DeviceChain.Harborpulse.Visuals
             }
         }
 
+        /// <summary>Every corner clears every street and stands outside every building already placed (the church included).</summary>
         bool CornersClear(Vector2 c, float w, float d, float yaw, float street)
         {
             var r = Quaternion.Euler(0, yaw, 0);
+            if (InBuilding(c, 0)) return false;
             foreach (var sx in new[] { -1, 1 }) foreach (var sz in new[] { -1, 1 })
             {
                 var v = r * new Vector3(sx * w / 2, 0, sz * d / 2);
-                if (Clearance(new Vector2(c.x + v.x, c.y + v.z)) < 0.8f) return false;
+                var corner = new Vector2(c.x + v.x, c.y + v.z);
+                if (Clearance(corner) < 0.8f || InBuilding(corner, 0)) return false;
             }
             return true;
         }
@@ -321,9 +349,11 @@ namespace DeviceChain.Harborpulse.Visuals
         void Landmarks()
         {
             // a white clapboard church with its steeple, where Church Street leaves Main Street
+            // it is placed before the lots are laid, so its whole footprint (nave, tower and steps) is reserved first
             var church = new Vector2(30, 274);
             Church(new Vector3(church.x, 0, church.y), 180);
-            footprints.Add(new Vector3(church.x, church.y, 18));
+            footprints.Add(new Vector3(church.x, church.y, 20));
+            Occupy(church, 180, 13, 34);
         }
 
         // ---------------------------------------------------------------- buildings
@@ -521,9 +551,13 @@ namespace DeviceChain.Harborpulse.Visuals
             // the working waterfront behind East Quay: sheds round a small boatyard, on the deck
             var yard = new Vector3(168, Deck, 100);
             P(m.Paving, yard, 0, false).Box(new Vector3(0, 0.03f, 0), new Vector3(110, 0.06f, 40));
-            Shed(new Vector3(132, Deck, 106), 180, 20, 11); footprints.Add(new Vector3(132, 106, 11));
-            Shed(new Vector3(162, Deck, 108), 180, 18, 10); footprints.Add(new Vector3(162, 108, 10));
-            Shed(new Vector3(198, Deck, 102), 200, 22, 12); footprints.Add(new Vector3(198, 102, 12));
+            foreach (var shed in new[] { new Vector4(132, 106, 20, 11), new Vector4(162, 108, 18, 10), new Vector4(198, 102, 22, 12) })
+            {
+                var yaw = shed.x > 190 ? 200 : 180;
+                Shed(new Vector3(shed.x, Deck, shed.y), yaw, shed.z, shed.w);
+                footprints.Add(new Vector3(shed.x, shed.y, Mathf.Max(shed.z, shed.w) / 2 + 1));
+                Occupy(new Vector2(shed.x, shed.y), yaw, shed.z, shed.w + 2);
+            }
             // a hauled-out boat on blocks, and stacked pots and crates
             HauledBoat(new Vector3(150, Deck, 86), 70);
             for (var i = 0; i < 6; i++) P(i % 2 == 0 ? m.Timber : m.AwningBlue, yard, 0).Box(new Vector3(18 + (i % 3) * 1.4f, 0.55f + (i / 3) * 1.1f, -14), new Vector3(1.2f, 1.0f, 1.2f));
@@ -657,7 +691,7 @@ namespace DeviceChain.Harborpulse.Visuals
                     var density = side ? 0.2f + 0.5f * Noise(p.x * 0.017f + 7, p.y * 0.017f) * Smooth(CoastZ, CoastZ + 60, p.y)
                         : 0.12f + 0.4f * Noise(p.x * 0.02f, p.y * 0.02f) + Smooth(300, 500, p.y) * 0.5f + Smooth(260, 460, Mathf.Abs(p.x)) * 0.3f;
                     if (random.NextDouble() > density) continue;
-                    if (Clearance(p) < 3.5f || !Free(p, 2)) continue;
+                    if (Clearance(p) < 3.5f || !Free(p, 2) || InBuilding(p, 1.5f)) continue;
                     Tree(new Vector3(p.x, 0, p.y), 8 + (float)random.NextDouble() * 7, true);
                 }
             // the hills and the far side lands: forest in big low-poly crowns, sparser and larger with distance; far crowns are coarser and cast no shadow
@@ -672,6 +706,7 @@ namespace DeviceChain.Harborpulse.Visuals
                     var p = new Vector2(x + ((float)random.NextDouble() - 0.5f) * step, z + ((float)random.NextDouble() - 0.5f) * step);
                     if (Noise(p.x * 0.006f + 2, p.y * 0.006f + 9) < 0.2f) continue; // clearings
                     var crown = step * (0.55f + (float)random.NextDouble() * 0.25f);
+                    if (p.y - crown < CoastZ + 4 || Mathf.Abs(p.x) + crown > 3400) continue; // the whole crown stays over land
                     var at = new Vector3(p.x, Height(p.x, p.y) - crown * 0.3f, p.y);
                     var near = d < 520;
                     var mat = random.NextDouble() < 0.28 ? m.FoliagePine : Foliage(p.x, p.y);
