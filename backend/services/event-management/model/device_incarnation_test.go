@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -27,21 +28,30 @@ type reincarnationFixture struct {
 	value               float64
 	occurred, processed time.Duration // offsets from reincarnationDeletedAt
 	current             bool          // belongs to the token's CURRENT incarnation
+	orphan              bool          // a payload row whose parent event is not stored
 }
 
 // reincarnationFixtures is the whole scenario: a device, deleted, then created again under
 // the same token. Only receipt time separates the incarnations: a deleted device resolves
 // no new events, so anything received at or after its deletion is the new device's.
 var reincarnationFixtures = []reincarnationFixture{
-	{"pump-1", 1, -time.Hour, -time.Hour, false},             // the old device's ordinary reading
-	{"pump-1", 2, 2 * time.Hour, -10 * time.Minute, false},   // the old device, its clock running ahead
-	{"pump-1", 3, -time.Second, -time.Second, false},         // the old device, the instant before deletion
-	{"pump-1", 10, time.Hour, time.Hour, true},               // the new device
-	{"pump-1", 11, -2 * time.Hour, 30 * time.Minute, true},   // the new device's store-and-forward reading
-	{"pump-1", 12, -90 * time.Minute, 0, true},               // received AT the deletion instant
-	{"pump-2", 20, -time.Hour, -time.Hour, true},             // a bystander with no deletion at all
-	{"pump-2", 21, 30 * time.Minute, 30 * time.Minute, true}, // ...after the other token's deletion
+	{"pump-1", 1, -time.Hour, -time.Hour, false, false},             // the old device's ordinary reading
+	{"pump-1", 2, 2 * time.Hour, -10 * time.Minute, false, false},   // the old device, its clock running ahead
+	{"pump-1", 3, -time.Second, -time.Second, false, false},         // the old device, the instant before deletion
+	{"pump-1", 10, time.Hour, time.Hour, true, false},               // the new device
+	{"pump-1", 11, -2 * time.Hour, 30 * time.Minute, true, false},   // the new device's store-and-forward reading
+	{"pump-1", 12, -90 * time.Minute, 0, true, false},               // received AT the deletion instant
+	{"pump-2", 20, -time.Hour, -time.Hour, true, false},             // a bystander with no deletion at all
+	{"pump-2", 21, 30 * time.Minute, 30 * time.Minute, true, false}, // ...after the other token's deletion
+	// A payload row whose parent retention already dropped: for a reused token nothing shows
+	// which device it was, so it is left out; for a token never deleted it is read as before.
+	{"pump-1", 30, time.Hour, time.Hour, false, true},
+	{"pump-2", 31, time.Hour, time.Hour, true, true},
 }
+
+// sampleLag puts every payload row's own instant before its parent event's, as a batched
+// reading's is: the bound must follow the PARENT's receipt, never the row's own time.
+const sampleLag = 5 * time.Minute
 
 // seedReincarnation stores every fixture as a measurement (base event + payload row) and
 // then records the deletion of the first "pump-1", exactly as the deletion consumer does.
@@ -55,9 +65,16 @@ func seedReincarnation(t *testing.T, api *Api, tenant string) {
 			OccurredTime:  reincarnationDeletedAt.Add(f.occurred),
 			ProcessedTime: reincarnationDeletedAt.Add(f.processed)}
 		ev.EventId = DeriveEventId(tenant, &ev, []byte{byte(f.value)})
+		if f.orphan {
+			require.NoError(t, api.RDB.DB(ctx).Create(&MeasurementEvent{EventId: ev.EventId,
+				PayloadId: DeriveEventId(tenant, &ev, []byte("payload")), DeviceToken: f.device,
+				EventType: eventtype.Measurement, OccurredTime: ev.OccurredTime.Add(-sampleLag), Name: "temp",
+				Value: sql.NullFloat64{Float64: f.value, Valid: true}}).Error)
+			continue
+		}
 		require.NoError(t, api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 			_, err := api.CreateMeasurementEvents(ctx, tx, []*MeasurementEventCreateRequest{{
-				Event: ev, EntryOccurredTime: ev.OccurredTime, Name: "temp", Value: f64(f.value)}})
+				Event: ev, EntryOccurredTime: ev.OccurredTime.Add(-sampleLag), Name: "temp", Value: f64(f.value)}})
 			return err
 		}))
 	}
@@ -101,13 +118,13 @@ func assertTokenReadsSeeOnlyTheCurrentIncarnation(t *testing.T, api *Api, tenant
 		}
 		var wantProcessed []time.Time
 		for _, f := range reincarnationFixtures {
-			if f.device == token && f.current {
+			if f.device == token && f.current && !f.orphan {
 				wantProcessed = append(wantProcessed, reincarnationDeletedAt.Add(f.processed))
 			}
 		}
 		assert.ElementsMatchf(t, wantProcessed, processed,
 			"events of %s: a read by token must return only its current incarnation's events", token)
-		assert.EqualValuesf(t, len(want), events.Pagination.TotalRecords,
+		assert.EqualValuesf(t, len(wantProcessed), events.Pagination.TotalRecords,
 			"events of %s: the total must count only the current incarnation", token)
 
 		measurements, err := api.MeasurementEvents(ctx, criteria)
@@ -120,6 +137,22 @@ func assertTokenReadsSeeOnlyTheCurrentIncarnation(t *testing.T, api *Api, tenant
 			"measurements of %s: a read by token must return only its current incarnation's readings", token)
 		assert.EqualValuesf(t, len(want), measurements.Pagination.TotalRecords,
 			"measurements of %s: the total must count only the current incarnation", token)
+
+		// The count-free page path builds its own statement; it is bounded the same way.
+		noTotal := false
+		pageOnly := criteria
+		pageOnly.IncludeTotal = &noTotal
+		measurements, err = api.MeasurementEvents(ctx, pageOnly)
+		require.NoError(t, err)
+		got = got[:0]
+		for _, m := range measurements.Results {
+			got = append(got, m.Value.Float64)
+		}
+		assert.ElementsMatchf(t, want, got, "measurements of %s without a total", token)
+		pageOnly.EventTypes = baseCriteria.EventTypes
+		events, err = api.Events(ctx, pageOnly)
+		require.NoError(t, err)
+		assert.Lenf(t, events.Results, len(wantProcessed), "events of %s without a total", token)
 	}
 }
 
@@ -158,5 +191,11 @@ func TestATenantWideReadIsNotBoundedByADeletion(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	events, err := api.Events(ctx, EventSearchCriteria{Pagination: rdb.Pagination{PageNumber: 1, PageSize: 100}})
 	require.NoError(t, err)
-	assert.Len(t, events.Results, len(reincarnationFixtures))
+	parents := 0
+	for _, f := range reincarnationFixtures {
+		if !f.orphan {
+			parents++
+		}
+	}
+	assert.Len(t, events.Results, parents)
 }

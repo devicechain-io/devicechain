@@ -258,6 +258,10 @@ func TestIntegrationIndexTrimAppliesOverCompressedChunks(t *testing.T) {
 	}
 	assertChunkSets(t, sys, 2, func(table string) []string { return sortedNames(afterTrimIndexes[table]) })
 
+	// The read path below is today's, and a read by device token needs the deletion
+	// watermark table, a later migration than this test stops at. Its own DDL, after the
+	// index assertions above, so they still describe the schema at the trim.
+	require.NoError(t, NewEntityDeletionWatermarksSchema().Migrate(sys))
 	api := NewApi(after)
 	ctx := core.WithTenant(context.Background(), "acme")
 	d0 := "dev-0"
