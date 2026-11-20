@@ -64,6 +64,11 @@ var (
 	EntityDeletedReader    messaging.MessageReader
 	EntityAnchorReconciler *processor.EntityAnchorReconciler
 
+	// DeviceRosterReader feeds DeviceTokenHolders, which records when a live device holds each
+	// token, so a read by a deleted token is bounded only once the token is created again.
+	DeviceRosterReader messaging.MessageReader
+	DeviceTokenHolders *processor.DeviceTokenHolderConsumer
+
 	AnchorSweep           *processor.AnchorReconciliationSweep
 	EntityDeletionResweep *processor.EntityDeletionResweep
 
@@ -203,6 +208,20 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 
+	// Reader + consumer of device-roster facts: a live device holds a token since the fact's
+	// instant. Durable and from the start of the retained stream (every write is forward-only,
+	// so the first-enablement replay only catches up); only this release's pods create it.
+	droster, err := nmgr.NewReader(streams.DeviceRoster)
+	if err != nil {
+		return err
+	}
+	DeviceRosterReader = droster
+	DeviceTokenHolders = processor.NewDeviceTokenHolderConsumer(Microservice, DeviceRosterReader,
+		Api, core.NewNoOpLifecycleCallbacks())
+	if err := DeviceTokenHolders.Initialize(context.Background()); err != nil {
+		return err
+	}
+
 	// The failed-events index: a durable reader of the stream this service also writes to,
 	// storing one row per record (flood-bounded) for the tenant's failedEvents query.
 	fevread, err := nmgr.NewReader(streams.FailedEvents)
@@ -222,13 +241,16 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 func wireAnchorSweep(ctx context.Context, peers *svcclient.Peers) error {
 	interval := Configuration.AnchorSweepIntervalSeconds
 	if interval <= 0 {
-		log.Info().Msg("Anchor reconciliation sweep disabled (interval <= 0).")
+		log.Warn().Msg("Anchor reconciliation sweep disabled (interval <= 0). Its device-token holder repair is " +
+			"disabled with it: a re-created device token whose roster fact was lost stays unbounded by token reads.")
 		return nil
 	}
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	seam, err := peers.Seam(infra.DeviceManagement.Endpoint(), auth.DeviceRead)
 	if err != nil {
-		log.Warn().Msg("Service secret, device-management, or user-management endpoint not configured — anchor reconciliation sweep disabled.")
+		log.Warn().Msg("Service secret, device-management, or user-management endpoint not configured — anchor reconciliation " +
+			"sweep disabled, and its device-token holder repair with it: a re-created device token whose roster fact was lost " +
+			"stays unbounded by token reads.")
 		return nil
 	}
 	AnchorSweep = processor.NewAnchorReconciliationSweep(Microservice, Api, seam.Client, seam.URL,
@@ -530,6 +552,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start the device-token holder consumer.
+	if err := DeviceTokenHolders.Start(ctx); err != nil {
+		return err
+	}
+
 	// Start the failed-events index consumer.
 	if err := FailedEventsIndexer.Start(ctx); err != nil {
 		return err
@@ -617,6 +644,13 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
+	// Stop the device-token holder consumer.
+	if DeviceTokenHolders != nil {
+		if err := DeviceTokenHolders.Stop(ctx); err != nil {
+			return err
+		}
+	}
+
 	for _, p := range AdditionalPersistenceProcessors {
 		if err := p.Stop(ctx); err != nil {
 			return err
@@ -659,6 +693,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if DeviceTokenHolders != nil {
+		if err := DeviceTokenHolders.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	if EntityDeletionResweep != nil {
 		if err := EntityDeletionResweep.Terminate(ctx); err != nil {
 			return err

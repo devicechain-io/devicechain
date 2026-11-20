@@ -109,6 +109,21 @@ func (api *MockApi) DistinctAnchorDeviceTokensAfter(ctx context.Context, after s
 	return args.Get(0).([]emmodel.AnchorRef), args.Error(1)
 }
 
+func (api *MockApi) RecordDeviceTokenHeld(ctx context.Context, token string, since time.Time) error {
+	args := api.Mock.Called(token, since)
+	return args.Error(0)
+}
+
+func (api *MockApi) DeletedDeviceTokenTenants(ctx context.Context) ([]string, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]string), args.Error(1)
+}
+
+func (api *MockApi) UnheldDeletedDeviceTokensAfter(ctx context.Context, after string) ([]string, error) {
+	args := api.Mock.Called(after)
+	return args.Get(0).([]string), args.Error(1)
+}
+
 // PersistInTx runs fn directly (no real database in tests) passing a nil *gorm.DB
 // handle. The batch create mocks above ignore the handle, so this preserves the
 // all-or-nothing semantics that the production transaction provides while

@@ -35,6 +35,10 @@ var repositoryDeletionPolicies = map[string]deletionPolicy{
 		deletionPurge, "Deleted with the device's live view by ApplyDeviceDeleted, on a higher-incarnation reset in the merge, and by the orphan sweep; a lower-incarnation update writes no reading."},
 	"backend/services/event-management/model/device_incarnation.go:deletedDeviceBound": {
 		deletionHistory, "Read shape of entity_deletion_watermarks: the token's deletion time that bounds a read by device token to its current incarnation. Never written through; the tenant purge erases the rows."},
+	"backend/services/event-management/model/device_incarnation.go:heldDeviceToken": {
+		deletionHistory, "Read shape of device_token_holders: when a live device last held a token, read only to decide whether a deleted token was created again. Never written through; the tenant purge erases the rows."},
+	"backend/services/event-management/model/device_token_holders.go:DeviceTokenHolder": {
+		deletionHistory, "A monotone HeldSince per (tenant, device token), recorded from device-roster facts and the anchor sweep. Deleting the holder moves the token's deletion watermark past it, which is what turns the read bound off; the row itself stays so a late or replayed fact cannot move it back. The tenant purge erases the rows."},
 	"backend/services/event-management/model/device_incarnation.go:eventReceiptKey": {
 		deletionHistory, "Read shape of the events table, the inside of the incarnation bound's key subquery; the rows are Event's and follow its retention."},
 	"backend/services/event-management/model/entity_deletion_watermarks.go:EntityDeletionWatermark": {

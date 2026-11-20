@@ -42,6 +42,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	savedSweep, savedWorker := AnchorSweep, BackfillWorker
 	savedRevents, savedFailed, savedDentity := ResolvedEventsReader, FailedEventsWriter, EntityDeletedReader
 	savedFevReader, savedFevIndexer, savedFevMetrics := FailedEventsReader, FailedEventsIndexer, FailedEventMetrics
+	savedRoster, savedHolders := DeviceRosterReader, DeviceTokenHolders
 	t.Cleanup(func() {
 		Microservice, Configuration, Api = savedMs, savedCfg, savedApi
 		PersistMetrics, BackfillMetrics = savedMetrics, savedBackfillMetrics
@@ -49,6 +50,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		AnchorSweep, BackfillWorker = savedSweep, savedWorker
 		ResolvedEventsReader, FailedEventsWriter, EntityDeletedReader = savedRevents, savedFailed, savedDentity
 		FailedEventsReader, FailedEventsIndexer, FailedEventMetrics = savedFevReader, savedFevIndexer, savedFevMetrics
+		DeviceRosterReader, DeviceTokenHolders = savedRoster, savedHolders
 	})
 
 	Microservice = &core.Microservice{
@@ -93,6 +95,10 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NotNil(t, EntityDeletedReader, "entity-deleted reader")
 	require.NotNil(t, FailedEventsReader, "failed-events reader (the index consumer's durable, declared in streams.All)")
 	require.NotNil(t, FailedEventsIndexer, "failed-events index consumer")
+	// The device-roster durable is created, and read, under the grant core/streams declares for
+	// this area (a missing grant fails the Initialize above as a broker violation).
+	require.NotNil(t, DeviceRosterReader, "device-roster reader (event-management's durable, declared in streams.All)")
+	require.NotNil(t, DeviceTokenHolders, "device-token holder consumer")
 
 	// Opened lazily, per subscriber, after start: graphql/subscriptions_events.go:49 feeds the
 	// events subscription from the tenant's resolved-events stream as a live (non-durable) feed.

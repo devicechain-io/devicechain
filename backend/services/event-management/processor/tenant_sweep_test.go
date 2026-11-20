@@ -31,6 +31,7 @@ func (a *isolatedAnchorAPI) DistinctAnchorTargetsAfter(ctx context.Context, _, _
 func TestAnchorSweepIsolatesTenantFailure(t *testing.T) {
 	api := &isolatedAnchorAPI{}
 	api.Mock.On("DistinctAnchorTenants").Return([]string{"A", "B"}, nil)
+	api.Mock.On("DeletedDeviceTokenTenants").Return([]string{}, nil).Maybe() // no deletions: the holder repair has nothing to ask
 	api.Mock.On("DistinctAnchorDeviceTokensAfter", "").Return([]emmodel.AnchorRef{}, nil).Once()
 	s := &AnchorReconciliationSweep{Api: api}
 	err := s.runOnce(context.Background())

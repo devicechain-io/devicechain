@@ -14,8 +14,14 @@ import (
 )
 
 // incarnationBound is the lower bound a read by device token puts on RECEIPT time: the
-// latest recorded deletion of a device with that token. A zero value (no deletion recorded)
-// bounds nothing.
+// latest recorded deletion of a device with that token, applied only once the token has been
+// CREATED AGAIN. A zero value bounds nothing.
+//
+// 🔴 ONLY A RE-CREATED TOKEN IS BOUNDED. A token deleted and never re-created reads its whole
+// history by token, exactly as it always has (an operator auditing a removed device relies on
+// that, and a minor never changes what an existing field returns). What is a defect is the
+// other case: a token deleted and created again returning the deleted device's events as the
+// new device's. "Created again" is a DeviceTokenHolder recorded at or after the deletion.
 //
 // A token can be deleted and created again. Both devices' events stay stored (deletion keeps
 // history), so a read by token would otherwise return the deleted device's events as the new
@@ -51,9 +57,25 @@ func (deletedDeviceBound) TableName(namer schema.Namer) string {
 // ScopedBy admits every member, scoped or not, to read the deletion bound of a token.
 func (deletedDeviceBound) ScopedBy() rdb.ScopeRule { return rdb.Catalogue() }
 
-// deviceIncarnationBound looks up the bound for a read naming token, one primary-key read of
-// entity_deletion_watermarks. A failed lookup fails the read: answering without the bound
-// would return another device's events.
+// heldDeviceToken is device_token_holders as deviceIncarnationBound reads it, ruled for every
+// caller for the reason deletedDeviceBound is: a time, never returned, that only narrows a read.
+type heldDeviceToken struct {
+	rdb.TenantScoped
+	DeviceToken string
+	HeldSince   time.Time
+}
+
+func (heldDeviceToken) TableName(namer schema.Namer) string {
+	return namer.TableName("DeviceTokenHolder")
+}
+
+// ScopedBy admits every member, scoped or not, to read when a token was last held.
+func (heldDeviceToken) ScopedBy() rdb.ScopeRule { return rdb.Catalogue() }
+
+// deviceIncarnationBound looks up the bound for a read naming token: one primary-key read of
+// entity_deletion_watermarks and, only when the token has a recorded deletion, one of
+// device_token_holders. A failed lookup fails the read: answering without the bound would
+// return another device's events.
 //
 // A scoped caller gets the bound as well. Its reads are also limited to events whose anchors
 // are in its scope, and the deletion removes the deleted device's anchors with this same cut,
@@ -72,7 +94,22 @@ func (api *Api) deviceIncarnationBound(ctx context.Context, token *string) (inca
 	if len(found) == 0 {
 		return incarnationBound{}, nil
 	}
+	var held []heldDeviceToken
+	if err := api.RDB.DB(ctx).Model(&heldDeviceToken{}).Where("device_token = ?", *token).
+		Limit(1).Find(&held).Error; err != nil {
+		return incarnationBound{}, err
+	}
+	if !recreated(held, found[0].DeletedTime) {
+		// Deleted and not (yet known to be) created again: the history is the token's own.
+		return incarnationBound{}, nil
+	}
 	return incarnationBound{token: *token, deleted: found[0].DeletedTime}, nil
+}
+
+// recreated reports whether a live device is recorded holding the token at or after its latest
+// deletion. A holder from before the deletion is the deleted device itself (or an earlier one).
+func recreated(held []heldDeviceToken, deleted time.Time) bool {
+	return len(held) > 0 && !held[0].HeldSince.Before(deleted)
 }
 
 // baseEvents bounds a read of the base event table, which carries its own receipt time.

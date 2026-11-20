@@ -145,4 +145,26 @@ func TestIntegrationTokenReadsSeeOnlyTheCurrentIncarnation(t *testing.T) {
 	scopedEvents, err := api.Events(scoped, measurementsOnly)
 	require.NoError(t, err)
 	assert.Len(t, scopedEvents.Results, len(wantReincarnation("pump-1")), "a scoped base-event read by token")
+
+	// 🔴 The pin, on the real store and both bucketed paths: with no live holder recorded the
+	// token is only deleted, and every read by it returns its whole history, as before.
+	require.NoError(t, api.RDB.DB(ctx).Where("device_token = ?", "pump-1").Delete(&DeviceTokenHolder{}).Error)
+	wantAll, _ := allPump1()
+	var wantSum float64
+	for _, v := range wantAll {
+		wantSum += v
+	}
+	all, err := api.MeasurementEvents(ctx, criteria)
+	require.NoError(t, err)
+	assert.Len(t, all.Results, len(wantAll), "a deleted, never re-created token reads every reading")
+	for _, path := range []struct {
+		name     string
+		disabled bool
+	}{{"rollup-eligible", false}, {"raw", true}} {
+		api.RollupReadsDisabled = path.disabled
+		sum, count := bucketed(path.name, "pump-1")
+		assert.EqualValuesf(t, len(wantAll), count, "%s bucketed count of a deleted, never re-created token", path.name)
+		assert.InDeltaf(t, wantSum, sum, 1e-9, "%s bucketed sum of a deleted, never re-created token", path.name)
+	}
+	api.RollupReadsDisabled = false
 }

@@ -12,6 +12,7 @@ import (
 
 	emmodel "github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
 )
@@ -56,15 +57,87 @@ func NewAnchorReconciliationSweep(ms *core.Microservice, api emmodel.EventManage
 // unconfirmed absence would erase a live tenant's whole anchor set — and before this it said
 // so only in a warning per tenant. The backstop being down for a week looked exactly like the
 // backstop finding nothing, which is the state it is normally in.
+//
+// The same pass then repairs the device-token holders (repairHolders), within the same
+// interval: the anchors first, because they are what this sweep has always been for.
 func (s *AnchorReconciliationSweep) runOnce(ctx context.Context) error {
 	tenants, err := s.Api.DistinctAnchorTenants(ctx)
 	if err != nil {
 		return fmt.Errorf("listing tenants with anchors: %w", err)
 	}
-	_, err = core.ForEachTenant(ctx, tenants, func(tctx context.Context, tenant string) error {
+	_, anchorErr := core.ForEachTenant(ctx, tenants, func(tctx context.Context, tenant string) error {
 		return s.sweepTenant(tctx, tenant)
 	})
+	if ctx.Err() != nil {
+		return errors.Join(anchorErr, ctx.Err())
+	}
+	return errors.Join(anchorErr, s.repairHolders(ctx))
+}
+
+// repairHolders is the backstop for the device-roster fact, which device-management publishes
+// best-effort: for every deleted device token not yet known to be held again, it asks
+// device-management whether the token resolves to a device now and, for each that does, records
+// the instant it ASKED as the token's HeldSince. A device found existing after the token's
+// recorded deletion can only be a re-created one; the instant taken BEFORE the question is the
+// conservative one, so a deletion racing the question is never treated as already re-created.
+//
+// It pages and batches like the anchor walk (one existence query per page of tokens) and fails
+// safe the same way: a page device-management could not answer ends the tenant and records
+// nothing. A token nobody re-creates is asked about again on every pass; the page size bounds
+// what each question costs.
+func (s *AnchorReconciliationSweep) repairHolders(ctx context.Context) error {
+	tenants, err := s.Api.DeletedDeviceTokenTenants(ctx)
+	if err != nil {
+		return fmt.Errorf("listing tenants with deleted entities: %w", err)
+	}
+	_, err = core.ForEachTenant(ctx, tenants, func(tctx context.Context, tenant string) error {
+		return s.repairTenantHolders(ctx, core.WithTenant(tctx, tenant), tenant)
+	})
 	return err
+}
+
+func (s *AnchorReconciliationSweep) repairTenantHolders(ctx, tctx context.Context, tenant string) error {
+	var cursor string
+	var watch cursorWatch
+	var recorded int
+	for {
+		if err := watch.advancing(cursor); err != nil {
+			return err
+		}
+		page, err := s.Api.UnheldDeletedDeviceTokensAfter(tctx, cursor)
+		if err != nil {
+			return fmt.Errorf("reading deleted device tokens: %w", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		cursor = page[len(page)-1]
+		refs := make([]emmodel.AnchorRef, len(page))
+		for i, token := range page {
+			refs[i] = emmodel.AnchorRef{Type: string(entity.TypeDevice), Token: token}
+		}
+		asked := time.Now()
+		existing := make(map[string]bool, len(refs))
+		if err := s.resolveChunk(ctx, tenant, refs, existing); err != nil {
+			log.Warn().Err(err).Str("tenant", tenant).
+				Msg("Device-token holder repair: device-management unreachable; skipping tenant")
+			return fmt.Errorf("%w: %v", errUnresolved, err)
+		}
+		for _, token := range page {
+			if !existing[refKey(string(entity.TypeDevice), token)] {
+				continue
+			}
+			if err := s.Api.RecordDeviceTokenHeld(tctx, token, asked); err != nil {
+				return fmt.Errorf("recording that device token %q is held again: %w", token, err)
+			}
+			recorded++
+		}
+	}
+	if recorded > 0 {
+		log.Info().Str("tenant", tenant).Int("tokens", recorded).
+			Msg("Device-token holder repair recorded re-created device tokens a roster fact had not")
+	}
+	return nil
 }
 
 // sweepTenant reconciles one tenant's anchors against device-management, ONE PAGE AT A

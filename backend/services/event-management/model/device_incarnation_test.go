@@ -80,10 +80,15 @@ func seedReincarnation(t *testing.T, api *Api, tenant string) {
 	}
 	_, err := api.DeleteAnchorsForEntity(ctx, "device", "pump-1", reincarnationDeletedAt)
 	require.NoError(t, err)
+	// The token is created again: a live device holds it from just after the deletion (the
+	// device-roster fact's ExpectedSince, or the instant the sweep asked).
+	require.NoError(t, api.RecordDeviceTokenHeld(ctx, "pump-1", reincarnationDeletedAt.Add(time.Minute)))
 	// A CUSTOMER that shares the bystander's token was deleted after everything above: it is
-	// not a device, so it bounds no read of the device "pump-2".
+	// not a device, so it bounds no read of the device "pump-2". The bystander is held (it is a
+	// live device), so only the entity type keeps the customer's deletion from bounding it.
 	_, err = api.DeleteAnchorsForEntity(ctx, "customer", "pump-2", reincarnationDeletedAt.Add(24*time.Hour))
 	require.NoError(t, err)
+	require.NoError(t, api.RecordDeviceTokenHeld(ctx, "pump-2", reincarnationDeletedAt.Add(48*time.Hour)))
 }
 
 // wantReincarnation is the readings a read of token must return: its current incarnation's.
@@ -243,10 +248,11 @@ func TestTheBucketedNameCountSeesOnlyTheCurrentIncarnation(t *testing.T) {
 	}
 	_, err := api.DeleteAnchorsForEntity(ctx, "device", "pump-1", reincarnationDeletedAt)
 	require.NoError(t, err)
+	require.NoError(t, api.RecordDeviceTokenHeld(ctx, "pump-1", reincarnationDeletedAt.Add(time.Minute)))
 	token := "pump-1"
 	incarnation, err := api.deviceIncarnationBound(ctx, &token)
 	require.NoError(t, err)
-	require.True(t, incarnation.active(), "precondition: the deletion is recorded")
+	require.True(t, incarnation.active(), "precondition: the token was deleted and created again")
 	names, err := api.distinctMeasurementNames(ctx, MeasurementAggregationCriteria{DeviceToken: &token},
 		incarnation, false, 100)
 	require.NoError(t, err)
