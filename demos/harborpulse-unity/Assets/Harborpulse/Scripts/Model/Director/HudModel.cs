@@ -79,5 +79,8 @@ namespace DeviceChain.Harborpulse.Model.Director
             var quay = d.Quay == "hp-east-quay" ? "E" : d.Quay == "hp-basin" ? "B" : "N";
             return (d.Kind == DeviceKind.Light ? "Lamp " : d.Kind == DeviceKind.Charger ? "Charger " : DeviceKind.IsGauge(d.Kind) ? "Gauge " : d.Kind == DeviceKind.Pump ? "Pump " : "Building ") + quay + (d.Index > 0 ? d.Index.ToString(CultureInfo.InvariantCulture) : "");
         }
+        /// <summary>Whether a recording may end now: no caption is visible, or the visible one has had its 3 s floor.</summary>
+        public static bool QuitAllowed(DirectorView view, double nowS) => view == null || QuitAllowed(view.Caption, view.CaptionAtS, nowS);
+        public static bool QuitAllowed(string caption, double captionAtS, double nowS) => string.IsNullOrEmpty(caption) || nowS - captionAtS >= 3;
     }
 }

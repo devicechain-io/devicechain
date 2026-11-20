@@ -321,7 +321,8 @@ namespace DeviceChain.Harborpulse.Visuals
                 var page = directorView?.Page ?? "ambient";
                 ScreenCapture.CaptureScreenshot(Path.Combine(captureDir, "harborpulse-d" + clock.Day + "-" + time + "-page-" + page + "-" + directorSeconds.ToString("000000.00", CultureInfo.InvariantCulture) + ".png"));
             }
-            if (Application.isPlaying && clock.SimSeconds / 3600 >= quitAfter) Application.Quit();
+            // Quit only on a caption boundary: a caption cut by the end of the recording would be on screen for less than 3 s.
+            if (Application.isPlaying && clock.SimSeconds / 3600 >= quitAfter && HudModel.QuitAllowed(directorView, directorSeconds)) Application.Quit();
         }
 
         void ResetDirector()

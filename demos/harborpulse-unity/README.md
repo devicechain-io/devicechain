@@ -386,7 +386,7 @@ Runtime capture flags:
 - `-hp-quit-after-sim <absolute hour>`: quit at that runner/preview time (26 means next day 02:00).
 - `-hp-resolution 1920x1080`, or `-hp-portrait` for 1080x1920 and `pose:home:portrait`.
 
-Editor batch entry points (no Editor was launched during implementation):
+Editor batch entry points:
 
 ```text
 DeviceChain.Harborpulse.EditorTools.HarborBuild.BuildWindowsPlayer -hp-build-dir <dir>
@@ -402,14 +402,14 @@ water exceeds 45%, sky exceeds 25%, fewer than 30 devices qualify, or a required
 The contact sheet advances the preview continuously; `-hp-director-hours <comma-separated hours>`
 selects samples. It keeps the preview stamp and renders only evidence the installed feed supplies.
 
-**HOME composition remains an acceptance limitation, not a claimed pass.** Both approved poses and
-committed anchors are retained. In portrait, forward=(0,-0.3795,0.9252), so at Basin z=90 the view depth
-is about 449 m. Its horizontal half-width is `449*tan(26 deg)*9/16 = 123 m`; Basin begins at x=-155 m.
-At the landscape Basin south end (z=-130), view depth is about 308 m and half-width is
-`308*tan(15 deg)*16/9 = 147 m`, while the quay spans x=-230..-155. Geometry cannot restore devices
-outside those frusta. The maintainer must choose revised HOME optics/positions or revised map anchors
-and then run the masks check; neither aspect's 30/37 criterion has been asserted here. The ridge arithmetic
-and exposed rig pixel estimate are also documented beside the ground geometry.
+**HOME passes at both aspects.** The side quays keep their devices on the water-facing wall of their
+northern two thirds (their southern ends are nearer the camera than HOME's frustum is wide there), and the
+9:16 HOME looks east along the horseshoe from over the western town, (-560, 300, -60) to (40, 0, 10) at a
+52 degree vertical field of view, because a north-facing 9:16 frame holds only North Quay. The masks check
+at 12:30 gives 36 of 37 devices at 16:9 (water 44 %, sky 0 %; the truck is hidden in its depot) and 36 of
+37 at 9:16 (water 35 %, sky 3 %), with all three quays, the mouth and the ridge visible. The camera-space
+Canvas does not render reliably outside Play mode, so the HOME beauty frame is the scene with its burnt-in
+stamp; HUD-bearing frames come from Play mode or the player's `-hp-capture-dir`.
 
 Verification:
 

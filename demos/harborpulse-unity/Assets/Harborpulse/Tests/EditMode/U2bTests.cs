@@ -166,5 +166,14 @@ namespace DeviceChain.Harborpulse.Tests
             r.Decision(new DirectorEvent(0,"caption","4","hello"));r.Decision(new DirectorEvent(1,"caption-end","5","other"));r.Decision(new DirectorEvent(2,"caption-end","4","hello"));
             Assert.That(DirectorLogCheck.Check(new StringReader(output.ToString())).Single(),Does.Contain("visible 2 s"));
         }
-    }
+            [Test]
+        public void ARecordingEndsOnlyOnACaptionBoundary()
+        {
+            // Live day 3: the control player quit at its sim hour 0 s into the end card's last caption, a sub-3 s caption on record.
+            Assert.That(HudModel.QuitAllowed("own position.", 100, 100), Is.False);
+            Assert.That(HudModel.QuitAllowed("own position.", 100, 102.9), Is.False);
+            Assert.That(HudModel.QuitAllowed("own position.", 100, 103), Is.True);
+            Assert.That(HudModel.QuitAllowed(null, 0, 1), Is.True);
+        }
+}
 }
