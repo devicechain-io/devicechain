@@ -165,7 +165,7 @@ The product/strategy narrative docs can be reconciled with the `/sync-product-do
 ## Build, test, and lint (these are the CI gates — run before committing)
 
 Go — **run these with a MODULE as the working directory, not the repo root.** CI does exactly
-that (`working-directory: ${{ matrix.module }}` on every Go step), and the root is not a Go
+that (small modules share a job but each command still runs inside its module), and the root is not a Go
 module, so the root-level forms do not do what they look like they do:
 
 - `go build ./...` from the root **fails outright** — `pattern ./...: directory prefix . does not
@@ -256,7 +256,12 @@ always true — CI's discovery used to glob `backend/{cli,core,k8s,edge/*,servic
 which silently omitted `deploy` (`deploy/assets.go`, the module embedding the chart and the
 OpenTofu tree into dcctl), so no CI job built, vetted, tested or scanned it. The one thing to know
 about the derived matrix: an empty or truncated module list would run *zero* jobs and report green,
-so the discover step cross-checks its count against a second, independent parse of `go.work`.
+so the discover step cross-checks its count and exact membership against a second, independent
+parse of `go.work`. `hack/ci-go-batch.py` also proves the full batches partition that module list
+without omissions or duplicates, before narrowing them to ci-select's selected legs. The checked-in
+`hack/ci-go-durations.json` uses successful push timings; regenerate it with the command in its
+`regenerate` field. Split, envtest, slow and unmeasured modules keep independent jobs; small modules
+share deterministic batches within their cache groups, with per-module log groups and summaries.
 
 Other areas:
 
