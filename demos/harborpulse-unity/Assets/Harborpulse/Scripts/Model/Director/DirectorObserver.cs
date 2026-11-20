@@ -15,7 +15,9 @@ namespace DeviceChain.Harborpulse.Model.Director
         sealed class Row { public string Name, Scope; public JsonElement Value; }
         readonly HarborLayout layout;
         readonly Func<DirectorReadSnapshot> reads;
+        // Sticky problems (a malformed record, a missing instant) last the run; current ones restate this frame's read state.
         readonly HashSet<string> problems = new HashSet<string>(StringComparer.Ordinal);
+        readonly HashSet<string> current = new HashSet<string>(StringComparer.Ordinal);
         readonly Dictionary<string, string> emitted = new Dictionary<string, string>();
         readonly Dictionary<string, JsonElement> alarmHistory = new Dictionary<string, JsonElement>();
         readonly Dictionary<string, Reading> previous = new Dictionary<string, Reading>();
@@ -41,7 +43,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         };
         public DirectorObserver(HarborLayout layout, Func<DirectorReadSnapshot> reads)
         { this.layout = layout ?? throw new ArgumentNullException(nameof(layout)); this.reads = reads ?? throw new ArgumentNullException(nameof(reads)); }
-        public IReadOnlyList<string> Problems => Array.AsReadOnly(problems.OrderBy(p => p, StringComparer.Ordinal).ToArray());
+        public IReadOnlyList<string> Problems => Array.AsReadOnly(problems.Union(current).OrderBy(p => p, StringComparer.Ordinal).ToArray());
         static string S(JsonElement r, string key) { var v = DirectorProbeEvaluation.Require(r, key); if (v.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(v.GetString())) throw new FormatException("missing required string " + key); return v.GetString(); }
         static string Optional(JsonElement r, string key) => r.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
         static DateTimeOffset Time(string value) => DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var t) ? t : throw new FormatException("invalid platform instant " + value);
@@ -84,14 +86,14 @@ namespace DeviceChain.Harborpulse.Model.Director
                 startSim = lastSim = input.Sim; measurementReconnects = alarmReconnects = 0;
             }
             if (input.Sim < lastSim) throw new InvalidOperationException("observer requires a new instance on seek");
-            var snapshot = reads(); rows = new List<Row>();
+            current.Clear(); var snapshot = reads(); rows = new List<Row>();
             if (snapshot == null) {
                 foreach (var name in Streams.Keys) Gap(name, lastSim, input.Sim);
-                if (input.Source is PreviewSource) { problems.Add("OFFLINE PREVIEW: scenario stand-ins; platform-only reads unavailable"); Preview(); }
-                else problems.Add("director reads waiting for bind");
+                if (input.Source is PreviewSource) { current.Add("OFFLINE PREVIEW: scenario stand-ins; platform-only reads unavailable"); Preview(); }
+                else current.Add("director reads waiting for bind");
             }
             else {
-                foreach (var p in snapshot.Problems) problems.Add(p);
+                foreach (var p in snapshot.Problems) current.Add(p);
                 foreach (var r in snapshot.Reads.Where(r => r.Probe == DirectorProbe.PROBE_FAILED)) failedProbes.Add(r.Name);
                 foreach (var name in failedProbes) Gap(name, startSim, input.Sim);
                 foreach (var name in Streams.Keys) {

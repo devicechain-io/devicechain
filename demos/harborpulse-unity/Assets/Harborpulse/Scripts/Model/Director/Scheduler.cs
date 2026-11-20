@@ -194,7 +194,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             if (active == null)
             {
                 var next = pages.Values.Where(p => !p.Retired && p.State != PageState.Presented && !p.Page.CutsOnly && p.Page.FromSim > sample.Sim).OrderBy(p => p.Page.FromSim).FirstOrDefault();
-                UpNext = next == null ? "" : "up next: " + PageTitle(next.Page.Id) + " at " + ((int)next.Page.FromSim).ToString("00", System.Globalization.CultureInfo.InvariantCulture) + ":" + ((int)Math.Round((next.Page.FromSim % 1) * 60)).ToString("00", System.Globalization.CultureInfo.InvariantCulture);
+                UpNext = next == null ? "" : "up next: " + PageTitle(next.Page.Id) + " at " + ((int)next.Page.FromSim % 24).ToString("00", System.Globalization.CultureInfo.InvariantCulture) + ":" + ((int)Math.Round((next.Page.FromSim % 1) * 60)).ToString("00", System.Globalization.CultureInfo.InvariantCulture);
                 if (log.Count == 0 || log.Last().Kind != "ambient" || log.Last().Value != UpNext) Emit(now, "ambient", null, UpNext);
                 var pose = new[] { "pose:home", "pose:north-quay:promenade", "pose:east-quay:mouth-wide" }[(int)(now / 12) % 3];
                 if (ambientPose != pose) { ambientPose = pose; Emit(now, "ambient-pose", null, pose); }

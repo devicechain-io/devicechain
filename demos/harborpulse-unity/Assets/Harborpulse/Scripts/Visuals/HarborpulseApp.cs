@@ -58,6 +58,7 @@ namespace DeviceChain.Harborpulse.Visuals
         DateTimeOffset recordingEpoch;
         string directorRun, localDigest, digestProblem;
         double directorSeconds, lastWorldS = -1;
+        readonly System.Diagnostics.Stopwatch directorWall = System.Diagnostics.Stopwatch.StartNew();
         string recordRoot, captureDir;
         double captureEvery, nextCapture, quitAfter = double.PositiveInfinity;
         bool engineer, hidden, portrait;
@@ -323,7 +324,7 @@ namespace DeviceChain.Harborpulse.Visuals
         void ResetDirector()
         {
             recording?.Dispose(); recording = null; director = null; directorRun = null;
-            fixes.Clear(); lastFix = default; directorSeconds = 0; lastWorldS = -1; nextCapture = 0;
+            fixes.Clear(); lastFix = default; directorSeconds = 0; lastWorldS = -1; nextCapture = 0; directorWall.Restart();
         }
         void ApplyMappedTruck(IHarborSource source, DateTimeOffset now)
         {
@@ -355,11 +356,16 @@ namespace DeviceChain.Harborpulse.Visuals
                 }
                 director = new DirectorHost(storyboard, layout, map, DirectorFeedFactory?.Invoke(), recording?.Recorder);
             }
-            directorSeconds += Math.Max(0, dt);
+            // Live: show seconds are the wall's, read from a monotonic stopwatch. Frame deltas are capped by Unity
+            // (maximumDeltaTime), so a slow frame would let the director's clock fall behind the platform's records,
+            // and a record stamped after "now" is never consumed. The preview keeps its own scripted clock.
+            if (Offline) directorSeconds += Math.Max(0, dt);
+            else directorSeconds = Math.Max(directorSeconds, directorWall.Elapsed.TotalSeconds);
             var matches = Offline || LayoutDigest.Matches(localDigest, source.Status?.LayoutDigest, out digestProblem);
             var sim = clock.SimSeconds / 3600;
             var defects = (source.Status?.Defects ?? Array.Empty<string>()).ToList();
             if (Array.IndexOf(Environment.GetCommandLineArgs(), "-hp-layout-digest-override") >= 0) defects.Add("CONTROL layout digest override");
+            controlRun = defects.Count > 0;
             var sample = new DirectorSample(run, sim, directorSeconds, clock.Mode == ClockMode.Stale || clock.Mode == ClockMode.Waiting, matches, defects);
             directorView = director.Tick(sample, new DirectorInputs { Run = run, RecordingEpoch = recordingEpoch, Now = recordingEpoch.AddSeconds(directorSeconds), Sim = sim, Source = source, Frame = frame });
             if (recording != null && directorSeconds - lastWorldS >= 1)
@@ -375,12 +381,14 @@ namespace DeviceChain.Harborpulse.Visuals
         {
             if (directorView == null) return;
             var sim = clock.SimSeconds / 3600;
-            var control = directorView.Banner.StartsWith("TEST CONTROL", StringComparison.Ordinal);
+            // A planted defect or a scene injection makes the whole run a control, whichever banner currently wins precedence.
+            var control = controlRun || directorView.Banner.StartsWith("TEST CONTROL", StringComparison.Ordinal);
             Hud?.Apply(directorView, Offline ? "OFFLINE PREVIEW" : control ? "TEST CONTROL" : "LIVE", sim,
                 Offline ? "x" + previewSpeed.ToString("0.#", CultureInfo.InvariantCulture) : "x1",
                 HudModel.Tags(layout, frame, sceneCamera.aspect < 1 ? 2 : 4),
                 string.Join(" | ", new[] { digestProblem, recording?.Problem, Offline ? null : frame.ReadProblem }.Where(p => !string.IsNullOrEmpty(p))));
         }
+        bool controlRun;
         DateTimeOffset previewWall;
         public void BeginDirectorPreview(double absoluteHour)
         {

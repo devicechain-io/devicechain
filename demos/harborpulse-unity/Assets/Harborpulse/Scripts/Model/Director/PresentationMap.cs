@@ -291,8 +291,13 @@ namespace DeviceChain.Harborpulse.Model.Director
             foreach (var pair in new[] { ("pump-north", "hp-pump-north"), ("pump-east", "hp-pump-east"), ("pump-basin", "hp-pump-basin"), ("chargers-east", "hp-charger-east-1"), ("chargers-basin", "hp-charger-basin-2"), ("lamp-east", "hp-light-east-3"), ("gauge-north", "hp-gauge-north-3"), ("gauge-east", "hp-gauge-east-1"), ("terminal", "hp-meter-ferry-terminal"), ("north-quay", "hp-light-north-1"), ("charger-north", "hp-charger-north-1") })
                 foreach (var suffix in new[] { "kiosk-ext", "well", "well-locked", "pair", "close", "wide", "promenade", "insert" })
                 {
+                    // Stand off on the device's water side (its quay's wall faces the harbour), so a close pose looks back at
+                    // the device across the quay edge instead of into the ground behind it.
                     var a = anchors[pair.Item2]; var close = suffix == "well" || suffix == "well-locked";
-                    poses.Add("pose:" + pair.Item1 + ":" + suffix, new CameraPose(new Point3(a.X, close ? 8 : 25, a.Z - (close ? 8 : 35)), new Point3(a.X, 1, a.Z), 38));
+                    var quay = layout.Devices.First(d => d.Token == pair.Item2).Quay;
+                    var wx = quay == "hp-east-quay" ? -1.0 : quay == "hp-basin" ? 1.0 : 0; var wz = quay == "hp-north-quay" ? -1.0 : 0;
+                    var back = close ? 16 : 38; var up = close ? 10 : 24;
+                    poses.Add("pose:" + pair.Item1 + ":" + suffix, new CameraPose(new Point3(a.X + wx * back, up, a.Z + wz * back), new Point3(a.X, 2, a.Z), close ? 42 : 38));
                 }
             poses.Add("pose:east-quay:mouth-wide", new CameraPose(new Point3(30, 55, -180), new Point3(175, 0, 20), 40));
             var plain = fences[layout.Fences[0].Token];

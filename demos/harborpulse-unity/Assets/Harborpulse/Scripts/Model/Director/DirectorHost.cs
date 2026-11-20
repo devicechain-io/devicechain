@@ -83,7 +83,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             view.Rail = hud.Rail; view.Links = hud.Links;
             view.Banner = HudModel.Banner(sample.DigestMatches, sample.Stale, sample.Defects);
             view.Problem = feed == null ? "no observer feed" : string.Join(" | ", (feed.Problems ?? Array.Empty<string>()).Concat(new[] { feedFailure }).Where(p => !string.IsNullOrEmpty(p)));
-            view.UpNext = Scheduler.UpNext; view.Mode = Scheduler.Mode;
+            view.UpNext = Scheduler.ActivePage == null ? Scheduler.UpNext : ""; // the chip belongs to idle time, not to a playing page view.Mode = Scheduler.Mode;
             view.DirectorWeight = Enabled && sample.DigestMatches ? FreeRoam.DirectorWeight(sample.MonotonicS) : 0;
             return view;
         }

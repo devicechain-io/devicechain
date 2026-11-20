@@ -78,7 +78,7 @@ namespace DeviceChain.Harborpulse.Live
                         w.WriteStartObject("c"); w.WriteNumber("pageNumber", 1); w.WriteNumber("pageSize", 1000);
                         if (d.Key == "membership") { w.WriteString("targetType", "area"); w.WriteString("target", "__harborpulse_probe_absent__"); }
                         if (d.Key == "notifications") w.WriteString("alarmToken", "__harborpulse_probe_absent__");
-                        if (d.Key == "alarms") w.WriteString("originatorToken", "__harborpulse_probe_absent__");
+                        if (d.Key == "alarms") { w.WriteString("originatorType", "device"); w.WriteString("originatorToken", "__harborpulse_probe_absent__"); }
                         if (d.Key == "measurements" || d.Key == "commands") w.WriteString("deviceToken", "__harborpulse_probe_absent__");
                         if (d.Key == "replacements") w.WriteString("device", "__harborpulse_probe_absent__");
                         w.WriteEndObject();
@@ -106,7 +106,8 @@ namespace DeviceChain.Harborpulse.Live
         });
         IEnumerable<JsonElement> Rows(string name)
         {
-            foreach (var j in jobs.Values.Where(j => j.Name == name && j.Scope != "__probe" && j.Result.Data.HasValue && j.Result.Error == null))
+            // Materialized: a caller may Add a job (an assignment found on a target row) while it walks these rows.
+            foreach (var j in jobs.Values.Where(j => j.Name == name && j.Scope != "__probe" && j.Result.Data.HasValue && j.Result.Error == null).ToArray())
                 foreach (var r in DirectorProbeEvaluation.Records(name, j.Result.Data.Value)) yield return r;
         }
         public void Tick(ScenarioStatus status, DateTimeOffset now)
@@ -114,7 +115,7 @@ namespace DeviceChain.Harborpulse.Live
             if (stop.IsCancellationRequested) return;
             foreach (var d in layout.Devices) {
                 var token = boundToken(d.ExternalId); if (token == null) continue;
-                Add("alarms", token, Criteria(w => w.WriteString("originatorToken", token)));
+                Add("alarms", token, Criteria(w => { w.WriteString("originatorType", "device"); w.WriteString("originatorToken", token); }));
                 // U1 supplies current readings. History is needed for replacement and the restore burst only.
                 if (d.Token == "hp-gauge-north-3" || d.Token == "hp-charger-east-1" || d.Token == "hp-charger-east-2")
                     Add("measurements", token, Criteria(w => {
