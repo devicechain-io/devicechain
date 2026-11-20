@@ -234,10 +234,17 @@ func (api *Api) CalculatedEvents(ctx context.Context, req CalculatedEventsReques
 	// Ordered by sample, then name and row identity, so a sample's rows are adjacent and a key
 	// a sample holds twice (two readings of one batch at one instant) resolves the same way on
 	// every read: the first row by payload id.
-	rows, err := api.RDB.DB(ctx).Model(&MeasurementEvent{}).
+	// The device's CURRENT incarnation only: a token deleted and created again keeps the
+	// deleted device's readings stored, and a preview of them would describe another device.
+	incarnation, err := api.deviceIncarnationBound(ctx, &req.DeviceToken)
+	if err != nil {
+		return nil, err
+	}
+	query := api.RDB.DB(ctx).Model(&MeasurementEvent{}).
 		Select("event_id, occurred_time, name, value").
 		Where("device_token = ? AND name IN ? AND occurred_time >= ? AND occurred_time <= ?",
-			req.DeviceToken, keys, req.From, req.To).
+			req.DeviceToken, keys, req.From, req.To)
+	rows, err := api.payloadRows(ctx, incarnation, "measurement_events", query).
 		Order("occurred_time ASC, event_id ASC, name ASC, payload_id ASC").
 		Rows()
 	if err != nil {

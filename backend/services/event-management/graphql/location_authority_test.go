@@ -41,7 +41,7 @@ func newLocationGateApi(t *testing.T) *model.Api {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err, "open sqlite")
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
-	require.NoError(t, db.AutoMigrate(&model.Event{}, &model.LocationEvent{}, &model.MeasurementEvent{}),
+	require.NoError(t, db.AutoMigrate(&model.Event{}, &model.LocationEvent{}, &model.MeasurementEvent{}, &model.EntityDeletionWatermark{}),
 		"migrate")
 	return model.NewApi(&rdb.RdbManager{Database: db})
 }

@@ -30,7 +30,7 @@ func newReadTestApi(t *testing.T) *Api {
 	}
 	// Only the base Event table is needed to prove tenant-scoped reads; the
 	// typed-table FKs are skipped here to keep the in-memory schema simple.
-	if err := db.AutoMigrate(&Event{}); err != nil {
+	if err := db.AutoMigrate(&Event{}, &EntityDeletionWatermark{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
 	return NewApi(&rdb.RdbManager{Database: db})

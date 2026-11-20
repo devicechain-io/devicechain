@@ -38,7 +38,7 @@ func newSharedAreaEvents(t *testing.T) sharedAreaEvents {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&model.Event{}, &model.EventAnchor{}))
+	require.NoError(t, db.AutoMigrate(&model.Event{}, &model.EventAnchor{}, &model.EntityDeletionWatermark{}))
 	f := sharedAreaEvents{api: model.NewApi(&rdb.RdbManager{Database: db}), tenant: "tenant1"}
 	write := core.WithTenant(context.Background(), f.tenant)
 	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)

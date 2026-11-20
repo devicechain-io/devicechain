@@ -35,7 +35,7 @@ func TestIsolationSweep(t *testing.T) {
 	db := sqlitetest.OpenMemory(t, &gorm.Config{Logger: logger.Discard})
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, db.AutoMigrate(&model.Event{}, &model.EventAnchor{}, &model.MeasurementEvent{},
-		&model.LocationEvent{}, &model.AlertEvent{}))
+		&model.LocationEvent{}, &model.AlertEvent{}, &model.EntityDeletionWatermark{}))
 	api := model.NewApi(&rdb.RdbManager{Database: db})
 
 	const tenant = "tenant1"

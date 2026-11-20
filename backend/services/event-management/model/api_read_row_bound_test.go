@@ -29,7 +29,7 @@ func newRowBoundTestApi(t *testing.T) *Api {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&MeasurementEvent{}, &MeasurementRollup{}))
+	require.NoError(t, db.AutoMigrate(&MeasurementEvent{}, &MeasurementRollup{}, &EntityDeletionWatermark{}))
 	return NewApi(&rdb.RdbManager{Database: db})
 }
 
@@ -125,7 +125,7 @@ func TestBucketedMeasurementsCountsOnlyNamesInScope(t *testing.T) {
 
 	criteria, _, err := boundBucketedRange(rowRead(9000, 1, nil), time.Now())
 	require.NoError(t, err)
-	n, err := api.distinctMeasurementNames(ctx, criteria, false, 100)
+	n, err := api.distinctMeasurementNames(ctx, criteria, incarnationBound{}, false, 100)
 	require.NoError(t, err)
 	assert.Equal(t, int64(5), n)
 
@@ -175,7 +175,7 @@ func TestDistinctMeasurementNamesStopsAtEnough(t *testing.T) {
 
 	criteria, _, err := boundBucketedRange(rowRead(MaxMeasurementBuckets, 1, nil), time.Now())
 	require.NoError(t, err)
-	n, err := api.distinctMeasurementNames(ctx, criteria, false, 6)
+	n, err := api.distinctMeasurementNames(ctx, criteria, incarnationBound{}, false, 6)
 	require.NoError(t, err)
 	assert.Equal(t, int64(6), n)
 
@@ -202,7 +202,7 @@ func TestBucketedMeasurementsFailsClosedWhenTheNameCountFails(t *testing.T) {
 
 	criteria, _, err := boundBucketedRange(rowRead(10, 60, nil), time.Now())
 	require.NoError(t, err)
-	n, err := api.distinctMeasurementNames(ctx, criteria, true, 100)
+	n, err := api.distinctMeasurementNames(ctx, criteria, incarnationBound{}, true, 100)
 	require.Error(t, err)
 	assert.Zero(t, n)
 
@@ -227,7 +227,7 @@ func TestDistinctMeasurementNamesRollupScope(t *testing.T) {
 
 	criteria, _, err := boundBucketedRange(rowRead(24*60, 60, nil), time.Now())
 	require.NoError(t, err)
-	n, err := api.distinctMeasurementNames(ctx, criteria, true, 100)
+	n, err := api.distinctMeasurementNames(ctx, criteria, incarnationBound{}, true, 100)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), n)
 }
@@ -246,12 +246,12 @@ func TestDistinctMeasurementNamesRawEventTypes(t *testing.T) {
 	criteria, _, err := boundBucketedRange(rowRead(3600, 1, nil), time.Now())
 	require.NoError(t, err)
 	criteria.EventTypes = []eventtype.EventType{eventtype.Measurement}
-	n, err := api.distinctMeasurementNames(ctx, criteria, false, 100)
+	n, err := api.distinctMeasurementNames(ctx, criteria, incarnationBound{}, false, 100)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), n)
 
 	criteria.EventTypes = nil
-	n, err = api.distinctMeasurementNames(ctx, criteria, false, 100)
+	n, err = api.distinctMeasurementNames(ctx, criteria, incarnationBound{}, false, 100)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), n, "the control: without the filter the third name counts")
 }

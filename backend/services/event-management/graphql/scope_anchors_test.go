@@ -44,7 +44,7 @@ func TestAScopedMemberSeesOnlyItsOwnAnchorsOnACoOwnedEvent(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&model.Event{}, &model.EventAnchor{}))
+	require.NoError(t, db.AutoMigrate(&model.Event{}, &model.EventAnchor{}, &model.EntityDeletionWatermark{}))
 	api := model.NewApi(&rdb.RdbManager{Database: db})
 
 	const tenant = "tenant1"

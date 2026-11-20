@@ -56,7 +56,7 @@ func newAreaWorld(t *testing.T) areaWorld {
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, db.AutoMigrate(&model.Event{}, &model.EventAnchor{},
-		&model.MeasurementEvent{}, &model.LocationEvent{}, &model.AlertEvent{}))
+		&model.MeasurementEvent{}, &model.LocationEvent{}, &model.AlertEvent{}, &model.EntityDeletionWatermark{}))
 	w := areaWorld{api: model.NewApi(&rdb.RdbManager{Database: db})}
 	record := func(device string, at time.Time, value float64, anchors ...[2]string) {
 		write := core.WithTenant(context.Background(), areaTenant)

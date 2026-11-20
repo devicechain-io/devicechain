@@ -52,7 +52,7 @@ func TestAnOutOfRangeAlertLevelNullsTheListingOnTheWire(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err, "open sqlite")
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
-	require.NoError(t, db.AutoMigrate(&model.AlertEvent{}), "migrate")
+	require.NoError(t, db.AutoMigrate(&model.AlertEvent{}, &model.EntityDeletionWatermark{}), "migrate")
 	ctx := core.WithTenant(context.Background(), "acme")
 	occurred := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	for i, level := range []uint32{3, math.MaxInt32 + 1} {
