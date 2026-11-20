@@ -249,6 +249,8 @@ var (
 	// PlacementUnavailableCounter counts captured messages held during a placement outage.
 	PlacementUnavailableCounter prometheus.Counter
 	PlacementHeldGauge          *prometheus.GaugeVec
+	// PlacementHoldFallbackCounter counts final deliveries that fell back to unheld, by reason.
+	PlacementHoldFallbackCounter *prometheus.CounterVec
 	// BackpressureCounter counts inbound messages refused because inbound-events is applying
 	// backpressure: a reader of it is so far behind that accepting more would discard events
 	// it has not read. Apart from RateLimitedCounter because the cause is the platform, not
@@ -454,6 +456,11 @@ func initializeMetrics() {
 		"placement_held_messages",
 		"Captured final deliveries held while shard placement is unavailable",
 		[]string{"source"})
+	PlacementHoldFallbackCounter = Microservice.NewCounterVec(
+		"total_placement_hold_fallback",
+		"Captured final deliveries not held (reason full) or no longer held (reason expired) during a placement outage; "+
+			"each is left unacknowledged for the max-delivery recorder",
+		[]string{"source", "reason"})
 	ExternalMqttOwnerGauge = Microservice.NewGaugeVec(
 		"external_mqtt_owner",
 		"1 on the pod that reads an external MQTT broker source, 0 on the others; per source, the sum across pods should be 1",
@@ -2227,6 +2234,9 @@ func wirePlacementHold(source *processor.GatewayJetStreamSource) {
 	source.UsePlacementCheck(inboundPlacementCheck)
 	if PlacementHeldGauge != nil {
 		source.UsePlacementHeldGauge(PlacementHeldGauge.WithLabelValues(source.Id))
+	}
+	if PlacementHoldFallbackCounter != nil {
+		source.UsePlacementHoldFallbackCounter(PlacementHoldFallbackCounter)
 	}
 }
 
