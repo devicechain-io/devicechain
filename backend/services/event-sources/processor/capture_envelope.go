@@ -39,11 +39,13 @@ import (
 // tenant's too (as a legacy-shaped message under the group id, never under a per-event id the
 // walk could not see).
 //
-// What does not take it: the message-store source (its ids carry a store epoch) and a message
-// with no capture sequence keep the per-event ids they always had.
+// The opt-in WAL source uses a separate W namespace, with the store incarnation in every
+// round key and id. A message whose position cannot be established keeps its legacy id.
 
 // captureDedupKind is the id kind letter of a capture-hop group.
 const captureDedupKind = "C"
+
+var errStoreEnvelopeUnsettled = errors.New("WAL envelope member is not known durable")
 
 // capturePos is where a captured message came from, carried from the gateway's read loop to the
 // submitter in the dedup id token (see positionToken).
@@ -95,16 +97,58 @@ func splitPosition(tenant, token string) (legacy string, pos *capturePos) {
 	if err != nil || seq == 0 {
 		return legacy, nil
 	}
-	return legacy, &capturePos{
+	pos = &capturePos{
 		key:         messaging.RoundKey{Tenant: tenant, Bucket: seq / messaging.RoundBucketSize, Epoch: epoch},
 		index:       uint32(seq % messaging.RoundBucketSize),
 		redelivered: redelivered,
 		ref:         ref,
 	}
+	if strings.Count(legacy, ".") == 2 {
+		storeEpoch, ok := storeIdentity(tenant, legacy, seq)
+		if !ok {
+			return legacy, nil
+		}
+		pos.key.SourceEpoch = storeEpoch
+	}
+	return legacy, pos
+}
+
+// storeIdentity accepts only the reader's complete incarnation-and-sequence identity.
+// Never invent an epoch from a pod's current view: a delivery can outlive WAL recreation.
+func storeIdentity(tenant, id string, seq uint64) (uint64, bool) {
+	prefix := tenant + ".m"
+	if !strings.HasPrefix(id, prefix) {
+		return 0, false
+	}
+	parts := strings.Split(strings.TrimPrefix(id, prefix), ".")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	epoch, err := strconv.ParseInt(parts[0], 36, 64)
+	if err != nil || epoch <= 0 || id != messaging.MqttMessageStoreDedupID(tenant, time.Unix(0, epoch), seq) {
+		return 0, false
+	}
+	return uint64(epoch), true
+}
+
+func (es *GatewayJetStreamSource) envelopeKey(tenant string, msg messaging.Message) (messaging.RoundKey, bool) {
+	key, _, ok := messaging.RoundKeyOf(tenant, msg.StreamSeq, msg.AppendTime)
+	if es.fromStore {
+		epoch, valid := storeIdentity(tenant, msg.DedupID, msg.StreamSeq)
+		if !valid || msg.AppendTime.IsZero() {
+			return messaging.RoundKey{}, false
+		}
+		key.SourceEpoch = epoch
+	}
+	return key, ok
 }
 
 // CaptureEnvelopes is the settings the gateway source needs to publish envelopes.
 type CaptureEnvelopes struct {
+	// AllowMessageStore explicitly opts the WAL source into the prototype. Capture
+	// callers leave it false; enabling inbound envelopes alone never changes WAL ingest.
+	AllowMessageStore bool
+
 	Rounds  messaging.RoundPublisher
 	Former  messaging.FormerConfig
 	Metrics *messaging.EnvelopeMetrics
@@ -115,9 +159,9 @@ type CaptureEnvelopes struct {
 
 // UseEnvelopes turns on inbound envelopes for this source. Call it before Start, beside
 // SetWriter: the writer must report a PubAck (messaging.AckedWriter), or the source refuses to
-// start rather than publish envelopes it cannot settle. The message-store source never takes it.
+// start rather than publish envelopes it cannot settle. The WAL source requires explicit opt-in.
 func (es *GatewayJetStreamSource) UseEnvelopes(c CaptureEnvelopes) error {
-	if es.fromStore {
+	if es.fromStore && !c.AllowMessageStore {
 		return errors.New("the message-store source publishes per-event ids and does not take inbound envelopes")
 	}
 	if c.Rounds == nil {
@@ -151,8 +195,12 @@ func (es *GatewayJetStreamSource) newCaptureEngine() (*captureEngine, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	dedupKind := captureDedupKind
+	if es.fromStore {
+		dedupKind = "W"
+	}
 	engine, err := messaging.NewRoundEngine(messaging.RoundEngineConfig{
-		Kind: eventenvelope.KindUnresolved, DedupKind: captureDedupKind,
+		Kind: eventenvelope.KindUnresolved, DedupKind: dedupKind,
 		Writer: aw, Rounds: es.envelopes.Rounds, Ctx: ctx, Metrics: es.envelopes.Metrics, TenantGone: es.envelopes.TenantGone,
 	})
 	if err != nil {
@@ -190,7 +238,7 @@ func (es *GatewayJetStreamSource) envelopeSubmitLoop(ce *captureEngine, publishe
 				flush(ce.former.Drain(time.Now()))
 				return
 			}
-			if p.pos == nil || len(p.msg.Value) > eventenvelope.MaxRawBytes {
+			if p.pos == nil || (!es.fromStore && len(p.msg.Value) > eventenvelope.MaxRawBytes) {
 				// It cannot be grouped, and it must not overtake an earlier event of its tenant
 				// that is still waiting for company in the open group: flush that group first.
 				if tenant, ok := core.TenantFromContext(p.ctx); ok {
@@ -220,6 +268,17 @@ func (es *GatewayJetStreamSource) publishGroup(ce *captureEngine, b messaging.Fo
 		if _, seen := groups[p.pos.key]; !seen {
 			order = append(order, p.pos.key)
 		}
+		settle := p.done
+		if es.fromStore {
+			settle = func(err error) {
+				if err != nil {
+					// Round failure does not judge payloads. Keep placement errors for the
+					// final-delivery hold; never ack other failures through poison routing.
+					err = errors.Join(errStoreEnvelopeUnsettled, err)
+				}
+				p.done(err)
+			}
+		}
 		groups[p.pos.key] = append(groups[p.pos.key], messaging.RoundMember{
 			TraceContext: p.ctx,
 			Index:        p.pos.index,
@@ -227,7 +286,7 @@ func (es *GatewayJetStreamSource) publishGroup(ce *captureEngine, b messaging.Fo
 			Key:          p.msg.Key,
 			Correlation:  p.msg.CorrelationID(),
 			Redelivered:  p.pos.redelivered,
-			Settle:       p.done,
+			Settle:       settle,
 			Beat:         p.pos.beat,
 		})
 	}

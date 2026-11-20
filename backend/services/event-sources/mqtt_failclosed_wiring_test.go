@@ -187,10 +187,23 @@ func TestTheStartFailsWithTheSettingOnAndNoGatewaySource(t *testing.T) {
 // one that hands the store source no writer, and a capture path that forwards the direct copy
 // too.
 func TestTheServiceReadsTheMessageStoreWithTheSettingOn(t *testing.T) {
+	for _, envelopes := range []bool{false, true} {
+		t.Run("envelopes="+strconv.FormatBool(envelopes), func(t *testing.T) {
+			testServiceReadsMessageStore(t, envelopes)
+		})
+	}
+}
+
+func testServiceReadsMessageStore(t *testing.T, envelopes bool) {
 	js, nmgr, mqttURL := fcWiringBrokerWith(t, true, true)
+	Configuration.Capture.MqttStoreEnvelopes = envelopes
+	Microservice.InstanceConfiguration.Infrastructure.Messaging.Envelopes.Inbound = envelopes
 	ctx := context.Background()
 	require.NoError(t, nmgr.Start(ctx))
-	t.Cleanup(func() { _ = nmgr.Stop(context.Background()) })
+	t.Cleanup(func() {
+		stopHTTPGroupCommit()
+		_ = nmgr.Stop(context.Background())
+	})
 	// The start's pass created the durables, so it left the direct streams without from marks
 	// (nothing is skipped until the durables have settled). A second pass, with the settle
 	// shortened, records them, as the watch's first pass after the settle does.
@@ -208,6 +221,7 @@ func TestTheServiceReadsTheMessageStoreWithTheSettingOn(t *testing.T) {
 	})
 	require.NoError(t, mqttStoreIngest.start(ctx, nmgr))
 	require.True(t, mqttStoreIngest.running())
+	require.Equal(t, envelopes, StoreSource.EnvelopesEnabled(), "the real WAL startup must wire the prototype")
 
 	clientID, err := messaging.DeviceClientID("inst-1", "acme", "sensor-001")
 	require.NoError(t, err)
@@ -233,6 +247,10 @@ func TestTheServiceReadsTheMessageStoreWithTheSettingOn(t *testing.T) {
 	require.EqualValues(t, 1, info.State.Msgs, "the event reached inbound-events by both copies")
 	m, err := js.GetMsg(inbound, info.State.LastSeq)
 	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(m.Header.Get(nats.MsgIdHdr), "acme.m"),
+	prefix := "acme.m"
+	if envelopes {
+		prefix = "W:acme:"
+	}
+	require.True(t, strings.HasPrefix(m.Header.Get(nats.MsgIdHdr), prefix),
 		"the event was forwarded from the capture path, not the store (dedup id %q)", m.Header.Get(nats.MsgIdHdr))
 }
