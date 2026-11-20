@@ -93,7 +93,7 @@ func LoadFile(path string) ([]Alert, error) {
 	return alerts, nil
 }
 
-// Check runs every alert in the given rule files past CheckExpr.
+// Check runs every alert in the given rule files past CheckExpr and CheckNameCollapse.
 //
 // It returns the findings and the number of alerts it actually examined. The caller
 // holds that count against a floor: zero findings is what a clean corpus reports AND
@@ -115,19 +115,42 @@ func Check(paths []string) ([]Finding, int, error) {
 				return nil, 0, fmt.Errorf("%s: %w", a.Location(), err)
 			}
 			if why != "" {
-				findings = append(findings, Finding{Alert: a, Reason: why})
+				findings = append(findings, Finding{Alert: a, Kind: AlwaysFiring, Reason: why})
+			}
+			why, err = CheckNameCollapse(a.Expr)
+			if err != nil {
+				return nil, 0, fmt.Errorf("%s: %w", a.Location(), err)
+			}
+			if why != "" {
+				findings = append(findings, Finding{Alert: a, Kind: CollapsedNames, Reason: why})
 			}
 		}
 	}
 	return findings, checked, nil
 }
 
-// Finding is one alert that can never return nothing.
+// Kind names which question a Finding answers.
+type Kind string
+
+const (
+	// AlwaysFiring is an alert that can never return nothing.
+	AlwaysFiring Kind = "always-firing"
+	// CollapsedNames is an alert whose range function leaves several metrics with
+	// identical label sets, so it cannot be evaluated on a real instance.
+	CollapsedNames Kind = "collapsed-names"
+)
+
+// Finding is one alert that can never return nothing, or that cannot be evaluated.
 type Finding struct {
 	Alert  Alert
+	Kind   Kind
 	Reason string
 }
 
 func (f Finding) String() string {
-	return fmt.Sprintf("%s\n    expr:   %s\n    always fires because %s", f.Alert.Location(), f.Alert.Expr, f.Reason)
+	verdict := "always fires because"
+	if f.Kind == CollapsedNames {
+		verdict = "cannot be evaluated because"
+	}
+	return fmt.Sprintf("%s\n    expr:   %s\n    %s %s", f.Alert.Location(), f.Alert.Expr, verdict, f.Reason)
 }
