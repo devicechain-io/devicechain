@@ -85,18 +85,35 @@ namespace DeviceChain.Harborpulse.Visuals
                 var pumps = layout.Devices.Where(d => map.QuayFor(d) == token && d.Kind == DeviceKind.Pump)
                     .Select(d => f.Local(V(map.Anchors[d.Token])) + new Vector3((float)WellFootprint.LocalX, 0, (float)WellFootprint.LocalZ)).ToArray();
                 var paving = new MeshKit();
-                for (float x = -f.Length / 2; x < f.Length / 2; x += 2)
-                    for (float z = -f.Depth; z < 0; z += 2)
+                // Join adjacent top tiles with the same height. Keep exactly the original
+                // aperture/low-plain decisions, saving vertices to pay for the exposed skirts.
+                for (float z = -f.Depth; z < 0; z += 2)
+                {
+                    float start = 0; bool? stripLow = null;
+                    for (float x = -f.Length / 2; x < f.Length / 2 + 2; x += 2)
                     {
-                        var clear = pumps.Any(p => Math.Abs(p.x - (x + 1)) < 3.5 && Math.Abs(p.z - (z + 1)) < 3.5);
+                        var clear = x >= f.Length / 2 || pumps.Any(p => Math.Abs(p.x - (x + 1)) < 3.5 && Math.Abs(p.z - (z + 1)) < 3.5);
                         var center = f.World(new Vector3(x + 1, 0, z + 1));
                         var low = IsPlain(new Ground(center.x, center.z));
-                        if (!clear) paving.Quad(new Vector3(x,low?Deck-.7f:Deck,z),new Vector3(x,low?Deck-.7f:Deck,Math.Min(z+2,0)),
-                            new Vector3(Math.Min(x+2,f.Length/2),low?Deck-.7f:Deck,Math.Min(z+2,0)),new Vector3(Math.Min(x+2,f.Length/2),low?Deck-.7f:Deck,z));
+                        if (stripLow.HasValue && (clear || stripLow.Value != low)) {
+                            var y = stripLow.Value ? Deck - .7f : Deck; var end = Math.Min(x, f.Length / 2);
+                            paving.Quad(new Vector3(start,y,z),new Vector3(start,y,Math.Min(z+2,0)),
+                                new Vector3(end,y,Math.Min(z+2,0)),new Vector3(end,y,z));
+                            stripLow = null;
+                        }
+                        if (!clear && !stripLow.HasValue) { start = x; stripLow = low; }
                     }
+                }
                 var pavement=paving.Spawn("Quay paving", t, mats.Surfaces);
                 SurfaceDetail.Colour(pavement,new Color(.59f,.57f,.54f,.1f));
                 Slab("Wall", -f.Length / 2, f.Length / 2, -.8f, 0, Deck + .35f, mats.Stone, t);
+                // The front seawall closes local +Z. Close both ends and the landward edge
+                // down to the seabed too, including East/Basin's exposed southern ends.
+                var skirt = new MeshKit(); var left = -f.Length / 2; var right = f.Length / 2;
+                skirt.Quad(new Vector3(left,SeabedY,0),new Vector3(left,Deck,0),new Vector3(left,Deck,-f.Depth),new Vector3(left,SeabedY,-f.Depth));
+                skirt.Quad(new Vector3(right,SeabedY,-f.Depth),new Vector3(right,Deck,-f.Depth),new Vector3(right,Deck,0),new Vector3(right,SeabedY,0));
+                skirt.Quad(new Vector3(left,SeabedY,-f.Depth),new Vector3(left,Deck,-f.Depth),new Vector3(right,Deck,-f.Depth),new Vector3(right,SeabedY,-f.Depth));
+                skirt.Spawn("Quay perimeter", t, mats.Stone);
                 var promenade=Slab("Promenade", -f.Length / 2, f.Length / 2, -7, -2, Deck + .015f, mats.Surfaces, t);
                 SurfaceDetail.Colour(promenade.gameObject,new Color(.56f,.54f,.50f,.2f));
                 // Asphalt is a finish on the existing deck, not a seabed-to-deck dark slab at the outer corners.

@@ -594,9 +594,17 @@ visible: 16:9 water 43.5 %, sky 0 %, 36/37 devices (the truck is in its depot); 
 
 The quay tops use vertex-coloured concrete, promenade pavers and asphalt, with derivative-filtered procedural
 expansion joints, stone joints, weathering and darker water-edge staining in `Resources/HarborScenery.shader`.
-Coping, worn bollard/cleat paint, road dashes and parking bays share merged meshes. The 2 m paving tiles now
-have four top vertices rather than six slab faces; the existing seawalls retain the quay silhouette and wells
-retain their open apertures. No imported textures or per-frame surface generation are used.
+Coping, worn bollard/cleat paint, road dashes and parking bays share merged meshes. Adjacent 2 m paving tiles
+at the same height share top strips; the well apertures and low-plain boundaries retain their original shape.
+Seabed-to-deck perimeter skirts close the ends and back of each quay and merge into its existing stone batch.
+The vertex savings exceed the skirts' cost without adding renderers. Core surfaces evaluate additional lights
+per fragment through URP 17.5's Forward/clustered light loops, so lamp state and dimming illuminate the ground.
+No imported textures or per-frame surface generation are used.
+
+Gauge alarm counters use an opaque unlit dark plate and unlit font pass, ordered above the emissive beacon.
+The plate fits the text bounds; neither weather nor point lighting changes the label palette. Both materials
+use a shader in Resources so their player variants are retained. Shader rendering and final pixel contrast,
+like HOME masks and frame time, require the Unity capture rig; the portable compile checks validate C# only.
 
 `Model/WorldPropPlan` owns the seeded placements consumed by the waterfront, town, terrain and tree builders.
 Its `FootprintRegistry` checks oriented rectangles with 0.15 m clearance using a build-time spatial hash.

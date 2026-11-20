@@ -31,6 +31,12 @@ namespace DeviceChain.Harborpulse.Visuals
             // the matte surfaces take no environment reflection: the reflection probe is the Editor's default sky, not this scene's
             // time of day, and at grazing angles it painted the far land and the night's facades daylight blue
             Surfaces = SceneryMesh.Material(); byName["surfaces"] = Surfaces;
+            var labelShader = Resources.Load<Shader>("HarborAlarmLabel");
+            AlarmText = new Material(labelShader) { name = "Harbor/alarm-text", renderQueue = 4000 };
+            AlarmPlate = new Material(labelShader) { name = "Harbor/alarm-plate", renderQueue = 3999 };
+            AlarmText.SetColor("_Color", HarborCards.AlarmForeground);
+            AlarmPlate.SetColor("_Color", HarborCards.AlarmBackground);
+            byName["alarm-text"] = AlarmText; byName["alarm-plate"] = AlarmPlate;
             Ground = Matte(Make("ground", new Color(0.28f, 0.42f, 0.22f), 0.1f));
             Paving = Matte(Make("paving", new Color(0.62f, 0.60f, 0.56f), 0.2f));
             Asphalt = Matte(Make("asphalt", new Color(0.13f, 0.13f, 0.14f), 0.3f));
@@ -117,6 +123,8 @@ namespace DeviceChain.Harborpulse.Visuals
         }
 
         public Material Surfaces { get; }
+        public Material AlarmText { get; }
+        public Material AlarmPlate { get; }
         public Material Flow { get; }
         public Material WorldCue { get; }
         public Material Failed { get; }
