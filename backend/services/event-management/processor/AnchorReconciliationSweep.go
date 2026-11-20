@@ -77,9 +77,14 @@ func (s *AnchorReconciliationSweep) runOnce(ctx context.Context) error {
 // repairHolders is the backstop for the device-roster fact, which device-management publishes
 // best-effort: for every deleted device token not yet known to be held again, it asks
 // device-management whether the token resolves to a device now and, for each that does, records
-// the instant it ASKED as the token's HeldSince. A device found existing after the token's
-// recorded deletion can only be a re-created one; the instant taken BEFORE the question is the
-// conservative one, so a deletion racing the question is never treated as already re-created.
+// the token's held-since as EXACTLY the deletion it asked about. A device found existing after
+// that deletion is a re-created one, which is all the bound needs to know.
+//
+// 🔴 IT RECORDS THE DELETION'S TIME, NEVER ITS OWN CLOCK. The re-created device may itself be
+// being deleted while the question is in flight (its deletion stamped, not yet committed, or not
+// yet consumed here). Recording "now" could then sit at or after that newer deletion, and the
+// bound would stay on for a token that is only deleted again, cutting its history. Recording
+// the old deletion's time means any newer deletion, whatever the clocks, moves past it.
 //
 // It pages and batches like the anchor walk (one existence query per page of tokens) and fails
 // safe the same way: a page device-management could not answer ends the tenant and records
@@ -111,24 +116,23 @@ func (s *AnchorReconciliationSweep) repairTenantHolders(ctx, tctx context.Contex
 		if len(page) == 0 {
 			break
 		}
-		cursor = page[len(page)-1]
+		cursor = page[len(page)-1].Token
 		refs := make([]emmodel.AnchorRef, len(page))
-		for i, token := range page {
-			refs[i] = emmodel.AnchorRef{Type: string(entity.TypeDevice), Token: token}
+		for i, d := range page {
+			refs[i] = emmodel.AnchorRef{Type: string(entity.TypeDevice), Token: d.Token}
 		}
-		asked := time.Now()
 		existing := make(map[string]bool, len(refs))
 		if err := s.resolveChunk(ctx, tenant, refs, existing); err != nil {
 			log.Warn().Err(err).Str("tenant", tenant).
 				Msg("Device-token holder repair: device-management unreachable; skipping tenant")
 			return fmt.Errorf("%w: %v", errUnresolved, err)
 		}
-		for _, token := range page {
-			if !existing[refKey(string(entity.TypeDevice), token)] {
+		for _, d := range page {
+			if !existing[refKey(string(entity.TypeDevice), d.Token)] {
 				continue
 			}
-			if err := s.Api.RecordDeviceTokenHeld(tctx, token, asked); err != nil {
-				return fmt.Errorf("recording that device token %q is held again: %w", token, err)
+			if err := s.Api.RecordDeviceTokenHeld(tctx, d.Token, d.DeletedTime); err != nil {
+				return fmt.Errorf("recording that device token %q is held again: %w", d.Token, err)
 			}
 			recorded++
 		}

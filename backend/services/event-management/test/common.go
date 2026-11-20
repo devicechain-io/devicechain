@@ -119,9 +119,9 @@ func (api *MockApi) DeletedDeviceTokenTenants(ctx context.Context) ([]string, er
 	return args.Get(0).([]string), args.Error(1)
 }
 
-func (api *MockApi) UnheldDeletedDeviceTokensAfter(ctx context.Context, after string) ([]string, error) {
+func (api *MockApi) UnheldDeletedDeviceTokensAfter(ctx context.Context, after string) ([]emmodel.DeletedDeviceToken, error) {
 	args := api.Mock.Called(after)
-	return args.Get(0).([]string), args.Error(1)
+	return args.Get(0).([]emmodel.DeletedDeviceToken), args.Error(1)
 }
 
 // PersistInTx runs fn directly (no real database in tests) passing a nil *gorm.DB

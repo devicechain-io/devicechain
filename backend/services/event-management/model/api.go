@@ -93,7 +93,7 @@ type EventManagementApi interface {
 	// tenant's deleted device tokens not yet known to be held again.
 	RecordDeviceTokenHeld(ctx context.Context, token string, since time.Time) error
 	DeletedDeviceTokenTenants(ctx context.Context) ([]string, error)
-	UnheldDeletedDeviceTokensAfter(ctx context.Context, after string) ([]string, error)
+	UnheldDeletedDeviceTokensAfter(ctx context.Context, after string) ([]DeletedDeviceToken, error)
 
 	// PersistInTx runs fn inside a single database transaction whose handle
 	// carries the supplied context, so what fn writes — one message's events, or a

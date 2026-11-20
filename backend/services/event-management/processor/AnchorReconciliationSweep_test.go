@@ -283,35 +283,33 @@ func TestSweep_EmptyTenantNoop(t *testing.T) {
 }
 
 // The holder repair asks device-management about the deleted device tokens not yet known to be
-// held again, a page at a time, and records the ones that resolve, at the instant it asked. A
-// token that does not resolve (deleted and never re-created) records nothing.
+// held again, a page at a time, and records the ones that resolve, each as held from EXACTLY the
+// deletion it asked about (never the sweep's own clock: a newer deletion must always overtake
+// it). A token that does not resolve (deleted and never re-created) records nothing.
 func TestSweep_RepairsHoldersOfReCreatedTokensOnly(t *testing.T) {
+	d1 := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	d9 := d1.Add(time.Hour)
 	api := &emtest.MockApi{}
 	api.Mock.On("DistinctAnchorTenants").Return([]string{}, nil)
 	api.Mock.On("DeletedDeviceTokenTenants").Return([]string{"acme"}, nil)
-	api.Mock.On("UnheldDeletedDeviceTokensAfter", "").Return([]string{"gone-1", "pump-1"}, nil)
-	api.Mock.On("UnheldDeletedDeviceTokensAfter", "pump-1").Return([]string{"pump-9"}, nil)
-	api.Mock.On("UnheldDeletedDeviceTokensAfter", "pump-9").Return([]string{}, nil)
+	api.Mock.On("UnheldDeletedDeviceTokensAfter", "").Return([]emmodel.DeletedDeviceToken{
+		{Token: "gone-1", DeletedTime: d1}, {Token: "pump-1", DeletedTime: d1}}, nil)
+	api.Mock.On("UnheldDeletedDeviceTokensAfter", "pump-1").Return([]emmodel.DeletedDeviceToken{
+		{Token: "pump-9", DeletedTime: d9}}, nil)
+	api.Mock.On("UnheldDeletedDeviceTokensAfter", "pump-9").Return([]emmodel.DeletedDeviceToken{}, nil)
 	var held []string
-	var at []time.Time
 	api.Mock.On("RecordDeviceTokenHeld", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-		held = append(held, args.String(0))
-		at = append(at, args.Get(1).(time.Time))
+		held = append(held, fmt.Sprintf("%s@%s", args.String(0), args.Get(1).(time.Time).Format(time.RFC3339)))
 	}).Return(nil)
 
-	before := time.Now()
 	s := sweepHarness(t, api, map[string]bool{"device|pump-1": true, "device|pump-9": true, "area|gone-1": true}, false)
 	if err := s.runOnce(context.Background()); err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
-	after := time.Now()
-	if fmt.Sprint(held) != "[pump-1 pump-9]" {
-		t.Fatalf("recorded %v; want only the device tokens that resolve again, every page of them", held)
-	}
-	for _, ts := range at {
-		if ts.Before(before) || ts.After(after) {
-			t.Fatalf("held since %v, outside the pass [%v, %v]", ts, before, after)
-		}
+	want := fmt.Sprintf("[pump-1@%s pump-9@%s]", d1.Format(time.RFC3339), d9.Format(time.RFC3339))
+	if fmt.Sprint(held) != want {
+		t.Fatalf("recorded %v; want %v: only the device tokens that resolve again, every page of them, "+
+			"each at the deletion it was asked about", held, want)
 	}
 }
 
@@ -321,7 +319,7 @@ func TestSweep_HolderRepairFailsSafe(t *testing.T) {
 	api := &emtest.MockApi{}
 	api.Mock.On("DistinctAnchorTenants").Return([]string{}, nil)
 	api.Mock.On("DeletedDeviceTokenTenants").Return([]string{"acme"}, nil)
-	api.Mock.On("UnheldDeletedDeviceTokensAfter", "").Return([]string{"pump-1"}, nil)
+	api.Mock.On("UnheldDeletedDeviceTokensAfter", "").Return([]emmodel.DeletedDeviceToken{{Token: "pump-1"}}, nil)
 	s := sweepHarness(t, api, nil, true)
 	if err := s.runOnce(context.Background()); err == nil {
 		t.Fatal("a pass that could not ask must not report itself complete")
