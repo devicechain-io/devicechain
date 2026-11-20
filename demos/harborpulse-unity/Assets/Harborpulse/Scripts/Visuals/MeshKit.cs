@@ -16,12 +16,31 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly List<Vector3> vertices = new List<Vector3>();
         readonly List<Vector3> normals = new List<Vector3>();
         readonly List<int> triangles = new List<int>();
+        Matrix4x4 placement = Matrix4x4.identity;
+        bool placed;
 
         public int VertexCount => vertices.Count;
 
-        void Quad(Vector3 a, Vector3 b, Vector3 c, Vector3 d)
+        /// <summary>
+        /// Places what is appended next: every later primitive is built in a local frame at <paramref name="origin"/>, turned by
+        /// <paramref name="yawDeg"/> about the vertical, until the next call. One kit can then batch many placed objects into one mesh.
+        /// </summary>
+        public MeshKit Place(Vector3 origin, float yawDeg)
         {
-            var n = Vector3.Cross(b - a, c - a).normalized;
+            placement = Matrix4x4.TRS(origin, Quaternion.Euler(0, yawDeg, 0), Vector3.one);
+            placed = true;
+            return this;
+        }
+
+        Vector3 X(Vector3 p) => placed ? placement.MultiplyPoint3x4(p) : p;
+
+        /// <summary>A quad given in order round its face (the face is the side from which the order runs clockwise).</summary>
+        public void Quad(Vector3 a, Vector3 b, Vector3 c, Vector3 d)
+        {
+            a = X(a); b = X(b); c = X(c); d = X(d);
+            // both triangles' normals, so a quad with one collapsed edge (a cone's side) still has a normal: a zero normal shades as NaN.
+            // A quad collapsed to a line or a point still has none; nothing here builds one.
+            var n = (Vector3.Cross(b - a, c - a) + Vector3.Cross(c - a, d - a)).normalized;
             var i = vertices.Count;
             vertices.Add(a);
             vertices.Add(b);
@@ -38,6 +57,7 @@ namespace DeviceChain.Harborpulse.Visuals
 
         void Tri(Vector3 a, Vector3 b, Vector3 c)
         {
+            a = X(a); b = X(b); c = X(c);
             var n = Vector3.Cross(b - a, c - a).normalized;
             var i = vertices.Count;
             vertices.Add(a);
@@ -119,6 +139,64 @@ namespace DeviceChain.Harborpulse.Visuals
                 Tri(P(ab), P(b), P(bc));
                 Tri(P(ca), P(bc), P(c));
                 Tri(P(ab), P(bc), P(ca));
+            }
+
+            return this;
+        }
+
+        /// <summary>
+        /// A faceted ellipsoid: an octahedron (<paramref name="detail"/> 0, eight faces) or the octahedron split once (detail 1, 32 faces),
+        /// pushed out to the ellipsoid's surface. Tree crowns and boulders.
+        /// </summary>
+        public MeshKit Ellipsoid(Vector3 center, Vector3 radii, int detail = 1)
+        {
+            if (detail < 0 || detail > 1) throw new System.ArgumentOutOfRangeException(nameof(detail), detail, "an ellipsoid has detail 0 or 1");
+            Vector3[] o = { Vector3.up, Vector3.forward, Vector3.right, Vector3.back, Vector3.left, Vector3.down };
+            int[,] faces = { { 0, 1, 2 }, { 0, 2, 3 }, { 0, 3, 4 }, { 0, 4, 1 }, { 5, 2, 1 }, { 5, 3, 2 }, { 5, 4, 3 }, { 5, 1, 4 } };
+            Vector3 P(Vector3 v) => center + Vector3.Scale(v, radii);
+            for (var f = 0; f < 8; f++)
+            {
+                Vector3 a = o[faces[f, 0]], b = o[faces[f, 1]], c = o[faces[f, 2]];
+                if (detail <= 0) { Tri(P(a), P(b), P(c)); continue; }
+                Vector3 ab = (a + b).normalized, bc = (b + c).normalized, ca = (c + a).normalized;
+                Tri(P(a), P(ab), P(ca));
+                Tri(P(ab), P(b), P(bc));
+                Tri(P(ca), P(bc), P(c));
+                Tri(P(ab), P(bc), P(ca));
+            }
+
+            return this;
+        }
+
+        /// <summary>
+        /// A boat's hull along local +Z (the bow): a square stern, straight sides and a pointed bow, its deck <paramref name="freeboard"/>
+        /// above <paramref name="waterline"/> and its keel <paramref name="draft"/> below, narrower at the keel.
+        /// </summary>
+        public MeshKit Hull(Vector3 waterline, float length, float beam, float freeboard, float draft)
+        {
+            float hl = length / 2, hb = beam / 2;
+            // counter-clockwise from above, starting at the starboard quarter
+            Vector2[] plan = { new Vector2(hb, -hl), new Vector2(hb, hl * 0.3f), new Vector2(0, hl), new Vector2(-hb, hl * 0.3f), new Vector2(-hb, -hl) };
+            var top = new Vector3[plan.Length]; var bottom = new Vector3[plan.Length];
+            for (var i = 0; i < plan.Length; i++)
+            {
+                top[i] = waterline + new Vector3(plan[i].x, freeboard, plan[i].y);
+                bottom[i] = waterline + new Vector3(plan[i].x * 0.55f, -draft, plan[i].y * 0.88f);
+            }
+
+            for (var i = 0; i < plan.Length; i++)
+            {
+                var j = (i + 1) % plan.Length;
+                Quad(bottom[i], top[i], top[j], bottom[j]);
+            }
+
+            var deck = waterline + new Vector3(0, freeboard, 0);
+            var keel = waterline + new Vector3(0, -draft, 0);
+            for (var i = 0; i < plan.Length; i++)
+            {
+                var j = (i + 1) % plan.Length;
+                Tri(deck, top[j], top[i]);
+                Tri(keel, bottom[i], bottom[j]);
             }
 
             return this;
