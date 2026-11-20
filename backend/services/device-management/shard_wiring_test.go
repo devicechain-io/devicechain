@@ -29,7 +29,7 @@ import (
 func TestShardGroupServiceWiring(t *testing.T) {
 	savedMs, savedCfg, savedStop := Microservice, Configuration, stopStreamSharding
 	t.Cleanup(func() { Microservice, Configuration, stopStreamSharding = savedMs, savedCfg, savedStop })
-	for _, mode := range []string{"off", "on", "unplaced"} {
+	for _, mode := range []string{"off", "on", "unplaced", "resolved-only"} {
 		t.Run(mode, func(t *testing.T) {
 			srv, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true, StoreDir: dctest.JetStreamStoreDir(t), JetStreamMaxStore: dctest.JetStreamMaxStore})
 			require.NoError(t, err)
@@ -47,7 +47,11 @@ func TestShardGroupServiceWiring(t *testing.T) {
 			Microservice.InstanceConfiguration.Infrastructure.Nats.Port = uint32(port)
 			Microservice.InstanceConfiguration.Infrastructure.Nats.StreamMaxBytes = 8 << 20
 			Microservice.InstanceConfiguration.Infrastructure.Nats.StreamMaxBytesCold = 1 << 20
-			if mode != "off" {
+			switch mode {
+			case "off":
+			case "resolved-only":
+				Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups = &mscfg.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.ResolvedEvents}}
+			default:
 				Microservice.InstanceConfiguration.Infrastructure.Nats.ShardGroups = &mscfg.NatsShardGroupsConfiguration{Count: 2, Suffixes: []string{streams.InboundEvents, streams.ResolvedEvents}}
 			}
 			Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
@@ -63,6 +67,18 @@ func TestShardGroupServiceWiring(t *testing.T) {
 			t.Cleanup(func() { _ = nmgr.Terminate(context.Background()) })
 			js, err := nmgr.Conn().JetStream()
 			require.NoError(t, err)
+			if mode == "resolved-only" {
+				// The hold waits on the placement of the stream it publishes to, resolved-events,
+				// not on the stream it reads.
+				stop, err := shardgroups.Enable(nmgr)
+				require.NoError(t, err)
+				t.Cleanup(stop)
+				savedNmgr := NatsManager
+				t.Cleanup(func() { NatsManager = savedNmgr })
+				NatsManager = nmgr
+				require.ErrorIs(t, resolvedPlacementCheck("tenant-b"), messaging.ErrUnplacedTenant)
+				return
+			}
 			if mode == "on" {
 				kv, err := nmgr.PartitionPlacementStore()
 				require.NoError(t, err)

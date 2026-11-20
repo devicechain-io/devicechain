@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventenvelope"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
@@ -196,6 +197,16 @@ func TestAnEnvelopeRoundRefusedForPlacementIsHeldAndWalkedAgain(t *testing.T) {
 	stored := len(base.stored)
 	base.mu.Unlock()
 	require.Equal(t, 1, stored, "the two events are stored once, in one round")
+	base.mu.Lock()
+	var round messaging.Message
+	for _, m := range base.bySeq {
+		round = m
+	}
+	base.mu.Unlock()
+	r, err := eventenvelope.Parse(round.Value)
+	require.NoError(t, err)
+	require.Equal(t, 2, r.Len(), "both refused events, each under its own member index")
+	require.NotEqual(t, r.Index(0), r.Index(1))
 	stopWithin(t, iproc, 5*time.Second)
 	require.EqualValues(t, 1, ack.acks.Load())
 }
