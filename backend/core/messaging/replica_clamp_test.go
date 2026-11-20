@@ -72,14 +72,15 @@ func TestBrokerIsClusteredAgainstAnUnclusteredBroker(t *testing.T) {
 		t.Errorf("effectiveStreamReplicas() = %d against an unclustered broker, want 1", got)
 	}
 
-	// A manager with no connection at all must clamp rather than assume.
+	// A manager with no connection at all reads as not clustered (the replica clamp does not
+	// read this predicate: see replicaClampClustering).
 	disconnected := &NatsManager{Microservice: nmgr.Microservice}
 	if disconnected.brokerIsClustered() {
 		t.Error("brokerIsClustered() is true with a nil connection")
 	}
 
-	// A connection that exists but is not CONNECTED must also clamp, and must not
-	// be mistaken for a definitive "not clustered".
+	// A connection that exists but is not CONNECTED also reads false here; the replica
+	// clamp is what must not take that for a definitive "not clustered".
 	nmgr.nc.Close()
 	if nmgr.brokerIsClustered() {
 		t.Error("brokerIsClustered() is true on a closed connection; an unreachable broker is being " +
@@ -139,5 +140,25 @@ func TestDesiredStreamReplicasIsUnclamped(t *testing.T) {
 	}
 	if nmgr.effectiveStreamReplicas() == nmgr.desiredStreamReplicas() {
 		t.Error("desired and effective agree on an unclustered broker; the mismatch signal is unreachable")
+	}
+}
+
+// The other half of holding the last observation: a single-server broker seen while connected
+// stays a single-server broker while the connection is down. A create buffered across that
+// server's restart is delivered to the same single server, which refuses more than one replica,
+// so dropping the observation and asking for the configured count would turn a restart into a
+// failed create.
+func TestReplicaClampHoldsAnObservedSingleServerWhileDisconnected(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = 3
+
+	if got := nmgr.effectiveStreamReplicas(); got != 1 {
+		t.Fatalf("effectiveStreamReplicas() = %d against the unclustered embedded broker, want 1", got)
+	}
+	nmgr.nc.Close()
+	if got := nmgr.effectiveStreamReplicas(); got != 1 {
+		t.Errorf("effectiveStreamReplicas() = %d after the connection to a single-server broker closed, "+
+			"want the observed 1", got)
 	}
 }
