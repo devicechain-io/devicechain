@@ -48,9 +48,11 @@ func (c *syncRoster) forToken(token string) []*DeviceRosterEvent {
 // raceAtTheStamp arms the delete's clock so that the moment it stamps the deletion, before the
 // stamp is returned to it, writer runs on another connection. It returns the time the delete
 // was stamped with, read once the delete has returned. The writer is given until it either
-// finishes or is seen waiting on a lock: a writer the delete has locked out waits for its
-// commit, and the delete must not be held behind it.
-func raceAtTheStamp(t *testing.T, api *Api, writer func() error) (stamp func() time.Time, writerErr func() error) {
+// finishes or is seen blocked on a lock in a statement matching waitingOn (an ILIKE pattern): a
+// writer the delete has locked out waits for its commit, and the delete must not be held
+// behind it. The statement is matched, and must be blocked BY someone, so that a waiter from
+// another test sharing the database cannot release the delete before the writer got there.
+func raceAtTheStamp(t *testing.T, api *Api, waitingOn string, writer func() error) (stamp func() time.Time, writerErr func() error) {
 	t.Helper()
 	var (
 		once     sync.Once
@@ -77,13 +79,18 @@ func raceAtTheStamp(t *testing.T, api *Api, writer func() error) (stamp func() t
 				var waiting int64
 				err := api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).
 					Raw(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
-						AND wait_event_type = 'Lock'`).Scan(&waiting).Error
+						AND wait_event_type = 'Lock' AND query ILIKE ? AND cardinality(pg_blocking_pids(pid)) > 0`,
+						waitingOn).Scan(&waiting).Error
 				if err == nil && waiting > 0 {
 					return
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			t.Errorf("the concurrent writer neither finished nor waited on a lock")
+			var waiters []string
+			_ = api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).
+				Raw(`SELECT wait_event_type || ' ' || coalesce(wait_event, '') || ' ' || query FROM pg_stat_activity
+					WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiters).Error
+			t.Errorf("the concurrent writer neither finished nor waited on a lock in %q; lock waiters: %q", waitingOn, waiters)
 		})
 		return now
 	}
@@ -119,14 +126,15 @@ func deletedTimeOf(t *testing.T, api *Api, ctx context.Context, etype, token str
 // and emits nothing.
 func TestADeviceDeleteLocksTheDeviceBeforeItStampsTheDeletion(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		writer func(api *Api, ctx context.Context, token string) error
+		name    string
+		waiting string
+		writer  func(api *Api, ctx context.Context, token string) error
 	}{
-		{"a disable", func(api *Api, ctx context.Context, token string) error {
+		{"a disable", `UPDATE %"devices" SET%`, func(api *Api, ctx context.Context, token string) error {
 			_, err := api.UpdateDevice(ctx, token, &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
 			return err
 		}},
-		{"a type re-point", func(api *Api, ctx context.Context, _ string) error {
+		{"a type re-point", `UPDATE %"devices" SET%`, func(api *Api, ctx context.Context, _ string) error {
 			_, err := api.UpdateDeviceType(ctx, "pump", &DeviceTypeUpdateRequest{
 				ProfileToken: dcgraphql.OptionalString{Set: true, Value: strp("other-profile")}})
 			return err
@@ -140,7 +148,7 @@ func TestADeviceDeleteLocksTheDeviceBeforeItStampsTheDeletion(t *testing.T) {
 			api.DeviceRosterPublisher = roster
 			token := "pump-00000"
 
-			stamp, writerErr := raceAtTheStamp(t, api, func() error { return tc.writer(api, ctx, token) })
+			stamp, writerErr := raceAtTheStamp(t, api, tc.waiting, func() error { return tc.writer(api, ctx, token) })
 			deleted, err := api.DeleteDevice(ctx, token)
 			require.NoError(t, err)
 			require.True(t, deleted)
@@ -218,7 +226,8 @@ func TestEveryEdgeDeleteHoldsItsRowWhenItStampsTheDeletion(t *testing.T) {
 			require.NoError(t, err)
 			// The writer: takes the entity's row for an update, refusing at once rather than
 			// queueing behind the delete.
-			_, writerErr := raceAtTheStamp(t, api, func() error {
+			// NOWAIT never waits, so nothing matches the pattern: the hook always waits for it.
+			_, writerErr := raceAtTheStamp(t, api, "%FOR UPDATE NOWAIT%", func() error {
 				var ids []uint
 				return api.RDB.DB(ctx).Raw(fmt.Sprintf(`SELECT id FROM %q WHERE id = ? FOR UPDATE NOWAIT`, tc.table), id).
 					Scan(&ids).Error
@@ -234,12 +243,13 @@ func TestEveryEdgeDeleteHoldsItsRowWhenItStampsTheDeletion(t *testing.T) {
 	}
 }
 
-// 🔴 A GROUP DELETE TAKES THE MEMBERSHIP FAMILY BEFORE THE GROUP ROW. Locking the row before the
-// stamp moved it to the top of the transaction, ahead of the family lock the cascade takes. An
-// access-scope switch takes the family lock and then the group row, so a delete holding the row
-// and then waiting on the family would close a cycle the engine resolves by failing one of the
-// two. Here the switch starts the moment the delete has stamped, and both must go through.
-func TestAGroupDeleteTakesTheFamilyLockBeforeTheGroupRow(t *testing.T) {
+// 🔴 A GROUP DELETE STILL TAKES THE MEMBERSHIP FAMILY BEFORE THE GROUP ROW. The row lock the
+// stamp waits for is taken where the delete always took the row, after the cascade's family
+// lock. Taken at the top of the transaction instead, it put the row ahead of the family, while
+// an access-scope switch takes the family and then the row: a cycle the engine resolves by
+// failing one of the two. Here the switch starts the moment the delete has stamped, and both
+// must go through.
+func TestAGroupDeleteKeepsTheFamilyLockAheadOfTheGroupRow(t *testing.T) {
 	api, ctx, _ := ownershipPgRig(t, 1)
 	dynamic, selector := "dynamic", `attr["region"] == "north"`
 	_, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{Token: "north",
@@ -248,7 +258,7 @@ func TestAGroupDeleteTakesTheFamilyLockBeforeTheGroupRow(t *testing.T) {
 	_, err = api.PublishEntityGroup(ctx, "north", nil, nil, "tester")
 	require.NoError(t, err)
 
-	_, writerErr := raceAtTheStamp(t, api, func() error {
+	_, writerErr := raceAtTheStamp(t, api, "%pg_advisory_xact_lock%", func() error {
 		_, err := api.SetEntityGroupAccessScope(ctx, "north", true)
 		return err
 	})
