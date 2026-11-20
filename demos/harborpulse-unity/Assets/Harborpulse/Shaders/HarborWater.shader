@@ -102,7 +102,7 @@ Shader "Harborpulse/Water"
                 float scale = WaveScaleAt(ws);
                 float3 offset, n;
                 HarborWaves(rest, scale * _Displace, offset, n);
-                ws = float3(rest.x, HarborTide(rest.x), rest.y) + offset;
+                ws = float3(rest.x, HarborTide(rest), rest.y) + offset;
                 o.positionWS = ws;
                 o.restXZ = rest;
                 o.waveScale = scale;

@@ -1,0 +1,10 @@
+{
+    "name": "DeviceChain.Harborpulse.Hud",
+    "rootNamespace": "DeviceChain.Harborpulse.Hud",
+    "references": [
+        "DeviceChain.Harborpulse.Model",
+        "DeviceChain.Harborpulse.Visuals",
+        "Unity.ugui"
+    ],
+    "autoReferenced": true
+}

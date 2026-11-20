@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE.parent / 'Assets/Harborpulse/Scripts/Model/Director'
-BUILD = HERE / '.build'
+BUILD = HERE / '.build' / 'u2b'
 # The caller can select an SDK through PATH or DOTNET_ROOT; never assume an account path.
 import shutil
 import uuid
@@ -44,7 +44,7 @@ MUTANTS = [
 def execute(env, name, test=None):
     results_dir = BUILD / 'mutants' / (name + '-' + uuid.uuid4().hex)
     results_dir.mkdir(parents=True)
-    command = [str(SDK), 'test', 'Tests/DeviceChain.Harborpulse.Tests.csproj', '--no-restore', '-c', 'Release',
+    command = [str(SDK), 'test', 'Tests/DeviceChain.Harborpulse.Tests.csproj', '--no-restore', '-c', 'Release', '-p:UseSharedCompilation=false', '-nodeReuse:false',
                f'-p:DirectoryBuildPropsPath={BUILD}/Directory.Build.props',
                '--logger', 'trx;LogFileName=result.trx', '--results-directory', str(results_dir)]
     if test:
@@ -59,7 +59,7 @@ def execute(env, name, test=None):
 def main():
     env = os.environ.copy()
     env.update(DOTNET_CLI_HOME=str(BUILD/'home'), APPDATA=str(BUILD/'roaming'), LOCALAPPDATA=str(BUILD/'local'),
-               DOTNET_CLI_TELEMETRY_OPTOUT='1')
+               DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_CLI_USE_MSBUILD_SERVER='0', MSBUILDDISABLENODEREUSE='1')
     env.pop('HARBORPULSE_UPDATE_FIXTURES', None)
     results = []
     baseline_code, baseline, baseline_dir = execute(env, 'baseline')

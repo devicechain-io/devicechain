@@ -29,7 +29,7 @@ namespace DeviceChain.Harborpulse.Visuals
             if (lofts) return;
             var z = wall - at.z;
             new MeshKit().Box(new Vector3(0, -1.1f, z + 11), new Vector3(36, 0.5f, 10)).Box(new Vector3(0, -0.8f, z + 3), new Vector3(2.4f, 0.2f, 6)).Spawn("FerryPontoon", t, m.Timber);
-            var ferry = AssetRig.Node("BerthedFerry", t, new Vector3(0, -at.y, z + 26));
+            var ferry = AssetRig.Node("BerthedFerry", t, new Vector3(0, -(float)DeviceChain.Harborpulse.Model.SitePlan.DeckHeightM, z + 26));
             new MeshKit().Box(new Vector3(0, 0.3f, 0), new Vector3(33, 2, 9)).Cylinder(new Vector3(16, -0.7f, 0), 4.5f, 2, 12).Spawn("Hull", ferry, m.DarkSteel);
             new MeshKit().Box(new Vector3(0, 2.5f, 0), new Vector3(27, 2.4f, 7)).Box(new Vector3(8, 4.2f, 0), new Vector3(8, 1, 6)).Spawn("FerryDeck", ferry, m.Render);
             new MeshKit().Box(new Vector3(0, 2.8f, 3.55f), new Vector3(25, 0.9f, 0.05f)).Spawn("FerryWindows", ferry, m.Glass);

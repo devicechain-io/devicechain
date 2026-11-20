@@ -40,7 +40,7 @@ namespace DeviceChain.Harborpulse.Visuals
             r["AttributeMarker"].gameObject.SetActive(false);
             r.Part("Float", new MeshKit().Ball(Vector3.zero, 0.18f), m.WorldCue, c + new Vector3(1.3f, 3.2f, 0));
             r.Part("FloatChain", new MeshKit().Cylinder(Vector3.zero, 0.025f, 1.2f, 6), m.Steel, c + new Vector3(1.3f, 3.2f, 0));
-            var outZ = wallZ - r.Root.position.z;
+            var outZ = wallZ - r.Root.localPosition.z;
             r.Part("DischargePipe", new MeshKit().Rod(new Vector3(0, -0.6f, -0.4f), new Vector3(0, -0.6f, outZ), 0.4f), m.DarkSteel, Vector3.zero);
             r.Part("Outfall", new MeshKit().Pipe(Vector3.zero, Vector3.forward, 0.55f, 1.3f, 20), m.Steel, new Vector3(0, -1.0f, outZ));
             var flap = r.Add("OutfallFlap", new Vector3(0, -0.43f, outZ + 1.31f));

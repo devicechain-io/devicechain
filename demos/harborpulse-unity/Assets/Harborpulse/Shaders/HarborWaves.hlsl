@@ -19,20 +19,23 @@ float4 _WaveA, _WaveB, _WaveC, _WaveD;
 float4 _WaveAmp, _WaveOmega;
 // the three quays' observed mean levels, west to east (x, y, z)
 float4 _TideLevels;
-// the quays' wall spans along X, west to east: (min, max) of the first two in _TideSpanAB, of the third in _TideSpanC.xy
-float4 _TideSpanAB;
-float4 _TideSpanC;
+// Quay rectangles: xmin, zmin, xmax, zmax, in the same order as _TideLevels.
+float4 _TideRects[3];
 float _WaterTime;
 
-// Along a quay's own wall the level is exactly that quay's (the median its readout shows); only in the open water between two
-// quays does it blend to the next. The model's TideProfile.LevelAt is the same mapping, for the CPU side and the tests.
-float HarborTide(float x)
+// Identical to Model/TideField. d=0 uses the exact inverse-distance limit.
+float HarborTide(float2 xz)
 {
-    if (x <= _TideSpanAB.y) return _TideLevels.x;
-    if (x < _TideSpanAB.z) return lerp(_TideLevels.x, _TideLevels.y, smoothstep(_TideSpanAB.y, _TideSpanAB.z, x));
-    if (x <= _TideSpanAB.w) return _TideLevels.y;
-    if (x < _TideSpanC.x) return lerp(_TideLevels.y, _TideLevels.z, smoothstep(_TideSpanAB.w, _TideSpanC.x, x));
-    return _TideLevels.z;
+    float sum = 0, weights = 0;
+    [unroll] for (int q = 0; q < 3; q++)
+    {
+        float2 d = max(max(_TideRects[q].xy - xz, 0), xz - _TideRects[q].zw);
+        float d2 = dot(d, d);
+        if (d2 == 0) return _TideLevels[q];
+        float w = 1.0 / (d2 + 0.0001);
+        sum += w * _TideLevels[q]; weights += w;
+    }
+    return sum / weights;
 }
 
 void GerstnerOne(float4 wave, float amp, float omega, float2 xz, float t, inout float3 offset, inout float3 tangent, inout float3 binormal)

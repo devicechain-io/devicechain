@@ -72,6 +72,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         double joinS;
         double currentSim;
         double staleAtS = double.NaN;
+        bool staleCaptionPending;
         string ambientPose;
         public DirectorMode Mode { get; private set; }
         public string Banner { get; private set; } = "";
@@ -136,11 +137,13 @@ namespace DeviceChain.Harborpulse.Model.Director
             if (sample.Stale)
             {
                 Mode = DirectorMode.Reconnecting; Banner = "reconnecting";
-                if (double.IsNaN(staleAtS)) { staleAtS = now; if (active != null) { Hide(active, now); active.Caption = null; active.Text = null; active.Provisional = false; active.Pending.Clear(); Offer(active, now); } }
+                if (double.IsNaN(staleAtS)) { staleAtS = now; staleCaptionPending = active != null; }
+                EndStaleCaption(now);
                 if (log.Count == 0 || log.Last().Value != Banner) Emit(now, "banner", null, Banner);
                 return log.Skip(start).ToArray();
             }
             if (!double.IsNaN(staleAtS)) { if (active != null) { active.ShotS += now - staleAtS; active.StartedS += now - staleAtS; } staleAtS = double.NaN; }
+            EndStaleCaption(now);
             Mode = DirectorMode.Active;
             if (run != sample.Run) Join(sample, store);
             var banner = sample.Defects.Count > 0 ? "TEST CONTROL: " + string.Join(", ", sample.Defects) : "";
@@ -197,6 +200,15 @@ namespace DeviceChain.Harborpulse.Model.Director
                 if (ambientPose != pose) { ambientPose = pose; Emit(now, "ambient-pose", null, pose); }
             }
             return log.Skip(start).ToArray();
+        }
+        void EndStaleCaption(double now)
+        {
+            // Even a reconnect must not put a sub-three-second caption into the recording.
+            // Keep this pending across a short outage, then offer the slot again so recovery
+            // rechecks proof instead of retaining the pre-outage claim indefinitely.
+            if (!staleCaptionPending || active == null || now - active.CaptionS < 3) return;
+            Hide(active, now); active.Caption = null; active.Text = null; active.Provisional = false;
+            active.Pending.Clear(); Offer(active, now); staleCaptionPending = false;
         }
         static bool Boundary(PageRun p, double now) => p.Caption == null || now - p.CaptionS >= p.CaptionHoldS;
         void Activate(PageRun p, bool resume, double now, ObservationStore store)

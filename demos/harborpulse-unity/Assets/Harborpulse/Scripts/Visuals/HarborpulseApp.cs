@@ -4,6 +4,11 @@
 using System;
 using System.Globalization;
 using System.Text;
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Linq;
+using System.Collections.Generic;
+using DeviceChain.Harborpulse.Model.Director;
 using DeviceChain.Demos.Platform;
 using DeviceChain.Harborpulse.Live;
 using DeviceChain.Harborpulse.Model;
@@ -44,6 +49,30 @@ namespace DeviceChain.Harborpulse.Visuals
 
         HarborLayout layout;
         SitePlan plan;
+        PresentationMap map;
+        Storyboard storyboard;
+        DirectorHost director;
+        DirectorCamera directorCamera;
+        DirectorView directorView;
+        RecordingFiles recording;
+        DateTimeOffset recordingEpoch;
+        string directorRun, localDigest, digestProblem;
+        double directorSeconds, lastWorldS = -1;
+        string recordRoot, captureDir;
+        double captureEvery, nextCapture, quitAfter = double.PositiveInfinity;
+        bool engineer, hidden, portrait;
+        readonly List<TimedFix> fixes = new List<TimedFix>();
+        DateTimeOffset lastFix;
+        public Func<IDirectorFeed> DirectorFeedFactory { get; set; }
+        public static Func<HarborpulseApp, IStoryHud> HudFactory { get; set; }
+        public IStoryHud Hud { get; private set; }
+        public PresentationMap Map => map;
+        public HarborWorld World => world;
+        public DirectorView DirectorView => directorView;
+        public DirectorCamera DirectorCamera => directorCamera;
+        public bool EngineerOverlay => engineer;
+        public double DirectorSeconds => directorSeconds;
+
         HarborMaterials mats;
         HarborWorld world;
         HarborSkyController sky;
@@ -84,6 +113,7 @@ namespace DeviceChain.Harborpulse.Visuals
         {
             if (!Offline) throw new InvalidOperationException("only the offline preview's clock can be set by hand; a live clock is the runner's");
             model = new HarborObservedModel(layout);
+            ResetDirector();
             preview = new PreviewSource(layout);
             previewHeld = true;
             // Observe forward through the lead-in, so a still does not manufacture command history or a start transition.
@@ -127,21 +157,42 @@ namespace DeviceChain.Harborpulse.Visuals
                 var text = Resources.Load<TextAsset>("harbor_layout");
                 if (text == null) throw new FormatException("Resources/harbor_layout.json is missing from the build");
                 layout = HarborLayout.Parse(text.text);
+                map = new PresentationMap(layout);
+                storyboard = Storyboard.Parse(Resources.Load<TextAsset>("storyboard").text, map);
+                var options = Environment.GetCommandLineArgs();
+                localDigest = LayoutDigest.Override(LayoutDigest.Compute(text.bytes), CommandLineArgs.Get(options, "-hp-layout-digest-override", out _));
+                portrait = Array.IndexOf(options, "-hp-portrait") >= 0;
+                recordRoot = CommandLineArgs.Get(options, "-hp-record-dir", out _) ?? Path.Combine(Application.persistentDataPath, "recordings");
+                captureDir = CommandLineArgs.Get(options, "-hp-capture-dir", out _);
+                captureEvery = Number(options, "-hp-capture-every", 10, .1, 86400);
+                quitAfter = Number(options, "-hp-quit-after-sim", double.PositiveInfinity, 0, 100000);
+                var resolution = CommandLineArgs.Get(options, "-hp-resolution", out _);
+                if (resolution != null)
+                {
+                    var size = resolution.ToLowerInvariant().Split('x');
+                    if (size.Length != 2 || !int.TryParse(size[0], out var width) || !int.TryParse(size[1], out var height) || width < 320 || height < 180 || width > 8192 || height > 8192)
+                        throw new FormatException("-hp-resolution requires WxH in 320x180..8192x8192");
+                    Screen.SetResolution(width, height, false);
+                }
+                else if (portrait) Screen.SetResolution(1080, 1920, false);
+                if (captureDir != null) Directory.CreateDirectory(captureDir);
                 plan = SitePlan.Build(layout);
                 model = new HarborObservedModel(layout);
                 mats = new HarborMaterials(litShader);
                 mats.CreateWetWell(wetWellShader != null ? wetWellShader : Shader.Find("Harborpulse/WetWellWater"));
-                world = HarborWorld.Build(plan, layout, mats, transform);
+                world = HarborWorld.Build(map, layout, mats, transform);
                 sky = new HarborSkyController(transform, skyShader);
-                water = new HarborWaterController(transform, waterShader, plan, 9000);
+                water = new HarborWaterController(transform, waterShader, map, world, 9000);
                 if (sceneCamera == null) sceneCamera = Camera.main;
                 if (sceneCamera == null) throw new InvalidOperationException("the scene has no camera");
                 sceneCamera.farClipPlane = 20000;
                 sceneCamera.nearClipPlane = 0.3f;
-                rig = new HarborCameraRig(sceneCamera, plan);
+                rig = new HarborCameraRig(sceneCamera, map);
+                directorCamera = new DirectorCamera(sceneCamera, map, portrait);
+                Hud = HudFactory?.Invoke(this);
                 grading = new HarborGrading(transform, sceneCamera);
                 reflection = new PlanarWaterReflection(transform, sceneCamera);
-                views = new HarborViews(world, plan, mats);
+                views = new HarborViews(world, mats);
             }
             catch (Exception e)
             {
@@ -243,7 +294,8 @@ namespace DeviceChain.Harborpulse.Visuals
             mats.SetNight((float)state.Night, (float)frame.World.EastFeederOutage);
             grading.Apply(state);
             views.Apply(frame, state, sceneCamera.transform.position, dt, waterTime);
-            rig.FollowTruck(frame.Truck);
+            TickDirector(source, now, dt);
+            ApplyMappedTruck(source, now);
 
             reflection.Level = (float)frame.ReflectionLevelM;
             water.Apply(q => frame.Tides[q].LevelM, 0.0, weather, waterTime, sceneCamera.transform.position);
@@ -255,8 +307,100 @@ namespace DeviceChain.Harborpulse.Visuals
                 b.rotation = Quaternion.Euler(Mathf.Sin(waterTime * 0.9f + i) * 6 * (0.3f + (float)weather.Storm), 0, Mathf.Cos(waterTime * 0.7f + i * 1.3f) * 6 * (0.3f + (float)weather.Storm));
             }
 
-            rig.Tick(dt <= 0 ? 10 : dt);
+            if (director != null) directorCamera.Tick(directorView, director, directorSeconds, dt, fixes);
+            if (Application.isPlaying && captureDir != null && directorSeconds >= nextCapture)
+            {
+                nextCapture = directorSeconds + captureEvery;
+                var time = HudModel.Clock(clock.SimSeconds / 3600).Replace(':', 'h');
+                var page = directorView?.Page ?? "ambient";
+                ScreenCapture.CaptureScreenshot(Path.Combine(captureDir, "harborpulse-d" + clock.Day + "-" + time + "-page-" + page + "-" + directorSeconds.ToString("000000.00", CultureInfo.InvariantCulture) + ".png"));
+            }
+            if (Application.isPlaying && clock.SimSeconds / 3600 >= quitAfter) Application.Quit();
         }
+
+        void ResetDirector()
+        {
+            recording?.Dispose(); recording = null; director = null; directorRun = null;
+            fixes.Clear(); lastFix = default; directorSeconds = 0; lastWorldS = -1; nextCapture = 0;
+        }
+        void ApplyMappedTruck(IHarborSource source, DateTimeOffset now)
+        {
+            if (source.TryLocation("PAW-TRUCK-1", out var location) && location.Latitude.HasValue && location.Longitude.HasValue && location.OccurredAt != lastFix)
+            {
+                var atS = (location.OccurredAt - recordingEpoch).TotalSeconds;
+                if (fixes.Count == 0 || atS > fixes[fixes.Count - 1].WallS)
+                    fixes.Add(new TimedFix(atS, new LatLon(location.Latitude.Value, location.Longitude.Value)));
+                lastFix = location.OccurredAt;
+            }
+            try
+            {
+                var drawn = map.TruckAt(fixes, directorSeconds).At;
+                var truck = world.Truck.Root;
+                truck.position = new Vector3((float)drawn.X, (float)SitePlan.DeckHeightM, (float)drawn.Z);
+            }
+            catch (FormatException e) { digestProblem = "truck mapping: " + e.Message; }
+        }
+        void TickDirector(IHarborSource source, DateTimeOffset now, float dt)
+        {
+            var run = Offline ? "offline-preview" : source.Status?.StartedAt?.ToString("O", CultureInfo.InvariantCulture) ?? "waiting";
+            if (director == null || directorRun != run)
+            {
+                ResetDirector(); recordingEpoch = now; directorRun = run;
+                if (!Offline && source.Status?.StartedAt != null)
+                {
+                    try { recording = new RecordingFiles(recordRoot, source.Status.StartedAt.Value, now); }
+                    catch (Exception e) { digestProblem = "recording IO: " + e.Message; }
+                }
+                director = new DirectorHost(storyboard, layout, map, DirectorFeedFactory?.Invoke(), recording?.Recorder);
+            }
+            directorSeconds += Math.Max(0, dt);
+            var matches = Offline || LayoutDigest.Matches(localDigest, source.Status?.LayoutDigest, out digestProblem);
+            var sim = clock.SimSeconds / 3600;
+            var defects = (source.Status?.Defects ?? Array.Empty<string>()).ToList();
+            if (Array.IndexOf(Environment.GetCommandLineArgs(), "-hp-layout-digest-override") >= 0) defects.Add("CONTROL layout digest override");
+            var sample = new DirectorSample(run, sim, directorSeconds, clock.Mode == ClockMode.Stale || clock.Mode == ClockMode.Waiting, matches, defects);
+            directorView = director.Tick(sample, new DirectorInputs { Run = run, RecordingEpoch = recordingEpoch, Now = recordingEpoch.AddSeconds(directorSeconds), Sim = sim, Source = source, Frame = frame });
+            if (recording != null && directorSeconds - lastWorldS >= 1)
+            {
+                lastWorldS = directorSeconds;
+                // A typed /status sample, never config or credentials. simHour also maps every
+                // director show second to the runner clock without changing the U2a wire format.
+                recording.Recorder.World(directorSeconds, StatusSample(source.Status, sim));
+            }
+            RefreshHud();
+        }
+        public void RefreshHud()
+        {
+            if (directorView == null) return;
+            var sim = clock.SimSeconds / 3600;
+            var control = directorView.Banner.StartsWith("TEST CONTROL", StringComparison.Ordinal);
+            Hud?.Apply(directorView, Offline ? "OFFLINE PREVIEW" : control ? "TEST CONTROL" : "LIVE", sim,
+                Offline ? "x" + previewSpeed.ToString("0.#", CultureInfo.InvariantCulture) : "x1",
+                HudModel.Tags(layout, frame, sceneCamera.aspect < 1 ? 2 : 4),
+                string.Join(" | ", new[] { digestProblem, recording?.Problem, frame.ReadProblem }.Where(p => !string.IsNullOrEmpty(p))));
+        }
+        DateTimeOffset previewWall;
+        public void BeginDirectorPreview(double absoluteHour)
+        {
+            if (!Offline) throw new InvalidOperationException("offline preview only");
+            ResetDirector(); model = new HarborObservedModel(layout); preview = new PreviewSource(layout);
+            previewHeld = false; previewSpeed = 1; previewSimS = absoluteHour * 3600;
+            previewWall = DateTimeOffset.UtcNow; Tick(0, previewWall);
+        }
+        public void AdvanceDirectorPreview(float wallSeconds)
+        { previewWall = previewWall.AddSeconds(wallSeconds); Tick(wallSeconds, previewWall); }
+        public double PreviewSecondsPerHour => layout.DayLengthSeconds / 24;
+        static string StatusSample(ScenarioStatus s, double sim) => DirectorWire.Json(w =>
+        {
+            w.WriteStartObject(); w.WriteString("sample", "/status"); w.WriteNumber("simHour", sim);
+            if (s != null)
+            {
+                w.WriteString("state", s.RunnerState); w.WriteString("startedAt", s.StartedAt?.ToString("O", CultureInfo.InvariantCulture));
+                w.WriteString("layoutDigest", s.LayoutDigest); w.WriteString("beat", s.Beat); w.WriteNumber("day", s.Day);
+                w.WriteStartArray("defects"); foreach (var defect in s.Defects) w.WriteStringValue(defect); w.WriteEndArray();
+            }
+            w.WriteEndObject();
+        });
 
         void OnDestroy() => Teardown();
 
@@ -270,6 +414,8 @@ namespace DeviceChain.Harborpulse.Visuals
         {
             if (tornDown) return;
             tornDown = true;
+            Hud?.Dispose();
+            recording?.Dispose();
             reflection?.Dispose();
             grading?.Dispose();
             live?.Dispose();
@@ -298,17 +444,38 @@ namespace DeviceChain.Harborpulse.Visuals
         void OnGUI()
         {
             Styles();
-            rig?.HandleEvent(Event.current);
+            var input = Event.current;
+            if (input.type == EventType.KeyDown)
+            {
+                if (input.keyCode == KeyCode.E) { engineer = !engineer; input.Use(); }
+                else if (input.keyCode == KeyCode.H) { hidden = !hidden; if (Hud != null) Hud.Visible = !hidden; input.Use(); }
+                else if (input.keyCode == KeyCode.D && director != null) { director.Enabled = !director.Enabled; directorCamera.AdoptPreset(); if (director.Enabled) directorCamera.Rejoin(directorSeconds); input.Use(); }
+            }
+            if (director != null)
+            {
+                directorCamera.HandleEvent(input, director, directorSeconds);
+                if (!director.Enabled)
+                {
+                    var preset = input.type == EventType.KeyDown && (input.keyCode >= KeyCode.Alpha0 && input.keyCode <= KeyCode.Alpha9 || input.keyCode == KeyCode.F1 || input.keyCode == KeyCode.F2);
+                    if (preset) { rig.HandleEvent(input); rig.Select(rig.Current, true); directorCamera.AdoptPreset(); }
+                }
+            }
             if (Problem != null)
             {
                 GUI.Box(new Rect(16, 16, 760, 120), "<b>Harborpulse cannot start</b>\n" + Problem, panel);
                 return;
             }
 
-            if (world == null || frame == null) return;
+            if (world == null || frame == null || !engineer || hidden) return;
             sb.Clear();
             sb.Append("<size=17><b>HARBORPULSE</b></size>  Port Alder waterfront\n");
             sb.Append(ModeLine()).Append('\n');
+            sb.Append("<b>presentation scale</b> ? compact horizontal layout; heights in metres\n");
+            if (director != null)
+                foreach (var row in director.Scheduler.Log.Skip(Math.Max(0, director.Scheduler.Log.Count - 6)))
+                    sb.Append(row.ShowS.ToString("0.0", CultureInfo.InvariantCulture)).Append(" ").Append(row.Page).Append(" ").Append(row.Kind).Append(" ").Append(row.Value).Append('\n');
+            var nearest = world.Rigs.OrderBy(r => (r.Root.position - sceneCamera.transform.position).sqrMagnitude).FirstOrDefault();
+            if (nearest != null) sb.Append(map.Disclosure(nearest.Placement.Device.Token, nearest.Placement.Device.Kind == DeviceKind.Truck && fixes.Count > 0 ? fixes[fixes.Count - 1].Position : (LatLon?)null)).Append('\n');
             sb.Append("<b>").Append(clock.Label).Append("</b>");
             var beat = Offline ? BeatAt(clock.HourOfDay) : live.Clock.Last?.Beat;
             if (!string.IsNullOrEmpty(beat)) sb.Append("  · ").Append(beat);
@@ -415,7 +582,7 @@ namespace DeviceChain.Harborpulse.Visuals
             {
                 var distance = r.Placement.Device.Kind == DeviceKind.Pump ? 90 : r.Placement.Device.Kind == DeviceKind.Light ? 100 : 130;
                 if ((r.Root.position - sceneCamera.transform.position).sqrMagnitude > distance * distance) continue;
-                yield return new HarborCard { At = r["CardAnchor"].position, Text = HarborCards.Device(r.Placement.Device, frame) };
+                yield return new HarborCard { At = r["CardAnchor"].position, Text = Regex.Replace(HarborCards.Device(r.Placement.Device, frame), @"(\d{2}:\d{2}:\d{2}\.\d{3})\d+", "$1") };
             }
         }
     }

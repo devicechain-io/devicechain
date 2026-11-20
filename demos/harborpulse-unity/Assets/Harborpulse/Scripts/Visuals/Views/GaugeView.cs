@@ -21,8 +21,8 @@ namespace DeviceChain.Harborpulse.Visuals
             t.GetComponent<MeshRenderer>().sharedMaterial = counter.font.material; counter.characterSize = 0.15f; counter.fontSize = 32; counter.anchor = TextAnchor.MiddleCenter;
             replacementLabel = AssetRig.Node("ReplacementLabel", rig["Plate"], new Vector3(0, 0.2f, 0.04f));
             AssetRig.Tag("replacement (runner)", replacementLabel, Vector3.zero, 0.08f);
-            var at = SitePlan.GaugeCrewAt(rig.Placement.At, wallZ);
-            crew = CrewBuilder.Build(rig.Root, mats, false, new Vector3((float)(at.X - rig.Placement.At.X), 0, (float)(at.Z - rig.Placement.At.Z)));
+            var at = SitePlan.GaugeCrewAt(new Ground(0, 0), wallZ);
+            crew = CrewBuilder.Build(rig.Root, mats, false, new Vector3((float)at.X, 0, (float)at.Z));
         }
         public void Apply(HarborFrame f)
         {
