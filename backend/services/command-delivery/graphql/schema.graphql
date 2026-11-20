@@ -214,6 +214,58 @@ type Command implements Model & TokenReference & MetadataEntity {
     never handed out.
     """
     deliveryAttempts: Int
+    """
+    Why the platform sent the command, when an automation sent it: the detection that fired and,
+    when the same rule targeted one, the alarm. Null for a command a person or a batch issued, for
+    a command sent before this field existed, and for a caller who may not see it. Seeing it
+    requires device:read; a cause of kind ALARM also requires alarm:read, and one from a rule that
+    tests geofence containment also requires location:read. A member whose access is limited to
+    some customers never sees it.
+    """
+    cause: CommandCause
+}
+
+"""
+Why the platform sent a command: the detection of a rule that sent it as an action. To find the
+alarm of a cause of kind ALARM, read device-management's alarms for the command's device with
+this alarmKey, and keep only an alarm whose originatorId equals deviceId.
+"""
+type CommandCause {
+    """
+    ALARM when the rule that fired also targeted an alarm on this detection (its raise-alarm
+    action applied to it), RULE when it targeted none. ALARM does not assert that the alarm was
+    created or is still active. New values may be added in a later release.
+    """
+    kind: String!
+    """
+    Runtime id of the rule that fired, the same value a detection on the live detection feed
+    carries as ruleId.
+    """
+    ruleId: String!
+    """Token of the rule in its device profile; null when ruleId does not name a profile rule."""
+    ruleToken: String
+    """Token of the device profile the rule belongs to; null when ruleId does not name a profile rule."""
+    profileToken: String
+    """The rule's type, for example threshold, deltaRate, duration or absence."""
+    detectionKind: String!
+    """
+    Event time of the detection, as an RFC 3339 timestamp with up to nanosecond precision. With
+    ruleId and the command's deviceToken it identifies the detection. It does not by itself name
+    an alarm cycle: an alarm raised by another rule before this detection keeps its own
+    raisedTime, so match a cycle only when the alarm's raisedTime is at or before this time and
+    it was not cleared in between, and otherwise treat the cycle as unknown.
+    """
+    detectedAt: String!
+    """The value that triggered the detection; null for a rule with no triggering value."""
+    value: Float
+    """Key of the alarm the rule targeted; set when kind is ALARM, otherwise null."""
+    alarmKey: String
+    """
+    Numeric id of the device the command was addressed to when it was accepted, as a string;
+    null when unknown. A device token can be reused after a device is deleted, so an alarm
+    belongs to this cause only when its originatorId equals this id.
+    """
+    deviceId: ID
 }
 
 """Fields for issuing a command to one device."""
@@ -260,6 +312,32 @@ input CommandCreateRequest {
     deliveryMode. Optional; the platform default is 3.
     """
     maxAttempts: Int
+    """
+    Why the platform is sending the command. Accepted only from a platform service (an
+    automation), never from a person's token, which is refused as forbidden. Optional.
+    """
+    cause: CommandCauseInput
+}
+
+"""
+Why the platform is sending a command (see CommandCause). Supplied by platform services only. A
+malformed cause is refused with CAUSE_INVALID.
+"""
+input CommandCauseInput {
+    """ALARM or RULE (see CommandCause.kind)."""
+    kind: String!
+    """Runtime id of the rule that fired; it must name a rule of the caller's tenant."""
+    ruleId: String!
+    """The rule's type, at most 64 characters."""
+    detectionKind: String!
+    """Event time of the detection, as an RFC 3339 timestamp."""
+    detectedAt: String!
+    """The value that triggered the detection, when there is one."""
+    value: Float
+    """Key of the alarm the rule targeted: required when kind is ALARM, refused when it is RULE."""
+    alarmKey: String
+    """Whether the rule tests geofence containment, which restricts who may read the cause."""
+    positionDerived: Boolean!
 }
 
 """
@@ -279,7 +357,7 @@ type CommandEnqueueRejection {
     COMMAND_NAME_TOO_LONG, PAYLOAD_TOO_LARGE, METADATA_TOO_LARGE, EXPIRES_AT_INVALID,
     HELD_CEILING_EXCEEDED, TOKEN_IN_USE, DEVICE_NOT_FOUND, DEVICE_DISABLED,
     COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION, DELIVERY_OPTION_INVALID,
-    DELIVERY_OPTION_NOT_APPLICABLE, or COMMAND_REJECTED when a refusal
+    DELIVERY_OPTION_NOT_APPLICABLE, CAUSE_INVALID, or COMMAND_REJECTED when a refusal
     arrived without a classification.
 
     Branch on this, never on reason. The list is open: treat an unrecognized code as a refusal

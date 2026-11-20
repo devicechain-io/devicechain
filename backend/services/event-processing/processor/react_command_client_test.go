@@ -52,7 +52,7 @@ func newCommandSink(t *testing.T, payload map[string]any) (react.CommandSink, *s
 	port, _ := strconv.Atoi(portStr)
 	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)},
 		"shh", "event-processing", []string{string(auth.CommandWrite)})
-	return NewCommandClient(client, cd.URL), sentQuery
+	return NewCommandClient(client, cd.URL, nil), sentQuery
 }
 
 func sendOne(t *testing.T, sink react.CommandSink) error {
@@ -211,7 +211,7 @@ func TestRuleExpiryReachesTheWire(t *testing.T) {
 	port, _ := strconv.Atoi(portStr)
 	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port), InternalPort: uint32(port)},
 		"shh", "event-processing", []string{string(auth.CommandWrite)})
-	sink := NewCommandClient(client, cd.URL)
+	sink := NewCommandClient(client, cd.URL, nil)
 
 	dispatch := func(ruleJSON string) map[string]any {
 		t.Helper()

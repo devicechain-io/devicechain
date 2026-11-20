@@ -508,8 +508,10 @@ type ReactMetrics struct {
 	connectorShed       *prometheus.CounterVec
 	permanentlyRejected *prometheus.CounterVec
 	dropped             *prometheus.CounterVec
-	orphan              prometheus.Counter
-	poisonDropped       prometheus.Counter
+	// causeOmitted counts commands enqueued WITHOUT their cause, by reason (commandClient).
+	causeOmitted  *prometheus.CounterVec
+	orphan        prometheus.Counter
+	poisonDropped prometheus.Counter
 	// deadLettered counts events recorded as dead letters. A letter that could not be
 	// written is counted by the dead-letter sink itself, on the dead_letter_lost_total every
 	// producing service shares (deadletter.Producer).
@@ -557,6 +559,7 @@ func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 		connectorShed:       ms.NewCounterVec("react_connector_egress_shed_total", "Connector dispatch ATTEMPTS (httpCall/publish) shed at the source for being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt: a sibling-failure redelivery may shed then later admit the same action, so this is not a count of permanently-dropped actions.", []string{"action"}),
 		permanentlyRejected: ms.NewCounterVec("react_actions_permanently_rejected_total", "REACT actions DROPPED because the downstream service returned a typed rejection a retry cannot change, by action type: a sendCommand for a device that no longer exists, or a command outside the device's published vocabulary. These were previously retried to the redelivery cap and counted as poison, so a non-zero rate here is an authoring defect (a rule aimed at commands its devices cannot accept), not an infrastructure one.", []string{"action"}),
 		dropped:             droppedPrecreated(ms.NewCounterVec("react_actions_dropped_total", "REACT actions skipped without being attempted, by reason. unknown_kind: the rule definition carried an action type this build cannot dispatch (a forged or hand-edited definition; unreachable through the supported authoring path), so a non-zero value is a defect to investigate, not load.", []string{"reason"})),
+		causeOmitted:        causeOmittedPrecreated(ms.NewCounterVec("react_command_cause_omitted_total", "REACT commands accepted by command-delivery after being resent WITHOUT the record of why they were sent, by reason. peer_lacks_cause: command-delivery runs a build that does not accept a cause, which a rolling upgrade does briefly, so a sustained rate means an older command-delivery is still deployed. cause_invalid: command-delivery refused the cause REACT built, which is a defect. A resend can be answered with a command that already existed, so this counts accepted resends, not stored rows.", []string{"reason"})),
 		orphan:              ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched)."),
 		poisonDropped:       ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch). Now that such an event is dead-lettered (ADR-024), this counts the same events react_events_dead_lettered_total does — kept because it is what the ReactPoisonDropping alert has always fired on, and a metric an alert is built around is not renamed for tidiness."),
 		deadLettered:        ms.NewCounter("react_events_dead_lettered_total", "Derived events written to the dead-letter stream after the redelivery cap, so their actions can be inspected rather than vanishing (ADR-024)."),
@@ -626,6 +629,22 @@ func droppedPrecreated(v *prometheus.CounterVec) *prometheus.CounterVec {
 	v.WithLabelValues(react.DropUnknownKind)
 	v.WithLabelValues(react.DropInvalidAction)
 	return v
+}
+
+// causeOmittedPrecreated creates every reason of the cause-omitted vec at 0.
+func causeOmittedPrecreated(v *prometheus.CounterVec) *prometheus.CounterVec {
+	v.WithLabelValues(CauseOmittedPeerLacksCause)
+	v.WithLabelValues(CauseOmittedCauseInvalid)
+	return v
+}
+
+// RecordCommandCauseOmitted records one command enqueued without its cause. Nil-safe; it is the
+// commandClient's onCauseOmitted.
+func (m *ReactMetrics) RecordCommandCauseOmitted(reason string) {
+	if m == nil || m.causeOmitted == nil {
+		return
+	}
+	m.causeOmitted.WithLabelValues(reason).Inc()
 }
 
 // recordShedDeadLettered records one shed connector action written as its own dead letter.

@@ -234,7 +234,14 @@ CREATE TABLE "command-delivery".commands (
  delivery_mode character varying(16),
  max_attempts integer,
  delivery_attempts integer,
- device_incarnation bigint
+ device_incarnation bigint,
+ cause_kind character varying(16),
+ cause_rule_id text,
+ cause_detection_kind character varying(64),
+ cause_detected_at character varying(64),
+ cause_value double precision,
+ cause_alarm_key text,
+ cause_position_derived boolean
 );
 CREATE TABLE "command-delivery".device_gate_syncs (
  id bigint NOT NULL,

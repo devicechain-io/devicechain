@@ -305,6 +305,23 @@ type Command struct {
 	// new owner. NULL (a row that predates the column, or an enqueue with no validator to
 	// ask) is invisible to every scoped member.
 	ScopeAnchors rdb.Anchors `gorm:"type:text[]"`
+
+	// The CAUSE columns record why the platform sent the command: the detection that fired and,
+	// when the same rule targeted one on that detection, the alarm (NewCommandCauseSchema). Only a
+	// service may assert a cause (an automation's command); a person's or a batch's command has
+	// none. CauseKind is NULL exactly when there is no cause; the rest are written with it, by the
+	// same insert, and never rewritten. See CommandCause for what each one means.
+	CauseKind          sql.NullString `gorm:"size:16"`
+	CauseRuleId        sql.NullString `gorm:"type:text"`
+	CauseDetectionKind sql.NullString `gorm:"size:64"`
+	// CauseDetectedAt is canonical UTC RFC 3339 text with nanoseconds, NOT a timestamp: the
+	// detection's identity is anchored at nanoseconds and Postgres keeps microseconds.
+	CauseDetectedAt sql.NullString `gorm:"size:64"`
+	CauseValue      sql.NullFloat64
+	CauseAlarmKey   sql.NullString `gorm:"type:text"`
+	// CausePositionDerived is true when the rule tests geofence containment. NULL is read as
+	// true (withheld from a reader without location:read), failing closed.
+	CausePositionDerived sql.NullBool
 }
 
 // ScopedBy admits members limited to part of the tenant (ADR-081): they read the commands
@@ -355,6 +372,20 @@ type CommandCreateRequest struct {
 	// channel; see requirePullChannel.
 	DeliveryMode *string
 	MaxAttempts  *int32
+	// Cause is why the platform sent the command. Only a SERVICE may supply one (the GraphQL
+	// resolver refuses it from anyone else before anything else runs); nil for a person's command.
+	Cause *CommandCauseInput
+}
+
+// CommandCauseInput is the cause an automation (REACT) records on the command it sends.
+type CommandCauseInput struct {
+	Kind            string
+	RuleId          string
+	DetectionKind   string
+	DetectedAt      string
+	Value           *float64
+	AlarmKey        *string
+	PositionDerived bool
 }
 
 // CommandSearchCriteria is the search criteria for locating commands.

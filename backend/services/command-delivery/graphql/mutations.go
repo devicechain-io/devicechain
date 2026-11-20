@@ -65,6 +65,17 @@ func (r *SchemaResolver) CreateCommand(ctx context.Context, args struct {
 	if _, err := auth.AuthorizeScoped(ctx, auth.CommandWrite); err != nil {
 		return nil, err
 	}
+	// 🔴 ONLY A SERVICE MAY SAY WHY THE PLATFORM SENT A COMMAND. A cause claims "an automation
+	// sent this because of that detection", and a person who could write one could make their own
+	// command look like the platform's. It is decided here, before the model's replay lookup, so a
+	// forged cause is refused even for a token that already exists. No new authority: a new
+	// event-processing asking an old user-management for one would have its whole service token
+	// refused during a rolling upgrade.
+	if args.Request.Cause != nil {
+		if err := auth.AuthorizeService(ctx, auth.CommandWrite); err != nil {
+			return nil, err
+		}
+	}
 
 	api := r.GetApi(ctx)
 	created, err := api.CreateCommand(ctx, &args.Request)

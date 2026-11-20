@@ -26,7 +26,12 @@ import (
 // binds well over a dozen columns, so ten thousand rows in one statement is roughly
 // 160,000 binds and fails outright. The chunks all run INSIDE the one transaction, so
 // atomicity is untouched — this is about statement size, not about commit scope.
-const batchInsertChunk = 1000
+//
+// It is sized against the SMALLER of the two engines this code runs on: SQLite (the unit
+// tests) caps a statement at 32,766 variables. A command row binds 39 columns since the cause
+// columns were added, so 1,000 rows (39,000 binds) passed Postgres and failed SQLite; 500 rows
+// is 19,500 binds, with room for the row to grow again.
+const batchInsertChunk = 500
 
 // BatchEnqueueValidator is the batch counterpart of CommandEnqueueValidator: it asks the
 // owner of the devices and the command vocabulary which of MANY devices may receive one
