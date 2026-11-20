@@ -31,6 +31,49 @@ namespace DeviceChain.Harborpulse.Visuals
             var t = mesh.Spawn(name, Root, material, shadow).transform; t.localPosition = at; Nodes.Add(name, t); return t;
         }
         public Transform Box(string name, Vector3 at, Vector3 size, Material mat) => Part(name, new MeshKit().Box(Vector3.zero, size), mat, at);
+
+        /// <summary>Batch only explicitly fixed parts. Named transforms survive; stateful renderers and moving attachments stay separate.</summary>
+        public void MergeFixed(params string[] names)
+        {
+            var parts = new List<MeshFilter>();
+            foreach (var name in names) parts.Add(Nodes[name].GetComponent<MeshFilter>());
+            MergeFixed(Root, parts);
+        }
+
+        public static void MergeFixed(Transform root, IEnumerable<MeshFilter> parts)
+        {
+            var groups = new Dictionary<(Material, UnityEngine.Rendering.ShadowCastingMode), List<MeshFilter>>();
+            foreach (var part in parts)
+            {
+                if (part == null || part.sharedMesh == null) continue;
+                var renderer = part.GetComponent<MeshRenderer>();
+                if (renderer == null) continue;
+                var key = (renderer.sharedMaterial, renderer.shadowCastingMode);
+                if (!groups.TryGetValue(key, out var group)) groups[key] = group = new List<MeshFilter>();
+                group.Add(part);
+            }
+            foreach (var pair in groups)
+            {
+                if (pair.Value.Count < 2) continue;
+                var combine = new CombineInstance[pair.Value.Count];
+                for (var i = 0; i < combine.Length; i++) combine[i] = new CombineInstance {
+                    mesh = pair.Value[i].sharedMesh, transform = root.worldToLocalMatrix * pair.Value[i].transform.localToWorldMatrix };
+                var vertexCount = 0; foreach (var part in pair.Value) vertexCount += part.sharedMesh.vertexCount;
+                var mesh = new Mesh { name = "Fixed fittings" };
+                if (vertexCount > 65000) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+                mesh.CombineMeshes(combine, true, true);
+                var node = Node("Fixed fittings", root, Vector3.zero);
+                node.gameObject.AddComponent<MeshFilter>().sharedMesh = mesh;
+                var renderer = node.gameObject.AddComponent<MeshRenderer>();
+                renderer.sharedMaterial = pair.Key.Item1; renderer.shadowCastingMode = pair.Key.Item2;
+                foreach (var part in pair.Value)
+                {
+                    var old = part.sharedMesh; part.sharedMesh = null;
+                    var oldRenderer = part.GetComponent<MeshRenderer>(); oldRenderer.enabled = false;
+                    MeshKit.Release(old); MeshKit.Release(oldRenderer); MeshKit.Release(part);
+                }
+            }
+        }
         public static void Tag(string text, Transform parent, Vector3 at, float size = 0.12f, Color? colour = null)
         {
             var t = Node(text, parent, at); t.localRotation = Quaternion.Euler(0, 180, 0);

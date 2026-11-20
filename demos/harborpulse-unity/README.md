@@ -589,3 +589,77 @@ visible: 16:9 water 43.5 %, sky 0 %, 36/37 devices (the truck is in its depot); 
   lamps go dark through the east feeder outage, a WORLD cue like `EastWindows` before.
 - **Frame stats.** `-hp-frame-stats` turns vsync off and logs the mean, 95th-percentile and worst frame time every
   10 s.
+
+### Quay surfaces and prop clearance
+
+The quay tops use vertex-coloured concrete, promenade pavers and asphalt, with derivative-filtered procedural
+expansion joints, stone joints, weathering and darker water-edge staining in `Resources/HarborScenery.shader`.
+Coping, worn bollard/cleat paint, road dashes and parking bays share merged meshes. The 2 m paving tiles now
+have four top vertices rather than six slab faces; the existing seawalls retain the quay silhouette and wells
+retain their open apertures. No imported textures or per-frame surface generation are used.
+
+`Model/WorldPropPlan` owns the seeded placements consumed by the waterfront, town, terrain and tree builders.
+Its `FootprintRegistry` checks oriented rectangles with 0.15 m clearance using a build-time spatial hash.
+Device anchors are fixed reservations; cars try deterministic alternative bays, while colliding decorative
+props are refused. Conservative envelopes include building overhangs and annexes, full tree crowns/lean,
+granite lobes, gauge staffs, benches, bollards and cleats. Decks, rails, buried plumbing and overhead canopies
+are attached surfaces rather than independent ground props. The pump's attached well is 13 m along local X
+to clear North lamp 2; geometry, markers, water mask and deck aperture use the same `WellFootprint` offset.
+
+`WorldPropPlanTests` independently checks every accepted footprint pair, device preservation and repeatability,
+and plants a car on a fixed lamp to prove both the audit and placement guard reject a real collision. These
+sidecar checks and desktop/WebGL compilation do not establish HOME pixel masks, shader rendering or frame time;
+those still require Unity. The prior HOME results above describe the U3 capture.
+
+### Round 2: readable coastal scenery
+
+The HOME cameras, presentation anchors and quay outlines are unchanged. The coastal ridge now settles behind
+an exposed rounded summit and ends at 2.4 km; the pure height-field projection checks 10-16% sky at landscape
+HOME. This is an analytic terrain check, not a new pixel-mask result. Meadow greens, rust bracken, worn-earth
+street edges and granite facets replace the pale town ground. Larger grey-pink shelves are reserved at the
+shore and on the HOME-facing upper slopes.
+
+Scenery palettes are decoded from display RGB to linear vertex albedo, and direct diffuse light uses the
+Lambert scale. This prevents the custom surface shader from overexposing concrete and grass relative to Lit
+materials. Concrete/promenade colours are warm mid-grey (0.54-0.59 display RGB), seams are softer, and the
+water edge has a darker wet band. Main Street is 10.5 m wide with a 2 m meadow verge, batched into terrain.
+
+Day haze matches the cool grey-blue horizon. Density is 0.00016, with a much lighter height term; both ramp
+only beyond 1,050 m outside the core, preserving the town and middle slope. The far third fades gradually.
+Woodland follows seeded connected stands with meadow gaps and exposed summit ledges. Trees have fuller
+two-tone crowns, thicker trunks with buried dark flares, and tiered conifers. There are 806 trees versus
+1,056 in round 1; estimated tree vertices fall from 182,803 to 131,869 and occupied tree tiles from 47 to 32.
+Granite and verges share terrain meshes; trees still cast no shadows and remain excluded from reflections.
+
+Round-2 gates: locked restore, Release build, all 416 sidecar tests, and desktop/WebGL compile checks.
+Unity was not run: the new beauty, both HOME masks, actual total renderers/vertices and the 12.4 ms frame-time
+baseline still need the capture rig. The earlier pixel-mask results describe the earlier captures only.
+
+### Round 3: closed backdrop and exposed summit
+
+Round 2 exposed the camera-following far-water ring beyond the terrain's 2.4 km edge. The HOME checker
+assigns unlit colours by renderer category; wet-edge colours do not affect its classification. In the
+round-2 masks, 61,176 landscape water pixels (2.95023 percentage points) project onto inland ground.
+Terrain now continues to 4.8 km in the existing edge batches, fading into the existing far fog. The far
+water ring also intersects the WORLD coast and harbour core, so inland water cannot reappear above the
+ridge or beyond the finite terrain. Its eight reusable patches have 32 vertices instead of 5,600;
+only camera grid-cell changes update their vertices, without allocating a new mesh.
+
+The central rounded summit reaches about 110 m, with lower shoulders and an exposed saddle. Sage/olive
+meadow, ochre-tan bracken, sparse muted rust and grey-green conifers soften the hills; autumn crowns
+remain. Larger pink-grey granite clusters with dark facets share the terrain batches. Whole-crown
+reservations stop the far forest before the summit, removing the distant treetop band. Quay asphalt is
+now a lighter top surface rather than a dark slab with exposed seabed-to-deck corner faces. Presentation
+anchors, quays, HOME poses and device geometry are unchanged; the mask checker and its thresholds are unchanged.
+
+Expected HOME water, obtained by projecting the supplied round-2 mask pixels onto the WORLD coast:
+**16:9 43.52691%, 9:16 23.32948%** (36 and 37 visible devices respectively, as in round 2).
+The terrain silhouette estimates 8.65% landscape sky; retaining the open sea gives roughly 5.2% portrait
+sky. Trees and granite can change those silhouette estimates. These are predictions, not Unity mask
+measurements. Both views should retain all three quays, mouth and ridge; the rig must verify pixels and
+the 12.4 ms frame-time baseline. Terrain continuation, water and road changes save about 3,868 vertices
+before forest savings and add no renderers. The seeded plan now has 444 trees (806 in round 2) and
+27 granite clusters. Trees remain shadow-free and excluded from reflections.
+
+Round-3 gates: locked restore, Release build, all 421 sidecar tests, and desktop/WebGL compile checks.
+No Unity run or commit was made.

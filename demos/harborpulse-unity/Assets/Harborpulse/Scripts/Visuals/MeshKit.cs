@@ -242,6 +242,49 @@ namespace DeviceChain.Harborpulse.Visuals
 
         public MeshKit Rod(Vector3 a, Vector3 b, float radius = 0.04f) => Pipe(a, b - a, radius, (b - a).magnitude, 6);
 
+        /// <summary>A square-section strut, cable or rail: 24 vertices instead of a six-sided capped pipe's 42.</summary>
+        public MeshKit Beam(Vector3 a, Vector3 b, float width, float depth = -1)
+        {
+            if ((b - a).sqrMagnitude < 0.000001f) return this;
+            if (depth < 0) depth = width;
+            var axis = (b - a).normalized;
+            var u = Vector3.Cross(axis, Mathf.Abs(axis.y) < .95f ? Vector3.up : Vector3.forward).normalized * width * .5f;
+            var v = Vector3.Cross(axis, u.normalized) * depth * .5f;
+            Quad(a-u-v, a-u+v, a+u+v, a+u-v);
+            Quad(b+u-v, b+u+v, b-u+v, b-u-v);
+            Quad(a+u-v, a+u+v, b+u+v, b+u-v);
+            Quad(a-u+v, a-u-v, b-u-v, b-u+v);
+            Quad(a+u+v, a-u+v, b-u+v, b+u+v);
+            Quad(a-u-v, a+u-v, b+u-v, b-u-v);
+            return this;
+        }
+
+        /// <summary>An octagonal hoop, in any plane; valve wheels, ropes, tyres and gallery rails share this mesh vocabulary.</summary>
+        public MeshKit Hoop(Vector3 center, Vector3 normal, float radius, float thickness, int segments = 8)
+        {
+            var rotation = Quaternion.FromToRotation(Vector3.up, normal.normalized);
+            for (var i = 0; i < segments; i++)
+            {
+                var a = i * Mathf.PI * 2 / segments; var b = (i + 1) * Mathf.PI * 2 / segments;
+                Beam(center + rotation * new Vector3(Mathf.Cos(a), 0, Mathf.Sin(a)) * radius,
+                    center + rotation * new Vector3(Mathf.Cos(b), 0, Mathf.Sin(b)) * radius, thickness);
+            }
+            return this;
+        }
+
+        /// <summary>A stone face set into a solid backing wall. The bevel supplies relief without five buried box faces.</summary>
+        public MeshKit Ashlar(Vector3 center, float width, float height, float relief = .10f)
+        {
+            var x = width * .5f; var y = height * .5f; const float bevel = .035f;
+            var a = center + new Vector3(-x, -y, 0); var b = center + new Vector3(-x, y, 0);
+            var c = center + new Vector3(x, y, 0); var d = center + new Vector3(x, -y, 0);
+            var aa = a + new Vector3(bevel, bevel, relief); var bb = b + new Vector3(bevel, -bevel, relief);
+            var cc = c + new Vector3(-bevel, -bevel, relief); var dd = d + new Vector3(-bevel, bevel, relief);
+            // The solid backing closes the side/lower seams. The exposed upper bevel catches the overcast light.
+            Quad(dd, cc, bb, aa); Quad(b, bb, cc, c);
+            return this;
+        }
+
         /// <summary>Destroys an object the scene made at run time, in Play mode or (for the Editor's stills) in edit mode.</summary>
         public static void Release(Object o)
         {

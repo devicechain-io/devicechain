@@ -25,6 +25,8 @@ namespace DeviceChain.Harborpulse.Visuals
         static readonly int Overcast = Shader.PropertyToID("_HarborOvercast");
         static readonly int SkyTime = Shader.PropertyToID("_HarborSkyTime");
         static readonly int Night = Shader.PropertyToID("_HarborNight");
+        static readonly int SceneryFog = Shader.PropertyToID("_HarborSceneryFog");
+        static readonly int SceneryFogColor = Shader.PropertyToID("_HarborSceneryFogColor");
 
         readonly Light sun, moon;
         readonly Material skybox;
@@ -36,6 +38,10 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly FogMode previousFogMode;
         readonly Light previousSun;
         readonly float previousReflectionIntensity;
+        readonly Color previousFogColor;
+        readonly float previousFogDensity;
+        readonly Vector4 previousSceneryFog;
+        readonly Color previousSceneryFogColor;
 
         public HarborSkyController(Transform parent, Shader skyShader)
         {
@@ -45,6 +51,10 @@ namespace DeviceChain.Harborpulse.Visuals
             previousFogMode = RenderSettings.fogMode;
             previousSun = RenderSettings.sun;
             previousReflectionIntensity = RenderSettings.reflectionIntensity;
+            previousFogColor = RenderSettings.fogColor;
+            previousFogDensity = RenderSettings.fogDensity;
+            previousSceneryFog = Shader.GetGlobalVector(SceneryFog);
+            previousSceneryFogColor = Shader.GetGlobalColor(SceneryFogColor);
             sun = MakeLight("Sun", parent, LightShadows.Soft);
             moon = MakeLight("Moon", parent, LightShadows.None);
             var shader = skyShader != null ? skyShader : Shader.Find("Harborpulse/Sky");
@@ -66,6 +76,10 @@ namespace DeviceChain.Harborpulse.Visuals
             RenderSettings.fogMode = previousFogMode;
             RenderSettings.sun = previousSun;
             RenderSettings.reflectionIntensity = previousReflectionIntensity;
+            RenderSettings.fogColor = previousFogColor;
+            RenderSettings.fogDensity = previousFogDensity;
+            Shader.SetGlobalVector(SceneryFog, previousSceneryFog);
+            Shader.SetGlobalColor(SceneryFogColor, previousSceneryFogColor);
             MeshKit.Release(skybox);
             if (sun != null) MeshKit.Release(sun.gameObject);
             if (moon != null) MeshKit.Release(moon.gameObject);
@@ -132,6 +146,9 @@ namespace DeviceChain.Harborpulse.Visuals
             RenderSettings.reflectionIntensity = Mathf.Lerp(1f, 0.08f, (float)s.Night);
             RenderSettings.fogColor = C(s.FogColor);
             RenderSettings.fogDensity = (float)s.FogDensity;
+            Shader.SetGlobalColor(SceneryFogColor, C(s.FogColor));
+            Shader.SetGlobalVector(SceneryFog, new Vector4((float)s.FogDensity, (float)s.HeightFogDensity,
+                (float)s.HeightFogBase, (float)s.HeightFogFalloff));
         }
     }
 }

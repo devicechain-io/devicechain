@@ -9,7 +9,8 @@ namespace DeviceChain.Harborpulse.Model
     /// <summary>The axis-aligned pump rig's outer well footprint, shared by geometry and the harbour-water mask.</summary>
     public readonly struct WellFootprint
     {
-        public const double LocalX = 9, LocalZ = 6, RadiusM = 2.45;
+        // The attached well clears North Quay lamp 2; the pump's PresentationMap anchor stays fixed.
+        public const double LocalX = 13, LocalZ = 6, RadiusM = 2.45;
         public WellFootprint(Ground pump) { Center = new Ground(pump.X + LocalX, pump.Z + LocalZ); }
         public Ground Center { get; }
         public bool Contains(Ground point) => (point.X - Center.X) * (point.X - Center.X) + (point.Z - Center.Z) * (point.Z - Center.Z) < RadiusM * RadiusM;

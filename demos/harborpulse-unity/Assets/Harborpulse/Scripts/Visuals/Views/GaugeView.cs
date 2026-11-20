@@ -21,7 +21,11 @@ namespace DeviceChain.Harborpulse.Visuals
             counter.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             t.GetComponent<MeshRenderer>().sharedMaterial = counter.font.material; counter.characterSize = 0.15f; counter.fontSize = 32; counter.anchor = TextAnchor.MiddleCenter;
             // a dark plate behind the count: the alarm beacon glows the same amber right behind it, and the bloom would swallow the text
-            counterPlate = new MeshKit().Box(new Vector3(0, 0, -0.08f), new Vector3(2.3f, 0.55f, 0.04f)).Spawn("AlarmCountPlate", t, mats.DoorDark, false);
+            counterPlate = new MeshKit().Box(new Vector3(0, 0, -0.08f), new Vector3(2.9f, 0.65f, 0.04f)).Spawn("AlarmCountPlate", t, mats.DoorDark, false);
+            var backing = new MaterialPropertyBlock();
+            backing.SetColor("_BaseColor", HarborCards.AlarmBackground);
+            backing.SetFloat("_Smoothness", 0); backing.SetFloat("_Metallic", 0);
+            counterPlate.GetComponent<MeshRenderer>().SetPropertyBlock(backing);
             replacementLabel = AssetRig.Node("ReplacementLabel", rig["Plate"], new Vector3(0, 0.2f, 0.04f));
             AssetRig.Tag("replacement (runner)", replacementLabel, Vector3.zero, 0.08f);
             var at = SitePlan.GaugeCrewAt(new Ground(0, 0), wallZ);
@@ -30,7 +34,7 @@ namespace DeviceChain.Harborpulse.Visuals
         public void Apply(HarborFrame f)
         {
             var id = rig.Placement.Device.ExternalId; var n = f.AlarmCounts[id];
-            counter.text = n == 0 ? "" : n + (n == 1 ? " alarm" : " alarms"); counter.color = new Color(1, 0.65f, 0.1f);
+            counter.text = n == 0 ? "" : n + (n == 1 ? " alarm" : " alarms"); counter.color = HarborCards.AlarmForeground;
             counterPlate.SetActive(n > 0);
             var replaced = f.Replacement?.ExternalId == id;
             rig["Plate"].GetComponent<MeshRenderer>().sharedMaterial = replaced ? mats.WorldCue : mats.Steel;

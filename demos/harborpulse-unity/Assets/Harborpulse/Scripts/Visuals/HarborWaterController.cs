@@ -12,7 +12,7 @@ namespace DeviceChain.Harborpulse.Visuals
 {
     /// <summary>
     /// The harbour water: a fine grid that follows the camera (snapped to its own cell, so the waves never swim) for the Gerstner displacement,
-    /// and round it a coarse ring out to the horizon with the same shader and no displacement. The waves fade out before the grid's edge
+        /// and round it a coast-clipped ring out to the horizon with the same shader and no displacement. The waves fade out before the grid's edge
     /// (the shader's fade ends inside it), so the two meet at the same flat tide with no step and never overlap. Each frame it hands the shader the quays' observed tide
     /// levels (from the <see cref="TideBoard"/>) and the waves for the story's storm (from <see cref="GerstnerWaves"/>): the surface is the
     /// observed tide plus zero-mean waves, nothing else.
@@ -21,7 +21,6 @@ namespace DeviceChain.Harborpulse.Visuals
     {
         const int GridCells = 360;
         const float Cell = 4f;
-        const float RingStep = 250f;
 
         static readonly int WaveA = Shader.PropertyToID("_WaveA"), WaveB = Shader.PropertyToID("_WaveB"), WaveC = Shader.PropertyToID("_WaveC"),
             WaveD = Shader.PropertyToID("_WaveD"), WaveAmp = Shader.PropertyToID("_WaveAmp"), WaveOmega = Shader.PropertyToID("_WaveOmega");
@@ -39,6 +38,10 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly TideField tideField;
         readonly Material nearMat, farMat;
         readonly Mesh nearMesh, farMesh;
+        readonly OceanPatch[] oceanPatches = new OceanPatch[OceanRing.PatchCount];
+        readonly Vector3[] oceanVertices = new Vector3[OceanRing.PatchCount * 4];
+        readonly float farExtent;
+        Vector3 ringCenter = new Vector3(float.NaN, 0, float.NaN);
         WaveComponent[] waves = GerstnerWaves.For(0);
         float time;
         Vector3 camera;
@@ -46,6 +49,7 @@ namespace DeviceChain.Harborpulse.Visuals
         /// <param name="plan">The district's three quays and pump footprints; the water orders quays west to east.</param>
         public HarborWaterController(Transform parent, Shader waterShader, PresentationMap map, HarborWorld world, float farExtent)
         {
+            this.farExtent = farExtent;
             var regions = new List<TideField.Region>();
             var rects = new Vector4[3];
             var index = 0;
@@ -60,7 +64,7 @@ namespace DeviceChain.Harborpulse.Visuals
             foreach (var rig in world.Rigs)
             {
                 if (rig.Placement.Device.Kind != DeviceKind.Pump) continue;
-                var well = rig.Root.TransformPoint(new Vector3(9, 0, 6));
+                var well = rig.Root.TransformPoint(new Vector3((float)WellFootprint.LocalX, 0, (float)WellFootprint.LocalZ));
                 discs[count++] = new Vector4(well.x, well.z, (float)WellFootprint.RadiusM, 0);
             }
             Shader.SetGlobalVectorArray(WellDiscs, discs); Shader.SetGlobalInt(WellCount, count);
@@ -84,48 +88,46 @@ namespace DeviceChain.Harborpulse.Visuals
             var ring = new GameObject("Water (far ring)");
             ring.transform.SetParent(parent, false);
             ring.layer = PlanarWaterReflection.WaterLayer;
-            ring.AddComponent<MeshFilter>().sharedMesh = farMesh = Ring(GridCells * Cell / 2, farExtent, RingStep);
+            ring.AddComponent<MeshFilter>().sharedMesh = farMesh = Ring();
             var fr = ring.AddComponent<MeshRenderer>();
             fr.sharedMaterial = farMat;
             fr.shadowCastingMode = ShadowCastingMode.Off;
             far = ring.transform;
+            UpdateRing(Vector3.zero);
         }
 
-        /// <summary>A flat square ring: the square of half-side <paramref name="outer"/> less the square of half-side <paramref name="inner"/>.</summary>
-        static Mesh Ring(float inner, float outer, float step)
+        /// <summary>Eight fixed patch slots for the coast-clipped square ring. All vertices remain in WORLD coordinates.</summary>
+        Mesh Ring()
         {
-            var vertices = new List<Vector3>();
-            var tris = new List<int>();
-            void Rect(float x0, float x1, float z0, float z1)
+            var normals = new Vector3[oceanVertices.Length];
+            var tris = new int[OceanRing.PatchCount * 6];
+            for(var p=0;p<OceanRing.PatchCount;p++)
             {
-                int nx = Mathf.Max(1, Mathf.CeilToInt((x1 - x0) / step)), nz = Mathf.Max(1, Mathf.CeilToInt((z1 - z0) / step));
-                var start = vertices.Count;
-                for (var z = 0; z <= nz; z++)
-                for (var x = 0; x <= nx; x++)
-                    vertices.Add(new Vector3(Mathf.Lerp(x0, x1, x / (float)nx), 0, Mathf.Lerp(z0, z1, z / (float)nz)));
-                for (var z = 0; z < nz; z++)
-                for (var x = 0; x < nx; x++)
-                {
-                    var i = start + z * (nx + 1) + x;
-                    tris.Add(i);
-                    tris.Add(i + nx + 1);
-                    tris.Add(i + nx + 2);
-                    tris.Add(i);
-                    tris.Add(i + nx + 2);
-                    tris.Add(i + 1);
-                }
+                var i=p*4;var t=p*6;
+                for(var k=0;k<4;k++)normals[i+k]=Vector3.up;
+                tris[t]=i;tris[t+1]=i+1;tris[t+2]=i+2;
+                tris[t+3]=i;tris[t+4]=i+2;tris[t+5]=i+3;
             }
-
-            Rect(-outer, outer, inner, outer);
-            Rect(-outer, outer, -outer, -inner);
-            Rect(-outer, -inner, -inner, inner);
-            Rect(inner, outer, -inner, inner);
-            var m = new Mesh { name = "water ring", indexFormat = vertices.Count > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16 };
-            m.SetVertices(vertices);
-            m.SetTriangles(tris, 0);
-            m.RecalculateNormals();
-            m.bounds = new Bounds(Vector3.zero, new Vector3(outer * 2 + 20, 40, outer * 2 + 20));
+            var m = new Mesh { name = "coast-clipped water ring" };
+            m.MarkDynamic();m.vertices=oceanVertices;m.normals=normals;m.triangles=tris;
             return m;
+        }
+
+        void UpdateRing(Vector3 center)
+        {
+            if(center==ringCenter)return;
+            ringCenter=center;
+            OceanRing.Fill(center.x,center.z,GridCells*Cell/2,farExtent,oceanPatches);
+            for(var p=0;p<OceanRing.PatchCount;p++)
+            {
+                var r=oceanPatches[p];var i=p*4;
+                oceanVertices[i]=new Vector3((float)r.MinX,0,(float)r.MinZ);
+                oceanVertices[i+1]=new Vector3((float)r.MinX,0,(float)r.MaxZ);
+                oceanVertices[i+2]=new Vector3((float)r.MaxX,0,(float)r.MaxZ);
+                oceanVertices[i+3]=new Vector3((float)r.MaxX,0,(float)r.MinZ);
+            }
+            farMesh.vertices=oceanVertices;
+            farMesh.bounds=new Bounds(center,new Vector3(farExtent*2+20,40,farExtent*2+20));
         }
 
         /// <summary>A flat grid centred on the origin, <paramref name="cells"/> square cells of <paramref name="size"/> metres a side.</summary>
@@ -191,7 +193,7 @@ namespace DeviceChain.Harborpulse.Visuals
             // the grid follows the camera in whole cells
             var snapped = new Vector3(Mathf.Round(cameraPos.x / Cell) * Cell, 0, Mathf.Round(cameraPos.z / Cell) * Cell);
             near.position = snapped;
-            far.position = snapped;
+            UpdateRing(snapped); // WORLD coast clipping; the mesh itself stays at the origin.
         }
 
         static Vector4 Pack(WaveComponent w) => new Vector4((float)w.DirX, (float)w.DirZ, (float)w.Steepness, (float)w.K);
