@@ -263,7 +263,7 @@ var harborBeats = []struct {
 	{"commute", 7.5, 10},
 	{"peak-demand", 8.5, 9.75},
 	{"lamp-flicker", 11, 12},
-	{"lamp-maintenance", 10.75, 11.5},
+	{"lamp-maintenance", HarborpulseLampServiceFrom, HarborpulseLampServiceTo},
 	{"connector-hot", 14, harborOverheatTo},
 	{"storm", 16, 22.5},
 	{"air-lock", harborAirLockFrom, harborAirLockTo},
@@ -313,6 +313,7 @@ func (s *harborpulse) ScenarioClock(now time.Time) *ScenarioClock {
 	}
 	c.Jobs = s.jobLedger()
 	c.S5 = s.s5Ledger()
+	c.LayoutDigest = HarborpulseLayoutDigest()
 	return c
 }
 

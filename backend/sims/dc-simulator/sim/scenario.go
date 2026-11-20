@@ -84,8 +84,11 @@ type ScenarioClock struct {
 	// Backfill is what each store-and-forward device buffered in each outage so far.
 	Backfill []ScenarioBackfill `json:"backfill,omitempty"`
 	// Jobs are the campaigns and maintenance-window openings the sim scheduled for each day.
-	Jobs                []ScenarioJob            `json:"jobs,omitempty"`
-	ThresholdChanges    []ThresholdChange        `json:"thresholdChanges,omitempty"`
+	Jobs             []ScenarioJob     `json:"jobs,omitempty"`
+	ThresholdChanges []ThresholdChange `json:"thresholdChanges,omitempty"`
+	// LayoutDigest is the lowercase hex SHA-256 of the scene layout file this sim generates
+	// (harborpulse only), so a scene can tell it was built for another layout.
+	LayoutDigest        string                   `json:"layoutDigest,omitempty"`
 	CalculatedBackfills []CalculatedBackfillBeat `json:"calculatedBackfills,omitempty"`
 }
 

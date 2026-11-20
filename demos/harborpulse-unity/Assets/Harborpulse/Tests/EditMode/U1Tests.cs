@@ -203,15 +203,20 @@ namespace DeviceChain.Harborpulse.Tests
         [Test]
         public void TruckRealSimulatorFloodPlainCoordinateFitsTheFrameAndAges()
         {
-            var plan = SitePlan.Build(Kit.Layout());
-            // harborTruckFix at 18:00: harborPlainLat=49.8020, harborPlainLon=-12.2000.
-            var fix = new HarborLocation(49.802, -12.2, 90, 8, Now);
+            var layout = Kit.Layout();
+            var plan = SitePlan.Build(layout);
+            // harborTruckFix at 18:00 is the route's last waypoint, the middle of the flood plain behind East Quay.
+            var plain = layout.TruckRoute[layout.TruckRoute.Count - 1];
+            var fix = new HarborLocation(plain.Lat, plain.Lon, 180, 8, Now);
             var t = TruckTrack.From(plan, fix, false, Now);
-            Assert.That(t.At.Z, Is.EqualTo(0).Within(1e-8)); Assert.That(t.At.X, Is.InRange(plan.MinX, plan.MaxX)); Assert.That(t.LightBar, Is.True);
+            // the plain and the depot are on land: south of the quay wall, the town's side (the water is north of it)
+            Assert.That(t.At.Z, Is.EqualTo(plan.Frame.ToGround(plain).Z).Within(1e-8)); Assert.That(t.At.Z, Is.LessThan(plan.WallZ - 30));
+            Assert.That(plan.Depot.Z, Is.LessThan(t.At.Z));
+            Assert.That(t.At.X, Is.InRange(plan.MinX, plan.MaxX)); Assert.That(t.At.Z, Is.InRange(plan.MinZ, plan.MaxZ)); Assert.That(t.LightBar, Is.True);
             Assert.That(TruckTrack.From(plan, fix, false, Now.AddSeconds(11)).Stale, Is.True);
             var no = TruckTrack.From(plan, null, false, Now); Assert.That(no.Note, Is.EqualTo("no fix")); Assert.That(no.At.X, Is.EqualTo(plan.Depot.X));
             Assert.That(TruckTrack.From(plan, new HarborLocation(null, null, 0, 0, Now), false, Now).NoFix, Is.True);
-            Assert.That(TruckTrack.From(plan, new HarborLocation(49.802, -12.2, 0, 0, Now), true, Now).LightBar, Is.True);
+            Assert.That(TruckTrack.From(plan, new HarborLocation(plain.Lat, plain.Lon, 0, 0, Now), true, Now).LightBar, Is.True);
         }
         [Test]
         public void ReplacementCountsOnlyDistinctObservedReadingsAfterTheDeclaredInstant()
