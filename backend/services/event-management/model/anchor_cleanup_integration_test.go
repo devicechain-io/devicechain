@@ -13,3 +13,8 @@ func TestIntegrationDeleteAnchorsForEntity_ProcessedTime(t *testing.T) {
 	api := newPostgresApi(t, freshInstance(t, "anchorreceipt"))
 	assertAnchorCleanupByReceiptTime(t, api)
 }
+
+func TestIntegrationAnchorsPersistedAfterDeletionCleanupAreNotReinserted(t *testing.T) {
+	api := newPostgresApi(t, freshInstance(t, "anchorlate"))
+	assertAnchorsPersistedAfterCleanupAreDropped(t, api)
+}

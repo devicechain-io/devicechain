@@ -67,6 +67,9 @@ func newScopeIntegrationApi(t *testing.T) *model.Api {
 		}
 	})
 	sys := mgr.Database.WithContext(core.WithSystemContext(context.Background()))
+	// The optional prefix omits later migrations, but the live anchor writer
+	// needs the watermark table. Use the migration's own DDL for that prerequisite.
+	require.NoError(t, model.NewEntityDeletionWatermarksSchema().Migrate(sys))
 	for _, table := range []string{"events", "location_events", "measurement_events",
 		"alert_events", "event_anchors", "state_change_events"} {
 		require.NoError(t, sys.Exec(fmt.Sprintf(`TRUNCATE TABLE "event-management".%q`, table)).Error)

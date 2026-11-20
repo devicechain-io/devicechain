@@ -594,9 +594,9 @@ func TestAConnectionFailureWritesEveryMessageAgainOnItsOwn(t *testing.T) {
 			if got := r.metric(t, metricFallbacks, "", ""); got != wantFallbacks {
 				t.Errorf("fallbacks = %v; want %v", got, wantFallbacks)
 			}
-			if !tc.connection && lastAll != 5 {
+			if !tc.connection && lastAll != 6 {
 				// probe, events, measurement_events, event_anchors, fence read
-				t.Errorf("the seven were written again with %d statements; want 5 (grouped)", lastAll)
+				t.Errorf("the seven were written again with %d statements; want 6 (grouped)", lastAll)
 			}
 			if e, _, _ := rowCounts(t, r.db); e != 7 {
 				t.Errorf("stored %d events; want 7", e)
@@ -714,7 +714,7 @@ func TestReplayingMessagesWritesNothingTwice(t *testing.T) {
 			// message at a time these were 8 probes, or 8 x 3 inserts + 1 = 25.
 			wantAll, wantFence := int64(1), int64(0)
 			if !alt {
-				wantAll, wantFence = 4, 1
+				wantAll, wantFence = 5, 1
 			}
 			if all != wantAll || fence != wantFence {
 				t.Errorf("the replay made %d statements with %d fence reads; want %d with %d",

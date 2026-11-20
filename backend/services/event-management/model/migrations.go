@@ -91,5 +91,6 @@ var (
 		// The usage rollup moves to ingest time: a BRIN index on events.processed_time and the
 		// rollup's persisted watermark (see its doc comment).
 		NewTenantUsageIngestSchema(),
+		NewEntityDeletionWatermarksSchema(),
 	}
 )

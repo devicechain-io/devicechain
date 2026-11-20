@@ -20,7 +20,7 @@ import (
 // is a durable, at-least-once consumer: cleanup is idempotent (deleting
 // already-absent rows is a no-op), so a redelivery — including the first-enablement
 // replay of the retained stream — is harmless. It runs a single inline read loop:
-// the cleanup is one cheap statement, so no worker pool is warranted.
+// watermark recording and cleanup are inline database operations; no worker pool is needed.
 type EntityAnchorReconciler struct {
 	Microservice *core.Microservice
 	Reader       messaging.MessageReader
@@ -108,9 +108,9 @@ func (r *EntityAnchorReconciler) ExecuteTerminate(context.Context) error {
 // reports EOF, or a run of non-EOF read errors outlasts the pacer's budget.
 //
 // 🔑 THAT LAST ONE ENDS THE WHOLE SERVICE, NOT JUST THIS RECONCILER, AND THAT IS THE POINT.
-// This loop is the only thing that removes anchors for deleted entities; if it stops,
-// nothing here reports it and the anchors accumulate silently against a service that still
-// looks healthy. The errors that get that far are broker-level, so they are the same ones
+// This loop records deletion watermarks and performs primary cleanup. If it stops,
+// new deletion facts have no watermark for the periodic resweep to recover, while
+// the service still looks healthy. The errors that get that far are broker-level, so they are the same ones
 // the persistence loop in this process is facing — and a restart, which re-dials the broker
 // and re-creates the durable, is the remedy for most of them. Both loops leave their
 // messages unacked, so a restart costs redelivery, not data.
@@ -149,6 +149,8 @@ func (r *EntityAnchorReconciler) handle(ctx context.Context, msg messaging.Messa
 			_ = msg.Ack()
 			return
 		case messaging.Exhausted:
+			// If the watermark committed before cleanup failed, its armed periodic
+			// resweep covers this exhausted delivery (including a crash after commit).
 			log.Error().Err(err).Str("entity", event.EntityToken).Int("delivered", msg.NumDelivered).
 				Msg("Giving up on entity-deleted event after max delivery attempts")
 			_ = msg.Ack()
