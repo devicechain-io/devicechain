@@ -23,6 +23,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         readonly Dictionary<string, Reading> previous = new Dictionary<string, Reading>();
         readonly Dictionary<string, Dictionary<string, string>> trends = new Dictionary<string, Dictionary<string, string>>();
         readonly Dictionary<string, JsonElement> wellHistory = new Dictionary<string, JsonElement>();
+        readonly SortedDictionary<DateTimeOffset, HashSet<string>> dueWells = new SortedDictionary<DateTimeOffset, HashSet<string>>();
+        readonly Dictionary<string, string> wellCycles = new Dictionary<string, string>();
         readonly Dictionary<string, Reading> pumpRunning = new Dictionary<string, Reading>();
         readonly Dictionary<string, DateTimeOffset> pumpOffAt = new Dictionary<string, DateTimeOffset>();
         readonly HashSet<string> failedProbes = new HashSet<string>();
@@ -32,6 +34,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         List<Row> rows;
         List<DirectorRead> complete;
         int measurementIndex;
+        public long MeasurementWorkUnits { get; private set; }
         string run;
         double startSim, lastSim;
         int measurementReconnects, alarmReconnects;
@@ -87,7 +90,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         {
             input = inputs ?? throw new ArgumentNullException(nameof(inputs)); this.observe = observe; this.cover = cover;
             if (run != inputs.Run) {
-                run = inputs.Run; emitted.Clear(); alarmHistory.Clear(); previous.Clear(); trends.Clear(); wellHistory.Clear(); pumpRunning.Clear(); pumpOffAt.Clear(); failedProbes.Clear(); problems.Clear();
+                run = inputs.Run; emitted.Clear(); alarmHistory.Clear(); previous.Clear(); trends.Clear(); wellHistory.Clear(); dueWells.Clear(); wellCycles.Clear(); pumpRunning.Clear(); pumpOffAt.Clear(); failedProbes.Clear(); problems.Clear();
                 startSim = lastSim = input.Sim; measurementReconnects = alarmReconnects = measurementIndex = 0;
             }
             if (input.Sim < lastSim) throw new InvalidOperationException("observer requires a new instance on seek");
@@ -315,6 +318,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         void Measurements()
         {
             foreach (var r in rows.Where(r => r.Name == "measurements" || r.Name == "streamMeasurements").Select(r => r.Value).OrderBy(r => Optional(r, "occurredTime"))) Safe("measurements", () => {
+                MeasurementWorkUnits++;
                 var token = S(r, "deviceToken"); var device = Device(token); var key = S(r, "name"); var at = T(r, "occurredTime");
                 var value = DirectorProbeEvaluation.Require(r, "value").GetDouble(); var f = new Dictionary<string, string> { ["value"] = N(value) }; var cycle = "";
                 var pk = device + "/" + key;
@@ -356,7 +360,11 @@ namespace DeviceChain.Harborpulse.Model.Director
         }
         void StreamMeasurements(DirectorReadSnapshot snapshot)
         {
-            foreach (var reading in snapshot.Measurements.Skip(measurementIndex).OrderBy(m => m.OccurredAt)) {
+            var fresh = new List<DirectorMeasurement>();
+            // IReadOnlyList.Skip enumerated the entire prefix on Unity's runtime.
+            for (var i = measurementIndex; i < snapshot.Measurements.Count; i++) fresh.Add(snapshot.Measurements[i]);
+            var addedWells = new HashSet<string>();
+            foreach (var reading in fresh.OrderBy(m => m.OccurredAt)) {
                 var token = reading.DeviceToken; var metric = reading.Name; var device = Device(token);
                 if (metric == Metrics.PumpRunning && (!pumpRunning.TryGetValue(device, out var old) || reading.OccurredAt > old.OccurredAt)) {
                     if (reading.Value <= .5 && (!pumpRunning.ContainsKey(device) || old.Value > .5)) pumpOffAt[device] = reading.OccurredAt;
@@ -368,11 +376,44 @@ namespace DeviceChain.Harborpulse.Model.Director
                     w.WriteString("occurredTime", reading.OccurredAt.ToString("O")); w.WriteNumber("value", reading.Value); w.WriteEndObject();
                 });
                 using var doc = JsonDocument.Parse(json); var record = doc.RootElement.Clone();
-                if (metric == Metrics.WetWell) wellHistory[id] = record;
+                if (metric == Metrics.WetWell) {
+                    wellHistory[id] = record; addedWells.Add(id);
+                    if (reading.OccurredAt > input.Now) {
+                        if (!dueWells.TryGetValue(reading.OccurredAt, out var due)) dueWells[reading.OccurredAt] = due = new HashSet<string>();
+                        due.Add(id);
+                    }
+                }
                 else rows.Add(new Row { Name = "streamMeasurements", Scope = token, Value = record });
             }
             measurementIndex = snapshot.Measurements.Count;
-            foreach (var record in wellHistory.Values) rows.Add(new Row { Name = "streamMeasurements", Scope = S(record, "deviceToken"), Value = record });
+            // Visit only the due prefix, never the retained archive on idle frames. Resolve IDs
+            // through wellHistory so corrections received while deferred use their final value.
+            while (dueWells.Count > 0) {
+                var due = dueWells.First();
+                if (due.Key > input.Now) break;
+                addedWells.UnionWith(due.Value); dueWells.Remove(due.Key);
+            }
+            // Collapse the entire fresh batch before emitting: equal timestamps share an event
+            // and observation time, so the store must see exactly one final revision.
+            foreach (var id in addedWells) {
+                var record = wellHistory[id];
+                if (T(record, "occurredTime") <= input.Now)
+                    rows.Add(new Row { Name = "streamMeasurements", Scope = S(record, "deviceToken"), Value = record });
+            }
+            // Wells already emitted need revisiting only when their alarm/off-interval join
+            // changes, so an arriving high alarm still gets ALL pre-alarm float evidence.
+            var changed = new HashSet<string>();
+            foreach (var pump in layout.Devices.Where(d => d.Kind == DeviceKind.Pump)) {
+                if (input.Source == null || !input.Source.TryToken(pump.ExternalId, out var token)) continue;
+                var cycle = string.Join("|", alarmHistory.Where(a => S(a.Value, "originatorToken") == token).Select(a => a.Key).OrderBy(k => k, StringComparer.Ordinal))
+                    + "/" + (pumpOffAt.TryGetValue(pump.Token, out var off) ? off.ToString("O") : "");
+                if (!wellCycles.TryGetValue(token, out var old) || old != cycle) { wellCycles[token] = cycle; changed.Add(token); }
+            }
+            if (changed.Count > 0) foreach (var p in wellHistory) {
+                var token = S(p.Value, "deviceToken");
+                if (changed.Contains(token) && !addedWells.Contains(p.Key) && T(p.Value, "occurredTime") <= input.Now)
+                    rows.Add(new Row { Name = "streamMeasurements", Scope = token, Value = p.Value });
+            }
         }
         void Binding()
         {

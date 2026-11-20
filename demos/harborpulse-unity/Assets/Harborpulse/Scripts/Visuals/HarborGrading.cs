@@ -42,19 +42,23 @@ namespace DeviceChain.Harborpulse.Visuals
         {
             var night = (float)sky.Night; var storm = (float)sky.Overcast;
             var warm = (1 - Mathf.Abs(night * 2 - 1)) * (1 - storm);
-            colour.postExposure.Override(0.2f + night * 0.75f - storm * 0.3f);
-            colour.contrast.Override(5 + night * 5 - storm * 3);
-            colour.saturation.Override(3 - night * 19 - storm * 18);
-            balance.temperature.Override(warm * 18 - night * 12); balance.tint.Override(warm * 3);
-            bloom.intensity.Override(Mathf.Lerp(0.18f, 0.65f, night));
+            // Night and storm are lifted, not crushed: the exposure rises with the night and holds through the storm, so captions sit over
+            // a readable town; the lamps and windows carry the night's colour through the bloom.
+            colour.postExposure.Override(0.05f + night * 0.55f + storm * 0.1f);
+            colour.contrast.Override(4 + night * 6 - storm * 4);
+            // capped at -16 (the U2b night): any deeper and the alarm levels' amber and coral wash out to peach
+            colour.saturation.Override(Mathf.Max(-16, 6 - night * 18 - storm * 10));
+            balance.temperature.Override(warm * 14 - night * 10 - (1 - night) * (1 - storm) * 3); balance.tint.Override(warm * 3);
+            bloom.intensity.Override(Mathf.Lerp(0.15f, 0.5f, night));
         }
         public void Dispose()
         {
-            camera.allowHDR = oldHdr;
+            // on quit the camera can be destroyed before the app's teardown runs
+            if (camera != null) camera.allowHDR = oldHdr;
             if (ownedCameraData) MeshKit.Release(cameraData);
-            else cameraData.renderPostProcessing = oldPost;
+            else if (cameraData != null) cameraData.renderPostProcessing = oldPost;
             foreach (var component in profile.components) MeshKit.Release(component);
-            MeshKit.Release(profile); MeshKit.Release(volume.gameObject);
+            MeshKit.Release(profile); if (volume != null) MeshKit.Release(volume.gameObject);
         }
 #else
         // Tier-1's older Unity reference package cannot compile URP. Real Unity builds must select the implementation above.

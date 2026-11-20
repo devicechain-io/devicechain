@@ -100,6 +100,7 @@ namespace DeviceChain.Harborpulse.Visuals
             b.Waterfront();
             b.Park();
             b.Trees();
+            b.StreetLamps();
             b.Flush();
             return b;
         }
@@ -644,6 +645,34 @@ namespace DeviceChain.Harborpulse.Visuals
             }
             foreach (var p in new[] { new Vector2(-196, 110), new Vector2(-174, 150), new Vector2(-214, 118), new Vector2(-150, 140) })
                 Tree(new Vector3(p.x, Deck, p.y), 11 + (float)random.NextDouble() * 4, true);
+        }
+
+        // ---------------------------------------------------------------- street lamps
+
+        void StreetLamps()
+        {
+            // a lamp every 26 m or so, alternating sides; scenery only (the quays' street lights are the devices)
+            foreach (var s in streets)
+            {
+                var length = s.Length; var side = 1;
+                for (var at = 10f; at < length - 4; at += 26, side = -side)
+                {
+                    s.At(at, out var p, out var t);
+                    var n = new Vector2(t.y, -t.x) * side;
+                    var c = p + n * (s.HalfWidth + 0.9f);
+                    var head = p + n * (s.HalfWidth + 0.15f);
+                    if (Mathf.Abs(c.x) < CoreHalfX && c.y < CoreNorthZ) continue;
+                    // the pole and the head stand clear of every building, every other street, the mapped ground and the devices
+                    if (InBuilding(c, 0.6f) || InBuilding(head, 0.6f) || Clearance(c) < 0.5f || reserved(c)) continue;
+                    var nearDevice = false;
+                    foreach (var k in keepClear) nearDevice |= Vector2.Distance(k, c) < 12;
+                    if (nearDevice) continue;
+                    var at3 = new Vector3(c.x, Height(c.x, c.y), c.y);
+                    var yaw = Mathf.Atan2(-n.x, -n.y) * Mathf.Rad2Deg;
+                    P(m.DarkSteel, at3, yaw).Cylinder(Vector3.zero, 0.09f, 4.6f, 6).Box(new Vector3(0, 4.6f, -0.35f), new Vector3(0.12f, 0.12f, 0.9f));
+                    P(c.x > 140 ? m.EastTownLamp : m.TownLamp, at3, yaw, false).Box(new Vector3(0, 4.38f, -0.75f), new Vector3(0.7f, 0.36f, 0.7f));
+                }
+            }
         }
 
         // ---------------------------------------------------------------- trees

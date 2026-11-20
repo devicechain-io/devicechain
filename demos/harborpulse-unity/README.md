@@ -564,3 +564,28 @@ HOME still passes at both aspects with every quay, the mouth and the ridge (now 
 visible: 16:9 water 43.5 %, sky 0 %, 36/37 devices (the truck is in its depot); 9:16 water 23.0 %, sky 0.7 %,
 36/37 (East Quay lamp 4 is under the 8 px floor, as it was before U3).
 
+
+## U3 art pass: light
+
+- **Overcast day.** `DayLighting.Cloud` (0.55) is a fixed high cloud. It softens the sun (×0.78) and its shadows
+  (`SkyState.ShadowStrength`: 0.57 at noon, lower in the storm), pales the sky to a grey-blue with a pearl horizon,
+  raises the ambient (×1.19) and adds haze (fog density 0.00026). `SkyState.CloudCover` (the high cloud or the
+  storm, whichever is thicker) is what the sky shader draws; `Overcast` stays the storm's own cover.
+- **Readable storm and night.** The ambient never drops below a cool moonlit floor (sky blue at least 0.24). The
+  storm's sky is lighter and its ambient is lifted ×1.5, so it darkens the sky rather than the town. The moon is 0.5.
+  The grading lifts exposure by up to 0.55 EV at night and 0.1 EV in the storm, desaturates the night (never past -16) and caps
+  bloom at 0.5.
+- **Emission in the player.** URP Lit's `_EMISSION`, `_ENVIRONMENTREFLECTIONS_OFF` and `_SURFACE_TYPE_TRANSPARENT`
+  are `shader_feature` keywords: a player compiles a variant only if some material in the build uses it, and every
+  material here is made at run time. Before U3 no window, lamp head, beacon or flow streak emitted in a player, and
+  the well glass was opaque (the Editor compiles every variant, so its stills hid this). `HarborSceneBuilder` now
+  creates `Assets/Harborpulse/Materials/LitVariant-{Emission,Matte,Transparent}.mat`, and the scene references them
+  through `HarborpulseApp.litVariants`. With emission real, the signal emissives are tuned for the player (alarm
+  levels 0.6/0.8/1.0, beacon 1.0, lamp head 4, halo 1.2), low enough that the tonemapper keeps each severity's
+  colour, and the gauge alarm count has a dark plate behind it.
+- **Lamps and windows.** The town's own street lamps stand about 26 m apart along every street, alternating sides,
+  clear of buildings, other streets, the mapped ground and 12 m round devices. They are scenery: the quays' lights
+  are the devices. About half the town's windows are lit at night (emission 4). The eastern town's windows and
+  lamps go dark through the east feeder outage, a WORLD cue like `EastWindows` before.
+- **Frame stats.** `-hp-frame-stats` turns vsync off and logs the mean, 95th-percentile and worst frame time every
+  10 s.
