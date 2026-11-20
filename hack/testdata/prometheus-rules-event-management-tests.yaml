@@ -113,8 +113,8 @@ tests:
         exp_alerts: []
 
   # The device token holder table is on the same series and has no size alert: it is as large
-  # as the fleet, and a loop of deleted tokens crosses the watermark line first. A holder table
-  # far over 1 GiB must not raise the watermark alert.
+  # as the fleet, which no absolute line can tell from a loop (see the rule template's header).
+  # A holder table far over 1 GiB must not raise the watermark alert.
   - name: a large device token holder table is not the watermark alert
     interval: 1m
     input_series:

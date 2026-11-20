@@ -17,10 +17,15 @@ loop. The series is the shared append-only table gauge every service exports for
 
 THE DEVICE TOKEN HOLDER TABLE IS ON THE SAME SERIES (table="device_token_holders") AND HAS NO SIZE
 ALERT, on purpose. It keeps one row per distinct device token a live device was ever known to hold, so
-its rows are the tenant's devices plus its deleted device tokens. A fleet of millions of devices is
-legitimately that large, so no absolute threshold can tell a big fleet from a loop. And a loop is
-already caught here: every deleted device token in it also has a watermark row, so the watermark table
-crosses its line first. The rule test pins that a holder table of any size does not raise this alert.
+its rows are, in the main, the tenant's devices plus its deleted device tokens. A fleet of millions of
+devices is legitimately that large, so no absolute threshold can tell a big fleet from a loop. A loop of
+devices created and deleted under new tokens also adds a watermark row per token, which the alert below
+watches. That is a second signal for the same loop, not a promise of which table crosses a line first:
+the holder table starts from the whole fleet, and both sizes are allocated space. A holder row can also
+outlive its device without a watermark row (a deletion fact that was never recorded, or a roster fact
+that landed after the deletion); those are bounded by lost deletions. The event store's volume alerts
+cover the space either way. The rule test pins that a holder table of any size does not raise this
+alert.
 
 ANY ONE REASON ABOVE 1 RECORD A SECOND FOR 15 MINUTES FIRES. A handful of refusals is a device
 with a typo; a sustained rate is a fleet that was configured wrong, a device stuck retrying, or a release that broke

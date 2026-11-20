@@ -375,12 +375,16 @@ func wireBackfill(ctx context.Context, peers *svcclient.Peers) error {
 // The device token holder table gains one row per distinct device token a live device was
 // ever known to hold, and keeps it for the life of the tenant too: it is what tells a
 // re-created token from one that was only deleted. It is measured but NOT alerted on by size.
-// Its rows are the tenant's devices plus the deleted device tokens, and the deleted ones each
-// already have a watermark row: growth beyond the fleet shows up first on the watermark
-// table, which EntityDeletionWatermarksLarge watches, while growth with the fleet is the fleet
-// itself, which an absolute size cannot tell from a loop. The chart's event-management rule
-// group says the same next to the alert, and its rule test pins that a large holder table does
-// not raise it.
+// Its rows are, in the main, the tenant's devices plus its deleted device tokens. Growth with
+// the fleet is the fleet itself, which no absolute size can tell from a loop; and a loop that
+// creates and deletes devices under new tokens grows the watermark table by a row per token
+// too, which EntityDeletionWatermarksLarge watches. A holder can also outlive both a live
+// device and a watermark row, when the deletion fact was never recorded (dropped after its
+// redeliveries ran out, or aged out of the stream) or a roster fact landed after the
+// deletion; such rows are bounded by lost deletions, not by anything a size alert would add.
+// The table's size is still on the series, and the event store's volume alerts cover the
+// space. The chart's event-management rule group says the same next to the alert, and its
+// rule test pins that a large holder table does not raise it.
 var appendOnlyModels = []any{&model.EntityDeletionWatermark{}, &model.DeviceTokenHolder{}}
 
 // Called after microservice has been initialized.
