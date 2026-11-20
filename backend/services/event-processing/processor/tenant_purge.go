@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -383,7 +385,9 @@ type TenantPurgeResponder struct {
 	partition  string
 	evict      func(ctx context.Context, tenant string) (int64, error)
 	sub        *nats.Subscription
-	children   []*TenantPurgeResponder
+	// children are the group workers' partitions. They hold no subscription of their own:
+	// the parent answers for them, in its one reply (see handle).
+	children []*TenantPurgeResponder
 }
 
 // NewTenantPurgeResponder wires a responder to a running processor.
@@ -439,62 +443,73 @@ func (r *TenantPurgeResponder) Start() error {
 	// The comment on that branch already names this shape — it attests to zero INTEREST,
 	// and a reconnecting client briefly has none. Our own startup is the same gap, and
 	// this is the half of it we control.
+	//
+	// 🔴 ONE SUBSCRIPTION PER PROCESS, EVEN WHEN THE PROCESS HOLDS SEVERAL PARTITIONS. The
+	// reply goes to the requester's inbox, which this login may publish to only because it
+	// received the request (allow_responses), and the broker counts that per connection and
+	// reply subject: one reply, and a second delivery of the same request to the same
+	// connection spends it. A subscription per partition, all on this connection, had every
+	// answer of a sharded engine refused, so its tenant deletions never completed. The group
+	// workers are answered for in handle, in this subscription's one reply.
 	sub, err := messaging.SubscribeSynced(r.conn, subject, r.handle)
 	if err != nil {
 		return fmt.Errorf("subscribing to the DETECT tenant-eviction subject %q: %w", subject, err)
 	}
 	r.sub = sub
-	// One serial subscription per partition: a slow commit must not prevent an
-	// empty sibling from answering CLEAN. All subscriptions live across terms.
+	partitions := []string{r.partition}
 	for _, child := range r.children {
-		if err := child.Start(); err != nil {
-			_ = r.Stop()
-			return err
-		}
+		partitions = append(partitions, child.partition)
 	}
-	log.Info().Str("subject", subject).Str("partition", r.partition).
+	log.Info().Str("subject", subject).Strs("partitions", partitions).
 		Msg("DETECT tenant-eviction responder subscribed.")
 	return nil
 }
 
 // Stop tears down the subscription.
 func (r *TenantPurgeResponder) Stop() error {
-	var err error
-	for _, child := range r.children {
-		err = errors.Join(err, child.Stop())
-	}
 	if r.sub == nil {
-		return err
+		return nil
 	}
-	return errors.Join(err, r.sub.Unsubscribe())
+	return r.sub.Unsubscribe()
 }
 
-// handle evicts one tenant and replies with what happened.
+// purgeAnswerBudget bounds each partition's eviction inside one request. It is shorter than
+// the caller's gather window because the reply is sent once, for every partition this
+// process holds: a partition that ran out the whole window would make the reply late and
+// silence its siblings with it. Past the budget the partition answers with an error, which
+// the caller records as still held and asks again on its next pass.
+const purgeAnswerBudget = messaging.DetectPurgeWindow - time.Second
+
+// handle evicts one tenant from every partition this process holds and replies once, for
+// all of them.
 //
 // Every partition reports failures explicitly, including before its first checkpoint
-// row exists. Only a successful eviction can answer CLEAN.
+// row exists. Only a successful eviction can answer CLEAN. The partitions evict
+// concurrently, each on its own single-writer loop, so a slow commit in one does not use up
+// another's budget.
 func (r *TenantPurgeResponder) handle(msg *nats.Msg) {
 	if msg.Reply == "" {
 		log.Warn().Msg("Ignoring a DETECT tenant-eviction request with no reply subject.")
 		return
 	}
-	reply := messaging.DetectPurgeReply{PartitionId: r.partition}
-
 	var req messaging.DetectPurgeRequest
-	if err := json.Unmarshal(msg.Data, &req); err != nil {
-		reply.Error = fmt.Sprintf("could not decode the eviction request: %v", err)
-	} else {
-		// Bounded by the caller's own gather window: past it the answer is unwanted, and an
-		// unbounded wait would leak one goroutine per pass against a wedged loop.
-		ctx, cancel := context.WithTimeout(context.Background(), messaging.DetectPurgeWindow)
-		evicted, err := r.evict(ctx, req.Tenant)
-		cancel()
-		reply.Evicted = evicted
-		if err != nil {
-			reply.Error = err.Error()
-			log.Warn().Err(err).Str("tenant", req.Tenant).Str("partition", r.partition).
-				Msg("DETECT tenant eviction did not complete; reporting the tenant as still held.")
-		}
+	decodeErr := json.Unmarshal(msg.Data, &req)
+
+	partitions := append([]*TenantPurgeResponder{r}, r.children...)
+	answers := make([]messaging.DetectPurgeReply, len(partitions))
+	var wg sync.WaitGroup
+	for i, p := range partitions {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			answers[i] = p.answer(req.Tenant, decodeErr)
+		}()
+	}
+	wg.Wait()
+	reply := answers[0]
+	reply.Siblings = answers[1:]
+	if len(reply.Siblings) == 0 {
+		reply.Siblings = nil
 	}
 
 	body, err := json.Marshal(reply)
@@ -504,6 +519,27 @@ func (r *TenantPurgeResponder) handle(msg *nats.Msg) {
 	}
 	if err := r.conn.Publish(msg.Reply, body); err != nil {
 		log.Warn().Err(err).Msg("Could not send a DETECT tenant-eviction reply; the caller will " +
-			"record this partition as not having answered.")
+			"record these partitions as not having answered.")
 	}
+}
+
+// answer evicts the tenant from this one partition and says what happened.
+func (r *TenantPurgeResponder) answer(tenant string, decodeErr error) messaging.DetectPurgeReply {
+	reply := messaging.DetectPurgeReply{PartitionId: r.partition}
+	if decodeErr != nil {
+		reply.Error = fmt.Sprintf("could not decode the eviction request: %v", decodeErr)
+		return reply
+	}
+	// Bounded inside the caller's own gather window: past it the answer is unwanted, and an
+	// unbounded wait would leak one goroutine per pass against a wedged loop.
+	ctx, cancel := context.WithTimeout(context.Background(), purgeAnswerBudget)
+	evicted, err := r.evict(ctx, tenant)
+	cancel()
+	reply.Evicted = evicted
+	if err != nil {
+		reply.Error = err.Error()
+		log.Warn().Err(err).Str("tenant", tenant).Str("partition", r.partition).
+			Msg("DETECT tenant eviction did not complete; reporting the tenant as still held.")
+	}
+	return reply
 }
