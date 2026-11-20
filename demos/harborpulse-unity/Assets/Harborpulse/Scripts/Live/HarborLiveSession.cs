@@ -26,6 +26,7 @@ namespace DeviceChain.Harborpulse.Live
         readonly CancellationTokenSource cts = new CancellationTokenSource();
         readonly Dictionary<string, string> tokenByExternalId = new Dictionary<string, string>(StringComparer.Ordinal);
         HarborPlatformReads reads;
+        DirectorReads directorReads;
         readonly ScenarioClockFollower clock = new ScenarioClockFollower();
         readonly ScenarioStatusClient statusClient;
         TokenBroker broker;
@@ -48,6 +49,7 @@ namespace DeviceChain.Harborpulse.Live
         public ObservedState Observed { get; private set; }
         public ObserverStatus ObserverStatus { get; } = new ObserverStatus();
         public TokenBroker Broker => broker;
+        public DeviceChain.Harborpulse.Model.Director.DirectorReadSnapshot DirectorReads => directorReads?.Snapshot;
 
         /// <summary>The platform's readings, by the layout's external IDs; empty until the observer runs.</summary>
         public IHarborSource Source => this;
@@ -113,6 +115,8 @@ namespace DeviceChain.Harborpulse.Live
                 Observed = new ObservedState(DateTimeOffset.UtcNow);
                 observer = new PlatformObserver(cfg.Value, broker, watched, Observed, ObserverStatus);
                 reads = new HarborPlatformReads(Config, broker, layout, id => TryToken(id, out var t) ? t : null);
+                directorReads = new DirectorReads(Config, broker, layout, id => TryToken(id, out var t) ? t : null, ObserverStatus);
+                observer.Watch += directorReads.Watch;
                 observer.Start();
                 Stage = "observing";
             }
@@ -139,6 +143,7 @@ namespace DeviceChain.Harborpulse.Live
             broker?.Tick();
             observer?.Pump();
             reads?.Tick(Status, DateTimeOffset.UtcNow);
+            directorReads?.Tick(Status, DateTimeOffset.UtcNow);
         }
 
         public void Dispose()
@@ -146,6 +151,7 @@ namespace DeviceChain.Harborpulse.Live
             cts.Cancel();
             statusClient.Dispose();
             reads?.Dispose();
+            directorReads?.Dispose();
             try { observer?.Dispose(); }
             catch (Exception e) { PlatformLog.Warn("observer shutdown: " + e.GetType().Name); }
         }

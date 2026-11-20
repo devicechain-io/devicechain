@@ -1770,16 +1770,14 @@
                 "alarm": {
                   "key": "light-silent",
                   "status": "RAISED",
-                  "mode": "occurred",
-                  "cycle": "$trigger.cycle"
+                  "mode": "occurred"
                 }
               },
               {
                 "alarm": {
                   "key": "charger-offline",
                   "status": "RAISED",
-                  "mode": "occurred",
-                  "cycle": "$trigger.cycle"
+                  "mode": "occurred"
                 }
               }
             ]
@@ -1802,16 +1800,14 @@
                     "alarm": {
                       "key": "light-silent",
                       "status": "RAISED",
-                      "mode": "occurred",
-                      "cycle": "$trigger.cycle"
+                      "mode": "occurred"
                     }
                   },
                   {
                     "alarm": {
                       "key": "charger-offline",
                       "status": "RAISED",
-                      "mode": "occurred",
-                      "cycle": "$trigger.cycle"
+                      "mode": "occurred"
                     }
                   }
                 ]
@@ -1819,8 +1815,7 @@
               "expected": {
                 "membership": {
                   "identity": "east-absence",
-                  "mode": "occurred",
-                  "cycle": "$trigger.cycle"
+                  "mode": "occurred"
                 }
               },
               "field": "device",
@@ -1848,16 +1843,14 @@
                 "alarm": {
                   "key": "light-silent",
                   "status": "RAISED",
-                  "mode": "occurred",
-                  "cycle": "$trigger.cycle"
+                  "mode": "occurred"
                 }
               },
               {
                 "alarm": {
                   "key": "charger-offline",
                   "status": "RAISED",
-                  "mode": "occurred",
-                  "cycle": "$trigger.cycle"
+                  "mode": "occurred"
                 }
               }
             ]
@@ -1894,16 +1887,14 @@
                       "alarm": {
                         "key": "light-silent",
                         "status": "RAISED",
-                        "mode": "occurred",
-                        "cycle": "$trigger.cycle"
+                        "mode": "occurred"
                       }
                     },
                     {
                       "alarm": {
                         "key": "charger-offline",
                         "status": "RAISED",
-                        "mode": "occurred",
-                        "cycle": "$trigger.cycle"
+                        "mode": "occurred"
                       }
                     }
                   ]
@@ -1911,8 +1902,7 @@
                 "expected": {
                   "membership": {
                     "identity": "east-absence",
-                    "mode": "occurred",
-                    "cycle": "$trigger.cycle"
+                    "mode": "occurred"
                   }
                 },
                 "field": "device",
@@ -1938,7 +1928,6 @@
                     "device": "hp-light-east-1",
                     "key": "light-silent",
                     "status": "RAISED",
-                    "cycle": "$trigger.cycle",
                     "as": "absence"
                   }
                 },
@@ -1969,7 +1958,6 @@
                     "device": "hp-light-east-1",
                     "key": "light-silent",
                     "status": "RAISED",
-                    "cycle": "$trigger.cycle",
                     "as": "absence"
                   }
                 },
@@ -2504,8 +2492,7 @@
               "fields": {
                 "rolloutToken": "$trigger.identity",
                 "artifactToken": "$trigger.artifactToken"
-              },
-              "attempt": "$trigger.attempt"
+              }
             }
           },
           "holdS": 3
@@ -2530,8 +2517,7 @@
               "device": "hp-charger-north-1",
               "status": "FAILED",
               "mode": "occurred",
-              "cycle": "$trigger.cycle",
-              "attempt": "$trigger.attempt"
+              "cycle": "$trigger.cycle"
             }
           },
           "holdS": 3
@@ -2553,8 +2539,7 @@
               "fields": {
                 "rolloutToken": "$trigger.identity",
                 "artifactToken": "$trigger.artifactToken"
-              },
-              "attempt": "$trigger.attempt"
+              }
             }
           },
           "holdS": 3
@@ -2582,7 +2567,7 @@
                   "status": "FAILED",
                   "mode": "occurred",
                   "cycle": "$trigger.cycle",
-                  "attempt": "$trigger.attempt"
+                  "as": "failure"
                 }
               },
               {
@@ -2597,7 +2582,7 @@
                   "key": "power_kw",
                   "mode": "occurred",
                   "cycle": "$trigger.cycle",
-                  "attempt": "$trigger.attempt"
+                  "attempt": "$match.failure.attempt"
                 }
               }
             ]
@@ -2700,8 +2685,7 @@
                 "fields": {
                   "rolloutToken": "$trigger.identity",
                   "artifactToken": "$trigger.artifactToken"
-                },
-                "attempt": "$trigger.attempt"
+                }
               }
             }
           },
@@ -2721,8 +2705,7 @@
                 "device": "hp-charger-north-1",
                 "status": "FAILED",
                 "mode": "occurred",
-                "cycle": "$trigger.cycle",
-                "attempt": "$trigger.attempt"
+                "cycle": "$trigger.cycle"
               }
             }
           }
