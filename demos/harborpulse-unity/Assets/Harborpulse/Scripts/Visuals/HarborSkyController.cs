@@ -109,17 +109,19 @@ namespace DeviceChain.Harborpulse.Visuals
             var sunLeads = s.SunIntensity >= s.MoonIntensity;
             sun.shadows = sunLeads ? LightShadows.Soft : LightShadows.None;
             moon.shadows = sunLeads ? LightShadows.None : LightShadows.Soft;
+            sun.shadowStrength = moon.shadowStrength = (float)s.ShadowStrength;
             RenderSettings.sun = sunLeads ? sun : moon;
 
             Shader.SetGlobalColor(Zenith, C(s.Zenith));
             Shader.SetGlobalColor(Horizon, C(s.Horizon));
             Shader.SetGlobalColor(GroundCol, C(s.Ground));
-            Shader.SetGlobalVector(SunDir, new Vector4(toSun.x, toSun.y, toSun.z, Mathf.Clamp01((float)(s.SunElevationDeg + 1) / 2) * (1 - (float)s.Overcast)));
+            // the sky draws the whole cloud cover (the high cloud as well as the storm), so the discs and the clouds match the light
+            Shader.SetGlobalVector(SunDir, new Vector4(toSun.x, toSun.y, toSun.z, Mathf.Clamp01((float)(s.SunElevationDeg + 1) / 2) * (1 - (float)s.CloudCover)));
             Shader.SetGlobalColor(SunColor, C(s.SunColor));
-            Shader.SetGlobalVector(MoonDir, new Vector4(toMoon.x, toMoon.y, toMoon.z, Mathf.Clamp01((float)(s.MoonElevationDeg + 1) / 2) * (1 - (float)s.Overcast)));
+            Shader.SetGlobalVector(MoonDir, new Vector4(toMoon.x, toMoon.y, toMoon.z, Mathf.Clamp01((float)(s.MoonElevationDeg + 1) / 2) * (1 - (float)s.CloudCover)));
             Shader.SetGlobalColor(MoonColor, C(s.MoonColor));
             Shader.SetGlobalFloat(Stars, (float)s.Stars);
-            Shader.SetGlobalFloat(Overcast, (float)s.Overcast);
+            Shader.SetGlobalFloat(Overcast, (float)s.CloudCover);
             Shader.SetGlobalFloat(SkyTime, time);
             Shader.SetGlobalFloat(Night, (float)s.Night);
 
