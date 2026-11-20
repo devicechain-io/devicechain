@@ -446,7 +446,7 @@ func TestTheIdleProbeIgnoresAnErrorAndALoopBlockedInHandle(t *testing.T) {
 	time.Sleep(600 * time.Millisecond)
 	require.Equal(t, unknownLag, lc.view(StreamStore).view(time.Now()).Lag, "an unreachable broker proves nothing")
 	p.err.Store(false)
-	es.inHandle.Store(true)
+	es.inHandle.Store(1)
 	time.Sleep(300 * time.Millisecond)
 	callsBlocked := p.calls.Load()
 	time.Sleep(600 * time.Millisecond)

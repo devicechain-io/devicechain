@@ -212,3 +212,20 @@ func TestASplitCopyKeepsItsOriginAndItsAttempts(t *testing.T) {
 	_, _, ok = plain.SourceCoordinate()
 	assert.False(t, ok)
 }
+
+// An ack callback on an envelope (Message.WithAckCallback) is the envelope's: it must run once,
+// when the last member acks the envelope, not when the first member acks itself.
+func TestAnEnvelopesAckCallbackRunsWhenTheLastMemberAcks(t *testing.T) {
+	ack := &countAck{}
+	env, _ := envelopeMessage(t, ack, event("a", 1), event("b", 2))
+	var callbacks atomic.Int32
+	units, _, err := SplitEnvelope(env.WithAckCallback(func() { callbacks.Add(1) }), "acme", noop, nil)
+	require.NoError(t, err)
+	require.Len(t, units, 2)
+	require.NoError(t, units[0].Msg.Ack())
+	require.NoError(t, units[0].Msg.Ack())
+	assert.Zero(t, callbacks.Load(), "a member is still outstanding")
+	require.NoError(t, units[1].Msg.Ack())
+	assert.EqualValues(t, 1, callbacks.Load(), "the callback runs once, with the envelope's ack")
+	assert.EqualValues(t, 1, ack.acks.Load())
+}
