@@ -371,7 +371,21 @@ func wireBackfill(ctx context.Context, peers *svcclient.Peers) error {
 // watermark table gains one row per distinct deleted (tenant, entity type, token) and
 // keeps it for the life of the tenant: it is what stops a re-created token from reading
 // the earlier incarnation's history, so it is measured and alerted on, not pruned.
-var appendOnlyModels = []any{&model.EntityDeletionWatermark{}}
+//
+// The device token holder table gains one row per distinct device token a live device was
+// ever known to hold, and keeps it for the life of the tenant too: it is what tells a
+// re-created token from one that was only deleted. It is measured but NOT alerted on by size.
+// Its rows are, in the main, the tenant's devices plus its deleted device tokens. Growth with
+// the fleet is the fleet itself, which no absolute size can tell from a loop; and a loop that
+// creates and deletes devices under new tokens grows the watermark table by a row per token
+// too, which EntityDeletionWatermarksLarge watches. A holder can also outlive both a live
+// device and a watermark row, when the deletion fact was never recorded (dropped after its
+// redeliveries ran out, or aged out of the stream) or a roster fact landed after the
+// deletion; such rows are bounded by lost deletions, not by anything a size alert would add.
+// The table's size is still on the series, and the event store's volume alerts cover the
+// space. The chart's event-management rule group says the same next to the alert, and its
+// rule test pins that a large holder table does not raise it.
+var appendOnlyModels = []any{&model.EntityDeletionWatermark{}, &model.DeviceTokenHolder{}}
 
 // Called after microservice has been initialized.
 func afterMicroserviceInitialized(ctx context.Context) error {

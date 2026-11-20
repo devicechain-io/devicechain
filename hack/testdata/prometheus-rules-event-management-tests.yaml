@@ -112,6 +112,21 @@ tests:
         alertname: EntityDeletionWatermarksLarge
         exp_alerts: []
 
+  # The device token holder table is on the same series and has no size alert: it is as large
+  # as the fleet, which no absolute line can tell from a loop (see the rule template's header).
+  # A holder table far over 1 GiB must not raise the watermark alert.
+  - name: a large device token holder table is not the watermark alert
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventmanagement_append_only_table_bytes{namespace="dci-devicechain", pod="dc-event-management-aaaaa", table="device_token_holders"}'
+        values: '50000000000+0x180'
+      - series: 'devicechain_eventmanagement_append_only_table_bytes{namespace="dci-devicechain", pod="dc-event-management-aaaaa", table="entity_deletion_watermarks"}'
+        values: '1000+0x180'
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: EntityDeletionWatermarksLarge
+        exp_alerts: []
+
   # Over 1 GiB on two replicas reporting the same table: pending at 45m (the `for` is an
   # hour), ONE alert at 90m (max by namespace, not one per replica), and it clears when the
   # table drops under the line (after a rewrite such as VACUUM FULL), so the alert can be answered by acting.

@@ -14,18 +14,19 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-// The deletion watermark table is reported through the shared storage-growth collector, so
-// the chart's EntityDeletionWatermarksLarge alert and the persistence dashboard can see it.
-// The table name is written out rather than derived from the list: comparing a list with
-// itself passes for any list, including an empty one.
-func TestDeletionWatermarksAreReportedForGrowth(t *testing.T) {
+// The deletion watermark and device token holder tables are reported through the shared
+// storage-growth collector, so the chart's EntityDeletionWatermarksLarge alert and the
+// persistence dashboard can see them. Both grow for the life of the tenant and nothing prunes
+// either. The table names are written out rather than derived from the list: comparing a list
+// with itself passes for any list, including an empty one.
+func TestUnprunedTablesAreReportedForGrowth(t *testing.T) {
 	var tables []string
 	for _, m := range appendOnlyModels {
 		parsed, err := schema.Parse(m, &sync.Map{}, schema.NamingStrategy{})
 		require.NoError(t, err)
 		tables = append(tables, parsed.Table)
 	}
-	require.Equal(t, []string{"entity_deletion_watermarks"}, tables)
+	require.Equal(t, []string{"entity_deletion_watermarks", "device_token_holders"}, tables)
 }
 
 // The list only matters if the service hands it to the registration. Nothing else exercises
