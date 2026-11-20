@@ -37,12 +37,24 @@ namespace DeviceChain.Harborpulse.Model.Director
     public sealed class DirectorHost
     {
         readonly Storyboard story;
-        readonly PresentationMap map;
+        PresentationMap map;
+        public void SetMap(PresentationMap value)
+        {
+            map = value;
+            if (view.Shot != null && view.Page != null) {
+                var shot = story.Page(view.Page).Shots.First(s => s.Id == view.Shot);
+                view.From = map.Pose(shot.From); view.To = map.Pose(shot.To);
+            }
+            else view.From = view.To = map.Pose(view.AmbientPose);
+            if (view.FollowDevice != null) view.FollowAnchor = map.Anchors[view.FollowDevice];
+        }
         readonly IDirectorFeed feed;
         readonly HudModel hud = new HudModel();
         string railPage;
         int consumedCount = -1;
         string feedFailure;
+        string visibleCaption = "", visiblePage;
+        double visibleAtS;
         readonly DirectorView view = new DirectorView { AmbientPose = "pose:home" };
         public ObservationStore Store { get; } = new ObservationStore();
         public Scheduler Scheduler { get; }
@@ -78,12 +90,19 @@ namespace DeviceChain.Harborpulse.Model.Director
             if (Scheduler.ActivePage == null && hud.CaptionKind == "pre" && sample.MonotonicS - hud.CaptionAtS >= 3)
                 hud.SetCaption("", "", "", sample.MonotonicS);
             hud.Tick(sample.MonotonicS);
+            // Record the rendered surface after its minimum-hold queue, including the opening title.
+            if (hud.Caption != visibleCaption || hud.CaptionPage != visiblePage || hud.CaptionAtS != visibleAtS) {
+                if (visibleCaption.Length > 0) Recorder.Decision(new DirectorEvent(sample.MonotonicS, "visible-caption-end", visiblePage, visibleCaption));
+                if (hud.Caption.Length > 0) Recorder.Decision(new DirectorEvent(sample.MonotonicS, "visible-caption", hud.CaptionPage, hud.Caption));
+                visibleCaption = hud.Caption; visiblePage = hud.CaptionPage; visibleAtS = hud.CaptionAtS;
+            }
             view.Page = Scheduler.ActivePage;
             view.Caption = hud.Caption; view.CaptionKind = hud.CaptionKind; view.CaptionAtS = hud.CaptionAtS;
             view.Rail = hud.Rail; view.Links = hud.Links;
             view.Banner = HudModel.Banner(sample.DigestMatches, sample.Stale, sample.Defects);
             view.Problem = feed == null ? "no observer feed" : string.Join(" | ", (feed.Problems ?? Array.Empty<string>()).Concat(new[] { feedFailure }).Where(p => !string.IsNullOrEmpty(p)));
-            view.UpNext = Scheduler.ActivePage == null ? Scheduler.UpNext : ""; // the chip belongs to idle time, not to a playing page view.Mode = Scheduler.Mode;
+            view.UpNext = Scheduler.ActivePage == null ? Scheduler.UpNext : ""; // the chip belongs to idle time
+            view.Mode = Scheduler.Mode;
             view.DirectorWeight = Enabled && sample.DigestMatches ? FreeRoam.DirectorWeight(sample.MonotonicS) : 0;
             return view;
         }

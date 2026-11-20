@@ -80,7 +80,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 var t = f.Parent(Root, "ground:" + token);
                 // Tile the quay top round each well's actual transformed disc. No opaque deck
                 // may close a U1 cut-away. A small square aperture surrounds each round shell.
-                var pumps = layout.Devices.Where(d => d.Quay == token && d.Kind == DeviceKind.Pump)
+                var pumps = layout.Devices.Where(d => map.QuayFor(d) == token && d.Kind == DeviceKind.Pump)
                     .Select(d => f.Local(V(map.Anchors[d.Token])) + new Vector3(9, 0, 6)).ToArray();
                 var paving = new MeshKit();
                 for (float x = -f.Length / 2; x < f.Length / 2; x += 2)
@@ -100,9 +100,10 @@ namespace DeviceChain.Harborpulse.Visuals
         }
         void Device(LayoutDevice d, HarborLayout layout)
         {
-            var f = d.Kind == DeviceKind.Truck ? null : Frames[d.Quay];
+            var quay = map.QuayFor(d);
+            var f = d.Kind == DeviceKind.Truck ? null : Frames[quay];
             var at = map.Anchors[d.Token];
-            var actual = new Placement(d, at, d.Kind == DeviceKind.Truck ? 0 : d.Quay == "hp-north-quay" ? 180 : d.Quay == "hp-east-quay" ? 270 : 90);
+            var actual = new Placement(d, at, d.Kind == DeviceKind.Truck ? 0 : quay == "hp-north-quay" ? 180 : quay == "hp-east-quay" ? 270 : 90);
             var parent = AssetRig.Node("anchor:" + d.Token, Root, V(at));
             if (f != null) parent.localRotation = f.Rotation;
             var local = new Placement(d, new Ground(0, 0));
@@ -115,7 +116,7 @@ namespace DeviceChain.Harborpulse.Visuals
                     r = GaugeBuilder.Build(local, parent, mats, layout);
                     // Keep the anchor, extend the board to the real wall face, and connect
                     // the sensor to it by a narrow catwalk. LoRa and legacy retain their pile.
-                    var lateral = d.Quay == "hp-north-quay" ? 0 : d.Kind == DeviceKind.LoraGauge ? -10 : d.Kind == DeviceKind.LegacyGauge ? -7 : (d.Index - 2) * 3;
+                    var lateral = quay == "hp-north-quay" ? 0 : d.Kind == DeviceKind.LoraGauge ? -10 : d.Kind == DeviceKind.LegacyGauge ? -7 : (d.Index - 2) * 3;
                     foreach (var name in new[] { "TideStaff", "StaffTicks", "Tier0", "Tier1", "Tier2" })
                         r[name].localPosition += new Vector3(lateral, 0, wallDistance);
                     r.Part("GaugeAccess", new MeshKit().Slab(-.65f, .65f, 0, wallDistance, -.1f, 0), mats.Timber, Vector3.zero);

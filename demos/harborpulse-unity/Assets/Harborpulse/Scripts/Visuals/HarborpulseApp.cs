@@ -57,6 +57,8 @@ namespace DeviceChain.Harborpulse.Visuals
         RecordingFiles recording;
         DateTimeOffset recordingEpoch;
         string directorRun, localDigest, digestProblem;
+        readonly RecordingStatus recordingStatus = new RecordingStatus();
+        string membershipKey, membershipRun, membershipProblem;
         double directorSeconds, lastWorldS = -1;
         readonly System.Diagnostics.Stopwatch directorWall = System.Diagnostics.Stopwatch.StartNew();
         string recordRoot, captureDir;
@@ -289,6 +291,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 model = new HarborObservedModel(layout); modelRun = started;
             }
             frame = model.Update(source, clock, now, Offline && previewHeld);
+            if (!Offline) ApplyMembership(source, now);
             var hour = clock.HourOfDay;
             weather = frame.World.Weather;
             var state = DayLighting.Evaluate(hour, weather);
@@ -326,6 +329,26 @@ namespace DeviceChain.Harborpulse.Visuals
             recording?.Dispose(); recording = null; director = null; directorRun = null;
             fixes.Clear(); lastFix = default; directorSeconds = 0; lastWorldS = -1; nextCapture = 0; directorWall.Restart();
         }
+        void ApplyMembership(IHarborSource source, DateTimeOffset now)
+        {
+            var run = source.Status?.StartedAt?.ToString("O", CultureInfo.InvariantCulture);
+            if (membershipRun != run) { membershipKey = null; membershipRun = run; }
+            if (!PresentationMembership.TryRead(layout, live.DirectorReads, id => source.TryToken(id, out var token) ? token : null,
+                now, out var members, out membershipProblem)) return;
+            var key = string.Join("|", members.OrderBy(p => p.Key).Select(p => p.Key + "=" + p.Value));
+            if (membershipKey == key) return;
+            var next = new PresentationMap(layout, members);
+            var moved = map.Anchors.Any(p => next.Anchors[p.Key].X != p.Value.X || next.Anchors[p.Key].Z != p.Value.Z);
+            map = next; membershipKey = key; director?.SetMap(map);
+            if (!moved) return;
+            // Rebuild the ground apertures and rig geometry too: a relocated pump must retain its cut-away.
+            water.Dispose(); world.Dispose();
+            world = HarborWorld.Build(map, layout, mats, transform);
+            water = new HarborWaterController(transform, waterShader, map, world, 9000);
+            views = new HarborViews(world, mats);
+            rig = new HarborCameraRig(sceneCamera, map);
+            directorCamera = new DirectorCamera(sceneCamera, map, portrait);
+        }
         void ApplyMappedTruck(IHarborSource source, DateTimeOffset now)
         {
             if (source.TryLocation("PAW-TRUCK-1", out var location) && location.Latitude.HasValue && location.Longitude.HasValue && location.OccurredAt != lastFix)
@@ -351,8 +374,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 ResetDirector(); recordingEpoch = now; directorRun = run;
                 if (!Offline && source.Status?.StartedAt != null)
                 {
-                    try { recording = new RecordingFiles(recordRoot, source.Status.StartedAt.Value, now); }
-                    catch (Exception e) { digestProblem = "recording IO: " + e.Message; }
+                    recording = recordingStatus.Establish(() => new RecordingFiles(recordRoot, source.Status.StartedAt.Value, now));
                 }
                 director = new DirectorHost(storyboard, layout, map, DirectorFeedFactory?.Invoke(), recording?.Recorder);
             }
@@ -386,7 +408,8 @@ namespace DeviceChain.Harborpulse.Visuals
             Hud?.Apply(directorView, Offline ? "OFFLINE PREVIEW" : control ? "TEST CONTROL" : "LIVE", sim,
                 Offline ? "x" + previewSpeed.ToString("0.#", CultureInfo.InvariantCulture) : "x1",
                 HudModel.Tags(layout, frame, sceneCamera.aspect < 1 ? 2 : 4),
-                string.Join(" | ", new[] { digestProblem, recording?.Problem, Offline ? null : frame.ReadProblem }.Where(p => !string.IsNullOrEmpty(p))));
+                string.Join(" | ", new[] { digestProblem, recordingStatus.Problem, recording?.Problem, membershipProblem,
+                    string.Join(" | ", map.ReadinessWarnings), Offline ? null : frame.ReadProblem }.Where(p => !string.IsNullOrEmpty(p))));
         }
         bool controlRun;
         DateTimeOffset previewWall;
@@ -480,6 +503,8 @@ namespace DeviceChain.Harborpulse.Visuals
             sb.Clear();
             sb.Append("<size=17><b>HARBORPULSE</b></size>  Port Alder waterfront\n");
             sb.Append(ModeLine()).Append('\n');
+            foreach (var problem in new[] { recordingStatus.Problem, recording?.Problem, membershipProblem }.Concat(map.ReadinessWarnings).Where(p => !string.IsNullOrEmpty(p)))
+                sb.Append(problem).Append('\n');
             sb.Append("<b>presentation scale</b> ? compact horizontal layout; heights in metres\n");
             if (director != null)
                 foreach (var row in director.Scheduler.Log.Skip(Math.Max(0, director.Scheduler.Log.Count - 6)))

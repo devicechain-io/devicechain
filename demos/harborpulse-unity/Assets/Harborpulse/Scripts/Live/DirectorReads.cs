@@ -43,10 +43,12 @@ namespace DeviceChain.Harborpulse.Live
         readonly HashSet<UnityWebRequest> requests = new HashSet<UnityWebRequest>();
         readonly Dictionary<string, (string state, string severity, DateTimeOffset at)> alarmStates = new Dictionary<string, (string, string, DateTimeOffset)>();
         readonly List<DirectorAlarmChange> alarmChanges = new List<DirectorAlarmChange>();
+        readonly DirectorMeasurementTap measurements = new DirectorMeasurementTap();
         public DirectorReadSnapshot Snapshot { get; private set; }
         /// <summary>The shared observer's main-thread tap retains actual stream transition times before its latest-state reduction.</summary>
         public void Watch(ObserverItem item)
         {
+            if (item is MeasurementItem m) measurements.Watch(new DirectorMeasurement(m.DeviceToken, m.Name, m.Value, m.OccurredAt));
             if (item is AlarmSnapshotItem snapshot) {
                 foreach (var a in snapshot.Alarms)
                     if (!alarmStates.TryGetValue(a.Alarm.Token, out var old) || a.Alarm.OccurredAt >= old.at)
@@ -164,6 +166,7 @@ namespace DeviceChain.Harborpulse.Live
         async Task Poll(ReadJob job)
         {
             var old = job.Result; var probe = old.Probe; JsonElement? data = null; string error = null;
+            var requestedAt = DateTimeOffset.UtcNow;
             try {
                 var used = await broker.Get(stop.Token);
                 var body = DirectorWire.Json(w => { w.WriteStartObject(); w.WriteString("query", Documents[job.Name]); w.WritePropertyName("variables"); using var d = JsonDocument.Parse(job.Variables); d.RootElement.WriteTo(w); w.WriteEndObject(); });
@@ -189,11 +192,11 @@ namespace DeviceChain.Harborpulse.Live
             var gap = error != null || old.Error != null || now - from > TimeSpan.FromSeconds(6);
             if (spans.Count > 0 && spans[spans.Count - 1].Gap == gap && spans[spans.Count - 1].To == from) { from = spans[spans.Count - 1].From; spans.RemoveAt(spans.Count - 1); }
             spans.Add(new ReadSpan(from, now, gap));
-            job.Result = new DirectorRead(job.Name, job.Scope, probe, error == null ? now : old.LastSuccess, error, data ?? old.Data, spans);
+            job.Result = new DirectorRead(job.Name, job.Scope, probe, error == null ? now : old.LastSuccess, error, data ?? old.Data, spans, error == null ? requestedAt : old.AsOf);
             job.Next = now.AddSeconds(3); Publish();
         }
         void Publish() => Snapshot = new DirectorReadSnapshot(jobs.Values.Select(j => j.Result), observerStatus?.Measurements.IsLive,
-            observerStatus?.Measurements.Reconnects ?? 0, observerStatus?.Alarms.Reconnects ?? 0, alarmChanges);
+            observerStatus?.Measurements.Reconnects ?? 0, observerStatus?.Alarms.Reconnects ?? 0, alarmChanges, measurements.Records);
         public void Dispose() { stop.Cancel(); foreach (var req in requests.ToArray()) req.Abort(); }
     }
 }

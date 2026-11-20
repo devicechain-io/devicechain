@@ -92,6 +92,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         public IReadOnlyDictionary<string, Ground[]> Quays => regions;
         public IReadOnlyDictionary<string, Ground[]> FenceRings => fences;
         public IReadOnlyList<string> ReadinessWarnings => warnings.AsReadOnly();
+        public string QuayFor(LayoutDevice device) => device.Kind == DeviceKind.Truck ? device.Quay :
+            regions.First(p => Contains(p.Value, anchors[device.Token])).Key;
         public IReadOnlyList<Ground> Road { get; private set; }
         public Ground Depot { get; private set; }
         public Ground[] InnerWater { get; } = Rect(-150, -140, 140, 75);
@@ -294,7 +296,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                     // Stand off on the device's water side (its quay's wall faces the harbour), so a close pose looks back at
                     // the device across the quay edge instead of into the ground behind it.
                     var a = anchors[pair.Item2]; var close = suffix == "well" || suffix == "well-locked";
-                    var quay = layout.Devices.First(d => d.Token == pair.Item2).Quay;
+                    var quay = QuayFor(layout.Devices.First(d => d.Token == pair.Item2));
                     var wx = quay == "hp-east-quay" ? -1.0 : quay == "hp-basin" ? 1.0 : 0; var wz = quay == "hp-north-quay" ? -1.0 : 0;
                     var back = close ? 16 : 38; var up = close ? 10 : 24;
                     poses.Add("pose:" + pair.Item1 + ":" + suffix, new CameraPose(new Point3(a.X + wx * back, up, a.Z + wz * back), new Point3(a.X, 2, a.Z), close ? 42 : 38));

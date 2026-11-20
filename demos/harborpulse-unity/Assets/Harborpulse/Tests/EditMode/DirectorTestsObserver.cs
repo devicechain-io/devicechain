@@ -14,7 +14,7 @@ using NUnit.Framework;
 
 namespace DeviceChain.Harborpulse.Tests
 {
-    public class DirectorTestsObserver
+    public partial class DirectorTestsObserver
     {
         static readonly DateTimeOffset Epoch = DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture);
         static DateTimeOffset At(double sim) => Epoch.AddSeconds((sim - 6) * 60);
@@ -45,7 +45,7 @@ namespace DeviceChain.Harborpulse.Tests
         static DirectorInputs Inputs(double sim, Source source = null) => new DirectorInputs { Run = "run", RecordingEpoch = Epoch, Now = At(sim), Sim = sim, Source = source ?? new Source() };
         static string Alarm(string state = "ACTIVE", double raised = 11, string device = "hp-light-east-3", string key = "lamp-flicker", string stamp = "service", string severity = "MINOR")
             => "{\"token\":\"alarm-real\",\"originatorToken\":" + Q(device) + ",\"alarmKey\":" + Q(key) + ",\"state\":" + Q(state) + ",\"severity\":" + Q(severity) + ",\"raisedTime\":" + Q(Ts(raised)) + ",\"clearedTime\":" + (state == "CLEARED" ? Q(Ts(11.6)) : "null") + ",\"raisedDuringSuppression\":" + (stamp == null ? "null" : Q(stamp)) + "}";
-        static string Window(string state = "ACTIVE") => "{\"token\":\"service\",\"kind\":\"ONE_TIME\",\"status\":" + Q(state) + ",\"startTime\":" + Q(Ts(10.75)) + ",\"endTime\":" + Q(Ts(11.5)) + ",\"endedAt\":null,\"targets\":[{\"type\":\"device\",\"token\":\"hp-light-east-3\"}],\"alarmKeys\":[\"lamp-flicker\"]}";
+        static string Window(string state = "ACTIVE") => "{\"token\":\"service\",\"kind\":\"ONE_SHOT\",\"status\":" + Q(state) + ",\"startTime\":" + Q(Ts(10.75)) + ",\"endTime\":" + Q(Ts(11.5)) + ",\"endedAt\":null,\"targets\":[{\"type\":\"DEVICE\",\"token\":\"hp-light-east-3\"}],\"alarmKeys\":[\"lamp-flicker\"]}";
         static string Journal() => "{\"id\":\"journal-real\",\"occurredTime\":" + Q(Ts(12.5)) + ",\"retiredCredentialTokens\":[\"old-real\"],\"newCredentialToken\":\"new-real\",\"device\":{\"id\":\"device-real\",\"token\":\"hp-gauge-north-3\",\"externalId\":\"hp-gauge-north-3\"}}";
         static string Credential(string enabled = "false") => "{\"token\":\"old-real\",\"enabled\":" + enabled + ",\"device\":{\"token\":\"hp-gauge-north-3\"}}";
         static string Measure(string id, double sim, double value = 1, string device = "hp-gauge-north-3", string metric = "water_level_m")
@@ -215,7 +215,7 @@ namespace DeviceChain.Harborpulse.Tests
         public void CleanDayObserverFeedsCommittedSchedulerAndPlatformControlsRemoveOnlyTheirClaim()
         {
             bool[] Claims(Scheduler s) => new[] {
-                s.Log.Any(e => e.Page == "2" && e.Kind == "caption" && e.Value == "No notification so far during the work."),
+                s.Log.Any(e => e.Page == "2" && e.Kind == "caption" && e.Value == "No notification recorded\nwhile the work is on."),
                 s.Log.Any(e => e.Page == "3" && e.Kind == "caption" && e.Value == "The old unit's credentials\nare disabled."),
                 s.Log.Any(e => e.Page == "8" && e.Kind == "node" && e.Value == "signed") };
             Assert.That(Claims(CleanDay("")), Is.EqualTo(new[] { true, true, true }));
@@ -231,7 +231,7 @@ namespace DeviceChain.Harborpulse.Tests
             var snapshot = new DirectorReadSnapshot(new[] {
                 Read("rollout", 26.4, Rollout()), Read("targets", 26.4, Page(Target, "{\"deviceToken\":\"hp-charger-east-1\",\"outcome\":\"SUCCEEDED\",\"assignmentToken\":\"assignment-other\"}"), "rollout-real"),
                 Read("assignments", 26.4, Assignment()), Read("assignments", 26.4, Assignment().Replace("hp-charger-north-1", "hp-charger-east-1").Replace("assignment-real", "assignment-other").Replace("attempt-real", "attempt-other").Replace("\"FAILED\"", "\"UPDATED\""), "other"),
-                Read("artifact", 26.4, Artifact), Read("signer", 26.4, Signer) }, true);
+                Read("artifact", 26.4, Artifact), Read("signer", 26.4, Signer) }, true, measurements: new[] { new DirectorMeasurement("hp-charger-north-1", "power_kw", 4, At(26.31)) });
             var store = new ObservationStore(); new DirectorObserver(Kit.Layout(), () => snapshot).Update(Inputs(26.4, source), o => store.Add(o), store.AddCoverage);
             var trigger = store.Records.Single(o => o.Kind == "rollout"); Assert.That(trigger.Attempt, Is.Empty, "a rollout has no device attempt");
             var page = DirectorKit.Story().Page("8"); var context = page.Context("run", (26.4 - 6) * 60, trigger: trigger);
@@ -268,9 +268,9 @@ namespace DeviceChain.Harborpulse.Tests
         {
             var source = new Source(); DirectorReadSnapshot snapshot = null; var adapter = new DirectorObserver(Kit.Layout(), () => snapshot); var obs = new List<Observation>();
             source.Values["PAW-PUMP-NORTH/pump_running"] = new Reading(0, At(17.2)); source.Values["PAW-PUMP-NORTH/wet_well_m"] = new Reading(3.4, At(17.2));
-            snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 17.2, Page()) }, true); adapter.Update(Inputs(17.2, source), obs.Add, _ => { });
+            snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 17.2, Page()) }, true, measurements: new[] { new DirectorMeasurement("hp-pump-north", Metrics.PumpRunning, 0, At(17.2)), new DirectorMeasurement("hp-pump-north", Metrics.WetWell, 3.4, At(17.2)) }); adapter.Update(Inputs(17.2, source), obs.Add, _ => { });
             source.Values["PAW-PUMP-NORTH/wet_well_m"] = new Reading(2.6, At(17.5));
-            snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 17.5, Page(Alarm(raised: 17.5, device: "hp-pump-north", key: "wet-well-high", stamp: null))) }, true); adapter.Update(Inputs(17.5, source), obs.Add, _ => { });
+            snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 17.5, Page(Alarm(raised: 17.5, device: "hp-pump-north", key: "wet-well-high", stamp: null))) }, true, measurements: snapshot.Measurements.Concat(new[] { new DirectorMeasurement("hp-pump-north", Metrics.WetWell, 2.6, At(17.5)) })); adapter.Update(Inputs(17.5, source), obs.Add, _ => { });
             Assert.That(obs.Any(o => o.Kind == "measure" && o.Key == "wet_well_m" && o.Cycle == Ts(17.5) && o.Field("value") == "3.4" && Math.Abs(o.OccurredAtS - 672) < 1e-6), Is.True);
         }
         static ScenarioStatus RestoreStatus() => ScenarioStatus.Parse("{\"state\":\"RUNNING\",\"scenario\":{\"name\":\"harborpulse\",\"started\":true,\"startedAt\":" + Q(Ts(6)) + ",\"dayLengthSeconds\":1440,\"startHour\":6,\"simHour\":21.6,\"day\":0,\"defects\":[\"drop-backfill\"],\"layoutDigest\":" + Q(new string('a', 64)) + ",\"backfill\":[{\"device\":\"hp-charger-east-1\",\"day\":0,\"buffered\":2,\"first\":" + Q(Ts(20)) + ",\"last\":" + Q(Ts(20.1)) + ",\"times\":[" + Q(Ts(20)) + "," + Q(Ts(20.1)) + "]}],\"s5\":{\"replacement\":{\"device\":\"hp-gauge-north-3\",\"at\":" + Q(Ts(12.5)) + ",\"unitIdentifier\":\"unit\"},\"restoreDrains\":[{\"day\":0,\"offered\":2,\"accepted\":2,\"refused429\":3,\"firstRefusalAt\":" + Q(Ts(21.26)) + ",\"caughtUpAt\":" + Q(Ts(21.3)) + "}]}}}");

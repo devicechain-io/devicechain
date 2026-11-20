@@ -107,7 +107,8 @@ namespace DeviceChain.Harborpulse.Tests
             Add("target", "", "", "SUCCEEDED", 26.15);
             Add("attempt", "hp-charger-north-1", "", "FAILED", 26.3, fields: new Dictionary<string, string> { ["code"] = "VERIFICATION_FAILED", ["platform"] = "false" });
             Add("measure", "hp-charger-north-1", "power_kw", "", 26.31, fields: new Dictionary<string, string> { ["afterFailure"] = "true" });
-            Add("rollout", "", "", "TERMINAL", 26.6, fields: new Dictionary<string, string> { ["updated"] = defect == "ota-failure-disabled" ? "6" : "5", ["refused"] = defect == "ota-failure-disabled" ? "0" : "1", ["maxInFlight"] = "2" });
+            Add("rollout", "", "", "TERMINAL", 26.6);
+            Add("rollout", "", "", "COUNTS", 26.6, fields: new Dictionary<string, string> { ["updated"] = defect == "ota-failure-disabled" ? "6" : "5", ["refused"] = defect == "ota-failure-disabled" ? "0" : "1", ["maxInFlight"] = "2" });
 
 
             return s;

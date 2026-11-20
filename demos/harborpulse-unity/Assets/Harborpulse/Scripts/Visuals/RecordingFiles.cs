@@ -60,6 +60,6 @@ namespace DeviceChain.Harborpulse.Visuals
             catch (Exception e) { Problem = "recording IO: " + e.Message; }
             finally { foreach (var stream in streams) stream.Dispose(); }
         }
-        public void Dispose() { if (disposed) return; disposed = true; queue.CompleteAdding(); worker.Join(); queue.Dispose(); }
+        public void Dispose() { if (disposed) return; disposed = true; Recorder.End(); queue.CompleteAdding(); worker.Join(); queue.Dispose(); }
     }
 }

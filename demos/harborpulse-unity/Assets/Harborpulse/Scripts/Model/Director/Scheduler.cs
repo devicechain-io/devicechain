@@ -142,7 +142,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                 if (log.Count == 0 || log.Last().Value != Banner) Emit(now, "banner", null, Banner);
                 return log.Skip(start).ToArray();
             }
-            if (!double.IsNaN(staleAtS)) { if (active != null) { active.ShotS += now - staleAtS; active.StartedS += now - staleAtS; } staleAtS = double.NaN; }
+            if (!double.IsNaN(staleAtS)) { if (active != null) { active.ShotS += now - staleAtS; active.StartedS += now - staleAtS; foreach (var opportunity in active.Pending) { opportunity.FromS += now - staleAtS; opportunity.DeadlineS += now - staleAtS; } } staleAtS = double.NaN; }
             EndStaleCaption(now);
             Mode = DirectorMode.Active;
             if (run != sample.Run) Join(sample, store);

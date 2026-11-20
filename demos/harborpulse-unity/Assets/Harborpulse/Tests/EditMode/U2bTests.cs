@@ -127,13 +127,16 @@ namespace DeviceChain.Harborpulse.Tests
         }
         [Test] public void CleanSyntheticLogExportsRecorderFormatAndPassesCaptionChecker()
         {
-            var scheduler=DirectorTimeline.Run();var path=Path.Combine(Path.GetTempPath(),"harbor-director-"+Guid.NewGuid().ToString("N")+".ndjson");
+            var path=Path.Combine(Path.GetTempPath(),"harbor-director-"+Guid.NewGuid().ToString("N")+".ndjson");
             try
             {
                 using(var output=File.CreateText(path))
                 {
                     var recorder=new Recorder(TextWriter.Null,TextWriter.Null,output,TextWriter.Null);
-                    foreach(var e in scheduler.Log)recorder.Decision(e);
+                    var layout=Kit.Layout();var host=new DirectorHost(DirectorKit.Story(),layout,new PresentationMap(layout),new TimelineFeed(),recorder);
+                    var epoch=DateTimeOffset.UtcNow;
+                    for(var t=0;t<=1380;t++) host.Tick(new DirectorSample("run",6+t/60.0,t),new DirectorInputs{Run="run",RecordingEpoch=epoch,Now=epoch.AddSeconds(t),Sim=6+t/60.0});
+                    recorder.End();
                 }
                 using(var reader=File.OpenText(path))Assert.That(DirectorLogCheck.Check(reader),Is.Empty);
                 var fixture=Path.Combine(TestContext.CurrentContext.WorkDirectory,"clean-director.ndjson");File.Copy(path,fixture,true);
@@ -145,7 +148,7 @@ namespace DeviceChain.Harborpulse.Tests
         public void StaleCaptionFloorAlsoSurvivesShortReconnect(bool recoverEarly)
         {
             var scheduler=new Scheduler(DirectorKit.Story(),Kit.Layout());var store=DirectorTimeline.Clean();
-            scheduler.Tick(new DirectorSample("run",6,0),store);
+            scheduler.Tick(new DirectorSample("run",6,0,defects:new[]{"stale-floor-test"}),store);
             Assert.That(scheduler.Log.Any(e=>e.Kind=="caption"&&e.ShowS==0),Is.True);
             scheduler.Tick(new DirectorSample("run",6,1,stale:true),store);
             Assert.That(scheduler.Log.Any(e=>e.Kind=="caption-end"&&e.ShowS<3),Is.False,"stale must not shorten a visible caption");

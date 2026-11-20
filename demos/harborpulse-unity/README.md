@@ -349,10 +349,10 @@ test covers a 0.30 m regional spread; a universal 1 cm bound for arbitrary diffe
 quays is mathematically impossible.
 
 `DirectorHost` owns the store, scheduler, recorder and free-roam state. `HarborpulseApp.DirectorFeedFactory`
-is an optional `Func<IDirectorFeed>` supplied before `Initialize()`. There is no default observer or
-synthetic director feed: the amber **no observer feed** problem remains visible until one is supplied,
-including offline preview. The U1 preview still supplies its labelled scene values. This work does not
-implement `DirectorObserver` or `DirectorReads`. The feed receives only `DirectorInputs`.
+is an optional `Func<IDirectorFeed>` supplied before `Initialize()`. The default live feed is
+`DirectorObserver` over the session's `DirectorReads`; an injected missing feed reports **no observer feed**.
+Offline preview supplies labelled scenario stand-ins and platform-read gaps. The feed receives only
+`DirectorInputs`.
 
 The camera-space uGUI Canvas is in `Scripts/Hud`, with text and visibility rules in engine-free `HudModel`.
 The portable checker excludes this package-dependent renderer, like towerpulse's story UI. It uses
@@ -423,8 +423,8 @@ python check_director_log.py <recording>/director.ndjson
 
 The verification script uses `.build/u2b` and disables MSBuild/compiler-server reuse to avoid cross-user
 cache permissions on Windows. The synthetic clean timeline test exports `clean-director.ndjson` in the
-test work directory, checks it with the C# page-local caption rule, and the operator Python checker uses
-the same caption/end/page-end boundaries. Mutation logs and named failing tests are under
+test work directory, checks rendered caption transitions with C#, and the operator Python checker uses
+the same rendered transitions, including titles, with recording-end or EOF as the final boundary. Mutation logs and named failing tests are under
 `.build/u2b/mutants`. Shader compilation, uGUI and Editor-tool compilation, real masked visibility, player
 build, live probe problems, live control runs, disk flushing under load and capture output need the Editor
 and runner. No scene operation writes to the platform or creates a device session.
@@ -439,15 +439,13 @@ reserved keys, and preset selection with direction off. Live review must check m
 TEST CONTROL precedence, stale/reconnecting behavior, observer problems, run rollover, one-second disk
 flushes and teardown drain. Build the Windows player and inspect HUD-bearing captures with sim/page names.
 
-Implementation verification: 330 engine-free tests pass; portable desktop and WebGL builds each report
-zero warnings and zero errors; seven U2b guard mutants are killed by named tests, and the exported clean
-synthetic log passes the Python caption checker. These do not establish an Editor visibility or visual pass.
+The verification gates cover the engine-free model, desktop and WebGL compilation, and both caption
+checkers. These do not establish an Editor visibility or visual pass.
 
 One U2a bug fix is included: `Scheduler` defers stale-clock caption ends to the three-second visible
 floor, including a reconnect before that deadline, and re-offers the slot for fresh evidence evaluation.
 `StaleCaptionFloorAlsoSurvivesShortReconnect(false/true)` failed against the committed behavior before
-the fix; the failing TRX is retained in `.build/u2b/stale-caption-before.trx`. The remaining protected
-observer, read-query, evidence, storyboard and recorder implementations are unchanged.
+the fix; the failing TRX is retained in `.build/u2b/stale-caption-before.trx`. The review corrections below extend the observer, predicates, storyboard and recording checks.
 
 ### U2b observer feed
 
@@ -471,3 +469,48 @@ unexpected stored times remain in the observed set and prevent an exact tally.
 Two storyboard predicate corrections are covered by real-identity regressions: page 6 groups each
 device's own alarm cycle within the outage interval, and page 8 joins a post-failure reading to that
 device's actual attempt, rather than treating a rollout as an attempt shared by all targets.
+
+
+### U2b review corrections
+
+Page 2 now says **"No notification recorded / while the work is on."** Its rail says **"No notification
+recorded in the window"**. This is a wording change the maintainer must approve: the best-effort attempt
+ledger cannot establish that no notification happened. Both caption lines fit the 42-character limit;
+the existing claim lint and cut timing law still apply.
+
+Rollout `TERMINAL` observations do not carry counts. A separate `COUNTS` snapshot is available only
+when complete successful target and relevant assignment reads cover the terminal instant. Updated
+comes from platform `progress.succeeded`; refused counts only reported `VERIFICATION_FAILED` failures
+with `platform=false`. Missing, failed, truncated or older child reads, unresolved targets and missing assignment identities
+withhold counts, report a problem and create an updates gap. Read coverage uses the request start, so a response finishing after a
+transition cannot make an earlier request cover it.
+
+The shared observer tap retains every measurement before latest-state reduction, including intermediate
+well readings, and records them with their platform times. Stream liveness and reconnect counters gate
+coverage on that path. Commands and notification attempts defer their cycle join until a complete alarm
+read covers their own platform instant; later raises cannot re-key unchanged earlier records.
+
+Credential, artifact trust, target outcome and membership reads have no transition timestamp in the
+selected contract. They are snapshots marked with `asOf` (recording seconds at request start), not dated
+transitions. Their numeric occurrence slot equals observation time for wire compatibility, but temporal
+predicates cannot order them; `occurredAtS` is unavailable as a predicate field. Artifact trust is never
+backdated to rollout start. Real alarm, attempt, command and measurement transition timestamps remain
+platform timestamps. Snapshot predicates reduce to current state before testing it.
+
+Every complete membership result, including an empty one, replaces its previous set. Once all quay
+reads succeed, the live scene rebuilds `PresentationMap` with platform membership. Moved anchors rebuild
+the world, ground apertures, views and camera maps. Waiting/failed membership reads and M2 readiness
+warnings remain visible in the HUD problem line and engineer overlay. Missing members are explicitly
+unknown. Recording creation failures have their own persistent problem, cleared only when a recording
+sink is established. Frozen-shot caption opportunities shift across reconnects, including a 60-second
+outage.
+
+`DirectorHost` records `visible-caption`/`visible-caption-end` after the HUD hold queue, including title
+text. Scheduler decisions remain in the log for evidence. Both checkers prefer those rendered
+transitions when present, reject empty acceptance logs and check the last visible caption through
+`recording-end` (written on normal teardown), or EOF after an interrupted recording.
+
+Run `python verify_review_mutants.py` from `Dotnet~` for all ten corrected findings, including both
+implementations of 12. It requires a complete green baseline, a named test failure for each broken guard, byte-for-byte
+source restoration and a complete green final gate. Logs, TRX files, restoration hashes and summary are
+under `.build/u2b/review-mutants/`. The normal verification gate also runs the Python checker regressions.

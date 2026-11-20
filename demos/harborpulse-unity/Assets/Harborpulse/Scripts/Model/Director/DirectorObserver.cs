@@ -12,7 +12,7 @@ namespace DeviceChain.Harborpulse.Model.Director
     /// <summary>Read-only evidence adapter. Joins use platform identities; runner plans never establish platform outcomes.</summary>
     public sealed class DirectorObserver : IDirectorFeed
     {
-        sealed class Row { public string Name, Scope; public JsonElement Value; }
+        sealed class Row { public string Name, Scope; public JsonElement Value; public DirectorRead Read; }
         readonly HarborLayout layout;
         readonly Func<DirectorReadSnapshot> reads;
         // Sticky problems (a malformed record, a missing instant) last the run; current ones restate this frame's read state.
@@ -30,6 +30,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         Action<Observation> observe;
         Action<CoverageInterval> cover;
         List<Row> rows;
+        List<DirectorRead> complete;
+        int measurementIndex;
         string run;
         double startSim, lastSim;
         int measurementReconnects, alarmReconnects;
@@ -83,10 +85,10 @@ namespace DeviceChain.Harborpulse.Model.Director
             input = inputs ?? throw new ArgumentNullException(nameof(inputs)); this.observe = observe; this.cover = cover;
             if (run != inputs.Run) {
                 run = inputs.Run; emitted.Clear(); alarmHistory.Clear(); previous.Clear(); trends.Clear(); wellHistory.Clear(); pumpRunning.Clear(); pumpOffAt.Clear(); failedProbes.Clear(); problems.Clear();
-                startSim = lastSim = input.Sim; measurementReconnects = alarmReconnects = 0;
+                startSim = lastSim = input.Sim; measurementReconnects = alarmReconnects = measurementIndex = 0;
             }
             if (input.Sim < lastSim) throw new InvalidOperationException("observer requires a new instance on seek");
-            current.Clear(); var snapshot = reads(); rows = new List<Row>();
+            current.Clear(); var snapshot = reads(); rows = new List<Row>(); complete = new List<DirectorRead>();
             if (snapshot == null) {
                 foreach (var name in Streams.Keys) Gap(name, lastSim, input.Sim);
                 if (input.Source is PreviewSource) { current.Add("OFFLINE PREVIEW: scenario stand-ins; platform-only reads unavailable"); Preview(); }
@@ -103,7 +105,11 @@ namespace DeviceChain.Harborpulse.Model.Director
                     foreach (var r in group) {
                         foreach (var span in r.Coverage.Where(c => c.Gap && Sim(c.To) >= startSim && Sim(c.From) <= input.Sim)) Gap(name, Math.Max(startSim, Sim(span.From)), Math.Min(input.Sim, Sim(span.To)));
                         if (!r.Healthy(input.Now) || failedProbes.Contains(name) || !r.Data.HasValue) continue;
-                        Safe(name, () => { foreach (var v in DirectorProbeEvaluation.Records(name, r.Data.Value)) rows.Add(new Row { Name = name, Scope = r.Scope, Value = v }); });
+                        Safe(name, () => {
+                            var records = DirectorProbeEvaluation.Records(name, r.Data.Value);
+                            complete.Add(r);
+                            foreach (var v in records) rows.Add(new Row { Name = name, Scope = r.Scope, Value = v, Read = r });
+                        });
                     }
                 }
                 foreach (var stream in Streams.Values.SelectMany(s => s).Distinct()) {
@@ -127,11 +133,11 @@ namespace DeviceChain.Harborpulse.Model.Director
                 foreach (var r in Rows("windows")) Safe("windows", () => Window(r.Value));
                 foreach (var r in Rows("notifications")) Safe("notifications", () => Notification(r.Value));
                 foreach (var r in Rows("replacements")) Safe("replacements", () => Replacement(r.Value));
-                foreach (var r in Rows("credentials")) Safe("credentials", () => Credential(r.Value));
+                foreach (var r in Rows("credentials")) Safe("credentials", () => Credential(r));
                 foreach (var r in Rows("commands")) Safe("commands", () => Command(r.Value));
                 foreach (var r in Rows("rollout")) Safe("rollout", () => Ota(r.Value));
-                foreach (var r in Rows("membership").GroupBy(r => r.Scope)) Safe("membership", () => Membership(r.Key, r.Select(x => x.Value).ToArray()));
-                if (snapshot.MeasurementsLive == true) StreamMeasurements();
+                foreach (var r in complete.Where(r => r.Name == "membership")) Safe("membership", () => Membership(r.Scope, Rows("membership").Where(x => x.Read == r).Select(x => x.Value).ToArray(), r));
+                StreamMeasurements(snapshot);
                 Measurements(); Chips(); Binding();
             }
             Safe("runner", Runner);
@@ -151,9 +157,10 @@ namespace DeviceChain.Harborpulse.Model.Director
         }
         void Window(JsonElement w)
         {
+            if (S(w, "kind") != "ONE_SHOT") throw new FormatException("lamp service requires ONE_SHOT");
             var id = S(w, "token"); var start = T(w, "startTime"); var end = T(w, Optional(w, "endedAt") != null ? "endedAt" : "endTime");
             foreach (var target in w.GetProperty("targets").EnumerateArray()) {
-                if (S(target, "type") != "device") continue;
+                if (S(target, "type") != "DEVICE") continue;
                 var d = Device(S(target, "token"));
                 foreach (var key in w.GetProperty("alarmKeys").EnumerateArray().Select(v => v.GetString())) {
                     Emit("window", id, d, key, "", "ACTIVE", start);
@@ -163,11 +170,20 @@ namespace DeviceChain.Harborpulse.Model.Director
         }
         public static bool NotificationInCycle(DateTimeOffset attempted, DateTimeOffset raised, DateTimeOffset? nextRaised)
             => attempted >= raised && (!nextRaised.HasValue || attempted < nextRaised.Value);
+        JsonElement CycleAt(string token, DateTimeOffset at)
+        {
+            var candidates = alarmHistory.Values.Where(a => S(a, "token") == token && T(a, "raisedTime") <= at).OrderByDescending(a => T(a, "raisedTime")).ToArray();
+            if (candidates.Length == 0) return default;
+            var device = S(candidates[0], "originatorToken");
+            // A cached lifecycle cannot exclude a newer raise until this device's complete read covers the record.
+            if (!complete.Any(r => r.Name == "alarms" && r.AsOf >= at &&
+                (r.Scope == device || Rows("alarms").Any(a => a.Read == r && S(a.Value, "token") == token)))) return default;
+            return candidates[0];
+        }
         void Notification(JsonElement n)
         {
             var id = S(n, "id"); var token = S(n, "alarmToken"); var at = T(n, "attemptedAt");
-            var cycles = alarmHistory.Values.Where(a => S(a, "token") == token).OrderBy(a => T(a, "raisedTime")).ToArray();
-            var alarm = cycles.LastOrDefault(a => NotificationInCycle(at, T(a, "raisedTime"), null));
+            var alarm = CycleAt(token, at);
             if (alarm.ValueKind == JsonValueKind.Undefined) return; // another cycle/run, outside the queried window
             var key = S(alarm, "alarmKey"); var f = new Dictionary<string, string> { ["alarmToken"] = token, ["trigger"] = S(n, "trigger") };
             var policy = Optional(n, "policyToken"); if (key == "lamp-flicker" && policy == null) throw new FormatException("missing notification policyToken");
@@ -194,28 +210,37 @@ namespace DeviceChain.Harborpulse.Model.Director
             Emit("replacement", id, device, "", S(r, "occurredTime"), "RECORDED", at, f,
                 new Dictionary<string, string[]> { ["disabledCredentials"] = r.GetProperty("retiredCredentialTokens").EnumerateArray().Select(v => v.GetString()).ToArray() });
         }
-        void Credential(JsonElement c)
+        Dictionary<string, string> SnapshotFields(DirectorRead read, Dictionary<string, string> fields = null)
         {
+            var f = fields ?? new Dictionary<string, string>(); f["asOf"] = N(Wall(read.AsOf.Value)); return f;
+        }
+        void Credential(Row row)
+        {
+            var c = row.Value;
             var id = S(c, "token"); var device = Device(S(c.GetProperty("device"), "token"));
             var enabled = DirectorProbeEvaluation.Require(c, "enabled").GetBoolean();
             foreach (var r in Rows("replacements").Select(r => r.Value).Where(r => S(r.GetProperty("device"), "token") == S(c.GetProperty("device"), "token") && r.GetProperty("retiredCredentialTokens").EnumerateArray().Any(t => t.GetString() == id)))
                 Emit("credential", id, device, "", S(r, "occurredTime"), enabled ? "ENABLED" : "DISABLED", input.Now,
-                    new Dictionary<string, string> { ["enabled"] = B(enabled), ["replacementToken"] = S(r, "id") });
+                    SnapshotFields(row.Read, new Dictionary<string, string> { ["enabled"] = B(enabled), ["replacementToken"] = S(r, "id") }));
         }
         void Command(JsonElement c)
         {
-            var id = S(c, "token"); var device = Device(S(c, "deviceToken")); var key = S(c, "name"); var f = new Dictionary<string, string>(); var cycle = "";
+            var id = S(c, "token"); var device = Device(S(c, "deviceToken")); var key = S(c, "name"); var f = new Dictionary<string, string>(); string alarmToken = null;
             // The served Command has no alarm foreign key. Only an explicit platform metadata join is evidence of one.
             var metadata = Optional(c, "metadata");
-            if (metadata != null) { using var m = JsonDocument.Parse(metadata); var alarm = Optional(m.RootElement, "alarmToken");
-                var a = alarmHistory.Values.Where(a => S(a, "token") == alarm).OrderByDescending(a => T(a, "raisedTime")).FirstOrDefault();
-                if (a.ValueKind != JsonValueKind.Undefined) { f["alarmToken"] = alarm; cycle = S(a, "raisedTime"); }
-            }
+            if (metadata != null) { using var m = JsonDocument.Parse(metadata); alarmToken = Optional(m.RootElement, "alarmToken"); }
             var payload = Optional(c, "payload");
             if (payload != null) { using var p = JsonDocument.Parse(payload); if (p.RootElement.TryGetProperty("max_kw", out var max)) f["max_kw"] = StrictJson.Scalar(max); }
             foreach (var state in new[] { "QUEUED", "SENT", S(c, "status") }.Distinct()) {
                 var field = state == "QUEUED" ? "queuedTime" : state == "SENT" ? "sentTime" : "respondedTime";
-                var at = Optional(c, field); if (at != null) Emit("command", id, device, key, cycle, state, Time(at), f, command: id);
+                var at = Optional(c, field); if (at != null) {
+                    var cycle = "";
+                    if (alarmToken != null) {
+                        var alarm = CycleAt(alarmToken, Time(at)); if (alarm.ValueKind == JsonValueKind.Undefined) continue;
+                        f["alarmToken"] = alarmToken; cycle = S(alarm, "raisedTime");
+                    }
+                    Emit("command", id, device, key, cycle, state, Time(at), f, command: id);
+                }
                 else if (state == S(c, "status")) problems.Add("commands: missing " + field + " for " + id);
             }
         }
@@ -225,44 +250,59 @@ namespace DeviceChain.Harborpulse.Model.Director
             Dictionary<string, string> Fields() => new Dictionary<string, string> { ["artifactToken"] = artifact, ["rolloutToken"] = id };
             var f = Fields(); f["maxInFlight"] = N(rollout.GetProperty("maxInFlight").GetInt32());
             var state = S(rollout, "state");
+            var terminal = state == "COMPLETED" || state == "ABORTED";
+            if (terminal) Emit("rollout", id, "", "", cycle, "TERMINAL", T(rollout, "finishedAt"), f);
             if (state != "COMPLETED" && state != "ABORTED")
                 Emit("rollout", id, "", "", cycle, state, state == "RUNNING" ? at : T(rollout, "stateChangedAt"), f);
-            foreach (var a in Rows("artifact").Select(r => r.Value).Where(a => S(a, "token") == artifact)) {
+            foreach (var row in Rows("artifact").Where(r => S(r.Value, "token") == artifact)) {
+                var a = row.Value;
                 var sig = a.GetProperty("signatures").EnumerateArray().FirstOrDefault(s => s.GetProperty("countsTowardTrust").GetBoolean() && S(s.GetProperty("signer"), "state") == "ACTIVE" &&
                     Rows("signer").Any(r => S(r.Value, "token") == S(s.GetProperty("signer"), "token") && S(r.Value, "keyId") == S(s.GetProperty("signer"), "keyId") && S(r.Value, "state") == "ACTIVE"));
                 var af = Fields(); if (sig.ValueKind != JsonValueKind.Undefined) af["signer"] = S(sig.GetProperty("signer"), "token");
                 // SIGNED is the platform's verified trust status; UpdateState.VERIFIED is integrity-only and is never used here.
-                Emit("artifact", artifact, "", "", cycle, S(a, "trustStatus") == "SIGNED" && af.ContainsKey("signer") ? "VERIFIED" : "UNVERIFIED", at, af);
+                Emit("artifact", artifact, "", "", cycle, S(a, "trustStatus") == "SIGNED" && af.ContainsKey("signer") ? "VERIFIED" : "UNVERIFIED", input.Now, SnapshotFields(row.Read, af));
             }
             var targets = Rows("targets").Where(t => t.Scope == id).Select(t => t.Value).ToArray(); int refused = 0;
+            var finished = terminal ? T(rollout, "finishedAt") : input.Now;
+            bool countsComplete = complete.Any(r => r.Name == "targets" && r.Scope == id && r.AsOf >= finished &&
+                r.Data.Value.GetProperty(DirectorProbeEvaluation.Roots["targets"]).ValueKind != JsonValueKind.Null) &&
+                targets.Length == rollout.GetProperty("progress").GetProperty("total").GetInt32() && targets.Select(t => S(t, "deviceToken")).Distinct().Count() == targets.Length;
             foreach (var t in targets) {
                 var token = S(t, "deviceToken"); var assignment = Optional(t, "assignmentToken");
+                if (S(t, "outcome") == "UNKNOWN" || S(t, "outcome") == "IN_FLIGHT") countsComplete = false;
                 var a = Rows("assignments").Select(r => r.Value).FirstOrDefault(a => S(a, "token") == assignment && S(a, "deviceToken") == token && S(a.GetProperty("artifact"), "token") == artifact);
                 string attempt = "";
                 if (a.ValueKind != JsonValueKind.Undefined) {
+                    if (!Rows("assignments").Any(r => r.Value.Equals(a) && r.Read.AsOf >= finished)) countsComplete = false;
                     var p = a.GetProperty("attempt"); attempt = S(p, "token"); var pf = Fields(); var ps = S(p, "state");
                     if (p.TryGetProperty("failure", out var failure) && failure.ValueKind != JsonValueKind.Null) {
                         pf["code"] = S(failure, "code"); pf["platform"] = B(failure.GetProperty("platform").GetBoolean());
                         if (ps == "FAILED" && pf["code"] == "VERIFICATION_FAILED" && pf["platform"] == "false") refused++;
                     }
+                    else if (ps == "FAILED") countsComplete = false;
+                    if (S(t, "outcome") == "FAILED" && ps != "FAILED") countsComplete = false;
                     Emit("attempt", attempt, Device(token), "", cycle, ps, T(p, "lastReportAt"), pf, attempt: attempt);
                 }
-                Emit("target", id + "/" + token, Device(token), "", cycle, S(t, "outcome"), input.Now, Fields(), attempt: attempt);
+                else if (assignment != null || S(t, "outcome") == "FAILED" || S(t, "outcome") == "SUCCEEDED") countsComplete = false;
+                var targetRead = Rows("targets").First(r => r.Scope == id && S(r.Value, "deviceToken") == token).Read;
+                Emit("target", id + "/" + token, Device(token), "", cycle, S(t, "outcome"), input.Now, SnapshotFields(targetRead, Fields()), attempt: attempt);
             }
-            if (state == "COMPLETED" || state == "ABORTED") {
-                f["updated"] = N(targets.Count(t => S(t, "outcome") == "SUCCEEDED")); f["refused"] = N(refused);
-                Emit("rollout", id, "", "", cycle, "TERMINAL", T(rollout, "finishedAt"), f);
+            if (terminal) {
+                if (!countsComplete) { current.Add("rollout counts: complete child reads covering terminal state and resolved attempts required"); Gap("targets", lastSim, input.Sim); return; }
+                f = Fields(); f["maxInFlight"] = N(rollout.GetProperty("maxInFlight").GetInt32());
+                f["updated"] = N(rollout.GetProperty("progress").GetProperty("succeeded").GetInt32()); f["refused"] = N(refused);
+                Emit("rollout", id, "", "", cycle, "COUNTS", input.Now, SnapshotFields(complete.First(r => r.Name == "targets" && r.Scope == id), f));
             }
         }
-        void Membership(string quay, JsonElement[] members)
+        void Membership(string quay, JsonElement[] members, DirectorRead read)
         {
             var ids = members.Select(m => Device(S(m, "token"))).ToArray();
             foreach (var a in alarmHistory.Values.Where(a => S(a, "alarmKey") == "light-silent" || S(a, "alarmKey") == "charger-offline")) {
                 if (quay != "hp-east-quay") continue;
                 var expected = ids.Where(id => { var d = layout.Devices.First(x => x.Token == id); return d.Kind == DeviceKind.Light || d.Kind == DeviceKind.Charger; }).ToArray();
-                Emit("membership", "east-absence", "", "", S(a, "raisedTime"), "", input.Now, sets: new Dictionary<string, string[]> { ["tokens"] = expected });
+                Emit("membership", "east-absence", "", "", S(a, "raisedTime"), "", input.Now, SnapshotFields(read), sets: new Dictionary<string, string[]> { ["tokens"] = expected });
             }
-            foreach (var id in ids) Emit("membership", quay + "/" + id, id, quay, "", "MEMBER", input.Now, sets: new Dictionary<string, string[]> { ["tokens"] = new[] { id } });
+            Emit("membership", quay, "", quay, "", "SNAPSHOT", input.Now, SnapshotFields(read), sets: new Dictionary<string, string[]> { ["tokens"] = ids });
         }
         void Measurements()
         {
@@ -306,17 +346,14 @@ namespace DeviceChain.Harborpulse.Model.Director
                 }
             });
         }
-        void StreamMeasurements()
+        void StreamMeasurements(DirectorReadSnapshot snapshot)
         {
-            if (input.Source == null) return;
-            foreach (var d in layout.Devices.Where(d => d.Kind == DeviceKind.Pump)) if (input.Source.TryGet(d.ExternalId, Metrics.PumpRunning, out var running)) {
-                if (!pumpRunning.TryGetValue(d.Token, out var old) || running.OccurredAt > old.OccurredAt) {
-                    if (running.Value <= 0.5 && (!pumpRunning.ContainsKey(d.Token) || old.Value > 0.5)) pumpOffAt[d.Token] = running.OccurredAt;
-                    pumpRunning[d.Token] = running;
+            foreach (var reading in snapshot.Measurements.Skip(measurementIndex).OrderBy(m => m.OccurredAt)) {
+                var token = reading.DeviceToken; var metric = reading.Name; var device = Device(token);
+                if (metric == Metrics.PumpRunning && (!pumpRunning.TryGetValue(device, out var old) || reading.OccurredAt > old.OccurredAt)) {
+                    if (reading.Value <= .5 && (!pumpRunning.ContainsKey(device) || old.Value > .5)) pumpOffAt[device] = reading.OccurredAt;
+                    pumpRunning[device] = new Reading(reading.Value, reading.OccurredAt);
                 }
-            }
-            foreach (var d in layout.Devices) foreach (var metric in HarborObservedModel.MetricsFor(d.Kind)) {
-                if (!input.Source.TryGet(d.ExternalId, metric, out var reading) || !input.Source.TryToken(d.ExternalId, out var token)) continue;
                 var id = token + "/" + metric + "@" + reading.OccurredAt.ToString("O");
                 var json = DirectorWire.Json(w => {
                     w.WriteStartObject(); w.WriteString("id", id); w.WriteString("deviceToken", token); w.WriteString("name", metric);
@@ -326,6 +363,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                 if (metric == Metrics.WetWell) wellHistory[id] = record;
                 else rows.Add(new Row { Name = "streamMeasurements", Scope = token, Value = record });
             }
+            measurementIndex = snapshot.Measurements.Count;
             foreach (var record in wellHistory.Values) rows.Add(new Row { Name = "streamMeasurements", Scope = S(record, "deviceToken"), Value = record });
         }
         void Binding()

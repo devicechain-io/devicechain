@@ -425,7 +425,8 @@
           "source": "PLATFORM",
           "slot": "none-work",
           "lines": [
-            "No notification so far during the work."
+            "No notification recorded",
+            "while the work is on."
           ],
           "needs": {
             "all": [
@@ -522,7 +523,7 @@
           {
             "id": "none",
             "family": "other",
-            "label": "No notification during the window",
+            "label": "No notification recorded in the window",
             "source": "PLATFORM",
             "needs": {
               "all": [
@@ -1815,7 +1816,7 @@
               "expected": {
                 "membership": {
                   "identity": "east-absence",
-                  "mode": "occurred"
+                  "mode": "current"
                 }
               },
               "field": "device",
@@ -1902,7 +1903,7 @@
                 "expected": {
                   "membership": {
                     "identity": "east-absence",
-                    "mode": "occurred"
+                    "mode": "current"
                   }
                 },
                 "field": "device",
@@ -2454,7 +2455,7 @@
               "present": [
                 "signer"
               ],
-              "mode": "occurred",
+              "mode": "current",
               "cycle": "$trigger.cycle",
               "fields": {
                 "rolloutToken": "$trigger.identity",
@@ -2487,7 +2488,7 @@
           "needs": {
             "target": {
               "status": "SUCCEEDED",
-              "mode": "occurred",
+              "mode": "current",
               "cycle": "$trigger.cycle",
               "fields": {
                 "rolloutToken": "$trigger.identity",
@@ -2623,7 +2624,7 @@
                 "refused": "refused",
                 "cap": "maxInFlight"
               },
-              "status": "TERMINAL",
+              "status": "COUNTS",
               "mode": "occurred",
               "cycle": "$trigger.cycle",
               "identity": "$trigger.identity"
@@ -2645,7 +2646,7 @@
                 "present": [
                   "signer"
                 ],
-                "mode": "occurred",
+                "mode": "current",
                 "cycle": "$trigger.cycle",
                 "fields": {
                   "rolloutToken": "$trigger.identity",
@@ -2680,7 +2681,7 @@
             "needs": {
               "target": {
                 "status": "SUCCEEDED",
-                "mode": "occurred",
+                "mode": "current",
                 "cycle": "$trigger.cycle",
                 "fields": {
                   "rolloutToken": "$trigger.identity",

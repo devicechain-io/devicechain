@@ -33,6 +33,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         string page;
         public string Caption { get; private set; } = "";
         public string CaptionKind { get; private set; } = "";
+        public string CaptionPage => page;
         public double CaptionAtS { get; private set; } = double.NegativeInfinity;
         public IReadOnlyList<RailNode> Rail => rail.ToArray();
         public IReadOnlyCollection<string> Links => links.ToArray();

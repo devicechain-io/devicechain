@@ -50,5 +50,9 @@ try {
         if ($Filter) { $selection = @('--filter', "FullyQualifiedName~$Filter") }
         & $sdk test --no-build -c Release @properties @selection --logger 'trx;LogFileName=director.trx' --results-directory "$build/results"
         if ($LASTEXITCODE) { throw "Model tests failed: $LASTEXITCODE" }
+        if (!$Filter) {
+            & python -m unittest test_check_director_log.py
+            if ($LASTEXITCODE) { throw "Python caption checker tests failed: $LASTEXITCODE" }
+        }
     }
 } finally { Pop-Location }

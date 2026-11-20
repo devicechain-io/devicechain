@@ -11,6 +11,27 @@ namespace DeviceChain.Harborpulse.Model.Director
 {
     public enum DirectorProbe { Waiting, PROBE_OK, PROBE_FAILED }
 
+    /// <summary>Main-thread tap, called before the shared observer reduces to latest state.</summary>
+    public sealed class DirectorMeasurementTap
+    {
+        readonly List<DirectorMeasurement> records = new List<DirectorMeasurement>();
+        public IReadOnlyList<DirectorMeasurement> Records => records;
+        public void Watch(DirectorMeasurement measurement)
+        {
+            records.Add(measurement);
+        }
+    }
+
+    public sealed class DirectorMeasurement
+    {
+        public DirectorMeasurement(string deviceToken, string name, double value, DateTimeOffset occurredAt)
+        { DeviceToken = deviceToken; Name = name; Value = value; OccurredAt = occurredAt; }
+        public string DeviceToken { get; }
+        public string Name { get; }
+        public double Value { get; }
+        public DateTimeOffset OccurredAt { get; }
+    }
+
     public sealed class DirectorAlarmChange
     {
         public DirectorAlarmChange(string token, string deviceToken, string key, DateTimeOffset occurredAt)
@@ -33,15 +54,17 @@ namespace DeviceChain.Harborpulse.Model.Director
     public sealed class DirectorRead
     {
         public DirectorRead(string name, string scope, DirectorProbe probe = DirectorProbe.Waiting,
-            DateTimeOffset? lastSuccess = null, string error = null, JsonElement? data = null, IEnumerable<ReadSpan> coverage = null)
+            DateTimeOffset? lastSuccess = null, string error = null, JsonElement? data = null, IEnumerable<ReadSpan> coverage = null, DateTimeOffset? asOf = null)
         {
             Name = name; Scope = scope; Probe = probe; LastSuccess = lastSuccess; Error = error;
             Data = data?.Clone(); Coverage = Array.AsReadOnly((coverage ?? Array.Empty<ReadSpan>()).ToArray());
+            AsOf = asOf ?? lastSuccess;
         }
         public string Name { get; }
         public string Scope { get; }
         public DirectorProbe Probe { get; }
         public DateTimeOffset? LastSuccess { get; }
+        public DateTimeOffset? AsOf { get; }
         public string Error { get; }
         public JsonElement? Data { get; }
         public IReadOnlyList<ReadSpan> Coverage { get; }
@@ -52,11 +75,12 @@ namespace DeviceChain.Harborpulse.Model.Director
     public sealed class DirectorReadSnapshot
     {
         public DirectorReadSnapshot(IEnumerable<DirectorRead> reads, bool? measurementsLive = null, int measurementReconnects = 0, int alarmReconnects = 0,
-            IEnumerable<DirectorAlarmChange> alarmChanges = null)
+            IEnumerable<DirectorAlarmChange> alarmChanges = null, IEnumerable<DirectorMeasurement> measurements = null)
         {
             Reads = Array.AsReadOnly(reads.ToArray());
             MeasurementsLive = measurementsLive; MeasurementReconnects = measurementReconnects; AlarmReconnects = alarmReconnects;
             AlarmChanges = Array.AsReadOnly((alarmChanges ?? Array.Empty<DirectorAlarmChange>()).ToArray());
+            Measurements = Array.AsReadOnly((measurements ?? Array.Empty<DirectorMeasurement>()).ToArray());
             Problems = Array.AsReadOnly(Reads.Where(r => r.Error != null || r.Probe == DirectorProbe.PROBE_FAILED)
                 .Select(r => r.Name + "/" + r.Scope + ": " + r.Probe + ": " + r.Error).ToArray());
         }
@@ -66,6 +90,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         public int MeasurementReconnects { get; }
         public int AlarmReconnects { get; }
         public IReadOnlyList<DirectorAlarmChange> AlarmChanges { get; }
+        public IReadOnlyList<DirectorMeasurement> Measurements { get; }
     }
 
     /// <summary>Shared by the live probes and canned tests. Nullable lookups may be absent; non-null selections may not.</summary>

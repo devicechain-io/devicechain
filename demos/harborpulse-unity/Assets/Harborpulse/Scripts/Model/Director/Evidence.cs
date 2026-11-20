@@ -80,6 +80,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         public string Status { get; }
         public double ObservedAtS { get; }
         public double OccurredAtS { get; }
+        public bool HasOccurrence => !Fields.ContainsKey("asOf");
         public double Sim { get; }
         public string Source { get; }
         public IReadOnlyDictionary<string, string> Fields { get; }
@@ -95,7 +96,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                 case "device": return Device; case "key": return Key; case "cycle": return Cycle;
                 case "identity": return Identity; case "command": return Command; case "attempt": return Attempt;
                 case "status": return Status; case "source": return Source;
-                case "occurredAtS": return OccurredAtS.ToString("R", CultureInfo.InvariantCulture);
+                case "occurredAtS": return HasOccurrence ? OccurredAtS.ToString("R", CultureInfo.InvariantCulture) : null;
                 default: return Fields.TryGetValue(name, out var v) ? v : null;
             }
         }
@@ -317,7 +318,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             }
             var available = store.Records.Where(o => o.Run == c.Run && o.Kind == Kind && o.Source == Source && o.ObservedAtS <= c.NowS);
             available = available.GroupBy(o => Mode == "current" ? o.SnapshotKey : o.EventKey).Select(g => g.OrderByDescending(o => o.ObservedAtS).ThenByDescending(o => o.OccurredAtS).First());
-            return available.Where(o => (!c.RestrictInterval || (o.Sim >= c.FromSim && o.Sim <= c.ToSim)) && (Before == null || (c.Trigger != null && o.OccurredAtS < c.Trigger.OccurredAtS)) && (After == null || (c.Trigger != null && o.OccurredAtS > c.Trigger.OccurredAtS)) && o.Sim >= (FromSim ?? c.FromSim) && o.Sim <= (ToSim ?? c.ToSim) && c.ObservedSim(o) >= (FromSim ?? c.FromSim) && c.ObservedSim(o) <= c.ToSim &&
+            return available.Where(o => (!c.RestrictInterval || (o.Sim >= c.FromSim && o.Sim <= c.ToSim)) && (Before == null || (c.Trigger != null && c.Trigger.HasOccurrence && o.HasOccurrence && o.OccurredAtS < c.Trigger.OccurredAtS)) && (After == null || (c.Trigger != null && c.Trigger.HasOccurrence && o.HasOccurrence && o.OccurredAtS > c.Trigger.OccurredAtS)) && o.Sim >= (FromSim ?? c.FromSim) && o.Sim <= (ToSim ?? c.ToSim) && c.ObservedSim(o) >= (FromSim ?? c.FromSim) && c.ObservedSim(o) <= c.ToSim &&
                 (!MaxAgeS.HasValue || c.NowS - o.ObservedAtS <= MaxAgeS) && (!Gte.HasValue || double.TryParse(o.Field("value"), NumberStyles.Float, CultureInfo.InvariantCulture, out var numeric) && numeric >= Gte.Value) && Present.All(f => !string.IsNullOrEmpty(o.Field(f))) && Match.All(m =>
                     o.Field(m.Key) != null && o.Field(m.Key) == Resolve(m.Value, o)));
         }
@@ -366,10 +367,10 @@ namespace DeviceChain.Harborpulse.Model.Director
             if (Count.HasValue) { var end = ThroughNow && context.NowSim.HasValue ? Math.Min(ToSim.Value, context.NowSim.Value) : ToSim.Value; return Result(store.Covers(context.Run, Stream, FromSim.Value, end) && rows.Length == Count.Value, rows); }
             if (AllBelow.HasValue)
             {
-                if (!context.Named.TryGetValue("running", out var reference) || reference.Kind != "chip" || reference.Status != "PLATFORM" || reference.Cycle != context.Trigger?.Cycle ||
+                if (!context.Named.TryGetValue("running", out var reference) || !reference.HasOccurrence || reference.Kind != "chip" || reference.Status != "PLATFORM" || reference.Cycle != context.Trigger?.Cycle ||
                     !double.TryParse(reference.Field("runningAt"), NumberStyles.Float, CultureInfo.InvariantCulture, out var end) || Math.Abs(end - reference.OccurredAtS) > 1e-6) return Result(false);
                 // Select through this exact transition, including readings beyond any old authored estimate.
-                rows = Select(store, context.With(FromSim.Value, reference.Sim)).Where(o => o.Sim <= reference.Sim && o.OccurredAtS <= end && o.Cycle == reference.Cycle).ToArray();
+                rows = Select(store, context.With(FromSim.Value, reference.Sim)).Where(o => o.HasOccurrence && o.Sim <= reference.Sim && o.OccurredAtS <= end && o.Cycle == reference.Cycle).ToArray();
                 return Result(rows.Length > 0 && store.Covers(context.Run, Stream, FromSim.Value, reference.Sim) && rows.All(o => double.TryParse(o.Field("value"), NumberStyles.Float, CultureInfo.InvariantCulture, out var value) && value < AllBelow.Value), rows.Append(reference));
             }
             if (Gte.HasValue) rows = rows.Where(o => double.TryParse(o.Field("value"), NumberStyles.Float, CultureInfo.InvariantCulture, out var value) && value >= Gte.Value).ToArray();
