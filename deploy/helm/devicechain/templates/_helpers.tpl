@@ -1750,6 +1750,22 @@ the filtered document by accident.
     {{- $_ := set $tags $key $want -}}
   {{- end -}}
   {{- $_ := set $shards "placementTags" $tags -}}
+  {{- /* The placement seed is set by dcctl for a sharding level. Held to its block here too, so a
+  raw render with a seed that cannot lay out the 64-vpartition table fails at the template rather
+  than as a user-management that refuses to start. */ -}}
+  {{- if hasKey $shards "seed" -}}
+    {{- $weights := get (get $shards "seed") "weights" -}}
+    {{- if ne (len $weights) (int $shards.count) -}}
+      {{- fail "shardGroups.seed.weights must have one weight per group (shardGroups.count)" -}}
+    {{- end -}}
+    {{- $sum := 0 -}}
+    {{- range $w := $weights -}}
+      {{- $sum = add $sum (int $w) -}}
+    {{- end -}}
+    {{- if ne (int $sum) 64 -}}
+      {{- fail "shardGroups.seed.weights must sum to the placement table's 64 vpartitions" -}}
+    {{- end -}}
+  {{- end -}}
 {{- end -}}
 {{- if hasKey $infra "egress" -}}
   {{- $egress := index $infra "egress" -}}
