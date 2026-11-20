@@ -27,7 +27,7 @@ release. See [The event wire format](#event-wire-format).
 
 Each minor release starts a release line, and its patch releases belong to that line. The three most recent lines have their full notes below, newest first. Older lines have a short entry under [Older releases](#older-releases).
 
-- **[v1.7](#v170-upgrade)**: [v1.7.0](#v170-upgrade)
+- **[v1.7](#v170-upgrade)**: [v1.7.1](#v171-upgrade) · [v1.7.0](#v170-upgrade)
 - **[v1.6](#v160-upgrade)**: [v1.6.0](#v160-upgrade)
 - **[v1.5](#v150-upgrade)**: [v1.5.0](#v150-upgrade)
 
@@ -763,6 +763,35 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 ## Recent releases {#recent-releases}
 
 The three most recent release lines are documented in full, newest first. Within a line, a patch release's notes come before those of the release it patches.
+
+### v1.7.1 — updates and campaign commands reach only the devices they were meant for {#v171-upgrade}
+
+`v1.7.1` is a patch release and an in-place upgrade from `v1.7.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades), using the v1.7.1 `dcctl` and `--version v1.7.1`. `update-management` appends one migration at its first start. It adds a column that may be empty, so `v1.7.0` pods keep working while the upgrade rolls. As for every release, there is no downgrade.
+
+```bash
+dcctl install local --version v1.7.1
+dcctl upgrade local devicechain --version v1.7.1 --dry-run
+dcctl upgrade local devicechain --version v1.7.1
+```
+
+This release changes no covered interface. It adds one refusal and skip code, `DEVICE_REPLACED`, to the existing code vocabulary.
+
+#### Before you upgrade to v1.7.1 {#v171-before-upgrade}
+
+- While old and new pods overlap during the rolling upgrade, a `v1.7.0` pod can still step a running rollout the old way until it is replaced. Finish the upgrade before you delete and re-create devices that a running rollout targets.
+- A rollout started before the upgrade recorded only its devices' tokens. For those rollouts, `update-management` compares when each device was created with when the rollout started (see [Rollouts target the devices they started with](#v171-rollout-identity)). A device whose creation time is within five minutes of the rollout's start is **held**: it is not told to update, and the rollout stays `RUNNING`. If a rollout stays running with devices waiting, abort it and start a new one.
+
+#### What is new in v1.7.1 {#v171-whats-new}
+
+- **An update assigned to a re-created device stays in place.** An assignment request that looked a device up before the device was deleted and re-created with the same token is now refused with `DEVICE_REPLACED`. It no longer replaces the new device's update. Before, the new device stopped being offered its update until it was assigned again.
+- **Campaign commands re-check the group when they are retried.** When creating a campaign's batch fails for a passing reason, the commands are retried later. They are now checked against the campaign's group first: a device that left the group meanwhile is recorded `NOT_IN_GROUP` and gets no command. If the group cannot be read, the commands wait; if they are still waiting past the campaign's lateness bound, they are recorded as missed.
+- **Backups of sharded instances include every shard-group stream.** On an instance with `infrastructure.nats.shardGroups` configured, `dcctl backup` now exports each group stream of a sharded stream (`<stream>-g1`, `<stream>-g2`, and so on) alongside its base stream and records the layout in the manifest. A configured group stream that is missing or unreadable, or a group stream the deployed configuration does not declare, fails the export instead of producing a partial backup. `dcctl restore --plan` lists every group stream and refuses a target whose shard-group layout differs from the backup's. Backups of a sharded instance taken with an earlier dcctl contain only the base streams (group zero), not the group streams; take a new backup after upgrading dcctl. Instances without shard groups are unaffected, and their manifests are unchanged.
+
+#### Rollouts target the devices they started with {#v171-rollout-identity}
+
+- `startUpdateRollout` now records which device each member of the group is, not only its token. A device later created with the same token is a different device: it is skipped with `DEVICE_REPLACED`, even if it is in the group, and it is never told to update. A member that leaves the group while the rollout starts is not part of the rollout.
+- When a device is deleted, a rollout target that is still waiting for that device is skipped with `DEVICE_NOT_FOUND`.
+- Rollouts started before v1.7.1: a device created more than five minutes after the rollout started is skipped with `DEVICE_REPLACED`, one created more than five minutes before it is updated as usual, and one created in between is held, as described under [Before you upgrade to v1.7.1](#v171-before-upgrade).
 
 ### v1.7.0 — deletions reach every service, and sessions ride out outages {#v170-upgrade}
 

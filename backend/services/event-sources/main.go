@@ -248,6 +248,7 @@ var (
 	TenantGoneCounter *prometheus.CounterVec
 	// PlacementUnavailableCounter counts captured messages held during a placement outage.
 	PlacementUnavailableCounter prometheus.Counter
+	PlacementHeldGauge          *prometheus.GaugeVec
 	// BackpressureCounter counts inbound messages refused because inbound-events is applying
 	// backpressure: a reader of it is so far behind that accepting more would discard events
 	// it has not read. Apart from RateLimitedCounter because the cause is the platform, not
@@ -449,6 +450,10 @@ func initializeMetrics() {
 	PlacementUnavailableCounter = Microservice.NewCounter(
 		"total_msg_placement_unavailable",
 		"Count of captured messages left unacknowledged because shard placement is unavailable")
+	PlacementHeldGauge = Microservice.NewGaugeVec(
+		"placement_held_messages",
+		"Captured final deliveries held while shard placement is unavailable",
+		[]string{"source"})
 	ExternalMqttOwnerGauge = Microservice.NewGaugeVec(
 		"external_mqtt_owner",
 		"1 on the pod that reads an external MQTT broker source, 0 on the others; per source, the sum across pods should be 1",
@@ -1162,6 +1167,7 @@ func buildEventSources(peers *svcclient.Peers) error {
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
 					ingestGate, readingGate, meterAt)
 				gateway.UsePlacementUnavailableCounter(PlacementUnavailableCounter)
+				wirePlacementHold(gateway)
 				// Held so createNatsComponents can hand it the capture reader and its
 				// inbound-events writer once they exist. Sources are built in the
 				// INITIALIZE phase and readers and writers are created in START, so there
@@ -1179,6 +1185,7 @@ func buildEventSources(peers *svcclient.Peers) error {
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
 					ingestGate, readingGate, meterAt)
 				StoreSource.UsePlacementUnavailableCounter(PlacementUnavailableCounter)
+				wirePlacementHold(StoreSource)
 				StoreSource.UseMessageStore()
 				if LagCredit != nil {
 					StoreSource.UseLagCredit(LagCredit, processor.StreamStore)
@@ -2213,3 +2220,17 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 
 // failedDecodeMaxBytes bounds the (redacted) body kept on the failed-decode stream.
 const failedDecodeMaxBytes = payloadredact.DiagnosticMaxBytes
+
+// Sources are built before NATS components; resolve the live manager at poll time.
+// Placement is per tenant and independent of writer backpressure.
+func wirePlacementHold(source *processor.GatewayJetStreamSource) {
+	source.UsePlacementCheck(inboundPlacementCheck)
+	if PlacementHeldGauge != nil {
+		source.UsePlacementHeldGauge(PlacementHeldGauge.WithLabelValues(source.Id))
+	}
+}
+
+func inboundPlacementCheck(tenant string) error {
+	_, err := NatsManager.TenantShardGroup(tenant, streams.InboundEvents)
+	return err
+}

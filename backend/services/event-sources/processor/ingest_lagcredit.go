@@ -573,7 +573,7 @@ func (es *GatewayJetStreamSource) probeIdle(ctx context.Context, lc *LagCreditIn
 		case <-t.C:
 		}
 		now := lc.clock()
-		if es.inHandle.Load() {
+		if es.inHandle.Load() != 0 {
 			continue
 		}
 		if at, seen := v.lastRead(); seen && now.Sub(at) < idleProbeEvery {
@@ -593,7 +593,7 @@ func (es *GatewayJetStreamSource) probeIdle(ctx context.Context, lc *LagCreditIn
 		}
 		// A read that happened while the question was in flight is stamped later than `asked`, and caughtUp
 		// never moves the last read backwards, so such an answer changes nothing.
-		if es.inHandle.Load() {
+		if es.inHandle.Load() != 0 {
 			continue
 		}
 		v.caughtUp(asked)
