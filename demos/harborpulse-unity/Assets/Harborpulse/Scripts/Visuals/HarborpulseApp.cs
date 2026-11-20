@@ -38,7 +38,7 @@ namespace DeviceChain.Harborpulse.Visuals
         public double previewStartHour = 16.5;
 
         [Tooltip("The shaders the scene builds its materials from; assigned by the scene builder so a player build includes them.")]
-        public Shader litShader, waterShader, skyShader;
+        public Shader litShader, waterShader, skyShader, wetWellShader;
 
         public Camera sceneCamera;
 
@@ -49,21 +49,24 @@ namespace DeviceChain.Harborpulse.Visuals
         HarborSkyController sky;
         HarborWaterController water;
         HarborCameraRig rig;
-        TideBoard tide;
-        LampBoard lamps;
+        HarborObservedModel model;
+        HarborFrame frame;
+        HarborViews views;
+        HarborGrading grading;
+        PlanarWaterReflection reflection;
+        DateTimeOffset? modelRun;
 
         PreviewSource preview;
         double previewSimS, previewSpeed = 1;
         bool previewHeld;
 
         HarborLiveSession live;
-        ScenarioStatusClient statusClient;
-        readonly ScenarioClockFollower follower = new ScenarioClockFollower();
+        LiveSettings liveSettings;
 
         ClockReading clock;
         Weather weather;
         float waterTime;
-        GUIStyle panel, small, label;
+        GUIStyle panel, small;
         readonly StringBuilder sb = new StringBuilder();
 
         /// <summary>Why the scene could not start, or null.</summary>
@@ -80,10 +83,25 @@ namespace DeviceChain.Harborpulse.Visuals
         public void HoldPreviewAt(double hourOfDay)
         {
             if (!Offline) throw new InvalidOperationException("only the offline preview's clock can be set by hand; a live clock is the runner's");
-            previewSimS = DayClock.At(0, 0, 0) + hourOfDay * 3600.0;
+            model = new HarborObservedModel(layout);
+            preview = new PreviewSource(layout);
             previewHeld = true;
-            Tick(0);
+            // Observe forward through the lead-in, so a still does not manufacture command history or a start transition.
+            var targetNow = DateTimeOffset.UtcNow;
+            var from = System.Math.Max(0, hourOfDay - 1);
+            for (var hour = from; hour < hourOfDay; hour += 0.01)
+            {
+                previewSimS = hour * 3600;
+                Tick((float)(0.01 / 24 * layout.DayLengthSeconds), targetNow.AddSeconds((hour - hourOfDay) / 24 * layout.DayLengthSeconds));
+            }
+            previewSimS = hourOfDay * 3600;
+            Tick(0, targetNow);
+            Tick(2.1f, targetNow.AddSeconds(2.1));
         }
+
+        public void RenderReflectionNow() => reflection?.RenderNow();
+        void LateUpdate() => reflection?.LateTick();
+        public HarborFrame Frame => frame;
 
         void Awake()
         {
@@ -110,17 +128,20 @@ namespace DeviceChain.Harborpulse.Visuals
                 if (text == null) throw new FormatException("Resources/harbor_layout.json is missing from the build");
                 layout = HarborLayout.Parse(text.text);
                 plan = SitePlan.Build(layout);
-                tide = new TideBoard(layout);
-                lamps = new LampBoard(layout);
+                model = new HarborObservedModel(layout);
                 mats = new HarborMaterials(litShader);
+                mats.CreateWetWell(wetWellShader != null ? wetWellShader : Shader.Find("Harborpulse/WetWellWater"));
                 world = HarborWorld.Build(plan, layout, mats, transform);
                 sky = new HarborSkyController(transform, skyShader);
-                water = new HarborWaterController(transform, waterShader, plan.Quays, 9000);
+                water = new HarborWaterController(transform, waterShader, plan, 9000);
                 if (sceneCamera == null) sceneCamera = Camera.main;
                 if (sceneCamera == null) throw new InvalidOperationException("the scene has no camera");
                 sceneCamera.farClipPlane = 20000;
                 sceneCamera.nearClipPlane = 0.3f;
                 rig = new HarborCameraRig(sceneCamera, plan);
+                grading = new HarborGrading(transform, sceneCamera);
+                reflection = new PlanarWaterReflection(transform, sceneCamera);
+                views = new HarborViews(world, plan, mats);
             }
             catch (Exception e)
             {
@@ -161,10 +182,9 @@ namespace DeviceChain.Harborpulse.Visuals
                 return;
             }
 
-            var settings = new LiveSettings { RunnerUrl = url, ExpectTenant = tenant, Source = "command line" };
-            live = new HarborLiveSession(layout, settings);
+            liveSettings = new LiveSettings { RunnerUrl = url, ExpectTenant = tenant, Source = "command line" };
+            live = new HarborLiveSession(layout, liveSettings);
             live.Start();
-            statusClient = new ScenarioStatusClient(url, follower);
         }
 
         double Number(string[] args, string flag, double fallback, double lo, double hi)
@@ -183,10 +203,10 @@ namespace DeviceChain.Harborpulse.Visuals
             Tick(Time.deltaTime);
         }
 
-        void Tick(float dt)
+        public void Tick(float dt, DateTimeOffset? wallNow = null)
         {
-            var now = DateTimeOffset.UtcNow;
-            IReadingSource source;
+            var now = wallNow ?? DateTimeOffset.UtcNow;
+            IHarborSource source;
             if (Offline)
             {
                 if (!previewHeld) previewSimS += DayClock.Day * dt / layout.DayLengthSeconds * previewSpeed;
@@ -196,58 +216,43 @@ namespace DeviceChain.Harborpulse.Visuals
             }
             else
             {
-                statusClient.Tick(now);
                 live.Tick();
-                clock = follower.Read(now);
+                clock = live.Clock.Read(now);
                 source = live.Source;
             }
 
+            var started = source.Status?.StartedAt;
+            if (!Offline && modelRun.HasValue && modelRun != started)
+            {
+                // A new runner can bind different platform tokens. Discard the observer as well as the reducers.
+                live.Dispose();
+                live = new HarborLiveSession(layout, liveSettings); live.Start();
+                model = new HarborObservedModel(layout); modelRun = null;
+                source = live.Source; clock = live.Clock.Read(now);
+            }
+            else if (!Offline && started.HasValue && !modelRun.HasValue)
+            {
+                model = new HarborObservedModel(layout); modelRun = started;
+            }
+            frame = model.Update(source, clock, now, Offline && previewHeld);
             var hour = clock.HourOfDay;
-            weather = Weather.At(layout, hour);
+            weather = frame.World.Weather;
             var state = DayLighting.Evaluate(hour, weather);
             waterTime = WaterTimeOverride ?? waterTime + dt;
             sky.Apply(state, waterTime);
-            mats.SetNight((float)state.Night);
+            mats.SetNight((float)state.Night, (float)frame.World.EastFeederOutage);
+            grading.Apply(state);
+            views.Apply(frame, state, sceneCamera.transform.position, dt, waterTime);
+            rig.FollowTruck(frame.Truck);
 
-            tide.Update(source, now);
-            lamps.Update(source, now);
-            water.Apply(q => tide.Region(q).LevelM, 0.0, weather, waterTime, sceneCamera.transform.position);
+            reflection.Level = (float)frame.ReflectionLevelM;
+            water.Apply(q => frame.Tides[q].LevelM, 0.0, weather, waterTime, sceneCamera.transform.position);
             for (var i = 0; i < world.Buoys.Count; i++)
             {
                 var rest = world.BuoyRest[i];
                 var b = world.Buoys[i];
                 b.position = new Vector3(rest.x, water.SurfaceAt(rest.x, rest.y), rest.y);
                 b.rotation = Quaternion.Euler(Mathf.Sin(waterTime * 0.9f + i) * 6 * (0.3f + (float)weather.Storm), 0, Mathf.Cos(waterTime * 0.7f + i * 1.3f) * 6 * (0.3f + (float)weather.Storm));
-            }
-
-            foreach (var lampRig in world.Lamps)
-            {
-                var s = lamps.Lamp(lampRig.Placement.Device.ExternalId);
-                switch (s.Condition)
-                {
-                    case LampCondition.On:
-                        lampRig.Head.sharedMaterial = mats.LampOn;
-                        lampRig.Halo.enabled = true;
-                        lampRig.Light.enabled = true;
-                        // an unreported dim level is drawn at full brightness, and the lamp's label says the level is unknown
-                        lampRig.Light.intensity = (float)(16.0 * (s.DimPct ?? 100.0) / 100.0) * Mathf.Lerp(0.15f, 1f, (float)state.Night);
-                        break;
-                    case LampCondition.Off:
-                        lampRig.Head.sharedMaterial = mats.LampOff;
-                        lampRig.Halo.enabled = false;
-                        lampRig.Light.enabled = false;
-                        break;
-                    case LampCondition.Silent:
-                        lampRig.Head.sharedMaterial = mats.LampSilent;
-                        lampRig.Halo.enabled = false;
-                        lampRig.Light.enabled = false;
-                        break;
-                    default:
-                        lampRig.Head.sharedMaterial = mats.LampUnknown;
-                        lampRig.Halo.enabled = false;
-                        lampRig.Light.enabled = false;
-                        break;
-                }
             }
 
             rig.Tick(dt <= 0 ? 10 : dt);
@@ -265,7 +270,8 @@ namespace DeviceChain.Harborpulse.Visuals
         {
             if (tornDown) return;
             tornDown = true;
-            statusClient?.Dispose();
+            reflection?.Dispose();
+            grading?.Dispose();
             live?.Dispose();
             water?.Dispose();
             sky?.Dispose();
@@ -287,8 +293,6 @@ namespace DeviceChain.Harborpulse.Visuals
             panel.normal.background = bg;
             panel.normal.textColor = new Color(0.9f, 0.93f, 0.95f);
             small = new GUIStyle(panel) { fontSize = 12, padding = new RectOffset(8, 8, 5, 5) };
-            label = new GUIStyle(GUI.skin.label) { richText = true, fontSize = 12, alignment = TextAnchor.LowerCenter };
-            label.normal.textColor = Color.white;
         }
 
         void OnGUI()
@@ -301,29 +305,51 @@ namespace DeviceChain.Harborpulse.Visuals
                 return;
             }
 
-            if (world == null) return;
+            if (world == null || frame == null) return;
             sb.Clear();
             sb.Append("<size=17><b>HARBORPULSE</b></size>  Port Alder waterfront\n");
             sb.Append(ModeLine()).Append('\n');
             sb.Append("<b>").Append(clock.Label).Append("</b>");
-            var beat = Offline ? BeatAt(clock.HourOfDay) : follower.Last?.Beat;
+            var beat = Offline ? BeatAt(clock.HourOfDay) : live.Clock.Last?.Beat;
             if (!string.IsNullOrEmpty(beat)) sb.Append("  · ").Append(beat);
             sb.Append("   storm ").Append((weather.Storm * 100).ToString("0")).Append(" %\n");
             if (!Offline) LiveLines();
             sb.Append("\n<b>Tide</b> (median of each quay's fresh gauges)\n");
             foreach (var q in plan.Quays) sb.Append(TideLine(q)).Append('\n');
-            sb.Append("\n<b>Street lights</b>  on ").Append(lamps.Count(LampCondition.On)).Append(" · off ").Append(lamps.Count(LampCondition.Off))
-                .Append(" · silent ").Append(lamps.Count(LampCondition.Silent)).Append(" · unknown ").Append(lamps.Count(LampCondition.Unknown));
+            var on = 0; var off = 0; var silent = 0; var unknown = 0;
+            foreach (var lamp in frame.Lamps.Values)
+            {
+                switch (lamp.Condition) { case LampCondition.On: on++; break; case LampCondition.Off: off++; break; case LampCondition.Silent: silent++; break; default: unknown++; break; }
+            }
+            sb.Append("\nStreet lights · on ").Append(on).Append(" · off ").Append(off).Append(" · silent ").Append(silent).Append(" · unknown ").Append(unknown);
+            sb.Append("\n").Append(frame?.World.BeatsNote ?? "layout beats (runner gives none)");
+            sb.Append("\nOTA: ").Append(HarborCards.RolloutLine(frame));
+            sb.Append("\nLamp service: ").Append(frame?.LampService?.Note ?? "not reported");
+            sb.Append("\nReplacement: ").Append(HarborCards.ReplacementLine(frame));
+            if (!string.IsNullOrEmpty(frame?.ReadProblem)) sb.Append("\n").Append(frame.ReadProblem);
             var text = sb.ToString();
             GUI.Box(new Rect(16, 16, 470, panel.CalcHeight(new GUIContent(text), 470)), text, panel);
 
             var shots = rig.Shots;
             sb.Clear();
-            for (var i = 0; i < shots.Count; i++) sb.Append(i == rig.Current ? "<b>[" : "[").Append(i).Append("] ").Append(shots[i].Name).Append(i == rig.Current ? "</b>   " : "   ");
+            for (var i = 0; i < shots.Count; i++) sb.Append(i == rig.Current ? "<b>[" : "[").Append(i == 10 ? "F1" : i == 11 ? "F2" : i.ToString(CultureInfo.InvariantCulture)).Append("] ").Append(shots[i].Name).Append(i == rig.Current ? "</b>   " : "   ");
             sb.Append("· drag to orbit, wheel to dolly");
-            GUI.Box(new Rect(16, Screen.height - 44, Screen.width - 32, 30), sb.ToString(), small);
+            var shotText = sb.ToString();
+            var shotHeight = small.CalcHeight(new GUIContent(shotText), Screen.width - 32);
+            GUI.Box(new Rect(16, Screen.height - shotHeight - 12, Screen.width - 32, shotHeight), shotText, small);
+            var occupied = new System.Collections.Generic.List<Rect> { new Rect(16, 16, 470, panel.CalcHeight(new GUIContent(text), 470)) };
 
-            Labels();
+            foreach (var card in Cards())
+            {
+                var p = sceneCamera.WorldToScreenPoint(card.At);
+                if (p.z <= 0) continue;
+                var rect = new Rect(Mathf.Clamp(p.x - 155, 4, Screen.width - 314), Mathf.Clamp(Screen.height - p.y, 4, Screen.height - 250), 310, small.CalcHeight(new GUIContent(card.Text), 310));
+                for (var i = 0; i < occupied.Count; i++)
+                    if (rect.Overlaps(occupied[i])) { rect.x = Mathf.Clamp(occupied[i].xMax + 6, 4, Screen.width - rect.width - 4); }
+                rect.y = Mathf.Min(rect.y, Screen.height - shotHeight - rect.height - 18);
+                occupied.Add(rect);
+                GUI.Box(rect, card.Text, small);
+            }
         }
 
         string ModeLine()
@@ -358,16 +384,13 @@ namespace DeviceChain.Harborpulse.Visuals
 
         string TideLine(QuayPlan q)
         {
-            var r = tide.Region(q.Token);
+            var r = frame.Tides[q.Token];
             var name = q.Name.PadRight(11);
             if (!r.LevelM.HasValue) return name + "<color=#ff8a65>no reading — the water is drawn at datum</color>";
-            var age = r.NewestAt.HasValue ? Age(DateTimeOffset.UtcNow - r.NewestAt.Value) : "";
+            var age = r.NewestAt.HasValue ? Age(frame.ObservedAt - r.NewestAt.Value) : "";
             var level = r.LevelM.Value.ToString("0.00", CultureInfo.InvariantCulture) + " m";
-            var tier = r.LevelM.Value > layout.Levels.FloodCriticalM ? " <color=#ff5a4a>CRITICAL</color>"
-                : r.LevelM.Value > layout.Levels.FloodMajorM ? " <color=#ff9a3c>MAJOR</color>"
-                : r.LevelM.Value > layout.Levels.FloodMinorM ? " <color=#ffd84a>MINOR</color>" : "";
             if (r.Held) return name + "<color=#ff8a65>" + level + " held · no fresh gauge for " + age + "</color>";
-            return name + "<b>" + level + "</b>" + tier + "  (" + r.Contributors + "/" + r.Gauges + " gauges, " + age + ")";
+            return name + "<b>" + level + "</b>" + "  (" + r.Contributors + "/" + r.Gauges + " gauges, " + age + ")";
         }
 
         static string Age(TimeSpan t)
@@ -385,61 +408,15 @@ namespace DeviceChain.Harborpulse.Visuals
             return on.Length > 0 ? on.ToString() : "quiet";
         }
 
-        // Readouts over the gauges and lights near the camera.
-        void Labels()
+        public System.Collections.Generic.IEnumerable<HarborCard> Cards()
         {
-            var camPos = sceneCamera.transform.position;
-            foreach (var g in world.Gauges)
+            if (frame == null || world == null) yield break;
+            foreach (var r in world.Rigs)
             {
-                if ((g.LabelAt - camPos).sqrMagnitude > 700f * 700f) continue;
-                var text = "<b>" + g.Placement.Device.ExternalId + "</b>\n" + GaugeText(g.Placement.Device);
-                Label(g.LabelAt, text);
+                var distance = r.Placement.Device.Kind == DeviceKind.Pump ? 90 : r.Placement.Device.Kind == DeviceKind.Light ? 100 : 130;
+                if ((r.Root.position - sceneCamera.transform.position).sqrMagnitude > distance * distance) continue;
+                yield return new HarborCard { At = r["CardAnchor"].position, Text = HarborCards.Device(r.Placement.Device, frame) };
             }
-
-            foreach (var l in world.Lamps)
-            {
-                if ((l.LabelAt - camPos).sqrMagnitude > 260f * 260f) continue;
-                var s = lamps.Lamp(l.Placement.Device.ExternalId);
-                var dim = s.Condition != LampCondition.On ? "" : s.DimPct.HasValue ? " " + s.DimPct.Value.ToString("0") + " %" : " (dim unknown)";
-                Label(l.LabelAt, l.Placement.Device.ExternalId + "\n" + s.Condition + dim + (s.Fault ? " FAULT" : ""));
-            }
-        }
-
-        string GaugeText(LayoutDevice d)
-        {
-            IReadingSource src = Offline ? (IReadingSource)preview : live?.Source;
-            if (src == null || !src.TryGet(d.ExternalId, Metrics.WaterLevel, out var r))
-                return d.Kind == DeviceKind.LegacyGauge ? "<color=#ff8a65>no decoded level</color>" : "<color=#9fb3c8>no reading</color>";
-            var age = DateTimeOffset.UtcNow - r.OccurredAt;
-            var stale = age > TideBoard.FreshFor(d.Kind);
-            return (stale ? "<color=#ff8a65>" : "") + r.Value.ToString("0.00", CultureInfo.InvariantCulture) + " m · " + Age(age) + (stale ? " (stale)</color>" : "");
-        }
-
-        void Label(Vector3 at, string text)
-        {
-            var p = sceneCamera.WorldToScreenPoint(at);
-            if (p.z <= 0) return;
-            var r = new Rect(p.x - 110, Screen.height - p.y - 44, 220, 44);
-            var shadow = new Rect(r.x + 1, r.y + 1, r.width, r.height);
-            var c = GUI.color;
-            GUI.color = new Color(0, 0, 0, 0.8f);
-            GUI.Label(shadow, StripColour(text), label);
-            GUI.color = c;
-            GUI.Label(r, text, label);
-        }
-
-        static string StripColour(string s)
-        {
-            var o = new StringBuilder(s.Length);
-            var inTag = false;
-            for (var i = 0; i < s.Length; i++)
-            {
-                if (s[i] == '<' && i + 1 < s.Length && (s[i + 1] == 'c' || s[i + 1] == '/')) inTag = true;
-                if (!inTag) o.Append(s[i]);
-                if (inTag && s[i] == '>') inTag = false;
-            }
-
-            return o.ToString();
         }
     }
 }

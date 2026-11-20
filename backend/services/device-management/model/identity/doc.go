@@ -3,7 +3,12 @@
 
 // Package identity is device identity and credentials, being carved out of package model:
 // trust anchors, the x509 revocation store, the device credential row and its vocabulary, the
-// pure x509 checks and rules, and (in later steps) provisioning, claims and session kicks.
+// pure x509 checks and rules, the revocation store's transaction layer, and (in later steps)
+// provisioning, claims and session kicks.
+//
+// The store's transaction layer is a set of functions over the caller's *gorm.DB (the CRL stage,
+// the list write, the anchor locks, the revocation read): model's *Api opens the transaction and
+// passes it in, so a list write and the session-kick queue rows it owes stay one transaction.
 //
 // The carve goes leaf first. The entities moved so far depend on nothing else in model. The
 // code that works on them through model's *Api stays in model for now. model re-exports every

@@ -5,12 +5,14 @@ package model
 
 import (
 	"fmt"
-	"github.com/devicechain-io/dc-microservice/x509trust"
-	"gorm.io/gorm"
 	"math/big"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/devicechain-io/dc-device-management/model/identity"
+	"github.com/devicechain-io/dc-microservice/x509trust"
+	"gorm.io/gorm"
 
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/stretchr/testify/assert"
@@ -160,16 +162,16 @@ func TestCrlKickJoinComparesTheIssuerKeyOfAKeyedLink(t *testing.T) {
 	queue := func(key string) int {
 		var n int
 		require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
-			require.NoError(t, tx.Exec("DROP TABLE IF EXISTS temp."+crlNewTable).Error)
-			require.NoError(t, tx.Exec("CREATE TEMP TABLE "+crlNewTable+" (serial varchar(64))").Error)
-			require.NoError(t, tx.Exec("INSERT INTO "+crlNewTable+" (serial) VALUES (?)", serial).Error)
+			require.NoError(t, tx.Exec("DROP TABLE IF EXISTS temp."+identity.CrlNewTable).Error)
+			require.NoError(t, tx.Exec("CREATE TEMP TABLE "+identity.CrlNewTable+" (serial varchar(64))").Error)
+			require.NoError(t, tx.Exec("INSERT INTO "+identity.CrlNewTable+" (serial) VALUES (?)", serial).Error)
 			gen, err := stashCrlRevocationSerials(tx, partialUpdateTenant, f.anchor.ID)
 			require.NoError(t, err)
 			tokens, err := crlRevocationKickTargets(tx, partialUpdateTenant, f.anchor.ID,
 				x509trust.IssuerID{Key: key, Name: real.Name}, gen, true)
 			require.NoError(t, err)
 			n = len(tokens)
-			return dropCrlNew(tx)
+			return identity.DropCrlNew(tx)
 		}))
 		return n
 	}

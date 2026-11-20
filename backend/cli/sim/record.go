@@ -44,6 +44,7 @@ type Endpoints struct {
 	OutboundConnectorsGraphQL string `json:"outboundConnectorsGraphQL,omitempty"`
 	NotificationMgmtGraphQL   string `json:"notificationMgmtGraphQL,omitempty"`
 	Integrations              string `json:"integrations,omitempty"`
+	UpdateMgmtGraphQL         string `json:"updateMgmtGraphQL,omitempty"`
 }
 
 // Record is dcctl's local record for one sim. It is written verbatim as the
@@ -385,6 +386,7 @@ func ResolveEndpoints(server, ingress, mqttBroker string, tls bool) Endpoints {
 		NotificationMgmtGraphQL:   fmt.Sprintf("%s://%s/api/notification-management/graphql", h, server),
 		// The chart routes /api/integrations to event-sources' /integrations, where a sender
 		// posts /{tenant}/{integration}.
-		Integrations: fmt.Sprintf("%s://%s/api/integrations", h, server),
+		Integrations:      fmt.Sprintf("%s://%s/api/integrations", h, server),
+		UpdateMgmtGraphQL: fmt.Sprintf("%s://%s/api/update-management/graphql", h, server),
 	}
 }

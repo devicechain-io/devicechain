@@ -1,0 +1,160 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Text.Json;
+
+namespace DeviceChain.Harborpulse.Model
+{
+    public sealed class StoryBeat
+    {
+        public StoryBeat(string name, double from, double to) { Name = name; From = from; To = to; }
+        public string Name { get; }
+        public double From { get; }
+        public double To { get; }
+    }
+
+    /// <summary>Runner declarations only. None of these fields establishes platform execution.</summary>
+    public sealed class StoryJob
+    {
+        public int Day { get; internal set; }
+        public string Name { get; internal set; }
+        public string Campaign { get; internal set; }
+        public string Window { get; internal set; }
+        public string Device { get; internal set; }
+        public string Group { get; internal set; }
+        public DateTimeOffset? FireAt { get; internal set; }
+        public DateTimeOffset? WindowOpens { get; internal set; }
+        public DateTimeOffset? WindowCloses { get; internal set; }
+    }
+
+    public sealed class StoryOta
+    {
+        public string Artifact { get; internal set; }
+        public string Version { get; internal set; }
+        public string Rollout { get; internal set; }
+        public string Group { get; internal set; }
+        public int MaxInFlight { get; internal set; }
+        public int FailureThreshold { get; internal set; }
+        public double ScheduleHour { get; internal set; }
+        public DateTimeOffset? CreatedAt { get; internal set; }
+        public DateTimeOffset? StartedAt { get; internal set; }
+        public string RefusalCode { get; internal set; }
+    }
+
+    public sealed class StoryReplacement
+    {
+        public string Device { get; internal set; }
+        public DateTimeOffset At { get; internal set; }
+        public string UnitIdentifier { get; internal set; }
+    }
+
+    public sealed partial class ScenarioStatus
+    {
+        public IReadOnlyList<StoryBeat> Beats { get; private set; } = Array.Empty<StoryBeat>();
+        public bool BeatsFromRunner { get; private set; }
+        public IReadOnlyList<StoryJob> Jobs { get; private set; } = Array.Empty<StoryJob>();
+        public StoryOta Ota { get; private set; }
+        public StoryReplacement Replacement { get; private set; }
+        public bool HasS5 { get; private set; }
+
+        /// <summary>The inverse of scenario-verify's wall-time mapping; absolute sim seconds, continuous across midnight.</summary>
+        public double ToSimSeconds(DateTimeOffset instant)
+        {
+            if (!StartedAt.HasValue) throw new InvalidOperationException("runner start instant not reported");
+            return StartHour * 3600 + (instant - StartedAt.Value).TotalSeconds * 86400 / DayLengthSeconds;
+        }
+
+        public DateTimeOffset ToWallTime(double simSeconds)
+        {
+            if (!StartedAt.HasValue) throw new InvalidOperationException("runner start instant not reported");
+            return StartedAt.Value.AddSeconds((simSeconds / 3600 - StartHour) / 24 * DayLengthSeconds);
+        }
+
+        void ParseMetadata(JsonElement c)
+        {
+            if (c.TryGetProperty("beats", out var beats))
+            {
+                var list = new List<StoryBeat>();
+                foreach (var b in Wire.Array(beats, "beats"))
+                {
+                    var from = Wire.Number(b, "from");
+                    var to = Wire.Number(b, "to");
+                    if (from < 0 || from >= 24 || to < 0 || to > 24 || from == to) throw new FormatException("beats: invalid hours");
+                    list.Add(new StoryBeat(Wire.String(b, "name"), from, to));
+                }
+                Beats = list.AsReadOnly();
+                BeatsFromRunner = true;
+            }
+            if (c.TryGetProperty("jobs", out var jobs))
+            {
+                var list = new List<StoryJob>();
+                foreach (var j in Wire.Array(jobs, "jobs"))
+                    list.Add(new StoryJob { Day = Wire.Int(j, "day"), Name = Wire.String(j, "name"),
+                        Campaign = Wire.String(j, "campaign"), Window = Wire.String(j, "window", true),
+                        Device = Wire.String(j, "device", true), Group = Wire.String(j, "group"),
+                        FireAt = Wire.Time(j, "fireAt", true), WindowOpens = Wire.Time(j, "windowOpens", true), WindowCloses = Wire.Time(j, "windowCloses", true) });
+                Jobs = list.AsReadOnly();
+            }
+            if (!c.TryGetProperty("s5", out var s5)) return;
+            Wire.Object(s5, "s5");
+            HasS5 = true;
+            if (s5.TryGetProperty("ota", out var o))
+            {
+                Wire.Object(o, "ota");
+                Ota = new StoryOta { Artifact = Wire.String(o, "artifact"), Version = Wire.String(o, "version"),
+                    Rollout = Wire.String(o, "rollout", true), Group = Wire.String(o, "group"), MaxInFlight = Wire.Int(o, "maxInFlight"),
+                    FailureThreshold = Wire.Int(o, "failureThreshold"), ScheduleHour = Wire.Number(o, "scheduleHour"),
+                    CreatedAt = Wire.Time(o, "createdAt", true), StartedAt = Wire.Time(o, "startedAt", true), RefusalCode = Wire.String(o, "refusalCode", true) };
+                // the runner states the rollout hour from day 0's midnight: 26 is 02:00 on the night after the run starts
+                if (Ota.ScheduleHour < 0 || Ota.ScheduleHour >= 48) throw new FormatException("ota.scheduleHour outside [0,48)");
+            }
+            if (s5.TryGetProperty("replacement", out var r))
+            {
+                Wire.Object(r, "replacement");
+                Replacement = new StoryReplacement { Device = Wire.String(r, "device"), At = Wire.Time(r, "at").Value, UnitIdentifier = Wire.String(r, "unitIdentifier") };
+            }
+            // Unknown members are deliberately not retained. In particular, no credential fields or raw JSON survive parsing.
+        }
+    }
+
+    internal static class Wire
+    {
+        public static void Object(JsonElement e, string name) { if (e.ValueKind != JsonValueKind.Object) throw new FormatException(name + ": expected object"); }
+        public static JsonElement Field(JsonElement e, string name) { Object(e, name); if (!e.TryGetProperty(name, out var v)) throw new FormatException(name + ": missing"); return v; }
+        public static string String(JsonElement e, string name, bool optional = false)
+        {
+            Object(e, name);
+            if (!e.TryGetProperty(name, out var v) && optional) return null;
+            if (v.ValueKind != JsonValueKind.String) throw new FormatException(name + ": expected string");
+            return v.GetString();
+        }
+        public static string NullableString(JsonElement e, string name) => Field(e, name).ValueKind == JsonValueKind.Null ? null : String(e, name);
+        public static double Number(JsonElement e, string name)
+        {
+            var v = Field(e, name);
+            if (v.ValueKind != JsonValueKind.Number || !v.TryGetDouble(out var n) || double.IsNaN(n) || double.IsInfinity(n)) throw new FormatException(name + ": expected finite number");
+            return n;
+        }
+        public static int Int(JsonElement e, string name)
+        {
+            var v = Field(e, name);
+            if (v.ValueKind != JsonValueKind.Number || !v.TryGetInt32(out var n) || n < 0) throw new FormatException(name + ": expected nonnegative integer");
+            return n;
+        }
+        public static DateTimeOffset? Time(JsonElement e, string name, bool optional = false)
+        {
+            var s = String(e, name, optional);
+            if (s == null || (optional && s == "")) return null; // Go's non-omitempty job times are empty until planned.
+            if (!DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var t)) throw new FormatException(name + ": expected timestamp");
+            return t;
+        }
+        public static JsonElement.ArrayEnumerator Array(JsonElement e, string name)
+        {
+            if (e.ValueKind != JsonValueKind.Array) throw new FormatException(name + ": expected array");
+            return e.EnumerateArray();
+        }
+    }
+}

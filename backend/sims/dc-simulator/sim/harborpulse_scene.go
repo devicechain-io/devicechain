@@ -3,6 +3,14 @@
 
 package sim
 
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"math"
+	"sync"
+)
+
 // The harborpulse scene layout: what the Unity showcase (demos/harborpulse-unity) builds the
 // waterfront from. It is generated from the manifest's own constants and committed in the Unity
 // project as Assets/Harborpulse/Resources/harbor_layout.json, and harborpulse_scene_test.go fails
@@ -32,6 +40,35 @@ type HarborSceneLayout struct {
 	Depot        HarborScenePoint   `json:"depot"`
 	Beats        []HarborSceneBeat  `json:"beats"`
 	Levels       HarborSceneLevels  `json:"levels"`
+	// Cues are planned hints for a director: when the scenario schedules each scripted event,
+	// and the wall-time durations its rules wait. No caption may depend on them; the platform's
+	// record is the evidence.
+	Cues HarborSceneCues `json:"cues"`
+	// TruckRoute is the route the truck drives, depot first, as waypoints.
+	TruckRoute []HarborScenePoint `json:"truckRoute"`
+	// ControlFrame is a rectangle, south-west corner first and anticlockwise, that strictly
+	// contains every position in this file. With the fence and depot rings' corners and the
+	// route's waypoints it is the set of manifest-side control points a presentation map
+	// triangulates.
+	ControlFrame []HarborScenePoint `json:"controlFrame"`
+}
+
+// HarborSceneCues are the scenario's planned cues. Keys carry their unit: Sim is a sim hour
+// (from the run's first midnight, so day 1 at 02:00 is 26), S is wall seconds.
+type HarborSceneCues struct {
+	TruckDepartSim     float64 `json:"truckDepartSim"`
+	TruckInPlainSim    float64 `json:"truckInPlainSim"`
+	TruckOutPlainSim   float64 `json:"truckOutPlainSim"`
+	TruckHomeSim       float64 `json:"truckHomeSim"`
+	ReplacementSim     float64 `json:"replacementSim"`
+	RolloutSim         float64 `json:"rolloutSim"`
+	LampServiceFromSim float64 `json:"lampServiceFromSim"`
+	LampServiceToSim   float64 `json:"lampServiceToSim"`
+	AirLockFromSim     float64 `json:"airLockFromSim"`
+	AirLockToSim       float64 `json:"airLockToSim"`
+	SilenceS           float64 `json:"silenceS"`
+	AirLockHoldS       float64 `json:"airLockHoldS"`
+	EscalateAfterS     float64 `json:"escalateAfterS"`
 }
 
 // HarborSceneQuay is one quay (a platform area).
@@ -160,5 +197,73 @@ func HarborpulseSceneLayout() HarborSceneLayout {
 	for _, b := range harborBeats {
 		out.Beats = append(out.Beats, HarborSceneBeat{Name: b.name, From: b.from, To: b.to})
 	}
+	out.Cues = HarborSceneCues{
+		TruckDepartSim: harborTruckDepart, TruckInPlainSim: HarborpulseTruckInPlainFrom,
+		TruckOutPlainSim: HarborpulseTruckInPlainTo, TruckHomeSim: harborTruckHome,
+		ReplacementSim: HarborpulseReplacementHour, RolloutSim: HarborpulseRolloutHour,
+		LampServiceFromSim: HarborpulseLampServiceFrom, LampServiceToSim: HarborpulseLampServiceTo,
+		AirLockFromSim: harborAirLockFrom, AirLockToSim: harborAirLockTo,
+		SilenceS: HarborpulseSilence.Seconds(), AirLockHoldS: HarborpulseAirLockHold.Seconds(),
+		EscalateAfterS: HarborpulseEscalateAfter.Seconds(),
+	}
+	for _, p := range harborTruckRoute() {
+		out.TruckRoute = append(out.TruckRoute, HarborScenePoint{Lat: p[1], Lon: p[0]})
+	}
+	out.ControlFrame = harborControlFrame(out)
 	return out
 }
+
+// harborControlFrameMargin is how far, in degrees, the control frame stands outside the outermost
+// position, before it is rounded outward to a thousandth of a degree.
+const harborControlFrameMargin = 0.005
+
+// harborControlFrame is the rectangle around every position the layout carries: the surveyed
+// lights, the fence rings, the depot and the truck route.
+func harborControlFrame(l HarborSceneLayout) []HarborScenePoint {
+	minLat, maxLat, minLon, maxLon := math.Inf(1), math.Inf(-1), math.Inf(1), math.Inf(-1)
+	grow := func(lat, lon float64) {
+		minLat, maxLat = math.Min(minLat, lat), math.Max(maxLat, lat)
+		minLon, maxLon = math.Min(minLon, lon), math.Max(maxLon, lon)
+	}
+	for _, d := range l.Devices {
+		if d.Position != nil {
+			grow(d.Position.Lat, d.Position.Lon)
+		}
+	}
+	for _, f := range l.Fences {
+		for _, p := range f.Ring {
+			grow(p[1], p[0])
+		}
+	}
+	grow(l.Depot.Lat, l.Depot.Lon)
+	for _, p := range l.TruckRoute {
+		grow(p.Lat, p.Lon)
+	}
+	down := func(v float64) float64 { return math.Floor((v-harborControlFrameMargin)*1000) / 1000 }
+	up := func(v float64) float64 { return math.Ceil((v+harborControlFrameMargin)*1000) / 1000 }
+	s, n, w, e := down(minLat), up(maxLat), down(minLon), up(maxLon)
+	return []HarborScenePoint{{Lat: s, Lon: w}, {Lat: s, Lon: e}, {Lat: n, Lon: e}, {Lat: n, Lon: w}}
+}
+
+// HarborpulseSceneLayoutJSON is the layout file's exact bytes: indented JSON and a final newline.
+func HarborpulseSceneLayoutJSON() ([]byte, error) {
+	b, err := json.MarshalIndent(HarborpulseSceneLayout(), "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(b, '\n'), nil
+}
+
+var harborLayoutDigest = sync.OnceValue(func() string {
+	b, err := HarborpulseSceneLayoutJSON()
+	if err != nil {
+		panic("harborpulse: the scene layout does not marshal: " + err.Error())
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+})
+
+// HarborpulseLayoutDigest is the lowercase hex SHA-256 of the layout file this sim generates. A
+// scene compares it with the file it was built with, line endings normalised to LF, and turns its
+// director off when they differ.
+func HarborpulseLayoutDigest() string { return harborLayoutDigest() }

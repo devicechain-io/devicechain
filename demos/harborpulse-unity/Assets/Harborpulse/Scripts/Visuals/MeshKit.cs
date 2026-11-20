@@ -138,6 +138,32 @@ namespace DeviceChain.Harborpulse.Visuals
             return this;
         }
 
+        /// <summary>A hollow cylindrical section; angles in degrees, with zero along +X.</summary>
+        public MeshKit Shell(Vector3 floor, float radius, float height, float thickness, float from = 0, float to = 360, int segments = 32)
+        {
+            for (var i = 0; i < segments; i++)
+            {
+                var a = Mathf.Lerp(from, to, i / (float)segments) * Mathf.Deg2Rad;
+                var b = Mathf.Lerp(from, to, (i + 1f) / segments) * Mathf.Deg2Rad;
+                var da = new Vector3(Mathf.Cos(a), 0, Mathf.Sin(a));
+                var db = new Vector3(Mathf.Cos(b), 0, Mathf.Sin(b));
+                var up = Vector3.up * height;
+                var oa = floor + da * radius; var ob = floor + db * radius;
+                var ia = floor + da * (radius - thickness); var ib = floor + db * (radius - thickness);
+                Quad(oa, oa + up, ob + up, ob);
+                Quad(ib, ib + up, ia + up, ia);
+                Quad(ia + up, ib + up, ob + up, oa + up);
+                Quad(oa, ob, ib, ia);
+                if (i == 0) Quad(ia, ia + up, oa + up, oa);
+                if (i == segments - 1) Quad(ob, ob + up, ib + up, ib);
+            }
+            return this;
+        }
+
+        public MeshKit Ring(Vector3 center, float radius, float width = 0.04f) => Shell(center, radius, width, width);
+
+        public MeshKit Rod(Vector3 a, Vector3 b, float radius = 0.04f) => Pipe(a, b - a, radius, (b - a).magnitude, 6);
+
         /// <summary>Destroys an object the scene made at run time, in Play mode or (for the Editor's stills) in edit mode.</summary>
         public static void Release(Object o)
         {

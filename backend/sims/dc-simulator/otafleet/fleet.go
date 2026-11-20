@@ -78,6 +78,8 @@ type Options struct {
 	StepDelay time.Duration
 	// Faults picks the misbehaving devices.
 	Faults Faults
+	// Modes overrides index-based faults for explicitly named device tokens.
+	Modes map[string]Mode
 	// DownloadDialAddr and DownloadInsecure shape the artifact download connection; see
 	// DownloadTransport. Both zero is a plain client.
 	DownloadDialAddr string
@@ -91,6 +93,16 @@ type Options struct {
 // Validate refuses a configuration that could only produce a fleet of devices that fail every
 // update, or no devices at all.
 func (o Options) Validate() error {
+	for token, mode := range o.Modes {
+		if token == "" {
+			return errors.New("otafleet: a named mode needs a device token")
+		}
+		switch mode {
+		case Healthy, BadHash, BadSignature, Interrupted, Offline:
+		default:
+			return fmt.Errorf("otafleet: unknown mode %q for device %q", mode, token)
+		}
+	}
 	switch {
 	case o.InitialVersion == "":
 		return errors.New("otafleet: InitialVersion is required")
@@ -103,6 +115,14 @@ func (o Options) Validate() error {
 			"images, so every update would be refused; give them a trusted public key or allow unsigned images")
 	}
 	return o.Faults.Validate()
+}
+
+// ModeFor selects a named override before falling back to the fleet position.
+func (o Options) ModeFor(token string, index int) Mode {
+	if mode, ok := o.Modes[token]; ok {
+		return mode
+	}
+	return o.Faults.ModeFor(index)
 }
 
 // Fleet is the set of simulated updatable devices of one instance and tenant.
@@ -178,7 +198,7 @@ func (f *Fleet) Attach(ctx context.Context, deviceToken, credentialID string, in
 
 	d := &device{
 		fleet: f, token: deviceToken, credentialID: credentialID, clientID: clientID + otaSessionSuffix,
-		mode:         f.opts.Faults.ModeFor(index),
+		mode:         f.opts.ModeFor(deviceToken, index),
 		desiredTopic: fmt.Sprintf("%s/%s/device-desired/%s", f.instanceID, f.tenant, deviceToken),
 		reportsTopic: fmt.Sprintf("%s/%s/device-reports/%s", f.instanceID, f.tenant, deviceToken),
 		msgs:         make(chan []byte, queueDepth),

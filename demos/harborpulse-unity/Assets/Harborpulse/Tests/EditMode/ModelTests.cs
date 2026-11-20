@@ -103,6 +103,49 @@ namespace DeviceChain.Harborpulse.Tests
             var text = Kit.LayoutText().Replace("PAW-GAUGE-NORTH-2", "PAW-GAUGE-NORTH-1");
             Assert.That(() => HarborLayout.Parse(text), Throws.TypeOf<FormatException>().With.Message.Contains("twice"));
         }
+
+        [Test]
+        public void TheCuesRouteAndControlFrameAreRead()
+        {
+            var l = Kit.Layout();
+            Assert.That(l.Cues.TruckInPlainSim, Is.EqualTo(17.75));
+            Assert.That(l.Cues.RolloutSim, Is.EqualTo(26));
+            Assert.That(l.Cues.SilenceS, Is.EqualTo(45));
+            Assert.That(l.TruckRoute[0].Lat, Is.EqualTo(l.Depot.Lat));
+            Assert.That(l.TruckRoute[0].Lon, Is.EqualTo(l.Depot.Lon));
+            Assert.That(l.ControlFrame[0].Lat, Is.LessThan(l.TruckRoute[1].Lat));
+            Assert.That(l.ControlFrame[2].Lat, Is.GreaterThan(l.PromenadeLat));
+        }
+
+        [Test]
+        public void MissingOrMisorderedCuesAreRefused()
+        {
+            Assert.That(() => HarborLayout.Parse(Kit.LayoutText().Replace("\"truckRoute\"", "\"route\"")),
+                Throws.TypeOf<FormatException>().With.Message.Contains("truckRoute"));
+            Assert.That(() => HarborLayout.Parse(Kit.LayoutText().Replace("\"truckInPlainSim\": 17.75", "\"truckInPlainSim\": 23")),
+                Throws.TypeOf<FormatException>().With.Message.Contains("not in order"));
+            Assert.That(() => HarborLayout.Parse(Kit.LayoutText().Replace("\"silenceS\"", "\"silence\"")),
+                Throws.TypeOf<FormatException>().With.Message.Contains("silenceS"));
+            Assert.That(() => HarborLayout.Parse(Kit.LayoutText().Replace("\"silenceS\": 45", "\"silenceS\": -45")),
+                Throws.TypeOf<FormatException>().With.Message.Contains("not positive"));
+            Assert.That(() => HarborLayout.Parse(Kit.LayoutText().Replace("\"lampServiceToSim\": 11.5", "\"lampServiceToSim\": 10")),
+                Throws.TypeOf<FormatException>().With.Message.Contains("ends before"));
+        }
+
+        [Test]
+        public void ARouteOffTheDepotOrAFrameThatMissesAPositionIsRefused()
+        {
+            var l = Kit.Layout();
+            var depotLat = l.Depot.Lat.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var text = Kit.LayoutText();
+            var routeAt = text.IndexOf("\"truckRoute\"", StringComparison.Ordinal);
+            var moved = text.Substring(0, routeAt) + text.Substring(routeAt).Replace("\"lat\": " + depotLat, "\"lat\": 49.79", StringComparison.Ordinal);
+            Assert.That(() => HarborLayout.Parse(moved), Throws.TypeOf<FormatException>().With.Message.Contains("does not start at the depot"));
+            var frameAt = text.IndexOf("\"controlFrame\"", StringComparison.Ordinal);
+            var south = l.ControlFrame[0].Lat.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var shrunk = text.Substring(0, frameAt) + text.Substring(frameAt).Replace("\"lat\": " + south, "\"lat\": 49.7999", StringComparison.Ordinal);
+            Assert.That(() => HarborLayout.Parse(shrunk), Throws.TypeOf<FormatException>().With.Message.Contains("not strictly inside the control frame"));
+        }
     }
 
     public class SitePlanTests

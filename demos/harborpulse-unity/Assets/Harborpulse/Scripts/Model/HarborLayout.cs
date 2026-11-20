@@ -83,6 +83,27 @@ namespace DeviceChain.Harborpulse.Model
     }
 
     /// <summary>
+    /// The scenario's planned cues: hints for a director's pre-roll, never evidence. Keys ending Sim are sim hours from the run's first midnight
+    /// (day 1 at 02:00 is 26); keys ending S are wall seconds.
+    /// </summary>
+    public sealed class LayoutCues
+    {
+        public double TruckDepartSim { get; internal set; }
+        public double TruckInPlainSim { get; internal set; }
+        public double TruckOutPlainSim { get; internal set; }
+        public double TruckHomeSim { get; internal set; }
+        public double ReplacementSim { get; internal set; }
+        public double RolloutSim { get; internal set; }
+        public double LampServiceFromSim { get; internal set; }
+        public double LampServiceToSim { get; internal set; }
+        public double AirLockFromSim { get; internal set; }
+        public double AirLockToSim { get; internal set; }
+        public double SilenceS { get; internal set; }
+        public double AirLockHoldS { get; internal set; }
+        public double EscalateAfterS { get; internal set; }
+    }
+
+    /// <summary>
     /// The harbour district as the simulator's manifest declares it: the committed <c>harbor_layout.json</c>, which the simulator's own test
     /// regenerates from the manifest and holds equal to it. Parsing is strict: an unknown version, kind or quay, a duplicate device or a missing
     /// field is a <see cref="FormatException"/> naming what is wrong, never a district drawn from a guess.
@@ -102,6 +123,13 @@ namespace DeviceChain.Harborpulse.Model
         public LatLon Depot { get; private set; }
         public IReadOnlyList<LayoutBeat> Beats { get; private set; }
         public LayoutLevels Levels { get; private set; }
+        public LayoutCues Cues { get; private set; }
+
+        /// <summary>The truck's route, depot first: the manifest's waypoints.</summary>
+        public IReadOnlyList<LatLon> TruckRoute { get; private set; }
+
+        /// <summary>A rectangle, south-west corner first and anticlockwise, strictly containing every manifest position in the file.</summary>
+        public IReadOnlyList<LatLon> ControlFrame { get; private set; }
 
         public LayoutDevice Find(string externalId)
         {
@@ -203,6 +231,45 @@ namespace DeviceChain.Harborpulse.Model
                     FloodCriticalM = Num(lv, "floodCriticalM", "levels"), QuayFloodingM = Num(lv, "quayFloodingM", "levels"),
                     WetWellHighM = Num(lv, "wetWellHighM", "levels"),
                 };
+
+                var c = Obj(root, "cues", "");
+                l.Cues = new LayoutCues
+                {
+                    TruckDepartSim = Num(c, "truckDepartSim", "cues"), TruckInPlainSim = Num(c, "truckInPlainSim", "cues"),
+                    TruckOutPlainSim = Num(c, "truckOutPlainSim", "cues"), TruckHomeSim = Num(c, "truckHomeSim", "cues"),
+                    ReplacementSim = Num(c, "replacementSim", "cues"), RolloutSim = Num(c, "rolloutSim", "cues"),
+                    LampServiceFromSim = Num(c, "lampServiceFromSim", "cues"), LampServiceToSim = Num(c, "lampServiceToSim", "cues"),
+                    AirLockFromSim = Num(c, "airLockFromSim", "cues"), AirLockToSim = Num(c, "airLockToSim", "cues"),
+                    SilenceS = Num(c, "silenceS", "cues"), AirLockHoldS = Num(c, "airLockHoldS", "cues"), EscalateAfterS = Num(c, "escalateAfterS", "cues"),
+                };
+                if (!(l.Cues.TruckDepartSim < l.Cues.TruckInPlainSim && l.Cues.TruckInPlainSim < l.Cues.TruckOutPlainSim && l.Cues.TruckOutPlainSim < l.Cues.TruckHomeSim))
+                    throw new FormatException("harbor layout: the truck cues are not in order (depart, in, out, home)");
+                if (!(l.Cues.LampServiceFromSim < l.Cues.LampServiceToSim) || !(l.Cues.AirLockFromSim < l.Cues.AirLockToSim))
+                    throw new FormatException("harbor layout: a cue window ends before it starts");
+                if (!(l.Cues.SilenceS > 0) || !(l.Cues.AirLockHoldS > 0) || !(l.Cues.EscalateAfterS > 0))
+                    throw new FormatException("harbor layout: a cue's wall duration is not positive");
+
+                var route = new List<LatLon>();
+                foreach (var p in Arr(root, "truckRoute", "")) route.Add(Point(p, "truckRoute[]"));
+                if (route.Count < 2) throw new FormatException("harbor layout: the truck route needs at least two waypoints");
+                if (route[0].Lat != l.Depot.Lat || route[0].Lon != l.Depot.Lon) throw new FormatException("harbor layout: the truck route does not start at the depot");
+                l.TruckRoute = route;
+
+                var frame = new List<LatLon>();
+                foreach (var p in Arr(root, "controlFrame", "")) frame.Add(Point(p, "controlFrame[]"));
+                if (frame.Count != 4 || frame[0].Lat != frame[1].Lat || frame[2].Lat != frame[3].Lat || frame[0].Lon != frame[3].Lon || frame[1].Lon != frame[2].Lon ||
+                    !(frame[2].Lat > frame[0].Lat) || !(frame[1].Lon > frame[0].Lon))
+                    throw new FormatException("harbor layout: the control frame is not a rectangle, south-west corner first and anticlockwise");
+                void Inside(LatLon p, string what)
+                {
+                    if (!(p.Lat > frame[0].Lat && p.Lat < frame[2].Lat && p.Lon > frame[0].Lon && p.Lon < frame[1].Lon))
+                        throw new FormatException("harbor layout: " + what + " " + p + " is not strictly inside the control frame");
+                }
+                foreach (var d in devices) if (d.Position.HasValue) Inside(d.Position.Value, d.ExternalId);
+                foreach (var f in fences) foreach (var p in f.Ring) Inside(p, "fence " + f.Token);
+                Inside(l.Depot, "the depot");
+                foreach (var p in route) Inside(p, "a truck route waypoint");
+                l.ControlFrame = frame;
                 return l;
             }
         }

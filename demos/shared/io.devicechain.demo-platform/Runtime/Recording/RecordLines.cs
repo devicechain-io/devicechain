@@ -92,6 +92,8 @@ namespace DeviceChain.Demos.Platform.Recording
         /// <summary>A command's queued time.</summary>
         public DateTimeOffset? QueuedAt { get; set; }
 
+        public double? Latitude { get; set; }
+        public double? Longitude { get; set; }
         public double? SpeedMps { get; set; }
         public double? HeadingDegrees { get; set; }
         public double? ElevationMetres { get; set; }
@@ -124,6 +126,8 @@ namespace DeviceChain.Demos.Platform.Recording
                     break;
                 case ObservedKinds.Location:
                     w.WriteString("dev", Device);
+                    JsonIo.WriteNum(w, "latitude", Latitude);
+                    JsonIo.WriteNum(w, "longitude", Longitude);
                     JsonIo.WriteNum(w, "speed", SpeedMps);
                     JsonIo.WriteNum(w, "heading", HeadingDegrees);
                     JsonIo.WriteNum(w, "elev", ElevationMetres);
@@ -203,6 +207,8 @@ namespace DeviceChain.Demos.Platform.Recording
                     break;
                 case ObservedKinds.Location:
                     l.Device = JsonIo.RequireStr(e, "dev", "location");
+                    l.Latitude = JsonIo.NumOrNull(e, "latitude");
+                    l.Longitude = JsonIo.NumOrNull(e, "longitude");
                     l.SpeedMps = JsonIo.NumOrNull(e, "speed");
                     l.HeadingDegrees = JsonIo.NumOrNull(e, "heading");
                     l.ElevationMetres = JsonIo.NumOrNull(e, "elev");

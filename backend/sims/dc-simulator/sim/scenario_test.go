@@ -275,8 +275,8 @@ func TestHarborpulseLongDayBuffersTheWholeOutage(t *testing.T) {
 		t.Fatalf("a %s day at the default cadence was refused: %v", day, err)
 	}
 	buffered, delivered := outage(s.ensureModel())
-	if perCharger := buffered / len(harborTokens(harborCharger, HarborpulseEastQuay)); perCharger <= harborBufferCap {
-		t.Fatalf("a %s day buffers %d readings per charger, not more than the floor %d: the test shows nothing", day, perCharger, harborBufferCap)
+	if perCharger := buffered / len(harborTokens(harborCharger, HarborpulseEastQuay)); perCharger != 90 {
+		t.Fatalf("a %s day buffers %d entries per charger, want 90", day, perCharger)
 	}
 	if delivered != buffered {
 		t.Fatalf("a %s day buffered %d readings and delivered %d: the buffer overflowed on a clean day", day, buffered, delivered)
@@ -284,14 +284,53 @@ func TestHarborpulseLongDayBuffersTheWholeOutage(t *testing.T) {
 
 	// The control: the same day with the old fixed buffer loses readings the ledger counted.
 	fixed := newHarborModelWith(1, day, harborDefects{})
-	fixed.bufferCap = harborBufferCap
+	fixed.bufferCap = 45
 	if b, d := outage(fixed); d >= b {
 		t.Fatalf("with a fixed %d-reading buffer a %s day delivered %d of %d: the overflow this test exists for cannot show", harborBufferCap, day, d, b)
 	}
 
-	// A day and cadence whose outage no charger could hold are refused, not run to a red day.
+	// Emit cadence cannot change the size of the device-local outage log.
 	fast := NewHarborpulse(1, Load{EmitInterval: 10 * time.Millisecond})
-	if err := ConfigureScenario(fast, ScenarioOptions{DayLength: day}); err == nil {
-		t.Fatalf("a %s day at a 10ms cadence (%d readings per outage) was accepted", day, harborBufferNeed(day, 10*time.Millisecond))
+	if err := ConfigureScenario(fast, ScenarioOptions{DayLength: day}); err != nil {
+		t.Fatal(err)
+	}
+	if harborBufferNeed(day, 10*time.Millisecond) != 90 {
+		t.Fatal("emit interval changed outage log capacity")
+	}
+}
+
+func TestScenarioClockBeatsWire(t *testing.T) {
+	s := NewHarborpulse(1, Load{})
+	c := s.(ScenarioClockReporter).ScenarioClock(time.Now())
+	b, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Beats []struct {
+			Name string  `json:"name"`
+			From float64 `json:"from"`
+			To   float64 `json:"to"`
+		} `json:"beats"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Beats) != len(harborBeats) {
+		t.Fatalf("reported %d beats, want %d", len(wire.Beats), len(harborBeats))
+	}
+	for i, want := range harborBeats {
+		got := wire.Beats[i]
+		if got.Name != want.name || got.From != want.from || got.To != want.to {
+			t.Errorf("beat %d: %+v, want %+v", i, got, want)
+		}
+	}
+	c.Beats[0].Name = "changed"
+	if s.(ScenarioClockReporter).ScenarioClock(time.Now()).Beats[0].Name != harborBeats[0].name {
+		t.Fatal("clock calls share a mutable beat slice")
+	}
+	b, err = json.Marshal(ScenarioClock{Name: "no-beats"})
+	if err != nil || strings.Contains(string(b), "\"beats\"") {
+		t.Fatalf("no beats must be omitted: %s, %v", b, err)
 	}
 }

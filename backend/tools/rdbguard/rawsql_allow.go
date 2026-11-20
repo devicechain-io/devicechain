@@ -138,7 +138,7 @@ var rawSQLAllowList = []siteEntry{
 	},
 
 	{
-		Path: "backend/services/device-management/model/api_x509_crl_stage.go", Func: "applyStagedEntries", Count: 4,
+		Path: "backend/services/device-management/model/identity/x509_crl_stage.go", Func: "ApplyStagedEntries", Count: 4,
 		Why: "the set-based write of one CRL's entries from the transaction's own staging table: two counts, a " +
 			"DELETE and an INSERT...SELECT over device_revoked_certificates. Each statement is a constant text " +
 			"whose WHERE names tenant_id, trust_anchor_id, revocation_list_id, kind, issuer_key and " +
@@ -150,7 +150,7 @@ var rawSQLAllowList = []siteEntry{
 	},
 
 	{
-		Path: "backend/services/device-management/model/api_x509_crl_stage.go", Func: "keepNewSerials", Count: 2,
+		Path: "backend/services/device-management/model/identity/x509_crl_stage.go", Func: "KeepNewSerials", Count: 2,
 		Why: "copies, into a TEMP table private to the transaction, the staged serials the list does not hold " +
 			"yet (the live-session kick's input). The SELECT's NOT EXISTS over device_revoked_certificates is a " +
 			"constant text whose WHERE binds tenant_id, trust_anchor_id, revocation_list_id, kind, issuer_key " +

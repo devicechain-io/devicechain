@@ -12,15 +12,13 @@ using UnityEngine.Rendering.Universal;
 namespace DeviceChain.Harborpulse.EditorTools
 {
     /// <summary>
-    /// Writes the scene file: a camera with URP post-processing, a global volume (ACES tonemapping and bloom, which the lamps and beacons glow
-    /// through), and one GameObject carrying <see cref="HarborpulseApp"/>, which builds everything else in code when the scene plays. The scene
+    /// Writes the scene file: a camera with URP post-processing, runtime grading, and one GameObject carrying <see cref="HarborpulseApp"/>, which builds everything else in code when the scene plays. The scene
     /// holds no geometry, so regenerating it is safe: Harborpulse > Build Scene, or in batch mode
     /// <c>-executeMethod DeviceChain.Harborpulse.EditorTools.HarborSceneBuilder.BuildFromCommandLine</c>.
     /// </summary>
     public static class HarborSceneBuilder
     {
         public const string ScenePath = "Assets/Harborpulse/Scenes/Harborpulse.unity";
-        public const string VolumePath = "Assets/Settings/HarborVolumeProfile.asset";
 
         [MenuItem("Harborpulse/Build Scene")]
         public static void Build()
@@ -37,18 +35,14 @@ namespace DeviceChain.Harborpulse.EditorTools
             data.renderPostProcessing = true;
             data.antialiasing = AntialiasingMode.SubpixelMorphologicalAntiAliasing;
 
-            var volGo = new GameObject("Global Volume");
-            var volume = volGo.AddComponent<Volume>();
-            volume.isGlobal = true;
-            volume.sharedProfile = Profile();
-
             var appGo = new GameObject("Harborpulse");
             var app = appGo.AddComponent<HarborpulseApp>();
             app.sceneCamera = cam;
             app.litShader = Shader.Find("Universal Render Pipeline/Lit");
             app.waterShader = AssetDatabase.LoadAssetAtPath<Shader>("Assets/Harborpulse/Shaders/HarborWater.shader");
+            app.wetWellShader = AssetDatabase.LoadAssetAtPath<Shader>("Assets/Harborpulse/Shaders/WetWellWater.shader");
             app.skyShader = AssetDatabase.LoadAssetAtPath<Shader>("Assets/Harborpulse/Shaders/HarborSky.shader");
-            if (app.litShader == null || app.waterShader == null || app.skyShader == null)
+            if (app.litShader == null || app.waterShader == null || app.skyShader == null || app.wetWellShader == null)
                 throw new InvalidOperationException("a shader is missing: URP Lit " + (app.litShader != null) + ", water " + (app.waterShader != null) + ", sky " + (app.skyShader != null));
 
             System.IO.Directory.CreateDirectory("Assets/Harborpulse/Scenes");
@@ -56,27 +50,6 @@ namespace DeviceChain.Harborpulse.EditorTools
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
             AssetDatabase.SaveAssets();
             Debug.Log("[harborpulse] wrote " + ScenePath);
-        }
-
-        static VolumeProfile Profile()
-        {
-            var profile = AssetDatabase.LoadAssetAtPath<VolumeProfile>(VolumePath);
-            if (profile != null) return profile;
-            profile = ScriptableObject.CreateInstance<VolumeProfile>();
-            AssetDatabase.CreateAsset(profile, VolumePath);
-            var tone = profile.Add<Tonemapping>(true);
-            tone.mode.Override(TonemappingMode.ACES);
-            var bloom = profile.Add<Bloom>(true);
-            bloom.threshold.Override(1.0f);
-            bloom.intensity.Override(0.7f);
-            bloom.scatter.Override(0.65f);
-            var colour = profile.Add<ColorAdjustments>(true);
-            colour.postExposure.Override(0.35f);
-            colour.saturation.Override(6f);
-            foreach (var c in profile.components) AssetDatabase.AddObjectToAsset(c, profile);
-            EditorUtility.SetDirty(profile);
-            AssetDatabase.SaveAssets();
-            return profile;
         }
 
         /// <summary>Batch mode: build the scene and quit with 0, or 1 on any failure.</summary>

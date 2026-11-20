@@ -21,7 +21,8 @@ func TestPeriodicPassMetricsWiring(t *testing.T) {
 	ms.UseMetricsRegistry(reg)
 	processor.NewUsageRollupSweep(ms, nil, nil, processor.UsageRollupInterval, core.NewNoOpLifecycleCallbacks())
 	backfill.NewTailSweeper(ms, nil, backfill.Config{}, nil, core.NewNoOpLifecycleCallbacks())
-	tasks := []string{"usage_rollup", "rollup_tail"}
+	processor.NewEntityDeletionResweep(ms, nil, core.NewNoOpLifecycleCallbacks())
+	tasks := []string{"usage_rollup", "rollup_tail", "entity_deletion_resweep"}
 	subsystem := "eventmanagement"
 
 	families, err := reg.Gather()

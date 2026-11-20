@@ -491,7 +491,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 		certMove := repoint && x509 && cur.TrustAnchorId != nil
 		if certMove {
 			movedAnchor = *cur.TrustAnchorId
-			if err := lockTrustAnchorShareByID(tx, movedAnchor); err != nil {
+			if err := identity.LockTrustAnchorShareByID(tx, movedAnchor); err != nil {
 				return err
 			}
 			var tokens []string

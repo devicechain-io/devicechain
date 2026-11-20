@@ -18,6 +18,19 @@ namespace DeviceChain.Demos.Tests
         }
 
         [Test]
+        public void LocationCoordinatesRoundTripAndOldRecordingsStayUnknown()
+        {
+            var line = ObservedLine.Of(ObservedKinds.Location);
+            line.Utc = At; line.Device = "truck"; line.Latitude = 49.802; line.Longitude = -12.2;
+            var back = ObservedLine.Read(Parse(line.ToJson()));
+            Assert.That(back.Latitude, Is.EqualTo(49.802));
+            Assert.That(back.Longitude, Is.EqualTo(-12.2));
+            var old = ObservedLine.Read(Parse("{\"t\":0,\"utc\":\"2026-10-01T12:00:00Z\",\"k\":\"location\",\"dev\":\"truck\"}"));
+            Assert.That(old.Latitude, Is.Null);
+            Assert.That(old.Longitude, Is.Null);
+        }
+
+        [Test]
         public void AMeasurementLineReadsBackAsItWasWritten()
         {
             var line = ObservedLine.Of(ObservedKinds.Measurement);

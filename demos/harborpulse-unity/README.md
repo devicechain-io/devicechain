@@ -9,16 +9,23 @@ A 3D scene of the `harborpulse` simulator's waterfront: the fictional Port Alder
 gauges, street lights, pump stations, EV chargers, two metered buildings and the flood-response truck, through
 the scenario's compressed day with its storm and king tide.
 
-**Status: milestone U0.** The project, the scene skeleton and the first live binding:
+**Status: U1 scene and evidence views, plus the engine-free U2a director model.** The existing scene builds itself in code from the manifest's surveyed
+layout. It includes stone quays and jetties, an enclosed Basin with a ferry berth, cut-away pump wells,
+gauge variants, chargers and parked hatchbacks, lamps, the utility truck, metered buildings and the town.
+Named rig nodes keep geometry refinements separate from the evidence views.
 
-- the waterfront is laid out in code from the manifest's own coordinates (`Assets/Harborpulse/Resources/harbor_layout.json`);
-- a time-of-day sky (sun and moon on arcs, graded dawn, day, dusk and night, stars, a storm overcast) driven by the
-  runner's scenario clock;
-- a first pass of the harbour water: a custom URP shader with Gerstner waves, depth colour, foam and rain, whose
-  height on each quay is that quay's observed tide;
-- live, read-only binding of the tide gauges and the street lights through the DeviceChain C# SDK.
+The scenario clock drives the sky and runtime URP grading. Observed gauge medians drive regional tide,
+planar reflections and overtopping; observed tide rise and the WORLD storm drive seawall spray. The water
+has Gerstner waves, depth colour, foam and rain. Wet wells use tiny ripples with shared lighting and no reflection.
+Their floor is independent of harbour datum: `wet_well_m` spans 0-4 m above the well floor. Fixed 0.8 m,
+2.5 m and 3.2 m markers stay separate from a reported `well_alarm_m` attribute.
 
-Pumps, alarms, commands and the truck's movements come in U1; the full art pass in U5.
+Pump, charger, gauge, lamp and truck views apply one detached model snapshot per frame. Cards show
+observed values and ages, command states actually seen, start evidence, OTA outcome words, replacement
+readings and platform suppression evidence. Beacon identities survive severity changes; acknowledged
+alarms stay steady and a cleared alarm briefly shows a green tick. Missing readings remain missing.
+WORLD feeder, OTA and crew cues use cool white and blue-grey styling. Amber identifies platform alarms,
+coral identifies failures, green identifies confirmations and blue identifies flow.
 
 ## What it shows, and where each thing comes from
 
@@ -28,7 +35,14 @@ Pumps, alarms, commands and the truck's movements come in U1; the full art pass 
 | Where every other device stands | the scene's own placement along its quay; the manifest gives them no position |
 | The time of day, the sun, the stars, the storm | the runner's `GET /status` (`scenario.startedAt`, `day`, `simHour`), and the storm beat's hours |
 | The water's height on each quay | the median of that quay's tide gauges' `water_level_m`, as the platform reports them, fresh readings only |
-| The waves, foam and rain | visual only, zero-mean; they follow the storm and never move the tide |
+| The waves, foam and rain | visual only, zero-mean; they follow the WORLD storm and never move the tide |
+| Pump water, current needle, impeller and outfall | observed `wet_well_m`, `pump_current_a`, `pump_running` and `flow_lps`; rotation and streak rate are visual mappings |
+| Alarm rings and counters | observed alarms, by device and alarm key, including acknowledgement and clear |
+| Charger screen, cable and car | observed power/session and OTA evidence; connector glow is a visual mapping of reported temperature |
+| Truck placement and heading | observed WGS84 fixes, interpolated visually; no fix means depot placement with a "no fix" label |
+| Feeder fades, maintenance rings and crew | runner beats and declared plans, WORLD only |
+| Lamp suppression ring and service card | an observed platform suppression window targeting that lamp |
+| Replacement plate | runner replacement declaration; the card separately counts readings observed afterwards on the bound device |
 | Each street light | the platform's last `lamp_on` and `dim_pct` for it: on, off, silent (nothing for longer than the platform's 45 s silence window) or unknown |
 
 The scene never writes to the platform. It creates no device credential, opens no device session and sends
@@ -76,7 +90,9 @@ devices (37 of 37) and the measurement and alarm streams. Within a few seconds e
 its gauges' median and how many contributed, and the lights switch with the platform's reports (off by day,
 on from 18:00, and East Quay's go silent through its feeder outage, 19:45 to 21:15).
 
-Keys: `0` overview, `1`-`3` the quays, `4` an East Quay gauge, `5` the promenade. Drag to orbit, wheel to dolly.
+Keys: `0` overview, `1`-`3` the quays, `4` an East Quay gauge, `5` the promenade, `6` North Quay pump,
+`7` Basin pump, `8` North Quay chargers, `9` North Quay gauge 3, `F1` East lamp 3, `F2` the following truck shot.
+Drag to orbit, wheel to dolly. Shot indices for batch stills are 0-11 (`F1` = 10, `F2` = 11).
 
 ## Layout
 
@@ -84,10 +100,12 @@ Keys: `0` overview, `1`-`3` the quays, `4` an East Quay gauge, `5` the promenade
 Assets/Harborpulse/
   Resources/harbor_layout.json   generated from the simulator's manifest (see below)
   Scenes/Harborpulse.unity       a camera, a volume and HarborpulseApp; everything else is built in code
-  Shaders/                       HarborWater.shader, HarborSky.shader, HarborWaves.hlsl
-  Scripts/Model/                 engine-free: layout, site plan, scenario clock, sky, waves, tide and lamp boards
+  Shaders/                       harbour water, reflection-free wet-well water, sky and shared wave/lighting HLSL
+  Scripts/Model/                 engine-free snapshot, evidence reducers, tide, sky, WORLD cues and visual mappings
   Scripts/Live/                  the read-only platform link: runner config, /status, the shared observer
-  Scripts/Visuals/               the world builder, sky, water, camera rig and the composition root
+  Scripts/Visuals/               composition, camera, sky, water, runtime grading and planar reflection
+    Assets/                     procedural builders, shared named rigs and WORLD crew props
+    Views/                      snapshot views, persistent beacons and evidence cards
   Scripts/Editor/                Harborpulse > Build Scene, Harborpulse > Render Preview Stills
   Tests/EditMode/                the model's tests (also run by Dotnet~)
 Dotnet~/                         compiles Scripts/Model and runs Tests/EditMode with the dotnet SDK
@@ -99,7 +117,12 @@ starts.
 ### The layout file
 
 `harbor_layout.json` is the manifest's district: every device with its external ID, type and quay, the street
-lights' surveyed positions, the depot, the geofences, the story's beats and the flood levels. The simulator's
+lights' surveyed positions, the depot, the geofences, the story's beats and the flood levels. It also carries
+the scenario's planned cues (`cues`: sim hours ending `Sim`, wall seconds ending `S`), the truck's route
+(`truckRoute`, depot first) and a `controlFrame` rectangle around every position in the file. The cues are hints
+for a director's timing, never evidence. The flood-plain fence and the depot stand behind East Quay, inland of
+its lights, in the manifest's own coordinates. The simulator's `/status` reports `scenario.layoutDigest`, the
+SHA-256 of the layout it generates, so a scene can tell it was built for another layout. The simulator's
 `TestHarborpulseSceneLayoutFixture` holds it equal to what the manifest produces, so a change to the scenario
 that moves a device fails that test until the file is regenerated:
 
@@ -123,8 +146,193 @@ The shaders, the Editor tools and the EditMode suite inside Unity need the Edito
 ```bash
 Unity -batchmode -projectPath demos/harborpulse-unity -runTests -testPlatform EditMode -testResults results.xml
 Unity -batchmode -projectPath demos/harborpulse-unity \
-  -executeMethod DeviceChain.Harborpulse.EditorTools.HarborStills.ShootFromCommandLine -hp-stills-dir Stills
+  -executeMethod DeviceChain.Harborpulse.EditorTools.HarborStills.ShootFromCommandLine -hp-stills-dir Stills -hp-stills-width 1600 -hp-stills-height 900
 ```
 
-The second renders look-check stills of the offline preview (morning, midday, dusk, the storm surge, night).
-They are stills of the preview's stand-in values and must not be captioned as a live run.
+The default set renders eleven U1 look checks: day overview/reflection, Basin pump before and after a
+platform-evidenced start, North Quay cut-away hero, East Quay night surge and outage, next-night charger
+OTA with a failed target, gauge replacement, lamp service, promenade reflections and the truck. These
+are preview stand-ins and must not be captioned as live data. Every PNG keeps a burnt-in OFFLINE PREVIEW
+stamp and the same evidence card text as IMGUI (`Camera.Render()` does not capture IMGUI itself).
+
+`-hp-stills-width` and `-hp-stills-height` default to 1600x900. Override the set with, for example,
+`-hp-stills "17.95:7,18.35:7,26.7:8"`; hours above 24 select subsequent days. Files use
+`harborpulse-<hh>h<mm>-<shot-slug>.png`. The stills path observes a forward lead-in at scenario speed,
+then holds the target to settle fades and cleared ticks. It explicitly renders the planar pass before
+the scene camera, using the same runtime grading as play mode.
+
+The planar pass excludes layer 30 (assigned in code only to the harbour surface), clips below the median
+observed water plane, and clears alpha to zero for the sky fallback. PC uses half resolution; an active
+pipeline asset whose name contains `Laptop` uses quarter resolution and updates every other play frame.
+The reflection camera has no post-processing or shadows. Runtime materials, meshes, camera, texture and
+grading profile are released by `Teardown()`.
+
+### Read-only requests
+
+All platform requests use the runner's operator authority. The scene sends these reads only:
+
+| Area | Reads |
+| --- | --- |
+| Runner HTTP | `GET /config.json` (including refresh), `GET /status` |
+| Device management | `devicesByExternalId` with device type/profile metric and command definitions for binding; `alarms`; `alarmStream` subscription |
+| Device state | `latestMeasurements` initial snapshots; `latestLocations` with latitude/longitude, heading and speed each second; `deviceStatesByDeviceToken` presence every five seconds |
+| Event management | `measurementStream` subscription |
+| Command delivery | shared observer `commands` and `commandsByToken` every second; harborpulse also reads the newest ten commands per bound pump in one aliased query every two seconds, including terminal records and their platform timestamps |
+| Device management supplements | `alarmSuppressionWindowsByToken` for declared lamp jobs and numeric SHARED `entityAttributes` for each pump's `well_alarm_m`, every five seconds |
+| Update management | `updateRollout` and bounded `updateRolloutTargets` every two seconds after a runner rollout declaration |
+
+The shared observer also checks the active-alarm snapshot every five seconds to detect stream gaps.
+There are no credential queries, mutations, device sessions or command submissions.
+
+The portable compile checker accepts `--no-restore` when projects have already been restored. For a
+supplemental C# check of URP and Editor code without launching Unity, point it at an installed Editor
+and the project's already imported assemblies:
+
+```bash
+sdks/unity/tools/UnityCompileCheck/compile-check.sh --no-restore \
+  -p:UnityManagedDir="/path/to/Editor/Data/Managed" \
+  -p:HarborUrpAssembliesDir="/path/to/harborpulse-unity/Library/ScriptAssemblies" \
+  -p:CompileHarborEditor=true
+```
+
+This checks C# API compatibility; shader compilation and visual inspection still require Unity.
+
+## U1 snapshot contract
+
+`Model/` has no Unity dependency. Both `PreviewSource` and `HarborLiveSession.Source` implement
+`IHarborSource`. After `live.Tick()` drains the shared observer and advances the read-only polls, build
+one detached snapshot per frame:
+
+```csharp
+var model = new HarborObservedModel(layout); // keep across frames, one instance per runner run
+// In Update, on the main thread:
+live.Tick();
+HarborFrame frame = model.Update(live.Source, live.Clock.Read(now), now);
+```
+
+`HarborFrame` holds WORLD cues separately from PLATFORM evidence: quay levels, lamp states, pump
+presentations, charger boards, readings (including meter metrics), beacons and per-device alarm counts,
+platform command records and observed-status history, truck fix, lamp-service evidence and replacement evidence. Collections are
+read-only, and later updates never change an earlier frame. Missing values remain nullable. Every
+measurement retains its occurred instant; command evidence retains nullable platform timestamps and its observation instant, and OTA evidence retains its observation instant.
+`ReadProblem` reports supplementary-read failures alongside the last evidence and its age.
+
+Use `StoryCues` for WORLD styling only. Runner `beats` take precedence even when the list is empty;
+absent beats fall back to the committed layout with an explicit note. Job and replacement instants use
+`ScenarioStatus.ToSimSeconds`, the inverse of the verifier's wall-time formula. The OTA night is the day
+after the opening day, at `scheduleHour`, for one sim hour. With no S5 OTA declaration there is no OTA
+cue. The replacement crew's visual window lasts half a sim hour. These are runner plans, never platform
+completion claims. Unknown S5 members are discarded; no credential fields or raw status JSON are retained.
+
+Beacon identity is `(external ID, alarm key)`, so severity changes resize the same beacon. A clear holds
+a green tick for two wall seconds from its first observation by the model. Acknowledgement removes the
+pulse. Alarm counts exclude cleared ticks. Pump command history shows QUEUED at `queuedTime`, SENT at
+`sentTime`, and terminal results at `respondedTime`, only when those platform timestamps exist, plus
+statuses actually seen by the observer. Cards label platform records with their timestamps and ages,
+show an observed status the platform also recorded once (as the record), and list the newest six rows with
+a count of the earlier rows not shown; there is no animation of missed transitions. PLATFORM start evidence compares a successful start-pump's
+`respondedTime` with the first running=1 reading after an observed running=0: the response must be at
+or before that reading's `occurredTime` and after the off interval began. Previous-cycle successes do
+not qualify. A scene that joined while running says UNCONFIRMED (joined while running).
+FLOAT-CONSISTENT additionally requires a contemporaneous well at the float and positive coverage from
+both the shared observer and the pump-history poll across the transition. Missing coverage stays UNCONFIRMED.
+The fixed 2.5 m high marker, 3.2 m float and 0.8 m cut-off are separate from the reported `well_alarm_m`.
+Impeller speed and connector glow are explicitly visual mappings.
+
+Live supplementary reads are query constants in `HarborReadQueries` (guarded by tests). Device management
+reads the lamp job's suppression window and each bound pump's numeric SHARED `well_alarm_m` every five
+seconds. Update management uses a raw bearer-authenticated GraphQL POST every two seconds once the
+runner supplies a rollout token, with one request in flight and one retry after a 401 refresh. It preserves
+the platform's rollout outcome and attempt-state words independently. Target pages are bounded at 1000;
+truncation is reported. There is no SDK change or mutation.
+
+The composition root uses `live.Clock` and `live.Source.Status`, with one status poll. It reconnects and rebinds after a runner restart, discarding the old observer, and creates a new model
+before each preview seek, so accumulated evidence cannot leak between runs. `WaterMotion` derives the reflection median, spray mapping and overtopping strength in the
+engine-free model; the views only apply those values.
+
+The OFFLINE PREVIEW remains a deterministic stand-in, **not platform data**. It now supplies the pump
+sequence (including a North Quay float-consistent case), East Quay flood escalation and outage alarms,
+lamp service, charger heat/derate and next-night OTA, truck route and gauge replacement. Every existing
+preview banner and still stamp remains in place.
+
+## U2a director model
+
+`Scripts/Model/Director/` adds the compact presentation map, strict storyboard, evidence predicates,
+deterministic live scheduler, free-roam ownership model and NDJSON recorder. This slice supplies model
+APIs and offline tests; the existing scene and live observer are not wired to them yet.
+
+- `PresentationMap` owns manifest-to-presentation conversion. Its constrained mesh splits the manifest
+  frame on each control coordinate, with Steiner vertices at intersections, and triangulates every
+  resulting rectangle. Fence edges are chains of triangle edges. The authored strip maps are monotone;
+  `Validate()` reports inverted triangles. Non-rectilinear fence constraints fail explicitly. Device
+  anchors, quay polygons, water, breakwaters, road and named camera poses are exposed in metres.
+  Pass recorded platform area membership to apply M2 and inspect `ReadinessWarnings` before directing.
+- `Storyboard.Parse(json, map)` loads `Resources/storyboard.json`. Caption alternatives share a slot;
+  the first satisfied claim wins, then pre/scenario/fallback text. Captions retain authored line breaks.
+  Cut segments have absolute recorded wall spans, independent move durations, caption slots and allowed
+  chain nodes. The short cut excludes the flood rail as well as the extra pages.
+- `Observation` identities include run, kind, device, alarm key/cycle, command, attempt, status and
+  source. The read-only observer adapter must supply real record identities and exact platform states.
+  Measurement identities include their occurred instant. Derived adapter fields such as `afterFailure`
+  and `afterReplacement` must be established from the named records, never from scenario cues.
+  `$trigger.cycle` binds proof to the active alarm cycle. Numeric caption placeholders bind to explicitly
+  declared evidence fields. A scenario ledger supplies an expected set, never proof of platform storage.
+- Positive coverage and gaps both go into `ObservationStore`. Exact-set and absence predicates require
+  positive coverage over the whole interval and reject any overlapping gap. A reconnect snapshot retains
+  the original event identities, so the scheduler's per-run consumed set prevents a second trigger.
+- Call `Scheduler.Tick` with an absolute sim hour (26 means the following night's 02:00), monotonic
+  seconds, clock freshness, digest agreement and defects. Its returned events carry page states, shots,
+  caption text and evidence keys. A stale clock freezes decisions; digest disagreement turns direction
+  off. `FreeRoam` separately reports a continuous director blend weight and remains available then.
+- Supply four caller-owned writers to `Recorder`: observed, world, director and checkpoints. Call
+  `Observe`, `World`, `Decision`, `Coverage`, and `Consumption(scheduler.Consumed)` as inputs arrive, and
+  `Advance` every frame, including idle frames. Checkpoints fall on exact 60-second recording boundaries.
+  `RecordingReader.Seek` reconstructs the observed state and recorded decisions; `SeekCut` maps show
+  time to the recording and silently consumes skipped events. It does not rerun a live scheduler or
+  invent missing observations. `RecordedState.Hash()` is stable across dictionary and token-set order.
+
+Authoring resolutions: the source timing table and individual shots disagree in several places. The
+file keeps page budgets at exactly 90 and 300 seconds, and gives every caption at least three seconds.
+The short cold open therefore uses two seconds of storm plus a three-second title; the short well
+entry uses a two-second move plus a three-second caption. Restore shots sum to 32 seconds and OTA
+shots to 38 seconds in the longer cut. The platform-verb fallbacks “The fault is detected.” and
+“Silence detected.” are gated claims. “A firmware update” is treated as a noun phrase by the lint.
+The opening recording disclosure and the end-card sub-line and position disclosure are scheduled
+as separate overlays in both cuts. The c90 OTA card carries the bound terminal totals and concurrency
+limit. Each segment explicitly carries its shared home seam pose and half-second dissolve.
+
+Windows verification with cached NuGet packages (redirects every project's intermediate/output files
+under this demo, and avoids inaccessible user SDK/config directories):
+
+```powershell
+cd demos/harborpulse-unity/Dotnet~
+powershell -NoProfile -ExecutionPolicy Bypass -File Verify-Director.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File Verify-Director.ps1 -CompileCheck
+python verify_director_mutants.py
+```
+
+The mutation runner changes one production expression at a time, requires a named failing NUnit test
+(compiler errors do not count), and restores the original bytes in `finally`. Logs, TRX results and the
+mutation summary are in ignored `Dotnet~/.build/`.
+
+U2a review corrections: the latitude strips now cover the southern control frame and keep depot-to-plain
+travel northbound. The metre grid spans the plain, depot and route plus ten metres. Observation history
+retains refreshed snapshots; `mode: occurred` selects an immutable event, while `mode: current` first
+reduces snapshots by entity/cycle before testing status and freshness. Event consumption never depends
+on observation time. Named conjunction records (`as`, `$match`) and trigger references join notification,
+OTA, replacement and clear proof. Missing set fields return an explicit evidence error; empty platform
+sets cannot prove storage, and the six-device claim requires cardinality six.
+
+Caption opportunities survive provisional text and shot changes until their authored hold deadline.
+Coverage is fed incrementally during playback; an open-window absence statement uses `throughNow`,
+while a completed-window statement requires its entire interval. Truck page five has an explicit
+missing-trigger skip policy. The control fixtures compare complete emitted output deltas against the
+clean recording, including caption text/endings, evidence identities, rail labels/links, shots, skips
+and wall times. Refresh fixtures only with `HARBORPULSE_UPDATE_FIXTURES=1`, then review every delta.
+Layout cue references resolve silence and air-lock wall offsets using the actual day length; the
+same timeline tests run at 1,440 and 2,880 seconds per day.
+
+The mutation verifier first requires a green complete baseline and confirms every selected test ran.
+Each mutant receives a unique results directory. A compile failure or absent selected test cannot
+count as a kill. Source restoration is followed by a fresh complete build/test, even on failure.
+SDK and package selection use the caller's environment rather than an account-specific path.

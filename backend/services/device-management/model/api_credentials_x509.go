@@ -93,7 +93,7 @@ func (api *Api) createX509Credential(ctx context.Context, device *Device, reques
 		// the chain verified, before this transaction, and a disable or a delete since then must
 		// not be missed. LOCK ORDER: anchor, then device (a move in UpdateDeviceCredential takes
 		// the device alone).
-		locked, err := lockTrustAnchorShareByToken(tx, anchorToken)
+		locked, err := identity.LockTrustAnchorShareByToken(tx, anchorToken)
 		if err != nil {
 			return err
 		}
@@ -120,7 +120,7 @@ func (api *Api) createX509Credential(ctx context.Context, device *Device, reques
 		}
 		// The path it was created through, for a later revocation to find its sessions by. A
 		// hint, in the credential's own transaction so a credential never exists without it.
-		return writeChainLinks(tx, created.ID, anchor.ID, verified.Chain)
+		return identity.WriteChainLinks(tx, created.ID, anchor.ID, verified.Chain)
 	})
 	if err != nil {
 		return nil, identity.ReferenceToNotFound(err, anchorToken)

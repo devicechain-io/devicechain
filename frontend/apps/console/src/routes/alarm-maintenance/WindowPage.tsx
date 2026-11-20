@@ -37,9 +37,12 @@ function WindowDetail({ token }: { token?: string }) {
     return token ? getWindow(token) : (await listWindows({ pageNumber: 1, pageSize: 1 })) ? true : null;
   }, [token, read], [token, read]);
   const entity = typeof query.data === 'object' && query.data !== null ? query.data : undefined;
-  const canWrite = hasAuthority(claims, 'alarm:write') && (!entity || !isBroad(entity) || hasAuthority(claims, 'notification:write'));
+  const alarmWrite = hasAuthority(claims, 'alarm:write');
+  // End only restores paging: alarm:write plus visibility. Delete needs what creating the window needed.
+  const canEnd = alarmWrite;
+  const canDelete = alarmWrite && (!entity || !isBroad(entity) || hasAuthority(claims, 'notification:write'));
   const act = async (remove: boolean) => {
-    if (!entity || !query.current || !canWrite || busy) return;
+    if (!entity || !query.current || busy || !(remove ? canDelete : canEnd)) return;
     if (remove && !await confirm({ title: t('delete'), description: t('deleteConfirm', { name: entity.name || entity.token }) })) return;
     setBusy(true); setError(null);
     try {
@@ -51,8 +54,8 @@ function WindowDetail({ token }: { token?: string }) {
   return <PageShell title={entity?.name || token || t('create')} titleAdornment={entity?.name ? <CopyToken value={entity.token} /> : undefined}
     description={entity ? t(`status${entity.status}`) : undefined}
     action={entity ? <>
-      <Button variant="outline" disabled={!canWrite || !query.current || busy || entity.status === 'ENDED'} onClick={() => act(false)}>{t('end')}</Button>
-      <Button variant="destructive" disabled={!canWrite || !query.current || busy} onClick={() => act(true)}>{t('delete')}</Button>
+      <Button variant="outline" disabled={!canEnd || !query.current || busy || entity.status === 'ENDED'} onClick={() => act(false)}>{t('end')}</Button>
+      <Button variant="destructive" disabled={!canDelete || !query.current || busy} onClick={() => act(true)}>{t('delete')}</Button>
     </> : undefined}>
     {error && <ErrorBanner message={error} />}
     {query.loading && !query.data ? <LoadingState /> : query.error && !query.data ? <ErrorState description={query.error} /> : query.data ?

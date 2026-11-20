@@ -236,7 +236,7 @@ built-in widgets.
 
 The release's upgrade guide covers what changes for stored boards and for the
 other packages:
-[If you build against the npm packages](https://docs.devicechain.io/deployment/releases-and-upgrades#v0220-packages).
+[If you build against the npm packages](https://github.com/devicechain-io/devicechain/blob/v0.22.0/docs/docs/deployment/releases-and-upgrades.md#if-you-build-against-the-npm-packages-v0220-packages).
 
 ## Compatibility
 

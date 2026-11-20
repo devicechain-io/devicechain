@@ -97,8 +97,10 @@ var sanctionedSystemContexts = map[string][]string{
 		"DigestPlaintextClaimSecrets", "DigestPlaintextProvisionSecrets",
 	},
 	"backend/services/device-state/processor/StateProcessor.go": {"StateProcessor.runInactivityMonitor"},
-	"backend/services/event-management/model/analytics.go":      {"ReconcileAnalyticsSurface"},
-	"backend/services/event-management/model/lifecycle.go":      {"ApplyDataLifecyclePolicies"},
+	// The deletion resweep reads due watermark keys of every tenant in one bounded read (no event or anchor data); every cleanup and schedule write runs under that row's own core.WithTenant.
+	"backend/services/event-management/model/entity_deletion_watermarks.go": {"Api.DueEntityDeletionWatermarks"},
+	"backend/services/event-management/model/analytics.go":                  {"ReconcileAnalyticsSurface"},
+	"backend/services/event-management/model/lifecycle.go":                  {"ApplyDataLifecyclePolicies"},
 	"backend/services/event-management/model/usage.go": {"Api.PruneUsageWorkingTables", "Api.RollupUsageHours",
 		"Api.RollupUsagePass"},
 	"backend/services/event-management/processor/backfill/worker.go": {"Worker.pass"},

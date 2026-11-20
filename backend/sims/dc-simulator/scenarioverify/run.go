@@ -264,6 +264,12 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 		return noVerdict{err}
 	}
 
+	// Watch the rollout before the potentially lengthy telemetry read-back.
+	_, err = watchS5(ctx, cfg, reader, &obs)
+	if err != nil {
+		return noVerdict{err}
+	}
+
 	// The read-back.
 	for _, p := range fleetOf(sim.HarborpulsePumpType, "") {
 		if err := readDevice(ctx, reader, &obs, p, obs.at(stormFrom).Add(-responseWithin), obs.at(pumpTo).Add(responseWithin)); err != nil {
@@ -324,18 +330,21 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 		if ferr != nil || lerr != nil {
 			return noVerdictf("the sim's backfill ledger for %s has unparseable times %q .. %q", b.Device, b.First, b.Last)
 		}
-		readings, err := reader.Readings(ctx, b.Device, first.Add(-time.Second), last.Add(time.Second))
+		readings, err := reader.Readings(ctx, b.Device, obs.at(sim.HarborpulseOutageFrom), obs.at(sim.HarborpulseOutageTo))
 		if err != nil {
 			return noVerdict{err}
 		}
-		if len(b.Times) != b.Buffered {
+		if len(b.Times) != b.Buffered || len(b.Values) != b.Buffered {
 			return noVerdictf("the sim's backfill ledger for %s counts %d buffered readings but carries %d times", b.Device, b.Buffered, len(b.Times))
 		}
-		bf := Backfill{Device: b.Device, Buffered: b.Buffered, First: first, Last: last}
+		bf := Backfill{Device: b.Device, Buffered: b.Buffered, First: first, Last: last, PowerKW: b.PowerKW, Values: b.Values, Rows: readings}
 		for _, s := range b.Times {
 			t, err := time.Parse(time.RFC3339Nano, s)
 			if err != nil {
 				return noVerdictf("the sim's backfill ledger for %s has an unparseable time %q", b.Device, s)
+			}
+			if t.Nanosecond()%1000 != 0 {
+				return noVerdictf("backfill taken time %q is not microsecond precise", s)
 			}
 			bf.Taken = append(bf.Taken, t)
 		}
@@ -343,6 +352,7 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 			// One row per reading: the metric the charger-offline rule watches.
 			if r.Name == sim.HarborpulseChargerPowerKey {
 				bf.Stored = append(bf.Stored, r.At)
+				bf.PowerStored = append(bf.PowerStored, r)
 			}
 		}
 		obs.Backfill = append(obs.Backfill, bf)
@@ -350,6 +360,13 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 	if err := readS4(ctx, reader, &obs, final.Scenario.Jobs); err != nil {
 		return noVerdict{err}
 	}
+	if err := readS5(ctx, reader, &obs, final.Scenario.S5); err != nil {
+		return noVerdict{err}
+	}
+	if err := readReplacement(ctx, reader, &obs); err != nil {
+		return noVerdict{err}
+	}
+	rep.WatchTo = time.Now()
 	rep.Invariants = Evaluate(obs)
 	return nil
 }

@@ -19,12 +19,15 @@ namespace DeviceChain.Harborpulse.Live
     /// It never writes. It opens no device session, creates no credential (the shared binder's credential step is the one part of it this
     /// session does not run) and sends no command: everything the scene shows is the platform's own record, read under the operator's token.
     /// </summary>
-    public sealed class HarborLiveSession : IDisposable
+    public sealed class HarborLiveSession : IDisposable, IHarborSource
     {
         readonly HarborLayout layout;
         readonly LiveSettings settings;
         readonly CancellationTokenSource cts = new CancellationTokenSource();
         readonly Dictionary<string, string> tokenByExternalId = new Dictionary<string, string>(StringComparer.Ordinal);
+        HarborPlatformReads reads;
+        readonly ScenarioClockFollower clock = new ScenarioClockFollower();
+        readonly ScenarioStatusClient statusClient;
         TokenBroker broker;
         PlatformObserver observer;
 
@@ -32,7 +35,7 @@ namespace DeviceChain.Harborpulse.Live
         {
             this.layout = layout ?? throw new ArgumentNullException(nameof(layout));
             this.settings = settings ?? throw new ArgumentNullException(nameof(settings));
-            Source = new ObservedSource(this);
+            statusClient = new ScenarioStatusClient(settings.RunnerUrl, clock);
         }
 
         /// <summary>Where the session is: "connecting", "binding", "observing", or why it stopped.</summary>
@@ -47,7 +50,7 @@ namespace DeviceChain.Harborpulse.Live
         public TokenBroker Broker => broker;
 
         /// <summary>The platform's readings, by the layout's external IDs; empty until the observer runs.</summary>
-        public IReadingSource Source { get; }
+        public IHarborSource Source => this;
 
         public int Bound { get; private set; }
 
@@ -109,6 +112,7 @@ namespace DeviceChain.Harborpulse.Live
 
                 Observed = new ObservedState(DateTimeOffset.UtcNow);
                 observer = new PlatformObserver(cfg.Value, broker, watched, Observed, ObserverStatus);
+                reads = new HarborPlatformReads(Config, broker, layout, id => TryToken(id, out var t) ? t : null);
                 observer.Start();
                 Stage = "observing";
             }
@@ -131,35 +135,76 @@ namespace DeviceChain.Harborpulse.Live
         /// <summary>Main thread, every frame: refresh the token on schedule and apply what the observer received.</summary>
         public void Tick()
         {
+            statusClient.Tick(DateTimeOffset.UtcNow);
             broker?.Tick();
             observer?.Pump();
+            reads?.Tick(Status, DateTimeOffset.UtcNow);
         }
 
         public void Dispose()
         {
             cts.Cancel();
+            statusClient.Dispose();
+            reads?.Dispose();
             try { observer?.Dispose(); }
             catch (Exception e) { PlatformLog.Warn("observer shutdown: " + e.GetType().Name); }
         }
 
-        sealed class ObservedSource : IReadingSource
+        public ScenarioStatus Status => statusClient.Last;
+        public ScenarioClockFollower Clock => clock;
+        public RolloutEvidence Rollout => reads?.Rollout;
+        public IReadOnlyList<SuppressionEvidence> Suppressions => reads?.Suppressions ?? Array.Empty<SuppressionEvidence>();
+        public string ReadProblem => reads?.Problem ?? statusClient.Problem;
+        public CommandCoverage CommandPoll => new CommandCoverage(ObserverStatus.CommandsHealthySince, ObserverStatus.CommandsLastOk)
+            .Intersect(reads?.CommandCoverage(DateTimeOffset.UtcNow) ?? default);
+        // A live stream is reported only after its snapshot attempt; a failed attempt remains in Reason.
+        public AlarmCoverage AlarmObservation => new AlarmCoverage(ObserverStatus.AlarmSnapshotNote == null && ObserverStatus.Alarms.Reason == null, ObserverStatus.Alarms.IsLive);
+        public IReadOnlyList<HarborAlarm> Alarms
         {
-            readonly HarborLiveSession session;
-
-            public ObservedSource(HarborLiveSession session)
+            get
             {
-                this.session = session;
+                var list = new List<HarborAlarm>();
+                if (Observed != null) foreach (var p in tokenByExternalId)
+                    if (Observed.TryGet(p.Value, out var d)) foreach (var a in d.Alarms.Values)
+                        list.Add(new HarborAlarm(p.Key, a.AlarmKey, a.State, a.Severity, a.Acknowledged, a.OccurredAt, a.ObservedAt));
+                return list.AsReadOnly();
             }
-
-            public bool TryGet(string externalId, string metric, out Reading reading)
+        }
+        public IReadOnlyList<HarborCommand> Commands
+        {
+            get
             {
-                reading = default;
-                var state = session.Observed;
-                if (state == null || !session.tokenByExternalId.TryGetValue(externalId ?? "", out var token)) return false;
-                if (!state.TryGet(token, out var device) || !device.Measurements.TryGetValue(metric, out var v)) return false;
-                reading = new Reading(v.Value, v.OccurredAt);
-                return true;
+                var list = new List<HarborCommand>();
+                if (reads != null) list.AddRange(reads.Commands);
+                if (Observed != null) foreach (var p in tokenByExternalId)
+                    if (Observed.TryGet(p.Value, out var d))
+                    {
+                        foreach (var c in d.Commands.Values) list.Add(new HarborCommand(p.Key, c.Token, c.Name, c.Status, c.ObservedAt));
+                        var last = d.LastCommand;
+                        if (last != null && !d.Commands.ContainsKey(last.Token)) list.Add(new HarborCommand(p.Key, last.Token, last.Name, last.Status, last.ObservedAt));
+                    }
+                return list.AsReadOnly();
             }
+        }
+        public bool TryLocation(string externalId, out HarborLocation location)
+        {
+            location = default;
+            if (Observed == null || !TryToken(externalId, out var token) || !Observed.TryGet(token, out var d) || d.Location == null) return false;
+            var p = d.Location;
+            location = new HarborLocation(p.Latitude, p.Longitude, p.HeadingDegrees, p.SpeedMps, p.OccurredAt);
+            return true;
+        }
+        public bool TryAttribute(string externalId, string key, out Reading value)
+        {
+            value = default;
+            return reads != null && reads.TryAttribute(externalId, key, out value);
+        }
+        public bool TryGet(string externalId, string metric, out Reading reading)
+        {
+            reading = default;
+            if (Observed == null || !TryToken(externalId, out var token) || !Observed.TryGet(token, out var d) || !d.Measurements.TryGetValue(metric, out var v)) return false;
+            reading = new Reading(v.Value, v.OccurredAt);
+            return true;
         }
     }
 }

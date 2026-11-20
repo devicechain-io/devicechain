@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,6 +73,35 @@ type httpSource struct {
 	grants *grantBox
 }
 
+// capabilityError keeps transport classification available without exposing a
+// bearer capability through url.Error, nested transport errors, logs or status.
+type capabilityError struct {
+	target string
+	cause  error
+}
+
+func (e *capabilityError) Error() string {
+	message := "updater: download request failed for " + e.target
+	if errors.Is(e.cause, io.ErrUnexpectedEOF) {
+		message += ": unexpected EOF"
+	}
+	return message
+}
+func (e *capabilityError) Unwrap() error { return e.cause }
+
+func sanitizeCapabilityError(target string, err error) error {
+	if err == nil {
+		return nil
+	}
+	safe := "[invalid download URL]"
+	if u, parseErr := url.Parse(target); parseErr == nil {
+		u.RawQuery, u.Fragment, u.RawFragment, u.User = "", "", "", nil
+		u.ForceQuery = false
+		safe = u.String()
+	}
+	return &capabilityError{target: safe, cause: err}
+}
+
 // ReadAt reads len(p) bytes at off with `Range: bytes=off-(off+len(p)-1)`. It returns
 // io.ErrUnexpectedEOF when the body ends before the window does, as a connection cut mid-body does,
 // and the bytes read so far are NOT committed by the updater, so the next call re-reads the window.
@@ -85,12 +115,12 @@ func (s *httpSource) ReadAt(p []byte, off int64) (int, error) {
 	}
 	req, err := http.NewRequest(http.MethodGet, target, nil)
 	if err != nil {
-		return 0, err
+		return 0, sanitizeCapabilityError(target, err)
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", off, off+int64(len(p))-1))
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("updater: download at offset %d: %w", off, err)
+		return 0, fmt.Errorf("updater: download at offset %d: %w", off, sanitizeCapabilityError(target, err))
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
@@ -117,7 +147,7 @@ func (s *httpSource) ReadAt(p []byte, off int64) (int, error) {
 		if errors.Is(err, io.EOF) {
 			err = io.ErrUnexpectedEOF
 		}
-		return n, fmt.Errorf("updater: download at offset %d: %w", off, err)
+		return n, fmt.Errorf("updater: download at offset %d: %w", off, sanitizeCapabilityError(target, err))
 	}
 	return n, nil
 }

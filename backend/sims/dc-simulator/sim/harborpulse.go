@@ -70,7 +70,9 @@ type harborpulse struct {
 	maintenanceUnavailable bool
 	jobs                   []ScenarioJob
 
-	s3b harborS3bState
+	s3b     harborS3bState
+	s5      harborS5State
+	restore harborRestoreQueue
 }
 
 // NewHarborpulse returns the harborpulse Sim seeded from the handshake. Prefer NewSim.
@@ -119,11 +121,14 @@ const (
 func HarborpulseDefects() []string {
 	return []string{
 		HarborpulseDefectAirLockBasin, HarborpulseDefectAttributeNotUpdated, HarborpulseDefectBackfillWrongWindow,
+		HarborpulseDefectBurstDropOn429, HarborpulseDefectBurstUnthrottled,
 		HarborpulseDefectDownlinkNack, HarborpulseDefectDropBackfill, HarborpulseDefectEastLampMislabelled,
 		HarborpulseDefectFeederMiswired, HarborpulseDefectFloodClearBetweenTiers, HarborpulseDefectFloodSplitKey,
 		HarborpulseDefectFlushUngated, HarborpulseDefectHolidayDropped, HarborpulseDefectLampUnsited,
 		HarborpulseDefectLegacyDecoderFixed, HarborpulseDefectLoftsUnderBasin, HarborpulseDefectLoraWrongScale,
-		HarborpulseDefectMQTTUnreachable, HarborpulseDefectNightDimAllLights, HarborpulseDefectRefuseDerate,
+		HarborpulseDefectMQTTUnreachable, HarborpulseDefectNightDimAllLights,
+		HarborpulseDefectOTACapThree, HarborpulseDefectOTAFailureDisabled, HarborpulseDefectOTAGroupMissingCharger, HarborpulseDefectOTASignatureOmitted, HarborpulseDefectRefuseDerate,
+		HarborpulseDefectReplacementNewDevice, HarborpulseDefectReplacementOldCredentialLeftLive,
 		HarborpulseDefectSilenceNorthLamp, HarborpulseDefectSuppressionWrongDevice, HarborpulseDefectTruckStaysHome, HarborpulseDefectUnscopedWatch,
 		HarborpulseDefectUnsignedWebhook, HarborpulseDefectWrongWellDepth,
 	}
@@ -143,14 +148,17 @@ const HarborpulseMinDayLength = harborpulseDayLength
 const HarborpulseMaxDayLength = 24 * time.Hour
 
 type harborDefects struct {
-	floodSplitKey, refuseDerate, airLockBasin, silenceNorthLamp, dropBackfill bool
-	unsignedWebhook, mqttUnreachable, truckStaysHome, wrongWellDepth          bool
-	loraWrongScale, legacyDecoderFixed, floodClearBetweenTiers                bool
-	eastLampMislabelled, unscopedWatch, nightDimAllLights, lampUnsited        bool
-	holidayDropped, flushUngated, loftsUnderBasin, feederMiswired             bool
-	attributeNotUpdated, downlinkNack, backfillWrongWindow                    bool
-	suppressionWrongDevice                                                    bool
-	names                                                                     []string
+	floodSplitKey, refuseDerate, airLockBasin, silenceNorthLamp, dropBackfill    bool
+	unsignedWebhook, mqttUnreachable, truckStaysHome, wrongWellDepth             bool
+	loraWrongScale, legacyDecoderFixed, floodClearBetweenTiers                   bool
+	eastLampMislabelled, unscopedWatch, nightDimAllLights, lampUnsited           bool
+	holidayDropped, flushUngated, loftsUnderBasin, feederMiswired                bool
+	attributeNotUpdated, downlinkNack, backfillWrongWindow                       bool
+	otaSignatureOmitted, otaGroupMissingCharger, otaCapThree, otaFailureDisabled bool
+	burstDropOn429                                                               bool
+	replacementNewDevice, replacementOldCredentialLeftLive                       bool
+	suppressionWrongDevice                                                       bool
+	names                                                                        []string
 }
 
 // ConfigureScenario applies --day-length and --scenario-defect.
@@ -169,8 +177,7 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 		s.dayLength = o.DayLength
 	}
 	if need := harborBufferNeed(s.dayLength, s.load.Interval()); need > harborMaxBufferCap {
-		return fmt.Errorf("--day-length %s at a %s cadence buffers %d readings per charger through the feeder outage, "+
-			"more than the %d a charger can hold: lengthen the cadence or shorten the day", s.dayLength, s.load.Interval(), need, harborMaxBufferCap)
+		return fmt.Errorf("--day-length %s at an outage log cadence of %s buffers %d entries per charger, more than the %d a charger can hold", s.dayLength, harborOutageCadence(s.dayLength), need, harborMaxBufferCap)
 	}
 	names, err := parseDefects(o.Defects, HarborpulseDefects())
 	if err != nil {
@@ -179,6 +186,20 @@ func (s *harborpulse) ConfigureScenario(o ScenarioOptions) error {
 	d := harborDefects{names: names}
 	for _, n := range names {
 		switch n {
+		case HarborpulseDefectReplacementNewDevice:
+			d.replacementNewDevice = true
+		case HarborpulseDefectReplacementOldCredentialLeftLive:
+			d.replacementOldCredentialLeftLive = true
+		case HarborpulseDefectBurstDropOn429:
+			d.burstDropOn429 = true
+		case HarborpulseDefectOTASignatureOmitted:
+			d.otaSignatureOmitted = true
+		case HarborpulseDefectOTAGroupMissingCharger:
+			d.otaGroupMissingCharger = true
+		case HarborpulseDefectOTACapThree:
+			d.otaCapThree = true
+		case HarborpulseDefectOTAFailureDisabled:
+			d.otaFailureDisabled = true
 		case HarborpulseDefectSuppressionWrongDevice:
 			d.suppressionWrongDevice = true
 		case HarborpulseDefectAttributeNotUpdated:
@@ -242,7 +263,7 @@ var harborBeats = []struct {
 	{"commute", 7.5, 10},
 	{"peak-demand", 8.5, 9.75},
 	{"lamp-flicker", 11, 12},
-	{"lamp-maintenance", 10.75, 11.5},
+	{"lamp-maintenance", HarborpulseLampServiceFrom, HarborpulseLampServiceTo},
 	{"connector-hot", 14, harborOverheatTo},
 	{"storm", 16, 22.5},
 	{"air-lock", harborAirLockFrom, harborAirLockTo},
@@ -279,6 +300,9 @@ func (s *harborpulse) ScenarioClock(now time.Time) *ScenarioClock {
 		c.SimHour = harborHourOf(elapsed, dayLength)
 	}
 	c.SimTime = formatSimTime(c.SimHour)
+	for _, b := range harborBeats {
+		c.Beats = append(c.Beats, ScenarioBeat{Name: b.name, From: b.from, To: b.to})
+	}
 	s.mu.Lock()
 	c.ThresholdChanges = append([]ThresholdChange(nil), s.s3b.Changes...)
 	c.CalculatedBackfills = append([]CalculatedBackfillBeat(nil), s.s3b.Jobs...)
@@ -288,6 +312,8 @@ func (s *harborpulse) ScenarioClock(now time.Time) *ScenarioClock {
 		c.Backfill = model.backfillLedger()
 	}
 	c.Jobs = s.jobLedger()
+	c.S5 = s.s5Ledger()
+	c.LayoutDigest = HarborpulseLayoutDigest()
 	return c
 }
 
@@ -827,6 +853,15 @@ func harborpulseDutyPolicy() NotificationPolicySpec {
 }
 
 func (s *harborpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
+	if err := rt.Endpoints.ResolveUpdateManagement(); err != nil {
+		return err
+	}
+	if rt.UpdateFleet != nil {
+		return fmt.Errorf("harborpulse declares its own update population; --ota cannot also be given")
+	}
+	if err := s.prepareReplacement(ctx, rt); err != nil {
+		return err
+	}
 	if err := Provision(ctx, rt, s.Manifest()); err != nil {
 		return err
 	}
@@ -834,7 +869,10 @@ func (s *harborpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
 	if err := deleteCampaignsWithPrefix(ctx, rt, HarborpulseNightDimPrefix, HarborpulseFlushPrefix); err != nil {
 		return err
 	}
-	return s.bootstrapMaintenance(ctx, rt)
+	if err := s.bootstrapMaintenance(ctx, rt); err != nil {
+		return err
+	}
+	return s.provisionChargerOTA(ctx, rt)
 }
 
 func (s *harborpulse) ensureModel() *harborModel {
@@ -859,16 +897,21 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	elapsed := now.Sub(s.started)
 	s.mu.Unlock()
 
-	beatErr := s.s3bBeats(ctx, rt, elapsed, now)
+	beatErr := errors.Join(s.s3bBeats(ctx, rt, elapsed, now), s.replacementBeat(ctx, rt, now), s.s5Beats(ctx, rt, now))
 	if beatErr != nil {
 		log.Error().Err(beatErr).Msg("run harborpulse beats failed; retrying next tick")
 	}
 	model.advanceTo(elapsed)
-	workers := rt.Load.Workers(len(rt.Devices))
+	workers := rt.Load.Workers(len(rt.deviceSnapshot()))
 	stamp := now.UTC().Truncate(time.Microsecond)
+	s.restore.beginTick()
+	shedBefore := rt.Stats.Shed.Load()
 
 	measErr := EmitAll(ctx, rt, workers, func(_ int, d DeviceInstance) map[string]float64 {
-		return model.reading(d.Token, elapsed, stamp)
+		if d.Token == HarborpulseReplacementSeparateDevice {
+			d.Token = HarborpulseReplacementDevice
+		}
+		return model.reading(d.Token, elapsed, now)
 	})
 	if measErr != nil {
 		log.Error().Err(measErr).Msg("emit harborpulse measurements failed")
@@ -879,14 +922,12 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	if locErr != nil {
 		log.Error().Err(locErr).Msg("emit harborpulse locations failed")
 	}
-	backErr := s.flushBackfill(ctx, rt, model, elapsed)
-	if backErr != nil {
-		log.Error().Err(backErr).Msg("flush harborpulse buffered readings failed")
-	}
 	loraErr := s.sendLoraUplinks(ctx, rt, model, elapsed, stamp)
 	if loraErr != nil {
 		log.Error().Err(loraErr).Msg("send harborpulse LoRaWAN uplinks failed")
 	}
+	backErr := s.flushBackfill(ctx, rt, model, elapsed)
+	s.restore.completeTick(s, harborDayOf(elapsed, s.dayLength), rt.Stats.Shed.Load()-shedBefore)
 	jobErr := s.scheduleDay(ctx, rt, now)
 	if jobErr != nil {
 		log.Error().Err(jobErr).Msg("schedule the harborpulse day's jobs failed; retrying next tick")
@@ -905,37 +946,10 @@ func (s *harborpulse) startedAt() time.Time {
 	return s.started
 }
 
-// flushBackfill sends the readings chargers buffered while their feeder was down, oldest first,
-// each with the time it was TAKEN. A reading the ingress did not accept goes back on the
-// device's buffer, as a store-and-forward device keeps what it has not delivered.
+// flushBackfill only transfers ownership to the bounded restore queue. Tick never sends it.
 func (s *harborpulse) flushBackfill(ctx context.Context, rt *Runtime, model *harborModel, elapsed time.Duration) error {
-	pending := model.takeBackfill(elapsed)
-	if len(pending) == 0 {
-		return nil
-	}
-	byToken := make(map[string]DeviceInstance, len(rt.Devices))
-	for _, d := range rt.Devices {
-		byToken[d.Token] = d
-	}
-	var errs []error
-	for _, p := range pending {
-		token, readings := p.token, p.readings
-		d, ok := byToken[token]
-		if !ok {
-			continue
-		}
-		for i, r := range readings {
-			err := emitMeasurementsAt(ctx, rt, d, r.at.Format(time.RFC3339Nano), wireMeasurements(r.values))
-			if err != nil {
-				rt.Stats.Failed.Add(1)
-				model.requeue(token, readings[i:])
-				errs = append(errs, fmt.Errorf("%s: %w", token, err))
-				break
-			}
-			rt.Stats.Emitted.Add(1)
-		}
-	}
-	return errors.Join(errs...)
+	s.restore.enqueue(ctx, s, rt, model.takeBackfill(elapsed), harborDayOf(elapsed, s.dayLength))
+	return nil
 }
 
 // CommandHandler is the device side of every command the district is sent: each one is applied

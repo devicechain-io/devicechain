@@ -24,6 +24,8 @@ namespace DeviceChain.Demos.Platform
     /// <summary>A device's last Location event as the platform holds it. Speed is metres per second, as stored.</summary>
     public sealed class ObservedLocation
     {
+        public double? Latitude { get; set; }
+        public double? Longitude { get; set; }
         public double? SpeedMps { get; set; }
         public double? HeadingDegrees { get; set; }
         public double? ElevationMetres { get; set; }
