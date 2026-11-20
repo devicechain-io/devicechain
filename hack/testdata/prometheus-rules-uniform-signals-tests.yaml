@@ -367,6 +367,49 @@ tests:
               devicechain_instance: devicechain
               job: processor
             exp_annotations: *id002
+  # 🔴 THE v1.8.0-rc.1 REGRESSION. A real device-management runs several processing loops
+  # in ONE pod, and their *_messages_total series differ only by metric name. increase()
+  # drops __name__, so an expression that does not carry the name into a label first
+  # leaves identical label sets, Prometheus refuses the evaluation ("vector cannot contain
+  # metrics with the same labelset") and the alert can never fire. Every other case here
+  # has one metric name per target, which is why they all passed while it was broken.
+  - name: several loops on one target, one of them dropping
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="device-management",instance="10.0.0.7:9090",pod="device-management-0",result="dropped"}
+        values: '0x60'
+      - series: devicechain_devicemanagement_device_reports_messages_total{namespace="dci-devicechain",job="device-management",instance="10.0.0.7:9090",pod="device-management-0",result="dropped"}
+        values: '0x60'
+      - series: devicechain_devicemanagement_raise_alarm_messages_total{namespace="dci-devicechain",job="device-management",instance="10.0.0.7:9090",pod="device-management-0",result="dropped"}
+        values: 0x9 1x50
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ProcessorLoopDropping
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ProcessorLoopDropping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: device-management
+            exp_annotations: *id002
+      - eval_time: 26m
+        alertname: ProcessorLoopDropping
+        exp_alerts: []
+  - name: several loops on one target, none dropping
+    interval: 1m
+    input_series:
+      - series: devicechain_devicemanagement_resolve_messages_total{namespace="dci-devicechain",job="device-management",instance="10.0.0.7:9090",pod="device-management-0",result="dropped"}
+        values: '0x60'
+      - series: devicechain_devicemanagement_device_reports_messages_total{namespace="dci-devicechain",job="device-management",instance="10.0.0.7:9090",pod="device-management-0",result="dropped"}
+        values: '0x60'
+      - series: devicechain_devicemanagement_raise_alarm_messages_total{namespace="dci-devicechain",job="device-management",instance="10.0.0.7:9090",pod="device-management-0",result="dropped"}
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ProcessorLoopDropping
+        exp_alerts: []
   - name: idle installation
     interval: 1m
     input_series: []

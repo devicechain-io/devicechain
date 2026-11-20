@@ -526,6 +526,10 @@ mutations = [
     ("device-state", "ProcessorLoopDropping", '__name__!="devicechain_devicestate_state_messages_total",', ""),
     ("reset-blind", "ProcessorLoopDropping", "increase(", "delta("),
     ("job-grouping", "ProcessorLoopDropping", "sum by (job)", "sum by (instance)"),
+    # The loops' names are no longer carried into a label, which is the v1.8.0-rc.1
+    # defect: once increase() drops __name__, two loops on one target share every
+    # label and Prometheus refuses the evaluation, so the alert never fires.
+    ("name-collapse", "ProcessorLoopDropping", '"metric", "$1", "__name__", "(.+)"', '"metric", "$1", "job", "(.+)"'),
     ("replica-age", "PeriodicTaskStalled", 'on (job, instance) group_left ()\n      (time() - process_start_time_seconds{namespace="dci-devicechain"})', 'on (job) group_left ()\n      (time() - min by (job) (process_start_time_seconds{namespace="dci-devicechain"}))'),
 ]
 for name, alert, old, new in mutations:
@@ -542,7 +546,14 @@ PY
     if output="$(run_rule_tests uniform-signals "$controls/stage" "$mutant" "$tests" 2>&1)"; then
       fail "uniform-signal tests accepted the $(basename "$mutant") defect"
     fi
-    if ! grep -q 'FAILED' <<<"$output" ||
+    # The name-collapse mutant is refused by Prometheus itself, as on a real instance:
+    # promtool reports the rule's evaluation error, not an alert mismatch. Only that
+    # exact error, on that rule, counts -- any other tool failure is still not a verdict.
+    if [ "$(basename "$mutant")" = name-collapse.yaml ]; then
+      grep -q 'FAILED' <<<"$output" &&
+        grep -q 'rule: ProcessorLoopDropping, .*err: vector cannot contain metrics with the same labelset' <<<"$output" ||
+        fail "uniform-signal name-collapse control failed without the same-labelset evaluation error: $output"
+    elif ! grep -q 'FAILED' <<<"$output" ||
        ! grep -Eq 'alertname: (PeriodicTaskStalled|ProcessorLoopDropping)' <<<"$output"; then
       fail "uniform-signal control failed without an alert assertion mismatch: $output"
     fi
@@ -1176,6 +1187,25 @@ PY
     "is not above the largest single rule file" \
     check_alert_census 1 "$d/rule-selftest-alpha.yaml" "$d/rule-selftest-beta.yaml"
 
+  # -------------------------------------------------------------------------
+  # Case 25 — A RANGE FUNCTION THAT COLLAPSES METRIC NAMES, alone, and verbatim:
+  # ProcessorLoopDropping as it shipped in v1.8.0-rc.1. increase() drops __name__,
+  # device-management runs several loops whose *_messages_total series share every
+  # other label, and Prometheus refused the evaluation on every instance ("vector
+  # cannot contain metrics with the same labelset"). promtool parsed it and its unit
+  # tests passed, because their series carried one metric name per target.
+  # Its counterweight, the same selector with the name carried into a label inside a
+  # subquery, must come back clean through the same entry point.
+  # -------------------------------------------------------------------------
+  d="$st/always-firing"
+  st_af_expect_finding "a range function collapsing several metric names, verbatim" ProcessorLoopDropping     'sum by (job) (increase({__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total",__name__!="devicechain_devicestate_state_messages_total",result="dropped",namespace="dci-devicechain"}[15m])) > 0'     'cannot be evaluated because `increase(...)` drops the metric name'
+  st_af_file "$d/probe.yaml" ProcessorLoopDropping     'sum by (job) (increase(label_replace({__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total",__name__!="devicechain_devicestate_state_messages_total",result="dropped",namespace="dci-devicechain"}, "metric", "$1", "__name__", "(.+)")[15m:1m])) > 0'
+  grep -q 'label_replace' "$d/probe.yaml" ||
+    st_fail "the collapsed-names counterweight fixture did not write -- believe no verdict from this run"
+  check_always_firing 1 "$d/probe.yaml" >/dev/null ||
+    st_fail "the name-carrying form of ProcessorLoopDropping was refused"
+  st_ok "the same selector with the name carried into a label passes"
+
   echo "self-test passed: $st_passed checks -- every planted defect caught, each alone, and every clean input passed"
 }
 
@@ -1264,12 +1294,15 @@ check_always_firing "$always_firing_floor" "${rule_files[@]}" || {
 This is the instrument reporting that it has no opinion, which is deliberately not
 spelled the same way as a clean result."
   fi
-  fail "an alerting rule can never return nothing, which means it is always firing.
+  fail "promqlguard refused an alerting rule (its reason is printed above): either it
+can never return nothing, which means it is always firing, or a range function in it
+collapses several metric names into identical label sets, which means Prometheus
+refuses to evaluate it on a real instance and it can never fire.
 
 An always-firing alert is worse than a missing one: it trains whoever receives the
 page to ignore the channel it arrives on, and the alerts that matter arrive there
-too. The expression is valid PromQL and promtool accepts it -- the defect is in
-where the comparison binds."
+too. A collapsing one is a missing alert that also keeps PrometheusRuleFailures
+firing. Both are valid PromQL that promtool accepts."
 }
 
 # ---------------------------------------------------------------------------
@@ -1377,7 +1410,7 @@ extract_rules "$snapwork/rendered.yaml" "$snapwork" database-backup database-sna
 snap_rules="$snapwork/rule-database-snapshot-backup.yaml"
 chmod 644 "$snapwork"/rule-*.yaml
 run_promtool "$snap_rules" || fail "promtool rejected the snapshot-backup rule group"
-check_always_firing 3 "$snap_rules" || fail "a snapshot-backup alert can never return nothing, or the check could not run"
+check_always_firing 3 "$snap_rules" || fail "a snapshot-backup alert can never return nothing or cannot be evaluated, or the check could not run"
 status=0
 run_rule_tests database-snapshot-backup "$snapwork/t" "$snap_rules" \
   "$repo_root/hack/testdata/prometheus-rules-snapshot-tests.yaml" || status=$?
