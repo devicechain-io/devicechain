@@ -154,6 +154,9 @@ func TestIntegrationTimeLeadingKeysApplyOverCompressedChunks(t *testing.T) {
 	assertAfterRekeyIndexes(t, sys, 2)
 	assert.Equal(t, "PRIMARY KEY (tenant_id, occurred_time, event_id)", pkeyDef(t, sys))
 
+	// A read by device token below needs the deletion watermark table, a later migration than
+	// this test stops at: its own DDL, after the schema assertions above.
+	require.NoError(t, NewEntityDeletionWatermarksSchema().Migrate(sys))
 	api := NewApi(after)
 	ctx := core.WithTenant(context.Background(), "acme")
 	d0 := "dev-0"
