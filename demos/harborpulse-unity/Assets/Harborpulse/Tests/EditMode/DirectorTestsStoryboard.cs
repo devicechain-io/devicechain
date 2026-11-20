@@ -72,7 +72,7 @@ namespace DeviceChain.Harborpulse.Tests
                 case "cut-target": cut["targetS"] = 299; break;
                 case "cut-caption-minimum": cutCaption["holdS"] = 2.99; break;
                 case "cut-caption-outside": cutCaption["atS"] = 100; break;
-                case "cut-extra-chain": var c90 = DirectorKit.Obj(DirectorKit.Arr(r["cuts"])[1]); First(c90, "segments")["page"] = "2"; break;
+                case "cut-extra-chain": var c90 = DirectorKit.Obj(DirectorKit.Arr(r["cuts"])[1]); First(c90, "segments")["page"] = "2"; First(c90, "segments")["shot"] = "2a"; break;
                 case "cut-gauge-chain": var shortCut = DirectorKit.Obj(DirectorKit.Arr(r["cuts"])[1]); var pump = DirectorKit.Arr(shortCut["segments"]).Select(DirectorKit.Obj).First(s => (string)s["page"] == "4"); DirectorKit.Arr(pump["nodes"]).Add("water"); break;
                 case "unknown-cut-node": DirectorKit.Arr(segment["nodes"]).Add("missing"); break;
                 case "unknown-follow": S(r)["followDeviceFromTrigger"] = "mystery"; break;
@@ -91,6 +91,30 @@ namespace DeviceChain.Harborpulse.Tests
         {
             var segment = DirectorKit.Story().Cuts[0].Segments.First(s => s.Page == "8");
             Assert.That(segment.RecordedWallFromS, Is.GreaterThan(1000)); Assert.That(segment.RecordedAt(segment.DurS / 2), Is.EqualTo((segment.RecordedWallFromS + segment.RecordedWallToS) / 2));
+        }
+
+        [Test]
+        public void PlaceholderMustBeBoundOnEveryAnyBranchAndFallbacksCannotSubstitute()
+        {
+            var root = DirectorKit.Object(DirectorKit.StoryText()); var c = C(root); c["kind"] = "claim"; c["lines"] = new List<object> { "There are {n}." };
+            c["needs"] = DirectorKit.Object("{\"any\":[{\"binding\":{\"bind\":{\"n\":\"freshDevices\"}}},{\"chip\":{}}]}");
+            Assert.Throws<FormatException>(() => Storyboard.Parse(DirectorKit.Json(root), new PresentationMap(Kit.Layout())));
+            c["kind"] = "fallback"; c["needs"] = DirectorKit.Object("{\"binding\":{\"bind\":{\"n\":\"freshDevices\"}}}");
+            Assert.Throws<FormatException>(() => Storyboard.Parse(DirectorKit.Json(root), new PresentationMap(Kit.Layout())));
+        }
+        [Test]
+        public void BothCutsScheduleDisclosuresSummaryAndSeams()
+        {
+            var story = DirectorKit.Story();
+            foreach (var cut in story.Cuts) {
+                Assert.That(cut.Segments.Where(s => s.Page == "0").SelectMany(s => s.Overlays).Select(c => c.Id), Does.Contain("disclosure"));
+                Assert.That(cut.Segments.Where(s => s.Page == "9").SelectMany(s => s.Overlays).Select(c => c.Id), Is.EquivalentTo(new[] { "subline", "fiction", "positions" }));
+                Assert.That(cut.Segments.Where(s => s.Page == "8").SelectMany(s => s.Captions).Select(c => c.Id), Does.Contain("ota-summary"));
+                Assert.That(cut.Segments.All(s => s.SeamPose == "pose:home" && s.DissolveS == 0.5), Is.True);
+            }
+            Assert.That(story.Page("4").Captions.Single(c => c.Id == "well").Lines[0], Is.EqualTo("The pump's well is filling\u2026"));
+            Assert.That(DirectorKit.StoryText(), Does.Not.Contain("?"));
+            Assert.That(story.Page("8").Shots.Single(s => s.Id == "8c").To, Is.EqualTo("pose:charger-north:close"));
         }
     }
 }

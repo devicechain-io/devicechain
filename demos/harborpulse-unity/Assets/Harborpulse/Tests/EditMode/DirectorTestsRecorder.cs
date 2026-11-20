@@ -21,7 +21,13 @@ namespace DeviceChain.Harborpulse.Tests
             {
                 recorder.Observe(t, DirectorKit.O("measure", "gauge", "water_level_m", sim: 6 + t / 60.0, wall: t, id: "reading-" + t, fields: new Dictionary<string, string> { ["value"] = (t / 100.0).ToString(System.Globalization.CultureInfo.InvariantCulture) }));
                 recorder.World(t, "{\"scenario\":{\"day\":0,\"simHour\":" + (6 + t / 60.0).ToString(System.Globalization.CultureInfo.InvariantCulture) + "}}");
-                if (t % 20 == 0) recorder.Decision(new DirectorEvent(t, "state", "4", "Playing"));
+                if (t % 20 == 0) {
+                    recorder.Decision(new DirectorEvent(t, "state", "4", t % 40 == 0 ? "Playing" : "Watching"));
+                    recorder.Decision(new DirectorEvent(t, "node", "4", "node-" + t));
+                    if (t > 0) recorder.Decision(new DirectorEvent(t, "link", "4", "node-" + (t - 20) + "->node-" + t));
+                    recorder.Decision(new DirectorEvent(t, "caption", "4", "caption-" + t));
+                }
+                if (t % 20 == 5) recorder.Decision(new DirectorEvent(t, "caption-end", "4", "caption"));
                 if (t % 30 == 0) recorder.Consumption(t, new[] { "key-" + t });
                 if (t == 125) recorder.Coverage(t, new CoverageInterval("run", "alarms", 8, 8.1, true));
             }
@@ -33,6 +39,8 @@ namespace DeviceChain.Harborpulse.Tests
                 Assert.That(reader.LastCheckpointLoadedS, Is.EqualTo(Math.Floor(t / 60) * 60));
             }
             Assert.That(reader.CheckpointTimes, Is.EqualTo(new double[] { 0, 60, 120, 180, 240, 300 }));
+            var rail = reader.Seek(241); Assert.That(rail.Decisions.Values.Count(e => e.Kind == "node"), Is.EqualTo(13)); Assert.That(rail.Decisions.Values.Count(e => e.Kind == "link"), Is.EqualTo(12));
+            Assert.That(rail.VisibleCaption("4"), Is.EqualTo("caption-240")); Assert.That(reader.Seek(246).VisibleCaption("4"), Is.Null);
         }
         [Test]
         public void CheckpointsCatchUpAtExactCadenceWithoutFutureState()

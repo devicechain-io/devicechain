@@ -45,6 +45,9 @@ namespace DeviceChain.Harborpulse.Model.Director
             public double CaptionS = double.NegativeInfinity;
             public string Caption;
             public string Text;
+            public double CaptionHoldS = 3;
+            public bool Provisional;
+            public readonly List<Opportunity> Pending = new List<Opportunity>();
             public double TriggerS;
             public bool Triggered;
             public bool Recap;
@@ -55,6 +58,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             public Observation TriggerRecord;
             public readonly HashSet<string> Nodes = new HashSet<string>(StringComparer.Ordinal);
         }
+        sealed class Opportunity { public StoryShot Shot; public string Slot; public double FromS; public double DeadlineS; public string Shown; }
         sealed class QueueEntry { public PageRun Runtime; public double AtS; public bool Resume; }
         readonly Storyboard story;
         readonly HarborLayout layout;
@@ -66,6 +70,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         string run;
         double lastS = double.NegativeInfinity;
         double joinS;
+        double currentSim;
+        double staleAtS = double.NaN;
         string ambientPose;
         public DirectorMode Mode { get; private set; }
         public string Banner { get; private set; } = "";
@@ -86,10 +92,10 @@ namespace DeviceChain.Harborpulse.Model.Director
         { p.State = state; Emit(now, "state", p, state.ToString()); }
         bool Open(PageRun p, double sim) => sim >= p.Page.FromSim && sim <= p.Page.ToSim;
         EvidenceResult Evaluate(Needs needs, PageRun p, ObservationStore store, double now, string source = EvidenceSource.Platform)
-            => needs?.Evaluate(store, p.Page.Context(run, now, source, p.TriggerRecord)) ?? new EvidenceResult();
+            => needs?.Evaluate(store, new EvidenceContext(run, p.Page.FromSim, p.Page.ToSim, now, source, p.TriggerRecord, currentSim, layout.DayLengthSeconds)) ?? new EvidenceResult();
         public void Join(DirectorSample sample, ObservationStore store)
         {
-            run = sample.Run; joinS = sample.MonotonicS; lastS = joinS; active = null; consumed.Clear(); queue.Clear(); pages.Clear();
+            currentSim = sample.Sim; run = sample.Run; joinS = sample.MonotonicS; lastS = joinS; active = null; consumed.Clear(); queue.Clear(); pages.Clear();
             foreach (var page in story.Pages) pages.Add(page.Id, new PageRun { Page = page });
             foreach (var o in store.Records.Where(o => o.Run == run && o.OccurredAtS < joinS)) consumed.Add(o.EventKey);
             foreach (var p in pages.Values.Where(p => p.Page.Once))
@@ -101,7 +107,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             {
                 var trigger = Evaluate(p.Page.Trigger, p, store, joinS);
                 if (trigger.Holds && trigger.Records.Any(o => o.OccurredAtS < joinS))
-                { p.Recap = true; p.Triggered = true; p.TriggerRecord = trigger.Records.LastOrDefault(); Enqueue(p, joinS, false); }
+                { p.Recap = true; p.Triggered = true; p.TriggerRecord = trigger.Records.LastOrDefault(); p.TriggerS = p.TriggerRecord.OccurredAtS; Enqueue(p, joinS, false); }
             }
             Emit(joinS, "join", null, run);
             if (sample.Defects.Count == 0)
@@ -113,7 +119,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         void Enqueue(PageRun p, double now, bool resume)
         {
             if (queue.Any(q => q.Runtime == p) || active == p) return;
-            p.TriggerS = now; queue.Add(new QueueEntry { Runtime = p, AtS = now, Resume = resume });
+            queue.Add(new QueueEntry { Runtime = p, AtS = now, Resume = resume });
             Emit(now, "queue", p, resume ? "resume" : "trigger");
         }
         public IReadOnlyList<DirectorEvent> Tick(DirectorSample sample, ObservationStore store)
@@ -121,7 +127,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             var start = log.Count;
             if (sample.MonotonicS < lastS) throw new ArgumentException("director monotonic clock moved backwards");
             lastS = sample.MonotonicS;
-            var now = lastS;
+            var now = lastS; currentSim = sample.Sim;
             if (!sample.DigestMatches)
             {
                 Mode = DirectorMode.LayoutMismatch; Banner = "layout mismatch: director off";
@@ -130,9 +136,11 @@ namespace DeviceChain.Harborpulse.Model.Director
             if (sample.Stale)
             {
                 Mode = DirectorMode.Reconnecting; Banner = "reconnecting";
+                if (double.IsNaN(staleAtS)) { staleAtS = now; if (active != null) { Hide(active, now); active.Caption = null; active.Text = null; active.Provisional = false; active.Pending.Clear(); Offer(active, now); } }
                 if (log.Count == 0 || log.Last().Value != Banner) Emit(now, "banner", null, Banner);
                 return log.Skip(start).ToArray();
             }
+            if (!double.IsNaN(staleAtS)) { if (active != null) { active.ShotS += now - staleAtS; active.StartedS += now - staleAtS; } staleAtS = double.NaN; }
             Mode = DirectorMode.Active;
             if (run != sample.Run) Join(sample, store);
             var banner = sample.Defects.Count > 0 ? "TEST CONTROL: " + string.Join(", ", sample.Defects) : "";
@@ -140,7 +148,9 @@ namespace DeviceChain.Harborpulse.Model.Director
             Banner = banner;
             foreach (var p in pages.Values.OrderBy(p => p.Page.Id, StringComparer.Ordinal))
             {
-                if (p.Page.CutsOnly || p.Retired || !Open(p, sample.Sim)) continue;
+                if (p.Page.CutsOnly || p.Retired) continue;
+                if (sample.Sim > p.Page.ToSim && p.Page.FallbackPolicy == "skip-page" && !p.Triggered && p.State != PageState.Presented) { Emit(now, "skip-page", p, "no trigger"); Transition(p, PageState.Presented, now); continue; }
+                if (!Open(p, sample.Sim)) continue;
                 if (p.State == PageState.Dormant) Transition(p, PageState.Eligible, now);
                 var result = Evaluate(p.Page.Trigger, p, store, now);
                 var newRecords = result.Records.Where(o => !consumed.Contains(o.EventKey)).ToArray();
@@ -154,7 +164,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                         p.LastReactionSim = sample.Sim; p.Reaction = true; p.Shot = 0; p.Slot = 0;
                         Transition(p, PageState.Eligible, now);
                     }
-                    p.Triggered = true; p.TriggerS = now;
+                    p.Triggered = true; p.TriggerS = p.TriggerRecord.OccurredAtS;
                     if (p != active) Enqueue(p, now, false);
                     else if (p.State == PageState.Watching)
                     {
@@ -163,10 +173,10 @@ namespace DeviceChain.Harborpulse.Model.Director
                     }
                 }
                 var planned = p.Page.PlannedSim.HasValue && sample.Sim >= p.Page.PlannedSim.Value - p.Page.PreRollS * 24 / layout.DayLengthSeconds;
-                if (p.State == PageState.Eligible && (planned || Evaluate(p.Page.Watch, p, store, now).Holds)) Enqueue(p, now, false);
+                if (p.Page.FallbackPolicy != "skip-page" && p.State == PageState.Eligible && (planned || Evaluate(p.Page.Watch, p, store, now).Holds)) Enqueue(p, now, false);
             }
             foreach (var q in queue.ToArray())
-                if ((!q.Resume && now - q.AtS > q.Runtime.Page.QueueTtlS) || !Open(q.Runtime, sample.Sim))
+                if ((!q.Resume && now - (q.Runtime.Triggered ? q.Runtime.TriggerS : q.AtS) > q.Runtime.Page.QueueTtlS) || !Open(q.Runtime, sample.Sim))
                 { Miss(q.Runtime, now, q.Resume ? "resume window closed" : "queue TTL/window expired"); queue.Remove(q); }
             var candidate = queue.OrderByDescending(q => q.Runtime.Page.Priority).ThenBy(q => q.AtS).ThenBy(q => q.Runtime.Page.Id, StringComparer.Ordinal).FirstOrDefault();
             if (active != null && candidate != null && candidate.Runtime.Page.Priority > active.Page.Priority && Boundary(active, now))
@@ -188,7 +198,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             }
             return log.Skip(start).ToArray();
         }
-        static bool Boundary(PageRun p, double now) => p.Caption == null || now - p.CaptionS >= 3;
+        static bool Boundary(PageRun p, double now) => p.Caption == null || now - p.CaptionS >= p.CaptionHoldS;
         void Activate(PageRun p, bool resume, double now, ObservationStore store)
         {
             active = p;
@@ -201,6 +211,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                     for (var i = 0; i < p.Page.Shots.Count; i++)
                         if (p.Page.Captions.Any(c => p.Page.Shots[i].Captions.Contains(c.Id) && c.Kind == "claim" && Evaluate(c.Needs, p, store, now, c.Source).Holds)) p.Shot = i;
                 }
+                Offer(p, now);
                 Transition(p, PageState.Staged, now);
                 Transition(p, p.Triggered || p.Page.Trigger == null ? PageState.Playing : PageState.Watching, now);
                 Emit(now, "shot", p, p.Page.Shots[p.Shot].Id);
@@ -212,8 +223,12 @@ namespace DeviceChain.Harborpulse.Model.Director
             {
                 p.Suspended = false; p.ShotS = now; p.CaptionS = now;
                 Emit(now, "resume", p, p.Page.Shots[p.Shot].Id);
-                // Resume the last caption, with a new guaranteed visibility interval.
-                if (p.Text != null) { p.Caption = p.Page.Captions.FirstOrDefault(c => c.Id == p.Caption)?.Id; Emit(now, "caption", p, p.Text); }
+                var caption = p.Page.Captions.FirstOrDefault(c => c.Id == p.Caption);
+                if (caption != null) {
+                    var proof = caption.Needs == null ? new EvidenceResult { Holds = true } : Evaluate(caption.Needs, p, store, now, caption.Source);
+                    if (proof.Holds) { p.Text = caption.Render(proof); Emit(now, "caption", p, p.Text, proof.Records); }
+                    else { p.Caption = null; p.Text = null; p.Slot = Math.Max(0, p.Slot - 1); }
+                }
             }
         }
         void Hide(PageRun p, double now)
@@ -226,43 +241,53 @@ namespace DeviceChain.Harborpulse.Model.Director
             if (p.Page.Once) p.Retired = true;
             active = null;
         }
+        void Offer(PageRun p, double now) {
+            var shot = p.Page.Shots[p.Shot];
+            foreach (var slot in shot.Captions.Select(id => p.Page.Captions.First(c => c.Id == id).Slot).Distinct())
+                p.Pending.Add(new Opportunity { Shot = shot, Slot = slot, FromS = now + shot.MoveS, DeadlineS = now + shot.MoveS + shot.HoldMaxS });
+        }
+        void Fallback(PageRun p, double now, ObservationStore store)
+        {
+            if (!Boundary(p, now)) return;
+            // Only an unresolved slot may fall back. A page-wide search can replay an
+            // unrelated fallback (for example the restore tally while waiting for the truck).
+            foreach (var opportunity in p.Pending.ToArray())
+            {
+                p.Pending.Remove(opportunity);
+                foreach (var caption in p.Page.Captions.Where(c => c.Kind == "fallback" &&
+                    opportunity.Shot.Captions.Contains(c.Id) && c.Slot == opportunity.Slot && c.Id != opportunity.Shown))
+                {
+                    var proof = caption.Needs == null ? new EvidenceResult { Holds = true } : Evaluate(caption.Needs, p, store, now, caption.Source);
+                    if (!proof.Holds) continue;
+                    Hide(p, now); p.Caption = caption.Id; p.Text = caption.Render(proof); p.CaptionS = now; p.CaptionHoldS = caption.HoldS;
+                    Emit(now, "caption", p, p.Text, proof.Records); return;
+                }
+            }
+            // No declared fallback means true numbers on the rail, with no claim caption.
+            Finish(p, now);
+        }
         void Advance(PageRun p, DirectorSample sample, ObservationStore store)
         {
             var now = sample.MonotonicS; var shot = p.Page.Shots[p.Shot];
-            if (!Boundary(p, now)) return;
             if ((p.Reaction || p.Recap) && now - p.StartedS >= 5) { Finish(p, now); return; }
+            if ((!Open(p, sample.Sim) || (p.State == PageState.Watching && now - p.StartedS >= p.Page.TriggerTimeoutS)) && !Boundary(p, now)) return;
             if (!Open(p, sample.Sim) || (p.State == PageState.Watching && now - p.StartedS >= p.Page.TriggerTimeoutS))
             {
-                if (p.State != PageState.Fallback) { Transition(p, PageState.Fallback, now); p.Slot = 0; }
+                if (p.State != PageState.Fallback) Transition(p, PageState.Fallback, now);
             }
-            var slots = shot.Captions.Select(id => p.Page.Captions.First(c => c.Id == id).Slot).Distinct().ToArray();
-            if (now - p.ShotS >= shot.MoveS && p.Slot < slots.Length && (!(p.Reaction || p.Recap) || p.Caption == null) && now + 3 <= p.ShotS + shot.MoveS + shot.HoldMaxS)
-            {
-                var captions = p.Page.Captions.Where(c => shot.Captions.Contains(c.Id) && c.Slot == slots[p.Slot]).ToArray();
-                StoryCaption chosen = null; EvidenceResult evidence = new EvidenceResult();
-                foreach (var c in captions.OrderBy(c => c.Kind == "claim" ? 0 : c.Kind == "scenario" ? 1 : c.Kind == "pre" ? 2 : 3))
-                {
-                    var result = c.Needs == null ? new EvidenceResult { Holds = true } : Evaluate(c.Needs, p, store, now, c.Source);
-                    if (result.Holds) { chosen = c; evidence = result; break; }
-                }
-                if (chosen != null)
-                {
-                    Hide(p, now); p.Caption = chosen.Id; p.Text = chosen.Render(evidence); p.CaptionS = now; p.Slot++;
-                    Emit(now, "caption", p, p.Text, evidence.Records);
-                    foreach (var o in evidence.Records) consumed.Add(o.EventKey);
-                    return;
-                }
-                if (p.State == PageState.Fallback || now - p.ShotS >= shot.MoveS + shot.HoldMinS) p.Slot++;
-            }
+            if (p.State == PageState.Fallback) { Fallback(p, now, store); return; }
             foreach (var node in p.Page.Nodes)
             {
-                if (p.Nodes.Contains(node.Id)) continue;
+                if (p.Nodes.Contains(node.Id) || now < p.StartedS + (node.AfterPageS ?? (p.Page.Nodes.ToList().IndexOf(node) + 1) * 3) || (node.AfterTriggerS > 0 && (!p.Triggered || now < p.TriggerS + node.AfterTriggerS))) continue;
                 var result = Evaluate(node.Needs, p, store, now, node.Source);
                 if (!result.Holds) continue;
                 // A rail gains at most one node per three seconds.
                 var previous = log.LastOrDefault(e => e.Kind == "node" && e.Page == p.Page.Id);
                 if (previous != null && now - previous.ShowS < 3) break;
                 p.Nodes.Add(node.Id); Emit(now, "node", p, node.Id, result.Records);
+                var label = node.Label; foreach (var binding in result.Bindings) label = label.Replace("{" + binding.Key + "}", binding.Value);
+                if (label.Contains("{")) throw new FormatException("unbound node label");
+                Emit(now, "node-label", p, label, result.Records);
                 foreach (var o in result.Records) consumed.Add(o.EventKey);
                 foreach (var link in p.Page.Links.Where(l => l[1] == node.Id && p.Nodes.Contains(l[0])))
                 {
@@ -273,14 +298,36 @@ namespace DeviceChain.Harborpulse.Model.Director
                 }
                 break;
             }
+            if (!Boundary(p, now)) return;
+            foreach (var opportunity in p.Pending.ToArray())
+            {
+                if (now < opportunity.FromS) continue;
+                if (now > opportunity.DeadlineS) { p.Pending.Remove(opportunity); continue; }
+                var captions = p.Page.Captions.Where(c => opportunity.Shot.Captions.Contains(c.Id) && c.Slot == opportunity.Slot).ToArray();
+                StoryCaption chosen = null; EvidenceResult evidence = new EvidenceResult();
+                foreach (var c in captions.OrderBy(c => c.Kind == "claim" ? 0 : c.Kind == "scenario" ? 1 : c.Kind == "pre" ? 2 : 3)) {
+                    var result = c.Needs == null ? new EvidenceResult { Holds = true } : Evaluate(c.Needs, p, store, now, c.Source);
+                    if (result.Holds && (p.State != PageState.Fallback || c.Kind == "fallback")) { chosen = c; evidence = result; break; }
+                }
+                if (chosen == null || chosen.Id == opportunity.Shown) continue;
+                var provisional = chosen.Kind != "claim" && captions.Any(c => c.Kind == "claim") && p.State != PageState.Fallback;
+                opportunity.Shown = chosen.Id;
+                if (!provisional) p.Pending.Remove(opportunity);
+                Hide(p, now); p.Caption = chosen.Id; p.Text = chosen.Render(evidence); p.CaptionS = now; p.CaptionHoldS = chosen.HoldS;
+                Emit(now, "caption", p, p.Text, evidence.Records);
+                foreach (var o in evidence.Records) consumed.Add(o.EventKey);
+                return;
+            }
             var elapsed = now - p.ShotS;
             var complete = elapsed >= shot.MoveS + shot.HoldMinS && (shot.Until == null || Evaluate(shot.Until, p, store, now).Holds);
             if (elapsed >= shot.MoveS + shot.HoldMaxS || p.State == PageState.Fallback) complete = true;
             if (!complete || (!Open(p, sample.Sim) && !Boundary(p, now))) return;
             if (p.Shot + 1 >= p.Page.Shots.Count && p.State == PageState.Watching) return;
+            if (p.Shot + 1 >= p.Page.Shots.Count && p.Pending.Count > 0 && Open(p, sample.Sim) && p.State != PageState.Fallback) return;
             if (p.Shot + 1 >= p.Page.Shots.Count || p.State == PageState.Fallback) { Finish(p, now); return; }
             if (sample.Sim < p.Page.Shots[p.Shot + 1].CueSim) return;
-            Hide(p, now); p.Caption = null; p.Text = null; p.Shot++; p.Slot = 0; p.ShotS = now;
+            Hide(p, now); p.Caption = null; p.Text = null; p.Shot++; p.Slot = 0; p.Provisional = false; p.ShotS = now;
+            Offer(p, now);
             var next = p.Page.Shots[p.Shot];
             Emit(now, "shot", p, next.Id);
             if (next.FollowDeviceFromTrigger != "none" && p.TriggerRecord != null)
@@ -304,7 +351,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         double lastNavigationS = double.NegativeInfinity;
         public void Input(double nowS, string key = null, bool mouseDrag = false, bool wheel = false)
         {
-            if (new[] { "E", "D", "H", "Space" }.Contains(key)) return;
+            if (new[] { "E", "D", "H", "Space" }.Contains(key)) key = null;
             if (mouseDrag || wheel || new[] { "W", "A", "S", "Q", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight" }.Contains(key)) lastNavigationS = nowS;
         }
         public double DirectorWeight(double nowS)

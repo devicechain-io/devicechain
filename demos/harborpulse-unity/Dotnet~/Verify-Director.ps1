@@ -12,7 +12,7 @@ $env:PATH = "$(Split-Path $sdk);$env:PATH"
 $env:DOTNET_CLI_HOME = "$build/home"
 $env:APPDATA = "$build/roaming"
 $env:LOCALAPPDATA = "$build/local"
-$env:NUGET_PACKAGES = "$HOME/.nuget/packages"
+if (!$env:NUGET_PACKAGES) { $env:NUGET_PACKAGES = "$HOME/.nuget/packages" }
 $env:NUGET_HTTP_CACHE_PATH = "$build/cache"
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
@@ -28,6 +28,7 @@ $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
     <TargetPlatformSdkPath>$build/sdk/</TargetPlatformSdkPath>
     <TargetPlatformDisplayName>Portable</TargetPlatformDisplayName>
     <NuGetAudit>false</NuGetAudit>
+    <DefaultItemExcludes>`$(DefaultItemExcludes);**/obj/**;**/bin/**;**/.build/**</DefaultItemExcludes>
   </PropertyGroup>
 </Project>
 "@ | Set-Content "$build/Directory.Build.props"

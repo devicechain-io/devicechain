@@ -44,6 +44,8 @@ namespace DeviceChain.Harborpulse.Model.Director
     public sealed class ChainNode
     {
         public string Id { get; internal set; }
+        public double AfterTriggerS { get; internal set; }
+        public double? AfterPageS { get; internal set; }
         public string Family { get; internal set; }
         public string Label { get; internal set; }
         public string Source { get; internal set; }
@@ -59,6 +61,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         public double PreRollS { get; internal set; }
         public double TriggerTimeoutS { get; internal set; }
         public double QueueTtlS { get; internal set; }
+        public string FallbackPolicy { get; internal set; } = "show-fallback";
         public bool Once { get; internal set; }
         public bool CutsOnly { get; internal set; }
         public Needs Watch { get; internal set; }
@@ -84,6 +87,9 @@ namespace DeviceChain.Harborpulse.Model.Director
         public double MoveS { get; internal set; }
         public double RecordedWallFromS { get; internal set; }
         public double RecordedWallToS { get; internal set; }
+        public string SeamPose { get; internal set; }
+        public double DissolveS { get; internal set; }
+        public IReadOnlyList<CutCaption> Overlays { get; internal set; }
         public string Borrowed { get; internal set; }
         public IReadOnlyList<CutCaption> Captions { get; internal set; }
         public IReadOnlyList<string> Nodes { get; internal set; }
@@ -131,12 +137,14 @@ namespace DeviceChain.Harborpulse.Model.Director
         static Needs Predicate(JsonElement e, string key) => e.TryGetProperty(key, out var v) && v.ValueKind != JsonValueKind.Null ? Needs.Parse(v) : null;
         static StoryPage ReadPage(JsonElement e, PresentationMap map)
         {
-            StrictJson.Keys(e, "id", "priority", "windowSim", "plannedSim", "preRollS", "triggerTimeoutS", "queueTtlS", "once", "cutsOnly", "watch", "trigger", "terminal", "shots", "captions", "chain");
+            StrictJson.Keys(e, "fallbackPolicy", "id", "priority", "windowSim", "plannedSim", "preRollS", "triggerTimeoutS", "queueTtlS", "once", "cutsOnly", "watch", "trigger", "terminal", "shots", "captions", "chain");
             var window = StrictJson.Array(e, "windowSim").ToArray();
             if (window.Length != 2 || !window[0].TryGetDouble(out var from) || !window[1].TryGetDouble(out var to) || !double.IsFinite(from) || !double.IsFinite(to) || to <= from) throw new FormatException("windowSim requires increasing finite pair");
             var priority = StrictJson.Num(e, "priority");
             if (priority < 0 || priority % 1 != 0) throw new FormatException("priority must be nonnegative integer");
-            var page = new StoryPage { Id = StrictJson.Str(e, "id"), Priority = (int)priority, FromSim = from, ToSim = to,
+            var policy = StrictJson.Str(e, "fallbackPolicy", "show-fallback");
+            if (policy != "show-fallback" && policy != "skip-page") throw new FormatException("unknown fallback policy");
+            var page = new StoryPage { FallbackPolicy = policy, Id = StrictJson.Str(e, "id"), Priority = (int)priority, FromSim = from, ToSim = to,
                 PlannedSim = e.GetProperty("plannedSim").ValueKind == JsonValueKind.Null ? (double?)null : StrictJson.Num(e, "plannedSim"),
                 PreRollS = StrictJson.Num(e, "preRollS"), TriggerTimeoutS = StrictJson.Num(e, "triggerTimeoutS"), QueueTtlS = StrictJson.Num(e, "queueTtlS"),
                 Once = Bool(e, "once"), CutsOnly = Bool(e, "cutsOnly"), Watch = Predicate(e, "watch"), Trigger = Predicate(e, "trigger"), Terminal = Predicate(e, "terminal") };
@@ -147,11 +155,12 @@ namespace DeviceChain.Harborpulse.Model.Director
             var chain = e.GetProperty("chain"); StrictJson.Keys(chain, "nodes", "links");
             page.Nodes = StrictJson.Array(chain, "nodes").Select(n =>
             {
-                StrictJson.Keys(n, "id", "family", "label", "source", "needs"); var family = StrictJson.Str(n, "family");
+                StrictJson.Keys(n, "afterTriggerS", "afterPageS", "id", "family", "label", "source", "needs"); var family = StrictJson.Str(n, "family");
                 if (!new[] { "gauge", "pump", "other" }.Contains(family)) throw new FormatException("unknown node family " + family);
                 var source = StrictJson.Str(n, "source"); EvidenceSource.Check(source);
-                return new ChainNode { Id = StrictJson.Str(n, "id"), Family = family, Label = StrictJson.Str(n, "label"), Source = source, Needs = Needs.Parse(n.GetProperty("needs")) };
+                return new ChainNode { AfterTriggerS = StrictJson.Num(n, "afterTriggerS", 0), AfterPageS = n.TryGetProperty("afterPageS", out _) ? StrictJson.Num(n, "afterPageS") : (double?)null, Id = StrictJson.Str(n, "id"), Family = family, Label = StrictJson.Str(n, "label"), Source = source, Needs = Needs.Parse(n.GetProperty("needs")) };
             }).ToArray(); Unique(page.Nodes.Select(n => n.Id), "node");
+            foreach (var need in new[] { page.Watch, page.Trigger, page.Terminal }.Concat(page.Captions.Select(c => c.Needs)).Concat(page.Nodes.Select(n => n.Needs)).Concat(page.Shots.Select(shot => shot.Until))) need?.ResolveTimes(map.Layout);
             page.Links = StrictJson.Array(chain, "links").Select(l =>
             {
                 if (l.ValueKind != JsonValueKind.Array) throw new FormatException("chain link requires pair");
@@ -176,8 +185,10 @@ namespace DeviceChain.Harborpulse.Model.Director
             if (c.Kind == "scenario" && c.Source != EvidenceSource.Scenario) throw new FormatException("scenario caption source " + c.Id);
             var text = string.Join(" ", c.Lines);
             // 'a firmware update' names the artifact; update is a noun in this authored fallback.
-            var lintText = text.Replace("a firmware update", "a firmware artifact");
+            var lintText = c.Id == "unsigned" && c.Kind == "fallback" && c.Source == EvidenceSource.Platform && text == "Overnight: a firmware update." ? "Overnight: a firmware artifact." : text;
             if ((c.Kind == "pre" || c.Kind == "fallback") && (PlatformVerb.IsMatch(lintText) || text.Any(char.IsDigit))) throw new FormatException("claim lint: platform verb or digit in " + c.Kind + " " + c.Id);
+            if (c.Kind == "pre" || c.Kind == "fallback")
+                if (Regex.IsMatch(text, @"\{[^}]+\}")) throw new FormatException("pre/fallback placeholders refused");
             if (c.Kind == "claim")
             {
                 if (text.Any(char.IsDigit)) throw new FormatException("claim lint: literal digit " + c.Id);
@@ -188,8 +199,9 @@ namespace DeviceChain.Harborpulse.Model.Director
         }
         static StoryShot ReadShot(JsonElement e, StoryPage page, PresentationMap map)
         {
-            StrictJson.Keys(e, "id", "from", "to", "moveS", "holdMinS", "holdMaxS", "cueSim", "until", "captions", "followDeviceFromTrigger");
+            StrictJson.Keys(e, "id", "from", "to", "moveS", "holdMinS", "holdMaxS", "cueRef", "cueSim", "until", "captions", "followDeviceFromTrigger");
             var s = new StoryShot { Id = StrictJson.Str(e, "id"), From = StrictJson.Str(e, "from"), To = StrictJson.Str(e, "to"), MoveS = StrictJson.Num(e, "moveS"), HoldMinS = StrictJson.Num(e, "holdMinS"), HoldMaxS = StrictJson.Num(e, "holdMaxS"), CueSim = StrictJson.Num(e, "cueSim"), Until = Predicate(e, "until"), FollowDeviceFromTrigger = StrictJson.Str(e, "followDeviceFromTrigger", "none"), Captions = StrictJson.Array(e, "captions").Select(v => v.GetString()).ToArray() };
+            if (e.TryGetProperty("cueRef", out _)) s.CueSim = Needs.Cue(StrictJson.Str(e, "cueRef"), map.Layout);
             map.Pose(s.From); map.Pose(s.To);
             if (s.FollowDeviceFromTrigger != "none" && s.FollowDeviceFromTrigger != "device") throw new FormatException("unknown followDeviceFromTrigger " + s.FollowDeviceFromTrigger);
             if (s.Captions.Any(id => !page.Captions.Any(c => c.Id == id))) throw new FormatException("shot unknown caption " + s.Id);
@@ -204,8 +216,10 @@ namespace DeviceChain.Harborpulse.Model.Director
             var target = StrictJson.Num(e, "targetS"); if (target != (id == "c90" ? 90 : 300)) throw new FormatException("cut target " + id);
             var segments = StrictJson.Array(e, "segments").Select(s =>
             {
-                StrictJson.Keys(s, "page", "shot", "durS", "moveS", "recordedWallFromS", "recordedWallToS", "borrowed", "captions", "nodes");
+                StrictJson.Keys(s, "seamPose", "dissolveS", "overlays", "page", "shot", "durS", "moveS", "recordedWallFromS", "recordedWallToS", "borrowed", "captions", "nodes");
                 var segment = new CutSegment { Page = StrictJson.Str(s, "page"), Shot = StrictJson.Str(s, "shot"), DurS = StrictJson.Num(s, "durS"), MoveS = StrictJson.Num(s, "moveS"), RecordedWallFromS = StrictJson.Num(s, "recordedWallFromS"), RecordedWallToS = StrictJson.Num(s, "recordedWallToS"), Borrowed = StrictJson.Str(s, "borrowed", "none") };
+                segment.SeamPose = StrictJson.Str(s, "seamPose"); segment.DissolveS = StrictJson.Num(s, "dissolveS");
+                if (segment.SeamPose != "pose:home" || segment.DissolveS < 0 || segment.DissolveS > segment.DurS) throw new FormatException("invalid seam");
                 var page = pages.FirstOrDefault(p => p.Id == segment.Page) ?? throw new FormatException("unknown cut page " + segment.Page);
                 if (!page.Shots.Any(shot => shot.Id == segment.Shot)) throw new FormatException("unknown cut shot " + segment.Shot);
                 if (id == "c90" && !new[] { "0", "1", "4", "6", "7", "8", "9" }.Contains(page.Id)) throw new FormatException("c90 contains extra chain " + page.Id);
@@ -218,6 +232,11 @@ namespace DeviceChain.Harborpulse.Model.Director
                     if (!page.Captions.Any(pc => pc.Id == caption.Id)) throw new FormatException("unknown cut caption " + caption.Id);
                     if (caption.HoldS < 3 || caption.AtS < segment.MoveS || caption.AtS + caption.HoldS > segment.DurS + 1e-9) throw new FormatException("cut caption timing law " + caption.Id);
                     return caption;
+                }).ToArray();
+                segment.Overlays = StrictJson.Array(s, "overlays").Select(o => {
+                    StrictJson.Keys(o, "id", "atS", "holdS"); var overlay = new CutCaption { Id = StrictJson.Str(o, "id"), AtS = StrictJson.Num(o, "atS"), HoldS = StrictJson.Num(o, "holdS") };
+                    if (!page.Captions.Any(c => c.Id == overlay.Id && (c.Kind == "scenario" || c.Kind == "claim")) || overlay.HoldS < 3 || overlay.AtS < 0 || overlay.AtS + overlay.HoldS > segment.DurS) throw new FormatException("invalid disclosure overlay");
+                    return overlay;
                 }).ToArray();
                 var ordered = segment.Captions.OrderBy(c => c.AtS).ToArray();
                 for (var i = 1; i < ordered.Length; i++)

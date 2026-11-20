@@ -81,7 +81,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                     var e = DirectorWire.ReadEvent(data);
                     if (e.Kind == "caption") Decisions.Remove(e.Page + ":caption-end");
                     if (e.Kind == "caption-end") Decisions.Remove(e.Page + ":caption");
-                    Decisions[e.Page + ":" + e.Kind] = e; foreach (var key in e.Evidence) Consumed.Add(key); break;
+                    Decisions[e.Page + ":" + e.Kind + (e.Kind == "node" || e.Kind == "node-label" || e.Kind == "link" ? ":" + e.Value : "")] = e; foreach (var key in e.Evidence) Consumed.Add(key); break;
                 case "consumed": foreach (var key in data.EnumerateArray()) Consumed.Add(key.GetString()); break;
                 default: throw new FormatException("unknown recording kind " + kind);
             }
@@ -90,7 +90,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         internal void Write(Utf8JsonWriter w)
         {
             w.WriteStartObject();
-            w.WriteStartArray("observations"); foreach (var o in Observed.Records.OrderBy(o => o.EventKey, StringComparer.Ordinal)) DirectorWire.Observation(w, o); w.WriteEndArray();
+            w.WriteStartArray("observations"); foreach (var o in Observed.Records.OrderBy(o => o.EventKey, StringComparer.Ordinal).ThenBy(o => o.ObservedAtS)) DirectorWire.Observation(w, o); w.WriteEndArray();
             w.WriteStartArray("coverage"); foreach (var c in Observed.Coverage.OrderBy(c => c.Run, StringComparer.Ordinal).ThenBy(c => c.Stream, StringComparer.Ordinal).ThenBy(c => c.FromSim).ThenBy(c => c.ToSim).ThenBy(c => c.Gap)) DirectorWire.Coverage(w, c); w.WriteEndArray();
             w.WritePropertyName("world"); using (var d = JsonDocument.Parse(World)) DirectorWire.Canonical(w, d.RootElement);
             w.WriteStartArray("decisions"); foreach (var p in Decisions.OrderBy(p => p.Key, StringComparer.Ordinal)) DirectorWire.Event(w, p.Value); w.WriteEndArray();

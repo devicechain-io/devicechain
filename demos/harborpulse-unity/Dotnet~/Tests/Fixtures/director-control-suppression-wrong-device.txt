@@ -1,0 +1,8 @@
++310|2|caption|The fault is detected.|3:run5:alarm34:alarm:hp-light-east-3:lamp-flicker15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:6:RAISED8:PLATFORM
++313|2|caption-end|fault-only|
+-300|2|link|work->fault|
+-300|2|node-label|Fault detected, during maintenance|3:run5:alarm34:alarm:hp-light-east-3:lamp-flicker15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:6:RAISED8:PLATFORM
+-300|2|node|fault|3:run5:alarm34:alarm:hp-light-east-3:lamp-flicker15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:6:RAISED8:PLATFORM
+-310|2|caption|The fault is still detected.|3:run5:alarm34:alarm:hp-light-east-3:lamp-flicker15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:6:RAISED8:PLATFORM
+-313|2|caption-end|fault|
+-330|2|link|fault->none|

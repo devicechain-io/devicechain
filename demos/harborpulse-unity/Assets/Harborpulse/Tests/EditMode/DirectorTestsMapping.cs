@@ -21,6 +21,14 @@ namespace DeviceChain.Harborpulse.Tests
                 { var path = Path.Combine(dir.FullName, relative); if (File.Exists(path)) return File.ReadAllText(path); }
             throw new FileNotFoundException("storyboard.json");
         }
+        public static string FixtureDirectory() {
+            for (var dir = new DirectoryInfo(Directory.GetCurrentDirectory()); dir != null; dir = dir.Parent) {
+                var path = Path.Combine(dir.FullName, "demos/harborpulse-unity/Dotnet~/Tests/Fixtures");
+                if (Directory.Exists(path)) return path;
+                path = Path.Combine(dir.FullName, "Tests/Fixtures"); if (Directory.Exists(path)) return path;
+            }
+            throw new DirectoryNotFoundException("director fixtures");
+        }
         public static Storyboard Story() => Storyboard.Parse(StoryText(), new PresentationMap(Kit.Layout()));
         public static Observation O(string kind, string device = "", string key = "", string status = "", double sim = 17.5, double wall = 690,
             string id = "record", string cycle = "cycle-this-run", string source = EvidenceSource.Platform, IReadOnlyDictionary<string, string> fields = null, IReadOnlyDictionary<string, string[]> sets = null,
@@ -125,7 +133,8 @@ namespace DeviceChain.Harborpulse.Tests
         static int GridMismatches(PresentationMap map)
         {
             var l = Kit.Layout(); var plain = l.Fences[0]; var frame = new WorldFrame(l.ControlFrame[0]);
-            var min = frame.ToGround(plain.Ring[0]); var max = frame.ToGround(plain.Ring[2]); var failures = 0;
+            var controls = plain.Ring.Concat(l.TruckRoute).Append(l.Depot).Select(frame.ToGround).ToArray();
+            var min = new Ground(controls.Min(p => p.X), controls.Min(p => p.Z)); var max = new Ground(controls.Max(p => p.X), controls.Max(p => p.Z)); var failures = 0;
             for (var x = (int)min.X - 10; x <= max.X + 10; x++) for (var z = (int)min.Z - 10; z <= max.Z + 10; z++)
             {
                 var lat = l.ControlFrame[0].Lat + z * 180 / (Math.PI * WorldFrame.EarthRadiusM);
@@ -151,7 +160,11 @@ namespace DeviceChain.Harborpulse.Tests
         [Test]
         public void M5_CrossedCornerFailsOrientationAndContainment()
         {
-            var map = new PresentationMap(Kit.Layout(), vertexOverrides: new Dictionary<int, Ground> { [12] = new Ground(130, 140) });
+            var l = Kit.Layout(); var controls = l.ControlFrame.Concat(l.Fences.SelectMany(f => f.Ring)).Concat(l.TruckRoute).ToArray();
+            var xs = controls.Select(p => p.Lon).Distinct().OrderBy(x => x).ToArray(); var zs = controls.Select(p => p.Lat).Distinct().OrderBy(x => x).ToArray();
+            var corner = l.Fences[0].Ring[0]; var index = Array.IndexOf(zs, corner.Lat) * xs.Length + Array.IndexOf(xs, corner.Lon);
+            var clean = new PresentationMap(l); var opposite = clean.MapFix(l.Fences[0].Ring[2].Lat, l.Fences[0].Ring[2].Lon);
+            var map = new PresentationMap(l, vertexOverrides: new Dictionary<int, Ground> { [index] = new Ground(opposite.X + 20, opposite.Z + 20) });
             Assert.That(map.Validate(), Is.Not.Empty); Assert.That(GridMismatches(map), Is.GreaterThan(0));
         }
         [Test]
@@ -162,16 +175,31 @@ namespace DeviceChain.Harborpulse.Tests
             var a = map.TruckAt(fixes, 0).At; var b = map.TruckAt(fixes, 20).At; var mid = map.TruckAt(fixes, 10).At;
             Assert.That(mid.Z, Is.EqualTo((a.Z + b.Z) / 2).Within(1e-8));
             var at40 = map.TruckAt(fixes, 40).At; Assert.That(at40.Z, Is.EqualTo(b.Z + (a.Z - b.Z) * 0.25).Within(1e-8));
-            Assert.That(map.SnapToRoad(new Ground(a.X + 2.9, 125)).At.X, Is.EqualTo(a.X).Within(1e-8));
-            Assert.That(map.SnapToRoad(new Ground(a.X + 3.1, 125)).OffRoad, Is.True);
-            for (var t = 0; t <= 100; t++) { var play = map.TruckAt(fixes, t); map.TruckAt(fixes, 0); Assert.That(map.TruckAt(fixes, t).At.Z, Is.EqualTo(play.At.Z)); }
+            var roadA = map.Road[0]; var roadB = map.Road[1]; var dx = roadB.X - roadA.X; var dz = roadB.Z - roadA.Z; var length = Math.Sqrt(dx * dx + dz * dz);
+            var middle = new Ground((roadA.X + roadB.X) / 2, (roadA.Z + roadB.Z) / 2);
+            foreach (var offset in new[] { 2.9, 3.0, 3.1 }) {
+                var fix = map.SnapToRoad(new Ground(middle.X - dz * offset / length, middle.Z + dx * offset / length));
+                Assert.That(fix.OffRoad, Is.EqualTo(offset > 3));
+                if (offset <= 3) { Assert.That(fix.At.X, Is.EqualTo(middle.X).Within(1e-8)); Assert.That(fix.At.Z, Is.EqualTo(middle.Z).Within(1e-8)); }
+            }
+            for (var t = 100; t >= 0; t--) { var play = map.TruckAt(fixes, t); map.TruckAt(fixes, 0); var seek = map.TruckAt(fixes, t); Assert.That(seek.At.Z, Is.EqualTo(play.At.Z)); Assert.That(seek.At.X, Is.EqualTo(play.At.X)); Assert.That(seek.OffRoad, Is.EqualTo(play.OffRoad)); }
         }
         [Test]
         public void HomePosesAndDisclosures()
         {
             var m = new PresentationMap(Kit.Layout()); Assert.That(m.Pose("pose:home").Camera.Z, Is.EqualTo(-420)); Assert.That(m.Pose("pose:home:portrait").VerticalFov, Is.EqualTo(52));
             Assert.That(m.Disclosure("hp-light-east-3"), Is.EqualTo("manifest 49.80200 N, 12.15800 W · drawn here (compact layout)"));
-            Assert.That(m.Disclosure("hp-pump-north"), Does.Not.Contain("manifest")); Assert.That(m.Disclosure("hp-truck-1", Kit.Layout().Depot), Does.Contain("49.81000"));
+            Assert.That(m.Disclosure("hp-pump-north"), Does.Not.Contain("manifest")); Assert.That(m.Disclosure("hp-truck-1", Kit.Layout().Depot), Does.Contain(Kit.Layout().Depot.Lat.ToString("0.00000", System.Globalization.CultureInfo.InvariantCulture)));
+        }
+
+        [Test]
+        public void SouthernControlsAreCompactNorthboundAndRejectBothBounds()
+        {
+            var l = Kit.Layout(); var map = new PresentationMap(l); Assert.That(map.Depot.Z, Is.GreaterThan(-180));
+            Assert.That(map.Road[1].Z, Is.GreaterThan(map.Depot.Z));
+            Assert.That(map.Pose("pose:depot:wide").Look.Z, Is.EqualTo(map.Depot.Z));
+            foreach (var lat in new[] { l.ControlFrame.Min(p => p.Lat) - 0.001, l.ControlFrame.Max(p => p.Lat) + 0.001 }) Assert.Throws<FormatException>(() => map.MapFix(lat, l.Depot.Lon));
+            foreach (var lon in new[] { l.ControlFrame.Min(p => p.Lon) - 0.001, l.ControlFrame.Max(p => p.Lon) + 0.001 }) Assert.Throws<FormatException>(() => map.MapFix(l.Depot.Lat, lon));
         }
     }
 }

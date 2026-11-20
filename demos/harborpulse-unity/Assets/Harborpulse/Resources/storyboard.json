@@ -81,7 +81,7 @@
       "priority": 10,
       "windowSim": [
         6,
-        8.25
+        8.35
       ],
       "plannedSim": 6,
       "preRollS": 3,
@@ -114,7 +114,7 @@
           "moveS": 1,
           "holdMinS": 7,
           "holdMaxS": 40,
-          "cueSim": 7.5,
+          "cueSim": 8.2,
           "until": null,
           "captions": [
             "quiet"
@@ -141,7 +141,8 @@
                 "n": "freshDevices"
               },
               "maxAgeS": 60,
-              "status": "READY"
+              "status": "READY",
+              "mode": "occurred"
             }
           },
           "holdS": 3
@@ -161,7 +162,8 @@
                   "count": 0,
                   "stream": "alarms",
                   "fromSim": 6,
-                  "toSim": 8.25
+                  "toSim": 8.25,
+                  "mode": "occurred"
                 }
               },
               {
@@ -199,7 +201,8 @@
         "alarm": {
           "device": "hp-meter-ferry-terminal",
           "key": "peak-demand",
-          "status": "RAISED"
+          "status": "RAISED",
+          "mode": "occurred"
         }
       },
       "terminal": null,
@@ -233,7 +236,10 @@
             "alarm": {
               "device": "hp-meter-ferry-terminal",
               "key": "peak-demand",
-              "status": "RAISED"
+              "status": "RAISED",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "identity": "$trigger.identity"
             }
           },
           "holdS": 3
@@ -250,7 +256,10 @@
             "alarm": {
               "device": "hp-meter-ferry-terminal",
               "key": "peak-demand",
-              "status": "CLEARED"
+              "status": "CLEARED",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "identity": "$trigger.identity"
             }
           },
           "holdS": 3
@@ -279,7 +288,8 @@
         "alarm": {
           "device": "hp-light-east-3",
           "key": "lamp-flicker",
-          "status": "RAISED"
+          "status": "RAISED",
+          "mode": "occurred"
         }
       },
       "terminal": null,
@@ -382,7 +392,9 @@
                 "raisedDuringSuppression": "true",
                 "suppressionWindowToken": "$window.identity"
               },
-              "cycle": "$trigger.cycle"
+              "cycle": "$trigger.cycle",
+              "mode": "occurred",
+              "identity": "$trigger.identity"
             }
           },
           "holdS": 3
@@ -400,7 +412,9 @@
               "device": "hp-light-east-3",
               "key": "lamp-flicker",
               "status": "RAISED",
-              "cycle": "$trigger.cycle"
+              "cycle": "$trigger.cycle",
+              "mode": "occurred",
+              "identity": "$trigger.identity"
             }
           },
           "holdS": 3
@@ -411,7 +425,7 @@
           "source": "PLATFORM",
           "slot": "none-work",
           "lines": [
-            "No notification while the work is on."
+            "No notification so far during the work."
           ],
           "needs": {
             "all": [
@@ -419,7 +433,8 @@
                 "window": {
                   "device": "hp-light-east-3",
                   "key": "lamp-flicker",
-                  "status": "ACTIVE"
+                  "status": "ACTIVE",
+                  "mode": "current"
                 }
               },
               {
@@ -429,7 +444,13 @@
                   "fromSim": 10.75,
                   "toSim": 11.5,
                   "device": "hp-light-east-3",
-                  "key": "lamp-flicker"
+                  "key": "lamp-flicker",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle",
+                  "fields": {
+                    "alarmToken": "$trigger.identity"
+                  },
+                  "throughNow": true
                 }
               }
             ]
@@ -450,11 +471,14 @@
               "fields": {
                 "policy": "hp-duty-escalation",
                 "afterClose": "true",
-                "alarmActive": "true"
+                "alarmActive": "true",
+                "alarmToken": "$trigger.identity"
               },
               "device": "hp-light-east-3",
               "key": "lamp-flicker",
-              "status": "SENT"
+              "status": "SENT",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle"
             }
           },
           "holdS": 3
@@ -470,7 +494,8 @@
             "needs": {
               "window": {
                 "source": "SCENARIO",
-                "device": "hp-light-east-3"
+                "device": "hp-light-east-3",
+                "mode": "occurred"
               }
             }
           },
@@ -488,7 +513,9 @@
                   "raisedDuringSuppression": "true",
                   "suppressionWindowToken": "$window.identity"
                 },
-                "cycle": "$trigger.cycle"
+                "cycle": "$trigger.cycle",
+                "mode": "occurred",
+                "identity": "$trigger.identity"
               }
             }
           },
@@ -503,7 +530,8 @@
                   "window": {
                     "device": "hp-light-east-3",
                     "key": "lamp-flicker",
-                    "status": "ACTIVE"
+                    "status": "ENDED",
+                    "mode": "occurred"
                   }
                 },
                 {
@@ -513,7 +541,12 @@
                     "fromSim": 10.75,
                     "toSim": 11.5,
                     "device": "hp-light-east-3",
-                    "key": "lamp-flicker"
+                    "key": "lamp-flicker",
+                    "mode": "occurred",
+                    "cycle": "$trigger.cycle",
+                    "fields": {
+                      "alarmToken": "$trigger.identity"
+                    }
                   }
                 }
               ]
@@ -527,7 +560,8 @@
             "needs": {
               "window": {
                 "device": "hp-light-east-3",
-                "status": "ENDED"
+                "status": "ENDED",
+                "mode": "occurred"
               }
             }
           },
@@ -541,11 +575,14 @@
                 "fields": {
                   "policy": "hp-duty-escalation",
                   "afterClose": "true",
-                  "alarmActive": "true"
+                  "alarmActive": "true",
+                  "alarmToken": "$trigger.identity"
                 },
                 "device": "hp-light-east-3",
                 "key": "lamp-flicker",
-                "status": "SENT"
+                "status": "SENT",
+                "mode": "occurred",
+                "cycle": "$trigger.cycle"
               }
             }
           }
@@ -587,13 +624,15 @@
       "trigger": {
         "replacement": {
           "device": "hp-gauge-north-3",
-          "status": "RECORDED"
+          "status": "RECORDED",
+          "mode": "occurred"
         }
       },
       "terminal": {
         "replacement": {
           "device": "hp-gauge-north-3",
-          "status": "RECORDED"
+          "status": "RECORDED",
+          "mode": "occurred"
         }
       },
       "shots": [
@@ -652,7 +691,10 @@
           "needs": {
             "replacement": {
               "device": "hp-gauge-north-3",
-              "status": "RECORDED"
+              "status": "RECORDED",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "identity": "$trigger.identity"
             }
           },
           "holdS": 3
@@ -670,16 +712,36 @@
               {
                 "replacement": {
                   "device": "hp-gauge-north-3",
-                  "status": "RECORDED"
+                  "status": "RECORDED",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle",
+                  "identity": "$trigger.identity"
+                }
+              },
+              {
+                "measure": {
+                  "mode": "occurred",
+                  "device": "hp-gauge-north-3",
+                  "key": "water_level_m",
+                  "identity": "$trigger.beforeReading",
+                  "cycle": "$trigger.cycle",
+                  "fromSim": 12.4,
+                  "toSim": 12.5,
+                  "before": "$trigger.occurredAtS"
                 }
               },
               {
                 "measure": {
                   "fields": {
-                    "afterReplacement": "true"
+                    "afterReplacement": "true",
+                    "replacementToken": "$trigger.identity"
                   },
                   "device": "hp-gauge-north-3",
-                  "key": "water_level_m"
+                  "key": "water_level_m",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle",
+                  "identity": "$trigger.afterReading",
+                  "after": "$trigger.occurredAtS"
                 }
               }
             ]
@@ -700,7 +762,10 @@
               {
                 "replacement": {
                   "device": "hp-gauge-north-3",
-                  "status": "RECORDED"
+                  "status": "RECORDED",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle",
+                  "identity": "$trigger.identity"
                 }
               },
               {
@@ -708,15 +773,21 @@
                   "observed": {
                     "credential": {
                       "fields": {
-                        "enabled": "false"
+                        "enabled": "false",
+                        "replacementToken": "$trigger.identity"
                       },
-                      "device": "hp-gauge-north-3"
+                      "device": "hp-gauge-north-3",
+                      "mode": "current",
+                      "cycle": "$trigger.cycle"
                     }
                   },
                   "expected": {
                     "replacement": {
                       "device": "hp-gauge-north-3",
-                      "status": "RECORDED"
+                      "status": "RECORDED",
+                      "mode": "occurred",
+                      "cycle": "$trigger.cycle",
+                      "identity": "$trigger.identity"
                     }
                   },
                   "field": "identity",
@@ -741,7 +812,8 @@
             "needs": {
               "replacement": {
                 "source": "SCENARIO",
-                "device": "hp-gauge-north-3"
+                "device": "hp-gauge-north-3",
+                "mode": "occurred"
               }
             }
           },
@@ -753,7 +825,10 @@
             "needs": {
               "replacement": {
                 "device": "hp-gauge-north-3",
-                "status": "RECORDED"
+                "status": "RECORDED",
+                "mode": "occurred",
+                "cycle": "$trigger.cycle",
+                "identity": "$trigger.identity"
               }
             }
           },
@@ -767,16 +842,36 @@
                 {
                   "replacement": {
                     "device": "hp-gauge-north-3",
-                    "status": "RECORDED"
+                    "status": "RECORDED",
+                    "mode": "occurred",
+                    "cycle": "$trigger.cycle",
+                    "identity": "$trigger.identity"
+                  }
+                },
+                {
+                  "measure": {
+                    "mode": "occurred",
+                    "device": "hp-gauge-north-3",
+                    "key": "water_level_m",
+                    "identity": "$trigger.beforeReading",
+                    "cycle": "$trigger.cycle",
+                    "fromSim": 12.4,
+                    "toSim": 12.5,
+                    "before": "$trigger.occurredAtS"
                   }
                 },
                 {
                   "measure": {
                     "fields": {
-                      "afterReplacement": "true"
+                      "afterReplacement": "true",
+                      "replacementToken": "$trigger.identity"
                     },
                     "device": "hp-gauge-north-3",
-                    "key": "water_level_m"
+                    "key": "water_level_m",
+                    "mode": "occurred",
+                    "cycle": "$trigger.cycle",
+                    "identity": "$trigger.afterReading",
+                    "after": "$trigger.occurredAtS"
                   }
                 }
               ]
@@ -792,7 +887,10 @@
                 {
                   "replacement": {
                     "device": "hp-gauge-north-3",
-                    "status": "RECORDED"
+                    "status": "RECORDED",
+                    "mode": "occurred",
+                    "cycle": "$trigger.cycle",
+                    "identity": "$trigger.identity"
                   }
                 },
                 {
@@ -800,15 +898,21 @@
                     "observed": {
                       "credential": {
                         "fields": {
-                          "enabled": "false"
+                          "enabled": "false",
+                          "replacementToken": "$trigger.identity"
                         },
-                        "device": "hp-gauge-north-3"
+                        "device": "hp-gauge-north-3",
+                        "mode": "current",
+                        "cycle": "$trigger.cycle"
                       }
                     },
                     "expected": {
                       "replacement": {
                         "device": "hp-gauge-north-3",
-                        "status": "RECORDED"
+                        "status": "RECORDED",
+                        "mode": "occurred",
+                        "cycle": "$trigger.cycle",
+                        "identity": "$trigger.identity"
                       }
                     },
                     "field": "identity",
@@ -856,7 +960,8 @@
         "alarm": {
           "device": "hp-charger-basin-2",
           "key": "connector-hot",
-          "status": "RAISED"
+          "status": "RAISED",
+          "mode": "occurred"
         }
       },
       "terminal": null,
@@ -919,11 +1024,14 @@
           "needs": {
             "command": {
               "fields": {
-                "max_kw": "11"
+                "max_kw": "11",
+                "alarmToken": "$trigger.identity"
               },
               "device": "hp-charger-basin-2",
               "key": "derate",
-              "status": "SUCCESSFUL"
+              "status": "SUCCESSFUL",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle"
             }
           },
           "holdS": 3
@@ -941,11 +1049,14 @@
               {
                 "command": {
                   "fields": {
-                    "max_kw": "11"
+                    "max_kw": "11",
+                    "alarmToken": "$trigger.identity"
                   },
                   "device": "hp-charger-basin-2",
                   "key": "derate",
-                  "status": "SUCCESSFUL"
+                  "status": "SUCCESSFUL",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle"
                 }
               },
               {
@@ -954,14 +1065,18 @@
                     "value": "11"
                   },
                   "device": "hp-charger-basin-2",
-                  "key": "max_kw"
+                  "key": "max_kw",
+                  "mode": "occurred"
                 }
               },
               {
                 "alarm": {
                   "device": "hp-charger-basin-2",
                   "key": "connector-hot",
-                  "status": "CLEARED"
+                  "status": "CLEARED",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle",
+                  "identity": "$trigger.identity"
                 }
               }
             ]
@@ -980,7 +1095,10 @@
             "alarm": {
               "device": "hp-charger-basin-2",
               "key": "connector-hot",
-              "status": "RAISED"
+              "status": "RAISED",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "identity": "$trigger.identity"
             }
           },
           "holdS": 3
@@ -1008,14 +1126,16 @@
         "measure": {
           "gte": 2.2,
           "device": "hp-pump-north",
-          "key": "wet_well_m"
+          "key": "wet_well_m",
+          "mode": "occurred"
         }
       },
       "trigger": {
         "alarm": {
           "device": "hp-pump-north",
           "key": "wet-well-high",
-          "status": "RAISED"
+          "status": "RAISED",
+          "mode": "occurred"
         }
       },
       "terminal": null,
@@ -1026,7 +1146,7 @@
           "to": "pose:storm-home",
           "moveS": 0,
           "holdMinS": 6,
-          "holdMaxS": 40,
+          "holdMaxS": 9,
           "cueSim": 16,
           "until": null,
           "captions": [
@@ -1040,7 +1160,7 @@
           "to": "pose:gauge-east:close",
           "moveS": 1,
           "holdMinS": 7,
-          "holdMaxS": 40,
+          "holdMaxS": 10,
           "cueSim": 17,
           "until": null,
           "captions": [
@@ -1054,7 +1174,7 @@
           "to": "pose:depot:wide",
           "moveS": 0,
           "holdMinS": 4,
-          "holdMaxS": 40,
+          "holdMaxS": 7,
           "cueSim": 17,
           "until": null,
           "captions": [],
@@ -1066,7 +1186,7 @@
           "to": "pose:pump-north:well",
           "moveS": 3,
           "holdMinS": 3,
-          "holdMaxS": 40,
+          "holdMaxS": 6,
           "cueSim": 17.2,
           "until": null,
           "captions": [
@@ -1080,13 +1200,33 @@
           "to": "pose:pump-north:well-locked",
           "moveS": 0,
           "holdMinS": 15,
-          "holdMaxS": 40,
+          "holdMaxS": 18,
           "cueSim": 17.5,
           "until": {
-            "chip": {
-              "device": "hp-pump-north",
-              "status": "PLATFORM"
-            }
+            "any": [
+              {
+                "chip": {
+                  "mode": "occurred",
+                  "device": "hp-pump-north",
+                  "status": "PLATFORM",
+                  "cycle": "$trigger.cycle",
+                  "fields": {
+                    "alarmToken": "$trigger.identity"
+                  }
+                }
+              },
+              {
+                "chip": {
+                  "mode": "occurred",
+                  "device": "hp-pump-north",
+                  "status": "FLOAT-CONSISTENT",
+                  "cycle": "$trigger.cycle",
+                  "fields": {
+                    "alarmToken": "$trigger.identity"
+                  }
+                }
+              }
+            ]
           },
           "captions": [
             "platform-start",
@@ -1101,7 +1241,7 @@
           "to": "pose:pump-north:close",
           "moveS": 0,
           "holdMinS": 5,
-          "holdMaxS": 40,
+          "holdMaxS": 8,
           "cueSim": 17.65,
           "until": null,
           "captions": [],
@@ -1113,7 +1253,7 @@
           "to": "pose:storm-home",
           "moveS": 1,
           "holdMinS": 5,
-          "holdMaxS": 40,
+          "holdMaxS": 8,
           "cueSim": 17.7,
           "until": null,
           "captions": [],
@@ -1145,7 +1285,8 @@
             "alarm": {
               "device": "hp-gauge-east-1",
               "key": "flood-level",
-              "status": "ESCALATED"
+              "status": "ESCALATED",
+              "mode": "occurred"
             }
           },
           "holdS": 3
@@ -1156,7 +1297,7 @@
           "source": "PLATFORM",
           "slot": "well",
           "lines": [
-            "The pump's well is filling?"
+            "The pump's well is filling…"
           ],
           "needs": null,
           "holdS": 3
@@ -1173,7 +1314,11 @@
             "chip": {
               "device": "hp-pump-north",
               "status": "PLATFORM",
-              "cycle": "$trigger.cycle"
+              "cycle": "$trigger.cycle",
+              "mode": "occurred",
+              "fields": {
+                "alarmToken": "$trigger.identity"
+              }
             }
           },
           "holdS": 3
@@ -1190,7 +1335,11 @@
             "chip": {
               "device": "hp-pump-north",
               "status": "FLOAT-CONSISTENT",
-              "cycle": "$trigger.cycle"
+              "cycle": "$trigger.cycle",
+              "mode": "occurred",
+              "fields": {
+                "alarmToken": "$trigger.identity"
+              }
             }
           },
           "holdS": 3
@@ -1209,18 +1358,25 @@
                 "chip": {
                   "device": "hp-pump-north",
                   "status": "PLATFORM",
-                  "cycle": "$trigger.cycle"
+                  "cycle": "$trigger.cycle",
+                  "mode": "occurred",
+                  "fields": {
+                    "alarmToken": "$trigger.identity"
+                  },
+                  "as": "running"
                 }
               },
               {
                 "measure": {
                   "allBelow": 3.2,
-                  "until": "chip.runningAt",
+                  "until": "$match.running.runningAt",
                   "stream": "pump",
                   "fromSim": 17,
-                  "toSim": 17.6,
+                  "toSim": 18.6,
                   "device": "hp-pump-north",
-                  "key": "wet_well_m"
+                  "key": "wet_well_m",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle"
                 }
               }
             ]
@@ -1239,7 +1395,8 @@
               "measure": {
                 "gte": 2.5,
                 "device": "hp-pump-north",
-                "key": "wet_well_m"
+                "key": "wet_well_m",
+                "mode": "occurred"
               }
             }
           },
@@ -1253,9 +1410,14 @@
                 "device": "hp-pump-north",
                 "key": "start-pump",
                 "status": "SENT",
-                "cycle": "$trigger.cycle"
+                "cycle": "$trigger.cycle",
+                "mode": "occurred",
+                "fields": {
+                  "alarmToken": "$trigger.identity"
+                }
               }
-            }
+            },
+            "afterTriggerS": 1
           },
           {
             "id": "running",
@@ -1266,9 +1428,14 @@
               "chip": {
                 "device": "hp-pump-north",
                 "status": "PLATFORM",
-                "cycle": "$trigger.cycle"
+                "cycle": "$trigger.cycle",
+                "mode": "occurred",
+                "fields": {
+                  "alarmToken": "$trigger.identity"
+                }
               }
-            }
+            },
+            "afterTriggerS": 4
           },
           {
             "id": "falling",
@@ -1281,9 +1448,11 @@
                   "falling": "true"
                 },
                 "device": "hp-pump-north",
-                "key": "wet_well_m"
+                "key": "wet_well_m",
+                "mode": "occurred"
               }
-            }
+            },
+            "afterTriggerS": 7
           },
           {
             "id": "water",
@@ -1296,7 +1465,8 @@
                   "rising": "true"
                 },
                 "device": "hp-gauge-east-1",
-                "key": "water_level_m"
+                "key": "water_level_m",
+                "mode": "occurred"
               }
             }
           },
@@ -1309,7 +1479,8 @@
               "alarm": {
                 "device": "hp-gauge-east-1",
                 "key": "flood-level",
-                "status": "ESCALATED"
+                "status": "ESCALATED",
+                "mode": "occurred"
               }
             }
           }
@@ -1339,7 +1510,7 @@
       "priority": 70,
       "windowSim": [
         17.7,
-        18.1
+        18.25
       ],
       "plannedSim": 17.75,
       "preRollS": 3,
@@ -1352,7 +1523,8 @@
         "alarm": {
           "device": "hp-truck-1",
           "key": "truck-in-flood-plain",
-          "status": "RAISED"
+          "status": "RAISED",
+          "mode": "occurred"
         }
       },
       "terminal": null,
@@ -1398,7 +1570,10 @@
             "alarm": {
               "device": "hp-truck-1",
               "key": "truck-in-flood-plain",
-              "status": "RAISED"
+              "status": "RAISED",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "identity": "$trigger.identity"
             }
           },
           "holdS": 3
@@ -1407,7 +1582,8 @@
       "chain": {
         "nodes": [],
         "links": []
-      }
+      },
+      "fallbackPolicy": "skip-page"
     },
     {
       "id": "4b",
@@ -1426,7 +1602,8 @@
       "trigger": {
         "alarm": {
           "key": "pump-air-lock",
-          "status": "RAISED"
+          "status": "RAISED",
+          "mode": "occurred"
         }
       },
       "terminal": null,
@@ -1443,7 +1620,8 @@
           "captions": [
             "air"
           ],
-          "followDeviceFromTrigger": "device"
+          "followDeviceFromTrigger": "device",
+          "cueRef": "airLock.detected"
         }
       ],
       "captions": [
@@ -1459,7 +1637,10 @@
           "needs": {
             "alarm": {
               "key": "pump-air-lock",
-              "status": "RAISED"
+              "status": "RAISED",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "identity": "$trigger.identity"
             }
           },
           "holdS": 3
@@ -1475,7 +1656,7 @@
       "priority": 85,
       "windowSim": [
         19.75,
-        21.2
+        21.25
       ],
       "plannedSim": 19.75,
       "preRollS": 3,
@@ -1489,13 +1670,15 @@
           {
             "alarm": {
               "key": "light-silent",
-              "status": "RAISED"
+              "status": "RAISED",
+              "mode": "occurred"
             }
           },
           {
             "alarm": {
               "key": "charger-offline",
-              "status": "RAISED"
+              "status": "RAISED",
+              "mode": "occurred"
             }
           }
         ]
@@ -1526,7 +1709,8 @@
           "cueSim": 20.08,
           "until": null,
           "captions": [],
-          "followDeviceFromTrigger": "none"
+          "followDeviceFromTrigger": "none",
+          "cueRef": "outage.wait"
         },
         {
           "id": "6c",
@@ -1540,14 +1724,15 @@
           "captions": [
             "silence"
           ],
-          "followDeviceFromTrigger": "none"
+          "followDeviceFromTrigger": "none",
+          "cueRef": "outage.detected"
         },
         {
           "id": "6d",
           "from": "pose:east-quay:mouth-wide",
           "to": "pose:east-quay:mouth-wide",
           "moveS": 0,
-          "holdMinS": 6,
+          "holdMinS": 35,
           "holdMaxS": 40,
           "cueSim": 20.55,
           "until": null,
@@ -1555,7 +1740,8 @@
             "exact",
             "silence-only"
           ],
-          "followDeviceFromTrigger": "none"
+          "followDeviceFromTrigger": "none",
+          "cueRef": "outage.tally"
         }
       ],
       "captions": [
@@ -1583,13 +1769,17 @@
               {
                 "alarm": {
                   "key": "light-silent",
-                  "status": "RAISED"
+                  "status": "RAISED",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle"
                 }
               },
               {
                 "alarm": {
                   "key": "charger-offline",
-                  "status": "RAISED"
+                  "status": "RAISED",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle"
                 }
               }
             ]
@@ -1611,27 +1801,35 @@
                   {
                     "alarm": {
                       "key": "light-silent",
-                      "status": "RAISED"
+                      "status": "RAISED",
+                      "mode": "occurred",
+                      "cycle": "$trigger.cycle"
                     }
                   },
                   {
                     "alarm": {
                       "key": "charger-offline",
-                      "status": "RAISED"
+                      "status": "RAISED",
+                      "mode": "occurred",
+                      "cycle": "$trigger.cycle"
                     }
                   }
                 ]
               },
               "expected": {
                 "membership": {
-                  "identity": "east-absence"
+                  "identity": "east-absence",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle"
                 }
               },
               "field": "device",
               "expectedField": "tokens",
               "stream": "alarms",
               "fromSim": 19.75,
-              "toSim": 20.55
+              "toSim": 20.55,
+              "cardinality": 6,
+              "toCue": "outage.tally"
             }
           },
           "holdS": 3
@@ -1649,13 +1847,17 @@
               {
                 "alarm": {
                   "key": "light-silent",
-                  "status": "RAISED"
+                  "status": "RAISED",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle"
                 }
               },
               {
                 "alarm": {
                   "key": "charger-offline",
-                  "status": "RAISED"
+                  "status": "RAISED",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle"
                 }
               }
             ]
@@ -1674,7 +1876,8 @@
               "window": {
                 "source": "SCENARIO",
                 "key": "feeder-outage",
-                "status": "ACTIVE"
+                "status": "ACTIVE",
+                "mode": "occurred"
               }
             }
           },
@@ -1690,27 +1893,35 @@
                     {
                       "alarm": {
                         "key": "light-silent",
-                        "status": "RAISED"
+                        "status": "RAISED",
+                        "mode": "occurred",
+                        "cycle": "$trigger.cycle"
                       }
                     },
                     {
                       "alarm": {
                         "key": "charger-offline",
-                        "status": "RAISED"
+                        "status": "RAISED",
+                        "mode": "occurred",
+                        "cycle": "$trigger.cycle"
                       }
                     }
                   ]
                 },
                 "expected": {
                   "membership": {
-                    "identity": "east-absence"
+                    "identity": "east-absence",
+                    "mode": "occurred",
+                    "cycle": "$trigger.cycle"
                   }
                 },
                 "field": "device",
                 "expectedField": "tokens",
                 "stream": "alarms",
                 "fromSim": 19.75,
-                "toSim": 20.55
+                "toSim": 20.55,
+                "cardinality": 6,
+                "toCue": "outage.tally"
               }
             }
           },
@@ -1720,10 +1931,29 @@
             "label": "Notification sent",
             "source": "PLATFORM",
             "needs": {
-              "attempt": {
-                "key": "absence",
-                "status": "SENT"
-              }
+              "all": [
+                {
+                  "alarm": {
+                    "mode": "occurred",
+                    "device": "hp-light-east-1",
+                    "key": "light-silent",
+                    "status": "RAISED",
+                    "cycle": "$trigger.cycle",
+                    "as": "absence"
+                  }
+                },
+                {
+                  "attempt": {
+                    "key": "absence",
+                    "status": "SENT",
+                    "mode": "occurred",
+                    "cycle": "$match.absence.cycle",
+                    "fields": {
+                      "alarmToken": "$match.absence.identity"
+                    }
+                  }
+                }
+              ]
             }
           },
           {
@@ -1732,13 +1962,30 @@
             "label": "still unacknowledged: re-notified",
             "source": "PLATFORM",
             "needs": {
-              "attempt": {
-                "fields": {
-                  "trigger": "ESCALATION"
+              "all": [
+                {
+                  "alarm": {
+                    "mode": "occurred",
+                    "device": "hp-light-east-1",
+                    "key": "light-silent",
+                    "status": "RAISED",
+                    "cycle": "$trigger.cycle",
+                    "as": "absence"
+                  }
                 },
-                "key": "absence",
-                "status": "SENT"
-              }
+                {
+                  "attempt": {
+                    "fields": {
+                      "trigger": "ESCALATION",
+                      "alarmToken": "$match.absence.identity"
+                    },
+                    "key": "absence",
+                    "status": "SENT",
+                    "mode": "occurred",
+                    "cycle": "$match.absence.cycle"
+                  }
+                }
+              ]
             }
           }
         ],
@@ -1823,8 +2070,8 @@
           "to": "pose:chargers-east:pair",
           "moveS": 0,
           "holdMinS": 6,
-          "holdMaxS": 40,
-          "cueSim": 21.55,
+          "holdMaxS": 6,
+          "cueSim": 21.6,
           "until": null,
           "captions": [
             "all-buffered",
@@ -1839,7 +2086,7 @@
           "moveS": 0,
           "holdMinS": 4,
           "holdMaxS": 40,
-          "cueSim": 21.6,
+          "cueSim": 21.666666666666668,
           "until": null,
           "captions": [],
           "followDeviceFromTrigger": "none"
@@ -1885,7 +2132,9 @@
               "fields": {
                 "backdated": "true"
               },
-              "key": "backfill"
+              "key": "backfill",
+              "mode": "occurred",
+              "device": "hp-charger-east-1"
             }
           },
           "holdS": 3
@@ -1903,7 +2152,8 @@
             "ledger": {
               "gte": 1,
               "source": "DEVICE-SIDE",
-              "key": "restore"
+              "key": "restore",
+              "mode": "occurred"
             }
           },
           "holdS": 3
@@ -1921,13 +2171,15 @@
             "set": {
               "observed": {
                 "measure": {
-                  "key": "backfill"
+                  "key": "backfill",
+                  "mode": "occurred"
                 }
               },
               "expected": {
                 "ledger": {
                   "source": "SCENARIO",
-                  "key": "backfill"
+                  "key": "backfill",
+                  "mode": "occurred"
                 }
               },
               "field": "readingIdentity",
@@ -1959,11 +2211,29 @@
             "Out again. Cleared."
           ],
           "needs": {
-            "alarm": {
-              "device": "hp-truck-1",
-              "key": "truck-in-flood-plain",
-              "status": "CLEARED"
-            }
+            "all": [
+              {
+                "alarm": {
+                  "device": "hp-truck-1",
+                  "key": "truck-in-flood-plain",
+                  "status": "RAISED",
+                  "mode": "occurred",
+                  "as": "raised",
+                  "fromSim": 17.7,
+                  "toSim": 21.2
+                }
+              },
+              {
+                "alarm": {
+                  "device": "hp-truck-1",
+                  "key": "truck-in-flood-plain",
+                  "status": "CLEARED",
+                  "mode": "occurred",
+                  "identity": "$match.raised.identity",
+                  "cycle": "$match.raised.cycle"
+                }
+              }
+            ]
           },
           "holdS": 3
         }
@@ -1979,7 +2249,8 @@
               "window": {
                 "source": "SCENARIO",
                 "key": "feeder-outage",
-                "status": "ENDED"
+                "status": "ENDED",
+                "mode": "occurred"
               }
             }
           },
@@ -1993,7 +2264,9 @@
                 "fields": {
                   "backdated": "true"
                 },
-                "key": "backfill"
+                "key": "backfill",
+                "mode": "occurred",
+                "device": "hp-charger-east-1"
               }
             }
           },
@@ -2006,7 +2279,8 @@
               "ledger": {
                 "gte": 1,
                 "source": "DEVICE-SIDE",
-                "key": "restore"
+                "key": "restore",
+                "mode": "occurred"
               }
             }
           },
@@ -2019,13 +2293,15 @@
               "set": {
                 "observed": {
                   "measure": {
-                    "key": "backfill"
+                    "key": "backfill",
+                    "mode": "occurred"
                   }
                 },
                 "expected": {
                   "ledger": {
                     "source": "SCENARIO",
-                    "key": "backfill"
+                    "key": "backfill",
+                    "mode": "occurred"
                   }
                 },
                 "field": "readingIdentity",
@@ -2042,11 +2318,29 @@
             "label": "Alarms cleared",
             "source": "PLATFORM",
             "needs": {
-              "alarm": {
-                "key": "charger-offline",
-                "status": "CLEARED"
-              }
-            }
+              "all": [
+                {
+                  "alarm": {
+                    "key": "charger-offline",
+                    "status": "RAISED",
+                    "mode": "occurred",
+                    "as": "raised",
+                    "fromSim": 19.75,
+                    "toSim": 21.2
+                  }
+                },
+                {
+                  "alarm": {
+                    "key": "charger-offline",
+                    "status": "CLEARED",
+                    "mode": "occurred",
+                    "identity": "$match.raised.identity",
+                    "cycle": "$match.raised.cycle"
+                  }
+                }
+              ]
+            },
+            "afterPageS": 25
           }
         ],
         "links": [
@@ -2085,12 +2379,14 @@
       "watch": null,
       "trigger": {
         "rollout": {
-          "status": "RUNNING"
+          "status": "RUNNING",
+          "mode": "occurred"
         }
       },
       "terminal": {
         "rollout": {
-          "status": "TERMINAL"
+          "status": "TERMINAL",
+          "mode": "occurred"
         }
       },
       "shots": [
@@ -2100,7 +2396,7 @@
           "to": "pose:night-home",
           "moveS": 0,
           "holdMinS": 8,
-          "holdMaxS": 40,
+          "holdMaxS": 11,
           "cueSim": 26,
           "until": null,
           "captions": [
@@ -2115,7 +2411,7 @@
           "to": "pose:chargers-east:pair",
           "moveS": 0,
           "holdMinS": 11,
-          "holdMaxS": 40,
+          "holdMaxS": 14,
           "cueSim": 26.15,
           "until": null,
           "captions": [
@@ -2126,10 +2422,10 @@
         {
           "id": "8c",
           "from": "pose:north-quay:close",
-          "to": "pose:north-quay:close",
+          "to": "pose:charger-north:close",
           "moveS": 0,
           "holdMinS": 11,
-          "holdMaxS": 40,
+          "holdMaxS": 14,
           "cueSim": 26.3,
           "until": null,
           "captions": [
@@ -2145,7 +2441,7 @@
           "to": "pose:night-home",
           "moveS": 0,
           "holdMinS": 8,
-          "holdMaxS": 40,
+          "holdMaxS": 11,
           "cueSim": 26.6,
           "until": null,
           "captions": [
@@ -2169,7 +2465,14 @@
               "status": "VERIFIED",
               "present": [
                 "signer"
-              ]
+              ],
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "fields": {
+                "rolloutToken": "$trigger.identity",
+                "artifactToken": "$trigger.artifactToken"
+              },
+              "identity": "$trigger.artifactToken"
             }
           },
           "holdS": 3
@@ -2195,7 +2498,14 @@
           ],
           "needs": {
             "target": {
-              "status": "SUCCEEDED"
+              "status": "SUCCEEDED",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "fields": {
+                "rolloutToken": "$trigger.identity",
+                "artifactToken": "$trigger.artifactToken"
+              },
+              "attempt": "$trigger.attempt"
             }
           },
           "holdS": 3
@@ -2213,10 +2523,15 @@
             "attempt": {
               "fields": {
                 "code": "VERIFICATION_FAILED",
-                "platform": "false"
+                "platform": "false",
+                "rolloutToken": "$trigger.identity",
+                "artifactToken": "$trigger.artifactToken"
               },
               "device": "hp-charger-north-1",
-              "status": "FAILED"
+              "status": "FAILED",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "attempt": "$trigger.attempt"
             }
           },
           "holdS": 3
@@ -2232,7 +2547,14 @@
           "needs": {
             "attempt": {
               "device": "hp-charger-north-1",
-              "status": "FAILED"
+              "status": "FAILED",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "fields": {
+                "rolloutToken": "$trigger.identity",
+                "artifactToken": "$trigger.artifactToken"
+              },
+              "attempt": "$trigger.attempt"
             }
           },
           "holdS": 3
@@ -2252,20 +2574,30 @@
                 "attempt": {
                   "fields": {
                     "code": "VERIFICATION_FAILED",
-                    "platform": "false"
+                    "platform": "false",
+                    "rolloutToken": "$trigger.identity",
+                    "artifactToken": "$trigger.artifactToken"
                   },
                   "device": "hp-charger-north-1",
-                  "status": "FAILED"
+                  "status": "FAILED",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle",
+                  "attempt": "$trigger.attempt"
                 }
               },
               {
                 "measure": {
                   "fields": {
-                    "afterFailure": "true"
+                    "afterFailure": "true",
+                    "rolloutToken": "$trigger.identity",
+                    "artifactToken": "$trigger.artifactToken"
                   },
                   "maxAgeS": 60,
                   "device": "hp-charger-north-1",
-                  "key": "power_kw"
+                  "key": "power_kw",
+                  "mode": "occurred",
+                  "cycle": "$trigger.cycle",
+                  "attempt": "$trigger.attempt"
                 }
               }
             ]
@@ -2282,7 +2614,10 @@
           ],
           "needs": {
             "rollout": {
-              "status": "TERMINAL"
+              "status": "TERMINAL",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "identity": "$trigger.identity"
             }
           },
           "holdS": 3
@@ -2293,7 +2628,7 @@
           "source": "PLATFORM",
           "slot": "ota-summary",
           "lines": [
-            "{updated} updated ? {refused} refused",
+            "{updated} updated · {refused} refused",
             "concurrency limit {cap}"
           ],
           "needs": {
@@ -2303,7 +2638,10 @@
                 "refused": "refused",
                 "cap": "maxInFlight"
               },
-              "status": "TERMINAL"
+              "status": "TERMINAL",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "identity": "$trigger.identity"
             }
           },
           "holdS": 3
@@ -2321,18 +2659,31 @@
                 "status": "VERIFIED",
                 "present": [
                   "signer"
-                ]
+                ],
+                "mode": "occurred",
+                "cycle": "$trigger.cycle",
+                "fields": {
+                  "rolloutToken": "$trigger.identity",
+                  "artifactToken": "$trigger.artifactToken"
+                },
+                "identity": "$trigger.artifactToken"
               }
             }
           },
           {
             "id": "cap",
             "family": "other",
-            "label": "Concurrency limit",
+            "label": "Concurrency limit {cap}",
             "source": "PLATFORM",
             "needs": {
               "rollout": {
-                "status": "RUNNING"
+                "status": "RUNNING",
+                "mode": "occurred",
+                "cycle": "$trigger.cycle",
+                "identity": "$trigger.identity",
+                "bind": {
+                  "cap": "maxInFlight"
+                }
               }
             }
           },
@@ -2343,7 +2694,14 @@
             "source": "PLATFORM",
             "needs": {
               "target": {
-                "status": "SUCCEEDED"
+                "status": "SUCCEEDED",
+                "mode": "occurred",
+                "cycle": "$trigger.cycle",
+                "fields": {
+                  "rolloutToken": "$trigger.identity",
+                  "artifactToken": "$trigger.artifactToken"
+                },
+                "attempt": "$trigger.attempt"
               }
             }
           },
@@ -2356,10 +2714,15 @@
               "attempt": {
                 "fields": {
                   "code": "VERIFICATION_FAILED",
-                  "platform": "false"
+                  "platform": "false",
+                  "rolloutToken": "$trigger.identity",
+                  "artifactToken": "$trigger.artifactToken"
                 },
                 "device": "hp-charger-north-1",
-                "status": "FAILED"
+                "status": "FAILED",
+                "mode": "occurred",
+                "cycle": "$trigger.cycle",
+                "attempt": "$trigger.attempt"
               }
             }
           }
@@ -2498,7 +2861,10 @@
           "recordedWallToS": 786,
           "borrowed": "later that day",
           "captions": [],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "0",
@@ -2515,7 +2881,16 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": [
+            {
+              "id": "disclosure",
+              "atS": 0,
+              "holdS": 3
+            }
+          ]
         },
         {
           "page": "1",
@@ -2532,15 +2907,18 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "1",
           "shot": "1b",
           "durS": 8,
           "moveS": 1,
-          "recordedWallFromS": 90.0,
-          "recordedWallToS": 98.0,
+          "recordedWallFromS": 135,
+          "recordedWallToS": 143,
           "borrowed": "none",
           "captions": [
             {
@@ -2549,7 +2927,10 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "1b",
@@ -2571,7 +2952,10 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "2",
@@ -2594,7 +2978,10 @@
             "none",
             "closed",
             "sent"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "2",
@@ -2611,7 +2998,10 @@
             "none",
             "closed",
             "sent"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "2",
@@ -2644,7 +3034,10 @@
             "none",
             "closed",
             "sent"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "2",
@@ -2667,7 +3060,10 @@
             "none",
             "closed",
             "sent"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "2",
@@ -2684,7 +3080,10 @@
             "none",
             "closed",
             "sent"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "3",
@@ -2706,7 +3105,10 @@
             "journal",
             "same",
             "disabled"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "3",
@@ -2728,7 +3130,10 @@
             "journal",
             "same",
             "disabled"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "3",
@@ -2750,7 +3155,10 @@
             "journal",
             "same",
             "disabled"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "3b",
@@ -2767,7 +3175,10 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "3b",
@@ -2789,7 +3200,10 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "3b",
@@ -2811,7 +3225,10 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "4",
@@ -2835,7 +3252,10 @@
             "falling",
             "water",
             "flood"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "4",
@@ -2859,7 +3279,10 @@
             "falling",
             "water",
             "flood"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "4",
@@ -2877,7 +3300,10 @@
             "falling",
             "water",
             "flood"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "4",
@@ -2901,7 +3327,10 @@
             "falling",
             "water",
             "flood"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "4",
@@ -2935,7 +3364,10 @@
             "falling",
             "water",
             "flood"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "4",
@@ -2953,7 +3385,10 @@
             "falling",
             "water",
             "flood"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "4",
@@ -2971,7 +3406,10 @@
             "falling",
             "water",
             "flood"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "5",
@@ -2988,7 +3426,10 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "5",
@@ -2999,7 +3440,10 @@
           "recordedWallToS": 731.0,
           "borrowed": "none",
           "captions": [],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "4b",
@@ -3016,7 +3460,10 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "6",
@@ -3038,7 +3485,10 @@
             "absence",
             "notify",
             "escalated"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "6",
@@ -3054,7 +3504,10 @@
             "absence",
             "notify",
             "escalated"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "6",
@@ -3076,7 +3529,10 @@
             "absence",
             "notify",
             "escalated"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "6",
@@ -3103,7 +3559,10 @@
             "absence",
             "notify",
             "escalated"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "7",
@@ -3126,7 +3585,10 @@
             "paced",
             "stored",
             "clear"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "7",
@@ -3149,7 +3611,10 @@
             "paced",
             "stored",
             "clear"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "7",
@@ -3172,7 +3637,10 @@
             "paced",
             "stored",
             "clear"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "7",
@@ -3200,7 +3668,10 @@
             "paced",
             "stored",
             "clear"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "7",
@@ -3217,7 +3688,10 @@
             "paced",
             "stored",
             "clear"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "7",
@@ -3240,7 +3714,10 @@
             "paced",
             "stored",
             "clear"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "8",
@@ -3267,7 +3744,10 @@
             "cap",
             "updated",
             "refused"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "8",
@@ -3289,7 +3769,10 @@
             "cap",
             "updated",
             "refused"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "8",
@@ -3321,7 +3804,10 @@
             "cap",
             "updated",
             "refused"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "8",
@@ -3348,7 +3834,10 @@
             "cap",
             "updated",
             "refused"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "9",
@@ -3370,7 +3859,26 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": [
+            {
+              "id": "subline",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "fiction",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "positions",
+              "atS": 0,
+              "holdS": 3
+            }
+          ]
         }
       ]
     },
@@ -3387,7 +3895,10 @@
           "recordedWallToS": 786,
           "borrowed": "later that day",
           "captions": [],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "0",
@@ -3404,7 +3915,16 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": [
+            {
+              "id": "disclosure",
+              "atS": 0,
+              "holdS": 3
+            }
+          ]
         },
         {
           "page": "1",
@@ -3421,7 +3941,10 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "4",
@@ -3443,7 +3966,10 @@
             "command",
             "running",
             "falling"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "4",
@@ -3465,7 +3991,10 @@
             "command",
             "running",
             "falling"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "4",
@@ -3497,7 +4026,10 @@
             "command",
             "running",
             "falling"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "4",
@@ -3513,7 +4045,10 @@
             "command",
             "running",
             "falling"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "6",
@@ -3535,7 +4070,10 @@
             "absence",
             "notify",
             "escalated"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "6",
@@ -3551,7 +4089,10 @@
             "absence",
             "notify",
             "escalated"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "6",
@@ -3573,7 +4114,10 @@
             "absence",
             "notify",
             "escalated"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "6",
@@ -3600,7 +4144,10 @@
             "absence",
             "notify",
             "escalated"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "7",
@@ -3623,7 +4170,10 @@
             "paced",
             "stored",
             "clear"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "7",
@@ -3646,7 +4196,10 @@
             "paced",
             "stored",
             "clear"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "7",
@@ -3669,7 +4222,10 @@
             "paced",
             "stored",
             "clear"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "7",
@@ -3697,7 +4253,10 @@
             "paced",
             "stored",
             "clear"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "8",
@@ -3724,7 +4283,10 @@
             "cap",
             "updated",
             "refused"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "8",
@@ -3746,7 +4308,10 @@
             "cap",
             "updated",
             "refused"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "8",
@@ -3778,7 +4343,10 @@
             "cap",
             "updated",
             "refused"
-          ]
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
         },
         {
           "page": "8",
@@ -3790,7 +4358,7 @@
           "borrowed": "none",
           "captions": [
             {
-              "id": "done",
+              "id": "ota-summary",
               "atS": 0,
               "holdS": 3
             }
@@ -3800,6 +4368,15 @@
             "cap",
             "updated",
             "refused"
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": [
+            {
+              "id": "done",
+              "atS": 0,
+              "holdS": 3
+            }
           ]
         },
         {
@@ -3822,7 +4399,26 @@
               "holdS": 3
             }
           ],
-          "nodes": []
+          "nodes": [],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": [
+            {
+              "id": "subline",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "fiction",
+              "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "positions",
+              "atS": 0,
+              "holdS": 3
+            }
+          ]
         }
       ]
     }

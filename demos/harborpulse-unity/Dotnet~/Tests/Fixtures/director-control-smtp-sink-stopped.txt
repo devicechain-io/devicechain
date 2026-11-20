@@ -1,0 +1,11 @@
+-332|2|caption|Window over, fault still there: / the crew is notified.|3:run7:attempt41:attempt:hp-light-east-3:lamp-flicker:SENT15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:4:SENT8:PLATFORM
+-336|2|link|closed->sent|
+-336|2|node-label|Notification sent|3:run7:attempt41:attempt:hp-light-east-3:lamp-flicker:SENT15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:4:SENT8:PLATFORM
+-336|2|node|sent|3:run7:attempt41:attempt:hp-light-east-3:lamp-flicker:SENT15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:4:SENT8:PLATFORM
+-339|2|caption-end|work-sent|
+-877|6|link|absence->notify|
+-877|6|node-label|Notification sent|3:run5:alarm34:alarm:hp-light-east-1:light-silent15:hp-light-east-112:light-silent12:outage-cycle0:0:6:RAISED8:PLATFORM,3:run7:attempt21:notifyhp-light-east-115:hp-light-east-17:absence12:outage-cycle0:0:4:SENT8:PLATFORM
+-877|6|node|notify|3:run5:alarm34:alarm:hp-light-east-1:light-silent15:hp-light-east-112:light-silent12:outage-cycle0:0:6:RAISED8:PLATFORM,3:run7:attempt21:notifyhp-light-east-115:hp-light-east-17:absence12:outage-cycle0:0:4:SENT8:PLATFORM
+-907|6|link|notify->escalated|
+-907|6|node-label|still unacknowledged: re-notified|3:run5:alarm34:alarm:hp-light-east-1:light-silent15:hp-light-east-112:light-silent12:outage-cycle0:0:6:RAISED8:PLATFORM,3:run7:attempt25:escalationhp-light-east-115:hp-light-east-17:absence12:outage-cycle0:0:4:SENT8:PLATFORM
+-907|6|node|escalated|3:run5:alarm34:alarm:hp-light-east-1:light-silent15:hp-light-east-112:light-silent12:outage-cycle0:0:6:RAISED8:PLATFORM,3:run7:attempt25:escalationhp-light-east-115:hp-light-east-17:absence12:outage-cycle0:0:4:SENT8:PLATFORM

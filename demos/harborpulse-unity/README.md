@@ -297,8 +297,9 @@ The short cold open therefore uses two seconds of storm plus a three-second titl
 entry uses a two-second move plus a three-second caption. Restore shots sum to 32 seconds and OTA
 shots to 38 seconds in the longer cut. The platform-verb fallbacks “The fault is detected.” and
 “Silence detected.” are gated claims. “A firmware update” is treated as a noun phrase by the lint.
-All end-card wording is retained in the page definition; its bridge/tagline are the cut's timed
-caption cards, with the disclosure and sub-line available for the later end-card layout.
+The opening recording disclosure and the end-card sub-line and position disclosure are scheduled
+as separate overlays in both cuts. The c90 OTA card carries the bound terminal totals and concurrency
+limit. Each segment explicitly carries its shared home seam pose and half-second dissolve.
 
 Windows verification with cached NuGet packages (redirects every project's intermediate/output files
 under this demo, and avoids inaccessible user SDK/config directories):
@@ -313,3 +314,25 @@ python verify_director_mutants.py
 The mutation runner changes one production expression at a time, requires a named failing NUnit test
 (compiler errors do not count), and restores the original bytes in `finally`. Logs, TRX results and the
 mutation summary are in ignored `Dotnet~/.build/`.
+
+U2a review corrections: the latitude strips now cover the southern control frame and keep depot-to-plain
+travel northbound. The metre grid spans the plain, depot and route plus ten metres. Observation history
+retains refreshed snapshots; `mode: occurred` selects an immutable event, while `mode: current` first
+reduces snapshots by entity/cycle before testing status and freshness. Event consumption never depends
+on observation time. Named conjunction records (`as`, `$match`) and trigger references join notification,
+OTA, replacement and clear proof. Missing set fields return an explicit evidence error; empty platform
+sets cannot prove storage, and the six-device claim requires cardinality six.
+
+Caption opportunities survive provisional text and shot changes until their authored hold deadline.
+Coverage is fed incrementally during playback; an open-window absence statement uses `throughNow`,
+while a completed-window statement requires its entire interval. Truck page five has an explicit
+missing-trigger skip policy. The control fixtures compare complete emitted output deltas against the
+clean recording, including caption text/endings, evidence identities, rail labels/links, shots, skips
+and wall times. Refresh fixtures only with `HARBORPULSE_UPDATE_FIXTURES=1`, then review every delta.
+Layout cue references resolve silence and air-lock wall offsets using the actual day length; the
+same timeline tests run at 1,440 and 2,880 seconds per day.
+
+The mutation verifier first requires a green complete baseline and confirms every selected test ran.
+Each mutant receives a unique results directory. A compile failure or absent selected test cannot
+count as a kill. Source restoration is followed by a fresh complete build/test, even on failure.
+SDK and package selection use the caller's environment rather than an account-specific path.

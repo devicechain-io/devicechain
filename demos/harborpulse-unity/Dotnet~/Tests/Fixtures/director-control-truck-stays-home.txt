@@ -1,0 +1,7 @@
++736|5|skip-page|no trigger|
+-717|5|caption|The truck enters the flood plain. / A geofence rule records it.|3:run5:alarm37:alarm:hp-truck-1:truck-in-flood-plain10:hp-truck-120:truck-in-flood-plain11:truck-cycle0:0:6:RAISED8:PLATFORM
+-717|5|shot|5a|
+-725|5|caption-end|truck|
+-725|5|shot|5b|
+-947|7|caption|Out again. Cleared.|3:run5:alarm37:alarm:hp-truck-1:truck-in-flood-plain10:hp-truck-120:truck-in-flood-plain11:truck-cycle0:0:6:RAISED8:PLATFORM,3:run5:alarm37:alarm:hp-truck-1:truck-in-flood-plain10:hp-truck-120:truck-in-flood-plain11:truck-cycle0:0:7:CLEARED8:PLATFORM
+-950|7|caption-end|truck-out|

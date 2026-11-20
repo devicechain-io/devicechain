@@ -79,6 +79,7 @@ namespace DeviceChain.Harborpulse.Model.Director
     public sealed class PresentationMap
     {
         readonly HarborLayout layout;
+        internal HarborLayout Layout => layout;
         readonly WorldFrame frame;
         readonly List<MapTriangle> triangles = new List<MapTriangle>();
         readonly Dictionary<string, Ground[]> fences = new Dictionary<string, Ground[]>(StringComparer.Ordinal);
@@ -131,10 +132,13 @@ namespace DeviceChain.Harborpulse.Model.Director
         // Authored monotone strip maps keep the plain inland of East Quay and the depot further inland.
         static readonly double[] Lon = { -12.236, -12.230, -12.212, -12.200, -12.182, -12.170, -12.1655, -12.1616, -12.161, -12.1604, -12.1565, -12.152, -12.146 };
         static readonly double[] DrawX = { -240, -220, -160, -110, 100, 145, 155, 177, 181, 185, 207, 220, 240 };
-        static readonly double[] Lat = { 49.797, 49.802, 49.8025, 49.804, 49.8055, 49.8096, 49.810, 49.8104, 49.816 };
-        static readonly double[] DrawZ = { -160, 60, 80, 100, 120, 147, 153, 159, 180 };
+        static readonly double[] Lat = { 49.7880, 49.7936, 49.7940, 49.7944, 49.7985, 49.8000, 49.8015, 49.8070, 49.8160 };
+        static readonly double[] DrawZ = { -185, -165, -155, -145, -115, -90, -65, 75, 180 };
         static double Strip(double value, double[] keys, double[] values)
         {
+            if (keys.Length != values.Length || keys.Length < 2 || !double.IsFinite(value)) throw new FormatException("invalid strip");
+            for (var i = 1; i < keys.Length; i++) if (keys[i] <= keys[i - 1] || values[i] <= values[i - 1]) throw new FormatException("non-monotone strip");
+            if (value < keys[0] || value > keys[keys.Length - 1]) throw new FormatException("control coordinate outside authored frame");
             for (var i = 1; i < keys.Length; i++)
                 if (value <= keys[i]) return values[i - 1] + (values[i] - values[i - 1]) * (value - keys[i - 1]) / (keys[i] - keys[i - 1]);
             throw new FormatException("control coordinate outside authored frame: " + value.ToString(CultureInfo.InvariantCulture));
@@ -269,16 +273,20 @@ namespace DeviceChain.Harborpulse.Model.Director
             poses.Add("pose:home:portrait", new CameraPose(new Point3(0, 160, -330), new Point3(0, 0, 60), 52));
             poses.Add("pose:night-home", poses["pose:home"]);
             poses.Add("pose:storm-home", poses["pose:home"]);
-            foreach (var pair in new[] { ("pump-north", "hp-pump-north"), ("pump-east", "hp-pump-east"), ("pump-basin", "hp-pump-basin"), ("chargers-east", "hp-charger-east-1"), ("chargers-basin", "hp-charger-basin-2"), ("lamp-east", "hp-light-east-3"), ("gauge-north", "hp-gauge-north-3"), ("gauge-east", "hp-gauge-east-1"), ("terminal", "hp-meter-ferry-terminal"), ("north-quay", "hp-light-north-1") })
+            foreach (var pair in new[] { ("pump-north", "hp-pump-north"), ("pump-east", "hp-pump-east"), ("pump-basin", "hp-pump-basin"), ("chargers-east", "hp-charger-east-1"), ("chargers-basin", "hp-charger-basin-2"), ("lamp-east", "hp-light-east-3"), ("gauge-north", "hp-gauge-north-3"), ("gauge-east", "hp-gauge-east-1"), ("terminal", "hp-meter-ferry-terminal"), ("north-quay", "hp-light-north-1"), ("charger-north", "hp-charger-north-1") })
                 foreach (var suffix in new[] { "kiosk-ext", "well", "well-locked", "pair", "close", "wide", "promenade", "insert" })
                 {
                     var a = anchors[pair.Item2]; var close = suffix == "well" || suffix == "well-locked";
                     poses.Add("pose:" + pair.Item1 + ":" + suffix, new CameraPose(new Point3(a.X, close ? 8 : 25, a.Z - (close ? 8 : 35)), new Point3(a.X, 1, a.Z), 38));
                 }
             poses.Add("pose:east-quay:mouth-wide", new CameraPose(new Point3(30, 55, -180), new Point3(175, 0, 20), 40));
-            poses.Add("pose:plain:wide", new CameraPose(new Point3(135, 60, 40), new Point3(181, 0, 100), 45));
-            poses.Add("pose:truck:chase", new CameraPose(new Point3(181, 14, 130), new Point3(181, 0, 100), 42));
-            poses.Add("pose:depot:wide", new CameraPose(new Point3(150, 35, 110), new Point3(181, 0, 153), 45));
+            var plain = fences[layout.Fences[0].Token];
+            var centre = new Ground(plain.Average(p => p.X), plain.Average(p => p.Z));
+            poses.Add("pose:plain:wide", new CameraPose(new Point3(centre.X - 46, 60, centre.Z - 60), new Point3(centre.X, 0, centre.Z), 45));
+            var direction = Road[1]; var dx = direction.X - Depot.X; var dz = direction.Z - Depot.Z;
+            var length = Math.Sqrt(dx * dx + dz * dz);
+            poses.Add("pose:truck:chase", new CameraPose(new Point3(centre.X - 30 * dx / length, 14, centre.Z - 30 * dz / length), new Point3(centre.X, 0, centre.Z), 42));
+            poses.Add("pose:depot:wide", new CameraPose(new Point3(Depot.X - 31, 35, Depot.Z - 43), new Point3(Depot.X, 0, Depot.Z), 45));
         }
         public CameraPose Pose(string name) => poses.TryGetValue(name, out var pose) ? pose : throw new FormatException("unknown pose " + name);
     }
