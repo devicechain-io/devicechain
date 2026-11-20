@@ -30,6 +30,7 @@ var sanctionedDisposeCallers = map[deliveryCapSite]string{
 	{"backend/services/device-state/processor/ownership_processor.go", "OwnershipProcessor.handle"}:                        "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/device-state/processor/StateProcessor.go", "StateProcessor.dispose"}:                                "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/event-management/processor/EntityAnchorReconciler.go", "EntityAnchorReconciler.handle"}:             "Owns the handling error and consumer-specific acknowledgement effects.",
+	{"backend/services/event-management/processor/DeviceTokenHolderConsumer.go", "DeviceTokenHolderConsumer.handle"}:       "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/event-management/processor/failed_events_indexer.go", "FailedEventsIndexer.handle"}:                 "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/event-management/processor/persist_batch.go", "EventPersistenceWorker.dispose"}:                     "Owns the handling error and consumer-specific acknowledgement effects.",
 	{"backend/services/notification-management/processor/NotificationProcessor.go", "NotificationProcessor.dispatchOne"}:   "Owns the handling error and consumer-specific acknowledgement effects.",
