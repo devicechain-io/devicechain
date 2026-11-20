@@ -61,7 +61,11 @@ namespace DeviceChain.Harborpulse.EditorTools
                     // Re-project the camera-space HUD at each aspect, then freeze camera ownership.
                     app.RefreshHud(); Canvas.ForceUpdateCanvases();
                     var name=vertical?"home-portrait":"home-landscape";
+                    // The camera-space Canvas does not render reliably outside Play mode (its dynamic font atlas is not built), so the
+                    // HOME beauty frame is the scene alone with the burnt-in stamp; HUD-bearing frames come from Play mode or the player.
+                    var hudShown=app.Hud?.Visible??false;if(app.Hud!=null)app.Hud.Visible=false;
                     Render(app.sceneCamera,Path.Combine(dir,name+"-beauty.png"),width,height,"OFFLINE PREVIEW - HOME 12:30",app);
+                    if(app.Hud!=null)app.Hud.Visible=hudShown;
                     var check=Mask(app,Path.Combine(dir,name+"-masks.png"),width,height);checks.Add(check);
                     Debug.Log("[harborpulse] "+name+" water="+check.Water.ToString("P2",CultureInfo.InvariantCulture)+" sky="+check.Sky.ToString("P2",CultureInfo.InvariantCulture)+" devices="+check.Devices+"/37 "+(check.Passed?"PASS":"FAIL"));
                 }
@@ -116,11 +120,14 @@ namespace DeviceChain.Harborpulse.EditorTools
                 tex.ReadPixels(new Rect(0,0,width,height),0,0);tex.Apply();File.WriteAllBytes(path,tex.EncodeToPNG());
                 var result=new Check{Width=width,Height=height,Pixels=names.ToDictionary(n=>n,n=>new Pixels())};
                 var pixels=tex.GetPixels32();
+                // URP converts an sRGB _BaseColor to linear before writing a linear target, so compare against the converted palette.
+                byte Linear(byte v)=>QualitySettings.activeColorSpace==ColorSpace.Linear?(byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.GammaToLinearSpace(v/255f)*255),0,255):v;
+                var expected=palette.Select(p=>new Color32(Linear(p.r),Linear(p.g),Linear(p.b),255)).ToList();
                 for(var i=0;i<pixels.Length;i++)
                 {
                     var pixel=pixels[i];var nearest=0;var best=int.MaxValue;
-                    for(var j=0;j<palette.Count;j++)
-                    {var p=palette[j];var distance=(pixel.r-p.r)*(pixel.r-p.r)+(pixel.g-p.g)*(pixel.g-p.g)+(pixel.b-p.b)*(pixel.b-p.b);if(distance<best){best=distance;nearest=j;}}
+                    for(var j=0;j<expected.Count;j++)
+                    {var p=expected[j];var distance=(pixel.r-p.r)*(pixel.r-p.r)+(pixel.g-p.g)*(pixel.g-p.g)+(pixel.b-p.b)*(pixel.b-p.b);if(distance<best){best=distance;nearest=j;}}
                     // Flat unlit, linear RT, no post or AA: interior mask pixels are exact.
                     // The small tolerance excludes edge blending instead of inventing visibility.
                     if(best<=27)result.Pixels[names[nearest]].Add(i%width,i/width);

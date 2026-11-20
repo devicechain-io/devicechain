@@ -177,7 +177,7 @@ namespace DeviceChain.Harborpulse.Visuals
                     BuildingBuilder.House(t, new Vector3(x, y, 275 + i * 48), 27, 20, 12, 3, mats, mats.Render, mats.Windows, true);
             }
             new MeshKit().Box(new Vector3(-75, 55, 280), new Vector3(16, 60, 22))
-                .Cylinder(new Vector3(-75, 85, 280), 9, 38, 4, 0).Spawn("Church spire", t, mats.Slate);
+                .Cylinder(new Vector3(-75, 85, 280), 9, 38, 4, 0.05f).Spawn("Church spire", t, mats.Slate);
             new MeshKit().Box(new Vector3(85, 64, 270), new Vector3(12, 85, 12))
                 .Gable(new Vector3(85, 107, 270), 16, 16, 10).Spawn("Harbour master clock tower", t, mats.Stone);
             new MeshKit().Pipe(new Vector3(85, 93, 263.9f), Vector3.back, 3.4f, .1f, 32).Spawn("Clock face", t, mats.GaugeBoard);

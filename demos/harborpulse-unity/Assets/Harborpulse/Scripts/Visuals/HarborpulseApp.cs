@@ -159,6 +159,8 @@ namespace DeviceChain.Harborpulse.Visuals
                 layout = HarborLayout.Parse(text.text);
                 map = new PresentationMap(layout);
                 storyboard = Storyboard.Parse(Resources.Load<TextAsset>("storyboard").text, map);
+                // The read-only observer adapter: live reads come from whichever session is current (a runner restart replaces it).
+                if (DirectorFeedFactory == null) DirectorFeedFactory = () => new DirectorObserver(layout, () => live?.DirectorReads);
                 var options = Environment.GetCommandLineArgs();
                 localDigest = LayoutDigest.Override(LayoutDigest.Compute(text.bytes), CommandLineArgs.Get(options, "-hp-layout-digest-override", out _));
                 portrait = Array.IndexOf(options, "-hp-portrait") >= 0;
@@ -377,7 +379,7 @@ namespace DeviceChain.Harborpulse.Visuals
             Hud?.Apply(directorView, Offline ? "OFFLINE PREVIEW" : control ? "TEST CONTROL" : "LIVE", sim,
                 Offline ? "x" + previewSpeed.ToString("0.#", CultureInfo.InvariantCulture) : "x1",
                 HudModel.Tags(layout, frame, sceneCamera.aspect < 1 ? 2 : 4),
-                string.Join(" | ", new[] { digestProblem, recording?.Problem, frame.ReadProblem }.Where(p => !string.IsNullOrEmpty(p))));
+                string.Join(" | ", new[] { digestProblem, recording?.Problem, Offline ? null : frame.ReadProblem }.Where(p => !string.IsNullOrEmpty(p))));
         }
         DateTimeOffset previewWall;
         public void BeginDirectorPreview(double absoluteHour)
