@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // PendingEntityDeletion preserves a deletion until the broker acknowledges it. A lost
@@ -42,14 +43,25 @@ type PendingEntityDeletion struct {
 // records the delete; journalling its announcement and drain adds no operator action.
 func (PendingEntityDeletion) AuditExempt() bool { return true }
 
-// entityTenantOnTx reads the tenant of the entity row about to be deleted, inside the delete's
-// transaction. The fact names its tenant explicitly rather than leaving it to the tenant
-// callback: that callback stamps nothing under a system context, and a fact with no tenant
-// could never be published under one, so it would block every drain pass behind it. An entity
-// with no tenant is refused, which rolls the delete back.
-func entityTenantOnTx(tx *gorm.DB, model any, id uint) (string, error) {
+// lockEntityForDeleteOnTx locks the row of the entity about to be deleted, inside the delete's
+// transaction, and reads its tenant.
+//
+// 🔴 THE LOCK COMES BEFORE THE DELETION IS STAMPED (deletionNow), and that is its point. A
+// consumer orders the deletion against other times this service stamps on the entity — a
+// device's roster fact (ExpectedSince) above all, which event-management reads, when it is newer
+// than the deletion, as proof the token was re-created. A writer that changed the row after the
+// stamp but before the delete reached it would commit a time later than the deletion of an entity
+// nobody re-created. With the row held first, a concurrent writer either committed before the
+// lock was granted, so before the stamp was taken, or waits for the delete and then finds no row.
+//
+// The fact names its tenant explicitly rather than leaving it to the tenant callback: that
+// callback stamps nothing under a system context, and a fact with no tenant could never be
+// published under one, so it would block every drain pass behind it. An entity with no tenant
+// is refused, which rolls the delete back.
+func lockEntityForDeleteOnTx(tx *gorm.DB, model any, id uint) (string, error) {
 	tenants := make([]string, 0, 1)
-	if err := tx.Unscoped().Model(model).Where("id = ?", id).Pluck("tenant_id", &tenants).Error; err != nil {
+	if err := tx.Unscoped().Model(model).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+		Where("id = ?", id).Pluck("tenant_id", &tenants).Error; err != nil {
 		return "", fmt.Errorf("reading the tenant of the entity being deleted: %w", err)
 	}
 	if len(tenants) != 1 || tenants[0] == "" {

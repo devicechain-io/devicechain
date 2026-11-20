@@ -140,6 +140,17 @@ func (api *Api) countReferencing(ctx context.Context, refModel interface{}, colu
 // entity.
 func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model interface{},
 	token string, cascade func(tx *gorm.DB, id uint) ([]uint, error)) (bool, error) {
+	return api.deleteEdgeEntityAfter(ctx, etype, model, token, nil, cascade)
+}
+
+// deleteEdgeEntityAfter is deleteEdgeEntity with `first` run before the entity's row is locked.
+// The row is locked at the top of the transaction, before the deletion is stamped
+// (lockEntityForDeleteOnTx), so a lock that other writers take AHEAD of that row cannot wait
+// for the cascade: taken there it would be the opposite order. `first` takes it instead — a
+// group's membership family, which an access-scope switch and a pointer move take before the
+// group row.
+func (api *Api) deleteEdgeEntityAfter(ctx context.Context, etype entity.Type, model interface{},
+	token string, first func(tx *gorm.DB) error, cascade func(tx *gorm.DB, id uint) ([]uint, error)) (bool, error) {
 	id, err := api.ResolveEntityToken(ctx, string(etype), token)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -149,9 +160,16 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 	}
 	var trackingSources ownershipQueued
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		// The deletion fact names the entity's own tenant (entityTenantOnTx), read before the
-		// row is gone.
-		tenant, err := entityTenantOnTx(tx, model, id)
+		if first != nil {
+			if err := first(tx); err != nil {
+				return err
+			}
+		}
+		// The entity's row is locked FIRST, before the deletion is stamped below: a writer that
+		// changed it after the stamp would commit a time later than the deletion while the entity
+		// still exists (lockEntityForDeleteOnTx). The deletion fact names the entity's own tenant,
+		// read under the same lock, before the row is gone.
+		tenant, err := lockEntityForDeleteOnTx(tx, model, id)
 		if err != nil {
 			return err
 		}

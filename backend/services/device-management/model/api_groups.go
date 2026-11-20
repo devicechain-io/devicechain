@@ -353,10 +353,12 @@ func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, erro
 	// writer taking both sets in ascending id — holding an edge device, waiting on a member
 	// this cascade held — closed a cycle the deadlock detector resolved by failing a request
 	// (ownership_outbox_lockorder_integration_test.go).
-	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeGroup, &EntityGroup{}, token, func(tx *gorm.DB, id uint) ([]uint, error) {
-		if err := api.lockMembershipFamily(ctx, tx, group.MemberType); err != nil {
-			return nil, err
-		}
+	//
+	// The family lock is taken BEFORE the group row (deleteEdgeEntityAfter), which the delete
+	// locks before it stamps the deletion: SetEntityGroupAccessScope and a pointer move take the
+	// family lock and then the group row, and the delete must take them in the same order.
+	familyFirst := func(tx *gorm.DB) error { return api.lockMembershipFamily(ctx, tx, group.MemberType) }
+	deleted, err := api.deleteEdgeEntityAfter(ctx, entity.TypeGroup, &EntityGroup{}, token, familyFirst, func(tx *gorm.DB, id uint) ([]uint, error) {
 		inUse, err := api.entityGroupReferencedByRule(ctx, tx, id)
 		if err != nil {
 			return nil, err
