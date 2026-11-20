@@ -61,6 +61,31 @@ func TestCollapsedNamesAreCaught(t *testing.T) {
 			want: "`increase(...)`",
 		},
 		{
+			name: "a copy of the name to a fixed value",
+			expr: `sum(increase(label_replace({__name__=~"a_total|b_total"}, "metric", "same", "__name__", "(.+)")[15m:1m])) > 0`,
+			want: "`increase(...)`",
+		},
+		{
+			name: "a copy of only part of the name",
+			expr: `sum(increase(label_replace({__name__=~"a_x_total|b_x_total"}, "metric", "$1", "__name__", ".+_(x)_total")[15m:1m])) > 0`,
+			want: "`increase(...)`",
+		},
+		{
+			name: "a copy back into the name itself",
+			expr: `sum(increase(label_replace({__name__=~"a_total|b_total"}, "__name__", "$1", "__name__", "(.+)")[15m:1m])) > 0`,
+			want: "`increase(...)`",
+		},
+		{
+			name: "an aggregation that keeps the name in its groups",
+			expr: `sum(rate(sum by (__name__, job, instance) ({__name__=~"a_total|b_total"})[5m:1m])) > 0`,
+			want: "`rate(...)`",
+		},
+		{
+			name: "a union matched on the name",
+			expr: `sum(increase((a_total or on(__name__, job, instance) b_total)[15m:1m])) > 0`,
+			want: "or on(__name__",
+		},
+		{
 			name: "nested inside a comparison on the right",
 			expr: `vector(1) and on() (sum(rate({__name__=~".+_total"}[5m])) > 0)`,
 			want: "`rate(...)`",
@@ -104,6 +129,14 @@ func TestDistinctAfterNameDropPasses(t *testing.T) {
 		`absent_over_time({__name__=~"a|b", job="x"}[5m])`,
 		// An aggregation inside a subquery has already removed the name.
 		`max_over_time(sum by (job) ({__name__=~"a|b"})[10m:1m]) > 0`,
+		// A regex with no metacharacters is one exact name.
+		`sum(rate({__name__=~"a_total"}[5m])) > 0`,
+		// A unary minus over one name.
+		`max_over_time((-a_total)[5m:1m]) > 0`,
+		// A plain union drops right-hand series whose other labels match the left.
+		`sum(increase((a_total or b_total)[15m:1m])) > 0`,
+		// ${1} spelling of the whole-name copy.
+		`sum(increase(label_replace({__name__=~"a|b"}, "metric", "${1}", "__name__", "(.*)")[15m:1m])) > 0`,
 		// Instant-vector selectors are not this check's concern.
 		`max by (stream) ({__name__=~"devicechain_[a-z0-9]+_jetstream_.+"}) > 0`,
 	} {

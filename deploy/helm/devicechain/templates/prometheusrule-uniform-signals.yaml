@@ -13,6 +13,9 @@ subquery before increase(), because increase() drops __name__: one service runs 
 loops whose *_messages_total series share every other label, and without the copy
 Prometheus refuses the evaluation ("vector cannot contain metrics with the same labelset")
 and the alert can never fire. hack/check-prometheus-rules.sh (promqlguard) refuses that shape.
+The subquery samples every 15s, no slower than the scrape (the ServiceMonitor names no
+interval, so the Prometheus default applies, 30s in kube-prometheus-stack). A slower step
+can land on neither the seeded zero nor the scrape before the first drop, and miss it.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -72,7 +75,7 @@ spec:
           expr: |
             sum by (job) (increase(label_replace(
               {__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total",__name__!="devicechain_devicestate_state_messages_total",result="dropped",namespace="{{ $ns }}"},
-              "metric", "$1", "__name__", "(.+)")[15m:1m])) > 0
+              "metric", "$1", "__name__", "(.+)")[15m:15s])) > 0
           labels:
             severity: warning
             devicechain_instance: {{ $id }}

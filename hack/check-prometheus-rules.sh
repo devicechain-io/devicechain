@@ -1198,8 +1198,11 @@ PY
   # subquery, must come back clean through the same entry point.
   # -------------------------------------------------------------------------
   d="$st/always-firing"
-  st_af_expect_finding "a range function collapsing several metric names, verbatim" ProcessorLoopDropping     'sum by (job) (increase({__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total",__name__!="devicechain_devicestate_state_messages_total",result="dropped",namespace="dci-devicechain"}[15m])) > 0'     'cannot be evaluated because `increase(...)` drops the metric name'
-  st_af_file "$d/probe.yaml" ProcessorLoopDropping     'sum by (job) (increase(label_replace({__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total",__name__!="devicechain_devicestate_state_messages_total",result="dropped",namespace="dci-devicechain"}, "metric", "$1", "__name__", "(.+)")[15m:1m])) > 0'
+  st_af_expect_finding "a range function collapsing several metric names, verbatim" ProcessorLoopDropping \
+    'sum by (job) (increase({__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total",__name__!="devicechain_devicestate_state_messages_total",result="dropped",namespace="dci-devicechain"}[15m])) > 0' \
+    'cannot be evaluated because `increase(...)` drops the metric name'
+  st_af_file "$d/probe.yaml" ProcessorLoopDropping \
+    'sum by (job) (increase(label_replace({__name__=~"devicechain_[a-z0-9]+_[a-z0-9_]+_messages_total",__name__!="devicechain_devicestate_state_messages_total",result="dropped",namespace="dci-devicechain"}, "metric", "$1", "__name__", "(.+)")[15m:15s])) > 0'
   grep -q 'label_replace' "$d/probe.yaml" ||
     st_fail "the collapsed-names counterweight fixture did not write -- believe no verdict from this run"
   check_always_firing 1 "$d/probe.yaml" >/dev/null ||

@@ -102,7 +102,8 @@ func main() {
 				"metrics with the same labelset\"): the rule errors on every evaluation, never fires,\n"+
 				"and PrometheusRuleFailures fires instead. promtool unit tests miss it whenever their\n"+
 				"series carry one metric name per target. Copy the name into a label first, inside a\n"+
-				"subquery: increase(label_replace(<selector>, \"metric\", \"$1\", \"__name__\", \"(.+)\")[15m:1m]).\n",
+				"subquery: increase(label_replace(<selector>, \"metric\", \"$1\", \"__name__\", \"(.+)\")[15m:15s]),\n"+
+				"with a step no slower than the scrape interval.\n",
 				n, checked)
 		}
 		os.Exit(1)
