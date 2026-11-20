@@ -19,6 +19,13 @@ namespace DeviceChain.Harborpulse.Visuals
     {
         /// <summary>The ground is the deck everywhere inside this rectangle (|x| below it, z below the north edge), and rises outside it.</summary>
         public const float CoreHalfX = 240, CoreNorthZ = 140, CoastZ = -140;
+
+        /// <summary>
+        /// The trees' layer (code only, like the water's 30): the planar reflection leaves it out, so the water reflects the town and the
+        /// hills' ground but not the hundreds of thousands of crown vertices. Trees cast no shadow either; under the high cloud their
+        /// shadows would be faint, and they would cost a pass over every crown.
+        /// </summary>
+        public const int FoliageLayer = 29;
         const float Tile = 300;
         static float Deck => (float)SitePlan.DeckHeightM;
 
@@ -214,7 +221,8 @@ namespace DeviceChain.Harborpulse.Visuals
             foreach (var pair in kits)
             {
                 if (pair.Value.VertexCount == 0) continue;
-                pair.Value.Spawn(pair.Key.Item1.name.Replace("Harbor/", "") + " " + pair.Key.Item2 + "," + pair.Key.Item3, pair.Key.Item5 ? forest : Town, pair.Key.Item1, pair.Key.Item4);
+                var go = pair.Value.Spawn(pair.Key.Item1.name.Replace("Harbor/", "") + " " + pair.Key.Item2 + "," + pair.Key.Item3, pair.Key.Item5 ? forest : Town, pair.Key.Item1, pair.Key.Item4);
+                if (IsFoliage(pair.Key.Item1)) go.layer = FoliageLayer;
             }
             kits.Clear();
         }
@@ -319,6 +327,9 @@ namespace DeviceChain.Harborpulse.Visuals
         }
 
         // ---------------------------------------------------------------- buildings
+
+        bool IsFoliage(Material mat) => mat == m.Bark || mat == m.FoliagePine || mat == m.FoliageGreen || mat == m.FoliageOlive
+            || mat == m.FoliageGold || mat == m.FoliageOrange || mat == m.FoliageRed;
 
         Material Paint()
         {
@@ -620,16 +631,16 @@ namespace DeviceChain.Harborpulse.Visuals
         {
             at.y = Height(at.x, at.z) - 0.3f;
             var conifer = random.NextDouble() < (town ? 0.18 : 0.3);
-            P(m.Bark, at, 0).Cylinder(Vector3.zero, height * 0.035f + 0.12f, height * 0.45f, 5, height * 0.025f);
+            P(m.Bark, at, 0, false).Cylinder(Vector3.zero, height * 0.035f + 0.12f, height * 0.45f, 5, height * 0.025f);
             if (conifer)
             {
                 var r = height * 0.24f;
-                P(m.FoliagePine, at, 0).Cylinder(new Vector3(0, height * 0.22f, 0), r, height * 0.5f, 7, 0).Cylinder(new Vector3(0, height * 0.48f, 0), r * 0.75f, height * 0.52f, 7, 0);
+                P(m.FoliagePine, at, 0, false).Cylinder(new Vector3(0, height * 0.22f, 0), r, height * 0.5f, 7, 0).Cylinder(new Vector3(0, height * 0.48f, 0), r * 0.75f, height * 0.52f, 7, 0);
             }
             else
             {
                 var r = height * 0.3f; var leaf = Foliage(at.x, at.z);
-                var crown = P(leaf, at, (float)random.NextDouble() * 360).Ellipsoid(new Vector3(0, height * 0.62f, 0), new Vector3(r, r * 0.95f, r), 1);
+                var crown = P(leaf, at, (float)random.NextDouble() * 360, false).Ellipsoid(new Vector3(0, height * 0.62f, 0), new Vector3(r, r * 0.95f, r), 1);
                 if (height > 11) crown.Ellipsoid(new Vector3(r * 0.45f, height * 0.5f, r * 0.2f), new Vector3(r * 0.7f, r * 0.65f, r * 0.7f), 1);
             }
         }
@@ -637,10 +648,10 @@ namespace DeviceChain.Harborpulse.Visuals
         void Trees()
         {
             // in town: yards and verges, kept off streets, buildings and the core; the side lands beside the Basin and East Quay get lighter woods
-            for (var z = -120f; z < 520; z += 10)
-                for (var x = -470f; x < 470; x += 10)
+            for (var z = -120f; z < 520; z += 11)
+                for (var x = -470f; x < 470; x += 11)
                 {
-                    var p = new Vector2(x + (float)random.NextDouble() * 8 - 4, z + (float)random.NextDouble() * 8 - 4);
+                    var p = new Vector2(x + (float)random.NextDouble() * 9 - 4.5f, z + (float)random.NextDouble() * 9 - 4.5f);
                     var side = p.y < 146;
                     if (side && Mathf.Abs(p.x) < CoreHalfX + 4) continue;
                     var density = side ? 0.2f + 0.5f * Noise(p.x * 0.017f + 7, p.y * 0.017f) * Smooth(CoastZ, CoastZ + 60, p.y)
@@ -650,21 +661,21 @@ namespace DeviceChain.Harborpulse.Visuals
                     Tree(new Vector3(p.x, 0, p.y), 8 + (float)random.NextDouble() * 7, true);
                 }
             // the hills and the far side lands: forest in big low-poly crowns, sparser and larger with distance; far crowns are coarser and cast no shadow
-            const float Base = 10;
+            const float Base = 13;
             for (var z = CoastZ + 20; z < 3000; z += Base)
                 for (var x = -3000f; x < 3000; x += Base)
                 {
                     var d = CoreDistance(x, z);
                     if (Mathf.Abs(x) < 470 && z < 520) continue; // the town and the near side lands have their own trees
-                    var step = Base + Mathf.Max(0, d - 470) * 0.045f;
+                    var step = Base + Mathf.Max(0, d - 470) * 0.05f;
                     if (random.NextDouble() > (Base / step) * (Base / step)) continue;
                     var p = new Vector2(x + ((float)random.NextDouble() - 0.5f) * step, z + ((float)random.NextDouble() - 0.5f) * step);
                     if (Noise(p.x * 0.006f + 2, p.y * 0.006f + 9) < 0.2f) continue; // clearings
                     var crown = step * (0.55f + (float)random.NextDouble() * 0.25f);
                     var at = new Vector3(p.x, Height(p.x, p.y) - crown * 0.3f, p.y);
-                    var near = d < 620;
+                    var near = d < 520;
                     var mat = random.NextDouble() < 0.28 ? m.FoliagePine : Foliage(p.x, p.y);
-                    Kit(mat, at, near, true).Place(at, (float)random.NextDouble() * 360)
+                    Kit(mat, at, false, true).Place(at, (float)random.NextDouble() * 360)
                         .Ellipsoid(new Vector3(0, crown * 0.9f, 0), new Vector3(crown, crown * 1.15f, crown), near ? 1 : 0);
                 }
         }

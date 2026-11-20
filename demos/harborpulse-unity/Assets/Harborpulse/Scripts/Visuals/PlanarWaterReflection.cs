@@ -53,7 +53,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 texture.Create();
             }
             reflection.CopyFrom(main); reflection.enabled = false;
-            reflection.targetTexture = texture; reflection.cullingMask = main.cullingMask & ~(1 << WaterLayer);
+            reflection.targetTexture = texture; reflection.cullingMask = main.cullingMask & ~(1 << WaterLayer) & ~(1 << TownBuilder.FoliageLayer);
             reflection.clearFlags = CameraClearFlags.SolidColor; reflection.backgroundColor = Color.clear;
             // y' = 2 * level - y, determinant -1: restore culling even if URP throws.
             var mirror = Matrix4x4.identity; mirror.m11 = -1; mirror.m13 = 2 * Level;
