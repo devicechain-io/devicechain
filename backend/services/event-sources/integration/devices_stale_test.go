@@ -248,8 +248,15 @@ func TestConcurrentLookupsWithDifferentBearersAreSeparateQuestions(t *testing.T)
 			out <- result{b, got, err}
 		}(b)
 	}
-	<-entered
-	<-entered
+	// Both are asked. A flight shared across bearers asks once, and the second never arrives.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			close(release)
+			t.Fatal("only one bearer was asked: the two lookups shared one flight")
+		}
+	}
 	close(release)
 	for i := 0; i < 2; i++ {
 		r := <-out
