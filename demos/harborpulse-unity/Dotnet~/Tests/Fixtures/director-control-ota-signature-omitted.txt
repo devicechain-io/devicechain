@@ -1,0 +1,7 @@
++1200|8|caption|Overnight: a firmware update.|
++1209|8|caption-end|unsigned|
+-1200|8|caption|Overnight: a signed firmware update.|3:run8:artifact17:firmware-artifact0:0:9:ota-cycle0:11:ota-attempt8:VERIFIED8:PLATFORM
+-1203|8|node-label|Signed update|3:run8:artifact17:firmware-artifact0:0:9:ota-cycle0:11:ota-attempt8:VERIFIED8:PLATFORM
+-1203|8|node|signed|3:run8:artifact17:firmware-artifact0:0:9:ota-cycle0:11:ota-attempt8:VERIFIED8:PLATFORM
+-1206|8|link|signed->cap|
+-1209|8|caption-end|signed|

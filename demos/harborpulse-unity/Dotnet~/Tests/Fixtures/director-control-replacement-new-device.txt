@@ -1,0 +1,15 @@
+-390|3|caption|New hardware, same gauge.|3:run11:replacement19:replacement-journal16:hp-gauge-north-30:17:replacement-cycle0:0:8:RECORDED8:PLATFORM
+-396|3|link|swapped->journal|
+-396|3|node-label|Replacement recorded|3:run11:replacement19:replacement-journal16:hp-gauge-north-30:17:replacement-cycle0:0:8:RECORDED8:PLATFORM
+-396|3|node|journal|3:run11:replacement19:replacement-journal16:hp-gauge-north-30:17:replacement-cycle0:0:8:RECORDED8:PLATFORM
+-397|3|caption-end|new-hardware|
+-398|3|caption|Same device, same history.|3:run7:measure12:before-gauge16:hp-gauge-north-313:water_level_m17:replacement-cycle0:0:0:8:PLATFORM,3:run11:replacement19:replacement-journal16:hp-gauge-north-30:17:replacement-cycle0:0:8:RECORDED8:PLATFORM,3:run7:measure11:after-gauge16:hp-gauge-north-313:water_level_m17:replacement-cycle0:0:0:8:PLATFORM
+-399|3|link|journal->same|
+-399|3|node-label|Same device reporting|3:run7:measure12:before-gauge16:hp-gauge-north-313:water_level_m17:replacement-cycle0:0:0:8:PLATFORM,3:run11:replacement19:replacement-journal16:hp-gauge-north-30:17:replacement-cycle0:0:8:RECORDED8:PLATFORM,3:run7:measure11:after-gauge16:hp-gauge-north-313:water_level_m17:replacement-cycle0:0:0:8:PLATFORM
+-399|3|node|same|3:run7:measure12:before-gauge16:hp-gauge-north-313:water_level_m17:replacement-cycle0:0:0:8:PLATFORM,3:run11:replacement19:replacement-journal16:hp-gauge-north-30:17:replacement-cycle0:0:8:RECORDED8:PLATFORM,3:run7:measure11:after-gauge16:hp-gauge-north-313:water_level_m17:replacement-cycle0:0:0:8:PLATFORM
+-404|3|caption-end|same|
+-405|3|caption|The old unit's credentials / are disabled.|3:run11:replacement19:replacement-journal16:hp-gauge-north-30:17:replacement-cycle0:0:8:RECORDED8:PLATFORM,3:run10:credential14:old-credential16:hp-gauge-north-30:17:replacement-cycle0:0:0:8:PLATFORM
+-405|3|link|same->disabled|
+-405|3|node-label|Old credentials disabled|3:run11:replacement19:replacement-journal16:hp-gauge-north-30:17:replacement-cycle0:0:8:RECORDED8:PLATFORM,3:run10:credential14:old-credential16:hp-gauge-north-30:17:replacement-cycle0:0:0:8:PLATFORM
+-405|3|node|disabled|3:run11:replacement19:replacement-journal16:hp-gauge-north-30:17:replacement-cycle0:0:8:RECORDED8:PLATFORM,3:run10:credential14:old-credential16:hp-gauge-north-30:17:replacement-cycle0:0:0:8:PLATFORM
+-410|3|caption-end|disabled|

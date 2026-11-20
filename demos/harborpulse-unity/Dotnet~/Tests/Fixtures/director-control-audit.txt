@@ -1,0 +1,86 @@
+Harborpulse U2a control audit (storyboard section 8)
+
+Compared control-versus-clean deltas, including timestamps and evidence identities.
+Below are the ORIGINAL non-target delta lines (evidence suffixes omitted for readability).
+All 15 regenerated controls have zero non-target deltas, enforced before fixture writes.
+
+acked-before-delay: none.
+air-lock-basin: none.
+drop-backfill: none.
+no-command-far-end: none.
+ota-cap-three: none.
+ota-failure-disabled: none.
+ota-signature-omitted: none.
+refuse-derate: none.
+silence-north-lamp: none.
+suppression-wrong-device: none.
+
+replacement-new-device:
+-393|3|node-label|Gauge swapped
+-393|3|node|swapped
++421|3|caption|The live view is unavailable.
++424|3|caption-end|page-unavailable
+
+replacement-old-credential-left-live:
++421|3|caption|The live view is unavailable.
++424|3|caption-end|page-unavailable
+
+smtp-sink-stopped:
++367|2|caption|The live view is unavailable.
++370|2|caption-end|page-unavailable
+
+truck-stays-home:
++967|7|caption|Readings arriving.
++970|7|caption-end|arriving
+The removed generic-unavailable pair on page 5 was also invalid in the clean baseline.
+
+stream-cut:
+-870|6|shot|6c
+-871|6|caption|The platform notices the silence.
+-877|6|node-label|Notification sent
+-877|6|node|notify
+-880|6|caption-end|silence
+-880|6|shot|6d
+-907|6|link|notify->escalated
+-907|6|node-label|still unacknowledged: re-notified
+-907|6|node|escalated
++936|7|caption|Readings arriving.
++941|7|caption-end|arriving
+-936|7|caption|Every buffered reading, / stored at the time it was taken.
+-936|7|link|paced->stored
+-936|7|node-label|All buffered readings stored
+-936|7|node|stored
+-941|7|caption-end|all-buffered
+-942|7|link|stored->clear
+-942|7|node-label|Alarms cleared
+-942|7|node|clear
+The original injection incorrectly stalled the scenario clock and cut every source.
+It now cuts alarm/notification stream coverage for 60 wall seconds while snapshot
+polls continue. The outage golden changes only the exact absence-set claim and its
+node/links. A separate maintenance-time injection verifies removal of the negative
+notification-window claim, without removing positive claims or changing other pages.
+
+Causes and corrections:
+- Page 1: quiet proof closes at 135 s; its 3 s caption and final camera hold need
+  time beyond windowSim 8.25. Presentation window now ends at 8.35; proof interval
+  still closes at 8.25. It finishes normally at 140 s.
+- Page 5: pump page queues truck entry until 717 s. Its 12 s shots cannot fit before
+  old window end 726 s. Window now ends at 18.25, allowing completion at 729 s.
+- Page 6: final shot starts at 880 s and holds 35 s for escalation evidence;
+  old window ended at 912 s. Window now ends at 21.25, allowing completion at 915 s.
+- Page 7: timeout searched all page fallbacks and replayed the successful tally's
+  fallback while waiting for the absent truck. Fallback now visits only unresolved
+  opportunities, and only captions declared for that shot and slot. No declared
+  fallback means no claim caption. Already shown fallbacks are not repeated.
+- After page 6's deadline fix, page 7 could reach its tally before coverage closed.
+  Shot 7d now cues at 21.6, matching the tally evidence interval's closing time.
+- Replacement-new-device also removed the independent scenario hardware-swap
+  record and bound its node to the absent platform journal. Keep the scenario
+  record and gate its node independently; platform identity claims still disappear.
+- Removed page-unavailable definitions entirely. Clean-output assertions and control
+  page/slot/node/link allow-lists run BEFORE any golden update.
+
+Verification:
+- Generic clean fallback mutant: CleanRunExactPageAndShotSequence failed at the
+  explicit 'clean output must not contain fallback/unavailable/skip text' assertion.
+  Production bytes restored afterward; mutation is registered in verify_director_mutants.py.
