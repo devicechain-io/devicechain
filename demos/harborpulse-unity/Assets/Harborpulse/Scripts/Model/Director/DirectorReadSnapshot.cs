@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text.Json;
@@ -15,7 +16,18 @@ namespace DeviceChain.Harborpulse.Model.Director
     public sealed class DirectorMeasurementTap
     {
         readonly List<DirectorMeasurement> records = new List<DirectorMeasurement>();
-        public IReadOnlyList<DirectorMeasurement> Records => records;
+        public IReadOnlyList<DirectorMeasurement> Records => new Prefix(records);
+        // Publication captures a count, not a copy of the run's entire stream. Appending on
+        // the main thread cannot change any already-published prefix or its elements.
+        internal sealed class Prefix : IReadOnlyList<DirectorMeasurement>
+        {
+            readonly List<DirectorMeasurement> records;
+            public int Count { get; }
+            public Prefix(List<DirectorMeasurement> records) { this.records = records; Count = records.Count; }
+            public DirectorMeasurement this[int index] => index >= 0 && index < Count ? records[index] : throw new ArgumentOutOfRangeException(nameof(index));
+            public IEnumerator<DirectorMeasurement> GetEnumerator() { for (var i = 0; i < Count; i++) yield return records[i]; }
+            IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+        }
         public void Watch(DirectorMeasurement measurement)
         {
             records.Add(measurement);
@@ -80,7 +92,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             Reads = Array.AsReadOnly(reads.ToArray());
             MeasurementsLive = measurementsLive; MeasurementReconnects = measurementReconnects; AlarmReconnects = alarmReconnects;
             AlarmChanges = Array.AsReadOnly((alarmChanges ?? Array.Empty<DirectorAlarmChange>()).ToArray());
-            Measurements = Array.AsReadOnly((measurements ?? Array.Empty<DirectorMeasurement>()).ToArray());
+            Measurements = measurements is DirectorMeasurementTap.Prefix prefix ? prefix : Array.AsReadOnly((measurements ?? Array.Empty<DirectorMeasurement>()).ToArray());
             Problems = Array.AsReadOnly(Reads.Where(r => r.Error != null || r.Probe == DirectorProbe.PROBE_FAILED)
                 .Select(r => r.Name + "/" + r.Scope + ": " + r.Probe + ": " + r.Error).ToArray());
         }

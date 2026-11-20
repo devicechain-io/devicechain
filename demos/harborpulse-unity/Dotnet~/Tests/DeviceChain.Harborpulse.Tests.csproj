@@ -24,6 +24,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="DirectorCostTests.cs" />
     <Compile Include="../../Assets/Harborpulse/Tests/EditMode/**/*.cs" />
   </ItemGroup>
 

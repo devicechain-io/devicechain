@@ -10,7 +10,7 @@ using DeviceChain.Harborpulse.Model.Director;
 
 namespace DeviceChain.Harborpulse.Visuals
 {
-    /// <summary>Caller-owned writers enqueue complete lines. Disk flushes happen off the player frame.</summary>
+    /// <summary>A bounded single-consumer queue owns recording serialization, checkpoints and disk writes.</summary>
     public sealed class RecordingFiles : IDisposable
     {
         sealed class QueueWriter : TextWriter
@@ -20,11 +20,11 @@ namespace DeviceChain.Harborpulse.Visuals
             public override Encoding Encoding => Encoding.UTF8;
             public override void WriteLine(string value)
             {
-                if (!owner.queue.TryAdd((stream, value))) owner.Problem = "recording queue full: recording incomplete";
+                owner.streams[stream].WriteLine(value); // invoked only by the recorder worker
             }
             public override void Flush() { } // worker flushes every second and drains at teardown
         }
-        readonly BlockingCollection<(int Stream, string Line)> queue = new BlockingCollection<(int, string)>(32768);
+        readonly BlockingCollection<Action> queue = new BlockingCollection<Action>(32768);
         readonly StreamWriter[] streams = new StreamWriter[4];
         readonly Thread worker;
         volatile string problem;
@@ -40,7 +40,8 @@ namespace DeviceChain.Harborpulse.Visuals
             try
             {
                 for (var i = 0; i < 4; i++) streams[i] = new StreamWriter(Path.Combine(DirectoryPath, names[i] + ".ndjson"), false, new UTF8Encoding(false));
-                Recorder = new Recorder(new QueueWriter(this, 0), new QueueWriter(this, 1), new QueueWriter(this, 2), new QueueWriter(this, 3));
+                Recorder = new Recorder(new QueueWriter(this, 0), new QueueWriter(this, 1), new QueueWriter(this, 2), new QueueWriter(this, 3),
+                    work => { if (!queue.TryAdd(work)) Problem = "recording queue full: recording incomplete"; });
                 worker = new Thread(Drain) { IsBackground = true, Name = "Harbor recording" }; worker.Start();
             }
             catch { foreach (var stream in streams) stream?.Dispose(); throw; }
@@ -52,7 +53,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 var lastFlush = DateTime.UtcNow;
                 while (!queue.IsCompleted)
                 {
-                    if (queue.TryTake(out var row, 100)) streams[row.Stream].WriteLine(row.Line);
+                    if (queue.TryTake(out var work, 100)) work();
                     if ((DateTime.UtcNow - lastFlush).TotalSeconds >= 1)
                     { foreach (var stream in streams) stream.Flush(); lastFlush = DateTime.UtcNow; }
                 }
