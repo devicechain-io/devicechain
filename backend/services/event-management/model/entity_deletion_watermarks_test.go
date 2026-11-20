@@ -19,11 +19,8 @@ import (
 )
 
 func TestDeletionResweepSchedule(t *testing.T) {
-	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.FixedZone("offset", 3600))
-	require.Nil(t, resweepSchedule(false, now), "clear when no older transaction can persist late anchors")
-	after := resweepSchedule(true, now)
-	require.NotNil(t, after, "an in-flight writer must keep the resweep armed")
-	assert.Equal(t, now.UTC().Add(time.Minute), *after)
+	require.False(t, resweepRearm(false), "clean and clear when no older transaction can persist late anchors")
+	require.True(t, resweepRearm(true), "an in-flight writer must keep the resweep armed")
 }
 
 func TestDeletionWatermarkMonotonicAcrossOffsets(t *testing.T) {

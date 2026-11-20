@@ -36,30 +36,41 @@ func TestIntegrationDeletionResweepWaitsForOlderTransaction(t *testing.T) {
 	var w EntityDeletionWatermark
 	require.NoError(t, api.RDB.DB(ctx).Take(&w).Error)
 	require.NotNil(t, w.ResweepAfter)
-	require.True(t, started.Before(w.ResweepAfter.Add(-EntityDeletionResweepDelay)))
+	require.NotNil(t, w.ArmedAt)
+	require.True(t, started.Before(*w.ArmedAt))
+	assert.WithinDuration(t, w.ArmedAt.Add(EntityDeletionResweepDelay), *w.ResweepAfter, time.Millisecond,
+		"the arm time and the schedule come from one database clock reading")
 	plant := func(id string) {
 		require.NoError(t, api.RDB.DB(ctx).Create(&EventAnchor{EventId: []byte(id), DeviceToken: "pump",
 			OccurredTime: cutoff.Add(-time.Hour), AnchorType: "area", AnchorToken: "floor"}).Error)
 	}
-	assertClean := func() {
+	count := func() int64 {
 		var n int64
 		require.NoError(t, api.RDB.DB(ctx).Model(&EventAnchor{}).Count(&n).Error)
-		assert.Zero(t, n, "cleanup must run even when the schedule is re-armed")
+		return n
 	}
 	plant("first")
 	before := time.Now().UTC()
 	require.NoError(t, api.ResweepEntityDeletionWatermark(context.Background(), w))
-	assertClean()
+	assert.Equal(t, int64(1), count(), "a postponed pass does not scan: the cleanup that counts runs once older transactions end")
 	var rearmed EntityDeletionWatermark
 	require.NoError(t, api.RDB.DB(ctx).Take(&rearmed).Error)
 	require.NotNil(t, rearmed.ResweepAfter, "an older transaction can still persist late anchors")
 	assert.WithinDuration(t, before.Add(time.Minute), *rearmed.ResweepAfter, 5*time.Second)
 	assert.False(t, rearmed.ResweepAfter.Equal(*w.ResweepAfter), "CAS must replace the schedule")
+	require.NotNil(t, rearmed.ArmedAt)
+	assert.True(t, rearmed.ArmedAt.Equal(*w.ArmedAt), "a re-arm must not move the arm time")
 
 	require.NoError(t, tx.Commit())
+	// A transaction that started AFTER the arm cannot have missed the watermark: it must not
+	// hold the schedule open.
+	newer, err := conn.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer newer.Rollback()
+	require.NoError(t, newer.QueryRowContext(ctx, "SELECT transaction_timestamp()").Scan(&started))
 	plant("after-commit")
 	require.NoError(t, api.ResweepEntityDeletionWatermark(context.Background(), rearmed))
-	assertClean()
+	assert.Zero(t, count(), "the clearing pass cleans")
 	var cleared EntityDeletionWatermark
 	require.NoError(t, api.RDB.DB(ctx).Take(&cleared).Error)
 	assert.Nil(t, cleared.ResweepAfter, "the next pass can clear after the old transaction ends")

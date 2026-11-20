@@ -130,7 +130,8 @@ CREATE TABLE "event-management".entity_deletion_watermarks (
  entity_type character varying(64) NOT NULL,
  entity_token character varying(128) NOT NULL,
  deleted_time timestamp with time zone NOT NULL,
- resweep_after timestamp with time zone
+ resweep_after timestamp with time zone,
+ armed_at timestamp with time zone
 );
 CREATE TABLE "event-management".event_anchors (
  tenant_id character varying(128) NOT NULL,

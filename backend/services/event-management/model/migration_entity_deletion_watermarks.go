@@ -20,6 +20,7 @@ var entityDeletionWatermarksDDL = []string{
 		entity_token varchar(128) NOT NULL,
 		deleted_time timestamptz NOT NULL,
 		resweep_after timestamptz NULL,
+		armed_at timestamptz NULL,
 		PRIMARY KEY (tenant_id, entity_type, entity_token)
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_entity_deletion_watermarks_resweep ON "event-management".entity_deletion_watermarks

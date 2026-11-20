@@ -29,6 +29,10 @@ type EntityDeletionWatermark struct {
 	EntityToken  string    `gorm:"size:128;not null"`
 	DeletedTime  time.Time `gorm:"not null"`
 	ResweepAfter *time.Time
+	// ArmedAt is when the latest deletion armed the resweep, on the DATABASE clock (Postgres),
+	// so it compares with pg_stat_activity.xact_start without pod clock skew. A re-arm while
+	// an older transaction is open moves ResweepAfter only, never ArmedAt.
+	ArmedAt *time.Time
 }
 
 // recordEntityDeletion commits independently of cleanup. A crash or an exhausted
@@ -41,14 +45,32 @@ func (api *Api) recordEntityDeletion(ctx context.Context, typ, token string, bef
 	if db.Dialector.Name() == "sqlite" {
 		maxTime = "MAX(entity_deletion_watermarks.deleted_time, excluded.deleted_time)"
 	}
-	after := time.Now().UTC().Add(EntityDeletionResweepDelay)
-	w := EntityDeletionWatermark{EntityType: typ, EntityToken: token, DeletedTime: before, ResweepAfter: &after}
-	err := db.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "tenant_id"}, {Name: "entity_type"}, {Name: "entity_token"}},
-		DoUpdates: clause.Assignments(map[string]any{
-			"deleted_time": gorm.Expr(maxTime), "resweep_after": after,
-		}),
-	}).Create(&w).Error
+	w := EntityDeletionWatermark{EntityType: typ, EntityToken: token, DeletedTime: before}
+	// The arm time and the schedule come from the database clock in the same statement, so
+	// the open-transaction check in ResweepEntityDeletionWatermark compares like with like.
+	// SQLite (unit tests only) has no comparable clock function and takes Go time.
+	var arm map[string]any
+	if db.Dialector.Name() == "postgres" {
+		arm = map[string]any{
+			"armed_at":      gorm.Expr("now()"),
+			"resweep_after": gorm.Expr("now() + make_interval(secs => ?)", EntityDeletionResweepDelay.Seconds()),
+		}
+	} else {
+		now := time.Now().UTC()
+		arm = map[string]any{"armed_at": now, "resweep_after": now.Add(EntityDeletionResweepDelay)}
+	}
+	// Both statements go through the model, so the tenant scope and the erasure fence apply,
+	// and one transaction keeps a recorded deletion from ever being left unarmed.
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "entity_type"}, {Name: "entity_token"}},
+			DoUpdates: clause.Assignments(map[string]any{"deleted_time": gorm.Expr(maxTime)}),
+		}).Create(&w).Error; err != nil {
+			return err
+		}
+		return tx.Model(&EntityDeletionWatermark{}).
+			Where("entity_type = ? AND entity_token = ?", typ, token).Updates(arm).Error
+	})
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -154,20 +176,21 @@ func anchorCleanupCandidates(q *gorm.DB, anchors []*EventAnchor) (*gorm.DB, erro
 		Where(pairQuery, string(pairJSON)), nil
 }
 
-// resweepSchedule keeps checking until transactions that could have read no
-// watermark have ended. It is pure so both decisions are covered without Postgres.
-func resweepSchedule(olderTxnRunning bool, now time.Time) *time.Time {
-	if olderTxnRunning {
-		after := now.UTC().Add(time.Minute)
-		return &after
-	}
-	return nil
-}
+// resweepRearm reports whether a pass must postpone rather than clean and clear: while a
+// transaction that started before the arm is still open, it may yet commit anchors that
+// read no watermark, so cleaning now proves nothing. It is pure so both decisions are
+// covered without Postgres.
+func resweepRearm(olderTxnRunning bool) bool { return olderTxnRunning }
 
 // DueEntityDeletionWatermarks is a bounded cross-tenant read; every write below
 // returns to a tenant context and uses a model so the erasure fence still applies.
 func (api *Api) DueEntityDeletionWatermarks(ctx context.Context, now time.Time) ([]EntityDeletionWatermark, error) {
 	var due []EntityDeletionWatermark
+	// SANCTIONED system context (core/test sanctionedSystemContexts): the resweep must find
+	// due watermarks of every tenant in one bounded read. It reads only the watermark keys and
+	// schedule (no event or anchor data), and every cleanup and schedule write then runs under
+	// that row's own core.WithTenant in ResweepEntityDeletionWatermark, which refuses a system
+	// context.
 	err := api.RDB.DB(core.WithSystemContext(ctx)).Where("resweep_after <= ?", now.UTC()).
 		Order("resweep_after, tenant_id, entity_type, entity_token").Limit(EntityDeletionResweepLimit).Find(&due).Error
 	return due, err
@@ -190,20 +213,30 @@ func (api *Api) ResweepEntityDeletionWatermark(ctx context.Context, w EntityDele
 		// any transaction in this database predates the arm time. Other roles' sessions
 		// show NULL xact_start without pg_read_all_stats; persists use our service role.
 		armedAt := w.ResweepAfter.Add(-EntityDeletionResweepDelay)
+		if w.ArmedAt != nil {
+			armedAt = *w.ArmedAt
+		}
 		if err := db.Raw(`SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname =
 			current_database() AND pid <> pg_backend_pid() AND xact_start IS NOT NULL AND xact_start < ?)`, armedAt).
 			Scan(&olderTxnRunning).Error; err != nil {
 			return err
 		}
 	}
+	// A newer deletion may re-arm between the read, cleanup and update. Preserve it
+	// whether this pass clears the schedule or postpones it for an in-flight writer.
+	cas := api.RDB.DB(ctx).Model(&EntityDeletionWatermark{}).
+		Where("entity_type = ? AND entity_token = ?", w.EntityType, w.EntityToken).
+		Where("resweep_after = ?", w.ResweepAfter)
+	if resweepRearm(olderTxnRunning) {
+		// Postpone WITHOUT cleaning: the cleanup that matters is the one after every older
+		// transaction has ended, and a pass that scanned the token's anchors every minute
+		// while a long transaction stays open would only repeat that cost. ArmedAt stays, so
+		// the check keeps meaning "older than this deletion's arm", not "older than a minute".
+		return cas.Update("resweep_after", gorm.Expr("now() + make_interval(secs => ?)", time.Minute.Seconds())).Error
+	}
 	if err := anchorCleanupQuery(api.RDB.DB(ctx), w.EntityType, w.EntityToken, w.DeletedTime).
 		Delete(&EventAnchor{}).Error; err != nil {
 		return err
 	}
-	// A newer deletion may re-arm between the read, cleanup and update. Preserve it
-	// whether this pass clears the schedule or postpones it for an in-flight writer.
-	return api.RDB.DB(ctx).Model(&EntityDeletionWatermark{}).
-		Where("entity_type = ? AND entity_token = ?", w.EntityType, w.EntityToken).
-		Where("resweep_after = ?", w.ResweepAfter).
-		Update("resweep_after", resweepSchedule(olderTxnRunning, time.Now())).Error
+	return cas.Update("resweep_after", nil).Error
 }
