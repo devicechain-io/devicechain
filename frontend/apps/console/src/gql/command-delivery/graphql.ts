@@ -118,8 +118,34 @@ export type CommandBatchSearchCriteria = {
   targetKind?: string | null | undefined;
 };
 
+/**
+ * Why the platform is sending a command (see CommandCause). Supplied by platform services only. A
+ * malformed cause is refused with CAUSE_INVALID.
+ */
+export type CommandCauseInput = {
+  /** Key of the alarm the rule targeted: required when kind is ALARM, refused when it is RULE. */
+  alarmKey?: string | null | undefined;
+  /** Event time of the detection, as an RFC 3339 timestamp. */
+  detectedAt: string;
+  /** The rule's type, at most 64 characters. */
+  detectionKind: string;
+  /** ALARM or RULE (see CommandCause.kind). */
+  kind: string;
+  /** Whether the rule tests geofence containment, which restricts who may read the cause. */
+  positionDerived: boolean;
+  /** Runtime id of the rule that fired; it must name a rule of the caller's tenant. */
+  ruleId: string;
+  /** The value that triggered the detection, when there is one. */
+  value?: number | null | undefined;
+};
+
 /** Fields for issuing a command to one device. */
 export type CommandCreateRequest = {
+  /**
+   * Why the platform is sending the command. Accepted only from a platform service (an
+   * automation), never from a person's token, which is refused as forbidden. Optional.
+   */
+  cause?: CommandCauseInput | null | undefined;
   /**
    * ONEWAY for a command the device acknowledges and does not answer. Accepted only for a device
    * whose type has the HTTP_PULL command channel; otherwise the request is refused with

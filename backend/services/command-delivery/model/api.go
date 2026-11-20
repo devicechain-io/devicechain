@@ -398,6 +398,14 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	if err := validateCommandInputBounds(request.Name, request.Payload, request.Metadata); err != nil {
 		return nil, err
 	}
+	// The cause is checked with the other local bounds. Who may supply one is the resolver's
+	// decision (only a service), made before this call.
+	var cause storedCause
+	if request.Cause != nil {
+		if cause, err = validCause(ctx, request.Cause); err != nil {
+			return nil, err
+		}
+	}
 	if err := validateDeliveryOptions(request.DeliveryMode, request.MaxAttempts); err != nil {
 		return nil, err
 	}
@@ -548,6 +556,7 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	if hold != nil {
 		stampHold(created, *hold)
 	}
+	cause.stamp(created)
 
 	// The held-command ceiling and the insert run in ONE transaction, so the count
 	// reads the same state the insert lands in (see heldCommandCeiling for where the

@@ -278,7 +278,7 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	}, t.ListSuppressionWindows)
 	register(s, c, &mcp.Tool{
 		Name:        "list_commands",
-		Description: "List dispatched commands in the caller's tenant (paged), optionally filtered by device token or status. Returns each command's token, device, status, and delivery-lifecycle timestamps, with its name and any device error under `untrusted` (payloads are omitted).",
+		Description: "List dispatched commands in the caller's tenant (paged), optionally filtered by device token or status. Returns each command's token, device, status, and delivery-lifecycle timestamps, with its name and any device error under `untrusted` (payloads are omitted). A command an automation sent carries its `cause`: the rule and detection that fired and, for kind ALARM, the alarm key (under `untrusted`) the rule targeted; find that alarm with list_alarms by the command's deviceToken and the key, keeping one whose originatorId equals the cause's deviceId. A cause needs device:read (and alarm:read for ALARM, location:read for a geofence rule) and is otherwise absent; causeUnavailable means causes could not be read at all.",
 	}, ToolRisk{
 		Exposure: ExposureOperational, Scale: ScalePage,
 		Discloses: "what a tenant has been telling its fleet to do and whether each instruction landed — the command names and lifecycle, though never the payloads",

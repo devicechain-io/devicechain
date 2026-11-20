@@ -158,6 +158,7 @@ title: 指标参考
 | 指标 | 含义 |
 | --- | --- |
 | `react_actions_dispatched_total{action}` | 交给其接收端的 REACT 动作，按动作类型区分（包括幂等重放）。 |
+| `react_command_cause_omitted_total{reason}` | 规则发送的命令在保存时缺少发送原因记录的次数，按原因区分。`peer_lacks_cause`：command-delivery 运行的版本不接受该记录，仅在升级滚动期间属于预期情况。`cause_invalid`：command-delivery 拒绝了该记录，属于缺陷。两种情况下命令本身都已发送。 |
 | `react_actions_dropped_total{reason}` | 未经尝试即被跳过的 REACT 动作，按原因区分。unknown_kind：规则定义带有此构建无法分发的动作类型（伪造或手工编辑的定义；通过受支持的编写路径无法到达），因此非零值是需要调查的缺陷，而不是负载。 |
 | `react_actions_not_enabled_total{action}` | 被识别但因此部署没有对应接收端而丢弃的 REACT 动作，按动作类型区分：未配置指令投递时的 sendCommand，或未启用出站连接器时的 httpCall/publish。告警接收端总是已接通，因此 raiseAlarm/clearAlarm 不应出现在这里。 |
 | `react_connector_egress_shed_total{action}` | 因超过租户出站速率而在源头被丢弃的连接器分发尝试（`httpCall`、`publish`），按动作类型区分。按尝试计数：重投递可能先被丢弃、后又接纳同一动作，所以这不是被永久丢弃动作的数量。 |

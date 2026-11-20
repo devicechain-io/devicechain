@@ -191,6 +191,7 @@ func (t *Tools) AggregateMeasurements(ctx context.Context, req *mcp.CallToolRequ
 type AlarmSummary struct {
 	Token            string            `json:"token" prov:"id"`
 	OriginatorToken  string            `json:"originatorToken,omitempty" prov:"id"`
+	OriginatorID     string            `json:"originatorId,omitempty" prov:"id" jsonschema:"numeric id of the originating device; a device token can be reused, this id cannot"`
 	State            string            `json:"state" prov:"platform"`
 	Severity         string            `json:"severity" prov:"platform"`
 	Acknowledged     bool              `json:"acknowledged"`
@@ -213,6 +214,7 @@ type AlarmUntrusted struct {
 type alarmRaw struct {
 	Token            string   `json:"token"`
 	OriginatorToken  string   `json:"originatorToken"`
+	OriginatorID     string   `json:"originatorId"`
 	AlarmKey         string   `json:"alarmKey"`
 	MetricKey        string   `json:"metricKey"`
 	State            string   `json:"state"`
@@ -237,7 +239,7 @@ func newAlarmSummaries(raw []alarmRaw) []AlarmSummary {
 			u = nil
 		}
 		out = append(out, AlarmSummary{
-			Token: a.Token, OriginatorToken: a.OriginatorToken, State: a.State, Severity: a.Severity,
+			Token: a.Token, OriginatorToken: a.OriginatorToken, OriginatorID: a.OriginatorID, State: a.State, Severity: a.Severity,
 			Acknowledged: a.Acknowledged, RaisedTime: a.RaisedTime, ClearedTime: a.ClearedTime,
 			AcknowledgedTime: a.AcknowledgedTime, LastValue: a.LastValue, Untrusted: u,
 		})
@@ -245,7 +247,7 @@ func newAlarmSummaries(raw []alarmRaw) []AlarmSummary {
 	return out
 }
 
-const alarmFields = `token originatorToken alarmKey metricKey state severity acknowledged raisedTime clearedTime acknowledgedTime acknowledgedBy lastValue`
+const alarmFields = `token originatorToken originatorId alarmKey metricKey state severity acknowledged raisedTime clearedTime acknowledgedTime acknowledgedBy lastValue`
 
 type ListAlarmsInput struct {
 	OriginatorToken string `json:"originatorToken,omitempty" jsonschema:"optional device token to filter alarms to one device"`
@@ -370,6 +372,102 @@ type CommandSummary struct {
 	SentTime      string            `json:"sentTime,omitempty" prov:"platform"`
 	RespondedTime string            `json:"respondedTime,omitempty" prov:"platform"`
 	Untrusted     *CommandUntrusted `json:"untrusted,omitempty"`
+	// Cause is why the platform sent the command, when an automation sent it and the caller may
+	// see it. Absent for a person's or a batch's command, and when causeUnavailable is set.
+	Cause *CommandCause `json:"cause,omitempty"`
+}
+
+// CommandCause is the detection (and alarm) an automation sent a command because of.
+type CommandCause struct {
+	Kind          string                 `json:"kind" prov:"platform" jsonschema:"ALARM when the rule also targeted an alarm on this detection (it does not prove the alarm exists), RULE otherwise"`
+	RuleToken     string                 `json:"ruleToken,omitempty" prov:"id" jsonschema:"token of the rule that fired, in its device profile"`
+	ProfileToken  string                 `json:"profileToken,omitempty" prov:"id" jsonschema:"token of the device profile the rule belongs to"`
+	DetectionKind string                 `json:"detectionKind" prov:"platform" jsonschema:"the rule's type, for example threshold"`
+	DetectedAt    string                 `json:"detectedAt" prov:"platform" jsonschema:"event time of the detection (RFC 3339, nanoseconds); it does not by itself name an alarm cycle"`
+	Value         *float64               `json:"value,omitempty" jsonschema:"the value that triggered the detection"`
+	DeviceID      string                 `json:"deviceId,omitempty" prov:"id" jsonschema:"id of the device the command addressed; an alarm is this cause's only when its originatorId equals it"`
+	Untrusted     *CommandCauseUntrusted `json:"untrusted,omitempty"`
+}
+
+// CommandCauseUntrusted is the text of a cause an operator authored: the alarm key is the rule's
+// own key or the output of its key template.
+type CommandCauseUntrusted struct {
+	AlarmKey *Marked `json:"alarmKey,omitempty" prov:"operator"`
+}
+
+// commandCauseRaw is the cause as command-delivery returns it.
+type commandCauseRaw struct {
+	Kind          string   `json:"kind"`
+	RuleToken     *string  `json:"ruleToken"`
+	ProfileToken  *string  `json:"profileToken"`
+	DetectionKind string   `json:"detectionKind"`
+	DetectedAt    string   `json:"detectedAt"`
+	Value         *float64 `json:"value"`
+	AlarmKey      *string  `json:"alarmKey"`
+	DeviceID      *string  `json:"deviceId"`
+}
+
+func (c *commandCauseRaw) summary() *CommandCause {
+	if c == nil {
+		return nil
+	}
+	out := &CommandCause{Kind: c.Kind, DetectionKind: c.DetectionKind, DetectedAt: c.DetectedAt,
+		Value: c.Value, RuleToken: deref(c.RuleToken), ProfileToken: deref(c.ProfileToken), DeviceID: deref(c.DeviceID)}
+	if key := mark(SourceOperator, deref(c.AlarmKey)); key != nil {
+		out.Untrusted = &CommandCauseUntrusted{AlarmKey: key}
+	}
+	return out
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+var commandCausesQuery = newDocument("command-delivery", `query CommandCauses($tokens: [String!]!) {
+  commandsByToken(tokens: $tokens) {
+    token
+    cause { kind ruleToken profileToken detectionKind detectedAt value alarmKey deviceId }
+  }
+}`)
+
+// enrichCommandCauses overlays each listed command's cause, read in a SECOND query so the base list
+// keeps working against a command-delivery older than the field (whose validator refuses the whole
+// document that names it). It answers true on ANY failure — an older server, a transport error, a
+// command missing from the answer — and then attaches nothing, so the absence of a cause never
+// passes for "the platform sent none".
+func (t *Tools) enrichCommandCauses(ctx context.Context, token string, commands []CommandSummary) bool {
+	if len(commands) == 0 {
+		return false
+	}
+	tokens := make([]string, 0, len(commands))
+	for _, c := range commands {
+		tokens = append(tokens, c.Token)
+	}
+	var resp struct {
+		CommandsByToken []struct {
+			Token string           `json:"token"`
+			Cause *commandCauseRaw `json:"cause"`
+		} `json:"commandsByToken"`
+	}
+	if err := t.gql.Query(ctx, commandCausesQuery, token, map[string]any{"tokens": tokens}, &resp); err != nil {
+		return true
+	}
+	causes := make(map[string]*commandCauseRaw, len(resp.CommandsByToken))
+	for _, row := range resp.CommandsByToken {
+		causes[row.Token] = row.Cause
+	}
+	for _, c := range commands {
+		if _, ok := causes[c.Token]; !ok {
+			return true
+		}
+	}
+	for i := range commands {
+		commands[i].Cause = causes[commands[i].Token].summary()
+	}
+	return false
 }
 
 // CommandUntrusted is the text of a dispatched command.
@@ -391,8 +489,9 @@ type commandRaw struct {
 }
 
 type ListCommandsOutput struct {
-	Commands     []CommandSummary `json:"commands"`
-	TotalRecords int              `json:"totalRecords"`
+	CauseUnavailable bool             `json:"causeUnavailable,omitempty" jsonschema:"true when the commands' causes could not be read; a missing cause then means unknown, not none"`
+	Commands         []CommandSummary `json:"commands"`
+	TotalRecords     int              `json:"totalRecords"`
 }
 
 var listCommandsQuery = newDocument("command-delivery", `query ListCommands($criteria: CommandSearchCriteria!) {
@@ -438,6 +537,7 @@ func (t *Tools) ListCommands(ctx context.Context, req *mcp.CallToolRequest, in L
 			SentTime: c.SentTime, RespondedTime: c.RespondedTime, Untrusted: u,
 		})
 	}
+	out.CauseUnavailable = t.enrichCommandCauses(ctx, token, out.Commands)
 	return provenanceResult(out), out, nil
 }
 

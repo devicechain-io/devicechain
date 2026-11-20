@@ -5,7 +5,9 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	dmcontract "github.com/devicechain-io/dc-device-management/contract"
@@ -88,13 +90,71 @@ var permanentRejectionCodes = map[string]bool{
 type commandClient struct {
 	client *svcclient.Client
 	url    string
+	// onCauseOmitted is told the reason each time a command is enqueued WITHOUT its cause.
+	onCauseOmitted func(reason string)
 }
 
 // NewCommandClient builds a send-command sink over a service-token client and command-delivery's
 // GraphQL URL (the REACT dispatcher's command seam, wired in main). It returns the dispatcher's
-// sink interface so the concrete adapter stays package-private.
-func NewCommandClient(client *svcclient.Client, url string) react.CommandSink {
-	return &commandClient{client: client, url: url}
+// sink interface so the concrete adapter stays package-private. onCauseOmitted (may be nil) is
+// told the reason each time a command has to be enqueued without its cause.
+func NewCommandClient(client *svcclient.Client, url string, onCauseOmitted func(reason string)) react.CommandSink {
+	return &commandClient{client: client, url: url, onCauseOmitted: onCauseOmitted}
+}
+
+// The reasons a command was enqueued without its cause (a metric label, so a fixed, small set).
+const (
+	// CauseOmittedPeerLacksCause: command-delivery runs a build from before the field.
+	CauseOmittedPeerLacksCause = "peer_lacks_cause"
+	// CauseOmittedCauseInvalid: command-delivery refused the cause itself.
+	CauseOmittedCauseInvalid = "cause_invalid"
+)
+
+// rejectCauseInvalid is command-delivery's code for a cause it refuses. A string literal for the
+// reason permanentRejectionCodes documents: this service does not import command-delivery.
+const rejectCauseInvalid = "CAUSE_INVALID"
+
+// errCauseInvalid marks command-delivery's CAUSE_INVALID rejection inside this client.
+var errCauseInvalid = errors.New("command-delivery refused the command's cause")
+
+// causeInput is the CommandCauseInput a cause is sent as. Absent optional fields are not sent.
+func causeInput(cause *react.CommandCause) map[string]any {
+	in := map[string]any{
+		"kind":            cause.Kind,
+		"ruleId":          cause.RuleID,
+		"detectionKind":   cause.DetectionKind,
+		"detectedAt":      cause.DetectedAt.UTC().Format(time.RFC3339Nano),
+		"positionDerived": cause.PositionDerived,
+	}
+	if cause.Value != nil {
+		in["value"] = *cause.Value
+	}
+	if cause.AlarmKey != "" {
+		in["alarmKey"] = cause.AlarmKey
+	}
+	return in
+}
+
+// peerLacksCommandCause reports whether err is command-delivery refusing the request because its
+// schema does not declare CommandCreateRequest.cause: a build from before the field, which a
+// rolling upgrade runs briefly. graphql-go validates variables before it executes anything, so such
+// a refusal created no command. Each line of each message is compared whole against the exact text
+// graphql-go writes (VariablesOfCorrectType), so another error's text, a suggestion or a transport
+// error never reads as version skew.
+func peerLacksCommandCause(err error) bool {
+	var gqlErr *svcclient.GraphQLError
+	if !errors.As(err, &gqlErr) || gqlErr == nil {
+		return false
+	}
+	const want = `Field "cause" is not defined by type "CommandCreateRequest".`
+	for _, message := range gqlErr.Messages {
+		for _, line := range strings.Split(message, "\n") {
+			if line == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Send enqueues one command. It returns nil on success (a fresh enqueue OR command-delivery's
@@ -130,6 +190,36 @@ func (c *commandClient) Send(ctx context.Context, req react.CommandRequest) erro
 	if !req.ExpiresAt.IsZero() {
 		request["expiresAt"] = req.ExpiresAt.UTC().Format(time.RFC3339)
 	}
+	if req.Cause == nil {
+		return c.create(ctx, req, request)
+	}
+	request["cause"] = causeInput(req.Cause)
+	err := c.create(ctx, req, request)
+	var reason string
+	switch {
+	case err == nil:
+		return nil
+	case peerLacksCommandCause(err):
+		reason = CauseOmittedPeerLacksCause
+	case errors.Is(err, errCauseInvalid):
+		reason = CauseOmittedCauseInvalid
+	default:
+		return err
+	}
+	// The cause could not be recorded. Either command-delivery runs a build from before the field
+	// (a rolling upgrade; its validation refused the whole request, so nothing was created), or it
+	// refused this cause, which it would do again on every redelivery since the cause is a function
+	// of the detection. Neither is a reason to withhold the actuation, so the request is sent once
+	// more WITHOUT the cause, under the same token, and the omission is counted.
+	if c.onCauseOmitted != nil {
+		c.onCauseOmitted(reason)
+	}
+	delete(request, "cause")
+	return c.create(ctx, req, request)
+}
+
+// create sends one createCommand request and classifies the answer (see Send).
+func (c *commandClient) create(ctx context.Context, req react.CommandRequest, request map[string]any) error {
 	vars := map[string]any{"request": request}
 	var out struct {
 		CreateCommand struct {
@@ -146,6 +236,12 @@ func (c *commandClient) Send(ctx context.Context, req react.CommandRequest) erro
 		return fmt.Errorf("react: enqueue command %q for device %q: %w", req.Command, req.DeviceToken, err)
 	}
 	if r := out.CreateCommand.Rejection; r != nil {
+		if r.Code == rejectCauseInvalid {
+			// Send resends without the cause. Wrapped so a request that carried no cause, and so
+			// cannot have been refused for one, still surfaces as an ordinary retryable error.
+			return fmt.Errorf("react: enqueue command %q for device %q: %w: %s",
+				req.Command, req.DeviceToken, errCauseInvalid, r.Reason)
+		}
 		if permanentRejectionCodes[r.Code] {
 			return &react.PermanentRejection{Code: r.Code, Reason: r.Reason}
 		}

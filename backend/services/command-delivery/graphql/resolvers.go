@@ -5,10 +5,12 @@ package graphql
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"fmt"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
+	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	gql "github.com/graph-gophers/graphql-go"
 )
@@ -203,4 +205,76 @@ func (r *PulledCommandResolver) ExpiresAt() *string {
 		return util.FormatTime(r.M.Command.ExpiresAt.Time)
 	}
 	return nil
+}
+
+// Cause is why the platform sent the command, served only to a caller who may see everything it
+// names; null otherwise, and for a command with no cause. See causeVisible.
+func (r *CommandResolver) Cause(ctx context.Context) *CommandCauseResolver {
+	cause := r.M.Cause()
+	if cause == nil || !causeVisible(ctx, cause) {
+		return nil
+	}
+	return &CommandCauseResolver{M: *cause, deviceID: r.M.DeviceIncarnation}
+}
+
+// causeVisible decides whether the caller may read a command's cause. Holding command:read is not
+// enough, because a cause says more than the command does:
+//
+//   - it names a rule and when it fired, which is the detection vocabulary event-processing
+//     serves under device:read;
+//   - a cause of kind ALARM names an alarm and when it was targeted, which device-management
+//     serves only under alarm:read;
+//   - a rule that tests geofence containment fires when the device crosses a fence, which
+//     device-management and event-processing withhold from a caller without location:read. An
+//     unknown verdict (a NULL column) reads as position-derived, failing closed.
+//
+// Each check uses auth.Authorize, which refuses every member limited to some customers: the
+// alarm's scope stamp is its own cycle's and can differ from the command's, so such a member
+// never sees a cause rather than one judged against the wrong stamp.
+func causeVisible(ctx context.Context, cause *model.CommandCause) bool {
+	if auth.Authorize(ctx, auth.DeviceRead) != nil {
+		return false
+	}
+	if cause.Kind != model.CauseKindRule && auth.Authorize(ctx, auth.AlarmRead) != nil {
+		return false
+	}
+	if cause.PositionDerived && auth.Authorize(ctx, auth.LocationRead) != nil {
+		return false
+	}
+	return true
+}
+
+// CommandCauseResolver exposes a command's cause.
+type CommandCauseResolver struct {
+	M        model.CommandCause
+	deviceID sql.NullInt64
+}
+
+func (r *CommandCauseResolver) Kind() string          { return r.M.Kind }
+func (r *CommandCauseResolver) RuleId() string        { return r.M.RuleId }
+func (r *CommandCauseResolver) DetectionKind() string { return r.M.DetectionKind }
+func (r *CommandCauseResolver) DetectedAt() string    { return r.M.DetectedAt }
+func (r *CommandCauseResolver) Value() *float64       { return r.M.Value }
+func (r *CommandCauseResolver) AlarmKey() *string     { return r.M.AlarmKey }
+
+func (r *CommandCauseResolver) RuleToken() *string {
+	if _, rule, ok := model.RuleTokens(r.M.RuleId); ok {
+		return &rule
+	}
+	return nil
+}
+
+func (r *CommandCauseResolver) ProfileToken() *string {
+	if profile, _, ok := model.RuleTokens(r.M.RuleId); ok {
+		return &profile
+	}
+	return nil
+}
+
+func (r *CommandCauseResolver) DeviceId() *gql.ID {
+	if !r.deviceID.Valid {
+		return nil
+	}
+	id := gql.ID(fmt.Sprint(r.deviceID.Int64))
+	return &id
 }

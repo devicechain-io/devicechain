@@ -1,0 +1,15 @@
+---
+section: whats-new
+---
+
+## en
+
+- **A command sent by an automation records why it was sent.** When a rule's send-command action sends a command, the command now carries a `cause`: the rule and profile that fired, the type of detection, its exact time and triggering value and, when the same rule also raises an alarm on that detection, the alarm's key. `Command.cause` is new in the command-delivery GraphQL API, beside `CommandCause.deviceId`, which lets a reader match the alarm to the right device even if a device token was reused. Seeing a cause requires `device:read`, plus `alarm:read` when it names an alarm and `location:read` when the rule tests a geofence. Members limited to some customers do not see it. Only platform services can set a cause; a request that sets one with a person's token is refused. The MCP `list_commands` tool returns the cause too, and `list_alarms` now returns each alarm's `originatorId`. Commands sent by people, by batches or before this release have no cause, and some sent while the upgrade rolls out may have none. The new `react_command_cause_omitted_total` metric counts commands stored without one.
+
+## es
+
+- **Un comando enviado por una automatización registra por qué se envió.** Cuando la acción de envío de comandos de una regla envía un comando, este incluye ahora un `cause`: la regla y el perfil que se activaron, el tipo de detección, su hora exacta y el valor que la provocó y, cuando la misma regla también genera una alarma en esa detección, la clave de la alarma. `Command.cause` es nuevo en la API GraphQL de command-delivery, junto con `CommandCause.deviceId`, que permite asociar la alarma con el dispositivo correcto aunque se haya reutilizado un token de dispositivo. Para ver una causa se necesita `device:read`, además de `alarm:read` cuando nombra una alarma y `location:read` cuando la regla evalúa una geocerca. Los miembros limitados a algunos clientes no la ven. Solo los servicios de la plataforma pueden establecer una causa; una solicitud que la establece con el token de una persona se rechaza. La herramienta MCP `list_commands` también devuelve la causa, y `list_alarms` devuelve ahora el `originatorId` de cada alarma. Los comandos enviados por personas, por lotes o antes de esta versión no tienen causa, y algunos enviados durante el despliegue de la actualización pueden no tenerla. La nueva métrica `react_command_cause_omitted_total` cuenta los comandos guardados sin ella.
+
+## zh-CN
+
+- **由自动化发送的命令会记录发送原因。** 当规则的发送命令动作发送命令时，命令现在会带有 `cause`：触发的规则和配置文件、检测类型、检测的精确时间和触发值；如果同一规则在该检测上还会产生告警，还包括告警的键。command-delivery GraphQL API 新增了 `Command.cause` 以及 `CommandCause.deviceId`，即使设备令牌被重复使用，读取方也能将告警对应到正确的设备。查看原因需要 `device:read`；原因涉及告警时还需要 `alarm:read`，规则检查地理围栏时还需要 `location:read`。仅限部分客户的成员看不到原因。只有平台服务可以设置原因；使用个人令牌设置原因的请求会被拒绝。MCP 工具 `list_commands` 也会返回原因，`list_alarms` 现在会返回每个告警的 `originatorId`。由人员或批量操作发送的命令以及本版本之前发送的命令没有原因，升级滚动期间发送的部分命令也可能没有原因。新增的 `react_command_cause_omitted_total` 指标统计保存时没有原因的命令。

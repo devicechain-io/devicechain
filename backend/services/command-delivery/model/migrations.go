@@ -47,5 +47,6 @@ var (
 		NewCampaignsSchema(),
 		NewDeviceGateDeletedSchema(),
 		NewDeviceIncarnationSchema(),
+		NewCommandCauseSchema(),
 	}
 )

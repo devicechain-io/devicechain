@@ -84,6 +84,44 @@ type CommandRequest struct {
 	// ExpiresAt, when non-zero, is the absolute time after which command-delivery must stop trying to
 	// deliver the command. Zero ⇒ no expiry sent, and command-delivery's default TTL applies.
 	ExpiresAt time.Time
+	// Cause is WHY the platform sent the command: the detection that fired and, when the same rule
+	// raised one on that detection, the alarm. The dispatcher always sets it. A sink that cannot
+	// deliver it (a command-delivery older than the field) sends the command without it, because
+	// the actuation matters more than its annotation.
+	Cause *CommandCause
+}
+
+// Cause kinds. ALARM: the rule that fired also raised an alarm on this detection. RULE: it raised
+// none (a rule may send a command without raising an alarm).
+const (
+	CauseKindAlarm = "ALARM"
+	CauseKindRule  = "RULE"
+)
+
+// CommandCause is the detection (and alarm) a REACT command was sent because of.
+//
+// It records what REACT KNOWS when it sends the command, and deliberately not the alarm's token:
+// the alarm row is created asynchronously by device-management's contributor fold, and a rule's
+// raiseAlarm and sendCommand actions are siblings with no ordering between them, so the token may
+// not exist yet. The alarm is named instead by its key — one alarm per (device, alarmKey), whose
+// token is stable across cycles — and DetectedAt names the cycle (the one raised at or before it).
+type CommandCause struct {
+	// Kind is CauseKindAlarm or CauseKindRule.
+	Kind string
+	// RuleID is the composed runtime rule id that fired (the value DetectionEvent.ruleId serves).
+	RuleID string
+	// DetectionKind is the rule type (threshold, absence, ...).
+	DetectionKind string
+	// DetectedAt is the detection's event time, the time its identity is anchored at.
+	DetectedAt time.Time
+	// Value is the triggering scalar; nil when the rule shape has none.
+	Value *float64
+	// AlarmKey is the key of the alarm the rule raised on this detection; set iff Kind is ALARM.
+	AlarmKey string
+	// PositionDerived is set when the rule tests geofence containment: its firing time says when the
+	// device crossed a fence, so command-delivery withholds the cause from a reader without
+	// location:read. It fails closed exactly as the alarm's RequiresPosition does.
+	PositionDerived bool
 }
 
 // PermanentRejection is a sink's report that the downstream service DECIDED the request is
@@ -597,6 +635,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			DeviceToken: ev.Series,
 			Command:     a.SendCommand.Command,
 			Payload:     a.SendCommand.Payload,
+			Cause:       d.commandCause(ev, rule),
 		}
 		if expiry > 0 {
 			// Wall clock at enqueue, deliberately NOT the event's time: the expiry bounds how long
@@ -797,22 +836,67 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 // wedge, and is logged so the defect is visible. Called only on the rising edge (see dispatchAction),
 // so it never gates a structural alarm clear.
 func (d *Dispatcher) guardAllows(ev runtime.DerivedEvent, a rules.Action) bool {
-	if a.Guard == "" {
-		return true
-	}
-	g, err := d.guardProgram(a.Guard)
+	ok, built, err := d.evalGuard(ev, a)
 	if err != nil {
-		d.log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: a published action guard failed to build; skipping the action (fail closed).")
-		d.dropped(DropGuardError)
-		return false
-	}
-	ok, err := g.Eval(rules.GuardInput{Value: ev.Value, Series: ev.Series})
-	if err != nil {
-		d.log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: an action guard errored at evaluation; skipping the action (fail closed).")
+		if !built {
+			d.log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: a published action guard failed to build; skipping the action (fail closed).")
+		} else {
+			d.log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: an action guard errored at evaluation; skipping the action (fail closed).")
+		}
 		d.dropped(DropGuardError)
 		return false
 	}
 	return ok
+}
+
+// evalGuard evaluates an action's guard with no side effect: no log and no drop report. built is
+// false when the guard failed to build. guardAllows reports a failure; commandCause, which only asks
+// whether a sibling raiseAlarm raises, must not report that sibling's failure a second time.
+func (d *Dispatcher) evalGuard(ev runtime.DerivedEvent, a rules.Action) (ok, built bool, err error) {
+	if a.Guard == "" {
+		return true, true, nil
+	}
+	g, err := d.guardProgram(a.Guard)
+	if err != nil {
+		return false, false, err
+	}
+	ok, err = g.Eval(rules.GuardInput{Value: ev.Value, Series: ev.Series})
+	if err != nil {
+		return false, true, err
+	}
+	return ok, true, nil
+}
+
+// commandCause builds the cause a sendCommand of this detection carries. It is an ALARM when some
+// raiseAlarm action of the same rule RAISES on this detection — the first in list order whose
+// payload is present, whose guard allows the detection and whose key resolves, which are exactly the
+// conditions under which dispatchAction raises it — and a RULE otherwise. It reports nothing: the
+// raiseAlarm action's own dispatch logs and reports its failures, once.
+func (d *Dispatcher) commandCause(ev runtime.DerivedEvent, rule rules.Rule) *CommandCause {
+	cause := &CommandCause{
+		Kind:            CauseKindRule,
+		RuleID:          ev.RuleID,
+		DetectionKind:   ev.Kind,
+		DetectedAt:      ev.OccurredTime,
+		Value:           ev.Value,
+		PositionDerived: d.requiresPosition(ev, rule),
+	}
+	for _, a := range rule.Actions {
+		if a.Type != rules.ActionRaiseAlarm || a.RaiseAlarm == nil {
+			continue
+		}
+		if ok, _, err := d.evalGuard(ev, a); err != nil || !ok {
+			continue
+		}
+		key, err := d.evalAlarmKey(ev, a.RaiseAlarm)
+		if err != nil {
+			continue
+		}
+		cause.Kind = CauseKindAlarm
+		cause.AlarmKey = key
+		break
+	}
+	return cause
 }
 
 // guardProgram returns the compiled guard for a source string, building and caching it on first
@@ -980,6 +1064,19 @@ func (d *Dispatcher) resolveAlarmKey(ev runtime.DerivedEvent, a *rules.RaiseAlar
 		return "", false
 	}
 	return key, true
+}
+
+// evalAlarmKey is resolveAlarmKey with no side effect (no log, no drop report), for commandCause.
+// The same inputs give the same key, so a command's cause names the alarm its sibling raises.
+func (d *Dispatcher) evalAlarmKey(ev runtime.DerivedEvent, a *rules.RaiseAlarmAction) (string, error) {
+	if a.AlarmKeyTemplate == "" {
+		return defaultAlarmKey(a.AlarmKey, ev.RuleID), nil
+	}
+	prog, err := d.alarmKeyProgram(a.AlarmKeyTemplate)
+	if err != nil {
+		return "", err
+	}
+	return prog.Eval(ev.Series)
 }
 
 // alarmKeyProgram returns the compiled alarm-key template for a source string, building and caching

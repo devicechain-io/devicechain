@@ -27,7 +27,7 @@ func TestNightShiftProbeDetectsPublishingSinks(t *testing.T) {
 	original := newSinks
 	t.Cleanup(func() { newSinks = original })
 	newSinks = func(rec *recorder) (react.CommandSink, react.AlarmSink, react.ConnectorSink) {
-		return processor.NewCommandClient(httpProbe.Client, httpProbe.URL), processor.NewAlarmClient(probe.Writers[streams.RaiseAlarm]), processor.NewConnectorClient(probe.Writers[streams.ConnectorDispatch])
+		return processor.NewCommandClient(httpProbe.Client, httpProbe.URL, nil), processor.NewAlarmClient(probe.Writers[streams.RaiseAlarm]), processor.NewConnectorClient(probe.Writers[streams.ConnectorDispatch])
 	}
 	def, err := rules.Decode(c.Header.R1.Definition)
 	require.NoError(t, err)

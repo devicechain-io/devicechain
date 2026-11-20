@@ -405,7 +405,7 @@ func wireReactDispatcher(nmgr *messaging.NatsManager, peers *svcclient.Peers) er
 	} else {
 		client := peers.Client(auth.CommandWrite)
 		url := infra.CommandDelivery.Endpoint().GraphQLURL()
-		commands = processor.NewCommandClient(client, url)
+		commands = processor.NewCommandClient(client, url, ReactMetrics.RecordCommandCauseOmitted)
 		log.Info().Str("commandDelivery", url).Msg("REACT send-command dispatch ENABLED (ADR-051 slice 5b).")
 	}
 
