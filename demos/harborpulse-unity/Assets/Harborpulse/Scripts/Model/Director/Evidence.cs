@@ -87,8 +87,9 @@ namespace DeviceChain.Harborpulse.Model.Director
         public IReadOnlyDictionary<string, string[]> Sets { get; }
         static string Part(string s) => s.Length.ToString(CultureInfo.InvariantCulture) + ":" + s;
         // Observation time is deliberately absent: a resubscribe is the same event, and cycles are distinct.
-        public string SnapshotKey => string.Concat(new[] { Run, Kind, Identity, Device, Key, Cycle, Command, Attempt, Source }.Select(Part));
-        public string EventKey => string.Concat(new[] { Run, Kind, Identity, Device, Key, Cycle, Command, Attempt, Status, Source }.Select(Part));
+        string snapshotKey, eventKey;
+        public string SnapshotKey => snapshotKey ?? (snapshotKey = string.Concat(new[] { Run, Kind, Identity, Device, Key, Cycle, Command, Attempt, Source }.Select(Part)));
+        public string EventKey => eventKey ?? (eventKey = string.Concat(new[] { Run, Kind, Identity, Device, Key, Cycle, Command, Attempt, Status, Source }.Select(Part)));
         public string Field(string name)
         {
             switch (name)
@@ -113,37 +114,24 @@ namespace DeviceChain.Harborpulse.Model.Director
         public bool Gap { get; }
     }
 
-    public sealed class ObservationStore
+    public sealed partial class ObservationStore
     {
         readonly Dictionary<string, Observation> records = new Dictionary<string, Observation>(StringComparer.Ordinal);
-        readonly List<CoverageInterval> coverage = new List<CoverageInterval>();
-        public IReadOnlyCollection<Observation> Records => records.Values;
-        public IReadOnlyList<CoverageInterval> Coverage => coverage.AsReadOnly();
+        IReadOnlyCollection<Observation> archive;
+        public IReadOnlyCollection<Observation> Records => archive ?? (archive = new Archive(this));
         public bool Add(Observation o)
         {
             var key = o.EventKey + ":" + o.ObservedAtS.ToString("R", CultureInfo.InvariantCulture);
             if (records.ContainsKey(key)) return false;
-            records[key] = o; return true;
+            records[key] = o; Index(o); return true;
         }
         public void AddCoverage(CoverageInterval interval)
         {
-            if (!interval.Gap) {
-                var overlapping = coverage.Where(c => !c.Gap && c.Run == interval.Run && c.Stream == interval.Stream && c.FromSim <= interval.ToSim && c.ToSim >= interval.FromSim).ToArray();
-                if (overlapping.Length > 0) { interval = new CoverageInterval(interval.Run, interval.Stream, Math.Min(interval.FromSim, overlapping.Min(c => c.FromSim)), Math.Max(interval.ToSim, overlapping.Max(c => c.ToSim)), false); foreach (var c in overlapping) coverage.Remove(c); }
-            }
-            if (!coverage.Any(c => c.Run == interval.Run && c.Stream == interval.Stream && c.FromSim == interval.FromSim && c.ToSim == interval.ToSim && c.Gap == interval.Gap)) coverage.Add(interval);
+            IndexCoverage(interval);
         }
         public bool Covers(string run, string stream, double from, double to)
         {
-            if (to < from || coverage.Any(g => g.Run == run && g.Stream == stream && g.Gap && g.FromSim <= to && g.ToSim >= from)) return false;
-            var end = from;
-            foreach (var c in coverage.Where(c => !c.Gap && c.Run == run && c.Stream == stream).OrderBy(c => c.FromSim))
-            {
-                if (c.FromSim > end) break;
-                if (c.ToSim >= end) end = c.ToSim;
-                if (end >= to) return true;
-            }
-            return false;
+            return IndexedCovers(run, stream, from, to);
         }
     }
 
@@ -311,13 +299,15 @@ namespace DeviceChain.Harborpulse.Model.Director
                 if (value == "$window.identity")
                 {
                     // Match the actual platform window identity active at this alarm's cycle, not a token baked into the story.
-                    var window = store.Records.Where(o => o.Run == c.Run && o.Kind == "window" && o.Source == EvidenceSource.Platform && o.Device == candidate.Device && o.Key == candidate.Key && o.ObservedAtS <= c.NowS && o.OccurredAtS <= candidate.OccurredAtS).OrderByDescending(o => o.OccurredAtS).FirstOrDefault();
+                    var window = store.WindowHistory(c.Run, candidate.Device, candidate.Key, c.NowS).Where(o => o.OccurredAtS <= candidate.OccurredAtS).OrderByDescending(o => o.OccurredAtS).FirstOrDefault();
                     return window?.Status == "ACTIVE" ? window.Identity : null;
                 }
                 return value;
             }
-            var available = store.Records.Where(o => o.Run == c.Run && o.Kind == Kind && o.Source == Source && o.ObservedAtS <= c.NowS);
-            available = available.GroupBy(o => Mode == "current" ? o.SnapshotKey : o.EventKey).Select(g => g.OrderByDescending(o => o.ObservedAtS).ThenByDescending(o => o.OccurredAtS).First());
+            string StableMatch(string field) => Match.TryGetValue(field, out var value) && value != "$window.identity" ? Resolve(value, null) : null;
+            var from = Math.Max(FromSim ?? c.FromSim, c.RestrictInterval ? c.FromSim : double.NegativeInfinity);
+            var to = Math.Min(ToSim ?? c.ToSim, c.RestrictInterval ? c.ToSim : double.PositiveInfinity);
+            var available = store.Query(c.Run, Kind, Source, Mode == "current", c.NowS, from, to, StableMatch("device"), StableMatch("key"));
             return available.Where(o => (!c.RestrictInterval || (o.Sim >= c.FromSim && o.Sim <= c.ToSim)) && (Before == null || (c.Trigger != null && c.Trigger.HasOccurrence && o.HasOccurrence && o.OccurredAtS < c.Trigger.OccurredAtS)) && (After == null || (c.Trigger != null && c.Trigger.HasOccurrence && o.HasOccurrence && o.OccurredAtS > c.Trigger.OccurredAtS)) && o.Sim >= (FromSim ?? c.FromSim) && o.Sim <= (ToSim ?? c.ToSim) && c.ObservedSim(o) >= (FromSim ?? c.FromSim) && c.ObservedSim(o) <= c.ToSim &&
                 (!MaxAgeS.HasValue || c.NowS - o.ObservedAtS <= MaxAgeS) && (!Gte.HasValue || double.TryParse(o.Field("value"), NumberStyles.Float, CultureInfo.InvariantCulture, out var numeric) && numeric >= Gte.Value) && Present.All(f => !string.IsNullOrEmpty(o.Field(f))) && Match.All(m =>
                     o.Field(m.Key) != null && o.Field(m.Key) == Resolve(m.Value, o)));
