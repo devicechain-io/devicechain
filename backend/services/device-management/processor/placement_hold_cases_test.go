@@ -125,7 +125,14 @@ func TestThePlacementHoldIsBounded(t *testing.T) {
 		return &ackCoord{src: holdSource(seq, messaging.MaxDeliver, &beatAck{}), tenant: holdTenant,
 			refused: []heldOutput{{index: 0, event: gateEvent(0).Resolved}}}
 	}
-	for seq := uint64(1); seq <= placementHoldLimit; seq++ {
+	// A source not watched (the watch was full when its fan-out was handed on) is renewed the
+	// moment it is held: its publish may already have spent most of AckWait.
+	firstAck := &beatAck{}
+	first := coord(0)
+	first.src = holdSource(0, messaging.MaxDeliver, firstAck)
+	require.True(t, h.hold(first))
+	require.EqualValues(t, 1, firstAck.beats.Load(), "renewed at once")
+	for seq := uint64(1); seq < placementHoldLimit; seq++ {
 		require.True(t, h.hold(coord(seq)))
 	}
 	require.False(t, h.hold(coord(placementHoldLimit+1)), "past the limit")
@@ -320,4 +327,74 @@ func TestALateSettleAfterStopHoldsNothing(t *testing.T) {
 	require.Zero(t, refusedAck.acks.Load())
 	require.Zero(t, refusedAck.beats.Load())
 	require.EqualValues(t, 1, storedAck.acks.Load())
+}
+
+// A stop while the hold is busy re-sending (placement answers, every publish is refused again, so
+// the worker keeps handing outputs to the resolved loop) must JOIN the hold before it closes the
+// resolved channel: a re-send still in flight would otherwise send on a closed channel.
+func TestStopJoinsABusyReSendBeforeClosingTheResolvedChannel(t *testing.T) {
+	for round := 0; round < 30; round++ {
+		w := newPlacementWriter(func(messaging.Message) error { return unplaced() })
+		failed := newPlacementWriter(func(messaging.Message) error { return nil })
+		iproc := NewInboundEventsProcessor(&core.Microservice{InstanceId: "inst", FunctionalArea: "device-management"},
+			[]messaging.MessageReader{&sliceReader{}}, w, failed, core.NewNoOpLifecycleCallbacks(), nil,
+			config.AuthModeOptional, time.Duration(config.DefaultMaxEventFutureSkewSeconds)*time.Second,
+			ResolveMetrics{}, WithPlacementCheck(func(string) error { return nil }))
+		iproc.placementHoldBeat, iproc.placementHoldPoll = time.Hour, 50*time.Microsecond
+		require.NoError(t, iproc.Initialize(context.Background()))
+		require.NoError(t, iproc.Start(context.Background()))
+		events := make([]EventResolutionResults, 64)
+		for i := range events {
+			events[i] = gateEvent(i)
+		}
+		for s := 0; s < 8; s++ {
+			iproc.OnResolvedEvent(holdSource(uint64(1000+s), messaging.MaxDeliver, &beatAck{}), holdTenant, events)
+		}
+		require.Eventually(t, func() bool { return len(w.ids()) > 8*64 }, 2*time.Second, 50*time.Microsecond,
+			"re-sends are flowing")
+		// The resolved channel is closed only once the hold's worker has stopped.
+		stopWithin(t, iproc, 5*time.Second)
+		select {
+		case <-iproc.placementHolds.done:
+		default:
+			t.Fatal("Stop returned before the placement hold finished")
+		}
+	}
+}
+
+// Stop waits for the hold's goroutines, even one inside a placement check, before it closes the
+// channels they could reach: here the check is held open, and Stop must not return until it ends.
+func TestStopWaitsForTheHoldsGoroutines(t *testing.T) {
+	inCheck, release := make(chan struct{}, 1), make(chan struct{})
+	w := newPlacementWriter(func(messaging.Message) error { return unplaced() })
+	failed := newPlacementWriter(func(messaging.Message) error { return nil })
+	iproc := NewInboundEventsProcessor(&core.Microservice{InstanceId: "inst", FunctionalArea: "device-management"},
+		[]messaging.MessageReader{&sliceReader{}}, w, failed, core.NewNoOpLifecycleCallbacks(), nil,
+		config.AuthModeOptional, time.Duration(config.DefaultMaxEventFutureSkewSeconds)*time.Second,
+		ResolveMetrics{}, WithPlacementCheck(func(string) error {
+			select {
+			case inCheck <- struct{}{}:
+			default:
+			}
+			<-release
+			return unplaced()
+		}))
+	iproc.placementHoldBeat, iproc.placementHoldPoll = time.Hour, time.Millisecond
+	require.NoError(t, iproc.Initialize(context.Background()))
+	require.NoError(t, iproc.Start(context.Background()))
+	iproc.OnResolvedEvent(holdSource(1, messaging.MaxDeliver, &beatAck{}), holdTenant, []EventResolutionResults{gateEvent(0)})
+	<-inCheck
+	stopped := make(chan struct{})
+	go func() { _ = iproc.Stop(context.Background()); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while the hold's loop was still running")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("HANG: Stop did not return once the check ended")
+	}
 }
