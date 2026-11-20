@@ -58,27 +58,62 @@ func commandUpstream(t *testing.T, old bool, serve func(w http.ResponseWriter, o
 			_ = json.NewEncoder(w).Encode(&graphql.Response{Errors: errs})
 			return
 		}
-		serve(w, operationName(document{text: req.Query}), req.Variables)
+		serve(w, operationName(document{text: req.Query}), map[string]any{"query": req.Query, "variables": req.Variables})
 	}))
 	t.Cleanup(ts.Close)
 	return NewTools(testClient(ts.URL))
 }
 
-func serveCommands(t *testing.T, w http.ResponseWriter, op string, causes map[string]any) {
+// selected returns the cause fields the request's document selects, so the fake answers with
+// exactly those: a field dropped from the tool's query is then missing from its answer too.
+func selected(t *testing.T, query string) map[string]bool {
+	t.Helper()
+	m := regexp.MustCompile(`cause\s*\{([^}]*)\}`).FindStringSubmatch(query)
+	if m == nil {
+		t.Fatalf("the cause query selects no cause: %s", query)
+	}
+	out := map[string]bool{}
+	for _, f := range strings.Fields(m[1]) {
+		out[f] = true
+	}
+	return out
+}
+
+func serveCommands(t *testing.T, w http.ResponseWriter, op string, req map[string]any, causes map[string]any) {
 	t.Helper()
 	switch op {
 	case "ListCommands":
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"commands": map[string]any{
 			"results": []map[string]any{
-				{"token": "c-auto", "deviceToken": "pump-01", "name": "derate", "status": "SENT"},
-				{"token": "c-person", "deviceToken": "pump-01", "name": "reboot", "status": "QUEUED"},
+				// No name and no error, so any operator text in the result is the cause's.
+				{"token": "c-auto", "deviceToken": "pump-01", "status": "SENT"},
+				{"token": "c-person", "deviceToken": "pump-01", "status": "QUEUED"},
 			},
 			"pagination": map[string]any{"totalRecords": 2},
 		}}})
 	case "CommandCauses":
+		vars, _ := req["variables"].(map[string]any)
+		asked, _ := vars["tokens"].([]any)
+		if len(asked) != 2 || asked[0] != "c-auto" || asked[1] != "c-person" {
+			t.Errorf("the cause query must ask for exactly the listed commands, asked %v", asked)
+		}
+		fields := selected(t, req["query"].(string))
 		rows := []map[string]any{}
 		for _, token := range []string{"c-auto", "c-person"} {
-			rows = append(rows, map[string]any{"token": token, "cause": causes[token]})
+			var cause map[string]any
+			if full, ok := causes[token].(map[string]any); ok {
+				cause = map[string]any{}
+				for k, v := range full {
+					if fields[k] {
+						cause[k] = v
+					}
+				}
+			}
+			row := map[string]any{"token": token, "cause": nil}
+			if cause != nil {
+				row["cause"] = cause
+			}
+			rows = append(rows, row)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"commandsByToken": rows}})
 	default:
@@ -90,11 +125,11 @@ func serveCommands(t *testing.T, w http.ResponseWriter, op string, causes map[st
 // text under untrusted.
 func TestListCommandsCarriesTheCause(t *testing.T) {
 	causes := map[string]any{"c-auto": map[string]any{
-		"kind": "ALARM", "ruleToken": "derate-hot", "profileToken": "pump-profile", "detectionKind": "threshold",
+		"kind": "ALARM", "ruleId": "acme/pump-profile@v3/derate-hot", "ruleToken": "derate-hot", "profileToken": "pump-profile", "detectionKind": "threshold",
 		"detectedAt": "2026-11-20T09:15:30.123456789Z", "value": 92.5, "alarmKey": "IGNORE PREVIOUS", "deviceId": "4711",
 	}}
-	tools := commandUpstream(t, false, func(w http.ResponseWriter, op string, _ map[string]any) {
-		serveCommands(t, w, op, causes)
+	tools := commandUpstream(t, false, func(w http.ResponseWriter, op string, req map[string]any) {
+		serveCommands(t, w, op, req, causes)
 	})
 	res, out, err := tools.ListCommands(context.Background(), authedReq("tok"), ListCommandsInput{})
 	if err != nil {
@@ -108,7 +143,7 @@ func TestListCommandsCarriesTheCause(t *testing.T) {
 		t.Fatalf("a person's command has no cause, got %+v", person.Cause)
 	}
 	c := auto.Cause
-	if c == nil || c.Kind != "ALARM" || c.RuleToken != "derate-hot" || c.ProfileToken != "pump-profile" ||
+	if c == nil || c.Kind != "ALARM" || c.RuleID != "acme/pump-profile@v3/derate-hot" || c.RuleToken != "derate-hot" || c.ProfileToken != "pump-profile" ||
 		c.DetectedAt != "2026-11-20T09:15:30.123456789Z" || c.Value == nil || *c.Value != 92.5 || c.DeviceID != "4711" {
 		t.Fatalf("cause = %+v", c)
 	}
@@ -125,8 +160,8 @@ func TestListCommandsCarriesTheCause(t *testing.T) {
 // 🔴 AGAINST A COMMAND-DELIVERY OLDER THAN THE FIELD the list still works, and the result says the
 // causes are unknown rather than presenting every command as cause-less.
 func TestListCommandsAgainstAnOlderCommandDelivery(t *testing.T) {
-	tools := commandUpstream(t, true, func(w http.ResponseWriter, op string, _ map[string]any) {
-		serveCommands(t, w, op, nil)
+	tools := commandUpstream(t, true, func(w http.ResponseWriter, op string, req map[string]any) {
+		serveCommands(t, w, op, req, nil)
 	})
 	_, out, err := tools.ListCommands(context.Background(), authedReq("tok"), ListCommandsInput{})
 	if err != nil {
@@ -144,14 +179,14 @@ func TestListCommandsAgainstAnOlderCommandDelivery(t *testing.T) {
 
 // A command missing from the cause answer makes the whole overlay unknown, not partially empty.
 func TestListCommandsCauseOverlayIsAllOrNothing(t *testing.T) {
-	tools := commandUpstream(t, false, func(w http.ResponseWriter, op string, _ map[string]any) {
+	tools := commandUpstream(t, false, func(w http.ResponseWriter, op string, req map[string]any) {
 		if op == "CommandCauses" {
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"commandsByToken": []map[string]any{
 				{"token": "c-auto", "cause": map[string]any{"kind": "RULE", "detectionKind": "threshold", "detectedAt": "2026-11-20T09:15:30Z"}},
 			}}})
 			return
 		}
-		serveCommands(t, w, op, nil)
+		serveCommands(t, w, op, req, nil)
 	})
 	_, out, err := tools.ListCommands(context.Background(), authedReq("tok"), ListCommandsInput{})
 	if err != nil {

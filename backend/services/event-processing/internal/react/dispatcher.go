@@ -104,7 +104,11 @@ const (
 // the alarm row is created asynchronously by device-management's contributor fold, and a rule's
 // raiseAlarm and sendCommand actions are siblings with no ordering between them, so the token may
 // not exist yet. The alarm is named instead by its key — one alarm per (device, alarmKey), whose
-// token is stable across cycles — and DetectedAt names the cycle (the one raised at or before it).
+// token is stable across cycles. DetectedAt does not by itself name an alarm cycle: another rule
+// may have raised the alarm before this detection, so a reader matches a cycle only when the
+// alarm's raisedTime is at or before DetectedAt and it was not cleared in between, and otherwise
+// treats the cycle as unknown. Kind ALARM says the rule TARGETED the alarm on this detection; it
+// does not prove the alarm was created or applied.
 type CommandCause struct {
 	// Kind is CauseKindAlarm or CauseKindRule.
 	Kind string

@@ -380,6 +380,7 @@ type CommandSummary struct {
 // CommandCause is the detection (and alarm) an automation sent a command because of.
 type CommandCause struct {
 	Kind          string                 `json:"kind" prov:"platform" jsonschema:"ALARM when the rule also targeted an alarm on this detection (it does not prove the alarm exists), RULE otherwise"`
+	RuleID        string                 `json:"ruleId" prov:"id" jsonschema:"runtime id of the rule that fired, including its profile version; with the command's deviceToken and detectedAt it identifies the detection"`
 	RuleToken     string                 `json:"ruleToken,omitempty" prov:"id" jsonschema:"token of the rule that fired, in its device profile"`
 	ProfileToken  string                 `json:"profileToken,omitempty" prov:"id" jsonschema:"token of the device profile the rule belongs to"`
 	DetectionKind string                 `json:"detectionKind" prov:"platform" jsonschema:"the rule's type, for example threshold"`
@@ -398,6 +399,7 @@ type CommandCauseUntrusted struct {
 // commandCauseRaw is the cause as command-delivery returns it.
 type commandCauseRaw struct {
 	Kind          string   `json:"kind"`
+	RuleID        string   `json:"ruleId"`
 	RuleToken     *string  `json:"ruleToken"`
 	ProfileToken  *string  `json:"profileToken"`
 	DetectionKind string   `json:"detectionKind"`
@@ -411,7 +413,7 @@ func (c *commandCauseRaw) summary() *CommandCause {
 	if c == nil {
 		return nil
 	}
-	out := &CommandCause{Kind: c.Kind, DetectionKind: c.DetectionKind, DetectedAt: c.DetectedAt,
+	out := &CommandCause{Kind: c.Kind, RuleID: c.RuleID, DetectionKind: c.DetectionKind, DetectedAt: c.DetectedAt,
 		Value: c.Value, RuleToken: deref(c.RuleToken), ProfileToken: deref(c.ProfileToken), DeviceID: deref(c.DeviceID)}
 	if key := mark(SourceOperator, deref(c.AlarmKey)); key != nil {
 		out.Untrusted = &CommandCauseUntrusted{AlarmKey: key}
@@ -429,7 +431,7 @@ func deref(s *string) string {
 var commandCausesQuery = newDocument("command-delivery", `query CommandCauses($tokens: [String!]!) {
   commandsByToken(tokens: $tokens) {
     token
-    cause { kind ruleToken profileToken detectionKind detectedAt value alarmKey deviceId }
+    cause { kind ruleId ruleToken profileToken detectionKind detectedAt value alarmKey deviceId }
   }
 }`)
 

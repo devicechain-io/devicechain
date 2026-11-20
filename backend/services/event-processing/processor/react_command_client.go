@@ -210,12 +210,16 @@ func (c *commandClient) Send(ctx context.Context, req react.CommandRequest) erro
 	// (a rolling upgrade; its validation refused the whole request, so nothing was created), or it
 	// refused this cause, which it would do again on every redelivery since the cause is a function
 	// of the detection. Neither is a reason to withhold the actuation, so the request is sent once
-	// more WITHOUT the cause, under the same token, and the omission is counted.
+	// more WITHOUT the cause, under the same token. The omission is counted only when that send is
+	// accepted: a resend that is itself refused or fails stored nothing without a cause.
+	delete(request, "cause")
+	if err := c.create(ctx, req, request); err != nil {
+		return err
+	}
 	if c.onCauseOmitted != nil {
 		c.onCauseOmitted(reason)
 	}
-	delete(request, "cause")
-	return c.create(ctx, req, request)
+	return nil
 }
 
 // create sends one createCommand request and classifies the answer (see Send).

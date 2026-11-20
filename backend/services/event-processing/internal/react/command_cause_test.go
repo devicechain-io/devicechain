@@ -138,6 +138,17 @@ func TestTheFirstRaisingAlarmIsNamed(t *testing.T) {
 	}
 }
 
+// Two alarms that both raise: the FIRST in list order is named, and a guard that passes counts as
+// raising.
+func TestTheFirstOfTwoRaisingAlarmsIsNamed(t *testing.T) {
+	v := 95.0
+	rule := causeRule(raiseAction("critical-hot", "", `value > 90.0`), raiseAction("warm", "", ""))
+	cause, _ := sentCause(t, rule, causeEvt(&v))
+	if cause.Kind != CauseKindAlarm || cause.AlarmKey != "critical-hot" {
+		t.Fatalf("cause = %+v, want critical-hot (listed first, its guard passes)", cause)
+	}
+}
+
 // A geofence rule's command cause is position-derived, so command-delivery withholds it from a
 // reader without location:read; an uncompilable rule fails closed the same way.
 func TestAGeofenceRulesCauseIsPositionDerived(t *testing.T) {

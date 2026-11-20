@@ -13,10 +13,12 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
-// RejectCauseInvalid: the cause an automation supplied is malformed. REACT, the one caller that
-// supplies a cause, answers it by sending the command again without one, so a defective cause
-// never costs the actuation.
-const RejectCauseInvalid RejectionCode = "CAUSE_INVALID"
+const (
+	// RejectCauseInvalid: the cause an automation supplied is malformed. REACT, the one caller
+	// that supplies a cause, answers it by sending the command again without one, so a defective
+	// cause never costs the actuation.
+	RejectCauseInvalid RejectionCode = "CAUSE_INVALID"
+)
 
 // The cause kinds. ALARM: the rule that fired also targeted an alarm on this detection (its
 // raiseAlarm action's guard passed and its key resolved); it does not assert that the alarm was

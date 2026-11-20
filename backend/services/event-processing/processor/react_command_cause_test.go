@@ -209,6 +209,21 @@ func TestAnOlderCommandDeliveryGetsTheCommandWithoutItsCause(t *testing.T) {
 	}
 }
 
+// An omission is counted only when the resend is accepted: an older peer that refuses the cause and
+// then refuses the command itself stored nothing, and the verdict on the command still decides.
+func TestAnOmissionIsCountedOnlyWhenTheResendIsAccepted(t *testing.T) {
+	cd := &cdResolver{rejectAlways: "DEVICE_NOT_FOUND"}
+	sink, omitted := causeSink(t, cdSDL(false), cd)
+	err := sink.Send(context.Background(), causedRequest())
+	var rejection *react.PermanentRejection
+	if !errors.As(err, &rejection) || rejection.Code != "DEVICE_NOT_FOUND" {
+		t.Fatalf("err = %v, want the command's own permanent rejection", err)
+	}
+	if len(*omitted) != 0 {
+		t.Fatalf("nothing was stored, so nothing may be counted as omitted: %v", *omitted)
+	}
+}
+
 // A refused cause costs the cause, never the command.
 func TestARefusedCauseStillSendsTheCommand(t *testing.T) {
 	cd := &cdResolver{refuseCause: true}
