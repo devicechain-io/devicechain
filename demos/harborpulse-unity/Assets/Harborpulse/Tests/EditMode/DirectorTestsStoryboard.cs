@@ -116,5 +116,24 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(DirectorKit.StoryText(), Does.Not.Contain("?"));
             Assert.That(story.Page("8").Shots.Single(s => s.Id == "8c").To, Is.EqualTo("pose:charger-north:close"));
         }
-    }
+    
+        [Test]
+        public void AShortCutChainOutranksAnyLiveOnlyPageItsWindowOverlaps()
+        {
+            // Live day 2: page 4b (live and 5 min only) waited 94 s for its trigger at a higher priority than page 6, one of the
+            // three 90 s chains, and page 6 expired in the queue. A short-cut page must be able to preempt a live-only page it meets.
+            var root = DirectorKit.Object(DirectorKit.StoryText());
+            var shortCut = new HashSet<string>(DirectorKit.Arr(root["cuts"]).Select(DirectorKit.Obj).Where(c => (string)c["id"] == "c90")
+                .SelectMany(c => DirectorKit.Arr(c["segments"]).Select(seg => (string)DirectorKit.Obj(seg)["page"])));
+            var pages = DirectorKit.Arr(root["pages"]).Select(DirectorKit.Obj).Where(p => !(bool)p["cutsOnly"]).ToArray();
+            double D(object v) => System.Convert.ToDouble(v, System.Globalization.CultureInfo.InvariantCulture);
+            foreach (var a in pages.Where(p => shortCut.Contains((string)p["id"])))
+                foreach (var b in pages.Where(p => !shortCut.Contains((string)p["id"])))
+                {
+                    var wa = DirectorKit.Arr(a["windowSim"]); var wb = DirectorKit.Arr(b["windowSim"]);
+                    if (D(wa[0]) < D(wb[1]) && D(wb[0]) < D(wa[1]))
+                        Assert.That(D(a["priority"]), Is.GreaterThan(D(b["priority"])), "page " + a["id"] + " vs " + b["id"]);
+                }
+        }
+}
 }

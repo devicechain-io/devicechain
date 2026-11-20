@@ -201,6 +201,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             Emit("attempt", id, Device(S(alarm, "originatorToken")), key == "light-silent" || key == "charger-offline" ? "absence" : key,
                 S(alarm, "raisedTime"), S(n, "status"), at, f, attempt: id);
         }
+        public static readonly TimeSpan ReplacementReadingWait = TimeSpan.FromSeconds(60);
         IEnumerable<JsonElement> History(string device) => Rows("measurements").Select(r => r.Value).Where(r => S(r, "deviceToken") == device);
         void Replacement(JsonElement r)
         {
@@ -210,6 +211,10 @@ namespace DeviceChain.Harborpulse.Model.Director
             var f = new Dictionary<string, string>();
             if (before.ValueKind != JsonValueKind.Undefined) f["beforeReading"] = S(before, "id");
             if (after.ValueKind != JsonValueKind.Undefined) f["afterReading"] = S(after, "id");
+            // The journal entry is a page trigger, and a trigger is captured once: emitted before the first reading after the swap
+            // has been read, its claims could never join that reading. Hold it until the reading is known, or for a minute at most
+            // (then it is emitted without one, and the claims that need the reading stay unmet).
+            if (!f.ContainsKey("afterReading") && input.Now - at < ReplacementReadingWait) return;
             Emit("replacement", id, device, "", S(r, "occurredTime"), "RECORDED", at, f,
                 new Dictionary<string, string[]> { ["disabledCredentials"] = r.GetProperty("retiredCredentialTokens").EnumerateArray().Select(v => v.GetString()).ToArray() });
         }

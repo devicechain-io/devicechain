@@ -39,7 +39,7 @@ namespace DeviceChain.Harborpulse.Live
         readonly ObserverStatus observerStatus;
         readonly CancellationTokenSource stop = new CancellationTokenSource();
         readonly Dictionary<string, ReadJob> jobs = new Dictionary<string, ReadJob>();
-        readonly HashSet<string> busyReads = new HashSet<string>();
+        public static int Parallel(string read) => read == "alarms" || read == "notifications" || read == "measurements" || read == "commands" ? 6 : 1;
         readonly HashSet<UnityWebRequest> requests = new HashSet<UnityWebRequest>();
         readonly Dictionary<string, (string state, string severity, DateTimeOffset at)> alarmStates = new Dictionary<string, (string, string, DateTimeOffset)>();
         readonly List<DirectorAlarmChange> alarmChanges = new List<DirectorAlarmChange>();
@@ -117,7 +117,6 @@ namespace DeviceChain.Harborpulse.Live
             if (stop.IsCancellationRequested) return;
             foreach (var d in layout.Devices) {
                 var token = boundToken(d.ExternalId); if (token == null) continue;
-                Add("alarms", token, Criteria(w => { w.WriteString("originatorType", "device"); w.WriteString("originatorToken", token); }));
                 // U1 supplies current readings. History is needed for replacement and the restore burst only.
                 if (d.Token == "hp-gauge-north-3" || d.Token == "hp-charger-east-1" || d.Token == "hp-charger-east-2")
                     Add("measurements", token, Criteria(w => {
@@ -131,6 +130,9 @@ namespace DeviceChain.Harborpulse.Live
                     }));
                 if (d.Kind == DeviceKind.Pump || d.Kind == DeviceKind.Charger) Add("commands", token, Criteria(w => w.WriteString("deviceToken", token)));
             }
+            // One fleet read of every alarm active at any point in this run (a few dozen rows a day) instead of one read per
+            // originator: per-device polling took a minute and a half to see a new alarm on a busy frame.
+            if (status?.StartedAt != null) Add("alarms", "run", Criteria(w => w.WriteString("startTime", status.StartedAt.Value.ToString("O"))));
             foreach (var quay in layout.Devices.Select(d => d.Quay).Distinct())
                 Add("membership", quay, Criteria(w => { w.WriteString("targetType", "area"); w.WriteString("target", quay); }));
             var replacementId = layout.Devices.FirstOrDefault(d => d.Token == status?.Replacement?.Device || d.ExternalId == status?.Replacement?.Device)?.ExternalId;
@@ -154,12 +156,15 @@ namespace DeviceChain.Harborpulse.Live
             }
             foreach (var target in Rows("targets")) if (target.TryGetProperty("assignmentToken", out var t) && t.ValueKind == JsonValueKind.String) Add("assignments", t.GetString(), Vars(t.GetString()));
             foreach (var name in Documents.Keys) {
-                if (busyReads.Contains(name)) continue;
                 var probe = jobs[name + "/__probe"];
                 if (probe.Result.Probe == DirectorProbe.PROBE_FAILED) continue;
-                var due = probe.Result.Probe == DirectorProbe.Waiting ? probe : jobs.Values.Where(j => j.Name == name && j.Scope != "__probe" && j.Next <= now && !j.Busy).OrderBy(j => j.Next).FirstOrDefault();
-                if (due == null) continue;
-                due.Busy = true; busyReads.Add(name); _ = Poll(due);
+                if (probe.Result.Probe == DirectorProbe.Waiting) { if (!probe.Busy) { probe.Busy = true; _ = Poll(probe); } continue; }
+                // Per-device reads (one per alarm originator, notification alarm, history device) run several at once, so one
+                // round of 37 alarm reads does not take 37 round trips; a fleet-wide read keeps one request in flight.
+                var limit = Parallel(name);
+                var inFlight = jobs.Values.Count(j => j.Name == name && j.Busy);
+                foreach (var due in jobs.Values.Where(j => j.Name == name && j.Scope != "__probe" && j.Next <= now && !j.Busy).OrderBy(j => j.Next).Take(Math.Max(0, limit - inFlight)).ToArray())
+                { due.Busy = true; _ = Poll(due); }
             }
             Publish();
         }
@@ -185,7 +190,7 @@ namespace DeviceChain.Harborpulse.Live
             }
             catch (OperationCanceledException) { return; }
             catch (Exception ex) { error = ex.Message; if (probe == DirectorProbe.Waiting) probe = DirectorProbe.PROBE_FAILED; }
-            finally { job.Busy = false; busyReads.Remove(job.Name); }
+            finally { job.Busy = false; }
             if (stop.IsCancellationRequested) return;
             var now = DateTimeOffset.UtcNow; var spans = old.Coverage.ToList();
             var from = old.LastSuccess ?? now;

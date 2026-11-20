@@ -451,7 +451,7 @@ the fix; the failing TRX is retained in `.build/u2b/stale-caption-before.trx`. T
 
 `HarborLiveSession.DirectorReads` publishes immutable read snapshots from `Live/DirectorReads.cs`.
 Each document has a bind-time operator authorization probe, then scoped polls at a three-second cadence,
-with one request in flight per read. Pages are bounded at 1000; truncation is a reported failure.
+with up to six requests in flight for the per-device reads (alarms, notifications, histories, commands) and one for each fleet-wide read. Pages are bounded at 1000; truncation is a reported failure.
 Unanswered data remains absent with state `waiting`; failed probes stay visible in `Problems` and
 invalidate that read's coverage for the recording. The shared observer tap retains escalation event
 times before the U1 latest-state reducer runs. Reconnect counters preserve gaps even across a frame

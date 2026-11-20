@@ -164,6 +164,22 @@ namespace DeviceChain.Harborpulse.Tests
             var m = obs.Single(o => o.Identity == "after-real"); Assert.That(m.Field("falling"), Is.EqualTo("true")); Assert.That(m.Field("afterReplacement"), Is.EqualTo("true")); Assert.That(m.Cycle, Is.EqualTo(Ts(12.5)));
         }
         [Test]
+        public void ReplacementTriggerWaitsForTheFirstReadingAfterTheSwap()
+        {
+            // A trigger is captured once, so a journal emitted before its after-reading was read could never join that reading.
+            DirectorReadSnapshot snapshot = null; var obs = new List<Observation>(); var adapter = new DirectorObserver(Kit.Layout(), () => snapshot);
+            snapshot = new DirectorReadSnapshot(new[] { Read("replacements", 12.6, Page(Journal())), Read("measurements", 12.6, Page(Measure("before-real", 12.45, 2))) });
+            adapter.Update(Inputs(12.6), obs.Add, _ => { });
+            Assert.That(obs.Any(o => o.Kind == "replacement"), Is.False);
+            snapshot = new DirectorReadSnapshot(new[] { Read("replacements", 12.7, Page(Journal())), Read("measurements", 12.7, Page(Measure("before-real", 12.45, 2), Measure("after-real", 12.65, 1))) });
+            adapter.Update(Inputs(12.7), obs.Add, _ => { });
+            Assert.That(obs.Single(o => o.Kind == "replacement").Field("afterReading"), Is.EqualTo("after-real"));
+            // With no reading after the swap, the journal still appears once the wait is over, and the claims needing the reading stay unmet.
+            var late = new List<Observation>(); var lone = new DirectorObserver(Kit.Layout(), () => new DirectorReadSnapshot(new[] { Read("replacements", 13.6, Page(Journal())), Read("measurements", 13.6, Page(Measure("before-real", 12.45, 2))) }));
+            lone.Update(Inputs(13.6), late.Add, _ => { });
+            Assert.That(late.Single(o => o.Kind == "replacement").Field("afterReading"), Is.Null);
+        }
+        [Test]
         public void CommandWithoutPlatformAlarmJoinDoesNotInventOne()
         {
             var command = "{\"token\":\"command-real\",\"deviceToken\":\"hp-pump-north\",\"name\":\"start-pump\",\"status\":\"SUCCESSFUL\",\"queuedTime\":" + Q(Ts(17.51)) + ",\"sentTime\":" + Q(Ts(17.52)) + ",\"respondedTime\":" + Q(Ts(17.53)) + ",\"payload\":null,\"metadata\":null}";
