@@ -44,9 +44,12 @@ namespace DeviceChain.Harborpulse.Visuals
             Slate = Matte(Make("slate", new Color(0.22f, 0.24f, 0.27f), 0.3f));
             Glass = Make("glass", new Color(0.20f, 0.28f, 0.32f), 0.9f, 0.2f);
             GaugeBoard = Make("gauge-board", new Color(0.92f, 0.92f, 0.88f), 0.4f);
-            Minor = Emissive("level-minor", new Color(0.95f, 0.78f, 0.10f), 2f);
-            Major = Emissive("level-major", new Color(0.95f, 0.45f, 0.08f), 3f);
-            Critical = Emissive("level-critical", new Color(1f, 0.32f, 0.02f), 4f);
+            // Signal emission is tuned for the player, where (since U3) the emission variant is actually compiled: bright enough to read
+            // as a signal at HOME distance, low enough that the tonemapper keeps each severity's colour (a hot emissive turns cream)
+            // and the bloom never swallows the label drawn over it.
+            Minor = Emissive("level-minor", new Color(0.95f, 0.78f, 0.10f), 0.6f);
+            Major = Emissive("level-major", new Color(0.95f, 0.45f, 0.08f), 0.8f);
+            Critical = Emissive("level-critical", new Color(1f, 0.32f, 0.02f), 1.0f);
             Safety = Make("safety-yellow", new Color(0.95f, 0.72f, 0.08f), 0.45f);
             BuoyRed = Make("buoy-red", new Color(0.75f, 0.10f, 0.08f), 0.5f);
             BuoyGreen = Make("buoy-green", new Color(0.08f, 0.50f, 0.20f), 0.5f);
@@ -84,10 +87,12 @@ namespace DeviceChain.Harborpulse.Visuals
             FoliageRed = Matte(Make("foliage-red", new Color(0.60f, 0.15f, 0.08f), 0.05f));
             FoliagePine = Matte(Make("foliage-pine", new Color(0.11f, 0.20f, 0.13f), 0.05f));
             Bark = Matte(Make("bark", new Color(0.24f, 0.19f, 0.15f), 0.1f));
+            TownLamp = Emissive("town-lamp", new Color(1.0f, 0.85f, 0.6f), 0);
+            EastTownLamp = Emissive("east-town-lamp", new Color(1.0f, 0.85f, 0.6f), 0);
 
-            Flow = Emissive("flow", new Color(0.1f, 0.55f, 1f), 2f);
-            WorldCue = Emissive("world-cue", new Color(0.55f, 0.75f, 0.88f), 1.8f);
-            Failed = Emissive("failed", new Color(1f, 0.32f, 0.25f), 2f);
+            Flow = Emissive("flow", new Color(0.1f, 0.55f, 1f), 1.2f);
+            WorldCue = Emissive("world-cue", new Color(0.55f, 0.75f, 0.88f), 1.1f);
+            Failed = Emissive("failed", new Color(1f, 0.32f, 0.25f), 1.2f);
             EastWindows = Emissive("east-windows", new Color(1f, 0.78f, 0.48f), 0);
             WellGlass = Make("well-glass", new Color(0.55f, 0.8f, 0.85f, 0.12f), 0.85f);
             WellGlass.SetFloat("_Surface", 1);
@@ -99,15 +104,15 @@ namespace DeviceChain.Harborpulse.Visuals
             WellGlass.renderQueue = 3000;
             for (var i = 0; i < 6; i++)
                 Courses[i] = Matte(Make("stone-course-" + i, new Color(0.43f + i * 0.025f, 0.42f + i * 0.023f, 0.39f + i * 0.022f), 0.2f));
-            LampOn = Emissive("lamp-on", new Color(1.0f, 0.86f, 0.62f), 10f);
-            LampHalo = Emissive("lamp-halo", new Color(1.0f, 0.80f, 0.55f), 3.0f);
+            LampOn = Emissive("lamp-on", new Color(1.0f, 0.86f, 0.62f), 4f);
+            LampHalo = Emissive("lamp-halo", new Color(1.0f, 0.80f, 0.55f), 1.2f);
             LampOff = Make("lamp-off", new Color(0.30f, 0.30f, 0.28f), 0.6f);
             LampSilent = Emissive("lamp-silent", new Color(0.45f, 0.30f, 0.65f), 0.6f);
             LampUnknown = Make("lamp-unknown", new Color(0.18f, 0.18f, 0.20f), 0.3f);
             Windows = Emissive("windows", new Color(1.0f, 0.78f, 0.48f), 0f);
             WindowsDark = Make("windows-dark", new Color(0.10f, 0.12f, 0.15f), 0.85f);
-            StatusGreen = Emissive("status-green", new Color(0.15f, 0.95f, 0.35f), 2.5f);
-            Beacon = Emissive("beacon-amber", new Color(1.0f, 0.55f, 0.05f), 4f);
+            StatusGreen = Emissive("status-green", new Color(0.15f, 0.95f, 0.35f), 1.4f);
+            Beacon = Emissive("beacon-amber", new Color(1.0f, 0.55f, 0.05f), 1.0f);
         }
 
         public Material Flow { get; }
@@ -181,6 +186,10 @@ namespace DeviceChain.Harborpulse.Visuals
         public Material FoliagePine { get; }
         public Material Bark { get; }
 
+        /// <summary>The town's own street lamps (scenery, not devices): lit with the night, the eastern ones dark through the feeder outage.</summary>
+        public Material TownLamp { get; }
+        public Material EastTownLamp { get; }
+
         /// <summary>The glow round a lit lamp: the lights stand 430 m apart, and without it a lit head is a pixel from the overview.</summary>
         public Material LampHalo { get; }
         public Material LampSilent { get; }
@@ -197,12 +206,18 @@ namespace DeviceChain.Harborpulse.Visuals
             byName.Clear();
         }
 
-        /// <summary>Lights the town's windows: 0 by day, full at night.</summary>
+        /// <summary>Lights the town's windows and street lamps: 0 by day, full at night. The east of the town is on the east feeder.</summary>
         public void SetNight(float night, float outage = 0)
         {
-            var w = new Color(1.0f, 0.78f, 0.48f) * Mathf.Lerp(0.0f, 1.3f, Mathf.SmoothStep(0, 1, night));
+            var lit = Mathf.SmoothStep(0, 1, night);
+            var w = new Color(1.0f, 0.78f, 0.48f) * Mathf.Lerp(0.0f, 4f, lit);
             Windows.SetColor(EmissionColor, w);
             EastWindows.SetColor(EmissionColor, w * (1 - outage));
+            var lamp = new Color(1.0f, 0.80f, 0.52f) * Mathf.Lerp(0.0f, 12f, lit);
+            TownLamp.SetColor(EmissionColor, lamp);
+            EastTownLamp.SetColor(EmissionColor, lamp * (1 - outage));
+            TownLamp.SetColor(BaseColor, Color.Lerp(new Color(0.55f, 0.55f, 0.52f), new Color(1.0f, 0.85f, 0.6f), lit));
+            EastTownLamp.SetColor(BaseColor, Color.Lerp(new Color(0.55f, 0.55f, 0.52f), new Color(1.0f, 0.85f, 0.6f), lit * (1 - outage)));
             EastWindows.SetColor(BaseColor, Color.Lerp(new Color(0.10f, 0.12f, 0.15f), new Color(0.55f, 0.45f, 0.30f), night * (1 - outage)));
             Windows.SetColor(BaseColor, Color.Lerp(new Color(0.16f, 0.20f, 0.24f), new Color(0.55f, 0.45f, 0.30f), night));
         }

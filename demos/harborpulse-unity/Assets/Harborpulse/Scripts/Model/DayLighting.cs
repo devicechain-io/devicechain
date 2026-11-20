@@ -120,6 +120,9 @@ namespace DeviceChain.Harborpulse.Model
         /// <summary>0 .. 1: storm cloud cover.</summary>
         public double Overcast { get; internal set; }
 
+        /// <summary>0 .. 1: the sky's whole cloud cover, the town's high cloud or the storm's, whichever is thicker. The sky draws this.</summary>
+        public double CloudCover { get; internal set; }
+
         public Rgb AmbientSky { get; internal set; }
         public Rgb AmbientEquator { get; internal set; }
         public Rgb AmbientGround { get; internal set; }
@@ -130,11 +133,15 @@ namespace DeviceChain.Harborpulse.Model
 
         /// <summary>0 at full day .. 1 at full night: how strongly the lamps, windows and beacons should read.</summary>
         public double Night { get; internal set; }
+
+        /// <summary>0 .. 1: how dark the dominant light's shadows are; soft under the town's high cloud, softer in the storm.</summary>
+        public double ShadowStrength { get; internal set; }
     }
 
     /// <summary>
-    /// The time of day as light: a stylised sun and moon on fixed arcs, graded through dawn, day, dusk and night, with the story's storm
-    /// laid over it. It is scenario time, not astronomy: the sun rises at 06:15 and sets at 18:15 every day so the story's beats always fall
+    /// The time of day as light: a stylised sun and moon on fixed arcs, graded through dawn, day, dusk and night, under a fixed high cloud
+    /// (<see cref="Cloud"/>, the soft overcast of a northern harbour town), with the story's storm laid over it. Night and storm are kept
+    /// readable: the ambient never drops below a moonlit floor and the storm darkens the sky, not the town. It is scenario time, not astronomy: the sun rises at 06:15 and sets at 18:15 every day so the story's beats always fall
     /// in the same light (the street lights come on at 18:00), and the platform's solar campaigns, which plan by the real sun, are a separate
     /// matter.
     /// </summary>
@@ -143,15 +150,20 @@ namespace DeviceChain.Harborpulse.Model
         public const double SunriseHour = 6.25, SunsetHour = 18.25;
         public const double SunMaxElevationDeg = 52, MoonMaxElevationDeg = 38;
 
-        static readonly Rgb NightZenith = new Rgb(0.006, 0.010, 0.030), NightHorizon = new Rgb(0.030, 0.040, 0.075);
+        /// <summary>The fair-weather cloud cover: it softens the sun and its shadows, pales the sky and lifts the ambient.</summary>
+        public const double Cloud = 0.55;
+
+        static readonly Rgb NightZenith = new Rgb(0.012, 0.018, 0.045), NightHorizon = new Rgb(0.050, 0.062, 0.105);
         static readonly Rgb TwilightZenith = new Rgb(0.10, 0.13, 0.30), TwilightHorizon = new Rgb(0.95, 0.46, 0.24);
         static readonly Rgb DayZenith = new Rgb(0.16, 0.38, 0.78), DayHorizon = new Rgb(0.64, 0.78, 0.93);
-        static readonly Rgb StormZenith = new Rgb(0.20, 0.22, 0.25), StormHorizon = new Rgb(0.36, 0.38, 0.41);
+        // the high cloud's sky: a pale grey-blue overhead, a bright pearl horizon
+        static readonly Rgb CloudZenith = new Rgb(0.46, 0.53, 0.63), CloudHorizon = new Rgb(0.80, 0.82, 0.84);
+        static readonly Rgb StormZenith = new Rgb(0.30, 0.33, 0.36), StormHorizon = new Rgb(0.46, 0.48, 0.50);
         static readonly Rgb CityGlow = new Rgb(0.085, 0.08, 0.082);
 
-        // the floor the night never drops below, so the quays stay readable by the lamps' and the sky's light
-        static readonly Rgb NightAmbientSky = new Rgb(0.075, 0.085, 0.12), NightAmbientEquator = new Rgb(0.065, 0.065, 0.075);
-        static readonly Rgb NightAmbientGround = new Rgb(0.03, 0.03, 0.032);
+        // the floor the night never drops below, so the quays, the town and the hills stay readable: a cool moonlit blue
+        static readonly Rgb NightAmbientSky = new Rgb(0.15, 0.17, 0.24), NightAmbientEquator = new Rgb(0.12, 0.125, 0.15);
+        static readonly Rgb NightAmbientGround = new Rgb(0.055, 0.055, 0.06);
 
         static Rgb Max(Rgb a, Rgb b) => new Rgb(Math.Max(a.R, b.R), Math.Max(a.G, b.G), Math.Max(a.B, b.B));
 
@@ -178,12 +190,13 @@ namespace DeviceChain.Harborpulse.Model
 
             var kelvin = 1900 + 3900 * Smooth(0, 35, sunElev);
             s.SunColor = Rgb.FromKelvin(kelvin);
-            s.SunIntensity = 2.1 * Smooth(-1.5, 22, sunElev) * (1 - 0.72 * storm);
+            s.SunIntensity = 2.1 * Smooth(-1.5, 22, sunElev) * (1 - 0.4 * Cloud) * (1 - 0.72 * storm);
             s.MoonColor = Rgb.FromKelvin(7800);
-            s.MoonIntensity = 0.32 * Smooth(-2, 10, moonElev) * night * (1 - 0.6 * storm);
+            s.MoonIntensity = 0.5 * Smooth(-2, 10, moonElev) * night * (1 - 0.6 * storm);
+            s.ShadowStrength = 0.85 * (1 - 0.6 * Cloud) * (1 - 0.4 * storm);
 
-            var zenith = Rgb.Lerp(NightZenith, DayZenith, day);
-            var horizon = Rgb.Lerp(NightHorizon, DayHorizon, day);
+            var zenith = Rgb.Lerp(NightZenith, Rgb.Lerp(DayZenith, CloudZenith, Cloud), day);
+            var horizon = Rgb.Lerp(NightHorizon, Rgb.Lerp(DayHorizon, CloudHorizon, Cloud), day);
             zenith = Rgb.Lerp(zenith, TwilightZenith, twilight * 0.6);
             horizon = Rgb.Lerp(horizon, TwilightHorizon, twilight);
             var stormLight = 0.12 + 0.88 * Math.Max(day, twilight * 0.5);
@@ -192,15 +205,18 @@ namespace DeviceChain.Harborpulse.Model
             s.Ground = s.Horizon.Scale(0.35);
             s.Stars = night * (1 - storm);
             s.Overcast = storm;
+            s.CloudCover = Math.Max(Cloud, storm);
 
             // the town's own glow on the cloud: a storm night is dim and warm-grey, never black
             s.Horizon = Rgb.Lerp(s.Horizon, CityGlow, night * (0.25 + 0.5 * storm));
-            var amb = 0.25 + 0.75 * day;
+            // a cloudy day's light is mostly sky: more ambient, and the storm's ambient is lifted so the town stays legible under it
+            var amb = (0.25 + 0.75 * day) * (1 + 0.35 * Cloud) * (1 + 0.5 * storm);
             s.AmbientSky = Max(s.Zenith.Scale(amb * 1.1 + 0.04), NightAmbientSky);
             s.AmbientEquator = Max(s.Horizon.Scale(amb * 0.8 + 0.03), NightAmbientEquator);
             s.AmbientGround = Max(s.Ground.Scale(0.6), NightAmbientGround);
             s.FogColor = s.Horizon;
-            s.FogDensity = 0.00012 + 0.00055 * storm + 0.00008 * night;
+            // haze gives the hills their distance; the storm thickens it
+            s.FogDensity = 0.00026 + 0.00045 * storm + 0.00004 * night;
             return s;
         }
 
