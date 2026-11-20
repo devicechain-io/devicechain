@@ -425,6 +425,7 @@ func newInboundEventsProcessor() *processor.InboundEventsProcessor {
 		processor.WithResolvedEnvelopes(resolvedEnvelopesOn(), ResolvedRoundPublisher),
 		processor.WithTenantGone(erasureFenced),
 		processor.WithStoreHold(newStoreHold("inbound-event-resolution")),
+		processor.WithPlacementCheck(resolvedPlacementCheck),
 		processor.WithSecretTransit(SecretTransit),
 		processor.WithGatewayNotices(messaging.NewGatewayNoticePublisher(
 			func() *nats.Conn { return NatsManager.Conn() }, Microservice.InstanceId)),
@@ -440,6 +441,14 @@ func newInboundEventsProcessor() *processor.InboundEventsProcessor {
 	return processor.NewInboundEventsProcessor(Microservice, InboundEventsReaders, ResolvedEventsWriter, FailedEventsWriter,
 		core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode,
 		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics, opts...)
+}
+
+// resolvedPlacementCheck answers whether tenant's resolved-events shard placement is available:
+// placement only, not backpressure, resolved against the live manager at poll time. It is
+// what a final delivery held for placement waits on.
+func resolvedPlacementCheck(tenant string) error {
+	_, err := NatsManager.TenantShardGroup(tenant, streams.ResolvedEvents)
+	return err
 }
 
 // erasureFenced reports whether a tenant's data is being erased here, from this service's own

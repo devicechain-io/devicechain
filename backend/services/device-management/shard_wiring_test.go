@@ -88,7 +88,12 @@ func TestShardGroupServiceWiring(t *testing.T) {
 			readers := InboundEventsReaders
 			writer, err := nmgr.NewWriter(streams.InboundEvents)
 			require.NoError(t, err)
+			savedNmgr := NatsManager
+			t.Cleanup(func() { NatsManager = savedNmgr })
+			NatsManager = nmgr
 			if mode == "unplaced" {
+				require.ErrorIs(t, resolvedPlacementCheck("tenant-b"), messaging.ErrUnplacedTenant,
+					"a held final delivery waits on the tenant's resolved-events placement")
 				require.ErrorIs(t, writer.WriteMessages(core.WithTenant(context.Background(), "tenant-b"), messaging.Message{Value: []byte(`{"event":"unplaced"}`)}), messaging.ErrUnplacedTenant)
 				for _, suffix := range []string{"inbound-events", "inbound-events" + "-g1"} {
 					info, err := js.StreamInfo("n2_" + suffix)
@@ -97,6 +102,7 @@ func TestShardGroupServiceWiring(t *testing.T) {
 				}
 				return
 			}
+			require.NoError(t, resolvedPlacementCheck("tenant-b"), "placement answers: the hold re-sends")
 			expectedReaders := 1
 			if mode == "on" {
 				expectedReaders = 2

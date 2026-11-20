@@ -195,7 +195,7 @@ func (e *envelopeEngine) publishBatch(ctx context.Context, batch []resolvedItem)
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}
-		coord := item.coord
+		coord, index := item.coord, item.index
 		groups[k] = append(groups[k], messaging.RoundMember{
 			TraceContext: coord.src.TraceContext(),
 			Index:        idx,
@@ -206,7 +206,7 @@ func (e *envelopeEngine) publishBatch(ctx context.Context, batch []resolvedItem)
 			// about the member's earlier life in the envelope it came from (its event may already
 			// be stored under the envelope's id), so it walks from round 0 like a redelivery.
 			Redelivered: coord.src.NumDelivered > 1 || coord.src.IsSplitCopy(),
-			Settle:      func(err error) { e.iproc.settleResolved(coord, err) },
+			Settle:      func(err error) { e.iproc.settleResolved(coord, index, err) },
 			Beat:        coord.beat,
 		})
 	}

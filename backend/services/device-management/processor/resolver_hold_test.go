@@ -88,7 +88,7 @@ func (suite *InboundEventsProcessorTestSuite) TestAnEventResolvedDuringAStoreOut
 			select {
 			case item := <-suite.IP.resolved:
 				suite.Equal(int32(0), ack.n.Load(), "the source is acked only after its resolved event is published")
-				suite.IP.settleResolved(item.coord, nil)
+				suite.IP.settleResolved(item.coord, item.index, nil)
 			case <-time.After(5 * time.Second):
 				suite.FailNow("the held event was never resolved")
 			}

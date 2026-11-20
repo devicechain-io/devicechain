@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/storehold"
@@ -44,19 +45,34 @@ const (
 // ackCoord coordinates acknowledgement of one source message across the 1->N
 // resolved-event fan-out it produced. The source is acked once every resolved
 // event has been durably published, or left unacked if any publish fails so the
-// whole message is redelivered after AckWait (ADR-022 review A3). Once OnResolvedEvent has
-// built it, it is only ever touched by the resolved writer's settle goroutine (see
-// settleResolved), so no locking is required.
+// whole message is redelivered after AckWait (ADR-022 review A3) - except a FINAL
+// delivery whose only failures are placement refusals, which is held and has just
+// those outputs published again (placement_hold.go).
 type ackCoord struct {
-	src       messaging.Message
+	src messaging.Message
+	// remaining counts the outputs whose publish has not settled yet; failed latches a
+	// failure that is not a placement refusal, and refused keeps the outputs refused for
+	// shard placement, to be published again by a placement hold.
 	remaining int
 	failed    bool
+	refused   []heldOutput
+	// tenant, correlation and events are what a refused output is rebuilt from: the
+	// resolver's own results while the first attempt is in flight (dropped once the source is
+	// held, so a held source keeps only its refused outputs), then resending, the outputs a
+	// hold has handed back to the resolved loop.
+	tenant      string
+	correlation string
+	events      []EventResolutionResults
+	resending   []heldOutput
+	// holds is the placement hold of the processor run that built the coordinator.
+	holds *placementHolds
 	// lastBeat is when an InProgress last went to the broker for this source (unix nanos), so a
 	// walk that beats several events of one source sends one.
 	lastBeat atomic.Int64
-	// mu guards remaining and failed. Without envelopes only the resolved writer's settle
+	// mu guards remaining, failed and refused. Without envelopes only the resolved writer's settle
 	// goroutine touches them, in order; with envelopes a duplicate's recovery settles members
-	// from a goroutine of its own, so the same coordinator can be settled from two.
+	// from a goroutine of its own, so the same coordinator can be settled from two, and a
+	// placement hold resets them before it publishes refused outputs again.
 	mu sync.Mutex
 }
 
@@ -206,6 +222,14 @@ type InboundEventsProcessor struct {
 	// decodeObserver is told every decode outcome (WithDecodeObserver); copied to each resolver.
 	decodeObserver DecodeObserver
 
+	// placementCheck answers whether a tenant's resolved-events placement is available
+	// (WithPlacementCheck); placementHolds is the run's hold of final deliveries refused for
+	// it (placement_hold.go), and the beat and poll intervals are its timing (tests shorten
+	// them; zero means AckWait/3 and one second).
+	placementCheck                       func(tenant string) error
+	placementHolds                       *placementHolds
+	placementHoldBeat, placementHoldPoll time.Duration
+
 	lifecycle core.LifecycleManager
 }
 
@@ -296,6 +320,14 @@ type ResolveMetrics struct {
 	envRetries       prometheus.Counter
 	envProbeDenied   prometheus.Counter
 	envRoundsEvicted prometheus.Counter
+
+	// placementHeld is how many sources are held because their final delivery's resolved
+	// events were refused for shard placement (placement_hold.go). Nil in a zero ResolveMetrics.
+	placementHeld prometheus.Gauge
+	// placementGaveUp counts held sources the hold could not finish: over its limit, released
+	// by a failure that is not a placement refusal, or abandoned at shutdown. Each is left
+	// unacked on its final delivery, for the max-delivery recorder.
+	placementGaveUp prometheus.Counter
 }
 
 // NewResolveMetrics builds the inbound resolve loop's instruments.
@@ -342,6 +374,10 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 			"Read-backs of a stored resolved envelope the broker REFUSED: this writer lacks the read-back grant, which no retry cures; each leaves its sources unacknowledged"),
 		envRoundsEvicted: ms.NewCounter("resolve_envelope_rounds_evicted_total",
 			"Resolved-envelope rounds a duplicate answer named whose message retention had already evicted, so the walk stepped past them: the stream holds less than one duplicate window of messages"),
+		placementHeld: ms.NewGauge("resolve_placement_held_sources",
+			"Inbound messages on their final delivery held because resolved-events placement is unavailable for their tenant; each is published once placement answers again"),
+		placementGaveUp: ms.NewCounter("resolve_placement_hold_given_up_total",
+			"Inbound messages held for resolved-events placement on their final delivery that the hold could not finish (hold full, another failure, or shutdown); each is left to the max-delivery recorder"),
 		workers: ms.NewGauge("resolve_workers",
 			"Resolvers this pod runs (resolution.workers). resolve_inflight held at this value means every resolver is busy and inbound events are queueing in front of them."),
 	}
@@ -448,6 +484,19 @@ func (iproc *InboundEventsProcessor) splitOut(src messaging.Message, tenant stri
 		return false
 	}
 	return true
+}
+
+// WithPlacementCheck hands the processor the check of a tenant's resolved-events shard
+// placement, placement ONLY (never backpressure). A final delivery whose resolved events are
+// refused for placement is held until it answers (placement_hold.go). Production wiring always
+// passes one; without one such a delivery is left unacked, and lettered, as before.
+func WithPlacementCheck(check func(tenant string) error) InboundOption {
+	return func(iproc *InboundEventsProcessor) { iproc.placementCheck = check }
+}
+
+// PlacementCheck is WithPlacementCheck's check (nil without one).
+func (iproc *InboundEventsProcessor) PlacementCheck() func(tenant string) error {
+	return iproc.placementCheck
 }
 
 // WithStoreHold hands the resolver pool the Holder that keeps an event unacked, and outside its
@@ -761,7 +810,8 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 func (iproc *InboundEventsProcessor) publishResolvedLegacy(ctx context.Context, item resolvedItem, bytes []byte, marshalErr error) {
 	coord := item.coord
 	ctx = coord.src.Context(ctx)
-	settle := func(err error) { iproc.settleResolved(coord, err) }
+	index := item.index
+	settle := func(err error) { iproc.settleResolved(coord, index, err) }
 	if marshalErr != nil {
 		log.Error().Err(marshalErr).Msg("unable to marshal resolved event to protobuf")
 		// Through the writer, not inline: the outcome must reach the coordinator on the
@@ -917,32 +967,70 @@ func fromUplinkStream(src messaging.Message) bool {
 	return strings.HasSuffix(src.Subject, "."+streams.IntegrationUplinks)
 }
 
-// settleResolved records the outcome of publishing one resolved event against
-// its source's ack coordinator: a publish failure latches failure so the source
-// is left unacked (AckWait redelivers the whole message); success decrements the
-// outstanding count and acks the source when the last resolved event has been
-// published.
+// settleResolved records the outcome of publishing the index-th resolved event of
+// a source against its ack coordinator. Every outcome counts down the outstanding
+// publishes; once the last has settled:
 //
-// It runs only on the resolved writer's settle goroutine (messaging.OrderedWriter),
-// in the order the events were submitted, and err is nil only after the broker's
-// PubAck.
-func (iproc *InboundEventsProcessor) settleResolved(coord *ackCoord, err error) {
+//   - every one stored: the source is acked;
+//   - only placement refusals (ErrUnplacedTenant), on the source's FINAL delivery:
+//     the source is held and the refused outputs alone are published again once the
+//     tenant's placement answers (placement_hold.go). The broker never redelivers a
+//     final delivery, so leaving it unacked would have it lettered and its events
+//     never resolved;
+//   - otherwise the source is left unacked, which leaves the whole message for
+//     AckWait-paced redelivery; the dedup ids fold the outputs already stored. Do NOT
+//     nak — an immediate nak would burn MaxDeliver in ~1.4ms inside a downstream
+//     outage (ADR-030).
+//
+// It runs on the resolved writer's settle goroutine (messaging.OrderedWriter), in
+// the order the events were submitted, or on an envelope walk's, and err is nil only
+// after the broker's PubAck.
+func (iproc *InboundEventsProcessor) settleResolved(coord *ackCoord, index int, err error) {
 	if coord == nil {
 		return
 	}
 	coord.mu.Lock()
 	defer coord.mu.Unlock()
-	if err != nil {
-		// A publish failed: latch failure so the source is never acked, which leaves
-		// the whole message for AckWait-paced redelivery. Do NOT nak — an immediate
-		// nak would burn MaxDeliver in ~1.4ms inside a downstream outage (ADR-030).
+	switch {
+	case err == nil:
+	case errors.Is(err, messaging.ErrUnplacedTenant):
+		if event := coord.output(index); event != nil {
+			coord.refused = append(coord.refused, heldOutput{index: index, event: event})
+		} else {
+			// Nothing to publish it again from: an ordinary failure.
+			coord.failed = true
+		}
+	default:
 		coord.failed = true
-		return
 	}
 	coord.remaining--
-	if coord.remaining == 0 && !coord.failed {
-		_ = coord.src.Ack()
+	if coord.remaining != 0 {
+		return
 	}
+	switch {
+	case !coord.failed && len(coord.refused) == 0:
+		// Ended before the ack, so no hold beat follows it.
+		coord.holds.finish(coord)
+		_ = coord.src.Ack()
+	case !coord.failed && messaging.FinalDelivery(coord.src) && coord.holds.hold(coord):
+		// Held: only the refused outputs are kept.
+		coord.events, coord.resending = nil, nil
+	default:
+		coord.holds.release(coord)
+	}
+}
+
+// output is the index-th resolved event of the source, or nil when it is not kept.
+func (c *ackCoord) output(index int) *resolvedevent.ResolvedEvent {
+	if index >= 0 && index < len(c.events) {
+		return c.events[index].Resolved
+	}
+	for _, o := range c.resending {
+		if o.index == index {
+			return o.event
+		}
+	}
+	return nil
 }
 
 // Called when an event is successfully resolved. An event resolving to no tracked
@@ -953,8 +1041,13 @@ func (iproc *InboundEventsProcessor) OnResolvedEvent(src messaging.Message, tena
 		_ = src.Ack()
 		return
 	}
-	coord := &ackCoord{src: src, remaining: len(events)}
 	correlation := src.CorrelationID()
+	coord := &ackCoord{src: src, remaining: len(events), tenant: tenant, correlation: correlation,
+		events: events, holds: iproc.placementHolds}
+	if messaging.FinalDelivery(src) {
+		// Beaten from now, not from its last settle: see placement_hold.go.
+		coord.holds.watch(coord)
+	}
 	for i, event := range events {
 		iproc.resolved <- resolvedItem{tenant: tenant, event: *event.Resolved, coord: coord, index: i, correlation: correlation}
 	}
@@ -1151,6 +1244,20 @@ func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
 		iproc.env = newEnvelopeEngine(walkCtx, iproc, aw, iproc.roundPublisher)
 		resolvedLoop = iproc.ProcessResolvedGroup
 	}
+	// The hold of final deliveries refused for placement re-sends on the resolved channel, which
+	// the resolved loop below drains until ExecuteStop closes it, after joining the hold.
+	if iproc.placementCheck != nil {
+		iproc.placementHolds = startPlacementHolds(iproc.placementCheck, iproc.metrics.placementHeld,
+			iproc.metrics.placementGaveUp, iproc.placementHoldBeat, iproc.placementHoldPoll,
+			func(ctx context.Context, item resolvedItem) bool {
+				select {
+				case iproc.resolved <- item:
+					return true
+				case <-ctx.Done():
+					return false
+				}
+			})
+	}
 	// Processing loop for failed events (drains until the failed channel closes).
 	iproc.outboundWG.Add(1)
 	go func() {
@@ -1205,6 +1312,11 @@ func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
 	if iproc.holdCancel != nil {
 		iproc.holdCancel()
 	}
+	// No source is held for placement from here on: one refused now stays unacked, and on its
+	// final delivery is lettered (the same residual as the store hold).
+	if iproc.placementHolds != nil {
+		iproc.placementHolds.cancel()
+	}
 	if iproc.procCancel != nil {
 		iproc.procCancel()
 	}
@@ -1233,8 +1345,11 @@ func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
 	if iproc.FailedEventsWriter != nil {
 		iproc.FailedEventsWriter.Draining()
 	}
-	close(iproc.messages)   //
-	iproc.workerWG.Wait()   // resolvers drained + exited: no more sends to resolved/failed
+	close(iproc.messages) //
+	iproc.workerWG.Wait() // resolvers drained + exited: no more sends to resolved/failed
+	if iproc.placementHolds != nil {
+		<-iproc.placementHolds.done // the hold's worker has stopped re-sending on resolved
+	}
 	close(iproc.resolved)   //
 	close(iproc.failed)     //
 	iproc.outboundWG.Wait() // submitters drained: every item has been handed to a writer
