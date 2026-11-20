@@ -12,8 +12,9 @@ import (
 )
 
 func TestBothGatewaySourcesWirePlacementHolds(t *testing.T) {
-	saved := PlacementHeldGauge
-	t.Cleanup(func() { PlacementHeldGauge = saved })
+	saved, savedFallback := PlacementHeldGauge, PlacementHoldFallbackCounter
+	t.Cleanup(func() { PlacementHeldGauge, PlacementHoldFallbackCounter = saved, savedFallback })
+	PlacementHoldFallbackCounter = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "total_placement_hold_fallback"}, []string{"source", "reason"})
 	PlacementHeldGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "placement_held_messages"}, []string{"source"})
 	buildInMeteringMode(t, IngestMeteringLegacy)
 	for name, source := range map[string]interface{}{"capture": GatewaySource, "message-store": StoreSource} {
