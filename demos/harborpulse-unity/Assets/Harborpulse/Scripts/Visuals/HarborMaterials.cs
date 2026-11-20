@@ -30,7 +30,7 @@ namespace DeviceChain.Harborpulse.Visuals
 
             // the matte surfaces take no environment reflection: the reflection probe is the Editor's default sky, not this scene's
             // time of day, and at grazing angles it painted the far land and the night's facades daylight blue
-            Ground = Matte(Make("ground", new Color(0.36f, 0.40f, 0.33f), 0.1f));
+            Ground = Matte(Make("ground", new Color(0.33f, 0.39f, 0.26f), 0.1f));
             Paving = Matte(Make("paving", new Color(0.62f, 0.60f, 0.56f), 0.2f));
             Asphalt = Matte(Make("asphalt", new Color(0.13f, 0.13f, 0.14f), 0.3f));
             Stone = Matte(Make("stone", new Color(0.47f, 0.45f, 0.42f), 0.2f));
@@ -52,6 +52,38 @@ namespace DeviceChain.Harborpulse.Visuals
             BuoyGreen = Make("buoy-green", new Color(0.08f, 0.50f, 0.20f), 0.5f);
             Charger = Make("charger", new Color(0.18f, 0.42f, 0.62f), 0.5f);
             Grass = Matte(Make("grass", new Color(0.24f, 0.36f, 0.20f), 0.1f));
+
+            // the town: weathered clapboard paints, brick, cedar shingle and painted trim, with a few colour accents
+            ClapWhite = Matte(Make("clapboard-white", new Color(0.86f, 0.85f, 0.81f), 0.15f));
+            ClapCream = Matte(Make("clapboard-cream", new Color(0.84f, 0.78f, 0.64f), 0.15f));
+            ClapGrey = Matte(Make("clapboard-grey", new Color(0.60f, 0.62f, 0.62f), 0.15f));
+            ClapBlue = Matte(Make("clapboard-blue", new Color(0.44f, 0.56f, 0.66f), 0.15f));
+            ClapSage = Matte(Make("clapboard-sage", new Color(0.53f, 0.60f, 0.48f), 0.15f));
+            ClapYellow = Matte(Make("clapboard-yellow", new Color(0.86f, 0.69f, 0.35f), 0.15f));
+            BarnRed = Matte(Make("barn-red", new Color(0.52f, 0.19f, 0.15f), 0.15f));
+            Shingle = Matte(Make("cedar-shingle", new Color(0.47f, 0.43f, 0.38f), 0.1f));
+            BrickDark = Matte(Make("brick-dark", new Color(0.38f, 0.21f, 0.17f), 0.15f));
+            Trim = Matte(Make("trim", new Color(0.92f, 0.91f, 0.88f), 0.2f));
+            DoorDark = Matte(Make("door", new Color(0.12f, 0.13f, 0.14f), 0.3f));
+            RoofBrown = Matte(Make("roof-brown", new Color(0.31f, 0.25f, 0.21f), 0.2f));
+            RoofGreen = Matte(Make("roof-green", new Color(0.24f, 0.32f, 0.29f), 0.2f));
+            RoofRed = Matte(Make("roof-red", new Color(0.40f, 0.17f, 0.13f), 0.2f));
+            AwningGreen = Matte(Make("awning-green", new Color(0.12f, 0.36f, 0.27f), 0.2f));
+            AwningBlue = Matte(Make("awning-blue", new Color(0.13f, 0.30f, 0.50f), 0.2f));
+            Lane = Matte(Make("lane", new Color(0.31f, 0.31f, 0.30f), 0.25f));
+            Lawn = Matte(Make("lawn", new Color(0.30f, 0.47f, 0.21f), 0.1f));
+            Piling = Matte(Make("piling", new Color(0.26f, 0.21f, 0.16f), 0.15f));
+            HullWhite = Make("hull-white", new Color(0.90f, 0.90f, 0.88f), 0.5f);
+            HullNavy = Make("hull-navy", new Color(0.10f, 0.17f, 0.30f), 0.5f);
+            HullRed = Make("hull-red", new Color(0.62f, 0.15f, 0.12f), 0.5f);
+            // autumn foliage: greens with gold, orange and red; dark pines
+            FoliageGreen = Matte(Make("foliage-green", new Color(0.20f, 0.33f, 0.15f), 0.05f));
+            FoliageOlive = Matte(Make("foliage-olive", new Color(0.40f, 0.42f, 0.17f), 0.05f));
+            FoliageGold = Matte(Make("foliage-gold", new Color(0.78f, 0.58f, 0.14f), 0.05f));
+            FoliageOrange = Matte(Make("foliage-orange", new Color(0.80f, 0.38f, 0.09f), 0.05f));
+            FoliageRed = Matte(Make("foliage-red", new Color(0.60f, 0.15f, 0.08f), 0.05f));
+            FoliagePine = Matte(Make("foliage-pine", new Color(0.11f, 0.20f, 0.13f), 0.05f));
+            Bark = Matte(Make("bark", new Color(0.24f, 0.19f, 0.15f), 0.1f));
 
             Flow = Emissive("flow", new Color(0.1f, 0.55f, 1f), 2f);
             WorldCue = Emissive("world-cue", new Color(0.55f, 0.75f, 0.88f), 1.8f);
@@ -119,6 +151,35 @@ namespace DeviceChain.Harborpulse.Visuals
         public Material Grass { get; }
         public Material LampOn { get; }
         public Material LampOff { get; }
+        public Material ClapWhite { get; }
+        public Material ClapCream { get; }
+        public Material ClapGrey { get; }
+        public Material ClapBlue { get; }
+        public Material ClapSage { get; }
+        public Material ClapYellow { get; }
+        public Material BarnRed { get; }
+        public Material Shingle { get; }
+        public Material BrickDark { get; }
+        public Material Trim { get; }
+        public Material DoorDark { get; }
+        public Material RoofBrown { get; }
+        public Material RoofGreen { get; }
+        public Material RoofRed { get; }
+        public Material AwningGreen { get; }
+        public Material AwningBlue { get; }
+        public Material Lane { get; }
+        public Material Lawn { get; }
+        public Material Piling { get; }
+        public Material HullWhite { get; }
+        public Material HullNavy { get; }
+        public Material HullRed { get; }
+        public Material FoliageGreen { get; }
+        public Material FoliageOlive { get; }
+        public Material FoliageGold { get; }
+        public Material FoliageOrange { get; }
+        public Material FoliageRed { get; }
+        public Material FoliagePine { get; }
+        public Material Bark { get; }
 
         /// <summary>The glow round a lit lamp: the lights stand 430 m apart, and without it a lit head is a pixel from the overview.</summary>
         public Material LampHalo { get; }

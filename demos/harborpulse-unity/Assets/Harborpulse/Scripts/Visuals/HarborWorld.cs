@@ -23,6 +23,7 @@ namespace DeviceChain.Harborpulse.Visuals
         public IReadOnlyList<AssetRig> Rigs => rigs;
         public IReadOnlyList<Transform> Buoys => buoys;
         public IReadOnlyList<Vector2> BuoyRest => buoyRest;
+        public TownBuilder Town { get; private set; }
         public Dictionary<string, List<Renderer>> Masks { get; } = new Dictionary<string, List<Renderer>>();
         public Dictionary<string, QuayFrame> Frames { get; } = new Dictionary<string, QuayFrame>();
         public AssetRig Truck => rigs.First(r => r.Placement.Device.Kind == DeviceKind.Truck);
@@ -42,7 +43,7 @@ namespace DeviceChain.Harborpulse.Visuals
             w.Slab("Depot headland", (float)map.Depot.X - 36, (float)map.Depot.X + 36,
                 (float)map.Depot.Z - 26, (float)map.Depot.Z + 26, Deck, mats.Ground);
             BuildingBuilder.Depot(w.Root, V(map.Depot, Deck), mats);
-            w.Town(); w.Ridge(); w.FloodPlain(); w.Breakwaters(); w.Floats();
+            w.TownAndHills(); w.FloodPlain(); w.Breakwaters(); w.Floats();
             return w;
         }
         void Mark(string category, Transform t)
@@ -60,19 +61,18 @@ namespace DeviceChain.Harborpulse.Visuals
             var east = new TideField.Region(map.Quays["hp-east-quay"]);
             // HOME arithmetic: forward=(0,-.2326,.9726), focal=1080/(2*tan15)=2015 px.
             // At North Quay z=95 depth=526 m, 2.2 m of exposed rig is 8.4 px.
-            // With up=(0,.9726,.2326), ridge (z=265,y=22) projects to normalized y=.700,
-            // and (z=457,y=134) to y=1.000: .5 + .5*dot(up,p-camera)/(depth*tan15).
-            // Terrace roofs replace sky while remaining behind all quay rigs.
-            // The top ray at z=280 is y=129 m, so the church spire tops at 123 m.
+            // With up=(0,.9726,.2326), the top ray leaves the camera 1.55 degrees above the horizontal: the
+            // forested hills (TownBuilder.Height) fill the frame's top behind every quay rig.
             // Portrait forward=(0,-.3795,.9252), focal=1920/(2*tan26)=1968 px.
             // At Basin z=90 depth=449 m its horizontal half-width is only 123 m: the
             // prescribed 52 degree portrait pose cannot contain x=-155..-230 (see README).
-            Slab("North hinterland", -1100, 1100, (float)north.MaxZ, 3000, Deck, mats.Ground);
+            // The core round the harbour is the deck; outside it TownBuilder's terrain rises from the same height.
+            Slab("North hinterland", -TownBuilder.CoreHalfX, TownBuilder.CoreHalfX, (float)north.MaxZ, TownBuilder.CoreNorthZ, Deck, mats.Ground);
             Slab("North west connection", (float)basin.MinX, (float)north.MinX, (float)basin.MaxZ, (float)north.MaxZ, Deck, mats.Ground);
             Slab("North east connection", (float)north.MaxX, (float)east.MaxX, (float)east.MaxZ, (float)north.MaxZ, Deck, mats.Ground);
             Slab("West shoulder", (float)basin.MaxX, (float)north.MinX, (float)inner.MaxZ, (float)basin.MaxZ, Deck, mats.Ground);
-            Slab("West hinterland", -1100, (float)basin.MinX, (float)inner.MinZ, (float)north.MaxZ, Deck, mats.Ground);
-            Slab("East hinterland", (float)east.MaxX, 1100, (float)inner.MinZ, (float)north.MaxZ, Deck, mats.Ground);
+            Slab("West hinterland", -TownBuilder.CoreHalfX, (float)basin.MinX, (float)inner.MinZ, (float)north.MaxZ, Deck, mats.Ground);
+            Slab("East hinterland", (float)east.MaxX, TownBuilder.CoreHalfX, (float)inner.MinZ, (float)north.MaxZ, Deck, mats.Ground);
             Slab("Harbour floor", -9000, 9000, -9000, 3000, SeabedY, mats.Seabed);
             foreach (var token in map.Quays.Keys)
             {
@@ -138,23 +138,14 @@ namespace DeviceChain.Harborpulse.Visuals
             }
             r.Placement = actual; rigs.Add(r); Mark("device:" + d.Token, r.Root);
         }
-        void Town()
+        void TownAndHills()
         {
-            var random = new System.Random(4242);
-            for (float z = -110; z < 250; z += 24)
-                for (float x = -410; x < 410; x += 24)
-                {
-                    // All three land masses are filled; keep the water, quays, buildings,
-                    // depot, mapped truck road and mapped flood plain unobstructed.
-                    if (x > -245 && x < 240 && z < 140) continue;
-                    if (map.FenceRings.Values.Any(r => PresentationMap.Contains(r, new Ground(x, z)))) continue;
-                    if (rigs.Any(r => Vector3.Distance(V(r.Placement.At), new Vector3(x, 0, z)) < 28)) continue;
-                    if (Vector3.Distance(V(map.Depot), new Vector3(x, 0, z)) < 50) continue;
-                    if (RoadDistance(new Ground(x, z)) < 13) continue;
-                    var height = 6 + random.Next(4) * 3.2f;
-                    BuildingBuilder.House(Root, new Vector3(x, Deck, z), 16 + random.Next(5), 14, height, (int)(height / 3.2f), mats,
-                        random.Next(2) == 0 ? mats.Brick : mats.Render, x > 140 ? mats.EastWindows : mats.Windows, true);
-                }
+            // Nothing is built within 30 m of a device anchor or the depot, nor on the mapped fences or the truck road.
+            var keep = map.Anchors.Values.Select(a => new Vector2((float)a.X, (float)a.Z)).ToList();
+            keep.Add(new Vector2((float)map.Depot.X, (float)map.Depot.Z));
+            Town = TownBuilder.Build(Root, mats, keep, p =>
+                map.FenceRings.Values.Any(r => PresentationMap.Contains(r, new Ground(p.x, p.y))) || RoadDistance(new Ground(p.x, p.y)) < 13);
+            Mark("ridge", Town.Backdrop);
         }
         double RoadDistance(Ground p)
         {
@@ -166,25 +157,6 @@ namespace DeviceChain.Harborpulse.Visuals
                 best = Math.Min(best, Math.Sqrt(Math.Pow(p.X-a.X-t*dx,2)+Math.Pow(p.Z-a.Z-t*dz,2)));
             }
             return best;
-        }
-        void Ridge()
-        {
-            var t = AssetRig.Node("Backdrop ridge", Root, Vector3.zero);
-            for (var i = 0; i < 6; i++)
-            {
-                var y = 22 + i * 28;
-                new MeshKit().Slab(-1000, 1000, 265 + i * 48, 1000, 0, y).Spawn("Terrace", t, mats.Grass);
-                for (var x = -420; x < 440; x += 36)
-                    BuildingBuilder.House(t, new Vector3(x, y, 275 + i * 48), 27, 20, 12, 3, mats, mats.Render, mats.Windows, true);
-            }
-            new MeshKit().Box(new Vector3(-75, 55, 280), new Vector3(16, 60, 22))
-                .Cylinder(new Vector3(-75, 85, 280), 9, 38, 4, 0.05f).Spawn("Church spire", t, mats.Slate);
-            new MeshKit().Box(new Vector3(85, 64, 270), new Vector3(12, 85, 12))
-                .Gable(new Vector3(85, 107, 270), 16, 16, 10).Spawn("Harbour master clock tower", t, mats.Stone);
-            new MeshKit().Pipe(new Vector3(85, 93, 263.9f), Vector3.back, 3.4f, .1f, 32).Spawn("Clock face", t, mats.GaugeBoard);
-            new MeshKit().Rod(new Vector3(85, 93, 263.7f), new Vector3(85, 95.5f, 263.7f), .12f)
-                .Rod(new Vector3(85, 93, 263.7f), new Vector3(87, 93, 263.7f), .12f).Spawn("Clock hands", t, mats.DarkSteel);
-            Mark("ridge", t);
         }
         bool IsPlain(Ground p) => map.FenceRings.Any(r => r.Key.IndexOf("depot", StringComparison.OrdinalIgnoreCase) < 0 && PresentationMap.Contains(r.Value, p));
         void FloodPlain()
@@ -202,8 +174,14 @@ namespace DeviceChain.Harborpulse.Visuals
                     new MeshKit().Rod(a,b,.16f).Spawn("Fence ground decal",t,mats.WorldCue,false);
                 }
                 Slab("Low flood plain",minX,maxX,minZ,maxZ,Deck-.69f,mats.Asphalt,t);
-                for(var x=minX+3;x<maxX-2;x+=7)
-                    new MeshKit().Box(new Vector3(x,Deck+.1f,(minZ+maxZ)/2),new Vector3(1.8f,1.4f,3.8f)).Spawn("Parked car",t,mats.Render);
+                // parked cars on the low plain (its surface is 0.69 m below the deck): a body and a cabin, in a few colours
+                var paints=new[]{mats.HullWhite,mats.ClapBlue,mats.BarnRed,mats.Slate,mats.ClapGrey};var n=0;
+                for(var x=minX+3;x<maxX-2;x+=7,n++)
+                {
+                    var z=(minZ+maxZ)/2;var floor=Deck-.69f;
+                    new MeshKit().Box(new Vector3(x,floor+.55f,z),new Vector3(1.8f,.8f,4.3f)).Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.6f,.6f,2.3f)).Spawn("Parked car",t,paints[n%paints.Length]);
+                    new MeshKit().Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.64f,.42f,2.1f)).Spawn("Car glass",t,mats.Glass,false);
+                }
             }
             for(var i=1;i<map.Road.Count;i++)
             {
@@ -235,11 +213,8 @@ namespace DeviceChain.Harborpulse.Visuals
                     var t=new MeshKit().Cylinder(new Vector3(0,-.8f,0),.8f,2.6f,10,side<0?.8f:.05f).Spawn("Channel buoy",Root,side<0?mats.BuoyRed:mats.BuoyGreen).transform;
                     buoyRest.Add(new Vector2(x,z));buoys.Add(t);
                 }
-            for(var i=0;i<5;i++)
-            {
-                var t=new MeshKit().Box(Vector3.up*.5f,new Vector3(3,1,8)).Box(Vector3.up*1.7f,new Vector3(2,1.3f,3)).Spawn("Moored fishing boat",Root,mats.Render).transform;
-                buoyRest.Add(new Vector2(-105+i*43,20+(i%2)*25));buoys.Add(t);
-            }
+            // the town's moored boats ride the same surface as the buoys
+            for(var i=0;i<Town.Boats.Count;i++){buoys.Add(Town.Boats[i]);buoyRest.Add(Town.BoatRest[i]);}
         }
         public void Dispose()
         {

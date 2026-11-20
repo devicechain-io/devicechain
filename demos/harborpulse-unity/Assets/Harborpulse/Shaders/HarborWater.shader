@@ -1,10 +1,12 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The harbour water, first pass (U0): Gerstner waves over the gauges' observed tide, depth-based colour and
-// refraction from the camera's depth and opaque textures, quay-wall and crest foam, a Fresnel blend to the
-// sky and the sun's glint, and procedural rain rings during the storm. Planar reflection of the town is the
-// next pass; here the reflection is a planar pass, falling back to the sky gradient where no geometry is reflected.
+// The harbour water: Gerstner waves over the gauges' observed tide, depth-based colour and refraction from the
+// camera's depth and opaque textures, a turquoise shallow tint along the quays, quay-wall and crest foam, a
+// Fresnel blend to the sky and the sun's glint, and procedural rain rings during the storm. The town's
+// reflection is a planar pass sampled soft: blurred from its mip chain (more with distance and with the
+// ripple), stretched vertically as calm water stretches it, and faded out with distance, so it reads as a
+// reflection on moving water rather than a mirror. Where no geometry is reflected it falls back to the sky.
 //
 // It draws after the opaques and composites the refracted scene itself (Blend One Zero), so it needs the
 // URP asset's Depth Texture and Opaque Texture, which the project's PC and Laptop assets enable.
@@ -12,8 +14,11 @@ Shader "Harborpulse/Water"
 {
     Properties
     {
-        _ShallowColor ("Shallow tint", Color) = (0.16, 0.48, 0.50, 1)
-        _DeepColor ("Deep colour", Color) = (0.015, 0.075, 0.11, 1)
+        _ShallowColor ("Shallow tint", Color) = (0.20, 0.55, 0.54, 1)
+        _DeepColor ("Deep colour", Color) = (0.045, 0.20, 0.24, 1)
+        _QuayTint ("Turquoise along the quays", Color) = (0.17, 0.52, 0.50, 1)
+        _QuayTintWidth ("Turquoise width (m)", Float) = 75
+        _ReflectionStrength ("Planar reflection strength", Float) = 0.62
         _FoamColor ("Foam", Color) = (0.90, 0.94, 0.95, 1)
         _DepthFade ("Depth for full colour (m)", Float) = 7
         _FoamDistance ("Wall foam width (m)", Float) = 1.4
@@ -57,6 +62,9 @@ Shader "Harborpulse/Water"
                 float _Displace;
                 float _WaveFadeStart;
                 float _WaveFadeEnd;
+                float4 _QuayTint;
+                float _QuayTintWidth;
+                float _ReflectionStrength;
             CBUFFER_END
 
             // the sky the water reflects, and the weather, from HarborSkyController / HarborWaterController
@@ -161,6 +169,32 @@ Shader "Harborpulse/Water"
                 return slope * 0.6;
             }
 
+            // The distance to the nearest quay's rectangle (the same rectangles the tide is held along).
+            float QuayDistance(float2 xz)
+            {
+                float best = 1e6;
+                [unroll] for (int q = 0; q < 3; q++)
+                {
+                    float2 d = max(max(_TideRects[q].xy - xz, 0), xz - _TideRects[q].zw);
+                    best = min(best, length(d));
+                }
+                return best;
+            }
+
+            // The planar reflection, softened: a small vertical-biased kernel on a blurred mip. blur is in screen UV.
+            half4 SoftReflection(float2 uv, float blur, float lod)
+            {
+                const float2 taps[7] = { float2(0, 0), float2(0.35, 1.1), float2(-0.35, -1.1), float2(-0.3, 2.3), float2(0.3, -2.3), float2(1.0, 0.2), float2(-1.0, -0.2) };
+                const float weights[7] = { 0.22, 0.15, 0.15, 0.11, 0.11, 0.13, 0.13 };
+                half4 sum = 0;
+                [unroll] for (int k = 0; k < 7; k++)
+                {
+                    half4 c = SAMPLE_TEXTURE2D_LOD(_PlanarReflectionTex, sampler_PlanarReflectionTex, saturate(uv + taps[k] * blur), lod);
+                    sum += half4(c.rgb * c.a, c.a) * weights[k];
+                }
+                return half4(sum.rgb / max(sum.a, 1e-3), sum.a);
+            }
+
             float3 SkyColour(float3 dir)
             {
                 float up = saturate(dir.y);
@@ -183,24 +217,27 @@ Shader "Harborpulse/Water"
                 HarborWaves(i.restXZ, i.waveScale, offset, n);
                 // the fine ripples and the rain rings are smaller than a pixel a few hundred metres out: fade them before they sparkle
                 float camDist = distance(i.positionWS, _WorldSpaceCameraPos);
-                float2 detail = DetailSlope(i.restXZ, _WaterTime) * (0.05 + 0.10 * _HarborStorm) * saturate(1.0 - camDist / 700.0);
+                float2 detail = DetailSlope(i.restXZ, _WaterTime) * (0.06 + 0.10 * _HarborStorm) * saturate(1.0 - camDist / 700.0);
                 float2 rain = RainSlope(i.restXZ, _WaterTime) * _HarborRain * saturate(1.0 - camDist / 160.0);
                 n = normalize(n + float3(-detail.x - rain.x, 0, -detail.y - rain.y));
                 if (!frontFace) n = -n;
 
                 float3 v = normalize(GetWorldSpaceViewDir(i.positionWS));
                 float ndv = saturate(dot(n, v));
-                float fresnel = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+                // a little under the physical Fresnel at grazing angles: from the harbour's camera heights a full mirror hides the water's colour
+                float fresnel = 0.02 + 0.80 * pow(1.0 - ndv, 5.0);
 
                 float4 shadowCoord = TransformWorldToShadowCoord(i.positionWS);
                 Light sun = GetMainLight(shadowCoord);
                 float3 r = reflect(-v, n);
                 r.y = abs(r.y);
                 float3 reflection = SkyColour(r);
-                float2 reflectionUV = GetNormalizedScreenSpaceUV(i.positionCS) + n.xz * 0.018;
-                half4 planar = SAMPLE_TEXTURE2D(_PlanarReflectionTex, sampler_PlanarReflectionTex, saturate(reflectionUV));
+                // the ripple breaks the reflection up; the blur grows with distance, where a pixel spans more water
+                float far = saturate(camDist / 600.0);
+                float2 reflectionUV = GetNormalizedScreenSpaceUV(i.positionCS) + n.xz * (0.03 + 0.03 * _HarborStorm);
+                half4 planar = SoftReflection(reflectionUV, 0.0035 + 0.006 * far, 1.0 + 1.5 * far);
                 float border = saturate(min(min(reflectionUV.x, 1-reflectionUV.x), min(reflectionUV.y, 1-reflectionUV.y)) * 30);
-                float reflected = _PlanarReflectionOn * saturate(planar.a) * border * (1 - smoothstep(450, 1800, camDist));
+                float reflected = _PlanarReflectionOn * saturate(planar.a) * border * (1 - smoothstep(300, 1100, camDist)) * _ReflectionStrength;
                 reflection = lerp(reflection, planar.rgb, reflected);
                 float glint = pow(saturate(dot(r, sun.direction)), 900.0) * 18.0 + pow(saturate(dot(r, sun.direction)), 90.0) * 0.6;
                 float3 specular = glint * sun.color * sun.shadowAttenuation * (1.0 - 0.85 * _HarborStorm);
@@ -223,6 +260,12 @@ Shader "Harborpulse/Water"
                 float3 deep = HarborWaterLight(_DeepColor.rgb, n, v, sun.direction, sun.color * (1.0 - 0.7 * _HarborStorm), ambient * 1.4);
                 float absorb = 1.0 - exp(-waterDepth / max(_DepthFade, 0.01));
                 float3 body = lerp(under * _ShallowColor.rgb * 1.6, deep, absorb);
+                // turquoise over the shallows along the quays, lit like the body; the storm greys the whole harbour down
+                float shallow = 1.0 - smoothstep(2.0, _QuayTintWidth, QuayDistance(i.restXZ));
+                float3 tint = HarborWaterLight(_QuayTint.rgb, n, v, sun.direction, sun.color * (1.0 - 0.7 * _HarborStorm), ambient * 1.6);
+                body = lerp(body, tint, shallow * 0.55);
+                float grey = dot(body, float3(0.3, 0.5, 0.2));
+                body = lerp(body, grey * float3(0.82, 0.95, 0.98), _HarborStorm * 0.45);
 
                 float3 colour = lerp(body, reflection, fresnel) + specular;
 
