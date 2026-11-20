@@ -80,6 +80,10 @@ func seedReincarnation(t *testing.T, api *Api, tenant string) {
 	}
 	_, err := api.DeleteAnchorsForEntity(ctx, "device", "pump-1", reincarnationDeletedAt)
 	require.NoError(t, err)
+	// A CUSTOMER that shares the bystander's token was deleted after everything above: it is
+	// not a device, so it bounds no read of the device "pump-2".
+	_, err = api.DeleteAnchorsForEntity(ctx, "customer", "pump-2", reincarnationDeletedAt.Add(24*time.Hour))
+	require.NoError(t, err)
 }
 
 // wantReincarnation is the readings a read of token must return: its current incarnation's.
@@ -198,4 +202,53 @@ func TestATenantWideReadIsNotBoundedByADeletion(t *testing.T) {
 		}
 	}
 	assert.Len(t, events.Results, parents)
+}
+
+// A failed lookup of the deletion bound fails the read: answering without it would return
+// the deleted device's events as the current one's. The sqlite fixture here has no
+// watermark table at all, which is a lookup that cannot succeed.
+func TestATokenReadFailsWhenTheDeletionBoundCannotBeRead(t *testing.T) {
+	api := newPersistenceTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	require.NoError(t, api.RDB.DB(core.WithSystemContext(context.Background())).
+		Exec("DROP TABLE entity_deletion_watermarks").Error)
+	token := "pump-1"
+	criteria := EventSearchCriteria{Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}, DeviceToken: &token}
+	_, err := api.Events(ctx, criteria)
+	assert.Error(t, err, "events: a token read without its bound must fail")
+	_, err = api.MeasurementEvents(ctx, criteria)
+	assert.Error(t, err, "measurements: a token read without its bound must fail")
+
+	// A read naming no token needs no bound and still answers.
+	_, err = api.Events(ctx, EventSearchCriteria{Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}})
+	assert.NoError(t, err)
+}
+
+// The name count that sizes a bucketed read is bounded like the read: a reused token's
+// deleted device reported names the current one never did, and they must not count.
+func TestTheBucketedNameCountSeesOnlyTheCurrentIncarnation(t *testing.T) {
+	api := newPersistenceTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	for i, f := range []struct {
+		name     string
+		received time.Duration
+	}{{"old-a", -time.Hour}, {"old-b", -time.Hour}, {"temp", time.Hour}} {
+		ev := Event{DeviceToken: "pump-1", EventType: eventtype.Measurement, Source: "mqtt",
+			OccurredTime:  reincarnationDeletedAt.Add(f.received),
+			ProcessedTime: reincarnationDeletedAt.Add(f.received)}
+		ev.EventId = DeriveEventId("acme", &ev, []byte{byte(i)})
+		_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx), []*MeasurementEventCreateRequest{{
+			Event: ev, EntryOccurredTime: ev.OccurredTime, Name: f.name, Value: f64(1)}})
+		require.NoError(t, err)
+	}
+	_, err := api.DeleteAnchorsForEntity(ctx, "device", "pump-1", reincarnationDeletedAt)
+	require.NoError(t, err)
+	token := "pump-1"
+	incarnation, err := api.deviceIncarnationBound(ctx, &token)
+	require.NoError(t, err)
+	require.True(t, incarnation.active(), "precondition: the deletion is recorded")
+	names, err := api.distinctMeasurementNames(ctx, MeasurementAggregationCriteria{DeviceToken: &token},
+		incarnation, false, 100)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, names, "only the current device's names size the read")
 }
