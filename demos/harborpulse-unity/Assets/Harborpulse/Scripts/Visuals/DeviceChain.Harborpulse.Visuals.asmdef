@@ -6,7 +6,9 @@
         "DeviceChain.Harborpulse.Live",
         "DeviceChain.Demos.Core",
         "DeviceChain.Demos.Platform",
-        "DeviceChain.Sdk.Unity"
+        "DeviceChain.Sdk.Unity",
+        "Unity.RenderPipelines.Core.Runtime",
+        "Unity.RenderPipelines.Universal.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

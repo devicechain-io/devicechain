@@ -62,7 +62,9 @@ func FinalDelivery(msg Message) bool { return msg.NumDelivered >= MaxDeliver }
 //   - Retry, on ANY delivery, when err is (or wraps) ErrHoldReleased: shutdown ended a store hold
 //     and the message was never judged.
 //   - Retry, on ANY delivery, when err is (or wraps) ErrUnplacedTenant: placement is
-//     unavailable, so this is not a failure of the message.
+//     unavailable, so this is not a failure of the message. A forwarding consumer must
+//     hold a final-delivery placement refusal and keep it alive with InProgress:
+//     leaving it unacked alone exhausts it and the max-delivery recorder letters it.
 //   - TenantErased, on ANY delivery, when err is (or wraps) the erasure fence's refusal. It
 //     comes first, so the final delivery of an erased tenant's message is not lettered either.
 //   - Exhausted on the final delivery (NumDelivered >= MaxDeliver).

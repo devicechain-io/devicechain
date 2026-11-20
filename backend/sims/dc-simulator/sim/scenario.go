@@ -47,6 +47,13 @@ func ConfigureScenario(s Sim, o ScenarioOptions) error {
 	return c.ConfigureScenario(o)
 }
 
+// ScenarioBeat is one declared story window, in sim hours.
+type ScenarioBeat struct {
+	Name string  `json:"name"`
+	From float64 `json:"from"`
+	To   float64 `json:"to"`
+}
+
 // ScenarioClock is the /status view of a story scenario's compressed day: where in the day the
 // run is, and what a verifier needs to map a sim time to the wall clock. It is additive JSON on
 // the sim's own control API, which only dcctl, scripts and the scenario verifier read.
@@ -54,7 +61,8 @@ func ConfigureScenario(s Sim, o ScenarioOptions) error {
 // 🔴 THE JSON TAGS ARE THE CONTRACT with cmd/scenario-verify, which maps a beat's sim time to wall
 // time as StartedAt + ((Day*24 + hour) - StartHour) / 24 * DayLength.
 type ScenarioClock struct {
-	Name string `json:"name"`
+	S5   *ScenarioS5 `json:"s5,omitempty"`
+	Name string      `json:"name"`
 	// Started is false until the first tick, which is the instant the day is measured from.
 	Started bool `json:"started"`
 	// StartedAt is that first tick, RFC 3339 with nanoseconds; empty until Started.
@@ -69,14 +77,18 @@ type ScenarioClock struct {
 	// SimTime is SimHour as HH:MM.
 	SimTime string `json:"simTime"`
 	// Beat names the story beats in progress, comma separated, or "quiet".
-	Beat string `json:"beat"`
+	Beat  string         `json:"beat"`
+	Beats []ScenarioBeat `json:"beats,omitempty"`
 	// Defects are the planted defects this run carries; omitted when it carries none.
 	Defects []string `json:"defects,omitempty"`
 	// Backfill is what each store-and-forward device buffered in each outage so far.
 	Backfill []ScenarioBackfill `json:"backfill,omitempty"`
 	// Jobs are the campaigns and maintenance-window openings the sim scheduled for each day.
-	Jobs                []ScenarioJob            `json:"jobs,omitempty"`
-	ThresholdChanges    []ThresholdChange        `json:"thresholdChanges,omitempty"`
+	Jobs             []ScenarioJob     `json:"jobs,omitempty"`
+	ThresholdChanges []ThresholdChange `json:"thresholdChanges,omitempty"`
+	// LayoutDigest is the lowercase hex SHA-256 of the scene layout file this sim generates
+	// (harborpulse only), so a scene can tell it was built for another layout.
+	LayoutDigest        string                   `json:"layoutDigest,omitempty"`
 	CalculatedBackfills []CalculatedBackfillBeat `json:"calculatedBackfills,omitempty"`
 }
 
@@ -92,6 +104,10 @@ type ScenarioBackfill struct {
 	// Times is when each buffered reading was taken, oldest first, RFC 3339 with nanoseconds: the
 	// exact set a verifier holds the stored readings in [First, Last] to.
 	Times []string `json:"times"`
+	// PowerKW parallels Times: the value TAKEN, before any delivery or retry.
+	PowerKW []float64 `json:"powerKw"`
+	// Values parallels Times and declares every metric taken before delivery.
+	Values []map[string]float64 `json:"values"`
 }
 
 // ScenarioClockReporter is a Sim with a compressed day to report on /status.

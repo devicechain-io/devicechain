@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -564,7 +565,7 @@ func TestCrlPostgresUploadToAnAnchorDeletedMidWaitIsRefusedInWords(t *testing.T)
 	holder := f.mgr.Database.WithContext(f.ctx).Begin()
 	require.NoError(t, holder.Error)
 	defer holder.Rollback()
-	require.NoError(t, lockCrlWriters(holder, f.tenant, doomed.ID))
+	require.NoError(t, identity.LockCrlWriters(holder, f.tenant, doomed.ID))
 
 	done := make(chan error, 1)
 	go func() {

@@ -1,0 +1,4 @@
++810|4b|caption|Running, but moving nothing. / Critical.|3:run5:alarm33:alarm:hp-pump-basin:pump-air-lock13:hp-pump-basin13:pump-air-lock32:cycle-hp-pump-basinpump-air-lock0:0:6:RAISED8:PLATFORM
++810|4b|follow|hp-pump-basin|
+-810|4b|caption|Running, but moving nothing. / Critical.|3:run5:alarm32:alarm:hp-pump-east:pump-air-lock12:hp-pump-east13:pump-air-lock31:cycle-hp-pump-eastpump-air-lock0:0:6:RAISED8:PLATFORM
+-810|4b|follow|hp-pump-east|

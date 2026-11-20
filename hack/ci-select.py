@@ -207,6 +207,8 @@ READERS = [
     # (documents_test.go validateDocuments: ../../<target>/graphql).
     ("backend/services/ai-inference", "inference", ["backend/services/user-management/graphql/**"], [], "inference/documents_test.go"),
     ("backend/services/notification-management", "processor", ["backend/services/device-management/graphql/**"], [], "processor/documents_test.go"),
+    # suppression_rolling_matrix_test.go:77 — the served device-management SDL, with alarmSuppressionStatus cut out to model an old server.
+    ("backend/services/notification-management", "processor", ["backend/services/device-management/graphql/schema.graphql"], [], "processor/suppression_rolling_matrix_test.go:77"),
     ("backend/services/event-sources", "adapter", [
         "backend/services/device-management/graphql/**",
         "backend/services/device-state/graphql/**",
@@ -242,13 +244,17 @@ READERS = [
         "backend/services/event-processing/internal/review/testdata/**",
         "demos/**",
     ], [], "sim/*_test.go"),
-    # scenarioverify/documents_test.go:21 reads the served SDL of the four areas the verifier queries
-    # (documents_test.go:47-59: device-management, command-delivery, event-management, event-processing).
+    # scenarioverify/documents_test.go:21 reads the served SDL of every area the verifier queries
+    # (verifierDocuments: device-management, command-delivery, event-management, event-processing,
+    # outbound-connectors, notification-management, update-management).
     ("backend/sims/dc-simulator", "scenarioverify", [
         "backend/services/device-management/graphql/**",
         "backend/services/command-delivery/graphql/**",
         "backend/services/event-management/graphql/**",
         "backend/services/event-processing/graphql/**",
+        "backend/services/outbound-connectors/graphql/**",
+        "backend/services/notification-management/graphql/**",
+        "backend/services/update-management/graphql/**",
     ], [], "scenarioverify/documents_test.go:21"),
     ("backend/sims/dc-simulator", "updater", ["backend/core/ota/testdata/**"], [], "updater/*_test.go"),
     # signer_baseline_test.go:24 loads ../../services as a baseline tree: each area's served graphql SDL.
@@ -294,6 +300,7 @@ IN_MODULE = {
     ("backend/services/event-processing", "internal/nldraft"): "reads inside its own module",
     ("backend/services/event-processing", "internal/nightshift"): "runtime.Caller root is its own module",
     ("backend/services/event-processing", "internal/rules"): "\"../../etc/passwd\" and ../replayinput are fixtures/in-module",
+    ("backend/services/event-processing", "processor"): "suppression_isolation_test.go walks \"..\", its own module root",
     ("backend/services/user-management", "identity"): "\"../\" is a refused-redirect fixture",
     ("backend/sims/dc-simulator", "cmd/nightshift-capture"): "a generator run by hand, never by a test",
     ("backend/sims/dc-simulator", "scenariosink"): "\"..\" is SMTP dot-stuffing in a DATA line; it reads no files",

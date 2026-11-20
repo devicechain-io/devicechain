@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -401,7 +402,7 @@ func TestRevocationLookupFailsClosed(t *testing.T) {
 	})
 	t.Run("more identities than a verified path can hold", func(t *testing.T) {
 		big := x509trust.RevocationQuery{}
-		for i := 0; i <= maxRevocationLookupKeys; i++ {
+		for i := 0; i <= identity.MaxRevocationLookupKeys; i++ {
 			big.Fingerprints = append(big.Fingerprints, fmt.Sprintf("%064x", i))
 		}
 		_, err := f.api.ResolveX509Revocation(f.ctx, f.freshAnchor(), big, now)
@@ -524,7 +525,7 @@ func TestRevocationReadRefusesAMalformedStoredRow(t *testing.T) {
 	sys := core.WithSystemContext(f.ctx)
 	require.NoError(t, f.api.RDB.DB(sys).Create(&DeviceRevokedCertificate{TenantId: partialUpdateTenant, TrustAnchorId: f.anchor.ID,
 		Kind: "WEIRD", Fingerprint: &fp, Reason: "unspecified", RevokedAt: time.Now(), CreatedAt: time.Now()}).Error)
-	require.NoError(t, bumpRevocationRows(f.api.RDB.DB(f.ctx), f.anchor.ID, 1))
+	require.NoError(t, identity.BumpRevocationRows(f.api.RDB.DB(f.ctx), f.anchor.ID, 1))
 	// The kind column is the guard here: the read only selects MANUAL and CRL, so a WEIRD row is
 	// invisible to it, which is the safe reading; a MANUAL row with no fingerprint cannot match.
 	_, err := f.decide(v)

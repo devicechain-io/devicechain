@@ -296,7 +296,7 @@ func crlRevocationKickTargets(tx *gorm.DB, tenant string, anchorId uint, issuer 
 }
 
 // stashCrlKickSerials is the CRL upload's step 2a, BEFORE the anchor row is locked: the serials the
-// upload newly revoked (crlNewTable, built before the entries were written) are copied to the durable
+// upload newly revoked (identity.CrlNewTable, built before the entries were written) are copied to the durable
 // table under a fresh generation, which the marker of step 2b carries. 0 when nothing is owed.
 func (api *Api) stashCrlKickSerials(tx *gorm.DB, tenant string, anchorId uint) (int64, error) {
 	if api.SessionKicker == nil {

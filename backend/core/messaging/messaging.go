@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -331,7 +332,8 @@ type Message struct {
 	// NATS message headers by the writer and populated from them by the reader.
 	Headers map[string]string
 
-	ack Acknowledger
+	onAck func()
+	ack   Acknowledger
 	// origin is where a consumed message came from; see Origin.
 	origin Origin
 	// slot is this message's claim on a capacity reader's pool (ReaderWithCapacity), and
@@ -434,6 +436,9 @@ func NewConsumedMessage(subject string, value []byte, numDelivered int, headers 
 // with a slot of its own.
 func (m Message) Ack() error {
 	defer m.Release()
+	if m.onAck != nil {
+		m.onAck()
+	}
 	if m.ack == nil {
 		return nil
 	}
@@ -1074,4 +1079,22 @@ func GroupSuffix(suffix string, group int) string {
 		return suffix
 	}
 	return suffix + "-g" + strconv.Itoa(group)
+}
+
+// WithAckCallback returns a copy whose Ack calls callback once, before attempting
+// the transport ack (including a failed ack). All message metadata, transport
+// capabilities, origin and capacity ownership are preserved. The original is
+// unchanged. Copies share the callback's once; existing callbacks are retained.
+func (m Message) WithAckCallback(callback func()) Message {
+	if callback == nil {
+		return m
+	}
+	previous := m.onAck
+	m.onAck = sync.OnceFunc(func() {
+		if previous != nil {
+			previous()
+		}
+		callback()
+	})
+	return m
 }

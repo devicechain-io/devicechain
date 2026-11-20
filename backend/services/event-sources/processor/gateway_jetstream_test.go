@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -437,16 +438,19 @@ func TestUnplacedCaptureIsHeldAtMaxDeliver(t *testing.T) {
 			counter := prometheus.NewCounter(prometheus.CounterOpts{Name: "placement_unavailable"})
 			h := newCaptureHarnessWith(t, func(s *GatewayJetStreamSource) {
 				s.UsePlacementUnavailableCounter(counter)
+				s.UsePlacementCheck(func(string) error { return messaging.ErrUnplacedTenant })
+				s.finalHoldBeat, s.finalHoldPoll = 5*time.Millisecond, 5*time.Millisecond
 			})
 			h.publishErr = errors.New("plain publish failure")
 			if unplaced {
 				h.publishErr = fmt.Errorf("forward: %w", messaging.ErrUnplacedTenant)
 			}
-			ack := &recordingAck{}
+			ack := &progressAck{}
 			h.source.handle(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, 11, ack))
 			h.quiesce(t, 1)
 			_, failed, _, _ := h.counts()
 			if unplaced {
+				require.Eventually(t, func() bool { return ack.beats.Load() >= 3 }, time.Second, time.Millisecond)
 				require.Zero(t, failed)
 				require.Zero(t, ack.counts())
 				require.Equal(t, 1.0, testutil.ToFloat64(counter))
@@ -974,4 +978,65 @@ func TestCaptureTracingDisabledLeavesTheEventUntraced(t *testing.T) {
 	events := h.publishedEvents()
 	require.Len(t, events, 1)
 	require.Nil(t, events[0].TraceContext)
+}
+
+// progressAck is a recordingAck that also counts InProgress, the beat that keeps a held
+// delivery from expiring.
+type progressAck struct {
+	recordingAck
+	beats atomic.Int64
+}
+
+func (a *progressAck) InProgress() error {
+	a.beats.Add(1)
+	return nil
+}
+
+// 🔴 A FINAL delivery refused for placement cannot be redelivered: the broker's MaxDeliver is
+// spent, so leaving it unacked hands it to the max-delivery recorder, which letters the capture
+// WITHOUT its payload and removes it from the work queue. Placement is not about the message,
+// so it is HELD instead: kept alive with InProgress while placement is unavailable, and run
+// again in-process once placement is back, then acked on a durable publish. Never sent to
+// failed-decode.
+func TestFinalDeliveryRefusedForPlacementIsHeldAndRecovered(t *testing.T) {
+	var placed atomic.Bool
+	h := newCaptureHarnessWith(t, func(s *GatewayJetStreamSource) {
+		s.UsePlacementCheck(func(tenant string) error {
+			if tenant != "acme" {
+				return fmt.Errorf("unexpected tenant %q", tenant)
+			}
+			if !placed.Load() {
+				return fmt.Errorf("check: %w", messaging.ErrUnplacedTenant)
+			}
+			return nil
+		})
+		s.finalHoldBeat, s.finalHoldPoll = 5*time.Millisecond, 5*time.Millisecond
+	})
+	h.mu.Lock()
+	h.publishErr = fmt.Errorf("forward: %w", messaging.ErrUnplacedTenant)
+	h.mu.Unlock()
+	ack := &progressAck{}
+	h.source.handle(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, 21, ack))
+	h.quiesce(t, 1)
+
+	// Held: beaten, not acked, not routed to failed-decode, while placement stays unavailable.
+	require.Eventually(t, func() bool { return ack.beats.Load() >= 3 }, 2*time.Second, time.Millisecond,
+		"a held final delivery must be kept alive with InProgress, or the broker exhausts it")
+	_, failed, _, _ := h.counts()
+	require.Zero(t, failed, "a placement refusal is not poison")
+	require.Zero(t, ack.counts(), "nothing was stored, so nothing may be acked")
+
+	// Placement comes back: the message is run again and acked once its publish lands.
+	h.mu.Lock()
+	h.publishErr = nil
+	h.mu.Unlock()
+	placed.Store(true)
+	require.Eventually(t, func() bool { return ack.counts() == 1 }, 2*time.Second, time.Millisecond,
+		"a held final delivery must be recovered once placement is available")
+	_, failed, _, _ = h.counts()
+	require.Zero(t, failed)
+	beats := ack.beats.Load()
+	time.Sleep(30 * time.Millisecond)
+	require.Equal(t, beats, ack.beats.Load(), "a recovered message is no longer beaten")
+	require.Equal(t, 1, ack.counts(), "acked exactly once")
 }

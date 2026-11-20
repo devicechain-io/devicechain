@@ -13,9 +13,9 @@ here="$(cd "$(dirname "$0")" && pwd)"
 proj="$here/UnityCompileCheck.csproj"
 
 echo "== tier-1: desktop branch (#else / ClientWebSocket) =="
-dotnet build "$proj" -c Desktop
+dotnet build "$proj" -c Desktop "$@"
 
 echo "== tier-1: WebGL branch (#if UNITY_WEBGL / .jslib P/Invoke) =="
-dotnet build "$proj" -c WebGL
+dotnet build "$proj" -c WebGL "$@"
 
 echo "tier-1 compile check passed (both platform branches)."

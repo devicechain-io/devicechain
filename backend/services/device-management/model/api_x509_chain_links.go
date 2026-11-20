@@ -11,7 +11,6 @@ import (
 	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/rs/zerolog/log"
-	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -24,19 +23,6 @@ import (
 // stored with a credential and a device presents its intermediates at every connect, so a
 // credential created through one cross-signed path may connect through another. The connect path
 // never reads them.
-
-// writeChainLinks records the links of a credential just inserted, in the credential's own
-// transaction. It is idempotent on (credential, depth).
-func writeChainLinks(tx *gorm.DB, credentialId, anchorId uint, chain []*x509.Certificate) error {
-	links, err := identity.ChainLinksOf(credentialId, anchorId, chain)
-	if err != nil {
-		return err
-	}
-	if len(links) == 0 {
-		return nil
-	}
-	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&links).Error
-}
 
 // legacyLinkBatch is how many credentials one reconciler statement handles.
 const legacyLinkBatch = 500

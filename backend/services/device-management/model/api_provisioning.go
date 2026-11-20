@@ -218,7 +218,7 @@ func (api *Api) CreateProvisioningProfile(ctx context.Context, request *Provisio
 		if x509Profile {
 			// The anchor is held FOR SHARE and re-checked, as for a credential: it was read
 			// before this transaction.
-			locked, err := lockTrustAnchorShareByToken(tx, anchorToken)
+			locked, err := identity.LockTrustAnchorShareByToken(tx, anchorToken)
 			if err != nil {
 				return err
 			}

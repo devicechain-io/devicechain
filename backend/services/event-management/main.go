@@ -64,7 +64,8 @@ var (
 	EntityDeletedReader    messaging.MessageReader
 	EntityAnchorReconciler *processor.EntityAnchorReconciler
 
-	AnchorSweep *processor.AnchorReconciliationSweep
+	AnchorSweep           *processor.AnchorReconciliationSweep
+	EntityDeletionResweep *processor.EntityDeletionResweep
 
 	// BackfillMetrics is built once in the initialize phase, like PersistMetrics, and
 	// BackfillWorker is the calculated-metric backfill worker, nil when it is switched off.
@@ -451,6 +452,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// Build the reconciliation sweep (ADR-044 decision 3), the backstop for
 			// entity-deletion events missed by the primary consumer. It needs the Api and
 			// nothing else, which is what makes this the right side of the sequence for it.
+			EntityDeletionResweep = processor.NewEntityDeletionResweep(Microservice, Api, core.NewNoOpLifecycleCallbacks())
+			if err := EntityDeletionResweep.Initialize(ctx); err != nil {
+				return err
+			}
 			if err := wireAnchorSweep(ctx, peers); err != nil {
 				return err
 			}
@@ -523,6 +528,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	if EntityDeletionResweep != nil {
+		if err := EntityDeletionResweep.Start(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Start the reconciliation sweep, if configured.
 	if AnchorSweep != nil {
 		if err := AnchorSweep.Start(ctx); err != nil {
@@ -572,6 +583,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 	if RollupTail != nil {
 		if err := RollupTail.Stop(ctx); err != nil {
+			return err
+		}
+	}
+
+	if EntityDeletionResweep != nil {
+		if err := EntityDeletionResweep.Stop(ctx); err != nil {
 			return err
 		}
 	}
@@ -635,6 +652,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if EntityDeletionResweep != nil {
+		if err := EntityDeletionResweep.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	// GraphQL, then NATS, then Rdb — the same order as the stop above.
 	//
 	// This service used to terminate NATS first. The change is not observable:

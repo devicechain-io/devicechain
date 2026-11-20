@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // DeleteAnchorsForEntity (ADR-044) removes a deleted entity's anchors: a device by
@@ -208,6 +209,91 @@ func assertAnchorCleanupByReceiptTime(t *testing.T, api *Api) {
 			var parents int64
 			require.NoError(t, api.RDB.DB(ctx).Model(&Event{}).Count(&parents).Error)
 			assert.Equal(t, int64(4), parents, "cleanup only removes anchors")
+		})
+	}
+}
+
+// An event RECEIVED before an entity's deletion was resolved against the old entity, but the
+// pipeline may persist it AFTER the deletion cleanup has run (lag, a backlog, a redelivery, an
+// outage here). Its anchors must not come back: a re-created entity with the same token would
+// otherwise read the old one's events through them. Anchors of events received at or after the
+// deletion (the re-created entity's) are kept. The same predicate as the cleanup itself.
+func TestAnchorsPersistedAfterDeletionCleanupAreNotReinserted(t *testing.T) {
+	assertAnchorsPersistedAfterCleanupAreDropped(t, newPersistenceTestApi(t))
+}
+
+func assertAnchorsPersistedAfterCleanupAreDropped(t *testing.T, api *Api) {
+	t.Helper()
+	for _, target := range []struct {
+		name, entityType, entityToken, device, anchorType, anchorToken string
+	}{
+		{"device_source", "device", "pump-8", "pump-8", "customer", "cust-8"},
+		{"customer_target", "customer", "cust-8", "pump-8", "customer", "cust-8"},
+		{"device_target", "device", "pump-8", "tracker", "device", "pump-8"},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			tenant := "late-" + target.name
+			ctx := core.WithTenant(context.Background(), tenant)
+			deletedAt := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+
+			// The deletion fact is handled first, while nothing of the old entity is stored yet.
+			removed, err := api.DeleteAnchorsForEntity(ctx, target.entityType, target.entityToken, deletedAt)
+			require.NoError(t, err)
+			require.Zero(t, removed)
+
+			var keep [][]byte
+			for _, fixture := range []struct {
+				name                string
+				occurred, processed time.Duration
+				survives            bool
+			}{
+				{"received_before", -time.Hour, -time.Minute, false},
+				{"buffered_old_clock", -2 * time.Hour, -time.Second, false},
+				{"at_cutoff", -3 * time.Hour, 0, true},
+				{"recreated", time.Minute, time.Minute, true},
+			} {
+				event := Event{
+					DeviceToken: target.device, EventType: eventtype.Measurement,
+					OccurredTime:  deletedAt.Add(fixture.occurred),
+					ProcessedTime: deletedAt.Add(fixture.processed), Source: "mqtt",
+				}
+				event.EventId = DeriveEventId(tenant, &event, []byte(fixture.name))
+				require.NoError(t, api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+					if err := tx.Create(&event).Error; err != nil {
+						return err
+					}
+					return api.CreateEventAnchors(ctx, tx, []*EventAnchor{{
+						EventId: event.EventId, DeviceToken: event.DeviceToken, EventType: event.EventType,
+						OccurredTime: event.OccurredTime, AnchorType: target.anchorType, AnchorToken: target.anchorToken,
+					}})
+				}))
+				if fixture.survives {
+					keep = append(keep, event.EventId)
+				}
+			}
+			var remaining [][]byte
+			require.NoError(t, api.RDB.DB(ctx).Model(&EventAnchor{}).Pluck("event_id", &remaining).Error)
+			assert.ElementsMatch(t, keep, remaining,
+				"an anchor of an event received before the deletion must not be re-inserted after its cleanup; "+
+					"one received at or after it (the re-created entity's) must be kept")
+
+			// Another tenant's same-token entity is untouched by this tenant's deletion.
+			other := core.WithTenant(context.Background(), tenant+"-other")
+			event := Event{DeviceToken: target.device, EventType: eventtype.Measurement,
+				OccurredTime: deletedAt.Add(-time.Hour), ProcessedTime: deletedAt.Add(-time.Hour), Source: "mqtt"}
+			event.EventId = DeriveEventId(tenant+"-other", &event, []byte("other"))
+			require.NoError(t, api.RDB.DB(other).Transaction(func(tx *gorm.DB) error {
+				if err := tx.Create(&event).Error; err != nil {
+					return err
+				}
+				return api.CreateEventAnchors(other, tx, []*EventAnchor{{
+					EventId: event.EventId, DeviceToken: event.DeviceToken, EventType: event.EventType,
+					OccurredTime: event.OccurredTime, AnchorType: target.anchorType, AnchorToken: target.anchorToken,
+				}})
+			}))
+			var n int64
+			require.NoError(t, api.RDB.DB(other).Model(&EventAnchor{}).Count(&n).Error)
+			assert.Equal(t, int64(1), n, "a deletion is scoped to its own tenant")
 		})
 	}
 }

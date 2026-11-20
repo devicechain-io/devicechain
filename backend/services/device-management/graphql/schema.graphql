@@ -7619,12 +7619,12 @@ type Mutation {
         """Partial edit with omitted, null and value states."""
         request: AlarmSuppressionWindowUpdateRequest!
     ): AlarmSuppressionWindow!
-    """End a whole visible window now, recording the caller's subject. Requires the existing window's write authorities."""
+    """End a whole visible window now, recording the caller's subject. Requires alarm:write and visibility of the window."""
     endAlarmSuppressionWindow(
         """Token of the window to end."""
         token: String!
     ): AlarmSuppressionWindow!
-    """Delete a whole visible window without removing cycle history. Requires the existing window's write authorities."""
+    """Delete a whole visible window without removing cycle history. Requires the authorities that creating it needed."""
     deleteAlarmSuppressionWindow(
         """Token of the window to delete."""
         token: String!

@@ -152,10 +152,38 @@ func upper(s string) string {
 // Atlantic water south-west of Ireland, where no settlement is, so a map that draws the scenario
 // never puts the fictional town on a real one. (The first coordinates sat on a real harbour town.)
 // Keep any new coordinate within a few kilometres of these.
+//
+// Both sites stand BEHIND EAST QUAY, as the fence's name says. The harbour water is north of the
+// promenade the lights stand along and the town is south of it (the 3D scene's literal frame draws
+// it so), so behind is SOUTH: inland of East Quay's lamps (longitudes -12.170 to -12.152), the
+// depot further inland than the plain. The truck drives due north from the depot into the plain
+// and back, and it crosses the plain's southern edge three quarters of the way out, which is
+// HarborpulseTruckInPlainFrom. TestHarborpulseSitesStandBehindEastQuay holds all of that.
+//
+// At 17:45 and 21:45 exactly the fix lies on the edge (the same float64 as the ring's latitude).
+// The platform's containment is boundary-inclusive with geodesic edges, so its transition is
+// within a fraction of a second of the cue; the verifier's poll tolerance absorbs that.
 const (
-	harborDepotLat, harborDepotLon = 49.8000, -12.2100
-	harborPlainLat, harborPlainLon = 49.8020, -12.2000
+	harborDepotLat, harborDepotLon = 49.7940, -12.1610
+	harborPlainLat, harborPlainLon = 49.8000, -12.1610
+	// harborPlainHalfLat and harborPlainHalfLon are the plain fence's half extents: its southern
+	// edge (49.7985) is a quarter of the depot-to-plain leg short of the plain's centre.
+	harborPlainHalfLat, harborPlainHalfLon = 0.0015, 0.0045
+	harborDepotHalfLat, harborDepotHalfLon = 0.0004, 0.0006
 )
+
+// The truck's day, sim hours: it leaves the depot, parks in the plain, sets off home and is back.
+const (
+	harborTruckDepart = 17.0
+	harborTruckParked = 18.0
+	harborTruckReturn = 21.5
+	harborTruckHome   = 22.5
+)
+
+// harborTruckRoute is the truck's route, depot first: the straight leg it drives out and back.
+func harborTruckRoute() [][2]float64 {
+	return [][2]float64{{harborDepotLon, harborDepotLat}, {harborPlainLon, harborPlainLat}}
+}
 
 func harborBox(lat, lon, dLat, dLon float64) [][2]float64 {
 	return [][2]float64{
@@ -166,9 +194,9 @@ func harborBox(lat, lon, dLat, dLon float64) [][2]float64 {
 func harborpulseGeoFences() []GeoFenceSpec {
 	return []GeoFenceSpec{
 		{Token: HarborpulseFloodPlainFence, Name: "East Quay flood plain", Description: "The low streets behind East Quay that flood first.",
-			Ring: harborBox(harborPlainLat, harborPlainLon, 0.0015, 0.0025)},
+			Ring: harborBox(harborPlainLat, harborPlainLon, harborPlainHalfLat, harborPlainHalfLon)},
 		{Token: HarborpulseDepotFence, Name: "Works depot", Description: "Where the response truck is kept.",
-			Ring: harborBox(harborDepotLat, harborDepotLon, 0.0004, 0.0006)},
+			Ring: harborBox(harborDepotLat, harborDepotLon, harborDepotHalfLat, harborDepotHalfLon)},
 	}
 }
 
@@ -290,13 +318,13 @@ func harborMeterKw(token string, h float64) float64 {
 func harborTruckFix(h float64) Fix {
 	var frac, speed, heading float64
 	switch {
-	case h >= 17 && h < 18:
-		frac, speed = h-17, 8
+	case h >= harborTruckDepart && h < harborTruckParked:
+		frac, speed = (h-harborTruckDepart)/(harborTruckParked-harborTruckDepart), 8
 		heading = canonicalHeading(math.Atan2(harborPlainLon-harborDepotLon, harborPlainLat-harborDepotLat) * 180 / math.Pi)
-	case h >= 18 && h < 21.5:
+	case h >= harborTruckParked && h < harborTruckReturn:
 		frac = 1
-	case h >= 21.5 && h < 22.5:
-		frac, speed = 1-(h-21.5), 8
+	case h >= harborTruckReturn && h < harborTruckHome:
+		frac, speed = 1-(h-harborTruckReturn)/(harborTruckHome-harborTruckReturn), 8
 		heading = canonicalHeading(math.Atan2(harborDepotLon-harborPlainLon, harborDepotLat-harborPlainLat) * 180 / math.Pi)
 	}
 	return Fix{
@@ -368,6 +396,8 @@ type harborModel struct {
 	// lastMeter is when each meter last read, for its energy integral.
 	lastMeter map[string]time.Duration
 	buffers   map[string][]harborBuffered
+	// outageNext is the next device-local outage log sample, independent of emit ticks.
+	outageNext map[string]time.Duration
 	// uplinks counts each LoRaWAN gauge's uplinks: its frame counter, which also alternates the
 	// frame layout it sends.
 	uplinks map[string]int
@@ -397,7 +427,7 @@ func newHarborModelWith(seed int64, dayLength time.Duration, defects harborDefec
 	m := &harborModel{
 		seed: seed, dayLength: dayLength, defects: defects, devices: map[string]harborDevice{}, pumps: map[string]*harborPumpState{},
 		cap: map[string]float64{}, dim: map[string]float64{}, flushes: map[string]int{}, kwh: map[string]float64{}, lastMeter: map[string]time.Duration{},
-		buffers: map[string][]harborBuffered{}, ledger: map[harborLedgerKey]*ScenarioBackfill{}, uplinks: map[string]int{},
+		buffers: map[string][]harborBuffered{}, outageNext: map[string]time.Duration{}, ledger: map[harborLedgerKey]*ScenarioBackfill{}, uplinks: map[string]int{},
 		bufferCap: harborBufferCapFor(dayLength, DefaultEmitInterval),
 		tier:      map[string]int{}, dipUntil: map[string]time.Duration{},
 	}
@@ -517,6 +547,7 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 			HarborpulseDimKey:       m.dim[token],
 		}
 	case harborCharger:
+		m.logOutage(d, elapsed, at)
 		power := math.Min(harborChargerDemand(d, h), m.cap[token])
 		values := map[string]float64{
 			HarborpulseChargerPowerKey: round3(power),
@@ -525,12 +556,6 @@ func (m *harborModel) reading(token string, elapsed time.Duration, at time.Time)
 			HarborpulseMaxKwKey:        m.cap[token],
 		}
 		if harborOutage(d.quay, h) {
-			m.recordBuffered(token, harborDayOf(elapsed, m.dayLength), at)
-			buf := append(m.buffers[token], harborBuffered{at: at, values: values})
-			if len(buf) > m.bufferCap {
-				buf = buf[len(buf)-m.bufferCap:]
-			}
-			m.buffers[token] = buf
 			return nil
 		}
 		return values
@@ -659,7 +684,7 @@ func (m *harborModel) airLocked(token string, h float64) bool {
 }
 
 // recordBuffered files one buffered reading in the outage ledger. Caller holds m.mu.
-func (m *harborModel) recordBuffered(token string, day int, at time.Time) {
+func (m *harborModel) recordBuffered(token string, day int, at time.Time, values map[string]float64) {
 	k := harborLedgerKey{token: token, day: day}
 	e := m.ledger[k]
 	stamp := at.UTC().Format(time.RFC3339Nano)
@@ -670,13 +695,65 @@ func (m *harborModel) recordBuffered(token string, day int, at time.Time) {
 	e.Buffered++
 	e.Last = stamp
 	e.Times = append(e.Times, stamp)
+	e.PowerKW = append(e.PowerKW, values[HarborpulseChargerPowerKey])
+	e.Values = append(e.Values, values)
 }
 
-// harborBufferNeed is how many readings one charger buffers through one feeder outage of a day of
-// dayLength, at one reading per interval (the ticker drops a tick rather than doubling up).
+// Each charger logs 90 entries during an outage, at outage-duration/90, even
+// between uplinks. Scaling with the day keeps the restore bounded at every day length.
+func harborOutageCadence(dayLength time.Duration) time.Duration {
+	return time.Duration((harborOutageTo-harborOutageFrom)/24*float64(dayLength)) / 90
+}
+
 func harborBufferNeed(dayLength, interval time.Duration) int {
 	outage := time.Duration((harborOutageTo - harborOutageFrom) / 24 * float64(dayLength))
-	return int((outage+interval-1)/interval) + 1
+	cadence := harborOutageCadence(dayLength)
+	return int((outage + cadence - 1) / cadence)
+}
+
+// logOutage materializes the charger's local log through elapsed. The uplink
+// ticker merely collects it; a slow or missed tick does not lose outage samples.
+// Caller holds m.mu. Values are immutable once recorded.
+func (m *harborModel) logOutage(d harborDevice, elapsed time.Duration, at time.Time) {
+	if d.quay != HarborpulseEastQuay {
+		return
+	}
+	from := time.Duration((harborOutageFrom - harborpulseStartHour) / 24 * float64(m.dayLength))
+	next, ok := m.outageNext[d.token]
+	if !ok {
+		next = from
+	}
+	cadence := harborOutageCadence(m.dayLength)
+	for next <= elapsed {
+		day := int((next - from) / m.dayLength)
+		end := from + time.Duration(day)*m.dayLength + 90*cadence
+		if next >= end {
+			next = from + time.Duration(day+1)*m.dayLength
+			continue
+		}
+		h := harborHourOf(next, m.dayLength)
+		power := math.Min(harborChargerDemand(d, h), m.cap[d.token])
+		values := map[string]float64{
+			HarborpulseChargerPowerKey: round3(power), HarborpulseSessionKey: boolNum(power > 1),
+			HarborpulseConnectorKey: round3(harborConnectorTemp(d.token, h, power) + harborNoise(m.seed, d.token, int64(next/time.Second), 0.3)),
+			HarborpulseMaxKwKey:     m.cap[d.token],
+		}
+		instant := at.Add(next - elapsed).UTC()
+		stamp := instant.Truncate(time.Microsecond)
+		if stamp.Before(instant) {
+			// Round into the outage window: the platform stores microseconds,
+			// while the scenario's independently known boundary can have nanoseconds.
+			stamp = stamp.Add(time.Microsecond)
+		}
+		m.recordBuffered(d.token, day, stamp, values)
+		buf := append(m.buffers[d.token], harborBuffered{at: stamp, values: values})
+		if len(buf) > m.bufferCap {
+			buf = buf[len(buf)-m.bufferCap:]
+		}
+		m.buffers[d.token] = buf
+		next += cadence
+	}
+	m.outageNext[d.token] = next
 }
 
 // harborBufferCapFor sizes a charger's buffer for the day: twice one outage, since readings the
@@ -726,6 +803,14 @@ func (m *harborModel) backfillLedger() []ScenarioBackfill {
 	for _, e := range m.ledger {
 		c := *e
 		c.Times = append([]string(nil), e.Times...)
+		c.PowerKW = append([]float64(nil), e.PowerKW...)
+		c.Values = make([]map[string]float64, len(e.Values))
+		for i, values := range e.Values {
+			c.Values[i] = make(map[string]float64, len(values))
+			for key, value := range values {
+				c.Values[i][key] = value
+			}
+		}
 		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool {

@@ -59,7 +59,7 @@ func newFencedPersistenceWorker(t *testing.T) (*EventPersistenceWorker, *gorm.DB
 	}
 	if err := db.AutoMigrate(&rdb.PurgedTenant{}, &rdb.AuditEvent{},
 		&model.Event{}, &model.MeasurementEvent{}, &model.LocationEvent{}, &model.AlertEvent{},
-		&model.StateChangeEvent{}, &model.EventAnchor{}); err != nil {
+		&model.StateChangeEvent{}, &model.EventAnchor{}, &model.EntityDeletionWatermark{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	// The ON CONFLICT arbiters, restated for sqlite exactly as model/persistence_test.go
@@ -70,6 +70,7 @@ func newFencedPersistenceWorker(t *testing.T) (*EventPersistenceWorker, *gorm.DB
 	// alternate id and instant, which PostgreSQL refuses (23505), and the persistence
 	// writer's alternate-id skip could be removed with nothing turning red.
 	for _, stmt := range []string{
+		`CREATE UNIQUE INDEX uq_entity_deletion_watermarks_key ON entity_deletion_watermarks (tenant_id, entity_type, entity_token);`,
 		`CREATE UNIQUE INDEX idx_events_identity ON events (tenant_id, occurred_time, event_id);`,
 		`CREATE UNIQUE INDEX idx_events_tenant_device_alt_id ON events (tenant_id, device_token, alt_id, occurred_time) WHERE alt_id IS NOT NULL;`,
 		`CREATE UNIQUE INDEX uq_measurement_events_idem ON measurement_events (tenant_id, occurred_time, payload_id);`,
@@ -170,7 +171,7 @@ func TestFenceCostOfAMeasurementMessage(t *testing.T) {
 			// tables it writes: the first insert reads it, the other two reuse the answer.
 			name:    "altId and one anchor",
 			event:   fenceCostMeasurement("fc-1", t0, 1),
-			wantAll: 5, wantFence: 1,
+			wantAll: 6, wantFence: 1,
 			wantEvents: 1, wantMeasurements: 3, wantAnchors: 1, wantPersisted: true,
 		},
 		{

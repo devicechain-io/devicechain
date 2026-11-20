@@ -30,6 +30,7 @@ namespace DeviceChain.Harborpulse.Visuals
         static readonly int WaterTime = Shader.PropertyToID("_WaterTime"), Storm = Shader.PropertyToID("_HarborStorm"), Rain = Shader.PropertyToID("_HarborRain");
         static readonly int Displace = Shader.PropertyToID("_Displace");
 
+        static readonly int WellDiscs = Shader.PropertyToID("_HarborWellDiscs"), WellCount = Shader.PropertyToID("_HarborWellCount");
         readonly Transform near, far;
         readonly List<string> quayOrder = new List<string>();
         readonly double[] xMin = new double[3], xMax = new double[3], levels = new double[3];
@@ -39,9 +40,21 @@ namespace DeviceChain.Harborpulse.Visuals
         float time;
         Vector3 camera;
 
-        /// <param name="quays">The district's three quays, in any order: the water takes them west to east.</param>
-        public HarborWaterController(Transform parent, Shader waterShader, IReadOnlyList<QuayPlan> quays, float farExtent)
+        /// <param name="plan">The district's three quays and pump footprints; the water orders quays west to east.</param>
+        public HarborWaterController(Transform parent, Shader waterShader, SitePlan plan, float farExtent)
         {
+            var quays = plan.Quays;
+            var discs = new Vector4[3];
+            var count = 0;
+            foreach (var p in plan.Placements)
+            {
+                if (p.Device.Kind != DeviceKind.Pump) continue;
+                if (count == discs.Length) throw new System.ArgumentException("water mask supports at most three wells");
+                var well = new WellFootprint(p.At);
+                discs[count++] = new Vector4((float)well.Center.X, (float)well.Center.Z, (float)WellFootprint.RadiusM, 0);
+            }
+            Shader.SetGlobalVectorArray(WellDiscs, discs);
+            Shader.SetGlobalInt(WellCount, count);
             if (quays.Count != 3) throw new System.ArgumentException("the water shader takes exactly three quays; the layout has " + quays.Count);
             var shader = waterShader != null ? waterShader : Shader.Find("Harborpulse/Water");
             if (shader == null) throw new System.InvalidOperationException("the Harborpulse/Water shader is missing from the project");
@@ -65,6 +78,7 @@ namespace DeviceChain.Harborpulse.Visuals
 
             var go = new GameObject("Water (near grid)");
             go.transform.SetParent(parent, false);
+            go.layer = PlanarWaterReflection.WaterLayer;
             go.AddComponent<MeshFilter>().sharedMesh = nearMesh = Grid(GridCells, Cell);
             var mr = go.AddComponent<MeshRenderer>();
             mr.sharedMaterial = nearMat;
@@ -73,6 +87,7 @@ namespace DeviceChain.Harborpulse.Visuals
 
             var ring = new GameObject("Water (far ring)");
             ring.transform.SetParent(parent, false);
+            ring.layer = PlanarWaterReflection.WaterLayer;
             ring.AddComponent<MeshFilter>().sharedMesh = farMesh = Ring(GridCells * Cell / 2, farExtent, RingStep);
             var fr = ring.AddComponent<MeshRenderer>();
             fr.sharedMaterial = farMat;
@@ -201,10 +216,13 @@ namespace DeviceChain.Harborpulse.Visuals
         /// <summary>Destroys the meshes and materials this controller made.</summary>
         public void Dispose()
         {
+            Shader.SetGlobalInt(WellCount, 0);
             MeshKit.Release(nearMat);
             MeshKit.Release(farMat);
             MeshKit.Release(nearMesh);
             MeshKit.Release(farMesh);
+            MeshKit.Release(near.gameObject);
+            MeshKit.Release(far.gameObject);
         }
     }
 }

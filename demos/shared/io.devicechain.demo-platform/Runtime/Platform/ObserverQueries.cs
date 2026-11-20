@@ -47,7 +47,7 @@ namespace DeviceChain.Demos.Platform
             "subscription { alarmStream { eventType alarmToken originatorType originatorToken alarmKey metricKey state severity previousSeverity acknowledged lastValue raisedTime occurredTime } }";
 
         public const string LocationsQuery =
-            "query Locations($t: [String!]!) { latestLocations(deviceTokens: $t) { deviceToken speed heading elevation occurredTime } }";
+            "query Locations($t: [String!]!) { latestLocations(deviceTokens: $t) { deviceToken latitude longitude speed heading elevation occurredTime } }";
 
         public const string PresenceQuery =
             "query Presence($t: [String!]!) { deviceStatesByDeviceToken(deviceTokens: $t) { deviceToken active lastActivityTime } }";
@@ -181,6 +181,15 @@ namespace DeviceChain.Demos.Platform
             return items;
         }
 
+        static bool NullableNumber(JsonElement row, string name, out double? number)
+        {
+            number = null;
+            if (!row.TryGetProperty(name, out var v) || v.ValueKind == JsonValueKind.Null) return true;
+            if (v.ValueKind != JsonValueKind.Number || !v.TryGetDouble(out var d) || double.IsInfinity(d) || double.IsNaN(d)) return false;
+            number = d;
+            return true;
+        }
+
         public static List<LocationItem> ParseLocations(string dataJson, DateTimeOffset observedAt)
         {
             var items = new List<LocationItem>();
@@ -188,11 +197,14 @@ namespace DeviceChain.Demos.Platform
             if (!doc.RootElement.TryGetProperty("latestLocations", out var rows) || rows.ValueKind != JsonValueKind.Array) return items;
             foreach (var row in rows.EnumerateArray())
             {
+                if (row.ValueKind != JsonValueKind.Object) continue;
                 var token = Str(row, "deviceToken");
                 var at = Time(row, "occurredTime");
-                if (token == null || !at.HasValue) continue;
+                if (token == null || !at.HasValue || !NullableNumber(row, "latitude", out var lat) || !NullableNumber(row, "longitude", out var lon)) continue;
                 items.Add(new LocationItem(token, new ObservedLocation
                 {
+                    Latitude = lat,
+                    Longitude = lon,
                     SpeedMps = Num(row, "speed"),
                     HeadingDegrees = Num(row, "heading"),
                     ElevationMetres = Num(row, "elevation"),

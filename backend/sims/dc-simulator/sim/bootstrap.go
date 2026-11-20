@@ -47,6 +47,8 @@ import (
 // On success, rt.Devices holds the manifest's Expand()'d devices (with their
 // credential material and Assignments), ready for Tick to emit against.
 func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
+	rt.devicesMu.Lock()
+	defer rt.devicesMu.Unlock()
 	if err := manifest.Validate(); err != nil {
 		return fmt.Errorf("invalid manifest: %w", err)
 	}
@@ -178,7 +180,7 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 		rt.IntegrationTokens[in.Token] = token
 	}
 
-	devices := manifest.Expand(manifest.Seed)
+	devices := rt.applyCredentialOverrides(manifest.Expand(manifest.Seed))
 	for _, d := range devices {
 		if err := ensureDevice(ctx, rt, d); err != nil {
 			return fmt.Errorf("provision device %q: %w", d.Token, err)

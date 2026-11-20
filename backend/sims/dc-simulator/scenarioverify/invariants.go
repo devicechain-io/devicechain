@@ -71,6 +71,7 @@ func Evaluate(o Observations) []Invariant {
 		checks = append(checks, c)
 	}
 	checks = append(checks, s4Checks()...)
+	checks = append(checks, s5Checks()...)
 	out := make([]Invariant, 0, len(checks))
 	for _, c := range checks {
 		inv := Invariant{Name: c.name, Passed: true, Control: Controls[c.name]}
@@ -519,10 +520,10 @@ func outageBlastRadius(o Observations) error {
 	return nil
 }
 
-// backfillStored: every reading an East Quay charger buffered through the outage is stored, at
+// backfillStored: every never-refused reading an East Quay charger buffered is stored, at
 // the time it was TAKEN, and nothing else is stored in the outage. The window [First, Last] holds
 // no live reading (the charger sent nothing live while its feeder was down), so the times stored
-// there must be EXACTLY the ledger's times: a platform that stamped the arrival time stores none
+// there must be ledger times. Refused entries belong to burst-caught-up. A platform that stamped the arrival time stores none
 // there, one that lost a reading stores one fewer, and one that rewrote a time stores one the
 // ledger does not have — at the same count.
 func backfillStored(o Observations) error {
@@ -540,6 +541,9 @@ func backfillStored(o Observations) error {
 			problems = append(problems, b.Device+": buffered nothing")
 			continue
 		}
+		if err := restoreRows(o, b, false); err != nil {
+			problems = append(problems, err.Error())
+		}
 		if len(b.Taken) != b.Buffered {
 			problems = append(problems, fmt.Sprintf("%s: the ledger counts %d buffered readings but carries %d times", b.Device, b.Buffered, len(b.Taken)))
 			continue
@@ -551,17 +555,20 @@ func backfillStored(o Observations) error {
 		stored := map[int64]bool{}
 		var extra []string
 		for _, t := range b.Stored {
-			if t.Before(b.First.Add(-time.Millisecond)) || t.After(b.Last.Add(time.Millisecond)) {
+			if t.Before(o.at(sim.HarborpulseOutageFrom)) || !t.Before(o.at(sim.HarborpulseOutageTo)) {
 				continue
 			}
 			stored[t.UnixMicro()] = true
-			if !taken[t.UnixMicro()] {
+			// Off the log grid within ingressStampSlack of the failure: the last pre-failure
+			// reading, stamped at send (see restoreRows). Excused here as there.
+			if !taken[t.UnixMicro()] && !t.Before(o.at(sim.HarborpulseOutageFrom).Add(ingressStampSlack)) {
 				extra = append(extra, t.UTC().Format(time.RFC3339Nano))
 			}
 		}
 		missing := 0
+		refused := restoreRefused(o, b.Device)
 		for us := range taken {
-			if !stored[us] {
+			if !refused[us] && !stored[us] {
 				missing++
 			}
 		}

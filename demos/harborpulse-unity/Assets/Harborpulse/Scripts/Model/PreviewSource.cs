@@ -12,7 +12,7 @@ namespace DeviceChain.Harborpulse.Model
     /// Quay sitting 0.3 m higher, the lamps on from 18:00 to 06:30, East Quay's feeder out from 19:45 to 21:15) so a preview looks like the
     /// day, but it is NOT platform data and the scene never shows it unlabelled: every frame of a preview says PREVIEW.
     /// </summary>
-    public sealed class PreviewSource : IReadingSource
+    public sealed partial class PreviewSource : IHarborSource
     {
         readonly HarborLayout layout;
         double simSeconds;
@@ -26,8 +26,10 @@ namespace DeviceChain.Harborpulse.Model
         /// <summary>Moves the preview to a sim time; readings are stamped <paramref name="wallNow"/>, so they are always fresh.</summary>
         public void SetTime(double simS, DateTimeOffset wallNow)
         {
+            if (simS < simSeconds) commandRecords.Clear();
             simSeconds = simS;
             now = wallNow;
+            BuildPreviewEvidence();
         }
 
         public bool TryGet(string externalId, string metric, out Reading reading)
@@ -57,7 +59,7 @@ namespace DeviceChain.Harborpulse.Model
                     reading = new Reading(100, now);
                     return true;
                 default:
-                    return false;
+                    return TryPreviewMetric(d, metric, h, outage, out reading);
             }
         }
 

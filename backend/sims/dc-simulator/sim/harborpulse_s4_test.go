@@ -70,6 +70,7 @@ func TestHarborpulseGroupsHoldWhatTheirAttributesSay(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := HarborpulseGroupMembers()
+	want[HarborpulseAllChargersGroup] = HarborpulseChargers()
 	devices := m.Expand(1)
 	for _, g := range m.EntityGroups {
 		got := membersOf(t, g.Selector, devices)

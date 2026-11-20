@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model/identity"
 	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/x509trust"
@@ -183,7 +184,7 @@ func TestX509RevocationSchemaOnPostgres(t *testing.T) {
 		entry := DeviceRevokedCertificate{TrustAnchorId: a.ID, Kind: RevokedKindCRL, RevocationListId: &dl.ID,
 			IssuerKey: &issuer.Key, IssuerName: &issuer.Name, Serial: &serial, Reason: "keyCompromise", RevokedAt: time.Now()}
 		require.NoError(t, f.api.RDB.DB(f.ctx).Create(&entry).Error)
-		require.NoError(t, bumpRevocationRows(f.api.RDB.DB(f.ctx), a.ID, 2))
+		require.NoError(t, identity.BumpRevocationRows(f.api.RDB.DB(f.ctx), a.ID, 2))
 
 		verified, err := x509trust.VerifyClientChain(f.ca.cert, []*x509.Certificate{leaf.cert}, time.Now())
 		require.NoError(t, err)

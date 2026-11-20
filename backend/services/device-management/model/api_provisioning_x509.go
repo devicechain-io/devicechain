@@ -175,7 +175,7 @@ func lockCertificateProfile(tx *gorm.DB, profile *ProvisioningProfile, request *
 	// read here: the registration is refused with nothing written. Without it a revocation that
 	// lands between the callout's gate and this insert would leave a registered, revoked device.
 	// The anchor passed is the row read under the lock, so a mode changed meanwhile is the one used.
-	return recheckRevocationLocked(tx, anchor.TenantId, &anchor, reg.Verified, defaultGrace)
+	return identity.RecheckRevocationLocked(tx, anchor.TenantId, &anchor, reg.Verified, defaultGrace)
 }
 
 // decideKnownDeviceByCertificate is decideKnownDevice's steps 5 to 8 for a certificate. The
@@ -238,7 +238,7 @@ func insertCertificateCredential(tx *gorm.DB, profile *ProvisioningProfile, devi
 	if err := tx.Omit("Device").Create(cred).Error; err != nil {
 		return err
 	}
-	return writeChainLinks(tx, cred.ID, anchorId, reg.Verified.Chain)
+	return identity.WriteChainLinks(tx, cred.ID, anchorId, reg.Verified.Chain)
 }
 
 // ProvisioningCodes is the closed vocabulary of refusal codes, in a fixed order. A caller that

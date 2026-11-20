@@ -64,7 +64,7 @@ func newPostgresApi(t *testing.T, instance string) *Api {
 	sys := mgr.Database.WithContext(core.WithSystemContext(context.Background()))
 	for _, table := range []string{
 		"events", "location_events", "measurement_events",
-		"alert_events", "event_anchors", "state_change_events",
+		"alert_events", "event_anchors", "state_change_events", "entity_deletion_watermarks",
 	} {
 		require.NoErrorf(t, sys.Exec(
 			fmt.Sprintf(`TRUNCATE TABLE "event-management".%q`, table)).Error,
