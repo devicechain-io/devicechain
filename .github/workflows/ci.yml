@@ -71,6 +71,7 @@ jobs:
     outputs:
       services: ${{ steps.svc.outputs.services }}
       modules: ${{ steps.mod.outputs.modules }}
+      go_batches: ${{ steps.mod.outputs.go_batches }}
       # The FULL integration plan, which every leg re-checks against fresh discovery (DC_IT_PLAN).
       integration_all: ${{ steps.integ.outputs.integration }}
       # What this run executes, from hack/ci-select.py: a subset on a pull request, all of it otherwise.
@@ -264,6 +265,11 @@ jobs:
       - name: go.mod tidy check self-test
         run: hack/check-go-mod-tidy.sh --self-test
 
+      - name: Go batching self-test
+        run: |
+          python3 hack/ci-go-batch.py --self-test
+          python3 hack/test-ci-go-batch.py
+
       - name: Discover Go modules
         id: mod
         run: |
@@ -306,6 +312,12 @@ jobs:
             exit 1
           fi
 
+          # Preserve the independent count guard above, and also compare exact membership
+          # against that reader. Then prove that batches partition the full list: no loss,
+          # duplication or substitution can turn a shortened matrix green.
+          batches="$(DISCOVERED_MODULES="$modules" WORKSPACE_MODULES="$(hack/list-workspace-modules.sh)" python3 hack/ci-go-batch.py discover)"
+          echo "go_batches=$batches" >> "$GITHUB_OUTPUT"
+          echo "Go batches: $batches"
           echo "modules=$modules" >> "$GITHUB_OUTPUT"
           echo "Modules ($got): $modules"
 
@@ -403,6 +415,7 @@ jobs:
         id: select
         env:
           DISCOVERED_MODULES: ${{ steps.mod.outputs.modules }}
+          GO_BATCHES: ${{ steps.mod.outputs.go_batches }}
           INTEGRATION_PLAN: ${{ steps.integ.outputs.integration }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -411,6 +424,10 @@ jobs:
         run: |
           set -euo pipefail
           sel="$(python3 hack/ci-select.py plan)"
+          # Select first, then remove unselected members from the fixed full-run batches.
+          # ci-go-batch compares every original leg payload after flattening; empty batches
+          # emit no matrix entry. Split/envtest/slow modules retain their original jobs.
+          sel="$(printf '%s\n' "$sel" | python3 hack/ci-go-batch.py select)"
           go_legs="$(jq -c '.go' <<<"$sel")"
           integ="$(jq -c '.integration' <<<"$sel")"
           frontend="$(jq -r '.frontend' <<<"$sel")"
@@ -423,7 +440,7 @@ jobs:
           case "$draft" in true|false) ;; *) echo "::error::draft verdict is '$draft'"; exit 1 ;; esac
           # A run that is not a pull request must plan every module; the script asserts the same.
           if [ "$GITHUB_EVENT_NAME" != pull_request ] && { [ "$(jq -r '.full' <<<"$sel")" != true ] || [ "$migrations" != true ] || [ "$draft" != false ] || [ "$smoke" != "$SMOKE_MODULES" ] \
-             || ! jq -e 'all(.go[]; .race_scope == "all")' <<<"$sel" >/dev/null; }; then
+             || ! jq -e '[.go[] | (.batch // [.])[]] | all(.race_scope == "all")' <<<"$sel" >/dev/null; }; then
             echo "::error::a $GITHUB_EVENT_NAME run selected a subset"
             exit 1
           fi
@@ -458,8 +475,8 @@ jobs:
         run: hack/go-race.sh --list
 
   # ---------------------------------------------------------------------------
-  # Per-module Go validation: fmt, build, vet, test.
-  # go.work makes the module the working directory for each matrix entry.
+  # Go validation: small modules share jobs; split/envtest/slow modules keep their legs.
+  # Every command still runs with its own module as the working directory.
   # ---------------------------------------------------------------------------
   #
   # 🔴 ONE ENTRY PER LEG, NOT PER MODULE. hack/ci-select.py plans the legs: a module runs as one
@@ -467,6 +484,9 @@ jobs:
   # and carries the module's static checks (`entry.static`: gofmt, build, vet, tidy, the workspace
   # sum, govulncheck), so those run once per module. A leg selected only because its tests read a
   # changed file runs just those packages, with no static checks: its module's code did not change.
+  # Small modules are grouped by hack/ci-go-batch.py AFTER selection, using checked-in
+  # successful push timings and the same cache group. go-ci-batch.sh runs every selected
+  # member with its original flags and reports failures by module in logs and the summary.
   # Skipped when the plan has no Go legs (a pull request touching nothing Go reads); ci-complete
   # accepts that skip only when discover succeeded and planned zero legs.
   go:
@@ -526,6 +546,12 @@ jobs:
           key: go-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-[${{ matrix.entry.cache_group }}]-${{ hashFiles('go.work', 'go.work.sum', '**/go.mod', '**/go.sum') }}
           restore-keys: go-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-[${{ matrix.entry.cache_group }}]-
 
+      - name: Validate selected modules in this batch
+        if: matrix.entry.batch
+        env:
+          BATCH_ENTRIES: ${{ toJson(matrix.entry.batch) }}
+        run: bash hack/go-ci-batch.sh
+
       # Prefetch the module graph with a bounded retry, then a different-infrastructure
       # fallback, so one dropped stream from the module proxy does not fail this job
       # before it builds anything. See hack/go-mod-download.sh for why the last attempt
@@ -533,6 +559,7 @@ jobs:
       # only), and for the fact that checksum verification stays on. It resolves the module
       # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
       - name: go mod download
+        if: ${{ !matrix.entry.batch }}
         env:
           # The windows vet step below loads files the linux listing skips (x/sys/windows
           # and friends), so prefetch that package set too or the vet step downloads it bare.
@@ -547,6 +574,7 @@ jobs:
       # read the result. hack/go-leg.sh derives a catch-all as `go list ./...` minus the split
       # packages and proves the arithmetic, and deals a shard round-robin over `go test -list`.
       - name: Resolve this leg's packages
+        if: ${{ !matrix.entry.batch }}
         env:
           LEG_PKGS: ${{ matrix.entry.pkgs }}
           LEG_EXCLUDE: ${{ matrix.entry.exclude }}
@@ -777,6 +805,7 @@ jobs:
         run: hack/govulncheck.sh "${{ matrix.entry.module }}"
 
       - name: go test
+        if: ${{ !matrix.entry.batch }}
         working-directory: ${{ matrix.entry.module }}
         env:
           # The bootstrap snapshot-currency test fails instead of skipping when the
@@ -816,16 +845,7 @@ jobs:
         # still shows the plain test output. Both verdicts are taken: a test failure
         # wins, and a clean run with an unreviewed skip is red too.
         shell: bash
-        run: |
-          set -uo pipefail
-          mapfile -t args < "$RUNNER_TEMP/leg-args" || exit 1
-          output="$RUNNER_TEMP/go-test.json"
-          go test -json -count=1 -timeout 20m "${args[@]}" | tee "$output" | jq -rj 'select(.Action == "output") | .Output // empty'
-          test_status=${PIPESTATUS[0]}
-          gate_status=0
-          bash "$GITHUB_WORKSPACE/hack/check-no-silent-skips.sh" "$output" || gate_status=$?
-          if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-          exit "$gate_status"
+        run: bash "$GITHUB_WORKSPACE/hack/go-ci-test.sh" "${{ matrix.entry.module }}" "$RUNNER_TEMP/leg-args" "$RUNNER_TEMP"
 
       # The payload decoder's timing gates, alone: the perf gate (decode against Cut A's
       # flatten, paired in one process) and the ns-per-declared-cost checks. They are timing
@@ -898,49 +918,12 @@ jobs:
       # narrowed scope does not reach surfaces on main's full run, which must therefore stay full.
       # The plain `go test` step above is NOT narrowed; it still runs every package of the leg.
       - name: race detector
+        if: ${{ !matrix.entry.batch }}
         env:
           MODULE: ${{ matrix.entry.module }}
           DC_RACE_SCOPE: ${{ matrix.entry.race_scope }}
           RACE_PKGS: ${{ matrix.entry.race_pkgs }}
-        run: |
-          set -euo pipefail
-          case "$DC_RACE_SCOPE" in
-            all) mapfile -t args < "$RUNNER_TEMP/leg-args" ;;
-            changed)
-              # The plan reads packages from the source, tags and all, so a package whose every
-              # file a build constraint excludes on this runner (an integration-only or
-              # frontend-only directory) can be named, and `go test` refuses one outright. Those
-              # are dropped. Any OTHER failure to resolve a package is doubt, and doubt races the
-              # whole leg.
-              read -r -a want <<<"$RACE_PKGS"
-              if js="$(cd "$MODULE" && go list -e -json "${want[@]}")" \
-                 && [ "$(jq -s '[.[] | select(.Error and (.Error.Err | test("build constraints exclude all Go files") | not))] | length' <<<"$js")" = 0 ]; then
-                mapfile -t args < <(jq -rs '.[] | select(.Error | not) | .ImportPath' <<<"$js")
-                [ "${#args[@]}" -gt 0 ] || DC_RACE_SCOPE=none
-              else
-                echo "::warning::could not resolve the race packages ($RACE_PKGS); racing the whole leg"
-                DC_RACE_SCOPE=all
-                mapfile -t args < "$RUNNER_TEMP/leg-args"
-              fi
-              export DC_RACE_SCOPE
-              ;;
-            none) args=() ;;
-            *) echo "::error::race_scope is '$DC_RACE_SCOPE', not all, changed or none"; exit 1 ;;
-          esac
-          hack/go-race.sh "$MODULE" "${args[@]}" 2>&1 | tee /tmp/go-race.log
-          # Fixed strings, not a pattern: the module path is data, and a regex
-          # here would only be one metacharacter away from matching the wrong
-          # module or nothing at all.
-          if grep -qF "race: COVERED $MODULE " /tmp/go-race.log \
-             || grep -qF "race: NOT COVERED $MODULE " /tmp/go-race.log; then
-            :
-          elif [ "$GITHUB_EVENT_NAME" = pull_request ] \
-             && { grep -qF "race: PARTIAL $MODULE " /tmp/go-race.log || grep -qF "race: SKIPPED $MODULE " /tmp/go-race.log; }; then
-            :
-          else
-            echo "::error::the race step reached the end without recording a verdict this $GITHUB_EVENT_NAME run may accept for $MODULE. Its green tick would mean nothing, so it fails instead."
-            exit 1
-          fi
+        run: bash hack/go-ci-race.sh "$MODULE" "$RUNNER_TEMP/leg-args" "$RUNNER_TEMP"
 
       # 🔴 THE WORKSPACE HIDES AN UNTIDY go.mod. Every other step here resolves
       # through go.work, where a module's own requirements are not what gets built,
