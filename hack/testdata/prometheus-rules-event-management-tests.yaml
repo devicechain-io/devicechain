@@ -78,3 +78,65 @@ tests:
       - eval_time: 55m
         alertname: FailedEventsSustained
         exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # EntityDeletionWatermarksLarge: the deletion watermark table over 1 GiB (1073741824 bytes),
+  # held an hour. The series is the shared append-only table size every service exports.
+  # ---------------------------------------------------------------------------
+
+  # Exactly on the line (1073741824), on both replicas: nothing fires. The boundary is
+  # strict, so a `>=` or a threshold typed in MiB instead of bytes shows up here or below.
+  - name: a watermark table at exactly 1 GiB raises nothing
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventmanagement_append_only_table_bytes{namespace="dci-devicechain", pod="dc-event-management-aaaaa", table="entity_deletion_watermarks"}'
+        values: '1073741824+0x180'
+      - series: 'devicechain_eventmanagement_append_only_table_bytes{namespace="dci-devicechain", pod="dc-event-management-bbbbb", table="entity_deletion_watermarks"}'
+        values: '1073741824+0x180'
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: EntityDeletionWatermarksLarge
+        exp_alerts: []
+
+  # Negative controls. A huge audit journal is NOT this alert (it is a different table with its
+  # own volume alerts), and another instance's namespace must not raise this instance's alert.
+  - name: only this instance's watermark table counts
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventmanagement_append_only_table_bytes{namespace="dci-devicechain", pod="dc-event-management-aaaaa", table="audit_events"}'
+        values: '50000000000+0x180'
+      - series: 'devicechain_eventmanagement_append_only_table_bytes{namespace="dci-other", pod="dc-event-management-zzzzz", table="entity_deletion_watermarks"}'
+        values: '50000000000+0x180'
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: EntityDeletionWatermarksLarge
+        exp_alerts: []
+
+  # Over 1 GiB on two replicas reporting the same table: pending at 45m (the `for` is an
+  # hour), ONE alert at 90m (max by namespace, not one per replica), and it clears when the
+  # table drops under the line (after a rewrite such as VACUUM FULL), so the alert can be answered by acting.
+  - name: a watermark table over 1 GiB warns once, after an hour, and clears
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventmanagement_append_only_table_bytes{namespace="dci-devicechain", pod="dc-event-management-aaaaa", table="entity_deletion_watermarks"}'
+        values: '1073741825+0x119 1000+0x60'
+      - series: 'devicechain_eventmanagement_append_only_table_bytes{namespace="dci-devicechain", pod="dc-event-management-bbbbb", table="entity_deletion_watermarks"}'
+        values: '1073741825+0x119 1000+0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: EntityDeletionWatermarksLarge
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: EntityDeletionWatermarksLarge
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#entitydeletionwatermarkslarge"
+              summary: "the table that remembers deleted entities is over 1 GiB"
+              description: "The deletion watermark table in the event store is over 1 GiB, with its indexes. It holds one row for each distinct token ever deleted (tenant, entity type and token) and nothing prunes it: the row is what keeps an entity created later under the same token from reading the deleted one's event history, so it is kept for the life of the tenant. A row is about 200 bytes, so this is several million distinct deleted tokens, far more than a fleet that is replaced a few times over. The size is allocated space, which also counts rows that were updated or removed and not yet reused, so check the live count before blaming a loop; when the count is in the millions it is nearly always one tenant creating and deleting entities under new tokens. On the event-store primary (dc-tsdb), by tenant:\n\n  SELECT tenant_id, count(*) FROM \"event-management\".entity_deletion_watermarks GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;\n\nStop the loop at its source. Purging the tenant removes its rows, but the table keeps the space for reuse and its size does not fall until it is rewritten (VACUUM FULL on the table, in a quiet period), so this alert can stay firing after the cause is gone. Otherwise the table is safe to leave: the growth is slow, and it only matters as part of the event store's volume, so keep the DatabaseVolumeFillingUp alerts for the dc-tsdb claim in view. Row counts are on the append_only_table_rows_estimate series and the size on append_only_table_bytes, both exported by event-management as table entity_deletion_watermarks."
+      - eval_time: 150m
+        alertname: EntityDeletionWatermarksLarge
+        exp_alerts: []
