@@ -33,22 +33,30 @@ var repositoryDeletionPolicies = map[string]deletionPolicy{
 		deletionPurge, "Deleted with the device's live view by ApplyDeviceDeleted, on a higher-incarnation reset in the merge, and by the orphan sweep; a lower-incarnation update writes no position."},
 	"backend/services/device-state/model/model.go:LatestMeasurement": {
 		deletionPurge, "Deleted with the device's live view by ApplyDeviceDeleted, on a higher-incarnation reset in the merge, and by the orphan sweep; a lower-incarnation update writes no reading."},
+	"backend/services/event-management/model/device_incarnation.go:deletedDeviceBound": {
+		deletionHistory, "Read shape of entity_deletion_watermarks: the token's deletion time that bounds a read by device token to its current incarnation. Never written through; the tenant purge erases the rows."},
+	"backend/services/event-management/model/device_incarnation.go:heldDeviceToken": {
+		deletionHistory, "Read shape of device_token_holders: when a live device last held a token, read only to decide whether a deleted token was created again. Never written through; the tenant purge erases the rows."},
+	"backend/services/event-management/model/device_token_holders.go:DeviceTokenHolder": {
+		deletionHistory, "A monotone HeldSince per (tenant, device token), recorded from device-roster facts and the anchor sweep. Deleting the holder moves the token's deletion watermark past it, which is what turns the read bound off; the row itself stays so a late or replayed fact cannot move it back. The tenant purge erases the rows."},
+	"backend/services/event-management/model/device_incarnation.go:eventReceiptKey": {
+		deletionHistory, "Read shape of the events table, the inside of the incarnation bound's key subquery; the rows are Event's and follow its retention."},
 	"backend/services/event-management/model/entity_deletion_watermarks.go:EntityDeletionWatermark": {
 		deletionHistory, "The deletion fact itself: a monotone DeletedTime per (tenant, entity type, token), retained so an anchor of an event received before it and stored late is dropped on insert and swept by the resweep. A re-created same-token entity's anchors (received after DeletedTime) pass; the tenant purge erases the rows."},
 	"backend/services/event-management/model/events.go:AlertEvent": {
 		deletionHistory, "Write-time alert payload records OccurredTime and event/payload identity; retained as historical telemetry under DataLifecyclePolicy retention, not a live device projection. Token queries can include old history."},
 	"backend/services/event-management/model/events.go:Event": {
-		deletionHistory, "Immutable event identity and OccurredTime record what happened; DataLifecyclePolicy retention bounds history when enabled. Token reuse can expose older historical events, deliberately not current device state."},
+		deletionHistory, "Immutable event identity and OccurredTime record what happened; DataLifecyclePolicy retention bounds history when enabled. A read by a reused token returns only events received at or after its latest recorded deletion (deviceIncarnationBound)."},
 	"backend/services/event-management/model/events.go:EventAnchor": {
 		deletionPurge, "EntityAnchorReconciler calls DeleteAnchorsForEntity with DeletedTime, removing source-device or target-entity anchors strictly before that occurrence-time bound; the orphan sweep also reconciles missing entities."},
 	"backend/services/event-management/model/events.go:LocationEvent": {
-		deletionHistory, "Write-time location payload records OccurredTime and event/payload identity; DataLifecyclePolicy location retention bounds historical queries when enabled. Reused tokens can include older history."},
+		deletionHistory, "Write-time location payload records OccurredTime and event/payload identity; DataLifecyclePolicy location retention bounds historical queries when enabled. A read by a reused token returns only rows whose stored parent was received at or after its latest recorded deletion."},
 	"backend/services/event-management/model/events.go:MeasurementEvent": {
-		deletionHistory, "Write-time measurement payload records OccurredTime and event/payload identity; DataLifecyclePolicy retention bounds historical queries when enabled. Reused tokens can include older history."},
+		deletionHistory, "Write-time measurement payload records OccurredTime and event/payload identity; DataLifecyclePolicy retention bounds historical queries when enabled. A read by a reused token returns only rows whose stored parent was received at or after its latest recorded deletion."},
 	"backend/services/event-management/model/events.go:MeasurementRollup": {
-		deletionHistory, "Continuous aggregate records measurement history in time buckets, read over historical ranges rather than as live device state. There is no entity-deletion hook; old-token history can span incarnations."},
+		deletionHistory, "Continuous aggregate records measurement history in time buckets, read over historical ranges rather than as live device state. There is no entity-deletion hook and its buckets can span incarnations, so a read by a token with a recorded deletion is served from the raw rows instead."},
 	"backend/services/event-management/model/events.go:StateChangeEvent": {
-		deletionHistory, "Write-time state-change payload records OccurredTime and event/payload identity; DataLifecyclePolicy retention bounds history when enabled. Historical token queries may span incarnations."},
+		deletionHistory, "Write-time state-change payload records OccurredTime and event/payload identity; DataLifecyclePolicy retention bounds history when enabled. A read by a reused token returns only rows whose stored parent was received at or after its latest recorded deletion."},
 	"backend/services/event-management/model/failed_events.go:FailedEventRecord": {
 		deletionHistory, "Failure index records occurrence-time diagnostics rather than current device state; DataLifecyclePolicy.FailedEventRetentionDays always ages these out, including history for a reused token."},
 	"backend/services/event-management/model/scope_rules.go:eventAnchorKey": {

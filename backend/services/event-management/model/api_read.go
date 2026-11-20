@@ -232,9 +232,14 @@ func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*Even
 	}
 	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
+	incarnation, err := api.deviceIncarnationBound(ctx, criteria.DeviceToken)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
+	}
 	results := make([]Event, 0)
 	rows, pag, err := readEventPage(ctx, api.RDB, &Event{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
+		result = incarnation.baseEvents(result)
 		return api.eventAnchorFilter(ctx, criteria, result)
 	}, criteria, results)
 	if err != nil {
@@ -254,9 +259,14 @@ func (api *Api) LocationEvents(ctx context.Context, criteria EventSearchCriteria
 	}
 	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
+	incarnation, err := api.deviceIncarnationBound(ctx, criteria.DeviceToken)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
+	}
 	results := make([]LocationEvent, 0)
 	rows, pag, err := readEventPage(ctx, api.RDB, &LocationEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
+		result = api.payloadRows(ctx, incarnation, "location_events", result)
 		return api.anchorFilter(ctx, criteria, result)
 	}, criteria, results)
 	if err != nil {
@@ -276,9 +286,14 @@ func (api *Api) MeasurementEvents(ctx context.Context, criteria EventSearchCrite
 	}
 	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
+	incarnation, err := api.deviceIncarnationBound(ctx, criteria.DeviceToken)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
+	}
 	results := make([]MeasurementEvent, 0)
 	rows, pag, err := readEventPage(ctx, api.RDB, &MeasurementEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
+		result = api.payloadRows(ctx, incarnation, "measurement_events", result)
 		return api.anchorFilter(ctx, criteria, result)
 	}, criteria, results)
 	if err != nil {
@@ -428,13 +443,19 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 	if err != nil {
 		return nil, err
 	}
-	rollup := !api.RollupReadsDisabled && useMeasurementRollup(ctx, criteria)
+	incarnation, err := api.deviceIncarnationBound(ctx, criteria.DeviceToken)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
+	}
+	// The rollup carries no receipt time, so it cannot tell a reused token's incarnations
+	// apart: a token with a recorded deletion is aggregated from the raw rows.
+	rollup := !api.RollupReadsDisabled && !incarnation.active() && useMeasurementRollup(ctx, criteria)
 	names := int64(1)
 	if criteria.Name == nil {
 		// One name more than the cap allows at this bucket count is enough to decide, so
 		// the count stops there instead of reading every name in range.
 		enough := MaxMeasurementRows/rowBuckets(buckets) + 1
-		if names, err = api.distinctMeasurementNames(ctx, criteria, rollup, enough); err != nil {
+		if names, err = api.distinctMeasurementNames(ctx, criteria, incarnation, rollup, enough); err != nil {
 			return nil, boundedReadError(ctx, err, bound)
 		}
 	}
@@ -445,7 +466,7 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 	if rollup {
 		out, err = api.bucketedMeasurementsFromRollup(ctx, criteria)
 	} else {
-		out, err = api.bucketedMeasurementsFromRaw(ctx, criteria)
+		out, err = api.bucketedMeasurementsFromRaw(ctx, criteria, incarnation)
 	}
 	return out, boundedReadError(ctx, err, bound)
 }
@@ -457,12 +478,13 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 // is, so reading further would only cost more. The scope keeps the model, so the
 // tenant-scope callback still applies. A failed count is returned as an error, never as
 // zero names: zero would let the read through unbounded.
-func (api *Api) distinctMeasurementNames(ctx context.Context, criteria MeasurementAggregationCriteria, rollup bool, enough int64) (int64, error) {
+func (api *Api) distinctMeasurementNames(ctx context.Context, criteria MeasurementAggregationCriteria,
+	incarnation incarnationBound, rollup bool, enough int64) (int64, error) {
 	var db *gorm.DB
 	if rollup {
 		db = api.rollupMeasurementScope(ctx, criteria)
 	} else {
-		db = api.rawMeasurementScope(ctx, criteria)
+		db = api.rawMeasurementScope(ctx, criteria, incarnation)
 	}
 	var names []string
 	if err := db.Distinct("name").Limit(int(enough)).Pluck("name", &names).Error; err != nil {
@@ -473,9 +495,10 @@ func (api *Api) distinctMeasurementNames(ctx context.Context, criteria Measureme
 
 // bucketedMeasurementsFromRaw is the exact path: it aggregates the raw
 // measurement_events hypertable per time_bucket, over rawMeasurementScope.
-func (api *Api) bucketedMeasurementsFromRaw(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
+func (api *Api) bucketedMeasurementsFromRaw(ctx context.Context, criteria MeasurementAggregationCriteria,
+	incarnation incarnationBound) ([]MeasurementBucket, error) {
 	results := make([]MeasurementBucket, 0)
-	db := api.rawMeasurementScope(ctx, criteria).
+	db := api.rawMeasurementScope(ctx, criteria, incarnation).
 		Select("time_bucket(make_interval(secs => ?), occurred_time) AS bucket_start, "+
 			"name, "+
 			"avg(value) AS avg, min(value) AS min, max(value) AS max, "+
@@ -492,11 +515,13 @@ func (api *Api) bucketedMeasurementsFromRaw(ctx context.Context, criteria Measur
 // the fail-closed tenant-scope callback injects the tenant predicate (ADR-015) just as
 // it does for the paginated reads. The optional anchor filter reuses the same
 // tenant-scoped event_id subquery as the typed payload reads.
-func (api *Api) rawMeasurementScope(ctx context.Context, criteria MeasurementAggregationCriteria) *gorm.DB {
+func (api *Api) rawMeasurementScope(ctx context.Context, criteria MeasurementAggregationCriteria,
+	incarnation incarnationBound) *gorm.DB {
 	db := api.RDB.DB(ctx).Model(&MeasurementEvent{})
 	if criteria.DeviceToken != nil {
 		db = db.Where("device_token = ?", *criteria.DeviceToken)
 	}
+	db = api.payloadRows(ctx, incarnation, "measurement_events", db)
 	if len(criteria.EventTypes) > 0 {
 		db = db.Where("event_type IN ?", criteria.EventTypes)
 	}
@@ -589,9 +614,14 @@ func (api *Api) AlertEvents(ctx context.Context, criteria EventSearchCriteria) (
 	}
 	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
+	incarnation, err := api.deviceIncarnationBound(ctx, criteria.DeviceToken)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
+	}
 	results := make([]AlertEvent, 0)
 	rows, pag, err := readEventPage(ctx, api.RDB, &AlertEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
+		result = api.payloadRows(ctx, incarnation, "alert_events", result)
 		return api.anchorFilter(ctx, criteria, result)
 	}, criteria, results)
 	if err != nil {
@@ -611,9 +641,14 @@ func (api *Api) StateChangeEvents(ctx context.Context, criteria EventSearchCrite
 	}
 	ctx, cancel, bound := boundEventRead(ctx, criteria.AnchorType)
 	defer cancel()
+	incarnation, err := api.deviceIncarnationBound(ctx, criteria.DeviceToken)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
+	}
 	results := make([]StateChangeEvent, 0)
 	rows, pag, err := readEventPage(ctx, api.RDB, &StateChangeEvent{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
+		result = api.payloadRows(ctx, incarnation, "state_change_events", result)
 		return api.anchorFilter(ctx, criteria, result)
 	}, criteria, results)
 	if err != nil {

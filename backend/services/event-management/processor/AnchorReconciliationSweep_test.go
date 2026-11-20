@@ -69,6 +69,7 @@ func sweepHarness(t *testing.T, api *emtest.MockApi, exists map[string]bool, out
 func TestSweep_DeletesOrphansOnly(t *testing.T) {
 	api := new(emtest.MockApi)
 	api.Mock.On("DistinctAnchorTenants").Return([]string{"acme"}, nil)
+	api.Mock.On("DeletedDeviceTokenTenants").Return([]string{}, nil).Maybe() // no deletions: the holder repair has nothing to ask
 	api.Mock.On("DistinctAnchorTargetsAfter", "", "").Return([]emmodel.AnchorRef{
 		{Type: "customer", Token: "cust-999"}, // orphan
 	}, nil)
@@ -91,6 +92,7 @@ func TestSweep_DeletesOrphansOnly(t *testing.T) {
 func TestSweep_FailsSafeOnResolveError(t *testing.T) {
 	api := new(emtest.MockApi)
 	api.Mock.On("DistinctAnchorTenants").Return([]string{"acme"}, nil)
+	api.Mock.On("DeletedDeviceTokenTenants").Return([]string{}, nil).Maybe() // no deletions: the holder repair has nothing to ask
 	api.Mock.On("DistinctAnchorTargetsAfter", "", "").Return([]emmodel.AnchorRef{
 		{Type: "customer", Token: "cust-999"},
 	}, nil)
@@ -161,6 +163,7 @@ func TestSweep_WalksATenantInPagesAndAsksAboutOnePageAtATime(t *testing.T) {
 
 	api := new(emtest.MockApi)
 	api.Mock.On("DistinctAnchorTenants").Return([]string{"acme"}, nil)
+	api.Mock.On("DeletedDeviceTokenTenants").Return([]string{}, nil).Maybe() // no deletions: the holder repair has nothing to ask
 	// Three reads: two pages of three, then the empty page that ends the source.
 	api.Mock.On("DistinctAnchorTargetsAfter", "", "").Return(page(1, 3), nil)
 	api.Mock.On("DistinctAnchorTargetsAfter", "customer", "cust-003").Return(page(4, 6), nil)
@@ -205,6 +208,7 @@ func TestSweep_ReconciledPagesSurviveALaterPageFailing(t *testing.T) {
 
 	api := new(emtest.MockApi)
 	api.Mock.On("DistinctAnchorTenants").Return([]string{"acme"}, nil)
+	api.Mock.On("DeletedDeviceTokenTenants").Return([]string{}, nil).Maybe() // no deletions: the holder repair has nothing to ask
 	api.Mock.On("DistinctAnchorTargetsAfter", "", "").Return([]emmodel.AnchorRef{
 		{Type: "customer", Token: "cust-001"},
 	}, nil)
@@ -239,6 +243,7 @@ func TestSweep_RefusesAPageThatDidNotAdvanceTheCursorInsteadOfSpinning(t *testin
 
 	api := new(emtest.MockApi)
 	api.Mock.On("DistinctAnchorTenants").Return([]string{"acme"}, nil)
+	api.Mock.On("DeletedDeviceTokenTenants").Return([]string{}, nil).Maybe() // no deletions: the holder repair has nothing to ask
 	// The same page whatever it is asked for: a read whose ordering and keyset filter
 	// disagree looks exactly like this from here.
 	api.Mock.On("DistinctAnchorTargetsAfter", "", "").Return(stuck, nil)
@@ -267,6 +272,7 @@ func TestSweep_RefusesAPageThatDidNotAdvanceTheCursorInsteadOfSpinning(t *testin
 func TestSweep_EmptyTenantNoop(t *testing.T) {
 	api := new(emtest.MockApi)
 	api.Mock.On("DistinctAnchorTenants").Return([]string{"acme"}, nil)
+	api.Mock.On("DeletedDeviceTokenTenants").Return([]string{}, nil).Maybe() // no deletions: the holder repair has nothing to ask
 	api.Mock.On("DistinctAnchorTargetsAfter", "", "").Return([]emmodel.AnchorRef{}, nil)
 	api.Mock.On("DistinctAnchorDeviceTokensAfter", "").Return([]emmodel.AnchorRef{}, nil)
 
@@ -274,4 +280,49 @@ func TestSweep_EmptyTenantNoop(t *testing.T) {
 	sweep.runOnce(context.Background())
 
 	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The holder repair asks device-management about the deleted device tokens not yet known to be
+// held again, a page at a time, and records the ones that resolve, each as held from EXACTLY the
+// deletion it asked about (never the sweep's own clock: a newer deletion must always overtake
+// it). A token that does not resolve (deleted and never re-created) records nothing.
+func TestSweep_RepairsHoldersOfReCreatedTokensOnly(t *testing.T) {
+	d1 := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	d9 := d1.Add(time.Hour)
+	api := &emtest.MockApi{}
+	api.Mock.On("DistinctAnchorTenants").Return([]string{}, nil)
+	api.Mock.On("DeletedDeviceTokenTenants").Return([]string{"acme"}, nil)
+	api.Mock.On("UnheldDeletedDeviceTokensAfter", "").Return([]emmodel.DeletedDeviceToken{
+		{Token: "gone-1", DeletedTime: d1}, {Token: "pump-1", DeletedTime: d1}}, nil)
+	api.Mock.On("UnheldDeletedDeviceTokensAfter", "pump-1").Return([]emmodel.DeletedDeviceToken{
+		{Token: "pump-9", DeletedTime: d9}}, nil)
+	api.Mock.On("UnheldDeletedDeviceTokensAfter", "pump-9").Return([]emmodel.DeletedDeviceToken{}, nil)
+	var held []string
+	api.Mock.On("RecordDeviceTokenHeld", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		held = append(held, fmt.Sprintf("%s@%s", args.String(0), args.Get(1).(time.Time).Format(time.RFC3339)))
+	}).Return(nil)
+
+	s := sweepHarness(t, api, map[string]bool{"device|pump-1": true, "device|pump-9": true, "area|gone-1": true}, false)
+	if err := s.runOnce(context.Background()); err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	want := fmt.Sprintf("[pump-1@%s pump-9@%s]", d1.Format(time.RFC3339), d9.Format(time.RFC3339))
+	if fmt.Sprint(held) != want {
+		t.Fatalf("recorded %v; want %v: only the device tokens that resolve again, every page of them, "+
+			"each at the deletion it was asked about", held, want)
+	}
+}
+
+// An unreachable device-management records nothing: a token is never taken as re-created on an
+// answer that did not come.
+func TestSweep_HolderRepairFailsSafe(t *testing.T) {
+	api := &emtest.MockApi{}
+	api.Mock.On("DistinctAnchorTenants").Return([]string{}, nil)
+	api.Mock.On("DeletedDeviceTokenTenants").Return([]string{"acme"}, nil)
+	api.Mock.On("UnheldDeletedDeviceTokensAfter", "").Return([]emmodel.DeletedDeviceToken{{Token: "pump-1"}}, nil)
+	s := sweepHarness(t, api, nil, true)
+	if err := s.runOnce(context.Background()); err == nil {
+		t.Fatal("a pass that could not ask must not report itself complete")
+	}
+	api.Mock.AssertNotCalled(t, "RecordDeviceTokenHeld", mock.Anything, mock.Anything)
 }

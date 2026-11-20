@@ -29,7 +29,7 @@ import (
 func TestCalculatedEventsIsScopedAndAuthorized(t *testing.T) {
 	db := sqlitetest.OpenMemory(t, &gorm.Config{Logger: logger.Discard})
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&model.Event{}, &model.EventAnchor{}, &model.MeasurementEvent{}))
+	require.NoError(t, db.AutoMigrate(&model.Event{}, &model.EventAnchor{}, &model.MeasurementEvent{}, &model.EntityDeletionWatermark{}))
 	api := model.NewApi(&rdb.RdbManager{Database: db})
 
 	const tenant = "tenant1"

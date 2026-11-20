@@ -23,7 +23,7 @@ func TestEventsCountFreeGraphQL(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&model.Event{}))
+	require.NoError(t, db.AutoMigrate(&model.Event{}, &model.EntityDeletionWatermark{}))
 	api := model.NewApi(&rdb.RdbManager{Database: db})
 	for i := 0; i < 3; i++ {
 		require.NoError(t, db.WithContext(core.WithTenant(context.Background(), "A")).Create(&model.Event{EventId: []byte{byte(i + 1)}, DeviceToken: "device", OccurredTime: time.Date(2026, 1, 1, 0, i, 0, 0, time.UTC), Source: "test"}).Error)

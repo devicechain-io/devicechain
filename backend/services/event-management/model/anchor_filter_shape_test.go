@@ -118,7 +118,7 @@ func TestTheRealAnchorFilteredReadsAreTheTenantFilterInsideTheOuterScopeRule(t *
 	raw := ctx("customer:acme")
 	var out []MeasurementEvent
 	require.NoError(t, api.rawMeasurementScope(raw, MeasurementAggregationCriteria{
-		AnchorType: &area, AnchorToken: &floor}).Find(&out).Error)
+		AnchorType: &area, AnchorToken: &floor}, incarnationBound{}).Find(&out).Error)
 	got := strings.Join(rec.take(), " ; ")
 	assert.Contains(t, got, filterSubquery, "rawMeasurementScope: the tenant filter subquery")
 	assert.Contains(t, got, outerScopeRule, "rawMeasurementScope: the outer scope rule")

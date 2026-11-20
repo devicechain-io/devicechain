@@ -32,7 +32,7 @@ func newCalculatedTestApi(t *testing.T) *Api {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&MeasurementEvent{}))
+	require.NoError(t, db.AutoMigrate(&MeasurementEvent{}, &EntityDeletionWatermark{}))
 	return NewApi(&rdb.RdbManager{Database: db})
 }
 

@@ -234,14 +234,25 @@ func (api *Api) CalculatedEvents(ctx context.Context, req CalculatedEventsReques
 	// Ordered by sample, then name and row identity, so a sample's rows are adjacent and a key
 	// a sample holds twice (two readings of one batch at one instant) resolves the same way on
 	// every read: the first row by payload id.
-	rows, err := api.RDB.DB(ctx).Model(&MeasurementEvent{}).
+	// The device's CURRENT incarnation only: a token deleted and created again keeps the
+	// deleted device's readings stored, and a preview of them would describe another device.
+	// The same deadline as every other event read: the bound below adds a subquery over the
+	// device's stored events, which the request's time window does not limit.
+	ctx, cancel, bound := boundEventRead(ctx, nil)
+	defer cancel()
+	incarnation, err := api.deviceIncarnationBound(ctx, &req.DeviceToken)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
+	}
+	query := api.RDB.DB(ctx).Model(&MeasurementEvent{}).
 		Select("event_id, occurred_time, name, value").
 		Where("device_token = ? AND name IN ? AND occurred_time >= ? AND occurred_time <= ?",
-			req.DeviceToken, keys, req.From, req.To).
+			req.DeviceToken, keys, req.From, req.To)
+	rows, err := api.payloadRows(ctx, incarnation, "measurement_events", query).
 		Order("occurred_time ASC, event_id ASC, name ASC, payload_id ASC").
 		Rows()
 	if err != nil {
-		return nil, err
+		return nil, boundedReadError(ctx, err, bound)
 	}
 	defer rows.Close()
 
@@ -255,7 +266,7 @@ func (api *Api) CalculatedEvents(ctx context.Context, req CalculatedEventsReques
 	for rows.Next() {
 		var row storedInputRow
 		if err := rows.Scan(&row.EventId, &row.OccurredTime, &row.Name, &row.Value); err != nil {
-			return nil, err
+			return nil, boundedReadError(ctx, err, bound)
 		}
 		if cur == nil || !row.OccurredTime.Equal(cur.OccurredTime) || !bytes.Equal(row.EventId, cur.EventId) {
 			if cur != nil {
@@ -273,7 +284,7 @@ func (api *Api) CalculatedEvents(ctx context.Context, req CalculatedEventsReques
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, boundedReadError(ctx, err, bound)
 	}
 	if cur != nil {
 		ev.finish()

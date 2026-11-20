@@ -92,5 +92,8 @@ var (
 		// rollup's persisted watermark (see its doc comment).
 		NewTenantUsageIngestSchema(),
 		NewEntityDeletionWatermarksSchema(),
+		// When a live device last held each token, so a read by a deleted token is bounded only
+		// once the token has been created again (device_incarnation.go).
+		NewDeviceTokenHoldersSchema(),
 	}
 )

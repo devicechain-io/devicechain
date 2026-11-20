@@ -298,6 +298,32 @@ func TestEventProcessingHasReadOnlyPlacementGrantsNowThatItRoutes(t *testing.T) 
 	require.True(t, writer.publishes("$KV."+names[0]+".key"))
 }
 
+// event-management reads device-roster facts (it records which deleted device tokens have been
+// created again) through its OWN named durable, and may not publish a roster fact: the stream is
+// device-management's. The control is device-management's publish on the same subject.
+func TestEventManagementReadsTheDeviceRosterThroughItsOwnDurableOnly(t *testing.T) {
+	p, err := AreaPermissions(permInstance, "event-management")
+	require.NoError(t, err)
+	name := messaging.StreamName(permInstance, streams.DeviceRoster)
+	durables := messaging.DeclaredDurables(permInstance, streams.DeviceRoster,
+		streams.Reader{Area: "event-management", Mode: streams.ReadDurable})
+	require.NotEmpty(t, durables)
+	for _, d := range durables {
+		require.True(t, p.publishes("$JS.API.CONSUMER.CREATE."+name+"."+d+".inst1.*.x"), "create %s", d)
+		require.True(t, p.publishes("$JS.API.CONSUMER.MSG.NEXT."+name+"."+d), "next %s", d)
+		require.True(t, p.publishes("$JS.ACK."+name+"."+d+".1.2.3.4.5"), "ack %s", d)
+	}
+	other := messaging.DeclaredDurables(permInstance, streams.DeviceRoster,
+		streams.Reader{Area: "event-processing", Mode: streams.ReadDurable})
+	require.NotEmpty(t, other)
+	require.False(t, p.publishes("$JS.API.CONSUMER.MSG.NEXT."+name+"."+other[0]), "event-processing's durable is not event-management's")
+	subject := permInstance + ".acme." + streams.DeviceRoster
+	require.False(t, p.publishes(subject), "event-management must not publish a roster fact")
+	writer, err := AreaPermissions(permInstance, "device-management")
+	require.NoError(t, err)
+	require.True(t, writer.publishes(subject), "control: the writer publishes the same subject")
+}
+
 // 🔑 R3: a durable consumer is named exactly, so one area cannot rewrite, steal from or ack
 // another's. The one wildcard-named grant is the ephemeral reader's, on its own stream, and it
 // is the residue the stream-administration step removes.

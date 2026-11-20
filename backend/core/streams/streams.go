@@ -1078,7 +1078,7 @@ var All = []Stream{
 	// start and every five minutes), not by replay.
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceRoster, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "roster changes are projected from the device store", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"command-delivery", ReadDurable}, {"event-processing", ReadDurable}, {"update-management", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
+	{Suffix: DeviceRoster, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "roster changes are projected from the device store", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"command-delivery", ReadDurable}, {"event-management", ReadDurable}, {"event-processing", ReadDurable}, {"update-management", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
 
 	// Emitted post-commit whenever a geofence change mints a new fence-set version, naming that
 	// version's fences and the content address of each one's geometry so event-processing's live

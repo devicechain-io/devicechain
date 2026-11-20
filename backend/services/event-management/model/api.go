@@ -86,6 +86,15 @@ type EventManagementApi interface {
 	DistinctAnchorTargetsAfter(ctx context.Context, afterType, afterToken string) ([]AnchorRef, error)
 	DistinctAnchorDeviceTokensAfter(ctx context.Context, after string) ([]AnchorRef, error)
 
+	// RecordDeviceTokenHeld moves forward the instant a live device is known to hold token
+	// (DeviceTokenHolder); the device-roster consumer and the anchor sweep call it. The two
+	// reads after it drive the sweep's repair of a missed roster fact: the tenants with a
+	// recorded deletion (cross-tenant; needs a system context), and one page of the current
+	// tenant's deleted device tokens not yet known to be held again.
+	RecordDeviceTokenHeld(ctx context.Context, token string, since time.Time) error
+	DeletedDeviceTokenTenants(ctx context.Context) ([]string, error)
+	UnheldDeletedDeviceTokensAfter(ctx context.Context, after string) ([]DeletedDeviceToken, error)
+
 	// PersistInTx runs fn inside a single database transaction whose handle
 	// carries the supplied context, so what fn writes — one message's events, or a
 	// batch of messages' — commits all-or-nothing (ADR-022 E5).

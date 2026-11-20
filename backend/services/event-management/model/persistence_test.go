@@ -44,10 +44,13 @@ func newPersistenceTestApi(t *testing.T) *Api {
 		`ON events (tenant_id, occurred_time, event_id);`).Error; err != nil {
 		t.Fatalf("failed to create identity index: %v", err)
 	}
-	if err := db.AutoMigrate(&MeasurementEvent{}, &EventAnchor{}, &EntityDeletionWatermark{}); err != nil {
+	if err := db.AutoMigrate(&MeasurementEvent{}, &EventAnchor{}, &EntityDeletionWatermark{}, &DeviceTokenHolder{}); err != nil {
 		t.Fatalf("failed to migrate child tables: %v", err)
 	}
 	if err := db.Exec(`CREATE UNIQUE INDEX uq_entity_deletion_watermarks_key ON entity_deletion_watermarks (tenant_id, entity_type, entity_token)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX uq_device_token_holders_key ON device_token_holders (tenant_id, device_token)`).Error; err != nil {
 		t.Fatal(err)
 	}
 	// Each payload row carries its own identity too, so a redelivery of an event with no

@@ -6,6 +6,8 @@ ALTER TABLE ONLY "event-management".audit_events ALTER COLUMN id SET DEFAULT nex
 ALTER TABLE ONLY "event-management".calculated_backfills
  ADD CONSTRAINT calculated_backfills_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "event-management".calculated_backfills ALTER COLUMN id SET DEFAULT nextval('"event-management".calculated_backfills_id_seq'::regclass);
+ALTER TABLE ONLY "event-management".device_token_holders
+ ADD CONSTRAINT device_token_holders_pkey PRIMARY KEY (tenant_id, device_token);
 ALTER TABLE ONLY "event-management".entity_deletion_watermarks
  ADD CONSTRAINT entity_deletion_watermarks_pkey PRIMARY KEY (tenant_id, entity_type, entity_token);
 ALTER TABLE ONLY "event-management".event_management_migrations
@@ -124,6 +126,11 @@ CREATE TABLE "event-management".calculated_backfills (
  cancel_requested_at timestamp with time zone,
  CONSTRAINT chk_calculated_backfills_phase CHECK ((phase = ANY (ARRAY['FILL'::text, 'REFRESH'::text]))),
  CONSTRAINT chk_calculated_backfills_status CHECK ((status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text, 'SUCCEEDED'::text, 'CANCELLED'::text, 'FAILED'::text])))
+);
+CREATE TABLE "event-management".device_token_holders (
+ tenant_id character varying(128) NOT NULL,
+ device_token character varying(128) NOT NULL,
+ held_since timestamp with time zone NOT NULL
 );
 CREATE TABLE "event-management".entity_deletion_watermarks (
  tenant_id character varying(128) NOT NULL,

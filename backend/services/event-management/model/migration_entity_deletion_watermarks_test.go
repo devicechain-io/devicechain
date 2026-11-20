@@ -29,7 +29,6 @@ func TestEntityDeletionWatermarkMigrationSnapshotAndReplay(t *testing.T) {
 	}, entityDeletionWatermarksDDL, "the migration owns its literal snapshot")
 	m := NewEntityDeletionWatermarksSchema()
 	assert.Equal(t, "20261119000000", m.ID)
-	assert.Equal(t, len(Migrations)-1, migrationPosition(t, m.ID))
 	assert.Equal(t, migrationPosition(t, NewTenantUsageIngestSchema().ID)+1, migrationPosition(t, m.ID))
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
