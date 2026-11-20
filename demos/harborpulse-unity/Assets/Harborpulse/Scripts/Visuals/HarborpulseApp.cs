@@ -45,6 +45,9 @@ namespace DeviceChain.Harborpulse.Visuals
         [Tooltip("The shaders the scene builds its materials from; assigned by the scene builder so a player build includes them.")]
         public Shader litShader, waterShader, skyShader, wetWellShader;
 
+        [Tooltip("Material assets carrying the URP Lit keyword sets the runtime materials use (emission, no environment reflections, transparent). A player build compiles only the shader_feature variants some material in the build uses; without these the windows, lamps and beacons built at run time never emit.")]
+        public Material[] litVariants;
+
         public Camera sceneCamera;
 
         HarborLayout layout;
@@ -63,6 +66,10 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly System.Diagnostics.Stopwatch directorWall = System.Diagnostics.Stopwatch.StartNew();
         string recordRoot, captureDir;
         double captureEvery, nextCapture, quitAfter = double.PositiveInfinity;
+        // -hp-frame-stats: vsync off, and every 10 s the log gets the frames' mean, 95th percentile and worst time
+        bool frameStats;
+        readonly List<float> frameTimes = new List<float>();
+        float frameStatsAt;
         bool engineer, hidden, portrait;
         readonly List<TimedFix> fixes = new List<TimedFix>();
         DateTimeOffset lastFix;
@@ -170,6 +177,8 @@ namespace DeviceChain.Harborpulse.Visuals
                 recordRoot = CommandLineArgs.Get(options, "-hp-record-dir", out _) ?? Path.Combine(Application.persistentDataPath, "recordings");
                 captureDir = CommandLineArgs.Get(options, "-hp-capture-dir", out _);
                 captureEvery = Number(options, "-hp-capture-every", 10, .1, 86400);
+                frameStats = Array.IndexOf(options, "-hp-frame-stats") >= 0;
+                if (frameStats && Application.isPlaying) { QualitySettings.vSyncCount = 0; Application.targetFrameRate = -1; }
                 quitAfter = Number(options, "-hp-quit-after-sim", double.PositiveInfinity, 0, 100000);
                 var resolution = CommandLineArgs.Get(options, "-hp-resolution", out _);
                 if (resolution != null)
@@ -257,6 +266,20 @@ namespace DeviceChain.Harborpulse.Visuals
         {
             if (Problem != null || world == null) return;
             Tick(Time.deltaTime);
+            if (frameStats) FrameStats(Time.unscaledDeltaTime);
+        }
+
+        void FrameStats(float dt)
+        {
+            frameTimes.Add(dt * 1000); frameStatsAt += dt;
+            if (frameStatsAt < 10) return;
+            frameTimes.Sort();
+            var mean = frameTimes.Average();
+            var p95 = frameTimes[Math.Min(frameTimes.Count - 1, (int)(frameTimes.Count * 0.95))];
+            Debug.Log(DemoIdentity.LogPrefix + "frame time over " + frameTimes.Count + " frames at " + Screen.width + "x" + Screen.height + ": mean "
+                + mean.ToString("0.00", CultureInfo.InvariantCulture) + " ms, p95 " + p95.ToString("0.00", CultureInfo.InvariantCulture) + " ms, max "
+                + frameTimes[frameTimes.Count - 1].ToString("0.00", CultureInfo.InvariantCulture) + " ms");
+            frameTimes.Clear(); frameStatsAt = 0;
         }
 
         public void Tick(float dt, DateTimeOffset? wallNow = null)

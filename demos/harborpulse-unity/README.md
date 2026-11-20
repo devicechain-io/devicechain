@@ -341,7 +341,7 @@ SDK and package selection use the caller's environment rather than an account-sp
 ## U2b Unity integration
 
 The scene draws the horseshoe from `PresentationMap`: south-facing North Quay, west-facing East Quay,
-east-facing Basin, mapped truck road and fence rings, depot, breakwater lights, town terraces and ridge.
+east-facing Basin, mapped truck road and fence rings, depot and breakwater lights. U3 replaced the town terraces and ridge (see below).
 Device roots retain the U1 node contract and evidence views, with geometry oriented in quay-local frames.
 Water uses `TideField` rectangle distances on CPU and HLSL, with the exact zero-distance limit on a quay
 and identity vertical metres. Missing readings still use the U1 held value or datum. The continuity grid
@@ -430,8 +430,7 @@ build, live probe problems, live control runs, disk flushing under load and capt
 and runner. No scene operation writes to the platform or creates a device session.
 
 Editor review values: deck 2.4 m, flood-plain surface 1.7 m, gauge mast 4.2 m, charger canopy 3.1 m;
-six ridge terraces at heights `22 + 28*i` m and z=`265 + 48*i` m; church spire top 123 m and clock
-roof top 117 m. Verify rig occlusion and staff separation, cut-away apertures, outfalls, the mapped road
+the U3 town and hills are described under U3 art pass. Verify rig occlusion and staff separation, cut-away apertures, outfalls, the mapped road
 foundation and depot headland, tide-board alignment and CPU/shader water agreement. Verify the 34 px
 caption at 1080p and its >=4.5:1 scrim contrast, camera-space capture, source shapes/words and declared
 arrows, <=4 world tags (2 portrait), 5-node rail cap (2 displayed portrait), 20 s idle + 3 s return,
@@ -514,3 +513,79 @@ Run `python verify_review_mutants.py` from `Dotnet~` for all ten corrected findi
 implementations of 12. It requires a complete green baseline, a named test failure for each broken guard, byte-for-byte
 source restoration and a complete green final gate. Logs, TRX files, restoration hashes and summary are
 under `.build/u2b/review-mutants/`. The normal verification gate also runs the Python checker regressions.
+
+## U3 art pass: town, hills and water
+
+The U2b town was a uniform grid of identical houses on six terraces, and the water mirrored it as a hard grid.
+U3 replaces both. `Scripts/Visuals/Assets/TownBuilder.cs` builds everything behind the waterfront, and it is all
+WORLD scenery: no device stands there and nothing in it reads the platform.
+
+- **Ground.** Inside the core (|x| < 240 m, z < 140 m: the water, the three quays, the mapped road, plain and
+  depot) the ground is the deck, exactly as before. Outside it a height field (`TownBuilder.Height`) rises gently
+  for the town, then into forested hills, then higher ridges far off. The grid is dense (10 m) round the town and
+  coarser outward, with no T-junctions, and leaves out every quad inside the core.
+- **Town.** A seeded plan of eight streets: Main Street climbs inland from the North Quay road between the lofts
+  and the north pump and bends as it goes, with side streets off it, Shore Road behind East Quay and a lane on the
+  western side land. Lots are laid along each street and kept off the core, the streets, each other, the park,
+  the mapped fences and road, and 30 m round every device anchor and the depot; every corner is tested against
+  the buildings already placed, the church first. There are five archetypes: a
+  clapboard house (one or two storeys, side or front gable, sometimes a porch), a shopfront house, a brick
+  commercial block with a cornice, shop windows and an awning, a waterfront shed and an inn with dormers and a
+  veranda. One white church with a steeple stands where Church Street leaves Main Street. Windows are on every
+  facade, about half of them lit at night, and the eastern town is on the east feeder (`EastWindows`), as the
+  U2b houses were.
+- **Trees and hills.** Low-poly deciduous trees in autumn colours and dark conifers stand in the yards and verges
+  and round the park. The hills carry a forest of larger crowns, sparser and coarser with distance, with
+  clearings, every crown wholly over land. Crowns more than 520 m outside the core are baked with the eight-face
+  ellipsoid (a fixed choice, not a camera LOD). No tree casts a shadow, and the trees sit on a code-only layer
+  (29) that the planar reflection leaves out, so the water reflects the town and the hills' ground without a
+  second pass over every crown.
+- **Waterfront.** There is a park lawn at the harbour's north-west corner with a gazebo by the water and a path,
+  a boatyard with three sheds and a hauled-out boat behind East Quay, two timber piers on pilings (off East
+  Quay's south end and inside the Basin's southern dock), and eight moored boats that ride the water like the
+  buoys. The five box "fishing boats" are gone, the flood plain's parked cars have a body and a cabin, the lofts
+  are brick with a cornice and the ferry terminal is grey clapboard under a pitched roof.
+- **Batching.** Geometry is batched by material into 300 m tiles, 900 m for the hills' forest (`MeshKit.Place`
+  builds a placed object into a shared kit), so culling works per tile. The HOME check logs the world's renderer,
+  vertex and shadow-caster counts.
+- **Water.** The planar reflection now has mips, and `HarborWater.shader` samples it soft: a seven-tap,
+  vertically stretched kernel on a blurred mip, blurring more with distance. The pass clears to transparent black,
+  so the taps' colours are already weighted by coverage; the kernel divides by the summed coverage once. Beyond the
+  fade the taps are skipped. Stronger ripple distortion breaks
+  it up, its strength is 0.62, and it fades out between 300 m and 1100 m. The Fresnel peak is lowered to 0.82,
+  so the water keeps its colour at grazing angles. The deep colour is a teal rather than a navy. A turquoise
+  shallow tint lies along the quays (75 m wide), lit like the body, and the storm greys the harbour down.
+  The detail ripple is a little stronger.
+
+`MeshKit.Quad` now sums both triangles' normals: the cone sides of the conifers have one collapsed edge, and a zero
+normal shaded as NaN, which bloom spread across the frame.
+
+HOME still passes at both aspects with every quay, the mouth and the ridge (now the terrain and its forest)
+visible: 16:9 water 43.5 %, sky 0 %, 36/37 devices (the truck is in its depot); 9:16 water 23.0 %, sky 0.7 %,
+36/37 (East Quay lamp 4 is under the 8 px floor, as it was before U3).
+
+
+## U3 art pass: light
+
+- **Overcast day.** `DayLighting.Cloud` (0.55) is a fixed high cloud. It softens the sun (×0.78) and its shadows
+  (`SkyState.ShadowStrength`: 0.57 at noon, lower in the storm), pales the sky to a grey-blue with a pearl horizon,
+  raises the ambient (×1.19) and adds haze (fog density 0.00026). `SkyState.CloudCover` (the high cloud or the
+  storm, whichever is thicker) is what the sky shader draws; `Overcast` stays the storm's own cover.
+- **Readable storm and night.** The ambient never drops below a cool moonlit floor (sky blue at least 0.24). The
+  storm's sky is lighter and its ambient is lifted ×1.5, so it darkens the sky rather than the town. The moon is 0.5.
+  The grading lifts exposure by up to 0.55 EV at night and 0.1 EV in the storm, desaturates the night (never past -16) and caps
+  bloom at 0.5.
+- **Emission in the player.** URP Lit's `_EMISSION`, `_ENVIRONMENTREFLECTIONS_OFF` and `_SURFACE_TYPE_TRANSPARENT`
+  are `shader_feature` keywords: a player compiles a variant only if some material in the build uses it, and every
+  material here is made at run time. Before U3 no window, lamp head, beacon or flow streak emitted in a player, and
+  the well glass was opaque (the Editor compiles every variant, so its stills hid this). `HarborSceneBuilder` now
+  creates `Assets/Harborpulse/Materials/LitVariant-{Emission,Matte,Transparent}.mat`, and the scene references them
+  through `HarborpulseApp.litVariants`. With emission real, the signal emissives are tuned for the player (alarm
+  levels 0.6/0.8/1.0, beacon 1.0, lamp head 4, halo 1.2), low enough that the tonemapper keeps each severity's
+  colour, and the gauge alarm count has a dark plate behind it.
+- **Lamps and windows.** The town's own street lamps stand about 26 m apart along every street, alternating sides,
+  clear of buildings, other streets, the mapped ground and 12 m round devices. They are scenery: the quays' lights
+  are the devices. About half the town's windows are lit at night (emission 4). The eastern town's windows and
+  lamps go dark through the east feeder outage, a WORLD cue like `EastWindows` before.
+- **Frame stats.** `-hp-frame-stats` turns vsync off and logs the mean, 95th-percentile and worst frame time every
+  10 s.

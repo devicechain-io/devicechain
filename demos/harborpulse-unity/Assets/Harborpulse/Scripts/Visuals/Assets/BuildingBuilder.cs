@@ -25,8 +25,13 @@ namespace DeviceChain.Harborpulse.Visuals
         public static void Build(Transform parent, Vector3 at, bool lofts, HarborMaterials m, float wall)
         {
             var t = AssetRig.Node(lofts ? "Quayside Lofts" : "Ferry Terminal", parent, at);
-            House(t, Vector3.zero, lofts ? 38 : 56, lofts ? 18 : 22, lofts ? 17 : 8, lofts ? 5 : 2, m, m.Render, lofts ? m.EastWindows : m.Windows, false);
-            if (lofts) return;
+            // the lofts are a converted brick warehouse with a painted cornice; the terminal a grey clapboard hall under a pitched roof
+            House(t, Vector3.zero, lofts ? 38 : 56, lofts ? 18 : 22, lofts ? 17 : 8, lofts ? 5 : 2, m, lofts ? m.Brick : m.ClapGrey, lofts ? m.EastWindows : m.Windows, !lofts);
+            if (lofts)
+            {
+                new MeshKit().Box(new Vector3(0, 17.3f, 0), new Vector3(39.2f, 0.6f, 19.2f)).Box(new Vector3(0, 3.6f, 9.08f), new Vector3(38.2f, 0.4f, 0.2f)).Spawn("Cornice", t, m.Trim);
+                return;
+            }
             var z = wall - at.z;
             new MeshKit().Box(new Vector3(0, -1.1f, z + 11), new Vector3(36, 0.5f, 10)).Box(new Vector3(0, -0.8f, z + 3), new Vector3(2.4f, 0.2f, 6)).Spawn("FerryPontoon", t, m.Timber);
             var ferry = AssetRig.Node("BerthedFerry", t, new Vector3(0, -(float)DeviceChain.Harborpulse.Model.SitePlan.DeckHeightM, z + 26));

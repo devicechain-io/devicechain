@@ -48,11 +48,12 @@ namespace DeviceChain.Harborpulse.Visuals
             if (texture == null || texture.width != width || texture.height != height)
             {
                 if (texture != null) { texture.Release(); MeshKit.Release(texture); }
-                texture = new RenderTexture(width, height, 24, RenderTextureFormat.ARGBHalf) { name = "Harbor planar reflection", useMipMap = false, filterMode = FilterMode.Bilinear };
+                // mips: the water samples a blurred level of the reflection, never the sharp mirror (see HarborWater's SoftReflection)
+                texture = new RenderTexture(width, height, 24, RenderTextureFormat.ARGBHalf) { name = "Harbor planar reflection", useMipMap = true, autoGenerateMips = true, filterMode = FilterMode.Trilinear };
                 texture.Create();
             }
             reflection.CopyFrom(main); reflection.enabled = false;
-            reflection.targetTexture = texture; reflection.cullingMask = main.cullingMask & ~(1 << WaterLayer);
+            reflection.targetTexture = texture; reflection.cullingMask = main.cullingMask & ~(1 << WaterLayer) & ~(1 << TownBuilder.FoliageLayer);
             reflection.clearFlags = CameraClearFlags.SolidColor; reflection.backgroundColor = Color.clear;
             // y' = 2 * level - y, determinant -1: restore culling even if URP throws.
             var mirror = Matrix4x4.identity; mirror.m11 = -1; mirror.m13 = 2 * Level;
