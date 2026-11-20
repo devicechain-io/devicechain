@@ -50,6 +50,54 @@ namespace DeviceChain.Harborpulse.Tests
         static string Credential(string enabled = "false") => "{\"token\":\"old-real\",\"enabled\":" + enabled + ",\"device\":{\"token\":\"hp-gauge-north-3\"}}";
         static string Measure(string id, double sim, double value = 1, string device = "hp-gauge-north-3", string metric = "water_level_m")
             => "{\"id\":" + Q(id) + ",\"deviceToken\":" + Q(device) + ",\"occurredTime\":" + Q(Ts(sim)) + ",\"name\":" + Q(metric) + ",\"value\":" + value.ToString(CultureInfo.InvariantCulture) + "}";
+        [TestCase(2.6, 3.4)]
+        [TestCase(3.4, 2.6)]
+        public void SameTimestampWellCorrectionsUseFinalBatchValue(double first, double final)
+        {
+            var snapshot = new DirectorReadSnapshot(Array.Empty<DirectorRead>(), measurements: new[] {
+                new DirectorMeasurement("hp-pump-north", Metrics.WetWell, first, At(17)),
+                new DirectorMeasurement("hp-pump-north", Metrics.WetWell, final, At(17))
+            });
+            var store = new ObservationStore(); var observations = new List<Observation>();
+            var adapter = new DirectorObserver(Kit.Layout(), () => snapshot);
+            adapter.Update(Inputs(17.1), o => { observations.Add(o); store.Add(o); }, _ => { });
+            var well = observations.Where(o => o.Kind == "measure" && o.Key == Metrics.WetWell).ToArray();
+            Assert.That(well.Length, Is.EqualTo(1), "one final revision per identity and batch");
+            Assert.That(well.Single().Fields["value"], Is.EqualTo(final.ToString(CultureInfo.InvariantCulture)));
+            store.Add(new Observation("run", "chip", "start", "hp-pump-north", "", "", "", "", "PLATFORM", 666, 666, 17.1, EvidenceSource.Platform,
+                new Dictionary<string, string> { ["runningAt"] = "666" }));
+            store.AddCoverage(new CoverageInterval("run", "pump", 17, 17.1, false));
+            using var doc = JsonDocument.Parse("{\"all\":[{\"chip\":{\"device\":\"hp-pump-north\",\"status\":\"PLATFORM\",\"as\":\"running\"}},{\"measure\":{\"device\":\"hp-pump-north\",\"key\":\"wet_well_m\",\"allBelow\":3.2,\"until\":\"$match.running.runningAt\",\"stream\":\"pump\",\"fromSim\":17,\"toSim\":18}}]}");
+            var trigger = new Observation("run", "alarm", "high", "hp-pump-north", "wet-well-high", "", "", "", "RAISED", 660, 660, 17, EvidenceSource.Platform);
+            Assert.That(Needs.Parse(doc.RootElement).Evaluate(store, new EvidenceContext("run", 17, 18, 1000, trigger: trigger)).Holds, Is.EqualTo(final < 3.2));
+        }
+        [Test]
+        public void FutureWellReadingsRetryWhenDueWithoutRevisitingHistory()
+        {
+            var tap = new DirectorMeasurementTap();
+            // Arrival order differs from due order; a correction arrives before its timestamp is due.
+            tap.Watch(new DirectorMeasurement("hp-pump-north", Metrics.WetWell, 2.6, At(17.3)));
+            tap.Watch(new DirectorMeasurement("hp-pump-north", Metrics.WetWell, 2.8, At(17.2)));
+            var snapshot = new DirectorReadSnapshot(Array.Empty<DirectorRead>(), measurements: tap.Records);
+            var observations = new List<Observation>(); var adapter = new DirectorObserver(Kit.Layout(), () => snapshot);
+            adapter.Update(Inputs(17.1), observations.Add, _ => { });
+            Assert.That(observations.Any(o => o.Kind == "measure"), Is.False);
+            var work = adapter.MeasurementWorkUnits;
+            for (var tick = 1; tick <= 120; tick++) adapter.Update(Inputs(17.1 + tick / 10000.0), observations.Add, _ => { });
+            Assert.That(adapter.MeasurementWorkUnits, Is.EqualTo(work));
+            tap.Watch(new DirectorMeasurement("hp-pump-north", Metrics.WetWell, 3.4, At(17.3)));
+            snapshot = new DirectorReadSnapshot(Array.Empty<DirectorRead>(), measurements: tap.Records);
+            adapter.Update(Inputs(17.2), observations.Add, _ => { });
+            Assert.That(observations.Where(o => o.Kind == "measure").Select(o => o.Fields["value"]), Is.EqualTo(new[] { "2.8" }));
+            adapter.Update(Inputs(17.3), observations.Add, _ => { });
+            var wells = observations.Where(o => o.Kind == "measure").ToArray();
+            Assert.That(wells.Select(o => o.Fields["value"]), Is.EqualTo(new[] { "2.8", "3.4" }));
+            Assert.That(wells[1].OccurredAtS, Is.EqualTo((At(17.3) - Epoch).TotalSeconds));
+            Assert.That(wells[1].ObservedAtS, Is.EqualTo(wells[1].OccurredAtS));
+            work = adapter.MeasurementWorkUnits;
+            adapter.Update(Inputs(17.4), observations.Add, _ => { });
+            Assert.That(adapter.MeasurementWorkUnits, Is.EqualTo(work));
+        }
         static string Rollout(string state = "RUNNING") => "{\"token\":\"rollout-real\",\"state\":" + Q(state) + ",\"startedAt\":" + Q(Ts(26)) + ",\"finishedAt\":" + Q(Ts(26.6)) + ",\"stateChangedAt\":" + Q(Ts(26)) + ",\"maxInFlight\":2,\"artifact\":{\"token\":\"artifact-real\"},\"progress\":{\"total\":6,\"pending\":0,\"inFlight\":0,\"succeeded\":5,\"failed\":1,\"unknown\":0,\"cancelled\":0,\"skipped\":0}}";
         const string Artifact = "{\"token\":\"artifact-real\",\"state\":\"AVAILABLE\",\"trustStatus\":\"SIGNED\",\"signatures\":[{\"countsTowardTrust\":true,\"signer\":{\"token\":\"signer-real\",\"keyId\":\"key-real\",\"state\":\"ACTIVE\"}}]}";
         const string Signer = "{\"token\":\"signer-real\",\"keyId\":\"key-real\",\"state\":\"ACTIVE\"}";

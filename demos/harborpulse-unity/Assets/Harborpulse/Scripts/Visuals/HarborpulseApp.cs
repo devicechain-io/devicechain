@@ -384,6 +384,11 @@ namespace DeviceChain.Harborpulse.Visuals
             }
             try
             {
+                // Both consumers sample this monotonic instant. Keep the predecessor and
+                // any future fixes so validation/interpolation never revisits a whole run.
+                var expired = 0;
+                while (expired + 1 < fixes.Count && fixes[expired + 1].WallS <= directorSeconds) expired++;
+                if (expired > 0) fixes.RemoveRange(0, expired);
                 var drawn = map.TruckAt(fixes, directorSeconds).At;
                 var truck = world.Truck.Root;
                 truck.position = new Vector3((float)drawn.X, (float)SitePlan.DeckHeightM, (float)drawn.Z);

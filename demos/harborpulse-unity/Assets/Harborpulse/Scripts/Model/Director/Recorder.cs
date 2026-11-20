@@ -114,17 +114,25 @@ namespace DeviceChain.Harborpulse.Model.Director
     public sealed class Recorder
     {
         readonly TextWriter observed, world, director, checkpoints;
+        readonly Action<Action> enqueue;
+        readonly bool disabled;
         readonly RecordedState state = new RecordedState();
         long sequence;
         double lastS;
         double checkpointS;
-        public Recorder(TextWriter observed, TextWriter world, TextWriter director, TextWriter checkpoints)
+        public Recorder(TextWriter observed, TextWriter world, TextWriter director, TextWriter checkpoints, Action<Action> enqueue = null)
         {
             this.observed = observed ?? throw new ArgumentNullException(nameof(observed)); this.world = world ?? throw new ArgumentNullException(nameof(world));
             this.director = director ?? throw new ArgumentNullException(nameof(director)); this.checkpoints = checkpoints ?? throw new ArgumentNullException(nameof(checkpoints));
-            Checkpoint(0);
+            this.enqueue = enqueue;
+            disabled = observed == TextWriter.Null && world == TextWriter.Null && director == TextWriter.Null && checkpoints == TextWriter.Null;
+            Run(() => Checkpoint(0));
         }
-        public void Advance(double wallS)
+        // An optional single-consumer dispatcher owns ALL state, serialization and checkpoint
+        // work. Inputs are immutable; queue order preserves the synchronous recorder's bytes.
+        void Run(Action work) { if (!disabled) { if (enqueue == null) work(); else enqueue(work); } }
+        public void Advance(double wallS) => Run(() => AdvanceCore(wallS));
+        void AdvanceCore(double wallS)
         {
             if (wallS < lastS || double.IsNaN(wallS) || double.IsInfinity(wallS)) throw new ArgumentException("recording time must increase");
             while (checkpointS + 60 <= wallS) { checkpointS += 60; Checkpoint(checkpointS); }
@@ -137,16 +145,21 @@ namespace DeviceChain.Harborpulse.Model.Director
         }
         void Append(TextWriter output, double wallS, string kind, Action<Utf8JsonWriter> write)
         {
-            Advance(wallS); var payload = DirectorWire.Json(write); sequence++;
+            AdvanceCore(wallS); var payload = DirectorWire.Json(write); sequence++;
             output.WriteLine(DirectorWire.Json(w => { w.WriteStartObject(); w.WriteNumber("wallS", wallS); w.WriteNumber("sequence", sequence); w.WriteString("kind", kind); w.WritePropertyName("data"); using (var d = JsonDocument.Parse(payload)) d.RootElement.WriteTo(w); w.WriteEndObject(); }));
             output.Flush(); using (var d = JsonDocument.Parse(payload)) state.Apply(kind, d.RootElement);
         }
-        public void Observe(double wallS, Observation observation) => Append(observed, wallS, "observation", w => DirectorWire.Observation(w, observation));
-        public void Coverage(double wallS, CoverageInterval interval) => Append(observed, wallS, "coverage", w => DirectorWire.Coverage(w, interval));
-        public void World(double wallS, string statusJson) => Append(world, wallS, "world", w => { using (var d = JsonDocument.Parse(statusJson)) DirectorWire.Canonical(w, d.RootElement); });
-        public void Decision(DirectorEvent e) => Append(director, e.ShowS, "director", w => DirectorWire.Event(w, e));
-        public void End() => Decision(new DirectorEvent(lastS, "recording-end", "", ""));
-        public void Consumption(double wallS, IEnumerable<string> keys) => Append(director, wallS, "consumed", w => { w.WriteStartArray(); foreach (var key in keys.OrderBy(k => k, StringComparer.Ordinal)) w.WriteStringValue(key); w.WriteEndArray(); });
+        public void Observe(double wallS, Observation observation) => Run(() => Append(observed, wallS, "observation", w => DirectorWire.Observation(w, observation)));
+        public void Coverage(double wallS, CoverageInterval interval) => Run(() => Append(observed, wallS, "coverage", w => DirectorWire.Coverage(w, interval)));
+        public void World(double wallS, string statusJson) => Run(() => Append(world, wallS, "world", w => { using (var d = JsonDocument.Parse(statusJson)) DirectorWire.Canonical(w, d.RootElement); }));
+        public void Decision(DirectorEvent e) => Run(() => Append(director, e.ShowS, "director", w => DirectorWire.Event(w, e)));
+        public void End() => Run(() => Append(director, lastS, "director", w => DirectorWire.Event(w, new DirectorEvent(lastS, "recording-end", "", ""))));
+        public void Consumption(double wallS, IEnumerable<string> keys)
+        {
+            if (disabled) return;
+            var snapshot = keys.ToArray();
+            Run(() => Append(director, wallS, "consumed", w => { w.WriteStartArray(); foreach (var key in snapshot.OrderBy(k => k, StringComparer.Ordinal)) w.WriteStringValue(key); w.WriteEndArray(); }));
+        }
     }
 
     public sealed class RecordingReader

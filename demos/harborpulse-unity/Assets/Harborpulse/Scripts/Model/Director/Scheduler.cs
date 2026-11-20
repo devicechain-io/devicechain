@@ -304,8 +304,8 @@ namespace DeviceChain.Harborpulse.Model.Director
                 foreach (var link in p.Page.Links.Where(l => l[1] == node.Id && p.Nodes.Contains(l[0])))
                 {
                     var before = log.Last(e => e.Kind == "node" && e.Page == p.Page.Id && e.Value == link[0]);
-                    var earlier = store.Records.Where(o => before.Evidence.Contains(o.EventKey)).ToArray();
-                    if (before.ShowS < now && earlier.Length > 0 && result.Records.Count > 0 && earlier.Max(o => o.ObservedAtS) <= result.Records.Max(o => o.ObservedAtS))
+                    var earlier = store.LatestEvidenceTime(before.Evidence);
+                    if (before.ShowS < now && earlier.HasValue && result.Records.Count > 0 && earlier.Value <= result.Records.Max(o => o.ObservedAtS))
                         Emit(now, "link", p, link[0] + "->" + link[1]);
                 }
                 break;
