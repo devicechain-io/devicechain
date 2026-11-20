@@ -140,6 +140,10 @@ func (h *placementHolds) watch(c *ackCoord) {
 		return
 	}
 	h.entries[c] = &holdEntry{}
+	// Renew at once: the next beat can be AckWait/3 away, and this delivery may already have
+	// spent most of its AckWait waiting for a resolver. Under mu, like every beat, so none
+	// follows finish.
+	_ = c.src.InProgress()
 }
 
 // hold makes c, whose outputs have all settled with only placement refusals, wait for placement:

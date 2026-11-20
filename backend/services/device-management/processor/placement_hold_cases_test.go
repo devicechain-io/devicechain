@@ -398,3 +398,14 @@ func TestStopWaitsForTheHoldsGoroutines(t *testing.T) {
 		t.Fatal("HANG: Stop did not return once the check ended")
 	}
 }
+
+// A watched final delivery is renewed the moment it is watched, not at the next beat (AckWait/3
+// in production): it may already have spent most of its AckWait waiting for a resolver.
+func TestAWatchedFinalDeliveryIsRenewedAtOnce(t *testing.T) {
+	h := startPlacementHolds(func(string) error { return nil }, nil, nil, time.Hour, time.Hour,
+		func(context.Context, resolvedItem) bool { return true })
+	defer func() { h.cancel(); <-h.done }()
+	ack := &beatAck{}
+	h.watch(&ackCoord{src: holdSource(1, messaging.MaxDeliver, ack), tenant: holdTenant})
+	require.EqualValues(t, 1, ack.beats.Load())
+}
