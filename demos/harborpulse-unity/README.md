@@ -180,7 +180,10 @@ All platform requests use the runner's operator authority. The scene sends these
 | Update management | `updateRollout` and bounded `updateRolloutTargets` every two seconds after a runner rollout declaration |
 
 The shared observer also checks the active-alarm snapshot every five seconds to detect stream gaps.
-There are no credential queries, mutations, device sessions or command submissions.
+U2b also reads notification attempts by alarm token, alarm suppression stamps/status, the replacement
+journal and retired credentials' tokens and `enabled` flags, artifact trust/signers, rollout targets and
+assignment attempts, quay `anchorDevices`, and bounded measurement history for replacement and restore.
+Credential reads select no secret or credential material. There are no mutations, device sessions or command submissions.
 
 The portable compile checker accepts `--no-restore` when projects have already been restored. For a
 supplemental C# check of URP and Editor code without launching Unity, point it at an installed Editor
@@ -445,3 +448,26 @@ floor, including a reconnect before that deadline, and re-offers the slot for fr
 `StaleCaptionFloorAlsoSurvivesShortReconnect(false/true)` failed against the committed behavior before
 the fix; the failing TRX is retained in `.build/u2b/stale-caption-before.trx`. The remaining protected
 observer, read-query, evidence, storyboard and recorder implementations are unchanged.
+
+### U2b observer feed
+
+`HarborLiveSession.DirectorReads` publishes immutable read snapshots from `Live/DirectorReads.cs`.
+Each document has a bind-time operator authorization probe, then scoped polls at a three-second cadence,
+with one request in flight per read. Pages are bounded at 1000; truncation is a reported failure.
+Unanswered data remains absent with state `waiting`; failed probes stay visible in `Problems` and
+invalidate that read's coverage for the recording. The shared observer tap retains escalation event
+times before the U1 latest-state reducer runs. Reconnect counters preserve gaps even across a frame
+that sees the streams live again.
+
+Construct `new DirectorObserver(layout, () => live.DirectorReads)` once per run and call `Update`
+after building the U1 frame, supplying the run, recording epoch, wall instant, absolute sim hour,
+source and frame through the committed `DirectorInputs` seam. Feed its observations and coverage to
+the recorder/store, and display `Problems`. Layout device identities in the storyboard are translated
+from bound external IDs; alarm tokens/cycles, journal IDs, command tokens and attempt tokens remain
+the platform's identities. Offline preview emits only supplied stand-ins with SCENARIO provenance
+and platform-read gaps. Restore-set identities use the verifier's database microsecond precision;
+unexpected stored times remain in the observed set and prevent an exact tally.
+
+Two storyboard predicate corrections are covered by real-identity regressions: page 6 groups each
+device's own alarm cycle within the outage interval, and page 8 joins a post-failure reading to that
+device's actual attempt, rather than treating a rollout as an attempt shared by all targets.
