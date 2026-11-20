@@ -175,7 +175,6 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 			"entity_type = ? AND entity_id = ?", string(etype), id).Delete(&EntityAttribute{}).Error; err != nil {
 			return err
 		}
-		deletedTime := api.deletionNow()
 		// Capture exactly the alarms removed by the cascade, including any raised
 		// after earlier reads in this transaction, so every deleted open alarm clears.
 		var alarms []*Alarm
@@ -190,19 +189,6 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 				return err
 			}
 		}
-		var alarmEvents []*AlarmStateChangeEvent
-		for _, alarm := range alarms {
-			if alarm.State == "CLEARED" {
-				continue
-			}
-			alarm.State = "CLEARED"
-			event := newAlarmStateChangeEvent(alarm, AlarmEventCleared, "", deletedTime)
-			event.ClearReason = AlarmClearReasonOriginatorDeleted
-			if device != nil {
-				describeAlarmDevice(event, device)
-			}
-			alarmEvents = append(alarmEvents, event)
-		}
 		// Cascade the entity's group memberships (ADR-062 S2): its membership rows address
 		// it by (entity_type, entity_id) with no DB foreign key, mirroring the attribute
 		// cascade, so a deleted member must not leave a dangling membership row.
@@ -216,6 +202,43 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 			}
 			sources = append(sources, moved...)
 		}
+		// 🔴 THE ROW IS LOCKED BEFORE THE DELETION IS STAMPED, and the stamp is taken only now.
+		// Consumers order the deletion against other times this service stamps on the entity —
+		// a device's roster fact (ExpectedSince) above all, which event-management reads, when it
+		// is newer than the deletion, as proof the token was re-created. Stamped before the row
+		// was held, a writer that changed the row in between (a disable, a re-type, a type
+		// re-point) committed a time later than the deletion of an entity nobody re-created.
+		// Held first, a concurrent writer either committed before the lock was granted, so before
+		// the stamp, or waits for this delete and then finds no row.
+		//
+		// The lock is taken HERE, where the delete took the row anyway, and not at the top of
+		// the transaction, so everything above keeps the lock order it always had. At the top it
+		// put a group's row ahead of its membership family, which an access-scope switch and a
+		// pointer move take the other way round; and taking the family first instead held it
+		// across the edge cleanup, closing a three-way cycle with a member's delete (holding the
+		// edge, waiting on an attribute) and an attribute write (holding the attribute, waiting
+		// on the family).
+		locked, err := lockEntityForDeleteOnTx(tx, model, id)
+		if err != nil {
+			return err
+		}
+		if !locked {
+			return errEntityGoneBeforeDelete
+		}
+		deletedTime := api.deletionNow()
+		var alarmEvents []*AlarmStateChangeEvent
+		for _, alarm := range alarms {
+			if alarm.State == "CLEARED" {
+				continue
+			}
+			alarm.State = "CLEARED"
+			event := newAlarmStateChangeEvent(alarm, AlarmEventCleared, "", deletedTime)
+			event.ClearReason = AlarmClearReasonOriginatorDeleted
+			if device != nil {
+				describeAlarmDevice(event, device)
+			}
+			alarmEvents = append(alarmEvents, event)
+		}
 		if err := tx.Unscoped().Where("token = ?", token).Delete(model).Error; err != nil {
 			return err
 		}
@@ -226,6 +249,10 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		trackingSources, err = queueOwnershipOnTx(tx, sources)
 		return err
 	})
+	if errors.Is(err, errEntityGoneBeforeDelete) {
+		// A concurrent delete of the same entity committed first: this one deleted nothing.
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // PendingEntityDeletion preserves a deletion until the broker acknowledges it. A lost
@@ -56,6 +57,22 @@ func entityTenantOnTx(tx *gorm.DB, model any, id uint) (string, error) {
 		return "", fmt.Errorf("the entity being deleted (id %d) has no single tenant to announce its deletion under", id)
 	}
 	return tenants[0], nil
+}
+
+// errEntityGoneBeforeDelete rolls back a delete whose entity row was gone by the time it was
+// locked: a concurrent delete of the same entity committed first.
+var errEntityGoneBeforeDelete = errors.New("the entity was deleted concurrently")
+
+// lockEntityForDeleteOnTx locks the row of the entity being deleted (FOR UPDATE), reporting
+// false when there is no row left to lock. deleteEdgeEntity takes the deletion's time only
+// once it holds this lock; see there for why.
+func lockEntityForDeleteOnTx(tx *gorm.DB, model any, id uint) (bool, error) {
+	ids := make([]uint, 0, 1)
+	if err := tx.Unscoped().Model(model).Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+		Where("id = ?", id).Pluck("id", &ids).Error; err != nil {
+		return false, fmt.Errorf("locking the entity being deleted: %w", err)
+	}
+	return len(ids) == 1, nil
 }
 
 // queueEntityDeletedOnTx records the deletion fact inside the delete's transaction. A failure
