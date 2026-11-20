@@ -496,3 +496,69 @@ func TestACleanReplyDoesNotShortenTheGatherWhileAPartitionIsStillExpected(t *tes
 		"and committed it — was never heard. The caller then records that partition as still "+
 		"holding this tenant's detection windows: %+v", detectPurgeQuiesce, res.Replies)
 }
+
+// TestOneReplyAnswersForEverySiblingPartition is the requester half of "one reply per
+// process". A sharded engine answers once for all of its partitions, because the broker admits
+// only one reply per connection to a request it delivered; every partition that reply carries
+// must count as answered, and the gather must end on it rather than wait out the window.
+func TestOneReplyAnswersForEverySiblingPartition(t *testing.T) {
+	nc := detectRig(t)
+	respondAs(t, nc, DetectPurgeReply{PartitionId: "singleton", Evicted: 2,
+		Siblings: []DetectPurgeReply{{PartitionId: "g1", Evicted: 3}, {PartitionId: "g2"}}})
+
+	start := time.Now()
+	res, err := PurgeTenantDetect(context.Background(), nc, detectInstance, "acme",
+		[]string{"singleton", "g1", "g2"})
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	got := map[string]int64{}
+	for _, r := range res.Replies {
+		assert.Empty(t, r.Siblings, "a flattened reply must not carry its siblings again")
+		got[r.PartitionId] = r.Evicted
+	}
+	assert.Equal(t, map[string]int64{"singleton": 2, "g1": 3, "g2": 0}, got)
+	assert.Len(t, res.Replies, 3)
+	// Not even the straggler window: the last awaited partition arrived in that reply, so there
+	// is nothing left to wait for.
+	assert.Lessf(t, elapsed, detectPurgeQuiesce,
+		"the gather kept waiting (%s) after one reply answered for every expected partition", elapsed)
+}
+
+// TestAFailedSiblingStaysHeld: a sibling carried in a clean parent's reply is weighed on its
+// own. Its error is recorded, and it does not satisfy its partition, so the gather keeps
+// waiting for it instead of ending on the parent's clean answer.
+func TestAFailedSiblingStaysHeld(t *testing.T) {
+	nc := detectRig(t)
+	respondAs(t, nc, DetectPurgeReply{PartitionId: "singleton",
+		Siblings: []DetectPurgeReply{{PartitionId: "g1", Error: "the commit failed"}}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	res, err := PurgeTenantDetect(ctx, nc, detectInstance, "acme", []string{"singleton", "g1"})
+	require.NoError(t, err)
+	assert.GreaterOrEqualf(t, time.Since(start), 900*time.Millisecond,
+		"the gather ended although g1 answered only with an error")
+	require.Len(t, res.Replies, 2)
+	errs := map[string]string{}
+	for _, r := range res.Replies {
+		errs[r.PartitionId] = r.Error
+	}
+	assert.Empty(t, errs["singleton"])
+	assert.Equal(t, "the commit failed", errs["g1"])
+}
+
+// TestASiblingsOwnSiblingsAreNotRead pins the one level: nothing nests, and a reply that did
+// would be answering for partitions no process claims to hold.
+func TestASiblingsOwnSiblingsAreNotRead(t *testing.T) {
+	r := DetectPurgeReply{PartitionId: "a", Siblings: []DetectPurgeReply{
+		{PartitionId: "b", Siblings: []DetectPurgeReply{{PartitionId: "c"}}}}}
+	parts := r.Partitions()
+	require.Len(t, parts, 2)
+	assert.Equal(t, "a", parts[0].PartitionId)
+	assert.Equal(t, "b", parts[1].PartitionId)
+	assert.Nil(t, parts[0].Siblings)
+	assert.Nil(t, parts[1].Siblings)
+	assert.Len(t, r.Siblings, 1, "Partitions must not modify the reply it reads")
+}
