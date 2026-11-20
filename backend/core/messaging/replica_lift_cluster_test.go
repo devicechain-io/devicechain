@@ -753,40 +753,56 @@ func TestBrokerIsClusteredIsReadLiveNotCached(t *testing.T) {
 // window, and it logged that the 3-node broker was "NOT clustered" and that every stream and
 // bucket was being created at one replica. The same answer feeds every create (newStreamConfig,
 // the KV create, the MQTT fail-closed store and its signature), and a create issued in that
-// window is buffered by the client and delivered to the next server once it reconnects, so
-// it lands on the healthy cluster at R1 for good: nothing ever lowers or raises it without an
-// administrator pass.
+// window is held by the client's reconnect buffer and delivered to the next server once it
+// reconnects, so it lands on the healthy cluster at R1 and stays there until something raises it.
 //
 // So the clamp answers from the topology last OBSERVED on a connected broker, and the live
-// predicate (brokerIsClustered, still false here) is left to what wants the live state.
-func TestReplicaClampHoldsTheObservedClusterWhileDisconnected(t *testing.T) {
-	nmgr, cleanup := newTestCluster(t)
-	defer cleanup()
+// predicate (brokerIsClustered, still false here) is left to what wants the live state. The
+// connection is left RECONNECTING, as a rolling restart leaves it, not closed.
+func TestReplicaClampHoldsTheObservedClusterWhileReconnecting(t *testing.T) {
+	servers := dctest.StartJetStreamCluster(t, 3)
+	stopped := false
+	stop := func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		for _, s := range servers {
+			s.Shutdown()
+		}
+	}
+	defer stop()
+	nc, err := nats.Connect(servers[0].ClientURL(), nats.MaxReconnects(-1), nats.ReconnectWait(50*time.Millisecond))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer nc.Close()
+	nmgr := &NatsManager{Microservice: &core.Microservice{InstanceId: "test", FunctionalArea: "area"}, nc: nc}
 	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = 3
 
 	if got := nmgr.effectiveStreamReplicas(); got != 3 {
 		t.Fatalf("effectiveStreamReplicas() = %d against a connected 3-node cluster, want 3; "+
-			"the disconnected case below would prove nothing", got)
+			"the reconnecting case below would prove nothing", got)
 	}
 
-	// Take every server away, so the connection is RECONNECTING: the state a rolling
-	// restart puts a pod in for the seconds between one server and the next.
-	cleanup()
+	// Take every server away, so the connection is RECONNECTING: the state a rolling restart
+	// puts a pod in for the seconds between one server and the next.
+	stop()
 	deadline := time.Now().Add(15 * time.Second)
-	for nmgr.nc.IsConnected() {
+	for nc.Status() != nats.RECONNECTING {
 		if time.Now().After(deadline) {
-			t.Fatal("the connection still reports CONNECTED after every server was shut down")
+			t.Fatalf("the connection is %v, not RECONNECTING, after every server was shut down", nc.Status())
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	if nmgr.brokerIsClustered() {
-		t.Fatal("brokerIsClustered() is true while disconnected; the live predicate must stay live")
+		t.Fatal("brokerIsClustered() is true while reconnecting; the live predicate must stay live")
 	}
 
 	if got := nmgr.effectiveStreamReplicas(); got != 3 {
 		t.Errorf("effectiveStreamReplicas() = %d while the connection is between servers of a cluster "+
 			"it has seen, want 3: a stream or bucket created now is buffered, delivered to the cluster "+
-			"on reconnect, and stays unreplicated for good", got)
+			"on reconnect, and stays unreplicated", got)
 	}
 	if got := nmgr.newStreamConfig("inbound-events").Replicas; got != 3 {
 		t.Errorf("newStreamConfig(...).Replicas = %d while reconnecting, want 3", got)
@@ -796,12 +812,14 @@ func TestReplicaClampHoldsTheObservedClusterWhileDisconnected(t *testing.T) {
 		t.Error("the sampler warned that the broker is NOT clustered while the connection was only " +
 			"between servers: an operator is told to change a setting that is already right")
 	}
+	if nc.Status() != nats.RECONNECTING {
+		t.Fatalf("the connection left RECONNECTING (%v) during the assertions; they did not test it", nc.Status())
+	}
 }
 
 // Before anything has been observed, the clamp does not ASSUME a single server: an unknown
 // topology is not evidence of an unclustered one. It asks for what is configured, and a broker
-// that really cannot replicate refuses the create, which is retried once the connection has
-// answered the question.
+// that really cannot replicate refuses the create rather than storing it unreplicated.
 func TestReplicaClampDoesNotAssumeUnclusteredBeforeObserving(t *testing.T) {
 	nmgr := &NatsManager{Microservice: &core.Microservice{InstanceId: "test", FunctionalArea: "area"}}
 	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = 3

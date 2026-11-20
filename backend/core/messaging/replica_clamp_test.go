@@ -72,14 +72,15 @@ func TestBrokerIsClusteredAgainstAnUnclusteredBroker(t *testing.T) {
 		t.Errorf("effectiveStreamReplicas() = %d against an unclustered broker, want 1", got)
 	}
 
-	// A manager with no connection at all must clamp rather than assume.
+	// A manager with no connection at all reads as not clustered (the replica clamp does not
+	// read this predicate: see replicaClampClustering).
 	disconnected := &NatsManager{Microservice: nmgr.Microservice}
 	if disconnected.brokerIsClustered() {
 		t.Error("brokerIsClustered() is true with a nil connection")
 	}
 
-	// A connection that exists but is not CONNECTED must also clamp, and must not
-	// be mistaken for a definitive "not clustered".
+	// A connection that exists but is not CONNECTED also reads false here; the replica
+	// clamp is what must not take that for a definitive "not clustered".
 	nmgr.nc.Close()
 	if nmgr.brokerIsClustered() {
 		t.Error("brokerIsClustered() is true on a closed connection; an unreachable broker is being " +

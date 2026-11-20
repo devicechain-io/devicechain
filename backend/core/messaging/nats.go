@@ -543,8 +543,9 @@ func (nmgr *NatsManager) effectiveStreamReplicas() int {
 	clustered, known := nmgr.replicaClampClustering()
 	if !known {
 		// Nothing has been observed, so nothing is clamped: an unknown topology is not
-		// evidence of an unclustered one. A broker that really cannot replicate refuses
-		// the create, and the retry re-evaluates once the connection has answered.
+		// evidence of an unclustered one. Initialize records an observation once the
+		// connection is up, so this is a manager that has never been connected; a broker
+		// that really cannot replicate refuses the create rather than storing it at R1.
 		return desired
 	}
 	return clampReplicas(desired, clustered)
@@ -570,21 +571,23 @@ const (
 // this clamp (newStreamConfig, the KV create, the MQTT fail-closed store and the signature
 // its holders compare), and a create issued while disconnected is not refused: the
 // client's reconnect buffer holds it and delivers it to the next server, so it lands on
-// the healthy cluster at R1, and no starting pod ever lowers or raises that.
+// the healthy cluster at R1 and stays there until something raises it (the administrator's
+// next pass, or for the identity buckets and the MQTT store, the next pass of their owner).
 //
 // This is NOT the cache the comment on brokerIsClustered warns against. That cache held
 // an answer taken before the connection had reached any broker, so "not reached yet" was
-// pinned as "not clustered". Here a disconnected or still-dialling connection records
-// nothing: only a CONNECTED read is kept, and every connected read replaces it, so a broker
-// scaled up or down is read as it is the moment the connection is back.
+// pinned as "not clustered". Here a disconnected, still-dialling or draining connection
+// records nothing: only a CONNECTED read is kept, and every connected read replaces it, so
+// a broker scaled up or down is read as it is the moment the connection is back.
 func (nmgr *NatsManager) replicaClampClustering() (clustered, known bool) {
 	if nc := nmgr.nc; nc != nil {
 		// ConnectedClusterName reads "" for any status other than CONNECTED, so an empty
 		// name is a single-server broker only if the connection was CONNECTED on both sides
-		// of the read, and on the same connection (no reconnect in between).
-		before, wasConnected := nc.Stats().Reconnects, nc.IsConnected()
+		// of the read, and on the same connection (no reconnect in between). Status, not
+		// IsConnected: IsConnected is also true while draining, when the name reads "".
+		before, wasConnected := nc.Stats().Reconnects, nc.Status() == nats.CONNECTED
 		clustered := nc.ConnectedClusterName() != ""
-		if clustered || (wasConnected && nc.IsConnected() && nc.Stats().Reconnects == before) {
+		if clustered || (wasConnected && nc.Status() == nats.CONNECTED && nc.Stats().Reconnects == before) {
 			observed := clusteringSingle
 			if clustered {
 				observed = clusteringClustered
@@ -3475,6 +3478,13 @@ func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 	nmgr.closeRequested = requested
 	nmgr.js = js
 	nmgr.connectedServer.Store(nc.ConnectedUrl())
+	// Read the topology now, while the connection is known to be up, so the replica clamp has
+	// an observation before anything creates a stream or bucket. Without it, a connection that
+	// drops between here and the first create (user-management's identity buckets are made on
+	// a connection of their own, and the administrator's KV pass has no retry) would leave the
+	// clamp with nothing observed, and it would ask a single-server broker for the configured
+	// count and be refused.
+	nmgr.replicaClampClustering()
 	log.Info().Msg(fmt.Sprintf("Verified connectivity to NATS at '%s'", url))
 	// The identity account, for the one service that holds its login. Dialled after the main
 	// connection so a broker that is merely slow fails here with the same named error, and closed

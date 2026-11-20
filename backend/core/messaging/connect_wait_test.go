@@ -236,3 +236,26 @@ func TestInitializeToleratesABrokerThatArrivesWithinTheWait(t *testing.T) {
 		t.Fatal("Initialize succeeded without a live connection")
 	}
 }
+
+// Initialize leaves the replica clamp with an observation of the broker it reached, so a
+// connection that drops before the first create still clamps for a single server rather than
+// asking it for the configured count and being refused (user-management's identity buckets are
+// created on a connection of their own, and the administrator's KV pass has no retry).
+func TestInitializeRecordsTheBrokerTopologyForTheReplicaClamp(t *testing.T) {
+	srv := runTestServer(t)
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: uniqueArea("clamp-prime")}
+	ms.InstanceConfiguration.ApplyDefaults()
+	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = "127.0.0.1"
+	ms.InstanceConfiguration.Infrastructure.Nats.Port = uint32(srv.Addr().(*net.TCPAddr).Port)
+	ms.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = 3
+	nmgr := NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(*NatsManager) error { return nil })
+	if err := nmgr.Initialize(t.Context()); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	t.Cleanup(nmgr.closeConn)
+	if got := nmgr.observedClustering.Load(); got != clusteringSingle {
+		t.Fatalf("observedClustering = %d after Initialize against a single server, want %d "+
+			"(clusteringSingle): the clamp has nothing to answer from if the connection drops "+
+			"before the first create", got, clusteringSingle)
+	}
+}
