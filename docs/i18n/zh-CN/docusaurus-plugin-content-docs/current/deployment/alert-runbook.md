@@ -565,6 +565,14 @@ A Sparkplug source's broker refused a group subscription
 
 ## `devicechain.event-management`
 
+### EntityDeletionWatermarksLarge {#entitydeletionwatermarkslarge}
+
+**严重程度:** `warning` · **规则组:** `devicechain.event-management`
+
+the table that remembers deleted entities is over 1 GiB
+
+**含义与处理方式.** The deletion watermark table in the event store is over 1 GiB, with its indexes. It holds one row for each distinct token ever deleted (tenant, entity type and token) and nothing prunes it: the row is what keeps an entity created later under the same token from reading the deleted one's event history, so it is kept for the life of the tenant. A row is about 200 bytes, so this is several million distinct deleted tokens, far more than a fleet that is replaced a few times over. The size is allocated space, which also counts rows that were updated or removed and not yet reused, so check the live count before blaming a loop; when the count is in the millions it is nearly always one tenant creating and deleting entities under new tokens. On the event-store primary (dc-tsdb), by tenant: SELECT tenant_id, count(*) FROM "event-management".entity_deletion_watermarks GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10; Stop the loop at its source. Purging the tenant removes its rows, but the table keeps the space for reuse and its size does not fall until it is rewritten (VACUUM FULL on the table, in a quiet period), so this alert can stay firing after the cause is gone. Otherwise the table is safe to leave: the growth is slow, and it only matters as part of the event store's volume, so keep the DatabaseVolumeFillingUp alerts for the dc-tsdb claim in view. Row counts are on the append_only_table_rows_estimate series and the size on append_only_table_bytes, both exported by event-management as table entity_deletion_watermarks.
+
 ### FailedEventsSustained {#failedeventssustained}
 
 **严重程度:** `warning` · **规则组:** `devicechain.event-management`

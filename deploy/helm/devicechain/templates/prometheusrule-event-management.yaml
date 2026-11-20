@@ -7,6 +7,14 @@ device per reason per hour and folds the rest into a count. So the TABLE cannot 
 operator that a fleet is being refused a thousand events a second; the rate counter the reader
 increments for EVERY record can, and this rule reads that.
 
+THE GROUP ALSO CARRIES EntityDeletionWatermarksLarge, the size alert for the table that remembers
+every deleted (tenant, entity type, token). Nothing prunes that table, so its size is measured instead: one
+row is added per DISTINCT deleted key (deleting and re-creating one token updates one row), and a row is
+about 200 bytes with its primary key and a partial index (measured: 1,000,000 rows with 36-character
+tokens took 192 MiB, 202 bytes a row), so the 1 GiB threshold is about five million distinct deleted tokens. That is far beyond a fleet that is replaced a few times over,
+and a count of that size is almost always something creating and deleting devices under fresh tokens in a
+loop. The series is the shared append-only table gauge every service exports for its own tables.
+
 ANY ONE REASON ABOVE 1 RECORD A SECOND FOR 15 MINUTES FIRES. A handful of refusals is a device
 with a typo; a sustained rate is a fleet that was configured wrong, a device stuck retrying, or a release that broke
 ingest, and it is the case where nobody is watching the rate.
@@ -40,4 +48,42 @@ spec:
             runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#failedeventssustained"
             summary: "the platform has been refusing more than one event a second for the same reason for 15 minutes"
             description: "Events are being refused or could not be stored at more than one a second for the reason named by the reason label, and have been for 15 minutes. That can be a single device sending that fast (2 a second from one device is enough to fire it) or many devices failing together: a credential or certificate that is wrong across many devices (unauthenticated), devices that were never registered (device_not_found), a gateway publishing for devices it does not hold (not_gateway_child), or a failing dependency (api_call_failed). The tenants' failedEvents query and the Ingest failures view in the console show which devices and what the platform said, at most ten rows per device an hour with the rest counted. Nothing is re-sent: the events were not stored, and fixing the cause makes the devices' next events succeed."
+        # The deletion watermark table over 1 GiB, held for an hour. See the header for the
+        # sizing: one row per distinct deleted token, about 200 bytes a row, so this is about five million
+        # distinct tokens. Growth is measured in weeks, hence the hour.
+        #
+        # max by (namespace), never sum: every event-management replica exports the same shared table's
+        # size, so a sum multiplies it by the replica count and jumps during a rollout. The size is the
+        # catalog's total relation size (heap, primary key and the partial index); it is exact, unlike
+        # the row estimate, which stays absent until the table is first analyzed.
+        #
+        # A table that cannot be measured exports NO series, so this rule stays quiet rather than
+        # reading a blind collector as an empty table; the table is not what this rule is about when
+        # that happens.
+        - alert: EntityDeletionWatermarksLarge
+          expr: max by (namespace) ({__name__=~"devicechain_[a-z0-9]+_append_only_table_bytes", namespace="{{ $ns }}", table="entity_deletion_watermarks"}) > 1073741824
+          for: 1h
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#entitydeletionwatermarkslarge"
+            summary: "the table that remembers deleted entities is over 1 GiB"
+            description: >-
+              The deletion watermark table in the event store is over 1 GiB, with its indexes. It holds one row for each
+              distinct token ever deleted (tenant, entity type and token) and nothing prunes it: the row is what keeps
+              an entity created later under the same token from reading the deleted one's event history, so
+              it is kept for the life of the tenant. A row is about 200 bytes, so this is several million
+              distinct deleted tokens, far more than a fleet that is replaced a few times over. The size is allocated space, which also counts
+              rows that were updated or removed and not yet reused, so check the live count before blaming a loop; when the count is
+              in the millions it is nearly always one tenant creating and deleting entities under new tokens. On the event-store primary (dc-tsdb), by tenant:
+
+                SELECT tenant_id, count(*) FROM "event-management".entity_deletion_watermarks GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;
+
+              Stop the loop at its source. Purging the tenant removes its rows, but the table keeps the space for reuse
+              and its size does not fall until it is rewritten (VACUUM FULL on the table, in a quiet period), so this alert can
+              stay firing after the cause is gone. Otherwise the table is safe to leave: the growth is slow, and it only matters as part of
+              the event store's volume, so keep the DatabaseVolumeFillingUp alerts for the dc-tsdb claim in view. Row counts are on the
+              append_only_table_rows_estimate series and the size on append_only_table_bytes, both exported by event-management as table
+              entity_deletion_watermarks.
 {{- end }}
