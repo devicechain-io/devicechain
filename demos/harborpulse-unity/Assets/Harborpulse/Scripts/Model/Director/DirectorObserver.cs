@@ -55,7 +55,10 @@ namespace DeviceChain.Harborpulse.Model.Director
         // The verifier compares stored times at database (microsecond) precision.
         static string ReadingIdentity(string device, string instant) => device + "@" + (Time(instant).UtcDateTime.Ticks / 10).ToString(CultureInfo.InvariantCulture);
         double Wall(DateTimeOffset t) => (t - input.RecordingEpoch).TotalSeconds;
-        double Sim(DateTimeOffset t) => input.Source?.Status?.StartedAt != null ? input.Source.Status.ToSimSeconds(t) / 3600 : input.Sim + (t - input.Now).TotalSeconds * 24 / layout.DayLengthSeconds;
+        // Rounded to a microhour (3.6 ms of sim time): converting a platform instant lands a few nanohours off an authored
+        // boundary (the 10:45 window opens at 10.7499999967), which would put it outside a page window that starts at 10.75.
+        double Sim(DateTimeOffset t) => RoundSim(input.Source?.Status?.StartedAt != null ? input.Source.Status.ToSimSeconds(t) / 3600 : input.Sim + (t - input.Now).TotalSeconds * 24 / layout.DayLengthSeconds);
+        public static double RoundSim(double hours) => Math.Round(hours, 6);
         string Device(string token)
         {
             foreach (var d in layout.Devices) if (input.Source != null && input.Source.TryToken(d.ExternalId, out var bound) && bound == token) return d.Token;

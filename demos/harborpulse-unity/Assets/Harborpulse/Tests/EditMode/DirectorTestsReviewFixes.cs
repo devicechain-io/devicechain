@@ -204,5 +204,30 @@ namespace DeviceChain.Harborpulse.Tests
             recorder.Decision(new DirectorEvent(0, "title", "", "title")); recorder.Advance(3); recorder.End();
             Assert.That(DirectorLogCheck.Check(new StringReader(output.ToString())), Is.Empty);
         }
-    }
+    
+        [Test]
+        public void PlatformBoundaryInstantRoundsOntoTheAuthoredHourAndBindsAWindowOpenedInPreRoll()
+        {
+            // Live: the 10:45 window's platform startTime converts to 10.7499999967 sim hours, just outside a page that starts at 10.75.
+            Assert.That(DirectorObserver.RoundSim(10.749999996666668), Is.EqualTo(10.75));
+            var window = new Dictionary<string, string>();
+            var need = "{\"window\":{\"device\":\"hp-light-east-3\",\"key\":\"lamp-flicker\",\"status\":\"ACTIVE\",\"mode\":\"current\"}}";
+            var alarm = DirectorKit.O("alarm", "hp-light-east-3", "lamp-flicker", "RAISED", sim: 11.1666, wall: 311.5, id: "alarm-token", cycle: "c1",
+                fields: new Dictionary<string, string> { ["raisedDuringSuppression"] = "true", ["suppressionWindowToken"] = "service" });
+            var context = new EvidenceContext("run", 10.75, 12.1, 312, trigger: alarm);
+            var store = new ObservationStore();
+            store.Add(DirectorKit.O("window", "hp-light-east-3", "lamp-flicker", "ACTIVE", sim: DirectorObserver.RoundSim(10.749999996666668), wall: 284.2, id: "service"));
+            store.Add(alarm);
+            Assert.That(DirectorKit.Need(need).Evaluate(store, context).Holds, Is.True);
+            // The suppression stamp binds the window that was active at the alarm's instant, wherever the page's own window starts.
+            var preRoll = new ObservationStore();
+            preRoll.Add(DirectorKit.O("window", "hp-light-east-3", "lamp-flicker", "ACTIVE", sim: 10.7, wall: 281, id: "service")); preRoll.Add(alarm);
+            var stamp = "{\"alarm\":{\"device\":\"hp-light-east-3\",\"key\":\"lamp-flicker\",\"status\":\"RAISED\",\"fields\":{\"raisedDuringSuppression\":\"true\",\"suppressionWindowToken\":\"$window.identity\"},\"cycle\":\"$trigger.cycle\",\"mode\":\"occurred\",\"identity\":\"$trigger.identity\"}}";
+            Assert.That(DirectorKit.Need(stamp).Evaluate(preRoll, context).Holds, Is.True);
+            // Control: a different window's identity never satisfies the stamp.
+            var other = new ObservationStore();
+            other.Add(DirectorKit.O("window", "hp-light-east-3", "lamp-flicker", "ACTIVE", sim: 10.7, wall: 281, id: "another-window")); other.Add(alarm);
+            Assert.That(DirectorKit.Need(stamp).Evaluate(other, context).Holds, Is.False);
+        }
+}
 }

@@ -311,7 +311,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                 if (value == "$window.identity")
                 {
                     // Match the actual platform window identity active at this alarm's cycle, not a token baked into the story.
-                    var window = store.Records.Where(o => o.Run == c.Run && o.Kind == "window" && o.Source == EvidenceSource.Platform && o.Device == candidate.Device && o.Key == candidate.Key && o.ObservedAtS <= c.NowS && o.OccurredAtS <= candidate.OccurredAtS && o.Sim >= c.FromSim && o.Sim <= c.ToSim).OrderByDescending(o => o.OccurredAtS).FirstOrDefault();
+                    var window = store.Records.Where(o => o.Run == c.Run && o.Kind == "window" && o.Source == EvidenceSource.Platform && o.Device == candidate.Device && o.Key == candidate.Key && o.ObservedAtS <= c.NowS && o.OccurredAtS <= candidate.OccurredAtS).OrderByDescending(o => o.OccurredAtS).FirstOrDefault();
                     return window?.Status == "ACTIVE" ? window.Identity : null;
                 }
                 return value;
