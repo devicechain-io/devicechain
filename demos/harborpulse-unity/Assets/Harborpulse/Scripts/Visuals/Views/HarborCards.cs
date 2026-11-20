@@ -14,6 +14,8 @@ namespace DeviceChain.Harborpulse.Visuals
     /// <summary>Both IMGUI and stills print these exact evidence strings.</summary>
     public static class HarborCards
     {
+        public static Color AlarmForeground => new Color(AlarmLabelPalette.ForegroundR, AlarmLabelPalette.ForegroundG, AlarmLabelPalette.ForegroundB, 1);
+        public static Color AlarmBackground => new Color(AlarmLabelPalette.BackgroundR, AlarmLabelPalette.BackgroundG, AlarmLabelPalette.BackgroundB, 1);
         const int MaxCommandRows = 6;
         static string Number(double? n, string unit) => n.HasValue ? n.Value.ToString("0.00", CultureInfo.InvariantCulture) + unit : "not reported";
         static string Age(DateTimeOffset? at, HarborFrame f) => at.HasValue ? Math.Max(0, (int)(f.ObservedAt - at.Value).TotalSeconds) + " s ago" : "age not reported";

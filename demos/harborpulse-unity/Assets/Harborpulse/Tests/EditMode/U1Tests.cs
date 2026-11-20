@@ -376,7 +376,7 @@ namespace DeviceChain.Harborpulse.Tests
             foreach (var p in plan.Placements.Where(p => p.Device.Kind == DeviceKind.Pump))
             {
                 count++; var disc = new WellFootprint(p.At);
-                Assert.That(disc.Center.X, Is.EqualTo(p.At.X + 9)); Assert.That(disc.Center.Z, Is.EqualTo(p.At.Z + 6));
+                Assert.That(disc.Center.X, Is.EqualTo(p.At.X + 13)); Assert.That(disc.Center.Z, Is.EqualTo(p.At.Z + 6));
                 Assert.That(disc.Contains(disc.Center), Is.True);
                 Assert.That(disc.Contains(new Ground(disc.Center.X + 2.44, disc.Center.Z)), Is.True);
                 Assert.That(disc.Contains(new Ground(disc.Center.X, disc.Center.Z - 2.44)), Is.True);

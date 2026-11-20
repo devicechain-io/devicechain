@@ -16,14 +16,15 @@ namespace DeviceChain.Harborpulse.Visuals
             r.Box("Kiosk", new Vector3(-2, 2.2f, -1), new Vector3(8, 4.4f, 7), m.Brick);
             r.Part("Roof", new MeshKit().Gable(Vector3.zero, 9, 8, 1.5f), m.Slate, new Vector3(-2, 4.4f, -1));
             r.Box("Door", new Vector3(-3, 1.3f, 2.56f), new Vector3(1.7f, 2.6f, 0.12f), m.DarkSteel);
-            r.Box("ControlCabinet", new Vector3(3.1f, 1.1f, 2), new Vector3(1.4f, 2.2f, 0.6f), m.Steel);
-            r.Part("Ammeter", new MeshKit().Pipe(Vector3.zero, Vector3.forward, 0.38f, 0.04f, 32), m.GaugeBoard, new Vector3(3.1f, 1.55f, 2.33f));
+            r.Part("ControlCabinet", new MeshKit().Box(new Vector3(3.1f, 1.1f, 2), new Vector3(1.4f, 2.2f, .6f))
+                .Box(new Vector3(3.1f,2.25f,2),new Vector3(1.55f,.12f,.75f)), m.Steel, Vector3.zero);
+            r.Part("Ammeter", new MeshKit().Pipe(Vector3.zero, Vector3.forward, 0.38f, 0.04f, 16), m.GaugeBoard, new Vector3(3.1f, 1.55f, 2.33f));
             var needle = r.Add("CurrentNeedle", new Vector3(3.1f, 1.55f, 2.40f));
             new MeshKit().Box(new Vector3(0, 0.14f, 0), new Vector3(0.025f, 0.3f, 0.025f)).Spawn("Needle", needle, m.DarkSteel);
             var c = new Vector3((float)WellFootprint.LocalX, WellFloor, (float)WellFootprint.LocalZ);
             r.Part("ConcreteWell", new MeshKit().Shell(Vector3.zero, (float)WellFootprint.RadiusM, 4.5f, 0.22f, 180, 360), m.Coping, c);
             r.Part("GlassSection", new MeshKit().Shell(Vector3.zero, 2.43f, 4.5f, 0.025f, 0, 180), m.WellGlass, c, false);
-            r.Part("WellFloor", new MeshKit().Cylinder(Vector3.zero, 2.4f, 0.12f, 40), m.Coping, c - Vector3.up * 0.12f);
+            r.Part("WellFloor", new MeshKit().Cylinder(Vector3.zero, 2.4f, 0.12f, 24), m.Coping, c - Vector3.up * 0.12f);
             r.Part("WellSurface", new MeshKit().Cylinder(Vector3.zero, 2.19f, 0.025f, 48), m.WetWell, c, false);
             // the cut-away is the scene's one deliberate x-ray, so it carries its own cool work light: without it the well is unreadable at night
             var wellLight = r.Add("WellLight", c + new Vector3(0, 4.3f, 0.6f)).gameObject.AddComponent<Light>();
@@ -40,6 +41,30 @@ namespace DeviceChain.Harborpulse.Visuals
             r["AttributeMarker"].gameObject.SetActive(false);
             r.Part("Float", new MeshKit().Ball(Vector3.zero, 0.18f), m.WorldCue, c + new Vector3(1.3f, 3.2f, 0));
             r.Part("FloatChain", new MeshKit().Cylinder(Vector3.zero, 0.025f, 1.2f, 6), m.Steel, c + new Vector3(1.3f, 3.2f, 0));
+            var fittings = new MeshKit(); var plumbing = new MeshKit();
+            for (var i = 0; i < 5; i++)
+                fittings.Box(new Vector3(3.1f,.4f+i*.13f,2.315f),new Vector3(.95f,.045f,.045f));
+            fittings.Box(new Vector3(3.63f,1.25f,2.34f),new Vector3(.08f,.3f,.06f))
+                .Box(new Vector3(-2.1f,1.4f,2.65f),new Vector3(.08f,.35f,.1f));
+            // The open front and the level markers remain unobstructed. Rails and guide pipes occupy the rear half only.
+            for (var s = -1; s <= 1; s += 2)
+            {
+                plumbing.Pipe(c+new Vector3(s*.8f,.45f,-.9f),Vector3.up,.16f,4.3f,8);
+                for (var y = 1f; y <= 4; y += 1.5f)
+                    plumbing.Pipe(c+new Vector3(s*.8f,y,-.9f),Vector3.up,.25f,.1f,8);
+                fittings.Beam(c+new Vector3(s*1.1f,.2f,-1.25f),c+new Vector3(s*1.1f,4.5f,-1.25f),.07f);
+                plumbing.Beam(c+new Vector3(s*1.9f,4.5f,-.6f),c+new Vector3(s*1.9f,5.4f,-.6f),.06f);
+            }
+            for (var y = .4f; y < 4.4f; y += .4f)
+                fittings.Beam(c+new Vector3(-1.1f,y,-1.25f),c+new Vector3(1.1f,y,-1.25f),.045f);
+            plumbing.Beam(c+new Vector3(-1.9f,5.4f,-.6f),c+new Vector3(1.9f,5.4f,-.6f),.065f)
+                .Box(c+new Vector3(0,4.58f,-1.65f),new Vector3(2.4f,.13f,.8f));
+            fittings.Hoop(new Vector3(4.35f,.9f,2),Vector3.forward,.37f,.065f)
+                .Beam(new Vector3(3.98f,.9f,2),new Vector3(4.72f,.9f,2),.045f)
+                .Beam(new Vector3(4.35f,.53f,2),new Vector3(4.35f,1.27f,2),.045f);
+            plumbing.Pipe(new Vector3(4.35f,.9f,1.5f),Vector3.forward,.12f,.5f,8);
+            r.Part("WellPipework",plumbing,m.Steel,Vector3.zero);
+            r.Part("CabinetLouvresAndValve",fittings,m.DarkSteel,Vector3.zero);
             var outZ = wallZ - r.Root.localPosition.z;
             r.Part("DischargePipe", new MeshKit().Rod(new Vector3(0, -0.6f, -0.4f), new Vector3(0, -0.6f, outZ), 0.4f), m.DarkSteel, Vector3.zero);
             r.Part("Outfall", new MeshKit().Pipe(Vector3.zero, Vector3.forward, 0.55f, 1.3f, 20), m.Steel, new Vector3(0, -1.0f, outZ));
@@ -48,11 +73,14 @@ namespace DeviceChain.Harborpulse.Visuals
             r.Part("OutfallJet", new MeshKit().Pipe(Vector3.zero, new Vector3(0, -0.18f, 1), 0.28f, 1, 10), m.Jet, new Vector3(0, -1, outZ + 1.4f), false);
             r["Beacon"].localPosition = new Vector3(2, 5.5f, 1);
             r["CardAnchor"].localPosition = new Vector3(8, 2.2f, 6);
+            r.MergeFixed("ConcreteWell", "WellFloor");
+            r.MergeFixed("ControlCabinet", "Motor", "WellPipework", "Outfall");
+            r.MergeFixed("Door", "DischargePipe", "CabinetLouvresAndValve");
             return r;
         }
         static void Marker(AssetRig r, HarborMaterials m, string name, float level, Material material, string text, float tagX, Color tagColour)
         {
-            var t = r.Part(name, new MeshKit().Ring(Vector3.zero, 2.24f, 0.06f), material, new Vector3(9, WellFloor + level, 6));
+            var t = r.Part(name, new MeshKit().Ring(Vector3.zero, 2.24f, 0.06f), material, new Vector3((float)WellFootprint.LocalX, WellFloor + level, (float)WellFootprint.LocalZ));
             AssetRig.Tag(text, t, new Vector3(tagX, 0.08f, 2.5f), 0.10f, tagColour);
         }
     }

@@ -19,7 +19,7 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(noon.ShadowStrength, Is.LessThan(0.6), "and its shadows");
             Assert.That(Luma(noon.AmbientSky), Is.GreaterThan(0.5), "a cloudy day's light is mostly sky");
             Assert.That(noon.Zenith.B - noon.Zenith.R, Is.LessThan(0.45), "a pale grey-blue sky, not a saturated one");
-            Assert.That(noon.FogDensity, Is.GreaterThanOrEqualTo(0.00025), "haze gives the hills their distance");
+            Assert.That(noon.FogDensity, Is.InRange(0.0001, 0.0002), "light haze leaves the middle hillside readable");
             Assert.That(noon.CloudCover, Is.EqualTo(DayLighting.Cloud), "the sky draws the high cloud the light is softened by");
             Assert.That(noon.Overcast, Is.EqualTo(0), "the storm's own cover stays the storm's");
             Assert.That(DayLighting.Evaluate(16.5, new Weather(1, 1)).CloudCover, Is.EqualTo(1), "the storm's cover is total");

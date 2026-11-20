@@ -16,6 +16,7 @@ namespace DeviceChain.Harborpulse.Visuals
         public const float SeabedY = -6.5f;
         readonly PresentationMap map;
         readonly HarborMaterials mats;
+        WorldPropPlan props;
         readonly List<AssetRig> rigs = new List<AssetRig>();
         readonly List<Transform> buoys = new List<Transform>();
         readonly List<Vector2> buoyRest = new List<Vector2>();
@@ -33,16 +34,17 @@ namespace DeviceChain.Harborpulse.Visuals
         public static HarborWorld Build(PresentationMap map, HarborLayout layout, HarborMaterials mats, Transform parent)
         {
             var w = new HarborWorld(map, mats);
+            w.props = WorldPropPlan.Generate(map, layout);
             w.Root = AssetRig.Node("Waterfront", parent, Vector3.zero);
             w.Ground(layout);
-            QuayBuilder.Build(map, w.Root, mats);
+            QuayBuilder.Build(map, w.Root, mats, w.props);
             foreach (var token in map.Quays.Keys) w.Mark(token, w.Root.Find(token));
             foreach (var d in layout.Devices) w.Device(d, layout);
             // The mapped depot sits just south of the eastern breakwater. Give its yard
             // a real foundation and connect it by the mapped road causeway, never a floating slab.
             w.Slab("Depot headland", (float)map.Depot.X - 36, (float)map.Depot.X + 36,
                 (float)map.Depot.Z - 26, (float)map.Depot.Z + 26, Deck, mats.Ground);
-            BuildingBuilder.Depot(w.Root, V(map.Depot, Deck), mats);
+            if(w.props.Find("depot")!=null)BuildingBuilder.Depot(w.Root, V(map.Depot, Deck), mats);
             w.TownAndHills(); w.FloodPlain(); w.Breakwaters(); w.Floats();
             return w;
         }
@@ -81,20 +83,47 @@ namespace DeviceChain.Harborpulse.Visuals
                 // Tile the quay top round each well's actual transformed disc. No opaque deck
                 // may close a U1 cut-away. A small square aperture surrounds each round shell.
                 var pumps = layout.Devices.Where(d => map.QuayFor(d) == token && d.Kind == DeviceKind.Pump)
-                    .Select(d => f.Local(V(map.Anchors[d.Token])) + new Vector3(9, 0, 6)).ToArray();
+                    .Select(d => f.Local(V(map.Anchors[d.Token])) + new Vector3((float)WellFootprint.LocalX, 0, (float)WellFootprint.LocalZ)).ToArray();
                 var paving = new MeshKit();
-                for (float x = -f.Length / 2; x < f.Length / 2; x += 2)
-                    for (float z = -f.Depth; z < 0; z += 2)
+                // Join adjacent top tiles with the same height. Keep exactly the original
+                // aperture/low-plain decisions, saving vertices to pay for the exposed skirts.
+                for (float z = -f.Depth; z < 0; z += 2)
+                {
+                    float start = 0; bool? stripLow = null;
+                    for (float x = -f.Length / 2; x < f.Length / 2 + 2; x += 2)
                     {
-                        var clear = pumps.Any(p => Math.Abs(p.x - (x + 1)) < 3.5 && Math.Abs(p.z - (z + 1)) < 3.5);
+                        var clear = x >= f.Length / 2 || pumps.Any(p => Math.Abs(p.x - (x + 1)) < 3.5 && Math.Abs(p.z - (z + 1)) < 3.5);
                         var center = f.World(new Vector3(x + 1, 0, z + 1));
                         var low = IsPlain(new Ground(center.x, center.z));
-                        if (!clear) paving.Slab(x, Math.Min(x + 2, f.Length / 2), z, Math.Min(z + 2, 0), SeabedY, low ? Deck - .7f : Deck);
+                        if (stripLow.HasValue && (clear || stripLow.Value != low)) {
+                            var y = stripLow.Value ? Deck - .7f : Deck; var end = Math.Min(x, f.Length / 2);
+                            paving.Quad(new Vector3(start,y,z),new Vector3(start,y,Math.Min(z+2,0)),
+                                new Vector3(end,y,Math.Min(z+2,0)),new Vector3(end,y,z));
+                            stripLow = null;
+                        }
+                        if (!clear && !stripLow.HasValue) { start = x; stripLow = low; }
                     }
-                paving.Spawn("Quay paving", t, mats.Paving);
+                }
+                var pavement=paving.Spawn("Quay paving", t, mats.Surfaces);
+                SurfaceDetail.Colour(pavement,new Color(.59f,.57f,.54f,.1f));
                 Slab("Wall", -f.Length / 2, f.Length / 2, -.8f, 0, Deck + .35f, mats.Stone, t);
-                Slab("Promenade", -f.Length / 2, f.Length / 2, -7, -2, Deck + .015f, mats.Paving, t);
-                Slab("Quay road", -f.Length / 2, f.Length / 2, -f.Depth + 2, -f.Depth + 9, Deck + .03f, mats.Asphalt, t);
+                // The front seawall closes local +Z. Close both ends and the landward edge
+                // down to the seabed too, including East/Basin's exposed southern ends.
+                var skirt = new MeshKit(); var left = -f.Length / 2; var right = f.Length / 2;
+                skirt.Quad(new Vector3(left,SeabedY,0),new Vector3(left,Deck,0),new Vector3(left,Deck,-f.Depth),new Vector3(left,SeabedY,-f.Depth));
+                skirt.Quad(new Vector3(right,SeabedY,-f.Depth),new Vector3(right,Deck,-f.Depth),new Vector3(right,Deck,0),new Vector3(right,SeabedY,0));
+                skirt.Quad(new Vector3(left,SeabedY,-f.Depth),new Vector3(left,Deck,-f.Depth),new Vector3(right,Deck,-f.Depth),new Vector3(right,SeabedY,-f.Depth));
+                skirt.Spawn("Quay perimeter", t, mats.Stone);
+                var promenade=Slab("Promenade", -f.Length / 2, f.Length / 2, -7, -2, Deck + .015f, mats.Surfaces, t);
+                SurfaceDetail.Colour(promenade.gameObject,new Color(.56f,.54f,.50f,.2f));
+                // Asphalt is a finish on the existing deck, not a seabed-to-deck dark slab at the outer corners.
+                var roadMesh=new MeshKit();
+                roadMesh.Quad(new Vector3(-f.Length/2,Deck+.03f,-f.Depth+2),new Vector3(-f.Length/2,Deck+.03f,-f.Depth+9),
+                    new Vector3(f.Length/2,Deck+.03f,-f.Depth+9),new Vector3(f.Length/2,Deck+.03f,-f.Depth+2));
+                var road=roadMesh.Spawn("Quay road",t,mats.Surfaces);
+                SurfaceDetail.Colour(road,new Color(.31f,.31f,.29f,.3f));
+                SurfaceDetail.Quay(t,mats,f);
+                AssetRig.MergeFixed(t,t.GetComponentsInChildren<MeshFilter>());
                 Mark(token, t);
             }
         }
@@ -124,9 +153,11 @@ namespace DeviceChain.Harborpulse.Visuals
                     break;
                 case DeviceKind.Light: r = LampBuilder.Build(local, parent, mats); break;
                 case DeviceKind.Charger:
-                    r = ChargerBuilder.Build(local, parent, mats);
-                    r.Box("CarPark", new Vector3(0, -.035f, 3), new Vector3(5, .05f, 9), mats.Asphalt);
-                    r.Box("ChargeCanopy", new Vector3(0, 3.1f, 1.5f), new Vector3(3.8f, .15f, 4), mats.Steel);
+                    var car=props.Find("car:"+d.Token);
+                    var localCar=f.Local(V(car.At))-f.Local(V(at));
+                    r = ChargerBuilder.Build(local, parent, mats, localCar);
+                    r.Box("CarPark", localCar+new Vector3(0, -.035f, -1), new Vector3(5, .05f, 9), mats.Asphalt);
+                    r.Box("ChargeCanopy", localCar+new Vector3(0, 3.1f, -2.5f), new Vector3(3.8f, .15f, 4), mats.Steel);
                     break;
                 case DeviceKind.Truck: r = TruckBuilder.Build(local, parent, mats); break;
                 case DeviceKind.Meter:
@@ -140,24 +171,10 @@ namespace DeviceChain.Harborpulse.Visuals
         }
         void TownAndHills()
         {
-            // Nothing is built within 30 m of a device anchor or the depot, nor on the mapped fences or the truck road.
-            var keep = map.Anchors.Values.Select(a => new Vector2((float)a.X, (float)a.Z)).ToList();
-            keep.Add(new Vector2((float)map.Depot.X, (float)map.Depot.Z));
-            Town = TownBuilder.Build(Root, mats, keep, p =>
-                map.FenceRings.Values.Any(r => PresentationMap.Contains(r, new Ground(p.x, p.y))) || RoadDistance(new Ground(p.x, p.y)) < 13);
+            Town = TownBuilder.Build(Root, mats, props);
             Mark("ridge", Town.Backdrop);
         }
-        double RoadDistance(Ground p)
-        {
-            var best = double.MaxValue;
-            for (var i = 1; i < map.Road.Count; i++)
-            {
-                var a = map.Road[i-1]; var b = map.Road[i]; var dx = b.X-a.X; var dz = b.Z-a.Z;
-                var t = Math.Max(0, Math.Min(1, ((p.X-a.X)*dx+(p.Z-a.Z)*dz)/Math.Max(.001,dx*dx+dz*dz)));
-                best = Math.Min(best, Math.Sqrt(Math.Pow(p.X-a.X-t*dx,2)+Math.Pow(p.Z-a.Z-t*dz,2)));
-            }
-            return best;
-        }
+
         bool IsPlain(Ground p) => map.FenceRings.Any(r => r.Key.IndexOf("depot", StringComparison.OrdinalIgnoreCase) < 0 && PresentationMap.Contains(r.Value, p));
         void FloodPlain()
         {
@@ -176,12 +193,15 @@ namespace DeviceChain.Harborpulse.Visuals
                 Slab("Low flood plain",minX,maxX,minZ,maxZ,Deck-.69f,mats.Asphalt,t);
                 // parked cars on the low plain (its surface is 0.69 m below the deck): a body and a cabin, in a few colours
                 var paints=new[]{mats.HullWhite,mats.ClapBlue,mats.BarnRed,mats.Slate,mats.ClapGrey};var n=0;
-                for(var x=minX+3;x<maxX-2;x+=7,n++)
+                foreach(var car in props.Props.Where(p=>p.Kind=="ParkedCar" && p.Area==ring.Key))
                 {
-                    var z=(minZ+maxZ)/2;var floor=Deck-.69f;
-                    new MeshKit().Box(new Vector3(x,floor+.55f,z),new Vector3(1.8f,.8f,4.3f)).Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.6f,.6f,2.3f)).Spawn("Parked car",t,paints[n%paints.Length]);
+                    var x=(float)car.At.X;var z=(float)car.At.Z;var floor=ring.Key.IndexOf("depot",StringComparison.OrdinalIgnoreCase)<0?Deck-.69f:Deck;
+                    new MeshKit().Box(new Vector3(x,floor+.55f,z),new Vector3((float)car.Width,.8f,(float)car.Depth)).Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.6f,.6f,2.3f)).Spawn("Parked car",t,paints[n++%paints.Length]);
                     new MeshKit().Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.64f,.42f,2.1f)).Spawn("Car glass",t,mats.Glass,false);
                 }
+                SurfaceDetail.Parking(t,mats,minX,maxX,minZ,maxZ,ring.Key.IndexOf("depot",StringComparison.OrdinalIgnoreCase)<0?Deck-.64f:Deck+.11f);
+                AssetRig.MergeFixed(t,t.GetComponentsInChildren<MeshFilter>());
+
             }
             for(var i=1;i<map.Road.Count;i++)
             {
@@ -189,7 +209,9 @@ namespace DeviceChain.Harborpulse.Visuals
                 var d=b-a; var mid=(a+b)/2;
                 var yaw=Mathf.Atan2(d.x,d.z)*Mathf.Rad2Deg;
                 new MeshKit().Box(new Vector3(mid.x,(Deck+SeabedY)/2,mid.z),new Vector3(7,Deck-SeabedY,d.magnitude),yaw).Spawn("Mapped road foundation",Root,mats.Stone);
-                new MeshKit().Box(mid,new Vector3(5,.06f,d.magnitude),yaw).Spawn("Mapped truck road",Root,mats.Asphalt);
+                var road=new MeshKit().Box(mid,new Vector3(5,.06f,d.magnitude),yaw).Spawn("Mapped truck road",Root,mats.Surfaces);
+                SurfaceDetail.Colour(road,new Color(.18f,.18f,.17f,.3f));
+                SurfaceDetail.Road(Root,mats,a,b);
             }
         }
         void Breakwaters()
@@ -199,8 +221,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 var p=pair.Item1; var x0=(float)p.Min(v=>v.X);var x1=(float)p.Max(v=>v.X);var z0=(float)p.Min(v=>v.Z);var z1=(float)p.Max(v=>v.Z);
                 Slab("Breakwater",x0,x1,z0,z1,3,mats.Stone);
                 var at=new Vector3(pair.Item2 ? x1-4 : x0+4,3,(z0+z1)/2);
-                new MeshKit().Cylinder(at,2,12,12,1.2f).Spawn("Light tower",Root,mats.Render);
-                new MeshKit().Cylinder(at+Vector3.up*12,1.5f,1.8f,12).Spawn("Navigation light",Root,pair.Item2?mats.BuoyGreen:mats.BuoyRed);
+                NavigationBuilder.Beacon(at,Root,mats,pair.Item2);
             }
         }
         void Floats()
@@ -210,15 +231,21 @@ namespace DeviceChain.Harborpulse.Visuals
                 foreach(var side in new[]{-1,1})
                 {
                     var x=channelX+side*(18+i*4);var z=-180+i*38;
-                    var t=new MeshKit().Cylinder(new Vector3(0,-.8f,0),.8f,2.6f,10,side<0?.8f:.05f).Spawn("Channel buoy",Root,side<0?mats.BuoyRed:mats.BuoyGreen).transform;
+                    var t=NavigationBuilder.Buoy(Root,mats,side<0);
                     buoyRest.Add(new Vector2(x,z));buoys.Add(t);
                 }
             // the town's moored boats ride the same surface as the buoys
-            for(var i=0;i<Town.Boats.Count;i++){buoys.Add(Town.Boats[i]);buoyRest.Add(Town.BoatRest[i]);}
+            PierDetailBuilder.Build(Root,mats);
+            for(var i=0;i<Town.Boats.Count;i++)
+            {
+                BoatBuilder.Refine(Town.Boats[i],mats,i);
+                buoys.Add(Town.Boats[i]);buoyRest.Add(Town.BoatRest[i]);
+            }
         }
         public void Dispose()
         {
             if(Root==null)return;
+            Town?.Dispose();
             foreach(var f in Root.GetComponentsInChildren<MeshFilter>(true)) MeshKit.Release(f.sharedMesh);
             MeshKit.Release(Root.gameObject);Root=null;
         }

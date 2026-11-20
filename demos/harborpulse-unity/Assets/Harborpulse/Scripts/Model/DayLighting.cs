@@ -131,6 +131,22 @@ namespace DeviceChain.Harborpulse.Model
         /// <summary>Exponential-squared fog density.</summary>
         public double FogDensity { get; internal set; }
 
+        /// <summary>WORLD scenery height fog, in inverse metres; height density decays upwards from the base.</summary>
+        public double HeightFogDensity { get; internal set; }
+        public double HeightFogBase { get; internal set; }
+        public double HeightFogFalloff { get; internal set; }
+
+        /// <summary>Matches the scenery shader's distance and midpoint-height optical depth. Near yards stay outside the height-fog ramp.</summary>
+        public double SceneryTransmission(double distanceM, double cameraHeight, double worldHeight, double outsideCoreM)
+        {
+            var depth = Math.Max(0, distanceM - 900);
+            var air = FogDensity * depth;
+            var t = Rgb.Clamp01((outsideCoreM - 1050) / 850);
+            var inland = t * t * (3 - 2 * t);
+            var exponent = Math.Max(-8, Math.Min(4, (HeightFogBase - (cameraHeight + worldHeight) * .5) * HeightFogFalloff));
+            return Math.Exp(-(air * air + HeightFogDensity * Math.Exp(exponent) * depth) * inland);
+        }
+
         /// <summary>0 at full day .. 1 at full night: how strongly the lamps, windows and beacons should read.</summary>
         public double Night { get; internal set; }
 
@@ -157,7 +173,7 @@ namespace DeviceChain.Harborpulse.Model
         static readonly Rgb TwilightZenith = new Rgb(0.10, 0.13, 0.30), TwilightHorizon = new Rgb(0.95, 0.46, 0.24);
         static readonly Rgb DayZenith = new Rgb(0.16, 0.38, 0.78), DayHorizon = new Rgb(0.64, 0.78, 0.93);
         // the high cloud's sky: a pale grey-blue overhead, a bright pearl horizon
-        static readonly Rgb CloudZenith = new Rgb(0.46, 0.53, 0.63), CloudHorizon = new Rgb(0.80, 0.82, 0.84);
+        static readonly Rgb CloudZenith = new Rgb(0.46, 0.53, 0.63), CloudHorizon = new Rgb(0.55, 0.65, 0.76);
         static readonly Rgb StormZenith = new Rgb(0.30, 0.33, 0.36), StormHorizon = new Rgb(0.46, 0.48, 0.50);
         static readonly Rgb CityGlow = new Rgb(0.085, 0.08, 0.082);
 
@@ -216,7 +232,10 @@ namespace DeviceChain.Harborpulse.Model
             s.AmbientGround = Max(s.Ground.Scale(0.6), NightAmbientGround);
             s.FogColor = s.Horizon;
             // haze gives the hills their distance; the storm thickens it
-            s.FogDensity = 0.00026 + 0.00045 * storm + 0.00004 * night;
+            s.FogDensity = 0.00016 + 0.00018 * storm + 0.00002 * night;
+            s.HeightFogDensity = 0.00038 + 0.00040 * storm + 0.00004 * night;
+            s.HeightFogBase = 65;
+            s.HeightFogFalloff = 0.006;
             return s;
         }
 

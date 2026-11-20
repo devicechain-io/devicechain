@@ -30,11 +30,18 @@ namespace DeviceChain.Harborpulse.Visuals
 
             // the matte surfaces take no environment reflection: the reflection probe is the Editor's default sky, not this scene's
             // time of day, and at grazing angles it painted the far land and the night's facades daylight blue
-            Ground = Matte(Make("ground", new Color(0.33f, 0.39f, 0.26f), 0.1f));
+            Surfaces = SceneryMesh.Material(); byName["surfaces"] = Surfaces;
+            var labelShader = Resources.Load<Shader>("HarborAlarmLabel");
+            AlarmText = new Material(labelShader) { name = "Harbor/alarm-text", renderQueue = 4000 };
+            AlarmPlate = new Material(labelShader) { name = "Harbor/alarm-plate", renderQueue = 3999 };
+            AlarmText.SetColor("_Color", HarborCards.AlarmForeground);
+            AlarmPlate.SetColor("_Color", HarborCards.AlarmBackground);
+            byName["alarm-text"] = AlarmText; byName["alarm-plate"] = AlarmPlate;
+            Ground = Matte(Make("ground", new Color(0.28f, 0.42f, 0.22f), 0.1f));
             Paving = Matte(Make("paving", new Color(0.62f, 0.60f, 0.56f), 0.2f));
             Asphalt = Matte(Make("asphalt", new Color(0.13f, 0.13f, 0.14f), 0.3f));
             Stone = Matte(Make("stone", new Color(0.47f, 0.45f, 0.42f), 0.2f));
-            Coping = Matte(Make("coping", new Color(0.72f, 0.70f, 0.66f), 0.25f));
+            Coping = Matte(Make("coping", new Color(0.59f, 0.57f, 0.53f), 0.25f));
             Seabed = Matte(Make("seabed", new Color(0.30f, 0.27f, 0.20f), 0.05f));
             Timber = Matte(Make("timber", new Color(0.36f, 0.26f, 0.17f), 0.2f));
             Steel = Make("steel", new Color(0.33f, 0.35f, 0.38f), 0.55f, 0.6f);
@@ -73,7 +80,7 @@ namespace DeviceChain.Harborpulse.Visuals
             RoofRed = Matte(Make("roof-red", new Color(0.40f, 0.17f, 0.13f), 0.2f));
             AwningGreen = Matte(Make("awning-green", new Color(0.12f, 0.36f, 0.27f), 0.2f));
             AwningBlue = Matte(Make("awning-blue", new Color(0.13f, 0.30f, 0.50f), 0.2f));
-            Lane = Matte(Make("lane", new Color(0.31f, 0.31f, 0.30f), 0.25f));
+            Lane = Matte(Make("lane", new Color(0.20f, 0.21f, 0.21f), 0.25f));
             Lawn = Matte(Make("lawn", new Color(0.30f, 0.47f, 0.21f), 0.1f));
             Piling = Matte(Make("piling", new Color(0.26f, 0.21f, 0.16f), 0.15f));
             HullWhite = Make("hull-white", new Color(0.90f, 0.90f, 0.88f), 0.5f);
@@ -115,6 +122,9 @@ namespace DeviceChain.Harborpulse.Visuals
             Beacon = Emissive("beacon-amber", new Color(1.0f, 0.55f, 0.05f), 1.0f);
         }
 
+        public Material Surfaces { get; }
+        public Material AlarmText { get; }
+        public Material AlarmPlate { get; }
         public Material Flow { get; }
         public Material WorldCue { get; }
         public Material Failed { get; }

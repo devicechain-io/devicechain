@@ -119,7 +119,7 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
---- !u!1 &600398755
+--- !u!1 &668854125
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -127,10 +127,66 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 600398759}
-  - component: {fileID: 600398756}
-  - component: {fileID: 600398758}
-  - component: {fileID: 600398757}
+  - component: {fileID: 668854127}
+  - component: {fileID: 668854126}
+  m_Layer: 0
+  m_Name: Harborpulse
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &668854126
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 668854125}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3b7984718fe1a7446befbc126bc16475, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: DeviceChain.Harborpulse.Visuals::DeviceChain.Harborpulse.Visuals.HarborpulseApp
+  offlinePreview: 0
+  runnerUrl: http://localhost:8090
+  previewStartHour: 16.5
+  litShader: {fileID: 4800000, guid: 933532a4fcc9baf4fa0491de14d08ed7, type: 3}
+  waterShader: {fileID: 4800000, guid: 22966046fec9c3e40866f7db34d497ba, type: 3}
+  skyShader: {fileID: 4800000, guid: b7dbc8db8d9d3d942aa05653ab8ced4e, type: 3}
+  wetWellShader: {fileID: 4800000, guid: df0dc94c0a4741c488501d38ddf61268, type: 3}
+  litVariants:
+  - {fileID: 2100000, guid: 1e4d1692842e4ae41bf6e3f82c468860, type: 2}
+  - {fileID: 2100000, guid: b9d7f2ea769f5b44b884f1655feea0c2, type: 2}
+  - {fileID: 2100000, guid: 8968eb6cc8ab92f43833488f2c498afe, type: 2}
+  sceneCamera: {fileID: 1263584468}
+--- !u!4 &668854127
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 668854125}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1263584467
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1263584471}
+  - component: {fileID: 1263584468}
+  - component: {fileID: 1263584470}
+  - component: {fileID: 1263584469}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -138,13 +194,13 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!20 &600398756
+--- !u!20 &1263584468
 Camera:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 600398755}
+  m_GameObject: {fileID: 1263584467}
   m_Enabled: 1
   serializedVersion: 2
   m_ClearFlags: 1
@@ -189,13 +245,13 @@ Camera:
   m_OcclusionCulling: 1
   m_StereoConvergence: 10
   m_StereoSeparation: 0.022
---- !u!114 &600398757
+--- !u!114 &1263584469
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 600398755}
+  m_GameObject: {fileID: 1263584467}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: a79441f348de89743a2939f4d699eac1, type: 3}
@@ -233,77 +289,21 @@ MonoBehaviour:
     m_VarianceClampScale: 0.9
     m_ContrastAdaptiveSharpening: 0
   m_Version: 2
---- !u!81 &600398758
+--- !u!81 &1263584470
 AudioListener:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 600398755}
+  m_GameObject: {fileID: 1263584467}
   m_Enabled: 1
---- !u!4 &600398759
+--- !u!4 &1263584471
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 600398755}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &1741117048
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1741117050}
-  - component: {fileID: 1741117049}
-  m_Layer: 0
-  m_Name: Harborpulse
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &1741117049
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1741117048}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 3b7984718fe1a7446befbc126bc16475, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: DeviceChain.Harborpulse.Visuals::DeviceChain.Harborpulse.Visuals.HarborpulseApp
-  offlinePreview: 0
-  runnerUrl: http://localhost:8090
-  previewStartHour: 16.5
-  litShader: {fileID: 4800000, guid: 933532a4fcc9baf4fa0491de14d08ed7, type: 3}
-  waterShader: {fileID: 4800000, guid: 22966046fec9c3e40866f7db34d497ba, type: 3}
-  skyShader: {fileID: 4800000, guid: b7dbc8db8d9d3d942aa05653ab8ced4e, type: 3}
-  wetWellShader: {fileID: 4800000, guid: df0dc94c0a4741c488501d38ddf61268, type: 3}
-  litVariants:
-  - {fileID: 2100000, guid: 1e4d1692842e4ae41bf6e3f82c468860, type: 2}
-  - {fileID: 2100000, guid: b9d7f2ea769f5b44b884f1655feea0c2, type: 2}
-  - {fileID: 2100000, guid: 8968eb6cc8ab92f43833488f2c498afe, type: 2}
-  sceneCamera: {fileID: 600398756}
---- !u!4 &1741117050
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1741117048}
+  m_GameObject: {fileID: 1263584467}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
@@ -316,5 +316,5 @@ Transform:
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
-  - {fileID: 600398759}
-  - {fileID: 1741117050}
+  - {fileID: 1263584471}
+  - {fileID: 668854127}
