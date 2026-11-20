@@ -1188,6 +1188,11 @@ func stepReport(ctx context.Context, st *State) error {
 			fmt.Printf("  %s %s\n", color.WhiteString("Note:"), color.YellowString(n))
 		}
 	}
+	// The sharding level, custom included (a raw shardGroups block with no level), whenever the
+	// instance is sharded at all.
+	if word, err := shardingOfRun(st); err == nil && word != ShardingOff {
+		fmt.Printf("  %s %s\n", color.WhiteString("Sharding:"), color.GreenString(word))
+	}
 	// The messaging topology, and only when it is the replicated one. Printed from
 	// the SAME haTopology both tools rendered from, so the summary cannot describe a
 	// topology the instance does not have — and printed at all because "is this

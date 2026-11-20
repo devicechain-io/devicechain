@@ -182,6 +182,8 @@ var ownedWithinTunable = []struct {
 	// an instance whose placement exists it would do nothing anyway.
 	{"instance.config.infrastructure.nats.shardGroups.seed",
 		"the placement seed belongs to a sharding level (--sharding), which renders it on a fresh install; it applies only when the placement table is first created, so an overlay cannot set it"},
+	{"instance.config.infrastructure.nats.shardGroups.capturePlacementTags",
+		"the capture stream's placement belongs to a sharding level (--sharding), which renders it on a fresh install, so an overlay cannot set it"},
 	{"functionalAreas.event-management.replicas",
 		"the event-management replica count is set by --ha, and the event store's connection reserve is sized to it; changing it here would leave the reserve counting a different number of pods"},
 	// 🔴 AN AREA'S CONFIG IS TUNABLE AS A WHOLE, SO WHAT INSIDE IT IS NOT HAS TO BE SAID HERE.

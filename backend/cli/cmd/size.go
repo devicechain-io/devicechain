@@ -45,3 +45,10 @@ func resolveInstallSize(compact, compactGiven bool, size string) (bool, error) {
 			"dcctl install takes %s or %s", size, size, bootstrap.SizeBase, bootstrap.SizeCompact)
 	}
 }
+
+// shardingUsage is --sharding's help.
+var shardingUsage = "sharding level for this instance: " + strings.Join(bootstrap.ShardingNames(), ", ") +
+	". off (the default) is one unsharded event path. scale splits inbound and resolved events into three " +
+	"groups, one per broker server, and is not yet available: it requires the r34 qualification. Chosen once, at " +
+	"install, recorded on the instance and never changed. Leave it out to install a raw shardGroups block from " +
+	"--values (a custom configuration)"

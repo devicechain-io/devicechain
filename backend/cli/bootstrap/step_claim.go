@@ -68,6 +68,11 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 			if err := adoptRecordedSize(st, existing.Spec); err != nil {
 				return err
 			}
+			// 🔴 AND FOR THE SHARDING LEVEL, by the same rule: a re-run keeps the recorded level and
+			// one that names another is refused. Nothing moves a tenant between groups.
+			if err := adoptRecordedSharding(st, existing.Spec); err != nil {
+				return err
+			}
 		}
 		if existing != nil {
 			st.ShardGroups = existing.Spec.ShardGroups.DeepCopy()
@@ -87,6 +92,11 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	// Refuse before the declaration write: a re-run keeps the recorded size via
 	// adoptRecordedSize, so writing first would turn "use a smaller --size" into
 	// a second refusal. The size is settled here, including on dry runs.
+	// The level's combinations again, now that a re-run has adopted the recorded size, overlay and
+	// fail-closed choice: what is judged is what the declaration will say.
+	if err := checkSharding(st); err != nil {
+		return err
+	}
 	if err := checkHaNodeCapacity(ctx, st); err != nil {
 		return err
 	}
@@ -201,6 +211,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		return err
 	}
 	if err := verifySizeRecorded(st.Size, inst.Spec.Size); err != nil {
+		return err
+	}
+	if err := verifyShardingRecorded(recordedSharding(st), inst.Spec.Sharding); err != nil {
 		return err
 	}
 	if err := ValidateInstanceSpec(inst.Spec); err != nil {

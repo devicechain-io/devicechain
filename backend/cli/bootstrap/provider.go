@@ -52,6 +52,10 @@ type Options struct {
 	// Size is --size: "" when not given (base). Validated by ValidateSize; the instance's own
 	// preset, recorded on the declaration. See size.go.
 	Size string
+	// Sharding is --sharding: "" when not given. Validated by ValidateSharding and judged by
+	// CheckShardingAgainstCluster; the instance's own level, recorded on the declaration. See
+	// shardlevel.go.
+	Sharding string
 	// MQTTExposure and MQTTHost are --mqtt-exposure and --mqtt-host: empty when not given (keep
 	// what the declaration records). See mqttexposure.go.
 	MQTTExposure string

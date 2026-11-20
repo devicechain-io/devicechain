@@ -382,6 +382,15 @@ spec:
                     || (k == ''2'' && self.count > 2 && self.placementTags[k] == [''dc-nats-2''])
                     || (k == ''3'' && self.count > 3 && self.placementTags[k] == [''dc-nats-3''])
                     || (k == ''4'' && self.count > 4 && self.placementTags[k] == [''dc-nats-4'']))'
+              sharding:
+                description: |-
+                  Sharding names the sharding level the instance was installed with ("scale"); absent is off,
+                  or custom when shardGroups is set by hand. Like size it is a NAME, rendered by the dcctl
+                  release that applies it, but a level's shard shape (group count, streams, placement, seed) is
+                  fixed per name, and the level itself is fixed at install: a rule on the spec refuses
+                  changing, adding or removing it.
+                maxLength: 32
+                type: string
               size:
                 description: |-
                   Size names the size preset the instance runs ("compact", "perf-12k", "perf-16k"); empty is base. It
@@ -442,6 +451,11 @@ spec:
             - message: shardGroups requires R1 streams and cannot be combined with
                 ha
               rule: '!has(self.shardGroups) || !has(self.ha) || !self.ha'
+            - message: 'sharding is immutable: an instance''s tenants are placed into
+                its shard groups when it is installed, and nothing moves them, so
+                the level cannot be changed, added or removed'
+              rule: has(self.sharding) == has(oldSelf.sharding) && (!has(self.sharding)
+                || self.sharding == oldSelf.sharding)
           status:
             description: |-
               InstanceStatus is the OBSERVED state, and the operator is its only writer.

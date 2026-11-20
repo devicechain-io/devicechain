@@ -33,6 +33,8 @@ var (
 	bootstrapDevAllowEgressList []string
 	// bootstrapSize is --size. See bootstrap.SizeNames.
 	bootstrapSize string
+	// bootstrapSharding is --sharding. See bootstrap.ShardingNames.
+	bootstrapSharding string
 )
 
 // bootstrapBrokerMaxConnections is --broker-max-connections, and ...Given whether it was on the
@@ -192,6 +194,7 @@ func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed, mqt
 		MqttFailClosed:       mqttFailClosed,
 		MqttDeviceUplinks:    mqttDeviceUplinks,
 		Size:                 bootstrapSize,
+		Sharding:             bootstrapSharding,
 		TrustedProxies:       bootstrapTrustedProxies,
 		MQTTExposure:         bootstrapMQTTExposure,
 		BrokerMaxConnections: bootstrap.BrokerMaxConnectionsFromFlag(bootstrapBrokerMaxConnectionsGiven, bootstrapBrokerMaxConnections),
@@ -236,6 +239,7 @@ func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding,
 		MqttFailClosed:            opts.MqttFailClosed,
 		MqttDeviceUplinks:         opts.MqttDeviceUplinks,
 		Size:                      bootstrap.StateSizeFrom(opts.Size),
+		Sharding:                  opts.Sharding,
 		MQTTExposureGiven:         opts.MQTTExposure,
 		BrokerMaxConnectionsGiven: opts.BrokerMaxConnections,
 		MQTTHostGiven:             opts.MQTTHost,
@@ -338,6 +342,9 @@ var bootstrapCmd = &cobra.Command{
 		}
 		if err := bootstrap.ValidateSize(bootstrapSize); err != nil {
 			return fmt.Errorf("--size: %w", err)
+		}
+		if err := bootstrap.ValidateSharding(bootstrapSharding); err != nil {
+			return fmt.Errorf("--sharding: %w", err)
 		}
 		// The tuning overlay is judged here too -- its keys against the allowlist and its values
 		// against the chart's schema -- so a refused key fails before any cluster exists.
@@ -660,6 +667,9 @@ func followClusterShape(changed func(string) bool, st *bootstrap.State) error {
 	if err := bootstrap.CheckSizeAgainstCluster(st); err != nil {
 		return err
 	}
+	if err := bootstrap.CheckShardingAgainstCluster(st); err != nil {
+		return err
+	}
 	if st.Compact {
 		// A compact cluster publishes a footprint measured on the default profile, and a
 		// larger profile deploys more than that number describes.
@@ -688,6 +698,9 @@ func followClusterShape(changed func(string) bool, st *bootstrap.State) error {
 		for _, n := range bootstrap.SizeNotices(st) {
 			fmt.Printf("note: %s\n", n)
 		}
+	}
+	if line := bootstrap.ShardingSummary(st); line != "" {
+		fmt.Println(line)
 	}
 	if st.HA {
 		fmt.Printf("ha cluster: %s\n", bootstrap.HaSummary(true))
@@ -776,6 +789,7 @@ func init() {
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapEnableAreas, "enable-area", nil, "additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with the cluster's --compact setting; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)")
 	bootstrapCmd.Flags().StringArrayVar(&bootstrapValues, "values", nil, valuesUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapSize, "size", "", sizeUsage)
+	bootstrapCmd.Flags().StringVar(&bootstrapSharding, "sharding", "", shardingUsage)
 	bootstrapCmd.Flags().BoolVar(&bootstrapMqttDeviceUplinks, "mqtt-device-uplinks", false, mqttDeviceUplinksUsage)
 	bootstrapCmd.Flags().BoolVar(&bootstrapMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)

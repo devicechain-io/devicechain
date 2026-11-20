@@ -254,6 +254,10 @@ func sizeFor(st *State) *sizePreset {
 	if !ok {
 		return nil
 	}
+	// A sharding level's broker row wins over the size's (precedence layer 2b, shardlevel.go).
+	if l := shardLevelFor(st); l != nil {
+		p = l.overBroker(p)
+	}
 	return &p
 }
 
