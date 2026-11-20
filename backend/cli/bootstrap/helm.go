@@ -519,6 +519,11 @@ func helmValues(st *State) map[string]interface{} {
 	for k, v := range haFor(st.HA).natsValues() {
 		natsVals[k] = v
 	}
+	// A sharding level's shardGroups block (shardlevel.go, precedence layer 2b). Nothing for off,
+	// so an instance that names no level renders what it rendered before the axis existed.
+	if block := shardLevelFor(st).shardGroupsBlock(); block != nil {
+		natsVals["shardGroups"] = block
+	}
 	applyMqttFailClosed(natsVals, st)
 	applyMqttDeviceUplinks(natsVals, st)
 	infraVals := map[string]interface{}{}
