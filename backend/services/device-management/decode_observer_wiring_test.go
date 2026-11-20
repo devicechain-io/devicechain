@@ -4,6 +4,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/processor"
@@ -57,4 +58,14 @@ func TestTheInboundProcessorRefusesToBeBuiltWithoutADecodeAccountant(t *testing.
 	DecodeAccountant = nil
 
 	require.Panics(t, func() { newInboundEventsProcessor() })
+}
+
+// A final delivery whose resolved events are refused for shard placement is held until the
+// tenant's placement answers. A processor test hands in its own check, so a main.go that stopped
+// passing it would leave every such delivery to be lettered while those tests stayed green.
+func TestTheInboundProcessorIsBuiltWithTheResolvedPlacementCheck(t *testing.T) {
+	decodeWiringFixture(t)
+	check := builtInboundProcessor(t).PlacementCheck()
+	require.NotNil(t, check)
+	require.Equal(t, reflect.ValueOf(resolvedPlacementCheck).Pointer(), reflect.ValueOf(check).Pointer())
 }
