@@ -159,6 +159,7 @@ var purgeSeedExemptions = map[string]string{
 	"event-management.audit_events":                              sharedJournal,
 	"event-management.calculated_backfills":                      representedTenantPredicate,
 	"event-management.entity_deletion_watermarks":                representedTenantPredicate,
+	"event-management.device_token_holders":                      representedTenantPredicate,
 	"event-management.event_anchors":                             representedTenantPredicate,
 	"event-management.event_management_migrations":               migrationTable,
 	"event-management.events":                                    representedTenantPredicate,
