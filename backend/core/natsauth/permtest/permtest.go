@@ -55,6 +55,9 @@ type Broker struct {
 
 // settings is what an Option adjusts before the broker starts.
 type settings struct {
+	instance string
+	err      error
+
 	users map[string]map[string]natsauth.Permissions
 	extra map[string]any
 	// bare leaves the broker's streams and buckets uncreated (see WithoutReconcile).
@@ -81,6 +84,16 @@ func WithOpenUser() Option {
 // WithoutReconcile starts the broker without running the broker administrator, so a test sees
 // what a service finds when nobody has created its streams (the drifted-broker case).
 func WithoutReconcile() Option { return func(s *settings) { s.bare = true } }
+
+// WithShardGroupPermissions adds the generated grants for cfg. Configure the
+// broker administrator and service managers with the same shard-group layout.
+func WithShardGroupPermissions(cfg *config.NatsShardGroupsConfiguration) Option {
+	return func(s *settings) {
+		if s.err == nil {
+			s.err = natsauth.AddShardGroupPermissions(s.instance, s.users, cfg)
+		}
+	}
+}
 
 // WithMQTT turns the MQTT gateway on at an ephemeral port (see Broker.MQTTPort), the way the
 // deployed broker runs it.
@@ -161,9 +174,12 @@ func Start(t testing.TB, instance string, opts ...Option) *Broker {
 	if err != nil {
 		t.Fatalf("generating the broker permissions: %v", err)
 	}
-	set := &settings{users: users, extra: map[string]any{}}
+	set := &settings{instance: instance, users: users, extra: map[string]any{}}
 	for _, o := range opts {
 		o(set)
+	}
+	if set.err != nil {
+		t.Fatalf("generating the shard-group broker permissions: %v", set.err)
 	}
 	accounts := map[string]any{}
 	for account, byUser := range users {
