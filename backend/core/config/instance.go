@@ -769,6 +769,7 @@ type InfrastructureConfiguration struct {
 	DeviceManagement DeviceManagementConfiguration
 	EventProcessing  EventProcessingConfiguration
 	CommandDelivery  CommandDeliveryConfiguration
+	UpdateManagement UpdateManagementConfiguration
 	DeviceState      DeviceStateConfiguration
 	AiInference      AiInferenceConfiguration
 	ServiceAuth      ServiceAuthConfiguration
@@ -783,6 +784,15 @@ type InfrastructureConfiguration struct {
 	// TokenAudience is the token-audience policy (which `aud` an API plane accepts, which
 	// `resource` the authorization server may issue for). FIXED configuration.
 	TokenAudience TokenAudienceConfiguration
+}
+
+// UpdateManagementConfiguration is FIXED instance configuration, adopted by rolling pods.
+type UpdateManagementConfiguration struct {
+	// RolloutSafety enables cohort plans and failure-rate policies. Default OFF.
+	// Keep it off during the version upgrade: old drivers dispatch across cohorts,
+	// ignore rate halts, and cannot serve the new pause reasons. After ALL
+	// update-management replicas are upgraded, enable it in a separate config roll.
+	RolloutSafety bool
 }
 
 // HttpConfiguration is how the instance's HTTP servers read a request's origin.

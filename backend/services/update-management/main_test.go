@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -106,4 +107,24 @@ func TestBuildBlobStoreHonoursObjectStoreNone(t *testing.T) {
 	store, err = buildBlobStore(context.Background())
 	require.NoError(t, err)
 	require.Nil(t, store, "none must build no store even though a directory is configured")
+}
+
+func TestBuildApiWiresFixedRolloutSafetyOptIn(t *testing.T) {
+	prevMs, prevCfg, prevRdb := Microservice, Configuration, RdbManager
+	t.Cleanup(func() { Microservice, Configuration, RdbManager = prevMs, prevCfg, prevRdb })
+	Configuration = config.NewUpdateManagementConfiguration()
+	RdbManager = &rdb.RdbManager{}
+	for _, enabled := range []bool{false, true} {
+		Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "update-management"}
+		Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+		doc := `{"infrastructure":{"updateManagement":{"rolloutSafety":false}}}`
+		if enabled {
+			doc = `{"infrastructure":{"updateManagement":{"rolloutSafety":true}}}`
+		}
+		require.NoError(t, json.Unmarshal([]byte(doc), &Microservice.InstanceConfiguration))
+		Microservice.InstanceConfiguration.Infrastructure.Blob = mscfg.BlobConfiguration{Backend: "filesystem", Directory: t.TempDir()}
+		api, err := buildApi(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, enabled, api.RolloutSafety)
+	}
 }
