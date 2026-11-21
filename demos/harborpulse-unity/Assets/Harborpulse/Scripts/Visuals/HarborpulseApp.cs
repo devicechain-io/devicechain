@@ -139,7 +139,12 @@ namespace DeviceChain.Harborpulse.Visuals
             Tick(2.1f, targetNow.AddSeconds(2.1));
         }
 
-        public void RenderReflectionNow() => reflection?.RenderNow();
+        public void RenderReflectionNow()
+        {
+            // the stills path never runs Update: bring the near detail to this camera before anything is drawn
+            world?.Detail.Refresh(sceneCamera.transform.position, true);
+            reflection?.RenderNow();
+        }
         void LateUpdate() => reflection?.LateTick();
         public HarborFrame Frame => frame;
 
@@ -325,6 +330,7 @@ namespace DeviceChain.Harborpulse.Visuals
             views.Apply(frame, state, sceneCamera.transform.position, dt, waterTime);
             TickDirector(source, now, dt);
             ApplyMappedTruck(source, now);
+            world.Detail.Refresh(sceneCamera.transform.position);
 
             reflection.Level = (float)frame.ReflectionLevelM;
             water.Apply(q => frame.Tides[q].LevelM, 0.0, weather, waterTime, sceneCamera.transform.position);

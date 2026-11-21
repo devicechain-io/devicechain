@@ -8,7 +8,7 @@ namespace DeviceChain.Harborpulse.Visuals
 {
     public static class TruckBuilder
     {
-        public static AssetRig Build(Placement p, Transform parent, HarborMaterials m)
+        public static AssetRig Build(Placement p, Transform parent, HarborMaterials m, DetailManager detail = null)
         {
             var r = new AssetRig(p, parent);
             r.Box("Chassis", new Vector3(0, 0.65f, 0), new Vector3(2.3f, 0.45f, 5.5f), m.DarkSteel);
@@ -61,6 +61,8 @@ namespace DeviceChain.Harborpulse.Visuals
             r.MergeFixed("Windscreen", "SideWindow-1", "SideWindow1", "Headlamps");
             r.MergeFixed("BlueStripe-1", "BlueStripe1");
             r.MergeFixed("LightStripe-1", "LightStripe1");
+            // the near level moves with the truck: its set is parented to the rig root and follows the truck's own position
+            detail?.Register(NearVehicles.Truck(), r.Root, Vector3.zero, Quaternion.identity, NearPalette.Vehicle(m.Render.GetColor("_BaseColor")), m.Surfaces, null, true);
             return r;
         }
     }

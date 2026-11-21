@@ -8,7 +8,7 @@ namespace DeviceChain.Harborpulse.Visuals
 {
     public static class ChargerBuilder
     {
-        public static AssetRig Build(Placement p, Transform parent, HarborMaterials m, Vector3 carAt)
+        public static AssetRig Build(Placement p, Transform parent, HarborMaterials m, Vector3 carAt, DetailManager detail = null)
         {
             var r = new AssetRig(p, parent);
             r.Part("Pedestal", new MeshKit().Box(Vector3.up * .95f, new Vector3(.7f, 1.9f, .5f))
@@ -35,6 +35,8 @@ namespace DeviceChain.Harborpulse.Visuals
             for (var side = -1; side <= 1; side += 2) for (var axle = -1; axle <= 1; axle += 2)
                 wheels.Pipe(new Vector3(side * 0.78f, 0.4f, axle * 1.1f), Vector3.right * side, 0.34f, 0.22f, 8);
             wheels.Spawn("CarWheels", car, m.DarkSteel);
+            // the car is only shown while a session is reported, so its near set follows the car's own visibility
+            detail?.Register(NearVehicles.Car(CarSpec.Charging), car, Vector3.zero, Quaternion.identity, NearPalette.Vehicle(m.Render.GetColor("_BaseColor")), m.Surfaces, null, true);
             var cable = new MeshKit(); var last = new Vector3(0.45f, 1.1f, 0.4f);
             for (var i = 1; i <= 8; i++) { var t = i / 8f; var next = Vector3.Lerp(new Vector3(0.45f, 1.1f, 0.4f), carAt + new Vector3(.8f,.8f,-1), t) - Vector3.up * Mathf.Sin(t * Mathf.PI) * 0.75f; cable.Beam(last, next, 0.06f); last = next; }
             r.Part("Cable", cable, m.DarkSteel, Vector3.zero);
