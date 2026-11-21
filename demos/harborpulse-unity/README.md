@@ -947,3 +947,56 @@ the new ranges fill the ridge's saddles. The world is 901 renderers and 1.06 M v
 (5.55 on average) and 5.65-5.91 ms for U6 (5.80 on average), so U6 is about a quarter of a millisecond higher, inside the spread
 of U5's own runs. The player's captures of a day page (lamp work), a storm page and a night page (the feeder outage) were read
 frame by frame.
+
+## U7 light, crests, rock and crews
+
+U6 left nine things short. This supersedes the U6 numbers for both HOME poses, the ambient light and the crews where they differ.
+
+- **The storm's dusk** (`SkyState.HorizonBreak`). The scenario's storm (16:00-22:30) covers every sunset, and nothing here moves it:
+  the beats, the cues and everything the rig judges are untouched. The front now stops short of the horizon towards the low sun. While
+  the sun is between 15 degrees up and 6 degrees under, a band of clear lit sky shows under the deck, about 6 degrees tall towards the
+  sun and tapering to nothing 110 degrees round from it (`SkyState.BreakReach`), gold while the sun is up and ember after. The 16:9
+  HOME looks north, so it holds the band's northern taper: tall at the frame's western edge, gone before the eastern one. Once the sun
+  is inside the band (under about 7 degrees) it reaches the town as a warm key again (`BreakKeyShare`: three quarters of what the storm
+  took), the deck's bases above the band are lit, the rain between the eye and the band is lit from behind, the rain in the air turns
+  from the WORLD cue's cool white towards gold (`HarborMaterials.SetRain`), and the water mirrors the band. The storm's cloud at dusk
+  is slate; it was the brown a drained rose leaves.
+- **Rain shafts** (`Shaders/HarborHaze.hlsl`). The haze a ray fades into is now one function in one file, included by the sky, the
+  scenery and the water. In the rain it carries shafts, slanted bands up to 42 % darker, sampled round the compass and moved by the
+  scenario clock, above the horizon and below it: the far land and sea under a storm are no longer one grey field.
+- **A fair-weather look check.** `-hp-stills-weather fair` (and `HarborpulseApp.PreviewFairWeather`) draws the OFFLINE PREVIEW's sky,
+  light, rain and sea for a dry day, so an hour the storm always covers can be judged as a clear one. It is a still tool: the stamp
+  reads `FAIR-WEATHER LOOK CHECK, STORM NOT DRAWN`, the file name ends `-fair`, the preview's readings and cues are the scenario's
+  own (a gauge still reads the storm's tide), a live scene refuses it, and any value but `fair` or `scenario` is refused.
+- **Dawn and white balance.** At 06:24 the sun is two degrees up: a key, but a weak and grazing one, so the flat ground had only an
+  ambient a third of the keyless hour's. The floor now carries a clear dawn and dusk as well (`TwilightFloorShare`), and once the sky
+  is light the floor is near neutral instead of the night's blue (the night keeps its blue). By day the sky-coloured ambient keeps
+  0.42 of the sky's colour (`DayAmbientKeep`), and less in the first and last hours: flat ground is lit by the whole sky, not the
+  zenith. The scenery shader divides its direct light by pi and not its ambient, so on the quays that ambient outweighed the sun and
+  turned concrete lavender. The grade's daytime temperature is +3 where it was -3. Measured on the 16:9 HOME stills, the west quay's
+  top was (46, 32, 37) at 06:24 and is (83, 67, 61); (62, 80, 122) at 07:06 and is (75, 79, 90); (95, 102, 128) at 12:30 and is
+  (102, 102, 107). The storm dusk's ambient has no violet left (blue was 1.6 times red at 18:18).
+- **The wood on the ranges** (`CoastalTerrain.HillLayer.CrestTrees`, `RidgeBuilder`). Each of the seven backdrop layers carries a line
+  of tree tops on its crest and two more down the face in front, 5,000 in all: flat cut-outs that face the harbour, one triangle a
+  conifer and three a broadleaf, 8.5-17 m tall, six conifers to four broadleaves, in stands with gaps. The broadleaves' colour and the
+  faces' own rust and gold follow a slow noise along the range, where a per-face hash scattered single faces. A crest's ground is
+  still under 3 degrees from a quay; its trees add under half a degree.
+- **16:9 HOME.** The look is raised from y = 4 to 7.5 (`PresentationMap.HomeLookY`), under half a degree: the horizon is 18.9 % down
+  (17.6 %). The mask reads sky 20.1 % (U5 19.6 %, U6 19.1 %) with the ranges at their U6 height and their tree line on top, water 39.1 %.
+- **9:16 HOME.** (-700, 235, -60) looking at (0, 22.2, -5), vertical FOV 44, horizon 12.5 % down. The devices stand between 46 % and
+  66 % of the way down (U6: 49-83 %), the farthest drawn no smaller than U6 drew it; below them are the western woods and houses,
+  above them the eastern woods, the uplands, the sea horizon and the sky. A backdrop layer seen from well above now lies in the same
+  haze as the ground round it (it stood out of it as a dark lens), and the coastal turf strip is weighed at each corner of a facet
+  and blended across it, where one weight a facet drew the grid as a staircase. The mask reads sky 19.4 %, water 15.6 %, 36 of 37
+  devices: from this lower eye the Basin's second charger is behind the ferry terminal.
+- **Granite** (`Outcrop.Blocks`). Every ledge of 10 m or more carries two to five loose blocks on its shoulders, and most ledges of
+  22 m or more a tor: two or three slabs stacked on the crown, up to 8 m above the ledge's top. Each block is a prism whose bottom is
+  half a metre under the drawn ground at every corner, inside the ledge's own rectangle: 192 blocks, 9 tors, about 7 k vertices in the
+  terrain tiles. Walls darken to their foot and tops are light, so a block shows as a lit cap over a dark side.
+- **Glass and the crews.** A vehicle's pane carries the sky in its upper part and a narrow glint (`NearPlan.Glazed`), cut from the
+  pane's own outline. The WORLD crew is a utility van with a cab, a bonnet, side cabinets and the fleet stripe, six cones with
+  collars and a two-board barrier; at a street light it has a bucket lift on outriggers with a technician at the lantern. It keeps the
+  WORLD cue's cool palette. A crew is built when the scenario first sends one (there was a hidden van at every lamp and gauge): the
+  world is 796 renderers and 1.06 M vertices (U6: 901 and 1.06 M).
+- **Well tags.** The wet well's level tags are drawn with a depth-tested font material (`Resources/HarborWorldTag.shader`); the
+  built-in one drew them through the quay into any lamp shot that stood beside a well.
