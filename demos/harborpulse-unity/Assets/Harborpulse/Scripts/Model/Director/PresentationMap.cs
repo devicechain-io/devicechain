@@ -302,8 +302,28 @@ namespace DeviceChain.Harborpulse.Model.Director
                 // the device across the quay edge instead of into the ground behind it.
                 var quay = QuayFor(layout.Devices.First(d => d.Token == pair.Token));
                 var wx = quay == "hp-east-quay" ? -1.0 : quay == "hp-basin" ? 1.0 : 0; var wz = quay == "hp-north-quay" ? -1.0 : 0;
+                var isLamp = layout.Devices.First(d => d.Token == pair.Token).Kind == DeviceKind.Light;
                 foreach (var suffix in StoryPoses.GroundSuffixes)
                 {
+                    if (isLamp)
+                    {
+                        // A lamp's story is its head: stand 14-18 m off, 25-35 degrees round from the quay's axis, eye 5-6 m, and aim a little
+                        // under the head so the whole lamp, head included, sits in the middle of the frame with the pole running down from it.
+                        double lamp, lampEye, lampFov = 40;
+                        switch (suffix)
+                        {
+                            case "kiosk-ext": lamp = 17; lampEye = 5.5; break;
+                            case "pair": lamp = 16; lampEye = 5.5; break;
+                            case "close": lamp = 14; lampEye = 5; break;
+                            case "wide": lamp = 18; lampEye = 6; lampFov = 42; break;
+                            case "promenade": lamp = 17; lampEye = 5.5; break;
+                            default: lamp = 15; lampEye = 5; break;
+                        }
+                        var turn = LampTurn(pair.Family) * Math.PI / 180;
+                        var dx2 = wx * Math.Cos(turn) - wz * Math.Sin(turn); var dz2 = wx * Math.Sin(turn) + wz * Math.Cos(turn);
+                        poses.Add("pose:" + pair.Family + ":" + suffix, Stand(a.X + dx2 * lamp, lampEye, a.Z + dz2 * lamp, a.X, a.Z, lampFov, .39));
+                        continue;
+                    }
                     // Ground-level views: the eye is 5-8 m above the deck and the look is flattened until the horizon falls about
                     // 30 % of the way down, so the sky shows and the device stays in the middle third of the frame.
                     double back, eye, fov, horizon = .29;
@@ -324,7 +344,9 @@ namespace DeviceChain.Harborpulse.Model.Director
                     poses.Add("pose:" + pair.Family + ":" + suffix, new CameraPose(new Point3(a.X + wx * 16, 10, a.Z + wz * 16), new Point3(a.X, 2, a.Z), 42));
             }
             // Outside the quay the eye sits just above the water and the look is flattened to put the horizon about a third of the way down.
-            poses.Add("pose:east-quay:mouth-wide", Stand(30, 10, -180, 160, 25, 44, .36));
+            // from inside the harbour, over the water off the basin, looking east-south-east across the quay's devices: no breakwater or lighthouse is
+            // in front of the subject, and the east light stands at the right edge in the middle distance
+            poses.Add("pose:east-quay:mouth-wide", Stand(-130, 9.5, 70, 150, -10, 56, .36));
             var plain = fences[layout.Fences[0].Token];
             var centre = new Ground(plain.Average(p => p.X), plain.Average(p => p.Z));
             poses.Add("pose:plain:wide", Stand(centre.X - 46, 10, centre.Z - 60, centre.X, centre.Z, 45, .30));
@@ -336,6 +358,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         }
 
         /// <summary>Sideways step (metres along the quay's wall) of a family's ground-level eye, so its sight line passes beside the lamps and masts on the quay edge.</summary>
+        static double LampTurn(string family) => family == "lamp-east" ? -30 : 30;
+
         static double Sidestep(string family) => family == "pump-east" || family == "pump-basin" ? 4 : family == "chargers-east" ? -16 : 0;
 
         /// <summary>A pose from an eye position looking at a ground point's x and z, its pitch chosen so the horizon falls at <paramref name="horizonFromTop"/> of the frame.</summary>

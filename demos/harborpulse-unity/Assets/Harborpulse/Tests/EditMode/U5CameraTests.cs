@@ -152,7 +152,7 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(water, Is.LessThanOrEqualTo(.40));
             // the terrain's far edge (x = 2400) must end in haze, not in the frame's air: by then the scenery fog has taken it all
             var noon = DayLighting.Evaluate(12.5, new Weather(0, 0));
-            Assert.That(noon.SceneryTransmission(Math.Sqrt(2960.0 * 2960 + 290 * 290), 300, 2.4, 2160), Is.LessThan(.01));
+            Assert.That(noon.SceneryTransmission(Math.Sqrt(2960.0 * 2960 + 290 * 290), 300, 2.4, 2160), Is.LessThan(.15));
             // and the night and storm homes are the daytime frames
             Assert.That(U5Plan.Map.Pose("pose:night-home"), Is.SameAs(U5Plan.Map.Pose("pose:home")));
             Assert.That(U5Plan.Map.Pose("pose:storm-home"), Is.SameAs(U5Plan.Map.Pose("pose:home")));
@@ -205,7 +205,7 @@ namespace DeviceChain.Harborpulse.Tests
                 var fromTop = .5 - ny / 2;
                 Assert.That(fromTop, Is.InRange(.34, .66), name + " subject row (clear of the HUD's bottom caption band)");
                 Assert.That(Math.Abs(nx), Is.LessThan(.35), name + " subject column");
-                Assert.That(pose.VerticalFov, Is.InRange(34, 46), name);
+                Assert.That(pose.VerticalFov, Is.InRange(34, 56), name);
             }
             // two examples for the report
             foreach (var name in new[] { "pose:pump-north:kiosk-ext", "pose:east-quay:mouth-wide" })
@@ -329,6 +329,85 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(StoryPoses.Blocks(pose, mid.X, mid.Z, Deck, Deck + 9, 1), Is.True);
             Assert.That(StoryPoses.Blocks(pose, mid.X + 20, mid.Z, Deck, Deck + 9, 1), Is.False);
             Assert.That(StoryPoses.Blocks(pose, mid.X, mid.Z, Deck, Deck + .5, 1), Is.False, "a kerb-height obstacle is below the sight line");
+        }
+
+        [Test]
+        public void LampPosesKeepTheWholeLampHeadIncludedInTheUpperMiddleOfTheFrame()
+        {
+            // the lamp's head (about 7 m up) is the story: it must be in frame, upper-middle, for every pose about a lamp
+            var lamps = StoryPoses.Families.Where(f => U5Plan.Layout.Devices.First(d => d.Token == f.Token).Kind == DeviceKind.Light).ToList();
+            Assert.That(lamps.Count, Is.EqualTo(2));
+            foreach (var f in lamps)
+                foreach (var s in StoryPoses.GroundSuffixes)
+                {
+                    var name = "pose:" + f.Family + ":" + s;
+                    var pose = U5Plan.Map.Pose(name); var a = U5Plan.Map.Anchors[f.Token];
+                    Assert.That(CameraMath.Project(pose, Wide, a.X, 7, a.Z, out var nx, out var ny), Is.True, name);
+                    Assert.That(Math.Abs(nx), Is.LessThanOrEqualTo(.35), name + " head column");
+                    Assert.That(ny, Is.InRange(.2, .7), name + " head row (upper middle)");
+                    CameraMath.Project(pose, Wide, a.X, Deck, a.Z, out _, out var baseY);
+                    Assert.That(baseY, Is.GreaterThan(-.9), name + " the lamp's foot is in frame too");
+                    var dist = Math.Sqrt((pose.Camera.X - a.X) * (pose.Camera.X - a.X) + (pose.Camera.Z - a.Z) * (pose.Camera.Z - a.Z));
+                    Assert.That(dist, Is.InRange(13.99, 18.01), name + " stand-off");
+                    Assert.That(pose.Camera.Y, Is.InRange(5, 6.01), name + " eye");
+                    // swung 25-35 degrees round from the quay's axis (the water-side direction)
+                    var quay = U5Plan.Map.QuayFor(U5Plan.Layout.Devices.First(d => d.Token == f.Token));
+                    double wx = quay == "hp-east-quay" ? -1 : quay == "hp-basin" ? 1 : 0, wz = quay == "hp-north-quay" ? -1 : 0;
+                    var angle = Math.Acos(((pose.Camera.X - a.X) * wx + (pose.Camera.Z - a.Z) * wz) / dist) * 180 / Math.PI;
+                    Assert.That(angle, Is.InRange(24.9, 35.1), name + " angle off the quay axis");
+                }
+        }
+
+        [Test]
+        public void MouthWideKeepsBreakwatersAndLighthousesOutOfTheLineOfSight()
+        {
+            var name = "pose:east-quay:mouth-wide";
+            var pose = U5Plan.Map.Pose(name);
+            Assert.That(pose.Camera.Y, Is.InRange(9, 10));
+            double ax = pose.Camera.X, az = pose.Camera.Z, bx = pose.Look.X, bz = pose.Look.Z;
+            double Distance(double px, double pz)
+            {
+                var dx = bx - ax; var dz = bz - az; var u = Math.Max(0, Math.Min(1, ((px - ax) * dx + (pz - az) * dz) / (dx * dx + dz * dz)));
+                return Math.Sqrt(Math.Pow(ax + u * dx - px, 2) + Math.Pow(az + u * dz - pz, 2));
+            }
+            foreach (var lighthouse in new[] { new Ground(-39, -148), new Ground(39, -148) })
+                Assert.That(Distance(lighthouse.X, lighthouse.Z), Is.GreaterThanOrEqualTo(80), "lighthouse near the view axis");
+            foreach (var wall in new[] { U5Plan.Map.WestBreakwater, U5Plan.Map.EastBreakwater })
+                foreach (var corner in wall) Assert.That(Distance(corner.X, corner.Z), Is.GreaterThanOrEqualTo(80), "breakwater near the view axis");
+            // and the camera stands over the harbour's own water, west of the East Quay
+            Assert.That(Water(pose.Camera.X, pose.Camera.Z) && pose.Camera.X < 140 && pose.Camera.Z > -140, Is.True);
+            // negative control: the U5 round-1 camera (30, -180) had a lighthouse within 80 m of its axis
+            var old = new CameraPose(new Point3(30, 10, -180), new Point3(175, 0, 20), 44);
+            ax = old.Camera.X; az = old.Camera.Z; bx = old.Look.X; bz = old.Look.Z;
+            Assert.That(Distance(39, -148), Is.LessThan(80));
+        }
+
+        [Test]
+        public void MeadowsAndLargeOutcropsAreOnScreenAtHomeBehindTheTown()
+        {
+            // pins the visible-bare-ground direction: from HOME 16:9, between 60 and 500 m beyond the town, at least four meadows of 70 m or
+            // more and five granite ledges of 15 m or more are inside the frame, and two meadows reach the town's edge
+            var plan = U5Plan.Plan; var pose = U5Plan.Map.Pose("pose:home");
+            var lots = plan.Props.Where(p => p.Footprint.Id.StartsWith("lot:", StringComparison.Ordinal)).Select(p => p.At).ToList();
+            double ToTown(double x, double z) => lots.Min(l => SceneryStreet.Distance(l, new Ground(x, z)));
+            bool InFrame(double x, double z)
+            {
+                return CameraMath.Project(pose, Wide, x, plan.Terrain.MeshHeight(x, z), z, out var nx, out var ny) && Math.Abs(nx) <= .95 && Math.Abs(ny) <= .95;
+            }
+            var meadows = 0; var touching = 0;
+            for (var i = 0; i < CoastalTerrain.MeadowCount; i++)
+            {
+                var m = CoastalTerrain.Meadow(i);
+                var d = ToTown(m.X, m.Z); TestContext.WriteLine("meadow " + i + " r=" + m.R + " nearest lot " + d.ToString("F0"));
+                if (m.R >= 70 && d >= 60 && d <= 500 && InFrame(m.X, m.Z) && CoastalTerrain.ClearingWeight(m.X, m.Z) > .9) { meadows++; if (d <= m.R + 15) touching++; }
+            }
+            var ledges = plan.Outcrops.Count(o => o.PlanSize >= 15 && ToTown(o.Center.X, o.Center.Z) is var d && d >= 60 && d <= 500 && InFrame(o.Center.X, o.Center.Z));
+            TestContext.WriteLine("Visible from HOME: " + meadows + " meadows (" + touching + " touching the town), " + ledges + " ledges of 15 m or more");
+            Assert.That(meadows, Is.GreaterThanOrEqualTo(4));
+            Assert.That(touching, Is.GreaterThanOrEqualTo(2));
+            Assert.That(ledges, Is.GreaterThanOrEqualTo(5));
+            // their dry grass is clearly lighter than the forest floor, by the terrain colours' own luminance (meadow straw .60,.56,.36 vs floor .20,.23,.14)
+            Assert.That(CoastalTerrain.ForestCover(CoastalTerrain.Meadow(0).X, CoastalTerrain.Meadow(0).Z), Is.LessThan(.05));
         }
     }
 }

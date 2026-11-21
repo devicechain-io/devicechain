@@ -813,3 +813,21 @@ every near plan staying inside the lot or footprint the building reserved (and v
 and that the per-house choices come from the position and repeat. The sidecar and compile gates establish none of
 the visual result: the look of the near sets, HOME pixels, the stills' switch timing and frame time need the Unity
 capture rig (the budget to hold is the earlier 4-5 ms mean at 1920x1080).
+
+### U5 round 2: haze range, visible meadows and granite, lighter conifers, lamp and mouth poses
+
+This supersedes the fog, forest, rock and pose numbers above where they differ.
+
+- **Haze range.** Scenery fog starts 350 m from the camera (`SceneryFogStartM`) with a gain of 3.5. From HOME at noon transmission
+  is 0.87 at 1,000 m, 0.83 at 1,100 m, 0.53 at 1,750 m and 0.23 at 2,500 m; in the storm half falls at about 1,000 m. The ridge
+  (own fog, scale 0.40, darker bands) keeps about 0.6 at noon and about 0.1 in the storm. The engine's fog density is back to
+  its pre-U5 value. The planted forest runs to 1,700 m from the core (minimal detail, spacing growing to about 29 m, faded from
+  1,250 m); the terrain grid is 20 m to 1.2 km and 30 m to 1.9 km.
+- **Counts.** 12,276 trees (59.5 % conifers), 721 k vertices (2,877 near, 4,259 mid, 5,140 far). Woodland covers 68 %.
+- **Meadows and granite.** Six meadows of 85-130 m sit where HOME looks (two touch the town's edge), with a cluster of granite ledges
+  at each; lead ledges are 18-35 m. 78 outcrops in all. A test projects them through the HOME pose.
+- **Conifers.** Greens from (.16,.34,.19) to (.28,.44,.24), about 15 % blue-green, top tiers 25 % lighter, whole stands drifting
+  in tone; far broadleaf crowns are brightened and more saturated.
+- **Poses.** Lamp subjects (`lamp-east`, `north-quay`) stand 14-18 m off, 30 degrees round from the quay's axis at eye 5-6 m, the
+  look just under the head so the whole lamp sits upper-middle of the frame. `east-quay:mouth-wide` stands inside the harbour at
+  (-130, 9.5, 70) looking at the quay (150, -10) with FOV 56; no breakwater or lighthouse is within 80 m of its axis.

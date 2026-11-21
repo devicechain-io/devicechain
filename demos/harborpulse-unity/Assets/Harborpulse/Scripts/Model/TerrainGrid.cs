@@ -27,15 +27,15 @@ namespace DeviceChain.Harborpulse.Model
                 for (var i = 0; i < xs.Length; i++) heights[j * xs.Length + i] = CoastalTerrain.Height(xs[i], zs[j]);
         }
 
-        /// <summary>10 m cells round the town, 20 m across the rolling ground, then coarser out to the ridge's foot (and 200 m cells on the flat far flanks). Grid lines fall exactly on the core's edges.</summary>
+        /// <summary>10 m cells round the town, 20 m across the rolling ground to 1.2 km, 30 m under the far forest, then coarser out to the ridge's foot (and 200 m cells on the flat far flanks). Grid lines fall exactly on the core's edges.</summary>
         public static TerrainGrid Standard()
         {
             // (to, step) segments; every boundary is a multiple of its step from the start, so no accumulated rounding.
-            var right = Line(0, new[] { (620.0, 10.0), (1500, 20), (2000, 50), (CoastalTerrain.TerrainReachM, 100), (CoastalTerrain.TerrainHalfWidthM, 200) });
+            var right = Line(0, new[] { (620.0, 10.0), (1200, 20), (1920, 30), (CoastalTerrain.TerrainReachM, 80), (CoastalTerrain.TerrainHalfWidthM, 200) });
             var xs = new List<float>();
             for (var i = right.Count - 1; i > 0; i--) xs.Add(-right[i]);
             xs.AddRange(right);
-            var zs = Line(CoastalTerrain.CoastZ, new[] { (520.0, 10.0), (1500, 20), (2000, 50), (CoastalTerrain.TerrainReachM, 100) });
+            var zs = Line(CoastalTerrain.CoastZ, new[] { (520.0, 10.0), (1200, 20), (1920, 30), (CoastalTerrain.TerrainReachM, 80) });
             return new TerrainGrid(xs.ToArray(), zs.ToArray());
         }
 

@@ -21,10 +21,10 @@ namespace DeviceChain.Harborpulse.Visuals
         {
             // pale valley haze at the foot, then two forest greens, then a slightly lighter crest
             Color c;
-            if (t < .18f) c = new Color(.36f, .45f, .47f);
-            else if (t < .45f) c = new Color(.28f, .41f, .41f);
-            else if (t < .72f) c = new Color(.23f, .36f, .34f);
-            else c = new Color(.25f, .38f, .35f);
+            if (t < .18f) c = new Color(.30f, .40f, .43f);
+            else if (t < .45f) c = new Color(.21f, .33f, .34f);
+            else if (t < .72f) c = new Color(.16f, .28f, .28f);
+            else c = new Color(.18f, .30f, .30f);
             return new Color(c.r * variation, c.g * variation, c.b * variation, SurfaceCode);
         }
 

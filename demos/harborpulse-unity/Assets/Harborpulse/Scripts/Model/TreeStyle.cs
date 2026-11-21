@@ -17,7 +17,7 @@ namespace DeviceChain.Harborpulse.Model
     /// </summary>
     public static class TreeStyle
     {
-        public const double NearM = 380, MidM = 800, PlantationM = 1250;
+        public const double NearM = 380, MidM = 800, PlantationM = 1700;
 
         public static bool IsConifer(TreeKind k) => k <= TreeKind.Pine;
 
@@ -54,10 +54,10 @@ namespace DeviceChain.Harborpulse.Model
 
         /// <summary>Planned crown spacing in metres by distance from the core: about 12 m beside the town (the vertex budget's price for full-detail crowns), thinning out into the haze.</summary>
         public static double Spacing(double coreDistanceM) =>
-            12 + 3 * CoastalTerrain.Smooth(300, 800, coreDistanceM) + 6 * CoastalTerrain.Smooth(800, 1100, coreDistanceM);
+            12 + 3 * CoastalTerrain.Smooth(300, 800, coreDistanceM) + 6 * CoastalTerrain.Smooth(800, 1100, coreDistanceM) + 8 * CoastalTerrain.Smooth(1100, 1700, coreDistanceM);
 
         /// <summary>1 inside the plantation, fading to 0 at its edge so nothing pops where the forest ends.</summary>
-        public static double Fade(double coreDistanceM) => 1 - CoastalTerrain.Smooth(950, PlantationM, coreDistanceM);
+        public static double Fade(double coreDistanceM) => 1 - CoastalTerrain.Smooth(1250, PlantationM, coreDistanceM);
 
         /// <summary>Vertices one tree costs in the visual builder (flat shading: every triangle owns three).</summary>
         public static int Vertices(TreeKind k, TreeLod lod)
@@ -93,18 +93,22 @@ namespace DeviceChain.Harborpulse.Model
             public static Colour Lerp(Colour a, Colour b, double t) => new Colour(a.R + (b.R - a.R) * t, a.G + (b.G - a.G) * t, a.B + (b.B - a.B) * t);
         }
 
-        static readonly Colour DeepGreen = new Colour(.10, .26, .15), LightGreen = new Colour(.20, .36, .19), BlueGreen = new Colour(.10, .28, .25);
+        static readonly Colour DeepGreen = new Colour(.16, .34, .19), LightGreen = new Colour(.28, .44, .24), BlueGreen = new Colour(.17, .33, .30);
         static readonly Colour Gold = new Colour(.84, .66, .18), Orange = new Colour(.82, .42, .12), Crimson = new Colour(.66, .15, .12),
             Russet = new Colour(.56, .27, .12), Olive = new Colour(.40, .45, .18), LeafGreen = new Colour(.26, .42, .17);
 
-        /// <summary>A conifer's body green: deep to lighter greens, a few blue-green, a touch lighter toward the top tiers (<paramref name="tier"/> 0 low .. 1 top).</summary>
-        public static Colour Conifer(TreeKind k, double roll, double tier)
+        /// <summary>
+        /// A conifer's body green, lit for a tone-mapped, shadowless frame: mid to light greens, about 15 % blue-green, the top tier a quarter
+        /// lighter than the lowest (<paramref name="tier"/> 0 low .. 1 top), and whole stands a little lighter or darker (drifts, by position).
+        /// </summary>
+        public static Colour Conifer(TreeKind k, double roll, double tier, double x = 0, double z = 0)
         {
             var body = Colour.Lerp(DeepGreen, LightGreen, roll);
-            if (roll > .88) body = Colour.Lerp(body, BlueGreen, .85);
-            if (k == TreeKind.Fir) body = body.Scale(.9);
-            else if (k == TreeKind.Pine) body = Colour.Lerp(body, new Colour(.22, .35, .16), .35);
-            return body.Scale(.92 + .22 * tier);
+            if (roll > .85) body = Colour.Lerp(body, BlueGreen, .8);
+            if (k == TreeKind.Fir) body = body.Scale(.94);
+            else if (k == TreeKind.Pine) body = Colour.Lerp(body, new Colour(.27, .40, .19), .3);
+            var stand = .88 + .24 * CoastalTerrain.Noise(x * .011 + 23, z * .011 - 5);
+            return body.Scale(stand * (.92 + .23 * tier));
         }
 
         /// <summary>

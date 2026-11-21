@@ -135,13 +135,21 @@ namespace DeviceChain.Harborpulse.Model
 
         // ---------------------------------------------------------------- what grows where
 
-        // centre x, centre z, radius: meadow clearings of 60-200 m. Some touch the town's edge, two sit on the knolls.
+        // centre x, centre z, radius: meadow clearings of 70-180 m. The first six are where HOME looks: on the rising ground behind the
+        // town and on both flanks, two of them touching the town's edge. The rest are further out; one sits on a knoll's summit.
         static readonly double[][] Clearings =
         {
-            new[] { -250.0, 470, 85 }, new[] { 330.0, 440, 105 }, new[] { 70.0, 580, 70 }, new[] { -640.0, 300, 75 },
-            new[] { -80.0, 1060, 150 }, new[] { 440.0, 640, 95 }, new[] { -520.0, 880, 125 }, new[] { 130.0, 820, 100 },
+            new[] { -250.0, 372, 90 }, new[] { 330.0, 370, 105 }, new[] { 40.0, 610, 85 }, new[] { -430.0, 650, 110 },
+            new[] { 480.0, 700, 120 }, new[] { -130.0, 820, 130 },
+            new[] { -640.0, 300, 75 }, new[] { -80.0, 1060, 150 }, new[] { -520.0, 880, 125 },
             new[] { 830.0, 900, 130 }, new[] { -950.0, 790, 100 }, new[] { 950.0, 430, 90 }, new[] { -330.0, 1000, 110 },
         };
+
+        /// <summary>The number of meadows (the first ones) placed where HOME sees them.</summary>
+        public const int VisibleMeadows = 6;
+        public static int MeadowCount => Clearings.Length;
+        /// <summary>A meadow's centre and nominal radius.</summary>
+        public static (double X, double Z, double R) Meadow(int i) => (Clearings[i][0], Clearings[i][1], Clearings[i][2]);
 
         /// <summary>1 inside a clearing, fading to 0 across its irregular edge.</summary>
         public static double ClearingWeight(double x, double z)

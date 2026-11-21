@@ -103,7 +103,7 @@ namespace DeviceChain.Harborpulse.Tests
                 {
                     var c = TreeStyle.Conifer(k, roll, 0);
                     Assert.That(c.G, Is.GreaterThan(c.R + .06), "green over red");
-                    Assert.That(c.G, Is.InRange(.2, .45));
+                    Assert.That(c.G, Is.InRange(.25, .60), "lighter greens than the first cut, which tone-mapped to near black");
                     Assert.That(TreeStyle.Conifer(k, roll, 1).G, Is.GreaterThan(c.G), "lighter toward the top tier");
                 }
             }
@@ -201,7 +201,7 @@ namespace DeviceChain.Harborpulse.Tests
                 lines.Add(lod + ": " + set.Count + " trees, " + v + " vertices");
             }
             TestContext.WriteLine(string.Join("; ", lines) + "; total " + total + " vertices over " + Trees.Count() + " trees");
-            Assert.That(total, Is.LessThanOrEqualTo(700000));
+            Assert.That(total, Is.LessThanOrEqualTo(760000));
             Assert.That(total, Is.GreaterThan(300000), "a full, wooded coast");
             Assert.That(counts[TreeLod.Near], Is.GreaterThan(1500));
             Assert.That(counts[TreeLod.Mid], Is.GreaterThan(counts[TreeLod.Near]));
@@ -225,7 +225,7 @@ namespace DeviceChain.Harborpulse.Tests
             double Density(double lo, double hi)
             {
                 var woods = 0; var trees = 0;
-                for (var z = -80; z < 1500; z += 10) for (var x = -1700; x < 1700; x += 10)
+                for (var z = -80; z < 1900; z += 10) for (var x = -2000; x < 2000; x += 10)
                 {
                     var r = CoastalTerrain.CoreDistance(x, z);
                     if (r >= lo && r < hi && CoastalTerrain.Woodland(x, z)) woods++;
@@ -233,10 +233,10 @@ namespace DeviceChain.Harborpulse.Tests
                 trees = d.Count(r => r >= lo && r < hi);
                 return trees * 100.0 / Math.Max(1, woods);   // each sample stands for 100 m2: trees per hectare
             }
-            var inner = Density(700, 800); var mid = Density(950, 1050); var edge = Density(1150, 1250);
-            TestContext.WriteLine("Trees per hectare of woodland: 700-800 m " + inner.ToString("F2") + ", 950-1050 " + mid.ToString("F2") + ", 1150-1250 " + edge.ToString("F2"));
-            Assert.That(mid, Is.LessThan(inner)); Assert.That(edge, Is.LessThan(mid * .35)); Assert.That(TreeStyle.Fade(1250), Is.EqualTo(0).Within(1e-12));
-            Assert.That(TreeStyle.Fade(900), Is.EqualTo(1));
+            var inner = Density(700, 800); var mid = Density(1100, 1200); var edge = Density(1600, 1700);
+            TestContext.WriteLine("Trees per hectare of woodland: 700-800 m " + inner.ToString("F2") + ", 1100-1200 " + mid.ToString("F2") + ", 1600-1700 " + edge.ToString("F2"));
+            Assert.That(mid, Is.LessThan(inner)); Assert.That(edge, Is.LessThan(mid * .35)); Assert.That(TreeStyle.Fade(1700), Is.EqualTo(0).Within(1e-12));
+            Assert.That(TreeStyle.Fade(1200), Is.EqualTo(1));
             Assert.That(TreeStyle.Spacing(200), Is.InRange(11.9, 12.5), "close crowns beside the town");
             Assert.That(TreeStyle.Spacing(1100), Is.GreaterThan(TreeStyle.Spacing(400) + 5), "sparser in the haze");
         }
@@ -275,7 +275,7 @@ namespace DeviceChain.Harborpulse.Tests
                 worst = Math.Min(worst, margin);
                 Assert.That(o.Top - plan.Terrain.MeshHeight(o.Center.X, o.Center.Z), Is.LessThanOrEqualTo(Math.Min(4, .4 * o.Radius) + 1e-9), "top above the ground at its centre");
                 Assert.That(o.Protrusion, Is.InRange(.6, 4.0 + 1e-9));
-                Assert.That(o.PlanSize, Is.InRange(8 - 1e-9, 30 + 1e-9));
+                Assert.That(o.PlanSize, Is.InRange(8 - 1e-9, 35 + 1e-9));
                 // every ring vertex lies inside the plan rectangle that the registry reserves for it
                 var footprint = o.Footprint("check");
                 foreach (var ring in o.Rings) foreach (var p in ring)

@@ -37,6 +37,8 @@ namespace DeviceChain.Harborpulse.Visuals
             if (TreeStyle.IsConifer(kind)) { Conifer(mesh, at, height, kind, lod, roll2, lean, bark, tr); return; }
 
             var leaf = C(TreeStyle.Broadleaf(kind, at.x, at.z, roll2));
+            // far crowns are brighter and a little more saturated, so the autumn colour survives the haze
+            if (lod == TreeLod.Far) { var grey = (leaf.r + leaf.g + leaf.b) / 3; leaf = new Color(Mathf.Clamp01((grey + (leaf.r - grey) * 1.25f) * 1.1f), Mathf.Clamp01((grey + (leaf.g - grey) * 1.25f) * 1.1f), Mathf.Clamp01((grey + (leaf.b - grey) * 1.25f) * 1.1f), 1); }
             // round maple, broad oak, tall oval birch
             Vector3 radii; float cy;
             if (kind == TreeKind.Oak) { radii = new Vector3(.40f, .30f, .38f) * height; cy = .60f; }
@@ -67,7 +69,7 @@ namespace DeviceChain.Harborpulse.Visuals
         {
             var up = Vector3.up;
             Vector3 P(float y) => at + lean * (y / height) + up * y;
-            Color Body(float u) => C(TreeStyle.Conifer(kind, roll, u));
+            Color Body(float u) => C(TreeStyle.Conifer(kind, roll, u, at.x, at.z));
             if (lod == TreeLod.Far)
             {
                 if (kind == TreeKind.Spruce)
