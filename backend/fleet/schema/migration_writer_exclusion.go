@@ -35,15 +35,6 @@ func NewWriterExclusionSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: WriterExclusionID,
 		Migrate: func(tx *gorm.DB) error {
-			// The singleton fence between manager replicas.
-			type managerLease struct {
-				ID        int16     `gorm:"primaryKey;autoIncrement:false;type:smallint"`
-				HolderID  string    `gorm:"type:text;not null"`
-				Epoch     int64     `gorm:"column:lease_epoch;not null;default:0"`
-				ExpiresAt time.Time `gorm:"type:timestamptz;not null"`
-				UpdatedAt time.Time `gorm:"type:timestamptz;not null"`
-			}
-
 			// One row per fleet cluster: the create intent.
 			type cloudIdentity struct {
 				ID               uint       `gorm:"primaryKey"`
@@ -195,7 +186,7 @@ func NewWriterExclusionSchema() *gormigrate.Migration {
 			}
 
 			// manager_lease is a singleton, named so rather than by gorm's pluralisation.
-			if err := tx.Table("manager_lease").AutoMigrate(&managerLease{}); err != nil {
+			if err := tx.AutoMigrate(&managerLease{}); err != nil {
 				return fmt.Errorf("fleet: manager_lease: %w", err)
 			}
 			if err := tx.AutoMigrate(
@@ -208,6 +199,21 @@ func NewWriterExclusionSchema() *gormigrate.Migration {
 		},
 	}
 }
+
+// managerLease is the singleton fence between manager replicas. It is declared here, beside the
+// migration and still its own snapshot (not a live model), because a table name that differs from
+// gorm's pluralisation needs a TableName method, and a method cannot be declared on a type local to
+// a function. The name carries no schema prefix: the connection's search_path puts it in the area's.
+type managerLease struct {
+	ID        int16     `gorm:"primaryKey;autoIncrement:false;type:smallint"`
+	HolderID  string    `gorm:"type:text;not null"`
+	Epoch     int64     `gorm:"column:lease_epoch;not null;default:0"`
+	ExpiresAt time.Time `gorm:"type:timestamptz;not null"`
+	UpdatedAt time.Time `gorm:"type:timestamptz;not null"`
+}
+
+// TableName names the singleton table.
+func (managerLease) TableName() string { return "manager_lease" }
 
 // check is a named CHECK constraint, added once behind a catalog probe.
 type check struct{ table, name, expr string }
