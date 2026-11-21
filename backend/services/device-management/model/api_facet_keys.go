@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
@@ -70,11 +72,25 @@ func (api *Api) SetFacetKey(ctx context.Context, request *FacetKeySetRequest) (*
 	if err != nil {
 		return nil, err
 	}
+	var facet *FacetKey
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockFacetKey(ctx, tx, request.MemberType, request.Key); err != nil {
+			return err
+		}
+		var err error
+		facet, err = setFacetKeyOnTx(tx, request, values)
+		return err
+	})
+	return facet, err
+}
 
+// The declaration and old-type value check must share the import's lock and
+// transaction, including when no declaration or values exist yet.
+func setFacetKeyOnTx(tx *gorm.DB, request *FacetKeySetRequest, values *datatypes.JSON) (*FacetKey, error) {
 	// Upsert on the natural key. The tenant predicate is added by the rdb scope
 	// callback, so this matches only the caller-tenant's row.
 	existing := &FacetKey{}
-	result := api.RDB.DB(ctx).Where(
+	result := tx.Where(
 		"member_type = ? AND attr_key = ?", request.MemberType, request.Key).First(existing)
 	if result.Error == nil {
 		if FacetSource(existing.Source) == FacetSourceSystem {
@@ -84,7 +100,7 @@ func (api *Api) SetFacetKey(ctx context.Context, request *FacetKeySetRequest) (*
 			// Values belong to shared attributes, not the registry. Never silently
 			// strand them by changing the type used to interpret this facet.
 			var attribute EntityAttribute
-			err := api.RDB.DB(ctx).Select("id").Where(
+			err := tx.Select("id").Where(
 				"entity_type = ? AND attr_key = ? AND scope = ? AND value_type = ? AND value IS NOT NULL",
 				request.MemberType, request.Key, string(AttributeScopeShared), existing.ValueType).Take(&attribute).Error
 			if err == nil {
@@ -98,7 +114,7 @@ func (api *Api) SetFacetKey(ctx context.Context, request *FacetKeySetRequest) (*
 		existing.Values = values
 		existing.Label = rdb.NullStrOf(request.Label)
 		existing.Source = string(FacetSourceAttribute)
-		if err := api.RDB.DB(ctx).Save(existing).Error; err != nil {
+		if err := tx.Save(existing).Error; err != nil {
 			return nil, err
 		}
 		return existing, nil
@@ -115,7 +131,7 @@ func (api *Api) SetFacetKey(ctx context.Context, request *FacetKeySetRequest) (*
 		Values:     values,
 		Label:      rdb.NullStrOf(request.Label),
 	}
-	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
+	if err := tx.Create(created).Error; err != nil {
 		return nil, err
 	}
 	return created, nil
@@ -142,8 +158,21 @@ func (api *Api) FacetKeys(ctx context.Context, criteria FacetKeySearchCriteria) 
 // whether a row was removed (a gorm soft-delete, so the natural key frees for reuse
 // via the partial-unique index).
 func (api *Api) DeleteFacetKey(ctx context.Context, memberType string, key string) (bool, error) {
+	var deleted bool
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockFacetKey(ctx, tx, memberType, key); err != nil {
+			return err
+		}
+		var err error
+		deleted, err = deleteFacetKeyOnTx(tx, memberType, key)
+		return err
+	})
+	return deleted, err
+}
+
+func deleteFacetKeyOnTx(tx *gorm.DB, memberType, key string) (bool, error) {
 	existing := &FacetKey{}
-	result := api.RDB.DB(ctx).Where(
+	result := tx.Where(
 		"member_type = ? AND attr_key = ?", memberType, key).First(existing)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return false, nil
@@ -154,9 +183,27 @@ func (api *Api) DeleteFacetKey(ctx context.Context, memberType string, key strin
 	if FacetSource(existing.Source) == FacetSourceSystem {
 		return false, fmt.Errorf("facet %q for %s is a system facet and cannot be deleted", key, memberType)
 	}
-	del := api.RDB.DB(ctx).Delete(existing)
+	del := tx.Delete(existing)
 	if del.Error != nil {
 		return false, del.Error
 	}
 	return del.RowsAffected > 0, nil
+}
+
+// lockFacetKey coordinates declaration changes with import validation and commit.
+// Use a natural-key advisory lock so missing and soft-deleted declarations are
+// covered too. It precedes attribute writes and membership/configuration locks;
+// declaration writers acquire no other domain locks, so this adds no lock cycle.
+// SQLite serializes writers; a stale read transaction cannot upgrade to a writer.
+func lockFacetKey(ctx context.Context, tx *gorm.DB, memberType, key string) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return core.ErrNoTenant
+	}
+	h := fnv.New64a()
+	_, _ = fmt.Fprintf(h, "%s\x00facet-key\x00%s\x00%s", tenant, memberType, key)
+	return tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(h.Sum64())).Error
 }

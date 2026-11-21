@@ -129,6 +129,10 @@ type configurationWrite struct {
 // the group-membership recompute, then the device's configuration lock, then the document.
 // Taking the configuration lock in the same place as every other writer keeps the two locks
 // in one order, so a restore cannot deadlock against a concurrent attribute write.
+// Multi-key writes and entity deletion acquire attributes in bytewise key order
+// (deleteEntityAttributesOnTx), before any membership/family work. Membership
+// maintenance reads owners without row locks; it must not reverse the device-row
+// before attribute/family ordering used by gateway creation and device deletion.
 func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken string, deviceId uint, document string) error {
 	target, err := parseConfigurationDocument(document)
 	if err != nil {
