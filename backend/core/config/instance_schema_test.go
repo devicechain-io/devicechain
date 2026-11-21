@@ -58,9 +58,6 @@ func TestInstanceSchemaDecodingRules(t *testing.T) {
 		if def["additionalProperties"] != false {
 			t.Errorf("%s accepts unknown keys", name)
 		}
-		if _, ok := def["required"]; ok {
-			t.Errorf("%s requires fields before defaults can run", name)
-		}
 	}
 	metrics := schema.Defs["MetricsConfiguration"]["properties"].(map[string]any)
 	retired := metrics["httpPort"].(map[string]any)

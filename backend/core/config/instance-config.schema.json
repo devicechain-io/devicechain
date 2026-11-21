@@ -11,7 +11,7 @@
           ]
         },
         "^[pP][oO][rR][tT]$": {
-          "maximum": 4294967295,
+          "maximum": 65535,
           "minimum": 0,
           "type": [
             "integer",
@@ -27,7 +27,7 @@
           ]
         },
         "port": {
-          "maximum": 4294967295,
+          "maximum": 65535,
           "minimum": 0,
           "type": [
             "integer",
@@ -133,7 +133,7 @@
           ]
         },
         "^[pP][oO][rR][tT]$": {
-          "maximum": 4294967295,
+          "maximum": 65535,
           "minimum": 0,
           "type": [
             "integer",
@@ -149,7 +149,7 @@
           ]
         },
         "port": {
-          "maximum": 4294967295,
+          "maximum": 65535,
           "minimum": 0,
           "type": [
             "integer",
@@ -209,7 +209,7 @@
           ]
         },
         "^[pP][oO][rR][tT]$": {
-          "maximum": 4294967295,
+          "maximum": 65535,
           "minimum": 0,
           "type": [
             "integer",
@@ -225,7 +225,7 @@
           ]
         },
         "port": {
-          "maximum": 4294967295,
+          "maximum": 65535,
           "minimum": 0,
           "type": [
             "integer",
@@ -248,7 +248,7 @@
           ]
         },
         "^[pP][oO][rR][tT]$": {
-          "maximum": 4294967295,
+          "maximum": 65535,
           "minimum": 0,
           "type": [
             "integer",
@@ -264,7 +264,7 @@
           ]
         },
         "port": {
-          "maximum": 4294967295,
+          "maximum": 65535,
           "minimum": 0,
           "type": [
             "integer",
@@ -346,8 +346,8 @@
           ]
         },
         "^[iI][nN][bB][oO][uU][nN][dD][lL][iI][nN][gG][eE][rR][mM][iI][lL][lL][iI][sſS]$": {
-          "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
+          "maximum": 10,
+          "minimum": 0,
           "type": [
             "integer",
             "null"
@@ -368,8 +368,8 @@
           ]
         },
         "inboundLingerMillis": {
-          "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
+          "maximum": 10,
+          "minimum": 0,
           "type": [
             "integer",
             "null"
@@ -397,7 +397,7 @@
           ]
         },
         "^[pP][oO][rR][tT]$": {
-          "maximum": 4294967295,
+          "maximum": 65535,
           "minimum": 0,
           "type": [
             "integer",
@@ -413,7 +413,7 @@
           ]
         },
         "port": {
-          "maximum": 4294967295,
+          "maximum": 65535,
           "minimum": 0,
           "type": [
             "integer",
@@ -490,6 +490,26 @@
     },
     "InfrastructureConfiguration": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "propertyNames": {
+              "not": {
+                "pattern": "^[nN][aA][tT][sſS]$"
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "propertyNames": {
+              "not": {
+                "pattern": "^[uU][sſS][eE][rR][mM][aA][nN][aA][gG][eE][mM][eE][nN][tT]$"
+              }
+            }
+          }
+        }
+      ],
       "patternProperties": {
         "^[aA][iI][iI][nN][fF][eE][rR][eE][nN][cC][eE]$": {
           "$ref": "#/$defs/AiInferenceConfiguration"
@@ -608,13 +628,21 @@
           "$ref": "#/$defs/UserManagementConfiguration"
         }
       },
-      "type": [
-        "object",
-        "null"
-      ]
+      "type": "object"
     },
     "InstanceConfiguration": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "propertyNames": {
+              "not": {
+                "pattern": "^[iI][nN][fF][rR][aA][sſS][tT][rR][uU][cC][tT][uU][rR][eE]$"
+              }
+            }
+          }
+        }
+      ],
       "patternProperties": {
         "^[iI][nN][fF][rR][aA][sſS][tT][rR][uU][cC][tT][uU][rR][eE]$": {
           "$ref": "#/$defs/InfrastructureConfiguration"
@@ -631,15 +659,21 @@
           "$ref": "#/$defs/PersistenceConfiguration"
         }
       },
-      "type": [
-        "object",
-        "null"
-      ]
+      "type": "object"
     },
     "LoggingConfiguration": {
       "additionalProperties": false,
       "patternProperties": {
         "^[lL][eE][vV][eE][lL]$": {
+          "enum": [
+            null,
+            "",
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
           "type": [
             "string",
             "null"
@@ -648,6 +682,15 @@
       },
       "properties": {
         "level": {
+          "enum": [
+            null,
+            "",
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
           "type": [
             "string",
             "null"
@@ -666,6 +709,12 @@
           "$ref": "#/$defs/EnvelopesConfiguration"
         },
         "^[wW][iI][rR][eE][fF][oO][rR][mM][aA][tT]$": {
+          "enum": [
+            null,
+            "",
+            "legacy",
+            "compact"
+          ],
           "type": [
             "string",
             "null"
@@ -677,6 +726,12 @@
           "$ref": "#/$defs/EnvelopesConfiguration"
         },
         "wireFormat": {
+          "enum": [
+            null,
+            "",
+            "legacy",
+            "compact"
+          ],
           "type": [
             "string",
             "null"
@@ -923,6 +978,26 @@
     },
     "NatsConfiguration": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "propertyNames": {
+              "not": {
+                "pattern": "^[hH][oO][sſS][tT][nN][aA][mM][eE]$"
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "propertyNames": {
+              "not": {
+                "pattern": "^[pP][oO][rR][tT]$"
+              }
+            }
+          }
+        }
+      ],
       "patternProperties": {
         "^[aA][fF][fF][iI][nN][iI][tT][yY]$": {
           "$ref": "#/$defs/NatsAffinityConfiguration"
@@ -934,10 +1009,8 @@
           "$ref": "#/$defs/NatsFetchConfiguration"
         },
         "^[hH][oO][sſS][tT][nN][aA][mM][eE]$": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "minLength": 1,
+          "type": "string"
         },
         "^[kKK][vV][cC][aA][cC][hH][eE][mM][aA][xX][bB][yY][tT][eE][sſS]$": {
           "maximum": 9223372036854775807,
@@ -984,19 +1057,16 @@
           ]
         },
         "^[pP][oO][rR][tT]$": {
-          "maximum": 4294967295,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
         },
         "^[sſS][hH][aA][rR][dD][gG][rR][oO][uU][pP][sſS]$": {
           "$ref": "#/$defs/NatsShardGroupsConfiguration"
         },
         "^[sſS][tT][rR][eE][aA][mM][dD][eE][sſS][iI][gG][nN][rR][aA][tT][eE]$": {
-          "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
+          "maximum": 1000000,
+          "minimum": 0,
           "type": [
             "integer",
             "null"
@@ -1035,6 +1105,13 @@
           ]
         },
         "^[sſS][tT][rR][eE][aA][mM][rR][eE][pP][lL][iI][cC][aA][sſS]$": {
+          "enum": [
+            null,
+            0,
+            1,
+            3,
+            5
+          ],
           "maximum": 4294967295,
           "minimum": 0,
           "type": [
@@ -1043,6 +1120,18 @@
           ]
         },
         "^[sſS][tT][rR][eE][aA][mM][rR][uU][nN][wW][aA][yY][mM][iI][nN][uU][tT][eE][sſS]$": {
+          "anyOf": [
+            {
+              "enum": [
+                null,
+                0
+              ]
+            },
+            {
+              "maximum": 10080,
+              "minimum": 10
+            }
+          ],
           "maximum": 9223372036854775807,
           "minimum": -9223372036854775808,
           "type": [
@@ -1065,10 +1154,8 @@
           "$ref": "#/$defs/NatsFetchConfiguration"
         },
         "hostname": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "minLength": 1,
+          "type": "string"
         },
         "kvCacheMaxBytes": {
           "maximum": 9223372036854775807,
@@ -1115,19 +1202,16 @@
           ]
         },
         "port": {
-          "maximum": 4294967295,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
         },
         "shardGroups": {
           "$ref": "#/$defs/NatsShardGroupsConfiguration"
         },
         "streamDesignRate": {
-          "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
+          "maximum": 1000000,
+          "minimum": 0,
           "type": [
             "integer",
             "null"
@@ -1166,6 +1250,13 @@
           ]
         },
         "streamReplicas": {
+          "enum": [
+            null,
+            0,
+            1,
+            3,
+            5
+          ],
           "maximum": 4294967295,
           "minimum": 0,
           "type": [
@@ -1174,6 +1265,18 @@
           ]
         },
         "streamRunwayMinutes": {
+          "anyOf": [
+            {
+              "enum": [
+                null,
+                0
+              ]
+            },
+            {
+              "maximum": 10080,
+              "minimum": 10
+            }
+          ],
           "maximum": 9223372036854775807,
           "minimum": -9223372036854775808,
           "type": [
@@ -1185,10 +1288,7 @@
           "$ref": "#/$defs/NatsTlsConfiguration"
         }
       },
-      "type": [
-        "object",
-        "null"
-      ]
+      "type": "object"
     },
     "NatsFetchConfiguration": {
       "additionalProperties": false,
@@ -1201,15 +1301,15 @@
         },
         "^[aA][hH][eE][aA][dD][hH][oO][lL][dD][bB][uU][dD][gG][eE][tT][mM][iI][lL][lL][iI][sſS]$": {
           "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
+          "minimum": 0,
           "type": [
             "integer",
             "null"
           ]
         },
         "^[bB][aA][tT][cC][hH]$": {
-          "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
+          "maximum": 256,
+          "minimum": 0,
           "type": [
             "integer",
             "null"
@@ -1225,15 +1325,15 @@
         },
         "aheadHoldBudgetMillis": {
           "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
+          "minimum": 0,
           "type": [
             "integer",
             "null"
           ]
         },
         "batch": {
-          "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
+          "maximum": 256,
+          "minimum": 0,
           "type": [
             "integer",
             "null"
@@ -1270,7 +1370,7 @@
             ]
           },
           "propertyNames": {
-            "pattern": "^[+-]?[0-9]+$"
+            "pattern": "^(\\+?0*(9223372036854775807|[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0})|-0*(9223372036854775808|[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7][0-9]{0}))$"
           },
           "type": [
             "object",
@@ -1316,7 +1416,7 @@
             ]
           },
           "propertyNames": {
-            "pattern": "^[+-]?[0-9]+$"
+            "pattern": "^(\\+?0*(9223372036854775807|[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0})|-0*(9223372036854775808|[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7][0-9]{0}))$"
           },
           "type": [
             "object",
@@ -1516,7 +1616,7 @@
       "patternProperties": {
         "^[dD][rR][aA][iI][nN][sſS][eE][cC][oO][nN][dD][sſS]$": {
           "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
+          "minimum": 0,
           "type": [
             "integer",
             "null"
@@ -1524,7 +1624,7 @@
         },
         "^[tT][eE][rR][mM][iI][nN][aA][tT][iI][oO][nN][gG][rR][aA][cC][eE][pP][eE][rR][iI][oO][dD][sſS][eE][cC][oO][nN][dD][sſS]$": {
           "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
+          "minimum": 0,
           "type": [
             "integer",
             "null"
@@ -1534,7 +1634,7 @@
       "properties": {
         "drainSeconds": {
           "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
+          "minimum": 0,
           "type": [
             "integer",
             "null"
@@ -1542,7 +1642,7 @@
         },
         "terminationGracePeriodSeconds": {
           "maximum": 9223372036854775807,
-          "minimum": -9223372036854775808,
+          "minimum": 0,
           "type": [
             "integer",
             "null"
@@ -1564,6 +1664,11 @@
           ]
         },
         "^[eE][nN][fF][oO][rR][cC][eE][mM][eE][nN][tT]$": {
+          "enum": [
+            null,
+            "",
+            "enforce"
+          ],
           "type": [
             "string",
             "null"
@@ -1594,6 +1699,11 @@
           ]
         },
         "^[uU][nN][sſS][cC][oO][pP][eE][dD][cC][lL][iI][eE][nN][tT][cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sſS]$": {
+          "enum": [
+            null,
+            "",
+            "observe"
+          ],
           "type": [
             "string",
             "null"
@@ -1608,6 +1718,11 @@
           ]
         },
         "enforcement": {
+          "enum": [
+            null,
+            "",
+            "enforce"
+          ],
           "type": [
             "string",
             "null"
@@ -1638,6 +1753,11 @@
           ]
         },
         "unscopedClientCredentials": {
+          "enum": [
+            null,
+            "",
+            "observe"
+          ],
           "type": [
             "string",
             "null"
@@ -1671,12 +1791,20 @@
           ]
         },
         "^[pP][rR][oO][tT][oO][cC][oO][lL]$": {
+          "enum": [
+            null,
+            "",
+            "grpc",
+            "http"
+          ],
           "type": [
             "string",
             "null"
           ]
         },
         "^[sſS][aA][mM][pP][lL][iI][nN][gG][rR][aA][tT][iI][oO]$": {
+          "maximum": 1,
+          "minimum": 0,
           "type": [
             "number",
             "null"
@@ -1703,12 +1831,20 @@
           ]
         },
         "protocol": {
+          "enum": [
+            null,
+            "",
+            "grpc",
+            "http"
+          ],
           "type": [
             "string",
             "null"
           ]
         },
         "samplingRatio": {
+          "maximum": 1,
+          "minimum": 0,
           "type": [
             "number",
             "null"
@@ -1722,15 +1858,33 @@
     },
     "UserManagementConfiguration": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "propertyNames": {
+              "not": {
+                "pattern": "^[hH][oO][sſS][tT][nN][aA][mM][eE]$"
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "propertyNames": {
+              "not": {
+                "pattern": "^[pP][oO][rR][tT]$"
+              }
+            }
+          }
+        }
+      ],
       "patternProperties": {
         "^[hH][oO][sſS][tT][nN][aA][mM][eE]$": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "minLength": 1,
+          "type": "string"
         },
         "^[iI][nN][tT][eE][rR][nN][aA][lL][pP][oO][rR][tT]$": {
-          "maximum": 4294967295,
+          "maximum": 65535,
           "minimum": 0,
           "type": [
             "integer",
@@ -1738,23 +1892,18 @@
           ]
         },
         "^[pP][oO][rR][tT]$": {
-          "maximum": 4294967295,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "properties": {
         "hostname": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "minLength": 1,
+          "type": "string"
         },
         "internalPort": {
-          "maximum": 4294967295,
+          "maximum": 65535,
           "minimum": 0,
           "type": [
             "integer",
@@ -1762,22 +1911,16 @@
           ]
         },
         "port": {
-          "maximum": 4294967295,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
         }
       },
-      "type": [
-        "object",
-        "null"
-      ]
+      "type": "object"
     }
   },
   "$ref": "#/$defs/InstanceConfiguration",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Structural schema of the instance document mounted at /etc/dci-config/instance. Use the asset from the exact target release or that release's dcctl config-schema. Keys match case-insensitively, omitted values are defaulted at startup, and declared retired keys are ignored with a warning. Startup validation additionally enforces semantic and cross-field constraints. Datastore configuration maps remain open because their keys depend on the selected driver.",
+  "description": "Schema of the instance document mounted at /etc/dci-config/instance. Use the asset from the exact target release or that release's dcctl config-schema. Keys match case-insensitively. infrastructure.nats and infrastructure.userManagement require nonempty hostname and nonzero port; other omitted fields may take startup defaults. Declared retired keys are ignored with a warning. Static enums and bounds are checked here; startup additionally enforces cross-field, credential and environment constraints. Datastore configuration maps remain open because their keys depend on the selected driver. Integer token limitation: JSON Schema treats 4222.0 and 4.222e3 as integers, but encoding/json rejects these spellings for Go integer fields. Emit integer tokens without a decimal point or exponent.",
   "title": "DeviceChain instance configuration"
 }
