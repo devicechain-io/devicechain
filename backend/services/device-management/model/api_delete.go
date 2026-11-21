@@ -148,13 +148,17 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		return false, err
 	}
 	var trackingSources ownershipQueued
-	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	err = api.runAttributeEntityTx(ctx, string(etype), "delete", func(tx *gorm.DB) error {
+		trackingSources = ownershipQueued{}
 		// LOCK ORDER: creation holds the gateway before family/membership work.
 		// Device deletion must therefore take that row before shared cleanup too:
 		// otherwise Create holds G waiting F, an attribute writer holds F waiting
 		// M(G), and Delete holds M(G) waiting G. Do not apply this to groups:
 		// their family must precede their row, after edge/attribute cleanup (#2920).
 		if etype == entity.TypeDevice {
+			if err := lockDeviceAttributes(ctx, tx, id); err != nil {
+				return err
+			}
 			if err := refuseDeleteOfGateway(tx, id); err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					return errEntityGoneBeforeDelete
@@ -491,6 +495,7 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 		func(tx *gorm.DB, id uint) ([]uint, error) {
 			// The gateway refusal and row lock precede shared cleanup in deleteEdgeEntity.
 			credentials = credentials[:0]
+			kickTenant = ""
 			if err := deleteCredentialsReturningOwners(tx.Unscoped().Where("device_id = ?", id), &credentials); err != nil {
 				return nil, err
 			}
