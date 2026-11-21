@@ -25,6 +25,7 @@ dcctl [command]
 * [dcctl backup](#dcctl-backup)	 - Export instance streams and blobs, or inspect a local backup set
 * [dcctl bootstrap](#dcctl-bootstrap)	 - Bootstrap a DeviceChain instance
 * [dcctl broker](#dcctl-broker)	 - Message broker operations
+* [dcctl config-schema](#dcctl-config-schema)	 - Print this release's instance configuration JSON Schema
 * [dcctl dead-letters](#dcctl-dead-letters)	 - Inspect work the platform accepted and then gave up on
 * [dcctl destroy](#dcctl-destroy)	 - Destroy a DeviceChain instance
 * [dcctl device](#dcctl-device)	 - Act as a device
@@ -577,6 +578,33 @@ dcctl broker reconcile <instance> [flags]
 ### SEE ALSO
 
 * [dcctl broker](#dcctl-broker)	 - Message broker operations
+
+## dcctl config-schema {#dcctl-config-schema}
+
+Print this release's instance configuration JSON Schema
+
+### Synopsis
+
+Print the embedded JSON Schema for the instance document mounted at
+/etc/dci-config/instance. Output is JSON only and works offline. This describes
+this binary's build; use the exact target release's dcctl or download
+instance-config.schema.json from that GitHub Release. It is not a Helm values
+or per-service config schema. Startup additionally checks semantic and
+cross-field constraints.
+
+```
+dcctl config-schema [flags]
+```
+
+### Options
+
+```
+  -h, --help   help for config-schema
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
 
 ## dcctl dead-letters {#dcctl-dead-letters}
 
