@@ -41,6 +41,8 @@ type Documents = {
     "\n  mutation StartUpdateRollout($token: String!) {\n    startUpdateRollout(token: $token) {\n      ...RolloutFields\n    }\n  }\n": typeof types.StartUpdateRolloutDocument,
     "\n  mutation PauseUpdateRollout($token: String!) {\n    pauseUpdateRollout(token: $token) {\n      ...RolloutFields\n    }\n  }\n": typeof types.PauseUpdateRolloutDocument,
     "\n  mutation ResumeUpdateRollout($token: String!, $failureThreshold: Int) {\n    resumeUpdateRollout(token: $token, failureThreshold: $failureThreshold) {\n      ...RolloutFields\n    }\n  }\n": typeof types.ResumeUpdateRolloutDocument,
+    "\n  mutation PromoteUpdateRollout($token: String!, $expectedCohort: Int!, $overrideFailure: Boolean! = false) {\n    promoteUpdateRollout(token: $token, expectedCohort: $expectedCohort, overrideFailure: $overrideFailure) {\n      ...RolloutFields\n    }\n  }\n": typeof types.PromoteUpdateRolloutDocument,
+    "\n  mutation ResumeHaltedUpdateRollout($token: String!, $haltSequence: Int!, $failureThreshold: Int) {\n    resumeHaltedUpdateRollout(token: $token, haltSequence: $haltSequence, failureThreshold: $failureThreshold) {\n      ...RolloutFields\n    }\n  }\n": typeof types.ResumeHaltedUpdateRolloutDocument,
     "\n  mutation AbortUpdateRollout($token: String!) {\n    abortUpdateRollout(token: $token) {\n      ...RolloutFields\n    }\n  }\n": typeof types.AbortUpdateRolloutDocument,
 };
 const documents: Documents = {
@@ -70,6 +72,8 @@ const documents: Documents = {
     "\n  mutation StartUpdateRollout($token: String!) {\n    startUpdateRollout(token: $token) {\n      ...RolloutFields\n    }\n  }\n": types.StartUpdateRolloutDocument,
     "\n  mutation PauseUpdateRollout($token: String!) {\n    pauseUpdateRollout(token: $token) {\n      ...RolloutFields\n    }\n  }\n": types.PauseUpdateRolloutDocument,
     "\n  mutation ResumeUpdateRollout($token: String!, $failureThreshold: Int) {\n    resumeUpdateRollout(token: $token, failureThreshold: $failureThreshold) {\n      ...RolloutFields\n    }\n  }\n": types.ResumeUpdateRolloutDocument,
+    "\n  mutation PromoteUpdateRollout($token: String!, $expectedCohort: Int!, $overrideFailure: Boolean! = false) {\n    promoteUpdateRollout(token: $token, expectedCohort: $expectedCohort, overrideFailure: $overrideFailure) {\n      ...RolloutFields\n    }\n  }\n": types.PromoteUpdateRolloutDocument,
+    "\n  mutation ResumeHaltedUpdateRollout($token: String!, $haltSequence: Int!, $failureThreshold: Int) {\n    resumeHaltedUpdateRollout(token: $token, haltSequence: $haltSequence, failureThreshold: $failureThreshold) {\n      ...RolloutFields\n    }\n  }\n": types.ResumeHaltedUpdateRolloutDocument,
     "\n  mutation AbortUpdateRollout($token: String!) {\n    abortUpdateRollout(token: $token) {\n      ...RolloutFields\n    }\n  }\n": types.AbortUpdateRolloutDocument,
 };
 
@@ -177,6 +181,14 @@ export function graphql(source: "\n  mutation PauseUpdateRollout($token: String!
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation ResumeUpdateRollout($token: String!, $failureThreshold: Int) {\n    resumeUpdateRollout(token: $token, failureThreshold: $failureThreshold) {\n      ...RolloutFields\n    }\n  }\n"): typeof import('./graphql').ResumeUpdateRolloutDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation PromoteUpdateRollout($token: String!, $expectedCohort: Int!, $overrideFailure: Boolean! = false) {\n    promoteUpdateRollout(token: $token, expectedCohort: $expectedCohort, overrideFailure: $overrideFailure) {\n      ...RolloutFields\n    }\n  }\n"): typeof import('./graphql').PromoteUpdateRolloutDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation ResumeHaltedUpdateRollout($token: String!, $haltSequence: Int!, $failureThreshold: Int) {\n    resumeHaltedUpdateRollout(token: $token, haltSequence: $haltSequence, failureThreshold: $failureThreshold) {\n      ...RolloutFields\n    }\n  }\n"): typeof import('./graphql').ResumeHaltedUpdateRolloutDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

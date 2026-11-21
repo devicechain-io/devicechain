@@ -337,6 +337,11 @@ CREATE FUNCTION "device-management".automation_review_policy_required(p_profile 
  SELECT EXISTS (SELECT 1 FROM "device-management".automation_review_policies
  WHERE device_profile_id = p_profile AND required)
 $$;
+CREATE FUNCTION "device-management".dc_entity_attr_lock(p_type text, p_id bigint) RETURNS void
+ LANGUAGE sql
+ AS $$
+ SELECT pg_advisory_xact_lock(hashtextextended('dc.attr|' || p_type || '|' || p_id::text, 0))
+$$;
 CREATE INDEX "idx_device-management_agent_effect_outboxes_created_at" ON "device-management".agent_effect_outboxes USING btree (created_at);
 CREATE INDEX "idx_device-management_agent_proposals_deleted_at" ON "device-management".agent_proposals USING btree (deleted_at);
 CREATE INDEX "idx_device-management_agent_proposals_expires_at" ON "device-management".agent_proposals USING btree (expires_at);

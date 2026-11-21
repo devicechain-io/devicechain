@@ -565,6 +565,9 @@
         "^[tT][rR][aA][cC][iI][nN][gG]$": {
           "$ref": "#/$defs/TracingConfiguration"
         },
+        "^[uU][pP][dD][aA][tT][eE][mM][aA][nN][aA][gG][eE][mM][eE][nN][tT]$": {
+          "$ref": "#/$defs/UpdateManagementConfiguration"
+        },
         "^[uU][sſS][eE][rR][mM][aA][nN][aA][gG][eE][mM][eE][nN][tT]$": {
           "$ref": "#/$defs/UserManagementConfiguration"
         }
@@ -623,6 +626,9 @@
         },
         "tracing": {
           "$ref": "#/$defs/TracingConfiguration"
+        },
+        "updateManagement": {
+          "$ref": "#/$defs/UpdateManagementConfiguration"
         },
         "userManagement": {
           "$ref": "#/$defs/UserManagementConfiguration"
@@ -1847,6 +1853,29 @@
           "minimum": 0,
           "type": [
             "number",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "UpdateManagementConfiguration": {
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[rR][oO][lL][lL][oO][uU][tT][sſS][aA][fF][eE][tT][yY]$": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "properties": {
+        "rolloutSafety": {
+          "type": [
+            "boolean",
             "null"
           ]
         }

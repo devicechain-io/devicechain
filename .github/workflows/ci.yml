@@ -108,6 +108,12 @@ jobs:
       - name: silent-skip gate self-test
         run: bash hack/check-no-silent-skips.sh --self-test
 
+      # The fleet module's real-Postgres suite runs inside hack/migration-diff.sh verify, behind
+      # the build tag fleetpg, and its count of passed TestFleetPG* tests is what proves the tag
+      # compiled anything. Prove once, here, that the count check refuses an empty suite.
+      - name: fleet real-Postgres count check self-test
+        run: bash hack/check-fleetpg-count.sh --self-test
+
       # The release-candidate run script's exit-code, stop and liveness handling, against
       # stub rungs. Nothing else runs it, and it is what a 60-minute run's verdict is
       # reported through.
@@ -3220,6 +3226,20 @@ jobs:
       - name: gke cluster-operations wait self-test
         working-directory: .
         run: deploy/gke/wait-for-cluster-operations.sh --self-test
+
+      # The no-op plan gate for the deploy/gke -> modules/gke-cluster extraction. The self-test
+      # runs first and shows the gate refusing each planted defect (a dropped moved block, a
+      # renamed module call, a changed input, a changed settle trigger, an empty fixture
+      # directory) on a synthetic pair; a gate that has not been shown to refuse anything cannot
+      # tell "nothing to report" from "never looked". Then the sanitized states of the real root
+      # (its current shape and the pre-for_each loadgen shape) must plan as pure no-ops. Offline:
+      # a dummy token and -refresh=false, so no cloud is called.
+      - name: gke extraction no-op plan gate
+        working-directory: .
+        run: |
+          set -euo pipefail
+          hack/check-gke-extraction-plans.sh --self-test
+          hack/check-gke-extraction-plans.sh deploy/gke/fixtures
 
       # The provider's max_history default is 0, which keeps every revision of every
       # release forever. That is not a setting anyone chose, so a release added

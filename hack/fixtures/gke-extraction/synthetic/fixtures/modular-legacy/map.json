@@ -1,0 +1,7 @@
+{
+  "google_container_cluster.this": "module.gke_cluster.google_container_cluster.this",
+  "google_container_node_pool.loadgen[0]": "module.gke_cluster.google_container_node_pool.this[\"loadgen\"]",
+  "google_container_node_pool.this[\"database\"]": "module.gke_cluster.google_container_node_pool.this[\"database\"]",
+  "google_container_node_pool.this[\"services\"]": "module.gke_cluster.google_container_node_pool.this[\"services\"]",
+  "terraform_data.cluster_settled[0]": "module.gke_cluster.terraform_data.cluster_settled[0]"
+}
