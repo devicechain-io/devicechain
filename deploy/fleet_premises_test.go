@@ -59,7 +59,7 @@ func fleetPremiseProblems(rootsDir, recordPath, ciPath, kindPath string, now tim
 	if err != nil {
 		return nil, err
 	}
-	kube, err := onlyVersion(kindPath, `S0_KIND_NODE_IMAGE=kindest/node:v([^\s#]+)`)
+	kube, err := onlyVersion(kindPath, `S0_KIND_NODE_IMAGE=kindest/node:v([^\s#@]+)`)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +81,16 @@ func fleetPremiseProblems(rootsDir, recordPath, ciPath, kindPath string, now tim
 func TestFleetPremisesFresh(t *testing.T) {
 	problems, err := fleetPremiseProblems("fleet", "fleet/premises/gke.json", "../.github/workflows/ci.yml", "../hack/fleet-s0/kind.sh", time.Now())
 	if errors.Is(err, premises.ErrNoFleetRoots) {
-		t.Skip("no fleet roots yet: the staleness gate starts comparing when deploy/fleet/gke-* land")
+		// Nothing to compare yet, which is a state to assert, not a test to skip: the gate starts
+		// comparing the moment a deploy/fleet/gke-* root exists, so one existing here is a defect.
+		roots, gerr := filepath.Glob("fleet/gke-*")
+		if gerr != nil {
+			t.Fatal(gerr)
+		}
+		if len(roots) != 0 {
+			t.Fatalf("premises reported no fleet roots, but %v exist", roots)
+		}
+		return
 	}
 	if err != nil {
 		t.Fatal(err)

@@ -29,7 +29,7 @@ for id in "${ids[@]}"; do
   case "$id" in
     E-g|E-j)
       docker rm -f "$run-pg" >/dev/null 2>&1 || true
-      docker run -d --name "$run-pg" -e POSTGRES_PASSWORD="$pgpass" postgres:16 >/dev/null
+      docker run -d --name "$run-pg" -e POSTGRES_PASSWORD="$pgpass" postgres:16@sha256:3950ad7c3148ca2175ef1b6c36c9efbf78957ae8fbe8b3a5d7c35af50500382f >/dev/null
       until docker exec "$run-pg" pg_isready -U postgres >/dev/null 2>&1; do sleep 1; done
       net=(--network "container:$run-pg")
       env+=(-e FLEET_S0_PG_ADMIN_URL="postgres://postgres:$pgpass@localhost:5432/postgres?sslmode=disable") ;;

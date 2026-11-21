@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # The Kubernetes the E-l premise is bound to. deploy/fleet_premises_test.go reads this line, so moving
 # the node image turns the recorded E-l result STALE until it is measured again.
-S0_KIND_NODE_IMAGE=kindest/node:v1.37.0
+S0_KIND_NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
 kind_cleanup() {
   if [[ -n ${S0_KIND_NAME:-} ]]; then kind delete cluster --name="$S0_KIND_NAME"; fi
 }
