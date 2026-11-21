@@ -276,9 +276,26 @@ func checkPurgeSeedCoverage(tables []string, seeds []seededLocation, exemptions 
 }
 
 func TestPurgeDrillSeedCoverage(t *testing.T) {
-	files, err := filepath.Glob("golden/*.sql")
+	all, err := filepath.Glob("golden/*.sql")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The purge is about TENANT data. A non-tenant area (fleet) has a golden of its own that this
+	// drill neither seeds nor sweeps, so it is excluded here by name rather than counted.
+	var files []string
+	for _, f := range all {
+		isFleet := false
+		for _, fa := range fleetAreas {
+			if strings.TrimSuffix(filepath.Base(f), ".sql") == fa.name {
+				isFleet = true
+			}
+		}
+		if !isFleet {
+			files = append(files, f)
+		}
+	}
+	if len(all)-len(files) != len(fleetAreas) {
+		t.Fatalf("expected a golden for each of the %d non-tenant area(s), got %d", len(fleetAreas), len(all)-len(files))
 	}
 	if len(files) != len(areas) {
 		t.Fatalf("got %d golden schemas for %d areas", len(files), len(areas))
