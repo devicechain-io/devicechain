@@ -35,7 +35,23 @@ resource "google_container_cluster" "this" {
   # destroy fail, which for a cluster meant to be torn down is the wrong default.
   deletion_protection = false
 
-  resource_labels = var.labels
+  # The ownership labels are merged into the CLUSTER's labels and nowhere else: not the pools' node
+  # labels, and not what the settle resource's trigger reads (a label there would replace the
+  # waiter). The public root passes an empty map, so its plan does not move.
+  resource_labels = merge(var.labels, var.ownership_labels)
+
+  # Pass-through network inputs. null leaves the provider's choice (the project's default network),
+  # which is what the public root has always planned.
+  network    = var.network
+  subnetwork = var.subnetwork
+
+  # Workload identity, off unless a pool is named. A fleet root names one and sets it as a literal.
+  dynamic "workload_identity_config" {
+    for_each = var.workload_pool == null ? [] : [var.workload_pool]
+    content {
+      workload_pool = workload_identity_config.value
+    }
+  }
 }
 
 # Three pools, one definition. GKE labels every node of a pool with
@@ -101,6 +117,12 @@ resource "google_container_node_pool" "this" {
     disk_size_gb = each.value.disk_size_gb
     labels       = var.labels
     oauth_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+    # Spot nodes are preempted and cheap: a rig that can be re-run, not an install. null for the
+    # service account leaves the project's default node identity, which is what the public root
+    # has always planned; a fleet root names a dedicated least-privilege one.
+    spot            = var.spot
+    service_account = var.node_service_account
 
     dynamic "taint" {
       for_each = each.value.taints

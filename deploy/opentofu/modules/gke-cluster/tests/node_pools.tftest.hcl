@@ -30,6 +30,12 @@ variables {
   wait_for_cluster_operations        = true
   cluster_operations_timeout_seconds = 1800
   labels                             = { app = "devicechain" }
+  spot                               = false
+  node_service_account               = null
+  workload_pool                      = null
+  network                            = null
+  subnetwork                         = null
+  ownership_labels                   = {}
 }
 
 run "the_default_cluster_has_a_database_and_a_services_pool" {
@@ -339,5 +345,143 @@ run "the_waiters_own_timeout_is_not_a_trigger" {
   assert {
     condition     = join(",", sort(keys(terraform_data.cluster_settled[0].triggers_replace))) == "cluster,labels,pool_settings,pools,release_channel"
     error_message = "The waiter should be keyed to exactly the cluster, its pools, the release channel, the labels and the pool settings."
+  }
+}
+
+# ---- module options -------------------------------------------------------------------------------
+
+# spot reaches EVERY pool, the optional one included, and is off by default.
+run "spot_reaches_every_pool" {
+  command = plan
+
+  variables {
+    spot               = true
+    loadgen_node_count = 1
+  }
+
+  assert {
+    condition     = alltrue([for name in ["database", "services", "loadgen"] : google_container_node_pool.this[name].node_config[0].spot])
+    error_message = "spot = true should put every pool on spot VMs."
+  }
+}
+
+run "pools_are_not_spot_by_default" {
+  command = plan
+
+  assert {
+    condition     = !anytrue([for pool in google_container_node_pool.this : pool.node_config[0].spot])
+    error_message = "No pool should be spot unless asked."
+  }
+}
+
+# Ownership labels are the CLUSTER's: they reach resource_labels and not the pools' node labels,
+# and a label there must not move the waiter's triggers (it would replace the waiter).
+run "ownership_labels_reach_the_cluster_only" {
+  command = plan
+
+  variables {
+    ownership_labels = { "dc-fleet-cluster" = "abc", "dc-fleet-owner" = "xyz" }
+  }
+
+  assert {
+    condition     = google_container_cluster.this.resource_labels == tomap({ app = "devicechain", dc-fleet-cluster = "abc", dc-fleet-owner = "xyz" })
+    error_message = "The cluster's labels should be the labels plus the ownership labels."
+  }
+  assert {
+    condition     = alltrue([for pool in google_container_node_pool.this : pool.node_config[0].labels == tomap({ app = "devicechain" })])
+    error_message = "A pool's node labels must not carry the ownership labels."
+  }
+  assert {
+    condition     = terraform_data.cluster_settled[0].triggers_replace.labels == "{\"app\":\"devicechain\"}"
+    error_message = "The waiter's triggers must not read the ownership labels."
+  }
+}
+
+run "no_ownership_labels_leave_the_cluster_labels_alone" {
+  command = plan
+
+  assert {
+    condition     = google_container_cluster.this.resource_labels == tomap({ app = "devicechain" })
+    error_message = "An empty ownership_labels should leave the cluster's labels as they were."
+  }
+}
+
+run "ownership_label_keys_are_checked" {
+  command = plan
+
+  variables {
+    ownership_labels = { "Bad Key" = "x" }
+  }
+
+  expect_failures = [var.ownership_labels]
+}
+
+run "a_node_service_account_reaches_every_pool" {
+  command = plan
+
+  variables {
+    node_service_account = "dcf-node@example-project.iam.gserviceaccount.com"
+    loadgen_node_count   = 1
+  }
+
+  assert {
+    condition     = alltrue([for pool in google_container_node_pool.this : pool.node_config[0].service_account == "dcf-node@example-project.iam.gserviceaccount.com"])
+    error_message = "node_service_account should be every pool's node identity."
+  }
+}
+
+run "a_malformed_node_service_account_is_refused" {
+  command = plan
+
+  variables {
+    node_service_account = "not-an-email"
+  }
+
+  expect_failures = [var.node_service_account]
+}
+
+run "workload_identity_is_off_unless_a_pool_is_named" {
+  command = plan
+
+  assert {
+    condition     = length(google_container_cluster.this.workload_identity_config) == 0
+    error_message = "Workload identity should be off unless a workload pool is named."
+  }
+}
+
+run "a_workload_pool_turns_workload_identity_on" {
+  command = plan
+
+  variables {
+    workload_pool = "example-project.svc.id.goog"
+  }
+
+  assert {
+    condition     = google_container_cluster.this.workload_identity_config[0].workload_pool == "example-project.svc.id.goog"
+    error_message = "workload_pool should reach the cluster's workload identity configuration."
+  }
+}
+
+run "a_malformed_workload_pool_is_refused" {
+  command = plan
+
+  variables {
+    workload_pool = "example-project"
+  }
+
+  expect_failures = [var.workload_pool]
+}
+
+run "network_inputs_pass_through" {
+  command = plan
+
+  variables {
+    network    = "projects/example-project/global/networks/fleet"
+    subnetwork = "projects/example-project/regions/us-central1/subnetworks/fleet-a"
+  }
+
+  assert {
+    condition     = google_container_cluster.this.network == "projects/example-project/global/networks/fleet" && google_container_cluster.this.subnetwork == "projects/example-project/regions/us-central1/subnetworks/fleet-a"
+    error_message = "network and subnetwork should reach the cluster."
   }
 }
