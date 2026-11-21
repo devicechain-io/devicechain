@@ -25,6 +25,16 @@ namespace DeviceChain.Harborpulse.Visuals
         static readonly int Overcast = Shader.PropertyToID("_HarborOvercast");
         static readonly int SkyTime = Shader.PropertyToID("_HarborSkyTime");
         static readonly int Night = Shader.PropertyToID("_HarborNight");
+        static readonly int SkyTop = Shader.PropertyToID("_HarborSkyTop");
+        static readonly int SkyMid = Shader.PropertyToID("_HarborSkyMid");
+        static readonly int SkyLow = Shader.PropertyToID("_HarborSkyLow");
+        static readonly int SkyHaze = Shader.PropertyToID("_HarborSkyHaze");
+        static readonly int SkyGlow = Shader.PropertyToID("_HarborSkyGlow");
+        static readonly int CloudLit = Shader.PropertyToID("_HarborCloudLit");
+        static readonly int CloudShade = Shader.PropertyToID("_HarborCloudShade");
+        static readonly int CloudLight = Shader.PropertyToID("_HarborCloudLight");
+        static readonly int Cloud = Shader.PropertyToID("_HarborCloud");
+        static readonly int CloudDrift = Shader.PropertyToID("_HarborCloudDrift");
         static readonly int SceneryFog = Shader.PropertyToID("_HarborSceneryFog");
         static readonly int SceneryFogColor = Shader.PropertyToID("_HarborSceneryFogColor");
 
@@ -129,15 +139,29 @@ namespace DeviceChain.Harborpulse.Visuals
             Shader.SetGlobalColor(Zenith, C(s.Zenith));
             Shader.SetGlobalColor(Horizon, C(s.Horizon));
             Shader.SetGlobalColor(GroundCol, C(s.Ground));
-            // the sky draws the whole cloud cover (the high cloud as well as the storm), so the discs and the clouds match the light
-            Shader.SetGlobalVector(SunDir, new Vector4(toSun.x, toSun.y, toSun.z, Mathf.Clamp01((float)(s.SunElevationDeg + 1) / 2) * (1 - (float)s.CloudCover)));
+            // the discs are whole whenever they are up: the sky shader hides them behind the cloud it draws, where the cloud is
+            Shader.SetGlobalVector(SunDir, new Vector4(toSun.x, toSun.y, toSun.z, Mathf.Clamp01((float)(s.SunElevationDeg + 1) / 2)));
             Shader.SetGlobalColor(SunColor, C(s.SunColor));
-            Shader.SetGlobalVector(MoonDir, new Vector4(toMoon.x, toMoon.y, toMoon.z, Mathf.Clamp01((float)(s.MoonElevationDeg + 1) / 2) * (1 - (float)s.CloudCover)));
+            Shader.SetGlobalVector(MoonDir, new Vector4(toMoon.x, toMoon.y, toMoon.z, Mathf.Clamp01((float)(s.MoonElevationDeg + 1) / 2)));
             Shader.SetGlobalColor(MoonColor, C(s.MoonColor));
             Shader.SetGlobalFloat(Stars, (float)s.Stars);
             Shader.SetGlobalFloat(Overcast, (float)s.CloudCover);
             Shader.SetGlobalFloat(SkyTime, time);
             Shader.SetGlobalFloat(Night, (float)s.Night);
+            // the sky the shader draws: the clear gradient, the cloud in front of it and where the scenario clock has carried that cloud
+            Shader.SetGlobalColor(SkyTop, C(s.ClearZenith));
+            Shader.SetGlobalColor(SkyMid, C(s.ClearMid));
+            Shader.SetGlobalColor(SkyLow, C(s.ClearHorizon));
+            Shader.SetGlobalColor(SkyHaze, C(s.FogColor));
+            var glow = C(s.TwilightGlow); glow.a = (float)s.TwilightStrength;
+            Shader.SetGlobalColor(SkyGlow, glow);
+            Shader.SetGlobalColor(CloudLit, C(s.CloudLit));
+            Shader.SetGlobalColor(CloudShade, C(s.CloudShade));
+            var toLight = s.SunElevationDeg > -4 ? toSun : toMoon;
+            Shader.SetGlobalVector(CloudLight, new Vector4(toLight.x, toLight.y, toLight.z, 0));
+            Shader.SetGlobalVector(Cloud, new Vector4((float)s.CloudCover, (float)s.CloudDepth, (float)s.Rain, 0));
+            // the high layer drifts the other way round at half the pace, so the two layers slide over each other
+            Shader.SetGlobalVector(CloudDrift, new Vector4((float)s.CloudDriftX, (float)s.CloudDriftZ, (float)(-s.CloudDriftZ * 0.5), (float)(s.CloudDriftX * 0.5)));
 
             RenderSettings.ambientSkyColor = C(s.AmbientSky);
             RenderSettings.ambientEquatorColor = C(s.AmbientEquator);
