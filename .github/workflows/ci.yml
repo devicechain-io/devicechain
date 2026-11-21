@@ -3214,6 +3214,17 @@ jobs:
         working-directory: .
         run: deploy/gke/wait-for-cluster-operations.sh --self-test
 
+      # The fleet premise spike's harness runs against scripted gcloud/kubectl/psql/tofu: every
+      # entry point must refuse what it should (a creation before the reaper preflight, an
+      # unenforced encryption key, a forged termination) before any real measurement is trusted.
+      # The self-test of each entry point also kills a preflight-bypass mutant.
+      - name: fleet premise harness self-test
+        working-directory: .
+        run: |
+          for e in hack/fleet-s0/E-*.sh hack/fleet-s0/reaper.sh hack/fleet-s0/run.sh; do
+            bash "$e" --self-test
+          done
+
       # The provider's max_history default is 0, which keeps every revision of every
       # release forever. That is not a setting anyone chose, so a release added
       # without one is the expected mistake rather than an unusual one. The self-test
