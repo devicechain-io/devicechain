@@ -55,8 +55,10 @@ namespace DeviceChain.Harborpulse.Model
         public double Depth { get; }
         public double Height { get; }
         public string Area { get; }
-        public WorldProp(string kind, PropFootprint footprint, Ground at, double yaw, double width, double depth, double height=0,string area="")
-        { Kind=kind;Footprint=footprint;At=at;Yaw=yaw;Width=width;Depth=depth;Height=height;Area=area; }
+        /// <summary>A tree's <see cref="TreeKind"/>, or a rock's index in <see cref="WorldPropPlan.Outcrops"/>; 0 for everything else.</summary>
+        public int Variant { get; }
+        public WorldProp(string kind, PropFootprint footprint, Ground at, double yaw, double width, double depth, double height=0,string area="",int variant=0)
+        { Kind=kind;Footprint=footprint;At=at;Yaw=yaw;Width=width;Depth=depth;Height=height;Area=area;Variant=variant; }
     }
 
     /// <summary>Complete deterministic ground-prop plan. Builders draw these accepted placements, never independently recompute candidates.
@@ -70,6 +72,10 @@ namespace DeviceChain.Harborpulse.Model
         readonly List<SceneryStreet> streets=new List<SceneryStreet>();
         public IReadOnlyList<WorldProp> Props => props.AsReadOnly();
         public IReadOnlyList<SceneryStreet> Streets => streets.AsReadOnly();
+        /// <summary>The terrain mesh's grid: rocks and trees stand on the surface it draws, and the visual builder draws exactly this grid.</summary>
+        public TerrainGrid Terrain { get; } = TerrainGrid.Standard();
+        readonly List<Outcrop> outcrops=new List<Outcrop>();
+        public IReadOnlyList<Outcrop> Outcrops => outcrops.AsReadOnly();
         public WorldProp Find(string id) => props.FirstOrDefault(p=>p.Footprint.Id==id);
         readonly PresentationMap map;
         readonly Random random=new Random(1789);
@@ -78,14 +84,16 @@ namespace DeviceChain.Harborpulse.Model
         public static WorldPropPlan Generate(PresentationMap map,HarborLayout layout)
         {
             var p=new WorldPropPlan(map);
-            p.AddStreets(); p.Devices(layout); p.Waterfront(); p.Lots(); p.Rocks(); p.Trees(); p.Lamps();
+            // The new rock and tree generation draws from its own seeded streams and runs after everything that fixes the town, so the
+            // streets, lots, houses and lamps are exactly what they were; lamps now go first so no tree can displace one.
+            p.AddStreets(); p.Devices(layout); p.Waterfront(); p.Lots(); p.Lamps(); p.Rocks(); p.Trees();
             return p;
         }
-        bool Add(string kind,Ground at,double w,double d,double yaw=0,double height=0,string area="",string id=null,double apron=0)
+        bool Add(string kind,Ground at,double w,double d,double yaw=0,double height=0,string area="",string id=null,double apron=0,int variant=0)
         {
             var footprint=new PropFootprint(id??kind+":"+serial++,at,w+apron,d+apron,yaw);
             if(!Registry.TryAdd(footprint)) return false;
-            props.Add(new WorldProp(kind,footprint,at,yaw,w,d,height,area));return true;
+            props.Add(new WorldProp(kind,footprint,at,yaw,w,d,height,area,variant));return true;
         }
         public static double QuayYaw(string token) => token=="hp-north-quay" ? 180 : token=="hp-east-quay" ? 270 : 90;
         public static PropFootprint QuayFrame(PresentationMap map,string token)
@@ -221,57 +229,167 @@ namespace DeviceChain.Harborpulse.Model
                 }
             }
         }
+        // ---------------------------------------------------------------- granite outcrops
+
+        double Slope(Ground p)
+        {
+            var t=Terrain;
+            var gx=(t.MeshHeight(p.X+10,p.Z)-t.MeshHeight(p.X-10,p.Z))/20;
+            var gz=(t.MeshHeight(p.X,p.Z+10)-t.MeshHeight(p.X,p.Z-10))/20;
+            return Math.Sqrt(gx*gx+gz*gz);
+        }
+        bool LocalSummit(Ground p)
+        {
+            var h=Terrain.MeshHeight(p.X,p.Z)+.5;
+            for(var k=0;k<8;k++)
+            {
+                var a=k*Math.PI/4;
+                if(Terrain.MeshHeight(p.X+Math.Cos(a)*100,p.Z+Math.Sin(a)*100)>h)return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Clusters of two to five low granite ledges, each fitted to its slope and sunk into it: on the shore outside the quays, in the
+        /// meadow clearings on knoll flanks and along woodland edges. Own seeded choices; they never touch the town's random stream.
+        /// </summary>
         void Rocks()
         {
-            // Exposed shelves sit below the skyline, where HOME can read their lit upper faces.
-            foreach(var p in new[]{new Ground(-270,160),new Ground(270,155),new Ground(-360,40),new Ground(360,30),
-                new Ground(-330,840),new Ground(140,930),new Ground(-170,1130),new Ground(100,1190)})
+            var candidates=new List<(Ground At,int Class,double Rank)>();
+            for(var z=-125.0;z<1250;z+=60)for(var x=-1400.0;x<1400;x+=60)
             {
-                var radius=p.Z<200?28:38;
-                if(Free(p,radius)) Add("Rock",p,radius*2.7,radius*2.7,height:radius);
+                var p=new Ground(x+(CoastalTerrain.Hash((int)x,(int)z+101)-.5)*40,z+(CoastalTerrain.Hash((int)x+77,(int)z)-.5)*40);
+                var d=CoastalTerrain.CoreDistance(p.X,p.Z);
+                if(d<60||p.Z<-125)continue;
+                var cls=-1;
+                if(p.Z<-30&&Math.Abs(p.X)>300&&Math.Abs(p.X)<1100)cls=0;
+                else if(d>300&&d<1150)
+                {
+                    var slope=Slope(p);
+                    if(slope>=.025&&slope<=.28)
+                    {
+                        if(CoastalTerrain.ClearingWeight(p.X,p.Z)>.3)cls=1;
+                        else{var cover=CoastalTerrain.ForestCover(p.X,p.Z);if(cover>.3&&cover<.7)cls=2;}
+                    }
+                }
+                if(cls<0||LocalSummit(p))continue;
+                // prefer clusters that can be seen: the first rank is a hash, pulled toward the shore beside the quays and the land 400-900 m out
+                candidates.Add((p,cls,CoastalTerrain.Hash((int)x*3+11,(int)z*5-7)*.5+(cls==0?Math.Abs(Math.Abs(p.X)-450)/1500:Math.Abs(d-550)/1600)));
             }
-            for(var z=-100;z<1600;z+=72)for(var x=-1500;x<1500;x+=81)
+            candidates.Sort((a,b)=>a.Rank.CompareTo(b.Rank));
+            var caps=new[]{4,7,5};var taken=new int[3];var centres=new List<Ground>();var cluster=0;
+            // The meadows HOME looks at each get a cluster of large ledges inside or at the edge of the clearing, so the rock reads from there.
+            for(var i=0;i<CoastalTerrain.VisibleMeadows;i++)
             {
-                var h=CoastalTerrain.Hash(x,z);var shore=z<-20&&Math.Abs(x)>280&&Math.Abs(x)<1000;
-                var upper=CoastalTerrain.Height(x,z)>52&&CoastalTerrain.Clearing(x,z);
-                if((!shore&&!upper)||h>(shore?.34:.2))continue;
-                var radius=shore?18+h*22:24+h*32;
-                // Both granite lobes, including the rotated second lobe, inside this conservative envelope.
-                Add("Rock",new Ground(x,z),radius*2.7,radius*2.7,height:radius);
+                var m=CoastalTerrain.Meadow(i);var angle=CoastalTerrain.Hash(i*7+3,11)*2*Math.PI;
+                var c=new Ground(m.X+Math.Cos(angle)*m.R*.45,m.Z+Math.Sin(angle)*m.R*.45);
+                if(PlaceCluster(c,3,cluster)>=2){centres.Add(c);cluster++;}
+            }
+            foreach(var c in candidates)
+            {
+                if(taken[c.Class]>=caps[c.Class]||centres.Any(o=>SceneryStreet.Distance(o,c.At)<190))continue;
+                if(PlaceCluster(c.At,c.Class,cluster)>=2){taken[c.Class]++;centres.Add(c.At);cluster++;}
             }
         }
-        void Tree(Ground p,double height,bool town)
+
+        /// <summary>Places one cluster; returns how many ledges were seated (the first is the largest).</summary>
+        int PlaceCluster(Ground centre,int cls,int index)
+        {
+            var seated=0;
+            var count=2+(int)(CoastalTerrain.Hash(index*13+5,cls*7+3)*3.999);
+            // long axes follow the contour, so the ledge reads as a stratum rather than a boulder
+            var gx=(Terrain.MeshHeight(centre.X+10,centre.Z)-Terrain.MeshHeight(centre.X-10,centre.Z));
+            var gz=(Terrain.MeshHeight(centre.X,centre.Z+10)-Terrain.MeshHeight(centre.X,centre.Z-10));
+            // local +x runs along (cos a, -sin a); the contour direction is (-gz, gx)
+            var contourYaw=(gx==0&&gz==0)?0:Math.Atan2(gx,gz)*180/Math.PI;
+            for(var i=0;i<count;i++)
+            {
+                for(var attempt=0;attempt<6;attempt++)
+                {
+                    var key=index*101+i*17+attempt*5;
+                    var angle=CoastalTerrain.Hash(key,1)*2*Math.PI;
+                    var dist=i==0?0:16+7*i+CoastalTerrain.Hash(key,2)*6;
+                    var at=new Ground(centre.X+Math.Cos(angle)*dist,centre.Z+Math.Sin(angle)*dist);
+                    var size=i==0?(cls==0?12+CoastalTerrain.Hash(key,3)*10:cls==3?20+CoastalTerrain.Hash(key,3)*15:18+CoastalTerrain.Hash(key,3)*17):8+CoastalTerrain.Hash(key,3)*8;
+                    var halfX=size/2;var halfZ=halfX*(.5+.3*CoastalTerrain.Hash(key,4));
+                    var yaw=contourYaw+(CoastalTerrain.Hash(key,5)-.5)*40;
+                    if(!Free(at,halfX))continue;
+                    var outcrop=Outcrop.Fit(Terrain,at,yaw,halfX,halfZ,key);
+                    if(outcrop==null)continue;
+                    var near=false;
+                    foreach(var ring in outcrop.Rings)foreach(var q in ring)if(Clearance(new Ground(q.X,q.Z))<2.5||Reserved(new Ground(q.X,q.Z),2))near=true;
+                    if(near)continue;
+                    var footprint=outcrop.Footprint("rock:"+serial++);
+                    if(!Registry.TryAdd(footprint))continue;
+                    props.Add(new WorldProp("Rock",footprint,at,yaw,2*halfX,2*halfZ,outcrop.Protrusion,"outcrop",outcrops.Count));
+                    outcrops.Add(outcrop);seated++;break;
+                }
+            }
+            return seated;
+        }
+
+        // ---------------------------------------------------------------- trees
+
+        // Own streams: the town's stream is never read here, so adding or retuning trees cannot move a house.
+        void Tree(Ground p,TreeKind kind,double height,bool town)
         {
             // Max species crown extent + lean + branch lobes is below .56 * height in either horizontal axis.
-            Add("Tree",p,height*1.12,height*1.12,height:height,area:town?"town":"forest");
+            Add("Tree",p,height*1.12,height*1.12,height:height,area:town?"town":"forest",variant:(int)kind);
         }
+
+        /// <summary>Park, yard and verge specimens (5-10 m), registered like any prop; then the forest, which keeps clear of every reservation without reserving its own crowns.</summary>
         void Trees()
         {
-            foreach(var p in new[]{new Ground(-196,110),new Ground(-174,150),new Ground(-214,118),new Ground(-150,140)})Tree(p,11+random.NextDouble()*4,true);
-            var candidate=0;
-            for(var z=-120.0;z<520;z+=11)for(var x=-470.0;x<470;x+=11)
+            var rng=new Random(4721);
+            // Each pose's line of sight runs from its camera to its subject (the look target, lifted to a device's height: far views aim their look below the ground).
+            var sights=StoryPoses.All().Select(n=>map.Pose(n)).Select(q=>new CameraPose(q.Camera,new Point3(q.Look.X,Math.Max(q.Look.Y,SitePlan.DeckHeightM+1.4),q.Look.Z),q.VerticalFov)).ToList();
+            bool Sighted(Ground p,double height,double radius)
             {
-                var p=new Ground(x+random.NextDouble()*9-4.5,z+random.NextDouble()*9-4.5);var side=p.Z<146;
-                if(side&&Math.Abs(p.X)<244)continue;
-                var density=side?.2+.5*CoastalTerrain.Noise(p.X*.017+7,p.Z*.017)*CoastalTerrain.Smooth(-140,-80,p.Z)
-                    :.12+.4*CoastalTerrain.Noise(p.X*.02,p.Z*.02)+CoastalTerrain.Smooth(300,500,p.Z)*.5+CoastalTerrain.Smooth(260,460,Math.Abs(p.X))*.3;
-                if(random.NextDouble()>density || Clearance(p)<7 || !Free(p,5))continue;
-                var height=8+random.NextDouble()*7;
-                // Yard specimens stay small; the woodland edge grows into connected stands.
-                if(p.Z < 300 && Math.Abs(p.X) < 340)
-                { if(CoastalTerrain.KeepTree(candidate++))Tree(p,11+random.NextDouble()*6,true); }
-                else if(CoastalTerrain.Woodland(p.X,p.Z))Tree(p,17+random.NextDouble()*7,false);
+                var ground=CoastalTerrain.Height(p.X,p.Z);
+                foreach(var s in sights)if(StoryPoses.Blocks(s,p.X,p.Z,ground,ground+height,radius))return true;
+                return false;
             }
-            for(var z=-120.0;z<2250;z+=13)for(var x=-2250.0;x<2250;x+=13)
+            // The park's perimeter, never its lawn or its path.
+            var path=new[]{new Ground(-135,80),new Ground(-150,104),new Ground(-172,122),new Ground(-198,132),new Ground(-222,156),new Ground(-236,168)};
+            foreach(var q in new[]{new Ground(-233,98),new Ground(-233,126),new Ground(-214,177),new Ground(-168,177),new Ground(-127,160)})
             {
-                if(Math.Abs(x)<470&&z<520)continue;
-                var step=13+Math.Max(0,CoastalTerrain.CoreDistance(x,z)-470)*.05;
-                if(random.NextDouble()>(13/step)*(13/step))continue;
-                var p=new Ground(x+(random.NextDouble()-.5)*step,z+(random.NextDouble()-.5)*step);
+                var kind=TreeStyle.Pick(rng.NextDouble(),q.X,q.Z);var height=TreeStyle.Height(kind,rng.NextDouble(),true);
+                var nearPath=double.MaxValue;for(var i=1;i<path.Length;i++)nearPath=Math.Min(nearPath,SceneryStreet.SegmentDistance(q,path[i-1],path[i]));
+                if(nearPath>4.5+height*.4&&Clearance(q)>height*.56+1&&!Sighted(q,height,height*.5))Tree(q,kind,height,true);
+            }
+            // One yard tree for about every two houses: behind or beside the lot, clear of the street and every reservation.
+            var yard=0;
+            foreach(var lot in props.Where(p=>p.Kind=="House").ToList())
+            {
+                if(yard++%2!=0)continue;
+                var kind=TreeStyle.Pick(rng.NextDouble(),lot.At.X,lot.At.Z);var height=TreeStyle.Height(kind,rng.NextDouble(),true);
+                var r=height*.56;var f=lot.Footprint;
+                var back=-(f.Depth/2+r+.6);var side=f.Width/2+r+.6;
+                var start=(int)(rng.NextDouble()*5);
+                var options=new[]{new Ground(0,back),new Ground(side,back*.5),new Ground(-side,back*.5),new Ground(side*1.1,0),new Ground(-side*1.1,0)};
+                for(var k=0;k<options.Length;k++)
+                {
+                    var o=options[(start+k)%options.Length];var p=f.Local(o.X,o.Z);
+                    if(Clearance(p)<r+1.2||Reserved(p,r)||!Free(p,r)||Sighted(p,height,r))continue;
+                    if(Add("Tree",p,height*1.12,height*1.12,height:height,area:"town",variant:(int)kind))break;
+                }
+            }
+            // The forest: broad connected stands on a jittered 8 m grid, thinned by distance and faded out at the plantation's edge.
+            for(var z=-90.0;z<1900;z+=8)for(var x=-2000.0;x<2000;x+=8)
+            {
+                var p=new Ground(x+rng.NextDouble()*8-4,z+rng.NextDouble()*8-4);
+                var keep=rng.NextDouble();var kindRoll=rng.NextDouble();var heightRoll=rng.NextDouble();
+                var d=CoastalTerrain.CoreDistance(p.X,p.Z);
+                if(d<1||d>TreeStyle.PlantationM)continue;
+                var spacing=TreeStyle.Spacing(d);
+                if(keep>(8/spacing)*(8/spacing)*TreeStyle.Fade(d))continue;
                 if(!CoastalTerrain.Woodland(p.X,p.Z))continue;
-                var height=20+random.NextDouble()*12;
-                if(p.Z-height*.47<-136||Math.Abs(p.X)+height*.47>3400)continue;
-                if(CoastalTerrain.ForestFits(p.X,p.Z,height)&&Free(p,height*.47))Tree(p,height,false);
+                var kind=TreeStyle.Pick(kindRoll,p.X,p.Z);var height=TreeStyle.Height(kind,heightRoll,false);
+                var crown=height*.45;
+                if(Clearance(p)<crown+3||!Free(p,crown))continue;
+                var footprint=new PropFootprint("tree:"+serial++,p,height*.9,height*.9,0);
+                if(!Registry.IsFree(footprint)||Sighted(p,height,crown))continue;
+                props.Add(new WorldProp("Tree",footprint,p,0,height*1.12,height*1.12,height,"forest",(int)kind));
             }
         }
         void Lamps()

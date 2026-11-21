@@ -131,9 +131,13 @@ func TestGatewayCreateDeleteAttributeDoNotDeadlockPostgres(t *testing.T) {
 			finished = true
 			return true
 		default:
-			return deleteRaceWaiter(api.RDB.DB(ctx), deletePID, "%entity_group_memberships%") != 0
+			// The writer now queues on the device attribute lock the delete took first;
+			// before that lock existed it reached the membership rows the delete held.
+			db := api.RDB.DB(ctx)
+			return deleteRaceWaiter(db, deletePID, "%entity_group_memberships%") != 0 ||
+				deleteRaceWaiter(db, deletePID, "%dc_entity_attr_lock%") != 0
 		}
-	}, 5*time.Second, 10*time.Millisecond, "attribute writer neither finished nor waited on membership")
+	}, 5*time.Second, 10*time.Millisecond, "attribute writer neither finished nor waited on membership or the device attribute lock")
 	release()
 	createErr, deleteErr := <-created, <-deleted
 	if !finished {
@@ -177,14 +181,16 @@ func TestConfigurationRestoreAndDeleteDoNotDeadlockPostgres(t *testing.T) {
 	t.Cleanup(func() { _ = api.RDB.Database.Callback().Delete().Remove("test:physical-delete") })
 	restored := make(chan error, 1)
 	go func() {
-		restored <- api.applyConfigurationDocument(context.WithValue(ctx, deleteRaceRole{}, "restore"), "victim", id, `{"a":"new","b":"new"}`)
+		restored <- api.applyConfigurationDocument(context.WithValue(ctx, deleteRaceRole{}, "restore"), "victim", id, `{"a":"new","b":"new"}`, "restore")
 	}()
 	restorePID := deleteRacePID(t, ctx, held)
 	deleted := make(chan error, 1)
 	go func() { _, err := api.DeleteDevice(ctx, "victim"); deleted <- err }()
+	// Deletion now takes the device's attribute lock first, so it queues behind restore
+	// there, before it can own any attribute row: the cycle this test guards cannot form.
 	require.Eventually(t, func() bool {
-		return deleteRaceWaiter(api.RDB.DB(ctx), restorePID, "%entity_attributes%") != 0
-	}, 5*time.Second, 10*time.Millisecond, "delete never waited for restore's a row")
+		return deleteRaceWaiter(api.RDB.DB(ctx), restorePID, "%dc_entity_attr_lock%") != 0
+	}, 5*time.Second, 10*time.Millisecond, "delete never waited for restore's device attribute lock")
 	release()
 	restoreErr, deleteErr := <-restored, <-deleted
 	requireNoDeleteDeadlock(t, restoreErr)

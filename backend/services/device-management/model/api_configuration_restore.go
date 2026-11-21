@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/entity"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
 
@@ -55,7 +54,7 @@ func (api *Api) RestoreDeviceConfiguration(ctx context.Context, deviceToken stri
 	if rev == nil {
 		return nil, fmt.Errorf("device %q has no configuration revision %d: %w", deviceToken, revision, gorm.ErrRecordNotFound)
 	}
-	if err := api.applyConfigurationDocument(ctx, deviceToken, deviceId, rev.Document); err != nil {
+	if err := api.applyConfigurationDocument(ctx, deviceToken, deviceId, rev.Document, "restore"); err != nil {
 		return nil, err
 	}
 	return api.DeviceConfigurationByToken(ctx, deviceToken)
@@ -104,7 +103,7 @@ func (api *Api) CopyDeviceConfiguration(ctx context.Context, fromToken, toToken 
 	if source == nil {
 		return nil, fmt.Errorf("source device %q has no configuration revision to copy: %w", fromToken, gorm.ErrRecordNotFound)
 	}
-	if err := api.applyConfigurationDocument(ctx, toToken, toId, source.Document); err != nil {
+	if err := api.applyConfigurationDocument(ctx, toToken, toId, source.Document, "copy"); err != nil {
 		return nil, err
 	}
 	return api.DeviceConfigurationByToken(ctx, toToken)
@@ -133,7 +132,7 @@ type configurationWrite struct {
 // (deleteEntityAttributesOnTx), before any membership/family work. Membership
 // maintenance reads owners without row locks; it must not reverse the device-row
 // before attribute/family ordering used by gateway creation and device deletion.
-func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken string, deviceId uint, document string) error {
+func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken string, deviceId uint, document string, path string) error {
 	target, err := parseConfigurationDocument(document)
 	if err != nil {
 		return err
@@ -144,7 +143,11 @@ func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken stri
 	var minted *DeviceConfigurationRevision
 	var touched membershipChange
 
-	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	err = api.runDeviceAttributeTx(ctx, path, func(tx *gorm.DB) error {
+		writes, minted, touched = nil, nil, membershipChange{}
+		if err := lockAttributeOwnerTx(ctx, tx, deviceType, deviceId); err != nil {
+			return err
+		}
 		declared, _, err := activeConfigurationDeclaration(tx, deviceId)
 		if err != nil {
 			return err
@@ -171,47 +174,40 @@ func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken stri
 		}
 		sort.Strings(keys)
 		now := time.Now()
-		changed := make([]string, 0, len(keys))
+		patch := make(AttributePatch, 0, len(keys))
 		for _, key := range keys {
 			decl := byKey[key]
-			var existing []EntityAttribute
-			if err := tx.Where("entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
-				deviceType, deviceId, shared, key).Limit(1).Find(&existing).Error; err != nil {
-				return err
-			}
 			raw, present := target[key]
-			if !present {
-				if len(existing) == 0 {
-					continue
-				}
-				if err := tx.Where("entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
-					deviceType, deviceId, shared, key).Delete(&EntityAttribute{}).Error; err != nil {
-					return err
-				}
-				writes = append(writes, configurationWrite{request: &EntityAttributeSetRequest{
-					EntityType: deviceType, Entity: deviceToken, Scope: shared, AttrKey: key}, removed: true, at: now})
-			} else {
+			op := AttributeOp{Scope: shared, Key: key, Unset: !present, SkipUnchanged: true, LastUpdated: now}
+			if present {
 				text, err := configurationAttributeText(decl.ValueType, raw)
 				if err != nil {
-					return &ConfigurationRefusal{Code: CodeConfigurationValueType, Message: fmt.Sprintf(
-						"the value of %q cannot be carried as the %s device %q declares for it", key, decl.ValueType, deviceToken)}
+					return &ConfigurationRefusal{Code: CodeConfigurationValueType, Message: fmt.Sprintf("the value of %q cannot be carried as the %s device %q declares for it", key, decl.ValueType, deviceToken)}
 				}
-				if len(existing) == 1 && existing[0].ValueType == decl.ValueType &&
-					existing[0].Value.Valid && existing[0].Value.String == text {
-					continue
-				}
-				row := &EntityAttribute{EntityType: deviceType, EntityId: deviceId, Scope: shared,
-					AttrKey: key, ValueType: decl.ValueType, Value: rdb.NullStrOf(&text), LastUpdated: now}
-				if err := upsertAttributeOnTx(tx, row); err != nil {
-					return err
-				}
-
-				value := text
-				writes = append(writes, configurationWrite{request: &EntityAttributeSetRequest{
-					EntityType: deviceType, Entity: deviceToken, Scope: shared, AttrKey: key,
-					ValueType: decl.ValueType, Value: &value}, at: now})
+				op.ValueType, op.Value = decl.ValueType, &text
 			}
-			changed = append(changed, key)
+			patch = append(patch, op)
+		}
+		receipt, err := api.applyAttributePatchTx(ctx, tx, deviceType, deviceId, patch)
+		if err != nil {
+			return err
+		}
+		changed := make([]string, 0, len(receipt.Changes))
+		for _, change := range receipt.Changes {
+			if change.RowsAffected == 0 {
+				continue
+			}
+			request := &EntityAttributeSetRequest{EntityType: deviceType, Entity: deviceToken, Scope: change.Scope, AttrKey: change.Key}
+			removed := change.After == nil
+			if !removed {
+				request.ValueType = change.After.ValueType
+				if change.After.Value.Valid {
+					value := change.After.Value.String
+					request.Value = &value
+				}
+			}
+			writes = append(writes, configurationWrite{request: request, removed: removed, at: now})
+			changed = append(changed, change.Key)
 		}
 		// Group membership is recomputed once every attribute row is written, not between
 		// them: a recompute between two row writes would hold membership rows while waiting

@@ -79,5 +79,6 @@ var (
 		NewDeletionAlarmCascadeSchema(),
 		NewAlarmSuppressionSchema(),
 		NewPendingAlarmEventsSchema(),
+		NewDeviceAttributeLockSchema(),
 	}
 )

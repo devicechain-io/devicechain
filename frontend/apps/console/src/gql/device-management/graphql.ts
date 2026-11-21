@@ -1299,6 +1299,23 @@ export type FacetKeySetRequest = {
   values?: Array<string> | null | undefined;
 };
 
+/**
+ * One facet value on an existing device, asset, area or customer, addressed by token.
+ * The server uses SHARED scope and the facet declaration's value type. Text is trimmed
+ * as on a single attribute write; blank values are INVALID. This operation does not
+ * clear attributes or create entities.
+ */
+export type FacetValueImportRow = {
+  /** A facet key declared for this member family. */
+  key: string;
+  /** The member family: device, asset, area or customer. */
+  memberType: string;
+  /** The existing entity's token in the caller's tenant. */
+  token: string;
+  /** Text to validate and normalize under the facet's declared type. */
+  value: string;
+};
+
 export type GeoFenceCreateRequest = {
   description?: string | null | undefined;
   geometry: string;
@@ -2715,6 +2732,14 @@ export type DeleteEntityAttributeMutationVariables = Exact<{
 
 
 export type DeleteEntityAttributeMutation = { deleteEntityAttribute: boolean };
+
+export type ImportFacetValuesMutationVariables = Exact<{
+  rows: Array<FacetValueImportRow> | FacetValueImportRow;
+  dryRun: boolean;
+}>;
+
+
+export type ImportFacetValuesMutation = { importFacetValues: Array<{ row: number, memberType: string, token: string, key: string, outcome: string, code: string | null, message: string | null }> };
 
 export type FacetKeysQueryVariables = Exact<{
   criteria: FacetKeySearchCriteria;
@@ -5431,6 +5456,19 @@ export const DeleteEntityAttributeDocument = new TypedDocumentString(`
   )
 }
     `) as unknown as TypedDocumentString<DeleteEntityAttributeMutation, DeleteEntityAttributeMutationVariables>;
+export const ImportFacetValuesDocument = new TypedDocumentString(`
+    mutation ImportFacetValues($rows: [FacetValueImportRow!]!, $dryRun: Boolean!) {
+  importFacetValues(rows: $rows, dryRun: $dryRun) {
+    row
+    memberType
+    token
+    key
+    outcome
+    code
+    message
+  }
+}
+    `) as unknown as TypedDocumentString<ImportFacetValuesMutation, ImportFacetValuesMutationVariables>;
 export const FacetKeysDocument = new TypedDocumentString(`
     query FacetKeys($criteria: FacetKeySearchCriteria!) {
   facetKeys(criteria: $criteria) {
