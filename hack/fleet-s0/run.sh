@@ -8,7 +8,7 @@ source "$here/lib.sh"
 source "$here/probes.sh"
 source "$here/local.sh"
 source "$here/kind.sh"
-unset S0_PREFLIGHT
+unset S0_PREFLIGHT S0_KIND_NAME S0_PG_DB S0_PG_OWNER S0_PG_RUNNER S0_PG_ROLES_OWNED S0_WRITER_PID
 S0_BACKEND=pg
 S0_REAPER_ONLY=false
 ids=()

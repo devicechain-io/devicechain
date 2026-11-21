@@ -31,6 +31,9 @@ func onlyVersion(path, pattern string) (string, error) {
 		return "", errors.New(path + ": want exactly one distinct version for " + pattern)
 	}
 	for v := range seen {
+		if !premises.IsExactVersion(v) {
+			return "", errors.New(path + ": " + v + " is not one exact version")
+		}
 		return v, nil
 	}
 	return "", nil
@@ -52,11 +55,11 @@ func fleetPremiseProblems(rootsDir, recordPath, ciPath, kindPath string, now tim
 	if err != nil {
 		return nil, err
 	}
-	tofu, err := onlyVersion(ciPath, `tofu_version:\s*([0-9.]+)`)
+	tofu, err := onlyVersion(ciPath, `tofu_version:\s*([^\s#]+)`)
 	if err != nil {
 		return nil, err
 	}
-	kube, err := onlyVersion(kindPath, `S0_KIND_NODE_IMAGE=kindest/node:v([0-9.]+)`)
+	kube, err := onlyVersion(kindPath, `S0_KIND_NODE_IMAGE=kindest/node:v([^\s#]+)`)
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +144,11 @@ func TestFleetPremiseGateRefusesMovedPins(t *testing.T) {
 	ci("1.10.11")
 	if problems := check(); len(problems) == 0 || !strings.Contains(problems[0], "STALE") {
 		t.Fatalf("a moved tofu pin did not turn the fleet gate red: %v", problems)
+	}
+	// A prerelease is a different version: it must not be read as the release it precedes.
+	ci(p.TofuVersion + "-rc1")
+	if problems := check(); len(problems) == 0 || !strings.Contains(problems[0], "STALE") {
+		t.Fatalf("a prerelease tofu pin was read as the release: %v", problems)
 	}
 	ci(p.TofuVersion)
 	root("9.9.9")

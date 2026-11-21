@@ -269,3 +269,24 @@ func TestCommittedRecordGoesStaleWhenRootPinMoves(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderPinIgnoresComments(t *testing.T) {
+	base := t.TempDir()
+	writeRoot(t, base, "gke-gcs", "8.4.0")
+	body := "terraform {\n  required_providers {\n    # google = {\n    #   version = \"8.4.0\"\n    # }\n    /* google = { version = \"8.3.0\" } */\n    google = {\n      source  = \"hashicorp/google\" # was 8.4.0\n      version = \"8.5.0\"\n    }\n  }\n}\n"
+	if err := os.WriteFile(base+"/gke-gcs/versions.tf", []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pin, err := ProviderPinFromRoots(base)
+	if err != nil || pin != "8.5.0" {
+		t.Fatalf("a commented-out pin masked the live one: %q, %v", pin, err)
+	}
+}
+
+func TestIsExactVersion(t *testing.T) {
+	for v, want := range map[string]bool{"1.10.10": true, "1.10.10-rc1": true, "1.10": false, ">= 1.10": false, "": false, "1.10.10 ": false} {
+		if IsExactVersion(v) != want {
+			t.Errorf("IsExactVersion(%q) = %v, want %v", v, !want, want)
+		}
+	}
+}

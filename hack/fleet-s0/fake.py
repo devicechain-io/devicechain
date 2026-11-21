@@ -90,6 +90,8 @@ if tool == "gcloud":
     if args[:2] == ["container", "clusters"]:
         if args[2] in ("create","get-credentials"):
             emit("")
+        if args[2] == "list":
+            emit("s0-e-b" if case == "cluster-exists" else "")
         if args[2] == "describe":
             emit("RUNNING")
         if args[2] == "delete":
@@ -194,7 +196,7 @@ if tool == "psql":
             sys.exit(1)
         emit("1")
     if "SHOW server_version" in sql: emit("16.0")
-    if any(x in sql for x in ("REVOKE","CREATE DATABASE","CREATE ROLE","ALTER ROLE","pg_terminate_backend","DROP DATABASE")):
+    if any(x in sql for x in ("REVOKE","DROP ROLE","CREATE DATABASE","CREATE ROLE","ALTER ROLE","pg_terminate_backend","DROP DATABASE")):
         emit("")
 if tool == "unshare":
     os.execvp("tofu",args[args.index("tofu")+1:])

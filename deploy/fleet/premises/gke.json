@@ -140,15 +140,16 @@
         "process_survived_session_drop": true,
         "exit_code": 0,
         "provider_called_after_drop": true,
-        "state_before": "869e2c91818487b9eb203219c8371102",
-        "state_after": "e1503c860007c5f9b25cf8d8d796a1a9",
+        "state_before": "0092735729833e0ebdcab2ebe7024d95",
+        "state_after": "6c40da224d4d5bed6fa5b4ec584fdd59",
         "credential_can_reconnect": true,
-        "state_changed": true
+        "state_changed": true,
+        "expectation": "the process can write state after its session dropped"
       },
       "tofu_version": "1.10.10",
       "provider_version": "8.4.0",
       "date": "2026-11-21",
-      "transcript_sha256": "2af5b42efa3d07278c7fb4b92cdd2c5a0441badec495a3966c2f8f1b7d37d2ef"
+      "transcript_sha256": "b2e0a3ae8117c2456c75abf3a98415b897ee511d11ac3a271ea6b9e89c1be888"
     },
     {
       "id": "E-h",
@@ -196,7 +197,7 @@
       "tofu_version": "1.10.10",
       "provider_version": "8.4.0",
       "date": "2026-11-21",
-      "transcript_sha256": "53af4a3d75a2c63991ad83850726fce2c73c6c56b86d27020b912fa67d8f9923"
+      "transcript_sha256": "5c6f7d0f43be1a99e5ecb538835598b073e049f90434feb7cdc556a173897834"
     },
     {
       "id": "E-j-2",
@@ -216,7 +217,7 @@
       "tofu_version": "1.10.10",
       "provider_version": "8.4.0",
       "date": "2026-11-21",
-      "transcript_sha256": "53af4a3d75a2c63991ad83850726fce2c73c6c56b86d27020b912fa67d8f9923"
+      "transcript_sha256": "5c6f7d0f43be1a99e5ecb538835598b073e049f90434feb7cdc556a173897834"
     },
     {
       "id": "E-j-3",
@@ -234,7 +235,7 @@
       "tofu_version": "1.10.10",
       "provider_version": "8.4.0",
       "date": "2026-11-21",
-      "transcript_sha256": "53af4a3d75a2c63991ad83850726fce2c73c6c56b86d27020b912fa67d8f9923"
+      "transcript_sha256": "5c6f7d0f43be1a99e5ecb538835598b073e049f90434feb7cdc556a173897834"
     },
     {
       "id": "E-j-4",
@@ -291,7 +292,7 @@
       "tofu_version": "1.10.10",
       "provider_version": "8.4.0",
       "date": "2026-11-21",
-      "transcript_sha256": "53af4a3d75a2c63991ad83850726fce2c73c6c56b86d27020b912fa67d8f9923"
+      "transcript_sha256": "5c6f7d0f43be1a99e5ecb538835598b073e049f90434feb7cdc556a173897834"
     },
     {
       "id": "E-j-5",
@@ -313,7 +314,7 @@
       "tofu_version": "1.10.10",
       "provider_version": "8.4.0",
       "date": "2026-11-21",
-      "transcript_sha256": "53af4a3d75a2c63991ad83850726fce2c73c6c56b86d27020b912fa67d8f9923"
+      "transcript_sha256": "5c6f7d0f43be1a99e5ecb538835598b073e049f90434feb7cdc556a173897834"
     },
     {
       "id": "E-k",
@@ -338,11 +339,11 @@
         "kubernetes"
       ],
       "measured": {
-        "pod_uid": "ab0cf4b5-cfc5-41db-b7f9-61a32fcb1d0b",
+        "pod_uid": "b95173c5-8efe-463e-8a78-467ea8c5eabf",
         "observations": {
           "before-partition": {
             "object_absent": false,
-            "uid": "ab0cf4b5-cfc5-41db-b7f9-61a32fcb1d0b",
+            "uid": "b95173c5-8efe-463e-8a78-467ea8c5eabf",
             "deletionTimestamp": null,
             "finalizers": [
               "fleet-s0.devicechain.io/observe"
@@ -365,7 +366,7 @@
           },
           "node-deleted": {
             "object_absent": false,
-            "uid": "ab0cf4b5-cfc5-41db-b7f9-61a32fcb1d0b",
+            "uid": "b95173c5-8efe-463e-8a78-467ea8c5eabf",
             "deletionTimestamp": null,
             "finalizers": [
               "fleet-s0.devicechain.io/observe"
@@ -383,13 +384,37 @@
             ],
             "process_heartbeat": [
               10,
-              13
+              12
             ]
           },
           "podgc": {
             "object_absent": false,
-            "uid": "ab0cf4b5-cfc5-41db-b7f9-61a32fcb1d0b",
-            "deletionTimestamp": "2026-11-21T19:59:48Z",
+            "uid": "b95173c5-8efe-463e-8a78-467ea8c5eabf",
+            "deletionTimestamp": "2026-11-21T20:28:36Z",
+            "finalizers": [
+              "fleet-s0.devicechain.io/observe"
+            ],
+            "phase": "Failed",
+            "conditions": [
+              "PodReadyToStartContainers=True",
+              "Initialized=True",
+              "Ready=True",
+              "ContainersReady=True",
+              "PodScheduled=True",
+              "DisruptionTarget=True"
+            ],
+            "containerStatuses": [
+              "running"
+            ],
+            "process_heartbeat": [
+              51,
+              53
+            ]
+          },
+          "force-deleted": {
+            "object_absent": false,
+            "uid": "b95173c5-8efe-463e-8a78-467ea8c5eabf",
+            "deletionTimestamp": "2026-11-21T20:28:36Z",
             "finalizers": [
               "fleet-s0.devicechain.io/observe"
             ],
@@ -409,30 +434,6 @@
               54,
               56
             ]
-          },
-          "force-deleted": {
-            "object_absent": false,
-            "uid": "ab0cf4b5-cfc5-41db-b7f9-61a32fcb1d0b",
-            "deletionTimestamp": "2026-11-21T19:59:48Z",
-            "finalizers": [
-              "fleet-s0.devicechain.io/observe"
-            ],
-            "phase": "Failed",
-            "conditions": [
-              "PodReadyToStartContainers=True",
-              "Initialized=True",
-              "Ready=True",
-              "ContainersReady=True",
-              "PodScheduled=True",
-              "DisruptionTarget=True"
-            ],
-            "containerStatuses": [
-              "running"
-            ],
-            "process_heartbeat": [
-              57,
-              59
-            ]
           }
         },
         "never_all_containers_terminated": true,
@@ -446,7 +447,7 @@
       "tofu_version": "1.10.10",
       "provider_version": "8.4.0",
       "date": "2026-11-21",
-      "transcript_sha256": "5348cbf69a65695cac1979f257c429c59a26de43e0e2c057caa1876cf3c5aea1"
+      "transcript_sha256": "7a874f825a52c1576726e74527dee49f2239a050c88a9620bec7f2346b31ff96"
     }
   ]
 }

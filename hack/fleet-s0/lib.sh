@@ -86,6 +86,15 @@ reaper_preflight() {
   [[ $label == throwaway ]] || die "spike project must carry fleet-s0=throwaway"
   assert_no_lien "$FLEET_S0_PROJECT"
   check_delete_role fleetS0ClusterDelete container.clusters.delete "$FLEET_S0_PROJECT"
+  # The reaper is armed against fixed cluster names: it must never be armed against a cluster this run did not create.
+  existing="$(gcloud container clusters list --project="$FLEET_S0_PROJECT" --format='value(name)')"
+  for name in "${S0_CLUSTER_NAMES[@]}"; do
+    [[ $'
+'$existing$'
+' != *$'
+'$name$'
+'* ]] || die "cluster $name already exists in the spike project; the reaper would delete one this run did not create"
+  done
   S0_STARTED="$(date +%s)"
   S0_RUN="$S0_STARTED-$$"
   arm_outer "$FLEET_S0_PROJECT" 21600

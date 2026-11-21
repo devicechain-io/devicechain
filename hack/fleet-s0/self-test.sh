@@ -38,7 +38,7 @@ expect_fail bash -c 'source "$1/lib.sh"; create_cluster s0-e-b' _ "$here"
 [[ ! -s "$d/calls" ]] || fail 'resource call before preflight'
 expect_fail run E-a FLEET_S0_ADMIN_PROJECT=
 [[ ! -s "$d/calls" ]] || fail 'resource call with unset admin project'
-for bad in lien canary-timeout scheduler-error wrong-role wrong-project; do
+for bad in lien cluster-exists canary-timeout scheduler-error wrong-role wrong-project; do
   : >"$d/calls"
   expect_fail run E-a S0_FAKE_CASE="$bad"
   if grep -q 'container clusters create' "$d/calls"; then fail "$bad reached experiment creation"; fi

@@ -31,7 +31,7 @@ for id in "${ids[@]}"; do
       until docker exec "$run-pg" pg_isready -U postgres >/dev/null 2>&1; do sleep 1; done
       net=(--network "container:$run-pg")
       env+=(-e FLEET_S0_PG_ADMIN_URL="postgres://postgres:$pgpass@localhost:5432/postgres?sslmode=disable") ;;
-    E-l) net=(--network kind); env+=(-e FLEET_S0_KIND_INTERNAL=1) ;;
+    E-l) env+=(-e FLEET_S0_KIND_INTERNAL=1) ;;
   esac
   mkdir -p "$out/$id"
   docker run --rm "${net[@]}" "${env[@]}" --security-opt seccomp=unconfined \

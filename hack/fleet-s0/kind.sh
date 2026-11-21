@@ -9,7 +9,7 @@ kind_cleanup() {
 }
 probe_l() {
   local uid container node control_ip control_ip6 before after event deadline name
-  S0_KIND_NAME="fleet-s0-$$-$RANDOM"
+  local cluster="fleet-s0-$$-$RANDOM"
   cat >"$S0_OUT/kind.yaml" <<'YAML'
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -18,7 +18,11 @@ nodes:
   - role: worker
   - role: worker
 YAML
-  kind create cluster --name="$S0_KIND_NAME" --image="$S0_KIND_NODE_IMAGE" --config="$S0_OUT/kind.yaml" --wait=180s
+  kind create cluster --name="$cluster" --image="$S0_KIND_NODE_IMAGE" --config="$S0_OUT/kind.yaml" --wait=180s
+  # Cleanup may delete only what this run created: ownership starts here, after a successful create.
+  S0_KIND_NAME="$cluster"
+  # From a container, reach the cluster over the kind network (created by kind itself).
+  [[ -z ${FLEET_S0_KIND_INTERNAL:-} ]] || docker network connect kind "$(hostname)"
   export KUBECONFIG="$S0_OUT/kind.kubeconfig"
   kind get kubeconfig ${FLEET_S0_KIND_INTERNAL:+--internal} --name="$S0_KIND_NAME" >"$KUBECONFIG"
   node="$S0_KIND_NAME-worker"

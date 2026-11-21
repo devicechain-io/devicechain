@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -209,7 +210,7 @@ func ProviderPinFromRoots(dir string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		m := providerPin.FindSubmatch(body)
+		m := providerPin.FindSubmatch(stripComments(body))
 		if m == nil || !exactVersion.MatchString(string(m[1])) {
 			return "", fmt.Errorf("%s: the google provider is not pinned to an exact version", file)
 		}
@@ -220,3 +221,24 @@ func ProviderPinFromRoots(dir string) (string, error) {
 	}
 	return pin, nil
 }
+
+var blockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+
+// stripComments removes HCL comments so a commented-out pin cannot stand in for the live one.
+// No pin or source string contains # or //, so cutting each line at the first one is safe here.
+func stripComments(body []byte) []byte {
+	body = blockComment.ReplaceAll(body, nil)
+	lines := strings.Split(string(body), "\n")
+	for i, line := range lines {
+		for _, marker := range []string{"#", "//"} {
+			if at := strings.Index(line, marker); at >= 0 {
+				line = line[:at]
+			}
+		}
+		lines[i] = line
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+// IsExactVersion reports whether v is one exact version, not a range, a prefix or empty.
+func IsExactVersion(v string) bool { return exactVersion.MatchString(v) }
