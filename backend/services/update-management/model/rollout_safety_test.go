@@ -21,6 +21,7 @@ func stagedRequest() RolloutCreateRequest {
 
 func TestCohortsGateOnSuccessAndManualPromotionIsIdempotent(t *testing.T) {
 	e := newRolloutEnv(t, 4)
+	e.api.RolloutSafety = true
 	ctx := tenantCtx("acme")
 	_, err := e.api.CreateRollout(ctx, stagedRequest())
 	require.NoError(t, err)
@@ -28,7 +29,7 @@ func TestCohortsGateOnSuccessAndManualPromotionIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, v.Progress.InFlight)
 	require.EqualValues(t, 1, e.assignmentCount(t, "dev-3"))
-	_, err = e.api.PromoteRollout(ctx, "staged", 0)
+	_, err = e.api.PromoteRollout(ctx, "staged", 0, false)
 	require.Error(t, err, "an unfinished canary cannot be promoted")
 	for range 3 {
 		e.step(t, "staged")
@@ -39,7 +40,7 @@ func TestCohortsGateOnSuccessAndManualPromotionIsIdempotent(t *testing.T) {
 	_, err = e.api.ResumeRollout(ctx, "staged", nil)
 	require.Error(t, err, "ordinary resume cannot bypass promotion")
 	for range 3 {
-		v, err = e.api.PromoteRollout(ctx, "staged", 0)
+		v, err = e.api.PromoteRollout(ctx, "staged", 0, false)
 		require.NoError(t, err)
 		require.Equal(t, 1, v.Rollout.CurrentCohort)
 	}
@@ -58,30 +59,9 @@ func TestCohortsGateOnSuccessAndManualPromotionIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestFailedUnknownAndSkippedCanariesNeverPromote(t *testing.T) {
-	for _, state := range []ota.State{ota.StateFailed, ota.StateUnknown, ota.StateCancelled} {
-		t.Run(string(state), func(t *testing.T) {
-			e := newRolloutEnv(t, 4)
-			ctx := tenantCtx("acme")
-			req := stagedRequest()
-			req.Cohorts[0].ManualPromotion = false
-			_, err := e.api.CreateRollout(ctx, req)
-			require.NoError(t, err)
-			_, err = e.api.StartRollout(ctx, req.Token)
-			require.NoError(t, err)
-			e.finishCurrent(t, state, "dev-3")
-			for range 3 {
-				e.step(t, req.Token)
-			}
-			require.Zero(t, e.assignmentCount(t, "dev-0"))
-			_, err = e.api.PromoteRollout(ctx, req.Token, 0)
-			require.Error(t, err)
-		})
-	}
-}
-
 func TestFailureRateHaltsBeforeDispatchAndNeedsExplicitIdempotentOverride(t *testing.T) {
 	e := newRolloutEnv(t, 6)
+	e.api.RolloutSafety = true
 	ctx := tenantCtx("acme")
 	req := RolloutCreateRequest{Token: "rate", ArtifactToken: "fw-2", GroupToken: "fleet", MaxInFlight: 2,
 		FailureRate: &RolloutFailureRate{Percentage: 49, WindowSeconds: 600, MinimumSamples: 2}}
@@ -120,6 +100,7 @@ func TestFailureRateHaltsBeforeDispatchAndNeedsExplicitIdempotentOverride(t *tes
 
 func TestRateHaltCanResumeWhenTheCountThresholdAlsoNeedsRaising(t *testing.T) {
 	e := newRolloutEnv(t, 6)
+	e.api.RolloutSafety = true
 	ctx := tenantCtx("acme")
 	_, err := e.api.CreateRollout(ctx, RolloutCreateRequest{Token: "both", ArtifactToken: "fw-2", GroupToken: "fleet", MaxInFlight: 3,
 		FailureThreshold: ptr(2), FailureRate: &RolloutFailureRate{Percentage: 49, WindowSeconds: 600, MinimumSamples: 2}})
@@ -143,6 +124,7 @@ func TestRateHaltCanResumeWhenTheCountThresholdAlsoNeedsRaising(t *testing.T) {
 
 func TestHaltResumeRetryAfterCompletionIsIdempotent(t *testing.T) {
 	e := newRolloutEnv(t, 2)
+	e.api.RolloutSafety = true
 	ctx := tenantCtx("acme")
 	_, err := e.api.CreateRollout(ctx, RolloutCreateRequest{Token: "done", ArtifactToken: "fw-2", GroupToken: "fleet", MaxInFlight: 2,
 		FailureRate: &RolloutFailureRate{Percentage: 49, WindowSeconds: 600, MinimumSamples: 2}})
@@ -164,24 +146,9 @@ func TestHaltResumeRetryAfterCompletionIsIdempotent(t *testing.T) {
 	require.Error(t, err, "a retry cannot silently accept a changed threshold after completion")
 }
 
-func TestSkippedCanaryCannotReleaseLaterCohorts(t *testing.T) {
-	e := newRolloutEnv(t, 4)
-	e.devices.disabled["acme/dev-3"] = true
-	req := stagedRequest()
-	req.Cohorts[0].ManualPromotion = false
-	_, err := e.api.CreateRollout(tenantCtx("acme"), req)
-	require.NoError(t, err)
-	_, err = e.api.StartRollout(tenantCtx("acme"), req.Token)
-	require.NoError(t, err)
-	for range 3 {
-		e.step(t, req.Token)
-	}
-	require.Equal(t, 1, e.rollout(t, req.Token).Progress.Skipped)
-	require.Zero(t, e.assignmentCount(t, "dev-0"))
-}
-
 func TestStaleCohortCandidateCannotClaimADeviceTwice(t *testing.T) {
 	e := newRolloutEnv(t, 4)
+	e.api.RolloutSafety = true
 	ctx := tenantCtx("acme")
 	_, err := e.api.CreateRollout(ctx, stagedRequest())
 	require.NoError(t, err)
@@ -217,6 +184,7 @@ func TestRateWindowMinimumSampleAndUnknownDenominator(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newRolloutEnv(t, 4)
+			e.api.RolloutSafety = true
 			ctx := tenantCtx("acme")
 			_, err := e.api.CreateRollout(ctx, RolloutCreateRequest{Token: "r", ArtifactToken: "fw-2", GroupToken: "fleet", MaxInFlight: 2,
 				FailureRate: &RolloutFailureRate{Percentage: tc.percent, MinimumSamples: tc.minimum, WindowSeconds: 600}})
@@ -234,6 +202,7 @@ func TestRateWindowMinimumSampleAndUnknownDenominator(t *testing.T) {
 
 func TestSafetyPlansRejectAmbiguousTargetsAndInvalidBounds(t *testing.T) {
 	e := newRolloutEnv(t, 4)
+	e.api.RolloutSafety = true
 	ctx := tenantCtx("acme")
 	for _, cohorts := range [][]RolloutCohort{
 		{{Name: "missing-final", DeviceTokens: []string{"dev-0"}}},

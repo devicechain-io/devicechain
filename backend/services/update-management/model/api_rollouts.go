@@ -24,6 +24,7 @@ import (
 
 // Refusal codes of the rollout plane.
 const (
+	CodeRolloutSafetyDisabled       = "ROLLOUT_SAFETY_DISABLED"
 	CodeRolloutNotFound             = "ROLLOUT_NOT_FOUND"
 	CodeRolloutExists               = "ROLLOUT_ALREADY_EXISTS"
 	CodeRolloutStateConflict        = "ROLLOUT_STATE_CONFLICT"
@@ -155,6 +156,9 @@ func (api *Api) artifactAssignable(a *Artifact) error {
 
 // CreateRollout declares a rollout in DRAFT. Nothing is resolved or dispatched until it starts.
 func (api *Api) CreateRollout(ctx context.Context, req RolloutCreateRequest) (*UpdateRolloutView, error) {
+	if err := api.requireRolloutSafety(len(req.Cohorts) > 0 || req.FailureRate != nil); err != nil {
+		return nil, err
+	}
 	if err := validateSafety(req); err != nil {
 		return nil, err
 	}
@@ -310,6 +314,9 @@ func (api *Api) StartRollout(ctx context.Context, token string) (*UpdateRolloutV
 	}
 	if r == nil {
 		return nil, refuse(CodeRolloutNotFound, "no rollout with token %q", token)
+	}
+	if err := api.requireRolloutSafety(r.CohortPlan.Valid || r.FailureRatePlan.Valid); err != nil {
+		return nil, err
 	}
 	if r.State != RolloutDraft {
 		return nil, refuse(CodeRolloutStateConflict, "rollout %q is %s; only a %s rollout can be started", token, r.State, RolloutDraft)
@@ -541,7 +548,18 @@ func (api *Api) resumeRollout(ctx context.Context, token string, failureThreshol
 		}
 		cols := map[string]any{"state": RolloutRunning, "pause_reason": ""}
 		if r.PauseReason == PauseCohortReady {
-			return nil, refuse(CodeRolloutStateConflict, "use promoteUpdateRollout to advance the successful cohort")
+			return nil, refuse(CodeRolloutStateConflict, "use promoteUpdateRollout to advance the cohort")
+		}
+		if r.PauseReason == PauseCohortFailed {
+			cohort, err := cohortProgress(tx, r)
+			if err != nil {
+				return nil, err
+			}
+			// An UNKNOWN at the cap can pause before the cohort is fully dispatched.
+			// Once resolved or abandoned, resume may finish those pending targets.
+			if cohort.Failures() > 0 || cohort.Pending == 0 {
+				return nil, refuse(CodeRolloutStateConflict, "use promoteUpdateRollout with overrideFailure for settled failures; resolve or abandon UNKNOWN attempts before resuming pending cohort targets")
+			}
 		}
 		if r.PauseReason == PauseFailureRate {
 			if haltSequence == nil {
@@ -932,11 +950,17 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 			return err
 		}
 		if len(plan) > 0 && r.CurrentCohort < len(plan)-1 {
-			succeeded, err := cohortSucceeded(tx, r)
+			cohort, err := cohortProgress(tx, r)
 			if err != nil {
 				return err
 			}
-			if succeeded {
+			if cohort.Unknown > 0 && cohort.InFlight == 0 && p.Occupied() >= r.MaxInFlight {
+				return pause(PauseCohortFailed)
+			}
+			if cohort.Total > 0 && cohort.Pending == 0 && cohort.InFlight == 0 {
+				if cohort.Failures() > 0 {
+					return pause(PauseCohortFailed)
+				}
 				if plan[r.CurrentCohort].ManualPromotion {
 					return pause(PauseCohortReady)
 				}

@@ -30,6 +30,7 @@ const (
 	PauseFailureThreshold = "FAILURE_THRESHOLD"
 	PauseFailureRate      = "FAILURE_RATE"
 	PauseCohortReady      = "COHORT_READY"
+	PauseCohortFailed     = "COHORT_FAILED"
 	// PauseArtifactNotAssignable: the artifact was retired, or lost the trust this instance
 	// requires (its only active signer was revoked), while the rollout was running.
 	PauseArtifactNotAssignable = "ARTIFACT_NOT_ASSIGNABLE"

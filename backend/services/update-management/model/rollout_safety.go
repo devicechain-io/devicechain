@@ -16,7 +16,7 @@ import (
 )
 
 // RolloutCohort selects an explicit canary set or a cumulative fleet percentage.
-// ManualPromotion gates departure from this cohort, after every member succeeds.
+// ManualPromotion gates departure once all members succeed or are skipped/cancelled.
 type RolloutCohort struct {
 	Name            string
 	DeviceTokens    []string
@@ -62,8 +62,8 @@ func validateSafety(req RolloutCreateRequest) error {
 	if len(req.Cohorts) > 0 && lastPercentage != 100 {
 		return refuse(CodeInvalidRollout, "the last cohort must cover 100 percent")
 	}
-	if f := req.FailureRate; f != nil && (f.Percentage < 1 || f.Percentage > 100 || f.WindowSeconds < 1 || f.WindowSeconds > 86400 || f.MinimumSamples < 1 || f.MinimumSamples > MaxRolloutTargets) {
-		return refuse(CodeInvalidRollout, "failure rate requires percentage 1..100, windowSeconds 1..86400 and minimumSamples 1..10000")
+	if f := req.FailureRate; f != nil && (f.Percentage < 1 || f.Percentage > 99 || f.WindowSeconds < 1 || f.WindowSeconds > 86400 || f.MinimumSamples < 1 || f.MinimumSamples > MaxRolloutTargets) {
+		return refuse(CodeInvalidRollout, "failure rate requires percentage 1..99, windowSeconds 1..86400 and minimumSamples 1..10000")
 	}
 	return nil
 }
@@ -134,7 +134,8 @@ func freezeCohorts(r UpdateRollout, devices []string) (map[string]int, error) {
 	return out, nil
 }
 
-func cohortSucceeded(tx *gorm.DB, r *UpdateRollout) (bool, error) {
+func cohortProgress(tx *gorm.DB, r *UpdateRollout) (RolloutProgress, error) {
+	var progress RolloutProgress
 	var rows []struct {
 		Status       string
 		AttemptState sql.NullString
@@ -144,20 +145,19 @@ func cohortSucceeded(tx *gorm.DB, r *UpdateRollout) (bool, error) {
 		Joins("LEFT JOIN update_attempts ON update_attempts.assignment_id = update_rollout_targets.assignment_id AND update_attempts.tenant_id = update_rollout_targets.tenant_id").
 		Where("update_rollout_targets.rollout_id = ? AND update_rollout_targets.cohort = ?", r.ID, r.CurrentCohort).
 		Scan(&rows).Error
-	if err != nil || len(rows) == 0 {
-		return false, err
+	if err != nil {
+		return progress, err
 	}
 	for _, row := range rows {
-		if outcomeOf(row.Status, row.AttemptState) != OutcomeSucceeded {
-			return false, nil
-		}
+		progress.add(outcomeOf(row.Status, row.AttemptState), 1)
 	}
-	return true, nil
+	return progress, nil
 }
 
-// PromoteRollout advances only the expected successful cohort. Repeating an old
+// PromoteRollout advances the expected settled cohort. Failed or UNKNOWN outcomes
+// require overrideFailure. UNKNOWN still occupies a slot after promotion. Repeating an old
 // promotion cannot accidentally promote a second cohort, even on another replica.
-func (api *Api) PromoteRollout(ctx context.Context, token string, expected int) (*UpdateRolloutView, error) {
+func (api *Api) PromoteRollout(ctx context.Context, token string, expected int, overrideFailure bool) (*UpdateRolloutView, error) {
 	var advanced uint
 	_, err := api.transition(ctx, token, func(tx *gorm.DB, r *UpdateRollout) (map[string]any, error) {
 		plan, err := r.Cohorts()
@@ -170,15 +170,18 @@ func (api *Api) PromoteRollout(ctx context.Context, token string, expected int) 
 		if r.CurrentCohort > expected {
 			return nil, nil
 		}
-		if r.CurrentCohort != expected || (r.State != RolloutRunning && !(r.State == RolloutPaused && r.PauseReason == PauseCohortReady)) {
+		if r.CurrentCohort != expected || (r.State != RolloutRunning && !(r.State == RolloutPaused && (r.PauseReason == PauseCohortReady || r.PauseReason == PauseCohortFailed))) {
 			return nil, refuse(CodeRolloutStateConflict, "cohort cannot be promoted in this state")
 		}
-		ok, err := cohortSucceeded(tx, r)
+		p, err := cohortProgress(tx, r)
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
-			return nil, refuse(CodeRolloutStateConflict, "every cohort target must confirm success before promotion")
+		if p.Total == 0 || p.Pending > 0 || p.InFlight > 0 {
+			return nil, refuse(CodeRolloutStateConflict, "cohort targets are still pending or in flight")
+		}
+		if p.Failures() > 0 && !overrideFailure {
+			return nil, refuse(CodeRolloutStateConflict, "failed or unknown cohort outcomes require overrideFailure")
 		}
 		advanced = r.ID
 		return map[string]any{"current_cohort": expected + 1, "state": RolloutRunning, "pause_reason": ""}, nil
@@ -206,11 +209,10 @@ func (api *Api) rateHalt(tx *gorm.DB, r *UpdateRollout) (bool, error) {
 	}
 	now := api.now()
 	var rows []struct {
-		ID      uint
-		State   string
-		Version int64
+		ID    uint
+		State string
 	}
-	err = tx.Model(&UpdateRolloutTarget{}).Select("update_attempts.id, update_attempts.state, update_attempts.version").
+	err = tx.Model(&UpdateRolloutTarget{}).Select("update_attempts.id, update_attempts.state").
 		Joins("JOIN update_attempts ON update_attempts.assignment_id = update_rollout_targets.assignment_id AND update_attempts.tenant_id = update_rollout_targets.tenant_id").
 		Where("update_rollout_targets.rollout_id = ? AND update_rollout_targets.status = ? AND update_attempts.updated_at >= ? AND update_attempts.updated_at <= ?",
 			r.ID, TargetDispatched, now.Add(-time.Duration(f.WindowSeconds)*time.Second), now).Scan(&rows).Error
@@ -232,7 +234,7 @@ func (api *Api) rateHalt(tx *gorm.DB, r *UpdateRollout) (bool, error) {
 		case ota.StateFailed, ota.StateTimedOut, ota.StateUnknown:
 			samples++
 			failures++
-			key := fmt.Sprintf("%d:%s:%d", row.ID, row.State, row.Version)
+			key := fmt.Sprintf("%d:%s", row.ID, row.State)
 			evidence[key] = true
 			if !acknowledged[key] {
 				newFailure = true
@@ -246,4 +248,13 @@ func (api *Api) rateHalt(tx *gorm.DB, r *UpdateRollout) (bool, error) {
 		Updates(map[string]any{"halt_sequence": r.HaltSequence + 1, "halt_failures": failures, "halt_samples": samples,
 			"halt_failure_evidence": safetyJSON(evidence)}).Error
 	return err == nil, err
+}
+
+// requireRolloutSafety fails closed during mixed-version upgrades. This setting
+// comes only from the mounted instance configuration, never a request or tenant.
+func (api *Api) requireRolloutSafety(needed bool) error {
+	if needed && !api.RolloutSafety {
+		return refuse(CodeRolloutSafetyDisabled, "cohorts and failureRate require infrastructure.updateManagement.rolloutSafety; enable only after all update-management replicas have upgraded")
+	}
+	return nil
 }

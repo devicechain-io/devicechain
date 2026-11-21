@@ -10,11 +10,12 @@ import (
 )
 
 func (r *SchemaResolver) PromoteUpdateRollout(ctx context.Context, args struct {
-	Token          string
-	ExpectedCohort int32
+	Token           string
+	ExpectedCohort  int32
+	OverrideFailure bool
 }) (*UpdateRolloutResolver, error) {
 	return r.rolloutWrite(ctx, func(api *model.Api) (*model.UpdateRolloutView, error) {
-		return api.PromoteRollout(ctx, args.Token, int(args.ExpectedCohort))
+		return api.PromoteRollout(ctx, args.Token, int(args.ExpectedCohort), args.OverrideFailure)
 	})
 }
 
