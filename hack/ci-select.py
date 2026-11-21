@@ -105,6 +105,12 @@ DOCS_DEPLOY = [
     "docs/i18n/*/docusaurus-plugin-content-docs/current/deployment/**",
 ]
 READERS = [
+    # tofu_roots_test.go — walks every .tf under deploy/ and compares the roots with what
+    # hack/tofu-roots.sh --all prints.
+    ("deploy", ".", [
+        "deploy/**/*.tf",
+        "hack/tofu-roots.sh",
+    ], [], "tofu_roots_test.go"),
     # build_paths_test.go:22-81 — the reproducible-build settings in every place the broker image is built.
     ("backend/broker/dc-nats-server", ".", [
         "deploy/local/build-images.sh",
