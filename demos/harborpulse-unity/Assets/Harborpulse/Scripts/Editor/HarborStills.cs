@@ -43,16 +43,31 @@ namespace DeviceChain.Harborpulse.EditorTools
                     if (parts.Length != 2) throw new ArgumentException("each still must be hour:shot");
                     var hour = double.Parse(parts[0], CultureInfo.InvariantCulture);
                     if (double.IsNaN(hour) || double.IsInfinity(hour) || hour < 0) throw new ArgumentException("still hour must be finite and nonnegative");
-                    var shot = int.Parse(parts[1], CultureInfo.InvariantCulture);
+                    // a shot is one of the rig's numbered shots, or "@x/y/z/lookX/lookY/lookZ/fov/name": a free camera, for trying a framing
+                    var free = parts[1].StartsWith("@", StringComparison.Ordinal) ? parts[1].Substring(1).Split('/') : null;
+                    if (free != null && free.Length != 8) throw new ArgumentException("a free still camera is @x/y/z/lookX/lookY/lookZ/fov/name");
+                    var shot = free != null ? 0 : int.Parse(parts[1], CultureInfo.InvariantCulture);
                     if (shot < 0 || shot >= app.Rig.Shots.Count) throw new ArgumentException("unknown still shot " + shot);
                     app.WaterTimeOverride = 37.5f;
                     app.Rig.Select(shot, true);
                     app.HoldPreviewAt(hour);
                     app.Rig.Select(shot, true);
+                    var shotName = app.Rig.Shots[shot].Name;
+                    if (free != null)
+                    {
+                        var v = new float[7];
+                        for (var k = 0; k < 7; k++) v[k] = float.Parse(free[k], CultureInfo.InvariantCulture);
+                        if (v[6] < 5 || v[6] > 120) throw new ArgumentException("a free still camera's field of view must be within 5 and 120 degrees");
+                        var at = new Vector3(v[0], v[1], v[2]); var look = new Vector3(v[3], v[4], v[5]);
+                        if ((look - at).sqrMagnitude < 1e-4f) throw new ArgumentException("a free still camera must look somewhere");
+                        app.sceneCamera.transform.SetPositionAndRotation(at, Quaternion.LookRotation(look - at, Vector3.up));
+                        app.sceneCamera.fieldOfView = v[6];
+                        shotName = free[7];
+                    }
                     app.RefreshHud();
                     Canvas.ForceUpdateCanvases();
-                    var name = "harborpulse-" + ((int)hour % 24).ToString("00", CultureInfo.InvariantCulture) + "h" + ((int)System.Math.Round((hour - System.Math.Floor(hour)) * 60) % 60).ToString("00", CultureInfo.InvariantCulture) + "-" + app.Rig.Shots[shot].Name.ToLowerInvariant().Replace(' ', '-') + ".png";
-                    var stamp = "OFFLINE PREVIEW - STAND-IN VALUES, NOT PLATFORM DATA - " + app.Clock.Label.Substring(app.Clock.Label.IndexOf(' ') + 1, 5) + " - " + app.Rig.Shots[shot].Name;
+                    var name = "harborpulse-" + ((int)hour % 24).ToString("00", CultureInfo.InvariantCulture) + "h" + ((int)System.Math.Round((hour - System.Math.Floor(hour)) * 60) % 60).ToString("00", CultureInfo.InvariantCulture) + "-" + shotName.ToLowerInvariant().Replace(' ', '-') + ".png";
+                    var stamp = "OFFLINE PREVIEW - STAND-IN VALUES, NOT PLATFORM DATA - " + app.Clock.Label.Substring(app.Clock.Label.IndexOf(' ') + 1, 5) + " - " + shotName;
                     Render(app.sceneCamera, Path.Combine(outDir, name), width, height, stamp, app);
                     made++;
                 }

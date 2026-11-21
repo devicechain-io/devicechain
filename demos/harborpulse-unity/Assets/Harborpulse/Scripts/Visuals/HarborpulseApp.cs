@@ -176,7 +176,8 @@ namespace DeviceChain.Harborpulse.Visuals
                 storyboard = Storyboard.Parse(Resources.Load<TextAsset>("storyboard").text, map);
                 // The read-only observer adapter: live reads come from whichever session is current (a runner restart replaces it).
                 if (DirectorFeedFactory == null) DirectorFeedFactory = () => new DirectorObserver(layout, () => live?.DirectorReads);
-                var options = Environment.GetCommandLineArgs();
+                var options = Options(out var optionProblem);
+                if (optionProblem != null) throw new FormatException(optionProblem);
                 localDigest = LayoutDigest.Override(LayoutDigest.Compute(text.bytes), CommandLineArgs.Get(options, "-hp-layout-digest-override", out _));
                 portrait = Array.IndexOf(options, "-hp-portrait") >= 0;
                 recordRoot = CommandLineArgs.Get(options, "-hp-record-dir", out _) ?? Path.Combine(Application.persistentDataPath, "recordings");
@@ -220,10 +221,17 @@ namespace DeviceChain.Harborpulse.Visuals
                 return;
             }
 
-            var args = Environment.GetCommandLineArgs();
+            var args = Options(out _);
             Offline = offlinePreview || Array.IndexOf(args, OfflineFlag) >= 0 || Environment.GetEnvironmentVariable(OfflineEnv) == "1";
             if (Offline) StartPreview(args);
             else StartLive(args);
+        }
+
+        /// <summary>The player's options: its command line, or in a browser (which has none) the ones its page address carries (<see cref="WebOptions"/>).</summary>
+        static string[] Options(out string problem)
+        {
+            problem = null;
+            return Application.platform == RuntimePlatform.WebGLPlayer ? WebOptions.FromUrl(Application.absoluteURL, out problem) : Environment.GetCommandLineArgs();
         }
 
         void StartPreview(string[] args)
