@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -17,9 +16,20 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 )
 
-// segment is the only shape a served-schema path component may take; the URL
-// is request-controlled, so nothing else may reach the filesystem join.
-var segment = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+// servedSchemas maps "<area>/<file>" to the real served schema on disk. The request
+// path only ever selects a key; it never reaches the filesystem.
+func servedSchemas() (map[string]string, error) {
+	_, here, _, _ := runtime.Caller(0)
+	paths, err := filepath.Glob(filepath.Join(filepath.Dir(here), "..", "..", "..", "services", "*", "graphql", "*schema.graphql"))
+	if err != nil {
+		return nil, err
+	}
+	known := make(map[string]string, len(paths))
+	for _, p := range paths {
+		known[filepath.Base(filepath.Dir(filepath.Dir(p)))+"/"+filepath.Base(p)] = p
+	}
+	return known, nil
+}
 
 // ServeCapabilities handles negotiation independently of a fixture's business
 // operations, so existing mutation/refusal/call-count assertions stay meaningful.
@@ -42,13 +52,18 @@ func ServeCapabilities(t testing.TB, w http.ResponseWriter, r *http.Request) boo
 			file = parts[2] + "_schema.graphql"
 		}
 	}
-	if !segment.MatchString(area) || !segment.MatchString(strings.TrimSuffix(file, "_schema.graphql")+"") && file != "schema.graphql" {
+	known, err := servedSchemas()
+	if err != nil {
+		t.Errorf("enumerate served schemas: %v", err)
+		http.Error(w, "schema unavailable", http.StatusServiceUnavailable)
+		return true
+	}
+	path, ok := known[area+"/"+file]
+	if !ok {
 		t.Errorf("unexpected schema discovery path %q", r.URL.Path)
 		http.Error(w, "unknown schema", http.StatusNotFound)
 		return true
 	}
-	_, here, _, _ := runtime.Caller(0)
-	path := filepath.Join(filepath.Dir(here), "..", "..", "..", "services", area, "graphql", file)
 	schema, err := os.ReadFile(path)
 	if err != nil {
 		t.Errorf("read served schema: %v", err)
