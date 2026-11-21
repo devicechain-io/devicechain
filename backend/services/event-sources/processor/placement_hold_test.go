@@ -553,3 +553,57 @@ func TestPlacementHoldExpiryWaitsForAnInFlightRerun(t *testing.T) {
 	require.Zero(t, testutil.ToFloat64(gauge))
 	require.Equal(t, float64(1), testutil.ToFloat64(fallback.WithLabelValues("gw-test", "expired")))
 }
+
+// Observe the counter at Sub itself, so moving the count after the gauge change
+// cannot pass just because shutdown has completed by the time the test scrapes.
+type shutdownPlacementGauge struct {
+	prometheus.Gauge
+	fallback *prometheus.CounterVec
+	atSub    chan float64
+}
+
+func (g *shutdownPlacementGauge) Sub(n float64) {
+	g.atSub <- testutil.ToFloat64(g.fallback.WithLabelValues("gw-test", "shutdown"))
+	g.Gauge.Sub(n)
+}
+
+func TestPlacementHoldShutdownCountsBeforeGaugeDrops(t *testing.T) {
+	fallback := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "shutdown_placement_fallback"}, []string{"source", "reason"})
+	gauge := &shutdownPlacementGauge{fallback: fallback, atSub: make(chan float64, 2)}
+	gauge.Gauge = prometheus.NewGauge(prometheus.GaugeOpts{Name: "shutdown_placement_held"})
+	h := newCaptureHarnessWith(t, func(s *GatewayJetStreamSource) {
+		s.UsePlacementCheck(func(string) error { return messaging.ErrUnplacedTenant })
+		s.UsePlacementHeldGauge(gauge)
+		s.UsePlacementHoldFallbackCounter(fallback)
+		s.finalHoldBeat, s.finalHoldPoll = time.Hour, time.Hour
+	})
+	acks := []*progressAck{{}, {}, {}}
+	for i, ack := range acks {
+		h.source.settler(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, uint64(i+1), ack), "acme")(messaging.ErrUnplacedTenant)
+	}
+	holds := h.source.finalHolds
+	var finished *finalPlacementHold
+	holds.mu.Lock()
+	for entry := range holds.entries {
+		if finished == nil {
+			finished = entry
+		} else {
+			entry.running = true // Queued/in-flight entries are abandoned too.
+			break
+		}
+	}
+	holds.mu.Unlock()
+	holds.finish(finished) // Already settled entries must not count as abandoned.
+	waitHeld(t, gauge, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.True(t, h.source.stopPipeline(ctx))
+	require.Equal(t, float64(2), <-gauge.atSub, "every abandoned hold must be counted before Sub")
+	require.Zero(t, testutil.ToFloat64(gauge))
+	require.Equal(t, float64(2), testutil.ToFloat64(fallback.WithLabelValues("gw-test", "shutdown")))
+	require.Zero(t, testutil.ToFloat64(fallback.WithLabelValues("other-source", "shutdown")))
+	require.Zero(t, testutil.ToFloat64(fallback.WithLabelValues("gw-test", "expired")))
+	for _, ack := range acks {
+		require.Zero(t, ack.counts(), "shutdown leaves deliveries unacked")
+	}
+}

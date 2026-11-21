@@ -462,6 +462,10 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 			// A gateway that still has children is not deleted (ErrGatewayHasChildren): a device
 			// must never be left naming a gateway that is gone.
 			if err := refuseDeleteOfGateway(tx, id); err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					// A concurrent delete won before the gateway check acquired the row.
+					return nil, errEntityGoneBeforeDelete
+				}
 				return nil, err
 			}
 			credentials = credentials[:0]
