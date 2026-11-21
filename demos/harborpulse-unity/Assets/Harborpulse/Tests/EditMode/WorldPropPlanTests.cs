@@ -23,11 +23,11 @@ namespace DeviceChain.Harborpulse.Tests
                 Assert.That(plan.Find("car:"+d.Token),Is.Not.Null);
             foreach(var kind in new[]{"House","Commercial","Church","Shed","Tree","Rock","Bench","Gazebo","StreetLamp","Bollard","Cleat","ParkedCar","ChargingCar","Depot"})
                 Assert.That(plan.Props.Any(p=>p.Kind==kind),Is.True,"missing class "+kind);
-            Assert.That(plan.Props.Count(p=>p.Kind=="Tree"),Is.InRange(100,1000),"fewer, fuller trees than the 1056 round-1 specimens");
+            Assert.That(plan.Props.Count(p=>p.Kind=="Tree"),Is.GreaterThan(5000),"a wooded coast, far more than the 444 of the U4 plan");
             foreach(var tree in plan.Props.Where(p=>p.Kind=="Tree" && p.Area=="forest"))
-                Assert.That(CoastalTerrain.Woodland(tree.At.X,tree.At.Z),Is.True,"woodland leaves exposed ledges and meadow gaps");
-            Assert.That(plan.Props.Any(p=>p.Kind=="Rock" && p.At.Z>500 && Math.Abs(p.At.X)<350),Is.True,"HOME-facing upper-slope ledges");
-            Assert.That(plan.Props.Any(p=>p.Kind=="Rock" && p.At.Z<180 && Math.Abs(p.At.X)<300),Is.True,"shore ledges behind the fixed quays");
+                Assert.That(CoastalTerrain.Woodland(tree.At.X,tree.At.Z),Is.True,"woodland leaves meadow gaps");
+            Assert.That(plan.Props.Count(p=>p.Kind=="Rock"),Is.GreaterThanOrEqualTo(20),"granite outcrops in clusters");
+            Assert.That(plan.Props.Any(p=>p.Kind=="Rock" && p.At.Z<-30 && Math.Abs(p.At.X)>300),Is.True,"shore ledges outside the quays");
             Assert.That(plan.Props.Count(p=>p.Area=="town" && p.Kind!="Tree"),Is.GreaterThan(50));
         }
 

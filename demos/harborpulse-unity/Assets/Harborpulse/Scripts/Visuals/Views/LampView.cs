@@ -27,8 +27,7 @@ namespace DeviceChain.Harborpulse.Visuals
             rig["Halo"].gameObject.SetActive(on && power > 0);
             var halo = rig["Halo"].GetComponent<MeshRenderer>();
             fadeBlock.Clear();
-            fadeBlock.SetColor("_EmissionColor", mats.LampHalo.GetColor("_EmissionColor") * power);
-            fadeBlock.SetColor("_BaseColor", Color.Lerp(new Color(0.10f, 0.12f, 0.15f), mats.LampHalo.GetColor("_BaseColor"), power));
+            fadeBlock.SetFloat(HarborMaterials.GlowPower, power);
             halo.SetPropertyBlock(fadeBlock);
             light.enabled = on && power > 0 && (rig.Root.position - camera).sqrMagnitude < 520 * 520;
             light.intensity = power * 16 * (float)(p.DimPct ?? 100) / 100 * Mathf.Lerp(0.15f, 1, (float)sky.Night);
