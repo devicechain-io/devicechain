@@ -36,6 +36,13 @@ func TestMembershipFamilyLockPrecedesMaintenance(t *testing.T) {
 				denied := errors.New("family lock refused")
 				locked, reads := false, 0
 				require.NoError(t, db.Callback().Raw().Before("gorm:raw").Register("test:family-lock", func(tx *gorm.DB) {
+					if strings.Contains(tx.Statement.SQL.String(), "dc_entity_attr_lock") {
+						// The device attribute lock is a different lock; SQLite cannot run it.
+						tx.Statement.SQL.Reset()
+						tx.Statement.SQL.WriteString("SELECT 1")
+						tx.Statement.Vars = nil
+						return
+					}
 					if !strings.Contains(tx.Statement.SQL.String(), "pg_advisory_xact_lock") {
 						return
 					}

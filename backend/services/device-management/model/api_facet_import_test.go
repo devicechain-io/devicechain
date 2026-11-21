@@ -285,6 +285,13 @@ func TestFacetDeclarationAndImportShareTransactionLock(t *testing.T) {
 				locked, reads, writes := false, 0, 0
 				var pool gorm.ConnPool
 				require.NoError(t, db.Callback().Raw().Before("gorm:raw").Register("test:facet-lock", func(tx *gorm.DB) {
+					if strings.Contains(tx.Statement.SQL.String(), "dc_entity_attr_lock") {
+						// The device attribute lock is a different lock; SQLite cannot run it.
+						tx.Statement.SQL.Reset()
+						tx.Statement.SQL.WriteString("SELECT 1")
+						tx.Statement.Vars = nil
+						return
+					}
 					if !strings.Contains(tx.Statement.SQL.String(), "pg_advisory_xact_lock") {
 						return
 					}
