@@ -1043,17 +1043,33 @@ recorded with it, and the director reads that.
   cycle is named only when that row's `raisedTime` is at or before `detectedAt` and it was not cleared at or before it; an earlier
   cycle than the row's counts only if its own cached record shows a `clearedTime` after the detection. Anything else is emitted as a
   command with no alarm and a `causeUnresolved` reason (the cached lifecycles are not a complete ledger of an alarm's cycles), and a
-  cause of kind `RULE`, or none, names no alarm at all. The join waits for a complete alarm read taken at or after the detection, and a
-  cycle once named is not moved by the alarm's later life. `detectedAt` carries up to nine fractional digits; it is cut (never rounded
-  up) to the 100 ns this runtime holds, so it still meets an alarm stored at microseconds.
-- **What shows.** The storyboard is unchanged. The derate caption needs the command (`derate`, `SUCCESSFUL`, `max_kw` 11) bound to the
-  triggering alarm's identity and cycle, and "Cooler now. Alarm cleared." needs the same command; without the link both stay unmet
-  and the page shows "Running hot. Alarm raised." Page 4's `start-pump sent` rail node binds the same way.
+  cause of kind `RULE`, or none, names no alarm at all. A complete alarm read older than the detection is followed by a newer one
+  within a poll, so the command waits for that; with no complete alarm read at all it does not wait, and is emitted unresolved and
+  tied to its alarm when the reads come back. A cause is resolved once per new alarm read, never per frame
+  (`DirectorObserver.CauseResolutions`), a cause that cannot be read (no kind, no usable `detectedAt`) costs the link and is
+  reported, never the command's own states, and a cycle once named is not moved by the alarm's later life. `detectedAt` carries up to
+  nine fractional digits; it is cut (never rounded up) to the 100 ns this runtime holds, so it still meets an alarm stored at
+  microseconds. The alarm is looked for in the run's alarm read, which is the read the page's trigger comes from: an alarm that
+  read does not hold cannot start the page either.
+- **What shows.** The derate caption needs the command (`derate`, `SUCCESSFUL`, `max_kw` 11) bound to the triggering alarm's identity
+  and cycle, and "Cooler now. Alarm cleared." needs the same command; without the link both stay unmet and the page shows "Running
+  hot. Alarm raised." Page 4's `start-pump sent` rail node binds the same way.
+- **The page's timing on a real day.** The first live day with the join in place bound the command to its alarm and still showed
+  only "Alarm raised." The rule averages a minute of readings, so the alarm is raised about forty seconds after the overheating
+  starts at 14:00, and the scene sees it, and the command a moment later, some 45 s after the page is staged: in the page's second
+  shot. The derate caption belongs to the first shot and was offered for 40 s from that shot's start, so its offer had run out four
+  seconds before there was anything to say. The first shot now holds its offer for 80 s (`holdMaxS`), the page's window runs to
+  15:45 so the alarm's clearing (about 15:25) falls inside it, and "Running hot. Alarm raised." carries `unlessShown: derate`: a
+  caption is no longer offered once the stronger one it stands in for has been shown in that presentation of the page
+  (`StoryCaption.UnlessShown`, which must name another claim of the page). On a live day the page reads "Running hot. Alarm
+  raised.", then "Running hot. The platform tells it to derate.", then "Cooler now. Alarm cleared."; without the link it keeps to
+  the first. The authored timeline the other director tests run (alarm at 14:00 sharp) shows what it did.
 - **Who can read a cause.** The platform serves a command's cause to a reader that holds `device:read` and `alarm:read`
   (`location:read` too for a rule that fires on position) and is not scoped to a customer; to any other reader it is `null`, and the
   scene falls back. The scene reads with the token the runner serves, a tenant-admin member, which is all of that.
   `hack/harborpulse-rig.sh run` now checks each sim's served token before the day starts and fails the run on one that could not
-  read a cause; its offline controls feed the check a scoped token and tokens missing each authority, which it must refuse.
+  read a cause: any `scp` claim, authorities that are not a list of strings, or a list without the three and without `*`. Its
+  offline controls feed the check each of those, which it must refuse.
 - **A control.** `-hp-control-no-cause` makes a live player read commands without their cause (`DirectorCommandsNoCause`). The banner
   turns to `TEST CONTROL: CONTROL command cause not read`, and every claim that needs the link must fall back.
 - An instance older than the cause (before v1.9) refuses the command read's `cause` selection: the commands probe fails, which the
@@ -1063,9 +1079,13 @@ recorded with it, and the director reads that.
 no originator, another key, no alarm, raised after the detection, cleared before it and at it, no device id, no alarm key), each
 reported unresolved with the command still evidence; a `RULE` cause and no cause; the wait for an alarm read that reaches the
 detection; an earlier cycle counting only when it was seen cleared after the detection; a bound cycle surviving a re-raise;
-nanosecond instants; and, from the observer's records through the storyboard's own predicates, the derate caption holding with the
-link and "Running hot. Alarm raised." holding without it. `ControlsChangeOnlyDeclaredEmittedOutputs("command-cause-not-read")` runs
-a whole day without the link: only page 3b's two caption slots and page 4's `start-pump sent` node change.
+nanosecond instants; a command with no alarm read to resolve it against, emitted and later tied; a cause with no kind or no usable
+time; one resolution per alarm read over thirty frames; and, from the observer's records through the storyboard's own predicates,
+the derate caption holding with the link and "Running hot. Alarm raised." holding without it. Three more run page 3b through the
+scheduler on a real day's timing: with the link the three captions in order (and the weaker one never after the stronger, when
+both are read in one frame), without it "Alarm raised." alone, and under U7's 40 s the derate caption absent, as the live day
+showed. `ControlsChangeOnlyDeclaredEmittedOutputs("command-cause-not-read")` runs a whole authored day without the link: only page
+3b's two caption slots and page 4's `start-pump sent` node change.
 
 ### The six
 

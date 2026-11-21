@@ -112,13 +112,60 @@ namespace DeviceChain.Harborpulse.Tests
         {
             // An alarm read taken before the detection cannot show the cycle the detection met, whatever it holds.
             DirectorReadSnapshot snapshot = null; var obs = new List<Observation>(); var adapter = new DirectorObserver(Kit.Layout(), () => snapshot);
-            snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 13.99, Page(HotAlarm(raised: 13.5))), Read("commands", 14.1, Page(Derate(Cause()))) });
-            adapter.Update(Inputs(14.1), obs.Add, _ => { });
+            // (the read is three seconds old, so it is a healthy one: a newer one is on its way)
+            snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 13.99, Page(HotAlarm(raised: 13.5))), Read("commands", 14.04, Page(Derate(Cause(), "QUEUED"))) });
+            adapter.Update(Inputs(14.04), obs.Add, _ => { });
             Assert.That(obs.Any(o => o.Kind == "command"), Is.False);
             snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 14.11, Page(HotAlarm(raised: 13.5))), Read("commands", 14.11, Page(Derate(Cause()))) });
             adapter.Update(Inputs(14.11), obs.Add, _ => { });
             Assert.That(obs.Where(o => o.Kind == "command").All(o => o.Field("alarmToken") == "alarm-hot" && o.Cycle == Ts(13.5)), Is.True);
             Assert.That(obs.Count(o => o.Kind == "command"), Is.EqualTo(3));
+        }
+        [Test]
+        public void WithNoAlarmReadAtAllTheCommandIsStillEvidenceAndIsTiedWhenTheReadsComeBack()
+        {
+            // An alarm read that fails must not make a command that was read disappear: there is nothing to wait for.
+            DirectorReadSnapshot snapshot = null; var obs = new List<Observation>(); var adapter = new DirectorObserver(Kit.Layout(), () => snapshot);
+            snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 14.1, Page(HotAlarm()), error: "HTTP 503"), Read("commands", 14.1, Page(Derate(Cause()))) });
+            adapter.Update(Inputs(14.1), obs.Add, _ => { });
+            AssertUnlinked(obs); Assert.That(obs.Where(o => o.Kind == "command").All(o => o.Field("causeUnresolved").Contains("no alarm read")), Is.True);
+            snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 14.15, Page(HotAlarm())), Read("commands", 14.15, Page(Derate(Cause()))) });
+            adapter.Update(Inputs(14.15), obs.Add, _ => { });
+            var tied = obs.Where(o => o.Kind == "command" && o.Field("alarmToken") == "alarm-hot").ToArray();
+            Assert.That(tied.Select(o => o.Status), Is.EquivalentTo(new[] { "QUEUED", "SENT", "SUCCESSFUL" })); Assert.That(tied.All(o => o.Cycle == Ts(14) && o.Field("causeUnresolved") == null), Is.True);
+        }
+        [TestCase("no-kind", "no kind")]
+        [TestCase("no-detected-at", "cannot be read")]
+        [TestCase("bad-detected-at", "cannot be read")]
+        public void ACauseThatCannotBeReadCostsTheLinkNotTheCommand(string fault, string why)
+        {
+            var cause = fault == "no-kind" ? Cause().Replace("\"kind\":\"ALARM\",", "") : fault == "no-detected-at" ? Cause().Replace("\"detectedAt\":" + Q(Ts(14)) + ",", "") : Cause(detectedAt: "yesterday");
+            var snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 14.1, Page(HotAlarm())), Read("commands", 14.1, Page(Derate(cause))) });
+            var obs = new List<Observation>(); var adapter = new DirectorObserver(Kit.Layout(), () => snapshot);
+            adapter.Update(Inputs(14.1), obs.Add, _ => { });
+            AssertUnlinked(obs);
+            Assert.That(obs.Where(o => o.Kind == "command").All(o => o.Field("causeUnresolved").Contains(why)), Is.True);
+            Assert.That(adapter.Problems.Any(p => p.StartsWith("commands: ", StringComparison.Ordinal)), Is.True, "and it is reported");
+        }
+        [Test]
+        public void ACauseIsResolvedOncePerAlarmReadNotOncePerFrame()
+        {
+            DirectorReadSnapshot snapshot = null; var obs = new List<Observation>(); var adapter = new DirectorObserver(Kit.Layout(), () => snapshot);
+            // unresolved (the alarm's cycle began after the detection): the same reads, frame after frame, resolve it once
+            snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 14.1, Page(HotAlarm(raised: 14.05))), Read("commands", 14.1, Page(Derate(Cause()))) });
+            for (var i = 0; i < 30; i++) adapter.Update(Inputs(14.1 + i / 6000.0), obs.Add, _ => { });
+            Assert.That(adapter.CauseResolutions, Is.EqualTo(1));
+            Assert.That(obs.Count(o => o.Kind == "command"), Is.EqualTo(3)); AssertUnlinked(obs);
+            // waiting (the alarm read is older than the detection): the same
+            var waiting = new DirectorObserver(Kit.Layout(), () => snapshot); var none = new List<Observation>();
+            snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 13.99, Page(HotAlarm())), Read("commands", 14.04, Page(Derate(Cause()))) });
+            for (var i = 0; i < 30; i++) waiting.Update(Inputs(14.04 + i / 6000.0), none.Add, _ => { });
+            Assert.That(waiting.CauseResolutions, Is.EqualTo(1)); Assert.That(none.Any(o => o.Kind == "command"), Is.False);
+            // a newer alarm read is a reason to try again, and a bound command is never tried again
+            snapshot = new DirectorReadSnapshot(new[] { Read("alarms", 14.2, Page(HotAlarm())), Read("commands", 14.2, Page(Derate(Cause()))) });
+            for (var i = 0; i < 30; i++) waiting.Update(Inputs(14.2 + i / 6000.0), none.Add, _ => { });
+            Assert.That(waiting.CauseResolutions, Is.EqualTo(2));
+            Assert.That(none.Where(o => o.Kind == "command").All(o => o.Field("alarmToken") == "alarm-hot"), Is.True); Assert.That(none.Count(o => o.Kind == "command"), Is.EqualTo(3));
         }
         [TestCase(true)]
         [TestCase(false)]
@@ -187,6 +234,69 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(Holds(store, trigger, "cool"), Is.False);
             Assert.That(Holds(store, trigger, "hot-only"), Is.True);
             Assert.That(string.Join(" ", DirectorKit.Story().Page("3b").Captions.Single(c => c.Id == "hot-only").Lines), Is.EqualTo("Running hot. Alarm raised."));
+        }
+        // Page 3b on a day's real timing. The rule averages a minute of readings, so the alarm is raised some forty seconds after the
+        // overheating starts and the scene sees it (and the command, a moment later) about 45 s after the page is staged at 14:00: in
+        // the page's SECOND shot. U7's storyboard offered the derate caption for 40 s from the first shot's start, so on a live day it
+        // had expired before there was anything to say, and the page said "Alarm raised." whatever the platform had recorded.
+        static string[] Page3bCaptions(bool linked, double commandLagS, string story = null)
+        {
+            var layout = Kit.Layout(); var scheduler = new Scheduler(Storyboard.Parse(story ?? DirectorKit.StoryText(), new PresentationMap(layout)), layout);
+            double Sim(double wall) => 6 + wall * 24 / layout.DayLengthSeconds;
+            const double seen = 524, cleared = 566; // 14:44 and 15:26
+            var alarm = new Dictionary<string, string> { ["alarmToken"] = "alarm-hot" };
+            var command = new Dictionary<string, string> { ["max_kw"] = "11", ["cause"] = linked ? "ALARM" : "RULE" }; if (linked) command["alarmToken"] = "alarm-hot";
+            var source = new[] {
+                DirectorKit.O("alarm", Charger, Hot, "RAISED", Sim(seen), seen, "alarm-hot", "cycle-hot", fields: alarm, occurred: seen - 9),
+                DirectorKit.O("command", Charger, "derate", "SUCCESSFUL", Sim(seen + commandLagS), seen + commandLagS, "derate-real", linked ? "cycle-hot" : "", fields: command, occurred: seen - .2, command: "derate-real"),
+                DirectorKit.O("measure", Charger, "max_kw", "", Sim(seen + 6), seen + 6, "cap-reading", "cycle-hot", fields: new Dictionary<string, string> { ["value"] = "11" }),
+                DirectorKit.O("alarm", Charger, Hot, "CLEARED", Sim(cleared), cleared, "alarm-hot", "cycle-hot", fields: alarm, occurred: cleared - 7),
+            };
+            var store = new ObservationStore();
+            for (var wall = 474; wall <= 600; wall++) {
+                foreach (var o in source.Where(o => o.ObservedAtS <= wall)) store.Add(o);
+                foreach (var stream in new[] { "alarms", "notifications", "credentials", "pump", "measurements" }) store.AddCoverage(new CoverageInterval("run", stream, 6, Sim(wall), false));
+                scheduler.Tick(new DirectorSample("run", Sim(wall), wall), store);
+            }
+            Assert.That(scheduler.Log.Where(e => e.Kind == "shot" && e.Page == "3b").Select(e => e.Value), Is.EqualTo(new[] { "3b-1", "3b-2", "3b-3" }));
+            return scheduler.Log.Where(e => e.Kind == "caption" && e.Page == "3b").Select(e => e.Value.Replace("\n", " ")).ToArray();
+        }
+        const string Derates = "Running hot. The platform tells it to derate.", Raised = "Running hot. Alarm raised.", Cooler = "Cooler now. Alarm cleared.";
+        [Test]
+        public void OnADaysRealTimingTheDerateCaptionShowsWhenTheCommandIsTiedToTheAlarm()
+        {
+            // the command is read a moment after the alarm: "alarm raised" first, then the stronger statement, then the outcome
+            Assert.That(Page3bCaptions(true, 1), Is.EqualTo(new[] { Raised, Derates, Cooler }));
+            // read in the same frame: the stronger statement at once, and the weaker one never after it
+            Assert.That(Page3bCaptions(true, 0), Is.EqualTo(new[] { Derates, Cooler }));
+            // a few seconds late (a slow poll): still shown
+            Assert.That(Page3bCaptions(true, 5), Is.EqualTo(new[] { Raised, Derates, Cooler }));
+        }
+        [Test]
+        public void OnADaysRealTimingThePageKeepsToAlarmRaisedWhenTheLinkIsAbsent()
+        {
+            // the same command with no alarm named: never "the platform tells it", never "cooler now" (which needs the same command)
+            var shown = Page3bCaptions(false, 1);
+            Assert.That(shown, Is.Not.Empty); Assert.That(shown.Distinct(), Is.EqualTo(new[] { Raised }));
+        }
+        [Test]
+        public void TheSameDayUnderU7sStoryboardNeverSaidThePlatformDerated()
+        {
+            // U7's page: the derate caption offered for 40 s, and "alarm raised" free to follow it
+            var u7 = DirectorKit.StoryText().Replace("\r\n", "\n");
+            var first = u7.IndexOf("\"id\": \"3b-1\"", StringComparison.Ordinal); var max = u7.IndexOf("\"holdMaxS\": 80", first, StringComparison.Ordinal);
+            Assert.That(first > 0 && max > first && max - first < 400, Is.True, "the first shot of page 3b holds its caption's offer for 80 s");
+            u7 = u7.Substring(0, max) + "\"holdMaxS\": 40" + u7.Substring(max + "\"holdMaxS\": 80".Length);
+            Assert.That(Page3bCaptions(true, 1, u7), Does.Not.Contain(Derates), "the check sees what a live day showed");
+        }
+        [Test]
+        public void UnlessShownMustNameAnotherClaimOfThePage()
+        {
+            var story = DirectorKit.StoryText(); var map = new PresentationMap(Kit.Layout());
+            Assert.That(DirectorKit.Story().Page("3b").Captions.Single(c => c.Id == "hot-only").UnlessShown, Is.EqualTo("derate"));
+            Assert.That(DirectorKit.Story().Pages.SelectMany(p => p.Captions).Count(c => c.UnlessShown != null), Is.EqualTo(1), "one caption uses it");
+            foreach (var bad in new[] { "hot-only", "no-such-caption", "" })
+                Assert.Throws<FormatException>(() => Storyboard.Parse(story.Replace("\"unlessShown\": \"derate\"", "\"unlessShown\": \"" + bad + "\""), map), bad);
         }
         [Test]
         public void TheDirectorAsksForTheCauseAndTheControlDoesNot()

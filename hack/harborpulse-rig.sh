@@ -351,11 +351,18 @@ observer_grant() {
   while ((${#payload} % 4)); do payload+="="; done
   claims="$(base64 -d <<<"$payload" 2>/dev/null)" && jq -e 'type == "object"' <<<"$claims" >/dev/null 2>&1 ||
     { echo "its claims are not readable"; return 1; }
-  if jq -e '(.scp // []) | length > 0' <<<"$claims" >/dev/null; then
-    echo "it is scoped to a customer ($(jq -c '.scp' <<<"$claims")): a scoped reader is never served a cause"
+  # An unscoped member's token carries no scp claim at all (the platform omits an empty one), so any scp claim is refused, whatever
+  # it holds: the check must not have to know which values the platform would read as "no scope".
+  if jq -e 'has("scp")' <<<"$claims" >/dev/null; then
+    echo "it carries a customer scope ($(jq -c '.scp' <<<"$claims")): a scoped reader is never served a cause"
     return 1
   fi
-  missing="$(jq -r '(.authorities // []) as $a | if ($a | index("*")) then [] else ["device:read", "alarm:read", "location:read"] - $a end | join(", ")' <<<"$claims")"
+  # The authorities are a list of strings or the check does not pass: a jq that fails on another shape prints nothing, and
+  # "nothing is missing" would read as a pass.
+  jq -e '(.authorities // []) | type == "array" and all(.[]; type == "string")' <<<"$claims" >/dev/null 2>&1 ||
+    { echo "its authorities are not a list of strings"; return 1; }
+  missing="$(jq -r '(.authorities // []) as $a | if ($a | index("*")) then [] else ["device:read", "alarm:read", "location:read"] - $a end | join(", ")' <<<"$claims")" ||
+    { echo "its authorities could not be read"; return 1; }
   [[ -z "$missing" ]] || { echo "it lacks $missing"; return 1; }
 }
 
@@ -385,7 +392,6 @@ offline_controls() {
     red "${c##*:} -> $out"
   done
 
-  local jwt
   jwt() { printf 'h.%s.s' "$(printf '%s' "$1" | base64 | tr -d '=\n' | tr '/+' '_-')"; }
   observer_grant "$(jwt '{"tenant":"t","authorities":["*"]}')" >/dev/null || fail "observer: a tenant-admin token was refused"
   observer_grant "$(jwt '{"tenant":"t","authorities":["device:read","alarm:read","location:read","command:read"]}')" >/dev/null ||
@@ -395,6 +401,11 @@ offline_controls() {
     '{"tenant":"t","authorities":["device:read","location:read","command:read"]}|a token without alarm:read' \
     '{"tenant":"t","authorities":["alarm:read","location:read"]}|a token without device:read' \
     '{"tenant":"t","authorities":["device:read","alarm:read"]}|a token without location:read' \
+    '{"tenant":"t","authorities":["*"],"scp":[]}|a token with an empty customer scope' \
+    '{"tenant":"t","authorities":["*"],"scp":null}|a token with a null customer scope' \
+    '{"tenant":"t","authorities":{}}|a token whose authorities are an object' \
+    '{"tenant":"t","authorities":"*"}|a token whose authorities are one string' \
+    '{"tenant":"t","authorities":["*",7]}|a token with an authority that is no string' \
     '{"tenant":"t"}|a token with no authorities'; do
     if out="$(observer_grant "$(jwt "${c%|*}")")"; then fail "observer: ${c##*|} was accepted"; fi
     red "${c##*|} -> $out"

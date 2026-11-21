@@ -48,6 +48,8 @@ namespace DeviceChain.Harborpulse.Model.Director
             public double CaptionHoldS = 3;
             public bool Provisional;
             public readonly List<Opportunity> Pending = new List<Opportunity>();
+            // the captions shown in this presentation of the page (StoryCaption.UnlessShown)
+            public readonly HashSet<string> Shown = new HashSet<string>(StringComparer.Ordinal);
             public double TriggerS;
             public bool Triggered;
             public bool Recap;
@@ -216,7 +218,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             active = p;
             if (!resume)
             {
-                p.StartedS = now; p.ShotS = now; p.Shot = 0; p.Slot = 0; p.Caption = null;
+                p.StartedS = now; p.ShotS = now; p.Shot = 0; p.Slot = 0; p.Caption = null; p.Shown.Clear();
                 if (p.Recap || p.Reaction)
                 {
                     // A recap uses snapshot proof, rather than re-enacting a planned establishing shot.
@@ -269,9 +271,10 @@ namespace DeviceChain.Harborpulse.Model.Director
                 foreach (var caption in p.Page.Captions.Where(c => c.Kind == "fallback" &&
                     opportunity.Shot.Captions.Contains(c.Id) && c.Slot == opportunity.Slot && c.Id != opportunity.Shown))
                 {
+                    if (caption.UnlessShown != null && p.Shown.Contains(caption.UnlessShown)) continue;
                     var proof = caption.Needs == null ? new EvidenceResult { Holds = true } : Evaluate(caption.Needs, p, store, now, caption.Source);
                     if (!proof.Holds) continue;
-                    Hide(p, now); p.Caption = caption.Id; p.Text = caption.Render(proof); p.CaptionS = now; p.CaptionHoldS = caption.HoldS;
+                    Hide(p, now); p.Caption = caption.Id; p.Text = caption.Render(proof); p.CaptionS = now; p.CaptionHoldS = caption.HoldS; p.Shown.Add(caption.Id);
                     Emit(now, "caption", p, p.Text, proof.Records); return;
                 }
             }
@@ -318,6 +321,8 @@ namespace DeviceChain.Harborpulse.Model.Director
                 var captions = p.Page.Captions.Where(c => opportunity.Shot.Captions.Contains(c.Id) && c.Slot == opportunity.Slot).ToArray();
                 StoryCaption chosen = null; EvidenceResult evidence = new EvidenceResult();
                 foreach (var c in captions.OrderBy(c => c.Kind == "claim" ? 0 : c.Kind == "scenario" ? 1 : c.Kind == "pre" ? 2 : 3)) {
+                    // a weaker statement is not offered after the stronger one it stands in for
+                    if (c.UnlessShown != null && p.Shown.Contains(c.UnlessShown)) continue;
                     var result = c.Needs == null ? new EvidenceResult { Holds = true } : Evaluate(c.Needs, p, store, now, c.Source);
                     if (result.Holds && (p.State != PageState.Fallback || c.Kind == "fallback")) { chosen = c; evidence = result; break; }
                 }
@@ -325,7 +330,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                 var provisional = chosen.Kind != "claim" && captions.Any(c => c.Kind == "claim") && p.State != PageState.Fallback;
                 opportunity.Shown = chosen.Id;
                 if (!provisional) p.Pending.Remove(opportunity);
-                Hide(p, now); p.Caption = chosen.Id; p.Text = chosen.Render(evidence); p.CaptionS = now; p.CaptionHoldS = chosen.HoldS;
+                Hide(p, now); p.Caption = chosen.Id; p.Text = chosen.Render(evidence); p.CaptionS = now; p.CaptionHoldS = chosen.HoldS; p.Shown.Add(chosen.Id);
                 Emit(now, "caption", p, p.Text, evidence.Records);
                 foreach (var o in evidence.Records) consumed.Add(o.EventKey);
                 return;
