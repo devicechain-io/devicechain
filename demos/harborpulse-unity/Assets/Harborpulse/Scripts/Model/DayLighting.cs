@@ -272,10 +272,10 @@ namespace DeviceChain.Harborpulse.Model
         static readonly Rgb NightAmbientGround = new Rgb(0.055, 0.055, 0.06);
 
         /// <summary>How far the ambient floor is lifted when neither the sun nor the moon gives a key light (a storm dusk, the hour before dawn).</summary>
-        public const double KeylessFloorLift = 1.2;
+        public const double KeylessFloorLift = 2.0;
 
         /// <summary>The stops the grade opens up by when the sun is up but weak: dawn, dusk, and under the storm.</summary>
-        public const double DimLightLift = 0.9;
+        public const double DimLightLift = 1.3;
 
         static Rgb Max(Rgb a, Rgb b) => new Rgb(Math.Max(a.R, b.R), Math.Max(a.G, b.G), Math.Max(a.B, b.B));
         static Rgb Add(Rgb a, Rgb b, double k) => new Rgb(a.R + b.R * k, a.G + b.G * k, a.B + b.B * k);

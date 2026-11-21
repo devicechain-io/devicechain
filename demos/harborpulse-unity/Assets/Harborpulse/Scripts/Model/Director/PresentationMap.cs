@@ -307,21 +307,21 @@ namespace DeviceChain.Harborpulse.Model.Director
                 {
                     if (isLamp)
                     {
-                        // A lamp's story is its head: stand 14-18 m off, 25-35 degrees round from the quay's axis, eye 5-6 m, and aim a little
-                        // under the head so the whole lamp, head included, sits in the middle of the frame with the pole running down from it.
-                        double lamp, lampEye, lampFov = 40;
+                        // A lamp's story is its head, 8.3 m above the deck: stand 20-24 m off, 25-35 degrees round from the quay's axis, eye 5-6 m,
+                        // and look up a little (horizon below the middle) so the whole lamp, lantern included, stands against the sky.
+                        double lamp, lampEye, lampFov = 46;
                         switch (suffix)
                         {
-                            case "kiosk-ext": lamp = 17; lampEye = 5.5; break;
-                            case "pair": lamp = 16; lampEye = 5.5; break;
-                            case "close": lamp = 14; lampEye = 5; break;
-                            case "wide": lamp = 18; lampEye = 6; lampFov = 42; break;
-                            case "promenade": lamp = 17; lampEye = 5.5; break;
-                            default: lamp = 15; lampEye = 5; break;
+                            case "kiosk-ext": lamp = 23; lampEye = 5.5; break;
+                            case "pair": lamp = 22; lampEye = 5.5; break;
+                            case "close": lamp = 20; lampEye = 5; break;
+                            case "wide": lamp = 24; lampEye = 6; lampFov = 48; break;
+                            case "promenade": lamp = 23; lampEye = 5.5; break;
+                            default: lamp = 21; lampEye = 5; break;
                         }
                         var turn = LampTurn(pair.Family) * Math.PI / 180;
                         var dx2 = wx * Math.Cos(turn) - wz * Math.Sin(turn); var dz2 = wx * Math.Sin(turn) + wz * Math.Cos(turn);
-                        poses.Add("pose:" + pair.Family + ":" + suffix, Stand(a.X + dx2 * lamp, lampEye, a.Z + dz2 * lamp, a.X, a.Z, lampFov, .39));
+                        poses.Add("pose:" + pair.Family + ":" + suffix, Stand(a.X + dx2 * lamp, lampEye, a.Z + dz2 * lamp, a.X, a.Z, lampFov, LampHorizon));
                         continue;
                     }
                     // Ground-level views: the eye is 5-8 m above the deck and the look is flattened until the horizon falls about
@@ -363,6 +363,9 @@ namespace DeviceChain.Harborpulse.Model.Director
         static double Sidestep(string family) => family == "pump-east" || family == "pump-basin" ? 4 : family == "chargers-east" ? -16 : 0;
 
         /// <summary>A pose from an eye position looking at a ground point's x and z, its pitch chosen so the horizon falls at <paramref name="horizonFromTop"/> of the frame.</summary>
+        /// <summary>Where the horizon falls in a lamp pose, from the top: below the middle, so the lantern has sky behind it.</summary>
+        public const double LampHorizon = .52;
+
         static CameraPose Stand(double camX, double eye, double camZ, double subjectX, double subjectZ, double vfov, double horizonFromTop)
         {
             var distance = Math.Sqrt((subjectX - camX) * (subjectX - camX) + (subjectZ - camZ) * (subjectZ - camZ));
