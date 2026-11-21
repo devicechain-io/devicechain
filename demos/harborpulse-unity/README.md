@@ -878,7 +878,7 @@ build had only ever been compiled. This supersedes the U5 numbers for the 9:16 H
   the water shader and the sky's own below-horizon part draw the same function, so far ground fades to a tone that is darker
   than the sky above it, the land keeps an edge against the horizon, and no seam shows where the terrain or the sea ends.
 - **The sea fades too** (`SkyState.SeaTransmission`). Open water now takes the scenery's distance haze (from 350 m out, no
-  height term): it was dark to its far edge, which drew a hard line under the sky and along the hazed coast in any view that
+  height term) in place of the engine's fog: it was dark to its far edge, which drew a hard line under the sky and along the hazed coast in any view that
   held the sea horizon. From HOME the harbour's own water is unchanged (transmission above 0.95 at 700 m).
 - **The sky is held back from the exposure lift** (`SkyState.SkyGain`). The grade opens up by `ExposureLift` for a dim town at
   dawn, at dusk and under the storm; the sky, its cloud and the haze are now multiplied by 2^(-0.8 x the dim-light and storm
@@ -897,10 +897,10 @@ build had only ever been compiled. This supersedes the U5 numbers for the 9:16 H
 - **9:16 HOME.** (-520, 260, 30) looking east at (0, 67.1, 10), vertical FOV 52: the horizon is 12 % of the way down
   (`PresentationMap.PortraitHorizon`), so the sky is in the frame, and so is the sunrise (the sun rises due east). All 37
   devices stand between 40 % and 90 % of the way down; above them are the eastern woods, the foothills and range in the
-  haze, the sea horizon and the sky. The masks measure sky SKYP % (it was 4.5 %) and water WATERP %.
+  haze, the sea horizon and the sky. The masks measure sky 19.5 % (it was 4.5 %) and water 25.3 %.
 - **Rocky foreshore** (`CoastalTerrain.ShoreReach`, `ShoreBuilder`). The open coast is a straight line in the terrain's grid.
   A faceted granite foreshore now runs out from it, 6-60 m wide along most of the coast and up to 190 m at five named points,
-  dipping under the lowest water at its seaward edge so the tide draws the waterline; eight skerries stand off it; and the
+  level with the land's own edge at the coast and 3 m under the datum at its seaward edge, so the tide draws the waterline; eight skerries stand off it; and the
   terrain's own coastal strip is turf and heath of uneven width instead of forest floor ruled off at the water. It starts
   290 m either side of the harbour's middle, clear of the breakwater roots and the depot, and nothing of it is inside the
   16:9 HOME frame, whose water share and masks are untouched.
@@ -923,7 +923,10 @@ build had only ever been compiled. This supersedes the U5 numbers for the 9:16 H
   `hp-offline`, `hp-portrait`, `hp-frame-stats`, `hp-start-hour`, `hp-speed`, `hp-quit-after-sim`; any other `hp-` key is
   refused, never ignored; nothing in a page address names a file or a runner). WebGL now defaults to the Laptop quality
   tier: the water needs the depth and opaque textures, which the Mobile tier's pipeline asset turns off, and on it the first
-  browser run drew the whole harbour as foam. WEBGLRESULT
+  browser run drew the whole harbour as foam. Run in Chrome on Windows (WebGL 2 through ANGLE on Direct3D 11) from the offline
+  preview at four start hours, the sky, the cloud, the layered haze, the water, the rain, the lamp glow and the bloom all draw
+  as they do in the Windows player. No other browser, no phone and no live link have been tried, and no frame time was taken
+  there.
 - **Stills.** A shot in `-hp-stills` may be a free camera, `hour:@x/y/z/lookX/lookY/lookZ/fov/name`, and `-hp-stills-hud 0`
   renders the scene alone under the burnt-in stamp. Shot indices are 0-12.
 
@@ -937,4 +940,10 @@ truck's near set being a whole truck on the far wheels' places; and the page-add
 `U5CameraTests` now pins the 9:16 HOME's horizon, its sky share and every device in the lower two thirds, and its sky helper
 counts the sea horizon where no land stands in a column.
 
-Measured with the capture rig (Unity 6000.5.3f1, Windows, D3D11): MEASURED
+Measured with the capture rig (Unity 6000.5.3f1, Windows, D3D11): the HOME masks pass at both aspects (16:9 water 40.2 %, sky
+19.1 %, 36 of 37 devices, the truck being in its depot; 9:16 water 25.3 %, sky 19.5 %, 37 of 37). The 16:9 sky was 19.6 % in U5:
+the new ranges fill the ridge's saddles. The world is 901 renderers and 1.06 M vertices (U5: 892 and 1.05 M). Frame time at
+1920x1080 over 120 s, the U5 and U6 players run alternately four times each: the mean of the 10 s windows was 5.27-5.99 ms for U5
+(5.55 on average) and 5.65-5.91 ms for U6 (5.80 on average), so U6 is about a quarter of a millisecond higher, inside the spread
+of U5's own runs. The player's captures of a day page (lamp work), a storm page and a night page (the feeder outage) were read
+frame by frame.
