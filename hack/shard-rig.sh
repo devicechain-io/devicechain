@@ -12,7 +12,7 @@
 #   hack/shard-rig.sh purge   # a tenant of each group is deleted and its DETECT state erased in its
 #                             # group, with no eviction reply refused by the broker; negative control
 #   hack/shard-rig.sh down    # destroy the instance and DELETE the cluster
-#   hack/shard-rig.sh all     # up, place, test, down (down runs even when a step fails)
+#   hack/shard-rig.sh all     # up, place, test, purge, down (down runs even when a step fails)
 #
 # WHAT `test` PROVES, through the ingress and across every service:
 #

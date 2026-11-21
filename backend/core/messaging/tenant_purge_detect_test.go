@@ -503,13 +503,20 @@ func TestACleanReplyDoesNotShortenTheGatherWhileAPartitionIsStillExpected(t *tes
 // must count as answered, and the gather must end on it rather than wait out the window.
 func TestOneReplyAnswersForEverySiblingPartition(t *testing.T) {
 	nc := detectRig(t)
-	respondAs(t, nc, DetectPurgeReply{PartitionId: "singleton", Evicted: 2,
-		Siblings: []DetectPurgeReply{{PartitionId: "g1", Evicted: 3}, {PartitionId: "g2"}}})
+	sub, err := nc.Subscribe(DetectPurgeSubject(detectInstance), func(msg *nats.Msg) {
+		body, _ := json.Marshal(DetectPurgeReply{PartitionId: "singleton", Evicted: 2,
+			Siblings: []DetectPurgeReply{{PartitionId: "g1", Evicted: 3}, {PartitionId: "g2"}}})
+		_ = nc.Publish(msg.Reply, body)
+		// Publish synchronously on the same connection so the full reply always arrives first.
+		body, _ = json.Marshal(DetectPurgeReply{PartitionId: "straggler"})
+		_ = nc.Publish(msg.Reply, body)
+	})
+	require.NoError(t, err)
+	require.NoError(t, nc.Flush())
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
 
-	start := time.Now()
 	res, err := PurgeTenantDetect(context.Background(), nc, detectInstance, "acme",
 		[]string{"singleton", "g1", "g2"})
-	elapsed := time.Since(start)
 
 	require.NoError(t, err)
 	got := map[string]int64{}
@@ -519,10 +526,9 @@ func TestOneReplyAnswersForEverySiblingPartition(t *testing.T) {
 	}
 	assert.Equal(t, map[string]int64{"singleton": 2, "g1": 3, "g2": 0}, got)
 	assert.Len(t, res.Replies, 3)
-	// Not even the straggler window: the last awaited partition arrived in that reply, so there
-	// is nothing left to wait for.
-	assert.Lessf(t, elapsed, detectPurgeQuiesce,
-		"the gather kept waiting (%s) after one reply answered for every expected partition", elapsed)
+	// The full reply satisfied every expected partition, so the gather must stop before
+	// reading the next message, regardless of how long the runner takes to schedule it.
+	assert.NotContains(t, got, "straggler", "the gather kept reading after every expected partition answered")
 }
 
 // TestAFailedSiblingStaysHeld: a sibling carried in a clean parent's reply is weighed on its
