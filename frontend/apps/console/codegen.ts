@@ -29,6 +29,7 @@ const config: CodegenConfig = {
         'src/lib/api/agent-proposals.ts',
         'src/lib/api/automation-reviews.ts',
         'src/lib/api/facet-keys.ts',
+        'src/lib/api/facet-import.ts',
         'src/lib/api/entity-attributes.ts',
         'src/lib/api/browse.ts',
         'src/lib/api/geofences.ts',
