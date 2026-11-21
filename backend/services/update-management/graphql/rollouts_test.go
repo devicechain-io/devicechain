@@ -48,6 +48,8 @@ func TestRolloutOperationsAreGatedByTheirAuthority(t *testing.T) {
 		`mutation { pauseUpdateRollout(token: "r1") { token } }`,
 		`mutation { resumeUpdateRollout(token: "r1") { token } }`,
 		`mutation { abortUpdateRollout(token: "r1") { token } }`,
+		`mutation { promoteUpdateRollout(token: "r1", expectedCohort: 0) { token } }`,
+		`mutation { resumeHaltedUpdateRollout(token: "r1", haltSequence: 1) { token } }`,
 	} {
 		require.Equal(t, auth.ErrForbidden.Error(), code(p.exec(reader, q, nil)), "read does not grant %s", q)
 	}

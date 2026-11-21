@@ -19,6 +19,14 @@ namespace DeviceChain.Harborpulse.Visuals
         static readonly int Metallic = Shader.PropertyToID("_Metallic");
         static readonly int EmissionColor = Shader.PropertyToID("_EmissionColor");
         static readonly int EnvironmentReflections = Shader.PropertyToID("_EnvironmentReflections");
+        static readonly int GlowColor = Shader.PropertyToID("_Color");
+        static readonly int GlowRadius = Shader.PropertyToID("_Radius");
+
+        /// <summary>The glow shader's per-lamp strength (0 dark .. 1 full), set through a property block.</summary>
+        public static readonly int GlowPower = Shader.PropertyToID("_Power");
+
+        /// <summary>The radius of a lit lamp's glow seen close; from far off the shader holds it at a least angle instead.</summary>
+        public const float LampGlowRadiusM = 1.7f;
 
         readonly Shader lit;
         readonly Dictionary<string, Material> byName = new Dictionary<string, Material>(StringComparer.Ordinal);
@@ -112,7 +120,12 @@ namespace DeviceChain.Harborpulse.Visuals
             for (var i = 0; i < 6; i++)
                 Courses[i] = Matte(Make("stone-course-" + i, new Color(0.43f + i * 0.025f, 0.42f + i * 0.023f, 0.39f + i * 0.022f), 0.2f));
             LampOn = Emissive("lamp-on", new Color(1.0f, 0.86f, 0.62f), 4f);
-            LampHalo = Emissive("lamp-halo", new Color(1.0f, 0.80f, 0.55f), 1.2f);
+            var glowShader = Resources.Load<Shader>("HarborGlow");
+            if (glowShader == null) throw new InvalidOperationException("HarborGlow shader missing from Resources");
+            LampHalo = new Material(glowShader) { name = "Harbor/lamp-halo" };
+            LampHalo.SetColor(GlowColor, new Color(1.0f, 0.80f, 0.55f) * 1.15f);
+            LampHalo.SetFloat(GlowRadius, LampGlowRadiusM);
+            byName["lamp-halo"] = LampHalo;
             LampOff = Make("lamp-off", new Color(0.30f, 0.30f, 0.28f), 0.6f);
             LampSilent = Emissive("lamp-silent", new Color(0.45f, 0.30f, 0.65f), 0.6f);
             LampUnknown = Make("lamp-unknown", new Color(0.18f, 0.18f, 0.20f), 0.3f);
@@ -200,7 +213,10 @@ namespace DeviceChain.Harborpulse.Visuals
         public Material TownLamp { get; }
         public Material EastTownLamp { get; }
 
-        /// <summary>The glow round a lit lamp: the lights stand 430 m apart, and without it a lit head is a pixel from the overview.</summary>
+        /// <summary>
+        /// The glow round a lit lamp, on the Harborpulse/Glow shader: a soft round camera-facing disc with no edge (it was a faceted ball, which
+        /// read as a paper lantern up close). The lights stand 430 m apart, and without it a lit head is a pixel from the overview.
+        /// </summary>
         public Material LampHalo { get; }
         public Material LampSilent { get; }
         public Material LampUnknown { get; }

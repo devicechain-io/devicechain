@@ -99,7 +99,7 @@ func TestRestoreAttributeCompetingFirstInsert(t *testing.T) {
 	dev := seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "site", ValueType: "STRING"}})
 	db := api.RDB.DB(ctx)
 	injected := injectCompetingAttributeInsert(t, db)
-	require.NoError(t, api.applyConfigurationDocument(ctx, "dev", dev.ID, `{"site":"north"}`))
+	require.NoError(t, api.applyConfigurationDocument(ctx, "dev", dev.ID, `{"site":"north"}`, "restore"))
 	require.True(t, injected())
 	var rows []EntityAttribute
 	require.NoError(t, db.Find(&rows).Error)
