@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/devicechain-io/dc-microservice/auth"
 )
 
 // segment is the only shape a served-schema path component may take; the URL
@@ -27,7 +29,7 @@ func ServeCapabilities(t testing.TB, w http.ResponseWriter, r *http.Request) boo
 		return false
 	}
 	t.Helper()
-	if r.Header.Get("Accept") != "application/vnd.devicechain.schema+json" || r.Header.Get("Authorization") == "" {
+	if r.Header.Get("Accept") != "application/vnd.devicechain.schema+json" || !hasBearer(r.Header) {
 		t.Error("schema discovery omitted its media type or bearer")
 		http.Error(w, "invalid discovery request", http.StatusUnauthorized)
 		return true
@@ -57,4 +59,9 @@ func ServeCapabilities(t testing.TB, w http.ResponseWriter, r *http.Request) boo
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{"format": 1, "schema": string(schema)})
 	return true
+}
+
+func hasBearer(h http.Header) bool {
+	token, ok := auth.BearerToken(h)
+	return ok && token != ""
 }
