@@ -37,6 +37,8 @@ namespace DeviceChain.Harborpulse.Visuals
             public Vector3 LocalCentre;
             public GameObject Root;
             public bool Shown;
+            /// <summary>The far level's own renderers this set replaces (a vehicle's body boxes): off while the set is shown.</summary>
+            public Renderer[] Hide;
         }
 
         readonly List<Entry> entries = new List<Entry>();
@@ -65,7 +67,7 @@ namespace DeviceChain.Harborpulse.Visuals
         /// ignored while the parent is inactive; the rest are fixed where they were registered.
         /// </summary>
         internal int Register(NearPlan plan, Transform parent, Vector3 localPosition, Quaternion localRotation, NearPalette palette, Material scenery,
-            Func<Vector3, int, Material> windows = null, bool dynamic = false)
+            Func<Vector3, int, Material> windows = null, bool dynamic = false, Renderer[] hide = null)
         {
             plan.Sphere(out var x, out var y, out var z, out var radius);
             var local = localPosition + localRotation * new Vector3(x, y, z);
@@ -74,7 +76,7 @@ namespace DeviceChain.Harborpulse.Visuals
             entries.Add(new Entry
             {
                 Name = plan.Name, Plan = plan, Parent = parent, LocalPosition = localPosition, LocalRotation = localRotation, Palette = palette, Scenery = scenery,
-                Windows = windows, Dynamic = dynamic, LocalCentre = local,
+                Windows = windows, Dynamic = dynamic, LocalCentre = local, Hide = hide,
             });
             if (dynamic) this.dynamic.Add(index);
             return index;
@@ -94,6 +96,12 @@ namespace DeviceChain.Harborpulse.Visuals
                 e.Plan.Sphere(out _, out _, out _, out var r);
                 if (DetailCandidates.Reachable(p.x, p.y, p.z, r, cameras, looks)) Build(e);
             }
+        }
+
+        static void SetFar(Entry e, bool on)
+        {
+            if (e.Hide == null) return;
+            foreach (var r in e.Hide) if (r != null) r.enabled = on;
         }
 
         static void Build(Entry e)
@@ -119,13 +127,14 @@ namespace DeviceChain.Harborpulse.Visuals
                 sw.SetActive(i, e.Parent.gameObject.activeInHierarchy);
             }
             if (!force && !sw.Due(frame, camera.x, camera.y, camera.z)) return;
-            sw.Update(frame, camera.x, camera.y, camera.z);
+            sw.Update(frame, camera.x, camera.y, camera.z, force);
             for (var i = 0; i < entries.Count; i++)
             {
                 var e = entries[i]; var want = sw.IsNear(i);
                 if (want == e.Shown) continue;
                 if (want && e.Root == null) Build(e);
                 if (e.Root != null) e.Root.SetActive(want);
+                SetFar(e, !want);
                 e.Shown = want;
             }
         }
@@ -136,6 +145,7 @@ namespace DeviceChain.Harborpulse.Visuals
             foreach (var e in entries)
             {
                 if (e.Root != null) e.Root.SetActive(false);
+                SetFar(e, true);
                 e.Shown = false;
             }
         }
