@@ -69,7 +69,8 @@ var ErrAckFloorPolicyMismatch = errors.New("messaging: durable exists with an ac
 // move a reader onto this option.
 //
 // The durable is named AckFloorDurableName, not DurableName: see there. The ordinary-named
-// durable the reader replaced is deleted at the start of each leadership term (BindTerm).
+// durable the reader replaced is deleted at the start of each leadership term (BindTerm),
+// on the original stream only (group zero when sharded). Nonzero groups started with AckAll.
 //
 // Messages from such a reader refuse Message.Ack (ErrAckFloorReader). It cannot be combined
 // with ReaderWithDeliverNew or ReaderWithCapacity; NewReader rejects the combination.
@@ -131,6 +132,11 @@ const ackFloorDurableTail = "_ackfloor"
 // every process start.
 func (r *natsReader) retireLegacyDurable() {
 	if !r.ackFloor() {
+		return
+	}
+	// Only the original stream ever held the explicit-ack durable. Nonzero
+	// groups started with AckAll, so there is no legacy consumer to retire there.
+	if r.shardGroup != nil && *r.shardGroup > 0 {
 		return
 	}
 	legacy := DurableName(r.nmgr.Microservice.InstanceId, r.nmgr.Microservice.FunctionalArea, r.suffix)
