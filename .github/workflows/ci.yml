@@ -3228,6 +3228,18 @@ jobs:
           hack/check-gke-extraction-plans.sh --self-test
           hack/check-gke-extraction-plans.sh deploy/gke/fixtures
 
+      # The fleet roots (deploy/fleet/*): what a manager runs, so enforced state and plan encryption
+      # and a declared backend are checked, not trusted. fmt, init -backend=false, validate and
+      # `tofu test` run WITH a throwaway pbkdf2 key; then, on a copy with no backend block, a plan
+      # with NO key must be refused by the encryption configuration and the same plan WITH the key
+      # must succeed (a gate that only refuses is an outage), and `init` with the backend block and
+      # no backend configuration must fail (no implicit local backend). The static half
+      # (`enforced = true` under both state and plan, the closed variable list, provider set and
+      # outputs) is deploy/fleet_roots_test.go, in the `deploy` module's go job.
+      - name: fleet roots
+        working-directory: .
+        run: hack/check-fleet-roots.sh
+
       # The provider's max_history default is 0, which keeps every revision of every
       # release forever. That is not a setting anyone chose, so a release added
       # without one is the expected mistake rather than an unusual one. The self-test
