@@ -243,7 +243,9 @@ namespace DeviceChain.Harborpulse.Tests
         {
             var layout = Kit.Layout(); var scheduler = new Scheduler(Storyboard.Parse(story ?? DirectorKit.StoryText(), new PresentationMap(layout)), layout);
             double Sim(double wall) => 6 + wall * 24 / layout.DayLengthSeconds;
-            const double seen = 524, cleared = 566; // 14:44 and 15:26
+            // 14:44, and the clearing read at 15:41: the alarm clears on a minute's average and the scene reads that some ten seconds
+            // after the platform's time for it, which on the second live day was 55 s after the alarm was first seen
+            const double seen = 524, cleared = 581;
             var alarm = new Dictionary<string, string> { ["alarmToken"] = "alarm-hot" };
             var command = new Dictionary<string, string> { ["max_kw"] = "11", ["cause"] = linked ? "ALARM" : "RULE" }; if (linked) command["alarmToken"] = "alarm-hot";
             var source = new[] {
@@ -286,6 +288,11 @@ namespace DeviceChain.Harborpulse.Tests
             var u7 = DirectorKit.StoryText().Replace("\r\n", "\n");
             var first = u7.IndexOf("\"id\": \"3b-1\"", StringComparison.Ordinal); var max = u7.IndexOf("\"holdMaxS\": 80", first, StringComparison.Ordinal);
             Assert.That(first > 0 && max > first && max - first < 400, Is.True, "the first shot of page 3b holds its caption's offer for 80 s");
+            // and the last shot waits as long for the clearing: with U7's 40 s there the day ends on the derate caption
+            var last = u7.IndexOf("\"id\": \"3b-3\"", StringComparison.Ordinal); var lastMax = u7.IndexOf("\"holdMaxS\": 80", last, StringComparison.Ordinal);
+            Assert.That(last > max && lastMax > last && lastMax - last < 400, Is.True);
+            var shortLast = u7.Substring(0, lastMax) + "\"holdMaxS\": 40" + u7.Substring(lastMax + "\"holdMaxS\": 80".Length);
+            Assert.That(Page3bCaptions(true, 1, shortLast), Is.EqualTo(new[] { Raised, Derates }), "the clearing is read after a 40 s offer has run out");
             u7 = u7.Substring(0, max) + "\"holdMaxS\": 40" + u7.Substring(max + "\"holdMaxS\": 80".Length);
             Assert.That(Page3bCaptions(true, 1, u7), Does.Not.Contain(Derates), "the check sees what a live day showed");
         }

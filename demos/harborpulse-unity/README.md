@@ -1058,8 +1058,10 @@ recorded with it, and the director reads that.
   only "Alarm raised." The rule averages a minute of readings, so the alarm is raised about forty seconds after the overheating
   starts at 14:00, and the scene sees it, and the command a moment later, some 45 s after the page is staged: in the page's second
   shot. The derate caption belongs to the first shot and was offered for 40 s from that shot's start, so its offer had run out four
-  seconds before there was anything to say. The first shot now holds its offer for 80 s (`holdMaxS`), the page's window runs to
-  15:45 so the alarm's clearing (about 15:25) falls inside it, and "Running hot. Alarm raised." carries `unlessShown: derate`: a
+  seconds before there was anything to say. The first shot now holds its offer for 80 s (`holdMaxS`). The last shot holds its own
+  for 80 s too and the page's window runs to 16:00: the alarm clears on a minute's average at about 15:25 and the scene reads
+  that some ten seconds after the platform's time for it, which on the second live day was 0.7 s after a 40 s offer had run out.
+  "Running hot. Alarm raised." carries `unlessShown: derate`: a
   caption is no longer offered once the stronger one it stands in for has been shown in that presentation of the page
   (`StoryCaption.UnlessShown`, which must name another claim of the page). On a live day the page reads "Running hot. Alarm
   raised.", then "Running hot. The platform tells it to derate.", then "Cooler now. Alarm cleared."; without the link it keeps to

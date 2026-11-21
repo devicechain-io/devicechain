@@ -948,7 +948,7 @@
       "priority": 60,
       "windowSim": [
         14,
-        15.75
+        16
       ],
       "plannedSim": 14,
       "preRollS": 3,
@@ -1002,7 +1002,7 @@
           "to": "pose:chargers-basin:wide",
           "moveS": 0,
           "holdMinS": 6,
-          "holdMaxS": 40,
+          "holdMaxS": 80,
           "cueSim": 15,
           "until": null,
           "captions": [
