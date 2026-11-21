@@ -411,6 +411,10 @@ enum UpdateRolloutState {
 
 """Why a rollout is paused."""
 enum UpdateRolloutPauseReason {
+    """The trailing-window failure ratio exceeded its configured percentage; an explicit override is required."""
+    FAILURE_RATE
+    """The current cohort succeeded and awaits explicit promotion."""
+    COHORT_READY
     """An operator paused it."""
     OPERATOR
     """The number of failed or unknown devices reached the rollout's failure threshold."""
@@ -459,6 +463,18 @@ type UpdateRolloutProgress {
 
 """An artifact assigned to the devices of a group, a capped number at a time."""
 type UpdateRollout {
+    """Ordered immutable cohort plan; empty for an ordinary rollout."""
+    cohorts: [UpdateRolloutCohort!]!
+    """Zero-based current cohort, or zero for an ordinary rollout."""
+    currentCohort: Int!
+    """Optional trailing-window failure policy."""
+    failureRate: UpdateRolloutFailureRate
+    """Monotonic identifier of the latest failure-rate halt; zero before any halt."""
+    haltSequence: Int!
+    """Bad outcomes recorded at the latest rate halt; retained after override."""
+    haltFailures: Int!
+    """Sample denominator recorded at the latest rate halt; retained after override."""
+    haltSamples: Int!
     """Internal identifier."""
     id: ID!
     """The rollout's token."""
@@ -499,6 +515,8 @@ type UpdateRollout {
 
 """One device of a rollout's target set."""
 type UpdateRolloutTarget {
+    """Frozen zero-based cohort index; zero for an ordinary rollout."""
+    cohort: Int!
     """The device's token."""
     deviceToken: String!
     """Where the device stands."""
@@ -517,6 +535,10 @@ type UpdateRolloutTarget {
 
 """A rollout to declare. It is created DRAFT and does nothing until it is started."""
 input UpdateRolloutCreateRequest {
+    """Optional ordered cohorts, up to 20. Explicit canaries precede increasing cumulative percentages ending at 100. Every cohort must be nonempty at freeze."""
+    cohorts: [UpdateRolloutCohortInput!]
+    """Optional failure-ratio policy; omitted preserves existing behavior."""
+    failureRate: UpdateRolloutFailureRateInput
     """The rollout's token, unique in the tenant."""
     token: String!
     """A label; the token when omitted."""
@@ -529,6 +551,50 @@ input UpdateRolloutCreateRequest {
     maxInFlight: Int!
     """Pause the rollout once this many devices failed or have an unknown outcome. Omit it to never pause on failures."""
     failureThreshold: Int
+}
+
+"""A named cohort in an immutable rollout plan."""
+type UpdateRolloutCohort {
+    """Unique cohort label."""
+    name: String!
+    """Explicit canary device tokens; empty for a percentage cohort."""
+    deviceTokens: [String!]!
+    """Cumulative percentage of the frozen fleet; zero for explicit canaries."""
+    percentage: Int!
+    """Require operator promotion after this cohort succeeds."""
+    manualPromotion: Boolean!
+}
+
+"""Select explicit canaries or a cumulative fleet percentage, rounded up."""
+input UpdateRolloutCohortInput {
+    """Unique nonempty cohort label, up to 128 bytes."""
+    name: String!
+    """Explicit members of the frozen fleet, without duplicates across cohorts."""
+    deviceTokens: [String!]! = []
+    """Cumulative fleet percentage from 1 to 100; zero selects explicit devices."""
+    percentage: Int! = 0
+    """Require explicit promotion after every target confirms success."""
+    manualPromotion: Boolean! = false
+}
+
+"""A trailing-window safety gate using server receipt times. FAILED, TIMED_OUT and UNKNOWN are bad; UPDATED is good. Other outcomes do not enter the denominator."""
+type UpdateRolloutFailureRate {
+    """Halt when the bad-outcome percentage strictly exceeds this value."""
+    percentage: Int!
+    """Trailing observation window, in seconds."""
+    windowSeconds: Int!
+    """Minimum completed or unknown sample before evaluating the ratio."""
+    minimumSamples: Int!
+}
+
+"""Opt-in trailing-window safety policy. UNKNOWN also continues to occupy a concurrency slot."""
+input UpdateRolloutFailureRateInput {
+    """Bad-outcome threshold from 1 to 100; equality does not halt."""
+    percentage: Int!
+    """Window from 1 to 86400 seconds, inclusive, using server update times."""
+    windowSeconds: Int!
+    """Required sample from 1 to 10000; pending and unfinished devices cannot count as success."""
+    minimumSamples: Int!
 }
 
 """Criteria for searching rollouts."""
@@ -642,6 +708,22 @@ type Query {
 
 """The update-management write operations."""
 type Mutation {
+    """Promote a successful cohort under artifact:write. expectedCohort is zero-based; repeating it never advances twice. Every preceding target must have confirmed UPDATED."""
+    promoteUpdateRollout(
+        """Rollout token."""
+        token: String!
+        """The current cohort the operator intends to leave."""
+        expectedCohort: Int!
+    ): UpdateRollout!
+    """Explicitly override one numbered failure-rate halt under artifact:write. Repeated calls are idempotent; stale halt numbers are refused. Evidence is retained and a new bad outcome can halt again."""
+    resumeHaltedUpdateRollout(
+        """Rollout token."""
+        token: String!
+        """Latest haltSequence observed by the operator."""
+        haltSequence: Int!
+        """Optional higher absolute failure-count threshold, if that limit also prevents resuming."""
+        failureThreshold: Int
+    ): UpdateRollout!
     """
     Declare an artifact in the UPLOADING state. Requires artifact:write. The compatible
     profiles are checked against device-management, and the size against the artifact and

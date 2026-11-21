@@ -28,6 +28,8 @@ var RolloutStates = []string{RolloutDraft, RolloutRunning, RolloutPaused, Rollou
 const (
 	PauseOperator         = "OPERATOR"
 	PauseFailureThreshold = "FAILURE_THRESHOLD"
+	PauseFailureRate      = "FAILURE_RATE"
+	PauseCohortReady      = "COHORT_READY"
 	// PauseArtifactNotAssignable: the artifact was retired, or lost the trust this instance
 	// requires (its only active signer was revoked), while the rollout was running.
 	PauseArtifactNotAssignable = "ARTIFACT_NOT_ASSIGNABLE"
@@ -68,21 +70,29 @@ type UpdateRollout struct {
 	UpdatedAt time.Time
 	rdb.TenantScoped
 
-	Token            string `gorm:"not null;size:128"`
-	Name             string `gorm:"not null;size:128"`
-	ArtifactId       uint   `gorm:"not null;index"`
-	GroupToken       string `gorm:"not null;size:128"`
-	GroupVersion     sql.NullInt32
-	MaxInFlight      int `gorm:"not null"`
-	FailureThreshold sql.NullInt32
-	State            string `gorm:"not null;size:16"`
-	PauseReason      string `gorm:"not null;size:32"`
-	TargetCount      int    `gorm:"not null"`
-	CreatedBy        string `gorm:"size:256"`
-	StartedAt        sql.NullTime
-	FinishedAt       sql.NullTime
-	StateChangedBy   string `gorm:"size:256"`
-	StateChangedAt   sql.NullTime
+	Token               string `gorm:"not null;size:128"`
+	Name                string `gorm:"not null;size:128"`
+	ArtifactId          uint   `gorm:"not null;index"`
+	GroupToken          string `gorm:"not null;size:128"`
+	GroupVersion        sql.NullInt32
+	MaxInFlight         int `gorm:"not null"`
+	FailureThreshold    sql.NullInt32
+	State               string `gorm:"not null;size:16"`
+	PauseReason         string `gorm:"not null;size:32"`
+	TargetCount         int    `gorm:"not null"`
+	CreatedBy           string `gorm:"size:256"`
+	StartedAt           sql.NullTime
+	FinishedAt          sql.NullTime
+	StateChangedBy      string `gorm:"size:256"`
+	StateChangedAt      sql.NullTime
+	CohortPlan          sql.NullString `gorm:"type:text"`
+	CurrentCohort       int            `gorm:"not null;default:0"`
+	FailureRatePlan     sql.NullString `gorm:"type:text"`
+	HaltSequence        int            `gorm:"not null;default:0"`
+	HaltFailures        int            `gorm:"not null;default:0"`
+	HaltSamples         int            `gorm:"not null;default:0"`
+	RateOverrideAt      sql.NullTime
+	HaltFailureEvidence sql.NullString `gorm:"type:text"`
 }
 
 // AuditLabel names the row in the audit journal.
@@ -109,6 +119,7 @@ type UpdateRolloutTarget struct {
 	SkipDetail   string `gorm:"not null;size:512"`
 	// DeviceIncarnation freezes device-management's row id; NULL uses the legacy time fence.
 	DeviceIncarnation sql.NullInt64 `gorm:"type:bigint"`
+	Cohort            int           `gorm:"not null;default:0"`
 }
 
 // AuditLabel names the row in the audit journal.
@@ -202,6 +213,8 @@ type RolloutCreateRequest struct {
 	GroupToken       string
 	MaxInFlight      int
 	FailureThreshold *int
+	Cohorts          []RolloutCohort
+	FailureRate      *RolloutFailureRate
 }
 
 // RolloutSearchCriteria filters and paginates a rollout search.
