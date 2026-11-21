@@ -37,8 +37,8 @@ namespace DeviceChain.Harborpulse.Visuals
             {
                 // nearer woods: spruce green low down, lighter mixed wood above, and here and there a face turned to rust or gold
                 var near = layer.FootFadeM < 26;
-                var low = near ? new Color(.13f, .22f, .17f) : new Color(.15f, .25f, .23f);
-                var high = near ? new Color(.20f, .29f, .19f) : new Color(.19f, .29f, .25f);
+                var low = near ? new Color(.18f, .27f, .23f) : new Color(.17f, .27f, .26f);
+                var high = near ? new Color(.25f, .33f, .25f) : new Color(.21f, .31f, .28f);
                 c = Color.Lerp(low, high, Mathf.SmoothStep(.15f, .85f, t));
                 if (autumn > .80f) c = Color.Lerp(c, new Color(.40f, .27f, .15f), near ? .55f : .38f);
                 else if (autumn < .10f) c = Color.Lerp(c, new Color(.46f, .40f, .17f), near ? .45f : .30f);

@@ -102,18 +102,19 @@ Shader "Harborpulse/CoastalScenery"
                 }
                 float distanceM = distance(_WorldSpaceCameraPos, i.world);
                 // Granite (vertex alpha 0.9): blotches, speckle and bedding cracks from the world position, no texture. The fine grain
-                // is only drawn close; from HOME the rock reads by its facets' own tones.
-                if (i.surface > .85 && i.surface < .95)
+                // is only drawn close; from HOME the rock reads by its facets' own tones. No derivative is taken in here, so the branch
+                // is a real one and the forest and the ground, which are nearly every scenery pixel, do not pay for it.
+                [branch] if (i.surface > .85 && i.surface < .95)
                 {
                     float3 w = i.world;
                     float blotch = HashCell(floor(w.xz / 1.7) + floor(w.y / 1.1) * 7.3);
                     float speck = HashCell(floor(w.xz * 2.6) + floor(w.y * 2.6) * 3.1);
                     float bedY = w.y / .8 + blotch * .35;
-                    float bedAA = max(fwidth(bedY), .0005);
-                    float crack = 1 - smoothstep(.03, .03 + bedAA, abs(frac(bedY) - .5));
+                    float crack = 1 - smoothstep(.04, .07, abs(frac(bedY) - .5));
+                    float crackFade = saturate(1 - distanceM / 90.0);
                     float nearFade = saturate(1 - distanceM / 220.0);
                     float midFade = saturate(1 - distanceM / 900.0);
-                    lit *= 1 + (blotch - .5) * .26 * midFade + (speck - .5) * .12 * nearFade - crack * .30 * nearFade * saturate(1 - bedAA * 3);
+                    lit *= 1 + (blotch - .5) * .26 * midFade + (speck - .5) * .12 * nearFade - crack * .30 * crackFade;
                     // lichen on the faces that look at the sky: pale grey-green rosettes and a little rust
                     float patch = HashCell(floor(w.xz / 2.3) + 11.0);
                     float upward = saturate(normalize(i.normalWS).y * 2 - .6);

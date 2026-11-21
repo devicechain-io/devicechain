@@ -102,6 +102,13 @@ namespace DeviceChain.Harborpulse.Visuals
                         foreach (var street in plan.Streets) edge = Mathf.Min(edge, (float)(street.DistanceTo(new Ground(x, z)) - street.Width / 2));
                         color = Mix(color, worn, 1 - Mathf.SmoothStep(0, 1, edge / 3));
                     }
+                    // the open coast's edge is turf and bare heath in a strip of uneven width, not forest floor ruled off at the water
+                    if (Mathf.Abs(x) > TownBuilder.CoreHalfX)
+                    {
+                        var strip = 22 + 60 * (float)CoastalTerrain.Noise(x * .011 + 17, 3.3);
+                        var shore = 1 - Mathf.SmoothStep(0, 1, (z - TownBuilder.CoastZ) / strip);
+                        color = Mix(color, Mix(heath, meadowStraw, Mathf.SmoothStep(.3f, .8f, patch)), shore * .85f);
+                    }
                     // rocky, heath-toned ground where the slope steepens, and the bedrock skirt round every outcrop
                     var bare = Mathf.Clamp01((.985f - n.y) * 9);
                     color = Mix(color, heath, bare * .5f);

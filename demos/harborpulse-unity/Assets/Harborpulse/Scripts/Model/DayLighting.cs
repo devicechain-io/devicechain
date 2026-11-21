@@ -443,7 +443,7 @@ namespace DeviceChain.Harborpulse.Model
             // the ambient takes the rose of a sunrise only lightly: the light on the town stays near neutral
             var equator = Rgb.Lerp(s.Horizon, Drained(s.Horizon, 0.3, 1), twilight * 0.6);
             // under a low sun the flat ground is lit by the sky alone: take some of the blue out of it, or the quays turn periwinkle
-            var skyLight = Drained(s.Zenith, 1 - 0.45 * (1 - high) * light, 1);
+            var skyLight = Drained(s.Zenith, 1 - 0.7 * (1 - high) * light, 1);
             s.AmbientSky = Max(skyLight.Scale(amb * 1.1 + 0.04), NightAmbientSky.Scale(floor));
             s.AmbientEquator = Max(equator.Scale(amb * 0.8 + 0.03), NightAmbientEquator.Scale(floor));
             s.AmbientGround = Max(s.Ground.Scale(0.6), NightAmbientGround.Scale(floor));
