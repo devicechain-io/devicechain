@@ -15,7 +15,9 @@ out="${FLEET_S0_OUTPUT_DIR:-$PWD/$run-out}"
 mkdir -p "$out"
 pgpass="$(python3 -c 'import secrets;print(secrets.token_hex(16))' 2>/dev/null || date +%s%N)"
 image=fleet-s0-runner:local
-cleanup() { docker rm -f "$run-pg" >/dev/null 2>&1 || true; }
+cleanup() {
+  docker rm -f "$run-pg" >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
 native() { (cd "$1" && { pwd -W 2>/dev/null || pwd; }); }
 docker build -q -t "$image" "$(native "$here/runner")" >/dev/null
@@ -39,4 +41,4 @@ for id in "${ids[@]}"; do
     "$image" bash hack/fleet-s0/run.sh "$id" || rc=$?
 done
 echo "candidate records under $out"
-exit "$rc"
+(exit "$rc")

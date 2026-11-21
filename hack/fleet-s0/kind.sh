@@ -8,7 +8,7 @@ kind_cleanup() {
   if [[ -n ${S0_KIND_NAME:-} ]]; then kind delete cluster --name="$S0_KIND_NAME"; fi
 }
 probe_l() {
-  local uid container node control_ip control_ip6 before after event deadline name
+  local uid container node control_ip control_ip6 before after event deadline
   local cluster="fleet-s0-$$-$RANDOM"
   cat >"$S0_OUT/kind.yaml" <<'YAML'
 kind: Cluster
@@ -43,6 +43,7 @@ YAML
   kubectl apply -f "$S0_OUT/runner.yaml"
   kubectl wait pod/s0-runner --for=condition=Ready --timeout=180s
   S0_KUBERNETES_VERSION="$(kubectl version -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)["serverVersion"]["gitVersion"].removeprefix("v"))')"
+  export S0_KUBERNETES_VERSION
   kubectl get pod s0-runner -o json >"$S0_OUT/pod-initial.json"
   uid="$(python3 - "$S0_OUT/pod-initial.json" <<'PY'
 import json,sys

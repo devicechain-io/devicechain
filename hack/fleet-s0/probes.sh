@@ -55,7 +55,7 @@ PY
   gcloud container node-pools delete probe --cluster=s0-e-c --project="$FLEET_S0_PROJECT"     --location="$FLEET_S0_LOCATION" --impersonate-service-account="$FLEET_S0_UPDATE_ONLY_IDENTITY" --quiet
   # Remove ONLY the measured role, then repeat on a second node pool.
   gcloud container node-pools create control --cluster=s0-e-c --num-nodes=1 --machine-type=e2-standard-2     --project="$FLEET_S0_PROJECT" --location="$FLEET_S0_LOCATION"
-  S0_RESTORE_UPDATE_ROLE=true
+  export S0_RESTORE_UPDATE_ROLE=true
   gcloud projects remove-iam-policy-binding "$FLEET_S0_PROJECT"     --member="serviceAccount:$FLEET_S0_UPDATE_ONLY_IDENTITY"     --role="projects/$FLEET_S0_PROJECT/roles/$FLEET_S0_UPDATE_ONLY_ROLE" --condition=None --quiet
   sleep "${FLEET_S0_DENY_SETTLE_SECONDS:-120}"
   expect_denied gcloud container node-pools delete control --cluster=s0-e-c --project="$FLEET_S0_PROJECT"     --location="$FLEET_S0_LOCATION" --impersonate-service-account="$FLEET_S0_UPDATE_ONLY_IDENTITY" --quiet
@@ -79,9 +79,9 @@ PY
 }
 probe_e() {
   require_preflight
-  local n start elapsed deadline
+  local start elapsed deadline
   : >"$S0_OUT/deny-latencies"
-  for n in 1 2 3 4 5; do
+  for _ in 1 2 3 4 5; do
     iam_has_delete || die "E-e baseline lacks delete permission"
     start="$(date +%s)"
     deny_policy
@@ -123,7 +123,7 @@ probe_f2() {
   [[ $pre_status == 200 ]] || die "cached-token baseline HTTP $pre_status"
   start="$(date +%s)"
   # EXIT restores containment even when a measurement fails; teardown does not use this identity.
-  S0_DISABLED_IDENTITY="$FLEET_S0_TEST_IDENTITY"
+  export S0_DISABLED_IDENTITY="$FLEET_S0_TEST_IDENTITY"
   gcloud iam service-accounts disable "$FLEET_S0_TEST_IDENTITY" --project="$FLEET_S0_PROJECT" --quiet
   deadline=$((SECONDS + 900))
   while (( cached < 0 || fresh < 0 )); do
@@ -151,7 +151,7 @@ PY
   (( $(date +%s) - start < 3300 )) || die "pre-disable token may have expired"
   post_status="$(token_status)"
   [[ $post_status == 200 || $post_status == 401 || $post_status == 403 ]] || die "unexpected re-enable HTTP $post_status"
-  S0_DISABLED_IDENTITY=
+  export S0_DISABLED_IDENTITY=
   cluster_gc delete s0-e-f2
   result E-f2 HOLDS '["cloud"]' "{\"cached_refusal_s\":$cached,\"fresh_issuance_refusal_s\":$fresh,\"pre_disable_token_after_reenable_http\":$post_status,\"containment_only\":true}"
 }
@@ -219,6 +219,7 @@ probe_k() {
   export KUBECONFIG="$S0_OUT/kubeconfig"
   cluster_gc get-credentials s0-e-k
   S0_KUBERNETES_VERSION="$(kubectl version -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)["serverVersion"]["gitVersion"].removeprefix("v"))')"
+  export S0_KUBERNETES_VERSION
   cat >"$S0_OUT/pvc.yaml" <<'YAML'
 apiVersion: storage.k8s.io/v1
 kind: StorageClass

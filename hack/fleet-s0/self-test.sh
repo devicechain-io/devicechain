@@ -7,7 +7,10 @@ d="$(mktemp -d)"
 trap 'rm -rf "$d"' EXIT
 mkdir -p "$d/bin"
 export S0_FAKE_DIR="$d" S0_FAKE_CASE=good
-if command -v cygpath >/dev/null; then export S0_FAKE_DIR="$(cygpath -w "$d")"; fi
+if command -v cygpath >/dev/null; then
+  S0_FAKE_DIR="$(cygpath -w "$d")"
+  export S0_FAKE_DIR
+fi
 if ! python3 -c 'pass' >/dev/null 2>&1; then
   py="$(command -v python)"
   printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$py" >"$d/bin/python3"
