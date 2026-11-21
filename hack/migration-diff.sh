@@ -227,6 +227,21 @@ if [ "$MODE" = "verify" ]; then
   ( cd "$ROOT/backend/core" && DC_IT_PGPORT="$HOST_PORT" \
       go test -tags integration -count=1 -timeout 20m ./rdb/... )
 
+  # The fleet module's real-Postgres suite (build tag fleetpg). The fleet schema and its
+  # writer-exclusion protocol are row locks, triggers, partial indexes and roles, which SQLite
+  # cannot test, and nothing else in CI has a Postgres a unit test can reach. Each test makes
+  # its own database on this server, so nothing here touches the one `verify` asserted.
+  #
+  # 🔴 The COUNT of passed TestFleetPG* tests is asserted, not just the exit status: without the
+  # tag the tests are not compiled, so a mistyped tag reports success over an empty suite.
+  # `pipefail` keeps go test's own status.
+  echo "==> Running the fleet module's real-Postgres suite"
+  ( cd "$ROOT/backend/fleet" && set -o pipefail &&
+      DC_FLEET_PG_DSN="postgres://postgres:$PASSWORD@127.0.0.1:$HOST_PORT/postgres?sslmode=disable"       go test -tags fleetpg -count=1 -timeout 20m -json ./... | "$ROOT/hack/check-fleetpg-count.sh" TestFleetPG 1 ) || {
+    echo "the fleet module's real-Postgres suite FAILED" >&2
+    exit 1
+  }
+
   # dcctl's per-instance database logins. PostgreSQL 16 changed what CREATEROLE grants,
   # and whether one instance's login is refused by another instance's database — the
   # property these exist for — is the server's behaviour, which nothing short of a
