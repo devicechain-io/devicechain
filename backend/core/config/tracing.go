@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -21,6 +22,8 @@ type TracingConfiguration struct {
 	Insecure      bool
 	SamplingRatio *float64
 }
+
+var tracingProtocols = []string{"grpc", "http"}
 
 func (c *TracingConfiguration) ApplyDefaults() {
 	if c.Protocol == "" {
@@ -40,7 +43,7 @@ func (c TracingConfiguration) Ratio() float64 {
 }
 
 func (c TracingConfiguration) Validate() error {
-	if c.Protocol != "" && c.Protocol != "grpc" && c.Protocol != "http" {
+	if c.Protocol != "" && !slices.Contains(tracingProtocols, c.Protocol) {
 		return fmt.Errorf("infrastructure.tracing.protocol must be grpc or http")
 	}
 	if r := c.Ratio(); math.IsNaN(r) || math.IsInf(r, 0) || r < 0 || r > 1 {

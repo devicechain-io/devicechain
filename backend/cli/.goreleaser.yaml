@@ -97,6 +97,10 @@ release:
   github:
     owner: devicechain-io
     name: devicechain
+  # The tag in the Release download URL selects the exact config contract.
+  # Attach the same committed bytes embedded in dcctl; no live instance needed.
+  extra_files:
+    - glob: ../core/config/instance-config.schema.json
   # Mark the GitHub Release as a prerelease automatically when the tag carries
   # a prerelease segment (e.g. v1.2.3-rc.1). Stable tags publish a full release.
   prerelease: auto
