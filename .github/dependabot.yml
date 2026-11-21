@@ -45,6 +45,7 @@ updates:
       - "/backend/admin/*"
       - "/backend/broker/*"
       - "/backend/edge/*"
+      - "/backend/fleet"
       - "/backend/sims/*"
       - "/backend/tools/*"
       - "/deploy"
