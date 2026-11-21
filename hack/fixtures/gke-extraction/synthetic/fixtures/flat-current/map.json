@@ -1,0 +1,6 @@
+{
+  "google_container_cluster.this": "google_container_cluster.this",
+  "google_container_node_pool.this[\"database\"]": "google_container_node_pool.this[\"database\"]",
+  "google_container_node_pool.this[\"services\"]": "google_container_node_pool.this[\"services\"]",
+  "terraform_data.cluster_settled[0]": "terraform_data.cluster_settled[0]"
+}
