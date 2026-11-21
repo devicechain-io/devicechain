@@ -81,14 +81,60 @@ helm install dc deploy/helm/devicechain \
 
 `user-management` 和 `device-management` 是必需核心。`event-management`、`device-state` 和 `command-delivery` 各自可选。如果选择中遗漏必需核心服务，或遗漏已启用服务的硬依赖，Chart 会**使渲染失败**，因此安装时就能发现无效拓扑，而不是等到 Pod 崩溃重启。应用时根据 Chart 的 `values.schema.json` 验证配置值。
 
+## 集群内执行器（Preview） {#in-cluster-executor}
+
+Preview：本版本会安装并验证执行器，但不会执行任何操作。
+每个可执行请求都会被拒绝，原因为 `NotExecutableInThisBuild`。现有实例保持不变。
+`dcctl install` 会新增 `ExecutorEnrollment` 和 `InstanceOperation` 两种资源定义，
+但不会注册或部署执行器。与每次发布一样，旧版 dcctl 会拒绝操作已由 1.9 版
+`dcctl install` 更新资源定义的集群。
+
+提供方管理员可以注册一个所有者以及按 SHA-256 摘要固定的镜像。注册要求集群中
+**每个** Instance 都有经过验证的 `OwnerOffline` 根密钥托管文件。
+默认使用现有的 dcctl 托管目录；`--escrow-dir` 可指定另一个目录，其中仍使用
+`<instance>-rootkey.escrow` 文件名。重新运行 `dcctl bootstrap` 会核对托管文件并补写
+缺失文件。发现不匹配时，应先调查原因再替换文件。
+
+```bash
+dcctl executor enroll --owner platform --image "$EXECUTOR_IMAGE" --kube-context prod
+dcctl executor status --kube-context prod
+dcctl executor unenroll --kube-context prod
+```
+
+将 `EXECUTOR_IMAGE` 设置为完整的 `ref@sha256:<64 位小写十六进制数字>`。注册会安装
+`dc-executor-system` 命名空间、ServiceAccount、固定镜像的 Deployment、执行器 RBAC、
+未绑定的请求方 ClusterRole 以及 `ExecutorEnrollment/cluster`。
+它不会写入 Secret、凭据文件或 kubeconfig。权限预检仅供提前检查，不能保证应用成功；
+应用失败时会逐个报告对象结果。注册最多等待五分钟，确认部署完成，且 Ready 状态是针对
+当前代数及固定镜像的观察结果。`--dry-run` 执行检查并打印计划，但不应用。
+Status 显示声明、能力、条件及非终态 InstanceOperation；集群未注册时也成功退出。
+
+注销会保留实例、操作历史和资源定义。存在未完成操作时，必须先用 `--force` 将其标记为
+`Refused/Unenrolled`。这一显式管理员恢复操作是唯一由执行器之外的主体写入操作状态的
+情况：在移除执行器前关闭请求，并通过资源版本检查保留并发产生的终态裁决。
+注销会等待执行器命名空间消失。
+
+注册会为命名空间添加 `app.kubernetes.io/managed-by: dcctl-executor` 标签。
+如果已有的 `dc-executor-system` 命名空间缺少该标签，注册和注销都会在任何更改前拒绝，
+即使使用 `--force` 也一样。删除命名空间时会以已观察到的 UID 为前提条件。
+如果既无注册资源也无自有命名空间，注销会报告 "not enrolled"，且不作任何更改。
+修改已有注册的 `owner` 或 `escrowDelivery` 也会在应用前被拒绝；请先注销，再用新值注册。
+
+存在非终态 InstanceOperation 时，`bootstrap` 和 `upgrade` 会拒绝操作对应实例；
+`destroy` 会警告并继续，以保证仍可恢复。请等待执行器裁决，或运行
+`dcctl executor unenroll --force`。这只是检测，不是互斥锁。
+
 ## 自定义资源 {#custom-resources}
 
-`dcctl install` 定义两种集群范围的自定义资源：
+`dcctl install` 定义四种集群范围的自定义资源：
 
 - **`Instance`**（`instances.core.devicechain.io`，短名 `dci`）：每次安装一个，声明实例身份和配置。
 - **`InstanceConfiguration`**（`instanceconfigurations.core.devicechain.io`，短名 `dcic`）：可保存实例配置文档的资源。定义会被安装，但 `dcctl bootstrap` 不会创建该资源，Operator 也不监视它。每个 Pod 从挂载的实例配置 Secret 读取实例配置。
 
-[`dcctl install`](./bootstrap.md#install) 将两种定义和控制器一起安装。它们在各方面都是集群范围的：每个集群一份，由其上的所有实例共享，版本跟随集群，而不是某个实例。因此，准备集群的命令也是升级它们的命令。
+- **`ExecutorEnrollment`**（`executorenrollments.core.devicechain.io`，`dce`）——执行器的唯一注册资源，记录所有者、固定镜像和观察到的能力。
+- **`InstanceOperation`**（`instanceoperations.core.devicechain.io`，`dcop`）——不可变的操作请求及其裁决；本 Preview 不执行任何操作。
+
+[`dcctl install`](./bootstrap.md#install) 将四种定义和控制器一起安装。它们在各方面都是集群范围的：每个集群一份，由其上的所有实例共享，版本跟随集群，而不是某个实例。因此，准备集群的命令也是升级它们的命令。
 
 `dcctl bootstrap` 和 `dcctl upgrade` 只读取定义。集群没有定义，或定义能够识别为来自不同发布版本时，它们会拒绝操作，并指出应运行的安装命令。手动安装的定义没有安装版本记录，因此允许通过，但会提示同一个命令，而不是拒绝。
 
@@ -102,7 +148,7 @@ Operator 是 `Instance` 的 `status` 的唯一写入者，记录它**观察到**
 | 注解（`core.devicechain.io/phase`、`last-applied-by`、`last-applied-at`） | 上次 `dcctl` 运行**意图**或所做的事；即 `OPERATION` 列 | `dcctl` |
 | Operator 命名空间中的 `dcctl` Lease | **此刻**谁在操作该集群 | `dcctl` |
 
-`dcctl` 从不写入 `status`，Operator 也从不读取这些注解：`OPERATION` 可以显示 `Upgrading`，而 `READY` 显示 `True`，两者同时成立。
+`dcctl` 从不写入 `Instance` 的 `status`，Operator 也从不读取这些注解：`OPERATION` 可以显示 `Upgrading`，而 `READY` 显示 `True`，两者同时成立。
 
 | 字段 | 含义 |
 |---|---|

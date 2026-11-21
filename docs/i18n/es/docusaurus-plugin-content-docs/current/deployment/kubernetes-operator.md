@@ -117,9 +117,59 @@ un servicio habilitado, de modo que una topología rota se detecta en el momento
 instalación, no después de que los pods entren en crash-loop. Los valores se validan contra el
 `values.schema.json` del chart en el momento de aplicarlos.
 
+## Ejecutor dentro del clúster (Preview) {#in-cluster-executor}
+
+Preview: el ejecutor se instala y verifica, pero no ejecuta operaciones en esta versión.
+Cada solicitud ejecutable se rechaza con `NotExecutableInThisBuild`. Las instancias existentes
+no cambian. `dcctl install` añade las definiciones `ExecutorEnrollment` e `InstanceOperation`;
+no registra ni despliega un ejecutor. Como en cada versión, un dcctl anterior rechaza un clúster
+cuyas definiciones haya actualizado un `dcctl install` de la versión 1.9.
+
+Un administrador del proveedor puede registrar un propietario y una imagen fijada por su
+resumen SHA-256. El registro exige un archivo de custodia `OwnerOffline` de la clave raíz
+verificado para **cada** Instance del clúster. Se usa el directorio de custodia existente de
+dcctl; `--escrow-dir` selecciona otro directorio con los mismos archivos
+`<instance>-rootkey.escrow`. Volver a ejecutar `dcctl bootstrap` reconcilia la custodia y
+escribe un archivo ausente. Investigue una discrepancia antes de sustituir el archivo.
+
+```bash
+dcctl executor enroll --owner platform --image "$EXECUTOR_IMAGE" --kube-context prod
+dcctl executor status --kube-context prod
+dcctl executor unenroll --kube-context prod
+```
+
+Establezca `EXECUTOR_IMAGE` como `ref@sha256:<64 dígitos hexadecimales en minúsculas>`. El registro
+instala el espacio de nombres `dc-executor-system`, una ServiceAccount, un Deployment fijado
+y los permisos RBAC del ejecutor, un ClusterRole de solicitante sin vincular y
+`ExecutorEnrollment/cluster`. No escribe ningún Secret, archivo de credenciales ni kubeconfig.
+La comprobación previa de permisos es orientativa, no una garantía; si falla la aplicación,
+se informa del resultado de cada objeto. El registro espera hasta cinco minutos al despliegue
+y a una observación Ready actual de la imagen fijada. `--dry-run` comprueba e imprime el plan
+sin aplicarlo. Status muestra la declaración, las capacidades, las condiciones y las
+InstanceOperations no terminales; un clúster sin registro también devuelve éxito.
+
+La retirada conserva las instancias, el historial de operaciones y las definiciones. Rechaza
+operaciones pendientes salvo que `--force` las marque primero como `Refused/Unenrolled`.
+Esta acción explícita de recuperación administrativa es la única escritura del estado de
+operaciones ajena al ejecutor: cierra solicitudes antes de retirar su ejecutor y comprueba
+la versión del recurso para conservar decisiones terminales concurrentes. La retirada espera
+hasta que desaparezca el espacio de nombres del ejecutor.
+
+El registro etiqueta su espacio de nombres con `app.kubernetes.io/managed-by: dcctl-executor`.
+Tanto el registro como la retirada rechazan un espacio de nombres `dc-executor-system` existente
+sin esa etiqueta antes de cambiar nada, incluso con `--force`. Su eliminación exige que el UID
+coincida con el observado. Sin registro ni espacio de nombres propio, la retirada informa
+"not enrolled" y no hace cambios. Cambiar `owner` o `escrowDelivery` de un registro existente
+también se rechaza antes de aplicar: retire primero el registro y vuelva a registrarlo con los
+nuevos valores.
+
+`bootstrap` y `upgrade` rechazan una instancia con una InstanceOperation no terminal;
+`destroy` avisa y continúa para permitir la recuperación. Espere la decisión del ejecutor
+o use `dcctl executor unenroll --force`. Es detección, no un bloqueo.
+
 ## Recursos personalizados {#custom-resources}
 
-`dcctl install` define dos recursos personalizados de ámbito de clúster:
+`dcctl install` define cuatro recursos personalizados de ámbito de clúster:
 
 - **`Instance`** (`instances.core.devicechain.io`, nombre corto `dci`) — uno por instalación,
   que declara la identidad y la configuración de la instancia.
@@ -128,7 +178,10 @@ instalación, no después de que los pods entren en crash-loop. Los valores se v
   instala, pero `dcctl bootstrap` no crea ninguno y el operador no lo observa. Cada pod lee la
   configuración de la instancia del Secret de configuración de instancia montado en él.
 
-[`dcctl install`](./bootstrap.md#install) instala ambas definiciones junto con el propio
+- **`ExecutorEnrollment`** (`executorenrollments.core.devicechain.io`, `dce`) — el registro único del propietario, la imagen fijada y las capacidades observadas del ejecutor.
+- **`InstanceOperation`** (`instanceoperations.core.devicechain.io`, `dcop`) — una solicitud de operación inmutable y su decisión; esta Preview no ejecuta operaciones.
+
+[`dcctl install`](./bootstrap.md#install) instala las cuatro definiciones junto con el propio
 controlador. Tienen ámbito de clúster en todos los sentidos: una sola copia por clúster,
 compartida por todas las instancias que haya en él, y versionada con el clúster y no con
 ninguna instancia concreta. Por eso el comando que prepara un clúster es el comando que las
@@ -153,7 +206,7 @@ naturaleza distinta:
 | anotaciones (`core.devicechain.io/phase`, `last-applied-by`, `last-applied-at`) | lo que la última ejecución de `dcctl` **pretendía** o hizo; la columna `OPERATION` | `dcctl` |
 | el Lease `dcctl` en el espacio de nombres del operador | quién opera sobre el clúster **ahora mismo** | `dcctl` |
 
-`dcctl` nunca escribe `status`, y el operador nunca lee las anotaciones: `OPERATION` puede decir
+`dcctl` nunca escribe el `status` de una `Instance`, y el operador nunca lee las anotaciones: `OPERATION` puede decir
 `Upgrading` mientras `READY` dice `True`, y ambas cosas son ciertas.
 
 | Campo | Significado |

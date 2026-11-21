@@ -112,9 +112,55 @@ render** if a selection omits a required core service or an enabled service's ha
 so a broken topology is caught at install time, not after pods crash-loop. Values are
 validated against the chart's `values.schema.json` at apply time.
 
+## In-cluster executor (Preview) {#in-cluster-executor}
+
+Preview: the executor is installed and verified but executes no operations in this release.
+Every executable request is refused as `NotExecutableInThisBuild`. Existing instances remain
+unchanged. `dcctl install` adds the `ExecutorEnrollment` and `InstanceOperation` definitions;
+it does not enroll or deploy an executor. As with every release, an older dcctl refuses a
+cluster whose definitions a 1.9 `dcctl install` has moved.
+
+A provider administrator can enroll an owner and an image pinned by SHA-256 digest. Enrollment
+requires a verified `OwnerOffline` root-key escrow artifact for **every** Instance in the cluster.
+The default is the existing dcctl escrow directory; `--escrow-dir` selects another directory
+containing the same `<instance>-rootkey.escrow` files. Re-running `dcctl bootstrap` reconciles
+escrow and writes a missing artifact. A mismatch must be investigated before replacing the file.
+
+```bash
+dcctl executor enroll --owner platform --image "$EXECUTOR_IMAGE" --kube-context prod
+dcctl executor status --kube-context prod
+dcctl executor unenroll --kube-context prod
+```
+
+Set `EXECUTOR_IMAGE` to a full `ref@sha256:<64 lowercase hex digits>`. Enrollment installs
+the `dc-executor-system` namespace, ServiceAccount, pinned Deployment and executor RBAC,
+an unbound requester ClusterRole, and `ExecutorEnrollment/cluster`. It writes no Secret,
+credential file or kubeconfig. Its privilege pre-check is advisory, not a guarantee; an apply
+failure reports each object's result. Enrollment waits up to five minutes for rollout and a
+current Ready observation of the pinned image. `--dry-run` performs the checks and prints
+the plan without applying it. Status shows the declaration, capability, conditions and
+non-terminal InstanceOperations; an unenrolled cluster is a successful status result.
+
+Unenrollment leaves instances, operation history and resource definitions in place. It refuses
+outstanding operations unless `--force` first marks them `Refused/Unenrolled`. This explicit
+administrator recovery action is the one non-executor writer of operation status: it closes
+requests before removing their executor, using resource-version checks to preserve concurrent
+terminal verdicts. Unenrollment waits for the executor namespace to disappear.
+
+Enrollment labels its namespace `app.kubernetes.io/managed-by: dcctl-executor`. Both enrollment
+and unenrollment refuse an existing `dc-executor-system` namespace without that label before
+changing anything, including when using `--force`. Namespace deletion uses its observed UID
+as a precondition. With no enrollment and no owned namespace, unenrollment reports "not enrolled"
+and makes no changes. Changing an existing enrollment's `owner` or `escrowDelivery` also refuses
+before apply; unenroll first, then enroll again with the new values.
+
+`bootstrap` and `upgrade` refuse an instance with a non-terminal InstanceOperation; `destroy`
+warns and proceeds so recovery stays possible. Wait for the executor's verdict, or use
+`dcctl executor unenroll --force`. This is detection, not a lock.
+
 ## Custom resources {#custom-resources}
 
-`dcctl install` defines two cluster-scoped custom resources:
+`dcctl install` defines four cluster-scoped custom resources:
 
 - **`Instance`** (`instances.core.devicechain.io`, short name `dci`) — one per installation,
   declaring the instance identity and configuration.
@@ -123,7 +169,10 @@ validated against the chart's `values.schema.json` at apply time.
   but `dcctl bootstrap` does not create one and the operator does not watch it. Each pod reads
   the instance configuration from the instance config Secret mounted into it.
 
-[`dcctl install`](./bootstrap.md#install) installs both definitions together with the
+- **`ExecutorEnrollment`** (`executorenrollments.core.devicechain.io`, `dce`) — the singleton executor owner, pinned image and capability observation.
+- **`InstanceOperation`** (`instanceoperations.core.devicechain.io`, `dcop`) — an immutable operation request and its verdict; this Preview executes no operations.
+
+[`dcctl install`](./bootstrap.md#install) installs all four definitions together with the
 controller itself. They are cluster-scoped in every sense: one copy per cluster, shared by
 every instance on it, and versioned with the cluster rather than with any one instance. That is
 why the command that prepares a cluster is the command that moves them.
@@ -146,7 +195,7 @@ different in kind:
 | annotations (`core.devicechain.io/phase`, `last-applied-by`, `last-applied-at`) | what the last `dcctl` run **intended** or did; the `OPERATION` column | `dcctl` |
 | the `dcctl` Lease in the operator's namespace | who is operating on the cluster **right now** | `dcctl` |
 
-`dcctl` never writes `status`, and the operator never reads the annotations: `OPERATION` can say
+`dcctl` never writes an `Instance`'s `status`, and the operator never reads the annotations: `OPERATION` can say
 `Upgrading` while `READY` says `True`, and both are true.
 
 | Field | Meaning |

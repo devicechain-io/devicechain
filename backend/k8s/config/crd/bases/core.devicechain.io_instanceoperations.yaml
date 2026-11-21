@@ -1,0 +1,143 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: instanceoperations.core.devicechain.io
+spec:
+  group: core.devicechain.io
+  names:
+    kind: InstanceOperation
+    listKind: InstanceOperationList
+    plural: instanceoperations
+    shortNames:
+    - dcop
+    singular: instanceoperation
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.instance
+      name: Instance
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.reason
+      name: Reason
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1beta1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              action:
+                enum:
+                - Install
+                - Bootstrap
+                - Upgrade
+                - Teardown
+                type: string
+              enrollmentUID:
+                minLength: 1
+                type: string
+              imageVersion:
+                pattern: ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$
+                type: string
+              instance:
+                maxLength: 63
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+              instanceUID:
+                type: string
+              protocolVersion:
+                format: int32
+                minimum: 1
+                type: integer
+            required:
+            - action
+            - enrollmentUID
+            - instance
+            - protocolVersion
+            type: object
+            x-kubernetes-validations:
+            - message: operation spec is immutable
+              rule: self == oldSelf
+            - message: instanceUID is required except for Bootstrap
+              rule: self.action == 'Bootstrap' || (has(self.instanceUID) && size(self.instanceUID)
+                > 0)
+          status:
+            description: The parent rule protects removal; this rule protects edits
+              while status exists.
+            properties:
+              decidedAt:
+                format: date-time
+                type: string
+              executorProtocolVersion:
+                format: int32
+                type: integer
+              message:
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                enum:
+                - Pending
+                - Refused
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              reason:
+                type: string
+            required:
+            - phase
+            type: object
+            x-kubernetes-validations:
+            - message: status requires phase
+              rule: has(self.phase)
+            - message: terminal verdict is immutable
+              rule: '!has(oldSelf.phase) || !(oldSelf.phase in [''Refused'', ''Succeeded'',
+                ''Failed'']) || (self.phase == oldSelf.phase && has(self.reason) ==
+                has(oldSelf.reason) && (!has(oldSelf.reason) || self.reason == oldSelf.reason)
+                && has(self.message) == has(oldSelf.message) && (!has(oldSelf.message)
+                || self.message == oldSelf.message) && has(self.decidedAt) == has(oldSelf.decidedAt)
+                && (!has(oldSelf.decidedAt) || self.decidedAt == oldSelf.decidedAt))'
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: terminal status cannot be removed
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.phase) || !(oldSelf.status.phase
+            in [''Refused'', ''Succeeded'', ''Failed'']) || (has(self.status) && has(self.status.phase))'
+    served: true
+    storage: true
+    subresources:
+      status: {}
