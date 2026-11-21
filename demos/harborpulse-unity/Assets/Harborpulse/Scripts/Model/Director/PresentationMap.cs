@@ -293,7 +293,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             // The land now stands far below this eye, so the haze-covered far ground ends well under the true horizon; the look is
             // steepened slightly (the horizon just above the frame) so the air over it is 8-14 % of the frame and the fog closes the view.
             // U6: the eye is lower and nearer and the look is flattened, so the horizon falls an eighth of the way down the frame: the
-            // sky is in it, the sun rises in it (due east), the harbour fills the lower half and the eastern uplands close the view.
+            // sky is in it, the sun rises in it (the camera looks a little north of east), the harbour holds the middle of the frame (U7) and the eastern uplands close the view.
             poses.Add("pose:home:portrait", Stand(-700, 235, -60, 0, -5, 44, PortraitHorizon));
             poses.Add("pose:night-home", poses["pose:home"]);
             poses.Add("pose:storm-home", poses["pose:home"]);
@@ -342,8 +342,17 @@ namespace DeviceChain.Harborpulse.Model.Director
                     var side = Sidestep(pair.Family);
                     poses.Add("pose:" + pair.Family + ":" + suffix, Stand(a.X + wx * back + (wx == 0 ? side : 0), eye, a.Z + wz * back + (wx == 0 ? 0 : side), a.X, a.Z, fov, horizon));
                 }
+                // The cut-away view looks down into the wet well. A pump's well is not at its anchor: it stands 13 m along the quay from the
+                // pump house (WellFootprint, moved there to clear a lamp), and a pose aimed at the anchor framed the pump house's door with
+                // the well out of the frame. Every other family keeps its anchor.
+                var well = a;
+                if (layout.Devices.First(d => d.Token == pair.Token).Kind == DeviceKind.Pump)
+                    well = new PropFootprint("well", a, 1, 1, WorldPropPlan.QuayYaw(quay)).Local(WellFootprint.LocalX, WellFootprint.LocalZ);
+                // East Quay's well stands just behind a charger bay, whose canopy covers it from the usual stand-off: there the eye is nearer and
+                // higher, and looks over the canopy.
+                double off = pair.Family == "pump-east" ? 9 : 16, wellEye = pair.Family == "pump-east" ? 13 : 10;
                 foreach (var suffix in StoryPoses.WellSuffixes)
-                    poses.Add("pose:" + pair.Family + ":" + suffix, new CameraPose(new Point3(a.X + wx * 16, 10, a.Z + wz * 16), new Point3(a.X, 2, a.Z), 42));
+                    poses.Add("pose:" + pair.Family + ":" + suffix, new CameraPose(new Point3(well.X + wx * off, wellEye, well.Z + wz * off), new Point3(well.X, 2, well.Z), 42));
             }
             // Outside the quay the eye sits just above the water and the look is flattened to put the horizon about a third of the way down.
             // from inside the harbour, over the water off the basin, looking east-south-east across the quay's devices: no breakwater or lighthouse is

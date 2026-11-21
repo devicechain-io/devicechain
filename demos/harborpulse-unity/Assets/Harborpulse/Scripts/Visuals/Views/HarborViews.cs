@@ -79,9 +79,16 @@ namespace DeviceChain.Harborpulse.Visuals
             }
         }
         /// <param name="weather">The weather drawn: the frame's own, unless a fair-weather look check of the preview has put the storm aside.</param>
-        public void Apply(HarborFrame f, SkyState sky, Vector3 camera, float dt, float time, Weather weather)
+        /// <summary>Decides every well's level tags for a camera (see <see cref="WellFootprint.TagsInView"/>).</summary>
+        public void FrameWells(Vector3 camera, Vector3 forward)
         {
-            foreach (var p in pumps) p.Value.Apply(f.Pumps[p.Key], dt, time);
+            foreach (var p in pumps) p.Value.FrameTags(camera, forward);
+        }
+
+        /// <param name="forward">The way the camera looks: a wet well's level tags are drawn only for a camera that frames the well.</param>
+        public void Apply(HarborFrame f, SkyState sky, Vector3 camera, float dt, float time, Weather weather, Vector3 forward)
+        {
+            foreach (var p in pumps) p.Value.Apply(f.Pumps[p.Key], dt, time, camera, forward);
             foreach (var p in gauges) p.Value.Apply(f);
             foreach (var p in chargers) p.Value.Apply(f.Chargers[p.Key], f.World);
             foreach (var p in lamps) p.Value.Apply(f.Lamps[p.Key], f, sky, camera);
@@ -97,7 +104,6 @@ namespace DeviceChain.Harborpulse.Visuals
                 }
                 b.Apply(alarm, f.ObservedAt);
             }
-            mats.SyncTagAtlas();
             rain.gameObject.SetActive(weather.Rain > 0.01);
             // light rain is the same streaks squeezed shorter and closer; the wrap follows the squeezed period
             var squeeze = Mathf.Max(0.05f, (float)weather.Rain);

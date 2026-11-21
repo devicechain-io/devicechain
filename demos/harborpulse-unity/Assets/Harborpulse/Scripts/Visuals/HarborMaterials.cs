@@ -121,11 +121,6 @@ namespace DeviceChain.Harborpulse.Visuals
             for (var i = 0; i < 6; i++)
                 Courses[i] = Matte(Make("stone-course-" + i, new Color(0.43f + i * 0.025f, 0.42f + i * 0.023f, 0.39f + i * 0.022f), 0.2f));
             LampOn = Emissive("lamp-on", new Color(1.0f, 0.86f, 0.62f), 4f);
-            var tagShader = Resources.Load<Shader>("HarborWorldTag");
-            if (tagShader == null) throw new InvalidOperationException("HarborWorldTag shader missing from Resources");
-            WorldTag = new Material(tagShader) { name = "Harbor/world-tag" };
-            byName["world-tag"] = WorldTag;
-            SyncTagAtlas();
             var glowShader = Resources.Load<Shader>("HarborGlow");
             if (glowShader == null) throw new InvalidOperationException("HarborGlow shader missing from Resources");
             LampHalo = new Material(glowShader) { name = "Harbor/lamp-halo" };
@@ -144,15 +139,6 @@ namespace DeviceChain.Harborpulse.Visuals
         public Material Surfaces { get; }
         public Material AlarmText { get; }
         public Material AlarmPlate { get; }
-        /// <summary>The font material for a tag that stands at a place in the world and is hidden by what is in front of it (the wet well's level tags).</summary>
-        public Material WorldTag { get; }
-
-        /// <summary>The built-in font can move to a new atlas texture when it grows; the tag material follows it.</summary>
-        public void SyncTagAtlas()
-        {
-            var atlas = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf").material.mainTexture;
-            if (WorldTag.mainTexture != atlas) WorldTag.mainTexture = atlas;
-        }
         public Material Flow { get; }
         public Material WorldCue { get; }
         /// <summary>The rain in the air: the WORLD cue's cool white, warmed when the low sun lights it through the break under the deck.</summary>

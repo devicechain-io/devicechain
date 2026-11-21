@@ -81,8 +81,7 @@ namespace DeviceChain.Harborpulse.Visuals
         static void Marker(AssetRig r, HarborMaterials m, string name, float level, Material material, string text, float tagX, Color tagColour)
         {
             var t = r.Part(name, new MeshKit().Ring(Vector3.zero, 2.24f, 0.06f), material, new Vector3((float)WellFootprint.LocalX, WellFloor + level, (float)WellFootprint.LocalZ));
-            // the level tags stand inside the cut-away, below the deck: they are hidden by the quay from any camera that is not looking into the well
-            AssetRig.Tag(text, t, new Vector3(tagX, 0.08f, 2.5f), 0.10f, tagColour, m.WorldTag);
+            AssetRig.Tag(text, t, new Vector3(tagX, 0.08f, 2.5f), 0.10f, tagColour);
         }
     }
 }

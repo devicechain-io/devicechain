@@ -320,6 +320,60 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(seen, Is.GreaterThanOrEqualTo(3), "tors inside the 16:9 HOME frame");
         }
 
+        // ---------------------------------------------------------------- the wet well's view and its tags
+
+        static Ground Well(string token) => U5Plan.Plan.Registry.Entries.First(f => f.Id == "device:" + token + ":well").At;
+
+        [Test]
+        public void APumpsWellPoseLooksIntoTheWellNotAtThePumpHouse()
+        {
+            foreach (var f in StoryPoses.Families.Where(f => f.Token.StartsWith("hp-pump-", StringComparison.Ordinal)))
+            {
+                var well = Well(f.Token); var anchor = U5Plan.Map.Anchors[f.Token];
+                Assert.That(Math.Sqrt(Math.Pow(well.X - anchor.X, 2) + Math.Pow(well.Z - anchor.Z, 2)), Is.GreaterThan(12), "the well stands off from the pump house");
+                foreach (var s in StoryPoses.WellSuffixes)
+                {
+                    var p = U5Plan.Map.Pose("pose:" + f.Family + ":" + s);
+                    Assert.That(p.Look.X, Is.EqualTo(well.X).Within(1e-9), f.Family); Assert.That(p.Look.Z, Is.EqualTo(well.Z).Within(1e-9), f.Family);
+                    // the well's middle is the frame's, and its level tags are drawn
+                    Assert.That(CameraMath.Project(p, Wide, well.X, Deck, well.Z, out var nx, out var ny), Is.True);
+                    Assert.That(Math.Abs(nx), Is.LessThan(.05)); Assert.That(Math.Abs(ny), Is.LessThan(.25));
+                    Assert.That(InView(p, well), Is.True, f.Family + ":" + s + " draws the tags");
+                    // U6 aimed it at the anchor: from there the well is outside the frame
+                    var side = U5Plan.Map.Pose("pose:" + f.Family + ":close").Camera;
+                    var u6 = new CameraPose(new Point3(anchor.X + Math.Sign(side.X - anchor.X) * (Math.Abs(side.X - anchor.X) > 5 ? 16 : 0), 10, anchor.Z + Math.Sign(side.Z - anchor.Z) * (Math.Abs(side.Z - anchor.Z) > 5 ? 16 : 0)), new Point3(anchor.X, 2, anchor.Z), 42);
+                    Assert.That(CameraMath.Project(u6, Wide, well.X, Deck, well.Z, out var ox, out _) && Math.Abs(ox) < 1, Is.False, f.Family + ": the old aim did not hold the well");
+                }
+            }
+        }
+
+        static bool InView(CameraPose p, Ground well)
+        {
+            double fx = p.Look.X - p.Camera.X, fy = p.Look.Y - p.Camera.Y, fz = p.Look.Z - p.Camera.Z; var n = Math.Sqrt(fx * fx + fy * fy + fz * fz);
+            return WellFootprint.TagsInView(well.X - p.Camera.X, Deck - p.Camera.Y, well.Z - p.Camera.Z, fx / n, fy / n, fz / n);
+        }
+
+        [Test]
+        public void AWellsTagsAreNotDrawnForACameraThatOnlyStandsBesideIt()
+        {
+            // the lamp, gauge and charger views near a well never draw its tags (U5 and U6 drew them through the quay at the frame's edge)
+            var wells = StoryPoses.Families.Where(f => f.Token.StartsWith("hp-pump-", StringComparison.Ordinal)).Select(f => Well(f.Token)).ToList();
+            var checkedPoses = 0;
+            foreach (var f in StoryPoses.Families.Where(f => !f.Token.StartsWith("hp-pump-", StringComparison.Ordinal)))
+                foreach (var s in StoryPoses.GroundSuffixes)
+                {
+                    var p = U5Plan.Map.Pose("pose:" + f.Family + ":" + s); checkedPoses++;
+                    foreach (var w in wells) Assert.That(InView(p, w), Is.False, f.Family + ":" + s);
+                }
+            Assert.That(checkedPoses, Is.GreaterThan(40));
+            foreach (var h in StoryPoses.Home) foreach (var w in wells) Assert.That(InView(U5Plan.Map.Pose(h), w), Is.False, h);
+            // the rule itself: in range and on the axis, yes; behind, to the side or far off, no
+            Assert.That(WellFootprint.TagsInView(0, -6, 10, 0, -.5, .866), Is.True);
+            Assert.That(WellFootprint.TagsInView(0, -6, -10, 0, -.5, .866), Is.False, "behind the camera");
+            Assert.That(WellFootprint.TagsInView(8, -6, 10, 0, -.5, .866), Is.False, "at the frame's edge");
+            Assert.That(WellFootprint.TagsInView(0, -15, 26, 0, -.5, .866), Is.False, "too far to read");
+        }
+
         // ---------------------------------------------------------------- glass
 
         [Test]
