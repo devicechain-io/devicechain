@@ -84,6 +84,9 @@ func TestSkewNegotiation(t *testing.T) {
 			}))
 			defer srv.Close()
 			s := NewTenantSession(srv.Client(), srv.URL, "", "", "tenant").WithSchemaNegotiation(func(string) string { return skewOldSchema })
+			if tc.legacy {
+				s.WithLegacyEndpointVersion(srv.URL, "v1.7.0")
+			}
 			s.access, s.expiresAt = "token", time.Now().Add(time.Hour)
 			var out struct {
 				Item struct{ Name, Modern, Status string }

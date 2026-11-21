@@ -9,8 +9,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	graphql "github.com/graph-gophers/graphql-go"
 )
 
 const skewPreviewSchema = `
@@ -21,6 +24,7 @@ type Query {
     """(Preview: may change in a minor release.) An experimental operation."""
     experiment: String
 }
+
 type Item {
     name: String!
     agent: Boolean
@@ -82,6 +86,7 @@ func TestLegacyPreviewRequiresDiscovery(t *testing.T) {
 			}))
 			defer srv.Close()
 			s := NewTenantSession(srv.Client(), srv.URL, "", "", "tenant").WithSchemaNegotiation(func(string) string { return skewPreviewSchema })
+			s.WithLegacyEndpointVersion(srv.URL, "v1.7.0")
 			s.access, s.expiresAt = "token", time.Now().Add(time.Hour)
 			err := s.Query(context.Background(), srv.URL, tc.query, tc.variables, nil)
 			if tc.refuse {
@@ -91,6 +96,41 @@ func TestLegacyPreviewRequiresDiscovery(t *testing.T) {
 				}
 			} else if err != nil || calls != 1 {
 				t.Fatalf("stable/discovered operation refused: err=%v calls=%d", err, calls)
+			}
+		})
+	}
+}
+
+func TestLegacyPreviewValuesUseDeclaredInputTypes(t *testing.T) {
+	sdl := skewPreviewSchema + `
+input StableInput { agent: String states: [StableStatus!] children: [StableInput!] }
+input TypedInput { text: String status: Status statuses: [Status!] children: [TypedInput!] }
+enum StableStatus { STABLE EXPERIMENTAL }
+`
+	sdl = strings.Replace(sdl, "choose(state: Status): String", "choose(state: Status): String stable(input: StableInput): String typed(input: TypedInput): String texts(values: [String!]): String stableEnum(value: StableStatus): String", 1)
+	contract := graphql.MustParseSchema(sdl, nil, graphql.UseStringDescriptions())
+	for _, tc := range []struct {
+		name, query string
+		variables   map[string]any
+		refuse      bool
+	}{
+		{"string", `query($v:String){echo(value:$v)}`, map[string]any{"v": "EXPERIMENTAL"}, false},
+		{"string list", `query($v:[String!]){texts(values:$v)}`, map[string]any{"v": []any{"EXPERIMENTAL"}}, false},
+		{"nested string", `query($v:TypedInput){typed(input:$v)}`, map[string]any{"v": map[string]any{"children": []any{map[string]any{"text": "EXPERIMENTAL"}}}}, false},
+		{"unrelated input and enum", `query($v:StableInput){stable(input:$v)}`, map[string]any{"v": map[string]any{"agent": "EXPERIMENTAL", "states": []any{"EXPERIMENTAL"}}}, false},
+		{"unrelated enum", `query($v:StableStatus){stableEnum(value:$v)}`, map[string]any{"v": "EXPERIMENTAL"}, false},
+		{"preview enum", `query($v:Status){choose(state:$v)}`, map[string]any{"v": "EXPERIMENTAL"}, true},
+		{"nested preview enum", `query($v:TypedInput){typed(input:$v)}`, map[string]any{"v": map[string]any{"children": []any{map[string]any{"status": "EXPERIMENTAL"}}}}, true},
+		{"preview enum list", `query($v:TypedInput){typed(input:$v)}`, map[string]any{"v": map[string]any{"statuses": []any{"EXPERIMENTAL"}}}, true},
+		{"preview enum singleton coercion", `query($v:TypedInput){typed(input:$v)}`, map[string]any{"v": map[string]any{"statuses": "EXPERIMENTAL"}}, true},
+		{"null", `query($v:TypedInput){typed(input:$v)}`, map[string]any{"v": nil}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if errs := contract.ValidateWithVariables(tc.query, tc.variables); len(errs) != 0 {
+				t.Fatalf("invalid test operation: %v", errs)
+			}
+			if name := legacyPreviewCapability(contract, tc.query, tc.variables); (name != "") != tc.refuse {
+				t.Fatalf("preview capability=%q, want refusal=%t", name, tc.refuse)
 			}
 		})
 	}

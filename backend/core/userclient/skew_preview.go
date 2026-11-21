@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	graphql "github.com/graph-gophers/graphql-go"
+	"github.com/graph-gophers/graphql-go/ast"
 	"github.com/graph-gophers/graphql-go/introspection"
 )
 
@@ -57,37 +58,95 @@ func legacyPreviewCapability(contract *graphql.Schema, query string, variables m
 	}
 	identifiers := graphqlIdentifiers(query)
 	for i, name := range identifiers {
+		if i > 0 && identifiers[i-1] == "$" {
+			continue // A variable's name does not select a capability.
+		}
 		input := inputNames[name] && i+1 < len(identifiers) && identifiers[i+1] == ":"
 		if names[name] || enumValues[name] || input {
 			return name
 		}
 	}
-	var checkValue func(any) string
-	checkValue = func(value any) string {
-		switch v := value.(type) {
-		case map[string]any:
-			for key, child := range v {
-				if inputNames[key] {
-					return key
-				}
-				if name := checkValue(child); name != "" {
-					return name
-				}
-			}
-		case []any:
-			for _, child := range v {
-				if name := checkValue(child); name != "" {
-					return name
-				}
-			}
-		case string:
-			if enumValues[v] {
-				return v
-			}
+	// Only declarations have the token sequence $ name : Type. The authoritative
+	// GraphQL validator has already checked syntax and resolved input types. Read
+	// those declarations, then walk JSON values using the schema's actual types;
+	// scalar strings and unrelated input fields/enums cannot select preview names.
+	for i := 0; i+3 < len(identifiers); i++ {
+		if identifiers[i] != "$" || identifiers[i+2] != ":" {
+			continue
 		}
+		typ, _ := legacyVariableType(contract.AST(), identifiers, i+3)
+		if name := legacyPreviewInput(typ, variables[identifiers[i+1]]); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+func legacyVariableType(schema *ast.Schema, tokens []string, i int) (ast.Type, int) {
+	if i >= len(tokens) {
+		return nil, i
+	}
+	var typ ast.Type
+	if tokens[i] == "[" {
+		inner, end := legacyVariableType(schema, tokens, i+1)
+		if end >= len(tokens) || tokens[end] != "]" {
+			return nil, end
+		}
+		typ, i = &ast.List{OfType: inner}, end+1
+	} else {
+		typ, i = schema.Types[tokens[i]], i+1
+	}
+	if i < len(tokens) && tokens[i] == "!" {
+		typ, i = &ast.NonNull{OfType: typ}, i+1
+	}
+	return typ, i
+}
+
+func legacyPreviewInput(typ ast.Type, value any) string {
+	if value == nil {
 		return ""
 	}
-	return checkValue(variables)
+	if named, ok := typ.(ast.NamedType); ok {
+		description := named.Description()
+		if previewDescription(&description) {
+			return named.TypeName()
+		}
+	}
+	switch t := typ.(type) {
+	case *ast.NonNull:
+		return legacyPreviewInput(t.OfType, value)
+	case *ast.List:
+		if values, ok := value.([]any); ok {
+			for _, child := range values {
+				if name := legacyPreviewInput(t.OfType, child); name != "" {
+					return name
+				}
+			}
+		} else {
+			// GraphQL coerces a single value into a one-element input list.
+			return legacyPreviewInput(t.OfType, value)
+		}
+	case *ast.EnumTypeDefinition:
+		text, _ := value.(string)
+		for _, enum := range t.EnumValuesDefinition {
+			if enum.EnumValue == text && previewDescription(&enum.Desc) {
+				return text
+			}
+		}
+	case *ast.InputObject:
+		object, _ := value.(map[string]any)
+		for _, field := range t.Values {
+			if child, exists := object[field.Name.Name]; exists {
+				if previewDescription(&field.Desc) {
+					return field.Name.Name
+				}
+				if name := legacyPreviewInput(field.Type, child); name != "" {
+					return name
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func previewDescription(description *string) bool {
@@ -101,8 +160,9 @@ func previewType(typ *introspection.Type) bool {
 	return typ != nil && previewDescription(typ.Description())
 }
 
-// graphqlIdentifiers extracts names and input separators; the real validator has
-// already checked syntax. Comments and strings cannot select a feature.
+// graphqlIdentifiers extracts names, input separators and variable type syntax;
+// the real validator has already checked syntax. Comments and strings cannot
+// select a feature.
 func graphqlIdentifiers(query string) []string {
 	var names []string
 	for i := 0; i < len(query); {
@@ -136,8 +196,8 @@ func graphqlIdentifiers(query string) []string {
 					i++
 				}
 			}
-		case query[i] == ':':
-			names = append(names, ":")
+		case strings.ContainsRune(":$[]!", rune(query[i])):
+			names = append(names, string(query[i]))
 			i++
 		case query[i] == '_' || query[i] >= 'A' && query[i] <= 'Z' || query[i] >= 'a' && query[i] <= 'z':
 			start := i
