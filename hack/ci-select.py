@@ -133,6 +133,10 @@ READERS = [
     ], NONTEST, "bootstrap/*_test.go"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
     ("backend/cli", "product", [SDL], [], "product/documents_test.go:32"),
+    # internal/apitest/capabilities.go:44-48 serves the real SDL from every service's graphql dir; the cmd and
+    # sim tests (cmd/product_rotate_test.go, sim/*_test.go) call it through their fixtures.
+    ("backend/cli", "internal/apitest", [SDL], [], "internal/apitest/capabilities_test.go"),
+    ("backend/cli", "sim", [SDL], [], "sim/admin_conflict_test.go, hostheader_test.go, tier_test.go via apitest"),
     ("backend/cli", "failedevents", ["backend/services/event-management/graphql/**"], [], "failedevents/*_test.go"),
     ("backend/cli", "sim", ["backend/sims/dc-simulator/sim/handshake.go"], [], "sim/handshake_lockstep_test.go:30"),
     # core/test walks every .go file in the repository (logsink, defaultorder, sharedcache, ...).

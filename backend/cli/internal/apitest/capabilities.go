@@ -9,10 +9,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+// segment is the only shape a served-schema path component may take; the URL
+// is request-controlled, so nothing else may reach the filesystem join.
+var segment = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // ServeCapabilities handles negotiation independently of a fixture's business
 // operations, so existing mutation/refusal/call-count assertions stay meaningful.
@@ -34,6 +39,11 @@ func ServeCapabilities(t testing.TB, w http.ResponseWriter, r *http.Request) boo
 		if len(parts) == 4 {
 			file = parts[2] + "_schema.graphql"
 		}
+	}
+	if !segment.MatchString(area) || !segment.MatchString(strings.TrimSuffix(file, "_schema.graphql")+"") && file != "schema.graphql" {
+		t.Errorf("unexpected schema discovery path %q", r.URL.Path)
+		http.Error(w, "unknown schema", http.StatusNotFound)
+		return true
 	}
 	_, here, _, _ := runtime.Caller(0)
 	path := filepath.Join(filepath.Dir(here), "..", "..", "..", "services", area, "graphql", file)
