@@ -16,7 +16,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // This file holds the current-state EntityAttribute API (ADR-012). Attributes
@@ -61,31 +60,23 @@ func (api *Api) SetEntityAttribute(ctx context.Context,
 		return nil, err
 	}
 
-	created := &EntityAttribute{
-		EntityType:  request.EntityType,
-		EntityId:    entityId,
-		Scope:       request.Scope,
-		AttrKey:     request.AttrKey,
-		ValueType:   request.ValueType,
-		Value:       rdb.NullStrOf(request.Value),
-		LastUpdated: time.Now(),
-	}
+	updatedAt := time.Now()
+	created := &EntityAttribute{}
 	if err := api.writeAttrThenRecompute(ctx, request.EntityType, entityId, request.AttrKey, request.Scope,
-		func(db *gorm.DB) error { return upsertAttributeOnTx(db, created) }); err != nil {
+		func(db *gorm.DB) error {
+			*created = EntityAttribute{}
+			receipt, err := api.applyAttributePatchTx(ctx, db, request.EntityType, entityId, AttributePatch{{
+				Scope: request.Scope, Key: request.AttrKey, ValueType: request.ValueType, Value: request.Value, LastUpdated: updatedAt,
+			}})
+			if err == nil {
+				*created = *receipt.Changes[0].After
+			}
+			return err
+		}); err != nil {
 		return nil, err
 	}
 	api.emitDeviceAttributeForSet(ctx, request, created.LastUpdated)
 	return created, nil
-}
-
-// upsertAttributeOnTx lets the database serialize competing writes to the same live key.
-// RETURNING preserves the stored identity and creation time on an update.
-func upsertAttributeOnTx(db *gorm.DB, row *EntityAttribute) error {
-	return db.Clauses(clause.OnConflict{
-		Columns:     []clause.Column{{Name: "tenant_id"}, {Name: "entity_type"}, {Name: "entity_id"}, {Name: "scope"}, {Name: "attr_key"}},
-		TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "deleted_at IS NULL"}}},
-		DoUpdates:   clause.AssignmentColumns([]string{"value_type", "value", "last_updated", "updated_at"}),
-	}, clause.Returning{}).Create(row).Error
 }
 
 // emitDeviceAttributeForSet emits a device-attribute fact for a just-committed attribute
@@ -307,57 +298,39 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 	// — the accepted monotonic-clock posture, as for the roster/profile-active projections).
 	removedAt := time.Now().UTC()
 	var rowsAffected int64
-	// Same-txn membership recompute (ADR-062 S2): removing a SHARED-scope facet can drop
-	// this entity out of a rule-scoped group, so the delete + the read-model recompute
-	// commit together (a recompute failure rolls the delete back). Only wrap in a
-	// transaction when the delete can affect membership; a CLIENT-scope delete runs bare.
 	var recomputed membershipChange
 	var minted *DeviceConfigurationRevision
-	membership := membershipScopeEligible(entityType, scope)
-	if membership || configurationScopeEligible(entityType, scope) {
-		err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-			result := tx.Where(
-				"entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
-				entityType, entityId, scope, attrKey).Delete(&EntityAttribute{})
-			if result.Error != nil {
-				return result.Error
-			}
-			rowsAffected = result.RowsAffected
-			if rowsAffected == 0 {
-				return nil
-			}
-			if membership {
-				c, err := api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
-				recomputed = c
-				if err != nil {
-					return err
-				}
-			}
-			// Removing a declared configuration key changes the device's document: mint
-			// the revision in the delete's transaction.
-			var err error
-			if minted, err = api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, false); err != nil {
+	// Same-txn membership recompute (ADR-062 S2): removing a SHARED-scope facet can drop
+	// this entity out of a rule-scoped group, so the delete + the read-model recompute
+	// commit together (a recompute failure rolls the delete back). A device delete always
+	// runs in a transaction, because it takes the per-device attribute lock first.
+	err = api.runAttributeEntityTx(ctx, entityType, "unset", func(tx *gorm.DB) error {
+		rowsAffected, recomputed, minted = 0, membershipChange{}, nil
+		receipt, err := api.applyAttributePatchTx(ctx, tx, entityType, entityId, AttributePatch{{Scope: scope, Key: attrKey, Unset: true}})
+		if err != nil {
+			return err
+		}
+		rowsAffected = receipt.RowsAffected
+		if rowsAffected == 0 {
+			return nil
+		}
+		if membershipScopeEligible(entityType, scope) {
+			recomputed, err = api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
+			if err != nil {
 				return err
 			}
-			return queueAccessChangeOnTx(tx, entityType, entityId, recomputed)
-		})
+		}
+		minted, err = api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, false)
 		if err != nil {
-			return false, err
+			return err
 		}
-		api.publishMintedConfiguration(ctx, entityId, minted)
-		// Evict the entity's membership cache post-commit (ADR-062) — only if a
-		// rule-referenced group existed for the key — and announce a device that entered or
-		// left an access scope.
-		api.afterMembershipRecompute(ctx, entityType, entityId, recomputed)
-	} else {
-		result := api.RDB.DB(ctx).Where(
-			"entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
-			entityType, entityId, scope, attrKey).Delete(&EntityAttribute{})
-		if result.Error != nil {
-			return false, result.Error
-		}
-		rowsAffected = result.RowsAffected
+		return queueAccessChangeOnTx(tx, entityType, entityId, recomputed)
+	})
+	if err != nil {
+		return false, err
 	}
+	api.publishMintedConfiguration(ctx, entityId, minted)
+	api.afterMembershipRecompute(ctx, entityType, entityId, recomputed)
 
 	if rowsAffected > 0 && dynamicThresholdEligible(entityType, scope) {
 		// A tracked device attribute was actually removed: drop it from event-processing's

@@ -49,10 +49,13 @@ func testMembershipFamilyRace(t *testing.T, registration bool) {
 			_, err = api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: "sensor"})
 			require.NoError(t, err)
 			// Test-only seam: preserve the real attribute/registration paths, removing
-			// only the advisory lock. Never change production code for this control.
+			// only the advisory locks. Never change production code for this control.
+			// Both writers address ONE device, so the per-device attribute lock
+			// (dc_entity_attr_lock) serializes them too and must be removed as well, or
+			// the control could never expose the race the family lock exists for.
 			if bypass {
 				require.NoError(t, mgr.Database.Callback().Raw().Before("gorm:raw").Register("test:bypass-family", func(db *gorm.DB) {
-					if strings.Contains(db.Statement.SQL.String(), "pg_advisory_xact_lock") {
+					if sql := db.Statement.SQL.String(); strings.Contains(sql, "pg_advisory_xact_lock") || strings.Contains(sql, "dc_entity_attr_lock") {
 						db.Statement.SQL.Reset()
 						db.Statement.SQL.WriteString("SELECT 1")
 						db.Statement.Vars = nil

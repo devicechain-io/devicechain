@@ -90,7 +90,15 @@ func (api *Api) importFacetValue(ctx context.Context, row *FacetValueImportRow, 
 	var created *EntityAttribute
 	var change membershipChange
 	var minted *DeviceConfigurationRevision
-	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	run := func(fn func(*gorm.DB) error) error {
+		return api.runAttributeEntityTx(ctx, row.MemberType, "import", fn)
+	}
+	if dryRun {
+		run = func(fn func(*gorm.DB) error) error { return api.RDB.DB(ctx).Transaction(fn) }
+	}
+	err := run(func(tx *gorm.DB) error {
+		created, change, minted = nil, membershipChange{}, nil
+		res.Outcome, res.Code, res.Message = "", nil, nil
 		if err := lockFacetKey(ctx, tx, row.MemberType, row.Key); err != nil {
 			return err
 		}
@@ -99,9 +107,11 @@ func (api *Api) importFacetValue(ctx context.Context, row *FacetValueImportRow, 
 		if err != nil || created == nil || dryRun {
 			return err
 		}
-		if err := upsertAttributeOnTx(tx, created); err != nil {
+		receipt, err := api.applyAttributePatchTx(ctx, tx, created.EntityType, created.EntityId, AttributePatch{{Scope: created.Scope, Key: created.AttrKey, ValueType: created.ValueType, Value: &created.Value.String, LastUpdated: created.LastUpdated}})
+		if err != nil {
 			return err
 		}
+		*created = *receipt.Changes[0].After
 		change, minted, err = api.reconcileAttributeWriteOnTx(ctx, tx, created.EntityType, created.EntityId, created.AttrKey, created.Scope)
 		return err
 	})
@@ -176,9 +186,18 @@ func (api *Api) importFacetValueOnTx(tx *gorm.DB, row *FacetValueImportRow, res 
 	if err != nil {
 		return nil, err
 	}
+	ownerID := owner.ID
+	// Take the device attribute lock (after the facet lock, which is not a device lock)
+	// before reading the stored value, so the EXISTS comparison sees the value the write
+	// replaces. A dry run writes nothing and takes no device lock.
+	if !dryRun {
+		if err := lockAttributeOwnerTx(tx.Statement.Context, tx, row.MemberType, ownerID); err != nil {
+			return nil, err
+		}
+	}
 	var stored EntityAttribute
 	err = tx.Where("entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
-		row.MemberType, owner.ID, string(AttributeScopeShared), row.Key).First(&stored).Error
+		row.MemberType, ownerID, string(AttributeScopeShared), row.Key).First(&stored).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -187,7 +206,7 @@ func (api *Api) importFacetValueOnTx(tx *gorm.DB, row *FacetValueImportRow, res 
 		return nil, nil
 	}
 	created := &EntityAttribute{
-		EntityType: row.MemberType, EntityId: owner.ID, Scope: string(AttributeScopeShared),
+		EntityType: row.MemberType, EntityId: ownerID, Scope: string(AttributeScopeShared),
 		AttrKey: row.Key, ValueType: facet.ValueType, Value: rdb.NullStrOf(value), LastUpdated: time.Now(),
 	}
 	if dryRun {
