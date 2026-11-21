@@ -15,28 +15,57 @@ import (
 // heldBy loads the slot and run for a transition that acts on the slot's CURRENT holder, in lock
 // order (slot, then run), and requires that the slot's holder is this run.
 func heldBy(tx *gorm.DB, runUID string, states ...string) (*slotRow, *runRow, error) {
+	slot, run, _, _, err := heldByLocked(tx, runUID, lockNone, states...)
+	return slot, run, err
+}
+
+// What a transition locks between the slot (step 2) and the run (step 6), in lock order: the
+// identity (step 4) and the state head (step 5). A transition that needs either takes it HERE, not
+// after it has loaded the run, because a lock taken after a later step is an opposing order.
+type lockSet int
+
+const (
+	lockNone        lockSet = 0
+	lockIdentityRow lockSet = 1 << iota
+	lockHeadRow
+)
+
+// heldByLocked is heldBy that also takes the identity and/or state head in lock order.
+func heldByLocked(tx *gorm.DB, runUID string, locks lockSet, states ...string) (*slotRow, *runRow, *identityRow, *StateHead, error) {
 	cluster, err := slotForRun(tx, runUID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	slot, err := lockSlot(tx, cluster)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if slot == nil {
-		return nil, nil, transitionRefused("no slot for cluster %s", cluster)
+		return nil, nil, nil, nil, transitionRefused("no slot for cluster %s", cluster)
+	}
+	var id *identityRow
+	if locks&lockIdentityRow != 0 {
+		if id, err = lockIdentity(tx, cluster); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	var head *StateHead
+	if locks&lockHeadRow != 0 {
+		if head, err = lockHead(tx, cluster); err != nil {
+			return nil, nil, nil, nil, err
+		}
 	}
 	run, err := loadRun(tx, runUID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if !in(slot.State, states...) {
-		return slot, run, transitionRefused("slot is %s, want one of %v", slot.State, states)
+		return slot, run, id, head, transitionRefused("slot is %s, want one of %v", slot.State, states)
 	}
 	if slot.HolderRunUID == nil || *slot.HolderRunUID != runUID {
-		return slot, run, transitionRefused("run %s is not the slot's holder", runUID)
+		return slot, run, id, head, transitionRefused("run %s is not the slot's holder", runUID)
 	}
-	return slot, run, nil
+	return slot, run, id, head, nil
 }
 
 func evidenceJSON(v map[string]any) string {
@@ -100,6 +129,12 @@ func (m *Manager) Observe(ctx context.Context, runUID, jobNamespace, jobUID, pod
 		if !in(run.Phase, PhaseIntent, PhaseJobCreating, PhaseRunning) {
 			return transitionRefused("run is %s", run.Phase)
 		}
+		// A recovery run starts only from a state head that was CHECKED: the state it reads must
+		// have the lineage on record and a serial no lower, or it could overwrite state before
+		// anything noticed. See VerifyRecoveryStart.
+		if run.Kind == KindRecover && run.Phase == PhaseIntent {
+			return transitionRefused("a RECOVER run's starting state head has not been verified (VerifyRecoveryStart)")
+		}
 		if run.PodUID != nil && *run.PodUID != podUID {
 			quarantined = true
 			return m.quarantineTx(tx, slot, &runUID, QuarantineSecondPod, Actor{ID: m.holderID, Issuer: reservedSystemIssuer},
@@ -128,7 +163,8 @@ func (m *Manager) Observe(ctx context.Context, runUID, jobNamespace, jobUID, pod
 func (m *Manager) Exit(ctx context.Context, runUID string, spec ExitSpec) error {
 	var quarantined bool
 	err := m.do(ctx, func(tx *gorm.DB) error {
-		slot, run, err := heldBy(tx, runUID, StateHeld, StateRecovering)
+		// The state head (step 5) is locked ahead of the run (step 6).
+		slot, run, _, head, err := heldByLocked(tx, runUID, lockHeadRow, StateHeld, StateRecovering)
 		if err != nil {
 			return err
 		}
@@ -141,16 +177,7 @@ func (m *Manager) Exit(ctx context.Context, runUID string, spec ExitSpec) error 
 		if spec.Head.Lineage == "" {
 			return transitionRefused("the state head's lineage is required")
 		}
-		// Step 5: the state head.
-		var head struct {
-			Lineage string
-			Serial  int64
-		}
-		res := tx.Raw(`SELECT lineage, serial FROM state_heads WHERE cluster_uid = ? FOR UPDATE`, slot.ClusterUID).Scan(&head)
-		if res.Error != nil {
-			return fmt.Errorf("writerslot: read state head: %w", res.Error)
-		}
-		if res.RowsAffected > 0 && (head.Lineage != spec.Head.Lineage || spec.Head.Serial < head.Serial) {
+		if head != nil && (head.Lineage != spec.Head.Lineage || spec.Head.Serial < head.Serial) {
 			quarantined = true
 			return m.quarantineTx(tx, slot, &runUID, QuarantineStateHeadMismatch, Actor{ID: m.holderID, Issuer: reservedSystemIssuer},
 				map[string]any{"recorded_lineage": head.Lineage, "recorded_serial": head.Serial, "observed_lineage": spec.Head.Lineage, "observed_serial": spec.Head.Serial})
@@ -383,7 +410,9 @@ func (m *Manager) Resume(ctx context.Context, runUID string, obs *PodObservation
 // on the database clock.
 func (m *Manager) RecordRefreshCut(ctx context.Context, runUID string) error {
 	return m.do(ctx, func(tx *gorm.DB) error {
-		slot, _, err := heldBy(tx, runUID, StateUncertain)
+		// A quarantined slot keeps its holder: an operator who force-deletes the pod after the
+		// quarantine records the cut here, and the slot's state does not move.
+		slot, _, err := heldBy(tx, runUID, StateUncertain, StateQuarantined)
 		if err != nil {
 			return err
 		}
@@ -405,7 +434,7 @@ func (m *Manager) RecordRefreshCut(ctx context.Context, runUID string) error {
 func (m *Manager) FinishRecovery(ctx context.Context, runUID string, lock LockResolution) error {
 	var quarantined bool
 	err := m.do(ctx, func(tx *gorm.DB) error {
-		slot, run, err := heldBy(tx, runUID, StateRecovering)
+		slot, run, id, _, err := heldByLocked(tx, runUID, lockIdentityRow, StateRecovering)
 		if err != nil {
 			return err
 		}
@@ -414,6 +443,11 @@ func (m *Manager) FinishRecovery(ctx context.Context, runUID string, lock LockRe
 		}
 		if !exited(run) {
 			return transitionRefused("run is %s, not exited", run.Phase)
+		}
+		// A force-unlock is a GCS lock object's resolution. A pg backend's lock is a session advisory
+		// lock that vanishes with the session, so "absent" is the only thing that establishes it.
+		if lock == LockForceUnlockedFromExcludedRun && (id.StateBackend == nil || *id.StateBackend != BackendGCS) {
+			return transitionRefused("a force-unlock resolves a gcs lock; this cluster's backend is not gcs")
 		}
 		switch lock {
 		case LockAbsent, LockForceUnlockedFromExcludedRun:
@@ -437,6 +471,39 @@ func (m *Manager) FinishRecovery(ctx context.Context, runUID string, lock LockRe
 			return err
 		}
 		return m.freeSlot(tx, slot, runUID, "recovery finished")
+	})
+	if err != nil {
+		return err
+	}
+	if quarantined {
+		return ErrQuarantined
+	}
+	return nil
+}
+
+// VerifyRecoveryStart is the check a RECOVER run needs BEFORE its Job is created: the state it is
+// about to read must have the lineage on record and a serial no lower. A different lineage or a
+// lower serial quarantines the slot, because a recovery that went ahead could overwrite state before
+// anything noticed. Observe refuses a RECOVER run that has not passed it.
+func (m *Manager) VerifyRecoveryStart(ctx context.Context, runUID string, head StateHead) error {
+	if head.Lineage == "" {
+		return transitionRefused("the state head's lineage is required")
+	}
+	var quarantined bool
+	err := m.do(ctx, func(tx *gorm.DB) error {
+		slot, run, _, onRecord, err := heldByLocked(tx, runUID, lockHeadRow, StateRecovering)
+		if err != nil {
+			return err
+		}
+		if run.Kind != KindRecover || run.Phase != PhaseIntent {
+			return transitionRefused("only a RECOVER run at INTENT has a starting head to verify (it is %s, %s)", run.Kind, run.Phase)
+		}
+		if onRecord != nil && (onRecord.Lineage != head.Lineage || head.Serial < onRecord.Serial) {
+			quarantined = true
+			return m.quarantineTx(tx, slot, &runUID, QuarantineStateHeadMismatch, Actor{ID: m.holderID, Issuer: reservedSystemIssuer},
+				map[string]any{"recorded_lineage": onRecord.Lineage, "recorded_serial": onRecord.Serial, "observed_lineage": head.Lineage, "observed_serial": head.Serial, "at": "recovery start"})
+		}
+		return tx.Exec(`UPDATE runs SET phase = 'JOB_CREATING' WHERE run_uid = ?`, runUID).Error
 	})
 	if err != nil {
 		return err

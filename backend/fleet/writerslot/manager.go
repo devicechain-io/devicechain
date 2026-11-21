@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // Manager is one fleet manager replica's handle on the exclusion tables. It acts only while it
@@ -21,7 +23,9 @@ type Manager struct {
 	holderID string
 	cfg      Config
 
-	epoch int64 // the lease epoch this manager holds; 0 until Take succeeds
+	// epoch is the lease epoch this manager holds; 0 until Take succeeds. Take writes it while
+	// transactions read it, so it is atomic, and each transaction captures it once (see do).
+	epoch atomic.Int64
 
 	// afterLease, when set, runs inside every transaction right after the lease check. Tests use it
 	// to hold a transaction open and prove the lease row is read FOR SHARE.
@@ -45,14 +49,18 @@ func NewManager(db *gorm.DB, holderID string, cfg Config) (*Manager, error) {
 	if cfg.ClockSkewMargin <= 0 {
 		cfg.ClockSkewMargin = defaultClockSkew
 	}
-	return &Manager{db: db, holderID: holderID, cfg: cfg}, nil
+	// 🔴 The manager's connection logs NOTHING. gorm's logger prints the SQL with its bound values
+	// filled in on an error and on a slow statement, and these statements carry confidential values:
+	// a cloud operation's error message, and a per-run role's password. The errors the manager
+	// returns are the signal; the SQL text is not worth a leak.
+	return &Manager{db: db.Session(&gorm.Session{Logger: logger.Discard}), holderID: holderID, cfg: cfg}, nil
 }
 
 // HolderID is the lease holder id, which is also the actor id of system-initiated transitions.
 func (m *Manager) HolderID() string { return m.holderID }
 
 // LeaseEpoch is the epoch of the lease this manager holds (0 before Take).
-func (m *Manager) LeaseEpoch() int64 { return m.epoch }
+func (m *Manager) LeaseEpoch() int64 { return m.epoch.Load() }
 
 // Take takes or renews the singleton manager lease with a compare-and-set against the database
 // clock. It succeeds when no manager holds a live lease, or when this manager already does. A
@@ -81,7 +89,7 @@ func (m *Manager) Take(ctx context.Context, ttl time.Duration) error {
 	if epoch == nil {
 		return ErrLeaseHeld
 	}
-	m.epoch = *epoch
+	m.epoch.Store(*epoch)
 	return nil
 }
 
@@ -96,26 +104,43 @@ type leaseRow struct {
 // manager's own holder id and epoch, still live. A deposed manager's transaction fails HERE, in
 // the database. Its external acts are harmless because each is idempotent by a deterministic name
 // and is followed by a transaction that will fail.
-func (m *Manager) requireLease(tx *gorm.DB) error {
+func (m *Manager) requireLease(tx *gorm.DB, epoch int64) error {
 	var l leaseRow
 	res := tx.Raw(`SELECT holder_id, lease_epoch, expires_at > clock_timestamp() AS live FROM manager_lease WHERE id = 1 FOR SHARE`).Scan(&l)
 	if res.Error != nil {
 		return fmt.Errorf("writerslot: read lease: %w", res.Error)
 	}
-	if res.RowsAffected == 0 || m.epoch == 0 || l.HolderID != m.holderID || l.Epoch != m.epoch || !l.Live {
+	if res.RowsAffected == 0 || epoch == 0 || l.HolderID != m.holderID || l.Epoch != epoch || !l.Live {
 		return ErrLeaseLost
 	}
 	return nil
+}
+
+// txEpochKey is the transaction setting that carries the lease epoch captured when it began.
+const txEpochKey = "fleet:lease_epoch"
+
+// txEpoch is the lease epoch this transaction captured when it began.
+func (m *Manager) txEpoch(tx *gorm.DB) int64 {
+	if v, ok := tx.Get(txEpochKey); ok {
+		if e, ok := v.(int64); ok {
+			return e
+		}
+	}
+	return m.epoch.Load()
 }
 
 // do runs fn in one transaction that starts with the lease check. No Kubernetes, cloud or
 // role-management call is made while it runs: the pattern is intent transaction, external act,
 // outcome transaction.
 func (m *Manager) do(ctx context.Context, fn func(tx *gorm.DB) error) error {
+	// The epoch is captured ONCE, so the lease check and every audit row of this transaction agree
+	// even if a renewal lands meanwhile.
+	epoch := m.epoch.Load()
 	return m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := m.requireLease(tx); err != nil {
+		if err := m.requireLease(tx, epoch); err != nil {
 			return err
 		}
+		tx.Set(txEpochKey, epoch)
 		if m.afterLease != nil {
 			m.afterLease()
 		}
@@ -254,6 +279,22 @@ func lockIdentity(tx *gorm.DB, clusterUID string) (*identityRow, error) {
 	return &id, nil
 }
 
+// lockHead is step 5: the state head row, locked FOR UPDATE, or nil when there is none.
+func lockHead(tx *gorm.DB, clusterUID string) (*StateHead, error) {
+	var head struct {
+		Lineage string
+		Serial  int64
+	}
+	res := tx.Raw(`SELECT lineage, serial FROM state_heads WHERE cluster_uid = ? FOR UPDATE`, clusterUID).Scan(&head)
+	if res.Error != nil {
+		return nil, fmt.Errorf("writerslot: read state head: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return nil, nil
+	}
+	return &StateHead{Lineage: head.Lineage, Serial: head.Serial}, nil
+}
+
 // loadRun is step 6: the run row, locked FOR UPDATE.
 func loadRun(tx *gorm.DB, runUID string) (*runRow, error) {
 	var r runRow
@@ -313,6 +354,7 @@ func (m *Manager) appendTransition(tx *gorm.DB, t transition) error {
 	if t.Evidence == "" {
 		t.Evidence = "{}"
 	}
+	leaseEpoch := m.txEpoch(tx)
 	var reason *string
 	if t.Reason != "" {
 		reason = &t.Reason
@@ -320,7 +362,7 @@ func (m *Manager) appendTransition(tx *gorm.DB, t transition) error {
 	err := tx.Exec(`INSERT INTO writer_slot_transitions
 		(cluster_uid, epoch, run_uid, from_state, to_state, cloud_cut_proof, state_cut_method, evidence, reason, actor_id, actor_issuer, request_id, manager_lease_epoch, at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, clock_timestamp())`,
-		t.ClusterUID, t.Epoch, t.RunUID, t.From, t.To, t.CloudCutProof, t.StateCutMethod, t.Evidence, reason, t.Actor.ID, t.Actor.Issuer, t.RequestID, m.epoch).Error
+		t.ClusterUID, t.Epoch, t.RunUID, t.From, t.To, t.CloudCutProof, t.StateCutMethod, t.Evidence, reason, t.Actor.ID, t.Actor.Issuer, t.RequestID, leaseEpoch).Error
 	if err != nil {
 		return fmt.Errorf("writerslot: append transition: %w", err)
 	}

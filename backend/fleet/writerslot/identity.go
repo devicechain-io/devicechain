@@ -110,16 +110,12 @@ func (m *Manager) RecordClusterImport(ctx context.Context, runUID, address strin
 	var out ClusterImportDecision
 	var quarantined bool
 	err = m.do(ctx, func(tx *gorm.DB) error {
-		slot, run, err := heldBy(tx, runUID, StateRecovering)
+		slot, run, id, _, err := heldByLocked(tx, runUID, lockIdentityRow, StateRecovering)
 		if err != nil {
 			return err
 		}
 		if run.Kind != KindRecover {
 			return transitionRefused("recovery imports belong to a RECOVER run")
-		}
-		id, err := lockIdentity(tx, slot.ClusterUID)
-		if err != nil {
-			return err
 		}
 		if id.ManagementMode != Managed {
 			return transitionRefused("an observe-only cluster is never imported into")
@@ -179,11 +175,7 @@ func (m *Manager) RecordPoolImport(ctx context.Context, runUID, address, poolNam
 	}
 	var out ClusterImportDecision
 	err = m.do(ctx, func(tx *gorm.DB) error {
-		slot, run, err := heldBy(tx, runUID, StateRecovering)
-		if err != nil {
-			return err
-		}
-		id, err := lockIdentity(tx, slot.ClusterUID)
+		slot, run, id, _, err := heldByLocked(tx, runUID, lockIdentityRow, StateRecovering)
 		if err != nil {
 			return err
 		}

@@ -221,6 +221,11 @@ type CloudCut struct {
 	// Pod is the observation read while the pod object was held by the manager's finalizer. Required
 	// for TERMINATION and ignored for EXPIRY.
 	Pod PodObservation
+	// MorePods are the observations of every OTHER pod the run was ever seen with. A second pod UID
+	// under one run quarantines the slot, and leaving that quarantine by TERMINATION needs every pod
+	// observed, the recorded one and each of these, terminated: proving the first dead says nothing
+	// about the second.
+	MorePods []PodObservation
 }
 
 // StateCut is cut 2.

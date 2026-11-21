@@ -39,11 +39,12 @@ const (
 )
 
 type fx struct {
-	t   *testing.T
-	env *pgtest.Env
-	db  *gorm.DB
-	mgr *Manager
-	ctx context.Context
+	t       *testing.T
+	env     *pgtest.Env
+	db      *gorm.DB
+	mgr     *Manager
+	ctx     context.Context
+	backend string
 }
 
 // premiseSet is a Premises with a fixed answer.
@@ -87,7 +88,7 @@ func newFx(t *testing.T, backend string, cfg Config) *fx {
 	require.NoError(t, schema.NewWriterExclusionSchema().Migrate(env.Gorm))
 	m, err := NewManager(env.Gorm, "manager-a", cfg)
 	require.NoError(t, err)
-	f := &fx{t: t, env: env, db: env.Gorm, mgr: m, ctx: context.Background()}
+	f := &fx{t: t, env: env, db: env.Gorm, mgr: m, ctx: context.Background(), backend: backend}
 	require.NoError(t, m.Take(f.ctx, time.Hour))
 	f.identity(clusterA, "dcf-a", nonceA, backend)
 	f.observe(clusterA, true)
@@ -113,8 +114,12 @@ func (f *fx) observe(uid string, complete bool) {
 }
 
 func (f *fx) spec(runUID, kind string) RunSpec {
-	return RunSpec{ClusterUID: clusterA, Kind: kind, RunUID: runUID, RequestID: reqID, CredentialMode: ModeKindJWKS, CloudIdentityRole: "apply",
+	s := RunSpec{ClusterUID: clusterA, Kind: kind, RunUID: runUID, RequestID: reqID, CredentialMode: ModeKindJWKS, CloudIdentityRole: "apply",
 		CloudPrincipal: "apply@example", KsaTokenTTL: time.Hour, StsTokenTTL: time.Hour, AccessTokenTTL: time.Hour}
+	if f.backend == BackendPG {
+		s.StateRoleName, _ = StateRoleName(runUID) // a pg run carries ITS OWN role, derived from its uid
+	}
+	return s
 }
 
 func (f *fx) acquire(runUID, kind string) *Run {
@@ -187,6 +192,22 @@ func TestFleetPGConcurrentAcquireExactlyOneWins(t *testing.T) {
 	const n = 8
 	var wins, refusals atomic.Int64
 	var wg sync.WaitGroup
+
+	// A barrier inside the transaction, after the lease check: every contender is in its own
+	// transaction before ANY of them goes on, so the outcome is decided by the slot's row lock and not
+	// by which goroutine happened to start first.
+	var arrived sync.WaitGroup
+	arrived.Add(n)
+	var once sync.Once
+	gate := make(chan struct{})
+	f.mgr.afterLease = func() {
+		arrived.Done()
+		<-gate
+	}
+	go func() {
+		arrived.Wait()
+		once.Do(func() { close(gate) })
+	}()
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(i int) {
@@ -203,6 +224,7 @@ func TestFleetPGConcurrentAcquireExactlyOneWins(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+	f.mgr.afterLease = nil
 	require.Equal(t, int64(1), wins.Load(), "exactly one concurrent acquire may win")
 	require.Equal(t, int64(n-1), refusals.Load())
 }
@@ -662,6 +684,10 @@ func TestFleetPGRecovery(t *testing.T) {
 	s := f.slot(clusterA)
 	require.Nil(t, s.CloudCutProof, "the excluded run's proof does not carry onto the recovery holder")
 
+	// A recovery run cannot be observed running until its starting state head is verified.
+	refused(t, f.mgr.Observe(f.ctx, run2, "fleet", "job-"+run2, "recovery-pod", "n"), ErrTransitionRefused)
+	require.NoError(t, f.mgr.VerifyRecoveryStart(f.ctx, run2, StateHead{Lineage: "l1", Serial: 1}))
+
 	// A lost recovery run goes through doubt like any other.
 	f.running(run2, "recovery-pod")
 	require.NoError(t, f.mgr.Doubt(f.ctx, run2, "recovery pod lost"))
@@ -680,6 +706,7 @@ func TestFleetPGRecoveryFinishesToFree(t *testing.T) {
 	f := newFx(t, BackendGCS, Config{})
 	f.excluded(run1, podA)
 	f.acquire(run2, KindRecover)
+	require.NoError(t, f.mgr.VerifyRecoveryStart(f.ctx, run2, StateHead{Lineage: "l1", Serial: 1}))
 	f.running(run2, "recovery-pod")
 	// A recovery run that recorded no state head cannot be judged consistent.
 	require.NoError(t, f.mgr.Exit(f.ctx, run2, ExitSpec{Pod: terminated("recovery-pod"), Succeeded: true, Head: StateHead{Lineage: "l1", Serial: 5}}))
@@ -785,9 +812,15 @@ func TestFleetPGUnknownValuesRefuseOnEveryReleasePath(t *testing.T) {
 		_, err := f.mgr.Acquire(f.ctx, f.spec(run1, KindChange))
 		refused(t, err, ErrNotAdmitted)
 		f.exec(`UPDATE cloud_operations SET status = 'DONE', error_code = '1', resolution = 'FUTURE_RESOLUTION'`)
-		// A resolution is a recorded fact; an unknown one still reads as "has a resolution" in SQL,
-		// so the manager must not be the one to widen what counts. It stays in the vocabulary check.
+		// A resolution this build does not know is not a settlement: admission refuses, and so does release.
+		_, err = f.mgr.Acquire(f.ctx, f.spec(run1, KindChange))
+		refused(t, err, ErrNotAdmitted)
+		require.Contains(t, err.Error(), "not settled")
 		require.Error(t, f.mgr.ResolveOperation(f.ctx, clusterA, "op", "FUTURE_RESOLUTION"))
+		// The counterweight: a KNOWN resolution does settle it.
+		require.NoError(t, f.mgr.ResolveOperation(f.ctx, clusterA, "op", ResolutionReconciled))
+		_, err = f.mgr.Acquire(f.ctx, f.spec(run1, KindChange))
+		require.NoError(t, err)
 	})
 }
 
@@ -800,18 +833,38 @@ func TestFleetPGLockOrderHoldsUnderConcurrentObserverAndTransitions(t *testing.T
 	f.exec(`SET deadlock_timeout = '200ms'`)
 	deadline := time.Now().Add(6 * time.Second)
 	var wg sync.WaitGroup
-	var deadlocks atomic.Int64
+	var deadlocks, unexpected, cycles, listings, serial atomic.Int64
 	check := func(err error) {
-		if err != nil && strings.Contains(err.Error(), "40P01") {
+		if err == nil {
+			return
+		}
+		if strings.Contains(err.Error(), "40P01") {
 			deadlocks.Add(1)
+			return
+		}
+		if !errors.Is(err, ErrNotAdmitted) {
+			unexpected.Add(1)
+			t.Errorf("unexpected error under load: %v", err)
 		}
 	}
+	wg.Add(1)
+	go func() { // a renewal racing the transitions: the same holder renewing keeps its epoch, so none is deposed
+		defer wg.Done()
+		for time.Now().Before(deadline) {
+			check(f.mgr.Take(f.ctx, time.Hour))
+		}
+	}()
 	for i := 0; i < 3; i++ { // the Observer
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			for n := 0; time.Now().Before(deadline); n++ {
-				check(f.mgr.RecordObservation(f.ctx, clusterA, Observation{Complete: true}))
+				err := f.mgr.RecordObservation(f.ctx, clusterA, Observation{Complete: true},
+					CloudOperation{Name: fmt.Sprintf("op-%d-%d", i, n%5), Status: OpDone, Source: SourceObserverList})
+				check(err)
+				if err == nil {
+					listings.Add(1)
+				}
 				check(f.mgr.RecordOperation(f.ctx, clusterA, CloudOperation{Name: fmt.Sprintf("op-%d-%d", i, n%5), Status: OpDone, Source: SourceObserverList}))
 			}
 		}(i)
@@ -826,17 +879,22 @@ func TestFleetPGLockOrderHoldsUnderConcurrentObserverAndTransitions(t *testing.T
 				check(err)
 				if err == nil {
 					check(f.mgr.Observe(f.ctx, uid, "fleet", "job-"+uid, "pod-"+uid, "n"))
-					check(f.mgr.Exit(f.ctx, uid, ExitSpec{Pod: terminated("pod-" + uid), Succeeded: true, Head: StateHead{Lineage: "l", Serial: int64(n + 1)}}))
-					check(f.mgr.Release(f.ctx, uid))
+					// The serial is taken while HOLDING the slot, so it rises in holder order.
+					check(f.mgr.Exit(f.ctx, uid, ExitSpec{Pod: terminated("pod-" + uid), Succeeded: true, Head: StateHead{Lineage: "l", Serial: serial.Add(1)}}))
+					rerr := f.mgr.Release(f.ctx, uid)
+					check(rerr)
+					if rerr == nil {
+						cycles.Add(1)
+					}
 				}
 			}
 		}(i)
 	}
 	wg.Wait()
 	require.Zero(t, deadlocks.Load(), "the lock order must hold under an opposing-path workload")
-	var runs int
-	require.NoError(t, f.db.Raw(`SELECT count(*) FROM runs`).Scan(&runs).Error)
-	require.Positive(t, runs, "the workload must have done work for the absence of deadlocks to mean anything")
+	require.Zero(t, unexpected.Load())
+	require.Positive(t, cycles.Load(), "the slot must have completed whole acquire-to-release cycles for the absence of deadlocks to mean anything")
+	require.Positive(t, listings.Load(), "the Observer must have published whole listings")
 }
 
 // ---- the state cut is real ------------------------------------------------------------------
@@ -1025,4 +1083,230 @@ func TestFleetPGStaleEpochOfTheSameHolderFails(t *testing.T) {
 	refused(t, err, ErrLeaseLost)
 	_, err = f.mgr.Acquire(f.ctx, f.spec(run1, KindCreate))
 	require.NoError(t, err)
+}
+
+// The per-run state role is the run's own: a caller-named role cannot satisfy the cut.
+func TestFleetPGStateRoleIsTheRunsOwn(t *testing.T) {
+	f := newFx(t, BackendPG, Config{})
+	s := f.spec(run1, KindCreate)
+	s.StateRoleName = "some_other_nologin_role"
+	_, err := f.mgr.Acquire(f.ctx, s)
+	refused(t, err, ErrNotAdmitted)
+	s.StateRoleName = ""
+	_, err = f.mgr.Acquire(f.ctx, s)
+	refused(t, err, ErrNotAdmitted)
+
+	g := newFx(t, BackendGCS, Config{})
+	s = g.spec(run1, KindCreate)
+	s.StateRoleName = "fleet_run_33333333333333333333333333333333"
+	_, err = g.mgr.Acquire(g.ctx, s)
+	refused(t, err, ErrNotAdmitted)
+
+	// A run whose recorded role is NOT derived from its uid cannot prove the cut with another role,
+	// even a real NOLOGIN one with no session. EXPIRY is used so that the only thing standing in the
+	// way is the role check (TERMINATION would be refused for its own reasons first).
+	h := newFx(t, BackendPG, Config{Premises: premiseSet{ModeKindJWKS: true}, ClockSkewMargin: 10 * time.Millisecond})
+	h.uncertainRun(run1, podA, func(s *RunSpec) {
+		s.KsaTokenTTL, s.StsTokenTTL, s.AccessTokenTTL = time.Second, time.Second, time.Second
+	})
+	require.NoError(t, h.mgr.RecordRefreshCut(h.ctx, run1))
+	h.exec(`UPDATE writer_slots SET refresh_cut_at = now() - interval '1 hour'`)
+	dropRolesAfter(t, "unrelated_role")
+	h.exec(`CREATE ROLE unrelated_role NOLOGIN`)
+	h.exec(`UPDATE runs SET state_role_name = 'unrelated_role'`)
+	err = h.mgr.Prove(h.ctx, run1, Proof{Cloud: CloudCut{Proof: ProofExpiry}, State: StateCut{Method: CutPGRoleRevoked}})
+	refused(t, err, ErrProofRefused)
+	require.Contains(t, err.Error(), "state role")
+}
+
+// A second pod quarantines; leaving that quarantine by TERMINATION needs EVERY observed pod dead.
+func TestFleetPGSecondPodNeedsBothPodsTerminated(t *testing.T) {
+	f := newFx(t, BackendGCS, Config{})
+	f.acquire(run1, KindCreate)
+	f.running(run1, podA)
+	refused(t, f.mgr.Observe(f.ctx, run1, "fleet", "job-"+run1, podB, "n2"), ErrQuarantined)
+
+	proofA := Proof{Cloud: CloudCut{Proof: ProofTermination, Pod: terminated(podA)}, State: StateCut{Method: CutProcessTerminated}}
+	err := f.mgr.Prove(f.ctx, run1, proofA)
+	refused(t, err, ErrProofRefused)
+	require.Contains(t, err.Error(), podB)
+	require.Equal(t, StateQuarantined, f.state())
+
+	// A pod that is NOT terminated does not cover it either.
+	proofA.Cloud.MorePods = []PodObservation{{PodUID: podB, Containers: []ContainerStatus{{Terminated: false}}}}
+	refused(t, f.mgr.Prove(f.ctx, run1, proofA), ErrProofRefused)
+
+	proofA.Cloud.MorePods = []PodObservation{terminated(podB)}
+	require.NoError(t, f.mgr.Prove(f.ctx, run1, proofA))
+	require.Equal(t, StateExcluded, f.state())
+}
+
+// A refresh cut can be recorded for a quarantined holder, so EXPIRY can be reached from quarantine.
+func TestFleetPGRefreshCutFromQuarantine(t *testing.T) {
+	cfg := Config{Premises: premiseSet{ModeKindJWKS: true}, ClockSkewMargin: 10 * time.Millisecond}
+	f := newFx(t, BackendGCS, cfg)
+	f.uncertainRun(run1, podA, func(s *RunSpec) {
+		s.KsaTokenTTL, s.StsTokenTTL, s.AccessTokenTTL = time.Second, time.Second, time.Second
+	})
+	require.NoError(t, f.mgr.Quarantine(f.ctx, clusterA, QuarantineNoProof, Actor{}))
+	require.NoError(t, f.mgr.RecordRefreshCut(f.ctx, run1))
+	require.Equal(t, StateQuarantined, f.state(), "recording the cut does not move the slot")
+	f.exec(`UPDATE writer_slots SET refresh_cut_at = now() - interval '1 hour'`)
+	require.NoError(t, f.mgr.Prove(f.ctx, run1, Proof{Cloud: CloudCut{Proof: ProofExpiry}, State: StateCut{Method: CutCloudCredential}}))
+	require.Equal(t, StateExcluded, f.state())
+}
+
+// A pg backend's lock resolves only by being absent; a force-unlock is a gcs lock's resolution.
+func TestFleetPGForceUnlockIsGCSOnly(t *testing.T) {
+	for backend, want := range map[string]bool{BackendGCS: true, BackendPG: false} {
+		f := newFx(t, backend, Config{})
+		f.excluded(run1, podA)
+		f.acquire(run2, KindRecover)
+		require.NoError(t, f.mgr.VerifyRecoveryStart(f.ctx, run2, StateHead{Lineage: "l1", Serial: 1}))
+		f.running(run2, "recovery-pod")
+		require.NoError(t, f.mgr.Exit(f.ctx, run2, ExitSpec{Pod: terminated("recovery-pod"), Succeeded: true, Head: StateHead{Lineage: "l1", Serial: 2}}))
+		err := f.mgr.FinishRecovery(f.ctx, run2, LockForceUnlockedFromExcludedRun)
+		if want {
+			require.NoError(t, err, backend)
+		} else {
+			refused(t, err, ErrTransitionRefused)
+			require.NoError(t, f.mgr.FinishRecovery(f.ctx, run2, LockAbsent), "absent resolves a pg lock")
+		}
+	}
+}
+
+// A recovery run starts only from a CHECKED state head: a different lineage or a lower serial
+// quarantines before any Job exists.
+func TestFleetPGRecoveryStartVerifiesTheStateHead(t *testing.T) {
+	setup := func(t *testing.T) *fx {
+		f := newFx(t, BackendGCS, Config{})
+		f.acquire(run1, KindCreate)
+		f.running(run1, podA)
+		require.NoError(t, f.mgr.Exit(f.ctx, run1, ExitSpec{Pod: terminated(podA), Head: StateHead{Lineage: "l1", Serial: 7}}))
+		require.NoError(t, f.mgr.Doubt(f.ctx, run1, "x"))
+		require.NoError(t, f.mgr.Prove(f.ctx, run1, Proof{Cloud: CloudCut{Proof: ProofTermination, Pod: terminated(podA)}, State: StateCut{Method: CutProcessTerminated}}))
+		f.acquire(run2, KindRecover)
+		return f
+	}
+	for name, head := range map[string]StateHead{"lower serial": {Lineage: "l1", Serial: 6}, "changed lineage": {Lineage: "other", Serial: 9}} {
+		f := setup(t)
+		refused(t, f.mgr.VerifyRecoveryStart(f.ctx, run2, head), ErrQuarantined)
+		require.Equal(t, QuarantineStateHeadMismatch, *f.slot(clusterA).QuarantineReason, name)
+		refused(t, f.mgr.Observe(f.ctx, run2, "fleet", "job", "pod", "n"), ErrTransitionRefused)
+	}
+	// The counterweight: the recorded head, or a higher serial of its lineage, verifies.
+	f := setup(t)
+	require.NoError(t, f.mgr.VerifyRecoveryStart(f.ctx, run2, StateHead{Lineage: "l1", Serial: 7}))
+	f.running(run2, "recovery-pod")
+	// It is a one-shot at INTENT, and only for a RECOVER run.
+	refused(t, f.mgr.VerifyRecoveryStart(f.ctx, run2, StateHead{Lineage: "l1", Serial: 7}), ErrTransitionRefused)
+}
+
+// A listing and the operations it found are published together, and admission waits for both: it
+// reads the observation row FOR SHARE, and a listing holds that row until it commits.
+func TestFleetPGAdmissionWaitsForAnInFlightListing(t *testing.T) {
+	f := newFx(t, BackendGCS, Config{})
+	inFlight := make(chan struct{})
+	release := make(chan struct{})
+	published := make(chan error, 1)
+	go func() {
+		published <- f.db.Transaction(func(tx *gorm.DB) error {
+			// What RecordObservation does: the observation row first (step 3), then the operations (step 7).
+			if err := tx.Exec(`UPDATE cluster_observations SET observer_listed_at = clock_timestamp(), observer_list_complete = true WHERE cluster_uid = ?`, clusterA).Error; err != nil {
+				return err
+			}
+			close(inFlight)
+			<-release
+			return tx.Exec(`INSERT INTO cloud_operations (cluster_uid, operation_name, status, source, first_seen_at, last_seen_at)
+				VALUES (?, 'op-found', 'RUNNING', 'OBSERVER_LIST', now(), now())`, clusterA).Error
+		})
+	}()
+	<-inFlight
+
+	admitted := make(chan error, 1)
+	go func() { _, err := f.mgr.Acquire(f.ctx, f.spec(run1, KindChange)); admitted <- err }()
+	select {
+	case err := <-admitted:
+		t.Fatalf("admission did not wait for the in-flight listing (it returned %v)", err)
+	case <-time.After(700 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-published)
+	refused(t, <-admitted, ErrNotAdmitted) // it then sees the operation the listing found
+	var runs int
+	require.NoError(t, f.db.Raw(`SELECT count(*) FROM runs`).Scan(&runs).Error)
+	require.Zero(t, runs)
+
+	// And the manager's own call is that atomic: the unsettled operation arrives with the listing.
+	g := newFx(t, BackendGCS, Config{})
+	require.NoError(t, g.mgr.RecordObservation(g.ctx, clusterA, Observation{Complete: true}, CloudOperation{Name: "op-1", Status: OpRunning, Source: SourceObserverList}))
+	_, err := g.mgr.Acquire(g.ctx, g.spec(run1, KindChange))
+	refused(t, err, ErrNotAdmitted)
+	// A bad operation fails the whole listing: nothing is published.
+	h := newFx(t, BackendGCS, Config{})
+	require.Error(t, h.mgr.RecordObservation(h.ctx, clusterA, Observation{Complete: true, ClusterStatus: "MARK"}, CloudOperation{Name: "", Status: OpRunning, Source: SourceObserverList}))
+	var status *string
+	require.NoError(t, h.db.Raw(`SELECT cluster_status FROM cluster_observations`).Scan(&status).Error)
+	require.Equal(t, "RUNNING", *status, "a rejected listing must not have been published")
+}
+
+// recordingLogger records every statement gorm would have logged.
+type recordingLogger struct {
+	mu   sync.Mutex
+	logs []string
+}
+
+func (r *recordingLogger) LogMode(logger.LogLevel) logger.Interface { return r }
+func (r *recordingLogger) Info(_ context.Context, m string, a ...interface{}) {
+	r.add(fmt.Sprintf(m, a...))
+}
+func (r *recordingLogger) Warn(_ context.Context, m string, a ...interface{}) {
+	r.add(fmt.Sprintf(m, a...))
+}
+func (r *recordingLogger) Error(_ context.Context, m string, a ...interface{}) {
+	r.add(fmt.Sprintf(m, a...))
+}
+func (r *recordingLogger) Trace(_ context.Context, _ time.Time, fc func() (string, int64), err error) {
+	sql, _ := fc()
+	r.add(fmt.Sprintf("%s %v", sql, err))
+}
+func (r *recordingLogger) add(s string) { r.mu.Lock(); r.logs = append(r.logs, s); r.mu.Unlock() }
+func (r *recordingLogger) text() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.Join(r.logs, "\n")
+}
+
+// Confidential values never reach a log: a cloud operation's error message, and a role's password.
+func TestFleetPGManagerStatementsAreNeverLogged(t *testing.T) {
+	f := newFx(t, BackendGCS, Config{})
+	rec := &recordingLogger{}
+	noisy := f.db.Session(&gorm.Session{Logger: rec})
+	const secret = "SECRET-ERROR-MESSAGE-7f3a"
+	const password = "a-sufficiently-long-password-9z"
+
+	// Control: the same failing statement through a plain handle IS recorded, so the silence below
+	// is the manager's doing and not an artefact of this logger.
+	_ = noisy.Exec(`INSERT INTO cloud_operations (cluster_uid, operation_name, status, source, error_message, first_seen_at, last_seen_at)
+		VALUES ('99999999-9999-9999-9999-999999999999', 'x', 'DONE', 'RUNNER_LOG', ?, now(), now())`, secret).Error
+	require.Contains(t, rec.text(), secret, "the control must show the logger records bound values")
+
+	rec2 := &recordingLogger{}
+	m, err := NewManager(f.db.Session(&gorm.Session{Logger: rec2}), "manager-a", Config{})
+	require.NoError(t, err)
+	require.NoError(t, m.Take(f.ctx, time.Hour)) // the same holder renews
+
+	// An operation naming a cluster that does not exist fails on the foreign key, with the error
+	// message among the bound values.
+	require.Error(t, m.RecordOperation(f.ctx, "99999999-9999-9999-9999-999999999999", CloudOperation{Name: "x", Status: OpDone, ErrorCode: "1", ErrorMessage: secret, Source: SourceRunnerLog}))
+	// A role created twice fails the second time, with the password in the statement.
+	run := "bbbbbbbb-0000-0000-0000-000000000009"
+	rname, _ := StateRoleName(run)
+	dropRolesAfter(t, rname)
+	require.NoError(t, m.CreateStateRole(f.ctx, run, "postgres", password))
+	require.Error(t, m.CreateStateRole(f.ctx, run, "postgres", password))
+
+	require.NotContains(t, rec2.text(), secret, "a cloud operation's error message must never be logged")
+	require.NotContains(t, rec2.text(), password, "a role's password must never be logged")
+	require.Empty(t, rec2.logs, "the manager's connection logs nothing at all")
 }

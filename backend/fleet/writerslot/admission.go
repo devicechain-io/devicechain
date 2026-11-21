@@ -15,7 +15,7 @@ import (
 // and either carries no error or has a recorded resolution. A DONE operation that carries an error
 // is NOT settled: it routes the slot to recovery or quarantine, and only a recorded resolution
 // settles it. It is also the predicate of the partial index ix_cloud_operations_unsettled.
-const unsettledPredicate = `NOT (status = 'DONE' AND (error_code IS NULL OR resolution IS NOT NULL))`
+const unsettledPredicate = `NOT (status = 'DONE' AND (error_code IS NULL OR COALESCE(resolution IN ('RECONCILED', 'QUARANTINED'), false)))`
 
 // clearSlotSQL resets everything a finished or abandoned holder left on the slot.
 const clearSlotSQL = `holder_run_uid = NULL, doubted_from = NULL, uncertain_since = NULL, refresh_cut_at = NULL,
@@ -110,7 +110,7 @@ func (m *Manager) Acquire(ctx context.Context, spec RunSpec) (*Run, error) {
 		}
 		if err := tx.Raw(`SELECT true AS present, observer_list_complete AS complete,
 				(observer_listed_at IS NOT NULL AND observer_listed_at > clock_timestamp() - (? * interval '1 millisecond')) AS fresh
-			FROM cluster_observations WHERE cluster_uid = ?`, m.cfg.ObservationFreshness.Milliseconds(), spec.ClusterUID).Scan(&fresh).Error; err != nil {
+			FROM cluster_observations WHERE cluster_uid = ? FOR SHARE`, m.cfg.ObservationFreshness.Milliseconds(), spec.ClusterUID).Scan(&fresh).Error; err != nil {
 			return fmt.Errorf("writerslot: read observation: %w", err)
 		}
 
@@ -127,6 +127,26 @@ func (m *Manager) Acquire(ctx context.Context, spec RunSpec) (*Run, error) {
 			return admitRefused("the cluster record is tombstoned")
 		case !lifecyclePermits(id.Lifecycle, spec.Kind):
 			return admitRefused("lifecycle %s does not permit %s", id.Lifecycle, spec.Kind)
+		}
+
+		// The state role is the run's own and nobody else's: derived from the run uid on a pg backend,
+		// absent on any other. Accepting a caller-named role would let an unrelated NOLOGIN role satisfy
+		// the state cut while the role the runner really holds stays usable.
+		backend := ""
+		if id.StateBackend != nil {
+			backend = *id.StateBackend
+		}
+		switch {
+		case backend == BackendPG:
+			want, err := StateRoleName(spec.RunUID)
+			if err != nil {
+				return admitRefused("%v", err)
+			}
+			if spec.StateRoleName != want {
+				return admitRefused("a pg-backend run's state role is %s, not %q", want, spec.StateRoleName)
+			}
+		case spec.StateRoleName != "":
+			return admitRefused("a %q-backend run has no per-run state role", backend)
 		}
 
 		var to string
@@ -156,6 +176,14 @@ func (m *Manager) Acquire(ctx context.Context, spec RunSpec) (*Run, error) {
 			return admitRefused("%d cloud operation(s) are not settled", unsettled)
 		}
 
+		// Intent precedes submission: first_submit_at is set in the transaction that takes the slot.
+		// It is written here, with the identity row this transaction already holds (step 4), before
+		// the run is inserted (step 6).
+		if err := tx.Exec(`UPDATE cloud_identities SET first_submit_at = COALESCE(first_submit_at, clock_timestamp()), updated_at = clock_timestamp() WHERE cluster_uid = ?`,
+			spec.ClusterUID).Error; err != nil {
+			return fmt.Errorf("writerslot: record first submit: %w", err)
+		}
+
 		epoch := slot.Epoch + 1
 		var stateRole *string
 		if spec.StateRoleName != "" {
@@ -168,18 +196,13 @@ func (m *Manager) Acquire(ctx context.Context, spec RunSpec) (*Run, error) {
 			VALUES (?, ?, ?, ?, ?, ?, ?, 'INTENT', ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?)`,
 			spec.RunUID, spec.ClusterUID, epoch, spec.RequestID, actor.ID, actor.Issuer, spec.Kind, spec.CredentialMode, spec.CloudIdentityRole,
 			spec.CloudPrincipal, int(spec.KsaTokenTTL/time.Second), int(spec.StsTokenTTL/time.Second), int(spec.AccessTokenTTL/time.Second), stateRole,
-			spec.RunnerImageDigest, spec.TofuVersion, spec.ProviderLockHash, spec.ModuleDigest, m.epoch).Error; err != nil {
+			spec.RunnerImageDigest, spec.TofuVersion, spec.ProviderLockHash, spec.ModuleDigest, m.txEpoch(tx)).Error; err != nil {
 			return fmt.Errorf("writerslot: record run: %w", err)
 		}
 		if err := tx.Exec(`UPDATE writer_slots SET epoch = ?, state = ?, holder_run_uid = ?, doubted_from = NULL, uncertain_since = NULL, refresh_cut_at = NULL,
 				cloud_cut_proof = NULL, cloud_cut_at = NULL, state_cut_method = NULL, state_cut_at = NULL, containment = NULL, containment_observed_at = NULL,
 				quarantine_reason = NULL, updated_at = clock_timestamp() WHERE cluster_uid = ?`, epoch, to, spec.RunUID, spec.ClusterUID).Error; err != nil {
 			return fmt.Errorf("writerslot: take slot: %w", err)
-		}
-		// Intent precedes submission: first_submit_at is set in the transaction that takes the slot.
-		if err := tx.Exec(`UPDATE cloud_identities SET first_submit_at = COALESCE(first_submit_at, clock_timestamp()), updated_at = clock_timestamp() WHERE cluster_uid = ?`,
-			spec.ClusterUID).Error; err != nil {
-			return fmt.Errorf("writerslot: record first submit: %w", err)
 		}
 		from := slot.State
 		reqID := spec.RequestID

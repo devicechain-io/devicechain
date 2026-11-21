@@ -130,10 +130,11 @@ func TestStateRoleNameIsDerivedFromTheRunUID(t *testing.T) {
 }
 
 func TestDestroyAndImportExecutionFailLoudly(t *testing.T) {
-	if !errors.Is(ErrDestroyNotImplemented, ErrDestroyNotImplemented) {
-		t.Fatal("unreachable")
-	}
 	m := &Manager{}
+	// DESTROY is refused before anything else is looked at, so no database is needed to see it.
+	if _, err := m.Acquire(context.Background(), RunSpec{Kind: KindDestroy}); !errors.Is(err, ErrDestroyNotImplemented) {
+		t.Fatalf("Acquire(DESTROY): %v", err)
+	}
 	if err := m.ExecuteImport(context.Background(), "a", "b"); !errors.Is(err, ErrImportNotImplemented) {
 		t.Fatalf("ExecuteImport: %v", err)
 	}

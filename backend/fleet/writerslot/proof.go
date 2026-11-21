@@ -43,11 +43,8 @@ func (m *Manager) Prove(ctx context.Context, runUID string, p Proof) error {
 		return unknown("state cut method", p.State.Method)
 	}
 	return m.do(ctx, func(tx *gorm.DB) error {
-		slot, run, err := heldBy(tx, runUID, StateUncertain, StateQuarantined)
-		if err != nil {
-			return err
-		}
-		id, err := lockIdentity(tx, slot.ClusterUID)
+		// The identity (step 4) is locked ahead of the run (step 6).
+		slot, run, id, _, err := heldByLocked(tx, runUID, lockIdentityRow, StateUncertain, StateQuarantined)
 		if err != nil {
 			return err
 		}
@@ -62,6 +59,22 @@ func (m *Manager) Prove(ctx context.Context, runUID string, p Proof) error {
 		case ProofTermination:
 			if run.PodUID == nil || !p.Cloud.Pod.AllTerminated(*run.PodUID) {
 				return proofRefused("TERMINATION needs every container of the recorded pod reported terminated; absence, phase and conditions do not count")
+			}
+			// Every OTHER pod this run was seen with must be shown terminated too.
+			extra, err := otherPods(tx, slot.ClusterUID, runUID, *run.PodUID)
+			if err != nil {
+				return err
+			}
+			for _, uid := range extra {
+				covered := false
+				for _, o := range p.Cloud.MorePods {
+					if o.AllTerminated(uid) {
+						covered = true
+					}
+				}
+				if !covered {
+					return proofRefused("pod %s was also observed for this run and is not shown terminated: proving the recorded pod dead does not exclude it", uid)
+				}
 			}
 			if p.State.Method != CutProcessTerminated {
 				return proofRefused("TERMINATION implies the process is dead: the state cut is PROCESS_TERMINATED, not %s", p.State.Method)
@@ -100,8 +113,14 @@ func (m *Manager) Prove(ctx context.Context, runUID string, p Proof) error {
 			if backend != BackendPG {
 				return proofRefused("PG_ROLE_REVOKED applies to a pg backend, this cluster's is %q", backend)
 			}
-			if run.StateRoleName == nil {
-				return proofRefused("the run has no per-run state role to have revoked")
+			want, rerr := StateRoleName(runUID)
+			if rerr != nil {
+				return proofRefused("%v", rerr)
+			}
+			// The role revoked must be THE run's: any other NOLOGIN role proves nothing about the
+			// one the runner holds.
+			if run.StateRoleName == nil || *run.StateRoleName != want {
+				return proofRefused("the run's state role is not %s: its revocation cannot be verified", want)
 			}
 			sessions, err := verifyRoleCut(tx, *run.StateRoleName)
 			if err != nil {
@@ -175,4 +194,22 @@ func verifyRoleCut(tx *gorm.DB, role string) (int64, error) {
 		return sessions, proofRefused("the per-run role %s still has %d session(s)", role, sessions)
 	}
 	return 0, nil
+}
+
+// otherPods are the pod UIDs, besides the recorded one, that a SECOND-POD quarantine of this run
+// observed. They live in the audit trail's evidence, which is append-only.
+func otherPods(tx *gorm.DB, clusterUID, runUID, recorded string) ([]string, error) {
+	var uids []string
+	if err := tx.Raw(`SELECT DISTINCT evidence->>'observed_pod_uid' FROM writer_slot_transitions
+		WHERE cluster_uid = ? AND run_uid = ? AND reason = ? AND evidence ? 'observed_pod_uid'`,
+		clusterUID, runUID, QuarantineSecondPod).Scan(&uids).Error; err != nil {
+		return nil, fmt.Errorf("writerslot: read observed pods: %w", err)
+	}
+	var out []string
+	for _, u := range uids {
+		if u != "" && u != recorded {
+			out = append(out, u)
+		}
+	}
+	return out, nil
 }
