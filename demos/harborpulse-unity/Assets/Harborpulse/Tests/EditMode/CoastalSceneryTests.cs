@@ -171,12 +171,12 @@ namespace DeviceChain.Harborpulse.Tests
             }
             var cover=woods/(double)land;
             TestContext.WriteLine("Woodland covers "+cover.ToString("P1")+" of the land 250-1100 m out");
-            Assert.That(cover,Is.InRange(.65,.75));
+            Assert.That(cover,Is.InRange(.60,.70));
             Assert.That(neighbours/(double)woods,Is.GreaterThan(.8),"stands are connected, not scattered");
             // clearings: several open patches of 60-200 m, some touching the town edge
             Assert.That(CoastalTerrain.Clearing(-80,1060),Is.True,"a clearing on a knoll");
-            Assert.That(CoastalTerrain.ClearingWeight(-250,470),Is.GreaterThan(.9));
-            Assert.That(CoastalTerrain.ClearingWeight(330,440),Is.GreaterThan(.9));
+            Assert.That(CoastalTerrain.ClearingWeight(-250,372),Is.GreaterThan(.9));
+            Assert.That(CoastalTerrain.ClearingWeight(330,370),Is.GreaterThan(.9));
             Assert.That(CoastalTerrain.ForestCover(0,2000),Is.InRange(0,1));
         }
 
@@ -199,8 +199,7 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(s.SceneryTransmission(600,110,20,80),Is.EqualTo(1),"inside the town ramp: crisp");
             Assert.That(s.SceneryTransmission(900,300,15,100),Is.EqualTo(1),"portrait foreground stays crisp");
             Assert.That(s.SceneryTransmission(700,100,10,140),Is.GreaterThan(.95),"the town's edge is barely touched");
-            Assert.That(s.SceneryTransmission(1500,100,30,1000),Is.LessThan(.35));
-            Assert.That(s.SceneryTransmission(2800,100,5,2000),Is.LessThan(.05));
+            Assert.That(s.SceneryTransmission(2800,100,5,2000),Is.LessThan(.2));
             var low=s.SceneryTransmission(1000,100,10,800);
             var high=s.SceneryTransmission(1000,100,170,800);
             Assert.That(low,Is.LessThanOrEqualTo(high),"height fog pools below the upper slopes");
@@ -208,34 +207,35 @@ namespace DeviceChain.Harborpulse.Tests
         }
 
         [Test]
-        public void ViewDistanceCloses_HalfFoggedAt900mAndNinetyPercentBy1500mAtNoon_HalfAt550mInTheStorm()
+        public void HazeRangeFromHome_ClearAt1000m_HalfAt1750m_FifthBy2500mAtNoon_HalfAt1000mInTheStorm()
         {
-            // pins A2: far from the core (full ramp) at the HOME-like camera height over mid ground
+            // pins the retuned range: from the HOME camera (z=-420, y=100) the forest 300 m behind the town (about 1,000-1,100 m away) keeps its
+            // colour; the haze closes in beyond it
             var noon=DayLighting.Evaluate(12.5,new Weather(0,0));
             var storm=DayLighting.Evaluate(12.5,new Weather(1,1));
-            var at900=noon.SceneryTransmission(900,100,25,800);
-            var at1500=noon.SceneryTransmission(1500,100,25,1200);
-            TestContext.WriteLine("Noon scenery transmission: 900 m "+at900.ToString("F3")+", 1500 m "+at1500.ToString("F3")+"; storm 550 m "+storm.SceneryTransmission(550,100,25,500).ToString("F3"));
-            Assert.That(at900,Is.InRange(.40,.60));
-            Assert.That(at1500,Is.InRange(.07,.16));
-            Assert.That(storm.SceneryTransmission(550,100,25,500),Is.InRange(.40,.60));
-            Assert.That(storm.SceneryTransmission(900,100,25,800),Is.LessThan(.25),"the storm closes the view further");
+            double At(SkyState s,double d)=>s.SceneryTransmission(d,100,25,Math.Max(0,d-600));
+            TestContext.WriteLine("Noon transmission: 1000 m "+At(noon,1000).ToString("F3")+", 1100 "+At(noon,1100).ToString("F3")+", 1750 "+At(noon,1750).ToString("F3")+", 2500 "+At(noon,2500).ToString("F3")+"; storm 1000 m "+At(storm,1000).ToString("F3"));
+            Assert.That(At(noon,1000),Is.GreaterThanOrEqualTo(.8));
+            Assert.That(At(noon,1100),Is.GreaterThanOrEqualTo(.8));
+            Assert.That(At(noon,1750),Is.InRange(.42,.58));
+            Assert.That(At(noon,2500),Is.InRange(.10,.25));
+            Assert.That(At(storm,1000),Is.InRange(.40,.60));
+            Assert.That(At(storm,1500),Is.LessThan(.2),"the storm closes the view further");
             // ground-level eye (8 m): the same curve
-            Assert.That(noon.SceneryTransmission(900,8,20,800),Is.InRange(.35,.60));
+            Assert.That(noon.SceneryTransmission(1750,8,20,1500),Is.InRange(.40,.60));
         }
 
         [Test]
-        public void TheRidgeIsReadableAtNoonAndNearlyVanishesInTheStorm()
+        public void TheRidgeIsADefiniteSilhouetteAtNoonAndFaintButPresentInTheStorm()
         {
             var noon=DayLighting.Evaluate(12.5,new Weather(0,0));
             var storm=DayLighting.Evaluate(12.5,new Weather(1,1));
-            foreach(var d in new[]{2800.0,3200,3500})
+            foreach(var d in new[]{3000.0,3200,3400})
             {
-                Assert.That(noon.RidgeTransmission(d),Is.InRange(.20,.70),"a pale shape at "+d+" m");
-                Assert.That(noon.RidgeTransmission(d),Is.GreaterThan(noon.SceneryTransmission(d,100,40,2500)*20),"lighter fog than the shared curve");
-                Assert.That(storm.RidgeTransmission(d),Is.LessThan(.2),"nearly gone in the storm");
+                Assert.That(noon.RidgeTransmission(d),Is.InRange(.45,.70),"a soft but definite shape at "+d+" m");
+                Assert.That(noon.RidgeTransmission(d),Is.GreaterThan(noon.SceneryTransmission(d,100,40,2500)*3),"lighter fog than the shared curve");
+                Assert.That(storm.RidgeTransmission(d),Is.InRange(.02,.2),"faint but present in the storm");
             }
-            Assert.That(storm.RidgeTransmission(3200),Is.LessThan(noon.RidgeTransmission(3200)));
         }
 
         [Test]

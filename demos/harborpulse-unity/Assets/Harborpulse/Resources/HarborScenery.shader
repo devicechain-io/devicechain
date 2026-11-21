@@ -100,22 +100,23 @@ Shader "Harborpulse/CoastalScenery"
                     lit*=factor;
                 }
                 float distanceM = distance(_WorldSpaceCameraPos, i.world);
-                // Fog counts from the camera: about half at 900 m and nine tenths by 1500 m at noon, half at 550 m in the storm.
-                // The air density is gained up (the same factor as DayLighting.SceneryFogGain) because the engine's own fog on the lit
-                // materials reads the plain value and must stay light.
-                float air = _HarborSceneryFog.x * 6.0 * distanceM;
+                // Fog counts from 350 m out (DayLighting.SceneryFogStartM): from HOME 1000-1100 m is still clear, half falls near 1750 m at
+                // noon and near 1000 m in the storm. The air density is gained up (DayLighting.SceneryFogGain) because the engine's own fog
+                // on the lit materials reads the plain value and must stay light.
+                float depth = max(0, distanceM - 350.0);
+                float air = _HarborSceneryFog.x * 3.5 * depth;
                 float h = (i.world.y + _WorldSpaceCameraPos.y) * .5;
                 float heightDensity = _HarborSceneryFog.y * exp(clamp((_HarborSceneryFog.z - h) * _HarborSceneryFog.w, -8, 4));
                 // Ramp inland: foreground yards, the church, the town's edge and the quays remain crisp in every view.
                 float2 outsideCore = max(float2(abs(i.world.x) - 240, i.world.z - 140), 0);
                 float inland = smoothstep(120, 420, length(outsideCore));
-                float optical = (air * air + heightDensity * distanceM) * inland;
+                float optical = (air * air + heightDensity * depth) * inland;
                 float transmission = exp(-optical);
                 // The distant ridge (vertex alpha 0.6) has its own, lighter fog so it stays a pale readable shape at noon and nearly
                 // vanishes in the storm, and its foot dissolves into the haze by height (DayLighting.RidgeFogScale).
                 if (abs(i.surface - 0.6) < 0.06)
                 {
-                    float ridgeAir = _HarborSceneryFog.x * 6.0 * 0.34 * distanceM;
+                    float ridgeAir = _HarborSceneryFog.x * 3.5 * 0.40 * distanceM;
                     transmission = exp(-ridgeAir * ridgeAir) * saturate((i.world.y - 6.0) / 50.0);
                 }
                 return half4(lerp(_HarborSceneryFogColor.rgb, lit, transmission), 1);

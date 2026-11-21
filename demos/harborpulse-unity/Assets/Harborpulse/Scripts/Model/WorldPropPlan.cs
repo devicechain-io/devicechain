@@ -278,6 +278,13 @@ namespace DeviceChain.Harborpulse.Model
             }
             candidates.Sort((a,b)=>a.Rank.CompareTo(b.Rank));
             var caps=new[]{4,7,5};var taken=new int[3];var centres=new List<Ground>();var cluster=0;
+            // The meadows HOME looks at each get a cluster of large ledges inside or at the edge of the clearing, so the rock reads from there.
+            for(var i=0;i<CoastalTerrain.VisibleMeadows;i++)
+            {
+                var m=CoastalTerrain.Meadow(i);var angle=CoastalTerrain.Hash(i*7+3,11)*2*Math.PI;
+                var c=new Ground(m.X+Math.Cos(angle)*m.R*.45,m.Z+Math.Sin(angle)*m.R*.45);
+                if(PlaceCluster(c,3,cluster)>=2){centres.Add(c);cluster++;}
+            }
             foreach(var c in candidates)
             {
                 if(taken[c.Class]>=caps[c.Class]||centres.Any(o=>SceneryStreet.Distance(o,c.At)<190))continue;
@@ -301,9 +308,9 @@ namespace DeviceChain.Harborpulse.Model
                 {
                     var key=index*101+i*17+attempt*5;
                     var angle=CoastalTerrain.Hash(key,1)*2*Math.PI;
-                    var dist=i==0?0:16+9*i+CoastalTerrain.Hash(key,2)*10;
+                    var dist=i==0?0:16+7*i+CoastalTerrain.Hash(key,2)*6;
                     var at=new Ground(centre.X+Math.Cos(angle)*dist,centre.Z+Math.Sin(angle)*dist);
-                    var size=i==0?(cls==0?12+CoastalTerrain.Hash(key,3)*10:16+CoastalTerrain.Hash(key,3)*14):8+CoastalTerrain.Hash(key,3)*8;
+                    var size=i==0?(cls==0?12+CoastalTerrain.Hash(key,3)*10:cls==3?20+CoastalTerrain.Hash(key,3)*15:18+CoastalTerrain.Hash(key,3)*17):8+CoastalTerrain.Hash(key,3)*8;
                     var halfX=size/2;var halfZ=halfX*(.5+.3*CoastalTerrain.Hash(key,4));
                     var yaw=contourYaw+(CoastalTerrain.Hash(key,5)-.5)*40;
                     if(!Free(at,halfX))continue;
@@ -368,7 +375,7 @@ namespace DeviceChain.Harborpulse.Model
                 }
             }
             // The forest: broad connected stands on a jittered 8 m grid, thinned by distance and faded out at the plantation's edge.
-            for(var z=-90.0;z<1400;z+=8)for(var x=-1500.0;x<1500;x+=8)
+            for(var z=-90.0;z<1900;z+=8)for(var x=-2000.0;x<2000;x+=8)
             {
                 var p=new Ground(x+rng.NextDouble()*8-4,z+rng.NextDouble()*8-4);
                 var keep=rng.NextDouble();var kindRoll=rng.NextDouble();var heightRoll=rng.NextDouble();
