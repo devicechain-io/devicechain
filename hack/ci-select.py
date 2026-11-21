@@ -116,7 +116,8 @@ READERS = [
     ("backend/cli", "cmd", [
         "docs/**", "README.md", "**/go.mod", SDL,
         "backend/services/event-management/model/analytics.go",
-    ], [], "cmd/docs_*_test.go"),
+        "backend/core/config/instance-config.schema.json",  # config_schema_test.go: the released schema asset
+    ], [], "cmd/docs_*_test.go, cmd/config_schema_test.go"),
     # bootstrap: README.md and deployment docs (fence/backupsizing/diskbudget/size_docs), every service's non-test
     # source (install_test.go:432), service configs (sizing/sparkplug), user-management go.mod
     # (breakglass), core/rdb/postgres.go (install_test.go:473), the broker's main.go/go.mod
