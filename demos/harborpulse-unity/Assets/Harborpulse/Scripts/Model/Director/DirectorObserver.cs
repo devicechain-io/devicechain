@@ -28,6 +28,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         readonly Dictionary<string, Reading> pumpRunning = new Dictionary<string, Reading>();
         readonly Dictionary<string, DateTimeOffset> pumpOffAt = new Dictionary<string, DateTimeOffset>();
         readonly HashSet<string> failedProbes = new HashSet<string>();
+        // A command's alarm cycle, once its cause has named it: later reads of the alarm (a new cycle, a clear) never move it.
+        readonly Dictionary<string, KeyValuePair<string, string>> commandCycles = new Dictionary<string, KeyValuePair<string, string>>();
         DirectorInputs input;
         Action<Observation> observe;
         Action<CoverageInterval> cover;
@@ -90,7 +92,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         {
             input = inputs ?? throw new ArgumentNullException(nameof(inputs)); this.observe = observe; this.cover = cover;
             if (run != inputs.Run) {
-                run = inputs.Run; emitted.Clear(); alarmHistory.Clear(); previous.Clear(); trends.Clear(); wellHistory.Clear(); dueWells.Clear(); wellCycles.Clear(); pumpRunning.Clear(); pumpOffAt.Clear(); failedProbes.Clear(); problems.Clear();
+                run = inputs.Run; emitted.Clear(); alarmHistory.Clear(); previous.Clear(); trends.Clear(); wellHistory.Clear(); dueWells.Clear(); wellCycles.Clear(); pumpRunning.Clear(); pumpOffAt.Clear(); failedProbes.Clear(); commandCycles.Clear(); problems.Clear();
                 startSim = lastSim = input.Sim; measurementReconnects = alarmReconnects = measurementIndex = 0;
             }
             if (input.Sim < lastSim) throw new InvalidOperationException("observer requires a new instance on seek");
@@ -234,24 +236,75 @@ namespace DeviceChain.Harborpulse.Model.Director
                 Emit("credential", id, device, "", S(r, "occurredTime"), enabled ? "ENABLED" : "DISABLED", input.Now,
                     SnapshotFields(row.Read, new Dictionary<string, string> { ["enabled"] = B(enabled), ["replacementToken"] = S(r, "id") }));
         }
+        /// <summary>
+        /// A served instant, cut to the 100 ns this runtime holds. A cause's detectedAt carries up to nine fractional digits,
+        /// which not every runtime's parser accepts; cutting (never rounding up) keeps "raised at or before the detection" true
+        /// for an alarm whose raisedTime is the same instant stored at microseconds.
+        /// </summary>
+        public static DateTimeOffset Instant(string value)
+        {
+            var dot = (value ?? "").IndexOf('.');
+            if (dot >= 0) {
+                var end = dot + 1; while (end < value.Length && char.IsDigit(value[end])) end++;
+                if (end - dot - 1 > 7) value = value.Substring(0, dot + 8) + value.Substring(end);
+            }
+            return Time(value);
+        }
+        /// <summary>
+        /// The alarm cycle a command's recorded cause names, or why it names none. The platform records what the rule knew when
+        /// it sent the command (its alarm KEY, the device row, the detection's time), never an alarm token, so the alarm is the
+        /// row for this device token and key whose originatorId is the cause's deviceId (a device token can be reused). The
+        /// cycle is named only when that row was raised at or before the detection and not cleared before it; anything else is
+        /// reported unresolved, because the cached lifecycles are not a complete ledger of an alarm's cycles.
+        /// </summary>
+        bool TryCauseCycle(string deviceToken, JsonElement cause, out JsonElement alarm, out string unresolved, out bool pending)
+        {
+            alarm = default; unresolved = null; pending = false;
+            var key = Optional(cause, "alarmKey"); var deviceId = Optional(cause, "deviceId");
+            if (key == null) { unresolved = "the cause names no alarm key"; return false; }
+            if (deviceId == null) { unresolved = "the cause names no device"; return false; }
+            var detected = Instant(S(cause, "detectedAt"));
+            // Only a complete alarm read taken at or after the detection can show the cycle the detection met.
+            var covering = complete.Where(r => r.Name == "alarms" && r.AsOf >= detected).ToArray();
+            if (covering.Length == 0) { pending = true; return false; }
+            var named = Rows("alarms").Where(a => covering.Contains(a.Read) && S(a.Value, "originatorToken") == deviceToken && S(a.Value, "alarmKey") == key).Select(a => a.Value).ToArray();
+            if (named.Length == 0) { unresolved = "no alarm with that key on the device"; return false; }
+            var rows = named.Where(a => Optional(a, "originatorId") == deviceId).OrderByDescending(a => T(a, "raisedTime")).ToArray();
+            if (rows.Length == 0) { unresolved = "the alarm belongs to another device record"; return false; }
+            var row = rows[0];
+            if (T(row, "raisedTime") > detected) {
+                // The row is a later cycle. An earlier one counts only if its own record shows it outlived the detection.
+                var token = S(row, "token");
+                row = alarmHistory.Values.Where(a => S(a, "token") == token && Optional(a, "originatorId") == deviceId && T(a, "raisedTime") <= detected)
+                    .OrderByDescending(a => T(a, "raisedTime")).FirstOrDefault();
+                if (row.ValueKind == JsonValueKind.Undefined || Optional(row, "clearedTime") == null) { unresolved = "the alarm's cycle began after the detection"; return false; }
+            }
+            var cleared = Optional(row, "clearedTime");
+            if (cleared != null && Time(cleared) <= detected) { unresolved = "the alarm was cleared before the detection"; return false; }
+            alarm = row; return true;
+        }
         void Command(JsonElement c)
         {
-            var id = S(c, "token"); var device = Device(S(c, "deviceToken")); var key = S(c, "name"); var f = new Dictionary<string, string>(); string alarmToken = null;
-            // The served Command has no alarm foreign key. Only an explicit platform metadata join is evidence of one.
-            var metadata = Optional(c, "metadata");
-            if (metadata != null) { using var m = JsonDocument.Parse(metadata); alarmToken = Optional(m.RootElement, "alarmToken"); }
+            var id = S(c, "token"); var deviceToken = S(c, "deviceToken"); var device = Device(deviceToken); var key = S(c, "name"); var f = new Dictionary<string, string>(); string alarmToken = null; var cycle = "";
+            // The served Command has no alarm foreign key. Its recorded cause is the only evidence that an alarm's rule sent it.
+            if (commandCycles.TryGetValue(id, out var bound)) { alarmToken = bound.Key; cycle = bound.Value; f["cause"] = "ALARM"; }
+            else if (c.TryGetProperty("cause", out var cause) && cause.ValueKind == JsonValueKind.Object) {
+                var kind = S(cause, "kind"); f["cause"] = kind;
+                if (kind == "ALARM") {
+                    if (TryCauseCycle(deviceToken, cause, out var alarm, out var unresolved, out var pending)) {
+                        alarmToken = S(alarm, "token"); cycle = S(alarm, "raisedTime"); commandCycles[id] = new KeyValuePair<string, string>(alarmToken, cycle);
+                    }
+                    else if (pending) return; // the alarm read has not reached the detection yet
+                    else f["causeUnresolved"] = unresolved;
+                }
+            }
+            if (alarmToken != null) f["alarmToken"] = alarmToken;
             var payload = Optional(c, "payload");
             if (payload != null) { using var p = JsonDocument.Parse(payload); if (p.RootElement.TryGetProperty("max_kw", out var max)) f["max_kw"] = StrictJson.Scalar(max); }
             foreach (var state in new[] { "QUEUED", "SENT", S(c, "status") }.Distinct()) {
                 var field = state == "QUEUED" ? "queuedTime" : state == "SENT" ? "sentTime" : "respondedTime";
-                var at = Optional(c, field); if (at != null) {
-                    var cycle = "";
-                    if (alarmToken != null) {
-                        var alarm = CycleAt(alarmToken, Time(at)); if (alarm.ValueKind == JsonValueKind.Undefined) continue;
-                        f["alarmToken"] = alarmToken; cycle = S(alarm, "raisedTime");
-                    }
-                    Emit("command", id, device, key, cycle, state, Time(at), f, command: id);
-                }
+                var at = Optional(c, field);
+                if (at != null) Emit("command", id, device, key, cycle, state, Time(at), f, command: id);
                 else if (state == S(c, "status")) problems.Add("commands: missing " + field + " for " + id);
             }
         }

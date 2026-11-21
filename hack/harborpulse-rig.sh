@@ -136,9 +136,18 @@
 # and a TSDB pool holding persistence.writers + 1 + 4 connections, and allow the sink's ClusterIP (`dcctl upgrade --dev-allow-egress <ip>` on a
 # local cluster), or every delivery is refused and the sink invariants are red.
 #
+# THE OBSERVER'S CREDENTIAL. A scene that watches a day (demos/harborpulse-unity) reads the platform
+# with the token each sim's runner serves at /config.json, and the scene's "the platform tells it to
+# derate" needs the cause the platform recorded with the command. The platform serves a command's
+# cause only to a reader that holds device:read and alarm:read (and location:read where the rule is a
+# geofence one) and is not scoped to a customer; to any other reader the cause is null, and the scene
+# falls back to "alarm raised". `dcctl sim create` gives the runner a tenant-admin member, which is
+# all of that, and `run` checks it on every sim before the day starts: a runner whose token could
+# not read a cause fails the run instead of showing a day that can only fall back.
+#
 # OFFLINE CONTROLS (`controls`, and run first by `run`): the verifier's own unit controls (a clean
-# day passes; each planted defect turns exactly its invariant red), and this script's judge fed
-# fabricated reports.
+# day passes; each planted defect turns exactly its invariant red), this script's judge fed
+# fabricated reports, and the observer-credential check fed fabricated tokens.
 #
 # Knobs: DC_HPRIG_CONTROLS=none runs the clean day alone, or a comma list of control names runs
 # those (all control sims at once is a lot for a laptop: with the 34 runs S5 brings, a --compact instance answers previewRule late or partially and every day loses its verdict, so run it in batches, e.g. the eight S5 controls, then the rest); DC_HPRIG_KEEP=1 keeps the sims' tenants
@@ -329,6 +338,27 @@ judge() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# The observer's credential. Pure: it reads a token's claims and prints why they are not enough.
+#   observer_grant <access token>
+# A command's cause is served to a reader holding device:read and alarm:read (location:read too when
+# the rule's firing depends on position), and never to one scoped to a customer.
+# ---------------------------------------------------------------------------
+observer_grant() {
+  local payload claims missing
+  payload="$(cut -s -d. -f2 <<<"$1" | tr '_-' '/+')"
+  [[ -n "$payload" ]] || { echo "not a JWT"; return 1; }
+  while ((${#payload} % 4)); do payload+="="; done
+  claims="$(base64 -d <<<"$payload" 2>/dev/null)" && jq -e 'type == "object"' <<<"$claims" >/dev/null 2>&1 ||
+    { echo "its claims are not readable"; return 1; }
+  if jq -e '(.scp // []) | length > 0' <<<"$claims" >/dev/null; then
+    echo "it is scoped to a customer ($(jq -c '.scp' <<<"$claims")): a scoped reader is never served a cause"
+    return 1
+  fi
+  missing="$(jq -r '(.authorities // []) as $a | if ($a | index("*")) then [] else ["device:read", "alarm:read", "location:read"] - $a end | join(", ")' <<<"$claims")"
+  [[ -z "$missing" ]] || { echo "it lacks $missing"; return 1; }
+}
+
 offline_controls() {
   say "offline controls (no cluster)"
   (cd "$repo_root/backend/sims/dc-simulator" &&
@@ -354,6 +384,23 @@ offline_controls() {
     if out="$(judge "$want" "$rc" "$d/$file")"; then fail "judge: ${c##*:} was accepted"; fi
     red "${c##*:} -> $out"
   done
+
+  local jwt
+  jwt() { printf 'h.%s.s' "$(printf '%s' "$1" | base64 | tr -d '=\n' | tr '/+' '_-')"; }
+  observer_grant "$(jwt '{"tenant":"t","authorities":["*"]}')" >/dev/null || fail "observer: a tenant-admin token was refused"
+  observer_grant "$(jwt '{"tenant":"t","authorities":["device:read","alarm:read","location:read","command:read"]}')" >/dev/null ||
+    fail "observer: a token holding the three authorities was refused"
+  pass "observer: a tenant-admin token and one holding device:read, alarm:read and location:read are accepted"
+  for c in '{"tenant":"t","authorities":["*"],"scp":["customer-1"]}|a token scoped to a customer' \
+    '{"tenant":"t","authorities":["device:read","location:read","command:read"]}|a token without alarm:read' \
+    '{"tenant":"t","authorities":["alarm:read","location:read"]}|a token without device:read' \
+    '{"tenant":"t","authorities":["device:read","alarm:read"]}|a token without location:read' \
+    '{"tenant":"t"}|a token with no authorities'; do
+    if out="$(observer_grant "$(jwt "${c%|*}")")"; then fail "observer: ${c##*|} was accepted"; fi
+    red "${c##*|} -> $out"
+  done
+  if out="$(observer_grant "not-a-token")"; then fail "observer: a string that is no JWT was accepted"; fi
+  red "a string that is no JWT -> $out"
 }
 
 # ---------------------------------------------------------------------------
@@ -643,6 +690,10 @@ cmd_run() {
     done
     [[ "$state" == BOOTSTRAPPED || "$state" == RUNNING ]] ||
       { tail -20 "$state_dir/$sname.sim.log" >&2; fail "$sname did not bootstrap (state '$state')"; }
+    # What a scene watching this sim would read with: it must be able to read a command's cause.
+    local why_not
+    why_not="$(observer_grant "$(curl -s --max-time 5 "http://127.0.0.1:$port/config.json" | jq -r '.token // empty')")" ||
+      fail "$sname: the token its runner serves cannot read a command's cause: $why_not"
     curl -s -X POST --max-time 10 "http://127.0.0.1:$port/start" >/dev/null || fail "could not start $sname"
     note "$sname running on :$port"
   done

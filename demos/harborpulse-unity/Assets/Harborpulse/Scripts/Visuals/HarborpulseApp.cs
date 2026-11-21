@@ -32,6 +32,9 @@ namespace DeviceChain.Harborpulse.Visuals
     {
         public const string OfflineFlag = "-hp-offline", OfflineEnv = "HARBORPULSE_OFFLINE", RunnerFlag = "-dc-runner", RunnerEnv = "HARBORPULSE_RUNNER";
         public const string StartHourFlag = "-hp-start-hour", SpeedFlag = "-hp-speed", ExpectTenantFlag = "-hp-expect-tenant";
+        /// <summary>A labelled CONTROL for a live run: the director reads commands without their recorded cause, so a claim that needs the cause must fall back.</summary>
+        public const string NoCauseControlFlag = "-hp-control-no-cause";
+        bool omitCommandCause;
 
         [Tooltip("Run the labelled offline preview instead of following a runner.")]
         public bool offlinePreview;
@@ -280,7 +283,8 @@ namespace DeviceChain.Harborpulse.Visuals
             }
 
             liveSettings = new LiveSettings { RunnerUrl = url, ExpectTenant = tenant, Source = "command line" };
-            live = new HarborLiveSession(layout, liveSettings);
+            omitCommandCause = Array.IndexOf(args, NoCauseControlFlag) >= 0;
+            live = new HarborLiveSession(layout, liveSettings) { OmitCommandCause = omitCommandCause };
             live.Start();
         }
 
@@ -337,7 +341,7 @@ namespace DeviceChain.Harborpulse.Visuals
             {
                 // A new runner can bind different platform tokens. Discard the observer as well as the reducers.
                 live.Dispose();
-                live = new HarborLiveSession(layout, liveSettings); live.Start();
+                live = new HarborLiveSession(layout, liveSettings) { OmitCommandCause = omitCommandCause }; live.Start();
                 model = new HarborObservedModel(layout); modelRun = null;
                 source = live.Source; clock = live.Clock.Read(now);
             }
@@ -450,6 +454,7 @@ namespace DeviceChain.Harborpulse.Visuals
             var sim = clock.SimSeconds / 3600;
             var defects = (source.Status?.Defects ?? Array.Empty<string>()).ToList();
             if (Array.IndexOf(Environment.GetCommandLineArgs(), "-hp-layout-digest-override") >= 0) defects.Add("CONTROL layout digest override");
+            if (omitCommandCause) defects.Add("CONTROL command cause not read");
             controlRun = defects.Count > 0;
             var sample = new DirectorSample(run, sim, directorSeconds, clock.Mode == ClockMode.Stale || clock.Mode == ClockMode.Waiting, matches, defects);
             directorView = director.Tick(sample, new DirectorInputs { Run = run, RecordingEpoch = recordingEpoch, Now = recordingEpoch.AddSeconds(directorSeconds), Sim = sim, Source = source, Frame = frame });

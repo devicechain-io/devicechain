@@ -175,7 +175,7 @@ All platform requests use the runner's operator authority. The scene sends these
 | Device management | `devicesByExternalId` with device type/profile metric and command definitions for binding; `alarms`; `alarmStream` subscription |
 | Device state | `latestMeasurements` initial snapshots; `latestLocations` with latitude/longitude, heading and speed each second; `deviceStatesByDeviceToken` presence every five seconds |
 | Event management | `measurementStream` subscription |
-| Command delivery | shared observer `commands` and `commandsByToken` every second; harborpulse also reads the newest ten commands per bound pump in one aliased query every two seconds, including terminal records and their platform timestamps |
+| Command delivery | shared observer `commands` and `commandsByToken` every second; harborpulse also reads the newest ten commands per bound pump in one aliased query every two seconds, including terminal records and their platform timestamps; the director's command read selects each command's recorded `cause` |
 | Device management supplements | `alarmSuppressionWindowsByToken` for declared lamp jobs and numeric SHARED `entityAttributes` for each pump's `well_alarm_m`, every five seconds |
 | Update management | `updateRollout` and bounded `updateRolloutTargets` every two seconds after a runner rollout declaration |
 
@@ -1025,3 +1025,81 @@ storm page and the night page as the Windows player does, and at 1920x1080 from 
 windows of 16.67 ms mean, 17-18 ms at the 95th percentile); with the frame-rate limit and vsync switched off in Chrome its windows
 were 8.6-12.5 ms mean, on a Quadro P2200, by the scene's own `hp-frame-stats` log, which has a 1 ms clock in a browser. The first
 frame took 13 s. No other browser, no phone and no live link have been tried.
+
+## U8 the derate, live, and six things U7 left short
+
+### Why the platform sent the command
+
+Page 3b says "Running hot. The platform tells it to derate." A served command had no link to the alarm whose rule sent it, so the
+claim could only bind through an `alarmToken` in the command's `metadata`, which nothing writes: in a live day the caption never
+appeared, and the page showed its fallback, "Running hot. Alarm raised." A command sent by a rule now carries the cause the platform
+recorded with it, and the director reads that.
+
+- **The reads.** `DirectorCommands` selects `cause { kind ruleId ruleToken profileToken detectionKind detectedAt value alarmKey deviceId }`
+  (and no longer `metadata`); `DirectorAlarms` selects `originatorId`.
+- **The join** (`DirectorObserver.TryCauseCycle`). The cause holds what the rule knew when it sent the command: an alarm KEY, the device
+  row and the detection's time, never an alarm token. For a cause of kind `ALARM` the alarm is the row with the command's device token
+  and the cause's `alarmKey` whose `originatorId` equals the cause's `deviceId` (a device token can be reused by a later device). The
+  cycle is named only when that row's `raisedTime` is at or before `detectedAt` and it was not cleared at or before it; an earlier
+  cycle than the row's counts only if its own cached record shows a `clearedTime` after the detection. Anything else is emitted as a
+  command with no alarm and a `causeUnresolved` reason (the cached lifecycles are not a complete ledger of an alarm's cycles), and a
+  cause of kind `RULE`, or none, names no alarm at all. The join waits for a complete alarm read taken at or after the detection, and a
+  cycle once named is not moved by the alarm's later life. `detectedAt` carries up to nine fractional digits; it is cut (never rounded
+  up) to the 100 ns this runtime holds, so it still meets an alarm stored at microseconds.
+- **What shows.** The storyboard is unchanged. The derate caption needs the command (`derate`, `SUCCESSFUL`, `max_kw` 11) bound to the
+  triggering alarm's identity and cycle, and "Cooler now. Alarm cleared." needs the same command; without the link both stay unmet
+  and the page shows "Running hot. Alarm raised." Page 4's `start-pump sent` rail node binds the same way.
+- **Who can read a cause.** The platform serves a command's cause to a reader that holds `device:read` and `alarm:read`
+  (`location:read` too for a rule that fires on position) and is not scoped to a customer; to any other reader it is `null`, and the
+  scene falls back. The scene reads with the token the runner serves, a tenant-admin member, which is all of that.
+  `hack/harborpulse-rig.sh run` now checks each sim's served token before the day starts and fails the run on one that could not
+  read a cause; its offline controls feed the check a scoped token and tokens missing each authority, which it must refuse.
+- **A control.** `-hp-control-no-cause` makes a live player read commands without their cause (`DirectorCommandsNoCause`). The banner
+  turns to `TEST CONTROL: CONTROL command cause not read`, and every claim that needs the link must fall back.
+- An instance older than the cause (before v1.9) refuses the command read's `cause` selection: the commands probe fails, which the
+  banner reports, and the pump and derate claims stay unmet for the run.
+
+`DirectorTestsCause` pins: the bound command's identity and cycle; nine ways an `ALARM` cause does not bind (another device record,
+no originator, another key, no alarm, raised after the detection, cleared before it and at it, no device id, no alarm key), each
+reported unresolved with the command still evidence; a `RULE` cause and no cause; the wait for an alarm read that reaches the
+detection; an earlier cycle counting only when it was seen cleared after the detection; a bound cycle surviving a re-raise;
+nanosecond instants; and, from the observer's records through the storyboard's own predicates, the derate caption holding with the
+link and "Running hot. Alarm raised." holding without it. `ControlsChangeOnlyDeclaredEmittedOutputs("command-cause-not-read")` runs
+a whole day without the link: only page 3b's two caption slots and page 4's `start-pump sent` node change.
+
+### The six
+
+- **The storm seen from the 9:16 HOME** (`Shaders/HarborHaze.hlsl`, `HarborSquall`). That frame looks east from 230 m up and held one
+  grey field from the horizon to the near shore. Below the horizon the rain's haze now carries squalls: narrow streaks that lean with
+  the wind, in ranks one behind another, up to a third darker than the haze between them, which is a little paler than it was. The
+  eastern uplands keep a ghost of their shape in the rain when seen from above (`HarborScenery.shader`). Seen edge-on, from the 16:9
+  HOME and the quays, the ranges fade as they did; the squalls show there too, in the band under the horizon.
+- **37 of 37 from the 9:16 HOME.** The ferry terminal's hall was 56 m long and its south bay stood between that eye and the Basin's
+  second charger, the one the derate page is about. It is 42 m (`NearLandmarks.TerminalW`) with its north gable where it was
+  (`TerminalOffsetX`), so the charger shows over open quay. The meter stays inside its building.
+- **A tor that is a landmark** (`Outcrop.Landmark`, `WorldPropPlan.PlaceLandmark`). At the back of the meadow on the town's east edge,
+  830 m from the 16:9 HOME's eye: a main stack of six slabs 25 m high, a second of three and a third of two beside it, a table stone
+  and clitter, on a ledge 40 m by 28 m. From HOME it is about 55 pixels tall at 1080 lines (U7's tallest tor was about 15). The lowest
+  slab of a stack comes up through the ground like every other block; each one above starts 0.9 m inside the slab it stands on. A
+  block's wall is now two quads that meet along a line, dark below and lit above: the lit band used to be laid 3 cm over the dark
+  one, which on a tall twisted wall sank through it and at HOME's range was under the depth buffer's step. It is outside the 9:16
+  HOME's frame, which looks along the coast.
+- **The storm's deck** (`HarborSky.shader`). A raining deck's relief is two close slates: the lit tone, which stood in it as pale
+  patches, is cut to a third of its strength by the rain.
+- **The wells' view.** A charging bay is never placed in front of a wet well's cut-away (`WorldPropPlan.InWellView`: the strip from
+  the well to where the view's eye stands). East Quay's first charger had its bay there, and its canopy stood between the eye and the
+  well; the bay is now on the other side of its charger, and East Quay's well is seen from the same stand-off as the other two
+  (16 m off, 10 m up). All three look at a point at the datum, under the deck (`PresentationMap.WellViewLookY`), so the well and its
+  level tags stand higher in the frame: "low cut-off" is 34 % of the way up a 16:9 frame, above the caption's box (the lower 8-24 %),
+  where it was 20 % up and written across the caption. The attribute rule's tag hangs 0.8 m under its own ring; at the low cut-off's
+  level the two tags were one smear. In a 9:16 frame the caption's box is higher (23-37 %) and "low cut-off" is still inside it.
+- **07:06** (`DayLighting.EarlySkyDrain`, `EarlyWallDrain`). Until the sun stands about 30 degrees up, the sky's light on flat ground
+  gives up most of its colour and the horizon's light on the walls half of it. A quay's top in the 16:9 HOME still read (75, 82, 93)
+  at 07:06 and reads (81, 80, 82); 06:24 and noon are unchanged at (82, 67, 62) and (102, 104, 110).
+- **The derate page's own view.** A tide gauge's mast on the quay edge stood between the eye and the Basin's second charger in the
+  page's close and insert shots; the eye steps 14 m towards the quay's north end (`PresentationMap.Sidestep`).
+
+`U8Tests` pins the landmark's height, its place in the 16:9 HOME frame and its stacking; the sight lines from the 9:16 HOME to both
+Basin chargers past the terminal (and that the same check sees U7's hall hide the second); no bay in any well's view, and the view's
+strip being the line from the well to the eye; the level tags above the caption's box and the far rim under the banner (and that the
+same check sees U7's overlap); and the ratio of blue to red in the light through the morning, without a step.
