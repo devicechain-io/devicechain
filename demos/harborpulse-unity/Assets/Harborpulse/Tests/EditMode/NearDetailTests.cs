@@ -453,7 +453,8 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(NearLandmarks.Terminal().Vertices, Is.LessThan(12000));
             Assert.That(NearLandmarks.Depot().Vertices, Is.LessThan(6000));
             Assert.That(NearLandmarks.Ferry().Vertices, Is.LessThan(9000));
-            Assert.That(NearVehicles.Truck().Vertices, Is.LessThan(6000));
+            // the truck is one vehicle, and its near set replaces the far boxes instead of dressing them
+            Assert.That(NearVehicles.Truck().Vertices, Is.LessThan(8000));
             Assert.That(NearVehicles.Car(CarSpec.Parked).Vertices, Is.LessThan(3500));
             foreach (var kind in Enum.GetValues(typeof(BoatKind)).Cast<BoatKind>()) Assert.That(NearVehicles.Boat(kind, 14, 4.5f).Vertices, Is.LessThan(3500), kind.ToString());
             Assert.That(NearVehicles.HauledBoat().Vertices, Is.LessThan(2500));

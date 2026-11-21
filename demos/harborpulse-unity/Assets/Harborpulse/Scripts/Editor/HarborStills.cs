@@ -24,7 +24,8 @@ namespace DeviceChain.Harborpulse.EditorTools
     {
         public const string DefaultSet = "12.5:0,17.95:7,18.35:7,18.1:6,19.4:4,20.7:10,26.7:8,12.67:9,11.0:10,22.6:5,17.6:11";
 
-        public static string Shoot(string outDir, string set, int width = 1600, int height = 900)
+        /// <param name="fairWeather">A look check: draw every still's sky, light and sea for a dry day (<see cref="HarborpulseApp.PreviewFairWeather"/>); the stamp says so.</param>
+        public static string Shoot(string outDir, string set, int width = 1600, int height = 900, bool hud = true, bool fairWeather = false)
         {
             EditorSceneManager.OpenScene(HarborSceneBuilder.ScenePath, OpenSceneMode.Single);
             var app = UnityEngine.Object.FindAnyObjectByType<HarborpulseApp>();
@@ -34,6 +35,7 @@ namespace DeviceChain.Harborpulse.EditorTools
             if (app.Problem != null) { app.Teardown(); return "the scene could not start: " + app.Problem; }
             try
             {
+                app.PreviewFairWeather = fairWeather;
                 if (width < 320 || height < 180 || width > 8192 || height > 8192) throw new ArgumentException("stills dimensions must be within 320x180 and 8192x8192");
                 Directory.CreateDirectory(outDir);
                 var made = 0;
@@ -43,16 +45,38 @@ namespace DeviceChain.Harborpulse.EditorTools
                     if (parts.Length != 2) throw new ArgumentException("each still must be hour:shot");
                     var hour = double.Parse(parts[0], CultureInfo.InvariantCulture);
                     if (double.IsNaN(hour) || double.IsInfinity(hour) || hour < 0) throw new ArgumentException("still hour must be finite and nonnegative");
-                    var shot = int.Parse(parts[1], CultureInfo.InvariantCulture);
+                    // a shot is one of the rig's numbered shots, or "@x/y/z/lookX/lookY/lookZ/fov/name": a free camera, for trying a framing
+                    var free = parts[1].StartsWith("@", StringComparison.Ordinal) ? parts[1].Substring(1).Split('/') : null;
+                    if (free != null && free.Length != 8) throw new ArgumentException("a free still camera is @x/y/z/lookX/lookY/lookZ/fov/name");
+                    var shot = free != null ? 0 : int.Parse(parts[1], CultureInfo.InvariantCulture);
                     if (shot < 0 || shot >= app.Rig.Shots.Count) throw new ArgumentException("unknown still shot " + shot);
                     app.WaterTimeOverride = 37.5f;
                     app.Rig.Select(shot, true);
                     app.HoldPreviewAt(hour);
                     app.Rig.Select(shot, true);
+                    var shotName = app.Rig.Shots[shot].Name;
+                    if (free != null)
+                    {
+                        var v = new float[7];
+                        for (var k = 0; k < 7; k++)
+                        {
+                            v[k] = float.Parse(free[k], CultureInfo.InvariantCulture);
+                            if (float.IsNaN(v[k]) || float.IsInfinity(v[k])) throw new ArgumentException("a free still camera's numbers must be finite");
+                        }
+                        if (v[6] < 5 || v[6] > 120) throw new ArgumentException("a free still camera's field of view must be within 5 and 120 degrees");
+                        var at = new Vector3(v[0], v[1], v[2]); var look = new Vector3(v[3], v[4], v[5]);
+                        if ((look - at).sqrMagnitude < 1e-4f) throw new ArgumentException("a free still camera must look somewhere");
+                        app.sceneCamera.transform.SetPositionAndRotation(at, Quaternion.LookRotation(look - at, Vector3.up));
+                        app.sceneCamera.fieldOfView = v[6];
+                        shotName = free[7];
+                    }
                     app.RefreshHud();
+                    // "-hp-stills-hud 0": the scene alone under the burnt-in stamp, for judging the sky and the light
+                    if (!hud && app.Hud != null) app.Hud.Visible = false;
                     Canvas.ForceUpdateCanvases();
-                    var name = "harborpulse-" + ((int)hour % 24).ToString("00", CultureInfo.InvariantCulture) + "h" + ((int)System.Math.Round((hour - System.Math.Floor(hour)) * 60) % 60).ToString("00", CultureInfo.InvariantCulture) + "-" + app.Rig.Shots[shot].Name.ToLowerInvariant().Replace(' ', '-') + ".png";
-                    var stamp = "OFFLINE PREVIEW - STAND-IN VALUES, NOT PLATFORM DATA - " + app.Clock.Label.Substring(app.Clock.Label.IndexOf(' ') + 1, 5) + " - " + app.Rig.Shots[shot].Name;
+                    if (fairWeather) shotName += "-fair";
+                    var name = "harborpulse-" + ((int)hour % 24).ToString("00", CultureInfo.InvariantCulture) + "h" + ((int)System.Math.Round((hour - System.Math.Floor(hour)) * 60) % 60).ToString("00", CultureInfo.InvariantCulture) + "-" + shotName.ToLowerInvariant().Replace(' ', '-') + ".png";
+                    var stamp = (fairWeather ? "OFFLINE PREVIEW - FAIR-WEATHER LOOK CHECK, STORM NOT DRAWN - " : "OFFLINE PREVIEW - STAND-IN VALUES, NOT PLATFORM DATA - ") + app.Clock.Label.Substring(app.Clock.Label.IndexOf(' ') + 1, 5) + " - " + shotName;
                     Render(app.sceneCamera, Path.Combine(outDir, name), width, height, stamp, app);
                     made++;
                 }
@@ -114,17 +138,24 @@ namespace DeviceChain.Harborpulse.EditorTools
             {
                 var args = Environment.GetCommandLineArgs();
                 string dir = null, set = DefaultSet;
-                var width = 1600; var height = 900;
+                var width = 1600; var height = 900; var hud = true; var fair = false;
                 for (var i = 0; i < args.Length - 1; i++)
                 {
                     if (args[i] == "-hp-stills-dir") dir = args[i + 1];
                     if (args[i] == "-hp-stills-width") width = int.Parse(args[i + 1], CultureInfo.InvariantCulture);
                     if (args[i] == "-hp-stills-height") height = int.Parse(args[i + 1], CultureInfo.InvariantCulture);
                     if (args[i] == "-hp-stills") set = args[i + 1];
+                    if (args[i] == "-hp-stills-hud") hud = args[i + 1] != "0";
+                    if (args[i] == "-hp-stills-weather")
+                    {
+                        // "scenario" is the default; "fair" is the look check. Anything else is refused, never read as one of the two.
+                        if (args[i + 1] != "fair" && args[i + 1] != "scenario") throw new ArgumentException("-hp-stills-weather is fair or scenario");
+                        fair = args[i + 1] == "fair";
+                    }
                 }
 
                 if (dir == null) throw new ArgumentException("-hp-stills-dir is required");
-                var result = Shoot(dir, set, width, height);
+                var result = Shoot(dir, set, width, height, hud, fair);
                 Debug.Log("[harborpulse] " + result);
                 EditorApplication.Exit(result.Contains(" stills in ") ? 0 : 1);
             }

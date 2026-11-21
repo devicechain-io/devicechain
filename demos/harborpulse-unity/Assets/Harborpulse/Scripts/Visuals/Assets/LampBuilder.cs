@@ -8,6 +8,20 @@ namespace DeviceChain.Harborpulse.Visuals
 {
     public static class LampBuilder
     {
+        /// <summary>
+        /// The glow shader's mesh: four vertices at the lamp itself with the disc's corner in the UV (the shader opens it towards the camera),
+        /// and bounds wide enough for the disc at its largest, when it is held at its least angle from the far clip.
+        /// </summary>
+        public static Mesh GlowDisc()
+        {
+            var mesh = new Mesh { name = "Lamp glow" };
+            mesh.SetVertices(new[] { Vector3.zero, Vector3.zero, Vector3.zero, Vector3.zero });
+            mesh.SetUVs(0, new[] { new Vector2(-1, -1), new Vector2(-1, 1), new Vector2(1, 1), new Vector2(1, -1) });
+            mesh.SetTriangles(new[] { 0, 1, 2, 0, 2, 3 }, 0);
+            mesh.bounds = new Bounds(Vector3.zero, Vector3.one * 32);
+            return mesh;
+        }
+
         public static AssetRig Build(Placement p, Transform parent, HarborMaterials m)
         {
             var r = new AssetRig(p, parent);
@@ -35,7 +49,11 @@ namespace DeviceChain.Harborpulse.Visuals
                 bracket.Beam(new Vector3(x * .27f, 8.05f, 1.7f + z * .36f), new Vector3(x * .27f, 8.53f, 1.7f + z * .36f), .045f);
             r.Part("Bracket", bracket, m.DarkSteel, Vector3.zero);
             var head = r.Box("Lantern", new Vector3(0, 8.28f, 1.7f), new Vector3(.51f, .44f, .69f), m.LampUnknown);
-            r.Part("Halo", new MeshKit().Ball(Vector3.zero, 1.6f), m.LampHalo, head.localPosition - Vector3.up * 0.15f, false);
+            var halo = AssetRig.Node("Halo", r.Root, head.localPosition - Vector3.up * 0.15f);
+            halo.gameObject.AddComponent<MeshFilter>().sharedMesh = GlowDisc();
+            var haloRenderer = halo.gameObject.AddComponent<MeshRenderer>();
+            haloRenderer.sharedMaterial = m.LampHalo; haloRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; haloRenderer.receiveShadows = false;
+            r.Nodes.Add("Halo", halo);
             var light = AssetRig.Node("Light", head, Vector3.down * 0.3f).gameObject.AddComponent<Light>();
             light.type = LightType.Point; light.range = 42; light.color = new Color(1, 0.82f, 0.58f); light.shadows = LightShadows.None;
             r.Part("PlatformWindow", new MeshKit().Ring(Vector3.zero, 2.3f, 0.05f), m.StatusGreen, Vector3.up * 0.08f, false);

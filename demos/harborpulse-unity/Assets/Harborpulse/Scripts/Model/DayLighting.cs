@@ -185,6 +185,59 @@ namespace DeviceChain.Harborpulse.Model
         public Rgb AmbientGround { get; internal set; }
         public Rgb FogColor { get; internal set; }
 
+        /// <summary>
+        /// The haze over the far land, seen from above: darker and bluer than <see cref="FogColor"/>, which is the haze along the horizon itself.
+        /// A view ray takes the one or the other by its elevation (<see cref="HazeColor"/>), in the sky and in the scenery's fog alike, so far
+        /// ground fades to a tone that is darker than the sky above it and the land keeps an edge against the horizon.
+        /// </summary>
+        public Rgb GroundHaze { get; internal set; }
+
+        /// <summary>The view-ray elevations (the ray's unit y) between which the haze turns from the horizon's colour to the ground's.</summary>
+        public const double HazeHorizonY = .004, HazeGroundY = -.05;
+
+        /// <summary>The haze colour along a view ray whose unit direction has this y: the sky shader and the scenery shader both draw exactly this.</summary>
+        public Rgb HazeColor(double rayY)
+        {
+            var t = Rgb.Clamp01((HazeHorizonY - rayY) / (HazeHorizonY - HazeGroundY));
+            return Rgb.Lerp(FogColor, GroundHaze, t * t * (3 - 2 * t));
+        }
+
+        /// <summary>
+        /// What the sky, its cloud and the haze are multiplied by when they are drawn (never the light on the town): the grade opens up by
+        /// <see cref="ExposureLift"/> for a dim town, and without this a dawn's or a storm's sky, which is bright already, washes out to white.
+        /// </summary>
+        public double SkyGain { get; internal set; }
+
+        /// <summary>The warm light a low sun throws on the cloud's bases from below, and how strong it is, 0 .. 1: strongest towards the sun.</summary>
+        public Rgb CloudUnderlight { get; internal set; }
+
+        public double CloudUnderlightStrength { get; internal set; }
+
+        /// <summary>0 .. 1: how strongly the moon silvers the cloud: all of the night's cloud a little, the cloud round the moon a lot.</summary>
+        public double MoonCloudGlow { get; internal set; }
+
+        /// <summary>
+        /// 0 .. 1: the break of light under the storm's deck about sunset. The front that closes the sky stops short of the horizon towards
+        /// the low sun, so for the last hour of the day a band of clear, lit sky shows under the cloud along the western horizon, the sun
+        /// reaches the town through it as a low warm key, and the rain between is lit from behind. It is nothing in fair weather (there is
+        /// no deck to break), nothing while the sun is high, and it dies with the afterglow.
+        /// </summary>
+        public double HorizonBreak { get; internal set; }
+
+        /// <summary>The colour of the sky in the break, at the horizon and at its upper edge under the cloud.</summary>
+        public Rgb BreakColor { get; internal set; }
+
+        public Rgb BreakEdgeColor { get; internal set; }
+
+        /// <summary>How far round from the sun's bearing the break still shows, as the cosine of that angle: it reaches a little past north and south.</summary>
+        public const double BreakReachCos = -0.35;
+
+        /// <summary>The break's height above the horizon towards the sun, as the view ray's unit y (about 6 degrees).</summary>
+        public const double BreakHeightY = 0.105;
+
+        /// <summary>0 .. 1: how much of the break shows on a bearing whose angle from the sun's has this cosine. The sky shader draws exactly this.</summary>
+        public static double BreakReach(double cosFromSun) => Rgb.Clamp01((cosFromSun - BreakReachCos) / (1 - BreakReachCos));
+
         /// <summary>Exponential-squared fog density.</summary>
         public double FogDensity { get; internal set; }
 
@@ -217,12 +270,32 @@ namespace DeviceChain.Harborpulse.Model
             return Math.Exp(-(air * air + HeightFogDensity * Math.Exp(exponent) * depth) * inland);
         }
 
+        /// <summary>
+        /// The sea's transmission at a distance: the scenery's distance curve with no height term and no core ramp, so open water fades into
+        /// the haze towards the horizon exactly as the land beside it does, and its far edge is gone before the far clip.
+        /// </summary>
+        public double SeaTransmission(double distanceM)
+        {
+            var air = FogDensity * SceneryFogGain * Math.Max(0, distanceM - SceneryFogStartM);
+            return Math.Exp(-air * air);
+        }
+
         /// <summary>The ridge's transmission at a distance: distance only, no height or core ramp (the shader also fades its foot into the haze by height).</summary>
         public double RidgeTransmission(double distanceM)
         {
             var air = FogDensity * SceneryFogGain * RidgeFogScale * Math.Max(0, distanceM);
             return Math.Exp(-air * air);
         }
+
+        /// <summary>The height above which a backdrop layer starts to show through the ground haze (the deck is at 2.4 m).</summary>
+        public const double BackdropFootY = 4;
+
+        /// <summary>
+        /// A nearer backdrop layer's transmission at a point on it: the ridge's distance curve, times the layer's foot dissolving into the ground
+        /// haze over <paramref name="footFadeM"/> (the far ridge keeps its own 6 m and 50 m; see the scenery shader).
+        /// </summary>
+        public double BackdropTransmission(double distanceM, double worldY, double footFadeM) =>
+            RidgeTransmission(distanceM) * Rgb.Clamp01((worldY - BackdropFootY) / footFadeM);
 
         /// <summary>0 at full day .. 1 at full night: how strongly the lamps, windows and beacons should read.</summary>
         public double Night { get; internal set; }
@@ -270,12 +343,36 @@ namespace DeviceChain.Harborpulse.Model
         // the floor the night never drops below, so the quays, the town and the hills stay readable: a cool moonlit blue
         static readonly Rgb NightAmbientSky = new Rgb(0.15, 0.17, 0.24), NightAmbientEquator = new Rgb(0.12, 0.125, 0.15);
         static readonly Rgb NightAmbientGround = new Rgb(0.055, 0.055, 0.06);
+        // the same floor once the sky is light: near neutral, so a dawn or a storm dusk is dim and not blue (the night keeps its blue)
+        static readonly Rgb DimAmbientSky = new Rgb(0.20, 0.195, 0.20), DimAmbientEquator = new Rgb(0.135, 0.13, 0.135);
+
+        /// <summary>How much of the floor lift a clear dawn or dusk gets while the low sun is still a weak key (the keyless hour gets all of it).</summary>
+        public const double TwilightFloorShare = 1.0;
+
+        /// <summary>How much of the sky's own colour the daylight ambient keeps: flat ground is lit by the whole sky, cloud and haze included, not by the zenith's blue.</summary>
+        public const double DayAmbientKeep = 0.42;
+
+        /// <summary>The fraction of the storm's dimming the sun gets back through the break under the deck.</summary>
+        public const double BreakKeyShare = 0.75;
+
+        static readonly Rgb BreakGold = new Rgb(1.0, 0.60, 0.22), BreakEmber = new Rgb(0.92, 0.30, 0.13);
 
         /// <summary>How far the ambient floor is lifted when neither the sun nor the moon gives a key light (a storm dusk, the hour before dawn).</summary>
         public const double KeylessFloorLift = 2.0;
 
         /// <summary>The stops the grade opens up by when the sun is up but weak: dawn, dusk, and under the storm.</summary>
         public const double DimLightLift = 1.3;
+
+        /// <summary>How much of the dim-light and storm exposure lift the sky and the haze are held back by (see <see cref="SkyState.SkyGain"/>).</summary>
+        public const double SkyExposureHold = 0.8;
+
+        /// <summary>The fraction of full key a sun 7 degrees up already gives (the plain curve gives a third of it there).</summary>
+        public const double LowSunKey = 0.62;
+
+        /// <summary>How dark the haze over far ground is beside the haze along the horizon.</summary>
+        public const double GroundHazeDepth = 0.72;
+
+        static readonly Rgb UnderlightColor = new Rgb(1.0, 0.44, 0.24);
 
         static Rgb Max(Rgb a, Rgb b) => new Rgb(Math.Max(a.R, b.R), Math.Max(a.G, b.G), Math.Max(a.B, b.B));
         static Rgb Add(Rgb a, Rgb b, double k) => new Rgb(a.R + b.R * k, a.G + b.G * k, a.B + b.B * k);
@@ -324,12 +421,28 @@ namespace DeviceChain.Harborpulse.Model
             var moonUp = Smooth(-2, 10, moonElev);
             s.Night = night * 0.85 + (1 - day) * 0.15;
 
-            var kelvin = 1900 + 3900 * Smooth(0, 35, sunElev);
+            // a low sun is warm, not red: its light has to leave the town's own colours readable on the faces it reaches
+            var kelvin = 2500 + 3300 * Smooth(0, 35, sunElev);
             s.SunColor = Rgb.FromKelvin(kelvin);
-            s.SunIntensity = 2.1 * Smooth(-1.5, 22, sunElev) * (1 - 0.4 * veil) * (1 - 0.72 * storm);
+            // the key comes up quickly after sunrise and holds late before sunset, so for an hour at each end of the day the faces
+            // towards the sun are plainly lit and the others are not: that side light is what tells the hour from a camera looking north
+            var key = Math.Max(Smooth(-1.5, 22, sunElev), LowSunKey * Smooth(-1.5, 7, sunElev));
+            // the break under the deck: open while the sun is within a hand of the horizon, gone with the afterglow
+            var breakBand = front * Smooth(-6, -1.5, sunElev) * (1 - Smooth(8, 15, sunElev));
+            s.HorizonBreak = breakBand;
+            // gold while the sun is up, ember once it is under the horizon
+            var emberT = 1 - Smooth(-3.5, 1.5, sunElev);
+            s.BreakColor = Rgb.Lerp(BreakGold, BreakEmber, emberT * 0.7);
+            s.BreakEdgeColor = Rgb.Lerp(BreakEmber, new Rgb(0.55, 0.20, 0.18), emberT);
+            // and the sun reaches the town through it
+            // (only once it has sunk into the band: a sun ten degrees up is still behind the deck)
+            var breakKey = breakBand * Smooth(-1, 2.5, sunElev) * (1 - Smooth(5, 9, sunElev));
+            s.SunIntensity = 2.1 * key * (1 - 0.4 * veil) * (1 - 0.72 * storm * (1 - BreakKeyShare * breakKey));
             s.MoonColor = Rgb.FromKelvin(7800);
             s.MoonIntensity = 0.5 * moonUp * night * (1 - 0.6 * storm);
             s.ShadowStrength = 0.85 * (1 - 0.6 * veil) * (1 - 0.4 * storm);
+            // long shadows under a low sun are part of the hour: keep them a little darker than the same cloud would leave them at noon
+            s.ShadowStrength = Math.Min(0.85, s.ShadowStrength * (1 + 0.35 * low * (1 - storm)));
 
             // the clear sky behind the cloud: blue on a fair day, paler ahead of the front, rose and violet about sunrise and sunset
             var zenith = Rgb.Lerp(NightZenith, Rgb.Lerp(DayZenith, CloudZenith, 0.15 + 0.5 * front), light);
@@ -353,6 +466,10 @@ namespace DeviceChain.Harborpulse.Model
             var shade = Rgb.Lerp(NightCloudShade, Rgb.Lerp(TwilightCloudShade, DayCloudShade, high), light);
             lit = Rgb.Lerp(lit, Drained(lit, 0.35, 0.50), depth);
             shade = Rgb.Lerp(shade, Drained(shade, 0.5, 0.40), depth);
+            // a storm's deck at dusk is slate, not the brown the drained rose leaves: the break under it is where the warmth is
+            var slate = storm * low;
+            lit = new Rgb(lit.R * (1 - 0.16 * slate), lit.G * (1 - 0.04 * slate), lit.B * (1 + 0.16 * slate));
+            shade = new Rgb(shade.R * (1 - 0.16 * slate), shade.G * (1 - 0.04 * slate), shade.B * (1 + 0.16 * slate));
             var glow = night * (0.3 + 0.5 * storm);
             s.CloudLit = Add(lit, CityGlow, glow);
             s.CloudShade = Add(shade, CityGlow, glow * 0.8);
@@ -371,14 +488,36 @@ namespace DeviceChain.Harborpulse.Model
             var amb = (0.25 + 0.75 * light) * (1 + 0.35 * veil) * (1 + 0.5 * storm);
             // with no key light at all the floor itself has to carry the scene
             var keyless = 1 - Smooth(0.05, 0.35, s.SunIntensity + s.MoonIntensity);
-            var floor = 1 + KeylessFloorLift * keyless;
+            double floor;
             // the ambient takes the rose of a sunrise only lightly: the light on the town stays near neutral
             var equator = Rgb.Lerp(s.Horizon, Drained(s.Horizon, 0.3, 1), twilight * 0.6);
-            s.AmbientSky = Max(s.Zenith.Scale(amb * 1.1 + 0.04), NightAmbientSky.Scale(floor));
-            s.AmbientEquator = Max(equator.Scale(amb * 0.8 + 0.03), NightAmbientEquator.Scale(floor));
+            // under a low sun the flat ground is lit by the sky alone: take some of the blue out of it, or the quays turn periwinkle
+            // and by day the ground is lit by the whole sky, its cloud and its haze, never by the zenith's blue alone: a quay is concrete, not lavender
+            // (and least of all in the first and last hours of the day, when the sun is too low to outweigh it)
+            var skyLight = Drained(s.Zenith, (1 - 0.7 * (1 - high) * light) * (1 - (1 - DayAmbientKeep) * light) * (1 - 0.35 * (1 - Smooth(10, 30, sunElev)) * light), 1);
+            // a clear dawn or dusk has a key, but a weak and grazing one: the floor carries the flat ground then too
+            var grazing = low * (1 - night) * (1 - Smooth(0.35, 1.1, s.SunIntensity));
+            floor = 1 + KeylessFloorLift * Math.Max(keyless, TwilightFloorShare * grazing);
+            var dimDay = Smooth(-5, 1, sunElev);
+            var floorSky = Rgb.Lerp(NightAmbientSky, DimAmbientSky, dimDay);
+            var floorEquator = Rgb.Lerp(NightAmbientEquator, DimAmbientEquator, dimDay);
+            // under the storm the last of the twilight's violet is drained from the light on the walls as well
+            equator = Drained(equator, 1 - 0.6 * storm * low, 1);
+            s.AmbientSky = Max(skyLight.Scale(amb * 1.1 + 0.04), floorSky.Scale(floor));
+            s.AmbientEquator = Max(equator.Scale(amb * 0.8 + 0.03), floorEquator.Scale(floor));
             s.AmbientGround = Max(s.Ground.Scale(0.6), NightAmbientGround.Scale(floor));
             s.FogColor = s.Horizon;
-            s.ExposureLift = s.Night * 0.55 + storm * 0.1 + DimLightLift * (1 - s.Night) * (1 - Smooth(0.2, 1.3, s.SunIntensity));
+            s.GroundHaze = Rgb.Lerp(s.FogColor.Scale(GroundHazeDepth), s.Zenith.Scale(0.9), 0.25);
+            // (the key now comes up sooner after sunrise, so the lift is held a little longer into it: the first hour stays readable)
+            var dim = DimLightLift * (1 - s.Night) * (1 - Smooth(0.3, 1.6, s.SunIntensity));
+            // and the first and last light of a clear day get a little more, so the town reads while the sun is still on the horizon
+            s.ExposureLift = s.Night * 0.55 + storm * 0.1 + dim + 0.3 * low * (1 - storm) * (1 - night);
+            s.SkyGain = Math.Pow(2, -SkyExposureHold * (dim + storm * 0.1));
+            // the low sun lights the cloud from below, rose and ember, for about an hour either side of the horizon; a closed front hides most of it
+            var under = Math.Max(0, 1 - Math.Abs(sunElev) / 13.0);
+            s.CloudUnderlight = UnderlightColor;
+            s.CloudUnderlightStrength = under * (1 - 0.93 * front) * (1 - night);
+            s.MoonCloudGlow = moonUp * night * (1 - storm);
             // haze closes the far view on purpose: half at about 1,750 m from HOME by day and 1,000 m in the storm (see SceneryFogGain)
             s.FogDensity = 0.00016 + 0.00018 * storm + 0.00002 * night;
             s.HeightFogDensity = 0.00002 + 0.00010 * storm + 0.00002 * night;

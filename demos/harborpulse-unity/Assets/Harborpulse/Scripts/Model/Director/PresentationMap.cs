@@ -286,13 +286,15 @@ namespace DeviceChain.Harborpulse.Model.Director
             // HOME, 16:9: lower and flatter than the first cut, wider, aimed above the water so the harbour sits in the lower
             // four fifths and the horizon falls a fifth of the way down; both breakwater lighthouses, the mouth and all three
             // quays stay inside the frame with a margin, and its bottom edge meets the water south of z = -190.
-            poses.Add("pose:home", new CameraPose(new Point3(0, 100, -420), new Point3(0, 4, 50), 35));
+            poses.Add("pose:home", new CameraPose(new Point3(0, 100, -420), new Point3(0, HomeLookY, 50), 35));
             // The 9:16 HOME looks east along the horseshoe from over the western town: the harbour's long (x) axis then runs up
             // the tall frame. The storyboard's first draft, (0, 160, -330) looking north, holds only North Quay at 9:16 (its
             // horizontal half-angle is about 15 degrees), so 12 of 37 devices were in frame; this pose holds all three quays.
             // The land now stands far below this eye, so the haze-covered far ground ends well under the true horizon; the look is
             // steepened slightly (the horizon just above the frame) so the air over it is 8-14 % of the frame and the fog closes the view.
-            poses.Add("pose:home:portrait", new CameraPose(new Point3(-560, 300, -60), new Point3(40, -25, 10), 52));
+            // U6: the eye is lower and nearer and the look is flattened, so the horizon falls an eighth of the way down the frame: the
+            // sky is in it, the sun rises in it (the camera looks a little north of east), the harbour holds the middle of the frame (U7) and the eastern uplands close the view.
+            poses.Add("pose:home:portrait", Stand(-700, 235, -60, 0, -5, 44, PortraitHorizon));
             poses.Add("pose:night-home", poses["pose:home"]);
             poses.Add("pose:storm-home", poses["pose:home"]);
             foreach (var pair in StoryPoses.Families)
@@ -340,13 +342,26 @@ namespace DeviceChain.Harborpulse.Model.Director
                     var side = Sidestep(pair.Family);
                     poses.Add("pose:" + pair.Family + ":" + suffix, Stand(a.X + wx * back + (wx == 0 ? side : 0), eye, a.Z + wz * back + (wx == 0 ? 0 : side), a.X, a.Z, fov, horizon));
                 }
+                // The cut-away view looks down into the wet well. A pump's well is not at its anchor: it stands 13 m along the quay from the
+                // pump house (WellFootprint, moved there to clear a lamp), and a pose aimed at the anchor framed the pump house's door with
+                // the well out of the frame. Every other family keeps its anchor.
+                var well = a;
+                if (layout.Devices.First(d => d.Token == pair.Token).Kind == DeviceKind.Pump)
+                    well = new PropFootprint("well", a, 1, 1, WorldPropPlan.QuayYaw(quay)).Local(WellFootprint.LocalX, WellFootprint.LocalZ);
+                // East Quay's well stands just behind a charger bay, whose canopy covers it from the usual stand-off: there the eye is nearer and
+                // higher, and looks over the canopy.
+                double off = pair.Family == "pump-east" ? 9 : 16, wellEye = pair.Family == "pump-east" ? 13 : 10;
                 foreach (var suffix in StoryPoses.WellSuffixes)
-                    poses.Add("pose:" + pair.Family + ":" + suffix, new CameraPose(new Point3(a.X + wx * 16, 10, a.Z + wz * 16), new Point3(a.X, 2, a.Z), 42));
+                    poses.Add("pose:" + pair.Family + ":" + suffix, new CameraPose(new Point3(well.X + wx * off, wellEye, well.Z + wz * off), new Point3(well.X, 2, well.Z), 42));
             }
             // Outside the quay the eye sits just above the water and the look is flattened to put the horizon about a third of the way down.
             // from inside the harbour, over the water off the basin, looking east-south-east across the quay's devices: no breakwater or lighthouse is
             // in front of the subject, and the east light stands at the right edge in the middle distance
             poses.Add("pose:east-quay:mouth-wide", Stand(-130, 9.5, 70, 150, -10, 56, .36));
+            // The night sky: HOME looks north and the sun and the moon cross the south, so neither ever enters it. This stands just off the
+            // east quay's north end and looks west-south-west across the water at the basin's lamps and the west light, with the horizon
+            // low in the frame: at StoryPoses.NightSkyHour the moon stands in the middle of it, 18 degrees up. Not a story pose.
+            poses.Add(StoryPoses.NightSky, Stand(118, 6.5, 56, -144, -89, 50, .62));
             var plain = fences[layout.Fences[0].Token];
             var centre = new Ground(plain.Average(p => p.X), plain.Average(p => p.Z));
             poses.Add("pose:plain:wide", Stand(centre.X - 46, 10, centre.Z - 60, centre.X, centre.Z, 45, .30));
@@ -365,6 +380,16 @@ namespace DeviceChain.Harborpulse.Model.Director
         /// <summary>A pose from an eye position looking at a ground point's x and z, its pitch chosen so the horizon falls at <paramref name="horizonFromTop"/> of the frame.</summary>
         /// <summary>Where the horizon falls in a lamp pose, from the top: below the middle, so the lantern has sky behind it.</summary>
         public const double LampHorizon = .52;
+
+        /// <summary>Where the horizon falls in the 9:16 HOME, from the top.</summary>
+        public const double PortraitHorizon = .125;
+
+        /// <summary>
+        /// The height the 16:9 HOME looks at, 470 m in front of it. It was 4: the ranges added in front of the far ridge filled the ridge's
+        /// saddles and took half a point of sky, and the tree line now drawn on every crest takes a little more, so the look is raised by
+        /// under half a degree. The ranges keep their height and the sky has its fifth of the frame again.
+        /// </summary>
+        public const double HomeLookY = 7.5;
 
         static CameraPose Stand(double camX, double eye, double camZ, double subjectX, double subjectZ, double vfov, double horizonFromTop)
         {

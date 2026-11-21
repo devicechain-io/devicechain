@@ -61,10 +61,10 @@ namespace DeviceChain.Harborpulse.Model
                 V(-cw + .15f, roof, rr), V(cw - .15f, roof, rr), V(cw - .15f, roof, rf), V(-cw + .15f, roof, rf) };
             p.Hex(NearTone.Paint, cabin);
             var mid = V(0, (bt + roof) / 2, s.CabinZ);
-            p.Pane(NearTone.Glass, cabin[3], cabin[2], cabin[6], cabin[7], mid, .13f, .012f);   // windscreen
-            p.Pane(NearTone.Glass, cabin[0], cabin[1], cabin[5], cabin[4], mid, .15f, .012f);   // rear window
-            p.Pane(NearTone.Glass, cabin[0], cabin[3], cabin[7], cabin[4], mid, .11f, .012f);   // left side
-            p.Pane(NearTone.Glass, cabin[1], cabin[2], cabin[6], cabin[5], mid, .11f, .012f);   // right side
+            p.Glazed(cabin[3], cabin[2], cabin[6], cabin[7], mid, .13f, .012f);   // windscreen
+            p.Glazed(cabin[0], cabin[1], cabin[5], cabin[4], mid, .15f, .012f);   // rear window
+            p.Glazed(cabin[0], cabin[3], cabin[7], cabin[4], mid, .11f, .012f);   // left side
+            p.Glazed(cabin[1], cabin[2], cabin[6], cabin[5], mid, .11f, .012f);   // right side
             // bumpers, lamps, grille and plates
             p.Box(NearTone.Black, 0, bb + .2f, f * (bl - .02f), s.BodyW - .08f, .22f, .13f).Box(NearTone.Black, 0, bb + .2f, -f * (bl - .02f), s.BodyW - .08f, .22f, .13f);
             p.Box(NearTone.Black, 0, bt - .3f, f * (bl + .012f), .95f, .16f, .03f).Box(NearTone.Metal, 0, bt - .3f, f * (bl + .03f), .9f, .02f, .02f)
@@ -102,61 +102,147 @@ namespace DeviceChain.Harborpulse.Model
 
         // ---------------------------------------------------------------- the service truck
 
-        /// <summary>The flood-response truck in its rig frame (+Z forward, origin on the deck): see the truck builder for the far boxes this dresses.</summary>
+        /// <summary>
+        /// The flood-response truck in its rig frame (+Z forward, origin on the deck): a complete low-poly service truck that REPLACES the far
+        /// level's boxes while it is shown (the manager hides those; the far light bar stays, because the platform's reports switch it). A cab
+        /// with a raked windscreen and glass in body-coloured frames over a grille, lamps and a bumper; external mudguards over tyres with
+        /// rims and hubs; a chassis with rails, a tank and an exhaust; and a service body of two side cabinets with compartment doors round an
+        /// open bed that carries the flood kit, under a ladder rack. Same footprint, stance and colours as the far boxes.
+        /// </summary>
         public static NearPlan Truck()
         {
             var p = new NearPlan("truck");
+            NearVec V(float x, float y, float z) => new NearVec(x, y, z);
+            const float hw = 1.125f, bw = 1.15f;                       // half widths: cab, service body
+            const float floor = .78f, belt = 1.52f, roof = 2.5f;       // cab heights
+            const float zr = .66f, zf = 2.55f;                         // cab rear wall and nose
+
+            // ---- chassis: rails, cross members, axles, a tank, a battery box and the exhaust
+            foreach (var sx in new[] { -1, 1 }) p.Box(NearTone.MetalDark, sx * .45f, .70f, -.05f, .12f, .2f, 5.2f);
+            foreach (var z in new[] { -2.45f, -1.2f, 0f, 1.2f }) p.Box(NearTone.Black, 0, .70f, z, .9f, .1f, .1f);
+            foreach (var wz in new[] { -1.9f, 1.9f }) p.Cyl(NearTone.MetalDark, -1.06f, .55f, wz, 1.06f, .55f, wz, .085f, -1, 6);
+            p.Box(NearTone.MetalDark, 0, .55f, -1.9f, .34f, .3f, .34f);
+            p.Cyl(NearTone.Metal, -.92f, .6f, -.5f, -.92f, .6f, .5f, .23f, -1, 10)
+                .Box(NearTone.Black, -.92f, .6f, -.25f, .5f, .5f, .04f).Box(NearTone.Black, -.92f, .6f, .25f, .5f, .5f, .04f);
+            p.Box(NearTone.MetalDark, .92f, .64f, 0, .38f, .36f, .8f).Box(NearTone.Black, 1.115f, .64f, 0, .012f, .26f, .66f);
+            p.Cyl(NearTone.MetalDark, .78f, .46f, -.6f, .78f, .46f, -2.6f, .05f, -1, 6);
+
+            // ---- wheels: a tyre, a rim, a dark dish and a hub; an external mudguard over each, with a flap behind
             foreach (var sx in new[] { -1, 1 })
-            {
                 foreach (var wz in new[] { -1.9f, 1.9f })
                 {
-                    // wheel arch liner behind the tyre, a rim, and five wheel nuts
-                    p.Cyl(NearTone.Black, sx * 1.16f, .55f, wz, sx * 1.178f, .55f, wz, .64f, -1, 12);
-                    p.Cyl(NearTone.Metal, sx * 1.36f, .55f, wz, sx * 1.39f, .55f, wz, .34f, -1, 10);
-                    for (var k = 0; k < 5; k++)
-                    {
-                        var a = k * (float)Math.PI * 2 / 5;
-                        p.Box(NearTone.MetalDark, sx * 1.4f, .55f + (float)Math.Cos(a) * .2f, wz + (float)Math.Sin(a) * .2f, .03f, .05f, .05f);
-                    }
+                    p.Cyl(NearTone.Black, sx * 1.06f, .55f, wz, sx * 1.36f, .55f, wz, .53f, -1, 14);
+                    p.Cyl(NearTone.Metal, sx * 1.36f, .55f, wz, sx * 1.372f, .55f, wz, .33f, -1, 12);
+                    p.Cyl(NearTone.MetalDark, sx * 1.372f, .55f, wz, sx * 1.378f, .55f, wz, .23f, -1, 10);
+                    p.Cyl(NearTone.Metal, sx * 1.378f, .55f, wz, sx * 1.43f, .55f, wz, .12f, .07f, 8);
+                    // the guard: a top plate, a sloped plate before and behind, and a lip on the outside
+                    p.Box(NearTone.Black, sx * 1.22f, 1.15f, wz, .36f, .05f, .86f);
+                    p.Beam(NearTone.Black, sx * 1.22f, 1.15f, wz + .42f, sx * 1.22f, .86f, wz + .70f, .36f, .05f);
+                    p.Beam(NearTone.Black, sx * 1.22f, 1.15f, wz - .42f, sx * 1.22f, .86f, wz - .70f, .36f, .05f);
+                    p.Box(NearTone.MetalDark, sx * 1.395f, 1.12f, wz, .02f, .1f, .86f);
+                    p.Box(NearTone.Black, sx * 1.22f, .56f, wz - .72f, .34f, .52f, .03f);
                 }
-                // cab door: outline seams, a handle, a grab rail, and the window frames
-                var x = sx * 1.132f;
-                p.Box(NearTone.Black, x, 1.5f, 1.0f, .018f, 1.75f, .022f).Box(NearTone.Black, x, 1.5f, 2.22f, .018f, 1.75f, .022f)
-                    .Box(NearTone.Black, x, 1.65f, 1.6f, .018f, .022f, 1.2f).Box(NearTone.Black, x, .86f, 1.6f, .018f, .022f, 1.2f)
-                    .Box(NearTone.Metal, x + sx * .014f, 1.55f, 2.05f, .03f, .05f, .2f)
-                    .Beam(NearTone.Metal, sx * 1.15f, 1.0f, .78f, sx * 1.15f, 2.1f, .78f, .045f);
-                var wx = sx * 1.17f;
-                p.Box(NearTone.Black, wx, 2.38f, 1.6f, .03f, .06f, 1.34f).Box(NearTone.Black, wx, 1.53f, 1.6f, .03f, .06f, 1.34f)
-                    .Box(NearTone.Black, wx, 1.95f, .96f, .03f, .88f, .06f).Box(NearTone.Black, wx, 1.95f, 2.24f, .03f, .88f, .06f);
-                // mirror glass, and a step under the door
-                p.Box(NearTone.Glass, sx * 1.485f, 2.0f, 2.05f, .02f, .22f, .18f).Box(NearTone.MetalDark, sx * 1.28f, .58f, 1.0f, .24f, .05f, .46f);
-                // tool body: two compartment doors a side, with handles and hinges
-                foreach (var z in new[] { -1.55f, -.65f })
-                    p.Box(NearTone.MetalDark, sx * 1.172f, 1.2f, z, .02f, .74f, .8f).Box(NearTone.Metal, sx * 1.19f, 1.1f, z + .28f, .02f, .06f, .2f)
-                        .Box(NearTone.Metal, sx * 1.185f, 1.45f, z - .38f, .02f, .12f, .04f).Box(NearTone.Metal, sx * 1.185f, .95f, z - .38f, .02f, .12f, .04f);
-                // headlamp housing and indicator, and the fuel filler behind the cab
-                p.Box(NearTone.Black, sx * .78f, 1.32f, 2.585f, .5f, .3f, .05f).Box(NearTone.Cream, sx * .78f, 1.32f, 2.615f, .36f, .18f, .03f).Box(NearTone.Orange, sx * 1.0f, 1.32f, 2.615f, .12f, .1f, .03f);
-                // rear lights, reflectors and chevrons on the bumper
-                p.Box(NearTone.Red, sx * .85f, .95f, -2.58f, .3f, .2f, .04f).Box(NearTone.Cream, sx * 1.0f, 1.3f, -2.58f, .12f, .12f, .04f);
+
+            // ---- cab: the body below the belt, the glasshouse above it narrowing to the roof, the screen raked back
+            p.Hex(NearTone.Paint, new[] { V(-hw + .03f, floor, zr), V(hw - .03f, floor, zr), V(hw - .03f, floor, zf), V(-hw + .03f, floor, zf),
+                V(-hw, belt, zr), V(hw, belt, zr), V(hw, belt, zf - .03f), V(-hw, belt, zf - .03f) });
+            var house = new[] { V(-hw, belt, zr), V(hw, belt, zr), V(hw, belt, zf - .03f), V(-hw, belt, zf - .03f),
+                V(-hw + .1f, roof, zr + .04f), V(hw - .1f, roof, zr + .04f), V(hw - .1f, roof, zf - .44f), V(-hw + .1f, roof, zf - .44f) };
+            p.Hex(NearTone.Paint, house);
+            var mid = V(0, (belt + roof) / 2, (zr + zf) / 2);
+            p.Glazed(house[3], house[2], house[6], house[7], mid, .09f, .012f);   // windscreen
+            p.Glazed(house[0], house[1], house[5], house[4], mid, .32f, .012f);   // rear window
+            p.Glazed(house[0], house[3], house[7], house[4], mid, .15f, .012f);   // left side
+            p.Glazed(house[1], house[2], house[6], house[5], mid, .15f, .012f);   // right side
+
+            // wipers lie on the screen, which leans back 0.41 m over its 0.98 m of height
+            float Screen(float y) => zf - .03f - (y - belt) * .418f + .03f;
+            p.Beam(NearTone.Black, -.12f, belt + .1f, Screen(belt + .1f), -.72f, belt + .52f, Screen(belt + .52f), .03f);
+            p.Beam(NearTone.Black, .6f, belt + .1f, Screen(belt + .1f), 0f, belt + .52f, Screen(belt + .52f), .03f);
+            // roof: the light bar's base, a visor over the screen, three marker lamps and an aerial
+            p.Box(NearTone.Black, 0, roof + .005f, 1.6f, 1.56f, .03f, .38f).Box(NearTone.Black, 0, roof - .03f, zf - .32f, 2.0f, .045f, .28f);
+            foreach (var x in new[] { -.6f, 0f, .6f }) p.Box(NearTone.Orange, x, roof + .03f, zf - .56f, .12f, .05f, .08f);
+            p.Beam(NearTone.Black, .82f, roof, .95f, .82f, roof + .75f, .82f, .022f);
+            // nose: grille with slats, lamp housings, lamps and indicators
+            p.Box(NearTone.Black, 0, 1.15f, zf + .012f, 1.16f, .44f, .03f);
+            for (var k = 0; k < 4; k++) p.Box(NearTone.Metal, 0, 1.0f + k * .1f, zf + .032f, 1.08f, .028f, .02f);
+            foreach (var sx in new[] { -1, 1 })
+                p.Box(NearTone.Black, sx * .84f, 1.15f, zf + .012f, .46f, .32f, .03f).Box(NearTone.Cream, sx * .8f, 1.17f, zf + .032f, .3f, .2f, .02f)
+                    .Box(NearTone.Orange, sx * 1.0f, 1.17f, zf + .032f, .08f, .2f, .02f);
+            // bumper with corner steps, fog lamps, tow eyes and a plain plate
+            p.Box(NearTone.Black, 0, .78f, zf + .1f, 2.38f, .26f, .2f).Box(NearTone.MetalDark, 0, .92f, zf + .1f, 2.2f, .03f, .16f)
+                .Box(NearTone.Cream, 0, .8f, zf + .205f, .5f, .12f, .02f);
+            foreach (var sx in new[] { -1, 1 })
+                p.Box(NearTone.Cream, sx * .86f, .78f, zf + .205f, .2f, .1f, .02f).Box(NearTone.Red, sx * .5f, .68f, zf + .205f, .07f, .07f, .03f);
+            foreach (var sx in new[] { -1, 1 })
+            {
+                // door: seams, a handle, a grab rail behind it, a step, and the mirror on its arm
+                var x = sx * (hw + .006f);
+                p.Box(NearTone.Black, x, 1.18f, .98f, .016f, .7f, .022f).Box(NearTone.Black, x, 1.18f, 2.24f, .016f, .7f, .022f)
+                    .Box(NearTone.Black, x, .84f, 1.61f, .016f, .022f, 1.28f)
+                    .Box(NearTone.Metal, x + sx * .014f, 1.38f, 2.08f, .03f, .05f, .2f)
+                    .Beam(NearTone.Metal, sx * (hw + .03f), 1.0f, .8f, sx * (hw + .03f), 2.1f, .8f, .04f);
+                p.Box(NearTone.MetalDark, sx * 1.26f, .56f, 1.02f, .26f, .05f, .5f).Box(NearTone.Black, sx * 1.15f, .66f, 1.02f, .04f, .2f, .5f);
+                p.Beam(NearTone.Black, sx * 1.1f, 2.0f, 2.2f, sx * 1.4f, 2.0f, 2.06f, .05f)
+                    .Box(NearTone.Black, sx * 1.42f, 2.0f, 2.05f, .12f, .3f, .2f).Box(NearTone.Glass, sx * 1.42f, 2.0f, 1.942f, .09f, .25f, .015f);
+                // the fleet stripe along the cab's flank
+                p.Box(NearTone.Accent, sx * (hw + .008f), 1.2f, 1.6f, .016f, .2f, 1.84f).Box(NearTone.AccentLight, sx * (hw + .008f), 1.37f, 1.6f, .016f, .08f, 1.84f);
             }
-            // windscreen frame and wipers, a grille with slats and a plain plate
-            p.Box(NearTone.Black, 0, 2.38f, 2.585f, 2.05f, .07f, .06f).Box(NearTone.Black, 0, 1.52f, 2.585f, 2.05f, .07f, .06f)
-                .Box(NearTone.Black, -1.0f, 1.95f, 2.585f, .07f, .9f, .06f).Box(NearTone.Black, 1.0f, 1.95f, 2.585f, .07f, .9f, .06f);
-            p.Beam(NearTone.Black, -.15f, 1.6f, 2.6f, -.8f, 2.05f, 2.6f, .03f).Beam(NearTone.Black, .55f, 1.6f, 2.6f, -.1f, 2.05f, 2.6f, .03f);
-            for (var k = 0; k < 4; k++) p.Box(NearTone.Black, 0, 1.08f + k * .08f, 2.63f, 1.2f, .03f, .03f);
-            p.Box(NearTone.Cream, 0, .72f, 2.77f, .5f, .12f, .02f);
+
+            // ---- service body: two side cabinets round an open bed, a headboard behind the cab and a tailgate
+            foreach (var sx in new[] { -1, 1 })
+            {
+                p.Box(NearTone.Metal, sx * .87f, 1.2f, -1.03f, .56f, 1.2f, 3.06f).Box(NearTone.MetalDark, sx * .87f, 1.81f, -1.03f, .5f, .02f, 3.0f);
+                var x = sx * (bw + .006f);
+                // three compartments a side: the middle one is short, over the wheel
+                foreach (var z in new[] { -2.5f, -1.45f, -.45f, .44f }) p.Box(NearTone.Black, x, 1.2f, z, .014f, 1.1f, .022f);
+                p.Box(NearTone.Black, x, 1.74f, -1.03f, .014f, .022f, 2.96f).Box(NearTone.Black, x, .66f, -1.03f, .014f, .022f, 2.96f)
+                    .Box(NearTone.Black, x, 1.28f, -1.95f, .014f, .022f, 1.03f);
+                foreach (var z in new[] { -1.95f, -.95f, 0f })
+                    p.Box(NearTone.TrimDark, x + sx * .012f, z < -1.5f ? 1.5f : 1.25f, z + .32f, .024f, .07f, .16f)
+                        .Box(NearTone.MetalDark, x + sx * .006f, 1.6f, z - .44f, .02f, .1f, .035f).Box(NearTone.MetalDark, x + sx * .006f, z < -1.5f ? 1.38f : .85f, z - .44f, .02f, .1f, .035f);
+                // the wheel arch cut into the rear compartment, and the stripe
+                p.Box(NearTone.Black, x, .93f, -1.9f, .014f, .62f, 1.0f);
+                p.Box(NearTone.Accent, x + sx * .004f, 1.2f, -.52f, .016f, .2f, 1.84f).Box(NearTone.AccentLight, x + sx * .004f, 1.37f, -.52f, .016f, .08f, 1.84f);
+                // tail lamps and a reflector on the cabinet's end
+                p.Box(NearTone.Black, sx * .87f, .96f, -2.565f, .4f, .46f, .02f).Box(NearTone.Red, sx * .87f, 1.06f, -2.58f, .3f, .14f, .02f)
+                    .Box(NearTone.Orange, sx * .87f, .92f, -2.58f, .3f, .09f, .02f).Box(NearTone.Cream, sx * .87f, .8f, -2.58f, .3f, .08f, .02f);
+            }
+            p.Box(NearTone.MetalDark, 0, 1.0f, -1.03f, 1.2f, .06f, 3.06f);
+            p.Box(NearTone.Metal, 0, 1.45f, .47f, 1.2f, .9f, .06f).Box(NearTone.Black, 0, 2.02f, .47f, 2.2f, .05f, .05f)
+                .Box(NearTone.Black, -.5f, 1.92f, .47f, .04f, .22f, .04f).Box(NearTone.Black, .5f, 1.92f, .47f, .04f, .22f, .04f);
+            foreach (var sx in new[] { -1, 1 }) p.Box(NearTone.Cream, sx * .8f, 2.1f, .5f, .18f, .11f, .09f);
+            p.Box(NearTone.Metal, 0, 1.25f, -2.535f, 1.2f, .46f, .05f).Box(NearTone.Black, 0, 1.3f, -2.57f, .3f, .05f, .03f);
+            // rear bumper with chevrons, a step, a plate and the tow hitch
+            p.Box(NearTone.Black, 0, .68f, -2.66f, 2.4f, .2f, .18f).Box(NearTone.MetalDark, 0, .5f, -2.74f, 1.2f, .05f, .26f)
+                .Box(NearTone.Cream, 0, 1.0f - .12f, -2.57f, .5f, .12f, .02f).Cyl(NearTone.Metal, 0, .58f, -2.75f, 0, .58f, -2.95f, .055f, -1, 8);
             for (var k = 0; k < 10; k++)
-                p.Box(k % 2 == 0 ? NearTone.Red : NearTone.Yellow, -1.0f + k * .22f, .7f, -2.745f, .2f, .16f, .01f);
-            p.Box(NearTone.Cream, 0, .98f, -2.58f, .5f, .12f, .02f).Cyl(NearTone.Metal, 0, .6f, -2.76f, 0, .6f, -3.0f, .06f, -1, 8);
-            // the load on the roof rack: sandbags, cones, a coiled hose, a portable pump and cans
-            for (var k = 0; k < 2; k++) p.Box(NearTone.Cream, -.45f, 1.9f, -1.95f + k * .65f, .55f, .2f, .32f).Box(NearTone.Cream, -.45f + .15f, 2.1f, -1.95f + k * .65f, .5f, .2f, .3f);
+                p.Box(k % 2 == 0 ? NearTone.Red : NearTone.Yellow, -1.0f + k * .222f, .68f, -2.755f, .2f, .16f, .012f);
+
+            // ---- the ladder rack over the bed, and a ladder on it
+            foreach (var sx in new[] { -1, 1 })
+            {
+                p.Beam(NearTone.Metal, sx * .8f, 1.8f, -2.42f, sx * .8f, 2.3f, -2.42f, .07f).Beam(NearTone.Metal, sx * .8f, 1.8f, .32f, sx * .8f, 2.3f, .32f, .07f)
+                    .Beam(NearTone.Metal, sx * .8f, 2.3f, -2.47f, sx * .8f, 2.3f, .42f, .065f)
+                    .Beam(NearTone.Metal, sx * .8f, 1.85f, -2.42f, sx * .8f, 2.25f, -2.0f, .04f);
+            }
+            foreach (var z in new[] { -2.42f, -1.05f, .32f }) p.Beam(NearTone.Metal, -.8f, 2.3f, z, .8f, 2.3f, z, .06f);
+            foreach (var x in new[] { .28f, .66f }) p.Beam(NearTone.Trim, x, 2.37f, -2.6f, x, 2.37f, .5f, .05f, .08f);
+            for (var k = 0; k < 9; k++) p.Beam(NearTone.TrimDark, .28f, 2.37f, -2.45f + k * .35f, .66f, 2.37f, -2.45f + k * .35f, .035f);
+            p.Cyl(NearTone.Orange, -.5f, 2.42f, -2.5f, -.5f, 2.42f, .4f, .075f, -1, 6);
+
+            // ---- the flood kit in the bed: sandbags, a portable pump on its frame, a hose reel, cans and stacked cones
             for (var k = 0; k < 3; k++)
-                p.Drum(NearTone.Orange, .5f, 1.83f, -2.1f + k * .5f, .15f, .4f, 8, .04f).Box(NearTone.Black, .5f, 1.815f, -2.1f + k * .5f, .32f, .03f, .32f);
-            p.Drum(NearTone.Yellow, .42f, 1.8f, -.35f, .34f, .2f, 10).Drum(NearTone.MetalDark, .42f, 2.0f, -.35f, .1f, .04f, 8);
-            p.Box(NearTone.Red, -.42f, 2.05f, -.45f, .6f, .4f, .5f).Drum(NearTone.MetalDark, -.42f, 2.25f, -.45f, .1f, .35f, 6).Box(NearTone.Metal, -.42f, 1.84f, -.45f, .66f, .06f, .56f)
-                .Box(NearTone.Red, .05f, 1.95f, -.05f, .24f, .35f, .14f).Box(NearTone.Red, .3f, 1.95f, -.05f, .24f, .35f, .14f);
-            // cab roof: a visor over the windscreen, and its light-bar brackets
-            p.Box(NearTone.Black, 0, 2.58f, 2.4f, 2.1f, .05f, .3f);
+                p.Box(NearTone.Rope, -.28f + (k % 2) * .5f, 1.13f, -2.2f + (k / 2) * .4f, .46f, .2f, .32f)
+                    .Box(NearTone.Rope, -.1f + (k % 2) * .3f - .1f, 1.32f, -2.1f + (k / 2) * .3f, .44f, .18f, .3f);
+            p.Box(NearTone.Red, -.2f, 1.3f, -1.3f, .56f, .42f, .5f).Drum(NearTone.MetalDark, -.2f, 1.51f, -1.3f, .11f, .3f, 6)
+                .Box(NearTone.Black, -.2f, 1.06f, -1.3f, .64f, .06f, .58f).Cyl(NearTone.Metal, .08f, 1.3f, -1.3f, .3f, 1.3f, -1.3f, .09f, -1, 6);
+            p.Cyl(NearTone.Yellow, .3f, 1.32f, -.6f, .52f, 1.32f, -.6f, .3f, -1, 10).Cyl(NearTone.MetalDark, .26f, 1.32f, -.6f, .56f, 1.32f, -.6f, .09f, -1, 6)
+                .Box(NearTone.Black, .41f, 1.06f, -.6f, .4f, .06f, .5f);
+            p.Box(NearTone.Red, -.38f, 1.22f, -.5f, .2f, .38f, .32f).Box(NearTone.Red, -.38f, 1.22f, -.12f, .2f, .38f, .32f)
+                .Box(NearTone.Black, -.38f, 1.43f, -.5f, .08f, .04f, .1f).Box(NearTone.Black, -.38f, 1.43f, -.12f, .08f, .04f, .1f);
+            for (var k = 0; k < 3; k++) p.Drum(NearTone.Orange, .1f, 1.07f + k * .1f, .12f, .15f, .42f, 8, .04f);
+            p.Box(NearTone.Black, .1f, 1.05f, .12f, .34f, .03f, .34f);
             return p;
         }
 

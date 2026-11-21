@@ -109,7 +109,16 @@ namespace DeviceChain.Harborpulse.Visuals
                     color = Mix(color, Scale(heath, .72f), skirt * .75f);
                     // Flat facets show the knolls; a whisper of per-facet variation, no alternating checkerboard
                     var shade = .985f + .03f * (float)CoastalTerrain.Noise(x * .05, z * .05) + .008f * (float)CoastalTerrain.Hash(i, j);
-                    Tile(x, z).Quad(a, c, d, b, Scale(color, shade));
+                    // The open coast's edge is turf and bare heath in a strip of uneven width, not forest floor ruled off at the water. The
+                    // strip is weighed at each CORNER and blended across the facet: weighed once per facet it drew the grid as a staircase
+                    // of 20 and 30 m squares wherever a camera looked along the coast.
+                    if (Mathf.Abs(x) > TownBuilder.CoreHalfX && z < TownBuilder.CoastZ + 140)
+                    {
+                        var turf = Mix(heath, meadowStraw, Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.3f, .8f, patch)));
+                        Color At(Vector3 p) => Scale(Mix(color, turf, Shore(p.x, p.z) * .85f), shade);
+                        Tile(x, z).Quad(a, c, d, b, At(a), At(c), At(d), At(b));
+                    }
+                    else Tile(x, z).Quad(a, c, d, b, Scale(color, shade));
                 }
             // Verges share the terrain tiles: widening Main Street adds no renderer or shadow caster.
             foreach (var street in plan.Streets)
@@ -140,31 +149,97 @@ namespace DeviceChain.Harborpulse.Visuals
             foreach (var tile in tiles) tile.Value.Spawn("Coastal terrain and granite " + tile.Key, parent, material);
         }
 
+        /// <summary>0 .. 1: how much of the coastal turf strip lies at a point: all of it at the coast, none past the strip's uneven inland edge (22-96 m).</summary>
+        static float Shore(float x, float z)
+        {
+            var strip = 22 + 60 * (float)CoastalTerrain.Noise(x * .011 + 17, 3.3) + 14 * (float)CoastalTerrain.Noise(x * .047 + 3, 8.1);
+            return 1 - Mathf.SmoothStep(0, 1, (z - TownBuilder.CoastZ) / strip);
+        }
+
         static Vector3 V(DeviceChain.Harborpulse.Model.Director.Point3 p) => new Vector3((float)p.X, (float)p.Y, (float)p.Z);
 
-        /// <summary>Warm light-grey granite with a few darker and a few lichen-tinted facets; walls a little darker than the lit tops.</summary>
+        /// <summary>The scenery shader's code for outcrop rock (vertex alpha): it adds the grain, the bedding cracks and the lichen.</summary>
+        public const float RockCode = .9f;
+
+        /// <summary>
+        /// Granite that reads as rock from HOME as well as close: three values of warm grey chosen facet by facet (so one outcrop is never one
+        /// pale patch), ledge tops lighter than the walls, every wall darkening to a shadowed foot where it meets the ground or the ledge
+        /// below, the walls that face away from the sun's arc darker again, and a few facets taken by lichen or moss. The scenery mesh casts
+        /// and takes no shadow, so the shading that makes a ledge a ledge is in the colours.
+        /// </summary>
         static void DrawOutcrop(SceneryMesh kit, Outcrop o)
         {
+            // warm greys: the scenery's light is mostly sky, which turns a neutral grey blue
+            var light = new Color(.76f, .69f, .57f); var mid = new Color(.61f, .54f, .45f); var dark = new Color(.40f, .36f, .31f);
+            var lichen = new Color(.55f, .59f, .38f); var rust = new Color(.58f, .42f, .25f); var moss = new Color(.25f, .31f, .20f);
+            Color Rock(Color c, float k) => new Color(c.r * k, c.g * k, c.b * k, RockCode);
             Color Granite(int ring, int i, bool top)
             {
                 var h = (float)CoastalTerrain.Hash(o.Seed * 31 + ring * 7, i * 13 + 5);
-                var tone = Color.Lerp(new Color(.60f, .57f, .53f), new Color(.69f, .64f, .59f), (float)CoastalTerrain.Hash(o.Seed + ring, i * 3 + 1));
-                if (h < .16f) tone = Color.Lerp(tone, new Color(.42f, .40f, .39f), .75f);          // a few dark, wet facets
-                else if (h > .90f) tone = Color.Lerp(tone, new Color(.52f, .58f, .40f), .6f);      // a few lichen-tinted ones
-                return Scale(tone, top ? 1.04f : .88f);
+                var v = (float)CoastalTerrain.Hash(o.Seed + ring, i * 3 + 1);
+                // most facets mid grey, a third light, a fifth dark and wet
+                var tone = v < .2f ? Color.Lerp(dark, mid, v * 2.5f) : v < .66f ? Color.Lerp(mid, light, (v - .2f) * .9f) : Color.Lerp(mid, light, .55f + (v - .66f) * 1.3f);
+                if (top)
+                {
+                    if (h > .80f) tone = Color.Lerp(tone, lichen, .55f);
+                    else if (h < .09f) tone = Color.Lerp(tone, rust, .45f);
+                }
+                else if (h > .86f) tone = Color.Lerp(tone, moss, .6f);
+                return tone;
             }
             var rings = o.Rings;
+            var centre = new Vector3((float)o.Center.X, 0, (float)o.Center.Z);
             for (var r = 0; r + 1 < rings.Length; r++)
                 for (var i = 0; i < rings[r].Length; i++)
                 {
                     var k = (i + 1) % rings[r].Length;
+                    Vector3 a = V(rings[r][i]), b = V(rings[r + 1][i]), c = V(rings[r + 1][k]), d = V(rings[r][k]);
                     // an outward-facing wall between this ring and the next one up, wound like the terrain's quads
-                    kit.Quad(V(rings[r][i]), V(rings[r + 1][i]), V(rings[r + 1][k]), V(rings[r][k]), Granite(r, i, false));
+                    var outward = (a + d) * .5f - centre; outward.y = 0; outward.Normalize();
+                    // the sun stays in the southern half of the sky: a wall that faces north is in shade all day
+                    var shade = Mathf.Lerp(1f, .68f, Mathf.Clamp01(outward.z * 1.4f));
+                    var tone = Granite(r, i, false);
+                    var foot = Rock(tone, .58f * shade); var lip = Rock(tone, .96f * shade);
+                    kit.Quad(a, b, c, d, foot, lip, lip, foot);
                 }
             var top = rings[rings.Length - 1];
             var crown = V(o.Crown);
             for (var i = 0; i < top.Length; i++)
-                kit.Tri(V(top[i]), crown, V(top[(i + 1) % top.Length]), Granite(rings.Length, i, true));
+                kit.Tri(V(top[i]), crown, V(top[(i + 1) % top.Length]), Rock(Granite(rings.Length, i, true), 1.12f));
+            // the ledges between the tiers: the flat shelf from each ring's lip in to the foot of the wall above is drawn by the walls'
+            // own slope here, so nothing more is needed; a dark fissure across the crown breaks the top into two blocks
+            if (top.Length >= 6)
+            {
+                var i0 = (int)(CoastalTerrain.Hash(o.Seed, 91) * top.Length); var i1 = (i0 + top.Length / 2) % top.Length;
+                Vector3 p0 = Vector3.Lerp(V(top[i0]), crown, .08f), p1 = Vector3.Lerp(V(top[i1]), crown, .08f);
+                var across = Vector3.Cross(Vector3.up, (p1 - p0).normalized) * Mathf.Max(.12f, .035f * (float)o.Radius);
+                var lift = Vector3.up * .04f;
+                var fissure = Rock(dark, .55f);
+                kit.Facing(p0 + lift, crown - across + lift, crown + across + lift, Vector3.up, fissure);
+                kit.Facing(p1 + lift, crown + across + lift, crown - across + lift, Vector3.up, fissure);
+            }
+            // The loose blocks and the tor (Outcrop.Blocks): each a prism that comes up through the ledge. Walls darken to their foot like the
+            // ledge's own, the wall away from the sun's arc is darker again, and every top is one of the light tones, so a block shows from
+            // HOME as a lit cap over a dark side: that pair is what reads as a boulder at half a kilometre.
+            for (var n = 0; n < o.Blocks.Length; n++)
+            {
+                var b = o.Blocks[n];
+                var middle = Vector3.zero;
+                for (var i = 0; i < 8; i++) middle += V(b[i]) / 8;
+                for (var i = 0; i < 4; i++)
+                {
+                    var k = (i + 1) % 4;
+                    Vector3 a0 = V(b[i]), a1 = V(b[k]), t0 = V(b[4 + i]), t1 = V(b[4 + k]);
+                    var outward = (a0 + a1 + t0 + t1) * .25f - middle; outward.y = 0; outward.Normalize();
+                    var shade = Mathf.Lerp(1f, .64f, Mathf.Clamp01(outward.z * 1.4f));
+                    var tone = Granite(20 + n, i, false);
+                    kit.Facing(a0, t0, t1, a1, outward, Rock(tone, .52f * shade));
+                    // the upper third of a wall catches the sky
+                    Vector3 m0 = Vector3.Lerp(a0, t0, .66f), m1 = Vector3.Lerp(a1, t1, .66f);
+                    kit.Facing(m0 + outward * .03f, t0 + outward * .03f, t1 + outward * .03f, m1 + outward * .03f, outward, Rock(tone, .9f * shade));
+                }
+                kit.Facing(V(b[4]), V(b[5]), V(b[6]), V(b[7]), Vector3.up, Rock(Granite(40 + n, 0, true), 1.16f));
+            }
         }
     }
 }

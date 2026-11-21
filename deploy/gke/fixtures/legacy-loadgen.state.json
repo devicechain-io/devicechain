@@ -1,0 +1,356 @@
+{
+  "check_results": null,
+  "lineage": "00000000-0000-0000-0000-000000000002",
+  "outputs": {},
+  "resources": [
+    {
+      "instances": [
+        {
+          "attributes": {
+            "allow_net_admin": null,
+            "autopilot_privileged_admission": [],
+            "binary_authorization": [],
+            "dataplane_optimization_mode": null,
+            "deletion_policy": "DELETE",
+            "deletion_protection": false,
+            "description": null,
+            "desired_emulated_version": null,
+            "disable_l4_lb_firewall_reconciliation": false,
+            "dns_config": [],
+            "effective_labels": {
+              "app": "devicechain",
+              "goog-terraform-provisioned": "true"
+            },
+            "enable_autopilot": null,
+            "enable_cilium_clusterwide_network_policy": false,
+            "enable_fqdn_network_policy": false,
+            "enable_k8s_beta_apis": [],
+            "enable_kubernetes_alpha": false,
+            "enable_legacy_abac": false,
+            "enable_multi_networking": false,
+            "enable_shielded_nodes": true,
+            "enable_tpu": null,
+            "fleet": [],
+            "id": "projects/example-project/locations/us-central1-a/clusters/dc-fixture",
+            "ignore_node_count_changes": null,
+            "in_transit_encryption_config": null,
+            "initial_node_count": 1,
+            "location": "us-central1-a",
+            "maintenance_policy": [],
+            "min_master_version": null,
+            "monitoring_config": [
+              {
+                "enable_components": [
+                  "SYSTEM_COMPONENTS"
+                ],
+                "managed_prometheus": [
+                  {
+                    "enabled": false
+                  }
+                ]
+              }
+            ],
+            "name": "dc-fixture",
+            "network": "default",
+            "network_performance_config": [],
+            "network_policy": [],
+            "node_locations": [],
+            "private_cluster_config": [],
+            "release_channel": [
+              {
+                "channel": "REGULAR"
+              }
+            ],
+            "remove_default_node_pool": true,
+            "resource_labels": {
+              "app": "devicechain"
+            },
+            "resource_usage_export_config": [],
+            "rollback_safe_upgrade": [],
+            "secret_manager_config": [],
+            "secret_sync_config": [],
+            "skip_node_pool_refresh": null,
+            "terraform_labels": {
+              "app": "devicechain",
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "user_managed_keys_config": []
+          },
+          "schema_version": 2
+        }
+      ],
+      "mode": "managed",
+      "name": "this",
+      "provider": "provider[\"registry.opentofu.org/hashicorp/google\"]",
+      "type": "google_container_cluster"
+    },
+    {
+      "instances": [
+        {
+          "attributes": {
+            "autoscaling": [],
+            "cluster": "projects/example-project/locations/us-central1-a/clusters/dc-fixture",
+            "deletion_policy": "DELETE",
+            "id": "projects/example-project/locations/us-central1-a/clusters/dc-fixture/nodePools/loadgen",
+            "ignore_node_count_changes": null,
+            "instance_group_urls": [],
+            "location": "us-central1-a",
+            "maintenance_policy": [],
+            "managed_instance_group_urls": [],
+            "management": [
+              {
+                "auto_repair": true,
+                "auto_upgrade": true
+              }
+            ],
+            "name": "loadgen",
+            "node_config": [
+              {
+                "advanced_machine_features": [],
+                "boot_disk_kms_key": null,
+                "disk_size_gb": 100,
+                "disk_type": "pd-standard",
+                "enable_confidential_storage": null,
+                "ephemeral_storage_local_ssd_config": [],
+                "fast_socket": [],
+                "flex_start": null,
+                "gvnic": [],
+                "labels": {
+                  "app": "devicechain"
+                },
+                "local_nvme_ssd_block_config": [],
+                "local_ssd_encryption_mode": null,
+                "machine_type": "n2-standard-4",
+                "max_run_duration": null,
+                "node_group": null,
+                "oauth_scopes": [
+                  "https://www.googleapis.com/auth/cloud-platform"
+                ],
+                "preemptible": false,
+                "reservation_affinity": [],
+                "resource_labels": null,
+                "resource_manager_tags": null,
+                "sandbox_config": [],
+                "secondary_boot_disks": [],
+                "sole_tenant_config": [],
+                "spot": false,
+                "storage_pools": null,
+                "tags": null,
+                "taint": [
+                  {
+                    "effect": "NO_SCHEDULE",
+                    "key": "dedicated",
+                    "value": "loadgen"
+                  }
+                ],
+                "taint_config": []
+              }
+            ],
+            "node_count": 1,
+            "node_locations": [],
+            "placement_policy": [],
+            "project": "example-project",
+            "queued_provisioning": [],
+            "timeouts": null
+          },
+          "index_key": 0,
+          "schema_version": 1
+        }
+      ],
+      "mode": "managed",
+      "name": "loadgen",
+      "provider": "provider[\"registry.opentofu.org/hashicorp/google\"]",
+      "type": "google_container_node_pool"
+    },
+    {
+      "instances": [
+        {
+          "attributes": {
+            "autoscaling": [],
+            "cluster": "projects/example-project/locations/us-central1-a/clusters/dc-fixture",
+            "deletion_policy": "DELETE",
+            "id": "projects/example-project/locations/us-central1-a/clusters/dc-fixture/nodePools/database",
+            "ignore_node_count_changes": null,
+            "instance_group_urls": [],
+            "location": "us-central1-a",
+            "maintenance_policy": [],
+            "managed_instance_group_urls": [],
+            "management": [
+              {
+                "auto_repair": true,
+                "auto_upgrade": true
+              }
+            ],
+            "name": "database",
+            "node_config": [
+              {
+                "advanced_machine_features": [],
+                "boot_disk_kms_key": null,
+                "disk_size_gb": 100,
+                "disk_type": "pd-standard",
+                "enable_confidential_storage": null,
+                "ephemeral_storage_local_ssd_config": [],
+                "fast_socket": [],
+                "flex_start": null,
+                "gvnic": [],
+                "labels": {
+                  "app": "devicechain"
+                },
+                "local_nvme_ssd_block_config": [],
+                "local_ssd_encryption_mode": null,
+                "machine_type": "n2-standard-4",
+                "max_run_duration": null,
+                "node_group": null,
+                "oauth_scopes": [
+                  "https://www.googleapis.com/auth/cloud-platform"
+                ],
+                "preemptible": false,
+                "reservation_affinity": [],
+                "resource_labels": null,
+                "resource_manager_tags": null,
+                "sandbox_config": [],
+                "secondary_boot_disks": [],
+                "sole_tenant_config": [],
+                "spot": false,
+                "storage_pools": null,
+                "tags": null,
+                "taint": [
+                  {
+                    "effect": "NO_SCHEDULE",
+                    "key": "dedicated",
+                    "value": "database"
+                  }
+                ],
+                "taint_config": []
+              }
+            ],
+            "node_count": 3,
+            "node_locations": [],
+            "placement_policy": [],
+            "project": "example-project",
+            "queued_provisioning": [],
+            "timeouts": null
+          },
+          "index_key": "database",
+          "schema_version": 1
+        }
+      ],
+      "mode": "managed",
+      "name": "this",
+      "provider": "provider[\"registry.opentofu.org/hashicorp/google\"]",
+      "type": "google_container_node_pool"
+    },
+    {
+      "instances": [
+        {
+          "attributes": {
+            "autoscaling": [],
+            "cluster": "projects/example-project/locations/us-central1-a/clusters/dc-fixture",
+            "deletion_policy": "DELETE",
+            "id": "projects/example-project/locations/us-central1-a/clusters/dc-fixture/nodePools/services",
+            "ignore_node_count_changes": null,
+            "instance_group_urls": [],
+            "location": "us-central1-a",
+            "maintenance_policy": [],
+            "managed_instance_group_urls": [],
+            "management": [
+              {
+                "auto_repair": true,
+                "auto_upgrade": true
+              }
+            ],
+            "name": "services",
+            "node_config": [
+              {
+                "advanced_machine_features": [],
+                "boot_disk_kms_key": null,
+                "disk_size_gb": 100,
+                "disk_type": "pd-standard",
+                "enable_confidential_storage": null,
+                "ephemeral_storage_local_ssd_config": [],
+                "fast_socket": [],
+                "flex_start": null,
+                "gvnic": [],
+                "labels": {
+                  "app": "devicechain"
+                },
+                "local_nvme_ssd_block_config": [],
+                "local_ssd_encryption_mode": null,
+                "machine_type": "t2d-standard-4",
+                "max_run_duration": null,
+                "node_group": null,
+                "oauth_scopes": [
+                  "https://www.googleapis.com/auth/cloud-platform"
+                ],
+                "preemptible": false,
+                "reservation_affinity": [],
+                "resource_labels": null,
+                "resource_manager_tags": null,
+                "sandbox_config": [],
+                "secondary_boot_disks": [],
+                "sole_tenant_config": [],
+                "spot": false,
+                "storage_pools": null,
+                "tags": null,
+                "taint": [],
+                "taint_config": []
+              }
+            ],
+            "node_count": 3,
+            "node_locations": [],
+            "placement_policy": [],
+            "project": "example-project",
+            "queued_provisioning": [],
+            "timeouts": null
+          },
+          "index_key": "services",
+          "schema_version": 1
+        }
+      ],
+      "mode": "managed",
+      "name": "this",
+      "provider": "provider[\"registry.opentofu.org/hashicorp/google\"]",
+      "type": "google_container_node_pool"
+    },
+    {
+      "instances": [
+        {
+          "attributes": {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "input": null,
+            "output": null,
+            "triggers_replace": {
+              "type": [
+                "object",
+                {
+                  "cluster": "string",
+                  "labels": "string",
+                  "pool_settings": "string",
+                  "pools": "string",
+                  "release_channel": "string"
+                }
+              ],
+              "value": {
+                "cluster": "projects/example-project/locations/us-central1-a/clusters/dc-fixture",
+                "labels": "{\"app\":\"devicechain\"}",
+                "pool_settings": "{\"database\":{\"disk_size_gb\":100,\"disk_type\":\"pd-standard\",\"machine_type\":\"n2-standard-4\",\"node_count\":3,\"taints\":[{\"effect\":\"NO_SCHEDULE\",\"key\":\"dedicated\",\"value\":\"database\"}]},\"loadgen\":{\"disk_size_gb\":100,\"disk_type\":\"pd-standard\",\"machine_type\":\"n2-standard-4\",\"node_count\":1,\"taints\":[{\"effect\":\"NO_SCHEDULE\",\"key\":\"dedicated\",\"value\":\"loadgen\"}]},\"services\":{\"disk_size_gb\":100,\"disk_type\":\"pd-standard\",\"machine_type\":\"t2d-standard-4\",\"node_count\":3,\"taints\":[]}}",
+                "pools": "database:projects/example-project/locations/us-central1-a/clusters/dc-fixture/nodePools/database:3,loadgen:projects/example-project/locations/us-central1-a/clusters/dc-fixture/nodePools/loadgen:1,services:projects/example-project/locations/us-central1-a/clusters/dc-fixture/nodePools/services:3",
+                "release_channel": "REGULAR"
+              }
+            }
+          },
+          "index_key": 0,
+          "schema_version": 0
+        }
+      ],
+      "mode": "managed",
+      "name": "cluster_settled",
+      "provider": "provider[\"terraform.io/builtin/terraform\"]",
+      "type": "terraform_data"
+    }
+  ],
+  "serial": 1,
+  "terraform_version": "1.10.10",
+  "version": 4
+}

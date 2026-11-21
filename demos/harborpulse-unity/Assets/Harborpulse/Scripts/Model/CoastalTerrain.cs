@@ -92,7 +92,153 @@ namespace DeviceChain.Harborpulse.Model
             return SitePlan.DeckHeightM + lift * Smooth(CoastZ, CoastZ + 120, z) * (1 - Smooth(1250, 2100, d));
         }
 
-        // ---------------------------------------------------------------- the distant ridge
+        // ---------------------------------------------------------------- the distant ridge and the hills in front of it
+
+        /// <summary>
+        /// One layer of the backdrop: a coarse strip of hills some way behind the harbour. Each is lower in the frame than the one behind it, and
+        /// the haze takes a little more of each with distance, so from HOME the land between the last trees and the skyline reads as successive
+        /// ranges instead of one pale band.
+        /// </summary>
+        public sealed class HillLayer
+        {
+            public HillLayer(string name, double[] rowZ, double[] rowFraction, double[][] hills, double halfWidth, double columnStep, double taperWestM, double taperEastM, double footFadeM, double treeLineM, int seed,
+                int side = 0, double alongCentre = 0)
+            {
+                Name = name; RowZ = rowZ; RowFraction = rowFraction; Hills = hills; HalfWidth = halfWidth; ColumnStep = columnStep; TaperWestM = taperWestM; TaperEastM = taperEastM; FootFadeM = footFadeM;
+                TreeLineM = treeLineM; Seed = seed; Side = side; AlongCentre = alongCentre;
+            }
+
+            public string Name { get; }
+            /// <summary>
+            /// Where the layer stands: 0 behind the harbour to the north (it runs along x, its rows step back in z), +1 to the east and -1 to
+            /// the west (it runs along z, its rows step out in |x|). <see cref="RowZ"/>, the hills' centres and the tapers are then measured
+            /// in the layer's own "along" and "back" directions (<see cref="Along"/>, <see cref="Back"/>).
+            /// </summary>
+            public int Side { get; }
+            /// <summary>The middle of the layer's run, in its along coordinate (0 for the northern layers).</summary>
+            public double AlongCentre { get; }
+            public double Along(double x, double z) => Side == 0 ? x : z;
+            public double Back(double x, double z) => Side == 0 ? z : Side * x;
+            /// <summary>The WORLD x and z of a point at an along and a back coordinate.</summary>
+            public void World(double along, double back, out double x, out double z)
+            {
+                if (Side == 0) { x = along; z = back; } else { x = Side * back; z = along; }
+            }
+            /// <summary>Row values of the layer's mesh in its back coordinate (z for a northern layer), and each row's fraction of the crest height (front foot to hidden back slope).</summary>
+            public double[] RowZ { get; }
+            public double[] RowFraction { get; }
+            /// <summary>Centre x, half-width, crest height above the deck, shape (0 round dome, 1 cusped, 2 plateau).</summary>
+            public double[][] Hills { get; }
+            public double HalfWidth { get; }
+            public double ColumnStep { get; }
+            /// <summary>The crest falls to nothing over these distances inside the west and east ends.</summary>
+            public double TaperWestM { get; }
+            public double TaperEastM { get; }
+            /// <summary>The layer's foot dissolves into the ground haze over this height above the deck.</summary>
+            public double FootFadeM { get; }
+            /// <summary>The crest's broken tree line: up to this many metres are added, column by column, where a hill stands.</summary>
+            public double TreeLineM { get; }
+            public int Seed { get; }
+            public double CrestZ => RowZ[Array.IndexOf(RowFraction, 1.0)];
+
+            /// <summary>The back coordinate at which the layer's front face reaches a fraction of its crest height (1 is the crest row itself).</summary>
+            public double BackAtFraction(double fraction)
+            {
+                var crest = Array.IndexOf(RowFraction, 1.0);
+                for (var i = 1; i <= crest; i++)
+                    if (fraction <= RowFraction[i])
+                        return RowZ[i - 1] + (RowZ[i] - RowZ[i - 1]) * (fraction - RowFraction[i - 1]) / (RowFraction[i] - RowFraction[i - 1]);
+                return RowZ[crest];
+            }
+
+            /// <summary>The lines of crest trees: each line's fraction of the crest height on the front face, and the spacing along it in metres.</summary>
+            public static readonly double[] TreeLineFraction = { 1, .8, .58 }, TreeLineSpacingM = { 11, 17, 17 };
+
+            /// <summary>The tallest crest tree, in metres above its foot; the foot is sunk <see cref="CrestTreeSinkM"/> into the layer.</summary>
+            public const double CrestTreeMaxM = 17, CrestTreeSinkM = 1.5;
+
+            /// <summary>
+            /// The wood on the layer as it shows from two kilometres: a line of tree tops along the crest and two more down the face in front
+            /// of it, six conifers to four broadleaves as in the planted forest, in stands with gaps, the broadleaves' autumn colour in drifts
+            /// along the range. They are flat cut-outs that face the harbour (the builder draws one to three triangles each), so the crest
+            /// reads as a tree line and the face as wooded at the distance where a planted tree would be a pixel. None stands where the layer
+            /// has no hill, and every foot is sunk into the layer's own surface.
+            /// </summary>
+            public System.Collections.Generic.IEnumerable<CrestTree> CrestTrees()
+            {
+                for (var k = 0; k < TreeLineFraction.Length; k++)
+                {
+                    var back = BackAtFraction(TreeLineFraction[k]);
+                    var spacing = TreeLineSpacingM[k];
+                    var count = (int)(2 * HalfWidth / spacing);
+                    for (var i = 0; i < count; i++)
+                    {
+                        var h1 = Hash(i * 31 + Seed * 1013 + k * 77, 5); var h2 = Hash(i * 17 + Seed * 311 + k * 53, 9); var h3 = Hash(i * 13 + Seed * 97 + k * 29, 21);
+                        var along = AlongCentre - HalfWidth + (i + .15 + .7 * h1) * spacing;
+                        if (Crest(along) < 8) continue;
+                        // stands and gaps: a slow noise opens the line here and there
+                        if (Noise(along * .012 + Seed * 3.1, k * 5.7 + 1.3) < .28) continue;
+                        World(along, back, out var x, out var z);
+                        var conifer = h2 < .6;
+                        var height = conifer ? 11 + 6 * h3 : 8.5 + 5.5 * h3;
+                        yield return new CrestTree(along, back, Height(x, z) - CrestTreeSinkM, height, conifer ? height * .21 : height * .40, conifer,
+                            Noise(along * .0055 + Seed * 7.7, 3.3 + k * .9), h1);
+                    }
+                }
+            }
+
+            /// <summary>The crest line: height above the deck at an along coordinate (x for a northern layer). Hills overlap, each with its own profile; it falls to nothing at both ends.</summary>
+            public double Crest(double x)
+            {
+                var best = 0.0;
+                foreach (var h in Hills)
+                {
+                    var u = Math.Min(1, Math.Abs(x - h[0]) / h[1]);
+                    double v;
+                    if (h[3] == 0) v = Math.Pow(Math.Cos(u * Math.PI / 2), 1.7);
+                    else if (h[3] == 1) v = Math.Pow(1 - u, 1.45);
+                    else v = Smooth(1, .42, u);
+                    best = Math.Max(best, h[2] * v);
+                }
+                if (TreeLineM > 0) best += TreeLineM * Noise(x / ColumnStep + Seed * 17.3, Seed * 3.7) * Smooth(2, 14, best);
+                var u0 = x - AlongCentre;
+                return best * Smooth(-HalfWidth, -HalfWidth + TaperWestM, u0) * (1 - Smooth(HalfWidth - TaperEastM, HalfWidth, u0));
+            }
+
+            /// <summary>The layer's height in WORLD metres at (x, z): linear between the mesh's rows, the deck in front of the first and beyond its ends.</summary>
+            public double Height(double worldX, double worldZ)
+            {
+                var x = Along(worldX, worldZ); var z = Back(worldX, worldZ);
+                if (Math.Abs(x - AlongCentre) >= HalfWidth) return SitePlan.DeckHeightM;
+                if (z <= RowZ[0]) return SitePlan.DeckHeightM;
+                if (z >= RowZ[RowZ.Length - 1]) return SitePlan.DeckHeightM + Crest(x) * RowFraction[RowFraction.Length - 1];
+                var i = 1;
+                while (z > RowZ[i]) i++;
+                var t = (z - RowZ[i - 1]) / (RowZ[i] - RowZ[i - 1]);
+                return SitePlan.DeckHeightM + Crest(x) * (RowFraction[i - 1] + (RowFraction[i] - RowFraction[i - 1]) * t);
+            }
+        }
+
+        /// <summary>One tree of a layer's wood (<see cref="HillLayer.CrestTrees"/>): where it stands in the layer's own coordinates, and its cut-out.</summary>
+        public readonly struct CrestTree
+        {
+            public CrestTree(double along, double back, double foot, double height, double halfWidth, bool conifer, double drift, double variation)
+            {
+                Along = along; Back = back; Foot = foot; Height = height; HalfWidth = halfWidth; Conifer = conifer; Drift = drift; Variation = variation;
+            }
+
+            public double Along { get; }
+            public double Back { get; }
+            /// <summary>WORLD height of the cut-out's foot, under the layer's surface.</summary>
+            public double Foot { get; }
+            public double Height { get; }
+            public double HalfWidth { get; }
+            public bool Conifer { get; }
+            /// <summary>0 .. 1, slow along the range: which autumn colour a broadleaf takes, so gold, rust and crimson come in drifts.</summary>
+            public double Drift { get; }
+            public double Variation { get; }
+            public double Top => Foot + Height;
+        }
 
         /// <summary>Row z values of the ridge mesh, and each row's fraction of the crest height (front foot to hidden back slope).</summary>
         public static readonly double[] RidgeRowZ = { 2350, 2480, 2620, 2760, 2900, 3050 };
@@ -106,32 +252,112 @@ namespace DeviceChain.Harborpulse.Model
             new[] { 1700.0, 560, 48, 0 }, new[] { -2050.0, 420, 26, 1 },
         };
 
-        /// <summary>The crest line: height above the deck at x. Two or three hills overlap, each with its own profile; it falls to nothing at both ends.</summary>
-        public static double RidgeCrest(double x)
-        {
-            var best = 0.0;
-            foreach (var h in RidgeHills)
+        /// <summary>The far ridge that carries the skyline: 2.35-3.05 km out, its highest crest 124 m.</summary>
+        public static readonly HillLayer Ridge = new HillLayer("Distant ridge", RidgeRowZ, RidgeRowFraction, RidgeHills, RidgeHalfWidth, RidgeColumnStep, 550, 600, 50, 0, 1);
+
+        /// <summary>
+        /// Wooded foothills just past the last trees (1.88-2.13 km out, crests 30-44 m) and a middle range behind them (2.15-2.45 km, 52-76 m).
+        /// Their summits stand between the far ridge's, so the three crest lines cross instead of running parallel, and every one of them is
+        /// below HOME's eye line: the skyline is still the far ridge's and the sky keeps its share.
+        /// </summary>
+        public static readonly HillLayer Foothills = new HillLayer("Foothills", new double[] { 1880, 1930, 1990, 2060, 2130 }, new[] { 0, .45, .9, 1, .5 },
+            new[]
             {
-                var u = Math.Min(1, Math.Abs(x - h[0]) / h[1]);
-                double v;
-                if (h[3] == 0) v = Math.Pow(Math.Cos(u * Math.PI / 2), 1.7);
-                else if (h[3] == 1) v = Math.Pow(1 - u, 1.45);
-                else v = Smooth(1, .42, u);
-                best = Math.Max(best, h[2] * v);
+                new[] { -560.0, 520, 36, 0 }, new[] { 560.0, 600, 44, 2 }, new[] { -1500.0, 560, 30, 1 }, new[] { 1650.0, 520, 38, 0 },
+                new[] { -2300.0, 420, 22, 0 }, new[] { 30.0, 300, 20, 0 },
+            }, 2700, 75, 500, 500, 14, 9, 2);
+
+        public static readonly HillLayer MidHills = new HillLayer("Middle range", new double[] { 2150, 2210, 2280, 2360, 2450 }, new[] { 0, .4, .85, 1, .55 },
+            new[]
+            {
+                new[] { 180.0, 640, 60, 1 }, new[] { -1020.0, 700, 76, 0 }, new[] { 1380.0, 620, 68, 2 }, new[] { -2100.0, 480, 44, 0 },
+                new[] { 2250.0, 380, 30, 1 },
+            }, 2700, 100, 500, 500, 26, 8, 3);
+
+        /// <summary>The backdrop behind the harbour, nearest first: what HOME's 16:9 frame looks at.</summary>
+        public static readonly HillLayer[] Backdrop = { Foothills, MidHills, Ridge };
+
+        // The uplands east and west of the town run from the coast north to the ridge's foot. HOME's 16:9 frame holds none of them; the 9:16
+        // HOME looks east along the harbour straight at the eastern pair, and the ground-level cameras that look east or west get a skyline.
+        const double UplandCentreZ = 1130, UplandHalf = 1270;
+        static readonly double[] UplandFootRows = { 1960, 2010, 2070, 2140, 2210 }, UplandFootFraction = { 0, .45, .9, 1, .5 };
+        static readonly double[] UplandRangeRows = { 2400, 2480, 2590, 2700, 2820, 2940 }, UplandRangeFraction = { 0, .35, .8, 1, .85, .4 };
+
+        public static readonly HillLayer EastFoothills = new HillLayer("East foothills", UplandFootRows, UplandFootFraction,
+            new[] { new[] { 260.0, 430, 40, 0 }, new[] { 1150.0, 520, 34, 2 }, new[] { 1920.0, 450, 44, 1 } }, UplandHalf, 75, 380, 400, 14, 8, 4, 1, UplandCentreZ);
+
+        public static readonly HillLayer EastRange = new HillLayer("East range", UplandRangeRows, UplandRangeFraction,
+            new[] { new[] { 150.0, 520, 96, 1 }, new[] { 900.0, 620, 124, 0 }, new[] { 1850.0, 560, 84, 2 } }, UplandHalf, 127, 420, 420, 50, 0, 5, 1, UplandCentreZ);
+
+        public static readonly HillLayer WestFoothills = new HillLayer("West foothills", UplandFootRows, UplandFootFraction,
+            new[] { new[] { 220.0, 400, 34, 2 }, new[] { 1000.0, 500, 42, 0 }, new[] { 1800.0, 480, 30, 1 } }, UplandHalf, 75, 380, 400, 14, 8, 6, -1, UplandCentreZ);
+
+        public static readonly HillLayer WestRange = new HillLayer("West range", UplandRangeRows, UplandRangeFraction,
+            new[] { new[] { 420.0, 600, 110, 0 }, new[] { 1300.0, 560, 82, 1 }, new[] { 2050.0, 400, 60, 0 } }, UplandHalf, 127, 420, 420, 50, 0, 7, -1, UplandCentreZ);
+
+        /// <summary>The uplands to the east and west, nearest first on each side.</summary>
+        public static readonly HillLayer[] Uplands = { EastFoothills, EastRange, WestFoothills, WestRange };
+
+        /// <summary>Every layer the backdrop builder draws.</summary>
+        public static readonly HillLayer[] HillLayers = { Foothills, MidHills, Ridge, EastFoothills, EastRange, WestFoothills, WestRange };
+
+        /// <summary>The far ridge's crest line: height above the deck at x.</summary>
+        public static double RidgeCrest(double x) => Ridge.Crest(x);
+
+        /// <summary>The far ridge's height in WORLD metres at (x, z): linear between the mesh's rows.</summary>
+        public static double RidgeHeight(double x, double z) => Ridge.Height(x, z);
+
+        // ---------------------------------------------------------------- the rocky foreshore
+
+        /// <summary>
+        /// The coast outside the harbour is a straight line in the terrain's grid; a rocky foreshore in front of it gives it points and coves.
+        /// It begins <see cref="ShoreStartX"/> either side of the harbour's middle, clear of the breakwater roots, the depot and the car park,
+        /// and of everything HOME's 16:9 frame holds at the coast.
+        /// </summary>
+        public const double ShoreStartX = 290, ShoreFullX = 380, ShoreMaxReachM = 190;
+
+        // centre x, half-width, extra reach: the named points
+        static readonly double[][] ShorePoints =
+        {
+            new[] { 640.0, 120, 85 }, new[] { -780.0, 160, 110 }, new[] { 1520.0, 240, 130 }, new[] { -1750.0, 200, 95 }, new[] { 2600.0, 300, 120 },
+        };
+
+        /// <summary>How far the foreshore runs out from the coast at x, in metres: nothing by the harbour, 6-60 m of ledge along most of the coast, more at the named points.</summary>
+        public static double ShoreReach(double x)
+        {
+            var open = Smooth(ShoreStartX, ShoreFullX, Math.Abs(x));
+            if (open <= 0) return 0;
+            var broad = Noise(x * .0035 + 31.7, 2.3);
+            var fine = Noise(x * .021 + 5.1, 9.9);
+            var reach = 6 + 44 * Smooth(.3, .85, broad) + 16 * fine;
+            foreach (var p in ShorePoints)
+            {
+                var u = (x - p[0]) / p[1];
+                reach += p[2] * Math.Exp(-u * u);
             }
-            return best * Smooth(-RidgeHalfWidth, -1850, x) * (1 - Smooth(1800, RidgeHalfWidth, x));
+            return Math.Min(ShoreMaxReachM, reach) * open;
         }
 
-        /// <summary>The ridge's height in WORLD metres at (x, z): linear between the mesh's rows.</summary>
-        public static double RidgeHeight(double x, double z)
+        /// <summary>
+        /// The foreshore's height at a fraction <paramref name="t"/> of the way out (0 at the coast, 1 at its seaward edge): exactly the
+        /// deck's height at the coast, where it meets the land's own edge with no step, falling slowly over its inner part and then down
+        /// under the lowest water at the edge, so the waterline wanders with the tide instead of following a mesh edge.
+        /// </summary>
+        public static double ShoreHeight(double t)
         {
-            if (z <= RidgeRowZ[0]) return SitePlan.DeckHeightM;
-            if (z >= RidgeRowZ[RidgeRowZ.Length - 1]) return SitePlan.DeckHeightM + RidgeCrest(x) * RidgeRowFraction[RidgeRowFraction.Length - 1];
-            var i = 1;
-            while (z > RidgeRowZ[i]) i++;
-            var t = (z - RidgeRowZ[i - 1]) / (RidgeRowZ[i] - RidgeRowZ[i - 1]);
-            return SitePlan.DeckHeightM + RidgeCrest(x) * (RidgeRowFraction[i - 1] + (RidgeRowFraction[i] - RidgeRowFraction[i - 1]) * t);
+            t = Math.Max(0, Math.Min(1, t));
+            return SitePlan.DeckHeightM - (SitePlan.DeckHeightM + ShoreEdgeDepthM) * t * t;
         }
+
+        /// <summary>How far under the datum the foreshore's seaward edge lies.</summary>
+        public const double ShoreEdgeDepthM = 3;
+
+        /// <summary>Offshore skerries: x, z, radius, height above the datum. All stand off the open coast, outside what HOME's 16:9 frame holds of the sea.</summary>
+        public static readonly double[][] Skerries =
+        {
+            new[] { 575.0, -262, 15, 3.4 }, new[] { 668.0, -300, 9, 2.0 }, new[] { 930.0, -236, 19, 4.2 }, new[] { 1480.0, -330, 24, 5.0 },
+            new[] { -545.0, -250, 12, 2.6 }, new[] { -870.0, -310, 21, 4.6 }, new[] { -925.0, -272, 8, 1.8 }, new[] { -1330.0, -240, 16, 3.6 },
+        };
 
         // ---------------------------------------------------------------- what grows where
 

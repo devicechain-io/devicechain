@@ -89,8 +89,8 @@ its gauges' median and how many contributed, and the lights switch with the plat
 on from 18:00, and East Quay's go silent through its feeder outage, 19:45 to 21:15).
 
 With the director off (`D`), presets: `0` overview, `1`-`3` the quays, `4` an East Quay gauge, `5` the promenade, `6` North Quay pump,
-`7` Basin pump, `8` North Quay chargers, `9` North Quay gauge 3, `F1` East lamp 3, `F2` the following truck shot.
-Drag to orbit, wheel to dolly. Shot indices for batch stills are 0-11 (`F1` = 10, `F2` = 11).
+`7` Basin pump, `8` North Quay chargers, `9` North Quay gauge 3, `F1` East lamp 3, `F2` the following truck shot, `F3` the night sky
+over the basin. Drag to orbit, wheel to dolly. Shot indices for batch stills are 0-12 (`F1` = 10, `F2` = 11, `F3` = 12).
 
 ## Layout
 
@@ -854,3 +854,174 @@ cloud the sky draws.
 `SkyWeatherTests` pins the cover through the day, continuity across every minute and across midnight, distinct skies at the seven
 reviewed hours, noon exposure within 15 % of the earlier grade, the night floor, and the sun's and moon's continuity. Shader output,
 the masks and frame time still need the Unity capture rig.
+
+## U6 depth, light and coast
+
+U5 left six things short: the 9:16 HOME was mostly haze under an out-of-frame horizon, the land between the last trees and the
+ridge was one pale band, the hour was hard to tell from HOME (it looks north, and the sun and the moon cross the south), the
+granite read as pale patches, a lit lamp was a faceted blob and the truck's near level was trim over a box, and the browser
+build had only ever been compiled. This supersedes the U5 numbers for the 9:16 HOME, the ridge and the haze where they differ.
+
+- **Layered backdrop** (`CoastalTerrain.HillLayer`, `RidgeBuilder`). Two more ranges stand in front of the U5 ridge: wooded
+  foothills 1.88-2.13 km out with crests of 30-44 m, and a middle range 2.15-2.45 km out with crests of 30-76 m. Their summits
+  stand between the ridge's, so the three crest lines cross; from HOME their highest points are at about -1.1, -0.3 and
+  +0.5 degrees, so the nearer two stay under HOME's eye line and the skyline is still the ridge's. Each layer has the ridge's
+  lighter fog (transmission 0.72, 0.64 and 0.60 at their summits at noon, 0.23, 0.14 and 0.10 in the storm) and its foot
+  dissolves into the ground haze over its own height (14, 26 and 50 m; the layer's vertex alpha, 0.72, 0.66 or 0.6, tells the
+  shader which). The same kind of layer runs north from the coast on each side of the town (`CoastalTerrain.Uplands`: east
+  and west foothills at |x| 1.96-2.21 km and ranges at 2.4-2.94 km, crests to 124 m): the 16:9 HOME holds none of them, the
+  9:16 HOME looks straight at the eastern pair, and a ground-level camera that looks east or west has a skyline. Seven layers,
+  about 1,800 quads in all, no trees, none within the plantation (which ends 1,700 m from the core), none more than 3 degrees
+  above the horizontal from a quay.
+- **Haze with depth** (`SkyState.GroundHaze`, `HazeColor`). The haze a view ray fades into now depends on its elevation: the
+  horizon's colour at and above the horizon, and a darker, bluer ground haze from 2.9 degrees below it down. The scenery shader,
+  the water shader and the sky's own below-horizon part draw the same function, so far ground fades to a tone that is darker
+  than the sky above it, the land keeps an edge against the horizon, and no seam shows where the terrain or the sea ends.
+- **The sea fades too** (`SkyState.SeaTransmission`). Open water now takes the scenery's distance haze (from 350 m out, no
+  height term) in place of the engine's fog: it was dark to its far edge, which drew a hard line under the sky and along the hazed coast in any view that
+  held the sea horizon. From HOME the harbour's own water is unchanged (transmission above 0.95 at 700 m).
+- **The sky is held back from the exposure lift** (`SkyState.SkyGain`). The grade opens up by `ExposureLift` for a dim town at
+  dawn, at dusk and under the storm; the sky, its cloud and the haze are now multiplied by 2^(-0.8 x the dim-light and storm
+  lift) when they are drawn, so a dawn sky keeps its rose and a storm sky is slate instead of white. The light on the town,
+  the night and a fair noon are unchanged.
+- **The hour, from a camera that looks north.** A low sun is a key light sooner (`LowSunKey`: 0.62 of full at 7 degrees, where
+  the plain curve gave a third of that) and is warm rather than red (2,500 K at the horizon), with slightly darker shadows:
+  for an hour at each end of the day the faces turned east or west are plainly lit and the others are not. The sky-coloured
+  ambient loses most of its blue while the sun is low, so flat ground does not turn periwinkle. The cloud's bases are lit
+  from below while the sun is within 13 degrees of the horizon (`CloudUnderlight`), all round the sky and more strongly
+  towards the sun, so the east and west halves of HOME's sky differ; a closed storm front leaves 7 % of it. At night the moon
+  silvers the faces of the cloud everywhere and the cloud round itself most (`MoonCloudGlow`), off under the storm's deck.
+- **A pose that sees the moon.** `pose:basin:night-sky` (rig shot 12, `F3`) stands just off the east quay's north end and looks
+  west-south-west across the water with the horizon 62 % of the way down; at 04:00 (`StoryPoses.NightSkyHour`) the moon stands
+  18 degrees up in the middle of the frame, over its own glitter path. It is not a story pose.
+- **9:16 HOME.** (-520, 260, 30) looking east at (0, 67.1, 10), vertical FOV 52: the horizon is 12 % of the way down
+  (`PresentationMap.PortraitHorizon`), so the sky is in the frame, and so is the sunrise (the sun rises due east). All 37
+  devices stand between 40 % and 90 % of the way down; above them are the eastern woods, the foothills and range in the
+  haze, the sea horizon and the sky. The masks measure sky 19.5 % (it was 4.5 %) and water 25.3 %.
+- **Rocky foreshore** (`CoastalTerrain.ShoreReach`, `ShoreBuilder`). The open coast is a straight line in the terrain's grid.
+  A faceted granite foreshore now runs out from it, 6-60 m wide along most of the coast and up to 190 m at five named points,
+  level with the land's own edge at the coast and 3 m under the datum at its seaward edge, so the tide draws the waterline; eight skerries stand off it; and the
+  terrain's own coastal strip is turf and heath of uneven width instead of forest floor ruled off at the water. It starts
+  290 m either side of the harbour's middle, clear of the breakwater roots and the depot, and nothing of it is inside the
+  16:9 HOME frame, whose water share and masks are untouched.
+- **Granite that reads as rock** (`TerrainBuilder.DrawOutcrop`, scenery code 0.9). Three values of warm grey chosen facet by
+  facet, ledge tops lighter than the walls, every wall darkening to a shadowed foot, north-facing walls darker again, lichen,
+  rust and moss on a few facets and a dark fissure across the crown. The scenery mesh casts and takes no shadow, so that
+  shading is in the vertex colours. Close up the shader adds blotches, speckle, bedding cracks and lichen rosettes from the
+  world position (no texture); they fade out by 220 m and 900 m. The outcrops' geometry, fit and count are U5's.
+- **Lamp glow** (`Resources/HarborGlow.shader`). A lit lamp's halo is a camera-facing disc with a bright core and a soft skirt
+  that reaches zero at its rim, added to what is behind it, instead of an emissive ball of 32 triangles. Its four vertices sit
+  at the lamp and the corner is in the UV, so it faces whichever camera draws it (the water's reflection camera included). It
+  is 1.7 m in radius close up and never smaller than 4 mrad, so a lit lamp still shows from HOME.
+- **The truck's near level is a truck** (`NearVehicles.Truck`, 7.3 k vertices). It replaces the far boxes while it is shown,
+  as the cars' near sets do (the far light bar stays: the platform's reports switch it): a cab with a raked windscreen and
+  glass in body-coloured frames, a grille, lamps, bumper, mirrors and steps, external mudguards over tyres with rims and hubs,
+  chassis rails, a tank and an exhaust, a service body of two side cabinets with compartment doors round an open bed carrying
+  sandbags, a pump, a hose reel, cans and cones, a ladder rack with a ladder, and the fleet stripe.
+- **Browser build.** `HarborBuild.BuildWebGLPlayer -hp-build-dir OUT` builds for WebGL. A browser has no command line, so the
+  page address carries the preview's options: `index.html?hp-offline&hp-start-hour=17.3&hp-speed=4` (`Model/WebOptions`:
+  `hp-offline`, `hp-portrait`, `hp-frame-stats`, `hp-start-hour`, `hp-speed`, `hp-quit-after-sim`; any other `hp-` key is
+  refused, never ignored; nothing in a page address names a file or a runner). WebGL now defaults to the Laptop quality
+  tier: the water needs the depth and opaque textures, which the Mobile tier's pipeline asset turns off, and on it the first
+  browser run drew the whole harbour as foam. Run in Chrome on Windows (WebGL 2 through ANGLE on Direct3D 11) from the offline
+  preview at four start hours, the sky, the cloud, the layered haze, the water, the rain, the lamp glow and the bloom all draw
+  as they do in the Windows player. No other browser, no phone and no live link have been tried, and no frame time was taken
+  there.
+- **Stills.** A shot in `-hp-stills` may be a free camera, `hour:@x/y/z/lookX/lookY/lookZ/fov/name`, and `-hp-stills-hud 0`
+  renders the scene alone under the burnt-in stamp. Shot indices are 0-12.
+
+`U6DepthTests` pins: three northern ranges nearest first, each behind the last tree and inside the far clip; their crest
+angles from HOME stepping up and crossing; no range above 3 degrees from a quay; the far ridge's U5 profile exactly; the haze
+darker below the horizon at every reviewed hour and one monotone function of ray elevation; each range keeping more of
+itself than the one behind at noon and in the storm; the sky held back while the town is lifted, with the horizon under white;
+the low-sun key, its warmth and its side; the underlight at dawn, at a clear dusk and under the front; the moon's glow and the
+night-sky pose framing the moon; the foreshore leaving the harbour and the 16:9 HOME frame alone while breaking the coast; the
+truck's near set being a whole truck on the far wheels' places; and the page-address options, including every refusal.
+`U5CameraTests` now pins the 9:16 HOME's horizon, its sky share and every device in the lower two thirds, and its sky helper
+counts the sea horizon where no land stands in a column.
+
+Measured with the capture rig (Unity 6000.5.3f1, Windows, D3D11): the HOME masks pass at both aspects (16:9 water 40.2 %, sky
+19.1 %, 36 of 37 devices, the truck being in its depot; 9:16 water 25.3 %, sky 19.5 %, 37 of 37). The 16:9 sky was 19.6 % in U5:
+the new ranges fill the ridge's saddles. The world is 901 renderers and 1.06 M vertices (U5: 892 and 1.05 M). Frame time at
+1920x1080 over 120 s, the U5 and U6 players run alternately four times each: the mean of the 10 s windows was 5.27-5.99 ms for U5
+(5.55 on average) and 5.65-5.91 ms for U6 (5.80 on average), so U6 is about a quarter of a millisecond higher, inside the spread
+of U5's own runs. The player's captures of a day page (lamp work), a storm page and a night page (the feeder outage) were read
+frame by frame.
+
+## U7 light, crests, rock and crews
+
+U6 left nine things short. This supersedes the U6 numbers for both HOME poses, the ambient light and the crews where they differ.
+
+- **The storm's dusk** (`SkyState.HorizonBreak`). The scenario's storm (16:00-22:30) covers every sunset, and nothing here moves it:
+  the beats, the cues and everything the rig judges are untouched. The front now stops short of the horizon towards the low sun. While
+  the sun is between 15 degrees up and 6 degrees under, a band of clear lit sky shows under the deck, about 6 degrees tall towards the
+  sun and tapering to nothing 110 degrees round from it (`SkyState.BreakReach`), gold while the sun is up and ember after. The 16:9
+  HOME looks north, so it holds the band's northern taper: tall at the frame's western edge, gone before the eastern one. Once the sun
+  is inside the band (under about 7 degrees) it reaches the town as a warm key again (`BreakKeyShare`: three quarters of what the storm
+  took), the deck's bases above the band are lit, the rain between the eye and the band is lit from behind, the rain in the air turns
+  from the WORLD cue's cool white towards gold (`HarborMaterials.SetRain`), and the water mirrors the band. The storm's cloud at dusk
+  is slate; it was the brown a drained rose leaves.
+- **Rain shafts** (`Shaders/HarborHaze.hlsl`). The haze a ray fades into is now one function in one file, included by the sky, the
+  scenery and the water. In the rain it carries shafts, slanted bands up to 42 % darker, sampled round the compass and moved by the
+  scenario clock, above the horizon and below it: the far land and sea under a storm are no longer one grey field.
+- **A fair-weather look check.** `-hp-stills-weather fair` (and `HarborpulseApp.PreviewFairWeather`) draws the OFFLINE PREVIEW's sky,
+  light, rain and sea for a dry day, so an hour the storm always covers can be judged as a clear one. It is a still tool: the stamp
+  reads `FAIR-WEATHER LOOK CHECK, STORM NOT DRAWN`, the file name ends `-fair`, the preview's readings and cues are the scenario's
+  own (a gauge still reads the storm's tide), a live scene refuses it, and any value but `fair` or `scenario` is refused.
+- **Dawn and white balance.** At 06:24 the sun is two degrees up: a key, but a weak and grazing one, so the flat ground had only an
+  ambient a third of the keyless hour's. The floor now carries a clear dawn and dusk as well (`TwilightFloorShare`), and once the sky
+  is light the floor is near neutral instead of the night's blue (the night keeps its blue). By day the sky-coloured ambient keeps
+  0.42 of the sky's colour (`DayAmbientKeep`), and less in the first and last hours: flat ground is lit by the whole sky, not the
+  zenith. The scenery shader divides its direct light by pi and not its ambient, so on the quays that ambient outweighed the sun and
+  turned concrete lavender. The grade's daytime temperature is +3 where it was -3. Measured on the 16:9 HOME stills, the west quay's
+  top was (46, 32, 37) at 06:24 and is (83, 67, 61); (62, 80, 122) at 07:06 and is (75, 79, 90); (95, 102, 128) at 12:30 and is
+  (102, 102, 107). The storm dusk's ambient has no violet left (blue was 1.6 times red at 18:18).
+- **The wood on the ranges** (`CoastalTerrain.HillLayer.CrestTrees`, `RidgeBuilder`). Each of the seven backdrop layers carries a line
+  of tree tops on its crest and two more down the face in front, 5,000 in all: flat cut-outs that face the harbour, one triangle a
+  conifer and three a broadleaf, 8.5-17 m tall, six conifers to four broadleaves, in stands with gaps. The broadleaves' colour and the
+  faces' own rust and gold follow a slow noise along the range, where a per-face hash scattered single faces. A crest's ground is
+  still under 3 degrees from a quay; its trees add under half a degree.
+- **16:9 HOME.** The look is raised from y = 4 to 7.5 (`PresentationMap.HomeLookY`), under half a degree: the horizon is 18.9 % down
+  (17.6 %). The mask reads sky 20.1 % (U5 19.6 %, U6 19.1 %) with the ranges at their U6 height and their tree line on top, water 39.1 %.
+- **9:16 HOME.** (-700, 235, -60) looking at (0, 22.2, -5), vertical FOV 44, horizon 12.5 % down. The devices stand between 46 % and
+  66 % of the way down (U6: 49-83 %), the farthest drawn no smaller than U6 drew it; below them are the western woods and houses,
+  above them the eastern woods, the uplands, the sea horizon and the sky. A backdrop layer seen from well above now lies in the same
+  haze as the ground round it (it stood out of it as a dark lens), and the coastal turf strip is weighed at each corner of a facet
+  and blended across it, where one weight a facet drew the grid as a staircase. The mask reads sky 19.4 %, water 15.6 %, 36 of 37
+  devices: from this lower eye the Basin's second charger is behind the ferry terminal.
+- **Granite** (`Outcrop.Blocks`). Every ledge of 10 m or more carries two to five loose blocks on its shoulders, and most ledges of
+  22 m or more a tor: two or three slabs stacked on the crown, up to 8 m above the ledge's top. Each block is a prism whose bottom is
+  half a metre under the drawn ground at every corner, inside the ledge's own rectangle: 192 blocks, 9 tors, about 7 k vertices in the
+  terrain tiles. Walls darken to their foot and tops are light, so a block shows as a lit cap over a dark side.
+- **Glass and the crews.** A vehicle's pane carries the sky in its upper part and a narrow glint (`NearPlan.Glazed`), cut from the
+  pane's own outline. The WORLD crew is a utility van with a cab, a bonnet, side cabinets and the fleet stripe, six cones with
+  collars and a two-board barrier; at a street light it has a bucket lift on outriggers with a technician at the lantern. It keeps the
+  WORLD cue's cool palette. A crew is built when the scenario first sends one (there was a hidden van at every lamp and gauge): the
+  world is 796 renderers and 1.06 M vertices (U6: 901 and 1.06 M).
+- **The well's view and its tags.** A pump's `well` and `well-locked` poses now look at the well. They were aimed at the pump's
+  anchor, and since the well moved 13 m along the quay to clear a lamp they framed the pump house's door with the well outside the
+  frame, under the caption about the well filling. East Quay's well stands behind a charger bay, so there the eye is nearer and
+  higher (9 m off, 13 m up) and looks over the canopy, which still covers the frame's lower left. The level tags are text, which the
+  font's material draws through the deck; they are now drawn only for a camera that frames the well (`WellFootprint.TagsInView`:
+  within 24 m and 20 degrees of the camera's axis), so a lamp or gauge shot beside a well no longer shows them at its edge. A still
+  decides them again at render time, for the camera it finally has.
+
+`U7LightTests` pins: the break opening only at a storm dusk, never in fair weather and never with a jump; the sun's key through it
+only once the sun is inside the band; the band's reach across the 16:9 HOME and its absence from the 9:16 one; the dawn's ambient and
+the ratio of blue to red in the ambient at the reviewed hours; no step in the ambient, the key or the exposure through either end of
+the day; both HOME frames; every layer's crest trees standing on it, sunk into it, in the forest's mix, in stands with gaps and with
+their colour in drifts; the tree line's cost in sky and its angle from a quay; every block under the drawn ground at every corner and
+inside its ledge (a lifted block fails the same check); tors inside the HOME frame; the sky and the glint lying inside each pane; a
+pump's well pose holding the well in the middle of the frame where the old aim did not; and the tags hidden from every lamp, gauge,
+charger and HOME pose.
+
+Measured with the capture rig (Unity 6000.5.3f1, Windows, D3D11): the HOME masks pass at both aspects (16:9 water 39.1 %, sky 20.1 %,
+36 of 37 devices, the truck being in its depot; 9:16 water 15.6 %, sky 19.4 %, 36 of 37, the Basin's second charger being behind the
+ferry terminal). The world is 796 renderers and 1.06 M vertices. Frame time at 1920x1080 over 120 s, the U6 and U7 players run
+alternately four times each: the mean of the 10 s windows was 5.27-6.12 ms for U6 (5.56 on average) and 5.31-5.78 ms for U7 (5.55 on
+average; three runs of the build before the well-view fix and one of the final build). The player's captures of the lamp-work page,
+the storm page and the night page were read frame by frame. In Chrome on Windows (WebGL 2 through ANGLE on Direct3D 11) the browser build draws the
+storm page and the night page as the Windows player does, and at 1920x1080 from HOME at noon it holds the display's 60 Hz (10 s
+windows of 16.67 ms mean, 17-18 ms at the 95th percentile); with the frame-rate limit and vsync switched off in Chrome its windows
+were 8.6-12.5 ms mean, on a Quadro P2200, by the scene's own `hp-frame-stats` log, which has a 1 ms clock in a browser. The first
+frame took 13 s. No other browser, no phone and no live link have been tried.
