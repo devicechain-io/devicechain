@@ -92,6 +92,8 @@ type rolloutCreateRequest struct {
 	GroupToken       string
 	MaxInFlight      int32
 	FailureThreshold *int32
+	Cohorts          *[]model.RolloutCohort
+	FailureRate      *model.RolloutFailureRate
 }
 
 // CreateUpdateRollout declares a rollout.
@@ -105,7 +107,10 @@ func (r *SchemaResolver) CreateUpdateRollout(ctx context.Context, args struct{ R
 	}
 	req := args.Request
 	in := model.RolloutCreateRequest{Token: req.Token, ArtifactToken: req.ArtifactToken, GroupToken: req.GroupToken,
-		MaxInFlight: int(req.MaxInFlight)}
+		MaxInFlight: int(req.MaxInFlight), FailureRate: req.FailureRate}
+	if req.Cohorts != nil {
+		in.Cohorts = *req.Cohorts
+	}
 	if req.Name != nil {
 		in.Name = *req.Name
 	}

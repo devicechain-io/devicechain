@@ -99,6 +99,9 @@ type Api struct {
 	// refuses unverified artifacts). Each one is also logged.
 	Undelivered atomic.Int64
 
+	// RolloutSafety is fixed instance opt-in, enabled only after all replicas upgrade.
+	RolloutSafety bool
+
 	RDB    *rdb.RdbManager
 	Blobs  blob.Store
 	Limits Limits

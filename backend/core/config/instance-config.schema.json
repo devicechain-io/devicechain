@@ -541,6 +541,9 @@
         "^[lL][oO][gG][gG][iI][nN][gG]$": {
           "$ref": "#/$defs/LoggingConfiguration"
         },
+        "^[mM][cC][pP]$": {
+          "$ref": "#/$defs/McpConfiguration"
+        },
         "^[mM][eE][sſS][sſS][aA][gG][iI][nN][gG]$": {
           "$ref": "#/$defs/MessagingConfiguration"
         },
@@ -564,6 +567,9 @@
         },
         "^[tT][rR][aA][cC][iI][nN][gG]$": {
           "$ref": "#/$defs/TracingConfiguration"
+        },
+        "^[uU][pP][dD][aA][tT][eE][mM][aA][nN][aA][gG][eE][mM][eE][nN][tT]$": {
+          "$ref": "#/$defs/UpdateManagementConfiguration"
         },
         "^[uU][sſS][eE][rR][mM][aA][nN][aA][gG][eE][mM][eE][nN][tT]$": {
           "$ref": "#/$defs/UserManagementConfiguration"
@@ -600,6 +606,9 @@
         "logging": {
           "$ref": "#/$defs/LoggingConfiguration"
         },
+        "mcp": {
+          "$ref": "#/$defs/McpConfiguration"
+        },
         "messaging": {
           "$ref": "#/$defs/MessagingConfiguration"
         },
@@ -623,6 +632,9 @@
         },
         "tracing": {
           "$ref": "#/$defs/TracingConfiguration"
+        },
+        "updateManagement": {
+          "$ref": "#/$defs/UpdateManagementConfiguration"
         },
         "userManagement": {
           "$ref": "#/$defs/UserManagementConfiguration"
@@ -693,6 +705,29 @@
           ],
           "type": [
             "string",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "McpConfiguration": {
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[cC][oO][mM][mM][aA][nN][dD][pP][rR][oO][pP][oO][sſS][aA][lL][sſS]$": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "properties": {
+        "commandProposals": {
+          "type": [
+            "boolean",
             "null"
           ]
         }
@@ -1847,6 +1882,29 @@
           "minimum": 0,
           "type": [
             "number",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "UpdateManagementConfiguration": {
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[rR][oO][lL][lL][oO][uU][tT][sſS][aA][fF][eE][tT][yY]$": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "properties": {
+        "rolloutSafety": {
+          "type": [
+            "boolean",
             "null"
           ]
         }
