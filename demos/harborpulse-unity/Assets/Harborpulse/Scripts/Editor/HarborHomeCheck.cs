@@ -60,7 +60,7 @@ namespace DeviceChain.Harborpulse.EditorTools
                 Debug.Log("[harborpulse] world: "+filters.Length+" renderers, "+vertices+" vertices, "+casting+" of them casting shadows");
                 app.World.Detail.Stats(out var built,out var shown,out var nearVertices,out var shownVertices);
                 Debug.Log("[harborpulse] near detail at HOME: "+app.World.Detail.Count+" sets, "+built+" built hidden ("+nearVertices+" vertices), "+shown+" shown ("+shownVertices+" vertices)");
-                if(shown>0)throw new InvalidOperationException("HOME must draw the far level only, but "+shown+" near-detail sets are shown");
+                // (the camera is wherever the director left it here, so nothing is asserted yet: HOME is asserted once the HOME pose is set below)
                 var checks=new List<Check>();
                 foreach(var vertical in new[]{false,true})
                 {
@@ -69,6 +69,10 @@ namespace DeviceChain.Harborpulse.EditorTools
                     app.DirectorCamera.ForcePose(vertical?"pose:home:portrait":"pose:home");
                     // Re-project the camera-space HUD at each aspect, then freeze camera ownership.
                     app.RefreshHud(); Canvas.ForceUpdateCanvases();
+                    // a forced decision from scratch for the HOME camera: no set may be near, whatever the camera showed before the cut
+                    app.World.Detail.Refresh(app.sceneCamera.transform.position,true);
+                    app.World.Detail.Stats(out _,out var nearShown,out _,out _);
+                    if(nearShown>0)throw new InvalidOperationException("HOME must draw the far level only, but "+nearShown+" near-detail sets are shown at "+(vertical?"portrait":"landscape"));
                     var name=vertical?"home-portrait":"home-landscape";
                     // The camera-space Canvas does not render reliably outside Play mode (its dynamic font atlas is not built), so the
                     // HOME beauty frame is the scene alone with the burnt-in stamp; HUD-bearing frames come from Play mode or the player.

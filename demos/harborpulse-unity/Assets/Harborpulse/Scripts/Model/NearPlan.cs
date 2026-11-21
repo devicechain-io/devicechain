@@ -163,6 +163,33 @@ namespace DeviceChain.Harborpulse.Model
             return Add(new NearPart(NearShape.Quad, t, 0, V(a.X, a.Y, a.Z), V(b.X, b.Y, b.Z), V(c.X, c.Y, c.Z), V(d.X, d.Y, d.Z), V(outward.X, outward.Y, outward.Z), 0, 0));
         }
 
+        /// <summary>
+        /// A solid with six faces from eight corners: <paramref name="c"/>[0..3] go round the bottom, [4..7] are the corners above them. Faces
+        /// look away from the solid's middle, so the corners may be tapered or sloped (a bonnet, a raked cabin).
+        /// </summary>
+        public NearPlan Hex(NearTone t, NearVec[] c)
+        {
+            float mx = 0, my = 0, mz = 0;
+            foreach (var v in c) { mx += v.X / 8; my += v.Y / 8; mz += v.Z / 8; }
+            void Face(NearVec a, NearVec b, NearVec cc, NearVec d)
+                => Quad(t, a, b, cc, d, new NearVec((a.X + b.X + cc.X + d.X) / 4 - mx, (a.Y + b.Y + cc.Y + d.Y) / 4 - my, (a.Z + b.Z + cc.Z + d.Z) / 4 - mz));
+            Face(c[0], c[1], c[2], c[3]); Face(c[4], c[5], c[6], c[7]);
+            for (var i = 0; i < 4; i++) Face(c[i], c[(i + 1) % 4], c[4 + (i + 1) % 4], c[4 + i]);
+            return this;
+        }
+
+        /// <summary>A quad pulled in toward its centre by the fraction <paramref name="inset"/> and lifted off the face it lies on, away from <paramref name="inside"/>: glass in a frame.</summary>
+        public NearPlan Pane(NearTone t, NearVec a, NearVec b, NearVec c, NearVec d, NearVec inside, float inset, float lift)
+        {
+            float gx = (a.X + b.X + c.X + d.X) / 4, gy = (a.Y + b.Y + c.Y + d.Y) / 4, gz = (a.Z + b.Z + c.Z + d.Z) / 4;
+            float ux = b.X - a.X, uy = b.Y - a.Y, uz = b.Z - a.Z, vx = c.X - a.X, vy = c.Y - a.Y, vz = c.Z - a.Z;
+            float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+            var nl = (float)Math.Sqrt(nx * nx + ny * ny + nz * nz); nx /= nl; ny /= nl; nz /= nl;
+            if (nx * (gx - inside.X) + ny * (gy - inside.Y) + nz * (gz - inside.Z) < 0) { nx = -nx; ny = -ny; nz = -nz; }
+            NearVec P(NearVec q) => new NearVec(gx + (q.X - gx) * (1 - inset) + nx * lift, gy + (q.Y - gy) * (1 - inset) + ny * lift, gz + (q.Z - gz) * (1 - inset) + nz * lift);
+            return Quad(t, P(a), P(b), P(c), P(d), new NearVec(nx, ny, nz));
+        }
+
         /// <summary>A box in a facade's frame: <c>u</c> along, <c>v</c> up, <c>n</c> out of the wall plane.</summary>
         public NearPlan Fb(NearFacade f, NearTone t, float u, float v, float n, float su, float sv, float sn, int seed = 0)
             => Box(t, f.X(u, n), v, f.Z(u, n), f.SizeX(su, sn), sv, f.SizeZ(su, sn), seed);

@@ -196,13 +196,16 @@ namespace DeviceChain.Harborpulse.Visuals
                 Slab("Low flood plain",minX,maxX,minZ,maxZ,Deck-.69f,mats.Asphalt,t);
                 // parked cars on the low plain (its surface is 0.69 m below the deck): a body and a cabin, in a few colours
                 var paints=new[]{mats.HullWhite,mats.ClapBlue,mats.BarnRed,mats.Slate,mats.ClapGrey};var n=0;
+                // the far bodies are kept out of the fence's merged batch so a near car can replace its own (a complete model, see NearVehicles.Car)
+                var carNode=AssetRig.Node("Parked cars "+ring.Key,Root,Vector3.zero);
                 foreach(var car in props.Props.Where(p=>p.Kind=="ParkedCar" && p.Area==ring.Key))
                 {
                     var x=(float)car.At.X;var z=(float)car.At.Z;var floor=ring.Key.IndexOf("depot",StringComparison.OrdinalIgnoreCase)<0?Deck-.69f:Deck;
                     var paint=paints[n++%paints.Length];
-                    new MeshKit().Box(new Vector3(x,floor+.55f,z),new Vector3((float)car.Width,.8f,(float)car.Depth)).Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.6f,.6f,2.3f)).Spawn("Parked car",t,paint);
-                    Detail.Register(NearVehicles.Car(CarSpec.Parked),t,new Vector3(x,floor,z),Quaternion.identity,NearPalette.Vehicle(paint.GetColor("_BaseColor")),mats.Surfaces);
-                    new MeshKit().Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.64f,.42f,2.1f)).Spawn("Car glass",t,mats.Glass,false);
+                    var body=new MeshKit().Box(new Vector3(x,floor+.55f,z),new Vector3((float)car.Width,.8f,(float)car.Depth)).Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.6f,.6f,2.3f)).Spawn("Parked car",carNode,paint);
+                    var glass=new MeshKit().Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.64f,.42f,2.1f)).Spawn("Car glass",carNode,mats.Glass,false);
+                    Detail.Register(NearVehicles.Car(CarSpec.Parked),carNode,new Vector3(x,floor,z),Quaternion.identity,NearPalette.Vehicle(paint.GetColor("_BaseColor")),mats.Surfaces,null,false,
+                        new[]{body.GetComponent<MeshRenderer>(),glass.GetComponent<MeshRenderer>()});
                 }
                 SurfaceDetail.Parking(t,mats,minX,maxX,minZ,maxZ,ring.Key.IndexOf("depot",StringComparison.OrdinalIgnoreCase)<0?Deck-.64f:Deck+.11f);
                 AssetRig.MergeFixed(t,t.GetComponentsInChildren<MeshFilter>());

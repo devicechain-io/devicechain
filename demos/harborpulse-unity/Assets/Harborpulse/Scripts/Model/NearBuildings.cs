@@ -229,10 +229,44 @@ namespace DeviceChain.Harborpulse.Model
             }
 
             Door(p, front, doorX, 0, !s.Shop && NearHash.Unit(s.X, s.Z, 13) < .5f);
+            RearDoor(p, rear, w, d, s);
             if (s.Shop) Shopfront(p, front, w, d, doorX, s);
             if (s.Porch) Porch(p, front, w, d, s);
             else if (!s.Shop) Stoop(p, front, doorX, 1.9f);
             return p;
+        }
+
+        /// <summary>
+        /// The street side. The lots are laid with the rear wall (local +Z) toward the street, so that wall gets what a street frontage has: a
+        /// door (the far level draws none there) in a frame, in the gap between two window columns, with a stoop and, where the lot allows, a small
+        /// porch with posts, a hood and a rail; its windows already have frames (the rows are drawn on all four walls).
+        /// </summary>
+        static void RearDoor(NearPlan p, NearFacade rear, float w, float d, HouseSpec s)
+        {
+            var count = WindowRow.Count(w, 2.8f);
+            // the middle of the gap between two columns (even count: the centre; odd: one pitch off it); a lone column leaves the quarter point free
+            var u = count == 1 ? w * .3f : count % 2 == 0 ? 0f : 1.4f;
+            var tone = NearTone.Trim;
+            p.Fb(rear, NearTone.Door, u, 1.1f, .04f, 1.0f, 2.2f, .08f);
+            p.Fb(rear, tone, u - .6f, 1.2f, .1f, .12f, 2.45f, .18f).Fb(rear, tone, u + .6f, 1.2f, .1f, .12f, 2.45f, .18f).Fb(rear, tone, u, 2.42f, .1f, 1.32f, .14f, .18f);
+            p.Fb(rear, NearTone.DoorPanel, u - .22f, .6f, .09f, .34f, .75f, .03f).Fb(rear, NearTone.DoorPanel, u + .22f, .6f, .09f, .34f, .75f, .03f)
+                .Fb(rear, NearTone.Glass, u, 1.65f, .09f, .7f, .6f, .03f).Fb(rear, NearTone.Metal, u + .36f, 1.05f, .12f, .06f, .06f, .08f);
+            var porch = !(s.Style == 4 && s.Rich) && s.D > 6;
+            if (!porch)
+            {
+                p.Fb(rear, NearTone.Stone, u, .06f, .4f, 1.6f, .12f, .4f).Fb(rear, NearTone.StoneDark, u, .12f, .18f, 1.4f, .1f, .3f);
+                return;
+            }
+            // a small porch: deck, two posts, a hood, a rail along one side, a step
+            p.Fb(rear, NearTone.Wood, u, .2f, .7f, 1.9f, .4f, 1.4f).Fb(rear, NearTone.WoodLight, u, .43f, .7f, 1.96f, .06f, 1.46f)
+                .Fb(rear, NearTone.Stone, u, .13f, 1.7f, 1.4f, .26f, .34f);
+            foreach (var k in new[] { -1f, 1f })
+                p.Fb(rear, tone, u + k * .85f, 1.55f, 1.3f, .14f, 2.2f, .14f);
+            p.Fb(rear, NearTone.Roof, u, 2.75f, .7f, 2.2f, .1f, 1.7f).Fb(rear, NearTone.RoofDark, u, 2.82f, .7f, 2.2f, .04f, 1.7f);
+            p.Fb(rear, tone, u + .85f, .95f, .7f, .06f, .06f, 1.2f).Fb(rear, tone, u + .85f, .65f, .7f, .06f, .05f, 1.2f);
+            for (var i = 0; i < 4; i++) p.Fb(rear, tone, u + .85f, .72f, .25f + i * .32f, .035f, .4f, .035f);
+            // pot beside the door
+            p.Fdrum(rear, NearTone.Red, u - .85f + .0f, .46f, .3f, .15f, .22f, 6, .2f);
         }
 
         static void Dormer(NearPlan p, float x, float y, float z, bool whole)

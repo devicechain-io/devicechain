@@ -34,66 +34,69 @@ namespace DeviceChain.Harborpulse.Model
         // ---------------------------------------------------------------- a hatchback
 
         /// <summary>
-        /// Wheels with arches and hubs, glazing pillars, lights, mirrors, bumpers and door seams for a hatchback. Everything stays within 0.06 m of
-        /// the sides and 0.1 m of the ends of the body the far level draws, which is the footprint a parked car reserves.
+        /// A complete low-poly hatchback that REPLACES the far level's two stacked boxes (the manager hides those while this is shown): a hull with
+        /// a sloped bonnet and tail, a cabin narrower at the roof with a raked windscreen and rear window and glass in a body-coloured frame, tyres
+        /// under dark arch trim with hubs, bumpers, lamps, plates, mirrors, door lines and handles. Same footprint, colour and place as the far
+        /// body; everything stays within 0.06 m of the sides and 0.1 m of the ends, which is the footprint a parked car reserves.
         /// </summary>
         public static NearPlan Car(CarSpec s)
         {
             var p = new NearPlan("car");
             var f = s.Front; float bw = s.BodyW / 2, bl = s.BodyL / 2;
-            var bodyH = s.BodyTop - s.BodyBottom;
-            // underbody shadow, bumpers, lamps and plates
-            p.Box(NearTone.Black, 0, s.BodyBottom - .02f, 0, s.BodyW - .12f, .1f, s.BodyL - .3f);
-            p.Box(NearTone.Black, 0, s.BodyBottom + .2f, f * (bl - .02f), s.BodyW - .08f, .22f, .13f).Box(NearTone.Black, 0, s.BodyBottom + .2f, -f * (bl - .02f), s.BodyW - .08f, .22f, .13f);
-            p.Box(NearTone.Black, 0, s.BodyTop - .3f, f * (bl + .012f), .95f, .16f, .03f)
-                .Box(NearTone.Metal, 0, s.BodyTop - .3f, f * (bl + .03f), .9f, .02f, .02f)
-                .Box(NearTone.Cream, -.62f, s.BodyTop - .27f, f * (bl + .012f), .36f, .13f, .03f).Box(NearTone.Cream, .62f, s.BodyTop - .27f, f * (bl + .012f), .36f, .13f, .03f)
-                .Box(NearTone.Orange, -.8f, s.BodyTop - .47f, f * (bl + .012f), .12f, .07f, .03f).Box(NearTone.Orange, .8f, s.BodyTop - .47f, f * (bl + .012f), .12f, .07f, .03f);
-            p.Box(NearTone.Red, -.64f, s.BodyTop - .25f, -f * (bl + .012f), .36f, .16f, .03f).Box(NearTone.Red, .64f, s.BodyTop - .25f, -f * (bl + .012f), .36f, .16f, .03f)
-                .Box(NearTone.Cream, 0, s.BodyBottom + .38f, -f * (bl + .016f), .5f, .11f, .02f);
-            // door seams, handles and a belt line along both flanks
+            float bb = s.BodyBottom, bt = s.BodyTop, belt = bt - .22f, roof = s.GlassTop + .09f, cw = s.CabinW / 2;
+            float zf = f * bl, zr = -f * bl, zw = s.CabinZ + f * s.CabinL / 2, zc = s.CabinZ - f * s.CabinL / 2;
+            NearVec V(float x, float y, float z) => new NearVec(x, y, z);
+            // hull below the belt line, with the sills a touch narrower than the flanks
+            p.Hex(NearTone.Paint, new[] { V(-bw + .03f, bb, zr), V(bw - .03f, bb, zr), V(bw - .03f, bb, zf), V(-bw + .03f, bb, zf),
+                V(-bw, belt, zr), V(bw, belt, zr), V(bw, belt, zf), V(-bw, belt, zf) });
+            // bonnet: slopes up from the nose to the foot of the windscreen
+            p.Hex(NearTone.Paint, new[] { V(-bw, belt, zw), V(bw, belt, zw), V(bw, belt, zf), V(-bw, belt, zf),
+                V(-bw + .05f, bt, zw), V(bw - .05f, bt, zw), V(bw - .1f, bt - .13f, zf), V(-bw + .1f, bt - .13f, zf) });
+            // shoulder and tail: level to the cabin, then falling a little to the back panel
+            p.Hex(NearTone.Paint, new[] { V(-bw, belt, zr), V(bw, belt, zr), V(bw, belt, zw), V(-bw, belt, zw),
+                V(-bw + .1f, bt - .06f, zr - f * -.08f), V(bw - .1f, bt - .06f, zr - f * -.08f), V(bw - .05f, bt, zw), V(-bw + .05f, bt, zw) });
+            // cabin: wide at the base, narrow at the roof, windscreen and rear window raked
+            var rf = zw - f * .62f; var rr = zc + f * .5f;
+            var cabin = new[] { V(-cw, bt, zc), V(cw, bt, zc), V(cw, bt, zw), V(-cw, bt, zw),
+                V(-cw + .15f, roof, rr), V(cw - .15f, roof, rr), V(cw - .15f, roof, rf), V(-cw + .15f, roof, rf) };
+            p.Hex(NearTone.Paint, cabin);
+            var mid = V(0, (bt + roof) / 2, s.CabinZ);
+            p.Pane(NearTone.Glass, cabin[3], cabin[2], cabin[6], cabin[7], mid, .13f, .012f);   // windscreen
+            p.Pane(NearTone.Glass, cabin[0], cabin[1], cabin[5], cabin[4], mid, .15f, .012f);   // rear window
+            p.Pane(NearTone.Glass, cabin[0], cabin[3], cabin[7], cabin[4], mid, .11f, .012f);   // left side
+            p.Pane(NearTone.Glass, cabin[1], cabin[2], cabin[6], cabin[5], mid, .11f, .012f);   // right side
+            // bumpers, lamps, grille and plates
+            p.Box(NearTone.Black, 0, bb + .2f, f * (bl - .02f), s.BodyW - .08f, .22f, .13f).Box(NearTone.Black, 0, bb + .2f, -f * (bl - .02f), s.BodyW - .08f, .22f, .13f);
+            p.Box(NearTone.Black, 0, bt - .3f, f * (bl + .012f), .95f, .16f, .03f).Box(NearTone.Metal, 0, bt - .3f, f * (bl + .03f), .9f, .02f, .02f)
+                .Box(NearTone.Cream, -.62f, bt - .27f, f * (bl + .012f), .36f, .13f, .03f).Box(NearTone.Cream, .62f, bt - .27f, f * (bl + .012f), .36f, .13f, .03f)
+                .Box(NearTone.Orange, -.8f, bt - .47f, f * (bl + .012f), .12f, .07f, .03f).Box(NearTone.Orange, .8f, bt - .47f, f * (bl + .012f), .12f, .07f, .03f);
+            p.Box(NearTone.Red, -.64f, bt - .25f, -f * (bl + .012f), .36f, .16f, .03f).Box(NearTone.Red, .64f, bt - .25f, -f * (bl + .012f), .36f, .16f, .03f)
+                .Box(NearTone.Cream, 0, bb + .38f, -f * (bl + .016f), .5f, .11f, .02f);
             foreach (var sx in new[] { -1, 1 })
             {
                 var x = sx * (bw + .008f);
+                // door lines, handles, a belt strip along the flank
                 foreach (var z in new[] { s.CabinZ + f * (s.CabinL / 2 - .05f), s.CabinZ - f * .05f, s.CabinZ - f * (s.CabinL / 2 - .05f) })
-                    p.Box(NearTone.Black, x, s.BodyBottom + bodyH / 2 - .02f, z, .016f, bodyH - .12f, .022f);
-                p.Box(NearTone.Metal, x + sx * .012f, s.BodyTop - .2f, s.CabinZ + f * .55f, .03f, .045f, .15f).Box(NearTone.Metal, x + sx * .012f, s.BodyTop - .2f, s.CabinZ - f * .5f, .03f, .045f, .15f);
-                p.Box(NearTone.Metal, x + sx * .004f, s.BodyTop - .04f, 0, .012f, .03f, s.BodyL - .7f);
-                // mirror on its short arm, at the cabin's front corner
-                var mz = s.CabinZ + f * (s.CabinL / 2 - .1f);
-                p.Beam(NearTone.Black, sx * (s.CabinW / 2), s.BodyTop + .15f, mz, sx * (s.CabinW / 2 + .08f), s.BodyTop + .17f, mz, .035f)
-                    .Box(NearTone.Paint, sx * (s.CabinW / 2 + .11f), s.BodyTop + .17f, mz, .08f, .11f, .16f);
-                // the pillars round the glass, in body colour, with a chrome sill
-                var gx = sx * (s.GlassW / 2 + .02f); var gy = (s.GlassBottom + s.GlassTop) / 2; var gh = s.GlassTop - s.GlassBottom + .04f;
-                p.Box(NearTone.Paint, gx, gy, s.CabinZ + f * (s.GlassL / 2 - .04f), .06f, gh, .09f).Box(NearTone.Paint, gx, gy, s.CabinZ - f * .05f, .06f, gh, .07f)
-                    .Box(NearTone.Paint, gx, gy, s.CabinZ - f * (s.GlassL / 2 - .04f), .06f, gh, .1f)
-                    .Box(NearTone.Metal, gx, s.GlassBottom - .02f, s.CabinZ, .05f, .025f, s.GlassL);
-            }
-            // roof: a pair of rails, a small fin and a lip spoiler at the tail
-            foreach (var sx in new[] { -1, 1 })
-                p.Box(NearTone.Black, sx * (s.CabinW / 2 - .1f), s.GlassTop + .17f, s.CabinZ, .05f, .04f, s.CabinL - .5f);
-            p.Box(NearTone.Black, 0, s.GlassTop + .2f, s.CabinZ - f * (s.CabinL / 2 - .25f), .08f, .06f, .22f)
-                .Box(NearTone.Paint, 0, s.GlassTop + .1f, s.CabinZ - f * (s.CabinL / 2 + .02f), s.CabinW - .2f, .05f, .14f);
-            // wheels: tyre, arch liner and hub (the charging car's far wheels are kept, so it only gains hub and arch)
-            foreach (var sx in new[] { -1, 1 })
+                    p.Box(NearTone.Black, x, bb + (belt - bb) / 2 + .1f, z, .016f, belt - bb - .05f, .022f);
+                p.Box(NearTone.Metal, x + sx * .012f, belt - .02f, s.CabinZ + f * .55f, .03f, .045f, .15f).Box(NearTone.Metal, x + sx * .012f, belt - .02f, s.CabinZ - f * .5f, .03f, .045f, .15f);
+                p.Box(NearTone.Metal, x + sx * .004f, belt + .02f, 0, .012f, .03f, s.BodyL - .7f);
+                // mirror on a short arm at the foot of the windscreen
+                var mz = zw - f * .12f;
+                p.Beam(NearTone.Black, sx * (cw - .02f), bt + .12f, mz, sx * (cw + .07f), bt + .14f, mz, .035f)
+                    .Box(NearTone.Paint, sx * (cw + .11f), bt + .14f, mz, .08f, .11f, .16f);
+                // arch trim: a dark liner behind each tyre, which stands proud of the flank with a hub
                 foreach (var wz in new[] { -s.WheelZ, s.WheelZ })
                 {
                     var ax = sx * (bw + .005f);
-                    p.Cyl(NearTone.Black, ax, s.WheelR + .02f, wz, ax + sx * .012f, s.WheelR + .02f, wz, s.WheelR + .1f, -1, 10);
-                    if (!s.WheelsInFar)
-                    {
-                        // the tyre: 0.2 wide, its outer face 0.03 proud of the body side
-                        p.Cyl(NearTone.Black, sx * (bw - .17f), s.WheelR, wz, sx * (bw + .03f), s.WheelR, wz, s.WheelR, -1, 10);
-                        p.Cyl(NearTone.Metal, sx * (bw + .03f), s.WheelR, wz, sx * (bw + .045f), s.WheelR, wz, s.WheelR * .56f, -1, 8);
-                    }
-                    else p.Cyl(NearTone.Metal, sx * 1.0f, s.WheelR, wz, sx * 1.016f, s.WheelR, wz, s.WheelR * .52f, -1, 8);
+                    p.Cyl(NearTone.Black, ax, s.WheelR + .02f, wz, ax + sx * .012f, s.WheelR + .02f, wz, s.WheelR + .11f, -1, 12);
+                    p.Cyl(NearTone.Black, sx * (bw - .17f), s.WheelR, wz, sx * (bw + .03f), s.WheelR, wz, s.WheelR, -1, 12);
+                    p.Cyl(NearTone.Metal, sx * (bw + .03f), s.WheelR, wz, sx * (bw + .045f), s.WheelR, wz, s.WheelR * .56f, -1, 8);
                 }
-            if (s.WheelsInFar)
-            {
-                // the charging car's cabin has a windscreen only: glazing down the sides and at the tail
-                foreach (var sx in new[] { -1, 1 }) p.Box(NearTone.Glass, sx * (s.CabinW / 2 + .012f), (s.GlassBottom + s.GlassTop) / 2 - .1f, s.CabinZ, .03f, .4f, s.CabinL - .3f);
-                p.Box(NearTone.Glass, 0, (s.GlassBottom + s.GlassTop) / 2 - .1f, s.CabinZ - s.CabinL / 2 - .012f, s.CabinW - .2f, .4f, .03f);
             }
+            // roof rails, a small fin and a lip spoiler at the tail
+            foreach (var sx in new[] { -1, 1 }) p.Box(NearTone.Black, sx * (cw - .22f), roof + .03f, s.CabinZ, .05f, .04f, s.CabinL - .9f);
+            p.Box(NearTone.Black, 0, roof + .04f, rr + f * .25f, .08f, .06f, .22f).Box(NearTone.Paint, 0, bt + .02f, zr + f * .12f, s.CabinW - .3f, .05f, .14f);
+            p.Box(NearTone.Black, 0, bb - .02f, 0, s.BodyW - .14f, .08f, s.BodyL - .3f);
             return p;
         }
 

@@ -83,9 +83,22 @@ namespace DeviceChain.Harborpulse.Model
             return dx * dx + dy * dy + dz * dz > MovedM * MovedM;
         }
 
-        /// <summary>Retakes the decision for a camera at the given place. Returns how many sets changed level.</summary>
-        public int Update(long frame, float x, float y, float z)
+        /// <summary>A camera that jumped farther than this since the last decision is a cut, not a drift: hysteresis does not apply to a cut.</summary>
+        public const float CutM = 150f;
+
+        /// <summary>
+        /// Retakes the decision for a camera at the given place. Returns how many sets changed level. With <paramref name="fromScratch"/>, or when
+        /// the camera has jumped more than <see cref="CutM"/> since the last decision, nothing is remembered: hysteresis and stickiness belong to a
+        /// camera that drifts, and a cut (a still posed at HOME after a shot) must get the answer a fresh start would.
+        /// </summary>
+        public int Update(long frame, float x, float y, float z, bool fromScratch = false)
         {
+            if (taken)
+            {
+                float jx = x - lastX, jy = y - lastY, jz = z - lastZ;
+                if (jx * jx + jy * jy + jz * jz > CutM * CutM) fromScratch = true;
+            }
+            if (fromScratch) for (var i = 0; i < count; i++) near[i] = false;
             taken = true; lastFrame = frame; lastX = x; lastY = y; lastZ = z;
             var candidates = 0;
             for (var i = 0; i < count; i++)
