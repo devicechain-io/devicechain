@@ -24,7 +24,7 @@ namespace DeviceChain.Harborpulse.EditorTools
     {
         public const string DefaultSet = "12.5:0,17.95:7,18.35:7,18.1:6,19.4:4,20.7:10,26.7:8,12.67:9,11.0:10,22.6:5,17.6:11";
 
-        public static string Shoot(string outDir, string set, int width = 1600, int height = 900)
+        public static string Shoot(string outDir, string set, int width = 1600, int height = 900, bool hud = true)
         {
             EditorSceneManager.OpenScene(HarborSceneBuilder.ScenePath, OpenSceneMode.Single);
             var app = UnityEngine.Object.FindAnyObjectByType<HarborpulseApp>();
@@ -65,6 +65,8 @@ namespace DeviceChain.Harborpulse.EditorTools
                         shotName = free[7];
                     }
                     app.RefreshHud();
+                    // "-hp-stills-hud 0": the scene alone under the burnt-in stamp, for judging the sky and the light
+                    if (!hud && app.Hud != null) app.Hud.Visible = false;
                     Canvas.ForceUpdateCanvases();
                     var name = "harborpulse-" + ((int)hour % 24).ToString("00", CultureInfo.InvariantCulture) + "h" + ((int)System.Math.Round((hour - System.Math.Floor(hour)) * 60) % 60).ToString("00", CultureInfo.InvariantCulture) + "-" + shotName.ToLowerInvariant().Replace(' ', '-') + ".png";
                     var stamp = "OFFLINE PREVIEW - STAND-IN VALUES, NOT PLATFORM DATA - " + app.Clock.Label.Substring(app.Clock.Label.IndexOf(' ') + 1, 5) + " - " + shotName;
@@ -129,17 +131,18 @@ namespace DeviceChain.Harborpulse.EditorTools
             {
                 var args = Environment.GetCommandLineArgs();
                 string dir = null, set = DefaultSet;
-                var width = 1600; var height = 900;
+                var width = 1600; var height = 900; var hud = true;
                 for (var i = 0; i < args.Length - 1; i++)
                 {
                     if (args[i] == "-hp-stills-dir") dir = args[i + 1];
                     if (args[i] == "-hp-stills-width") width = int.Parse(args[i + 1], CultureInfo.InvariantCulture);
                     if (args[i] == "-hp-stills-height") height = int.Parse(args[i + 1], CultureInfo.InvariantCulture);
                     if (args[i] == "-hp-stills") set = args[i + 1];
+                    if (args[i] == "-hp-stills-hud") hud = args[i + 1] != "0";
                 }
 
                 if (dir == null) throw new ArgumentException("-hp-stills-dir is required");
-                var result = Shoot(dir, set, width, height);
+                var result = Shoot(dir, set, width, height, hud);
                 Debug.Log("[harborpulse] " + result);
                 EditorApplication.Exit(result.Contains(" stills in ") ? 0 : 1);
             }

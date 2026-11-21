@@ -70,6 +70,9 @@ Shader "Harborpulse/Water"
             // the sky the water reflects, and the weather, from HarborSkyController / HarborWaterController
             float4 _HarborSkyZenith;
             float4 _HarborSkyHorizon;
+            float4 _HarborSceneryFog;      // x the scenery's air density (HarborSkyController)
+            float4 _HarborSceneryFogColor; // the haze along the horizon
+            float4 _HarborSceneryFogLow;   // the haze over far ground and far water, below the horizon
             float _HarborStorm;
             float _HarborRain;
             float _HarborNight;
@@ -286,6 +289,14 @@ Shader "Harborpulse/Water"
                 colour = lerp(colour, foamLit, saturate(foam) * 0.85);
 
                 colour = MixFog(colour, i.fogCoord);
+                // Open water fades into the same haze as the land beside it (DayLighting.SeaTransmission: the scenery's distance curve, from
+                // 350 m out), toward the colour a ray of this elevation fades to (DayLighting.HazeColor). Without it the sea stayed dark to
+                // its far edge and drew a hard line under the sky and along the hazed coast.
+                float away = distance(_WorldSpaceCameraPos, i.positionWS);
+                float seaAir = _HarborSceneryFog.x * 3.5 * max(0.0, away - 350.0);
+                float rayY = (i.positionWS.y - _WorldSpaceCameraPos.y) / max(away, 1.0);
+                float3 seaHaze = lerp(_HarborSceneryFogColor.rgb, _HarborSceneryFogLow.rgb, 1.0 - smoothstep(-0.05, 0.004, rayY));
+                colour = lerp(seaHaze, colour, exp(-seaAir * seaAir));
                 return half4(colour, 1.0);
             }
             ENDHLSL

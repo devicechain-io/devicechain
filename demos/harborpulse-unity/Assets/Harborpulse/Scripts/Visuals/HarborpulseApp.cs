@@ -577,7 +577,7 @@ namespace DeviceChain.Harborpulse.Visuals
 
             var shots = rig.Shots;
             sb.Clear();
-            for (var i = 0; i < shots.Count; i++) sb.Append(i == rig.Current ? "<b>[" : "[").Append(i == 10 ? "F1" : i == 11 ? "F2" : i.ToString(CultureInfo.InvariantCulture)).Append("] ").Append(shots[i].Name).Append(i == rig.Current ? "</b>   " : "   ");
+            for (var i = 0; i < shots.Count; i++) sb.Append(i == rig.Current ? "<b>[" : "[").Append(i == 10 ? "F1" : i == 11 ? "F2" : i == 12 ? "F3" : i.ToString(CultureInfo.InvariantCulture)).Append("] ").Append(shots[i].Name).Append(i == rig.Current ? "</b>   " : "   ");
             sb.Append("· drag to orbit, wheel to dolly");
             var shotText = sb.ToString();
             var shotHeight = small.CalcHeight(new GUIContent(shotText), Screen.width - 32);
