@@ -998,5 +998,30 @@ U6 left nine things short. This supersedes the U6 numbers for both HOME poses, t
   collars and a two-board barrier; at a street light it has a bucket lift on outriggers with a technician at the lantern. It keeps the
   WORLD cue's cool palette. A crew is built when the scenario first sends one (there was a hidden van at every lamp and gauge): the
   world is 796 renderers and 1.06 M vertices (U6: 901 and 1.06 M).
-- **Well tags.** The wet well's level tags are drawn with a depth-tested font material (`Resources/HarborWorldTag.shader`); the
-  built-in one drew them through the quay into any lamp shot that stood beside a well.
+- **The well's view and its tags.** A pump's `well` and `well-locked` poses now look at the well. They were aimed at the pump's
+  anchor, and since the well moved 13 m along the quay to clear a lamp they framed the pump house's door with the well outside the
+  frame, under the caption about the well filling. East Quay's well stands behind a charger bay, so there the eye is nearer and
+  higher (9 m off, 13 m up) and looks over the canopy, which still covers the frame's lower left. The level tags are text, which the
+  font's material draws through the deck; they are now drawn only for a camera that frames the well (`WellFootprint.TagsInView`:
+  within 24 m and 20 degrees of the camera's axis), so a lamp or gauge shot beside a well no longer shows them at its edge. A still
+  decides them again at render time, for the camera it finally has.
+
+`U7LightTests` pins: the break opening only at a storm dusk, never in fair weather and never with a jump; the sun's key through it
+only once the sun is inside the band; the band's reach across the 16:9 HOME and its absence from the 9:16 one; the dawn's ambient and
+the ratio of blue to red in the ambient at the reviewed hours; no step in the ambient, the key or the exposure through either end of
+the day; both HOME frames; every layer's crest trees standing on it, sunk into it, in the forest's mix, in stands with gaps and with
+their colour in drifts; the tree line's cost in sky and its angle from a quay; every block under the drawn ground at every corner and
+inside its ledge (a lifted block fails the same check); tors inside the HOME frame; the sky and the glint lying inside each pane; a
+pump's well pose holding the well in the middle of the frame where the old aim did not; and the tags hidden from every lamp, gauge,
+charger and HOME pose.
+
+Measured with the capture rig (Unity 6000.5.3f1, Windows, D3D11): the HOME masks pass at both aspects (16:9 water 39.1 %, sky 20.1 %,
+36 of 37 devices, the truck being in its depot; 9:16 water 15.6 %, sky 19.4 %, 36 of 37, the Basin's second charger being behind the
+ferry terminal). The world is 796 renderers and 1.06 M vertices. Frame time at 1920x1080 over 120 s, the U6 and U7 players run
+alternately four times each: the mean of the 10 s windows was 5.27-6.12 ms for U6 (5.56 on average) and 5.31-5.78 ms for U7 (5.55 on
+average; three runs of the build before the well-view fix and one of the final build). The player's captures of the lamp-work page,
+the storm page and the night page were read frame by frame. In Chrome on Windows (WebGL 2 through ANGLE on Direct3D 11) the browser build draws the
+storm page and the night page as the Windows player does, and at 1920x1080 from HOME at noon it holds the display's 60 Hz (10 s
+windows of 16.67 ms mean, 17-18 ms at the 95th percentile); with the frame-rate limit and vsync switched off in Chrome its windows
+were 8.6-12.5 ms mean, on a Quadro P2200, by the scene's own `hp-frame-stats` log, which has a 1 ms clock in a browser. The first
+frame took 13 s. No other browser, no phone and no live link have been tried.
