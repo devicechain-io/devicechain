@@ -33,6 +33,11 @@ type EntityDeletionWatermark struct {
 	// so it compares with pg_stat_activity.xact_start without pod clock skew. A re-arm while
 	// an older transaction is open moves ResweepAfter only, never ArmedAt.
 	ArmedAt *time.Time
+	// Holder checks belong to this exact deletion. A newer deletion bypasses an old
+	// schedule, including when it was written by a pod predating holder backoff.
+	HolderCheckedDeletion   *time.Time
+	HolderCheckAfter        *time.Time
+	HolderCheckDelaySeconds int `gorm:"not null;default:0"`
 }
 
 // recordEntityDeletion commits independently of cleanup. A crash or an exhausted

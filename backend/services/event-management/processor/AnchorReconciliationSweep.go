@@ -38,6 +38,7 @@ type AnchorReconciliationSweep struct {
 	Api          emmodel.EventManagementApi
 	client       *svcclient.Client
 	dmURL        string
+	now          func() time.Time // nil uses time.Now; fixed for each tenant pass
 }
 
 // NewAnchorReconciliationSweep builds the sweep. client resolves entity existence
@@ -88,8 +89,10 @@ func (s *AnchorReconciliationSweep) runOnce(ctx context.Context) error {
 //
 // It pages and batches like the anchor walk (one existence query per page of tokens) and fails
 // safe the same way: a page device-management could not answer ends the tenant and records
-// nothing. A token nobody re-creates is asked about again on every pass; the page size bounds
-// what each question costs.
+// nothing. Confirmed absences back off from one hour to seven days, durably per deletion.
+// Roster facts still record holders immediately; a missed fact is caught on the next due
+// pass (at most seven days plus the sweep interval, assuming successful passes).
+// No token is permanently skipped. Old pods ignore this schedule during a rolling upgrade.
 func (s *AnchorReconciliationSweep) repairHolders(ctx context.Context) error {
 	tenants, err := s.Api.DeletedDeviceTokenTenants(ctx)
 	if err != nil {
@@ -102,6 +105,10 @@ func (s *AnchorReconciliationSweep) repairHolders(ctx context.Context) error {
 }
 
 func (s *AnchorReconciliationSweep) repairTenantHolders(ctx, tctx context.Context, tenant string) error {
+	now := time.Now().UTC()
+	if s.now != nil {
+		now = s.now().UTC()
+	}
 	var cursor string
 	var watch cursorWatch
 	var recorded int
@@ -109,7 +116,7 @@ func (s *AnchorReconciliationSweep) repairTenantHolders(ctx, tctx context.Contex
 		if err := watch.advancing(cursor); err != nil {
 			return err
 		}
-		page, err := s.Api.UnheldDeletedDeviceTokensAfter(tctx, cursor)
+		page, err := s.Api.UnheldDeletedDeviceTokensAfter(tctx, cursor, now)
 		if err != nil {
 			return fmt.Errorf("reading deleted device tokens: %w", err)
 		}
@@ -129,6 +136,9 @@ func (s *AnchorReconciliationSweep) repairTenantHolders(ctx, tctx context.Contex
 		}
 		for _, d := range page {
 			if !existing[refKey(string(entity.TypeDevice), d.Token)] {
+				if err := s.Api.RecordDeviceTokenAbsent(tctx, d, now); err != nil {
+					return fmt.Errorf("recording absent device token %q: %w", d.Token, err)
+				}
 				continue
 			}
 			if err := s.Api.RecordDeviceTokenHeld(tctx, d.Token, d.DeletedTime); err != nil {

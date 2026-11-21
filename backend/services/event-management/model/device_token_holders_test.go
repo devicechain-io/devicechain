@@ -132,7 +132,7 @@ func TestUnheldDeletedDeviceTokensAfter(t *testing.T) {
 	require.NoError(t, err)
 
 	tokens := func(after string) []string {
-		page, err := api.UnheldDeletedDeviceTokensAfter(ctx, after)
+		page, err := api.UnheldDeletedDeviceTokensAfter(ctx, after, time.Now())
 		require.NoError(t, err)
 		var out []string
 		for _, d := range page {
