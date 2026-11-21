@@ -298,6 +298,9 @@ func TestSweep_RepairsHoldersOfReCreatedTokensOnly(t *testing.T) {
 		{Token: "pump-9", DeletedTime: d9}}, nil)
 	api.Mock.On("UnheldDeletedDeviceTokensAfter", "pump-9").Return([]emmodel.DeletedDeviceToken{}, nil)
 	var held []string
+	api.Mock.On("RecordDeviceTokenAbsent", mock.MatchedBy(func(d emmodel.DeletedDeviceToken) bool {
+		return d.Token == "gone-1" && d.DeletedTime.Equal(d1)
+	}), mock.Anything).Return(nil).Once()
 	api.Mock.On("RecordDeviceTokenHeld", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		held = append(held, fmt.Sprintf("%s@%s", args.String(0), args.Get(1).(time.Time).Format(time.RFC3339)))
 	}).Return(nil)
