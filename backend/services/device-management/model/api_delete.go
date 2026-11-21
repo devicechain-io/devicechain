@@ -149,6 +149,19 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 	}
 	var trackingSources ownershipQueued
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// LOCK ORDER: creation holds the gateway before family/membership work.
+		// Device deletion must therefore take that row before shared cleanup too:
+		// otherwise Create holds G waiting F, an attribute writer holds F waiting
+		// M(G), and Delete holds M(G) waiting G. Do not apply this to groups:
+		// their family must precede their row, after edge/attribute cleanup (#2920).
+		if etype == entity.TypeDevice {
+			if err := refuseDeleteOfGateway(tx, id); err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return errEntityGoneBeforeDelete
+				}
+				return err
+			}
+		}
 		// The deletion fact names the entity's own tenant (entityTenantOnTx), read before the
 		// row is gone.
 		tenant, err := entityTenantOnTx(tx, model, id)
@@ -171,8 +184,7 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		// Cascade the entity's attributes: they address their owner by
 		// (entity_type, entity_id) with no DB foreign key, so nothing else removes
 		// them (ADR-044 same-service RI gap).
-		if err := tx.Unscoped().Where(
-			"entity_type = ? AND entity_id = ?", string(etype), id).Delete(&EntityAttribute{}).Error; err != nil {
+		if err := deleteEntityAttributesOnTx(tx, etype, id); err != nil {
 			return err
 		}
 		// Capture exactly the alarms removed by the cascade, including any raised
@@ -211,13 +223,10 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		// Held first, a concurrent writer either committed before the lock was granted, so before
 		// the stamp, or waits for this delete and then finds no row.
 		//
-		// The lock is taken HERE, where the delete took the row anyway, and not at the top of
-		// the transaction, so everything above keeps the lock order it always had. At the top it
-		// put a group's row ahead of its membership family, which an access-scope switch and a
-		// pointer move take the other way round; and taking the family first instead held it
-		// across the edge cleanup, closing a three-way cycle with a member's delete (holding the
-		// edge, waiting on an attribute) and an attribute write (holding the attribute, waiting
-		// on the family).
+		// Devices already hold their row from the gateway check. Other entities keep
+		// the late lock, especially groups: putting a group row ahead of its family
+		// inverts access-scope switches and pointer moves. Taking its family before
+		// edge cleanup instead closes the edge/attribute/family cycle fixed in #2920.
 		locked, err := lockEntityForDeleteOnTx(tx, model, id)
 		if err != nil {
 			return err
@@ -264,6 +273,27 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 	// that was never a member.
 	api.evictMemberships(ctx, string(etype), []uint{id})
 	return true, nil
+}
+
+// deleteEntityAttributesOnTx acquires write locks in the same bytewise key order
+// as configuration restore/copy, then scope and ID to break ties. An unordered
+// multi-row DELETE can lock b before a while restore holds a and waits for b.
+// Sort in Go so database collation cannot disagree with restore's sort.Strings.
+// The initial read takes no row locks; each hard delete acquires just its own row.
+func deleteEntityAttributesOnTx(tx *gorm.DB, etype entity.Type, id uint) error {
+	var rows []EntityAttribute
+	if err := tx.Unscoped().Where("entity_type = ? AND entity_id = ?", string(etype), id).Find(&rows).Error; err != nil {
+		return err
+	}
+	slices.SortFunc(rows, func(a, b EntityAttribute) int {
+		return cmp.Or(strings.Compare(a.AttrKey, b.AttrKey), strings.Compare(a.Scope, b.Scope), cmp.Compare(a.ID, b.ID))
+	})
+	for i := range rows {
+		if err := tx.Unscoped().Delete(&rows[i]).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // deleteParentType deletes a "type" parent by token, refusing with ErrEntityInUse
@@ -459,15 +489,7 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 	kickTenant := ""
 	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeDevice, &Device{}, token,
 		func(tx *gorm.DB, id uint) ([]uint, error) {
-			// A gateway that still has children is not deleted (ErrGatewayHasChildren): a device
-			// must never be left naming a gateway that is gone.
-			if err := refuseDeleteOfGateway(tx, id); err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					// A concurrent delete won before the gateway check acquired the row.
-					return nil, errEntityGoneBeforeDelete
-				}
-				return nil, err
-			}
+			// The gateway refusal and row lock precede shared cleanup in deleteEdgeEntity.
 			credentials = credentials[:0]
 			if err := deleteCredentialsReturningOwners(tx.Unscoped().Where("device_id = ?", id), &credentials); err != nil {
 				return nil, err
