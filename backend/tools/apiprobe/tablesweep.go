@@ -320,6 +320,15 @@ var tableSweepExemptions = map[string]string{
 		"has acknowledged it. Only an executed agent proposal writes one and the seed proposes nothing " +
 		"(actuation is off by default), so empty is the normal state; a row that stays here means executed " +
 		"effects are not reaching the broker, which is a finding this bucket should report.",
+	"command-delivery.agent_proposals": "the agent command-proposal ledger. Only an AI agent's access token " +
+		"carrying command:propose may write it, and only while infrastructure.mcp.commandProposals is on " +
+		"(off by default and on no drill instance); a person's console token, like the tenant administrator " +
+		"this probe runs as, is refused by design. The table's tenant column is proved by the purge " +
+		"coverage gate.",
+	"command-delivery.agent_actuation_fences": "command-delivery's per-tenant local kill fence: a row " +
+		"appears when the first agent command execution of a tenant seeds it or when a kill event for the " +
+		"tenant is applied. The seed neither executes an agent proposal nor kills one, so no row is " +
+		"expected; an absent row means \"never killed\".",
 	"device-management.agent_actuation_fences": "the per-tenant local kill fence: a row appears when the " +
 		"first agent execution of a tenant seeds it or when a kill event for the tenant is applied. Agent " +
 		"actuation is off by default and the seed neither executes an agent proposal nor kills one, so no " +

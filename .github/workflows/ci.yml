@@ -108,6 +108,12 @@ jobs:
       - name: silent-skip gate self-test
         run: bash hack/check-no-silent-skips.sh --self-test
 
+      # The fleet module's real-Postgres suite runs inside hack/migration-diff.sh verify, behind
+      # the build tag fleetpg, and its count of passed TestFleetPG* tests is what proves the tag
+      # compiled anything. Prove once, here, that the count check refuses an empty suite.
+      - name: fleet real-Postgres count check self-test
+        run: bash hack/check-fleetpg-count.sh --self-test
+
       # The release-candidate run script's exit-code, stop and liveness handling, against
       # stub rungs. Nothing else runs it, and it is what a 60-minute run's verdict is
       # reported through.
@@ -3167,45 +3173,52 @@ jobs:
             echo "::endgroup::"
           done
 
-      # deploy/gke creates a cluster rather than installing into one, and dcctl
-      # does not ship it, so it is not one of the roots above (hack/tofu-roots.sh
-      # lists what dcctl embeds, and other checks rely on that). It is checked on
-      # its own here so that broken HCL in it fails CI instead of a user's apply.
-      - name: tofu fmt, init and validate deploy/gke
-        working-directory: deploy/gke
+      # The roots dcctl does not embed: deploy/gke and deploy/playground create a cluster
+      # rather than installing into one, and later the fleet roots under deploy/fleet. They
+      # are not among the roots above (hack/tofu-roots.sh lists what dcctl embeds, and other
+      # checks rely on that), so they are discovered with `--all`, which walks the whole of
+      # deploy/ and skips modules, tests, fixtures and premises.
+      #
+      # 🔴 A LOOP, NOT ONE STEP PER ROOT: a root added under deploy/ is then fmt-checked,
+      # init'd, validated and tested the day it lands, instead of the day someone remembers
+      # to write its step. The discovery's own self-test and the independent directory-set
+      # cross-check (deploy/tofu_roots_test.go) keep the list honest, and the script refuses
+      # an empty list.
+      #
+      # `tofu test` with no test files reports success, so for a root that HAS a tests
+      # directory the pass count is required to be non-zero rather than the exit status
+      # alone trusted. The output goes through tee so a failing run still prints its per-run
+      # lines; pipefail keeps tofu's own status.
+      - name: tofu fmt, init, validate and test every other root
+        working-directory: .
         run: |
           set -euo pipefail
-          tofu fmt -check -recursive
-          "$GITHUB_WORKSPACE/hack/ci-retry.sh" tofu init -backend=false
-          tofu validate
-
-      # The plan's shape, rather than its syntax: two pools, the database one
-      # tainted, and the outputs naming how a pod reaches the database pool.
-      # `tofu test` with no test files reports success, so the pass count is
-      # required to be non-zero rather than the exit status alone trusted. The
-      # output goes through tee so a failing run still prints its per-run lines;
-      # pipefail keeps tofu's own status. (The step above ran init here.)
-      - name: tofu test deploy/gke
-        working-directory: deploy/gke
-        run: |
-          set -euo pipefail
-          tofu test -no-color | tee "$RUNNER_TEMP/gke-tftest.log"
-          grep -Eq '^Success! [1-9][0-9]* passed, 0 failed\.$' "$RUNNER_TEMP/gke-tftest.log"
-
-      # The hosted playground's root (deploy/playground) is a sibling of deploy/gke for the
-      # same reason: it creates a cluster, dcctl does not ship it, and hack/tofu-roots.sh
-      # lists only what dcctl embeds. Its test suite holds the plan's shape (one spot pool,
-      # the budget alert, the reset wired to the driver's day boundary) against mocked
-      # providers. The pass count is required to be non-zero for the reason given above.
-      - name: tofu fmt, init, validate and test deploy/playground
-        working-directory: deploy/playground
-        run: |
-          set -euo pipefail
-          tofu fmt -check -recursive
-          "$GITHUB_WORKSPACE/hack/ci-retry.sh" tofu init -backend=false
-          tofu validate
-          tofu test -no-color | tee "$RUNNER_TEMP/playground-tftest.log"
-          grep -Eq '^Success! [1-9][0-9]* passed, 0 failed\.$' "$RUNNER_TEMP/playground-tftest.log"
+          hack/tofu-roots.sh --self-test
+          hack/tofu-roots.sh --all > "$RUNNER_TEMP/all-roots.txt"
+          # The install roots are covered by the step above; everything else is here.
+          grep -v '^deploy/opentofu/' "$RUNNER_TEMP/all-roots.txt" > "$RUNNER_TEMP/other-roots.txt" || true
+          [ -s "$RUNNER_TEMP/other-roots.txt" ] || { echo "no root outside deploy/opentofu was discovered"; exit 1; }
+          # The fleet roots (deploy/fleet/*) ENFORCE state and plan encryption, so even `init` needs a
+          # key. CI supplies a throwaway one; whether the `enforced` lines are really there is
+          # checked statically and by a no-key plan in hack/check-fleet-roots.sh, not here.
+          fleet_key='key_provider "pbkdf2" "ci" { passphrase = "ci-throwaway-passphrase-0123456789" }
+          method "aes_gcm" "ci" { keys = key_provider.pbkdf2.ci }
+          state { method = method.aes_gcm.ci }
+          plan { method = method.aes_gcm.ci }'
+          while IFS= read -r root; do
+            echo "::group::$root"
+            ( cd "$root"
+              case "$root" in deploy/fleet/*) export TF_ENCRYPTION="$fleet_key" ;; esac
+              tofu fmt -check -recursive
+              "$GITHUB_WORKSPACE/hack/ci-retry.sh" tofu init -backend=false
+              tofu validate
+              if [ -d tests ]; then
+                log="$RUNNER_TEMP/$(echo "$root" | tr '/' '-')-tftest.log"
+                tofu test -no-color | tee "$log"
+                grep -Eq '^Success! [1-9][0-9]* passed, 0 failed\.$' "$log"
+              fi )
+            echo "::endgroup::"
+          done < "$RUNNER_TEMP/other-roots.txt"
 
       # The wait that ends the apply has a self-test against a scripted gcloud: it must
       # wait through RECONCILING and fail on a timeout, an always-failing gcloud and a
@@ -3213,6 +3226,20 @@ jobs:
       - name: gke cluster-operations wait self-test
         working-directory: .
         run: deploy/opentofu/modules/gke-cluster/wait-for-cluster-operations.sh --self-test
+
+      # The no-op plan gate for the deploy/gke -> modules/gke-cluster extraction. The self-test
+      # runs first and shows the gate refusing each planted defect (a dropped moved block, a
+      # renamed module call, a changed input, a changed settle trigger, an empty fixture
+      # directory) on a synthetic pair; a gate that has not been shown to refuse anything cannot
+      # tell "nothing to report" from "never looked". Then the sanitized states of the real root
+      # (its current shape and the pre-for_each loadgen shape) must plan as pure no-ops. Offline:
+      # a dummy token and -refresh=false, so no cloud is called.
+      - name: gke extraction no-op plan gate
+        working-directory: .
+        run: |
+          set -euo pipefail
+          hack/check-gke-extraction-plans.sh --self-test
+          hack/check-gke-extraction-plans.sh deploy/gke/fixtures
 
       # The no-op plan gate for the deploy/gke -> modules/gke-cluster extraction. The self-test
       # runs first and shows the gate refusing each planted defect (a dropped moved block, a

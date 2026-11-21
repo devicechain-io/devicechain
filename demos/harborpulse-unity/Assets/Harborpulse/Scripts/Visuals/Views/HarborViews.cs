@@ -20,6 +20,7 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly List<(string Quay, Transform Spray, Transform Overtop)> sea = new List<(string, Transform, Transform)>();
         readonly HarborMaterials mats;
         readonly Transform feeder, rain;
+        const float RainPeriod = 8;
         TruckView truck;
         public HarborViews(HarborWorld world, HarborMaterials mats)
         {
@@ -38,12 +39,20 @@ namespace DeviceChain.Harborpulse.Visuals
             }
             var rainMesh = new MeshKit();
             var random = new System.Random(712);
-            for (var i = 0; i < 240; i++)
+            // Streaks slanted by the wind in a box that follows the camera. The same streaks repeat every RainPeriod metres of height, so
+            // sliding the box down by the fall and wrapping it at one period never shows a seam; none is planted right at the lens.
+            for (var i = 0; i < 320; i++)
             {
-                var a = new Vector3((float)random.NextDouble() * 50 - 25, (float)random.NextDouble() * 28, (float)random.NextDouble() * 50 - 25);
-                rainMesh.Rod(a, a + new Vector3(-0.10f, -0.6f, 0), 0.008f);
+                var x = (float)random.NextDouble() * 70 - 35; var y = (float)random.NextDouble() * RainPeriod; var z = (float)random.NextDouble() * 70 - 35;
+                var length = 0.5f + (float)random.NextDouble() * 0.5f;
+                if (x * x + z * z < 36) continue;
+                for (var layer = -1; layer < 3; layer++)
+                {
+                    var a = new Vector3(x, y + layer * RainPeriod, z);
+                    rainMesh.Rod(a, a + new Vector3(-0.28f, -1f, 0.06f) * length, 0.004f);
+                }
             }
-            rain = rainMesh.Spawn("WORLD Rain", world.Root, mats.WorldCue, false).transform;
+            rain = rainMesh.Spawn("WORLD Rain", world.Root, mats.Rain, false).transform;
             var eastLamp = world.Rigs.First(r => r.Placement.Device.ExternalId == "PAW-LIGHT-EAST-3").Placement;
             var cab = AssetRig.Node("FeederCabinet", world.Root, new Vector3((float)eastLamp.At.X + 5, (float)SitePlan.DeckHeightM, (float)eastLamp.At.Z + 1));
             new MeshKit().Box(Vector3.up * 0.8f, new Vector3(1.1f, 1.6f, 0.6f)).Spawn("Cabinet", cab, mats.Steel);
@@ -69,9 +78,17 @@ namespace DeviceChain.Harborpulse.Visuals
             }
             }
         }
-        public void Apply(HarborFrame f, SkyState sky, Vector3 camera, float dt, float time)
+        /// <param name="weather">The weather drawn: the frame's own, unless a fair-weather look check of the preview has put the storm aside.</param>
+        /// <summary>Decides every well's level tags for a camera (see <see cref="WellFootprint.TagsInView"/>).</summary>
+        public void FrameWells(Vector3 camera, Vector3 forward)
         {
-            foreach (var p in pumps) p.Value.Apply(f.Pumps[p.Key], dt, time);
+            foreach (var p in pumps) p.Value.FrameTags(camera, forward);
+        }
+
+        /// <param name="forward">The way the camera looks: a wet well's level tags are drawn only for a camera that frames the well.</param>
+        public void Apply(HarborFrame f, SkyState sky, Vector3 camera, float dt, float time, Weather weather, Vector3 forward)
+        {
+            foreach (var p in pumps) p.Value.Apply(f.Pumps[p.Key], dt, time, camera, forward);
             foreach (var p in gauges) p.Value.Apply(f);
             foreach (var p in chargers) p.Value.Apply(f.Chargers[p.Key], f.World);
             foreach (var p in lamps) p.Value.Apply(f.Lamps[p.Key], f, sky, camera);
@@ -87,9 +104,11 @@ namespace DeviceChain.Harborpulse.Visuals
                 }
                 b.Apply(alarm, f.ObservedAt);
             }
-            rain.gameObject.SetActive(f.World.Weather.Rain > 0.01);
-            rain.position = camera + Vector3.down * (time * 15 % 8);
-            rain.localScale = new Vector3(1, (float)f.World.Weather.Rain, 1);
+            rain.gameObject.SetActive(weather.Rain > 0.01);
+            // light rain is the same streaks squeezed shorter and closer; the wrap follows the squeezed period
+            var squeeze = Mathf.Max(0.05f, (float)weather.Rain);
+            rain.position = camera + Vector3.down * (time * 17 % (RainPeriod * squeeze));
+            rain.localScale = new Vector3(1, squeeze, 1);
             feeder.gameObject.SetActive(f.World.EastFeederOutage > 0);
             feeder.localScale = Vector3.one * (float)f.World.EastFeederOutage;
             foreach (var s in sea)

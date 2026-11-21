@@ -28,7 +28,7 @@ namespace DeviceChain.Harborpulse.EditorTools
             var camGo = new GameObject("Main Camera") { tag = "MainCamera" };
             var cam = camGo.AddComponent<Camera>();
             cam.allowHDR = true;
-            cam.farClipPlane = 20000;
+            cam.farClipPlane = 3600;
             cam.nearClipPlane = 0.3f;
             camGo.AddComponent<AudioListener>();
             var data = camGo.AddComponent<UniversalAdditionalCameraData>();

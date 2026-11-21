@@ -586,23 +586,24 @@ func (api *Api) AnyScopedGroups(ctx context.Context) (bool, error) {
 // writeAttrThenRecompute runs an attribute write and, when the write can affect
 // dynamic-group membership (an anchor-able family + SHARED scope), the membership recompute
 // in ONE transaction (ADR-062 S2 same-txn recompute) so a recompute failure rolls the write
-// back — the attribute row and the read-model can never diverge. An ineligible write
-// (CLIENT scope, a non-member family) runs bare: no transaction overhead, and the
-// reverse-index lookup would be empty anyway.
+// back — the attribute row and the read-model can never diverge.
 //
 // A SHARED device write also reconciles the device's configuration revisions in the same
 // transaction (reconcileDeviceConfigurationOnTx): a write the configuration document
 // refuses rolls back, and a revision is never minted for a write that did not commit.
+//
+// Every DEVICE write, CLIENT scope included, runs in a transaction through
+// runDeviceAttributeTx, because the per-device attribute lock (applyAttributePatchTx) is
+// transaction-scoped. Only an ineligible write of a non-device family still runs bare.
 func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, entityId uint,
 	attrKey, scope string, write func(db *gorm.DB) error) error {
-	membership := membershipScopeEligible(entityType, scope)
-	configuration := configurationScopeEligible(entityType, scope)
-	if !membership && !configuration {
+	if entityType != string(entity.TypeDevice) && !membershipScopeEligible(entityType, scope) && !configurationScopeEligible(entityType, scope) {
 		return write(api.RDB.DB(ctx))
 	}
 	var change membershipChange
 	var minted *DeviceConfigurationRevision
-	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	err := api.runAttributeEntityTx(ctx, entityType, "set", func(tx *gorm.DB) error {
+		change, minted = membershipChange{}, nil
 		if err := write(tx); err != nil {
 			return err
 		}
@@ -613,11 +614,7 @@ func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, e
 	if err != nil {
 		return err
 	}
-	// Post-commit: deliver the revision this write minted, if any.
 	api.publishMintedConfiguration(ctx, entityId, minted)
-	// Evict the entity's membership cache post-commit — only if a rule-referenced group
-	// existed for the key (otherwise no membership could have changed, and an unused tenant
-	// pays nothing) — and announce a device that entered or left an access scope.
 	api.afterMembershipRecompute(ctx, entityType, entityId, change)
 	return nil
 }

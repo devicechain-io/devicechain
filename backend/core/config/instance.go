@@ -762,6 +762,7 @@ type BlobConfiguration struct {
 
 // Infrastructure configuration section
 type InfrastructureConfiguration struct {
+	Mcp              McpConfiguration
 	Tracing          TracingConfiguration
 	Nats             NatsConfiguration
 	Metrics          MetricsConfiguration
@@ -769,6 +770,7 @@ type InfrastructureConfiguration struct {
 	DeviceManagement DeviceManagementConfiguration
 	EventProcessing  EventProcessingConfiguration
 	CommandDelivery  CommandDeliveryConfiguration
+	UpdateManagement UpdateManagementConfiguration
 	DeviceState      DeviceStateConfiguration
 	AiInference      AiInferenceConfiguration
 	ServiceAuth      ServiceAuthConfiguration
@@ -783,6 +785,25 @@ type InfrastructureConfiguration struct {
 	// TokenAudience is the token-audience policy (which `aud` an API plane accepts, which
 	// `resource` the authorization server may issue for). FIXED configuration.
 	TokenAudience TokenAudienceConfiguration
+}
+
+// UpdateManagementConfiguration is FIXED instance configuration, adopted by rolling pods.
+type UpdateManagementConfiguration struct {
+	// RolloutSafety enables cohort plans and failure-rate policies. Default OFF.
+	// Keep it off during the version upgrade: old drivers dispatch across cohorts,
+	// ignore rate halts, and cannot serve the new pause reasons. After ALL
+	// update-management replicas are upgraded, enable it in a separate config roll.
+	RolloutSafety bool
+}
+
+// McpConfiguration contains FIXED MCP capability switches.
+type McpConfiguration struct {
+	// CommandProposals is RESERVED for agent command proposals and defaults OFF.
+	// Nothing reads it yet, so setting it changes nothing until the proposal path lands.
+	// Enable it only after the release rollout completes, in a separate config roll:
+	// every service strict-loads the whole instance document, so pods from an
+	// earlier release refuse this key.
+	CommandProposals bool
 }
 
 // HttpConfiguration is how the instance's HTTP servers read a request's origin.

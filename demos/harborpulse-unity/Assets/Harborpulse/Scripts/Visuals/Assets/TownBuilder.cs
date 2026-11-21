@@ -39,6 +39,7 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly TreeBuilder treeBuilder = new TreeBuilder();
         readonly Dictionary<(int, int), SceneryMesh> details = new Dictionary<(int, int), SceneryMesh>();
         readonly Material scenery;
+        DetailManager detail;
 
         public IReadOnlyList<Transform> Boats => boats;
         public IReadOnlyList<Vector2> BoatRest => boatRest;
@@ -88,9 +89,11 @@ namespace DeviceChain.Harborpulse.Visuals
         }
 
         /// <param name="plan">Shared pure-model placements, with fixed devices and every accepted prop reserved first.</param>
-        public static TownBuilder Build(Transform parent, HarborMaterials mats, WorldPropPlan plan)
+        /// <param name="detail">Where the buildings' near-detail sets register (see <see cref="DetailManager"/>); null draws the far level only.</param>
+        public static TownBuilder Build(Transform parent, HarborMaterials mats, WorldPropPlan plan, DetailManager detail = null)
         {
             var b = new TownBuilder(parent, mats, plan);
+            b.detail = detail;
             b.Streets();
             b.Terrain();
             b.Landmarks();
@@ -115,39 +118,26 @@ namespace DeviceChain.Harborpulse.Visuals
             }
         }
 
-        /// <summary>The unchanged mapped deck and town slope, then a low coastal ridge with a rounded summit.</summary>
+        /// <summary>The mapped deck, a low apron under the town, then gently rolling ground; the skyline belongs to the distant ridge mesh.</summary>
         public static float Height(float x, float z)
         {
             return (float)CoastalTerrain.Height(x, z);
         }
 
-        static List<float> Axis(float from, float to, float denseUntil, float denseStep)
-        {
-            var v = new List<float>(); var step = denseStep; var x = from;
-            while (x < to)
-            {
-                v.Add(x);
-                if (Mathf.Abs(x) >= denseUntil || x >= denseUntil) step = Mathf.Min(step * 1.13f, 150);
-                x += step;
-            }
-            v.Add(to);
-            return v;
-        }
-
         void Terrain()
         {
             Backdrop = AssetRig.Node("Hills and forest", root, Vector3.zero);
-            // a rectilinear grid, dense (10 m) round the town and coarser outward, with no T-junction; quads inside the core are left out
-            var right = Axis(0, 2400, 720, 10);
-            // One coarse continuation closes the land behind the summit; it shares the existing edge tiles.
-            right.Add(4800);
-            var xs = new List<float>(); for (var i = right.Count - 1; i > 0; i--) xs.Add(-right[i]); xs.AddRange(right);
-            var zs = Axis(CoastZ, 2400, 820, 10);
-            zs.Add(4800);
-            TerrainBuilder.Build(Backdrop, scenery, xs, zs, Height, plan);
+            // the plan's own grid (10 m cells round the town, 20 m across the rolling ground, coarser out to the ridge's foot, flat far
+            // flanks past the far clip), so every rock and tree stands on exactly the surface drawn here; quads inside the core are left out
+            TerrainBuilder.Build(Backdrop, scenery, plan, Height);
+            // the backdrop behind the last trees: foothills, a middle range and the distant hazy ridge that carries the skyline
+            RidgeBuilder.Build(Backdrop, scenery);
+            // the rocky foreshore along the open coast, and the skerries off it
+            ShoreBuilder.Build(Backdrop, scenery);
             // the coast's face where the side lands meet the sea, and the strips that join the terrain to the quays' deck
-            new MeshKit().Slab(-4800, -CoreHalfX, CoastZ - 1, CoastZ, HarborWorld.SeabedY, Deck)
-                .Slab(CoreHalfX, 4800, CoastZ - 1, CoastZ, HarborWorld.SeabedY, Deck).Spawn("Coast", Backdrop, m.Stone);
+            var reach = (float)CoastalTerrain.TerrainHalfWidthM;
+            new MeshKit().Slab(-reach, -CoreHalfX, CoastZ - 1, CoastZ, HarborWorld.SeabedY, Deck)
+                .Slab(CoreHalfX, reach, CoastZ - 1, CoastZ, HarborWorld.SeabedY, Deck).Spawn("Coast", Backdrop, m.Stone);
             // the streets, draped over the ground
             var road = new MeshKit();
             foreach (var s in streets) Ribbon(road, s);
@@ -275,6 +265,13 @@ namespace DeviceChain.Harborpulse.Visuals
 
         static bool Rich(Vector3 at) => at.z < 290 && Mathf.Abs(at.x) < 360;
 
+        /// <summary>Registers a building's near-detail set (built the first time a camera comes within range, see <see cref="DetailManager"/>).</summary>
+        void NearSet(NearPlan plan, Vector3 at, float yaw, NearPalette palette)
+        {
+            if (detail == null) return;
+            detail.Register(plan, root, at, Quaternion.Euler(0, yaw, 0), palette, scenery, WindowFor);
+        }
+
         Material WindowFor(Vector3 at, int seed)
         {
             // about half the windows are lit at night; the east of the town is on the east feeder
@@ -286,8 +283,8 @@ namespace DeviceChain.Harborpulse.Visuals
         /// <summary>Windows in a row on one facade: <paramref name="face"/> is the facade's outward local axis.</summary>
         void Windows(Vector3 at, float yaw, Vector3 origin, Vector3 along, Vector3 face, float span, int floors, float floorHeight, float sill, Vector2 size, float spacing, int seed)
         {
-            var count = Mathf.Max(1, Mathf.FloorToInt((span - 1.5f) / spacing));
-            var start = -(count - 1) * spacing / 2;
+            var count = WindowRow.Count(span, spacing);
+            var start = WindowRow.Start(count, spacing);
             for (var f = 0; f < floors; f++)
                 for (var i = 0; i < count; i++)
                 {
@@ -295,7 +292,6 @@ namespace DeviceChain.Harborpulse.Visuals
                     var world = at + Quaternion.Euler(0, yaw, 0) * local;
                     var dims = new Vector3(Mathf.Abs(along.x) * size.x + Mathf.Abs(face.x) * 0.12f, size.y, Mathf.Abs(along.z) * size.x + Mathf.Abs(face.z) * 0.12f);
                     P(WindowFor(world, seed + f * 13 + i), at, yaw, false).Box(local, dims);
-                    BuildingDetail.Window(Detail(at), at, yaw, local, along, face, size, Rich(at));
                 }
         }
 
@@ -317,7 +313,8 @@ namespace DeviceChain.Harborpulse.Visuals
             BuildingDetail.Roof(P(roof, at, yaw + (gableFront ? 90 : 0)), gableFront ? d + .8f : w + .8f,
                 gableFront ? w + .7f : d + .7f, h, rise, style);
             BuildingDetail.Envelope(Detail(at), at, yaw, w, d, h, paint.GetColor("_BaseColor"), true, Rich(at), w*.18f);
-            if (Rich(at) && style == 0 && !gableFront)
+            var farDormer = Rich(at) && style == 0 && !gableFront;
+            if (farDormer)
             {
                 var dormer = new Vector3(-w*.22f, h+rise*.48f, -d*.28f);
                 P(paint, at, yaw).Box(dormer, new Vector3(2.0f,1.65f,1.8f));
@@ -328,18 +325,22 @@ namespace DeviceChain.Harborpulse.Visuals
             if (paint != m.ClapWhite && !Rich(at))
                 foreach (var sx in new[] { -1, 1 }) foreach (var sz in new[] { -1, 1 })
                     P(m.Trim, at, yaw).Box(new Vector3(sx * (w / 2 - 0.1f), h / 2 - 0.2f, sz * (d / 2 - 0.1f)), new Vector3(0.35f, h + 0.4f, 0.35f));
+            float chimneyX = 0, chimneyY = 0, chimneyZ = 0, chimneyTall = 0;
             if (random.NextDouble() < 0.7)
             {
                 var chimney = new Vector3(w*.3f*(random.Next(2)*2-1), h+rise*.6f, d*.15f);
                 var tall = 2.4f + (style % 3)*.4f;
                 P(style%2 == 0 ? m.Brick : m.Stone,at,yaw).Box(chimney,new Vector3(.85f,tall,.85f));
                 P(m.BrickDark,at,yaw).Box(chimney+Vector3.up*(tall*.5f),new Vector3(1.08f,.22f,1.08f));
+                chimneyX = chimney.x; chimneyY = chimney.y; chimneyZ = chimney.z; chimneyTall = tall;
             }
+            Material awning = null;
             if (shop)
             {
                 // a shop window band and an awning in an accent colour
+                awning = Accent();
                 P(m.Glass, at, yaw, false).Box(new Vector3(0, 1.5f, -d / 2 - 0.05f), new Vector3(w - 2.5f, 2.0f, 0.1f));
-                P(Accent(), at, yaw).Box(new Vector3(0, 3.0f, -d / 2 - 0.9f), new Vector3(w - 1.5f, 0.18f, 1.8f));
+                P(awning, at, yaw).Box(new Vector3(0, 3.0f, -d / 2 - 0.9f), new Vector3(w - 1.5f, 0.18f, 1.8f));
                 Windows(at, yaw, new Vector3(0, 0, -d / 2), Vector3.right, Vector3.back, w, floors - 1, 3.1f, 4.0f, new Vector2(1.0f, 1.5f), 2.6f, 5);
                 AllWindows(at, yaw, w, d, floors, 3.1f, 0.9f, new Vector2(1.0f, 1.4f), 2.8f, false);
             }
@@ -349,11 +350,9 @@ namespace DeviceChain.Harborpulse.Visuals
                 var pw = Mathf.Min(w - 1, 7);
                 P(m.Trim, at, yaw).Box(new Vector3(0, 0.25f, -d / 2 - 1.3f), new Vector3(pw, 0.5f, 2.6f));
                 P(roof, at, yaw).Box(new Vector3(0, 3.0f, -d / 2 - 1.3f), new Vector3(pw + 0.4f, 0.2f, 2.9f));
-                if (Rich(at))
-                    for (var step=0;step<3;step++) Detail(at).Box(at+Quaternion.Euler(0,yaw,0)*new Vector3(0,.09f+step*.1f,-d/2-3.15f+step*.28f),
-                        new Vector3(2.2f,.18f+step*.2f,.32f),m.Stone.GetColor("_BaseColor"),Quaternion.Euler(0,yaw,0));
+                // two end posts: the middle of the front is the stair, which the near level builds (steps, newels and rails)
                 for (var x = -pw / 2 + 0.3f; x <= pw / 2 - 0.2f; x += (pw - 0.6f) / 2)
-                    P(m.Trim, at, yaw).Box(new Vector3(x, 1.6f, -d / 2 - 2.4f), new Vector3(0.22f, 2.8f, 0.22f));
+                    if (Mathf.Abs(x) > .05f) P(m.Trim, at, yaw).Box(new Vector3(x, 1.6f, -d / 2 - 2.4f), new Vector3(0.22f, 2.8f, 0.22f));
             }
             P(m.DoorDark, at, yaw, false).Box(new Vector3(w * 0.18f, 1.1f, -d / 2 - 0.05f), new Vector3(1.1f, 2.2f, 0.1f));
             // Small rear wash-house/wood shed, wholly inside the lot's already reserved extension.
@@ -365,6 +364,12 @@ namespace DeviceChain.Harborpulse.Visuals
                     P(m.RoofBrown,rear,yaw).Gable(new Vector3(0,2.3f,0),3.3f,2.7f,.8f);
                     P(m.DoorDark,rear,yaw,false).Box(new Vector3(1.52f,1,0),new Vector3(.1f,2,1));
                 }
+            }
+            if (detail != null)
+            {
+                var spec = new HouseSpec(at.x, at.z, w, d, floors, porch, shop, gableFront, style, rise, Rich(at), farDormer, chimneyX, chimneyY, chimneyZ, chimneyTall);
+                var accent = shop ? awning.GetColor("_BaseColor") : NearPalette.DoorAccent(at);
+                NearSet(NearBuildings.House(spec), at, yaw, NearPalette.Building(paint.GetColor("_BaseColor"), roof.GetColor("_BaseColor"), accent));
             }
         }
 
@@ -380,15 +385,19 @@ namespace DeviceChain.Harborpulse.Visuals
             BuildingDetail.Envelope(Detail(at),at,yaw,w,d,h,Color.white,false,Rich(at),0);
             var wall = random.NextDouble() < 0.65 ? m.Brick : random.NextDouble() < 0.5 ? m.BrickDark : m.ClapCream;
             P(wall, at, yaw).Box(new Vector3(0, (h - 3) / 2, 0), new Vector3(w, h + 3, d));
+            var awning = Accent();
             P(m.Trim, at, yaw).Box(new Vector3(0, h + 0.25f, 0), new Vector3(w + 0.6f, 0.5f, d + 0.6f));
             P(m.Slate, at, yaw).Box(new Vector3(0, h + 0.55f, 0), new Vector3(w - 0.6f, 0.15f, d - 0.6f));
             P(m.Trim, at, yaw).Box(new Vector3(0, 3.55f, -d / 2 - 0.08f), new Vector3(w, 0.35f, 0.16f));
             P(m.Glass, at, yaw, false).Box(new Vector3(0, 1.6f, -d / 2 - 0.05f), new Vector3(w - 2.2f, 2.4f, 0.1f));
-            P(Accent(), at, yaw).Box(new Vector3(0, 3.1f, -d / 2 - 1.0f), new Vector3(w - 1.2f, 0.18f, 2.0f));
+            P(awning, at, yaw).Box(new Vector3(0, 3.1f, -d / 2 - 1.0f), new Vector3(w - 1.2f, 0.18f, 2.0f));
             Windows(at, yaw, new Vector3(0, 0, -d / 2), Vector3.right, Vector3.back, w, floors - 1, 3.5f, 4.4f, new Vector2(1.1f, 1.8f), 2.7f, 6);
             Windows(at, yaw, new Vector3(0, 0, d / 2), Vector3.right, Vector3.forward, w, floors, 3.5f, 0.9f, new Vector2(1.1f, 1.8f), 2.9f, 7);
             Windows(at, yaw, new Vector3(-w / 2, 0, 0), Vector3.forward, Vector3.left, d, floors, 3.5f, 0.9f, new Vector2(1.1f, 1.8f), 3.4f, 8);
             Windows(at, yaw, new Vector3(w / 2, 0, 0), Vector3.forward, Vector3.right, d, floors, 3.5f, 0.9f, new Vector2(1.1f, 1.8f), 3.4f, 9);
+            if (detail != null)
+                NearSet(NearBuildings.Commercial(at.x, at.z, w, d, floors, wall != m.ClapCream, Rich(at)), at, yaw,
+                    NearPalette.Building(wall.GetColor("_BaseColor"), m.Slate.GetColor("_BaseColor"), awning.GetColor("_BaseColor")));
         }
 
         void Inn(Vector3 at, float yaw, float w, float d)
@@ -410,18 +419,26 @@ namespace DeviceChain.Harborpulse.Visuals
             for (var x = -w / 2 + 0.4f; x <= w / 2; x += w / 6) P(m.Trim, at, yaw).Box(new Vector3(x, 1.7f, -d / 2 - 3.0f), new Vector3(0.25f, 2.9f, 0.25f));
             AllWindows(at, yaw, w, d, 3, 3.1f, 0.9f, new Vector2(1.0f, 1.5f), 2.6f);
             P(m.DoorDark, at, yaw, false).Box(new Vector3(0, 1.2f, -d / 2 - 0.05f), new Vector3(1.6f, 2.4f, 0.1f));
+            if (detail != null)
+                NearSet(NearBuildings.Inn(at.x, at.z, w, d, Rich(at)), at, yaw,
+                    NearPalette.Building(m.ClapWhite.GetColor("_BaseColor"), m.RoofGreen.GetColor("_BaseColor"), NearPalette.DoorAccent(at)));
         }
 
-        void Shed(Vector3 at, float yaw, float w, float d)
+        void Shed(Vector3 at, float yaw, float w, float d, bool yard = false)
         {
             var wall = random.NextDouble() < 0.55 ? m.Shingle : m.BarnRed; var h = 5.2f;
             BuildingDetail.Envelope(Detail(at),at,yaw,w,d,h,wall.GetColor("_BaseColor"),true,Rich(at),-w*.2f);
             P(wall, at, yaw).Box(new Vector3(0, (h - 3) / 2, 0), new Vector3(w, h + 3, d));
-            P(random.NextDouble() < 0.5 ? m.Slate : m.RoofBrown, at, yaw).Gable(new Vector3(0, h, 0), w + 0.8f, d + 0.8f, 2.6f);
+            var shedRoof = random.NextDouble() < 0.5 ? m.Slate : m.RoofBrown;
+            P(shedRoof, at, yaw).Gable(new Vector3(0, h, 0), w + 0.8f, d + 0.8f, 2.6f);
             P(m.DoorDark, at, yaw, false).Box(new Vector3(-w * 0.2f, 1.8f, -d / 2 - 0.05f), new Vector3(4.0f, 3.6f, 0.1f));
             P(m.Trim, at, yaw).Box(new Vector3(-w * 0.2f, 3.75f, -d / 2 - 0.08f), new Vector3(4.4f, 0.25f, 0.16f));
             Windows(at, yaw, new Vector3(w * 0.2f, 0, -d / 2), Vector3.right, Vector3.back, w * 0.5f, 1, 3, 1.4f, new Vector2(1.0f, 1.0f), 2.6f, 10);
             Windows(at, yaw, new Vector3(-w / 2, 0, 0), Vector3.forward, Vector3.left, d, 1, 3, 1.4f, new Vector2(1.0f, 1.0f), 3.2f, 11);
+            // the town's lots reserve 3.5 m front and back; a boatyard shed's apron is one metre all round
+            if (detail != null)
+                NearSet(NearBuildings.Shed(at.x, at.z, w, d, Rich(at), yard ? new NearReach(1f, 1f, 1f) : NearReach.Lot), at, yaw,
+                    NearPalette.Building(wall.GetColor("_BaseColor"), shedRoof.GetColor("_BaseColor"), NearPalette.DoorAccent(at)));
         }
 
         void Church(Vector3 at, float yaw)
@@ -440,6 +457,8 @@ namespace DeviceChain.Harborpulse.Visuals
             foreach (var sx in new[] { -1, 1 })
                 for (var z = -d / 2 + 4; z < d / 2 - 2; z += 4.5f)
                     P(WindowFor(at + new Vector3(sx, 0, z), 31), at, yaw, false).Box(new Vector3(sx * (w / 2 + 0.06f), 4.2f, z), new Vector3(0.12f, 3.6f, 1.3f));
+            if (detail != null)
+                NearSet(NearBuildings.Church(), at, yaw, NearPalette.Building(m.ClapWhite.GetColor("_BaseColor"), m.Slate.GetColor("_BaseColor"), NearPalette.DoorAccent(at)));
         }
 
         // ---------------------------------------------------------------- waterfront and park
@@ -464,7 +483,7 @@ namespace DeviceChain.Harborpulse.Visuals
             foreach(var shed in plan.Props)
             {
                 if(shed.Kind!="Shed" || shed.Area=="town")continue;
-                Shed(new Vector3((float)shed.At.X,Deck,(float)shed.At.Z),(float)shed.Yaw,(float)shed.Width,(float)shed.Depth);
+                Shed(new Vector3((float)shed.At.X,Deck,(float)shed.At.Z),(float)shed.Yaw,(float)shed.Width,(float)shed.Depth,true);
             }
             // a hauled-out boat on blocks, and stacked pots and crates
             var hauled=plan.Find("hauled");
@@ -496,6 +515,7 @@ namespace DeviceChain.Harborpulse.Visuals
             P(m.HullNavy, at, yaw).Hull(new Vector3(0, 1.4f, 0), 11, 3.6f, 1.6f, 0.9f);
             P(m.Trim, at, yaw).Box(new Vector3(0, 3.4f, -1.5f), new Vector3(2.4f, 1.6f, 3.4f));
             foreach (var z in new[] { -3f, 0f, 3f }) P(m.Timber, at, yaw).Box(new Vector3(0, 0.35f, z), new Vector3(2.6f, 0.7f, 0.6f));
+            if (detail != null) detail.Register(NearVehicles.HauledBoat(), root, at, Quaternion.Euler(0, yaw, 0), NearPalette.Vehicle(m.HullNavy.GetColor("_BaseColor")), scenery);
         }
 
         void Boat(Vector2 rest, float yaw, float length, Material hull, bool sail)
@@ -569,15 +589,16 @@ namespace DeviceChain.Harborpulse.Visuals
 
         // ---------------------------------------------------------------- trees
 
-        void Tree(Vector3 at, float height, bool town)
+        void Tree(Vector3 at, float height, TreeKind kind, bool town)
         {
-            at.y = Height(at.x,at.z)-.2f;
-            treeBuilder.Add(at,height,town);
+            // on the drawn surface (the two-triangle mesh), not the smooth field it was sampled from
+            at.y = (float)plan.Terrain.MeshHeight(at.x,at.z)-.15f;
+            treeBuilder.Add(at,height,kind,town);
         }
 
         void Trees()
         {
-            foreach(var p in plan.Props)if(p.Kind=="Tree")Tree(new Vector3((float)p.At.X,0,(float)p.At.Z),(float)p.Height,p.Area=="town");
+            foreach(var p in plan.Props)if(p.Kind=="Tree")Tree(new Vector3((float)p.At.X,0,(float)p.At.Z),(float)p.Height,(TreeKind)p.Variant,p.Area=="town");
         }
     }
 }
