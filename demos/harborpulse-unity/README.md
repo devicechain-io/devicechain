@@ -831,3 +831,26 @@ This supersedes the fog, forest, rock and pose numbers above where they differ.
 - **Poses.** Lamp subjects (`lamp-east`, `north-quay`) stand 14-18 m off, 30 degrees round from the quay's axis at eye 5-6 m, the
   look just under the head so the whole lamp sits upper-middle of the frame. `east-quay:mouth-wide` stands inside the harbour at
   (-130, 9.5, 70) looking at the quay (150, -10) with FOV 56; no breakwater or lighthouse is within 80 m of its axis.
+
+## U5 sky and weather
+
+The sky is a pure function of the scenario hour and the layout's `storm` beat (`DayLighting.Evaluate`), and the light follows the same
+cloud the sky draws.
+
+- **Cloud cover** is no longer a constant. `DayLighting.FairCloud` gives the fair-weather cover of the hour (about a fifth of the sky in
+  the small hours, two fifths in the early afternoon). `Weather.Front` is the storm's cloud front: it builds over the three hours before
+  the beat, is closed through it, and breaks up over the two hours after it, on either side of midnight.
+- **The sky shader** (`HarborSky.shader`) draws a three-stop gradient, the low sun's glow along the horizon, sun and moon discs that
+  cloud hides, stars, a high streaky layer and a low cumulus layer shaded in three flat tones, and rain curtains under the storm deck.
+  The cloud drifts on a daily circle driven by the scenario clock, so a still of an hour is always the same sky. The horizon line is the
+  fog colour, so the haze over the land meets the sky without a seam.
+- **The moon's arc is continuous.** The hidden part of an arc now has its own length; the moon's direction used to jump once a day.
+- **Dim daylight is lit.** A storm dusk and the hour before dawn have neither sun nor moon as a key light. The ambient floor is lifted
+  then (`KeylessFloorLift`), and the grade opens up for dim daylight (`SkyState.ExposureLift`), without changing noon or the night.
+- **Rain** is a box of slanted streaks that follows the camera and wraps seamlessly; it is off whenever the weather is dry.
+- **Lamp poses** stand 20-24 m off and look up a little (`PresentationMap.LampHorizon`), so the lantern, 8.3 m above the deck, stands
+  against the sky. This supersedes the 14-18 m lamp stand-off described above.
+
+`SkyWeatherTests` pins the cover through the day, continuity across every minute and across midnight, distinct skies at the seven
+reviewed hours, noon exposure within 15 % of the earlier grade, the night floor, and the sun's and moon's continuity. Shader output,
+the masks and frame time still need the Unity capture rig.

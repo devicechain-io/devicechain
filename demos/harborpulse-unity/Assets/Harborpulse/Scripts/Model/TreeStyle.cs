@@ -17,7 +17,7 @@ namespace DeviceChain.Harborpulse.Model
     /// </summary>
     public static class TreeStyle
     {
-        public const double NearM = 380, MidM = 800, PlantationM = 1700;
+        public const double NearM = 240, MidM = 800, PlantationM = 1700;
 
         public static bool IsConifer(TreeKind k) => k <= TreeKind.Pine;
 

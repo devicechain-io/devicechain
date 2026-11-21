@@ -98,7 +98,6 @@ namespace DeviceChain.Harborpulse.Model
                 float jx = x - lastX, jy = y - lastY, jz = z - lastZ;
                 if (jx * jx + jy * jy + jz * jz > CutM * CutM) fromScratch = true;
             }
-            if (fromScratch) for (var i = 0; i < count; i++) near[i] = false;
             taken = true; lastFrame = frame; lastX = x; lastY = y; lastZ = z;
             var candidates = 0;
             for (var i = 0; i < count; i++)
@@ -106,10 +105,12 @@ namespace DeviceChain.Harborpulse.Model
                 next[i] = false;
                 if (!active[i]) continue;
                 var d = Distance(i, x, y, z);
-                if (d >= (near[i] ? LeaveM : EnterM)) continue;
+                // a decision from scratch forgets what was near (no leave band, no stickiness) but still counts the changes against it
+                var was = near[i] && !fromScratch;
+                if (d >= (was ? LeaveM : EnterM)) continue;
                 next[i] = true;
                 // the rank: nearest first, a set already near a little ahead, the index to break exact ties the same way every time
-                key[candidates] = d - (near[i] ? StickyM : 0f) + i * 1e-5f;
+                key[candidates] = d - (was ? StickyM : 0f) + i * 1e-5f;
                 order[candidates] = i;
                 candidates++;
             }

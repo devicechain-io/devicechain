@@ -189,7 +189,7 @@ namespace DeviceChain.Harborpulse.Tests
         [Test]
         public void TreesHonourTheLevelOfDetailBandsAndTheVertexBudget()
         {
-            // pins A3: near (<=380 m from the core) / medium (<=800) / minimal beyond; all trees together <= 700k vertices
+            // pins A3: near (<=240 m from the core) / medium (<=800) / minimal beyond; all trees together <= 700k vertices
             long total = 0;
             var lines = new List<string>();
             var counts = new Dictionary<TreeLod, int>();
@@ -203,7 +203,7 @@ namespace DeviceChain.Harborpulse.Tests
             TestContext.WriteLine(string.Join("; ", lines) + "; total " + total + " vertices over " + Trees.Count() + " trees");
             Assert.That(total, Is.LessThanOrEqualTo(760000));
             Assert.That(total, Is.GreaterThan(300000), "a full, wooded coast");
-            Assert.That(counts[TreeLod.Near], Is.GreaterThan(1500));
+            Assert.That(counts[TreeLod.Near], Is.GreaterThan(1200));
             Assert.That(counts[TreeLod.Mid], Is.GreaterThan(counts[TreeLod.Near]));
             // the model cost table: near detail costs more than medium, medium more than minimal, for every species
             foreach (var k in Enum.GetValues(typeof(TreeKind)).Cast<TreeKind>())
@@ -211,7 +211,7 @@ namespace DeviceChain.Harborpulse.Tests
                 Assert.That(TreeStyle.Vertices(k, TreeLod.Near), Is.GreaterThan(TreeStyle.Vertices(k, TreeLod.Mid)), k.ToString());
                 Assert.That(TreeStyle.Vertices(k, TreeLod.Mid), Is.GreaterThan(TreeStyle.Vertices(k, TreeLod.Far)), k.ToString());
             }
-            Assert.That(TreeStyle.Lod(380), Is.EqualTo(TreeLod.Near)); Assert.That(TreeStyle.Lod(381), Is.EqualTo(TreeLod.Mid));
+            Assert.That(TreeStyle.Lod(240), Is.EqualTo(TreeLod.Near)); Assert.That(TreeStyle.Lod(241), Is.EqualTo(TreeLod.Mid));
             Assert.That(TreeStyle.Lod(800), Is.EqualTo(TreeLod.Mid)); Assert.That(TreeStyle.Lod(801), Is.EqualTo(TreeLod.Far));
         }
 

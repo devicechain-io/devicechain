@@ -77,8 +77,10 @@ namespace DeviceChain.Harborpulse.Model.Director
             var dy = b.Forward.Y + b.Right.Y * nx * t * aspect + b.Up.Y * ny * t;
             var dz = b.Forward.Z + b.Right.Z * nx * t * aspect + b.Up.Z * ny * t;
             x = z = double.NaN;
-            if (dy >= -1e-9) return false;
+            if (Math.Abs(dy) < 1e-9) return false;
             var s = (planeY - pose.Camera.Y) / dy;
+            // a plane behind the camera is not seen through the frame
+            if (s <= 0) return false;
             x = pose.Camera.X + dx * s; z = pose.Camera.Z + dz * s;
             return true;
         }

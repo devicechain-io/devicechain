@@ -118,7 +118,7 @@ Shader "Harborpulse/Sky"
                 float3 cell = floor(sp);
                 float star = step(0.9962, Hash31(cell));
                 float3 f = frac(sp) - 0.5;
-                star *= smoothstep(0.26, 0.0, length(f)) * (0.6 + 0.4 * sin(_HarborSkyTime * 2.0 + Hash31(cell + 5.0) * 30.0));
+                star *= (1.0 - smoothstep(0.0, 0.26, length(f))) * (0.6 + 0.4 * sin(_HarborSkyTime * 2.0 + Hash31(cell + 5.0) * 30.0));
                 float3 stars = star * _HarborStars * saturate(up * 6.0) * float3(1.7, 1.75, 1.9);
 
                 // both cloud layers lie on planes above the camera; the +0.22 keeps their shapes whole down to the horizon
@@ -151,9 +151,10 @@ Shader "Harborpulse/Sky"
                 float3 highCol = lerp(_HarborCloudLit.rgb, _HarborCloudShade.rgb, 0.25 + 0.5 * depth);
 
                 // rain curtains hang under the deck towards the horizon, slanted by the wind
-                float bearing = atan2(d.x, d.z);
-                float curtain = Noise(float2(bearing * 7.0 + up * 4.0 + _HarborCloudDrift.x * 0.4, 2.7));
-                curtain = smoothstep(0.42, 0.78, curtain) * rain * smoothstep(0.40, 0.03, up);
+                // sampled round the compass on a circle, so there is no seam where a bearing would wrap
+                float2 around = az * 4.5 + float2(up * 4.0 + _HarborCloudDrift.x * 0.4, 2.7);
+                float curtain = Noise(around);
+                curtain = smoothstep(0.42, 0.78, curtain) * rain * (1.0 - smoothstep(0.03, 0.40, up));
 
                 // the discs sit behind the cloud
                 float sunDisc = smoothstep(0.99968, 0.99978, sd) * _HarborSunDir.w;
