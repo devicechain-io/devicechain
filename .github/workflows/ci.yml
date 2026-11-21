@@ -108,6 +108,12 @@ jobs:
       - name: silent-skip gate self-test
         run: bash hack/check-no-silent-skips.sh --self-test
 
+      # The fleet module's real-Postgres suite runs inside hack/migration-diff.sh verify, behind
+      # the build tag fleetpg, and its count of passed TestFleetPG* tests is what proves the tag
+      # compiled anything. Prove once, here, that the count check refuses an empty suite.
+      - name: fleet real-Postgres count check self-test
+        run: bash hack/check-fleetpg-count.sh --self-test
+
       # The release-candidate run script's exit-code, stop and liveness handling, against
       # stub rungs. Nothing else runs it, and it is what a 60-minute run's verdict is
       # reported through.

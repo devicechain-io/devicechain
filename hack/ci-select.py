@@ -633,10 +633,12 @@ MIGRATION_ROOTS = [
     ("backend/cli/bootstrap", False, False),
 ]
 # Non-Go inputs the jobs read directly: the operand image they build and launch
-# (deploy/images/timescaledb/build.sh, standalone.sh). hack/** (migration-diff.sh,
+# (deploy/images/timescaledb/build.sh, standalone.sh) and the fleet module, whose tagged
+# real-Postgres suite the script runs (a build-tagged file is invisible to the import graph, so
+# the whole module is an input). hack/** (migration-diff.sh,
 # check-duplicate-indexes.sh, docker-pull.sh, go-mod-download.sh), .github/**, go.work and every
 # go.mod/go.sum already run everything, so they need no row here.
-MIGRATION_INPUTS = ["deploy/images/timescaledb/**"]
+MIGRATION_INPUTS = ["deploy/images/timescaledb/**", "backend/fleet/**"]
 
 # ---------------------------------------------------------------------------------------------
 # The `image-smoke` legs: one ko build per image module, so what can change one.
