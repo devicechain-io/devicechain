@@ -19,6 +19,17 @@ resource "google_container_cluster" "this" {
     channel = var.release_channel
   }
 
+  # The temporary default pool is created (then removed) with the cluster, and it boots with the
+  # project's default node identity unless told otherwise. When a dedicated node service account is
+  # named, it is used here too, so a project that has disabled the default account still provisions.
+  # null adds no block, so the public root's plan does not move.
+  dynamic "node_config" {
+    for_each = var.node_service_account == null ? [] : [var.node_service_account]
+    content {
+      service_account = node_config.value
+    }
+  }
+
   # `dcctl install` brings its own Prometheus and Grafana. GKE's Managed Service
   # for Prometheus and its kube-state, cAdvisor and kubelet packages would collect
   # the same things a second time, and they bill per sample: on a small cluster
@@ -123,6 +134,16 @@ resource "google_container_node_pool" "this" {
     # has always planned; a fleet root names a dedicated least-privilege one.
     spot            = var.spot
     service_account = var.node_service_account
+
+    # Enabling workload identity on the cluster leaves every pool on its old metadata mode, so a pool
+    # must ask for the GKE metadata server itself. No workload pool, no block: the public root's plan
+    # does not move.
+    dynamic "workload_metadata_config" {
+      for_each = var.workload_pool == null ? [] : [1]
+      content {
+        mode = "GKE_METADATA"
+      }
+    }
 
     dynamic "taint" {
       for_each = each.value.taints

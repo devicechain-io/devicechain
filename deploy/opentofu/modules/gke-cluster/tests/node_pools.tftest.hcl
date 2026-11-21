@@ -485,3 +485,38 @@ run "network_inputs_pass_through" {
     error_message = "network and subnetwork should reach the cluster."
   }
 }
+
+run "a_workload_pool_puts_every_pool_on_the_gke_metadata_server" {
+  command = plan
+
+  variables {
+    workload_pool = "example-project.svc.id.goog"
+  }
+
+  assert {
+    condition     = alltrue([for k, p in google_container_node_pool.this : p.node_config[0].workload_metadata_config[0].mode == "GKE_METADATA"])
+    error_message = "every pool should use the GKE metadata server once a workload pool is named."
+  }
+}
+
+run "no_workload_pool_leaves_the_pools_metadata_mode_alone" {
+  command = plan
+
+  assert {
+    condition     = alltrue([for k, p in google_container_node_pool.this : length(p.node_config[0].workload_metadata_config) == 0])
+    error_message = "the public root's pools should carry no workload_metadata_config."
+  }
+}
+
+run "a_node_service_account_reaches_the_bootstrap_pool" {
+  command = plan
+
+  variables {
+    node_service_account = "dcf-node@example-project.iam.gserviceaccount.com"
+  }
+
+  assert {
+    condition     = google_container_cluster.this.node_config[0].service_account == "dcf-node@example-project.iam.gserviceaccount.com"
+    error_message = "the cluster's temporary default pool should use the named node service account."
+  }
+}
