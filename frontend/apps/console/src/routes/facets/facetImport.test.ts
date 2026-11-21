@@ -15,7 +15,10 @@ import {
   resultsCsv,
   runFacetImport,
   stripSecretColumns,
+  isSecretHeader,
+  secretFields,
   ImportRunError,
+  LOST_RESPONSE_CODE,
   type FileRowOutcome,
 } from './facetImport';
 
@@ -121,11 +124,11 @@ describe('runFacetImport', () => {
     expect(outcomes[0].outcome).toBe('SET');
   });
 
-  it('turns an unanswered row into a REFUSED NO_RESULT, never a success', async () => {
+  it('turns an unanswered row into an UNKNOWN NO_RESULT, never a success or a failure', async () => {
     const { outcomes } = await runFacetImport([row('d1'), row('d2')], false, async (part) => [
       { row: 1, memberType: 'device', token: part[0].token, key: 'site', outcome: 'SET' },
     ]);
-    expect(outcomes[1]).toMatchObject({ row: 2, outcome: 'REFUSED', code: NO_RESULT_CODE });
+    expect(outcomes[1]).toMatchObject({ row: 2, outcome: 'UNKNOWN', code: NO_RESULT_CODE });
   });
 
   it('stops before the next chunk when aborted and keeps what was answered', async () => {
@@ -141,6 +144,29 @@ describe('runFacetImport', () => {
     expect(outcomes).toHaveLength(1000);
   });
 
+  it('marks a chunk whose answer was lost UNKNOWN, and a retry shows the server answer', async () => {
+    const rows = Array.from({ length: 1500 }, (_, i) => row(`d${i}`));
+    let calls = 0;
+    const err = (await runFacetImport(rows, false, async (part) => {
+      if (++calls === 2) throw new Error('response lost');
+      return answerAll()(part);
+    }).catch((e) => e)) as ImportRunError;
+    expect(err).toBeInstanceOf(ImportRunError);
+    const first = err.outcomes;
+    expect(first).toHaveLength(1500);
+    expect(first.filter((o) => o.outcome === 'SET')).toHaveLength(1000);
+    const unknown = first.filter((o) => o.outcome === 'UNKNOWN');
+    expect(unknown).toHaveLength(500);
+    expect(unknown.every((o) => o.code === LOST_RESPONSE_CODE)).toBe(true);
+
+    // The lost chunk had in fact committed: the retry is answered EXISTS, not SET and not a failure.
+    const retry = await runFacetImport(rows, false, answerAll('EXISTS'), {
+      only: new Set(unknown.map((o) => o.row)),
+    });
+    const merged = mergeOutcomes(first, retry.outcomes);
+    expect(countOutcomes(merged)).toEqual({ SET: 1000, EXISTS: 500, INVALID: 0, REFUSED: 0, UNKNOWN: 0 });
+  });
+
   it('attaches earlier answers to a chunk failure', async () => {
     const rows = Array.from({ length: 1500 }, (_, i) => row(`d${i}`));
     let calls = 0;
@@ -149,7 +175,7 @@ describe('runFacetImport', () => {
       return answerAll()(part);
     }).catch((e) => e);
     expect(err).toBeInstanceOf(ImportRunError);
-    expect((err as ImportRunError).outcomes).toHaveLength(1000);
+    expect((err as ImportRunError).outcomes.filter((o) => o.outcome === 'SET')).toHaveLength(1000);
     expect((err as ImportRunError).message).toBe('network down');
   });
 
@@ -191,7 +217,7 @@ describe('outcomes', () => {
   });
 
   it('counts by outcome', () => {
-    expect(countOutcomes([o(1, 'SET'), o(2, 'SET'), o(3, 'REFUSED')])).toEqual({ SET: 2, EXISTS: 0, INVALID: 0, REFUSED: 1 });
+    expect(countOutcomes([o(1, 'SET'), o(2, 'SET'), o(3, 'REFUSED')])).toEqual({ SET: 2, EXISTS: 0, INVALID: 0, REFUSED: 1, UNKNOWN: 0 });
   });
 
   it('merges a retry over earlier answers in file order', () => {
@@ -229,6 +255,38 @@ describe('failed-rows file', () => {
     );
     expect(csv).not.toContain('AKIA');
     expect(csv).not.toContain('hunter');
+  });
+
+  it('blanks every field fed by a secret-looking column, whichever field it is mapped to', () => {
+    const h = ['memberType', 'api_key', 'key', 'value'];
+    const t = [['device', 'AKIA-LEAK', 'site', 'north']];
+    const out: FileRowOutcome = { row: 1, memberType: 'device', token: 'AKIA-LEAK', key: 'site', outcome: 'INVALID', code: 'NOT_FOUND', message: 'no such entity' };
+    const m = { memberType: 0, token: 1, key: 2, value: 3 };
+    expect([...secretFields(h, m)]).toEqual(['token']);
+    expect(failedRowsCsv(t, h, m, {}, [out])).not.toContain('AKIA-LEAK');
+    expect(resultsCsv([out], secretFields(h, m))).not.toContain('AKIA-LEAK');
+    expect(resultsCsv([out])).toContain('AKIA-LEAK');
+    const h2 = ['access_token', 'token', 'facet key', 'value'];
+    expect(failedRowsCsv([['LEAK-TYPE', 'd1', 'site', 'v']], h2, { memberType: 0, token: 1, key: 2, value: 3 }, {}, [
+      { ...out, token: 'd1' },
+    ])).not.toContain('LEAK-TYPE');
+  });
+
+  it('keeps an UNKNOWN row in the failed-rows file so it is not lost', () => {
+    const csv = failedRowsCsv([['device', 'd1', 'site', 'north']], ['memberType', 'token', 'key', 'value'], autoMap(['memberType', 'token', 'key', 'value']), {}, [
+      { row: 1, memberType: 'device', token: 'd1', key: 'site', outcome: 'UNKNOWN', code: LOST_RESPONSE_CODE },
+    ]);
+    expect(csv).toContain('device,d1,site,north,UNKNOWN,RESPONSE_LOST');
+  });
+
+  it('recognises credential headers after normalization, and not the import columns', () => {
+    for (const h of ['access_token', 'refresh_token', 'api_token', 'API-Key', 'apiKey', 'client_secret', 'signing_key',
+      'Password', 'passwd', 'db_pwd', 'private_key', 'auth_token', 'id_token', 'session_token', 'Bearer', 'credentials', 'service_key']) {
+      expect(isSecretHeader(h), h).toBe(true);
+    }
+    for (const h of ['token', 'key', 'value', 'memberType', 'Entity token', 'Facet key', 'device_token', 'attribute key', 'name', 'monkey']) {
+      expect(isSecretHeader(h), h).toBe(false);
+    }
   });
 
   it('blanks the value when the value column itself is a secret', () => {

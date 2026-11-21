@@ -68,10 +68,27 @@ export function autoMap(header: string[]): ColumnMapping {
 
 // A header that names a credential. Such a column is never written to the failed-rows file,
 // and if it was mapped as the value its cells are blanked there too.
-const SECRET_HEADER = /secret|passw(or)?d|passphrase|credential|apikey|privatekey|bearer|accesskey|authtoken/;
+// Matched on the normalized header (lowercase letters and digits only), so `API-Key`,
+// `api_key` and `apiKey` are one spelling. A bare `token` or `key` is the import's own column
+// and is NOT secret; a qualified one (`access_token`, `client_secret`, `signing_key`) is.
+const SECRET_HEADER =
+  /secret|passw(or)?d|passwd|pwd|passphrase|credential|bearer|apikey|privatekey|accesskey|authtoken|(access|refresh|api|auth|id|session|bearer|client|private|signing|sas|service|bot|oauth)token|(api|access|private|secret|signing|auth|client|encryption|master|service|shared)key/;
 
 /** True when a column header looks like it holds a credential. */
 export const isSecretHeader = (header: string): boolean => SECRET_HEADER.test(normalizeHeader(header));
+
+/**
+ * The import fields fed by a secret-looking column. Such a field is written blank into every
+ * download, whichever field the operator mapped the column to.
+ */
+export function secretFields(header: string[], mapping: ColumnMapping): Set<FacetImportField> {
+  const out = new Set<FacetImportField>();
+  for (const f of FACET_IMPORT_FIELDS) {
+    const idx = mapping[f];
+    if (idx !== undefined && isSecretHeader(header[idx] ?? '')) out.add(f);
+  }
+  return out;
+}
 
 /** Blanks every secret-looking column of a table (header kept), so none is held after a run. */
 export function stripSecretColumns(table: string[][]): string[][] {
@@ -122,6 +139,14 @@ export function findDuplicates(rows: FacetValueImportRow[]): Set<number> {
   return dup;
 }
 
+/**
+ * The server's four outcomes, plus UNKNOWN: this console sent the row but never got its answer
+ * (the response was lost, or the server skipped the row), so it may or may not have been
+ * written. Never a failure and never a success. Resending is safe, because an unchanged value
+ * is reported as EXISTS and a changed one is set, and the retry shows whichever the server says.
+ */
+export type RowOutcome = FacetImportOutcome | 'UNKNOWN';
+
 /** A row's outcome keyed to its position in the FILE (1-based data row, header excluded). */
 export interface FileRowOutcome {
   /** 1-based data row in the file. */
@@ -129,14 +154,14 @@ export interface FileRowOutcome {
   memberType: string;
   token: string;
   key: string;
-  outcome: FacetImportOutcome;
+  outcome: RowOutcome;
   code?: string | null;
   message?: string | null;
 }
 
-export type OutcomeCounts = Record<FacetImportOutcome, number>;
+export type OutcomeCounts = Record<RowOutcome, number>;
 
-export const emptyCounts = (): OutcomeCounts => ({ SET: 0, EXISTS: 0, INVALID: 0, REFUSED: 0 });
+export const emptyCounts = (): OutcomeCounts => ({ SET: 0, EXISTS: 0, INVALID: 0, REFUSED: 0, UNKNOWN: 0 });
 
 export function countOutcomes(outcomes: FileRowOutcome[]): OutcomeCounts {
   const counts = emptyCounts();
@@ -145,10 +170,14 @@ export function countOutcomes(outcomes: FileRowOutcome[]): OutcomeCounts {
 }
 
 /** Outcomes that mean the row still needs the operator. EXISTS is a success. */
-export const FAILED_OUTCOMES: FacetImportOutcome[] = ['INVALID', 'REFUSED'];
+export const FAILED_OUTCOMES: RowOutcome[] = ['INVALID', 'REFUSED', 'UNKNOWN'];
+
+/** Outcomes worth sending again without changing the file. */
+export const RETRYABLE_OUTCOMES: RowOutcome[] = ['REFUSED', 'UNKNOWN'];
 
 export const DUPLICATE_CODE = 'DUPLICATE_IN_FILE';
 export const NO_RESULT_CODE = 'NO_RESULT';
+export const LOST_RESPONSE_CODE = 'RESPONSE_LOST';
 
 /** The sender: one call of at most IMPORT_CHUNK_SIZE rows. */
 export type ChunkSender = (rows: FacetValueImportRow[], dryRun: boolean) => Promise<FacetValueImportRowResult[]>;
@@ -219,6 +248,18 @@ export async function runFacetImport(
         dryRun,
       );
     } catch (err) {
+      // The call may have committed before its answer was lost: its rows are UNKNOWN, not failed.
+      for (const p of part) {
+        outcomes.push({
+          row: p.file,
+          memberType: p.row.memberType,
+          token: p.row.token,
+          key: p.row.key,
+          outcome: 'UNKNOWN',
+          code: LOST_RESPONSE_CODE,
+          message: null,
+        });
+      }
       throw new ImportRunError(err, outcomes.sort(byRow));
     }
     const answered = new Map(results.map((r) => [r.row, r]));
@@ -233,7 +274,7 @@ export async function runFacetImport(
               memberType: p.row.memberType,
               token: p.row.token,
               key: p.row.key,
-              outcome: 'REFUSED',
+              outcome: 'UNKNOWN',
               code: NO_RESULT_CODE,
               message: null,
             },
@@ -253,13 +294,16 @@ export function mergeOutcomes(previous: FileRowOutcome[], fresh: FileRowOutcome[
 
 const RESULT_HEADERS = ['row', 'memberType', 'token', 'key', 'outcome', 'code', 'message'] as const;
 
-/** The per-row results as CSV. Carries no value: outcomes never hold one. */
-export function resultsCsv(outcomes: FileRowOutcome[]): string {
+/**
+ * The per-row results as CSV. Carries no value: outcomes never hold one. A field fed by a
+ * secret-looking column (see secretFields) is written blank.
+ */
+export function resultsCsv(outcomes: FileRowOutcome[], secret: Set<FacetImportField> = new Set()): string {
   const columns: CsvColumn<FileRowOutcome>[] = [
     { header: RESULT_HEADERS[0], value: (o) => o.row },
-    { header: RESULT_HEADERS[1], value: (o) => o.memberType },
-    { header: RESULT_HEADERS[2], value: (o) => o.token },
-    { header: RESULT_HEADERS[3], value: (o) => o.key },
+    { header: RESULT_HEADERS[1], value: (o) => (secret.has('memberType') ? '' : o.memberType) },
+    { header: RESULT_HEADERS[2], value: (o) => (secret.has('token') ? '' : o.token) },
+    { header: RESULT_HEADERS[3], value: (o) => (secret.has('key') ? '' : o.key) },
     { header: RESULT_HEADERS[4], value: (o) => o.outcome },
     { header: RESULT_HEADERS[5], value: (o) => o.code },
     { header: RESULT_HEADERS[6], value: (o) => o.message },
@@ -271,7 +315,7 @@ export function resultsCsv(outcomes: FileRowOutcome[]): string {
  * The rows that did not land, as a file that can be fixed and imported again: the canonical
  * four columns (so it maps without help) plus the outcome columns (ignored on re-import).
  * Nothing else from the source file is written, so a secret-looking column never appears; and
- * if the value column itself is secret-looking its cells are blanked.
+ * if any mapped column is secret-looking (whichever field it feeds) its cells are blanked.
  */
 export function failedRowsCsv(
   table: string[][],
@@ -281,17 +325,18 @@ export function failedRowsCsv(
   outcomes: FileRowOutcome[],
 ): string {
   const rows = buildRows(table, mapping, defaults);
-  const valueIsSecret = mapping.value !== undefined && isSecretHeader(header[mapping.value] ?? '');
+  const secret = secretFields(header, mapping);
+  const cellOf = (f: FacetImportField, v: string) => csvCell(secret.has(f) ? '' : v);
   const head = [...FACET_IMPORT_FIELDS, 'outcome', 'code', 'message'].map((h) => csvCell(h)).join(',');
   const lines = outcomes
     .filter((o) => FAILED_OUTCOMES.includes(o.outcome))
     .map((o) => {
       const r = rows[o.row - 1];
       return [
-        csvCell(r?.memberType ?? o.memberType),
-        csvCell(r?.token ?? o.token),
-        csvCell(r?.key ?? o.key),
-        csvCell(valueIsSecret ? '' : (r?.value ?? '')),
+        cellOf('memberType', r?.memberType ?? o.memberType),
+        cellOf('token', r?.token ?? o.token),
+        cellOf('key', r?.key ?? o.key),
+        cellOf('value', r?.value ?? ''),
         csvCell(o.outcome),
         csvCell(o.code),
         csvCell(o.message),

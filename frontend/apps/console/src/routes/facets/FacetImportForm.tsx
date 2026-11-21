@@ -21,7 +21,7 @@ import {
   DataTableRow,
 } from '@/components/ui/data-table';
 import { errMessage } from '@/routes/common';
-import { importFacetValues, type FacetImportOutcome } from '@/lib/api/facet-import';
+import { importFacetValues } from '@/lib/api/facet-import';
 import { FACET_MEMBER_TYPES } from '@/lib/api/facet-keys';
 import { downloadCsv, exportFilename } from '@/lib/csv';
 import {
@@ -42,11 +42,14 @@ import {
   findDuplicates,
   mergeOutcomes,
   resultsCsv,
+  RETRYABLE_OUTCOMES,
+  secretFields,
   runFacetImport,
   stripSecretColumns,
   type ColumnMapping,
   type FacetImportField,
   type FileRowOutcome,
+  type RowOutcome,
 } from '@/routes/facets/facetImport';
 
 const RESULTS_STEM = 'facet-values-import-results';
@@ -57,9 +60,9 @@ const PREVIEW_ROWS = 3;
 
 const PHASE_PICK: Phase = 'pick';
 type Phase = 'pick' | 'map' | 'checked' | 'running' | 'done';
-type Filter = 'ALL' | FacetImportOutcome;
+type Filter = 'ALL' | RowOutcome;
 
-const OUTCOMES: FacetImportOutcome[] = ['SET', 'EXISTS', 'INVALID', 'REFUSED'];
+const OUTCOMES: RowOutcome[] = ['SET', 'EXISTS', 'INVALID', 'REFUSED', 'UNKNOWN'];
 
 const FAMILY_LABEL_KEY: Record<string, string> = {
   device: 'common:familyDevice',
@@ -68,8 +71,8 @@ const FAMILY_LABEL_KEY: Record<string, string> = {
   customer: 'common:familyCustomer',
 };
 
-const outcomeVariant = (o: FacetImportOutcome) =>
-  o === 'SET' || o === 'EXISTS' ? 'success' : 'destructive';
+const outcomeVariant = (o: RowOutcome) =>
+  o === 'SET' || o === 'EXISTS' ? 'success' : o === 'UNKNOWN' ? 'warning' : 'destructive';
 
 // FacetImportForm sets facet values on many existing entities from a CSV file in four steps:
 // read the file and map its columns (entity type, token, facet key, value), preview with a dry
@@ -231,7 +234,7 @@ export function FacetImportForm({ onDone }: { onDone: (message: string) => void 
     const answered = new Set(outcomes.map((o) => o.row));
     const rows = new Set<number>();
     outcomes.forEach((o) => {
-      if (o.outcome === 'REFUSED' && !duplicates.has(o.row)) rows.add(o.row);
+      if (RETRYABLE_OUTCOMES.includes(o.outcome) && !duplicates.has(o.row)) rows.add(o.row);
     });
     rowsToSend.forEach((_, i) => {
       if (!answered.has(i + 1)) rows.add(i + 1);
@@ -247,17 +250,29 @@ export function FacetImportForm({ onDone }: { onDone: (message: string) => void 
   const detail = (o: FileRowOutcome): string => {
     if (o.code === 'DUPLICATE_IN_FILE') return t('importCode_DUPLICATE_IN_FILE');
     if (o.code === 'NO_RESULT') return t('importCode_NO_RESULT');
+    if (o.code === 'RESPONSE_LOST') return t('importCode_RESPONSE_LOST');
     return o.message ?? '—';
   };
 
   const resultsTable = (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('importFilterLabel')}>
-        <Button size="sm" variant={filter === 'ALL' ? 'default' : 'outline'} onClick={() => setFilter('ALL')}>
+        <Button
+          size="sm"
+          variant={filter === 'ALL' ? 'default' : 'outline'}
+          aria-pressed={filter === 'ALL'}
+          onClick={() => setFilter('ALL')}
+        >
           {t('importFilterAll', { count: outcomes.length })}
         </Button>
         {OUTCOMES.filter((o) => counts[o] > 0).map((o) => (
-          <Button key={o} size="sm" variant={filter === o ? 'default' : 'outline'} onClick={() => setFilter(o)}>
+          <Button
+            key={o}
+            size="sm"
+            variant={filter === o ? 'default' : 'outline'}
+            aria-pressed={filter === o}
+            onClick={() => setFilter(o)}
+          >
             {t(`importOutcome_${o}`)} · {counts[o]}
           </Button>
         ))}
@@ -300,7 +315,11 @@ export function FacetImportForm({ onDone }: { onDone: (message: string) => void 
 
   const downloads = (
     <div className="flex flex-wrap gap-2">
-      <Button variant="outline" size="sm" onClick={() => downloadCsv(exportFilename(RESULTS_STEM), resultsCsv(outcomes))}>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => downloadCsv(exportFilename(RESULTS_STEM), resultsCsv(outcomes, secretFields(header, mapping)))}
+      >
         <Download size={16} /> {t('importDownloadResults')}
       </Button>
       {outcomes.some((o) => FAILED_OUTCOMES.includes(o.outcome)) && table && (
@@ -484,6 +503,11 @@ export function FacetImportForm({ onDone }: { onDone: (message: string) => void 
               <p className="text-sm" data-shot="import-summary">
                 {t('importSummary', { set: counts.SET, exists: counts.EXISTS, failed: failedCount })}
               </p>
+              {counts.UNKNOWN > 0 && (
+                <p role="status" className="text-sm text-amber-600">
+                  {t('importUnknownNote', { count: counts.UNKNOWN })}
+                </p>
+              )}
               {resultsTable}
               <div className="flex flex-wrap items-center gap-2">
                 {retryRows.size > 0 && (

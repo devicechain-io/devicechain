@@ -133,6 +133,39 @@ describe('the facet value import wizard', () => {
     expect(screen.queryByRole('button', { name: /^Retry/ })).toBeNull();
   });
 
+  it('shows a lost answer as unknown, then the server answer on retry', async () => {
+    let lose = true;
+    const inner = gqlMock.getMockImplementation()!;
+    gqlMock.mockImplementation((service: string, doc: unknown, vars?: Vars) => {
+      if (vars?.rows && !vars.dryRun && lose) {
+        lose = false;
+        return Promise.reject(new Error('connection reset'));
+      }
+      return inner(service, doc, vars);
+    });
+    await pasteAndCheck('memberType,token,key,value\ndevice,d1,site,a\n');
+    fireEvent.click(screen.getByRole('button', { name: 'Set 1 value' }));
+    await screen.findByText('Import finished');
+    expect(screen.getAllByText('Outcome unknown').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/need attention/)?.textContent).toContain('0 need attention');
+    expect(screen.getByText(/answer for this row was lost/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry 1 row' }));
+    await waitFor(() => expect(screen.getByText('1 set, 0 unchanged, 0 need attention.')).toBeTruthy());
+    expect(screen.queryByText('Outcome unknown')).toBeNull();
+  });
+
+  it('exposes the selected outcome filter', async () => {
+    await pasteAndCheck('memberType,token,key,value\ndevice,d1,site,a\ndevice,ghost,site,b\n');
+    const all = screen.getByRole('button', { name: /^All · 2$/ });
+    expect(all.getAttribute('aria-pressed')).toBe('true');
+    const invalid = screen.getByRole('button', { name: /^Invalid · 1$/ });
+    expect(invalid.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(invalid);
+    expect(invalid.getAttribute('aria-pressed')).toBe('true');
+    expect(all.getAttribute('aria-pressed')).toBe('false');
+  });
+
   it('downloads failed rows without any secret-looking column', async () => {
     await pasteAndCheck('memberType,token,key,value,api_key\ndevice,d1,site,a,AKIA-TOPSECRET\ndevice,ghost,site,b,AKIA-TOPSECRET-2\n');
     fireEvent.click(screen.getByRole('button', { name: 'Set 1 value' }));
