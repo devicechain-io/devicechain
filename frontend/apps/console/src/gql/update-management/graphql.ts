@@ -432,6 +432,24 @@ export type ResumeUpdateRolloutMutationVariables = Exact<{
 
 export type ResumeUpdateRolloutMutation = { resumeUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
 
+export type PromoteUpdateRolloutMutationVariables = Exact<{
+  token: string;
+  expectedCohort: number;
+  overrideFailure?: boolean;
+}>;
+
+
+export type PromoteUpdateRolloutMutation = { promoteUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
+
+export type ResumeHaltedUpdateRolloutMutationVariables = Exact<{
+  token: string;
+  haltSequence: number;
+  failureThreshold?: number | null | undefined;
+}>;
+
+
+export type ResumeHaltedUpdateRolloutMutation = { resumeHaltedUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
+
 export type AbortUpdateRolloutMutationVariables = Exact<{
   token: string;
 }>;
@@ -1404,6 +1422,98 @@ export const ResumeUpdateRolloutDocument = new TypedDocumentString(`
     skipped
   }
 }`) as unknown as TypedDocumentString<ResumeUpdateRolloutMutation, ResumeUpdateRolloutMutationVariables>;
+export const PromoteUpdateRolloutDocument = new TypedDocumentString(`
+    mutation PromoteUpdateRollout($token: String!, $expectedCohort: Int!, $overrideFailure: Boolean! = false) {
+  promoteUpdateRollout(
+    token: $token
+    expectedCohort: $expectedCohort
+    overrideFailure: $overrideFailure
+  ) {
+    ...RolloutFields
+  }
+}
+    fragment RolloutFields on UpdateRollout {
+  id
+  token
+  name
+  groupToken
+  groupVersion
+  maxInFlight
+  failureThreshold
+  state
+  pauseReason
+  targetCount
+  createdAt
+  createdBy
+  startedAt
+  finishedAt
+  stateChangedBy
+  stateChangedAt
+  artifact {
+    token
+    name
+    version
+    component
+    state
+    trustStatus
+  }
+  progress {
+    total
+    pending
+    inFlight
+    succeeded
+    failed
+    unknown
+    cancelled
+    skipped
+  }
+}`) as unknown as TypedDocumentString<PromoteUpdateRolloutMutation, PromoteUpdateRolloutMutationVariables>;
+export const ResumeHaltedUpdateRolloutDocument = new TypedDocumentString(`
+    mutation ResumeHaltedUpdateRollout($token: String!, $haltSequence: Int!, $failureThreshold: Int) {
+  resumeHaltedUpdateRollout(
+    token: $token
+    haltSequence: $haltSequence
+    failureThreshold: $failureThreshold
+  ) {
+    ...RolloutFields
+  }
+}
+    fragment RolloutFields on UpdateRollout {
+  id
+  token
+  name
+  groupToken
+  groupVersion
+  maxInFlight
+  failureThreshold
+  state
+  pauseReason
+  targetCount
+  createdAt
+  createdBy
+  startedAt
+  finishedAt
+  stateChangedBy
+  stateChangedAt
+  artifact {
+    token
+    name
+    version
+    component
+    state
+    trustStatus
+  }
+  progress {
+    total
+    pending
+    inFlight
+    succeeded
+    failed
+    unknown
+    cancelled
+    skipped
+  }
+}`) as unknown as TypedDocumentString<ResumeHaltedUpdateRolloutMutation, ResumeHaltedUpdateRolloutMutationVariables>;
 export const AbortUpdateRolloutDocument = new TypedDocumentString(`
     mutation AbortUpdateRollout($token: String!) {
   abortUpdateRollout(token: $token) {
