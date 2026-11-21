@@ -105,6 +105,11 @@ DOCS_DEPLOY = [
     "docs/i18n/*/docusaurus-plugin-content-docs/current/deployment/**",
 ]
 READERS = [
+    # plan_fixtures_test.go — scans the sanitized plan-gate fixtures for confidential material.
+    ("deploy", ".", [
+        "deploy/gke/fixtures/**",
+        "hack/fixtures/gke-extraction/**",
+    ], [], "plan_fixtures_test.go"),
     # build_paths_test.go:22-81 — the reproducible-build settings in every place the broker image is built.
     ("backend/broker/dc-nats-server", ".", [
         "deploy/local/build-images.sh",
