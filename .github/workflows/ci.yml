@@ -3192,9 +3192,17 @@ jobs:
           # The install roots are covered by the step above; everything else is here.
           grep -v '^deploy/opentofu/' "$RUNNER_TEMP/all-roots.txt" > "$RUNNER_TEMP/other-roots.txt" || true
           [ -s "$RUNNER_TEMP/other-roots.txt" ] || { echo "no root outside deploy/opentofu was discovered"; exit 1; }
+          # The fleet roots (deploy/fleet/*) ENFORCE state and plan encryption, so even `init` needs a
+          # key. CI supplies a throwaway one; whether the `enforced` lines are really there is
+          # checked statically and by a no-key plan in hack/check-fleet-roots.sh, not here.
+          fleet_key='key_provider "pbkdf2" "ci" { passphrase = "ci-throwaway-passphrase-0123456789" }
+          method "aes_gcm" "ci" { keys = key_provider.pbkdf2.ci }
+          state { method = method.aes_gcm.ci }
+          plan { method = method.aes_gcm.ci }'
           while IFS= read -r root; do
             echo "::group::$root"
             ( cd "$root"
+              case "$root" in deploy/fleet/*) export TF_ENCRYPTION="$fleet_key" ;; esac
               tofu fmt -check -recursive
               "$GITHUB_WORKSPACE/hack/ci-retry.sh" tofu init -backend=false
               tofu validate
