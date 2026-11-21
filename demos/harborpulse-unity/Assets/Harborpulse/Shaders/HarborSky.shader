@@ -98,7 +98,7 @@ Shader "Harborpulse/Sky"
                 float rain = _HarborCloud.z;
 
                 // the clear sky: horizon band, middle sky, zenith
-                float3 sky = lerp(_HarborSkyLow.rgb, _HarborSkyMid.rgb, smoothstep(0.0, 0.17, up));
+                float3 sky = lerp(_HarborSkyLow.rgb, _HarborSkyMid.rgb, smoothstep(0.0, 0.10, up));
                 sky = lerp(sky, _HarborSkyTop.rgb, smoothstep(0.10, 0.70, up));
 
                 // the low sun's glow lies along the whole horizon and is strongest towards the sun
@@ -167,8 +167,8 @@ Shader "Harborpulse/Sky"
                 sky = lerp(sky, _HarborCloudShade.rgb * 0.75, curtain * 0.55);
 
                 // the horizon line is the fog colour, and so is everything under it: the land and the sea fade into the same haze
-                float haze = exp(-up * 24.0);
-                sky = lerp(sky, _HarborSkyHaze.rgb, haze * 0.9);
+                float haze = exp(-up * 42.0);
+                sky = lerp(sky, _HarborSkyHaze.rgb, haze);
                 // under a closed deck at sunset a last ember shows low in the west
                 sky += _HarborSkyGlow.rgb * _HarborSkyGlow.a * exp(-up * 26.0) * toward * 0.45 * step(0.0, h);
                 sky = lerp(sky, _HarborSkyHaze.rgb, step(h, 0.0));

@@ -161,6 +161,12 @@ namespace DeviceChain.Harborpulse.Model
 
         public double TwilightStrength { get; internal set; }
 
+        /// <summary>
+        /// The exposure the grade adds, in stops: the eye opens up at night, a little in the storm, and through the dim light of a dawn, a
+        /// dusk or a heavy overcast, when the sky is bright but little of its light reaches the town.
+        /// </summary>
+        public double ExposureLift { get; internal set; }
+
         /// <summary>The cloud's lit faces and its shaded bases.</summary>
         public Rgb CloudLit { get; internal set; }
 
@@ -265,6 +271,9 @@ namespace DeviceChain.Harborpulse.Model
         /// <summary>How far the ambient floor is lifted when neither the sun nor the moon gives a key light (a storm dusk, the hour before dawn).</summary>
         public const double KeylessFloorLift = 1.2;
 
+        /// <summary>The stops the grade opens up by when the sun is up but weak: dawn, dusk, and under the storm.</summary>
+        public const double DimLightLift = 0.9;
+
         static Rgb Max(Rgb a, Rgb b) => new Rgb(Math.Max(a.R, b.R), Math.Max(a.G, b.G), Math.Max(a.B, b.B));
         static Rgb Add(Rgb a, Rgb b, double k) => new Rgb(a.R + b.R * k, a.G + b.G * k, a.B + b.B * k);
         static double Luma(Rgb c) => 0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B;
@@ -366,6 +375,7 @@ namespace DeviceChain.Harborpulse.Model
             s.AmbientEquator = Max(equator.Scale(amb * 0.8 + 0.03), NightAmbientEquator.Scale(floor));
             s.AmbientGround = Max(s.Ground.Scale(0.6), NightAmbientGround.Scale(floor));
             s.FogColor = s.Horizon;
+            s.ExposureLift = s.Night * 0.55 + storm * 0.1 + DimLightLift * (1 - s.Night) * (1 - Smooth(0.2, 1.3, s.SunIntensity));
             // haze closes the view on purpose: scenery fog is about half at 900 m by day and at 550 m in the storm (see SceneryFogGain)
             s.FogDensity = 0.00016 + 0.00008 * storm + 0.00001 * night;
             s.HeightFogDensity = 0.00004 + 0.00020 * storm + 0.00002 * night;

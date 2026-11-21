@@ -44,12 +44,12 @@ namespace DeviceChain.Harborpulse.Visuals
             for (var i = 0; i < 320; i++)
             {
                 var x = (float)random.NextDouble() * 70 - 35; var y = (float)random.NextDouble() * RainPeriod; var z = (float)random.NextDouble() * 70 - 35;
-                var length = 0.7f + (float)random.NextDouble() * 0.7f;
-                if (x * x + z * z < 6) continue;
+                var length = 0.5f + (float)random.NextDouble() * 0.5f;
+                if (x * x + z * z < 36) continue;
                 for (var layer = -1; layer < 3; layer++)
                 {
                     var a = new Vector3(x, y + layer * RainPeriod, z);
-                    rainMesh.Rod(a, a + new Vector3(-0.28f, -1f, 0.06f) * length, 0.006f);
+                    rainMesh.Rod(a, a + new Vector3(-0.28f, -1f, 0.06f) * length, 0.004f);
                 }
             }
             rain = rainMesh.Spawn("WORLD Rain", world.Root, mats.WorldCue, false).transform;
