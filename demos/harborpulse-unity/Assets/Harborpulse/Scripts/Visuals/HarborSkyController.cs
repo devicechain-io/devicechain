@@ -54,7 +54,8 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly Color previousFogColor;
         readonly float previousFogDensity;
         readonly Vector4 previousSceneryFog;
-        readonly Color previousSceneryFogColor, previousSceneryFogLow;
+        readonly Color previousSceneryFogColor, previousSceneryFogLow, previousCloudUnder;
+        readonly float previousMoonGlow;
 
         public HarborSkyController(Transform parent, Shader skyShader)
         {
@@ -69,6 +70,8 @@ namespace DeviceChain.Harborpulse.Visuals
             previousSceneryFog = Shader.GetGlobalVector(SceneryFog);
             previousSceneryFogColor = Shader.GetGlobalColor(SceneryFogColor);
             previousSceneryFogLow = Shader.GetGlobalColor(SceneryFogLow);
+            previousCloudUnder = Shader.GetGlobalColor(CloudUnder);
+            previousMoonGlow = Shader.GetGlobalFloat(MoonGlow);
             sun = MakeLight("Sun", parent, LightShadows.Soft);
             moon = MakeLight("Moon", parent, LightShadows.None);
             var shader = skyShader != null ? skyShader : Shader.Find("Harborpulse/Sky");
@@ -95,6 +98,8 @@ namespace DeviceChain.Harborpulse.Visuals
             Shader.SetGlobalVector(SceneryFog, previousSceneryFog);
             Shader.SetGlobalColor(SceneryFogColor, previousSceneryFogColor);
             Shader.SetGlobalColor(SceneryFogLow, previousSceneryFogLow);
+            Shader.SetGlobalColor(CloudUnder, previousCloudUnder);
+            Shader.SetGlobalFloat(MoonGlow, previousMoonGlow);
             MeshKit.Release(skybox);
             if (sun != null) MeshKit.Release(sun.gameObject);
             if (moon != null) MeshKit.Release(moon.gameObject);

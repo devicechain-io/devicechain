@@ -56,7 +56,11 @@ namespace DeviceChain.Harborpulse.EditorTools
                     if (free != null)
                     {
                         var v = new float[7];
-                        for (var k = 0; k < 7; k++) v[k] = float.Parse(free[k], CultureInfo.InvariantCulture);
+                        for (var k = 0; k < 7; k++)
+                        {
+                            v[k] = float.Parse(free[k], CultureInfo.InvariantCulture);
+                            if (float.IsNaN(v[k]) || float.IsInfinity(v[k])) throw new ArgumentException("a free still camera's numbers must be finite");
+                        }
                         if (v[6] < 5 || v[6] > 120) throw new ArgumentException("a free still camera's field of view must be within 5 and 120 degrees");
                         var at = new Vector3(v[0], v[1], v[2]); var look = new Vector3(v[3], v[4], v[5]);
                         if ((look - at).sqrMagnitude < 1e-4f) throw new ArgumentException("a free still camera must look somewhere");

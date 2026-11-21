@@ -107,7 +107,7 @@ namespace DeviceChain.Harborpulse.Visuals
                     {
                         var strip = 22 + 60 * (float)CoastalTerrain.Noise(x * .011 + 17, 3.3);
                         var shore = 1 - Mathf.SmoothStep(0, 1, (z - TownBuilder.CoastZ) / strip);
-                        color = Mix(color, Mix(heath, meadowStraw, Mathf.SmoothStep(.3f, .8f, patch)), shore * .85f);
+                        color = Mix(color, Mix(heath, meadowStraw, Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.3f, .8f, patch))), shore * .85f);
                     }
                     // rocky, heath-toned ground where the slope steepens, and the bedrock skirt round every outcrop
                     var bare = Mathf.Clamp01((.985f - n.y) * 9);

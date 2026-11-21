@@ -188,9 +188,10 @@ Shader "Harborpulse/Sky"
                 sky = lerp(sky, _HarborSkyHaze.rgb, haze);
                 // under a closed deck at sunset a last ember shows low in the west
                 sky += _HarborSkyGlow.rgb * _HarborSkyGlow.a * exp(-up * 26.0) * toward * 0.45 * step(0.0, h);
-                // below the horizon: the horizon's haze, darkening to the far ground's (the scenery shader draws the same function)
+                // At and below the horizon: the horizon's haze, darkening to the far ground's. The scenery and the water draw the same
+                // function, which begins a hair above the horizon (0.004), so the sky joins it over that hair instead of stepping at zero.
                 float3 below = lerp(_HarborSkyHaze.rgb, _HarborSceneryFogLow.rgb, 1.0 - smoothstep(-0.05, 0.004, h));
-                sky = lerp(sky, below, step(h, 0.0));
+                sky = lerp(sky, below, 1.0 - smoothstep(0.0, 0.004, h));
                 return half4(max(sky, 0.0), 1.0);
             }
             ENDHLSL

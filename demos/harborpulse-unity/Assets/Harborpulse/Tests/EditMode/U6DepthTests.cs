@@ -94,8 +94,10 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(CoastalTerrain.RidgeCrest(760), Is.EqualTo(90).Within(1e-9));
             Assert.That(CoastalTerrain.RidgeHeight(-420, 2760), Is.EqualTo(Deck + 124).Within(1e-9));
             Assert.That(CoastalTerrain.RidgeHeight(-420, 2480), Is.EqualTo(Deck + 124 * .35).Within(1e-9));
-            Assert.That(CoastalTerrain.RidgeCrest(1800), Is.EqualTo(CoastalTerrain.Ridge.Crest(1800)));
-            Assert.That(CoastalTerrain.RidgeCrest(2100), Is.GreaterThan(0)); Assert.That(CoastalTerrain.RidgeCrest(-1900), Is.GreaterThan(0));
+            // inside both tapers, from the U5 formula worked by hand: the east one runs 1800-2400 and the west one -2400 to -1850
+            Assert.That(CoastalTerrain.RidgeCrest(2100), Is.EqualTo(5.80).Within(.05));
+            Assert.That(CoastalTerrain.RidgeCrest(-2100), Is.EqualTo(12.29).Within(.05));
+            Assert.That(CoastalTerrain.RidgeCrest(1800), Is.EqualTo(44.86).Within(.05), "the east taper has not begun at 1800");
         }
 
         // ---------------------------------------------------------------- the haze
@@ -234,10 +236,12 @@ namespace DeviceChain.Harborpulse.Tests
             TestContext.WriteLine("foreshore reach " + min.ToString("F0") + " to " + max.ToString("F0") + " m, " + turns + " turns along the east coast");
             Assert.That(max - min, Is.GreaterThan(90), "points and coves, not a second straight line");
             Assert.That(turns, Is.GreaterThan(12));
-            // level with the deck at the coast, above the flood level over its inner third, under the lowest water at its edge
-            Assert.That(CoastalTerrain.ShoreHeight(0), Is.GreaterThanOrEqualTo(Deck));
-            Assert.That(CoastalTerrain.ShoreHeight(.3), Is.GreaterThan(2.0));
-            Assert.That(CoastalTerrain.ShoreHeight(1), Is.LessThan(-.9));
+            // exactly the deck's height at the coast (the land's own edge: no step, no seam), still dry a third of the way out, and
+            // under the lowest water at its edge
+            Assert.That(CoastalTerrain.ShoreHeight(0), Is.EqualTo(Deck));
+            Assert.That(CoastalTerrain.Height(900, CoastalTerrain.CoastZ), Is.EqualTo(Deck), "the terrain's edge is at the deck's height too");
+            Assert.That(CoastalTerrain.ShoreHeight(.3), Is.GreaterThan(1.8));
+            Assert.That(CoastalTerrain.ShoreHeight(1), Is.EqualTo(-CoastalTerrain.ShoreEdgeDepthM).Within(1e-9));
             for (var t = 0.0; t < 1; t += .05) Assert.That(CoastalTerrain.ShoreHeight(t + .05), Is.LessThan(CoastalTerrain.ShoreHeight(t)));
             // HOME's 16:9 frame holds none of it: the water share and the masks there are untouched
             var home = U5Plan.Map.Pose("pose:home");

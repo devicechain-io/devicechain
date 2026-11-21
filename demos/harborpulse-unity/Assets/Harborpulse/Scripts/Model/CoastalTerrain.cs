@@ -272,15 +272,18 @@ namespace DeviceChain.Harborpulse.Model
         }
 
         /// <summary>
-        /// The foreshore's height at a fraction <paramref name="t"/> of the way out (0 at the coast, 1 at its seaward edge): level with the
-        /// deck at the coast, a ledge that stays above the highest water over its inner part, then down under the lowest water at the edge,
-        /// so the waterline wanders with the tide instead of following a mesh edge.
+        /// The foreshore's height at a fraction <paramref name="t"/> of the way out (0 at the coast, 1 at its seaward edge): exactly the
+        /// deck's height at the coast, where it meets the land's own edge with no step, falling slowly over its inner part and then down
+        /// under the lowest water at the edge, so the waterline wanders with the tide instead of following a mesh edge.
         /// </summary>
         public static double ShoreHeight(double t)
         {
             t = Math.Max(0, Math.Min(1, t));
-            return SitePlan.DeckHeightM + .4 - (SitePlan.DeckHeightM + 3.4) * t * t;
+            return SitePlan.DeckHeightM - (SitePlan.DeckHeightM + ShoreEdgeDepthM) * t * t;
         }
+
+        /// <summary>How far under the datum the foreshore's seaward edge lies.</summary>
+        public const double ShoreEdgeDepthM = 3;
 
         /// <summary>Offshore skerries: x, z, radius, height above the datum. All stand off the open coast, outside what HOME's 16:9 frame holds of the sea.</summary>
         public static readonly double[][] Skerries =

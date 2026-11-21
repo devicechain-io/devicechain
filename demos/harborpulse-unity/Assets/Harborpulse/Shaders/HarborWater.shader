@@ -43,7 +43,6 @@ Shader "Harborpulse/Water"
             #pragma target 3.5
             #pragma vertex Vert
             #pragma fragment Frag
-            #pragma multi_compile_fog
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
             #pragma multi_compile_fragment _ _SHADOWS_SOFT
 
@@ -94,7 +93,6 @@ Shader "Harborpulse/Water"
                 float2 restXZ : TEXCOORD1;
                 float waveScale : TEXCOORD2;
                 float crest : TEXCOORD3;
-                float fogCoord : TEXCOORD4;
                 // the surface's distance along the view axis, for the depth difference to what is under it
                 float eyeDepth : TEXCOORD5;
             };
@@ -120,7 +118,6 @@ Shader "Harborpulse/Water"
                 o.crest = offset.y / max(_WaveAmp.x * 1.8, 1e-3);
                 o.positionCS = TransformWorldToHClip(ws);
                 o.eyeDepth = -TransformWorldToView(ws).z;
-                o.fogCoord = ComputeFogFactor(o.positionCS.z);
                 return o;
             }
 
@@ -249,7 +246,8 @@ Shader "Harborpulse/Water"
                     reflection = lerp(reflection, planar.rgb, reach * saturate(planar.a));
                 }
                 float glint = pow(saturate(dot(r, sun.direction)), 900.0) * 18.0 + pow(saturate(dot(r, sun.direction)), 90.0) * 0.6;
-                float3 specular = glint * sun.color * sun.shadowAttenuation * (1.0 - 0.85 * _HarborStorm);
+                // under the storm's closed deck neither the sun nor the moon lays a path on the water
+                float3 specular = glint * sun.color * sun.shadowAttenuation * (1.0 - 0.97 * _HarborStorm);
 
                 // refraction: what is under the surface, nudged by the slope; a nudge onto something in front of the water is undone
                 float2 screenUV = GetNormalizedScreenSpaceUV(i.positionCS);
@@ -288,10 +286,10 @@ Shader "Harborpulse/Water"
                 float3 foamLit = _FoamColor.rgb * (ambient * 1.2 + sun.color * lit * 0.8);
                 colour = lerp(colour, foamLit, saturate(foam) * 0.85);
 
-                colour = MixFog(colour, i.fogCoord);
                 // Open water fades into the same haze as the land beside it (DayLighting.SeaTransmission: the scenery's distance curve, from
-                // 350 m out), toward the colour a ray of this elevation fades to (DayLighting.HazeColor). Without it the sea stayed dark to
-                // its far edge and drew a hard line under the sky and along the hazed coast.
+                // 350 m out), toward the colour a ray of this elevation fades to (DayLighting.HazeColor). This replaces the engine's fog on
+                // the water: with that alone the sea stayed dark to its far edge and drew a hard line under the sky and along the hazed
+                // coast, and with both it was fogged twice.
                 float away = distance(_WorldSpaceCameraPos, i.positionWS);
                 float seaAir = _HarborSceneryFog.x * 3.5 * max(0.0, away - 350.0);
                 float rayY = (i.positionWS.y - _WorldSpaceCameraPos.y) / max(away, 1.0);

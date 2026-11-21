@@ -21,7 +21,7 @@ namespace DeviceChain.Harborpulse.Visuals
             var v = (float)CoastalTerrain.Hash(column * 13 + 7, row * 29 + 3);
             var tone = v < .25f ? Color.Lerp(new Color(.40f, .36f, .31f), new Color(.61f, .54f, .45f), v * 4) : Color.Lerp(new Color(.61f, .54f, .45f), new Color(.76f, .69f, .57f), (v - .25f) * 1.2f);
             // wet and weed-dark near the water, a pale dry band above the tide's reach, lichen on a few of the high facets
-            var wet = 1 - Mathf.SmoothStep(.2f, 1.9f, height);
+            var wet = 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.2f, 1.9f, height));
             tone = Color.Lerp(tone, new Color(.17f, .19f, .15f), wet * .75f);
             if (height > 2f && v > .86f) tone = Color.Lerp(tone, new Color(.55f, .59f, .38f), .5f);
             tone.a = TerrainBuilder.RockCode;
