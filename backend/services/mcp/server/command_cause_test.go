@@ -30,8 +30,12 @@ func commandSchema(t *testing.T, old bool) *graphql.Schema {
 	if old {
 		sdl = regexp.MustCompile(`(?s)""".*?"""`).ReplaceAllString(sdl, "")
 		sdl = regexp.MustCompile(`(?ms)^(?:type|input) CommandCause\w*[^\{]*\{.*?^\}`).ReplaceAllString(sdl, "")
-		sdl = regexp.MustCompile(`(?m)^\s*cause\s*:\s*CommandCause\w*[^\S\r\n]*$`).ReplaceAllString(sdl, "")
-		if strings.Contains(sdl, "CommandCause") {
+		// An older command-delivery has neither the legacy cause nor the later
+		// causeDetails/proposal fields, so all of them go.
+		sdl = regexp.MustCompile(`(?m)^\s*cause\w*\s*:\s*CommandCause\w*[^\S\r\n]*$`).ReplaceAllString(sdl, "")
+		sdl = regexp.MustCompile(`(?ms)^type AgentProposalReference\b[^\{]*\{.*?^\}`).ReplaceAllString(sdl, "")
+		sdl = regexp.MustCompile(`(?m)^\s*proposal\s*:\s*AgentProposalReference[^\S\r\n]*$`).ReplaceAllString(sdl, "")
+		if strings.Contains(sdl, "CommandCause") || strings.Contains(sdl, "AgentProposalReference") {
 			t.Fatal("old SDL still names the cause")
 		}
 	}

@@ -278,3 +278,62 @@ func (r *CommandCauseResolver) DeviceId() *gql.ID {
 	id := gql.ID(fmt.Sprint(r.deviceID.Int64))
 	return &id
 }
+
+// proposalCauseVisible applies the unscoped human ledger-read rule to both links.
+func proposalCauseVisible(ctx context.Context) bool {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims.TokenType != auth.TokenTypeAccess {
+		return false
+	}
+	if auth.IsAgentOrigin(claims) {
+		return false
+	}
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		return false
+	}
+	// This helper checks authority; the ledger's explicit scope refusal is above.
+	_, err := auth.AuthorizeScoped(ctx, auth.CommandRead)
+	return err == nil
+}
+
+func (r *CommandResolver) CauseDetails(ctx context.Context) *CommandCauseDetailsResolver {
+	details := r.M.CauseDetails()
+	if details == nil {
+		return nil
+	}
+	if details.Kind == model.CauseKindProposal {
+		if !proposalCauseVisible(ctx) {
+			return nil
+		}
+	} else if !causeVisible(ctx, details.Detection) {
+		return nil
+	}
+	return &CommandCauseDetailsResolver{M: *details, deviceID: r.M.DeviceIncarnation}
+}
+
+type CommandCauseDetailsResolver struct {
+	M        model.CommandCauseDetails
+	deviceID sql.NullInt64
+}
+
+func (r *CommandCauseDetailsResolver) Kind() string        { return r.M.Kind }
+func (r *CommandCauseDetailsResolver) ProposalId() *string { return r.M.ProposalId }
+func (r *CommandCauseDetailsResolver) Detection() *CommandCauseResolver {
+	if r.M.Detection == nil {
+		return nil
+	}
+	return &CommandCauseResolver{M: *r.M.Detection, deviceID: r.deviceID}
+}
+
+type AgentProposalReferenceResolver struct{ token string }
+
+func (r *AgentProposalReferenceResolver) Area() string  { return "command-delivery" }
+func (r *AgentProposalReferenceResolver) Token() string { return r.token }
+
+func (r *CommandResolver) Proposal(ctx context.Context) *AgentProposalReferenceResolver {
+	details := r.CauseDetails(ctx)
+	if details == nil || details.M.Kind != model.CauseKindProposal || details.M.ProposalId == nil {
+		return nil
+	}
+	return &AgentProposalReferenceResolver{token: *details.M.ProposalId}
+}

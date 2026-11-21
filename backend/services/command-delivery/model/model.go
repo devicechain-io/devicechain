@@ -311,6 +311,8 @@ type Command struct {
 	// service may assert a cause (an automation's command); a person's or a batch's command has
 	// none. CauseKind is NULL exactly when there is no cause; the rest are written with it, by the
 	// same insert, and never rewritten. See CommandCause for what each one means.
+	// ProposalToken is the authoritative proposal link. NULL for all existing enqueue paths.
+	ProposalToken      sql.NullString `gorm:"size:64"`
 	CauseKind          sql.NullString `gorm:"size:16"`
 	CauseRuleId        sql.NullString `gorm:"type:text"`
 	CauseDetectionKind sql.NullString `gorm:"size:64"`
