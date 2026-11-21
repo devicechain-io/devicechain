@@ -35,7 +35,7 @@ type FacetValueImportRowResultResolver struct {
 }
 
 func (r *FacetValueImportRowResultResolver) Row() int32         { return r.M.Row }
-func (r *FacetValueImportRowResultResolver) EntityType() string { return r.M.EntityType }
+func (r *FacetValueImportRowResultResolver) MemberType() string { return r.M.MemberType }
 func (r *FacetValueImportRowResultResolver) Token() string      { return r.M.Token }
 func (r *FacetValueImportRowResultResolver) Key() string        { return r.M.Key }
 func (r *FacetValueImportRowResultResolver) Outcome() string    { return r.M.Outcome }

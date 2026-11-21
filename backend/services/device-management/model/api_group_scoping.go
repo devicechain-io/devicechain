@@ -606,18 +606,9 @@ func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, e
 		if err := write(tx); err != nil {
 			return err
 		}
-		if membership {
-			c, err := api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
-			change = c
-			if err != nil {
-				return err
-			}
-		}
 		var err error
-		if minted, err = api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, true); err != nil {
-			return err
-		}
-		return queueAccessChangeOnTx(tx, entityType, entityId, change)
+		change, minted, err = api.reconcileAttributeWriteOnTx(ctx, tx, entityType, entityId, attrKey, scope)
+		return err
 	})
 	if err != nil {
 		return err
@@ -629,6 +620,25 @@ func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, e
 	// pays nothing) — and announce a device that entered or left an access scope.
 	api.afterMembershipRecompute(ctx, entityType, entityId, change)
 	return nil
+}
+
+// reconcileAttributeWriteOnTx keeps single writes and facet imports on the same
+// membership, configuration and access-outbox path. Publish only after commit.
+func (api *Api) reconcileAttributeWriteOnTx(ctx context.Context, tx *gorm.DB, entityType string, entityId uint,
+	attrKey, scope string) (membershipChange, *DeviceConfigurationRevision, error) {
+	var change membershipChange
+	if membershipScopeEligible(entityType, scope) {
+		var err error
+		change, err = api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
+		if err != nil {
+			return change, nil, err
+		}
+	}
+	minted, err := api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, true)
+	if err != nil {
+		return change, nil, err
+	}
+	return change, minted, queueAccessChangeOnTx(tx, entityType, entityId, change)
 }
 
 // MembershipsForEntity returns the group@versions the entity currently belongs to (its

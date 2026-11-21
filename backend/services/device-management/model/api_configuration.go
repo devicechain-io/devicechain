@@ -173,28 +173,58 @@ func (api *Api) reconcileDeviceConfigurationOnTx(ctx context.Context, tx *gorm.D
 	if err != nil {
 		return nil, err
 	}
-	if written && slices.Contains(doc.Invalid, attrKey) {
-		return nil, &ConfigurationRefusal{Code: CodeConfigurationValueType, Message: fmt.Sprintf(
-			"attribute %q is declared as device configuration with a different value type, "+
-				"or its value cannot be carried as that type", attrKey)}
+	if err := validateConfigurationWrite(doc, attrKey, written); err != nil {
+		return nil, err
 	}
 	if len(doc.Canonical) > MaxConfigurationDocumentBytes {
-		if !written {
-			// A delete only shrinks the document. One still over the cap can be over it
-			// only because a later profile version declared more keys; refusing the delete
-			// would make it impossible to bring the device back under. Mint nothing: no
-			// revision over the cap ever exists, and the read API shows the device stale.
-			return nil, nil
-		}
-		return nil, &ConfigurationRefusal{Code: CodeConfigurationTooLarge, Message: fmt.Sprintf(
-			"the device's configuration document would be %d bytes, over the %d byte limit",
-			len(doc.Canonical), MaxConfigurationDocumentBytes)}
+		// A delete can shrink a document still over the cap after a profile change.
+		return nil, nil
 	}
 	rev, minted, err := mintConfigurationRevision(tx, deviceId, doc, versionId, configurationActor(ctx))
 	if err != nil || !minted {
 		return nil, err
 	}
 	return rev, nil
+}
+
+// validateConfigurationWrite is shared by preview and committed attribute writes.
+func validateConfigurationWrite(doc *ConfigurationDocument, attrKey string, written bool) error {
+	if written && slices.Contains(doc.Invalid, attrKey) {
+		return &ConfigurationRefusal{Code: CodeConfigurationValueType, Message: fmt.Sprintf(
+			"attribute %q is declared as device configuration with a different value type, "+
+				"or its value cannot be carried as that type", attrKey)}
+	}
+	if written && len(doc.Canonical) > MaxConfigurationDocumentBytes {
+		return &ConfigurationRefusal{Code: CodeConfigurationTooLarge, Message: fmt.Sprintf(
+			"the device's configuration document would be %d bytes, over the %d byte limit",
+			len(doc.Canonical), MaxConfigurationDocumentBytes)}
+	}
+	return nil
+}
+
+// previewConfigurationAttribute substitutes the proposed SHARED value in memory.
+// It neither writes attributes nor mints or publishes configuration revisions.
+func previewConfigurationAttribute(db *gorm.DB, attr *EntityAttribute) error {
+	if !configurationScopeEligible(attr.EntityType, attr.Scope) {
+		return nil
+	}
+	declared, _, err := activeConfigurationDeclaration(db, attr.EntityId)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(declared, func(k ConfigurationKey) bool { return k.Key == attr.AttrKey }) {
+		return nil
+	}
+	var attrs []*EntityAttribute
+	if err := db.Where("entity_type = ? AND entity_id = ? AND scope = ? AND attr_key <> ?",
+		attr.EntityType, attr.EntityId, attr.Scope, attr.AttrKey).Find(&attrs).Error; err != nil {
+		return err
+	}
+	doc, err := BuildConfigurationDocument(declared, append(attrs, attr))
+	if err != nil {
+		return err
+	}
+	return validateConfigurationWrite(doc, attr.AttrKey, true)
 }
 
 // mintConfigurationRevision appends a revision for doc unless the latest revision already

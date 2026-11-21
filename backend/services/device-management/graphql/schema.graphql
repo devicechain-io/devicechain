@@ -6708,7 +6708,7 @@ as on a single attribute write; blank values are INVALID. This operation does no
 clear attributes or create entities."""
 input FacetValueImportRow {
     """The member family: device, asset, area or customer."""
-    entityType: String!
+    memberType: String!
     """The existing entity's token in the caller's tenant."""
     token: String!
     """A facet key declared for this member family."""
@@ -6722,7 +6722,7 @@ type FacetValueImportRowResult {
     """One-based position within this call."""
     row: Int!
     """The supplied member family."""
-    entityType: String!
+    memberType: String!
     """The supplied entity token."""
     token: String!
     """The supplied facet key."""
@@ -6742,7 +6742,7 @@ type Mutation {
     with membership and configuration reconciliation; failures report REFUSED.
     Re-running identical normalized values reports EXISTS without another write.
     Different values replace the existing SHARED value. Later duplicate
-    (entityType, token, key) rows in this call are INVALID. Does not create entities."""
+    (memberType, token, key) rows in this call are INVALID. Does not create entities."""
     importFacetValues(
         """Values on existing entities, addressed by token."""
         rows: [FacetValueImportRow!]!
