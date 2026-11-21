@@ -53,10 +53,14 @@ namespace DeviceChain.Harborpulse.EditorTools
             {
                 var dir=OutputDirectory();app=PreviewApp();app.WaterTimeOverride=37.5f;app.HoldPreviewAt(12.5);
                 // the scene's size, for the performance budget: renderers, vertices, and how many of each cast shadows
-                var filters=app.World.Root.GetComponentsInChildren<MeshFilter>(true);
+                // the far level only: the near-detail sets are built hidden, drawn only close to a camera, and counted on their own line below
+                var filters=app.World.Root.GetComponentsInChildren<MeshFilter>(true).Where(f=>f.GetComponentInParent<NearDetailRoot>(true)==null).ToArray();
                 long vertices=filters.Sum(f=>(long)(f.sharedMesh!=null?f.sharedMesh.vertexCount:0));
                 long casting=filters.Where(f=>f.GetComponent<MeshRenderer>()!=null&&f.GetComponent<MeshRenderer>().shadowCastingMode!=UnityEngine.Rendering.ShadowCastingMode.Off).Sum(f=>(long)(f.sharedMesh!=null?f.sharedMesh.vertexCount:0));
                 Debug.Log("[harborpulse] world: "+filters.Length+" renderers, "+vertices+" vertices, "+casting+" of them casting shadows");
+                app.World.Detail.Stats(out var built,out var shown,out var nearVertices,out var shownVertices);
+                Debug.Log("[harborpulse] near detail at HOME: "+app.World.Detail.Count+" sets, "+built+" built hidden ("+nearVertices+" vertices), "+shown+" shown ("+shownVertices+" vertices)");
+                if(shown>0)throw new InvalidOperationException("HOME must draw the far level only, but "+shown+" near-detail sets are shown");
                 var checks=new List<Check>();
                 foreach(var vertical in new[]{false,true})
                 {

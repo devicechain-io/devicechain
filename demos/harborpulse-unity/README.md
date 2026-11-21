@@ -671,3 +671,70 @@ before forest savings and add no renderers. The seeded plan now has 444 trees (8
 
 Round-3 gates: locked restore, Release build, all 421 sidecar tests, and desktop/WebGL compile checks.
 No Unity run or commit was made.
+
+## U5 level of detail: richer buildings and vehicles near the camera
+
+HOME sees the town from 450-900 m, where a window frame is a fraction of a pixel; the ground-level story cameras
+see the first row of buildings, the sheds, the terminal, the lofts, the parked cars, the truck and the moored boats
+from 20-45 m. Each building and vehicle therefore has two levels.
+
+- **FAR (what HOME and every distant view draws).** The same merged tile meshes as before, with the fine detail taken
+  out: no window frames, sills, shutters or mullions, no clapboard courses, no steps. What stays is the silhouette
+  and what the night is carried by: walls, the real roof shape and overhang, chimneys, the porch slab and roof and its
+  end posts, the stone base, corner boards and door frames, the flat window panes (the shared `Windows`, `EastWindows`
+  and `WindowsDark` materials, so the night's lit windows are untouched), shop glass and awnings. The far town loses
+  about 171,000 vertices (an estimate, from the generation order: 1,585 windows lose a frame each, the rest is
+  courses, steps and one post per porch), and the renderer count is unchanged.
+- **NEAR (within 110 m of the active camera).** An extra set per building or vehicle, drawn on top of the far level:
+  window frames, sashes, mullions, sills and heads, shutters on some houses (chosen from a hash of the building's
+  position, never from the town's seeded streams), flower boxes, panelled doors with lights and transoms, stoops,
+  porch rails with balusters, newel posts and stairs, a bench, pots, firewood or a barrel on some porches, clapboard
+  and brick courses, board-and-batten, corrugated ribs, friezes, gutters and downpipes, shingle courses, dormer frames
+  and a second dormer, an attic window in some front gables, chimney flashing, corbels and pots, shopfront bays over a
+  bulkhead with a valance and brackets, sliding shed doors on their track with ramps, lobster pots and buoys, the lofts'
+  entrance, string courses, pilasters, loading doors and roof plant, the church's framed and pointed windows,
+  buttresses, louvres and finial, the terminal's entrance, the depot's roller doors, the ferry berth (pontoon planks,
+  rails, gangway, bollards) and the ferry itself (portholes, fenders, window frames, rails, bridge, funnel, life
+  rings). Vehicles get wheels with arch liners, rims and hubs (the cars' far boxes have none), glazing pillars, lamps,
+  mirrors, bumpers, door seams and handles; the truck gets a roof rack load (sandbags, cones, a hose coil, a pump,
+  cans) and chevrons; boats get lifelines and pulpits or a wheelhouse with frames, radar, aerials, buoys, a hauler,
+  an outboard, oars, planking and cleats; the hauled-out boat gets props, rails, window frames, a rudder and propeller.
+  No text or signage anywhere.
+- **The switch is additive.** A near set only adds parts over the far level's own walls, roof and window panes, so
+  nothing has to be hidden while it is shown: no hole can open, nothing pops but the added detail, the same windows
+  are lit in both levels, and at HOME every set is inactive. This is why the far meshes stay merged per tile (a
+  `LODGroup` would need a renderer per building, hundreds of extra renderers at HOME) and why there is no list of
+  buildings whose far mesh must disappear.
+- **Who decides.** `Model/DetailSwitch` is the whole decision and has no engine in it: a set enters at 110 m and
+  leaves at 130 m measured to the set's nearest edge (centre distance less its radius), at most 25 sets are near
+  at once (the nearest win, a set already near has a 6 m head start so the cap cannot flicker), the work allocates
+  nothing after construction, and it is retaken every four frames or when the camera has moved a metre.
+  `Visuals/DetailManager` owns the sets: it builds each one the first time it is wanted (or at load, inactive, when a
+  story camera can bring it within reach: the authored poses, 20 m of margin on each camera and 130 m about each
+  look point, from `DetailCandidates`) and switches the root on and off. The truck and a charger's car follow
+  their own transform every refresh; a car the view has hidden is never near. The planar reflection draws whichever
+  level the main camera has.
+- **The stills path.** `HarborpulseApp.Tick` refreshes the switch every frame; `RenderReflectionNow`, which every
+  Editor still calls just before `Camera.Render`, refreshes it forced for the camera's final position. A still shot
+  after `Rig.Select` or `DirectorCamera.ForcePose` therefore shows the level that camera would have in play. At HOME
+  nothing is near; `HarborHomeCheck` logs the near sets (built hidden, shown) and fails if any is shown at HOME. Its
+  world renderer and vertex counts leave the near roots out (they are hidden at HOME), so they remain comparable with
+  the earlier captures. Near roots sit under the town, the device rigs or a boat, so the HOME mask classes them with
+  their parent; they are scenery and never hide a device (they stay inside the lot the building reserved).
+- **Budget.** A near set is one vertex-coloured renderer (no shadows: it is all small trim, and the far body keeps
+  casting) plus one more per window material only where a set has windows of its own (the attic window and the second
+  dormer). Typical vertices per set: house 5.8 k (2.7-9.1 k), shopfront 4.6 k, commercial block 10.2 k, inn 13.8 k,
+  shed 2.6 k, church 3.2 k, lofts 12.6 k, terminal 6.8 k, depot 3.3 k, ferry berth 5.2 k, truck 3.9 k, parked or
+  charging car 2.1 k or 1.8 k, hauled boat 1.9 k, moored boats 0.6-1.7 k. From each authored ground-level pose
+  the sidecar tests find 6-17 near sets and about 23-90 k vertices, and bound every plan so twenty-five of the largest
+  houses stay under the 250 k budget.
+
+`NearDetailTests` pin: the hysteresis band (no change anywhere between 110 and 130 m), the 25-set cap and its
+stability, the range measured to the edge, a moving set switching by its position, an inactive set never near,
+the retake schedule, no allocation per decision, HOME in both aspects selecting nothing, every ground-level pose
+selecting something, every set a story camera or its 20 m margin can bring near being a load-time candidate,
+every near plan staying inside the lot or footprint the building reserved (and vehicles inside theirs plus
+6 cm of trim), no near box covering a far window pane, a frame for every lofts pane, bounded vertex cost per kind,
+and that the per-house choices come from the position and repeat. The sidecar and compile gates establish none of
+the visual result: the look of the near sets, HOME pixels, the stills' switch timing and frame time need the Unity
+capture rig (the budget to hold is the earlier 4-5 ms mean at 1920x1080).
