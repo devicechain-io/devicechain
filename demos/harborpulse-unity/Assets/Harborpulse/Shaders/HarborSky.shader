@@ -4,7 +4,10 @@
 // The procedural sky. A three-stop gradient graded by the time of day, the low sun's glow along the horizon, the sun and moon discs
 // where HarborSkyController puts their lights, a star field at night, and two cloud layers: high streaks and low chunky cumulus whose
 // cover, depth and colours follow the weather (separate clouds on a fair day, a building front, a closed dark deck with rain curtains
-// in the storm, breaking up afterwards). The story cameras look near the horizon, so the detail lives in the low sky. Every input is a
+// in the storm, breaking up afterwards). A low sun lights the cloud's bases from below, more strongly towards itself, and the moon
+// silvers the night's cloud, so the hour shows even in the part of the sky the sun and the moon never cross. Below the horizon the sky
+// is the haze the scenery fades into, which darkens from the horizon's colour to the far ground's with the ray's elevation
+// (DayLighting.HazeColor). The story cameras look near the horizon, so the detail lives in the low sky. Every input is a
 // global the controller sets from DayLighting each frame; the cloud moves by the scenario clock, so a still of an hour is always the same.
 Shader "Harborpulse/Sky"
 {
@@ -25,6 +28,9 @@ Shader "Harborpulse/Sky"
             float4 _HarborSkyMid;      // the middle sky
             float4 _HarborSkyLow;      // the horizon band
             float4 _HarborSkyHaze;     // the fog colour: the horizon line itself, so the haze over the land meets the sky without a seam
+            float4 _HarborSceneryFogLow; // the haze over far ground, below the horizon
+            float4 _HarborCloudUnder;  // rgb the low sun's light on the cloud's bases, a its strength
+            float _HarborMoonGlow;     // how strongly the moon silvers the cloud
             float4 _HarborSkyGlow;     // rgb the low sun's glow, a its strength
             float4 _HarborSunDir;      // towards the sun, w = disc visibility
             float4 _HarborSunColor;
@@ -149,6 +155,16 @@ Shader "Harborpulse/Sky"
                 cloudCol += _HarborSunColor.rgb * pow(saturate(sd), 10.0) * 0.40 * sunUp * (1.0 - depth);
                 cloudCol += _HarborMoonColor.rgb * pow(saturate(md), 40.0) * 0.10 * _HarborMoonDir.w * (1.0 - depth);
                 float3 highCol = lerp(_HarborCloudLit.rgb, _HarborCloudShade.rgb, 0.25 + 0.5 * depth);
+                // a low sun lights the bases from below: all round the sky, and more towards the sun, so east and west differ
+                float3 under = _HarborCloudUnder.rgb * _HarborCloudUnder.a * (0.38 + 0.62 * toward);
+                cloudCol += under * (1.0 - 0.8 * tone) * 0.9;
+                highCol += under * 0.55;
+                // the moon silvers the faces of the night's cloud, and the cloud round the moon most
+                float moonSide = saturate(md * 0.5 + 0.5);
+                moonSide = moonSide * moonSide * moonSide;
+                float3 silver = _HarborMoonColor.rgb * _HarborMoonGlow * (0.06 + 0.5 * moonSide * moonSide);
+                cloudCol += silver * (0.3 + 0.7 * tone);
+                highCol += silver * 0.4;
 
                 // rain curtains hang under the deck towards the horizon, slanted by the wind
                 // sampled round the compass on a circle, so there is no seam where a bearing would wrap
@@ -172,7 +188,10 @@ Shader "Harborpulse/Sky"
                 sky = lerp(sky, _HarborSkyHaze.rgb, haze);
                 // under a closed deck at sunset a last ember shows low in the west
                 sky += _HarborSkyGlow.rgb * _HarborSkyGlow.a * exp(-up * 26.0) * toward * 0.45 * step(0.0, h);
-                sky = lerp(sky, _HarborSkyHaze.rgb, step(h, 0.0));
+                // At and below the horizon: the horizon's haze, darkening to the far ground's. The scenery and the water draw the same
+                // function, which begins a hair above the horizon (0.004), so the sky joins it over that hair instead of stepping at zero.
+                float3 below = lerp(_HarborSkyHaze.rgb, _HarborSceneryFogLow.rgb, 1.0 - smoothstep(-0.05, 0.004, h));
+                sky = lerp(sky, below, 1.0 - smoothstep(0.0, 0.004, h));
                 return half4(max(sky, 0.0), 1.0);
             }
             ENDHLSL

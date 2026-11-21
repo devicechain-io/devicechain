@@ -61,8 +61,15 @@ namespace DeviceChain.Harborpulse.Visuals
             r.MergeFixed("Windscreen", "SideWindow-1", "SideWindow1", "Headlamps");
             r.MergeFixed("BlueStripe-1", "BlueStripe1");
             r.MergeFixed("LightStripe-1", "LightStripe1");
-            // the near level moves with the truck: its set is parented to the rig root and follows the truck's own position
-            detail?.Register(NearVehicles.Truck(), r.Root, Vector3.zero, Quaternion.identity, NearPalette.Vehicle(m.Render.GetColor("_BaseColor")), m.Surfaces, null, true);
+            // The near level is a whole truck that REPLACES these boxes while it is shown, so everything drawn so far is handed to the
+            // manager to hide, except the light bar: the platform's reports switch that, in both levels. The set is parented to the rig
+            // root and follows the truck's own position.
+            var far = new System.Collections.Generic.List<Renderer>();
+            foreach (var renderer in r.Root.GetComponentsInChildren<MeshRenderer>(true))
+                if (renderer.enabled && renderer.transform != r["LightBar"]) far.Add(renderer);
+            var paint = m.Render.GetColor("_BaseColor");
+            detail?.Register(NearVehicles.Truck(), r.Root, Vector3.zero, Quaternion.identity, new NearPalette(paint, paint, m.Charger.GetColor("_BaseColor"), paint), m.Surfaces, null, true,
+                far.ToArray());
             return r;
         }
     }

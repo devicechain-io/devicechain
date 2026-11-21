@@ -292,7 +292,9 @@ namespace DeviceChain.Harborpulse.Model.Director
             // horizontal half-angle is about 15 degrees), so 12 of 37 devices were in frame; this pose holds all three quays.
             // The land now stands far below this eye, so the haze-covered far ground ends well under the true horizon; the look is
             // steepened slightly (the horizon just above the frame) so the air over it is 8-14 % of the frame and the fog closes the view.
-            poses.Add("pose:home:portrait", new CameraPose(new Point3(-560, 300, -60), new Point3(40, -25, 10), 52));
+            // U6: the eye is lower and nearer and the look is flattened, so the horizon falls an eighth of the way down the frame: the
+            // sky is in it, the sun rises in it (due east), the harbour fills the lower half and the eastern uplands close the view.
+            poses.Add("pose:home:portrait", Stand(-520, 260, 30, 0, 10, 52, PortraitHorizon));
             poses.Add("pose:night-home", poses["pose:home"]);
             poses.Add("pose:storm-home", poses["pose:home"]);
             foreach (var pair in StoryPoses.Families)
@@ -347,6 +349,10 @@ namespace DeviceChain.Harborpulse.Model.Director
             // from inside the harbour, over the water off the basin, looking east-south-east across the quay's devices: no breakwater or lighthouse is
             // in front of the subject, and the east light stands at the right edge in the middle distance
             poses.Add("pose:east-quay:mouth-wide", Stand(-130, 9.5, 70, 150, -10, 56, .36));
+            // The night sky: HOME looks north and the sun and the moon cross the south, so neither ever enters it. This stands just off the
+            // east quay's north end and looks west-south-west across the water at the basin's lamps and the west light, with the horizon
+            // low in the frame: at StoryPoses.NightSkyHour the moon stands in the middle of it, 18 degrees up. Not a story pose.
+            poses.Add(StoryPoses.NightSky, Stand(118, 6.5, 56, -144, -89, 50, .62));
             var plain = fences[layout.Fences[0].Token];
             var centre = new Ground(plain.Average(p => p.X), plain.Average(p => p.Z));
             poses.Add("pose:plain:wide", Stand(centre.X - 46, 10, centre.Z - 60, centre.X, centre.Z, 45, .30));
@@ -365,6 +371,9 @@ namespace DeviceChain.Harborpulse.Model.Director
         /// <summary>A pose from an eye position looking at a ground point's x and z, its pitch chosen so the horizon falls at <paramref name="horizonFromTop"/> of the frame.</summary>
         /// <summary>Where the horizon falls in a lamp pose, from the top: below the middle, so the lantern has sky behind it.</summary>
         public const double LampHorizon = .52;
+
+        /// <summary>Where the horizon falls in the 9:16 HOME, from the top.</summary>
+        public const double PortraitHorizon = .12;
 
         static CameraPose Stand(double camX, double eye, double camZ, double subjectX, double subjectZ, double vfov, double horizonFromTop)
         {

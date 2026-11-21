@@ -44,6 +44,18 @@ namespace DeviceChain.Harborpulse.Visuals
             triangles.Add(i); triangles.Add(i + 2); triangles.Add(i + 3);
         }
 
+        /// <summary>A quad with a colour per corner (a wall that darkens towards its foot). The alpha, the shader's surface code, must be the same on all four.</summary>
+        public void Quad(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Color ca, Color cb, Color cc, Color cd)
+        {
+            var n = (Vector3.Cross(b - a, c - a) + Vector3.Cross(c - a, d - a)).normalized;
+            var i = vertices.Count;
+            vertices.Add(a); vertices.Add(b); vertices.Add(c); vertices.Add(d);
+            colours.Add(ca.linear); colours.Add(cb.linear); colours.Add(cc.linear); colours.Add(cd.linear);
+            for (var k = 0; k < 4; k++) normals.Add(n);
+            triangles.Add(i); triangles.Add(i + 1); triangles.Add(i + 2);
+            triangles.Add(i); triangles.Add(i + 2); triangles.Add(i + 3);
+        }
+
         public void Box(Vector3 at, Vector3 size, Color color, Quaternion rotation)
         {
             Vector3 P(float x, float y, float z) => at + rotation * Vector3.Scale(new Vector3(x, y, z), size * .5f);

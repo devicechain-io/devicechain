@@ -27,6 +27,10 @@ namespace DeviceChain.Harborpulse.Model.Director
         /// <summary>The ground-level poses that are not a family of device views.</summary>
         public static readonly string[] SpecialGround = { "pose:east-quay:mouth-wide", "pose:plain:wide", "pose:truck:chase", "pose:depot:wide" };
 
+        /// <summary>The rig's night-sky shot (not a story pose) and the scenario hour at which the moon stands in the middle of it.</summary>
+        public const string NightSky = "pose:basin:night-sky";
+        public const double NightSkyHour = 4;
+
         public static readonly string[] Home = { "pose:home", "pose:home:portrait", "pose:night-home", "pose:storm-home" };
 
         public static IEnumerable<string> GroundLevel()
