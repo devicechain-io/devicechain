@@ -516,6 +516,9 @@ under `.build/u2b/review-mutants/`. The normal verification gate also runs the P
 
 ## U3 art pass: town, hills and water
 
+> The hills, forest, rocks and HOME cameras described in this and the next two sections were superseded by
+> [U5 landform, forest, outcrops and cameras](#u5-art-pass-landform-forest-outcrops-and-cameras) below.
+
 The U2b town was a uniform grid of identical houses on six terraces, and the water mirrored it as a hard grid.
 U3 replaces both. `Scripts/Visuals/Assets/TownBuilder.cs` builds everything behind the waterfront, and it is all
 WORLD scenery: no device stands there and nothing in it reads the platform.
@@ -671,3 +674,75 @@ before forest savings and add no renderers. The seeded plan now has 444 trees (8
 
 Round-3 gates: locked restore, Release build, all 421 sidecar tests, and desktop/WebGL compile checks.
 No Unity run or commit was made.
+
+## U5 art pass: landform, forest, outcrops and cameras
+
+The U4 look read as one bare lawn of hill with no sky behind the story cameras. U5 lowers the ground, closes the view in
+haze, plants a wooded coast, seats the rock in the slope and drops the story cameras to eye level. It is all WORLD
+scenery and camera framing: presentation anchors, quays, device positions and the U4 prop-overlap checks did not move.
+
+- **Landform** (`Model/CoastalTerrain.cs`). The core is still the deck. Outside it the ground rises about 9 m across
+  the first 450 m (the town's apron), then rolls in knolls and hollows of 6-16 m with a smooth ceiling at 32 m above
+  the deck; nothing within 1,300 m of the core is higher than 34 m (the measured maximum is 18.4 m). From 6 m above
+  North Quay the bare-ground skyline is under 1 degree (limit 2.5), and from the East Quay and Basin eyes under 0.7
+  (limit 3). The skyline is a separate, distant ridge instead (`RidgeBuilder`, 155 quads = 310 triangles, no trees):
+  two or three overlapping hills 2.35-3.05 km out, with dome, cusp and plateau profiles, the highest crest 2.54 degrees
+  above the horizontal from the harbour and shoulders 1-1.8, falling to nothing at both ends. It sits under the HOME
+  checker's "ridge" mask with the terrain. The terrain mesh is the plan's own grid (`Model/TerrainGrid.cs`: 10 m cells
+  round the town, 20 m on the rolling ground, 50-100 m beyond, 200 m flat flanks to x = +-3.8 km), 125,688 vertices.
+  `TerrainGrid.MeshHeight` is the height of the two triangles actually drawn, which is what rocks and trees stand on.
+  The 4.8 km continuation is gone. A west headland where the near land falls to the sea was skipped: the far-water ring
+  covers only the sea south of the coast, so a falling coast would open holes rather than a horizon.
+- **View distance.** Scenery fog counts from the camera (no 900 m dead zone) and ramps in with the distance outside
+  the core (120-420 m), so the town and its yards stay crisp: about 54 % fog at 900 m and 88 % at 1,500 m at noon, 53 %
+  at 550 m in the storm. The shader multiplies the density by `SceneryFogGain` (6): the engine's own fog on the lit
+  materials and the water reads the same density and must stay light, so only the scenery gains it. The ridge has its
+  own lighter fog (vertex alpha 0.6 selects it; `RidgeFogScale`) and its foot dissolves into the haze by height: about
+  40 % transmission at noon, 13 % in the storm. Every camera far clip is 3,600 m.
+- **Forest.** 9,674 trees (the U4 plan had 444), 60 % conifers by count (spruce, fir, pine in deep greens, a few
+  blue-green, lighter toward the top tiers), 40 % broadleaf in three shapes (round maple, tall oval birch with a pale
+  trunk, broad oak) whose autumn colour follows a slow position noise, so gold, orange, crimson, russet and green-olive
+  come in drifts. Heights are 8-16 m in the forest and 5-10 m in yards. About 70 % of the open land 250-1,100 m out is
+  woodland in broad stands, with twelve clearings of 60-200 m (some touching the town's edge, one on a knoll summit),
+  planted on a jittered 8 m grid thinned to a 12 m crown spacing near the town (the vertex budget's price for full-detail
+  crowns) and 15-21 m beyond, fading to nothing at 1,250 m so nothing pops. Yard trees stand behind and beside about one
+  house in two, and the park carries trees on its perimeter only. No tree stands on a street, a lot, a quay, a park path
+  or lawn, within 14 m of an anchor, in a rock footprint, or on a story camera's line of sight. Detail is by distance
+  from the core, baked per tile: within 380 m 4-5 conifer tiers or a full crown with a side lobe; 380-800 m two tiers
+  or one low-poly crown with a short trunk; beyond, one or two four-sided cones or an eight-face blob (`TreeStyle`).
+  2,765 near, 4,433 medium and 2,476 far trees cost 393,116 + 215,235 + 50,196 = 658,547 vertices (limit 700,000) in
+  48 tile meshes. Trees still cast no shadows and sit on layer 29.
+- **Rock.** 62 outcrops in 16 clusters of 2-5 (the shore outside the quays, clearing flanks, woodland edges), each a
+  stepped, faceted granite ledge of 8-30 m in plan and 0.6-4 m high (never more than 0.4 of its plan radius), whose long
+  axis follows the contour. `Model/Outcrop.cs` fits each against the drawn terrain: the base ring is sunk until every
+  point along its edges, sampled every half metre, is below the surface (the tightest margin is 0.58 m), the tops follow
+  the fitted terrain plane, and the ground in a skirt round it is darkened. Footprints are in the registry, so trees and
+  props avoid them. They share the terrain tiles (4,560 vertices in all).
+- **Ground colour.** Forest floor under the wood, dry straw-green meadow in warmer and greener drifts between, heath
+  tone on steeper facets, lawn green only on the park and in yards, worn earth at the street edges. Per-facet variation
+  is a smooth noise plus under 1 %, so there is no checkerboard.
+- **Cameras.** HOME 16:9 is (0, 100, -420) looking at (0, 4, 50), vertical FOV 35: horizon 17.6 % down, sky 19.6 % by
+  the analytic silhouette (terrain, ridge and tree tops), flat-plane water 42 % (the same estimate gives 45 % for the U4
+  pose, where the mask measured 43.5 %), every device but the truck inside the frame with a 3 % margin, both breakwater
+  lighthouses, the mouth and most of each quay in frame, and the frame's bottom edge on the water at z = -240. HOME 9:16
+  is (-560, 300, -60) looking at (40, -25, 10), FOV 52: all 37 devices inside, sky 11.5 %. The land now stands far below
+  that eye, so the far ground ends well under the true horizon; the look is steepened a little rather than raised to keep
+  the sky share down. The ground-level story poses (`kiosk-ext`, `pair`, `close`, `wide`, `promenade`, `insert` for each
+  device, and `east-quay:mouth-wide`, `plain:wide`, `truck:chase`, `depot:wide`) now stand 6.5-10 m up with the look
+  flattened so the horizon falls 29-36 % from the top and the subject is in the middle third. A few step sideways so their
+  sight line passes beside a lamp or a gauge mast instead of through it. `well` and `well-locked` still look down into
+  the well.
+
+`U5CameraTests`, `U5ForestTests` and the extended `CoastalSceneryTests` pin these numbers: the terrain apron, ceiling and
+skyline rays, the ridge's crest angles, woodland cover, fog at 900 m, 1,500 m and 550 m, the ridge's fog, the 60/40
+species ratio, heights, no tree on any reservation (each check has a planted negative control), the vertex budget per band,
+the rock fit (a lifted base ring fails it), the HOME frames from pose, FOV and aspect, and every ground pose's horizon,
+middle third and line of sight. A literal-checksum test proves the 104 building lots and 71 street lamps are exactly what
+origin/main generated: the town's random stream is never read by the new rock and tree generation, which has its own
+seeds.
+
+Not verified without Unity (the sidecar and both compile checks do not run it): the shader's syntax and look, the HOME
+masks and the actual renderer and vertex totals (estimated at about 870 renderers and 1.29 M vertices against the
+budgets of 950 and 1.5 M), frame time, the rendered colours and silhouettes, and whether the far-clip edge of the sea and
+fogged ground meets the sky's below-horizon colour without a visible seam: the fog and the sky share the horizon colour,
+but the sky blends toward its ground colour just under the horizon.

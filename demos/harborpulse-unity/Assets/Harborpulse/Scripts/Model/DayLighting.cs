@@ -136,15 +136,32 @@ namespace DeviceChain.Harborpulse.Model
         public double HeightFogBase { get; internal set; }
         public double HeightFogFalloff { get; internal set; }
 
-        /// <summary>Matches the scenery shader's distance and midpoint-height optical depth. Near yards stay outside the height-fog ramp.</summary>
+        /// <summary>The scenery shader multiplies <see cref="FogDensity"/> by this (the planar and URP fog on every other material keep the plain value).</summary>
+        public const double SceneryFogGain = 6;
+
+        /// <summary>The distant ridge's own, lighter fog: its air density as a fraction of the scenery's, so it stays a readable shape at noon and nearly vanishes in the storm.</summary>
+        public const double RidgeFogScale = .34;
+
+        /// <summary>
+        /// Matches the scenery shader's distance and midpoint-height optical depth. Fog counts from the camera (about half at 900 m and
+        /// nine tenths by 1,500 m at noon, half at 550 m in the storm) but ramps in with the distance outside the core, so the town, its
+        /// yards and the quays stay crisp in every view.
+        /// </summary>
         public double SceneryTransmission(double distanceM, double cameraHeight, double worldHeight, double outsideCoreM)
         {
-            var depth = Math.Max(0, distanceM - 900);
-            var air = FogDensity * depth;
-            var t = Rgb.Clamp01((outsideCoreM - 1050) / 850);
+            var depth = Math.Max(0, distanceM);
+            var air = FogDensity * SceneryFogGain * depth;
+            var t = Rgb.Clamp01((outsideCoreM - 120) / 300);
             var inland = t * t * (3 - 2 * t);
             var exponent = Math.Max(-8, Math.Min(4, (HeightFogBase - (cameraHeight + worldHeight) * .5) * HeightFogFalloff));
             return Math.Exp(-(air * air + HeightFogDensity * Math.Exp(exponent) * depth) * inland);
+        }
+
+        /// <summary>The ridge's transmission at a distance: distance only, no height or core ramp (the shader also fades its foot into the haze by height).</summary>
+        public double RidgeTransmission(double distanceM)
+        {
+            var air = FogDensity * SceneryFogGain * RidgeFogScale * Math.Max(0, distanceM);
+            return Math.Exp(-air * air);
         }
 
         /// <summary>0 at full day .. 1 at full night: how strongly the lamps, windows and beacons should read.</summary>
@@ -231,9 +248,9 @@ namespace DeviceChain.Harborpulse.Model
             s.AmbientEquator = Max(s.Horizon.Scale(amb * 0.8 + 0.03), NightAmbientEquator);
             s.AmbientGround = Max(s.Ground.Scale(0.6), NightAmbientGround);
             s.FogColor = s.Horizon;
-            // haze gives the hills their distance; the storm thickens it
-            s.FogDensity = 0.00016 + 0.00018 * storm + 0.00002 * night;
-            s.HeightFogDensity = 0.00038 + 0.00040 * storm + 0.00004 * night;
+            // haze closes the view on purpose: scenery fog is about half at 900 m by day and at 550 m in the storm (see SceneryFogGain)
+            s.FogDensity = 0.00016 + 0.00008 * storm + 0.00001 * night;
+            s.HeightFogDensity = 0.00004 + 0.00020 * storm + 0.00002 * night;
             s.HeightFogBase = 65;
             s.HeightFogFalloff = 0.006;
             return s;

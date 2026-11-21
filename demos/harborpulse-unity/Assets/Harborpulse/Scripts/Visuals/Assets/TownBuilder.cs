@@ -115,39 +115,24 @@ namespace DeviceChain.Harborpulse.Visuals
             }
         }
 
-        /// <summary>The unchanged mapped deck and town slope, then a low coastal ridge with a rounded summit.</summary>
+        /// <summary>The mapped deck, a low apron under the town, then gently rolling ground; the skyline belongs to the distant ridge mesh.</summary>
         public static float Height(float x, float z)
         {
             return (float)CoastalTerrain.Height(x, z);
         }
 
-        static List<float> Axis(float from, float to, float denseUntil, float denseStep)
-        {
-            var v = new List<float>(); var step = denseStep; var x = from;
-            while (x < to)
-            {
-                v.Add(x);
-                if (Mathf.Abs(x) >= denseUntil || x >= denseUntil) step = Mathf.Min(step * 1.13f, 150);
-                x += step;
-            }
-            v.Add(to);
-            return v;
-        }
-
         void Terrain()
         {
             Backdrop = AssetRig.Node("Hills and forest", root, Vector3.zero);
-            // a rectilinear grid, dense (10 m) round the town and coarser outward, with no T-junction; quads inside the core are left out
-            var right = Axis(0, 2400, 720, 10);
-            // One coarse continuation closes the land behind the summit; it shares the existing edge tiles.
-            right.Add(4800);
-            var xs = new List<float>(); for (var i = right.Count - 1; i > 0; i--) xs.Add(-right[i]); xs.AddRange(right);
-            var zs = Axis(CoastZ, 2400, 820, 10);
-            zs.Add(4800);
-            TerrainBuilder.Build(Backdrop, scenery, xs, zs, Height, plan);
+            // the plan's own grid (10 m cells round the town, 20 m across the rolling ground, coarser out to the ridge's foot, flat far
+            // flanks past the far clip), so every rock and tree stands on exactly the surface drawn here; quads inside the core are left out
+            TerrainBuilder.Build(Backdrop, scenery, plan, Height);
+            // the one distant hazy ridge that carries the skyline
+            RidgeBuilder.Build(Backdrop, scenery);
             // the coast's face where the side lands meet the sea, and the strips that join the terrain to the quays' deck
-            new MeshKit().Slab(-4800, -CoreHalfX, CoastZ - 1, CoastZ, HarborWorld.SeabedY, Deck)
-                .Slab(CoreHalfX, 4800, CoastZ - 1, CoastZ, HarborWorld.SeabedY, Deck).Spawn("Coast", Backdrop, m.Stone);
+            var reach = (float)CoastalTerrain.TerrainHalfWidthM;
+            new MeshKit().Slab(-reach, -CoreHalfX, CoastZ - 1, CoastZ, HarborWorld.SeabedY, Deck)
+                .Slab(CoreHalfX, reach, CoastZ - 1, CoastZ, HarborWorld.SeabedY, Deck).Spawn("Coast", Backdrop, m.Stone);
             // the streets, draped over the ground
             var road = new MeshKit();
             foreach (var s in streets) Ribbon(road, s);
@@ -569,15 +554,16 @@ namespace DeviceChain.Harborpulse.Visuals
 
         // ---------------------------------------------------------------- trees
 
-        void Tree(Vector3 at, float height, bool town)
+        void Tree(Vector3 at, float height, TreeKind kind, bool town)
         {
-            at.y = Height(at.x,at.z)-.2f;
-            treeBuilder.Add(at,height,town);
+            // on the drawn surface (the two-triangle mesh), not the smooth field it was sampled from
+            at.y = (float)plan.Terrain.MeshHeight(at.x,at.z)-.15f;
+            treeBuilder.Add(at,height,kind,town);
         }
 
         void Trees()
         {
-            foreach(var p in plan.Props)if(p.Kind=="Tree")Tree(new Vector3((float)p.At.X,0,(float)p.At.Z),(float)p.Height,p.Area=="town");
+            foreach(var p in plan.Props)if(p.Kind=="Tree")Tree(new Vector3((float)p.At.X,0,(float)p.At.Z),(float)p.Height,(TreeKind)p.Variant,p.Area=="town");
         }
     }
 }

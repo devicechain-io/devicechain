@@ -199,7 +199,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 water = new HarborWaterController(transform, waterShader, map, world, 9000);
                 if (sceneCamera == null) sceneCamera = Camera.main;
                 if (sceneCamera == null) throw new InvalidOperationException("the scene has no camera");
-                sceneCamera.farClipPlane = 20000;
+                sceneCamera.farClipPlane = 3600;
                 sceneCamera.nearClipPlane = 0.3f;
                 rig = new HarborCameraRig(sceneCamera, map);
                 directorCamera = new DirectorCamera(sceneCamera, map, portrait);

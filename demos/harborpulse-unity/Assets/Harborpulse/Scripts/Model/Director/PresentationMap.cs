@@ -283,32 +283,67 @@ namespace DeviceChain.Harborpulse.Model.Director
         static Ground[] Rect(double x0, double z0, double x1, double z1) => new[] { new Ground(x0, z0), new Ground(x1, z0), new Ground(x1, z1), new Ground(x0, z1) };
         void AddPoses()
         {
-            poses.Add("pose:home", new CameraPose(new Point3(0, 110, -420), new Point3(0, 0, 40), 30));
+            // HOME, 16:9: lower and flatter than the first cut, wider, aimed above the water so the harbour sits in the lower
+            // four fifths and the horizon falls a fifth of the way down; both breakwater lighthouses, the mouth and all three
+            // quays stay inside the frame with a margin, and its bottom edge meets the water south of z = -190.
+            poses.Add("pose:home", new CameraPose(new Point3(0, 100, -420), new Point3(0, 4, 50), 35));
             // The 9:16 HOME looks east along the horseshoe from over the western town: the harbour's long (x) axis then runs up
             // the tall frame. The storyboard's first draft, (0, 160, -330) looking north, holds only North Quay at 9:16 (its
             // horizontal half-angle is about 15 degrees), so 12 of 37 devices were in frame; this pose holds all three quays.
-            poses.Add("pose:home:portrait", new CameraPose(new Point3(-560, 300, -60), new Point3(40, 0, 10), 52));
+            // The land now stands far below this eye, so the haze-covered far ground ends well under the true horizon; the look is
+            // steepened slightly (the horizon just above the frame) so the air over it is 8-14 % of the frame and the fog closes the view.
+            poses.Add("pose:home:portrait", new CameraPose(new Point3(-560, 300, -60), new Point3(40, -25, 10), 52));
             poses.Add("pose:night-home", poses["pose:home"]);
             poses.Add("pose:storm-home", poses["pose:home"]);
-            foreach (var pair in new[] { ("pump-north", "hp-pump-north"), ("pump-east", "hp-pump-east"), ("pump-basin", "hp-pump-basin"), ("chargers-east", "hp-charger-east-1"), ("chargers-basin", "hp-charger-basin-2"), ("lamp-east", "hp-light-east-3"), ("gauge-north", "hp-gauge-north-3"), ("gauge-east", "hp-gauge-east-1"), ("terminal", "hp-meter-ferry-terminal"), ("north-quay", "hp-light-north-1"), ("charger-north", "hp-charger-north-1") })
-                foreach (var suffix in new[] { "kiosk-ext", "well", "well-locked", "pair", "close", "wide", "promenade", "insert" })
+            foreach (var pair in StoryPoses.Families)
+            {
+                var a = anchors[pair.Token];
+                // Stand off on the device's water side (its quay's wall faces the harbour), so a close pose looks back at
+                // the device across the quay edge instead of into the ground behind it.
+                var quay = QuayFor(layout.Devices.First(d => d.Token == pair.Token));
+                var wx = quay == "hp-east-quay" ? -1.0 : quay == "hp-basin" ? 1.0 : 0; var wz = quay == "hp-north-quay" ? -1.0 : 0;
+                foreach (var suffix in StoryPoses.GroundSuffixes)
                 {
-                    // Stand off on the device's water side (its quay's wall faces the harbour), so a close pose looks back at
-                    // the device across the quay edge instead of into the ground behind it.
-                    var a = anchors[pair.Item2]; var close = suffix == "well" || suffix == "well-locked";
-                    var quay = QuayFor(layout.Devices.First(d => d.Token == pair.Item2));
-                    var wx = quay == "hp-east-quay" ? -1.0 : quay == "hp-basin" ? 1.0 : 0; var wz = quay == "hp-north-quay" ? -1.0 : 0;
-                    var back = close ? 16 : 38; var up = close ? 10 : 24;
-                    poses.Add("pose:" + pair.Item1 + ":" + suffix, new CameraPose(new Point3(a.X + wx * back, up, a.Z + wz * back), new Point3(a.X, 2, a.Z), close ? 42 : 38));
+                    // Ground-level views: the eye is 5-8 m above the deck and the look is flattened until the horizon falls about
+                    // 30 % of the way down, so the sky shows and the device stays in the middle third of the frame.
+                    double back, eye, fov, horizon = .29;
+                    switch (suffix)
+                    {
+                        case "kiosk-ext": back = 36; eye = 8; fov = 38; break;
+                        case "pair": back = 34; eye = 7.6; fov = 38; break;
+                        case "close": back = 22; eye = 6.6; fov = 36; break;
+                        case "wide": back = 52; eye = 10; fov = 44; horizon = .30; break;
+                        case "promenade": back = 44; eye = 8.6; fov = 40; horizon = .30; break;
+                        default: back = 28; eye = 7; fov = 36; break;
+                    }
+                    // Some stand-off lines run straight through a lamp or a gauge mast on the quay edge; a sideways step of the eye clears them.
+                    var side = Sidestep(pair.Family);
+                    poses.Add("pose:" + pair.Family + ":" + suffix, Stand(a.X + wx * back + (wx == 0 ? side : 0), eye, a.Z + wz * back + (wx == 0 ? 0 : side), a.X, a.Z, fov, horizon));
                 }
-            poses.Add("pose:east-quay:mouth-wide", new CameraPose(new Point3(30, 55, -180), new Point3(175, 0, 20), 40));
+                foreach (var suffix in StoryPoses.WellSuffixes)
+                    poses.Add("pose:" + pair.Family + ":" + suffix, new CameraPose(new Point3(a.X + wx * 16, 10, a.Z + wz * 16), new Point3(a.X, 2, a.Z), 42));
+            }
+            // Outside the quay the eye sits just above the water and the look is flattened to put the horizon about a third of the way down.
+            poses.Add("pose:east-quay:mouth-wide", Stand(30, 10, -180, 160, 25, 44, .36));
             var plain = fences[layout.Fences[0].Token];
             var centre = new Ground(plain.Average(p => p.X), plain.Average(p => p.Z));
-            poses.Add("pose:plain:wide", new CameraPose(new Point3(centre.X - 46, 60, centre.Z - 60), new Point3(centre.X, 0, centre.Z), 45));
+            poses.Add("pose:plain:wide", Stand(centre.X - 46, 10, centre.Z - 60, centre.X, centre.Z, 45, .30));
             var direction = Road[1]; var dx = direction.X - Depot.X; var dz = direction.Z - Depot.Z;
             var length = Math.Sqrt(dx * dx + dz * dz);
-            poses.Add("pose:truck:chase", new CameraPose(new Point3(centre.X - 30 * dx / length, 14, centre.Z - 30 * dz / length), new Point3(centre.X, 0, centre.Z), 42));
-            poses.Add("pose:depot:wide", new CameraPose(new Point3(Depot.X - 31, 35, Depot.Z - 43), new Point3(Depot.X, 0, Depot.Z), 45));
+            poses.Add("pose:truck:chase", Stand(centre.X - 30 * dx / length, 6.5, centre.Z - 30 * dz / length, centre.X, centre.Z, 42, .30));
+            // from the south-east, so the yard building is not between the eye and the truck
+            poses.Add("pose:depot:wide", Stand(Depot.X + 24, 10, Depot.Z - 43, Depot.X, Depot.Z, 45, .30));
+        }
+
+        /// <summary>Sideways step (metres along the quay's wall) of a family's ground-level eye, so its sight line passes beside the lamps and masts on the quay edge.</summary>
+        static double Sidestep(string family) => family == "pump-east" || family == "pump-basin" ? 4 : family == "chargers-east" ? -16 : 0;
+
+        /// <summary>A pose from an eye position looking at a ground point's x and z, its pitch chosen so the horizon falls at <paramref name="horizonFromTop"/> of the frame.</summary>
+        static CameraPose Stand(double camX, double eye, double camZ, double subjectX, double subjectZ, double vfov, double horizonFromTop)
+        {
+            var distance = Math.Sqrt((subjectX - camX) * (subjectX - camX) + (subjectZ - camZ) * (subjectZ - camZ));
+            var down = (1 - 2 * horizonFromTop) * CameraMath.TanHalf(vfov);
+            return new CameraPose(new Point3(camX, eye, camZ), new Point3(subjectX, eye - distance * down, subjectZ), vfov);
         }
         public CameraPose Pose(string name) => poses.TryGetValue(name, out var pose) ? pose : throw new FormatException("unknown pose " + name);
     }
