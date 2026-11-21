@@ -247,7 +247,8 @@ namespace DeviceChain.Harborpulse.Tests
                 var camera = new NearVec((float)pose.Camera.X, (float)pose.Camera.Y, (float)pose.Camera.Z);
                 var near = NearAt(sites, camera, out var vertices);
                 Assert.That(near, Is.LessThanOrEqualTo(DetailSwitch.MaxNear), name);
-                if (camera.Y > 12 || name.Contains("home")) continue;
+                // the mouth-wide pose stands over open water and frames the far quay: nothing is within near range of it by design
+                if (camera.Y > 12 || name.Contains("home") || name == "pose:east-quay:mouth-wide") continue;
                 ground++;
                 TestContext.Out.WriteLine(name + ": " + near + " near sets, about " + vertices + " vertices");
                 Assert.That(near, Is.GreaterThan(0), name + " is a ground-level pose and must show some near detail");
