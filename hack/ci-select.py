@@ -105,6 +105,10 @@ DOCS_DEPLOY = [
     "docs/i18n/*/docusaurus-plugin-content-docs/current/deployment/**",
 ]
 READERS = [
+    # fleet_roots_test.go — parses the fleet roots' own files (provider set, variables, outputs, encryption, backend).
+    ("deploy", ".", [
+        "deploy/fleet/**",
+    ], [], "fleet_roots_test.go"),
     # plan_fixtures_test.go — scans the sanitized plan-gate fixtures for confidential material.
     ("deploy", ".", [
         "deploy/gke/fixtures/**",
