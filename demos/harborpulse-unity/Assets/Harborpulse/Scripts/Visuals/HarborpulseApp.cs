@@ -118,6 +118,23 @@ namespace DeviceChain.Harborpulse.Visuals
         /// <summary>Stills and rehearsal: when set, the water's wave clock is this instead of the frame clock.</summary>
         public float? WaterTimeOverride { get; set; }
 
+        bool previewFairWeather;
+
+        /// <summary>
+        /// A look check of the OFFLINE PREVIEW only: the sky, the light, the rain and the sea are drawn for a dry, calm day in place of the
+        /// scenario's weather, so an hour the story's storm always covers (every dusk) can be judged as a clear one. It changes no reading,
+        /// no cue and nothing a live run draws, and a still made with it says so in its stamp; a live scene refuses it.
+        /// </summary>
+        public bool PreviewFairWeather
+        {
+            get => previewFairWeather;
+            set
+            {
+                if (value && !Offline) throw new InvalidOperationException("the fair-weather look check is the offline preview's; a live scene draws the scenario's weather");
+                previewFairWeather = value;
+            }
+        }
+
         /// <summary>Preview only: hold the day at an hour (a still frame).</summary>
         public void HoldPreviewAt(double hourOfDay)
         {
@@ -143,6 +160,8 @@ namespace DeviceChain.Harborpulse.Visuals
         {
             // the stills path never runs Update: bring the near detail to this camera before anything is drawn
             world?.Detail.Refresh(sceneCamera.transform.position, true);
+            // and the wells' tags: the last Tick decided them for the camera it had, which a still may have moved since
+            views?.FrameWells(sceneCamera.transform.position, sceneCamera.transform.forward);
             reflection?.RenderNow();
         }
         void LateUpdate() => reflection?.LateTick();
@@ -329,13 +348,14 @@ namespace DeviceChain.Harborpulse.Visuals
             frame = model.Update(source, clock, now, Offline && previewHeld);
             if (!Offline) ApplyMembership(source, now);
             var hour = clock.HourOfDay;
-            weather = frame.World.Weather;
+            weather = PreviewFairWeather ? new Weather(0, 0) : frame.World.Weather;
             var state = DayLighting.Evaluate(hour, weather);
             waterTime = WaterTimeOverride ?? waterTime + dt;
             sky.Apply(state, waterTime);
             mats.SetNight((float)state.Night, (float)frame.World.EastFeederOutage);
+            mats.SetRain(state);
             grading.Apply(state);
-            views.Apply(frame, state, sceneCamera.transform.position, dt, waterTime);
+            views.Apply(frame, state, sceneCamera.transform.position, dt, waterTime, weather, sceneCamera.transform.forward);
             TickDirector(source, now, dt);
             ApplyMappedTruck(source, now);
             world.Detail.Refresh(sceneCamera.transform.position);
