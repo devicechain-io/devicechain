@@ -107,6 +107,7 @@ namespace DeviceChain.Harborpulse.Visuals
 
             Flow = Emissive("flow", new Color(0.1f, 0.55f, 1f), 1.2f);
             WorldCue = Emissive("world-cue", new Color(0.55f, 0.75f, 0.88f), 1.1f);
+            Rain = Emissive("rain", RainCool, 1.1f);
             Failed = Emissive("failed", new Color(1f, 0.32f, 0.25f), 1.2f);
             EastWindows = Emissive("east-windows", new Color(1f, 0.78f, 0.48f), 0);
             WellGlass = Make("well-glass", new Color(0.55f, 0.8f, 0.85f, 0.12f), 0.85f);
@@ -120,6 +121,11 @@ namespace DeviceChain.Harborpulse.Visuals
             for (var i = 0; i < 6; i++)
                 Courses[i] = Matte(Make("stone-course-" + i, new Color(0.43f + i * 0.025f, 0.42f + i * 0.023f, 0.39f + i * 0.022f), 0.2f));
             LampOn = Emissive("lamp-on", new Color(1.0f, 0.86f, 0.62f), 4f);
+            var tagShader = Resources.Load<Shader>("HarborWorldTag");
+            if (tagShader == null) throw new InvalidOperationException("HarborWorldTag shader missing from Resources");
+            WorldTag = new Material(tagShader) { name = "Harbor/world-tag" };
+            byName["world-tag"] = WorldTag;
+            SyncTagAtlas();
             var glowShader = Resources.Load<Shader>("HarborGlow");
             if (glowShader == null) throw new InvalidOperationException("HarborGlow shader missing from Resources");
             LampHalo = new Material(glowShader) { name = "Harbor/lamp-halo" };
@@ -138,8 +144,20 @@ namespace DeviceChain.Harborpulse.Visuals
         public Material Surfaces { get; }
         public Material AlarmText { get; }
         public Material AlarmPlate { get; }
+        /// <summary>The font material for a tag that stands at a place in the world and is hidden by what is in front of it (the wet well's level tags).</summary>
+        public Material WorldTag { get; }
+
+        /// <summary>The built-in font can move to a new atlas texture when it grows; the tag material follows it.</summary>
+        public void SyncTagAtlas()
+        {
+            var atlas = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf").material.mainTexture;
+            if (WorldTag.mainTexture != atlas) WorldTag.mainTexture = atlas;
+        }
         public Material Flow { get; }
         public Material WorldCue { get; }
+        /// <summary>The rain in the air: the WORLD cue's cool white, warmed when the low sun lights it through the break under the deck.</summary>
+        public Material Rain { get; }
+        static readonly Color RainCool = new Color(0.55f, 0.75f, 0.88f);
         public Material Failed { get; }
         public Material EastWindows { get; }
         public Material WellGlass { get; }
@@ -246,6 +264,15 @@ namespace DeviceChain.Harborpulse.Visuals
             EastTownLamp.SetColor(BaseColor, Color.Lerp(new Color(0.55f, 0.55f, 0.52f), new Color(1.0f, 0.85f, 0.6f), lit * (1 - outage)));
             EastWindows.SetColor(BaseColor, Color.Lerp(new Color(0.10f, 0.12f, 0.15f), new Color(0.55f, 0.45f, 0.30f), night * (1 - outage)));
             Windows.SetColor(BaseColor, Color.Lerp(new Color(0.16f, 0.20f, 0.24f), new Color(0.55f, 0.45f, 0.30f), night));
+        }
+
+        /// <summary>Colours the rain by the sky: cool by default, gold while the break under the storm's deck lights it from behind.</summary>
+        public void SetRain(DeviceChain.Harborpulse.Model.SkyState sky)
+        {
+            var warm = new Color((float)sky.BreakColor.R, (float)sky.BreakColor.G, (float)sky.BreakColor.B);
+            var c = Color.Lerp(RainCool, warm, (float)sky.HorizonBreak * 0.7f);
+            Rain.SetColor(BaseColor, c);
+            Rain.SetColor(EmissionColor, c * 1.1f);
         }
 
         Material Make(string name, Color color, float smoothness, float metallic = 0)

@@ -30,6 +30,90 @@ namespace DeviceChain.Harborpulse.Model
         public double PlanSize => 2 * Radius;
         public double Protrusion => Top - GroundAtCentre;
 
+        /// <summary>
+        /// The loose rock on the ledge: angular blocks that break its stepped outline, and on the larger ledges a tor, two or three slabs
+        /// stacked on the crown. Each is eight corners, [0..3] round the bottom and [4..7] above them. A block's bottom is under the DRAWN
+        /// terrain at every one of its corners (<see cref="BlockSinkM"/>), so it is a prism that comes up through the ledge, never a stone
+        /// set down on it; its plan stays inside the ledge's own rectangle, which the registry already reserves.
+        /// </summary>
+        public Point3[][] Blocks { get; private set; } = new Point3[0][];
+
+        /// <summary>The highest point of the ledge and its blocks, in WORLD metres.</summary>
+        public double Peak { get; private set; }
+
+        /// <summary>How far a block's bottom lies under the lowest drawn ground at its corners.</summary>
+        public const double BlockSinkM = .5;
+
+        /// <summary>A tor stands on ledges at least this wide in plan, and rises at most this far above the ledge's own top (and at most <see cref="TorRadiusShare"/> of its radius).</summary>
+        public const double TorMinRadiusM = 11, TorMaxRiseM = 8, TorRadiusShare = .46;
+
+        static Point3[] Block(TerrainGrid grid, PropFootprint frame, double lx, double lz, double halfA, double halfB, double yawRad, double top, double taper, double tilt, int seed, int n)
+        {
+            var c = new Point3[8];
+            double cs = Math.Cos(yawRad), sn = Math.Sin(yawRad);
+            var low = double.MaxValue;
+            var plan = new Ground[4];
+            for (var i = 0; i < 4; i++)
+            {
+                double ax = (i == 0 || i == 3 ? -1 : 1) * halfA, bz = (i < 2 ? -1 : 1) * halfB;
+                plan[i] = new Ground(lx + ax * cs - bz * sn, lz + ax * sn + bz * cs);
+                var p = frame.Local(plan[i].X, plan[i].Z);
+                low = Math.Min(low, grid.MeshHeight(p.X, p.Z));
+            }
+            for (var i = 0; i < 4; i++)
+            {
+                var p = frame.Local(plan[i].X, plan[i].Z);
+                c[i] = new Point3(p.X, low - BlockSinkM, p.Z);
+                // the top is smaller, skewed a little and never level: a split block, not a brick
+                double tx = lx + (plan[i].X - lx) * taper * (.86 + .28 * H(seed, 60 + n, i)), tz = lz + (plan[i].Z - lz) * taper * (.86 + .28 * H(seed, 70 + n, i));
+                var q = frame.Local(tx, tz);
+                c[4 + i] = new Point3(q.X, top - tilt * H(seed, 80 + n, i), q.Z);
+            }
+            return c;
+        }
+
+        void AddBlocks(TerrainGrid grid, PropFootprint frame, double mean, double gx, double gz, double protrusion)
+        {
+            var radius = Radius;
+            Peak = Top;
+            if (radius < 5) return;
+            var blocks = new System.Collections.Generic.List<Point3[]>();
+            // the ledge's own surface at a point of its plan, near enough: the fitted plane, and the stepped rise falling away from the crown
+            double Surface(double lx, double lz)
+            {
+                var u = Math.Sqrt(lx * lx / (HalfX * HalfX) + lz * lz / (HalfZ * HalfZ));
+                return mean + .55 * (gx * lx + gz * lz) + protrusion * (1 - CoastalTerrain.Smooth(.3, .95, u));
+            }
+            var loose = 2 + (int)(H(Seed, 50, 0) * 2.999) + (radius >= 12 ? 1 : 0);
+            for (var n = 0; n < loose; n++)
+            {
+                // on the shoulders: between a third and 0.58 of the way out, all round
+                var a = (n + H(Seed, 51, n)) * 2 * Math.PI / loose;
+                var u = .30 + .28 * H(Seed, 52, n);
+                double lx = HalfX * u * Math.Cos(a), lz = HalfZ * u * Math.Sin(a);
+                var size = Math.Max(1.0, Math.Min(3.8, radius * (.12 + .11 * H(Seed, 53, n))));
+                var rise = Math.Min(3.2, size * (.55 + .7 * H(Seed, 54, n)));
+                blocks.Add(Block(grid, frame, lx, lz, size, size * (.6 + .35 * H(Seed, 55, n)), H(Seed, 56, n) * Math.PI, Surface(lx, lz) + rise, .72, rise * .3, Seed, n));
+            }
+            if (radius >= TorMinRadiusM && H(Seed, 57, 0) < .7)
+            {
+                // the tor: a broad slab on the crown, a narrower one on it, and on the largest ledges a cap stone, each turned from the last
+                var rise = Math.Min(TorMaxRiseM, TorRadiusShare * radius) * (.72 + .28 * H(Seed, 58, 0));
+                var slabs = radius >= 14 ? 3 : 2;
+                var yaw = H(Seed, 59, 0) * Math.PI;
+                double ox = (H(Seed, 61, 0) - .5) * .16 * HalfX, oz = (H(Seed, 62, 0) - .5) * .16 * HalfZ;
+                for (var s = 0; s < slabs; s++)
+                {
+                    var half = Math.Min(5.5, radius * .3) * (1 - .27 * s);
+                    var topY = Surface(ox, oz) + rise * (s + 1) / slabs;
+                    blocks.Add(Block(grid, frame, ox + (H(Seed, 63, s) - .5) * half * .5, oz + (H(Seed, 64, s) - .5) * half * .5, half, half * (.62 + .25 * H(Seed, 65, s)),
+                        yaw + s * .7 + H(Seed, 66, s) * .5, topY, .80, rise * .1, Seed, 10 + s));
+                }
+            }
+            Blocks = blocks.ToArray();
+            foreach (var b in Blocks) for (var i = 4; i < 8; i++) Peak = Math.Max(Peak, b[i].Y);
+        }
+
         /// <summary>The footprint the registry reserves: the plan rectangle plus a metre and a half of margin each way.</summary>
         public PropFootprint Footprint(string id) => new PropFootprint(id, Center, 2 * HalfX + 3, 2 * HalfZ + 3, YawDeg);
 
@@ -108,11 +192,13 @@ namespace DeviceChain.Harborpulse.Model
                 if (top - ground <= limit)
                 {
                     if (top - ground < .6) return null;
-                    return new Outcrop
+                    var fitted = new Outcrop
                     {
                         Center = c, YawDeg = yawDeg, HalfX = halfX, HalfZ = halfZ, Rings = rings, Seed = seed,
                         Crown = new Point3(c.X, crownY, c.Z), GroundAtCentre = ground, Top = top,
                     };
+                    fitted.AddBlocks(grid, frame, mean, gx, gz, protrusion);
+                    return fitted;
                 }
                 protrusion *= .88;
             }

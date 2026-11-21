@@ -18,6 +18,7 @@ Shader "Harborpulse/CoastalScenery"
             #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "Assets/Harborpulse/Shaders/HarborHaze.hlsl"
             float4 _HarborSceneryFog; // density, height density, base height, falloff
             float4 _HarborSceneryFogColor;
             float4 _HarborSceneryFogLow; // the haze over far ground: a ray below the horizon fades to this (DayLighting.HazeColor)
@@ -142,12 +143,17 @@ Shader "Harborpulse/CoastalScenery"
                     float ridgeAir = _HarborSceneryFog.x * 3.5 * 0.40 * distanceM;
                     float foot = i.surface < 0.63 ? saturate((i.world.y - 6.0) / 50.0)
                         : i.surface < 0.69 ? saturate((i.world.y - 4.0) / 26.0) : saturate((i.world.y - 4.0) / 14.0);
-                    transmission = exp(-ridgeAir * ridgeAir) * foot;
+                    float layerT = exp(-ridgeAir * ridgeAir) * foot;
+                    // Seen from well above (the 9:16 HOME stands 230 m up and looks along the coast at the eastern uplands), a layer lies in
+                    // the same haze as the ground round it: with its lighter fog alone it stood out of that haze as a dark lens. Edge-on
+                    // from the 16:9 HOME and from the quays (the ray within 1.7 degrees of level) nothing changes.
+                    float above = smoothstep(0.03, 0.09, -(i.world.y - _WorldSpaceCameraPos.y) / max(distanceM, 1.0));
+                    transmission = lerp(layerT, layerT * (0.40 + 0.60 * transmission), above);
                 }
                 // The haze a ray fades into depends on its elevation: the horizon's colour along the horizon, the darker far-ground haze
                 // below it. The sky shader draws the same function below the horizon, so the land's far edge has no seam.
-                float rayY = (i.world.y - _WorldSpaceCameraPos.y) / max(distanceM, 1.0);
-                float3 hazeColor = lerp(_HarborSceneryFogColor.rgb, _HarborSceneryFogLow.rgb, 1.0 - smoothstep(-0.05, 0.004, rayY));
+                float3 ray = (i.world - _WorldSpaceCameraPos) / max(distanceM, 1.0);
+                float3 hazeColor = HarborHazeColor(ray, _HarborSceneryFogColor.rgb, _HarborSceneryFogLow.rgb);
                 return half4(lerp(hazeColor, lit, transmission), 1);
             }
             ENDHLSL

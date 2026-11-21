@@ -51,6 +51,7 @@ Shader "Harborpulse/Water"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareOpaqueTexture.hlsl"
             #include "HarborWaves.hlsl"
+            #include "Assets/Harborpulse/Shaders/HarborHaze.hlsl"
 
             CBUFFER_START(UnityPerMaterial)
                 float4 _ShallowColor;
@@ -74,6 +75,8 @@ Shader "Harborpulse/Water"
             float4 _HarborSceneryFogLow;   // the haze over far ground and far water, below the horizon
             float _HarborStorm;
             float _HarborRain;
+            float4 _HarborBreak;   // rgb the sky in the break under the storm's deck, a its strength (HarborSkyController)
+            float4 _HarborSunDir;  // towards the sun
             float _HarborNight;
             float4 _HarborWellDiscs[3]; // world X, Z, outer well radius; only this harbour shader uses the mask
             int _HarborWellCount;
@@ -200,7 +203,12 @@ Shader "Harborpulse/Water"
             float3 SkyColour(float3 dir)
             {
                 float up = saturate(dir.y);
-                return lerp(_HarborSkyHorizon.rgb, _HarborSkyZenith.rgb, pow(up, 0.5));
+                float3 sky = lerp(_HarborSkyHorizon.rgb, _HarborSkyZenith.rgb, pow(up, 0.5));
+                // the break under the storm's deck is mirrored too: a low band of lit sky towards the sun (HarborSky.shader draws the same reach)
+                float2 az = normalize(dir.xz + float2(1e-5, 0.0));
+                float2 sunAz = normalize(_HarborSunDir.xz + float2(1e-5, 0.0));
+                float reach = saturate((dot(az, sunAz) + 0.35) / 1.35);
+                return sky + _HarborBreak.rgb * (_HarborBreak.a * reach * exp(-up * 9.0) * 0.6);
             }
 
             half4 Frag(Varyings i, bool frontFace : SV_IsFrontFace) : SV_Target
@@ -292,8 +300,7 @@ Shader "Harborpulse/Water"
                 // coast, and with both it was fogged twice.
                 float away = distance(_WorldSpaceCameraPos, i.positionWS);
                 float seaAir = _HarborSceneryFog.x * 3.5 * max(0.0, away - 350.0);
-                float rayY = (i.positionWS.y - _WorldSpaceCameraPos.y) / max(away, 1.0);
-                float3 seaHaze = lerp(_HarborSceneryFogColor.rgb, _HarborSceneryFogLow.rgb, 1.0 - smoothstep(-0.05, 0.004, rayY));
+                float3 seaHaze = HarborHazeColor((i.positionWS - _WorldSpaceCameraPos) / max(away, 1.0), _HarborSceneryFogColor.rgb, _HarborSceneryFogLow.rgb);
                 colour = lerp(seaHaze, colour, exp(-seaAir * seaAir));
                 return half4(colour, 1.0);
             }

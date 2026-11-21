@@ -48,7 +48,9 @@ namespace DeviceChain.Harborpulse.Visuals
             colour.contrast.Override(4 + night * 6 - storm * 4);
             // capped at -16 (the U2b night): any deeper and the alarm levels' amber and coral wash out to peach
             colour.saturation.Override(Mathf.Max(-16, 6 - night * 18 - storm * 10));
-            balance.temperature.Override(warm * 14 - night * 10 - (1 - night) * (1 - storm) * 3); balance.tint.Override(warm * 3);
+            // the day is graded neutral to a touch warm (it was three points cool, which with a sky-blue ambient turned every quay lavender);
+            // the night keeps its cool, and dawn and a clear dusk their warmth
+            balance.temperature.Override(warm * 14 - night * 10 + (1 - night) * (1 - storm) * 3); balance.tint.Override(warm * 3);
             bloom.intensity.Override(Mathf.Lerp(0.15f, 0.5f, night));
         }
         public void Dispose()

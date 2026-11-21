@@ -74,12 +74,13 @@ namespace DeviceChain.Harborpulse.Visuals
                 }
             }
         }
-        public static void Tag(string text, Transform parent, Vector3 at, float size = 0.12f, Color? colour = null)
+        /// <param name="material">A font material of the scene's own; null draws the tag with the font's built-in one, over everything.</param>
+        public static void Tag(string text, Transform parent, Vector3 at, float size = 0.12f, Color? colour = null, Material material = null)
         {
             var t = Node(text, parent, at); t.localRotation = Quaternion.Euler(0, 180, 0);
             var m = t.gameObject.AddComponent<TextMesh>(); m.text = text; m.characterSize = size; m.fontSize = 36;
             m.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            t.GetComponent<MeshRenderer>().sharedMaterial = m.font.material;
+            t.GetComponent<MeshRenderer>().sharedMaterial = material != null ? material : m.font.material;
             m.anchor = TextAnchor.MiddleCenter; m.color = colour ?? new Color(0.78f, 0.85f, 0.90f);
         }
     }

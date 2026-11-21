@@ -23,6 +23,7 @@ Shader "Harborpulse/Sky"
             #pragma vertex Vert
             #pragma fragment Frag
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Assets/Harborpulse/Shaders/HarborHaze.hlsl"
 
             float4 _HarborSkyTop;      // the clear sky at the zenith
             float4 _HarborSkyMid;      // the middle sky
@@ -39,8 +40,8 @@ Shader "Harborpulse/Sky"
             float4 _HarborCloudLit;
             float4 _HarborCloudShade;
             float4 _HarborCloudLight;  // towards the body that lights the cloud
-            float4 _HarborCloud;       // x cover, y depth, z rain
-            float4 _HarborCloudDrift;  // xy the low layer's offset, zw the high layer's
+            float4 _HarborBreak;       // rgb the sky in the break under the storm's deck, at the horizon; a the break's strength
+            float4 _HarborBreakEdge;   // rgb the same at its upper edge, under the cloud
             float _HarborStars;
             float _HarborSkyTime;
 
@@ -101,7 +102,6 @@ Shader "Harborpulse/Sky"
                 float up = max(h, 0.0);
                 float cover = _HarborCloud.x;
                 float depth = _HarborCloud.y;
-                float rain = _HarborCloud.z;
 
                 // the clear sky: horizon band, middle sky, zenith
                 float3 sky = lerp(_HarborSkyLow.rgb, _HarborSkyMid.rgb, smoothstep(0.0, 0.10, up));
@@ -119,6 +119,16 @@ Shader "Harborpulse/Sky"
                 float sunUp = saturate(_HarborSunDir.y * 6.0 + 0.5);
                 sky += _HarborSunColor.rgb * (pow(saturate(sd), 48.0) * 0.30 + pow(saturate(sd), 6.0) * 0.08) * sunUp * (1.0 - 0.7 * depth);
 
+                // The break under the storm's deck (DayLighting.HorizonBreak): the front stops short of the horizon towards the low sun, so a
+                // band of clear lit sky shows under the cloud, tallest towards the sun and tapering to nothing a little past north and south
+                // (SkyState.BreakReach). Its upper edge is the deck's ragged base.
+                float breakReach = saturate((dot(az, sunAz) + 0.35) / 1.35);
+                float gapTop = 0.105 * breakReach;
+                float ragged = (Noise(az * 9.0 + _HarborCloudDrift.xy * 0.25) - 0.5) * 0.05 + (Noise(az * 31.0 + 4.7) - 0.5) * 0.016;
+                float gap = _HarborBreak.a * smoothstep(0.0, 0.12, breakReach) * (1.0 - smoothstep(gapTop * 0.62, gapTop * 1.04 + 0.002, up + ragged * breakReach));
+                float3 breakSky = lerp(_HarborBreak.rgb, _HarborBreakEdge.rgb, smoothstep(0.0, max(gapTop, 0.001), up)) * 1.15;
+                sky = lerp(sky, breakSky, gap);
+
                 // stars, fixed to the sky, fading towards the horizon
                 float3 sp = d * 220.0;
                 float3 cell = floor(sp);
@@ -133,13 +143,13 @@ Shader "Harborpulse/Sky"
                 // the high layer: thin streaks, stretched along the wind
                 float2 hp = plane * float2(0.50, 1.55) + _HarborCloudDrift.zw;
                 float streak = Fbm3(hp);
-                float high = smoothstep(0.50, 0.78, streak) * (0.30 + 0.50 * cover) * smoothstep(0.0, 0.07, up);
+                float high = smoothstep(0.50, 0.78, streak) * (0.30 + 0.50 * cover) * smoothstep(0.0, 0.07, up) * (1.0 - 0.8 * gap);
 
                 // the low layer: chunky cumulus that closes into a deck
                 float2 lp = plane * 1.30 + _HarborCloudDrift.xy;
                 float n = Fbm4(lp);
                 float threshold = lerp(0.70, 0.22, cover);
-                float low = smoothstep(threshold, threshold + 0.14, n) * smoothstep(-0.01, 0.05, h);
+                float low = smoothstep(threshold, threshold + 0.14, n) * smoothstep(-0.01, 0.05, h) * (1.0 - gap);
 
                 // relief: the side of a cloud towards the light is lit, its thick middle and far side fall to the base colour
                 float2 lightAz = normalize(_HarborCloudLight.xz + float2(1e-4, 0.0));
@@ -159,6 +169,9 @@ Shader "Harborpulse/Sky"
                 float3 under = _HarborCloudUnder.rgb * _HarborCloudUnder.a * (0.38 + 0.62 * toward);
                 cloudCol += under * (1.0 - 0.8 * tone) * 0.9;
                 highCol += under * 0.55;
+                // and the break lights the deck's bases above it: strongest at the break's own edge, gone a third of the way up the sky
+                float3 breakUnder = _HarborBreak.rgb * _HarborBreak.a * breakReach * exp(-up * 13.0);
+                cloudCol += breakUnder * (1.0 - 0.7 * tone) * 0.6;
                 // the moon silvers the faces of the night's cloud, and the cloud round the moon most
                 float moonSide = saturate(md * 0.5 + 0.5);
                 moonSide = moonSide * moonSide * moonSide;
@@ -168,9 +181,8 @@ Shader "Harborpulse/Sky"
 
                 // rain curtains hang under the deck towards the horizon, slanted by the wind
                 // sampled round the compass on a circle, so there is no seam where a bearing would wrap
-                float2 around = az * 4.5 + float2(up * 4.0 + _HarborCloudDrift.x * 0.4, 2.7);
-                float curtain = Noise(around);
-                curtain = smoothstep(0.42, 0.78, curtain) * rain * (1.0 - smoothstep(0.03, 0.40, up));
+                // (HarborHaze.hlsl: the same shafts carry on below the horizon, in the haze over the far land and sea)
+                float curtain = HarborRainShaft(float3(d.x, up, d.z)) * (1.0 - smoothstep(0.03, 0.40, up));
 
                 // the discs sit behind the cloud
                 float sunDisc = smoothstep(0.99968, 0.99978, sd) * _HarborSunDir.w;
@@ -181,17 +193,20 @@ Shader "Harborpulse/Sky"
 
                 sky = lerp(sky, highCol, high * (1.0 - low));
                 sky = lerp(sky, cloudCol, low);
-                sky = lerp(sky, _HarborCloudShade.rgb * 0.75, curtain * 0.55);
+                // rain between the eye and the break is lit from behind: warm shafts against the slate
+                float backlit = _HarborBreak.a * breakReach;
+                sky = lerp(sky, lerp(_HarborCloudShade.rgb * 0.75, _HarborBreak.rgb * 0.8, backlit * 0.5 * exp(-up * 5.0)), curtain * 0.55);
 
                 // the horizon line is the fog colour, and so is everything under it: the land and the sea fade into the same haze
                 float haze = exp(-up * 42.0);
-                sky = lerp(sky, _HarborSkyHaze.rgb, haze);
+                float3 hazeCol = HarborHazeColor(d, _HarborSkyHaze.rgb, _HarborSceneryFogLow.rgb);
+                // (in the break the horizon's own haze is lit through)
+                sky = lerp(sky, lerp(hazeCol, breakSky, gap * 0.8), haze);
                 // under a closed deck at sunset a last ember shows low in the west
                 sky += _HarborSkyGlow.rgb * _HarborSkyGlow.a * exp(-up * 26.0) * toward * 0.45 * step(0.0, h);
                 // At and below the horizon: the horizon's haze, darkening to the far ground's. The scenery and the water draw the same
                 // function, which begins a hair above the horizon (0.004), so the sky joins it over that hair instead of stepping at zero.
-                float3 below = lerp(_HarborSkyHaze.rgb, _HarborSceneryFogLow.rgb, 1.0 - smoothstep(-0.05, 0.004, h));
-                sky = lerp(sky, below, 1.0 - smoothstep(0.0, 0.004, h));
+                sky = lerp(sky, hazeCol, 1.0 - smoothstep(0.0, 0.004, h));
                 return half4(max(sky, 0.0), 1.0);
             }
             ENDHLSL

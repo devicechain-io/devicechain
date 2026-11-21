@@ -286,7 +286,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             // HOME, 16:9: lower and flatter than the first cut, wider, aimed above the water so the harbour sits in the lower
             // four fifths and the horizon falls a fifth of the way down; both breakwater lighthouses, the mouth and all three
             // quays stay inside the frame with a margin, and its bottom edge meets the water south of z = -190.
-            poses.Add("pose:home", new CameraPose(new Point3(0, 100, -420), new Point3(0, 4, 50), 35));
+            poses.Add("pose:home", new CameraPose(new Point3(0, 100, -420), new Point3(0, HomeLookY, 50), 35));
             // The 9:16 HOME looks east along the horseshoe from over the western town: the harbour's long (x) axis then runs up
             // the tall frame. The storyboard's first draft, (0, 160, -330) looking north, holds only North Quay at 9:16 (its
             // horizontal half-angle is about 15 degrees), so 12 of 37 devices were in frame; this pose holds all three quays.
@@ -294,7 +294,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             // steepened slightly (the horizon just above the frame) so the air over it is 8-14 % of the frame and the fog closes the view.
             // U6: the eye is lower and nearer and the look is flattened, so the horizon falls an eighth of the way down the frame: the
             // sky is in it, the sun rises in it (due east), the harbour fills the lower half and the eastern uplands close the view.
-            poses.Add("pose:home:portrait", Stand(-520, 260, 30, 0, 10, 52, PortraitHorizon));
+            poses.Add("pose:home:portrait", Stand(-700, 235, -60, 0, -5, 44, PortraitHorizon));
             poses.Add("pose:night-home", poses["pose:home"]);
             poses.Add("pose:storm-home", poses["pose:home"]);
             foreach (var pair in StoryPoses.Families)
@@ -373,7 +373,14 @@ namespace DeviceChain.Harborpulse.Model.Director
         public const double LampHorizon = .52;
 
         /// <summary>Where the horizon falls in the 9:16 HOME, from the top.</summary>
-        public const double PortraitHorizon = .12;
+        public const double PortraitHorizon = .125;
+
+        /// <summary>
+        /// The height the 16:9 HOME looks at, 470 m in front of it. It was 4: the ranges added in front of the far ridge filled the ridge's
+        /// saddles and took half a point of sky, and the tree line now drawn on every crest takes a little more, so the look is raised by
+        /// under half a degree. The ranges keep their height and the sky has its fifth of the frame again.
+        /// </summary>
+        public const double HomeLookY = 7.5;
 
         static CameraPose Stand(double camX, double eye, double camZ, double subjectX, double subjectZ, double vfov, double horizonFromTop)
         {
