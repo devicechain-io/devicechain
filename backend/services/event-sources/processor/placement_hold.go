@@ -28,8 +28,9 @@ const finalPlacementFullLogEvery = time.Minute
 
 // Reasons a final delivery fell back to unheld, on the fallback counter.
 const (
-	placementFallbackFull    = "full"
-	placementFallbackExpired = "expired"
+	placementFallbackFull     = "full"
+	placementFallbackExpired  = "expired"
+	placementFallbackShutdown = "shutdown"
 )
 
 type finalPlacementHold struct {
@@ -104,6 +105,8 @@ func (es *GatewayJetStreamSource) startFinalPlacementHolds() *finalPlacementHold
 	go func() {
 		running.Wait()
 		h.mu.Lock()
+		// Count before the gauge drops, so abandoned holds never disappear silently.
+		h.countFallback(placementFallbackShutdown, len(h.entries))
 		if h.gauge != nil {
 			h.gauge.Sub(float64(len(h.entries)))
 		}

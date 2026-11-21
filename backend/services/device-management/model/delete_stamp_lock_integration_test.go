@@ -295,3 +295,49 @@ func TestAGroupDeleteKeepsTheFamilyLockAheadOfTheGroupRow(t *testing.T) {
 	require.NoError(t, <-writerDone, "the writer taking the family and then the group row was failed")
 	require.NoError(t, <-deleteDone, "the group delete was failed")
 }
+
+func TestADeviceDeleteLosingTheGatewayLockRaceAnswersFalse(t *testing.T) {
+	api, ctx, ids := ownershipPgRig(t, 1)
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	winner := api.RDB.DB(ctx).Begin()
+	require.NoError(t, winner.Error)
+	defer winner.Rollback()
+	// Hold the device on connection one while the API on connection two resolves
+	// its token and reaches the gateway check. Delete only after that lock waits.
+	require.NoError(t, refuseDeleteOfGateway(winner, ids[0]))
+	var blocker int
+	require.NoError(t, winner.Raw("SELECT pg_backend_pid()").Scan(&blocker).Error)
+	type result struct {
+		deleted bool
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		deleted, err := api.DeleteDevice(ctx, "pump-00000")
+		done <- result{deleted, err}
+	}()
+	require.Eventually(t, func() bool {
+		var waiting int64
+		err := api.RDB.DB(ctx).Raw(`SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'
+			AND query ILIKE '%SELECT%devices%FOR UPDATE%'
+			AND ? = ANY(pg_blocking_pids(pid))`, blocker).Scan(&waiting).Error
+		return err == nil && waiting == 1
+	}, 10*time.Second, 10*time.Millisecond, "the second delete must wait in the gateway check")
+	require.NoError(t, winner.Unscoped().Delete(&Device{}, ids[0]).Error)
+	require.NoError(t, winner.Commit().Error)
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.False(t, got.deleted)
+	case <-ctx.Done():
+		t.Fatal("the losing delete never returned")
+	}
+	var n int64
+	require.NoError(t, api.RDB.DB(ctx).Model(&PendingEntityDeletion{}).Count(&n).Error)
+	require.Zero(t, n, "the losing delete must roll back without queueing a deletion")
+	deleted, err := api.DeleteDevice(ctx, "never-existed")
+	require.NoError(t, err)
+	require.False(t, deleted)
+}
