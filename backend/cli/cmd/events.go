@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dcctl/apiclient"
 	"github.com/devicechain-io/dcctl/failedevents"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
@@ -172,7 +172,7 @@ func runEventsFailed(cmd *cobra.Command, args []string) error {
 	}
 
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
-	session := userclient.NewTenantSession(nil, endpoints.UserGraphQL, evEmail, evPassword, evTenant).
+	session := apiclient.NewTenantSession(nil, endpoints.UserGraphQL, evEmail, evPassword, evTenant).
 		WithOTP(otpFunc(otpFlag(cmd)))
 	out := cmd.OutOrStdout()
 

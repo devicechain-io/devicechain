@@ -68,6 +68,7 @@ func MustParseSchema(schema string, resolver interface{}, opts ...graphql.Schema
 	}
 	return &Schema{
 		inner:            graphql.MustParseSchema(schema, resolver, opts...),
+		capabilitySchema: schema,
 		maxQueryLength:   maxLen,
 		maxQueryRoots:    maxQueryRootFields(),
 		maxMutationRoots: maxMutationRootFields(),

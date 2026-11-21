@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dcctl/apiclient"
 	"github.com/devicechain-io/dcctl/attr"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/fatih/color"
@@ -132,7 +132,7 @@ func attrSession(cmd *cobra.Command) (attr.Client, string, error) {
 		return nil, "", fmt.Errorf("--email and --password are required: the change is authorized as the identity that makes it")
 	}
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
-	session := userclient.NewTenantSession(nil, endpoints.UserGraphQL, attrEmail, attrPassword, attrTenant).
+	session := apiclient.NewTenantSession(nil, endpoints.UserGraphQL, attrEmail, attrPassword, attrTenant).
 		WithOTP(otpFunc(otpFlag(cmd)))
 	return session, endpoints.DeviceMgmtGraphQL, nil
 }

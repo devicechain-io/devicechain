@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/devicechain-io/dcctl/internal/apitest"
 )
 
 // tierStub answers login, the tier listing (existing is the tenantTiers JSON array) and records
@@ -31,6 +33,9 @@ type tierStub struct {
 func (s *tierStub) server(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if apitest.ServeCapabilities(t, w, r) {
+			return
+		}
 		raw, _ := io.ReadAll(r.Body)
 		var body struct {
 			Query     string         `json:"query"`

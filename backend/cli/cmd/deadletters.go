@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/deadletter"
-	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dcctl/apiclient"
 	"github.com/devicechain-io/dcctl/deadletters"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
@@ -109,7 +109,7 @@ func runDeadLettersList(cmd *cobra.Command, args []string) error {
 	}
 
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
-	session := userclient.NewAdminSession(nil, endpoints.UserGraphQL, dlEmail, dlPassword).WithOTP(otpFunc(otpFlag(cmd)))
+	session := apiclient.NewAdminSession(nil, endpoints.UserGraphQL, dlEmail, dlPassword).WithOTP(otpFunc(otpFlag(cmd)))
 
 	// 🔴 NO SUPERUSER PRE-CHECK HERE, and an earlier version had one. The server gates
 	// this on audit:read, which is deliberately grantable on a non-superuser system role —
