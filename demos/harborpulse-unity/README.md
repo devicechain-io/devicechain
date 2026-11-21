@@ -516,6 +516,9 @@ under `.build/u2b/review-mutants/`. The normal verification gate also runs the P
 
 ## U3 art pass: town, hills and water
 
+> The hills, forest, rocks and HOME cameras described in this and the next two sections were superseded by
+> [U5 landform, forest, outcrops and cameras](#u5-art-pass-landform-forest-outcrops-and-cameras) below.
+
 The U2b town was a uniform grid of identical houses on six terraces, and the water mirrored it as a hard grid.
 U3 replaces both. `Scripts/Visuals/Assets/TownBuilder.cs` builds everything behind the waterfront, and it is all
 WORLD scenery: no device stands there and nothing in it reads the platform.
@@ -671,3 +674,183 @@ before forest savings and add no renderers. The seeded plan now has 444 trees (8
 
 Round-3 gates: locked restore, Release build, all 421 sidecar tests, and desktop/WebGL compile checks.
 No Unity run or commit was made.
+
+## U5 art pass: landform, forest, outcrops and cameras
+
+The U4 look read as one bare lawn of hill with no sky behind the story cameras. U5 lowers the ground, closes the view in
+haze, plants a wooded coast, seats the rock in the slope and drops the story cameras to eye level. It is all WORLD
+scenery and camera framing: presentation anchors, quays, device positions and the U4 prop-overlap checks did not move.
+
+- **Landform** (`Model/CoastalTerrain.cs`). The core is still the deck. Outside it the ground rises about 9 m across
+  the first 450 m (the town's apron), then rolls in knolls and hollows of 6-16 m with a smooth ceiling at 32 m above
+  the deck; nothing within 1,300 m of the core is higher than 34 m (the measured maximum is 18.4 m). From 6 m above
+  North Quay the bare-ground skyline is under 1 degree (limit 2.5), and from the East Quay and Basin eyes under 0.7
+  (limit 3). The skyline is a separate, distant ridge instead (`RidgeBuilder`, 155 quads = 310 triangles, no trees):
+  two or three overlapping hills 2.35-3.05 km out, with dome, cusp and plateau profiles, the highest crest 2.54 degrees
+  above the horizontal from the harbour and shoulders 1-1.8, falling to nothing at both ends. It sits under the HOME
+  checker's "ridge" mask with the terrain. The terrain mesh is the plan's own grid (`Model/TerrainGrid.cs`: 10 m cells
+  round the town, 20 m on the rolling ground, 50-100 m beyond, 200 m flat flanks to x = +-3.8 km), 125,688 vertices.
+  `TerrainGrid.MeshHeight` is the height of the two triangles actually drawn, which is what rocks and trees stand on.
+  The 4.8 km continuation is gone. A west headland where the near land falls to the sea was skipped: the far-water ring
+  covers only the sea south of the coast, so a falling coast would open holes rather than a horizon.
+- **View distance.** Scenery fog counts from the camera (no 900 m dead zone) and ramps in with the distance outside
+  the core (120-420 m), so the town and its yards stay crisp: about 54 % fog at 900 m and 88 % at 1,500 m at noon, 53 %
+  at 550 m in the storm. The shader multiplies the density by `SceneryFogGain` (6): the engine's own fog on the lit
+  materials and the water reads the same density and must stay light, so only the scenery gains it. The ridge has its
+  own lighter fog (vertex alpha 0.6 selects it; `RidgeFogScale`) and its foot dissolves into the haze by height: about
+  40 % transmission at noon, 13 % in the storm. Every camera far clip is 3,600 m.
+- **Forest.** 9,674 trees (the U4 plan had 444), 60 % conifers by count (spruce, fir, pine in deep greens, a few
+  blue-green, lighter toward the top tiers), 40 % broadleaf in three shapes (round maple, tall oval birch with a pale
+  trunk, broad oak) whose autumn colour follows a slow position noise, so gold, orange, crimson, russet and green-olive
+  come in drifts. Heights are 8-16 m in the forest and 5-10 m in yards. About 70 % of the open land 250-1,100 m out is
+  woodland in broad stands, with twelve clearings of 60-200 m (some touching the town's edge, one on a knoll summit),
+  planted on a jittered 8 m grid thinned to a 12 m crown spacing near the town (the vertex budget's price for full-detail
+  crowns) and 15-21 m beyond, fading to nothing at 1,250 m so nothing pops. Yard trees stand behind and beside about one
+  house in two, and the park carries trees on its perimeter only. No tree stands on a street, a lot, a quay, a park path
+  or lawn, within 14 m of an anchor, in a rock footprint, or on a story camera's line of sight. Detail is by distance
+  from the core, baked per tile: within 380 m 4-5 conifer tiers or a full crown with a side lobe; 380-800 m two tiers
+  or one low-poly crown with a short trunk; beyond, one or two four-sided cones or an eight-face blob (`TreeStyle`).
+  2,765 near, 4,433 medium and 2,476 far trees cost 393,116 + 215,235 + 50,196 = 658,547 vertices (limit 700,000) in
+  48 tile meshes. Trees still cast no shadows and sit on layer 29.
+- **Rock.** 62 outcrops in 16 clusters of 2-5 (the shore outside the quays, clearing flanks, woodland edges), each a
+  stepped, faceted granite ledge of 8-30 m in plan and 0.6-4 m high (never more than 0.4 of its plan radius), whose long
+  axis follows the contour. `Model/Outcrop.cs` fits each against the drawn terrain: the base ring is sunk until every
+  point along its edges, sampled every half metre, is below the surface (the tightest margin is 0.58 m), the tops follow
+  the fitted terrain plane, and the ground in a skirt round it is darkened. Footprints are in the registry, so trees and
+  props avoid them. They share the terrain tiles (4,560 vertices in all).
+- **Ground colour.** Forest floor under the wood, dry straw-green meadow in warmer and greener drifts between, heath
+  tone on steeper facets, lawn green only on the park and in yards, worn earth at the street edges. Per-facet variation
+  is a smooth noise plus under 1 %, so there is no checkerboard.
+- **Cameras.** HOME 16:9 is (0, 100, -420) looking at (0, 4, 50), vertical FOV 35: horizon 17.6 % down, sky 19.6 % by
+  the analytic silhouette (terrain, ridge and tree tops), flat-plane water 42 % (the same estimate gives 45 % for the U4
+  pose, where the mask measured 43.5 %), every device but the truck inside the frame with a 3 % margin, both breakwater
+  lighthouses, the mouth and most of each quay in frame, and the frame's bottom edge on the water at z = -240. HOME 9:16
+  is (-560, 300, -60) looking at (40, -25, 10), FOV 52: all 37 devices inside, sky 11.5 %. The land now stands far below
+  that eye, so the far ground ends well under the true horizon; the look is steepened a little rather than raised to keep
+  the sky share down. The ground-level story poses (`kiosk-ext`, `pair`, `close`, `wide`, `promenade`, `insert` for each
+  device, and `east-quay:mouth-wide`, `plain:wide`, `truck:chase`, `depot:wide`) now stand 6.5-10 m up with the look
+  flattened so the horizon falls 29-36 % from the top and the subject is in the middle third. A few step sideways so their
+  sight line passes beside a lamp or a gauge mast instead of through it. `well` and `well-locked` still look down into
+  the well.
+
+`U5CameraTests`, `U5ForestTests` and the extended `CoastalSceneryTests` pin these numbers: the terrain apron, ceiling and
+skyline rays, the ridge's crest angles, woodland cover, fog at 900 m, 1,500 m and 550 m, the ridge's fog, the 60/40
+species ratio, heights, no tree on any reservation (each check has a planted negative control), the vertex budget per band,
+the rock fit (a lifted base ring fails it), the HOME frames from pose, FOV and aspect, and every ground pose's horizon,
+middle third and line of sight. A literal-checksum test proves the 104 building lots and 71 street lamps are exactly what
+origin/main generated: the town's random stream is never read by the new rock and tree generation, which has its own
+seeds.
+
+Not verified without Unity (the sidecar and both compile checks do not run it): the shader's syntax and look, the HOME
+masks and the actual renderer and vertex totals (estimated at about 870 renderers and 1.29 M vertices against the
+budgets of 950 and 1.5 M), frame time, the rendered colours and silhouettes, and whether the far-clip edge of the sea and
+fogged ground meets the sky's below-horizon colour without a visible seam: the fog and the sky share the horizon colour,
+but the sky blends toward its ground colour just under the horizon.
+
+## U5 level of detail: richer buildings and vehicles near the camera
+
+HOME sees the town from 450-900 m, where a window frame is a fraction of a pixel; the ground-level story cameras
+see the first row of buildings, the sheds, the terminal, the lofts, the parked cars, the truck and the moored boats
+from 20-45 m. Each building and vehicle therefore has two levels.
+
+- **FAR (what HOME and every distant view draws).** The same merged tile meshes as before, with the fine detail taken
+  out: no window frames, sills, shutters or mullions, no clapboard courses, no steps. What stays is the silhouette
+  and what the night is carried by: walls, the real roof shape and overhang, chimneys, the porch slab and roof and its
+  end posts, the stone base, corner boards and door frames, the flat window panes (the shared `Windows`, `EastWindows`
+  and `WindowsDark` materials, so the night's lit windows are untouched), shop glass and awnings. The far town loses
+  about 171,000 vertices (an estimate, from the generation order: 1,585 windows lose a frame each, the rest is
+  courses, steps and one post per porch), and the renderer count is unchanged.
+- **NEAR (within 110 m of the active camera).** An extra set per building or vehicle, drawn on top of the far level:
+  window frames, sashes, mullions, sills and heads, shutters on some houses (chosen from a hash of the building's
+  position, never from the town's seeded streams), flower boxes, panelled doors with lights and transoms, stoops,
+  porch rails with balusters, newel posts and stairs, a bench, pots, firewood or a barrel on some porches, clapboard
+  and brick courses, board-and-batten, corrugated ribs, friezes, gutters and downpipes, shingle courses, dormer frames
+  and a second dormer, an attic window in some front gables, chimney flashing, corbels and pots, shopfront bays over a
+  bulkhead with a valance and brackets, sliding shed doors on their track with ramps, lobster pots and buoys, the lofts'
+  entrance, string courses, pilasters, loading doors and roof plant, the church's framed and pointed windows,
+  buttresses, louvres and finial, the terminal's entrance, the depot's roller doors, the ferry berth (pontoon planks,
+  rails, gangway, bollards) and the ferry itself (portholes, fenders, window frames, rails, bridge, funnel, life
+  rings). Vehicles get wheels with arch liners, rims and hubs (the cars' far boxes have none), glazing pillars, lamps,
+  mirrors, bumpers, door seams and handles; the truck gets a roof rack load (sandbags, cones, a hose coil, a pump,
+  cans) and chevrons; boats get lifelines and pulpits or a wheelhouse with frames, radar, aerials, buoys, a hauler,
+  an outboard, oars, planking and cleats; the hauled-out boat gets props, rails, window frames, a rudder and propeller.
+  No text or signage anywhere.
+- **The switch is additive.** A near set only adds parts over the far level's own walls, roof and window panes, so
+  nothing has to be hidden while it is shown: no hole can open, nothing pops but the added detail, the same windows
+  are lit in both levels, and at HOME every set is inactive. This is why the far meshes stay merged per tile (a
+  `LODGroup` would need a renderer per building, hundreds of extra renderers at HOME) and why there is no list of
+  buildings whose far mesh must disappear.
+- **Who decides.** `Model/DetailSwitch` is the whole decision and has no engine in it: a set enters at 110 m and
+  leaves at 130 m measured to the set's nearest edge (centre distance less its radius), at most 25 sets are near
+  at once (the nearest win, a set already near has a 6 m head start so the cap cannot flicker), the work allocates
+  nothing after construction, and it is retaken every four frames or when the camera has moved a metre.
+  `Visuals/DetailManager` owns the sets: it builds each one the first time it is wanted (or at load, inactive, when a
+  story camera can bring it within reach: the authored poses, 20 m of margin on each camera and 130 m about each
+  look point, from `DetailCandidates`) and switches the root on and off. The truck and a charger's car follow
+  their own transform every refresh; a car the view has hidden is never near. The planar reflection draws whichever
+  level the main camera has.
+- **The stills path.** `HarborpulseApp.Tick` refreshes the switch every frame; `RenderReflectionNow`, which every
+  Editor still calls just before `Camera.Render`, refreshes it forced for the camera's final position. A still shot
+  after `Rig.Select` or `DirectorCamera.ForcePose` therefore shows the level that camera would have in play. At HOME
+  nothing is near; `HarborHomeCheck` logs the near sets (built hidden, shown) and fails if any is shown at HOME. Its
+  world renderer and vertex counts leave the near roots out (they are hidden at HOME), so they remain comparable with
+  the earlier captures. Near roots sit under the town, the device rigs or a boat, so the HOME mask classes them with
+  their parent; they are scenery and never hide a device (they stay inside the lot the building reserved).
+- **Budget.** A near set is one vertex-coloured renderer (no shadows: it is all small trim, and the far body keeps
+  casting) plus one more per window material only where a set has windows of its own (the attic window and the second
+  dormer). Typical vertices per set: house 5.8 k (2.7-9.1 k), shopfront 4.6 k, commercial block 10.2 k, inn 13.8 k,
+  shed 2.6 k, church 3.2 k, lofts 12.6 k, terminal 6.8 k, depot 3.3 k, ferry berth 5.2 k, truck 3.9 k, parked or
+  charging car 2.1 k or 1.8 k, hauled boat 1.9 k, moored boats 0.6-1.7 k. From each authored ground-level pose
+  the sidecar tests find 6-17 near sets and about 23-90 k vertices, and bound every plan so twenty-five of the largest
+  houses stay under the 250 k budget.
+
+`NearDetailTests` pin: the hysteresis band (no change anywhere between 110 and 130 m), the 25-set cap and its
+stability, the range measured to the edge, a moving set switching by its position, an inactive set never near,
+the retake schedule, no allocation per decision, HOME in both aspects selecting nothing, every ground-level pose
+selecting something, every set a story camera or its 20 m margin can bring near being a load-time candidate,
+every near plan staying inside the lot or footprint the building reserved (and vehicles inside theirs plus
+6 cm of trim), no near box covering a far window pane, a frame for every lofts pane, bounded vertex cost per kind,
+and that the per-house choices come from the position and repeat. The sidecar and compile gates establish none of
+the visual result: the look of the near sets, HOME pixels, the stills' switch timing and frame time need the Unity
+capture rig (the budget to hold is the earlier 4-5 ms mean at 1920x1080).
+
+### U5 round 2: haze range, visible meadows and granite, lighter conifers, lamp and mouth poses
+
+This supersedes the fog, forest, rock and pose numbers above where they differ.
+
+- **Haze range.** Scenery fog starts 350 m from the camera (`SceneryFogStartM`) with a gain of 3.5. From HOME at noon transmission
+  is 0.87 at 1,000 m, 0.83 at 1,100 m, 0.53 at 1,750 m and 0.23 at 2,500 m; in the storm half falls at about 1,000 m. The ridge
+  (own fog, scale 0.40, darker bands) keeps about 0.6 at noon and about 0.1 in the storm. The engine's fog density is back to
+  its pre-U5 value. The planted forest runs to 1,700 m from the core (minimal detail, spacing growing to about 29 m, faded from
+  1,250 m); the terrain grid is 20 m to 1.2 km and 30 m to 1.9 km.
+- **Counts.** 12,276 trees (59.5 % conifers), 721 k vertices (2,877 near, 4,259 mid, 5,140 far). Woodland covers 68 %.
+- **Meadows and granite.** Six meadows of 85-130 m sit where HOME looks (two touch the town's edge), with a cluster of granite ledges
+  at each; lead ledges are 18-35 m. 78 outcrops in all. A test projects them through the HOME pose.
+- **Conifers.** Greens from (.16,.34,.19) to (.28,.44,.24), about 15 % blue-green, top tiers 25 % lighter, whole stands drifting
+  in tone; far broadleaf crowns are brightened and more saturated.
+- **Poses.** Lamp subjects (`lamp-east`, `north-quay`) stand 14-18 m off, 30 degrees round from the quay's axis at eye 5-6 m, the
+  look just under the head so the whole lamp sits upper-middle of the frame. `east-quay:mouth-wide` stands inside the harbour at
+  (-130, 9.5, 70) looking at the quay (150, -10) with FOV 56; no breakwater or lighthouse is within 80 m of its axis.
+
+## U5 sky and weather
+
+The sky is a pure function of the scenario hour and the layout's `storm` beat (`DayLighting.Evaluate`), and the light follows the same
+cloud the sky draws.
+
+- **Cloud cover** is no longer a constant. `DayLighting.FairCloud` gives the fair-weather cover of the hour (about a fifth of the sky in
+  the small hours, two fifths in the early afternoon). `Weather.Front` is the storm's cloud front: it builds over the three hours before
+  the beat, is closed through it, and breaks up over the two hours after it, on either side of midnight.
+- **The sky shader** (`HarborSky.shader`) draws a three-stop gradient, the low sun's glow along the horizon, sun and moon discs that
+  cloud hides, stars, a high streaky layer and a low cumulus layer shaded in three flat tones, and rain curtains under the storm deck.
+  The cloud drifts on a daily circle driven by the scenario clock, so a still of an hour is always the same sky. The horizon line is the
+  fog colour, so the haze over the land meets the sky without a seam.
+- **The moon's arc is continuous.** The hidden part of an arc now has its own length; the moon's direction used to jump once a day.
+- **Dim daylight is lit.** A storm dusk and the hour before dawn have neither sun nor moon as a key light. The ambient floor is lifted
+  then (`KeylessFloorLift`), and the grade opens up for dim daylight (`SkyState.ExposureLift`), without changing noon or the night.
+- **Rain** is a box of slanted streaks that follows the camera and wraps seamlessly; it is off whenever the weather is dry.
+- **Lamp poses** stand 20-24 m off and look up a little (`PresentationMap.LampHorizon`), so the lantern, 8.3 m above the deck, stands
+  against the sky. This supersedes the 14-18 m lamp stand-off described above.
+
+`SkyWeatherTests` pins the cover through the day, continuity across every minute and across midnight, distinct skies at the seven
+reviewed hours, noon exposure within 15 % of the earlier grade, the night floor, and the sun's and moon's continuity. Shader output,
+the masks and frame time still need the Unity capture rig.
