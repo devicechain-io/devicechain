@@ -34,7 +34,7 @@ const (
 
 // rolloutTransitionLabels is every value of the transitions counter's label, so each series exists
 // at zero from startup.
-var rolloutTransitionLabels = []string{"completed", "paused_failure_threshold", "paused_artifact_not_assignable"}
+var rolloutTransitionLabels = []string{"completed", "paused_failure_threshold", "paused_artifact_not_assignable", "paused_failure_rate", "paused_cohort_ready"}
 
 // NewRolloutMetrics registers the rollout instruments, once.
 func NewRolloutMetrics(ms *core.Microservice) *RolloutMetrics {
@@ -45,8 +45,8 @@ func NewRolloutMetrics(ms *core.Microservice) *RolloutMetrics {
 				"busy with another update).",
 			[]string{"result"}),
 		transitions: ms.NewCounterVec("update_rollout_transitions_total",
-			"Group rollouts the driver moved on its own: completed, or paused because the failure threshold was "+
-				"reached or the artifact stopped being assignable (retired, or its signer revoked).",
+			"Group rollouts the driver moved on its own: completed, or paused at a failure-count limit, "+
+				"failure-rate limit, manual cohort gate, or because the artifact stopped being assignable.",
 			[]string{"to"}),
 		failures: ms.NewCounterVec("update_rollout_step_failures_total",
 			"Rollout driver failures left for the next pass, by stage: step (one rollout's step failed: a database "+
@@ -83,6 +83,11 @@ func (m *RolloutMetrics) Observe(res model.RolloutStepResult, err error) {
 	if m == nil {
 		return
 	}
+	// A rate halt can commit even when all pre-lock device lookups failed. StepRollout
+	// returns that committed transition alongside the lookup error; expose both facts.
+	if res.Transition == model.RolloutPaused && res.Reason == model.PauseFailureRate {
+		m.transitions.WithLabelValues("paused_failure_rate").Inc()
+	}
 	if err != nil {
 		m.failures.WithLabelValues(rolloutStageStep).Inc()
 		return
@@ -94,7 +99,9 @@ func (m *RolloutMetrics) Observe(res model.RolloutStepResult, err error) {
 		m.transitions.WithLabelValues("completed").Inc()
 	case res.Transition == model.RolloutPaused && res.Reason == model.PauseFailureThreshold:
 		m.transitions.WithLabelValues("paused_failure_threshold").Inc()
-	case res.Transition == model.RolloutPaused:
+	case res.Transition == model.RolloutPaused && res.Reason == model.PauseCohortReady:
+		m.transitions.WithLabelValues("paused_cohort_ready").Inc()
+	case res.Transition == model.RolloutPaused && res.Reason != model.PauseFailureRate:
 		m.transitions.WithLabelValues("paused_artifact_not_assignable").Inc()
 	}
 }

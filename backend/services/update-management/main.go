@@ -21,7 +21,7 @@
 //     driver on every replica dispatches through the same assignment path a single device uses.
 //
 // What it does not do, so nobody assumes it: it authenticates who produced an artifact only
-// through signatures by signers the tenant registered, and a rollout has no waves, schedules or
+// through signatures by signers the tenant registered, and a rollout has no schedules or
 // maintenance windows.
 package main
 
@@ -285,6 +285,7 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 
 	api.Policy = Configuration.Policy()
 	api.AllowUnverified = Configuration.Updates.AllowUnverifiedArtifacts
+	api.RolloutSafety = Microservice.InstanceConfiguration.Infrastructure.UpdateManagement.RolloutSafety
 	api.DownloadBaseURL = Configuration.Updates.DownloadBaseURL
 	api.CapabilityTTL = time.Duration(Configuration.Updates.CapabilityTTLSeconds) * time.Second
 	api.OnRolloutStep = RolloutStats.Observe
