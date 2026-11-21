@@ -172,7 +172,7 @@ expect_fail() {
 	# Say WHY it was refused, so a control refused for the wrong reason (an environment error
 	# rather than the planted defect) is visible in the log.
 	echo "  control $name refused, as it must be: $(printf '%s
-' "$out" | grep -v '^FAIL' | grep -m1 -E 'actions|expected|planned|nothing|tofu exited|Error' | sed 's/^ *//' || true)"
+' "$out" | grep -v '^FAIL' | grep -E 'actions|expected|planned|nothing|tofu exited|Error' | sed -n '1s/^ *//p' || true)"
 }
 
 # mutate TREE FILE FROM TO: plant one defect, failing if the text to replace is not there (a
