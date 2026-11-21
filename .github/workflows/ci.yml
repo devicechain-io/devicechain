@@ -3212,7 +3212,7 @@ jobs:
       # missing one, because a wait that cannot fail is a wait that returns early.
       - name: gke cluster-operations wait self-test
         working-directory: .
-        run: deploy/gke/wait-for-cluster-operations.sh --self-test
+        run: deploy/opentofu/modules/gke-cluster/wait-for-cluster-operations.sh --self-test
 
       # The no-op plan gate for the deploy/gke -> modules/gke-cluster extraction. The self-test
       # runs first and shows the gate refusing each planted defect (a dropped moved block, a
