@@ -671,11 +671,30 @@ stop_forwards() {
   ((${#fwd_pids[@]} == 0)) || stop_group "${fwd_pids[@]}"
   fwd_pids=()
 }
-destroy_sims() { # destroy every sim's tenant this run created, once; a failure is noted, not fatal
-  local sname
-  if [[ -n "$s7_oauth_client" && -n "$s7_peer_handshake" ]]; then
-    s7_registry delete || note "could not delete the per-run OAuth client"
-    s7_oauth_client=""
+destroy_sims() { # destroy tenants; an unresolved OAuth client makes the rig fail
+  local sname attempt recovery cleanup_rc=0 deleted=0
+  if [[ -n "$s7_oauth_client" ]]; then
+    recovery="$state_dir/$s7_oauth_client.oauth-client-id"
+    # Keep the public client id before attempting deletion, including on EXIT.
+    # Never overwrite another run's recovery record, or remove it before success.
+    if ! printf '%s\n' "$s7_oauth_client" >"$recovery"; then
+      printf '\nFAIL: could not save OAuth recovery id %s to %s\n' "$s7_oauth_client" "$recovery" >&2
+      cleanup_rc=1
+    fi
+    for attempt in 1 2 3; do
+      if [[ -n "$s7_peer_handshake" ]] && s7_registry delete; then
+        deleted=1
+        break
+      fi
+      ((attempt == 3)) || sleep 2
+    done
+    if ((deleted)); then
+      rm -f "$recovery" || cleanup_rc=1
+      s7_oauth_client=""
+    else
+      printf '\nFAIL: could not delete OAuth client %s; recovery id retained at %s\n' "$s7_oauth_client" "$recovery" >&2
+      cleanup_rc=1
+    fi
   fi
   if [[ "${DC_HPRIG_KEEP:-0}" != 1 ]]; then
     for sname in ${created_sims[@]+"${created_sims[@]}"}; do
@@ -684,11 +703,15 @@ destroy_sims() { # destroy every sim's tenant this run created, once; a failure 
     done
   fi
   created_sims=()
+  return "$cleanup_rc"
 }
 stop_all() {
+  local original_rc=$? cleanup_rc=0
   stop_procs
-  destroy_sims
+  destroy_sims || cleanup_rc=1
   stop_forwards
+  ((original_rc == 0)) || return "$original_rc"
+  return "$cleanup_rc"
 }
 trap stop_all EXIT
 
@@ -863,7 +886,7 @@ cmd_run() {
   done
 
   stop_procs
-  destroy_sims
+  destroy_sims || bad=1
   stop_forwards
   ((bad == 0)) || fail "the harborpulse rig is red"
   say "ALL CHECKS PASSED"

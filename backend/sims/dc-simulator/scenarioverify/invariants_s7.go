@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"time"
 
 	"github.com/devicechain-io/dc-simulator/sim"
 )
@@ -62,6 +63,8 @@ type S7 struct {
 	ExpectedFlooding []string
 	Pumps            []string
 	ExpectedPumps    []string
+	PumpFrom         time.Time
+	PumpTo           time.Time
 }
 
 func init() {
@@ -93,19 +96,22 @@ func tenantIsolation(o Observations) error {
 	a, b := map[string]S7Device{}, map[string]S7Device{}
 	ids := map[string]bool{}
 	for _, d := range s.A.Devices {
-		if d.ID == "" || ids[d.ID] || d.Description != sim.HarborpulseTenantDescription(s.TenantA) {
+		if d.ID == "" || d.Token == "" || ids[d.ID] || a[d.Token].ID != "" || d.Description != sim.HarborpulseTenantDescription(s.TenantA) {
 			return fmt.Errorf("tenant A inventory contains foreign or duplicate state")
 		}
 		ids[d.ID], a[d.Token] = true, d
 	}
 	for _, d := range s.B.Devices {
-		if d.ID == "" || ids[d.ID] || d.Description != sim.HarborpulseTenantDescription(s.TenantB) {
+		if d.ID == "" || d.Token == "" || ids[d.ID] || b[d.Token].ID != "" || d.Description != sim.HarborpulseTenantDescription(s.TenantB) {
 			return fmt.Errorf("tenant B inventory contains tenant A or duplicate state")
 		}
 		ids[d.ID], b[d.Token] = true, d
 	}
 	for token, d := range a {
 		peer, ok := b[token]
+		if !ok && token == sim.HarborpulseReplacementSeparateDevice && d.ExternalID == "PAW-GAUGE-NORTH-3-NEW" {
+			continue
+		}
 		if !ok || d.ExternalID != peer.ExternalID {
 			return fmt.Errorf("fleets do not reuse device tokens and external ids")
 		}
@@ -178,6 +184,9 @@ func mcpFleetQA(o Observations) error {
 	if err := s7Compare(s.QAReads, []string{"list_alarms", "list_commands", "aggregate_measurements"}); err != nil {
 		return err
 	}
+	if err := s7PumpCommandEvidence(s); err != nil {
+		return err
+	}
 	if len(s.ExpectedFlooding) == 0 || len(s.ExpectedPumps) == 0 {
 		return fmt.Errorf("no critical flood or running pump evidence from GraphQL")
 	}
@@ -186,6 +195,38 @@ func mcpFleetQA(o Observations) error {
 	}
 	if !slices.Equal(s.ExpectedFlooding, []string{sim.HarborpulseEastQuay}) {
 		return fmt.Errorf("critical flood answer did not identify East Quay")
+	}
+	return nil
+}
+
+// A pump answer needs both stored running telemetry and a successful start
+// command in the same platform observation window, independently on each plane.
+func s7PumpCommandEvidence(s *S7) error {
+	if s.PumpFrom.IsZero() || !s.PumpTo.After(s.PumpFrom) {
+		return fmt.Errorf("missing pump command observation window")
+	}
+	for _, answer := range []struct {
+		pumps []string
+		raw   json.RawMessage
+	}{{s.ExpectedPumps, s.QAReads["list_commands"].Expected}, {s.Pumps, s.QAReads["list_commands"].Actual}} {
+		var commands []s7Command
+		if json.Unmarshal(answer.raw, &commands) != nil {
+			return fmt.Errorf("missing successful pump command history")
+		}
+		for _, pump := range answer.pumps {
+			supported := false
+			for _, command := range commands {
+				queued, qerr := time.Parse(time.RFC3339Nano, command.QueuedTime)
+				responded, rerr := time.Parse(time.RFC3339Nano, command.RespondedTime)
+				if command.Token != "" && command.DeviceToken == pump && command.Name == sim.HarborpulseStartPumpKey && command.Status == "SUCCESSFUL" &&
+					qerr == nil && rerr == nil && !queued.Before(s.PumpFrom) && !responded.Before(queued) && !responded.After(s.PumpTo) {
+					supported = true
+				}
+			}
+			if !supported {
+				return fmt.Errorf("reported pump has no relevant successful start command")
+			}
+		}
 	}
 	return nil
 }

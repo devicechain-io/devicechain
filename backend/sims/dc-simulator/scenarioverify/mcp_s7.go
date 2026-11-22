@@ -83,11 +83,11 @@ func (m *s7MCP) rpc(ctx context.Context, method string, params any, out any) err
 		return fmt.Errorf("MCP request failed")
 	}
 	defer res.Body.Close()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("MCP %s returned HTTP %d", method, res.StatusCode)
-	}
 	if session := res.Header.Get("Mcp-Session-Id"); session != "" {
 		m.session = session
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("MCP %s returned HTTP %d", method, res.StatusCode)
 	}
 	if out == nil {
 		return nil
@@ -128,7 +128,12 @@ func (m *s7MCP) rpc(ctx context.Context, method string, params any, out any) err
 	return nil
 }
 
-func (m *s7MCP) initialize(ctx context.Context) error {
+func (m *s7MCP) initialize(ctx context.Context) (err error) {
+	defer func() {
+		if err != nil {
+			m.close()
+		}
+	}()
 	var out struct {
 		ProtocolVersion string `json:"protocolVersion"`
 	}
@@ -146,6 +151,11 @@ func (m *s7MCP) initialize(ctx context.Context) error {
 }
 
 func (m *s7MCP) close() {
+	if m.session == "" {
+		return
+	}
+	session := m.session
+	m.session = ""
 	ctx, cancel := context.WithTimeout(context.Background(), 5e9)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, m.endpoint, nil)
@@ -153,7 +163,7 @@ func (m *s7MCP) close() {
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+m.token)
-	req.Header.Set("Mcp-Session-Id", m.session)
+	req.Header.Set("Mcp-Session-Id", session)
 	req.Header.Set("Mcp-Protocol-Version", m.version)
 	if res, err := m.do(req); err == nil {
 		res.Body.Close()

@@ -221,25 +221,80 @@ func s7AlarmComparison(ctx context.Context, r *Reader, m *s7MCP) (S7Comparison, 
 	return S7Comparison{}, nil, nil, fmt.Errorf("S7 alarm snapshot did not settle")
 }
 
+// Bracket the tool with normalized independent platform reads. A fixed event
+// window can still change when ingestion arrives late. Only reference movement
+// triggers retries; a stable wrong tool answer remains evidence for the invariant.
+func s7Bracket[T any](label string, read, tool func() ([]T, error)) (S7Comparison, []T, []T, error) {
+	for range 4 {
+		before, err := read()
+		if err != nil {
+			return S7Comparison{}, nil, nil, err
+		}
+		actual, err := tool()
+		if err != nil {
+			return S7Comparison{}, nil, nil, err
+		}
+		after, err := read()
+		if err != nil {
+			return S7Comparison{}, nil, nil, err
+		}
+		if reflect.DeepEqual(before, after) {
+			return S7Comparison{Expected: s7JSON(before), Actual: s7JSON(actual)}, before, actual, nil
+		}
+	}
+	return S7Comparison{}, nil, nil, fmt.Errorf("S7 %s snapshot did not settle", label)
+}
+
 func s7Aggregate(ctx context.Context, r *Reader, m *s7MCP, device, name string, from, to time.Time) (S7Comparison, []s7Bucket, []s7Bucket, error) {
 	filters := map[string]any{"deviceToken": device, "name": name, "startTime": from.Format(time.RFC3339Nano), "endTime": to.Format(time.RFC3339Nano), "intervalSeconds": 3600}
-	var truth struct {
-		Buckets []s7Bucket `json:"bucketedMeasurements"`
+	read := func() ([]s7Bucket, error) {
+		var truth struct {
+			Buckets []s7Bucket `json:"bucketedMeasurements"`
+		}
+		if err := r.session.Query(ctx, r.events, queryS7Buckets, map[string]any{"c": filters}, &truth); err != nil {
+			return nil, fmt.Errorf("S7 aggregate platform read failed")
+		}
+		sort.Slice(truth.Buckets, func(i, j int) bool { return truth.Buckets[i].BucketStart < truth.Buckets[j].BucketStart })
+		return truth.Buckets, nil
 	}
-	if err := r.session.Query(ctx, r.events, queryS7Buckets, map[string]any{"c": filters}, &truth); err != nil {
-		return S7Comparison{}, nil, nil, fmt.Errorf("S7 aggregate platform read failed")
+	tool := func() ([]s7Bucket, error) {
+		out, err := m.call(ctx, "aggregate_measurements", filters)
+		if err != nil {
+			return nil, err
+		}
+		actual, err := s7Decode[[]s7Bucket](out["buckets"])
+		if err != nil {
+			return nil, fmt.Errorf("MCP aggregate decoding failed")
+		}
+		sort.Slice(actual, func(i, j int) bool { return actual[i].BucketStart < actual[j].BucketStart })
+		return actual, nil
 	}
-	out, err := m.call(ctx, "aggregate_measurements", filters)
-	if err != nil {
-		return S7Comparison{}, nil, nil, err
+	return s7Bracket("aggregate", read, tool)
+}
+
+// Read successful history for the same window as the pump telemetry.
+func s7CommandComparison(ctx context.Context, r *Reader, m *s7MCP, device string, from, to time.Time) (S7Comparison, []s7Command, []s7Command, error) {
+	filters := map[string]any{"deviceToken": device, "status": "SUCCESSFUL"}
+	window := func(rows []s7Command) []s7Command {
+		out := []s7Command{}
+		for _, command := range rows {
+			at, err := time.Parse(time.RFC3339Nano, command.QueuedTime)
+			if err == nil && !at.Before(from) && !at.After(to) {
+				out = append(out, command)
+			}
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Token < out[j].Token })
+		return out
 	}
-	actual, err := s7Decode[[]s7Bucket](out["buckets"])
-	if err != nil {
-		return S7Comparison{}, nil, nil, fmt.Errorf("MCP aggregate decoding failed")
+	read := func() ([]s7Command, error) {
+		rows, err := s7Rows[s7Command](ctx, r, r.endpoints.CommandMgmtGraphQL, queryS7Commands, "commands", filters)
+		return window(rows), err
 	}
-	sort.Slice(truth.Buckets, func(i, j int) bool { return truth.Buckets[i].BucketStart < truth.Buckets[j].BucketStart })
-	sort.Slice(actual, func(i, j int) bool { return actual[i].BucketStart < actual[j].BucketStart })
-	return S7Comparison{Expected: s7JSON(truth.Buckets), Actual: s7JSON(actual)}, truth.Buckets, actual, nil
+	tool := func() ([]s7Command, error) {
+		rows, err := s7ToolRows[s7Command](ctx, m, "list_commands", "commands", filters)
+		return window(rows), err
+	}
+	return s7Bracket("command history", read, tool)
 }
 
 func s7StateComparison(ctx context.Context, r *Reader, other *Reader, m *s7MCP, tokens []string) (S7Comparison, error) {
@@ -251,50 +306,58 @@ func s7StateComparison(ctx context.Context, r *Reader, other *Reader, m *s7MCP, 
 		sort.Slice(out.States, func(i, j int) bool { return out.States[i].DeviceToken < out.States[j].DeviceToken })
 		return out.States, err
 	}
-	before, err := read()
-	if err != nil {
-		return S7Comparison{}, fmt.Errorf("S7 state platform read failed")
-	}
-	var foreign struct {
-		States []s7State `json:"deviceStatesByDeviceToken"`
-	}
-	if err := other.session.Query(ctx, other.endpoints.DeviceStateGraphQL, queryS7States, map[string]any{"tokens": tokens}, &foreign); err != nil {
-		return S7Comparison{}, fmt.Errorf("S7 peer state platform read failed")
-	}
-	if !s7StateWitness(before, foreign.States, tokens) {
-		return S7Comparison{Expected: s7JSON("complete distinct tenant B broker admissions"), Actual: s7JSON(before)}, nil
-	}
-	out, err := m.call(ctx, "get_device_state", map[string]any{"deviceTokens": tokens})
-	if err != nil {
-		return S7Comparison{}, err
-	}
-	actual, err := s7Decode[[]s7State](out["states"])
-	if err != nil {
-		return S7Comparison{}, fmt.Errorf("MCP state decoding failed")
-	}
-	after, err := read()
-	if err != nil {
-		return S7Comparison{}, fmt.Errorf("S7 state platform reread failed")
-	}
-	sort.Slice(actual, func(i, j int) bool { return actual[i].DeviceToken < actual[j].DeviceToken })
-	if len(before) != len(tokens) || len(after) != len(tokens) || len(actual) != len(tokens) {
-		return S7Comparison{Expected: s7JSON("complete tenant B states"), Actual: s7JSON(actual)}, nil
-	}
-	for i := range before {
-		lo, e1 := time.Parse(time.RFC3339Nano, before[i].LastActivityTime)
-		hi, e2 := time.Parse(time.RFC3339Nano, after[i].LastActivityTime)
-		at, e3 := time.Parse(time.RFC3339Nano, actual[i].LastActivityTime)
-		if e1 != nil || e2 != nil || e3 != nil || at.Before(lo) || at.After(hi) {
-			return S7Comparison{Expected: s7JSON("valid tenant B activity within GraphQL bounds"), Actual: s7JSON(actual)}, nil
+	for range 4 {
+		before, err := read()
+		if err != nil {
+			return S7Comparison{}, fmt.Errorf("S7 state platform read failed")
 		}
-		// Keep only the stable columns after validating activity against its two
-		// independently read platform bounds.
-		before[i].LastActivityTime, after[i].LastActivityTime, actual[i].LastActivityTime = "", "", ""
+		var foreign struct {
+			States []s7State `json:"deviceStatesByDeviceToken"`
+		}
+		if err := other.session.Query(ctx, other.endpoints.DeviceStateGraphQL, queryS7States, map[string]any{"tokens": tokens}, &foreign); err != nil {
+			return S7Comparison{}, fmt.Errorf("S7 peer state platform read failed")
+		}
+		out, err := m.call(ctx, "get_device_state", map[string]any{"deviceTokens": tokens})
+		if err != nil {
+			return S7Comparison{}, err
+		}
+		actual, err := s7Decode[[]s7State](out["states"])
+		if err != nil {
+			return S7Comparison{}, fmt.Errorf("MCP state decoding failed")
+		}
+		after, err := read()
+		if err != nil {
+			return S7Comparison{}, fmt.Errorf("S7 state platform reread failed")
+		}
+		sort.Slice(actual, func(i, j int) bool { return actual[i].DeviceToken < actual[j].DeviceToken })
+		stableBefore, stableAfter := slices.Clone(before), slices.Clone(after)
+		for i := range stableBefore {
+			stableBefore[i].LastActivityTime = ""
+		}
+		for i := range stableAfter {
+			stableAfter[i].LastActivityTime = ""
+		}
+		if !reflect.DeepEqual(stableBefore, stableAfter) {
+			continue
+		}
+		if !s7StateWitness(before, foreign.States, tokens) {
+			return S7Comparison{Expected: s7JSON("complete distinct tenant B broker admissions"), Actual: s7JSON(before)}, nil
+		}
+		if len(actual) != len(tokens) {
+			return S7Comparison{Expected: s7JSON("complete tenant B states"), Actual: s7JSON(actual)}, nil
+		}
+		for i := range before {
+			lo, e1 := time.Parse(time.RFC3339Nano, before[i].LastActivityTime)
+			hi, e2 := time.Parse(time.RFC3339Nano, after[i].LastActivityTime)
+			at, e3 := time.Parse(time.RFC3339Nano, actual[i].LastActivityTime)
+			if e1 != nil || e2 != nil || e3 != nil || at.Before(lo) || at.After(hi) {
+				return S7Comparison{Expected: s7JSON("valid tenant B activity within GraphQL bounds"), Actual: s7JSON(actual)}, nil
+			}
+			actual[i].LastActivityTime = ""
+		}
+		return S7Comparison{Expected: s7JSON(stableBefore), Actual: s7JSON(actual)}, nil
 	}
-	if !reflect.DeepEqual(before, after) {
-		return S7Comparison{}, fmt.Errorf("S7 connectivity snapshot moved")
-	}
-	return S7Comparison{Expected: s7JSON(before), Actual: s7JSON(actual)}, nil
+	return S7Comparison{}, fmt.Errorf("S7 connectivity snapshot did not settle")
 }
 
 func s7StateWitness(own, foreign []s7State, tokens []string) bool {
@@ -366,10 +429,10 @@ func collectS7(ctx context.Context, cfg Config, reader *Reader, defects []string
 		return nil, err
 	}
 	m := &s7MCP{http: cfg.HTTP, endpoint: c.MCPURL, token: token}
+	defer m.close()
 	if err := m.initialize(ctx); err != nil {
 		return nil, err
 	}
-	defer m.close()
 	s := &S7{TenantA: reader.tenant, TenantB: peer.tenant, IsolationReads: map[string]S7Comparison{}, QAReads: map[string]S7Comparison{}}
 	alarmRead, alarms, answers, err := s7AlarmComparison(ctx, peer, m)
 	if err != nil {
@@ -424,6 +487,7 @@ func collectS7(ctx context.Context, cfg Config, reader *Reader, defects []string
 	s.Pumps, s.ExpectedPumps = []string{}, []string{}
 	truthAggregates, toolAggregates := map[string][]s7Bucket{}, map[string][]s7Bucket{}
 	truthCommands, toolCommands := []s7Command{}, []s7Command{}
+	s.PumpFrom, s.PumpTo = clock.At(day, 17), end
 	for _, device := range pumps {
 		_, truth, actual, err := s7Aggregate(ctx, peer, m, device, sim.HarborpulsePumpRunningKey, clock.At(day, 17), end)
 		if err != nil {
@@ -441,25 +505,11 @@ func collectS7(ctx context.Context, cfg Config, reader *Reader, defects []string
 				}
 			}
 		}
-		expected, err := s7Rows[s7Command](ctx, peer, peer.endpoints.CommandMgmtGraphQL, queryS7Commands, "commands", map[string]any{"deviceToken": device, "status": "SUCCESSFUL"})
+		_, expected, returned, err := s7CommandComparison(ctx, peer, m, device, s.PumpFrom, s.PumpTo)
 		if err != nil {
 			return nil, err
 		}
-		returned, err := s7ToolRows[s7Command](ctx, m, "list_commands", "commands", map[string]any{"deviceToken": device, "status": "SUCCESSFUL"})
-		if err != nil {
-			return nil, err
-		}
-		filter := func(rows []s7Command) []s7Command {
-			out := []s7Command{}
-			for _, command := range rows {
-				at, err := time.Parse(time.RFC3339Nano, command.QueuedTime)
-				if err == nil && !at.Before(clock.At(day, 17)) && !at.After(end) {
-					out = append(out, command)
-				}
-			}
-			return out
-		}
-		truthCommands, toolCommands = append(truthCommands, filter(expected)...), append(toolCommands, filter(returned)...)
+		truthCommands, toolCommands = append(truthCommands, expected...), append(toolCommands, returned...)
 	}
 	sort.Slice(truthCommands, func(i, j int) bool { return truthCommands[i].Token < truthCommands[j].Token })
 	sort.Slice(toolCommands, func(i, j int) bool { return toolCommands[i].Token < toolCommands[j].Token })

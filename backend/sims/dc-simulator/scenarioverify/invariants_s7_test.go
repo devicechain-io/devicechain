@@ -4,8 +4,10 @@
 package scenarioverify
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-simulator/sim"
 )
@@ -30,6 +32,9 @@ func cleanS7() *S7 {
 	for _, tool := range []string{"list_alarms", "list_commands", "aggregate_measurements"} {
 		s.QAReads[tool] = S7Comparison{Expected: s7JSON([]string{"independent-platform-answer"}), Actual: s7JSON([]string{"independent-platform-answer"})}
 	}
+	s.PumpFrom, s.PumpTo = at(17), at(19.5)
+	commands := []s7Command{{Token: "c", DeviceToken: "same-pump", Name: sim.HarborpulseStartPumpKey, Status: "SUCCESSFUL", QueuedTime: at(18).Format("2006-01-02T15:04:05Z07:00"), RespondedTime: at(18.1).Format("2006-01-02T15:04:05Z07:00")}}
+	s.QAReads["list_commands"] = S7Comparison{Expected: s7JSON(commands), Actual: s7JSON(commands)}
 	return s
 }
 
@@ -157,6 +162,101 @@ func TestS7ReadDocumentsMatchServedSchemas(t *testing.T) {
 	} {
 		if errs := servedSchema(t, d.area).ValidateWithVariables(d.doc, d.vars); len(errs) > 0 {
 			t.Errorf("%s: %v", d.doc, errs)
+		}
+	}
+}
+
+func TestS7AllowsOnlyKnownS5ExtraDevice(t *testing.T) {
+	o := cleanDay().observe()
+	o.S5.Replacement.Records = nil
+	o.S7.A.Devices = append(o.S7.A.Devices, S7Device{ID: "s5-extra", Token: sim.HarborpulseReplacementSeparateDevice, ExternalID: "PAW-GAUGE-NORTH-3-NEW", Description: sim.HarborpulseTenantDescription(o.S7.TenantA)})
+	o.S7.ObservedA = o.S7.A
+	var red []string
+	for _, inv := range Evaluate(o) {
+		if !inv.Passed {
+			red = append(red, inv.Name)
+		}
+	}
+	if !slices.Equal(red, []string{InvReplacementIdentity}) {
+		t.Fatalf("combined S5/S7 observations red %v, want only replacement identity", red)
+	}
+	for _, token := range []string{"unexpected-device", ""} {
+		o.S7.A.Devices[1].Token = token
+		o.S7.ObservedA = o.S7.A
+		if tenantIsolation(o) == nil {
+			t.Fatalf("unrecognized extra token %q passed", token)
+		}
+	}
+}
+
+func TestS7PumpAnswersRequireSupportingCommands(t *testing.T) {
+	for _, rows := range [][]s7Command{
+		{},
+		{{Token: "c", DeviceToken: "another-pump", Name: sim.HarborpulseStartPumpKey, Status: "SUCCESSFUL", QueuedTime: at(18).Format("2006-01-02T15:04:05Z07:00"), RespondedTime: at(18.1).Format("2006-01-02T15:04:05Z07:00")}},
+	} {
+		s := cleanS7()
+		s.QAReads["list_commands"] = S7Comparison{Expected: s7JSON(rows), Actual: s7JSON(rows)}
+		if mcpFleetQA(Observations{S7: s}) == nil {
+			t.Fatal("equal histories without a successful start command for the reported pump passed")
+		}
+	}
+}
+
+func TestS7PumpCommandRelevance(t *testing.T) {
+	for name, alter := range map[string]func(*s7Command){
+		"no-token":       func(c *s7Command) { c.Token = "" },
+		"other-command":  func(c *s7Command) { c.Name = sim.HarborpulseStopPumpKey },
+		"failed":         func(c *s7Command) { c.Status = "FAILED" },
+		"missing-reply":  func(c *s7Command) { c.RespondedTime = "" },
+		"bad-queue-time": func(c *s7Command) { c.QueuedTime = "bad" },
+		"stale":          func(c *s7Command) { c.QueuedTime = at(16).Format(time.RFC3339Nano) },
+		"future":         func(c *s7Command) { c.RespondedTime = at(20).Format(time.RFC3339Nano) },
+		"reply-before-queue": func(c *s7Command) {
+			c.RespondedTime = at(17.9).Format(time.RFC3339Nano)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := cleanS7()
+			var commands []s7Command
+			if err := json.Unmarshal(s.QAReads["list_commands"].Expected, &commands); err != nil {
+				t.Fatal(err)
+			}
+			alter(&commands[0])
+			s.QAReads["list_commands"] = S7Comparison{Expected: s7JSON(commands), Actual: s7JSON(commands)}
+			if mcpFleetQA(Observations{S7: s}) == nil {
+				t.Fatal("irrelevant or unsuccessful command supported a pump answer")
+			}
+		})
+	}
+	s := cleanS7()
+	s.Pumps, s.ExpectedPumps = []string{"same-pump", "second-pump"}, []string{"same-pump", "second-pump"}
+	if mcpFleetQA(Observations{S7: s}) == nil {
+		t.Fatal("one pump's history supported a second reported pump")
+	}
+	var commands []s7Command
+	if err := json.Unmarshal(s.QAReads["list_commands"].Expected, &commands); err != nil {
+		t.Fatal(err)
+	}
+	next := commands[0]
+	next.Token, next.DeviceToken = "second-command", "second-pump"
+	commands = append(commands, next)
+	s.QAReads["list_commands"] = S7Comparison{Expected: s7JSON(commands), Actual: s7JSON(commands)}
+	if err := mcpFleetQA(Observations{S7: s}); err != nil {
+		t.Fatalf("independently supported pump answers refused: %v", err)
+	}
+}
+
+func TestS7ExtraDeviceExemptionRemainsNarrow(t *testing.T) {
+	for _, extra := range []S7Device{
+		{ID: "extra", Token: sim.HarborpulseReplacementSeparateDevice, ExternalID: "wrong"},
+		{ID: "extra", Token: "same-pump", ExternalID: "same-external"},
+	} {
+		s := cleanS7()
+		extra.Description = sim.HarborpulseTenantDescription(s.TenantA)
+		s.A.Devices = append(s.A.Devices, extra)
+		s.ObservedA = s.A
+		if tenantIsolation(Observations{S7: s}) == nil {
+			t.Fatal("malformed or duplicate extra device passed")
 		}
 	}
 }
