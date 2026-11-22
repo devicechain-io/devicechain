@@ -163,7 +163,7 @@ describe('the predicate environment extraction', () => {
 // empty list, running zero assertions and reporting a green file.
 describe('the locale set', () => {
   it('found every locale the console ships', () => {
-    expect(Object.keys(HELP).sort()).toEqual(['en', 'es']);
+    expect(Object.keys(HELP).sort()).toEqual(['en', 'es', 'zh-CN']);
   });
 });
 
