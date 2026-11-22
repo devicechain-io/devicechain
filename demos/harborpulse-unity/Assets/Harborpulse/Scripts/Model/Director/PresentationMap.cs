@@ -358,7 +358,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                 // nodes across the frame from 60 % up), so the same eye wrote "low cut-off" inside the caption's box, cut the attribute
                 // rule's tag off at the frame's edge and put the well behind the rail. The tall view stands twice as far back and as high on
                 // the same line, looking at the same point: the well and all four tags then stand between the caption and the rail, and
-                // the text is nine tenths the size on the screen that a 16:9 frame of the same width in pixels gives it.
+                // the text in a 1080 x 1920 frame is nine tenths the size, in pixels, that the 16:9 view gives it in a 1920 x 1080 one.
                 var tallWell = new CameraPose(new Point3(well.X + wx * WellViewBackM * WellViewTallScale, WellViewEyeM * WellViewTallScale, well.Z + wz * WellViewBackM * WellViewTallScale),
                     new Point3(well.X, WellViewLookY, well.Z), 42);
                 foreach (var suffix in StoryPoses.WellSuffixes)

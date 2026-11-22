@@ -21,7 +21,6 @@ namespace DeviceChain.Harborpulse.Hud
         readonly Text[] nodes = new Text[5], tags = new Text[4];
         readonly Image bannerBackground;
         readonly GameObject[,] shapes = new GameObject[5, 3];
-        readonly bool portrait;
         public bool Visible { get => root.activeSelf; set => root.SetActive(value); }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
@@ -33,7 +32,6 @@ namespace DeviceChain.Harborpulse.Hud
         public HarborStoryHud(HarborpulseApp app)
         {
             this.app = app;
-            portrait = Environment.GetCommandLineArgs().Contains("-hp-portrait");
             root = new GameObject("Story HUD", typeof(RectTransform));
             font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             var canvas = root.AddComponent<Canvas>(); canvas.renderMode = RenderMode.ScreenSpaceCamera;
@@ -94,7 +92,7 @@ namespace DeviceChain.Harborpulse.Hud
         static void Show(Text text, string value) { text.text = value; text.transform.parent.gameObject.SetActive(!string.IsNullOrEmpty(value)); }
         public void Apply(DirectorView view, string badge, double sim, string rate, IReadOnlyList<WorldTag> worldTags, string extraProblem)
         {
-            var vertical = app.sceneCamera.aspect < 1 || portrait;
+            var vertical = app.TallFrame;
             Show(top, badge + "  ·  Port Alder       " + HudModel.Clock(sim) + "  ·  " + HudModel.Beat(sim) + "       " + rate + "   [E] engineer");
             Show(caption, view.Caption);
             var captionRect = caption.transform.parent.GetComponent<RectTransform>();

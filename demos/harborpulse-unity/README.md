@@ -1135,9 +1135,10 @@ same check sees U7's overlap); and the ratio of blue to red in the light through
   caption's box, the attribute rule's tag ran off the frame's edge and the well stood behind the rail. A well's view now has a version
   of its own for a tall frame: the same line of sight from twice as far and twice as high (`WellViewTallScale`). The well and all four
   tags stand between the caption and the rail, the lowest line of text 2 % of the frame above the caption's box; the last 1.5 % of the
-  well's far rim is under the rail's lower node. The text is 0.89 of the size it has in a 16:9 frame of the same width in pixels.
-  `DirectorCamera` takes the tall version when it is told the frame is tall (`-hp-portrait`), as it takes the 9:16 HOME; every other
-  pose is its own tall version. The tags are text drawn over everything, so they are drawn only for a camera that frames the well:
+  well's far rim is under the rail's lower node. In a 1080 x 1920 frame the text is 0.89 of the size, in pixels, that the 16:9 view
+  gives it in a 1920 x 1080 one. Whether the frame is tall is decided once (`HarborpulseApp.TallFrame`: `-hp-portrait`, or a frame
+  drawn taller than wide) for the camera, the HUD and the tags; U8 asked the flag for the camera and the aspect or the flag for the
+  HUD. `DirectorCamera` then takes the tall version, as it takes the 9:16 HOME; every other pose is its own tall version. The tags are text drawn over everything, so they are drawn only for a camera that frames the well:
   within 24 m, or, in a tall frame, within 42 m by a camera that looks down by 20 degrees or more (`WellFootprint.TagRangeTallM`,
   `TagTallDownward`). The HUD's caption box and rail rows are now named in `HudModel`, where the test reads them.
 - **Two tors, and their joints** (`Outcrop.JointShare`, `WorldPropPlan.EastTor`, `WestTor`). U8 lit the upper 58 % of what shows of
@@ -1164,8 +1165,10 @@ same check sees U7's overlap); and the ratio of blue to red in the light through
   first shot's offer ran out, 15 s after a clean day had left. The last shot now waits only for the offers it made itself. An earlier
   offer is still taken while the page is open; it no longer holds it open. No caption's words and no cut changed: in the director's
   golden outputs the clean day is unchanged, and the two no-link controls differ in one line each, the last `caption-end` of page 3b
-  (561 s to 546 s, the clean day's). What it costs: on a linked day whose command is read more than about 65 s after the page is staged
-  and after the last shot has stood its 6 s, the page has already ended; before, it would have shown the derate caption until 80 s.
+  (561 s to 546 s, the clean day's). What it costs: once "Alarm raised." has gone up in the last shot and the shot has stood its 6 s, a day whose
+  link is about to be read and a day whose link never comes look the same, and the page ends; a command read after that (about 65 s
+  after the page's first shot) is not captioned, where U8 would have shown it until 80 s. On the live days so far the command was read
+  within 3 s of its alarm. `ALinkReadAfterTheLastShotHasStoodItsTimeIsNotShown` pins this.
 
 ### The ground
 

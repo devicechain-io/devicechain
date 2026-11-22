@@ -45,11 +45,12 @@ namespace DeviceChain.Harborpulse.Tests
                     Assert.That(tall, Is.SameAs(U5Plan.Map.Pose(name + StoryPoses.TallSuffix)), name);
                     Assert.That(tall, Is.Not.SameAs(wide), name);
                     double dx = wide.Camera.X - well.X, dz = wide.Camera.Z - well.Z; var n = Math.Sqrt(dx * dx + dz * dz); dx /= n; dz /= n;
-                    // the same line of sight, from twice as far: a 9:16 frame is 1.78 times as many pixels high, so the text is 0.89 of the size
+                    // the same line of sight, from twice as far: 1080 x 1920 is 1.78 times as many pixels high as 1920 x 1080 at the same
+                    // vertical field of view, so the text is 0.89 of the size in pixels that the 16:9 view gives it there
                     Assert.That(tall.Camera.X - well.X, Is.EqualTo(dx * PresentationMap.WellViewBackM * PresentationMap.WellViewTallScale).Within(1e-9));
                     Assert.That(tall.Camera.Z - well.Z, Is.EqualTo(dz * PresentationMap.WellViewBackM * PresentationMap.WellViewTallScale).Within(1e-9));
                     Assert.That(tall.Camera.Y, Is.EqualTo(PresentationMap.WellViewEyeM * PresentationMap.WellViewTallScale).Within(1e-9));
-                    Assert.That((16.0 / 9) / PresentationMap.WellViewTallScale, Is.InRange(.75, 1.0), "the text is not much smaller than in a 16:9 frame of the same width");
+                    Assert.That((16.0 / 9) / PresentationMap.WellViewTallScale, Is.InRange(.75, 1.0), "the text in 1080 x 1920 is not much smaller than the 16:9 view's in 1920 x 1080");
 
                     double FromBottom(CameraPose pose, double level, double side, out double nx)
                     {
@@ -225,6 +226,29 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(shownAt, Is.GreaterThan(shots.Last().At), "the derate caption is shown in the last shot");
             Assert.That(shownAt, Is.LessThan(shots.First().At + 80), "inside the first shot's offer");
             Assert.That(Events(s, "caption").Select(c => c.Value), Does.Contain("Running hot. Alarm raised."));
+        }
+
+        [Test]
+        public void ALinkReadAfterTheLastShotHasStoodItsTimeIsNotShown()
+        {
+            // What the tidy costs, pinned so that it is a decision and not an accident. When "Alarm raised." has gone up in the last shot
+            // and the shot has stood its minimum, a day whose link will come in ten seconds and a day whose link never comes look the
+            // same, and the page ends. U8 waited out the first shot's 80 s offer for both. Here the command is read 70 s after the page's
+            // first shot: inside that offer, after the page has ended.
+            var layout = Kit.Layout(); var source = DirectorTimeline.Clean("", layout); var late = new ObservationStore();
+            var s = new Scheduler(Storyboard.Parse(DirectorKit.StoryText(), new PresentationMap(layout)), layout);
+            for (var wall = 0; wall <= 600; wall++)
+            {
+                var sim = 6 + wall * 24.0 / layout.DayLengthSeconds;
+                foreach (var o in source.Records.Where(o => o.ObservedAtS <= (o.Kind == "command" && o.Key == "derate" ? wall - 70 : wall))) late.Add(o);
+                foreach (var stream in new[] { "alarms", "notifications", "credentials", "pump", "measurements" }) late.AddCoverage(new CoverageInterval("run", stream, 6, sim, false));
+                s.Tick(new DirectorSample("run", sim, wall), late);
+            }
+            var first = Events(s, "shot").First().At; var end = Events(s, "caption-end").Last().At;
+            Assert.That(late.Records.Any(o => o.Kind == "command" && o.Key == "derate" && o.ObservedAtS + 70 > end && o.ObservedAtS + 70 < first + 80), Is.True, "the command is read after the page's end and inside the first shot's offer");
+            Assert.That(Events(s, "caption").Any(c => c.Value.Contains("derate")), Is.False);
+            Assert.That(Events(s, "caption").Select(c => c.Value).Distinct().Single(), Is.EqualTo("Running hot. Alarm raised."));
+            Assert.That(end, Is.EqualTo(Events(DirectorTimeline.Run(), "caption-end").Last().At), "the page ends when a clean day's does");
         }
 
         // ---------------------------------------------------------------- the two tors
