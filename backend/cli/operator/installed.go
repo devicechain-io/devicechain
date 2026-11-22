@@ -120,6 +120,10 @@ func DeclaredCRDs(manifests []byte) ([]string, error) {
 // so a guard reading it would wave through exactly the clusters it exists to catch.
 // Ask for the artifact that travels WITH the thing.
 //
+// What it compares is the identity STAMP each CRD carries: the annotation the
+// install wrote, never a digest recomputed from the live objects. A definition
+// hand-edited after an install keeps its stamp (see dck8s.IdentityAnnotation).
+//
 // 🔴 EVERY DECLARED CRD MUST BE PRESENT AND THEY MUST AGREE. Checking one would
 // pass a half-applied operator — an apply interrupted between two CRDs is an
 // ordinary way to end up in that state — and reporting the first stamp found would
