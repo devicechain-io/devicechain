@@ -157,6 +157,8 @@ func TestIntegrationTimeLeadingKeysApplyOverCompressedChunks(t *testing.T) {
 	// A read by device token below needs the deletion watermark table, a later migration than
 	// this test stops at: its own DDL, after the schema assertions above.
 	require.NoError(t, NewEntityDeletionWatermarksSchema().Migrate(sys))
+	// The live writer below names text_value, a later migration than this test stops at.
+	require.NoError(t, NewMeasurementTextValueSchema().Migrate(sys))
 	api := NewApi(after)
 	ctx := core.WithTenant(context.Background(), "acme")
 	d0 := "dev-0"
