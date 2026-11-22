@@ -5,6 +5,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -56,6 +57,99 @@ func operationWrites() float64 {
 }
 
 var _ = Describe("Executor admission and inert reconciliation", func() {
+	It("admits Install only at cluster scope and requires targets for other actions", func(ctx SpecContext) {
+		for _, action := range []string{"Install", "Bootstrap", "Upgrade", "Teardown"} {
+			for _, instance := range []bool{false, true} {
+				for _, uid := range []bool{false, true} {
+					spec := map[string]interface{}{"action": action, "enrollmentUID": "enrollment", "protocolVersion": int64(1)}
+					if instance {
+						spec["instance"] = "prod"
+					}
+					if uid {
+						spec["instanceUID"] = "target"
+					}
+					op := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": api.GroupVersion.String(), "kind": "InstanceOperation", "metadata": map[string]interface{}{"name": fmt.Sprintf("shape-%s-%t-%t", strings.ToLower(action), instance, uid)}, "spec": spec}}
+					valid := instance && (uid || action == "Bootstrap")
+					if action == "Install" {
+						valid = !instance && !uid
+					}
+					err := k8sClient.Create(ctx, op)
+					if valid {
+						Expect(err).NotTo(HaveOccurred())
+						Expect(k8sClient.Delete(ctx, op)).To(Succeed())
+					} else {
+						Expect(apierrors.IsInvalid(err)).To(BeTrue(), "%s instance=%t uid=%t: %v", action, instance, uid, err)
+					}
+				}
+			}
+		}
+	})
+	It("bounds UIDs, image and verdict strings and validates capability items", func(ctx SpecContext) {
+		for _, field := range []string{"instanceUID", "enrollmentUID"} {
+			for _, size := range []int{36, 37} {
+				op := operationFixture(fmt.Sprintf("bounds-%s-%d", strings.ToLower(field), size))
+				if field == "instanceUID" {
+					op.Spec.InstanceUID = strings.Repeat("a", size)
+				} else {
+					op.Spec.EnrollmentUID = strings.Repeat("a", size)
+				}
+				err := k8sClient.Create(ctx, op)
+				if size == 36 {
+					Expect(err).NotTo(HaveOccurred())
+					Expect(k8sClient.Delete(ctx, op)).To(Succeed())
+				} else {
+					Expect(apierrors.IsInvalid(err)).To(BeTrue())
+				}
+			}
+		}
+		for _, size := range []int{512, 513} {
+			e := enrollmentFixture()
+			e.Spec.ExecutorImage = strings.Repeat("r", size-72) + "@sha256:" + strings.Repeat("a", 64)
+			err := k8sClient.Create(ctx, e)
+			if size == 512 {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(k8sClient.Delete(ctx, e)).To(Succeed())
+			} else {
+				Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			}
+		}
+		op := operationFixture("verdict-bounds")
+		Expect(k8sClient.Create(ctx, op)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(context.Background(), op)).To(Succeed()) })
+		for _, tc := range []struct {
+			reason, message string
+			valid           bool
+		}{
+			{strings.Repeat("A", 128), strings.Repeat("m", 32768), true},
+			{strings.Repeat("A", 129), "Preview", false},
+			{"NotExecutableInThisBuild", strings.Repeat("m", 32769), false},
+			{"lowercase", "Preview", false}, {"Has-Hyphen", "Preview", false},
+		} {
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: op.Name}, op)).To(Succeed())
+			op.Status = api.InstanceOperationStatus{Phase: api.OperationPending, Reason: tc.reason, Message: tc.message}
+			err := k8sClient.Status().Update(ctx, op)
+			if tc.valid {
+				Expect(err).NotTo(HaveOccurred())
+			} else {
+				Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			}
+		}
+		e := enrollmentFixture()
+		Expect(k8sClient.Create(ctx, e)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(context.Background(), e)).To(Succeed()) })
+		for _, action := range []string{"Install", "Bootstrap", "Upgrade", "Teardown", "Future"} {
+			raw := &unstructured.Unstructured{}
+			raw.SetGroupVersionKind(api.GroupVersion.WithKind("ExecutorEnrollment"))
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "cluster"}, raw)).To(Succeed())
+			raw.Object["status"] = map[string]interface{}{"capability": map[string]interface{}{"protocolVersion": int64(1), "executableActions": []interface{}{action}}}
+			err := k8sClient.Status().Update(ctx, raw)
+			if action == "Future" {
+				Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		}
+	})
 	It("enforces singleton, digest, immutable enrollment and operation specs", func(ctx SpecContext) {
 		e := enrollmentFixture()
 		e.Name = "other"
@@ -124,6 +218,14 @@ var _ = Describe("Executor admission and inert reconciliation", func() {
 				}
 				Expect(apierrors.IsInvalid(k8sClient.Status().Update(ctx, raw))).To(BeTrue(), "mutation %s", mutation)
 			}
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: op.Name}, op)).To(Succeed())
+			op.Status.Conditions = []metav1.Condition{{Type: "Decided", Status: metav1.ConditionTrue, Reason: "Original", Message: "Preview", LastTransitionTime: metav1.NewTime(time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC))}}
+			Expect(k8sClient.Status().Update(ctx, op)).To(Succeed())
+			op.Status.Conditions[0].LastTransitionTime = metav1.NewTime(time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC))
+			Expect(k8sClient.Status().Update(ctx, op)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: op.Name}, op)).To(Succeed())
+			Expect(op.Status.Conditions).To(HaveLen(1))
+			Expect(op.Status.Conditions[0].LastTransitionTime.Time.Day()).To(Equal(22))
 		}
 		op := operationFixture("status-without-phase")
 		Expect(k8sClient.Create(ctx, op)).To(Succeed())
@@ -177,6 +279,10 @@ var _ = Describe("Executor admission and inert reconciliation", func() {
 			return op.Status.Reason
 		}, 15*time.Second).Should(Equal("NotExecutableInThisBuild"))
 		Expect(op.Status.Phase).To(Equal(api.OperationRefused))
+		condition := meta.FindStatusCondition(op.Status.Conditions, "Decided")
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+		Expect(condition.Reason).To(Equal(op.Status.Reason))
 		rv := op.ResourceVersion
 		Eventually(operationWrites, 5*time.Second).Should(BeNumerically(">=", 1))
 		writes := operationWrites()
@@ -191,6 +297,15 @@ var _ = Describe("Executor admission and inert reconciliation", func() {
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: stale.Name}, stale)).To(Succeed())
 			return stale.Status.Reason
 		}, 10*time.Second).Should(Equal("StaleTarget"))
+		install := operationFixture("cluster-install-operation")
+		install.Spec.Action, install.Spec.Instance, install.Spec.InstanceUID = api.ActionInstall, "", ""
+		install.Spec.EnrollmentUID = string(enrollment.UID)
+		Expect(k8sClient.Create(ctx, install)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(context.Background(), install)).To(Succeed()) })
+		Eventually(func() string {
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: install.Name}, install)).To(Succeed())
+			return install.Status.Reason
+		}, 10*time.Second).Should(Equal("NotExecutableInThisBuild"))
 		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "cluster"}, enrollment)).To(Succeed())
 		enrollment.Spec.ExecutorImage = "other@sha256:" + strings.Repeat("b", 64)
 		Expect(k8sClient.Update(ctx, enrollment)).To(Succeed())

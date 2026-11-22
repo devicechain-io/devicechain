@@ -84,9 +84,9 @@ func TestExecutorRBACExact(t *testing.T) {
 	read := []string{"get", "list", "watch"}
 	status := []string{"get", "update", "patch"}
 	expected := map[string][]string{
-		"ClusterRole/dc-executor":           append(append(expectedGrants("core.devicechain.io", []string{"instances", "executorenrollments", "instanceoperations"}, read), expectedGrants("core.devicechain.io", []string{"executorenrollments/status", "instanceoperations/status"}, status)...), expectedGrants("events.k8s.io", []string{"events"}, []string{"create", "patch"})...),
+		"ClusterRole/dc-executor":           append(expectedGrants("core.devicechain.io", []string{"instances", "executorenrollments", "instanceoperations"}, read), expectedGrants("core.devicechain.io", []string{"executorenrollments/status", "instanceoperations/status"}, status)...),
 		"ClusterRole/dc-executor-requester": append(expectedGrants("core.devicechain.io", []string{"instanceoperations"}, []string{"create", "get", "list", "watch"}), expectedGrants("core.devicechain.io", []string{"instances", "executorenrollments"}, read)...),
-		"Role/dc-executor":                  append(append(expectedGrants("", []string{"pods"}, []string{"get"}), expectedGrants("coordination.k8s.io", []string{"leases"}, []string{"get", "list", "watch", "create", "update", "patch"})...), expectedGrants("", []string{"events"}, []string{"create", "patch"})...),
+		"Role/dc-executor":                  append(expectedGrants("", []string{"pods"}, []string{"get"}), expectedGrants("coordination.k8s.io", []string{"leases"}, []string{"get", "list", "watch", "create", "update", "patch"})...),
 	}
 	for _, o := range executorObjects(t) {
 		key := o.GetKind() + "/" + o.GetName()
@@ -116,6 +116,21 @@ func TestExecutorRBACExact(t *testing.T) {
 	}
 	if len(expected) != 0 {
 		t.Fatalf("missing roles: %v", expected)
+	}
+}
+
+func TestExecutorClusterRBACOwnershipMarkers(t *testing.T) {
+	seen := 0
+	for _, obj := range executorObjects(t) {
+		if obj.GetKind() == "ClusterRole" || obj.GetKind() == "ClusterRoleBinding" {
+			seen++
+			if obj.GetLabels()["app.kubernetes.io/managed-by"] != "dcctl-executor" {
+				t.Errorf("%s/%s lacks ownership label", obj.GetKind(), obj.GetName())
+			}
+		}
+	}
+	if seen != 3 {
+		t.Fatalf("got %d cluster RBAC objects, want 3", seen)
 	}
 }
 func TestRenderExecutorValidationAndCredentials(t *testing.T) {

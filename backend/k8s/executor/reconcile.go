@@ -110,7 +110,7 @@ func (r *OperationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 	verification := VerifySelf(ctx, r.Reader, &enrollment, r.Self)
 	var instance *api.Instance
-	if verification.Ready && enrollment.Status.ObservedGeneration == enrollment.Generation {
+	if operation.Spec.Action != api.ActionInstall && verification.Ready && enrollment.Status.ObservedGeneration == enrollment.Generation {
 		instance = &api.Instance{}
 		if err := r.Get(ctx, client.ObjectKey{Name: operation.Spec.Instance}, instance); err != nil {
 			if !apierrors.IsNotFound(err) {
@@ -126,6 +126,13 @@ func (r *OperationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	decisions.WithLabelValues(string(verdict.Phase), verdict.Reason).Inc()
 	now := metav1.Now()
 	operation.Status = api.InstanceOperationStatus{Phase: verdict.Phase, Reason: verdict.Reason, Message: verdict.Message, DecidedAt: &now, ObservedGeneration: operation.Generation, ExecutorProtocolVersion: CompiledProtocolVersion}
+	if Terminal(verdict.Phase) {
+		meta.SetStatusCondition(&operation.Status.Conditions, metav1.Condition{
+			Type: api.OperationConditionDecided, Status: metav1.ConditionTrue,
+			Reason: verdict.Reason, Message: verdict.Message,
+			ObservedGeneration: operation.Generation, LastTransitionTime: now,
+		})
+	}
 	return updateStatus(ctx, r.Client, &operation)
 }
 

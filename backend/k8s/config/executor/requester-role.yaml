@@ -5,6 +5,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: dc-executor-requester
+  labels:
+    app.kubernetes.io/managed-by: dcctl-executor
 rules:
 - apiGroups: [core.devicechain.io]
   resources: [instanceoperations]

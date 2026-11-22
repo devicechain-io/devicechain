@@ -53,7 +53,7 @@ func (in *ExecutorCapability) DeepCopyInto(out *ExecutorCapability) {
 	*out = *in
 	if in.ExecutableActions != nil {
 		in, out := &in.ExecutableActions, &out.ExecutableActions
-		*out = make([]string, len(*in))
+		*out = make([]OperationAction, len(*in))
 		copy(*out, *in)
 	}
 }

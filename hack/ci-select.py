@@ -134,6 +134,8 @@ READERS = [
         "backend/core/rdb/postgres.go",
         "backend/broker/dc-nats-server/main.go",
         "backend/broker/dc-nats-server/go.mod",
+        # executor_apiserver_test.go installs the release CRDs in envtest.
+        "backend/k8s/config/crd/bases/**",
         "hack/harborpulse-rig.sh",  # valuesoverlay_test.go: the rig's --values heredoc
     ], NONTEST, "bootstrap/*_test.go"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
@@ -178,7 +180,13 @@ READERS = [
         "deploy/opentofu/modules/nats/main.tf",
         "**/RUNBOOK.md",
     ], [], "functionalarea/release_*contract_test.go"),
-    ("backend/k8s", "controllers", ["deploy/opentofu/modules/cnpg-cluster/chart/**"], [], "controllers/snapshotretention_helm_test.go:31"),
+    ("backend/k8s", "controllers", ["deploy/opentofu/modules/cnpg-cluster/chart/**"], [], "controllers/snapshotretention_helm_test.go:31; executor_test.go reads ../config/executor/requester-role.yaml inside the module"),
+    # executor_security_test.go walks every Helm manifest for requester bindings
+    # and the chart templates for accidental executor installation.
+    ("backend/k8s", "config", ["deploy/helm/**"], [], "config/executor_security_test.go"),
+    # Both tests copy/read the current CLI refusal probe; git baseline trees are
+    # mocked temporary fixtures, not additional current-tree dependencies.
+    ("backend/k8s", "executor", ["backend/cli/bootstrap/foundation_probe_test.go"], [], "executor/foundation_test.go, executor/foundation_execution_test.go"),
     ("backend/services/command-delivery", ".", [
         "frontend/apps/console/src/routes/command-batches/CreateBatchForm.tsx",
         "frontend/apps/console/src/routes/devices/DeviceCommandsPanel.tsx",
@@ -318,7 +326,7 @@ IN_MODULE = {
     ("backend/core", "test/frontend"): "build-tagged `frontend`, so the go job never compiles it; the frontend job runs the same vitest suites",
     ("backend/core", "replication"): "\"..\" appears only in a comment",
     ("backend/core", "webhooksig"): "\"..\" is a refused path segment",
-    ("backend/k8s", "api/v1beta1"): "reads ../../config/crd inside backend/k8s",
+    ("backend/k8s", "api/v1beta1"): "instance_crd_test.go, executor_crd_test.go and executor_schema_test.go read ../../config/crd/bases inside backend/k8s",
     ("backend/services/command-delivery", "processor"): "reads ../contract inside its own module",
     ("backend/services/event-processing", "internal/review"): "reads ../replayinput inside its own module",
     ("backend/services/device-management", "graphql"): "\"../x\" is a refused-key fixture",

@@ -47,7 +47,7 @@ func judgeExecutorEscrow(evidence []executorEscrowEvidence) error {
 	sort.Strings(failures)
 	// Read errors are deliberately not formatted: a credential parser's error
 	// must never turn into a way to print root-key material.
-	return fmt.Errorf("executor enrollment requires verified OwnerOffline escrow for every Instance:\n  %s\nRe-run dcctl bootstrap for each listed instance to reconcile escrow (a missing artifact is written). Preserve and inspect a mismatched artifact before moving it aside; use --escrow-dir when the artifacts are stored elsewhere", strings.Join(failures, "\n  "))
+	return fmt.Errorf("executor enrollment requires an escrow artifact whose fingerprint matches the deployed root key for every Instance (OwnerOffline):\n  %s\nRe-run dcctl bootstrap for each listed instance to reconcile escrow (a missing artifact is written). Preserve and inspect a mismatched artifact before moving it aside; use --escrow-dir when the artifacts are stored elsewhere", strings.Join(failures, "\n  "))
 }
 
 var executorReadEscrow = os.ReadFile

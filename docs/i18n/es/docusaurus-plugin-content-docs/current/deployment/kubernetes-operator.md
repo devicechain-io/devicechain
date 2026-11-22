@@ -126,8 +126,8 @@ no registra ni despliega un ejecutor. Como en cada versión, un dcctl anterior r
 cuyas definiciones haya actualizado un `dcctl install` de la versión 1.9.
 
 Un administrador del proveedor puede registrar un propietario y una imagen fijada por su
-resumen SHA-256. El registro exige un archivo de custodia `OwnerOffline` de la clave raíz
-verificado para **cada** Instance del clúster. Se usa el directorio de custodia existente de
+resumen SHA-256. El registro exige un archivo de custodia cuya huella coincide con la clave raíz
+desplegada para **cada** Instance del clúster (`OwnerOffline`). Se usa el directorio de custodia existente de
 dcctl; `--escrow-dir` selecciona otro directorio con los mismos archivos
 `<instance>-rootkey.escrow`. Volver a ejecutar `dcctl bootstrap` reconcilia la custodia y
 escribe un archivo ausente. Investigue una discrepancia antes de sustituir el archivo.
@@ -165,7 +165,10 @@ nuevos valores.
 
 `bootstrap` y `upgrade` rechazan una instancia con una InstanceOperation no terminal;
 `destroy` avisa y continúa para permitir la recuperación. Espere la decisión del ejecutor
-o use `dcctl executor unenroll --force`. Es detección, no un bloqueo.
+o use `dcctl executor unenroll --force`, que también cierra solicitudes pendientes si no hay un
+ejecutor registrado. El rechazo indica `kubectl delete instanceoperation <name>` para cada solicitud
+como otra solución. Es detección, no un bloqueo. AB6 no cubre `dcctl install`: prepara un clúster,
+y esta Preview rechaza las solicitudes Install de todos modos.
 
 ## Recursos personalizados {#custom-resources}
 
@@ -180,6 +183,15 @@ o use `dcctl executor unenroll --force`. Es detección, no un bloqueo.
 
 - **`ExecutorEnrollment`** (`executorenrollments.core.devicechain.io`, `dce`) — el registro único del propietario, la imagen fijada y las capacidades observadas del ejecutor.
 - **`InstanceOperation`** (`instanceoperations.core.devicechain.io`, `dcop`) — una solicitud de operación inmutable y su decisión; esta Preview no ejecuta operaciones.
+
+Install es una solicitud del clúster: prohíbe `spec.instance` y `spec.instanceUID`. Las demás acciones
+requieren `spec.instance`; Upgrade y Teardown también requieren `spec.instanceUID`, mientras que
+Bootstrap puede omitirlo porque su destino aún no existe. Todas requieren el `spec.enrollmentUID`
+actual. Una decisión terminal incluye `Decided=True` con su motivo en `status.conditions`.
+La fase, el motivo, el mensaje y la fecha de decisión terminales son inmutables; las condiciones
+pueden cambiar para mantener sus marcas de tiempo. La retirada solo elimina RBAC de ámbito de
+clúster con `app.kubernetes.io/managed-by: dcctl-executor`, con una precondición de UID, e informa
+de los objetos que omite.
 
 [`dcctl install`](./bootstrap.md#install) instala las cuatro definiciones junto con el propio
 controlador. Tienen ámbito de clúster en todos los sentidos: una sola copia por clúster,

@@ -90,7 +90,7 @@ Preview：本版本会安装并验证执行器，但不会执行任何操作。
 `dcctl install` 更新资源定义的集群。
 
 提供方管理员可以注册一个所有者以及按 SHA-256 摘要固定的镜像。注册要求集群中
-**每个** Instance 都有经过验证的 `OwnerOffline` 根密钥托管文件。
+**每个** Instance 都有指纹与已部署根密钥匹配的托管文件（`OwnerOffline`）。
 默认使用现有的 dcctl 托管目录；`--escrow-dir` 可指定另一个目录，其中仍使用
 `<instance>-rootkey.escrow` 文件名。重新运行 `dcctl bootstrap` 会核对托管文件并补写
 缺失文件。发现不匹配时，应先调查原因再替换文件。
@@ -122,7 +122,10 @@ Status 显示声明、能力、条件及非终态 InstanceOperation；集群未�
 
 存在非终态 InstanceOperation 时，`bootstrap` 和 `upgrade` 会拒绝操作对应实例；
 `destroy` 会警告并继续，以保证仍可恢复。请等待执行器裁决，或运行
-`dcctl executor unenroll --force`。这只是检测，不是互斥锁。
+`dcctl executor unenroll --force`；即使执行器未注册，该命令也会关闭待处理请求。
+拒绝信息还会为每个请求列出 `kubectl delete instanceoperation <name>`，作为另一种恢复方法。
+这只是检测，不是互斥锁。AB6 不覆盖 `dcctl install`：该命令准备的是集群，
+而本 Preview 无论如何都会拒绝 Install 请求。
 
 ## 自定义资源 {#custom-resources}
 
@@ -133,6 +136,14 @@ Status 显示声明、能力、条件及非终态 InstanceOperation；集群未�
 
 - **`ExecutorEnrollment`**（`executorenrollments.core.devicechain.io`，`dce`）——执行器的唯一注册资源，记录所有者、固定镜像和观察到的能力。
 - **`InstanceOperation`**（`instanceoperations.core.devicechain.io`，`dcop`）——不可变的操作请求及其裁决；本 Preview 不执行任何操作。
+
+Install 是集群级请求，禁止提供 `spec.instance` 和 `spec.instanceUID`。其他动作必须提供
+`spec.instance`；Upgrade 和 Teardown 还必须提供 `spec.instanceUID`，Bootstrap 可省略它，
+因为目标实例尚不存在。每个请求都必须提供当前的 `spec.enrollmentUID`。终态裁决会在
+`status.conditions` 中设置 `Decided=True`，并附上裁决原因。终态的 phase、reason、message
+和决定时间不可更改；条件仍可更改，以维护其时间戳。注销仅删除带有
+`app.kubernetes.io/managed-by: dcctl-executor` 标签的集群级 RBAC，并使用 UID 前置条件，
+同时报告跳过的对象。
 
 [`dcctl install`](./bootstrap.md#install) 将四种定义和控制器一起安装。它们在各方面都是集群范围的：每个集群一份，由其上的所有实例共享，版本跟随集群，而不是某个实例。因此，准备集群的命令也是升级它们的命令。
 

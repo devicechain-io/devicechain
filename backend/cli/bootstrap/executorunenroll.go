@@ -20,12 +20,17 @@ import (
 )
 
 func prepareExecutorUnenroll(ctx context.Context, dyn dynamic.Interface, force bool) error {
+	_, err := closeExecutorOperations(ctx, dyn, force)
+	return err
+}
+
+func closeExecutorOperations(ctx context.Context, dyn dynamic.Interface, force bool) (int, error) {
 	operations, err := listExecutorResource(ctx, dyn, operationGVR)
 	if err != nil {
 		if executorResourceAbsent(err) {
-			return nil
+			return 0, nil
 		}
-		return fmt.Errorf("refusing executor unenrollment: cannot read InstanceOperations: %w", err)
+		return 0, fmt.Errorf("refusing executor unenrollment: cannot read InstanceOperations: %w", err)
 	}
 	pending := pendingExecutorOperations(operations, "")
 	if len(pending) != 0 && !force {
@@ -33,21 +38,27 @@ func prepareExecutorUnenroll(ctx context.Context, dyn dynamic.Interface, force b
 		for _, op := range pending {
 			descriptions = append(descriptions, executorOperationSummary(op, time.Now()))
 		}
-		return fmt.Errorf("refusing executor unenrollment while operations are non-terminal:\n  %s\nWait for a verdict, or use dcctl executor unenroll --force to mark them Refused/Unenrolled first. This is detection, not a lock", strings.Join(descriptions, "\n  "))
+		return 0, fmt.Errorf("refusing executor unenrollment while operations are non-terminal:\n  %s\nWait for a verdict, or use dcctl executor unenroll --force to mark them Refused/Unenrolled first. This is detection, not a lock", strings.Join(descriptions, "\n  "))
 	}
+	closed := 0
 	for _, op := range pending {
-		if err := refuseOperationOnUnenroll(ctx, dyn, op.GetName()); err != nil {
-			return err
+		changed, err := refuseOperationOnUnenroll(ctx, dyn, op.GetName())
+		if err != nil {
+			return closed, err
+		}
+		if changed {
+			closed++
 		}
 	}
-	return nil
+	return closed, nil
 }
 
 // Forced unenrollment is the one non-executor writer of operation status. An
 // administrator closes outstanding requests before removing the writer that
 // could decide them. UpdateStatus carries resourceVersion; on a conflict, reread
 // and preserve any terminal verdict the executor has already written.
-func refuseOperationOnUnenroll(ctx context.Context, dyn dynamic.Interface, name string) error {
+func refuseOperationOnUnenroll(ctx context.Context, dyn dynamic.Interface, name string) (bool, error) {
+	changed := false
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		op, err := dyn.Resource(operationGVR).Get(ctx, name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
@@ -59,22 +70,29 @@ func refuseOperationOnUnenroll(ctx context.Context, dyn dynamic.Interface, name 
 		if !operationNonTerminal(*op) {
 			return nil
 		}
+		now := time.Now().UTC().Format(time.RFC3339)
 		status := map[string]interface{}{
 			"phase": "Refused", "reason": "Unenrolled",
 			"message":            "A provider administrator forcibly unenrolled the executor; submit a new request after enrollment.",
 			"observedGeneration": op.GetGeneration(),
-			"decidedAt":          time.Now().UTC().Format(time.RFC3339),
+			"decidedAt":          now,
+			"conditions": []interface{}{map[string]interface{}{
+				"type": "Decided", "status": "True", "reason": "Unenrolled",
+				"message":            "A provider administrator forcibly unenrolled the executor.",
+				"observedGeneration": op.GetGeneration(), "lastTransitionTime": now,
+			}},
 		}
 		if err := unstructured.SetNestedMap(op.Object, status, "status"); err != nil {
 			return err
 		}
 		_, err = dyn.Resource(operationGVR).UpdateStatus(ctx, op, metav1.UpdateOptions{})
+		changed = err == nil
 		return err
 	})
 	if err != nil {
-		return fmt.Errorf("marking InstanceOperation/%s Refused/Unenrolled before removing executor: %w", name, err)
+		return false, fmt.Errorf("marking InstanceOperation/%s Refused/Unenrolled before removing executor: %w", name, err)
 	}
-	return nil
+	return changed, nil
 }
 
 func UnenrollExecutor(ctx context.Context, kubeContext string, force bool, out io.Writer) error {
@@ -94,14 +112,26 @@ func UnenrollExecutor(ctx context.Context, kubeContext string, force bool, out i
 		return fmt.Errorf("refusing executor unenrollment: cannot read ExecutorEnrollment/cluster: %w", enrollmentErr)
 	}
 	if ns == nil && executorResourceAbsent(enrollmentErr) {
-		fmt.Fprintln(out, "Executor not enrolled; no resources were changed.")
+		if force {
+			closed, err := closeExecutorOperations(ctx, dyn, true)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Executor not enrolled; marked %d non-terminal InstanceOperations Refused/Unenrolled. No resources were deleted.\n", closed)
+		} else {
+			fmt.Fprintln(out, "Executor not enrolled; no resources were changed.")
+		}
 		return nil
 	}
 	if ns != nil && ns.GetUID() == "" {
 		return fmt.Errorf("refusing executor unenrollment: Namespace/%s has no UID; no resources were changed", executorNamespace)
 	}
-	if err := prepareExecutorUnenroll(ctx, dyn, force); err != nil {
+	closed, err := closeExecutorOperations(ctx, dyn, force)
+	if err != nil {
 		return err
+	}
+	if force {
+		fmt.Fprintf(out, "Marked %d non-terminal InstanceOperations Refused/Unenrolled.\n", closed)
 	}
 	targets := []struct {
 		resource        schema.GroupVersionResource
@@ -128,6 +158,25 @@ func UnenrollExecutor(ctx context.Context, kubeContext string, force bool, out i
 		var resource dynamic.ResourceInterface = dyn.Resource(target.resource)
 		if target.namespace != "" {
 			resource = dyn.Resource(target.resource).Namespace(target.namespace)
+		}
+		if target.resource.Group == "rbac.authorization.k8s.io" && target.namespace == "" {
+			object, err := resource.Get(ctx, target.name, metav1.GetOptions{})
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("executor removal stopped reading %s/%s: %w; earlier deletions have already completed", target.resource.Resource, target.name, err)
+			}
+			if object.GetLabels()[executorManagedByLabel] != executorFieldManager {
+				fmt.Fprintf(out, "skipped %s/%s: missing %s=%s ownership label\n", object.GetKind(), target.name, executorManagedByLabel, executorFieldManager)
+				continue
+			}
+			uid := object.GetUID()
+			if uid == "" {
+				fmt.Fprintf(out, "skipped %s/%s: object has no UID\n", object.GetKind(), target.name)
+				continue
+			}
+			options.Preconditions = &metav1.Preconditions{UID: &uid}
 		}
 		err := resource.Delete(ctx, target.name, options)
 		if err != nil && !apierrors.IsNotFound(err) {

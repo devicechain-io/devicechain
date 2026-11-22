@@ -18,12 +18,12 @@ type Registry map[Action]Runner
 // Activation requires a released refusal foundation and explicit provider privileges.
 var executable = map[Action]Runner{}
 
-func ExecutableActions() []string {
-	actions := make([]string, 0, len(executable))
+func ExecutableActions() []api.OperationAction {
+	actions := make([]api.OperationAction, 0, len(executable))
 	for action := range executable {
-		actions = append(actions, string(action))
+		actions = append(actions, action)
 	}
-	sort.Strings(actions)
+	sort.Slice(actions, func(i, j int) bool { return actions[i] < actions[j] })
 	return actions
 }
 

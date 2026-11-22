@@ -121,7 +121,8 @@ it does not enroll or deploy an executor. As with every release, an older dcctl 
 cluster whose definitions a 1.9 `dcctl install` has moved.
 
 A provider administrator can enroll an owner and an image pinned by SHA-256 digest. Enrollment
-requires a verified `OwnerOffline` root-key escrow artifact for **every** Instance in the cluster.
+requires an escrow artifact whose fingerprint matches the deployed root key for **every**
+Instance in the cluster (`OwnerOffline`).
 The default is the existing dcctl escrow directory; `--escrow-dir` selects another directory
 containing the same `<instance>-rootkey.escrow` files. Re-running `dcctl bootstrap` reconciles
 escrow and writes a missing artifact. A mismatch must be investigated before replacing the file.
@@ -156,7 +157,10 @@ before apply; unenroll first, then enroll again with the new values.
 
 `bootstrap` and `upgrade` refuse an instance with a non-terminal InstanceOperation; `destroy`
 warns and proceeds so recovery stays possible. Wait for the executor's verdict, or use
-`dcctl executor unenroll --force`. This is detection, not a lock.
+`dcctl executor unenroll --force`, which also closes pending requests when no executor is enrolled.
+The refusal names `kubectl delete instanceoperation <name>` for each request as another remedy.
+This is detection, not a lock. AB6 does not cover `dcctl install`: it prepares a cluster,
+and this Preview refuses Install requests anyway.
 
 ## Custom resources {#custom-resources}
 
@@ -171,6 +175,15 @@ warns and proceeds so recovery stays possible. Wait for the executor's verdict, 
 
 - **`ExecutorEnrollment`** (`executorenrollments.core.devicechain.io`, `dce`) — the singleton executor owner, pinned image and capability observation.
 - **`InstanceOperation`** (`instanceoperations.core.devicechain.io`, `dcop`) — an immutable operation request and its verdict; this Preview executes no operations.
+
+Install is a cluster-level request: `spec.instance` and `spec.instanceUID` are forbidden.
+Every other action requires `spec.instance`; Upgrade and Teardown also require `spec.instanceUID`,
+while Bootstrap may omit it because its target does not yet exist. Every request requires the
+current `spec.enrollmentUID`. A terminal verdict includes `Decided=True` with its reason in
+`status.conditions`. The terminal phase, reason, message and decision time remain immutable;
+conditions may change independently so their timestamps can be maintained. Unenrollment only
+deletes cluster-scoped RBAC carrying `app.kubernetes.io/managed-by: dcctl-executor`, using a UID
+precondition, and reports objects it skips.
 
 [`dcctl install`](./bootstrap.md#install) installs all four definitions together with the
 controller itself. They are cluster-scoped in every sense: one copy per cluster, shared by

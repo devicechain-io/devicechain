@@ -23,7 +23,8 @@ func newExecutorCommand() *cobra.Command {
 	var owner, image, escrowDir string
 	var dryRun, force bool
 	enroll := &cobra.Command{
-		Use: "enroll", Short: "Install and verify the executor (Preview)", Long: executorPreviewHelp,
+		Use: "enroll", Short: "Install and verify the executor (Preview)",
+		Long: executorPreviewHelp + "\n\nEnrollment requires an escrow artifact whose fingerprint matches the deployed root key for every instance (OwnerOffline).",
 		Args: cobra.NoArgs, SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := bootstrap.ValidateExecutorEnrollment(owner, image); err != nil {
@@ -59,7 +60,7 @@ func newExecutorCommand() *cobra.Command {
 			return bootstrap.UnenrollExecutor(cmd.Context(), kubeContext, force, cmd.OutOrStdout())
 		},
 	}
-	unenroll.Flags().BoolVar(&force, "force", false, "first mark non-terminal operations Refused/Unenrolled, then remove the executor")
+	unenroll.Flags().BoolVar(&force, "force", false, "mark non-terminal operations Refused/Unenrolled even when no executor is enrolled, then remove any enrolled executor")
 	group.AddCommand(enroll, status, unenroll)
 	return group
 }

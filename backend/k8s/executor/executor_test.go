@@ -113,7 +113,7 @@ func TestVerifySelf(t *testing.T) {
 			if !tt.missing {
 				b = b.WithObjects(pod)
 			}
-			enrollment := &api.ExecutorEnrollment{Spec: api.ExecutorEnrollmentSpec{ExecutorImage: tt.image, ProtocolVersion: tt.protocol}, Status: api.ExecutorEnrollmentStatus{Capability: &api.ExecutorCapability{ProtocolVersion: 1, ExecutableActions: []string{"Upgrade"}}}}
+			enrollment := &api.ExecutorEnrollment{Spec: api.ExecutorEnrollmentSpec{ExecutorImage: tt.image, ProtocolVersion: tt.protocol}, Status: api.ExecutorEnrollmentStatus{Capability: &api.ExecutorCapability{ProtocolVersion: 1, ExecutableActions: []api.OperationAction{api.ActionUpgrade}}}}
 			got := VerifySelf(context.Background(), b.Build(), enrollment, tt.identity)
 			if got.Reason != tt.reason || got.Ready != (tt.reason == "Enrolled") {
 				t.Fatalf("%+v", got)

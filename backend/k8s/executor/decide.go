@@ -47,7 +47,7 @@ func Decide(in DecideInput) Verdict {
 		if in.Instance != nil {
 			return refuse("InstanceExists", "An Instance with this name already exists.")
 		}
-	} else {
+	} else if op.Spec.Action != api.ActionInstall {
 		if in.Instance == nil {
 			return refuse("InstanceNotFound", "The target Instance does not exist.")
 		}

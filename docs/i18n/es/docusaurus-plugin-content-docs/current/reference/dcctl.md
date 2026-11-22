@@ -1047,6 +1047,8 @@ Install and verify the executor (Preview)
 
 Preview: the executor is installed and verified but executes no operations in this release
 
+Enrollment requires an escrow artifact whose fingerprint matches the deployed root key for every instance (OwnerOffline).
+
 ```
 dcctl executor enroll [flags]
 ```
@@ -1114,7 +1116,7 @@ dcctl executor unenroll [flags]
 ### Options
 
 ```
-      --force   first mark non-terminal operations Refused/Unenrolled, then remove the executor
+      --force   mark non-terminal operations Refused/Unenrolled even when no executor is enrolled, then remove any enrolled executor
   -h, --help    help for unenroll
 ```
 

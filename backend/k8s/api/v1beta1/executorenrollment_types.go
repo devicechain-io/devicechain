@@ -11,6 +11,7 @@ type ExecutorEnrollmentSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="owner is immutable"
 	Owner string `json:"owner"`
 	// +kubebuilder:validation:Pattern=`^[^@\s]+@sha256:[a-f0-9]{64}$`
+	// +kubebuilder:validation:MaxLength=512
 	ExecutorImage string `json:"executorImage"`
 	// +kubebuilder:validation:Enum=OwnerOffline
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="escrowDelivery is immutable"
@@ -22,7 +23,7 @@ type ExecutorEnrollmentSpec struct {
 type ExecutorCapability struct {
 	ProtocolVersion int32 `json:"protocolVersion"`
 	// +listType=set
-	ExecutableActions []string `json:"executableActions"`
+	ExecutableActions []OperationAction `json:"executableActions"`
 }
 
 type ExecutorEnrollmentStatus struct {

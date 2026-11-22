@@ -98,7 +98,7 @@ func judgePendingOperations(ops []unstructured.Unstructured, readErr error, inst
 	}
 	lines := make([]string, 0, len(pending))
 	for _, op := range pending {
-		lines = append(lines, executorOperationSummary(op, now))
+		lines = append(lines, executorOperationSummary(op, now)+"; to remove this request: kubectl delete instanceoperation "+op.GetName())
 	}
 	return fmt.Errorf("refusing %s for instance %q while InstanceOperations are non-terminal:\n  %s\nWait for the executor's verdict, or run dcctl executor unenroll --force. This is detection, not a lock", verb, instance, strings.Join(lines, "\n  "))
 }
