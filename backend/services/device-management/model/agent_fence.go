@@ -100,12 +100,17 @@ func (api *Api) reenableFence(ctx context.Context, decisionGeneration int) error
 
 const DefaultKillFeedTTL = 30 * time.Second
 
-// KillFeed is process-local evidence that the kill consumer can still reach the broker.
+// KillFeed is process-local evidence that the kill consumer is caught up.
+// An unapplied kill that exhausts its deliveries latches the shared feed stale for
+// every tenant until process restart; neither a heartbeat nor fence re-enablement
+// clears that loss of evidence.
 type KillFeed struct {
 	mu   sync.RWMutex
 	last time.Time
 	ttl  time.Duration
 	now  func() time.Time
+
+	staleLatched bool
 }
 
 func NewKillFeed(ttl time.Duration, now func() time.Time) *KillFeed {
@@ -125,6 +130,15 @@ func (f *KillFeed) Now() time.Time {
 	return f.now()
 }
 func (f *KillFeed) Beat(now time.Time) { f.mu.Lock(); defer f.mu.Unlock(); f.last = now }
+
+// LatchStale fails all agent alarm executions closed until process restart.
+// There is deliberately no reset: a caught-up durable can have lost a kill.
+func (f *KillFeed) LatchStale() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.staleLatched = true
+}
+
 func (f *KillFeed) Fresh(now time.Time) bool {
 	if f == nil {
 		return false
@@ -135,5 +149,5 @@ func (f *KillFeed) Fresh(now time.Time) bool {
 	if ttl <= 0 {
 		ttl = DefaultKillFeedTTL
 	}
-	return !f.last.IsZero() && !now.Before(f.last) && now.Sub(f.last) < ttl
+	return !f.staleLatched && !f.last.IsZero() && !now.Before(f.last) && now.Sub(f.last) < ttl
 }
