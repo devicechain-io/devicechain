@@ -37,10 +37,9 @@ var operationTypeCases = []struct {
 	{"a backslash before a shorter quote run in a block string", `subscription { ticks(x: """a\"b""") }`, "", opSubscription},
 	{"a block string hides a brace", `subscription { ticks(x: """ { """) } mutation { doIt }`, "", ""},
 	// Refused lexemes. graphql-go's scanner runs in Go-token mode, so `//` and `/* */`
-	// are comments to it and backquoted raw strings and `'c'` are single tokens; and it
-	// closes a block string at the first three quotes, backslash or not. Its
-	// normalising pass reads none of these the same way, so the reader refuses them all.
-	{"backslash before three quotes closes a block string", `subscription { ticks(x: """a\""" ) }`, "", ""},
+	// are comments to it and backquoted raw strings and `'c'` are single tokens.
+	// Keep the escaped block-quote refusal too, although v1.11.1 honours that escape.
+	{"escaped block quote remains refused", `subscription { ticks(x: """a\""" ) }`, "", ""},
 	{"Go line comment", "// mutation { doIt }\nsubscription { ticks }", "", ""},
 	{"Go block comment", "/* mutation { doIt } */ subscription { ticks }", "", ""},
 	{"a Go block comment hides a brace", "subscription { ticks /* } mutation { doIt } */ }", "", ""},
@@ -51,10 +50,11 @@ var operationTypeCases = []struct {
 	{"empty selection set", `subscription { }`, "", ""},
 	{"junk between the name and the selection set", `subscription S ??? { ticks }`, "", ""},
 	{"an argument with no value", `subscription { ticks(x: ) }`, "", ""},
-	// Strings graphql-go's normalising pass rewrites, and a minus before a name: both
-	// classified, and both run by graphql-go (see TestOperationTypeAgreesWithGraphQLGo).
+	// Normalised string escapes and numeric Any arguments run upstream. Since
+	// v1.11.1 a minus before a name is a syntax error, even for Any.
 	{"surrogate pair escape", `subscription { ticks(x: "\uD83D\uDE00") }`, "", opSubscription},
-	{"minus before a name, for an Any argument", `subscription { ticks(a: -x) }`, "", opSubscription},
+	{"minus before a name, for an Any argument", `subscription { ticks(a: -x) }`, "", ""},
+	{"negative number for an Any argument", `subscription { ticks(a: -1) }`, "", opSubscription},
 	{"fragment before the operation", `fragment F on Subscription { ticks } subscription { ...F }`, "", opSubscription},
 	{"fragment only", `fragment F on Query { hello }`, "", ""},
 	{"select the subscription by name", `mutation M { doIt } subscription S { ticks }`, "S", opSubscription},
@@ -114,7 +114,7 @@ const arbiterSchema = `
 `
 
 // newArbiter is graphql-go over arbiterSchema, without the work limit. The Any scalar
-// (see lexSDL) lets it execute a minus in front of a name.
+// (see lexSDL) prevents scalar validation from hiding lexical disagreements.
 func newArbiter(res *arbiterResolver) *graphql.Schema {
 	return graphql.MustParseSchema(arbiterSchema, res, graphql.Logger(silentLogger{}))
 }
