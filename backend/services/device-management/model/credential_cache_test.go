@@ -61,7 +61,7 @@ type ccFixture struct {
 // credentialCacheTables is everything the writes under test touch: the credential and its
 // device, and every table DeleteDevice's cascade and ReplaceDevice's journal write.
 func credentialCacheTables() []any {
-	return append(append([]any{}, deviceProfileTables...), &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{}, &DeviceConfigurationRevision{}, &DeviceConfigurationState{},
+	return append(append([]any{}, deviceProfileTables...), &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{}, &DeviceConfigurationRevision{}, &DeviceConfigurationReport{}, &DeviceConfigurationState{},
 		&EntityRelationship{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{}, &PendingEntityDeletion{}, &PendingAlarmEvent{})
 }
 

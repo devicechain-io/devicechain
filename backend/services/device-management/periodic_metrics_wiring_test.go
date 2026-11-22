@@ -16,9 +16,11 @@ import (
 func TestPeriodicPassMetricsWiring(t *testing.T) {
 	prevMS, prevReaper, prevClassifier, prevMarkerHeal := Microservice, AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal
 	prevAccounting, prevAccountant := DecodeAccounting, DecodeAccountant
+	prevConfigurationMaintenance := ConfigurationReportMaintenance
 	t.Cleanup(func() {
 		Microservice, AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal = prevMS, prevReaper, prevClassifier, prevMarkerHeal
 		DecodeAccounting, DecodeAccountant = prevAccounting, prevAccountant
+		ConfigurationReportMaintenance = prevConfigurationMaintenance
 	})
 	Microservice = &core.Microservice{FunctionalArea: "device-management"}
 	reg := prometheus.NewRegistry()
@@ -27,7 +29,8 @@ func TestPeriodicPassMetricsWiring(t *testing.T) {
 	require.NoError(t, initAlarmPositionClassifier())
 	require.NoError(t, initCreateEnrollMarkerHeal())
 	require.NoError(t, initDecodeAccounting())
-	tasks := []string{"agent_proposal_reaper", "alarm_position_classifier", "create_enroll_marker_heal", "decode_accounting"}
+	require.NoError(t, initConfigurationReportMaintenance())
+	tasks := []string{"agent_proposal_reaper", "alarm_position_classifier", "create_enroll_marker_heal", "decode_accounting", "configuration_report_maintenance"}
 	subsystem := "devicemanagement"
 
 	families, err := reg.Gather()
