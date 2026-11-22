@@ -92,6 +92,14 @@ func appendMeasurementEntry(dst []byte, r *MeasurementEventCreateRequest) ([]byt
 	if dst, ok = eventid.AppendJSONStringPtr(dst, r.DataType); !ok {
 		return dst, false
 	}
+	// Present only on a STRING reading, so a numeric row's preimage, and the id stored for
+	// every row written before text values existed, is byte for byte what it was.
+	if r.TextValue != nil {
+		dst = eventid.AppendKey(dst, false, "TextValue")
+		if dst, ok = eventid.AppendJSONString(dst, *r.TextValue); !ok {
+			return dst, false
+		}
+	}
 	dst = eventid.AppendKey(dst, false, "Occurred")
 	if dst, ok = eventid.AppendJSONTime(dst, r.EntryOccurredTime); !ok {
 		return dst, false

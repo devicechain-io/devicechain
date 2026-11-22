@@ -232,7 +232,12 @@ func measurementFromResolved(tenant string, e *resolvedevent.ResolvedEvent,
 		OccurredTime: entry.OccurredTime,
 		Name:         mx.Name,
 	}
-	if f, err := strconv.ParseFloat(mx.Value, 64); err == nil {
+	// A STRING reading carries its value as text, exactly as the persist path keeps it, so
+	// the payload id derived below is the id the stored row gets.
+	if mx.DataType != nil && *mx.DataType == model.DataTypeString && !mx.Derived {
+		text := mx.Value
+		me.TextValue = &text
+	} else if f, err := strconv.ParseFloat(mx.Value, 64); err == nil {
 		me.Value = sql.NullFloat64{Float64: f, Valid: true}
 	}
 	if mx.Classifier != nil {
@@ -271,6 +276,7 @@ func measurementFromResolved(tenant string, e *resolvedevent.ResolvedEvent,
 		Classifier:        me.Classifier,
 		Unit:              mx.Unit,
 		DataType:          mx.DataType,
+		TextValue:         me.TextValue,
 		Derived:           mx.Derived,
 	}
 	// The value goes into the preimage as the same *float64 the persist path builds. The
