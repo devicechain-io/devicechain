@@ -1931,31 +1931,35 @@ type GeoFenceGeometry {
     geometry: String!
 }
 
-# One alarm a bulk acknowledge did not act on, and why.
+"""One alarm a bulk acknowledge did not act on, and why."""
 type AlarmAckRefusal {
-    # The alarm this refusal is about, exactly as the caller spelled it.
+    """The alarm this refusal is about, exactly as the caller spelled it."""
     token: String!
-    # The machine-readable classification. Branch on this, never on `reason`.
-    #
-    # ALARM_NOT_FOUND is the only value, and that is a fact about acknowledgment rather than an
-    # omission: acknowledgment is orthogonal to ACTIVE/CLEARED (either may be acknowledged) and
-    # is idempotent, so no alarm STATE refuses it. A token naming nothing is the whole failure
-    # space. Treat the field as an open vocabulary anyway.
+    """
+    Machine-readable classification of the refusal. ALARM_NOT_FOUND, meaning the token names no
+    alarm, is the only value today; acknowledgement is idempotent and independent of ACTIVE or
+    CLEARED, so no alarm state refuses it. Branch on this rather than on reason, and treat unknown
+    values as a refusal.
+    """
     code: String!
-    # Why it was refused, in client-safe terms.
+    """Why the alarm was refused, in client-safe terms. For display only; do not parse it."""
     reason: String!
 }
 
-# What one bulk acknowledge did.
-#
-# Every token the caller supplied appears in EXACTLY ONE of the two lists, so a selection can be
-# reconciled completely rather than inferred from a count.
+"""
+What one bulk acknowledge did. Every distinct token the caller supplied appears in exactly one of
+the two lists, so a selection can be reconciled completely rather than inferred from a count.
+"""
 type BulkAcknowledgeAlarmsResult {
-    # The alarms that are now acknowledged — including any that ALREADY were, matching
-    # acknowledgeAlarm, which likewise returns an already-acknowledged alarm rather than
-    # treating the repeat as a failure.
+    """
+    The alarms that are now acknowledged, including any that already were: a repeat acknowledgement
+    is not a failure, matching acknowledgeAlarm. In the order each token was first named.
+    """
     acknowledged: [Alarm!]!
-    # The tokens that named no alarm. Empty for a clean request.
+    """
+    The tokens that named no alarm, each with its code and reason. Empty for a clean request. In the
+    order each token was first named.
+    """
     refusals: [AlarmAckRefusal!]!
 }
 
@@ -1967,35 +1971,96 @@ type AlarmLifecycle {
     state: String!
 }
 
-# A raised alarm (ADR-041) — the operational alarm object. Raised when a DETECT rule's
-# condition fires (ADR-057, via the contributor-set integrator), keyed by (originator,
-# alarmKey): there is at most one live alarm per key, so re-crossings dedup into the
-# same row and severity escalates in place. The four-state model is state (ACTIVE |
-# CLEARED) crossed with acknowledged. The originator is addressed uniformly by
-# (originatorType, originatorId) (ADR-013); today it is always a device.
+"""
+A raised alarm, the operational alarm object. A DETECT rule whose condition holds raises it; there
+is at most one live alarm per originator and alarm key, so a repeated crossing is folded into the
+same row and its severity escalates in place. Its lifecycle is state (ACTIVE or CLEARED) crossed
+with acknowledged. The originator is addressed by originatorType and originatorId, and is always a
+device today. Requires alarm:read; a member whose access is limited to some customers sees only the
+alarms of its own devices.
+"""
 type Alarm implements Model & TokenReference & MetadataEntity {
+    """
+    Server-assigned numeric identifier, as a string. Address an alarm by its token instead where you
+    can.
+    """
     id: ID!
+    """
+    When the alarm row was first created, as an RFC 3339 timestamp. A re-raise reuses the row, so
+    this does not move; see raisedTime for the current cycle.
+    """
     createdAt: String
+    """When the alarm row was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """When the alarm was deleted, as an RFC 3339 timestamp; null for a live alarm."""
     deletedAt: String
+    """
+    Identifier of the alarm, unique within the tenant. It is stable for the alarm's whole life,
+    across clears and re-raises.
+    """
     token: String!
+    """Entity type of the originator, the thing the alarm is about. Always device today."""
     originatorType: String!
+    """
+    Numeric id of the originator within the tenant, as a string. Use originatorToken to address it
+    by token.
+    """
     originatorId: ID!
-    # The originator's token, resolved on demand (device originators only today);
-    # null when the originator is not a device or no longer exists. Mirrors
-    # AlarmEvent.originatorToken so a live list and its reconciling query address the
-    # originator the same way.
+    """
+    The originator's token, resolved on demand. Null when the originator is not a device or no
+    longer exists. Matches AlarmEvent.originatorToken, so a live list and a reconciling query
+    address the originator the same way.
+    """
     originatorToken: String
+    """
+    The alarm key the raising rule targets. It names which alarm on the originator this is; together
+    with the originator it is unique among live alarms.
+    """
     alarmKey: String!
+    """Key of the measurement the raising rule watches, kept for display."""
     metricKey: String!
+    """
+    Lifecycle state: ACTIVE while a condition holds, CLEARED once every contributing condition has
+    resolved or an operator cleared it. A cleared alarm that is raised again returns to ACTIVE on
+    the same row.
+    """
     state: String!
+    """
+    Whether an operator has acknowledged the alarm. Independent of state: either an ACTIVE or a
+    CLEARED alarm may be acknowledged. Raising the alarm again starts a new cycle and resets this to
+    false.
+    """
     acknowledged: Boolean!
+    """
+    Current severity tier: CRITICAL, MAJOR, MINOR, WARNING or INDETERMINATE. It escalates in place
+    to the highest tier among the conditions currently holding. Treat unknown values as a tier you
+    do not recognise.
+    """
     severity: String!
+    """
+    When the current cycle began, as an RFC 3339 timestamp: the first raise, or the most recent
+    return to ACTIVE after a clear. Earlier cycles are not kept on the row.
+    """
     raisedTime: String
+    """When the alarm was last cleared, as an RFC 3339 timestamp. Null while the alarm is ACTIVE."""
     clearedTime: String
+    """
+    When an operator acknowledged the alarm, as an RFC 3339 timestamp. Null until acknowledged, and
+    reset when the alarm is raised again.
+    """
     acknowledgedTime: String
+    """
+    Subject that acknowledged the alarm, taken from the authenticated caller and never from client
+    input. Null until acknowledged.
+    """
     acknowledgedBy: String
+    """
+    The reading that most recently raised a contribution to this alarm. Only a value-bearing raise
+    moves it; a resolve, or a raise from silence with no value, leaves it unchanged. Null when no
+    reading has been recorded.
+    """
     lastValue: Float
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
     """
     The disposition of this alarm's current cycle (see setAlarmDisposition), or null when
@@ -2109,18 +2174,28 @@ input AlarmAnchor {
     token: String!
 }
 
-# Criteria used when searching for alarms. All facets are optional and AND together;
-# originator restricts to a single entity by its (originatorType, originatorToken).
+"""
+Criteria for searching alarms. Every facet is optional and they AND together. originatorType and
+originatorToken restrict to one entity.
+"""
 input AlarmSearchCriteria {
     """True selects current cycles raised under suppression; false selects cycles without a stamp. Omit for either."""
     raisedDuringSuppression: Boolean
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Entity type of the originator, for example device. Required when originatorToken is set."""
     originatorType: String
+    """Only alarms of this originator, by its token. An unknown token finds nothing."""
     originatorToken: String
+    """Only alarms in this state: ACTIVE or CLEARED."""
     state: String
+    """Only alarms at this severity: CRITICAL, MAJOR, MINOR, WARNING or INDETERMINATE."""
     severity: String
+    """True selects acknowledged alarms and false unacknowledged ones. Omit for either."""
     acknowledged: Boolean
+    """Only alarms with this alarm key."""
     alarmKey: String
     """
     Only alarms raised on a device of this type, by the type's token. An unknown token finds
@@ -2188,9 +2263,11 @@ type AlarmSeverityCount {
     count: Int!
 }
 
-# Search results returned from an alarm query.
+"""One page of alarms."""
 type AlarmSearchResults {
+    """The alarms on this page."""
     results: [Alarm!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -6214,9 +6291,15 @@ type Query {
     # answer: a caller that asked for forty and silently received twenty-four could not tell
     # that from a tenant holding only twenty-four of them.
     geoFenceGeometry(hashes: [String!]!): [GeoFenceGeometry!]!
-    # Find raised alarms by unique id.
+    """
+    Reads alarms by numeric id. Ids naming no alarm, or an alarm the caller may not see, are
+    omitted. Requires alarm:read.
+    """
     alarmsById(ids: [ID!]!): [Alarm!]!
-    # Find raised alarms by unique token.
+    """
+    Reads alarms by token. Tokens naming no alarm, or an alarm the caller may not see, are omitted.
+    Requires alarm:read.
+    """
     alarmsByToken(tokens: [String!]!): [Alarm!]!
     """
     Service plane. Returns existence and lifecycle state only, including alarms derived from
@@ -6227,7 +6310,10 @@ type Query {
         """The alarm tokens to reconcile, bounded by the batch lookup limit."""
         tokens: [String!]!
     ): [AlarmLifecycle!]!
-    # List raised alarms that meet criteria.
+    """
+    Lists the alarms that match the criteria, one page at a time. Requires alarm:read; a member
+    whose access is limited to some customers sees only the alarms of its own devices.
+    """
     alarms(criteria: AlarmSearchCriteria!): AlarmSearchResults!
     """
     Lists alarm disposition labels, newest labelled cycle first: every labelled cycle, including
@@ -7101,26 +7187,26 @@ type Mutation {
     # Delete a single geofence. device:write alone — removing a fence constructs no question and
     # answers none, and delete-then-recreate is no way around the gate on creation.
     deleteGeoFence(token: String!): Boolean!
-    # Acknowledge a raised alarm (operator action). The acknowledging identity is the
-    # authenticated subject, recorded server-side — not a client-supplied value.
+    """
+    Acknowledges an alarm: an operator asserts the alarm has been seen. It does not change state or
+    severity and is independent of ACTIVE or CLEARED. Idempotent: acknowledging an acknowledged
+    alarm returns it unchanged. The acknowledging identity is the authenticated subject, recorded
+    server-side. Refused when the token names no alarm. Requires alarm:write.
+    """
     acknowledgeAlarm(token: String!): Alarm!
-    # Acknowledge many raised alarms at once — the fan-out counterpart of acknowledgeAlarm, for
-    # an operator working through an alarm storm. Same authority, same transition, and the same
-    # server-side acknowledging identity.
-    #
-    # 🔑 IT IS PARTIAL. A token naming no alarm is REFUSED and named in `refusals`; every other
-    # alarm is still acknowledged. A stale selection is the normal case here — alarms are being
-    # erased and devices deleted while an operator works — so refusing the whole request over one
-    # vanished row would leave no way to make progress but to bisect the list by hand.
-    #
-    # 🔴 AN EMPTY LIST ACKNOWLEDGES NOTHING. It is not "all alarms" and never has been.
-    #
-    # At most 2000 tokens per request. Over that is a GraphQL ERROR rather than a refusal list:
-    # it is a fault in how the caller chunked its work, not a verdict about any alarm. Duplicate
-    # tokens are collapsed and both result lists come back in the order each token was first
-    # named, so the answer is a deterministic function of the request.
+    """
+    Acknowledges many alarms at once, the bulk counterpart of acknowledgeAlarm with the same
+    authority, transition and recorded identity. It is partial: a token naming no alarm is refused
+    and listed in refusals, and every other alarm is still acknowledged. An empty list acknowledges
+    nothing. At most 2000 tokens per request; more is an error rather than a per-alarm refusal.
+    Duplicate tokens are collapsed. Requires alarm:write.
+    """
     acknowledgeAlarms(tokens: [String!]!): BulkAcknowledgeAlarmsResult!
-    # Clear a raised alarm (manual operator override).
+    """
+    Clears an alarm by hand, moving it to CLEARED. A manual override: the detection engine also
+    clears an alarm when its conditions resolve. Idempotent on an alarm that is already CLEARED. It
+    does not acknowledge the alarm. Refused when the token names no alarm. Requires alarm:write.
+    """
     clearAlarm(token: String!): Alarm!
     """
     Labels the CURRENT cycle of an alarm with an operator's verdict (see AlarmDisposition) and
@@ -7702,39 +7788,56 @@ enum AlarmClearReason {
     ORIGINATOR_DELETED
 }
 
-# A single alarm state-change, pushed live to a subscriber (ADR-041 / ADR-037). It
-# is the transition envelope re-emitted by the alarm integrator and the operator API — not
-# the stored Alarm row — so it carries the transition kind (eventType) and, for a
-# severity move, the prior severity, alongside a snapshot of the alarm after the
-# change. Address the alarm by token to re-query it; the originator is the uniform
-# (type, id) reference, with originatorToken resolved on demand for a device.
+"""
+A single alarm state change, pushed live to a subscriber. It is the transition envelope emitted by
+the alarm engine and the operator actions, not the stored Alarm row: it carries the kind of
+transition and, for a severity move, the prior severity, alongside a snapshot of the alarm after the
+change. Address the alarm by alarmToken to re-query it.
+"""
 type AlarmEvent {
     """The lifecycle reason for clearing the alarm; absent for ordinary clears."""
     clearReason: AlarmClearReason
-    # One of RAISED, ESCALATED, DEESCALATED, CLEARED, ACKNOWLEDGED.
+    """
+    The transition: RAISED, ESCALATED, DEESCALATED, CLEARED or ACKNOWLEDGED. Treat an unknown value
+    as a change you do not handle.
+    """
     eventType: String!
-    # Token of the alarm this event is about (stable across its lifecycle).
+    """Token of the alarm this event is about. Stable across the alarm's life."""
     alarmToken: String!
+    """Entity type of the originator. Always device today."""
     originatorType: String!
+    """Numeric id of the originator within the tenant, as a string."""
     originatorId: ID!
-    # The originator's token, resolved on demand (device originators only today);
-    # null when the originator is not a device or no longer exists.
+    """
+    The originator's token, resolved on demand. Null when the originator is not a device or no
+    longer exists.
+    """
     originatorToken: String
+    """The alarm key of the alarm, as on Alarm.alarmKey."""
     alarmKey: String!
+    """Key of the measurement the raising rule watches, as on Alarm.metricKey."""
     metricKey: String!
-    # Alarm state after the transition: ACTIVE | CLEARED.
+    """The alarm's state after the transition: ACTIVE or CLEARED."""
     state: String!
-    # Severity after the transition.
+    """The alarm's severity after the transition."""
     severity: String!
-    # The severity held before an in-place change; set only for ESCALATED/DEESCALATED.
+    """The severity held before an in-place change. Set only for ESCALATED and DEESCALATED; null otherwise."""
     previousSeverity: String
+    """Whether the alarm is acknowledged after the transition."""
     acknowledged: Boolean!
+    """Subject that acknowledged the alarm, or null when it is not acknowledged."""
     acknowledgedBy: String
+    """The alarm's last recorded reading after the transition, as on Alarm.lastValue. Null when none."""
     lastValue: Float
-    # When the current alarm cycle began (pairs with occurredTime for "active 42m").
+    """
+    When the alarm's current cycle began, as an RFC 3339 timestamp. Pair it with occurredTime to
+    show how long the alarm has been active.
+    """
     raisedTime: String
-    # The event time that drove the transition (measurement time, or operation time
-    # for an operator ack/clear).
+    """
+    The event time that drove the transition, as an RFC 3339 timestamp: the measurement time, or the
+    time of the operator's acknowledge or clear.
+    """
     occurredTime: String!
     """Live suppression deadline carried by the event, as RFC 3339; null when absent."""
     suppressedUntil: String
@@ -7744,19 +7847,18 @@ type AlarmEvent {
     raisedDuringSuppression: String
 }
 
-# Live alarm stream (ADR-037). Pushes each alarm transition to the subscriber as it
-# happens — scoped to the subscriber's tenant — from subscribe time onward with no
-# historical backfill (use the alarm queries for current state). Optional filters
-# narrow the feed to one originator, state, severity, or alarm key.
-#
-# Delivery is best-effort (at-most-once): the stored Alarm row is the source of
-# truth, and an event may be dropped (a transient publish failure, or a slow
-# consumer). A client that merges this stream into a live list must reconcile — re-run
-# the alarm queries on reconnect and periodically — so a dropped event can't leave a
-# stale row (e.g. a missed CLEARED showing a ghost active alarm).
+"""Live feeds. Delivery is best-effort and at most once."""
 type Subscription {
-    # Streams alarm state-change events. When originatorToken is supplied, originatorType
-    # is required and the token is resolved to its id once at subscribe time.
+    """
+    Streams alarm state changes for the subscriber's tenant, from subscribe time onward with no
+    backfill; use the alarm queries for current state. Delivery is best-effort: an event can be
+    dropped (a transient publish failure or a slow consumer), and the stored alarm is the source of
+    truth. A client merging this stream into a live list must re-run the alarm queries on reconnect
+    and periodically, so a dropped event cannot leave a ghost row, such as a missed CLEARED showing
+    an active alarm. The optional filters narrow the feed to one originator, state, severity or
+    alarm key. When originatorToken is given, originatorType is required, and the token is resolved
+    to its id once at subscribe time.
+    """
     alarmStream(
         originatorType: String
         originatorToken: String

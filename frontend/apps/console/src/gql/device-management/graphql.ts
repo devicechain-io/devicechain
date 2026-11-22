@@ -56,8 +56,14 @@ export type AlarmAnchor = {
   type: string;
 };
 
+/**
+ * Criteria for searching alarms. Every facet is optional and they AND together. originatorType and
+ * originatorToken restrict to one entity.
+ */
 export type AlarmSearchCriteria = {
+  /** True selects acknowledged alarms and false unacknowledged ones. Omit for either. */
   acknowledged?: boolean | null | undefined;
+  /** Only alarms with this alarm key. */
   alarmKey?: string | null | undefined;
   /** Only alarms stamped with this anchor (see AlarmAnchor). */
   anchor?: AlarmAnchor | null | undefined;
@@ -74,12 +80,17 @@ export type AlarmSearchCriteria = {
    * no upper bound. A value that is not RFC 3339 is an error.
    */
   endTime?: string | null | undefined;
+  /** Only alarms of this originator, by its token. An unknown token finds nothing. */
   originatorToken?: string | null | undefined;
+  /** Entity type of the originator, for example device. Required when originatorToken is set. */
   originatorType?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
   /** True selects current cycles raised under suppression; false selects cycles without a stamp. Omit for either. */
   raisedDuringSuppression?: boolean | null | undefined;
+  /** Only alarms at this severity: CRITICAL, MAJOR, MINOR, WARNING or INDETERMINATE. */
   severity?: string | null | undefined;
   /**
    * Only alarms active at some point at or after this instant (inclusive), as an RFC 3339
@@ -87,6 +98,7 @@ export type AlarmSearchCriteria = {
    * active then is included. Omit for no lower bound. A value that is not RFC 3339 is an error.
    */
   startTime?: string | null | undefined;
+  /** Only alarms in this state: ACTIVE or CLEARED. */
   state?: string | null | undefined;
 };
 
