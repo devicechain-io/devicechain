@@ -30,7 +30,7 @@ import {
   DataTableRow,
 } from '@/components/ui/data-table';
 import { errMessage } from '@/routes/common';
-import { rolloutPauseReasonLabel } from '@/lib/enumLabel';
+import { rolloutOutcomeLabel, rolloutPauseReasonLabel } from '@/lib/enumLabel';
 import { promoteRollout, resumeHaltedRollout, type UpdateRollout } from '@/lib/api/update-management';
 import '@/i18n/lazy/updates';
 
@@ -120,6 +120,11 @@ export function CohortPanel({
           <DataTableHeaderCell>{t('cohortColSize')}</DataTableHeaderCell>
           <DataTableHeaderCell>{t('cohortColPromotion')}</DataTableHeaderCell>
           <DataTableHeaderCell>{t('cohortColStatus')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('cohortColTargets')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{rolloutOutcomeLabel(t, 'SUCCEEDED')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{rolloutOutcomeLabel(t, 'IN_FLIGHT')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{rolloutOutcomeLabel(t, 'PENDING')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('cohortColFailures')}</DataTableHeaderCell>
         </DataTableHead>
         <DataTableBody>
           {cohorts.map((c, i) => {
@@ -141,16 +146,18 @@ export function CohortPanel({
                     {t(`cohortStatus_${status}`)}
                   </Badge>
                 </DataTableCell>
+                <DataTableCell className="text-muted-foreground" data-testid={`cohort-counts-${i}`}>
+                  {c.progress.total}
+                </DataTableCell>
+                <DataTableCell className="text-muted-foreground">{c.progress.succeeded}</DataTableCell>
+                <DataTableCell className="text-muted-foreground">{c.progress.inFlight}</DataTableCell>
+                <DataTableCell className="text-muted-foreground">{c.progress.pending}</DataTableCell>
+                <DataTableCell className="text-muted-foreground">{c.progress.failed + c.progress.unknown}</DataTableCell>
               </DataTableRow>
             );
           })}
         </DataTableBody>
       </DataTable>
-      )}
-      {cohorts.length > 0 && (
-        <HintText size="md" className="mt-3">
-          {t('cohortProgressHint')}
-        </HintText>
       )}
 
       {canWrite && paused && reason === 'COHORT_READY' && (
