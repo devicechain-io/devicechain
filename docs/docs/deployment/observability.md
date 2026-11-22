@@ -1626,7 +1626,7 @@ exports three series under its own service's name, `devicechain_<area>_<task>_â€
 | event-sources | `presence_demote`, `presence_reconcile`, `presence_canary` |
 | device-management | `ownership_drain`, `session_kick_drain` |
 | command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile`, `campaign_scheduler` |
-| event-processing | `detect_tick`, `rule_health_flush`, `shed_summary` |
+| event-processing | `detect_tick`, `rule_health_flush`, `rule_stat_sweep`, `shed_summary` |
 | lwm2m-ingest | `tenant_sweep` |
 | sparkplug-ingest | `presence_probe` |
 

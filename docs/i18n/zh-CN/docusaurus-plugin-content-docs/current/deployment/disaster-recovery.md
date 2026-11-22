@@ -184,7 +184,7 @@ kubectl -n dci-<instance-id> exec -it dc-tsdb-1 -c postgres -- psql -U postgres 
 SELECT hypertable_schema, hypertable_name FROM timescaledb_information.hypertables;
 ```
 
-事件表位于 `event-management` schema，应该全部出现在列表中。如果恢复后变成普通表，这项检查就能发现。Schema 导出中普通表与超表看起来相同，无法据此识别。（不必查找 `measurement_rollups`。它是连续聚合，底层超表属于内部表，因此未出现在此列表中是正常的。）
+事件表位于 `event-management` schema，应该全部出现在列表中。如果恢复后变成普通表，这项检查就能发现。Schema 导出中普通表与超表看起来相同，无法据此识别。（不必查找 `measurement_rollups` 或 `measurement_rollups_1h`。它们是连续聚合，底层超表属于内部表，因此未出现在此列表中是正常的。）
 
 第二项更关键：任务调度器是否真的在*当前集群*上运行？执行以下查询，等待一两分钟，再执行一次：
 

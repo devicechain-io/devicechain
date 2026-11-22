@@ -34,9 +34,11 @@ import (
 // unique), with the tenant denormalized for the tenant-scoped ruleHealth read filter.
 //
 // Row growth: the rule id embeds "{profileToken}@{version}", so a re-publish strands the prior
-// version's stat rows (never read again once that version is superseded). This mirrors the
-// sibling DetectRule projection's deferred growth posture (bounding row count is the ADR-023/052
-// governance concern); a supersede-time or periodic sweep is a cheap follow-up, not this slice.
+// version's stat rows. They are not read while that version is superseded, but they are read
+// again if a rollback makes the version active again. SweepStranded, run hourly by
+// processor.RuleStatSweep, removes them once they have stopped firing, and records the removal
+// in RuleStatSweepRecord in the same transaction, so ruleHealth can say that the version's
+// history was removed rather than report its rules as never having fired.
 type RuleStat struct {
 	// RuleId is the composed runtime id "{tenant}/{profileVersionToken}/{ruleToken}" — the
 	// same key DetectRule and the engine use, so a fire joins its rule row directly.
@@ -253,4 +255,149 @@ func (s *RuleStatStore) LoadByIDs(ctx context.Context, tenant string, ids []stri
 		out[st.RuleId] = st
 	}
 	return out, nil
+}
+
+// RuleStatSweepRecord says that SweepStranded removed rule stats of one profile version, and
+// when it last did. ruleHealth reads it for the active version: a rollback can make a swept
+// version active again, and its rules' counts then cover only the fires since SweptAt.
+type RuleStatSweepRecord struct {
+	Tenant              string    `gorm:"primaryKey;size:256;not null"`
+	ProfileVersionToken string    `gorm:"primaryKey;size:256;not null"`
+	SweptAt             time.Time `gorm:"not null"`
+}
+
+// TableName pins the table the migration creates.
+func (RuleStatSweepRecord) TableName() string { return "rule_stat_sweeps" }
+
+// AuditExempt: like RuleStat, a derived record the sweep maintains, not a user change.
+func (RuleStatSweepRecord) AuditExempt() bool { return true }
+
+// RuleStatSweepLock names the advisory lock the stranded-row sweep takes, so that one replica
+// sweeps at a time. It is taken per batch transaction with pg_try_advisory_xact_lock: a replica
+// that does not get it skips the batch rather than waiting, and the lock is released when the
+// batch commits or rolls back, so a replica that dies mid-sweep never holds it.
+const RuleStatSweepLock = "event-processing-rule-stat-sweep"
+
+// ruleStatStrandedPredicate is the condition under which the sweep may delete the stat row
+// aliased `s`, binding the tenant and the cut-off time in that order. It is the one risky part
+// of the sweep, so it is written once and used twice (see SweepStranded), and every clause errs
+// on the side of KEEPING a row:
+//
+//   - s.last_fired_at < before. A row that fired recently is kept whatever its version, so a
+//     version still firing (an event resolved against it while a publish propagates, or a
+//     replay) keeps its row. last_fired_at is the EVENT time of the fire while before is the
+//     wall clock less the quiet period, so a device whose clock runs behind can lose its row
+//     early and one whose clock runs ahead keeps it longer; either way only a counter moves.
+//   - the rule's profile HAS an active-version row, and that active version is not the row's.
+//     The rule id is "{tenant}/{profileToken}@{version}/{ruleToken}" and tokens are
+//     [A-Za-z0-9_-] (core.ValidateToken), so split_part takes the version token and the
+//     profile token apart exactly, and the profile_actives lookup is a primary-key match. A
+//     profile with no active-version row is one this service has not seen published, and its
+//     rows are left alone rather than guessed about.
+//
+// EXISTS over the primary key, rather than a NOT IN (which a NULL turns into "never") or a
+// prefix comparison (which cannot use the key).
+func ruleStatStrandedPredicate(s string) string {
+	version := `split_part(` + s + `.rule_id, '/', 2)`
+	return s + `.tenant = ? AND ` + s + `.last_fired_at < ?
+	AND EXISTS (SELECT 1 FROM profile_actives AS pa WHERE pa.tenant = ` + s + `.tenant
+		AND pa.profile_token = split_part(` + version + `, '@', 1)
+		AND pa.active_version_token <> ` + version + `)`
+}
+
+// SweepStranded deletes up to limit of tenant's stat rows that a re-publish left behind: rows
+// for a profile version that is no longer the profile's active version and that last fired
+// before `before` (see ruleStatStrandedPredicate). It returns how many it deleted.
+//
+// The rows are chosen in rule-id order by a CTE bounded by limit that locks them FOR UPDATE
+// SKIP LOCKED: a row a fire batch is writing is passed over rather than waited on, so
+// the sweep never queues behind the fire writer or deadlocks with it, and a later pass takes
+// the row if it is still stranded. The DELETE repeats the whole predicate on the rows it reaches.
+//
+// In the same transaction it records, for every version it deleted rows of, that the version's
+// history was removed (RuleStatSweepRecord), so a rollback that makes the version active again
+// is reported as such. A delete and its record commit together or not at all.
+//
+// It runs in a transaction that first tries the sweep's advisory lock. When another replica
+// holds it, nothing is deleted and the error is dccore.ErrPassSkipped.
+func (s *RuleStatStore) SweepStranded(ctx context.Context, tenant string, before time.Time, limit int) (int64, error) {
+	if tenant == "" {
+		return 0, dccore.ErrNoTenant
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("rule stat sweep: limit must be positive, got %d", limit)
+	}
+	var deleted int64
+	err := s.rdb.DB(dccore.WithTenant(ctx, tenant)).Transaction(func(tx *gorm.DB) error {
+		var locked bool
+		if err := tx.Raw(`SELECT pg_try_advisory_xact_lock(hashtextextended(?, 0))`, RuleStatSweepLock).Scan(&locked).Error; err != nil {
+			return fmt.Errorf("rule stat sweep: try lock: %w", err)
+		}
+		if !locked {
+			return dccore.ErrPassSkipped
+		}
+		var ids []string
+		// The chosen rows are a MATERIALIZED CTE, not an IN subquery: a locking subquery
+		// under IN can be rescanned once per outer row, and each rescan then returns another
+		// limit's worth, so the LIMIT would bound nothing.
+		if err := tx.Raw(`WITH chosen AS MATERIALIZED (
+		SELECT c.rule_id FROM rule_stats AS c WHERE `+ruleStatStrandedPredicate("c")+`
+		ORDER BY c.rule_id LIMIT ? FOR UPDATE OF c SKIP LOCKED)
+	DELETE FROM rule_stats AS s USING chosen WHERE s.rule_id = chosen.rule_id AND `+ruleStatStrandedPredicate("s")+`
+	RETURNING s.rule_id`,
+			tenant, before, limit, tenant, before).Scan(&ids).Error; err != nil {
+			return fmt.Errorf("rule stat sweep: delete: %w", err)
+		}
+		deleted = int64(len(ids))
+		records := sweptVersions(tenant, ids, time.Now().UTC())
+		if len(records) == 0 {
+			return nil
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "tenant"}, {Name: "profile_version_token"}},
+			DoUpdates: clause.AssignmentColumns([]string{"swept_at"}),
+		}).Create(&records).Error; err != nil {
+			return fmt.Errorf("rule stat sweep: record: %w", err)
+		}
+		return nil
+	})
+	return deleted, err
+}
+
+// sweptVersions is one record per distinct profile version among the deleted rule ids, in
+// version order. A rule id is "{tenant}/{profileVersionToken}/{ruleToken}".
+func sweptVersions(tenant string, ids []string, at time.Time) []RuleStatSweepRecord {
+	seen := map[string]bool{}
+	var out []RuleStatSweepRecord
+	for _, id := range ids {
+		parts := strings.SplitN(id, "/", 3)
+		if len(parts) != 3 || seen[parts[1]] {
+			continue
+		}
+		seen[parts[1]] = true
+		out = append(out, RuleStatSweepRecord{Tenant: tenant, ProfileVersionToken: parts[1], SweptAt: at})
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].ProfileVersionToken < out[b].ProfileVersionToken })
+	return out
+}
+
+// LoadSweptAt returns when SweepStranded last removed stats of a profile version, and whether
+// it ever did.
+func (s *RuleStatStore) LoadSweptAt(ctx context.Context, tenant, profileVersionToken string) (time.Time, bool, error) {
+	var recs []RuleStatSweepRecord
+	err := s.rdb.DB(dccore.WithTenant(ctx, tenant)).Where("profile_version_token = ?", profileVersionToken).Limit(1).Find(&recs).Error
+	if err != nil || len(recs) == 0 {
+		return time.Time{}, false, err
+	}
+	return recs[0].SweptAt, true, nil
+}
+
+// SweepTenants lists the tenants that have stat rows, for the sweep to visit one at a time.
+// It is the one read under a system context, because it has to see every tenant to list
+// them; it reads only the distinct tenant column, and every statement the sweep then makes
+// runs under that one tenant (SweepStranded).
+func (s *RuleStatStore) SweepTenants(ctx context.Context) ([]string, error) {
+	var tenants []string
+	err := s.rdb.DB(dccore.WithSystemContext(ctx)).Model(&RuleStat{}).Distinct("tenant").Order("tenant").Pluck("tenant", &tenants).Error
+	return tenants, err
 }
