@@ -86,6 +86,7 @@ backend/core/test/storagegrowth_repo_test.go
 backend/core/webhooksig/keys.go
 backend/edge/dc-edge-agent/agent/dashboard_test.go
 backend/edge/dc-edge-agent/agent/gateway_test.go
+backend/k8s/api/v1beta1/deprecations_test.go
 backend/k8s/api/v1beta1/executor_crd_test.go
 backend/k8s/api/v1beta1/executor_schema_test.go
 backend/k8s/api/v1beta1/instance_crd_test.go
