@@ -65,6 +65,19 @@ func (l *dryRunLimiter) allow(now time.Time, keys ...string) bool {
 	return true
 }
 
+// dryRunLimitInit guards the lazy creation of an Api's limiter. Lazy, so an Api built by
+// literal (as tests and some wiring do) is limited too rather than silently unlimited.
+var dryRunLimitInit sync.Mutex
+
+func (api *Api) dryRunLimit() *dryRunLimiter {
+	dryRunLimitInit.Lock()
+	defer dryRunLimitInit.Unlock()
+	if api.dryRuns == nil {
+		api.dryRuns = &dryRunLimiter{}
+	}
+	return api.dryRuns
+}
+
 func errDryRunRateExceeded() *actiongate.Error {
 	e := actiongate.Refusal("DRY_RUN_RATE_EXCEEDED", "too many command-proposal dry runs; wait a minute and try again", false)
 	e.Retryable = true

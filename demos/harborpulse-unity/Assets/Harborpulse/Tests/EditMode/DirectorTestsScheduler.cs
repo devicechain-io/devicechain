@@ -43,6 +43,8 @@ namespace DeviceChain.Harborpulse.Tests
                 if (kind == "window" && device == "hp-light-east-3" && source == EvidenceSource.Platform) { key = "lamp-flicker"; id = "service-this-run"; }
                 if (kind == "attempt" && key == "lamp-flicker") fields["alarmToken"] = Alarm(device, key);
                 if (kind == "command" || kind == "chip") fields["alarmToken"] = Alarm(device, device == "hp-pump-north" ? "wet-well-high" : "connector-hot");
+                // The observer's control (-hp-control-no-cause): commands are read without their recorded cause, so none names an alarm or a cycle.
+                if (defect == "command-cause-not-read" && kind == "command") { fields.Remove("alarmToken"); cycle = ""; }
                 if (kind == "replacement") { id = "replacement-journal"; fields["beforeReading"] = "before-gauge"; fields["afterReading"] = "after-gauge"; }
                 if (device == "hp-gauge-north-3" && (kind == "measure" || kind == "credential")) { fields["replacementToken"] = "replacement-journal"; if (kind == "measure") id = fields.ContainsKey("afterReplacement") ? "after-gauge" : "before-gauge"; }
                 if (sim >= 26) {
@@ -278,6 +280,7 @@ namespace DeviceChain.Harborpulse.Tests
                 case "truck-stays-home": return new[] { "5:*", "7:slot:truck-out" };
                 case "silence-north-lamp": case "stream-cut": return new[] { "6:slot:absence", "6:node:absence", "6:link:outage->absence", "6:link:absence->notify" };
                 case "refuse-derate": return new[] { "3b:slot:derate", "3b:slot:cool" };
+                case "command-cause-not-read": return new[] { "3b:slot:derate", "3b:slot:cool", "4:node:command", "4:link:well->command", "4:link:command->running" };
                 case "no-command-far-end": return new[] { "4:slot:start", "4:slot:before-float", "4:node:command", "4:node:running", "4:link:well->command", "4:link:command->running", "4:link:running->falling" };
                 case "air-lock-basin": return new[] { "4b:follow:hp-pump-east", "4b:follow:hp-pump-basin", "4b:slot:air" };
                 case "drop-backfill": return new[] { "7:slot:tally", "7:node:stored", "7:link:paced->stored", "7:link:stored->clear" };
@@ -295,6 +298,7 @@ namespace DeviceChain.Harborpulse.Tests
         [TestCase("truck-stays-home") ]
         [TestCase("silence-north-lamp") ]
         [TestCase("refuse-derate") ]
+        [TestCase("command-cause-not-read") ]
         [TestCase("no-command-far-end") ]
         [TestCase("air-lock-basin") ]
         [TestCase("drop-backfill") ]

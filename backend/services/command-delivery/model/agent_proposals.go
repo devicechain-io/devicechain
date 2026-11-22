@@ -115,7 +115,7 @@ func (api *Api) ProposeCommand(ctx context.Context, proposer actiongate.Proposer
 		}
 	}
 	now := api.agentNow()
-	if req.DryRun && !api.dryRuns.allow(now, "client|"+proposer.Tenant+"|"+proposer.Client, "principal|"+proposer.Tenant+"|"+proposer.Principal) {
+	if req.DryRun && !api.dryRunLimit().allow(now, "client|"+proposer.Tenant+"|"+proposer.Client, "principal|"+proposer.Tenant+"|"+proposer.Principal) {
 		return nil, errDryRunRateExceeded()
 	}
 	cutoff, err := commandCutoff(i, now)

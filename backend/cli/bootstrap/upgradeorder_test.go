@@ -118,6 +118,9 @@ func TestHydratingAnUpgradeAsksWhichDcctlInstalledTheCluster(t *testing.T) {
 	prev := requireOperatorFor
 	t.Cleanup(func() { requireOperatorFor = prev })
 	requireOperatorFor = func(context.Context, string, string, string) error { return nil } // identity unchanged
+	prevPending := refusePendingOperationFor
+	t.Cleanup(func() { refusePendingOperationFor = prevPending })
+	refusePendingOperationFor = func(context.Context, string, string, string) error { return nil }
 	// The declaration read would fail the test if the refusal did not come first.
 	declared := false
 	stubDeclarationCalls(t, &declared)

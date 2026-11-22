@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dcctl/internal/apitest"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -23,6 +24,9 @@ func TestProductRotateIntegrationToken(t *testing.T) {
 			const issued = "one-time-bearer-secret"
 			calls := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if apitest.ServeCapabilities(t, w, r) {
+					return
+				}
 				var body struct {
 					Query     string         `json:"query"`
 					Variables map[string]any `json:"variables"`

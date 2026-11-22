@@ -25,6 +25,9 @@ import (
 func stubOperatorCheck(t *testing.T, err error) *int {
 	t.Helper()
 	prev := requireOperatorFor
+	prevPending := refusePendingOperationFor
+	t.Cleanup(func() { refusePendingOperationFor = prevPending })
+	refusePendingOperationFor = func(context.Context, string, string, string) error { return nil }
 	t.Cleanup(func() { requireOperatorFor = prev })
 	calls := 0
 	requireOperatorFor = func(context.Context, string, string, string) error {

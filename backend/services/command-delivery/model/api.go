@@ -196,7 +196,8 @@ type Api struct {
 	// the fence is judged: the window a concurrent re-enable must not slip through.
 	afterKillProposalsForTest func()
 	// dryRuns bounds command-proposal dry runs per agent client and person (DryRunsPerMinute).
-	dryRuns     dryRunLimiter
+	// A pointer, created on first use (dryRunLimit), so an Api stays copyable.
+	dryRuns     *dryRunLimiter
 	proposalNow func() time.Time
 	RDB         *rdb.RdbManager
 	// EnqueueValidator, when set, gates CreateCommand on the target device existing

@@ -64,9 +64,10 @@ func operationType(document, operationName string, maxLen int) (string, *gqlerro
 
 // opLexer tokenises a document the way graphql-go's lexer does
 // (internal/common/lexer.go in graphql-go), and REFUSES the lexemes at which
-// graphql-go's own two layers can disagree (see readRootFields). There is one reader
-// over it, readRootFields, with two callers that both enter through readDocument: the
-// work limit, and the WebSocket's operation-type gate.
+// graphql-go's own two layers can disagree, plus our established escaped-block-quote
+// exclusion (see readRootFields). Its reader, readRootFields, has two callers that
+// both enter through readDocument: the work limit and the WebSocket's operation-type
+// gate.
 type opLexer struct {
 	sc   scanner.Scanner
 	tok  rune
@@ -159,19 +160,16 @@ func (l *opLexer) next() {
 	}
 }
 
-// skipBlockString consumes the rest of a block string the way graphql-go does: the
-// third opening quote, then every rune up to and including the first run of three
-// consecutive quotes. graphql-go does NOT honour `\"""` as an escape here: the three
-// quotes after the backslash still close the string.
+// skipBlockString consumes the third opening quote and reads to the first triple
+// quote. An immediately preceding backslash refuses the document, so no caller can
+// classify or count the text after that escape.
 //
-// 🔴 A BLOCK STRING WHOSE CLOSING RUN FOLLOWS A BACKSLASH IS REFUSED. `\"""` is the
-// specification's escaped triple quote, and graphql-go's normalising pass honours it
-// (it stays inside the block string), while its lexer closes the string there. The two
-// layers then disagree about every byte that follows, so graphql-go never ran such a
-// document as written. The rule is exact: it refuses when the rune before the closing
-// run is a backslash, whether or not that backslash is itself escaped, because the
-// normalising pass does not care either. A backslash before a shorter run (`\"`) is
-// ordinary block-string content.
+// In v1.11.0 consumeTripleQuoteComment closed even at `\"""`, disagreeing with the
+// normalising pass. v1.11.1 now detects that suffix, drops the backslash and resets
+// its quote count to keep reading the block string. Keep our existing refusal:
+// accepting the newly aligned escape would widen the established lexical subset.
+// Upstream's suffix check ignores backslash parity, so multiple backslashes remain
+// refused too. A backslash before a shorter quote run (`\"`) is ordinary content.
 //
 // An unterminated block string is an error, where graphql-go reads to EOF and fails
 // later; either way nothing executes.

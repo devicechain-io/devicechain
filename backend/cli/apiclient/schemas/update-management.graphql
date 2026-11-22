@@ -1,0 +1,822 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# The update-management data plane: the per-tenant catalogue of update artifacts (firmware,
+# software and configuration images). An artifact is declared here, its bytes are uploaded
+# to the content endpoint PUT /updates/artifacts/{token}/content, and it is then AVAILABLE.
+# Artifacts are immutable once available. An available artifact is assigned to a device, which
+# downloads it through a short-lived grant and reports its progress; the platform tracks each
+# update attempt through to the running version.
+schema {
+    query: Query
+    mutation: Mutation
+}
+
+"""Pagination info for search results."""
+type SearchResultsPagination {
+    """Position of the first result on this page within the full result set (1-based)."""
+    pageStart: Int
+    """Position of the last result on this page within the full result set (1-based)."""
+    pageEnd: Int
+    """Total number of records matching the search."""
+    totalRecords: Int
+}
+
+"""Static service identity: the deployed functional area (non-sensitive)."""
+type ServiceInfo {
+    """The functional area this service is deployed as."""
+    area: String!
+    """
+    Whether this instance lets an UNVERIFIED artifact be assigned (updates.allowUnverifiedArtifacts).
+    False means only a SIGNED artifact can be assigned. True is a development setting: it is shown
+    here so an instance running with it can be seen to be.
+    """
+    allowUnverifiedArtifacts: Boolean!
+    """
+    The largest artifact this deployment accepts, in bytes, as a decimal string: the configured
+    ceiling already clamped to what the object store can take in one upload.
+    """
+    maxArtifactBytes: String!
+    """
+    Whether a download base is set (updates.downloadBaseUrl). It does not prove devices can reach
+    that address. False means no device can be given a download link: an assignment is published
+    but nothing assigned will install until a download base is configured.
+    """
+    downloadsConfigured: Boolean!
+    """
+    Whether an object store is configured for artifact content. False means the service runs but
+    refuses every artifact declaration and upload (OBJECT_STORE_NOT_CONFIGURED): the instance was
+    built without a store, or its store cannot be shared with this service. No update can be
+    assigned until a store exists, and a store cannot be added to a running instance.
+    """
+    objectStoreConfigured: Boolean!
+}
+
+"""What an update artifact is."""
+enum ArtifactKind {
+    """A device firmware image."""
+    FIRMWARE
+    """An application or agent software package."""
+    SOFTWARE
+    """A configuration bundle installed as an update."""
+    CONFIGURATION
+}
+
+"""Where an artifact is in its lifecycle."""
+enum ArtifactState {
+    """Declared, with no verified content yet. The only state in which content can be uploaded."""
+    UPLOADING
+    """The content is stored and matches the declared size and digest. The artifact is immutable."""
+    AVAILABLE
+    """Withdrawn from new use. Its metadata and content remain."""
+    RETIRED
+}
+
+"""
+How far an artifact's origin has been established. It is DERIVED each time it is read from the
+signatures on record and the state of the signers behind them, so revoking a signer changes what
+every artifact it vouched for reports, without any write to the artifact.
+"""
+enum ArtifactTrustStatus {
+    """No signature by an ACTIVE signer: the platform checks that the bytes are the declared bytes and does not attribute them to anyone."""
+    UNVERIFIED
+    """At least one signature by an ACTIVE signer verified against the artifact's digest."""
+    SIGNED
+}
+
+"""The algorithm of a signer's key."""
+enum SignerAlgorithm {
+    """ECDSA over the NIST P-256 curve, signing the SHA-256 digest (ASN.1 DER signature)."""
+    ECDSA_P256
+    """Ed25519, signing the raw 32-byte SHA-256 digest."""
+    ED25519
+}
+
+"""Whether a signer's signatures still count."""
+enum SignerState {
+    """The signer's signatures count toward an artifact's trust."""
+    ACTIVE
+    """Terminal. The signer's signatures stay on record and no longer count."""
+    REVOKED
+}
+
+"""
+A public key the tenant trusts to vouch for artifacts. The platform holds only the public half.
+"""
+type ArtifactSigner {
+    """Internal identifier."""
+    id: ID!
+    """When the signer was registered, as an RFC 3339 timestamp."""
+    createdAt: String
+    """The signer's token, unique within the tenant."""
+    token: String!
+    """A label for the signer."""
+    name: String!
+    """The key's algorithm."""
+    algorithm: SignerAlgorithm!
+    """The public key as an SPKI PEM block."""
+    publicKeyPem: String!
+    """The key's identity: the lowercase hex SHA-256 of its SubjectPublicKeyInfo DER. Unique within the tenant."""
+    keyId: String!
+    """Whether the signer's signatures still count."""
+    state: SignerState!
+    """When the signer was revoked, as an RFC 3339 timestamp; null while ACTIVE."""
+    revokedAt: String
+    """Who registered the signer."""
+    createdBy: String
+    """Who revoked the signer; null while ACTIVE."""
+    revokedBy: String
+    """
+    How many artifacts have this signer as the ONLY active signer on their signatures, and would
+    therefore fall back to UNVERIFIED if it were revoked. 0 once revoked.
+    """
+    soleSignedArtifactCount: Int!
+}
+
+"""Criteria for searching signers. Every filter is optional."""
+input ArtifactSignerSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
+    pageNumber: Int!
+    """Records per page."""
+    pageSize: Int!
+    """Only signers in this state."""
+    state: SignerState
+}
+
+"""A page of signers."""
+type ArtifactSignerSearchResults {
+    """The signers on this page, newest first."""
+    results: [ArtifactSigner!]!
+    """Pagination info for the search."""
+    pagination: SearchResultsPagination!
+}
+
+"""A tenant-scoped, immutable update artifact."""
+type Artifact {
+    """Internal identifier."""
+    id: ID!
+    """When the artifact was declared, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the artifact last changed state, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """The artifact's token, unique within the tenant."""
+    token: String!
+    """What the artifact is."""
+    kind: ArtifactKind!
+    """The artifact's name. Together with component and version it is the artifact's identity, unique per tenant."""
+    name: String!
+    """The artifact's version label. It is opaque to the platform."""
+    version: String!
+    """The part of the device the artifact updates, for example firmware or app/agent."""
+    component: String!
+    """The size of the content in bytes, as a decimal string (it can exceed a 32-bit integer)."""
+    sizeBytes: String!
+    """The content's SHA-256 digest, as sha256: followed by 64 lowercase hex digits."""
+    digest: String!
+    """The IANA media type of the content."""
+    mediaType: String!
+    """Tokens of the device profiles the artifact may be assigned to."""
+    compatibleProfiles: [String!]!
+    """How far the artifact's origin has been established, derived from its signatures at read time."""
+    trustStatus: ArtifactTrustStatus!
+    """
+    The signatures on record for the artifact, oldest first, including those by revoked signers.
+    The signature bytes are not exposed. Not available to a member whose access is limited to
+    part of the tenant.
+    """
+    signatures: [ArtifactSignature!]!
+    """
+    Who declared the artifact and any source or notes they recorded, as a JSON object; null when
+    none. Not available to a member whose access is limited to part of the tenant.
+    """
+    provenance: String
+    """Where the artifact is in its lifecycle."""
+    state: ArtifactState!
+}
+
+"""One signer's verified signature over an artifact's digest."""
+type ArtifactSignature {
+    """Internal identifier."""
+    id: ID!
+    """When the signature was recorded, as an RFC 3339 timestamp."""
+    createdAt: String
+    """The signer that made the signature."""
+    signer: ArtifactSigner!
+    """Who attached the signature; null when not recorded."""
+    createdBy: String
+    """Whether the signature currently counts toward the artifact's trust: true while its signer is ACTIVE, false once the signer is REVOKED."""
+    countsTowardTrust: Boolean!
+}
+
+"""The data needed to declare an artifact. No content travels with it."""
+input ArtifactCreateRequest {
+    """The artifact's token, unique within the tenant."""
+    token: String!
+    """What the artifact is."""
+    kind: ArtifactKind!
+    """The artifact's name."""
+    name: String!
+    """The artifact's version label. Name, component and version together must be unique within the tenant."""
+    version: String!
+    """The part of the device the artifact updates, for example firmware or app/agent."""
+    component: String!
+    """
+    The exact size of the content in bytes, as a decimal string. An upload that delivers any
+    other number of bytes is refused.
+    """
+    sizeBytes: String!
+    """The content's SHA-256 digest, as sha256: followed by 64 hex digits. An upload that hashes differently is refused."""
+    digest: String!
+    """The IANA media type of the content. Defaults to application/octet-stream."""
+    mediaType: String
+    """Tokens of the device profiles the artifact may be assigned to. At least one; each must exist."""
+    compatibleProfiles: [String!]!
+    """Where the artifact came from, recorded as provenance."""
+    source: String
+    """Free-form notes, recorded as provenance."""
+    notes: String
+}
+
+"""Criteria for searching artifacts. Every filter is optional."""
+input ArtifactSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
+    pageNumber: Int!
+    """Records per page."""
+    pageSize: Int!
+    """Only artifacts of this kind."""
+    kind: ArtifactKind
+    """Only artifacts in this state."""
+    state: ArtifactState
+    """Only artifacts for this component."""
+    component: String
+    """Only artifacts with this derived trust."""
+    trustStatus: ArtifactTrustStatus
+}
+
+"""A page of artifacts."""
+type ArtifactSearchResults {
+    """The artifacts on this page, newest first."""
+    results: [Artifact!]!
+    """Pagination info for the search."""
+    pagination: SearchResultsPagination!
+}
+
+"""Where one update attempt is. The platform maps what the device reports to these states."""
+enum UpdateState {
+    """The platform created the attempt and the device has not reported."""
+    QUEUED
+    """The device acknowledged the assignment."""
+    INITIATED
+    """The device is downloading the artifact."""
+    DOWNLOADING
+    """The device holds all the bytes."""
+    DOWNLOADED
+    """The bytes the device holds hash to the artifact's digest. This is integrity only: it does not say who produced them."""
+    VERIFIED
+    """The device is installing."""
+    UPDATING
+    """The device is rebooting into the new version."""
+    REBOOTING
+    """The device is running the target version. Reached only on confirmation evidence: the version, and a new boot when the artifact needs one."""
+    UPDATED
+    """The device reported a failure, or came back on the wrong version."""
+    FAILED
+    """A phase deadline passed before installation was reported started."""
+    TIMED_OUT
+    """A phase deadline passed during installation or reboot. The attempt waits for evidence and is neither failed nor succeeded."""
+    UNKNOWN
+    """The update was cancelled before installation began."""
+    CANCELLED
+}
+
+"""Download progress an attempt last reported, in bytes."""
+type UpdateProgress {
+    """Bytes the device holds, as a decimal string."""
+    bytes: String!
+    """Total bytes, as a decimal string; 0 when the device did not say."""
+    total: String!
+}
+
+"""Why an attempt failed or timed out."""
+type UpdateFailure {
+    """The stage the attempt was in, empty when the failure has no device stage."""
+    stage: String!
+    """A machine-readable code: the device's own, or DEADLINE or NOT_RUNNING_TARGET when the platform decided."""
+    code: String!
+    """The device's human-readable detail."""
+    detail: String!
+    """True when the platform decided, rather than the device reporting."""
+    platform: Boolean!
+}
+
+"""One try at moving one component of one device to an assignment's artifact."""
+type UpdateAttempt {
+    """The attempt's token, the attemptId on the wire."""
+    token: String!
+    """Where the attempt is."""
+    state: UpdateState!
+    """The version the artifact installs."""
+    targetVersion: String!
+    """The digest the device must verify."""
+    targetDigest: String!
+    """Whether the update needs a reboot to take effect, in which case UPDATED needs a boot other than the install boot."""
+    requiresReboot: Boolean!
+    """When the platform last accepted a report from the device, or created the attempt."""
+    lastReportAt: String
+    """The last download progress reported; null when none was."""
+    progress: UpdateProgress
+    """Why the attempt failed or timed out; null otherwise."""
+    failure: UpdateFailure
+    """True once a cancel was requested and the device has not yet confirmed it."""
+    cancelRequested: Boolean!
+    """True when the attempt left UNKNOWN on a device's evidence."""
+    reconciled: Boolean!
+}
+
+"""A decision that a device should install an artifact, with the attempt that carries it out."""
+type UpdateAssignment {
+    """Internal identifier."""
+    id: ID!
+    """When the artifact was assigned, as an RFC 3339 timestamp."""
+    createdAt: String
+    """The assignment's token, the assignmentId on the wire."""
+    token: String!
+    """The device the artifact was assigned to."""
+    deviceToken: String!
+    """The component being updated."""
+    component: String!
+    """The artifact being installed."""
+    artifact: Artifact!
+    """Who assigned it. Not available to a member whose access is limited to part of the tenant."""
+    actor: String
+    """When a newer assignment replaced this one; null while it is the device's current assignment."""
+    supersededAt: String
+    """True while this is the device's current assignment for the component."""
+    current: Boolean!
+    """The attempt that carries the assignment out."""
+    attempt: UpdateAttempt!
+    """The signer whose signature the assignment is pinned to, and so the one the device is told to verify against. Null when the assignment pins no signature (it was made under updates.allowUnverifiedArtifacts with no active signer). The pin does not move when the signer is later revoked: an update already in flight keeps the signature it was assigned under."""
+    signedBy: AssignmentSigner
+}
+
+"""The signer an update assignment is pinned to."""
+type AssignmentSigner {
+    """The signer's token."""
+    token: String!
+    """The signer's label."""
+    name: String!
+    """The key's identity: the lowercase hex SHA-256 of its SubjectPublicKeyInfo DER."""
+    keyId: String!
+    """The key's algorithm."""
+    algorithm: SignerAlgorithm!
+    """The signer's state now. A REVOKED signer still vouches for the assignments already pinned to it."""
+    state: SignerState!
+}
+
+"""Criteria for searching update assignments. Every filter is optional."""
+input UpdateAssignmentSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
+    pageNumber: Int!
+    """Records per page."""
+    pageSize: Int!
+    """Only this device's assignments."""
+    deviceToken: String
+    """Only this component's assignments."""
+    component: String
+    """Only each device's current assignment, not the superseded history."""
+    currentOnly: Boolean
+}
+
+"""A page of update assignments."""
+type UpdateAssignmentSearchResults {
+    """The assignments on this page, newest first."""
+    results: [UpdateAssignment!]!
+    """Pagination info for the search."""
+    pagination: SearchResultsPagination!
+}
+
+"""Where a group rollout is in its lifecycle."""
+enum UpdateRolloutState {
+    """Declared; no device has been resolved or told anything."""
+    DRAFT
+    """The group's devices were frozen as the target set and are being dispatched, at most maxInFlight at a time."""
+    RUNNING
+    """No further device is dispatched until the rollout is resumed. Devices already working on the update carry on."""
+    PAUSED
+    """Every target was dispatched or skipped and no device is still working on the update."""
+    COMPLETED
+    """Ended by an operator. Devices not yet dispatched were cancelled; devices already working on the update were left to finish."""
+    ABORTED
+}
+
+"""Why a rollout is paused."""
+enum UpdateRolloutPauseReason {
+    """An operator paused it."""
+    OPERATOR
+    """The number of failed or unknown devices reached the rollout's failure threshold."""
+    FAILURE_THRESHOLD
+    """The artifact can no longer be assigned: it was retired, or it lost the signature this instance requires."""
+    ARTIFACT_NOT_ASSIGNABLE
+}
+
+"""Where one device of a rollout stands. Every outcome after dispatch is read from the device's own update attempt."""
+enum UpdateRolloutOutcome {
+    """Not dispatched yet."""
+    PENDING
+    """Dispatched; the device's update attempt has not finished."""
+    IN_FLIGHT
+    """The device confirmed it runs the artifact (UPDATED)."""
+    SUCCEEDED
+    """The device's update attempt FAILED or TIMED_OUT."""
+    FAILED
+    """The device's update outcome is UNKNOWN; it holds its slot and counts toward the failure threshold."""
+    UNKNOWN
+    """The rollout was aborted before this device was dispatched, or its update was cancelled."""
+    CANCELLED
+    """The device was refused at dispatch (skipCode says why) and was not told anything."""
+    SKIPPED
+}
+
+"""A rollout's targets counted by outcome."""
+type UpdateRolloutProgress {
+    """Every target in the frozen set."""
+    total: Int!
+    """Targets not dispatched yet."""
+    pending: Int!
+    """Targets whose update attempt has not finished."""
+    inFlight: Int!
+    """Targets whose device confirmed the update."""
+    succeeded: Int!
+    """Targets whose update attempt failed or timed out."""
+    failed: Int!
+    """Targets whose update outcome is unknown."""
+    unknown: Int!
+    """Targets cancelled by an abort, or whose update was cancelled."""
+    cancelled: Int!
+    """Targets refused at dispatch."""
+    skipped: Int!
+}
+
+"""An artifact assigned to the devices of a group, a capped number at a time."""
+type UpdateRollout {
+    """Internal identifier."""
+    id: ID!
+    """The rollout's token."""
+    token: String!
+    """A label for the rollout."""
+    name: String!
+    """The artifact the devices are moved to."""
+    artifact: Artifact!
+    """The device group whose members are the targets."""
+    groupToken: String!
+    """The published version of a dynamic group the start resolved; null for a static group or before the start."""
+    groupVersion: Int
+    """The most devices whose update may be unfinished at once. A device whose outcome is UNKNOWN keeps its place."""
+    maxInFlight: Int!
+    """The number of failed or unknown devices at which the rollout pauses itself; null when it never does."""
+    failureThreshold: Int
+    """Where the rollout is in its lifecycle."""
+    state: UpdateRolloutState!
+    """Why the rollout is paused; null unless it is PAUSED."""
+    pauseReason: UpdateRolloutPauseReason
+    """How many devices the start froze as targets; 0 before the start."""
+    targetCount: Int!
+    """When the rollout was declared, as an RFC 3339 timestamp."""
+    createdAt: String
+    """Who declared the rollout."""
+    createdBy: String
+    """When the rollout started, as an RFC 3339 timestamp; null before the start."""
+    startedAt: String
+    """When the rollout completed or was aborted, as an RFC 3339 timestamp."""
+    finishedAt: String
+    """Who last started, paused, resumed or aborted it; null when the rollout itself made the last change (completing, or pausing at its threshold)."""
+    stateChangedBy: String
+    """When the state last changed, as an RFC 3339 timestamp."""
+    stateChangedAt: String
+    """The targets counted by outcome."""
+    progress: UpdateRolloutProgress!
+}
+
+"""One device of a rollout's target set."""
+type UpdateRolloutTarget {
+    """The device's token."""
+    deviceToken: String!
+    """Where the device stands."""
+    outcome: UpdateRolloutOutcome!
+    """The token of the update assignment the rollout made or adopted for the device; null before dispatch and when skipped."""
+    assignmentToken: String
+    """The state of the device's update attempt; null before dispatch and when skipped."""
+    attemptState: UpdateState
+    """Why the device was refused at dispatch (the assignment plane's own code, such as DEVICE_DISABLED or UPDATE_IN_PROGRESS); null otherwise."""
+    skipCode: String
+    """The refusal's message; null unless skipped."""
+    skipDetail: String
+    """When the device was dispatched, as an RFC 3339 timestamp."""
+    dispatchedAt: String
+}
+
+"""A rollout to declare. It is created DRAFT and does nothing until it is started."""
+input UpdateRolloutCreateRequest {
+    """The rollout's token, unique in the tenant."""
+    token: String!
+    """A label; the token when omitted."""
+    name: String
+    """The AVAILABLE artifact to roll out."""
+    artifactToken: String!
+    """The device group whose members, as of the start, are the targets."""
+    groupToken: String!
+    """The most devices whose update may be unfinished at once, from 1 to 1000."""
+    maxInFlight: Int!
+    """Pause the rollout once this many devices failed or have an unknown outcome. Omit it to never pause on failures."""
+    failureThreshold: Int
+}
+
+"""Criteria for searching rollouts."""
+input UpdateRolloutSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
+    pageNumber: Int!
+    """Records per page."""
+    pageSize: Int!
+    """Only rollouts in this state."""
+    state: UpdateRolloutState
+}
+
+"""A page of rollouts."""
+type UpdateRolloutSearchResults {
+    """The rollouts on this page, newest first."""
+    results: [UpdateRollout!]!
+    """Pagination info for the search."""
+    pagination: SearchResultsPagination!
+}
+
+"""Criteria for paging a rollout's targets."""
+input UpdateRolloutTargetSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
+    pageNumber: Int!
+    """Records per page."""
+    pageSize: Int!
+    """Only targets with this outcome."""
+    outcome: UpdateRolloutOutcome
+}
+
+"""A page of a rollout's targets."""
+type UpdateRolloutTargetSearchResults {
+    """The targets on this page, in the order the start froze them."""
+    results: [UpdateRolloutTarget!]!
+    """Pagination info for the search."""
+    pagination: SearchResultsPagination!
+}
+
+"""The update-management read operations."""
+type Query {
+    """Non-sensitive service identity (the deployed functional area)."""
+    updateManagementInfo: ServiceInfo!
+    """Look up an artifact by token. Requires artifact:read. Null when there is none in the caller's tenant."""
+    artifact(
+        """
+        The token of the artifact to look up.
+        """
+        token: String!
+    ): Artifact
+    """Search the tenant's artifacts, newest first. Requires artifact:read."""
+    artifacts(
+        """
+        The filters and page to search with.
+        """
+        criteria: ArtifactSearchCriteria!
+    ): ArtifactSearchResults!
+    """Look up a signer by token. Requires artifact:read. Null when there is none in the caller's tenant."""
+    artifactSigner(
+        """
+        The token of the signer to look up.
+        """
+        token: String!
+    ): ArtifactSigner
+    """Search the tenant's signers, newest first. Requires artifact:read."""
+    artifactSigners(
+        """
+        The filters and page to search with.
+        """
+        criteria: ArtifactSignerSearchCriteria!
+    ): ArtifactSignerSearchResults!
+    """Look up an update assignment by token. Requires artifact:read. Null when there is none in the caller's tenant."""
+    updateAssignment(
+        """
+        The token of the update assignment to look up.
+        """
+        token: String!
+    ): UpdateAssignment
+    """Search the tenant's update assignments, newest first. Requires artifact:read."""
+    updateAssignments(
+        """
+        The filters and page to search with.
+        """
+        criteria: UpdateAssignmentSearchCriteria!
+    ): UpdateAssignmentSearchResults!
+    """Look up a group rollout by token. Requires artifact:read; not available to a member limited to part of the tenant. Null when there is none in the caller's tenant."""
+    updateRollout(
+        """
+        The token of the rollout to look up.
+        """
+        token: String!
+    ): UpdateRollout
+    """Search the tenant's group rollouts, newest first. Requires artifact:read; not available to a member limited to part of the tenant."""
+    updateRollouts(
+        """
+        The filters and page to search with.
+        """
+        criteria: UpdateRolloutSearchCriteria!
+    ): UpdateRolloutSearchResults!
+    """Page a rollout's targets, with each device's outcome. Requires artifact:read; not available to a member limited to part of the tenant. Null when the tenant has no such rollout."""
+    updateRolloutTargets(
+        """
+        The token of the rollout.
+        """
+        token: String!
+        """
+        The filters and page to search with.
+        """
+        criteria: UpdateRolloutTargetSearchCriteria!
+    ): UpdateRolloutTargetSearchResults
+}
+
+"""The update-management write operations."""
+type Mutation {
+    """
+    Declare an artifact in the UPLOADING state. Requires artifact:write. The compatible
+    profiles are checked against device-management, and the size against the artifact and
+    tenant ceilings. Upload the content afterwards with PUT /updates/artifacts/{token}/content.
+    """
+    createArtifact(
+        """
+        The artifact to declare.
+        """
+        request: ArtifactCreateRequest!
+    ): Artifact!
+    """
+    Withdraw an artifact from new use. Requires artifact:write. Idempotent. The content is
+    kept: removing it is not offered until update assignments exist to check it against.
+    """
+    retireArtifact(
+        """
+        The token of the artifact to retire.
+        """
+        token: String!
+    ): Artifact!
+    """
+    Tell a device to install an AVAILABLE artifact. Requires artifact:write. The device must exist and its
+    profile must be on the artifact's compatible list, and an artifact that is not SIGNED is refused unless
+    the instance allows it (UNVERIFIED_ARTIFACT_REFUSED). A device works toward one target per component: assigning while its previous
+    update is still live is refused until that is cancelled, assigning the same artifact again returns
+    the same assignment, and assigning after the previous update finished supersedes it (the history is kept).
+    """
+    assignArtifact(
+        """
+        The token of the device to update.
+        """
+        deviceToken: String!
+        """
+        The token of the AVAILABLE artifact the device should install.
+        """
+        artifactToken: String!
+    ): UpdateAssignment!
+    """
+    Register a public key the tenant trusts to sign artifacts. Requires artifact:trust, which is separate
+    from artifact:write on purpose: who may publish a binary and who may decide whose signature makes it
+    trusted are different decisions. Accepts one SPKI PEM block holding an ECDSA P-256 or Ed25519 public
+    key; a PRIVATE key is refused (SIGNER_KEY_REFUSED) without being echoed or stored, as is any other key
+    type or curve. The same key cannot be registered twice (SIGNER_ALREADY_REGISTERED).
+    """
+    registerArtifactSigner(
+        """
+        A label for the signer.
+        """
+        name: String!
+        """
+        The public key as one SPKI PEM block.
+        """
+        publicKeyPem: String!
+    ): ArtifactSigner!
+    """
+    Revoke a signer. Requires artifact:trust. Terminal and idempotent: its signatures stay on record and stop
+    counting, so every artifact it alone vouched for reads UNVERIFIED from this moment. No artifact is
+    rewritten. soleSignedArtifactCount previews how many.
+    """
+    revokeArtifactSigner(
+        """
+        The token of the signer to revoke.
+        """
+        token: String!
+    ): ArtifactSigner!
+    """
+    Attach a signature to an artifact. Requires artifact:write. The signature is verified against the
+    artifact's STORED SHA-256 digest with the signer's key: ECDSA P-256 verifies an ASN.1 signature of the
+    32-byte digest, Ed25519 verifies a signature of the raw 32 digest bytes. A signature that does not
+    verify is refused (SIGNATURE_INVALID) and so is a revoked signer (SIGNER_REVOKED). Signing again with
+    the same signer is idempotent. Returns the artifact with its recomputed trustStatus.
+    """
+    addArtifactSignature(
+        """
+        The token of the artifact that was signed.
+        """
+        artifactToken: String!
+        """
+        The token of the registered signer that made the signature.
+        """
+        signerToken: String!
+        """
+        The signature, standard base64.
+        """
+        signature: String!
+    ): Artifact!
+    """
+    Cancel an update. Requires artifact:write. A queued update is cancelled at once; before installation the
+    request is recorded and completes when the device confirms; from installation on it is refused because it
+    cannot be recalled. The device is told in every accepted case.
+    """
+    cancelUpdate(
+        """
+        The token of the update assignment to cancel.
+        """
+        assignmentToken: String!
+    ): UpdateAssignment!
+    """
+    Stop waiting for an update whose outcome is UNKNOWN. Requires artifact:write. This is an explicit
+    operator decision, separate from cancelUpdate (which refuses an UNKNOWN update because the device may
+    have installed it): the update ends CANCELLED, the required reason is stored on it, the change is
+    journaled under the caller, and the device is sent a cancel. It frees the component for a new
+    assignment. It does not find out what the device runs, and the device may be on either version, so check
+    its inventory before relying on either.
+    """
+    abandonUnknownUpdate(
+        """
+        The token of the UNKNOWN update assignment to abandon.
+        """
+        assignmentToken: String!
+        """
+        Why the update is being abandoned. Required, and kept on the update.
+        """
+        reason: String!
+    ): UpdateAssignment!
+    """
+    Declare a group rollout in the DRAFT state. Requires artifact:write. The artifact must be AVAILABLE and
+    assignable on this instance (an artifact that is not SIGNED is refused unless the instance allows it). Nothing
+    is resolved or sent until the rollout is started.
+    """
+    createUpdateRollout(
+        """
+        The rollout to declare.
+        """
+        request: UpdateRolloutCreateRequest!
+    ): UpdateRollout!
+    """
+    Start a DRAFT rollout. Requires artifact:write. The group's members are frozen now as the target set: a device
+    that joins the group later is not part of the rollout, and one that leaves it stays a target. A group of more
+    than 10000 devices is refused (ROLLOUT_TOO_LARGE). Devices are then assigned the artifact through the same rules
+    as assignArtifact, at most maxInFlight unfinished at once; a device the assignment plane refuses is SKIPPED with
+    its code.
+    """
+    startUpdateRollout(
+        """
+        The token of the rollout to start.
+        """
+        token: String!
+    ): UpdateRollout!
+    """
+    Pause a RUNNING rollout. Requires artifact:write. No further device is dispatched; devices already working on
+    the update carry on, since pausing does not recall them. Pausing a paused rollout changes nothing.
+    """
+    pauseUpdateRollout(
+        """
+        The token of the rollout to pause.
+        """
+        token: String!
+    ): UpdateRollout!
+    """
+    Resume a PAUSED rollout. Requires artifact:write. A rollout whose failed or unknown devices reach its failure
+    threshold is refused (ROLLOUT_FAILURE_THRESHOLD_REACHED) unless a higher failureThreshold is passed: resuming
+    never resets the count. Resuming a running rollout changes nothing, and is refused (ROLLOUT_STATE_CONFLICT) if it
+    passes a failureThreshold other than the one the rollout has.
+    """
+    resumeUpdateRollout(
+        """
+        The token of the rollout to resume.
+        """
+        token: String!
+        """
+        A new failure threshold for the rollout, replacing the one it has.
+        """
+        failureThreshold: Int
+    ): UpdateRollout!
+    """
+    Abort a rollout for good. Requires artifact:write. Devices not yet dispatched are cancelled. Devices already
+    working on the update are left to finish and keep being reported in the progress; cancel any of them with
+    cancelUpdate. Aborting an aborted rollout changes nothing; a completed one cannot be aborted.
+    """
+    abortUpdateRollout(
+        """
+        The token of the rollout to abort.
+        """
+        token: String!
+    ): UpdateRollout!
+}

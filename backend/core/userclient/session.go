@@ -35,6 +35,8 @@ type TenantSession struct {
 	tenant      string
 	otp         OTPFunc
 
+	schemaNegotiation *schemaNegotiation
+
 	group singleflight.Group
 
 	mu           sync.RWMutex
@@ -145,7 +147,11 @@ func (s *TenantSession) Query(ctx context.Context, baseURL, query string, variab
 	if err != nil {
 		return err
 	}
-	return graphqlPost(ctx, s.httpc, baseURL, map[string]string{"Authorization": "Bearer " + token}, query, variables, out)
+	headers := map[string]string{"Authorization": "Bearer " + token}
+	if err := s.schemaNegotiation.check(ctx, s.httpc, baseURL, headers, query, variables); err != nil {
+		return err
+	}
+	return graphqlPost(ctx, s.httpc, baseURL, headers, query, variables, out)
 }
 
 // HTTPClient returns an *http.Client that attaches the tenant access token as a bearer
@@ -309,6 +315,8 @@ type AdminSession struct {
 	password    string
 	otp         OTPFunc
 
+	schemaNegotiation *schemaNegotiation
+
 	group singleflight.Group
 
 	mu        sync.RWMutex
@@ -342,7 +350,11 @@ func (a *AdminSession) Query(ctx context.Context, adminBaseURL, query string, va
 	if err != nil {
 		return err
 	}
-	return graphqlPost(ctx, a.httpc, adminBaseURL, map[string]string{"Authorization": "Bearer " + token}, query, variables, out)
+	headers := map[string]string{"Authorization": "Bearer " + token}
+	if err := a.schemaNegotiation.check(ctx, a.httpc, adminBaseURL, headers, query, variables); err != nil {
+		return err
+	}
+	return graphqlPost(ctx, a.httpc, adminBaseURL, headers, query, variables, out)
 }
 
 // Superuser reports whether the last login authenticated a superuser. It forces a

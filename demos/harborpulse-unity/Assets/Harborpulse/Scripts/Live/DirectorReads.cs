@@ -37,6 +37,8 @@ namespace DeviceChain.Harborpulse.Live
         readonly HarborLayout layout;
         readonly Func<string, string> boundToken;
         readonly ObserverStatus observerStatus;
+        readonly bool omitCommandCause;
+        string Document(string name) => omitCommandCause && name == "commands" ? HarborReadQueries.DirectorCommandsNoCause : Documents[name];
         readonly CancellationTokenSource stop = new CancellationTokenSource();
         readonly Dictionary<string, ReadJob> jobs = new Dictionary<string, ReadJob>();
         public static int Parallel(string read) => read == "alarms" || read == "notifications" || read == "measurements" || read == "commands" ? 6 : 1;
@@ -64,10 +66,12 @@ namespace DeviceChain.Harborpulse.Live
         }
         static int Severity(string value) => Array.IndexOf(new[] { "WARNING", "MINOR", "MAJOR", "CRITICAL" }, value);
 
-        public DirectorReads(RunnerConfig config, TokenBroker broker, HarborLayout layout, Func<string, string> boundToken, ObserverStatus observerStatus = null)
+        /// <summary><paramref name="omitCommandCause"/> is the CONTROL of -hp-control-no-cause: the command read asks for no cause, so no command can be tied to an alarm.</summary>
+        public DirectorReads(RunnerConfig config, TokenBroker broker, HarborLayout layout, Func<string, string> boundToken, ObserverStatus observerStatus = null, bool omitCommandCause = false)
         {
             this.config = config; this.broker = broker; this.layout = layout; this.boundToken = boundToken;
-            this.observerStatus = observerStatus;
+            this.observerStatus = observerStatus; this.omitCommandCause = omitCommandCause;
+            HarborReadQueries.RequireReadOnly(HarborReadQueries.DirectorCommandsNoCause);
             foreach (var d in Documents) {
                 HarborReadQueries.RequireReadOnly(d.Value);
                 // Nullable token lookups and empty searches still execute authorization and field validation.
@@ -174,7 +178,7 @@ namespace DeviceChain.Harborpulse.Live
             var requestedAt = DateTimeOffset.UtcNow;
             try {
                 var used = await broker.Get(stop.Token);
-                var body = DirectorWire.Json(w => { w.WriteStartObject(); w.WriteString("query", Documents[job.Name]); w.WritePropertyName("variables"); using var d = JsonDocument.Parse(job.Variables); d.RootElement.WriteTo(w); w.WriteEndObject(); });
+                var body = DirectorWire.Json(w => { w.WriteStartObject(); w.WriteString("query", Document(job.Name)); w.WritePropertyName("variables"); using var d = JsonDocument.Parse(job.Variables); d.RootElement.WriteTo(w); w.WriteEndObject(); });
                 var area = new[] { "artifact", "signer", "rollout", "targets", "assignments" }.Contains(job.Name) ? "update-management" : job.Name == "notifications" ? "notification-management" : job.Name == "measurements" ? "event-management" : job.Name == "commands" ? "command-delivery" : "device-management";
                 using var req = new UnityWebRequest(config.ApiOrigin.TrimEnd('/') + "/api/" + area + "/graphql", "POST");
                 req.uploadHandler = new UploadHandlerRaw(System.Text.Encoding.UTF8.GetBytes(body)); req.downloadHandler = new DownloadHandlerBuffer(); req.timeout = 5;

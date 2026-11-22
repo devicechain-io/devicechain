@@ -244,7 +244,7 @@ namespace DeviceChain.Harborpulse.Tests
                 {
                     var p = U5Plan.Map.Pose("pose:" + f.Family + ":" + s);
                     Assert.That(CameraMath.PitchDegrees(p), Is.LessThan(-20), f.Family + ":" + s);
-                    Assert.That(p.Look.Y, Is.EqualTo(2));
+                    Assert.That(p.Look.Y, Is.EqualTo(PresentationMap.WellViewLookY));
                     Assert.That(p.VerticalFov, Is.EqualTo(42));
                 }
         }

@@ -252,7 +252,7 @@ jobs:
       # its caches per module. (It is NOT off because the cache step would fail; it
       # would not. See the cache-dependency-path note in the `go` job for what setup-go
       # actually does when a cache path resolves to nothing.)
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: false
@@ -532,7 +532,7 @@ jobs:
       #     seconds: the `go mod download` step below averaged 0.1 min a leg at a 73% miss rate;
       #   - pull requests restore only. The one leg with `cache_save` (its group saver's static
       #     leg) saves, at the end of the job, on a push to main and only after success.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         id: setup-go
         with:
           go-version-file: go.work
@@ -999,7 +999,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: true
@@ -1067,7 +1067,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: true
@@ -1167,7 +1167,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: true
@@ -1339,7 +1339,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: true
@@ -1447,7 +1447,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: true
@@ -1505,7 +1505,7 @@ jobs:
       # Restore-only: the go job's entry for the cache group of this leg's first module (see the
       # restore step there). Nothing here saves, so no integration leg competes for that key or
       # writes an entry of its own; the integration build differs from the go job's only by a tag.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         id: setup-go
         with:
           go-version-file: go.work
@@ -1541,7 +1541,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: true
@@ -1646,7 +1646,7 @@ jobs:
       - name: rc perf run script self-test
         run: hack/loadtest-rc-run.sh --self-test
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: false
@@ -1909,7 +1909,7 @@ jobs:
       # claim nothing substantiates. The check re-renders the pages and fails on any difference.
       # Self-test first: it proves the guard fails on a hand edit, on results from a dirty tree, on a
       # negative control that never went red and on stale results, before it is trusted to pass.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: true
@@ -2000,7 +2000,7 @@ jobs:
       # same check runs as a test in the `go` job (module backend/tools/docsgql); it is
       # repeated here so a docs-only change fails in the docs job, next to the other
       # docs gates, with the skip list in the log.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: false
@@ -2235,7 +2235,7 @@ jobs:
       # is a direct dependency of backend/core, so `go build` yields exactly the version that
       # ships, with no second pin to keep in step and no checksum to maintain. A downloaded
       # release binary would be a version claim that drifts away from go.mod silently.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: true
@@ -2621,7 +2621,7 @@ jobs:
       # COMPILED deny table against the RENDERED policy, so it runs two small commands
       # out of backend/core rather than scraping either source file. Reading the sources
       # is what made the previous version of that check unable to see a template edit.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: true
@@ -3266,6 +3266,18 @@ jobs:
           hack/check-gke-extraction-plans.sh --self-test
           hack/check-gke-extraction-plans.sh deploy/gke/fixtures
 
+      # The fleet roots (deploy/fleet/*): what a manager runs, so enforced state and plan encryption
+      # and a declared backend are checked, not trusted. fmt, init -backend=false, validate and
+      # `tofu test` run WITH a throwaway pbkdf2 key; then, on a copy with no backend block, a plan
+      # with NO key must be refused by the encryption configuration and the same plan WITH the key
+      # must succeed (a gate that only refuses is an outage), and `init` with the backend block and
+      # no backend configuration must fail (no implicit local backend). The static half
+      # (`enforced = true` under both state and plan, the closed variable list, provider set and
+      # outputs) is deploy/fleet_roots_test.go, in the `deploy` module's go job.
+      - name: fleet roots
+        working-directory: .
+        run: hack/check-fleet-roots.sh
+
       # The provider's max_history default is 0, which keeps every revision of every
       # release forever. That is not a setting anyone chose, so a release added
       # without one is the expected mistake rather than an unusual one. The self-test
@@ -3368,7 +3380,7 @@ jobs:
       # No Go cache here. ko builds with its own flags (static, trimmed), so none of the go job's
       # compiled packages are reusable, and the entries these legs used to save were 19 more keys
       # (~5.7 GB) in a cache already over its limit, for a measured 0.7 min a hit at a 25% hit rate.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: false
@@ -3606,7 +3618,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: false
@@ -3721,7 +3733,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: true

@@ -160,6 +160,9 @@ Shader "Harborpulse/Sky"
                 tone = saturate(tone - depth * (0.55 - reach) * 0.9);
                 // three flat tones with soft joins, to sit with the low-poly world
                 tone = (smoothstep(0.26, 0.36, tone) + smoothstep(0.56, 0.66, tone)) * 0.5;
+                // A raining deck has no sunlit tops to show: its relief is two close slates, the paler one a third of the way to the lit colour.
+                // (The full lit tone stood in it as pale patches, which read as holes in a storm.)
+                tone *= 1.0 - 0.66 * _HarborCloud.z;
                 float3 cloudCol = lerp(_HarborCloudShade.rgb, _HarborCloudLit.rgb, tone);
                 // the sun or the moon behind thin cloud shows as a bright patch
                 cloudCol += _HarborSunColor.rgb * pow(saturate(sd), 10.0) * 0.40 * sunUp * (1.0 - depth);

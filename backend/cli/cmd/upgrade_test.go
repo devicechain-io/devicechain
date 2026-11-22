@@ -132,3 +132,16 @@ func TestUpgradeAcceptsYesLikeInstallAndBootstrap(t *testing.T) {
 		t.Error("--yes does not reach Options.AssumeYes")
 	}
 }
+
+// The skipped-minor override is off by default and reaches the upgrade.
+func TestAllowSkippedMinorIsOffByDefaultAndReachesTheUpgrade(t *testing.T) {
+	f := upgradeCmd.Flags().Lookup("allow-skipped-minor")
+	if f == nil || f.DefValue != "false" {
+		t.Fatalf("--allow-skipped-minor = %v; it must exist and default to false", f)
+	}
+	upgradeAllowSkippedMinor = true
+	t.Cleanup(func() { upgradeAllowSkippedMinor = false })
+	if !upgradeOptions("i", nil, nil, nil).AllowSkippedMinor {
+		t.Error("the flag does not reach UpgradeOptions.AllowSkippedMinor")
+	}
+}

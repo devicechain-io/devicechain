@@ -267,6 +267,10 @@ func (h *HttpHandler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		switch err.(*auth.BearerError).Reason {
 		case auth.BearerMissing:
 			if !h.policy.required {
+				if isSchemaCapabilityRequest(r) {
+					http.Error(w, "authentication required", http.StatusUnauthorized)
+					return
+				}
 				h.serveExec(w, r)
 				return
 			}
@@ -307,6 +311,15 @@ type execRequest struct {
 // that decodes gets HTTP 200 with a JSON GraphQL response, errors included — a GraphQL
 // request error is a 200 with an `errors` array, never an HTTP status.
 func (h *HttpHandler) serveExec(w http.ResponseWriter, r *http.Request) {
+	if isSchemaCapabilityRequest(r) {
+		if r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+			w.Header().Set("Connection", "close")
+			http.Error(w, "schema discovery does not accept a request body", http.StatusBadRequest)
+			return
+		}
+		h.serveSchemaCapabilities(w)
+		return
+	}
 	// A deadline on delivering the body, so a client that trickles it cannot hold the
 	// connection. Cleared once the body is read, so it does not cut the response write.
 	// A ResponseWriter that cannot set one (a test recorder) is served without it.

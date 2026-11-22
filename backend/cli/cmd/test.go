@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/ruletest"
-	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dcctl/apiclient"
 	"github.com/devicechain-io/dcctl/ruletestrun"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
@@ -114,7 +114,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return ruletestrun.Errored(err)
 	}
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
-	session := userclient.NewTenantSession(nil, endpoints.UserGraphQL, testEmail, password, testTenant).
+	session := apiclient.NewTenantSession(nil, endpoints.UserGraphQL, testEmail, password, testTenant, recordedEndpointVersions(cmd, endpoints.EventProcessingGraphQL)...).
 		WithOTP(otpFunc(otpFlag(cmd)))
 	cases, err := ruletestrun.Run(cmd.Context(), plan, ruletestrun.Options{
 		Client: session, Endpoint: endpoints.EventProcessingGraphQL, Out: cmd.OutOrStdout(),
