@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -139,8 +140,12 @@ func TestASecondLocalInstanceIsBuiltWithTheNextMQTTNodePort(t *testing.T) {
 	if !slices.Contains(infraVars(st), "nats_mqtt_node_port=31884") {
 		t.Errorf("beta does not ask for node port 31884: %v", infraVars(st))
 	}
+	if len(recorded) != 0 {
+		t.Errorf("the step recorded %v before the apply; the record follows a successful apply", recorded)
+	}
+	recordMQTTNodePortAfterApply(st)
 	if !slices.Equal(recorded, []int32{31884}) {
-		t.Errorf("recorded %v, want [31884]", recorded)
+		t.Errorf("recorded after the apply %v, want [31884]", recorded)
 	}
 	if line := mqttReportLine(st); !strings.Contains(line, "31884") {
 		t.Errorf("the report does not say where beta's broker is: %q", line)
@@ -160,8 +165,68 @@ func TestASecondLocalInstanceIsBuiltWithTheNextMQTTNodePort(t *testing.T) {
 	if line := mqttReportLine(st); !strings.Contains(line, "in-cluster only") {
 		t.Errorf("the report hides that the broker is in-cluster only: %q", line)
 	}
+	recordMQTTNodePortAfterApply(st)
 	if !slices.Equal(recorded, []int32{0}) {
 		t.Errorf("recorded %v, want [0]", recorded)
+	}
+}
+
+// 🔴 THE RECORD IS BOOKKEEPING: a failure to write it is a warning, never a failed run, and a
+// rehearsal, or a run that decided no port, writes nothing.
+func TestRecordingTheMQTTNodePortNeverFailsTheRun(t *testing.T) {
+	origRec := recordMQTTNodePort
+	t.Cleanup(func() { recordMQTTNodePort = origRec })
+	calls := 0
+	recordMQTTNodePort = func(string, int32) error { calls++; return errors.New("disk full") }
+
+	st := &State{Instance: "beta", KubeContext: "kind-dev", Values: map[string]string{mqttNodePortKey: "31884"}}
+	out := captureStdout(t, func() { recordMQTTNodePortAfterApply(st) })
+	if calls != 1 || !strings.Contains(out, "warning") || !strings.Contains(out, "disk full") {
+		t.Errorf("calls %d, output %q: want one attempt and a warning naming the error", calls, out)
+	}
+
+	calls = 0
+	recordMQTTNodePortAfterApply(&State{Instance: "beta", KubeContext: "kind-dev", DryRun: true,
+		Values: map[string]string{mqttNodePortKey: "31884"}})
+	recordMQTTNodePortAfterApply(&State{Instance: "beta", KubeContext: "kind-dev", Values: map[string]string{}})
+	recordMQTTNodePortAfterApply(&State{Instance: "beta", KubeContext: "prod-eks", Values: map[string]string{mqttNodePortKey: "31884"}})
+	if calls != 0 {
+		t.Errorf("a rehearsal, an undecided run or a cloud run wrote the record %d time(s)", calls)
+	}
+}
+
+// A hand-edited record naming something other than a port of the set reads as none: it is never
+// narrowed into a different number.
+func TestAHandEditedRecordedPortOutsideTheSetReadsAsNone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for _, v := range []int{31884, 4294998652 /* 31884 + 2^32 */, -1, 30001} {
+		if err := WriteInstanceRecord(InstanceRecord{Instance: "beta", Provider: "local", MQTTNodePort: v}); err != nil {
+			t.Fatal(err)
+		}
+		want := int32(0)
+		if v == 31884 {
+			want = 31884
+		}
+		if got := recordedMQTTNodePort("beta"); got != want {
+			t.Errorf("recorded %d reads as %d, want %d", v, got, want)
+		}
+	}
+}
+
+// One `docker port` call answers for every port: a read per port could drop the first and keep a
+// later one.
+func TestThePublishedPortsComeFromOneDockerRead(t *testing.T) {
+	orig := dockerPortOutput
+	t.Cleanup(func() { dockerPortOutput = orig })
+	calls := 0
+	dockerPortOutput = func(string) (string, error) {
+		calls++
+		return "31883/tcp -> 0.0.0.0:1883\n31884/tcp -> 0.0.0.0:1884\n31885/tcp -> 0.0.0.0:1885\n", nil
+	}
+	if got := publishedMQTTNodePorts("kind-dev"); !slices.Equal(got, allLocalMQTTNodePorts) || calls != 1 {
+		t.Errorf("published %v in %d docker call(s), want all three in one", got, calls)
 	}
 }
 

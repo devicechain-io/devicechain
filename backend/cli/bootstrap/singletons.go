@@ -222,10 +222,17 @@ func keptMQTTNodePort(held clusterSingletons, recorded int32) int32 {
 // publishedMQTTNodePorts are the localMQTTNodePorts the kind cluster behind kubeContext publishes
 // on the host, in order. A context that is not kind's, or a cluster whose published ports cannot
 // be read, gets localMQTTNodePort alone: what every local instance got before there were more.
+//
+// ONE `docker port` read answers for all of them: a read per port could fail for the first and
+// succeed for a later one, and a new instance would then skip a free localMQTTNodePort.
 var publishedMQTTNodePorts = func(kubeContext string) []int32 {
+	published, ok := KindPublishedHostPorts(kubeContext)
+	if !ok {
+		return []int32{localMQTTNodePort}
+	}
 	var out []int32
 	for _, p := range localMQTTNodePorts {
-		if _, ok := KindPublishedHostPort(kubeContext, int(p)); ok {
+		if _, ok := published[int(p)]; ok {
 			out = append(out, p)
 		}
 	}
@@ -255,12 +262,38 @@ var recordMQTTNodePort = func(instance string, port int32) error {
 
 // recordedMQTTNodePort is the node port the local instance record says the instance was given,
 // or 0.
+//
+// The record is a file a person can edit, so its value is compared against the set rather than
+// narrowed: anything that is not one of localMQTTNodePorts reads as none.
 var recordedMQTTNodePort = func(instance string) int32 {
 	rec, err := ReadInstanceRecord(instance)
 	if err != nil {
 		return 0
 	}
-	return int32(rec.MQTTNodePort)
+	for _, p := range localMQTTNodePorts {
+		if int(p) == rec.MQTTNodePort {
+			return p
+		}
+	}
+	return 0
+}
+
+// recordMQTTNodePortAfterApply writes the node port the apply just exposed into the local instance
+// record. Only after a successful apply, so the record never names a port the instance does not
+// have, never in a rehearsal, and only where a port was decided at all. A failure to write it is a
+// warning and never fails the run: the instance's own Service is what the next upgrade reads
+// first, and the record is bookkeeping, as the bootstrap's own record write treats it.
+func recordMQTTNodePortAfterApply(st *State) {
+	if st.DryRun || !monitoringSlim(st) {
+		return
+	}
+	if _, decided := st.Values[mqttNodePortKey]; !decided {
+		return
+	}
+	if err := recordMQTTNodePort(st.Instance, mqttNodePortOf(st)); err != nil {
+		fmt.Println(color.YellowString("  warning: could not record this instance's MQTT node port (%v); "+
+			"`dcctl sim create` falls back to %d until it is", err, localMQTTNodePort))
+	}
 }
 
 // mqttNodePortsHeldBy names who holds which local MQTT node ports, for the message that says
@@ -572,9 +605,6 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 	case port != localMQTTNodePort:
 		fmt.Printf("  %s\n", color.WhiteString(fmt.Sprintf("MQTT node port %d is held by another instance, so "+
 			"this instance takes node port %d", localMQTTNodePort, port)))
-	}
-	if err := recordMQTTNodePort(st.Instance, port); err != nil {
-		return fail("recording the instance's MQTT node port", err)
 	}
 	return nil
 }

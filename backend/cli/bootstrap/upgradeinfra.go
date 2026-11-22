@@ -666,9 +666,6 @@ func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
 	if monitoringSlim(st) {
 		port := keptMQTTNodePort(held, recordedMQTTNodePort(st.Instance))
 		st.Values[mqttNodePortKey] = strconv.Itoa(int(port))
-		if err := recordMQTTNodePort(st.Instance, port); err != nil {
-			return fmt.Errorf("recording the instance's MQTT node port: %w", err)
-		}
 	}
 
 	infra, err := readLiveInfra(ctx, st.KubeContext, st.Instance)
@@ -1712,6 +1709,7 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 		return err
 	}
 	st.InfraApplied = true
+	recordMQTTNodePortAfterApply(st)
 	if err := waits.broker(ctx); err != nil {
 		return err
 	}

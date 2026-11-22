@@ -51,6 +51,36 @@ func KindPublishedHostPort(kubeContext string, containerPort int) (int, bool) {
 	return parseDockerPort(out, containerPort)
 }
 
+// KindPublishedHostPorts reads every container-port to host-port mapping the kind cluster behind
+// kubeContext publishes, from ONE `docker port` call. ok is false when it cannot be read.
+func KindPublishedHostPorts(kubeContext string) (map[int]int, bool) {
+	cluster := clusterNameFromKindContext(kubeContext)
+	if cluster == "" {
+		return nil, false
+	}
+	out, err := dockerPortOutput(cluster + "-control-plane")
+	if err != nil {
+		return nil, false
+	}
+	m := map[int]int{}
+	for _, line := range strings.Split(out, "\n") {
+		left, _, found := strings.Cut(line, "->")
+		if !found {
+			continue
+		}
+		cp, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(left), "/tcp"))
+		if err != nil {
+			continue
+		}
+		if hp, ok := parseDockerPort(line, cp); ok {
+			if _, seen := m[cp]; !seen {
+				m[cp] = hp
+			}
+		}
+	}
+	return m, true
+}
+
 // parseDockerPort reads `docker port` lines ("80/tcp -> 0.0.0.0:8080", possibly
 // repeated for an IPv6 binding) and returns the host port for containerPort/tcp.
 func parseDockerPort(out string, containerPort int) (int, bool) {

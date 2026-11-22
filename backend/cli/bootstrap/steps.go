@@ -860,8 +860,12 @@ func stepInfraApply(ctx context.Context, st *State) error {
 			"(NATS, Timescale), on the prerequisites `dcctl install` put in place")
 		return nil
 	}
-	return runStreamed("applying infrastructure stack (OpenTofu)", "infrastructure stack",
-		func() error { return applyInfra(ctx, st) })
+	if err := runStreamed("applying infrastructure stack (OpenTofu)", "infrastructure stack",
+		func() error { return applyInfra(ctx, st) }); err != nil {
+		return err
+	}
+	recordMQTTNodePortAfterApply(st)
+	return nil
 }
 
 // operatorImageRef is the controller image this run's settled image source names.
