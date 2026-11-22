@@ -16,7 +16,8 @@ import (
 
 const (
 	// RuleStatSweepInterval is how often the stranded rule-stat sweep runs. The rows it removes
-	// are never read, so there is no hurry: hourly keeps the table bounded without load.
+	// are not read while their version is superseded, so there is no hurry: hourly keeps the
+	// table bounded without load.
 	RuleStatSweepInterval = time.Hour
 	// RuleStatSweepQuiet is how long a superseded version's row must have gone without a fire
 	// before it is removed. A version that is still firing (events resolved against it while a
@@ -39,7 +40,10 @@ var _ RuleStatSweeper = (*model.RuleStatStore)(nil)
 
 // RuleStatSweep removes the rule-health stat rows that a re-publish strands: rows for a profile
 // version that is no longer active and has not fired for RuleStatSweepQuiet. The health view
-// reads only the active version's rows, so these are never read again.
+// reads only the active version's rows, so these are not read while the version is
+// superseded. A rollback can make the version active again; the sweep records each version it
+// removed rows of (model.RuleStatSweepRecord), and the health view then reports that the
+// history was removed instead of counting the rules as never fired.
 type RuleStatSweep struct {
 	Store   RuleStatSweeper
 	Deleted prometheus.Counter
@@ -56,7 +60,9 @@ func NewRuleStatSweep(ms *core.Microservice, store RuleStatSweeper) *core.Period
 }
 
 // Run is one pass: every tenant with stat rows, up to ruleStatSweepMaxBatches batches each.
-// When another replica holds the sweep lock the pass stops and reports itself skipped.
+// When another replica holds the sweep lock the pass stops. It reports itself skipped only when
+// it had swept nothing yet; a pass that ran batches before the lock was taken reports the
+// tenants it visited, so the pass metrics do not file real work as skipped.
 func (s *RuleStatSweep) Run(ctx context.Context) error {
 	now := time.Now
 	if s.Now != nil {
@@ -67,14 +73,18 @@ func (s *RuleStatSweep) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	failed := 0
+	failed, visited, ran := 0, 0, false
 	var last error
 	for _, tenant := range tenants {
 		for i := 0; i < ruleStatSweepMaxBatches; i++ {
 			n, err := s.Store.SweepStranded(ctx, tenant, before, RuleStatSweepBatch)
 			if errors.Is(err, core.ErrPassSkipped) {
-				return err
+				if !ran {
+					return err
+				}
+				return core.PassResult(visited, failed, last)
 			}
+			ran = true
 			if err != nil {
 				failed++
 				last = err
@@ -88,6 +98,7 @@ func (s *RuleStatSweep) Run(ctx context.Context) error {
 				break
 			}
 		}
+		visited++
 	}
-	return core.PassResult(len(tenants), failed, last)
+	return core.PassResult(visited, failed, last)
 }

@@ -85,11 +85,19 @@ export function RuleHealthPanel({ profileToken }: { profileToken: string }) {
   );
 
   const rules = data ?? [];
+  // Set on every row when this version's firing history was removed (it was superseded, then
+  // made active again by a rollback); the counts then cover only the fires since.
+  const historyRemovedAt = rules.find((r) => r.historyRemovedAt)?.historyRemovedAt ?? null;
 
   return (
     <div className="space-y-6">
       <div className="space-y-3">
         <p className="max-w-prose text-sm text-muted-foreground">{t('healthIntro')}</p>
+        {historyRemovedAt && (
+          <p className="max-w-prose rounded-md border px-4 py-3 text-sm text-muted-foreground">
+            {t('healthHistoryRemoved', { date: formatDateTime(historyRemovedAt) })}
+          </p>
+        )}
         {loading && !data ? (
           <LoadingState description={t('healthLoading')} />
         ) : error ? (
@@ -128,7 +136,12 @@ export function RuleHealthPanel({ profileToken }: { profileToken: string }) {
                       <Dash />
                     )}
                   </DataTableCell>
-                  <DataTableCell className="text-right tabular-nums">{r.fireCount}</DataTableCell>
+                  <DataTableCell className="text-right tabular-nums">
+                    {r.fireCount}
+                    {r.historyRemovedAt && (
+                      <span className="ml-1 text-xs text-muted-foreground">{t('healthFiresSinceRemoved')}</span>
+                    )}
+                  </DataTableCell>
                 </DataTableRow>
               ))}
             </DataTableBody>

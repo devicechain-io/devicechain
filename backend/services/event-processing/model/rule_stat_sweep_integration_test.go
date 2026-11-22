@@ -30,10 +30,23 @@ var sweepBefore = sweepNow.Add(-7 * 24 * time.Hour)
 func newSweepFixture(t *testing.T) (*RuleStatStore, *gorm.DB) {
 	t.Helper()
 	s, db := newPostgresRuleStatStore(t)
-	if err := db.Exec(`TRUNCATE TABLE "event-processing".profile_actives`).Error; err != nil {
-		t.Fatalf("truncate profile_actives: %v", err)
+	for _, table := range []string{"profile_actives", "rule_stat_sweeps"} {
+		if err := db.Exec(`TRUNCATE TABLE "event-processing".` + table).Error; err != nil {
+			t.Fatalf("truncate %s: %v", table, err)
+		}
 	}
 	return s, db
+}
+
+// sweptVersionsOf lists tenant's sweep records as version tokens, in order.
+func sweptVersionsOf(t *testing.T, db *gorm.DB, tenant string) []string {
+	t.Helper()
+	var v []string
+	if err := sysDB(db).Model(&RuleStatSweepRecord{}).Where("tenant = ?", tenant).Order("profile_version_token").
+		Pluck("profile_version_token", &v).Error; err != nil {
+		t.Fatalf("list sweep records: %v", err)
+	}
+	return v
 }
 
 func seedActive(t *testing.T, db *gorm.DB, tenant, profile, active string) {
@@ -187,19 +200,19 @@ func TestSweepStrandedSkipsWhileAnotherReplicaHoldsTheLockOnPostgres(t *testing.
 	}
 }
 
-// 🔴 A fire that lands on a row the sweep has chosen must keep it. The fire's transaction
-// advances last_fired_at and holds the row; the sweep's DELETE waits on it, and when the fire
-// commits the DELETE re-checks the predicate against the new value and leaves the row.
-func TestSweepStrandedKeepsARowAConcurrentFireAdvancedOnPostgres(t *testing.T) {
+// 🔴 A fire that holds a stranded row must neither be waited on nor lose the row. The fire's
+// transaction advances last_fired_at and holds the row; the sweep passes over it (SKIP LOCKED)
+// and deletes only the other row, without waiting, and the fired row survives the commit.
+func TestSweepStrandedPassesOverARowAFireHoldsOnPostgres(t *testing.T) {
 	s, db := newSweepFixture(t)
 	seedActive(t, db, "acme", "p", "p@2")
 	seedStat(t, db, "acme", "acme/p@1/a", sweepBefore.Add(-time.Hour))
 	seedStat(t, db, "acme", "acme/p@1/b", sweepBefore.Add(-time.Hour))
 
 	fire := sysDB(db).Begin()
+	defer fire.Rollback()
 	if err := fire.Exec(`UPDATE rule_stats SET last_fired_at = ?, fire_count = fire_count + 1 WHERE rule_id = ?`,
 		sweepNow, "acme/p@1/a").Error; err != nil {
-		fire.Rollback()
 		t.Fatalf("fire: %v", err)
 	}
 	type result struct {
@@ -211,38 +224,87 @@ func TestSweepStrandedKeepsARowAConcurrentFireAdvancedOnPostgres(t *testing.T) {
 		n, err := s.SweepStranded(context.Background(), "acme", sweepBefore, 100)
 		done <- result{n, err}
 	}()
-	// Wait until the sweep is blocked on the fire's row lock, so the order is the one under test.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var waiting int
-		if err := sysDB(db).Raw(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'DELETE FROM rule_stats%'`).Scan(&waiting).Error; err != nil {
-			fire.Rollback()
-			t.Fatalf("pg_stat_activity: %v", err)
-		}
-		if waiting > 0 {
-			break
-		}
-		select {
-		case r := <-done:
-			fire.Rollback()
-			t.Fatalf("the sweep finished without waiting on the fire's row: %d, %v", r.n, r.err)
-		default:
-		}
-		if time.Now().After(deadline) {
-			fire.Rollback()
-			t.Fatal("the sweep never waited on the fire's row lock")
-		}
-		time.Sleep(20 * time.Millisecond)
+	var r result
+	select {
+	case r = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sweep waited on the row a fire holds instead of passing over it")
+	}
+	if r.err != nil || r.n != 1 {
+		t.Fatalf("SweepStranded = %d, %v; want 1 (only the row no fire holds)", r.n, r.err)
 	}
 	if err := fire.Commit().Error; err != nil {
 		t.Fatalf("commit the fire: %v", err)
 	}
-	r := <-done
-	if r.err != nil || r.n != 1 {
-		t.Fatalf("SweepStranded = %d, %v; want 1 (only the row no fire touched)", r.n, r.err)
-	}
 	if got := statIDs(t, db); !sameIDs(got, []string{"acme/p@1/a"}) {
 		t.Fatalf("after the sweep: %v; want the fired row kept", got)
+	}
+	// It has now fired recently, so a later sweep keeps it too.
+	if n, err := s.SweepStranded(context.Background(), "acme", sweepBefore, 100); err != nil || n != 0 {
+		t.Fatalf("later sweep = %d, %v; want 0", n, err)
+	}
+}
+
+// Every version the sweep removed rows of is recorded, per tenant, and a sweep that removes
+// nothing records nothing. A later sweep of the same version moves its time forward.
+func TestSweepStrandedRecordsTheVersionsItRemovedOnPostgres(t *testing.T) {
+	s, db := newSweepFixture(t)
+	old := sweepBefore.Add(-time.Hour)
+	seedActive(t, db, "acme", "p", "p@3")
+	seedActive(t, db, "beta", "p", "p@3")
+	for _, id := range []string{"acme/p@1/a", "acme/p@1/b", "acme/p@2/a", "acme/p@3/a"} {
+		seedStat(t, db, "acme", id, old)
+	}
+	seedStat(t, db, "beta", "beta/p@1/a", old)
+	if n, err := s.SweepStranded(context.Background(), "acme", sweepBefore, 100); err != nil || n != 3 {
+		t.Fatalf("SweepStranded = %d, %v; want 3", n, err)
+	}
+	if got := sweptVersionsOf(t, db, "acme"); !sameIDs(got, []string{"p@1", "p@2"}) {
+		t.Fatalf("acme sweep records: %v; want p@1 and p@2 (not the active p@3)", got)
+	}
+	if got := sweptVersionsOf(t, db, "beta"); len(got) != 0 {
+		t.Fatalf("beta sweep records after sweeping acme: %v; want none", got)
+	}
+	first, ok, err := s.LoadSweptAt(context.Background(), "acme", "p@1")
+	if err != nil || !ok {
+		t.Fatalf("LoadSweptAt(p@1) = %v, %v", ok, err)
+	}
+	if _, ok, err := s.LoadSweptAt(context.Background(), "acme", "p@3"); err != nil || ok {
+		t.Fatalf("LoadSweptAt(p@3) = %v, %v; want no record", ok, err)
+	}
+	// Nothing left to remove: no new record, no change.
+	if n, err := s.SweepStranded(context.Background(), "acme", sweepBefore, 100); err != nil || n != 0 {
+		t.Fatalf("second sweep = %d, %v", n, err)
+	}
+	// p@1 fired again after a rollback and was superseded again: a later sweep moves its time.
+	time.Sleep(10 * time.Millisecond)
+	seedStat(t, db, "acme", "acme/p@1/a", old)
+	if n, err := s.SweepStranded(context.Background(), "acme", sweepBefore, 100); err != nil || n != 1 {
+		t.Fatalf("third sweep = %d, %v; want 1", n, err)
+	}
+	again, _, _ := s.LoadSweptAt(context.Background(), "acme", "p@1")
+	if !again.After(first) {
+		t.Fatalf("p@1 swept again at %s; its record still says %s", again, first)
+	}
+}
+
+// 🔴 The delete and its record commit together: when the record cannot be written the rows are
+// not deleted, so there is never a version whose history is gone with nothing saying so.
+func TestSweepStrandedDeletesNothingWhenItCannotRecordOnPostgres(t *testing.T) {
+	s, db := newSweepFixture(t)
+	seedActive(t, db, "acme", "p", "p@2")
+	seedStat(t, db, "acme", "acme/p@1/a", sweepBefore.Add(-time.Hour))
+	if err := db.Exec(`ALTER TABLE "event-processing".rule_stat_sweeps RENAME TO rule_stat_sweeps_away`).Error; err != nil {
+		t.Fatalf("hide the record table: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Exec(`ALTER TABLE "event-processing".rule_stat_sweeps_away RENAME TO rule_stat_sweeps`).Error
+	})
+	if _, err := s.SweepStranded(context.Background(), "acme", sweepBefore, 100); err == nil {
+		t.Fatal("the sweep succeeded with nowhere to record what it removed")
+	}
+	if got := statIDs(t, db); !sameIDs(got, []string{"acme/p@1/a"}) {
+		t.Fatalf("after a sweep that could not record: %v; want the row still there", got)
 	}
 }
 

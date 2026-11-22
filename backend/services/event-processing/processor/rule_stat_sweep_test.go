@@ -15,19 +15,23 @@ import (
 type fakeSweepStore struct {
 	tenants []string
 	// left is each tenant's stranded backlog; fail is a tenant whose sweep errs; busy skips.
-	left   map[string]int64
-	fail   string
-	busy   bool
-	calls  map[string]int
-	before time.Time
+	left map[string]int64
+	fail string
+	busy bool
+	// busyAfter makes the lock refused from that call on (counting from 1); 0 never.
+	busyAfter int
+	n         int
+	calls     map[string]int
+	before    time.Time
 }
 
 func (f *fakeSweepStore) SweepTenants(context.Context) ([]string, error) { return f.tenants, nil }
 
 func (f *fakeSweepStore) SweepStranded(_ context.Context, tenant string, before time.Time, limit int) (int64, error) {
 	f.calls[tenant]++
+	f.n++
 	f.before = before
-	if f.busy {
+	if f.busy || (f.busyAfter > 0 && f.n >= f.busyAfter) {
 		return 0, core.ErrPassSkipped
 	}
 	if tenant == f.fail {
@@ -81,5 +85,18 @@ func TestRuleStatSweepPassReportsAFailedTenantAndGoesOn(t *testing.T) {
 	}
 	if f.calls["acme"] != 1 || f.left["beta"] != 0 {
 		t.Errorf("acme %d calls, beta %d left; want one try at acme and beta swept", f.calls["acme"], f.left["beta"])
+	}
+}
+
+// A pass that swept before another replica took the lock is not filed as skipped.
+func TestRuleStatSweepPassThatDidWorkIsNotReportedSkipped(t *testing.T) {
+	f := &fakeSweepStore{tenants: []string{"acme", "beta"}, calls: map[string]int{}, busyAfter: 2,
+		left: map[string]int64{"acme": 3, "beta": 3}}
+	err := (&RuleStatSweep{Store: f}).Run(context.Background())
+	if errors.Is(err, core.ErrPassSkipped) || err != nil {
+		t.Fatalf("Run = %v; want a pass that did its work (acme swept), not skipped", err)
+	}
+	if f.left["acme"] != 0 || f.left["beta"] != 3 {
+		t.Errorf("acme %d left, beta %d left; want acme swept and beta left to the next pass", f.left["acme"], f.left["beta"])
 	}
 }
