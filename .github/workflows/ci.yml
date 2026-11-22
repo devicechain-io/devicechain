@@ -3225,7 +3225,21 @@ jobs:
       # missing one, because a wait that cannot fail is a wait that returns early.
       - name: gke cluster-operations wait self-test
         working-directory: .
-        run: deploy/gke/wait-for-cluster-operations.sh --self-test
+        run: deploy/opentofu/modules/gke-cluster/wait-for-cluster-operations.sh --self-test
+
+      # The no-op plan gate for the deploy/gke -> modules/gke-cluster extraction. The self-test
+      # runs first and shows the gate refusing each planted defect (a dropped moved block, a
+      # renamed module call, a changed input, a changed settle trigger, an empty fixture
+      # directory) on a synthetic pair; a gate that has not been shown to refuse anything cannot
+      # tell "nothing to report" from "never looked". Then the sanitized states of the real root
+      # (its current shape and the pre-for_each loadgen shape) must plan as pure no-ops. Offline:
+      # a dummy token and -refresh=false, so no cloud is called.
+      - name: gke extraction no-op plan gate
+        working-directory: .
+        run: |
+          set -euo pipefail
+          hack/check-gke-extraction-plans.sh --self-test
+          hack/check-gke-extraction-plans.sh deploy/gke/fixtures
 
       # The fleet premise spike's harness runs against scripted gcloud/kubectl/psql/tofu: every
       # entry point must refuse what it should (a creation before the reaper preflight, an

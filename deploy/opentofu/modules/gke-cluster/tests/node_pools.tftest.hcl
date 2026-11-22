@@ -8,8 +8,28 @@
 
 mock_provider "google" {}
 
+# The module has no defaults: each root passes every value. These are the public root's defaults
+# (deploy/gke/variables.tf), restated so that the runs below can name only what they change.
 variables {
-  project_id = "test-project"
+  project_id                         = "test-project"
+  location                           = "us-east4-b"
+  cluster_name                       = "devicechain"
+  release_channel                    = "REGULAR"
+  database_machine_type              = "n2-standard-4"
+  database_node_count                = 3
+  database_disk_type                 = "pd-standard"
+  database_disk_size_gb              = 100
+  services_machine_type              = "t2d-standard-4"
+  services_node_count                = 3
+  services_disk_type                 = "pd-standard"
+  services_disk_size_gb              = 100
+  loadgen_node_count                 = 0
+  loadgen_machine_type               = "n2-standard-4"
+  loadgen_disk_type                  = "pd-standard"
+  loadgen_disk_size_gb               = 100
+  wait_for_cluster_operations        = true
+  cluster_operations_timeout_seconds = 1800
+  labels                             = { app = "devicechain" }
 }
 
 run "the_default_cluster_has_a_database_and_a_services_pool" {
