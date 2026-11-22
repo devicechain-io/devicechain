@@ -170,6 +170,18 @@ ejecutor registrado. El rechazo indica `kubectl delete instanceoperation <name>`
 como otra solución. Es detección, no un bloqueo. AB6 no cubre `dcctl install`: prepara un clúster,
 y esta Preview rechaza las solicitudes Install de todos modos.
 
+### Métricas del ejecutor {#executor-metrics}
+
+El ejecutor exporta tres contadores en el endpoint de métricas de su propio pod en `dc-executor-system`.
+No llevan el prefijo `devicechain_`, no se etiquetan por instancia ni operación, y el Prometheus del chart no
+rastrea ese espacio de nombres, así que configura tú el rastreo si las quieres.
+
+| Métrica | Significado |
+| --- | --- |
+| `dc_executor_decisions_total{verdict,reason}` | Veredictos que el ejecutor escribió en una `InstanceOperation`. `verdict` es la fase escrita: `Refused` o `Running`. `reason` es `Executable`, o el motivo del rechazo: `StaleEnrollment`, `InstanceExists`, `InstanceNotFound`, `StaleTarget` (la solicitud nombra un registro o una instancia que ha sido sustituida, o cuya existencia no encaja con la acción) o `NotExecutableInThisBuild`. En esta versión Preview ninguna acción es ejecutable, así que toda solicitud válida termina `Refused` con `NotExecutableInThisBuild`: es el estado estable esperado, no un fallo. Un aumento de cualquier otro motivo de rechazo significa que se envían solicitudes contra un registro o una instancia obsoletos; envía una nueva. |
+| `dc_executor_operations_skipped_total{reason}` | Operaciones que el ejecutor dejó intactas porque debe atenderlas un ejecutor más nuevo: `protocol` (la solicitud exige un protocolo más reciente que el de este ejecutor) o `action` (una acción que este ejecutor no conoce). Cero en un clúster con la imagen del ejecutor al día. Un aumento significa que solicitudes de un `dcctl` más reciente esperan a que se actualice el ejecutor: vuelve a ejecutar `dcctl executor enroll` con la imagen nueva. |
+| `dc_executor_status_writes_total{kind,result}` | Intentos de escribir el estado de una `InstanceOperation` o una `ExecutorEnrollment` (`kind`), por `result`: `success`, `conflict` (otro escritor se adelantó; el ejecutor reintenta de inmediato) o `error`. Algún conflicto ocasional es normal. Una tasa sostenida de `error` significa que el ejecutor no puede escribir el estado, por lo que las operaciones quedan sin veredicto; revisa el registro del ejecutor y su RBAC. |
+
 ## Recursos personalizados {#custom-resources}
 
 `dcctl install` define cuatro recursos personalizados de ámbito de clúster:

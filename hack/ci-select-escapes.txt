@@ -43,6 +43,7 @@ backend/cli/cmd/docs_commands_test.go
 backend/cli/cmd/docs_graphql_commands_test.go
 backend/cli/cmd/docs_helm_commands_test.go
 backend/cli/cmd/docs_test.go
+backend/cli/cmd/relationship_test.go
 backend/cli/cmd/restore_test.go
 backend/cli/dcdir/dcdir.go
 backend/cli/dcdir/dcdir_test.go

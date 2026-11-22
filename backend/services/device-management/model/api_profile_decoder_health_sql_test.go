@@ -123,3 +123,24 @@ func TestAnEmptyDecoderHealthWindowIsZero(t *testing.T) {
 	require.Nil(t, got.LastFailureAt)
 	require.Empty(t, got.LastError)
 }
+
+// 🔴 FAILURE TIMES ARE STORED IN UTC. A writer handing in a failure time in another zone must not
+// change which failure reads as the latest: SQLite keeps a time as text in the zone it was given,
+// and an ORDER BY over that text compares the clock digits, so 05:30-05:00 (10:30 UTC) would sort
+// before 10:00+00:00 and the earlier failure's error would be reported.
+func TestADecoderFailureTimeInAnotherZoneStillReadsAsTheLatest(t *testing.T) {
+	f := newHealthFixture(t)
+	w := time.Now().UTC().Truncate(time.Minute).Add(-5 * time.Minute)
+	earlier := w.Add(10 * time.Second)
+	later := earlier.Add(30 * time.Minute).In(time.FixedZone("UTC-5", -5*60*60))
+	_, _, err := f.api.WriteDecoderHealth(f.ctx, []DecoderHealthWrite{
+		{ProfileToken: "meter", Version: 1, WindowStart: w, Replica: "pod-a", Failed: 1, LastFailureAt: &earlier, LastError: "earlier"},
+		{ProfileToken: "meter", Version: 1, WindowStart: w, Replica: "pod-b", Failed: 1, LastFailureAt: &later, LastError: "later"},
+	})
+	require.NoError(t, err)
+	got, err := f.api.PayloadDecoderHealth(writerCtx(f.ctx), "meter", 60)
+	require.NoError(t, err)
+	require.Equal(t, "later", got.LastError)
+	require.NotNil(t, got.LastFailureAt)
+	require.True(t, got.LastFailureAt.Equal(later), "last failure %v, want %v", got.LastFailureAt, later)
+}

@@ -91,6 +91,12 @@ var rawSQLAllowList = []siteEntry{
 			"configuration with no tenant predicate by design; it reads and writes no row itself",
 	},
 
+	{
+		Path: "backend/services/event-management/model/rollup_hourly.go", Func: "Api.orderNames", Count: 1,
+		Why: "sorts a list of measurement NAMES the read already returned, in the database's own collation: a " +
+			"VALUES list of bound text values with no table in it, so it reads and writes no row of any tenant",
+	},
+
 	// --- metering ---
 	{
 		Path: "backend/services/event-management/model/usage.go", Func: "rollupHour", Count: 4,

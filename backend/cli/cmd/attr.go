@@ -65,6 +65,9 @@ A negative number looks like a flag, so put it after "--" (flags first):
   dcctl attr set device m1 offset --tenant acme --email you@example.com --password <password> -- -5
 
 Writing one key never touches another: this is an upsert on (entity, scope, key).`,
+	Example: `  dcctl attr set device meter-0042 floor 3 -t acme --email you@example.com --password <password>
+  dcctl attr set device meter-0042 region arid --scope SHARED -t acme --email you@example.com --password <password>
+  dcctl attr set device meter-0042 note "east wall" --type STRING -t acme --email you@example.com --password <password>`,
 	Args:         cobra.ExactArgs(4),
 	RunE:         runAttrSet,
 	SilenceUsage: true,
@@ -80,6 +83,9 @@ but matches nothing: the device reported its own value at CLIENT scope. Narrow w
 
 A token that names no entity answers exactly like an entity with no attributes, so an empty
 result is not proof the entity exists.`,
+	Example: `  dcctl attr get device meter-0042 -t acme --email you@example.com --password <password>
+  dcctl attr get device meter-0042 floor -t acme --email you@example.com --password <password>
+  dcctl attr get asset pump-7 --scope SHARED -o json -t acme --email you@example.com --password <password>`,
 	Args:         cobra.RangeArgs(2, 3),
 	RunE:         runAttrGet,
 	SilenceUsage: true,
@@ -92,6 +98,8 @@ var attrUnsetCmd = &cobra.Command{
 
 This deletes the row; it does not write an empty value, which would stay on the entity and
 still count as a value. Removing a key that is not set succeeds and says so.`,
+	Example: `  dcctl attr unset device meter-0042 floor -t acme --email you@example.com --password <password>
+  dcctl attr unset customer acme-hq region --scope SHARED -t acme --email you@example.com --password <password>`,
 	Args:         cobra.ExactArgs(3),
 	RunE:         runAttrUnset,
 	SilenceUsage: true,
