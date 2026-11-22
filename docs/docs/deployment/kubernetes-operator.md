@@ -195,8 +195,10 @@ Nothing changes for an instance carrying them:
 
 - `spec.grafanaSSO` has no effect. Grafana's login is configured for the whole cluster, not per
   instance.
-- `spec.compact` is replaced by `spec.size: compact`. dcctl writes both and refuses a declaration in
-  which they disagree.
+- `spec.compact` is replaced by `spec.size: compact`. **Keep both fields; do not remove `compact`.**
+  dcctl writes both, still reads `compact`, and refuses a declaration whose `size` is `compact`
+  while `compact` is not set, so removing it by hand blocks every later bootstrap and upgrade. No
+  action is needed.
 
 Install is a cluster-level request: `spec.instance` and `spec.instanceUID` are forbidden.
 Every other action requires `spec.instance`; Upgrade and Teardown also require `spec.instanceUID`,

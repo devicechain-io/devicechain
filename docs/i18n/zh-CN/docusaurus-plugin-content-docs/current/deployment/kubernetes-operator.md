@@ -151,7 +151,7 @@ Status 显示声明、能力、条件及非终态 InstanceOperation；集群未�
 `Instance` 声明中有两个字段已**弃用**，后续的主版本将删除它们。带有这两个字段的实例不受任何影响：
 
 - `spec.grafanaSSO` 不起作用。Grafana 的登录针对整个集群配置，而不是按实例配置。
-- `spec.compact` 由 `spec.size: compact` 取代。dcctl 会同时写入两者，并拒绝两者不一致的声明。
+- `spec.compact` 由 `spec.size: compact` 取代。**请保留两个字段，不要删除 `compact`。** dcctl 会同时写入两者，仍读取 `compact`，并拒绝 `size` 为 `compact` 但未设置 `compact` 的声明，因此手动删除它会阻止之后的每次初始化和升级。无需任何操作。
 
 Install 是集群级请求，禁止提供 `spec.instance` 和 `spec.instanceUID`。其他动作必须提供
 `spec.instance`；Upgrade 和 Teardown 还必须提供 `spec.instanceUID`，Bootstrap 可省略它，

@@ -143,8 +143,8 @@
       "translationSha256": "c67d101ae9e3b54577579617024336803b4b9e114a826350d16fdef0c425f87e"
     },
     "deployment/kubernetes-operator.md": {
-      "sourceSha256": "14022e52d9365bcd5a1f3f636f30e647aea1ea5dc7e68c05923babe13076f403",
-      "translationSha256": "973b59fc111bab5aa1c738d3423ec758834289a4e14f98cb6a4d6345919244dc"
+      "sourceSha256": "eb97ef2e8adbe8db68245d2b76a70ef812ada89077ac449a555d040aad756f8b",
+      "translationSha256": "3f21a3bbd647d4518d4fb17be36de1e6f7eb005cbc554b79e26491e08b4c7736"
     },
     "deployment/metrics-reference.md": {
       "sourceSha256": "1c34f6f62de91da3274059d2c5dd0d68f3b825ce1f30b16c56d0c9d8eaeb7d3e",

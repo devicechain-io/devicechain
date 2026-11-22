@@ -52,17 +52,32 @@ func TestTheInstanceConfigurationVersionIsDeprecatedWithAWarning(t *testing.T) {
 
 func TestTheDeprecatedInstanceFieldsSayWhatReplacesThem(t *testing.T) {
 	props := specSchema(t, loadInstanceCRD(t))["properties"].(map[string]interface{})
+	// Phrases only the deprecation paragraph carries, so a description that lost the paragraph
+	// cannot pass on the field's ordinary wording.
 	for field, replacement := range map[string]string{
-		"compact":    "size: compact",
-		"grafanaSSO": "cluster configuration",
+		"compact":    "do not remove compact",
+		"grafanaSSO": "with the cluster configuration instead",
 	} {
 		node, ok := props[field].(map[string]interface{})
 		if !ok {
 			t.Fatalf("spec.%s is gone from the schema; a deprecation keeps it until a major release removes it", field)
 		}
 		desc, _ := node["description"].(string)
+		desc = strings.Join(strings.Fields(desc), " ") // generated text wraps lines anywhere
 		if !strings.Contains(desc, "Deprecated:") || !strings.Contains(desc, replacement) {
 			t.Fatalf("spec.%s's description does not mark it deprecated and name %q:\n%s", field, replacement, desc)
+		}
+	}
+}
+
+// The deprecations are of FIELDS of Instance, never of its version: Instance v1beta1 stays the
+// served, undeprecated version until v1 exists.
+func TestTheInstanceVersionItselfIsNotDeprecated(t *testing.T) {
+	versions := loadInstanceCRD(t)["spec"].(map[string]interface{})["versions"].([]interface{})
+	for _, v := range versions {
+		vm := v.(map[string]interface{})
+		if vm["deprecated"] == true {
+			t.Fatalf("instances version %v is marked deprecated; only two of its fields are", vm["name"])
 		}
 	}
 }

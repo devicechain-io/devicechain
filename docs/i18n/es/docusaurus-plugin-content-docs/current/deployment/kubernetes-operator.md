@@ -203,8 +203,10 @@ elimina. Nada cambia para una instancia que los lleve:
 
 - `spec.grafanaSSO` no tiene efecto. El inicio de sesión de Grafana se configura para todo el
   clúster, no por instancia.
-- `spec.compact` se sustituye por `spec.size: compact`. dcctl escribe ambos y rechaza una
-  declaración en la que no coincidan.
+- `spec.compact` se sustituye por `spec.size: compact`. **Conserva ambos campos; no quites
+  `compact`.** dcctl escribe ambos, sigue leyendo `compact` y rechaza una declaración cuyo `size`
+  es `compact` sin `compact`, así que quitarlo a mano bloquea todos los arranques iniciales y las
+  actualizaciones posteriores. No hace falta hacer nada.
 
 Install es una solicitud del clúster: prohíbe `spec.instance` y `spec.instanceUID`. Las demás acciones
 requieren `spec.instance`; Upgrade y Teardown también requieren `spec.instanceUID`, mientras que
