@@ -736,6 +736,14 @@ func (c *Client) runLoop(ctx context.Context) {
 	}
 }
 
+const (
+	// mqttKeepAlive is the keep-alive stated explicitly (paho's own default).
+	mqttKeepAlive = 30 * time.Second
+	// mqttWriteTimeout bounds one socket write to the broker, matching outbound-connectors'
+	// publish client.
+	mqttWriteTimeout = 5 * time.Second
+)
+
 // sessionOptions builds the paho options for one session, stamping BOTH the
 // OFFLINE Last-Will and (via the connect handler) the ONLINE birth with the same
 // sessionTs — the Sparkplug 3.0 timestamp match (B4) an edge node uses to reject
@@ -759,6 +767,10 @@ func (c *Client) sessionOptions(sessionCtx context.Context, sessionTs int64, los
 	opts.SetAutoReconnect(false)
 	opts.SetConnectRetry(false)
 	opts.SetConnectTimeout(connectTimeout)
+	// Bound one socket write and state the keep-alive: at paho's default of no write
+	// timeout a write to a dead peer blocks for good and the ping timeout is never checked.
+	opts.SetKeepAlive(mqttKeepAlive)
+	opts.SetWriteTimeout(mqttWriteTimeout)
 	// Ordered delivery is REQUIRED by the SP2 session machine: it validates a
 	// strict per-node seq (next == last+1), so paho's unordered mode (a goroutine
 	// per message) would reorder a healthy stream into a false gap and rebirth a
