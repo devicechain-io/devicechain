@@ -149,6 +149,10 @@ Shader "Harborpulse/CoastalScenery"
                     // from the 16:9 HOME and from the quays (the ray within 1.7 degrees of level) nothing changes.
                     float above = smoothstep(0.03, 0.09, -(i.world.y - _WorldSpaceCameraPos.y) / max(distanceM, 1.0));
                     transmission = lerp(layerT, layerT * (0.40 + 0.60 * transmission), above);
+                    // In the rain a range seen from above is not lost in the haze: it keeps a ghost of its shape, darker than the rain in
+                    // front of it and standing on its own foot fade. From the 9:16 HOME that is the eastern uplands, one range behind
+                    // another, where there was nothing between the trees and the horizon. Edge-on (the 16:9 HOME) nothing changes.
+                    transmission = max(transmission, above * _HarborCloud.z * 0.17 * foot * (0.55 + 0.45 * saturate((i.surface - 0.57) / 0.15)));
                 }
                 // The haze a ray fades into depends on its elevation: the horizon's colour along the horizon, the darker far-ground haze
                 // below it. The sky shader draws the same function below the horizon, so the land's far edge has no seam.

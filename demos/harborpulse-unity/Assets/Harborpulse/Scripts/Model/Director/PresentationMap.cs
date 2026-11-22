@@ -348,11 +348,12 @@ namespace DeviceChain.Harborpulse.Model.Director
                 var well = a;
                 if (layout.Devices.First(d => d.Token == pair.Token).Kind == DeviceKind.Pump)
                     well = new PropFootprint("well", a, 1, 1, WorldPropPlan.QuayYaw(quay)).Local(WellFootprint.LocalX, WellFootprint.LocalZ);
-                // East Quay's well stands just behind a charger bay, whose canopy covers it from the usual stand-off: there the eye is nearer and
-                // higher, and looks over the canopy.
-                double off = pair.Family == "pump-east" ? 9 : 16, wellEye = pair.Family == "pump-east" ? 13 : 10;
+                // Every well is looked into from the same stand-off (WorldPropPlan.InWellView keeps charging bays out of the line: East Quay's
+                // had a canopy in it, and its view was a nearer, higher one over a canopy that still filled the lower left). The look is at
+                // a point under the deck, WellViewLookY: the well and its three level tags then stand in the upper two thirds of the frame,
+                // and the caption's lines (the lower quarter, HarborStoryHud) are written under the "low cut-off" tag instead of across it.
                 foreach (var suffix in StoryPoses.WellSuffixes)
-                    poses.Add("pose:" + pair.Family + ":" + suffix, new CameraPose(new Point3(well.X + wx * off, wellEye, well.Z + wz * off), new Point3(well.X, 2, well.Z), 42));
+                    poses.Add("pose:" + pair.Family + ":" + suffix, new CameraPose(new Point3(well.X + wx * WellViewBackM, WellViewEyeM, well.Z + wz * WellViewBackM), new Point3(well.X, WellViewLookY, well.Z), 42));
             }
             // Outside the quay the eye sits just above the water and the look is flattened to put the horizon about a third of the way down.
             // from inside the harbour, over the water off the basin, looking east-south-east across the quay's devices: no breakwater or lighthouse is
@@ -375,7 +376,9 @@ namespace DeviceChain.Harborpulse.Model.Director
         /// <summary>Sideways step (metres along the quay's wall) of a family's ground-level eye, so its sight line passes beside the lamps and masts on the quay edge.</summary>
         static double LampTurn(string family) => family == "lamp-east" ? -30 : 30;
 
-        static double Sidestep(string family) => family == "pump-east" || family == "pump-basin" ? 4 : family == "chargers-east" ? -16 : 0;
+        // (U8: the Basin's chargers are the derate page's subject, and a tide gauge's mast on the quay edge stood between the eye and the
+        // second charger in its close and insert views. The eye steps 14 m towards the quay's north end and looks back past the mast.)
+        static double Sidestep(string family) => family == "pump-east" || family == "pump-basin" ? 4 : family == "chargers-east" ? -16 : family == "chargers-basin" ? 14 : 0;
 
         /// <summary>A pose from an eye position looking at a ground point's x and z, its pitch chosen so the horizon falls at <paramref name="horizonFromTop"/> of the frame.</summary>
         /// <summary>Where the horizon falls in a lamp pose, from the top: below the middle, so the lantern has sky behind it.</summary>
@@ -390,6 +393,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         /// under half a degree. The ranges keep their height and the sky has its fifth of the frame again.
         /// </summary>
         public const double HomeLookY = 7.5;
+        /// <summary>The wet well's cut-away view: how far the eye stands off on the water side, how high, and the height it looks at (under the deck).</summary>
+        public const double WellViewBackM = 16, WellViewEyeM = 10, WellViewLookY = 0;
 
         static CameraPose Stand(double camX, double eye, double camZ, double subjectX, double subjectZ, double vfov, double horizonFromTop)
         {

@@ -275,7 +275,7 @@ namespace DeviceChain.Harborpulse.Tests
                 worst = Math.Min(worst, margin);
                 Assert.That(o.Top - plan.Terrain.MeshHeight(o.Center.X, o.Center.Z), Is.LessThanOrEqualTo(Math.Min(4, .4 * o.Radius) + 1e-9), "top above the ground at its centre");
                 Assert.That(o.Protrusion, Is.InRange(.6, 4.0 + 1e-9));
-                Assert.That(o.PlanSize, Is.InRange(8 - 1e-9, 35 + 1e-9));
+                Assert.That(o.PlanSize, Is.InRange(8 - 1e-9, (o.Landmark ? 2 * Outcrop.LandmarkHalfX : 35) + 1e-9));
                 // every ring vertex lies inside the plan rectangle that the registry reserves for it
                 var footprint = o.Footprint("check");
                 foreach (var ring in o.Rings) foreach (var p in ring)

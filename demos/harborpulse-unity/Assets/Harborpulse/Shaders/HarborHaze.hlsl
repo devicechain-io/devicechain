@@ -35,6 +35,20 @@ float HarborRainShaft(float3 d)
     return smoothstep(0.42, 0.78, HarborHazeNoise(around)) * _HarborCloud.z;
 }
 
+// 0 .. 1: the squalls inside the rain, seen from above. A ray that looks down on far land or sea crosses the rain at a slant, so the
+// squalls show as long streaks leaning with the wind and as bands lying along the distance: narrow ones (a twelfth of the compass), and
+// between them gaps the far light comes through. Drawn only below the horizon: above it the sky has its own curtains.
+float HarborSquall(float3 d)
+{
+    float2 az = normalize(d.xz + float2(1e-5, 0.0));
+    float down = max(-d.y, 0.0);
+    // streaks: fine round the compass, long down the frame, leaning
+    float streak = HarborHazeNoise(az * 21.0 + float2(down * 13.0 + _HarborCloudDrift.x * 0.7, 7.1 - down * 7.0));
+    // bands: the far rain lies in ranks, one behind another, broken and bowed round the compass
+    float band = HarborHazeNoise(float2(down * 27.0 + az.x * 4.5, az.y * 6.0 + 1.9 + _HarborCloudDrift.x * 0.25));
+    return (smoothstep(0.36, 0.78, streak) * 0.75 + smoothstep(0.50, 0.80, band) * 0.4) * _HarborCloud.z;
+}
+
 // The haze colour along a unit view ray.
 float3 HarborHazeColor(float3 d, float3 horizonHaze, float3 groundHaze)
 {
@@ -43,8 +57,16 @@ float3 HarborHazeColor(float3 d, float3 horizonHaze, float3 groundHaze)
     [branch] if (_HarborCloud.z > 0.001)
     {
         // the shafts thin out towards the ground under the eye: they are a far thing
-        float shaft = HarborRainShaft(d) * (1.0 - smoothstep(0.0, 0.34, -d.y));
+        float far = 1.0 - smoothstep(0.0, 0.34, -d.y);
+        float shaft = HarborRainShaft(d) * far;
         c *= 1.0 - 0.42 * shaft;
+        // Seen from high up (the 9:16 HOME looks east along the coast from 230 m), a storm's distance was one grey field from the
+        // horizon to the near shore. Squalls darken it in streaks and ranks, and between them the haze is a little paler than the mean:
+        // the far light under the deck. They start just under the horizon, so the horizon's own line stays the fog's colour, and are
+        // at their strongest between 2 and 12 degrees down, where the far land and sea are.
+        float under = smoothstep(0.004, 0.035, -d.y) * (1.0 - smoothstep(0.20, 0.36, -d.y));
+        float squall = HarborSquall(d);
+        c *= 1.0 + under * _HarborCloud.z * (0.12 - 0.34 * squall);
     }
     return c;
 }

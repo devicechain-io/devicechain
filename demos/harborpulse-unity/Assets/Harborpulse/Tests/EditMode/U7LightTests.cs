@@ -276,7 +276,8 @@ namespace DeviceChain.Harborpulse.Tests
                 {
                     blocks++;
                     Assert.That(b.Length, Is.EqualTo(8));
-                    Assert.That(Embedded(plan.Terrain, b), Is.True, "a block's bottom is under the drawn ground at every corner");
+                    // (a slab of the landmark tor's stacks starts inside the slab under it instead: U8Tests)
+                    if (!o.Landmark) Assert.That(Embedded(plan.Terrain, b), Is.True, "a block's bottom is under the drawn ground at every corner");
                     for (var i = 0; i < 8; i++)
                     {
                         // inside the ledge's own plan rectangle (the registry reserves that plus a metre and a half)
@@ -289,6 +290,8 @@ namespace DeviceChain.Harborpulse.Tests
                     Assert.That(Enumerable.Range(4, 4).Min(i => b[i].Y) - b[0].Y, Is.GreaterThan(.5));
                 }
                 Assert.That(o.Peak, Is.GreaterThanOrEqualTo(o.Top));
+                Assert.That(o.BlockFoot.Length, Is.EqualTo(o.Blocks.Length));
+                if (o.Landmark) continue; // the one tor that is meant to stand high: U8LandmarkTests
                 Assert.That(o.Peak - o.Top, Is.LessThanOrEqualTo(Math.Max(3.2, Math.Min(Outcrop.TorMaxRiseM, Outcrop.TorRadiusShare * o.Radius)) + 1e-6), "no block stands higher over its ledge than a tor may");
                 if (o.Radius >= Outcrop.TorMinRadiusM && o.Peak - o.Top > 2.5) tors++;
                 else if (o.Radius < Outcrop.TorMinRadiusM) Assert.That(o.Peak - o.Top, Is.LessThanOrEqualTo(3.2 + 1e-6), "only the larger ledges carry a tor");
@@ -337,7 +340,8 @@ namespace DeviceChain.Harborpulse.Tests
                     Assert.That(p.Look.X, Is.EqualTo(well.X).Within(1e-9), f.Family); Assert.That(p.Look.Z, Is.EqualTo(well.Z).Within(1e-9), f.Family);
                     // the well's middle is the frame's, and its level tags are drawn
                     Assert.That(CameraMath.Project(p, Wide, well.X, Deck, well.Z, out var nx, out var ny), Is.True);
-                    Assert.That(Math.Abs(nx), Is.LessThan(.05)); Assert.That(Math.Abs(ny), Is.LessThan(.25));
+                    // (U8: the look is under the deck, so the well stands a little above the middle and its tags clear the caption)
+                    Assert.That(Math.Abs(nx), Is.LessThan(.05)); Assert.That(ny, Is.InRange(.1, .38));
                     Assert.That(InView(p, well), Is.True, f.Family + ":" + s + " draws the tags");
                     // U6 aimed it at the anchor: from there the well is outside the frame
                     var side = U5Plan.Map.Pose("pose:" + f.Family + ":close").Camera;

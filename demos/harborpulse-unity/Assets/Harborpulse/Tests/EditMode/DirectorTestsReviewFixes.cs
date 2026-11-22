@@ -91,7 +91,7 @@ namespace DeviceChain.Harborpulse.Tests
             store.AddCoverage(new CoverageInterval("run", "pump", 17, 17.6, false));
             var page = DirectorKit.Story().Page("4"); Assert.That(page.Captions.Single(c => c.Id == "before-float").Needs.Evaluate(store, page.Context("run", 696, trigger: trigger)).Holds, Is.False);
         }
-        static string JoinedCommand() => "{\"token\":\"command-real\",\"deviceToken\":\"hp-light-east-3\",\"name\":\"derate\",\"status\":\"SENT\",\"queuedTime\":" + Q(Ts(11.11)) + ",\"sentTime\":" + Q(Ts(11.111)) + ",\"metadata\":" + JsonSerializer.Serialize("{\"alarmToken\":\"alarm-real\"}") + "}";
+        static string JoinedCommand() => "{\"token\":\"command-real\",\"deviceToken\":\"hp-light-east-3\",\"name\":\"derate\",\"status\":\"SENT\",\"queuedTime\":" + Q(Ts(11.11)) + ",\"sentTime\":" + Q(Ts(11.111)) + ",\"cause\":{\"kind\":\"ALARM\",\"ruleId\":\"tenant/hp-light@v1/hp-lamp-flicker\",\"detectionKind\":\"threshold\",\"detectedAt\":" + Q(Ts(11.11)) + ",\"alarmKey\":\"lamp-flicker\",\"deviceId\":\"device-row\"}}";
         static string JoinedAttempt() => "{\"id\":\"attempt-real\",\"alarmToken\":\"alarm-real\",\"attemptedAt\":" + Q(Ts(11.11)) + ",\"status\":\"SENT\",\"trigger\":\"ESCALATION\",\"policyToken\":\"hp-duty-escalation\"}";
         [Test]
         public void ReorderedCycleRecordsDeferUntilAlarmReadCoversOwnInstant()
