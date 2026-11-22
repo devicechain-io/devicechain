@@ -225,6 +225,11 @@ type InstanceSpec struct {
 
 	// Compact applies the small-footprint sizing preset.
 	//
+	// Deprecated: size: compact replaces it, but keep both fields: do not remove compact. dcctl
+	// writes both, still reads compact, and refuses a declaration whose size is compact while
+	// compact is not set, so removing it by hand would block every later bootstrap and upgrade.
+	// No action is needed. It will not be removed before v3.0.
+	//
 	// +optional
 	Compact bool `json:"compact,omitempty"`
 
@@ -275,6 +280,9 @@ type InstanceSpec struct {
 	// it: a dcctl re-run writes the declaration without it, so a value set by hand is
 	// dropped then. It is kept in the schema so a declaration that carries it is still
 	// accepted.
+	//
+	// Deprecated: has no effect; configure Grafana's login with the cluster configuration
+	// instead. It will not be removed before v3.0.
 	//
 	// +optional
 	GrafanaSSO bool `json:"grafanaSSO,omitempty"`
