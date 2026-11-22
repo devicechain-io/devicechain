@@ -80,15 +80,16 @@ namespace DeviceChain.Harborpulse.Visuals
         }
         /// <param name="weather">The weather drawn: the frame's own, unless a fair-weather look check of the preview has put the storm aside.</param>
         /// <summary>Decides every well's level tags for a camera (see <see cref="WellFootprint.TagsInView"/>).</summary>
-        public void FrameWells(Vector3 camera, Vector3 forward)
+        public void FrameWells(Vector3 camera, Vector3 forward, bool tallFrame)
         {
-            foreach (var p in pumps) p.Value.FrameTags(camera, forward);
+            foreach (var p in pumps) p.Value.FrameTags(camera, forward, tallFrame);
         }
 
         /// <param name="forward">The way the camera looks: a wet well's level tags are drawn only for a camera that frames the well.</param>
-        public void Apply(HarborFrame f, SkyState sky, Vector3 camera, float dt, float time, Weather weather, Vector3 forward)
+        /// <param name="tallFrame">A 9:16 frame: its view of a well stands further back, and the tags are drawn from there too.</param>
+        public void Apply(HarborFrame f, SkyState sky, Vector3 camera, float dt, float time, Weather weather, Vector3 forward, bool tallFrame = false)
         {
-            foreach (var p in pumps) p.Value.Apply(f.Pumps[p.Key], dt, time, camera, forward);
+            foreach (var p in pumps) p.Value.Apply(f.Pumps[p.Key], dt, time, camera, forward, tallFrame);
             foreach (var p in gauges) p.Value.Apply(f);
             foreach (var p in chargers) p.Value.Apply(f.Chargers[p.Key], f.World);
             foreach (var p in lamps) p.Value.Apply(f.Lamps[p.Key], f, sky, camera);

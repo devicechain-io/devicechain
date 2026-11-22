@@ -18,6 +18,16 @@ const (
 	KindMQTTNodePort     = localMQTTNodePort
 )
 
+// InstanceMQTTNodePort is the node port a local instance's MQTT gateway was given, as its local
+// instance record says, and KindMQTTNodePort for an instance whose record names none (one built
+// before the record carried it, when every local instance that had a port had that one).
+func InstanceMQTTNodePort(instance string) int {
+	if p := recordedMQTTNodePort(instance); p != 0 {
+		return int(p)
+	}
+	return KindMQTTNodePort
+}
+
 // dockerPortOutput is the one window onto `docker port`, a variable so a test can
 // present any published-port table without a Docker daemon.
 var dockerPortOutput = func(container string) (string, error) {
@@ -39,6 +49,36 @@ func KindPublishedHostPort(kubeContext string, containerPort int) (int, bool) {
 		return 0, false
 	}
 	return parseDockerPort(out, containerPort)
+}
+
+// KindPublishedHostPorts reads every container-port to host-port mapping the kind cluster behind
+// kubeContext publishes, from ONE `docker port` call. ok is false when it cannot be read.
+func KindPublishedHostPorts(kubeContext string) (map[int]int, bool) {
+	cluster := clusterNameFromKindContext(kubeContext)
+	if cluster == "" {
+		return nil, false
+	}
+	out, err := dockerPortOutput(cluster + "-control-plane")
+	if err != nil {
+		return nil, false
+	}
+	m := map[int]int{}
+	for _, line := range strings.Split(out, "\n") {
+		left, _, found := strings.Cut(line, "->")
+		if !found {
+			continue
+		}
+		cp, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(left), "/tcp"))
+		if err != nil {
+			continue
+		}
+		if hp, ok := parseDockerPort(line, cp); ok {
+			if _, seen := m[cp]; !seen {
+				m[cp] = hp
+			}
+		}
+	}
+	return m, true
 }
 
 // parseDockerPort reads `docker port` lines ("80/tcp -> 0.0.0.0:8080", possibly

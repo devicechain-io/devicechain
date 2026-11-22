@@ -378,10 +378,10 @@ dcctl bootstrap local scratch --dev
 ```
 
 :::danger 需要保留的实例必须保存此文件
-根密钥加密实例保存的所有秘密，仅存在于集群 etcd，且 **DeviceChain 备份不包含 etcd**。没有此文件，将数据库备份恢复到新集群后，恢复的秘密将无法解密。请提前阅读[灾难恢复](./disaster-recovery.md)。
+根密钥加密实例保存的所有机密，仅存在于集群 etcd，且 **DeviceChain 备份不包含 etcd**。没有此文件，将数据库备份恢复到新集群后，恢复的机密将无法解密。请提前阅读[灾难恢复](./disaster-recovery.md)。
 :::
 
-保存秘密的领域无法解密凭据时拒绝启动。用户管理服务也在其中：它封存令牌签名密钥，因此所有用户无法登录。问题会立即显现，但届时已无法补救。[灾难恢复](./disaster-recovery.md)说明完整流程。
+保存机密的领域无法解密凭据时拒绝启动。用户管理服务也在其中：它封存令牌签名密钥，因此所有用户无法登录。问题会立即显现，但届时已无法补救。[灾难恢复](./disaster-recovery.md)说明完整流程。
 
 使用 `--no-escrow` 或 `--dev` 创建的无托管实例可之后补充，无需重建。向 `dcctl upgrade` 提供口令会写入缺失文件，每次升级也检查已有文件。见[托管协调](./disaster-recovery.md#escrow-reconcile)。
 

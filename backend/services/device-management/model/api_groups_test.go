@@ -105,13 +105,13 @@ func TestUpdateEntityGroup_AStaticGroupRefusesASelector(t *testing.T) {
 
 	// The counterweight, first: an ordinary presentation edit still works, so the refusal
 	// below is not bought by refusing everything.
-	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{
+	if _, err := api.UpdateEntityGroup(ctx, "g1", nil, &EntityGroupUpdateRequest{
 		Name: dcgraphql.OptionalStringOf("Fleet North"),
 	}); err != nil {
 		t.Fatalf("presentation update rejected: %v", err)
 	}
 
-	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{
+	if _, err := api.UpdateEntityGroup(ctx, "g1", nil, &EntityGroupUpdateRequest{
 		Selector: dcgraphql.OptionalStringOf(`attr["x"] == 1`),
 	}); err == nil {
 		t.Error("a static group accepted a selector, which nothing would ever evaluate")
@@ -132,7 +132,7 @@ func TestUpdateEntityGroup_ADynamicSelectorCannotBeCleared(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{
+	if _, err := api.UpdateEntityGroup(ctx, "g1", nil, &EntityGroupUpdateRequest{
 		Selector: dcgraphql.ClearedString(),
 	}); err == nil {
 		t.Fatal("a dynamic group's selector was cleared, leaving a group that matches nothing")
@@ -147,7 +147,7 @@ func TestUpdateEntityGroup_ADynamicSelectorCannotBeCleared(t *testing.T) {
 
 	// The counterweight: a real selector edit still takes.
 	replaced := `attr["climate"] == "humid"`
-	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{
+	if _, err := api.UpdateEntityGroup(ctx, "g1", nil, &EntityGroupUpdateRequest{
 		Selector: dcgraphql.OptionalStringOf(replaced),
 	}); err != nil {
 		t.Fatalf("a selector edit was refused: %v", err)

@@ -96,5 +96,7 @@ var (
 		// once the token has been created again (device_incarnation.go).
 		NewDeviceTokenHoldersSchema(),
 		NewHolderCheckBackoffSchema(),
+		// Where a STRING reading keeps its value (see its doc comment): nullable, no default.
+		NewMeasurementTextValueSchema(),
 	}
 )

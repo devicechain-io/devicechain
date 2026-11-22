@@ -320,7 +320,7 @@ func clusterMqttBroker(cmd *cobra.Command, server, instance string) string {
 		}
 		kubeContext = binding.KubeContext
 	}
-	p, ok := bootstrap.KindPublishedHostPort(kubeContext, bootstrap.KindMQTTNodePort)
+	p, ok := bootstrap.KindPublishedHostPort(kubeContext, bootstrap.InstanceMQTTNodePort(instance))
 	if !ok || p == 1883 {
 		return ""
 	}
