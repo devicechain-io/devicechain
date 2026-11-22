@@ -183,6 +183,7 @@ var purgeSeedExemptions = map[string]string{
 	"event-processing.event_processing_migrations":               migrationTable,
 	"event-processing.profile_actives":                           representedTenantPredicate,
 	"event-processing.purged_tenants":                            purgeTombstone,
+	"event-processing.rule_stat_sweeps":                          representedTenantPredicate,
 	"event-processing.rule_stats":                                representedTenantPredicate,
 	"notification-management.audit_events":                       sharedJournal,
 	"notification-management.notification_attempts":              representedTenantPredicate,
