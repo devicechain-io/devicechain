@@ -528,6 +528,8 @@ CREATE INDEX ix_entity_attributes_facet_value ON "device-management".entity_attr
 CREATE INDEX ix_entity_attributes_list_order ON "device-management".entity_attributes USING btree (tenant_id, created_at DESC, id DESC) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_entity_relationships_list_order ON "device-management".entity_relationships USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_geo_fences_list_order ON "device-management".geo_fences USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
+CREATE INDEX ix_profile_decoder_healths_profile_window ON "device-management".profile_decoder_healths USING btree (tenant_id, device_profile_id, window_start);
+CREATE INDEX ix_profile_decoder_healths_window_start ON "device-management".profile_decoder_healths USING btree (window_start);
 CREATE SCHEMA "device-management";
 CREATE SEQUENCE "device-management".agent_proposals_id_seq
  START WITH 1
