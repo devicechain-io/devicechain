@@ -50,6 +50,7 @@ import {
   type UpdateRollout,
   type UpdateRolloutOutcome,
 } from '@/lib/api/update-management';
+import { CohortPanel } from './CohortPanel';
 import { Fact } from '@/routes/command-batches/Fact';
 import { RolloutOutcomeBadge, RolloutProgressBar, RolloutStateBadge, pauseReasonText } from './rolloutBadges';
 import '@/i18n/lazy/updates';
@@ -139,6 +140,9 @@ function RolloutDetail({
         {canWrite && rollout.state === 'PAUSED' && rollout.pauseReason === 'FAILURE_THRESHOLD' && (
           <RaiseThresholdPanel rollout={rollout} actionable={actionable} onChanged={onChanged} />
         )}
+        {(rollout.cohorts.length > 0 || (rollout.state === 'PAUSED' && rollout.pauseReason === 'FAILURE_RATE')) && (
+          <CohortPanel rollout={rollout} canWrite={canWrite} actionable={actionable} onChanged={onChanged} />
+        )}
         <SummaryPanel rollout={rollout} />
         {rollout.state !== 'DRAFT' && <TargetsPanel rollout={rollout} reloadKey={reloadKey} />}
       </div>
@@ -195,7 +199,13 @@ function RolloutControls({
     if (ok) await act(() => abortRollout(rollout.token));
   };
 
-  const threshold = rollout.state === 'PAUSED' && rollout.pauseReason === 'FAILURE_THRESHOLD';
+  // These pauses have their own decision (a raised threshold, a promotion, a numbered halt
+  // override); a plain Resume would only be refused, so it is not offered.
+  const threshold =
+    rollout.state === 'PAUSED' &&
+    (rollout.pauseReason === 'FAILURE_THRESHOLD' ||
+      rollout.pauseReason === 'COHORT_READY' ||
+      rollout.pauseReason === 'FAILURE_RATE');
   return (
     <div className="flex items-center gap-2">
       {rollout.state === 'DRAFT' && (
@@ -339,6 +349,7 @@ function TargetsPanel({ rollout, reloadKey }: { rollout: UpdateRollout; reloadKe
   const { t } = useTranslation('updates');
   const [pageNumber, setPageNumber] = useState(1);
   const [outcome, setOutcome] = useState('');
+  const staged = rollout.cohorts.length > 0;
   useEffect(() => setPageNumber(1), [outcome]);
   const { data, loading, error } = useQuery(
     () =>
@@ -374,6 +385,7 @@ function TargetsPanel({ rollout, reloadKey }: { rollout: UpdateRollout; reloadKe
         <>
           <DataTable>
             <DataTableHead>
+              {staged && <DataTableHeaderCell>{t('rolloutColCohort')}</DataTableHeaderCell>}
               <DataTableHeaderCell>{t('colDevice')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('colOutcome')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('colUpdateState')}</DataTableHeaderCell>
@@ -383,6 +395,7 @@ function TargetsPanel({ rollout, reloadKey }: { rollout: UpdateRollout; reloadKe
             <DataTableBody>
               {data!.results.map((r) => (
                 <DataTableRow key={r.deviceToken}>
+                  {staged && <DataTableCell className="text-muted-foreground">{r.cohort + 1}</DataTableCell>}
                   <DataTableCell className="font-mono text-foreground">
                     <Link className="underline" to={`/devices/${encodeURIComponent(r.deviceToken)}`}>
                       {r.deviceToken}
