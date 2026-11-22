@@ -376,10 +376,10 @@ dcctl bootstrap local scratch --dev
 ```
 
 :::danger 需要保留的实例必须保存此文件
-根密钥加密实例保存的所有秘密，仅存在于集群 etcd，且 **DeviceChain 备份不包含 etcd**。没有此文件，将数据库备份恢复到新集群后，恢复的秘密将无法解密。请提前阅读[灾难恢复](./disaster-recovery.md)。
+根密钥加密实例保存的所有机密，仅存在于集群 etcd，且 **DeviceChain 备份不包含 etcd**。没有此文件，将数据库备份恢复到新集群后，恢复的机密将无法解密。请提前阅读[灾难恢复](./disaster-recovery.md)。
 :::
 
-保存秘密的领域无法解密凭据时拒绝启动。用户管理服务也在其中：它封存令牌签名密钥，因此所有用户无法登录。问题会立即显现，但届时已无法补救。[灾难恢复](./disaster-recovery.md)说明完整流程。
+保存机密的领域无法解密凭据时拒绝启动。用户管理服务也在其中：它封存令牌签名密钥，因此所有用户无法登录。问题会立即显现，但届时已无法补救。[灾难恢复](./disaster-recovery.md)说明完整流程。
 
 使用 `--no-escrow` 或 `--dev` 创建的无托管实例可之后补充，无需重建。向 `dcctl upgrade` 提供口令会写入缺失文件，每次升级也检查已有文件。见[托管协调](./disaster-recovery.md#escrow-reconcile)。
 
@@ -524,6 +524,18 @@ JetStream 卷大小由各 stream 预先保留的容量上限之和推导。两�
 
 :::tip 无须额外配置的本地 URL
 `dcctl bootstrap local my-instance --build --host localhost --no-tls` 将控制台开放在 `http://localhost/`，无须修改 hosts 文件，也不会出现证书警告。
+:::
+
+
+:::tip 按主机名运行第二个本地实例
+`localhost` 只能服务一个实例。要在其旁边再运行一个，请为每个实例使用 `localtest.me` 下各自的名称。这是一个公共域名，其下所有名称都解析到 `127.0.0.1`，同样无须修改 hosts 文件：
+
+```bash
+dcctl bootstrap local alpha --host alpha.localtest.me --no-tls
+dcctl bootstrap local beta --host beta.localtest.me --no-tls
+```
+
+控制台随后位于 `http://alpha.localtest.me/` 和 `http://beta.localtest.me/`。该名称通过 DNS 解析，因此需要网络访问；离线时请改用 `*.localhost` 名称。
 :::
 
 ### `--ha` {#ha}

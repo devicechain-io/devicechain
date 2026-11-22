@@ -68,7 +68,10 @@ namespace DeviceChain.Sitepulse.Tests
 
         public static Dev Hauler(string n = "01") => new Dev { Token = "sp-hauler-" + n, ExternalId = "SP-HL-00" + n, Type = "sp-hauler" };
         public static Dev Loader(string n = "01") => new Dev { Token = "sp-loader-" + n, ExternalId = "SP-LD-00" + n, Type = "sp-loader" };
-        public static Dev Dozer(string n = "01") => new Dev { Token = "sp-dozer-" + n, ExternalId = "SP-DZ-00" + n, Type = "sp-dozer" };
+        public static string[] DozerMetrics() => new[] { "fuel_pct", "engine_temp_c", "engine_hours" };
+
+        // a dozer has its own profile: no payload, no tyres
+        public static Dev Dozer(string n = "01") => new Dev { Token = "sp-dozer-" + n, ExternalId = "SP-DZ-00" + n, Type = "sp-dozer", Profile = "sp-dozer-profile", Metrics = DozerMetrics() };
 
         public static Dev Plant() => new Dev
         {

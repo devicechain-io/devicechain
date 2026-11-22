@@ -1,0 +1,17 @@
+{
+  "actorPlaceholder": "按操作者筛选…",
+  "allOperationsPlaceholder": "所有操作",
+  "colActor": "操作者",
+  "colOperation": "操作",
+  "colRows": "行数",
+  "colTable": "表",
+  "colTarget": "目标",
+  "colTime": "时间",
+  "description": "对此租户注册表的每一次更改，均由系统自动记录。",
+  "empty": "没有符合条件的审计记录。",
+  "loading": "正在加载审计日志…",
+  "opCreate": "创建",
+  "opDelete": "删除",
+  "opUpdate": "更新",
+  "title": "审计"
+}

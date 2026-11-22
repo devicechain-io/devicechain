@@ -1058,6 +1058,22 @@ clúster: `--compact` se decide una vez, antes de que haya nada ejecutándose ba
 `http://localhost/`, sin entrada en el archivo hosts y sin advertencia de certificado.
 :::
 
+
+:::tip Una segunda instancia local por nombre de host
+`localhost` sirve una sola instancia. Para ejecutar otra a su lado, dé a cada una su propio nombre
+bajo `localtest.me`, un dominio público cuyos nombres resuelven todos a `127.0.0.1`, por lo que
+tampoco necesita entrada en el archivo hosts:
+
+```bash
+dcctl bootstrap local alpha --host alpha.localtest.me --no-tls
+dcctl bootstrap local beta --host beta.localtest.me --no-tls
+```
+
+Las consolas quedan entonces en `http://alpha.localtest.me/` y `http://beta.localtest.me/`. El
+nombre se resuelve por DNS, así que requiere acceso a la red; sin conexión, use un nombre
+`*.localhost`.
+:::
+
 ### `--ha` {#ha}
 
 `--ha` se elige al instalar, y lo sigue toda instancia del clúster. Cada instancia ejecuta su
