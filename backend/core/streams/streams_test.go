@@ -362,7 +362,7 @@ func TestAgentActuationKillsContract(t *testing.T) {
 	if len(s.Writers) != 1 || s.Writers[0] != "user-management" {
 		t.Fatalf("kill writers = %v", s.Writers)
 	}
-	if len(s.Readers) != 1 || s.Readers[0] != (Reader{"device-management", ReadDurable}) {
+	if len(s.Readers) != 2 || s.Readers[0] != (Reader{"device-management", ReadDurable}) || s.Readers[1] != (Reader{"command-delivery", ReadDurable}) {
 		t.Fatalf("kill readers = %v", s.Readers)
 	}
 	if s.Tier != Cold || s.Shape != ShapeTenant || s.DeadLetterKind != kindControlFact || !s.PlatformAuthored || s.DuplicateWindowSeconds != BrokerDefaultDuplicateWindowSeconds {

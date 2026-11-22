@@ -7,14 +7,17 @@ require (
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/graph-gophers/graphql-go v1.11.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/nats-io/nats-server/v2 v2.15.3
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
 	gorm.io/datatypes v1.2.7
+	gorm.io/driver/postgres v1.6.3
 	gorm.io/gorm v1.31.2
 )
 
@@ -32,13 +35,11 @@ require (
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.13.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
@@ -78,7 +79,6 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
-	gorm.io/driver/postgres v1.6.3 // indirect
 	modernc.org/libc v1.22.5 // indirect
 	modernc.org/mathutil v1.5.0 // indirect
 	modernc.org/memory v1.5.0 // indirect
