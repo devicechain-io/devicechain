@@ -3,13 +3,17 @@
 
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/command-delivery';
-import type { CommandAgentProposalsQuery, AgentProposalSearchCriteria } from '@/gql/command-delivery/graphql';
+import type { CommandAgentProposalsQuery, CommandAgentProposalDetailQuery, AgentProposalSearchCriteria } from '@/gql/command-delivery/graphql';
 
-export type CommandAgentProposal = CommandAgentProposalsQuery['agentProposals']['results'][number];
+/** One inbox row. A list summary omits the command payload and the agent's rationale; only the
+ * detail a person opens to review carries them. */
+export type CommandAgentProposalRow = CommandAgentProposalsQuery['agentProposals']['results'][number];
+/** The full proposal a person reviews and approves. */
+export type CommandAgentProposal = CommandAgentProposalDetailQuery['agentProposal'];
 const LIST = graphql(`
   query CommandAgentProposals($criteria: AgentProposalSearchCriteria!) {
     agentProposals(criteria: $criteria) {
-      results { token kind state payload targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note deviceToken command commandCutoff resultRef }
+      results { token kind state targets digest impact targetCount proposerPrincipal proposerClient clientAttested policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note deviceToken command commandCutoff resultRef }
       pagination { pageStart pageEnd totalRecords }
     }
   }

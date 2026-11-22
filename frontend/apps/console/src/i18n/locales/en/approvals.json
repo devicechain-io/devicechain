@@ -91,8 +91,8 @@
   "approvalRemaining": "{{seconds}} seconds remaining",
   "approvalExpired": "The approval deadline has passed.",
   "commandDeliveryNotice": "Approval queues the command. It may wait for a maintenance window, expire at its cutoff, or fail. Sent commands cannot be recalled.",
-  "approveFinalConfirm_COMMAND_SEND": "This is the final approval. Approving queues the command as you, the approving person, with impact {{impact}}. It may wait for a maintenance window, expire at its cutoff, or fail. Sent commands cannot be recalled. Continue?",
-  "approveCommandConfirm": "Approve this command with impact {{impact}}? Another person's approval may make it final, and then it is queued: it may wait for a maintenance window, expire at its cutoff, or fail. Sent commands cannot be recalled. Continue?",
+  "approveFinalConfirm_COMMAND_SEND": "This is the final approval. Approving queues {{command}} for device {{device}} as you, the approving person, with impact {{impact}}. It may wait for a maintenance window, expire at its cutoff, or fail. Sent commands cannot be recalled. Continue?",
+  "approveCommandConfirm": "Approve sending {{command}} to device {{device}} (impact {{impact}})? Another person's approval may make it final, and then it is queued: it may wait for a maintenance window, expire at its cutoff, or fail. Sent commands cannot be recalled. Continue?",
   "commandQueued": "Command queued for delivery.",
   "commandQueuedResult": "The approved command was queued for delivery; delivery may still wait, expire or fail.",
   "commandRefused": "The command proposal was refused. No command was queued.",
@@ -108,5 +108,7 @@
   "destructiveNeedsTwoApprovers": "A destructive command needs two distinct eligible approvers (DESTRUCTIVE_NEEDS_TWO_APPROVERS).",
   "tokenInUse": "The command token is already in use (TOKEN_IN_USE). Request a new proposal.",
   "alreadyAdmitted": "A command has already been admitted for this proposal (ALREADY_ADMITTED). Do not submit it again.",
-  "validationUnavailable": "Device validation is temporarily unavailable (VALIDATION_UNAVAILABLE). No command was queued."
+  "validationUnavailable": "Device validation is temporarily unavailable (VALIDATION_UNAVAILABLE). No command was queued.",
+  "selfApprovalNotAllowed": "You proposed this through an agent, and its impact is not NORMAL: another person must approve it.",
+  "invisibleCharacters": "Contains invisible formatting characters, shown as \\uXXXX"
 }

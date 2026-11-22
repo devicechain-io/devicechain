@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useRef, useState } from 'react';
+import { revealInvisible } from './invisible';
 import { useTranslation } from 'react-i18next';
 import { approveAgentProposal, rejectAgentProposal, type AgentProposal, type ProposalArea } from '@/lib/api/agent-proposals';
 import { serverErrorCode } from '@/i18n/signInError';
@@ -38,7 +39,8 @@ export function useProposalDecision(area: ProposalArea, token: string, current: 
       const destructiveCommand = command && displayed.impact === 'DESTRUCTIVE';
       const description = final ? `approveFinalConfirm_${displayed.kind}` : command ? 'approveCommandConfirm' : 'approveConfirm';
       if (approve && !(await confirm({ title: t('approve'),
-        description: t(description, { count: displayed.targetCount, impact: displayed.impact }),
+        description: t(description, { count: displayed.targetCount, impact: displayed.impact,
+          device: 'deviceToken' in displayed ? displayed.deviceToken : '', command: 'command' in displayed ? revealInvisible(displayed.command).text : '' }),
         confirmLabel: t('approve'), destructive: destructiveCommand }))) return;
       setMutationError(null); setStepUp(false); setInfo(null);
       if (approve) {

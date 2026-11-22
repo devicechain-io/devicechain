@@ -5,14 +5,16 @@ import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-management';
 import type { AgentProposalsQuery, AgentProposalSearchCriteria } from '@/gql/device-management/graphql';
 
-import { listCommandProposals, getCommandProposal, approveCommandProposal, rejectCommandProposal, type CommandAgentProposal } from './command-proposals';
+import { listCommandProposals, getCommandProposal, approveCommandProposal, rejectCommandProposal, type CommandAgentProposal, type CommandAgentProposalRow } from './command-proposals';
 import type { AgentProposalSearchCriteria as CommandProposalSearchCriteria } from '@/gql/command-delivery/graphql';
 
 import type { ProposalArea } from '@/lib/proposal-areas';
 export { COMMAND_PROPOSAL_AREA, PROPOSAL_AREAS, type ProposalArea } from '@/lib/proposal-areas';
 export type AgentProposal = AgentProposalsQuery['agentProposals']['results'][number] | CommandAgentProposal;
+/** An inbox row: an alarm proposal row, or a command proposal summary (no payload, no rationale). */
+export type AgentProposalRow = AgentProposalsQuery['agentProposals']['results'][number] | CommandAgentProposalRow;
 export type AgentProposalPage = {
-  results: AgentProposal[];
+  results: AgentProposalRow[];
   pagination: AgentProposalsQuery['agentProposals']['pagination'];
 };
 export const proposalPath = (area: ProposalArea, token: string) => area === 'command-delivery'

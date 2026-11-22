@@ -91,8 +91,8 @@
   "approvalRemaining": "Quedan {{seconds}} segundos",
   "approvalExpired": "Ha vencido el plazo de aprobación.",
   "commandDeliveryNotice": "Aprobar pone el comando en cola. Puede esperar una ventana de mantenimiento, caducar o fallar. Los comandos enviados no se pueden recuperar.",
-  "approveFinalConfirm_COMMAND_SEND": "Esta es la aprobación final. Aprobar pone el comando en cola en tu nombre, como persona que aprueba, con impacto {{impact}}. Puede esperar una ventana de mantenimiento, caducar o fallar. Los comandos enviados no se pueden recuperar. ¿Continuar?",
-  "approveCommandConfirm": "¿Aprobar este comando con impacto {{impact}}? La aprobación de otra persona puede hacerla definitiva y entonces se pondrá en cola: puede esperar a una ventana de mantenimiento, caducar en su plazo o fallar. Los comandos enviados no se pueden recuperar. ¿Continuar?",
+  "approveFinalConfirm_COMMAND_SEND": "Esta es la aprobación final. Aprobar pone {{command}} en cola para el dispositivo {{device}} en tu nombre, como persona que aprueba, con impacto {{impact}}. Puede esperar una ventana de mantenimiento, caducar o fallar. Los comandos enviados no se pueden recuperar. ¿Continuar?",
+  "approveCommandConfirm": "¿Aprobar el envío de {{command}} al dispositivo {{device}} (impacto {{impact}})? La aprobación de otra persona puede hacerla definitiva y entonces se pondrá en cola: puede esperar a una ventana de mantenimiento, caducar en su plazo o fallar. Los comandos enviados no se pueden recuperar. ¿Continuar?",
   "commandQueued": "Comando en cola para su entrega.",
   "commandQueuedResult": "El comando aprobado está en cola; su entrega aún puede esperar, caducar o fallar.",
   "commandRefused": "Se ha denegado la propuesta. No se ha puesto ningún comando en cola.",
@@ -108,5 +108,7 @@
   "destructiveNeedsTwoApprovers": "Un comando destructivo necesita dos personas distintas que puedan aprobarlo (DESTRUCTIVE_NEEDS_TWO_APPROVERS).",
   "tokenInUse": "El token del comando ya está en uso (TOKEN_IN_USE). Solicita una nueva propuesta.",
   "alreadyAdmitted": "Ya se ha admitido un comando para esta propuesta (ALREADY_ADMITTED). No lo vuelvas a enviar.",
-  "validationUnavailable": "La validación del dispositivo no está disponible temporalmente (VALIDATION_UNAVAILABLE). No se ha puesto ningún comando en cola."
+  "validationUnavailable": "La validación del dispositivo no está disponible temporalmente (VALIDATION_UNAVAILABLE). No se ha puesto ningún comando en cola.",
+  "selfApprovalNotAllowed": "Tú propusiste esto mediante un agente y su impacto no es NORMAL: debe aprobarlo otra persona.",
+  "invisibleCharacters": "Contiene caracteres de formato invisibles, mostrados como \\uXXXX"
 }

@@ -92,11 +92,15 @@ type CommandProposalOutcome struct {
 
 const commandProposalFields = proposalFields + ` payload deviceToken command commandCutoff resultRef`
 
+// commandProposalSummaryFields is what a LIST of command proposals selects: no command payload
+// and no rationale. A summary names the proposal; get_proposal returns the full detail.
+const commandProposalSummaryFields = `token kind state targets digest impact targetCount proposerPrincipal proposerClient clientAttested policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note deviceToken command commandCutoff resultRef`
+
 var proposeCommandMutation = newDocument("command-delivery", `mutation ProposeCommand($input: AgentCommandProposalInput!) {
  proposeCommand(input: $input) { status verdict requiredApprovals reasons digest expiresAt targetCount preview { deviceToken incarnation command payload payloadPresent impact definition cutoff dispatchAfter windowToken } proposal { `+commandProposalFields+` } }
 }`)
 var getCommandProposalQuery = newDocument("command-delivery", `query GetCommandProposal($token: String!) { agentProposal(token: $token) { `+commandProposalFields+` } }`)
-var listMyCommandProposalsQuery = newDocument("command-delivery", `query ListMyCommandProposals($criteria: AgentProposalSearchCriteria!) { agentProposals(criteria: $criteria) { results { `+commandProposalFields+` } pagination { totalRecords } } }`)
+var listMyCommandProposalsQuery = newDocument("command-delivery", `query ListMyCommandProposals($criteria: AgentProposalSearchCriteria!) { agentProposals(criteria: $criteria) { results { `+commandProposalSummaryFields+` } pagination { totalRecords } } }`)
 
 func (t *Tools) ProposeCommand(ctx context.Context, req *mcp.CallToolRequest, in ProposeCommandInput) (*mcp.CallToolResult, CommandProposalOutcome, error) {
 	var out CommandProposalOutcome
@@ -154,6 +158,11 @@ func (t *Tools) ProposeCommand(ctx context.Context, req *mcp.CallToolRequest, in
 		return nil, out, err
 	}
 	if resp.Outcome == nil || resp.Outcome.Status == "" || resp.Outcome.Verdict == "" {
+		return nil, out, invalidProposalInput("command proposal response is unavailable or incomplete")
+	}
+	// A stored outcome must carry its stored proposal: PENDING_APPROVAL or EXISTING with no
+	// proposal is an incomplete answer, never a success the agent can act on.
+	if (resp.Outcome.Status == "PENDING_APPROVAL" || resp.Outcome.Status == "EXISTING") && resp.Outcome.Stored == nil {
 		return nil, out, invalidProposalInput("command proposal response is unavailable or incomplete")
 	}
 	out = resp.Outcome.CommandProposalOutcome

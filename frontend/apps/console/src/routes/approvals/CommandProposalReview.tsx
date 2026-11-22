@@ -9,6 +9,7 @@ import { CopyToken } from '@/components/ui/copy-token';
 import { ErrorState } from '@/components/ui/error-state';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { formatTime } from '@/lib/utils';
+import { revealInvisible } from './invisible';
 
 interface CommandSnapshot {
   deviceToken: string;
@@ -91,20 +92,29 @@ function ApprovalCountdown({ expiresAt }: { expiresAt: string }) {
     <p className="mt-3">{t('commandDeliveryNotice')}</p>
   </SectionPanel>;
 }
+// Revealed shows untrusted text with every invisible format character made visible, and a
+// warning badge when there was any (see revealInvisible).
+function Revealed({ value, pre, paragraph, className }: { value: string; pre?: boolean; paragraph?: boolean; className?: string }) {
+  const { t } = useTranslation('approvals');
+  const shown = revealInvisible(value);
+  const text = pre ? <pre className={className}>{shown.text}</pre>
+    : paragraph ? <p className={className}>{shown.text}</p> : <span className={className}>{shown.text}</span>;
+  return <>{shown.found && <Badge variant="warning">{t('invisibleCharacters')}</Badge>}{text}</>;
+}
 export function CommandProposalReview({ proposal, snapshot }: { proposal: CommandAgentProposal; snapshot: CommandSnapshot | null }) {
   const { t } = useTranslation('approvals');
   return <>
     {snapshot ? <SectionPanel title={t('action')}><dl className="space-y-3">
       <dt>{t('device')}</dt><dd className="font-mono break-all">{snapshot.deviceToken}</dd>
       <dt>{t('incarnation')}</dt><dd>{snapshot.incarnation}</dd>
-      <dt>{t('command')}</dt><dd className="whitespace-pre-wrap break-all">{snapshot.command}</dd>
-      <dt>{t('commandPayload')}</dt><dd>{snapshot.payload === null ? <p>{t('noCommandPayload')}</p> : <pre className="whitespace-pre-wrap break-all">{snapshot.payload}</pre>}</dd>
+      <dt>{t('command')}</dt><dd className="whitespace-pre-wrap break-all"><Revealed value={snapshot.command} /></dd>
+      <dt>{t('commandPayload')}</dt><dd>{snapshot.payload === null ? <p>{t('noCommandPayload')}</p> : <Revealed pre className="whitespace-pre-wrap break-all" value={snapshot.payload} />}</dd>
       <dt>{t('impact')}</dt><dd><Badge variant={proposal.impact === 'DESTRUCTIVE' ? 'destructive' : proposal.impact === 'DISRUPTIVE' ? 'warning' : 'outline'}>{proposal.impact}</Badge></dd>
       <dt>{t('definition')}</dt><dd className="font-mono break-all">{snapshot.definition}</dd>
       <dt>{t('commandCutoff')}</dt><dd><time dateTime={snapshot.cutoff}>{snapshot.cutoff}</time></dd>
       <dt>{t('digest')}</dt><dd><p className="font-mono break-all">{proposal.digest}</p><CopyToken value={proposal.digest} /></dd>
     </dl></SectionPanel> : <ErrorState description={t('snapshotUnavailable')} />}
     <ApprovalCountdown expiresAt={proposal.expiresAt} />
-    <SectionPanel title={t('agentRationale')}><p className="whitespace-pre-wrap break-words">{proposal.rationale}</p></SectionPanel>
+    <SectionPanel title={t('agentRationale')}><Revealed paragraph className="whitespace-pre-wrap break-words" value={proposal.rationale ?? ''} /></SectionPanel>
   </>;
 }

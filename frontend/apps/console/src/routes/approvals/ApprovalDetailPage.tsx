@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { hasAuthority } from '@devicechain/client';
@@ -17,10 +18,18 @@ import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
-import { ApprovalsGate, ProposalResult, StepUpPrompt } from './shared';
+import { ApprovalsGate, ProposalResult, StepUpPrompt, useApprovalAccess } from './shared';
 
 import { useProposalDecision } from './useProposalDecision';
 import { CommandProposalReview, commandSnapshot } from './CommandProposalReview';
+
+// useExpired turns true once expiresAt has passed, re-checked every second, so Approve and Reject
+// are disabled the moment the countdown reaches zero rather than on the next reload.
+function useExpired(expiresAt: string | undefined): boolean {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
+  return !!expiresAt && Date.parse(expiresAt) <= now;
+}
 
 export default function ApprovalDetailPage({ area: selectedArea }: { area?: ProposalArea }) {
   const { token = '', area: routeArea } = useParams();
@@ -34,13 +43,20 @@ function Detail({ area, token }: { area: ProposalArea; token: string }) {
   const [version, reload] = useReload();
   const { data: proposal, current, loading, error } = useQuery(() => command ? getAgentProposal(area, token) : getAgentProposal(token), [area, token, version], [area, token]);
   const snapshot = proposal?.kind === 'COMMAND_SEND' ? commandSnapshot(proposal) : null;
-  const decision = command && (!snapshot || !hasAuthority(claims, 'command:write')) ? undefined : current;
+  const { canApprove } = useApprovalAccess();
+  // Decide only what this person may decide: a command with a verified snapshot and command:write,
+  // an alarm only as an approver. Otherwise the page is read-only, never an offer the server refuses.
+  const decision = command ? (snapshot && hasAuthority(claims, 'command:write') ? current : undefined) : (canApprove ? current : undefined);
+  // The proposer's own principal may not approve a proposal that is not NORMAL; the server refuses
+  // it (SELF_APPROVAL), so the button is disabled here with the reason shown.
+  const selfApproval = !!proposal && proposal.proposerPrincipal === claims?.username && proposal.impact !== 'NORMAL';
+  const expired = useExpired(proposal?.expiresAt);
   const { act, busy, canAct: ready, stepUp, rejecting, setRejecting, note, setNote, noteTooLong, info, mutationError } = useProposalDecision(area, token, decision, reload);
-  const canAct = ready && (!command || snapshot !== null);
+  const canAct = ready && (!command || snapshot !== null) && !expired;
   if (!proposal) return <PageShell title={t('detailTitle')}>{loading ? <LoadingState description={t('loading')} /> : <ErrorState description={error!} />}</PageShell>;
   return <PageShell title={t('detailTitle')} titleAdornment={<Badge variant="secondary">{t('preview')}</Badge>}
     description={token} action={<>
-      <Button disabled={!canAct} onClick={() => void act(true)}>{t('approve')}</Button>
+      <Button disabled={!canAct || selfApproval} title={selfApproval ? t('selfApprovalNotAllowed') : undefined} onClick={() => void act(true)}>{t('approve')}</Button>
       <Button variant="destructive" disabled={!canAct} onClick={() => setRejecting(true)}>{t('reject')}</Button>
     </>}>
     <div className="space-y-4">
@@ -48,6 +64,8 @@ function Detail({ area, token }: { area: ProposalArea; token: string }) {
       {mutationError && <ErrorState description={mutationError} />}
       {stepUp && <StepUpPrompt path={proposalPath(area, token)} />}
       {info && <p role="status">{info}</p>}
+      {selfApproval && proposal.state === 'PROPOSED' && <p role="note">{t('selfApprovalNotAllowed')}</p>}
+      {expired && proposal.state === 'PROPOSED' && <p role="note">{t('approvalExpired', { seconds: 0 })}</p>}
       {rejecting && <SectionPanel title={t('reject')}><form className="space-y-3" onSubmit={e => { e.preventDefault(); void act(false); }}>
         <label htmlFor="reject-note">{t('note')}</label>
         <Input id="reject-note" value={note} onChange={e => setNote(e.target.value)} />

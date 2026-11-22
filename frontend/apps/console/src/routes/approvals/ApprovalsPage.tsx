@@ -25,7 +25,7 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { DataTable, DataTableBody, DataTableCell, DataTableHead, DataTableHeaderCell, DataTableRow } from '@/components/ui/data-table';
-import { ApprovalsGate, ProposalResult, StepUpPrompt } from './shared';
+import { ApprovalsGate, ProposalResult, StepUpPrompt, useApprovalAccess } from './shared';
 
 const STATES: AgentProposalState[] = ['PROPOSED', 'EXECUTED', 'REJECTED', 'EXPIRED', 'REFUSED', 'CANCELLED', 'KILLED'];
 const pageSize = 25;
@@ -79,7 +79,10 @@ function Inbox() {
   const isAdmin = hasAuthority(claims, 'agent:admin');
   const { t, i18n } = useTranslation('approvals');
   const [state, setState] = useState<AgentProposalState>('PROPOSED');
-  const [area, setArea] = useState<ProposalArea>('device-management');
+  const { canApprove } = useApprovalAccess();
+  // Open on a tab this person can read: a command reader who is not an alarm approver starts on
+  // Commands rather than on an Alarms tab they cannot act in.
+  const [area, setArea] = useState<ProposalArea>(!canApprove && hasAuthority(claims, 'command:read') ? COMMAND_PROPOSAL_AREA : 'device-management');
   const [pages, setPages] = useState<Record<ProposalArea, number>>({ 'device-management': 1, 'command-delivery': 1 });
   const pageNumber = pages[area];
   const setPageNumber = (page: number) => setPages(current => ({ ...current, [area]: page }));
@@ -113,7 +116,7 @@ function Inbox() {
             </DataTableCell>
             <DataTableCell>{t(p.state)}{p.decidedBy && <div>{t('decisionBy', { principal: p.decidedBy })}</div>}</DataTableCell>
             <DataTableCell><ProposalResult proposal={p} /></DataTableCell>
-            <DataTableCell><p className="max-w-xs truncate">{p.rationale}</p></DataTableCell>
+            <DataTableCell><p className="max-w-xs truncate">{'rationale' in p ? p.rationale : null}</p></DataTableCell>
           </DataTableRow>)}</DataTableBody></DataTable>
           <Pagination pageNumber={pageNumber} pageSize={pageSize} pagination={data.pagination} onPageChange={setPageNumber} />
         </>}

@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState, type ReactNode } from 'react';
+import { createContext, useContext, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { StepUpDialog } from '@/components/StepUpDialog';
 import { useTranslation } from 'react-i18next';
@@ -63,6 +63,11 @@ export function StepUpPrompt({ path }: { path: string }) {
   </div>;
 }
 
+/** What the signed-in person may decide, as established by the gate: whether they are an alarm
+ * approver (the policy's approver role); command decisions are judged on command:write. */
+const ApprovalAccess = createContext<{ canApprove: boolean }>({ canApprove: false });
+export const useApprovalAccess = () => useContext(ApprovalAccess);
+
 export function ApprovalsGate({ children }: { children: ReactNode }) {
   const { claims, identityToken } = useAuth();
   const { t } = useTranslation('approvals');
@@ -83,7 +88,8 @@ function InstanceGate({ children }: { children: ReactNode }) {
   if (!current?.instanceEnabled) return <PageShell title={t('title')}>
     {error ? <ErrorState description={error} /> : <EmptyState description={t('notEnabled')} />}
   </PageShell>;
-  return children;
+  // An instance administrator reaches the inbox through the policy, as before.
+  return <ApprovalAccess.Provider value={{ canApprove: true }}>{children}</ApprovalAccess.Provider>;
 }
 
 function ApproverGate({ children }: { children: ReactNode }) {
@@ -92,5 +98,7 @@ function ApproverGate({ children }: { children: ReactNode }) {
   const { current, loading } = useQuery(getAgentApprovalAccess);
   if (loading) return <PageShell title={t('title')}><LoadingState description={t('loading')} /></PageShell>;
   if (!current?.instanceEnabled || !current.canApprove && !hasAuthority(claims, 'command:read')) return <PageShell title={t('title')}><EmptyState description={t('notAuthorized')} /></PageShell>;
-  return children;
+  // A command reader who is not an approver is let in to READ; whether they may decide is
+  // passed down, so an alarm proposal never offers them Approve/Reject the server would refuse.
+  return <ApprovalAccess.Provider value={{ canApprove: current.canApprove }}>{children}</ApprovalAccess.Provider>;
 }

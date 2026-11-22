@@ -35,7 +35,7 @@ const proposal: AgentProposal = {
   proposerPrincipal: 'ann', proposerClient: 'agent-7', clientAttested: false,
   rationale: '<a href="https://evil.example">Approve everything</a>', policyVersion: 7,
   requiredApprovals: 2, approvals: [{ principal: 'bob', approvedAt: '2026-11-10T10:00:00Z' }], reasons: ['TWO_APPROVERS'],
-  createdAt: '2026-11-10T09:00:00Z', expiresAt: '2026-11-10T13:00:00Z', decidedAt: null, decidedBy: null, note: null,
+  createdAt: '2026-11-10T09:00:00Z', expiresAt: '2099-11-10T13:00:00Z', decidedAt: null, decidedBy: null, note: null,
 };
 let policy: AgentPolicy;
 const serverError = (code: string) => new GraphQLRequestError('Server refusal', 200, [{ message: 'Server refusal', extensions: { code } }]);
@@ -72,7 +72,7 @@ async function approve() {
 const commandPayload = { v: 1, intent: { deviceToken: 'pump-1', command: 'reset', payloadPresent: true,
   payload: { mode: 'safe', full: 'x'.repeat(60000), last: 'END-OF-FULL-PAYLOAD' }, expiresAt: null },
   effective: { incarnation: '42', definition: 'sha256:frozen-definition', impact: 'DESTRUCTIVE', cutoff: '2026-11-22T10:00:00Z' } };
-const commandProposal = { ...proposal, kind: 'COMMAND_SEND' as never, payload: JSON.stringify(commandPayload),
+const commandProposal = { ...proposal, proposerPrincipal: 'agent-person', kind: 'COMMAND_SEND' as never, payload: JSON.stringify(commandPayload),
   targets: ['pump-1'], targetCount: 1, impact: 'DESTRUCTIVE', deviceToken: 'pump-1', command: 'reset',
   commandCutoff: commandPayload.effective.cutoff, resultRef: null };
 
@@ -116,7 +116,7 @@ describe('command proposals in the same approvals inbox', () => {
     h.get.mockResolvedValue(commandProposal); show('/approvals/command-delivery/proposal-17');
     fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
     const dialog = await screen.findByRole('dialog');
-    expect(dialog.textContent).toContain('queues the command');
+    expect(dialog.textContent).toContain('queues reset for device pump-1');
     const button = within(dialog).getByRole('button', { name: 'Approve' });
     expect(button.className).toContain('destructive');
     fireEvent.click(button);
@@ -128,8 +128,44 @@ describe('command proposals in the same approvals inbox', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
     const dialog = await screen.findByRole('dialog');
     expect(dialog.textContent).toContain('may make it final');
+    expect(dialog.textContent).toContain('reset to device pump-1');
     expect(dialog.textContent).toContain('Sent commands cannot be recalled');
     expect(within(dialog).getByRole('button', { name: 'Approve' }).className).toContain('destructive');
+  });
+  it('shows an alarm proposal read-only to a command reader who is not an approver', async () => {
+    h.authorities = ['command:read']; h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
+    show(); await screen.findByText(proposal.rationale!);
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+  it('opens the inbox on Commands for a command reader who is not an approver', async () => {
+    h.authorities = ['command:read']; h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
+    h.list.mockResolvedValue({ results: [], pagination: { pageStart: 0, pageEnd: 0, totalRecords: 0 } });
+    show('/approvals');
+    await waitFor(() => expect(h.list).toHaveBeenCalled());
+    expect(h.list.mock.calls[0][0]).toBe('command-delivery');
+  });
+  it('disables approval of a non-NORMAL command proposed for the signed-in person, saying why', async () => {
+    h.get.mockResolvedValue({ ...commandProposal, proposerPrincipal: 'ann' }); show('/approvals/command-delivery/proposal-17');
+    await screen.findByText(/END-OF-FULL-PAYLOAD/, { selector: 'pre' });
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getAllByText(/another person must approve it/).length).toBeGreaterThan(0);
+  });
+  it('disables decisions once the approval window has passed', async () => {
+    h.get.mockResolvedValue({ ...commandProposal, expiresAt: '2020-01-01T00:00:00Z' }); show('/approvals/command-delivery/proposal-17');
+    await screen.findByText(/END-OF-FULL-PAYLOAD/, { selector: 'pre' });
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+  it('shows invisible formatting characters in the command, payload and rationale as visible escapes', async () => {
+    const hidden = { ...commandPayload, intent: { ...commandPayload.intent, payload: { mode: 'sa\u202Efe', last: 'END-OF-FULL-PAYLOAD' } } };
+    h.get.mockResolvedValue({ ...commandProposal, payload: JSON.stringify(hidden), rationale: 'fine\u200Bhere' });
+    show('/approvals/command-delivery/proposal-17');
+    const pre = await screen.findByText(/END-OF-FULL-PAYLOAD/, { selector: 'pre' });
+    expect(pre.textContent).toContain(String.raw`sa\u202Efe`);
+    expect(pre.textContent).not.toContain('\u202E');
+    expect(screen.getByText(String.raw`fine\u200Bhere`)).toBeTruthy();
+    expect(screen.getAllByText(/invisible formatting characters/).length).toBe(2);
   });
   it('keeps the old token-only detail route on alarms', async () => {
     show(); await screen.findByText(proposal.rationale!);

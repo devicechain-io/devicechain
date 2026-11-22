@@ -341,7 +341,7 @@ export type CommandAgentProposalsQueryVariables = Exact<{
 }>;
 
 
-export type CommandAgentProposalsQuery = { agentProposals: { results: Array<{ token: string, kind: AgentProposalKind, state: AgentProposalState, payload: string, targets: Array<string>, digest: string, impact: string, targetCount: number, proposerPrincipal: string, proposerClient: string, clientAttested: boolean, rationale: string | null, policyVersion: number, requiredApprovals: number, reasons: Array<string>, createdAt: string, expiresAt: string, decidedAt: string | null, decidedBy: string | null, note: string | null, deviceToken: string, command: string, commandCutoff: string, resultRef: string | null, approvals: Array<{ principal: string, approvedAt: string }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type CommandAgentProposalsQuery = { agentProposals: { results: Array<{ token: string, kind: AgentProposalKind, state: AgentProposalState, targets: Array<string>, digest: string, impact: string, targetCount: number, proposerPrincipal: string, proposerClient: string, clientAttested: boolean, policyVersion: number, requiredApprovals: number, reasons: Array<string>, createdAt: string, expiresAt: string, decidedAt: string | null, decidedBy: string | null, note: string | null, deviceToken: string, command: string, commandCutoff: string, resultRef: string | null, approvals: Array<{ principal: string, approvedAt: string }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CommandAgentProposalDetailQueryVariables = Exact<{
   token: string;
@@ -578,7 +578,6 @@ export const CommandAgentProposalsDocument = new TypedDocumentString(`
       token
       kind
       state
-      payload
       targets
       digest
       impact
@@ -586,7 +585,6 @@ export const CommandAgentProposalsDocument = new TypedDocumentString(`
       proposerPrincipal
       proposerClient
       clientAttested
-      rationale
       policyVersion
       requiredApprovals
       approvals {

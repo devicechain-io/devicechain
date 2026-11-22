@@ -149,7 +149,7 @@ El asistente **propone** una acción y las personas deciden. En esta **vista pre
 
 ### Reviewing proposals in the console (preview) {#approvals-inbox}
 
-Abre **Supervisión > Aprobaciones**. La bandeja requiere una membresía en el inquilino sin
+Abre **Supervisión > Aprobaciones**. Para revisar alarmas, la bandeja requiere una membresía en el inquilino sin
 restricción de alcance con `agent:admin` o un aprobador actual (rol aprobador, `alarm:write` y segundo factor activo), y el interruptor de acciones de agentes de la instancia
 debe estar habilitado. Listar propuestas también necesita `alarm:read`; aprobar sigue requiriendo
 el rol aprobador, `alarm:write` y el segundo factor reciente descritos arriba. La bandeja no edita
@@ -317,7 +317,7 @@ Algunos límites son decisiones y otros son cotas de la implementación actual. 
 - **Sin acceso entre inquilinos.** El token tiene alcance limitado a un inquilino, elegido por el usuario en el momento de la concesión. La pertenencia a un inquilino nunca es un parámetro de una herramienta, así que no hay ningún argumento que un agente pueda variar para alcanzar otro inquilino.
 - **Sin consultas arbitrarias.** Solo el conjunto de herramientas curado es alcanzable; no existe `run_graphql`.
 - **Ninguna credencial de servicio en ninguna ruta de código que ejecute.** Esto es más fuerte que «no usa un token de servicio»: ninguna ruta de código del servidor MCP echa mano de una credencial propia, así que un agente no tiene ninguna autoridad prestada que explotar. Toda lectura hacia abajo sale bajo el token del propio solicitante, y un agente sin permiso para leer algo recibe el mismo rechazo que recibiría una persona. (Su pod monta la configuración de instancia igual que la de cualquier otro servicio. Eso es fontanería de despliegue, no algo que el servidor use.)
-- **Los payloads de los comandos no se devuelven.** `list_commands` te da el nombre, el estado y las marcas de tiempo de un comando. Lo que se envió al dispositivo queda fuera del contexto del agente.
+- **El historial de comandos omite los payloads.** `list_commands` te da el nombre, el estado y las marcas de tiempo de un comando. Un agente puede leer los argumentos de sus propias propuestas de comandos mediante `get_proposal`.
 
 **Cotas con las que te toparás antes que con cualquier otra cosa:**
 

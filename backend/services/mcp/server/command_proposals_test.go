@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -349,5 +350,33 @@ func TestListCommandsNeverSelectsHumanOnlyProposalLinks(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("pinned %d documents, want base and cause overlay", count)
+	}
+}
+
+// A stored outcome that comes back without its stored proposal is an error, never a success the
+// agent could act on.
+func TestCommandProposalStoredOutcomeWithoutProposalIsAnError(t *testing.T) {
+	for _, status := range []string{"PENDING_APPROVAL", "EXISTING"} {
+		body := `{"data":{"proposeCommand":{"status":"` + status + `","verdict":"APPROVE","requiredApprovals":1,"reasons":[],"digest":"d","expiresAt":null,"targetCount":1,"preview":null,"proposal":null}}}`
+		_, url := newRecordingUpstream(t, body)
+		cs, _ := commandProposalSession(t, url, true, true, "read-only act:commands")
+		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "propose_command", Arguments: commandArguments()})
+		if err == nil && (res == nil || !res.IsError) {
+			t.Fatalf("%s without a proposal must be an error", status)
+		}
+	}
+}
+
+// A LIST of command proposals is a summary: it never selects the command payload or the
+// rationale (get_proposal returns the detail).
+func TestCommandProposalListSelectsNoPayloadOrRationale(t *testing.T) {
+	q := listMyCommandProposalsQuery.text
+	for _, field := range []string{"payload", "rationale"} {
+		if regexp.MustCompile(`\b` + field + `\b`).MatchString(q) {
+			t.Fatalf("the list document selects %s: %s", field, q)
+		}
+	}
+	if !strings.Contains(getCommandProposalQuery.text, "payload") {
+		t.Fatal("the detail document must still carry the payload")
 	}
 }
