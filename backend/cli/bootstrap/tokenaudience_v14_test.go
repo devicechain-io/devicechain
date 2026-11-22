@@ -204,7 +204,7 @@ func assertObservePreflightBeforeUpgradeMutations(t *testing.T) {
 	})
 	require.Len(t, positions["precheckValuesOverlay"], 1)
 	gate := positions["precheckValuesOverlay"][0]
-	for _, name := range []string{"planUpgradeInfra", "recordUpgradedVersion", "beginUpgradeClaim", "renewBrokerCertificate", "applyUpgradeInfra", "helmInstall"} {
+	for _, name := range []string{"planUpgradeInfra", "recordUpgradedVersion", "takeUpgradeClaim", "renewBrokerCertificate", "applyUpgradeInfra", "helmInstall"} {
 		require.NotEmpty(t, positions[name], "missing mutation boundary %s", name)
 		for _, pos := range positions[name] {
 			require.Less(t, gate, pos, "preflight must precede %s", name)
