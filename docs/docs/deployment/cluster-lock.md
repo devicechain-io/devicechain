@@ -49,7 +49,7 @@ second run by the same user on the same host from being mistaken for the first o
 | `dcctl install` | Refuses, before the operator or the cluster's prerequisites are touched. |
 | `dcctl bootstrap` | Refuses, at its second step — before the infrastructure or the chart are touched. |
 | `dcctl destroy` | Warns and continues — *"but if that run is live, this will fight it"*. |
-| `dcctl upgrade` | Warns and continues, with the same warning. |
+| `dcctl upgrade` | Refuses, before it writes anything, and names the run that holds the lock. |
 | `dcctl bootstrap --dry-run` | Takes no lock at all, and reports the claim it *would* have met. |
 
 A bootstrap takes the lock at its second step, not its first. The first step is the
@@ -57,24 +57,27 @@ image build for the `--build` developer path, which needs no cluster lock and pr
 the images the chart later deploys. On the published-image path that step does nothing
 at all.
 
-`dcctl upgrade` warns rather than refuses on the lock, but it has a separate refusal
-that has nothing to do with the lock. It will not move an instance onto a release when
-the cluster has no operator, or has one identifiably from another release, and it names
-`dcctl install` as the way through. An operator installed by hand is let through with a
-note instead. See [Releases & upgrades](./releases-and-upgrades.md#rolling-upgrades).
+`dcctl upgrade` takes the lock before its first write and checks the cluster's operator again
+while it holds it. It will not move an instance onto a release when the cluster has no
+operator, or has one identifiably from another release, and it names `dcctl install` as the
+way through. An operator installed by hand is let through with a note instead. Because
+`dcctl install` takes the same lock, the operator cannot change under an upgrade that holds
+it. See [Releases & upgrades](./releases-and-upgrades.md#rolling-upgrades).
 
-Because an upgrade also applies the instance's broker and event store from the OpenTofu state
-on the machine running it, a second upgrade of the same instance from another machine, past the
-warning, applies that machine's copy of the state at the same time. Upgrade an instance from one
-machine at a time.
+A run that was killed leaves the lock behind: take it with
+[`dcctl instances reclaim`](#reclaim), which waits a lease duration and asks you to type the
+holder back. A run that is still alive keeps renewing and cannot be reclaimed: stop that
+process first.
 
 The asymmetry is deliberate:
 
-- **Install and bootstrap refuse.** A second bootstrap running alongside a first
-  produces one instance built half from each, so refusing is the only useful answer.
-- **Destroy and upgrade warn.** A teardown is something an operator has already decided
-  to do, often because something is wrong. Being unable to ask the cluster politely
-  first must not be what stops them, so these two say so loudly and carry on.
+- **Install, bootstrap and upgrade refuse.** A second bootstrap running alongside a first
+  produces one instance built half from each. An upgrade rewrites the instance's declaration,
+  its configuration and its release, and a second run doing the same at the same time, or an
+  install moving the operator underneath it, leaves an instance that matches neither.
+- **Destroy warns.** A teardown is something an operator has already decided to do, often
+  because something is wrong. Being unable to ask the cluster politely first must not be what
+  stops it, so it says so loudly and carries on.
 - **A dry run takes no lock.** A dry run is a plan, and a plan that mutates the cluster
   is not one. It writes nothing, including the lock. It still reports who holds the
   lock, because "someone else is already running" is part of the answer to "what would
@@ -125,6 +128,7 @@ account needs:
   `dc-k8s-system`;
 - `get`, `list`, `create`, `update`, `patch` and `delete` on
   `instances.core.devicechain.io`, cluster-wide;
+- `get` on `customresourcedefinitions`, cluster-wide;
 - `list` on `secrets` in `dc-system`.
 
 `list` is not optional on either line, and it is the verb most likely to be left out.
@@ -133,7 +137,9 @@ they have claimed — the ingress host, the local MQTT port, the connection budg
 question is a list, not a get. An account granted only `get` fails at the check that
 protects the other instances on the cluster. `update` and `delete` release the
 declaration's finalizer when an instance is torn down, and `patch` records a run's
-phase on the declaration.
+phase on the declaration. `dcctl instances release` uses `patch` rather than `update`: it
+changes only the finalizer list. Reading the `customresourcedefinitions` is how `bootstrap`,
+`upgrade` and `release` check which operator the cluster has.
 
 If your account lacks these permissions, `dcctl` shows the API server's own refusal —
 which verb, which resource, which namespace, which user — rather than reporting it as an

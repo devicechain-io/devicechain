@@ -33,19 +33,32 @@ func init() {
 // (soft-deleted ones included, since they remain physical rows until this cleanup deletes them)
 // and generation heads whose device no longer exists.
 func (api *Api) CountOrphanedDeviceAttributes(ctx context.Context) (int64, error) {
-	var count int64
-	err := api.RDB.DB(ctx).Unscoped().Model(&EntityAttribute{}).
-		Where("entity_type = ?", "device").
-		Where("NOT EXISTS (SELECT 1 FROM devices WHERE devices.id = entity_attributes.entity_id)").
-		Count(&count).Error
-	if err != nil {
-		return 0, err
-	}
-	var heads int64
-	err = api.RDB.DB(ctx).Model(&AttributeGeneration{}).
-		Where("NOT EXISTS (SELECT 1 FROM devices WHERE devices.id = entity_attribute_generations.device_id)").
-		Count(&heads).Error
-	return count + heads, err
+	var total int64
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// The count is a diagnostic over rows that can be many: bound it rather than let one
+		// request hold a scan open.
+		if tx.Dialector.Name() == "postgres" {
+			if err := tx.Exec("SET LOCAL statement_timeout = '5s'").Error; err != nil {
+				return err
+			}
+		}
+		var count int64
+		if err := tx.Unscoped().Model(&EntityAttribute{}).
+			Where("entity_type = ?", "device").
+			Where("NOT EXISTS (SELECT 1 FROM devices WHERE devices.id = entity_attributes.entity_id)").
+			Count(&count).Error; err != nil {
+			return err
+		}
+		var heads int64
+		if err := tx.Model(&AttributeGeneration{}).
+			Where("NOT EXISTS (SELECT 1 FROM devices WHERE devices.id = entity_attribute_generations.device_id)").
+			Count(&heads).Error; err != nil {
+			return err
+		}
+		total = count + heads
+		return nil
+	})
+	return total, err
 }
 
 // attributeOrphanSweepLockKey is the fixed session advisory lock that admits ONE replica to a

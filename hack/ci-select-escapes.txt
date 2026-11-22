@@ -49,6 +49,7 @@ backend/cli/dcdir/dcdir.go
 backend/cli/dcdir/dcdir_test.go
 backend/cli/failedevents/documents_test.go
 backend/cli/failedevents/failedevents_test.go
+backend/cli/fleetop/documents_test.go
 backend/cli/internal/apitest/capabilities.go
 backend/cli/product/bundle.go
 backend/cli/product/documents_test.go
@@ -113,6 +114,7 @@ backend/services/device-management/graphql/profile_configuration_declaration_tes
 backend/services/device-management/model/attribute_writer_self_test.go
 backend/services/device-management/model/authored_sim_alarm_wire_test.go
 backend/services/device-management/model/authored_sim_fleetpulse_command_test.go
+backend/services/device-management/model/fleet_operation_gate_test.go
 backend/services/device-management/processor/connect_snippet_golden_test.go
 backend/services/event-management/model/upgrade_notes_bounds_test.go
 backend/services/event-management/processor/backfill/deps_test.go
@@ -198,6 +200,7 @@ backend/tools/docsgql/cmd/sdldesc/main.go
 backend/tools/docsgql/decoderfuncs/decoderfuncs_test.go
 backend/tools/docsgql/docsgql_test.go
 backend/tools/docsgql/sdlcompat/sdlcompat_test.go
+backend/tools/docsgql/sdldesc/fleet_operation_test.go
 backend/tools/docsgql/sdldesc/sdldesc_test.go
 backend/tools/playground/playground_test.go
 backend/tools/rdbguard/rawsql_test.go
