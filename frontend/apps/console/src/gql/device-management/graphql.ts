@@ -603,34 +603,90 @@ export type CustomerUpdateRequest = {
   name?: string | null | undefined;
 };
 
+/**
+ * Data required to create a detection rule on a device profile. The definition is checked to be well-
+ * formed JSON on write; the detection engine does the authoritative validation when the profile is
+ * published.
+ */
 export type DetectionRuleCreateRequest = {
+  /**
+   * The visual automation canvas document the rule was authored with. Omit for a rule authored as a
+   * form. When present it must be a JSON object; it is stored verbatim and not interpreted.
+   */
   authoringGraph?: string | null | undefined;
+  /** The rule as a JSON document in the detection engine's rule language. Must be well-formed JSON. */
   definition: string;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Token of the device profile to declare the rule on. An unknown token is refused. */
   deviceProfileToken: string;
+  /** Whether the rule is live. A disabled rule is kept but not run. */
   enabled: boolean;
+  /**
+   * Token of a dynamic entity group to scope the rule to. Omit both scope fields for a rule that
+   * covers every device of the profile, or set both together. Checked on save: it must name a
+   * published dynamic group version.
+   */
   entityGroupToken?: string | null | undefined;
+  /** Published version of the entity group to scope the rule to. Set together with entityGroupToken. */
   entityGroupVersion?: number | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new rule, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing detection rules. */
 export type DetectionRuleSearchCriteria = {
+  /** Only rules declared on the device profile with this token. Omit for every rule. */
   deviceProfile?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of a detection rule. Each field has three states: omit it to keep the stored value,
+ * send null to clear it, or send a value to set it. The rule's token is not here because the
+ * mutation's token argument names the rule and an update cannot move it.
+ */
 export type DetectionRuleUpdateRequest = {
+  /**
+   * The visual canvas document. Null drops it, which is what a form edit of a canvas-authored rule
+   * needs since the graph is then stale; omitting it keeps it.
+   */
   authoringGraph?: string | null | undefined;
+  /**
+   * The rule JSON document. Required: null is refused, because a rule with no definition detects
+   * nothing.
+   */
   definition?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /**
+   * Moves the rule to this device profile. Null is refused, and an unknown token refuses the whole
+   * update.
+   */
   deviceProfileToken?: string | null | undefined;
+  /**
+   * Whether the rule is live. Null is refused rather than read as false, which would silently park a
+   * live rule.
+   */
   enabled?: boolean | null | undefined;
+  /**
+   * Entity group scope. The two scope fields are applied independently and then checked as a pair
+   * against what the rule ends up with, so naming one without the other is refused. Null on either
+   * removes the scope.
+   */
   entityGroupToken?: string | null | undefined;
+  /** Published version of the scoping entity group. See entityGroupToken for how the pair is applied. */
   entityGroupVersion?: number | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
 };
 
@@ -1328,23 +1384,53 @@ export type FacetValueImportRow = {
   value: string;
 };
 
+/**
+ * Data required to create a geofence. The geometry is validated on write: its kind, GeoJSON shape,
+ * coordinate ranges and size. Two ceilings are enforced at authoring time: the positions one fence may
+ * carry (512 by default) and the fences a tenant may hold (100 by default), both set by the tenant's
+ * tier. A stored geometry document is also limited to 32 KiB.
+ */
 export type GeoFenceCreateRequest = {
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /**
+   * The geometry document, as described on GeoFence.geometry. Must declare kind POLYGON_2D; reserved
+   * kinds are refused.
+   */
   geometry: string;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new fence, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing geofences. */
 export type GeoFenceSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of a geofence. Each field has three states: omit it to keep the stored value, send
+ * null to clear it, or send a value to set it. A fence's token is immutable, so there is no token
+ * field: create the new fence first and delete the old one if a different token is wanted.
+ */
 export type GeoFenceUpdateRequest = {
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /**
+   * The geometry document. Required: null is refused, because a fence with no shape is not a fence.
+   * Omitting it leaves the shape alone, so a rename or metadata edit is not held to the tenant's
+   * position ceiling, which refuses growth rather than size.
+   */
   geometry?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
 };
 
