@@ -123,6 +123,7 @@ type Backfill struct {
 
 // Observations is everything the verifier read about one sim day.
 type Observations struct {
+	S7    *S7   `json:"-"`
 	S6    S6    `json:"-"`
 	Clock Clock `json:"-"`
 	Day   int   `json:"day"`

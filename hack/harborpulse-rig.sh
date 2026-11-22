@@ -123,7 +123,13 @@
 #   config-report-stale --scenario-defect config-report-stale config-applied
 #   pull-polling-stopped --scenario-defect pull-polling-stopped pull-commands-complete
 #
-# S6 controls require EXACTLY their own invariant red; legacy controls retain their documented
+# S7 also runs a clean witness sim in tenant B, reusing every device token/external id.
+# A per-run public OAuth client is registered through user-management; B's member
+# completes login + consent + authorization-code/PKCE over HTTP. MCP always carries
+# that user's resource-bound token. No service account or service token is used.
+#   isolation-cross-read --scenario-defect isolation-cross-read tenant-isolation
+#   mcp-wrong-answer   --scenario-defect mcp-wrong-answer mcp-fleet-qa
+# S6 and S7 controls require EXACTLY their own invariant red; legacy controls retain their documented
 # collateral failures. The existing MQTT host mapping and the default DeviceChain broker are
 # required; run also verifies the broker build, MQTT TLS and client-certificate request gauges.
 #
@@ -325,6 +331,9 @@ runs=(
   "mqtt-never-disconnect|--scenario-defect mqtt-never-disconnect|connectivity-alarm"
   "config-report-stale|--scenario-defect config-report-stale|config-applied"
   "pull-polling-stopped|--scenario-defect pull-polling-stopped|pull-commands-complete"
+  "witness||"
+  "isolation-cross-read|--scenario-defect isolation-cross-read|tenant-isolation"
+  "mcp-wrong-answer|--scenario-defect mcp-wrong-answer|mcp-fleet-qa"
 )
 
 # ---------------------------------------------------------------------------
@@ -352,10 +361,10 @@ judge() {
   case "$passed" in
     false)
       case "$want" in
-        charger-mqtt-stored|charger-x509-admitted|connectivity-alarm|config-applied|pull-commands-complete)
+        charger-mqtt-stored|charger-x509-admitted|connectivity-alarm|config-applied|pull-commands-complete|tenant-isolation|mcp-fleet-qa)
           local other
           other="$(jq -r --arg n "$want" '[.invariants[] | select(.passed == false and .name != $n) | .name] | join(",")' "$report")"
-          [[ -z "$other" ]] || { echo "S6 control also turned $other red"; return 1; }
+          [[ -z "$other" ]] || { echo "control also turned $other red"; return 1; }
           ;;
       esac
       return 0 ;;
@@ -400,6 +409,7 @@ offline_controls() {
     go test -count=1 ./scenariosink/ >/dev/null) ||
     fail "the verifier's or the sink's own controls failed (go test ./scenarioverify/ ./scenariosink/ in backend/sims/dc-simulator)"
   (cd "$repo_root/backend/sims/dc-simulator" && go test -count=1 -run 'TestEachS6ControlTurnsExactlyItsInvariantRed|TestS6|TestHarborpulseS6' ./scenarioverify/ ./sim/ >/dev/null) || fail "S6 controls failed"
+  (cd "$repo_root/backend/sims/dc-simulator" && go test -count=1 -run 'TestEachS7Control|TestS7|TestHarborpulseS7' ./scenarioverify/ ./sim/ >/dev/null) || fail "S7 controls failed"
   pass "the verifier: a clean day passes, each planted defect turns exactly its invariant red"
   pass "the sink: what real MQTT, SMTP and HTTP clients deliver is recorded exactly"
 
@@ -420,7 +430,7 @@ offline_controls() {
     red "${c##*:} -> $out"
   done
   local invariant
-  for invariant in charger-mqtt-stored charger-x509-admitted connectivity-alarm config-applied pull-commands-complete; do
+  for invariant in charger-mqtt-stored charger-x509-admitted connectivity-alarm config-applied pull-commands-complete tenant-isolation mcp-fleet-qa; do
     jq -n --arg n "$invariant" '{invariants:[{name:$n,passed:false},{name:"flood-escalates",passed:true}]}' >"$d/s6-red.json"
     judge "$invariant" 1 "$d/s6-red.json" >/dev/null || fail "S6 judge refused $invariant alone red"
     jq '.invariants[1].passed=false' "$d/s6-red.json" >"$d/s6-collateral.json"
@@ -536,7 +546,7 @@ sink_ip() { k -n "$sink_ns" get svc hp-sink -o jsonpath='{.spec.clusterIP}'; }
 
 cmd_up() {
   ((own_cluster)) || fail "DC_HPRIG_KUBECONFIG is set: this rig uses that instance and does not create one"
-  need kind; need kubectl; need docker; need jq; need go
+  need kind; need kubectl; need docker; need jq; need curl; need go
   need ko
   disk_guard
   if ! cluster_exists; then
@@ -597,8 +607,11 @@ functionalAreas:
 VALUES
   say "bootstrapping $instance with LPWAN downlink and calculated backfill"
   "$dcctl" bootstrap local "$instance" --yes --no-escrow --cluster "$cluster" --host localhost --no-tls \
-    --enable-area outbound-connectors --dev-allow-egress "$ip" --values "$(winpath "$state_dir/harborpulse-values.yaml")" "${images[@]}"
+    --enable-area outbound-connectors --enable-area mcp --dev-allow-egress "$ip" --values "$(winpath "$state_dir/harborpulse-values.yaml")" "${images[@]}"
   require_s6_broker
+  forward forward-up-mcp.log traefik svc/traefik "$http_port:80"
+  require_s7_mcp
+  stop_forwards
   say "UP COMPLETE: run 'hack/harborpulse-rig.sh run'"
 }
 
@@ -633,6 +646,9 @@ cmd_down() {
 bg_pids=()      # sims and verifiers
 fwd_pids=()     # port-forward loops
 created_sims=() # every sim this run asked dcctl to create, whose tenant it must destroy
+s7_oauth_client=""
+s7_peer_handshake=""
+s7_peer_port=""
 last_bg=""
 start_bg() { # start_bg <log> <command...>; leaves the pid (= its process group) in last_bg
   local log="$1"
@@ -657,6 +673,10 @@ stop_forwards() {
 }
 destroy_sims() { # destroy every sim's tenant this run created, once; a failure is noted, not fatal
   local sname
+  if [[ -n "$s7_oauth_client" && -n "$s7_peer_handshake" ]]; then
+    s7_registry delete || note "could not delete the per-run OAuth client"
+    s7_oauth_client=""
+  fi
   if [[ "${DC_HPRIG_KEEP:-0}" != 1 ]]; then
     for sname in ${created_sims[@]+"${created_sims[@]}"}; do
       "$dcctl" sim destroy "$sname" -i "$instance" -s "localhost:$http_port" --kube-context "$kube_context" \
@@ -692,8 +712,30 @@ build_tools() {
   [[ -x "$dcctl" ]] || make -C "$(winpath "$repo_root")/backend/cli" build >/dev/null
 }
 
+require_s7_mcp() {
+  k -n "$namespace" rollout status deployment/mcp --timeout=120s >/dev/null ||
+    fail "S7: mcp deployment is not ready"
+  local code
+  code="$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "http://localhost:$http_port/api/mcp")" ||
+    fail "S7: mcp is not serving"
+  [[ "$code" == 401 ]] || fail "S7: MCP must serve an OAuth challenge (got HTTP $code)"
+  curl -fsS --max-time 10 "http://localhost:$http_port/.well-known/oauth-protected-resource/api/mcp" |
+    jq -e '.resource | type == "string" and endswith("/api/mcp")' >/dev/null ||
+    fail "S7: mcp protected-resource metadata is not serving"
+}
+
+s7_registry() {
+  local password="${DC_ADMIN_PASSWORD:-}"
+  if [[ -z "$password" ]]; then
+    password="$(k -n "$namespace" get secret "dci-$instance-superuser" -o jsonpath='{.data.password}' | base64 --decode)" || return 1
+  fi
+  [[ -n "$password" ]] || return 1
+  DC_ADMIN_PASSWORD="$password" "$verifier" --handshake "$s7_peer_handshake" \
+    --oauth-client "$s7_oauth_client" --oauth-client-action "$1" >/dev/null
+}
+
 selected() { # selected <run-name>: whether DC_HPRIG_CONTROLS includes it
-  [[ "$1" == clean || "$controls" == all ]] && return 0
+  [[ "$1" == clean || "$1" == witness || "$controls" == all ]] && return 0
   [[ "$controls" == none ]] && return 1
   [[ ",$controls," == *",$1,"* ]]
 }
@@ -713,6 +755,7 @@ cmd_run() {
   forward forward-http.log traefik svc/traefik "$http_port:80"
   forward forward-ingest.log "$namespace" svc/event-sources "$ingest_port:8081"
   forward forward-sink.log "$sink_ns" svc/hp-sink "$sink_port:8080"
+  require_s7_mcp
 
   # The callout, rather than the sim's dial error, supplies certificate rejection evidence.
   # Derive the selector from this instance's deployment so every current replica is read.
@@ -743,6 +786,7 @@ cmd_run() {
       --manifest harborpulse "${tier_flags[@]}" --control-addr "http://127.0.0.1:$port" >"$state_dir/$sname.create.log" 2>&1 ||
       { tail -5 "$state_dir/$sname.create.log" >&2; fail "dcctl sim create $sname failed"; }
     hs="$(winpath "$HOME/.devicechain/sims/$sname.json")"
+    if [[ "$name" == witness ]]; then s7_peer_handshake="$hs"; s7_peer_port="$port"; fi
     # shellcheck disable=SC2086 # the flags are words on purpose
     start_bg "$state_dir/$sname.sim.log" env "DC_SIM_HARBORPULSE_SINK_URL=http://127.0.0.1:$sink_port" "$simulator" --handshake "$hs" --port "$port" $flags
     bg_pids+=("$last_bg")
@@ -765,15 +809,32 @@ cmd_run() {
     local why_not
     why_not="$(observer_grant "$(curl -s --max-time 5 "http://127.0.0.1:$port/config.json" | jq -r '.token // empty')")" ||
       fail "$sname: the token its runner serves cannot read a command's cause: $why_not"
+  done
+  # Bootstrap and observer checks are a barrier: no fleet starts its compressed
+  # clock while another fleet is still provisioning.
+  for s in "${sims[@]}"; do
+    IFS='|' read -r sname port want_inv hsp <<<"$s"
     curl -s -X POST --max-time 10 "http://127.0.0.1:$port/start" >/dev/null || fail "could not start $sname"
     note "$sname running on :$port"
   done
 
+  s7_oauth_client="hprig-s7-$stamp-$$"
+  s7_registry create || fail "could not register this run's PKCE client"
   say "verifying (the next whole sim day of each run; about 30 minutes)"
   local vpids=()
   for s in "${sims[@]}"; do
     IFS='|' read -r sname port want_inv hsp <<<"$s"
+    [[ "$hsp" != "$s7_peer_handshake" ]] || continue
+    # Only the clean run and S7 controls need the shared B session. This keeps
+    # legacy control batches below MCP's per-caller session/rate ceilings.
+    local s7_flags=()
+    case "$want_inv" in
+      ""|tenant-isolation|mcp-fleet-qa)
+        s7_flags=(--peer-handshake "$s7_peer_handshake" --peer-sim "http://127.0.0.1:$s7_peer_port"
+          --mcp "http://localhost:$http_port/api/mcp" --oauth-client "$s7_oauth_client") ;;
+    esac
     start_bg "$state_dir/$sname.verify.log" "$verifier" --handshake "$hsp" --sim "http://127.0.0.1:$port" \
+      "${s7_flags[@]}" \
       --sink "http://127.0.0.1:$sink_port" --auth-callout-log "$(winpath "$auth_log")" --report "$(winpath "$state_dir/$sname.report.json")"
     bg_pids+=("$last_bg")
     vpids+=("$last_bg")
@@ -783,6 +844,7 @@ cmd_run() {
   for s in "${sims[@]}"; do
     IFS='|' read -r sname port want_inv hsp <<<"$s"
     rc=0
+    [[ "$hsp" != "$s7_peer_handshake" ]] || continue
     wait "${vpids[$idx]}" || rc=$?
     idx=$((idx + 1))
     if why="$(judge "$want_inv" "$rc" "$state_dir/$sname.report.json")"; then
