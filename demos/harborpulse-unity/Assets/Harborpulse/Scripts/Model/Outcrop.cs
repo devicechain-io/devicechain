@@ -53,8 +53,24 @@ namespace DeviceChain.Harborpulse.Model
         /// </summary>
         public bool Landmark { get; private set; }
 
+        /// <summary>How far a landmark tor's tallest stack was asked to stand above its ledge's surface (0 for every other outcrop).</summary>
+        public double LandmarkRise { get; private set; }
+
         /// <summary>The landmark tor's ledge (half its plan) and how far its tallest stack stands above the ledge's surface.</summary>
         public const double LandmarkHalfX = 20, LandmarkHalfZ = 14, LandmarkRiseM = 25;
+
+        /// <summary>
+        /// How far the west tor's tallest stack stands above its ledge: the lesser of the two landmarks, in the wood west of the Basin, where
+        /// the 9:16 HOME looks down on it (the east tor is outside that frame, which looks along the coast).
+        /// </summary>
+        public const double WestTorRiseM = 21;
+
+        /// <summary>
+        /// A landmark tor's slab wall, as the builder colours it: the share of what shows of the slab that is the shadow in the joint under it,
+        /// that shadow's value, and the wall's own value at its foot and under its top (all as shares of the facet's granite tone). U8 drew
+        /// 42 % of each slab at 0.52 and the rest at 0.98, and from HOME a stack of six was a striped tower.
+        /// </summary>
+        public const float JointShare = .16f, JointTone = .64f, WallFootTone = .80f, WallHeadTone = .97f;
 
         /// <summary>How far a block's bottom lies under the lowest drawn ground at its corners.</summary>
         public const double BlockSinkM = .5;
@@ -148,9 +164,11 @@ namespace DeviceChain.Harborpulse.Model
         /// the one it stands on, and is about as wide at its foot as that one is at its top, so the joints overhang a little here and there
         /// as a tor's do and no slab is a pillar standing through the ones under it.
         /// </summary>
-        void AddLandmarkTor(TerrainGrid grid, PropFootprint frame, double mean, double gx, double gz, double protrusion)
+        void AddLandmarkTor(TerrainGrid grid, PropFootprint frame, double mean, double gx, double gz, double protrusion, double riseM, bool mirrored)
         {
-            Landmark = true; Peak = Top;
+            Landmark = true; LandmarkRise = riseM; Peak = Top;
+            // a lesser tor is the same rock scaled to its height and laid out the other way round, so the two are sisters and not copies
+            double scale = riseM / LandmarkRiseM, flip = mirrored ? -1 : 1;
             var blocks = new System.Collections.Generic.List<Point3[]>(); var feet = new System.Collections.Generic.List<double>();
             double Surface(double lx, double lz)
             {
@@ -159,6 +177,7 @@ namespace DeviceChain.Harborpulse.Model
             }
             void Pile(int id, double px, double pz, double baseHalf, double rise, int slabs, double leanX, double leanZ)
             {
+                px *= flip; leanX *= flip; baseHalf *= .5 + .5 * scale; rise *= scale;
                 var yaw = H(Seed, 100 + id, 0) * Math.PI; var foot = Surface(px, pz);
                 for (var s = 0; s < slabs; s++)
                 {
@@ -195,13 +214,15 @@ namespace DeviceChain.Harborpulse.Model
         static double H(int seed, int a, int b) => CoastalTerrain.Hash(seed * 7919 + a * 104729, seed * 6271 + b * 31337 + a);
 
         /// <summary>Fits the landmark tor's ledge at <paramref name="c"/> and stacks the tor on it, or returns null when the ground cannot seat the ledge.</summary>
-        public static Outcrop FitLandmark(TerrainGrid grid, Ground c, double yawDeg, int seed) => Fit(grid, c, yawDeg, LandmarkHalfX, LandmarkHalfZ, seed, true);
+        public static Outcrop FitLandmark(TerrainGrid grid, Ground c, double yawDeg, int seed, double riseM = LandmarkRiseM, bool mirrored = false) =>
+            Fit(grid, c, yawDeg, LandmarkHalfX, LandmarkHalfZ, seed, riseM, mirrored);
 
         /// <summary>Fits an outcrop at <paramref name="c"/>, or returns null when the ground there is too steep or too broken to seat it.</summary>
-        public static Outcrop Fit(TerrainGrid grid, Ground c, double yawDeg, double halfX, double halfZ, int seed) => Fit(grid, c, yawDeg, halfX, halfZ, seed, false);
+        public static Outcrop Fit(TerrainGrid grid, Ground c, double yawDeg, double halfX, double halfZ, int seed) => Fit(grid, c, yawDeg, halfX, halfZ, seed, 0, false);
 
-        static Outcrop Fit(TerrainGrid grid, Ground c, double yawDeg, double halfX, double halfZ, int seed, bool landmark)
+        static Outcrop Fit(TerrainGrid grid, Ground c, double yawDeg, double halfX, double halfZ, int seed, double landmarkRiseM, bool mirrored)
         {
+            var landmark = landmarkRiseM > 0;
             var frame = new PropFootprint("outcrop", c, 1, 1, yawDeg);
             var radius = Math.Max(halfX, halfZ);
             var ground = grid.MeshHeight(c.X, c.Z);
@@ -277,7 +298,7 @@ namespace DeviceChain.Harborpulse.Model
                         Center = c, YawDeg = yawDeg, HalfX = halfX, HalfZ = halfZ, Rings = rings, Seed = seed,
                         Crown = new Point3(c.X, crownY, c.Z), GroundAtCentre = ground, Top = top,
                     };
-                    if (landmark) fitted.AddLandmarkTor(grid, frame, mean, gx, gz, protrusion);
+                    if (landmark) fitted.AddLandmarkTor(grid, frame, mean, gx, gz, protrusion, landmarkRiseM, mirrored);
                     else fitted.AddBlocks(grid, frame, mean, gx, gz, protrusion);
                     return fitted;
                 }

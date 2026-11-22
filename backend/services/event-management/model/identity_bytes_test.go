@@ -50,8 +50,9 @@ func oracleMeasurementId(r *MeasurementEventCreateRequest) ([]byte, error) {
 		Value          *float64
 		Classifier     *uint
 		Unit, DataType *string
+		TextValue      *string `json:",omitempty"`
 		Occurred       time.Time
-	}{r.Name, r.Value, r.Classifier, r.Unit, r.DataType, r.EntryOccurredTime})
+	}{r.Name, r.Value, r.Classifier, r.Unit, r.DataType, r.TextValue, r.EntryOccurredTime})
 	if err != nil {
 		return nil, err
 	}
@@ -398,6 +399,9 @@ func TestPayloadIdsAreByteIdenticalToTheJSONDerivation(t *testing.T) {
 		if r.Intn(2) == 0 {
 			c := uint(r.Uint32())
 			m.Classifier = &c
+		}
+		if r.Intn(4) == 0 {
+			m.TextValue = randStrPtr(r)
 		}
 		want, werr := oracleMeasurementId(m)
 		got, gerr := DeriveMeasurementPayloadId(m)

@@ -12,6 +12,9 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// ErrAssetConflict refuses an asset save made from a stale copy.
+var ErrAssetConflict = rdb.NewStaleWriteError("asset")
+
 // Create a new asset type.
 func (api *Api) CreateAssetType(ctx context.Context, request *AssetTypeCreateRequest) (*AssetType, error) {
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
@@ -248,7 +251,11 @@ func (api *Api) CreateAsset(ctx context.Context, request *AssetCreateRequest) (*
 // Looked up by the `token` ARGUMENT; the payload no longer carries a token, so the
 // argument is no longer dead and a token move is unrepresentable rather than merely
 // refused.
-func (api *Api) UpdateAsset(ctx context.Context, token string, request *AssetUpdateRequest) (*Asset, error) {
+//
+// When expectedUpdatedAt is supplied, refuse a stale copy before validation and
+// guard the write against another writer moving the row after the read.
+func (api *Api) UpdateAsset(ctx context.Context, token string, expectedUpdatedAt *string,
+	request *AssetUpdateRequest) (*Asset, error) {
 	matches, err := api.AssetsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -258,6 +265,9 @@ func (api *Api) UpdateAsset(ctx context.Context, token string, request *AssetUpd
 	}
 
 	updated := matches[0]
+	if err := rdb.RefuseIfMoved(updated.UpdatedAt, expectedUpdatedAt, ErrAssetConflict); err != nil {
+		return nil, err
+	}
 	assignments := make(map[string]any)
 	retypeTo, retype, err := resolveRequiredTypeRef(request.AssetTypeToken, "", "assetTypeToken")
 	if err != nil {
@@ -328,7 +338,10 @@ func (api *Api) UpdateAsset(ctx context.Context, token string, request *AssetUpd
 		}
 		// Unrelated edits deliberately skip property validation: rollback can
 		// leave historical documents nonconforming, without making them uneditable.
-		result := tx.Model(updated).Omit(clause.Associations).Updates(assignments)
+		if expectedUpdatedAt != nil {
+			return rdb.UpdateIfUnmoved(tx, updated, updated.UpdatedAt, assignments, ErrAssetConflict)
+		}
+		result := rdb.AdvancingFrom(tx, updated.UpdatedAt).Model(updated).Omit(clause.Associations).Updates(assignments)
 		if result.Error != nil {
 			return result.Error
 		}

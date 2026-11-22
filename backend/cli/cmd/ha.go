@@ -6,6 +6,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -24,7 +25,49 @@ var (
 	haProbeMqtt   bool
 	haSettle      time.Duration
 	haLeadersJSON bool
+	haJSON        bool
 )
+
+// haReport is what verify and verify-db share: a verdict and a human rendering.
+type haReport interface {
+	OK() bool
+	Format() string
+}
+
+// concludeHaReport prints a verify report and returns the process exit code.
+//
+// With asJSON the report is the ONLY thing written to out, so a script can pipe stdout
+// straight into a parser; the negative-control sentence moves to errOut, as it does for
+// `ha leaders --json`. --expect-fail inverts the status identically in both modes: a
+// check that passes when it was expected to fail is still a red control.
+func concludeHaReport(out, errOut io.Writer, rep haReport, asJSON, expectFail bool, failedControl, heldControl string) int {
+	msgOut := out
+	if asJSON {
+		raw, err := json.MarshalIndent(rep, "", "  ")
+		if err != nil {
+			fmt.Fprintln(errOut, "could not encode the report:", err)
+			return 1
+		}
+		fmt.Fprintln(out, string(raw))
+		msgOut = errOut
+	} else {
+		fmt.Fprint(out, rep.Format())
+	}
+	if expectFail {
+		if rep.OK() {
+			fmt.Fprintln(msgOut, color.RedString("NEGATIVE CONTROL FAILED: "+failedControl+
+				". The suite is not detecting the state it exists to detect, so every "+
+				"green run of it means nothing."))
+			return 1
+		}
+		fmt.Fprintln(msgOut, color.GreenString("negative control held: "+heldControl))
+		return 0
+	}
+	if !rep.OK() {
+		return 1
+	}
+	return 0
+}
 
 var haCmd = &cobra.Command{
 	Use:   "ha",
@@ -52,7 +95,8 @@ Exit status is the result: 0 when every assertion holds, 1 when any does not.
 
   dcctl ha verify --instance default
 
-Use --expect-fail to invert that, for the negative control. A check suite that
+Use --json to print the report as JSON (the only thing written to stdout). Use
+--expect-fail to invert that, for the negative control. A check suite that
 cannot fail asserts nothing, so the drill runs the SAME command against a
 single-node instance and requires it to report failures:
 
@@ -74,22 +118,10 @@ single-node instance and requires it to report failures:
 			// never ran.
 			return err
 		}
-		fmt.Print(rep.Format())
-
-		if haExpectFail {
-			if rep.OK() {
-				fmt.Println(color.RedString(
-					"NEGATIVE CONTROL FAILED: this instance PASSED a check it was expected to " +
-						"fail. The suite is not detecting the state it exists to detect, so every " +
-						"green run of it means nothing."))
-				os.Exit(1)
-			}
-			fmt.Println(color.GreenString(
-				"negative control held: the suite failed the instance it was expected to fail."))
-			return nil
-		}
-		if !rep.OK() {
-			os.Exit(1)
+		if code := concludeHaReport(os.Stdout, os.Stderr, rep, haJSON, haExpectFail,
+			"this instance PASSED a check it was expected to fail",
+			"the suite failed the instance it was expected to fail."); code != 0 {
+			os.Exit(code)
 		}
 		return nil
 	},
@@ -194,7 +226,8 @@ Exit status is the result: 0 when every assertion holds, 1 when any does not.
 
   dcctl ha verify-db --cluster dc-rdb --require-synchronous
 
-Use --expect-fail for the negative control, stating the topology the store is
+Use --json to print the report as JSON (the only thing written to stdout). Use
+--expect-fail for the negative control, stating the topology the store is
 expected NOT to hold:
 
   dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --expect-fail`,
@@ -229,22 +262,10 @@ expected NOT to hold:
 			// recorded as either answer.
 			return err
 		}
-		fmt.Print(rep.Format())
-
-		if haExpectFail {
-			if rep.OK() {
-				fmt.Println(color.RedString(
-					"NEGATIVE CONTROL FAILED: this store PASSED a check it was expected to " +
-						"fail. The suite is not detecting the state it exists to detect, so every " +
-						"green run of it means nothing."))
-				os.Exit(1)
-			}
-			fmt.Println(color.GreenString(
-				"negative control held: the suite failed the store it was expected to fail."))
-			return nil
-		}
-		if !rep.OK() {
-			os.Exit(1)
+		if code := concludeHaReport(os.Stdout, os.Stderr, rep, haJSON, haExpectFail,
+			"this store PASSED a check it was expected to fail",
+			"the suite failed the store it was expected to fail."); code != 0 {
+			os.Exit(code)
 		}
 		return nil
 	},
@@ -308,6 +329,8 @@ func init() {
 		"bound the whole check")
 	haVerifyDbCmd.Flags().BoolVar(&haExpectFail, "expect-fail", false,
 		"invert the exit status: succeed only if the check FAILS (the negative control)")
+	haVerifyDbCmd.Flags().BoolVar(&haJSON, "json", false,
+		"print the report as JSON")
 
 	haVerifyCmd.Flags().StringVar(&haInstanceId, "instance", "default",
 		"instance id; its services and broker run in namespace dci-<instance>")
@@ -325,6 +348,8 @@ func init() {
 		"bound the whole check")
 	haVerifyCmd.Flags().BoolVar(&haExpectFail, "expect-fail", false,
 		"invert the exit status: succeed only if the check FAILS (the negative control)")
+	haVerifyCmd.Flags().BoolVar(&haJSON, "json", false,
+		"print the report as JSON")
 	haVerifyCmd.Flags().BoolVar(&haProbeMqtt, "probe-mqtt", false,
 		"open one MQTT connection first so the broker's $MQTT_* streams exist and their "+
 			"replica factor can be observed. MUTATES the broker (it creates those streams "+

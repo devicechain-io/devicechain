@@ -169,6 +169,7 @@ var purgeSeedExemptions = map[string]string{
 	"event-management.events":                                    representedTenantPredicate,
 	"event-management.location_events":                           representedTenantPredicate,
 	"event-management.purged_tenants":                            purgeTombstone,
+	"event-management.rollup_levels":                             indirectTable,
 	"event-management.state_change_events":                       representedTenantPredicate,
 	"event-management.tenant_usage_daily":                        representedTenantPredicate,
 	"event-management.tenant_usage_devices":                      representedTenantPredicate,

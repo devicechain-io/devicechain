@@ -12,6 +12,7 @@ package deadletters
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -75,12 +76,23 @@ const listQuery = `query DeadLetters($criteria: DeadLetterSearchCriteria!) {
 
 // Summary is what a run found.
 type Summary struct {
-	Letters []Letter
-	Total   int32
+	Letters []Letter `json:"letters"`
+	Total   int32    `json:"total"`
 	// Truncated says the operator's page budget ran out before the results did, so the
 	// count they were shown is not the count that exists. Saying so is the difference
 	// between a bounded read and a wrong answer.
-	Truncated bool
+	Truncated bool `json:"truncated"`
+}
+
+// PrintJSON writes the summary as indented JSON: exactly the records the table shows,
+// with an empty list (never null) when there are none.
+func PrintJSON(w io.Writer, sum Summary) error {
+	if sum.Letters == nil {
+		sum.Letters = []Letter{}
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(sum)
 }
 
 // Run pages through the store and collects what it finds.

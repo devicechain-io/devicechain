@@ -180,3 +180,14 @@ func TestPrintShowsNotesVerificationAndTheFinalityCaveat(t *testing.T) {
 	require.Contains(t, b.String(), "NOT ERASED")
 	require.Contains(t, b.String(), "NOT clean")
 }
+
+func TestPrintJSONIsTheRecordAndNothingElse(t *testing.T) {
+	var b strings.Builder
+	d := &Deletion{Token: "acme", Epoch: e1, Erased: true, ErasedAt: ptr("z"), RowsErased: 7,
+		Awaiting: "TOKEN_HOLD", Stores: []Store{{Store: "tsdb", Complete: true}}}
+	require.NoError(t, PrintJSON(&b, d))
+	var got Deletion
+	require.NoError(t, json.Unmarshal([]byte(b.String()), &got))
+	require.Equal(t, *d, got)
+	require.NotContains(t, b.String(), "tenant acme")
+}

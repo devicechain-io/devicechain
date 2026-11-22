@@ -559,16 +559,16 @@ func TestSitepulseResizeScalesTheMachinesAndKeepsTheSinglePlant(t *testing.T) {
 	}
 }
 
-// The three machine kinds are device types over ONE shared equipment profile; the plant is
-// a fixed type over its own profile, because it reports metrics no machine does.
-func TestSitepulseDeviceTypesShareTheEquipmentProfileAndThePlantHasItsOwn(t *testing.T) {
+// The loader and hauler share the equipment profile; the dozer has its own (no payload, no
+// tyres) and so does the plant, because it reports metrics no machine does.
+func TestSitepulseDeviceTypesShareTheEquipmentProfileExceptDozerAndPlant(t *testing.T) {
 	m := sitepulseManifest(t)
 	got := map[string]string{}
 	for _, dt := range m.DeviceTypes {
 		got[dt.Token] = dt.ProfileToken
 	}
 	want := map[string]string{
-		"sp-dozer":         "sp-equipment-profile",
+		"sp-dozer":         "sp-dozer-profile",
 		"sp-loader":        "sp-equipment-profile",
 		"sp-hauler":        "sp-equipment-profile",
 		"sp-crusher-plant": "sp-plant-profile",
@@ -842,5 +842,38 @@ func TestSitepulseTickEmitsNothingBecauseUnityIsTheDevice(t *testing.T) {
 	if snap.Emitted != 0 || snap.Failed != 0 || snap.Shed != 0 || snap.Backpressured != 0 {
 		t.Errorf("Tick moved the emit counters (emitted %d, failed %d, shed %d, backpressured %d)",
 			snap.Emitted, snap.Failed, snap.Shed, snap.Backpressured)
+	}
+}
+
+// A dozer is a tracked machine: it carries no load and has no tyres, so its profile must not
+// declare payload or tyre pressure (the fleet widgets read "does not report this" from what
+// the profile declares), and it must carry no tyre rule.
+func TestSitepulseDozerProfileDeclaresNoPayloadOrTyres(t *testing.T) {
+	p := profileByToken(t, sitepulseManifest(t), SitepulseDozerProfileToken)
+	var keys []string
+	for _, mx := range p.Metrics {
+		keys = append(keys, mx.Key)
+	}
+	want := []string{SitepulseFuelKey, SitepulseEngineTempKey, SitepulseEngineHoursKey}
+	if len(keys) != len(want) {
+		t.Fatalf("the dozer profile declares %v, want %v", keys, want)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Errorf("dozer metric[%d] is %q, want %q", i, keys[i], want[i])
+		}
+	}
+	var rules []string
+	for _, r := range p.DetectionRules {
+		rules = append(rules, r.Token)
+	}
+	if len(rules) != 2 || rules[0] != SitepulseDozerRuleToken || rules[1] != SitepulseDozerOverheatRuleToken {
+		t.Errorf("the dozer profile declares rules %v, want low fuel and overheat only", rules)
+	}
+	// The scene resolves commands by KEY, so the dozer must answer the same two.
+	for _, key := range []string{SitepulseGotoCommandKey, SitepulseRefuelCommandKey} {
+		if _, ok := commandByKey(p, key); !ok {
+			t.Errorf("the dozer profile does not declare command %q", key)
+		}
 	}
 }

@@ -180,3 +180,40 @@ func TestAnExactlyFullFinalPageIsNotTruncated(t *testing.T) {
 		t.Fatalf("got %d letters, want 100", len(sum.Letters))
 	}
 }
+
+// -o json is the records the table shows: a letters array that is [] and never null when
+// nothing matched, the total, and whether the page budget ran out.
+func TestPrintJSONCarriesTheRecordsTotalAndTruncation(t *testing.T) {
+	var b strings.Builder
+	if err := PrintJSON(&b, Summary{}); err != nil {
+		t.Fatal(err)
+	}
+	var empty map[string]any
+	if err := json.Unmarshal([]byte(b.String()), &empty); err != nil {
+		t.Fatalf("not JSON: %v: %s", err, b.String())
+	}
+	if l, ok := empty["letters"].([]any); !ok || len(l) != 0 {
+		t.Fatalf("empty summary letters = %#v, want []", empty["letters"])
+	}
+
+	b.Reset()
+	ref := "alarm-7"
+	ls := letters(2)
+	ls[0].Reference = &ref
+	if err := PrintJSON(&b, Summary{Letters: ls, Total: 9, Truncated: true}); err != nil {
+		t.Fatal(err)
+	}
+	var got Summary
+	if err := json.Unmarshal([]byte(b.String()), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Letters) != 2 || got.Total != 9 || !got.Truncated {
+		t.Fatalf("round trip = %+v", got)
+	}
+	if got.Letters[0].Reference == nil || *got.Letters[0].Reference != "alarm-7" || got.Letters[0].Attempts != 5 {
+		t.Fatalf("record not preserved: %+v", got.Letters[0])
+	}
+	if strings.Contains(b.String(), "Nothing replays") {
+		t.Fatal("prose leaked into the JSON output")
+	}
+}

@@ -81,6 +81,7 @@ var (
 		NewPendingAlarmEventsSchema(),
 		NewDeviceAttributeLockSchema(),
 		NewDeviceConfigurationReportsSchema(),
+		NewDecoderHealthWindowIndexesSchema(),
 		NewAttributeGenerationsSchema(),
 	}
 )

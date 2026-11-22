@@ -6,6 +6,8 @@ title: Why isn't my device's data showing up
 
 A device sends events and nothing appears. Before you read a pod log, look at what the platform **refused**. When it turns an event away, or cannot store it, it keeps a short record of that, and your tenant can read it.
 
+The console's page for these records is described in [Ingest failures](../user-guide/ingest-failures.md).
+
 :::note Status
 Available. Open **Ingest failures** in the console's **Monitor** section, or query `failedEvents` and `failedEventSummary` on the event-management GraphQL API. Both need `device:write`, the grant of the members who manage devices and so can act on a refusal, and not the read-only baseline every member holds. They are also not offered to members whose access is limited to some customers: a refusal often names a device that does not exist, so it has no customer to belong to.
 :::

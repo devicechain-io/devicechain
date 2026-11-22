@@ -1,0 +1,17 @@
+{
+  "activeBadge": "当前",
+  "activeLabel": "当前版本：",
+  "colBy": "发布者",
+  "colPublished": "发布时间",
+  "colVersion": "版本",
+  "descHint": "关于此版本的可选说明。",
+  "empty": "尚未发布任何版本。",
+  "labelFieldLabel": "标签",
+  "labelHint": "可选，例如版本名称。",
+  "labelPlaceholder": "v1.0",
+  "loading": "正在加载版本…",
+  "publishButton": "发布",
+  "publishedToast": "已发布版本 {{version}}",
+  "rollbackButton": "回滚",
+  "rolledBackToast": "已回滚到版本 {{version}}"
+}
