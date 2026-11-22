@@ -65,7 +65,8 @@ export function DeviceBulkForm({ onDone }: { onDone: (message: string) => void }
     if (tokenTemplate.includes('{random}')) return t('tokenTemplateNoRandom');
     if (!INDEX_PLACEHOLDER.test(tokenTemplate)) return t('tokenTemplateNeedsIndex');
     if (nameTemplate.includes('{random}')) return t('nameTemplateNoRandom');
-    const firstToken = renderPreview(tokenTemplate, startIndex);
+    // Judge the token the way it is sent: the template is trimmed on submit.
+    const firstToken = renderPreview(tokenTemplate.trim(), startIndex);
     if (!TOKEN_GRAMMAR.test(firstToken)) return t('renderedTokenInvalid', { token: firstToken });
     // A fixed external id would collide across the batch (external ids are unique
     // per tenant), so require it to vary when creating more than one device.

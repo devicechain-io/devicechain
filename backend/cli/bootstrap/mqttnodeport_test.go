@@ -238,8 +238,9 @@ func TestTheMQTTNodePortIsRecordedOnTheInstance(t *testing.T) {
 	if err := WriteInstanceRecord(InstanceRecord{Instance: "beta", Provider: "local", KubeContext: "kind-dev"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := InstanceMQTTNodePort("beta"); got != KindMQTTNodePort {
-		t.Errorf("an instance with no recorded port reads %d, want the first (%d)", got, KindMQTTNodePort)
+	stubOwnMQTTNodePort(t, 0, errors.New("no cluster in this test"))
+	if got := ResolveInstanceMQTTNodePort(context.Background(), "kind-dev", "beta"); got != KindMQTTNodePort {
+		t.Errorf("an instance with no recorded port, on a cluster that cannot be read, reads %d, want the first (%d)", got, KindMQTTNodePort)
 	}
 	if err := recordMQTTNodePort("beta", 31885); err != nil {
 		t.Fatal(err)
@@ -251,7 +252,7 @@ func TestTheMQTTNodePortIsRecordedOnTheInstance(t *testing.T) {
 	if rec.MQTTNodePort != 31885 || rec.KubeContext != "kind-dev" {
 		t.Errorf("record after the write: %+v", rec)
 	}
-	if got := InstanceMQTTNodePort("beta"); got != 31885 {
+	if got := ResolveInstanceMQTTNodePort(context.Background(), "kind-dev", "beta"); got != 31885 {
 		t.Errorf("read back %d, want 31885", got)
 	}
 	// No record (an instance built on another machine) is not an error.
@@ -288,5 +289,61 @@ func TestEveryLocalMQTTNodePortIsMappedByTheEmbeddedKindConfig(t *testing.T) {
 	}
 	if !slices.Equal(localMQTTNodePorts, allLocalMQTTNodePorts) {
 		t.Errorf("localMQTTNodePorts %v changed; update this test's list deliberately", localMQTTNodePorts)
+	}
+}
+
+func stubOwnMQTTNodePort(t *testing.T, port int32, err error) *int {
+	t.Helper()
+	orig := instanceOwnMQTTNodePort
+	t.Cleanup(func() { instanceOwnMQTTNodePort = orig })
+	calls := 0
+	instanceOwnMQTTNodePort = func(context.Context, string, string) (int32, error) {
+		calls++
+		return port, err
+	}
+	return &calls
+}
+
+// 🔴 "NONE" IS NOT "NOT RECORDED". An instance that was given no MQTT node port is recorded as
+// such, and resolves to none without asking the cluster; a record that predates the field is
+// settled by the instance's own Services, so an older second instance with no port is not
+// addressed at the first instance's 31883, while an older first instance still resolves to it.
+func TestResolvingTheMQTTNodePortTellsNoneFromNotRecorded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	ctx := context.Background()
+	if err := WriteInstanceRecord(InstanceRecord{Instance: "beta", Provider: "local", KubeContext: "kind-dev"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recorded none: 0, and the cluster is not asked.
+	if err := recordMQTTNodePort("beta", 0); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := ReadInstanceRecord("beta")
+	if rec.MQTTNodePort != MQTTNodePortNone {
+		t.Fatalf("no port was recorded as %d, want %d", rec.MQTTNodePort, MQTTNodePortNone)
+	}
+	calls := stubOwnMQTTNodePort(t, 31883, nil)
+	if got := ResolveInstanceMQTTNodePort(ctx, "kind-dev", "beta"); got != 0 || *calls != 0 {
+		t.Errorf("a recorded none resolved to %d after %d cluster read(s), want 0 and none", got, *calls)
+	}
+
+	// Not recorded (an older record): the instance's own Service decides.
+	if err := WriteInstanceRecord(InstanceRecord{Instance: "beta", Provider: "local", KubeContext: "kind-dev"}); err != nil {
+		t.Fatal(err)
+	}
+	stubOwnMQTTNodePort(t, 31883, nil)
+	if got := ResolveInstanceMQTTNodePort(ctx, "kind-dev", "beta"); got != 31883 {
+		t.Errorf("an older first instance with a 31883 Service resolved to %d, want 31883", got)
+	}
+	stubOwnMQTTNodePort(t, 0, nil)
+	if got := ResolveInstanceMQTTNodePort(ctx, "kind-dev", "beta"); got != 0 {
+		t.Errorf("an older second instance with no node-port Service resolved to %d, want 0", got)
+	}
+	// No record at all (built on another machine) is settled the same way.
+	if got := ResolveInstanceMQTTNodePort(ctx, "kind-dev", "nobody"); got != 0 {
+		t.Errorf("an unrecorded instance with no node-port Service resolved to %d, want 0", got)
 	}
 }

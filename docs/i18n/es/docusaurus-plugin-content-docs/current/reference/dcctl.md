@@ -110,6 +110,14 @@ result is not proof the entity exists.
 dcctl attr get <kind> <token> [key] [flags]
 ```
 
+### Examples
+
+```
+  dcctl attr get device meter-0042 -t acme --email you@example.com --password <password>
+  dcctl attr get device meter-0042 floor -t acme --email you@example.com --password <password>
+  dcctl attr get asset pump-7 --scope SHARED -o json -t acme --email you@example.com --password <password>
+```
+
 ### Options
 
 ```
@@ -164,6 +172,14 @@ Writing one key never touches another: this is an upsert on (entity, scope, key)
 dcctl attr set <kind> <token> <key> <value> [flags]
 ```
 
+### Examples
+
+```
+  dcctl attr set device meter-0042 floor 3 -t acme --email you@example.com --password <password>
+  dcctl attr set device meter-0042 region arid --scope SHARED -t acme --email you@example.com --password <password>
+  dcctl attr set device meter-0042 note "east wall" --type STRING -t acme --email you@example.com --password <password>
+```
+
 ### Options
 
 ```
@@ -201,6 +217,13 @@ still count as a value. Removing a key that is not set succeeds and says so.
 
 ```
 dcctl attr unset <kind> <token> <key> [flags]
+```
+
+### Examples
+
+```
+  dcctl attr unset device meter-0042 floor -t acme --email you@example.com --password <password>
+  dcctl attr unset customer acme-hq region --scope SHARED -t acme --email you@example.com --password <password>
 ```
 
 ### Options
@@ -661,6 +684,14 @@ truncated list read as a complete one.
 
 ```
 dcctl dead-letters list [flags]
+```
+
+### Examples
+
+```
+  dcctl dead-letters list --email ops@example.com --password <password>
+  dcctl dead-letters list --tenant acme --kind detection-action --email ops@example.com --password <password>
+  dcctl dead-letters list --source event-processing --since 2026-11-01T00:00:00Z --email ops@example.com --password <password> -o json
 ```
 
 ### Options
@@ -2556,6 +2587,14 @@ This reads the operator plane and authenticates as an identity, not as a tenant.
 
 ```
 dcctl tenant-deletion status <token> [flags]
+```
+
+### Examples
+
+```
+  dcctl tenant-deletion status acme --email ops@example.com --password <password>
+  dcctl tenant-deletion status acme --wait --timeout 1h --email ops@example.com --password <password>
+  dcctl tenant-deletion status acme --until complete -o json --email ops@example.com --password <password>
 ```
 
 ### Options
