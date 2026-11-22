@@ -484,14 +484,17 @@ no configuration. A broker that is already even is left alone, apart from the se
 below. Each move is a brief leader election for one stream or consumer.
 
 First it keeps the streams every device event passes through on different servers: when the stream
-that carries resolved events is led by the same server as the device capture or the inbound stream,
-it is handed to a replica on a server that leads neither, and the balancing that follows leaves it
-there. The summary ends with where those streams are led. The resolved stream reads "separated", or
+that carries resolved events is led by the same server as the device capture stream, the inbound
+stream or the broker's MQTT message store, it is handed to a replica on a server that leads none of
+them, and the balancing that follows leaves it there. Then each consumer of the resolved stream is
+moved off a server that leads more of those streams than one of its replicas does, and is never
+balanced back onto a busier one. The summary ends with where those streams are led, and
+`dcctl ha leaders` reports the same placement without moving anything. The resolved stream reads "separated", or
 "SHARED" when no current replica sits on a free server: fewer servers than such streams, a free
 server that holds no replica of it (five servers at three replicas), or replicas that are behind.
-It reads "NOT CONFIRMED" when the move failed or was skipped. The capture and inbound streams are
-never moved, so when one server leads both the line says so as information; it clears at the next
-broker roll.
+It reads "NOT CONFIRMED" when the move failed or was skipped. The capture and inbound streams and the
+MQTT message store are never moved, so when one server leads two of them the line says so as
+information; it clears at the next broker roll.
 
 Streams that hold device data already acknowledged to the device are never moved, and there is no
 option to include them: the broker's MQTT streams, the device capture stream and every stream an
@@ -1025,8 +1028,67 @@ Inspect an instance's high-availability posture
 ### SEE ALSO
 
 * [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl ha leaders](#dcctl-ha-leaders)	 - Report where the broker's per-event stream leaders sit, and whether they could be separated further
 * [dcctl ha verify](#dcctl-ha-verify)	 - Assert an instance's broker actually holds the replication it declares
 * [dcctl ha verify-db](#dcctl-ha-verify-db)	 - Assert a database store actually holds the replication it declares
+
+## dcctl ha leaders {#dcctl-ha-leaders}
+
+Report where the broker's per-event stream leaders sit, and whether they could be separated further
+
+### Synopsis
+
+Report, from live broker state, which broker server leads each stream every device event passes
+through (the capture stream, the inbound stream, the resolved stream and the broker's MQTT message
+store), which server leads each consumer of the resolved stream, and how many streams and consumers
+each server leads.
+
+Each of those streams costs its leader a replicated write per event. When one server leads several
+of them it becomes the broker's bottleneck long before the others are busy, and nothing in the
+deployment shows it.
+
+The verdict is a dry run of `dcctl broker rebalance`, under the same rules, and moves nothing:
+
+```
+  PASS       no leader move the rebalance may make would separate them further
+  FAIL       it would move the resolved stream or one of its consumers to a server leading fewer
+             of these streams; the moves are listed. `dcctl broker rebalance` makes them
+  UNSETTLED  one of the instance's per-event streams or a leader is missing, or a replica is
+             offline or behind where the rebalance would wait on it, so it cannot be judged now
+```
+
+The capture stream, the inbound stream and the MQTT message store are never moved: a leader change
+on them can lose messages already acknowledged to a device. When two of them share a server, the
+report says so; it is not a failure.
+
+Exit status is the result: 0 on PASS, 1 otherwise. A failure to read the broker is an error, never a
+verdict. --json prints the report as JSON. --expect-fail inverts the status for the negative
+control, and succeeds only on FAIL (never on UNSETTLED).
+
+```
+  dcctl ha leaders --instance default
+```
+
+```
+dcctl ha leaders [flags]
+```
+
+### Options
+
+```
+      --expect-fail           invert the exit status: succeed only if the check FAILS (the negative control)
+  -h, --help                  help for leaders
+      --instance string       instance id; its services and broker run in namespace dci-<instance> (default "default")
+      --json                  print the report as JSON
+      --kube-context string   kubeconfig context (default: current context)
+      --nats-url string       dial this NATS URL instead of opening a port-forward
+      --settle duration       keep re-reading for this long while the broker is UNSETTLED (an election under way, a replica behind). A FAIL is reported at once. 0 disables it (default 30s)
+      --timeout duration      bound the whole check (default 2m0s)
+```
+
+### SEE ALSO
+
+* [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
 
 ## dcctl ha verify {#dcctl-ha-verify}
 

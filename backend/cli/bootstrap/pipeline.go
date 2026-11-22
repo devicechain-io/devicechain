@@ -552,6 +552,8 @@ func NewDefaultPipeline() Pipeline {
 		{Name: "Apply infrastructure", Run: stepInfraApply},
 		{Name: "Install instance (Helm)", Run: stepHelmInstall},
 		{Name: "Wait for readiness", Run: stepWaitReady},
+		// After readiness, so every stream exists and is led. Best effort: see brokerbalance.go.
+		{Name: "Even out broker leadership", Run: stepBrokerRebalance},
 		{Name: "Report access info", Run: stepReport},
 	}}
 }

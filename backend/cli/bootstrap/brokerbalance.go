@@ -85,21 +85,8 @@ func rebalanceBrokerLeadership(ctx context.Context, st *State, typed *kubernetes
 	exp := messaging.ReplicationExpectationFor(st.Instance, int(cfg.Infrastructure.Nats.StreamReplicas), areas,
 		cfg.Infrastructure.Nats.Auth.IdentityAccount)
 
-	// 🔴 ONLY STREAMS OFF THE ACKNOWLEDGED-INGEST PATH ARE EVER MOVED. A leader change on the broker's
-	// MQTT streams or the capture stream has lost messages already PUBACKed to devices (59,964 in one
-	// capture step-down on GKE), and a latency imbalance is never worth that. The set is a positive
-	// list derived from the stream declarations (messaging.RebalanceableStreams); there is no flag
-	// that widens it. The imbalance on the ingest streams clears at the next roll, or on its own.
-	movable := map[string]bool{}
-	for _, n := range messaging.RebalanceableStreams(st.Instance) {
-		movable[n] = true
-	}
-	isMovable := func(stream string) bool { return movable[stream] }
-	perEvent := map[string]bool{}
-	for _, n := range messaging.PerEventStreams(st.Instance) {
-		perEvent[n] = true
-	}
-	isPerEvent := func(stream string) bool { return perEvent[stream] }
+	opts := rebalancePlanOptions(st.Instance, brokerRebalanceMaxMoves)
+	isMovable, isPerEvent := opts.Movable, opts.PerEvent
 
 	// Settle: every movable group led, every replica of it current. Bounded, and when it does not
 	// settle nothing is planned: a plan over a broker still catching up would move leadership onto
@@ -124,12 +111,41 @@ func rebalanceBrokerLeadership(ctx context.Context, st *State, typed *kubernetes
 		}
 	}
 
-	plan := replication.PlanRebalance(snap, replication.PlanOptions{Movable: isMovable, MaxMoves: brokerRebalanceMaxMoves, PerEvent: isPerEvent})
+	plan := replication.PlanRebalance(snap, opts)
 	if len(plan.Moves) == 0 {
 		return summarizeRebalance(plan, nil), nil
 	}
 	results := replication.ApplyMoves(ctx, nc, js, plan.Moves, replication.ApplyOptions{PerMove: brokerRebalancePerMove})
 	return summarizeRebalance(plan, results), rebalanceFailures(results)
+}
+
+// rebalancePlanOptions are the rules every leader move dcctl makes is planned under, and the rules
+// `dcctl ha leaders` judges a broker by: one definition, so the check cannot hold the broker to a
+// placement the rebalance would not make.
+//
+// 🔴 ONLY STREAMS OFF THE ACKNOWLEDGED-INGEST PATH ARE EVER MOVED. A leader change on the broker's
+// MQTT streams or the capture stream has lost messages already PUBACKed to devices (59,964 in one
+// capture step-down on GKE), and a latency imbalance is never worth that. The set is a positive
+// list derived from the stream declarations (messaging.RebalanceableStreams); there is no flag
+// that widens it. The imbalance on the ingest streams clears at the next roll, or on its own.
+//
+// The per-event set is messaging.PerEventLeaderStreams: the streams every device event passes
+// through plus the MQTT message store. The ones that may not move are read as anchors, so the one
+// that may (resolved-events) and its consumers are placed away from the servers leading them.
+func rebalancePlanOptions(instance string, maxMoves int) replication.PlanOptions {
+	movable := map[string]bool{}
+	for _, n := range messaging.RebalanceableStreams(instance) {
+		movable[n] = true
+	}
+	perEvent := map[string]bool{}
+	for _, n := range messaging.PerEventLeaderStreams(instance) {
+		perEvent[n] = true
+	}
+	return replication.PlanOptions{
+		Movable:  func(stream string) bool { return movable[stream] },
+		PerEvent: func(stream string) bool { return perEvent[stream] },
+		MaxMoves: maxMoves,
+	}
 }
 
 // brokerSettled is whether every group the plan reads has a leader and all its replicas are current:
@@ -228,8 +244,7 @@ func perEventLine(plan replication.RebalancePlan, results []replication.MoveResu
 	sort.Strings(names)
 	parts := make([]string, 0, len(names))
 	for _, n := range names {
-		short := n[strings.LastIndex(n, "_")+1:] // the suffix after the instance prefix
-		parts = append(parts, short+"="+plan.PerEventLeaders[n])
+		parts = append(parts, perEventShort(n)+"="+plan.PerEventLeaders[n])
 	}
 	state := "separated"
 	if plan.PerEventShared {
@@ -248,11 +263,20 @@ func perEventLine(plan replication.RebalancePlan, results []replication.MoveResu
 	for _, f := range plan.FixedShared {
 		short := make([]string, len(f.Streams))
 		for i, n := range f.Streams {
-			short[i] = n[strings.LastIndex(n, "_")+1:]
+			short[i] = perEventShort(n)
 		}
 		line += "; " + strings.Join(short, "/") + " share " + f.Server + " (fixed, not moved)"
 	}
 	return line
+}
+
+// perEventShort is a per-event stream's name without its instance prefix. The broker's own MQTT
+// streams have none, and their names contain an underscore of their own, so they are kept whole.
+func perEventShort(n string) string {
+	if strings.HasPrefix(n, replication.MqttStreamPrefix) {
+		return n
+	}
+	return n[strings.LastIndex(n, "_")+1:]
 }
 
 func summarizeMoves(plan replication.RebalancePlan, results []replication.MoveResult) string {
@@ -290,13 +314,45 @@ func spreadLine(kind string, sp replication.Spread, servers []string) string {
 // runBrokerRebalance is the upgrade's step: it runs the rebalance, prints its summary and turns
 // every failure into a warning. It never returns an error.
 func runBrokerRebalance(ctx context.Context, st *State, typed *kubernetes.Clientset) {
+	runBrokerRebalanceAfter(ctx, st, typed, "The upgrade is complete")
+}
+
+// stepBrokerRebalance is bootstrap's last-but-one step: once the instance is ready, the same
+// best-effort rebalance the upgrade runs after it rolls the broker. A fresh install leaves leadership
+// wherever each stream happened to be created (on GKE one server led nothing, and resolved-events shared
+// a server with capture and the MQTT message store). It moves only what rebalancePlanOptions allows, and
+// it never fails the bootstrap.
+func stepBrokerRebalance(ctx context.Context, st *State) error {
+	if st.DryRun {
+		wouldDo("even out which broker server leads which stream and consumer (never the device-ingest streams)")
+		return nil
+	}
+	typed, err := stepBrokerRebalanceClient(st.KubeContext)
+	if err != nil {
+		fmt.Println(color.YellowString("  Warning: could not even out broker leadership: %v", err))
+		fmt.Println(color.YellowString("  The instance is installed. `dcctl broker rebalance %s` repeats this step.", st.Instance))
+		return nil
+	}
+	runBrokerRebalanceAfter(ctx, st, typed, "The instance is installed")
+	return nil
+}
+
+// stepBrokerRebalanceClient builds the step's client; a variable so a test can run the step.
+var stepBrokerRebalanceClient = func(kubeContext string) (*kubernetes.Clientset, error) {
+	_, _, typed, err := kubeClients(kubeContext)
+	return typed, err
+}
+
+// runBrokerRebalanceAfter runs the rebalance and turns every failure into a warning that starts
+// with done, which says what has nevertheless finished.
+func runBrokerRebalanceAfter(ctx context.Context, st *State, typed *kubernetes.Clientset, done string) {
 	fmt.Printf("%s", color.WhiteString("Evening out broker leadership... "))
 	summary, err := brokerRebalance(ctx, st, typed)
 	switch {
 	case err != nil && summary == "":
 		fmt.Println(color.YellowString("skipped."))
 		fmt.Println(color.YellowString("  Warning: could not even out broker leadership: %v", err))
-		fmt.Println(color.YellowString("  The upgrade is complete. Until leadership is even, publish latency is higher than it need be; " +
+		fmt.Println(color.YellowString("  " + done + ". Until leadership is even, publish latency is higher than it need be; " +
 			"`dcctl broker rebalance` repeats this step."))
 	case err != nil:
 		fmt.Println(color.YellowString("partly done."))
