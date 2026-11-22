@@ -55,6 +55,8 @@ type seedEventsOptions struct {
 const (
 	recentAge = 2 * time.Hour
 	oldAge    = 30 * 24 * time.Hour
+	// maxSeedCount bounds --count; see the check in runSeedEvents.
+	maxSeedCount = 60
 )
 
 func runSeedEvents(ctx context.Context, argv []string) error {
@@ -79,6 +81,14 @@ func runSeedEvents(ctx context.Context, argv []string) error {
 	}
 	if o.count < 1 {
 		return failWith(exitSetup, "--count must be at least 1")
+	}
+	// The recent cohort starts recentAge (2 h) ago, one reading a minute. At most 60
+	// keeps its last reading more than an hour old, so every hour bucket it touches
+	// is CLOSED when the seed refreshes the hour level. A bucket still open then would
+	// be materialized later by the hour level's own policy, and verify-events would
+	// count a row the seed never recorded and call the restore broken.
+	if o.count > maxSeedCount {
+		return failWith(exitSetup, "--count must be at most %d: the recent cohort's hour buckets have to be closed when the hour level is refreshed", maxSeedCount)
 	}
 
 	receipt, err := ReadReceipt(o.receipt)
@@ -185,11 +195,15 @@ device's rows first, or drill a fresh instance`, o.device, receipt.Tenant, exist
 	fmt.Printf("ok   %d measurements written for device %q across two cohorts (age %s and %s)\n",
 		rows, o.device, oldAge, recentAge)
 
-	if err := refreshRollup(ctx, db); err != nil {
-		return failWith(exitSetup, "%w", err)
+	// The minute level first: the hour level is refreshed FROM it, so the other order
+	// materializes an empty hour level and records zero.
+	for _, view := range rollupViews {
+		if err := refreshRollup(ctx, db, view); err != nil {
+			return failWith(exitSetup, "%w", err)
+		}
 	}
 
-	matTable, err := materializationTable(ctx, db, areaEvent)
+	matTable, err := materializationTable(ctx, db, areaEvent, rollupView)
 	if err != nil {
 		return failWith(exitSetup, "%w", err)
 	}
@@ -203,6 +217,30 @@ device's rows first, or drill a fresh instance`, o.device, receipt.Tenant, exist
 			matTable, receipt.Tenant)
 	}
 	fmt.Printf("ok   %d rows materialized into %s (read directly, NOT through the view)\n", matCount, matTable)
+
+	hourTable, err := materializationTable(ctx, db, areaEvent, rollupView1h)
+	if err != nil {
+		return failWith(exitSetup, "%w", err)
+	}
+	hourCount, err := materializedRows(ctx, db, hourTable, receipt.Tenant, o.device)
+	if err != nil {
+		return failWith(exitSetup, "%w", err)
+	}
+	if hourCount == 0 {
+		return failWith(exitSetup,
+			"the refresh materialized nothing into %s (the hour level) for tenant %q. Recording zero here would make verify-events pass against a restore that lost the hour level",
+			hourTable, receipt.Tenant)
+	}
+	hourFrom, ok, err := rollupLevelCompleteFrom(ctx, db, rollupLevel1h)
+	if err != nil {
+		return failWith(exitSetup, "%w", err)
+	}
+	if !ok {
+		return failWith(exitSetup,
+			"%s.rollup_levels has no %q row on the cluster being seeded, so there is nothing for the restore to bring back. event-management's hour-level migration writes it",
+			areaEvent, rollupLevel1h)
+	}
+	fmt.Printf("ok   %d rows materialized into %s (the hour level), which serves reads from %s\n", hourCount, hourTable, hourFrom)
 
 	// Compress the old cohort's chunks. See the cohort comment: this is the shape
 	// production data mostly has, and it is a different physical representation.
@@ -232,17 +270,19 @@ device's rows first, or drill a fresh instance`, o.device, receipt.Tenant, exist
 	fmt.Printf("ok   %d chunk(s) compressed holding %d of this run's rows\n", compressed, compressedRows)
 
 	receipt.Events = &EventSeed{
-		Tenant:            receipt.Tenant,
-		DeviceToken:       o.device,
-		EventType:         int(eventtype.Measurement),
-		Name:              o.name,
-		Start:             start.Format(time.RFC3339),
-		End:               end.Format(time.RFC3339),
-		RawCount:          rows,
-		Sum:               sum,
-		MaterializedCount: matCount,
-		CompressedChunks:  compressed,
-		CompressedRows:    compressedRows,
+		Tenant:                receipt.Tenant,
+		DeviceToken:           o.device,
+		EventType:             int(eventtype.Measurement),
+		Name:                  o.name,
+		Start:                 start.Format(time.RFC3339),
+		End:                   end.Format(time.RFC3339),
+		RawCount:              rows,
+		Sum:                   sum,
+		MaterializedCount:     matCount,
+		HourMaterializedCount: hourCount,
+		HourLevelCompleteFrom: hourFrom,
+		CompressedChunks:      compressed,
+		CompressedRows:        compressedRows,
 	}
 	if err := WriteReceipt(o.receipt, receipt); err != nil {
 		return failWith(exitSetup, "write receipt: %w", err)
@@ -276,9 +316,9 @@ device's rows first, or drill a fresh instance`, o.device, receipt.Tenant, exist
 //
 // It cannot run inside a transaction, which is why this is a bare Exec on a
 // connection gorm is not wrapping.
-func refreshRollup(ctx context.Context, db *gorm.DB) error {
+func refreshRollup(ctx context.Context, db *gorm.DB, view string) error {
 	const attempts = 20
-	stmt := fmt.Sprintf(`CALL refresh_continuous_aggregate('%s.%s', NULL, NULL);`, areaEvent, rollupView)
+	stmt := fmt.Sprintf(`CALL refresh_continuous_aggregate('%s.%s', NULL, NULL);`, areaEvent, view)
 	for i := 1; ; i++ {
 		err := db.WithContext(ctx).Exec(stmt).Error
 		if err == nil {
@@ -286,14 +326,14 @@ func refreshRollup(ctx context.Context, db *gorm.DB) error {
 		}
 		var pgErr *pgconn.PgError
 		if !errors.As(err, &pgErr) || pgErr.Code != pgErrLockNotAvailable {
-			return fmt.Errorf("refreshing %s: %w", rollupView, err)
+			return fmt.Errorf("refreshing %s: %w", view, err)
 		}
 		if i >= attempts {
 			return fmt.Errorf(
 				"refreshing %s was blocked by a concurrent refresh on all %d attempts. The aggregate's own refresh policy runs every minute; a refresh that never wins in %d tries means something is holding it far longer than one should: %w",
-				rollupView, attempts, attempts, err)
+				view, attempts, attempts, err)
 		}
-		fmt.Printf("     %s is being refreshed by its own policy; retrying (%d/%d)\n", rollupView, i, attempts)
+		fmt.Printf("     %s is being refreshed by its own policy; retrying (%d/%d)\n", view, i, attempts)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

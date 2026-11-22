@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Retain SQLite's SQL implementation but exercise the Postgres-only lock branch.
@@ -33,6 +34,7 @@ func TestMembershipFamilyLockPrecedesMaintenance(t *testing.T) {
 				require.NoError(t, err)
 				db := api.RDB.Database
 				db.Dialector = membershipPostgresDialect{db.Dialector}
+				stubAttributeProtocolPostgresSQL(t, db)
 				denied := errors.New("family lock refused")
 				locked, reads := false, 0
 				require.NoError(t, db.Callback().Raw().Before("gorm:raw").Register("test:family-lock", func(tx *gorm.DB) {
@@ -83,4 +85,43 @@ func TestMembershipFamilyLockPrecedesMaintenance(t *testing.T) {
 			})
 		}
 	}
+}
+
+// These maintenance tests retain SQLite's SQL builder while selecting Postgres's
+// lock branches. Emulate only the attribute protocol's Postgres functions; the
+// integration suite checks their real transaction and sequence semantics.
+func stubAttributeProtocolPostgresSQL(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	require.NoError(t, db.Callback().Raw().Before("gorm:raw").Register("test:attribute-protocol-functions", func(tx *gorm.DB) {
+		sql := tx.Statement.SQL.String()
+		if strings.Contains(sql, "dc_entity_attr_lock") || strings.Contains(sql, "set_config('devicechain.attr_protocol'") {
+			tx.Statement.SQL.Reset()
+			tx.Statement.SQL.WriteString("SELECT 1")
+			tx.Statement.Vars = nil
+		}
+	}))
+	require.NoError(t, db.Callback().Row().Before("gorm:row").Register("test:attribute-generation-sequence", func(tx *gorm.DB) {
+		if strings.Contains(tx.Statement.SQL.String(), "nextval(") {
+			tx.Statement.SQL.Reset()
+			tx.Statement.SQL.WriteString("SELECT COALESCE(MAX(generation), 0) + 1 FROM entity_attribute_generations")
+			tx.Statement.Vars = nil
+		}
+	}))
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("test:attribute-generation-upsert", func(tx *gorm.DB) {
+		if tx.Statement.Table != "entity_attribute_generations" {
+			return
+		}
+		c := tx.Statement.Clauses["ON CONFLICT"]
+		conflict, ok := c.Expression.(clause.OnConflict)
+		if !ok {
+			return
+		}
+		for i := range conflict.DoUpdates {
+			if conflict.DoUpdates[i].Column.Name == "generation" {
+				conflict.DoUpdates[i].Value = gorm.Expr("excluded.generation")
+			}
+		}
+		c.Expression = conflict
+		tx.Statement.Clauses["ON CONFLICT"] = c
+	}))
 }

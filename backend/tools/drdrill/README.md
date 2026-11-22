@@ -146,6 +146,7 @@ to come back wrong while every ordinary check reports success:
 | `shared_preload_libraries` loses `timescaledb` | the extension's catalog rehydrates with the data; the resource manager loads at server START. Measured: Cluster reports healthy, API answers, and **every row in a compressed chunk returns as nothing at all**, silently |
 | a hypertable returns as a plain table | it holds every row, so counts agree; the partitioning is gone and cannot be restored in place |
 | a continuous aggregate returns as a definition with no materialization | reads through the view still work |
+| the hour level (`measurement_rollups_1h`) loses its refresh policy or its `rollup_levels` marker | the minute level and its policy are fine, and one refresh job was all the jobs check used to look for |
 | the background jobs come back unscheduled | job rows are DATA, so they restore whether or not anything will run them again |
 
 So `verify-events` asks about the server's configuration **before** it asks about

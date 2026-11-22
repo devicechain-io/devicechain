@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/attrprotocol"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/prometheus/client_golang/prometheus"
@@ -54,6 +55,7 @@ type AttributeChange struct {
 	Before       []EntityAttribute // nil means absent; duplicates are retained, never hidden.
 	After        *EntityAttribute
 	RowsAffected int64
+	Generation   int64
 }
 type AttributeReceipt struct {
 	Changes      []AttributeChange
@@ -68,6 +70,8 @@ var (
 	// Test-only observation points. Nil in production; tests must not install them in parallel.
 	attributeBeforeCommitHook func(*gorm.DB) error
 	attributeAfterReadHook    func(*gorm.DB) error
+	// attributeYieldHook runs after a busy attempt has rolled back and before the retry sleep.
+	attributeYieldHook func(attempt int)
 )
 
 func init() {
@@ -127,6 +131,9 @@ func (api *Api) runDeviceAttributeTx(ctx context.Context, path string, fn func(t
 				return &AttributeWriteBusyError{}
 			}
 			deviceAttributeWriteYields.WithLabelValues(path, "retried").Inc()
+			if attributeYieldHook != nil {
+				attributeYieldHook(attempt)
+			}
 		case attributeSQLState(err) == "40P01":
 			deviceAttributeWriteDeadlocks.WithLabelValues(path).Inc()
 			if deadlocks >= attributeWriteDeadlockRetries || attempt == attributeWriteAttempts-1 {
@@ -151,17 +158,45 @@ func (api *Api) runDeviceAttributeTx(ctx context.Context, path string, fn func(t
 // lockDeviceAttributes calls the ONE SQL definition of the key. Missing migration
 // is a hard error. Never implement or change the hash in Go.
 func lockDeviceAttributes(ctx context.Context, tx *gorm.DB, id uint) error {
+	if tx == nil || tx.Statement == nil {
+		return errors.New("device attribute protocol requires a transaction")
+	}
+	if _, ok := tx.Statement.ConnPool.(gorm.TxCommitter); !ok {
+		return errors.New("device attribute protocol requires a transaction")
+	}
+	// 🔴 ONLY INSIDE runDeviceAttributeTx. The runner is what carries the one-device state, the
+	// bounded retry on a busy row and the post-commit discipline; a plain Transaction has none of
+	// them, so a lock taken there is refused rather than quietly given a fresh state.
+	state, _ := tx.Statement.Context.Value(attributeTxContextKey{}).(*attributeTxState)
+	if state == nil {
+		return errors.New("device attribute protocol requires runDeviceAttributeTx")
+	}
+	if state.locked && state.owner != id {
+		return errors.New("device attribute transaction cannot own two devices")
+	}
 	if tx.Dialector.Name() != "postgres" {
+		state.owner, state.locked = id, true
 		return nil
 	}
-	path := "repair"
-	if state, ok := tx.Statement.Context.Value(attributeTxContextKey{}).(*attributeTxState); ok {
-		path = state.path
-	}
+	path := state.path
+	reacquire := state.locked && state.owner == id
 	started := time.Now()
 	err := tx.WithContext(tx.Statement.Context).Exec(`SELECT "device-management".dc_entity_attr_lock('device', ?)`, id).Error
-	deviceAttributeLockWait.WithLabelValues(path).Observe(time.Since(started).Seconds())
-	return err
+	if !reacquire {
+		// A same-owner re-acquire is free (the transaction already holds the lock); observing it
+		// would skew the wait histogram toward zero.
+		deviceAttributeLockWait.WithLabelValues(path).Observe(time.Since(started).Seconds())
+	}
+	if err != nil {
+		return err
+	}
+	// Reacquire and mark even for the same owner: ROLLBACK TO SAVEPOINT can undo
+	// both database effects without undoing the Go state. Never trust that cache.
+	if err := tx.Exec(attrprotocol.MarkerSQL).Error; err != nil {
+		return err
+	}
+	state.owner, state.locked = id, true
+	return nil
 }
 
 // lockAttributeOwnerTx may precede declaration discovery, which itself reads the
@@ -176,7 +211,6 @@ func lockAttributeOwnerTx(ctx context.Context, tx *gorm.DB, entityType string, i
 		if state.owner != id {
 			return errors.New("device attribute transaction cannot own two devices")
 		}
-		return nil
 	}
 	if err := lockDeviceAttributes(ctx, tx, id); err != nil {
 		return err
@@ -258,6 +292,18 @@ func (api *Api) applyAttributePatchTx(ctx context.Context, tx *gorm.DB, entityTy
 				change.After, change.RowsAffected = row, 1
 			}
 			images[key] = []EntityAttribute{*change.After}
+		}
+		if entityType == string(entity.TypeDevice) {
+			// Restore/copy SkipUnchanged no-ops wrote nothing and must not bump.
+			// An ordinary unset of an absent key is still a protocol operation.
+			if !op.SkipUnchanged || change.RowsAffected > 0 {
+				change.Generation, err = bumpAttributeGenerationTx(tx, entityId, op.Scope, op.Key)
+			} else {
+				change.Generation, _, err = attributeGeneration(tx, entityId, op.Scope, op.Key)
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 		receipt.RowsAffected += change.RowsAffected
 		receipt.Changes = append(receipt.Changes, change)

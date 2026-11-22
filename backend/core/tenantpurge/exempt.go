@@ -222,6 +222,13 @@ var exemptions = []Exemption{
 			"owes. It names no tenant and holds no tenant's figures.",
 	},
 
+	{
+		Schema: "event-management", Name: "rollup_levels", Class: ClassExempt,
+		Reason: "records, per rollup level, the hour from which the level is complete. It names no " +
+			"tenant and holds no tenant's figures; the aggregates it describes are classified " +
+			"through their own materializations.",
+	},
+
 	// ---- event-processing: the DETECT engine's own state --------------------
 	// detect_stream_topology was listed one release AHEAD of the migration that creates it,
 	// so a user-management pod from the previous release, still running beside a newer

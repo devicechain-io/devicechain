@@ -107,8 +107,8 @@
       "translationSha256": "b40a164076801aff473a18b27bcc7dbe65bedce8175a216de0340e586466c723"
     },
     "deployment/bootstrap.md": {
-      "sourceSha256": "2fd764b1ccc4e8a3f1ee2fd0d7219a8abcc1a64b90536bc3cbf5b3f6712aa0c8",
-      "translationSha256": "e3b5ffb6c43e29818498e587c1f025f1423d6309d46e3ee49e047eb876520e88"
+      "sourceSha256": "90dc967ac9aab3c11b71cc970d118f0ae573623fabb0edd08508951552e5b43a",
+      "translationSha256": "6a3b17b6d93571a19517bbcb0b056d8a0d4b45b84659748ed3025a087380e435"
     },
     "deployment/cluster-lock.md": {
       "sourceSha256": "1f023271ebfdba3cbab4a140db9606d0827bd12f7c96000c5c6bc946b588b148",
@@ -131,8 +131,8 @@
       "translationSha256": "3c17f274538577b98a17b345b489172efba6076b8633f0d5062da855067897d0"
     },
     "deployment/edge-services.md": {
-      "sourceSha256": "033d9ec7a7ab76d6b08af5d05661ee745926c50c5602128f1c8eaa617abc8f81",
-      "translationSha256": "82cd326c640fdc929c96db3899422ca1ad97fcb382415394f005b1aaffe52b38"
+      "sourceSha256": "fdc1e8ab20c03169808704450d0119b75fd02bdbdfcd8aa56ac281ebcfedea84",
+      "translationSha256": "af72ea815d5fe6b58e5adcddd140c79d6c86fa6beb2a255edd64ea2caa18584a"
     },
     "deployment/grafana-boards.md": {
       "sourceSha256": "874dda791c21789109bc8666953ac1c7b9a0b7a173996a16e9ee05cf66145fd1",
@@ -143,12 +143,12 @@
       "translationSha256": "c67d101ae9e3b54577579617024336803b4b9e114a826350d16fdef0c425f87e"
     },
     "deployment/kubernetes-operator.md": {
-      "sourceSha256": "2f34d6a90755c66b4f743acc950cc0842d7b761489c739bd6965f0ea19240f37",
-      "translationSha256": "ad799e411e025c4b0a70ba215940ba613aa53314164c8742ab4a20ec5350f662"
+      "sourceSha256": "41bdd347f6bb00855cf0d872307edcf79fe18e5beb3f656d809ad35413985034",
+      "translationSha256": "7b9600a9309caa7d5ea7ceaf6b5635842c963e95fa9912faa90d2c3426f0f0d5"
     },
     "deployment/metrics-reference.md": {
-      "sourceSha256": "638889e8d52411894a4e69863fb1dc99a043130acd0f12e4e1e6c49979ba18b2",
-      "translationSha256": "efca6179fdbe7ee7ab7e2143936be9e9026c422b21586551c2497794a2558617"
+      "sourceSha256": "1c34f6f62de91da3274059d2c5dd0d68f3b825ce1f30b16c56d0c9d8eaeb7d3e",
+      "translationSha256": "7bb3e262724d2dddee661934736ee74e5d93842fffcc52fbe72e15f4ed798c8f"
     },
     "deployment/observability.md": {
       "sourceSha256": "d65cf0ed0eadeb8a5a481d1c6100c068393243f1260f63a1d19bb930ac8cb617",

@@ -641,6 +641,7 @@ const ENTITY_GROUPS = graphql(`
         imageUrl
         metadata
         createdAt
+        updatedAt
         memberType
       }
       pagination {
@@ -683,6 +684,7 @@ const ENTITY_GROUP_BY_TOKEN = graphql(`
       imageUrl
       metadata
       createdAt
+      updatedAt
       memberType
     }
   }
@@ -719,6 +721,7 @@ const CREATE_ENTITY_GROUP = graphql(`
       imageUrl
       metadata
       createdAt
+      updatedAt
       memberType
     }
   }
@@ -730,8 +733,12 @@ export async function createEntityGroup(request: EntityGroupCreateRequest): Prom
 }
 
 const UPDATE_ENTITY_GROUP = graphql(`
-  mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!) {
-    updateEntityGroup(token: $token, request: $request) {
+  mutation UpdateEntityGroup(
+    $token: String!
+    $request: EntityGroupUpdateRequest!
+    $expectedUpdatedAt: String
+  ) {
+    updateEntityGroup(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {
       id
       token
       name
@@ -743,6 +750,7 @@ const UPDATE_ENTITY_GROUP = graphql(`
       imageUrl
       metadata
       createdAt
+      updatedAt
       memberType
     }
   }
@@ -759,11 +767,19 @@ const UPDATE_ENTITY_GROUP = graphql(`
  * would orphan its members. The server used to refuse each of those; now there is no
  * request that expresses one.
  */
+// expectedUpdatedAt is an optimistic-concurrency precondition: pass the updatedAt the
+// caller loaded and the update is refused (STALE_WRITE) if another writer changed it since.
+// Omitted (undefined or null), the update is last-write-wins, as before.
 export async function updateEntityGroup(
   token: string,
   request: EntityGroupUpdateRequest,
+  expectedUpdatedAt?: string | null,
 ): Promise<EntityGroup> {
-  const data = await gql('device-management', UPDATE_ENTITY_GROUP, { token, request });
+  const data = await gql('device-management', UPDATE_ENTITY_GROUP, {
+    token,
+    request,
+    expectedUpdatedAt: expectedUpdatedAt ?? null,
+  });
   return data.updateEntityGroup;
 }
 
@@ -786,8 +802,11 @@ export const listDeviceGroups = (opts: { pageNumber: number; pageSize: number })
 export const getDeviceGroup = (token: string) => getEntityGroupOfType(token, 'device');
 export const createDeviceGroup = (request: GroupFormRequest) =>
   createEntityGroup({ ...request, memberType: 'device' });
-export const updateDeviceGroup = (token: string, request: EntityGroupUpdateRequest) =>
-  updateEntityGroup(token, request);
+export const updateDeviceGroup = (
+  token: string,
+  request: EntityGroupUpdateRequest,
+  expectedUpdatedAt?: string | null,
+) => updateEntityGroup(token, request, expectedUpdatedAt);
 export const deleteDeviceGroup = deleteEntityGroup;
 
 // ── Access scopes (a group a member's access can be limited to) ─────────────

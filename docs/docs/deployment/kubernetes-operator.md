@@ -162,6 +162,18 @@ The refusal names `kubectl delete instanceoperation <name>` for each request as 
 This is detection, not a lock. AB6 does not cover `dcctl install`: it prepares a cluster,
 and this Preview refuses Install requests anyway.
 
+### Executor metrics {#executor-metrics}
+
+The executor exports three counters on the metrics endpoint of its own pod in `dc-executor-system`.
+They are not prefixed with `devicechain_` and are not labelled by instance or operation, and the
+chart's Prometheus does not scrape that namespace, so scrape it yourself if you want them.
+
+| Metric | Means |
+| --- | --- |
+| `dc_executor_decisions_total{verdict,reason}` | Verdicts the executor wrote to an `InstanceOperation`. `verdict` is the phase written: `Refused` or `Running`. `reason` is `Executable`, or why it was refused: `StaleEnrollment`, `InstanceExists`, `InstanceNotFound`, `StaleTarget` (the request names an enrollment or instance that has since been replaced, or whose existence does not suit the action) or `NotExecutableInThisBuild`. In this Preview release no action is executable, so every valid request ends `Refused` with `NotExecutableInThisBuild`: that is the expected steady state, not a fault. A rise in any other refusal reason means requests are being submitted against a stale enrollment or instance; submit a new one. |
+| `dc_executor_operations_skipped_total{reason}` | Operations the executor left untouched because a newer executor must handle them: `protocol` (the request needs a newer protocol than this executor was built for) or `action` (an action this executor does not know). Zero in a cluster whose executor image is current. A rise means requests from a newer `dcctl` are waiting on an executor upgrade: run `dcctl executor enroll` again with the newer image. |
+| `dc_executor_status_writes_total{kind,result}` | Attempts to write status on an `InstanceOperation` or `ExecutorEnrollment` (`kind`), by `result`: `success`, `conflict` (another writer got there first; the executor retries at once) or `error`. Occasional conflicts are normal. A sustained `error` rate means the executor cannot write status, so operations stay without a verdict; check the executor's log and its RBAC. |
+
 ## Custom resources {#custom-resources}
 
 `dcctl install` defines four cluster-scoped custom resources:

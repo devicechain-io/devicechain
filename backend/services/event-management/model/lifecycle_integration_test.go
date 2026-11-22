@@ -54,6 +54,7 @@ func requireRetentionJobs(t *testing.T, db *gorm.DB, policy DataLifecyclePolicy)
 			margin = 1
 		}
 		want[RollupAggregate] = policy.RetentionDays + margin
+		want[RollupAggregate1h] = policy.RetentionDays + margin
 	}
 	got := map[string]int{}
 	for _, job := range jobs {

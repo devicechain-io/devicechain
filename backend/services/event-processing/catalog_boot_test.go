@@ -16,6 +16,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-event-processing/model"
+	"github.com/devicechain-io/dc-event-processing/processor"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
@@ -48,6 +49,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 
 	prevMs, prevCfg, prevNats, prevRdb, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Svc
 	prevDetect, prevReact, prevPurge, prevReader := ResolvedEventsProcessor, ReactDispatcher, TenantPurgeResponder, ResolvedEventsReader
+	prevSweep := RuleStatSweep
 	prevSnap, prevRules, prevStats, prevRoster, prevActive, prevAttr, prevReg :=
 		SnapshotStore, DetectRuleStore, RuleStatStore, DeviceRosterStore, ProfileActiveStore, DeviceAttributeStore, RuleRegistry
 	prevDM, prevFS, prevCFS, prevFM := DeviceManagementFacts, FenceSets, CurrentFenceSets, FenceManifests
@@ -55,6 +57,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	t.Cleanup(func() {
 		Microservice, Configuration, NatsManager, RdbManager, Svc = prevMs, prevCfg, prevNats, prevRdb, prevSvc
 		ResolvedEventsProcessor, ReactDispatcher, TenantPurgeResponder, ResolvedEventsReader = prevDetect, prevReact, prevPurge, prevReader
+		RuleStatSweep = prevSweep
 		SnapshotStore, DetectRuleStore, RuleStatStore, DeviceRosterStore, ProfileActiveStore, DeviceAttributeStore, RuleRegistry =
 			prevSnap, prevRules, prevStats, prevRoster, prevActive, prevAttr, prevReg
 		DeviceManagementFacts, FenceSets, CurrentFenceSets, FenceManifests = prevDM, prevFS, prevCFS, prevFM
@@ -88,6 +91,8 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	SnapshotStore = model.NewSnapshotStore(RdbManager)
 	DetectRuleStore = model.NewDetectRuleStore(RdbManager)
 	RuleStatStore = model.NewRuleStatStore(RdbManager)
+	RuleStatSweep = processor.NewRuleStatSweep(Microservice, RuleStatStore)
+	require.NoError(t, RuleStatSweep.Initialize(context.Background()))
 	DeviceRosterStore = model.NewDeviceRosterStore(RdbManager)
 	ProfileActiveStore = model.NewProfileActiveStore(RdbManager)
 	DeviceAttributeStore = model.NewDeviceAttributeStore(RdbManager)

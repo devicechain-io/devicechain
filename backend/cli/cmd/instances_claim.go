@@ -50,6 +50,8 @@ or a closed laptop lid looks exactly the same from here, and no amount of waitin
 changes that. Confirm the other process is really gone before you take its lock.
 You will be asked to type the holder's identity back, which is there to make you
 read it.`,
+	Example: `  dcctl instances reclaim
+  dcctl instances reclaim --kube-context prod`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runReclaim(cmd.Context(), os.Stdout, os.Stdin, reclaimKubeContext)
@@ -70,6 +72,8 @@ finalizer is gone.
 
 If what you want is to remove the instance, use ` + "`dcctl destroy`" + `, which
 clears the finalizer itself as its last step.`,
+	Example: `  dcctl instances release acme
+  dcctl instances release acme --kube-context prod --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runRelease(cmd.Context(), os.Stdout, os.Stdin, releaseKubeContext, args[0])

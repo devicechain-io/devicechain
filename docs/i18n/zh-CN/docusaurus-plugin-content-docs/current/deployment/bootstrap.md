@@ -597,6 +597,14 @@ dcctl ha verify --instance my-instance
 
 该命令读取实际消息代理，检查每个 stream、KV 桶和 durable consumer 都具有声明的副本因子，**所有 peer 都已追赶**，且三台服务器位于不同节点。任何条件不足都会非零退出，并打印检查对象，避免将空集合检查误认为有效通过。
 
+stream leader 的分布与副本数量同样重要。每个设备事件都会让其经过的每个 stream 的 leader 服务器承担一次复制写入，因此一台服务器同时担任其中多个 stream 的 leader 时，会在其他服务器还很空闲时就成为消息代理的瓶颈：
+
+```bash
+dcctl ha leaders --instance my-instance
+```
+
+该命令报告哪台服务器担任捕获、入站和已解析 stream、消息代理的 MQTT 消息存储以及已解析 stream 的 consumer 的 leader。**PASS** 表示再平衡允许的任何 leader 迁移都无法让它们分布得更开。**FAIL** 会列出迁移，由 `dcctl broker rebalance my-instance` 执行。**UNSETTLED** 表示缺少某个 stream、leader 或已追赶的副本，暂时无法判断分布；请在 `dcctl ha verify` 通过后再次运行。捕获和入站 stream 以及 MQTT 消息存储永远不会迁移，因为在它们上切换 leader 可能丢失已向设备确认的消息。
+
 #### 节点丢失和重新加入 {#ha-node-loss}
 
 `--ha` 容忍一个节点丢失。外部可按以下顺序观察到：
@@ -610,7 +618,7 @@ dcctl ha verify --instance my-instance
 - **丢失节点上已驱逐的 Pod 保持 `Terminating`，直到节点返回。** Kubernetes 无法确认其停止，因此保留。不要强制删除不可达节点的 Pod：数据库或消息代理可能仍在故障另一侧运行，强制删除会让替代实例同时启动。如果机器永久消失，先确认已断电，再删除 Node 对象，Kubernetes 随后移除其 Pod。数据库节点返回后作为 standby 加入。
 - **节点返回本身也有短暂扰动。** 被隔离的消息代理服务器一直自行选举，重新加入时，其他服务器 stream 和 consumer 再次选举 leader。节点返回约 45 秒后，JetStream 可能数秒返回“temporarily unavailable”，HTTP 接入在窗口内拒绝部分发布，已有事件可能延迟处理最多一分钟。不会丢失数据，服务自行重新连接。
 
-应像规划节点丢失一样规划其返回。在 `dcctl ha verify` 再次通过之前，不要让第二个节点停机。
+应像规划节点丢失一样规划其返回。在 `dcctl ha verify` 再次通过之前，不要让第二个节点停机。之后运行 `dcctl ha leaders`：leader 会停留在选举结束时的位置，因此返回的服务器在有人迁移 leader 之前不担任任何 leader，出现 FAIL 时用 `dcctl broker rebalance` 纠正。
 
 #### 维护数据库节点 {#ha-database-node-maintenance}
 

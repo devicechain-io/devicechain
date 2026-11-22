@@ -246,6 +246,7 @@ const RULE_HEALTH = graphql(`
       fireCount
       lastSignal
       message
+      historyRemovedAt
     }
   }
 `);

@@ -101,6 +101,11 @@ cannot fail asserts nothing, so the drill runs the SAME command against a
 single-node instance and requires it to report failures:
 
   dcctl ha verify --instance default --replicas 3 --expect-fail`,
+	Example: `  # exits 0 when every assertion holds, 1 when any does not
+  dcctl ha verify --instance default
+  # the negative control: exits 0 only when the check fails, so a suite that cannot fail is caught
+  dcctl ha verify --instance default --replicas 3 --expect-fail
+  dcctl ha verify --instance default --kube-context prod --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		rep, err := bootstrap.VerifyReplication(cmd.Context(), bootstrap.HaVerifyOptions{
 			KubeContext: haKubeContext,
@@ -156,6 +161,12 @@ verdict. --json prints the report as JSON. --expect-fail inverts the status for 
 control, and succeeds only on FAIL (never on UNSETTLED).
 
   dcctl ha leaders --instance default`,
+	Example: `  # exits 0 on PASS; 1 on FAIL or UNSETTLED
+  dcctl ha leaders --instance default
+  # the report as JSON on stdout, for a script; the exit status is unchanged
+  dcctl ha leaders --instance default --json
+  # the negative control: exits 0 only on FAIL, never on UNSETTLED
+  dcctl ha leaders --instance default --expect-fail`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		rep, err := bootstrap.InspectLeadership(cmd.Context(), bootstrap.LeadersOptions{
 			KubeContext: haKubeContext,
@@ -230,6 +241,11 @@ Use --json to print the report as JSON (the only thing written to stdout). Use
 --expect-fail for the negative control, stating the topology the store is
 expected NOT to hold:
 
+  dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --expect-fail`,
+	Example: `  # exits 0 when every assertion holds, 1 when any does not
+  dcctl ha verify-db --cluster dc-rdb --require-synchronous
+  dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --json
+  # the negative control: exits 0 only when the store does NOT hold the stated topology
   dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --expect-fail`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// A stated expectation that is never tested is the failure this whole
