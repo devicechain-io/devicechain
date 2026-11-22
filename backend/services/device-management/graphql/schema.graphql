@@ -7241,7 +7241,12 @@ type Mutation {
     createEntityGroup(request: EntityGroupCreateRequest): EntityGroup!
     # Update an existing entity group's presentation fields (member family + mode
     # are immutable).
-    updateEntityGroup(token: String!, request: EntityGroupUpdateRequest!): EntityGroup!
+    updateEntityGroup(
+        token: String!
+        request: EntityGroupUpdateRequest!
+        """Apply only if updatedAt still equals this value; returns STALE_WRITE if the record changed. Reload before retrying. Omit for last-write-wins."""
+        expectedUpdatedAt: String
+    ): EntityGroup!
     # Delete an entity group, its relationship edges, and its frozen versions.
     # Refused (ErrEntityInUse) while a detection rule scopes to the group (ADR-062).
     deleteEntityGroup(token: String!): Boolean!
@@ -7565,7 +7570,12 @@ type Mutation {
     # Create a new asset.
     createAsset(request: AssetCreateRequest): Asset!
     # Update an existing asset.
-    updateAsset(token: String!, request: AssetUpdateRequest!): Asset!
+    updateAsset(
+        token: String!
+        request: AssetUpdateRequest!
+        """Apply only if updatedAt still equals this value; returns STALE_WRITE if the record changed. Reload before retrying. Omit for last-write-wins."""
+        expectedUpdatedAt: String
+    ): Asset!
     # Delete an asset and its relationship edges.
     deleteAsset(token: String!): Boolean!
 
@@ -7612,7 +7622,12 @@ type Mutation {
     # INVALID_VALUE; a token a live customer holds answers CONFLICT.
     createCustomer(request: CustomerCreateRequest): Customer!
     # Update an existing customer.
-    updateCustomer(token: String!, request: CustomerUpdateRequest!): Customer!
+    updateCustomer(
+        token: String!
+        request: CustomerUpdateRequest!
+        """Apply only if updatedAt still equals this value; returns STALE_WRITE if the record changed. Reload before retrying. Omit for last-write-wins."""
+        expectedUpdatedAt: String
+    ): Customer!
     # Delete a customer and its relationship edges. Its token is retired: no other
     # customer in the tenant can be created with it.
     deleteCustomer(token: String!): Boolean!
@@ -7626,7 +7641,12 @@ type Mutation {
     # Create a new area.
     createArea(request: AreaCreateRequest): Area!
     # Update an existing area.
-    updateArea(token: String!, request: AreaUpdateRequest!): Area!
+    updateArea(
+        token: String!
+        request: AreaUpdateRequest!
+        """Apply only if updatedAt still equals this value; returns STALE_WRITE if the record changed. Reload before retrying. Omit for last-write-wins."""
+        expectedUpdatedAt: String
+    ): Area!
     # Delete an area and its relationship edges.
     deleteArea(token: String!): Boolean!
     """
