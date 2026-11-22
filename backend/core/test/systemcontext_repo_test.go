@@ -122,6 +122,7 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/event-processing/model/device_attribute_store.go":          {"DeviceAttributeStore.LoadAll"},
 	"backend/services/event-processing/model/device_roster_store.go":             {"DeviceRosterStore.LoadAll", "DeviceRosterStore.LoadAllLifecycle"},
 	"backend/services/event-processing/model/profile_active_store.go":            {"ProfileActiveStore.LoadAll"},
+	"backend/services/event-processing/model/rule_stat_store.go":                 {"RuleStatStore.SweepTenants"},
 	"backend/services/notification-management/processor/escalation_scheduler.go": {"EscalationScheduler.runOnce"},
 	"backend/services/user-management/deadletters/context.go":                    {"systemCtx"},
 	"backend/services/user-management/iam/purge.go":                              {"Store.PurgeRecords"},

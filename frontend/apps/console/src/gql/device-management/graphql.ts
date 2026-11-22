@@ -603,34 +603,90 @@ export type CustomerUpdateRequest = {
   name?: string | null | undefined;
 };
 
+/**
+ * Data required to create a detection rule on a device profile. The definition is checked to be well-
+ * formed JSON on write; the detection engine does the authoritative validation when the profile is
+ * published.
+ */
 export type DetectionRuleCreateRequest = {
+  /**
+   * The visual automation canvas document the rule was authored with. Omit for a rule authored as a
+   * form. When present it must be a JSON object; it is stored verbatim and not interpreted.
+   */
   authoringGraph?: string | null | undefined;
+  /** The rule as a JSON document in the detection engine's rule language. Must be well-formed JSON. */
   definition: string;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Token of the device profile to declare the rule on. An unknown token is refused. */
   deviceProfileToken: string;
+  /** Whether the rule is live. A disabled rule is kept but not run. */
   enabled: boolean;
+  /**
+   * Token of a dynamic entity group to scope the rule to. Omit both scope fields for a rule that
+   * covers every device of the profile, or set both together. Checked on save: it must name a
+   * published dynamic group version.
+   */
   entityGroupToken?: string | null | undefined;
+  /** Published version of the entity group to scope the rule to. Set together with entityGroupToken. */
   entityGroupVersion?: number | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new rule, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing detection rules. */
 export type DetectionRuleSearchCriteria = {
+  /** Only rules declared on the device profile with this token. Omit for every rule. */
   deviceProfile?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of a detection rule. Each field has three states: omit it to keep the stored value,
+ * send null to clear it, or send a value to set it. The rule's token is not here because the
+ * mutation's token argument names the rule and an update cannot move it.
+ */
 export type DetectionRuleUpdateRequest = {
+  /**
+   * The visual canvas document. Null drops it, which is what a form edit of a canvas-authored rule
+   * needs since the graph is then stale; omitting it keeps it.
+   */
   authoringGraph?: string | null | undefined;
+  /**
+   * The rule JSON document. Required: null is refused, because a rule with no definition detects
+   * nothing.
+   */
   definition?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /**
+   * Moves the rule to this device profile. Null is refused, and an unknown token refuses the whole
+   * update.
+   */
   deviceProfileToken?: string | null | undefined;
+  /**
+   * Whether the rule is live. Null is refused rather than read as false, which would silently park a
+   * live rule.
+   */
   enabled?: boolean | null | undefined;
+  /**
+   * Entity group scope. The two scope fields are applied independently and then checked as a pair
+   * against what the rule ends up with, so naming one without the other is refused. Null on either
+   * removes the scope.
+   */
   entityGroupToken?: string | null | undefined;
+  /** Published version of the scoping entity group. See entityGroupToken for how the pair is applied. */
   entityGroupVersion?: number | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
 };
 
@@ -1240,39 +1296,83 @@ export type EntityAttributeSetRequest = {
   valueType: string;
 };
 
+/**
+ * Data required to create an entity group. membershipMode defaults to static; a selector is required
+ * for a dynamic group and refused for a static one. Edit a group afterwards with
+ * EntityGroupUpdateRequest.
+ */
 export type EntityGroupCreateRequest = {
+  /** Background colour to display the group with, up to 32 characters. Not validated. */
   backgroundColor?: string | null | undefined;
+  /** Border colour to display the group with, up to 32 characters. Not validated. */
   borderColor?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Foreground (text) colour to display the group with, up to 32 characters. Not validated. */
   foregroundColor?: string | null | undefined;
+  /** Name of an icon representing the group, up to 128 characters. Not checked against any icon set. */
   icon?: string | null | undefined;
+  /** URL of an image representing the group, up to 512 characters. */
   imageUrl?: string | null | undefined;
+  /** The entity family the group collects: device, asset, area or customer. Cannot be changed later. */
   memberType: string;
+  /** static or dynamic. Omitted means static. Cannot be changed later. */
   membershipMode?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The CEL membership selector. Required, and only allowed, when membershipMode is dynamic. It is
+   * compiled and cost-checked on create.
+   */
   selector?: string | null | undefined;
+  /** Identifier for the new group, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing entity groups. memberType and membershipMode are optional filters. */
 export type EntityGroupSearchCriteria = {
   /** Keep only the groups that are (true) or are not (false) access scopes. Omit it for both. */
   accessScope?: boolean | null | undefined;
+  /** Only groups collecting this entity family: device, asset, area or customer. */
   memberType?: string | null | undefined;
+  /** Only groups with this membership mode: static or dynamic. */
   membershipMode?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of an entity group. Each field has three states: omit it to keep the stored value,
+ * send null to clear it, or send a value to set it. The token, memberType and membershipMode are
+ * absent because they are identity: changing the family would leave members that do not belong, and
+ * converting between static and dynamic would orphan the members.
+ */
 export type EntityGroupUpdateRequest = {
+  /** Background colour; null clears it. */
   backgroundColor?: string | null | undefined;
+  /** Border colour; null clears it. */
   borderColor?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** Foreground colour; null clears it. */
   foregroundColor?: string | null | undefined;
+  /** Icon name; null clears it. */
   icon?: string | null | undefined;
+  /** Image URL; null clears it. */
   imageUrl?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
+  /**
+   * The membership selector of a dynamic group; refused for a static group. A provided selector is
+   * recompiled and cost-checked before it replaces the stored draft. Null is refused, because a
+   * dynamic group with no selector matches nothing.
+   */
   selector?: string | null | undefined;
 };
 
@@ -1328,23 +1428,53 @@ export type FacetValueImportRow = {
   value: string;
 };
 
+/**
+ * Data required to create a geofence. The geometry is validated on write: its kind, GeoJSON shape,
+ * coordinate ranges and size. Two ceilings are enforced at authoring time: the positions one fence may
+ * carry (512 by default) and the fences a tenant may hold (100 by default), both set by the tenant's
+ * tier. A stored geometry document is also limited to 32 KiB.
+ */
 export type GeoFenceCreateRequest = {
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /**
+   * The geometry document, as described on GeoFence.geometry. Must declare kind POLYGON_2D; reserved
+   * kinds are refused.
+   */
   geometry: string;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new fence, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing geofences. */
 export type GeoFenceSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of a geofence. Each field has three states: omit it to keep the stored value, send
+ * null to clear it, or send a value to set it. A fence's token is immutable, so there is no token
+ * field: create the new fence first and delete the old one if a different token is wanted.
+ */
 export type GeoFenceUpdateRequest = {
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /**
+   * The geometry document. Required: null is refused, because a fence with no shape is not a fence.
+   * Omitting it leaves the shape alone, so a rename or metadata edit is not held to the tenant's
+   * position ceiling, which refuses growth rather than size.
+   */
   geometry?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
 };
 
@@ -1819,29 +1949,30 @@ export type AreasQueryVariables = Exact<{
 }>;
 
 
-export type AreasQuery = { areas: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AreasQuery = { areas: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AreaByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AreaByTokenQuery = { areasByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type AreaByTokenQuery = { areasByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateAreaMutationVariables = Exact<{
   request?: AreaCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAreaMutation = { createArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateAreaMutation = { createArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateAreaMutationVariables = Exact<{
   token: string;
   request: AreaUpdateRequest;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
-export type UpdateAreaMutation = { updateArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateAreaMutation = { updateArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteAreaMutationVariables = Exact<{
   token: string;
@@ -1891,29 +2022,30 @@ export type AssetsQueryVariables = Exact<{
 }>;
 
 
-export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, updatedAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AssetByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, updatedAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateAssetMutationVariables = Exact<{
   request?: AssetCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, updatedAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateAssetMutationVariables = Exact<{
   token: string;
   request: AssetUpdateRequest;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
-export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, updatedAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteAssetMutationVariables = Exact<{
   token: string;
@@ -2164,14 +2296,14 @@ export type CustomersQueryVariables = Exact<{
 }>;
 
 
-export type CustomersQuery = { customers: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type CustomersQuery = { customers: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CustomerByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type CustomerByTokenQuery = { customersByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type CustomerByTokenQuery = { customersByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CustomerNamesQueryVariables = Exact<{
   tokens: Array<string> | string;
@@ -2185,15 +2317,16 @@ export type CreateCustomerMutationVariables = Exact<{
 }>;
 
 
-export type CreateCustomerMutation = { createCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateCustomerMutation = { createCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateCustomerMutationVariables = Exact<{
   token: string;
   request: CustomerUpdateRequest;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
-export type UpdateCustomerMutation = { updateCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateCustomerMutation = { updateCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteCustomerMutationVariables = Exact<{
   token: string;
@@ -2410,29 +2543,30 @@ export type EntityGroupsQueryVariables = Exact<{
 }>;
 
 
-export type EntityGroupsQuery = { entityGroups: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type EntityGroupsQuery = { entityGroups: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, memberType: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type EntityGroupByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type EntityGroupByTokenQuery = { entityGroupsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string }> };
+export type EntityGroupByTokenQuery = { entityGroupsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, memberType: string }> };
 
 export type CreateEntityGroupMutationVariables = Exact<{
   request?: EntityGroupCreateRequest | null | undefined;
 }>;
 
 
-export type CreateEntityGroupMutation = { createEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string } };
+export type CreateEntityGroupMutation = { createEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, memberType: string } };
 
 export type UpdateEntityGroupMutationVariables = Exact<{
   token: string;
   request: EntityGroupUpdateRequest;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
-export type UpdateEntityGroupMutation = { updateEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string } };
+export type UpdateEntityGroupMutation = { updateEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, memberType: string } };
 
 export type DeleteEntityGroupMutationVariables = Exact<{
   token: string;
@@ -3331,6 +3465,7 @@ export const AreasDocument = new TypedDocumentString(`
       description
       metadata
       createdAt
+      updatedAt
       areaType {
         id
         token
@@ -3358,6 +3493,7 @@ export const AreaByTokenDocument = new TypedDocumentString(`
     description
     metadata
     createdAt
+    updatedAt
     areaType {
       id
       token
@@ -3379,6 +3515,7 @@ export const CreateAreaDocument = new TypedDocumentString(`
     description
     metadata
     createdAt
+    updatedAt
     areaType {
       id
       token
@@ -3392,14 +3529,19 @@ export const CreateAreaDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateAreaMutation, CreateAreaMutationVariables>;
 export const UpdateAreaDocument = new TypedDocumentString(`
-    mutation UpdateArea($token: String!, $request: AreaUpdateRequest!) {
-  updateArea(token: $token, request: $request) {
+    mutation UpdateArea($token: String!, $request: AreaUpdateRequest!, $expectedUpdatedAt: String) {
+  updateArea(
+    token: $token
+    request: $request
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     id
     token
     name
     description
     metadata
     createdAt
+    updatedAt
     areaType {
       id
       token
@@ -3508,6 +3650,7 @@ export const AssetsDocument = new TypedDocumentString(`
       metadata
       properties
       createdAt
+      updatedAt
       assetType {
         id
         token
@@ -3536,6 +3679,7 @@ export const AssetByTokenDocument = new TypedDocumentString(`
     metadata
     properties
     createdAt
+    updatedAt
     assetType {
       id
       token
@@ -3558,6 +3702,7 @@ export const CreateAssetDocument = new TypedDocumentString(`
     metadata
     properties
     createdAt
+    updatedAt
     assetType {
       id
       token
@@ -3571,8 +3716,12 @@ export const CreateAssetDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateAssetMutation, CreateAssetMutationVariables>;
 export const UpdateAssetDocument = new TypedDocumentString(`
-    mutation UpdateAsset($token: String!, $request: AssetUpdateRequest!) {
-  updateAsset(token: $token, request: $request) {
+    mutation UpdateAsset($token: String!, $request: AssetUpdateRequest!, $expectedUpdatedAt: String) {
+  updateAsset(
+    token: $token
+    request: $request
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     id
     token
     name
@@ -3580,6 +3729,7 @@ export const UpdateAssetDocument = new TypedDocumentString(`
     metadata
     properties
     createdAt
+    updatedAt
     assetType {
       id
       token
@@ -4268,6 +4418,7 @@ export const CustomersDocument = new TypedDocumentString(`
       description
       metadata
       createdAt
+      updatedAt
       customerType {
         id
         token
@@ -4295,6 +4446,7 @@ export const CustomerByTokenDocument = new TypedDocumentString(`
     description
     metadata
     createdAt
+    updatedAt
     customerType {
       id
       token
@@ -4324,6 +4476,7 @@ export const CreateCustomerDocument = new TypedDocumentString(`
     description
     metadata
     createdAt
+    updatedAt
     customerType {
       id
       token
@@ -4337,14 +4490,19 @@ export const CreateCustomerDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateCustomerMutation, CreateCustomerMutationVariables>;
 export const UpdateCustomerDocument = new TypedDocumentString(`
-    mutation UpdateCustomer($token: String!, $request: CustomerUpdateRequest!) {
-  updateCustomer(token: $token, request: $request) {
+    mutation UpdateCustomer($token: String!, $request: CustomerUpdateRequest!, $expectedUpdatedAt: String) {
+  updateCustomer(
+    token: $token
+    request: $request
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     id
     token
     name
     description
     metadata
     createdAt
+    updatedAt
     customerType {
       id
       token
@@ -4883,6 +5041,7 @@ export const EntityGroupsDocument = new TypedDocumentString(`
       imageUrl
       metadata
       createdAt
+      updatedAt
       memberType
     }
     pagination {
@@ -4907,6 +5066,7 @@ export const EntityGroupByTokenDocument = new TypedDocumentString(`
     imageUrl
     metadata
     createdAt
+    updatedAt
     memberType
   }
 }
@@ -4925,13 +5085,18 @@ export const CreateEntityGroupDocument = new TypedDocumentString(`
     imageUrl
     metadata
     createdAt
+    updatedAt
     memberType
   }
 }
     `) as unknown as TypedDocumentString<CreateEntityGroupMutation, CreateEntityGroupMutationVariables>;
 export const UpdateEntityGroupDocument = new TypedDocumentString(`
-    mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!) {
-  updateEntityGroup(token: $token, request: $request) {
+    mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!, $expectedUpdatedAt: String) {
+  updateEntityGroup(
+    token: $token
+    request: $request
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     id
     token
     name
@@ -4943,6 +5108,7 @@ export const UpdateEntityGroupDocument = new TypedDocumentString(`
     imageUrl
     metadata
     createdAt
+    updatedAt
     memberType
   }
 }

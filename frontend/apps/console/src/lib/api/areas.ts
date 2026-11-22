@@ -54,6 +54,7 @@ const AREAS = graphql(`
         description
         metadata
         createdAt
+        updatedAt
         areaType {
           id
           token
@@ -95,6 +96,7 @@ const AREA_BY_TOKEN = graphql(`
       description
       metadata
       createdAt
+      updatedAt
       areaType {
         id
         token
@@ -122,6 +124,7 @@ const CREATE_AREA = graphql(`
       description
       metadata
       createdAt
+      updatedAt
       areaType {
         id
         token
@@ -141,14 +144,15 @@ export async function createArea(request: AreaCreateRequest): Promise<Area> {
 }
 
 const UPDATE_AREA = graphql(`
-  mutation UpdateArea($token: String!, $request: AreaUpdateRequest!) {
-    updateArea(token: $token, request: $request) {
+  mutation UpdateArea($token: String!, $request: AreaUpdateRequest!, $expectedUpdatedAt: String) {
+    updateArea(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {
       id
       token
       name
       description
       metadata
       createdAt
+      updatedAt
       areaType {
         id
         token
@@ -170,11 +174,19 @@ const UPDATE_AREA = graphql(`
 // WRONG one now: a form that re-sends fields it never showed is writing them back
 // from a snapshot it read minutes ago, so two operators on two tabs each silently
 // overwrite the other. Absence is the carry-forward.
+// expectedUpdatedAt is an optimistic-concurrency precondition: pass the updatedAt the
+// caller loaded and the update is refused (STALE_WRITE) if another writer changed it since.
+// Omitted (undefined or null), the update is last-write-wins, as before.
 export async function updateArea(
   token: string,
   request: AreaUpdateRequest,
+  expectedUpdatedAt?: string | null,
 ): Promise<Area> {
-  const data = await gql('device-management', UPDATE_AREA, { token, request });
+  const data = await gql('device-management', UPDATE_AREA, {
+    token,
+    request,
+    expectedUpdatedAt: expectedUpdatedAt ?? null,
+  });
   return data.updateArea;
 }
 
@@ -325,6 +337,9 @@ export const listAreaGroups = (opts: { pageNumber: number; pageSize: number }) =
 export const getAreaGroup = (token: string) => getEntityGroupOfType(token, 'area');
 export const createAreaGroup = (request: GroupFormRequest) =>
   createEntityGroup({ ...request, memberType: 'area' });
-export const updateAreaGroup = (token: string, request: EntityGroupUpdateRequest) =>
-  updateEntityGroup(token, request);
+export const updateAreaGroup = (
+  token: string,
+  request: EntityGroupUpdateRequest,
+  expectedUpdatedAt?: string | null,
+) => updateEntityGroup(token, request, expectedUpdatedAt);
 export const deleteAreaGroup = deleteEntityGroup;

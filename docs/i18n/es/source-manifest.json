@@ -43,8 +43,8 @@
       "translationSha256": "a7874515427db67e167c419946a425f0efc35c3e3f3bc813fb87a12179faffcd"
     },
     "concepts/event-processing.md": {
-      "sourceSha256": "017ebfc1077bbb9cef32197b009f7a438bfa127cfd014e74b4f3c7a556e11961",
-      "translationSha256": "9c329a46810db46b55784c6e124869717e07142119129db6017b81d00e0451d2"
+      "sourceSha256": "9ac42aa6b5c9c77a81577d708a815af0bf8396371bc2ca76168155028ac88443",
+      "translationSha256": "f759ede8dc3f1c66a7da9affd172cd26b4c18ae3d99fbc9d057c7f6404d56136"
     },
     "concepts/geofencing.md": {
       "sourceSha256": "a6977f892a2f4734e5b9df1753b1c3ddb041243ea92c40097635775c15c3e732",
@@ -107,8 +107,8 @@
       "translationSha256": "c3b0778b9ba1a76f812be84f5da226895e1535b25cc21a38587f96863695dbda"
     },
     "deployment/bootstrap.md": {
-      "sourceSha256": "2fd764b1ccc4e8a3f1ee2fd0d7219a8abcc1a64b90536bc3cbf5b3f6712aa0c8",
-      "translationSha256": "cb387e60ee6b4cb959f15388f3d6bb13c45d2586b7df9ef0002f85244c9d39ca"
+      "sourceSha256": "90dc967ac9aab3c11b71cc970d118f0ae573623fabb0edd08508951552e5b43a",
+      "translationSha256": "592aa5ebf59e6f540d6156edf1579a2606767dc82938850cf8952c5e83276c17"
     },
     "deployment/cluster-lock.md": {
       "sourceSha256": "1f023271ebfdba3cbab4a140db9606d0827bd12f7c96000c5c6bc946b588b148",

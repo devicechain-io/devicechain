@@ -1292,6 +1292,17 @@ control, and succeeds only on FAIL (never on UNSETTLED).
 dcctl ha leaders [flags]
 ```
 
+### Examples
+
+```
+  # exits 0 on PASS; 1 on FAIL or UNSETTLED
+  dcctl ha leaders --instance default
+  # the report as JSON on stdout, for a script; the exit status is unchanged
+  dcctl ha leaders --instance default --json
+  # the negative control: exits 0 only on FAIL, never on UNSETTLED
+  dcctl ha leaders --instance default --expect-fail
+```
+
 ### Options
 
 ```
@@ -1346,6 +1357,16 @@ single-node instance and requires it to report failures:
 
 ```
 dcctl ha verify [flags]
+```
+
+### Examples
+
+```
+  # exits 0 when every assertion holds, 1 when any does not
+  dcctl ha verify --instance default
+  # the negative control: exits 0 only when the check fails, so a suite that cannot fail is caught
+  dcctl ha verify --instance default --replicas 3 --expect-fail
+  dcctl ha verify --instance default --kube-context prod --json
 ```
 
 ### Options
@@ -1408,6 +1429,16 @@ expected NOT to hold:
 
 ```
 dcctl ha verify-db [flags]
+```
+
+### Examples
+
+```
+  # exits 0 when every assertion holds, 1 when any does not
+  dcctl ha verify-db --cluster dc-rdb --require-synchronous
+  dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --json
+  # the negative control: exits 0 only when the store does NOT hold the stated topology
+  dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --expect-fail
 ```
 
 ### Options
@@ -1590,6 +1621,15 @@ by "break-glass:pod-exec".
 dcctl instances break-glass mfa-reset [email] [flags]
 ```
 
+### Examples
+
+```
+  dcctl instances break-glass mfa-reset --instance acme --email superuser@devicechain.local
+  dcctl instances break-glass mfa-reset superuser@devicechain.local --instance acme --kube-context prod
+  # choose the password yourself: the first line of stdin, and nothing is printed
+  dcctl instances break-glass mfa-reset --instance acme --email superuser@devicechain.local --password-stdin --yes
+```
+
 ### Options
 
 ```
@@ -1630,6 +1670,13 @@ kubeContext, status, hasRecord) and nothing else on stdout; an empty array when 
 dcctl instances list [flags]
 ```
 
+### Examples
+
+```
+  dcctl instances list
+  dcctl instances list -o json
+```
+
 ### Options
 
 ```
@@ -1668,6 +1715,13 @@ read it.
 dcctl instances reclaim [flags]
 ```
 
+### Examples
+
+```
+  dcctl instances reclaim
+  dcctl instances reclaim --kube-context prod
+```
+
 ### Options
 
 ```
@@ -1700,6 +1754,13 @@ clears the finalizer itself as its last step.
 dcctl instances release <instance> [flags]
 ```
 
+### Examples
+
+```
+  dcctl instances release acme
+  dcctl instances release acme --kube-context prod --yes
+```
+
 ### Options
 
 ```
@@ -1724,6 +1785,14 @@ These are the prerequisites for standing a cluster up, not for building an insta
 
 ```
 dcctl preflight [provider] [flags]
+```
+
+### Examples
+
+```
+  dcctl preflight local
+  dcctl preflight local --kube-context prod
+  dcctl preflight local --cluster scratch --build
 ```
 
 ### Options
@@ -1814,6 +1883,16 @@ Start with --dry-run, which writes nothing and lists the devices in scope.
 
 ```
 dcctl presence demote [flags]
+```
+
+### Examples
+
+```
+  # first, list the devices in scope and write nothing
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source mqtt1 --reason "broker replaced" --dry-run
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source mqtt1 --reason "broker replaced"
+  # narrow the run to two devices within the source
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source sparkplug:plant1 --reason "host retired" --device pump-7 --device pump-8
 ```
 
 ### Options

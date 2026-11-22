@@ -1468,56 +1468,94 @@ type CommandDefinitionSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# A DETECT rule declared on a device profile (ADR-051 / ADR-053 §5 / ADR-045). The rule
-# body — definition — is an opaque JSON document (the event-processing rules.Rule schema);
-# device-management versions it with the profile but does not parse the detection taxonomy
-# (that stays single-homed in event-processing, which compiles and cost-gates it at
-# publish). DetectionRule is the one alarm-authoring path (ADR-057); its edge-triggered rules
-# raise/resolve alarms through the contributor-set integrator, the sole alarm-raise path since the 6d
-# cutover. (An alarm is still acknowledged and cleared by an operator through the mutations below.)
+"""
+A detection rule declared on a device profile. The rule body, definition, is an opaque JSON
+document: device-management stores it with the profile's draft but does not interpret the detection
+language. It is compiled and cost-checked by the detection engine when the profile is published, and
+a rule takes effect on devices only through a published profile version. Edge-triggered rules raise
+and resolve alarms; an operator acknowledges and clears the alarms through the alarm mutations.
+"""
 type DetectionRule implements Model & TokenReference & NamedEntity & MetadataEntity {
+    """Server-assigned numeric identifier, as a string. Address a rule by its token instead where you can."""
     id: ID!
+    """When the rule was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the rule was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: a deleted rule is removed outright and is not returned."""
     deletedAt: String
+    """Identifier of the rule, unique within the tenant. It cannot be changed after creation."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """The device profile the rule is declared on."""
     deviceProfile: DeviceProfile!
-    # The authored rule as a JSON document (the rules.Rule schema).
+    """
+    The authored rule as a JSON document in the detection engine's rule language. Stored as written
+    once it parses as JSON; the engine validates its type and cost when the profile is published.
+    """
     definition: String!
-    # The optional visual-canvas document (ADR-053 CanvasDefinition JSON) this rule was
-    # authored with, so the console re-opens it on the canvas — null for a form-authored rule.
-    # Opaque authoring metadata; not parsed here and not frozen into the publish snapshot.
+    """
+    The visual automation canvas document the rule was authored with, as JSON, so the console can
+    reopen it on the canvas. Null for a rule authored as a form. Authoring metadata only: it is
+    stored verbatim, never interpreted by the platform, and not part of what a profile publish
+    freezes.
+    """
     authoringGraph: String
+    """
+    Whether the rule is live. A disabled rule is kept on the profile but is left out of the rules a
+    published version runs.
+    """
     enabled: Boolean!
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
-    # The optional group scope (ADR-062 S4): the published dynamic entity-group version whose
-    # members the rule fires for. Both null for an unscoped (profile-wide) rule; set together
-    # for a scoped rule (the engine fires it only for events whose resolved entity is a member
-    # of entityGroupToken@entityGroupVersion).
+    """
+    Token of the dynamic entity group that scopes the rule, or null for a rule that applies to every
+    device of the profile. Set together with entityGroupVersion: the engine fires the rule only for
+    events whose entity is a member of that published group version.
+    """
     entityGroupToken: String
+    """
+    Published version of the entity group that scopes the rule. Null exactly when entityGroupToken
+    is null.
+    """
     entityGroupVersion: Int
 }
 
-# Data required to create a detection rule. definition is the rules.Rule JSON document as a
-# string; device-management checks it is well-formed JSON on write, and event-processing
-# performs the authoritative type/cost validation when the profile is published.
+"""
+Data required to create a detection rule on a device profile. The definition is checked to be well-
+formed JSON on write; the detection engine does the authoritative validation when the profile is
+published.
+"""
 input DetectionRuleCreateRequest {
+    """Identifier for the new rule, unique within the tenant. Cannot be changed later."""
     token: String!
+    """Token of the device profile to declare the rule on. An unknown token is refused."""
     deviceProfileToken: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """The rule as a JSON document in the detection engine's rule language. Must be well-formed JSON."""
     definition: String!
-    # The optional canvas CanvasDefinition JSON sidecar (ADR-053 slice 9b). Omit for a
-    # form-authored rule; when present it must be a JSON object. Stored verbatim, not parsed.
+    """
+    The visual automation canvas document the rule was authored with. Omit for a rule authored as a
+    form. When present it must be a JSON object; it is stored verbatim and not interpreted.
+    """
     authoringGraph: String
+    """Whether the rule is live. A disabled rule is kept but not run."""
     enabled: Boolean!
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
-    # The optional group scope (ADR-062 S4): the published dynamic entity-group version whose
-    # members the rule fires for. Omit both for an unscoped rule; set both together for a scoped
-    # rule. Validated at save (must be a published dynamic group@version).
+    """
+    Token of a dynamic entity group to scope the rule to. Omit both scope fields for a rule that
+    covers every device of the profile, or set both together. Checked on save: it must name a
+    published dynamic group version.
+    """
     entityGroupToken: String
+    """Published version of the entity group to scope the rule to. Set together with entityGroupToken."""
     entityGroupVersion: Int
 }
 
@@ -1530,37 +1568,63 @@ input DetectionRuleCreateRequest {
 # 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
 # arrive already-populated for a caller who never sent it, which collapses "omitted" back
 # into "sent", and turns this input back into the full replace it replaces.
+"""
+A partial update of a detection rule. Each field has three states: omit it to keep the stored value,
+send null to clear it, or send a value to set it. The rule's token is not here because the
+mutation's token argument names the rule and an update cannot move it.
+"""
 input DetectionRuleUpdateRequest {
-    # Re-parents the rule. Null is refused; an unknown token refuses the whole update.
+    """
+    Moves the rule to this device profile. Null is refused, and an unknown token refuses the whole
+    update.
+    """
     deviceProfileToken: String
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
-    # Required and unclearable: a rule with no definition detects nothing.
+    """
+    The rule JSON document. Required: null is refused, because a rule with no definition detects
+    nothing.
+    """
     definition: String
-    # The canvas sidecar. Null DROPS it — what a form edit of a canvas-authored rule
-    # needs, since the graph is then stale. Omitting it KEEPS it.
+    """
+    The visual canvas document. Null drops it, which is what a form edit of a canvas-authored rule
+    needs since the graph is then stale; omitting it keeps it.
+    """
     authoringGraph: String
-    # Required and unclearable. Null is refused rather than read as false, which would
-    # park a live rule and report success.
+    """
+    Whether the rule is live. Null is refused rather than read as false, which would silently park a
+    live rule.
+    """
     enabled: Boolean
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
-    # The optional group scope. The two are folded independently and then validated as a
-    # PAIR against what the rule ends up with, so naming one without the other is refused
-    # rather than silently discarded. Null on either un-scopes the rule.
+    """
+    Entity group scope. The two scope fields are applied independently and then checked as a pair
+    against what the rule ends up with, so naming one without the other is refused. Null on either
+    removes the scope.
+    """
     entityGroupToken: String
+    """Published version of the scoping entity group. See entityGroupToken for how the pair is applied."""
     entityGroupVersion: Int
 }
 
-# Criteria used when searching for detection rules.
+"""Criteria for listing detection rules."""
 input DetectionRuleSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Only rules declared on the device profile with this token. Omit for every rule."""
     deviceProfile: String
 }
 
-# Search results returned from detection rule query.
+"""One page of detection rules."""
 type DetectionRuleSearchResults {
+    """The rules on this page."""
     results: [DetectionRule!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -1576,25 +1640,55 @@ type DetectionRuleSearchResults {
 # so the fence set an event is evaluated against is frozen into the event itself. A fence
 # edit that moves a boundary mints a new version; it is not a rule migration, and rules
 # need not be republished. Renaming a fence mints nothing — the frozen shapes are the same.
+"""
+An authored geofence: a region that a detection rule can test a device's reported position against,
+naming the fence by its token. Containment is evaluated by the detection engine, not in the
+database, so the geometry is stored as an opaque document with no spatial column or index. The
+tenant's fence-set version is stamped on each resolved location event, which freezes the fences an
+event is judged against, so replaying history gives the answer it gave at the time. Changing a
+boundary, creating or deleting a fence mints a new version; renaming a fence does not.
+"""
 type GeoFence implements Model & TokenReference & NamedEntity & MetadataEntity {
+    """Server-assigned numeric identifier, as a string. Address a fence by its token instead where you can."""
     id: ID!
+    """When the fence was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the fence was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: a deleted fence is removed outright and its token can be reused."""
     deletedAt: String
+    """
+    Identifier of the fence, unique within the tenant. Detection rules name the fence by it, so it
+    is immutable.
+    """
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
     # The geometry as a self-describing JSON document: a kind discriminator plus a GeoJSON
     # geometry object, e.g.
     # {"kind":"POLYGON_2D","geometry":{"type":"Polygon","coordinates":[[[lon,lat],...]]}}.
     # Coordinates follow the platform-wide contract: WGS84 / EPSG:4326 decimal degrees.
+    """
+    The geometry as a self-describing JSON document: a kind discriminator plus a GeoJSON geometry
+    object, for example
+    {"kind":"POLYGON_2D","geometry":{"type":"Polygon","coordinates":[[[lon,lat],...]]}}. Coordinates
+    are WGS84 (EPSG:4326) decimal degrees in longitude, latitude order. Returned in a canonical form
+    that can differ in whitespace and number formatting from what was written.
+    """
     geometry: String!
     # The geometry kind, derived from the document above rather than stored separately.
     # POLYGON_2D today; POLYGON_2_5D (polygon + altitude band) and VOXEL_3D are reserved
     # names that are rejected on write until the engine can evaluate them. The kind belongs
     # to the FENCE, not to the rule language — a rule asks whether a device is inside a
     # fence, and that question does not change when the fence gains a third dimension.
+    """
+    The geometry kind, read from the geometry document. POLYGON_2D is the only kind that can be
+    stored; POLYGON_2_5D and VOXEL_3D are reserved names that are refused on write.
+    """
     kind: String!
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
 }
 
@@ -1604,11 +1698,25 @@ type GeoFence implements Model & TokenReference & NamedEntity & MetadataEntity {
 # them: a fence may carry at most 512 positions, and a tenant at most 100 fences. The
 # publish-time rule cost gate estimates cost from the expression alone, so it cannot price
 # a containment call whose real cost is the fence's vertex count times the fences in scope.
+"""
+Data required to create a geofence. The geometry is validated on write: its kind, GeoJSON shape,
+coordinate ranges and size. Two ceilings are enforced at authoring time: the positions one fence may
+carry (512 by default) and the fences a tenant may hold (100 by default), both set by the tenant's
+tier. A stored geometry document is also limited to 32 KiB.
+"""
 input GeoFenceCreateRequest {
+    """Identifier for the new fence, unique within the tenant. Cannot be changed later."""
     token: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """
+    The geometry document, as described on GeoFence.geometry. Must declare kind POLYGON_2D; reserved
+    kinds are refused.
+    """
     geometry: String!
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
 
@@ -1627,25 +1735,39 @@ input GeoFenceCreateRequest {
 # A caller who wants a different token creates the new fence FIRST and deletes the old
 # one after; doing it the other way round can forfeit grandfathered position headroom and
 # leave the fence unrecreatable.
+"""
+A partial update of a geofence. Each field has three states: omit it to keep the stored value, send
+null to clear it, or send a value to set it. A fence's token is immutable, so there is no token
+field: create the new fence first and delete the old one if a different token is wanted.
+"""
 input GeoFenceUpdateRequest {
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
-    # Required and unclearable: a fence with no shape is not a fence. Omitting it leaves
-    # the shape alone, which is what makes a rename or a metadata edit exempt from the
-    # tenant's position ceiling — that ceiling refuses GROWTH, not size.
+    """
+    The geometry document. Required: null is refused, because a fence with no shape is not a fence.
+    Omitting it leaves the shape alone, so a rename or metadata edit is not held to the tenant's
+    position ceiling, which refuses growth rather than size.
+    """
     geometry: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
 
-# Criteria used when searching for geofences.
+"""Criteria for listing geofences."""
 input GeoFenceSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
 }
 
-# Search results returned from geofence query.
+"""One page of geofences."""
 type GeoFenceSearchResults {
+    """The fences on this page."""
     results: [GeoFence!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -1656,9 +1778,16 @@ type GeoFenceSearchResults {
 # This is what makes replaying history CORRECT rather than vacuous. Evaluating last week's
 # events against today's fences would answer a different question; each of those events
 # names the version whose snapshot holds the geometry it was actually resolved against.
+"""
+The frozen fence set of one fence-set version: the fences that were live when an event stamped with
+that version was resolved. It is not an entity, has no id and cannot be edited or deleted. Replaying
+an old event reads the geometry it was resolved against rather than today's fences.
+"""
 type GeoFenceSetSnapshot {
-    # The version this set is the frozen state of. 0 means the tenant had never created a
-    # fence when the event was resolved — an empty fence set as knowledge, not as absence.
+    """
+    The version this set is the frozen state of. 0 means the tenant had never created a fence at
+    that time: an empty fence set, known to be empty.
+    """
     version: Int!
     # The fences as of this version, ordered by token, one bounded page at a time.
     #
@@ -1672,18 +1801,31 @@ type GeoFenceSetSnapshot {
     # Paging a SNAPSHOT is safe in a way paging a live list is not: a version's fence set
     # is frozen at mint and nothing ever rewrites it, so two pages of one version cannot
     # come from two different fence sets however long the read takes.
-    fences(pagination: PaginationInput!): GeoFenceSnapshotEntrySearchResults!
+    """
+    The fences of this version, ordered by token, one page at a time. Paginated because a fence set
+    at the authoring ceiling can exceed what one cross-service response carries. Read pages until
+    pagination.pageEnd reaches pagination.totalRecords. Pages of one version always come from the
+    same fence set, because a version is never rewritten.
+    """
+    fences(
+        """The page of fences to return."""
+        pagination: PaginationInput!
+    ): GeoFenceSnapshotEntrySearchResults!
 }
 
-# One page of a frozen fence set's fences.
+"""One page of a frozen fence set's fences."""
 type GeoFenceSnapshotEntrySearchResults {
+    """The fences on this page, ordered by token."""
     results: [GeoFenceSnapshotEntry!]!
+    """Where this page sits in the full fence set."""
     pagination: SearchResultsPagination!
 }
 
-# One fence inside a frozen snapshot. Name and description are deliberately absent: the
-# snapshot freezes only what changes what a rule computes, so a typo fix in a fence's name
-# does not make history read differently.
+"""
+One fence inside a frozen snapshot. Name and description are absent on purpose: a snapshot freezes
+only what changes what a rule computes, so correcting a fence's name does not change how history
+reads.
+"""
 type GeoFenceSnapshotEntry {
     """
     The fence's GeoFence.id, frozen with the snapshot. Null for snapshots written before
@@ -1691,49 +1833,60 @@ type GeoFenceSnapshotEntry {
     this, not the token, says which fence row the snapshot froze.
     """
     fenceId: ID
-    # The stable per-tenant token a rule names this fence by.
+    """The tenant-unique token a rule names this fence by."""
     token: String!
-    # The geometry envelope as it stood at this version — NOT the fence's current geometry.
+    """The geometry document as it stood at this version, not the fence's current geometry."""
     geometry: String!
 }
 
-# One enabled detection rule of a published profile version, as the detection engine
-# receives it.
+"""One enabled detection rule of a published profile version, as the detection engine receives it."""
 type PublishedProfileRule {
-    # The rule's authoring token, unique within the profile.
+    """The rule's token, unique within the profile."""
     token: String!
-    # The rule definition document.
+    """The rule definition JSON document."""
     definition: String!
-    # The published entity group the rule is scoped to; empty for a profile-wide rule.
+    """
+    Token of the published entity group the rule is scoped to; an empty string for a rule that
+    covers the whole profile.
+    """
     entityGroupToken: String!
-    # The version of that group; 0 for a profile-wide rule.
+    """Version of that entity group; 0 for a rule that covers the whole profile."""
     entityGroupVersion: Int!
 }
 
-# A published profile's active version, as the detection engine should hold it.
+"""A published profile's active version, as the detection engine should hold it."""
 type ActiveProfileRules {
+    """Token of the device profile."""
     profileToken: String!
-    # "{profileToken}@{version}" — the token resolved events carry and rules are keyed on.
+    """
+    The active version's token, {profileToken}@{version}: the value resolved events carry and rules
+    are keyed on.
+    """
     versionToken: String!
-    # When this version became active (published, or rolled back to).
+    """When this version became active (published, or rolled back to), as an RFC 3339 timestamp."""
     activeSince: String!
+    """The version's enabled detection rules."""
     rules: [PublishedProfileRule!]!
 }
 
+"""One page of published profiles' active versions."""
 type ActiveProfileRulesPage {
+    """The profiles on this page."""
     entries: [ActiveProfileRules!]!
-    # The cursor to pass as afterId for the next page; null when the walk is complete.
-    # Treat it as opaque.
+    """The cursor to pass as afterId for the next page; null when the walk is complete. Treat it as opaque."""
     nextCursor: String
 }
 
-# One device as the detection engine's roster holds it.
+"""One device as the detection engine's roster holds it."""
 type DeviceRosterEntry {
+    """The device's token."""
     deviceToken: String!
-    # The token of the profile the device's type adopts; empty when it adopts none.
+    """Token of the profile the device's type adopts; empty when it adopts none."""
     profileToken: String!
-    # When the device's membership of that profile began: its creation, or the last
-    # re-type of the device or re-point of its type.
+    """
+    When the device's membership of that profile began, as an RFC 3339 timestamp: its creation, or
+    the last re-typing of the device or re-pointing of its type.
+    """
     expectedSince: String!
 }
 
@@ -1875,26 +2028,36 @@ type DeviceConstantsPage {
     nextCursor: String
 }
 
+"""One page of the device roster."""
 type DeviceRosterPage {
+    """The devices on this page."""
     entries: [DeviceRosterEntry!]!
-    # The cursor to pass as afterId for the next page; null when the walk is complete.
+    """The cursor to pass as afterId for the next page; null when the walk is complete."""
     nextCursor: String
 }
 
-# One numeric device attribute a dynamic detection threshold can read.
+"""One numeric device attribute that a dynamic detection threshold can read."""
 type DeviceThresholdAttribute {
+    """Token of the device the attribute belongs to."""
     deviceToken: String!
-    # SHARED or SERVER.
+    """The attribute's scope: SHARED or SERVER."""
     scope: String!
+    """The attribute's key."""
     key: String!
+    """The attribute's numeric value."""
     value: Float!
-    # When the attribute was last written.
+    """When the attribute was last written, as an RFC 3339 timestamp."""
     updatedAt: String!
 }
 
+"""
+One page of numeric device attributes. A page can hold fewer entries than the limit and still have a
+nextCursor; only a null cursor ends the walk.
+"""
 type DeviceThresholdAttributePage {
+    """The attributes on this page."""
     entries: [DeviceThresholdAttribute!]!
-    # The cursor to pass as afterId for the next page; null when the walk is complete.
+    """The cursor to pass as afterId for the next page; null when the walk is complete."""
     nextCursor: String
 }
 
@@ -1905,29 +2068,50 @@ type DeviceThresholdAttributePage {
 # This is how a holder of a version number learns what to resolve: an engine that missed the
 # announcement, one starting cold, or a preview replaying last week. The geometry itself comes
 # from geoFenceGeometry, keyed by the addresses named here.
+"""
+The manifest of one fence-set version: which fences it holds and the content address of each one's
+geometry. It carries no geometry, so its size depends only on the fence count and it needs no
+pagination. A holder of a version number uses it to learn what to resolve, then fetches the geometry
+with geoFenceGeometry.
+"""
 type GeoFenceSetManifest {
-    # The version this manifest describes. 0 means the tenant had never created a fence when
-    # the event was resolved — an empty fence set as knowledge, not as absence.
+    """
+    The version this manifest describes. 0 means the tenant had never created a fence: an empty
+    fence set, known to be empty.
+    """
     version: Int!
-    # When the change that minted this version committed. Carried for diagnosis — how old is
-    # the set an engine is holding? — and never read by containment.
+    """
+    When the change that minted this version committed, as an RFC 3339 timestamp. For diagnosing how
+    old a held fence set is; never used by containment tests.
+    """
     mintedAt: String
-    # The fences of this version, ordered by token.
+    """The fences of this version, ordered by token."""
     fences: [GeoFenceManifestEntry!]!
 }
 
-# One fence inside a manifest: the token a rule names it by, and the content address under
-# which its geometry is stored.
+"""
+One fence inside a manifest: the token a rule names it by and the content address under which its
+geometry is stored.
+"""
 type GeoFenceManifestEntry {
+    """The tenant-unique token a rule names this fence by."""
     token: String!
+    """The content address of the fence's geometry document, to pass to geoFenceGeometry."""
     hash: String!
 }
 
 # One archived geometry document and the content address it is filed under. The address is
 # the SHA-256 of exactly these bytes, so a caller can — and should — re-derive it to verify
 # what it received rather than trusting the association.
+"""
+One archived geometry document and the content address it is filed under. The address is the SHA-256
+of exactly these bytes, so a caller should re-derive it to verify what it received rather than trust
+the association.
+"""
 type GeoFenceGeometry {
+    """The content address the document is filed under."""
     hash: String!
+    """The geometry document, in the same envelope as GeoFence.geometry."""
     geometry: String!
 }
 
@@ -3019,38 +3203,92 @@ type DeviceSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a group of related devices.
+"""
+A group of entities of one family: devices, assets, areas or customers. Membership is either static
+(members are added explicitly over relationships of the member type) or dynamic (a selector over the
+members' facet attributes, evaluated when the group is read). A dynamic group is versioned:
+publishing freezes the selector as an immutable version, which detection rules and access scopes
+then pin to.
+"""
 type EntityGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity & Entity {
+    """Server-assigned numeric identifier, as a string. Address a group by its token instead where you can."""
     id: ID!
+    """When the group was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the group was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: a deleted group is removed outright and is not returned."""
     deletedAt: String
+    """Identifier of the group, unique within the tenant. It cannot be changed after creation."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """URL of an image representing the group, up to 512 characters. Null when none is set."""
     imageUrl: String
+    """
+    Name of an icon representing the group, up to 128 characters. Not checked against any icon set.
+    Null when none is set.
+    """
     icon: String
+    """
+    Background colour to display the group with, up to 32 characters. Not validated. Null when none
+    is set.
+    """
     backgroundColor: String
+    """
+    Foreground (text) colour to display the group with, up to 32 characters. Not validated. Null
+    when none is set.
+    """
     foregroundColor: String
+    """Border colour to display the group with, up to 32 characters. Not validated. Null when none is set."""
     borderColor: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
     # The entity family this group collects: device | asset | area | customer.
+    """The entity family the group collects: device, asset, area or customer. Fixed at creation."""
     memberType: String!
     # How members are determined: static (explicit "member" edges) or dynamic
     # (a CEL selector over member-entity facet attributes — ADR-061 G3).
+    """
+    How members are determined: static, for members added explicitly, or dynamic, for members
+    matched by selector. Fixed at creation.
+    """
     membershipMode: String!
     # The CEL membership predicate, present only for dynamic groups.
+    """
+    The membership predicate, a CEL expression over the members' facet attributes. Present only for
+    dynamic groups; null for a static group. This is the editable draft: the selector a published
+    version froze is on that version.
+    """
     selector: String
     # The resolved members of this group — a static group's "member" edges or a
     # dynamic group's eval-on-read selector matches, transparently (a consumer does
     # not branch on mode). Always bounded + paginated (ADR-061 G4).
-    members(pagination: PaginationInput!): EntityGroupMemberSearchResults!
+    """
+    The resolved members of the group: a static group's explicit members, or the entities a dynamic
+    group's selector matches now. A consumer does not need to branch on mode. Always bounded and
+    paginated.
+    """
+    members(
+        """The page of members to return."""
+        pagination: PaginationInput!
+    ): EntityGroupMemberSearchResults!
     # The published version whose frozen selector a rule-scoped resolve reads
     # (ADR-062 S1). Null until a dynamic group is first published; always null for a
     # static group (never versioned). The live `selector` above is the mutable draft.
+    """
+    The published version whose frozen selector rule-scoped resolution reads. Null until a dynamic
+    group is first published, and always null for a static group, which is never versioned.
+    """
     activeVersion: Int
     # The group's published versions, newest first (ADR-062 S1). Empty for a group
     # that has never been published (and always empty for a static group).
+    """
+    The group's published versions, newest first. Empty for a group that has never been published,
+    and always empty for a static group.
+    """
     versions: [EntityGroupVersion!]!
     """
     Whether the group is an access scope: a group a member's access can be limited to. A member
@@ -3060,66 +3298,97 @@ type EntityGroup implements Model & TokenReference & NamedEntity & BrandedEntity
     accessScope: Boolean!
 }
 
-# An immutable published snapshot of a DYNAMIC entity group's membership selector
-# (ADR-062 S1). A rule scopes to a specific {group}@{version}, so its target set
-# cannot drift under a later selector edit. Mirrors DeviceProfileVersion.
+"""
+An immutable published snapshot of a dynamic entity group's selector. A detection rule scopes to a
+specific group and version, so the set of entities it covers cannot change under a later selector
+edit.
+"""
 type EntityGroupVersion {
-    # Monotonic per-group version number.
+    """Version number, increasing per group."""
     version: Int!
-    # The frozen lowerable-CEL membership selector captured at publish.
+    """The membership selector frozen at publish."""
     selector: String!
-    # The entity family the group collects, frozen with the version.
+    """The entity family the group collects, frozen with the version."""
     memberType: String!
-    # Optional user-supplied label (may embed a semver string; not parsed).
+    """Optional label given at publish. It may embed a semantic version string, which is not parsed."""
     label: String
+    """Optional description of what the version changes. Null when none was given."""
     description: String
-    # When the version was published (the row's creation time).
+    """When the version was published, as an RFC 3339 timestamp."""
     publishedAt: String!
-    # The identity that published it (username, falling back to email).
+    """
+    The identity that published the version: its username, falling back to its email. Null when not
+    recorded.
+    """
     publishedBy: String
 }
 
-# A resolved member of an entity group — the lightweight identity (row id + token)
-# of a family entity, enough for a consumer to hydrate the full record. The family
-# is the group's memberType, so it is not repeated per member.
+"""
+A resolved member of an entity group: the lightweight identity of one entity, enough to look up the
+full record. The entity family is the group's memberType, so it is not repeated per member.
+"""
 type EntityGroupMember {
+    """Numeric id of the member entity, as a string."""
     id: ID!
+    """Token of the member entity."""
     token: String!
 }
 
-# A paginated page of an entity group's resolved members.
+"""One page of an entity group's resolved members."""
 type EntityGroupMemberSearchResults {
+    """The members on this page."""
     results: [EntityGroupMember!]!
+    """Where this page sits in the full member set."""
     pagination: SearchResultsPagination!
 }
 
-# The result of evaluating a CANDIDATE dynamic-group selector without saving it
-# (ADR-061 G4). A selector that fails the publish gate (non-lowerable, over-budget,
-# a parse/type error) returns valid=false with the console-surfaceable error in
-# `error` and a null `members`, so the authoring UI can show the problem inline as
-# the user types rather than treating it as a hard failure. When valid, `members`
-# carries the eval-on-read matches (the live "matches N" preview).
+"""
+The result of evaluating a candidate dynamic-group selector without saving it. A selector that fails
+the publish checks (not expressible as a query, over the cost budget, or a parse or type error)
+returns valid false with the error and no members, so an authoring form can show the problem inline
+as the user types instead of treating it as a failure.
+"""
 type SelectorPreview {
+    """Whether the selector passed the same checks a saved dynamic group must pass."""
     valid: Boolean!
+    """Why the selector was refused, in terms fit to show the author. Null when valid."""
     error: String
+    """One page of the entities the selector matches now. Null when the selector is not valid."""
     members: EntityGroupMemberSearchResults
 }
 
-# Data required to create an entity group (ADR-061). membershipMode defaults to
-# "static"; selector is only permitted (and required) for "dynamic".
-# Editing one afterwards is EntityGroupUpdateRequest.
+"""
+Data required to create an entity group. membershipMode defaults to static; a selector is required
+for a dynamic group and refused for a static one. Edit a group afterwards with
+EntityGroupUpdateRequest.
+"""
 input EntityGroupCreateRequest {
+    """Identifier for the new group, unique within the tenant. Cannot be changed later."""
     token: String!
+    """The entity family the group collects: device, asset, area or customer. Cannot be changed later."""
     memberType: String!
+    """static or dynamic. Omitted means static. Cannot be changed later."""
     membershipMode: String
+    """
+    The CEL membership selector. Required, and only allowed, when membershipMode is dynamic. It is
+    compiled and cost-checked on create.
+    """
     selector: String
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """URL of an image representing the group, up to 512 characters."""
     imageUrl: String
+    """Name of an icon representing the group, up to 128 characters. Not checked against any icon set."""
     icon: String
+    """Background colour to display the group with, up to 32 characters. Not validated."""
     backgroundColor: String
+    """Foreground (text) colour to display the group with, up to 32 characters. Not validated."""
     foregroundColor: String
+    """Border colour to display the group with, up to 32 characters. Not validated."""
     borderColor: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
 
@@ -3138,28 +3407,46 @@ input EntityGroupCreateRequest {
 # members do not belong to, and converting a static group to dynamic (or back) would
 # orphan its members. A field that can only ever be a no-op or an error does not belong
 # in an update input.
+"""
+A partial update of an entity group. Each field has three states: omit it to keep the stored value,
+send null to clear it, or send a value to set it. The token, memberType and membershipMode are
+absent because they are identity: changing the family would leave members that do not belong, and
+converting between static and dynamic would orphan the members.
+"""
 input EntityGroupUpdateRequest {
-    # The CEL membership predicate, required (and only permitted) for a dynamic group. A
-    # provided selector is re-compiled and cost-gated before it replaces the stored one.
-    # Null is refused: a dynamic group with no selector matches nothing and cannot be
-    # repaired into a valid group.
+    """
+    The membership selector of a dynamic group; refused for a static group. A provided selector is
+    recompiled and cost-checked before it replaces the stored draft. Null is refused, because a
+    dynamic group with no selector matches nothing.
+    """
     selector: String
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
+    """Image URL; null clears it."""
     imageUrl: String
+    """Icon name; null clears it."""
     icon: String
+    """Background colour; null clears it."""
     backgroundColor: String
+    """Foreground colour; null clears it."""
     foregroundColor: String
+    """Border colour; null clears it."""
     borderColor: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
 
-# Criteria used when searching for entity groups. memberType and membershipMode
-# are optional filters.
+"""Criteria for listing entity groups. memberType and membershipMode are optional filters."""
 input EntityGroupSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Only groups collecting this entity family: device, asset, area or customer."""
     memberType: String
+    """Only groups with this membership mode: static or dynamic."""
     membershipMode: String
     """
     Keep only the groups that are (true) or are not (false) access scopes. Omit it for both.
@@ -3167,9 +3454,11 @@ input EntityGroupSearchCriteria {
     accessScope: Boolean
 }
 
-# Search results returned from entity groups query.
+"""One page of entity groups."""
 type EntityGroupSearchResults {
+    """The groups on this page."""
     results: [EntityGroup!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -6143,18 +6432,36 @@ type Query {
         """Token of the device."""
         deviceToken: String!
     ): DeviceMetricVocabulary
-    # Find detection rules by unique id.
-    detectionRulesById(ids: [ID!]!): [DetectionRule!]!
-    # Find detection rules by unique token.
-    detectionRulesByToken(tokens: [String!]!): [DetectionRule!]!
-    # List detection rules that meet criteria.
-    detectionRules(criteria: DetectionRuleSearchCriteria!): DetectionRuleSearchResults!
-    # Find geofences by unique id.
-    geoFencesById(ids: [ID!]!): [GeoFence!]!
-    # Find geofences by unique token.
-    geoFencesByToken(tokens: [String!]!): [GeoFence!]!
-    # List geofences that meet criteria.
-    geoFences(criteria: GeoFenceSearchCriteria!): GeoFenceSearchResults!
+    """Reads detection rules by numeric id. Ids naming no rule are omitted. Requires device:read."""
+    detectionRulesById(
+        """Numeric ids of the detection rules to read."""
+        ids: [ID!]!
+    ): [DetectionRule!]!
+    """Reads detection rules by token. Tokens naming no rule are omitted. Requires device:read."""
+    detectionRulesByToken(
+        """Tokens of the detection rules to read."""
+        tokens: [String!]!
+    ): [DetectionRule!]!
+    """Lists the detection rules that match the criteria, one page at a time. Requires device:read."""
+    detectionRules(
+        """The facets the listed detection rules must match, and the page to return."""
+        criteria: DetectionRuleSearchCriteria!
+    ): DetectionRuleSearchResults!
+    """Reads geofences by numeric id. Ids naming no fence are omitted. Requires device:read."""
+    geoFencesById(
+        """Numeric ids of the geofences to read."""
+        ids: [ID!]!
+    ): [GeoFence!]!
+    """Reads geofences by token. Tokens naming no fence are omitted. Requires device:read."""
+    geoFencesByToken(
+        """Tokens of the geofences to read."""
+        tokens: [String!]!
+    ): [GeoFence!]!
+    """Lists the tenant's geofences, one page at a time. Requires device:read."""
+    geoFences(
+        """The facets the listed geofences must match, and the page to return."""
+        criteria: GeoFenceSearchCriteria!
+    ): GeoFenceSearchResults!
     # The tenant's active fence-set version — the number stamped onto resolved location
     # events, naming the frozen snapshot of the fences live at that moment. A change to the
     # fence SET mints the next one — a fence created, a boundary edited, a fence deleted.
@@ -6162,6 +6469,13 @@ type Query {
     # in the frozen snapshot, so a new version would name shapes identical to the current one.
     # 0 means the tenant has never had a fence, which is distinct from a minted version whose
     # fence set happens to be empty.
+    """
+    The tenant's active fence-set version: the number stamped onto resolved location events, naming
+    the frozen snapshot of the fences live at that moment. Creating a fence, editing a boundary or
+    deleting a fence mints the next one; renaming a fence or editing its description or metadata
+    does not. 0 means the tenant has never had a fence, which differs from a minted version whose
+    fence set happens to be empty. Requires device:read.
+    """
     currentFenceSetVersion: Int!
     # The FROZEN fence set of one fence-set version — the fences that were live when an
     # event stamped with that version was resolved. This is how a consumer resolves a
@@ -6169,7 +6483,17 @@ type Query {
     # late redelivery, a cold start. An unknown non-zero version is an error, because a
     # stamp naming a version that is not on record means the history was truncated and
     # answering "empty" would read as "no fences" rather than "cannot know".
-    geoFenceSetSnapshot(version: Int!): GeoFenceSetSnapshot!
+    """
+    The frozen fence set of one version: the fences that were live when an event stamped with that
+    version was resolved. Used to resolve a version a consumer no longer holds, such as a preview
+    replaying last week, a late redelivery or a cold start. An unknown non-zero version is an error,
+    because a stamp naming a version that is not on record means history was truncated and answering
+    empty would read as no fences rather than cannot know. Requires device:read.
+    """
+    geoFenceSetSnapshot(
+        """The fence-set version to read the frozen fence set of."""
+        version: Int!
+    ): GeoFenceSetSnapshot!
     # The frozen fence set of the tenant's CURRENT version — the version and its fences
     # read together, so the two cannot disagree across a concurrent fence edit.
     #
@@ -6178,6 +6502,12 @@ type Query {
     # version this one reported: asking here twice is two questions about a moving target,
     # and a fence edit between them yields two pages of two different sets stitched
     # together under one version number.
+    """
+    The frozen fence set of the tenant's current version, with the version and its fences read
+    together so they cannot disagree across a concurrent fence edit. That holds only within one
+    response: to read a multi-page fence set, take page 1 from here and every later page from
+    geoFenceSetSnapshot at the version reported here. Requires device:read.
+    """
     currentGeoFenceSet: GeoFenceSetSnapshot!
     # The manifest of one fence-set version: which fences it held and the content address
     # of each one's geometry. Unlike geoFenceSetSnapshot this reads no geometry at all, so
@@ -6187,7 +6517,16 @@ type Query {
     # a stamp naming a version that is not on record means the history was truncated, and
     # answering "empty" would read as "no fences" rather than "cannot know". A negative
     # version is refused outright rather than sharing version 0's known-empty answer.
-    geoFenceSetManifest(version: Int!): GeoFenceSetManifest!
+    """
+    The manifest of one fence-set version: which fences it held and the content address of each
+    one's geometry. It reads no geometry, so it costs the same per fence and needs no pagination. An
+    unknown positive version is an error, for the reason given on geoFenceSetSnapshot, and a
+    negative version is refused. Requires device:read.
+    """
+    geoFenceSetManifest(
+        """The fence-set version to read the manifest of."""
+        version: Int!
+    ): GeoFenceSetManifest!
     # ---- Detection-engine reconcile reads ------------------------------------------------
     # What the detection engine's copy of this tenant's rules, devices and thresholds is
     # checked against. event-processing reads them over a service token when it takes the
@@ -6200,10 +6539,32 @@ type Query {
     # instant that version became active and the version's enabled detection rules. A
     # profile whose frozen snapshot cannot be read fails the whole page rather than
     # answering with no rules.
-    activeProfileRules(afterId: String, limit: Int!): ActiveProfileRulesPage!
-    # One page of the device roster: every device, the profile its type adopts (empty when
-    # none) and when that membership began.
-    deviceRosterPage(afterId: String, limit: Int!): DeviceRosterPage!
+    """
+    Detection-engine reconcile read. One page of the tenant's published profiles, each with its
+    active version, when that version became active and its enabled detection rules. The engine
+    reads the reconcile queries when it takes the detection partition and every five minutes after,
+    and corrects whatever differs, so a rule, device or attribute change whose notification was lost
+    still reaches detection. A keyset page: pass the previous page's nextCursor as afterId, and stop
+    when it is null. A limit outside 1 to the maximum is refused. A profile whose frozen snapshot
+    cannot be read fails the whole page rather than answering with no rules. Requires device:read.
+    """
+    activeProfileRules(
+        """The nextCursor of the previous page; omit for the first page."""
+        afterId: String
+        """Page size, from 1 to the maximum the query allows; a value outside that range is refused."""
+        limit: Int!
+    ): ActiveProfileRulesPage!
+    """
+    Detection-engine reconcile read. One page of the device roster: every device, the profile its
+    type adopts (empty when none) and when that membership began. Pass the previous page's
+    nextCursor as afterId and stop when it is null. Requires device:read.
+    """
+    deviceRosterPage(
+        """The nextCursor of the previous page; omit for the first page."""
+        afterId: String
+        """Page size, from 1 to the maximum the query allows; a value outside that range is refused."""
+        limit: Int!
+    ): DeviceRosterPage!
     """
     One page of the numbers the devices of a profile (those whose type adopts it) hold in
     their metadata under the given names, which a draft calculated-metric formula reads as
@@ -6272,13 +6633,21 @@ type Query {
         """Page size, 1 to 1000."""
         limit: Int!
     ): DisabledDevicePage!
-    # One page of the numeric SHARED and SERVER device attributes a dynamic detection
-    # threshold can read. A page may hold fewer entries than its limit and still have a
-    # nextCursor; only a null cursor ends the walk.
-    deviceThresholdAttributePage(afterId: String, limit: Int!): DeviceThresholdAttributePage!
-    # The manifest of the tenant's CURRENT version — the version and its fences read from
-    # one row, so the two cannot disagree across a concurrent fence edit. Reading the
-    # version and the manifest as two queries would be two questions about a moving target.
+    """
+    Detection-engine reconcile read. One page of the numeric SHARED and SERVER device attributes
+    that a dynamic detection threshold can read. A page can hold fewer entries than its limit and
+    still have a nextCursor; only a null cursor ends the walk. Requires device:read.
+    """
+    deviceThresholdAttributePage(
+        """The nextCursor of the previous page; omit for the first page."""
+        afterId: String
+        """Page size, from 1 to the maximum the query allows; a value outside that range is refused."""
+        limit: Int!
+    ): DeviceThresholdAttributePage!
+    """
+    The manifest of the tenant's current version, with the version and its fences read from one row
+    so they cannot disagree across a concurrent fence edit. Requires device:read.
+    """
     currentGeoFenceSetManifest: GeoFenceSetManifest!
     # The archived geometry documents stored under the given content addresses.
     #
@@ -6292,7 +6661,21 @@ type Query {
     # Asking for more addresses than the per-request limit is an error rather than a partial
     # answer: a caller that asked for forty and silently received twenty-four could not tell
     # that from a tenant holding only twenty-four of them.
-    geoFenceGeometry(hashes: [String!]!): [GeoFenceGeometry!]!
+    """
+    The archived geometry documents stored under the given content addresses. An address the tenant
+    does not hold is absent from the result rather than an error, so incompleteness is the caller's
+    to interpret: a missing body must become a fence that reports an error, never one that is
+    silently absent, since an absent fence reads as outside for a device that is inside. Asking for
+    more addresses than the per-request limit is an error, not a partial answer. Requires
+    device:read.
+    """
+    geoFenceGeometry(
+        """
+        Content addresses of the geometry documents to fetch, taken from a manifest. More than the
+        per-request limit is an error.
+        """
+        hashes: [String!]!
+    ): [GeoFenceGeometry!]!
     """
     Reads alarms by numeric id. Ids naming no alarm, or an alarm the caller may not see, are
     omitted. Requires alarm:read.
@@ -6420,23 +6803,55 @@ type Query {
         """The anchor, an optional relationship type and the page to return."""
         criteria: AnchorDeviceSearchCriteria!
     ): DeviceSearchResults!
-    # Find entity groups by unique id.
-    entityGroupsById(ids: [ID!]!): [EntityGroup!]!
-    # Find entity groups by unique token. Answered to a member whose access is limited to part
-    # of the tenant too, with only the groups its scope names, of which it reads the token and
-    # name: description, metadata, selector, members and versions are refused.
-    entityGroupsByToken(tokens: [String!]!): [EntityGroup!]!
-    # List entity groups that meet criteria (optionally by member family / mode).
-    entityGroups(criteria: EntityGroupSearchCriteria!): EntityGroupSearchResults!
-    # Evaluate a CANDIDATE dynamic-group selector for a member family WITHOUT saving
-    # it — the console's live "matches N" authoring preview (ADR-061 G4 §4). Takes the
-    # identical publish gate + lowering + bounded query as a saved dynamic group, so
-    # the preview is exactly what the group would resolve. A non-lowerable / over-budget
-    # / malformed selector returns valid=false with an inline error, never a hard fault.
-    previewSelector(memberType: String!, selector: String!, pagination: PaginationInput!): SelectorPreview!
-    # List a dynamic entity group's published versions, newest first (ADR-062 S1).
-    # At most 1000 per call (newest first); limit (at least 1) narrows that and offset (not negative) pages further.
-    entityGroupVersions(token: String!, limit: Int, offset: Int): [EntityGroupVersion!]!
+    """Reads entity groups by numeric id. Ids naming no group are omitted. Requires device:read."""
+    entityGroupsById(
+        """Numeric ids of the entity groups to read."""
+        ids: [ID!]!
+    ): [EntityGroup!]!
+    """
+    Reads entity groups by token. Tokens naming no group are omitted. Also answered to a member
+    whose access is limited to part of the tenant, with only the groups its scope names, of which it
+    reads the token and name: description, metadata, selector, members and versions are refused.
+    """
+    entityGroupsByToken(
+        """Tokens of the entity groups to read."""
+        tokens: [String!]!
+    ): [EntityGroup!]!
+    """
+    Lists the entity groups that match the criteria, optionally by member family and mode, one page
+    at a time. Requires device:read.
+    """
+    entityGroups(
+        """The facets the listed entity groups must match, and the page to return."""
+        criteria: EntityGroupSearchCriteria!
+    ): EntityGroupSearchResults!
+    """
+    Evaluates a candidate dynamic-group selector for a member family without saving it, for a live
+    matches-N authoring preview. It applies the same checks, translation and bounded query as a
+    saved dynamic group, so the preview is what the group would resolve. A selector that is not
+    expressible, over budget or malformed returns valid false with an inline error rather than
+    failing. Requires device:read.
+    """
+    previewSelector(
+        """The entity family to evaluate the selector against: device, asset, area or customer."""
+        memberType: String!
+        """The candidate CEL membership selector. It is evaluated but not saved."""
+        selector: String!
+        """The page of matching members to return."""
+        pagination: PaginationInput!
+    ): SelectorPreview!
+    """
+    Lists a dynamic entity group's published versions, newest first. At most 1000 per call; limit
+    (at least 1) narrows that and offset (not negative) pages further. Requires device:read.
+    """
+    entityGroupVersions(
+        """Token of the dynamic entity group."""
+        token: String!
+        """Most versions to return, at least 1 and at most 1000. Omit for 1000."""
+        limit: Int
+        """Number of versions to skip, not negative. Use with limit to page further."""
+        offset: Int
+    ): [EntityGroupVersion!]!
     # Find device credentials by unique id.
     deviceCredentialsById(ids: [ID!]!): [DeviceCredential!]!
     # Find device credentials by unique token.
@@ -7178,26 +7593,77 @@ type Mutation {
         """Token of the command definition to delete."""
         token: String!
     ): Boolean!
-    # Create a new detection rule.
-    createDetectionRule(request: DetectionRuleCreateRequest!): DetectionRule!
-    # Update an existing detection rule.
-    updateDetectionRule(token: String!, request: DetectionRuleUpdateRequest!): DetectionRule!
-    # Delete a single detection rule.
-    deleteDetectionRule(token: String!): Boolean!
+    """
+    Creates a detection rule on a device profile's draft. Requires device:write, plus the authority
+    each action in the rule's definition needs. The profile must exist, the token must be new, and
+    the profile's ceiling on rules applies. It takes effect on devices when a profile version
+    containing it is published.
+    """
+    createDetectionRule(
+        """The detection rule to create."""
+        request: DetectionRuleCreateRequest!
+    ): DetectionRule!
+    """
+    Applies a partial update to a detection rule, identified by token. Omitted fields are kept, null
+    clears a clearable field, and the required fields (deviceProfileToken, definition, enabled)
+    refuse null. Requires device:write, plus the authority each action in the rule's definition
+    needs.
+    """
+    updateDetectionRule(
+        """Token of the detection rule to update."""
+        token: String!
+        """The fields to change."""
+        request: DetectionRuleUpdateRequest!
+    ): DetectionRule!
+    """
+    Deletes a detection rule outright. A published profile version keeps the copy it froze. Returns
+    true when it was deleted and false when nothing has the token. Requires device:write.
+    """
+    deleteDetectionRule(
+        """Token of the detection rule to delete."""
+        token: String!
+    ): Boolean!
     # Create a new geofence. Takes device:write AND location:read: a fence is a question about
     # where a device is, and whoever can shape the question can extract the answer — a caller able
     # to mint fences can narrow one until a containment rule's raise/resolve edge reveals a
     # device's actual coordinates. Reading fences stays on device:read, since a fence's geometry
     # is a region someone drew, not a device's position.
-    createGeoFence(request: GeoFenceCreateRequest!): GeoFence!
+    """
+    Creates a geofence and mints a new fence-set version. Requires device:write and location:read:
+    whoever can shape a fence can narrow it until a containment rule's raise and resolve reveals a
+    device's actual coordinates, so authoring is held to the same authority as reading positions.
+    Reading fences needs only device:read.
+    """
+    createGeoFence(
+        """The geofence to create."""
+        request: GeoFenceCreateRequest!
+    ): GeoFence!
     # Update an existing geofence. Same authorities as creation, for the same reason: reshaping a
     # fence is the same question-shaping primitive as minting one. The request's `token` must
     # equal the `token` argument: a fence's token is immutable, because rules name fences by
     # token and this service cannot rewrite the rules that would be left naming nothing.
-    updateGeoFence(token: String!, request: GeoFenceUpdateRequest!): GeoFence!
+    """
+    Applies a partial update to a geofence, identified by token, which is immutable. Needs the same
+    authorities as creation, for the same reason. Changing the geometry mints a new fence-set
+    version; changing only name, description or metadata does not.
+    """
+    updateGeoFence(
+        """Token of the geofence to update."""
+        token: String!
+        """The fields to change."""
+        request: GeoFenceUpdateRequest!
+    ): GeoFence!
     # Delete a single geofence. device:write alone — removing a fence constructs no question and
     # answers none, and delete-then-recreate is no way around the gate on creation.
-    deleteGeoFence(token: String!): Boolean!
+    """
+    Deletes a geofence outright and mints a new fence-set version, after which its token can be
+    reused. Refused while an area names the fence as its boundary. Returns true when it was deleted
+    and false when nothing has the token. Requires device:write only.
+    """
+    deleteGeoFence(
+        """Token of the geofence to delete."""
+        token: String!
+    ): Boolean!
     """
     Acknowledges an alarm: an operator asserts the alarm has been seen. It does not change state or
     severity and is independent of ACTIVE or CLEARED. Idempotent: acknowledging an acknowledged
@@ -7341,21 +7807,37 @@ type Mutation {
         """Token of the device to delete."""
         token: String!
     ): Boolean!
-    # Create a new entity group (ADR-061). A static group's members are managed over
-    # "member" relationship edges; a dynamic group carries a CEL selector and resolves
-    # its members eval-on-read (validated + cost-gated at create).
-    createEntityGroup(request: EntityGroupCreateRequest): EntityGroup!
-    # Update an existing entity group's presentation fields (member family + mode
-    # are immutable).
+    """
+    Creates an entity group. A static group's members are managed with relationships of the member
+    type; a dynamic group carries a CEL selector, validated and cost-checked on create, and resolves
+    its members when read. Requires device:write.
+    """
+    createEntityGroup(
+        """The entity group to create."""
+        request: EntityGroupCreateRequest
+    ): EntityGroup!
+    """
+    Applies a partial update to an entity group, identified by token. Member family and membership
+    mode cannot change. Pass expectedUpdatedAt to refuse the write if the group changed since it was
+    read. Requires device:write.
+    """
     updateEntityGroup(
+        """Token of the entity group to update."""
         token: String!
+        """The fields to change."""
         request: EntityGroupUpdateRequest!
         """Apply only if updatedAt still equals this value; returns STALE_WRITE if the record changed. Reload before retrying. Omit for last-write-wins."""
         expectedUpdatedAt: String
     ): EntityGroup!
-    # Delete an entity group, its relationship edges, and its frozen versions.
-    # Refused (ErrEntityInUse) while a detection rule scopes to the group (ADR-062).
-    deleteEntityGroup(token: String!): Boolean!
+    """
+    Deletes an entity group together with its member relationships and its frozen versions. Refused
+    while a detection rule scopes to the group. Returns true when it was deleted and false when
+    nothing has the token. Requires device:write.
+    """
+    deleteEntityGroup(
+        """Token of the entity group to delete."""
+        token: String!
+    ): Boolean!
     """
     Publishes a dynamic entity group's current draft selector as a new immutable version and makes
     it the active version a rule-scoped resolve reads. Rejected for a static group. Requires
@@ -7376,9 +7858,16 @@ type Mutation {
         """
         expectedActiveVersion: Int
     ): EntityGroupVersion!
-    # Re-point a dynamic group's active version at an existing version — a
-    # non-destructive rollback; the draft is untouched. Returns the updated group.
-    rollbackEntityGroup(token: String!, version: Int!): EntityGroup!
+    """
+    Points a dynamic group's active version back at an existing version and returns the group. Non-
+    destructive: no version is removed and the draft selector is untouched. Requires device:write.
+    """
+    rollbackEntityGroup(
+        """Token of the dynamic group to roll back."""
+        token: String!
+        """The published version to make active again."""
+        version: Int!
+    ): EntityGroup!
     """
     Make a group an access scope, or stop it being one, and return the group. A member whose
     access is limited to the group sees the devices in it at its active version, so publishing
