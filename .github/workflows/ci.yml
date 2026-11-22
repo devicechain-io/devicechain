@@ -3241,6 +3241,17 @@ jobs:
           hack/check-gke-extraction-plans.sh --self-test
           hack/check-gke-extraction-plans.sh deploy/gke/fixtures
 
+      # The fleet premise spike's harness runs against scripted gcloud/kubectl/psql/tofu: every
+      # entry point must refuse what it should (a creation before the reaper preflight, an
+      # unenforced encryption key, a forged termination) before any real measurement is trusted.
+      # The self-test of each entry point also kills a preflight-bypass mutant.
+      - name: fleet premise harness self-test
+        working-directory: .
+        run: |
+          for e in hack/fleet-s0/E-*.sh hack/fleet-s0/reaper.sh hack/fleet-s0/run.sh; do
+            bash "$e" --self-test
+          done
+
       # The no-op plan gate for the deploy/gke -> modules/gke-cluster extraction. The self-test
       # runs first and shows the gate refusing each planted defect (a dropped moved block, a
       # renamed module call, a changed input, a changed settle trigger, an empty fixture
