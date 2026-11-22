@@ -29,7 +29,7 @@ func newGroupScopeFixture(t *testing.T) scopeFixture {
 	}
 	f := seedScopeFixture(t, db, &model.EntityGroup{}, &model.IssuedGroupToken{}, &model.EntityGroupVersion{},
 		&model.EntityGroupMembership{}, &model.EntityGroupFacetRef{}, &model.DetectionRuleScopeRef{},
-		&model.DeviceConfigurationRevision{}, &model.DeviceConfigurationState{})
+		&model.DeviceConfigurationRevision{}, &model.DeviceConfigurationReport{}, &model.DeviceConfigurationState{})
 	ctx := f.operator()
 	north := "north"
 	if _, err := f.api.SetEntityAttribute(ctx, &model.EntityAttributeSetRequest{
