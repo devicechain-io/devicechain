@@ -9,7 +9,7 @@ replace github.com/devicechain-io/dc-microservice => ../../core
 
 require (
 	github.com/devicechain-io/dc-microservice v0.0.0-00010101000000-000000000000
-	github.com/graph-gophers/graphql-go v1.11.0
+	github.com/graph-gophers/graphql-go v1.11.1
 	github.com/stretchr/testify v1.12.1
 	gorm.io/driver/postgres v1.6.3
 	gorm.io/gorm v1.31.2
