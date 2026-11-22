@@ -40,7 +40,7 @@ func S7RegisterClient(ctx context.Context, hs *sim.Handshake, httpc *http.Client
 		return fmt.Errorf("client registration requires DC_ADMIN_PASSWORD and a per-run client id")
 	}
 	admin := userclient.NewAdminSession(httpc, hs.Endpoints.UserGraphQL, auth.DefaultSuperuserEmail, password)
-	doc := `mutation($id:String!,$redirect:String!){createOauthClient(request:{clientId:$id,redirectUris:[$redirect],scopes:["read-only"],confidential:false}){client{clientId}}}`
+	doc := `mutation($id:String!,$redirect:String!){createOauthClient(request:{clientId:$id,redirectUris:[$redirect],scopes:["read-only","location"],confidential:false}){client{clientId}}}`
 	vars := map[string]any{"id": id, "redirect": s7Redirect}
 	if remove {
 		doc = `mutation($id:String!){deleteOauthClient(clientId:$id)}`
@@ -88,9 +88,12 @@ func s7Authorize(ctx context.Context, httpc *http.Client, hs *sim.Handshake, cli
 		return "", err
 	}
 	sum := sha256.Sum256([]byte(verifier))
+	// Full tenant alarm truth includes the truck's geofence alarm. The separate
+	// location consent retains location:read on this member's OAuth grant;
+	// read-only alone legitimately withholds position-derived alarms.
 	form := url.Values{
 		"response_type": {"code"}, "client_id": {clientID}, "redirect_uri": {s7Redirect},
-		"scope": {"read-only"}, "state": {state}, "resource": {resource},
+		"scope": {"read-only location"}, "state": {state}, "resource": {resource},
 		"code_challenge":        {base64.RawURLEncoding.EncodeToString(sum[:])},
 		"code_challenge_method": {"S256"}, "step": {"login"},
 		"email": {hs.SimEmail}, "password": {hs.SimPassword},
@@ -175,8 +178,8 @@ func s7MemberClaims(token string, hs *sim.Handshake, clientID, resource string) 
 		Audience []string        `json:"aud"`
 		Expires  int64           `json:"exp"`
 	}
-	if err != nil || json.Unmarshal(body, &claims) != nil || claims.Tenant != hs.Tenant || claims.Username != hs.SimEmail || claims.ClientID != clientID || claims.Scope != "read-only" || claims.Sudo || len(claims.Anchors) != 0 || !slices.Contains(claims.Audience, resource) || claims.Expires <= time.Now().Unix() {
-		return fmt.Errorf("OAuth token is not the requested unscoped tenant member's read-only resource grant")
+	if err != nil || json.Unmarshal(body, &claims) != nil || claims.Tenant != hs.Tenant || claims.Username != hs.SimEmail || claims.ClientID != clientID || claims.Scope != "read-only location" || claims.Sudo || len(claims.Anchors) != 0 || !slices.Contains(claims.Audience, resource) || claims.Expires <= time.Now().Unix() {
+		return fmt.Errorf("OAuth token is not the requested unscoped tenant member's read-only and location resource grant")
 	}
 	return nil
 }

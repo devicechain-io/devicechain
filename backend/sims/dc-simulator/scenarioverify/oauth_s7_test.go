@@ -25,7 +25,7 @@ func s7TestToken(claims map[string]any) string {
 
 func s7TestClaims() map[string]any {
 	return map[string]any{"tenant": "tenant-b", "username": "member@example.invalid", "client_id": "per-run",
-		"scope": "read-only", "aud": []string{"https://mcp.example.invalid/api/mcp"}, "exp": time.Now().Add(time.Hour).Unix()}
+		"scope": "read-only location", "aud": []string{"https://mcp.example.invalid/api/mcp"}, "exp": time.Now().Add(time.Hour).Unix()}
 }
 
 func TestS7PKCEUserFlowUsesRealHTTPAuthorizationSteps(t *testing.T) {
@@ -46,7 +46,7 @@ func TestS7PKCEUserFlowUsesRealHTTPAuthorizationSteps(t *testing.T) {
 			t.Error("grant binding changed")
 		}
 		if r.URL.Path == "/oauth/authorize" {
-			if f.Get("code_challenge_method") != "S256" || f.Get("scope") != "read-only" {
+			if f.Get("code_challenge_method") != "S256" || f.Get("scope") != "read-only location" {
 				t.Error("PKCE or scope omitted")
 			}
 			switch f.Get("step") {
@@ -98,7 +98,7 @@ func TestS7RefusesOperatorAgentWrongTenantAndUnboundTokens(t *testing.T) {
 	hs := &sim.Handshake{Tenant: "tenant-b", SimEmail: "member@example.invalid"}
 	for _, change := range []map[string]any{
 		{"tenant": "tenant-a"}, {"username": "operator@example.invalid"}, {"sudo": true},
-		{"client_id": "other"}, {"scope": "read-only act:alarms"}, {"aud": []string{"another-resource"}},
+		{"client_id": "other"}, {"scope": "read-only location act:alarms"}, {"scope": "read-only"}, {"scope": "location"}, {"aud": []string{"another-resource"}},
 		{"scp": []string{"customer"}}, {"scp": nil}, {"exp": 1},
 	} {
 		claims := s7TestClaims()
@@ -113,6 +113,37 @@ func TestS7RefusesOperatorAgentWrongTenantAndUnboundTokens(t *testing.T) {
 		if strings.Contains(err.Error(), token) {
 			t.Fatal("credential appeared in error")
 		}
+	}
+}
+
+func TestS7RegistersLocationConsentForFullAlarmTruth(t *testing.T) {
+	t.Setenv("DC_ADMIN_PASSWORD", "operator-password")
+	registered := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		if r.URL.Path == "/graphql" {
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"login": map[string]any{"identityToken": "operator", "expiresAt": time.Now().Add(time.Hour).Format(time.RFC3339)}}})
+			return
+		}
+		if r.URL.Path != "/admin/graphql" || r.Header.Get("Authorization") != "Bearer operator" {
+			t.Error("client registration did not use the operator registry")
+		}
+		registered = true
+		if !strings.Contains(req.Query, `scopes:["read-only","location"]`) || !strings.Contains(req.Query, "confidential:false") {
+			t.Error("full alarm comparison requires a public client registered for separate location consent")
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"createOauthClient": map[string]any{"client": map[string]any{"clientId": "per-run"}}}})
+	}))
+	defer server.Close()
+	hs := &sim.Handshake{Endpoints: sim.Endpoints{UserGraphQL: server.URL + "/graphql"}}
+	if err := S7RegisterClient(context.Background(), hs, server.Client(), "per-run", false); err != nil || !registered {
+		t.Fatalf("registration=%v err=%v", registered, err)
 	}
 }
 

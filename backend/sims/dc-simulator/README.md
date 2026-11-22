@@ -853,8 +853,11 @@ bootstrap before starting their clocks; MCP collection waits for the selected pr
 serve. Each rig run registers a public OAuth client through user-management's admin registry,
 then the verifier POSTs B's member login and consent to the real authorization endpoint and
 redeems the authorization code with S256 PKCE and the MCP resource indicator. The MCP bearer is
-that member's read-only token. The operator credential is used only for client registration and
-deletion. Tokens, the identity proof, authorization code and PKCE verifier stay in memory and
+that member's token with explicit `read-only location` consent. The separate `location` scope
+allows the truck's geofence alarm to participate in the full tenant alarm comparison; a
+`read-only` grant alone legitimately withholds position-derived alarms. The operator credential
+is used only for client registration and deletion. Tokens, the identity proof, authorization
+code and PKCE verifier stay in memory and
 never enter reports or logs; a public client has no client secret. Teardown deletes the client.
 
 For a standalone verifier, add `--peer-handshake <B.json> --peer-sim <B-control-URL>`,
