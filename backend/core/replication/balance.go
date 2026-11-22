@@ -245,11 +245,27 @@ func PlanRebalance(snap Snapshot, opts PlanOptions) RebalancePlan {
 		return consumers[i].consumer < consumers[j].consumer
 	})
 	consumerCounts := spread(consumers)
+	// The most constrained first: a consumer with fewer less-busy replicas to go to is placed before one
+	// with more, so the flexible ones fill whatever the constrained ones could not use. In name order a
+	// flexible consumer could take the only server a constrained one can reach, and the step pins what it
+	// moves, so the count balancing could not even that out afterwards.
+	var order []int
+	eligible := map[int]int{}
 	for i := range consumers {
 		g := &consumers[i]
 		if !pinnedStream[g.stream] {
 			continue
 		}
+		for _, c := range g.candidates {
+			if occ[c] < occ[g.leader] {
+				eligible[i]++
+			}
+		}
+		order = append(order, i)
+	}
+	sort.SliceStable(order, func(a, b int) bool { return eligible[order[a]] < eligible[order[b]] })
+	for _, i := range order {
+		g := &consumers[i]
 		moved := false
 		if maxMoves <= 0 || budget() > 0 {
 			best := ""
