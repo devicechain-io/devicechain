@@ -2455,94 +2455,165 @@ type AlarmSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a single current-state attribute for an entity (ADR-012).
+"""
+A single current-state attribute of an entity: a key and value in one scope. Unlike an event, an
+attribute is a mutable row; writing the same entity, scope and key replaces the value. The value is
+stored as text with a type tag so consumers can coerce it.
+"""
 type EntityAttribute implements Model {
+    """Server-assigned numeric identifier, as a string."""
     id: ID!
+    """When the attribute was first written, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the attribute row was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: a deleted attribute is removed outright and is not returned."""
     deletedAt: String
+    """Entity type of the owner, for example device."""
     entityType: String!
+    """The entity the attribute belongs to."""
     entity: Entity!
+    """
+    Who owns the attribute: CLIENT, reported by the device; SERVER, set by the platform and hidden
+    from the device; or SHARED, set by the platform and readable by the device, which also
+    subscribes to it.
+    """
     scope: String!
+    """The attribute's key, up to 128 bytes."""
     attrKey: String!
+    """How to read value: STRING, LONG, DOUBLE, BOOLEAN or JSON."""
     valueType: String!
+    """The attribute's value as text, interpreted by valueType. Null when none is set. At most 64 KiB."""
     value: String
+    """When the value was last set, as an RFC 3339 timestamp."""
     lastUpdated: String
 }
 
-# Data required to set (upsert) an entity attribute.
+"""
+Data required to set, or replace, an entity attribute. The owner is resolved from its type and
+token, which must name an existing entity.
+"""
 input EntityAttributeSetRequest {
+    """Entity type of the owner, for example device."""
     entityType: String!
+    """Token of the entity the attribute belongs to."""
     entity: String!
+    """CLIENT, SERVER or SHARED. See EntityAttribute.scope. Any other value is refused."""
     scope: String!
+    """The attribute's key, up to 128 bytes."""
     attrKey: String!
+    """How to read value: STRING, LONG, DOUBLE, BOOLEAN or JSON. Any other value is refused."""
     valueType: String!
+    """The attribute's value as text, up to 64 KiB. Omit or send null for none."""
     value: String
 }
 
-# Criteria used when searching for entity attributes.
+"""Criteria for listing entity attributes. Every facet is optional and they AND together."""
 input EntityAttributeSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Only attributes of entities of this type, for example device."""
     entityType: String
+    """
+    Only attributes of the entity with this token. It takes effect only together with entityType; an
+    entity that does not exist finds nothing.
+    """
     entity: String
+    """Only attributes in this scope: CLIENT, SERVER or SHARED."""
     scope: String
+    """Only attributes whose key is one of these, at most 1000 keys."""
     attrKeys: [String!]
 }
 
-# A row of the audit journal (ADR-019). Captured by construction on every entity
-# mutation in this service, and never mutated via the API. It is written to by
-# exactly one other path: deleting a tenant empties the fields that name a person,
-# keeping the row as the evidence of the deletion. Times are RFC3339 strings.
+"""
+A row of the audit journal. It is captured on every entity mutation in this service and is never
+changed through the API. The one other thing that writes it is deleting a tenant, which empties the
+fields that name a person and keeps the row as evidence of the deletion. Requires audit:read.
+"""
 type AuditEvent {
+    """Server-assigned numeric identifier, as a string."""
     id: ID!
     # RFC3339 time the audited statement committed.
+    """When the audited statement committed, as an RFC 3339 timestamp."""
     occurredTime: String!
     # "mutation" (an entity create/update/delete) or "auth" (login/refresh).
+    """mutation for an entity create, update or delete, or auth for a login or token refresh."""
     category: String!
     # JWT subject that performed it, "system" for a system-context operation, or
     # "" when neither is present.
+    """
+    The authenticated subject that performed it, system for a system-context operation, or an empty
+    string when neither is present.
+    """
     actor: String!
     # "create" | "update" | "delete" for a mutation.
+    """create, update or delete for a mutation."""
     operation: String!
     # Schema-qualified mutated table (empty for an auth event).
+    """The schema-qualified table that was mutated. Empty for an auth event."""
     tableName: String
     # Primary key of the affected row when the statement targets a single row;
     # empty for a bulk/condition mutation (rowsAffected then conveys the scope).
+    """
+    Primary key of the affected row when the statement targets a single row; empty for a bulk or
+    conditional mutation, whose scope rowsAffected conveys.
+    """
     entityPk: String
     # Human-facing label of the affected row (e.g. its token), captured when the
     # model provides one; null otherwise. It is emptied for a tenant that has been
     # deleted: the journal is retained as the evidence of the deletion, and it does
     # not keep the identifiers the deletion was of.
+    """
+    A human-facing label of the affected row, such as its token, captured when the model provides
+    one; null otherwise. Emptied for a tenant that has been deleted, because the journal is kept as
+    evidence of the deletion without the identifiers it concerned.
+    """
     entityLabel: String
     # Number of rows the audited statement affected.
+    """Number of rows the audited statement affected."""
     rowsAffected: Int!
 }
 
-# Criteria for an audit-journal query. All filters are optional except
-# pagination; a bounded (startTime, endTime) range is recommended.
+"""
+Criteria for querying the audit journal. Every filter is optional; a bounded startTime and endTime
+range is recommended.
+"""
 input AuditEventSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Only entries at or after this instant, as an RFC 3339 timestamp."""
     startTime: String
+    """Only entries at or before this instant, as an RFC 3339 timestamp."""
     endTime: String
+    """Only entries of this category: mutation or auth."""
     category: String
+    """Only entries of this operation: create, update or delete."""
     operation: String
     """Only entries whose actor contains this text. The match ignores case. At most 256 bytes; longer input is refused with LIMIT_EXCEEDED."""
     actor: String
+    """Only entries that mutated this table."""
     tableName: String
+    """Only entries that affected the row with this primary key."""
     entityPk: String
 }
 
-# A page of audit-journal rows, newest first.
+"""One page of audit journal rows, newest first."""
 type AuditEventSearchResults {
+    """The entries on this page."""
     results: [AuditEvent!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
-# Search results returned from entity attribute query.
+"""One page of entity attributes."""
 type EntityAttributeSearchResults {
+    """The attributes on this page."""
     results: [EntityAttribute!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -3462,56 +3533,78 @@ type EntityGroupSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# A per-tenant declaration that an EntityAttribute key, for a member family, is a
-# classification facet (ADR-061 G2 / SD-5). It declares which keys are facets for
-# the console browse/filter axes + typeahead; it does NOT store facet values (those
-# stay as EntityAttribute rows on the member entities). Addressed by its natural
-# key (memberType, key). Named FacetKey to avoid colliding with the ADR-045
-# discovery-facet concept (DeviceFacet / facetValues).
+"""
+A per-tenant declaration that an attribute key is a classification facet for a member family. It
+tells the console which keys to offer as browse and filter axes and as typeahead; it does not store
+facet values, which remain attributes on the member entities. Addressed by its natural key,
+memberType and key. Named FacetKey so it is not confused with the device and profile discovery
+facets read by facetValues.
+"""
 type FacetKey implements Model {
+    """Server-assigned numeric identifier, as a string."""
     id: ID!
+    """When the facet key was declared, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the facet key was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: a deleted facet key is removed outright and is not returned."""
     deletedAt: String
-    # The entity family this facet classifies: device | asset | area | customer.
+    """The entity family this facet classifies: device, asset, area or customer."""
     memberType: String!
-    # The EntityAttribute key this facet declares (e.g. "climate", "country").
+    """The attribute key this facet declares, for example climate or country."""
     key: String!
-    # The value type the facet's attribute values carry: STRING | LONG | DOUBLE |
-    # BOOLEAN | JSON.
+    """The value type of the facet's attribute values: STRING, LONG, DOUBLE, BOOLEAN or JSON."""
     valueType: String!
-    # Where the facet's values come from: "attribute" (v1) or "system" (a
-    # predefined, non-deletable, modeled-column facet — declared seam, deferred).
+    """
+    Where the facet's values come from: attribute, for values stored as attributes, or system, for a
+    predefined facet over a modelled column, which cannot be deleted.
+    """
     source: String!
-    # An optional value vocabulary that powers the console typeahead; null when the
-    # facet's values are free-form.
+    """
+    An optional vocabulary of values that powers the console typeahead. Null when the facet's values
+    are free-form.
+    """
     values: [String!]
-    # An optional human display label for the axis; null falls back to key.
+    """An optional human display label for the axis. Null falls back to key."""
     label: String
 }
 
-# Data required to declare (upsert) a facet key (ADR-061 G2). The natural key
-# (memberType, key) selects the row; the remaining fields are (re)written. v1 only
-# writes attribute-source facets, so there is no source field here.
+"""
+Data required to declare, or redeclare, a facet key. The natural key, memberType and key, selects
+the row and the remaining fields are rewritten. Only attribute-source facets can be written, so
+there is no source field.
+"""
 input FacetKeySetRequest {
+    """The entity family the facet classifies: device, asset, area or customer."""
     memberType: String!
+    """The attribute key the facet declares."""
     key: String!
+    """The value type of the facet's attribute values: STRING, LONG, DOUBLE, BOOLEAN or JSON."""
     valueType: String!
+    """An optional vocabulary of values for the console typeahead. Omit for free-form values."""
     values: [String!]
+    """An optional human display label for the axis. Omit to fall back to the key."""
     label: String
 }
 
-# Criteria used when searching for facet keys. memberType is an optional filter
-# (the console axis picker asks per family).
+"""Criteria for listing declared facet keys."""
 input FacetKeySearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """
+    Only facet keys declared for this entity family: device, asset, area or customer. Omit for every
+    family.
+    """
     memberType: String
 }
 
-# Search results returned from the facet keys query.
+"""One page of facet keys."""
 type FacetKeySearchResults {
+    """The facet keys on this page."""
     results: [FacetKey!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -5594,34 +5687,63 @@ type AreaSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Uniform entity interface implemented by all entity object types.
+"""
+Interface implemented by every entity object type: anything that can be addressed by an entity type
+and a token.
+"""
 interface Entity {
+    """Server-assigned numeric identifier, as a string."""
     id: ID!
+    """Identifier of the entity, unique within its type and tenant."""
     token: String!
 }
 
-# A uniform (type, token) reference to an entity (ADR-013/044).
+"""A reference to an entity by its type and token."""
 input EntityRefInput {
+    """Entity type, for example device, asset, area, customer or group."""
     type: String!
+    """Token of the entity."""
     token: String!
 }
 
-# A uniform (type, token) reference to an entity (ADR-013/044), returned from a query.
+"""A reference to an entity by its type and token, returned from a query."""
 type EntityRef {
+    """Entity type, for example device, asset, area, customer or group."""
     type: String!
+    """Token of the entity."""
     token: String!
 }
 
-# Represents a type of relation between entities.
+"""
+A kind of relationship between entities, such as assigned or contains. One table of types serves
+every entity family. A tracked type marks relationships whose edges are denormalized onto events for
+indexing, and only tracked relationships count as ownership for members whose access is limited to
+part of the tenant.
+"""
 type EntityRelationshipType implements Model & TokenReference & NamedEntity & MetadataEntity {
+    """
+    Server-assigned numeric identifier, as a string. Address a relationship type by its token
+    instead where you can.
+    """
     id: ID!
+    """When the relationship type was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the relationship type was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: a deleted relationship type is removed outright and is not returned."""
     deletedAt: String
+    """Identifier of the relationship type, unique within the tenant. It cannot be changed after creation."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
+    """
+    Whether relationships of this type are tracked: denormalized onto events so they can be indexed
+    and filtered by, and counted as ownership for scoped access.
+    """
     tracked: Boolean!
     """
     The vocabulary predicate this relationship is (for example brick:feeds), or null when it
@@ -5632,12 +5754,20 @@ type EntityRelationshipType implements Model & TokenReference & NamedEntity & Me
     semanticInverse: SemanticTerm
 }
 
-# Data required to create an entity relationship type.
+"""Data required to create an entity relationship type."""
 input EntityRelationshipTypeCreateRequest {
+    """Identifier for the new relationship type, unique within the tenant. Cannot be changed later."""
     token: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
+    """
+    Whether relationships of this type are tracked: denormalized onto events and counted as
+    ownership for scoped access. A device may carry only a bounded number of tracked relationships.
+    """
     tracked: Boolean!
     """
     A PREDICATE of an enabled vocabulary pack, as a CURIE or full IRI. A term of the wrong
@@ -5662,12 +5792,21 @@ input EntityRelationshipTypeCreateRequest {
 # 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
 # arrive already-populated for a caller who never sent it, which collapses "omitted" back
 # into "sent", and turns this input back into the full replace it replaces.
+"""
+A partial update of an entity relationship type. Each field has three states: omit it to keep the
+stored value, send null to clear it, or send a value to set it.
+"""
 input EntityRelationshipTypeUpdateRequest {
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
-    # Required and unclearable: null is refused rather than read as false, which would
-    # stop denormalizing this type's relationships onto events and report success.
+    """
+    Whether relationships of this type are tracked. Null is refused rather than read as false, which
+    would stop denormalizing the type's relationships onto events and report success.
+    """
     tracked: Boolean
     """
     New predicate: null clears it, and the inverse with it. Omit to leave it alone. Validated
@@ -5682,59 +5821,100 @@ input EntityRelationshipTypeUpdateRequest {
     semanticInverse: String
 }
 
-# Criteria used when searching for entity relationship types.
+"""Criteria for listing entity relationship types."""
 input EntityRelationshipTypeSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
 }
 
-# Search results returned from entity relationship type query.
+"""One page of entity relationship types."""
 type EntityRelationshipTypeSearchResults {
+    """The relationship types on this page."""
     results: [EntityRelationshipType!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
-# Represents a relationship between two entities.
+"""
+A directed relationship edge between two entities, of a given relationship type. The source and
+target are each addressed by entity type and token.
+"""
 type EntityRelationship implements Model & TokenReference & MetadataEntity {
+    """
+    Server-assigned numeric identifier, as a string. Address a relationship by its token instead
+    where you can.
+    """
     id: ID!
+    """When the relationship was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the relationship was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: a removed relationship is deleted outright and is not returned."""
     deletedAt: String
+    """Identifier of the relationship, unique within the tenant."""
     token: String!
+    """Entity type of the source entity."""
     sourceType: String!
+    """The entity the edge points from."""
     source: Entity!
+    """Entity type of the target entity."""
     targetType: String!
+    """The entity the edge points to."""
     target: Entity!
+    """The kind of relationship the edge is."""
     relationshipType: EntityRelationshipType!
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
 }
 
-# Data required to create an entity relationship.
+"""
+Data required to create an entity relationship. The source and target are resolved from their types
+and tokens, which must name existing entities.
+"""
 input EntityRelationshipCreateRequest {
+    """Identifier for the new relationship, unique within the tenant."""
     token: String!
+    """Entity type of the source entity, for example device."""
     sourceType: String!
+    """Token of the source entity."""
     source: String!
+    """Entity type of the target entity, for example customer."""
     targetType: String!
+    """Token of the target entity."""
     target: String!
+    """Token of the relationship type. An unknown token is refused."""
     relationshipType: String!
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
 
-# Criteria used when searching for entity relationships.
+"""Criteria for listing entity relationships. Every facet is optional and they AND together."""
 input EntityRelationshipSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Only relationships whose source is of this entity type."""
     sourceType: String
+    """Only relationships whose source has this token. It takes effect only together with sourceType."""
     source: String
+    """Only relationships whose target is of this entity type."""
     targetType: String
+    """Only relationships whose target has this token. It takes effect only together with targetType."""
     target: String
+    """Only relationships of the relationship type with this token."""
     relationshipType: String
+    """True selects relationships of tracked types and false those of untracked types. Omit for either."""
     tracked: Boolean
 }
 
-# Search results returned from entity relationship query.
+"""One page of entity relationships."""
 type EntityRelationshipSearchResults {
+    """The relationships on this page."""
     results: [EntityRelationship!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -6570,6 +6750,11 @@ type AutomationReviewBreakGlass {
     at: String!
 }
 
+"""
+The reads of the tenant data plane: devices, device types and profiles, the relationship graph,
+alarms, entity groups, geofences and the rest of device management. A field's description names the
+authority it needs.
+"""
 type Query {
     """Preview. Report this build's fleet operation capabilities and fresh database enforcement and tenant orphan facts. Requires fleet:operate; scoped members are refused. An expensive diagnostic (it counts rows): query it when you need the answer, do not poll it."""
     fleetOperationReadiness: FleetOperationReadiness!
@@ -6664,9 +6849,14 @@ type Query {
         """The field whose values to list."""
         facet: DeviceFacet!
     ): [String!]!
-    # List the tenant's declared facet keys, optionally for one member family
-    # (ADR-061 G2). Powers the console browse/filter axis picker + typeahead.
-    facetKeys(criteria: FacetKeySearchCriteria!): FacetKeySearchResults!
+    """
+    Lists the tenant's declared facet keys, optionally for one member family, one page at a time.
+    Powers the console's browse and filter axis picker and typeahead. Requires device:read.
+    """
+    facetKeys(
+        """The facets the listed facet keys must match, and the page to return."""
+        criteria: FacetKeySearchCriteria!
+    ): FacetKeySearchResults!
     """
     Returns the metric definitions with the given ids. Ids that match nothing are omitted,
     an id that is not a number fails the request, and more than 1000 ids are refused with
@@ -7199,10 +7389,16 @@ type Query {
         """Only alarms on devices of this type, by its token."""
         deviceType: String
     ): [AlarmSeverityCount!]!
-    # List entity attributes that meet criteria.
-    entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
-    # Query the audit journal (ADR-019); tenant-scoped, newest first.
-    auditEvents(criteria: AuditEventSearchCriteria!): AuditEventSearchResults!
+    """Lists the entity attributes that match the criteria, one page at a time. Requires device:read."""
+    entityAttributes(
+        """The facets the listed attributes must match, and the page to return."""
+        criteria: EntityAttributeSearchCriteria!
+    ): EntityAttributeSearchResults!
+    """Queries the audit journal, newest first, one page at a time. Requires audit:read."""
+    auditEvents(
+        """The facets the listed audit events must match, and the page to return."""
+        criteria: AuditEventSearchCriteria!
+    ): AuditEventSearchResults!
     """
     Returns the devices with the given ids. Ids that match no device are omitted, an id
     that is not a number fails the request, and more than 1000 ids are refused with
@@ -7550,12 +7746,21 @@ type Query {
         deviceToken: String!
     ): DeviceClaim
 
-    # Find entity relationship types by unique id.
-    entityRelationshipTypesById(ids: [String!]!): [EntityRelationshipType!]!
-    # Find entity relationship types by unique token.
-    entityRelationshipTypesByToken(tokens: [String!]!): [EntityRelationshipType!]!
-    # List entity relationship types that meet criteria.
-    entityRelationshipTypes(criteria: EntityRelationshipTypeSearchCriteria!): EntityRelationshipTypeSearchResults!
+    """Reads relationship types by numeric id. Ids naming no type are omitted. Requires device:read."""
+    entityRelationshipTypesById(
+        """Numeric ids of the entity relationship types to read."""
+        ids: [String!]!
+    ): [EntityRelationshipType!]!
+    """Reads relationship types by token. Tokens naming no type are omitted. Requires device:read."""
+    entityRelationshipTypesByToken(
+        """Tokens of the entity relationship types to read."""
+        tokens: [String!]!
+    ): [EntityRelationshipType!]!
+    """Lists the relationship types that match the criteria, one page at a time. Requires device:read."""
+    entityRelationshipTypes(
+        """The facets the listed entity relationship types must match, and the page to return."""
+        criteria: EntityRelationshipTypeSearchCriteria!
+    ): EntityRelationshipTypeSearchResults!
     """
     The tenant's semantic context: the vocabulary packs it has enabled and the custom prefixes
     it declared. A tenant that never set one has an empty context, which enables nothing, so
@@ -7563,17 +7768,30 @@ type Query {
     read it. Null only on an error, which says why.
     """
     semanticContext: SemanticContext
-    # Find entity relationships by unique id.
-    entityRelationshipsById(ids: [String!]!): [EntityRelationship!]!
-    # Find entity relationships by unique token.
-    entityRelationshipsByToken(tokens: [String!]!): [EntityRelationship!]!
-    # List entity relationships that meet criteria.
-    entityRelationships(criteria: EntityRelationshipSearchCriteria!): EntityRelationshipSearchResults!
-    # Return the subset of the given (type, id) references that resolve to an
-    # existing entity in the caller's tenant (ADR-044 decision 3). The
-    # event-management reconciliation sweep uses this to find orphaned anchors whose
-    # referenced entity was deleted.
-    existingEntityRefs(refs: [EntityRefInput!]!): [EntityRef!]!
+    """Reads relationships by numeric id. Ids naming no relationship are omitted. Requires device:read."""
+    entityRelationshipsById(
+        """Numeric ids of the entity relationships to read."""
+        ids: [String!]!
+    ): [EntityRelationship!]!
+    """Reads relationships by token. Tokens naming no relationship are omitted. Requires device:read."""
+    entityRelationshipsByToken(
+        """Tokens of the entity relationships to read."""
+        tokens: [String!]!
+    ): [EntityRelationship!]!
+    """Lists the relationships that match the criteria, one page at a time. Requires device:read."""
+    entityRelationships(
+        """The facets the listed entity relationships must match, and the page to return."""
+        criteria: EntityRelationshipSearchCriteria!
+    ): EntityRelationshipSearchResults!
+    """
+    Returns the subset of the given references that resolve to an existing entity in the caller's
+    tenant, so a caller can find the references whose entity has been deleted. The event-management
+    reconciliation sweep uses it to find orphaned anchors. Requires device:read.
+    """
+    existingEntityRefs(
+        """The (type, id) references to check."""
+        refs: [EntityRefInput!]!
+    ): [EntityRef!]!
 
     """
     Reads asset types by numeric id. Ids naming no asset type are omitted. Answered to a member
@@ -7606,12 +7824,18 @@ type Query {
     and properties are null for it, and any other id is omitted as if it did not exist. Requires
     device:read.
     """
-    assetsById(ids: [ID!]!): [Asset!]!
+    assetsById(
+        """Numeric ids of the assets to read."""
+        ids: [ID!]!
+    ): [Asset!]!
     """
     Reads assets by token. Scoped as assetsById: an asset outside the caller's reach is omitted,
     never refused. Requires device:read.
     """
-    assetsByToken(tokens: [String!]!): [Asset!]!
+    assetsByToken(
+        """Tokens of the assets to read."""
+        tokens: [String!]!
+    ): [Asset!]!
     """
     Lists the assets that match the criteria, one page at a time. Scoped as assetsById; pagination
     counts only the assets the caller reaches. Requires device:read.
@@ -7733,9 +7957,15 @@ type Query {
         criteria: CustomerTypeSearchCriteria!
     ): CustomerTypeSearchResults!
     """Reads customers by numeric id. Ids naming no customer are omitted. Requires device:read."""
-    customersById(ids: [ID!]!): [Customer!]!
+    customersById(
+        """Numeric ids of the customers to read."""
+        ids: [ID!]!
+    ): [Customer!]!
     """Reads customers by token. Tokens naming no customer are omitted. Requires device:read."""
-    customersByToken(tokens: [String!]!): [Customer!]!
+    customersByToken(
+        """Tokens of the customers to read."""
+        tokens: [String!]!
+    ): [Customer!]!
     """Lists the customers that match the criteria, one page at a time. Requires device:read."""
     customers(
         """The facets the listed customers must match, and the page to return."""
@@ -7772,12 +8002,18 @@ type Query {
     areas one of its visible devices is placed in (over a tracked relationship), their metadata is
     null for it, and any other id is omitted as if it did not exist. Requires device:read.
     """
-    areasById(ids: [ID!]!): [Area!]!
+    areasById(
+        """Numeric ids of the areas to read."""
+        ids: [ID!]!
+    ): [Area!]!
     """
     Reads areas by token. Scoped as areasById: an area outside the caller's reach is omitted, never
     refused. Requires device:read.
     """
-    areasByToken(tokens: [String!]!): [Area!]!
+    areasByToken(
+        """Tokens of the areas to read."""
+        tokens: [String!]!
+    ): [Area!]!
     """
     Lists the areas that match the criteria, one page at a time. Scoped as areasById; pagination
     counts only the areas the caller reaches. Requires device:read.
@@ -7861,6 +8097,10 @@ type FacetValueImportRowResult {
 }
 
 # Contains mutations executed against model.
+"""
+The writes of the tenant data plane. A field's description names the authority it needs; a write
+applies to the caller's tenant only.
+"""
 type Mutation {
     """Import 1-1000 facet values with one result per row in input order. Requires
     device:write, like setEntityAttribute. Each changed row commits independently
@@ -8337,10 +8577,29 @@ type Mutation {
         """
         raisedTime: String
     ): Alarm!
-    # Set (upsert) an entity attribute.
-    setEntityAttribute(request: EntityAttributeSetRequest!): EntityAttribute!
-    # Delete an entity attribute by its natural key.
-    deleteEntityAttribute(entityType: String!, entity: String!, scope: String!, attrKey: String!): Boolean!
+    """
+    Sets an entity attribute, replacing the value when the same entity, scope and key already has
+    one. Requires device:write.
+    """
+    setEntityAttribute(
+        """The attribute to set."""
+        request: EntityAttributeSetRequest!
+    ): EntityAttribute!
+    """
+    Deletes one entity attribute, identified by its entity, scope and key. Removing a SHARED
+    attribute can take an entity out of a group whose selector reads it. Returns true when an
+    attribute was deleted and false when there was none. Requires device:write.
+    """
+    deleteEntityAttribute(
+        """Entity type the attribute belongs to, for example device."""
+        entityType: String!
+        """Token of the entity the attribute belongs to."""
+        entity: String!
+        """Scope of the attribute: SHARED, SERVER or CLIENT."""
+        scope: String!
+        """Key of the attribute to delete."""
+        attrKey: String!
+    ): Boolean!
     """Creates a device and returns it. Requires device:write."""
     createDevice(
         """The new device's fields. Although the schema lets it be omitted, a call without it fails."""
@@ -8498,11 +8757,25 @@ type Mutation {
         """True to make it an access scope, false to stop it being one."""
         enabled: Boolean!
     ): EntityGroup!
-    # Declare (upsert) a facet key by its natural key (memberType, key) — ADR-061 G2.
-    setFacetKey(request: FacetKeySetRequest): FacetKey!
-    # Delete a facet key by its natural key. Returns whether a row was removed; a
-    # system facet is non-deletable and its removal is refused.
-    deleteFacetKey(memberType: String!, key: String!): Boolean!
+    """
+    Declares a facet key by its natural key, memberType and key, creating it or rewriting the
+    existing declaration. Requires device:write.
+    """
+    setFacetKey(
+        """The facet key declaration to upsert."""
+        request: FacetKeySetRequest
+    ): FacetKey!
+    """
+    Deletes a facet key declaration by its natural key; the attribute values on the entities are
+    untouched. A system facet cannot be deleted and its removal is refused. Returns true when a
+    declaration was removed. Requires device:write.
+    """
+    deleteFacetKey(
+        """The member family the key is declared for: device, asset, area or customer."""
+        memberType: String!
+        """The facet key to delete."""
+        key: String!
+    ): Boolean!
     """
     Creates a credential for a device. For ACCESS_TOKEN the token is returned once, in this
     response, and only a keyed digest is stored. For MQTT_BASIC the password is write-only. For
@@ -8812,7 +9085,10 @@ type Mutation {
     transaction, so one secret can never produce two ownership edges. Refused when the claim is
     expired, not open, or the secret does not match. Requires device:write.
     """
-    claimDevice(request: DeviceClaimRequest!): EntityRelationship!
+    claimDevice(
+        """The device, claim secret and customer to assign it to."""
+        request: DeviceClaimRequest!
+    ): EntityRelationship!
     """
     Cancels a device's open claim without assigning the device. Returns true when an open claim was
     closed and false when there was none. Requires device:write.
@@ -8822,21 +9098,55 @@ type Mutation {
         deviceToken: String!
     ): Boolean!
 
-    # Create a new entity relationship type.
-    createEntityRelationshipType(request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
-    # Update an existing entity relationship type.
-    updateEntityRelationshipType(token: String!, request: EntityRelationshipTypeUpdateRequest!): EntityRelationshipType!
-    # Delete a relationship type. Refused while any edge still uses it.
-    deleteEntityRelationshipType(token: String!): Boolean!
-    # Create a new entity relationship.
-    createEntityRelationship(request: EntityRelationshipCreateRequest!): EntityRelationship!
-    # Remove a single relationship edge — the explicit "unassign" operation.
-    removeEntityRelationship(token: String!): Boolean!
-    # Create multiple entity relationships in one transaction (bulk "add members" /
-    # "assign"). Auto-provisions the reserved "member" relationship type on first use.
-    createEntityRelationships(requests: [EntityRelationshipCreateRequest!]!): [EntityRelationship!]!
-    # Remove multiple relationship edges by token (bulk "remove members" / "unassign").
-    removeEntityRelationships(tokens: [String!]!): Boolean!
+    """Creates a relationship type. Requires device:write."""
+    createEntityRelationshipType(
+        """The entity relationship type to create."""
+        request: EntityRelationshipTypeCreateRequest!
+    ): EntityRelationshipType!
+    """Applies a partial update to a relationship type, identified by token. Requires device:write."""
+    updateEntityRelationshipType(
+        """Token of the entity relationship type to update."""
+        token: String!
+        """The fields to change."""
+        request: EntityRelationshipTypeUpdateRequest!
+    ): EntityRelationshipType!
+    """
+    Deletes a relationship type. Refused while any relationship uses it. Returns true when it was
+    deleted and false when nothing has the token. Requires device:write.
+    """
+    deleteEntityRelationshipType(
+        """Token of the entity relationship type to delete."""
+        token: String!
+    ): Boolean!
+    """Creates a relationship edge between two existing entities. Requires device:write."""
+    createEntityRelationship(
+        """The entity relationship to create."""
+        request: EntityRelationshipCreateRequest!
+    ): EntityRelationship!
+    """
+    Removes a single relationship edge: the explicit unassign. Returns true when it was removed and
+    false when nothing has the token. Requires device:write.
+    """
+    removeEntityRelationship(
+        """Token of the relationship edge to remove."""
+        token: String!
+    ): Boolean!
+    """
+    Creates many relationship edges in one transaction, for bulk add-members and assign. The
+    reserved member relationship type is created on first use. Requires device:write.
+    """
+    createEntityRelationships(
+        """The relationship edges to create, all in one transaction."""
+        requests: [EntityRelationshipCreateRequest!]!
+    ): [EntityRelationship!]!
+    """
+    Removes many relationship edges by token, for bulk remove-members and unassign. Requires
+    device:write.
+    """
+    removeEntityRelationships(
+        """Tokens of the relationship edges to remove."""
+        tokens: [String!]!
+    ): Boolean!
 
     """
     Creates an asset type with a draft property contract, which is not binding until published.

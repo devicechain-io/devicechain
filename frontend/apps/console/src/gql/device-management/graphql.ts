@@ -354,16 +354,28 @@ export type AssetUpdateRequest = {
   properties?: string | null | undefined;
 };
 
+/**
+ * Criteria for querying the audit journal. Every filter is optional; a bounded startTime and endTime
+ * range is recommended.
+ */
 export type AuditEventSearchCriteria = {
   /** Only entries whose actor contains this text. The match ignores case. At most 256 bytes; longer input is refused with LIMIT_EXCEEDED. */
   actor?: string | null | undefined;
+  /** Only entries of this category: mutation or auth. */
   category?: string | null | undefined;
+  /** Only entries at or before this instant, as an RFC 3339 timestamp. */
   endTime?: string | null | undefined;
+  /** Only entries that affected the row with this primary key. */
   entityPk?: string | null | undefined;
+  /** Only entries of this operation: create, update or delete. */
   operation?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
+  /** Only entries at or after this instant, as an RFC 3339 timestamp. */
   startTime?: string | null | undefined;
+  /** Only entries that mutated this table. */
   tableName?: string | null | undefined;
 };
 
@@ -1505,21 +1517,41 @@ export type DeviceUpdateRequest = {
   name?: string | null | undefined;
 };
 
+/** Criteria for listing entity attributes. Every facet is optional and they AND together. */
 export type EntityAttributeSearchCriteria = {
+  /** Only attributes whose key is one of these, at most 1000 keys. */
   attrKeys?: Array<string> | null | undefined;
+  /**
+   * Only attributes of the entity with this token. It takes effect only together with entityType; an
+   * entity that does not exist finds nothing.
+   */
   entity?: string | null | undefined;
+  /** Only attributes of entities of this type, for example device. */
   entityType?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
+  /** Only attributes in this scope: CLIENT, SERVER or SHARED. */
   scope?: string | null | undefined;
 };
 
+/**
+ * Data required to set, or replace, an entity attribute. The owner is resolved from its type and
+ * token, which must name an existing entity.
+ */
 export type EntityAttributeSetRequest = {
+  /** The attribute's key, up to 128 bytes. */
   attrKey: string;
+  /** Token of the entity the attribute belongs to. */
   entity: string;
+  /** Entity type of the owner, for example device. */
   entityType: string;
+  /** CLIENT, SERVER or SHARED. See EntityAttribute.scope. Any other value is refused. */
   scope: string;
+  /** The attribute's value as text, up to 64 KiB. Omit or send null for none. */
   value?: string | null | undefined;
+  /** How to read value: STRING, LONG, DOUBLE, BOOLEAN or JSON. Any other value is refused. */
   valueType: string;
 };
 
@@ -1603,38 +1635,75 @@ export type EntityGroupUpdateRequest = {
   selector?: string | null | undefined;
 };
 
+/**
+ * Data required to create an entity relationship. The source and target are resolved from their types
+ * and tokens, which must name existing entities.
+ */
 export type EntityRelationshipCreateRequest = {
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Token of the relationship type. An unknown token is refused. */
   relationshipType: string;
+  /** Token of the source entity. */
   source: string;
+  /** Entity type of the source entity, for example device. */
   sourceType: string;
+  /** Token of the target entity. */
   target: string;
+  /** Entity type of the target entity, for example customer. */
   targetType: string;
+  /** Identifier for the new relationship, unique within the tenant. */
   token: string;
 };
 
+/** Criteria for listing entity relationships. Every facet is optional and they AND together. */
 export type EntityRelationshipSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
+  /** Only relationships of the relationship type with this token. */
   relationshipType?: string | null | undefined;
+  /** Only relationships whose source has this token. It takes effect only together with sourceType. */
   source?: string | null | undefined;
+  /** Only relationships whose source is of this entity type. */
   sourceType?: string | null | undefined;
+  /** Only relationships whose target has this token. It takes effect only together with targetType. */
   target?: string | null | undefined;
+  /** Only relationships whose target is of this entity type. */
   targetType?: string | null | undefined;
+  /** True selects relationships of tracked types and false those of untracked types. Omit for either. */
   tracked?: boolean | null | undefined;
 };
 
+/** Criteria for listing declared facet keys. */
 export type FacetKeySearchCriteria = {
+  /**
+   * Only facet keys declared for this entity family: device, asset, area or customer. Omit for every
+   * family.
+   */
   memberType?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * Data required to declare, or redeclare, a facet key. The natural key, memberType and key, selects
+ * the row and the remaining fields are rewritten. Only attribute-source facets can be written, so
+ * there is no source field.
+ */
 export type FacetKeySetRequest = {
+  /** The attribute key the facet declares. */
   key: string;
+  /** An optional human display label for the axis. Omit to fall back to the key. */
   label?: string | null | undefined;
+  /** The entity family the facet classifies: device, asset, area or customer. */
   memberType: string;
+  /** The value type of the facet's attribute values: STRING, LONG, DOUBLE, BOOLEAN or JSON. */
   valueType: string;
+  /** An optional vocabulary of values for the console typeahead. Omit for free-form values. */
   values?: Array<string> | null | undefined;
 };
 
