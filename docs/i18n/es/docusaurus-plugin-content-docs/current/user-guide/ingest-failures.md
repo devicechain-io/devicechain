@@ -45,7 +45,7 @@ Las etiquetas sobre la tabla son los motivos. Cada una muestra cuántos registro
 | **Fallo del decodificador** | Un decodificador de payload no pudo convertir un uplink en lecturas. El comienzo del error indica por qué. Abre el perfil del tipo de dispositivo, pestaña **Decodificador**, para ver los fallos conservados y probarlos. |
 | **Otro motivo** | Un motivo para el que esta versión de la consola no tiene texto. La fila lleva su código de motivo. |
 
-Para saber qué revisar en cada motivo, consulta [Por qué no aparecen los datos de mi dispositivo](/guides/why-isnt-my-data-showing-up#reasons).
+Para saber qué revisar en cada motivo, consulta [Por qué no aparecen los datos de mi dispositivo](../guides/why-isnt-my-data-showing-up.md#reasons).
 
 ## Acotar la lista {#filters}
 
@@ -61,12 +61,12 @@ Una flota con una credencial equivocada puede sufrir miles de rechazos por segun
 
 ## Desde la línea de comandos, y las dead letters {#cli}
 
-`dcctl events failed` lee los mismos registros como miembro del tenant, con el mismo requisito `device:write`, y `--summary` los cuenta por motivo como hacen las etiquetas. Consulta la [referencia de comandos](/reference/dcctl#dcctl-events-failed).
+`dcctl events failed` lee los mismos registros como miembro del tenant, con el mismo requisito `device:write`, y `--summary` los cuenta por motivo como hacen las etiquetas. Consulta la [referencia de comandos](../reference/dcctl.md#dcctl-events-failed).
 
 Estos registros no son dead letters. Un fallo de ingesta es un evento rechazado en la entrada, y el registro es tuyo para leerlo. Una dead letter es un mensaje del que un servicio de la plataforma desistió después de aceptarlo y se conserva para los operadores; se lee con `dcctl dead-letters` y no aparece aquí.
 
 ## Relacionado {#related}
 
-- [Por qué no aparecen los datos de mi dispositivo](/guides/why-isnt-my-data-showing-up): qué revisar en cada motivo, la retención y la alerta que reciben los operadores.
-- [Dispositivos](/user-guide/devices): la página de cada dispositivo, que enlaza aquí.
-- [La consola de un vistazo](/user-guide/console-at-a-glance): dónde está **Fallos de ingesta** en la barra lateral.
+- [Por qué no aparecen los datos de mi dispositivo](../guides/why-isnt-my-data-showing-up.md): qué revisar en cada motivo, la retención y la alerta que reciben los operadores.
+- [Dispositivos](./devices.md): la página de cada dispositivo, que enlaza aquí.
+- [La consola de un vistazo](./console-at-a-glance.md): dónde está **Fallos de ingesta** en la barra lateral.

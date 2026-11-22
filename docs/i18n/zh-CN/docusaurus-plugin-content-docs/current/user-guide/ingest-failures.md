@@ -45,7 +45,7 @@ sidebar_position: 7
 | **解码失败** | 负载解码器无法把一条上行消息转换为读数。错误开头会说明原因。请打开该设备类型的配置文件的**解码器**选项卡，查看保留的失败记录并进行测试。 |
 | **其他原因** | 此版本控制台没有对应措辞的原因。该行会带有其原因代码。 |
 
-各个原因分别应检查什么，请参阅[为什么我的设备数据没有出现](/guides/why-isnt-my-data-showing-up#reasons)。
+各个原因分别应检查什么，请参阅[为什么我的设备数据没有出现](../guides/why-isnt-my-data-showing-up.md#reasons)。
 
 ## 缩小列表范围 {#filters}
 
@@ -61,12 +61,12 @@ sidebar_position: 7
 
 ## 命令行，以及死信 {#cli}
 
-`dcctl events failed` 以租户成员的身份读取同样的记录，同样需要 `device:write`，`--summary` 会像标签一样按原因统计。请参阅[命令参考](/reference/dcctl#dcctl-events-failed)。
+`dcctl events failed` 以租户成员的身份读取同样的记录，同样需要 `device:write`，`--summary` 会像标签一样按原因统计。请参阅[命令参考](../reference/dcctl.md#dcctl-events-failed)。
 
 这些记录不是死信（dead letter）。摄取失败是在入口处被拒绝的事件，记录由你自己读取。死信则是平台服务在接受消息之后放弃处理的消息，保留给运维人员；它通过 `dcctl dead-letters` 读取，不会列在这里。
 
 ## 相关内容 {#related}
 
-- [为什么我的设备数据没有出现](/guides/why-isnt-my-data-showing-up)：每个原因应检查什么、保留期，以及运维人员收到的告警。
-- [设备](/user-guide/devices)：设备自己的页面，会链接到这里。
-- [控制台概览](/user-guide/console-at-a-glance)：**摄取失败**在侧边栏中的位置。
+- [为什么我的设备数据没有出现](../guides/why-isnt-my-data-showing-up.md)：每个原因应检查什么、保留期，以及运维人员收到的告警。
+- [设备](./devices.md)：设备自己的页面，会链接到这里。
+- [控制台概览](./console-at-a-glance.md)：**摄取失败**在侧边栏中的位置。

@@ -45,7 +45,7 @@ The chips above the table are the reasons. Each shows how many records of that r
 | **Decoder failed** | A payload decoder could not turn an uplink into readings. The start of the error says why. Open the device type's profile, **Decoder** tab, to see the kept failures and test them. |
 | **Other reason** | A reason this version of the console has no wording for. The row carries its reason code. |
 
-For what to check for each reason, see [Why isn't my device's data showing up](/guides/why-isnt-my-data-showing-up#reasons).
+For what to check for each reason, see [Why isn't my device's data showing up](../guides/why-isnt-my-data-showing-up.md#reasons).
 
 ## Narrowing the list {#filters}
 
@@ -61,12 +61,12 @@ A fleet with one wrong credential can be refused thousands of events a second, a
 
 ## From the command line, and dead letters {#cli}
 
-`dcctl events failed` reads the same records as a member of the tenant, with the same `device:write` requirement, and `--summary` counts them per reason as the chips do. See the [command reference](/reference/dcctl#dcctl-events-failed).
+`dcctl events failed` reads the same records as a member of the tenant, with the same `device:write` requirement, and `--summary` counts them per reason as the chips do. See the [command reference](../reference/dcctl.md#dcctl-events-failed).
 
 These records are not dead letters. An ingest failure is an event refused at the door, and the record is yours to read. A dead letter is a message that a platform service gave up on after accepting it, and it is kept for operators; it is read with `dcctl dead-letters` and is not listed here.
 
 ## Related {#related}
 
-- [Why isn't my device's data showing up](/guides/why-isnt-my-data-showing-up): what to check for each reason, retention, and the alert operators get.
-- [Devices](/user-guide/devices): a device's own page, which links here.
-- [Console at a glance](/user-guide/console-at-a-glance): where **Ingest failures** sits in the sidebar.
+- [Why isn't my device's data showing up](../guides/why-isnt-my-data-showing-up.md): what to check for each reason, retention, and the alert operators get.
+- [Devices](./devices.md): a device's own page, which links here.
+- [Console at a glance](./console-at-a-glance.md): where **Ingest failures** sits in the sidebar.
