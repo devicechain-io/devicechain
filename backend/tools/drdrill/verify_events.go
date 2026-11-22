@@ -131,7 +131,13 @@ func runVerifyEvents(ctx context.Context, argv []string) error {
 	if verdict := checkHypertables(ctx, db, seed); verdict != nil {
 		return verdict
 	}
-	if verdict := checkMaterialization(ctx, db, seed); verdict != nil {
+	if verdict := checkMaterialization(ctx, db, seed, rollupView, seed.MaterializedCount); verdict != nil {
+		return verdict
+	}
+	if verdict := checkMaterialization(ctx, db, seed, rollupView1h, seed.HourMaterializedCount); verdict != nil {
+		return verdict
+	}
+	if verdict := checkHourLevelMarker(ctx, db, seed); verdict != nil {
 		return verdict
 	}
 	if verdict := checkCompression(ctx, db, seed); verdict != nil {
@@ -243,12 +249,12 @@ func checkHypertables(ctx context.Context, db *gorm.DB, seed EventSeed) error {
 // restored state too, so a view read cannot separate "the materialization came
 // back" from "the watermark did not, and this was recomputed". This one goes to
 // the physical relation and gets a single answer.
-func checkMaterialization(ctx context.Context, db *gorm.DB, seed EventSeed) error {
-	table, err := materializationTable(ctx, db, areaEvent)
+func checkMaterialization(ctx context.Context, db *gorm.DB, seed EventSeed, view string, want int) error {
+	table, err := materializationTable(ctx, db, areaEvent, view)
 	if errors.Is(err, errNoMaterialization) {
 		return failWith(exitTimescaleBroken,
 			"%s.%s has no materialization hypertable at all: %w. The aggregate's definition came back and the object holding its data did not",
-			areaEvent, rollupView, err)
+			areaEvent, view, err)
 	}
 	if err != nil {
 		// NOT a machinery verdict — the question was not answered. See
@@ -272,12 +278,12 @@ watermark, which is why this check does not go through it.
 emptied and the watermark left where it was, refresh_continuous_aggregate over
 the whole range succeeds and materializes NOTHING — the watermark says that range
 is already done. Repair means invalidating the range first`,
-			areaEvent, rollupView, table, seed.Tenant, seed.MaterializedCount)
+			areaEvent, view, table, seed.Tenant, want)
 	}
-	if count != seed.MaterializedCount {
+	if count != want {
 		return failWith(exitTimescaleBroken,
 			"%s holds %d materialized rows for tenant %q; the seed materialized %d",
-			table, count, seed.Tenant, seed.MaterializedCount)
+			table, count, seed.Tenant, want)
 	}
 	fmt.Printf("ok   %d rows in %s — the aggregate's materialization came back, not just its definition\n", count, table)
 	return nil
@@ -370,20 +376,18 @@ func checkJobs(ctx context.Context, db *gorm.DB) error {
 			areaEvent)
 	}
 
-	refreshJob := 0
+	refreshJobs, noRefresh := refreshJobsByView(jobs, rollupViews)
+	if len(noRefresh) > 0 {
+		return failWith(exitTimescaleBroken,
+			"the restored event store has %d background job(s) on %q but no policy_refresh_continuous_aggregate for %s. That aggregate would stop advancing, and real-time aggregation would hide that behind correct answers",
+			len(jobs), areaEvent, strings.Join(noRefresh, " or "))
+	}
+	refreshJob := refreshJobs[rollupView]
 	var unplanned []string
 	for _, j := range jobs {
-		if j.Proc == "policy_refresh_continuous_aggregate" {
-			refreshJob = j.ID
-		}
 		if !j.Scheduled || j.NextStart == nil {
 			unplanned = append(unplanned, fmt.Sprintf("%s (job %d)", j.Proc, j.ID))
 		}
-	}
-	if refreshJob == 0 {
-		return failWith(exitTimescaleBroken,
-			"the restored event store has %d background job(s) on %q but no policy_refresh_continuous_aggregate. %s would stop advancing, and real-time aggregation would hide that behind correct answers",
-			len(jobs), areaEvent, rollupView)
 	}
 	if len(unplanned) > 0 {
 		return failWith(exitTimescaleBroken,
@@ -506,4 +510,37 @@ func readMeasurementsOverAPI(ctx context.Context, o verifyEventsOptions, receipt
 		}
 	}
 	return count, sum, nil
+}
+
+// checkHourLevelMarker proves rollup_levels' hour-level row came back unchanged.
+//
+// It is ordinary data, so a restore either brings it back or it does not, and the
+// two failures read differently: with the row gone the read path has no hour to
+// serve the hour level from, and with it moved the read path serves hours the
+// hour level may not hold, or stops serving ones it does.
+func checkHourLevelMarker(ctx context.Context, db *gorm.DB, seed EventSeed) error {
+	got, ok, err := rollupLevelCompleteFrom(ctx, db, rollupLevel1h)
+	if err != nil {
+		return failWith(exitSetup, "%w", err)
+	}
+	if verdict := judgeHourLevelMarker(got, ok, seed.HourLevelCompleteFrom); verdict != nil {
+		return verdict
+	}
+	fmt.Printf("ok   the hour level's marker came back: it serves reads from %s, as seeded\n", got)
+	return nil
+}
+
+// judgeHourLevelMarker is checkHourLevelMarker's verdict on what was read.
+func judgeHourLevelMarker(got string, present bool, want string) error {
+	if !present {
+		return failWith(exitMismatch,
+			"%s.rollup_levels has no %q row after the restore; the seed recorded %s. Without it the read path cannot tell from when the hour level is complete",
+			areaEvent, rollupLevel1h, want)
+	}
+	if got != want {
+		return failWith(exitMismatch,
+			"%s.rollup_levels' %q row says %s after the restore; the seed recorded %s. The read path would serve the hour level over a different range than the one it was complete for",
+			areaEvent, rollupLevel1h, got, want)
+	}
+	return nil
 }
