@@ -155,6 +155,14 @@ export interface ResolvedBasemap {
 }
 ```
 
+## `.:SchemaNegotiationOptions`
+
+```ts
+export interface SchemaNegotiationOptions {
+    release?: string;
+}
+```
+
 ## `.:SchemaSkewError`
 
 ```ts
@@ -168,7 +176,7 @@ export declare class SchemaSkewError extends GraphQLRequestError {
 ## `.:SchemaSkewKind`
 
 ```ts
-export type SchemaSkewKind = 'unsupported' | 'undiscoverable' | 'invalid-contract';
+export type SchemaSkewKind = 'unsupported' | 'invalid-request' | 'undiscoverable' | 'invalid-contract';
 ```
 
 ## `.:ScopeAnchorRef`
@@ -288,7 +296,7 @@ export declare function disposeSubscriptions(): void;
 ## `.:enableSchemaNegotiation`
 
 ```ts
-export declare function enableSchemaNegotiation(): void;
+export declare function enableSchemaNegotiation(options?: SchemaNegotiationOptions): void;
 ```
 
 ## `.:errorCode`

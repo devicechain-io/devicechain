@@ -34,6 +34,7 @@ export {
   isSchemaSkewError,
   SchemaSkewError,
   type SchemaSkewKind,
+  type SchemaNegotiationOptions,
 } from './skew';
 
 export { isForbiddenError, isScopeUnsupportedError, isStaleWrite, errorCode } from './errors';

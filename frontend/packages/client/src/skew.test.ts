@@ -72,9 +72,9 @@ describe('a newer console against an older instance', () => {
     const err = await failure(gql('device-management', readSerial, { t: 'a' }));
     expect(isSchemaSkewError(err)).toBe(true);
     expect(err).toBeInstanceOf(SchemaSkewError);
-    expect(err).toMatchObject({ kind: 'unsupported', status: 0, endpoint: '/api/device-management/graphql' });
+    expect(err).toMatchObject({ kind: 'unsupported', status: 422, endpoint: '/api/device-management/graphql' });
     expect(err.message).toContain('serial');
-    expect(err.message).toContain('v1.9.0');
+    expect(err.message).not.toContain('v1.9.0');
     expect(inst.posts()).toBe(0);
   });
 
@@ -98,6 +98,44 @@ describe('a newer console against an older instance', () => {
     await gql('device-management', readSerial, { t: 'a' });
     await gql('device-management', create, { i: { token: 'a', serial: 'S1' } });
     expect(inst.posts()).toBe(2);
+  });
+
+  it('names the console release when told it, and never asks for a specific instance release', async () => {
+    enableSchemaNegotiation({ release: 'v1.9.2' });
+    instance({ sdl: OLD_SDL });
+    const err = await failure(gql('device-management', readSerial, { t: 'a' }));
+    expect(err.message).toContain('v1.9.2');
+    expect(err.message).not.toMatch(/upgrade to/i);
+  });
+
+  it('a rolling upgrade heals: a stale cached contract is rediscovered once before refusing', async () => {
+    const calls: string[] = [];
+    let sdl = OLD_SDL;
+    vi.stubGlobal('fetch', vi.fn(async (_u: string, init: RequestInit) => {
+      calls.push(String(init.method));
+      if (init.method === 'OPTIONS') return new Response(JSON.stringify({ format: 1, schema: sdl }), { status: 200 });
+      return new Response(JSON.stringify({ data: { ok: true } }), { status: 200 });
+    }));
+    await gql('device-management', readOk, { t: 'a' }); // caches the OLD contract
+    await expect(gql('device-management', readSerial, { t: 'a' })).rejects.toMatchObject({ kind: 'unsupported' });
+    sdl = NEW_SDL; // the instance is upgraded under the running page
+    await gql('device-management', readSerial, { t: 'a' }); // the stale refusal rediscovers and passes
+    expect(calls.filter((c) => c === 'POST')).toHaveLength(2);
+    expect(calls.filter((c) => c === 'OPTIONS')).toHaveLength(3); // discover, recheck-after-refusal, recheck
+  });
+
+  it('a refusal from a contract discovered in this very call is not re-asked', async () => {
+    const inst = instance({ sdl: OLD_SDL });
+    await expect(gql('device-management', readSerial, { t: 'a' })).rejects.toMatchObject({ kind: 'unsupported' });
+    expect(inst.calls.filter((c) => c.method === 'OPTIONS')).toHaveLength(1);
+  });
+
+  it('a request that is wrong for another reason is invalid-request, never an upgrade hint', async () => {
+    instance({ sdl: NEW_SDL });
+    const noVar = 'query D { device { token } }' as unknown as Doc<unknown, Record<string, never>>; // missing required argument
+    const err = await failure(gql('device-management', noVar));
+    expect(err).toMatchObject({ kind: 'invalid-request', status: 422 });
+    expect(err.message).not.toMatch(/upgrade|older|release/i);
   });
 
   it('discovers once per endpoint and carries the bearer on an OPTIONS with the schema Accept', async () => {

@@ -8,6 +8,7 @@ import { ThemeProvider } from '@/components/ThemeProvider';
 import { ToastProvider } from '@/components/ui/toast';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { enableSchemaNegotiation } from '@devicechain/client';
+import { schemaNegotiationWanted } from '@/lib/schema-negotiation';
 import { AuthProvider } from '@/auth/AuthProvider';
 import { AreaCapabilityProvider } from '@/lib/capabilities';
 import { SSO_COMPLETE_PATH, captureSsoReturn } from '@/lib/sso';
@@ -29,9 +30,11 @@ if (window.location.pathname === SSO_COMPLETE_PATH) captureSsoReturn();
 installChunkReload(window);
 
 // Check each authenticated request against the schema the connected instance serves, so a console
-// pointed at an older instance refuses what it cannot serve (naming the release it needs) instead
-// of sending it. Served by its own instance, the check passes in production.
-enableSchemaNegotiation();
+// pointed at an older instance refuses what it cannot serve instead of sending it. Only where the
+// console and the instance can be different releases: `vite dev`, or a build made with
+// VITE_SCHEMA_NEGOTIATION=on for a console hosted apart from its instance. A production console
+// served by its own instance is that instance's release, so it stays off (see lib/schema-negotiation).
+if (schemaNegotiationWanted(import.meta.env)) enableSchemaNegotiation();
 
 const root = createRoot(document.getElementById('root')!);
 
