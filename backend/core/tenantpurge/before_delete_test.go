@@ -22,7 +22,7 @@ BEGIN SELECT RAISE(ABORT, 'unmarked'); END`).Error)
 	plan := planOf(t, []column{col("main", "devices", "tenant_id", "text")}, nil)
 	_, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
 	require.ErrorContains(t, err, "unmarked")
-	plan.BeforeDelete = func(tx *gorm.DB) error {
+	plan.BeforeDelete = func(tx *gorm.DB, _ string) error {
 		_, inTx := tx.Statement.ConnPool.(gorm.TxCommitter)
 		require.True(t, inTx)
 		return tx.Exec("INSERT INTO purge_marker VALUES (1)").Error

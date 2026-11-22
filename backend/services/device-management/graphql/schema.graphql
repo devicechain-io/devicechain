@@ -3203,38 +3203,92 @@ type DeviceSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a group of related devices.
+"""
+A group of entities of one family: devices, assets, areas or customers. Membership is either static
+(members are added explicitly over relationships of the member type) or dynamic (a selector over the
+members' facet attributes, evaluated when the group is read). A dynamic group is versioned:
+publishing freezes the selector as an immutable version, which detection rules and access scopes
+then pin to.
+"""
 type EntityGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity & Entity {
+    """Server-assigned numeric identifier, as a string. Address a group by its token instead where you can."""
     id: ID!
+    """When the group was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the group was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: a deleted group is removed outright and is not returned."""
     deletedAt: String
+    """Identifier of the group, unique within the tenant. It cannot be changed after creation."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """URL of an image representing the group, up to 512 characters. Null when none is set."""
     imageUrl: String
+    """
+    Name of an icon representing the group, up to 128 characters. Not checked against any icon set.
+    Null when none is set.
+    """
     icon: String
+    """
+    Background colour to display the group with, up to 32 characters. Not validated. Null when none
+    is set.
+    """
     backgroundColor: String
+    """
+    Foreground (text) colour to display the group with, up to 32 characters. Not validated. Null
+    when none is set.
+    """
     foregroundColor: String
+    """Border colour to display the group with, up to 32 characters. Not validated. Null when none is set."""
     borderColor: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
     # The entity family this group collects: device | asset | area | customer.
+    """The entity family the group collects: device, asset, area or customer. Fixed at creation."""
     memberType: String!
     # How members are determined: static (explicit "member" edges) or dynamic
     # (a CEL selector over member-entity facet attributes — ADR-061 G3).
+    """
+    How members are determined: static, for members added explicitly, or dynamic, for members
+    matched by selector. Fixed at creation.
+    """
     membershipMode: String!
     # The CEL membership predicate, present only for dynamic groups.
+    """
+    The membership predicate, a CEL expression over the members' facet attributes. Present only for
+    dynamic groups; null for a static group. This is the editable draft: the selector a published
+    version froze is on that version.
+    """
     selector: String
     # The resolved members of this group — a static group's "member" edges or a
     # dynamic group's eval-on-read selector matches, transparently (a consumer does
     # not branch on mode). Always bounded + paginated (ADR-061 G4).
-    members(pagination: PaginationInput!): EntityGroupMemberSearchResults!
+    """
+    The resolved members of the group: a static group's explicit members, or the entities a dynamic
+    group's selector matches now. A consumer does not need to branch on mode. Always bounded and
+    paginated.
+    """
+    members(
+        """The page of members to return."""
+        pagination: PaginationInput!
+    ): EntityGroupMemberSearchResults!
     # The published version whose frozen selector a rule-scoped resolve reads
     # (ADR-062 S1). Null until a dynamic group is first published; always null for a
     # static group (never versioned). The live `selector` above is the mutable draft.
+    """
+    The published version whose frozen selector rule-scoped resolution reads. Null until a dynamic
+    group is first published, and always null for a static group, which is never versioned.
+    """
     activeVersion: Int
     # The group's published versions, newest first (ADR-062 S1). Empty for a group
     # that has never been published (and always empty for a static group).
+    """
+    The group's published versions, newest first. Empty for a group that has never been published,
+    and always empty for a static group.
+    """
     versions: [EntityGroupVersion!]!
     """
     Whether the group is an access scope: a group a member's access can be limited to. A member
@@ -3244,66 +3298,97 @@ type EntityGroup implements Model & TokenReference & NamedEntity & BrandedEntity
     accessScope: Boolean!
 }
 
-# An immutable published snapshot of a DYNAMIC entity group's membership selector
-# (ADR-062 S1). A rule scopes to a specific {group}@{version}, so its target set
-# cannot drift under a later selector edit. Mirrors DeviceProfileVersion.
+"""
+An immutable published snapshot of a dynamic entity group's selector. A detection rule scopes to a
+specific group and version, so the set of entities it covers cannot change under a later selector
+edit.
+"""
 type EntityGroupVersion {
-    # Monotonic per-group version number.
+    """Version number, increasing per group."""
     version: Int!
-    # The frozen lowerable-CEL membership selector captured at publish.
+    """The membership selector frozen at publish."""
     selector: String!
-    # The entity family the group collects, frozen with the version.
+    """The entity family the group collects, frozen with the version."""
     memberType: String!
-    # Optional user-supplied label (may embed a semver string; not parsed).
+    """Optional label given at publish. It may embed a semantic version string, which is not parsed."""
     label: String
+    """Optional description of what the version changes. Null when none was given."""
     description: String
-    # When the version was published (the row's creation time).
+    """When the version was published, as an RFC 3339 timestamp."""
     publishedAt: String!
-    # The identity that published it (username, falling back to email).
+    """
+    The identity that published the version: its username, falling back to its email. Null when not
+    recorded.
+    """
     publishedBy: String
 }
 
-# A resolved member of an entity group — the lightweight identity (row id + token)
-# of a family entity, enough for a consumer to hydrate the full record. The family
-# is the group's memberType, so it is not repeated per member.
+"""
+A resolved member of an entity group: the lightweight identity of one entity, enough to look up the
+full record. The entity family is the group's memberType, so it is not repeated per member.
+"""
 type EntityGroupMember {
+    """Numeric id of the member entity, as a string."""
     id: ID!
+    """Token of the member entity."""
     token: String!
 }
 
-# A paginated page of an entity group's resolved members.
+"""One page of an entity group's resolved members."""
 type EntityGroupMemberSearchResults {
+    """The members on this page."""
     results: [EntityGroupMember!]!
+    """Where this page sits in the full member set."""
     pagination: SearchResultsPagination!
 }
 
-# The result of evaluating a CANDIDATE dynamic-group selector without saving it
-# (ADR-061 G4). A selector that fails the publish gate (non-lowerable, over-budget,
-# a parse/type error) returns valid=false with the console-surfaceable error in
-# `error` and a null `members`, so the authoring UI can show the problem inline as
-# the user types rather than treating it as a hard failure. When valid, `members`
-# carries the eval-on-read matches (the live "matches N" preview).
+"""
+The result of evaluating a candidate dynamic-group selector without saving it. A selector that fails
+the publish checks (not expressible as a query, over the cost budget, or a parse or type error)
+returns valid false with the error and no members, so an authoring form can show the problem inline
+as the user types instead of treating it as a failure.
+"""
 type SelectorPreview {
+    """Whether the selector passed the same checks a saved dynamic group must pass."""
     valid: Boolean!
+    """Why the selector was refused, in terms fit to show the author. Null when valid."""
     error: String
+    """One page of the entities the selector matches now. Null when the selector is not valid."""
     members: EntityGroupMemberSearchResults
 }
 
-# Data required to create an entity group (ADR-061). membershipMode defaults to
-# "static"; selector is only permitted (and required) for "dynamic".
-# Editing one afterwards is EntityGroupUpdateRequest.
+"""
+Data required to create an entity group. membershipMode defaults to static; a selector is required
+for a dynamic group and refused for a static one. Edit a group afterwards with
+EntityGroupUpdateRequest.
+"""
 input EntityGroupCreateRequest {
+    """Identifier for the new group, unique within the tenant. Cannot be changed later."""
     token: String!
+    """The entity family the group collects: device, asset, area or customer. Cannot be changed later."""
     memberType: String!
+    """static or dynamic. Omitted means static. Cannot be changed later."""
     membershipMode: String
+    """
+    The CEL membership selector. Required, and only allowed, when membershipMode is dynamic. It is
+    compiled and cost-checked on create.
+    """
     selector: String
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """URL of an image representing the group, up to 512 characters."""
     imageUrl: String
+    """Name of an icon representing the group, up to 128 characters. Not checked against any icon set."""
     icon: String
+    """Background colour to display the group with, up to 32 characters. Not validated."""
     backgroundColor: String
+    """Foreground (text) colour to display the group with, up to 32 characters. Not validated."""
     foregroundColor: String
+    """Border colour to display the group with, up to 32 characters. Not validated."""
     borderColor: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
 
@@ -3322,28 +3407,46 @@ input EntityGroupCreateRequest {
 # members do not belong to, and converting a static group to dynamic (or back) would
 # orphan its members. A field that can only ever be a no-op or an error does not belong
 # in an update input.
+"""
+A partial update of an entity group. Each field has three states: omit it to keep the stored value,
+send null to clear it, or send a value to set it. The token, memberType and membershipMode are
+absent because they are identity: changing the family would leave members that do not belong, and
+converting between static and dynamic would orphan the members.
+"""
 input EntityGroupUpdateRequest {
-    # The CEL membership predicate, required (and only permitted) for a dynamic group. A
-    # provided selector is re-compiled and cost-gated before it replaces the stored one.
-    # Null is refused: a dynamic group with no selector matches nothing and cannot be
-    # repaired into a valid group.
+    """
+    The membership selector of a dynamic group; refused for a static group. A provided selector is
+    recompiled and cost-checked before it replaces the stored draft. Null is refused, because a
+    dynamic group with no selector matches nothing.
+    """
     selector: String
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
+    """Image URL; null clears it."""
     imageUrl: String
+    """Icon name; null clears it."""
     icon: String
+    """Background colour; null clears it."""
     backgroundColor: String
+    """Foreground colour; null clears it."""
     foregroundColor: String
+    """Border colour; null clears it."""
     borderColor: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
 
-# Criteria used when searching for entity groups. memberType and membershipMode
-# are optional filters.
+"""Criteria for listing entity groups. memberType and membershipMode are optional filters."""
 input EntityGroupSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Only groups collecting this entity family: device, asset, area or customer."""
     memberType: String
+    """Only groups with this membership mode: static or dynamic."""
     membershipMode: String
     """
     Keep only the groups that are (true) or are not (false) access scopes. Omit it for both.
@@ -3351,9 +3454,11 @@ input EntityGroupSearchCriteria {
     accessScope: Boolean
 }
 
-# Search results returned from entity groups query.
+"""One page of entity groups."""
 type EntityGroupSearchResults {
+    """The groups on this page."""
     results: [EntityGroup!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -4539,30 +4644,64 @@ input DeviceClaimRequest {
     relationshipType: String
 }
 
-# Represents a type or class of assets
+"""
+A type, or class, of assets: configuration shared by every asset that references it. An asset type
+may declare a property contract: a typed schema its assets' property documents are validated
+against. The contract is drafted on the type and takes effect only when published as a version.
+"""
 type AssetType implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
+    """
+    Server-assigned numeric identifier, as a string. Address a asset type by its token instead where
+    you can.
+    """
     id: ID!
+    """When the asset type was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the asset type was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleted asset types are not returned."""
     deletedAt: String
+    """Identifier of the asset type, unique within the tenant. It cannot be changed after creation."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """URL of an image representing the asset type, up to 512 characters. Null when none is set."""
     imageUrl: String
+    """
+    Name of an icon representing the asset type, up to 128 characters. Not checked against any icon
+    set. Null when none is set.
+    """
     icon: String
+    """
+    Background colour to display the asset type with, up to 32 characters. Not validated. Null when
+    none is set.
+    """
     backgroundColor: String
+    """
+    Foreground (text) colour to display the asset type with, up to 32 characters. Not validated.
+    Null when none is set.
+    """
     foregroundColor: String
+    """
+    Border colour to display the asset type with, up to 32 characters. Not validated. Null when none
+    is set.
+    """
     borderColor: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
-    # The DRAFT property contract for assets of this type: a JSON array of typed
-    # field descriptors, in declaration order, or null when the type declares none.
-    # It is the same descriptor shape a command definition uses for its parameters.
-    # Editing it changes nothing an asset is validated against until the type is
-    # published.
+    """
+    The draft property contract for assets of this type: a JSON array of typed field descriptors in
+    declaration order, in the same descriptor shape a command definition uses for its parameters.
+    Null when the type declares none. Editing it changes nothing an asset is validated against until
+    the type is published.
+    """
     propertySchema: String
-    # The published version assets of this type are validated against, or null when
-    # the type has never been published. An asset of an unpublished type may carry
-    # no properties at all.
+    """
+    The published version that assets of this type are validated against. Null when the type has
+    never been published, in which case an asset of the type may carry no properties at all.
+    """
     activeVersion: Int
     """
     The classes this type's draft is, as terms of the vocabularies the tenant has enabled
@@ -4573,20 +4712,26 @@ type AssetType implements Model & TokenReference & NamedEntity & BrandedEntity &
     semanticTypes: [SemanticTerm!]
 }
 
-# An immutable published snapshot of an asset type's property contract. Assets are
-# validated against the type's ACTIVE version, never against its draft, so
-# publishing is what makes a contract binding. History is append-only; a rollback
-# re-points the active version without deleting anything.
+"""
+An immutable published snapshot of an asset type's property contract. Assets are validated against
+the type's active version, never its draft, so publishing is what makes a contract binding. History
+is append-only: a rollback re-points the active version and deletes nothing.
+"""
 type AssetTypeVersion {
+    """Version number, increasing per type."""
     version: Int!
+    """Optional label given at publish. It may embed a semantic version string, which is not parsed."""
     label: String
+    """Optional description of what the version changes. Null when none was given."""
     description: String
+    """When the version was published, as an RFC 3339 timestamp."""
     publishedAt: String!
+    """The identity that published the version. Null when not recorded."""
     publishedBy: String
-    # The frozen property contract this version publishes, in the same JSON form as
-    # AssetType.propertySchema. Unlike a device profile version's snapshot this IS
-    # exposed: an author needs to see what a version froze in order to decide whether
-    # to roll back to it.
+    """
+    The property contract this version froze, in the same JSON form as AssetType.propertySchema.
+    Exposed so an author can see what a version froze before deciding to roll back to it.
+    """
     propertySchema: String!
     """
     The classes the type was bound to when this version was published; empty when it was
@@ -4602,22 +4747,32 @@ type AssetTypeVersion {
     semanticPackVersions: [SemanticPackVersion!]
 }
 
-# Data required to create an asset type.
+"""Data required to create an asset type."""
 input AssetTypeCreateRequest {
+    """Identifier for the new asset type, unique within the tenant. Cannot be changed later."""
     token: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """URL of an image representing the asset type, up to 512 characters."""
     imageUrl: String
+    """Name of an icon representing the asset type, up to 128 characters. Not checked against any icon set."""
     icon: String
+    """Background colour to display the asset type with, up to 32 characters. Not validated."""
     backgroundColor: String
+    """Foreground (text) colour to display the asset type with, up to 32 characters. Not validated."""
     foregroundColor: String
+    """Border colour to display the asset type with, up to 32 characters. Not validated."""
     borderColor: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
-    # The draft property contract (see AssetType.propertySchema). Rejected if it is
-    # not a JSON array of descriptors, if it carries a key no descriptor declares
-    # (so a typo'd "maximum" is refused rather than dropped), or if it declares a
-    # contract nothing could satisfy — a duplicate name, an unknown data type, a
-    # default outside its own enum.
+    """
+    The draft property contract, as on AssetType.propertySchema. Refused if it is not a JSON array
+    of descriptors, if it carries a key no descriptor declares (so a mistyped key is refused rather
+    than dropped), or if it declares a contract nothing could satisfy, such as a duplicate name, an
+    unknown data type or a default outside its own enum.
+    """
     propertySchema: String
     """
     The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
@@ -4639,18 +4794,32 @@ input AssetTypeCreateRequest {
 # field arrive already-populated for a caller who never sent it, which collapses
 # "omitted" back into "sent", and turns this input back into the full replace it
 # replaces.
+"""
+A partial update of an asset type. Each field has three states: omit it to keep the stored value,
+send null to clear it, or send a value to set it. There is no token field: the mutation's token
+argument names the record, so a token cannot be moved.
+"""
 input AssetTypeUpdateRequest {
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
+    """Image URL; null clears it."""
     imageUrl: String
+    """Icon name; null clears it."""
     icon: String
+    """Background colour; null clears it."""
     backgroundColor: String
+    """Foreground colour; null clears it."""
     foregroundColor: String
+    """Border colour; null clears it."""
     borderColor: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
-    # Replaces the draft property contract wholesale; null withdraws it. Omit to
-    # leave the stored draft alone. It is validated the same way as on create, and a
-    # rejection writes nothing at all.
+    """
+    Replaces the draft property contract wholesale; null withdraws it. Omit to keep the stored
+    draft. Validated as on create, and a refusal writes nothing.
+    """
     propertySchema: String
     """
     New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
@@ -4659,15 +4828,19 @@ input AssetTypeUpdateRequest {
     semanticTypes: [String!]
 }
 
-# Criteria used when searching for asset types.
+"""Criteria for listing asset types."""
 input AssetTypeSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
 }
 
-# Search results returned from asset types query.
+"""One page of asset types."""
 type AssetTypeSearchResults {
+    """The asset types on this page."""
     results: [AssetType!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -4750,20 +4923,48 @@ type AssetSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a type or class of customers
+"""A type, or class, of customers: configuration shared by every customer that references it."""
 type CustomerType implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
+    """
+    Server-assigned numeric identifier, as a string. Address a customer type by its token instead
+    where you can.
+    """
     id: ID!
+    """When the customer type was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the customer type was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleted customer types are not returned."""
     deletedAt: String
+    """Identifier of the customer type, unique within the tenant. It cannot be changed after creation."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """URL of an image representing the customer type, up to 512 characters. Null when none is set."""
     imageUrl: String
+    """
+    Name of an icon representing the customer type, up to 128 characters. Not checked against any
+    icon set. Null when none is set.
+    """
     icon: String
+    """
+    Background colour to display the customer type with, up to 32 characters. Not validated. Null
+    when none is set.
+    """
     backgroundColor: String
+    """
+    Foreground (text) colour to display the customer type with, up to 32 characters. Not validated.
+    Null when none is set.
+    """
     foregroundColor: String
+    """
+    Border colour to display the customer type with, up to 32 characters. Not validated. Null when
+    none is set.
+    """
     borderColor: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
     """
     The classes this type is, as terms of the vocabularies the tenant has enabled; empty when
@@ -4773,16 +4974,28 @@ type CustomerType implements Model & TokenReference & NamedEntity & BrandedEntit
     semanticTypes: [SemanticTerm!]
 }
 
-# Data required to create a customer type.
+"""Data required to create a customer type."""
 input CustomerTypeCreateRequest {
+    """Identifier for the new customer type, unique within the tenant. Cannot be changed later."""
     token: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """URL of an image representing the customer type, up to 512 characters."""
     imageUrl: String
+    """
+    Name of an icon representing the customer type, up to 128 characters. Not checked against any
+    icon set.
+    """
     icon: String
+    """Background colour to display the customer type with, up to 32 characters. Not validated."""
     backgroundColor: String
+    """Foreground (text) colour to display the customer type with, up to 32 characters. Not validated."""
     foregroundColor: String
+    """Border colour to display the customer type with, up to 32 characters. Not validated."""
     borderColor: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
     """
     The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
@@ -4804,14 +5017,27 @@ input CustomerTypeCreateRequest {
 # field arrive already-populated for a caller who never sent it, which collapses
 # "omitted" back into "sent", and turns this input back into the full replace it
 # replaces.
+"""
+A partial update of a customer type. Each field has three states: omit it to keep the stored value,
+send null to clear it, or send a value to set it. There is no token field: the mutation's token
+argument names the record, so a token cannot be moved.
+"""
 input CustomerTypeUpdateRequest {
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
+    """Image URL; null clears it."""
     imageUrl: String
+    """Icon name; null clears it."""
     icon: String
+    """Background colour; null clears it."""
     backgroundColor: String
+    """Foreground colour; null clears it."""
     foregroundColor: String
+    """Border colour; null clears it."""
     borderColor: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
     """
     New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
@@ -4820,15 +5046,19 @@ input CustomerTypeUpdateRequest {
     semanticTypes: [String!]
 }
 
-# Criteria used when searching for customer types.
+"""Criteria for listing customer types."""
 input CustomerTypeSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
 }
 
-# Search results returned from customer type query.
+"""One page of customer types."""
 type CustomerTypeSearchResults {
+    """The customer types on this page."""
     results: [CustomerType!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -4885,20 +5115,48 @@ type CustomerSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a type or class of areas
+"""A type, or class, of areas: configuration shared by every area that references it."""
 type AreaType implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
+    """
+    Server-assigned numeric identifier, as a string. Address a area type by its token instead where
+    you can.
+    """
     id: ID!
+    """When the area type was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the area type was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleted area types are not returned."""
     deletedAt: String
+    """Identifier of the area type, unique within the tenant. It cannot be changed after creation."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """URL of an image representing the area type, up to 512 characters. Null when none is set."""
     imageUrl: String
+    """
+    Name of an icon representing the area type, up to 128 characters. Not checked against any icon
+    set. Null when none is set.
+    """
     icon: String
+    """
+    Background colour to display the area type with, up to 32 characters. Not validated. Null when
+    none is set.
+    """
     backgroundColor: String
+    """
+    Foreground (text) colour to display the area type with, up to 32 characters. Not validated. Null
+    when none is set.
+    """
     foregroundColor: String
+    """
+    Border colour to display the area type with, up to 32 characters. Not validated. Null when none
+    is set.
+    """
     borderColor: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
     """
     The classes this type is, as terms of the vocabularies the tenant has enabled; empty when
@@ -4908,16 +5166,25 @@ type AreaType implements Model & TokenReference & NamedEntity & BrandedEntity & 
     semanticTypes: [SemanticTerm!]
 }
 
-# Data required to create an area type.
+"""Data required to create an area type."""
 input AreaTypeCreateRequest {
+    """Identifier for the new area type, unique within the tenant. Cannot be changed later."""
     token: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """URL of an image representing the area type, up to 512 characters."""
     imageUrl: String
+    """Name of an icon representing the area type, up to 128 characters. Not checked against any icon set."""
     icon: String
+    """Background colour to display the area type with, up to 32 characters. Not validated."""
     backgroundColor: String
+    """Foreground (text) colour to display the area type with, up to 32 characters. Not validated."""
     foregroundColor: String
+    """Border colour to display the area type with, up to 32 characters. Not validated."""
     borderColor: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
     """
     The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
@@ -4939,14 +5206,27 @@ input AreaTypeCreateRequest {
 # field arrive already-populated for a caller who never sent it, which collapses
 # "omitted" back into "sent", and turns this input back into the full replace it
 # replaces.
+"""
+A partial update of an area type. Each field has three states: omit it to keep the stored value,
+send null to clear it, or send a value to set it. There is no token field: the mutation's token
+argument names the record, so a token cannot be moved.
+"""
 input AreaTypeUpdateRequest {
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
+    """Image URL; null clears it."""
     imageUrl: String
+    """Icon name; null clears it."""
     icon: String
+    """Background colour; null clears it."""
     backgroundColor: String
+    """Foreground colour; null clears it."""
     foregroundColor: String
+    """Border colour; null clears it."""
     borderColor: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
     """
     New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
@@ -4955,15 +5235,19 @@ input AreaTypeUpdateRequest {
     semanticTypes: [String!]
 }
 
-# Criteria used when searching for area types.
+"""Criteria for listing area types."""
 input AreaTypeSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
 }
 
-# Search results returned from area types query.
+"""One page of area types."""
 type AreaTypeSearchResults {
+    """The area types on this page."""
     results: [AreaType!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -6696,23 +6980,55 @@ type Query {
         """The anchor, an optional relationship type and the page to return."""
         criteria: AnchorDeviceSearchCriteria!
     ): DeviceSearchResults!
-    # Find entity groups by unique id.
-    entityGroupsById(ids: [ID!]!): [EntityGroup!]!
-    # Find entity groups by unique token. Answered to a member whose access is limited to part
-    # of the tenant too, with only the groups its scope names, of which it reads the token and
-    # name: description, metadata, selector, members and versions are refused.
-    entityGroupsByToken(tokens: [String!]!): [EntityGroup!]!
-    # List entity groups that meet criteria (optionally by member family / mode).
-    entityGroups(criteria: EntityGroupSearchCriteria!): EntityGroupSearchResults!
-    # Evaluate a CANDIDATE dynamic-group selector for a member family WITHOUT saving
-    # it — the console's live "matches N" authoring preview (ADR-061 G4 §4). Takes the
-    # identical publish gate + lowering + bounded query as a saved dynamic group, so
-    # the preview is exactly what the group would resolve. A non-lowerable / over-budget
-    # / malformed selector returns valid=false with an inline error, never a hard fault.
-    previewSelector(memberType: String!, selector: String!, pagination: PaginationInput!): SelectorPreview!
-    # List a dynamic entity group's published versions, newest first (ADR-062 S1).
-    # At most 1000 per call (newest first); limit (at least 1) narrows that and offset (not negative) pages further.
-    entityGroupVersions(token: String!, limit: Int, offset: Int): [EntityGroupVersion!]!
+    """Reads entity groups by numeric id. Ids naming no group are omitted. Requires device:read."""
+    entityGroupsById(
+        """Numeric ids of the entity groups to read."""
+        ids: [ID!]!
+    ): [EntityGroup!]!
+    """
+    Reads entity groups by token. Tokens naming no group are omitted. Also answered to a member
+    whose access is limited to part of the tenant, with only the groups its scope names, of which it
+    reads the token and name: description, metadata, selector, members and versions are refused.
+    """
+    entityGroupsByToken(
+        """Tokens of the entity groups to read."""
+        tokens: [String!]!
+    ): [EntityGroup!]!
+    """
+    Lists the entity groups that match the criteria, optionally by member family and mode, one page
+    at a time. Requires device:read.
+    """
+    entityGroups(
+        """The facets the listed entity groups must match, and the page to return."""
+        criteria: EntityGroupSearchCriteria!
+    ): EntityGroupSearchResults!
+    """
+    Evaluates a candidate dynamic-group selector for a member family without saving it, for a live
+    matches-N authoring preview. It applies the same checks, translation and bounded query as a
+    saved dynamic group, so the preview is what the group would resolve. A selector that is not
+    expressible, over budget or malformed returns valid false with an inline error rather than
+    failing. Requires device:read.
+    """
+    previewSelector(
+        """The entity family to evaluate the selector against: device, asset, area or customer."""
+        memberType: String!
+        """The candidate CEL membership selector. It is evaluated but not saved."""
+        selector: String!
+        """The page of matching members to return."""
+        pagination: PaginationInput!
+    ): SelectorPreview!
+    """
+    Lists a dynamic entity group's published versions, newest first. At most 1000 per call; limit
+    (at least 1) narrows that and offset (not negative) pages further. Requires device:read.
+    """
+    entityGroupVersions(
+        """Token of the dynamic entity group."""
+        token: String!
+        """Most versions to return, at least 1 and at most 1000. Omit for 1000."""
+        limit: Int
+        """Number of versions to skip, not negative. Use with limit to page further."""
+        offset: Int
+    ): [EntityGroupVersion!]!
     # Find device credentials by unique id.
     deviceCredentialsById(ids: [ID!]!): [DeviceCredential!]!
     # Find device credentials by unique token.
@@ -6914,13 +7230,31 @@ type Query {
     # referenced entity was deleted.
     existingEntityRefs(refs: [EntityRefInput!]!): [EntityRef!]!
 
-    # Find asset types by unique id. Answered to a member limited to part of the tenant too:
-    # a type is configuration, not device data.
-    assetTypesById(ids: [ID!]!): [AssetType!]!
-    # Find asset types by unique token. Answered to a member limited to part of the tenant too.
-    assetTypesByToken(tokens: [String!]!): [AssetType!]!
-    # List asset types that meet criteria. Answered to a member limited to part of the tenant too.
-    assetTypes(criteria: AssetTypeSearchCriteria!): AssetTypeSearchResults!
+    """
+    Reads asset types by numeric id. Ids naming no asset type are omitted. Answered to a member
+    limited to part of the tenant too, since a type is configuration rather than device data.
+    Requires device:read.
+    """
+    assetTypesById(
+        """Numeric ids of the asset types to read."""
+        ids: [ID!]!
+    ): [AssetType!]!
+    """
+    Reads asset types by token. Tokens naming no asset type are omitted. Answered to a member
+    limited to part of the tenant too. Requires device:read.
+    """
+    assetTypesByToken(
+        """Tokens of the asset types to read."""
+        tokens: [String!]!
+    ): [AssetType!]!
+    """
+    Lists the asset types that match the criteria, one page at a time. Answered to a member limited
+    to part of the tenant too. Requires device:read.
+    """
+    assetTypes(
+        """The facets the listed asset types must match, and the page to return."""
+        criteria: AssetTypeSearchCriteria!
+    ): AssetTypeSearchResults!
     # Find assets by unique id. A member limited to part of the tenant is answered with only
     # the assets one of its visible devices is assigned to (a tracked edge); the metadata and
     # properties of those are null for it, and any other id is omitted as if it did not exist.
@@ -6931,12 +7265,26 @@ type Query {
     # List assets that meet criteria. Scoped as assetsById; pagination counts only the assets
     # the member reaches.
     assets(criteria: AssetSearchCriteria!): AssetSearchResults!
-    # An asset type's published property-contract versions, newest first.
-    # At most 1000 per call (newest first); limit (at least 1) narrows that and offset (not negative) pages further.
-    assetTypeVersions(token: String!, limit: Int, offset: Int): [AssetTypeVersion!]!
-    # The version an asset of this type is currently validated against, or null when
-    # the type has never been published.
-    activeAssetTypeVersion(token: String!): AssetTypeVersion
+    """
+    Lists an asset type's published property-contract versions, newest first. At most 1000 per call;
+    limit (at least 1) narrows that and offset (not negative) pages further. Requires device:read.
+    """
+    assetTypeVersions(
+        """Token of the asset type."""
+        token: String!
+        """Most versions to return, at least 1 and at most 1000. Omit for 1000."""
+        limit: Int
+        """Number of versions to skip, not negative. Use with limit to page further."""
+        offset: Int
+    ): [AssetTypeVersion!]!
+    """
+    The version that assets of this type are currently validated against, or null when the type has
+    never been published. Requires device:read.
+    """
+    activeAssetTypeVersion(
+        """Token of the asset type."""
+        token: String!
+    ): AssetTypeVersion
 
     """Find maintenance windows by unique id. Ids that match nothing are omitted. Requires device:read."""
     maintenanceWindowsById(
@@ -7004,12 +7352,31 @@ type Query {
         credentialId: String!
     ): CommandChannelAccess
 
-    # Find customer types by unique id.
-    customerTypesById(ids: [ID!]!): [CustomerType!]!
-    # Find customer types by unique token.
-    customerTypesByToken(tokens: [String!]!): [CustomerType!]!
-    # List customer types that meet criteria.
-    customerTypes(criteria: CustomerTypeSearchCriteria!): CustomerTypeSearchResults!
+    """
+    Reads customer types by numeric id. Ids naming no customer type are omitted. Answered to a
+    member limited to part of the tenant too, since a type is configuration rather than device data.
+    Requires device:read.
+    """
+    customerTypesById(
+        """Numeric ids of the customer types to read."""
+        ids: [ID!]!
+    ): [CustomerType!]!
+    """
+    Reads customer types by token. Tokens naming no customer type are omitted. Answered to a member
+    limited to part of the tenant too. Requires device:read.
+    """
+    customerTypesByToken(
+        """Tokens of the customer types to read."""
+        tokens: [String!]!
+    ): [CustomerType!]!
+    """
+    Lists the customer types that match the criteria, one page at a time. Answered to a member
+    limited to part of the tenant too. Requires device:read.
+    """
+    customerTypes(
+        """The facets the listed customer types must match, and the page to return."""
+        criteria: CustomerTypeSearchCriteria!
+    ): CustomerTypeSearchResults!
     # Find customers by unique id.
     customersById(ids: [ID!]!): [Customer!]!
     # Find customers by unique token.
@@ -7017,13 +7384,31 @@ type Query {
     # List customers that meet criteria.
     customers(criteria: CustomerSearchCriteria!): CustomerSearchResults!
 
-    # Find area types by unique id. Answered to a member limited to part of the tenant too:
-    # a type is configuration, not device data.
-    areaTypesById(ids: [ID!]!): [AreaType!]!
-    # Find area types by unique token. Answered to a member limited to part of the tenant too.
-    areaTypesByToken(tokens: [String!]!): [AreaType!]!
-    # List area types that meet criteria. Answered to a member limited to part of the tenant too.
-    areaTypes(criteria: AreaTypeSearchCriteria!): AreaTypeSearchResults!
+    """
+    Reads area types by numeric id. Ids naming no area type are omitted. Answered to a member
+    limited to part of the tenant too, since a type is configuration rather than device data.
+    Requires device:read.
+    """
+    areaTypesById(
+        """Numeric ids of the area types to read."""
+        ids: [ID!]!
+    ): [AreaType!]!
+    """
+    Reads area types by token. Tokens naming no area type are omitted. Answered to a member limited
+    to part of the tenant too. Requires device:read.
+    """
+    areaTypesByToken(
+        """Tokens of the area types to read."""
+        tokens: [String!]!
+    ): [AreaType!]!
+    """
+    Lists the area types that match the criteria, one page at a time. Answered to a member limited
+    to part of the tenant too. Requires device:read.
+    """
+    areaTypes(
+        """The facets the listed area types must match, and the page to return."""
+        criteria: AreaTypeSearchCriteria!
+    ): AreaTypeSearchResults!
     # Find areas by unique id. A member limited to part of the tenant is answered with only
     # the areas one of its visible devices is placed in (a tracked edge); the metadata of
     # those is null for it, and any other id is omitted as if it did not exist.
@@ -7668,21 +8053,37 @@ type Mutation {
         """Token of the device to delete."""
         token: String!
     ): Boolean!
-    # Create a new entity group (ADR-061). A static group's members are managed over
-    # "member" relationship edges; a dynamic group carries a CEL selector and resolves
-    # its members eval-on-read (validated + cost-gated at create).
-    createEntityGroup(request: EntityGroupCreateRequest): EntityGroup!
-    # Update an existing entity group's presentation fields (member family + mode
-    # are immutable).
+    """
+    Creates an entity group. A static group's members are managed with relationships of the member
+    type; a dynamic group carries a CEL selector, validated and cost-checked on create, and resolves
+    its members when read. Requires device:write.
+    """
+    createEntityGroup(
+        """The entity group to create."""
+        request: EntityGroupCreateRequest
+    ): EntityGroup!
+    """
+    Applies a partial update to an entity group, identified by token. Member family and membership
+    mode cannot change. Pass expectedUpdatedAt to refuse the write if the group changed since it was
+    read. Requires device:write.
+    """
     updateEntityGroup(
+        """Token of the entity group to update."""
         token: String!
+        """The fields to change."""
         request: EntityGroupUpdateRequest!
         """Apply only if updatedAt still equals this value; returns STALE_WRITE if the record changed. Reload before retrying. Omit for last-write-wins."""
         expectedUpdatedAt: String
     ): EntityGroup!
-    # Delete an entity group, its relationship edges, and its frozen versions.
-    # Refused (ErrEntityInUse) while a detection rule scopes to the group (ADR-062).
-    deleteEntityGroup(token: String!): Boolean!
+    """
+    Deletes an entity group together with its member relationships and its frozen versions. Refused
+    while a detection rule scopes to the group. Returns true when it was deleted and false when
+    nothing has the token. Requires device:write.
+    """
+    deleteEntityGroup(
+        """Token of the entity group to delete."""
+        token: String!
+    ): Boolean!
     """
     Publishes a dynamic entity group's current draft selector as a new immutable version and makes
     it the active version a rule-scoped resolve reads. Rejected for a static group. Requires
@@ -7703,9 +8104,16 @@ type Mutation {
         """
         expectedActiveVersion: Int
     ): EntityGroupVersion!
-    # Re-point a dynamic group's active version at an existing version — a
-    # non-destructive rollback; the draft is untouched. Returns the updated group.
-    rollbackEntityGroup(token: String!, version: Int!): EntityGroup!
+    """
+    Points a dynamic group's active version back at an existing version and returns the group. Non-
+    destructive: no version is removed and the draft selector is untouched. Requires device:write.
+    """
+    rollbackEntityGroup(
+        """Token of the dynamic group to roll back."""
+        token: String!
+        """The published version to make active again."""
+        version: Int!
+    ): EntityGroup!
     """
     Make a group an access scope, or stop it being one, and return the group. A member whose
     access is limited to the group sees the devices in it at its active version, so publishing
@@ -7986,20 +8394,60 @@ type Mutation {
     # Remove multiple relationship edges by token (bulk "remove members" / "unassign").
     removeEntityRelationships(tokens: [String!]!): Boolean!
 
-    # Create a new asset type.
-    createAssetType(request: AssetTypeCreateRequest): AssetType!
-    # Update an existing asset type.
-    updateAssetType(token: String!, request: AssetTypeUpdateRequest!): AssetType!
-    # Delete an asset type. Refused while any asset references it; its published
-    # version history goes with it.
-    deleteAssetType(token: String!): Boolean!
-    # Freeze an asset type's draft property contract into a new immutable version and
-    # make it the one its assets are validated against. Refused when the type has no
-    # draft contract to freeze.
-    publishAssetType(token: String!, label: String, description: String): AssetTypeVersion!
-    # Re-point an asset type's active version at an earlier published one. The draft
-    # is untouched and nothing is deleted, so it can be rolled forward again.
-    rollbackAssetType(token: String!, version: Int!): AssetType!
+    """
+    Creates an asset type with a draft property contract, which is not binding until published.
+    Requires device:write.
+    """
+    createAssetType(
+        """The asset type to create."""
+        request: AssetTypeCreateRequest
+    ): AssetType!
+    """
+    Applies a partial update to an asset type, identified by token. Editing the draft property
+    contract changes nothing assets are validated against until the type is published. Requires
+    device:write.
+    """
+    updateAssetType(
+        """Token of the asset type to update."""
+        token: String!
+        """The fields to change."""
+        request: AssetTypeUpdateRequest!
+    ): AssetType!
+    """
+    Deletes an asset type together with its published version history. Refused while any asset
+    references the type. Returns true when it was deleted and false when nothing has the token.
+    Requires device:write.
+    """
+    deleteAssetType(
+        """Token of the asset type to delete."""
+        token: String!
+    ): Boolean!
+    """
+    Freezes an asset type's draft property contract into a new immutable version and makes it the
+    version its assets are validated against. Refused when the type has no draft contract to freeze;
+    a draft that is an empty array publishes, and says that assets of the type carry nothing. label
+    and description annotate the version. Requires device:write.
+    """
+    publishAssetType(
+        """Token of the asset type to publish."""
+        token: String!
+        """Optional label for the new version. It may embed a semantic version string, which is not parsed."""
+        label: String
+        """Optional longer description of what the new version changes."""
+        description: String
+    ): AssetTypeVersion!
+    """
+    Re-points an asset type's active version at an earlier published one and returns the type. The
+    draft is untouched and nothing is deleted, so the type can be rolled forward again. Assets
+    already stored are not rechecked or rewritten; the contract applies when a property document is
+    next written. Requires device:write.
+    """
+    rollbackAssetType(
+        """Token of the asset type to roll back."""
+        token: String!
+        """The published version to make active again."""
+        version: Int!
+    ): AssetType!
     # Create a new asset.
     createAsset(request: AssetCreateRequest): Asset!
     # Update an existing asset.
@@ -8012,17 +8460,31 @@ type Mutation {
     # Delete an asset and its relationship edges.
     deleteAsset(token: String!): Boolean!
 
-    # Create a new customer type.
-    createCustomerType(request: CustomerTypeCreateRequest): CustomerType!
-    # Update an existing customer type.
+    """Creates a customer type. Requires device:write."""
+    createCustomerType(
+        """The customer type to create."""
+        request: CustomerTypeCreateRequest
+    ): CustomerType!
+    """
+    Applies a partial update to a customer type, identified by token. Pass expectedUpdatedAt to
+    refuse the write if the type changed since it was read. Requires device:write.
+    """
     updateCustomerType(
+        """Token of the customer type to update."""
         token: String!
+        """The fields to change."""
         request: CustomerTypeUpdateRequest!
         """Apply only if updatedAt still equals this value; reload after a stale-write error. Omit for last-write-wins."""
         expectedUpdatedAt: String
     ): CustomerType!
-    # Delete a customer type. Refused while any customer references it.
-    deleteCustomerType(token: String!): Boolean!
+    """
+    Deletes a customer type. Refused while any customer references it. Returns true when it was
+    deleted and false when nothing has the token. Requires device:write.
+    """
+    deleteCustomerType(
+        """Token of the customer type to delete."""
+        token: String!
+    ): Boolean!
     """
     Create a maintenance window. The time zone and slots are validated together, and the slots
     are stored in canonical form. Requires device:write.
@@ -8065,12 +8527,26 @@ type Mutation {
     # customer in the tenant can be created with it.
     deleteCustomer(token: String!): Boolean!
 
-    # Create a new area type.
-    createAreaType(request: AreaTypeCreateRequest): AreaType!
-    # Update an existing area type.
-    updateAreaType(token: String!, request: AreaTypeUpdateRequest!): AreaType!
-    # Delete an area type. Refused while any area references it.
-    deleteAreaType(token: String!): Boolean!
+    """Creates an area type. Requires device:write."""
+    createAreaType(
+        """The area type to create."""
+        request: AreaTypeCreateRequest
+    ): AreaType!
+    """Applies a partial update to an area type, identified by token. Requires device:write."""
+    updateAreaType(
+        """Token of the area type to update."""
+        token: String!
+        """The fields to change."""
+        request: AreaTypeUpdateRequest!
+    ): AreaType!
+    """
+    Deletes an area type. Refused while any area references it. Returns true when it was deleted and
+    false when nothing has the token. Requires device:write.
+    """
+    deleteAreaType(
+        """Token of the area type to delete."""
+        token: String!
+    ): Boolean!
     # Create a new area.
     createArea(request: AreaCreateRequest): Area!
     # Update an existing area.
