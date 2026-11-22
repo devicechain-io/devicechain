@@ -492,8 +492,9 @@ func submitLoop(publishes <-chan pendingPublish, writer messaging.OrderedWriter,
 // returns, leaving what is unsettled UNACKED, which is the correct outcome: the capture
 // stream redelivers it to whichever pod is running, the capture dedup id stores it once,
 // and at-least-once is exactly the guarantee this source exists to provide.
-// A final-delivery placement hold abandoned at shutdown is already exhausted:
-// its AckWait expiration is recorded by the max-delivery recorder, as in core/storehold.
+// A final-delivery placement hold abandoned at shutdown is already exhausted.
+// Captured streams have a max-delivery recorder; the WAL does not. Its retained,
+// unacked entry requires recovery outside this stopped run.
 func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 	es.runMu.Lock()
 	defer es.runMu.Unlock()
@@ -936,7 +937,8 @@ func (es *GatewayJetStreamSource) UsePlacementUnavailableCounter(counter prometh
 // it — the same shape as the drop trap above, one level down.
 // Placement refusals do not judge the payload. Non-final deliveries wait for
 // broker redelivery; final deliveries are held and beaten until placement returns.
-// An unheld final delivery is exhausted and lettered by the max-delivery recorder.
+// Captured streams leave unheld final deliveries to their max-delivery recorder.
+// The WAL has no recorder, so its unheld final deliveries use failed-decode.
 func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string, recovery ...*finalPlacementHold) func(error) {
 	poison := es.poison
 	holds := es.finalHolds
@@ -979,20 +981,28 @@ func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string, 
 			if errors.Is(handleErr, messaging.ErrUnplacedTenant) && es.placementUnavailable != nil {
 				es.placementUnavailable.Inc()
 			}
-			if errors.Is(handleErr, messaging.ErrUnplacedTenant) {
-				if messaging.FinalDelivery(msg) {
-					if es.placementCheck == nil || holds == nil {
-						log.Error().Str("source", es.Id).Str("tenant", tenant).Msg("Final placement refusal has no placement hold wired; leaving it unacked for the max-delivery recorder.")
-					} else {
-						holds.hold(msg, tenant, held)
-					}
-				}
+			if errors.Is(handleErr, messaging.ErrRoundWalkStopped) || errors.Is(handleErr, messaging.ErrTenantGone) {
+				// Shutdown has no durable outcome, and a deleted tenant's payload must
+				// not be stored again. The WAL has no max-delivery recorder.
 				return
 			}
-			if errors.Is(handleErr, errStoreEnvelopeUnsettled) || errors.Is(handleErr, messaging.ErrRoundWalkStopped) || errors.Is(handleErr, messaging.ErrTenantGone) {
-				// A stopped walk has no outcome; routing an erased tenant's payload would
-				// store it again. Left unacked, these can still be lettered by the recorder
-				// after a final delivery's AckWait expires; they are never routed as poison.
+			if errors.Is(handleErr, messaging.ErrUnplacedTenant) {
+				if !messaging.FinalDelivery(msg) {
+					return
+				}
+				if es.placementCheck == nil || holds == nil {
+					log.Error().Str("source", es.Id).Str("tenant", tenant).
+						Msg("Final placement refusal has no placement hold wired; using the source's unheld final-delivery policy.")
+				} else if holds.hold(msg, tenant, held) {
+					return
+				}
+				if !es.fromStore {
+					return
+				}
+				// A full or unwired WAL hold cannot rely on a recorder. Use the
+				// same durable terminal route as the legacy per-message WAL path.
+			}
+			if errors.Is(handleErr, errStoreEnvelopeUnsettled) && (!es.fromStore || !messaging.FinalDelivery(msg)) {
 				return
 			}
 			if messaging.FinalDelivery(msg) {
@@ -1010,15 +1020,15 @@ func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string, 
 				// inbound-events writer's settle goroutine, which reports every other
 				// outcome in order behind it. So it runs on its own goroutine, at most
 				// POISON_ROUTE_LIMIT at once. With every slot busy the message is left
-				// UNACKED: this is its last delivery, so the broker terminates it and the
-				// max-delivery recorder letters it — recorded, loudly, rather than holding
-				// back every other message's ack.
+				// UNACKED. Captured streams have a max-delivery recorder for that
+				// fallback; the WAL does not, so a saturated or unavailable terminal
+				// route leaves its retained entry requiring external recovery.
 				select {
 				case poison.slots <- struct{}{}:
 				default:
 					log.Error().Err(handleErr).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
 						Int("attempts", msg.NumDelivered).
-						Msg("Captured message is poison and every failed-decode route is busy; leaving it unacked for the max-delivery record.")
+						Msg("Captured message is poison and every failed-decode route is busy; leaving it unacked.")
 					return
 				}
 				poison.running.Add(1)
@@ -1069,9 +1079,8 @@ func (es *GatewayJetStreamSource) routePoison(msg messaging.Message, tenant stri
 		Int("attempts", msg.NumDelivered).
 		Msg("Captured message failed every delivery attempt; routing to failed-decode.")
 	if err := es.failed(es.Id, tenant, msg.Value, handleErr); err != nil {
-		// Even the dead-letter route failed. Leave it UNACKED: the broker's own
-		// MaxDeliver terminates it eventually, and losing it loudly later beats
-		// discarding it silently now.
+		// Leave the source unacked when the terminal publish fails. Captured streams
+		// have a recorder fallback; the WAL retains the entry but has no recorder.
 		log.Error().Err(err).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
 			Msg("Failed to route a poison captured message to failed-decode; leaving it unacked.")
 		return

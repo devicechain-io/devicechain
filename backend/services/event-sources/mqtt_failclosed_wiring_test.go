@@ -200,6 +200,14 @@ func testServiceReadsMessageStore(t *testing.T, envelopes bool) {
 	Microservice.InstanceConfiguration.Infrastructure.Messaging.Envelopes.Inbound = envelopes
 	ctx := context.Background()
 	require.NoError(t, nmgr.Start(ctx))
+	storeInfo, storeErr := js.StreamInfo(messaging.MqttMessageStore)
+	require.NoError(t, storeErr)
+	writerMode := "/per-message"
+	if envelopes {
+		writerMode = "/envelopes"
+	}
+	require.True(t, strings.HasSuffix(storeInfo.Config.Metadata["io.devicechain.mqtt-fail-closed.holder"], writerMode),
+		"the service must register its actual writer mode before reconciliation")
 	t.Cleanup(func() {
 		stopHTTPGroupCommit()
 		_ = nmgr.Stop(context.Background())

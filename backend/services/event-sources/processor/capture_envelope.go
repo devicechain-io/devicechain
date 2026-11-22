@@ -272,8 +272,9 @@ func (es *GatewayJetStreamSource) publishGroup(ce *captureEngine, b messaging.Fo
 		if es.fromStore {
 			settle = func(err error) {
 				if err != nil {
-					// Round failure does not judge payloads. Keep placement errors for the
-					// final-delivery hold; never ack other failures through poison routing.
+					// Preserve the round failure for retry or placement recovery. On the
+					// WAL's final delivery the settler must use failed-decode: this
+					// stream has no max-delivery recorder to rescue an unacked member.
 					err = errors.Join(errStoreEnvelopeUnsettled, err)
 				}
 				p.done(err)

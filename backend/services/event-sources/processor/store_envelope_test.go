@@ -93,7 +93,7 @@ func TestStoreEnvelopeAcksEveryMemberOnlyAfterDurableStore(t *testing.T) {
 	require.Equal(t, []string{"acme-1", "acme-2", "acme-3"}, b.devices(t))
 }
 
-func TestFailedStoreEnvelopeAcksNothingEvenOnFinalDelivery(t *testing.T) {
+func TestFailedStoreEnvelopeRoutesEveryFinalMemberBeforeAck(t *testing.T) {
 	b := newEnvBroker()
 	b.rejectAll.Store(true)
 	es := storeEnvSource(t, b, true)
@@ -101,7 +101,7 @@ func TestFailedStoreEnvelopeAcksNothingEvenOnFinalDelivery(t *testing.T) {
 	require.NoError(t, err)
 	defer ce.cancel()
 	ce.engine.SetGiveUp(time.Millisecond)
-	// A failed envelope is an infrastructure failure, never a poison member to ack away.
+	// The WAL has no max-delivery recorder: its last attempt must use failed-decode.
 	es.poison = &poisonRoutes{slots: make(chan struct{}, POISON_ROUTE_LIMIT)}
 	var poison atomic.Int32
 	es.failed = func(string, string, []byte, error) error { poison.Add(1); return nil }
@@ -110,9 +110,9 @@ func TestFailedStoreEnvelopeAcksNothingEvenOnFinalDelivery(t *testing.T) {
 	ce.engine.Wait()
 	es.poison.running.Wait()
 	for _, a := range acks {
-		require.Zero(t, a.counts())
+		require.Equal(t, 1, a.counts())
 	}
-	require.Zero(t, poison.Load())
+	require.EqualValues(t, 3, poison.Load())
 	require.Empty(t, b.devices(t))
 }
 

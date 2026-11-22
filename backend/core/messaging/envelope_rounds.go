@@ -400,8 +400,8 @@ func (e *RoundEngine) publishPieces(ctx context.Context, k RoundKey, ms []RoundM
 	})
 }
 
-// buildRound builds the message for round of the bucket's members.
-func (e *RoundEngine) buildRound(k RoundKey, round uint32, ms []RoundMember) (Message, error) {
+// roundID is shared by publication and read-back verification.
+func (e *RoundEngine) roundID(k RoundKey, round uint32) string {
 	kind := e.cfg.DedupKind
 	if k.Mapped {
 		kind = e.cfg.MappedDedupKind
@@ -411,6 +411,12 @@ func (e *RoundEngine) buildRound(k RoundKey, round uint32, ms []RoundMember) (Me
 		id = kind + ":" + k.Tenant + ":" + strconv.FormatUint(k.SourceEpoch, 36) + ":" +
 			strconv.FormatUint(k.Source(), 36) + ":" + strconv.FormatUint(uint64(round), 36)
 	}
+	return id
+}
+
+// buildRound builds the message for round of the bucket's members.
+func (e *RoundEngine) buildRound(k RoundKey, round uint32, ms []RoundMember) (Message, error) {
+	id := e.roundID(k, round)
 	if len(ms) == 1 {
 		m := Message{
 			traceContext: ms[0].TraceContext,
@@ -769,7 +775,7 @@ func (e *RoundEngine) heldOf(ctx context.Context, k RoundKey, round uint32, seq 
 		return s, nil
 	}
 	e.Probes.Add(1)
-	s, err := e.Carried(ctx, k.Tenant, seq)
+	s, err := e.Carried(ctx, k.Tenant, seq, e.roundID(k, round))
 	if err != nil {
 		return nil, err
 	}
@@ -784,12 +790,17 @@ var errNotAnEnvelope = errors.New("the stored message is neither an envelope nor
 // Carried returns the source indices the stored message at seq settled: its members and the
 // indices it says were settled elsewhere. Anything that does not parse as exactly that is an
 // error - never an empty set, which would republish what is already stored.
-func (e *RoundEngine) Carried(ctx context.Context, tenant string, seq uint64) (map[uint32]struct{}, error) {
+// roundID must be the id whose PubAck named seq. Placement can move between
+// Publish and Get, so the sequence alone does not identify the stored round.
+func (e *RoundEngine) Carried(ctx context.Context, tenant string, seq uint64, roundID string) (map[uint32]struct{}, error) {
 	ctx, cancel := context.WithTimeout(ctx, roundTimeout)
 	defer cancel()
 	stored, err := e.cfg.Rounds.Get(ctx, tenant, seq)
 	if err != nil {
 		return nil, err
+	}
+	if roundID == "" || stored.Headers[nats.MsgIdHdr] != roundID {
+		return nil, fmt.Errorf("reading round %q at seq %d: stored Nats-Msg-Id is %q", roundID, seq, stored.Headers[nats.MsgIdHdr])
 	}
 	out := map[uint32]struct{}{}
 	if v := stored.Headers[eventenvelope.HeaderName]; v != "" {

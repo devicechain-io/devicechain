@@ -111,7 +111,11 @@ func (r envRounds) Get(_ context.Context, tenant string, seq uint64) (messaging.
 	if !ok {
 		return messaging.StoredMessage{}, fmt.Errorf("no message %d", seq)
 	}
-	return messaging.StoredMessage{Sequence: seq, Subject: "i." + tenant + ".inbound-events", Value: st.msg.Value, Headers: st.msg.Headers}, nil
+	headers := map[string]string{"Nats-Msg-Id": st.msg.DedupID}
+	for k, v := range st.msg.Headers {
+		headers[k] = v
+	}
+	return messaging.StoredMessage{Sequence: seq, Subject: "i." + tenant + ".inbound-events", Value: st.msg.Value, Headers: headers}, nil
 }
 
 // pbDevice is a well-formed protobuf carrying the device token: what a marshalled event is to
