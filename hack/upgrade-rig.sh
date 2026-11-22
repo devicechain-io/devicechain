@@ -3251,6 +3251,23 @@ attrlock_psql() {
   attrlock_last_number <<<"$out"
 }
 
+# attrlock_readiness_orphans reads the orphan count out of `dcctl fleet-op readiness -o json` on stdin, and
+# fails for anything that is not a number: a null (the server could not count them), a missing field, or no
+# JSON at all must never read as zero. Pure, so the selftest can feed it each.
+attrlock_readiness_orphans() {
+  jq -er '.orphanedAttributeRows | select(type == "number")' 2>/dev/null
+}
+
+# attrlock_readiness <tenant> runs the readiness command as the seed's identity and prints the orphan count.
+attrlock_readiness() {
+  local tenant="$1" email pw tls=() out
+  email="$(jq -r '.identity.email' "$receipt")"
+  pw="$(jq -r '.identity.password' "$receipt")"
+  [[ "$api_scheme" == https ]] && tls=(--tls)
+  out="$("$target_dcctl" fleet-op readiness -o json -s "$api_server" ${tls[@]+"${tls[@]}"} -t "$tenant"     --email "$email" --password "$pw" 2>/dev/null)" || true
+  attrlock_readiness_orphans <<<"$out"
+}
+
 # attrlock_hold <pod> <device id> <seconds> holds the device's attribute lock in an open transaction, in
 # the background, through the ONE SQL definition the platform's own writers call.
 attrlock_hold() {
@@ -3392,6 +3409,33 @@ versions must leave none."
   [[ "$orphans" == "0" ]] || fail "the planted orphan was not rolled back cleanly ($orphans left)"
   note "no orphaned attribute row or generation head, and the same query counts a planted one ✓ (it can fail)"
 
+  # The platform's OWN answer, as an operator gets it: dcctl fleet-op readiness reports the same count through
+  # the API, for this tenant. It exits non-zero in this release (enforcement is not installed, by design), so
+  # its JSON is read and its exit status is not. The SQL above is kept as the cross-check: it counts every
+  # tenant, this counts the seed's, and the two must agree here because only this tenant wrote.
+  [[ -x "$target_dcctl" ]] || build_target_dcctl
+  # 🔴 THE BASELINE COPY MUST BE GONE FIRST. dcctl reaches device-management through the ingress, the copy keeps
+  # the live pods' labels, and a v1.8 pod serves no fleetOperationReadiness: a query routed to it would fail for
+  # a reason that is not the release's. Deleted and waited on, not merely asked to go.
+  attrlock_cleanup
+  kubectl --context "$kube_context" -n "$ns" wait --for=delete pod -l "$oldpod_label=oldpod-device-management" --timeout=120s >/dev/null 2>&1 ||
+    fail "the $baseline_tag device-management copy did not terminate, so readiness could be answered by it"
+  local ready
+  ready="$(attrlock_readiness "$tenant")" ||
+    fail "dcctl fleet-op readiness reported no orphan count (it must answer for the seed's tenant, as that tenant's administrator)"
+  [[ "$ready" == "0" ]] || fail "dcctl fleet-op readiness reports $ready orphaned attribute row(s) after the roll window; the SQL count says $orphans. A roll that writes attributes from both versions must leave none."
+  note "dcctl fleet-op readiness agrees with the SQL: 0 orphans ✓"
+  # ...and it is shown to count one: a generation head for a device that does not exist, COMMITTED so the API sees it,
+  # then removed.
+  attrlock_psql "$pod" "INSERT INTO \"device-management\".entity_attribute_generations (id, tenant_id, device_id, scope, attr_key, generation) VALUES ((SELECT COALESCE(max(id), 0) + 1000000 FROM \"device-management\".entity_attribute_generations), '$tenant', 999999999, 'SHARED', 'drill-readiness-control', 1)" >/dev/null || true
+  ready="$(attrlock_readiness "$tenant")" || ready=""
+  attrlock_psql "$pod" "DELETE FROM \"device-management\".entity_attribute_generations WHERE tenant_id = '$tenant' AND device_id = 999999999 AND attr_key = 'drill-readiness-control'" >/dev/null || true
+  [[ "$ready" =~ ^[0-9]+$ && "$ready" -ge 1 ]] ||
+    fail "THE READINESS CHECK DID NOT SEE A PLANTED ORPHAN (it reported '$ready' with one committed), so its 0 above says nothing."
+  ready="$(attrlock_readiness "$tenant")" || ready=""
+  [[ "$ready" == "0" ]] || fail "the planted orphan was not removed cleanly (readiness reports '$ready')"
+  note "readiness counted a planted orphan ✓ (it can fail), and reads 0 again once it is removed"
+
   attrlock_cleanup
   trap - EXIT
   say "ATTRIBUTE LOCK HOLDS — $baseline_tag and upgraded pods wrote one device at once, the lock was in force, and nothing was left behind"
@@ -3466,6 +3510,13 @@ ROLLBACK')" ]] ||
     fail "SELF-TEST FAILED: a batch with no result printed a number"
   grep -q "entity_attributes" <<<"$attrlock_orphan_sql" && grep -q "entity_attribute_generations" <<<"$attrlock_orphan_sql" ||
     fail "SELF-TEST FAILED: the orphan query no longer counts both attribute rows and generation heads"
+  [[ "$(attrlock_readiness_orphans <<<'{"enforcement":"NOT_INSTALLED","orphanedAttributeRows":0}')" == "0" ]] ||
+    fail "SELF-TEST FAILED: a zero orphan count was not read as 0"
+  [[ "$(attrlock_readiness_orphans <<<'{"orphanedAttributeRows":3}')" == "3" ]] ||
+    fail "SELF-TEST FAILED: an orphan count of 3 was not read as 3"
+  for bad in '{"orphanedAttributeRows":null}' '{"enforcement":"X"}' '' 'not json'; do
+    attrlock_readiness_orphans <<<"$bad" >/dev/null && fail "SELF-TEST FAILED: '$bad' was read as an orphan count"
+  done
   note "the lock-wait verdict, the psql result reader and the orphan query are pinned ✓"
 }
 
