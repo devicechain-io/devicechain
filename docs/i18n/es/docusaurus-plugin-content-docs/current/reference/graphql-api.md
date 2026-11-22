@@ -336,7 +336,8 @@ destructivo — consulta [el aviso de más abajo](#where-the-default-does-not-ho
 
 Una actualización parcial reduce los conflictos de concurrencia sin eliminarlos. Dos escritores que
 tocan campos distintos ya no se pisan, pero dos que tocan el mismo campo sí. `updateDashboard`,
-`updateConnector`, `updateAiProvider` y `updateNotificationPolicy` aceptan un `expectedUpdatedAt`
+`updateConnector`, `updateAiProvider`, `updateNotificationPolicy`, `updateArea`, `updateAsset`,
+`updateCustomer` y `updateEntityGroup` aceptan un `expectedUpdatedAt`
 opcional y rechazan la escritura si la marca de tiempo almacenada se ha movido desde que la leíste.
 Envía el `updatedAt` que leíste por última vez, u omítelo para que gane la última escritura. El
 `updatedAt` que devuelve una respuesta `create*` no sirve para esto: vuelve a leer el registro
@@ -990,7 +991,7 @@ mutation Verify($challenge: String!, $code: String!) {
 
 `verifyMfa` devuelve lo mismo que `login`, y el cliente continúa con `selectTenant` como antes. `code` es el código de seis dígitos de la aplicación o un código de recuperación (`ABCD-EFGH-JKMN-PQRS`, en mayúsculas o minúsculas, con o sin guiones). Un desafío dura cinco minutos, admite cinco intentos e inicia sesión una sola vez.
 
-**Verificación adicional dentro de la sesión (Vista previa: puede cambiar en una versión menor).** Si una aprobación de agente o una relajación de política devuelve `STEP_UP_REQUIRED`, envía tu token de acceso del inquilino en `Authorization: Bearer ...` y tu propio token de actualización con un código nuevo:
+**Verificación adicional dentro de la sesión (Vista previa: puede cambiar en una versión menor).** Si una aprobación de agente o una relajación de política devuelve `STEP_UP_REQUIRED`, envía tu propio token de acceso del inquilino en `Authorization: Bearer ...` y tu token de actualización de la consola con un código nuevo del autenticador:
 
 ```graphql
 mutation StepUp($refreshToken: String!, $code: String!) {
@@ -1002,7 +1003,9 @@ mutation StepUp($refreshToken: String!, $code: String!) {
 }
 ```
 
-Devuelve el mismo par `AuthToken` que `refresh`. Guarda ambos tokens y vuelve a intentar la acción sin cerrar sesión. Conserva el identificador y la época de la sesión y actualiza `mfa_time`; una actualización normal no renueva la verificación. Los tokens deben pertenecer al mismo usuario e inquilino. Se rechazan los tokens de agentes, servicio, identidad o actualización como autorización, los tokens de actualización OAuth, las sesiones terminadas y las épocas revocadas.
+`stepUp` devuelve el mismo par `AuthToken` que `refresh`. Guarda ambos tokens de reemplazo y vuelve a intentar la acción. Conserva el identificador y la época de la sesión y actualiza `mfa_time`; una actualización normal no renueva la vigencia del factor. El token de actualización debe pertenecer al mismo nombre de usuario e inquilino que el token de acceso. Los tokens de agentes, de servicio, de identidad y de actualización no pueden autorizar esta operación, y los tokens de actualización OAuth no pueden nombrar la sesión. Se rechazan las sesiones terminadas y las épocas de sesión rotadas.
+
+Solo se aceptan códigos TOTP: los códigos de recuperación se rechazan **sin evaluarse ni consumirse**. Los códigos incorrectos, repetidos y bloqueados devuelven `invalid code` y comparten el bloqueo de factor del inicio de sesión; un código incorrecto deja utilizable el token de actualización. Se permite una verificación por solicitud. Las sesiones de inicio de sesión único devuelven `STEP_UP_SSO`; las cuentas sin factor devuelven `MFA_NOT_ENROLLED`. El cuadro de aprobación de la consola verifica sin cerrar sesión y te indica que reintentes; solo ofrece volver a iniciar sesión cuando la mutación no está disponible, incluidos servidores anteriores, caídas de red o del almacén, el inicio de sesión único y la falta de inscripción.
 
 
 Las operaciones están en el endpoint de user-management. `mfaStatus`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` y `disableTotp` toman el token de identidad como argumento (no en una cabecera `Authorization`), no un token de inquilino. `verifyMfa` no toma ningún token. `setTenantMfaRequired` del plano del inquilino toma el token de acceso del inquilino y requiere `member:write` y un llamador sin alcance restringido. `resetIdentityMfa` y el `setTenantMfaRequired` de la API de administración están en la API de administración y requieren `user:write`:

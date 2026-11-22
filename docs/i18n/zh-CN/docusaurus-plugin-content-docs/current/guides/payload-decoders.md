@@ -33,6 +33,8 @@ title: 载荷解码器
 
 解码器是一份用小型、无循环语言（CEL）写成的表达式文档。它有一个要读取的**输入**类型、可选的**共享值**，以及一个或多个**分段**；每个分段有若干**行**，每一行说明它写入哪个指标，以及如何计算该值。这门语言没有时钟、没有随机性、没有副作用，因此相同的输入总是得到相同的读数。
 
+DeviceChain 不会把 JavaScript、Python 或其他用户提供的脚本作为载荷解码器来执行。ChirpStack 的 JavaScript 编解码器在 ChirpStack 中运行；DeviceChain 通过[入站集成](./inbound-integrations.md#chirpstack)接收它解码出的对象。对于已有脚本，请把受支持的字节读取和 JSON 映射改写为 CEL 解码器行。无法用该语言表达的逻辑，请保留在网络服务器的编解码器中，或放在转发[设备事件](../reference/device-protocol.md)的外部桥接器中。
+
 一个解码器最多有 8 个分段、16 个共享值和 20 个已保存的测试向量，整份文档最大 32 KiB。[函数参考](../reference/decoder-functions.md#decoder-functions-limits)列出了这些限制。
 
 ## 输入 {#inputs}

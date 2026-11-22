@@ -1,6 +1,13 @@
+# A minimal Instance: the declaration `dcctl bootstrap` writes for an instance on a local kind
+# cluster it created. dcctl writes and reads this resource; an operator rarely needs to. provider,
+# cluster and managed are immutable once set (the API server refuses a change), because
+# `dcctl destroy` reads them to decide which cluster to act on and whether it may delete it.
 apiVersion: core.devicechain.io/v1beta1
 kind: Instance
 metadata:
   name: instance-sample
 spec:
-  # TODO(user): Add fields here
+  provider: local
+  cluster: kind-devicechain
+  managed: true
+  profile: default
