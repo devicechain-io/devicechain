@@ -84,10 +84,18 @@ func (api *Api) WriteDecoderHealth(ctx context.Context, rows []DecoderHealthWrit
 			skipped++
 			continue
 		}
+		// The failure time is stored in UTC, like the window: the last error is the row with the
+		// latest failure, and a store that keeps a time in the zone it was handed (SQLite keeps text)
+		// would otherwise order a later failure written in a western zone before an earlier one.
+		var lastFailureAt *time.Time
+		if r.LastFailureAt != nil {
+			t := r.LastFailureAt.UTC()
+			lastFailureAt = &t
+		}
 		row := ProfileDecoderHealth{
 			DeviceProfileId: id, ProfileVersion: r.Version, WindowStart: r.WindowStart.UTC(), Replica: r.Replica,
 			Decoded: r.Decoded, Ignored: r.Ignored, Failed: r.Failed, Suppressed: r.Suppressed,
-			ChargeSkew: r.ChargeSkew, LastFailureAt: r.LastFailureAt, LastError: r.LastError,
+			ChargeSkew: r.ChargeSkew, LastFailureAt: lastFailureAt, LastError: r.LastError,
 		}
 		row.TenantId = tenant
 		err := api.RDB.DB(ctx).Clauses(clause.OnConflict{

@@ -363,8 +363,10 @@ El ajuste está desactivado de forma predeterminada y no cambia nada para un anf
 ## Interacciones y modelo de confianza {#interactions-and-the-trust-model}
 
 `interactions` enumera los callbacks del anfitrión que usa el widget: `alarmActions` (reconocer y
-cerrar; solo canal de alarmas), `commandSend` (solo canal de control), `selection` y `candidates`.
-El anfitrión proporciona únicamente los callbacks que declaraste, limitados además a lo que el
+cerrar; solo canal de alarmas), `commandSend` (solo canal de control), `selection` y `candidates`. Lee la selección y los candidatos con `useWidgetSelect()` y `useWidgetCandidates()`;
+estos hooks pueden devolver undefined. La prop `actions` aporta las escrituras de alarmas y comandos;
+`sendCommand` es opcional y devuelve un `CommandDispatch` (`sent` o `rejected`), así que
+detecta si existe y comprueba el estado devuelto. El anfitrión proporciona únicamente los callbacks que declaraste, limitados además a lo que el
 anfitrión admite y a lo que el espectador tiene permitido. Un widget sin callback se comporta como
 de solo lectura. El servidor sigue siendo la autoridad: una acción que el espectador no puede
 realizar es rechazada por el servidor, y el rechazo llega a tu componente.

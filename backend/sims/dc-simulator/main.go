@@ -401,7 +401,7 @@ func run(handshakePath, bind, port string, load sim.Load, scenario sim.ScenarioO
 	sim.NewControlServer(lc, rt).Register(mux)
 	sim.RegisterPresentation(mux, webRoot, rt, manifestId)
 
-	srv := &http.Server{Addr: bind + ":" + port, Handler: mux}
+	srv := newControlHTTPServer(bind+":"+port, mux)
 	go func() {
 		<-ctx.Done()
 		// Halt the emit loop before draining the server so a graceful shutdown
@@ -496,4 +496,22 @@ func envDurationOr(key string, fallback time.Duration) time.Duration {
 		log.Fatal().Str(key, v).Msg("not a duration (want e.g. 200ms, 5s)")
 	}
 	return d
+}
+
+// controlReadHeaderTimeout and controlIdleTimeout bound the simulator's control and presentation
+// server, as every other server in the tree is bounded: without them a client that opens a
+// connection and never finishes its headers (or never closes an idle keep-alive) holds it forever.
+const (
+	controlReadHeaderTimeout = 5 * time.Second
+	controlIdleTimeout       = 2 * time.Minute
+)
+
+// newControlHTTPServer is the simulator's control server, with its timeouts.
+func newControlHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: controlReadHeaderTimeout,
+		IdleTimeout:       controlIdleTimeout,
+	}
 }
