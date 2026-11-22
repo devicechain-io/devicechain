@@ -176,6 +176,14 @@ func (up *Uplink) commandsFilter() string {
 // ErrGatewayAddressedItself is returned by EventTopic for the gateway's own token.
 var ErrGatewayAddressedItself = errors.New("the gateway's own token is not a child of itself")
 
+const (
+	// mqttKeepAlive is the keep-alive stated explicitly (paho's own default).
+	mqttKeepAlive = 30 * time.Second
+	// mqttWriteTimeout bounds one socket write to the broker, matching outbound-connectors'
+	// publish client.
+	mqttWriteTimeout = 5 * time.Second
+)
+
 // clientOptions builds a fresh paho option set for one connection attempt. Auto-
 // reconnect and connect-retry are OFF: this Uplink owns the reconnect loop.
 func (up *Uplink) clientOptions() *mqtt.ClientOptions {
@@ -194,6 +202,11 @@ func (up *Uplink) clientOptions() *mqtt.ClientOptions {
 	opts.SetAutoReconnect(false)
 	opts.SetConnectRetry(false)
 	opts.SetConnectTimeout(up.connectTimeout)
+	// Bound one socket write and state the keep-alive: the uplink is the loaded publisher,
+	// and at paho's default of no write timeout a write to a dead peer blocks for good and
+	// the ping timeout is never checked.
+	opts.SetKeepAlive(mqttKeepAlive)
+	opts.SetWriteTimeout(mqttWriteTimeout)
 	opts.SetCleanSession(true)
 	// KNOWN LIMIT. The session is clean on purpose: the client id is the gateway device's
 	// presence identity, and a persistent session would change what the broker means by that
