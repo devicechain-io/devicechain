@@ -1,8 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The Simplified Chinese locale is SCOPED: it ships the namespaces its config entry lists, and
-// every other screen falls back to English. Two registries say which namespaces those are (the
+// The Simplified Chinese locale ships every namespace its config entry lists (all of them). Two registries say which namespaces those are (the
 // `namespaces` list in config.ts, which the parity test reads, and the one-module index the
 // loader imports), so they are pinned to each other here: a catalog in the index but not the
 // list escapes the parity check, and one in the list but not the index never loads.
@@ -34,7 +33,7 @@ describe('the zh-CN catalogs', () => {
     }
   });
 
-  it.each(['adminSettings', 'devices', 'identities', 'alarmMaintenance', 'nav'])('%s keeps every placeholder and markup tag, and is translated', (ns) => {
+  it.each(zh.namespaces ?? [])('%s keeps every placeholder and markup tag, and is translated', (ns) => {
     const tokens = (s: string) => s.match(/{{[^}]+}}|<\/?\w+\/?>/g)?.sort() ?? [];
     const en = bundle('en', ns)!;
     const translated = bundle('zh-CN', ns)!;
@@ -58,6 +57,16 @@ describe('the zh-CN catalogs', () => {
     expect(i18n.t('devices:title')).not.toBe(bundle('en', 'devices')!.title);
     expect(i18n.t('adminSettings:title')).toBe('系统设置');
     expect(i18n.t('adminSettings:settingSavedToast', { key: 'locale.default' })).toBe('设置“locale.default”已保存');
-    expect(i18n.t('common:back')).toBe('Back'); // a namespace zh-CN does not ship stays English
+    expect(i18n.t('common:back')).toBe(bundle('zh-CN', 'common')!.back);
+    expect(i18n.t('common:back')).not.toBe('Back');
+  });
+
+  it('covers every English namespace, including the OTA updates and facets catalogs', () => {
+    const english = Object.keys(files)
+      .filter((f) => f.startsWith('./locales/en/'))
+      .map((f) => f.replace('./locales/en/', '').replace('.json', ''));
+    expect([...(zh.namespaces ?? [])].sort()).toEqual(english.sort());
+    expect(zh.namespaces).toContain('updates');
+    expect(zh.namespaces).toContain('facets');
   });
 });

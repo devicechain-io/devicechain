@@ -1,0 +1,14 @@
+{
+  "title": "语言",
+  "description": "未自行选择语言的成员打开此租户控制台时所使用的语言。",
+  "loading": "正在加载语言设置…",
+  "noPermissionPrefix": "您需要",
+  "noPermissionSuffix": "权限才能更改此租户的默认语言。",
+  "defaultLanguage": "默认语言",
+  "defaultLanguageHelp": "选择“继承”可沿用运营方设置的实例级默认值。",
+  "inheritOption": "继承",
+  "inheriting": "继承实例默认值：{{locale}}",
+  "precedenceNote": "这只是默认值，不会覆盖个人的选择。已通过语言切换器选择语言的用户将保留其选择；未选择的用户会看到此语言。如果此处设为“继承”，且运营方也未设置默认值，则他们会看到浏览器所请求的、我们所支持的语言，否则显示英文。",
+  "save": "保存语言",
+  "savedToast": "默认语言已保存。"
+}
