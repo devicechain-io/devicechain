@@ -131,8 +131,8 @@
       "translationSha256": "dadbdb6fd144d58cffa9c7d22334011813e62b685873b1d871eaaf6169d4b3a3"
     },
     "deployment/edge-services.md": {
-      "sourceSha256": "a0f2c648d70bcfd79b8eabb2ae1b05df72e4c1c8f71d13850fb8f9661e00813b",
-      "translationSha256": "d006cd9928f68b0b2d72c174c3824f151388ceb8bc99a70be1013049de627c59"
+      "sourceSha256": "fdc1e8ab20c03169808704450d0119b75fd02bdbdfcd8aa56ac281ebcfedea84",
+      "translationSha256": "2df535056c2f704e7301cb6ab3074d25380c60233f5e93fd4b9e394acda01d61"
     },
     "deployment/grafana-boards.md": {
       "sourceSha256": "874dda791c21789109bc8666953ac1c7b9a0b7a173996a16e9ee05cf66145fd1",
@@ -143,12 +143,12 @@
       "translationSha256": "f6820681c86d5a41ab342180019f511969a3088c0e7543fe8a9cda496f3e1775"
     },
     "deployment/kubernetes-operator.md": {
-      "sourceSha256": "54fd4acbd6f808c7b1ada281f16f4832ec60cf483d3500b8698676a0f81f41b4",
-      "translationSha256": "b2ee7d2b1464bb21adf8e65f365fb8c2f6607483efedbc9d1045f89602eab08a"
+      "sourceSha256": "41bdd347f6bb00855cf0d872307edcf79fe18e5beb3f656d809ad35413985034",
+      "translationSha256": "0be17424b5ea391b02fbe4c7b7a917dd3d385d58597a3a502a878028f967c5fc"
     },
     "deployment/metrics-reference.md": {
-      "sourceSha256": "aef506be46fa370e4b7ef6eca7af4303c81a6633d3eaadeedb86822c7f3ec128",
-      "translationSha256": "1c43a9b72016108b479208ffb63fff1a23be81544d840238424be9d9327ceb3b"
+      "sourceSha256": "1c34f6f62de91da3274059d2c5dd0d68f3b825ce1f30b16c56d0c9d8eaeb7d3e",
+      "translationSha256": "99b374a56d054844cd695ccf559fec66a33a348d3c74ce83d53e8fd4cb9aaf22"
     },
     "deployment/observability.md": {
       "sourceSha256": "ec89dc7ebcf9d604a0aec8048cda6797c30e4a83d8c1aacd74457247b9e6cd53",
