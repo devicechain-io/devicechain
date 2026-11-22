@@ -22,7 +22,6 @@ import (
 	"github.com/devicechain-io/dc-simulator/updater"
 	"github.com/devicechain-io/dc-simulator/x509sim"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	mqttpackets "github.com/eclipse/paho.mqtt.golang/packets"
 	"github.com/rs/zerolog/log"
 )
 
@@ -73,6 +72,10 @@ type s6PullCommand struct {
 	Token, Name    string
 	Payload        json.RawMessage
 	acted, success bool
+}
+
+type s6PullBatch struct {
+	Commands *[]s6PullCommand `json:"commands"`
 }
 
 type harborS6State struct {
@@ -436,10 +439,11 @@ func (s *harborpulse) tickS6(ctx context.Context, rt *Runtime, now time.Time, el
 		if d.Token == HarborpulseRevokedCharger() && s.s6.revoked && !s.hasS6Defect(HarborpulseDefectX509RevocationSkipped) {
 			if err == nil {
 				errs = append(errs, fmt.Errorf("revoked charger was admitted by the broker"))
-			} else if !s6CertificateRefused(err) {
-				errs = append(errs, fmt.Errorf("revoked charger reconnect failed without an authentication refusal: %w", err))
 			}
-			continue // Keep retrying the same certificate; the oracle separately requires a callout rejection.
+			// The real broker closes a rejected TLS connection with EOF. Any failed
+			// connect is only a candidate refusal: the verifier requires the platform's
+			// matching x509_credential_rejected record, so a transport outage stays red.
+			continue
 		}
 		if err != nil {
 			errs = append(errs, err)
@@ -481,9 +485,7 @@ func (s *harborpulse) tickS6(ctx context.Context, rt *Runtime, now time.Time, el
 
 func (s *harborpulse) pollS6Lamp(ctx context.Context, rt *Runtime, d DeviceInstance) error {
 	base := fmt.Sprintf("%s/%s/%s/devices/%s/commands", strings.TrimRight(rt.Endpoints.Ingress, "/"), rt.InstanceId, rt.Tenant, d.Token)
-	var out struct {
-		Commands *[]s6PullCommand `json:"commands"`
-	}
+	var out s6PullBatch
 	if s.s6.pending == nil {
 		s.s6.pending = map[string][]s6PullCommand{}
 	}
@@ -535,7 +537,7 @@ func (s *harborpulse) pollS6Lamp(ctx context.Context, rt *Runtime, d DeviceInsta
 	return errors.Join(errs...)
 }
 
-func s6HTTP(ctx context.Context, rt *Runtime, d DeviceInstance, method, endpoint string, body []byte, out any) error {
+func s6HTTP(ctx context.Context, rt *Runtime, d DeviceInstance, method, endpoint string, body []byte, out *s6PullBatch) error {
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -550,6 +552,13 @@ func s6HTTP(ctx context.Context, rt *Runtime, d DeviceInstance, method, endpoint
 		return err
 	}
 	defer resp.Body.Close()
+	if method == http.MethodGet && resp.StatusCode == http.StatusNoContent {
+		if out != nil {
+			empty := []s6PullCommand{}
+			out.Commands = &empty
+		}
+		return nil
+	}
 	want := http.StatusNoContent
 	if method == http.MethodGet {
 		want = http.StatusOK
@@ -593,8 +602,4 @@ func (s *harborpulse) resetS6Day(ctx context.Context, rt *Runtime, day int) erro
 	s.s6.configured, s.s6.revoked = false, false
 	s.s6.day = day
 	return nil
-}
-
-func s6CertificateRefused(err error) bool {
-	return errors.Is(err, mqttpackets.ConnErrors[mqttpackets.ErrRefusedNotAuthorised]) || errors.Is(err, mqttpackets.ConnErrors[mqttpackets.ErrRefusedBadUsernameOrPassword])
 }

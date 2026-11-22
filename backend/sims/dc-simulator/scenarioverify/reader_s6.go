@@ -20,7 +20,19 @@ const queryS6Anchor = `query($tokens:[String!]!){deviceTrustAnchorsByToken(token
 const queryS6Configuration = `query($device:String!){deviceConfiguration(deviceToken:$device){desired{revision digest document createdAt} reported{revision digest status errors reportedAt} pending stale}}`
 const queryS6PullType = `query($tokens:[String!]!){deviceTypesByToken(tokens:$tokens){token commandChannel}}`
 
-func readS6(ctx context.Context, r *Reader, o *Observations, ledger *sim.ScenarioS6) error {
+// Capture latest-state rows while they still describe the watched day. S5 waits
+// until hour 26; by then the next day's reset has changed these same rows.
+func captureS6(ctx context.Context, r *Reader, o *Observations, ledger *sim.ScenarioS6, now time.Time) error {
+	if o.S6.Ledger != nil || now.Before(o.at(22)) {
+		return nil
+	}
+	if !s6InDay(*o, now) {
+		return fmt.Errorf("missed S6 state snapshot on day %d", o.Day)
+	}
+	return readS6Snapshot(ctx, r, o, ledger)
+}
+
+func readS6Snapshot(ctx context.Context, r *Reader, o *Observations, ledger *sim.ScenarioS6) error {
 	if ledger == nil {
 		return fmt.Errorf("harborpulse has no S6 declaration")
 	}
@@ -90,6 +102,19 @@ func readS6(ctx context.Context, r *Reader, o *Observations, ledger *sim.Scenari
 	if len(typ.Items) == 1 && typ.Items[0].Token == sim.HarborpulsePullLightType {
 		s.PullChannel = typ.Items[0].CommandChannel
 	}
+	o.S6 = s
+	return nil
+}
+
+// Stored history is day-bounded and can be read after midnight. Never replace
+// the earlier platform snapshot with next-day credentials, presence or config.
+func readS6(ctx context.Context, r *Reader, o *Observations) error {
+	if o.S6.Ledger == nil {
+		return fmt.Errorf("no S6 state snapshot captured on day %d", o.Day)
+	}
+	s := &o.S6
+	s.Readings, s.Commands = map[string][]Reading{}, nil
+	chargers := append(sim.HarborpulseMQTTChargers(), sim.HarborpulseX509Chargers()...)
 	for _, device := range append(chargers, sim.HarborpulsePullLights()...) {
 		rows, err := r.Readings(ctx, device, s6DayStart(*o), o.at(WatchTo))
 		if err != nil {
@@ -104,7 +129,6 @@ func readS6(ctx context.Context, r *Reader, o *Observations, ledger *sim.Scenari
 		}
 		s.Commands = append(s.Commands, cmds...)
 	}
-	o.S6 = s
 	return nil
 }
 

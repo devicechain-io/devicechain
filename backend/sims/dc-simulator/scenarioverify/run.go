@@ -255,6 +255,13 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 			}
 			obs.S3.GapBefore = gap
 		}
+		capturingS6 := obs.S6.Ledger == nil
+		if err := captureS6(ctx, reader, &obs, status.Scenario.S6, now); err != nil {
+			return noVerdict{err}
+		}
+		if capturingS6 && obs.S6.Ledger != nil && !s6InDay(obs, time.Now()) {
+			return noVerdictf("S6 state snapshot crossed midnight on day %d", day)
+		}
 		rep.Polls++
 		select {
 		case <-ctx.Done():
@@ -369,7 +376,7 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 		return noVerdict{err}
 	}
 	rep.WatchTo = time.Now()
-	if err := readS6(ctx, reader, &obs, final.Scenario.S6); err != nil {
+	if err := readS6(ctx, reader, &obs); err != nil {
 		return noVerdict{err}
 	}
 	obs.S6.Rejections, err = readS6Rejections(cfg.AuthCalloutLog, cfg.Handshake.Tenant)

@@ -146,11 +146,14 @@ func chargerX509Admitted(o Observations) error {
 		if device == sim.HarborpulseRevokedCharger() {
 			state, exists := s.States[device]
 			if credential.Enabled || !exists || state.Active || state.PresenceSource != "ASSERTED" || after != 0 {
-				return fmt.Errorf("revoked charger remains enabled, connected, or stored telemetry afterwards")
+				return fmt.Errorf("revoked charger: credentialEnabled=%t presenceFound=%t active=%t presenceSource=%q storedAfterRevocation=%d", credential.Enabled, exists, state.Active, state.PresenceSource, after)
 			}
+			// Bootstrap connects before the first tick starts the scenario clock.
+			// The stored pre-revocation readings above prove this session was used
+			// during the day; its last admission must precede credential disable.
 			disabled, disableErr := time.Parse(time.RFC3339Nano, credential.UpdatedAt)
 			connected, connectErr := time.Parse(time.RFC3339Nano, state.LastConnectTime)
-			if disableErr != nil || connectErr != nil || disabled.Before(revokedAt) || !s6InDay(o, disabled) || !s6InDay(o, connected) || connected.After(disabled) {
+			if disableErr != nil || connectErr != nil || disabled.Before(revokedAt) || !s6InDay(o, disabled) || connected.IsZero() || connected.After(disabled) {
 				return fmt.Errorf("revoked charger has no platform timestamps proving its last admission preceded credential disable")
 			}
 			rejected := false
@@ -201,7 +204,7 @@ func configApplied(o Observations) error {
 		minted, mintErr := time.Parse(time.RFC3339Nano, d.CreatedAt)
 		reported, reportErr := time.Parse(time.RFC3339Nano, r.ReportedAt)
 		if mintErr != nil || reportErr != nil || minted.Before(o.at(sim.HarborpulseConfigHour)) || !s6InDay(o, minted) || reported.Before(minted) || !s6InDay(o, reported) {
-			return fmt.Errorf("%s has no configuration transition and report on day %d", device, o.Day)
+			return fmt.Errorf("%s has no configuration transition and report on day %d: createdAt=%q reportedAt=%q", device, o.Day, d.CreatedAt, r.ReportedAt)
 		}
 		var document map[string]float64
 		if err := json.Unmarshal([]byte(d.Document), &document); err != nil || len(document) != 1 || document[sim.HarborpulseConfigKey] != 11 {

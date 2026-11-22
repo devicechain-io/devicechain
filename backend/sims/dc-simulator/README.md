@@ -813,6 +813,21 @@ and `pull-commands-complete`, judged from platform stores and tenant GraphQL. Th
 `mqtt-wrong-topic`, `x509-revocation-skipped`, `mqtt-never-disconnect`, `config-report-stale` and
 `pull-polling-stopped`; each must turn exactly its own invariant red.
 
+A failed post-disable certificate connect (including the broker's TLS/connection EOF) is a
+candidate refusal. The verifier requires a matching platform `x509_credential_rejected` record
+for this tenant and fingerprint after disable; a transport failure alone cannot pass. Like
+`hack/x509-rig.sh`, it combines client failure with independent platform refusal and store evidence.
+An empty HTTP pull is `204 No Content`; `200` carries the command list. Unexpected statuses fail.
+
+The verifier snapshots mutable S6 platform rows at 22:00, before the next day's reset. S5's
+rollout watch extends to at least 26:00, so reading latest credentials, presence and configuration
+after it would judge the next day's enabled/reconnected charger and reset `max_kw=22` revision.
+Stored readings and command history are read afterwards and judged within the watched day. A missed
+snapshot gives no verdict. Configuration uses MQTT desired/reports at 09:00, before revocation
+at 14:00; the APPLIED and planted REJECTED reports must both match that day's revision.
+Bootstrap may admit a charger before the scenario clock starts; its last admission must still
+precede credential disable, with stored pre-revocation telemetry during the watched day.
+
 The sim's scene contract generator adds these six devices and five timing cues. U8 owns adopting
 the generated `demos/harborpulse-unity/Assets/Harborpulse/Resources/harbor_layout.json`; this slice
 does not edit the Unity project. The cues live inside that JSON, and `/status.scenario.layoutDigest`

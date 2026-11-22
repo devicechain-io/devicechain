@@ -10,7 +10,6 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -478,7 +477,7 @@ func TestS6PullRetriesWorkHiddenAfterAck(t *testing.T) {
 				}
 				if r.Method == http.MethodGet {
 					if hidden {
-						_, _ = io.WriteString(w, `{"commands":[]}`)
+						w.WriteHeader(http.StatusNoContent)
 					} else {
 						_, _ = io.WriteString(w, `{"commands":[{"token":"cmd","name":"set-dim","payload":{"level_pct":35}}]}`)
 					}
@@ -516,7 +515,7 @@ func TestS6PullRetriesWorkHiddenAfterAck(t *testing.T) {
 	}
 }
 
-func TestS6TransportFailureIsNotCertificateRefusal(t *testing.T) {
+func TestS6PostDisableConnectFailureDefersProofToVerifier(t *testing.T) {
 	s := harborWith(t)
 	st, err := x509sim.OpenOrMint(t.TempDir(), x509sim.Options{Prefix: harborX509Prefix, Pinned: 2})
 	if err != nil {
@@ -525,11 +524,11 @@ func TestS6TransportFailureIsNotCertificateRefusal(t *testing.T) {
 	s.s6.pki = st
 	s.s6.initialized, s.s6.configured, s.s6.revoked = true, true, true
 	s.s6.newMQTT = func(*mqtt.ClientOptions) mqtt.Client {
-		return &s6WireClient{refuseConnect: true, connectErr: errors.New("TLS handshake failed")}
+		return &s6WireClient{refuseConnect: true, connectErr: fmt.Errorf("network Error : %w", io.EOF)}
 	}
 	rt := &Runtime{InstanceId: "instance", Tenant: "tenant", MqttBroker: "ssl://broker.test:1883", Devices: []DeviceInstance{{Token: HarborpulseRevokedCharger(), DeviceTypeToken: HarborpulseX509ChargerType}}}
-	if err := s.tickS6(context.Background(), rt, time.Now(), 10*time.Minute); err == nil {
-		t.Fatal("transport failure counted as certificate refusal")
+	if err := s.tickS6(context.Background(), rt, time.Now(), 10*time.Minute); err != nil {
+		t.Fatalf("post-disable EOF must leave refusal proof to the platform oracle: %v", err)
 	}
 }
 
