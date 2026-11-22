@@ -156,8 +156,9 @@ type PutOptions struct {
 	// backend holds one part (8 MiB) in memory whatever the object size. An S3 object is
 	// limited by the 10,000 parts an upload may have, about 78 GiB at the default part
 	// size; a bounded Put with a larger MaxSize raises the part size to fit, up to 64 MiB
-	// parts (about 640 GB), and past that the Put fails with its own error. Set MaxSize whenever the size is known (the
-	// branding consumer does) for uniform, backend-independent behavior.
+	// parts (about 640 GB), and past that the Put fails with its own error. Set MaxSize
+	// whenever the size is known (the branding consumer does) for uniform,
+	// backend-independent behavior.
 	MaxSize int64
 }
 

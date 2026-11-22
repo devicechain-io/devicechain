@@ -123,6 +123,11 @@ func NewS3Store(ctx context.Context, cfg Config, instanceID string) (Store, erro
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 		}
 		o.UsePathStyle = cfg.UsePathStyle
+		// Checksums only where the API requires one. The SDK default adds a CRC32 trailer to
+		// every upload and validates every download, which S3-compatible servers (MinIO among
+		// them) answer unevenly, and a multipart part is the request that exercises it.
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
 	return &s3Store{
 		api:        client,
@@ -173,15 +178,22 @@ func (s *s3Store) Put(ctx context.Context, key Key, r io.Reader, opts PutOptions
 	// MaxSize is enforced as the bytes are read, so an oversized stream stops at the
 	// ceiling plus one byte, never in full.
 	src := bufio.NewReaderSize(io.LimitReader(r, limit+1), 16)
-	first, err := io.ReadAll(io.LimitReader(src, partSize))
-	if err != nil {
+	// One buffer serves every part. A ceiling smaller than a part needs no more than itself
+	// plus the one byte that proves it was passed.
+	bufSize := partSize
+	if bounded && limit+1 < bufSize {
+		bufSize = limit + 1
+	}
+	buf := make([]byte, bufSize)
+	n, err := io.ReadFull(src, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return Ref{}, fmt.Errorf("blob: reading object: %w", err)
 	}
-	if int64(len(first)) > limit {
+	if int64(n) > limit {
 		return Ref{}, ErrTooLarge
 	}
 	more := false
-	if int64(len(first)) == partSize {
+	if int64(n) == partSize {
 		_, perr := src.Peek(1)
 		switch {
 		case perr == nil:
@@ -192,9 +204,44 @@ func (s *s3Store) Put(ctx context.Context, key Key, r io.Reader, opts PutOptions
 		}
 	}
 	if !more {
-		return s.putSingle(ctx, fullKey, first, opts.ContentType)
+		return s.putSingle(ctx, fullKey, buf[:n], opts.ContentType)
 	}
-	return s.putMultipart(ctx, fullKey, first, src, partSize, limit, opts.ContentType)
+	// A byte follows a part that already reaches the ceiling: the object is over it.
+	if int64(n)+1 > limit {
+		return Ref{}, ErrTooLarge
+	}
+	return s.putMultipart(ctx, fullKey, buf, n, src, partSize, limit, bounded, opts.ContentType)
+}
+
+// isS3NoSuchUpload reports whether err says the multipart upload does not exist (any more).
+func isS3NoSuchUpload(err error) bool {
+	var nsu *s3types.NoSuchUpload
+	if errors.As(err, &nsu) {
+		return true
+	}
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "NoSuchUpload"
+}
+
+// settleAmbiguousComplete runs after a CompleteMultipartUpload reported failure and the abort
+// found the upload already gone, which is what a complete that succeeded on the server and
+// failed on the wire looks like. It looks for the object: one that exists is deleted, because
+// the Put failed and must leave nothing (the keys of both callers are random, so nothing else
+// can own it); one that is absent means nothing was kept; and when that cannot be settled the
+// error says the object may have been stored.
+func (s *s3Store) settleAmbiguousComplete(ctx context.Context, fullKey string, cause error) error {
+	_, herr := s.api.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(fullKey)})
+	switch {
+	case herr == nil:
+		if _, derr := s.api.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(fullKey)}); derr != nil {
+			return fmt.Errorf("%w (the failed complete may have stored the object and deleting it failed, so it may be left behind: %v)", cause, derr)
+		}
+		return fmt.Errorf("%w (the failed complete had stored the object; it was deleted, so the upload was not kept)", cause)
+	case isS3NotFound(herr):
+		return fmt.Errorf("%w (no object was stored)", cause)
+	default:
+		return fmt.Errorf("%w (the object may have been stored: checking for it failed: %v)", cause, herr)
+	}
 }
 
 // partSizeFor is the part size for an object of at most maxSize bytes (0 is unknown): the
@@ -230,8 +277,8 @@ func (s *s3Store) putSingle(ctx context.Context, fullKey string, body []byte, co
 	return Ref{Backend: BackendS3, Key: fullKey}, nil
 }
 
-// putMultipart streams an object larger than one part: first is the first part, already
-// read, and rest holds the remainder. Only one part is in memory at a time.
+// putMultipart streams an object larger than one part: full is the part buffer, holding
+// the first firstLen bytes, and rest holds the remainder. Only one part is in memory at a time.
 //
 // 🔴 EVERY EXIT BEFORE A SUCCESSFUL COMPLETE ABORTS THE UPLOAD. An unaborted multipart
 // upload is not an error and not an object: it is invisible to a listing of the bucket keys
@@ -239,8 +286,8 @@ func (s *s3Store) putSingle(ctx context.Context, fullKey string, body []byte, co
 // that S3 refuses, a stream over MaxSize and a cancelled context all leave one behind, so
 // the abort is deferred rather than written at each return, and it runs on a context
 // detached from the caller: a cancelled caller is the commonest reason to be here.
-func (s *s3Store) putMultipart(ctx context.Context, fullKey string, first []byte, rest io.Reader,
-	partSize, limit int64, contentType string) (_ Ref, err error) {
+func (s *s3Store) putMultipart(ctx context.Context, fullKey string, full []byte, firstLen int, rest io.Reader,
+	partSize, limit int64, bounded bool, contentType string) (_ Ref, err error) {
 	create := &s3.CreateMultipartUploadInput{Bucket: aws.String(s.bucket), Key: aws.String(fullKey)}
 	if contentType != "" {
 		create.ContentType = aws.String(contentType)
@@ -251,32 +298,42 @@ func (s *s3Store) putMultipart(ctx context.Context, fullKey string, first []byte
 	}
 	uploadID := created.UploadId
 	completed := false
+	completeFailed := false
 	defer func() {
 		if completed {
 			return
 		}
 		abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s3AbortTimeout)
 		defer cancel()
-		if _, aerr := s.api.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
+		_, aerr := s.api.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
 			Bucket: aws.String(s.bucket), Key: aws.String(fullKey), UploadId: uploadID,
-		}); aerr != nil {
+		})
+		switch {
+		case aerr == nil:
+		case completeFailed && isS3NoSuchUpload(aerr):
+			// The complete reported failure, yet the upload is gone: the server may have
+			// finished it and lost the answer, which leaves an object this Put did not mean to keep.
+			err = s.settleAmbiguousComplete(abortCtx, fullKey, err)
+		default:
 			err = fmt.Errorf("%w (aborting the multipart upload also failed, and it may be left behind: %v)", err, aerr)
 		}
 	}()
 
 	var parts []s3types.CompletedPart
 	var total int64
-	// One buffer of exactly one part, reused for every part. (first came from ReadAll, whose
-	// capacity is not the part size.)
-	full := make([]byte, partSize)
-	buf := full[:copy(full, first)]
+	buf := full[:firstLen]
 	for n := int32(1); ; n++ {
-		if n > s3MaxParts {
-			return Ref{}, fmt.Errorf("blob: object needs more than %d parts of %d bytes; set PutOptions.MaxSize so the part size can grow to fit", s3MaxParts, partSize)
-		}
+		// The size check comes first: a stream over MaxSize is ErrTooLarge whatever part it
+		// was on, and the part-count refusal is for an object that is within its ceiling.
 		total += int64(len(buf))
 		if total > limit {
 			return Ref{}, ErrTooLarge
+		}
+		if n > s3MaxParts {
+			if bounded {
+				return Ref{}, fmt.Errorf("blob: object needs more than %d parts: the s3 backend stores at most %d parts of %d bytes, so MaxSize is past what it can hold", s3MaxParts, s3MaxParts, int64(s3MaxPartSize))
+			}
+			return Ref{}, fmt.Errorf("blob: object needs more than %d parts of %d bytes; set PutOptions.MaxSize so the part size can grow to fit", s3MaxParts, partSize)
 		}
 		if cerr := ctx.Err(); cerr != nil {
 			return Ref{}, fmt.Errorf("blob: uploading part %d: %w", n, cerr)
@@ -311,6 +368,7 @@ func (s *s3Store) putMultipart(ctx context.Context, fullKey string, first []byte
 		UploadId:        uploadID,
 		MultipartUpload: &s3types.CompletedMultipartUpload{Parts: parts},
 	}); cerr != nil {
+		completeFailed = true
 		return Ref{}, fmt.Errorf("blob: completing multipart upload: %w", cerr)
 	}
 	completed = true

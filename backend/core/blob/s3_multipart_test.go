@@ -443,3 +443,108 @@ type errReader struct{ err error }
 func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 
 var _ = s3types.CompletedPart{}
+
+// A stream over MaxSize is ErrTooLarge even when it is also past the part count: the size
+// refusal comes first, and the part-count refusal is for an object within its ceiling.
+func TestS3PutSizeCheckPrecedesThePartCountCheck(t *testing.T) {
+	f := &mpFake{}
+	_, err := putData(t, newMP(f, 1), context.Background(), bytes.NewReader(make([]byte, s3MaxParts+1)),
+		PutOptions{MaxSize: s3MaxParts})
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+	if len(f.aborts) != 1 || f.completed != nil {
+		t.Fatalf("aborts=%d completed=%v", len(f.aborts), f.completed != nil)
+	}
+}
+
+// With a MaxSize the part-count refusal names the backend ceiling, not "set MaxSize".
+func TestS3PutPartCountErrorForABoundedPutNamesTheCeiling(t *testing.T) {
+	f := &mpFake{}
+	// A MaxSize far past what 10,000 parts of this size hold, with a stream that gets there.
+	s := newMP(f, 1)
+	_, err := s.Put(context.Background(), mpKey, bytes.NewReader(make([]byte, s3MaxParts+1)), PutOptions{MaxSize: math.MaxInt64})
+	if err == nil || errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want a part-count error", err)
+	}
+	if bytes.Contains([]byte(err.Error()), []byte("set PutOptions.MaxSize")) {
+		t.Fatalf("a bounded put must not be told to set MaxSize: %v", err)
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("at most")) {
+		t.Fatalf("err = %q, want the backend ceiling named", err)
+	}
+}
+
+// A stream already at the ceiling with a byte to spare is refused before any upload is started.
+func TestS3PutRefusesEarlyWhenTheFirstPartReachesTheCeiling(t *testing.T) {
+	f := &mpFake{}
+	_, err := putData(t, newMP(f, 4), context.Background(), bytes.NewReader(make([]byte, 40)), PutOptions{MaxSize: 4})
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+	if len(f.created) != 0 {
+		t.Fatal("no multipart upload should have been started for an object already over the ceiling")
+	}
+}
+
+// A complete that reports failure but whose abort finds the upload gone may have succeeded on the
+// server: the object is looked for, deleted if there, and the error says what became of it.
+func TestS3PutAmbiguousCompleteDeletesAnObjectThatWasStored(t *testing.T) {
+	boom := errors.New("connection reset")
+	f := &mpFake{compErr: boom, abortEr: &s3types.NoSuchUpload{}}
+	f.headOut = &s3.HeadObjectOutput{}
+	_, err := putData(t, newMP(f, 4), context.Background(), bytes.NewReader(make([]byte, 20)), PutOptions{})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap the cause", err)
+	}
+	if len(f.delKeys) != 1 || f.delKeys[0] != "inst1/acme/update-artifact/fw.bin" {
+		t.Fatalf("deleted %v, want the stored object removed", f.delKeys)
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("not kept")) {
+		t.Fatalf("err = %q, want it to say the upload was not kept", err)
+	}
+}
+
+func TestS3PutAmbiguousCompleteWithNoObjectSaysSo(t *testing.T) {
+	f := &mpFake{compErr: errors.New("connection reset"), abortEr: &s3types.NoSuchUpload{}}
+	f.headErr = &s3types.NotFound{}
+	_, err := putData(t, newMP(f, 4), context.Background(), bytes.NewReader(make([]byte, 20)), PutOptions{})
+	if err == nil || len(f.delKeys) != 0 {
+		t.Fatalf("err=%v deleted=%v; nothing exists, so nothing is deleted", err, f.delKeys)
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("no object was stored")) {
+		t.Fatalf("err = %q", err)
+	}
+}
+
+func TestS3PutAmbiguousCompleteThatCannotBeSettledSaysTheObjectMayExist(t *testing.T) {
+	f := &mpFake{compErr: errors.New("connection reset"), abortEr: &s3types.NoSuchUpload{}}
+	f.headErr = errors.New("head refused")
+	_, err := putData(t, newMP(f, 4), context.Background(), bytes.NewReader(make([]byte, 20)), PutOptions{})
+	if err == nil || len(f.delKeys) != 0 {
+		t.Fatalf("err=%v deleted=%v", err, f.delKeys)
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("may have been stored")) {
+		t.Fatalf("err = %q, want it to say the object may have been stored", err)
+	}
+
+	// and an object that exists but cannot be deleted says it may be left behind
+	g := &mpFake{compErr: errors.New("connection reset"), abortEr: &s3types.NoSuchUpload{}}
+	g.headOut = &s3.HeadObjectOutput{}
+	g.delErr = errors.New("delete refused")
+	_, err = putData(t, newMP(g, 4), context.Background(), bytes.NewReader(make([]byte, 20)), PutOptions{})
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("left behind")) {
+		t.Fatalf("err = %v, want it to say the object may be left behind", err)
+	}
+}
+
+// The ordinary failed complete (the upload still exists, so the abort works) never touches the
+// object: there is nothing to look for.
+func TestS3PutFailedCompleteWithASuccessfulAbortLooksForNothing(t *testing.T) {
+	f := &mpFake{compErr: errors.New("refused")}
+	f.headOut = &s3.HeadObjectOutput{}
+	_, err := putData(t, newMP(f, 4), context.Background(), bytes.NewReader(make([]byte, 20)), PutOptions{})
+	if err == nil || len(f.delKeys) != 0 || len(f.aborts) != 1 {
+		t.Fatalf("err=%v deleted=%v aborts=%d", err, f.delKeys, len(f.aborts))
+	}
+}
