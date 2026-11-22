@@ -362,6 +362,10 @@ type NatsManager struct {
 	mqttLockMu sync.Mutex
 	mqttLockKV nats.KeyValue
 	mqttClock  func() time.Time
+
+	// mqttStoreWriterMode is fixed before reconciliation and reader construction.
+	mqttStoreWriterMode MqttStoreWriterMode
+
 	// mqttPassHook, when set, is called by a fail-closed pass at the named point ("decided":
 	// a write decided on from a read without the lock, before taking it; "locked": holding the
 	// lock, the store just read again; "store-created": the store just created, before its
@@ -2643,6 +2647,16 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return Message{}, io.EOF
+		}
+		// A different WAL writer mode must not fetch or pop a buffered member
+		// while the store belongs to the other mode.
+		if r.store && r.suffix == streams.DeviceEventsCapture && !r.nmgr.mqttView().writerModeReady() {
+			select {
+			case <-ctx.Done():
+				return Message{}, io.EOF
+			case <-time.After(termGatePoll):
+			}
+			continue
 		}
 		// Stay parked until the data plane is released (ADR-022 decision 3). A
 		// cancelled context here means shutdown, which surfaces as EOF below.

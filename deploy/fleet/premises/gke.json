@@ -1,0 +1,453 @@
+{
+  "schema_version": 1,
+  "experiments": [
+    {
+      "id": "E-a",
+      "verdict": "INCONCLUSIVE",
+      "binds": [
+        "cloud"
+      ],
+      "measured": {
+        "blocked": "U2",
+        "reason": "GKE v1 Cluster deletion-protection field: needs the cloud API discovery document under the rehearsed reaper",
+        "digest_covers": "the notice text, not a transcript"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "3f570fdb33483c0f0c2678ba73a02afc88649f287926214f4062a816d71676f4"
+    },
+    {
+      "id": "E-b",
+      "verdict": "INCONCLUSIVE",
+      "binds": [
+        "cloud"
+      ],
+      "measured": {
+        "blocked": "U2",
+        "reason": "IAM deny on clusters.delete: needs a throwaway project",
+        "digest_covers": "the notice text, not a transcript"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "954053e6d08151b0842504f85dc88ca974bd714cfe97fd8cbb9ae5232a8a427f"
+    },
+    {
+      "id": "E-c",
+      "verdict": "INCONCLUSIVE",
+      "binds": [
+        "cloud"
+      ],
+      "measured": {
+        "blocked": "U2",
+        "reason": "node-pool deletion authorization: needs a throwaway project",
+        "digest_covers": "the notice text, not a transcript"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "d6ced47c81571c378b6fed417330bfdd67bc5721c874580e3594f99eee8e7c0b"
+    },
+    {
+      "id": "E-d",
+      "verdict": "INCONCLUSIVE",
+      "binds": [
+        "cloud"
+      ],
+      "measured": {
+        "blocked": "U2",
+        "reason": "WIF from a kind pod with uploaded JWKS: needs a throwaway project (and the JWKS fixture is not built)",
+        "digest_covers": "the notice text, not a transcript"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "11ced606ba052e57bff04257e8a5c9beb24ef1a7261f8eb2a66aa581b66c7e53"
+    },
+    {
+      "id": "E-e",
+      "verdict": "INCONCLUSIVE",
+      "binds": [
+        "cloud"
+      ],
+      "measured": {
+        "blocked": "U2",
+        "reason": "deny propagation latency: needs a throwaway project",
+        "digest_covers": "the notice text, not a transcript"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "195b0dc63c81617e0e9a5bc91cf901adb6085588e7b9400eca71415c0696175d"
+    },
+    {
+      "id": "E-f",
+      "verdict": "INCONCLUSIVE",
+      "binds": [
+        "cloud"
+      ],
+      "measured": {
+        "blocked": "U2",
+        "reason": "H08 token-chain expiry bound (KSA, STS, access token): the STS and access-token lifetimes are cloud-side. Only the local half is measured: see E-l (the process survives partition, node delete, PodGC and force-delete)",
+        "digest_covers": "the notice text, not a transcript"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "666713460aceda78f7a32843b12e8d1029c92a0e662dfcee4523561643b5d6ce"
+    },
+    {
+      "id": "E-f2",
+      "verdict": "INCONCLUSIVE",
+      "binds": [
+        "cloud"
+      ],
+      "measured": {
+        "blocked": "U2",
+        "reason": "service-account disable semantics: needs a throwaway project",
+        "digest_covers": "the notice text, not a transcript"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "4d57ad72914ab7f67dc335fec053c6d3ab7ed740bea3fa72f281a3111d9830d0"
+    },
+    {
+      "id": "E-g-gcs",
+      "verdict": "INCONCLUSIVE",
+      "binds": [
+        "tofu",
+        "cloud"
+      ],
+      "measured": {
+        "blocked": "U2",
+        "reason": "GCS lock holder after SIGKILL: needs a bucket in a throwaway project",
+        "digest_covers": "the notice text, not a transcript"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "36baac9885be10534514cc7fd8c5a157c7dd5d6649a0f5d55cf3573979fee13e"
+    },
+    {
+      "id": "E-g-pg",
+      "verdict": "HOLDS",
+      "binds": [
+        "tofu"
+      ],
+      "measured": {
+        "process_survived_session_drop": true,
+        "exit_code": 0,
+        "provider_called_after_drop": true,
+        "state_before": "0092735729833e0ebdcab2ebe7024d95",
+        "state_after": "6c40da224d4d5bed6fa5b4ec584fdd59",
+        "credential_can_reconnect": true,
+        "state_changed": true,
+        "expectation": "the process can write state after its session dropped"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "b2e0a3ae8117c2456c75abf3a98415b897ee511d11ac3a271ea6b9e89c1be888"
+    },
+    {
+      "id": "E-h",
+      "verdict": "INCONCLUSIVE",
+      "binds": [
+        "cloud"
+      ],
+      "measured": {
+        "blocked": "U2",
+        "reason": "crash points of a first cluster create: needs a throwaway project (and the crash checkpoints are not built)",
+        "digest_covers": "the notice text, not a transcript"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "82507b2dffc812d5bb43e5a5a623af07ef8f2eb93374164e08dcc5c6109dd66d"
+    },
+    {
+      "id": "E-i",
+      "verdict": "INCONCLUSIVE",
+      "binds": [
+        "cloud"
+      ],
+      "measured": {
+        "blocked": "U2",
+        "reason": "indirect paths from the candidate apply role to workload data: needs a throwaway project",
+        "digest_covers": "the notice text, not a transcript"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "ef4c88859880c7da45bff6eca16ded87a9b9c08db3c1896dd2b17dcf1e46deec"
+    },
+    {
+      "id": "E-j-1",
+      "verdict": "HOLDS",
+      "binds": [
+        "tofu"
+      ],
+      "measured": {
+        "state_no_key_refused": true,
+        "saved_plan_no_key_refused": true,
+        "keyed_apply_and_plan": true
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "5c6f7d0f43be1a99e5ecb538835598b073e049f90434feb7cdc556a173897834"
+    },
+    {
+      "id": "E-j-2",
+      "verdict": "HOLDS",
+      "binds": [
+        "tofu"
+      ],
+      "measured": {
+        "precreated_schema_tables_indexes": true,
+        "all_skip_creation": true,
+        "inherited_provider_role_apply": true,
+        "cross_schema_read_refused": true,
+        "noinherit_control_refused": true,
+        "pg_server_version": "16.15 (Debian 16.15-1.pgdg13+2)",
+        "runner_owned_objects": 0
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "5c6f7d0f43be1a99e5ecb538835598b073e049f90434feb7cdc556a173897834"
+    },
+    {
+      "id": "E-j-3",
+      "verdict": "HOLDS",
+      "binds": [
+        "tofu",
+        "provider"
+      ],
+      "measured": {
+        "sanitized_local_state": true,
+        "dummy_access_token": true,
+        "refresh": false,
+        "network_namespace": "no interfaces"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "5c6f7d0f43be1a99e5ecb538835598b073e049f90434feb7cdc556a173897834"
+    },
+    {
+      "id": "E-j-4",
+      "verdict": "HOLDS",
+      "binds": [
+        "tofu"
+      ],
+      "measured": {
+        "clean_directory": [
+          {
+            "key": "present",
+            "command": "init",
+            "exit_code": 0
+          },
+          {
+            "key": "present",
+            "command": "validate",
+            "exit_code": 0
+          },
+          {
+            "key": "present",
+            "command": "test",
+            "exit_code": 0
+          },
+          {
+            "key": "present",
+            "command": "plan",
+            "exit_code": 0
+          },
+          {
+            "key": "absent",
+            "command": "init",
+            "exit_code": 0
+          },
+          {
+            "key": "absent",
+            "command": "validate",
+            "exit_code": 0
+          },
+          {
+            "key": "absent",
+            "command": "test",
+            "exit_code": 0
+          },
+          {
+            "key": "absent",
+            "command": "plan",
+            "exit_code": 1
+          }
+        ],
+        "keyless_plan_names_encryption_tf": true,
+        "init_backend_false_with_existing_encrypted_state_exit_code": 1
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "5c6f7d0f43be1a99e5ecb538835598b073e049f90434feb7cdc556a173897834"
+    },
+    {
+      "id": "E-j-5",
+      "verdict": "HOLDS",
+      "binds": [
+        "tofu"
+      ],
+      "measured": {
+        "nologin": true,
+        "sessions_after_termination": 0,
+        "reconnect_refused": true,
+        "live_writer_failed": true,
+        "state_unchanged": true,
+        "provider_call_completed_after_cut": true,
+        "failed_to_persist_state": true,
+        "lock_release_errored": true,
+        "errored_tfstate_written_locally": true
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "5c6f7d0f43be1a99e5ecb538835598b073e049f90434feb7cdc556a173897834"
+    },
+    {
+      "id": "E-k",
+      "verdict": "INCONCLUSIVE",
+      "binds": [
+        "cloud"
+      ],
+      "measured": {
+        "blocked": "U2",
+        "reason": "survivors of a bare cluster destroy: needs a throwaway project",
+        "digest_covers": "the notice text, not a transcript"
+      },
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "7d032b43c8c04bdffd8b7036ec98c0e54491837aa131a601d27fcf8427df6ec4"
+    },
+    {
+      "id": "E-l",
+      "verdict": "HOLDS",
+      "binds": [
+        "kubernetes"
+      ],
+      "measured": {
+        "pod_uid": "b95173c5-8efe-463e-8a78-467ea8c5eabf",
+        "observations": {
+          "before-partition": {
+            "object_absent": false,
+            "uid": "b95173c5-8efe-463e-8a78-467ea8c5eabf",
+            "deletionTimestamp": null,
+            "finalizers": [
+              "fleet-s0.devicechain.io/observe"
+            ],
+            "phase": "Running",
+            "conditions": [
+              "PodReadyToStartContainers=True",
+              "Initialized=True",
+              "Ready=True",
+              "ContainersReady=True",
+              "PodScheduled=True"
+            ],
+            "containerStatuses": [
+              "running"
+            ],
+            "process_heartbeat": [
+              1,
+              4
+            ]
+          },
+          "node-deleted": {
+            "object_absent": false,
+            "uid": "b95173c5-8efe-463e-8a78-467ea8c5eabf",
+            "deletionTimestamp": null,
+            "finalizers": [
+              "fleet-s0.devicechain.io/observe"
+            ],
+            "phase": "Running",
+            "conditions": [
+              "PodReadyToStartContainers=True",
+              "Initialized=True",
+              "Ready=True",
+              "ContainersReady=True",
+              "PodScheduled=True"
+            ],
+            "containerStatuses": [
+              "running"
+            ],
+            "process_heartbeat": [
+              10,
+              12
+            ]
+          },
+          "podgc": {
+            "object_absent": false,
+            "uid": "b95173c5-8efe-463e-8a78-467ea8c5eabf",
+            "deletionTimestamp": "2026-11-21T20:28:36Z",
+            "finalizers": [
+              "fleet-s0.devicechain.io/observe"
+            ],
+            "phase": "Failed",
+            "conditions": [
+              "PodReadyToStartContainers=True",
+              "Initialized=True",
+              "Ready=True",
+              "ContainersReady=True",
+              "PodScheduled=True",
+              "DisruptionTarget=True"
+            ],
+            "containerStatuses": [
+              "running"
+            ],
+            "process_heartbeat": [
+              51,
+              53
+            ]
+          },
+          "force-deleted": {
+            "object_absent": false,
+            "uid": "b95173c5-8efe-463e-8a78-467ea8c5eabf",
+            "deletionTimestamp": "2026-11-21T20:28:36Z",
+            "finalizers": [
+              "fleet-s0.devicechain.io/observe"
+            ],
+            "phase": "Failed",
+            "conditions": [
+              "PodReadyToStartContainers=True",
+              "Initialized=True",
+              "Ready=True",
+              "ContainersReady=True",
+              "PodScheduled=True",
+              "DisruptionTarget=True"
+            ],
+            "containerStatuses": [
+              "running"
+            ],
+            "process_heartbeat": [
+              54,
+              56
+            ]
+          }
+        },
+        "never_all_containers_terminated": true,
+        "phase_forged_terminal_while_process_runs": [
+          "force-deleted",
+          "podgc"
+        ],
+        "consequence": "status.phase and deletionTimestamp are forgeable by PodGC; only containerStatuses terminated for the recorded UID is usable, and it never appeared"
+      },
+      "kubernetes_version": "1.37.0",
+      "tofu_version": "1.10.10",
+      "provider_version": "8.4.0",
+      "date": "2026-11-21",
+      "transcript_sha256": "7a874f825a52c1576726e74527dee49f2239a050c88a9620bec7f2346b31ff96"
+    }
+  ]
+}

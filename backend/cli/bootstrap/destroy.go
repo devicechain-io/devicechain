@@ -146,6 +146,12 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 	}
 
 	opts.KubeContext = binding.KubeContext
+	operationCtx, cancelOperationCheck := context.WithTimeout(ctx, 10*time.Second)
+	operationErr := pendingOperationForDestroy(operationCtx, opts.KubeContext, opts.Instance, "a destroy")
+	cancelOperationCheck()
+	if err := operationErr; err != nil {
+		fmt.Println(color.YellowString("warning: %v\n  Continuing destroy so recovery remains possible.", err))
+	}
 
 	// 🔴 THE STATE REFUSALS COME BEFORE THE FIRST CHANGE — before the prompt, the lock and
 	// the uninstall — because a refusal after any of them has already removed part of what

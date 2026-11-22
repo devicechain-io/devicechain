@@ -319,3 +319,15 @@ func PerEventStreams(instanceId string) []string {
 	slices.Sort(out)
 	return out
 }
+
+// PerEventLeaderStreams is what leader placement keeps apart: PerEventStreams plus the broker's MQTT
+// message store, where every QoS 1 device publish is a replicated write before it is acknowledged.
+// The store is on the acknowledged-ingest path and is never moved (RebalanceableStreams leaves it
+// out); it is named so that resolved-events and its consumers are placed away from the server that
+// leads it. nats-server creates it at the first MQTT connect, so on an instance no MQTT client has
+// reached yet it is simply absent from what the broker reports.
+func PerEventLeaderStreams(instanceId string) []string {
+	out := append(PerEventStreams(instanceId), MqttMessageStore)
+	slices.Sort(out)
+	return out
+}

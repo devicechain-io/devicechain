@@ -1806,6 +1806,13 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	stopStreamSharding = stop
+	mode := messaging.MqttStoreWriterPerMessage
+	if Configuration.Capture.MqttStoreEnvelopes && envelopesInbound() {
+		mode = messaging.MqttStoreWriterEnvelopes
+	}
+	if err := nmgr.SetMqttMessageStoreWriterMode(mode); err != nil {
+		return err
+	}
 	// The fail-closed MQTT store comes FIRST, before any reader, writer or source exists:
 	// it is the store the broker acknowledges device QoS 1 publishes against, and its
 	// platform durables are what make it keep them. A store this cannot declare would

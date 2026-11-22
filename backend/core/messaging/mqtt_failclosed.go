@@ -62,7 +62,7 @@ import (
 // store carries, in its own metadata, who it is held for:
 //
 //   - FAIL-CLOSED IS A LEASE. A pod with the setting on writes this instance's owner mark,
-//     the signature of the bound it wants (its "holder"), and a heartbeat it renews on every
+//     the signature of its bounds, replicas and WAL writer mode (its "holder"), and a heartbeat on every
 //     pass. Pods that want the same signature hold it together. A pod that wants something
 //     else, on or off, leaves a store whose heartbeat is fresh alone and takes it over only
 //     once the heartbeat has gone stale (mqttFailClosedLeaseTTL), which is when no pod that
@@ -72,8 +72,8 @@ import (
 //     takes over a stale store drops the owner mark (so no pod skips a direct copy any more)
 //     and marks it released, and leaves the durables in place: they hold store copies whose
 //     direct copies a pod with the setting on has already skipped (see
-//     mqtt_failclosed_view.go), and every event-sources pod that sees this instance's mark on
-//     the store reads them. The store stays discard NEW at its bound until they are drained:
+//     mqtt_failclosed_view.go), and compatible-mode event-sources pods that see this instance's
+//     mark on the store read them. The store stays discard NEW at its bound until they are drained:
 //     discard old, or a lower bound, would EVICT the oldest of those copies, which are the only
 //     ones (TestAReleaseKeepsEveryStoreCopyTheDurablesHold). Once the store has been released
 //     for mqttFailClosedReleaseGrace (every pod has stopped skipping by then) the pass records
@@ -383,11 +383,11 @@ const (
 	mqttStandingPristine = "pristine"
 	// mqttStandingHolder: fail-closed in force, held by this pod's signature.
 	mqttStandingHolder = "holder"
-	// mqttStandingStandby: fail-closed in force, held by live pods with another signature; this
-	// pod (setting on) takes it over when their heartbeat goes stale.
+	// mqttStandingStandby: another signature holds the store, or its old writer mode
+	// still has pending acknowledgements. Takeover waits for both boundaries.
 	mqttStandingStandby = "standby"
 	// mqttStandingHeldByOn: this pod has the setting off, and live pods with it on hold the
-	// store; it releases the store when their heartbeat goes stale.
+	// store; release waits for their stale heartbeat and any cross-mode pending acks.
 	mqttStandingHeldByOn = "held-by-pods-with-it-on"
 	// mqttStandingReleased: released by a pod with the setting off, durables not yet removed.
 	mqttStandingReleased = "released"
@@ -478,10 +478,11 @@ func unixNanoTime(s string) time.Time {
 	return time.Unix(0, n)
 }
 
-// mqttFailClosedSignature is what the holder key records: the bound and the replica count a
-// pod declares the store with. Pods that agree on it hold the store together.
-func mqttFailClosedSignature(maxBytes int64, replicas int) string {
-	return strconv.FormatInt(maxBytes, 10) + "/" + strconv.Itoa(replicas)
+// mqttFailClosedSignature records bounds, replicas and the writer protocol.
+// Equal signatures hold together; a different mode must also wait for in-flight
+// WAL publications to settle before taking the store over.
+func mqttFailClosedSignature(maxBytes int64, replicas int, mode MqttStoreWriterMode) string {
+	return strconv.FormatInt(maxBytes, 10) + "/" + strconv.Itoa(replicas) + "/" + string(mode)
 }
 
 // mqttNow is the clock the lease is read and written by; a test seam.
@@ -535,7 +536,7 @@ func (nmgr *NatsManager) ReconcileMqttFailClosed(ctx context.Context) (MqttMessa
 			if rep.standing == mqttStandingStandby {
 				log.Warn().Str("stream", MqttMessageStore).Int64("maxBytes", rep.state.MaxBytes).
 					Msg("The MQTT message store is held fail-closed by event-sources pods with a different bound or " +
-						"replica count. This pod reads it and takes it over once they have stopped")
+						"replica count or writer mode. A different-mode pod waits for the holders and their in-flight WAL publications")
 			} else {
 				log.Info().Str("stream", MqttMessageStore).Int64("maxBytes", rep.state.MaxBytes).
 					Int("replicas", rep.state.Replicas).Time("epoch", rep.state.Epoch).
@@ -602,6 +603,13 @@ func (nmgr *NatsManager) decide(info *nats.StreamInfo, marks mqttStoreMarks, on 
 	case marks.owned:
 		return mqttActRelease
 	case marks.released:
+		mode := mqttFailClosedWriterMode(marks.holder)
+		if marks.holder == "" {
+			mode = MqttStoreWriterPerMessage
+		}
+		if mode != nmgr.mqttWriterMode() {
+			return mqttActRelease
+		}
 		if now.Sub(marks.releasedAt) >= mqttFailClosedReleaseGrace || marks.releasedAt.IsZero() {
 			return mqttActFinish
 		}
@@ -631,7 +639,7 @@ func (nmgr *NatsManager) mqttFailClosedPass(ctx context.Context, startup bool) (
 		// 0 is UNLIMITED to JetStream; a fail-closed store without a bound is not one.
 		return rep, fmt.Errorf("%w: its ceiling must be positive, got %d", errMqttFailClosedUnfixable, maxBytes)
 	}
-	sig := mqttFailClosedSignature(maxBytes, nmgr.effectiveStreamReplicas())
+	sig := mqttFailClosedSignature(maxBytes, nmgr.effectiveStreamReplicas(), nmgr.mqttWriterMode())
 
 	// Whether this instance held the store when the watch last looked: a store found missing
 	// now that was held then was deleted out from under it, which is a repair, not a take-over.
@@ -684,8 +692,30 @@ func (nmgr *NatsManager) mqttFailClosedPass(ctx context.Context, startup bool) (
 		marks := nmgr.marksOf(info)
 		switch act := nmgr.decide(info, marks, on, sig, nmgr.mqttNow()); act {
 		case mqttActHold, mqttActTakeOn:
+			// The holder lease excludes other modes while live. After it expires,
+			// in-flight WAL publications must still settle under their old ids.
+			if (marks.owned || marks.released) && mqttFailClosedWriterMode(marks.holder) != nmgr.mqttWriterMode() {
+				drained, err := nmgr.mqttWriterDrained(ctx)
+				if err != nil {
+					return err
+				}
+				if !drained {
+					rep, passErr = nmgr.reportReadOnly(ctx, info, mqttActStandby, rep)
+					break
+				}
+			}
 			rep, passErr = nmgr.assertMqttFailClosed(ctx, info, marks, act == mqttActTakeOn, wasOwned && !startup, sig, rep)
 		case mqttActRelease:
+			if mqttFailClosedWriterMode(marks.holder) != nmgr.mqttWriterMode() {
+				drained, err := nmgr.mqttWriterDrained(ctx)
+				if err != nil {
+					return err
+				}
+				if !drained {
+					rep, passErr = nmgr.reportReadOnly(ctx, info, mqttActStandby, rep)
+					break
+				}
+			}
 			rep, passErr = nmgr.releaseMqttFailClosed(ctx, info, rep)
 		case mqttActFinish:
 			rep, passErr = nmgr.finishMqttFailClosed(ctx, info, marks, rep)
@@ -705,6 +735,19 @@ func (nmgr *NatsManager) mqttFailClosedPass(ctx context.Context, startup bool) (
 		return rep, nil
 	}
 	return rep, passErr
+}
+
+// mqttWriterDrained is called under the reconcile lock before changing modes.
+func (nmgr *NatsManager) mqttWriterDrained(ctx context.Context) (bool, error) {
+	d := MqttFailClosedDurables(nmgr.Microservice.InstanceId)[0]
+	ci, err := nmgr.js.ConsumerInfo(MqttMessageStore, d.Name, nats.Context(ctx))
+	if errors.Is(err, nats.ErrConsumerNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading WAL writer handoff on %s: %w", d.Name, err)
+	}
+	return ci.NumAckPending == 0, nil
 }
 
 // readMqttStore reads the store, nil when it does not exist, and records the look.
@@ -1230,11 +1273,12 @@ func (nmgr *NatsManager) ensureMqttFailClosedDurable(ctx context.Context, d Mqtt
 }
 
 // releaseMqttFailClosed releases a store whose holders are gone, for a pod with the setting
-// off, under the lock: no owner, holder, heartbeat or from marks, and the released mark with
+// off, under the lock: no owner, heartbeat or from marks, and the released mark with
 // its time. The durables stay, and so do discard new and the bound: the durables hold the
 // only copies of direct copies that were skipped, and discard old, or the lower setting-off
 // bound, would EVICT the oldest of them at once. finishMqttFailClosed puts the gateway's
 // policy back once they are drained; see the file comment.
+// The holder signature retains the drain's writer mode until the durables are removed.
 func (nmgr *NatsManager) releaseMqttFailClosed(ctx context.Context, info *nats.StreamInfo, rep mqttFailClosedReport) (mqttFailClosedReport, error) {
 	cfg := info.Config
 	md := make(map[string]string, len(cfg.Metadata)+2)
@@ -1244,6 +1288,7 @@ func (nmgr *NatsManager) releaseMqttFailClosed(ctx context.Context, info *nats.S
 		}
 	}
 	md[mqttFailClosedReleasedKey] = nmgr.Microservice.InstanceId
+	md[mqttFailClosedHolderKey] = mqttFailClosedSignature(info.Config.MaxBytes, info.Config.Replicas, nmgr.mqttWriterMode())
 	md[mqttFailClosedReleasedAtKey] = strconv.FormatInt(nmgr.mqttNow().UnixNano(), 10)
 	cfg.Metadata = md
 	if err := mqttFenced(ctx); err != nil {

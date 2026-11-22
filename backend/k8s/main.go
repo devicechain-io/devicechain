@@ -5,6 +5,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 
 	corev1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dc-k8s/controllers"
+	"github.com/devicechain-io/dc-k8s/executor"
 	"github.com/devicechain-io/dc-k8s/internal/manageropts"
 	//+kubebuilder:scaffold:imports
 )
@@ -39,6 +41,7 @@ func init() {
 
 func main() {
 	managerOptions := manageropts.BindManagerFlags(flag.CommandLine)
+	executorMode := flag.Bool("executor", false, "Run the Preview executor controllers.")
 	managerOptions.Scheme = scheme
 	managerOptions.Cache = controllers.CacheOptions()
 	opts := zap.Options{
@@ -46,8 +49,15 @@ func main() {
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
-
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	if *executorMode {
+		managerOptions.LeaderElectionID = "dc-executor"
+		managerOptions.LeaderElectionNamespace = os.Getenv("POD_NAMESPACE")
+		if managerOptions.LeaderElectionNamespace == "" {
+			setupLog.Error(fmt.Errorf("POD_NAMESPACE is required"), "executor namespace unavailable")
+			os.Exit(1)
+		}
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), *managerOptions)
 	if err != nil {
@@ -55,24 +65,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controllers.InstanceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Instance")
-		os.Exit(1)
-	}
-	// Volume-snapshot base backups are pruned here because CloudNativePG does not
-	// prune them. A Runnable on a timer rather than a controller: see
-	// controllers/snapshotretention.go for why it must not start an informer.
-	if err := mgr.Add(&controllers.SnapshotRetention{
-		Reader:   mgr.GetAPIReader(),
-		Writer:   mgr.GetClient(),
-		Recorder: mgr.GetEventRecorder("snapshot-retention"),
-		Interval: 10 * time.Minute,
-		Now:      time.Now,
-	}); err != nil {
-		setupLog.Error(err, "unable to add the snapshot retention runnable")
+	if err := registerComponents(*executorMode, managerRegistrar{mgr}); err != nil {
+		setupLog.Error(err, "unable to register manager components")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder
@@ -90,5 +84,43 @@ func main() {
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
+	}
+}
+
+// registrar is the startup boundary for controllers and manager runnables.
+type registrar interface {
+	Register(name string) error
+}
+
+func registerComponents(mode bool, r registrar) error {
+	for _, name := range manageropts.ControllersFor(mode) {
+		if err := r.Register(name); err != nil {
+			return fmt.Errorf("registering %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+type managerRegistrar struct{ manager ctrl.Manager }
+
+func (r managerRegistrar) Register(name string) error {
+	mgr := r.manager
+	switch name {
+	case "executor":
+		return executor.SetupExecutor(mgr, executor.Options{})
+	case "instance":
+		return (&controllers.InstanceReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr)
+	case "snapshot-retention":
+		// Snapshot pruning is a timer runnable, not an informer.
+		return mgr.Add(&controllers.SnapshotRetention{
+			Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(),
+			Recorder: mgr.GetEventRecorder("snapshot-retention"),
+			Interval: 10 * time.Minute, Now: time.Now,
+		})
+	default:
+		return fmt.Errorf("unknown controller %q", name)
 	}
 }

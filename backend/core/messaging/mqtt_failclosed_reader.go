@@ -19,9 +19,12 @@ import (
 //
 // It is a durable reader like any other (batches, AckWait-paced retry, backpressure parking,
 // the one-goroutine contract), bound to one of the platform durables
-// (MqttFailClosedDurables), with five differences, each of which is here because the store is
+// (MqttFailClosedDurables), with the following differences because the store is
 // not a platform stream:
 //
+//   - THE EVENTS READER WAITS FOR ITS WRITER MODE. The fail-closed holder signature
+//     distinguishes envelope and per-message ids. A different mode cannot fetch
+//     while live holders or their pending acknowledgements remain.
 //   - IT NEVER CREATES ITS DURABLE. The fail-closed pass owns them: it creates them in the
 //     order that makes skipping a direct copy safe, and removes them when the store is
 //     released. A reader that recreated a durable on its own (the self-heal every other reader

@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -22,6 +23,7 @@ var (
 	haExpectFail  bool
 	haProbeMqtt   bool
 	haSettle      time.Duration
+	haLeadersJSON bool
 )
 
 var haCmd = &cobra.Command{
@@ -84,6 +86,71 @@ single-node instance and requires it to report failures:
 			}
 			fmt.Println(color.GreenString(
 				"negative control held: the suite failed the instance it was expected to fail."))
+			return nil
+		}
+		if !rep.OK() {
+			os.Exit(1)
+		}
+		return nil
+	},
+}
+
+var haLeadersCmd = &cobra.Command{
+	Use:   "leaders",
+	Short: "Report where the broker's per-event stream leaders sit, and whether they could be separated further",
+	Long: `Report, from live broker state, which broker server leads each stream every device event passes
+through (the capture stream, the inbound stream, the resolved stream and the broker's MQTT message
+store), which server leads each consumer of the resolved stream, and how many streams and consumers
+each server leads.
+
+Each of those streams costs its leader a replicated write per event. When one server leads several
+of them it becomes the broker's bottleneck long before the others are busy, and nothing in the
+deployment shows it.
+
+The verdict is a dry run of ` + "`dcctl broker rebalance`" + `, under the same rules, and moves nothing:
+
+  PASS       no leader move the rebalance may make would separate them further
+  FAIL       it would move the resolved stream or one of its consumers to a server leading fewer
+             of these streams; the moves are listed. ` + "`dcctl broker rebalance`" + ` makes them
+  UNSETTLED  one of the instance's per-event streams or a leader is missing, or a replica is
+             offline or behind where the rebalance would wait on it, so it cannot be judged now
+
+The capture stream, the inbound stream and the MQTT message store are never moved: a leader change
+on them can lose messages already acknowledged to a device. When two of them share a server, the
+report says so; it is not a failure.
+
+Exit status is the result: 0 on PASS, 1 otherwise. A failure to read the broker is an error, never a
+verdict. --json prints the report as JSON. --expect-fail inverts the status for the negative
+control, and succeeds only on FAIL (never on UNSETTLED).
+
+  dcctl ha leaders --instance default`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		rep, err := bootstrap.InspectLeadership(cmd.Context(), bootstrap.LeadersOptions{
+			KubeContext: haKubeContext,
+			InstanceId:  haInstanceId,
+			NatsUrl:     haNatsUrl,
+			Settle:      haSettle,
+			Timeout:     haTimeout,
+		})
+		if err != nil {
+			return err
+		}
+		if haLeadersJSON {
+			raw, err := json.MarshalIndent(rep, "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(raw))
+		} else {
+			fmt.Print(rep.Format())
+		}
+		if haExpectFail {
+			if rep.Verdict != bootstrap.LeadersFail {
+				fmt.Fprintln(os.Stderr, color.RedString(
+					"NEGATIVE CONTROL FAILED: the check reported %s on a broker it was expected to FAIL.", rep.Verdict))
+				os.Exit(1)
+			}
+			fmt.Fprintln(os.Stderr, color.GreenString("negative control held: the check failed the broker it was expected to fail."))
 			return nil
 		}
 		if !rep.OK() {
@@ -187,6 +254,23 @@ func init() {
 	rootCmd.AddCommand(haCmd)
 	haCmd.AddCommand(haVerifyCmd)
 	haCmd.AddCommand(haVerifyDbCmd)
+	haCmd.AddCommand(haLeadersCmd)
+
+	haLeadersCmd.Flags().StringVar(&haInstanceId, "instance", "default",
+		"instance id; its services and broker run in namespace dci-<instance>")
+	haLeadersCmd.Flags().StringVar(&haKubeContext, "kube-context", "",
+		"kubeconfig context (default: current context)")
+	haLeadersCmd.Flags().StringVar(&haNatsUrl, "nats-url", "",
+		"dial this NATS URL instead of opening a port-forward")
+	haLeadersCmd.Flags().DurationVar(&haSettle, "settle", 30*time.Second,
+		"keep re-reading for this long while the broker is UNSETTLED (an election under way, a replica "+
+			"behind). A FAIL is reported at once. 0 disables it")
+	haLeadersCmd.Flags().DurationVar(&haTimeout, "timeout", 2*time.Minute,
+		"bound the whole check")
+	haLeadersCmd.Flags().BoolVar(&haExpectFail, "expect-fail", false,
+		"invert the exit status: succeed only if the check FAILS (the negative control)")
+	haLeadersCmd.Flags().BoolVar(&haLeadersJSON, "json", false,
+		"print the report as JSON")
 
 	haVerifyDbCmd.Flags().StringVar(&haKubeContext, "kube-context", "",
 		"kubeconfig context (default: current context)")
