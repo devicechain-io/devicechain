@@ -4,11 +4,27 @@
 package replication
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	nats "github.com/nats-io/nats.go"
 )
+
+// ConsumerListingError reports a consumer sweep that disagrees with the stream's
+// own count. The partial snapshot must not be judged; collection must be retried.
+type ConsumerListingError struct {
+	Stream   string
+	Expected int
+	Listed   int
+}
+
+func (e *ConsumerListingError) Error() string {
+	return fmt.Sprintf("replication: the broker reports %d consumer(s) in stream %q "+
+		"but the listing returned %d — the sweep was truncated (a dropped "+
+		"connection mid-page, or a consumer created concurrently). Re-run; a partial "+
+		"snapshot cannot be judged", e.Expected, e.Stream, e.Listed)
+}
 
 // Collect reads the broker and returns what it actually sees.
 //
@@ -29,11 +45,34 @@ import (
 //  1. AccountInfo is called FIRST and its error is returned. It is a real
 //     request/reply, so a connection or permission problem surfaces here as an
 //     error rather than as silence.
-//  2. The number of streams listed is compared against the account's own count.
+//  2. The number of streams listed is compared against the account's own count,
+//     and each stream's consumer listing against that stream's consumer count.
 //     A truncated or aborted sweep is an error, not a smaller snapshot.
 //  3. Verify treats an empty snapshot as a finding in its own right, so even if
 //     both guards were removed the suite would not go green over nothing.
+//
+// collectListingAttempts bounds how often Collect re-reads a broker whose consumer
+// listing disagreed with a stream's own count. Consumers come and go on a live
+// broker (ephemeral readers), so one disagreement is ordinary churn; a listing that
+// still disagrees after this many fresh sweeps is reported.
+const collectListingAttempts = 3
+
 func Collect(js nats.JetStreamContext, exp Expectation) (Snapshot, error) {
+	var (
+		snap Snapshot
+		err  error
+	)
+	for attempt := 0; attempt < collectListingAttempts; attempt++ {
+		snap, err = collectOnce(js, exp)
+		var listing *ConsumerListingError
+		if !errors.As(err, &listing) {
+			return snap, err
+		}
+	}
+	return snap, err
+}
+
+func collectOnce(js nats.JetStreamContext, exp Expectation) (Snapshot, error) {
 	var snap Snapshot
 
 	info, err := js.AccountInfo()
@@ -62,10 +101,12 @@ func Collect(js nats.JetStreamContext, exp Expectation) (Snapshot, error) {
 			continue
 		}
 		snap.Objects = append(snap.Objects, objectFrom(si))
+		listed := 0
 		for ci := range js.ConsumersInfo(si.Config.Name) {
 			if ci == nil {
 				continue
 			}
+			listed++
 			snap.Consumers = append(snap.Consumers, Consumer{
 				Stream: si.Config.Name,
 				Name:   ci.Name,
@@ -76,6 +117,9 @@ func Collect(js nats.JetStreamContext, exp Expectation) (Snapshot, error) {
 				// ephemeral means lives in Verify where it is tested.
 				Durable: ci.Config.Durable != "",
 			})
+		}
+		if listed != si.State.Consumers {
+			return snap, &ConsumerListingError{Stream: si.Config.Name, Expected: si.State.Consumers, Listed: listed}
 		}
 	}
 	return snap, nil
