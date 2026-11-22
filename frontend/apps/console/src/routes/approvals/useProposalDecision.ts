@@ -43,6 +43,10 @@ export function useProposalDecision(area: ProposalArea, token: string, current: 
           device: 'deviceToken' in displayed ? displayed.deviceToken : '', command: 'command' in displayed ? revealInvisible(displayed.command).text : '' }),
         confirmLabel: t('approve'), destructive: destructiveCommand }))) return;
       setMutationError(null); setStepUp(false); setInfo(null);
+      // The dialog may have stayed open past the deadline: judge it again at the moment of sending.
+      if (Date.parse(displayed.expiresAt) <= Date.now()) {
+        setInfo(t('approvalExpired', { seconds: 0 })); reload(); return;
+      }
       if (approve) {
         const outcome = command ? await approveAgentProposal(area, token, displayed.digest) : await approveAgentProposal(token, displayed.digest);
         if (outcome.state === 'REFUSED') {

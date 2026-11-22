@@ -83,13 +83,16 @@ export function ApprovalsGate({ children }: { children: ReactNode }) {
 function InstanceGate({ children }: { children: ReactNode }) {
   const { t } = useTranslation('approvals');
   const { data, current, loading, error } = useQuery(getAgentPolicy);
+  // Administering the policy is not approving: an administrator decides alarm proposals only
+  // with real approver standing, read the same way as for everyone else.
+  const { current: access } = useQuery(getAgentApprovalAccess);
   if (!data) return <PageShell title={t('title')}>{loading
     ? <LoadingState description={t('loading')} /> : <ErrorState description={error!} />}</PageShell>;
   if (!current?.instanceEnabled) return <PageShell title={t('title')}>
     {error ? <ErrorState description={error} /> : <EmptyState description={t('notEnabled')} />}
   </PageShell>;
   // An instance administrator reaches the inbox through the policy, as before.
-  return <ApprovalAccess.Provider value={{ canApprove: true }}>{children}</ApprovalAccess.Provider>;
+  return <ApprovalAccess.Provider value={{ canApprove: !!access?.canApprove }}>{children}</ApprovalAccess.Provider>;
 }
 
 function ApproverGate({ children }: { children: ReactNode }) {

@@ -44,7 +44,7 @@ beforeEach(() => {
   h.tenant = 'tenant-a'; h.username = 'ann'; h.identityToken = 'session-a';
   policy = { published: null, operatorSuspended: false, actuationOff: false, instanceEnabled: true, actuationInEffect: true };
   h.policy.mockImplementation(async () => ({ ...policy }));
-  h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
+  h.access.mockResolvedValue({ instanceEnabled: true, canApprove: true });
   h.get.mockResolvedValue(proposal);
   h.list.mockResolvedValue({ results: [proposal], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } });
   h.stepUp.mockResolvedValue(undefined);
@@ -77,7 +77,7 @@ const commandProposal = { ...proposal, proposerPrincipal: 'agent-person', kind: 
   commandCutoff: commandPayload.effective.cutoff, resultRef: null };
 
 describe('command proposals in the same approvals inbox', () => {
-  beforeEach(() => { h.authorities = ['agent:admin', 'command:read', 'command:write']; });
+  beforeEach(() => { h.authorities = ['agent:admin', 'alarm:read', 'command:read', 'command:write']; });
   it('lists the Commands tab with area-qualified keys, pagination and links', async () => {
     h.list.mockImplementation(async (...args: unknown[]) => ({ results: args[0] === 'command-delivery' ? [commandProposal] : [proposal],
       pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } }));
@@ -137,6 +137,30 @@ describe('command proposals in the same approvals inbox', () => {
     show(); await screen.findByText(proposal.rationale!);
     expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+  it('offers an administrator without approver standing no alarm decision', async () => {
+    h.authorities = ['agent:admin', 'alarm:read']; h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
+    show(); await screen.findByText(proposal.rationale!);
+    await waitFor(() => expect(h.access).toHaveBeenCalled());
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+  it('opens on Commands for an approver who can read commands but not alarms', async () => {
+    h.authorities = ['agent:admin', 'command:read', 'command:write']; h.access.mockResolvedValue({ instanceEnabled: true, canApprove: true });
+    h.list.mockResolvedValue({ results: [], pagination: { pageStart: 0, pageEnd: 0, totalRecords: 0 } });
+    show('/approvals');
+    await waitFor(() => expect(h.list).toHaveBeenCalled());
+    expect(h.list.mock.calls[0][0]).toBe('command-delivery');
+  });
+  it('does not send an approval confirmed after the approval window closed', async () => {
+    h.get.mockResolvedValue({ ...commandProposal, expiresAt: new Date(Date.now() + 1500).toISOString() });
+    show('/approvals/command-delivery/proposal-17');
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    const dialog = await screen.findByRole('dialog');
+    await act(() => new Promise(resolve => setTimeout(resolve, 1700)));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(screen.getAllByText('The approval deadline has passed.').length).toBeGreaterThan(0));
+    expect(h.approve).not.toHaveBeenCalled();
   });
   it('opens the inbox on Commands for a command reader who is not an approver', async () => {
     h.authorities = ['command:read']; h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
@@ -431,7 +455,7 @@ describe('inbox and kill switch', () => {
     expect(h.get).not.toHaveBeenCalled();
   });
   it.each(['/approvals', '/approvals/proposal-17'])('refuses %s without agent:admin before any API call', async path => {
-    h.authorities = ['alarm:read']; show(path);
+    h.authorities = ['alarm:read']; h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false }); show(path);
     await screen.findByText('You are not authorized to review agent proposals.');
     expect(h.policy).not.toHaveBeenCalled(); expect(h.list).not.toHaveBeenCalled(); expect(h.get).not.toHaveBeenCalled();
   });

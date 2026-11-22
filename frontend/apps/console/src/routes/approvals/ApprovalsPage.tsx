@@ -25,7 +25,7 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { DataTable, DataTableBody, DataTableCell, DataTableHead, DataTableHeaderCell, DataTableRow } from '@/components/ui/data-table';
-import { ApprovalsGate, ProposalResult, StepUpPrompt, useApprovalAccess } from './shared';
+import { ApprovalsGate, ProposalResult, StepUpPrompt } from './shared';
 
 const STATES: AgentProposalState[] = ['PROPOSED', 'EXECUTED', 'REJECTED', 'EXPIRED', 'REFUSED', 'CANCELLED', 'KILLED'];
 const pageSize = 25;
@@ -79,10 +79,9 @@ function Inbox() {
   const isAdmin = hasAuthority(claims, 'agent:admin');
   const { t, i18n } = useTranslation('approvals');
   const [state, setState] = useState<AgentProposalState>('PROPOSED');
-  const { canApprove } = useApprovalAccess();
-  // Open on a tab this person can read: a command reader who is not an alarm approver starts on
-  // Commands rather than on an Alarms tab they cannot act in.
-  const [area, setArea] = useState<ProposalArea>(!canApprove && hasAuthority(claims, 'command:read') ? COMMAND_PROPOSAL_AREA : 'device-management');
+  // Open on a tab this person can READ (what they may decide does not decide what they may
+  // read): Commands for a command reader without alarm:read, otherwise Alarms.
+  const [area, setArea] = useState<ProposalArea>(!hasAuthority(claims, 'alarm:read') && hasAuthority(claims, 'command:read') ? COMMAND_PROPOSAL_AREA : 'device-management');
   const [pages, setPages] = useState<Record<ProposalArea, number>>({ 'device-management': 1, 'command-delivery': 1 });
   const pageNumber = pages[area];
   const setPageNumber = (page: number) => setPages(current => ({ ...current, [area]: page }));
