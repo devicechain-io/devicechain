@@ -178,6 +178,8 @@ var rawSQLAllowList = []siteEntry{
 			"index that returns only the distinct tenant_id values and reads no row content. Every row it then " +
 			"removes is removed through the model under that tenant's own core.WithTenant. The only formatted-in " +
 			"text is the model's quoted table name.",
+	},
+	{
 		Path: "backend/services/device-management/model/api_attribute_owner.go", Func: "lockDeviceAttributes", Count: 1,
 		Why: "sets the transaction-local device attribute writer protocol marker (attrprotocol.MarkerSQL, " +
 			"SELECT set_config('devicechain.attr_protocol', '1', true)). It reads and writes no table; the SQL is " +
