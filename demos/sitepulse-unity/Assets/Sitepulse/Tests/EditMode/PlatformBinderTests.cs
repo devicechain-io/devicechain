@@ -37,6 +37,34 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
+        public void ADozerBindsOnItsOwnProfileWithNoPayloadOrTyres()
+        {
+            var r = One(Dozer(), SceneKind.Dozer);
+            Assert.AreEqual(BindOutcome.Bound, r.Outcome, r.Detail);
+            Assert.AreEqual("sp-dozer", r.TypeToken);
+            Assert.AreEqual("sp-dozer-profile", r.ProfileToken);
+        }
+
+        [Test]
+        public void ADozerOnTheSharedEquipmentProfileStillBinds()
+        {
+            var d = Dozer();
+            d.Profile = "sp-equipment-profile";
+            d.Metrics = EquipmentMetrics();
+            Assert.AreEqual(BindOutcome.Bound, One(d, SceneKind.Dozer).Outcome);
+        }
+
+        [Test]
+        public void ADozerMissingFuelIsAProfileMismatch()
+        {
+            var d = Dozer();
+            d.Metrics = d.Metrics.Where(m => m != "fuel_pct").ToArray();
+            var r = One(d, SceneKind.Dozer);
+            Assert.AreEqual(BindOutcome.ProfileMismatch, r.Outcome);
+            StringAssert.Contains("missing metric fuel_pct", r.Detail);
+        }
+
+        [Test]
         public void ThePlantBindsOnItsOwnMetrics()
         {
             var r = One(Plant(), SceneKind.Plant);
