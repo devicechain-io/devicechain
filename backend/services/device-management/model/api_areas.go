@@ -13,6 +13,9 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// ErrAreaConflict refuses an area save made from a stale copy.
+var ErrAreaConflict = rdb.NewStaleWriteError("area")
+
 // Create a new area type.
 func (api *Api) CreateAreaType(ctx context.Context, request *AreaTypeCreateRequest) (*AreaType, error) {
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
@@ -223,7 +226,11 @@ func (api *Api) CreateArea(ctx context.Context, request *AreaCreateRequest) (*Ar
 // Looked up by the `token` ARGUMENT; the payload no longer carries a token, so the
 // argument is no longer dead and a token move is unrepresentable rather than merely
 // refused.
-func (api *Api) UpdateArea(ctx context.Context, token string, request *AreaUpdateRequest) (*Area, error) {
+//
+// When expectedUpdatedAt is supplied, refuse a stale copy before validation and
+// guard the write against another writer moving the row after the read.
+func (api *Api) UpdateArea(ctx context.Context, token string, expectedUpdatedAt *string,
+	request *AreaUpdateRequest) (*Area, error) {
 	matches, err := api.AreasByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -233,6 +240,9 @@ func (api *Api) UpdateArea(ctx context.Context, token string, request *AreaUpdat
 	}
 
 	current := matches[0]
+	if err := rdb.RefuseIfMoved(current.UpdatedAt, expectedUpdatedAt, ErrAreaConflict); err != nil {
+		return nil, err
+	}
 	assignments := map[string]any{}
 
 	// The type hop resolves BEFORE anything is written, so an unknown area type
@@ -297,6 +307,9 @@ func (api *Api) UpdateArea(ctx context.Context, token string, request *AreaUpdat
 		}
 		// Only requested columns are written: an omitted boundary must never restore
 		// a stale link after another writer unlinked the area and deleted the fence.
+		if expectedUpdatedAt != nil {
+			return rdb.UpdateIfUnmoved(tx, current, current.UpdatedAt, assignments, ErrAreaConflict)
+		}
 		res := rdb.AdvancingFrom(tx, current.UpdatedAt).Model(current).Omit(clause.Associations).
 			Where("id = ?", current.ID).Updates(assignments)
 		if res.Error != nil {

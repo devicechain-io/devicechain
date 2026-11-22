@@ -321,7 +321,8 @@ destructive — see [the warning below](#where-the-default-does-not-hold).
 
 A partial update narrows concurrency conflicts without removing them. Two writers who touch
 different fields no longer overwrite each other, but two who touch the same field still do.
-`updateDashboard`, `updateConnector`, `updateAiProvider` and `updateNotificationPolicy` take an
+`updateDashboard`, `updateConnector`, `updateAiProvider`, `updateNotificationPolicy`, `updateArea`,
+`updateAsset`, `updateCustomer` and `updateEntityGroup` take an
 optional `expectedUpdatedAt` and refuse the write when the stored timestamp has moved since you read
 it. Pass the `updatedAt` you last read, or omit it for last-write-wins. The `updatedAt` a `create*`
 response carries is not one to send: read the record back first, or the first guarded update may be
