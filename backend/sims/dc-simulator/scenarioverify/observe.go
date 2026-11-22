@@ -82,6 +82,9 @@ type Command struct {
 	Status    string    `json:"status"`
 	Queued    time.Time `json:"queued"`
 	Responded time.Time `json:"responded"`
+	// Raw diagnostic-only timestamps: malformed values must not alter a verdict.
+	CreatedAt string `json:"createdAt,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
 }
 
 // Reading is one stored measurement.

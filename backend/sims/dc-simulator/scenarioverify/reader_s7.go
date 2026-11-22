@@ -215,7 +215,7 @@ func s7AlarmComparison(ctx context.Context, r *Reader, m *s7MCP) (S7Comparison, 
 			return S7Comparison{}, nil, nil, err
 		}
 		if reflect.DeepEqual(before, after) {
-			return S7Comparison{Expected: s7JSON(before), Actual: s7JSON(actual)}, before, actual, nil
+			return S7Comparison{Expected: s7JSON(before), Actual: s7JSON(actual), alarmCounts: &s7AlarmCounts{before: len(before), after: len(after)}}, before, actual, nil
 		}
 	}
 	return S7Comparison{}, nil, nil, fmt.Errorf("S7 alarm snapshot did not settle")

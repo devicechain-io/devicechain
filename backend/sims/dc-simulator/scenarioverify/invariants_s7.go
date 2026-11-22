@@ -43,6 +43,8 @@ type S7Event struct {
 type S7Comparison struct {
 	Expected json.RawMessage
 	Actual   json.RawMessage
+	// Diagnostic metadata only; never participates in the verdict.
+	alarmCounts *s7AlarmCounts
 }
 
 type S7Truth struct {
@@ -239,6 +241,9 @@ func s7Compare(reads map[string]S7Comparison, tools []string) error {
 			return fmt.Errorf("%s has no independently read platform evidence", tool)
 		}
 		if expected == nil || !reflect.DeepEqual(expected, actual) {
+			if tool == "list_alarms" {
+				return fmt.Errorf("%s answer differs from tenant GraphQL truth: %s", tool, s7AlarmDiagnostic(read))
+			}
 			return fmt.Errorf("%s answer differs from tenant GraphQL truth", tool)
 		}
 	}
