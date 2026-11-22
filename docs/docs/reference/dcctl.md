@@ -649,6 +649,12 @@ cross-field constraints.
 dcctl config-schema [flags]
 ```
 
+### Examples
+
+```
+  dcctl config-schema > instance-config.schema.json
+```
+
 ### Options
 
 ```
@@ -1986,6 +1992,16 @@ run 'dcctl product rotate-integration-token \<integration-token>' to issue one.
 dcctl product apply <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>'
+  # converge drafts and stop, without publishing
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>' --no-publish
+  # apply without printing the plan first
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>' --yes
+```
+
 ### Options
 
 ```
@@ -2038,6 +2054,14 @@ unless you name it in --kinds.
 dcctl product export <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>'
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>' --kinds device-types,profiles
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>' --name "Acme product"
+```
+
 ### Options
 
 ```
@@ -2083,6 +2107,14 @@ Against a tenant that already holds the bundle the plan reports no changes. Use
 dcctl product plan <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl product plan ./acme --tenant acme-prod --email you@example.com --password '<password>'
+  # exits non-zero when the tenant has drifted from the bundle, for CI
+  dcctl product plan ./acme --tenant acme-prod --email you@example.com --password '<password>' --fail-on-changes
+```
+
 ### Options
 
 ```
@@ -2125,6 +2157,13 @@ a shell. A warning is written to stderr. This command does not save the token to
 
 ```
 dcctl product rotate-integration-token <integration-token> [flags]
+```
+
+### Examples
+
+```
+  dcctl product rotate-integration-token chirpstack-1 --tenant acme --email you@example.com --password '<password>'
+  dcctl product rotate-integration-token chirpstack-1 --tenant acme --email you@example.com --password '<password>' --server dc.example.com --tls
 ```
 
 ### Options
@@ -2430,6 +2469,13 @@ artifact against a live instance, use "dcctl secrets escrow verify".
 dcctl secrets escrow show <file> [flags]
 ```
 
+### Examples
+
+```
+  dcctl secrets escrow show ~/.devicechain/escrow/prod.escrow
+  dcctl secrets escrow show ./prod-rootkey.escrow
+```
+
 ### Options
 
 ```
@@ -2463,6 +2509,14 @@ the instance has no usable escrow. The command exits non-zero in that case.
 
 ```
 dcctl secrets escrow verify <file> [flags]
+```
+
+### Examples
+
+```
+  # exits non-zero when the artifact does not hold the key the instance is running
+  dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow
+  dcctl secrets escrow verify --instance prod --kube-context prod ./prod-rootkey.escrow
 ```
 
 ### Options
@@ -3028,6 +3082,15 @@ of the shell history and the process list.
 
 ```
 dcctl test <path> [flags]
+```
+
+### Examples
+
+```
+  dcctl test ./tests --tenant acme --email you@example.com --password '<password>'
+  # the password from the environment, and a JUnit report for CI
+  DCCTL_PASSWORD='<password>' dcctl test ./tests/low-battery.test.yaml --tenant acme --email you@example.com --junit results.xml
+  dcctl test ./tests --tenant acme --email you@example.com --password '<password>' --server dc.example.com --tls
 ```
 
 ### Options
