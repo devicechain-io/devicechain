@@ -4844,19 +4844,37 @@ type AssetTypeSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents an asset instance
+"""
+An asset: a physical or logical thing that devices can be assigned to, such as a pump, a vehicle or
+a building system, optionally carrying a property document validated against its type's published
+contract. Assets can be arranged in a hierarchy.
+"""
 type Asset implements Model & TokenReference & NamedEntity & MetadataEntity & Entity {
+    """
+    Server-assigned numeric identifier, as a string. Address an asset by its token instead where you
+    can.
+    """
     id: ID!
+    """When the asset was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the asset was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleted assets are not returned."""
     deletedAt: String
+    """Identifier of the asset, unique within the tenant. It cannot be changed after creation."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """The asset type this asset is an instance of."""
     assetType: AssetType!
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
-    # The asset's property document: a JSON object whose keys are the properties its
-    # type's published contract declares. Null when the asset carries none.
+    """
+    The asset's property document: a JSON object whose keys are the properties its type's published
+    contract declares. Null when the asset carries none.
+    """
     properties: String
     """
     Where the asset was installed. Needs location:installed:read (location:read includes it).
@@ -4871,18 +4889,24 @@ type Asset implements Model & TokenReference & NamedEntity & MetadataEntity & En
     positionWithheld: Boolean!
 }
 
-# Data required to create an asset.
+"""Data required to create an asset."""
 input AssetCreateRequest {
+    """Identifier for the new asset, unique within the tenant. Cannot be changed later."""
     token: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """Token of the asset type to create it under. An unknown token is refused."""
     assetTypeToken: String!
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
-    # The asset's property document, validated against the asset type's ACTIVE
-    # PUBLISHED contract before anything is written. Refused when the type has no
-    # published contract, when a key is not declared, when a value does not fit its
-    # declared type/bounds/allowed values, or when a required property is missing —
-    # and the refusal is total, so no asset is created.
+    """
+    The asset's property document, validated against the asset type's active published contract
+    before anything is written. Refused when the type has no published contract, when a key is not
+    declared, when a value does not fit its declared type, bounds or allowed values, or when a
+    required property is missing; a refusal is total, so no asset is created.
+    """
     properties: String
 }
 
@@ -4893,33 +4917,50 @@ input AssetCreateRequest {
 # field arrive already-populated for a caller who never sent it, which collapses
 # "omitted" back into "sent", and turns this input back into the full replace it
 # replaces.
+"""
+A partial update of an asset. Each field has three states: omit it to keep the stored value, send
+null to clear it, or send a value to set it. There is no token field: the mutation's token argument
+names the record, so a token cannot be moved.
+"""
 input AssetUpdateRequest {
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
     # Re-points the asset at a different asset type. Omit to keep the current one.
     # Unlike DeviceTypeUpdateRequest.profileToken, NULL IS REFUSED here: every asset
     # must reference a type, so "no type" is not a state it can be in. An unknown
     # token is refused too, and the refusal is total — nothing is written.
+    """
+    Re-points the asset at a different asset type. Omit to keep the current one. Null is refused,
+    because every asset must reference a type, and so is an unknown token; a refusal writes nothing.
+    """
     assetTypeToken: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
-    # Replaces the asset's property document wholesale; null clears it. Omit to keep
-    # what is stored — but note that omitting it does NOT skip the check: a retype
-    # re-validates the properties the asset already carries against the contract of
-    # the type it is moving to, so an asset can never be left describing itself in a
-    # vocabulary its type does not declare.
+    """
+    Replaces the asset's property document wholesale; null clears it. Omit to keep what is stored.
+    Omitting it does not skip the check: moving to another asset type re-validates the properties
+    the asset already carries against that type's contract.
+    """
     properties: String
 }
 
-# Criteria used when searching for assets.
+"""Criteria for listing assets."""
 input AssetSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Only assets of the asset type with this token. Omit for every asset."""
     assetTypeToken: String
 }
 
-# Search results returned from assets query.
+"""One page of assets."""
 type AssetSearchResults {
+    """The assets on this page."""
     results: [Asset!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -5062,25 +5103,45 @@ type CustomerTypeSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a customer instance
+"""
+A customer: an organisation or person that devices are assigned to. A member's access can be limited
+to the devices of particular customers.
+"""
 type Customer implements Model & TokenReference & NamedEntity & MetadataEntity & Entity {
+    """
+    Server-assigned numeric identifier, as a string. Address a customer by its token instead where
+    you can.
+    """
     id: ID!
+    """When the customer was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the customer was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleted customers are not returned."""
     deletedAt: String
+    """Identifier of the customer, unique within the tenant. It cannot be changed after creation."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """The customer type this customer is an instance of."""
     customerType: CustomerType!
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
 }
 
-# Data required to create a customer.
+"""Data required to create a customer."""
 input CustomerCreateRequest {
+    """Identifier for the new customer, unique within the tenant. Cannot be changed later."""
     token: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """Token of the customer type to create it under. An unknown token is refused."""
     customerTypeToken: String!
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
 
@@ -5091,27 +5152,45 @@ input CustomerCreateRequest {
 # field arrive already-populated for a caller who never sent it, which collapses
 # "omitted" back into "sent", and turns this input back into the full replace it
 # replaces.
+"""
+A partial update of a customer. Each field has three states: omit it to keep the stored value, send
+null to clear it, or send a value to set it. There is no token field: the mutation's token argument
+names the record, so a token cannot be moved.
+"""
 input CustomerUpdateRequest {
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
     # Re-points the customer at a different customer type. Omit to keep the current one.
     # Unlike DeviceTypeUpdateRequest.profileToken, NULL IS REFUSED here: every customer
     # must reference a type, so "no type" is not a state it can be in. An unknown
     # token is refused too, and the refusal is total — nothing is written.
+    """
+    Re-points the customer at a different customer type. Omit to keep the current one. Null is
+    refused, because every customer must reference a type, and so is an unknown token; a refusal
+    writes nothing.
+    """
     customerTypeToken: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
 
-# Criteria used when searching for customers.
+"""Criteria for listing customers."""
 input CustomerSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Only customers of the customer type with this token. Omit for every customer."""
     customerTypeToken: String
 }
 
-# Search results returned from customer query.
+"""One page of customers."""
 type CustomerSearchResults {
+    """The customers on this page."""
     results: [Customer!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -5251,16 +5330,25 @@ type AreaTypeSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents an area instance
+"""An area: a place that devices can be located in, optionally bounded by a geofence."""
 type Area implements Model & TokenReference & NamedEntity & MetadataEntity & Entity {
+    """Server-assigned numeric identifier, as a string. Address an area by its token instead where you can."""
     id: ID!
+    """When the area was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the area was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleted areas are not returned."""
     deletedAt: String
+    """Identifier of the area, unique within the tenant. It cannot be changed after creation."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """The area type this area is an instance of."""
     areaType: AreaType!
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
     """
     The geofence that bounds the area, or null when none does. Null for a caller limited to part
@@ -5269,12 +5357,17 @@ type Area implements Model & TokenReference & NamedEntity & MetadataEntity & Ent
     boundaryFence: GeoFence
 }
 
-# Data required to create an area.
+"""Data required to create an area."""
 input AreaCreateRequest {
+    """Identifier for the new area, unique within the tenant. Cannot be changed later."""
     token: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """Token of the area type to create it under. An unknown token is refused."""
     areaTypeToken: String!
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
     """The token of the geofence that bounds the area. It must name an existing fence."""
     boundaryFenceToken: String
@@ -5287,14 +5380,26 @@ input AreaCreateRequest {
 # field arrive already-populated for a caller who never sent it, which collapses
 # "omitted" back into "sent", and turns this input back into the full replace it
 # replaces.
+"""
+A partial update of an area. Each field has three states: omit it to keep the stored value, send
+null to clear it, or send a value to set it. There is no token field: the mutation's token argument
+names the record, so a token cannot be moved.
+"""
 input AreaUpdateRequest {
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
     # Re-points the area at a different area type. Omit to keep the current one.
     # Unlike DeviceTypeUpdateRequest.profileToken, NULL IS REFUSED here: every area
     # must reference a type, so "no type" is not a state it can be in. An unknown
     # token is refused too, and the refusal is total — nothing is written.
+    """
+    Re-points the area at a different area type. Omit to keep the current one. Null is refused,
+    because every area must reference a type, and so is an unknown token; a refusal writes nothing.
+    """
     areaTypeToken: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
     """
     Links the area to the geofence that bounds it: omit to keep the link, send null to remove
@@ -5303,16 +5408,21 @@ input AreaUpdateRequest {
     boundaryFenceToken: String
 }
 
-# Criteria used when searching for areas.
+"""Criteria for listing areas."""
 input AreaSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Only areas of the area type with this token. Omit for every area."""
     areaTypeToken: String
 }
 
-# Search results returned from areas query.
+"""One page of areas."""
 type AreaSearchResults {
+    """The areas on this page."""
     results: [Area!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -7063,15 +7173,32 @@ type Query {
         """
         pagination: PaginationInput!
     ): DeviceConfigurationRevisionSearchResults!
-    # The asset directly above this one in the hierarchy, or null when it is a
-    # root. A root is a normal state, not an error.
-    assetParent(token: String!): Asset
-    # The path from an asset to its root, NEAREST ANCESTOR FIRST - the order a
-    # breadcrumb is built from.
-    assetAncestors(token: String!): [Asset!]!
-    # A page of the assets directly below a parent. Omit parentToken to page the
-    # ROOTS of the tree; a tree browser asks the same question at every level.
-    assetChildren(parentToken: String, pagination: PaginationInput!): AssetSearchResults!
+    """
+    The asset directly above this one in the hierarchy, or null when it is a root. A root is a
+    normal state, not an error. Requires device:read.
+    """
+    assetParent(
+        """Token of the asset whose parent to read."""
+        token: String!
+    ): Asset
+    """
+    The path from an asset to its root, nearest ancestor first, which is the order a breadcrumb is
+    built from. Requires device:read.
+    """
+    assetAncestors(
+        """Token of the asset whose ancestors to read."""
+        token: String!
+    ): [Asset!]!
+    """
+    One page of the assets directly below a parent. Omit parentToken to page the roots of the tree,
+    so a tree browser asks the same question at every level. Requires device:read.
+    """
+    assetChildren(
+        """Token of the parent asset. Omit to page the roots of the tree."""
+        parentToken: String
+        """The page of children to return."""
+        pagination: PaginationInput!
+    ): AssetSearchResults!
     # Find provisioning profiles by unique id.
     provisioningProfilesById(ids: [ID!]!): [ProvisioningProfile!]!
     # Find provisioning profiles by unique token.
@@ -7255,16 +7382,26 @@ type Query {
         """The facets the listed asset types must match, and the page to return."""
         criteria: AssetTypeSearchCriteria!
     ): AssetTypeSearchResults!
-    # Find assets by unique id. A member limited to part of the tenant is answered with only
-    # the assets one of its visible devices is assigned to (a tracked edge); the metadata and
-    # properties of those are null for it, and any other id is omitted as if it did not exist.
+    """
+    Reads assets by numeric id. A member limited to part of the tenant is answered with only the
+    assets one of its visible devices is assigned to (over a tracked relationship), their metadata
+    and properties are null for it, and any other id is omitted as if it did not exist. Requires
+    device:read.
+    """
     assetsById(ids: [ID!]!): [Asset!]!
-    # Find assets by unique token. Scoped as assetsById: an asset outside the member's reach
-    # is omitted, never refused.
+    """
+    Reads assets by token. Scoped as assetsById: an asset outside the caller's reach is omitted,
+    never refused. Requires device:read.
+    """
     assetsByToken(tokens: [String!]!): [Asset!]!
-    # List assets that meet criteria. Scoped as assetsById; pagination counts only the assets
-    # the member reaches.
-    assets(criteria: AssetSearchCriteria!): AssetSearchResults!
+    """
+    Lists the assets that match the criteria, one page at a time. Scoped as assetsById; pagination
+    counts only the assets the caller reaches. Requires device:read.
+    """
+    assets(
+        """The facets the listed assets must match, and the page to return."""
+        criteria: AssetSearchCriteria!
+    ): AssetSearchResults!
     """
     Lists an asset type's published property-contract versions, newest first. At most 1000 per call;
     limit (at least 1) narrows that and offset (not negative) pages further. Requires device:read.
@@ -7377,12 +7514,15 @@ type Query {
         """The facets the listed customer types must match, and the page to return."""
         criteria: CustomerTypeSearchCriteria!
     ): CustomerTypeSearchResults!
-    # Find customers by unique id.
+    """Reads customers by numeric id. Ids naming no customer are omitted. Requires device:read."""
     customersById(ids: [ID!]!): [Customer!]!
-    # Find customers by unique token.
+    """Reads customers by token. Tokens naming no customer are omitted. Requires device:read."""
     customersByToken(tokens: [String!]!): [Customer!]!
-    # List customers that meet criteria.
-    customers(criteria: CustomerSearchCriteria!): CustomerSearchResults!
+    """Lists the customers that match the criteria, one page at a time. Requires device:read."""
+    customers(
+        """The facets the listed customers must match, and the page to return."""
+        criteria: CustomerSearchCriteria!
+    ): CustomerSearchResults!
 
     """
     Reads area types by numeric id. Ids naming no area type are omitted. Answered to a member
@@ -7409,16 +7549,25 @@ type Query {
         """The facets the listed area types must match, and the page to return."""
         criteria: AreaTypeSearchCriteria!
     ): AreaTypeSearchResults!
-    # Find areas by unique id. A member limited to part of the tenant is answered with only
-    # the areas one of its visible devices is placed in (a tracked edge); the metadata of
-    # those is null for it, and any other id is omitted as if it did not exist.
+    """
+    Reads areas by numeric id. A member limited to part of the tenant is answered with only the
+    areas one of its visible devices is placed in (over a tracked relationship), their metadata is
+    null for it, and any other id is omitted as if it did not exist. Requires device:read.
+    """
     areasById(ids: [ID!]!): [Area!]!
-    # Find areas by unique token. Scoped as areasById: an area outside the member's reach is
-    # omitted, never refused.
+    """
+    Reads areas by token. Scoped as areasById: an area outside the caller's reach is omitted, never
+    refused. Requires device:read.
+    """
     areasByToken(tokens: [String!]!): [Area!]!
-    # List areas that meet criteria. Scoped as areasById; pagination counts only the areas
-    # the member reaches.
-    areas(criteria: AreaSearchCriteria!): AreaSearchResults!
+    """
+    Lists the areas that match the criteria, one page at a time. Scoped as areasById; pagination
+    counts only the areas the caller reaches. Requires device:read.
+    """
+    areas(
+        """The facets the listed areas must match, and the page to return."""
+        criteria: AreaSearchCriteria!
+    ): AreaSearchResults!
     """
     (Preview: may change in a minor release.) The tenant's agent proposals, newest first. A person
     needs alarm:read; an AI agent's token (one holding alarm:propose) sees only its own client's
@@ -8148,14 +8297,25 @@ type Mutation {
     # transaction. The device's history, alarms, relationships, group membership and
     # command vocabulary carry forward because none of them are touched.
     replaceDevice(request: DeviceReplaceRequest!): DeviceReplaceResult!
-    # Place an asset under a parent, replacing whatever parent it had. Refused when
-    # it would make an asset its own ancestor, give it a second parent, or push the
-    # tree past its depth limit. The asset's own children travel with it.
-    setAssetParent(childToken: String!, parentToken: String!): EntityRelationship!
-    # Detach an asset from its parent, making it a root. Its children travel with
-    # it. Reports whether an edge was removed, so "already a root" is
-    # distinguishable from "done".
-    clearAssetParent(childToken: String!): Boolean!
+    """
+    Places an asset under a parent, replacing whatever parent it had, and returns the relationship
+    edge. Refused when it would make an asset its own ancestor, give it a second parent, or push the
+    tree past its depth limit of 64. The asset's own children travel with it. Requires device:write.
+    """
+    setAssetParent(
+        """Token of the asset to place under the parent."""
+        childToken: String!
+        """Token of the asset to become its parent."""
+        parentToken: String!
+    ): EntityRelationship!
+    """
+    Detaches an asset from its parent, making it a root; its children travel with it. Returns true
+    when an edge was removed and false when the asset was already a root. Requires device:write.
+    """
+    clearAssetParent(
+        """Token of the asset to detach from its parent."""
+        childToken: String!
+    ): Boolean!
     # Create a new provisioning profile. The response carries the provision secret the server
     # generated, once.
     createProvisioningProfile(request: ProvisioningProfileCreateRequest): ProvisioningProfileSecretResult!
@@ -8448,17 +8608,34 @@ type Mutation {
         """The published version to make active again."""
         version: Int!
     ): AssetType!
-    # Create a new asset.
-    createAsset(request: AssetCreateRequest): Asset!
-    # Update an existing asset.
+    """
+    Creates an asset of an asset type. Its property document, if any, is validated against the
+    type's active published contract. Requires device:write.
+    """
+    createAsset(
+        """The asset to create."""
+        request: AssetCreateRequest
+    ): Asset!
+    """
+    Applies a partial update to an asset, identified by token. Pass expectedUpdatedAt to refuse the
+    write if the asset changed since it was read. Requires device:write.
+    """
     updateAsset(
+        """Token of the asset to update."""
         token: String!
+        """The fields to change."""
         request: AssetUpdateRequest!
         """Apply only if updatedAt still equals this value; returns STALE_WRITE if the record changed. Reload before retrying. Omit for last-write-wins."""
         expectedUpdatedAt: String
     ): Asset!
-    # Delete an asset and its relationship edges.
-    deleteAsset(token: String!): Boolean!
+    """
+    Deletes an asset together with its relationship edges. Returns true when it was deleted and
+    false when nothing has the token. Requires device:write.
+    """
+    deleteAsset(
+        """Token of the asset to delete."""
+        token: String!
+    ): Boolean!
 
     """Creates a customer type. Requires device:write."""
     createCustomerType(
@@ -8513,19 +8690,36 @@ type Mutation {
         token: String!
     ): Boolean!
 
-    # Create a new customer. A token a deleted customer held is retired and answers
-    # INVALID_VALUE; a token a live customer holds answers CONFLICT.
-    createCustomer(request: CustomerCreateRequest): Customer!
-    # Update an existing customer.
+    """
+    Creates a customer of a customer type. A token that a deleted customer held is retired and is
+    refused with INVALID_VALUE; a token a live customer holds is refused with CONFLICT. Requires
+    device:write.
+    """
+    createCustomer(
+        """The customer to create."""
+        request: CustomerCreateRequest
+    ): Customer!
+    """
+    Applies a partial update to a customer, identified by token. Pass expectedUpdatedAt to refuse
+    the write if the customer changed since it was read. Requires device:write.
+    """
     updateCustomer(
+        """Token of the customer to update."""
         token: String!
+        """The fields to change."""
         request: CustomerUpdateRequest!
         """Apply only if updatedAt still equals this value; returns STALE_WRITE if the record changed. Reload before retrying. Omit for last-write-wins."""
         expectedUpdatedAt: String
     ): Customer!
-    # Delete a customer and its relationship edges. Its token is retired: no other
-    # customer in the tenant can be created with it.
-    deleteCustomer(token: String!): Boolean!
+    """
+    Deletes a customer together with its relationship edges. Its token is retired: no other customer
+    in the tenant can be created with it. Returns true when it was deleted and false when nothing
+    has the token. Requires device:write.
+    """
+    deleteCustomer(
+        """Token of the customer to delete."""
+        token: String!
+    ): Boolean!
 
     """Creates an area type. Requires device:write."""
     createAreaType(
@@ -8547,17 +8741,31 @@ type Mutation {
         """Token of the area type to delete."""
         token: String!
     ): Boolean!
-    # Create a new area.
-    createArea(request: AreaCreateRequest): Area!
-    # Update an existing area.
+    """Creates an area of an area type, optionally bounded by an existing geofence. Requires device:write."""
+    createArea(
+        """The area to create."""
+        request: AreaCreateRequest
+    ): Area!
+    """
+    Applies a partial update to an area, identified by token. Pass expectedUpdatedAt to refuse the
+    write if the area changed since it was read. Requires device:write.
+    """
     updateArea(
+        """Token of the area to update."""
         token: String!
+        """The fields to change."""
         request: AreaUpdateRequest!
         """Apply only if updatedAt still equals this value; returns STALE_WRITE if the record changed. Reload before retrying. Omit for last-write-wins."""
         expectedUpdatedAt: String
     ): Area!
-    # Delete an area and its relationship edges.
-    deleteArea(token: String!): Boolean!
+    """
+    Deletes an area together with its relationship edges. Returns true when it was deleted and false
+    when nothing has the token. Requires device:write.
+    """
+    deleteArea(
+        """Token of the area to delete."""
+        token: String!
+    ): Boolean!
     """
     Records where a device or an asset was installed. Needs device:write. The position is
     refused, before anything is stored, when it is not a finite WGS84 coordinate. An entity
