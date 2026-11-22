@@ -3427,9 +3427,9 @@ versions must leave none."
   note "dcctl fleet-op readiness agrees with the SQL: 0 orphans ✓"
   # ...and it is shown to count one: a generation head for a device that does not exist, COMMITTED so the API sees it,
   # then removed.
-  attrlock_psql "$pod" "INSERT INTO \"device-management\".entity_attribute_generations (id, tenant_id, device_id, scope, attr_key, generation) VALUES ((SELECT COALESCE(max(id), 0) + 1000000 FROM \"device-management\".entity_attribute_generations), '$tenant', 999999999, 'SHARED', 'drill-readiness-control', 1)" >/dev/null
+  attrlock_psql "$pod" "INSERT INTO \"device-management\".entity_attribute_generations (id, tenant_id, device_id, scope, attr_key, generation) VALUES ((SELECT COALESCE(max(id), 0) + 1000000 FROM \"device-management\".entity_attribute_generations), '$tenant', 999999999, 'SHARED', 'drill-readiness-control', 1)" >/dev/null || true
   ready="$(attrlock_readiness "$tenant")" || ready=""
-  attrlock_psql "$pod" "DELETE FROM \"device-management\".entity_attribute_generations WHERE tenant_id = '$tenant' AND device_id = 999999999 AND attr_key = 'drill-readiness-control'" >/dev/null
+  attrlock_psql "$pod" "DELETE FROM \"device-management\".entity_attribute_generations WHERE tenant_id = '$tenant' AND device_id = 999999999 AND attr_key = 'drill-readiness-control'" >/dev/null || true
   [[ "$ready" =~ ^[0-9]+$ && "$ready" -ge 1 ]] ||
     fail "THE READINESS CHECK DID NOT SEE A PLANTED ORPHAN (it reported '$ready' with one committed), so its 0 above says nothing."
   ready="$(attrlock_readiness "$tenant")" || ready=""
