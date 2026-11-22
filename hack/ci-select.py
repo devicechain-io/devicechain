@@ -109,11 +109,15 @@ READERS = [
     ("deploy", ".", [
         "deploy/fleet/**",
     ], [], "fleet_roots_test.go"),
-    # plan_fixtures_test.go — scans the sanitized plan-gate fixtures for confidential material.
+    # tofu_roots_test.go — walks every .tf under deploy/ and compares the roots with what
+    # hack/tofu-roots.sh --all prints. plan_fixtures_test.go — scans the sanitized plan-gate
+    # fixtures for confidential material.
     ("deploy", ".", [
+        "deploy/**/*.tf",
+        "hack/tofu-roots.sh",
         "deploy/gke/fixtures/**",
         "hack/fixtures/gke-extraction/**",
-    ], [], "plan_fixtures_test.go"),
+    ], [], "tofu_roots_test.go, plan_fixtures_test.go"),
     # build_paths_test.go:22-81 — the reproducible-build settings in every place the broker image is built.
     ("backend/broker/dc-nats-server", ".", [
         "deploy/local/build-images.sh",
@@ -142,6 +146,9 @@ READERS = [
     ], NONTEST, "bootstrap/*_test.go"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
     ("backend/cli", "product", [SDL], [], "product/documents_test.go:32"),
+    # deploy/fleet_premises_test.go:82 pins the recorded premises to the toolchain versions in ci.yml and
+    # to the kind node image in hack/fleet-s0/kind.sh.
+    ("deploy", ".", [".github/workflows/ci.yml", "hack/fleet-s0/kind.sh"], [], "fleet_premises_test.go:82"),
     ("backend/cli", "failedevents", ["backend/services/event-management/graphql/**"], [], "failedevents/*_test.go"),
     ("backend/cli", "sim", ["backend/sims/dc-simulator/sim/handshake.go"], [], "sim/handshake_lockstep_test.go:30"),
     # core/test walks every .go file in the repository (logsink, defaultorder, sharedcache, ...).
@@ -637,10 +644,12 @@ MIGRATION_ROOTS = [
     ("backend/cli/bootstrap", False, False),
 ]
 # Non-Go inputs the jobs read directly: the operand image they build and launch
-# (deploy/images/timescaledb/build.sh, standalone.sh). hack/** (migration-diff.sh,
+# (deploy/images/timescaledb/build.sh, standalone.sh) and the fleet module, whose tagged
+# real-Postgres suite the script runs (a build-tagged file is invisible to the import graph, so
+# the whole module is an input). hack/** (migration-diff.sh,
 # check-duplicate-indexes.sh, docker-pull.sh, go-mod-download.sh), .github/**, go.work and every
 # go.mod/go.sum already run everything, so they need no row here.
-MIGRATION_INPUTS = ["deploy/images/timescaledb/**"]
+MIGRATION_INPUTS = ["deploy/images/timescaledb/**", "backend/fleet/**"]
 
 # ---------------------------------------------------------------------------------------------
 # The `image-smoke` legs: one ko build per image module, so what can change one.

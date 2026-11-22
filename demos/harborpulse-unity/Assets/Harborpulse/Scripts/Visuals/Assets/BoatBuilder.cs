@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+using DeviceChain.Harborpulse.Model;
 using UnityEngine;
 
 namespace DeviceChain.Harborpulse.Visuals
@@ -8,7 +9,7 @@ namespace DeviceChain.Harborpulse.Visuals
     /// <summary>Refines the authored moorings in place. Yaw stays baked into the meshes, so the existing wave motion owns the root.</summary>
     public static class BoatBuilder
     {
-        public static void Refine(Transform boat, HarborMaterials m, int slot)
+        public static void Refine(Transform boat, HarborMaterials m, int slot, DetailManager detail = null)
         {
             var hull = boat.Find("Hull");
             if (hull == null || hull.GetComponent<MeshFilter>() == null) return;
@@ -103,6 +104,12 @@ namespace DeviceChain.Harborpulse.Visuals
             Replace(boat.Find("Cabin"),white);
             Replace(boat.Find("CabinGlass"),dark);
             Replace(boat.Find("Deck"),timber);
+            if (detail != null)
+            {
+                var kind = sail ? BoatKind.Sail : ferry ? BoatKind.Ferry : skiff ? BoatKind.Skiff : lobster ? BoatKind.Lobster : BoatKind.Fishing;
+                var colour = hull.GetComponent<MeshRenderer>().sharedMaterial.GetColor("_BaseColor");
+                detail.Register(NearVehicles.Boat(kind, length, beam), boat, Vector3.zero, Quaternion.Euler(0, yaw, 0), NearPalette.Vehicle(colour), m.Surfaces);
+            }
             var mast = boat.Find("Mast");
             if (mast != null)
             {

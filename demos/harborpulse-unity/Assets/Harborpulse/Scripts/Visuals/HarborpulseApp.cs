@@ -118,6 +118,23 @@ namespace DeviceChain.Harborpulse.Visuals
         /// <summary>Stills and rehearsal: when set, the water's wave clock is this instead of the frame clock.</summary>
         public float? WaterTimeOverride { get; set; }
 
+        bool previewFairWeather;
+
+        /// <summary>
+        /// A look check of the OFFLINE PREVIEW only: the sky, the light, the rain and the sea are drawn for a dry, calm day in place of the
+        /// scenario's weather, so an hour the story's storm always covers (every dusk) can be judged as a clear one. It changes no reading,
+        /// no cue and nothing a live run draws, and a still made with it says so in its stamp; a live scene refuses it.
+        /// </summary>
+        public bool PreviewFairWeather
+        {
+            get => previewFairWeather;
+            set
+            {
+                if (value && !Offline) throw new InvalidOperationException("the fair-weather look check is the offline preview's; a live scene draws the scenario's weather");
+                previewFairWeather = value;
+            }
+        }
+
         /// <summary>Preview only: hold the day at an hour (a still frame).</summary>
         public void HoldPreviewAt(double hourOfDay)
         {
@@ -139,7 +156,14 @@ namespace DeviceChain.Harborpulse.Visuals
             Tick(2.1f, targetNow.AddSeconds(2.1));
         }
 
-        public void RenderReflectionNow() => reflection?.RenderNow();
+        public void RenderReflectionNow()
+        {
+            // the stills path never runs Update: bring the near detail to this camera before anything is drawn
+            world?.Detail.Refresh(sceneCamera.transform.position, true);
+            // and the wells' tags: the last Tick decided them for the camera it had, which a still may have moved since
+            views?.FrameWells(sceneCamera.transform.position, sceneCamera.transform.forward);
+            reflection?.RenderNow();
+        }
         void LateUpdate() => reflection?.LateTick();
         public HarborFrame Frame => frame;
 
@@ -171,7 +195,8 @@ namespace DeviceChain.Harborpulse.Visuals
                 storyboard = Storyboard.Parse(Resources.Load<TextAsset>("storyboard").text, map);
                 // The read-only observer adapter: live reads come from whichever session is current (a runner restart replaces it).
                 if (DirectorFeedFactory == null) DirectorFeedFactory = () => new DirectorObserver(layout, () => live?.DirectorReads);
-                var options = Environment.GetCommandLineArgs();
+                var options = Options(out var optionProblem);
+                if (optionProblem != null) throw new FormatException(optionProblem);
                 localDigest = LayoutDigest.Override(LayoutDigest.Compute(text.bytes), CommandLineArgs.Get(options, "-hp-layout-digest-override", out _));
                 portrait = Array.IndexOf(options, "-hp-portrait") >= 0;
                 recordRoot = CommandLineArgs.Get(options, "-hp-record-dir", out _) ?? Path.Combine(Application.persistentDataPath, "recordings");
@@ -199,7 +224,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 water = new HarborWaterController(transform, waterShader, map, world, 9000);
                 if (sceneCamera == null) sceneCamera = Camera.main;
                 if (sceneCamera == null) throw new InvalidOperationException("the scene has no camera");
-                sceneCamera.farClipPlane = 20000;
+                sceneCamera.farClipPlane = 3600;
                 sceneCamera.nearClipPlane = 0.3f;
                 rig = new HarborCameraRig(sceneCamera, map);
                 directorCamera = new DirectorCamera(sceneCamera, map, portrait);
@@ -215,10 +240,17 @@ namespace DeviceChain.Harborpulse.Visuals
                 return;
             }
 
-            var args = Environment.GetCommandLineArgs();
+            var args = Options(out _);
             Offline = offlinePreview || Array.IndexOf(args, OfflineFlag) >= 0 || Environment.GetEnvironmentVariable(OfflineEnv) == "1";
             if (Offline) StartPreview(args);
             else StartLive(args);
+        }
+
+        /// <summary>The player's options: its command line, or in a browser (which has none) the ones its page address carries (<see cref="WebOptions"/>).</summary>
+        static string[] Options(out string problem)
+        {
+            problem = null;
+            return Application.platform == RuntimePlatform.WebGLPlayer ? WebOptions.FromUrl(Application.absoluteURL, out problem) : Environment.GetCommandLineArgs();
         }
 
         void StartPreview(string[] args)
@@ -316,15 +348,17 @@ namespace DeviceChain.Harborpulse.Visuals
             frame = model.Update(source, clock, now, Offline && previewHeld);
             if (!Offline) ApplyMembership(source, now);
             var hour = clock.HourOfDay;
-            weather = frame.World.Weather;
+            weather = PreviewFairWeather ? new Weather(0, 0) : frame.World.Weather;
             var state = DayLighting.Evaluate(hour, weather);
             waterTime = WaterTimeOverride ?? waterTime + dt;
             sky.Apply(state, waterTime);
             mats.SetNight((float)state.Night, (float)frame.World.EastFeederOutage);
+            mats.SetRain(state);
             grading.Apply(state);
-            views.Apply(frame, state, sceneCamera.transform.position, dt, waterTime);
+            views.Apply(frame, state, sceneCamera.transform.position, dt, waterTime, weather, sceneCamera.transform.forward);
             TickDirector(source, now, dt);
             ApplyMappedTruck(source, now);
+            world.Detail.Refresh(sceneCamera.transform.position);
 
             reflection.Level = (float)frame.ReflectionLevelM;
             water.Apply(q => frame.Tides[q].LevelM, 0.0, weather, waterTime, sceneCamera.transform.position);
@@ -563,7 +597,7 @@ namespace DeviceChain.Harborpulse.Visuals
 
             var shots = rig.Shots;
             sb.Clear();
-            for (var i = 0; i < shots.Count; i++) sb.Append(i == rig.Current ? "<b>[" : "[").Append(i == 10 ? "F1" : i == 11 ? "F2" : i.ToString(CultureInfo.InvariantCulture)).Append("] ").Append(shots[i].Name).Append(i == rig.Current ? "</b>   " : "   ");
+            for (var i = 0; i < shots.Count; i++) sb.Append(i == rig.Current ? "<b>[" : "[").Append(i == 10 ? "F1" : i == 11 ? "F2" : i == 12 ? "F3" : i.ToString(CultureInfo.InvariantCulture)).Append("] ").Append(shots[i].Name).Append(i == rig.Current ? "</b>   " : "   ");
             sb.Append("· drag to orbit, wheel to dolly");
             var shotText = sb.ToString();
             var shotHeight = small.CalcHeight(new GUIContent(shotText), Screen.width - 32);

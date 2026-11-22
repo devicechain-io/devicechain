@@ -149,6 +149,7 @@ type Documents = {
     "\n  query EntityAttributes($criteria: EntityAttributeSearchCriteria!) {\n    entityAttributes(criteria: $criteria) {\n      results {\n        id\n        entityType\n        scope\n        attrKey\n        valueType\n        value\n        lastUpdated\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": typeof types.EntityAttributesDocument,
     "\n  mutation SetEntityAttribute($request: EntityAttributeSetRequest!) {\n    setEntityAttribute(request: $request) {\n      id\n      scope\n      attrKey\n      valueType\n      value\n    }\n  }\n": typeof types.SetEntityAttributeDocument,
     "\n  mutation DeleteEntityAttribute(\n    $entityType: String!\n    $entity: String!\n    $scope: String!\n    $attrKey: String!\n  ) {\n    deleteEntityAttribute(\n      entityType: $entityType\n      entity: $entity\n      scope: $scope\n      attrKey: $attrKey\n    )\n  }\n": typeof types.DeleteEntityAttributeDocument,
+    "\n  mutation ImportFacetValues($rows: [FacetValueImportRow!]!, $dryRun: Boolean!) {\n    importFacetValues(rows: $rows, dryRun: $dryRun) {\n      row\n      memberType\n      token\n      key\n      outcome\n      code\n      message\n    }\n  }\n": typeof types.ImportFacetValuesDocument,
     "\n  query FacetKeys($criteria: FacetKeySearchCriteria!) {\n    facetKeys(criteria: $criteria) {\n      results {\n        id\n        memberType\n        key\n        valueType\n        source\n        values\n        label\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.FacetKeysDocument,
     "\n  mutation SetFacetKey($request: FacetKeySetRequest!) {\n    setFacetKey(request: $request) {\n      memberType\n      key\n    }\n  }\n": typeof types.SetFacetKeyDocument,
     "\n  mutation DeleteFacetKey($memberType: String!, $key: String!) {\n    deleteFacetKey(memberType: $memberType, key: $key)\n  }\n": typeof types.DeleteFacetKeyDocument,
@@ -337,6 +338,7 @@ const documents: Documents = {
     "\n  query EntityAttributes($criteria: EntityAttributeSearchCriteria!) {\n    entityAttributes(criteria: $criteria) {\n      results {\n        id\n        entityType\n        scope\n        attrKey\n        valueType\n        value\n        lastUpdated\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": types.EntityAttributesDocument,
     "\n  mutation SetEntityAttribute($request: EntityAttributeSetRequest!) {\n    setEntityAttribute(request: $request) {\n      id\n      scope\n      attrKey\n      valueType\n      value\n    }\n  }\n": types.SetEntityAttributeDocument,
     "\n  mutation DeleteEntityAttribute(\n    $entityType: String!\n    $entity: String!\n    $scope: String!\n    $attrKey: String!\n  ) {\n    deleteEntityAttribute(\n      entityType: $entityType\n      entity: $entity\n      scope: $scope\n      attrKey: $attrKey\n    )\n  }\n": types.DeleteEntityAttributeDocument,
+    "\n  mutation ImportFacetValues($rows: [FacetValueImportRow!]!, $dryRun: Boolean!) {\n    importFacetValues(rows: $rows, dryRun: $dryRun) {\n      row\n      memberType\n      token\n      key\n      outcome\n      code\n      message\n    }\n  }\n": types.ImportFacetValuesDocument,
     "\n  query FacetKeys($criteria: FacetKeySearchCriteria!) {\n    facetKeys(criteria: $criteria) {\n      results {\n        id\n        memberType\n        key\n        valueType\n        source\n        values\n        label\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.FacetKeysDocument,
     "\n  mutation SetFacetKey($request: FacetKeySetRequest!) {\n    setFacetKey(request: $request) {\n      memberType\n      key\n    }\n  }\n": types.SetFacetKeyDocument,
     "\n  mutation DeleteFacetKey($memberType: String!, $key: String!) {\n    deleteFacetKey(memberType: $memberType, key: $key)\n  }\n": types.DeleteFacetKeyDocument,
@@ -927,6 +929,10 @@ export function graphql(source: "\n  mutation SetEntityAttribute($request: Entit
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteEntityAttribute(\n    $entityType: String!\n    $entity: String!\n    $scope: String!\n    $attrKey: String!\n  ) {\n    deleteEntityAttribute(\n      entityType: $entityType\n      entity: $entity\n      scope: $scope\n      attrKey: $attrKey\n    )\n  }\n"): typeof import('./graphql').DeleteEntityAttributeDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation ImportFacetValues($rows: [FacetValueImportRow!]!, $dryRun: Boolean!) {\n    importFacetValues(rows: $rows, dryRun: $dryRun) {\n      row\n      memberType\n      token\n      key\n      outcome\n      code\n      message\n    }\n  }\n"): typeof import('./graphql').ImportFacetValuesDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

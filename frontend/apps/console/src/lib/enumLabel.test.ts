@@ -40,6 +40,7 @@ const ROLLOUT_OUTCOMES = members({
 } satisfies Record<UpdateRolloutOutcome, true>);
 const ROLLOUT_PAUSE_REASONS = members({
   OPERATOR: true, FAILURE_THRESHOLD: true, ARTIFACT_NOT_ASSIGNABLE: true,
+  FAILURE_RATE: true, COHORT_READY: true, COHORT_FAILED: true,
 } satisfies Record<UpdateRolloutPauseReason, true>);
 
 const FAMILIES: Array<[string, readonly string[]]> = [

@@ -121,3 +121,11 @@ func (r *SchemaResolver) AgentExecutionDecision(ctx context.Context, args struct
 	}
 	return &AgentExecutionDecisionResolver{d: d}, nil
 }
+
+// GroupRestriction is the policy's current target-group restriction, null for none.
+func (r *AgentExecutionDecisionResolver) GroupRestriction() *[]string {
+	if r.d.Decision.GroupRestriction == nil {
+		return nil
+	}
+	return &r.d.Decision.GroupRestriction
+}

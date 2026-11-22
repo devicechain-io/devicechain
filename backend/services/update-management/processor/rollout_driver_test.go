@@ -24,12 +24,16 @@ func TestRolloutMetricsRecordWhatAStepDid(t *testing.T) {
 	m.Observe(model.RolloutStepResult{Dispatched: 3, Skipped: 1}, nil)
 	m.Observe(model.RolloutStepResult{Transition: model.RolloutPaused, Reason: model.PauseFailureThreshold}, nil)
 	m.Observe(model.RolloutStepResult{Transition: model.RolloutPaused, Reason: model.PauseArtifactNotAssignable}, nil)
+	m.Observe(model.RolloutStepResult{Transition: model.RolloutPaused, Reason: model.PauseFailureRate}, nil)
+	m.Observe(model.RolloutStepResult{Transition: model.RolloutPaused, Reason: model.PauseCohortReady}, nil)
 	m.Observe(model.RolloutStepResult{Transition: model.RolloutCompleted}, nil)
 	m.Observe(model.RolloutStepResult{Dispatched: 9}, errors.New("database down"))
 
 	require.EqualValues(t, 3, testutil.ToFloat64(m.dispatches.WithLabelValues("dispatched")), "a failed step dispatched nothing")
 	require.EqualValues(t, 1, testutil.ToFloat64(m.dispatches.WithLabelValues("skipped")))
 	require.EqualValues(t, 1, testutil.ToFloat64(m.transitions.WithLabelValues("paused_failure_threshold")))
+	require.EqualValues(t, 1, testutil.ToFloat64(m.transitions.WithLabelValues("paused_failure_rate")))
+	require.EqualValues(t, 1, testutil.ToFloat64(m.transitions.WithLabelValues("paused_cohort_ready")))
 	require.EqualValues(t, 1, testutil.ToFloat64(m.transitions.WithLabelValues("paused_artifact_not_assignable")))
 	require.EqualValues(t, 1, testutil.ToFloat64(m.transitions.WithLabelValues("completed")))
 	require.EqualValues(t, 1, testutil.ToFloat64(m.failures.WithLabelValues("step")))
@@ -44,6 +48,17 @@ func TestRolloutMetricsRecordWhatAStepDid(t *testing.T) {
 	var nilMetrics *RolloutMetrics
 	nilMetrics.Observe(model.RolloutStepResult{}, nil) // an unwired observer is a no-op, not a panic
 	nilMetrics.ObserveListFailure(nil)
+}
+
+func TestCommittedRateHaltIsVisibleEvenWhenDeviceLookupFailed(t *testing.T) {
+	ms := &core.Microservice{InstanceId: "inst", FunctionalArea: "update-management"}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	m := NewRolloutMetrics(ms)
+	// StepRollout returns its committed transition alongside a failed pre-lock lookup.
+	m.Observe(model.RolloutStepResult{Transition: model.RolloutPaused, Reason: model.PauseFailureRate}, errors.New("device lookup unavailable"))
+	require.EqualValues(t, 1, testutil.ToFloat64(m.transitions.WithLabelValues("paused_failure_rate")))
+	require.EqualValues(t, 1, testutil.ToFloat64(m.failures.WithLabelValues("step")))
+	require.EqualValues(t, 0, testutil.ToFloat64(m.transitions.WithLabelValues("paused_artifact_not_assignable")))
 }
 
 func TestTheRolloutDriverRefusesANonPositiveInterval(t *testing.T) {

@@ -200,6 +200,17 @@
                     }
                   }
                 },
+                "mcp": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Switches for what AI agents may do through MCP.",
+                  "properties": {
+                    "commandProposals": {
+                      "type": "boolean",
+                      "description": "Reserved for agent command proposals (Preview). False by default; nothing reads it yet, so setting it changes nothing. When it is used, turn it on in an upgrade of its own after the release rollout completes: pods from an earlier release refuse this key."
+                    }
+                  }
+                },
                 "tokenAudience": {
                   "type": "object",
                   "additionalProperties": false,

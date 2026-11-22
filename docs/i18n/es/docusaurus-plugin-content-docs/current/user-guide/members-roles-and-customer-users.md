@@ -162,6 +162,8 @@ posteriores.
 
 {/* TODO(screenshot): role-detail, a tenant role with the grouped authority checklist. */}
 
+`fleet:operate` queda reservado para operaciones de flota; ninguna API lo usa en esta versión. No se incluye en ningún rol integrado, aunque `*` ya lo satisface. Concédelo a roles personalizados solo después de que haya finalizado el despliegue de la actualización: un pod antiguo de user-management rechaza cualquier edición de un rol que contenga un permiso desconocido, incluso una edición no relacionada de un rol que ya lo tenga.
+
 Las autoridades que no tienes aparecen atenuadas: nadie puede conceder más de lo que tiene. Un rol
 solo puede llevar autoridades del inquilino, así que nunca se ofrecen permisos de nivel de
 instancia.

@@ -25,6 +25,8 @@ namespace DeviceChain.Harborpulse.Visuals
         public IReadOnlyList<Transform> Buoys => buoys;
         public IReadOnlyList<Vector2> BuoyRest => buoyRest;
         public TownBuilder Town { get; private set; }
+        /// <summary>The level-of-detail switch for the town's buildings and vehicles (see <see cref="DetailManager"/>).</summary>
+        public DetailManager Detail { get; } = new DetailManager();
         public Dictionary<string, List<Renderer>> Masks { get; } = new Dictionary<string, List<Renderer>>();
         public Dictionary<string, QuayFrame> Frames { get; } = new Dictionary<string, QuayFrame>();
         public AssetRig Truck => rigs.First(r => r.Placement.Device.Kind == DeviceKind.Truck);
@@ -44,8 +46,9 @@ namespace DeviceChain.Harborpulse.Visuals
             // a real foundation and connect it by the mapped road causeway, never a floating slab.
             w.Slab("Depot headland", (float)map.Depot.X - 36, (float)map.Depot.X + 36,
                 (float)map.Depot.Z - 26, (float)map.Depot.Z + 26, Deck, mats.Ground);
-            if(w.props.Find("depot")!=null)BuildingBuilder.Depot(w.Root, V(map.Depot, Deck), mats);
+            if(w.props.Find("depot")!=null)BuildingBuilder.Depot(w.Root, V(map.Depot, Deck), mats, w.Detail);
             w.TownAndHills(); w.FloodPlain(); w.Breakwaters(); w.Floats();
+            w.PrebuildDetail();
             return w;
         }
         void Mark(string category, Transform t)
@@ -155,14 +158,14 @@ namespace DeviceChain.Harborpulse.Visuals
                 case DeviceKind.Charger:
                     var car=props.Find("car:"+d.Token);
                     var localCar=f.Local(V(car.At))-f.Local(V(at));
-                    r = ChargerBuilder.Build(local, parent, mats, localCar);
+                    r = ChargerBuilder.Build(local, parent, mats, localCar, Detail);
                     r.Box("CarPark", localCar+new Vector3(0, -.035f, -1), new Vector3(5, .05f, 9), mats.Asphalt);
                     r.Box("ChargeCanopy", localCar+new Vector3(0, 3.1f, -2.5f), new Vector3(3.8f, .15f, 4), mats.Steel);
                     break;
-                case DeviceKind.Truck: r = TruckBuilder.Build(local, parent, mats); break;
+                case DeviceKind.Truck: r = TruckBuilder.Build(local, parent, mats, Detail); break;
                 case DeviceKind.Meter:
                     r = new AssetRig(local, parent);
-                    BuildingBuilder.Build(r.Root, Vector3.zero, d.Index == 1, mats, wallDistance);
+                    BuildingBuilder.Build(r.Root, Vector3.zero, d.Index == 1, mats, wallDistance, Detail);
                     r["Beacon"].localPosition = Vector3.up * 20; r["CardAnchor"].localPosition = Vector3.up * 18;
                     break;
                 default: throw new InvalidOperationException("no builder for " + d.Kind);
@@ -171,7 +174,7 @@ namespace DeviceChain.Harborpulse.Visuals
         }
         void TownAndHills()
         {
-            Town = TownBuilder.Build(Root, mats, props);
+            Town = TownBuilder.Build(Root, mats, props, Detail);
             Mark("ridge", Town.Backdrop);
         }
 
@@ -193,11 +196,16 @@ namespace DeviceChain.Harborpulse.Visuals
                 Slab("Low flood plain",minX,maxX,minZ,maxZ,Deck-.69f,mats.Asphalt,t);
                 // parked cars on the low plain (its surface is 0.69 m below the deck): a body and a cabin, in a few colours
                 var paints=new[]{mats.HullWhite,mats.ClapBlue,mats.BarnRed,mats.Slate,mats.ClapGrey};var n=0;
+                // the far bodies are kept out of the fence's merged batch so a near car can replace its own (a complete model, see NearVehicles.Car)
+                var carNode=AssetRig.Node("Parked cars "+ring.Key,Root,Vector3.zero);
                 foreach(var car in props.Props.Where(p=>p.Kind=="ParkedCar" && p.Area==ring.Key))
                 {
                     var x=(float)car.At.X;var z=(float)car.At.Z;var floor=ring.Key.IndexOf("depot",StringComparison.OrdinalIgnoreCase)<0?Deck-.69f:Deck;
-                    new MeshKit().Box(new Vector3(x,floor+.55f,z),new Vector3((float)car.Width,.8f,(float)car.Depth)).Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.6f,.6f,2.3f)).Spawn("Parked car",t,paints[n++%paints.Length]);
-                    new MeshKit().Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.64f,.42f,2.1f)).Spawn("Car glass",t,mats.Glass,false);
+                    var paint=paints[n++%paints.Length];
+                    var body=new MeshKit().Box(new Vector3(x,floor+.55f,z),new Vector3((float)car.Width,.8f,(float)car.Depth)).Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.6f,.6f,2.3f)).Spawn("Parked car",carNode,paint);
+                    var glass=new MeshKit().Box(new Vector3(x,floor+1.22f,z+.2f),new Vector3(1.64f,.42f,2.1f)).Spawn("Car glass",carNode,mats.Glass,false);
+                    Detail.Register(NearVehicles.Car(CarSpec.Parked),carNode,new Vector3(x,floor,z),Quaternion.identity,NearPalette.Vehicle(paint.GetColor("_BaseColor")),mats.Surfaces,null,false,
+                        new[]{body.GetComponent<MeshRenderer>(),glass.GetComponent<MeshRenderer>()});
                 }
                 SurfaceDetail.Parking(t,mats,minX,maxX,minZ,maxZ,ring.Key.IndexOf("depot",StringComparison.OrdinalIgnoreCase)<0?Deck-.64f:Deck+.11f);
                 AssetRig.MergeFixed(t,t.GetComponentsInChildren<MeshFilter>());
@@ -238,9 +246,28 @@ namespace DeviceChain.Harborpulse.Visuals
             PierDetailBuilder.Build(Root,mats);
             for(var i=0;i<Town.Boats.Count;i++)
             {
-                BoatBuilder.Refine(Town.Boats[i],mats,i);
+                BoatBuilder.Refine(Town.Boats[i],mats,i,Detail);
                 buoys.Add(Town.Boats[i]);buoyRest.Add(Town.BoatRest[i]);
             }
+        }
+        /// <summary>
+        /// Builds, inactive, the near sets any story pose could bring within reach, so the show's cuts do not hitch on them. The poses come from the
+        /// presentation map (the fixed ones, the per-device ones, and every pose the storyboard names); one the map does not know is skipped.
+        /// </summary>
+        void PrebuildDetail()
+        {
+            var names = new List<string>(DetailCandidates.PoseNames());
+            var story = Resources.Load<TextAsset>("storyboard");
+            if (story != null) foreach (var n in DetailCandidates.PoseNamesIn(story.text)) if (!names.Contains(n)) names.Add(n);
+            var cameras = new List<NearVec>(); var looks = new List<NearVec>();
+            foreach (var name in names)
+            {
+                CameraPose pose;
+                try { pose = map.Pose(name); } catch (FormatException) { continue; }
+                cameras.Add(new NearVec((float)pose.Camera.X, (float)pose.Camera.Y, (float)pose.Camera.Z));
+                looks.Add(new NearVec((float)pose.Look.X, (float)pose.Look.Y, (float)pose.Look.Z));
+            }
+            Detail.Prebuild(cameras, looks);
         }
         public void Dispose()
         {

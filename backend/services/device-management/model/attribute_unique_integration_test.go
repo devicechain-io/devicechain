@@ -76,7 +76,7 @@ func TestRestoreAttributeConcurrentFirstWritePostgres(t *testing.T) {
 	require.NoError(t, tx.Create(first).Error)
 	done := make(chan error, 1)
 	go func() {
-		done <- api.applyConfigurationDocument(ctx, device.Token, device.ID, `{"site":"south"}`)
+		done <- api.applyConfigurationDocument(ctx, device.Token, device.ID, `{"site":"south"}`, "restore")
 	}()
 	waitForBlockedBackend(t, api.RDB.Database)
 	select {
