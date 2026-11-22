@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// refusedLexemes are documents holding a lexeme at which graphql-go's Unicode
-// normalising pass and its text/scanner lexer can disagree about whether a byte is
-// inside a string. Each is refused by the document reader, whatever it counts. reason
+// refusedLexemes hold scanner/normaliser disagreements or historically excluded
+// escapes whose refusal we retain after v1.11.1 fixed upstream's block strings.
+// Each is refused by the document reader, whatever it counts. reason
 // is a fragment of the refusal's message.
 //
 // The limit these run at (5) is above every row's field count, so a refusal here is
@@ -27,11 +27,11 @@ var refusedLexemes = []struct{ name, doc, reason string }{
 	{"backquoted raw string", "mutation { a: m(s: `x`) }", "backquoted string is not accepted"},
 	{"raw string after a minus", "mutation { a: bump(a: -`x`) }", "backquoted string is not accepted"},
 	{"single-quoted character", "mutation { a: m(s: 'x') }", "single-quoted character is not accepted"},
-	// `\"""` is the specification's escaped triple quote. graphql-go closes the block
-	// string at those three quotes anyway, so it never read the escape as written.
+	// v1.11.1 honours `\"""` in a block string. Keep our established refusal even
+	// though the upstream lexer and normalising pass now agree on this escape.
 	{"escaped closing triple quote", `mutation { a: m(s: """x\""") }`, `closing """ follows a backslash`},
-	// The backslash is itself escaped here, and the rule does not care: graphql-go's
-	// normalising pass does not either.
+	// Upstream's new suffix check ignores backslash parity, just like its
+	// normalising pass and our existing refusal.
 	{"escaped backslash before the closing triple quote", `mutation { a: m(s: """x\\""") }`, `closing """ follows a backslash`},
 	{"escaped triple quote and one more", `mutation { a: m(s: """x\"""") }`, `closing """ follows a backslash`},
 	// The documents that showed the disagreement is real: the Go comment holding a
@@ -71,8 +71,8 @@ var lexemeFuzzSeeds = []string{
 	"mutation { z: bump(s: \"x\" \"a\" \"\"\") # \"\"\" \"\n a: bump(s: [-\\uDC00]) b: bump }",
 }
 
-// 🔴 THE READER REFUSES EXACTLY THE LEXEMES WHERE graphql-go'S TWO LAYERS CAN DISAGREE,
-// and it does so before anything is counted or run: the work limit refuses the
+// The reader pins the lexical subset's refusals, including the historical escaped
+// block-quote exclusion, before counting or running: the work limit refuses the
 // document with the lexeme's reason, and no resolver runs.
 func TestRefusedLexemes(t *testing.T) {
 	schema := lexSchema(5)
@@ -120,21 +120,22 @@ func TestRefusedLexemesAreStillAcceptedInsideStringsAndComments(t *testing.T) {
 	}
 }
 
-// Sanity for the fuzz arbiter's reach: graphql-go really does EXECUTE a minus in front
-// of a token that is not a number when the argument is the Any scalar, and the work
-// limit counts those fields. Without Any, graphql-go's validation refuses every such
-// literal, and a quiet fuzz run over this class would say nothing about the counter.
-// (A minus in front of a STRING still never runs: graphql-go panics unquoting `-"…"`,
-// recovers, and answers with an error. That is graphql-go refusing, not a reach.)
-func TestFuzzArbiterReachesTheMinusAnyPath(t *testing.T) {
+// v1.11.1 rejects a non-number after '-' before Any scalar validation. Pin that
+// change in both the upstream arbiter and our guard, rather than quietly losing the
+// old fuzz reach when the parser becomes stricter.
+func TestFuzzArbiterRefusesTheMinusAnyPath(t *testing.T) {
 	const doc = `mutation { a: bump(a: -x) b: bump(l: [-y, -z]) }`
 	resp, calls := execCounting(func(ctx context.Context) *graphql.Response {
 		return lexInner().Exec(ctx, doc, "", nil)
 	})
-	require.Empty(t, resp.Errors)
-	assert.Equal(t, int32(2), calls, "graphql-go ran both root fields")
-	assert.NotNil(t, checkWork(doc, DefaultGraphQLMaxQueryLength, 1, 1), "and the limit counts both")
-	assert.Nil(t, checkWork(doc, DefaultGraphQLMaxQueryLength, 2, 2))
+	require.Len(t, resp.Errors, 1)
+	assert.Contains(t, resp.Errors[0].Message, "syntax error: expected number")
+	assert.Zero(t, calls)
+	assert.Nil(t, resp.Data)
+	qerr := checkWork(doc, DefaultGraphQLMaxQueryLength, 2, 2)
+	require.NotNil(t, qerr)
+	assert.Contains(t, qerr.Message, "expected number")
+	assert.Nil(t, qerr.Extensions, "the refusal is lexical, not a field-count limit")
 }
 
 // 🔴 A REFUSED LEXEME READS AS THE END OF THE DOCUMENT, at the lexer itself and not

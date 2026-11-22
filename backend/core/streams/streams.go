@@ -1120,7 +1120,7 @@ var All = []Stream{
 	{Suffix: DeviceOwnership, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "ownership changes are projected from the stored relationships", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a relationship edit — an operator assigning or claiming a device"},
 
 	// Small control facts; the window deduplicates retries of the same EventID.
-	{Suffix: AgentActuationKills, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "the policy head retains the kill state and operators can repeat a kill", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"user-management"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Cold, MaxBytesCap: agentActuationKillsMaxBytesCap, DeadLetterKind: kindControlFact, Why: "tenant agent actuation kills"},
+	{Suffix: AgentActuationKills, BackupClass: durability.BackupCheckpoint, Durability: durability.Rebuildable, DurabilityWhy: "the policy head retains the kill state and operators can repeat a kill", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"user-management"}, Readers: []Reader{{"device-management", ReadDurable}, {"command-delivery", ReadDurable}}, Tier: Cold, MaxBytesCap: agentActuationKillsMaxBytesCap, DeadLetterKind: kindControlFact, Why: "tenant agent actuation kills"},
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).

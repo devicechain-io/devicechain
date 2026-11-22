@@ -798,11 +798,11 @@ type UpdateManagementConfiguration struct {
 
 // McpConfiguration contains FIXED MCP capability switches.
 type McpConfiguration struct {
-	// CommandProposals is RESERVED for agent command proposals and defaults OFF.
-	// Nothing reads it yet, so setting it changes nothing until the proposal path lands.
-	// Enable it only after the release rollout completes, in a separate config roll:
-	// every service strict-loads the whole instance document, so pods from an
-	// earlier release refuse this key.
+	// CommandProposals is FIXED, default off. Turns on agent command proposals (Preview).
+	// Enable it in an upgrade of its own after the release rollout completes:
+	// pods from an earlier release refuse this key. While it is off, command-delivery
+	// refuses command proposals and approvals; rejecting, reading, expiry and the kill
+	// path keep working.
 	CommandProposals bool
 }
 

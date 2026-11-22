@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-command-delivery/presence"
 	"github.com/devicechain-io/dc-command-delivery/processor"
 	"github.com/devicechain-io/dc-command-delivery/verify"
+	"github.com/devicechain-io/dc-microservice/actiongate"
 	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -56,7 +57,9 @@ var (
 	RosterConsumer *processor.RosterConsumer
 
 	// DeletionConsumer cancels commands covered by device-deletion facts.
-	DeletionConsumer *processor.DeletionConsumer
+	DeletionConsumer    *processor.DeletionConsumer
+	AgentKillConsumer   *processor.AgentKillConsumer
+	AgentProposalReaper *core.PeriodicTask
 
 	// The Prometheus instruments the two components above export. Both are built ONCE,
 	// in the initialize phase, and shared by every component the NATS manager's oncreate
@@ -259,7 +262,54 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	DeletionConsumer = processor.NewDeletionConsumer(Microservice, deletionReader, core.NewNoOpLifecycleCallbacks(), Api, deadLetters)
 	DeletionConsumer.Hold = newStoreHold("entity-deleted")
-	return DeletionConsumer.Initialize(context.Background())
+	if err := DeletionConsumer.Initialize(context.Background()); err != nil {
+		return err
+	}
+	// A rolling broker auth callout may not yet grant this new subscription.
+	// Bind in the consumer's background retry loop; a missing feed fails execution closed.
+	Api.KillFeed = model.NewKillFeed(0, nil)
+	AgentKillConsumer = processor.NewAgentKillConsumer(Microservice, nil, Api, Api.KillFeed, deadLetters)
+	AgentKillConsumer.BindReader = func() (messaging.MessageReader, error) {
+		return nmgr.NewReader(streams.AgentActuationKills)
+	}
+	return AgentKillConsumer.Initialize(context.Background())
+}
+
+// wireCommandProposals has no dependency on the service secret or service-token peers.
+func wireCommandProposals(infra mscfg.InfrastructureConfiguration) {
+	Api.CommandProposalsEnabled = infra.Mcp.CommandProposals
+	log.Info().Bool("enabled", Api.CommandProposalsEnabled).Msg("Agent command proposals (Preview)")
+	Api.AgentDecider = nil
+	if um := infra.UserManagement; um.Hostname != "" && um.Port != 0 {
+		Api.AgentDecider = actiongate.NewCallerDecider(um.Endpoint().GraphQLURL())
+	}
+	Api.ProposalTargets = nil
+	if dm := infra.DeviceManagement; dm.Hostname != "" && dm.Port != 0 {
+		Api.ProposalTargets = verify.NewProposalTargetReader(dm.Endpoint().GraphQLURL())
+	}
+}
+
+func initAgentProposalReaper() error {
+	AgentProposalReaper = core.NewPeriodicTask(Microservice.FunctionalArea, "agent-proposal-reaper", time.Minute,
+		func(ctx context.Context) error {
+			expired, err := Api.ExpireAgentProposals(ctx)
+			if err != nil {
+				log.Warn().Err(err).Msg("Could not expire agent command proposals")
+			} else {
+				log.Debug().Int64("expired", expired).Msg("Expired agent command proposals")
+			}
+			purged, purgeErr := Api.PurgeAgentProposals(ctx)
+			if purgeErr != nil {
+				log.Warn().Err(purgeErr).Msg("Could not purge decided agent command proposals")
+			} else {
+				log.Debug().Int64("purged", purged).Msg("Purged decided agent command proposals")
+			}
+			if err != nil {
+				return err
+			}
+			return purgeErr
+		}, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("agent_proposal_reaper"))
+	return AgentProposalReaper.Initialize(context.Background())
 }
 
 // newStoreHold builds the Holder that keeps a consumer's messages unacked, outside their
@@ -501,6 +551,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// ApplyDefaults) gives every enqueued command a terminal horizon when its creator
 			// supplies no explicit expiresAt (ADR-075 L4b).
 			Api = model.NewApi(RdbManager)
+			wireCommandProposals(infra)
+			if err := initAgentProposalReaper(); err != nil {
+				return err
+			}
 			Api.DefaultCommandTTL = time.Duration(Configuration.DefaultCommandTTLSeconds) * time.Second
 
 			// How many failed dispatches one command may accumulate before the release path stops
@@ -609,12 +663,28 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := DeletionConsumer.Start(ctx); err != nil {
 		return err
 	}
+	if err := AgentKillConsumer.Start(ctx); err != nil {
+		return err
+	}
+	if err := AgentProposalReaper.Start(ctx); err != nil {
+		return err
+	}
 	// Last: a pass creates batches, which hand commands to the processor started above.
 	return CampaignScheduler.Start(ctx)
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	if AgentProposalReaper != nil {
+		if err := AgentProposalReaper.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	if AgentKillConsumer != nil {
+		if err := AgentKillConsumer.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	// The scheduler first: it creates commands for the processor stopped below.
 	if CampaignScheduler != nil {
 		if err := CampaignScheduler.Stop(ctx); err != nil {
@@ -661,6 +731,16 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if AgentProposalReaper != nil {
+		if err := AgentProposalReaper.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if AgentKillConsumer != nil {
+		if err := AgentKillConsumer.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	if CampaignScheduler != nil {
 		if err := CampaignScheduler.Terminate(ctx); err != nil {
 			return err
