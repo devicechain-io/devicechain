@@ -64,7 +64,7 @@ func replacementTestApi(t *testing.T) (*Api, context.Context) {
 		&DeviceConfigurationRevision{}, &DeviceConfigurationReport{}, &DeviceConfigurationState{},
 		&AssetType{}, &Asset{},
 		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{},
-		&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupMembership{},
+		&EntityAttribute{}, &AttributeGeneration{}, &Alarm{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupMembership{},
 	), "migrate")
 	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
 		t.Fatal(err)

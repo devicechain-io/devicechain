@@ -591,6 +591,8 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 - 用已有 token 创建命令不会拒绝，而是返回原命令。参见[发送命令](../guides/sending-commands.md#issue-it)。
 - 删除仍被其他记录引用的记录会携带 `REFERENCE_VIOLATION`。参见[引用或值被拒绝](#reference-and-invalid-values)。
 
+对设备属性的写入如果发现其中某个属性被另一次写入占用，并且在五次短暂重试后仍然如此，会被拒绝，并将 `errors[*].extensions.code` 设为 `ATTRIBUTE_WRITE_BUSY`。它可能来自 `setEntityAttribute`、`deleteEntityAttribute`、`restoreDeviceConfiguration` 和 `copyDeviceConfiguration`。此时没有写入任何内容，可以安全地重试该请求。在升级滚动进行期间最可能出现这种情况，因为尚未升级的 pod 可能正在写入同一个属性。
+
 如果更新的前置条件（例如 `expectedUpdatedAt`）与记录不再一致（即在你读取之后有人修改了它），该更新会被拒绝，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。所有服务都以这种方式响应过时写入：连接器、仪表盘、AI 提供方、通知策略、客户类型、实体组、角色和告警均是如此。不会写入任何内容，消息与引入该代码之前相同：`<记录> was modified by another writer; reload and try again`，例如 `dashboard was modified by another writer; reload and try again`。`CONFLICT` 仍表示唯一值冲突，从不用于过时写入。请根据代码而非消息文本分类；`@devicechain/client` 中的 `isStaleWrite(err)` 会这样做，并在较旧的服务器上回退为匹配消息。控制台在所有带前置条件的保存中都会识别该代码。
 
 ### 引用或值被拒绝 {#reference-and-invalid-values}

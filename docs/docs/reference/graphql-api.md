@@ -726,6 +726,8 @@ Some refusals look similar and do not carry `CONFLICT`:
 - Deleting a record that other records still refer to carries `REFERENCE_VIOLATION`. See
   [A reference or a value that is refused](#reference-and-invalid-values).
 
+A write of a device's attributes that finds one of them held by another write, and keeps finding it after five short retries, is refused with `errors[*].extensions.code` set to `ATTRIBUTE_WRITE_BUSY`. It can come from `setEntityAttribute`, `deleteEntityAttribute`, `restoreDeviceConfiguration` and `copyDeviceConfiguration`. Nothing was written, and the request is safe to retry. It is most likely while an upgrade is rolling out, when a pod that has not been upgraded yet may be writing the same attribute.
+
 An update whose precondition, such as `expectedUpdatedAt`, no longer matches the record because someone changed it after you read it is refused with `errors[*].extensions.code` set to `STALE_WRITE`. Every service answers a stale write this way: connectors, dashboards, AI providers, notification policies, customer types, entity groups, roles and alarms alike. Nothing is written, and the message is the same as before the code existed: `<record> was modified by another writer; reload and try again`, such as `dashboard was modified by another writer; reload and try again`. `CONFLICT` continues to mean a uniqueness collision and is never used for a stale write. Classify by code rather than message text; `isStaleWrite(err)` in `@devicechain/client` does that, and falls back to the message for an older server. The console recognizes the code wherever it saves with a precondition.
 
 ### A reference or a value that is refused {#reference-and-invalid-values}

@@ -1255,6 +1255,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initConfigurationReportMaintenance(); err != nil {
 				return err
 			}
+			if err = initAttributeOrphanSweep(); err != nil {
+				return err
+			}
 			if err = initDecodeAccounting(); err != nil {
 				return err
 			}
@@ -1395,6 +1398,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err = ConfigurationReportMaintenance.Start(ctx); err != nil {
 		return err
 	}
+	if err = AttributeOrphanSweep.Start(ctx); err != nil {
+		return err
+	}
 
 	// Start flushing the payload decoders' health and failure samples.
 	if DecodeAccounting != nil {
@@ -1519,6 +1525,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := ConfigurationReportMaintenance.Stop(ctx); err != nil {
 		return err
 	}
+	if err := AttributeOrphanSweep.Stop(ctx); err != nil {
+		return err
+	}
 
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
@@ -1592,6 +1601,9 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		return err
 	}
 	if err := ConfigurationReportMaintenance.Terminate(ctx); err != nil {
+		return err
+	}
+	if err := AttributeOrphanSweep.Terminate(ctx); err != nil {
 		return err
 	}
 	if DecodeAccounting != nil {
