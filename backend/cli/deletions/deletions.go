@@ -12,6 +12,7 @@ package deletions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -217,6 +218,13 @@ func Wait(ctx context.Context, c Client, adminURL, token, epoch string, t Target
 		case <-time.After(every):
 		}
 	}
+}
+
+// PrintJSON writes one deletion as indented JSON: the record the text rendering shows.
+func PrintJSON(w io.Writer, d *Deletion) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(d)
 }
 
 // Print renders one deletion.
