@@ -77,6 +77,8 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/api_attribute_repairs.go": {"Api.DrainAttributeRepairs"},
 	// The configuration-report maintenance lists the tenants that have report history (no row is read), then removes orphans and expired rows under each tenant's own core.WithTenant.
 	"backend/services/device-management/model/api_configuration_report_maintenance.go": {"Api.configurationReportTenants"},
+	// The attribute orphan sweep lists the tenants that hold device attribute or generation rows (no row content is read), then removes each tenant's orphans under its own core.WithTenant.
+	"backend/services/device-management/model/api_attribute_orphans.go": {"Api.SweepAllDeviceAttributeOrphans"},
 	// The agent-effect relay lists the tenants that have queued effects, then drains each tenant's rows under core.WithTenant.
 	"backend/services/device-management/model/agent_effect_outbox.go":        {"Api.DrainAgentEffects"},
 	"backend/services/device-management/model/api_profile_decoder_health.go": {"Api.TrimDecoderHealth"},

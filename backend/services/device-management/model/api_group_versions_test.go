@@ -29,7 +29,7 @@ func newGroupVersionTestApi(t *testing.T) (*Api, context.Context) {
 	}
 	if err := db.AutoMigrate(&EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{},
 		&EntityGroupMembership{}, &EntityGroupFacetRef{},
-		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &EntityAttribute{}, &Alarm{},
+		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &EntityAttribute{}, &AttributeGeneration{}, &Alarm{},
 		&DetectionRule{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{}, &DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

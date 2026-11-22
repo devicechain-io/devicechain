@@ -40,7 +40,7 @@ func newDeleteEmitTestApi(t *testing.T) *Api {
 	// attributes, alarms, and (for a device) credentials before the row — so every
 	// table it touches must exist.
 	if err := db.AutoMigrate(&EntityGroupFacetRef{}, &Device{}, &DeviceType{}, &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{}, &IntegrationUnregisteredDevice{}, &DeviceConfigurationRevision{}, &DeviceConfigurationReport{}, &DeviceConfigurationState{}, &PendingSessionKick{}, &PendingRevocationKick{}, &PendingRevocationExpansion{}, &PendingRevocationExpansionSerial{},
-		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{}); err != nil {
+		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &EntityAttribute{}, &AttributeGeneration{}, &Alarm{}, &EntityGroupMembership{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {

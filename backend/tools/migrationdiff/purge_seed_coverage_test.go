@@ -126,6 +126,7 @@ var purgeSeedExemptions = map[string]string{
 	"device-management.device_revocation_lists":                  representedTenantPredicate,
 	"device-management.device_revoked_certificates":              representedTenantPredicate,
 	"device-management.device_trust_anchors":                     representedTenantPredicate,
+	"device-management.entity_attribute_generations":             representedTenantPredicate,
 	"device-management.entity_attributes":                        representedTenantPredicate,
 	"device-management.entity_group_facet_refs":                  representedTenantPredicate,
 	"device-management.entity_group_memberships":                 representedTenantPredicate,
