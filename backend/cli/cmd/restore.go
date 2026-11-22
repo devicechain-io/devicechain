@@ -14,9 +14,12 @@ func newRestoreCmd() *cobra.Command {
 	var from string
 	var plan, forceForeign bool
 	cmd := &cobra.Command{
-		Use:          "restore <instance> --from <backup-set> --plan",
-		Short:        "Verify a backup and print a read-only restore plan",
-		Long:         "Verify local backup bytes, identity and coverage before connecting to the installed instance.\nRead target stream state and blob bytes; refuse possible newer-data loss. No restore is applied.\nFreeze target writers while planning; this is an observation, not a reservation for a later apply.",
+		Use:   "restore <instance> --from <backup-set> --plan",
+		Short: "Verify a backup and print a read-only restore plan",
+		Long:  "Verify local backup bytes, identity and coverage before connecting to the installed instance.\nRead target stream state and blob bytes; refuse possible newer-data loss. No restore is applied.\nFreeze target writers while planning; this is an observation, not a reservation for a later apply.",
+		Example: `  dcctl restore acme --from ./acme-backup --plan
+  dcctl restore acme --from ./acme-backup --plan --kube-context prod
+  dcctl restore acme-copy --from ./acme-backup --plan --force-foreign`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

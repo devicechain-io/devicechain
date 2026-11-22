@@ -37,6 +37,14 @@ var commandsWithExamples = []string{
 	"dcctl instances break-glass mfa-reset",
 	"dcctl presence demote",
 	"dcctl preflight",
+	"dcctl install",
+	"dcctl bootstrap",
+	"dcctl upgrade",
+	"dcctl destroy",
+	"dcctl backup",
+	"dcctl backup inspect",
+	"dcctl restore",
+	"dcctl enable-area",
 }
 
 func TestCommandsListedHaveRealExamples(t *testing.T) {

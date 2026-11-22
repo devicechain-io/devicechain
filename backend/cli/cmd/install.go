@@ -260,6 +260,13 @@ Ingress object in the cluster still names its class: move each instance first wi
 
 Running it again converges. Changing its settings is refused while any instance runs on
 the cluster, with one exception: the connection budget may be raised.`,
+	Example: `  # a local kind cluster named "devicechain"
+  dcctl install local
+  # a small-footprint cluster, for a laptop
+  dcctl install local --compact
+  # an existing cluster (any cloud): dcctl never creates or deletes it
+  dcctl install local --kube-context prod
+  dcctl install local --kube-context prod --ha --dry-run`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		provider, err := bootstrap.Get(args[0])
