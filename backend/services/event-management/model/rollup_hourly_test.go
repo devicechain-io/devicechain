@@ -47,7 +47,8 @@ func TestHourlySpanOf(t *testing.T) {
 			if tc.floor != nil {
 				floor = *tc.floor
 			}
-			span, ok := hourlySpanOf(c, floor, tc.floor != nil)
+			complete := h0.Add(-100 * 24 * time.Hour)
+			span, ok := hourlySpanOf(c, floor, tc.floor != nil, complete)
 			if tc.from == nil {
 				assert.False(t, ok)
 				return
@@ -57,7 +58,7 @@ func TestHourlySpanOf(t *testing.T) {
 			assert.Equal(t, *tc.to, span.to)
 		})
 	}
-	_, ok := hourlySpanOf(MeasurementAggregationCriteria{IntervalSeconds: 3600}, time.Time{}, false)
+	_, ok := hourlySpanOf(MeasurementAggregationCriteria{IntervalSeconds: 3600}, time.Time{}, false, time.Time{})
 	assert.False(t, ok, "an unbounded read has no hour span")
 }
 
@@ -84,4 +85,20 @@ func TestMergeRollupPartialsAddsSharedBuckets(t *testing.T) {
 	assert.Equal(t, nf(2.5), got[0].Avg)
 	assert.False(t, got[1].Avg.Valid, "nothing counted: avg is NULL, as the minute query's NULLIF gives")
 	assert.False(t, got[1].Sum.Valid)
+}
+
+// Hours before the hour the aggregate is complete from are never the hour level's, whatever the
+// range asks: the aggregate holds nothing there, so reading it would answer with an empty history.
+func TestHourlySpanStartsAtTheCompleteFromHour(t *testing.T) {
+	h0 := time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC)
+	start, end := h0, h0.Add(9*time.Hour+59*time.Minute)
+	c := MeasurementAggregationCriteria{IntervalSeconds: 3600, StartTime: &start, EndTime: &end}
+
+	span, ok := hourlySpanOf(c, time.Time{}, false, h0.Add(4*time.Hour))
+	require.True(t, ok)
+	assert.Equal(t, h0.Add(4*time.Hour), span.from, "the span starts at the marker")
+	assert.Equal(t, h0.Add(10*time.Hour), span.to)
+
+	_, ok = hourlySpanOf(c, time.Time{}, false, h0.Add(24*time.Hour))
+	assert.False(t, ok, "a marker after the range leaves the whole read to the minute level")
 }

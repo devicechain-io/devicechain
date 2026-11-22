@@ -8,7 +8,10 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+
+	"gorm.io/gorm/schema"
 )
 
 // The hourly read path: a bucketed read whose interval is a whole number of hours is served from
@@ -29,6 +32,35 @@ import (
 
 const rollupHourSeconds = rollup1hBucketSeconds
 
+// rollupLevel is one row of rollup_levels: the instant from which a rollup level is complete.
+type rollupLevel struct {
+	Level        string
+	CompleteFrom time.Time
+}
+
+// TableName is rollup_levels under the functional-area prefix, derived through the namer.
+func (rollupLevel) TableName(namer schema.Namer) string { return namer.TableName("RollupLevel") }
+
+// rollup1hCompleteFrom is the hour from which the hour level holds every hour it should, and
+// false when the migration has not recorded one (the level is then not read at all). The
+// aggregate is created without history, so hours before this instant are the minute level's.
+// The value never changes once written, so it is read once and kept.
+func (api *Api) rollup1hCompleteFrom(ctx context.Context) (time.Time, bool, error) {
+	if cached := api.rollup1hFrom.Load(); cached != nil {
+		return *cached, true, nil
+	}
+	var rows []rollupLevel
+	if err := api.RDB.DB(ctx).Where("level = ?", rollup1hLevel).Limit(1).Find(&rows).Error; err != nil {
+		return time.Time{}, false, fmt.Errorf("reading the one-hour rollup's complete-from hour: %w", err)
+	}
+	if len(rows) == 0 {
+		return time.Time{}, false, nil
+	}
+	from := rows[0].CompleteFrom
+	api.rollup1hFrom.Store(&from)
+	return from, true, nil
+}
+
 // hourSpan is the half-open range [from, to) of whole hours the hour level serves for one read,
 // with the retention floor the read was planned under so both levels apply the same one.
 type hourSpan struct {
@@ -40,16 +72,26 @@ type hourSpan struct {
 // hourlySpan plans the hour level's share of a read, and reports false when it has none (the
 // interval is not a whole number of hours, or the range holds no whole hour), in which case the
 // whole read is the minute level's.
-func (api *Api) hourlySpan(criteria MeasurementAggregationCriteria) (hourSpan, bool) {
+func (api *Api) hourlySpan(ctx context.Context, criteria MeasurementAggregationCriteria) (hourSpan, bool, error) {
+	if criteria.IntervalSeconds < rollupHourSeconds || criteria.IntervalSeconds%rollupHourSeconds != 0 {
+		return hourSpan{}, false, nil
+	}
+	completeFrom, ok, err := api.rollup1hCompleteFrom(ctx)
+	if err != nil || !ok {
+		return hourSpan{}, false, err
+	}
 	floor, hasFloor := api.rollupRetentionFloor()
-	return hourlySpanOf(criteria, floor, hasFloor)
+	span, ok := hourlySpanOf(criteria, floor, hasFloor, completeFrom)
+	return span, ok, nil
 }
 
 // hourlySpanOf derives the span from the minute level's own bounds: its lower bound is the later
-// of the start (minute-floored) and the retention floor, its upper bound is the end,
+// of the start (minute-floored), the retention floor and the hour the level is complete from
+// (completeFrom, itself on an hour boundary), its upper bound is the end,
 // minute-floored and inclusive. An hour starting at h holds the minutes h .. h+59, so it lies
 // wholly inside the range when h >= lower and h+59min <= upper.
-func hourlySpanOf(criteria MeasurementAggregationCriteria, floor time.Time, hasFloor bool) (hourSpan, bool) {
+func hourlySpanOf(criteria MeasurementAggregationCriteria, floor time.Time, hasFloor bool,
+	completeFrom time.Time) (hourSpan, bool) {
 	if criteria.IntervalSeconds < rollupHourSeconds || criteria.IntervalSeconds%rollupHourSeconds != 0 ||
 		criteria.StartTime == nil || criteria.EndTime == nil {
 		return hourSpan{}, false
@@ -59,6 +101,9 @@ func hourlySpanOf(criteria MeasurementAggregationCriteria, floor time.Time, hasF
 	lower := criteria.StartTime.Truncate(minute)
 	if hasFloor && floor.After(lower) {
 		lower = floor
+	}
+	if completeFrom.After(lower) {
+		lower = completeFrom
 	}
 	from := ceilTo(lower, hour)
 	to := criteria.EndTime.Truncate(minute).Add(minute).Truncate(hour)
@@ -121,7 +166,7 @@ func (api *Api) bucketedMeasurementsFromHourly(ctx context.Context, criteria Mea
 	if criteria.Name == nil && len(middle) > 0 && len(edges) > 0 {
 		// Two sorted streams can only be interleaved by comparing names, and the database's
 		// collation is not Go's byte order. Ask the database for the order of the names in play.
-		rank, err := api.nameRank(ctx, criteria, span, merged)
+		rank, err := api.orderNames(ctx, merged)
 		if err != nil {
 			return nil, err
 		}
@@ -135,34 +180,31 @@ func (api *Api) bucketedMeasurementsFromHourly(ctx context.Context, criteria Mea
 	return derivePartialBuckets(merged), nil
 }
 
-// nameRank orders the measurement names of the read by the database's own ordering of the name
-// column, which is the order the minute level's ORDER BY name returns. The names come from the
-// hour level over every hour the read touches, where a name costs one row per hour, so a name in
-// any piece of the read is in the list.
-func (api *Api) nameRank(ctx context.Context, criteria MeasurementAggregationCriteria, span hourSpan,
-	rows []rollupPartial) (map[string]int, error) {
-	hour := time.Duration(rollupHourSeconds) * time.Second
-	minute := time.Duration(rollupBucketSeconds) * time.Second
-	lower := criteria.StartTime.Truncate(minute)
-	if span.hasFloor && span.floor.After(lower) {
-		lower = span.floor
+// orderNames ranks the measurement names of rows by the database's own ordering of text, the
+// order the minute level's ORDER BY name returns (the name column carries the database's
+// default collation, as does a bound text value). The names are sorted in the database from the
+// values themselves, so a name missing from any level cannot fail the read.
+func (api *Api) orderNames(ctx context.Context, rows []rollupPartial) (map[string]int, error) {
+	seen := map[string]struct{}{}
+	var args []any
+	for _, r := range rows {
+		if _, ok := seen[r.Name]; !ok {
+			seen[r.Name] = struct{}{}
+			args = append(args, r.Name)
+		}
 	}
-	var names []string
-	db := api.rollupFilters(ctx, criteria, &MeasurementRollupHourly{}, span.floor, false).
-		Where("bucket >= ? AND bucket <= ?", lower.Truncate(hour), criteria.EndTime.Truncate(minute))
-	if err := db.Distinct("name").Order("name ASC").Pluck("name", &names).Error; err != nil {
+	var ordered []struct{ Name string }
+	query := "SELECT n AS name FROM (VALUES " + strings.TrimSuffix(strings.Repeat("(?::text),", len(args)), ",") +
+		") AS v(n) ORDER BY n"
+	if err := api.RDB.DB(ctx).Raw(query, args...).Scan(&ordered).Error; err != nil {
 		return nil, fmt.Errorf("ordering measurement names: %w", err)
 	}
-	rank := make(map[string]int, len(names))
-	for i, n := range names {
-		rank[n] = i
+	if len(ordered) != len(args) {
+		return nil, fmt.Errorf("ordering measurement names returned %d of %d", len(ordered), len(args))
 	}
-	// Fail loudly rather than order a name arbitrarily: every name the read returned must be in
-	// the list that orders it.
-	for _, r := range rows {
-		if _, ok := rank[r.Name]; !ok {
-			return nil, fmt.Errorf("measurement name %q was read but is missing from the ordering read", r.Name)
-		}
+	rank := make(map[string]int, len(ordered))
+	for i, o := range ordered {
+		rank[o.Name] = i
 	}
 	return rank, nil
 }

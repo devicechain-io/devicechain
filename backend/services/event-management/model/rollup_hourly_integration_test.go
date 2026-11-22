@@ -54,6 +54,11 @@ func refreshRollupsNow(t *testing.T, sys *gorm.DB, views ...string) {
 	}
 }
 
+func setHourlyMarker(t *testing.T, sys *gorm.DB, at time.Time) {
+	t.Helper()
+	require.NoError(t, sys.Exec(`UPDATE "event-management".rollup_levels SET complete_from = ? WHERE level = '1h'`, at).Error)
+}
+
 func hourlyMaterialization(t *testing.T, sys *gorm.DB) string {
 	t.Helper()
 	var name string
@@ -85,6 +90,10 @@ func TestIntegrationHourlyReadEqualsTheMinuteLevel(t *testing.T) {
 	seedHourlyReadings(t, sys, "acme", hour0, now)
 	seedHourlyReadings(t, sys, "other", hour0, now) // a second tenant that must never leak in
 	refreshRollupsNow(t, sys, "measurement_rollups", "measurement_rollups_1h")
+	// The migration records the next hour boundary as the hour the aggregate is complete from, so a
+	// store just created reads everything from the minute level. Move the marker back, as it stands
+	// on a store that has run for a while, so the hour level serves the range under test.
+	setHourlyMarker(t, sys, hour0)
 
 	var materialized int64
 	require.NoError(t, sys.Table(hourlyMaterialization(t, sys)).Count(&materialized).Error)
@@ -131,7 +140,8 @@ func TestIntegrationHourlyReadEqualsTheMinuteLevel(t *testing.T) {
 			}
 			criteria := MeasurementAggregationCriteria{DeviceToken: &dev, Name: tc.metric,
 				IntervalSeconds: tc.interval, StartTime: tc.start, EndTime: tc.end}
-			_, span := api.hourlySpan(criteria)
+			_, span, err := api.hourlySpan(ctx, criteria)
+			require.NoError(t, err)
 			require.Equal(t, tc.wantHourlyShare, span, "the read's hour-level share")
 
 			want, err := api.bucketedMeasurementsFromMinuteRollup(ctx, criteria)
@@ -180,11 +190,37 @@ func assertSameBuckets(t *testing.T, want, got []MeasurementBucket) {
 	}
 }
 
-// TestIntegrationHourlyAggregateMaterializesExistingHistory upgrades a store that predates the
-// aggregate and already holds readings, and requires the history to be readable from the hour
-// level without waiting for a policy pass; then it replays the migration over the live
-// aggregate and requires the aggregate, its policy and its materialization to be left alone.
-func TestIntegrationHourlyAggregateMaterializesExistingHistory(t *testing.T) {
+type hourlyJob struct {
+	JobID            int64
+	ScheduleInterval string
+	Config           string
+	Scheduled        bool
+}
+
+func hourlyPolicyJob(t *testing.T, sys *gorm.DB) hourlyJob {
+	t.Helper()
+	var job hourlyJob
+	require.NoError(t, sys.Raw(`SELECT job_id, schedule_interval::text AS schedule_interval, config::text AS config, scheduled
+ FROM timescaledb_information.jobs
+ WHERE hypertable_schema = 'event-management' AND hypertable_name = 'measurement_rollups_1h'
+ AND proc_name = 'policy_refresh_continuous_aggregate'`).Scan(&job).Error)
+	require.NotZero(t, job.JobID, "the hour aggregate has no refresh policy")
+	return job
+}
+
+func hourlyMarker(t *testing.T, sys *gorm.DB) time.Time {
+	t.Helper()
+	var at time.Time
+	require.NoError(t, sys.Raw(`SELECT complete_from FROM "event-management".rollup_levels WHERE level = '1h'`).Scan(&at).Error)
+	return at
+}
+
+// TestIntegrationHourlyAggregateIsCreatedWithoutHistory upgrades a store that already holds
+// readings, some older than the policy's window, and requires the migration to be DDL only: the
+// aggregate starts empty, the marker is the next hour boundary, and reads of the old history
+// still equal the minute level. A planted defect that ignores the marker shows the history
+// missing. A replay over the live aggregate leaves its policy job and marker untouched.
+func TestIntegrationHourlyAggregateIsCreatedWithoutHistory(t *testing.T) {
 	inst := freshInstance(t, "ithourlyup")
 	id := NewRollup1hSchema().ID
 	before := newPostgresManagerWith(t, inst, migrationsBefore(t, id))
@@ -194,41 +230,91 @@ func TestIntegrationHourlyAggregateMaterializesExistingHistory(t *testing.T) {
  WHERE view_name = 'measurement_rollups_1h'`).Scan(&existing).Error)
 	require.Zero(t, existing, "the chain before the migration must not hold the aggregate")
 
-	now := time.Now().UTC().Truncate(time.Minute)
-	start := now.Truncate(time.Hour).Add(-50 * 24 * time.Hour) // older than the policy's 30-day window
-	seedHourlyReadings(t, sys, "acme", start, start.Add(5*time.Hour))
+	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
+	old := now.Truncate(time.Hour).Add(-50 * 24 * time.Hour) // older than the policy's 30-day window
+	seedHourlyReadings(t, sys, "acme", old, old.Add(5*time.Hour))
+	seedHourlyReadings(t, sys, "acme", now.Truncate(time.Hour).Add(-3*time.Hour), now)
 	refreshRollupsNow(t, sys, "measurement_rollups")
 
+	started := time.Now()
 	mgr := newPostgresManagerWith(t, inst, Migrations)
 	sys = systemDB(mgr)
+	t.Logf("the migration chain ran in %v", time.Since(started))
 	mat := hourlyMaterialization(t, sys)
-	var old int64
-	require.NoError(t, sys.Table(mat).Where("bucket < ?", now.Add(-40*24*time.Hour)).Count(&old).Error)
-	require.EqualValues(t, 4*5, old, "five hours of four names, materialized by the migration itself")
-	require.Len(t, hourlyRefreshPolicies(t, sys), 1)
-	var realTime bool
-	require.NoError(t, sys.Raw(`SELECT NOT materialized_only FROM timescaledb_information.continuous_aggregates
- WHERE view_name = 'measurement_rollups_1h'`).Scan(&realTime).Error)
-	assert.True(t, realTime, "the hour aggregate must be real-time")
+
+	var materialized int64
+	require.NoError(t, sys.Table(mat).Count(&materialized).Error)
+	assert.Zero(t, materialized, "the migration must not fill the aggregate")
+	marker := hourlyMarker(t, sys)
+	assert.True(t, marker.Equal(marker.Truncate(time.Hour)), "the marker is on an hour boundary: %v", marker)
+	assert.True(t, marker.After(started) && !marker.After(started.Add(time.Hour+time.Minute)),
+		"the marker is the next hour boundary: %v", marker)
+	job := hourlyPolicyJob(t, sys)
+	assert.Equal(t, "00:01:00", job.ScheduleInterval)
+	var interval string
+	require.NoError(t, sys.Raw(`SELECT d.time_interval::text FROM timescaledb_information.dimensions d
+ WHERE d.hypertable_schema = '_timescaledb_internal' AND d.hypertable_name = ?`, mat[len("_timescaledb_internal."):]).
+		Scan(&interval).Error)
+	assert.Equal(t, "7 days", interval, "the hour materialization's chunk width")
+
+	// Stand in for the policy's first passes: the watermark moves up over the trailing window, which
+	// materializes nothing before it. The 50-day-old hours are now below a watermark and absent
+	// from the aggregate, which is what an unfilled history looks like.
+	require.NoError(t, sys.Exec(`CALL refresh_continuous_aggregate('event-management.measurement_rollups_1h', ?::timestamptz, ?::timestamptz)`,
+		now.Add(-30*24*time.Hour), now.Truncate(time.Hour).Add(-time.Hour)).Error)
+
+	ctx := core.WithTenant(context.Background(), "acme")
+	dev := "meter-1"
+	start := old.Add(-time.Hour)
+	criteria := MeasurementAggregationCriteria{DeviceToken: &dev, IntervalSeconds: 3600, StartTime: &start, EndTime: &now}
+	api := NewApi(mgr)
+	want, err := api.bucketedMeasurementsFromMinuteRollup(ctx, criteria)
+	require.NoError(t, err)
+	require.NotEmpty(t, want)
+	got, err := api.BucketedMeasurements(ctx, criteria)
+	require.NoError(t, err)
+	assertSameBuckets(t, want, got)
+
+	// Planted defect: ignore the marker. The hour level has nothing for the old history, so the
+	// read must come back short; the comparison above is what catches it.
+	setHourlyMarker(t, sys, time.Unix(0, 0).UTC())
+	defective := NewApi(mgr)
+	short, err := defective.BucketedMeasurements(ctx, criteria)
+	require.NoError(t, err)
+	assert.Less(t, len(short), len(want), "a read that ignores the marker must lose the unfilled history")
+	setHourlyMarker(t, sys, marker)
 
 	// Replay: the migration run again over the live aggregate changes nothing.
-	var matName string
-	var jobID int64
-	snapshot := func() {
-		matName = hourlyMaterialization(t, sys)
-		require.NoError(t, sys.Raw(`SELECT job_id FROM timescaledb_information.jobs
- WHERE hypertable_schema = 'event-management' AND hypertable_name = 'measurement_rollups_1h'
- AND proc_name = 'policy_refresh_continuous_aggregate'`).Scan(&jobID).Error)
-	}
-	snapshot()
-	firstMat, firstJob := matName, jobID
 	require.NoError(t, NewRollup1hSchema().Migrate(mgr.Database.WithContext(core.WithSystemContext(context.Background()))))
-	snapshot()
-	assert.Equal(t, firstMat, matName, "a replay must not recreate the aggregate")
-	assert.Equal(t, firstJob, jobID, "a replay must not replace the policy")
-	var after int64
-	require.NoError(t, sys.Table(mat).Where("bucket < ?", now.Add(-40*24*time.Hour)).Count(&after).Error)
-	assert.EqualValues(t, old, after)
+	assert.Equal(t, mat, hourlyMaterialization(t, sys), "a replay must not recreate the aggregate")
+	assert.Equal(t, job, hourlyPolicyJob(t, sys), "a replay must not replace or alter the policy job")
+	assert.True(t, marker.Equal(hourlyMarker(t, sys)), "a replay must keep the first marker")
+}
+
+// TestIntegrationHourlyReadWithTheMinutePolicyStalled: the hour level is built from the minute
+// level's real-time view, so it is right even when the minute level has not been refreshed.
+func TestIntegrationHourlyReadWithTheMinutePolicyStalled(t *testing.T) {
+	mgr := newPostgresManager(t, freshInstance(t, "ithourlystall"))
+	sys := systemDB(mgr)
+	// Stop both policy jobs: nothing refreshes unless the test does it.
+	require.NoError(t, sys.Exec(`SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs
+ WHERE proc_name = 'policy_refresh_continuous_aggregate' AND hypertable_schema = 'event-management'`).Error)
+	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
+	hour0 := now.Truncate(time.Hour).Add(-6 * time.Hour)
+	seedHourlyReadings(t, sys, "acme", hour0, now)
+	refreshRollupsNow(t, sys, "measurement_rollups_1h") // the minute level is never refreshed
+	setHourlyMarker(t, sys, hour0)
+
+	api := NewApi(mgr)
+	ctx := core.WithTenant(context.Background(), "acme")
+	dev := "meter-1"
+	criteria := MeasurementAggregationCriteria{DeviceToken: &dev, IntervalSeconds: 3600, StartTime: &hour0, EndTime: &now}
+	want, err := api.bucketedMeasurementsFromMinuteRollup(ctx, criteria)
+	require.NoError(t, err)
+	require.NotEmpty(t, want)
+	got, err := api.BucketedMeasurements(ctx, criteria)
+	require.NoError(t, err)
+	assertSameBuckets(t, want, got)
 }
 
 // TestIntegrationRetentionReachesTheHourlyAggregate: the reconciler gives the hour aggregate the

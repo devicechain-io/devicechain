@@ -317,7 +317,7 @@ func (s *TailSweeper) refreshWindow(ctx context.Context, db *gorm.DB, win chunkW
 		if s.refresh != nil {
 			err = s.refresh(ctx, db, win.Start, win.End)
 		} else {
-			err = refreshRollups(db, win.Start, win.End)
+			err = refreshRollups(db, win.Start, win.End, tailWindowTimeout)
 		}
 		if err == nil {
 			s.metrics.RefreshSeconds.Observe(s.now().Sub(started).Seconds())

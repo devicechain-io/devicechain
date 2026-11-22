@@ -16,6 +16,8 @@ ALTER TABLE ONLY "event-management".events
  ADD CONSTRAINT events_pkey PRIMARY KEY (tenant_id, occurred_time, event_id);
 ALTER TABLE ONLY "event-management".purged_tenants
  ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
+ALTER TABLE ONLY "event-management".rollup_levels
+ ADD CONSTRAINT rollup_levels_pkey PRIMARY KEY (level);
 ALTER TABLE ONLY "event-management".tenant_usage_daily
  ADD CONSTRAINT tenant_usage_daily_pkey PRIMARY KEY (tenant_id, day);
 ALTER TABLE ONLY "event-management".tenant_usage_devices
@@ -211,6 +213,10 @@ CREATE TABLE "event-management".purged_tenants (
  epoch timestamp with time zone NOT NULL,
  planted_at timestamp with time zone NOT NULL,
  completed_at timestamp with time zone
+);
+CREATE TABLE "event-management".rollup_levels (
+ level character varying(32) NOT NULL,
+ complete_from timestamp with time zone NOT NULL
 );
 CREATE TABLE "event-management".state_change_events (
  tenant_id character varying(128) NOT NULL,
@@ -408,4 +414,4 @@ TIMESCALE HYPERTABLE location_events DIMENSION occurred_time INTERVAL 7 days COM
 TIMESCALE HYPERTABLE measurement_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE state_change_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE POLICY policy_refresh_continuous_aggregate ON measurement_rollups SCHEDULE 00:01:00 CONFIG {"end_offset": "00:01:00", "start_offset": "30 days", "mat_hypertable_id": N};
-TIMESCALE POLICY policy_refresh_continuous_aggregate ON measurement_rollups_1h SCHEDULE 00:05:00 CONFIG {"end_offset": "01:00:00", "start_offset": "30 days", "mat_hypertable_id": N};
+TIMESCALE POLICY policy_refresh_continuous_aggregate ON measurement_rollups_1h SCHEDULE 00:01:00 CONFIG {"end_offset": "01:00:00", "start_offset": "30 days", "mat_hypertable_id": N};

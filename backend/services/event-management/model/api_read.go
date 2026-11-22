@@ -554,7 +554,11 @@ func (api *Api) rawMeasurementScope(ctx context.Context, criteria MeasurementAgg
 // A read whose interval is a whole number of hours takes the hour level for the hours its
 // range holds whole (see rollup_hourly.go) and returns the same result.
 func (api *Api) bucketedMeasurementsFromRollup(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
-	if span, ok := api.hourlySpan(criteria); ok {
+	span, ok, err := api.hourlySpan(ctx, criteria)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
 		return api.bucketedMeasurementsFromHourly(ctx, criteria, span)
 	}
 	return api.bucketedMeasurementsFromMinuteRollup(ctx, criteria)

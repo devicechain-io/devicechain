@@ -55,21 +55,51 @@ var rollup1hCreateStmt = fmt.Sprintf(`CREATE MATERIALIZED VIEW "event-management
 	GROUP BY tenant_id, device_token, event_type, name, time_bucket(INTERVAL '%[1]d seconds', bucket)
 	WITH NO DATA;`, rollup1hBucketSeconds)
 
+// rollupLevelsDDL is this migration's own snapshot of the table that records, per rollup level,
+// the instant from which the level is complete. It names no tenant and holds no tenant's figures.
+const rollupLevelsDDL = `CREATE TABLE IF NOT EXISTS "event-management".rollup_levels (
+	level varchar(32) PRIMARY KEY,
+	complete_from timestamptz NOT NULL
+)`
+
+// rollup1hLevel names the hour level's row in rollup_levels.
+const rollup1hLevel = "1h"
+
+// rollup1hMarkerStmt records the hour the aggregate is complete from: the next hour boundary
+// after the moment the migration runs, in UTC so a server zone with a half-hour offset cannot
+// move it off the hour. DO NOTHING keeps the first marker on a replay.
+const rollup1hMarkerStmt = `INSERT INTO "event-management".rollup_levels (level, complete_from)
+	VALUES ('1h', (date_trunc('hour', now() AT TIME ZONE 'UTC') + INTERVAL '1 hour') AT TIME ZONE 'UTC')
+	ON CONFLICT (level) DO NOTHING`
+
+// rollup1hChunkInterval is the hour materialization's chunk width, set explicitly so a retention
+// job drops its chunks on time.
+const rollup1hChunkInterval = "7 days"
+
 // NewRollup1hSchema creates the one-hour continuous aggregate over measurement_rollups, its
-// refresh policy and its initial materialization.
+// refresh policy and the marker that says from when it is complete. It is DDL ONLY.
 //
-// 🔴 RE-RUNNABLE, WITHOUT RECOMPUTING HISTORY ON A REPLAY. Migrations run with UseTransaction:false
-// and replay from the top after a failure, and create_materialized_view and the refresh cannot
-// run in a transaction. The aggregate is created only when absent, the ALTER and the policy
-// are idempotent, and the full-history refresh runs only while the aggregate has no refresh
-// policy: the policy is the last step, so "no policy" means the run that created the aggregate
-// never finished, and a replay of a finished migration over a live store does not pay for the
-// whole history again.
+// 🔴 IT DOES NOT FILL THE AGGREGATE, AND THAT IS THE DESIGN. A startup migration has a bounded
+// window (the startup probe), and a refresh over a store's whole history is not bounded by it:
+// the baseline's own comment measures ~90 s per 300k rows, and the refresh errors (55P03) when
+// it meets the policy job's. So the aggregate is created WITH NO DATA and the policy maintains
+// it from the moment it exists. History from before then is never filled by this migration, and
+// the read path knows it: rollup_levels records the hour the aggregate is complete from, and
+// the hour level is read only at or after that hour. Anything older is read from the minute
+// level, exactly as before the aggregate existed, so an unfilled history never reads as empty.
+// A follow-up may fill history in the background and move the marker back.
+//
+// Every statement is re-runnable (this area's migrations run with UseTransaction:false and
+// replay from the top): the table and the aggregate are created only when absent, the ALTER,
+// the chunk interval and the policy are idempotent, and the marker keeps its first value.
 func NewRollup1hSchema() *gormigrate.Migration {
 	const view = `"event-management"."measurement_rollups_1h"`
 	return &gormigrate.Migration{
 		ID: "20261122030000",
 		Migrate: func(tx *gorm.DB) error {
+			if err := tx.Exec(rollupLevelsDDL).Error; err != nil {
+				return fmt.Errorf("create rollup_levels: %w", err)
+			}
 			var existing int64
 			if err := tx.Raw(`SELECT count(*) FROM timescaledb_information.continuous_aggregates ` +
 				`WHERE view_schema = 'event-management' AND view_name = 'measurement_rollups_1h'`).
@@ -85,33 +115,31 @@ func NewRollup1hSchema() *gormigrate.Migration {
 				` SET (timescaledb.materialized_only = false);`).Error; err != nil {
 				return err
 			}
-
-			var policies int64
-			if err := tx.Raw(`SELECT count(*) FROM timescaledb_information.jobs ` +
-				`WHERE hypertable_schema = 'event-management' AND hypertable_name = 'measurement_rollups_1h' ` +
-				`AND proc_name = 'policy_refresh_continuous_aggregate'`).
-				Scan(&policies).Error; err != nil {
-				return fmt.Errorf("look for the measurement_rollups_1h refresh policy: %w", err)
+			// The materialization's default chunk width is a multiple of the level beneath's,
+			// which is itself ten raw chunks, so a retention window would drop its chunks
+			// months late. Chunks of a week keep that to a week.
+			if err := tx.Exec(`SELECT set_chunk_time_interval('event-management.measurement_rollups_1h', ` +
+				`INTERVAL '` + rollup1hChunkInterval + `');`).Error; err != nil {
+				return fmt.Errorf("set the measurement_rollups_1h chunk interval: %w", err)
 			}
-			if policies == 0 {
-				// Materialize all existing history once; the policy below maintains only a
-				// trailing window. NULL, NULL is the entire range.
-				if err := tx.Exec(`CALL refresh_continuous_aggregate(` +
-					`'event-management.measurement_rollups_1h', NULL, NULL);`).Error; err != nil {
-					return err
-				}
-			}
-			// The window ends one bucket back so the hour still filling is left to real-time
-			// aggregation; late writes inside the window are picked up on the next pass.
-			return tx.Exec(fmt.Sprintf(`SELECT add_continuous_aggregate_policy(`+
+			// Every minute, like the level beneath: the window ends one bucket back so the hour
+			// still filling is left to real-time aggregation, and an hour closed by a late
+			// write is corrected within the minute.
+			if err := tx.Exec(fmt.Sprintf(`SELECT add_continuous_aggregate_policy(`+
 				`'event-management.measurement_rollups_1h',`+
 				` start_offset => INTERVAL '%d days',`+
 				` end_offset => INTERVAL '%d seconds',`+
-				` schedule_interval => INTERVAL '5 minutes',`+
-				` if_not_exists => true);`, rollup1hWindowDays, rollup1hBucketSeconds)).Error
+				` schedule_interval => INTERVAL '1 minute',`+
+				` if_not_exists => true);`, rollup1hWindowDays, rollup1hBucketSeconds)).Error; err != nil {
+				return err
+			}
+			return tx.Exec(rollup1hMarkerStmt).Error
 		},
 		Rollback: func(tx *gorm.DB) error {
-			return tx.Exec(`DROP MATERIALIZED VIEW IF EXISTS ` + view + `;`).Error
+			if err := tx.Exec(`DROP MATERIALIZED VIEW IF EXISTS ` + view + `;`).Error; err != nil {
+				return err
+			}
+			return tx.Exec(`DROP TABLE IF EXISTS "event-management".rollup_levels;`).Error
 		},
 	}
 }

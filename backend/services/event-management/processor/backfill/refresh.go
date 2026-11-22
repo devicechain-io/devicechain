@@ -28,8 +28,22 @@ const (
 // sees what the minute refresh has already put there. The aggregates' own policies reach only a
 // trailing window, so a refresh of older history that stopped at the minute level would leave
 // the hour level answering with what it had before.
-func refreshRollups(db *gorm.DB, start, end time.Time) error {
+//
+// budget is the window's whole allowance, not each statement's: each statement runs under a
+// statement_timeout of what is left of it, so two statements cannot take twice the time the
+// window was given. A spent budget is reported as a statement timeout (57014), which is how the
+// callers already classify a window that ran out.
+func refreshRollups(db *gorm.DB, start, end time.Time, budget time.Duration) error {
+	began := time.Now()
 	for _, view := range []string{rollupView, rollupViewHourly} {
+		left := budget - time.Since(began)
+		if left <= 0 {
+			return &pgconn.PgError{Code: "57014", Message: "the window's refresh budget was spent on the minute aggregate"}
+		}
+		if err := db.Exec(`SELECT set_config('statement_timeout', ?, false)`,
+			fmt.Sprintf("%d", left.Milliseconds())).Error; err != nil {
+			return err
+		}
 		if err := db.Exec(`CALL refresh_continuous_aggregate(?::regclass, ?::timestamptz, ?::timestamptz)`,
 			view, start, end).Error; err != nil {
 			return err
@@ -111,7 +125,7 @@ func (r *jobRun) refreshWindow(ctx context.Context, win chunkWindow) error {
 		if w.hooks.refresh != nil {
 			err = w.hooks.refresh(ctx, r.db, win.Start, win.End)
 		} else {
-			err = refreshRollups(r.db, win.Start, win.End)
+			err = refreshRollups(r.db, win.Start, win.End, refreshTimeout)
 		}
 		if err == nil {
 			w.metrics.RefreshSeconds.Observe(w.now().Sub(started).Seconds())
