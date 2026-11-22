@@ -552,6 +552,13 @@ var bootstrapCmd = &cobra.Command{
 			fmt.Println(color.YellowString("[dry-run] %v\n"+
 				"  The plan below assumes the operator this release expects.", err))
 		}
+		if !opts.DryRun {
+			if err := bootstrap.CheckPendingOperation(ctx, binding.KubeContext, opts.Instance, "a bootstrap"); err != nil {
+				return err
+			}
+		} else {
+			fmt.Println(color.YellowString("[dry-run] skipping the pending-operation lookup; this is detection, not a lock."))
+		}
 		// Set on a dry run too: the rehearsal reads the cluster's Secrets back, and asks
 		// whether each is THIS cluster's, which needs its identity. Nothing a dry run does
 		// writes it anywhere.

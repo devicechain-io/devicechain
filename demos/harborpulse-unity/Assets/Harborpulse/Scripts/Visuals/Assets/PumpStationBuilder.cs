@@ -37,7 +37,7 @@ namespace DeviceChain.Harborpulse.Visuals
             Marker(r, m, "LowCutoff", 0.8f, m.Steel, "low cut-off 0.8 m", 0, new Color(0.62f, 0.68f, 0.74f));
             Marker(r, m, "HighMarker", 2.5f, m.Major, "wet-well-high 2.5 m (rule)", 0, new Color(1f, 0.62f, 0.2f));
             Marker(r, m, "FloatMarker", 3.2f, m.GaugeBoard, "float start 3.2 m (pump's own)", 0, new Color(0.92f, 0.92f, 0.88f));
-            Marker(r, m, "AttributeMarker", 0, m.Minor, "well_alarm_m (platform attribute, MINOR rule)", -1.9f, new Color(1f, 0.85f, 0.35f));
+            Marker(r, m, "AttributeMarker", 0, m.Minor, "well_alarm_m (platform attribute, MINOR rule)", -1.9f, new Color(1f, 0.85f, 0.35f), -AttributeTagDropM);
             r["AttributeMarker"].gameObject.SetActive(false);
             r.Part("Float", new MeshKit().Ball(Vector3.zero, 0.18f), m.WorldCue, c + new Vector3(1.3f, 3.2f, 0));
             r.Part("FloatChain", new MeshKit().Cylinder(Vector3.zero, 0.025f, 1.2f, 6), m.Steel, c + new Vector3(1.3f, 3.2f, 0));
@@ -78,10 +78,15 @@ namespace DeviceChain.Harborpulse.Visuals
             r.MergeFixed("Door", "DischargePipe", "CabinetLouvresAndValve");
             return r;
         }
-        static void Marker(AssetRig r, HarborMaterials m, string name, float level, Material material, string text, float tagX, Color tagColour)
+        /// <summary>
+        /// The attribute rule's tag hangs this far under its own ring. The rule's level is the tenant's (it moves in the day) and stands at
+        /// or near one of the three fixed levels, whose tags are written at their rings: at the same height the two tags were one smear.
+        /// </summary>
+        public const float AttributeTagDropM = .8f;
+        static void Marker(AssetRig r, HarborMaterials m, string name, float level, Material material, string text, float tagX, Color tagColour, float tagY = 0)
         {
             var t = r.Part(name, new MeshKit().Ring(Vector3.zero, 2.24f, 0.06f), material, new Vector3((float)WellFootprint.LocalX, WellFloor + level, (float)WellFootprint.LocalZ));
-            AssetRig.Tag(text, t, new Vector3(tagX, 0.08f, 2.5f), 0.10f, tagColour);
+            AssetRig.Tag(text, t, new Vector3(tagX, 0.08f + tagY, 2.5f), 0.10f, tagColour);
         }
     }
 }

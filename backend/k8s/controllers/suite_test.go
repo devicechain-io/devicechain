@@ -39,6 +39,7 @@ var _ = BeforeSuite(func() {
 		ErrorIfCRDPathMissing: true,
 	}
 
+	testEnv.ControlPlane.GetAPIServer().Configure().Set("authorization-mode", "RBAC")
 	cfg, err := testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(cfg).NotTo(BeNil())

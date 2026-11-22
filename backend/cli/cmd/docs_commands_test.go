@@ -1310,6 +1310,9 @@ func TestDocsGatePassesWhatIsReal(t *testing.T) {
 		"dcctl <command> --help",
 		"dcctl bootstrap <provider> <instance>",
 		"dcctl sim",
+		"dcctl executor enroll --owner ops --image ghcr.io/devicechain-io/operator@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --escrow-dir /owner/escrow --dry-run",
+		"dcctl executor status --kube-context prod",
+		"dcctl executor unenroll --kube-context prod --force",
 		"cat <<EOF > notes.txt",
 		"dcctl frobnicate inside a heredoc is data",
 		"EOF",
@@ -1337,8 +1340,8 @@ func TestDocsGatePassesWhatIsReal(t *testing.T) {
 	if len(s.findings) != 0 {
 		t.Fatalf("real commands were rejected:\n%s", findingTexts(s))
 	}
-	if s.dcctlChecked != 7 {
-		t.Errorf("checked %d dcctl invocations, want 7 (a non-shell fence or comment was read, or a real one was lost)", s.dcctlChecked)
+	if s.dcctlChecked != 10 {
+		t.Errorf("checked %d dcctl invocations, want 10 (a non-shell fence or comment was read, or a real one was lost)", s.dcctlChecked)
 	}
 	if len(s.dcctlSkipped) != 1 {
 		t.Errorf("skipped %v, want only the `dcctl <command> --help` template", s.dcctlSkipped)

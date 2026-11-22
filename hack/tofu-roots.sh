@@ -37,8 +37,15 @@
 # or a move to deploy/opentofu/{cluster,instance}/ with modules/ shared — without
 # this file having to know which was chosen.
 #
+# `--all` WIDENS the walk to the whole of deploy/ and is for the gates that must
+# cover roots dcctl does not embed (deploy/gke, deploy/playground, deploy/fleet/*).
+# The default output is UNCHANGED, because the install-root gates rely on it. It
+# also skips the directories that hold .tf files without being roots:
+# tests, fixtures and premises (test inputs and records) as well as modules.
+#
 # Usage:
-#   hack/tofu-roots.sh                 # print the roots
+#   hack/tofu-roots.sh                 # print the install roots (deploy/opentofu)
+#   hack/tofu-roots.sh --all           # print every root under deploy/
 #   hack/tofu-roots.sh --tree <dir>    # discover under <dir> instead (tests)
 #   hack/tofu-roots.sh --self-test     # prove discovery can fail
 #
@@ -52,14 +59,20 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# The segments that never make a directory a root. The default keeps its original
+# pair; --all adds the directories that hold .tf files as test inputs or records.
+DEFAULT_EXCLUDE='(^|/)(modules|\.terraform)(/|$)'
+ALL_EXCLUDE='(^|/)(modules|tests|fixtures|premises|\.terraform)(/|$)'
+
 discover() {
 	local tree="$1"
+	local exclude="${2:-$DEFAULT_EXCLUDE}"
 	[ -d "$tree" ] || return 0
 	# -print on the .tf file, then take its directory: a directory qualifies by
 	# holding a .tf, not by being named anything in particular.
 	find "$tree" -type f -name '*.tf' -print 2>/dev/null |
 		while IFS= read -r f; do dirname "$f"; done |
-		grep -v -E '(^|/)(modules|\.terraform)(/|$)' |
+		grep -v -E "$exclude" |
 		sort -u
 }
 
@@ -112,6 +125,34 @@ self_test() {
 		rc=1
 	fi
 
+	# 5. --all: a root under a `fleet` tree, beside a root that is not in the install
+	#    tree, is found; the default mode must not report either (its output is relied
+	#    on by the install-root gates); tests, fixtures, premises and .terraform
+	#    directories are never roots.
+	mkdir -p "$tmp/all/opentofu" "$tmp/all/gke/tests" "$tmp/all/gke/fixtures" 		"$tmp/all/fleet/gke-gcs/tests" "$tmp/all/fleet/premises" 		"$tmp/all/fleet/gke-gcs/.terraform/modules" "$tmp/all/opentofu/modules/x"
+	for d in opentofu gke gke/tests gke/fixtures fleet/gke-gcs fleet/gke-gcs/tests 		fleet/premises fleet/gke-gcs/.terraform/modules opentofu/modules/x; do
+		echo 'variable "z" {}' >"$tmp/all/$d/main.tf"
+	done
+	want="$(printf '%s
+' "$tmp/all/fleet/gke-gcs" "$tmp/all/gke" "$tmp/all/opentofu" | sort)"
+	got="$(roots_or_die "$tmp/all" "$ALL_EXCLUDE" 2>/dev/null || true)"
+	if [ "$got" != "$want" ]; then
+		echo "SELF-TEST FAIL: --all expected [$want], got [$got]" >&2
+		rc=1
+	fi
+	got="$(discover "$tmp/all" | sort)"
+	want="$(printf '%s
+' "$tmp/all/fleet/gke-gcs" "$tmp/all/fleet/gke-gcs/tests" "$tmp/all/fleet/premises" "$tmp/all/gke" "$tmp/all/gke/fixtures" "$tmp/all/gke/tests" "$tmp/all/opentofu" | sort)"
+	if [ "$got" != "$want" ]; then
+		echo "SELF-TEST FAIL: the default mode's exclusions changed; got [$got]" >&2
+		rc=1
+	fi
+	# --all must also fail on an empty tree.
+	if roots_or_die "$tmp/none-at-all" "$ALL_EXCLUDE" >/dev/null 2>&1; then
+		echo "SELF-TEST FAIL: --all reported success on an empty tree" >&2
+		rc=1
+	fi
+
 	if [ "$rc" -eq 0 ]; then
 		echo "SELF-TEST PASS: discovery finds roots, excludes modules, and fails on an empty tree"
 	fi
@@ -120,8 +161,9 @@ self_test() {
 
 roots_or_die() {
 	local tree="$1"
+	local exclude="${2:-$DEFAULT_EXCLUDE}"
 	local out
-	out="$(discover "$tree")"
+	out="$(discover "$tree" "$exclude")"
 	if [ -z "$out" ]; then
 		echo "FAIL: no OpenTofu roots found under $tree." >&2
 		echo "      Every gate that iterates over roots would now check NOTHING and report" >&2
@@ -141,6 +183,9 @@ case "${1:-}" in
 		exit 1
 	}
 	roots_or_die "$2"
+	;;
+--all)
+	roots_or_die "$repo_root/deploy" "$ALL_EXCLUDE" | sed "s#^$repo_root/##"
 	;;
 "")
 	roots_or_die "$repo_root/deploy/opentofu" | sed "s#^$repo_root/##"

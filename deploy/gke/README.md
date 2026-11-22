@@ -7,6 +7,16 @@ and its node pools and nothing inside them. DeviceChain is then installed with
 It is an OpenTofu (or Terraform) configuration of its own. It keeps its own state,
 and `dcctl` neither reads it nor ships it.
 
+> **Do not apply a state from an older checkout once it has been applied from this one.** The
+> cluster, its node pools and the wait for the cluster's operations are defined in
+> `../opentofu/modules/gke-cluster`, shared with the fleet configurations. A state applied by an
+> earlier checkout moves to the module's addresses on its next `tofu apply` (a plan shows each
+> resource as a move and plans nothing else). After that, an OLDER checkout no longer finds its
+> resources where it expects them, so it would plan to **delete the cluster and create a new one**.
+> If several people or load-test lanes share one state, update every checkout before the first
+> apply. `tofu plan` before every `apply` shows it: a healthy plan after the move has no create or
+> destroy lines at all.
+
 ## What it creates
 
 | Resource | Default |
@@ -252,14 +262,14 @@ cluster.
 
 A transient error from the Google Cloud API while the cluster is created, such as
 a timeout or a server error, can leave OpenTofu marking the cluster *tainted*. The
-next plan then says `google_container_cluster.this` "is tainted, so must be
+next plan then says `module.gke_cluster.google_container_cluster.this` "is tainted, so must be
 replaced": the apply would destroy and recreate it, which takes another 10 to 15
 minutes and loses anything installed on it. If the cluster itself came up
 (`gcloud container clusters list` shows it `RUNNING`) and the plan shows the
 cluster as the only thing to replace, clear the mark instead:
 
 ```bash
-tofu untaint google_container_cluster.this
+tofu untaint module.gke_cluster.google_container_cluster.this
 gcloud container node-pools list --cluster devicechain --location us-east4-b
 ```
 

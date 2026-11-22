@@ -48,5 +48,6 @@ var (
 		NewDeviceGateDeletedSchema(),
 		NewDeviceIncarnationSchema(),
 		NewCommandCauseSchema(),
+		NewAgentCommandProposalsSchema(),
 	}
 )

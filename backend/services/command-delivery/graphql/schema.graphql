@@ -223,6 +223,28 @@ type Command implements Model & TokenReference & MetadataEntity {
     some customers never sees it.
     """
     cause: CommandCause
+    """(Preview: may change in a minor release.) The recorded detection or proposal cause, null when absent or not visible to this caller."""
+    causeDetails: CommandCauseDetails
+    """(Preview: may change in a minor release.) The originating proposal, visible only to unscoped human command readers. A link grants no read authority."""
+    proposal: AgentProposalReference
+}
+
+"""(Preview: may change in a minor release.) The recorded detection or proposal that caused a command."""
+type CommandCauseDetails {
+    """(Preview: may change in a minor release.) ALARM, RULE or PROPOSAL."""
+    kind: String!
+    """(Preview: may change in a minor release.) The authoritative proposal token, null for detection causes."""
+    proposalId: String
+    """(Preview: may change in a minor release.) The legacy detection cause, null for proposals."""
+    detection: CommandCause
+}
+
+"""(Preview: may change in a minor release.) An owner-qualified proposal link; the owner separately enforces read authority."""
+type AgentProposalReference {
+    """(Preview: may change in a minor release.) The proposal owner, always command-delivery."""
+    area: String!
+    """(Preview: may change in a minor release.) The proposal's server-generated token."""
+    token: String!
 }
 
 """
