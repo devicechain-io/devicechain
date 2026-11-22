@@ -24,6 +24,7 @@ import (
 	"github.com/devicechain-io/dc-simulator/cmdreceiver"
 	"github.com/devicechain-io/dc-simulator/x509sim"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	mqttpackets "github.com/eclipse/paho.mqtt.golang/packets"
 )
 
 type s6CompletedToken struct {
@@ -42,6 +43,7 @@ type s6WireClient struct {
 	bodies        [][]byte
 	disconnects   int
 	refuseConnect bool
+	connectErr    error
 }
 
 func (c *s6WireClient) IsConnectionOpen() bool { return !c.refuseConnect }
@@ -50,7 +52,10 @@ func (c *s6WireClient) Connect() mqtt.Token {
 	close(done)
 	var err error
 	if c.refuseConnect {
-		err = errors.New("certificate refused")
+		err = mqttpackets.ConnErrors[mqttpackets.ErrRefusedNotAuthorised]
+		if c.connectErr != nil {
+			err = c.connectErr
+		}
 	}
 	return s6CompletedToken{done: done, err: err}
 }
@@ -456,5 +461,210 @@ func TestHarborpulseS6OldStateEndpointAndSceneSlots(t *testing.T) {
 			t.Fatalf("scene slot reused: %s", key)
 		}
 		seen[key] = true
+	}
+}
+
+func TestS6PullRetriesWorkHiddenAfterAck(t *testing.T) {
+	for _, failAt := range []string{"ack", "response"} {
+		t.Run(failAt, func(t *testing.T) {
+			s := harborWith(t)
+			d := DeviceInstance{Token: HarborpulsePullLights()[0], CredentialId: "secret"}
+			s.s6.dims = map[string]float64{d.Token: 100}
+			hidden, failed, completed := false, false, false
+			acks, responses := 0, 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Host != "ingress.test" {
+					t.Errorf("Host=%q, want ingress.test", r.Host)
+				}
+				if r.Method == http.MethodGet {
+					if hidden {
+						_, _ = io.WriteString(w, `{"commands":[]}`)
+					} else {
+						_, _ = io.WriteString(w, `{"commands":[{"token":"cmd","name":"set-dim","payload":{"level_pct":35}}]}`)
+					}
+					return
+				}
+				stage := "response"
+				if strings.HasSuffix(r.URL.Path, "/ack") {
+					stage, hidden = "ack", true // Server committed even if its reply is lost.
+					acks++
+				} else {
+					responses++
+				}
+				if stage == failAt && !failed {
+					failed = true
+					w.WriteHeader(503)
+					return
+				}
+				if stage == "response" {
+					completed = true
+				}
+				w.WriteHeader(204)
+			}))
+			defer srv.Close()
+			rt := &Runtime{InstanceId: "i", Tenant: "t", HostHeader: "ingress.test", HTTPClient: srv.Client(), Endpoints: Endpoints{Ingress: srv.URL}}
+			if err := s.pollS6Lamp(context.Background(), rt, d); err == nil {
+				t.Fatal("lost reply was hidden")
+			}
+			if err := s.pollS6Lamp(context.Background(), rt, d); err != nil {
+				t.Fatal(err)
+			}
+			if !completed || s.s6.dims[d.Token] != 35 || acks != 2 {
+				t.Fatalf("completed=%t dim=%v acks=%d responses=%d", completed, s.s6.dims[d.Token], acks, responses)
+			}
+		})
+	}
+}
+
+func TestS6TransportFailureIsNotCertificateRefusal(t *testing.T) {
+	s := harborWith(t)
+	st, err := x509sim.OpenOrMint(t.TempDir(), x509sim.Options{Prefix: harborX509Prefix, Pinned: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.s6.pki = st
+	s.s6.initialized, s.s6.configured, s.s6.revoked = true, true, true
+	s.s6.newMQTT = func(*mqtt.ClientOptions) mqtt.Client {
+		return &s6WireClient{refuseConnect: true, connectErr: errors.New("TLS handshake failed")}
+	}
+	rt := &Runtime{InstanceId: "instance", Tenant: "tenant", MqttBroker: "ssl://broker.test:1883", Devices: []DeviceInstance{{Token: HarborpulseRevokedCharger(), DeviceTypeToken: HarborpulseX509ChargerType}}}
+	if err := s.tickS6(context.Background(), rt, time.Now(), 10*time.Minute); err == nil {
+		t.Fatal("transport failure counted as certificate refusal")
+	}
+}
+
+func TestS6BeatsRepeatAfterMidnight(t *testing.T) {
+	s := harborWith(t)
+	s.s6.initialized, s.s6.configured, s.s6.revoked = true, true, true
+	s.s6.dims, s.s6.queued = map[string]float64{}, map[string]bool{}
+	var commands []string
+	var values []string
+	enabled := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = io.WriteString(w, `{"commands":[]}`)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/events") {
+			w.WriteHeader(202)
+			return
+		}
+		var req struct {
+			Query     string
+			Variables struct {
+				Token   string
+				Request map[string]any
+			}
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		var data map[string]any
+		switch {
+		case strings.Contains(req.Query, "createCommand("):
+			token, _ := req.Variables.Request["token"].(string)
+			commands = append(commands, token)
+			data = map[string]any{"createCommand": map[string]any{"command": map[string]any{"token": token}}}
+		case strings.Contains(req.Query, "updateDeviceCredential("):
+			if req.Variables.Request["enabled"] == true {
+				enabled++
+			}
+			data = map[string]any{"updateDeviceCredential": map[string]any{"token": req.Variables.Token}}
+		case strings.Contains(req.Query, "setEntityAttribute("):
+			value, _ := req.Variables.Request["value"].(string)
+			values = append(values, value)
+			data = map[string]any{}
+		default:
+			data, _ = (&fakeProfileServer{}).dispatch(req.Query, nil)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer srv.Close()
+	rt := &Runtime{InstanceId: "instance", Tenant: "tenant", HTTPClient: srv.Client(), Endpoints: Endpoints{Ingress: srv.URL, DeviceMgmtGraphQL: srv.URL, CommandMgmtGraphQL: srv.URL}, Devices: []DeviceInstance{{Token: HarborpulsePullLights()[0], DeviceTypeToken: HarborpulsePullLightType}}}
+	rt.Session = userclient.NewTenantSession(srv.Client(), srv.URL, "sim@example.com", "password", "tenant")
+	s.s6.dims[HarborpulsePullLights()[0]] = 35
+	start := time.Now()
+	for _, elapsed := range []time.Duration{4 * time.Minute, 18 * time.Minute, 27 * time.Minute, 28 * time.Minute} {
+		if err := s.tickS6(context.Background(), rt, start.Add(elapsed), elapsed); err != nil {
+			t.Fatal(err)
+		}
+		if elapsed == 18*time.Minute && (s.s6.revoked || s.s6.configured || s.s6.dims[HarborpulsePullLights()[0]] != 100 || s.s6.queued[HarborpulsePullLights()[0]]) {
+			t.Fatal("midnight did not restore the initial state")
+		}
+	}
+	if enabled != 2 || strings.Join(values, ",") != "22,22,11,11" || len(commands) != 2 || commands[0] == commands[1] {
+		t.Fatalf("enabled=%d values=%v commands=%v", enabled, values, commands)
+	}
+}
+
+func TestS6ResponseRetryDoesNotApplyTheCommandAgain(t *testing.T) {
+	s := harborWith(t)
+	d := DeviceInstance{Token: HarborpulsePullLights()[0]}
+	s.s6.dims = map[string]float64{d.Token: 100}
+	polls, responses, acks := 0, 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet:
+			polls++
+			if polls == 1 {
+				_, _ = io.WriteString(w, `{"commands":[{"token":"cmd","name":"set-dim","payload":{"level_pct":35}}]}`)
+			} else {
+				_, _ = io.WriteString(w, `{"commands":[]}`)
+			}
+		case strings.HasSuffix(r.URL.Path, "/ack"):
+			acks++
+			w.WriteHeader(204)
+		default:
+			responses++
+			if responses == 1 {
+				w.WriteHeader(503)
+			} else {
+				w.WriteHeader(204)
+			}
+		}
+	}))
+	defer srv.Close()
+	rt := &Runtime{HTTPClient: srv.Client(), Endpoints: Endpoints{Ingress: srv.URL}}
+	if err := s.pollS6Lamp(context.Background(), rt, d); err == nil {
+		t.Fatal("response failure hidden")
+	}
+	if s.s6.dims[d.Token] != 35 {
+		t.Fatal("command was not applied before its first response")
+	}
+	s.s6.dims[d.Token] = 77 // A newer action or a day reset must survive a response retry.
+	for i := 0; i < 2; i++ {
+		if err := s.pollS6Lamp(context.Background(), rt, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.s6.dims[d.Token] != 77 || responses != 2 || acks != 2 {
+		t.Fatalf("dim=%v responses=%d acks=%d", s.s6.dims[d.Token], responses, acks)
+	}
+}
+
+func TestS6PullPreservesCommandArrivalOrder(t *testing.T) {
+	s := harborWith(t)
+	d := DeviceInstance{Token: HarborpulsePullLights()[0]}
+	s.s6.dims = map[string]float64{d.Token: 100}
+	var responded []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = io.WriteString(w, `{"commands":[{"token":"d","name":"set-dim","payload":{"level_pct":10}},{"token":"c","name":"set-dim","payload":{"level_pct":20}},{"token":"b","name":"set-dim","payload":{"level_pct":30}},{"token":"a","name":"set-dim","payload":{"level_pct":40}}]}`)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/response") {
+			parts := strings.Split(r.URL.Path, "/")
+			responded = append(responded, parts[len(parts)-2])
+		}
+		w.WriteHeader(204)
+	}))
+	defer srv.Close()
+	rt := &Runtime{HTTPClient: srv.Client(), Endpoints: Endpoints{Ingress: srv.URL}}
+	if err := s.pollS6Lamp(context.Background(), rt, d); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(responded, ",") != "d,c,b,a" || s.s6.dims[d.Token] != 40 {
+		t.Fatalf("responses=%v dim=%v", responded, s.s6.dims[d.Token])
 	}
 }

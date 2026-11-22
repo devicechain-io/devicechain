@@ -6,6 +6,9 @@ package scenarioverify
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,7 +16,7 @@ import (
 )
 
 func (d *day) cleanS6() {
-	s := S6{Ledger: &sim.ScenarioS6{Anchor: "hp-charger-trust", Credentials: map[string]string{}},
+	s := S6{Tenant: "tenant", Rejections: []S6Rejection{{Event: "x509_credential_rejected", Tenant: "tenant", Fingerprint: "cert-" + sim.HarborpulseRevokedCharger(), RejectedAt: at(14.1).Format(time.RFC3339Nano)}}, Ledger: &sim.ScenarioS6{Anchor: "hp-charger-trust", Credentials: map[string]string{}},
 		AnchorEnabled: true, States: map[string]S6Presence{}, Credentials: map[string]S6Credential{},
 		Configurations: map[string]S6Configuration{}, Readings: map[string][]Reading{}, PullChannel: "HTTP_PULL"}
 	for _, device := range append(sim.HarborpulseMQTTChargers(), sim.HarborpulseX509Chargers()...) {
@@ -28,12 +31,12 @@ func (d *day) cleanS6() {
 	for _, device := range sim.HarborpulseX509Chargers() {
 		credential := device + "-x509"
 		s.Ledger.Credentials[device] = credential
-		s.Credentials[credential] = S6Credential{Token: credential, CredentialType: "X509_CERTIFICATE", UpdatedAt: at(14).Format(time.RFC3339Nano), Enabled: device != sim.HarborpulseRevokedCharger()}
+		s.Credentials[credential] = S6Credential{Token: credential, CredentialType: "X509_CERTIFICATE", CredentialID: "cert-" + device, UpdatedAt: at(14).Format(time.RFC3339Nano), Enabled: device != sim.HarborpulseRevokedCharger()}
 		s.Credentials["token/"+device] = S6Credential{Token: device + "-token", CredentialType: "ACCESS_TOKEN", Enabled: false}
 		document := `{"max_kw":11}`
 		hash := sha256.Sum256([]byte(document))
 		digest := "sha256:" + hex.EncodeToString(hash[:])
-		c := S6Configuration{Desired: &S6Revision{Revision: 2, Digest: digest, Document: document}, Reported: &S6Report{Revision: 2, Digest: digest, Status: "APPLIED"}}
+		c := S6Configuration{Desired: &S6Revision{Revision: 2, Digest: digest, Document: document, CreatedAt: at(9).Format(time.RFC3339Nano)}, Reported: &S6Report{Revision: 2, Digest: digest, Status: "APPLIED", ReportedAt: at(9.1).Format(time.RFC3339Nano)}}
 		if device == sim.HarborpulseRejectedConfigCharger() {
 			c.Reported.Status, c.Reported.Errors, c.Pending = "REJECTED", []string{"power cap refused"}, true
 		}
@@ -184,5 +187,163 @@ func TestS6ReadDocumentsMatchServedSchemas(t *testing.T) {
 		if errs := servedSchema(t, d.area).ValidateWithVariables(d.doc, d.vars); len(errs) > 0 {
 			t.Errorf("%s: %v", d.doc, errs)
 		}
+	}
+}
+
+func TestS6FirstDayEvidenceCannotPassAnotherDay(t *testing.T) {
+	for _, check := range s6Checks() {
+		if check.name == InvConnectivityAlarm {
+			continue
+		}
+		t.Run(check.name, func(t *testing.T) {
+			o := cleanDay().observe()
+			o.Day = 1
+			if check.fn(o) == nil {
+				t.Fatal("day zero evidence passed day one")
+			}
+		})
+	}
+}
+
+func TestS6RequiresCertificateRejectionEvidence(t *testing.T) {
+	o := cleanDay().observe()
+	if err := json.Unmarshal([]byte(`{"Rejections":[]}`), &o.S6); err != nil {
+		t.Fatal(err)
+	}
+	if chargerX509Admitted(o) == nil {
+		t.Fatal("disabled/offline snapshot passed without platform certificate rejection")
+	}
+}
+
+func TestS6EvidenceFromSelectedDayPasses(t *testing.T) {
+	for _, day := range []int{1, 3} {
+		o := cleanDay().observe()
+		raw, err := json.Marshal(o.S6)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var tree any
+		if err := json.Unmarshal(raw, &tree); err != nil {
+			t.Fatal(err)
+		}
+		var shift func(any) any
+		shift = func(v any) any {
+			switch x := v.(type) {
+			case string:
+				if at, err := time.Parse(time.RFC3339Nano, x); err == nil {
+					return at.Add(time.Duration(day) * o.Clock.DayLength).Format(time.RFC3339Nano)
+				}
+			case map[string]any:
+				for k, v := range x {
+					x[k] = shift(v)
+				}
+			case []any:
+				for k, v := range x {
+					x[k] = shift(v)
+				}
+			}
+			return v
+		}
+		raw, err = json.Marshal(shift(tree))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &o.S6); err != nil {
+			t.Fatal(err)
+		}
+		o.Day = day
+		for _, check := range s6Checks() {
+			if check.name != InvConnectivityAlarm {
+				if err := check.fn(o); err != nil {
+					t.Errorf("day %d %s: %v", day, check.name, err)
+				}
+			}
+		}
+	}
+}
+
+func TestS6RejectsUnrelatedOrOldCertificateRejection(t *testing.T) {
+	for _, change := range []map[string]string{
+		{"Fingerprint": "another-certificate"},
+		{"Tenant": "another-tenant"},
+		{"RejectedAt": at(13).Format(time.RFC3339Nano)},
+		{"RejectedAt": at(38).Format(time.RFC3339Nano)},
+	} {
+		o := cleanDay().observe()
+		record := map[string]string{"Event": "x509_credential_rejected", "Tenant": "tenant", "Fingerprint": "cert-" + sim.HarborpulseRevokedCharger(), "RejectedAt": at(14.1).Format(time.RFC3339Nano)}
+		for k, v := range change {
+			record[k] = v
+		}
+		raw, err := json.Marshal(map[string]any{"Rejections": []any{record}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &o.S6); err != nil {
+			t.Fatal(err)
+		}
+		if chargerX509Admitted(o) == nil {
+			t.Errorf("unrelated rejection passed: %v", change)
+		}
+	}
+}
+
+func TestS6CurrentReadingsCannotHideAnOldPullCompletion(t *testing.T) {
+	o := cleanDay().observe()
+	o.Day = 1
+	for _, device := range sim.HarborpulsePullLights() {
+		for i := range o.S6.Readings[device] {
+			o.S6.Readings[device][i].At = o.S6.Readings[device][i].At.Add(o.Clock.DayLength)
+		}
+	}
+	if pullCommandsComplete(o) == nil {
+		t.Fatal("fresh readings hid an earlier day's command completion")
+	}
+}
+
+func TestS6EvidenceCannotComeFromTheNextDay(t *testing.T) {
+	for _, check := range []func(Observations) error{chargerMQTTStored, pullCommandsComplete} {
+		o := cleanDay().observe()
+		for device, rows := range o.S6.Readings {
+			for i := range rows {
+				rows[i].At = rows[i].At.Add(o.Clock.DayLength)
+			}
+			o.S6.Readings[device] = rows
+		}
+		if check(o) == nil {
+			t.Fatal("next day's readings passed the selected day")
+		}
+	}
+}
+
+func TestS6ConfigurationNeedsBothTransitionAndReportThisDay(t *testing.T) {
+	for _, stale := range []string{"desired", "reported"} {
+		o := cleanDay().observe()
+		o.Day = 1
+		for _, c := range o.S6.Configurations {
+			if stale != "desired" {
+				c.Desired.CreatedAt = at(33).Format(time.RFC3339Nano)
+			}
+			if stale != "reported" {
+				c.Reported.ReportedAt = at(33.1).Format(time.RFC3339Nano)
+			}
+		}
+		if configApplied(o) == nil {
+			t.Errorf("old %s evidence passed", stale)
+		}
+	}
+}
+
+func TestReadS6RejectionsUsesPlatformRecordsForThisTenant(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "callout.jsonl")
+	raw := "kubectl diagnostic\n" + `{"event":"x509_credential_rejected","tenant":"other","fingerprint":"other"}` + "\n" + `{"event":"other","tenant":"tenant","fingerprint":"noise"}` + "\n" + `{"event":"x509_credential_rejected","tenant":"tenant","fingerprint":"certificate","rejectedAt":"2026-11-16T12:08:01Z"}` + "\n"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	records, err := readS6Rejections(path, "tenant")
+	if err != nil || len(records) != 1 || records[0].Fingerprint != "certificate" || records[0].RejectedAt != "2026-11-16T12:08:01Z" {
+		t.Fatalf("records=%+v error=%v", records, err)
+	}
+	if _, err := readS6Rejections(path+".missing", "tenant"); err == nil {
+		t.Fatal("missing log source was silently accepted")
 	}
 }

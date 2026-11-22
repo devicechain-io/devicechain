@@ -395,7 +395,7 @@ offline_controls() {
 
 require_s6_broker() {
   local pods p body metric
-  pods="$(k get pods -A -l 'app.kubernetes.io/name=nats,app.kubernetes.io/component=nats' -o json | jq -r '.items[] | select(.status.phase=="Running") | "\(.metadata.namespace)/\(.metadata.name)"')"
+  pods="$(k get pods -n "$namespace" -l 'app.kubernetes.io/name=nats,app.kubernetes.io/component=nats' -o json | jq -r '.items[] | select(.status.phase=="Running") | "\(.metadata.namespace)/\(.metadata.name)"')"
   [[ -n "$pods" ]] || fail "S6: no running default broker"
   while IFS= read -r p; do
     body="$(k get --raw "/api/v1/namespaces/${p%%/*}/pods/${p##*/}:7778/proxy/metrics")" || fail "S6: broker metrics unavailable"
@@ -656,6 +656,15 @@ cmd_run() {
   forward forward-ingest.log "$namespace" svc/event-sources "$ingest_port:8081"
   forward forward-sink.log "$sink_ns" svc/hp-sink "$sink_port:8080"
 
+  # The callout, rather than the sim's dial error, supplies certificate rejection evidence.
+  # Derive the selector from this instance's deployment so every current replica is read.
+  local auth_selector auth_log="$state_dir/auth-callout.jsonl"
+  auth_selector="$(k -n "$namespace" get deployment device-management -o json | jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')"
+  [[ -n "$auth_selector" ]] || fail "S6: no device-management pod selector"
+  start_bg "$auth_log" k -n "$namespace" logs -l "$auth_selector" --all-containers=true \
+    --max-log-requests=50 --since=1m --follow=true --prefix=false
+  bg_pids+=("$last_bg")
+
   local stamp r name flags want port i=0 sims=() hs tier tier_config
   stamp="$(date -u +%H%M%S)"
   for r in "${runs[@]}"; do
@@ -703,7 +712,7 @@ cmd_run() {
   for s in "${sims[@]}"; do
     IFS='|' read -r sname port want_inv hsp <<<"$s"
     start_bg "$state_dir/$sname.verify.log" "$verifier" --handshake "$hsp" --sim "http://127.0.0.1:$port" \
-      --sink "http://127.0.0.1:$sink_port" --report "$(winpath "$state_dir/$sname.report.json")"
+      --sink "http://127.0.0.1:$sink_port" --auth-callout-log "$(winpath "$auth_log")" --report "$(winpath "$state_dir/$sname.report.json")"
     bg_pids+=("$last_bg")
     vpids+=("$last_bg")
   done

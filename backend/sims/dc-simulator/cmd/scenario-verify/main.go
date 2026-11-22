@@ -77,6 +77,7 @@ func main() {
 	reportPath := flag.String("report", "", "write the JSON report to this path (the human one goes to stderr)")
 	sinkURL := flag.String("sink", "", "the scenario sink's HTTP address (scenario-sink, usually through a port-forward); "+
 		"without it the deliveries out of the tenant are not judged")
+	authCalloutLog := flag.String("auth-callout-log", "", "device-management JSON-lines log; required to prove S6 certificate rejection after disable")
 	flag.Parse()
 
 	if *handshakePath == "" {
@@ -100,7 +101,7 @@ func main() {
 
 	report, err := scenarioverify.Run(ctx, scenarioverify.Config{
 		Handshake: hs, SimURL: *simURL, HTTP: httpc, StatusHTTP: simHTTP,
-		Poll: *poll, Settle: *settle, StartTimeout: *startTimeout, Day: *day, SinkURL: *sinkURL,
+		Poll: *poll, Settle: *settle, StartTimeout: *startTimeout, Day: *day, SinkURL: *sinkURL, AuthCalloutLog: *authCalloutLog,
 	})
 	if err != nil {
 		if code, ok := stop.ExitCode(); ok {

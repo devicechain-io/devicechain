@@ -22,6 +22,7 @@ import (
 	"github.com/devicechain-io/dc-simulator/updater"
 	"github.com/devicechain-io/dc-simulator/x509sim"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	mqttpackets "github.com/eclipse/paho.mqtt.golang/packets"
 	"github.com/rs/zerolog/log"
 )
 
@@ -68,6 +69,12 @@ type ScenarioS6 struct {
 	Credentials map[string]string `json:"credentials"`
 }
 
+type s6PullCommand struct {
+	Token, Name    string
+	Payload        json.RawMessage
+	acted, success bool
+}
+
 type harborS6State struct {
 	runMu                            sync.Mutex
 	mu                               sync.Mutex
@@ -78,6 +85,8 @@ type harborS6State struct {
 	agents                           map[string]*updater.ConfigAgent
 	dims                             map[string]float64
 	queued                           map[string]bool
+	pending                          map[string][]s6PullCommand
+	day                              int
 	initialized, revoked, configured bool
 }
 
@@ -368,7 +377,13 @@ func (s *harborpulse) tickS6(ctx context.Context, rt *Runtime, now time.Time, el
 		}
 		return nil // original-fleet telemetry fixtures deliberately have no S6 population
 	}
-	h := harborpulseStartHour + elapsed.Seconds()/s.dayLength.Seconds()*24
+	day := harborDayOf(elapsed, s.dayLength)
+	if day != s.s6.day {
+		if err := s.resetS6Day(ctx, rt, day); err != nil {
+			return err
+		}
+	}
+	h := harborHourOf(elapsed, s.dayLength)
 	var errs []error
 	if h >= HarborpulseConfigHour && !s.s6.configured {
 		var configErr error
@@ -386,7 +401,7 @@ func (s *harborpulse) tickS6(ctx context.Context, rt *Runtime, now time.Time, el
 	for _, d := range rt.deviceSnapshot() {
 		if d.DeviceTypeToken == HarborpulsePullLightType {
 			if h >= HarborpulsePullHour && !s.s6.queued[d.Token] {
-				req := map[string]any{"token": fmt.Sprintf("hp-pull-%s-%d", d.Token, s.startedAt().Unix()), "deviceToken": d.Token, "name": HarborpulseSetDimKey, "payload": `{"level_pct":35}`, "expiresAt": now.Add(s.dayLength).Format(time.RFC3339)}
+				req := map[string]any{"token": fmt.Sprintf("hp-pull-%s-%d-%d", d.Token, s.startedAt().Unix(), day), "deviceToken": d.Token, "name": HarborpulseSetDimKey, "payload": `{"level_pct":35}`, "expiresAt": now.Add(s.dayLength).Format(time.RFC3339)}
 				var out struct {
 					CreateCommand struct {
 						Command   *struct{ Token string }
@@ -421,8 +436,10 @@ func (s *harborpulse) tickS6(ctx context.Context, rt *Runtime, now time.Time, el
 		if d.Token == HarborpulseRevokedCharger() && s.s6.revoked && !s.hasS6Defect(HarborpulseDefectX509RevocationSkipped) {
 			if err == nil {
 				errs = append(errs, fmt.Errorf("revoked charger was admitted by the broker"))
+			} else if !s6CertificateRefused(err) {
+				errs = append(errs, fmt.Errorf("revoked charger reconnect failed without an authentication refusal: %w", err))
 			}
-			continue // Expected refusal; keep trying on subsequent ticks with the very same certificate.
+			continue // Keep retrying the same certificate; the oracle separately requires a callout rejection.
 		}
 		if err != nil {
 			errs = append(errs, err)
@@ -465,35 +482,57 @@ func (s *harborpulse) tickS6(ctx context.Context, rt *Runtime, now time.Time, el
 func (s *harborpulse) pollS6Lamp(ctx context.Context, rt *Runtime, d DeviceInstance) error {
 	base := fmt.Sprintf("%s/%s/%s/devices/%s/commands", strings.TrimRight(rt.Endpoints.Ingress, "/"), rt.InstanceId, rt.Tenant, d.Token)
 	var out struct {
-		Commands *[]struct {
-			Token, Name string
-			Payload     json.RawMessage
-		} `json:"commands"`
+		Commands *[]s6PullCommand `json:"commands"`
 	}
+	if s.s6.pending == nil {
+		s.s6.pending = map[string][]s6PullCommand{}
+	}
+	pending := s.s6.pending[d.Token]
+	var errs []error
 	if err := s6HTTP(ctx, rt, d, http.MethodGet, base+"?wait=0", nil, &out); err != nil {
-		return err
+		errs = append(errs, err)
+	} else if out.Commands == nil {
+		errs = append(errs, fmt.Errorf("pull lamp %s received no command list", d.Token))
+	} else {
+		// Retain the entire delivery before acknowledging any of it: an ACK may commit
+		// even when its HTTP reply is lost, and acknowledged commands leave polling.
+		for _, c := range *out.Commands {
+			if !slices.ContainsFunc(pending, func(p s6PullCommand) bool { return p.Token == c.Token }) {
+				pending = append(pending, c)
+			}
+		}
 	}
-	if out.Commands == nil {
-		return fmt.Errorf("pull lamp %s received no command list", d.Token)
-	}
-	for _, c := range *out.Commands {
+	// Store the complete ordered batch before ACK can remove anything from polling.
+	s.s6.pending[d.Token] = pending
+	for len(pending) > 0 {
+		c := &pending[0]
 		if err := s6HTTP(ctx, rt, d, http.MethodPost, base+"/"+c.Token+"/ack", nil, nil); err != nil {
-			return err
+			errs = append(errs, err)
+			break
 		}
-		level, valid := harborParam(c.Payload, HarborpulseLevelParam, 0, 100)
-		ok := c.Name == HarborpulseSetDimKey && valid
-		if ok {
-			s.s6.dims[d.Token] = level
+		if !c.acted {
+			level, valid := harborParam(c.Payload, HarborpulseLevelParam, 0, 100)
+			c.success = c.Name == HarborpulseSetDimKey && valid
+			if c.success {
+				s.s6.dims[d.Token] = level
+			}
+			c.acted = true
 		}
-		body, err := json.Marshal(map[string]any{"success": ok})
+		// Retries report the original action; they must not overwrite newer device state.
+		body, err := json.Marshal(map[string]any{"success": c.success})
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			break
 		}
 		if err := s6HTTP(ctx, rt, d, http.MethodPost, base+"/"+c.Token+"/response", body, nil); err != nil {
-			return err
+			errs = append(errs, err)
+			break
 		}
+		pending[0] = s6PullCommand{}
+		pending = pending[1:]
+		s.s6.pending[d.Token] = pending
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func s6HTTP(ctx context.Context, rt *Runtime, d DeviceInstance, method, endpoint string, body []byte, out any) error {
@@ -501,6 +540,7 @@ func s6HTTP(ctx context.Context, rt *Runtime, d DeviceInstance, method, endpoint
 	if err != nil {
 		return err
 	}
+	req.Host = rt.HostHeader
 	req.Header.Set("Authorization", "Bearer "+d.CredentialId)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -533,4 +573,28 @@ func (s *harborpulse) CloseDeviceSessions() {
 	s.s6.runMu.Lock()
 	defer s.s6.runMu.Unlock()
 	s.closeS6Clients()
+}
+
+// Reset only after every platform write succeeds. Retrying a partial reset is safe;
+// pending pull deliveries deliberately survive midnight until their responses complete.
+func (s *harborpulse) resetS6Day(ctx context.Context, rt *Runtime, day int) error {
+	for _, device := range HarborpulseX509Chargers() {
+		if err := setHarborCredentialEnabled(ctx, rt, x509sim.CredentialToken(device), true); err != nil {
+			return err
+		}
+		if err := ensureAttribute(ctx, rt, NumericAttributeSpec{Device: device, Key: HarborpulseConfigKey, Value: 22}); err != nil {
+			return err
+		}
+	}
+	s.s6.dims, s.s6.queued = map[string]float64{}, map[string]bool{}
+	for _, device := range HarborpulsePullLights() {
+		s.s6.dims[device] = 100
+	}
+	s.s6.configured, s.s6.revoked = false, false
+	s.s6.day = day
+	return nil
+}
+
+func s6CertificateRefused(err error) bool {
+	return errors.Is(err, mqttpackets.ConnErrors[mqttpackets.ErrRefusedNotAuthorised]) || errors.Is(err, mqttpackets.ConnErrors[mqttpackets.ErrRefusedBadUsernameOrPassword])
 }

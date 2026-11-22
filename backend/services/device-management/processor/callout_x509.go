@@ -200,6 +200,13 @@ func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant st
 		return c.grantX509(ctx, req, tenant, chain, found, result, obs)
 	}
 	if result := c.x509LookupRefusal(tenant, req, err); result != "" {
+		if result == x509ResultRevoked {
+			// Public certificate identity and a platform timestamp let external rigs prove
+			// this refusal independently of their own transport errors or device snapshots.
+			log.Info().Str("event", "x509_credential_rejected").Str("tenant", tenant).
+				Str("fingerprint", pin).Str("rejectedAt", c.now().UTC().Format(time.RFC3339Nano)).
+				Msg("Disabled certificate rejected by auth callout.")
+		}
 		return c.refuseX509(obs, result)
 	}
 	return c.grantX509(ctx, req, tenant, chain, found, x509ResultOK, obs)

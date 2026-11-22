@@ -4,16 +4,20 @@
 package scenarioverify
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/devicechain-io/dc-simulator/sim"
 )
 
 const queryS6States = `query($tokens:[String!]!){deviceStatesByDeviceToken(deviceTokens:$tokens){deviceToken active presenceSource sessionId lastConnectTime}}`
-const queryS6Credentials = `query($tokens:[String!]!){deviceCredentialsByToken(tokens:$tokens){token credentialType enabled updatedAt}}`
+const queryS6Credentials = `query($tokens:[String!]!){deviceCredentialsByToken(tokens:$tokens){token credentialType credentialId enabled updatedAt}}`
 const queryS6Anchor = `query($tokens:[String!]!){deviceTrustAnchorsByToken(tokens:$tokens){token enabled}}`
-const queryS6Configuration = `query($device:String!){deviceConfiguration(deviceToken:$device){desired{revision digest document} reported{revision digest status errors} pending stale}}`
+const queryS6Configuration = `query($device:String!){deviceConfiguration(deviceToken:$device){desired{revision digest document createdAt} reported{revision digest status errors reportedAt} pending stale}}`
 const queryS6PullType = `query($tokens:[String!]!){deviceTypesByToken(tokens:$tokens){token commandChannel}}`
 
 func readS6(ctx context.Context, r *Reader, o *Observations, ledger *sim.ScenarioS6) error {
@@ -23,7 +27,7 @@ func readS6(ctx context.Context, r *Reader, o *Observations, ledger *sim.Scenari
 	if r.endpoints.DeviceStateGraphQL == "" {
 		return fmt.Errorf("handshake has no deviceStateGraphQL for MQTT presence")
 	}
-	s := S6{Ledger: ledger, States: map[string]S6Presence{}, Credentials: map[string]S6Credential{}, Configurations: map[string]S6Configuration{}, Readings: map[string][]Reading{}}
+	s := S6{Tenant: r.tenant, Ledger: ledger, States: map[string]S6Presence{}, Credentials: map[string]S6Credential{}, Configurations: map[string]S6Configuration{}, Readings: map[string][]Reading{}}
 	chargers := append(sim.HarborpulseMQTTChargers(), sim.HarborpulseX509Chargers()...)
 	var states struct {
 		States []S6Presence `json:"deviceStatesByDeviceToken"`
@@ -87,7 +91,7 @@ func readS6(ctx context.Context, r *Reader, o *Observations, ledger *sim.Scenari
 		s.PullChannel = typ.Items[0].CommandChannel
 	}
 	for _, device := range append(chargers, sim.HarborpulsePullLights()...) {
-		rows, err := r.Readings(ctx, device, o.Clock.StartedAt, o.at(WatchTo))
+		rows, err := r.Readings(ctx, device, s6DayStart(*o), o.at(WatchTo))
 		if err != nil {
 			return err
 		}
@@ -102,4 +106,35 @@ func readS6(ctx context.Context, r *Reader, o *Observations, ledger *sim.Scenari
 	}
 	o.S6 = s
 	return nil
+}
+
+func s6DayStart(o Observations) time.Time {
+	start := o.at(0)
+	if start.Before(o.Clock.StartedAt) {
+		return o.Clock.StartedAt
+	}
+	return start
+}
+
+// Only the platform's structured disabled-certificate records are evidence. Kubectl
+// diagnostics and other tenants' log lines cannot satisfy this tenant's invariant.
+func readS6Rejections(path, tenant string) ([]S6Rejection, error) {
+	if path == "" {
+		return nil, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+	var records []S6Rejection
+	for scanner.Scan() {
+		var record S6Rejection
+		if json.Unmarshal(scanner.Bytes(), &record) == nil && record.Event == "x509_credential_rejected" && record.Tenant == tenant {
+			records = append(records, record)
+		}
+	}
+	return records, scanner.Err()
 }

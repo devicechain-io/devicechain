@@ -3,7 +3,8 @@
 
 // Package scenarioverify is the harborpulse oracle: it watches one compressed day of a running
 // harborpulse sim and judges what the PLATFORM did, read back over the tenant GraphQL APIs the
-// way any client would. It never trusts the simulator's own account of what happened, with one
+// way any client would, plus certificate rejection records collected from the platform callout.
+// It never trusts the simulator's own account of what happened, with one
 // stated exception: the store-and-forward ledger (what each charger buffered), which is the
 // expectation the stored readings are held to, as a load harness holds its stored events to the
 // driver's accepted count.

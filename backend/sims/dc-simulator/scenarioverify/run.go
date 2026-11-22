@@ -113,6 +113,8 @@ type Config struct {
 	SinkURL string
 	// SinkHTTP reaches the sink.
 	SinkHTTP *http.Client
+	// AuthCalloutLog is a JSON-lines log collected directly from device-management.
+	AuthCalloutLog string
 }
 
 func (c Config) withDefaults() Config {
@@ -368,6 +370,10 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 	}
 	rep.WatchTo = time.Now()
 	if err := readS6(ctx, reader, &obs, final.Scenario.S6); err != nil {
+		return noVerdict{err}
+	}
+	obs.S6.Rejections, err = readS6Rejections(cfg.AuthCalloutLog, cfg.Handshake.Tenant)
+	if err != nil {
 		return noVerdict{err}
 	}
 	rep.Invariants = Evaluate(obs)

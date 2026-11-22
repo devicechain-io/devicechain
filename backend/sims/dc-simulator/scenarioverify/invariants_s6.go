@@ -28,16 +28,19 @@ type S6Presence struct {
 }
 type S6Credential struct {
 	Token, CredentialType, UpdatedAt string
+	CredentialID                     string `json:"credentialId"`
 	Enabled                          bool
 }
 type S6Revision struct {
 	Revision         int
 	Digest, Document string
+	CreatedAt        string
 }
 type S6Report struct {
 	Revision       int
 	Digest, Status string
 	Errors         []string
+	ReportedAt     string
 }
 type S6Configuration struct {
 	Desired        *S6Revision
@@ -45,8 +48,15 @@ type S6Configuration struct {
 	Pending, Stale bool
 }
 
-// S6 is tenant-plane platform evidence. Ledger contains only the expected public identities.
+// S6 combines tenant-plane evidence with rejection records from platform callout logs.
+// Ledger contains only the expected public identities.
+type S6Rejection struct {
+	Event, Tenant, Fingerprint, RejectedAt string
+}
+
 type S6 struct {
+	Tenant         string
+	Rejections     []S6Rejection
 	Ledger         *sim.ScenarioS6
 	States         map[string]S6Presence
 	Credentials    map[string]S6Credential
@@ -91,7 +101,7 @@ func chargerMQTTStored(o Observations) error {
 		}
 		n := 0
 		for _, r := range o.S6.Readings[device] {
-			if r.Name == sim.HarborpulseChargerPowerKey && r.Value == 7.2 && !r.At.Before(o.Clock.StartedAt) {
+			if r.Name == sim.HarborpulseChargerPowerKey && r.Value == 7.2 && s6InDay(o, r.At) {
 				n++
 			}
 		}
@@ -107,7 +117,7 @@ func chargerX509Admitted(o Observations) error {
 	if s.Ledger == nil || s.Ledger.Anchor == "" || !s.AnchorEnabled {
 		return fmt.Errorf("no enabled platform trust anchor for certificate chargers")
 	}
-	revokedAt := o.Clock.At(0, sim.HarborpulseX509RevokeHour)
+	revokedAt := o.at(sim.HarborpulseX509RevokeHour)
 	for _, device := range sim.HarborpulseX509Chargers() {
 		credential, ok := s.Credentials[s.Ledger.Credentials[device]]
 		if !ok || credential.CredentialType != "X509_CERTIFICATE" {
@@ -121,7 +131,7 @@ func chargerX509Admitted(o Observations) error {
 		}
 		before, after := 0, 0
 		for _, row := range s.Readings[device] {
-			if row.Name != sim.HarborpulseChargerPowerKey || row.Value != 7.2 || row.At.Before(o.Clock.StartedAt) {
+			if row.Name != sim.HarborpulseChargerPowerKey || row.Value != 7.2 || !s6InDay(o, row.At) {
 				continue
 			}
 			if row.At.Before(revokedAt) {
@@ -140,8 +150,18 @@ func chargerX509Admitted(o Observations) error {
 			}
 			disabled, disableErr := time.Parse(time.RFC3339Nano, credential.UpdatedAt)
 			connected, connectErr := time.Parse(time.RFC3339Nano, state.LastConnectTime)
-			if disableErr != nil || connectErr != nil || connected.After(disabled) {
+			if disableErr != nil || connectErr != nil || disabled.Before(revokedAt) || !s6InDay(o, disabled) || !s6InDay(o, connected) || connected.After(disabled) {
 				return fmt.Errorf("revoked charger has no platform timestamps proving its last admission preceded credential disable")
+			}
+			rejected := false
+			for _, rejection := range s.Rejections {
+				at, err := time.Parse(time.RFC3339Nano, rejection.RejectedAt)
+				if rejection.Event == "x509_credential_rejected" && s.Tenant != "" && rejection.Tenant == s.Tenant && credential.CredentialID != "" && rejection.Fingerprint == credential.CredentialID && err == nil && at.After(disabled) && s6InDay(o, at) {
+					rejected = true
+				}
+			}
+			if !rejected {
+				return fmt.Errorf("revoked certificate has no platform callout rejection after disable on day %d", o.Day)
 			}
 		} else if !credential.Enabled || !s6Online(s, device) || after < 3 {
 			return fmt.Errorf("healthy certificate charger %s did not remain admitted", device)
@@ -178,6 +198,11 @@ func configApplied(o Observations) error {
 			return fmt.Errorf("%s has no current pushed configuration revision and report", device)
 		}
 		d, r := c.Desired, c.Reported
+		minted, mintErr := time.Parse(time.RFC3339Nano, d.CreatedAt)
+		reported, reportErr := time.Parse(time.RFC3339Nano, r.ReportedAt)
+		if mintErr != nil || reportErr != nil || minted.Before(o.at(sim.HarborpulseConfigHour)) || !s6InDay(o, minted) || reported.Before(minted) || !s6InDay(o, reported) {
+			return fmt.Errorf("%s has no configuration transition and report on day %d", device, o.Day)
+		}
 		var document map[string]float64
 		if err := json.Unmarshal([]byte(d.Document), &document); err != nil || len(document) != 1 || document[sim.HarborpulseConfigKey] != 11 {
 			return fmt.Errorf("%s desired document does not contain the pushed max_kw=11", device)
@@ -204,7 +229,7 @@ func pullCommandsComplete(o Observations) error {
 	for _, device := range sim.HarborpulsePullLights() {
 		var answered time.Time
 		for _, c := range o.S6.Commands {
-			if c.Device == device && c.Name == sim.HarborpulseSetDimKey && c.Status == "SUCCESSFUL" && !c.Responded.IsZero() && !c.Queued.Before(o.Clock.StartedAt) {
+			if c.Device == device && c.Name == sim.HarborpulseSetDimKey && c.Status == "SUCCESSFUL" && !c.Responded.IsZero() && !c.Queued.Before(o.at(sim.HarborpulsePullHour)) && s6InDay(o, c.Queued) && !c.Responded.Before(c.Queued) && s6InDay(o, c.Responded) {
 				answered = c.Responded
 				break
 			}
@@ -214,11 +239,17 @@ func pullCommandsComplete(o Observations) error {
 		}
 		acted := false
 		for _, r := range o.S6.Readings[device] {
-			acted = acted || r.Name == sim.HarborpulseDimKey && r.Value == 35 && !r.At.Before(answered)
+			acted = acted || r.Name == sim.HarborpulseDimKey && r.Value == 35 && !r.At.Before(answered) && s6InDay(o, r.At)
 		}
 		if !acted {
 			return fmt.Errorf("%s did not store the pulled command's applied dim level", device)
 		}
 	}
 	return nil
+}
+
+// s6InDay excludes evidence from earlier and later scenario days, including
+// delayed reads collected while the next day is already running.
+func s6InDay(o Observations, at time.Time) bool {
+	return !at.Before(o.Clock.StartedAt) && !at.Before(o.at(0)) && at.Before(o.at(24))
 }

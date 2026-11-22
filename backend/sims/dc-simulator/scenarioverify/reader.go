@@ -64,6 +64,7 @@ type Reader struct {
 	ingress   string
 	http      *http.Client
 	seed      int64
+	tenant    string
 }
 
 // NewReader signs in as the handshake's sim identity.
@@ -84,7 +85,7 @@ func NewReader(hs *sim.Handshake, httpc *http.Client) (*Reader, error) {
 		}
 	}
 	return &Reader{
-		http: httpc, seed: hs.Seed,
+		http: httpc, seed: hs.Seed, tenant: hs.Tenant,
 		session:   userclient.NewTenantSession(httpc, hs.Endpoints.UserGraphQL, hs.SimEmail, hs.SimPassword, hs.Tenant),
 		endpoints: hs.Endpoints,
 		events:    httpFromWS(hs.Endpoints.EventMgmtWS),
