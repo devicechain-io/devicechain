@@ -151,13 +151,13 @@ type PutOptions struct {
 	// the Key.ID extension.
 	ContentType string
 	// MaxSize rejects the write once more than MaxSize bytes have been read, with
-	// ErrTooLarge and no committed object. 0 means the CALLER imposes no ceiling —
-	// but a backend that must buffer to write (the S3 backend, which needs a known
-	// length to sign) then applies its own interim safety cap and rejects an object
-	// past it with a distinct error, NOT ErrTooLarge (streaming/multipart upload is
-	// a later slice). The filesystem backend streams and imposes no cap at MaxSize 0.
-	// Set MaxSize whenever the size is known (the branding consumer does) for uniform,
-	// backend-independent behavior.
+	// ErrTooLarge and no committed object (the S3 backend aborts the multipart upload it
+	// had started). 0 means the CALLER imposes no ceiling: both backends stream, and the S3
+	// backend holds one part (8 MiB) in memory whatever the object size. An S3 object is
+	// limited by the 10,000 parts an upload may have, about 78 GiB at the default part
+	// size; a bounded Put with a larger MaxSize raises the part size to fit, up to 64 MiB
+	// parts (about 640 GB), and past that the Put fails with its own error. Set MaxSize whenever the size is known (the
+	// branding consumer does) for uniform, backend-independent behavior.
 	MaxSize int64
 }
 
