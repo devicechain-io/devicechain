@@ -53,6 +53,10 @@ loudly if it cannot, since the reset has already happened by then.
 It refuses an identity that holds no system role. Reset anyone else through the admin API
 (resetIdentityMfa), where the log names the operator who did it. The reset is recorded as mfa_reset
 by "break-glass:pod-exec".`,
+	Example: `  dcctl instances break-glass mfa-reset --instance acme --email superuser@devicechain.local
+  dcctl instances break-glass mfa-reset superuser@devicechain.local --instance acme --kube-context prod
+  # choose the password yourself: the first line of stdin, and nothing is printed
+  dcctl instances break-glass mfa-reset --instance acme --email superuser@devicechain.local --password-stdin --yes`,
 	Args:         cobra.MaximumNArgs(1),
 	RunE:         runBreakGlassMfaReset,
 	SilenceUsage: true,

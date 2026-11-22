@@ -84,6 +84,11 @@ the totals. It is safe to re-run: an interrupted walk resumes by running it agai
 a device that is already inferred is not matched a second time.
 
 Start with --dry-run, which writes nothing and lists the devices in scope.`,
+	Example: `  # first, list the devices in scope and write nothing
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source mqtt1 --reason "broker replaced" --dry-run
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source mqtt1 --reason "broker replaced"
+  # narrow the run to two devices within the source
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source sparkplug:plant1 --reason "host retired" --device pump-7 --device pump-8`,
 	Args:         cobra.NoArgs,
 	RunE:         runPresenceDemote,
 	SilenceUsage: true,
