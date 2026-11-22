@@ -25,6 +25,10 @@ type Documents = {
     "\n  mutation CancelCommandBatch($token: String!) {\n    cancelCommandBatch(token: $token) {\n      cancelled\n      alreadySent\n      alreadyFinished\n      matched\n    }\n  }\n": typeof types.CancelCommandBatchDocument,
     "\n  query DeviceCommandHold($deviceToken: String!) {\n    deviceCommandHold(deviceToken: $deviceToken) {\n      disabled\n      heldCount\n    }\n  }\n": typeof types.DeviceCommandHoldDocument,
     "\n  mutation CancelDeviceCommands($deviceToken: String!) {\n    cancelDeviceCommands(deviceToken: $deviceToken) {\n      cancelled\n    }\n  }\n": typeof types.CancelDeviceCommandsDocument,
+    "\n  query CommandAgentProposals($criteria: AgentProposalSearchCriteria!) {\n    agentProposals(criteria: $criteria) {\n      results { token kind state payload targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note deviceToken command commandCutoff resultRef }\n      pagination { pageStart pageEnd totalRecords }\n    }\n  }\n": typeof types.CommandAgentProposalsDocument,
+    "\n  query CommandAgentProposalDetail($token: String!) {\n    agentProposal(token: $token) { token kind state payload targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note deviceToken command commandCutoff resultRef }\n  }\n": typeof types.CommandAgentProposalDetailDocument,
+    "\n  mutation ApproveCommandAgentProposal($token: String!, $digest: String!) {\n    approveAgentProposal(token: $token, digest: $digest) { token state reasons }\n  }\n": typeof types.ApproveCommandAgentProposalDocument,
+    "\n  mutation RejectCommandAgentProposal($token: String!, $note: String) {\n    rejectAgentProposal(token: $token, note: $note) { token }\n  }\n": typeof types.RejectCommandAgentProposalDocument,
 };
 const documents: Documents = {
     "\n  query Commands($criteria: CommandSearchCriteria!) {\n    commands(criteria: $criteria) {\n      results {\n        id\n        token\n        deviceToken\n        batchToken\n        name\n        payload\n        status\n        queuedTime\n        sentTime\n        respondedTime\n        expiresAt\n        dispatchAfter\n        maintenanceWindowToken\n        responsePayload\n        error\n        outcome\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.CommandsDocument,
@@ -37,6 +41,10 @@ const documents: Documents = {
     "\n  mutation CancelCommandBatch($token: String!) {\n    cancelCommandBatch(token: $token) {\n      cancelled\n      alreadySent\n      alreadyFinished\n      matched\n    }\n  }\n": types.CancelCommandBatchDocument,
     "\n  query DeviceCommandHold($deviceToken: String!) {\n    deviceCommandHold(deviceToken: $deviceToken) {\n      disabled\n      heldCount\n    }\n  }\n": types.DeviceCommandHoldDocument,
     "\n  mutation CancelDeviceCommands($deviceToken: String!) {\n    cancelDeviceCommands(deviceToken: $deviceToken) {\n      cancelled\n    }\n  }\n": types.CancelDeviceCommandsDocument,
+    "\n  query CommandAgentProposals($criteria: AgentProposalSearchCriteria!) {\n    agentProposals(criteria: $criteria) {\n      results { token kind state payload targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note deviceToken command commandCutoff resultRef }\n      pagination { pageStart pageEnd totalRecords }\n    }\n  }\n": types.CommandAgentProposalsDocument,
+    "\n  query CommandAgentProposalDetail($token: String!) {\n    agentProposal(token: $token) { token kind state payload targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note deviceToken command commandCutoff resultRef }\n  }\n": types.CommandAgentProposalDetailDocument,
+    "\n  mutation ApproveCommandAgentProposal($token: String!, $digest: String!) {\n    approveAgentProposal(token: $token, digest: $digest) { token state reasons }\n  }\n": types.ApproveCommandAgentProposalDocument,
+    "\n  mutation RejectCommandAgentProposal($token: String!, $note: String) {\n    rejectAgentProposal(token: $token, note: $note) { token }\n  }\n": types.RejectCommandAgentProposalDocument,
 };
 
 /**
@@ -79,6 +87,22 @@ export function graphql(source: "\n  query DeviceCommandHold($deviceToken: Strin
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation CancelDeviceCommands($deviceToken: String!) {\n    cancelDeviceCommands(deviceToken: $deviceToken) {\n      cancelled\n    }\n  }\n"): typeof import('./graphql').CancelDeviceCommandsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query CommandAgentProposals($criteria: AgentProposalSearchCriteria!) {\n    agentProposals(criteria: $criteria) {\n      results { token kind state payload targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note deviceToken command commandCutoff resultRef }\n      pagination { pageStart pageEnd totalRecords }\n    }\n  }\n"): typeof import('./graphql').CommandAgentProposalsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query CommandAgentProposalDetail($token: String!) {\n    agentProposal(token: $token) { token kind state payload targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note deviceToken command commandCutoff resultRef }\n  }\n"): typeof import('./graphql').CommandAgentProposalDetailDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation ApproveCommandAgentProposal($token: String!, $digest: String!) {\n    approveAgentProposal(token: $token, digest: $digest) { token state reasons }\n  }\n"): typeof import('./graphql').ApproveCommandAgentProposalDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation RejectCommandAgentProposal($token: String!, $note: String) {\n    rejectAgentProposal(token: $token, note: $note) { token }\n  }\n"): typeof import('./graphql').RejectCommandAgentProposalDocument;
 
 
 export function graphql(source: string) {

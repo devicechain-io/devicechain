@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { StepUpDialog } from '@/components/StepUpDialog';
 import { useTranslation } from 'react-i18next';
 import { hasAuthority, isScoped } from '@devicechain/client';
@@ -16,9 +17,17 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import type { AgentProposal } from '@/lib/api/agent-proposals';
 
-export function refusalReasonKey(reason: string) {
+export function refusalReasonKey(reason: string, command = false) {
   switch (reason) {
-    case 'DEPENDENCY_CHANGED': return 'dependencyChanged';
+    case 'DEPENDENCY_CHANGED': return command ? 'commandDependencyChanged' : 'dependencyChanged';
+    case 'COMMAND_PROPOSALS_DISABLED': return 'commandProposalsDisabled';
+    case 'COMMAND_CUTOFF_PASSED': return 'commandCutoffPassed';
+    case 'EXECUTION_RATE_EXCEEDED': return 'executionRateExceeded';
+    case 'GROUP_RESTRICTION_NOT_SUPPORTED': return 'groupRestrictionNotSupported';
+    case 'DESTRUCTIVE_NEEDS_TWO_APPROVERS': return 'destructiveNeedsTwoApprovers';
+    case 'TOKEN_IN_USE': return 'tokenInUse';
+    case 'ALREADY_ADMITTED': return 'alreadyAdmitted';
+    case 'VALIDATION_UNAVAILABLE': return 'validationUnavailable';
     case 'INSTANCE_ACTUATION_OFF':
     case 'TENANT_ACTUATION_OFF': return 'actionsOffReason';
     case 'OPERATOR_SUSPENDED': return 'suspendedReason';
@@ -28,12 +37,15 @@ export function refusalReasonKey(reason: string) {
   }
 }
 
-export function ProposalResult({ proposal }: { proposal: Pick<AgentProposal, 'state' | 'kind' | 'targetCount' | 'reasons'> }) {
+export function ProposalResult({ proposal }: { proposal: Pick<AgentProposal, 'state' | 'kind' | 'targetCount' | 'reasons'> & { deviceToken?: string; resultRef?: string | null } }) {
   const { t } = useTranslation('approvals');
-  if (proposal.state === 'EXECUTED') return <p>{t('executedResult', { action: t(proposal.kind), count: proposal.targetCount })}</p>;
+  const command = proposal.kind === 'COMMAND_SEND';
+  if (proposal.state === 'EXECUTED') return command ? <div><p>{t('commandQueuedResult')}</p>
+    {proposal.resultRef && proposal.deviceToken && <Link className="text-primary underline" to={`/devices/${encodeURIComponent(proposal.deviceToken)}?tab=commands#command-${encodeURIComponent(proposal.resultRef)}`}>{t('commandHistory', { token: proposal.resultRef })}</Link>}
+  </div> : <p>{t('executedResult', { action: t(proposal.kind), count: proposal.targetCount })}</p>;
   if (proposal.state !== 'REFUSED') return null;
-  return <div><p>{t('refused')}</p><ul>{proposal.reasons.map(reason => <li key={reason}>
-    {t(refusalReasonKey(reason), { reason })}
+  return <div><p>{t(command ? 'commandRefused' : 'refused')}</p><ul>{proposal.reasons.map(reason => <li key={reason}>
+    {t(refusalReasonKey(reason, command), { reason })}
   </li>)}</ul></div>;
 }
 
@@ -76,8 +88,9 @@ function InstanceGate({ children }: { children: ReactNode }) {
 
 function ApproverGate({ children }: { children: ReactNode }) {
   const { t } = useTranslation('approvals');
+  const { claims } = useAuth();
   const { current, loading } = useQuery(getAgentApprovalAccess);
   if (loading) return <PageShell title={t('title')}><LoadingState description={t('loading')} /></PageShell>;
-  if (!current?.canApprove || !current.instanceEnabled) return <PageShell title={t('title')}><EmptyState description={t('notAuthorized')} /></PageShell>;
+  if (!current?.instanceEnabled || !current.canApprove && !hasAuthority(claims, 'command:read')) return <PageShell title={t('title')}><EmptyState description={t('notAuthorized')} /></PageShell>;
   return children;
 }

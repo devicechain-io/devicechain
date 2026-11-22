@@ -1,76 +1,42 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { approveAgentProposal, getAgentProposal, rejectAgentProposal } from '@/lib/api/agent-proposals';
+import { hasAuthority } from '@devicechain/client';
+import { useAuth } from '@/auth/AuthProvider';
+import { getAgentProposal, proposalPath, type ProposalArea } from '@/lib/api/agent-proposals';
 import { useQuery } from '@/lib/hooks/use-query';
-import { serverErrorCode } from '@/i18n/signInError';
 import { formatTime } from '@/lib/utils';
-import { errMessage, useReload } from '@/routes/common';
+import { useReload } from '@/routes/common';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { CopyToken } from '@/components/ui/copy-token';
-import { useConfirm } from '@/components/ui/confirm-dialog';
-import { useToast } from '@/components/ui/toast';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
-import { ApprovalsGate, ProposalResult, refusalReasonKey, StepUpPrompt } from './shared';
+import { ApprovalsGate, ProposalResult, StepUpPrompt } from './shared';
 
-export default function ApprovalDetailPage() {
-  const { token = '' } = useParams();
-  return <ApprovalsGate><Detail key={token} token={token} /></ApprovalsGate>;
+import { useProposalDecision } from './useProposalDecision';
+import { CommandProposalReview, commandSnapshot } from './CommandProposalReview';
+
+export default function ApprovalDetailPage({ area: selectedArea }: { area?: ProposalArea }) {
+  const { token = '', area: routeArea } = useParams();
+  const area = selectedArea ?? (routeArea === 'command-delivery' ? 'command-delivery' : 'device-management');
+  return <ApprovalsGate><Detail key={JSON.stringify([area, token])} area={area} token={token} /></ApprovalsGate>;
 }
-function Detail({ token }: { token: string }) {
+function Detail({ area, token }: { area: ProposalArea; token: string }) {
   const { t } = useTranslation('approvals');
-  const { toast } = useToast();
-  const confirm = useConfirm();
+  const { claims } = useAuth();
+  const command = area === 'command-delivery';
   const [version, reload] = useReload();
-  const { data: proposal, current, loading, error } = useQuery(() => getAgentProposal(token), [token, version]);
-  const [busy, setBusy] = useState(false);
-  const inFlight = useRef(false);
-  const [stepUp, setStepUp] = useState(false);
-  const [rejecting, setRejecting] = useState(false);
-  const [note, setNote] = useState('');
-  const [info, setInfo] = useState<string | null>(null);
-  const [mutationError, setMutationError] = useState<string | null>(null);
-  const noteTooLong = new TextEncoder().encode(note).length > 512;
-  const canAct = !!current && current.state === 'PROPOSED' && !busy;
-  const act = async (approve: boolean) => {
-    if (!current || current.state !== 'PROPOSED' || inFlight.current || (!approve && noteTooLong)) return;
-    // This snapshot stays displayed while the confirm dialog is open. No read is started
-    // until the mutation settles, so the dialog describes exactly the digest being sent.
-    const displayed = current;
-    inFlight.current = true;
-    setBusy(true);
-    try {
-      if (approve && !(await confirm({ title: t('approve'),
-        description: t(displayed.approvals.length + 1 >= displayed.requiredApprovals ? `approveFinalConfirm_${displayed.kind}` : 'approveConfirm',
-          { count: displayed.targetCount, impact: displayed.impact }),
-        confirmLabel: t('approve'), destructive: false }))) return;
-      setMutationError(null); setStepUp(false); setInfo(null);
-      if (approve) {
-        const outcome = await approveAgentProposal(token, displayed.digest);
-        if (outcome.state === 'REFUSED') {
-          const message = [t('refused'), ...outcome.reasons.map(reason => t(refusalReasonKey(reason), { reason }))].join(' ');
-          setInfo(message); toast(message, 'info');
-        } else toast(t(outcome.state === 'EXECUTED' ? 'executed' : 'approved'));
-      } else { await rejectAgentProposal(token, note || undefined); toast(t('rejected')); }
-      setRejecting(false); reload();
-    } catch (err) {
-      const code = serverErrorCode(err);
-      if (code === 'STEP_UP_REQUIRED') setStepUp(true);
-      else if (code === 'EXECUTION_NOT_AVAILABLE' || code === 'CONCURRENT_APPROVAL') {
-        const message = t(code === 'CONCURRENT_APPROVAL' ? 'concurrentApproval' : 'executionUnavailable');
-        setInfo(message); toast(message, 'info'); reload();
-      }
-      else setMutationError(errMessage(err));
-    } finally { inFlight.current = false; setBusy(false); }
-  };
+  const { data: proposal, current, loading, error } = useQuery(() => command ? getAgentProposal(area, token) : getAgentProposal(token), [area, token, version], [area, token]);
+  const snapshot = proposal?.kind === 'COMMAND_SEND' ? commandSnapshot(proposal) : null;
+  const decision = command && (!snapshot || !hasAuthority(claims, 'command:write')) ? undefined : current;
+  const { act, busy, canAct: ready, stepUp, rejecting, setRejecting, note, setNote, noteTooLong, info, mutationError } = useProposalDecision(area, token, decision, reload);
+  const canAct = ready && (!command || snapshot !== null);
   if (!proposal) return <PageShell title={t('detailTitle')}>{loading ? <LoadingState description={t('loading')} /> : <ErrorState description={error!} />}</PageShell>;
   return <PageShell title={t('detailTitle')} titleAdornment={<Badge variant="secondary">{t('preview')}</Badge>}
     description={token} action={<>
@@ -80,7 +46,7 @@ function Detail({ token }: { token: string }) {
     <div className="space-y-4">
       {error && <ErrorState description={error} />}
       {mutationError && <ErrorState description={mutationError} />}
-      {stepUp && <StepUpPrompt path={`/approvals/${encodeURIComponent(token)}`} />}
+      {stepUp && <StepUpPrompt path={proposalPath(area, token)} />}
       {info && <p role="status">{info}</p>}
       {rejecting && <SectionPanel title={t('reject')}><form className="space-y-3" onSubmit={e => { e.preventDefault(); void act(false); }}>
         <label htmlFor="reject-note">{t('note')}</label>
@@ -89,7 +55,7 @@ function Detail({ token }: { token: string }) {
         <Button type="submit" disabled={!canAct || noteTooLong}>{t('submitReject')}</Button>
         <Button variant="outline" disabled={busy} onClick={() => setRejecting(false)}>{t('common:cancel')}</Button>
       </form></SectionPanel>}
-      <SectionPanel title={t('action')}><dl className="space-y-3">
+      {command && proposal.kind === 'COMMAND_SEND' ? <CommandProposalReview proposal={proposal} snapshot={snapshot} /> : <SectionPanel title={t('action')}><dl className="space-y-3">
         <dt>{t('kind')}</dt><dd>{t(proposal.kind)}</dd>
         <dt>{t('targets')}</dt><dd>{proposal.targetCount}<ul>{proposal.targets.map(target => <li className="font-mono break-all" key={target}>{target}</li>)}</ul></dd>
         <dt>{t('impact')}</dt><dd><Badge variant="outline">{proposal.impact}</Badge></dd>
@@ -98,10 +64,12 @@ function Detail({ token }: { token: string }) {
         <dt>{t('policyVersion')}</dt><dd>{proposal.policyVersion}</dd>
         <dt>{t('reasons')}</dt><dd><ul>{proposal.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul></dd>
       </dl></SectionPanel>
+      }
       <SectionPanel title={t('proposer')}>
         <p>{proposal.proposerClient}</p><p>{t('actingFor', { principal: proposal.proposerPrincipal })}</p>
-        {!proposal.clientAttested && <Badge variant="warning">{t('unverified')}</Badge>}
-        <h3 className="mt-3 font-medium">{t('agentRationale')}</h3><p className="whitespace-pre-wrap break-words">{proposal.rationale}</p>
+        {(command || !proposal.clientAttested) && <Badge variant={proposal.clientAttested ? 'secondary' : 'warning'}>{t(proposal.clientAttested ? 'attested' : 'unverified')}</Badge>}
+        {command && <p>{t('policyVersion')}: {proposal.policyVersion}</p>}
+        {!command && <><h3 className="mt-3 font-medium">{t('agentRationale')}</h3><p className="whitespace-pre-wrap break-words">{proposal.rationale}</p></>}
       </SectionPanel>
       <SectionPanel title={t('decision')}><dl className="space-y-3">
         <dt>{t('state')}</dt><dd>{t(proposal.state)}</dd>

@@ -3,6 +3,7 @@
 
 import nav from './nav.json';
 import alarmMaintenance from './alarmMaintenance.json';
+import approvals from './approvals.json';
 
 // Dashboard widgets and viewer controls, the device screens, the identity directory and the
 // instance system settings; other screens use the English fallback. Each namespace here is
@@ -12,4 +13,4 @@ import dashboards from './dashboards.json';
 import devices from './devices.json';
 import identities from './identities.json';
 
-export default { nav, alarmMaintenance, adminSettings, dashboards, devices, identities };
+export default { nav, alarmMaintenance, approvals, adminSettings, dashboards, devices, identities };

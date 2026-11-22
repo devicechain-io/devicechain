@@ -34,7 +34,7 @@ describe('the zh-CN catalogs', () => {
     }
   });
 
-  it.each(['adminSettings', 'devices', 'identities', 'alarmMaintenance', 'nav'])('%s keeps every placeholder and markup tag, and is translated', (ns) => {
+  it.each(['adminSettings', 'devices', 'identities', 'alarmMaintenance', 'approvals', 'nav'])('%s keeps every placeholder and markup tag, and is translated', (ns) => {
     const tokens = (s: string) => s.match(/{{[^}]+}}|<\/?\w+\/?>/g)?.sort() ?? [];
     const en = bundle('en', ns)!;
     const translated = bundle('zh-CN', ns)!;

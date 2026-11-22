@@ -79,7 +79,7 @@ export interface Locale {
 export const SUPPORTED_LOCALES: Locale[] = [
   { code: 'en', label: 'English', badge: 'EN' },
   { code: 'es', label: 'Español', badge: 'ES' },
-  { code: 'zh-CN', label: '简体中文', badge: 'ZH', namespaces: ['nav', 'alarmMaintenance', 'adminSettings', 'dashboards', 'devices', 'identities'] },
+  { code: 'zh-CN', label: '简体中文', badge: 'ZH', namespaces: ['nav', 'alarmMaintenance', 'approvals', 'adminSettings', 'dashboards', 'devices', 'identities'] },
 ];
 
 export const DEFAULT_LOCALE = 'en';
