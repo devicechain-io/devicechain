@@ -11,7 +11,7 @@ using NUnit.Framework;
 namespace DeviceChain.Harborpulse.Tests
 {
     /// <summary>
-    /// U9: the wet wells' view in a 9:16 frame, the derate page's wide view past the ferry, the page's end on a day with no link, the two
+    /// U9: the wet wells' view in a 9:16 frame, the derate page's wide view past the ferry, the page's late claim and its end on a day with no link, the two
     /// landmark tors and their joints, and the squalls kept to an eye that stands high.
     /// </summary>
     public class U9Tests
@@ -176,40 +176,33 @@ namespace DeviceChain.Harborpulse.Tests
             foreach (var s in new[] { "close", "insert" }) Assert.That(map.Pose("pose:chargers-basin:" + s).Camera.Z, Is.EqualTo(charger.Z + 14).Within(1e-9), s);
         }
 
-        // ---------------------------------------------------------------- the derate page's end on a day with no link
+        // ---------------------------------------------------------------- the derate page's late claim, and its end on a day with no link
 
         static (double At, string Value)[] Events(Scheduler s, string kind) => s.Log.Where(e => e.Page == "3b" && e.Kind == kind).Select(e => (e.ShowS, e.Value.Replace("\n", " "))).ToArray();
 
         [TestCase("command-cause-not-read")]
         [TestCase("refuse-derate")]
-        public void ADayWithNoLinkLeavesTheDeratePageWhenACleanDayDoes(string control)
+        public void ADayWithNoLinkHoldsTheLastShotUntilTheFirstShotsOfferRunsOut(string control)
         {
+            // The derate caption is the page's headline claim and outranks a tidy end: the page stays open for the whole of the first
+            // shot's 80 s offer, so on a day when the link never comes the last shot stands on "Alarm raised." about 15 s longer than a
+            // clean day's does. The cuts are the clean day's, to the second, and the caption's words are what they were.
             var clean = DirectorTimeline.Run(); var run = DirectorTimeline.Run(control);
-            // the cuts are the clean day's, to the second
             Assert.That(Events(run, "shot"), Is.EqualTo(Events(clean, "shot")));
             Assert.That(Events(run, "shot").Select(e => e.Value), Is.EqualTo(new[] { "3b-1", "3b-2", "3b-3" }));
-            // and so is the page's end: the last shot stood 15 s longer on "Alarm raised.", until the first shot's offer of the derate caption ran out
-            var end = Events(run, "caption-end").Last(); var last = Events(run, "shot").Last();
-            Assert.That(end.At, Is.EqualTo(Events(clean, "caption-end").Last().At), "the page ends when a clean day's does");
+            var story = DirectorKit.Story().Pages.Single(p => p.Id == "3b");
+            var end = Events(run, "caption-end").Last(); var first = Events(run, "shot").First().At;
             Assert.That(end.Value, Is.EqualTo("hot-only"));
-            var story = DirectorKit.Story().Pages.Single(p => p.Id == "3b"); var first = story.Shots[0]; var third = story.Shots[2];
-            Assert.That(end.At - last.At, Is.EqualTo(third.HoldMinS).Within(1e-9), "the last shot's own minimum");
-            Assert.That(Events(run, "shot").First().At + first.HoldMaxS, Is.GreaterThan(end.At + 10), "the first shot's offer is still open when the page ends");
-            // the caption's words are what they were, and it stood for its hold
-            var captions = Events(run, "caption");
-            Assert.That(captions.Select(c => c.Value).Distinct().Single(), Is.EqualTo("Running hot. Alarm raised."));
-            Assert.That(end.At - captions.Last().At, Is.GreaterThanOrEqualTo(3));
-            // nothing outside page 3b moved, but for the page-4 node the cause control declares
-            string[] Rest(Scheduler s) => s.Log.Where(e => e.Page != "3b" && e.Page != "4" && new[] { "shot", "caption", "caption-end", "node", "link" }.Contains(e.Kind))
-                .Select(e => e.ShowS.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + "|" + e.Page + "|" + e.Kind + "|" + e.Value).ToArray();
-            Assert.That(Rest(run), Is.EqualTo(Rest(clean)));
+            Assert.That(end.At, Is.InRange(first + story.Shots[0].HoldMaxS, first + story.Shots[0].HoldMaxS + 1.5), "the page ends when the first shot's offer does");
+            Assert.That(end.At - Events(clean, "caption-end").Last().At, Is.InRange(10, 20), "longer than a clean day, by about 15 s");
+            Assert.That(Events(run, "caption").Select(c => c.Value).Distinct().Single(), Is.EqualTo("Running hot. Alarm raised."));
         }
 
         [Test]
         public void AnOfferFromAnEarlierShotIsStillTakenInTheLastOne()
         {
             // A clean day whose derate command is read a minute late, in the page's last shot, after "Alarm raised." went up: the first
-            // shot's offer is still open, and the caption is shown. The offer no longer holds the page open; it is still an offer.
+            // shot's offer is still open, and the caption is shown.
             var layout = Kit.Layout(); var source = DirectorTimeline.Clean("", layout); var late = new ObservationStore();
             var shownAt = double.NaN;
             var s = new Scheduler(Storyboard.Parse(DirectorKit.StoryText(), new PresentationMap(layout)), layout);
@@ -229,26 +222,26 @@ namespace DeviceChain.Harborpulse.Tests
         }
 
         [Test]
-        public void ALinkReadAfterTheLastShotHasStoodItsTimeIsNotShown()
+        public void ALinkReadAfterTheLastShotHasStoodItsTimeIsStillShown()
         {
-            // What the tidy costs, pinned so that it is a decision and not an accident. When "Alarm raised." has gone up in the last shot
-            // and the shot has stood its minimum, a day whose link will come in ten seconds and a day whose link never comes look the
-            // same, and the page ends. U8 waited out the first shot's 80 s offer for both. Here the command is read 70 s after the page's
-            // first shot: inside that offer, after the page has ended.
+            // The claim, pinned. The command is read 70 s after its alarm: after "Alarm raised." has gone up in the last shot and the shot
+            // has stood its minimum, and inside the first shot's 80 s offer. A scheduler that let the last shot wait only for its own
+            // offers (tried in U9, and ruled out) had ended the page by then and never said the platform derated.
             var layout = Kit.Layout(); var source = DirectorTimeline.Clean("", layout); var late = new ObservationStore();
+            var shownAt = double.NaN;
             var s = new Scheduler(Storyboard.Parse(DirectorKit.StoryText(), new PresentationMap(layout)), layout);
             for (var wall = 0; wall <= 600; wall++)
             {
                 var sim = 6 + wall * 24.0 / layout.DayLengthSeconds;
                 foreach (var o in source.Records.Where(o => o.ObservedAtS <= (o.Kind == "command" && o.Key == "derate" ? wall - 70 : wall))) late.Add(o);
                 foreach (var stream in new[] { "alarms", "notifications", "credentials", "pump", "measurements" }) late.AddCoverage(new CoverageInterval("run", stream, 6, sim, false));
-                s.Tick(new DirectorSample("run", sim, wall), late);
+                foreach (var e in s.Tick(new DirectorSample("run", sim, wall), late))
+                    if (e.Page == "3b" && e.Kind == "caption" && e.Value.Contains("derate")) shownAt = e.ShowS;
             }
-            var first = Events(s, "shot").First().At; var end = Events(s, "caption-end").Last().At;
-            Assert.That(late.Records.Any(o => o.Kind == "command" && o.Key == "derate" && o.ObservedAtS + 70 > end && o.ObservedAtS + 70 < first + 80), Is.True, "the command is read after the page's end and inside the first shot's offer");
-            Assert.That(Events(s, "caption").Any(c => c.Value.Contains("derate")), Is.False);
-            Assert.That(Events(s, "caption").Select(c => c.Value).Distinct().Single(), Is.EqualTo("Running hot. Alarm raised."));
-            Assert.That(end, Is.EqualTo(Events(DirectorTimeline.Run(), "caption-end").Last().At), "the page ends when a clean day's does");
+            var shots = Events(s, "shot"); var story = DirectorKit.Story().Pages.Single(p => p.Id == "3b");
+            Assert.That(shownAt, Is.GreaterThan(shots.Last().At + story.Shots[2].HoldMinS + 3), "after the last shot's minimum and the stand-in's hold");
+            Assert.That(shownAt, Is.LessThan(shots.First().At + story.Shots[0].HoldMaxS), "inside the first shot's offer");
+            Assert.That(Events(s, "caption").Select(c => c.Value), Does.Contain("Running hot. Alarm raised."));
         }
 
         // ---------------------------------------------------------------- the two tors

@@ -1126,7 +1126,7 @@ Basin chargers past the terminal (and that the same check sees U7's hall hide th
 strip being the line from the well to the eye; the level tags above the caption's box and the far rim under the banner (and that the
 same check sees U7's overlap); and the ratio of blue to red in the light through the morning, without a step.
 
-## U9 five things U8 left short, and the ground
+## U9 four things U8 left short, one it keeps, and the ground
 
 ### The five
 
@@ -1159,16 +1159,16 @@ same check sees U7's overlap); and the ratio of blue to red in the light through
   wide view alone now stands 34 m south of the chargers' line, off the ferry's stern, and looks north-west: both chargers in the
   middle with the terminal behind them, the quay's steps at the left and the berth's pontoon at the right. The close and insert views
   keep U8's step. The berth's plan is named once (`NearLandmarks.FerryOffM` and its neighbours) for the builder and the test.
-- **The derate page's end on a day with no link** (`Scheduler.Advance`). A caption's offer outlives its shot: page 3b's derate
-  caption is offered for 80 s from the page's first shot and is usually read in the second. The page's last shot waited for every
-  open offer, so on a day when the link never comes (the command refused, or its cause not read) it stood on "Alarm raised." until the
-  first shot's offer ran out, 15 s after a clean day had left. The last shot now waits only for the offers it made itself. An earlier
-  offer is still taken while the page is open; it no longer holds it open. No caption's words and no cut changed: in the director's
-  golden outputs the clean day is unchanged, and the two no-link controls differ in one line each, the last `caption-end` of page 3b
-  (561 s to 546 s, the clean day's). What it costs: once "Alarm raised." has gone up in the last shot and the shot has stood its 6 s, a day whose
-  link is about to be read and a day whose link never comes look the same, and the page ends; a command read after that (about 65 s
-  after the page's first shot) is not captioned, where U8 would have shown it until 80 s. On the live days so far the command was read
-  within 3 s of its alarm. `ALinkReadAfterTheLastShotHasStoodItsTimeIsNotShown` pins this.
+- **The derate page's end on a day with no link: tried, and ruled out** (`Scheduler.Advance`). A caption's offer outlives its shot:
+  page 3b's derate caption is offered for 80 s from the page's first shot and is usually read in the second. The page's last shot
+  waits for every open offer, so on a day when the link never comes (the command refused, or its cause not read) it stands on "Alarm
+  raised." until the first shot's offer runs out, about 15 s after a clean day has left. U9 first made the last shot wait only for
+  the offers it made itself, which ended those days on the clean day's second, and a live day confirmed it. But once "Alarm raised."
+  is up in the last shot, a day whose link is about to be read and a day whose link never comes look the same, so that rule also
+  dropped the derate caption for a command read after the last shot's minimum. The derate caption is the page's headline claim and
+  outranks the tidy: the scheduler is as U8 left it, the goldens are unchanged, and the 15 s stays.
+  `ALinkReadAfterTheLastShotHasStoodItsTimeIsStillShown` pins the claim and
+  `ADayWithNoLinkHoldsTheLastShotUntilTheFirstShotsOfferRunsOut` its price.
 
 ### The ground
 
@@ -1181,6 +1181,6 @@ the 9:16 HOME's whole foreground. A facet still has one normal, so the knolls ke
 `U9Tests` pins the tall view (every tag's line between the caption and the rail, both ends of the attribute rule's tag inside the
 frame, and that the same checks see the 16:9 eye fail all three in a tall frame); that only a well's view has a tall version and only
 it draws the tags in a tall frame; the wide view (no point of the ferry in the frame, the pontoon right of both chargers, nothing on
-the quay's edge in front of either, and that the same check sees U8's ferry); the no-link page's end at the clean day's second with
-the clean day's cuts, and an earlier shot's offer still taken in the last one; the west tor's place in the 9:16 HOME and out of the
+the quay's edge in front of either, and that the same check sees U8's ferry); a derate command read late in the last shot still
+captioned, and the no-link page's end with the first shot's offer; the west tor's place in the 9:16 HOME and out of the
 16:9 one, its stacking and its being its sister's mirror; the joint's share and tones; and the squalls' eye heights against every pose.

@@ -340,10 +340,10 @@ namespace DeviceChain.Harborpulse.Model.Director
             if (elapsed >= shot.MoveS + shot.HoldMaxS || p.State == PageState.Fallback) complete = true;
             if (!complete || (!Open(p, sample.Sim) && !Boundary(p, now))) return;
             if (p.Shot + 1 >= p.Page.Shots.Count && p.State == PageState.Watching) return;
-            // The last shot stays for the offers it made itself. An offer left over from an earlier shot may still be taken while the page is open
-            // (page 3b's derate caption is offered for 80 s from its first shot and is usually read in the second), but it does not hold the page
-            // open: on a day with no link it never comes, and the last shot stood on "Alarm raised." until that first offer ran out.
-            if (p.Shot + 1 >= p.Page.Shots.Count && p.Pending.Any(o => o.Shot == shot) && Open(p, sample.Sim) && p.State != PageState.Fallback) return;
+            // The last shot stays while ANY offer is open, an earlier shot's included: page 3b's derate caption, the page's headline claim, is
+            // offered for 80 s from its first shot, and a command read late must still be captioned. The price is paid on a day with no link,
+            // when the last shot stands on "Alarm raised." until that first offer runs out (U9Tests pins both).
+            if (p.Shot + 1 >= p.Page.Shots.Count && p.Pending.Count > 0 && Open(p, sample.Sim) && p.State != PageState.Fallback) return;
             if (p.Shot + 1 >= p.Page.Shots.Count || p.State == PageState.Fallback) { Finish(p, now); return; }
             if (sample.Sim < p.Page.Shots[p.Shot + 1].CueSim) return;
             Hide(p, now); p.Caption = null; p.Text = null; p.Shot++; p.Slot = 0; p.Provisional = false; p.ShotS = now;
