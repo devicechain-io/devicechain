@@ -101,15 +101,16 @@ func (r *SchemaResolver) CreateArea(ctx context.Context, args struct {
 // update naming no fields was a caller error; nothing enforced that, and nothing
 // should.
 func (r *SchemaResolver) UpdateArea(ctx context.Context, args struct {
-	Token   string
-	Request model.AreaUpdateRequest
+	Token             string
+	ExpectedUpdatedAt *string
+	Request           model.AreaUpdateRequest
 }) (*AreaResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateArea(ctx, args.Token, &args.Request)
+	updated, err := api.UpdateArea(ctx, args.Token, args.ExpectedUpdatedAt, &args.Request)
 	if err != nil {
 		return nil, err
 	}

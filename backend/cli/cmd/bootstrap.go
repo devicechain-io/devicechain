@@ -620,6 +620,11 @@ var bootstrapCmd = &cobra.Command{
 				CreatedAt:    time.Now().UTC(),
 				DcctlVersion: Version,
 			}
+			// A re-run rewrites the record; the MQTT node port the earlier run recorded is still
+			// the instance's until this run's apply records it again.
+			if old, err := bootstrap.ReadInstanceRecord(opts.Instance); err == nil {
+				rec.MQTTNodePort = old.MQTTNodePort
+			}
 			if err := bootstrap.WriteInstanceRecord(rec); err != nil {
 				fmt.Println(color.YellowString(
 					"warning: could not record which cluster this instance lives in (%v).\n"+

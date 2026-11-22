@@ -357,7 +357,7 @@ func assetFamily() putest.Family[*Api] {
 		},
 		NewRequest: func() any { return new(AssetUpdateRequest) },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
-			_, err := api.UpdateAsset(ctx, token, req.(*AssetUpdateRequest))
+			_, err := api.UpdateAsset(ctx, token, nil, req.(*AssetUpdateRequest))
 			return err
 		},
 		Fields: append(memberFields("assetTypeToken",
@@ -405,7 +405,7 @@ func customerFamily() putest.Family[*Api] {
 		},
 		NewRequest: func() any { return new(CustomerUpdateRequest) },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
-			_, err := api.UpdateCustomer(ctx, token, req.(*CustomerUpdateRequest))
+			_, err := api.UpdateCustomer(ctx, token, nil, req.(*CustomerUpdateRequest))
 			return err
 		},
 		Fields: memberFields("customerTypeToken",
@@ -459,7 +459,7 @@ func areaFamily() putest.Family[*Api] {
 		},
 		NewRequest: func() any { return new(AreaUpdateRequest) },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
-			_, err := api.UpdateArea(ctx, token, req.(*AreaUpdateRequest))
+			_, err := api.UpdateArea(ctx, token, nil, req.(*AreaUpdateRequest))
 			return err
 		},
 		Fields: append(memberFields("areaTypeToken",
@@ -1056,7 +1056,7 @@ func publishDynamicGroupVersions(t *testing.T, api *Api, ctx context.Context, to
 	for v := 1; v <= versions; v++ {
 		if v > 1 {
 			next := `attr["climate"] == "v` + intStr(int32(v)) + `"`
-			if _, err := api.UpdateEntityGroup(ctx, token, &EntityGroupUpdateRequest{
+			if _, err := api.UpdateEntityGroup(ctx, token, nil, &EntityGroupUpdateRequest{
 				Selector: dcgraphql.OptionalStringOf(next),
 			}); err != nil {
 				t.Fatalf("edit %q draft for v%d: %v", token, v, err)
@@ -1175,7 +1175,7 @@ func entityGroupFamily() putest.Family[*Api] {
 		},
 		NewRequest: func() any { return new(EntityGroupUpdateRequest) },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
-			_, err := api.UpdateEntityGroup(ctx, token, req.(*EntityGroupUpdateRequest))
+			_, err := api.UpdateEntityGroup(ctx, token, nil, req.(*EntityGroupUpdateRequest))
 			return err
 		},
 		Fields: append(
