@@ -147,7 +147,7 @@ func runPresenceDemote(cmd *cobra.Command, args []string) error {
 		},
 	}
 
-	session := apiclient.NewTenantSession(nil, endpoints.UserGraphQL, presenceEmail, presencePassword, presenceTenant).
+	session := apiclient.NewTenantSession(nil, endpoints.UserGraphQL, presenceEmail, presencePassword, presenceTenant, recordedEndpointVersions(cmd, opts.Endpoint)...).
 		WithOTP(otpFunc(otpFlag(cmd)))
 	sum, err := presence.Run(cmd.Context(), session, opts)
 	if errors.Is(err, presence.ErrDeclined) {

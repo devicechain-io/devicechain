@@ -134,7 +134,7 @@ func (n *schemaNegotiation) contractFor(ctx context.Context, httpc *http.Client,
 	sdl, conservative, err := n.discover(ctx, httpc, endpoint, headers)
 	cached.conservative = conservative
 	if err != nil {
-		cached.err = fmt.Errorf("cannot negotiate this instance's schema; discovery is required unless its legacy endpoint version was independently verified: %w", err)
+		cached.err = fmt.Errorf("cannot negotiate this instance's schema; discovery is required unless its legacy endpoint version was independently verified; dcctl: select --instance <id> with a readable Instance release record, or upgrade to v1.9.0+ and allow OPTIONS discovery through the proxy: %w", err)
 	} else {
 		cached.schema, err = graphql.ParseSchema(sdl, nil, graphql.UseStringDescriptions())
 		if err != nil {

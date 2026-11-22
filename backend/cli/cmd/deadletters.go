@@ -109,7 +109,7 @@ func runDeadLettersList(cmd *cobra.Command, args []string) error {
 	}
 
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
-	session := apiclient.NewAdminSession(nil, endpoints.UserGraphQL, dlEmail, dlPassword).WithOTP(otpFunc(otpFlag(cmd)))
+	session := apiclient.NewAdminSession(nil, endpoints.UserGraphQL, dlEmail, dlPassword, recordedEndpointVersions(cmd, opts.AdminURL)...).WithOTP(otpFunc(otpFlag(cmd)))
 
 	// 🔴 NO SUPERUSER PRE-CHECK HERE, and an earlier version had one. The server gates
 	// this on audit:read, which is deliberately grantable on a non-superuser system role —

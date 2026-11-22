@@ -172,7 +172,7 @@ func runEventsFailed(cmd *cobra.Command, args []string) error {
 	}
 
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
-	session := apiclient.NewTenantSession(nil, endpoints.UserGraphQL, evEmail, evPassword, evTenant).
+	session := apiclient.NewTenantSession(nil, endpoints.UserGraphQL, evEmail, evPassword, evTenant, recordedEndpointVersions(cmd, opts.Endpoint)...).
 		WithOTP(otpFunc(otpFlag(cmd)))
 	out := cmd.OutOrStdout()
 
