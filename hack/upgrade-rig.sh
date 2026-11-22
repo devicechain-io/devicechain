@@ -3266,7 +3266,7 @@ cmd_attrlock() {
   resolve_baseline_tag
   [[ -s "$receipt" ]] || fail "$receipt is missing; run 'up' and 'upgrade' first: the writes are to the device the seed made"
   [[ -x "$apiprobe" ]] || build_apiprobe
-  local ns deploy json live image pod dev_id waiters p_old p_new p_hold rc i
+  local ns deploy json live image pod dev_id tenant waiters p_old p_new p_hold rc i
   ns="$(instance_namespace)"
   say "ATTRIBUTE LOCK — a $baseline_tag device-management pod beside the upgraded ones"
   trap attrlock_cleanup EXIT
@@ -3313,8 +3313,12 @@ $(cat "$work/attrlock-new.log")"
   # 2. The protocol is in force: a write waits on the device's lock while it is held.
   pod="$(pg_pod)"
   rdb_db="$(rdb_database "$pod" entity_attribute_generations)"
-  dev_id="$(attrlock_psql "$pod" "SELECT id FROM \"device-management\".devices WHERE token = 'apiprobe-device' LIMIT 1")"
-  [[ "$dev_id" =~ ^[0-9]+$ ]] || fail "could not find the seeded device's id (got '$dev_id')"
+  # The seed's tenant, not any tenant: the table sweep later seeds a second tenant whose device has the
+  # same token, and the lock is per device id, so the wrong one holds a lock the write never asks for.
+  tenant="$(jq -r '.tenant' "$receipt")"
+  [[ -n "$tenant" && "$tenant" != null && "$tenant" =~ ^[A-Za-z0-9_-]+$ ]] || fail "the receipt names no usable tenant ('$tenant')"
+  dev_id="$(attrlock_psql "$pod" "SELECT id FROM \"device-management\".devices WHERE tenant_id = '$tenant' AND token = 'apiprobe-device'")"
+  [[ "$dev_id" =~ ^[0-9]+$ ]] || fail "could not find the seeded device's id in tenant $tenant (got '$dev_id')"
 
   attrlock_hold "$pod" "$dev_id" 14
   p_hold=$!
