@@ -3,8 +3,8 @@
   "locale": "es",
   "pages": {
     "concepts/ai-authoring.md": {
-      "sourceSha256": "454470ce9e33be1285bf78cca11aca57f9dec7dec73bc833f7e31b42e40cd3d2",
-      "translationSha256": "0fde0d61f10960d75d8a2954a64e9e3e5975d60788ca4fc0c818ed7de220fc8f"
+      "sourceSha256": "86d1bb48aa4bb117f26fb44995c149556e4e376b854e0f3c61632da2c3748848",
+      "translationSha256": "6982b5434bab58b6eced8ad2c85a663ac68b6c94676173164c8ce8baf4dd1883"
     },
     "concepts/architecture-at-a-glance.md": {
       "sourceSha256": "1c0528fa3ccc7f295e22b476d1cbc8523431a0eb40007e960a5be8f9e423cb53",
@@ -15,8 +15,8 @@
       "translationSha256": "63a1885dfc57d960bafdb5d277e8036a4f59d0b6372fa76b9e17caf664e656c7"
     },
     "concepts/automation-change-review.md": {
-      "sourceSha256": "28a4e4b9133c132b3ed769fe08c0914c926091307b5fec02f27a613036a6b0d6",
-      "translationSha256": "2f3449314526481b2174e6eb01ebc6d6123b4afd89485478b2a67e05f5c45a0b"
+      "sourceSha256": "afc685bd22b8b583905f40de42d452b772f34058a2faf4904ab1279f719b752e",
+      "translationSha256": "4683d083c89f92889a9bdd59edb77b9f2039aafaa9eb9d423e50ce656db23e7d"
     },
     "concepts/basemaps.md": {
       "sourceSha256": "61971b3c52b6d9a9f6b3acf9be14492c243f648c5e796f21708aa96f6358fef7",
@@ -27,8 +27,8 @@
       "translationSha256": "3e24172ebcdc8c937f0a2c5084a227b07555efe85ea1967732cee96aeb8daf1f"
     },
     "concepts/dashboards.md": {
-      "sourceSha256": "53f565d8cd259ba527fa31cc58719632e8d7e84ea2a93a28ae46e8da9db48e7e",
-      "translationSha256": "5800d8d1051beaf8cbd6bc4ee4c308701f421370a58972832280d0829dc8aee0"
+      "sourceSha256": "e1ebbdedb1493c00924e7f220f12d6fd51be8969c3b9707358fda0f2e59d75c7",
+      "translationSha256": "a9ea78f045009de1227b354ea0fd919b95b5396ec2bc1fce27b6af597498a862"
     },
     "concepts/device-certificates.md": {
       "sourceSha256": "3da5f49e01033c552f72eed12a5877bd2b7bb83660f4e8644fd98fe1c5312b62",
@@ -39,12 +39,12 @@
       "translationSha256": "53ae41b52b87ebe28e94a2040d79401706eda5d4dd8b344ffaf469aeb903f86e"
     },
     "concepts/domain-model.md": {
-      "sourceSha256": "6130345fbf475ceb3ef775caf8781e345bb24ad4f00ffc083a33d13691bf81e6",
-      "translationSha256": "2245776d16ecb57b16391a8c221352214cd7d5de0aa9d059d4819aa787188627"
+      "sourceSha256": "c4c54be33891be3ce11b3efb77aa40e486bafcfb6a982833168f5bf95d04fb6f",
+      "translationSha256": "a7874515427db67e167c419946a425f0efc35c3e3f3bc813fb87a12179faffcd"
     },
     "concepts/event-processing.md": {
-      "sourceSha256": "d41560392a7c5266ee2075ce3ee38fe04fdf27af41f1f809fefa573ff25c8262",
-      "translationSha256": "c71cc40ac65fd92cfb862d110dcbeee809e22fc4fd37229a3d654a80ac9f5a80"
+      "sourceSha256": "017ebfc1077bbb9cef32197b009f7a438bfa127cfd014e74b4f3c7a556e11961",
+      "translationSha256": "9c329a46810db46b55784c6e124869717e07142119129db6017b81d00e0451d2"
     },
     "concepts/geofencing.md": {
       "sourceSha256": "a6977f892a2f4734e5b9df1753b1c3ddb041243ea92c40097635775c15c3e732",
@@ -59,8 +59,8 @@
       "translationSha256": "552935434fbaddd4bc043c527c5f0a9e9e3c2fe76aef51111f91b9db0df504e4"
     },
     "concepts/mcp.md": {
-      "sourceSha256": "354ee6a37c055940215a04753164999db567fb34459aa00544d9c734b5aa888a",
-      "translationSha256": "62f9054da6101b1bfd82f98815c5e525a957c2e25b189a631337bf2d4f2ad6ab"
+      "sourceSha256": "afdc732f9ddb53e57209a13d0880800af67f3ea98a8688ced4241c97554c4ea8",
+      "translationSha256": "3a5189003f67e999af6b0ff20dfc233e00ceee3e238666ebc9b137c796327792"
     },
     "concepts/multi-tenancy.md": {
       "sourceSha256": "3210c3d842a42523f8122b1f639855ba714a3f48bf895331c533a7b59c6e1ec6",
@@ -75,8 +75,8 @@
       "translationSha256": "612dd7c04984c5cebd28707b891797aa62556fe10f047cd5ccd09e57d80ba553"
     },
     "concepts/over-the-air-updates.md": {
-      "sourceSha256": "3fc7c82c9403cdc534c4896cf50eccc0facf3ff7023b13b33b45ec8acf5c7464",
-      "translationSha256": "a5f494146f7aed3b7a159aa0dfb637b55aa89e37722a2e8307d18759b7fb9c09"
+      "sourceSha256": "9809d0dd6a0c83f4b6e9370a7398fcf4b8bd3f8895ed56619b635aebc5ea49c6",
+      "translationSha256": "24441e41782ae09c4f8391b424bbf5788931a8bdcb89bac61e61562e77355977"
     },
     "concepts/security-model.md": {
       "sourceSha256": "eb0b1c8ca6bf603f3fb68677b80e272f970718ba2954675cf6c2a6f9a6ce3484",
@@ -87,16 +87,16 @@
       "translationSha256": "e4c7b648b10c66c926c44a19b574d615b1da473e89fa87ad66b2ad05030d8e28"
     },
     "concepts/sparkplug.md": {
-      "sourceSha256": "95925217ebca312322417268e71cc31163783864c564e04d07209a98c354678d",
-      "translationSha256": "f0d7af79d905e2e316b15a3b10238f509c275033ba787439a3a7b357a4599148"
+      "sourceSha256": "d03e32767e283142a0697251de2de2c5fc3ad7c241eac73297683eac23c99e94",
+      "translationSha256": "da38a7de020e9f033240ff9b459925406718064d2f6237f20bb76f61ffd22dec"
     },
     "concepts/system-settings.md": {
       "sourceSha256": "db845b63621d48142efaa1ea7e38e4ef33ae73d264ad52ef2c645e33086a0a2c",
       "translationSha256": "fbcffbbbc115194f8b70842108c8a7dfaa9b673a9b86d3e491ea9c3432393c6f"
     },
     "concepts/tenant-tiers.md": {
-      "sourceSha256": "ce444237d29ac2223ef20f8cbc21c37e96f1ee8fdf83e94981a81e5707bd5ea7",
-      "translationSha256": "5b1618260f5638710b3ebb0b7ac39384fa39d2265bf1660296c9567299866292"
+      "sourceSha256": "9eea6f3917cb446521037898f8885bd4550b3028f964ed45fff86cd460603d6c",
+      "translationSha256": "8341ec715d3c1a0fa103950901f66700c91b31aaa52829ab80296050874ba512"
     },
     "concepts/white-labeling.md": {
       "sourceSha256": "cd5d23795508ae3259d295bed6fa30e944703edfab47b1604d8988bf795bc800",
