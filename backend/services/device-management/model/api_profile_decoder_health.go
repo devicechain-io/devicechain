@@ -217,24 +217,38 @@ func (api *Api) PayloadDecoderHealth(ctx context.Context, profileToken string, m
 		return nil, err
 	}
 	since := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute).Truncate(time.Minute)
-	var rows []ProfileDecoderHealth
-	err = api.RDB.DB(ctx).
-		Where("tenant_id = ? AND device_profile_id = ? AND window_start >= ?", tenant, p.ID, since).
-		Order("window_start ASC, id ASC").Find(&rows).Error
-	if err != nil {
+	// 🔴 SUMMED IN THE DATABASE. A week at the maximum span is one row per replica per minute (about
+	// 10,000 per replica), and reading every one of them into the service to add five numbers made
+	// the read grow with the span and the replica count. Two statements, both on the
+	// (tenant_id, device_profile_id, window_start) index: one aggregate, and the one row that
+	// carries the last error.
+	window := func() *gorm.DB {
+		return api.RDB.DB(ctx).Model(&ProfileDecoderHealth{}).
+			Where("tenant_id = ? AND device_profile_id = ? AND window_start >= ?", tenant, p.ID, since)
+	}
+	var sums struct {
+		Windows                                          int
+		Decoded, Ignored, Failed, Suppressed, ChargeSkew int64
+	}
+	if err := window().Select("COUNT(*) AS windows, " +
+		"COALESCE(SUM(decoded), 0) AS decoded, COALESCE(SUM(ignored), 0) AS ignored, " +
+		"COALESCE(SUM(failed), 0) AS failed, COALESCE(SUM(suppressed), 0) AS suppressed, " +
+		"COALESCE(SUM(charge_skew), 0) AS charge_skew").Scan(&sums).Error; err != nil {
 		return nil, err
 	}
-	out := &DecoderHealth{Since: since, Windows: len(rows)}
-	for _, r := range rows {
-		out.Decoded += r.Decoded
-		out.Ignored += r.Ignored
-		out.Failed += r.Failed
-		out.Suppressed += r.Suppressed
-		out.ChargeSkew += r.ChargeSkew
-		if r.LastFailureAt != nil && (out.LastFailureAt == nil || r.LastFailureAt.After(*out.LastFailureAt)) {
-			t := *r.LastFailureAt
-			out.LastFailureAt, out.LastError = &t, r.LastError
-		}
+	out := &DecoderHealth{Since: since, Windows: sums.Windows, Decoded: sums.Decoded, Ignored: sums.Ignored,
+		Failed: sums.Failed, Suppressed: sums.Suppressed, ChargeSkew: sums.ChargeSkew}
+	// The last error is the one recorded with the latest failure. Among rows whose failures are
+	// equally late, the earliest row (window_start, then id) keeps it, which is what the tally did
+	// when it walked the rows in that order and replaced only on a strictly later failure.
+	var last []ProfileDecoderHealth
+	if err := window().Select("last_failure_at", "last_error").Where("last_failure_at IS NOT NULL").
+		Order("last_failure_at DESC, window_start ASC, id ASC").Limit(1).Find(&last).Error; err != nil {
+		return nil, err
+	}
+	if len(last) == 1 && last[0].LastFailureAt != nil {
+		t := *last[0].LastFailureAt
+		out.LastFailureAt, out.LastError = &t, last[0].LastError
 	}
 	return out, nil
 }
