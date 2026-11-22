@@ -5,10 +5,12 @@ package model
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/gorm/schema"
 )
 
 // Event with token references resolved. DeviceToken names the originating device
@@ -260,6 +262,23 @@ type MeasurementRollup struct {
 	MinValue    sql.NullFloat64
 	MaxValue    sql.NullFloat64
 	CountValue  int64
+}
+
+// MeasurementRollupHourly is one row of the measurement_rollups_1h continuous aggregate: the
+// same partials as MeasurementRollup, one hour per row, built over the one-minute level. It
+// carries the same tenant column, so a read of it is fail-closed tenant-scoped exactly like
+// the level beneath. Like that level it declares no scope rule: a scoped caller never reads
+// it (see useMeasurementRollup).
+type MeasurementRollupHourly struct {
+	MeasurementRollup
+}
+
+// TableName is measurement_rollups_1h under the functional-area prefix. It takes the namer so
+// gorm applies that prefix exactly as it does to MeasurementRollup (an explicit string would
+// bypass it): the namer names the minute level, and this swaps that table's own name for the
+// hourly one, so the prefix is whatever the namer says it is.
+func (MeasurementRollupHourly) TableName(namer schema.Namer) string {
+	return strings.TrimSuffix(namer.TableName("MeasurementRollup"), RollupAggregate) + RollupAggregate1h
 }
 
 // Alert event fields.

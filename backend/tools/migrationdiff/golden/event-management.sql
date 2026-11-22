@@ -287,6 +287,31 @@ UNION ALL
  FROM "event-management".measurement_events
  WHERE (measurement_events.occurred_time >= COALESCE(_timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(N)), '-infinity'::timestamp with time zone))
  GROUP BY measurement_events.tenant_id, measurement_events.device_token, measurement_events.event_type, measurement_events.name, (public.time_bucket('00:01:00'::interval, measurement_events.occurred_time));
+CREATE VIEW "event-management".measurement_rollups_1h AS
+ SELECT _materialized_hypertable_N.tenant_id,
+ _materialized_hypertable_N.device_token,
+ _materialized_hypertable_N.event_type,
+ _materialized_hypertable_N.name,
+ _materialized_hypertable_N.bucket,
+ _materialized_hypertable_N.sum_value,
+ _materialized_hypertable_N.min_value,
+ _materialized_hypertable_N.max_value,
+ _materialized_hypertable_N.count_value
+ FROM _timescaledb_internal._materialized_hypertable_N
+ WHERE (_materialized_hypertable_N.bucket < COALESCE(_timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(N)), '-infinity'::timestamp with time zone))
+UNION ALL
+ SELECT measurement_rollups.tenant_id,
+ measurement_rollups.device_token,
+ measurement_rollups.event_type,
+ measurement_rollups.name,
+ public.time_bucket('01:00:00'::interval, measurement_rollups.bucket) AS bucket,
+ sum(measurement_rollups.sum_value) AS sum_value,
+ min(measurement_rollups.min_value) AS min_value,
+ max(measurement_rollups.max_value) AS max_value,
+ (sum(measurement_rollups.count_value))::bigint AS count_value
+ FROM "event-management".measurement_rollups
+ WHERE (measurement_rollups.bucket >= COALESCE(_timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(N)), '-infinity'::timestamp with time zone))
+ GROUP BY measurement_rollups.tenant_id, measurement_rollups.device_token, measurement_rollups.event_type, measurement_rollups.name, (public.time_bucket('01:00:00'::interval, measurement_rollups.bucket));
 CREATE VIEW analytics.alert_events WITH (security_barrier='true') AS
  SELECT tenant_id,
  event_id,
@@ -374,6 +399,7 @@ CREATE VIEW analytics.state_change_events WITH (security_barrier='true') AS
  FROM "event-management".state_change_events
  WHERE ((tenant_id)::text = analytics.reader_tenant());
 TIMESCALE CONTINUOUS AGGREGATE measurement_rollups MATERIALIZED_ONLY f MATERIALIZATION _materialized_hypertable_N;
+TIMESCALE CONTINUOUS AGGREGATE measurement_rollups_1h MATERIALIZED_ONLY f MATERIALIZATION _materialized_hypertable_N;
 TIMESCALE HYPERTABLE alert_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE event_anchors DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
@@ -382,3 +408,4 @@ TIMESCALE HYPERTABLE location_events DIMENSION occurred_time INTERVAL 7 days COM
 TIMESCALE HYPERTABLE measurement_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE state_change_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE POLICY policy_refresh_continuous_aggregate ON measurement_rollups SCHEDULE 00:01:00 CONFIG {"end_offset": "00:01:00", "start_offset": "30 days", "mat_hypertable_id": N};
+TIMESCALE POLICY policy_refresh_continuous_aggregate ON measurement_rollups_1h SCHEDULE 00:05:00 CONFIG {"end_offset": "01:00:00", "start_offset": "30 days", "mat_hypertable_id": N};

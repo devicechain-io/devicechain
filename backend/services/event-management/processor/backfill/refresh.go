@@ -11,12 +11,32 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 
 	"github.com/devicechain-io/dc-event-management/model"
 )
 
-// rollupView is the continuous aggregate a refresh brings up to date.
-const rollupView = `"event-management".measurement_rollups`
+// rollupView is the continuous aggregate a refresh brings up to date, and rollupViewHourly the
+// one-hour aggregate built over it.
+const (
+	rollupView       = `"event-management".measurement_rollups`
+	rollupViewHourly = `"event-management".measurement_rollups_1h`
+)
+
+// refreshRollups refreshes the minute aggregate over a window and then the hour aggregate over
+// the same window, in that order: the hour level is built from the minute level, so it only
+// sees what the minute refresh has already put there. The aggregates' own policies reach only a
+// trailing window, so a refresh of older history that stopped at the minute level would leave
+// the hour level answering with what it had before.
+func refreshRollups(db *gorm.DB, start, end time.Time) error {
+	for _, view := range []string{rollupView, rollupViewHourly} {
+		if err := db.Exec(`CALL refresh_continuous_aggregate(?::regclass, ?::timestamptz, ?::timestamptz)`,
+			view, start, end).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // refreshNext refreshes the rollup over the next chunk window the aggregate's own policy will
 // not reach, oldest first, and reports whether there is nothing left to refresh.
@@ -91,8 +111,7 @@ func (r *jobRun) refreshWindow(ctx context.Context, win chunkWindow) error {
 		if w.hooks.refresh != nil {
 			err = w.hooks.refresh(ctx, r.db, win.Start, win.End)
 		} else {
-			err = r.db.Exec(`CALL refresh_continuous_aggregate(?::regclass, ?::timestamptz, ?::timestamptz)`,
-				rollupView, win.Start, win.End).Error
+			err = refreshRollups(r.db, win.Start, win.End)
 		}
 		if err == nil {
 			w.metrics.RefreshSeconds.Observe(w.now().Sub(started).Seconds())
