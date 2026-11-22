@@ -3212,6 +3212,7 @@ $problems"
 # a controlled interleaving a live cluster cannot give, and is T-del-2 in
 # backend/services/device-management/model/attribute_old_delete_integration_test.go.
 attrlock_port=18461
+attrlock_port_new=18462
 attrlock_pids=()
 
 attrlock_cleanup() {
@@ -3323,12 +3324,25 @@ cmd_attrlock() {
   (exec 3<>"/dev/tcp/127.0.0.1/$attrlock_port") 2>/dev/null ||
     fail "the port-forward to the $baseline_tag pod never opened on $attrlock_port: $(cat "$work/attrlock-forward.log")"
 
+  # 🔴 THE UPGRADED PODS ARE REACHED THROUGH THEIR OWN PORT-FORWARD, NOT THE INGRESS. The baseline copy keeps the
+  # live pods' labels (the network policy selects on them), so the Service routes to it too, and a write
+  # through the ingress lands on it about half the time: the lock-wait check below then saw a v1.8 pod, which
+  # takes no lock, answer instantly. A forward to the ORIGINAL Deployment can only reach a pod of this release.
+  kubectl --context "$kube_context" -n "$ns" port-forward "deployment/$deploy" "${attrlock_port_new}:8080"     >"$work/attrlock-forward-new.log" 2>&1 &
+  attrlock_pids+=("$!")
+  for i in $(seq 1 30); do
+    (exec 3<>"/dev/tcp/127.0.0.1/$attrlock_port_new") 2>/dev/null && break
+    sleep 1
+  done
+  (exec 3<>"/dev/tcp/127.0.0.1/$attrlock_port_new") 2>/dev/null ||
+    fail "the port-forward to the upgraded pod never opened on $attrlock_port_new: $(cat "$work/attrlock-forward-new.log")"
+
   # 1. BOTH versions write the same device at once, and every write succeeds.
-  local old_url="http://127.0.0.1:$attrlock_port/graphql" args
+  local old_url="http://127.0.0.1:$attrlock_port/graphql" new_url="http://127.0.0.1:$attrlock_port_new/graphql" args
   args=(--server "$api_server" --scheme "$api_scheme" --receipt "$receipt")
   "$apiprobe" attrwrite "${args[@]}" --url "$old_url" --count 40 >"$work/attrlock-old.log" 2>&1 &
   p_old=$!
-  "$apiprobe" attrwrite "${args[@]}" --count 40 >"$work/attrlock-new.log" 2>&1 &
+  "$apiprobe" attrwrite "${args[@]}" --url "$new_url" --count 40 >"$work/attrlock-new.log" 2>&1 &
   p_new=$!
   rc=0; wait "$p_old" || rc=$?
   [[ "$rc" -eq 0 ]] || fail "WRITES THROUGH THE $baseline_tag POD FAILED while the upgraded pods write the same device (exit $rc):
@@ -3352,7 +3366,7 @@ $(cat "$work/attrlock-new.log")"
   attrlock_hold "$pod" "$dev_id" 14
   p_hold=$!
   sleep 3
-  "$apiprobe" attrwrite "${args[@]}" --count 1 >"$work/attrlock-wait.log" 2>&1 &
+  "$apiprobe" attrwrite "${args[@]}" --url "$new_url" --count 1 >"$work/attrlock-wait.log" 2>&1 &
   p_new=$!
   sleep 3
   waiters="$(attrlock_psql "$pod" "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted")"
@@ -3370,7 +3384,7 @@ The upgraded pods' attribute protocol did not take the lock, so it is not in for
   p_hold=$!
   sleep 3
   rc=0
-  "$apiprobe" attrwrite "${args[@]}" --count 1 >"$work/attrlock-ctl.log" 2>&1 &
+  "$apiprobe" attrwrite "${args[@]}" --url "$new_url" --count 1 >"$work/attrlock-ctl.log" 2>&1 &
   p_new=$!
   for i in $(seq 1 8); do kill -0 "$p_new" 2>/dev/null || break; sleep 1; done
   if kill -0 "$p_new" 2>/dev/null; then
