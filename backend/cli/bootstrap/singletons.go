@@ -253,10 +253,16 @@ var recordMQTTNodePort = func(instance string, port int32) error {
 	if err != nil {
 		return err
 	}
-	if rec.MQTTNodePort == int(port) {
+	want := int(port)
+	if port == 0 {
+		// "None" is written down, so it is not read back as "never recorded": an instance with no
+		// port must not be addressed at another instance's.
+		want = MQTTNodePortNone
+	}
+	if rec.MQTTNodePort == want {
 		return nil
 	}
-	rec.MQTTNodePort = int(port)
+	rec.MQTTNodePort = want
 	return WriteInstanceRecord(rec)
 }
 
