@@ -34,3 +34,16 @@ output "database_taint" {
     format("%s=%s:%s", t.key, t.value, local.kubernetes_taint_effect[t.effect])
   ])
 }
+
+
+output "shape" {
+  description = "What the module planned, for a root's own tests: a root-level `tofu test` can read module outputs but not the resources inside a module. Nothing secret, and not an interface a caller should build on."
+  value = {
+    cluster_labels       = google_container_cluster.this.resource_labels
+    pool_spot            = { for key, pool in google_container_node_pool.this : key => pool.node_config[0].spot }
+    pool_node_labels     = { for key, pool in google_container_node_pool.this : key => pool.node_config[0].labels }
+    pool_service_account = { for key, pool in google_container_node_pool.this : key => pool.node_config[0].service_account }
+    workload_pool        = length(google_container_cluster.this.workload_identity_config) == 0 ? null : google_container_cluster.this.workload_identity_config[0].workload_pool
+    waiter_enabled       = length(terraform_data.cluster_settled) == 1
+  }
+}

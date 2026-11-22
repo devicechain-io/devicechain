@@ -202,7 +202,7 @@ jobs:
       # dcctl, server, and driver are one consistent commit -- no admin-schema skew
       # (a HEAD dcctl sending shedPriority to a pre-#480 published server is the skew
       # this avoids). On the pull path, consistency instead comes from checkout==tag.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: true

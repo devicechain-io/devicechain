@@ -53,12 +53,12 @@ func resolveHostHeader(cmd *cobra.Command, server, instance string) string {
 }
 
 // newSimAdmin builds the admin client, presenting hostHeader as the Host when set.
-func newSimAdmin(hostHeader, userGraphQL, adminURL, email, password string) *sim.Admin {
+func newSimAdmin(cmd *cobra.Command, instance, hostHeader, userGraphQL, adminURL, email, password string) *sim.Admin {
 	var httpc *http.Client
 	if hostHeader != "" {
 		httpc = sim.HostHeaderClient(hostHeader)
 	}
-	return sim.NewAdminWithClient(httpc, userGraphQL, adminURL, email, password)
+	return sim.NewAdminWithClient(httpc, userGraphQL, adminURL, email, password, instanceEndpointVersions(cmd, instance, hostHeader, adminURL)...)
 }
 
 // withHostHint names the fix when a call that went to an address, with no Host

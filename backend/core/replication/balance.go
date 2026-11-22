@@ -225,6 +225,80 @@ func PlanRebalance(snap Snapshot, opts PlanOptions) RebalancePlan {
 		g.candidates = nil // placed (or unplaceable): the count balancing below leaves it where it is
 	}
 
+	// The consumers of the movable per-event streams. Moving a stream's leader does not move its
+	// consumers' leaders, and each of these delivers every event, so they are hot too. occ is the
+	// per-event streams each server leads now that the separation has placed the movable ones. A
+	// consumer on a server with a higher occ than one of its current, online replicas is moved to the
+	// lowest-occ such replica (then the one leading the fewest consumers, then by name). Each move
+	// strictly lowers its occ, so this terminates, and a server is never left hotter than before. A
+	// consumer this step moved is pinned; one it left may still be evened out by the count balancing,
+	// but only over servers no hotter than the one it is on: its candidates are narrowed to those.
+	occ := ledBy(nil)
+	pinnedStream := map[string]bool{}
+	for _, g := range pinned {
+		pinnedStream[g.stream] = true
+	}
+	sort.Slice(consumers, func(i, j int) bool {
+		if consumers[i].stream != consumers[j].stream {
+			return consumers[i].stream < consumers[j].stream
+		}
+		return consumers[i].consumer < consumers[j].consumer
+	})
+	consumerCounts := spread(consumers)
+	// The most constrained first: a consumer with fewer less-busy replicas to go to is placed before one
+	// with more, so the flexible ones fill whatever the constrained ones could not use. In name order a
+	// flexible consumer could take the only server a constrained one can reach, and the step pins what it
+	// moves, so the count balancing could not even that out afterwards.
+	var order []int
+	eligible := map[int]int{}
+	for i := range consumers {
+		g := &consumers[i]
+		if !pinnedStream[g.stream] {
+			continue
+		}
+		for _, c := range g.candidates {
+			if occ[c] < occ[g.leader] {
+				eligible[i]++
+			}
+		}
+		order = append(order, i)
+	}
+	sort.SliceStable(order, func(a, b int) bool { return eligible[order[a]] < eligible[order[b]] })
+	for _, i := range order {
+		g := &consumers[i]
+		moved := false
+		if maxMoves <= 0 || budget() > 0 {
+			best := ""
+			for _, c := range g.candidates {
+				if occ[c] >= occ[g.leader] {
+					continue
+				}
+				if best == "" || occ[c] < occ[best] || occ[c] == occ[best] && consumerCounts[c] < consumerCounts[best] {
+					best = c
+				}
+			}
+			if best != "" {
+				plan.Moves = append(plan.Moves, Move{Stream: g.stream, Consumer: g.consumer, From: g.leader, To: best})
+				consumerCounts[g.leader]--
+				consumerCounts[best]++
+				g.leader = best
+				moved = true
+			}
+		}
+		if moved {
+			// Placed: the count balancing leaves it there, so no group is elected twice in one plan.
+			g.candidates = nil
+			continue
+		}
+		var keep []string
+		for _, c := range g.candidates {
+			if c != g.leader && occ[c] <= occ[g.leader] {
+				keep = append(keep, c)
+			}
+		}
+		g.candidates = keep
+	}
+
 	balance := func(gs []group) Spread {
 		sp := spread(gs)
 		sort.Slice(gs, func(i, j int) bool {

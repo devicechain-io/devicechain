@@ -8,7 +8,7 @@ require (
 	github.com/devicechain-io/dc-outbound-connectors v0.0.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-	github.com/graph-gophers/graphql-go v1.11.0
+	github.com/graph-gophers/graphql-go v1.11.1
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1

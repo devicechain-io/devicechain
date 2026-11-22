@@ -12,7 +12,7 @@ require (
 	github.com/devicechain-io/dc-mcp v0.0.1
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/fatih/color v1.19.0
-	github.com/graph-gophers/graphql-go v1.11.0
+	github.com/graph-gophers/graphql-go v1.11.1
 	github.com/hashicorp/go-version v1.9.0
 	github.com/hashicorp/terraform-exec v0.26.0
 	github.com/hashicorp/terraform-json v0.29.0

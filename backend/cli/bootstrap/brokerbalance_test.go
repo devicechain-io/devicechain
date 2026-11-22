@@ -170,6 +170,46 @@ func TestNoIngestStreamIsEverMovable(t *testing.T) {
 	if len(plan.Moves) != 0 {
 		t.Fatalf("a plan moved ingest groups: %+v", plan.Moves)
 	}
+
+	// The same promise through the REAL options, with the per-event separation and consumer steps on.
+	// A hot resolved-events stream and its consumers share the ingest groups' server, so both steps have
+	// work to do there, and a shard-group copy of the inbound stream sits beside them: the steps must
+	// move resolved and its consumers and nothing of the ingest path, consumers included.
+	ingest := map[string]bool{}
+	for _, n := range []string{"$MQTT_msgs", "$MQTT_rmsgs", "inst_device-events-capture", "inst_inbound-events", "inst_inbound-events-g1"} {
+		ingest[n] = true
+	}
+	full := replication.Snapshot{}
+	add := func(stream string, consumers ...string) {
+		full.Objects = append(full.Objects, replication.Object{Name: stream, Replicas: 3, Leader: "n0", Peers: peers})
+		for _, c := range consumers {
+			full.Consumers = append(full.Consumers, replication.Consumer{Stream: stream, Name: c, Durable: true, Leader: "n0", Peers: peers})
+		}
+	}
+	for n := range ingest {
+		add(n, "reader", "other")
+	}
+	resolved := messaging.StreamName("inst", streams.ResolvedEvents)
+	add(resolved, "store", "state", "rules")
+	add(messaging.StreamName("inst", streams.AlarmEvents), "a")
+	opts := rebalancePlanOptions("inst", brokerRebalanceMaxMoves)
+	if opts.PerEvent == nil || !opts.PerEvent("$MQTT_msgs") || !opts.PerEvent(resolved) {
+		t.Fatal("the real options do not turn the per-event steps on")
+	}
+	real := replication.PlanRebalance(full, opts)
+	movedResolved, movedConsumer := false, false
+	for _, m := range real.Moves {
+		if ingest[m.Stream] || !movable[m.Stream] {
+			t.Errorf("the real options moved an ingest group: %+v", m)
+		}
+		if m.Stream == resolved {
+			movedResolved = movedResolved || !m.IsConsumer()
+			movedConsumer = movedConsumer || m.IsConsumer()
+		}
+	}
+	if !movedResolved || !movedConsumer {
+		t.Errorf("fixture: the separation and consumer steps should both have moved resolved-events work off n0: %+v", real.Moves)
+	}
 }
 
 // 🔴 TESTING THE STEP IS NOT TESTING THAT THE UPGRADE RUNS IT, and the upgrade needs a cluster.

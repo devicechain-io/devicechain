@@ -19,7 +19,7 @@ require (
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/google/cel-go v0.30.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
-	github.com/graph-gophers/graphql-go v1.11.0 // indirect
+	github.com/graph-gophers/graphql-go v1.11.1 // indirect
 	github.com/klauspost/compress v1.20.4 // indirect
 	github.com/nats-io/nats.go v1.55.0 // indirect
 	github.com/nats-io/nkeys v0.4.17 // indirect

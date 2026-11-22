@@ -12,6 +12,8 @@ import (
 var knownRawCapChecks = map[deliveryCapSite]string{}
 
 var sanctionedFinalDeliveryCallers = map[deliveryCapSite]string{
+	{"backend/services/device-management/processor/agent_kill_consumer.go", "AgentKillConsumer.handle"}: "Latches the process kill feed stale before dead-lettering an unapplied final kill; acknowledging alone cannot restore safety.",
+
 	{"backend/services/event-processing/processor/react_dispatcher.go", "ReactDispatcher.dispatch"}:       "Classifies a react.Result rather than an error.",
 	{"backend/services/outbound-connectors/processor/consumer.go", "DispatchConsumer.retryOrDeadLetter"}:  "The deadLetter helper owns the tenant decision.",
 	{"backend/services/outbound-connectors/processor/consumer.go", "DispatchConsumer.deadLetter"}:         "Bounds write attempts on the final delivery.",
