@@ -200,6 +200,8 @@ Both are fed by live subscriptions, so state changes appear as they happen.
 
 A profile's own editor also shows **rule health** — per-rule status, last-fired time, and fire count — alongside a **live feed** of detections as they occur. You can confirm a newly published rule is behaving before it ever raises an alarm.
 
+Each published version keeps its own statistics. Those of a version that has been replaced are removed once its rules have gone a week without firing. If a rollback later makes that version active again, rule health says its history was removed and when, and the last-fired times and fire counts it shows cover only the fires since then.
+
 ## Running the service {#running-it}
 
 The service that evaluates rules holds live state in memory and detects from a single active instance; any extra replicas are standbys. That gives it a few operational properties to know before you depend on it in production: what a restart costs, how quickly a silence rule can fire, why an alarm might not clear, and how to find a rule that is failing to evaluate. **[Running the Detection Engine](../deployment/detection-engine.md)** covers them.

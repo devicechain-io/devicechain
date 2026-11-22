@@ -58,26 +58,52 @@ func Mark(tx *gorm.DB) error {
 	return tx.Exec(MarkerSQL).Error
 }
 
+// DevicesTable is the parent every protocol writer, and the configuration report path, holds a
+// row lock on before it touches a device's child rows.
+const DevicesTable = "devices"
+
 // RegisterPurge makes a tenant purge plan that deletes the protocol's tables mark its
-// transaction before any deletion. A plan that touches neither table is left unchanged; an
-// existing BeforeDelete runs first.
+// transaction, and then lock the tenant's device rows, before any deletion. A plan that touches
+// neither table is left unchanged; an existing BeforeDelete runs first.
+//
+// 🔴 PARENTS FIRST. The purge deletes tables in foreign-key order and then alphabetically, so
+// the device-management children (device_configuration_*, ...) go before devices. A writer
+// holds its device row (KEY SHARE, or FOR UPDATE for a delete) BEFORE it touches those
+// children, so a purge that deleted a child row first and then waited for the device row could
+// close a cycle with it (40P01). Locking the tenant's device rows FOR UPDATE, in id order, before
+// the first DELETE makes the purge wait for every in-flight writer while it still holds no child
+// row. Row locks are kept on the rows themselves, so this does not grow the lock table the way an
+// advisory lock per device would.
 func RegisterPurge(plan *tenantpurge.Plan) {
 	if plan == nil {
 		return
 	}
 	for _, entry := range plan.Entries {
-		if entry.Table.Schema != Schema || (entry.Table.Name != AttributesTable && entry.Table.Name != GenerationsTable) {
+		if entry.Table.Schema != Schema || (entry.Table.Name != AttributesTable && entry.Table.Name != GenerationsTable && entry.Table.Name != DevicesTable) {
 			continue
 		}
 		previous := plan.BeforeDelete
-		plan.BeforeDelete = func(tx *gorm.DB) error {
+		plan.BeforeDelete = func(tx *gorm.DB, tenant string) error {
 			if previous != nil {
-				if err := previous(tx); err != nil {
+				if err := previous(tx, tenant); err != nil {
 					return err
 				}
 			}
-			return Mark(tx)
+			if err := Mark(tx); err != nil {
+				return err
+			}
+			return lockTenantDevices(tx, tenant)
 		}
 		return
 	}
+}
+
+// lockTenantDevices takes every device row of tenant FOR UPDATE, in id order, inside the purge
+// transaction. PostgreSQL only: the SQLite fixtures have a single writer.
+func lockTenantDevices(tx *gorm.DB, tenant string) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	var ids []int64
+	return tx.Raw(`SELECT id FROM "device-management".devices WHERE tenant_id = ? ORDER BY id FOR UPDATE`, tenant).Scan(&ids).Error
 }
