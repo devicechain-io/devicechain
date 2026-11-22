@@ -16,6 +16,9 @@ func newBackupCmd() *cobra.Command {
 		Use:   "backup <instance> --destination <dir>",
 		Short: "Export instance streams and blobs, or inspect a local backup set",
 		Long:  "Export checkpoint-preserved JetStream streams with consumers and instance blobs.\nFreeze writers before export. This does not coordinate database recovery cutoffs or maintenance mode.",
+		Example: `  dcctl backup acme --destination ./acme-backup
+  dcctl backup acme --destination ./acme-backup --kube-context prod
+  dcctl backup acme --destination ./acme-backup --blob-directory /mnt/acme-blobs`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 && cmd.Flags().NFlag() == 0 {
 				return nil
@@ -44,6 +47,7 @@ func newBackupCmd() *cobra.Command {
 		Long: "Read manifest.json and verify each listed snapshot's size and SHA-256.\n" +
 			"Requires --verify. Uses no cluster access. Verification covers listed files only;\n" +
 			"it does not establish inventory completeness or checkpoint consistency.",
+		Example:      `  dcctl backup inspect ./acme-backup --verify`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

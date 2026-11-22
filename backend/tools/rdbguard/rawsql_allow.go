@@ -200,6 +200,12 @@ var rawSQLAllowList = []siteEntry{
 			"formatted-in text is the model's quoted table name.",
 	},
 	{
+		Path: "backend/services/device-management/model/api_fleet_operation_readiness.go", Func: "Api.FleetOperationEnforcement", Count: 1,
+		Why: "a catalog read (pg_trigger, pg_class, pg_namespace, pg_proc) that names entity_attributes only as the " +
+			"relation whose triggers it inspects. It reads no row of entity_attributes or of any tenant table, so " +
+			"there is no tenant predicate to bypass.",
+	},
+	{
 		Path: "backend/services/device-management/model/position_classify.go", Func: "Api.ClassifyUnclassifiedAlarms", Count: 1,
 		Why: "the alarm position classifier's periodic pass, which spans tenants on purpose: it classifies every " +
 			"alarm whose position_derived is NULL (what a replica older than the column writes during a rolling " +
@@ -245,6 +251,13 @@ var rawSQLAllowList = []siteEntry{
 		Path: "backend/core/tenantpurge/sweep.go", Func: "Residue", Count: 2,
 		Why: "counts what the sweep left behind for the purged tenant, binding the tenant explicitly, " +
 			"under a system context",
+	},
+	{
+		Path: "backend/core/attrprotocol/attrprotocol.go", Func: "lockTenantDevices", Count: 1,
+		Why: "the tenant purge's BeforeDelete hook: locks the purged tenant's device rows FOR UPDATE in id " +
+			"order before the sweep deletes them, so the purge and a device attribute writer take the device " +
+			"row first and cannot deadlock. The tenant is a bound parameter; it reads only ids, under the " +
+			"purge's system context",
 	},
 
 	// --- control-plane ---

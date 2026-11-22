@@ -56,6 +56,12 @@ func (b *grantBox) clear() {
 	b.g = nil
 }
 
+// usable reports whether the box holds a grant the device clock still trusts.
+func (b *grantBox) usable() bool {
+	_, err := b.current()
+	return err == nil
+}
+
 func (b *grantBox) current() (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

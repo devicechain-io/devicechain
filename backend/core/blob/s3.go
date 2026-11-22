@@ -315,7 +315,7 @@ func (s *s3Store) putMultipart(ctx context.Context, fullKey string, full []byte,
 			// finished it and lost the answer, which leaves an object this Put did not mean to keep.
 			err = s.settleAmbiguousComplete(abortCtx, fullKey, err)
 		default:
-			err = fmt.Errorf("%w (aborting the multipart upload also failed, and it may be left behind: %v)", err, aerr)
+			err = withAbortFailure(err, aerr)
 		}
 	}()
 
@@ -697,4 +697,16 @@ func derefTime(v *time.Time) time.Time {
 		return time.Time{}
 	}
 	return *v
+}
+
+// withAbortFailure adds a failed abort to the error that made the upload be abandoned.
+//
+// err is nil only while a panic unwinds through Put's deferred abort: the panic carries on
+// and this value is discarded, but it is still reported as the abort's own failure rather
+// than wrapped as a nil cause (which would read "%!w(<nil>)").
+func withAbortFailure(err, aerr error) error {
+	if err == nil {
+		return fmt.Errorf("blob: aborting the multipart upload failed, and it may be left behind: %w", aerr)
+	}
+	return fmt.Errorf("%w (aborting the multipart upload also failed, and it may be left behind: %v)", err, aerr)
 }

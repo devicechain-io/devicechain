@@ -32,6 +32,7 @@ dcctl [command]
 * [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
 * [dcctl events](#dcctl-events)	 - Inspect a tenant's events
 * [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
+* [dcctl fleet-op](#dcctl-fleet-op)	 - Preview. Inspect fleet operation capabilities
 * [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
 * [dcctl install](#dcctl-install)	 - Prepare a cluster for DeviceChain instances
 * [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
@@ -263,6 +264,14 @@ Freeze writers before export. This does not coordinate database recovery cutoffs
 dcctl backup <instance> --destination <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl backup acme --destination ./acme-backup
+  dcctl backup acme --destination ./acme-backup --kube-context prod
+  dcctl backup acme --destination ./acme-backup --blob-directory /mnt/acme-blobs
+```
+
 ### Options
 
 ```
@@ -292,6 +301,12 @@ it does not establish inventory completeness or checkpoint consistency.
 dcctl backup inspect <backup-set-dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl backup inspect ./acme-backup --verify
+```
+
 ### Options
 
 ```
@@ -313,6 +328,21 @@ Provisions a usable DeviceChain instance on the given provider (e.g. "local")
 
 ```
 dcctl bootstrap <provider> <instance> [flags]
+```
+
+### Examples
+
+```
+  # a local kind cluster prepared with "dcctl install local"
+  dcctl bootstrap local my-instance
+  # an existing cluster (any cloud) prepared with "dcctl install local --kube-context prod"
+  dcctl bootstrap local prod --kube-context prod --host iot.example.com
+  # see what would happen first
+  dcctl bootstrap local my-instance --dry-run
+  # deploy a functional area on top of the profile
+  dcctl bootstrap local my-instance --enable-area outbound-connectors
+  # the local-developer preset
+  dcctl bootstrap local scratch --dev
 ```
 
 ### Options
@@ -624,6 +654,12 @@ cross-field constraints.
 dcctl config-schema [flags]
 ```
 
+### Examples
+
+```
+  dcctl config-schema > instance-config.schema.json
+```
+
 ### Options
 
 ```
@@ -783,6 +819,17 @@ Use --all to destroy every instance on this machine.
 dcctl destroy <provider> <instance> [flags]
 ```
 
+### Examples
+
+```
+  dcctl destroy local my-instance
+  # see what would be removed first
+  dcctl destroy local my-instance --dry-run
+  # keep the event-store backups, to rebuild the instance from them
+  dcctl destroy local my-instance --keep-backups --yes
+  dcctl destroy --all --yes
+```
+
 ### Options
 
 ```
@@ -934,15 +981,20 @@ There is no command that disables an area. An enabled area may hold data, and
 taking it out of the deployment would leave that data with nothing serving it.
 
 ```
+dcctl enable-area <provider> <instance> <area> [<area>...] [flags]
+```
+
+### Examples
+
+```
   # Add the outbound connectors area to an instance
   dcctl enable-area local devicechain outbound-connectors
 
   # Add two areas at once, and see what would happen first
   dcctl enable-area local devicechain outbound-connectors mcp --dry-run
-```
 
-```
-dcctl enable-area <provider> <instance> <area> [<area>...] [flags]
+  # name the cluster explicitly; it must be the one recorded at bootstrap
+  dcctl enable-area local prod update-management --kube-context prod
 ```
 
 ### Options
@@ -1166,6 +1218,76 @@ dcctl executor unenroll [flags]
 ### SEE ALSO
 
 * [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
+
+## dcctl fleet-op {#dcctl-fleet-op}
+
+Preview. Inspect fleet operation capabilities
+
+### Synopsis
+
+Preview. Inspect this instance's fleet operation capabilities using your tenant identity.
+
+### Options
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              help for fleet-op
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to inspect (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl fleet-op readiness](#dcctl-fleet-op-readiness)	 - Preview. Report whether this instance can run fleet operations
+
+## dcctl fleet-op readiness {#dcctl-fleet-op-readiness}
+
+Preview. Report whether this instance can run fleet operations
+
+### Synopsis
+
+Preview. Report the writer protocol version, fresh database enforcement state,
+executable operation kinds and orphaned device attribute and generation rows in your tenant.
+Requires fleet:operate; scoped members are refused.
+
+Exit status is zero only when enforcement is ENFORCED and orphanedAttributeRows is zero; that
+says the database enforces the writer protocol, not that any operation kind is executable. If the
+orphan count cannot be read the command reports the error and exits non-zero. The query is an
+expensive diagnostic (it counts rows); run it when you need the answer, do not poll it.
+In v1.9 enforcement is not installed and no kind is executable. The non-zero exit is
+expected until the release that installs enforcement. Use -o json for the four facts as JSON.
+
+```
+dcctl fleet-op readiness [flags]
+```
+
+### Options
+
+```
+  -h, --help            help for readiness
+  -o, --output string   output format: table or json (default "table")
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to inspect (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl fleet-op](#dcctl-fleet-op)	 - Preview. Inspect fleet operation capabilities
 
 ## dcctl ha {#dcctl-ha}
 
@@ -1444,6 +1566,18 @@ the cluster, with one exception: the connection budget may be raised.
 dcctl install <provider> [flags]
 ```
 
+### Examples
+
+```
+  # a local kind cluster named "devicechain"
+  dcctl install local
+  # a small-footprint cluster, for a laptop
+  dcctl install local --compact
+  # an existing cluster (any cloud): dcctl never creates or deletes it
+  dcctl install local --kube-context prod
+  dcctl install local --kube-context prod --ha --dry-run
+```
+
 ### Options
 
 ```
@@ -1683,6 +1817,15 @@ finalizer is gone.
 If what you want is to remove the instance, use `dcctl destroy`, which
 clears the finalizer itself as its last step.
 
+It first checks the cluster's DeviceChain operator. A cluster whose operator is not
+the one this dcctl was built for is refused: run the release from the dcctl that
+matches it, or pass --force to release anyway. A cluster with no operator at all is
+let through, because a declaration left without one is what this command is for.
+
+It needs get on customresourcedefinitions (to read the operator's definitions),
+get and patch on instances.core.devicechain.io (it patches the finalizer list rather
+than updating the whole declaration), and delete on it.
+
 ```
 dcctl instances release <instance> [flags]
 ```
@@ -1697,6 +1840,7 @@ dcctl instances release <instance> [flags]
 ### Options
 
 ```
+      --force                 release even when the cluster's operator does not match this dcctl
   -h, --help                  help for release
       --kube-context string   kube context of the cluster holding the declaration
       --yes                   skip the confirmation prompt
@@ -1933,6 +2077,16 @@ run 'dcctl product rotate-integration-token \<integration-token>' to issue one.
 dcctl product apply <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>'
+  # converge drafts and stop, without publishing
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>' --no-publish
+  # apply without printing the plan first
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>' --yes
+```
+
 ### Options
 
 ```
@@ -1985,6 +2139,14 @@ unless you name it in --kinds.
 dcctl product export <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>'
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>' --kinds device-types,profiles
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>' --name "Acme product"
+```
+
 ### Options
 
 ```
@@ -2030,6 +2192,14 @@ Against a tenant that already holds the bundle the plan reports no changes. Use
 dcctl product plan <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl product plan ./acme --tenant acme-prod --email you@example.com --password '<password>'
+  # exits non-zero when the tenant has drifted from the bundle, for CI
+  dcctl product plan ./acme --tenant acme-prod --email you@example.com --password '<password>' --fail-on-changes
+```
+
 ### Options
 
 ```
@@ -2072,6 +2242,13 @@ a shell. A warning is written to stderr. This command does not save the token to
 
 ```
 dcctl product rotate-integration-token <integration-token> [flags]
+```
+
+### Examples
+
+```
+  dcctl product rotate-integration-token chirpstack-1 --tenant acme --email you@example.com --password '<password>'
+  dcctl product rotate-integration-token chirpstack-1 --tenant acme --email you@example.com --password '<password>' --server dc.example.com --tls
 ```
 
 ### Options
@@ -2298,6 +2475,14 @@ Freeze target writers while planning; this is an observation, not a reservation 
 dcctl restore <instance> --from <backup-set> --plan [flags]
 ```
 
+### Examples
+
+```
+  dcctl restore acme --from ./acme-backup --plan
+  dcctl restore acme --from ./acme-backup --plan --kube-context prod
+  dcctl restore acme-copy --from ./acme-backup --plan --force-foreign
+```
+
 ### Options
 
 ```
@@ -2369,6 +2554,13 @@ artifact against a live instance, use "dcctl secrets escrow verify".
 dcctl secrets escrow show <file> [flags]
 ```
 
+### Examples
+
+```
+  dcctl secrets escrow show ~/.devicechain/escrow/prod.escrow
+  dcctl secrets escrow show ./prod-rootkey.escrow
+```
+
 ### Options
 
 ```
@@ -2402,6 +2594,14 @@ the instance has no usable escrow. The command exits non-zero in that case.
 
 ```
 dcctl secrets escrow verify <file> [flags]
+```
+
+### Examples
+
+```
+  # exits non-zero when the artifact does not hold the key the instance is running
+  dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow
+  dcctl secrets escrow verify --instance prod --kube-context prod ./prod-rootkey.escrow
 ```
 
 ### Options
@@ -2969,6 +3169,15 @@ of the shell history and the process list.
 dcctl test <path> [flags]
 ```
 
+### Examples
+
+```
+  dcctl test ./tests --tenant acme --email you@example.com --password '<password>'
+  # the password from the environment, and a JUnit report for CI
+  DCCTL_PASSWORD='<password>' dcctl test ./tests/low-battery.test.yaml --tenant acme --email you@example.com --junit results.xml
+  dcctl test ./tests --tenant acme --email you@example.com --password '<password>' --server dc.example.com --tls
+```
+
 ### Options
 
 ```
@@ -3150,6 +3359,15 @@ store), says so when it rises, and warns when the volume has less free space tha
 
 ```
 dcctl upgrade <provider> <instance> [flags]
+```
+
+### Examples
+
+```
+  dcctl upgrade local my-instance --dry-run
+  dcctl upgrade local my-instance
+  # name the cluster explicitly; it must be the one recorded at bootstrap
+  dcctl upgrade local prod --kube-context prod
 ```
 
 ### Options

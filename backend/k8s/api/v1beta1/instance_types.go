@@ -269,12 +269,12 @@ type InstanceSpec struct {
 	// +optional
 	CNPG bool `json:"cnpg,omitempty"`
 
-	// GrafanaSSO reports whether Grafana's login is wired to DeviceChain SSO.
-	//
-	// Recorded for the same reason and with a sharper edge: this seeds an OAuth
-	// client into the user-management config and turns the integration on in the
-	// infrastructure apply, so a re-run without it does not merely skip the feature
-	// — it removes both halves from a live instance.
+	// GrafanaSSO has no effect. Grafana's login is configured for the whole cluster
+	// by the OpenTofu cluster configuration (its monitoring_grafana_oauth_* settings),
+	// not per instance. Nothing in dcctl or the operator reads it, and dcctl does not carry
+	// it: a dcctl re-run writes the declaration without it, so a value set by hand is
+	// dropped then. It is kept in the schema so a declaration that carries it is still
+	// accepted.
 	//
 	// +optional
 	GrafanaSSO bool `json:"grafanaSSO,omitempty"`
