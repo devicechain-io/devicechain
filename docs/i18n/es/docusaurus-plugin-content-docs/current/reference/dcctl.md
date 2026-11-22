@@ -38,6 +38,7 @@ dcctl [command]
 * [dcctl preflight](#dcctl-preflight)	 - Check local prerequisites for installing a cluster
 * [dcctl presence](#dcctl-presence)	 - Inspect and repair device presence
 * [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
+* [dcctl relationship](#dcctl-relationship)	 - Add, list and remove typed entity relationships
 * [dcctl resgen](#dcctl-resgen)	 - Generate configuration resources
 * [dcctl restore](#dcctl-restore)	 - Verify a backup and print a read-only restore plan
 * [dcctl secrets](#dcctl-secrets)	 - Inspect and verify instance secret material
@@ -2016,6 +2017,166 @@ dcctl product rotate-integration-token <integration-token> [flags]
 ### SEE ALSO
 
 * [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
+
+## dcctl relationship {#dcctl-relationship}
+
+Add, list and remove typed entity relationships
+
+### Synopsis
+
+Manage a tenant's typed entity relationship graph as the identity you sign in with.
+Endpoints are identified by entity type and token. The relationship type must already exist;
+the server validates entity types, endpoints and permissions.
+
+### Options
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              help for relationship
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --json              print JSON (equivalent to --output json)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+  -o, --output string     output format: table or json (default "table")
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant that owns the relationships (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl relationship add](#dcctl-relationship-add)	 - Create one typed entity relationship
+* [dcctl relationship list](#dcctl-relationship-list)	 - List one page of typed entity relationships
+* [dcctl relationship remove](#dcctl-relationship-remove)	 - Remove relationships by their tokens
+
+## dcctl relationship add {#dcctl-relationship-add}
+
+Create one typed entity relationship
+
+### Synopsis
+
+Create a relationship with its own token between a source and a target entity.
+Give --source-type, --source, --target-type, --target and --relationship-type.
+Optional --metadata is passed as the API's metadata string.
+
+```
+dcctl relationship add <token> [flags]
+```
+
+### Options
+
+```
+  -h, --help                       help for add
+      --metadata string            optional relationship metadata string
+      --relationship-type string   relationship type token
+      --source string              source entity token
+      --source-type string         source entity type
+      --target string              target entity token
+      --target-type string         target entity type
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --json              print JSON (equivalent to --output json)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+  -o, --output string     output format: table or json (default "table")
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant that owns the relationships (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl relationship](#dcctl-relationship)	 - Add, list and remove typed entity relationships
+
+## dcctl relationship list {#dcctl-relationship-list}
+
+List one page of typed entity relationships
+
+### Synopsis
+
+List one page of relationships, including pagination totals in table and JSON output.
+Narrow by source, target, relationship type or whether the relationship type is tracked.
+An endpoint token filter requires its corresponding entity type. --tracked=false selects
+untracked relationships; omitting --tracked includes both.
+
+```
+dcctl relationship list [flags]
+```
+
+### Options
+
+```
+  -h, --help                       help for list
+      --page-number int            page to read (starting at 1) (default 1)
+      --page-size int              number of relationships per page (default 100)
+      --relationship-type string   relationship type token
+      --source string              source entity token
+      --source-type string         source entity type
+      --target string              target entity token
+      --target-type string         target entity type
+      --tracked                    filter by whether the relationship type is tracked (default: both)
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --json              print JSON (equivalent to --output json)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+  -o, --output string     output format: table or json (default "table")
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant that owns the relationships (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl relationship](#dcctl-relationship)	 - Add, list and remove typed entity relationships
+
+## dcctl relationship remove {#dcctl-relationship-remove}
+
+Remove relationships by their tokens
+
+### Synopsis
+
+Remove the relationships named by their own tokens in one API request.
+If none of the tokens match, the command succeeds and reports that nothing was removed.
+
+```
+dcctl relationship remove <token> [token...] [flags]
+```
+
+### Options
+
+```
+  -h, --help   help for remove
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --json              print JSON (equivalent to --output json)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+  -o, --output string     output format: table or json (default "table")
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant that owns the relationships (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl relationship](#dcctl-relationship)	 - Add, list and remove typed entity relationships
 
 ## dcctl resgen {#dcctl-resgen}
 

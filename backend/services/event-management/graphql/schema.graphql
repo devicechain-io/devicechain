@@ -158,11 +158,15 @@ type MeasurementEvent {
     """Name of the measurement, for example a metric key such as temperature."""
     name: String!
     """
-    The numeric value of the reading. Null for a reading whose value is text: event-management
-    stores such a value in a separate column that this schema does not yet expose, and on
-    measurementStream the reading is delivered with a null value.
+    The numeric value of the reading. Null for a reading whose value is text, which is in
+    textValue instead.
     """
     value: Float
+    """
+    The value of a reading whose data type is STRING; null for a numeric reading. A reading has
+    exactly one of value and textValue.
+    """
+    textValue: String
     """
     Id of the metric definition the reading was bound to, as a decimal string; null for an
     undeclared measurement.
@@ -801,7 +805,9 @@ type Query {
     ): StateChangeEventSearchResults!
     """
     Aggregates measurements into fixed-width time buckets (average, minimum, maximum, sum and
-    count) per measurement name, ordered by bucket start and then name. startTime is required,
+    count) per measurement name. Only numeric readings aggregate: a measurement whose readings
+    are text is refused with NOT_AGGREGATABLE when the request names it, and is left out when the
+    request asks for every name; read such readings with measurementEvents. Buckets are ordered by bucket start and then name. startTime is required,
     and a request covering more than 10,000 buckets (range / intervalSeconds, rounded up) is
     refused with LIMIT_EXCEEDED; because buckets align to fixed instants, a result can hold one
     more bucket per name than that count. A result of more than 50,000 rows (buckets times
