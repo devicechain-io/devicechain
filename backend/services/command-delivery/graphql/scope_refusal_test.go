@@ -20,6 +20,11 @@ var scopedOptIns = []string{"commands", "commandsById", "commandsByToken", "crea
 
 // scopedRefusals is every other operation, with a well-formed call to each.
 var scopedRefusals = map[string]string{
+	"proposeCommand":         proposalOperations["propose"],
+	"approveAgentProposal":   proposalOperations["approve"],
+	"rejectAgentProposal":    proposalOperations["reject"],
+	"agentProposal":          proposalOperations["read"],
+	"agentProposals":         proposalOperations["list"],
 	"commandBatchesById":     `query { commandBatchesById(ids: ["1"]) { token } }`,
 	"commandBatchesByToken":  `query { commandBatchesByToken(tokens: ["b"]) { token } }`,
 	"commandBatches":         `query { commandBatches(criteria: {pageNumber: 1, pageSize: 10}) { results { token } } }`,
@@ -86,6 +91,11 @@ func TestScopedMembersAreRefusedEverythingElse(t *testing.T) {
 	for name, query := range scopedRefusals {
 		res := schema.Exec(scoped, query, "", nil)
 		require.NotEmpty(t, res.Errors, "%s answered a scoped member", name)
+		if code, ok := map[string]string{"proposeCommand": "AGENT_ONLY", "approveAgentProposal": "SCOPED_GRANT_NOT_SUPPORTED", "rejectAgentProposal": "SCOPED_GRANT_NOT_SUPPORTED"}[name]; ok {
+			require.True(t, errors.Is(res.Errors[0].ResolverError, auth.ErrForbidden))
+			require.Equal(t, code, res.Errors[0].Extensions["code"])
+			continue
+		}
 		require.True(t, errors.Is(res.Errors[0].ResolverError, auth.ErrScopeUnsupported),
 			"%s: want the scope refusal, got %v", name, res.Errors[0])
 	}

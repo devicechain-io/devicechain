@@ -5,6 +5,8 @@ package graphql
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"text/scanner"
 
 	gqlerrors "github.com/graph-gophers/graphql-go/errors"
@@ -76,61 +78,36 @@ func selectOperation(ops []rootOperation, name string) (rootOperation, error) {
 // selections, or fails. Callers enter through readDocument, which checks the length
 // first.
 //
-// 🔴 IT IS A MIRROR OF graphql-go's OWN QUERY PARSER, OVER A LEXER THAT TOKENISES AS
-// graphql-go's DOES — not a GraphQL parser. The work limit is only worth anything if
-// the fields it counts are the fields graphql-go goes on to execute, and two readers of
-// the same text agree only where they tokenise it the same way. A spec-conformant parser
-// does not: graphql-go's lexer is Go's text/scanner in its default mode, so it skips
-// `//` and `/* */` comments, reads backquoted raw strings and `'c'` literals as single
-// tokens, and closes a block string at the first `"""` even after a backslash. A document
-// written to be read one way by a conformant parser and another way by graphql-go —
-// three mutations that a conformant parser reads as one field holding a block string,
-// say — would be counted as one and executed as three. So this reuses opLexer, which
-// copies the scanning graphql-go runs and REFUSES what graphql-go's normalising pass
-// does not also see (below), and each function here is the graphql-go function of the
-// same shape (internal/query/query.go and internal/common/{values,literals,types,
-// directive}.go), consuming the same tokens in the same order and failing where it
-// fails.
+// This mirrors graphql-go's query parser over its actual scanner mode, rather
+// than a second specification parser: agreement about token boundaries is what
+// makes both the root-field limit and the operation-type gate safe. graphql-go's
+// Init resets text/scanner to GoTokens, which skips Go comments and reads raw
+// strings and character literals as single tokens. opLexer refuses those tokens
+// because the Unicode-normalising pass (internal/common/norm) has only code, #
+// comment, string and block-string states and does not see them the same way.
 //
-// 🔴 THE ONE LAYER OF graphql-go THIS DOES NOT COPY is the Unicode-normalising reader
-// its lexer scans through (internal/common/norm). That pass rewrites string escapes
-// (`\u{…}` to `\U…`, a surrogate pair to `\U…`, a lone surrogate to `\u{…}`), and to
-// know where strings are it keeps its own small state machine: code, `#` comment,
-// string and block string. It knows nothing of the places where text/scanner's state
-// and a GraphQL reading part ways — `//` and `/* */` comments, backquoted raw strings,
-// `'c'` literals, a block string whose closing `"""` follows a backslash (which it reads
-// as the escaped `\"""` and keeps going), and a NON-EMPTY string directly followed by a
-// quote (which graphql-go's lexer opens as a block string, since it checks only that
-// the previous token was a string, while the normalising pass reads `"x"` and then a
-// new string). Around any of them the two layers disagree about whether a byte is
-// inside a string, and the rewrites add and remove braces there: a `/* " */` puts the
-// normalising pass inside a "string" where the lexer sees bare tokens, so `-\uDC00`,
-// `-\u{aaaaaaaaa` and `-\u{41}` are each rewritten into something else before
-// graphql-go's lexer ever sees them; `"x""` followed by a `#` comment holding `""" "`
-// does the same after the newline.
+// A non-empty string followed immediately by a quote is also refused: the upstream
+// lexer opens a block string after ANY string token followed by a quote, while its
+// normalising pass sees adjacent strings. Only the empty string plus a quote may
+// open a block string here. Historically, a quote in a Go comment or adjacent
+// strings let the normalising pass rewrite braces in what the scanner read as code.
 //
-// So opLexer REFUSES all five. That list is what the two layers' state machines were
-// compared for — the normalising pass's four states against the tokens text/scanner
-// can return in graphql-go's mode — and not a count a test can prove complete: the
-// fifth was found only after the first four had been written down as the whole list.
-// FuzzRootFieldLimit and FuzzOperationType are what would find a sixth. With the five
-// gone, a string opens at the same quote on both sides, a block string opens only at
-// `"""` on both sides, and a `#` comment and a block string are read rune by rune on
-// both sides. What is left are verdicts on single escapes INSIDE a string, and none of
-// them moves a token boundary, because a rewrite consumes and emits only a backslash,
-// `u`/`U`, hex digits and braces, never a quote:
+// v1.11.1 fixes another disagreement: consumeTripleQuoteComment now honours the
+// escaped triple quote, matching the normalising pass. opLexer deliberately keeps
+// refusing that previously excluded lexeme rather than expanding the subset. The
+// same release replaces unchecked literals after '-' with consumeNumber; literal
+// and number below follow its stricter grammar, bounds and token-boundary checks.
 //
-//   - `\u{41}` (braced): refused here (text/scanner calls it an invalid escape),
-//     accepted by graphql-go. A false refusal.
-//   - `\uDC00` (a lone surrogate): accepted here, refused by graphql-go, which sees the
-//     rewritten `\u{DC00}`. Nothing runs.
-//   - a surrogate pair: accepted by both.
+// This reader does not copy Unicode normalisation itself. Once the excluded
+// lexemes are gone, rewriting a string escape never moves a token boundary: it
+// consumes and emits backslashes, u/U, hex digits and braces, never a quote.
+// A braced Unicode escape is still refused by our scanner although upstream accepts
+// it; a lone surrogate is accepted here but refused upstream; a surrogate pair is
+// accepted by both. None can cause a differently classified operation to execute.
 //
-// Anything it cannot read, it refuses, and the caller refuses the document. That is the
-// safe direction: a document refused here that graphql-go would have run is a false
-// refusal; a document read here differently from graphql-go is a hole.
-// FuzzRootFieldLimit holds the pair to the only property that matters, with
-// graphql-go as the arbiter.
+// Anything this cannot read is refused. FuzzRootFieldLimit and FuzzOperationType use
+// graphql-go as the arbiter: a false refusal is safe, while reading a document as a
+// different set of fields or operation type could let work past a transport gate.
 func readRootFields(document string) (ops []rootOperation, fragments map[string][][]rootSelection, err error) {
 	r := &rootReader{l: newOpLexer(document), fragments: map[string][][]rootSelection{}}
 	defer func() {
@@ -356,18 +333,16 @@ func (r *rootReader) literal(constOnly bool) {
 		}
 		r.token('$')
 		r.ident()
-	case scanner.Int, scanner.Float, scanner.String, scanner.Ident:
+	case scanner.Int, scanner.Float:
+		r.number(false)
+	case scanner.String, scanner.Ident:
 		r.advance()
 	case '-':
-		// 🔴 graphql-go's ConsumeLiteral after a minus takes WHATEVER token comes next
-		// — a brace, a bracket, a parenthesis — without checking its type. Reading a
-		// structural token here as a structure would put this reader out of step with
-		// graphql-go for the rest of the document, so it is consumed as one token too.
+		// v1.11.1 ParseLiteral calls consumeNumber(true) after '-', replacing
+		// v1.11.0's unchecked ConsumeLiteral. Names and structural tokens must now
+		// fail here too, even for Any; swallowing one would lose parser agreement.
 		r.token('-')
-		if r.l.tok == scanner.EOF {
-			r.fail("unexpected end of document")
-		}
-		r.advance()
+		r.number(true)
 	case '[':
 		r.token('[')
 		for r.l.tok != ']' {
@@ -385,6 +360,42 @@ func (r *rootReader) literal(constOnly bool) {
 	default:
 		r.fail("invalid value")
 	}
+}
+
+// v1.11.1's consumeNumber checks this grammar before parsing the signed text.
+// text/scanner alone also accepts Go numbers (hex, underscores, leading zeroes,
+// missing integer/fraction parts), so its token kind cannot establish agreement.
+var opNumberPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
+
+func (r *rootReader) number(negative bool) {
+	if r.l.tok != scanner.Int && r.l.tok != scanner.Float {
+		r.fail("expected number")
+	}
+	text := r.l.text
+	if negative {
+		text = "-" + text
+	}
+	if !opNumberPattern.MatchString(text) {
+		r.fail("invalid numeric literal")
+	}
+	// Upstream consumeNumber also rejects int64/float64 overflow. Include the
+	// sign before parsing so -9223372036854775808 remains valid, as upstream does.
+	var err error
+	if r.l.tok == scanner.Int {
+		_, err = strconv.ParseInt(text, 10, 64)
+	} else {
+		_, err = strconv.ParseFloat(text, 64)
+	}
+	if err != nil {
+		r.fail("numeric literal out of range")
+	}
+	// v1.11.1 ConsumeWhitespace rejects an ASCII name-start immediately after a
+	// numeric token. Without this, [123abc] becomes two values in our reader.
+	next := r.l.sc.Peek()
+	if next == '_' || next >= 'A' && next <= 'Z' || next >= 'a' && next <= 'z' {
+		r.fail("a number directly followed by a name is not accepted")
+	}
+	r.advance()
 }
 
 // countRootKeys counts the DISTINCT response keys an operation's root selection set

@@ -20,7 +20,7 @@ import (
 // row out of the middle of it. Handing over the row would invite exactly the caller that
 // dispatches its own command and steps over an older one.
 //
-// It must not block and must not report failure. The caller is CreateCommand, on the hot
+// It must not block and must not report failure. The callers are direct enqueue and final proposal approval, on the hot
 // enqueue path, and there is nothing useful it could do with an error: the delivery sweep
 // is the net underneath every nudge, so the worst outcome of a nudge that never happens
 // is the latency the platform had before this existed.
@@ -89,6 +89,7 @@ func (api *Api) QueuedCommandsForDevice(ctx context.Context, deviceToken string,
 		Where("status IN ?", sweepableStatusStrings()).
 		Where(heldSQL, heldArgs...).
 		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
+		Scopes(api.agentDispatchScope(ctx)).
 		Order("id ASC").
 		Limit(limit).
 		Find(&found)

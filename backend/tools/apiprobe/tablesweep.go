@@ -209,6 +209,11 @@ var tableSweepExemptions = map[string]string{
 		"Delivery and reporting are proven end to end by the device-management delivery tests. The " +
 		"revision a report would answer is covered: entity-attribute-configuration mints " +
 		"device_configuration_revisions through the real API.",
+	"device-management.device_configuration_reports": "the accepted APPLIED/REJECTED verdict history, " +
+		"written in the same transaction as device_configuration_states by the device-reports consumer and " +
+		"by nothing else, so it is empty for exactly the reason that table is: no GraphQL mutation reaches " +
+		"it and the drill opens no device session. Capture, the previous-release gap rule and the " +
+		"maintenance pass are proven by device-management's own unit and Postgres tests.",
 	"update-management.secrets": "the per-tenant download-capability signing key, created on first " +
 		"use by GrantDownload -- and the only caller is update-management's consumer of the " +
 		"device-reports channel, answering a DEVICE's request to download its current assignment. " +

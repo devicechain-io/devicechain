@@ -233,10 +233,19 @@ namespace DeviceChain.Harborpulse.Visuals
                     var outward = (a0 + a1 + t0 + t1) * .25f - middle; outward.y = 0; outward.Normalize();
                     var shade = Mathf.Lerp(1f, .64f, Mathf.Clamp01(outward.z * 1.4f));
                     var tone = Granite(20 + n, i, false);
-                    kit.Facing(a0, t0, t1, a1, outward, Rock(tone, .52f * shade));
-                    // the upper third of a wall catches the sky
-                    Vector3 m0 = Vector3.Lerp(a0, t0, .66f), m1 = Vector3.Lerp(a1, t1, .66f);
-                    kit.Facing(m0 + outward * .03f, t0 + outward * .03f, t1 + outward * .03f, m1 + outward * .03f, outward, Rock(tone, .9f * shade));
+                    // the upper third of a wall catches the sky. A slab of the landmark tor shows only from the top of the slab under it, so its
+                    // lit band is the upper part of what shows: each joint of the stack is then a dark line under a light band, from HOME too
+                    var lit = .66f;
+                    if (o.Landmark)
+                    {
+                        float bottom = Mathf.Min(a0.y, a1.y), topY = Mathf.Min(t0.y, t1.y);
+                        lit = Mathf.Clamp(((float)o.BlockFoot[n] + .42f * (topY - (float)o.BlockFoot[n]) - bottom) / Mathf.Max(.01f, topY - bottom), .05f, .95f);
+                    }
+                    // Two quads that meet along a line, not a light one laid 3 cm over a dark one: a block's top is skewed, so its wall is a
+                    // twisted quad, and on a tall slab the overlay sank through it (and at HOME's range 3 cm is under the depth buffer's step).
+                    Vector3 m0 = Vector3.Lerp(a0, t0, lit), m1 = Vector3.Lerp(a1, t1, lit);
+                    kit.Facing(a0, m0, m1, a1, outward, Rock(tone, .52f * shade));
+                    kit.Facing(m0, t0, t1, m1, outward, Rock(tone, (o.Landmark ? .98f : .9f) * shade));
                 }
                 kit.Facing(V(b[4]), V(b[5]), V(b[6]), V(b[7]), Vector3.up, Rock(Granite(40 + n, 0, true), 1.16f));
             }

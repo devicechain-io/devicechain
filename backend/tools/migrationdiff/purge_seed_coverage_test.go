@@ -115,6 +115,7 @@ var purgeSeedExemptions = map[string]string{
 	"device-management.detection_rules":                          representedTenantPredicate,
 	"device-management.device_aliases":                           representedTenantPredicate,
 	"device-management.device_claims":                            representedTenantPredicate,
+	"device-management.device_configuration_reports":             representedTenantPredicate,
 	"device-management.device_configuration_revisions":           representedTenantPredicate,
 	"device-management.device_configuration_states":              representedTenantPredicate,
 	"device-management.device_credential_chain_links":            representedTenantPredicate,

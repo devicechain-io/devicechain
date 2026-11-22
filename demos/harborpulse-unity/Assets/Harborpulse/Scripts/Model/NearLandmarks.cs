@@ -12,7 +12,7 @@ namespace DeviceChain.Harborpulse.Model
     /// </summary>
     public static class NearLandmarks
     {
-        public const float LoftsW = 38, LoftsD = 18, LoftsH = 17, TerminalW = 56, TerminalD = 22, TerminalH = 8, DepotW = 28, DepotD = 16, DepotH = 7;
+        public const float LoftsW = 38, LoftsD = 18, LoftsH = 17, TerminalW = 42, TerminalD = 22, TerminalH = 8, DepotW = 28, DepotD = 16, DepotH = 7;
 
         static readonly NearBuildings.WindowStyle Brickwork = new NearBuildings.WindowStyle(NearTone.Stone, false, false, 2);
         static readonly NearBuildings.WindowStyle Cladding = new NearBuildings.WindowStyle(NearTone.Trim, false, false, 2);
@@ -86,6 +86,13 @@ namespace DeviceChain.Harborpulse.Model
 
         // ---------------------------------------------------------------- the ferry terminal
 
+        /// <summary>
+        /// Where the terminal's hall stands along its own length, from the meter's anchor: 7 m towards the quay's north end. The hall was 56 m
+        /// long and centred on the anchor, and its south bay stood between the 9:16 HOME's eye and the Basin's second charger (the one the
+        /// derate story is about). It is 42 m now and its north gable is where it was, so the charger shows over open quay.
+        /// </summary>
+        public const float TerminalOffsetX = -7;
+
         public static NearPlan Terminal()
         {
             const float w = TerminalW, d = TerminalD, h = TerminalH, rise = 5f;
@@ -110,7 +117,7 @@ namespace DeviceChain.Harborpulse.Model
                 .Fbeam(rear, NearTone.Metal, eu - .9f, 2.55f, .05f, eu - .9f, 2.95f, .4f, .05f).Fbeam(rear, NearTone.Metal, eu + .9f, 2.55f, .05f, eu + .9f, 2.95f, .4f, .05f)
                 .Fb(rear, NearTone.Stone, eu, .06f, .27f, 2.1f, .12f, .4f);
             // two big luggage and loading doors at the ends of the rear wall, with a frame and a sill
-            foreach (var u in new[] { -24f, 24f })
+            foreach (var u in new[] { -(w / 2 - 4), w / 2 - 4 })
                 p.Fb(rear, NearTone.Trim, u - 1.45f, 1.6f, .1f, .16f, 3.2f, .18f).Fb(rear, NearTone.Trim, u + 1.45f, 1.6f, .1f, .16f, 3.2f, .18f).Fb(rear, NearTone.Trim, u, 3.22f, .1f, 3.06f, .18f, .18f)
                     .Fb(rear, NearTone.MetalDark, u, 1.5f, .07f, 2.7f, 3.0f, .04f).Fb(rear, NearTone.Metal, u, 2.0f, .1f, 2.7f, .04f, .04f).Fb(rear, NearTone.Metal, u, 1.0f, .1f, 2.7f, .04f, .04f);
             // roof: gutters and shingle courses

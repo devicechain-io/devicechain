@@ -79,7 +79,7 @@ func startDeliveryFixture(t *testing.T) *deliveryFixture {
 		&model.EntityGroupFacetRef{}, &model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{}, &model.Alarm{},
 		&model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{}, &model.MetricDefinition{}, &model.CommandDefinition{},
 		&model.DetectionRule{}, &model.DetectionRuleScopeRef{},
-		&model.DeviceConfigurationRevision{}, &model.DeviceConfigurationState{}))
+		&model.DeviceConfigurationRevision{}, &model.DeviceConfigurationReport{}, &model.DeviceConfigurationState{}))
 	require.NoError(t, rdb.CreatePartialUniqueIndex(db, &model.EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"))
 	RdbManager = &rdb.RdbManager{Database: db}
 	Api = model.NewApi(RdbManager)

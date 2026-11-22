@@ -219,7 +219,7 @@ func runSimDestroy(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(hostHeader) == "" {
 		hostHeader = rec.HostHeader
 	}
-	admin := newSimAdmin(hostHeader, rec.Endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
+	admin := newSimAdmin(cmd, instance, hostHeader, rec.Endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
 	ctx := cmd.Context()
 	if err := admin.EnsureSuperuser(ctx); err != nil {
 		// The record's own login URL names the address create dialled, which is what the

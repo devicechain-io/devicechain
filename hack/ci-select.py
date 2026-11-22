@@ -144,6 +144,10 @@ READERS = [
     ], NONTEST, "bootstrap/*_test.go"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
     ("backend/cli", "product", [SDL], [], "product/documents_test.go:32"),
+    # internal/apitest/capabilities.go:44-48 serves the real SDL from every service's graphql dir; the cmd and
+    # sim tests (cmd/product_rotate_test.go, sim/*_test.go) call it through their fixtures.
+    ("backend/cli", "internal/apitest", [SDL], [], "internal/apitest/capabilities_test.go"),
+    ("backend/cli", "sim", [SDL], [], "sim/admin_conflict_test.go, hostheader_test.go, tier_test.go via apitest"),
     # deploy/fleet_premises_test.go:82 pins the recorded premises to the toolchain versions in ci.yml and
     # to the kind node image in hack/fleet-s0/kind.sh.
     ("deploy", ".", [".github/workflows/ci.yml", "hack/fleet-s0/kind.sh"], [], "fleet_premises_test.go:82"),
@@ -200,6 +204,7 @@ READERS = [
         "deploy/helm/devicechain/dashboards/command-delivery.json",
     ], [], "console_submission_contract_test.go:17, dashboard_series_test.go:43"),
     ("backend/services/command-delivery", "model", ["backend/testdata/authored-rules/**"], [], "model/authored_sim_command_wire_test.go:30"),
+    ("backend/services/command-delivery", "verify", ["backend/services/device-management/graphql/schema.graphql"], [], "verify/proposal_target_test.go:143"),
     ("backend/services/device-management", "config", ["deploy/helm/devicechain/values.yaml"], [], "config/chart_floor_test.go:25"),
     ("backend/services/device-management", "model", [
         "backend/testdata/authored-rules/**",

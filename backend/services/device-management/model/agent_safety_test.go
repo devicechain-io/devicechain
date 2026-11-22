@@ -39,7 +39,7 @@ func requireUnexecuted(t *testing.T, r *proposalRig, p *AgentProposal, ctx conte
 }
 
 func TestAgentFenceFeedFailsClosed(t *testing.T) {
-	for _, mode := range []string{"nil", "unbeaten", "stale"} {
+	for _, mode := range []string{"nil", "unbeaten", "stale", "latched"} {
 		t.Run(mode, func(t *testing.T) {
 			r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
 			now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
@@ -50,6 +50,10 @@ func TestAgentFenceFeedFailsClosed(t *testing.T) {
 			case "stale":
 				r.api.KillFeed.Beat(now)
 				now = now.Add(2 * time.Second)
+			case "latched":
+				r.api.KillFeed.Beat(now)
+				r.api.KillFeed.LatchStale()
+				r.api.KillFeed.Beat(now)
 			}
 			_, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
 			require.ErrorIs(t, err, actiongate.ErrFenceUnavailable)

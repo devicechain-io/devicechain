@@ -48,6 +48,7 @@ backend/cli/dcdir/dcdir.go
 backend/cli/dcdir/dcdir_test.go
 backend/cli/failedevents/documents_test.go
 backend/cli/failedevents/failedevents_test.go
+backend/cli/internal/apitest/capabilities.go
 backend/cli/product/bundle.go
 backend/cli/product/documents_test.go
 backend/cli/sim/handshake_lockstep_test.go
@@ -103,6 +104,7 @@ backend/services/command-delivery/console_submission_contract_test.go
 backend/services/command-delivery/dashboard_series_test.go
 backend/services/command-delivery/model/authored_sim_command_wire_test.go
 backend/services/command-delivery/processor/contract_test.go
+backend/services/command-delivery/verify/proposal_target_test.go
 backend/services/device-management/config/chart_floor_test.go
 backend/services/device-management/graphql/console_picker_documents_test.go
 backend/services/device-management/graphql/profile_configuration_declaration_test.go

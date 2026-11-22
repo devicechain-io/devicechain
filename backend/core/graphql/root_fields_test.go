@@ -19,10 +19,9 @@ import (
 // its call into the counter the context carries; Obj's field does not, so a nested
 // selection can never be mistaken for a root one.
 //
-// The custom scalar Any is what lets graphql-go EXECUTE a minus followed by a token
-// that is not a number (`-x`): with the built-in scalars only, its validation refuses
-// every such literal, so the fuzz arbiter could never run the class of document where
-// a string escape is read differently by the reader and by graphql-go.
+// The custom scalar Any accepts every parsed literal, so scalar validation cannot
+// hide a lexical disagreement. Before v1.11.1 it even let graphql-go execute `-x`;
+// the upstream parser now refuses that before scalar validation.
 const lexSDL = `
 	schema { query: Query mutation: Mutation }
 	scalar Any
@@ -37,9 +36,8 @@ type lexAny struct{}
 func (lexAny) ImplementsGraphQLType(name string) bool { return name == "Any" }
 func (*lexAny) UnmarshalGraphQL(any) error            { return nil }
 
-// silentLogger drops graphql-go's recovered-panic reports. graphql-go panics (and
-// recovers) deserialising a minus in front of a string or a brace; without this, every
-// such fuzz execution prints a stack trace.
+// silentLogger drops graphql-go's recovered-panic reports during fuzzing. Before
+// v1.11.1 a minus before a string or brace reached deserialisation and panicked.
 type silentLogger struct{}
 
 func (silentLogger) LogPanic(context.Context, any) {}
@@ -104,43 +102,27 @@ func execCounting(exec func(context.Context) *graphql.Response) (*graphql.Respon
 	return resp, calls.Load()
 }
 
-// tokenisationBypasses are documents that a reader tokenising by the GraphQL spec
-// rather than as graphql-go does reads with FEWER root fields than graphql-go executes.
-// Each is written against a limit of 1. counted marks the one the reader reads and
-// COUNTS; every other row holds a lexeme the reader refuses before counting anything.
+// tokenisationBypasses are historical different-tokenisation attacks. v1.11.1
+// closes the numeric and escaped block-quote gaps; our subset still refuses every
+// document. rawRoots is the exact number of roots upstream now executes (zero means
+// upstream also refuses). reason pins a syntax refusal before any field counting.
 var tokenisationBypasses = []struct {
-	name, doc string
-	counted   bool
+	name, doc, reason string
+	rawRoots          int32
 }{
-	// The original: a spec parser honours \""" inside a block string, so it reads ONE
-	// field whose argument is a block string running to the last """. graphql-go does
-	// not honour the escape, closes the string early, and runs three mutations.
-	{"escaped block-string quote", `mutation { a: bump(s: ["""X\""" ]) b: bump(s: ["y"]) c: bump(s: ["\""" """ ]) }`, false},
-	// The same trick as a bare argument rather than inside a list.
-	{"escaped block-string quote, bare", `mutation { a: bump(s: """ \""" ) b: bump c: bump(s: """ """) }`, false},
-	// graphql-go skips a Go block comment; a reader that does not sees `}` close the
-	// selection set after the first field.
-	{"block comment", "mutation { a: bump /* } */ b: bump c: bump }", false},
-	// A quote inside a block comment would open a string for a reader that does not
-	// know the comment, swallowing the field between the two.
-	{"quote in block comment", `mutation { a: bump /* " */ b: bump /* " */ }`, false},
-	// graphql-go skips a Go line comment to the end of the line.
-	{"line comment", "mutation { a: bump // }\n b: bump c: bump }", false},
-	// A backquoted raw string is one token to graphql-go. It can only sit where
-	// graphql-go takes ANY token as a literal (after a minus).
-	{"raw string", "mutation { a: bump(s: -`}`) b: bump c: bump }", false},
-	// graphql-go's ConsumeLiteral after a minus takes the next token WHATEVER it is,
-	// including a closing brace; a reader that parsed a value there would lose step.
-	{"minus swallows a brace", "mutation { a: bump(s: [-}]) b: bump }", true},
+	// v1.11.0 closed at the escaped quote and executed three fields. v1.11.1
+	// honours the escape and executes one field; we retain the established refusal.
+	{"escaped block-string quote", `mutation { a: bump(s: ["""X\""" ]) b: bump(s: ["y"]) c: bump(s: ["\""" """ ]) }`, "is not accepted", 1},
+	{"escaped block-string quote, bare", `mutation { a: bump(s: """ \""" ) b: bump c: bump(s: """ """) }`, "is not accepted", 0},
+	{"block comment", "mutation { a: bump /* } */ b: bump c: bump }", "is not accepted", 3},
+	{"quote in block comment", `mutation { a: bump /* " */ b: bump /* " */ }`, "is not accepted", 2},
+	{"line comment", "mutation { a: bump // }\n b: bump c: bump }", "is not accepted", 3},
+	// Go raw strings are still refused locally; v1.11.1 also refuses the minus.
+	{"raw string", "mutation { a: bump(s: -`}`) b: bump c: bump }", "is not accepted", 0},
+	// v1.11.1 consumeNumber no longer swallows a structural token after '-'.
+	{"minus swallows a brace", "mutation { a: bump(s: [-}]) b: bump }", "expected number", 0},
 }
 
-// 🔴 THE BYPASS THAT MADE THE COUNTER A MIRROR. Each document is refused by the work
-// limit and runs nothing: the one the reader can read, for its count; every other one
-// for the lexeme it holds, as a syntax error. As the control, each is shown to run
-// MORE than one root field when handed to graphql-go without the limit (where
-// graphql-go runs it at all), so the refusal is refusing real work and not a document
-// nothing would execute — which is what makes the refused lexemes real bypasses
-// rather than dead syntax.
 func TestTokenisationBypassesAreRefused(t *testing.T) {
 	schema := lexSchema(1)
 	for _, tc := range tokenisationBypasses {
@@ -149,31 +131,23 @@ func TestTokenisationBypassesAreRefused(t *testing.T) {
 				return schema.Exec(ctx, tc.doc, "", nil)
 			})
 			require.Len(t, resp.Errors, 1, "%v", resp.Errors)
-			if tc.counted {
-				assert.Equal(t, workLimitCode, resp.Errors[0].Extensions["code"], "%s", resp.Errors[0].Message)
-			} else {
-				assert.Nil(t, resp.Errors[0].Extensions, "%s", resp.Errors[0].Message)
-				assert.Contains(t, resp.Errors[0].Message, "is not accepted")
-			}
+			assert.Nil(t, resp.Errors[0].Extensions, "%s", resp.Errors[0].Message)
+			assert.Contains(t, resp.Errors[0].Message, tc.reason)
 			assert.Nil(t, resp.Data)
 			assert.Equal(t, int32(0), calls, "no resolver may run for a refused document")
 
-			// The control: what graphql-go does with the same document unlimited.
 			raw, rawCalls := execCounting(func(ctx context.Context) *graphql.Response {
 				return schema.inner.Exec(ctx, tc.doc, "", nil)
 			})
-			if len(raw.Errors) == 0 {
-				assert.Greater(t, rawCalls, int32(1), "control: graphql-go runs more than one root field")
+			if tc.rawRoots == 0 {
+				require.NotEmpty(t, raw.Errors, "upstream also refuses this syntax")
+				assert.Nil(t, raw.Data)
+			} else {
+				require.Empty(t, raw.Errors)
 			}
+			assert.Equal(t, tc.rawRoots, rawCalls)
 		})
 	}
-	// The one the report named, pinned by its exact effect on graphql-go.
-	raw, calls := execCounting(func(ctx context.Context) *graphql.Response {
-		return schema.inner.Exec(ctx, tokenisationBypasses[0].doc, "", nil)
-	})
-	require.Empty(t, raw.Errors)
-	assert.Equal(t, int32(3), calls)
-	assert.JSONEq(t, `{"a":1,"b":2,"c":3}`, string(raw.Data))
 }
 
 // The counterweight: the same tokens, where graphql-go reads them as ONE root field

@@ -100,6 +100,7 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	prevDeletion, prevClassifier, prevMarkerHeal := EntityDeletionDrain, AlarmPositionClassifier, CreateEnrollMarkerHeal
 	prevEffects, prevKills := AgentEffectsDrain, AgentKillConsumer
 	prevAlarmEvents := AlarmEventDrain
+	prevReportMaintenance := ConfigurationReportMaintenance
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, Svc = prevMs, prevGql, prevNats, prevSvc
 		InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer = prevIep, prevRac, prevCallout, prevDrc
@@ -107,6 +108,7 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 		EntityDeletionDrain, AlarmPositionClassifier, CreateEnrollMarkerHeal = prevDeletion, prevClassifier, prevMarkerHeal
 		AgentEffectsDrain, AgentKillConsumer = prevEffects, prevKills
 		AlarmEventDrain = prevAlarmEvents
+		ConfigurationReportMaintenance = prevReportMaintenance
 	})
 
 	area := fmt.Sprintf("device-management-shutdown-%d", time.Now().UnixNano())
@@ -184,6 +186,9 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	CreateEnrollMarkerHeal = core.NewPeriodicTask(area, "create-enroll-marker-heal", time.Hour,
 		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("create_enroll_marker_heal"))
 	require.NoError(t, CreateEnrollMarkerHeal.Initialize(context.Background()))
+	ConfigurationReportMaintenance = core.NewPeriodicTask(area, "configuration-report-maintenance", time.Hour,
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("configuration_report_maintenance"))
+	require.NoError(t, ConfigurationReportMaintenance.Initialize(context.Background()))
 	// And the decode accounting, which the stopper stops and then flushes. A fresh one: an earlier test of
 	// the package may have left the global stopped.
 	prevAccountant, prevAccounting := DecodeAccountant, DecodeAccounting

@@ -95,6 +95,11 @@ read tools remain in the not-covered catalog above.
 - **Skipping a minor** is not a tested path. To go from `1.4.x` to `1.7.0`, upgrade through `1.5.x`
   and `1.6.x` first. A release's upgrade section says when it requires a particular release first, as the
   [event wire format](./releases-and-upgrades.md#event-wire-format) section does today.
+  `dcctl upgrade` enforces this: it refuses a move more than one minor ahead of the version the
+  instance's workloads run (read from the running images, not from the declared version), and
+  across a major allows only the major's first minor (`x.0`). The `--allow-skipped-minor` flag
+  overrides the refusal; that path is unsupported and untested, and the flag never disables a
+  protection the database enforces.
 - **Database migrations always upgrade.** From v1.0.0 an instance is never recreated to take a new
   release. A schema change is a migration that is appended to the area's chain, never an edit to an
   earlier one, and every migration can be re-run after a failure. Before v1.0.0 a few releases

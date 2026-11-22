@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dcctl/apiclient"
 	"github.com/devicechain-io/dcctl/presence"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/fatih/color"
@@ -147,7 +147,7 @@ func runPresenceDemote(cmd *cobra.Command, args []string) error {
 		},
 	}
 
-	session := userclient.NewTenantSession(nil, endpoints.UserGraphQL, presenceEmail, presencePassword, presenceTenant).
+	session := apiclient.NewTenantSession(nil, endpoints.UserGraphQL, presenceEmail, presencePassword, presenceTenant, recordedEndpointVersions(cmd, opts.Endpoint)...).
 		WithOTP(otpFunc(otpFlag(cmd)))
 	sum, err := presence.Run(cmd.Context(), session, opts)
 	if errors.Is(err, presence.ErrDeclined) {

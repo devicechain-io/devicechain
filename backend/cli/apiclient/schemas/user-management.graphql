@@ -1,0 +1,1972 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Descriptions: a """string""" above an element is its PUBLIC description — served by
+# introspection, read by every GraphQL tool, published on the docs site — and may not
+# cite a decision record. A # comment is a maintainer note. backend/tools/docsgql/sdldesc
+# enforces both.
+
+"""
+A tenant-scoped session: a short-lived access token paired with a longer-lived refresh
+token. Returned by selectTenant and refresh.
+"""
+type AuthToken {
+    """
+    Signed JWT that authorizes tenant-scoped API requests; send it as
+    `Authorization: Bearer <token>`. Valid until expiresAt.
+    """
+    accessToken: String!
+    """
+    Signed JWT whose only use is to obtain a new pair through the refresh mutation. It is
+    single-use: refreshing consumes it and returns a new one.
+    """
+    refreshToken: String!
+    """
+    When the access token expires, as an RFC 3339 timestamp in UTC. The refresh token's
+    own, longer expiry is not reported. The lifetimes are operator-configured; the defaults
+    are 15 minutes for the access token and 7 days for the refresh token.
+    """
+    expiresAt: String!
+}
+
+"""
+The result of a successful email and password login: an identity token that is not yet
+tied to any tenant, and the identity's memberships. Pass the identity token and a
+chosen tenant to selectTenant to obtain a tenant-scoped AuthToken.
+"""
+# Result of an email/password login (ADR-033): an instance-scoped identity token
+# plus the tenants the identity may act in. The caller picks one via selectTenant.
+type IdentityAuth {
+    """
+    Signed JWT proving who the caller is, valid across the instance rather than within one
+    tenant. It is accepted by selectTenant, identityMemberships and the instance-level
+    administration endpoints, and is not accepted as a tenant access token.
+    """
+    identityToken: String!
+    """
+    When the identity token expires, as an RFC 3339 timestamp in UTC. It lives as long as a
+    tenant access token (15 minutes by default, operator-configured).
+    """
+    expiresAt: String!
+    """
+    True when the identity holds the superuser system role, which may enter any tenant with
+    full authority whether or not it has a membership there.
+    """
+    superuser: Boolean!
+    """
+    The identity's tenant memberships as of login, including any that are disabled or in a
+    tenant that is disabled or being deleted; selectTenant refuses those. After a password
+    sign-in, a tenant that requires single sign-on is listed with ssoRequired set, and
+    selectTenant refuses it. Call identityMemberships to re-read them later without logging
+    in again.
+    """
+    memberships: [Membership!]!
+}
+
+"""A tenant an identity belongs to, with the roles the identity holds in it."""
+type Membership {
+    """Token of the tenant, as accepted by selectTenant."""
+    tenant: String!
+    """Tokens of the roles this identity holds in the tenant. Empty if it holds none."""
+    roles: [String!]!
+    """
+    True when the tenant requires single sign-on and this sign-in used a password, so
+    selectTenant refuses it with the error code SSO_REQUIRED: sign in through the identity
+    provider (beginSso) to enter it. Always false for a superuser, and for a sign-in that came
+    through single sign-on.
+    """
+    ssoRequired: Boolean!
+    """
+    True when the tenant requires a second factor and this password sign-in did not use one, so
+    selectTenant refuses it with the error code MFA_REQUIRED (the identity has a factor: sign
+    in again and enter the code) or MFA_ENROLLMENT_REQUIRED (it has none: set up two-factor
+    authentication first, with beginTotpEnrollment, then sign in again). Always false for a
+    superuser, and for a sign-in that already used a second factor.
+    """
+    mfaRequired: Boolean!
+}
+
+"""
+What beginTotpEnrollment hands back, once: everything an authenticator app needs to hold the
+new second factor. Render otpauthUri as a QR code in the browser (it carries the secret) or
+show secret for typing in by hand. Neither is stored in readable form or returned again.
+"""
+type TotpEnrollment {
+    """The otpauth:// URI to render as a QR code."""
+    otpauthUri: String!
+    """The same shared secret as unpadded base32, for typing into an authenticator by hand."""
+    secret: String!
+    """When the pending enrolment stops being confirmable, as an RFC 3339 timestamp. Ten minutes after it began."""
+    expiresAt: String!
+}
+
+"""
+A set of single-use recovery codes, shown ONCE. Each is stored only as a digest, so a lost set
+cannot be shown again: regenerateRecoveryCodes replaces it.
+"""
+type RecoveryCodes {
+    """The codes, such as `ABCD-EFGH-JKMN-PQRS`. Each can sign in once, in place of an authenticator code."""
+    codes: [String!]!
+}
+
+"""
+What confirmTotpEnrollment returns: the recovery codes, shown once, and the caller's replacement
+sign-in.
+"""
+type TotpEnrollmentResult {
+    """The ten recovery codes, shown once. Each is stored only as a digest and cannot be shown again."""
+    codes: [String!]!
+    """
+    The sign-in to continue with. Turning the second factor on ends every session the account
+    had, the one that enrolled included (so a session started by someone who had only the
+    password does not outlast it), and this is a fresh sign-in whose tokens record a password
+    and an authenticator code. Same shape as login's answer.
+    """
+    auth: IdentityAuth!
+}
+
+"""An identity's own view of its second factor."""
+type MfaStatus {
+    """True when an authenticator is enrolled and confirmed, so a password sign-in asks for a code."""
+    totpEnabled: Boolean!
+    """When the factor was confirmed, as an RFC 3339 timestamp. Null when it is not enabled."""
+    enrolledAt: String
+    """How many recovery codes are still unused. Zero when the factor is not enabled."""
+    recoveryCodesRemaining: Int!
+}
+
+"""
+The tenant the caller is acting within, as seen by that tenant's own members. It carries
+the settings that shape the console: white-label branding, the map basemap and the
+default language.
+"""
+# The tenant the authenticated caller is acting within (control plane). Drives
+# the console's tenant header, and carries the resolved white-labeling branding
+# (ADR-038) the console applies to the shell.
+type Tenant {
+    """Unique identifier of the tenant on this instance."""
+    token: String!
+    """
+    True when the tenant requires a second factor of its password sign-ins: the tenant's own
+    setting or its tier's floor. Single sign-on is governed by its connection's requirements
+    instead. Readable by any member of the tenant.
+    """
+    mfaRequired: Boolean!
+    """
+    True when the tenant's tier requires a second factor, which setTenantMfaRequired cannot
+    turn off. Readable by any member of the tenant.
+    """
+    mfaRequiredByTier: Boolean!
+    """Human-readable name of the tenant. Null when none has been set."""
+    name: String
+    """Free-text description of the tenant. Null when none has been set."""
+    description: String
+    """
+    The white-labeling in effect for this tenant: the tenant's own overrides laid over the
+    instance-wide default, field by field, with the tenant's value winning. Always present;
+    a field is null when neither level sets it, and the console then keeps its built-in look
+    for that aspect. Readable by any member of the tenant.
+    """
+    # The resolved white-labeling for this tenant: the tenant's override folded
+    # over the operator/code default (most-specific-non-null wins). Always present;
+    # an individual field is null when nothing overrides it, and the console then
+    # keeps its built-in look for that field. Never carried in the JWT (ADR-038 §1).
+    branding: TenantBranding!
+    """
+    Only the branding this tenant has set itself, with no instance default folded in: a
+    null field means the tenant inherits that aspect. Use it to show which values are
+    overridden when editing; use branding to apply the look. Readable by any member of the
+    tenant.
+    """
+    # The tenant's RAW branding override — the stored columns with no cascade, so a
+    # null field means "this tenant inherits" (vs `branding`, which fills it from
+    # the default). The editor reads this to show set-vs-inherited per field; it is
+    # NOT for applying to the shell. Self-scoped, like `branding`.
+    brandingOverride: TenantBranding!
+    """
+    The map basemap in effect for this tenant: its own overrides laid over the instance-wide
+    default. Always present; a field is null where neither level sets it, and maps with no
+    tile source draw positions on a plain panel. Readable by any member of the tenant.
+    """
+    # The tenant's EFFECTIVE basemap: its override folded over the operator's
+    # `basemap.default`. Always present; every field is null when nothing sets it,
+    # and the surface then draws positions on a plain panel and says why — the
+    # platform ships no default tile source. Requires no authority beyond being a
+    # member, like `branding`: gating it would blank the map for the people who
+    # need it.
+    basemap: TenantBasemap!
+    """
+    Only the basemap this tenant has set itself, with no instance default folded in: a null
+    field means the tenant inherits it. Use it to show which values are overridden when
+    editing; use basemap to draw maps. Readable by any member of the tenant.
+    """
+    # The tenant's RAW basemap override — the stored columns with no cascade, so a
+    # null field means "this tenant inherits" (vs `basemap`, which fills it from the
+    # operator default). The editor reads this to show set-vs-inherited.
+    basemapOverride: TenantBasemap!
+    """
+    The default language of the console for this tenant, as a BCP-47 language tag such as
+    "en", "es" or "pt-BR": the tenant's own setting if it has one, otherwise the instance
+    default. Null when neither is set. It applies only to members who have not chosen a
+    language themselves, and only when the console ships that language. Readable by any
+    member of the tenant.
+    """
+    # The tenant's EFFECTIVE default language: its own override folded over the
+    # operator's `locale.default`. A BCP-47 tag ("en", "es", "pt-BR"), or null when
+    # neither tier sets one. Requires no authority beyond being a member, like
+    # `branding`.
+    #
+    # 🔴 This is a DEFAULT, not the language in effect. The console resolves four
+    # rungs — an explicit user choice, then this, then the browser's advertised
+    # languages, then English — so this only answers for a member who has not chosen,
+    # and only when the console ships that catalog.
+    locale: String
+    """
+    Only the default language this tenant has set itself, with no instance default folded
+    in: null means the tenant inherits it. Use it to show whether the value is overridden
+    when editing; use locale for the value in effect.
+    """
+    # The tenant's RAW locale override — the stored column with no cascade, so null
+    # means "this tenant inherits" (vs `locale`, which fills it from the operator
+    # default). The editor reads this to show set-vs-inherited.
+    localeOverride: String
+}
+
+"""
+The map tile source a tenant's maps draw on, plus the view they open at when there is
+nothing to fit to. A null field is unset.
+"""
+# tileUrl is a raster tile TEMPLATE ({z}/{x}/{y}, or {bbox-epsg-3857}, or {quadkey})
+# and attribution is the credit line its provider's licence requires. The two
+# RESOLVE TOGETHER: a tenant that names its own tile source never inherits the
+# operator's credit line, because crediting one provider for another's tiles is a
+# licence violation rather than a cosmetic mismatch. Neither may be set without the
+# other.
+#
+# centerLat/centerLon/zoom are a FALLBACK view, not an override — a surface that has
+# something of its own to fit to (an existing fence's bounds, a widget's markers)
+# fits it and ignores these.
+type TenantBasemap {
+    """
+    URL template of the raster tiles, over https, in which {z}, {x} and {y} (or
+    {bbox-epsg-3857}, or {quadkey}) stand for the tile being requested.
+    """
+    tileUrl: String
+    """
+    The credit line the tile provider requires, shown on the map. Plain text, in which links
+    may be written as `<a href="https://...">text</a>`. Always set together with tileUrl:
+    a tenant that sets its own tileUrl does not inherit the instance default's credit line.
+    """
+    attribution: String
+    """
+    Latitude in degrees, from -90 to 90, of the point maps open centered on when they have
+    nothing of their own to fit to. Set together with centerLon.
+    """
+    centerLat: Float
+    """
+    Longitude in degrees, from -180 to 180, of the point maps open centered on when they
+    have nothing of their own to fit to. Set together with centerLat.
+    """
+    centerLon: Float
+    """
+    Zoom level, from 0 (whole world) to 24, that maps open at when they have nothing of
+    their own to fit to.
+    """
+    zoom: Float
+}
+
+"""
+A basemap for setTenantBasemap. Every field is optional and the input replaces the
+tenant's whole basemap: a field left out or sent as null (or as a blank string) is cleared,
+so that aspect falls back to the instance default.
+"""
+# A basemap override for setTenantBasemap. Every field is optional and this is a full
+# replace: a null field CLEARS that override, re-inheriting the operator default.
+# Validated server-side (fail-closed): an https tile template carrying a real
+# placeholder, a non-empty attribution whose only permitted markup is
+# <a href="https://…">…</a>, in-range coordinates, and a zoom between 0 and 24.
+input TenantBasemapInput {
+    """
+    Raster tile URL template: an https URL of at most 2048 characters containing {z}, {x}
+    and {y}, or {bbox-epsg-3857}, or {quadkey}. {prefix}, {ratio} and {bbox} are also substituted;
+    any other placeholder is rejected. Requires attribution.
+    """
+    tileUrl: String
+    """
+    Credit line for the tiles, at most 512 characters. The only markup allowed is links
+    written exactly as `<a href="https://...">text</a>`. Required when tileUrl is set, and
+    rejected without it.
+    """
+    attribution: String
+    """Latitude in degrees, from -90 to 90. Must be sent together with centerLon."""
+    centerLat: Float
+    """Longitude in degrees, from -180 to 180. Must be sent together with centerLat."""
+    centerLon: Float
+    """Zoom level, from 0 to 24."""
+    zoom: Float
+}
+
+"""
+White-labeling applied to the console. A null field means the console keeps its built-in
+look for that aspect.
+"""
+# The resolved white-labeling applied to the console shell (ADR-038). A null field
+# means "inherit the built-in look" for that aspect. Colors are hex #rrggbb;
+# logoMaxHeight caps the render in px; updatedAt versions the value so a client can
+# key its cache. logo is either a directly-usable value (an https URL or a bounded
+# raster data: URI, Tier-0) or, for an object-store-backed (Tier-1) logo, a proxy
+# path the client fetches with its token — the raw storage reference is never
+# exposed. Logo lifecycle is managed OUT of the full-replace input below, via
+# setTenantLogo (url/clear) and the POST /branding/logo upload (ADR-058).
+type TenantBranding {
+    """Product name shown in the browser tab and the console, at most 64 characters."""
+    title: String
+    """
+    The logo, in a form you can put straight into an image tag: an https URL, a base64
+    `data:` URI of a PNG, JPEG or WebP image, or, for an uploaded logo, a path on this API
+    that you fetch with your access token.
+    """
+    logo: String
+    """Maximum height, in pixels, at which the logo is drawn, from 16 to 200."""
+    logoMaxHeight: Int
+    """Primary brand color as a hex string, `#rrggbb`."""
+    primary: String
+    """Page background color as a hex string, `#rrggbb`."""
+    background: String
+    """Text color as a hex string, `#rrggbb`."""
+    foreground: String
+    """Accent color as a hex string, `#rrggbb`."""
+    accent: String
+    """
+    A version stamp, as an RFC 3339 timestamp, for caching: it changes whenever the branding
+    may have changed. On branding it is the later of the tenant's last modification and the
+    instance default's; on brandingOverride it is the tenant's last modification, which any
+    change to the tenant moves, not only a branding change. Null if never modified.
+    """
+    updatedAt: String
+}
+
+"""
+A tenant's white-labeling theme for setTenantBranding. It replaces the whole theme: a
+field left out or sent as null is cleared, so that aspect falls back to the instance
+default. The logo is not part of it; see setTenantLogo.
+"""
+# A white-labeling override for setTenantBranding — the theme fields only. Every
+# field is optional: a null field CLEARS that override, re-inheriting the operator/
+# code default. Validated server-side (fail-closed): hex colors, a bounded title and
+# logo height. The logo is deliberately NOT here: a client cannot round-trip an
+# object-store logo reference through a full replace, so setting colors/title would
+# otherwise wipe an uploaded logo — logo is managed separately (setTenantLogo +
+# the upload endpoint, ADR-058).
+input TenantBrandingInput {
+    """Product name shown in the browser tab and the console, at most 64 characters."""
+    title: String
+    """Maximum height in pixels at which the logo is drawn; from 16 to 200."""
+    logoMaxHeight: Int
+    """Primary brand color as a hex string, `#rrggbb`."""
+    primary: String
+    """Page background color as a hex string, `#rrggbb`."""
+    background: String
+    """Text color as a hex string, `#rrggbb`."""
+    foreground: String
+    """Accent color as a hex string, `#rrggbb`."""
+    accent: String
+}
+
+"""
+The limits that apply to one tenant, resolved for the services that enforce them: each
+value is the tenant's own setting if it has one, otherwise the setting of the tenant's
+tier. A null limit means neither sets it, and the enforcing service then applies its
+platform default; null never means unlimited. Which of the two supplied a value is not
+reported.
+"""
+# The EFFECTIVE governance ceilings for the tenant the caller is acting within,
+# already folded over the tenant's tier (ADR-065): each field is the tenant's own
+# override if it has one, else its tier's setting. A null field means neither
+# declares one, so the enforcing service applies the platform default — null is
+# "inherit", never "unlimited". Read by the enforcing services over a service token:
+# event-sources (ingest*) and outbound-connectors (outbound*, ADR-060).
+#
+# The tier's VALUES are deliberately not on the wire: a service enforcing a ceiling
+# has no business knowing why the number is what it is. That provenance belongs to the
+# admin plane, which exposes the tier and the tenant's override separately. The tier's
+# IDENTITY is exposed (tierToken) for the one consumer that must resolve a SET this
+# service cannot fold for it — see the field. Field selection keeps the rest honest:
+# a service that does not ask does not learn.
+type TenantGovernance {
+    """
+    The tenant's effective sustained ingest ceiling, in readings per second: its own
+    override, else its tier's. A reading is one stored value: one measurement value, one
+    location or one alert. Null means neither declares one and the platform default
+    applies — never unlimited.
+    """
+    ingestReadingsPerSecond: Float
+    """
+    How many readings the tenant may submit in a burst above the sustained ingest rate
+    before being throttled.
+    """
+    ingestBurst: Int
+    """
+    The tenant's effective sustained outbound ceiling, in connector calls dispatched per
+    second: its own override, else its tier's. Null means neither declares one and the
+    platform default applies — never unlimited.
+    """
+    outboundCallsPerSecond: Float
+    """
+    How many outbound calls the tenant may make in a burst above the sustained outbound
+    rate before being throttled.
+    """
+    outboundBurst: Int
+    """
+    Whether the tenant has agreed to have its data sent to an external AI model provider.
+    False unless the tenant has explicitly opted in; there is no inherited value, and a
+    tenant that never opted in reads as false.
+    """
+    # Whether this tenant has opted in to routing its data to an EXTERNAL frontier
+    # model (ADR-056 §6). Non-null and fail-closed: false unless explicitly opted
+    # in. Read by the ai-inference service over a service token.
+    aiExternalEnabled: Boolean!
+    """
+    Sustained rate at which the tenant may make AI inference requests, in requests per
+    minute.
+    """
+    # How fast this tenant may spend AI inference budget (ADR-056 §6 / ADR-023),
+    # enforced by the ai-inference service. Declared per MINUTE — drafting is a
+    # human-paced authoring action, so the legible ceiling is "30 a minute", not
+    # "0.5 a second". Null inherits the platform default, never unlimited.
+    aiInferenceRequestsPerMinute: Float
+    """
+    How many AI inference requests the tenant may make in a burst above the sustained
+    rate before being throttled.
+    """
+    aiInferenceBurst: Int
+    """
+    The tenant's effective sustained self-registration ceiling, in device registrations
+    per second: its own override, else its tier's. Null means neither declares one and the
+    platform default applies — never unlimited.
+    """
+    provisioningRegistrationsPerSecond: Float
+    """
+    How many device registrations the tenant may make in a burst above the sustained
+    self-registration rate before being throttled.
+    """
+    provisioningBurst: Int
+    """
+    How strongly the tenant's traffic is protected when the platform is overloaded and has
+    to refuse some ingest: a whole number from 1 to 100, higher meaning more protected.
+    80 to 100 is never refused, 50 to 79 only under the heaviest load, 20 to 49 under heavy
+    load, and 1 to 19 first. When null, the platform treats the tenant as priority 30.
+    """
+    # This tenant's ADR-063 shed priority (1–100), resolved down the cascade (override,
+    # else tier, else null). Read by event-sources over a service token: it bands the
+    # value (80–100 gold · 50–79 silver · 20–49 bronze · 1–19 best-effort) and, under a
+    # contention floor, lowers the affected classes' effective ingest ceiling. Null ⇒
+    # the reader substitutes the platform fail-safe (a bronze-band value), never gold.
+    shedPriority: Int
+    """
+    The most commands the tenant may have waiting on a device that is known to be offline,
+    in the held state. Beyond it, new commands for absent devices are refused. When null,
+    the command service applies its configured default; there is no unlimited value.
+    """
+    # How many commands this tenant may have parked in the HELD state — the
+    # command-delivery lifecycle state meaning "the platform is deliberately
+    # withholding dispatch because the device is known absent". Resolved down the same
+    # cascade (override, else tier, else null). An offline fleet's backlog accumulates
+    # there and can sit for days, which is why it is bounded per tenant. Null ⇒ the
+    # reader substitutes its own configured default — a real bound. There is no value
+    # meaning unlimited, at any level.
+    heldCommandCeiling: Int
+    """
+    The most positions (vertices) one geofence may have, counted across all of its rings.
+    A limit on the size of a single fence. When null, the platform default applies.
+    """
+    # The three geofence caps, each resolved down the same cascade (override, else tier, else
+    # null) and each bounding a cost the other two cannot express. Read by device-management
+    # when a tenant creates or edits a fence. Null ⇒ the reader substitutes the platform
+    # default, which is a real bound; there is no value meaning unlimited, at any level.
+    #
+    # geoFencePositionCeiling bounds ONE fence's position count across every ring, because
+    # compiling a fence is quadratic in that number.
+    geoFencePositionCeiling: Int
+    """
+    The most geofences the tenant may have at one time. When null, the platform default
+    applies.
+    """
+    # geoFenceCeiling bounds how many fences the tenant may hold, because the fence-set
+    # manifest carries one entry per fence and must fit inside one broker message.
+    geoFenceCeiling: Int
+    """
+    The most positions (vertices) the tenant's geofences may have in total, summed across
+    every fence. A limit on the combined size of the whole set, independent of
+    geoFencePositionCeiling and geoFenceCeiling. When null, the platform default applies.
+    """
+    # geoFencePositionBudget bounds the position count across the tenant's WHOLE current fence
+    # set — the cost neither of the others reaches, since one bounds a compile and the other a
+    # message. It is the tenant's share of a geometry cache that lives in a single DETECT
+    # process serving every tenant on the instance, which is why it alone among these caps
+    # bounds a resource the tenant does not own.
+    geoFencePositionBudget: Int
+    """
+    The most calculated metrics (metrics computed from a formula over the other metrics of
+    a reading) that one of the tenant's device profiles may publish. Set on the tenant's
+    tier; there is no per-tenant override. When null, the platform default applies, which
+    is 0: calculated metrics are off unless the tier turns them on.
+    """
+    # Read by device-management when a profile carrying a calculated metric is published.
+    calculatedMetricsPerProfile: Int
+    "Enabled detection rules across active profile versions; null inherits the platform default."
+    rulesPerTenant: Int
+    """
+    The most inbound integrations (network servers and webhook senders, each authenticated
+    by its own bearer token) the tenant may hold. Set on the tenant's tier; there is no
+    per-tenant override. When null, the platform default applies, which is 5. Zero is a real
+    setting: the tier holds none.
+    """
+    # Read by device-management when an integration is created.
+    integrationsPerTenant: Int
+    """
+    Where the tenant is in its deletion lifecycle: `active` for a normal tenant, or
+    `purging` once the tenant has been deleted and its data is being erased. Never null.
+    """
+    # Where this tenant sits in the ADR-077 deletion lifecycle: "active" or "purging".
+    # Read by the data-plane services that must stop acting on behalf of a tenant an
+    # operator has deleted — device connect-auth, ingest auto-registration, command
+    # dispatch — none of which has any other way to learn it (a device credential and a
+    # queued command both outlive the delete). Non-null, and never null-as-inherit: a
+    # tenant is always in exactly one state, and there is nothing above it to inherit
+    # from. Unlike the ceilings above this is not a metered value; it is here because it
+    # is the same per-tenant fact, on the same service-token read, with the same cache.
+    purgeState: String!
+    """
+    Token of the tier (the operator-defined packaging level) the tenant belongs to. Every
+    tenant has exactly one.
+    """
+    # This tenant's ADR-065 packaging tier — its identity, not a value derived from it.
+    # Read by ai-inference, which joins its own tier↔provider grants against it to
+    # resolve which AI models the tenant may use (decision 10). It is here rather than
+    # folded away like a ceiling because this service cannot resolve that set: it
+    # cannot see providers at all (ai-inference is opt-in; user-management ships
+    # everywhere and may never reference it).
+    tierToken: String!
+}
+
+"""The signed-in user, as shown in the console."""
+# The identity the caller is signed in as (control plane), for display in the
+# console — its name, falling back to email.
+type CurrentIdentity {
+    """The user's email address, which is their sign-in name and cannot be changed."""
+    email: String!
+    """The user's first name. Null when none has been set."""
+    firstName: String
+    """The user's last name. Null when none has been set."""
+    lastName: String
+    """
+    The customers the signed-in member is limited to in the current tenant. Empty when they
+    see the whole tenant.
+    """
+    scope: [ScopeAnchor!]!
+}
+
+"""
+Changes to the signed-in user's own display name. The user is identified by the request's
+access token, so only your own profile can be edited. For each field, leaving it out keeps
+the stored name, a value sets it, and null or an empty string clears it.
+"""
+# Data to update the signed-in user's own profile. The identity is named by the
+# caller's own token, so it is not a member of this input — editing someone else's
+# profile is unrepresentable here, not merely refused.
+#
+# Both fields carry the platform's three update states: OMITTING one leaves the stored
+# name alone, sending a value sets it, and sending null (or "") clears it. Null and ""
+# mean the same thing: an empty display name is a state a person may legitimately be in,
+# and the server writes the same empty for either spelling — so there is no third stored
+# outcome for them to differ over.
+input ProfileUpdateRequest {
+    """New first name. Omit to keep it, send null or an empty string to clear it."""
+    firstName: String
+    """New last name. Omit to keep it, send null or an empty string to clear it."""
+    lastName: String
+}
+
+"""The kind of thing a scope anchor names."""
+enum ScopeAnchorKind {
+    """A customer: the anchor covers the devices assigned to that customer."""
+    CUSTOMER
+    """
+    An entity group: the anchor covers the devices in the group while it is an access scope (at
+    its active version), so a device moved into or out of the group is seen or not without the
+    member being edited. A group that is not an access scope covers nothing.
+    """
+    GROUP
+}
+
+"""One entry of a member's scope: a customer or group whose devices the member can see."""
+type ScopeAnchor {
+    """What the anchor names."""
+    kind: ScopeAnchorKind!
+    """Token of the customer (or group) the anchor names."""
+    token: String!
+}
+
+"""One entry of a scope to set on a member."""
+input ScopeAnchorInput {
+    """What the anchor names."""
+    kind: ScopeAnchorKind!
+    """Token of the customer or group the anchor names."""
+    token: String!
+}
+
+"""Who defined a role."""
+enum RoleOwner {
+    """A role the instance operator defined. It can be assigned here but not changed here."""
+    INSTANCE
+    """A role this tenant defined for itself. It exists only in this tenant."""
+    TENANT
+}
+
+"""A role that can be assigned to members of this tenant."""
+type TenantRole {
+    """Token of the role, unique among the roles assignable in this tenant."""
+    token: String!
+    """Human-readable name of the role. Null when none has been set."""
+    name: String
+    """Free-text description of the role. Null when none has been set."""
+    description: String
+    """
+    The authorities the role grants, such as `device:read` or `alarm:write`. `*` grants
+    every tenant authority.
+    """
+    authorities: [String!]!
+    """Whether the instance operator or this tenant defined the role."""
+    owner: RoleOwner!
+}
+
+"""A person's membership in this tenant, as the tenant's administrators see it."""
+type Member {
+    """The member's email address, which is their sign-in name."""
+    email: String!
+    """
+    The member's first name. Null when none has been set, and always null while the
+    member's invitation is pending.
+    """
+    firstName: String
+    """
+    The member's last name. Null when none has been set, and always null while the
+    member's invitation is pending.
+    """
+    lastName: String
+    """False when the membership is disabled, or the member has not accepted their invitation yet."""
+    enabled: Boolean!
+    """The roles the member holds in this tenant."""
+    roles: [TenantRole!]!
+    """
+    The customers whose devices the member is limited to. Empty when the member sees the
+    whole tenant.
+    """
+    scope: [ScopeAnchor!]!
+    """
+    True when the membership is managed by the tenant's identity provider. Such a membership
+    cannot be changed here.
+    """
+    managedByIdentityProvider: Boolean!
+    """True when the member was invited and has not accepted yet."""
+    invitationPending: Boolean!
+    """True when the member has two-factor authentication turned on. Always false while their invitation is pending."""
+    mfaEnabled: Boolean!
+}
+
+"""Where a page of search results sits in the full result set. Positions are 1-based and inclusive."""
+type SearchResultsPagination {
+    """Position of the first result on this page within the full result set (1-based)."""
+    pageStart: Int
+    """Position of the last result on this page within the full result set (1-based, inclusive)."""
+    pageEnd: Int
+    """Number of records matching the criteria across all pages."""
+    totalRecords: Int
+}
+
+"""Filters and paging for listing this tenant's members. Filters are combined with AND."""
+input MemberSearchCriteria {
+    """Page to return, starting at 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+    """Only members whose email starts with this text, ignoring case."""
+    emailPrefix: String
+    """True for enabled memberships only, false for disabled ones only. Omit it for both."""
+    enabled: Boolean
+    """Only members who hold the role with this token, whether the instance's or the tenant's own."""
+    roleToken: String
+    """
+    Only members whose scope names this customer or group. A member with the whole tenant has
+    no scope and is not matched.
+    """
+    scopeAnchor: ScopeAnchorInput
+    """
+    True for memberships the tenant's identity provider manages only, false for manual ones
+    only. Omit it for both.
+    """
+    managedByIdentityProvider: Boolean
+}
+
+"""One page of this tenant's members, ordered by email."""
+type MemberSearchResults {
+    """The members on this page."""
+    results: [Member!]!
+    """Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""Where an invitation is in its life."""
+enum InvitationState {
+    """Issued and still usable."""
+    PENDING
+    """Accepted: the member has joined."""
+    ACCEPTED
+    """Not accepted before it expired. Reissue it to send a new one."""
+    EXPIRED
+    """Revoked by an administrator."""
+    REVOKED
+}
+
+"""An invitation to join this tenant."""
+type Invitation {
+    """The email address the invitation was issued to."""
+    email: String!
+    """Where the invitation is in its life."""
+    state: InvitationState!
+    """When the invitation was issued, as an RFC 3339 timestamp."""
+    createdAt: String!
+    """When the invitation stops being usable, as an RFC 3339 timestamp."""
+    expiresAt: String!
+    """When the invitation was accepted, as an RFC 3339 timestamp. Null until it is."""
+    acceptedAt: String
+    """When the invitation was revoked, as an RFC 3339 timestamp. Null unless it was."""
+    revokedAt: String
+}
+
+"""Paging for listing this tenant's invitations."""
+input InvitationSearchCriteria {
+    """Page to return, starting at 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+}
+
+"""One page of this tenant's invitations, newest first."""
+type InvitationSearchResults {
+    """The invitations on this page."""
+    results: [Invitation!]!
+    """Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""A person to invite into this tenant."""
+input InviteMemberRequest {
+    """The person's email address."""
+    email: String!
+    """Tokens of the roles to give them. Each must be assignable in this tenant."""
+    roleTokens: [String!]!
+    """
+    The customers to limit them to. Omit it, or send an empty list, for the whole tenant. At
+    most 16 anchors.
+    """
+    scope: [ScopeAnchorInput!]
+}
+
+"""The result of inviting a person or reissuing their invitation."""
+type MemberInvitation {
+    """The member, disabled until they accept."""
+    member: Member!
+    """
+    The one-time invitation code. Give it to the person to accept with acceptInvitation; it
+    is shown only here, is never stored, and cannot be read back later. It is valid for 7
+    days.
+    """
+    invitationCode: String!
+}
+
+"""A role to define for this tenant."""
+input TenantRoleCreateRequest {
+    """
+    Unique identifier for the role: letters, digits, hyphens and underscores, starting with a
+    letter or digit, at most 128 characters. It may not be the token of an instance role.
+    """
+    token: String!
+    """Human-readable name of the role."""
+    name: String
+    """Free-text description of the role."""
+    description: String
+    """
+    The authorities the role grants. Each must be a tenant authority that you hold yourself;
+    `*` only if you hold `*`.
+    """
+    authorities: [String!]!
+}
+
+"""
+Changes to a role this tenant defined. For each field, leaving it out keeps the stored value,
+a value sets it, and null clears it.
+"""
+input TenantRoleUpdateRequest {
+    """New name. Omit to keep it, send null to clear it."""
+    name: String
+    """New description. Omit to keep it, send null to clear it."""
+    description: String
+    """
+    New authorities, replacing the current set. Omit to keep them; null or an empty list
+    removes them all. Each must be a tenant authority that you hold yourself.
+    """
+    authorities: [String!]
+}
+
+"""
+One client secret of a service account. The secret itself is shown only once, when it is
+created; this record never carries it.
+"""
+type ServiceAccountSecret {
+    """The secret's last four characters, to tell secrets apart."""
+    hint: String!
+    """When the secret was created, as an RFC 3339 timestamp."""
+    createdAt: String!
+    """
+    When the secret stops working, as an RFC 3339 timestamp. Every secret expires; after a
+    rotation the previous secret's expiry is the end of the overlap.
+    """
+    expiresAt: String!
+    """When the secret last obtained a token, as an RFC 3339 timestamp. Null if it never has."""
+    lastUsedAt: String
+    """True while the secret can still obtain tokens."""
+    active: Boolean!
+}
+
+"""
+A service account: a non-human principal of this tenant that an integration uses to call the
+APIs. It obtains short-lived access tokens from the OAuth token endpoint with the
+client_credentials grant, using its client ID and a client secret, and acts with exactly the
+authorities of its roles, limited to its scope.
+"""
+type ServiceAccount {
+    """Unique identifier of the service account within this tenant."""
+    token: String!
+    """Human-readable name. Null when none was set."""
+    name: String
+    """Free-text description. Null when none was set."""
+    description: String
+    """The OAuth client ID the account authenticates with. Not a secret."""
+    clientId: String!
+    """False when the account is disabled and cannot obtain tokens."""
+    enabled: Boolean!
+    """
+    True when the account runs an AI agent. Its tokens never carry a write authority: in place of
+    its roles' writes they carry the matching proposal authorities, so it can ask for an action and
+    never perform one. Set when the account is created and never changed. This field is stable,
+    not preview: it will not be removed, because removing it would turn agent accounts back into
+    integrations holding their roles' writes.
+    """
+    agent: Boolean!
+    """
+    The roles the account holds. An ordinary account's tokens carry exactly these roles'
+    authorities. (Preview: may change in a minor release.) An agent account's tokens carry their
+    reads and the proposal authorities derived from their writes.
+    """
+    roles: [TenantRole!]!
+    """The customers or groups whose devices the account is limited to. Empty for the whole tenant."""
+    scope: [ScopeAnchor!]!
+    """The account's secrets, newest first, including expired ones."""
+    secrets: [ServiceAccountSecret!]!
+    """The subject of the administrator who created the account."""
+    createdBy: String
+    """When the account was created, as an RFC 3339 timestamp."""
+    createdAt: String!
+}
+
+"""Paging for listing this tenant's service accounts."""
+input ServiceAccountSearchCriteria {
+    """Page to return, starting at 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+}
+
+"""One page of this tenant's service accounts, ordered by token."""
+type ServiceAccountSearchResults {
+    """The service accounts on this page."""
+    results: [ServiceAccount!]!
+    """Where this page sits within the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""A service account to create."""
+input ServiceAccountCreateRequest {
+    """
+    Unique identifier within this tenant: letters, digits, hyphens and underscores, starting
+    with a letter or digit, at most 128 characters.
+    """
+    token: String!
+    """Human-readable name, at most 128 characters."""
+    name: String
+    """Free-text description, at most 1024 characters."""
+    description: String
+    """
+    The roles to assign. Each must be assignable in this tenant and grant only authorities
+    you hold yourself.
+    """
+    roleTokens: [String!]!
+    """The customers or groups to limit the account to. Omit it, or send an empty list, for the whole tenant."""
+    scope: [ScopeAnchorInput!]
+    """Days until the first secret expires: 1 to 730. Defaults to 365."""
+    secretExpiresInDays: Int
+    """
+    (Preview: may change in a minor release.) True to create an AGENT account, for an AI agent: its tokens carry proposal authorities in
+    place of its roles' write authorities. Cannot be changed later. Defaults to false. Refused
+    unless agent actions are enabled on this instance. A tenant
+    whose agent policy lists authorities under serviceAccounts.agentFlagRequiredFor refuses an
+    account that holds any of them without this flag.
+    """
+    agent: Boolean
+}
+
+"""(Preview: may change in a minor release.) How a version of the agent policy came to be published."""
+enum AgentPolicyOrigin {
+    """(Preview: may change in a minor release.) The draft was published."""
+    PUBLISH
+    """(Preview: may change in a minor release.) An earlier version's document was published again as a new version."""
+    ROLLBACK
+    """(Preview: may change in a minor release.) The version in force was republished with only agent actuation turned on or off."""
+    ACTUATION
+}
+
+"""(Preview: may change in a minor release.) The caller's own approvals inbox standing; grants no authority."""
+type AgentApprovalAccess {
+    """(Preview: may change in a minor release.) Whether this instance enables agent actions."""
+    instanceEnabled: Boolean!
+    """(Preview: may change in a minor release.) Whether the caller currently has approver standing for this release's alarm proposals."""
+    canApprove: Boolean!
+}
+
+"""(Preview: may change in a minor release.) One published version of this tenant's agent policy. Versions are never changed or removed."""
+type AgentPolicyVersion {
+    """(Preview: may change in a minor release.) The version number. It only grows: a rollback publishes a new, higher version."""
+    version: Int!
+    """(Preview: may change in a minor release.) The policy document, as JSON."""
+    document: String!
+    """(Preview: may change in a minor release.) How this version came to be published."""
+    origin: AgentPolicyOrigin!
+    """(Preview: may change in a minor release.) Who published it."""
+    publishedBy: String!
+    """(Preview: may change in a minor release.) When it was published, as an RFC 3339 timestamp."""
+    publishedAt: String!
+}
+
+"""
+(Preview: may change in a minor release.) This tenant's agent policy: whether AI agents may act in the tenant, which OAuth clients may,
+what each kind of action needs before it happens, and who may approve it. Agents can act only
+when this instance allows agent actions, the operator has not suspended them for this tenant,
+the tenant kill switch is off, and the published policy enables them.
+"""
+type AgentPolicy {
+    """(Preview: may change in a minor release.) The version in force, or null when none has been published (agents cannot act)."""
+    published: AgentPolicyVersion
+    """(Preview: may change in a minor release.) The working draft, as JSON, or null when there is none. A draft changes nothing until it is published."""
+    draft: String
+    """(Preview: may change in a minor release.) When the draft was last saved, as an RFC 3339 timestamp, or null."""
+    draftUpdatedAt: String
+    """(Preview: may change in a minor release.) Who last saved the draft, or null."""
+    draftUpdatedBy: String
+    """(Preview: may change in a minor release.) True when the instance operator has suspended agent actions for this tenant, whatever its policy says."""
+    operatorSuspended: Boolean!
+    """(Preview: may change in a minor release.) True when the tenant has switched agent actions off with the kill switch, independent of the document."""
+    actuationOff: Boolean!
+    """(Preview: may change in a minor release.) True when this instance allows agent actions at all."""
+    instanceEnabled: Boolean!
+    """(Preview: may change in a minor release.) True when agents may act in this tenant now: the instance allows it, the operator has not suspended it, the tenant kill switch is off, and the published policy enables it."""
+    actuationInEffect: Boolean!
+}
+
+"""(Preview: may change in a minor release.) A kind of action an AI agent may ask for."""
+enum AgentActionKind {
+    """(Preview: may change in a minor release.) Acknowledge an alarm."""
+    ALARM_ACK
+    """(Preview: may change in a minor release.) Clear an alarm."""
+    ALARM_CLEAR
+    """(Preview: may change in a minor release.) Send a command to one device."""
+    COMMAND_SEND
+    """(Preview: may change in a minor release.) Send a command to several devices."""
+    COMMAND_BATCH
+    """(Preview: may change in a minor release.) Change detection rules."""
+    RULE_CHANGESET
+    """(Preview: may change in a minor release.) Start a firmware update rollout."""
+    ROLLOUT_CREATE
+    """(Preview: may change in a minor release.) Add a note to a device, asset or alarm."""
+    ANNOTATION
+}
+
+"""(Preview: may change in a minor release.) How much an action changes the physical or logical world, as its command definition declares."""
+enum AgentActionImpact {
+    """(Preview: may change in a minor release.) An ordinary action."""
+    NORMAL
+    """(Preview: may change in a minor release.) An action that interrupts a device's normal operation."""
+    DISRUPTIVE
+    """(Preview: may change in a minor release.) An action that cannot be undone."""
+    DESTRUCTIVE
+}
+
+"""(Preview: may change in a minor release.) The outcome of an agent-action decision."""
+enum AgentActionVerdict {
+    """(Preview: may change in a minor release.) The action is not allowed."""
+    REFUSE
+    """(Preview: may change in a minor release.) The action may run without a person approving it."""
+    AUTO
+    """(Preview: may change in a minor release.) The action needs the given number of people to approve it."""
+    APPROVE
+}
+
+"""(Preview: may change in a minor release.) The tenant's verdict on an action an AI agent proposes to take."""
+type AgentActuationDecision {
+    """(Preview: may change in a minor release.) What the policy says."""
+    verdict: AgentActionVerdict!
+    """(Preview: may change in a minor release.) How many distinct people must approve: 0 for AUTO and REFUSE, otherwise 1 or 2."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) Platform-defined codes saying why, for example CLIENT_NOT_ALLOWED or FLOOR_TWO_PERSON."""
+    reasons: [String!]!
+    """(Preview: may change in a minor release.) The policy version the decision was made under, or 0 when none is published."""
+    policyVersion: Int!
+    """(Preview: may change in a minor release.) When set, the groups every target device must belong to. Null for no group restriction."""
+    groupRestriction: [String!]
+    """
+    (Preview: may change in a minor release.) How long a proposal made now may wait for approval, in seconds, from the policy's expiry
+    settings and never more than 24 hours. 0 when the verdict is REFUSE.
+    """
+    expiresInSeconds: Int!
+    """
+    (Preview: may change in a minor release.) The policy's limit on how many actions of this kind the client, and separately the person,
+    may propose per hour, or 0 when the policy sets none and the platform limit applies. The
+    owning service never lets it exceed the platform limit. 0 when the verdict is REFUSE.
+    """
+    actionsPerHour: Int!
+    """
+    (Preview: may change in a minor release.) Whether the client's identity is authenticated (a confidential client or an agent service
+    account) rather than a label any application can claim. False when the verdict is REFUSE.
+    """
+    clientAttested: Boolean!
+}
+
+"""
+(Preview: may change in a minor release.) What the owning service recorded about an agent's
+proposal, and who has approved it so far, for agentExecutionDecision.
+"""
+input AgentExecutionDecisionInput {
+    """(Preview: may change in a minor release.) The proposal's token, for correlation."""
+    proposalToken: String!
+    """(Preview: may change in a minor release.) The kind of action."""
+    kind: AgentActionKind!
+    """(Preview: may change in a minor release.) The action's impact. Defaults to NORMAL."""
+    impact: AgentActionImpact
+    """(Preview: may change in a minor release.) How many targets the proposal reaches."""
+    targetCount: Int!
+    """(Preview: may change in a minor release.) The groups the targets were chosen through, if any."""
+    groupTokens: [String!]
+    """(Preview: may change in a minor release.) For a command, its name."""
+    command: String
+    """(Preview: may change in a minor release.) The principal the proposal was made for, as recorded on it."""
+    proposerPrincipal: String!
+    """(Preview: may change in a minor release.) The agent client the proposal was made through, as recorded on it."""
+    proposerClient: String!
+    """(Preview: may change in a minor release.) The grant session the proposal was made under, when the token carried one."""
+    proposerSid: String
+    """(Preview: may change in a minor release.) The principals who have approved so far, including the caller when the caller is approving. At most 10."""
+    approvers: [String!]!
+    """(Preview: may change in a minor release.) An approver counts only through the sign-in named here, which must still be open and started under the identity's current session epoch. An approver in approvers with no session here does not count. At most 10."""
+    approverSessions: [AgentApproverSessionInput!]
+}
+
+"""(Preview: may change in a minor release.) The sign-in that gave a principal's approval."""
+input AgentApproverSessionInput {
+    """(Preview: may change in a minor release.) The approver's principal."""
+    principal: String!
+    """(Preview: may change in a minor release.) The approver's sign-in."""
+    sid: String!
+}
+
+"""
+(Preview: may change in a minor release.) Whether a stored agent proposal may still go ahead, and
+under what approval rules, read now from this service's records.
+"""
+type AgentExecutionDecision {
+    """The current actuation generation, advanced by each tenant or operator switch call."""
+    actuationGeneration: Int!
+    """(Preview: may change in a minor release.) What the current policy says. Never AUTO."""
+    verdict: AgentActionVerdict!
+    """(Preview: may change in a minor release.) How many distinct people must approve under the current policy: 0 for REFUSE, otherwise 1 or 2."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) The named approvers who are approvers now: enabled members in an approver role, holding the write the action needs, with an active second factor and a named sign-in still open under the identity's current session epoch. Approvers without a named session do not count."""
+    validApprovers: [String!]!
+    """(Preview: may change in a minor release.) Platform-defined codes saying why, for example PROPOSER_LOST_AUTHORITY or CLIENT_NOT_ALLOWED."""
+    reasons: [String!]!
+    """(Preview: may change in a minor release.) The policy version the decision was made under, or 0 when none is published."""
+    policyVersion: Int!
+    """(Preview: may change in a minor release.) How recently, in seconds, an approver's second factor must have been verified."""
+    stepUpMaxAgeSeconds: Int!
+    """(Preview: may change in a minor release.) Whether a sign-in completed with a recovery code counts as a second factor for an approval."""
+    acceptRecoveryCodes: Boolean!
+    """(Preview: may change in a minor release.) Whether the person the proposal was made for may be its only approver."""
+    allowSelfConfirm: Boolean!
+}
+
+"""
+A service account with a newly created client secret. The secret is shown only here: it is
+never stored, and cannot be read back later.
+"""
+type ServiceAccountCredentials {
+    """The service account."""
+    serviceAccount: ServiceAccount!
+    """The client ID to authenticate with."""
+    clientId: String!
+    """The client secret. Store it now; it cannot be shown again."""
+    clientSecret: String!
+    """The token endpoint to request tokens from. Null when this instance has no OAuth issuer configured."""
+    tokenEndpoint: String
+}
+
+"""(Preview: may change in a minor release.) A named person's current standing in this tenant."""
+type PrincipalStanding {
+    """(Preview: may change in a minor release.) The requested person's sign-in name."""
+    principal: String!
+    """(Preview: may change in a minor release.) Whether the person has an enabled identity and an enabled, unscoped membership with every requested authority."""
+    qualifies: Boolean!
+}
+
+"""
+Sign-in, session and self-service reads, and this tenant's own members, invitations and
+roles. Everything here is scoped to the caller's own tenant or identity; instance-level
+administration is a separate API.
+"""
+# The tenant-scoped user-management API: authentication, self-service, and since ADR-081
+# the tenant's delegated administration of its OWN members, invitations and tenant-owned
+# roles. The identity directory, the role catalogue and the tenant registry stay on the
+# instance-scoped admin API (admin_schema.graphql).
+type Query {
+    """Liveness check. Always returns the string "pong". Needs no token."""
+    ping: String!
+    """
+    The tenant the caller is currently acting within, as named by their access token. Fails
+    with an authentication error if the request carries no tenant access token. Needs no
+    authority beyond being signed in to the tenant.
+    """
+    tenant: Tenant!
+    """
+    The limits that apply to the tenant of the current request, for the services that
+    enforce them. The tenant comes from the access token, or from the tenant a service
+    names when it calls with a service token. Fails if that tenant does not exist. Requires
+    tenant:read, an instance-level authority that tenant users do not hold.
+    """
+    # The ingest governance overrides for the caller's tenant (requires
+    # tenant:read); read by the enforcing service over a service token.
+    tenantGovernance: TenantGovernance!
+    """
+    (Preview: may change in a minor release.) Service-only: whether each named person still holds an
+    enabled, unscoped membership of this tenant with every listed authority. Answers only the
+    device-management service's own token; every other caller is refused.
+    """
+    principalStanding(
+        """(Preview: may change in a minor release.) The people's sign-in names, 1 to 10."""
+        principals: [String!]!
+        """(Preview: may change in a minor release.) The authorities each must hold, 1 to 8."""
+        authorities: [String!]!
+    ): [PrincipalStanding!]!
+    """
+    The token of every tenant on the instance. Returns tokens only, not tenant records.
+    Requires tenant:read, which only an instance-level caller holds, so a tenant user,
+    including one with every tenant authority, cannot list tenants.
+    """
+    # Every tenant token on the instance (requires the system-tier tenant:read).
+    # Read by services that must act across tenants over a service token — broker
+    # presence reconciliation compares the broker's live connections against what
+    # each tenant's projection believes, and a tenant whose whole fleet dropped is
+    # nameable only from a list. Tokens only: an iteration key, not tenant records.
+    tenantTokens: [String!]!
+    """
+    The user the access token belongs to. Fails with an authentication error if the request
+    carries no valid access token.
+    """
+    me: CurrentIdentity!
+    """
+    The identity's tenant memberships as of now, with its roles in each, including any that
+    are disabled or in a tenant that is disabled or being deleted; selectTenant refuses
+    those. It takes the
+    identity token returned by login, so it works before any tenant is selected and needs no
+    Authorization header; use it to refresh a tenant picker after memberships change
+    without logging in again. Fails with "invalid or expired token" if the identity token
+    is expired, malformed, or from a session that has since ended (for example after a
+    password reset or the account being disabled).
+    """
+    identityMemberships(
+        """The identity token from login."""
+        identityToken: String!
+    ): [Membership!]!
+    """
+    The identity's own second-factor status. It takes the identity token returned by login (or
+    verifyMfa), so it works before any tenant is selected. Fails with "invalid or expired token"
+    if the token is expired, malformed, or from a session that has ended.
+    """
+    mfaStatus(
+        """The identity token from login."""
+        identityToken: String!
+    ): MfaStatus!
+    """
+    The names of the functional areas deployed on this instance, so a client can tell a
+    feature that was never deployed from a server that is failing. It reports what the
+    operator enabled, not whether each area is healthy: an area that is enabled but down
+    still appears. Requires only a signed-in caller.
+    """
+    functionalAreas: [String!]!
+    """
+    The entity token masks as a JSON object serialized to a string: it maps an entity type
+    (or "default") to the mask template used to generate tokens for new entities of that
+    type. A template is literal text plus the placeholders {slug}, {uuid},
+    {alphanumeric-N} and {numeric-N}. Masks apply to the create forms in the console; the
+    server accepts any token that satisfies the general token format. Requires only a
+    signed-in caller. The same masks are served on the settings API.
+    """
+    # The effective entity token-mask map, as a JSON object string. Requires only an
+    # authenticated caller — the masks are non-sensitive UI templates that every
+    # create form needs to mint a token, not a settings read.
+    #
+    # Deliberately served HERE AS WELL AS on the settings schema, and that is not a
+    # duplicate. The masks are instance-global, so both planes answer identically;
+    # what differs is which session the ASKING SCREEN holds. A tenant-scoped create
+    # form has a tenant session that lives for days and an identity token that dies
+    # in fifteen minutes, so asking over the identity lane makes the mask stop
+    # applying mid-session. An operator creating the FIRST tenant has the opposite
+    # problem: an identity session and no tenant at all. Neither plane can serve
+    # both, so both serve.
+    tokenMasks: String!
+    """
+    One page of this tenant's members, with their roles, scope and status. Requires
+    member:read. Refused (error code FORBIDDEN) for a member whose access is limited to part
+    of the tenant.
+    """
+    members(
+        """Filters and paging."""
+        criteria: MemberSearchCriteria!
+    ): MemberSearchResults!
+    """
+    One member of this tenant by email. An email that is not a member of this tenant fails
+    with the error code NOT_FOUND, whether or not an account with that email exists. Requires
+    member:read.
+    """
+    member(
+        """Email of the member."""
+        email: String!
+    ): Member!
+    """
+    The roles that can be assigned in this tenant: the instance roles (owner INSTANCE) and the
+    roles this tenant defined (owner TENANT). Requires role:read.
+    """
+    tenantRoles: [TenantRole!]!
+    """
+    The authorities a role defined in this tenant may grant, sorted, including `*` (every
+    tenant authority). A role may grant only those of them that the person defining it holds.
+    Requires role:read. Refused (error code FORBIDDEN) for a member whose access is limited
+    to part of the tenant.
+    """
+    tenantAuthorities: [String!]!
+    """One page of this tenant's invitations, newest first. Requires member:read."""
+    invitations(
+        """Paging."""
+        criteria: InvitationSearchCriteria!
+    ): InvitationSearchResults!
+    """
+    One page of this tenant's service accounts, ordered by token. Requires member:read.
+    Refused (error code FORBIDDEN) for a member whose access is limited to part of the tenant.
+    """
+    serviceAccounts(
+        """Paging."""
+        criteria: ServiceAccountSearchCriteria!
+    ): ServiceAccountSearchResults!
+    """
+    One service account of this tenant by token. A token that names no service account of
+    this tenant fails with the error code NOT_FOUND. Requires member:read.
+    """
+    serviceAccount(
+        """Token of the service account."""
+        token: String!
+    ): ServiceAccount!
+    """
+    The OAuth token endpoint service accounts obtain their tokens from, or null when this
+    instance has no OAuth issuer configured, in which case service accounts cannot obtain
+    tokens. Requires member:read.
+    """
+    serviceAccountTokenEndpoint: String
+    """
+    (Preview: may change in a minor release.) This tenant's agent policy: the version in force, the working draft, and whether agent
+    actions are in effect. Requires agent:admin.
+    """
+    agentPolicy: AgentPolicy!
+    """(Preview: may change in a minor release.) Answers only the caller's OWN standing, without agent:admin. Requires a person's own session; agent-origin tokens and scoped sessions are refused. Reveals no other principals or policy document."""
+    agentApprovalAccess: AgentApprovalAccess!
+    """(Preview: may change in a minor release.) The published versions of this tenant's agent policy, newest first. Requires agent:admin."""
+    agentPolicyVersions(
+        """(Preview: may change in a minor release.) How many versions to return: 1 to 100. Defaults to 20."""
+        limit: Int
+    ): [AgentPolicyVersion!]!
+    """
+    (Preview: may change in a minor release.) The tenant's verdict on an action an AI agent proposes to take, read now from the published
+    policy. The agent's client is the one in the caller's own token, never an argument, so this
+    answers only for the caller, and only an agent's token (one carrying a proposal authority) may
+    ask: any other caller is refused with an error. This release never answers AUTO: an action the
+    policy would let run automatically still needs one person to approve it. An error must be
+    treated as a refusal.
+    """
+    agentActuationDecision(
+        """(Preview: may change in a minor release.) The kind of action."""
+        kind: AgentActionKind!
+        """(Preview: may change in a minor release.) The action's impact, from the command definition. Defaults to NORMAL."""
+        impact: AgentActionImpact
+        """(Preview: may change in a minor release.) How many devices the action would reach."""
+        targetCount: Int!
+        """(Preview: may change in a minor release.) The groups the targets were chosen through, if any."""
+        groupTokens: [String!]
+        """(Preview: may change in a minor release.) For a command, its name."""
+        command: String
+    ): AgentActuationDecision!
+    """
+    (Preview: may change in a minor release.) Whether a stored agent proposal may still go ahead,
+    asked by the service that owns it when a person approves it. Only a person's own session
+    holding the write the action needs may ask; an agent's token is refused. It answers for the
+    original client and proposer recorded on the proposal and for every approver named, from this
+    service's records read now. An error must be treated as a refusal.
+    """
+    agentExecutionDecision(
+        """(Preview: may change in a minor release.) What the owning service recorded about the proposal, and who has approved it so far."""
+        input: AgentExecutionDecisionInput!
+    ): AgentExecutionDecision!
+}
+
+"""
+The start of a single sign-on: the address of the identity provider's sign-in page. Send the
+browser there; the provider sends it back to the `returnTo` address you gave.
+"""
+type SsoBegin {
+    """The provider's authorization address, to navigate the browser to."""
+    authorizationUrl: String!
+}
+
+"""The app a sign-out at the identity provider returns the browser to."""
+enum SignOutReturn {
+    """The console's sign-in page."""
+    CONSOLE
+    """The dashboard app."""
+    DASHBOARD
+}
+
+"""The outcome of signing out. The sign-in has ended on this platform."""
+type SignOut {
+    """
+    Where to send the browser to sign out at the identity provider as well, or null when
+    there is nothing more to do: the sign-in did not come through single sign-on, its
+    connection is not set to sign people out at the provider, the provider publishes no
+    sign-out address, or `returnTo` was not given. The provider sends the browser back to
+    the app named by `returnTo`.
+    """
+    providerSignOutUrl: String
+}
+
+"""
+Sign in, choose a tenant, refresh the session, sign out, edit the signed-in user's profile and
+their tenant's look and defaults, and manage the tenant's members, invitations and roles.
+"""
+type Mutation {
+    """
+    Signs in with an email address and password. Returns an identity token and the tenants
+    the identity may enter; call selectTenant next to obtain a tenant-scoped session. Needs
+    no token. Fails with "invalid credentials" for an unknown email, a wrong password or a
+    disabled account, without saying which. Repeated failures for one email are slowed down,
+    and a request that is throttled or exceeds its allowance of password checks is refused
+    without checking the password.
+
+    An account with two-factor authentication turned on does not get a token from the password
+    alone. When its password is right, login fails with the error code MFA_CHALLENGE and carries
+    `challenge` (an opaque handle), `expiresAt` (RFC 3339, five minutes out) and `methods`
+    (`TOTP`, `RECOVERY_CODE`) in the error's `extensions`. Send the challenge and a code to
+    verifyMfa to finish signing in. The error means the password was right; it is the only
+    thing login reveals about the account, and nothing is issued until the code is accepted.
+    A client that does not handle it reports an error rather than receiving a token.
+    """
+    # Authenticate with an email and password, returning an identity token + the
+    # tenants the identity may select (ADR-033). No tenant is chosen yet.
+    login(
+        """Email address of the account. Case and surrounding whitespace are ignored."""
+        email: String!
+        """The account's password."""
+        password: String!
+    ): IdentityAuth!
+    """
+    Exchanges an identity token for a session in one tenant. The identity must have an
+    enabled membership in an enabled tenant; a superuser may enter any tenant. Needs no
+    Authorization header, since the identity token is the argument. Fails with "invalid or
+    expired token" if the identity token is expired or from a session that has ended, and
+    with "invalid credentials" if the identity may not enter that tenant. A member whose
+    tenant requires single sign-on (Membership.ssoRequired) and who signed in with a password
+    is refused with the error code SSO_REQUIRED instead; a non-member never sees that code.
+    """
+    # Exchange an identity token for a tenant-scoped access/refresh pair.
+    selectTenant(
+        """The identity token returned by login."""
+        identityToken: String!
+        """Token of the tenant to enter."""
+        tenant: String!
+    ): AuthToken!
+    """
+    Verify an authenticator code in the caller's own password session and rotate its tokens.
+    Requires a tenant access token and its matching console refresh token. Recovery codes
+    are refused without redemption. (Preview: may change in a minor release.)
+    """
+    stepUp(
+        """The console session's current refresh token. It is replaced by the one this returns."""
+        refreshToken: String!
+        """The current six-digit code from the authenticator app. Recovery codes are refused."""
+        code: String!
+    ): AuthToken!
+
+    """
+    Completes a sign-in that login held for its second factor, and returns what login returns:
+    an identity token and the tenants the identity may enter. Needs no token. challenge is the
+    handle from login's MFA_CHALLENGE error; code is a code from the authenticator app (six
+    digits) or one of the account's recovery codes. Every token minted from this sign-in
+    records how the person proved who they are (the `amr` claim: `pwd`, `otp` and `mfa` for an
+    authenticator code, `pwd` and `mfa` for a recovery code).
+
+    A wrong code, a replayed code and a code refused because the account is locked all fail
+    with the same "invalid code" error. A challenge accepts five attempts and five minutes, and
+    one challenge signs in once; an unknown, expired, used-up or outdated challenge (the
+    password was reset since) fails with MFA_CHALLENGE_EXPIRED: sign in again. Repeated wrong
+    authenticator codes lock the account's authenticator for a while (recovery codes keep
+    working), and attempts are limited per source address. One verification per request.
+    """
+    verifyMfa(
+        """The challenge from login's MFA_CHALLENGE error."""
+        challenge: String!
+        """An authenticator code, or a recovery code."""
+        code: String!
+    ): IdentityAuth!
+    """
+    Starts setting up an authenticator app. Returns the new shared secret as an otpauth:// URI
+    and as base32, once; nothing changes about how the account signs in until
+    confirmTotpEnrollment proves the app holds it. Starting again replaces an unconfirmed
+    enrolment, which expires after ten minutes. Needs no Authorization header: the identity
+    token is the argument. The password is re-checked, because identity tokens travel; a wrong
+    one fails with "invalid credentials" and changes nothing. Fails with MFA_ALREADY_ENROLLED
+    while an authenticator is active.
+    """
+    beginTotpEnrollment(
+        """The identity token from login or verifyMfa."""
+        identityToken: String!
+        """The account's password, re-checked."""
+        password: String!
+    ): TotpEnrollment!
+    """
+    Finishes setting up the authenticator: proves it holds the secret by presenting its current
+    code, turns the second factor on, and returns ten recovery codes, once. Turning it on ends
+    every session the account had, including the one that enrolled (the identity token passed
+    here stops working); the answer carries a fresh sign-in, with `amr` recording the code
+    just presented, so the caller carries on without signing in again. The password is
+    re-checked. Five wrong codes cancel the pending enrolment.
+    """
+    confirmTotpEnrollment(
+        """The identity token from login or verifyMfa."""
+        identityToken: String!
+        """The account's password, re-checked."""
+        password: String!
+        """The current six-digit code from the authenticator."""
+        code: String!
+    ): TotpEnrollmentResult!
+    """
+    Replaces the account's recovery codes with a new set of ten and returns them once. Needs
+    the password AND a code (an authenticator code or an unused recovery code), so a stolen
+    identity token is not enough. Fails with MFA_NOT_ENROLLED if two-factor authentication is
+    not set up.
+    """
+    regenerateRecoveryCodes(
+        """The identity token from login or verifyMfa."""
+        identityToken: String!
+        """The account's password, re-checked."""
+        password: String!
+        """An authenticator code or a recovery code."""
+        code: String!
+    ): RecoveryCodes!
+    """
+    Turns the second factor off: removes the authenticator, the recovery codes and the stored
+    secret, and ends every session the account has (including this one), so the person signs
+    in again with the password alone. Needs the password AND a code (an authenticator code or
+    a recovery code). Returns true. Fails with MFA_NOT_ENROLLED if two-factor authentication is
+    not set up.
+    """
+    disableTotp(
+        """The identity token from login or verifyMfa."""
+        identityToken: String!
+        """The account's password, re-checked."""
+        password: String!
+        """An authenticator code or a recovery code."""
+        code: String!
+    ): Boolean!
+    """
+    Exchanges a refresh token for a new access and refresh pair, and consumes the refresh
+    token: each one can be used once. The roles and authorities in the new tokens are read
+    afresh, so a change to the user's role or membership applies from the next refresh. Needs
+    no Authorization header. Fails with "invalid or expired token" if the refresh token is
+    expired, already used, or belongs to a session that has ended or a membership or tenant
+    that is no longer allowed in. If the tenant has started requiring single sign-on and the
+    session came from a password sign-in, the error carries the code SSO_REQUIRED and the
+    refresh token is consumed: sign in through the identity provider. If the failure is
+    temporary the error says the session could not be refreshed right now and the same
+    refresh token remains usable.
+    """
+    # Exchange a valid refresh token for a new pair (rotates the refresh token).
+    refresh(
+        """The refresh token from selectTenant or an earlier refresh."""
+        refreshToken: String!
+    ): AuthToken!
+    """
+    Signs out: ends the sign-in the token belongs to, and from that moment refuses its
+    exchanges. Refresh tokens minted from this sign-in, in any tenant, no longer refresh;
+    its identity token can no longer select a tenant; and OAuth grants authorized during
+    this sign-in no longer refresh. The MCP authorization page signs in on its own, so a
+    grant made there is not ended by signing out of the console: it ends when that
+    sign-in runs out (7 days by default). Access tokens and identity tokens already
+    issued, including on the admin API, are not recalled and stay valid until they
+    expire, at most 15 minutes by default. Other sign-ins of the same account, on other
+    devices or browsers, are not affected; to end all of them, reset the password or
+    disable the account. Needs no Authorization header. Safe to repeat, and a token that
+    has expired still ends its sign-in. Fails with "invalid or expired token" for a
+    token this instance did not sign or that names no sign-in, and with a retryable
+    error, leaving the sign-in open, if the sign-out could not be recorded.
+
+    With `returnTo`, the answer also says where to send the browser to sign out at the
+    identity provider, when the sign-in came through single sign-on and its connection is
+    set to sign people out there too; otherwise that address is null and the sign-out is
+    complete. The sign-in here has ended either way: the provider is never contacted by
+    this call, so it cannot make it fail.
+    """
+    # Server-side sign-out (see description). token is the sign-in's refresh token, or its
+    # identity token when no tenant has been selected yet.
+    logout(
+        """A refresh token from selectTenant or refresh, or the identity token from login."""
+        token: String!
+        """
+        The app to come back to after signing out at the identity provider. Leave it out to
+        sign out of this platform only.
+        """
+        returnTo: SignOutReturn
+    ): SignOut!
+
+    """
+    Starts a single sign-on through an external identity provider. Give either the person's
+    email (the connection is the one that speaks for its domain) or a connection token. Returns
+    where to send the browser, or null when an email's domain has no single sign-on connection
+    that is enabled and approved, in which case sign in some other way. `returnTo` must be this instance's own
+    `/login/sso/complete` or `/dash/sso/complete` address. `codeChallenge` is the SHA-256 of a
+    random secret you keep in the browser, base64url-encoded without padding (43 characters);
+    completeSso needs that secret, so only the browser that began the sign-in can finish it.
+    Needs no token. Fails with "single sign-on is not available" when the instance, or a
+    connection named by token, is not set up for it, and is rate limited per source address.
+    """
+    beginSso(
+        """The person's email address, to find their connection by domain. Give this or `connection`."""
+        email: String
+        """Token of the connection to use. Give this or `email`."""
+        connection: String
+        """Where the provider's answer sends the browser back to: this instance's own completion page."""
+        returnTo: String!
+        """Base64url SHA-256 of the secret only this browser holds."""
+        codeChallenge: String!
+    ): SsoBegin
+    """
+    Finishes a single sign-on. After the provider sends the browser back to the `returnTo`
+    address with a `code` in its query, call this with that code and the secret whose hash you
+    gave to beginSso. Returns what login returns: an identity token and the tenants it may enter
+    (only the tenants the connection serves), to be chosen with selectTenant. Needs no token. Each
+    code works once, for one minute; fails with "invalid or expired sign-in code" for a code that
+    is unknown, used, expired or not matched by the secret.
+    """
+    completeSso(
+        """The `code` from the return address."""
+        code: String!
+        """The secret whose SHA-256 you gave to beginSso."""
+        codeVerifier: String!
+    ): IdentityAuth!
+    """
+    Starts linking the signed-in person's own account at an external identity provider to their
+    identity, so they can sign in through it afterwards. The connection is not named by the
+    caller: it is the tenant connection whose verified domain is the identity's own email
+    domain, and it must be enabled and approved. Needs the identity token of a PASSWORD sign-in,
+    and the provider must report the identity's own email address. Returns where to send the
+    browser; the provider then returns to `returnTo` with `linked=1`, or with `error=` set to
+    `link_email_mismatch` (the provider reported a different address), `link_unverified_email`
+    (the provider did not vouch for the address), `link_session_ended` (the password sign-in
+    ended first), `link_already_linked` (the provider account or this identity is already
+    linked), `link_not_allowed`, or a sign-in's own `idp_error` or `refused`. Each refusal here
+    carries `extensions.code`: SSO_LINK_SESSION_REQUIRED (the identity token is invalid or
+    expired, or its sign-in ended: sign in with the password again), SSO_LINK_PASSWORD_REQUIRED
+    (the sign-in came through a provider), SSO_LINK_NOT_ALLOWED (the identity holds a system
+    role), SSO_LINK_NO_CONNECTION (no enabled, approved tenant connection serves the email
+    domain) or SSO_LINK_ALREADY_LINKED. Rate limited per source address.
+    """
+    beginSsoLink(
+        """The identity token from a password login."""
+        identityToken: String!
+        """Where the provider's answer sends the browser back to: this instance's own completion page."""
+        returnTo: String!
+    ): SsoBegin!
+    """
+    Changes the signed-in user's own first and last name and returns the updated user. The
+    email cannot be changed here. Fields left out of the request keep their stored value.
+    Requires only a signed-in caller.
+    """
+    # Update the signed-in user's own display name (first/last). Email is fixed;
+    # self-scoped to the caller's identity. A partial update: an omitted field is left
+    # alone, a null (or "") clears it, a value sets it.
+    updateProfile(
+        """The name changes to apply."""
+        request: ProfileUpdateRequest!
+    ): CurrentIdentity!
+    """
+    Sets the white-label theme of the caller's own tenant and returns the tenant with its
+    resulting branding. It replaces the whole theme: any field not sent, or sent as null, is
+    cleared and falls back to the instance default. Colors must be `#rrggbb`, the title at
+    most 64 characters, and the logo height from 16 to 200 pixels; an invalid value rejects
+    the whole request. It does not touch the logo; use setTenantLogo. Requires
+    branding:write.
+    """
+    # Set the caller's OWN tenant white-labeling theme (ADR-038): title, colors,
+    # logo height. Self-scoped to the tenant in the access token; requires
+    # branding:write. A null field clears that override. Does NOT manage the logo
+    # (see setTenantLogo). Returns the tenant with its freshly-resolved branding so
+    # the editing client can write it straight into cache.
+    setTenantBranding(
+        """The theme to apply; replaces the tenant's current theme."""
+        input: TenantBrandingInput!
+    ): Tenant!
+    """
+    Sets the logo of the caller's own tenant to an image URL or an inline image, or clears
+    it, and returns the tenant. The logo must be an https URL of at most 2048 characters, or
+    a base64 `data:` URI of a PNG, JPEG or WebP image of at most 256 KiB once decoded; SVG
+    is accepted only as an https URL. Null or a blank string clears the logo. Uploading an
+    image file is done with a separate HTTP upload endpoint rather than this mutation, and
+    setting or clearing the logo here discards any previously uploaded image. Requires
+    branding:write.
+    """
+    # Set the caller's OWN tenant logo to an https URL (or a bounded raster data:
+    # URI), or clear it with null — self-scoped, requires branding:write (ADR-038).
+    # An uploaded (binary) logo instead goes to the object store via POST
+    # /branding/logo (ADR-058); both paths garbage-collect a replaced object-store
+    # logo. A blob storage reference is never accepted here (clients never hold one).
+    setTenantLogo(
+        """The logo as an https URL or an inline image data URI. Null clears it."""
+        logo: String
+    ): Tenant!
+    """
+    Sets the map basemap of the caller's own tenant and returns the tenant with its
+    resulting basemap. It replaces the whole basemap: any field not sent, or sent as null or
+    a blank string, is cleared and falls back to the instance default. An invalid value
+    rejects the whole request. Requires basemap:write, which is separate from
+    branding:write because the tile URL may embed the tenant's own provider key.
+    """
+    # Set the caller's OWN tenant basemap (ADR-079): tile source, credit line, and
+    # fallback view. Self-scoped to the tenant in the access token; requires
+    # basemap:write — NOT branding:write, because the tile URL carries the tenant's
+    # own provider credential and neither grant should imply the other. A full
+    # replace: a null field clears that override. Returns the tenant with its freshly
+    # resolved basemap so the editing client can write it straight into cache.
+    setTenantBasemap(
+        """The basemap to apply; replaces the tenant's current basemap."""
+        input: TenantBasemapInput!
+    ): Tenant!
+    """
+    Sets the default console language of the caller's own tenant and returns the tenant.
+    Null or a blank string clears it, so the tenant falls back to the instance default. The
+    value must be a BCP-47 language tag of at most 35 characters in the form `en`, `es-MX`,
+    `zh-Hans` or `zh-Hans-CN` (a two- or three-letter language, an optional four-letter
+    script, an optional two-letter or three-digit region); its case is normalized. A
+    well-formed tag the console has no translation for is stored and takes effect once the
+    console supports it. Requires locale:write.
+    """
+    # Set the caller's OWN tenant default language, or clear it with null to
+    # re-inherit the operator's `locale.default`. Self-scoped to the tenant in the
+    # access token; requires locale:write — NOT branding:write, because this one value
+    # re-languages the console for every member who has not chosen otherwise, and that
+    # plausibly belongs to different people than the brand does. Takes a BCP-47 tag
+    # ("en", "es", "pt-BR"); a tag whose catalog this console build does not ship is
+    # stored but has no effect until it does. Returns the tenant with its freshly
+    # resolved locale so the editing client can write it straight into cache.
+    setTenantLocale(
+        """The language tag, such as "en" or "pt-BR". Null clears it."""
+        locale: String
+    ): Tenant!
+    """
+    Requires (or stops requiring) a second factor of the caller's own tenant's password
+    sign-ins, and returns the tenant. While it is on, a member whose sign-in did not use a
+    second factor is refused by selectTenant, refresh and the MCP authorization step (error
+    codes MFA_REQUIRED and MFA_ENROLLMENT_REQUIRED), and password sessions already inside the
+    tenant are refused at their next refresh. A member can always still sign in and set up
+    their own authenticator, so turning it on strands nobody. It cannot turn off a requirement
+    the tenant's tier sets (Tenant.mfaRequiredByTier). Requires member:write and an unscoped
+    caller. Service accounts and single sign-on sessions are not affected.
+    """
+    setTenantMfaRequired(
+        """True to require a second factor."""
+        required: Boolean!
+    ): Tenant!
+
+    """
+    Invites a person into this tenant with the given roles and scope, and returns the new
+    member with a one-time invitation code. The membership stays disabled until the code is
+    accepted. The answer is the same whether or not the person already has an account. Fails
+    with the error code CONFLICT if they are already a member, ESCALATION if a role grants an
+    authority you do not hold, NOT_FOUND if a role token is not assignable here,
+    INVALID_VALUE for a scope anchor whose token is not valid, and
+    LIMIT_EXCEEDED for more than 16 scope anchors. Requires member:write.
+    """
+    inviteMember(
+        """The person to invite."""
+        request: InviteMemberRequest!
+    ): MemberInvitation!
+    """
+    Replaces a member's roles with exactly those given and returns the member. The change,
+    adding or taking away authorities, takes effect at the member's next token refresh (within
+    15 minutes; 5 for customer-scoped access): an access token already issued keeps its old
+    authorities until it expires, and the member's sessions in other tenants are not affected.
+    Fails with ESCALATION (a role grants, or the member holds, an authority you do not
+    hold), SELF_MODIFICATION (your own membership), LAST_ADMIN (it would leave nobody able to
+    manage members), MANAGED_BY_IDP (the identity provider manages it) or NOT_FOUND. Requires
+    member:write.
+    """
+    setMemberRoles(
+        """Email of the member."""
+        email: String!
+        """Tokens of the roles the member should hold."""
+        roleTokens: [String!]!
+    ): Member!
+    """
+    Replaces the customers and groups a member is limited to and returns the member. An empty list gives
+    them the whole tenant. The change takes effect at the member's next token refresh, as
+    setMemberRoles does. Fails with the same error codes as setMemberRoles,
+    plus INVALID_VALUE for an anchor whose token is not valid, and LIMIT_EXCEEDED for more
+    than 16 anchors. Requires member:write.
+    """
+    setMemberScope(
+        """Email of the member."""
+        email: String!
+        """The customers to limit the member to; empty for the whole tenant."""
+        scope: [ScopeAnchorInput!]!
+    ): Member!
+    """
+    Replaces a member's roles and the customers and groups they are limited to in one step, and
+    returns the member: both change or neither does. Use it instead of calling setMemberRoles
+    and setMemberScope in turn, which can leave the roles changed when the scope is refused.
+    The change takes effect at the member's next token refresh, as setMemberRoles describes.
+    Fails with the error codes of setMemberRoles, plus INVALID_VALUE for an anchor whose token is
+    not valid, and LIMIT_EXCEEDED for more than 16 anchors.
+    Requires member:write.
+    """
+    setMemberAccess(
+        """Email of the member."""
+        email: String!
+        """Tokens of the roles the member should hold."""
+        roleTokens: [String!]!
+        """The customers and groups to limit the member to; empty for the whole tenant."""
+        scope: [ScopeAnchorInput!]!
+    ): Member!
+    """
+    Enables or disables a member and returns the member. Disabling takes effect at the
+    member's next token refresh, which is refused for this tenant (within 15 minutes; 5 for
+    customer-scoped access); their sessions in other tenants are not affected. A member whose invitation is still
+    pending cannot be enabled (error code INVALID_VALUE): reissue or revoke the invitation.
+    Fails with the same error codes as setMemberRoles. Requires member:write.
+    """
+    setMemberEnabled(
+        """Email of the member."""
+        email: String!
+        """True to enable, false to disable."""
+        enabled: Boolean!
+    ): Member!
+    """
+    Removes a member from this tenant, and their open invitation with them; their account is
+    kept. Takes effect at the member's next token refresh, as disabling them does. Returns
+    true. Fails with the same error codes as setMemberRoles. Requires member:write.
+    """
+    removeMember(
+        """Email of the member."""
+        email: String!
+    ): Boolean!
+    """
+    Revokes a member's open invitation so its code stops working, and returns the member, who
+    stays disabled. Fails with NOT_FOUND if no invitation of theirs is waiting to be accepted.
+    Requires member:write.
+    """
+    revokeInvitation(
+        """Email of the member."""
+        email: String!
+    ): Member!
+    """
+    Revokes a member's open invitation, if any, and issues a new code, valid for 7 days. Fails
+    with NOT_FOUND if the member has already joined. Requires member:write.
+    """
+    reissueInvitation(
+        """Email of the member."""
+        email: String!
+    ): MemberInvitation!
+    """
+    Defines a role for this tenant and returns it. Fails with ESCALATION if an authority is
+    not a tenant authority or is one you do not hold, CONFLICT if the token is taken, and
+    INVALID_VALUE for an unknown authority. Requires role:write.
+    """
+    createTenantRole(
+        """The role to define."""
+        request: TenantRoleCreateRequest!
+    ): TenantRole!
+    """
+    Changes a role this tenant defined and returns it. Members holding it receive the change at
+    their next token refresh, removing an authority included, as setMemberRoles describes.
+    Fails with READ_ONLY for an instance role, NOT_FOUND for an unknown token, ESCALATION if
+    the resulting set grants an authority you do not hold, and LAST_ADMIN if it would leave
+    nobody able to manage members. Requires role:write.
+    """
+    updateTenantRole(
+        """Token of the role."""
+        token: String!
+        """The changes to apply."""
+        request: TenantRoleUpdateRequest!
+    ): TenantRole!
+    """
+    Deletes a role this tenant defined. Returns true if one was deleted and false if there was
+    no such role. Fails with REFERENCE_VIOLATION while a member holds it, READ_ONLY for an
+    instance role, and ESCALATION if it grants an authority you do not hold. Requires
+    role:write.
+    """
+    deleteTenantRole(
+        """Token of the role."""
+        token: String!
+    ): Boolean!
+    """
+    Accepts an invitation and returns what login returns: an identity token and the tenants
+    the identity may enter, the new one among them. Needs no token. Give exactly one of:
+    `password`, to create the password of a new account the invitation was issued to; or
+    `identityToken`, from signing in to an existing account, which must be the account the
+    invitation was issued to. A tenant that requires single sign-on refuses `password` with
+    the error code SSO_REQUIRED: sign in through the identity provider and accept with the
+    identity token. Every way the code cannot be used (unknown, expired, revoked, already
+    used, or presented for another account) fails with the one error code
+    INVALID_INVITATION.
+    """
+    acceptInvitation(
+        """The invitation code."""
+        code: String!
+        """The password to set on a new account."""
+        password: String
+        """The identity token of an existing account, from login or completeSso."""
+        identityToken: String
+    ): IdentityAuth!
+    """
+    Creates a service account in this tenant with its first client secret, which the answer
+    carries and nothing can read again. Requires member:write. Every role must grant only
+    authorities you hold (error code ESCALATION otherwise). A tenant holds at most 200
+    service accounts. Fails with CONFLICT when the token is taken.
+    """
+    createServiceAccount(
+        """The service account to create."""
+        request: ServiceAccountCreateRequest!
+    ): ServiceAccountCredentials!
+    """
+    Replaces a service account's roles and scope. Requires member:write, and you must hold
+    every authority the account holds now and every authority of the new roles (error code
+    ESCALATION otherwise). Tokens already issued keep their old access until they expire, at
+    most 5 minutes.
+    """
+    setServiceAccountAccess(
+        """Token of the service account."""
+        token: String!
+        """The roles the account will hold, replacing its current ones."""
+        roleTokens: [String!]!
+        """The account's new scope. An empty list means the whole tenant."""
+        scope: [ScopeAnchorInput!]!
+    ): ServiceAccount!
+    """
+    Enables or disables a service account. A disabled account cannot obtain tokens; tokens
+    already issued stay valid until they expire, at most 5 minutes. Requires member:write
+    and every authority the account holds.
+    """
+    setServiceAccountEnabled(
+        """Token of the service account."""
+        token: String!
+        """True to enable, false to disable."""
+        enabled: Boolean!
+    ): ServiceAccount!
+    """
+    Creates a new client secret for a service account and returns it, the only time it can
+    be read. The secret it replaces keeps working for `overlapHours` (0 to 168, default 24)
+    so the integration can switch over, then stops; any older secret still working stops at
+    once. Requires member:write and every authority the account holds.
+    """
+    rotateServiceAccountSecret(
+        """Token of the service account."""
+        token: String!
+        """Hours the previous secret keeps working: 0 to 168. Defaults to 24."""
+        overlapHours: Int
+        """Days until the new secret expires: 1 to 730. Defaults to 365."""
+        expiresInDays: Int
+    ): ServiceAccountCredentials!
+    """
+    Deletes a service account and all its secrets. Tokens already issued stay valid until
+    they expire, at most 5 minutes. Returns false when there was no such account. Requires
+    member:write and every authority the account holds.
+    """
+    deleteServiceAccount(
+        """Token of the service account."""
+        token: String!
+    ): Boolean!
+    """
+    (Preview: may change in a minor release.) Saves the working draft of this tenant's agent policy. The document is JSON; unknown keys
+    and invalid values are refused. Saving changes nothing in force. Requires agent:admin, and
+    cannot be called by an AI agent or a service account.
+    """
+    saveAgentPolicyDraft(
+        """(Preview: may change in a minor release.) The policy document, as JSON."""
+        document: String!
+    ): AgentPolicy!
+    """
+    (Preview: may change in a minor release.) Publishes the draft as the agent policy in force, as a new version. A change that loosens the
+    policy (more automatic actions, larger limits, new clients, more approvers, fewer approvals,
+    weaker sign-in requirements) needs a second factor verified within the policy's step-up age,
+    and is refused with the code STEP_UP_REQUIRED otherwise. Requires agent:admin, and cannot be
+    called by an AI agent or a service account.
+    """
+    publishAgentPolicy: AgentPolicy!
+    """
+    (Preview: may change in a minor release.) Publishes an earlier version's document again, as a new version. The same step-up rule as
+    publishAgentPolicy applies. Requires agent:admin, and cannot be called by an AI agent or a
+    service account.
+    """
+    rollbackAgentPolicy(
+        """(Preview: may change in a minor release.) The version whose document to publish again."""
+        version: Int!
+    ): AgentPolicy!
+    """
+    (Preview: may change in a minor release.) Turns agent actions in this tenant off or on using a flag independent of the policy document.
+    Turning them off sets the kill flag and needs no second factor; while upgrading it may also
+    publish the policy with actuation disabled.
+    Turning them back on needs a fresh second factor under the policy in force; if the document
+    disables actuation, enabling publishes it enabled. Requires agent:admin, and cannot be called by an AI
+    agent or a service account.
+    """
+    setAgentActuation(
+        """(Preview: may change in a minor release.) False to stop agent actions; true to allow them again under the published policy."""
+        enabled: Boolean!
+    ): AgentPolicy!
+}
+
+schema {
+    query: Query
+    mutation: Mutation
+}

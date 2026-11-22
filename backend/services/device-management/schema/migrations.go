@@ -80,5 +80,6 @@ var (
 		NewAlarmSuppressionSchema(),
 		NewPendingAlarmEventsSchema(),
 		NewDeviceAttributeLockSchema(),
+		NewDeviceConfigurationReportsSchema(),
 	}
 )

@@ -12,6 +12,8 @@ import (
 var knownRawCapChecks = map[deliveryCapSite]string{}
 
 var sanctionedFinalDeliveryCallers = map[deliveryCapSite]string{
+	{"backend/services/device-management/processor/agent_kill_consumer.go", "AgentKillConsumer.handle"}: "Latches the process kill feed stale before dead-lettering an unapplied final kill; acknowledging alone cannot restore safety.",
+
 	{"backend/services/event-processing/processor/react_dispatcher.go", "ReactDispatcher.dispatch"}:       "Classifies a react.Result rather than an error.",
 	{"backend/services/outbound-connectors/processor/consumer.go", "DispatchConsumer.retryOrDeadLetter"}:  "The deadLetter helper owns the tenant decision.",
 	{"backend/services/outbound-connectors/processor/consumer.go", "DispatchConsumer.deadLetter"}:         "Bounds write attempts on the final delivery.",
@@ -19,6 +21,7 @@ var sanctionedFinalDeliveryCallers = map[deliveryCapSite]string{
 	{"backend/services/outbound-connectors/lpwan/adapter.go", "Adapter.handle"}:                           "No handling error: a cancelled capacity wait refuses the command as unsent on the final delivery.",
 	{"backend/services/device-management/processor/inbound.go", "InboundEventsProcessor.settleResolved"}:  "Holds a final delivery whose resolved fan-out was refused only for shard placement; every other outcome keeps the unacked give-up.",
 	{"backend/services/device-management/processor/inbound.go", "InboundEventsProcessor.OnResolvedEvent"}: "Watches a final delivery for the placement hold before its fan-out is published; it judges no error.",
+	{"backend/services/command-delivery/processor/agent_kill_consumer.go", "AgentKillConsumer.handle"}:    "A kill the broker will pass over after this delivery latches the kill feed stale and is dead-lettered for an operator to repeat.",
 }
 
 var sanctionedDisposeCallers = map[deliveryCapSite]string{
