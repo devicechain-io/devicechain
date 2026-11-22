@@ -118,11 +118,15 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return result, nil
 	}
 	// A merge patch from the object as read, with no resourceVersion precondition.
-	// Status has one writer, but not one process: the operator runs without leader
-	// election, so two replicas during a rollout of the operator itself can both
-	// patch. They compute the same status from the same Deployments and the patch
-	// replaces whole fields, so the last write wins harmlessly. A spec or annotation
-	// write by dcctl between the read and here must not fail the status write.
+	// Status has one writer, but not always one process. The shipped manager runs one
+	// replica with --leader-elect (config/manager/manager.yaml), so only the lease holder
+	// reconciles; but during a rollout of the operator itself the outgoing leader can
+	// still be finishing a pass when the incoming one takes the lease, and a manager
+	// started without --leader-elect (`make run`) has no lease at all. Two writers then
+	// compute status from what each has cached and the patch replaces whole fields, so
+	// the LAST write wins: a pass from a stale cache can briefly publish an older
+	// observation, which the next reconcile corrects. A spec or annotation write by
+	// dcctl between the read and here must not fail the status write.
 	patch := client.MergeFrom(instance.DeepCopy())
 	instance.Status = desired
 	if err := r.Status().Patch(ctx, instance, patch); err != nil {
