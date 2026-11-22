@@ -47,6 +47,26 @@ describe('the zh-CN catalogs', () => {
     expect(chinese / Object.keys(en).length).toBeGreaterThan(0.9);
   });
 
+  // One Chinese term per concept across the console AND docs/i18n/zh-CN. These are the variants the
+  // catalogs once mixed; each maps to the term that won. Add a row when a new split is unified.
+  it.each([
+    ['预配配置文件', /设备配置方案/],
+    ['制品', /更新包(?!含)/],
+    ['分面', /分类属性/],
+    ['推出', /更新部署/],
+    ['身份提供商', /身份提供方/],
+    ['机密', /秘密(?!访问密钥)/],
+    ['签名者', /签名方(?!面)/],
+  ])('uses %s, never a variant of it', (term, forbidden) => {
+    const offenders: string[] = [];
+    for (const ns of zh.namespaces ?? []) {
+      for (const [key, value] of Object.entries(bundle('zh-CN', ns) ?? {})) {
+        if (forbidden.test(value)) offenders.push(`${ns}:${key}`);
+      }
+    }
+    expect(offenders, `use ${term}`).toEqual([]);
+  });
+
   it('renders the device, identity and system-settings screens in Chinese through the real loader', async () => {
     await i18nReady;
     await i18n.changeLanguage('zh-CN');
