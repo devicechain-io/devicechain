@@ -62,7 +62,7 @@ type ccFixture struct {
 // device, and every table DeleteDevice's cascade and ReplaceDevice's journal write.
 func credentialCacheTables() []any {
 	return append(append([]any{}, deviceProfileTables...), &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{}, &DeviceConfigurationRevision{}, &DeviceConfigurationReport{}, &DeviceConfigurationState{},
-		&EntityRelationship{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{}, &PendingEntityDeletion{}, &PendingAlarmEvent{})
+		&EntityRelationship{}, &EntityAttribute{}, &AttributeGeneration{}, &Alarm{}, &EntityGroupMembership{}, &PendingEntityDeletion{}, &PendingAlarmEvent{})
 }
 
 func newCredentialCacheFixture(t *testing.T) ccFixture {

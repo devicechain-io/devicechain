@@ -67,11 +67,13 @@ export const assetResource: RegistryResource<Asset> = {
         // so it sends exactly those. externalId and metadata are untouched because
         // they are not mentioned — where the full-replace shape needed them re-sent
         // from a stale snapshot to survive at all.
-        updateAsset(token, {
-          name: req.name,
-          description: req.description,
-          assetTypeToken: req.typeToken,
-        })
+        updateAsset(
+          token,
+          { name: req.name, description: req.description, assetTypeToken: req.typeToken },
+          // The updatedAt this form was opened on: a save over someone else's change
+          // is refused (STALE_WRITE) instead of silently overwriting it.
+          a?.updatedAt,
+        )
       }
       onDone={onDone}
     />

@@ -182,6 +182,11 @@ func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch ti
 				return fmt.Errorf("refusing to sweep %q: %w", tenant, err)
 			}
 		}
+		if plan.BeforeDelete != nil {
+			if err := plan.BeforeDelete(tx); err != nil {
+				return fmt.Errorf("preparing to sweep %q: %w", tenant, err)
+			}
+		}
 		for _, e := range plan.Actionable() {
 			where, args, err := tenantPredicate(idx, e.Table, tenant, 0)
 			if err != nil {

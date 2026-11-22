@@ -34,7 +34,7 @@ func newRetiredTokenApi(t *testing.T) (*Api, context.Context) {
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
 	require.NoError(t, db.AutoMigrate(&EntityGroupFacetRef{},
 		&CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &Device{}, &DeviceType{},
-		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{},
+		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &EntityAttribute{}, &AttributeGeneration{}, &Alarm{}, &EntityGroupMembership{},
 	), "migrate")
 	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
 		t.Fatal(err)

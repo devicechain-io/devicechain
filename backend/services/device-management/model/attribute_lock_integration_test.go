@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -122,6 +124,22 @@ func TestAttributeLockT2YieldsAndBusy(t *testing.T) {
 			if err := helper.Exec("SELECT id FROM entity_attributes WHERE entity_type='device' AND entity_id=? AND attr_key='k' FOR UPDATE", dev.ID).Error; err != nil {
 				t.Fatal(err)
 			}
+			// The release case must not race the retry budget: the first yield parks the writer
+			// (rolled back, holding nothing) until the helper has committed, so the next attempt
+			// is guaranteed to find the row free.
+			yielded, resume := make(chan struct{}), make(chan struct{})
+			if release {
+				var once sync.Once
+				attributeYieldHook = func(int) { once.Do(func() { close(yielded); <-resume }) }
+				t.Cleanup(func() {
+					attributeYieldHook = nil
+					select {
+					case <-resume:
+					default:
+						close(resume)
+					}
+				})
+			}
 			yields := testutil.ToFloat64(deviceAttributeWriteYields.WithLabelValues("set", "retried"))
 			deadlocks := testutil.ToFloat64(deviceAttributeWriteDeadlocks.WithLabelValues("set"))
 			pid := make(chan int, 10)
@@ -140,9 +158,11 @@ func TestAttributeLockT2YieldsAndBusy(t *testing.T) {
 				t.Fatal("writer waited for an attribute row while holding advisory lock")
 			}
 			if release {
+				attributeAwait(t, yielded)
 				if err := helper.Commit().Error; err != nil {
 					t.Fatal(err)
 				}
+				close(resume)
 			}
 			err := attributeAwait(t, done)
 			if release {
@@ -286,8 +306,11 @@ func TestAttributeLockT22MissingFunctionAndMigration(t *testing.T) {
 	if err := tx.Exec(`DROP FUNCTION "device-management".dc_entity_attr_lock(text,bigint)`).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.applyAttributePatchTx(ctx, tx, "device", dev.ID, attributeSetPatch("bad")); err == nil {
-		t.Fatal("missing function permitted unlocked write")
+	// Inside the runner's state, so the error can only be the missing function, not the refusal
+	// of a lock taken outside runDeviceAttributeTx.
+	_, err := api.applyAttributePatchTx(ctx, asRunnerTx(tx), "device", dev.ID, attributeSetPatch("bad"))
+	if err == nil || !strings.Contains(err.Error(), "dc_entity_attr_lock") {
+		t.Fatalf("a missing lock function must fail the write on the function itself: %v", err)
 	}
 }
 func TestAttributeLockRestoreCopyAndOneDevice(t *testing.T) {
@@ -456,4 +479,11 @@ func attributeWaitDeviceAdvisory(t *testing.T, db *gorm.DB, id uint) {
 		err := db.Raw(`SELECT count(*) FROM pg_locks WHERE NOT granted AND locktype='advisory' AND objsubid=1 AND classid::bigint=((hashtextextended('dc.attr|device|'||?::bigint::text,0)>>32)&4294967295) AND objid::bigint=(hashtextextended('dc.attr|device|'||?::bigint::text,0)&4294967295)`, id, id).Scan(&n).Error
 		return n > 0, err
 	})
+}
+
+// asRunnerTx gives a hand-opened test transaction the state runDeviceAttributeTx carries, so a
+// test that must hold or pin its own transaction can still call the lock helpers, which refuse
+// any transaction the runner did not open.
+func asRunnerTx(tx *gorm.DB) *gorm.DB {
+	return tx.WithContext(context.WithValue(tx.Statement.Context, attributeTxContextKey{}, &attributeTxState{path: "set"}))
 }

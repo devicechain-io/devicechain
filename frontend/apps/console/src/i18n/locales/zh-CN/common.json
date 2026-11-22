@@ -129,6 +129,7 @@
   "updateState_UNKNOWN": "未知",
   "signerState_ACTIVE": "有效",
   "signerState_REVOKED": "已吊销",
+  "staleWrite": "自你打开后，此项已被更改。请复制未保存的修改，重新加载后再次应用修改并保存。",
   "artifactKind_FIRMWARE": "固件",
   "artifactKind_SOFTWARE": "软件",
   "artifactKind_CONFIGURATION": "配置",
