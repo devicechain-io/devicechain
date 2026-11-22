@@ -57,6 +57,9 @@ The erased claim is as of the latest pass and is withdrawn if data reappears; it
 when the deletion completes. The output shows when it was last verified.
 
 This reads the operator plane and authenticates as an identity, not as a tenant.`,
+	Example: `  dcctl tenant-deletion status acme --email ops@example.com --password <password>
+  dcctl tenant-deletion status acme --wait --timeout 1h --email ops@example.com --password <password>
+  dcctl tenant-deletion status acme --until complete -o json --email ops@example.com --password <password>`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runTenantDeletionStatus,
 	SilenceUsage: true,

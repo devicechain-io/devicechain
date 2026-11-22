@@ -54,6 +54,9 @@ Narrow with --tenant, --kind, --source and --since. -o json prints the same reco
 as one JSON object (letters, total, truncated) and nothing else on stdout. Reading is bounded by --pages:
 when more records exist than were fetched, the output says so rather than letting a
 truncated list read as a complete one.`,
+	Example: `  dcctl dead-letters list --email ops@example.com --password <password>
+  dcctl dead-letters list --tenant acme --kind detection-action --email ops@example.com --password <password>
+  dcctl dead-letters list --source event-processing --since 2026-11-01T00:00:00Z --email ops@example.com --password <password> -o json`,
 	Args:         cobra.NoArgs,
 	RunE:         runDeadLettersList,
 	SilenceUsage: true,

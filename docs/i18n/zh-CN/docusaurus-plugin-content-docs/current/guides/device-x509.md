@@ -197,6 +197,7 @@ echo "devicechain:acme:pv-$slug-$hash"     # devicechain:acme:pv-SN-000123-06e08
 C# SDK（`DeviceChain.Sdk`，以及基于它的 Unity 包）会在 TLS 握手中出示客户端证书。加载证书及其密钥，把证书交给会话，并让信任指向你的实例 CA：
 
 ```csharp
+using System;
 using DeviceChain.Sdk.Mqtt;
 using DeviceChain.Sdk.Transport;
 
