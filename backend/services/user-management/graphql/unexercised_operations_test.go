@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/stretchr/testify/require"
 )
@@ -183,4 +184,47 @@ func TestServiceAccountTokenEndpoint(t *testing.T) {
 		require.NotNil(t, errs, name)
 		require.Nil(t, data["serviceAccountTokenEndpoint"], name)
 	}
+}
+
+func (e *adminEscalationEnv) rejectAuditRows(t *testing.T) []rdb.AuditEvent {
+	t.Helper()
+	require.NoError(t, e.db.WithContext(core.WithSystemContext(context.Background())).AutoMigrate(&rdb.AuditEvent{}))
+	var rows []rdb.AuditEvent
+	require.NoError(t, e.db.WithContext(core.WithSystemContext(context.Background())).
+		Where("operation = ?", rdb.AuditOpIdentityLinkRejected).Order("id").Find(&rows).Error)
+	return rows
+}
+
+// A reject writes exactly one audit row, naming the actor and the request; a repeated reject,
+// an unknown id and a refused caller write none.
+func TestRejectSsoLinkRequestIsAudited(t *testing.T) {
+	e := newAdminEscalationEnv(t)
+	request := e.seedLinkRequest(t, "audited-sub", "plain@example.com")
+	other := e.seedLinkRequest(t, "other-sub", "plain@example.com")
+	require.Empty(t, e.rejectAuditRows(t))
+
+	// Refused callers: nothing deleted, nothing audited.
+	for _, c := range []context.Context{e.adminCtxWith("user:read"), auth.WithClaims(e.adminCtxWith("user:write"), nil)} {
+		require.Len(t, e.schema.Exec(c, rejectDoc(request.ID), "", nil).Errors, 1)
+	}
+	require.Empty(t, e.rejectAuditRows(t), "a refused reject wrote an audit row")
+
+	res := e.schema.Exec(e.adminCtxWith("user:write"), rejectDoc(request.ID), "", nil)
+	require.Empty(t, res.Errors)
+	rows := e.rejectAuditRows(t)
+	require.Len(t, rows, 1)
+	require.Equal(t, "helen@example.com", rows[0].Actor)
+	require.Equal(t, rdb.AuditCategoryAuth, rows[0].Category)
+	require.Empty(t, rows[0].TenantId)
+	require.Contains(t, rows[0].EntityLabel, fmt.Sprintf("request=%d", request.ID))
+	require.Contains(t, rows[0].EntityLabel, "connection=instance")
+	require.NotContains(t, rows[0].EntityLabel, "audited-sub")
+	require.NotContains(t, rows[0].EntityLabel, "plain@example.com")
+
+	// Already gone, never existed, malformed: no further rows.
+	for _, id := range []any{request.ID, 999999, "nope"} {
+		e.schema.Exec(e.adminCtxWith("user:write"), rejectDoc(id), "", nil)
+	}
+	require.Len(t, e.rejectAuditRows(t), 1)
+	_ = other
 }
