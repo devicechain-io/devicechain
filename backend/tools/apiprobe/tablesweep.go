@@ -343,9 +343,12 @@ var tableSweepExemptions = map[string]string{
 	"device-management.profile_decoder_healths": "per-replica decode tallies, written by the resolver's " +
 		"accounting flusher when an integration uplink is decoded by a profile's published decoder. The " +
 		"seed ingests no uplink through an integration, so no decode runs and no tally exists.",
-	"device-management.profile_decoder_samples": "stored failing uplinks. Nothing writes a row until the " +
-		"decode accounting slice (B3b) lands the sample writer. TODO(B3b): seed one failing decode through " +
-		"an integration and drop this exemption.",
+	"device-management.profile_decoder_samples": "stored failing uplinks, kept for the decoder test panel. " +
+		"The only writer is the decode accounting flusher (processor/decode_accounting.go, through " +
+		"StoreDecoderSample), when a profile's published decoder FAILS an uplink an integration posted. " +
+		"The seed ingests no uplink through an integration, so no decode runs, none fails, and no sample " +
+		"exists. The write, its per-profile cap and its trim are proved by device-management's model and " +
+		"Postgres tests, and hack/decoder-rig.sh drives a real failing decode end to end.",
 
 	// ---- per-area journals, correctly empty ----------------------------------
 	//
