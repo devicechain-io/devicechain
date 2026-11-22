@@ -5,6 +5,10 @@ package sim
 
 import "fmt"
 
+// harborS6SceneDevices are the S6 devices as the layout generator WOULD place them. They are
+// deliberately NOT in HarborpulseSceneLayout: the Unity scene authors one presentation anchor per
+// layout device and refuses any other count, so the committed scene contract stays the 37 devices
+// the district draws. The verifier's fleet (HarborpulseFleet) and the slot test use these.
 func harborS6SceneDevices() []HarborSceneDev {
 	var out []HarborSceneDev
 	for _, group := range []struct {
@@ -27,15 +31,5 @@ func harborS6SceneDevices() []HarborSceneDev {
 			out = append(out, HarborSceneDev{Token: token, ExternalId: ext, DeviceType: group.typ, Kind: group.kind, Quay: HarborpulseNorthQuay, Index: offset + i + 1})
 		}
 	}
-	return out
-}
-
-// HarborpulseSceneLayout includes the additive S6 population and cues. The Unity lane owns
-// adopting this generated contract in its Resources file; this lane never rewrites that file.
-func HarborpulseSceneLayout() HarborSceneLayout {
-	out := harborpulseBaseSceneLayout()
-	out.Devices = append(out.Devices, harborS6SceneDevices()...)
-	out.Cues.MQTTDropFromSim, out.Cues.MQTTDropToSim = HarborpulseMQTTDropFrom, HarborpulseMQTTDropTo
-	out.Cues.X509RevokeSim, out.Cues.ConfigPushSim, out.Cues.PullCommandSim = HarborpulseX509RevokeHour, HarborpulseConfigHour, HarborpulsePullHour
 	return out
 }

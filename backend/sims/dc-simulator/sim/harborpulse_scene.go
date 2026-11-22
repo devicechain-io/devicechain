@@ -56,11 +56,6 @@ type HarborSceneLayout struct {
 // HarborSceneCues are the scenario's planned cues. Keys carry their unit: Sim is a sim hour
 // (from the run's first midnight, so day 1 at 02:00 is 26), S is wall seconds.
 type HarborSceneCues struct {
-	MQTTDropFromSim    float64 `json:"mqttDropFromSim,omitempty"`
-	MQTTDropToSim      float64 `json:"mqttDropToSim,omitempty"`
-	X509RevokeSim      float64 `json:"x509RevokeSim,omitempty"`
-	ConfigPushSim      float64 `json:"configPushSim,omitempty"`
-	PullCommandSim     float64 `json:"pullCommandSim,omitempty"`
 	TruckDepartSim     float64 `json:"truckDepartSim"`
 	TruckInPlainSim    float64 `json:"truckInPlainSim"`
 	TruckOutPlainSim   float64 `json:"truckOutPlainSim"`
@@ -160,7 +155,7 @@ func harborSceneKind(d harborDevice) string {
 
 // HarborpulseSceneLayout is the layout of the scenario as authored: the default day length and no
 // defects, which is the district the scene draws.
-func harborpulseBaseSceneLayout() HarborSceneLayout {
+func HarborpulseSceneLayout() HarborSceneLayout {
 	out := HarborSceneLayout{
 		Version:          HarborSceneLayoutVersion,
 		Scenario:         "harborpulse",

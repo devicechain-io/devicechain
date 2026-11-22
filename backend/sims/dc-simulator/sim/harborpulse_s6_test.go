@@ -452,7 +452,7 @@ func TestHarborpulseS6OldStateEndpointAndSceneSlots(t *testing.T) {
 		t.Fatal("guessed a state endpoint for a custom route")
 	}
 	seen := map[string]bool{}
-	for _, d := range HarborpulseSceneLayout().Devices {
+	for _, d := range append(HarborpulseSceneLayout().Devices, harborS6SceneDevices()...) {
 		if d.Quay != HarborpulseNorthQuay || d.Kind != harborSceneLight && d.Kind != harborSceneCharger {
 			continue
 		}

@@ -46,16 +46,6 @@ func TestHarborpulseSceneLayoutFixture(t *testing.T) {
 	}
 	// git on Windows may check the file out with CRLF line endings; the content is what matters
 	got = bytes.ReplaceAll(got, []byte("\r\n"), []byte("\n"))
-	// U8 owns adopting the new layout. Accept either the exact S1-S5 contract or
-	// the exact S6 contract during this additive handoff; never ignore arbitrary drift.
-	base, err := json.MarshalIndent(harborpulseBaseSceneLayout(), "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	base = append(base, '\n')
-	if bytes.Equal(got, base) {
-		return
-	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("%s is not the layout the manifest produces; regenerate it with HARBORPULSE_UPDATE_SCENE=1 (see the test's comment)", harborSceneFixture)
 	}
@@ -70,6 +60,14 @@ func TestHarborpulseSceneLayoutIsTheManifestFleet(t *testing.T) {
 		for _, in := range p.Instances {
 			provisioned[in.ExternalId] = p.OfType
 		}
+	}
+	// The S6 devices are provisioned but deliberately not drawn (the Unity scene authors one
+	// presentation anchor per drawn device and refuses any other count): exactly those, no others.
+	for _, d := range harborS6SceneDevices() {
+		if provisioned[d.ExternalId] != d.DeviceType {
+			t.Errorf("S6 device %s is not provisioned as %s", d.ExternalId, d.DeviceType)
+		}
+		delete(provisioned, d.ExternalId)
 	}
 	layout := HarborpulseSceneLayout()
 	drawn := map[string]string{}
@@ -248,7 +246,7 @@ func TestHarborpulseControlFrameContainsEverything(t *testing.T) {
 }
 
 // TestHarborpulseStatusLayoutDigest: /status names the SHA-256 of the layout this sim generates,
-// under the wire name a scene reads, and it identifies the full generated contract during U8's handoff.
+// under the wire name a scene reads, and it is the digest of the committed file.
 func TestHarborpulseStatusLayoutDigest(t *testing.T) {
 	c := NewHarborpulse(1, Load{}).(ScenarioClockReporter).ScenarioClock(time.Now())
 	b, err := json.Marshal(c)
@@ -266,9 +264,13 @@ func TestHarborpulseStatusLayoutDigest(t *testing.T) {
 	} else if err := json.Unmarshal(raw, &wire.LayoutDigest); err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256(harborSceneJSON(t))
+	committed, err := os.ReadFile(harborSceneFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(bytes.ReplaceAll(committed, []byte("\r\n"), []byte("\n")))
 	if want := hex.EncodeToString(sum[:]); wire.LayoutDigest != want {
-		t.Fatalf("/status layoutDigest %q; the generated S6 contract's is %q", wire.LayoutDigest, want)
+		t.Fatalf("/status layoutDigest %q; the committed layout's is %q", wire.LayoutDigest, want)
 	}
 	if b, _ := json.Marshal(ScenarioClock{Name: "other"}); strings.Contains(strings.ToLower(string(b)), "layoutdigest") {
 		t.Fatalf("a scenario with no layout must omit layoutDigest: %s", b)
