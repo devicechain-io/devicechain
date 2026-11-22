@@ -454,7 +454,7 @@ func mqttNodePortOf(st *State) int32 {
 	if !ok {
 		return localMQTTNodePort
 	}
-	n, err := strconv.Atoi(v)
+	n, err := strconv.ParseInt(v, 10, 32)
 	if err != nil || n < 0 {
 		return 0
 	}
