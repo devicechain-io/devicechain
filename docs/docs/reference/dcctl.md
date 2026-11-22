@@ -259,6 +259,14 @@ Freeze writers before export. This does not coordinate database recovery cutoffs
 dcctl backup <instance> --destination <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl backup acme --destination ./acme-backup
+  dcctl backup acme --destination ./acme-backup --kube-context prod
+  dcctl backup acme --destination ./acme-backup --blob-directory /mnt/acme-blobs
+```
+
 ### Options
 
 ```
@@ -288,6 +296,12 @@ it does not establish inventory completeness or checkpoint consistency.
 dcctl backup inspect <backup-set-dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl backup inspect ./acme-backup --verify
+```
+
 ### Options
 
 ```
@@ -309,6 +323,21 @@ Provisions a usable DeviceChain instance on the given provider (e.g. "local")
 
 ```
 dcctl bootstrap <provider> <instance> [flags]
+```
+
+### Examples
+
+```
+  # a local kind cluster prepared with "dcctl install local"
+  dcctl bootstrap local my-instance
+  # an existing cluster (any cloud) prepared with "dcctl install local --kube-context prod"
+  dcctl bootstrap local prod --kube-context prod --host iot.example.com
+  # see what would happen first
+  dcctl bootstrap local my-instance --dry-run
+  # deploy a functional area on top of the profile
+  dcctl bootstrap local my-instance --enable-area outbound-connectors
+  # the local-developer preset
+  dcctl bootstrap local scratch --dev
 ```
 
 ### Options
@@ -779,6 +808,17 @@ Use --all to destroy every instance on this machine.
 dcctl destroy <provider> <instance> [flags]
 ```
 
+### Examples
+
+```
+  dcctl destroy local my-instance
+  # see what would be removed first
+  dcctl destroy local my-instance --dry-run
+  # keep the event-store backups, to rebuild the instance from them
+  dcctl destroy local my-instance --keep-backups --yes
+  dcctl destroy --all --yes
+```
+
 ### Options
 
 ```
@@ -930,15 +970,20 @@ There is no command that disables an area. An enabled area may hold data, and
 taking it out of the deployment would leave that data with nothing serving it.
 
 ```
+dcctl enable-area <provider> <instance> <area> [<area>...] [flags]
+```
+
+### Examples
+
+```
   # Add the outbound connectors area to an instance
   dcctl enable-area local devicechain outbound-connectors
 
   # Add two areas at once, and see what would happen first
   dcctl enable-area local devicechain outbound-connectors mcp --dry-run
-```
 
-```
-dcctl enable-area <provider> <instance> <area> [<area>...] [flags]
+  # name the cluster explicitly; it must be the one recorded at bootstrap
+  dcctl enable-area local prod update-management --kube-context prod
 ```
 
 ### Options
@@ -1221,6 +1266,17 @@ control, and succeeds only on FAIL (never on UNSETTLED).
 dcctl ha leaders [flags]
 ```
 
+### Examples
+
+```
+  # exits 0 on PASS; 1 on FAIL or UNSETTLED
+  dcctl ha leaders --instance default
+  # the report as JSON on stdout, for a script; the exit status is unchanged
+  dcctl ha leaders --instance default --json
+  # the negative control: exits 0 only on FAIL, never on UNSETTLED
+  dcctl ha leaders --instance default --expect-fail
+```
+
 ### Options
 
 ```
@@ -1275,6 +1331,16 @@ single-node instance and requires it to report failures:
 
 ```
 dcctl ha verify [flags]
+```
+
+### Examples
+
+```
+  # exits 0 when every assertion holds, 1 when any does not
+  dcctl ha verify --instance default
+  # the negative control: exits 0 only when the check fails, so a suite that cannot fail is caught
+  dcctl ha verify --instance default --replicas 3 --expect-fail
+  dcctl ha verify --instance default --kube-context prod --json
 ```
 
 ### Options
@@ -1337,6 +1403,16 @@ expected NOT to hold:
 
 ```
 dcctl ha verify-db [flags]
+```
+
+### Examples
+
+```
+  # exits 0 when every assertion holds, 1 when any does not
+  dcctl ha verify-db --cluster dc-rdb --require-synchronous
+  dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --json
+  # the negative control: exits 0 only when the store does NOT hold the stated topology
+  dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --expect-fail
 ```
 
 ### Options
@@ -1407,6 +1483,18 @@ the cluster, with one exception: the connection budget may be raised.
 
 ```
 dcctl install <provider> [flags]
+```
+
+### Examples
+
+```
+  # a local kind cluster named "devicechain"
+  dcctl install local
+  # a small-footprint cluster, for a laptop
+  dcctl install local --compact
+  # an existing cluster (any cloud): dcctl never creates or deletes it
+  dcctl install local --kube-context prod
+  dcctl install local --kube-context prod --ha --dry-run
 ```
 
 ### Options
@@ -1519,6 +1607,15 @@ by "break-glass:pod-exec".
 dcctl instances break-glass mfa-reset [email] [flags]
 ```
 
+### Examples
+
+```
+  dcctl instances break-glass mfa-reset --instance acme --email superuser@devicechain.local
+  dcctl instances break-glass mfa-reset superuser@devicechain.local --instance acme --kube-context prod
+  # choose the password yourself: the first line of stdin, and nothing is printed
+  dcctl instances break-glass mfa-reset --instance acme --email superuser@devicechain.local --password-stdin --yes
+```
+
 ### Options
 
 ```
@@ -1559,6 +1656,13 @@ kubeContext, status, hasRecord) and nothing else on stdout; an empty array when 
 dcctl instances list [flags]
 ```
 
+### Examples
+
+```
+  dcctl instances list
+  dcctl instances list -o json
+```
+
 ### Options
 
 ```
@@ -1597,6 +1701,13 @@ read it.
 dcctl instances reclaim [flags]
 ```
 
+### Examples
+
+```
+  dcctl instances reclaim
+  dcctl instances reclaim --kube-context prod
+```
+
 ### Options
 
 ```
@@ -1629,6 +1740,13 @@ clears the finalizer itself as its last step.
 dcctl instances release <instance> [flags]
 ```
 
+### Examples
+
+```
+  dcctl instances release acme
+  dcctl instances release acme --kube-context prod --yes
+```
+
 ### Options
 
 ```
@@ -1653,6 +1771,14 @@ These are the prerequisites for standing a cluster up, not for building an insta
 
 ```
 dcctl preflight [provider] [flags]
+```
+
+### Examples
+
+```
+  dcctl preflight local
+  dcctl preflight local --kube-context prod
+  dcctl preflight local --cluster scratch --build
 ```
 
 ### Options
@@ -1743,6 +1869,16 @@ Start with --dry-run, which writes nothing and lists the devices in scope.
 
 ```
 dcctl presence demote [flags]
+```
+
+### Examples
+
+```
+  # first, list the devices in scope and write nothing
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source mqtt1 --reason "broker replaced" --dry-run
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source mqtt1 --reason "broker replaced"
+  # narrow the run to two devices within the source
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source sparkplug:plant1 --reason "host retired" --device pump-7 --device pump-8
 ```
 
 ### Options
@@ -2213,6 +2349,14 @@ Freeze target writers while planning; this is an observation, not a reservation 
 
 ```
 dcctl restore <instance> --from <backup-set> --plan [flags]
+```
+
+### Examples
+
+```
+  dcctl restore acme --from ./acme-backup --plan
+  dcctl restore acme --from ./acme-backup --plan --kube-context prod
+  dcctl restore acme-copy --from ./acme-backup --plan --force-foreign
 ```
 
 ### Options
@@ -3067,6 +3211,15 @@ store), says so when it rises, and warns when the volume has less free space tha
 
 ```
 dcctl upgrade <provider> <instance> [flags]
+```
+
+### Examples
+
+```
+  dcctl upgrade local my-instance --dry-run
+  dcctl upgrade local my-instance
+  # name the cluster explicitly; it must be the one recorded at bootstrap
+  dcctl upgrade local prod --kube-context prod
 ```
 
 ### Options

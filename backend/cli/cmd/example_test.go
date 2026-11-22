@@ -28,6 +28,23 @@ var commandsWithExamples = []string{
 	"dcctl sim stop",
 	"dcctl sim windows",
 	"dcctl sim destroy",
+	"dcctl ha verify",
+	"dcctl ha leaders",
+	"dcctl ha verify-db",
+	"dcctl instances list",
+	"dcctl instances reclaim",
+	"dcctl instances release",
+	"dcctl instances break-glass mfa-reset",
+	"dcctl presence demote",
+	"dcctl preflight",
+	"dcctl install",
+	"dcctl bootstrap",
+	"dcctl upgrade",
+	"dcctl destroy",
+	"dcctl backup",
+	"dcctl backup inspect",
+	"dcctl restore",
+	"dcctl enable-area",
 }
 
 func TestCommandsListedHaveRealExamples(t *testing.T) {
@@ -46,8 +63,8 @@ func TestCommandsListedHaveRealExamples(t *testing.T) {
 		checked := 0
 		for _, line := range strings.Split(joined, "\n") {
 			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue // a full-line comment explains the line after it
 			}
 			for _, seg := range splitSegments(line) {
 				words := commandWords(seg)

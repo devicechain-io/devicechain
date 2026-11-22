@@ -30,5 +30,6 @@ var (
 	Migrations = []*gormigrate.Migration{
 		NewBaselineSchema(),
 		NewDetectStreamTopology(),
+		NewRuleStatSweeps(),
 	}
 )

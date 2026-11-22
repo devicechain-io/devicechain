@@ -311,9 +311,9 @@ SELECT hypertable_schema, hypertable_name FROM timescaledb_information.hypertabl
 
 Your event tables live in the `event-management` schema and should all be listed. A table that
 came back as an ordinary table is the failure this catches. It is invisible in a schema dump, where
-a plain table and a hypertable look identical. (Don't look for `measurement_rollups`. It is a
-continuous aggregate, and the hypertable backing it is internal, so its absence from this list is
-normal.)
+a plain table and a hypertable look identical. (Don't look for `measurement_rollups` or
+`measurement_rollups_1h`. They are continuous aggregates, and the hypertables backing them are
+internal, so their absence from this list is normal.)
 
 Second, and this is the one that matters: is the job scheduler actually running _on this cluster_?
 Run this, wait a minute or two, and run it again:

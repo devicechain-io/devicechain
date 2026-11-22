@@ -62,11 +62,13 @@ export const customerResource: RegistryResource<Customer> = {
         // so it sends exactly those. externalId and metadata are untouched because
         // they are not mentioned — where the full-replace shape needed them re-sent
         // from a stale snapshot to survive at all.
-        updateCustomer(token, {
-          name: req.name,
-          description: req.description,
-          customerTypeToken: req.typeToken,
-        })
+        updateCustomer(
+          token,
+          { name: req.name, description: req.description, customerTypeToken: req.typeToken },
+          // The updatedAt this form was opened on: a save over someone else's change
+          // is refused (STALE_WRITE) instead of silently overwriting it.
+          c?.updatedAt,
+        )
       }
       onDone={onDone}
     />

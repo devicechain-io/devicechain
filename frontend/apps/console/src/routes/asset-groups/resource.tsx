@@ -41,7 +41,7 @@ export const assetGroupResource: RegistryResource<AssetGroup> = {
       // is partial now, so an unnamed field is left alone — and re-sending a value
       // the operator never saw would be a write over whatever it has become since.
       update={(token, req) =>
-        updateAssetGroup(token, { name: req.name, description: req.description })
+        updateAssetGroup(token, { name: req.name, description: req.description }, g?.updatedAt)
       }
       onDone={onDone}
     />

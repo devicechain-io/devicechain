@@ -105,6 +105,13 @@ type EventSeed struct {
 	// ever materialized. The watermark is restored state as well, so a view read
 	// conflates two findings with opposite meanings. See materializationTable.
 	MaterializedCount int `json:"materializedCount"`
+	// HourMaterializedCount is the same count for the hour level (measurement_rollups_1h),
+	// read the same way, after the hour level was refreshed from the minute level.
+	HourMaterializedCount int `json:"hourMaterializedCount"`
+	// HourLevelCompleteFrom is rollup_levels' "1h" row at seed time (RFC 3339, UTC): the
+	// hour the read path serves the hour level from. The row is ordinary data, and a
+	// restore that loses or moves it changes which level serves a read.
+	HourLevelCompleteFrom string `json:"hourLevelCompleteFrom"`
 	// CompressedChunks and CompressedRows are the compression half's EXACT
 	// expectation.
 	//
@@ -129,6 +136,9 @@ func (e EventSeed) Validate() error {
 		"events.name":        e.Name,
 		"events.start":       e.Start,
 		"events.end":         e.End,
+		// A receipt from before the hour level was checked lacks this and the count
+		// below; it is refused rather than verified on less evidence. Seed again.
+		"events.hourLevelCompleteFrom": e.HourLevelCompleteFrom,
 	} {
 		if strings.TrimSpace(value) == "" {
 			missing = append(missing, name)
@@ -147,11 +157,12 @@ func (e EventSeed) Validate() error {
 	// CHANGED". Both are a malformed FILE degrading into a confident finding about
 	// a restore, which is the failure this whole method exists to prevent.
 	for name, n := range map[string]int{
-		"events.rawCount":          e.RawCount,
-		"events.materializedCount": e.MaterializedCount,
-		"events.compressedChunks":  e.CompressedChunks,
-		"events.compressedRows":    e.CompressedRows,
-		"events.eventType":         e.EventType,
+		"events.rawCount":              e.RawCount,
+		"events.materializedCount":     e.MaterializedCount,
+		"events.hourMaterializedCount": e.HourMaterializedCount,
+		"events.compressedChunks":      e.CompressedChunks,
+		"events.compressedRows":        e.CompressedRows,
+		"events.eventType":             e.EventType,
 	} {
 		if n == 0 {
 			missing = append(missing, name)

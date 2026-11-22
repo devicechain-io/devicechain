@@ -253,6 +253,10 @@ var tableSweepExemptions = map[string]string{
 		"so nothing is attempted and nothing is recorded.",
 	"event-processing.rule_stats": "written only by RuleStatStore.RecordFire, i.e. when a rule actually " +
 		"FIRES. No telemetry, no fire, no row.",
+	"event-processing.rule_stat_sweeps": "written only by the hourly stranded rule-stat sweep, in the " +
+		"transaction that deletes a superseded version's rule_stats rows after a week without a fire. " +
+		"No fire means no rule_stats row to sweep (see event-processing.rule_stats), so no record. The " +
+		"record and its delete are proved by event-processing's Postgres sweep tests.",
 
 	// ---- everything downstream of a rule that RUNS ---------------------------
 	//

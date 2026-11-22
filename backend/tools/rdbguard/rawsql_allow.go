@@ -216,6 +216,14 @@ var rawSQLAllowList = []siteEntry{
 			"It writes only that row's position_derived and position_classified_version, and its joins equate p.tenant_id with the alarm's " +
 			"tenant_id, as for Api.ClassifyUnclassifiedAlarms.",
 	},
+	{
+		Path: "backend/services/event-processing/model/rule_stat_store.go", Func: "RuleStatStore.SweepStranded", Count: 1,
+		Why: "the stranded rule-stat sweep's DELETE for ONE tenant: both the outer statement and its bounding " +
+			"subquery repeat ruleStatStrandedPredicate, whose first clause binds rule_stats.tenant to the " +
+			"tenant the call names (the context carries the same tenant), and its profile_actives subqueries " +
+			"equate pp.tenant and pa.tenant with the row's own tenant. It deletes only that tenant's rows, and only derived " +
+			"health counters. Raw because the anti-join and the re-checked bounded subquery have no gorm form.",
+	},
 
 	// --- erasure ---
 	{
@@ -237,6 +245,13 @@ var rawSQLAllowList = []siteEntry{
 		Path: "backend/core/tenantpurge/sweep.go", Func: "Residue", Count: 2,
 		Why: "counts what the sweep left behind for the purged tenant, binding the tenant explicitly, " +
 			"under a system context",
+	},
+	{
+		Path: "backend/core/attrprotocol/attrprotocol.go", Func: "lockTenantDevices", Count: 1,
+		Why: "the tenant purge's BeforeDelete hook: locks the purged tenant's device rows FOR UPDATE in id " +
+			"order before the sweep deletes them, so the purge and a device attribute writer take the device " +
+			"row first and cannot deadlock. The tenant is a bound parameter; it reads only ids, under the " +
+			"purge's system context",
 	},
 
 	// --- control-plane ---
