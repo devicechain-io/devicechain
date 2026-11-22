@@ -2253,6 +2253,15 @@ names the missing key.
 dcctl sim create <name> [flags]
 ```
 
+### Examples
+
+```
+  dcctl sim create demo
+  dcctl sim create demo --manifest harborpulse --instance my-instance --server dc.example.com --tls
+  dcctl sim create tower --manifest towerpulse --episode night-shift
+  dcctl sim create load --tier rc-100k --tier-config '{"ingestReadingsPerSecond":100000}'
+```
+
 ### Options
 
 ```
@@ -2337,6 +2346,13 @@ read connected for a while after the data stops.
 dcctl sim destroy <name> [flags]
 ```
 
+### Examples
+
+```
+  dcctl sim destroy demo
+  dcctl sim destroy demo --instance my-instance --server dc.example.com --tls
+```
+
 ### Options
 
 ```
@@ -2381,6 +2397,15 @@ run a player against the same sim while it is on.
 dcctl sim run <name> [flags]
 ```
 
+### Examples
+
+```
+  dcctl sim run demo
+  dcctl sim run harbor --day-length 48m
+  dcctl sim run site --play-devices --publish-log ./published.ndjson
+  dcctl sim run demo --emit-interval 3s --simulator ./bin/dc-simulator
+```
+
 ### Options
 
 ```
@@ -2417,6 +2442,13 @@ Start (resume) a stopped sim's emit loop
 dcctl sim start <name> [flags]
 ```
 
+### Examples
+
+```
+  dcctl sim start demo
+  dcctl sim start harbor
+```
+
 ### Options
 
 ```
@@ -2446,6 +2478,13 @@ Show a running sim's lifecycle state
 
 ```
 dcctl sim status <name> [flags]
+```
+
+### Examples
+
+```
+  dcctl sim status demo
+  dcctl sim status harbor
 ```
 
 ### Options
@@ -2479,6 +2518,13 @@ Stop a running sim's emit loop (tenant + data are kept)
 dcctl sim stop <name> [flags]
 ```
 
+### Examples
+
+```
+  dcctl sim stop demo
+  dcctl sim stop harbor
+```
+
 ### Options
 
 ```
@@ -2508,6 +2554,12 @@ Print the recorded episode windows (role, start, end)
 
 ```
 dcctl sim windows <name> [flags]
+```
+
+### Examples
+
+```
+  dcctl sim windows tower
 ```
 
 ### Options

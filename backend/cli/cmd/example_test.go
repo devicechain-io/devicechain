@@ -21,6 +21,13 @@ var commandsWithExamples = []string{
 	"dcctl attr unset",
 	"dcctl dead-letters list",
 	"dcctl tenant-deletion status",
+	"dcctl sim create",
+	"dcctl sim run",
+	"dcctl sim status",
+	"dcctl sim start",
+	"dcctl sim stop",
+	"dcctl sim windows",
+	"dcctl sim destroy",
 }
 
 func TestCommandsListedHaveRealExamples(t *testing.T) {
