@@ -64,8 +64,10 @@ way through. An operator installed by hand is let through with a note instead. B
 `dcctl install` takes the same lock, the operator cannot change under an upgrade that holds
 it. See [Releases & upgrades](./releases-and-upgrades.md#rolling-upgrades).
 
-A run that died gives the lock up on its own within about a minute, once it stops renewing
-it. A run that is still alive but stuck is what [reclaim](#reclaim) is for.
+A run that was killed leaves the lock behind: take it with
+[`dcctl instances reclaim`](#reclaim), which waits a lease duration and asks you to type the
+holder back. A run that is still alive keeps renewing and cannot be reclaimed: stop that
+process first.
 
 The asymmetry is deliberate:
 
@@ -126,6 +128,7 @@ account needs:
   `dc-k8s-system`;
 - `get`, `list`, `create`, `update`, `patch` and `delete` on
   `instances.core.devicechain.io`, cluster-wide;
+- `get` on `customresourcedefinitions`, cluster-wide;
 - `list` on `secrets` in `dc-system`.
 
 `list` is not optional on either line, and it is the verb most likely to be left out.
@@ -134,7 +137,9 @@ they have claimed — the ingress host, the local MQTT port, the connection budg
 question is a list, not a get. An account granted only `get` fails at the check that
 protects the other instances on the cluster. `update` and `delete` release the
 declaration's finalizer when an instance is torn down, and `patch` records a run's
-phase on the declaration.
+phase on the declaration. `dcctl instances release` uses `patch` rather than `update`: it
+changes only the finalizer list. Reading the `customresourcedefinitions` is how `bootstrap`,
+`upgrade` and `release` check which operator the cluster has.
 
 If your account lacks these permissions, `dcctl` shows the API server's own refusal —
 which verb, which resource, which namespace, which user — rather than reporting it as an

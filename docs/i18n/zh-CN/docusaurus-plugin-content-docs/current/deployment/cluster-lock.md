@@ -47,7 +47,7 @@ process is genuinely gone, take the claim with `dcctl instances reclaim
 
 `dcctl upgrade` 在第一次写入之前获取锁，并在持有锁时再次检查集群的Operator。如果集群中没有Operator，或可以确认Operator来自另一个发行版本，它不会将实例升级到目标版本，并会提示先运行 `dcctl install`。手动安装的Operator会收到提示，但可以继续。由于 `dcctl install` 获取的是同一把锁，持有锁的升级运行期间Operator不会被更改。参见[发行与升级](./releases-and-upgrades.md#rolling-upgrades)。
 
-已终止的运行停止续期后，大约一分钟内会自动释放锁。仍在运行但卡住的运行，请使用[回收](#reclaim)。
+被终止的运行会留下锁：请用 [`dcctl instances reclaim`](#reclaim) 获取它，该命令会等待一个租约时长，并要求你输入持有者标识。仍在运行的运行会持续续约，无法被回收：请先停止该进程。
 
 这种差异是有意设计的：
 
@@ -79,9 +79,10 @@ kubectl --context <kube-context> get lease dcctl -n dc-k8s-system -o yaml
 
 - 在 `dc-k8s-system` 中对 `leases.coordination.k8s.io` 的 `get`、`create`、`update` 和 `delete` 权限；
 - 在整个集群范围内对 `instances.core.devicechain.io` 的 `get`、`list`、`create`、`update`、`patch` 和 `delete` 权限；
+- 在整个集群范围内对 `customresourcedefinitions` 的 `get` 权限；
 - 在 `dc-system` 中对 `secrets` 的 `list` 权限。
 
-上述两项中的 `list` 都不可省略，而且最容易被漏掉。每次初始化和升级都会查询集群已有的实例及其占用资源，包括入口主机名、本地 MQTT 端口和连接预算。这需要列举，而不是读取单个对象。只有 `get` 权限的账户会在保护其他实例的检查中失败。`update` 和 `delete` 用于在销毁实例时释放声明的 finalizer，`patch` 用于记录声明上的运行阶段。
+上述两项中的 `list` 都不可省略，而且最容易被漏掉。每次初始化和升级都会查询集群已有的实例及其占用资源，包括入口主机名、本地 MQTT 端口和连接预算。这需要列举，而不是读取单个对象。只有 `get` 权限的账户会在保护其他实例的检查中失败。`update` 和 `delete` 用于在销毁实例时释放声明的 finalizer，`patch` 用于记录声明上的运行阶段。`dcctl instances release` 使用 `patch` 而不是 `update`：它只修改 finalizer 列表。`bootstrap`、`upgrade` 和 `release` 通过读取 `customresourcedefinitions` 来检查集群使用的是哪个 Operator。
 
 如果账户缺少这些权限，`dcctl` 会显示 API 服务器的实际拒绝信息：操作、资源、命名空间及用户，而不会把它报告成服务中断。
 

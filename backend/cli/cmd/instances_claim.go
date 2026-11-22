@@ -71,7 +71,16 @@ declaration that cannot be deleted because the operator that would clear its
 finalizer is gone.
 
 If what you want is to remove the instance, use ` + "`dcctl destroy`" + `, which
-clears the finalizer itself as its last step.`,
+clears the finalizer itself as its last step.
+
+It first checks the cluster's DeviceChain operator. A cluster whose operator is not
+the one this dcctl was built for is refused: run the release from the dcctl that
+matches it, or pass --force to release anyway. A cluster with no operator at all is
+let through, because a declaration left without one is what this command is for.
+
+It needs get on customresourcedefinitions (to read the operator's definitions),
+get and patch on instances.core.devicechain.io (it patches the finalizer list rather
+than updating the whole declaration), and delete on it.`,
 	Example: `  dcctl instances release acme
   dcctl instances release acme --kube-context prod --yes`,
 	Args: cobra.ExactArgs(1),
@@ -88,6 +97,8 @@ func init() {
 		"kube context of the cluster holding the declaration")
 	instancesReleaseCmd.Flags().BoolVar(&releaseAssumeYes, "yes", false,
 		"skip the confirmation prompt")
+	instancesReleaseCmd.Flags().BoolVar(&releaseForce, "force", false,
+		"release even when the cluster's operator does not match this dcctl")
 	instancesCmd.AddCommand(instancesReclaimCmd)
 	instancesCmd.AddCommand(instancesReleaseCmd)
 }
@@ -138,7 +149,13 @@ func runRelease(ctx context.Context, out io.Writer, in io.Reader, kubeContext, i
 	// is refused (run it from the dcctl that does), while a cluster with no operator at all is
 	// let through, because that is the case this command exists for.
 	if err := requireOperatorForRelease(ctx, kubeContext, "`dcctl instances release`", "dcctl install"); err != nil {
-		return err
+		if !releaseForce {
+			return fmt.Errorf("%w\n  To release the declaration anyway, re-run with --force. A release only clears "+
+				"the finalizer and deletes the declaration, but this dcctl was not built for the definitions "+
+				"this cluster serves", err)
+		}
+		fmt.Fprintln(out, color.RedString("WARNING: --force releases the declaration although this dcctl does not "+
+			"match the cluster's operator (%v). It clears only the finalizer and deletes the declaration.", err))
 	}
 
 	fmt.Fprintln(out, color.HiYellowString(
@@ -221,3 +238,6 @@ func confirmHolder(out io.Writer, in io.Reader, lease *coordinationv1.Lease) (st
 // requireOperatorForRelease is the seam runRelease checks the operator through, so its wiring
 // is reachable without a cluster.
 var requireOperatorForRelease = bootstrap.RequireOperatorUnlessAbsent
+
+// releaseForce is --force on `dcctl instances release`.
+var releaseForce bool

@@ -286,9 +286,11 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// the lock, against what the cluster holds now.
 	//
 	// The old reason for not enforcing was that a run repairing a stuck instance must not be
-	// blocked by the lock the stuck run holds. A dead run's Lease lapses on its own once it stops
-	// renewing (claimLeaseDuration), and a live-but-hung one is what `dcctl instances reclaim` is
-	// for; the refusal says which. A dry run writes nothing and takes nothing.
+	// blocked by the lock the stuck run holds. That case has its own command: a run that was
+	// KILLED leaves its Lease behind, and `dcctl instances reclaim` takes it (it waits a lease
+	// duration to see the holder is not renewing, and asks for the holder to be typed back). A
+	// run that is still ALIVE keeps renewing and cannot be reclaimed, and must be stopped
+	// first. The refusal says both. A dry run writes nothing and takes nothing.
 	var upgradeClaim *Claim
 	if !opts.DryRun {
 		c, err := takeUpgradeClaim(ctx, kubeContext, opts.Instance, func(ctx context.Context) error {
@@ -1176,8 +1178,9 @@ func takeUpgradeClaim(ctx context.Context, kubeContext, instance string, recheck
 	}
 	claim, err := acquireClaimFor(ctx, typed, ns, instance, kubeContext)
 	if err != nil {
-		return nil, fmt.Errorf("%w\n  Nothing has been changed. A run that died lets go of the lock on its own within "+
-			"about a minute; one that is still alive and stuck is what `dcctl instances reclaim` is for", err)
+		return nil, fmt.Errorf("%w\n  Nothing has been changed. A run that was killed leaves the lock behind: take it "+
+			"with `dcctl instances reclaim` (it waits a lease duration and asks you to type the holder back). A run "+
+			"that is still alive keeps renewing and cannot be reclaimed: stop that process first", err)
 	}
 	if err := recheck(ctx); err != nil {
 		release, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)

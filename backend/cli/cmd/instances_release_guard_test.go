@@ -33,4 +33,20 @@ func TestReleaseAsksTheOperatorGuardBeforeAnythingElse(t *testing.T) {
 	if strings.Contains(out.String(), "Type the instance name") {
 		t.Fatal("the release prompted before the operator check refused")
 	}
+	if !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("the refusal does not name the way through: %v", err)
+	}
+
+	// --force goes past the refusal with a warning (and on to the prompt, refused here by a
+	// wrong answer so nothing is released).
+	releaseForce = true
+	t.Cleanup(func() { releaseForce = false })
+	out.Reset()
+	err = runRelease(t.Context(), &out, strings.NewReader("not-acme\n"), "kind-test", "acme")
+	if !strings.Contains(out.String(), "WARNING: --force") || !strings.Contains(out.String(), "Type the instance name") {
+		t.Fatalf("--force did not warn and continue to the prompt:\n%s", out.String())
+	}
+	if err == nil || errors.Is(err, refusal) {
+		t.Fatalf("with --force the operator refusal still stopped the release: %v", err)
+	}
 }

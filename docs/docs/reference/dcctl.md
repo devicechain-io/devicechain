@@ -1742,6 +1742,15 @@ finalizer is gone.
 If what you want is to remove the instance, use `dcctl destroy`, which
 clears the finalizer itself as its last step.
 
+It first checks the cluster's DeviceChain operator. A cluster whose operator is not
+the one this dcctl was built for is refused: run the release from the dcctl that
+matches it, or pass --force to release anyway. A cluster with no operator at all is
+let through, because a declaration left without one is what this command is for.
+
+It needs get on customresourcedefinitions (to read the operator's definitions),
+get and patch on instances.core.devicechain.io (it patches the finalizer list rather
+than updating the whole declaration), and delete on it.
+
 ```
 dcctl instances release <instance> [flags]
 ```
@@ -1756,6 +1765,7 @@ dcctl instances release <instance> [flags]
 ### Options
 
 ```
+      --force                 release even when the cluster's operator does not match this dcctl
   -h, --help                  help for release
       --kube-context string   kube context of the cluster holding the declaration
       --yes                   skip the confirmation prompt

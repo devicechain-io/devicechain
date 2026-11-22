@@ -66,9 +66,10 @@ camino a seguir. Un operador instalado a mano se deja pasar con una nota. Como `
 toma el mismo bloqueo, el operador no puede cambiar bajo una actualización que lo tiene.
 Consulta [Versiones y actualizaciones](./releases-and-upgrades.md#rolling-upgrades).
 
-Una ejecución que murió suelta el bloqueo sola en un minuto aproximadamente, cuando deja de
-renovarlo. Una ejecución que sigue viva pero atascada es para lo que sirve
-[reclamar](#reclaim).
+Una ejecución que fue terminada deja el bloqueo atrás: tómalo con
+[`dcctl instances reclaim`](#reclaim), que espera la duración de un lease y te pide que escribas
+de vuelta el titular. Una ejecución que sigue viva lo sigue renovando y no se puede reclamar:
+detén antes ese proceso.
 
 La asimetría es deliberada:
 
@@ -131,6 +132,7 @@ cuenta necesita:
   `dc-k8s-system`;
 - `get`, `list`, `create`, `update`, `patch` y `delete` sobre
   `instances.core.devicechain.io`, con alcance de clúster;
+- `get` sobre `customresourcedefinitions`, con alcance de clúster;
 - `list` sobre `secrets` en `dc-system`.
 
 `list` no es opcional en ninguna de las dos líneas, y es el verbo que más fácilmente se
@@ -139,7 +141,9 @@ han reclamado: el host de ingress, el puerto MQTT local, el presupuesto de conex
 pregunta es un list, no un get. Una cuenta con solo `get` falla en la comprobación que
 protege a las demás instancias del clúster. `update` y `delete` liberan el finalizer de la
 declaración cuando se destruye una instancia, y `patch` registra la fase de una ejecución
-en la declaración.
+en la declaración. `dcctl instances release` usa `patch` en lugar de `update`: solo cambia la
+lista de finalizers. Leer las `customresourcedefinitions` es como `bootstrap`, `upgrade` y
+`release` comprueban qué operador tiene el clúster.
 
 Si a tu cuenta le faltan estos permisos, `dcctl` te muestra la negativa del propio servidor
 de la API (qué verbo, qué recurso, qué namespace, qué usuario) en lugar de presentarla como

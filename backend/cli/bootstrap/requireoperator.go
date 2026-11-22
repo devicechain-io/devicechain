@@ -174,9 +174,9 @@ func RequireOperatorUnlessAbsent(ctx context.Context, kubeContext, verb, install
 // judgeOperatorUnlessAbsent is judgeOperator with an absent operator answered by a note.
 func judgeOperatorUnlessAbsent(have operator.Installed, want, verb, installCommand string) (string, error) {
 	if !have.Present {
-		return fmt.Sprintf("  note: this cluster has no DeviceChain operator (missing: %v), so there is "+
-			"nothing to check %s against; going ahead, since a declaration left without one is what "+
-			"%s is for.", have.Missing, verb, verb), nil
+		return fmt.Sprintf("  note: this cluster is missing the DeviceChain operator's definitions %v, so "+
+			"there is nothing to check %s against; going ahead, since a declaration left without an "+
+			"operator is what %s is for.", have.Missing, verb, verb), nil
 	}
 	return judgeOperator(have, want, verb, installCommand)
 }
