@@ -3203,38 +3203,92 @@ type DeviceSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents a group of related devices.
+"""
+A group of entities of one family: devices, assets, areas or customers. Membership is either static
+(members are added explicitly over relationships of the member type) or dynamic (a selector over the
+members' facet attributes, evaluated when the group is read). A dynamic group is versioned:
+publishing freezes the selector as an immutable version, which detection rules and access scopes
+then pin to.
+"""
 type EntityGroup implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity & Entity {
+    """Server-assigned numeric identifier, as a string. Address a group by its token instead where you can."""
     id: ID!
+    """When the group was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the group was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: a deleted group is removed outright and is not returned."""
     deletedAt: String
+    """Identifier of the group, unique within the tenant. It cannot be changed after creation."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """URL of an image representing the group, up to 512 characters. Null when none is set."""
     imageUrl: String
+    """
+    Name of an icon representing the group, up to 128 characters. Not checked against any icon set.
+    Null when none is set.
+    """
     icon: String
+    """
+    Background colour to display the group with, up to 32 characters. Not validated. Null when none
+    is set.
+    """
     backgroundColor: String
+    """
+    Foreground (text) colour to display the group with, up to 32 characters. Not validated. Null
+    when none is set.
+    """
     foregroundColor: String
+    """Border colour to display the group with, up to 32 characters. Not validated. Null when none is set."""
     borderColor: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
     # The entity family this group collects: device | asset | area | customer.
+    """The entity family the group collects: device, asset, area or customer. Fixed at creation."""
     memberType: String!
     # How members are determined: static (explicit "member" edges) or dynamic
     # (a CEL selector over member-entity facet attributes — ADR-061 G3).
+    """
+    How members are determined: static, for members added explicitly, or dynamic, for members
+    matched by selector. Fixed at creation.
+    """
     membershipMode: String!
     # The CEL membership predicate, present only for dynamic groups.
+    """
+    The membership predicate, a CEL expression over the members' facet attributes. Present only for
+    dynamic groups; null for a static group. This is the editable draft: the selector a published
+    version froze is on that version.
+    """
     selector: String
     # The resolved members of this group — a static group's "member" edges or a
     # dynamic group's eval-on-read selector matches, transparently (a consumer does
     # not branch on mode). Always bounded + paginated (ADR-061 G4).
-    members(pagination: PaginationInput!): EntityGroupMemberSearchResults!
+    """
+    The resolved members of the group: a static group's explicit members, or the entities a dynamic
+    group's selector matches now. A consumer does not need to branch on mode. Always bounded and
+    paginated.
+    """
+    members(
+        """The page of members to return."""
+        pagination: PaginationInput!
+    ): EntityGroupMemberSearchResults!
     # The published version whose frozen selector a rule-scoped resolve reads
     # (ADR-062 S1). Null until a dynamic group is first published; always null for a
     # static group (never versioned). The live `selector` above is the mutable draft.
+    """
+    The published version whose frozen selector rule-scoped resolution reads. Null until a dynamic
+    group is first published, and always null for a static group, which is never versioned.
+    """
     activeVersion: Int
     # The group's published versions, newest first (ADR-062 S1). Empty for a group
     # that has never been published (and always empty for a static group).
+    """
+    The group's published versions, newest first. Empty for a group that has never been published,
+    and always empty for a static group.
+    """
     versions: [EntityGroupVersion!]!
     """
     Whether the group is an access scope: a group a member's access can be limited to. A member
@@ -3244,66 +3298,97 @@ type EntityGroup implements Model & TokenReference & NamedEntity & BrandedEntity
     accessScope: Boolean!
 }
 
-# An immutable published snapshot of a DYNAMIC entity group's membership selector
-# (ADR-062 S1). A rule scopes to a specific {group}@{version}, so its target set
-# cannot drift under a later selector edit. Mirrors DeviceProfileVersion.
+"""
+An immutable published snapshot of a dynamic entity group's selector. A detection rule scopes to a
+specific group and version, so the set of entities it covers cannot change under a later selector
+edit.
+"""
 type EntityGroupVersion {
-    # Monotonic per-group version number.
+    """Version number, increasing per group."""
     version: Int!
-    # The frozen lowerable-CEL membership selector captured at publish.
+    """The membership selector frozen at publish."""
     selector: String!
-    # The entity family the group collects, frozen with the version.
+    """The entity family the group collects, frozen with the version."""
     memberType: String!
-    # Optional user-supplied label (may embed a semver string; not parsed).
+    """Optional label given at publish. It may embed a semantic version string, which is not parsed."""
     label: String
+    """Optional description of what the version changes. Null when none was given."""
     description: String
-    # When the version was published (the row's creation time).
+    """When the version was published, as an RFC 3339 timestamp."""
     publishedAt: String!
-    # The identity that published it (username, falling back to email).
+    """
+    The identity that published the version: its username, falling back to its email. Null when not
+    recorded.
+    """
     publishedBy: String
 }
 
-# A resolved member of an entity group — the lightweight identity (row id + token)
-# of a family entity, enough for a consumer to hydrate the full record. The family
-# is the group's memberType, so it is not repeated per member.
+"""
+A resolved member of an entity group: the lightweight identity of one entity, enough to look up the
+full record. The entity family is the group's memberType, so it is not repeated per member.
+"""
 type EntityGroupMember {
+    """Numeric id of the member entity, as a string."""
     id: ID!
+    """Token of the member entity."""
     token: String!
 }
 
-# A paginated page of an entity group's resolved members.
+"""One page of an entity group's resolved members."""
 type EntityGroupMemberSearchResults {
+    """The members on this page."""
     results: [EntityGroupMember!]!
+    """Where this page sits in the full member set."""
     pagination: SearchResultsPagination!
 }
 
-# The result of evaluating a CANDIDATE dynamic-group selector without saving it
-# (ADR-061 G4). A selector that fails the publish gate (non-lowerable, over-budget,
-# a parse/type error) returns valid=false with the console-surfaceable error in
-# `error` and a null `members`, so the authoring UI can show the problem inline as
-# the user types rather than treating it as a hard failure. When valid, `members`
-# carries the eval-on-read matches (the live "matches N" preview).
+"""
+The result of evaluating a candidate dynamic-group selector without saving it. A selector that fails
+the publish checks (not expressible as a query, over the cost budget, or a parse or type error)
+returns valid false with the error and no members, so an authoring form can show the problem inline
+as the user types instead of treating it as a failure.
+"""
 type SelectorPreview {
+    """Whether the selector passed the same checks a saved dynamic group must pass."""
     valid: Boolean!
+    """Why the selector was refused, in terms fit to show the author. Null when valid."""
     error: String
+    """One page of the entities the selector matches now. Null when the selector is not valid."""
     members: EntityGroupMemberSearchResults
 }
 
-# Data required to create an entity group (ADR-061). membershipMode defaults to
-# "static"; selector is only permitted (and required) for "dynamic".
-# Editing one afterwards is EntityGroupUpdateRequest.
+"""
+Data required to create an entity group. membershipMode defaults to static; a selector is required
+for a dynamic group and refused for a static one. Edit a group afterwards with
+EntityGroupUpdateRequest.
+"""
 input EntityGroupCreateRequest {
+    """Identifier for the new group, unique within the tenant. Cannot be changed later."""
     token: String!
+    """The entity family the group collects: device, asset, area or customer. Cannot be changed later."""
     memberType: String!
+    """static or dynamic. Omitted means static. Cannot be changed later."""
     membershipMode: String
+    """
+    The CEL membership selector. Required, and only allowed, when membershipMode is dynamic. It is
+    compiled and cost-checked on create.
+    """
     selector: String
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """URL of an image representing the group, up to 512 characters."""
     imageUrl: String
+    """Name of an icon representing the group, up to 128 characters. Not checked against any icon set."""
     icon: String
+    """Background colour to display the group with, up to 32 characters. Not validated."""
     backgroundColor: String
+    """Foreground (text) colour to display the group with, up to 32 characters. Not validated."""
     foregroundColor: String
+    """Border colour to display the group with, up to 32 characters. Not validated."""
     borderColor: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
 
@@ -3322,28 +3407,46 @@ input EntityGroupCreateRequest {
 # members do not belong to, and converting a static group to dynamic (or back) would
 # orphan its members. A field that can only ever be a no-op or an error does not belong
 # in an update input.
+"""
+A partial update of an entity group. Each field has three states: omit it to keep the stored value,
+send null to clear it, or send a value to set it. The token, memberType and membershipMode are
+absent because they are identity: changing the family would leave members that do not belong, and
+converting between static and dynamic would orphan the members.
+"""
 input EntityGroupUpdateRequest {
-    # The CEL membership predicate, required (and only permitted) for a dynamic group. A
-    # provided selector is re-compiled and cost-gated before it replaces the stored one.
-    # Null is refused: a dynamic group with no selector matches nothing and cannot be
-    # repaired into a valid group.
+    """
+    The membership selector of a dynamic group; refused for a static group. A provided selector is
+    recompiled and cost-checked before it replaces the stored draft. Null is refused, because a
+    dynamic group with no selector matches nothing.
+    """
     selector: String
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
+    """Image URL; null clears it."""
     imageUrl: String
+    """Icon name; null clears it."""
     icon: String
+    """Background colour; null clears it."""
     backgroundColor: String
+    """Foreground colour; null clears it."""
     foregroundColor: String
+    """Border colour; null clears it."""
     borderColor: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
 
-# Criteria used when searching for entity groups. memberType and membershipMode
-# are optional filters.
+"""Criteria for listing entity groups. memberType and membershipMode are optional filters."""
 input EntityGroupSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Only groups collecting this entity family: device, asset, area or customer."""
     memberType: String
+    """Only groups with this membership mode: static or dynamic."""
     membershipMode: String
     """
     Keep only the groups that are (true) or are not (false) access scopes. Omit it for both.
@@ -3351,9 +3454,11 @@ input EntityGroupSearchCriteria {
     accessScope: Boolean
 }
 
-# Search results returned from entity groups query.
+"""One page of entity groups."""
 type EntityGroupSearchResults {
+    """The groups on this page."""
     results: [EntityGroup!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -6696,23 +6801,55 @@ type Query {
         """The anchor, an optional relationship type and the page to return."""
         criteria: AnchorDeviceSearchCriteria!
     ): DeviceSearchResults!
-    # Find entity groups by unique id.
-    entityGroupsById(ids: [ID!]!): [EntityGroup!]!
-    # Find entity groups by unique token. Answered to a member whose access is limited to part
-    # of the tenant too, with only the groups its scope names, of which it reads the token and
-    # name: description, metadata, selector, members and versions are refused.
-    entityGroupsByToken(tokens: [String!]!): [EntityGroup!]!
-    # List entity groups that meet criteria (optionally by member family / mode).
-    entityGroups(criteria: EntityGroupSearchCriteria!): EntityGroupSearchResults!
-    # Evaluate a CANDIDATE dynamic-group selector for a member family WITHOUT saving
-    # it — the console's live "matches N" authoring preview (ADR-061 G4 §4). Takes the
-    # identical publish gate + lowering + bounded query as a saved dynamic group, so
-    # the preview is exactly what the group would resolve. A non-lowerable / over-budget
-    # / malformed selector returns valid=false with an inline error, never a hard fault.
-    previewSelector(memberType: String!, selector: String!, pagination: PaginationInput!): SelectorPreview!
-    # List a dynamic entity group's published versions, newest first (ADR-062 S1).
-    # At most 1000 per call (newest first); limit (at least 1) narrows that and offset (not negative) pages further.
-    entityGroupVersions(token: String!, limit: Int, offset: Int): [EntityGroupVersion!]!
+    """Reads entity groups by numeric id. Ids naming no group are omitted. Requires device:read."""
+    entityGroupsById(
+        """Numeric ids of the entity groups to read."""
+        ids: [ID!]!
+    ): [EntityGroup!]!
+    """
+    Reads entity groups by token. Tokens naming no group are omitted. Also answered to a member
+    whose access is limited to part of the tenant, with only the groups its scope names, of which it
+    reads the token and name: description, metadata, selector, members and versions are refused.
+    """
+    entityGroupsByToken(
+        """Tokens of the entity groups to read."""
+        tokens: [String!]!
+    ): [EntityGroup!]!
+    """
+    Lists the entity groups that match the criteria, optionally by member family and mode, one page
+    at a time. Requires device:read.
+    """
+    entityGroups(
+        """The facets the listed entity groups must match, and the page to return."""
+        criteria: EntityGroupSearchCriteria!
+    ): EntityGroupSearchResults!
+    """
+    Evaluates a candidate dynamic-group selector for a member family without saving it, for a live
+    matches-N authoring preview. It applies the same checks, translation and bounded query as a
+    saved dynamic group, so the preview is what the group would resolve. A selector that is not
+    expressible, over budget or malformed returns valid false with an inline error rather than
+    failing. Requires device:read.
+    """
+    previewSelector(
+        """The entity family to evaluate the selector against: device, asset, area or customer."""
+        memberType: String!
+        """The candidate CEL membership selector. It is evaluated but not saved."""
+        selector: String!
+        """The page of matching members to return."""
+        pagination: PaginationInput!
+    ): SelectorPreview!
+    """
+    Lists a dynamic entity group's published versions, newest first. At most 1000 per call; limit
+    (at least 1) narrows that and offset (not negative) pages further. Requires device:read.
+    """
+    entityGroupVersions(
+        """Token of the dynamic entity group."""
+        token: String!
+        """Most versions to return, at least 1 and at most 1000. Omit for 1000."""
+        limit: Int
+        """Number of versions to skip, not negative. Use with limit to page further."""
+        offset: Int
+    ): [EntityGroupVersion!]!
     # Find device credentials by unique id.
     deviceCredentialsById(ids: [ID!]!): [DeviceCredential!]!
     # Find device credentials by unique token.
@@ -7668,21 +7805,37 @@ type Mutation {
         """Token of the device to delete."""
         token: String!
     ): Boolean!
-    # Create a new entity group (ADR-061). A static group's members are managed over
-    # "member" relationship edges; a dynamic group carries a CEL selector and resolves
-    # its members eval-on-read (validated + cost-gated at create).
-    createEntityGroup(request: EntityGroupCreateRequest): EntityGroup!
-    # Update an existing entity group's presentation fields (member family + mode
-    # are immutable).
+    """
+    Creates an entity group. A static group's members are managed with relationships of the member
+    type; a dynamic group carries a CEL selector, validated and cost-checked on create, and resolves
+    its members when read. Requires device:write.
+    """
+    createEntityGroup(
+        """The entity group to create."""
+        request: EntityGroupCreateRequest
+    ): EntityGroup!
+    """
+    Applies a partial update to an entity group, identified by token. Member family and membership
+    mode cannot change. Pass expectedUpdatedAt to refuse the write if the group changed since it was
+    read. Requires device:write.
+    """
     updateEntityGroup(
+        """Token of the entity group to update."""
         token: String!
+        """The fields to change."""
         request: EntityGroupUpdateRequest!
         """Apply only if updatedAt still equals this value; returns STALE_WRITE if the record changed. Reload before retrying. Omit for last-write-wins."""
         expectedUpdatedAt: String
     ): EntityGroup!
-    # Delete an entity group, its relationship edges, and its frozen versions.
-    # Refused (ErrEntityInUse) while a detection rule scopes to the group (ADR-062).
-    deleteEntityGroup(token: String!): Boolean!
+    """
+    Deletes an entity group together with its member relationships and its frozen versions. Refused
+    while a detection rule scopes to the group. Returns true when it was deleted and false when
+    nothing has the token. Requires device:write.
+    """
+    deleteEntityGroup(
+        """Token of the entity group to delete."""
+        token: String!
+    ): Boolean!
     """
     Publishes a dynamic entity group's current draft selector as a new immutable version and makes
     it the active version a rule-scoped resolve reads. Rejected for a static group. Requires
@@ -7703,9 +7856,16 @@ type Mutation {
         """
         expectedActiveVersion: Int
     ): EntityGroupVersion!
-    # Re-point a dynamic group's active version at an existing version — a
-    # non-destructive rollback; the draft is untouched. Returns the updated group.
-    rollbackEntityGroup(token: String!, version: Int!): EntityGroup!
+    """
+    Points a dynamic group's active version back at an existing version and returns the group. Non-
+    destructive: no version is removed and the draft selector is untouched. Requires device:write.
+    """
+    rollbackEntityGroup(
+        """Token of the dynamic group to roll back."""
+        token: String!
+        """The published version to make active again."""
+        version: Int!
+    ): EntityGroup!
     """
     Make a group an access scope, or stop it being one, and return the group. A member whose
     access is limited to the group sees the devices in it at its active version, so publishing

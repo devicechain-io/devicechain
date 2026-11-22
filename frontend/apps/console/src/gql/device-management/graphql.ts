@@ -1296,39 +1296,83 @@ export type EntityAttributeSetRequest = {
   valueType: string;
 };
 
+/**
+ * Data required to create an entity group. membershipMode defaults to static; a selector is required
+ * for a dynamic group and refused for a static one. Edit a group afterwards with
+ * EntityGroupUpdateRequest.
+ */
 export type EntityGroupCreateRequest = {
+  /** Background colour to display the group with, up to 32 characters. Not validated. */
   backgroundColor?: string | null | undefined;
+  /** Border colour to display the group with, up to 32 characters. Not validated. */
   borderColor?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Foreground (text) colour to display the group with, up to 32 characters. Not validated. */
   foregroundColor?: string | null | undefined;
+  /** Name of an icon representing the group, up to 128 characters. Not checked against any icon set. */
   icon?: string | null | undefined;
+  /** URL of an image representing the group, up to 512 characters. */
   imageUrl?: string | null | undefined;
+  /** The entity family the group collects: device, asset, area or customer. Cannot be changed later. */
   memberType: string;
+  /** static or dynamic. Omitted means static. Cannot be changed later. */
   membershipMode?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The CEL membership selector. Required, and only allowed, when membershipMode is dynamic. It is
+   * compiled and cost-checked on create.
+   */
   selector?: string | null | undefined;
+  /** Identifier for the new group, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing entity groups. memberType and membershipMode are optional filters. */
 export type EntityGroupSearchCriteria = {
   /** Keep only the groups that are (true) or are not (false) access scopes. Omit it for both. */
   accessScope?: boolean | null | undefined;
+  /** Only groups collecting this entity family: device, asset, area or customer. */
   memberType?: string | null | undefined;
+  /** Only groups with this membership mode: static or dynamic. */
   membershipMode?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of an entity group. Each field has three states: omit it to keep the stored value,
+ * send null to clear it, or send a value to set it. The token, memberType and membershipMode are
+ * absent because they are identity: changing the family would leave members that do not belong, and
+ * converting between static and dynamic would orphan the members.
+ */
 export type EntityGroupUpdateRequest = {
+  /** Background colour; null clears it. */
   backgroundColor?: string | null | undefined;
+  /** Border colour; null clears it. */
   borderColor?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** Foreground colour; null clears it. */
   foregroundColor?: string | null | undefined;
+  /** Icon name; null clears it. */
   icon?: string | null | undefined;
+  /** Image URL; null clears it. */
   imageUrl?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
+  /**
+   * The membership selector of a dynamic group; refused for a static group. A provided selector is
+   * recompiled and cost-checked before it replaces the stored draft. Null is refused, because a
+   * dynamic group with no selector matches nothing.
+   */
   selector?: string | null | undefined;
 };
 
