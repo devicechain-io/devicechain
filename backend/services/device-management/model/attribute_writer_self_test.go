@@ -4,6 +4,9 @@
 package model
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +26,18 @@ func TestAttributeWritersGoThroughPrimitive(t *testing.T) {
 	}
 	for _, violation := range violations {
 		t.Error(violation)
+	}
+	// An empty or partial scan must not pass: the primitive's file was read, and every allow-list
+	// entry names a function that exists where it says.
+	if _, ok := sources["model/api_attribute_owner.go"]; !ok {
+		t.Fatal("the scan did not read model/api_attribute_owner.go")
+	}
+	for key := range attributeWriterAllowList {
+		file, function, _ := strings.Cut(key, ":")
+		src, ok := sources[file]
+		if !ok || !attributeWriterDeclares(src, function) {
+			t.Errorf("stale allow-list entry %s: no such function in the scanned sources", key)
+		}
 	}
 	t.Logf("scanned %d production files in %s", len(sources), time.Since(start))
 	if time.Since(start) >= 10*time.Second {
@@ -79,6 +94,12 @@ func TestAttributeWriterPlantedViolations(t *testing.T) {
 		"generation SQL":         `func scratch(tx *gorm.DB) { tx.Exec("INSERT INTO entity_attribute_generations DEFAULT VALUES") }`,
 		"unscoped delete":        `func scratch(tx *gorm.DB) { tx.Unscoped().Delete(&EntityAttribute{}) }`,
 		"package initializer":    `var bad = func(tx *gorm.DB) { tx.Delete(&EntityAttribute{}) }`,
+		"struct field carrier":   `type carrier struct{ rows []EntityAttribute }; func scratch(tx *gorm.DB) { x := carrier{}; tx.Delete(&x.rows) }`,
+		"closure return":         `func scratch(tx *gorm.DB) { f := func() *EntityAttribute { return &EntityAttribute{} }; tx.Create(f()) }`,
+		"interface dispatch":     `type deleter interface{ Delete(any, ...any) *gorm.DB }; func scratch(tx *gorm.DB) { var d deleter = tx; d.Delete(&EntityAttribute{}) }`,
+		"statement table":        `func scratch(tx *gorm.DB) { tx.Statement.Table = "entity_attributes"; tx.Delete(map[string]any{}) }`,
+		"connpool exec context":  `func scratch(tx *gorm.DB) { tx.Statement.ConnPool.ExecContext(nil, "DELETE FROM entity_attributes") }`,
+		"query context":          `func scratch(tx *gorm.DB) { tx.Statement.ConnPool.QueryContext(nil, "UPDATE entity_attribute_generations SET generation=2 RETURNING id") }`,
 	}
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -152,8 +173,9 @@ func TestAttributeWriterScansEveryServicePackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sources) != 5 {
-		t.Fatalf("scan scope: got %v, want all five production packages", sources)
+	// schema/frozen.go is not a NAMED frozen migration, so it is scanned like the rest.
+	if len(sources) != 6 {
+		t.Fatalf("scan scope: got %d files, want all six production files (the _test.go file excluded)", len(sources))
 	}
 	violations, err := scanAttributeWriterPackages(sources)
 	if err != nil {
@@ -250,5 +272,37 @@ func TestAttributeWriterAuthorityRestrictions(t *testing.T) {
 		if err != nil || len(violations) == 0 {
 			t.Fatalf("copied allow-list name escaped: %s (%v)", name, err)
 		}
+	}
+}
+
+// attributeWriterDeclares reports whether src declares a function or method named function.
+func attributeWriterDeclares(src []byte, function string) bool {
+	f, err := parser.ParseFile(token.NewFileSet(), "", src, 0)
+	if err != nil {
+		return false
+	}
+	for _, decl := range f.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == function {
+			return true
+		}
+	}
+	return false
+}
+
+// L6: a NEW file under schema/ that writes attribute rows is scanned; only named, frozen
+// migrations are skipped.
+func TestAttributeWriterScansNewSchemaFiles(t *testing.T) {
+	sources := map[string][]byte{
+		"schema/new_backfill.go": []byte("package schema\nimport \"gorm.io/gorm\"\nfunc backfill(tx *gorm.DB) { tx.Exec(\"UPDATE entity_attributes SET value = NULL\") }"),
+	}
+	violations, err := scanAttributeWriterPackages(sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) == 0 {
+		t.Fatal("a new schema file writing entity_attributes escaped the guard")
+	}
+	if attributeWriterFrozenMigrations["schema/new_backfill.go"] {
+		t.Fatal("the frozen list must name migrations explicitly")
 	}
 }

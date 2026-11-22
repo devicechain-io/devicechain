@@ -18,23 +18,87 @@ import (
 	"strings"
 )
 
-// Released schema migrations are frozen and run before any pod serves.
+// attributeWriterFrozenMigrations names, file by file, the schema migrations the guard does not
+// scan: each is frozen once released and runs before any pod serves (the historic attribute
+// dedupe among them). A NEW file under schema/ is scanned like any other until it is added here,
+// which is a reviewed decision, never a directory-wide exemption.
+// attributeWriterFrozenSchema is the schema package; its frozen files are type-checked with it but
+// never reported.
 const attributeWriterFrozenSchema = "schema"
 
+var attributeWriterFrozenMigrations = map[string]bool{
+	"schema/baseline.go":                                    true,
+	"schema/baseline_snapshot.go":                           true,
+	"schema/baseline_snapshot_2.go":                         true,
+	"schema/migration_agent_proposals.go":                   true,
+	"schema/migration_agent_safety.go":                      true,
+	"schema/migration_alarm_dispositions.go":                true,
+	"schema/migration_alarm_position_derived.go":            true,
+	"schema/migration_alarm_position_stamp.go":              true,
+	"schema/migration_alarm_scope_anchors.go":               true,
+	"schema/migration_alarm_suppression.go":                 true,
+	"schema/migration_anchor_ocsp.go":                       true,
+	"schema/migration_asset_property_schema.go":             true,
+	"schema/migration_attribute_generations.go":             true,
+	"schema/migration_automation_review_enforcement.go":     true,
+	"schema/migration_automation_reviews.go":                true,
+	"schema/migration_command_encoder.go":                   true,
+	"schema/migration_credential_secret_digest.go":          true,
+	"schema/migration_deletion_alarm_cascade.go":            true,
+	"schema/migration_detect_reconcile_instants.go":         true,
+	"schema/migration_device_aliases.go":                    true,
+	"schema/migration_device_attribute_lock.go":             true,
+	"schema/migration_device_configuration.go":              true,
+	"schema/migration_device_configuration_reports.go":      true,
+	"schema/migration_device_disabled.go":                   true,
+	"schema/migration_device_disabled_index.go":             true,
+	"schema/migration_device_gateway.go":                    true,
+	"schema/migration_device_replacements.go":               true,
+	"schema/migration_device_trust_anchors.go":              true,
+	"schema/migration_device_type_command_channel.go":       true,
+	"schema/migration_device_type_index.go":                 true,
+	"schema/migration_drop_alarm_message.go":                true,
+	"schema/migration_enrollment_secret_digest.go":          true,
+	"schema/migration_entity_attribute_unique_key.go":       true,
+	"schema/migration_geofence_geometry_blobs.go":           true,
+	"schema/migration_geofence_snapshot_backfill.go":        true,
+	"schema/migration_geofences.go":                         true,
+	"schema/migration_group_access_scope.go":                true,
+	"schema/migration_installed_position.go":                true,
+	"schema/migration_integrations.go":                      true,
+	"schema/migration_issued_customer_tokens.go":            true,
+	"schema/migration_list_order_indexes.go":                true,
+	"schema/migration_maintenance_window.go":                true,
+	"schema/migration_metric_expression.go":                 true,
+	"schema/migration_pending_alarm_events.go":              true,
+	"schema/migration_pending_entity_deletions.go":          true,
+	"schema/migration_pending_ownership_facts.go":           true,
+	"schema/migration_pending_session_kicks.go":             true,
+	"schema/migration_profile_activations.go":               true,
+	"schema/migration_profile_configuration_declaration.go": true,
+	"schema/migration_profile_decoders.go":                  true,
+	"schema/migration_profile_location_declaration.go":      true,
+	"schema/migration_revocation_expansion_markers.go":      true,
+	"schema/migration_revocation_kick_queue.go":             true,
+	"schema/migration_self_registration.go":                 true,
+	"schema/migration_semantic_bindings.go":                 true,
+	"schema/migration_x509_revocation.go":                   true,
+}
+
+// attributeWriterAllowList is every function allowed to write attribute rows or generation heads,
+// each with its reason. TestAttributeWritersGoThroughPrimitive fails on an entry that names no
+// function the scan saw, so the list cannot go stale silently.
+var attributeWriterAllowList = map[string]string{
+	"model/api_attribute_owner.go:applyAttributePatchTx":          "the locked attribute patch primitive",
+	"model/api_attribute_owner.go:upsertAttributeOnTx":            "the primitive's single-row upsert",
+	"model/api_attribute_generation.go:bumpAttributeGenerationTx": "the primitive's monotone head bump",
+	"model/api_delete.go:deleteEntityAttributesOnTx":              "locked entity deletion, including its generation cascade",
+	"model/api_attribute_orphans.go:deleteAttributeOrphanBatch":   "bounded marked deletion of rows with no surviving owner",
+}
+
 func attributeWriterAllowed(file, function string) bool {
-	switch file + ":" + function {
-	case "model/api_attribute_owner.go:applyAttributePatchTx": // The locked attribute patch primitive.
-		return true
-	case "model/api_attribute_owner.go:upsertAttributeOnTx": // The primitive's single-row upsert.
-		return true
-	case "model/api_attribute_generation.go:bumpAttributeGenerationTx": // The primitive's monotone head bump.
-		return true
-	case "model/api_delete.go:deleteEntityAttributesOnTx": // Locked entity deletion, including its generation cascade.
-		return true
-	case "model/api_attribute_orphans.go:deleteAttributeOrphanBatch": // Bounded marked deletion of rows with no surviving owner.
-		return true
-	}
-	return false
+	_, ok := attributeWriterAllowList[file+":"+function]
+	return ok
 }
 
 func attributeWriterSources(root string) (map[string][]byte, error) {
@@ -48,9 +112,6 @@ func attributeWriterSources(root string) (map[string][]byte, error) {
 			return err
 		}
 		if entry.IsDir() {
-			if filepath.ToSlash(rel) == attributeWriterFrozenSchema {
-				return filepath.SkipDir
-			}
 			return nil
 		}
 		if strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
@@ -391,8 +452,16 @@ func (s *attributeWriterScan) touches(n ast.Node) bool {
 	case *ast.Ident:
 		return s.tainted[s.key(e)]
 	case *ast.CallExpr:
-		if fn, ok := s.object(e.Fun).(*types.Func); ok {
-			return s.returns[fn]
+		if fn, ok := s.object(e.Fun).(*types.Func); ok && s.returns[fn] {
+			return true
+		}
+		// A call of a local closure returns what its body returns.
+		if id, ok := e.Fun.(*ast.Ident); ok {
+			for _, bound := range s.bindings[s.key(id)] {
+				if lit, ok := bound.(*ast.FuncLit); ok && s.funcLitReturnsAttribute(lit) {
+					return true
+				}
+			}
 		}
 		if s.attributeAssociation(e) {
 			return true
@@ -736,6 +805,9 @@ func scanAttributeWriterPackages(sources map[string][]byte) ([]string, error) {
 	var violations []string
 	visit(func(f *ast.File) {
 		file := fset.Position(f.Pos()).Filename
+		if attributeWriterFrozenMigrations[file] {
+			return // frozen migration: type-checked with its package, never reported
+		}
 		inspect := func(node ast.Node, function string) {
 			ast.Inspect(node, func(n ast.Node) bool {
 				if id, ok := n.(*ast.Ident); ok && attributeRestrictedReference(file, function, id.Name) {
@@ -743,6 +815,18 @@ func scanAttributeWriterPackages(sources map[string][]byte) ([]string, error) {
 				}
 				if attributeWriterAllowed(file, function) {
 					return true
+				}
+				// Pointing a statement at an attribute table by hand (tx.Statement.Table = ...) is a
+				// write-path redirection whatever call follows it.
+				if assign, ok := n.(*ast.AssignStmt); ok {
+					for i, lhs := range assign.Lhs {
+						if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Table" && i < len(assign.Rhs) {
+							parts := s.fragments(assign.Rhs[i], map[any]bool{})
+							if attributeTable(strings.Join(parts, " ")) || attributeTable(strings.Join(parts, "")) {
+								violations = append(violations, fset.Position(assign.Pos()).String()+": attribute writer bypasses owner")
+							}
+						}
+					}
 				}
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
@@ -758,9 +842,13 @@ func scanAttributeWriterPackages(sources map[string][]byte) ([]string, error) {
 					bad = s.touches(call) || s.tableHandle(call)
 				case "CreateInBatches", "FirstOrCreate", "Append", "Replace", "Clear":
 					bad = s.touches(call) || s.tableHandle(call)
-				case "Exec", "Raw":
-					if len(call.Args) > 0 {
-						parts := s.fragments(call.Args[0], map[any]bool{})
+				case "Exec", "Raw", "ExecContext", "QueryContext", "QueryRowContext", "PrepareContext":
+					sqlArg := 0
+					if strings.HasSuffix(sel.Sel.Name, "Context") {
+						sqlArg = 1 // database/sql style: the context comes first
+					}
+					if len(call.Args) > sqlArg {
+						parts := s.fragments(call.Args[sqlArg], map[any]bool{})
 						sql := strings.Join(parts, " ")
 						table := attributeTable(sql) || attributeTable(strings.Join(parts, ""))
 						// FOR UPDATE is a read-side lock, not an UPDATE statement.
@@ -804,4 +892,23 @@ func attributeRestrictedReference(file, function, name string) bool {
 		return !(file == "model/api_attribute_owner.go" && function == "applyAttributePatchTx")
 	}
 	return false
+}
+
+// funcLitReturnsAttribute reports whether a closure returns an attribute-bearing value.
+func (s *attributeWriterScan) funcLitReturnsAttribute(lit *ast.FuncLit) bool {
+	found := false
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		if _, nested := n.(*ast.FuncLit); nested {
+			return false
+		}
+		if ret, ok := n.(*ast.ReturnStmt); ok {
+			for _, value := range ret.Results {
+				if s.touches(value) {
+					found = true
+				}
+			}
+		}
+		return !found
+	})
+	return found
 }
