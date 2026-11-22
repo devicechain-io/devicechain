@@ -185,7 +185,7 @@ func testAttributePurgeMarker(t *testing.T, f attributeProtocolFixture) {
 	_, err = tenantpurge.Sweep(sys, f.api.RDB.Database, plan, f.tenant, time.Now(), nil)
 	require.Equal(t, "DCAP1", attributeSQLState(err), "the hook-free counterweight must reject")
 	err = f.api.RDB.DB(sys).Transaction(func(tx *gorm.DB) error {
-		if err := mark(tx); err != nil {
+		if err := mark(tx, f.tenant); err != nil {
 			return err
 		}
 		assertAttributeMarker(t, tx, "1")
@@ -284,7 +284,8 @@ func TestAttributeProtocolMarkerLifetimeSameBackend(t *testing.T) {
 		purgePlan := &tenantpurge.Plan{Entries: []tenantpurge.Entry{{Table: tenantpurge.Table{Schema: "device-management", Name: "entity_attributes"}}}}
 		attrprotocol.RegisterPurge(purgePlan)
 		require.NotNil(t, purgePlan.BeforeDelete)
-		for _, mark := range []func(*gorm.DB) error{purgePlan.BeforeDelete, markAttributeOrphanSweep} {
+		purgeMark := func(tx *gorm.DB) error { return purgePlan.BeforeDelete(tx, f.tenant) }
+		for _, mark := range []func(*gorm.DB) error{purgeMark, markAttributeOrphanSweep} {
 			for _, commit := range []bool{true, false} {
 				tx = conn.Begin()
 				require.NoError(t, tx.Error)
@@ -345,4 +346,41 @@ func TestAttributeOrphanSweepRunsOnOneReplicaPostgres(t *testing.T) {
 	}))
 	require.NoError(t, f.api.SweepAllDeviceAttributeOrphans(f.ctx))
 	require.Zero(t, count())
+}
+
+// #2978: tenant purge locks the tenant's device rows before it deletes any child row. A report
+// (or any writer) that holds its device row KEY SHARE and then touches a configuration row must
+// never meet a purge that has already deleted that row and is waiting for the device: the purge
+// is observed waiting on the device row while the configuration row is still free.
+func TestTenantPurgeTakesDeviceRowsFirstPostgres(t *testing.T) {
+	f := newAttributeProtocolFixture(t)
+	db := f.api.RDB.Database
+	// A device configuration state row exists for the device, written the way a report writes it.
+	require.NoError(t, f.api.RDB.DB(f.ctx).Exec(`INSERT INTO device_configuration_states (tenant_id, device_id, created_at, updated_at)
+		VALUES (?, ?, now(), now()) ON CONFLICT DO NOTHING`, f.tenant, f.device.ID).Error)
+
+	holder := db.Begin()
+	require.NoError(t, holder.Error)
+	defer holder.Rollback()
+	require.NoError(t, holder.Exec(`SELECT id FROM devices WHERE id = ? FOR KEY SHARE`, f.device.ID).Error)
+
+	sys := core.WithSystemContext(context.Background())
+	plan, err := tenantpurge.Classify(sys, db)
+	require.NoError(t, err)
+	attrprotocol.RegisterPurge(plan)
+	purged := make(chan error, 1)
+	go func() {
+		_, err := tenantpurge.Sweep(sys, db, plan, f.tenant, time.Now(), nil)
+		purged <- err
+	}()
+	// The purge waits on the device row the holder shares ...
+	require.Eventually(t, func() bool {
+		var waiting int64
+		_ = db.Raw(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%FROM "device-management".devices%FOR UPDATE%'`).Scan(&waiting).Error
+		return waiting > 0
+	}, 10*time.Second, 20*time.Millisecond, "purge must wait on the tenant's device rows first")
+	// ... while it holds no child row: the holder can still update its configuration row.
+	require.NoError(t, holder.Exec(`UPDATE device_configuration_states SET updated_at = now() WHERE device_id = ?`, f.device.ID).Error)
+	require.NoError(t, holder.Commit().Error)
+	require.NoError(t, <-purged, "the purge completes once the writer commits; no 40P01")
 }
