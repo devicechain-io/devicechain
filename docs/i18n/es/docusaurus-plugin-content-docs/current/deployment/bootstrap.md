@@ -1243,6 +1243,24 @@ tres nodos distintos. Termina con código distinto de cero si algo se queda cort
 qué examinó para que un resultado correcto sobre un conjunto vacío no se confunda con un éxito
 real.
 
+Dónde están los líderes de los streams importa tanto como cuántas réplicas hay. Cada evento de
+dispositivo le cuesta una escritura replicada al servidor que lidera cada stream por el que pasa,
+así que un servidor que lidera varios de ellos limita el broker mucho antes de que los demás estén
+ocupados:
+
+```bash
+dcctl ha leaders --instance my-instance
+```
+
+Esto indica qué servidor lidera los streams de captura, de entrada y de eventos resueltos, el
+almacén de mensajes MQTT del broker y los consumidores del stream de eventos resueltos. **PASS**
+significa que ningún cambio de líder que el rebalanceo puede hacer los repartiría más. **FAIL**
+enumera los movimientos, y `dcctl broker rebalance my-instance` los hace. **UNSETTLED** significa
+que falta un stream, un líder o una réplica al día, así que la distribución todavía no se puede
+juzgar; vuelve a ejecutarlo cuando `dcctl ha verify` pase. Los streams de captura y de entrada y el
+almacén de mensajes MQTT nunca se mueven, porque un cambio de líder en ellos puede perder mensajes
+ya confirmados a un dispositivo.
+
 #### Perder un nodo y recuperarlo {#ha-node-loss}
 
 `--ha` sobrevive a la pérdida de un nodo. Así se ve desde fuera, en el orden en que ocurre:
@@ -1315,7 +1333,9 @@ real.
   nada, y los servicios se vuelven a enlazar solos.
 
 Planifica la vuelta de un nodo como planificas su pérdida, y no retires un segundo nodo hasta
-que `dcctl ha verify` vuelva a pasar.
+que `dcctl ha verify` vuelva a pasar. Después ejecuta `dcctl ha leaders`: los líderes se quedan
+donde los dejaron las elecciones, así que el servidor que vuelve no lidera nada hasta que algo
+mueva el liderazgo, y un FAIL ahí se corrige con `dcctl broker rebalance`.
 
 #### Mantenimiento de un nodo de base de datos {#ha-database-node-maintenance}
 
