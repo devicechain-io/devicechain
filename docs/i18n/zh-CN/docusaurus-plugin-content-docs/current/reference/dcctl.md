@@ -654,7 +654,8 @@ List dead letters, newest first
 
 List dead letters, newest first.
 
-Narrow with --tenant, --kind, --source and --since. Reading is bounded by --pages:
+Narrow with --tenant, --kind, --source and --since. -o json prints the same records
+as one JSON object (letters, total, truncated) and nothing else on stdout. Reading is bounded by --pages:
 when more records exist than were fetched, the output says so rather than letting a
 truncated list read as a complete one.
 
@@ -667,6 +668,7 @@ dcctl dead-letters list [flags]
 ```
   -h, --help            help for list
       --kind string     only this kind: detection-action, notification, command-response, connector-dispatch, event, command, control-fact
+  -o, --output string   output format: table or json (default "table")
       --page int        records per server round-trip (default 50)
       --pages int       how many pages to fetch before stopping (default 4)
       --since string    only records from this RFC3339 time onward (e.g. 2026-09-04T00:00:00Z)
@@ -1234,7 +1236,8 @@ Exit status is the result: 0 when every assertion holds, 1 when any does not.
   dcctl ha verify --instance default
 ```
 
-Use --expect-fail to invert that, for the negative control. A check suite that
+Use --json to print the report as JSON (the only thing written to stdout). Use
+--expect-fail to invert that, for the negative control. A check suite that
 cannot fail asserts nothing, so the drill runs the SAME command against a
 single-node instance and requires it to report failures:
 
@@ -1252,6 +1255,7 @@ dcctl ha verify [flags]
       --expect-fail           invert the exit status: succeed only if the check FAILS (the negative control)
   -h, --help                  help for verify
       --instance string       instance id; its services and broker run in namespace dci-<instance> (default "default")
+      --json                  print the report as JSON
       --kube-context string   kubeconfig context (default: current context)
       --nats-url string       dial this NATS URL instead of opening a port-forward
       --probe-mqtt            open one MQTT connection first so the broker's $MQTT_* streams exist and their replica factor can be observed. MUTATES the broker (it creates those streams if no client has ever connected), so it is off by default
@@ -1295,7 +1299,8 @@ Exit status is the result: 0 when every assertion holds, 1 when any does not.
   dcctl ha verify-db --cluster dc-rdb --require-synchronous
 ```
 
-Use --expect-fail for the negative control, stating the topology the store is
+Use --json to print the report as JSON (the only thing written to stdout). Use
+--expect-fail for the negative control, stating the topology the store is
 expected NOT to hold:
 
 ```
@@ -1315,6 +1320,7 @@ dcctl ha verify-db [flags]
       --expect-fail            invert the exit status: succeed only if the check FAILS (the negative control)
   -h, --help                   help for verify-db
       --instances int          expected instance count (default: read from the live Cluster spec). State it explicitly for the negative control — read from the spec, a single-instance store expects one instance and duly has one, so it can never fail
+      --json                   print the report as JSON
       --kube-context string    kubeconfig context (default: current context)
       --namespace string       namespace holding the CloudNativePG Cluster: dc-system for the shared relational store (dc-rdb), dci-<instance> for that instance's event store (dc-tsdb) (default "dc-system")
       --require-synchronous    demand synchronous replication. Deliberately NOT derived from the Cluster spec: a pruned or misspelled field leaves a spec that asks for nothing, which a spec-derived check would happily confirm
@@ -1518,6 +1524,9 @@ A row reading "cluster gone" is an instance whose cluster has been deleted out f
 under it, leaving only local state. That is the normal end state of a validation rig
 run, and clearing it is what `dcctl destroy` does.
 
+-o json prints an array with one object per instance (instance, namespace, provider, cluster,
+kubeContext, status, hasRecord) and nothing else on stdout; an empty array when there are none.
+
 ```
 dcctl instances list [flags]
 ```
@@ -1525,7 +1534,8 @@ dcctl instances list [flags]
 ### Options
 
 ```
-  -h, --help   help for list
+  -h, --help            help for list
+  -o, --output string   output format: table or json (default "table")
 ```
 
 ### SEE ALSO
@@ -2528,6 +2538,9 @@ list of blockers. It comes before the deletion completes, because the tenant's t
 for a further period (12 hours by default) before it can be reused. Use --until complete to wait
 for that release instead.
 
+-o json prints the deletion record as JSON on stdout (progress and errors go to stderr); the
+exit status is unchanged.
+
 With --wait the command polls until the target is reached, and exits non-zero if --timeout passes
 first. A tenant with no deletion record is an error, never a success.
 
@@ -2551,6 +2564,7 @@ dcctl tenant-deletion status <token> [flags]
       --epoch string        bind to the deletion at exactly this epoch (RFC 3339, as printed by this command)
   -h, --help                help for status
       --interval duration   how often --wait polls (default 10s)
+  -o, --output string       output format: table or json (default "table")
       --timeout duration    how long --wait polls before giving up (default 30m0s)
       --until string        what to wait for and require: erased (data established as gone) or complete (token released) (default "erased")
       --wait                poll until the target is reached
