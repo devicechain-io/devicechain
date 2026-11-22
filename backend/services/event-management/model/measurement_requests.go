@@ -55,6 +55,25 @@ type MeasurementReading struct {
 // change the bytes.
 func MeasurementRequestFor(event Event, at time.Time, mx MeasurementReading) (*MeasurementEventCreateRequest, error) {
 	val := mx.Value
+	// A STRING reading is not a number: its value is stored as text and Value stays nil, so
+	// nothing that aggregates the numeric column sees it. Only a STRING one — a numeric type
+	// whose value does not parse is still a refusal below.
+	if mx.DataType != nil && *mx.DataType == "STRING" && !mx.Derived {
+		var classifier *uint
+		if mx.Classifier != nil {
+			c := uint(*mx.Classifier)
+			classifier = &c
+		}
+		return &MeasurementEventCreateRequest{
+			Event:             event,
+			EntryOccurredTime: at,
+			Name:              mx.Name,
+			Classifier:        classifier,
+			Unit:              mx.Unit,
+			DataType:          mx.DataType,
+			TextValue:         &val,
+		}, nil
+	}
 	fval, err := ParseNullableFloat64(&val)
 	if err != nil {
 		return nil, err
