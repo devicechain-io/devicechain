@@ -50,6 +50,9 @@ type teardownRig struct {
 // resource (so tofu destroy has work).
 func newTeardownRig(t *testing.T, rels []*release.Release, namespaces []string, declared ...string) *teardownRig {
 	t.Helper()
+	previousPending := pendingOperationForDestroy
+	t.Cleanup(func() { pendingOperationForDestroy = previousPending })
+	pendingOperationForDestroy = func(context.Context, string, string, string) error { return nil }
 	r := &teardownRig{home: fakeHome(t)}
 	unreachableKubeContext(t) // the lock and the declaration release fail fast, and say so
 	writeRecord(t, InstanceRecord{Instance: "acme", Provider: "local", Cluster: "c", KubeContext: "kind-c", Managed: true})

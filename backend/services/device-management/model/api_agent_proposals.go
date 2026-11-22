@@ -468,7 +468,7 @@ func (api *Api) AgentProposals(ctx context.Context, criteria AgentProposalSearch
 	if criteria.State != nil && !actiongate.State(*criteria.State).Valid() {
 		return nil, fmt.Errorf("unknown proposal state %q", *criteria.State)
 	}
-	if criteria.Kind != nil && !actiongate.Kind(*criteria.Kind).Valid() {
+	if criteria.Kind != nil && !alarmProposalKind(*criteria.Kind) {
 		return nil, fmt.Errorf("unknown proposal kind %q", *criteria.Kind)
 	}
 	results := make([]AgentProposal, 0)
@@ -693,4 +693,9 @@ func (api *Api) ExpireAgentProposals(ctx context.Context) (int64, error) {
 		api.AgentMetrics.expired.Add(float64(n))
 	}
 	return n, err
+}
+
+// alarmProposalKind is this area's vocabulary; command proposals belong to command-delivery.
+func alarmProposalKind(kind string) bool {
+	return kind == string(actiongate.KindAlarmAck) || kind == string(actiongate.KindAlarmClear)
 }

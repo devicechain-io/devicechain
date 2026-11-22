@@ -45,6 +45,9 @@ namespace DeviceChain.Harborpulse.Live
         /// <summary>Set when the session cannot go on; the scene shows it and does not pretend to be live.</summary>
         public string Failure { get; private set; }
 
+        /// <summary>CONTROL (-hp-control-no-cause), set before Start: the director reads commands without their recorded cause.</summary>
+        public bool OmitCommandCause { get; set; }
+
         public RunnerConfig Config { get; private set; }
         public ObservedState Observed { get; private set; }
         public ObserverStatus ObserverStatus { get; } = new ObserverStatus();
@@ -115,7 +118,7 @@ namespace DeviceChain.Harborpulse.Live
                 Observed = new ObservedState(DateTimeOffset.UtcNow);
                 observer = new PlatformObserver(cfg.Value, broker, watched, Observed, ObserverStatus);
                 reads = new HarborPlatformReads(Config, broker, layout, id => TryToken(id, out var t) ? t : null);
-                directorReads = new DirectorReads(Config, broker, layout, id => TryToken(id, out var t) ? t : null, ObserverStatus);
+                directorReads = new DirectorReads(Config, broker, layout, id => TryToken(id, out var t) ? t : null, ObserverStatus, OmitCommandCause);
                 observer.Watch += directorReads.Watch;
                 observer.Start();
                 Stage = "observing";

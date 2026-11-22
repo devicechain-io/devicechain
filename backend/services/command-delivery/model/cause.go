@@ -24,8 +24,9 @@ const (
 // raiseAlarm action's guard passed and its key resolved); it does not assert that the alarm was
 // created or applied. RULE: the rule targeted no alarm.
 const (
-	CauseKindAlarm = "ALARM"
-	CauseKindRule  = "RULE"
+	CauseKindAlarm    = "ALARM"
+	CauseKindRule     = "RULE"
+	CauseKindProposal = "PROPOSAL"
 )
 
 // maxCauseText bounds the free-length cause strings (the rule id and the alarm key). A default alarm
@@ -115,7 +116,7 @@ type CommandCause struct {
 
 // Cause returns the command's recorded cause, or nil when it has none.
 func (c *Command) Cause() *CommandCause {
-	if !c.CauseKind.Valid {
+	if !c.CauseKind.Valid || (c.CauseKind.String != CauseKindAlarm && c.CauseKind.String != CauseKindRule) {
 		return nil
 	}
 	out := &CommandCause{
@@ -153,4 +154,30 @@ func RuleTokens(ruleID string) (profileToken, ruleToken string, ok bool) {
 		return "", "", false
 	}
 	return profileToken, ruleToken, true
+}
+
+// CommandCauseDetails is the additive cause projection. ProposalId always comes
+// from the same proposal_token column as the navigation link, never metadata.
+type CommandCauseDetails struct {
+	Kind       string
+	ProposalId *string
+	Detection  *CommandCause
+}
+
+// CauseDetails withholds unknown variants and corrupt proposal rows.
+func (c *Command) CauseDetails() *CommandCauseDetails {
+	if !c.CauseKind.Valid {
+		return nil
+	}
+	switch c.CauseKind.String {
+	case CauseKindAlarm, CauseKindRule:
+		return &CommandCauseDetails{Kind: c.CauseKind.String, Detection: c.Cause()}
+	case CauseKindProposal:
+		if !c.ProposalToken.Valid {
+			return nil
+		}
+		return &CommandCauseDetails{Kind: CauseKindProposal, ProposalId: &c.ProposalToken.String}
+	default:
+		return nil
+	}
 }
