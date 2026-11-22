@@ -5,7 +5,9 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -44,6 +46,8 @@ var instancesCmd = &cobra.Command{
 	Short: "Inspect the DeviceChain instances on this machine",
 }
 
+var instancesOutput string
+
 var instancesListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the instances bootstrapped on this machine and the clusters they live in",
@@ -57,9 +61,18 @@ instance bootstrapped with --kube-context.
 
 A row reading "cluster gone" is an instance whose cluster has been deleted out from
 under it, leaving only local state. That is the normal end state of a validation rig
-run, and clearing it is what ` + "`dcctl destroy`" + ` does.`,
+run, and clearing it is what ` + "`dcctl destroy`" + ` does.
+
+-o json prints an array with one object per instance (instance, namespace, provider, cluster,
+kubeContext, status, hasRecord) and nothing else on stdout; an empty array when there are none.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if instancesOutput != "table" && instancesOutput != "json" {
+			return fmt.Errorf("--output must be table or json, not %q", instancesOutput)
+		}
+		if instancesOutput == "json" {
+			return runInstancesListJSON(cmd.Context(), cmd.OutOrStdout())
+		}
 		return runInstancesList(cmd.Context(), os.Stdout)
 	},
 	SilenceUsage: true,
@@ -302,7 +315,50 @@ func runInstancesList(ctx context.Context, out *os.File) error {
 	return w.Flush()
 }
 
+// instanceRow is one instance in `-o json`: the table's columns, by name. An instance with
+// no record has empty provider, cluster and kubeContext and hasRecord false (the table
+// prints "?" there).
+type instanceRow struct {
+	Instance    string `json:"instance"`
+	Namespace   string `json:"namespace"`
+	Provider    string `json:"provider"`
+	Cluster     string `json:"cluster"`
+	KubeContext string `json:"kubeContext"`
+	Status      string `json:"status"`
+	HasRecord   bool   `json:"hasRecord"`
+}
+
+func runInstancesListJSON(ctx context.Context, out io.Writer) error {
+	known, err := bootstrap.ListInstances()
+	if err != nil {
+		return err
+	}
+	return writeInstancesJSON(ctx, out, known, liveProbes)
+}
+
+func writeInstancesJSON(ctx context.Context, out io.Writer, known []bootstrap.KnownInstance, probes listingProbes) error {
+	rows := make([]instanceRow, 0, len(known))
+	for _, k := range known {
+		r := instanceRow{
+			Instance:  k.Instance,
+			Namespace: bootstrap.InstanceNamespace(k.Instance),
+			Status:    instanceStatus(ctx, k, probes),
+			HasRecord: k.HasRecord,
+		}
+		if k.HasRecord {
+			r.Provider = k.Record.Provider
+			r.Cluster = k.Record.Cluster
+			r.KubeContext = k.Record.KubeContext
+		}
+		rows = append(rows, r)
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(rows)
+}
+
 func init() {
+	instancesListCmd.Flags().StringVarP(&instancesOutput, "output", "o", "table", "output format: table or json")
 	instancesCmd.AddCommand(instancesListCmd)
 	rootCmd.AddCommand(instancesCmd)
 }
