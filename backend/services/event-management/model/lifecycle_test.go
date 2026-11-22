@@ -447,6 +447,7 @@ func TestRollupRetentionStatements(t *testing.T) {
 	assert.Equal(t, `SELECT add_retention_policy('"event-management"."measurement_rollups"'::regclass, make_interval(days => ?))`, addRetentionPolicyStmt(RollupAggregate))
 	assert.Equal(t, `SELECT remove_retention_policy('"event-management"."measurement_rollups"'::regclass, if_exists => true)`, removeRetentionPolicyStmt(RollupAggregate))
 	assert.NotContains(t, LifecycleHypertables, RollupAggregate)
+	assert.NotContains(t, LifecycleHypertables, RollupAggregate1h)
 }
 
 func TestRollupRetentionDays(t *testing.T) {
@@ -472,9 +473,13 @@ func TestApplyRollupRetention(t *testing.T) {
 				p.RetentionDays = 30
 			}
 			require.NoError(t, applyRollupRetention(db, p))
-			want := []capturedExec{{sql: removeRetentionPolicyStmt(RollupAggregate)}}
-			if enabled {
-				want = append(want, capturedExec{sql: addRetentionPolicyStmt(RollupAggregate), vars: []interface{}{31}})
+			// Both rollup levels carry the same window.
+			var want []capturedExec
+			for _, aggregate := range []string{RollupAggregate, RollupAggregate1h} {
+				want = append(want, capturedExec{sql: removeRetentionPolicyStmt(aggregate)})
+				if enabled {
+					want = append(want, capturedExec{sql: addRetentionPolicyStmt(aggregate), vars: []interface{}{31}})
+				}
 			}
 			require.Len(t, captured, len(want))
 			for i := range want {
@@ -507,8 +512,9 @@ func TestApplyRollupRetentionFailure(t *testing.T) {
 				assert.Contains(t, err.Error(), RollupAggregate)
 			} else {
 				require.NoError(t, err)
-				require.Len(t, captured, 2)
+				require.Len(t, captured, 4)
 				assert.Equal(t, addRetentionPolicyStmt(RollupAggregate), captured[1].sql)
+				assert.Equal(t, addRetentionPolicyStmt(RollupAggregate1h), captured[3].sql)
 			}
 		})
 	}
