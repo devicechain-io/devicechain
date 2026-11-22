@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dcctl/apiclient"
 	"github.com/devicechain-io/dcctl/deletions"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
@@ -95,7 +95,7 @@ func runTenantDeletionStatus(cmd *cobra.Command, args []string) error {
 	}
 	adminURL := sim.AdminURL(server, tls)
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
-	session := userclient.NewAdminSession(nil, endpoints.UserGraphQL, tdEmail, tdPassword).WithOTP(otpFunc(otpFlag(cmd)))
+	session := apiclient.NewAdminSession(nil, endpoints.UserGraphQL, tdEmail, tdPassword, recordedEndpointVersions(cmd, adminURL)...).WithOTP(otpFunc(otpFlag(cmd)))
 	return tenantDeletionStatus(cmd.Context(), cmd, session, adminURL, args[0], tdEpoch, target)
 }
 

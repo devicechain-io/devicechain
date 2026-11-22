@@ -168,7 +168,8 @@ var (
 	// create-enrollment marker it lacks, and the members it missed for want of it
 	// (model/api_group_enroll_marker.go), so an entity created after the upgrade joins a group
 	// registered before it.
-	CreateEnrollMarkerHeal *core.PeriodicTask
+	CreateEnrollMarkerHeal         *core.PeriodicTask
+	ConfigurationReportMaintenance *core.PeriodicTask
 
 	// DecodeAccountant is the payload decoders' accounting: the per-(tenant, device type) record
 	// budget a failing decoder is held to, the health tallies and the failure samples. It is the
@@ -911,6 +912,18 @@ func initCreateEnrollMarkerHeal() error {
 	return CreateEnrollMarkerHeal.Initialize(context.Background())
 }
 
+const configurationReportMaintenanceInterval = 10 * time.Minute
+
+// Every replica prunes independently, as the classifier above does. The bounded
+// conditional DELETEs count only their own removals, so no leader is required.
+func initConfigurationReportMaintenance() error {
+	ConfigurationReportMaintenance = core.NewPeriodicTask(Microservice.FunctionalArea, "configuration-report-maintenance", configurationReportMaintenanceInterval,
+		func(ctx context.Context) error { return Api.MaintainDeviceConfigurationReports(ctx) },
+		core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("configuration_report_maintenance"),
+		core.WithImmediateFirstPass())
+	return ConfigurationReportMaintenance.Initialize(context.Background())
+}
+
 // decodeAccountingInterval is how often the decoders' health tallies and failure samples are
 // written. A tally is held in memory between passes, so this is also the most a crash can lose of
 // the counts (never of the failed-events records, which are written before the source is acked).
@@ -1175,7 +1188,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		Rdb: &service.RdbSpec{
 			AppendOnly: []any{&model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{},
 				&model.DeviceProfileVersion{}, &model.DeviceProfileActivation{}, &model.EntityGroupVersion{}, &model.AssetTypeVersion{},
-				&model.DeviceConfigurationRevision{}},
+				&model.DeviceConfigurationRevision{}, &model.DeviceConfigurationReport{}},
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Migrations: schema.Migrations,
 			Config:     Configuration.RdbConfiguration,
@@ -1237,6 +1250,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				return err
 			}
 			if err = initCreateEnrollMarkerHeal(); err != nil {
+				return err
+			}
+			if err = initConfigurationReportMaintenance(); err != nil {
 				return err
 			}
 			if err = initDecodeAccounting(); err != nil {
@@ -1376,6 +1392,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err = CreateEnrollMarkerHeal.Start(ctx); err != nil {
 		return err
 	}
+	if err = ConfigurationReportMaintenance.Start(ctx); err != nil {
+		return err
+	}
 
 	// Start flushing the payload decoders' health and failure samples.
 	if DecodeAccounting != nil {
@@ -1497,6 +1516,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := CreateEnrollMarkerHeal.Stop(ctx); err != nil {
 		return err
 	}
+	if err := ConfigurationReportMaintenance.Stop(ctx); err != nil {
+		return err
+	}
 
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
@@ -1567,6 +1589,9 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		return err
 	}
 	if err := CreateEnrollMarkerHeal.Terminate(ctx); err != nil {
+		return err
+	}
+	if err := ConfigurationReportMaintenance.Terminate(ctx); err != nil {
 		return err
 	}
 	if DecodeAccounting != nil {

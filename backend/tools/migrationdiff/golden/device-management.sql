@@ -20,6 +20,7 @@ ALTER SEQUENCE "device-management".detection_rule_scope_refs_id_seq OWNED BY "de
 ALTER SEQUENCE "device-management".detection_rules_id_seq OWNED BY "device-management".detection_rules.id;
 ALTER SEQUENCE "device-management".device_aliases_id_seq OWNED BY "device-management".device_aliases.id;
 ALTER SEQUENCE "device-management".device_claims_id_seq OWNED BY "device-management".device_claims.id;
+ALTER SEQUENCE "device-management".device_configuration_reports_id_seq OWNED BY "device-management".device_configuration_reports.id;
 ALTER SEQUENCE "device-management".device_configuration_revisions_id_seq OWNED BY "device-management".device_configuration_revisions.id;
 ALTER SEQUENCE "device-management".device_configuration_states_id_seq OWNED BY "device-management".device_configuration_states.id;
 ALTER SEQUENCE "device-management".device_credentials_id_seq OWNED BY "device-management".device_credentials.id;
@@ -144,6 +145,9 @@ ALTER TABLE ONLY "device-management".device_aliases ALTER COLUMN id SET DEFAULT 
 ALTER TABLE ONLY "device-management".device_claims
  ADD CONSTRAINT device_claims_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_claims ALTER COLUMN id SET DEFAULT nextval('"device-management".device_claims_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".device_configuration_reports
+ ADD CONSTRAINT device_configuration_reports_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".device_configuration_reports ALTER COLUMN id SET DEFAULT nextval('"device-management".device_configuration_reports_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".device_configuration_revisions
  ADD CONSTRAINT device_configuration_revisions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_configuration_revisions ALTER COLUMN id SET DEFAULT nextval('"device-management".device_configuration_revisions_id_seq'::regclass);
@@ -488,6 +492,7 @@ CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btr
 CREATE INDEX idx_automation_review_break_glass_device_profile_id ON "device-management".automation_review_break_glass USING btree (device_profile_id);
 CREATE INDEX idx_automation_review_break_glass_tenant_id ON "device-management".automation_review_break_glass USING btree (tenant_id);
 CREATE INDEX idx_automation_review_break_glass_txid ON "device-management".automation_review_break_glass USING btree (txid);
+CREATE INDEX idx_configuration_reports_tenant_created ON "device-management".device_configuration_reports USING btree (tenant_id, created_at);
 CREATE INDEX idx_device_credentials_provisioning_profile ON "device-management".device_credentials USING btree (provisioning_profile_id) WHERE (provisioning_profile_id IS NOT NULL);
 CREATE INDEX idx_device_credentials_trust_anchor ON "device-management".device_credentials USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
 CREATE INDEX idx_devices_device_type ON "device-management".devices USING btree (tenant_id, device_type_id) WHERE (deleted_at IS NULL);
@@ -651,6 +656,12 @@ CREATE SEQUENCE "device-management".device_aliases_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".device_claims_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".device_configuration_reports_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -1288,6 +1299,18 @@ CREATE TABLE "device-management".device_claims (
  claimed_by_customer_id bigint,
  claim_secret_digest character varying(128)
 );
+CREATE TABLE "device-management".device_configuration_reports (
+ id bigint NOT NULL,
+ created_at timestamp with time zone NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ device_id bigint NOT NULL,
+ revision bigint NOT NULL,
+ digest character varying(71) NOT NULL,
+ status character varying(16) NOT NULL,
+ errors jsonb,
+ source character varying(16) NOT NULL,
+ CONSTRAINT chk_configuration_reports_status CHECK (((status)::text = ANY ((ARRAY['APPLIED'::character varying, 'REJECTED'::character varying])::text[])))
+);
 CREATE TABLE "device-management".device_configuration_revisions (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -1310,7 +1333,12 @@ CREATE TABLE "device-management".device_configuration_states (
  reported_status character varying(16),
  reported_errors jsonb,
  reported_at timestamp with time zone,
- last_sync_at timestamp with time zone
+ last_sync_at timestamp with time zone,
+ captured_revision bigint,
+ captured_status character varying(16),
+ capture_gap_through bigint,
+ capture_complete_since timestamp with time zone,
+ captured_reported_at timestamp with time zone
 );
 CREATE TABLE "device-management".device_credential_chain_links (
  credential_id bigint NOT NULL,
@@ -1905,6 +1933,7 @@ CREATE UNIQUE INDEX uix_automation_reviews_request ON "device-management".automa
 CREATE UNIQUE INDEX uix_automation_reviews_tenant_token ON "device-management".automation_reviews USING btree (tenant_id, token);
 CREATE UNIQUE INDEX uix_command_definitions_tenant_profile_key ON "device-management".command_definitions USING btree (tenant_id, device_profile_id, command_key) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_command_definitions_tenant_token ON "device-management".command_definitions USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_configuration_reports_device_revision_status ON "device-management".device_configuration_reports USING btree (device_id, revision, status);
 CREATE UNIQUE INDEX uix_customer_types_tenant_token ON "device-management".customer_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_customers_tenant_token ON "device-management".customers USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_dcr_device_revision ON "device-management".device_configuration_revisions USING btree (device_id, revision);

@@ -169,6 +169,7 @@ func (api *Api) PullCommands(ctx context.Context, deviceToken string, limit int)
 		Where("(batch_id IS NULL OR batch_id NOT IN (?))", api.cancelledBatchIds(ctx)).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
 		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
+		Scopes(api.agentDispatchScope(ctx)).
 		Order("id ASC").
 		Limit(limit).
 		Find(&candidates)
@@ -268,6 +269,7 @@ func (api *Api) claimForPull(ctx context.Context, c *Command, deviceToken string
 		Where("(batch_id IS NULL OR batch_id NOT IN (?))", api.cancelledBatchIds(ctx)).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
 		Where("NOT EXISTS (?)", api.deletedCovers(ctx))
+	claim = api.withAgentDispatchFence(ctx, claim)
 	if c.Status == CommandSent.String() {
 		// A re-handed command: only the dispatch the read saw may be replaced.
 		claim = claim.Where("status = ? AND dispatch_nonce = ? AND delivered_time IS NULL",

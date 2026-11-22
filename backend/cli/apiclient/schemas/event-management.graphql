@@ -1,0 +1,1001 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+#
+# Event Management GraphQL Schema
+#
+
+"""
+Where one page of search results sits within the full result set. Positions are 1-based and
+inclusive.
+"""
+# Pagination info for search results.
+type SearchResultsPagination {
+    """Position of the first result of this page within the full result set (1-based)."""
+    pageStart: Int
+    """
+    Position of the last result of this page within the full result set (1-based, inclusive).
+    When a total is included, capped at totalRecords.
+    """
+    pageEnd: Int
+    """Number of records matching the criteria across all pages."""
+    totalRecords: Int
+    """Whether another page follows this one. Always set by event list queries; with the default includeTotal it equals pageEnd < totalRecords."""
+    hasMore: Boolean
+}
+
+"""
+One relationship anchor of an event: an entity the event is queryable by, such as the customer
+or area the device was assigned to when the event arrived.
+"""
+# One anchor of an event: a tracked-relationship target the event is queryable by.
+# Both the type (an entity class, e.g. "customer") and the token (that entity's
+# stable per-tenant token) name the target across the service seam — never a
+# device-management row id (ADR-044).
+type EventAnchorRef {
+    """The entity class of the anchor: one of device, asset, area, customer or group."""
+    type: String!
+    """The anchored entity's token, unique within the tenant."""
+    token: String!
+}
+
+"""
+A stored event envelope: one message from one device, identified by the device's token. The
+readings it carries are stored separately and are read with locationEvents, measurementEvents
+and alertEvents.
+"""
+# A persisted base event with token references resolved. The originating device is
+# named by its token (ADR-044). Its tracked-relationship targets are recorded as a
+# set of anchors in event_anchors (ADR-013 addendum 2026-07-01), exposed as `anchors`
+# and queryable via the (type, token) search filter below; an event with no
+# assignment simply has no anchor rows.
+type Event {
+    """
+    Opaque identifier of the event, derived from its content: the same event delivered twice has
+    the same id. Serialized as a hexadecimal string.
+    """
+    id: ID!
+    """Token of the device that sent the event."""
+    deviceToken: String!
+    """
+    Kind of event, as an integer: 0 new relationship, 1 location, 2 measurement, 3 alert, 4
+    state change, 5 command invocation, 6 command response.
+    """
+    eventType: Int!
+    """
+    When the event happened, as an RFC 3339 timestamp: the device's own time where it reported
+    one, otherwise the time the platform received it.
+    """
+    occurredTime: String
+    """
+    When the platform received the event, as an RFC 3339 timestamp. For events arriving on the
+    platform's MQTT broker this is the time the broker stored the message; otherwise the time
+    the ingest path took the event in.
+    """
+    # When the platform RECEIVED the event: for MQTT on the platform broker, the time the
+    # broker stored the message; otherwise when the ingest path took it in.
+    processedTime: String
+    """Identifier of the event source (inbound transport) that received the event."""
+    source: String!
+    """
+    Alternate identifier supplied by the sender, which is part of the event's identity: it lets
+    a device keep apart two otherwise identical events. Null if none was supplied.
+    """
+    altId: String
+    """
+    The relationship anchors recorded for this event. Empty for an event from a device that had
+    no assignment when it arrived. A member whose access is limited to some customers sees only
+    the anchors naming one of them.
+    """
+    anchors: [EventAnchorRef!]!
+}
+
+"""
+A stored location fix. Coordinates are WGS84 decimal degrees; every coordinate is optional
+because a device reports only what its receiver knows, and null means not reported (not 0).
+"""
+# A persisted location event.
+type LocationEvent {
+    """
+    Opaque identifier of this location row, derived from its content. Serialized as a
+    hexadecimal string.
+    """
+    id: ID!
+    """Token of the device that reported the fix."""
+    deviceToken: String!
+    """Kind of event, as an integer; always 1 for a location event."""
+    eventType: Int!
+    """
+    When the fix was taken, as an RFC 3339 timestamp: the sample's own time where the device
+    reported one, otherwise the time of the message that carried it.
+    """
+    occurredTime: String
+    """Latitude in decimal degrees; null when not reported."""
+    latitude: Float
+    """Longitude in decimal degrees; null when not reported."""
+    longitude: Float
+    """Elevation in metres; null when not reported."""
+    elevation: Float
+    """Horizontal accuracy of the fix in metres; null when not reported."""
+    # Horizontal accuracy in metres, ground speed in metres per second, and
+    # heading in degrees clockwise from true north in [0, 360). All optional:
+    # a device reports what its receiver knows.
+    accuracy: Float
+    """Ground speed in metres per second; null when not reported."""
+    speed: Float
+    """
+    Heading in degrees clockwise from true north, in the range 0 to 360 (360 excluded); null
+    when not reported.
+    """
+    heading: Float
+}
+
+"""
+A measurement: one named reading from a device (a message carrying several readings produces
+one row each). Returned by measurementEvents (stored rows) and measurementStream (live
+readings). Unit and data type are copied from the bound metric definition when the reading is
+stored, so the row describes itself and does not change if the definition is later edited.
+"""
+# A persisted measurement event (one row per measurement entry). unit and dataType
+# are denormalized from the bound metric definition (ADR-016) so the reading is
+# self-describing; both are null for an undeclared measurement. dataType lets a
+# consumer interpret value — e.g. render a 0/1 BOOLEAN measurement as false/true.
+type MeasurementEvent {
+    """
+    Opaque identifier of this measurement row, derived from its content. Serialized as a
+    hexadecimal string.
+    """
+    id: ID!
+    """Token of the device that reported the reading."""
+    deviceToken: String!
+    """Kind of event, as an integer; always 2 for a measurement."""
+    eventType: Int!
+    """
+    When the reading was taken, as an RFC 3339 timestamp: the sample's own time where the device
+    reported one, otherwise the time of the message that carried it.
+    """
+    occurredTime: String
+    """Name of the measurement, for example a metric key such as temperature."""
+    name: String!
+    """
+    The numeric value of the reading. A stored measurement always has one, because a non-numeric
+    reading is rejected and not stored; on measurementStream such a reading is delivered with a
+    null value.
+    """
+    value: Float
+    """
+    Id of the metric definition the reading was bound to, as a decimal string; null for an
+    undeclared measurement.
+    """
+    classifier: String
+    """
+    Unit of measure copied from the bound metric definition; null for an undeclared measurement.
+    """
+    unit: String
+    """
+    Data type copied from the bound metric definition; it tells a consumer how to read value,
+    for example to render a 0/1 BOOLEAN as false/true. Null for an undeclared measurement.
+    """
+    dataType: String
+}
+
+"""
+A stored alert reported by a device (a message carrying several alerts produces one row each).
+This is an alert the device sent, not an alarm raised by a detection rule.
+"""
+# A persisted alert event (one row per alert entry).
+type AlertEvent {
+    """
+    Opaque identifier of this alert row, derived from its content. Serialized as a hexadecimal
+    string.
+    """
+    id: ID!
+    """Token of the device that reported the alert."""
+    deviceToken: String!
+    """Kind of event, as an integer; always 3 for an alert."""
+    eventType: Int!
+    """
+    When the alert happened, as an RFC 3339 timestamp: the alert's own time where the device
+    reported one, otherwise the time of the message that carried it.
+    """
+    occurredTime: String
+    """The alert's type, as named by the device."""
+    type: String!
+    """The alert's level, a non-negative integer as reported by the device."""
+    level: Int!
+    """The alert's text, as sent by the device; an empty string when it sent none."""
+    message: String
+    """The alert's source, as sent by the device; an empty string when it sent none."""
+    source: String
+}
+
+"""
+A stored presence transition of a device: the history behind its live connectivity state. One
+row per transition the device's transport reported, so it shows when the device connected, when
+it disconnected, and when the platform stopped trusting the transport to report for it.
+"""
+type StateChangeEvent {
+    """Token of the device the transition belongs to."""
+    deviceToken: String!
+    """Kind of event, as an integer; always 4 for a state change."""
+    eventType: Int!
+    """When the transition happened, as an RFC 3339 timestamp."""
+    occurredTime: String
+    """
+    The transition: CONNECTED, DISCONNECTED, or DEMOTED. DEMOTED is not a connectivity edge: it
+    records that the device was released back to inferred presence.
+    """
+    state: String!
+    """Why the transport reported the transition, when it said; null otherwise."""
+    reason: String
+    """
+    The transport's connect epoch for the session the transition belongs to, as a decimal
+    string. "0" when the transport reports none.
+    """
+    sessionId: String!
+}
+
+"""A relationship anchor to filter events by: events recorded against this entity."""
+# Relationship anchor used to filter events. The type names an entity class
+# (e.g. "customer", "area") and the token is that entity's stable per-tenant token;
+# together they filter the (anchorType, anchorToken) columns on event_anchors
+# (ADR-044).
+input EventAnchor {
+    """Entity class: one of device, asset, area, customer or group. Any other value is an error."""
+    type: String!
+    """Token of the entity, unique within the tenant."""
+    token: String!
+}
+
+"""
+Filters and paging for event searches. All supplied filters must match. Results are newest first
+by occurred time.
+"""
+# Criteria used when searching for events. Times are RFC3339 strings.
+input EventSearchCriteria {
+    """
+    Omitted or true: totalRecords is the exact count of matching events (the default).
+    False: no count is run, totalRecords is null, pageStart/pageEnd describe the rows
+    returned, and hasMore says whether another page follows. Use false for large histories.
+    An empty count-free page has pageEnd = pageStart - 1 and hasMore false.
+    """
+    includeTotal: Boolean
+    """Page to return, starting at 1; values below 1 are treated as 1."""
+    pageNumber: Int!
+    """Results per page. Values below 1 become 100; values above 1000 are capped at 1000."""
+    pageSize: Int!
+    """Only events from this device."""
+    deviceToken: String
+    """
+    Only events of these types, as integers (0 new relationship, 1 location, 2 measurement, 3
+    alert, 4 state change, 5 command invocation, 6 command response). An empty list applies no
+    type filter.
+    """
+    eventTypes: [Int!]
+    """
+    Only events that occurred at or after this instant (inclusive), as an RFC 3339 timestamp.
+    Omit for no lower bound. A value that is not RFC 3339 is an error.
+    """
+    startTime: String
+    """
+    Only events that occurred at or before this instant (inclusive), as an RFC 3339 timestamp.
+    Omit for no upper bound. A value that is not RFC 3339 is an error.
+    """
+    endTime: String
+    """Only events recorded against this entity."""
+    anchor: EventAnchor
+}
+
+"""One page of event envelopes."""
+# Search results returned from a base event query.
+type EventSearchResults {
+    """The events on this page, newest first."""
+    results: [Event!]!
+    """Where this page sits within all matching events."""
+    pagination: SearchResultsPagination!
+}
+
+"""One page of location events."""
+# Search results returned from a location event query.
+type LocationEventSearchResults {
+    """The location events on this page, newest first."""
+    results: [LocationEvent!]!
+    """Where this page sits within all matching location events."""
+    pagination: SearchResultsPagination!
+}
+
+"""One page of presence transitions."""
+type StateChangeEventSearchResults {
+    """The transitions on this page, newest first."""
+    results: [StateChangeEvent!]!
+    """Where this page sits within all matching transitions."""
+    pagination: SearchResultsPagination!
+}
+
+"""One page of measurement events."""
+# Search results returned from a measurement event query.
+type MeasurementEventSearchResults {
+    """The measurement events on this page, newest first."""
+    results: [MeasurementEvent!]!
+    """Where this page sits within all matching measurement events."""
+    pagination: SearchResultsPagination!
+}
+
+"""One page of alert events."""
+# Search results returned from an alert event query.
+type AlertEventSearchResults {
+    """The alert events on this page, newest first."""
+    results: [AlertEvent!]!
+    """Where this page sits within all matching alert events."""
+    pagination: SearchResultsPagination!
+}
+
+"""
+Filters for a server-side, time-bucketed measurement aggregation. The device, event type, time
+range and anchor filters work as in EventSearchCriteria, with an added filter on measurement
+name. startTime is required; a range that would produce more than 10,000 buckets, or a
+result of more than 50,000 rows (one per bucket per measurement name), is refused with
+LIMIT_EXCEEDED, so narrow the range, filter on a name or widen intervalSeconds.
+"""
+# Criteria for a server-side, time-bucketed measurement aggregation. Reuses the
+# event search filters (device, event types, time range, anchor) plus an optional
+# measurement-name filter. intervalSeconds is the time_bucket width and must be
+# >= 1. startTime is required (endTime defaults to now). A request whose range
+# would produce more than 10,000 buckets is refused with LIMIT_EXCEEDED, and so is
+# one that would return more than 50,000 rows: one row per bucket per measurement
+# name, so with no name filter the buckets are multiplied by the number of distinct
+# measurement names that match the read's filters. Filter on a name, narrow the
+# range or widen the interval to stay under it.
+input MeasurementAggregationCriteria {
+    """Only measurements from this device."""
+    deviceToken: String
+    """Only measurements with this name. Omit to aggregate every measurement name separately."""
+    name: String
+    """
+    Only readings whose event type is in this list, as integers. An empty list applies no type
+    filter.
+    """
+    eventTypes: [Int!]
+    """
+    Only readings that occurred at or after this instant, as an RFC 3339 timestamp. Required;
+    omitting it is an error. When the aggregation is served from one-minute summaries (see intervalSeconds)
+    the bound is applied at whole-minute granularity, so readings earlier in the same minute are
+    included.
+    """
+    startTime: String
+    """
+    Only readings that occurred at or before this instant, as an RFC 3339 timestamp. Omit to use
+    the current time. Must not be before startTime. When the aggregation is served from one-minute summaries (see intervalSeconds)
+    the bound is applied at whole-minute granularity, so readings later in the same minute are
+    included.
+    """
+    endTime: String
+    """
+    Only measurements recorded against this entity. Anchored aggregations are computed from the
+    individual readings.
+    """
+    anchor: EventAnchor
+    """
+    Width of each time bucket in seconds; must be 1 or more (smaller is an error). A width that
+    is a multiple of 60 without an anchor filter is normally served from pre-computed one-minute
+    summaries (an operator setting can turn that off); any other width is computed from the
+    individual readings. Bucket boundaries are fixed instants shared by every query of the same width, not aligned to startTime.
+    """
+    intervalSeconds: Int!
+}
+
+"""
+Aggregated values of one measurement name over one time bucket. Every standard aggregate is
+returned so a single query can drive a chart under any aggregation.
+"""
+# One time bucket of aggregated measurement values for a single measurement name.
+# bucketStart is the RFC3339 bucket start. Every standard aggregate is returned
+# so one query can drive a chart under any aggregation; avg/min/max/sum are null
+# for an all-null bucket and count is the number of non-null values.
+type MeasurementBucket {
+    """Start of the bucket, as an RFC 3339 timestamp."""
+    bucketStart: String!
+    """Name of the measurement the bucket aggregates."""
+    name: String!
+    """Average of the bucket's values; null when the bucket holds no non-null values."""
+    avg: Float
+    """Smallest value in the bucket; null when the bucket holds no non-null values."""
+    min: Float
+    """Largest value in the bucket; null when the bucket holds no non-null values."""
+    max: Float
+    """Sum of the bucket's values; null when the bucket holds no non-null values."""
+    sum: Float
+    """Number of non-null values in the bucket."""
+    count: Int!
+}
+
+"""
+One input a draft calculated-metric formula reads: a measured metric's key and data type.
+"""
+input CalculatedInput {
+    """The measured metric's key, as readings and the formula name it."""
+    key: String!
+    """The measured metric's data type: DOUBLE, INT or BOOLEAN."""
+    dataType: String!
+}
+
+"""One device constant a draft calculated-metric formula reads as `device.name`."""
+input CalculatedConstant {
+    """The constant's name, as the formula spells it after `device.`."""
+    key: String!
+    """The number the device's metadata holds under that name, as text such as `1.02`."""
+    value: String!
+}
+
+"""One input of one evaluated sample, as the formula read it from storage."""
+type CalculatedInputValue {
+    """The input's key."""
+    key: String!
+    """The stored value the formula read, as text."""
+    value: String!
+}
+
+"""
+One sample a draft formula was evaluated over: the readings of one stored event that share
+one instant. Exactly one of value and skippedReason is set.
+"""
+type CalculatedSample {
+    """When the readings were taken, as an RFC 3339 timestamp with fractional seconds."""
+    occurredTime: String!
+    """Identifier of the stored event the readings belong to, as a hexadecimal string."""
+    eventId: String!
+    """The inputs the sample held, as the formula read them."""
+    inputs: [CalculatedInputValue!]!
+    """What the formula gave for the sample, as text; null when it produced no value."""
+    value: String
+    """
+    Why the formula produced no value for the sample: missing_input, invalid_input,
+    non_finite, div_zero, overflow, range, unstorable or eval_error. Null when it produced one.
+    """
+    skippedReason: String
+}
+
+"""How many samples a draft formula produced no value for, for one reason."""
+type CalculatedSkipCount {
+    """The skip reason, as in CalculatedSample.skippedReason."""
+    reason: String!
+    """How many samples were skipped for it."""
+    count: Int!
+}
+
+"""
+A draft formula evaluated over a device's stored readings. Inputs are read back from storage,
+which keeps a reading to inputDecimalPlaces decimal places, so a value here can differ from the
+one computed from the full-precision reading when it was recorded. Nothing here is stored.
+"""
+type CalculatedEventsResult {
+    """Every evaluated sample in the range, oldest first."""
+    samples: [CalculatedSample!]!
+    """How many samples produced a value."""
+    computed: Int!
+    """How many samples produced no value, by reason; only reasons that occurred are listed."""
+    skipped: [CalculatedSkipCount!]!
+    """How many decimal places stored inputs keep."""
+    inputDecimalPlaces: Int!
+}
+
+"""
+Where a calculated-metric backfill job stands. QUEUED and RUNNING are active; a tenant may have
+one active job. SUCCEEDED, CANCELLED and FAILED are final.
+"""
+enum CalculatedMetricBackfillStatus {
+    """Accepted and waiting for the worker."""
+    QUEUED
+    """The worker is filling it."""
+    RUNNING
+    """Every device and window was filled or skipped, and the rollup was refreshed."""
+    SUCCEEDED
+    """Cancelled. Rows already written stay."""
+    CANCELLED
+    """Stopped on an error, named in failure. Rows already written stay; start a new job to resume."""
+    FAILED
+}
+
+"""How many (sample, metric) pairs a backfill skipped for one reason."""
+type CalculatedMetricBackfillSkipCount {
+    """
+    The reason: a formula skip reason as in CalculatedSample.skippedReason, or `ambiguous` when a
+    sample holds one of the formula's inputs twice with different values, so no single value can
+    be chosen for it.
+    """
+    reason: String!
+    """How many pairs were skipped for it. A Float, because a long job overflows a 32-bit Int."""
+    count: Float!
+}
+
+"""
+One calculated-metric backfill: a job that computes the metrics a published profile version
+defines for stored readings that have no value for them, and writes the missing values. It never
+changes a value that is already stored. Every counter is a Float, because a long job overflows a
+32-bit Int, and every counter is exact across restarts.
+"""
+type CalculatedMetricBackfill {
+    """The job's token, unique within the tenant."""
+    token: String!
+    """Where the job stands."""
+    status: CalculatedMetricBackfillStatus!
+    """The token of the device profile whose version is filled."""
+    profileToken: String!
+    """The published version number whose formulas are filled."""
+    profileVersion: Int!
+    """The metrics being filled."""
+    metricKeys: [String!]!
+    """
+    Notes about what the fill will and will not do, given when the job was accepted: a metric
+    whose formula differs from an earlier version's, or one that reads an unselected metric that
+    may be stored under an earlier formula.
+    """
+    warnings: [String!]!
+    """Start of the filled range, an RFC 3339 timestamp in UTC."""
+    from: String!
+    """End of the filled range, an RFC 3339 timestamp in UTC."""
+    to: String!
+    """How many devices the job covers; null until the first device page has been read."""
+    devicesTotal: Float
+    """How many devices are finished."""
+    devicesDone: Float!
+    """Devices done as a fraction of devicesTotal, 0 to 1; null while devicesTotal is unknown."""
+    progress: Float
+    """Samples evaluated: the readings of one event at one instant."""
+    samples: Float!
+    """Pairs of a sample and a metric that produced a value or already held one."""
+    computed: Float!
+    """Rows written."""
+    written: Float!
+    """Pairs whose row already existed, so nothing was written."""
+    alreadyPresent: Float!
+    """Device-batch and chunk-window pairs skipped because the chunk is compressed."""
+    windowsCompressed: Float!
+    """Device-batch and chunk-window pairs skipped because retention may drop the chunk."""
+    windowsBeyondRetention: Float!
+    """Windows whose rollup was refreshed."""
+    windowsRefreshed: Float!
+    """Pairs that produced no value, by reason; only reasons that occurred are listed."""
+    skipped: [CalculatedMetricBackfillSkipCount!]!
+    """What the fill read: stored readings keep a fixed number of decimal places, so a value here can differ from one computed when the reading arrived."""
+    storedInputPrecision: String!
+    """Why the job failed; null otherwise."""
+    failure: String
+    """When the job was accepted, an RFC 3339 timestamp in UTC."""
+    createdAt: String!
+    """Who started it."""
+    createdBy: String
+    """When the worker first took it; null while QUEUED."""
+    startedAt: String
+    """When it reached a final status; null while active."""
+    finishedAt: String
+    """When a cancel was requested of a running job; null otherwise."""
+    cancelRequestedAt: String
+}
+
+"""Whether this instance can run a calculated-metric backfill."""
+type CalculatedMetricBackfillAvailability {
+    """True when a start is not refused for the instance's own state."""
+    available: Boolean!
+    """
+    Why backfill is unavailable, for a person to read; null when available. It names the lever
+    (the worker is switched off, or the event store has no connection to spare for it) and never
+    the instance's settings or sizing, which are in the service's startup log.
+    """
+    reason: String
+}
+
+"""One page of backfill jobs, newest first."""
+type CalculatedMetricBackfillConnection {
+    """The jobs on this page."""
+    nodes: [CalculatedMetricBackfill!]!
+    """The cursor to pass as after for the next page; null on the last page."""
+    nextCursor: String
+}
+
+"""What to fill."""
+input CalculatedMetricBackfillInput {
+    """The token of the device profile."""
+    profileToken: String!
+    """The published version to fill; omit for the active version. A draft is not a version."""
+    version: Int
+    """
+    The calculated metrics to fill. Omit to fill the metrics that are new in the version, those
+    its previous published version did not calculate; a version with none then needs them named.
+    A metric whose formula changed since an earlier version may be named, and is flagged in
+    warnings.
+    """
+    metricKeys: [String!]
+    """Start of the range, an RFC 3339 timestamp. Not older than retention allows."""
+    from: String!
+    """End of the range, an RFC 3339 timestamp, not in the future; after from, by at most 90 days."""
+    to: String!
+    """Only these devices, at most 1000; omit to fill every device of the profile."""
+    deviceTokens: [String!]
+}
+
+"""
+Why the platform refused an event or could not store it. UNKNOWN is a reason this version of the
+API does not name: either none was given, or a newer part of the platform wrote one, and then
+reasonCode carries its number. A reason is never reported as a different one.
+"""
+enum FailedEventReason {
+    """The message could not be read, or a value in it was refused."""
+    INVALID
+    """A platform service the event needed could not be reached, or storing the event failed."""
+    API_CALL_FAILED
+    """No device has the token the sender named."""
+    DEVICE_NOT_FOUND
+    """The credential the device presented was missing or wrong."""
+    UNAUTHENTICATED
+    """The device exists and an operator has disabled it."""
+    DEVICE_DISABLED
+    """A gateway published for a device that is not assigned to it, or that does not exist."""
+    NOT_GATEWAY_CHILD
+    """An integration's event named a device that no longer holds the alias it was resolved from."""
+    INTEGRATION_ALIAS_MISMATCH
+    """A payload decoder refused an integration's uplink; the start of the error text names why (for example no_section or invalid_output)."""
+    DECODE_FAILED
+    """No reason, or one this version does not name; see reasonCode."""
+    UNKNOWN
+}
+
+"""
+Whether the original event behind a failure record is still held on the platform's failure stream.
+The stream keeps records for a bounded time, the same bound that rolls its oldest records off
+unread, so a held original turns EXPIRED sooner or later; a record that is EXPIRED stays listed
+here and says so, rather than reading as an error or as empty. This API never returns the
+original, in any state.
+"""
+enum FailedEventPayloadStatus {
+    """The stream still holds the original."""
+    AVAILABLE
+    """The stream has discarded the original to make room; only this summary remains."""
+    EXPIRED
+    """The record never held an original (the platform could not read the message and kept nothing of it, or this is the overflow row); it will not become AVAILABLE or EXPIRED."""
+    NOT_RETAINED
+    """The stream could not be asked just now. None of the above is claimed."""
+    UNKNOWN
+}
+
+"""Filters and paging for the failed-event list. All supplied filters must match."""
+input FailedEventSearchCriteria {
+    """Page to return, starting at 1; values below 1 are treated as 1."""
+    pageNumber: Int!
+    """Results per page. Values below 1 become 100; values above 100 are capped at 100."""
+    pageSize: Int!
+    """Only failures for this reason. UNKNOWN selects every reason this version does not name."""
+    reason: FailedEventReason
+    """
+    Only failures for this device token, as the sender named it (a token longer than 128 bytes
+    is matched as the platform stored it, cut to 128). The overflow row has no token and cannot be
+    filtered for: "*" is refused with INVALID_VALUE.
+    """
+    deviceToken: String
+    """
+    Only failures recorded at or after this instant, an RFC 3339 timestamp. Defaults to, and is
+    capped at, 31 days ago.
+    """
+    since: String
+    """Only failures recorded at or before this instant, an RFC 3339 timestamp."""
+    until: String
+}
+
+"""
+One record of an event the platform refused or could not store. The event itself is not kept
+here: a record says what was refused, for whom and why. Nothing here can be re-sent or replayed;
+fix the cause and the device's next event will be accepted.
+
+To keep a misbehaving fleet from filling the list, at most 10 records are kept per device and
+reason in any hour; the rest are counted in suppressed on the newest of them, and past 1000
+records an hour for one reason the remainder are counted on a single row with no deviceToken.
+"""
+type FailedEvent {
+    """An opaque identifier of this record, stable across requests. It carries no meaning."""
+    id: ID!
+    """When the platform recorded the failure (RFC 3339), not when the device sent the event."""
+    occurredTime: String!
+    """The part of the platform that refused the event."""
+    sourceArea: String!
+    """Why the event was refused."""
+    reason: FailedEventReason!
+    """The reason's number, for a reason the enum calls UNKNOWN."""
+    reasonCode: Int!
+    """
+    The device token the SENDER named. It is the sender's claim, not proof the device exists:
+    for DEVICE_NOT_FOUND it names no device at all. Null when the record named none, and for the
+    row that counts a reason's overflow.
+    """
+    deviceToken: String
+    """The event type the sender named (see EventSearchCriteria.eventTypes), when there was one."""
+    eventType: Int
+    """What went wrong, in the platform's words. Bounded to 512 bytes."""
+    error: String!
+    """The correlation id the failed event carried, for matching it to a log line."""
+    correlation: String!
+    """How many further records of this reason from this device the hourly bound folded into this one."""
+    suppressed: Int!
+    """True for the row that counts a reason's records beyond the 1000-an-hour bound."""
+    overflow: Boolean!
+    """Whether the original event was kept and is still held on the failure stream; see FailedEventPayloadStatus."""
+    payloadStatus: FailedEventPayloadStatus!
+}
+
+"""One page of failed-event records."""
+type FailedEventSearchResults {
+    """The records on this page, newest first."""
+    results: [FailedEvent!]!
+    """Where this page sits within all matching records."""
+    pagination: SearchResultsPagination!
+}
+
+"""One device's failures for a reason."""
+type FailedEventDeviceCount {
+    """The token the sender named."""
+    deviceToken: String!
+    """Records for this device, including those folded into a count."""
+    records: Int!
+}
+
+"""One reason's line of the failure summary."""
+type FailedEventReasonCount {
+    """The reason."""
+    reason: FailedEventReason!
+    """The reason's number, for a reason the enum calls UNKNOWN."""
+    reasonCode: Int!
+    """Every record refused for this reason in the span, including those folded into a count."""
+    records: Int!
+    """Of records, how many were folded into a count rather than kept as a row."""
+    suppressed: Int!
+    """The devices with the most records for this reason, most first (at most 10)."""
+    devices: [FailedEventDeviceCount!]!
+}
+
+# Contains queries executed against model.
+type Query {
+    """
+    Searches stored event envelopes, newest first by occurred time, one page at a time. Requires
+    event:read. A member whose access is limited to some customers sees only
+    events recorded while the device belonged to one of them.
+    """
+    events(
+        """Filters and page to return."""
+        criteria: EventSearchCriteria!
+    ): EventSearchResults!
+    """
+    Searches stored location fixes, newest first by occurred time, one page at a time. Requires
+    location:read, which is separate from event:read. A member whose access is limited to some customers sees only
+    events recorded while the device belonged to one of them.
+    """
+    locationEvents(
+        """Filters and page to return."""
+        criteria: EventSearchCriteria!
+    ): LocationEventSearchResults!
+    """
+    Searches stored measurements, newest first by occurred time, one page at a time. Requires
+    event:read. A member whose access is limited to some customers sees only
+    events recorded while the device belonged to one of them.
+    """
+    measurementEvents(
+        """Filters and page to return."""
+        criteria: EventSearchCriteria!
+    ): MeasurementEventSearchResults!
+    """
+    Searches stored device alerts, newest first by occurred time, one page at a time. Requires
+    event:read. A member whose access is limited to some customers sees only
+    events recorded while the device belonged to one of them.
+    """
+    alertEvents(
+        """Filters and page to return."""
+        criteria: EventSearchCriteria!
+    ): AlertEventSearchResults!
+    """
+    Searches the presence transitions of devices (connected, disconnected, demoted), newest first
+    by occurred time, one page at a time. Filter by deviceToken and bound the range with
+    startTime and endTime. Requires event:read. A member whose access is limited to some
+    customers sees only transitions recorded while the device belonged to one of them.
+    """
+    stateChangeEvents(
+        """Filters and page to return."""
+        criteria: EventSearchCriteria!
+    ): StateChangeEventSearchResults!
+    """
+    Aggregates measurements into fixed-width time buckets (average, minimum, maximum, sum and
+    count) per measurement name, ordered by bucket start and then name. startTime is required,
+    and a request covering more than 10,000 buckets (range / intervalSeconds, rounded up) is
+    refused with LIMIT_EXCEEDED; because buckets align to fixed instants, a result can hold one
+    more bucket per name than that count. A result of more than 50,000 rows (buckets times
+    measurement names) is also refused with LIMIT_EXCEEDED. Returns an empty list when nothing
+    matches. Requires event:read. A member whose access is limited to some customers sees only
+    events recorded while the device belonged to one of them.
+    """
+    bucketedMeasurements(
+        """Filters and bucket width."""
+        criteria: MeasurementAggregationCriteria!
+    ): [MeasurementBucket!]!
+    """
+    Evaluates a DRAFT calculated-metric formula over one device's stored readings, for previewing
+    the formula while it is being written: each sample (the readings of one stored event that
+    share one instant) is evaluated as it would be when readings are recorded, and returned with
+    its inputs and its value or the reason it produced none. The formula is checked as a publish
+    checks it, and an invalid one is refused. Inputs are the values as stored, to
+    inputDecimalPlaces decimal places, so a result can differ from the value computed from the
+    full-precision reading. Only the inputs the formula reads are fetched and returned, so an
+    event holding none of them is not a sample. The range must be longer than zero and at most
+    7 days; a range holding more than 50,000 samples, or more than 250,000 input values, is
+    refused with LIMIT_EXCEEDED rather than truncated. Nothing is stored. Requires event:read. A member whose
+    access is limited to some customers sees only events recorded while the device belonged to
+    one of them.
+    """
+    # Draft-formula history preview (ADR-082). Console-only: the console
+    # sends the draft formula and its inputs' types; nothing computed here is written, streamed
+    # or fed to detection.
+    calculatedEvents(
+        """Token of the device whose readings to evaluate."""
+        deviceToken: String!
+        """The formula, as written on the calculated metric."""
+        expression: String!
+        """The calculated metric's data type: DOUBLE, INT or BOOLEAN."""
+        dataType: String!
+        """
+        The metrics the formula reads, with their data types: measured ones, and calculated
+        ones, whose stored values are read like a measured one's: rounded as stored, and as
+        computed by the formula that was published when each reading arrived.
+        """
+        inputs: [CalculatedInput!]!
+        """Smallest value the metric may take; a result below it is skipped as range."""
+        minValue: Float
+        """Largest value the metric may take; a result above it is skipped as range."""
+        maxValue: Float
+        """
+        The values of the device constants the formula reads as `device.name`, as the device's
+        metadata holds them now, at most 32. Every sample is evaluated with these same values:
+        they are the device's current constants, not the ones its history was recorded under. A
+        constant the formula reads and this omits is absent, so its samples are skipped as
+        missing_input. Omit this when the formula reads none.
+        """
+        constants: [CalculatedConstant!]
+        """Start of the range by occurred time, as an RFC 3339 timestamp."""
+        from: String!
+        """End of the range by occurred time, as an RFC 3339 timestamp; after from, by at most 7 days."""
+        to: String!
+    ): CalculatedEventsResult!
+    """
+    Whether this instance can run a calculated-metric backfill at all, so a client can disable
+    its backfill control up front instead of learning from a refused start. available is false
+    when the backfill worker is switched off, its pool is too small to run, or device-management
+    is not configured; reason then says why, in the same words a refused start carries in
+    UNAVAILABLE. It answers for the instance, not the tenant: a true answer does not promise a
+    start will be accepted (a range, a metric or an already-active job can still refuse it).
+    Requires event:read; customer-scoped callers are refused with FORBIDDEN.
+    """
+    calculatedMetricBackfillAvailability: CalculatedMetricBackfillAvailability!
+    """
+    One calculated-metric backfill job of the tenant. Null when the tenant has none with that
+    token. Requires event:read; customer-scoped callers are refused with FORBIDDEN.
+    """
+    calculatedMetricBackfill(
+        """The job's token."""
+        token: String!
+    ): CalculatedMetricBackfill
+    """
+    The tenant's calculated-metric backfill jobs, newest first, a page at a time. Requires
+    event:read; customer-scoped callers are refused with FORBIDDEN. A first outside 1..100 or an
+    after that was not given by this list is refused with INVALID_VALUE.
+    """
+    calculatedMetricBackfills(
+        """Only the jobs of this profile."""
+        profileToken: String
+        """Only jobs in one of these statuses. At most 5 entries, counting duplicates; longer lists are refused with LIMIT_EXCEEDED. Accepted lists are de-duplicated."""
+        statuses: [CalculatedMetricBackfillStatus!]
+        """Page size, 1 to 100; defaults to 25."""
+        first: Int
+        """The nextCursor of the previous page; omit for the first page."""
+        after: String
+    ): CalculatedMetricBackfillConnection!
+    """
+    The events the platform refused or could not store for this tenant, newest first, a page at a
+    time: the answer to "why is my device's data not showing up". Each record names the reason,
+    the device token the sender claimed and the platform's error. Records are kept for 7 days by
+    default (an operator can change it) and are not a queue: nothing is re-sent. Requires
+    device:write; customer-scoped callers are refused with FORBIDDEN. A since or until that is not
+    RFC 3339, or a deviceToken of "*", is refused with INVALID_VALUE. With no since, the list
+    covers the last 31 days, and an older since is treated as 31 days ago.
+    """
+    failedEvents(
+        """Filters and page to return."""
+        criteria: FailedEventSearchCriteria!
+    ): FailedEventSearchResults!
+    """
+    Counts the tenant's failures per reason since an instant, with the devices with the most of
+    each. Records folded into a count are included. Requires device:write; customer-scoped callers
+    are refused with FORBIDDEN. since is an RFC 3339 timestamp; a value older than 31 days is
+    treated as 31 days ago. Reasons with no records are omitted.
+    """
+    failedEventSummary(
+        """Count failures recorded at or after this instant."""
+        since: String!
+    ): [FailedEventReasonCount!]!
+    """
+    How many events were refused for one claimed device token since an instant, including records
+    folded into a count. Drives "N events from this device were rejected". Requires device:write;
+    customer-scoped callers are refused with FORBIDDEN. A since older than 31 days is treated as
+    31 days ago, and a deviceToken of "*" is refused with INVALID_VALUE.
+    """
+    failedEventCount(
+        """The device token, as the sender names it."""
+        deviceToken: String!
+        """Count failures recorded at or after this instant, an RFC 3339 timestamp."""
+        since: String!
+    ): Int!
+}
+
+"""
+Writes of this service. Readings are written by the ingest pipeline; the only thing the API
+writes is a backfill job.
+"""
+type Mutation {
+    """
+    Starts a backfill: computes the calculated metrics of a published profile version for stored
+    readings that have no value for them, and writes the missing values. It never changes a
+    value that is already stored. The job runs in the background; read it with
+    calculatedMetricBackfill. Requires device:write; customer-scoped callers are refused with
+    FORBIDDEN. Refusals: INVALID_VALUE for a from or to that is not an RFC 3339 timestamp, an
+    empty profileToken or a version below 1, for a range that is empty, in the future, longer than
+    90 days or older than retention allows (it is refused, never shortened), for a metric the
+    version does not calculate or whose formula cannot run, for omitted metricKeys when no metric
+    is new in the version, for more than 1000 devices or an empty device token, and for a device
+    that is not of the profile; NOT_FOUND for an unknown profile or an unpublished version; CONFLICT,
+    naming the active job, when the tenant already has one; UNAVAILABLE when the backfill worker is
+    switched off or cannot run on this instance, or device-management cannot be reached.
+    """
+    startCalculatedMetricBackfill(
+        """The profile, version, metrics, range and devices to fill."""
+        input: CalculatedMetricBackfillInput!
+    ): CalculatedMetricBackfill!
+    """
+    Cancels a backfill. A queued job is cancelled at once; a running job stops at its next commit,
+    so its status reads RUNNING with cancelRequestedAt set until then. Rows already written stay.
+    Requires device:write; customer-scoped callers are refused with FORBIDDEN. NOT_FOUND for a
+    token the tenant has no job for; CONFLICT when the job already finished.
+    """
+    cancelCalculatedMetricBackfill(
+        """The token of the job to cancel."""
+        token: String!
+    ): CalculatedMetricBackfill!
+}
+
+# Live event streams (ADR-037). Each field pushes events to the subscriber as
+# they flow through the resolve pipeline — the same resolved events that are
+# persisted — scoped to the subscriber's tenant. A subscription streams from
+# subscribe time onward with no historical backfill; use the queries for history.
+type Subscription {
+    """
+    Streams measurements as they arrive, live from the moment of subscription: there is no
+    historical backfill, so use measurementEvents for history. Scoped to the caller's tenant and
+    optionally filtered to one device and/or one measurement name. Requires event:read. A member
+    whose access is limited to some customers receives only measurements recorded while the
+    device belongs to one of them; a stream for any other device stays silent.
+    """
+    # Streams measurement events as they resolve, optionally filtered to one
+    # device (by token) and/or one measurement name. Drives live charts, gauges,
+    # and cards. Named measurementStream (not measurementEvents, the historical
+    # query) since both fields resolve off the one root resolver.
+    measurementStream(
+        """Only measurements from this device. Omit for all devices."""
+        deviceToken: String
+        """
+        Stream readings from any of these devices on one subscription, instead of one subscription per device.
+        At most 1000 tokens; duplicates are ignored and a malformed token is refused. Cannot be combined with deviceToken. An empty list is refused.
+        """
+        deviceTokens: [String!]
+        """Only measurements with this name. Omit for all names."""
+        name: String
+    ): MeasurementEvent!
+}
+
+schema {
+    query: Query
+    mutation: Mutation
+    subscription: Subscription
+}

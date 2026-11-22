@@ -1,0 +1,2570 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Descriptions: a """string""" above an element is its PUBLIC description — served by
+# introspection, read by every GraphQL tool, published on the docs site — and may not
+# cite a decision record. A # comment is a maintainer note. backend/tools/docsgql/sdldesc
+# enforces both.
+
+# Admin (instance-scoped) GraphQL API — ADR-033.
+#
+# Served at /admin/graphql and authenticated with an *identity*-tier token (the
+# tenant-less system token minted by login), not a tenant access token. Every
+# operation additionally requires a specific system authority; a superuser holds
+# the super-authority "*" and so passes them all. This API is cross-tenant: it
+# administers the global identity directory, the tenant registry, the role
+# catalog, and the per-tenant memberships.
+
+"""
+A user account, which exists once across the whole instance and is identified by its
+email address. It can belong to any number of tenants through memberships.
+"""
+# A global, email-keyed principal (ADR-033).
+type AdminIdentity {
+    """Server-assigned identifier. Address an identity by its email, not by this."""
+    id: ID!
+    """When the identity was created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the identity was last changed, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """The identity's email address, stored lower-cased. It is the sign-in name and cannot be changed."""
+    email: String!
+    """First name. Null when none has been set."""
+    firstName: String
+    """Last name. Null when none has been set."""
+    lastName: String
+    """False when the identity is disabled and cannot sign in."""
+    enabled: Boolean!
+    """
+    Tokens of the system roles the identity holds. System roles grant instance-level
+    authorities, such as administering tenants or users, rather than authority inside a
+    tenant.
+    """
+    # System role tokens held by this identity (e.g. "superuser").
+    systemRoles: [String!]!
+    """
+    True when the identity has two-factor authentication turned on, so a password sign-in asks
+    for a code. Reset it with resetIdentityMfa.
+    """
+    mfaEnabled: Boolean!
+    """The tenants the identity belongs to, each with its roles there."""
+    # The tenants this identity can act in, with its per-tenant roles.
+    memberships: [AdminMembership!]!
+}
+
+"""
+An identity's membership in one tenant: whether it is active and which tenant roles the
+identity holds there.
+"""
+# An identity's binding to a single tenant, with its tenant-scoped role tokens.
+type AdminMembership {
+    """Token of the tenant."""
+    tenant: String!
+    """False when the membership is disabled, so the identity cannot enter the tenant through it."""
+    enabled: Boolean!
+    """Tokens of the tenant-scoped roles the identity holds in this tenant."""
+    roles: [String!]!
+    """
+    The customers the membership is limited to inside the tenant. Empty when it sees the
+    whole tenant.
+    """
+    scope: [ScopeAnchor!]!
+}
+
+"""The kind of thing a scope anchor names."""
+enum ScopeAnchorKind {
+    """A customer: the anchor covers the devices assigned to that customer."""
+    CUSTOMER
+    """
+    An entity group: the anchor covers the devices in the group while it is an access scope (at
+    its active version), so a device moved into or out of the group is seen or not without the
+    member being edited. A group that is not an access scope covers nothing.
+    """
+    GROUP
+}
+
+"""One entry of a membership's scope: a customer or group whose devices the member can see."""
+type ScopeAnchor {
+    """What the anchor names."""
+    kind: ScopeAnchorKind!
+    """Token of the customer (or group) the anchor names."""
+    token: String!
+}
+
+"""One entry of a scope to set on a membership."""
+input ScopeAnchorInput {
+    """What the anchor names."""
+    kind: ScopeAnchorKind!
+    """Token of the customer or group the anchor names."""
+    token: String!
+}
+
+"""
+A named packaging level, such as gold, silver or bronze, that an operator assigns to
+tenants. A tier supplies default limits for the tenants at it, and a tenant's own settings
+override them. Editing a tier changes every tenant at it.
+"""
+# An operator-defined packaging tier (ADR-065): the one durable answer to "what
+# kind of customer is this?". Subsystems read it and each owns its own
+# interpretation — shed order, the set of AI models offered, default ceilings — but
+# none redefines it. gold/silver/bronze ship seeded and are editable: packaging is
+# data, not a code deploy.
+type AdminTenantTier {
+    """Server-assigned identifier. Address a tier by its token, not by this."""
+    id: ID!
+    """When the tier was created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the tier was last changed, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """Unique identifier of the tier."""
+    token: String!
+    """Human-readable name of the tier. Null when none has been set."""
+    name: String
+    """Free-text description of the tier. Null when none has been set."""
+    description: String
+    """
+    The tier's settings as a JSON object serialized to a string, or null when it has none.
+    The keys are the governance setting names listed by governanceDimensions (the rate and
+    burst fields) together with `shedPriority`, `heldCommandCeiling`,
+    `geoFencePositionCeiling`, `geoFenceCeiling` and `geoFencePositionBudget`. A tenant that
+    has no setting of its own for a key takes the tier's value.
+    """
+    # The tier's settings as a JSON object string (null when unset).
+    config: String
+    """
+    The number of active tenants at this tier, not counting tenants being deleted. A tier
+    cannot be deleted while any tenant, including one still being deleted, is at it.
+    """
+    # How many tenants are packaged at this tier. A tier with tenants cannot be
+    # deleted (its tenants' tier is a required FK).
+    tenantCount: Int!
+    """
+    Position of the tier in the operator's listing order, counting up from 0. It only
+    orders lists: a higher position does not make a tier a superset of a lower one. A new
+    tier starts at 0 and tiers with the same position are listed alphabetically by token,
+    until the order is set with reorderTenantTiers.
+    """
+    # PRESENTATION ONLY (ADR-065 S5c). The operator's listing order (low to high; the
+    # tenantTiers query returns tiers already sorted by it) and a palette-token color for
+    # the tier's pill (one of tierColorPalette.colors, or null for no pill). Neither is read
+    # to make a decision — displayOrder is not a rank and implies no nesting between tiers;
+    # shed priority is a separate concern.
+    displayOrder: Int!
+    """
+    Name of the color the console shows for this tier, one of those listed by
+    tierColorPalette, or null for no color. Presentation only.
+    """
+    color: String
+}
+
+"""The fixed set of color names a tier may be given."""
+# The palette a tier's color is chosen from (ADR-065 S5c) — a closed, named vocabulary,
+# not free-form hex, so a pill's contrast is guaranteed in both themes and the value is
+# validated on write. The console maps each name to a theme-aware swatch.
+type TierColorPalette {
+    """The color names, in the order a picker should present them."""
+    colors: [String!]!
+}
+
+"""Fields for a new tenant tier."""
+# Data to create a tier. config is an optional JSON object string. color is a palette
+# token (see tierColorPalette), or omitted, null or "" for no pill; displayOrder is not
+# set here — a new tier starts at 0 (ties sort by token) and is arranged with
+# reorderTenantTiers.
+input AdminTenantTierCreateRequest {
+    """
+    Unique identifier for the tier: letters, digits, hyphens and underscores, starting with
+    a letter or digit, at most 128 characters.
+    """
+    token: String!
+    """Human-readable name."""
+    name: String
+    """Free-text description."""
+    description: String
+    """
+    The tier's settings as a JSON object serialized to a string, using the keys described
+    on AdminTenantTier.config. An unknown key, or a value outside its allowed range, rejects
+    the request. Omit it, or send an empty string or `{}`, for a tier with no settings.
+    """
+    config: String
+    """
+    A color name from tierColorPalette. Omit it, or send null or an empty string, for no
+    color; an unknown name rejects the request.
+    """
+    color: String
+}
+
+"""
+A partial update to a tier. Omit a field to keep it, send a value to set it, or send null
+to clear it. The tier is named by the mutation's token argument. Changes apply to every
+tenant at the tier.
+"""
+# Data to update a tier (its token is fixed and named by the mutation's own argument).
+# Editing a tier changes behavior for every tenant at it, live.
+#
+# A PARTIAL update: omitting a field leaves the stored value alone, sending null clears
+# it, sending a value sets it. name and description used to be a full replace — omitting
+# one CLEARED it — while config alone had a bespoke absent state, because clearing config
+# silently re-prices every tenant at the tier (they fall back to the platform default
+# within a minute) and that was too destructive to reach by omission. Every field has the
+# absent state now, so the asymmetry is gone rather than generalized.
+input AdminTenantTierUpdateRequest {
+    """New name, or null to clear it."""
+    name: String
+    """New description, or null to clear it."""
+    description: String
+    """
+    The tier's settings as a JSON object serialized to a string, replacing the current
+    settings entirely. Null, an empty string or `{}` removes all of them, so every tenant at
+    the tier then falls back to the platform defaults. An unknown key, or a value outside
+    its allowed range, rejects the request.
+    """
+    # The tier's settings, as a JSON object string. Null, "" and "{}" all clear them.
+    config: String
+    """
+    A color name from tierColorPalette, trimmed of surrounding spaces. Null or an empty
+    string clears it; an unknown name rejects the request.
+    """
+    # A palette token, or null for no pill: sending "" or null clears it. Surrounding
+    # spaces are trimmed before the token is checked.
+    color: String
+}
+
+"""
+A tenant: an isolated customer environment that has its own devices and data. This is the
+operator's view of the tenant's registry entry, its limits and its deletion status.
+"""
+# A control-plane tenant record (ADR-033): a registry entry, not a provisioned
+# resource. Config is freeform JSON exposed as a JSON-encoded string.
+type AdminTenant {
+    """Server-assigned identifier. Address a tenant by its token, not by this."""
+    id: ID!
+    """When the tenant was created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the tenant was last changed, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """Unique identifier of the tenant on this instance. It cannot be changed."""
+    token: String!
+    """Human-readable name. Null when none has been set."""
+    name: String
+    """
+    False when the tenant is disabled. Members cannot enter a disabled tenant, though a
+    superuser still can.
+    """
+    enabled: Boolean!
+    """
+    Where the tenant is in its deletion lifecycle: `active` normally, or `purging` once
+    deleteTenant has been called. A purging tenant stays in the registry, and keeps its token
+    reserved, until the deletion completes: its data erased everywhere and the settling and
+    token-hold periods over; the entry then disappears.
+    """
+    # Where the tenant sits in the deletion lifecycle (ADR-077): "active" or
+    # "purging". There is deliberately no "purged" — it would have to live on a row
+    # that cannot survive its own purge, so the durable deletion record carries that
+    # fact instead. Deleting a tenant does not remove it immediately: the row survives
+    # WHILE THE PURGE RUNS, holding its token reserved, because every functional area
+    # keys its rows on that token and a tenant recreated at a used token would inherit
+    # the old one's data. Completion removes the row and releases the token.
+    purgeState: String!
+    """
+    When deletion of the tenant was requested, as an RFC 3339 timestamp. Null while the
+    tenant is active. Together with the token it identifies this deletion in tenantDeletion.
+    """
+    # When the delete was requested (RFC3339), null while active. It dates the cut,
+    # which is what lets a later sweep tell a purged tenant's residue from a
+    # successor's legitimate rows.
+    purgeEpoch: String
+    """
+    Whether the tenant's people must sign in through single sign-on. While true, a session that
+    began with a password cannot enter the tenant (at sign-in, tenant selection, refresh or an
+    MCP authorization), and the password sign-in does not list the tenant. A superuser is exempt
+    and each of their entries is audited. Change it with setTenantSsoEnforced.
+    """
+    ssoEnforced: Boolean!
+    """
+    The tenant's own "second factor required" setting. The tenant's effective requirement is
+    this OR its tier's mfaRequired floor (mfaRequiredByTier); either one makes a password
+    sign-in without a second factor unable to enter the tenant. Single sign-on is governed by
+    its connection's requirements instead, and the admin API is never gated on it. Change it
+    with setTenantMfaRequired.
+    """
+    mfaRequired: Boolean!
+    """True when the tenant's tier requires a second factor, which no tenant setting can turn off."""
+    mfaRequiredByTier: Boolean!
+    """The tier the tenant is packaged at. Every tenant has exactly one."""
+    # The tier this tenant is packaged at (ADR-065). Never null: every tenant has a
+    # tier, enforced by a NOT NULL FK, so there is no un-tiered state.
+    tier: AdminTenantTier!
+    """
+    Free-form settings for the tenant as a JSON object serialized to a string. The platform
+    stores it as given. Null when the tenant has none.
+    """
+    # Freeform per-tenant config as a JSON object string (null when unset).
+    config: String
+    # Per-tenant ingest governance overrides. Null means the tenant inherits the
+    # platform default; a set value raises or lowers its ceiling.
+    """
+    This tenant's own ingest ceiling override, in readings (decoded samples) per second.
+    Null means the tenant inherits its tier's ceiling, then the platform default.
+    """
+    ingestReadingsPerSecond: Float
+    """The tenant's own override of its ingest burst allowance, in readings. Null means no override."""
+    ingestBurst: Int
+    # Per-tenant outbound-connector governance overrides (ADR-060). Null means the
+    # tenant inherits the platform default; a set value raises or lowers its ceiling.
+    """
+    This tenant's own outbound ceiling override, in connector calls dispatched per second.
+    Null means the tenant inherits its tier's ceiling, then the platform default.
+    """
+    outboundCallsPerSecond: Float
+    """The tenant's own override of its outbound burst allowance, in calls. Null means no override."""
+    outboundBurst: Int
+    """
+    Whether the tenant has agreed to have its data sent to an external AI model provider.
+    Null and false both mean it has not; only true allows it.
+    """
+    # Per-tenant external-AI consent (ADR-056 §6). Null/false means the tenant is
+    # not opted in (fail-closed); true records the operator's consent to route this
+    # tenant's data to an external frontier model.
+    aiExternalEnabled: Boolean
+    """
+    The tenant's own override of its sustained AI inference rate, in requests per minute.
+    Null means no override: the tier's value applies, then the platform default; it never
+    means unlimited.
+    """
+    # Per-tenant AI-inference rate overrides (ADR-056 §6 / ADR-023): how fast this
+    # tenant may spend inference budget on the NL authoring door. Declared per
+    # MINUTE. Null means the tenant inherits the platform default, never unlimited.
+    # Distinct from aiExternalEnabled: that gates WHETHER this tenant's data may be
+    # routed externally, these gate HOW OFTEN.
+    aiInferenceRequestsPerMinute: Float
+    """The tenant's own override of its AI inference burst allowance, in requests. Null means no override."""
+    aiInferenceBurst: Int
+    """
+    The tenant's own override of its sustained device self-registration rate, in
+    registrations per second. Null means no override: the tier's value applies, then the
+    platform default; it never means unlimited.
+    """
+    provisioningRegistrationsPerSecond: Float
+    """The tenant's own override of its self-registration burst allowance, in registrations. Null means no override."""
+    provisioningBurst: Int
+    """
+    The tenant's own override of its overload-protection priority, a whole number from 1 to
+    100, higher meaning the tenant's traffic is refused later when the platform is
+    overloaded. Null means no override: the tier's value applies, then the platform default.
+    """
+    # Per-tenant ADR-063 shed-priority override (1–100), a contention preference (who
+    # degrades last). Null means the tenant inherits its tier's shedPriority, then the
+    # platform fail-safe. Readable here, like every override above, so an operator can see
+    # what a tenant actually declares. It used to be load-bearing for a different reason —
+    # updateTenant was a full replace, so a console that could not read the value back
+    # nulled it on any unrelated edit — which the partial update has now removed.
+    shedPriority: Int
+    """
+    The tenant's own override of how many commands may be held waiting for offline devices.
+    Null means no override: the tier's value applies, then the command service's default.
+    It never means unlimited.
+    """
+    # Per-tenant ceiling on how many commands may sit in the HELD state (the platform
+    # deliberately withholding dispatch because the device is known absent). Null means
+    # the tenant inherits its tier's heldCommandCeiling, then the enforcing service's
+    # default — never unlimited. Readable here, like every override above, so an operator
+    # can see what a tenant actually declares; omitting it from an update now leaves it
+    # alone, so reading it back is no longer what keeps it from being nulled.
+    heldCommandCeiling: Int
+    """
+    The tenant's own override of the most positions one geofence may have, counted across
+    all of its rings. Null means no override: the tier's value applies, then the platform
+    default. It never means unlimited.
+    """
+    # Per-tenant geofence cap overrides. Null means the tenant inherits its tier's key, then
+    # the platform default — never unlimited. Readable here, like every override above, so an
+    # operator can see what a tenant actually declares. Omitting one from an update now leaves it
+    # alone; only an explicit null clears it, which for these three would RAISE a cap an operator
+    # had deliberately tightened.
+    #
+    # Each bounds a different cost: geoFencePositionCeiling one fence's position count (a
+    # quadratic compile), geoFenceCeiling the tenant's fence count (a manifest that must fit one
+    # broker message), and geoFencePositionBudget the position count across the whole fence set
+    # (footprint in a DETECT geometry cache shared by every tenant on the instance).
+    geoFencePositionCeiling: Int
+    """
+    The tenant's own override of the most geofences it may have. Null means no override: the
+    tier's value applies, then the platform default.
+    """
+    geoFenceCeiling: Int
+    """
+    The tenant's own override of the most positions its geofences may have in total, summed
+    across all fences. Null means no override: the tier's value applies, then the platform
+    default.
+    """
+    geoFencePositionBudget: Int
+    """
+    What the tenant is actually limited to for each governance dimension, and which level
+    set it. This is the result of applying the tenant's own overrides on top of its tier;
+    use it to see the limit in force rather than to read the override fields.
+    """
+    # What this tenant is ACTUALLY metered at for every governance dimension, and
+    # WHY (ADR-065 decision 7): the cascade above resolved down to one value per
+    # dimension, carrying the level that produced it and the levels it beat.
+    #
+    # This is the readable form of the fields above, not a replacement for them:
+    # those are the tenant's own overrides (what a write sets), this is the result
+    # of folding them onto the tier. Resolved by the same code the data plane reads
+    # its ceilings through, so it cannot claim something the platform does not do.
+    effectiveSettings: [AdminTenantSetting!]!
+    """
+    What the tenant is actually limited to for each single-number setting that is not a
+    rate and burst pair: the held-command ceiling, the shed priority and the three geofence
+    limits. Each entry says which level set it, as effectiveSettings does.
+    """
+    # The scalar counterpart of effectiveSettings: the same override -> tier -> platform
+    # cascade, resolved by the same iam.Tenant methods the data plane reads, for the keys
+    # that have no rate or burst.
+    effectiveScalarSettings: [AdminTenantScalarSetting!]!
+}
+
+"""
+A kind of usage the platform limits per tenant, expressed as a sustained rate plus a
+burst allowance. A tier or a tenant may set limits for each dimension.
+"""
+# One governance dimension the platform declares (ADR-023): a rate/burst pair a
+# tenant may be limited on, and which a tier may set a default for.
+#
+# Enumerated rather than hardcoded by callers so a tier editor or an
+# effective-settings view renders every dimension the platform actually has — a
+# fourth becomes configurable and visible the day it is declared, instead of
+# shipping a ceiling no operator can see or set.
+type AdminGovernanceDimension {
+    """Short stable identifier of the dimension, such as `ingest`."""
+    # Short stable id ("ingest"), also the key an operator-facing caller matches on.
+    name: String!
+    """Human-readable heading for the dimension, such as "Ingest"."""
+    # Operator-facing heading ("Ingest", "AI drafting").
+    label: String!
+    """
+    Name of the setting that holds this dimension's rate. It is both the key used in a
+    tier's config and the name of the matching field on tenants and tenant requests.
+    """
+    # The tier config keys this dimension's rate and burst are set under — the same
+    # names the enforcing service reads off the wire.
+    rateField: String!
+    """
+    Name of the setting that holds this dimension's burst allowance, used the same way as
+    rateField.
+    """
+    burstField: String!
+    """
+    The unit the rate is expressed in, such as `readings/sec` or `requests/min`. Bursts are
+    plain counts of the same thing and carry no unit.
+    """
+    # The unit the RATE is declared in ("readings/sec", "requests/min"). Bursts are a
+    # count and have no unit.
+    rateUnit: String!
+}
+
+"""
+The rate limit that applies to a tenant for one dimension, with where it came from, so you
+can see both the result and the levels behind it.
+"""
+# A tenant's effective rate for one dimension, with the provenance that makes it
+# inspectable as tier + delta rather than an opaque merged number.
+type AdminRateSetting {
+    """
+    Which level supplied the value: `override` (the tenant's own setting), `tier` (its
+    tier's setting) or `platform-default` (neither sets one).
+    """
+    # Which level produced the effective value: "override" (the tenant carries an
+    # audited exception), "tier" (its packaging decides), or "platform-default".
+    source: String!
+    """
+    The rate in force, in the dimension's rate unit. Null when source is `platform-default`:
+    each service applies its own built-in default, which this API does not report. Null does
+    not mean unlimited.
+    """
+    # The effective rate. NULL when source is "platform-default" — and that is not a
+    # gap to fill in: the platform default is NOT user-management's to state. Each
+    # enforcing service constructs its own from its own Helm config, and the outbound
+    # dimension has two independent copies (event-processing at the REACT source,
+    # outbound-connectors at the sink, ADR-060 SD-3) which may legally differ. A
+    # number here would be a third copy that drifts the first time a chart value is
+    # edited. It is still a real ceiling, never unlimited (ADR-023).
+    value: Float
+    """What the tenant's tier sets for this dimension. Null if the tier sets none."""
+    # What the tier declares for this dimension (null if it declares none), and the
+    # tenant's own override (null if it carries none) — shown together so an operator
+    # sees the packaging and the exception to it, not just the winner.
+    tier: Float
+    """The tenant's own override for this dimension. Null if it has none."""
+    override: Float
+}
+
+"""
+The burst allowance that applies to a tenant for one dimension, with where it came from.
+It is the same as AdminRateSetting except that a burst is a whole count.
+"""
+# A tenant's effective burst for one dimension. As AdminRateSetting, but a burst is
+# a whole count.
+type AdminBurstSetting {
+    """
+    Which level supplied the value: `override`, `tier` or `platform-default`, as for
+    AdminRateSetting.
+    """
+    source: String!
+    """The burst allowance in force. Null when source is `platform-default`; null does not mean unlimited."""
+    value: Int
+    """What the tenant's tier sets for this dimension. Null if the tier sets none."""
+    tier: Int
+    """The tenant's own override for this dimension. Null if it has none."""
+    override: Int
+}
+
+"""
+The value in force for a tenant on one single-number setting, with where it came from, so
+you can see both the result and the levels behind it. It has the same shape as
+AdminBurstSetting, plus the setting's key and label.
+"""
+# A tenant's effective value for one tier-governed scalar (ADR-065 decision 7), with the
+# provenance that makes it inspectable as tier + delta.
+type AdminTenantScalarSetting {
+    """
+    Name of the setting, such as `heldCommandCeiling`. It is both the key used in a tier's
+    config and the name of the matching override field on tenants.
+    """
+    key: String!
+    """Human-readable heading for the setting, such as "Shed priority"."""
+    label: String!
+    """
+    Which level supplied the value: `override` (the tenant's own setting), `tier` (its
+    tier's setting) or `platform-default` (neither sets one).
+    """
+    source: String!
+    """
+    The value in force. Null when source is `platform-default`: the enforcing service applies
+    its own built-in default, which this API does not report. Null does not mean unlimited.
+    """
+    value: Int
+    """What the tenant's tier sets for this setting. Null if the tier sets none."""
+    tier: Int
+    """The tenant's own override for this setting. Null if it has none."""
+    override: Int
+}
+
+"""The limits in force for a tenant on one governance dimension."""
+# What a tenant is effectively metered at for one dimension (ADR-065 decision 7).
+type AdminTenantSetting {
+    """The dimension these limits apply to."""
+    dimension: AdminGovernanceDimension!
+    """The sustained rate limit."""
+    rate: AdminRateSetting!
+    """The burst allowance."""
+    burst: AdminBurstSetting!
+}
+
+"""
+A named bundle of authorities that can be granted to identities. A system role carries
+instance-level authorities and is assigned to an identity; a tenant role carries
+authorities within one tenant and is assigned to a membership.
+"""
+# A globally-defined, named bundle of authorities (ADR-008 RBAC / ADR-033). Scope
+# is "system" (assigned to identities, gates the admin API) or "tenant" (assigned
+# to memberships, gates the data plane).
+type AdminRole {
+    """Server-assigned identifier. Address a role by its scope and token, not by this."""
+    id: ID!
+    """When the role was created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the role was last changed, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """Either `system` or `tenant`: who the role can be assigned to and which authorities it can grant."""
+    scope: String!
+    """Identifier of the role, unique within its scope."""
+    token: String!
+    """Human-readable name. Null when none has been set."""
+    name: String
+    """Free-text description. Null when none has been set."""
+    description: String
+    """
+    The authorities the role grants, such as `device:write`. The single value `*` grants
+    every authority available at the role's scope. May be empty.
+    """
+    authorities: [String!]!
+}
+
+"""Fields for a new role."""
+# Data to create a role. scope is "system" or "tenant"; each authority must name a
+# known capability (e.g. "device:write", "tenant:read", or "*").
+input AdminRoleCreateRequest {
+    """`system` or `tenant`. A role's scope cannot be changed afterwards."""
+    scope: String!
+    """Identifier for the role, unique within its scope."""
+    token: String!
+    """Human-readable name."""
+    name: String
+    """Free-text description."""
+    description: String
+    """
+    The authorities to grant, as listed by the authorities query for the same scope; `*` is
+    allowed at either scope. An unknown authority, or one that belongs to the other scope,
+    rejects the request. An empty list creates a role that grants nothing.
+    """
+    authorities: [String!]!
+}
+
+"""
+A partial update to a role. Omit a field to keep it, send a value to set it, or send null
+to clear it. The role is named by the mutation's scope and token arguments, which cannot
+be changed.
+"""
+# Data to update a role (its scope + token identity is fixed and named by the
+# mutation's own arguments).
+#
+# A PARTIAL update: omitting a field leaves the stored value alone, sending null clears
+# it, sending a value sets it. It used to be a full replace, so `updateRole(scope:…,
+# token:…, request:{name:"Ops"})` erased the role's description AND every authority it
+# granted, and returned the emptied role with a success.
+input AdminRoleUpdateRequest {
+    """New name, or null to clear it."""
+    name: String
+    """New description, or null to clear it."""
+    description: String
+    """
+    The complete new set of authorities, replacing the current set. Null and an empty list
+    both leave the role granting nothing. Validated as for creation; an unknown authority,
+    or one that belongs to the other scope, rejects the whole update.
+    """
+    # The role's authority set, REPLACED wholesale when sent. Nullable so the absent
+    # state exists: a non-null list would be required by validation and there would be no
+    # way to leave the authorities alone. Null and [] both mean the empty set — for a
+    # list those are one request spelled two ways — and emptying it IS allowed, because
+    # createRole allows it: a role that grants nothing is a real thing an operator builds,
+    # and refusing it here only would make such a role creatable and uncorrectable.
+    authorities: [String!]
+}
+
+"""Fields for a new tenant."""
+# Data to create a tenant. config is an optional JSON object string. The ingest* /
+# outbound* overrides are optional; omit them to inherit the platform default.
+input AdminTenantCreateRequest {
+    """
+    Unique identifier for the tenant: letters, digits, hyphens and underscores, starting
+    with a letter or digit, at most 128 characters. It cannot be changed. A token that
+    belongs to a tenant being deleted is reserved and is refused until that deletion finishes.
+    """
+    token: String!
+    """Human-readable name."""
+    name: String
+    """Token of the tier to package the tenant at. The tier must exist."""
+    # The tier to package this tenant at, by token (ADR-065). Required — there is no
+    # un-tiered tenant, so there is nothing to default.
+    tierToken: String!
+    """Free-form settings as a JSON object serialized to a string. Omit it, or send an empty string or `{}`, for none."""
+    config: String
+    """
+    Ingest ceiling override, in readings (decoded samples) per second. Must be positive;
+    omit it to inherit the tier's ceiling, then the platform default.
+    """
+    ingestReadingsPerSecond: Float
+    """Override of the ingest burst allowance, in readings. Must be positive. Omit to inherit."""
+    ingestBurst: Int
+    """
+    Outbound ceiling override, in connector calls dispatched per second. Must be positive;
+    omit it to inherit the tier's ceiling, then the platform default.
+    """
+    outboundCallsPerSecond: Float
+    """Override of the outbound burst allowance, in calls. Must be positive. Omit to inherit."""
+    outboundBurst: Int
+    """
+    Records the tenant's agreement to have its data sent to an external AI model provider.
+    Omit it for not agreed.
+    """
+    # Per-tenant external-AI consent (ADR-056 §6); omit for not-opted-in (the
+    # fail-closed default).
+    aiExternalEnabled: Boolean
+    """Override of the sustained AI inference rate in requests per minute. Must be positive. Omit to inherit."""
+    # Per-tenant AI-inference rate overrides (ADR-056 §6 / ADR-023): how fast this
+    # tenant may spend inference budget on the NL authoring door. Declared per
+    # MINUTE. Null means the tenant inherits the platform default, never unlimited.
+    # Distinct from aiExternalEnabled: that gates WHETHER this tenant's data may be
+    # routed externally, these gate HOW OFTEN.
+    aiInferenceRequestsPerMinute: Float
+    """Override of the AI inference burst allowance, in requests. Must be positive. Omit to inherit."""
+    aiInferenceBurst: Int
+    """
+    Override of the sustained device self-registration rate, in registrations per second.
+    Must be positive. Omit to inherit the tier's value, then the platform default.
+    """
+    provisioningRegistrationsPerSecond: Float
+    """Override of the self-registration burst allowance, in registrations. Must be positive. Omit to inherit."""
+    provisioningBurst: Int
+    """
+    Override of the overload-protection priority: a whole number from 1 to 100, higher
+    meaning the tenant's traffic is refused later when the platform is overloaded; 80 to 100
+    is never refused. Omit to inherit the tier's value, then the platform default.
+    """
+    # Per-tenant ADR-063 shed-priority override (1–100). NOT a ceiling but a contention
+    # PREFERENCE (who degrades last): 80–100 gold · 50–79 silver · 20–49 bronze · 1–19
+    # best-effort. Null inherits the tenant's tier shedPriority, then the platform
+    # fail-safe (a bronze-band value), never gold.
+    shedPriority: Int
+    """
+    Override of how many commands may be held waiting for offline devices. Any positive
+    whole number. Omit to inherit the tier's value, then the command service's default.
+    """
+    # Per-tenant ceiling on how many commands may sit in the HELD state (dispatch
+    # deliberately withheld because the device is known absent). A CEILING — how much —
+    # unlike shedPriority above, which is a point on a band scale: any positive whole
+    # number is meaningful here. Null inherits the tenant's tier heldCommandCeiling,
+    # then the enforcing service's own default. No value means unlimited — at any level.
+    heldCommandCeiling: Int
+    """
+    Override of the most positions one geofence may have, across all of its rings. A
+    positive whole number of at most 1024; a larger value is rejected, not clamped. Omit to
+    inherit.
+    """
+    # Per-tenant geofence cap overrides (ADR-023 governance, ADR-065 tier). Null inherits the
+    # tenant's tier key, then the platform default. Unlike every ceiling above, each of these
+    # also has a platform MAXIMUM and a value past it is REJECTED rather than clamped. The three
+    # maxima bound three DIFFERENT costs — a quadratic per-fence compile, the fence-set
+    # manifest's broker message, and a DETECT geometry cache shared by every tenant — so raising
+    # one past the platform bound is not a per-tenant decision.
+    #
+    # geoFencePositionCeiling — positions in one fence (bounds a quadratic compile).
+    # geoFenceCeiling — fences the tenant may hold (bounds the fence-set manifest's wire size).
+    # geoFencePositionBudget — positions across the tenant's whole fence set (bounds its share of
+    # the shared geometry cache).
+    geoFencePositionCeiling: Int
+    """
+    Override of the most geofences the tenant may have. A positive whole number of at most
+    4000; a larger value is rejected, not clamped. Omit to inherit.
+    """
+    geoFenceCeiling: Int
+    """
+    Override of the most positions the tenant's geofences may have in total. A positive whole
+    number of at most 128000; a larger value is rejected, not clamped. Omit to inherit.
+    """
+    geoFencePositionBudget: Int
+}
+
+"""
+A partial update to a tenant. For every field, omitting it keeps the stored value, sending
+a value sets it, and sending null clears it. Clearing a limit removes the tenant's own
+override, so the tier's value applies, then the platform default; it never makes the tenant
+unlimited. The tenant is named by the mutation's token argument. Limits are validated as
+for creation.
+"""
+# Data to update a tenant (its token is fixed and named by the mutation's own argument).
+#
+# A PARTIAL update: OMITTING a field leaves the stored value alone, sending null clears
+# it, sending a value sets it. That distinction matters most for the governance
+# overrides, where nil already means something load-bearing — "this tenant declares no
+# override, so it falls back to its tier and then to the platform default, and NEVER to
+# unlimited". Under the full-replace shape this replaces, an omitted override was written
+# as NULL, so renaming a tenant removed its ingest ceiling, its shed priority and its
+# geofence caps in the same request, and returned success.
+#
+#   omitted        leave the override exactly as it is, whether set or absent
+#   null           REMOVE the override, so the tenant inherits its tier then the platform
+#                  default — never zero, and never unlimited
+#   a value        set the override to it
+input AdminTenantUpdateRequest {
+    """New name, or null to clear it."""
+    name: String
+    """
+    Token of the tier to move the tenant to; the change takes effect within about a minute.
+    Omit it to keep the current tier. Null is rejected, because every tenant has a tier.
+    """
+    # The tier to package this tenant at, by token (ADR-065). OPTIONAL: omitting it keeps
+    # the tenant at its current tier, and an explicit null is REFUSED, because the tier is
+    # a NOT NULL foreign key and there is no un-tiered tenant. It used to be required, on
+    # the reasoning that an omitted tier could not be told from "clear it" — true only of
+    # the full replace this replaces. Re-tiering is a live, settings-only change.
+    tierToken: String
+    """
+    Free-form settings as a JSON object serialized to a string, replacing the current ones.
+    Null, an empty string or `{}` clears them.
+    """
+    config: String
+    """
+    Ingest ceiling override, in readings (decoded samples) per second. Omitted leaves it
+    as it is; null removes it so the tenant inherits; a value must be positive.
+    """
+    ingestReadingsPerSecond: Float
+    """Override of the ingest burst allowance, in readings. Must be positive. Omitted leaves it as it is; null removes it so the tenant inherits."""
+    ingestBurst: Int
+    """
+    Outbound ceiling override, in connector calls dispatched per second. Omitted leaves it
+    as it is; null removes it so the tenant inherits; a value must be positive.
+    """
+    outboundCallsPerSecond: Float
+    """Override of the outbound burst allowance, in calls. Must be positive. Omitted leaves it as it is; null removes it so the tenant inherits."""
+    outboundBurst: Int
+    """
+    Whether the tenant has agreed to have its data sent to an external AI model provider.
+    Null clears the record, which counts as not agreed.
+    """
+    aiExternalEnabled: Boolean
+    """Override of the sustained AI inference rate, in requests per minute. Must be positive."""
+    # Per-tenant AI-inference rate overrides (ADR-056 §6 / ADR-023): how fast this
+    # tenant may spend inference budget on the NL authoring door. Declared per
+    # MINUTE. Null means the tenant inherits the platform default, never unlimited.
+    # Distinct from aiExternalEnabled: that gates WHETHER this tenant's data may be
+    # routed externally, these gate HOW OFTEN.
+    aiInferenceRequestsPerMinute: Float
+    """Override of the AI inference burst allowance, in requests. Must be positive."""
+    aiInferenceBurst: Int
+    """
+    Override of the sustained device self-registration rate, in registrations per second.
+    Must be positive. Omitted leaves it as it is; null removes it so the tenant inherits.
+    """
+    provisioningRegistrationsPerSecond: Float
+    """Override of the self-registration burst allowance, in registrations. Must be positive. Omitted leaves it as it is; null removes it so the tenant inherits."""
+    provisioningBurst: Int
+    """Override of the overload-protection priority, a whole number from 1 to 100."""
+    # Per-tenant ADR-063 shed-priority override (1–100), a contention preference. Null
+    # clears it, reverting to the tier's shedPriority then the platform fail-safe.
+    shedPriority: Int
+    """Override of how many commands may be held waiting for offline devices. A positive whole number."""
+    # Per-tenant HELD-command ceiling. Null clears it, reverting to the tier's
+    # heldCommandCeiling then the enforcing service's default — never to unlimited.
+    heldCommandCeiling: Int
+    """Override of the most positions one geofence may have. A positive whole number of at most 1024."""
+    # Per-tenant geofence cap overrides. Null clears one, reverting to the tier's key then the
+    # platform default — never to unlimited. A value above the platform maximum is rejected, not
+    # clamped; the three maxima bound three different costs (a per-fence compile, a broker
+    # message, a shared geometry cache).
+    geoFencePositionCeiling: Int
+    """Override of the most geofences the tenant may have. A positive whole number of at most 4000."""
+    geoFenceCeiling: Int
+    """Override of the most positions the tenant's geofences may have in total. A positive whole number of at most 128000."""
+    geoFencePositionBudget: Int
+}
+
+"""Fields for a new identity."""
+# Data required to create a global identity. Each system role must name an
+# existing role with system scope; the password is hashed server-side.
+input AdminIdentityCreateRequest {
+    """The identity's email address. It becomes the sign-in name, is stored lower-cased and cannot be changed. It must not already be in use."""
+    email: String!
+    """The initial password. It must not be empty. It is stored hashed and cannot be read back."""
+    password: String!
+    """Given name, shown in the console. A blank value is stored as unset."""
+    firstName: String
+    """Family name, shown in the console. A blank value is stored as unset."""
+    lastName: String
+    """Whether the identity may sign in. Send false to create it disabled."""
+    enabled: Boolean!
+    """Tokens of the system roles to assign. Each must name an existing role with system scope; an empty list assigns none."""
+    systemRoles: [String!]!
+}
+
+"""Where a page of search results sits in the full result set. Positions are 1-based and inclusive."""
+# Pagination info for admin search results.
+type SearchResultsPagination {
+    """Position of the first result on this page within the full result set (1-based)."""
+    pageStart: Int
+    """Position of the last result on this page within the full result set (1-based, inclusive)."""
+    pageEnd: Int
+    """Number of records matching the criteria across all pages."""
+    totalRecords: Int
+}
+
+"""
+One entry in the instance's audit journal: either a sign-in or token refresh, or a change
+to one of this service's records (identities, roles, tenants, memberships and the like),
+including a tenant's own self-service changes. The journal covers the whole instance, not one tenant.
+"""
+# A row of the instance's user-management audit journal (ADR-019): an
+# authentication event (login/refresh) or an administrative mutation (identity /
+# role / tenant / membership). Instance-wide and cross-tenant, so it is exposed
+# only on the admin API. Times are RFC3339 strings.
+type AdminAuditEvent {
+    """Server-assigned identifier of the entry."""
+    id: ID!
+    """When the event happened, as an RFC 3339 timestamp."""
+    # RFC3339 time the audited statement committed / the event occurred.
+    occurredTime: String!
+    """`auth` for a sign-in or token refresh, or `mutation` for a change to stored data."""
+    # "auth" (a login/login_failed/refresh) or "mutation" (an admin entity change).
+    category: String!
+    """
+    Token of the tenant the entry belongs to. Null for events that belong to no tenant,
+    such as signing in before a tenant is chosen.
+    """
+    # The tenant the row was stamped with, or null for a tenant-less system/auth event.
+    tenant: String
+    """
+    Who performed the action: the subject of the token that made the request, which is the
+    user's email address for a person, `system` for an action the platform took itself, or an
+    empty string when it was not recorded. Emptied for a tenant that has been deleted.
+    """
+    # JWT subject that performed it, "system" for a system-context op, or "".
+    actor: String!
+    """
+    What happened: `login`, `login_failed` or `refresh` for an `auth` entry; `create`,
+    `update` or `delete` for a `mutation` entry.
+    """
+    # "login"/"login_failed"/"refresh" for auth; "create"/"update"/"delete" for a mutation.
+    operation: String!
+    """Qualified name of the stored collection that was changed. Null for an `auth` entry."""
+    # Schema-qualified mutated table (null for an auth event).
+    tableName: String
+    """Identifier of the changed record, when a single record was changed. Null otherwise."""
+    # Primary key of the affected row for a single-row mutation; null otherwise.
+    entityPk: String
+    """
+    A readable label for the changed record, such as a role or tenant token or an identity's
+    email, when one is available. Null otherwise, and always cleared for a tenant that has
+    been deleted, so the journal keeps the fact of the deletion but not what was deleted.
+    """
+    # Human-facing label of the affected row (e.g. a role/tenant token or an identity
+    # email), captured when the model provides one; null otherwise. It is emptied for a
+    # tenant that has been deleted: the journal is retained as the evidence of the
+    # deletion, and it does not keep the identifiers the deletion was of.
+    entityLabel: String
+    """How many records the change affected."""
+    # Number of rows the audited statement affected.
+    rowsAffected: Int!
+}
+
+"""
+Filters and paging for searching the audit journal. Every filter is optional and filters
+are combined with AND.
+"""
+# Criteria for an admin audit query. All filters are optional except pagination;
+# actor is a case-insensitive substring match, category/operation/tenant are exact.
+input AdminAuditEventSearchCriteria {
+    """Page to return, starting at 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+    """Only entries at or after this time, as an RFC 3339 timestamp."""
+    startTime: String
+    """Only entries at or before this time, as an RFC 3339 timestamp."""
+    endTime: String
+    """Only entries of this category, `auth` or `mutation`. Exact match."""
+    category: String
+    """Only entries of this operation, such as `login` or `update`. Exact match."""
+    operation: String
+    """Only entries whose actor contains this text. The match ignores case. At most 256 bytes; longer input is refused with LIMIT_EXCEEDED."""
+    actor: String
+    """
+    Only entries belonging to the tenant with this token. Exact match. Entries that belong
+    to no tenant are excluded when this is set. A deleted tenant's entries are kept under
+    its deletion's `retainedAuditTenant`, not under its token.
+    """
+    # Restrict to a single tenant's rows (by tenant token). Tenant-less auth
+    # events are excluded when set.
+    tenant: String
+}
+
+"""One page of audit journal entries, newest first."""
+# A page of admin audit rows, newest first.
+type AdminAuditEventSearchResults {
+    """The entries on this page, newest first."""
+    results: [AdminAuditEvent!]!
+    """Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""
+A unit of work the platform accepted and then gave up on, recorded so that the failure can
+be seen and diagnosed. The record is informational: the work is not retried from it, and the
+consequence of the failure stands.
+"""
+# One piece of work a consumer accepted and then gave up on.
+#
+# It is a RECORD, not a queue: nothing re-runs a dead letter. The record exists so a
+# failure is visible and diagnosable rather than silent, and the consequences of the
+# failure itself stand either way — an alarm that was not raised was not raised.
+#
+# It is served here, on the operator plane, rather than to the tenant it belongs to.
+# `detail` is the underlying error, and for an egress failure that can carry the status
+# and address of a destination the caller chose — which on a tenant-readable surface would
+# hand back an oracle. An operator asking about a tenant's failures is not that caller.
+type DeadLetter {
+    """Server-assigned identifier of the record, as accepted by the deadLetter query."""
+    id: ID!
+    """Token of the tenant whose work this was."""
+    # The tenant whose work this was.
+    tenant: String!
+    """When the platform gave up, as an RFC 3339 timestamp."""
+    # When the platform gave up, RFC3339.
+    occurredTime: String!
+    """
+    What kind of work was given up on: `detection-action`, `notification`,
+    `command-response`, `connector-dispatch`, `event`, `command` or `control-fact`. For
+    `connector-dispatch` the record is only an index entry, with no copy of the request.
+    """
+    # What was given up on: detection-action, notification, command-response,
+    # connector-dispatch, event, command or control-fact — the kind is fixed by the stream
+    # the work arrived on. A connector-dispatch record is an INDEX entry — the request
+    # itself is kept verbatim on the instance's connector-dispatch dead-letter subject,
+    # so this one carries no payload. `subject` and `sequence` locate the ORIGINAL on the
+    # connector-dispatch stream, NOT the copy: the copy has no recorded position of its
+    # own, so it is found by scanning that dead-letter subject for this record's
+    # `correlation`.
+    kind: String!
+    """
+    Why the work was given up on: `exhausted` (retried up to the limit), `unprocessable`
+    (accepted, but can never be completed), `shed` (refused because the tenant stayed over
+    its rate limit for too long; the work itself was fine and was never attempted) or
+    `no-outcome` (every delivery ended without an outcome being recorded, so the work may
+    in fact have happened).
+    """
+    # Why: exhausted (retried to the cap), unprocessable (accepted, then found to be
+    # something this consumer can never complete), or shed (refused on a governed
+    # ceiling — the tenant stayed over its rate for longer than the smoothing budget
+    # allows, so the work is not broken and nothing was attempted), or no-outcome (every
+    # delivery ran out with no outcome recorded — a consumer stopped mid-handling or ran
+    # past its window; the work may still have happened, so such a record never settles
+    # anything).
+    reason: String!
+    """Name of the functional area that gave up."""
+    # The functional area that gave up.
+    source: String!
+    """A fixed sentence describing the class of failure. Safe to show to anyone."""
+    # A fixed sentence describing the failure class, safe to show anywhere.
+    summary: String!
+    """
+    The underlying error text. It can name destinations a tenant configured, so treat it as
+    operator-only. Null when there is nothing to add.
+    """
+    # The underlying error. Null when there is nothing to add.
+    detail: String
+    """How many delivery attempts were made before giving up."""
+    # How many delivery attempts were made before giving up.
+    attempts: Int!
+    """
+    Where the original message was published, for locating it while the platform still
+    retains it. Null when not recorded.
+    """
+    # Where the original message was, while its own stream still holds it.
+    subject: String
+    """
+    Position of the original message in its stream, as a decimal string because the value
+    can exceed what a GraphQL Int holds. Null when not recorded.
+    """
+    sequence: String
+    """Identifier of the request the work belonged to, for matching against logs. Null when not recorded."""
+    # The inbound correlation id, for joining to logs.
+    correlation: String
+    """
+    Identifier of the specific thing that failed within its kind, such as a rule, alarm or
+    command token. Null when not recorded.
+    """
+    # What identifies the failed work within its kind — a rule id, an alarm token, a
+    # command token.
+    reference: String
+}
+
+"""Filters and paging for searching dead letters. Every filter is optional and filters are combined with AND."""
+# Criteria for a dead-letter query. All filters are optional except pagination; tenant,
+# kind and source are exact matches.
+input DeadLetterSearchCriteria {
+    """Page to return, starting at 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+    """Only records for the tenant with this token. Exact match."""
+    tenant: String
+    """Only records of this kind. Exact match."""
+    kind: String
+    """Only records from this functional area. Exact match."""
+    source: String
+    """Only records that occurred at or after this time, as an RFC 3339 timestamp. A value that cannot be parsed is an error, not ignored."""
+    # Bound the occurred time, RFC3339. Both ends optional.
+    since: String
+    """Only records that occurred at or before this time, as an RFC 3339 timestamp. A value that cannot be parsed is an error, not ignored."""
+    until: String
+}
+
+"""One page of dead letters, newest first."""
+# A page of dead letters, newest first.
+type DeadLetterSearchResults {
+    """The records on this page, newest first."""
+    results: [DeadLetter!]!
+    """Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""Paging and an optional completion filter for listing tenant deletions."""
+input TenantDeletionSearchCriteria {
+    """Page to return, starting at 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+    """True for deletions that have finished, false for those still in progress. Omit it for both."""
+    # Filter to finished (true) or in-flight (false) deletions. Omit for both.
+    completed: Boolean
+}
+
+"""One page of tenant deletion records, newest first."""
+type TenantDeletionSearchResults {
+    """The deletion records on this page, newest first."""
+    results: [TenantDeletion!]!
+    """Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""
+A client application registered to sign users in through the platform's OAuth 2.1
+authorization flow. A client can only use the redirect addresses and scopes registered here.
+The client's secret is never readable.
+"""
+# A registered OAuth 2.1 client (ADR-047): the allowlist entry the Authorization
+# Server validates the authorization-code flow against. redirectUris is the
+# exact-match allowlist; scopes is the set the client may request. hasSecret tells
+# whether it is a confidential client (authenticates at the token endpoint with a
+# secret) or a public PKCE client — the cleartext secret is never exposed here.
+type AdminOAuthClient {
+    """Server-assigned identifier. Address a client by its clientId, not by this."""
+    id: ID!
+    """When the client was registered, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the client was last changed, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """The client's public identifier, as presented in authorization requests. It cannot be changed."""
+    clientId: String!
+    """Human-readable name. Null when none has been set."""
+    name: String
+    """Free-text description. Null when none has been set."""
+    description: String
+    """False when the client is disabled; the authorization and token endpoints then reject it."""
+    enabled: Boolean!
+    """The redirect addresses the client may use. A request must match one of them exactly."""
+    redirectUris: [String!]!
+    """The scopes the client may request."""
+    scopes: [String!]!
+    """
+    True for a confidential client, which authenticates with a secret. False for a public
+    client, which authenticates with PKCE instead.
+    """
+    hasSecret: Boolean!
+}
+
+"""
+The result of registering a client or rotating its secret. This is the only time the
+secret is shown.
+"""
+# The result of registering or rotating a client. clientSecret is the cleartext,
+# returned EXACTLY ONCE (only its bcrypt hash is stored) — null for a public client.
+# Capture it now; it cannot be retrieved again.
+type AdminOAuthClientSecret {
+    """The registered client as it now stands."""
+    client: AdminOAuthClient!
+    """
+    The client's secret in clear text, returned only in this response and stored only as a
+    hash, so it cannot be retrieved again; keep it now. Null when the client is public.
+    """
+    clientSecret: String
+}
+
+"""Fields for registering an OAuth client."""
+# Data to register an OAuth client. clientId is its stable public identifier; each
+# redirectUri must be https (or http for a loopback host) with no fragment; each
+# scope must name a scope the AS grants (e.g. "read-only"). confidential requests a
+# server-generated client secret (returned once) for a confidential client;
+# omitted/false registers a public PKCE client.
+input AdminOAuthClientCreateRequest {
+    """
+    The client's public identifier: letters, digits, `-`, `_` and `.`, at most 128
+    characters. It cannot be changed.
+    """
+    clientId: String!
+    """Human-readable name."""
+    name: String
+    """Free-text description."""
+    description: String
+    """
+    The redirect addresses the client may use; at least one and at most 16, each at most
+    2048 characters. Each must be an absolute https URL with no fragment and no embedded
+    credentials. Plain http is accepted only for loopback hosts (`localhost`, `127.0.0.1`,
+    `::1`). A longer list or entry is refused with error code LIMIT_EXCEEDED.
+    """
+    redirectUris: [String!]!
+    """
+    The scopes the client may request; at least one and at most 16, each at most 64
+    characters. Supported scopes are `read-only` and `location`. A longer list or entry is
+    refused with error code LIMIT_EXCEEDED.
+    """
+    scopes: [String!]!
+    """
+    True to register a confidential client, for which a secret is generated and returned
+    once. False or omitted registers a public client that uses PKCE.
+    """
+    confidential: Boolean
+}
+
+"""
+A partial update to an OAuth client. Omit a field to keep it, send a value to set it, or
+send null to clear it. The client is named by the mutation's clientId argument, which
+cannot be changed.
+"""
+# Data to update a client (its clientId is fixed and named by the mutation's own
+# argument).
+#
+# A PARTIAL update: omitting a field leaves the stored value alone, sending null clears
+# it, sending a value sets it. It used to be a full replace, so renaming a client also
+# rewrote both of its allowlists from whatever the caller happened to send.
+input AdminOAuthClientUpdateRequest {
+    """New name, or null to clear it."""
+    name: String
+    """New description, or null to clear it."""
+    description: String
+    # The exact-match redirect allowlist and the scopes the client may request, each
+    # REPLACED wholesale when sent. Nullable so the absent state exists — a non-null list
+    # would be required by validation, leaving no way to say "leave these alone".
+    #
+    # EMPTYING EITHER IS REFUSED, by the same rules the create path applies: a client with
+    # no redirect URI can never complete an authorization, and one registered for no scope
+    # describes a permission set nobody can read. Null and [] are the same request here,
+    # and both are rejected rather than one being quietly read as "leave it alone".
+    """
+    The complete new list of redirect addresses, replacing the current list and validated as
+    for registration, including its bounds (at most 16, each at most 2048 characters; more
+    is refused with error code LIMIT_EXCEEDED). It cannot be emptied: null or an empty list
+    is rejected, so to keep the list unchanged omit the field.
+    """
+    redirectUris: [String!]
+    """
+    The complete new list of scopes the client may request, replacing the current list and
+    validated as for registration, including its bounds (at most 16, each at most 64
+    characters; more is refused with error code LIMIT_EXCEEDED). It cannot be emptied: null
+    or an empty list is rejected, so to keep the list unchanged omit the field.
+    """
+    scopes: [String!]
+}
+
+"""One storage system's line in a tenant deletion's progress record."""
+# One storage system's line in a deletion's ledger (ADR-077).
+#
+# A line is REWRITTEN on every pass rather than appended, so it is a standing claim about
+# the store right now, not a log entry.
+type TenantDeletionStore {
+    """
+    Short key of the storage system this line reports on, such as `rdb` for the relational
+    database or `blob` for the object store.
+    """
+    # The store's ledger key: rdb, tsdb, broker, kv, detect, blob.
+    store: String!
+    """True once this storage system has reported that it holds nothing for the tenant."""
+    # Whether this store has reported that it holds nothing for the tenant.
+    complete: Boolean!
+    """
+    How much this storage system has erased so far, in records, counted across all passes.
+    It shows that erasure ran; it is not a percentage of progress.
+    """
+    # How much this store has erased, ACCUMULATED ACROSS PASSES. It is evidence the sweep
+    # ran, never a percentage: an erasure is idempotent and a deletion cannot finish on the
+    # pass that erased something, so the per-pass figure is zero on every pass that could
+    # complete one.
+    rowsErased: Int!
+    """
+    A sentence describing data this storage system still holds and has not erased. Null
+    means it holds nothing outstanding. While set it blocks the deletion from finishing and
+    does not clear by itself; something has to change first.
+    """
+    # Data this store still HOLDS and did not erase, in a sentence. Null means nothing.
+    # This is the field that blocks completion, and it does not clear on its own — it clears
+    # when someone changes something.
+    retaining: String
+    """
+    A sentence describing why the latest pass could not confirm this storage system is
+    clean. Null when it succeeded. Unlike retaining, this is expected to clear by itself on
+    a later pass.
+    """
+    # Why the last pass could not establish that the store is clean. Null on success. Unlike
+    # retaining, this is expected to clear by itself on a later pass.
+    lastError: String
+    """
+    A sentence describing something this storage system deliberately did not examine, or why
+    it reported clean while erasing nothing, such as a store that does not exist on this
+    instance. It qualifies a clean result and is not a problem to act on.
+    """
+    # What this store DECLINED TO LOOK AT, or the ground on which it reported clean while
+    # erasing nothing — for example a telemetry database that does not exist on this
+    # instance, or the key-value buckets a purge deliberately exempts.
+    #
+    # It is a QUALIFIER on a clean line and never a problem to act on: a store carrying a
+    # note is working as designed. Present it as a footnote to "clean", not as a warning.
+    note: String
+    """When this storage system was last checked, as an RFC 3339 timestamp. Null if it has not been checked yet."""
+    # When this store was last asked (RFC3339).
+    attemptedAt: String
+    """
+    When this storage system first reported clean and has stayed clean on every check since,
+    as an RFC 3339 timestamp. Null unless it is clean now.
+    """
+    # When this store FIRST reported clean and has reported clean on every pass since. Null
+    # unless it is clean right now. The settle window is measured from the LATEST of these
+    # across all stores, so one store going clean late holds the whole deletion.
+    cleanSince: String
+}
+
+"""What a tenant deletion is currently waiting on."""
+# What a deletion is currently waiting on (ADR-077).
+#
+# The three waits have different remedies — fix something, wait minutes, wait hours — and a
+# surface that cannot tell them apart teaches an operator to escalate a healthy deletion.
+enum DeletionWait {
+    """
+    At least one storage system has not reported clean. This is the only wait that needs a
+    person; blockedBy says which system and why.
+    """
+    # At least one storage system has not reported clean. The only one a human can act on;
+    # blockedBy says which and why.
+    STORES
+    """Every storage system is clean but has not yet stayed clean for the required settling period."""
+    # Everything is clean, and has not been clean for long enough yet.
+    SETTLE
+    """
+    Everything is clean and settled, but the deletion is not yet old enough to release the
+    tenant's token for reuse.
+    """
+    # Everything is clean and settled; the deletion is not yet old enough to release its
+    # token for reuse.
+    TOKEN_HOLD
+    """Nothing is outstanding."""
+    # Nothing outstanding.
+    NONE
+}
+
+"""
+The durable record of one tenant deletion. It outlives the tenant: once the deletion
+completes the tenant is gone, and this record is the evidence that its data was erased.
+It deliberately holds no tenant name.
+"""
+# The durable record of one tenant deletion (ADR-077).
+#
+# 🔴 IT OUTLIVES THE TENANT, BY DESIGN. Completing a deletion removes the tenant row — that
+# removal IS the token release — so a finished deletion has no tenant to hang off, and this
+# record is the only surviving evidence that the erasure happened.
+#
+# A record is identified by (token, epoch) and NEVER by token alone: the token is released on
+# completion and can be taken by a new tenant, so a lookup by token alone would attribute a
+# predecessor's record to whoever holds that name now.
+#
+# It deliberately carries no tenant NAME. A record retaining "Acme Manufacturing GmbH" would
+# leave the erasure's own evidence as the last place the customer's details lived.
+type TenantDeletion {
+    """
+    Token of the deleted tenant. A token can be reused after a deletion finishes, so it
+    identifies a deletion only together with epoch.
+    """
+    # The deleted tenant's token. Not unique on its own — see the type comment.
+    token: String!
+    """
+    When the deletion was requested, as an RFC 3339 timestamp with fractional seconds. With
+    the token it identifies the record; pass it back exactly as returned.
+    """
+    # When the deletion was requested (RFC3339). With the token, this identifies the record.
+    epoch: String!
+    """
+    The tenant value the deleted tenant's audit journal entries are kept under: the token and
+    the epoch joined by `~`. The entries are kept as evidence of the deletion, with the names
+    in them removed, and are moved off the token so that a new tenant created later with the
+    same token does not see them. Pass this as the `tenant` filter of `auditEvents` to read
+    them.
+    """
+    # tenantpurge.RetainedTenant(token, epoch): what the purge re-keys every area's retained
+    # audit_events rows to. One value per deletion, so two deletions of one token stay apart.
+    retainedAuditTenant: String!
+    """
+    When every storage system had reported clean and the token was released, as an RFC 3339
+    timestamp. Null while the deletion is in progress.
+    """
+    # When every storage system had reported clean and the token was released (RFC3339).
+    # Null while the deletion is still in flight.
+    completedAt: String
+    """
+    When the deletion's data was first established as erased, as an RFC 3339 timestamp: every
+    storage system had reported clean, continuously for the settling period, as of that pass. This comes
+    before completedAt, because the token is held for a further period after the data is gone.
+    Null while any storage system still holds data. The claim is withdrawn, and this returns to
+    null, if a storage system reports data again before the deletion completes.
+    """
+    # The standing erasure claim (RFC3339); null whenever any store is not clean and settled.
+    erasedAt: String
+    """
+    When the latest coordinator pass re-confirmed the erasure claim, as an RFC 3339 timestamp:
+    every storage system reported clean, continuously for the settling period, as of that pass.
+    Null whenever erasedAt is. The claim can be withdrawn until the deletion completes
+    (completedAt), so this says how fresh it is; it is final only at completedAt.
+    """
+    # Last pass that confirmed the claim (RFC3339); null whenever erasedAt is.
+    lastVerifiedAt: String
+    """
+    True when the tenant's data is established as erased (erasedAt is set) or the deletion has
+    completed. False means erasure is not established: a deletion that is partial is not erased.
+    """
+    # erasedAt != nil || completedAt != nil; fail closed, never derived from "nothing blocking".
+    erased: Boolean!
+    """Total number of records erased across all storage systems."""
+    # Total erased across every storage system.
+    rowsErased: Int!
+    """One line per storage system, ordered by name."""
+    # One line per storage system, ordered by name.
+    stores: [TenantDeletionStore!]!
+    """
+    One sentence for each storage system that is not yet clean, in that system's own words.
+    Empty means nothing is blocking, which is not the same as finished: the deletion may
+    still be waiting out a settling period or the token hold.
+    """
+    # One sentence per storage system that is not clean, in that store's own words. Empty
+    # means nothing is blocking — which is NOT the same as finished, since a deletion with
+    # nothing blocking is still waiting out one of its two windows.
+    blockedBy: [String!]!
+    """What the deletion is currently waiting on."""
+    # Which wait is outstanding.
+    awaiting: DeletionWait!
+    """
+    When the current waiting period ends, as an RFC 3339 timestamp. Null when the wait is
+    not a timed period: while awaiting is STORES the deletion waits on the systems, not on
+    a clock, and when awaiting is NONE nothing is pending.
+    """
+    # When the outstanding WINDOW elapses (RFC3339), or null when the wait is not a window.
+    #
+    # Null for STORES deliberately: a storage system holding data does not clear on a timer,
+    # and a countdown there would promise something nothing will deliver.
+    elapsesAt: String
+}
+
+"""
+An identity provider connection: an external OpenID Connect provider that people sign in
+through. The provider's client secret is write-only and is never returned.
+"""
+type IdpConnection {
+    """Short unique token of the connection; it appears in the connection's callback address."""
+    token: String!
+    """Display name."""
+    name: String!
+    """
+    Whose provider this is: `tenant` for a provider that serves one or more tenants' own people
+    (its sign-ins can enter only those tenants and can never reach an identity holding a system
+    role), or `instance` for the operator's own provider (linked to identities only by explicit
+    action, and entering a tenant only as a superuser).
+    """
+    kind: String!
+    """Whether sign-ins through this connection are accepted. A connection is created disabled."""
+    enabled: Boolean!
+    """The provider's issuer. Fixed when the connection is created."""
+    issuer: String!
+    """The client identifier registered at the provider."""
+    clientId: String!
+    """Whether a client secret is stored. The secret itself can never be read."""
+    hasSecret: Boolean!
+    """OAuth scopes requested at sign-in."""
+    scopes: [String!]!
+    """Name of the claim carrying the person's email address."""
+    emailClaim: String!
+    """
+    Name of the claim carrying the person's group values, which role mappings match. Only a
+    tenant connection reads it.
+    """
+    groupsClaim: String!
+    """
+    Whether a first sign-in creates an identity for a person no identity has the address of. An
+    address that already has an identity is never linked automatically: it leaves a link request.
+    """
+    jitEnabled: Boolean!
+    """Tokens of the tenant roles everyone who signs in through the connection holds in each tenant it serves."""
+    defaultTenantRoles: [String!]!
+    """The group-to-role mappings, across the tenants the connection serves."""
+    roleMappings: [IdpRoleMapping!]!
+    """Claims every sign-in must carry with exactly these values."""
+    requiredClaims: [IdpClaimRequirement!]!
+    """Authentication methods of which a sign-in must report at least one; empty for none required."""
+    requiredAmr: [String!]!
+    """
+    How long a session through this connection lasts, in seconds, counted from the moment this
+    service accepted the sign-in (not the provider's own authentication time) and never extended
+    by a refresh. When it passes, the session ends at its next exchange and the person signs in
+    again. 12 hours (43200) unless changed with setIdpSessionMaxAge.
+    """
+    sessionMaxAgeSeconds: Int!
+    """Email domains this connection speaks for."""
+    domains: [IdpDomain!]!
+    """Tokens of the tenants a tenant connection serves; empty for an instance connection."""
+    tenants: [String!]!
+    """The address to register at the provider as this connection's redirect (callback) URI."""
+    callbackUrl: String!
+    """
+    Whether signing out also signs the person out at the provider, through its approved
+    sign-out endpoint. Off unless switched on with updateIdpConnection: signing out at the
+    provider ends the person's session there for every application it serves. Has no effect
+    while the approved discovery document names no sign-out endpoint.
+    """
+    providerSignOut: Boolean!
+    """
+    The certificates of the private CA bundle this provider's TLS certificate is verified
+    against, in addition to the system's trusted roots. Empty when none is set.
+    """
+    caCertificates: [IdpCaCertificate!]!
+    """
+    The addresses to register at the provider as post-logout redirect URIs, one per app (the
+    console's sign-in page and the dashboard app), for signing out at the provider. Empty when
+    the instance has no public address.
+    """
+    signOutReturnUrls: [String!]!
+    """The provider's discovery document as last fetched; sign-ins use only the endpoints approved here."""
+    discovery: IdpDiscovery!
+    """When the connection was created."""
+    createdAt: String
+    """When the connection was last changed."""
+    updatedAt: String
+}
+
+"""A mapping from a provider group to a tenant role, within one tenant a connection serves."""
+type IdpRoleMapping {
+    """Token of the tenant."""
+    tenant: String!
+    """The group value in the provider's groups claim."""
+    group: String!
+    """Token of the tenant role members of the group hold."""
+    role: String!
+    """Whether the role carries the tenant's super-authority."""
+    fullAuthority: Boolean!
+}
+
+"""One group-to-role mapping to set."""
+input IdpRoleMappingInput {
+    """The group value in the provider's groups claim."""
+    group: String!
+    """Token of a tenant role. System roles are refused."""
+    role: String!
+}
+
+"""A claim a sign-in must carry, with the value it must have."""
+type IdpClaimRequirement {
+    """Claim name."""
+    name: String!
+    """Required value."""
+    value: String!
+}
+
+"""A claim requirement to set on a connection."""
+input IdpClaimRequirementInput {
+    """Claim name, for example `hd` or `tid`."""
+    name: String!
+    """Required value."""
+    value: String!
+}
+
+"""An email domain asserted for a connection."""
+type IdpDomain {
+    """The domain, lower-case ASCII."""
+    domain: String!
+    """When it was asserted."""
+    verifiedAt: String!
+    """Who asserted it."""
+    verifiedBy: String!
+}
+
+"""The endpoints a connection will use, as fetched from the provider's discovery document."""
+type IdpDiscovery {
+    """The authorization endpoint."""
+    authorizationEndpoint: String!
+    """The token endpoint."""
+    tokenEndpoint: String!
+    """The address of the provider's signing keys."""
+    jwksUri: String!
+    """The provider's sign-out endpoint, when it has one."""
+    endSessionEndpoint: String
+    """When the document was fetched."""
+    fetchedAt: String
+    """Identifies this exact set of endpoints; pass it to approveIdpDiscovery to approve what you reviewed."""
+    fingerprint: String!
+    """Whether a person has approved these endpoints. Sign-ins are refused until they have."""
+    approved: Boolean!
+    """Who approved them."""
+    approvedBy: String
+    """When they were approved."""
+    approvedAt: String
+}
+
+"""One certificate of a connection's private CA bundle."""
+type IdpCaCertificate {
+    """SHA-256 fingerprint of the certificate, in hex; compare it with the one your CA publishes."""
+    fingerprintSha256: String!
+    """Subject distinguished name."""
+    subject: String!
+    """Issuer distinguished name."""
+    issuer: String!
+    """Start of the validity period."""
+    notBefore: String!
+    """End of the validity period. The provider cannot be reached once the root it chains to has expired."""
+    notAfter: String!
+    """Whether the certificate says it is a certificate authority. A certificate that is not one is accepted (it pins that exact certificate) but is usually not what was meant."""
+    isCa: Boolean!
+}
+
+"""Data to create a connection."""
+input IdpConnectionCreateRequest {
+    """Short unique token for the connection (letters, digits and hyphens)."""
+    token: String!
+    """Display name."""
+    name: String!
+    """`tenant` or `instance`."""
+    kind: String!
+    """The provider's issuer, an https address. A shared multi-tenant issuer must be pinned to your organisation by a required claim."""
+    issuer: String!
+    """The client identifier registered at the provider."""
+    clientId: String!
+    """The client secret. Write-only; leave out for a public client."""
+    clientSecret: String
+    """OAuth scopes to request; defaults to openid, email and profile."""
+    scopes: [String!]
+    """Name of the claim carrying the email address; defaults to `email`."""
+    emailClaim: String
+    """Name of the claim carrying group values; defaults to `groups`."""
+    groupsClaim: String
+    """Claims every sign-in must carry with exactly these values (Google needs `hd`, Microsoft needs `tid`)."""
+    requiredClaims: [IdpClaimRequirementInput!]
+    """Authentication methods of which a sign-in must report at least one."""
+    requiredAmr: [String!]
+    """
+    For an instance connection with no required authentication methods: your statement that the
+    provider enforces multi-factor sign-in. It is recorded in the audit journal.
+    """
+    mfaEnforcedByIdp: Boolean
+    """
+    PEM text of private CA certificates to trust, besides the system's roots, for this provider's
+    TLS certificate (an on-premises provider whose certificate a private CA signed). Up to 64 KiB
+    of CERTIFICATE blocks; a private key is refused. The provider's discovery document must be
+    reachable under it.
+    """
+    caBundle: String
+}
+
+"""
+Changes to a connection. A partial update: leaving a field out keeps its stored value. The
+issuer, kind and token cannot be changed.
+"""
+input IdpConnectionUpdateRequest {
+    """New display name."""
+    name: String
+    """True to accept sign-ins through the connection; enabling needs approved discovery."""
+    enabled: Boolean
+    """New client identifier."""
+    clientId: String
+    """New email claim name."""
+    emailClaim: String
+    """New groups claim name."""
+    groupsClaim: String
+    """The complete new list of scopes."""
+    scopes: [String!]
+    """The complete new list of required authentication methods."""
+    requiredAmr: [String!]
+    """True to sign people out at the provider too when they sign out; see IdpConnection.providerSignOut."""
+    providerSignOut: Boolean
+}
+
+"""A sign-in that was refused because it matched an existing identity with no link. It grants nothing."""
+type SsoLinkRequest {
+    """Identifier of the request."""
+    id: ID!
+    """Token of the connection the sign-in came through."""
+    connection: String!
+    """The external account's subject at the provider."""
+    subject: String!
+    """The email address the provider asserted."""
+    email: String!
+    """When the sign-in was refused."""
+    createdAt: String
+    """Whether an identity with that email exists now."""
+    identityExists: Boolean!
+    """True when that identity is already linked on this connection under a different subject, which is what a recycled email address looks like."""
+    subjectChanged: Boolean!
+    """Tenants this connection serves where the identity already has a membership that no connection manages."""
+    manualMemberships: [String!]!
+}
+
+"""
+Read operations of the instance administration API. This API takes an identity token, not
+a tenant access token, and each operation additionally requires the authority named in its
+description. A superuser holds every authority.
+"""
+# Admin queries. Each requires a system authority (superusers hold "*").
+type Query {
+    """Liveness check. Always returns the string "pong"."""
+    # Liveness placeholder.
+    ping: String!
+    """
+    The names of the functional areas deployed on this instance, so a client can tell a
+    feature that was never deployed from a server that is failing. It reports what the
+    operator enabled, not whether each area is healthy. Requires only a valid identity token.
+    """
+    # The functional areas this instance deployed, so the admin console can tell
+    # "this feature was never deployed here" apart from "the server is broken"
+    # instead of surfacing a raw HTTP status. Reports DESIRED state (what the
+    # operator deployed), never health.
+    functionalAreas: [String!]!
+    """
+    Every identity on the instance, with its system roles and memberships. The list is not
+    paged. Requires user:read.
+    """
+    # List the full identity directory (requires user:read).
+    identities: [AdminIdentity!]!
+    """
+    Every tenant, including any that are being deleted. The list is not paged. Requires
+    tenant:read.
+    """
+    # List every tenant (requires tenant:read).
+    tenants: [AdminTenant!]!
+    """The tier catalog in the operator's listing order. Requires tenant:read."""
+    # List the tenant tier catalog (requires tenant:read). Gated on the tenant
+    # authorities rather than one of its own: a tier is tenant-registry packaging,
+    # administered on the same plane by the same operator.
+    tenantTiers: [AdminTenantTier!]!
+    """
+    (Preview: may change in a minor release.) Agent actions in one tenant: whether this instance allows them, whether the operator has
+    suspended them for the tenant, and the tenant's published agent policy version. Requires
+    tenant:read.
+    """
+    tenantAgentActuation(
+        """(Preview: may change in a minor release.) Token of the tenant."""
+        tenant: String!
+    ): AdminTenantAgentActuation!
+    """
+    The governance dimensions the platform defines, so an editor can offer exactly the
+    settings a tier or tenant may carry. The answer does not depend on the tenant. Requires
+    tenant:read.
+    """
+    # The governance dimensions the platform declares (requires tenant:read), so a
+    # tier editor can offer exactly the settings a tier may carry rather than keep
+    # its own list of them. Static for a given build; not tenant-specific.
+    governanceDimensions: [AdminGovernanceDimension!]!
+    """The color names a tier may be given. Requires tenant:read."""
+    # The tier color palette (requires tenant:read) — the closed set a tier's color is
+    # chosen from, so the console picker offers exactly what the server will accept.
+    # Static for a given build.
+    tierColorPalette: TierColorPalette!
+    """
+    The role catalog, optionally limited to one scope. Fails if scope is neither `system`
+    nor `tenant`. Requires role:read.
+    """
+    # List the role catalog, optionally filtered to a scope (requires role:read).
+    roles(
+        """`system` or `tenant`. Omit it to list roles of both scopes."""
+        scope: String
+    ): [AdminRole!]!
+    """
+    The authorities that can be granted to a role, sorted, including `*`. With a scope, only
+    the authorities a role of that scope may grant, since a role cannot be granted an
+    authority that belongs to the other scope. Fails if scope is neither `system` nor
+    `tenant`. Requires role:read.
+    """
+    # The authority vocabulary (sorted, includes "*"), for offering a checklist when
+    # defining a role rather than free-text entry (requires role:read). With a scope
+    # ("system" | "tenant") it returns only the authorities a role at that scope may
+    # grant: an authority's tier and a role's scope must agree (ADR-065), so an
+    # unfiltered list would offer a tenant role an operator authority the write path
+    # then refuses. Omit the scope for the whole vocabulary.
+    authorities(
+        """`system` or `tenant`. Omit it to list every authority."""
+        scope: String
+    ): [String!]!
+    """
+    Searches the audit journal of sign-ins, token refreshes and administrative changes,
+    across all tenants, newest first. Requires audit:read.
+    """
+    # Query the instance audit journal for user-management — auth events plus
+    # identity/role/tenant administration, newest first (requires audit:read).
+    auditEvents(
+        """Filters and paging for the search."""
+        criteria: AdminAuditEventSearchCriteria!
+    ): AdminAuditEventSearchResults!
+    """
+    Searches the work the platform accepted and gave up on, across all tenants, newest
+    first. Requires audit:read.
+    """
+    # Work the platform accepted and gave up on, newest first. Instance-wide: the
+    # question an operator asks here is "what has been failing", which is not a
+    # per-tenant question even though every answer names a tenant.
+    deadLetters(
+        """Filters and paging for the search."""
+        criteria: DeadLetterSearchCriteria!
+    ): DeadLetterSearchResults!
+
+    """
+    One dead-letter record by its id. Returns null if there is none; fails if the id is not
+    a number. Requires audit:read.
+    """
+    # One dead letter by id, or null.
+    deadLetter(
+        """Id of the record, as returned in the id field."""
+        id: ID!
+    ): DeadLetter
+
+    """
+    The deletion record for one tenant token, with the progress of each storage system.
+    Returns null if there is no such record. Requires tenant:read.
+    """
+    # One tenant deletion record with its per-store ledger (requires tenant:read).
+    #
+    # Omit epoch to ask for the token's IN-FLIGHT deletion, which is unambiguous because at
+    # most one can be in flight at a time. A historical one must name its epoch: the token is
+    # reusable, so token alone does not identify a deletion. Null when there is no such
+    # record.
+    tenantDeletion(
+        """Token of the deleted tenant."""
+        token: String!
+        """
+        The epoch of the deletion, as returned in the epoch field, to select a particular
+        past deletion. Omit it to get the deletion currently in progress for the token. It
+        must be an RFC 3339 timestamp and is matched exactly, fractional seconds included.
+        """
+        epoch: String
+    ): TenantDeletion
+    """
+    Tenant deletion records, newest first, including those that have finished. They cover
+    the whole instance and outlive the tenants they describe. Requires tenant:read.
+    """
+    # Deletion records newest cut first (requires tenant:read). Instance-wide and
+    # cross-tenant, because a record outlives the tenant it describes — there is no tenant to
+    # scope it to. Pass completed to filter to finished or in-flight deletions.
+    tenantDeletions(
+        """Paging and an optional filter on whether the deletion has finished."""
+        criteria: TenantDeletionSearchCriteria!
+    ): TenantDeletionSearchResults!
+    """The registered OAuth clients. Requires client:read."""
+    # List the OAuth 2.1 client registry (requires client:read).
+    oauthClients: [AdminOAuthClient!]!
+
+    """
+    Lists the configured identity provider connections. Client secrets are never included.
+    Requires user:read.
+    """
+    idpConnections: [IdpConnection!]!
+    """
+    Returns one identity provider connection, or null if there is none with that token.
+    Requires user:read.
+    """
+    idpConnection(
+        """Token of the connection."""
+        token: String!
+    ): IdpConnection
+    """
+    Lists the sign-ins refused because they matched an existing identity with no link, oldest
+    first, for a superuser to approve or reject. Requires user:read.
+    """
+    ssoLinkRequests: [SsoLinkRequest!]!
+}
+
+"""
+Write operations of the instance administration API. This API takes an identity token, not
+a tenant access token, and each operation additionally requires the authority named in its
+description. A superuser holds every authority.
+"""
+# Admin mutations. Identity + membership administration requires user:write
+# (superusers hold "*"). All return the affected identity (re-loaded) unless noted.
+type Mutation {
+    """
+    Creates an identity with the given system roles and returns it. Fails if the email is
+    already in use (error code CONFLICT), if the password is empty, or if a system role does
+    not exist. Requires user:write.
+    The caller may assign only system roles whose authorities it currently holds.
+    """
+    # Create a global identity with the given system roles.
+    createIdentity(
+        """The identity to create."""
+        request: AdminIdentityCreateRequest!
+    ): AdminIdentity!
+    """
+    Enables or disables an identity and returns it. A disabled identity cannot sign in.
+    Disabling also ends every session the identity has, so re-enabling does not revive them;
+    tokens already issued stop working when they expire (15 minutes by default). Fails if the
+    identity does not exist. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
+    """
+    # Enable or disable an identity (disabled identities cannot authenticate).
+    # Disabling also ends every refresh session the identity holds, so re-enabling
+    # does not bring them back; identity and access tokens already issued run out
+    # their own (short) lifetime.
+    setIdentityEnabled(
+        """Email of the identity."""
+        email: String!
+        """True to enable, false to disable."""
+        enabled: Boolean!
+    ): AdminIdentity!
+    """
+    Replaces the identity's system roles with exactly those given and returns the identity.
+    An empty list removes them all. Fails if the identity does not exist or a role does not
+    exist with system scope. Requires user:write.
+    The caller must hold every authority granted by both the current and requested system roles.
+    """
+    # Replace an identity's system-role assignments (role tokens, system scope).
+    setSystemRoles(
+        """Email of the identity."""
+        email: String!
+        """Tokens of the system roles the identity should hold."""
+        roleTokens: [String!]!
+    ): AdminIdentity!
+    """
+    Replaces an identity's password and returns the identity. This also ends every session
+    the identity has, so it must sign in again; tokens already issued stop working when they
+    expire (15 minutes by default). Fails if the password is empty or the identity does not
+    exist. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
+    """
+    # Replace an identity's password (hashed server-side). Also ends every refresh
+    # session the identity holds; identity and access tokens already issued run out
+    # their own (short) lifetime.
+    setPassword(
+        """Email of the identity."""
+        email: String!
+        """The new password. It must not be empty."""
+        password: String!
+    ): AdminIdentity!
+    """
+    Deletes an identity together with its memberships. Returns true if one was deleted and
+    false if there was no such identity. Its sessions end with it, and an identity later
+    created with the same email does not inherit them. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
+    """
+    # Delete an identity and its memberships; returns whether one was removed. Its
+    # refresh sessions end with it, and an identity created again under the same
+    # email does not inherit them.
+    deleteIdentity(
+        """Email of the identity."""
+        email: String!
+    ): Boolean!
+    """
+    Removes an identity's two-factor authentication (a lost phone): the authenticator, the
+    recovery codes and the stored secret go, every session the identity has ends, and the next
+    password sign-in asks for no code. Returns the identity.
+
+    If the factor has wrong codes on record or is locked, the password may be in use by someone
+    else, so newPassword is required and is set in the same step; without it the call fails
+    with the error code MFA_RESET_NEEDS_PASSWORD and changes nothing. Resetting an identity that
+    holds a system role needs a superuser caller. An identity with no second factor fails with
+    an error. Requires user:write.
+    """
+    resetIdentityMfa(
+        """Email of the identity."""
+        email: String!
+        """A new password to set together with the reset. Required while the factor has failed attempts outstanding."""
+        newPassword: String
+    ): AdminIdentity!
+
+    """
+    Adds an identity to a tenant with the given tenant roles and returns the identity. The
+    membership starts enabled. The roles may be instance roles with tenant scope or roles the
+    tenant defined for itself. Fails if the identity or tenant does not exist, if the tenant
+    is being deleted, if a role is not assignable in the tenant, if the scope has more than
+    16 anchors (LIMIT_EXCEEDED) or names a group (INVALID_VALUE), or if the identity is
+    already a member of the tenant (error code CONFLICT). Requires user:write.
+    Delegated callers must hold every authority granted by the assigned tenant roles (ESCALATION).
+    """
+    # Bind an identity to an existing tenant with the given tenant roles and scope.
+    addMembership(
+        """Email of the identity."""
+        email: String!
+        """Token of the tenant."""
+        tenant: String!
+        """Tokens of the tenant roles to grant in the tenant."""
+        roleTokens: [String!]!
+        """
+        The customers to limit the membership to. Omit it, or send an empty list, for the
+        whole tenant.
+        """
+        scope: [ScopeAnchorInput!]
+    ): AdminIdentity!
+    """
+    Replaces the customers and groups a membership is limited to and returns the identity. An empty list
+    gives the whole tenant. The change takes effect at the identity's next token refresh
+    (within 15 minutes; 5 for customer-scoped access): an access token already issued keeps
+    its old scope until it expires, and its sessions in other tenants are not affected. Fails if the identity has no membership in
+    the tenant, or for more than 16 anchors (LIMIT_EXCEEDED).
+    Requires user:write.
+    Delegated callers must hold every authority granted by the membership's current tenant roles (ESCALATION).
+    """
+    setMembershipScope(
+        """Email of the identity."""
+        email: String!
+        """Token of the tenant."""
+        tenant: String!
+        """The customers to limit the membership to; empty for the whole tenant."""
+        scope: [ScopeAnchorInput!]!
+    ): AdminIdentity!
+    """
+    Replaces the tenant roles an identity holds in a tenant with exactly those given and
+    returns the identity. Fails if the identity has no membership in the tenant or a role is
+    not assignable in the tenant. Adding or taking away authorities takes effect at the
+    identity's next token refresh (within 15 minutes; 5 for customer-scoped access): an access
+    token already issued keeps its old authorities until it expires. Requires user:write.
+    Delegated callers must hold every authority granted by both the current and assigned tenant roles (ESCALATION).
+    """
+    # Replace a membership's tenant-role assignments (role tokens, tenant scope).
+    setMembershipRoles(
+        """Email of the identity."""
+        email: String!
+        """Token of the tenant."""
+        tenant: String!
+        """Tokens of the tenant roles the identity should hold in the tenant."""
+        roleTokens: [String!]!
+    ): AdminIdentity!
+    """
+    Enables or disables an identity's membership in a tenant and returns the identity. A
+    disabled membership cannot be used to enter the tenant: disabling one takes effect at the
+    identity's next token refresh (within 15 minutes; 5 for customer-scoped access), which is
+    refused for this tenant, while an access token already issued keeps working until it
+    expires. Its sessions in other tenants are not affected. Fails if the identity has no membership in the tenant. Requires user:write.
+    Delegated callers must hold every authority granted by the membership's current tenant roles (ESCALATION).
+    """
+    # Enable or disable a membership (a disabled membership cannot be selected).
+    setMembershipEnabled(
+        """Email of the identity."""
+        email: String!
+        """Token of the tenant."""
+        tenant: String!
+        """True to enable, false to disable."""
+        enabled: Boolean!
+    ): AdminIdentity!
+    """
+    Removes an identity's membership in a tenant and returns the identity. This takes effect
+    as disabling the membership does, at the identity's next token refresh. Fails if the identity has no membership in
+    the tenant. Requires user:write.
+    Delegated callers must hold every authority granted by the membership's current tenant roles (ESCALATION).
+    """
+    # Remove an identity's membership in a tenant.
+    removeMembership(
+        """Email of the identity."""
+        email: String!
+        """Token of the tenant."""
+        tenant: String!
+    ): AdminIdentity!
+
+    """
+    Creates a role and returns it. Fails if the scope is not `system` or `tenant`, if an
+    authority is unknown or belongs to the other scope, or if the token is already used in
+    that scope (error code CONFLICT). Requires role:write.
+    The caller must hold every authority the new role grants.
+    """
+    # Create a role granting a set of authorities (requires role:write).
+    createRole(
+        """The role to create."""
+        request: AdminRoleCreateRequest!
+    ): AdminRole!
+    """
+    Applies a partial update to a role and returns it. Fails if the role does not exist or
+    the resulting authorities are not valid for its scope. Requires role:write.
+    The caller must hold every authority granted by both the current and resulting role.
+    """
+    # Apply a partial update to a role by scope + token: an omitted field is left
+    # alone, a null clears it, a value sets it (requires role:write).
+    updateRole(
+        """`system` or `tenant`: the scope of the role to update."""
+        scope: String!
+        """Token of the role to update."""
+        token: String!
+        """The changes to apply."""
+        request: AdminRoleUpdateRequest!
+        """Optional updatedAt from the role being edited. A stale version refuses the save; omit for an unconditional update."""
+        expectedUpdatedAt: String
+    ): AdminRole!
+    """
+    Deletes a role and removes it from everything it was assigned to. Returns true if it was
+    deleted and false if there was no such role. The `superuser` system role cannot be
+    deleted, so the instance cannot be locked out of this API. Requires role:write.
+    The caller must hold every authority the current role grants.
+    """
+    # Delete a role by scope + token; returns whether one was removed. The
+    # superuser system role is protected (requires role:write).
+    deleteRole(
+        """`system` or `tenant`: the scope of the role to delete."""
+        scope: String!
+        """Token of the role to delete."""
+        token: String!
+    ): Boolean!
+
+    """
+    Creates a tier and returns it. It is placed at display order 0. Fails if the config has
+    an unknown key or an out-of-range value, if the color is not in the palette, or if the
+    token is already used (error code CONFLICT). The catalog holds at most 100 tiers; a
+    create beyond that is refused with error code LIMIT_EXCEEDED. Requires tenant:write.
+    """
+    # Create a tenant tier (requires tenant:write).
+    createTenantTier(
+        """The tier to create."""
+        request: AdminTenantTierCreateRequest!
+    ): AdminTenantTier!
+    """
+    Applies a partial update to a tier and returns it. This changes the limits of every
+    tenant at the tier, taking effect within about a minute and without a deployment. Fails
+    if the tier does not exist, the config has an unknown key or an out-of-range value, or the
+    color is not in the palette. Requires tenant:write.
+    """
+    # Apply a partial update to a tier by token: an omitted field is left alone, a
+    # null clears it, a value sets it. This changes behavior for every tenant at the
+    # tier, live and with no deploy (requires tenant:write).
+    updateTenantTier(
+        """Token of the tier to update."""
+        token: String!
+        """The changes to apply."""
+        request: AdminTenantTierUpdateRequest!
+    ): AdminTenantTier!
+    """
+    Deletes a tier. Returns true if it was deleted and false if there was no such tier.
+    Fails (error code REFERENCE_VIOLATION) while any tenant is still at the tier. Requires
+    tenant:write.
+    """
+    # Delete a tier by token; returns whether one was removed. Refused while any
+    # tenant is still packaged at it (requires tenant:write).
+    deleteTenantTier(
+        """Token of the tier to delete."""
+        token: String!
+    ): Boolean!
+    # Set the operator's listing order for the whole tier catalog (requires
+    # tenant:write). orderedTokens must be exactly the current tiers — a stale client
+    # (one that has not seen a tier just added or deleted) is refused rather than
+    # silently dropping it. Presentation only: it changes where tiers appear, nothing
+    # about what any tier grants.
+    """
+    Sets the listing order of the tiers and returns them in the new order. The list must
+    name every existing tier exactly once; if it omits, repeats or invents a tier the
+    request fails and nothing changes, which also catches a client working from a stale
+    list. A list longer than 100 (the catalog's own bound), or a token longer than 128
+    characters, is refused with error code LIMIT_EXCEEDED. It changes only how tiers are
+    ordered in lists, not what any tier grants. Requires tenant:write.
+    """
+    reorderTenantTiers(
+        """Tokens of every tier, in the desired order, first to last."""
+        orderedTokens: [String!]!
+    ): [AdminTenantTier!]!
+
+    """
+    Creates a tenant at the given tier and returns it. The tenant starts enabled. Fails if
+    the tier does not exist, a limit is out of range, the token is already used by an active
+    tenant (error code CONFLICT), or the token is reserved by a tenant that is still being
+    deleted. Requires tenant:write.
+    """
+    # Create a tenant, enabled by default, at the requested tier (requires tenant:write).
+    createTenant(
+        """The tenant to create."""
+        request: AdminTenantCreateRequest!
+    ): AdminTenant!
+    """
+    Applies a partial update to a tenant and returns it. If any value is invalid the whole
+    update is rejected and nothing is changed. Fails if the tenant does not exist. Requires
+    tenant:write.
+    """
+    # Apply a partial update to a tenant by token: an omitted field is left alone, a
+    # null clears it, a value sets it. Omitting a governance override no longer clears
+    # it — a null does, reverting the tenant to its tier and then to the platform
+    # default, never to unlimited (requires tenant:write).
+    updateTenant(
+        """Token of the tenant to update."""
+        token: String!
+        """The changes to apply."""
+        request: AdminTenantUpdateRequest!
+    ): AdminTenant!
+    """
+    Enables or disables a tenant and returns it. Members of a disabled tenant cannot enter it
+    (a superuser still can); sessions already open are refused at their next refresh. Fails if
+    the tenant does not exist. Requires tenant:write.
+    """
+    # Enable or disable a tenant (requires tenant:write).
+    setTenantEnabled(
+        """Token of the tenant."""
+        token: String!
+        """True to enable, false to disable."""
+        enabled: Boolean!
+    ): AdminTenant!
+    """
+    Begins permanently deleting a tenant, which cannot be undone. Sign-ins and token
+    refreshes for the tenant are refused at once for its members (a superuser can still enter,
+    to operate the deletion), and its data is then erased from every storage system in the
+    background; track that with tenantDeletion. Returning true means the deletion has started, not that the data
+    is already gone. The tenant's token stays reserved until the deletion completes (see tenantDeletion). Returns
+    false, changing nothing, if there is no such tenant or it is already being deleted. Fails
+    (error code REFERENCE_VIOLATION) while any identity still has a membership in the
+    tenant: remove the memberships first. Requires tenant:write.
+    """
+    # Begin deleting a tenant by token; returns whether the delete was accepted.
+    # It does NOT remove the row: the tenant moves to `purging` with its access cut
+    # immediately, and its data is reclaimed afterwards by the purge coordinator,
+    # which removes the row and releases the token once every store reports clean.
+    # Idempotent in both directions — an unknown or already-purging tenant returns
+    # false. Rejected while the tenant still has memberships (requires tenant:write).
+    deleteTenant(
+        """Token of the tenant to delete."""
+        token: String!
+    ): Boolean!
+
+    """
+    Registers an OAuth client and returns it. The client starts enabled. For a confidential
+    client the response also carries its secret, shown only this once. Fails if the clientId is
+    invalid or already used (error code CONFLICT), or a redirect address or scope is not
+    acceptable. Requires client:write.
+    """
+    # Register an OAuth client, enabled by default (requires client:write). Returns
+    # the client plus, for a confidential client, its one-time cleartext secret.
+    createOauthClient(
+        """The client to register."""
+        request: AdminOAuthClientCreateRequest!
+    ): AdminOAuthClientSecret!
+    """
+    Applies a partial update to a client and returns it. Neither the redirect addresses nor
+    the scopes may be emptied. Fails if the client does not exist or a value is not
+    acceptable. Requires client:write.
+    """
+    # Apply a partial update to a client by clientId: an omitted field is left alone, a
+    # null clears it, a value sets it. Neither allowlist may be emptied (requires
+    # client:write).
+    updateOauthClient(
+        """The clientId of the client to update."""
+        clientId: String!
+        """The changes to apply."""
+        request: AdminOAuthClientUpdateRequest!
+    ): AdminOAuthClient!
+    """
+    Enables or disables a client and returns it. A disabled client is rejected at the
+    authorization and token endpoints. Fails if the client does not exist. Requires
+    client:write.
+    """
+    # Enable or disable a client; a disabled client is rejected at the authorize /
+    # token endpoints (requires client:write).
+    setOauthClientEnabled(
+        """The clientId of the client."""
+        clientId: String!
+        """True to enable, false to disable."""
+        enabled: Boolean!
+    ): AdminOAuthClient!
+    """
+    Generates a new secret for a client and returns it once, invalidating the previous
+    secret. Rotating the secret of a public client makes it a confidential client. Fails if
+    the client does not exist. Requires client:write.
+    """
+    # Mint a fresh secret for a client (promotes a public client to confidential),
+    # invalidating any previous one. Returns the new one-time secret (requires
+    # client:write).
+    rotateOauthClientSecret(
+        """The clientId of the client."""
+        clientId: String!
+    ): AdminOAuthClientSecret!
+    """
+    Deletes a client. Returns true if it was deleted and false if there was no such client.
+    Requires client:write.
+    """
+    # Delete a client by clientId; returns whether one was removed (requires
+    # client:write).
+    deleteOauthClient(
+        """The clientId of the client to delete."""
+        clientId: String!
+    ): Boolean!
+
+    """
+    Creates an identity provider connection and returns it. The connection starts disabled and
+    its discovery document is fetched (through the egress guard) and held for approval; review it
+    with idpConnection, then approveIdpDiscovery and updateIdpConnection to enable it. Fails if
+    this instance has no public issuer address ("sso requires a public issuer URL"), the token is
+    taken, the issuer cannot be pinned to one organisation (Microsoft needs its tenant id and a
+    `tid` requirement; Google needs an `hd` requirement), the provider cannot be reached, or an
+    instance connection has neither required authentication methods nor mfaEnforcedByIdp.
+    Requires user:write.
+    """
+    createIdpConnection(
+        """The connection to create."""
+        request: IdpConnectionCreateRequest!
+    ): IdpConnection!
+    """
+    Applies a partial update to a connection and returns it. Enabling a connection needs its
+    discovery snapshot approved. Disabling it ends its sessions at their next exchange: their
+    refresh tokens stop working at once, and an access token already issued runs until it
+    expires (15 minutes by default). An identity token already issued for an instance connection
+    likewise keeps working on the admin API until it expires. Disabling the last enabled
+    connection serving a tenant that requires single sign-on is refused with the error code
+    SSO_ENFORCED_TENANT_STRANDED (its `tenants` extension names them): turn the requirement off
+    with setTenantSsoEnforced first. Requires user:write.
+    Changing a tenant connection's groupsClaim requires holding every authority its default roles and group mappings grant.
+    """
+    updateIdpConnection(
+        """Token of the connection."""
+        token: String!
+        """The changes to apply."""
+        request: IdpConnectionUpdateRequest!
+    ): IdpConnection!
+    """
+    Replaces the claims every sign-in through the connection must carry, and returns the
+    connection. The issuer rules still apply: a Google connection cannot drop `hd` nor a
+    Microsoft one `tid`. Requires user:write.
+    """
+    setIdpRequiredClaims(
+        """Token of the connection."""
+        token: String!
+        """The complete new list of required claims."""
+        claims: [IdpClaimRequirementInput!]!
+    ): IdpConnection!
+    """
+    Deletes a connection together with its tenants, domains, links, pending requests and sealed
+    client secret. Memberships it managed are disabled, not removed. Its sign-ins end at their next
+    exchange; an identity token already issued for an instance connection keeps working on the
+    admin API until it expires (15 minutes by default). Deleting the last enabled connection
+    serving a tenant that requires single sign-on is refused with the error code
+    SSO_ENFORCED_TENANT_STRANDED: turn the requirement off with setTenantSsoEnforced first.
+    Returns true if it was deleted and false if there was no such
+    connection. Requires user:write.
+    """
+    deleteIdpConnection(
+        """Token of the connection."""
+        token: String!
+    ): Boolean!
+    """
+    Stores a connection's client secret, replacing any earlier one, and returns the connection.
+    The secret is write-only and can never be read back. Requires user:write.
+    """
+    setIdpConnectionSecret(
+        """Token of the connection."""
+        token: String!
+        """The client secret."""
+        secret: String!
+    ): IdpConnection!
+    """
+    Replaces a connection's private CA bundle and returns the connection; an empty bundle clears
+    it, returning the connection to the system's trusted roots alone. A new bundle must verify the
+    provider: its discovery document is fetched under it before anything is saved, and when that
+    document names different endpoints than the approved ones the approval is withdrawn. The
+    bundle is PEM text (up to 64 KiB of CERTIFICATE blocks); a private key is refused and never
+    echoed. Requires user:write.
+    """
+    setIdpCaBundle(
+        """Token of the connection."""
+        token: String!
+        """The PEM certificates, or an empty string to clear."""
+        caBundle: String!
+    ): IdpConnection!
+    """
+    Sets exactly which tenants a tenant connection serves, and returns it. Sign-ins through it
+    can enter those tenants and no others. Fails for an instance connection or an unknown tenant,
+    and refuses to drop a tenant that requires single sign-on when this is the last enabled
+    connection serving it, with the error code SSO_ENFORCED_TENANT_STRANDED. Requires user:write.
+    Requires holding every authority the connection's default roles and group mappings grant.
+    """
+    setIdpConnectionTenants(
+        """Token of the connection."""
+        token: String!
+        """Tokens of the tenants it serves."""
+        tenants: [String!]!
+    ): IdpConnection!
+    """
+    Asserts that a connection speaks for an email domain, recorded with your name, and returns the
+    connection. Freemail providers and public suffixes are refused, and a domain belongs to one
+    connection. Requires user:write.
+    """
+    addIdpDomain(
+        """Token of the connection."""
+        token: String!
+        """The domain, for example `example.com`."""
+        domain: String!
+    ): IdpConnection!
+    """Removes a domain from a connection and returns the connection. Requires user:write."""
+    removeIdpDomain(
+        """Token of the connection."""
+        token: String!
+        """The domain to remove."""
+        domain: String!
+    ): IdpConnection!
+    """
+    Fetches the provider's discovery document again and returns the connection. If the endpoints
+    changed, the new ones replace the snapshot and its approval is withdrawn: the connection
+    refuses sign-ins until approveIdpDiscovery. Requires user:write.
+    """
+    refreshIdpDiscovery(
+        """Token of the connection."""
+        token: String!
+    ): IdpConnection!
+    """
+    Approves the connection's current discovery snapshot and returns the connection. Fails if the
+    snapshot is no longer the one with this fingerprint. Requires user:write.
+    """
+    approveIdpDiscovery(
+        """Token of the connection."""
+        token: String!
+        """The fingerprint of the snapshot you reviewed."""
+        fingerprint: String!
+    ): IdpConnection!
+    """
+    Links an external account to an identity: signing in at the provider as this subject signs in
+    as this identity. This is how an instance connection reaches an identity. A tenant connection
+    refuses an identity that holds a system role. Fails if the identity or connection does not
+    exist, or either side is already linked. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
+    """
+    linkIdentity(
+        """Email of the identity."""
+        email: String!
+        """Token of the connection."""
+        connection: String!
+        """The external account's subject at the provider."""
+        subject: String!
+    ): Boolean!
+    """
+    Removes an identity's link on a connection; its sign-ins through that connection end at their
+    next exchange. Returns true if a link was removed. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
+    """
+    unlinkIdentity(
+        """Email of the identity."""
+        email: String!
+        """Token of the connection."""
+        connection: String!
+    ): Boolean!
+    """
+    Approves a pending link request: the external account is linked to the identity that has the
+    request's email NOW. If that identity already holds memberships in the connection's tenants
+    that no connection manages, say what becomes of them: `convert` makes the connection manage
+    them, `keep_manual` leaves them. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
+    """
+    approveSsoLinkRequest(
+        """Identifier of the request."""
+        id: ID!
+        """`convert` or `keep_manual`; required when the identity has such memberships."""
+        membershipDisposition: String
+    ): Boolean!
+    """
+    Replaces a tenant connection's group-to-role mappings for one tenant it serves, and returns
+    the connection. At each sign-in the person's membership in that tenant is recomputed: the
+    connection's default roles plus the role of every mapping whose group they hold; none at all
+    disables it. Only memberships the connection manages are touched, never manual ones. Roles
+    are tenant roles only: a system role is refused. A role with full authority in the tenant
+    needs acknowledgeFullAuthority. Takes effect at each person's next sign-in. Requires user:write.
+    Delegated callers must hold every authority granted by the mapped tenant roles and by the mappings being replaced (ESCALATION).
+    """
+    setIdpRoleMappings(
+        """Token of the connection."""
+        connection: String!
+        """Token of the tenant; the connection must serve it."""
+        tenant: String!
+        """The complete new set of mappings for the tenant."""
+        mappings: [IdpRoleMappingInput!]!
+        """Must be true to map a group to a role with full authority."""
+        acknowledgeFullAuthority: Boolean
+    ): IdpConnection!
+    """
+    Sets whether a tenant connection creates identities at first sign-in (only for an address no
+    identity has) and the tenant roles everyone who signs in through it holds, and returns the
+    connection. An instance connection takes neither. A role with full authority needs
+    acknowledgeFullAuthority. Requires user:write.
+    Delegated callers must hold every authority granted by the default tenant roles and by the defaults being replaced (ESCALATION).
+    """
+    setIdpJit(
+        """Token of the connection."""
+        connection: String!
+        """Whether first sign-ins create identities."""
+        enabled: Boolean!
+        """Tokens of the tenant roles every person holds in each tenant the connection serves."""
+        defaultTenantRoles: [String!]!
+        """Must be true to grant a role with full authority to everyone."""
+        acknowledgeFullAuthority: Boolean
+    ): IdpConnection!
+    """
+    Requires (or stops requiring) that a tenant's people sign in through single sign-on, and
+    returns the tenant. Turning it on needs at least one enabled connection serving the tenant,
+    so its people are not locked out (refused otherwise with the error code
+    SSO_ENFORCE_NO_CONNECTION), and ends the password sessions already inside the tenant
+    at their next refresh. Superusers are exempt and each of their entries is audited, so an
+    identity provider outage never locks the operator out. Requires user:write.
+    """
+    setTenantSsoEnforced(
+        """Token of the tenant."""
+        tenant: String!
+        """Whether single sign-on is required."""
+        enforced: Boolean!
+    ): AdminTenant!
+    """
+    Requires (or stops requiring) a second factor of a tenant's password sign-ins and returns the
+    tenant. While it is on, a member whose sign-in did not use a second factor is refused entry
+    (error codes MFA_REQUIRED and MFA_ENROLLMENT_REQUIRED) and password sessions already inside
+    are refused at their next refresh; a member can still sign in and set up their own
+    authenticator, so nobody is stranded. Superusers are exempt and each of their entries is
+    audited. It cannot turn off a requirement the tenant's tier sets. Requires user:write.
+    """
+    setTenantMfaRequired(
+        """Token of the tenant."""
+        tenant: String!
+        """Whether a second factor is required."""
+        required: Boolean!
+    ): AdminTenant!
+    """
+    Sets how long a session through a connection lasts, in seconds, and returns the connection.
+    The allowed range is 900 (15 minutes) to 604800 (7 days); the upper bound is lower when the
+    deployment's refresh token lifetime is shorter, and a value set before that lifetime was
+    shortened is held to the new bound when sessions are checked. The lifetime counts from the moment this
+    service accepted the sign-in and is never extended by a refresh. It applies to sessions
+    already open, at their next exchange. Requires user:write.
+    """
+    setIdpSessionMaxAge(
+        """Token of the connection."""
+        connection: String!
+        """The session lifetime in seconds."""
+        seconds: Int!
+    ): IdpConnection!
+    """
+    Ends every session an identity has, on every device: password and single sign-on, console,
+    dashboard and MCP. Each ends at its next exchange; the access and identity tokens already
+    issued stop working when they expire, 15 minutes by default (on the admin API too). The password
+    is unchanged and the person can sign in again at once. Returns how many sign-ins it ended.
+    Fails if the identity does not exist. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
+    """
+    revokeSessions(
+        """Email of the identity."""
+        email: String!
+    ): Int!
+    """
+    Removes an identity's password, so it can sign in only through single sign-on, and ends
+    every session it has. Returns the identity. Fails if the identity does not exist, and is
+    refused unless the identity is linked to an enabled connection it can sign in through (an
+    instance connection for an identity holding a system role), so it is never left with no way
+    in. Requires user:write.
+    The caller must hold every authority granted by the identity's current system roles.
+    """
+    clearPassword(
+        """Email of the identity."""
+        email: String!
+    ): AdminIdentity!
+    """Rejects a pending link request, deleting it. Returns true if it existed. Requires user:write."""
+    rejectSsoLinkRequest(
+        """Identifier of the request."""
+        id: ID!
+    ): Boolean!
+    """
+    (Preview: may change in a minor release.) Suspends or restores agent actions for one tenant, whatever its own agent policy says.
+    Suspended, no AI agent can be granted an action scope in the tenant and every agent decision
+    there is a refusal. Restoring returns the tenant to its own policy. Requires tenant:write.
+    """
+    setTenantAgentActuationSuspended(
+        """(Preview: may change in a minor release.) Token of the tenant."""
+        tenant: String!
+        """(Preview: may change in a minor release.) True to suspend agent actions in the tenant; false to restore its own policy."""
+        suspended: Boolean!
+    ): AdminTenantAgentActuation!
+}
+
+"""
+(Preview: may change in a minor release.) Agent actions in one tenant, as the instance operator sees them. Agents can act in a tenant only
+when this instance allows agent actions, the operator has not suspended them for the tenant, and
+the tenant's own published agent policy enables them.
+"""
+type AdminTenantAgentActuation {
+    """(Preview: may change in a minor release.) Token of the tenant."""
+    tenant: String!
+    """(Preview: may change in a minor release.) True when this instance allows agent actions at all."""
+    instanceEnabled: Boolean!
+    """(Preview: may change in a minor release.) True when the operator has suspended agent actions for this tenant."""
+    suspended: Boolean!
+    """(Preview: may change in a minor release.) When the suspension was set, as an RFC 3339 timestamp, or null."""
+    suspendedAt: String
+    """(Preview: may change in a minor release.) Who set the suspension, or null."""
+    suspendedBy: String
+    """(Preview: may change in a minor release.) The tenant's published agent policy version, or 0 when it has published none."""
+    publishedVersion: Int!
+}
+
+schema {
+    query: Query
+    mutation: Mutation
+}

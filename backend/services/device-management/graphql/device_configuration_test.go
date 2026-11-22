@@ -30,7 +30,7 @@ func deviceConfigurationCtx(t *testing.T) context.Context {
 		&model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{}, &model.Alarm{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
 		&model.DetectionRuleScopeRef{}, &model.DeviceConfigurationRevision{},
-		&model.DeviceConfigurationState{}); err != nil {
+		&model.DeviceConfigurationReport{}, &model.DeviceConfigurationState{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	if err := rdb.CreatePartialUniqueIndex(db, &model.EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {

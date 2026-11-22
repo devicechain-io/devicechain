@@ -172,6 +172,14 @@ var rawSQLAllowList = []siteEntry{
 			"name is a package constant naming the temp table.",
 	},
 	{
+		Path: "backend/services/device-management/model/api_configuration_report_maintenance.go", Func: "Api.configurationReportTenants", Count: 1,
+		Why: "the configuration-report maintenance's tenant listing, which spans tenants on purpose under a system " +
+			"context: a loose index scan (recursive CTE) over device_configuration_reports' (tenant_id, created_at) " +
+			"index that returns only the distinct tenant_id values and reads no row content. Every row it then " +
+			"removes is removed through the model under that tenant's own core.WithTenant. The only formatted-in " +
+			"text is the model's quoted table name.",
+	},
+	{
 		Path: "backend/services/device-management/model/position_classify.go", Func: "Api.ClassifyUnclassifiedAlarms", Count: 1,
 		Why: "the alarm position classifier's periodic pass, which spans tenants on purpose: it classifies every " +
 			"alarm whose position_derived is NULL (what a replica older than the column writes during a rolling " +

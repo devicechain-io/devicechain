@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/devicechain-io/dcctl/internal/apitest"
 )
 
 func TestNeedsHostHeader(t *testing.T) {
@@ -54,6 +56,9 @@ func TestPickHostHeader(t *testing.T) {
 func TestHostHeaderClientPresentsHostWhileDialingTheAddress(t *testing.T) {
 	var seen string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if apitest.ServeCapabilities(t, w, r) {
+			return
+		}
 		seen = r.Host
 		w.WriteHeader(http.StatusOK)
 	}))
