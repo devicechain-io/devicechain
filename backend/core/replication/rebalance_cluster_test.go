@@ -86,7 +86,16 @@ func TestRebalanceEvensOutLeadershipOnARealCluster(t *testing.T) {
 	if len(plan.Moves) == 0 {
 		t.Fatalf("an unbalanced cluster %v produced no plan", before)
 	}
-	for _, r := range replication.ApplyMoves(context.Background(), nc, js, plan.Moves, replication.ApplyOptions{PerMove: 10 * time.Second}) {
+	// 🔴 EVERY RESULT IS LOGGED, passed or not. This test failed once in CI after ~24 s with the failing
+	// line not in the retained log, and a rebalance has more than one way to fall short: the broker honours
+	// a step-down's placement as a PREFERENCE, so a group can settle on a third server (reported as "moved,
+	// not to plan"), a replica can be behind or offline, or a move can time out. Which of them it was decides
+	// whether the fault is the test's assumption that one pass lands every move or the rebalance itself, so
+	// the next failure has to say.
+	results := replication.ApplyMoves(context.Background(), nc, js, plan.Moves, replication.ApplyOptions{PerMove: 10 * time.Second})
+	t.Logf("plan from %v: %d move(s)", before, len(plan.Moves))
+	for _, r := range results {
+		t.Logf("move %+v: skipped=%v err=%v", r.Move, r.Skipped, r.Err)
 		if r.Err != nil {
 			t.Errorf("move %+v: %v", r.Move, r.Err)
 		}
