@@ -27,7 +27,8 @@ namespace DeviceChain.Harborpulse.Visuals
         {
             var t = AssetRig.Node(lofts ? "Quayside Lofts" : "Ferry Terminal", parent, at);
             // the lofts are a converted brick warehouse with a painted cornice; the terminal a grey clapboard hall under a pitched roof
-            House(t, Vector3.zero, lofts ? 38 : 56, lofts ? 18 : 22, lofts ? 17 : 8, lofts ? 5 : 2, m, lofts ? m.Brick : m.ClapGrey, lofts ? m.EastWindows : m.Windows, !lofts);
+            var hall = lofts ? Vector3.zero : new Vector3(NearLandmarks.TerminalOffsetX, 0, 0);
+            House(t, hall, lofts ? NearLandmarks.LoftsW : NearLandmarks.TerminalW, lofts ? NearLandmarks.LoftsD : NearLandmarks.TerminalD, lofts ? NearLandmarks.LoftsH : NearLandmarks.TerminalH, lofts ? 5 : 2, m, lofts ? m.Brick : m.ClapGrey, lofts ? m.EastWindows : m.Windows, !lofts);
             if (lofts)
             {
                 new MeshKit().Box(new Vector3(0, 17.3f, 0), new Vector3(39.2f, 0.6f, 19.2f)).Box(new Vector3(0, 3.6f, 9.08f), new Vector3(38.2f, 0.4f, 0.2f)).Spawn("Cornice", t, m.Trim);
@@ -42,7 +43,7 @@ namespace DeviceChain.Harborpulse.Visuals
             new MeshKit().Box(new Vector3(0, 2.5f, 0), new Vector3(27, 2.4f, 7)).Box(new Vector3(8, 4.2f, 0), new Vector3(8, 1, 6)).Spawn("FerryDeck", ferry, m.Render);
             new MeshKit().Box(new Vector3(0, 2.8f, 3.55f), new Vector3(25, 0.9f, 0.05f)).Spawn("FerryWindows", ferry, m.Glass);
             if (detail == null) return;
-            detail.Register(NearLandmarks.Terminal(), t, Vector3.zero, Quaternion.identity,
+            detail.Register(NearLandmarks.Terminal(), t, hall, Quaternion.identity,
                 NearPalette.Building(m.ClapGrey.GetColor("_BaseColor"), m.Slate.GetColor("_BaseColor"), m.AwningGreen.GetColor("_BaseColor")), m.Surfaces);
             // the ferry berth: the pontoon and gangway the plain slabs stand for, and the ferry itself
             detail.Register(NearLandmarks.Ferry(), ferry, Vector3.zero, Quaternion.identity, NearPalette.Vehicle(m.Render.GetColor("_BaseColor")), m.Surfaces);

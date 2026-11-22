@@ -1,0 +1,77 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dc-executor-system
+  labels:
+    app.kubernetes.io/managed-by: dcctl-executor
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dc-executor
+  namespace: dc-executor-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dc-executor
+  namespace: dc-executor-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dc-executor
+  template:
+    metadata:
+      labels:
+        app: dc-executor
+    spec:
+      serviceAccountName: dc-executor
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: manager
+        image: controller:latest
+        args:
+        - --executor
+        - --leader-elect
+        - --health-probe-bind-address=:8081
+        - --metrics-bind-address=0
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        ports:
+        - name: health
+          containerPort: 8081
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+          limits:
+            memory: 256Mi

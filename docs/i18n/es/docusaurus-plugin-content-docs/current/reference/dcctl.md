@@ -31,6 +31,7 @@ dcctl [command]
 * [dcctl device](#dcctl-device)	 - Act as a device
 * [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
 * [dcctl events](#dcctl-events)	 - Inspect a tenant's events
+* [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
 * [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
 * [dcctl install](#dcctl-install)	 - Prepare a cluster for DeviceChain instances
 * [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
@@ -1018,6 +1019,119 @@ dcctl events failed [flags]
 ### SEE ALSO
 
 * [dcctl events](#dcctl-events)	 - Inspect a tenant's events
+
+## dcctl executor {#dcctl-executor}
+
+Manage the in-cluster executor (Preview)
+
+### Synopsis
+
+Preview: the executor is installed and verified but executes no operations in this release
+
+### Options
+
+```
+  -h, --help                  help for executor
+      --kube-context string   kube-context to target (default: current context)
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl executor enroll](#dcctl-executor-enroll)	 - Install and verify the executor (Preview)
+* [dcctl executor status](#dcctl-executor-status)	 - Show enrollment, capability and pending operations
+* [dcctl executor unenroll](#dcctl-executor-unenroll)	 - Remove the executor, leaving instances and resource definitions
+
+## dcctl executor enroll {#dcctl-executor-enroll}
+
+Install and verify the executor (Preview)
+
+### Synopsis
+
+Preview: the executor is installed and verified but executes no operations in this release
+
+Enrollment requires an escrow artifact whose fingerprint matches the deployed root key for every instance (OwnerOffline).
+
+```
+dcctl executor enroll [flags]
+```
+
+### Options
+
+```
+      --dry-run             validate enrollment and run read-only checks, then print the objects that would be applied
+      --escrow-dir string   directory containing existing instance root-key escrow artifacts (default: the dcctl escrow directory)
+  -h, --help                help for enroll
+      --image string        executor image pinned as ref@sha256:<64 lowercase hex digits>
+      --owner string        executor owner (DNS label, at most 63 characters)
+```
+
+### Options inherited from parent commands
+
+```
+      --kube-context string   kube-context to target (default: current context)
+```
+
+### SEE ALSO
+
+* [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
+
+## dcctl executor status {#dcctl-executor-status}
+
+Show enrollment, capability and pending operations
+
+### Synopsis
+
+Preview: the executor is installed and verified but executes no operations in this release
+
+```
+dcctl executor status [flags]
+```
+
+### Options
+
+```
+  -h, --help   help for status
+```
+
+### Options inherited from parent commands
+
+```
+      --kube-context string   kube-context to target (default: current context)
+```
+
+### SEE ALSO
+
+* [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
+
+## dcctl executor unenroll {#dcctl-executor-unenroll}
+
+Remove the executor, leaving instances and resource definitions
+
+### Synopsis
+
+Preview: the executor is installed and verified but executes no operations in this release
+
+```
+dcctl executor unenroll [flags]
+```
+
+### Options
+
+```
+      --force   mark non-terminal operations Refused/Unenrolled even when no executor is enrolled, then remove any enrolled executor
+  -h, --help    help for unenroll
+```
+
+### Options inherited from parent commands
+
+```
+      --kube-context string   kube-context to target (default: current context)
+```
+
+### SEE ALSO
+
+* [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
 
 ## dcctl ha {#dcctl-ha}
 
@@ -2705,6 +2819,7 @@ dcctl upgrade <provider> <instance> [flags]
       --alert-watchdog-webhook string           send the always-firing Watchdog alert to this URL, every minute, so a dead-man's-switch service (Healthchecks, Dead Man's Snitch, Cronitor) tells you when the alerting pipeline itself goes silent. Without it a broken Alertmanager looks exactly like a healthy, quiet cluster
       --alert-webhook string                    send alerts to this webhook URL (Alertmanager's webhook format, which Slack-compatible relays, PagerDuty, Opsgenie and most incident tools accept). Every alert the platform raises is dropped without a receiver. The URL is a credential and is kept in a Secret, never in the infrastructure state. Naming any --alert-* flag restates ALL the routing
       --allow-envelope-downgrade                move to a release below the first one that reads event envelopes even though the streams may still hold one: a service on such a release dead-letters an envelope and the events in it are lost to that service
+      --allow-skipped-minor                     UNSUPPORTED: move more than one minor release ahead of the version the instance's workloads run. Skipping a minor is untested, and this never disables a protection the database enforces
       --broker-max-connections int              cap the platform broker's simultaneous client connections (nats-server max_connections), devices and platform clients alike. It bounds a connection flood against the MQTT port when that is exposed (--mqtt-exposure): every connection costs a TLS handshake and, for a device, an authentication round trip. Size it above your fleet with headroom for a reconnect storm; devices past it are refused. 0 returns to the server's own limit, which is also what an instance that never set it has. Recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted
       --clear-alert-routing                     remove the alert routing: alerts go back to no receiver and the instance reports ALERTS NOT ROUTED
       --dev-allow-egress strings                DEVELOPMENT ONLY, local clusters only (kind, minikube, k3d, docker-desktop, rancher-desktop): let tenant webhooks and connectors reach these private destinations (IP addresses or CIDRs, repeatable or comma-separated), for example a service on your own machine or LAN. Recorded on the instance so every upgrade keeps it, shown by 'dcctl instances', and logged as a warning by every service that uses it. The cloud metadata addresses, loopback, link-local and multicast stay blocked whatever you list. 'none' removes it. Refused on any other cluster

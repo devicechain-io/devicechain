@@ -351,6 +351,13 @@ namespace DeviceChain.Harborpulse.Model
 
         /// <summary>How much of the sky's own colour the daylight ambient keeps: flat ground is lit by the whole sky, cloud and haze included, not by the zenith's blue.</summary>
         public const double DayAmbientKeep = 0.42;
+        /// <summary>
+        /// The early morning and the late afternoon, while the sun is under <see cref="EarlySunDeg"/>: how much more of the sky's colour the
+        /// light on flat ground gives up, and how much of the horizon's the light on the walls does. A sun that low is weak on a level
+        /// surface, so the ambient alone sets a quay's colour, and with the sky's blue in it 07:06 was a blue hour between a warm dawn and
+        /// a neutral noon.
+        /// </summary>
+        public const double EarlySkyDrain = 0.62, EarlyWallDrain = 0.50, EarlySunDeg = 32;
 
         /// <summary>The fraction of the storm's dimming the sun gets back through the break under the deck.</summary>
         public const double BreakKeyShare = 0.75;
@@ -494,13 +501,18 @@ namespace DeviceChain.Harborpulse.Model
             // under a low sun the flat ground is lit by the sky alone: take some of the blue out of it, or the quays turn periwinkle
             // and by day the ground is lit by the whole sky, its cloud and its haze, never by the zenith's blue alone: a quay is concrete, not lavender
             // (and least of all in the first and last hours of the day, when the sun is too low to outweigh it)
-            var skyLight = Drained(s.Zenith, (1 - 0.7 * (1 - high) * light) * (1 - (1 - DayAmbientKeep) * light) * (1 - 0.35 * (1 - Smooth(10, 30, sunElev)) * light), 1);
+            // (U8: 07:06 still read blue, 1.24 times as much blue as red on a quay's top. The hours after sunrise have a sun too low and too
+            // warm to outweigh the sky's light on flat ground, so until it stands about 30 degrees up that light gives up most of its colour.)
+            var early = (1 - Smooth(10, EarlySunDeg, sunElev)) * light;
+            var skyLight = Drained(s.Zenith, (1 - 0.7 * (1 - high) * light) * (1 - (1 - DayAmbientKeep) * light) * (1 - EarlySkyDrain * early), 1);
             // a clear dawn or dusk has a key, but a weak and grazing one: the floor carries the flat ground then too
             var grazing = low * (1 - night) * (1 - Smooth(0.35, 1.1, s.SunIntensity));
             floor = 1 + KeylessFloorLift * Math.Max(keyless, TwilightFloorShare * grazing);
             var dimDay = Smooth(-5, 1, sunElev);
             var floorSky = Rgb.Lerp(NightAmbientSky, DimAmbientSky, dimDay);
             var floorEquator = Rgb.Lerp(NightAmbientEquator, DimAmbientEquator, dimDay);
+            // the walls take the horizon's colour, which an hour after sunrise is as blue as the zenith's: the same early hours drain it
+            equator = Drained(equator, 1 - EarlyWallDrain * early * (1 - low), 1);
             // under the storm the last of the twilight's violet is drained from the light on the walls as well
             equator = Drained(equator, 1 - 0.6 * storm * low, 1);
             s.AmbientSky = Max(skyLight.Scale(amb * 1.1 + 0.04), floorSky.Scale(floor));

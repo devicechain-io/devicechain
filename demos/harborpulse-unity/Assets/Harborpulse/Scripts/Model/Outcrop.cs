@@ -41,13 +41,31 @@ namespace DeviceChain.Harborpulse.Model
         /// <summary>The highest point of the ledge and its blocks, in WORLD metres.</summary>
         public double Peak { get; private set; }
 
+        /// <summary>
+        /// For each block, the height at which it comes out of the rock under it: the ledge's surface, or the top of the slab it is stacked
+        /// on. The part of a block below this is inside other rock; the builder lights a block's wall by the part above it.
+        /// </summary>
+        public double[] BlockFoot { get; private set; } = new double[0];
+
+        /// <summary>
+        /// The one tor that is a landmark: stacks of slabs <see cref="LandmarkRiseM"/> high on a broad ledge, where the 16:9 HOME looks. Every
+        /// other tor is a few metres of rock on a ledge and reads from HOME as rubble; this one is taller than the church's ridge.
+        /// </summary>
+        public bool Landmark { get; private set; }
+
+        /// <summary>The landmark tor's ledge (half its plan) and how far its tallest stack stands above the ledge's surface.</summary>
+        public const double LandmarkHalfX = 20, LandmarkHalfZ = 14, LandmarkRiseM = 25;
+
         /// <summary>How far a block's bottom lies under the lowest drawn ground at its corners.</summary>
         public const double BlockSinkM = .5;
 
         /// <summary>A tor stands on ledges at least this wide in plan, and rises at most this far above the ledge's own top (and at most <see cref="TorRadiusShare"/> of its radius).</summary>
         public const double TorMinRadiusM = 11, TorMaxRiseM = 8, TorRadiusShare = .46;
 
-        static Point3[] Block(TerrainGrid grid, PropFootprint frame, double lx, double lz, double halfA, double halfB, double yawRad, double top, double taper, double tilt, int seed, int n)
+        /// <summary>How far a stacked slab's bottom lies under the nominal top of the slab it stands on (whose own top is tilted by less).</summary>
+        public const double SlabSinkM = .9;
+
+        static Point3[] Block(TerrainGrid grid, PropFootprint frame, double lx, double lz, double halfA, double halfB, double yawRad, double top, double taper, double tilt, int seed, int n, double standsOn = double.NaN)
         {
             var c = new Point3[8];
             double cs = Math.Cos(yawRad), sn = Math.Sin(yawRad);
@@ -63,7 +81,8 @@ namespace DeviceChain.Harborpulse.Model
             for (var i = 0; i < 4; i++)
             {
                 var p = frame.Local(plan[i].X, plan[i].Z);
-                c[i] = new Point3(p.X, low - BlockSinkM, p.Z);
+                // a slab of a stack starts inside the slab under it; every other block comes up through the ground
+                c[i] = new Point3(p.X, double.IsNaN(standsOn) ? low - BlockSinkM : standsOn - SlabSinkM, p.Z);
                 // the top is smaller, skewed a little and never level: a split block, not a brick
                 double tx = lx + (plan[i].X - lx) * taper * (.86 + .28 * H(seed, 60 + n, i)), tz = lz + (plan[i].Z - lz) * taper * (.86 + .28 * H(seed, 70 + n, i));
                 var q = frame.Local(tx, tz);
@@ -111,6 +130,62 @@ namespace DeviceChain.Harborpulse.Model
                 }
             }
             Blocks = blocks.ToArray();
+            BlockFoot = new double[Blocks.Length];
+            for (var n = 0; n < Blocks.Length; n++)
+            {
+                // a loose block and a tor's slab alike: the lowest of its own top corners, less its visible height, is where the ledge meets it
+                double lx = 0, lz = 0; var a = YawDeg * Math.PI / 180;
+                for (var i = 0; i < 4; i++) { double dx = Blocks[n][i].X - Center.X, dz = Blocks[n][i].Z - Center.Z; lx += (dx * Math.Cos(a) - dz * Math.Sin(a)) / 4; lz += (dx * Math.Sin(a) + dz * Math.Cos(a)) / 4; }
+                BlockFoot[n] = Surface(lx, lz);
+            }
+            foreach (var b in Blocks) for (var i = 4; i < 8; i++) Peak = Math.Max(Peak, b[i].Y);
+        }
+
+        /// <summary>
+        /// The landmark's rock: a main stack of six slabs, each narrower than and turned from the one under it and leaning a little, a second
+        /// stack half as high beside it, a third lower again and a table stone, with clitter round their feet. The lowest slab of a stack is
+        /// a prism like any block (its bottom under the drawn ground at every corner); each slab above starts <see cref="SlabSinkM"/> inside
+        /// the one it stands on, and is about as wide at its foot as that one is at its top, so the joints overhang a little here and there
+        /// as a tor's do and no slab is a pillar standing through the ones under it.
+        /// </summary>
+        void AddLandmarkTor(TerrainGrid grid, PropFootprint frame, double mean, double gx, double gz, double protrusion)
+        {
+            Landmark = true; Peak = Top;
+            var blocks = new System.Collections.Generic.List<Point3[]>(); var feet = new System.Collections.Generic.List<double>();
+            double Surface(double lx, double lz)
+            {
+                var u = Math.Sqrt(lx * lx / (HalfX * HalfX) + lz * lz / (HalfZ * HalfZ));
+                return mean + .55 * (gx * lx + gz * lz) + protrusion * (1 - CoastalTerrain.Smooth(.3, .95, u));
+            }
+            void Pile(int id, double px, double pz, double baseHalf, double rise, int slabs, double leanX, double leanZ)
+            {
+                var yaw = H(Seed, 100 + id, 0) * Math.PI; var foot = Surface(px, pz);
+                for (var s = 0; s < slabs; s++)
+                {
+                    var t = slabs == 1 ? 0 : s / (double)(slabs - 1);
+                    var half = baseHalf * Math.Pow(.895, s);
+                    // the slabs are of unequal thickness: the stack's joints are not a ladder
+                    var topY = Surface(px, pz) + rise * (s + 1 + (s + 1 < slabs ? (H(Seed, 101 + id, s) - .5) * .5 : 0)) / slabs;
+                    double cx = px + leanX * t + (s == 0 ? 0 : (H(Seed, 102 + id, s) - .5) * half * .16), cz = pz + leanZ * t + (s == 0 ? 0 : (H(Seed, 103 + id, s) - .5) * half * .16);
+                    blocks.Add(Block(grid, frame, cx, cz, half, half * (.70 + .10 * H(Seed, 104 + id, 0)), yaw + s * .22 + (H(Seed, 105 + id, s) - .5) * .3, topY, .93, (topY - foot) * .1, Seed, 100 * id + s,
+                        s == 0 ? double.NaN : foot));
+                    feet.Add(foot); foot = topY;
+                }
+            }
+            Pile(1, -3.0, .6, 8.8, LandmarkRiseM, 6, 1.5, -.7);
+            Pile(2, 10.6, 1.0, 5.6, LandmarkRiseM * .58, 3, -.6, .5);
+            Pile(3, -13.6, -1.5, 4.0, LandmarkRiseM * .34, 2, .4, .2);
+            Pile(4, 4.6, -8.2, 3.6, LandmarkRiseM * .2, 1, 0, 0);
+            // clitter: fallen blocks at the stacks' feet
+            for (var n = 0; n < 5; n++)
+            {
+                var a = (n + .5 * H(Seed, 151, n)) * 2 * Math.PI / 5 + 1.1;
+                double lx = HalfX * .66 * Math.Cos(a), lz = HalfZ * .62 * Math.Sin(a);
+                var size = 1.5 + 1.3 * H(Seed, 153, n); var rise = size * (.7 + .6 * H(Seed, 154, n));
+                blocks.Add(Block(grid, frame, lx, lz, size, size * (.6 + .3 * H(Seed, 155, n)), H(Seed, 156, n) * Math.PI, Surface(lx, lz) + rise, .72, rise * .3, Seed, 300 + n));
+                feet.Add(Surface(lx, lz));
+            }
+            Blocks = blocks.ToArray(); BlockFoot = feet.ToArray();
             foreach (var b in Blocks) for (var i = 4; i < 8; i++) Peak = Math.Max(Peak, b[i].Y);
         }
 
@@ -119,8 +194,13 @@ namespace DeviceChain.Harborpulse.Model
 
         static double H(int seed, int a, int b) => CoastalTerrain.Hash(seed * 7919 + a * 104729, seed * 6271 + b * 31337 + a);
 
+        /// <summary>Fits the landmark tor's ledge at <paramref name="c"/> and stacks the tor on it, or returns null when the ground cannot seat the ledge.</summary>
+        public static Outcrop FitLandmark(TerrainGrid grid, Ground c, double yawDeg, int seed) => Fit(grid, c, yawDeg, LandmarkHalfX, LandmarkHalfZ, seed, true);
+
         /// <summary>Fits an outcrop at <paramref name="c"/>, or returns null when the ground there is too steep or too broken to seat it.</summary>
-        public static Outcrop Fit(TerrainGrid grid, Ground c, double yawDeg, double halfX, double halfZ, int seed)
+        public static Outcrop Fit(TerrainGrid grid, Ground c, double yawDeg, double halfX, double halfZ, int seed) => Fit(grid, c, yawDeg, halfX, halfZ, seed, false);
+
+        static Outcrop Fit(TerrainGrid grid, Ground c, double yawDeg, double halfX, double halfZ, int seed, bool landmark)
         {
             var frame = new PropFootprint("outcrop", c, 1, 1, yawDeg);
             var radius = Math.Max(halfX, halfZ);
@@ -197,7 +277,8 @@ namespace DeviceChain.Harborpulse.Model
                         Center = c, YawDeg = yawDeg, HalfX = halfX, HalfZ = halfZ, Rings = rings, Seed = seed,
                         Crown = new Point3(c.X, crownY, c.Z), GroundAtCentre = ground, Top = top,
                     };
-                    fitted.AddBlocks(grid, frame, mean, gx, gz, protrusion);
+                    if (landmark) fitted.AddLandmarkTor(grid, frame, mean, gx, gz, protrusion);
+                    else fitted.AddBlocks(grid, frame, mean, gx, gz, protrusion);
                     return fitted;
                 }
                 protrusion *= .88;
