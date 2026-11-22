@@ -65,6 +65,8 @@ run, and clearing it is what ` + "`dcctl destroy`" + ` does.
 
 -o json prints an array with one object per instance (instance, namespace, provider, cluster,
 kubeContext, status, hasRecord) and nothing else on stdout; an empty array when there are none.`,
+	Example: `  dcctl instances list
+  dcctl instances list -o json`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if instancesOutput != "table" && instancesOutput != "json" {
