@@ -45,6 +45,14 @@ var commandsWithExamples = []string{
 	"dcctl backup inspect",
 	"dcctl restore",
 	"dcctl enable-area",
+	"dcctl product export",
+	"dcctl product plan",
+	"dcctl product apply",
+	"dcctl product rotate-integration-token",
+	"dcctl secrets escrow show",
+	"dcctl secrets escrow verify",
+	"dcctl config-schema",
+	"dcctl test",
 }
 
 func TestCommandsListedHaveRealExamples(t *testing.T) {
