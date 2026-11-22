@@ -15,6 +15,9 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// ErrCustomerConflict refuses a customer save made from a stale copy.
+var ErrCustomerConflict = rdb.NewStaleWriteError("customer")
+
 // Create a new customer type.
 func (api *Api) CreateCustomerType(ctx context.Context, request *CustomerTypeCreateRequest) (*CustomerType, error) {
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
@@ -300,7 +303,11 @@ func retireCustomerToken(tx *gorm.DB, token string) error {
 // Looked up by the `token` ARGUMENT; the payload no longer carries a token, so the
 // argument is no longer dead and a token move is unrepresentable rather than merely
 // refused.
-func (api *Api) UpdateCustomer(ctx context.Context, token string, request *CustomerUpdateRequest) (*Customer, error) {
+//
+// When expectedUpdatedAt is supplied, refuse a stale copy before validation and
+// guard the write against another writer moving the row after the read.
+func (api *Api) UpdateCustomer(ctx context.Context, token string, expectedUpdatedAt *string,
+	request *CustomerUpdateRequest) (*Customer, error) {
 	matches, err := api.CustomersByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -310,6 +317,9 @@ func (api *Api) UpdateCustomer(ctx context.Context, token string, request *Custo
 	}
 
 	updated := matches[0]
+	if err := rdb.RefuseIfMoved(updated.UpdatedAt, expectedUpdatedAt, ErrCustomerConflict); err != nil {
+		return nil, err
+	}
 	assignments := make(map[string]any)
 
 	// Resolve every explicitly named type before writing anything, including a
@@ -348,9 +358,13 @@ func (api *Api) UpdateCustomer(ctx context.Context, token string, request *Custo
 
 	// Only named columns are written: values read above for omitted fields may
 	// already be stale. The preloaded type must not be saved as an association.
-	result := api.RDB.DB(ctx).Model(updated).Omit(clause.Associations).Updates(assignments)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if expectedUpdatedAt != nil {
+			return rdb.UpdateIfUnmoved(tx, updated, updated.UpdatedAt, assignments, ErrCustomerConflict)
+		}
+		return rdb.AdvancingFrom(tx, updated.UpdatedAt).Model(updated).Omit(clause.Associations).Updates(assignments).Error
+	}); err != nil {
+		return nil, err
 	}
 	reloaded, err := api.CustomersById(ctx, []uint{updated.ID})
 	if err != nil {

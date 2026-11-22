@@ -54,7 +54,8 @@ La contraseña o la clave secreta es la **credencial** del conector. Es de solo 
 guardada, la consola solo te dice que hay una credencial configurada y nunca vuelve a mostrarla. Para
 cambiarla, haz clic en **Reemplazar** y escribe un valor nuevo; para quitarla, haz clic en **Limpiar**, y
 **Deshacer** anula esa limpieza antes de guardar. **Limpiar** no se ofrece cuando el tipo exige una
-credencial: siempre en AWS, y en Kafka cuando SASL está activado.
+credencial: siempre en AWS, y en Kafka cuando SASL está activado. Si cambias las URL del broker u otro
+destino de la credencial, elige **Reemplazar** y vuelve a proporcionar la credencial antes de guardar.
 
 Limitación conocida: la credencial que vuelves a proporcionar para un nuevo destino también se usa en la versión publicada actualmente hasta que publiques el nuevo borrador, así que publícalo cuanto antes.
 
@@ -65,6 +66,8 @@ permitido. Consulta [a dónde puede enviar un conector](../concepts/outbound-con
 
 Haz clic en **Crear conector** para guardarlo. Un conector nuevo es un **borrador**: ninguna regla puede
 publicar a través de él hasta que publiques una versión, como se explica más abajo.
+
+Cambiar el tipo o destino de una credencial almacenada requiere `secret` en la misma solicitud; omitirlo devuelve `SECRET_RESUPPLY_REQUIRED`. Vuelve a enviar la credencial o bórrala con `secret: null`. Con `dcctl product apply`, establece el identificador de credencial del manifiesto antes de cambiar su destino. Los cambios de tema, QoS e identidad conservan la credencial.
 
 ## Editar un conector
 
@@ -100,5 +103,3 @@ la línea sobre la tabla indica la versión a través de la cual despachan las r
   webhook, la entrega, los destinos y la gobernanza.
 - [Procesamiento de eventos](../concepts/event-processing.md): las reglas que publican a través de
   los conectores.
-
-Cambiar el tipo o destino de una credencial almacenada requiere `secret` en la misma solicitud; omitirlo devuelve `SECRET_RESUPPLY_REQUIRED`. Vuelve a enviar la credencial o bórrala con `secret: null`. Con `dcctl product apply`, establece el identificador de credencial del manifiesto antes de cambiar su destino. Los cambios de tema, QoS e identidad conservan la credencial.
