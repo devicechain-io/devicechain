@@ -93,6 +93,9 @@ func hydrateUpgradeState(
 	// release's controller passes the check above whenever a release left the definitions alone.
 	// The install record says which dcctl last finished the cluster-level install. See
 	// upgradeorder.go.
+	if err := refusePendingOperationFor(ctx, binding.KubeContext, opts.Instance, "an upgrade"); err != nil {
+		return nil, err
+	}
 	if err := requireInstallOrderFor(ctx, typed, opts.DcctlVersion,
 		InstallCommand(provider.Name(), binding)); err != nil {
 		return nil, err

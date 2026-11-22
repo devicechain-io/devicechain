@@ -28,6 +28,13 @@ namespace DeviceChain.Harborpulse.Model.Director
         readonly Dictionary<string, Reading> pumpRunning = new Dictionary<string, Reading>();
         readonly Dictionary<string, DateTimeOffset> pumpOffAt = new Dictionary<string, DateTimeOffset>();
         readonly HashSet<string> failedProbes = new HashSet<string>();
+        // A command's alarm cycle, once its cause has named it: later reads of the alarm (a new cycle, a clear) never move it.
+        readonly Dictionary<string, KeyValuePair<string, string>> commandCycles = new Dictionary<string, KeyValuePair<string, string>>();
+        // A command whose cause did not name a cycle: the alarm reads it was tried against, and why not (null while it waits for a later read).
+        readonly Dictionary<string, KeyValuePair<long, string>> causeTried = new Dictionary<string, KeyValuePair<long, string>>();
+        long alarmStamp;
+        /// <summary>How many times a command's cause has been resolved against the alarm reads: once per command per new alarm read, never per frame.</summary>
+        public long CauseResolutions { get; private set; }
         DirectorInputs input;
         Action<Observation> observe;
         Action<CoverageInterval> cover;
@@ -90,7 +97,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         {
             input = inputs ?? throw new ArgumentNullException(nameof(inputs)); this.observe = observe; this.cover = cover;
             if (run != inputs.Run) {
-                run = inputs.Run; emitted.Clear(); alarmHistory.Clear(); previous.Clear(); trends.Clear(); wellHistory.Clear(); dueWells.Clear(); wellCycles.Clear(); pumpRunning.Clear(); pumpOffAt.Clear(); failedProbes.Clear(); problems.Clear();
+                run = inputs.Run; emitted.Clear(); alarmHistory.Clear(); previous.Clear(); trends.Clear(); wellHistory.Clear(); dueWells.Clear(); wellCycles.Clear(); pumpRunning.Clear(); pumpOffAt.Clear(); failedProbes.Clear(); commandCycles.Clear(); causeTried.Clear(); problems.Clear();
                 startSim = lastSim = input.Sim; measurementReconnects = alarmReconnects = measurementIndex = 0;
             }
             if (input.Sim < lastSim) throw new InvalidOperationException("observer requires a new instance on seek");
@@ -140,6 +147,8 @@ namespace DeviceChain.Harborpulse.Model.Director
                 foreach (var r in Rows("notifications")) Safe("notifications", () => Notification(r.Value));
                 foreach (var r in Rows("replacements")) Safe("replacements", () => Replacement(r.Value));
                 foreach (var r in Rows("credentials")) Safe("credentials", () => Credential(r));
+                // the newest complete alarm read this frame: a cause is resolved again only when this moves
+                alarmStamp = 0; foreach (var r in complete) if (r.Name == "alarms" && r.AsOf.HasValue) alarmStamp = Math.Max(alarmStamp, r.AsOf.Value.UtcTicks);
                 foreach (var r in Rows("commands")) Safe("commands", () => Command(r.Value));
                 foreach (var r in Rows("rollout")) Safe("rollout", () => Ota(r.Value));
                 foreach (var r in complete.Where(r => r.Name == "membership")) Safe("membership", () => Membership(r.Scope, Rows("membership").Where(x => x.Read == r).Select(x => x.Value).ToArray(), r));
@@ -234,24 +243,97 @@ namespace DeviceChain.Harborpulse.Model.Director
                 Emit("credential", id, device, "", S(r, "occurredTime"), enabled ? "ENABLED" : "DISABLED", input.Now,
                     SnapshotFields(row.Read, new Dictionary<string, string> { ["enabled"] = B(enabled), ["replacementToken"] = S(r, "id") }));
         }
+        /// <summary>
+        /// A served instant, cut to the 100 ns this runtime holds. A cause's detectedAt carries up to nine fractional digits,
+        /// which not every runtime's parser accepts; cutting (never rounding up) keeps "raised at or before the detection" true
+        /// for an alarm whose raisedTime is the same instant stored at microseconds.
+        /// </summary>
+        public static DateTimeOffset Instant(string value)
+        {
+            var dot = (value ?? "").IndexOf('.');
+            if (dot >= 0) {
+                var end = dot + 1; while (end < value.Length && char.IsDigit(value[end])) end++;
+                if (end - dot - 1 > 7) value = value.Substring(0, dot + 8) + value.Substring(end);
+            }
+            return Time(value);
+        }
+        /// <summary>
+        /// The alarm cycle a command's recorded cause names, or why it names none. The platform records what the rule knew when
+        /// it sent the command (its alarm KEY, the device row, the detection's time), never an alarm token, so the alarm is the
+        /// row for this device token and key whose originatorId is the cause's deviceId (a device token can be reused). The
+        /// cycle is named only when that row was raised at or before the detection and not cleared before it; anything else is
+        /// reported unresolved, because the cached lifecycles are not a complete ledger of an alarm's cycles.
+        /// </summary>
+        bool TryCauseCycle(string deviceToken, JsonElement cause, out JsonElement alarm, out string unresolved, out bool pending)
+        {
+            alarm = default; unresolved = null; pending = false;
+            var key = Optional(cause, "alarmKey"); var deviceId = Optional(cause, "deviceId");
+            if (key == null) { unresolved = "the cause names no alarm key"; return false; }
+            if (deviceId == null) { unresolved = "the cause names no device"; return false; }
+            var detected = Instant(S(cause, "detectedAt"));
+            // Only a complete alarm read taken at or after the detection can show the cycle the detection met. One taken before it is
+            // followed by a newer one within a poll, so the command waits for that; with no complete alarm read at all there is nothing
+            // to wait for, and the command is evidence on its own (it is tied to its alarm when the alarm reads come back).
+            var covering = complete.Where(r => r.Name == "alarms" && r.AsOf >= detected).ToArray();
+            if (covering.Length == 0) {
+                if (complete.Any(r => r.Name == "alarms")) pending = true; else unresolved = "no alarm read to find the alarm in";
+                return false;
+            }
+            var named = Rows("alarms").Where(a => covering.Contains(a.Read) && S(a.Value, "originatorToken") == deviceToken && S(a.Value, "alarmKey") == key).Select(a => a.Value).ToArray();
+            if (named.Length == 0) { unresolved = "no alarm with that key on the device"; return false; }
+            var rows = named.Where(a => Optional(a, "originatorId") == deviceId).OrderByDescending(a => T(a, "raisedTime")).ToArray();
+            if (rows.Length == 0) { unresolved = "the alarm belongs to another device record"; return false; }
+            var row = rows[0];
+            if (T(row, "raisedTime") > detected) {
+                // The row is a later cycle. An earlier one counts only if its own record shows it outlived the detection.
+                var token = S(row, "token");
+                row = alarmHistory.Values.Where(a => S(a, "token") == token && Optional(a, "originatorId") == deviceId && T(a, "raisedTime") <= detected)
+                    .OrderByDescending(a => T(a, "raisedTime")).FirstOrDefault();
+                if (row.ValueKind == JsonValueKind.Undefined || Optional(row, "clearedTime") == null) { unresolved = "the alarm's cycle began after the detection"; return false; }
+            }
+            var cleared = Optional(row, "clearedTime");
+            if (cleared != null && Time(cleared) <= detected) { unresolved = "the alarm was cleared before the detection"; return false; }
+            alarm = row; return true;
+        }
         void Command(JsonElement c)
         {
-            var id = S(c, "token"); var device = Device(S(c, "deviceToken")); var key = S(c, "name"); var f = new Dictionary<string, string>(); string alarmToken = null;
-            // The served Command has no alarm foreign key. Only an explicit platform metadata join is evidence of one.
-            var metadata = Optional(c, "metadata");
-            if (metadata != null) { using var m = JsonDocument.Parse(metadata); alarmToken = Optional(m.RootElement, "alarmToken"); }
+            var id = S(c, "token"); var deviceToken = S(c, "deviceToken"); var device = Device(deviceToken); var key = S(c, "name"); var f = new Dictionary<string, string>(); string alarmToken = null; var cycle = "";
+            // The served Command has no alarm foreign key. Its recorded cause is the only evidence that an alarm's rule sent it.
+            if (commandCycles.TryGetValue(id, out var bound)) { alarmToken = bound.Key; cycle = bound.Value; f["cause"] = "ALARM"; }
+            else if (c.TryGetProperty("cause", out var cause) && cause.ValueKind == JsonValueKind.Object) {
+                // A cause that cannot be read costs the link, never the command: the command's own states are still evidence.
+                var kind = Optional(cause, "kind");
+                if (kind == null) { f["causeUnresolved"] = "the cause has no kind"; problems.Add("commands: cause without a kind for " + id); }
+                else f["cause"] = kind;
+                if (kind == "ALARM") {
+                    // Resolved against the alarm reads, so tried again only when those have moved on (a few commands a day, but every frame).
+                    if (causeTried.TryGetValue(id, out var tried) && tried.Key == alarmStamp) {
+                        if (tried.Value == null) return; // still waiting for an alarm read that reaches the detection
+                        f["causeUnresolved"] = tried.Value;
+                    }
+                    else {
+                        JsonElement alarm = default; string unresolved = null; var pending = false; bool tied;
+                        CauseResolutions++;
+                        try { tied = TryCauseCycle(deviceToken, cause, out alarm, out unresolved, out pending); }
+                        catch (FormatException ex) { tied = false; pending = false; unresolved = "the cause cannot be read (" + ex.Message + ")"; problems.Add("commands: " + ex.Message + " in the cause of " + id); }
+                        if (tied) {
+                            alarmToken = S(alarm, "token"); cycle = S(alarm, "raisedTime"); commandCycles[id] = new KeyValuePair<string, string>(alarmToken, cycle); causeTried.Remove(id);
+                        }
+                        else {
+                            causeTried[id] = new KeyValuePair<long, string>(alarmStamp, pending ? null : unresolved);
+                            if (pending) return; // the alarm read has not reached the detection yet
+                            f["causeUnresolved"] = unresolved;
+                        }
+                    }
+                }
+            }
+            if (alarmToken != null) f["alarmToken"] = alarmToken;
             var payload = Optional(c, "payload");
             if (payload != null) { using var p = JsonDocument.Parse(payload); if (p.RootElement.TryGetProperty("max_kw", out var max)) f["max_kw"] = StrictJson.Scalar(max); }
             foreach (var state in new[] { "QUEUED", "SENT", S(c, "status") }.Distinct()) {
                 var field = state == "QUEUED" ? "queuedTime" : state == "SENT" ? "sentTime" : "respondedTime";
-                var at = Optional(c, field); if (at != null) {
-                    var cycle = "";
-                    if (alarmToken != null) {
-                        var alarm = CycleAt(alarmToken, Time(at)); if (alarm.ValueKind == JsonValueKind.Undefined) continue;
-                        f["alarmToken"] = alarmToken; cycle = S(alarm, "raisedTime");
-                    }
-                    Emit("command", id, device, key, cycle, state, Time(at), f, command: id);
-                }
+                var at = Optional(c, field);
+                if (at != null) Emit("command", id, device, key, cycle, state, Time(at), f, command: id);
                 else if (state == S(c, "status")) problems.Add("commands: missing " + field + " for " + id);
             }
         }

@@ -83,6 +83,8 @@ var purgeSeedExemptions = map[string]string{
 	"ai-inference.purged_tenants":                                purgeTombstone,
 	"ai-inference.secrets":                                       representedTenantPredicate,
 	"command-delivery.audit_events":                              sharedJournal,
+	"command-delivery.agent_actuation_fences":                    representedTenantPredicate,
+	"command-delivery.agent_proposals":                           representedTenantPredicate,
 	"command-delivery.campaign_cycles":                           representedTenantPredicate,
 	"command-delivery.campaign_elements":                         representedTenantPredicate,
 	"command-delivery.campaigns":                                 representedTenantPredicate,

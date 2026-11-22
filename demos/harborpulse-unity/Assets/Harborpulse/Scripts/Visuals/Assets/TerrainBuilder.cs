@@ -102,13 +102,6 @@ namespace DeviceChain.Harborpulse.Visuals
                         foreach (var street in plan.Streets) edge = Mathf.Min(edge, (float)(street.DistanceTo(new Ground(x, z)) - street.Width / 2));
                         color = Mix(color, worn, 1 - Mathf.SmoothStep(0, 1, edge / 3));
                     }
-                    // the open coast's edge is turf and bare heath in a strip of uneven width, not forest floor ruled off at the water
-                    if (Mathf.Abs(x) > TownBuilder.CoreHalfX)
-                    {
-                        var strip = 22 + 60 * (float)CoastalTerrain.Noise(x * .011 + 17, 3.3);
-                        var shore = 1 - Mathf.SmoothStep(0, 1, (z - TownBuilder.CoastZ) / strip);
-                        color = Mix(color, Mix(heath, meadowStraw, Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.3f, .8f, patch))), shore * .85f);
-                    }
                     // rocky, heath-toned ground where the slope steepens, and the bedrock skirt round every outcrop
                     var bare = Mathf.Clamp01((.985f - n.y) * 9);
                     color = Mix(color, heath, bare * .5f);
@@ -116,7 +109,16 @@ namespace DeviceChain.Harborpulse.Visuals
                     color = Mix(color, Scale(heath, .72f), skirt * .75f);
                     // Flat facets show the knolls; a whisper of per-facet variation, no alternating checkerboard
                     var shade = .985f + .03f * (float)CoastalTerrain.Noise(x * .05, z * .05) + .008f * (float)CoastalTerrain.Hash(i, j);
-                    Tile(x, z).Quad(a, c, d, b, Scale(color, shade));
+                    // The open coast's edge is turf and bare heath in a strip of uneven width, not forest floor ruled off at the water. The
+                    // strip is weighed at each CORNER and blended across the facet: weighed once per facet it drew the grid as a staircase
+                    // of 20 and 30 m squares wherever a camera looked along the coast.
+                    if (Mathf.Abs(x) > TownBuilder.CoreHalfX && z < TownBuilder.CoastZ + 140)
+                    {
+                        var turf = Mix(heath, meadowStraw, Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.3f, .8f, patch)));
+                        Color At(Vector3 p) => Scale(Mix(color, turf, Shore(p.x, p.z) * .85f), shade);
+                        Tile(x, z).Quad(a, c, d, b, At(a), At(c), At(d), At(b));
+                    }
+                    else Tile(x, z).Quad(a, c, d, b, Scale(color, shade));
                 }
             // Verges share the terrain tiles: widening Main Street adds no renderer or shadow caster.
             foreach (var street in plan.Streets)
@@ -145,6 +147,13 @@ namespace DeviceChain.Harborpulse.Visuals
             // Granite outcrops: stepped, faceted ledges sunk into the slope (the model fits and checks every ring), sharing the terrain tiles.
             foreach (var o in plan.Outcrops) DrawOutcrop(Tile((float)o.Center.X, (float)o.Center.Z), o);
             foreach (var tile in tiles) tile.Value.Spawn("Coastal terrain and granite " + tile.Key, parent, material);
+        }
+
+        /// <summary>0 .. 1: how much of the coastal turf strip lies at a point: all of it at the coast, none past the strip's uneven inland edge (22-96 m).</summary>
+        static float Shore(float x, float z)
+        {
+            var strip = 22 + 60 * (float)CoastalTerrain.Noise(x * .011 + 17, 3.3) + 14 * (float)CoastalTerrain.Noise(x * .047 + 3, 8.1);
+            return 1 - Mathf.SmoothStep(0, 1, (z - TownBuilder.CoastZ) / strip);
         }
 
         static Vector3 V(DeviceChain.Harborpulse.Model.Director.Point3 p) => new Vector3((float)p.X, (float)p.Y, (float)p.Z);
@@ -208,6 +217,37 @@ namespace DeviceChain.Harborpulse.Visuals
                 var fissure = Rock(dark, .55f);
                 kit.Facing(p0 + lift, crown - across + lift, crown + across + lift, Vector3.up, fissure);
                 kit.Facing(p1 + lift, crown + across + lift, crown - across + lift, Vector3.up, fissure);
+            }
+            // The loose blocks and the tor (Outcrop.Blocks): each a prism that comes up through the ledge. Walls darken to their foot like the
+            // ledge's own, the wall away from the sun's arc is darker again, and every top is one of the light tones, so a block shows from
+            // HOME as a lit cap over a dark side: that pair is what reads as a boulder at half a kilometre.
+            for (var n = 0; n < o.Blocks.Length; n++)
+            {
+                var b = o.Blocks[n];
+                var middle = Vector3.zero;
+                for (var i = 0; i < 8; i++) middle += V(b[i]) / 8;
+                for (var i = 0; i < 4; i++)
+                {
+                    var k = (i + 1) % 4;
+                    Vector3 a0 = V(b[i]), a1 = V(b[k]), t0 = V(b[4 + i]), t1 = V(b[4 + k]);
+                    var outward = (a0 + a1 + t0 + t1) * .25f - middle; outward.y = 0; outward.Normalize();
+                    var shade = Mathf.Lerp(1f, .64f, Mathf.Clamp01(outward.z * 1.4f));
+                    var tone = Granite(20 + n, i, false);
+                    // the upper third of a wall catches the sky. A slab of the landmark tor shows only from the top of the slab under it, so its
+                    // lit band is the upper part of what shows: each joint of the stack is then a dark line under a light band, from HOME too
+                    var lit = .66f;
+                    if (o.Landmark)
+                    {
+                        float bottom = Mathf.Min(a0.y, a1.y), topY = Mathf.Min(t0.y, t1.y);
+                        lit = Mathf.Clamp(((float)o.BlockFoot[n] + .42f * (topY - (float)o.BlockFoot[n]) - bottom) / Mathf.Max(.01f, topY - bottom), .05f, .95f);
+                    }
+                    // Two quads that meet along a line, not a light one laid 3 cm over a dark one: a block's top is skewed, so its wall is a
+                    // twisted quad, and on a tall slab the overlay sank through it (and at HOME's range 3 cm is under the depth buffer's step).
+                    Vector3 m0 = Vector3.Lerp(a0, t0, lit), m1 = Vector3.Lerp(a1, t1, lit);
+                    kit.Facing(a0, m0, m1, a1, outward, Rock(tone, .52f * shade));
+                    kit.Facing(m0, t0, t1, m1, outward, Rock(tone, (o.Landmark ? .98f : .9f) * shade));
+                }
+                kit.Facing(V(b[4]), V(b[5]), V(b[6]), V(b[7]), Vector3.up, Rock(Granite(40 + n, 0, true), 1.16f));
             }
         }
     }

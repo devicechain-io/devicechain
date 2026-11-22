@@ -541,6 +541,9 @@
         "^[lL][oO][gG][gG][iI][nN][gG]$": {
           "$ref": "#/$defs/LoggingConfiguration"
         },
+        "^[mM][cC][pP]$": {
+          "$ref": "#/$defs/McpConfiguration"
+        },
         "^[mM][eE][sſS][sſS][aA][gG][iI][nN][gG]$": {
           "$ref": "#/$defs/MessagingConfiguration"
         },
@@ -602,6 +605,9 @@
         },
         "logging": {
           "$ref": "#/$defs/LoggingConfiguration"
+        },
+        "mcp": {
+          "$ref": "#/$defs/McpConfiguration"
         },
         "messaging": {
           "$ref": "#/$defs/MessagingConfiguration"
@@ -699,6 +705,29 @@
           ],
           "type": [
             "string",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "McpConfiguration": {
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[cC][oO][mM][mM][aA][nN][dD][pP][rR][oO][pP][oO][sſS][aA][lL][sſS]$": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "properties": {
+        "commandProposals": {
+          "type": [
+            "boolean",
             "null"
           ]
         }

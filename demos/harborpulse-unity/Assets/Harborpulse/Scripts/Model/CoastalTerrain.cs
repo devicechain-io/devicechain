@@ -141,6 +141,52 @@ namespace DeviceChain.Harborpulse.Model
             public int Seed { get; }
             public double CrestZ => RowZ[Array.IndexOf(RowFraction, 1.0)];
 
+            /// <summary>The back coordinate at which the layer's front face reaches a fraction of its crest height (1 is the crest row itself).</summary>
+            public double BackAtFraction(double fraction)
+            {
+                var crest = Array.IndexOf(RowFraction, 1.0);
+                for (var i = 1; i <= crest; i++)
+                    if (fraction <= RowFraction[i])
+                        return RowZ[i - 1] + (RowZ[i] - RowZ[i - 1]) * (fraction - RowFraction[i - 1]) / (RowFraction[i] - RowFraction[i - 1]);
+                return RowZ[crest];
+            }
+
+            /// <summary>The lines of crest trees: each line's fraction of the crest height on the front face, and the spacing along it in metres.</summary>
+            public static readonly double[] TreeLineFraction = { 1, .8, .58 }, TreeLineSpacingM = { 11, 17, 17 };
+
+            /// <summary>The tallest crest tree, in metres above its foot; the foot is sunk <see cref="CrestTreeSinkM"/> into the layer.</summary>
+            public const double CrestTreeMaxM = 17, CrestTreeSinkM = 1.5;
+
+            /// <summary>
+            /// The wood on the layer as it shows from two kilometres: a line of tree tops along the crest and two more down the face in front
+            /// of it, six conifers to four broadleaves as in the planted forest, in stands with gaps, the broadleaves' autumn colour in drifts
+            /// along the range. They are flat cut-outs that face the harbour (the builder draws one to three triangles each), so the crest
+            /// reads as a tree line and the face as wooded at the distance where a planted tree would be a pixel. None stands where the layer
+            /// has no hill, and every foot is sunk into the layer's own surface.
+            /// </summary>
+            public System.Collections.Generic.IEnumerable<CrestTree> CrestTrees()
+            {
+                for (var k = 0; k < TreeLineFraction.Length; k++)
+                {
+                    var back = BackAtFraction(TreeLineFraction[k]);
+                    var spacing = TreeLineSpacingM[k];
+                    var count = (int)(2 * HalfWidth / spacing);
+                    for (var i = 0; i < count; i++)
+                    {
+                        var h1 = Hash(i * 31 + Seed * 1013 + k * 77, 5); var h2 = Hash(i * 17 + Seed * 311 + k * 53, 9); var h3 = Hash(i * 13 + Seed * 97 + k * 29, 21);
+                        var along = AlongCentre - HalfWidth + (i + .15 + .7 * h1) * spacing;
+                        if (Crest(along) < 8) continue;
+                        // stands and gaps: a slow noise opens the line here and there
+                        if (Noise(along * .012 + Seed * 3.1, k * 5.7 + 1.3) < .28) continue;
+                        World(along, back, out var x, out var z);
+                        var conifer = h2 < .6;
+                        var height = conifer ? 11 + 6 * h3 : 8.5 + 5.5 * h3;
+                        yield return new CrestTree(along, back, Height(x, z) - CrestTreeSinkM, height, conifer ? height * .21 : height * .40, conifer,
+                            Noise(along * .0055 + Seed * 7.7, 3.3 + k * .9), h1);
+                    }
+                }
+            }
+
             /// <summary>The crest line: height above the deck at an along coordinate (x for a northern layer). Hills overlap, each with its own profile; it falls to nothing at both ends.</summary>
             public double Crest(double x)
             {
@@ -171,6 +217,27 @@ namespace DeviceChain.Harborpulse.Model
                 var t = (z - RowZ[i - 1]) / (RowZ[i] - RowZ[i - 1]);
                 return SitePlan.DeckHeightM + Crest(x) * (RowFraction[i - 1] + (RowFraction[i] - RowFraction[i - 1]) * t);
             }
+        }
+
+        /// <summary>One tree of a layer's wood (<see cref="HillLayer.CrestTrees"/>): where it stands in the layer's own coordinates, and its cut-out.</summary>
+        public readonly struct CrestTree
+        {
+            public CrestTree(double along, double back, double foot, double height, double halfWidth, bool conifer, double drift, double variation)
+            {
+                Along = along; Back = back; Foot = foot; Height = height; HalfWidth = halfWidth; Conifer = conifer; Drift = drift; Variation = variation;
+            }
+
+            public double Along { get; }
+            public double Back { get; }
+            /// <summary>WORLD height of the cut-out's foot, under the layer's surface.</summary>
+            public double Foot { get; }
+            public double Height { get; }
+            public double HalfWidth { get; }
+            public bool Conifer { get; }
+            /// <summary>0 .. 1, slow along the range: which autumn colour a broadleaf takes, so gold, rust and crimson come in drifts.</summary>
+            public double Drift { get; }
+            public double Variation { get; }
+            public double Top => Foot + Height;
         }
 
         /// <summary>Row z values of the ridge mesh, and each row's fraction of the crest height (front foot to hidden back slope).</summary>

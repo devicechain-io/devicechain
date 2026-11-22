@@ -19,6 +19,8 @@ namespace DeviceChain.Harborpulse.Model
         Paint, PaintDark, PaintLight, Trim, TrimDark, Stone, StoneDark, Brick, BrickLight, Mortar, Wood, WoodDark, WoodLight,
         Roof, RoofDark, Accent, AccentLight, Door, DoorPanel, Metal, MetalDark, Black, Glass, Foliage, FoliageDark,
         Red, Yellow, Orange, Cream, Rope, Hull, HullDark, Window,
+        /// <summary>The sky a pane of glass mirrors in its upper part, and the glint across it (see <see cref="NearPlan.Glazed"/>).</summary>
+        GlassSky, GlassGlint,
     }
 
     public readonly struct NearVec
@@ -188,6 +190,28 @@ namespace DeviceChain.Harborpulse.Model
             if (nx * (gx - inside.X) + ny * (gy - inside.Y) + nz * (gz - inside.Z) < 0) { nx = -nx; ny = -ny; nz = -nz; }
             NearVec P(NearVec q) => new NearVec(gx + (q.X - gx) * (1 - inset) + nx * lift, gy + (q.Y - gy) * (1 - inset) + ny * lift, gz + (q.Z - gz) * (1 - inset) + nz * lift);
             return Quad(t, P(a), P(b), P(c), P(d), new NearVec(nx, ny, nz));
+        }
+
+        /// <summary>
+        /// A vehicle's glass: the pane of <see cref="Pane"/> (corners given bottom-left, bottom-right, top-right, top-left), with the sky
+        /// mirrored in its upper part and a narrow glint across one corner, so it reads as glass where one flat dark quad read as a hole.
+        /// The two are thin quads a few millimetres proud of the pane, inside its outline; nothing is transparent.
+        /// </summary>
+        public NearPlan Glazed(NearVec a, NearVec b, NearVec c, NearVec d, NearVec inside, float inset, float lift)
+        {
+            Pane(NearTone.Glass, a, b, c, d, inside, inset, lift);
+            NearVec L(NearVec p, NearVec q, float t) => new NearVec(p.X + (q.X - p.X) * t, p.Y + (q.Y - p.Y) * t, p.Z + (q.Z - p.Z) * t);
+            // the pane's own corners, pulled in as Pane pulls them: the sky and the glint are cut from these, so neither can leave the pane
+            float gx = (a.X + b.X + c.X + d.X) / 4, gy = (a.Y + b.Y + c.Y + d.Y) / 4, gz = (a.Z + b.Z + c.Z + d.Z) / 4;
+            NearVec In(NearVec q) => new NearVec(gx + (q.X - gx) * (1 - inset), gy + (q.Y - gy) * (1 - inset), gz + (q.Z - gz) * (1 - inset));
+            a = In(a); b = In(b); c = In(c); d = In(d);
+            // the sky: the upper part of the pane, its lower edge slanting a little so it is not a ruled band
+            Pane(NearTone.GlassSky, L(a, d, .50f), L(b, c, .62f), c, d, inside, 0, lift + .004f);
+            // the glint: a thin slanting bar across the lower corner
+            NearVec g0 = L(L(a, b, .14f), L(d, c, .14f), .10f), g1 = L(L(a, b, .20f), L(d, c, .20f), .10f),
+                g2 = L(L(a, b, .36f), L(d, c, .36f), .44f), g3 = L(L(a, b, .30f), L(d, c, .30f), .44f);
+            Pane(NearTone.GlassGlint, g0, g1, g2, g3, inside, 0, lift + .008f);
+            return this;
         }
 
         /// <summary>A box in a facade's frame: <c>u</c> along, <c>v</c> up, <c>n</c> out of the wall plane.</summary>
