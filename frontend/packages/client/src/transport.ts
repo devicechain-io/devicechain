@@ -8,6 +8,10 @@
 // GraphQL handler lets an absent token through with no tenant).
 
 import type { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+import { GraphQLRequestError, type GraphQLErrorEntry } from './request-error';
+import { checkOperation, schemaNegotiationEnabled, SCHEMA_MEDIA_TYPE } from './skew';
+
+export { GraphQLRequestError, type GraphQLErrorEntry };
 
 // DeviceChain functional areas that expose a GraphQL endpoint. An "area" ending in
 // `/admin` is a service's instance-scoped admin API (ADR-033), served by that
@@ -125,30 +129,6 @@ export async function resolveAuthToken(): Promise<string | null> {
 
 // ── Errors ──────────────────────────────────────────────────────────────
 
-export class GraphQLRequestError extends Error {
-  constructor(
-    message: string,
-    /** HTTP status, or 0 for a transport-level failure. */
-    public status: number,
-    /** The raw `errors` array from a GraphQL response, when present. */
-    public errors?: GraphQLErrorEntry[],
-  ) {
-    super(message);
-    this.name = 'GraphQLRequestError';
-  }
-}
-
-/**
- * One entry of a GraphQL response's `errors` array. `extensions` carries the server's
- * machine-readable detail when it sends any — for example `code: "THROTTLED"` with
- * `retryAfterSeconds` on a sign-in refused by the per-account backoff — so a caller can
- * branch on a code instead of matching the message text.
- */
-export interface GraphQLErrorEntry {
-  message: string;
-  extensions?: Record<string, unknown>;
-}
-
 interface GraphQLResponse<T> {
   data?: T;
   errors?: GraphQLErrorEntry[];
@@ -206,14 +186,11 @@ export async function gql<TResult, TVariables>(
     }
   }
 
-  const bodyText = JSON.stringify({ query: document.toString(), variables });
-  const send = async (): Promise<Response> => {
+  const query = document.toString();
+  const bodyText = JSON.stringify({ query, variables });
+  const sendWith = async (init: RequestInit): Promise<Response> => {
     try {
-      return await fetch(areaPath(area), {
-        method: 'POST',
-        headers: { ...headers },
-        body: bodyText,
-      });
+      return await fetch(areaPath(area), init);
     } catch (err) {
       throw new GraphQLRequestError(
         err instanceof Error ? err.message : 'Network request failed',
@@ -221,28 +198,58 @@ export async function gql<TResult, TVariables>(
       );
     }
   };
+  const send = (): Promise<Response> =>
+    sendWith({ method: 'POST', headers: { ...headers }, body: bodyText });
 
-  let res = await send();
-  if (res.status === 401 && token && handler && !options?.anonymous) {
-    const rejectedToken = token;
-    // The refresh call must be anonymous, so it cannot recursively recover itself.
-    // A refresh that THROWS could not be completed right now (a network failure, a 5xx or a
-    // 429): nothing was refused, so the session is kept, onEnd is not called, and this request
-    // fails with that error. Only a null (a definitive refusal, or no recovery for this token)
-    // or a second 401 ends the session.
-    token = await handler.refresh(rejectedToken, useIdentity);
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-      res = await send();
+  // One 401 recovery, shared by the operation and (when negotiation is on) the schema discovery
+  // that precedes it, so both ride the same refresh-once-then-end policy.
+  const recover = async (first: Response, resend: () => Promise<Response>): Promise<Response> => {
+    let res = first;
+    if (res.status === 401 && token && handler && !options?.anonymous) {
+      const rejectedToken = token;
+      // The refresh call must be anonymous, so it cannot recursively recover itself.
+      // A refresh that THROWS could not be completed right now (a network failure, a 5xx or a
+      // 429): nothing was refused, so the session is kept, onEnd is not called, and this request
+      // fails with that error. Only a null (a definitive refusal, or no recovery for this token)
+      // or a second 401 ends the session.
+      token = await handler.refresh(rejectedToken, useIdentity);
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+        res = await resend();
+      }
+      if (res.status === 401) {
+        handler.onEnd(
+          new GraphQLRequestError('Request failed (401)', 401),
+          token ?? rejectedToken,
+          useIdentity,
+        );
+      }
     }
-    if (res.status === 401) {
-      handler.onEnd(
-        new GraphQLRequestError('Request failed (401)', 401),
-        token ?? rejectedToken,
-        useIdentity,
-      );
-    }
+    return res;
+  };
+
+  // Negotiation: check the operation against the endpoint's served contract before dispatch.
+  // Authenticated requests only; login and refresh keep their stable contract.
+  if (schemaNegotiationEnabled() && !options?.anonymous) {
+    const discover = () =>
+      sendWith({
+        method: 'OPTIONS',
+        headers: { ...headers, Accept: SCHEMA_MEDIA_TYPE },
+        redirect: 'error',
+      });
+    await checkOperation(
+      areaPath(area),
+      async () => {
+        const found = await recover(await discover(), discover);
+        if (found.status === 401) throw new GraphQLRequestError('Request failed (401)', 401);
+        return found;
+      },
+      query,
+      variables,
+    );
   }
+
+  const res = await recover(await send(), send);
 
   if (!res.ok) {
     throw new GraphQLRequestError(`Request failed (${res.status})`, res.status);
