@@ -40,19 +40,19 @@ process is genuinely gone, take the claim with `dcctl instances reclaim
 | `dcctl install` | 拒绝执行，不会修改Operator或集群前置组件。 |
 | `dcctl bootstrap` | 在第二步拒绝执行，不会修改基础设施或 Chart。 |
 | `dcctl destroy` | 发出警告后继续：*“但如果该运行仍在执行，这次操作会与它冲突”*。 |
-| `dcctl upgrade` | 发出同样的警告后继续。 |
+| `dcctl upgrade` | 在写入任何内容之前拒绝执行，并指出持有锁的运行。 |
 | `dcctl bootstrap --dry-run` | 不获取锁，只报告实际执行时*会*遇到的占用情况。 |
 
 初始化在第二步获取锁，而不是第一步。第一步是 `--build` 开发流程中的镜像构建，它不需要集群锁，只生成 Chart 随后要部署的镜像。使用已发布镜像时，第一步不做任何操作。
 
-`dcctl upgrade` 遇到集群锁只会警告，但另有一项与锁无关的拒绝条件：如果集群中没有Operator，或可以确认Operator来自另一个发行版本，它不会将实例升级到目标版本，并会提示先运行 `dcctl install`。手动安装的Operator会收到提示，但可以继续。参见[发行与升级](./releases-and-upgrades.md#rolling-upgrades)。
+`dcctl upgrade` 在第一次写入之前获取锁，并在持有锁时再次检查集群的Operator。如果集群中没有Operator，或可以确认Operator来自另一个发行版本，它不会将实例升级到目标版本，并会提示先运行 `dcctl install`。手动安装的Operator会收到提示，但可以继续。由于 `dcctl install` 获取的是同一把锁，持有锁的升级运行期间Operator不会被更改。参见[发行与升级](./releases-and-upgrades.md#rolling-upgrades)。
 
-升级还会使用执行机器上的 OpenTofu 状态来应用实例的消息代理和事件存储配置。因此，如果另一台机器无视警告，同时升级同一个实例，它会同时应用自己那份状态。对同一个实例，每次只应从一台机器执行升级。
+被终止的运行会留下锁：请用 [`dcctl instances reclaim`](#reclaim) 获取它，该命令会等待一个租约时长，并要求你输入持有者标识。仍在运行的运行会持续续约，无法被回收：请先停止该进程。
 
 这种差异是有意设计的：
 
-- **安装和初始化拒绝执行。** 两次初始化并行运行，可能拼出一个部分由第一份配置、部分由第二份配置构建的实例；拒绝第二次运行才有意义。
-- **销毁和升级只发出警告。** 运维人员已经决定要拆除实例，往往正是因为出现了故障。无法先正常询问集群，不应成为阻止拆除的原因；所以这两个命令会明确警告，然后继续。
+- **安装、初始化和升级拒绝执行。** 两次初始化并行运行，可能拼出一个部分由第一份配置、部分由第二份配置构建的实例。升级会重写实例的声明、配置和发布；另一个运行同时做同样的事，或安装在其下更换Operator，都会留下与两者都不一致的实例。
+- **销毁只发出警告。** 运维人员已经决定要拆除实例，往往正是因为出现了故障。无法先正常询问集群，不应成为阻止拆除的原因；所以它会明确警告，然后继续。
 - **预演不获取锁。** 预演是计划，不应修改集群，因此什么也不写，包括锁。但它仍会报告锁的持有者，因为“已有其他运行”也是“这次操作将会做什么”的一部分。
 
 ## 锁的范围 {#scope}
@@ -79,9 +79,10 @@ kubectl --context <kube-context> get lease dcctl -n dc-k8s-system -o yaml
 
 - 在 `dc-k8s-system` 中对 `leases.coordination.k8s.io` 的 `get`、`create`、`update` 和 `delete` 权限；
 - 在整个集群范围内对 `instances.core.devicechain.io` 的 `get`、`list`、`create`、`update`、`patch` 和 `delete` 权限；
+- 在整个集群范围内对 `customresourcedefinitions` 的 `get` 权限；
 - 在 `dc-system` 中对 `secrets` 的 `list` 权限。
 
-上述两项中的 `list` 都不可省略，而且最容易被漏掉。每次初始化和升级都会查询集群已有的实例及其占用资源，包括入口主机名、本地 MQTT 端口和连接预算。这需要列举，而不是读取单个对象。只有 `get` 权限的账户会在保护其他实例的检查中失败。`update` 和 `delete` 用于在销毁实例时释放声明的 finalizer，`patch` 用于记录声明上的运行阶段。
+上述两项中的 `list` 都不可省略，而且最容易被漏掉。每次初始化和升级都会查询集群已有的实例及其占用资源，包括入口主机名、本地 MQTT 端口和连接预算。这需要列举，而不是读取单个对象。只有 `get` 权限的账户会在保护其他实例的检查中失败。`update` 和 `delete` 用于在销毁实例时释放声明的 finalizer，`patch` 用于记录声明上的运行阶段。`dcctl instances release` 使用 `patch` 而不是 `update`：它只修改 finalizer 列表。`bootstrap`、`upgrade` 和 `release` 通过读取 `customresourcedefinitions` 来检查集群使用的是哪个 Operator。
 
 如果账户缺少这些权限，`dcctl` 会显示 API 服务器的实际拒绝信息：操作、资源、命名空间及用户，而不会把它报告成服务中断。
 

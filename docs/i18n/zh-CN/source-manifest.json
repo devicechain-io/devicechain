@@ -111,8 +111,8 @@
       "translationSha256": "6a3b17b6d93571a19517bbcb0b056d8a0d4b45b84659748ed3025a087380e435"
     },
     "deployment/cluster-lock.md": {
-      "sourceSha256": "1f023271ebfdba3cbab4a140db9606d0827bd12f7c96000c5c6bc946b588b148",
-      "translationSha256": "930b8ceb9fa126e278b533eb8fef833e67b5d4664dc9fc681b61ce5267857e98"
+      "sourceSha256": "7af0207cc3746508a5e12b65a75581899e2dbd60639d256d33c1e84c29d58231",
+      "translationSha256": "3b086ffdbe0ca32d17afdad08df9a883ae26f5095079c8173eb135f751a79f70"
     },
     "deployment/connecting-from-outside.md": {
       "sourceSha256": "eef042cd33321265162d5b810600196a1ec28011a4f792e1ce1ee2a964b893d7",
@@ -143,8 +143,8 @@
       "translationSha256": "c67d101ae9e3b54577579617024336803b4b9e114a826350d16fdef0c425f87e"
     },
     "deployment/kubernetes-operator.md": {
-      "sourceSha256": "41bdd347f6bb00855cf0d872307edcf79fe18e5beb3f656d809ad35413985034",
-      "translationSha256": "7b9600a9309caa7d5ea7ceaf6b5635842c963e95fa9912faa90d2c3426f0f0d5"
+      "sourceSha256": "c6f609e04c941c7d6171a9fc9b2dbee4acb1df11d6549f7e00c8d93d7ffa9785",
+      "translationSha256": "daffb29829f7ed5a576d48c4be1cf8526976710c9200511db6c5dbd1584de397"
     },
     "deployment/metrics-reference.md": {
       "sourceSha256": "1c34f6f62de91da3274059d2c5dd0d68f3b825ce1f30b16c56d0c9d8eaeb7d3e",

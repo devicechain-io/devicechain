@@ -452,6 +452,14 @@ deja de tener un registro de a qué pertenecen. Por eso el comando te obliga a c
 explícitamente que eso es lo que quieres. Existe porque, de lo contrario, un finalizador cuyo
 liberador ha desaparecido dejaría al clúster con un objeto que nadie puede borrar.
 
+Primero comprueba el operador de DeviceChain del clúster. Un clúster cuyo operador no es para el
+que se construyó este `dcctl` se rechaza: ejecuta la liberación desde el `dcctl` que coincide con
+el clúster, o pasa `--force` para liberarla de todos modos, con un aviso. Un clúster sin ningún
+operador se deja pasar, porque una declaración que se quedó sin él es para lo que existe el
+comando. Solo cambia la lista de finalizers (un patch, no una actualización de toda la
+declaración), así que necesita `get` y `patch` sobre `instances.core.devicechain.io`, `delete`
+sobre él, y `get` sobre `customresourcedefinitions`.
+
 Imprime lo que va a hacer y te pide que escribas de vuelta el nombre de la instancia; `--yes`
 omite esa confirmación para uso automatizado. `--kube-context` hace falta desde cualquier
 máquina que no haya arrancado la instancia, ya que es lo que le dice a `dcctl` qué clúster
