@@ -190,6 +190,7 @@ const sidebars: SidebarsConfig = {
             'guides/device-self-registration',
             'guides/importing-devices',
             'guides/migrating-from-another-platform',
+            'guides/product-as-code',
             'guides/inbound-integrations',
             'guides/chirpstack-uplinks',
             'guides/the-things-stack-uplinks',
