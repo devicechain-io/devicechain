@@ -317,6 +317,8 @@ dcctl instances release <id> --kube-context <kube-context>
 
 这会清除 finalizer 并删除声明。**它不销毁任何内容。** 命名空间、数据库、卷和工作负载之后仍在运行，而 `dcctl` 不再有记录说明它们属于什么。因此命令要求你明确确认这正是想要的结果。它之所以存在，是因为负责移除 finalizer 的工具消失时，否则集群会留下无人能够删除的对象。
 
+它首先检查集群的 DeviceChain Operator。如果集群的 Operator 不是当前 `dcctl` 所对应的版本，命令会拒绝执行：请使用与集群匹配的 `dcctl` 执行释放，或传入 `--force` 在警告后继续释放。完全没有 Operator 的集群会被放行，因为这正是该命令的用途。它只修改 finalizer 列表（使用 patch，而不是更新整个声明），因此需要对 `instances.core.devicechain.io` 的 `get`、`patch` 和 `delete` 权限，以及对 `customresourcedefinitions` 的 `get` 权限。
+
 命令会打印即将执行的操作，并要求再次输入实例名称；脚本使用时可用 `--yes` 跳过提示。任何未引导该实例的机器都需要 `--kube-context`，因为它告诉 `dcctl` 哪个集群保存声明。
 
 要移除**实例**，请运行 `dcctl destroy`。

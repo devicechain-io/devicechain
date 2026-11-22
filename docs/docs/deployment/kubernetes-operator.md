@@ -438,6 +438,14 @@ record of what they belong to. That is why the command makes you confirm explici
 is what you want. It exists because a finalizer whose remover is gone would otherwise leave the
 cluster holding an object nobody can delete.
 
+It first checks the cluster's DeviceChain operator. A cluster whose operator is not the one
+this `dcctl` was built for is refused: run the release from the `dcctl` that matches the
+cluster, or pass `--force` to release anyway, with a warning. A cluster with no operator at all
+is let through, because a declaration left without one is what the command is for. It changes
+only the finalizer list (a patch, not an update of the whole declaration), so it needs `get` and
+`patch` on `instances.core.devicechain.io`, `delete` on it, and `get` on
+`customresourcedefinitions`.
+
 It prints what it is about to do and asks you to type the instance name back; `--yes` skips
 that prompt for scripted use. `--kube-context` is needed from any machine that did not
 bootstrap the instance, since that is what tells `dcctl` which cluster holds the declaration.

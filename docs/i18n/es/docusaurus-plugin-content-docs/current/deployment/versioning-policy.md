@@ -70,7 +70,7 @@ intencionada, igual que cualquier otra, de modo que ningún cambio en vista prev
 note. Un formato de archivo en vista previa lleva una versión, como `v1alpha1`, y una herramienta que no
 conoce la versión rechaza el archivo en lugar de adivinar.
 
-Hoy el nivel de vista previa contiene tres superficies. Las pruebas de reglas: la operación `evaluateRules`
+Hoy el nivel de vista previa contiene cuatro superficies. Las pruebas de reglas: la operación `evaluateRules`
 de la API de event-processing, los formatos de archivo de escenario y de prueba, y el comando `dcctl test`
 que los lee (consulta [Probar tus reglas](../guides/testing-your-rules.md)). El producto como código:
 `dcctl product export`, `plan` y `apply`, y su formato de paquete (consulta [Producto como código](../guides/product-as-code.md)).
@@ -87,6 +87,11 @@ incluyen sus tipos de entrada y resultado exclusivos, campos, argumentos y valor
 El campo `ServiceAccount.agent` no está en vista previa: está cubierto desde la versión que lo añade.
 Los roles de las cuentas de servicio ordinarias siguen cubiertos. Todavía no se ofrece ninguna
 herramienta MCP de acción; las herramientas MCP de lectura siguen en el catálogo no cubierto anterior.
+
+La preparación de operaciones de flota entra en vista previa en **v1.9**, cuando comienza su
+plazo de vista previa: la consulta `fleetOperationReadiness`, los tipos `FleetOperationReadiness`
+y `FleetOperationEnforcement`, incluidos sus campos y valores de enumeración, y
+`dcctl fleet-op readiness`. Requieren `fleet:operate`; se rechazan los miembros con ámbito limitado.
 
 ## Rutas de actualización admitidas {#upgrade-paths}
 

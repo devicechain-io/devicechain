@@ -102,30 +102,49 @@ export type AlarmSearchCriteria = {
   state?: string | null | undefined;
 };
 
+/** Data required to create an area. */
 export type AreaCreateRequest = {
+  /** Token of the area type to create it under. An unknown token is refused. */
   areaTypeToken: string;
   /** The token of the geofence that bounds the area. It must name an existing fence. */
   boundaryFenceToken?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new area, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing areas. */
 export type AreaSearchCriteria = {
+  /** Only areas of the area type with this token. Omit for every area. */
   areaTypeToken?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/** Data required to create an area type. */
 export type AreaTypeCreateRequest = {
+  /** Background colour to display the area type with, up to 32 characters. Not validated. */
   backgroundColor?: string | null | undefined;
+  /** Border colour to display the area type with, up to 32 characters. Not validated. */
   borderColor?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Foreground (text) colour to display the area type with, up to 32 characters. Not validated. */
   foregroundColor?: string | null | undefined;
+  /** Name of an icon representing the area type, up to 128 characters. Not checked against any icon set. */
   icon?: string | null | undefined;
+  /** URL of an image representing the area type, up to 512 characters. */
   imageUrl?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
   /**
    * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
@@ -135,22 +154,39 @@ export type AreaTypeCreateRequest = {
    * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
    */
   semanticTypes?: Array<string> | null | undefined;
+  /** Identifier for the new area type, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing area types. */
 export type AreaTypeSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of an area type. Each field has three states: omit it to keep the stored value,
+ * send null to clear it, or send a value to set it. There is no token field: the mutation's token
+ * argument names the record, so a token cannot be moved.
+ */
 export type AreaTypeUpdateRequest = {
+  /** Background colour; null clears it. */
   backgroundColor?: string | null | undefined;
+  /** Border colour; null clears it. */
   borderColor?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** Foreground colour; null clears it. */
   foregroundColor?: string | null | undefined;
+  /** Icon name; null clears it. */
   icon?: string | null | undefined;
+  /** Image URL; null clears it. */
   imageUrl?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
   /**
    * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
@@ -159,42 +195,85 @@ export type AreaTypeUpdateRequest = {
   semanticTypes?: Array<string> | null | undefined;
 };
 
+/**
+ * A partial update of an area. Each field has three states: omit it to keep the stored value, send
+ * null to clear it, or send a value to set it. There is no token field: the mutation's token argument
+ * names the record, so a token cannot be moved.
+ */
 export type AreaUpdateRequest = {
+  /**
+   * Re-points the area at a different area type. Omit to keep the current one. Null is refused,
+   * because every area must reference a type, and so is an unknown token; a refusal writes nothing.
+   */
   areaTypeToken?: string | null | undefined;
   /**
    * Links the area to the geofence that bounds it: omit to keep the link, send null to remove
    * it, send a token to set it. The token must name an existing fence.
    */
   boundaryFenceToken?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
 };
 
+/** Data required to create an asset. */
 export type AssetCreateRequest = {
+  /** Token of the asset type to create it under. An unknown token is refused. */
   assetTypeToken: string;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The asset's property document, validated against the asset type's active published contract
+   * before anything is written. Refused when the type has no published contract, when a key is not
+   * declared, when a value does not fit its declared type, bounds or allowed values, or when a
+   * required property is missing; a refusal is total, so no asset is created.
+   */
   properties?: string | null | undefined;
+  /** Identifier for the new asset, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing assets. */
 export type AssetSearchCriteria = {
+  /** Only assets of the asset type with this token. Omit for every asset. */
   assetTypeToken?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/** Data required to create an asset type. */
 export type AssetTypeCreateRequest = {
+  /** Background colour to display the asset type with, up to 32 characters. Not validated. */
   backgroundColor?: string | null | undefined;
+  /** Border colour to display the asset type with, up to 32 characters. Not validated. */
   borderColor?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Foreground (text) colour to display the asset type with, up to 32 characters. Not validated. */
   foregroundColor?: string | null | undefined;
+  /** Name of an icon representing the asset type, up to 128 characters. Not checked against any icon set. */
   icon?: string | null | undefined;
+  /** URL of an image representing the asset type, up to 512 characters. */
   imageUrl?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The draft property contract, as on AssetType.propertySchema. Refused if it is not a JSON array
+   * of descriptors, if it carries a key no descriptor declares (so a mistyped key is refused rather
+   * than dropped), or if it declares a contract nothing could satisfy, such as a duplicate name, an
+   * unknown data type or a default outside its own enum.
+   */
   propertySchema?: string | null | undefined;
   /**
    * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
@@ -204,23 +283,44 @@ export type AssetTypeCreateRequest = {
    * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
    */
   semanticTypes?: Array<string> | null | undefined;
+  /** Identifier for the new asset type, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing asset types. */
 export type AssetTypeSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of an asset type. Each field has three states: omit it to keep the stored value,
+ * send null to clear it, or send a value to set it. There is no token field: the mutation's token
+ * argument names the record, so a token cannot be moved.
+ */
 export type AssetTypeUpdateRequest = {
+  /** Background colour; null clears it. */
   backgroundColor?: string | null | undefined;
+  /** Border colour; null clears it. */
   borderColor?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** Foreground colour; null clears it. */
   foregroundColor?: string | null | undefined;
+  /** Icon name; null clears it. */
   icon?: string | null | undefined;
+  /** Image URL; null clears it. */
   imageUrl?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
+  /**
+   * Replaces the draft property contract wholesale; null withdraws it. Omit to keep the stored
+   * draft. Validated as on create, and a refusal writes nothing.
+   */
   propertySchema?: string | null | undefined;
   /**
    * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
@@ -229,11 +329,28 @@ export type AssetTypeUpdateRequest = {
   semanticTypes?: Array<string> | null | undefined;
 };
 
+/**
+ * A partial update of an asset. Each field has three states: omit it to keep the stored value, send
+ * null to clear it, or send a value to set it. There is no token field: the mutation's token argument
+ * names the record, so a token cannot be moved.
+ */
 export type AssetUpdateRequest = {
+  /**
+   * Re-points the asset at a different asset type. Omit to keep the current one. Null is refused,
+   * because every asset must reference a type, and so is an unknown token; a refusal writes nothing.
+   */
   assetTypeToken?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
+  /**
+   * Replaces the asset's property document wholesale; null clears it. Omit to keep what is stored.
+   * Omitting it does not skip the check: moving to another asset type re-validates the properties
+   * the asset already carries against that type's contract.
+   */
   properties?: string | null | undefined;
 };
 
@@ -541,28 +658,50 @@ export type ConfigurationKeyInput = {
   valueType: string;
 };
 
+/** Data required to create a customer. */
 export type CustomerCreateRequest = {
+  /** Token of the customer type to create it under. An unknown token is refused. */
   customerTypeToken: string;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new customer, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing customers. */
 export type CustomerSearchCriteria = {
+  /** Only customers of the customer type with this token. Omit for every customer. */
   customerTypeToken?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/** Data required to create a customer type. */
 export type CustomerTypeCreateRequest = {
+  /** Background colour to display the customer type with, up to 32 characters. Not validated. */
   backgroundColor?: string | null | undefined;
+  /** Border colour to display the customer type with, up to 32 characters. Not validated. */
   borderColor?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Foreground (text) colour to display the customer type with, up to 32 characters. Not validated. */
   foregroundColor?: string | null | undefined;
+  /**
+   * Name of an icon representing the customer type, up to 128 characters. Not checked against any
+   * icon set.
+   */
   icon?: string | null | undefined;
+  /** URL of an image representing the customer type, up to 512 characters. */
   imageUrl?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
   /**
    * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
@@ -572,22 +711,39 @@ export type CustomerTypeCreateRequest = {
    * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
    */
   semanticTypes?: Array<string> | null | undefined;
+  /** Identifier for the new customer type, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing customer types. */
 export type CustomerTypeSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of a customer type. Each field has three states: omit it to keep the stored value,
+ * send null to clear it, or send a value to set it. There is no token field: the mutation's token
+ * argument names the record, so a token cannot be moved.
+ */
 export type CustomerTypeUpdateRequest = {
+  /** Background colour; null clears it. */
   backgroundColor?: string | null | undefined;
+  /** Border colour; null clears it. */
   borderColor?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** Foreground colour; null clears it. */
   foregroundColor?: string | null | undefined;
+  /** Icon name; null clears it. */
   icon?: string | null | undefined;
+  /** Image URL; null clears it. */
   imageUrl?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
   /**
    * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
@@ -596,10 +752,23 @@ export type CustomerTypeUpdateRequest = {
   semanticTypes?: Array<string> | null | undefined;
 };
 
+/**
+ * A partial update of a customer. Each field has three states: omit it to keep the stored value, send
+ * null to clear it, or send a value to set it. There is no token field: the mutation's token argument
+ * names the record, so a token cannot be moved.
+ */
 export type CustomerUpdateRequest = {
+  /**
+   * Re-points the customer at a different customer type. Omit to keep the current one. Null is
+   * refused, because every customer must reference a type, and so is an unknown token; a refusal
+   * writes nothing.
+   */
   customerTypeToken?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
 };
 
@@ -776,6 +945,7 @@ export type DeviceCreateRequest = {
   token: string;
 };
 
+/** Data required to create a device credential. */
 export type DeviceCredentialCreateRequest = {
   /**
    * X509_CERTIFICATE only: the device certificate in PEM, optionally followed by the
@@ -789,6 +959,7 @@ export type DeviceCredentialCreateRequest = {
    * is stored only as a keyed digest and is returned once, in this mutation's response.
    */
   credentialId: string;
+  /** The kind of credential: ACCESS_TOKEN, MQTT_BASIC or X509_CERTIFICATE. Any other value is refused. */
   credentialType: string;
   /**
    * The password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
@@ -797,28 +968,44 @@ export type DeviceCredentialCreateRequest = {
    * working until it is next changed.
    */
   credentialValue?: string | null | undefined;
+  /** Token of the device the credential authenticates. An unknown token is refused. */
   deviceToken: string;
+  /** Whether the credential can authenticate. A disabled credential is kept but refused at connect. */
   enabled: boolean;
+  /** When the credential stops authenticating, as an RFC 3339 timestamp. Omit for never. */
   expiresAt?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Identifier for the new credential record, unique within the tenant. */
   token: string;
   /** X509_CERTIFICATE only: the trust anchor the certificate's chain must reach, at creation and at every connect. */
   trustAnchorToken?: string | null | undefined;
 };
 
+/** Criteria for listing device credentials. Every facet is optional and they AND together. */
 export type DeviceCredentialSearchCriteria = {
   /**
    * An MQTT username, or for ACCESS_TOKEN either the access token or the fingerprint a read
    * returns. The token is matched through its digest; it is never stored or compared as sent.
    */
   credentialId?: string | null | undefined;
+  /** Only credentials of this type: ACCESS_TOKEN, MQTT_BASIC or X509_CERTIFICATE. */
   credentialType?: string | null | undefined;
+  /** Only credentials of the device with this token. */
   device?: string | null | undefined;
+  /** True selects enabled credentials and false disabled ones. Omit for either. */
   enabled?: boolean | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of a device credential. Each field has three states: omit it to keep the stored
+ * value, send null to clear it, or send a value to set it. The token is not here because the
+ * mutation's token argument names the credential and an update cannot move it.
+ */
 export type DeviceCredentialUpdateRequest = {
   /**
    * The MQTT username, or the new access token for ACCESS_TOKEN. Setting it on an
@@ -828,6 +1015,7 @@ export type DeviceCredentialUpdateRequest = {
    * extensions.code INVALID_VALUE.
    */
   credentialId?: string | null | undefined;
+  /** The kind of credential. Required: null is refused. Validated against the known types when sent. */
   credentialType?: string | null | undefined;
   /**
    * The new password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
@@ -837,9 +1025,22 @@ export type DeviceCredentialUpdateRequest = {
    * working until it is next changed.
    */
   credentialValue?: string | null | undefined;
+  /**
+   * Re-points the credential at another device. Null is refused, and an unknown token refuses the
+   * whole update.
+   */
   deviceToken?: string | null | undefined;
+  /**
+   * Whether the credential can authenticate. Null is refused rather than read as false, which would
+   * silently disable the credential and take the device offline at its next reconnect.
+   */
   enabled?: boolean | null | undefined;
+  /**
+   * When the credential stops authenticating, as an RFC 3339 timestamp. Null, or an empty string
+   * such as a cleared form field sends, means never expires.
+   */
   expiresAt?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
 };
 
@@ -1000,9 +1201,21 @@ export type DeviceProfileUpdateRequest = {
   name?: string | null | undefined;
 };
 
+/**
+ * What a caller sends to swap the physical unit behind a device identity. It carries no device
+ * identity fields on purpose: there is no token, external id, device type or name, so a replacement
+ * cannot move the identity, the business key or the profile binding. Rotate credentials, not identity.
+ */
 export type DeviceReplaceRequest = {
+  /**
+   * The identifier the new unit presents at connect time. Optional only for ACCESS_TOKEN, where a
+   * random token is minted and returned once in newCredential; required for every other type, since
+   * the server cannot invent an MQTT username.
+   */
   credentialId?: string | null | undefined;
+  /** Token for the new credential record. A UUID is generated when omitted. */
   credentialToken?: string | null | undefined;
+  /** Type of the credential minted for the incoming unit. Defaults to ACCESS_TOKEN. */
   credentialType?: string | null | undefined;
   /**
    * The password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
@@ -1011,15 +1224,29 @@ export type DeviceReplaceRequest = {
    * working until it is next changed.
    */
   credentialValue?: string | null | undefined;
+  /** Token of the surviving logical device. An unknown token is refused. */
   deviceToken: string;
+  /** When the new credential stops authenticating, as an RFC 3339 timestamp. Omit for never. */
   expiresAt?: string | null | undefined;
+  /**
+   * The operator's free-text note, for example water ingress or an RMA number. Recorded on the
+   * replacement.
+   */
   reason?: string | null | undefined;
+  /**
+   * The incoming physical unit's own identifier, such as a manufacturer serial or IMEI. Recorded on
+   * the replacement, not on the device.
+   */
   unitIdentifier?: string | null | undefined;
 };
 
+/** Criteria for listing device replacement records. */
 export type DeviceReplacementSearchCriteria = {
+  /** Only the replacements of the device with this token. Omit for every device. */
   device?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
@@ -1787,18 +2014,45 @@ export type PayloadDecoderTestInput = {
   webhookBody?: string | null | undefined;
 };
 
+/**
+ * Data required to create a provisioning profile. The provision secret is not chosen by the caller:
+ * the server generates it and returns it once in the response.
+ */
 export type ProvisioningProfileCreateRequest = {
+  /**
+   * Type of credential to issue. When sent it must be a type provisioning can mint; for a
+   * certificate profile it must be X509_CERTIFICATE.
+   */
   credentialType?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /**
+   * Token of the device type of every device the profile registers, and the only type it will adopt.
+   * An unknown token is refused.
+   */
   deviceTypeToken: string;
+  /** Whether the profile accepts registrations. */
   enabled: boolean;
+  /** When the profile stops accepting registrations, as an RFC 3339 timestamp. Omit for never. */
   expiresAt?: string | null | undefined;
   /** The most devices the profile may register; at least 1. Omit or send null for no cap. */
   maxDevices?: number | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The key a fleet presents to register itself. Refused when empty or whitespace-only, and unique
+   * within the tenant. A padded value is stored exactly as sent.
+   */
   provisionKey: string;
+  /**
+   * ALLOW_NEW registers a device that does not exist yet and adopts an earmarked one;
+   * CHECK_PRE_PROVISIONED registers only earmarked devices that already exist. Neither adopts a
+   * device that was not earmarked for the profile.
+   */
   strategy: string;
+  /** Identifier for the new profile, unique within the tenant. Cannot be changed later. */
   token: string;
   /**
    * Makes this a certificate profile: its devices authenticate by a client certificate whose
@@ -1810,27 +2064,60 @@ export type ProvisioningProfileCreateRequest = {
   trustAnchorToken?: string | null | undefined;
 };
 
+/** Criteria for listing provisioning profiles. Every facet is optional and they AND together. */
 export type ProvisioningProfileSearchCriteria = {
+  /** Only profiles that register devices of the device type with this token. */
   deviceType?: string | null | undefined;
+  /** True selects enabled profiles and false disabled ones. Omit for either. */
   enabled?: boolean | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
+  /** Only profiles with this strategy: ALLOW_NEW or CHECK_PRE_PROVISIONED. */
   strategy?: string | null | undefined;
 };
 
+/**
+ * A partial update of a provisioning profile. Each field has three states: omit it to keep the stored
+ * value, send null to clear it, or send a value to set it. The token is not here because the
+ * mutation's token argument names the profile. The credential type cannot be edited and the secret is
+ * replaced only by rotateProvisioningProfileSecret.
+ */
 export type ProvisioningProfileUpdateRequest = {
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /**
+   * Device type stamped onto auto-created devices. Null is refused, and an unknown token refuses the
+   * whole update.
+   */
   deviceTypeToken?: string | null | undefined;
+  /** Whether the profile accepts registrations. Null is refused rather than read as false. */
   enabled?: boolean | null | undefined;
+  /**
+   * When the profile stops accepting registrations, as an RFC 3339 timestamp. Null, or an empty
+   * string, means never expires.
+   */
   expiresAt?: string | null | undefined;
   /**
    * The most devices the profile may register; at least 1. Null removes the cap. Lowering it
    * below the number already registered only refuses further registrations.
    */
   maxDevices?: number | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
+  /**
+   * The key a fleet presents to register itself. Required: null is refused, because a blank key
+   * authenticates nothing. The secret is not editable here; rotateProvisioningProfileSecret replaces
+   * it.
+   */
   provisionKey?: string | null | undefined;
+  /**
+   * ALLOW_NEW or CHECK_PRE_PROVISIONED. Required: null is refused. Validated against the known
+   * strategies when sent.
+   */
   strategy?: string | null | undefined;
   /**
    * Re-points a certificate profile at another trust anchor. Null is refused, and so is naming

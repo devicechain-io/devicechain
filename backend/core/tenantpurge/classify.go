@@ -224,9 +224,10 @@ type Plan struct {
 	// Entries holds every table, ordered so that a table is deleted before any table
 	// it references. Non-actionable classes keep their place; the sweep skips them.
 	Entries []Entry
-	// BeforeDelete prepares area-specific destructive writes inside the sweep's
+	// BeforeDelete prepares area-specific destructive writes inside the sweep's (it is given the
+	// tenant being swept)
 	// transaction, after its precondition and before any deletion.
-	BeforeDelete func(tx *gorm.DB) error `json:"-"`
+	BeforeDelete func(tx *gorm.DB, tenant string) error `json:"-"`
 }
 
 // Actionable returns the entries the sweep deletes from, in delete order.
