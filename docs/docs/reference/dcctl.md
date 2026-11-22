@@ -27,6 +27,7 @@ dcctl [command]
 * [dcctl device](#dcctl-device)	 - Act as a device
 * [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
 * [dcctl events](#dcctl-events)	 - Inspect a tenant's events
+* [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
 * [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
 * [dcctl install](#dcctl-install)	 - Prepare a cluster for DeviceChain instances
 * [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
@@ -1014,6 +1015,119 @@ dcctl events failed [flags]
 ### SEE ALSO
 
 * [dcctl events](#dcctl-events)	 - Inspect a tenant's events
+
+## dcctl executor {#dcctl-executor}
+
+Manage the in-cluster executor (Preview)
+
+### Synopsis
+
+Preview: the executor is installed and verified but executes no operations in this release
+
+### Options
+
+```
+  -h, --help                  help for executor
+      --kube-context string   kube-context to target (default: current context)
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl executor enroll](#dcctl-executor-enroll)	 - Install and verify the executor (Preview)
+* [dcctl executor status](#dcctl-executor-status)	 - Show enrollment, capability and pending operations
+* [dcctl executor unenroll](#dcctl-executor-unenroll)	 - Remove the executor, leaving instances and resource definitions
+
+## dcctl executor enroll {#dcctl-executor-enroll}
+
+Install and verify the executor (Preview)
+
+### Synopsis
+
+Preview: the executor is installed and verified but executes no operations in this release
+
+Enrollment requires an escrow artifact whose fingerprint matches the deployed root key for every instance (OwnerOffline).
+
+```
+dcctl executor enroll [flags]
+```
+
+### Options
+
+```
+      --dry-run             validate enrollment and run read-only checks, then print the objects that would be applied
+      --escrow-dir string   directory containing existing instance root-key escrow artifacts (default: the dcctl escrow directory)
+  -h, --help                help for enroll
+      --image string        executor image pinned as ref@sha256:<64 lowercase hex digits>
+      --owner string        executor owner (DNS label, at most 63 characters)
+```
+
+### Options inherited from parent commands
+
+```
+      --kube-context string   kube-context to target (default: current context)
+```
+
+### SEE ALSO
+
+* [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
+
+## dcctl executor status {#dcctl-executor-status}
+
+Show enrollment, capability and pending operations
+
+### Synopsis
+
+Preview: the executor is installed and verified but executes no operations in this release
+
+```
+dcctl executor status [flags]
+```
+
+### Options
+
+```
+  -h, --help   help for status
+```
+
+### Options inherited from parent commands
+
+```
+      --kube-context string   kube-context to target (default: current context)
+```
+
+### SEE ALSO
+
+* [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
+
+## dcctl executor unenroll {#dcctl-executor-unenroll}
+
+Remove the executor, leaving instances and resource definitions
+
+### Synopsis
+
+Preview: the executor is installed and verified but executes no operations in this release
+
+```
+dcctl executor unenroll [flags]
+```
+
+### Options
+
+```
+      --force   mark non-terminal operations Refused/Unenrolled even when no executor is enrolled, then remove any enrolled executor
+  -h, --help    help for unenroll
+```
+
+### Options inherited from parent commands
+
+```
+      --kube-context string   kube-context to target (default: current context)
+```
+
+### SEE ALSO
+
+* [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
 
 ## dcctl ha {#dcctl-ha}
 
