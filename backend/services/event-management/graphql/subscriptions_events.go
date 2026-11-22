@@ -234,7 +234,7 @@ func measurementFromResolved(tenant string, e *resolvedevent.ResolvedEvent,
 	}
 	// A STRING reading carries its value as text, exactly as the persist path keeps it, so
 	// the payload id derived below is the id the stored row gets.
-	if mx.DataType != nil && *mx.DataType == "STRING" && !mx.Derived {
+	if mx.DataType != nil && *mx.DataType == model.DataTypeString && !mx.Derived {
 		text := mx.Value
 		me.TextValue = &text
 	} else if f, err := strconv.ParseFloat(mx.Value, 64); err == nil {

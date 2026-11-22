@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ErrDeterministic marks a failure that no amount of redelivery can fix: bad data, such as a
@@ -44,6 +46,34 @@ type MeasurementReading struct {
 	Derived    bool
 }
 
+// DataTypeString is the declared data type of a reading whose value is text. A reading of this
+// type is stored in text_value and never in the numeric column.
+const DataTypeString = "STRING"
+
+// MaxTextValueBytes bounds a STRING reading's value. The column is unbounded text, so without
+// a bound one reading could carry as much as the message does; 4 KiB is room for any state,
+// mode or short code a device reports, and a longer value is a payload that belongs elsewhere.
+const MaxTextValueBytes = 4096
+
+// checkTextValue refuses, as deterministic, a STRING value that cannot be stored or that is
+// over the bound. Each refusal is one no redelivery changes, and each must stop HERE: a NUL
+// byte is rejected by PostgreSQL (22021) for the whole insert, and an invalid UTF-8 sequence
+// likewise (22021), which would give up every other reading of the same message, numeric ones
+// included.
+func checkTextValue(name, v string) error {
+	if len(v) > MaxTextValueBytes {
+		return fmt.Errorf("%w: measurement %q: a STRING value is %d bytes, over the %d-byte bound",
+			ErrDeterministic, name, len(v), MaxTextValueBytes)
+	}
+	if !utf8.ValidString(v) {
+		return fmt.Errorf("%w: measurement %q: a STRING value is not valid UTF-8", ErrDeterministic, name)
+	}
+	if strings.IndexByte(v, 0) >= 0 {
+		return fmt.Errorf("%w: measurement %q: a STRING value contains a NUL byte", ErrDeterministic, name)
+	}
+	return nil
+}
+
 // MeasurementRequestFor maps one reading, taken at the entry instant at, to its create request
 // under the message's base event. It is the one definition of the string to row mapping: the
 // persistence worker writes live events through it and a backfill writes the values it computes
@@ -58,7 +88,10 @@ func MeasurementRequestFor(event Event, at time.Time, mx MeasurementReading) (*M
 	// A STRING reading is not a number: its value is stored as text and Value stays nil, so
 	// nothing that aggregates the numeric column sees it. Only a STRING one — a numeric type
 	// whose value does not parse is still a refusal below.
-	if mx.DataType != nil && *mx.DataType == "STRING" && !mx.Derived {
+	if mx.DataType != nil && *mx.DataType == DataTypeString && !mx.Derived {
+		if err := checkTextValue(mx.Name, val); err != nil {
+			return nil, err
+		}
 		var classifier *uint
 		if mx.Classifier != nil {
 			c := uint(*mx.Classifier)
