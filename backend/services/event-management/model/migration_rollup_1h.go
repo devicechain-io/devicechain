@@ -68,7 +68,7 @@ var rollup1hCreateStmt = fmt.Sprintf(`CREATE MATERIALIZED VIEW "event-management
 func NewRollup1hSchema() *gormigrate.Migration {
 	const view = `"event-management"."measurement_rollups_1h"`
 	return &gormigrate.Migration{
-		ID: "20261122000000",
+		ID: "20261122030000",
 		Migrate: func(tx *gorm.DB) error {
 			var existing int64
 			if err := tx.Raw(`SELECT count(*) FROM timescaledb_information.continuous_aggregates ` +
