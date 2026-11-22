@@ -1218,3 +1218,23 @@ When the alert fires, someone is most likely trying many addresses:
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.
 
 `SECRET_RESUPPLY_REQUIRED` means an update would send a stored credential to a different destination or present it differently. On `updateConnector`, `updateNotificationChannel` or `updateAiProvider`, supply `secret` again in the same request, or clear it with `secret: null`. For a connector rollback with a different binding, use `updateConnector` with the target configuration and its credential instead.
+
+## Fleet operation readiness (Preview) {#fleet-operation-readiness}
+
+Preview. The device-management tenant data plane exposes `fleetOperationReadiness` to callers
+with `fleet:operate`; scoped members are refused. It reports the build's writer protocol version,
+fresh database enforcement state, executable operation kinds and a fresh count of orphaned
+device attribute and generation rows in the caller's tenant (including soft-deleted attributes).
+In v1.9 enforcement is `NOT_INSTALLED` and no kind is executable; this is expected until the
+release that installs enforcement. A failed catalog read reports `UNREADABLE` while preserving
+the other facts. Only a trigger enabled `ALWAYS` counts as `ENFORCED`; ordinary, replica-only
+and disabled triggers report `DISABLED`. Missing or mismatched enforcement reports `NOT_INSTALLED`.
+The preview clock starts at v1.9.
+
+The Preview command prints the same four facts and exits successfully only when enforcement is
+`ENFORCED` and the orphan count is zero. The v1.9 non-zero exit is expected. Use the same login
+and instance flags as `dcctl attr`:
+
+```bash
+dcctl fleet-op readiness --tenant acme --email ops@example.com --password <password> -o json
+```
