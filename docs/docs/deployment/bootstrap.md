@@ -347,7 +347,7 @@ The cluster install sets up one ingress controller and every instance gets its r
 at the edge is a security control: the service-token mint and the signing-key set are served by
 `user-management` on an internal port that no ingress route targets, so the public port answers 404
 for them behind any controller. The mint is protected by the shared service secret, compared in constant time.
-The chart's routes carry no configuration snippet. On a cluster that retains `ingress-nginx`, `dcctl install` disables snippets and restores the controller's default annotations risk level. It first refuses while any Ingress of that controller's class carries a `*-snippet` annotation, naming each one: upgrade its owning instance with `dcctl upgrade`, or remove the annotation, then re-run `dcctl install`. See [the v1.6.0 upgrade notes](./releases-and-upgrades.md#v160-nginx-snippets-off).
+The chart's routes carry no configuration snippet. On a cluster that retains `ingress-nginx`, `dcctl install` disables snippets and restores the controller's default annotations risk level. It first refuses while any Ingress of that controller's class carries a `*-snippet` annotation, naming each one: upgrade its owning instance with `dcctl upgrade`, or remove the annotation, then re-run `dcctl install`. See [the v1.6.0 upgrade notes](/1.6/deployment/releases-and-upgrades#v160-nginx-snippets-off).
 
 If you bring your own controller, route the chart's five ingresses. A controller that implements the Gateway API can serve the Gateway and HTTPRoutes the chart renders instead (`ingress.controller: gateway`; the chart's README lists what such a controller must do):
 
