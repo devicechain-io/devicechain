@@ -13,9 +13,11 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	sigsyaml "sigs.k8s.io/yaml"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
@@ -479,4 +481,36 @@ func TestTheAPIServerRefusesToChangeTheShardingLevel(t *testing.T) {
 			t.Fatalf("a 33-character level was accepted: %v", err)
 		}
 	})
+}
+
+// The shipped samples (config/samples) are resources the API server admits, CEL rules and all.
+// A sample that the server refuses is documentation that cannot be followed.
+func TestTheSamplesAreAdmittedByTheAPIServer(t *testing.T) {
+	c := withAPIServer(t)
+	dir := filepath.Join("..", "config", "samples")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "core_") || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		obj := &unstructured.Unstructured{}
+		if err := sigsyaml.Unmarshal(b, &obj.Object); err != nil {
+			t.Fatalf("%s: %v", e.Name(), err)
+		}
+		if err := c.Create(context.Background(), obj); err != nil {
+			t.Errorf("%s was refused: %v", e.Name(), err)
+		}
+		n++
+	}
+	if n < 2 {
+		t.Fatalf("checked %d sample(s); expected the Instance and the InstanceConfiguration", n)
+	}
 }

@@ -366,6 +366,14 @@ func (r *Registry) Register(ctx context.Context, identity string, binding config
 	// event below would be written with an EMPTY device token, and for a deleted tenant
 	// (ADR-077) it would be written into the tenant being erased, by the one device front
 	// that never passes the broker auth-callout.
+	// A device whose auto-registration failed moments ago is waiting out its backoff: the same
+	// retryable answer a failed create gave it before the backoff existed, so it Registers again
+	// later instead of being told it is unknown.
+	if outcome == adapter.ResolveRegisterBackoff {
+		log.Debug().Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).
+			Msg("Refusing LwM2M registration for now (the device's auto-registration failed moments ago).")
+		return RegisterUnavailable, "", 0, false
+	}
 	if !outcome.Ingestible() {
 		incr(r.metrics.Dropped, 1)
 		reason := "auto-registration is off for this credential"

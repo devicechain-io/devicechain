@@ -1162,3 +1162,18 @@ func TestReconstructDisconnectIsAbandonedWhenTheTermEnds(t *testing.T) {
 		t.Fatal("an in-flight orphan DISCONNECT was not abandoned when the term context ended")
 	}
 }
+
+// A device waiting out an auto-registration backoff is told to come back later (retryable), not
+// that it is unknown, which is the answer the failed create gave it before the backoff existed.
+func TestRegisterDuringAnAutoRegisterBackoffIsRetryable(t *testing.T) {
+	res := &fakeResolver{outcome: adapter.ResolveRegisterBackoff}
+	em := &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, nil)
+
+	result, regId, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
+
+	assert.Equal(t, RegisterUnavailable, result)
+	assert.Empty(t, regId)
+	assert.Empty(t, em.all())
+}
