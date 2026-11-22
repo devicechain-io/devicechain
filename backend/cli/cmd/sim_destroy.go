@@ -59,6 +59,8 @@ session already established keeps its broker-issued credential until it expires 
 12 hours by default — though its ingest is refused at admission regardless. And a device
 still holding a lifetime or a subscription drops off on its own schedule, so presence can
 read connected for a while after the data stops.`,
+	Example: `  dcctl sim destroy demo
+  dcctl sim destroy demo --instance my-instance --server dc.example.com --tls`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runSimDestroy,
 	SilenceUsage: true,

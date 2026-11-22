@@ -42,6 +42,10 @@ dcctl bootstrap seeds only the platform tiers, so a load run that needs a bigger
 the tier the same way, raising but never lowering it. A tier that already exists must state
 every limit the config names (dcctl cannot see an inherited default), or create refuses and
 names the missing key.`,
+	Example: `  dcctl sim create demo
+  dcctl sim create demo --manifest harborpulse --instance my-instance --server dc.example.com --tls
+  dcctl sim create tower --manifest towerpulse --episode night-shift
+  dcctl sim create load --tier rc-100k --tier-config '{"ingestReadingsPerSecond":100000}'`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runSimCreate,
 	SilenceUsage: true,

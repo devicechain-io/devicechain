@@ -495,23 +495,27 @@ func applyOne(db *gorm.DB, table string, policy DataLifecyclePolicy) error {
 }
 
 // applyRollupRetention reconciles retention alone: chunk sizing and compression
-// settings for raw hypertables must never be applied to the continuous aggregate.
+// settings for raw hypertables must never be applied to the continuous aggregates.
+// Both rollup levels share the one window, so the hour level never outlives, or is
+// dropped before, the minute level it is read in place of.
 func applyRollupRetention(db *gorm.DB, policy DataLifecyclePolicy) error {
 	days := policy.RollupRetentionDays()
-	if days > 0 {
-		exec := func(step, stmt string, args ...interface{}) {
-			if err := db.Exec(stmt, args...).Error; err != nil {
-				log.Error().Err(err).Str("hypertable", RollupAggregate).Str("step", step).
-					Msg("Failed to apply data-lifecycle policy statement; continuing.")
+	for _, aggregate := range []string{RollupAggregate, RollupAggregate1h} {
+		if days > 0 {
+			exec := func(step, stmt string, args ...interface{}) {
+				if err := db.Exec(stmt, args...).Error; err != nil {
+					log.Error().Err(err).Str("hypertable", aggregate).Str("step", step).
+						Msg("Failed to apply data-lifecycle policy statement; continuing.")
+				}
 			}
+			exec("retention-policy-remove", removeRetentionPolicyStmt(aggregate))
+			exec("retention-policy-add", addRetentionPolicyStmt(aggregate), days)
+			continue
 		}
-		exec("retention-policy-remove", removeRetentionPolicyStmt(RollupAggregate))
-		exec("retention-policy-add", addRetentionPolicyStmt(RollupAggregate), days)
-		return nil
-	}
-	if err := db.Exec(removeRetentionPolicyStmt(RollupAggregate)).Error; err != nil {
-		return fmt.Errorf("remove retention policy on %q while retention is disabled "+
-			"(a previously-added policy may still be dropping data): %w", RollupAggregate, err)
+		if err := db.Exec(removeRetentionPolicyStmt(aggregate)).Error; err != nil {
+			return fmt.Errorf("remove retention policy on %q while retention is disabled "+
+				"(a previously-added policy may still be dropping data): %w", aggregate, err)
+		}
 	}
 	return nil
 }

@@ -127,6 +127,17 @@ Status 显示声明、能力、条件及非终态 InstanceOperation；集群未�
 这只是检测，不是互斥锁。AB6 不覆盖 `dcctl install`：该命令准备的是集群，
 而本 Preview 无论如何都会拒绝 Install 请求。
 
+### 执行器指标 {#executor-metrics}
+
+执行器在 `dc-executor-system` 中自己 Pod 的指标端点上导出三个计数器。它们没有 `devicechain_` 前缀，
+也不按实例或操作打标签，而且 chart 的 Prometheus 不会抓取该命名空间，如需使用请自行配置抓取。
+
+| 指标 | 含义 |
+| --- | --- |
+| `dc_executor_decisions_total{verdict,reason}` | 执行器写入 `InstanceOperation` 的判定。`verdict` 是写入的阶段：`Refused` 或 `Running`。`reason` 为 `Executable`，或拒绝的原因：`StaleEnrollment`、`InstanceExists`、`InstanceNotFound`、`StaleTarget`（请求指向已被替换的注册或实例，或其存在与否与该操作不符）或 `NotExecutableInThisBuild`。本 Preview 版本中没有任何操作可执行，因此每个有效请求都以 `Refused` 和 `NotExecutableInThisBuild` 结束：这是预期的稳态，不是故障。其他任何拒绝原因上升，说明请求是针对过期的注册或实例提交的；请提交新的请求。 |
+| `dc_executor_operations_skipped_total{reason}` | 执行器未处理、须留给更新版执行器的操作：`protocol`（请求需要比本执行器所构建的更新的协议）或 `action`（本执行器不认识的操作）。执行器镜像为最新时为零。上升表示来自更新版 `dcctl` 的请求在等待执行器升级：用新镜像再次运行 `dcctl executor enroll`。 |
+| `dc_executor_status_writes_total{kind,result}` | 写入 `InstanceOperation` 或 `ExecutorEnrollment`（`kind`）状态的尝试，按 `result` 区分：`success`、`conflict`（另一个写入者抢先；执行器立即重试）或 `error`。偶尔的冲突属正常。`error` 速率持续偏高，说明执行器无法写入状态，操作因此一直没有判定；请检查执行器的日志及其 RBAC。 |
+
 ## 自定义资源 {#custom-resources}
 
 `dcctl install` 定义四种集群范围的自定义资源：
