@@ -1,0 +1,454 @@
+{
+  "source": "ci push jobs with success; started-to-completed seconds, including setup",
+  "regenerate": "python3 hack/ci-go-batch.py regenerate /path/to/jobs.json > hack/ci-go-durations.json",
+  "first_started": "2026-11-18T17:34:55Z",
+  "last_started": "2026-11-19T21:43:24Z",
+  "push_runs": 20,
+  "observed_push_go_slots": [
+    54
+  ],
+  "modules": {
+    "backend/admin/dc-broker-admin": {
+      "samples": 20,
+      "median_seconds": 65,
+      "p90_seconds": 72
+    },
+    "backend/broker/dc-nats-server": {
+      "samples": 20,
+      "median_seconds": 95,
+      "p90_seconds": 116
+    },
+    "backend/edge/dc-edge-agent": {
+      "samples": 20,
+      "median_seconds": 543,
+      "p90_seconds": 592
+    },
+    "backend/k8s": {
+      "samples": 20,
+      "median_seconds": 284,
+      "p90_seconds": 304
+    },
+    "backend/services/ai-inference": {
+      "samples": 20,
+      "median_seconds": 76,
+      "p90_seconds": 89
+    },
+    "backend/services/command-delivery": {
+      "samples": 20,
+      "median_seconds": 317,
+      "p90_seconds": 411
+    },
+    "backend/services/dashboard-management": {
+      "samples": 20,
+      "median_seconds": 78,
+      "p90_seconds": 139
+    },
+    "backend/services/device-state": {
+      "samples": 20,
+      "median_seconds": 161,
+      "p90_seconds": 179
+    },
+    "backend/services/event-management": {
+      "samples": 20,
+      "median_seconds": 209,
+      "p90_seconds": 247
+    },
+    "backend/services/event-sources": {
+      "samples": 20,
+      "median_seconds": 701,
+      "p90_seconds": 750
+    },
+    "backend/services/lwm2m-ingest": {
+      "samples": 20,
+      "median_seconds": 95,
+      "p90_seconds": 110
+    },
+    "backend/services/mcp": {
+      "samples": 20,
+      "median_seconds": 106,
+      "p90_seconds": 120
+    },
+    "backend/services/notification-management": {
+      "samples": 20,
+      "median_seconds": 147,
+      "p90_seconds": 269
+    },
+    "backend/services/outbound-connectors": {
+      "samples": 20,
+      "median_seconds": 130,
+      "p90_seconds": 158
+    },
+    "backend/services/sparkplug-ingest": {
+      "samples": 20,
+      "median_seconds": 207,
+      "p90_seconds": 221
+    },
+    "backend/services/update-management": {
+      "samples": 20,
+      "median_seconds": 163,
+      "p90_seconds": 194
+    },
+    "backend/sims/dc-simulator": {
+      "samples": 20,
+      "median_seconds": 291,
+      "p90_seconds": 317
+    },
+    "backend/tools/apiprobe": {
+      "samples": 20,
+      "median_seconds": 67,
+      "p90_seconds": 86
+    },
+    "backend/tools/credguard": {
+      "samples": 20,
+      "median_seconds": 51,
+      "p90_seconds": 63
+    },
+    "backend/tools/docsgql": {
+      "samples": 20,
+      "median_seconds": 68,
+      "p90_seconds": 79
+    },
+    "backend/tools/drdrill": {
+      "samples": 20,
+      "median_seconds": 51,
+      "p90_seconds": 99
+    },
+    "backend/tools/migrationdiff": {
+      "samples": 20,
+      "median_seconds": 59,
+      "p90_seconds": 77
+    },
+    "backend/tools/muxguard": {
+      "samples": 20,
+      "median_seconds": 48,
+      "p90_seconds": 65
+    },
+    "backend/tools/ocspresponder": {
+      "samples": 20,
+      "median_seconds": 52,
+      "p90_seconds": 68
+    },
+    "backend/tools/phaseguard": {
+      "samples": 20,
+      "median_seconds": 55,
+      "p90_seconds": 71
+    },
+    "backend/tools/playground": {
+      "samples": 20,
+      "median_seconds": 50,
+      "p90_seconds": 64
+    },
+    "backend/tools/promqlguard": {
+      "samples": 20,
+      "median_seconds": 63,
+      "p90_seconds": 74
+    },
+    "backend/tools/rdbguard": {
+      "samples": 20,
+      "median_seconds": 60,
+      "p90_seconds": 70
+    },
+    "backend/tools/redlines": {
+      "samples": 20,
+      "median_seconds": 51,
+      "p90_seconds": 64
+    },
+    "backend/tools/subconfirm": {
+      "samples": 20,
+      "median_seconds": 61,
+      "p90_seconds": 72
+    },
+    "backend/tools/transportmatrix": {
+      "samples": 20,
+      "median_seconds": 54,
+      "p90_seconds": 61
+    },
+    "backend/tools/vocabgen": {
+      "samples": 20,
+      "median_seconds": 53,
+      "p90_seconds": 66
+    },
+    "deploy": {
+      "samples": 20,
+      "median_seconds": 51,
+      "p90_seconds": 59
+    },
+    "examples/ota-device": {
+      "samples": 20,
+      "median_seconds": 57,
+      "p90_seconds": 66
+    }
+  },
+  "legs": {
+    "go (backend/admin/dc-broker-admin)": {
+      "samples": 20,
+      "median_seconds": 65,
+      "p90_seconds": 72
+    },
+    "go (backend/broker/dc-nats-server)": {
+      "samples": 20,
+      "median_seconds": 95,
+      "p90_seconds": 116
+    },
+    "go (backend/cli / bootstrap 1/3)": {
+      "samples": 20,
+      "median_seconds": 553,
+      "p90_seconds": 689
+    },
+    "go (backend/cli / bootstrap 2/3)": {
+      "samples": 20,
+      "median_seconds": 770,
+      "p90_seconds": 954
+    },
+    "go (backend/cli / bootstrap 3/3)": {
+      "samples": 20,
+      "median_seconds": 878,
+      "p90_seconds": 1112
+    },
+    "go (backend/cli / rest)": {
+      "samples": 20,
+      "median_seconds": 166,
+      "p90_seconds": 398
+    },
+    "go (backend/core / messaging 1/3)": {
+      "samples": 20,
+      "median_seconds": 814,
+      "p90_seconds": 849
+    },
+    "go (backend/core / messaging 2/3)": {
+      "samples": 20,
+      "median_seconds": 719,
+      "p90_seconds": 783
+    },
+    "go (backend/core / messaging 3/3)": {
+      "samples": 20,
+      "median_seconds": 813,
+      "p90_seconds": 864
+    },
+    "go (backend/core / rest)": {
+      "samples": 20,
+      "median_seconds": 941,
+      "p90_seconds": 1009
+    },
+    "go (backend/edge/dc-edge-agent)": {
+      "samples": 20,
+      "median_seconds": 543,
+      "p90_seconds": 592
+    },
+    "go (backend/k8s)": {
+      "samples": 20,
+      "median_seconds": 284,
+      "p90_seconds": 304
+    },
+    "go (backend/services/ai-inference)": {
+      "samples": 20,
+      "median_seconds": 76,
+      "p90_seconds": 89
+    },
+    "go (backend/services/command-delivery)": {
+      "samples": 20,
+      "median_seconds": 317,
+      "p90_seconds": 411
+    },
+    "go (backend/services/dashboard-management)": {
+      "samples": 20,
+      "median_seconds": 78,
+      "p90_seconds": 139
+    },
+    "go (backend/services/device-management / model 1/2)": {
+      "samples": 20,
+      "median_seconds": 444,
+      "p90_seconds": 758
+    },
+    "go (backend/services/device-management / model 2/2)": {
+      "samples": 20,
+      "median_seconds": 530,
+      "p90_seconds": 783
+    },
+    "go (backend/services/device-management / processor 1/3)": {
+      "samples": 20,
+      "median_seconds": 390,
+      "p90_seconds": 498
+    },
+    "go (backend/services/device-management / processor 2/3)": {
+      "samples": 20,
+      "median_seconds": 1115,
+      "p90_seconds": 1235
+    },
+    "go (backend/services/device-management / processor 3/3)": {
+      "samples": 20,
+      "median_seconds": 510,
+      "p90_seconds": 1197
+    },
+    "go (backend/services/device-management / rest)": {
+      "samples": 20,
+      "median_seconds": 419,
+      "p90_seconds": 560
+    },
+    "go (backend/services/device-state)": {
+      "samples": 20,
+      "median_seconds": 161,
+      "p90_seconds": 179
+    },
+    "go (backend/services/event-management)": {
+      "samples": 20,
+      "median_seconds": 209,
+      "p90_seconds": 247
+    },
+    "go (backend/services/event-processing / internal/detect/core 1/2)": {
+      "samples": 20,
+      "median_seconds": 441,
+      "p90_seconds": 575
+    },
+    "go (backend/services/event-processing / internal/detect/core 2/2)": {
+      "samples": 20,
+      "median_seconds": 215,
+      "p90_seconds": 235
+    },
+    "go (backend/services/event-processing / rest)": {
+      "samples": 20,
+      "median_seconds": 833,
+      "p90_seconds": 950
+    },
+    "go (backend/services/event-sources)": {
+      "samples": 20,
+      "median_seconds": 701,
+      "p90_seconds": 750
+    },
+    "go (backend/services/lwm2m-ingest)": {
+      "samples": 20,
+      "median_seconds": 95,
+      "p90_seconds": 110
+    },
+    "go (backend/services/mcp)": {
+      "samples": 20,
+      "median_seconds": 106,
+      "p90_seconds": 120
+    },
+    "go (backend/services/notification-management)": {
+      "samples": 20,
+      "median_seconds": 147,
+      "p90_seconds": 269
+    },
+    "go (backend/services/outbound-connectors)": {
+      "samples": 20,
+      "median_seconds": 130,
+      "p90_seconds": 158
+    },
+    "go (backend/services/sparkplug-ingest)": {
+      "samples": 20,
+      "median_seconds": 207,
+      "p90_seconds": 221
+    },
+    "go (backend/services/update-management)": {
+      "samples": 20,
+      "median_seconds": 163,
+      "p90_seconds": 194
+    },
+    "go (backend/services/user-management / identity 1/2)": {
+      "samples": 20,
+      "median_seconds": 758,
+      "p90_seconds": 777
+    },
+    "go (backend/services/user-management / identity 2/2)": {
+      "samples": 20,
+      "median_seconds": 788,
+      "p90_seconds": 837
+    },
+    "go (backend/services/user-management / rest)": {
+      "samples": 20,
+      "median_seconds": 379,
+      "p90_seconds": 465
+    },
+    "go (backend/sims/dc-simulator)": {
+      "samples": 20,
+      "median_seconds": 291,
+      "p90_seconds": 317
+    },
+    "go (backend/tools/apiprobe)": {
+      "samples": 20,
+      "median_seconds": 67,
+      "p90_seconds": 86
+    },
+    "go (backend/tools/credguard)": {
+      "samples": 20,
+      "median_seconds": 51,
+      "p90_seconds": 63
+    },
+    "go (backend/tools/docsgql)": {
+      "samples": 20,
+      "median_seconds": 68,
+      "p90_seconds": 79
+    },
+    "go (backend/tools/drdrill)": {
+      "samples": 20,
+      "median_seconds": 51,
+      "p90_seconds": 99
+    },
+    "go (backend/tools/migrationdiff)": {
+      "samples": 20,
+      "median_seconds": 59,
+      "p90_seconds": 77
+    },
+    "go (backend/tools/muxguard)": {
+      "samples": 20,
+      "median_seconds": 48,
+      "p90_seconds": 65
+    },
+    "go (backend/tools/ocspresponder)": {
+      "samples": 20,
+      "median_seconds": 52,
+      "p90_seconds": 68
+    },
+    "go (backend/tools/phaseguard)": {
+      "samples": 20,
+      "median_seconds": 55,
+      "p90_seconds": 71
+    },
+    "go (backend/tools/playground)": {
+      "samples": 20,
+      "median_seconds": 50,
+      "p90_seconds": 64
+    },
+    "go (backend/tools/promqlguard)": {
+      "samples": 20,
+      "median_seconds": 63,
+      "p90_seconds": 74
+    },
+    "go (backend/tools/rdbguard)": {
+      "samples": 20,
+      "median_seconds": 60,
+      "p90_seconds": 70
+    },
+    "go (backend/tools/redlines)": {
+      "samples": 20,
+      "median_seconds": 51,
+      "p90_seconds": 64
+    },
+    "go (backend/tools/subconfirm)": {
+      "samples": 20,
+      "median_seconds": 61,
+      "p90_seconds": 72
+    },
+    "go (backend/tools/transportmatrix)": {
+      "samples": 20,
+      "median_seconds": 54,
+      "p90_seconds": 61
+    },
+    "go (backend/tools/vocabgen)": {
+      "samples": 20,
+      "median_seconds": 53,
+      "p90_seconds": 66
+    },
+    "go (deploy)": {
+      "samples": 20,
+      "median_seconds": 51,
+      "p90_seconds": 59
+    },
+    "go (examples/ota-device)": {
+      "samples": 20,
+      "median_seconds": 57,
+      "p90_seconds": 66
+    }
+  }
+}
