@@ -6,7 +6,7 @@ require (
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/graph-gophers/graphql-go v1.11.1
 	github.com/nats-io/nats-server/v2 v2.15.3
-	github.com/nats-io/nats.go v1.55.0
+	github.com/nats-io/nats.go v1.56.0
 	github.com/pion/dtls/v3 v3.1.16
 	github.com/plgd-dev/go-coap/v3 v3.8.1
 	github.com/prometheus/client_golang v1.25.0
@@ -76,7 +76,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
-	golang.org/x/net v0.62.0 // indirect
+	golang.org/x/net v0.63.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/time v0.16.0 // indirect

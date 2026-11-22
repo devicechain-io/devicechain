@@ -26,6 +26,17 @@ namespace DeviceChain.Harborpulse.Model.Director
     /// <summary>All story text and visibility rules. Rendering has no evidence decisions.</summary>
     public sealed class HudModel
     {
+        /// <summary>
+        /// Where the HUD writes, as shares of the frame's height from its bottom: the caption's box in a 16:9 frame and in a 9:16 one (which
+        /// writes it higher, clear of a phone's own controls), and the lower edge of the rail's lowest node in a 9:16 frame, where the nodes
+        /// run across the whole width (two are shown, <see cref="RailRowTop"/> down by <see cref="RailRowStep"/> each). A camera that has
+        /// something to show in a tall frame shows it between <see cref="CaptionTopTall"/> and <see cref="RailBottomTall"/>.
+        /// </summary>
+        public const float CaptionBottomWide = .08f, CaptionTopWide = .24f, CaptionBottomTall = .23f, CaptionTopTall = .37f;
+        public const float RailRowTop = .758f, RailRowHeight = .078f, RailRowStep = .082f;
+        public const int RailRowsTall = 2, RailRowsWide = 5;
+        public const float RailBottomTall = RailRowTop - RailRowHeight - RailRowStep * (RailRowsTall - 1);
+
         readonly List<RailNode> rail = new List<RailNode>();
         readonly HashSet<string> links = new HashSet<string>(StringComparer.Ordinal);
         string pendingText, pendingKind, pendingPage;

@@ -67,7 +67,7 @@ func TestCustomerConcurrentPartialUpdatePreservesOmittedFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, err := api.UpdateCustomer(ctx, "c-1", &CustomerUpdateRequest{
+	updated, err := api.UpdateCustomer(ctx, "c-1", nil, &CustomerUpdateRequest{
 		Name: dcgraphql.OptionalStringOf("Renamed"),
 	})
 	if err != nil {
@@ -107,7 +107,7 @@ func TestCustomerConcurrentPartialUpdatePreservesOmittedFields(t *testing.T) {
 func TestCustomerPartialUpdateExplicitNullDescription(t *testing.T) {
 	api, ctx, _ := customerPartialFixture(t)
 	before := reloadPartialCustomer(t, api, ctx)
-	updated, err := api.UpdateCustomer(ctx, "c-1", &CustomerUpdateRequest{
+	updated, err := api.UpdateCustomer(ctx, "c-1", nil, &CustomerUpdateRequest{
 		Description: dcgraphql.ClearedString(),
 	})
 	if err != nil {
@@ -134,7 +134,7 @@ func TestCustomerPartialUpdateInvalidTypeWritesNothing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			api, ctx, statements := customerPartialFixture(t)
 			before := reloadPartialCustomer(t, api, ctx)
-			_, err := api.UpdateCustomer(ctx, "c-1", &CustomerUpdateRequest{
+			_, err := api.UpdateCustomer(ctx, "c-1", nil, &CustomerUpdateRequest{
 				Name: dcgraphql.OptionalStringOf("Refused"), CustomerTypeToken: tc.token,
 			})
 			if err == nil {
@@ -154,7 +154,7 @@ func TestCustomerPartialUpdateInvalidTypeWritesNothing(t *testing.T) {
 func TestCustomerEmptyUpdateRetainsExactTimestamp(t *testing.T) {
 	api, ctx, statements := customerPartialFixture(t)
 	before := reloadPartialCustomer(t, api, ctx)
-	updated, err := api.UpdateCustomer(ctx, "c-1", &CustomerUpdateRequest{})
+	updated, err := api.UpdateCustomer(ctx, "c-1", nil, &CustomerUpdateRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestCustomerEmptyUpdateRetainsExactTimestamp(t *testing.T) {
 
 func TestCustomerPartialUpdateTypeWritesOnlyForeignKey(t *testing.T) {
 	api, ctx, statements := customerPartialFixture(t)
-	updated, err := api.UpdateCustomer(ctx, "c-1", &CustomerUpdateRequest{
+	updated, err := api.UpdateCustomer(ctx, "c-1", nil, &CustomerUpdateRequest{
 		CustomerTypeToken: dcgraphql.OptionalStringOf(otherTypeToken),
 	})
 	if err != nil {
@@ -198,7 +198,7 @@ func TestCustomerPartialUpdateTypeWritesOnlyForeignKey(t *testing.T) {
 	if updates != 1 {
 		t.Fatalf("got %d customer UPDATEs, want one", updates)
 	}
-	_, err = api.UpdateCustomer(ctx, "no-such-customer", &CustomerUpdateRequest{})
+	_, err = api.UpdateCustomer(ctx, "no-such-customer", nil, &CustomerUpdateRequest{})
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("missing customer: %v, want not found", err)
 	}

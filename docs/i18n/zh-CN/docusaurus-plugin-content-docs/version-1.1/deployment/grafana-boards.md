@@ -198,7 +198,7 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 | Service health | 缺失副本、未就绪 Pod、容器重启、上次因内存不足而停止的容器，以及可用副本与期望副本的对比。 |
 | CPU and memory | 内存相对限制、CPU 相对请求，以及 CPU 限流。 |
 | Service runtime | Goroutine、堆、常驻内存、垃圾回收次数与停顿，以及已打开文件句柄相对上限。 |
-| Sign-in | 按结果划分的凭据检查、被限流的登录、单点登录拒绝、身份提供方获取失败和令牌密钥获取。 |
+| Sign-in | 按结果划分的凭据检查、被限流的登录、单点登录拒绝、身份提供商获取失败和令牌密钥获取。 |
 | Tenant deletion | 与 Persistence 相同的删除视图，从平台侧查看。 |
 | Limits and safety gates | 被关闭的安全闸、按平台默认值计量的租户、已用的共享额度、被舍弃的出站动作，以及设备流量和出站调用触及的上限。 |
 | AI inference | 按结果划分的推理调用和使用的模型令牌。 |

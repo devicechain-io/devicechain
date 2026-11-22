@@ -88,7 +88,7 @@ namespace DeviceChain.Harborpulse.Visuals
             {
                 shotAt = view.ShotAtS; moveStart = camera.transform.position; moveRotation = camera.transform.rotation; moveFov = camera.fieldOfView;
             }
-            var pose = Portrait && view.Shot == null && view.AmbientPose == "pose:home" ? map.Pose("pose:home:portrait") : view.To;
+            var pose = Portrait && view.Shot == null && view.AmbientPose == "pose:home" ? map.Pose("pose:home:portrait") : Portrait ? map.Tall(view.To) : view.To;
             var pos = V(pose.Camera); var look = V(pose.Look);
             if (view.FollowDevice == "hp-truck-1")
             {

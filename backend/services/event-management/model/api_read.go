@@ -430,6 +430,10 @@ func boundBucketedRows(buckets, names int64) error {
 //
 // The read is bounded before it runs: at most MaxMeasurementBuckets buckets, and at
 // most MaxMeasurementRows rows (buckets x measurement names).
+//
+// Only numeric readings aggregate. A measurement whose readings are text (a STRING metric) is
+// refused with NOT_AGGREGATABLE when the request names it, and left out when the request asks
+// for every name (see numericBucketsOnly).
 func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
 	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
 		return nil, err
@@ -468,7 +472,10 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 	} else {
 		out, err = api.bucketedMeasurementsFromRaw(ctx, criteria, incarnation)
 	}
-	return out, boundedReadError(ctx, err, bound)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
+	}
+	return numericBucketsOnly(out, criteria.Name)
 }
 
 // distinctMeasurementNames counts the measurement names a read with no name filter will
