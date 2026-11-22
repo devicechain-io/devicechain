@@ -86,6 +86,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         readonly Dictionary<string, Ground[]> regions = new Dictionary<string, Ground[]>(StringComparer.Ordinal);
         readonly Dictionary<string, Ground> anchors = new Dictionary<string, Ground>(StringComparer.Ordinal);
         readonly Dictionary<string, CameraPose> poses = new Dictionary<string, CameraPose>(StringComparer.Ordinal);
+        // a pose's own 9:16 version, where one frame cannot serve both shapes (keyed by the pose itself: a shot hands the camera a pose, not a name)
+        readonly Dictionary<CameraPose, CameraPose> tall = new Dictionary<CameraPose, CameraPose>();
         readonly List<string> warnings = new List<string>();
         public IReadOnlyList<MapTriangle> Triangles => triangles.AsReadOnly();
         public IReadOnlyDictionary<string, Ground> Anchors => anchors;
@@ -339,7 +341,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                         default: back = 28; eye = 7; fov = 36; break;
                     }
                     // Some stand-off lines run straight through a lamp or a gauge mast on the quay edge; a sideways step of the eye clears them.
-                    var side = Sidestep(pair.Family);
+                    var side = Sidestep(pair.Family, suffix);
                     poses.Add("pose:" + pair.Family + ":" + suffix, Stand(a.X + wx * back + (wx == 0 ? side : 0), eye, a.Z + wz * back + (wx == 0 ? 0 : side), a.X, a.Z, fov, horizon));
                 }
                 // The cut-away view looks down into the wet well. A pump's well is not at its anchor: it stands 13 m along the quay from the
@@ -352,8 +354,20 @@ namespace DeviceChain.Harborpulse.Model.Director
                 // had a canopy in it, and its view was a nearer, higher one over a canopy that still filled the lower left). The look is at
                 // a point under the deck, WellViewLookY: the well and its three level tags then stand in the upper two thirds of the frame,
                 // and the caption's lines (the lower quarter, HarborStoryHud) are written under the "low cut-off" tag instead of across it.
+                // A 9:16 frame is a quarter as wide for its height and its caption is written higher (the lower 23-37 %, with the rail's
+                // nodes across the frame from 60 % up), so the same eye wrote "low cut-off" inside the caption's box, cut the attribute
+                // rule's tag off at the frame's edge and put the well behind the rail. The tall view stands twice as far back and as high on
+                // the same line, looking at the same point: the well and all four tags then stand between the caption and the rail, and
+                // the text is nine tenths the size on the screen that a 16:9 frame of the same width in pixels gives it.
+                var tallWell = new CameraPose(new Point3(well.X + wx * WellViewBackM * WellViewTallScale, WellViewEyeM * WellViewTallScale, well.Z + wz * WellViewBackM * WellViewTallScale),
+                    new Point3(well.X, WellViewLookY, well.Z), 42);
                 foreach (var suffix in StoryPoses.WellSuffixes)
-                    poses.Add("pose:" + pair.Family + ":" + suffix, new CameraPose(new Point3(well.X + wx * WellViewBackM, WellViewEyeM, well.Z + wz * WellViewBackM), new Point3(well.X, WellViewLookY, well.Z), 42));
+                {
+                    var wide = new CameraPose(new Point3(well.X + wx * WellViewBackM, WellViewEyeM, well.Z + wz * WellViewBackM), new Point3(well.X, WellViewLookY, well.Z), 42);
+                    poses.Add("pose:" + pair.Family + ":" + suffix, wide);
+                    poses.Add("pose:" + pair.Family + ":" + suffix + StoryPoses.TallSuffix, tallWell);
+                    tall.Add(wide, tallWell);
+                }
             }
             // Outside the quay the eye sits just above the water and the look is flattened to put the horizon about a third of the way down.
             // from inside the harbour, over the water off the basin, looking east-south-east across the quay's devices: no breakwater or lighthouse is
@@ -378,7 +392,14 @@ namespace DeviceChain.Harborpulse.Model.Director
 
         // (U8: the Basin's chargers are the derate page's subject, and a tide gauge's mast on the quay edge stood between the eye and the
         // second charger in its close and insert views. The eye steps 14 m towards the quay's north end and looks back past the mast.)
-        static double Sidestep(string family) => family == "pump-east" || family == "pump-basin" ? 4 : family == "chargers-east" ? -16 : family == "chargers-basin" ? 14 : 0;
+        // U9: that step put the wide view's eye, 52 m off the quay, over the berthed ferry: its cabin roof and mast filled the lower third
+        // of the page's last shot. The wide view stands off the ferry's stern instead (BasinWideSidestepM), south of the pontoon, and looks
+        // north-west at the chargers with the terminal behind them and the berth at the frame's right.)
+        static double Sidestep(string family, string suffix) => family == "pump-east" || family == "pump-basin" ? 4 : family == "chargers-east" ? -16 :
+            family == "chargers-basin" ? (suffix == "wide" ? BasinWideSidestepM : 14) : 0;
+
+        /// <summary>How far along the quay (negative: south) the eye of the Basin chargers' wide view stands from the chargers' own line.</summary>
+        public const double BasinWideSidestepM = -34;
 
         /// <summary>A pose from an eye position looking at a ground point's x and z, its pitch chosen so the horizon falls at <paramref name="horizonFromTop"/> of the frame.</summary>
         /// <summary>Where the horizon falls in a lamp pose, from the top: below the middle, so the lantern has sky behind it.</summary>
@@ -395,6 +416,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         public const double HomeLookY = 7.5;
         /// <summary>The wet well's cut-away view: how far the eye stands off on the water side, how high, and the height it looks at (under the deck).</summary>
         public const double WellViewBackM = 16, WellViewEyeM = 10, WellViewLookY = 0;
+        /// <summary>The well's view in a 9:16 frame: how many times further off and higher its eye stands, on the same line.</summary>
+        public const double WellViewTallScale = 2;
 
         static CameraPose Stand(double camX, double eye, double camZ, double subjectX, double subjectZ, double vfov, double horizonFromTop)
         {
@@ -403,5 +426,8 @@ namespace DeviceChain.Harborpulse.Model.Director
             return new CameraPose(new Point3(camX, eye, camZ), new Point3(subjectX, eye - distance * down, subjectZ), vfov);
         }
         public CameraPose Pose(string name) => poses.TryGetValue(name, out var pose) ? pose : throw new FormatException("unknown pose " + name);
+
+        /// <summary>The pose a 9:16 frame takes in place of <paramref name="pose"/>: its own tall version where it has one, else the pose itself.</summary>
+        public CameraPose Tall(CameraPose pose) => pose != null && tall.TryGetValue(pose, out var t) ? t : pose;
     }
 }

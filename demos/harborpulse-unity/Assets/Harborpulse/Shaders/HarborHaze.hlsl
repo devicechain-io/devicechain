@@ -38,6 +38,10 @@ float HarborRainShaft(float3 d)
 // 0 .. 1: the squalls inside the rain, seen from above. A ray that looks down on far land or sea crosses the rain at a slant, so the
 // squalls show as long streaks leaning with the wind and as bands lying along the distance: narrow ones (a twelfth of the compass), and
 // between them gaps the far light comes through. Drawn only below the horizon: above it the sky has its own curtains.
+// And only for an eye that stands high (HarborSquallEye): from 235 m, the 9:16 HOME, the band they lie in is a fifth of the frame and they
+// read as ranks of rain over the land. From the 16:9 HOME's 100 m, and from a quay, the same band is two degrees deep and holds the ranges,
+// and the streaks were smudges across them: there the ranges fade evenly, as they did before the squalls, and the storm is read in the
+// deck, its curtains over the horizon and the sea.
 float HarborSquall(float3 d)
 {
     float2 az = normalize(d.xz + float2(1e-5, 0.0));
@@ -47,6 +51,13 @@ float HarborSquall(float3 d)
     // bands: the far rain lies in ranks, one behind another, broken and bowed round the compass
     float band = HarborHazeNoise(float2(down * 27.0 + az.x * 4.5, az.y * 6.0 + 1.9 + _HarborCloudDrift.x * 0.25));
     return (smoothstep(0.36, 0.78, streak) * 0.75 + smoothstep(0.50, 0.80, band) * 0.4) * _HarborCloud.z;
+}
+
+// 0 .. 1: how far the eye is above the height at which the squalls begin to show (SkyState.SquallEyeFromM .. SquallEyeFullM, the same
+// numbers). The absolute height: the planar reflection's camera is the eye mirrored under the water.
+float HarborSquallEye()
+{
+    return smoothstep(120.0, 190.0, abs(_WorldSpaceCameraPos.y));
 }
 
 // The haze colour along a unit view ray.
@@ -64,9 +75,13 @@ float3 HarborHazeColor(float3 d, float3 horizonHaze, float3 groundHaze)
         // horizon to the near shore. Squalls darken it in streaks and ranks, and between them the haze is a little paler than the mean:
         // the far light under the deck. They start just under the horizon, so the horizon's own line stays the fog's colour, and are
         // at their strongest between 2 and 12 degrees down, where the far land and sea are.
-        float under = smoothstep(0.004, 0.035, -d.y) * (1.0 - smoothstep(0.20, 0.36, -d.y));
-        float squall = HarborSquall(d);
-        c *= 1.0 + under * _HarborCloud.z * (0.12 - 0.34 * squall);
+        float under = smoothstep(0.004, 0.035, -d.y) * (1.0 - smoothstep(0.20, 0.36, -d.y)) * HarborSquallEye();
+        // (a real branch again: a low eye, which is every story camera but one, does not pay for the squalls' two noises)
+        [branch] if (under > 0.001)
+        {
+            float squall = HarborSquall(d);
+            c *= 1.0 + under * _HarborCloud.z * (0.12 - 0.34 * squall);
+        }
     }
     return c;
 }

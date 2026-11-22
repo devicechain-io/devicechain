@@ -42,7 +42,7 @@ namespace DeviceChain.Harborpulse.Hud
             scaler.referenceResolution = new Vector2(1920, 1080); scaler.matchWidthOrHeight = 1;
             top = Label("Top bar", new Vector2(0, .935f), Vector2.one, 24, true);
             top.alignment = TextAnchor.MiddleLeft;
-            caption = Label("Caption", new Vector2(.055f, .08f), new Vector2(.75f, .24f), 34, true);
+            caption = Label("Caption", new Vector2(.055f, HudModel.CaptionBottomWide), new Vector2(.75f, HudModel.CaptionTopWide), 34, true);
             caption.alignment = TextAnchor.MiddleLeft;
             banner = Label("Persistent banner", new Vector2(.15f, .86f), new Vector2(.85f, .925f), 28, true);
             bannerBackground = banner.transform.parent.GetComponent<Image>();
@@ -52,7 +52,7 @@ namespace DeviceChain.Harborpulse.Hud
             preview = Label("Offline preview disclosure", new Vector2(.03f, .015f), new Vector2(.97f, .06f), 20, true);
             for (var i = 0; i < nodes.Length; i++)
             {
-                nodes[i] = Label("Chain " + i, new Vector2(.735f, .68f - i * .082f), new Vector2(.985f, .758f - i * .082f), 22, true);
+                nodes[i] = Label("Chain " + i, new Vector2(.735f, HudModel.RailRowTop - HudModel.RailRowHeight - i * HudModel.RailRowStep), new Vector2(.985f, HudModel.RailRowTop - i * HudModel.RailRowStep), 22, true);
                 nodes[i].GetComponent<RectTransform>().offsetMin = new Vector2(40, 4);
                 for (var kind = 0; kind < 3; kind++) shapes[i, kind] = Shape(nodes[i].transform.parent, kind);
             }
@@ -98,13 +98,14 @@ namespace DeviceChain.Harborpulse.Hud
             Show(top, badge + "  ·  Port Alder       " + HudModel.Clock(sim) + "  ·  " + HudModel.Beat(sim) + "       " + rate + "   [E] engineer");
             Show(caption, view.Caption);
             var captionRect = caption.transform.parent.GetComponent<RectTransform>();
-            captionRect.anchorMin = new Vector2(.055f, vertical ? .23f : .08f); captionRect.anchorMax = new Vector2(vertical ? .945f : .73f, vertical ? .37f : .24f);
+            captionRect.anchorMin = new Vector2(.055f, vertical ? HudModel.CaptionBottomTall : HudModel.CaptionBottomWide);
+            captionRect.anchorMax = new Vector2(vertical ? .945f : .73f, vertical ? HudModel.CaptionTopTall : HudModel.CaptionTopWide);
             Show(banner, view.Banner == "reconnecting" ? "reconnecting · STALE CLOCK" : view.Banner);
             bannerBackground.color = view.Banner.StartsWith("TEST CONTROL", StringComparison.Ordinal) ? new Color(.55f, .035f, .04f, .98f) : new Color(.04f, .06f, .09f, .98f);
             Show(problem, string.Join(" | ", new[] { view.Problem, extraProblem }.Where(s => !string.IsNullOrEmpty(s))));
             Show(upNext, view.UpNext);
             Show(preview, badge == "OFFLINE PREVIEW" ? "OFFLINE PREVIEW · stand-in values, not platform data" : "");
-            var rail = view.Rail.Skip(Math.Max(0, view.Rail.Count - (vertical ? 2 : 5))).ToArray();
+            var rail = view.Rail.Skip(Math.Max(0, view.Rail.Count - (vertical ? HudModel.RailRowsTall : HudModel.RailRowsWide))).ToArray();
             for (var i = 0; i < nodes.Length; i++)
             {
                 if (i >= rail.Length) { Show(nodes[i], ""); continue; }
@@ -114,8 +115,8 @@ namespace DeviceChain.Harborpulse.Hud
                 Show(nodes[i], arrow + n.Label + "\n" + n.Tag + (n.SincePreviousS > 0 ? "  +" + n.SincePreviousS.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + " s" : ""));
                 nodes[i].color = n.Source == EvidenceSource.Scenario ? new Color(.70f, .77f, .83f) : Color.white;
                 var rect = nodes[i].transform.parent.GetComponent<RectTransform>();
-                rect.anchorMin = new Vector2(vertical ? .04f : .735f, .68f - i * .082f);
-                rect.anchorMax = new Vector2(.985f, .758f - i * .082f);
+                rect.anchorMin = new Vector2(vertical ? .04f : .735f, HudModel.RailRowTop - HudModel.RailRowHeight - i * HudModel.RailRowStep);
+                rect.anchorMax = new Vector2(.985f, HudModel.RailRowTop - i * HudModel.RailRowStep);
             }
             var tagIndex = 0;
             foreach (var tag in worldTags.Take(vertical ? 2 : 4))

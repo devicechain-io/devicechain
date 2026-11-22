@@ -165,6 +165,12 @@ namespace DeviceChain.Harborpulse.Model
         // ---------------------------------------------------------------- the berthed ferry and its pontoon
 
         /// <summary>
+        /// The berth, measured out from the Basin's quay wall and along it from the terminal's anchor: the pontoon's middle and the ferry's
+        /// (both lie along the wall), their lengths along it and widths across it, and the height of the ferry's mast head over the water.
+        /// </summary>
+        public const float PontoonOffM = 11, PontoonLengthM = 36, PontoonWidthM = 10, FerryOffM = 26, FerryLengthM = 33, FerryBeamM = 9, FerryMastTopM = 7.2f;
+
+        /// <summary>
         /// Everything at the ferry berth, in the ferry node's frame (its origin is the waterline at the berth centre; the terminal's frame
         /// is 2.4 m above it): the pontoon and gangway the far level draws as plain slabs, and the ferry's hull, cabin and bridge.
         /// </summary>

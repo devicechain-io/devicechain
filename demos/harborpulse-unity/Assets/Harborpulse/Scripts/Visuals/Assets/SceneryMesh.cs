@@ -74,6 +74,13 @@ namespace DeviceChain.Harborpulse.Visuals
             if (Vector3.Dot(n, outward) < 0) Quad(d, c, b, a, color); else Quad(a, b, c, d, color);
         }
 
+        /// <summary>The same, with a colour per corner (given in the order of the corners as passed).</summary>
+        public void Facing(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 outward, Color ca, Color cb, Color cc, Color cd)
+        {
+            var n = Vector3.Cross(b - a, c - a) + Vector3.Cross(c - a, d - a);
+            if (Vector3.Dot(n, outward) < 0) Quad(d, c, b, a, cd, cc, cb, ca); else Quad(a, b, c, d, ca, cb, cc, cd);
+        }
+
         /// <summary>A triangle whose visible side is the one facing <paramref name="outward"/>.</summary>
         public void Facing(Vector3 a, Vector3 b, Vector3 c, Vector3 outward, Color color)
         {

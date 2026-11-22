@@ -1125,3 +1125,59 @@ showed. `ControlsChangeOnlyDeclaredEmittedOutputs("command-cause-not-read")` run
 Basin chargers past the terminal (and that the same check sees U7's hall hide the second); no bay in any well's view, and the view's
 strip being the line from the well to the eye; the level tags above the caption's box and the far rim under the banner (and that the
 same check sees U7's overlap); and the ratio of blue to red in the light through the morning, without a step.
+
+## U9 five things U8 left short, and the ground
+
+### The five
+
+- **The wet well in a 9:16 frame** (`PresentationMap.Tall`, `StoryPoses.TallSuffix`). A 9:16 frame writes its caption higher (the lower
+  23-37 %) and runs the rail's nodes across the whole width from 60 % up. From the 16:9 eye "low cut-off" was written inside the
+  caption's box, the attribute rule's tag ran off the frame's edge and the well stood behind the rail. A well's view now has a version
+  of its own for a tall frame: the same line of sight from twice as far and twice as high (`WellViewTallScale`). The well and all four
+  tags stand between the caption and the rail, the lowest line of text 2 % of the frame above the caption's box; the last 1.5 % of the
+  well's far rim is under the rail's lower node. The text is 0.89 of the size it has in a 16:9 frame of the same width in pixels.
+  `DirectorCamera` takes the tall version when it is told the frame is tall (`-hp-portrait`), as it takes the 9:16 HOME; every other
+  pose is its own tall version. The tags are text drawn over everything, so they are drawn only for a camera that frames the well:
+  within 24 m, or, in a tall frame, within 42 m by a camera that looks down by 20 degrees or more (`WellFootprint.TagRangeTallM`,
+  `TagTallDownward`). The HUD's caption box and rail rows are now named in `HudModel`, where the test reads them.
+- **Two tors, and their joints** (`Outcrop.JointShare`, `WorldPropPlan.EastTor`, `WestTor`). U8 lit the upper 58 % of what shows of
+  each slab and left the rest at half that value, and one slab in five was drawn dark and wet or mossed: from HOME the stack was a
+  striped tower. A slab's joint is now a shadow a sixth of the slab high, at 0.64 of the rock's tone, and the wall above it one face
+  that runs from 0.80 at its foot to 0.97 under its top; a landmark's walls keep to the mid and light greys. The 9:16 HOME looks east
+  along the coast and never held that tor, so it has one of its own: a lesser sister 21 m high (`Outcrop.WestTorRiseM`) in the wood
+  west of the Basin, 360 m in front of that eye, the same stacks laid out the other way round with a few low ledges at its foot. It is
+  about 120 pixels tall of 1920 and stands under the caption's box. It is outside the 16:9 HOME's frame; from the Basin's quay it
+  shows over the trees beside the terminal.
+- **Squalls for an eye that stands high** (`HarborSquallEye` in `Shaders/HarborHaze.hlsl`, `SkyState.SquallEyeFromM`). From 235 m,
+  the 9:16 HOME, the band the squalls lie in is a fifth of the frame and they read as ranks of rain. From the 16:9 HOME's 100 m and
+  from a quay the same band is two degrees deep and holds the ranges, and the streaks were smudges across them. They are drawn in full
+  for an eye above 190 m and not at all under 120 m (the eye's height, taken without its sign: the planar reflection's camera is the
+  eye mirrored under the water). The 16:9 storm is what U7 drew under the horizon, with U8's even deck over it.
+- **The derate page's wide view** (`PresentationMap.BasinWideSidestepM`). U8 stepped the page's eye 14 m north to clear a gauge's
+  mast, which put the wide view's eye, 52 m off the wall, over the berthed ferry: its cabin roof and mast filled the lower third. The
+  wide view alone now stands 34 m south of the chargers' line, off the ferry's stern, and looks north-west: both chargers in the
+  middle with the terminal behind them, the quay's steps at the left and the berth's pontoon at the right. The close and insert views
+  keep U8's step. The berth's plan is named once (`NearLandmarks.FerryOffM` and its neighbours) for the builder and the test.
+- **The derate page's end on a day with no link** (`Scheduler.Advance`). A caption's offer outlives its shot: page 3b's derate
+  caption is offered for 80 s from the page's first shot and is usually read in the second. The page's last shot waited for every
+  open offer, so on a day when the link never comes (the command refused, or its cause not read) it stood on "Alarm raised." until the
+  first shot's offer ran out, 15 s after a clean day had left. The last shot now waits only for the offers it made itself. An earlier
+  offer is still taken while the page is open; it no longer holds it open. No caption's words and no cut changed: in the director's
+  golden outputs the clean day is unchanged, and the two no-link controls differ in one line each, the last `caption-end` of page 3b
+  (561 s to 546 s, the clean day's). What it costs: on a linked day whose command is read more than about 65 s after the page is staged
+  and after the last shot has stood its 6 s, the page has already ended; before, it would have shown the derate caption until 80 s.
+
+### The ground
+
+What grows at a point (wood, meadow, yard, worn earth, a rock's skirt, the coast's turf) is weighed at each corner of the terrain's
+grid and blended across the facet (`TerrainBuilder.Build`). U8 weighed it once per facet, and only the coast's turf at the corners:
+wherever wood met meadow the grid showed as 20 and 30 m squares of one colour beside squares of another, plainest from above, which is
+the 9:16 HOME's whole foreground. A facet still has one normal, so the knolls keep their facets. The forest floor is a shade lighter
+((0.235, 0.265, 0.165) from (0.20, 0.23, 0.14)): where the wood is thin and seen from above it was a black field the trees stood in.
+
+`U9Tests` pins the tall view (every tag's line between the caption and the rail, both ends of the attribute rule's tag inside the
+frame, and that the same checks see the 16:9 eye fail all three in a tall frame); that only a well's view has a tall version and only
+it draws the tags in a tall frame; the wide view (no point of the ferry in the frame, the pontoon right of both chargers, nothing on
+the quay's edge in front of either, and that the same check sees U8's ferry); the no-link page's end at the clean day's second with
+the clean day's cuts, and an earlier shot's offer still taken in the last one; the west tor's place in the 9:16 HOME and out of the
+16:9 one, its stacking and its being its sister's mirror; the joint's share and tones; and the squalls' eye heights against every pose.

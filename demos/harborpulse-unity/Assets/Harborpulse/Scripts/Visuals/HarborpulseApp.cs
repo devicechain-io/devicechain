@@ -164,7 +164,7 @@ namespace DeviceChain.Harborpulse.Visuals
             // the stills path never runs Update: bring the near detail to this camera before anything is drawn
             world?.Detail.Refresh(sceneCamera.transform.position, true);
             // and the wells' tags: the last Tick decided them for the camera it had, which a still may have moved since
-            views?.FrameWells(sceneCamera.transform.position, sceneCamera.transform.forward);
+            views?.FrameWells(sceneCamera.transform.position, sceneCamera.transform.forward, sceneCamera.aspect < 1);
             reflection?.RenderNow();
         }
         void LateUpdate() => reflection?.LateTick();
@@ -359,7 +359,7 @@ namespace DeviceChain.Harborpulse.Visuals
             mats.SetNight((float)state.Night, (float)frame.World.EastFeederOutage);
             mats.SetRain(state);
             grading.Apply(state);
-            views.Apply(frame, state, sceneCamera.transform.position, dt, waterTime, weather, sceneCamera.transform.forward);
+            views.Apply(frame, state, sceneCamera.transform.position, dt, waterTime, weather, sceneCamera.transform.forward, sceneCamera.aspect < 1);
             TickDirector(source, now, dt);
             ApplyMappedTruck(source, now);
             world.Detail.Refresh(sceneCamera.transform.position);
