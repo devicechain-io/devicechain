@@ -526,6 +526,18 @@ JetStream 卷大小由各 stream 预先保留的容量上限之和推导。两�
 `dcctl bootstrap local my-instance --build --host localhost --no-tls` 将控制台开放在 `http://localhost/`，无须修改 hosts 文件，也不会出现证书警告。
 :::
 
+
+:::tip 按主机名运行第二个本地实例
+`localhost` 只能服务一个实例。要在其旁边再运行一个，请为每个实例使用 `localtest.me` 下各自的名称。这是一个公共域名，其下所有名称都解析到 `127.0.0.1`，同样无须修改 hosts 文件：
+
+```bash
+dcctl bootstrap local alpha --host alpha.localtest.me --no-tls
+dcctl bootstrap local beta --host beta.localtest.me --no-tls
+```
+
+控制台随后位于 `http://alpha.localtest.me/` 和 `http://beta.localtest.me/`。该名称通过 DNS 解析，因此需要网络访问；离线时请改用 `*.localhost` 名称。
+:::
+
 ### `--ha` {#ha}
 
 `--ha` 在安装时选择，集群中每个实例都遵循。每个实例的消息代理运行为三节点 RAFT 集群，每节点一台服务器，**每个 JetStream stream 和 KV 桶都在其中复制**。实例能够在一个节点丢失后保留消息、设备会话和实时状态。
