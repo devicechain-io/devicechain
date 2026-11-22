@@ -42,7 +42,7 @@ export const deviceGroupResource: RegistryResource<DeviceGroup> = {
       // is partial now, so an unnamed field is left alone — and re-sending a value
       // the operator never saw would be a write over whatever it has become since.
       update={(token, req) =>
-        updateDeviceGroup(token, { name: req.name, description: req.description })
+        updateDeviceGroup(token, { name: req.name, description: req.description }, g?.updatedAt)
       }
       onDone={onDone}
     />
