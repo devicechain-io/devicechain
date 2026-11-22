@@ -143,10 +143,15 @@ Status 显示声明、能力、条件及非终态 InstanceOperation；集群未�
 `dcctl install` 定义四种集群范围的自定义资源：
 
 - **`Instance`**（`instances.core.devicechain.io`，短名 `dci`）：每次安装一个，声明实例身份和配置。
-- **`InstanceConfiguration`**（`instanceconfigurations.core.devicechain.io`，短名 `dcic`）：可保存实例配置文档的资源。定义会被安装，但 `dcctl bootstrap` 不会创建该资源，Operator 也不监视它。每个 Pod 从挂载的实例配置 Secret 读取实例配置。
+- **`InstanceConfiguration`**（`instanceconfigurations.core.devicechain.io`，短名 `dcic`）：可保存实例配置文档的资源。定义会被安装，但 `dcctl bootstrap` 不会创建该资源，Operator 也不监视它。每个 Pod 从挂载的实例配置 Secret 读取实例配置。**已弃用：**读取或写入该资源时 API 服务器会发出警告，后续的主版本将删除该定义。
 
 - **`ExecutorEnrollment`**（`executorenrollments.core.devicechain.io`，`dce`）——执行器的唯一注册资源，记录所有者、固定镜像和观察到的能力。
 - **`InstanceOperation`**（`instanceoperations.core.devicechain.io`，`dcop`）——不可变的操作请求及其裁决；本 Preview 不执行任何操作。
+
+`Instance` 声明中有两个字段已**弃用**，后续的主版本将删除它们。带有这两个字段的实例不受任何影响：
+
+- `spec.grafanaSSO` 不起作用。Grafana 的登录针对整个集群配置，而不是按实例配置。
+- `spec.compact` 由 `spec.size: compact` 取代。dcctl 会同时写入两者，并拒绝两者不一致的声明。
 
 Install 是集群级请求，禁止提供 `spec.instance` 和 `spec.instanceUID`。其他动作必须提供
 `spec.instance`；Upgrade 和 Teardown 还必须提供 `spec.instanceUID`，Bootstrap 可省略它，

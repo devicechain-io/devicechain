@@ -183,10 +183,20 @@ chart's Prometheus does not scrape that namespace, so scrape it yourself if you 
 - **`InstanceConfiguration`** (`instanceconfigurations.core.devicechain.io`, short name `dcic`)
   — a resource that can hold an instance configuration document. The definition is installed,
   but `dcctl bootstrap` does not create one and the operator does not watch it. Each pod reads
-  the instance configuration from the instance config Secret mounted into it.
+  the instance configuration from the instance config Secret mounted into it. **Deprecated:**
+  the API server warns when one is read or written, and a later major release removes the
+  definition.
 
 - **`ExecutorEnrollment`** (`executorenrollments.core.devicechain.io`, `dce`) — the singleton executor owner, pinned image and capability observation.
 - **`InstanceOperation`** (`instanceoperations.core.devicechain.io`, `dcop`) — an immutable operation request and its verdict; this Preview executes no operations.
+
+Two fields of an `Instance` declaration are **deprecated**, and a later major release removes them.
+Nothing changes for an instance carrying them:
+
+- `spec.grafanaSSO` has no effect. Grafana's login is configured for the whole cluster, not per
+  instance.
+- `spec.compact` is replaced by `spec.size: compact`. dcctl writes both and refuses a declaration in
+  which they disagree.
 
 Install is a cluster-level request: `spec.instance` and `spec.instanceUID` are forbidden.
 Every other action requires `spec.instance`; Upgrade and Teardown also require `spec.instanceUID`,

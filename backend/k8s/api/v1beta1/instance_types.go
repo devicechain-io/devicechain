@@ -225,6 +225,10 @@ type InstanceSpec struct {
 
 	// Compact applies the small-footprint sizing preset.
 	//
+	// Deprecated: use size: compact. dcctl writes both today and refuses a declaration in
+	// which they disagree, and compact is still the field it reads; it will be removed in a
+	// later major release, no earlier than the one that follows 1.11.
+	//
 	// +optional
 	Compact bool `json:"compact,omitempty"`
 
@@ -273,6 +277,10 @@ type InstanceSpec struct {
 	// by the OpenTofu cluster configuration (its monitoring_grafana_oauth_* settings),
 	// not per instance, and nothing in dcctl or the operator writes or reads this
 	// field. It is kept so a declaration that carries it is still accepted.
+	//
+	// Deprecated: has no effect; configure Grafana's login with the cluster configuration
+	// instead. It will be removed in a later major release, no earlier than the one that
+	// follows 1.11.
 	//
 	// +optional
 	GrafanaSSO bool `json:"grafanaSSO,omitempty"`
