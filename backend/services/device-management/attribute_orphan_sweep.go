@@ -10,12 +10,13 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
-const attributeOrphanSweepInterval = time.Minute
+// Every 10 minutes, like the configuration-report maintenance, with an immediate first pass. A
+// pass runs on one replica at a time (SweepAllDeviceAttributeOrphans).
+const attributeOrphanSweepInterval = 10 * time.Minute
 
 var AttributeOrphanSweep *core.PeriodicTask
 
-// Match the create-enrollment healer's lifecycle and HA behavior: every replica
-// runs an immediate first pass, followed by fixed-interval idempotent passes.
+// Every replica schedules the task; the pass's advisory lock admits one at a time.
 func initAttributeOrphanSweep() error {
 	AttributeOrphanSweep = core.NewPeriodicTask(Microservice.FunctionalArea, "device-attribute-orphan-sweep", attributeOrphanSweepInterval,
 		func(ctx context.Context) error { return Api.SweepAllDeviceAttributeOrphans(ctx) },

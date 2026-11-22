@@ -322,3 +322,27 @@ func TestAttributeGenerationsMigrationReplayPostgres(t *testing.T) {
 		require.NoError(t, schema.NewAttributeGenerationsSchema().Migrate(db))
 	}
 }
+
+// M1: a pass runs on ONE replica. While another replica holds the sweep's session lock, a pass
+// removes nothing and returns cleanly; once the lock is free, the next pass removes the orphans.
+func TestAttributeOrphanSweepRunsOnOneReplicaPostgres(t *testing.T) {
+	f := newAttributeProtocolFixture(t)
+	protocolSet(t, f, "SERVER", "orphan-gate")
+	require.NoError(t, f.api.RDB.DB(f.ctx).Exec("DELETE FROM devices WHERE id = ?", f.device.ID).Error)
+	count := func() int64 {
+		n, err := f.api.CountOrphanedDeviceAttributes(f.ctx)
+		require.NoError(t, err)
+		return n
+	}
+	require.Positive(t, count())
+	require.NoError(t, f.api.RDB.DB(f.ctx).Connection(func(other *gorm.DB) error {
+		var held bool
+		require.NoError(t, other.Raw("SELECT pg_try_advisory_lock(?)", attributeOrphanSweepLockKey).Scan(&held).Error)
+		require.True(t, held)
+		require.NoError(t, f.api.SweepAllDeviceAttributeOrphans(f.ctx))
+		require.Positive(t, count(), "a replica that did not take the sweep lock must not sweep")
+		return other.Exec("SELECT pg_advisory_unlock(?)", attributeOrphanSweepLockKey).Error
+	}))
+	require.NoError(t, f.api.SweepAllDeviceAttributeOrphans(f.ctx))
+	require.Zero(t, count())
+}

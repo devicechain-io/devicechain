@@ -12,8 +12,8 @@ import (
 )
 
 func TestAttributeOrphanSweepLifecycle(t *testing.T) {
-	if attributeOrphanSweepInterval != 60*time.Second {
-		t.Fatal("orphan sweep must run every 60 seconds")
+	if attributeOrphanSweepInterval != 10*time.Minute {
+		t.Fatal("orphan sweep must run every 10 minutes (one replica per pass)")
 	}
 	calls := map[string]bool{}
 	for _, path := range []string{"main.go", "attribute_orphan_sweep.go"} {

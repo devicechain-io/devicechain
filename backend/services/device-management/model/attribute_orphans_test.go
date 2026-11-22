@@ -38,7 +38,7 @@ func testAttributeOrphanSweep(t *testing.T, api *Api, ctx context.Context, dev *
 	require.NoError(t, api.RDB.DB(ctx).Exec("DELETE FROM devices WHERE id = ?", dev.ID).Error)
 	n, err := api.CountOrphanedDeviceAttributes(ctx)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), n)
+	require.Equal(t, int64(2), n, "one orphaned attribute row and its orphaned generation head")
 	beforeAttrs := testutil.ToFloat64(deviceAttributeOrphansRemoved.WithLabelValues("entity_attributes"))
 	beforeHeads := testutil.ToFloat64(deviceAttributeOrphansRemoved.WithLabelValues("entity_attribute_generations"))
 	require.NoError(t, api.SweepDeviceAttributeOrphans(ctx))

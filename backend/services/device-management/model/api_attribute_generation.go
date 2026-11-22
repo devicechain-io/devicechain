@@ -27,9 +27,11 @@ type AttributeGeneration struct {
 	UpdatedAt  time.Time
 }
 
-// TableName sorts the table beside entity_attributes and after devices, so tenant purge (which
-// orders tables with no foreign key alphabetically) deletes it after a tenant's devices, in the
-// same order a device delete takes.
+// TableName sorts the table beside entity_attributes and AFTER devices. Tenant purge orders the
+// tables that have no foreign key alphabetically, so it deletes a tenant's devices before this
+// table, which is the order every writer and device delete take: device row first, then its child
+// rows. Had the table sorted before devices, purge would hold a head row a device delete is about
+// to remove while waiting for that delete's device row lock, and the two would deadlock (40P01).
 func (AttributeGeneration) TableName() string { return "entity_attribute_generations" }
 
 func attributeGeneration(tx *gorm.DB, deviceID uint, scope, key string) (int64, bool, error) {
@@ -48,7 +50,8 @@ func bumpAttributeGenerationTx(tx *gorm.DB, deviceID uint, scope, key string) (i
 		if err := tx.Raw(`SELECT nextval('"device-management".entity_attribute_generation_seq')`).Scan(&next).Error; err != nil {
 			return 0, err
 		}
-		updates["generation"] = gorm.Expr(`nextval('"device-management".entity_attribute_generation_seq')`)
+		// One nextval per bump: the value just drawn is both the insert's and the update's.
+		updates["generation"] = next
 	} else {
 		// SQLite tests are single-writer; allocate inside the owning transaction. The tenant's own
 		// maximum is enough there: a head is compared only with heads of the same device.

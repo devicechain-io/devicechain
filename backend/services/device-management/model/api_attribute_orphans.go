@@ -29,40 +29,101 @@ func init() {
 	}
 }
 
-// CountOrphanedDeviceAttributes is the tenant-scoped readiness probe. Include
-// soft-deleted attributes: they remain physical rows until this cleanup deletes them.
+// CountOrphanedDeviceAttributes is the tenant-scoped readiness probe: device attribute rows
+// (soft-deleted ones included, since they remain physical rows until this cleanup deletes them)
+// and generation heads whose device no longer exists.
 func (api *Api) CountOrphanedDeviceAttributes(ctx context.Context) (int64, error) {
 	var count int64
 	err := api.RDB.DB(ctx).Unscoped().Model(&EntityAttribute{}).
 		Where("entity_type = ?", "device").
 		Where("NOT EXISTS (SELECT 1 FROM devices WHERE devices.id = entity_attributes.entity_id)").
 		Count(&count).Error
-	return count, err
+	if err != nil {
+		return 0, err
+	}
+	var heads int64
+	err = api.RDB.DB(ctx).Model(&AttributeGeneration{}).
+		Where("NOT EXISTS (SELECT 1 FROM devices WHERE devices.id = entity_attribute_generations.device_id)").
+		Count(&heads).Error
+	return count + heads, err
 }
 
-// SweepAllDeviceAttributeOrphans discovers tenants from BOTH tables: an old pod
-// may delete every attribute but leave only generation heads. Every replica runs
-// this idempotent sweep; concurrent deletes count only rows actually committed.
+// attributeOrphanSweepLockKey is the fixed session advisory lock that admits ONE replica to a
+// sweep pass at a time. It is unrelated to the per-device attribute lock's key space.
+const attributeOrphanSweepLockKey int64 = 0x6463_6f72_7068_616e // "dcorphan"
+
+// SweepAllDeviceAttributeOrphans runs one pass on ONE replica: the replica that takes the
+// sweep's session advisory lock (on a pinned connection, released at the end of the pass, or
+// by the server if the connection dies) sweeps; the others skip the pass. Tenants are discovered
+// from BOTH tables, because an old pod may delete every attribute and leave only generation
+// heads, with a loose index scan over each table's tenant_id index, so a pass costs one index
+// probe per tenant rather than a scan of the attribute tables.
 func (api *Api) SweepAllDeviceAttributeOrphans(ctx context.Context) error {
-	var tenants, headTenants []string
-	sys := api.RDB.DB(core.WithSystemContext(ctx))
-	if err := sys.Unscoped().Model(&EntityAttribute{}).Where("entity_type = ?", "device").
-		Distinct().Pluck("tenant_id", &tenants).Error; err != nil {
+	db := api.RDB.DB(core.WithSystemContext(ctx))
+	if db.Dialector.Name() != "postgres" {
+		return api.sweepAllDeviceAttributeOrphans(ctx)
+	}
+	return db.Connection(func(conn *gorm.DB) error {
+		var held bool
+		if err := conn.Raw("SELECT pg_try_advisory_lock(?)", attributeOrphanSweepLockKey).Scan(&held).Error; err != nil {
+			return err
+		}
+		if !held {
+			return nil // another replica is sweeping this pass
+		}
+		defer conn.Exec("SELECT pg_advisory_unlock(?)", attributeOrphanSweepLockKey)
+		return api.sweepAllDeviceAttributeOrphans(ctx)
+	})
+}
+
+func (api *Api) sweepAllDeviceAttributeOrphans(ctx context.Context) error {
+	tenants, err := api.attributeOrphanTenants(ctx)
+	if err != nil {
 		return err
 	}
-	if err := sys.Model(&AttributeGeneration{}).Distinct().Pluck("tenant_id", &headTenants).Error; err != nil {
-		return err
-	}
-	tenants = append(tenants, headTenants...)
-	slices.Sort(tenants)
-	tenants = slices.Compact(tenants)
 	var failures []error
 	for _, tenant := range tenants {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := api.SweepDeviceAttributeOrphans(core.WithTenant(ctx, tenant)); err != nil {
 			failures = append(failures, fmt.Errorf("sweep device attribute orphans for tenant %q: %w", tenant, err))
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// attributeOrphanTenants lists the tenants holding attribute rows or generation heads, reading
+// no row content. On PostgreSQL each table is walked one tenant at a time along an index that
+// leads with tenant_id (a loose index scan); elsewhere it is a plain DISTINCT.
+func (api *Api) attributeOrphanTenants(ctx context.Context) ([]string, error) {
+	db := api.RDB.DB(core.WithSystemContext(ctx))
+	var tenants []string
+	for _, model := range []any{&EntityAttribute{}, &AttributeGeneration{}} {
+		var found []string
+		if db.Dialector.Name() != "postgres" {
+			if err := db.Unscoped().Model(model).Distinct().Pluck("tenant_id", &found).Error; err != nil {
+				return nil, err
+			}
+		} else {
+			stmt := &gorm.Statement{DB: db}
+			if err := stmt.Parse(model); err != nil {
+				return nil, err
+			}
+			table := db.Statement.Quote(stmt.Table)
+			if err := db.Raw(`WITH RECURSIVE t(tenant_id) AS (
+  (SELECT tenant_id FROM ` + table + ` ORDER BY tenant_id LIMIT 1)
+  UNION ALL
+  SELECT (SELECT r.tenant_id FROM ` + table + ` r WHERE r.tenant_id > t.tenant_id ORDER BY r.tenant_id LIMIT 1)
+  FROM t WHERE t.tenant_id IS NOT NULL
+) SELECT tenant_id FROM t WHERE tenant_id IS NOT NULL`).Scan(&found).Error; err != nil {
+				return nil, err
+			}
+		}
+		tenants = append(tenants, found...)
+	}
+	slices.Sort(tenants)
+	return slices.Compact(tenants), nil
 }
 
 // SweepDeviceAttributeOrphans performs one tenant's pass, one bounded transaction

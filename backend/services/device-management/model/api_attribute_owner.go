@@ -179,9 +179,14 @@ func lockDeviceAttributes(ctx context.Context, tx *gorm.DB, id uint) error {
 		return nil
 	}
 	path := state.path
+	reacquire := state.locked && state.owner == id
 	started := time.Now()
 	err := tx.WithContext(tx.Statement.Context).Exec(`SELECT "device-management".dc_entity_attr_lock('device', ?)`, id).Error
-	deviceAttributeLockWait.WithLabelValues(path).Observe(time.Since(started).Seconds())
+	if !reacquire {
+		// A same-owner re-acquire is free (the transaction already holds the lock); observing it
+		// would skew the wait histogram toward zero.
+		deviceAttributeLockWait.WithLabelValues(path).Observe(time.Since(started).Seconds())
+	}
 	if err != nil {
 		return err
 	}
