@@ -20,6 +20,8 @@ ALTER TABLE ONLY "event-processing".profile_actives
  ADD CONSTRAINT profile_actives_pkey PRIMARY KEY (tenant, profile_token);
 ALTER TABLE ONLY "event-processing".purged_tenants
  ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
+ALTER TABLE ONLY "event-processing".rule_stat_sweeps
+ ADD CONSTRAINT rule_stat_sweeps_pkey PRIMARY KEY (tenant, profile_version_token);
 ALTER TABLE ONLY "event-processing".rule_stats
  ADD CONSTRAINT rule_stats_pkey PRIMARY KEY (rule_id);
 CREATE INDEX "idx_event-processing_detect_rules_tenant" ON "event-processing".detect_rules USING btree (tenant);
@@ -114,6 +116,11 @@ CREATE TABLE "event-processing".purged_tenants (
  epoch timestamp with time zone NOT NULL,
  planted_at timestamp with time zone NOT NULL,
  completed_at timestamp with time zone
+);
+CREATE TABLE "event-processing".rule_stat_sweeps (
+ tenant character varying(256) NOT NULL,
+ profile_version_token character varying(256) NOT NULL,
+ swept_at timestamp with time zone NOT NULL
 );
 CREATE TABLE "event-processing".rule_stats (
  rule_id character varying(512) NOT NULL,

@@ -216,6 +216,14 @@ var rawSQLAllowList = []siteEntry{
 			"It writes only that row's position_derived and position_classified_version, and its joins equate p.tenant_id with the alarm's " +
 			"tenant_id, as for Api.ClassifyUnclassifiedAlarms.",
 	},
+	{
+		Path: "backend/services/event-processing/model/rule_stat_store.go", Func: "RuleStatStore.SweepStranded", Count: 1,
+		Why: "the stranded rule-stat sweep's DELETE for ONE tenant: both the outer statement and its bounding " +
+			"subquery repeat ruleStatStrandedPredicate, whose first clause binds rule_stats.tenant to the " +
+			"tenant the call names (the context carries the same tenant), and its profile_actives subqueries " +
+			"equate pp.tenant and pa.tenant with the row's own tenant. It deletes only that tenant's rows, and only derived " +
+			"health counters. Raw because the anti-join and the re-checked bounded subquery have no gorm form.",
+	},
 
 	// --- erasure ---
 	{
