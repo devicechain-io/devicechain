@@ -86,6 +86,10 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/api_x509_revocation_markers.go": {"Api.tenantsOwingMarkers"},
 	// The agent-proposal reaper: one conditional update that can only move overdue PROPOSED rows to EXPIRED.
 	"backend/services/device-management/model/api_agent_proposals.go": {"Api.ExpireAgentProposals"},
+	// command-delivery's agent-command-proposal reaper (the same expiry, stop-only) and the ruled
+	// 30-day retention purge: one bounded DELETE of proposals decided more than 30 days ago,
+	// never a PROPOSED one; neither reads a row back nor writes anything but that.
+	"backend/services/command-delivery/model/agent_approval.go": {"Api.ExpireAgentProposals", "Api.PurgeAgentProposals"},
 	"backend/services/device-management/schema/migration_credential_secret_digest.go": {
 		"CountForeignCredentialDigests", "DigestPlaintextCredentialSecrets",
 	},

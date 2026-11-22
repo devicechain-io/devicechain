@@ -19,6 +19,7 @@ var sanctionedFinalDeliveryCallers = map[deliveryCapSite]string{
 	{"backend/services/outbound-connectors/lpwan/adapter.go", "Adapter.handle"}:                           "No handling error: a cancelled capacity wait refuses the command as unsent on the final delivery.",
 	{"backend/services/device-management/processor/inbound.go", "InboundEventsProcessor.settleResolved"}:  "Holds a final delivery whose resolved fan-out was refused only for shard placement; every other outcome keeps the unacked give-up.",
 	{"backend/services/device-management/processor/inbound.go", "InboundEventsProcessor.OnResolvedEvent"}: "Watches a final delivery for the placement hold before its fan-out is published; it judges no error.",
+	{"backend/services/command-delivery/processor/agent_kill_consumer.go", "AgentKillConsumer.handle"}:    "A kill the broker will pass over after this delivery latches the kill feed stale and is dead-lettered for an operator to repeat.",
 }
 
 var sanctionedDisposeCallers = map[deliveryCapSite]string{

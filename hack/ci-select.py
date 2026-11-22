@@ -192,6 +192,7 @@ READERS = [
         "deploy/helm/devicechain/dashboards/command-delivery.json",
     ], [], "console_submission_contract_test.go:17, dashboard_series_test.go:43"),
     ("backend/services/command-delivery", "model", ["backend/testdata/authored-rules/**"], [], "model/authored_sim_command_wire_test.go:30"),
+    ("backend/services/command-delivery", "verify", ["backend/services/device-management/graphql/schema.graphql"], [], "verify/proposal_target_test.go:143"),
     ("backend/services/device-management", "config", ["deploy/helm/devicechain/values.yaml"], [], "config/chart_floor_test.go:25"),
     ("backend/services/device-management", "model", [
         "backend/testdata/authored-rules/**",

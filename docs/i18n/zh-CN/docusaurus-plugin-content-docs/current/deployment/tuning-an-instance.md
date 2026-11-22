@@ -96,6 +96,7 @@ event-sources Pod 上设置 `EVENT_SOURCES_INGEST_METERING`。这不是 `instanc
 | `instance.config.infrastructure.tracing` | 分布式追踪（OpenTelemetry），默认关闭；参见[可观测性](./observability.md)。请在版本滚动发布完成后，通过一次独立升级启用：早期版本的 Pod 会拒绝此键 |
 | `instance.config.infrastructure.messaging.envelopes.resolved`、`.inbound`、`.inboundLingerMillis` | 事件是否以信封形式写入，默认关闭 |
 | `instance.config.infrastructure.tokenAudience.enforcement`、`.unscopedClientCredentials`、`.externalResources` | 令牌受众始终强制执行。enforcement 应未设置或为 `enforce`；`v1.4` 拒绝 `observe`。不同的设置 `unscopedClientCredentials: observe` 仍受支持。`externalResources` 列出平台外的资源服务器，另外两个键由 chart 派生和控制。 |
+| `instance.config.infrastructure.mcp.commandProposals` | 固定设置，默认关闭。启用代理命令提案（Preview）。请在版本滚动部署全部完成后，通过单独的一次升级启用：较早版本的 Pod 会拒绝此配置键。关闭时，command-delivery 拒绝命令提案和批准；拒绝提案、读取、过期清理及代理终止路径仍正常工作。 |
 | `eventSources.ingestMetering` | 可选的带延迟补偿额度的摄取计量；参见 [Ingest metering](#ingest-metering)。默认值为 `legacy` |
 | `brokerAdmin.allowCeilingShrink` | 允许一次升级把某个流的上限降到其现有内容以下。仅在该次升级时设置，之后移除 |
 

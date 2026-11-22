@@ -59,6 +59,7 @@ CREATE INDEX "idx_command-delivery_commands_deleted_at" ON "command-delivery".co
 CREATE INDEX "idx_command-delivery_commands_device_token" ON "command-delivery".commands USING btree (device_token);
 CREATE INDEX "idx_command-delivery_commands_status" ON "command-delivery".commands USING btree (status);
 CREATE INDEX "idx_command-delivery_commands_token" ON "command-delivery".commands USING btree (token);
+CREATE INDEX idx_agent_proposals_decided_at ON "command-delivery".agent_proposals USING btree (decided_at, id) WHERE (decided_at IS NOT NULL);
 CREATE INDEX idx_audit_tenant_time ON "command-delivery".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_campaign_cycles_created ON "command-delivery".campaign_cycles USING btree (tenant_id, created_at);
 CREATE INDEX idx_campaign_elements_batch ON "command-delivery".campaign_elements USING btree (tenant_id, batch_token) WHERE (batch_token IS NOT NULL);
