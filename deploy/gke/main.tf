@@ -30,6 +30,15 @@ module "gke_cluster" {
   wait_for_cluster_operations        = var.wait_for_cluster_operations
   cluster_operations_timeout_seconds = var.cluster_operations_timeout_seconds
   labels                             = var.labels
+
+  # The options the fleet roots use. The public root passes the values it has always planned, so
+  # its plan does not move; the no-op plan gate holds that.
+  spot                 = false
+  node_service_account = null
+  workload_pool        = null
+  network              = null
+  subnetwork           = null
+  ownership_labels     = {}
 }
 
 # The addresses the cluster, its pools and the settle resource had before they moved into the

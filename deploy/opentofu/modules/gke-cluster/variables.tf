@@ -134,3 +134,52 @@ variable "labels" {
   description = "Labels applied to the cluster and its nodes, for finding (and billing) what this created."
   type        = map(string)
 }
+
+variable "spot" {
+  description = "Run every node pool on spot VMs: cheaper, and preempted at any time. For a rig that can be re-run, never for an install that holds data."
+  type        = bool
+}
+
+variable "node_service_account" {
+  description = "The Google service account every node runs as, as an email. null keeps the project's default node identity."
+  type        = string
+  nullable    = true
+
+  validation {
+    condition     = var.node_service_account == null || can(regex("^[a-z0-9._-]+@[a-z0-9.-]+\\.iam\\.gserviceaccount\\.com$", var.node_service_account))
+    error_message = "node_service_account must be a service account email (NAME@PROJECT.iam.gserviceaccount.com), or null."
+  }
+}
+
+variable "workload_pool" {
+  description = "The cluster's workload identity pool (PROJECT.svc.id.goog). null leaves workload identity off."
+  type        = string
+  nullable    = true
+
+  validation {
+    condition     = var.workload_pool == null || can(regex("^[a-z][a-z0-9.:-]*\\.svc\\.id\\.goog$", var.workload_pool))
+    error_message = "workload_pool must look like PROJECT.svc.id.goog, or be null."
+  }
+}
+
+variable "network" {
+  description = "The VPC network the cluster joins, as a name or a self link. null keeps the project's default network."
+  type        = string
+  nullable    = true
+}
+
+variable "subnetwork" {
+  description = "The subnetwork the cluster's nodes join. null lets GKE choose for the network."
+  type        = string
+  nullable    = true
+}
+
+variable "ownership_labels" {
+  description = "Labels that identify who owns the cluster, merged into the CLUSTER's labels only (never the pools' node labels, and never the wait's triggers). Empty for the public root."
+  type        = map(string)
+
+  validation {
+    condition     = alltrue([for k, v in var.ownership_labels : can(regex("^[a-z][a-z0-9_-]{0,62}$", k)) && can(regex("^[a-z0-9_-]{0,63}$", v))])
+    error_message = "ownership_labels keys and values must be GCP label strings: lower-case letters, digits, underscore and hyphen, at most 63 characters, keys starting with a letter."
+  }
+}
