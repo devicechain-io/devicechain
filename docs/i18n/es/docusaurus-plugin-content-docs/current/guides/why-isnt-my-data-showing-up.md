@@ -6,6 +6,8 @@ title: Por qué no aparecen los datos de mi dispositivo
 
 Un dispositivo envía eventos y no aparece nada. Antes de leer el log de un pod, mira lo que la plataforma **rechazó**. Cuando descarta un evento, o no puede almacenarlo, guarda un registro breve de ello, y tu tenant puede leerlo.
 
+La página de la consola para estos registros se describe en [Fallos de ingesta](/user-guide/ingest-failures).
+
 :::note Estado
 Disponible. Abre **Fallos de ingesta** en la sección **Monitor** de la consola, o consulta `failedEvents` y `failedEventSummary` en la API GraphQL de event-management. Ambas requieren `device:write`, la autorización de los miembros que gestionan dispositivos y por tanto pueden actuar ante un rechazo, y no la base de solo lectura que tiene todo miembro. Tampoco se ofrecen a los miembros cuyo acceso se limita a algunos clientes: un rechazo suele nombrar un dispositivo que no existe, por lo que no pertenece a ningún cliente.
 :::
