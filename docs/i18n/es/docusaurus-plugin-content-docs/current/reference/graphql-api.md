@@ -336,7 +336,8 @@ destructivo — consulta [el aviso de más abajo](#where-the-default-does-not-ho
 
 Una actualización parcial reduce los conflictos de concurrencia sin eliminarlos. Dos escritores que
 tocan campos distintos ya no se pisan, pero dos que tocan el mismo campo sí. `updateDashboard`,
-`updateConnector`, `updateAiProvider` y `updateNotificationPolicy` aceptan un `expectedUpdatedAt`
+`updateConnector`, `updateAiProvider`, `updateNotificationPolicy`, `updateArea`, `updateAsset`,
+`updateCustomer` y `updateEntityGroup` aceptan un `expectedUpdatedAt`
 opcional y rechazan la escritura si la marca de tiempo almacenada se ha movido desde que la leíste.
 Envía el `updatedAt` que leíste por última vez, u omítelo para que gane la última escritura. El
 `updatedAt` que devuelve una respuesta `create*` no sirve para esto: vuelve a leer el registro

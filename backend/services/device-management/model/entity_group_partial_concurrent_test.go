@@ -74,7 +74,7 @@ func TestEntityGroupPartialConcurrentRenamePreservesSelectorAndPublishedPointer(
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { api.RDB.Database.Callback().Query().Remove(callback) })
-	updated, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{
+	updated, err := api.UpdateEntityGroup(ctx, "g1", nil, &EntityGroupUpdateRequest{
 		Name: dcgraphql.OptionalStringOf("Renamed"),
 	})
 	if err != nil {
@@ -119,7 +119,7 @@ func TestEntityGroupPartialConcurrentSelectorReplacementWritesPair(t *testing.T)
 		Update("selector_schema", 0).Error; err != nil {
 		t.Fatal(err)
 	}
-	updated, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{
+	updated, err := api.UpdateEntityGroup(ctx, "g1", nil, &EntityGroupUpdateRequest{
 		Selector: dcgraphql.OptionalStringOf(groupPartialSelectorB),
 	})
 	if err != nil {
@@ -160,7 +160,7 @@ func TestEntityGroupPartialConcurrentInvalidSelectorWritesNothing(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			api, ctx, statements := entityGroupPartialFixture(t, tc.dynamic)
 			before := reloadPartialEntityGroup(t, api, ctx)
-			_, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{
+			_, err := api.UpdateEntityGroup(ctx, "g1", nil, &EntityGroupUpdateRequest{
 				Name: dcgraphql.OptionalStringOf("Refused"), Selector: tc.field,
 			})
 			if err == nil {
@@ -180,7 +180,7 @@ func TestEntityGroupPartialConcurrentInvalidSelectorWritesNothing(t *testing.T) 
 func TestEntityGroupPartialEmptyRetainsExactTimestamp(t *testing.T) {
 	api, ctx, statements := entityGroupPartialFixture(t, true)
 	before := reloadPartialEntityGroup(t, api, ctx)
-	updated, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{})
+	updated, err := api.UpdateEntityGroup(ctx, "g1", nil, &EntityGroupUpdateRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestEntityGroupPartialEmptyRetainsExactTimestamp(t *testing.T) {
 	if !stored.UpdatedAt.Equal(before.UpdatedAt) || !updated.UpdatedAt.Equal(before.UpdatedAt) {
 		t.Fatal("empty request advanced updated_at")
 	}
-	_, err = api.UpdateEntityGroup(ctx, "missing", &EntityGroupUpdateRequest{})
+	_, err = api.UpdateEntityGroup(ctx, "missing", nil, &EntityGroupUpdateRequest{})
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("missing group: %v; want not found", err)
 	}
