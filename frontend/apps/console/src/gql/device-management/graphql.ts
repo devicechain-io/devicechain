@@ -1819,29 +1819,30 @@ export type AreasQueryVariables = Exact<{
 }>;
 
 
-export type AreasQuery = { areas: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AreasQuery = { areas: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AreaByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AreaByTokenQuery = { areasByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type AreaByTokenQuery = { areasByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateAreaMutationVariables = Exact<{
   request?: AreaCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAreaMutation = { createArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateAreaMutation = { createArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateAreaMutationVariables = Exact<{
   token: string;
   request: AreaUpdateRequest;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
-export type UpdateAreaMutation = { updateArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateAreaMutation = { updateArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteAreaMutationVariables = Exact<{
   token: string;
@@ -1891,29 +1892,30 @@ export type AssetsQueryVariables = Exact<{
 }>;
 
 
-export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, updatedAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AssetByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, updatedAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateAssetMutationVariables = Exact<{
   request?: AssetCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, updatedAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateAssetMutationVariables = Exact<{
   token: string;
   request: AssetUpdateRequest;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
-export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, updatedAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteAssetMutationVariables = Exact<{
   token: string;
@@ -2164,14 +2166,14 @@ export type CustomersQueryVariables = Exact<{
 }>;
 
 
-export type CustomersQuery = { customers: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type CustomersQuery = { customers: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CustomerByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type CustomerByTokenQuery = { customersByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type CustomerByTokenQuery = { customersByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CustomerNamesQueryVariables = Exact<{
   tokens: Array<string> | string;
@@ -2185,15 +2187,16 @@ export type CreateCustomerMutationVariables = Exact<{
 }>;
 
 
-export type CreateCustomerMutation = { createCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateCustomerMutation = { createCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateCustomerMutationVariables = Exact<{
   token: string;
   request: CustomerUpdateRequest;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
-export type UpdateCustomerMutation = { updateCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateCustomerMutation = { updateCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteCustomerMutationVariables = Exact<{
   token: string;
@@ -2410,29 +2413,30 @@ export type EntityGroupsQueryVariables = Exact<{
 }>;
 
 
-export type EntityGroupsQuery = { entityGroups: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type EntityGroupsQuery = { entityGroups: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, memberType: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type EntityGroupByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type EntityGroupByTokenQuery = { entityGroupsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string }> };
+export type EntityGroupByTokenQuery = { entityGroupsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, memberType: string }> };
 
 export type CreateEntityGroupMutationVariables = Exact<{
   request?: EntityGroupCreateRequest | null | undefined;
 }>;
 
 
-export type CreateEntityGroupMutation = { createEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string } };
+export type CreateEntityGroupMutation = { createEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, memberType: string } };
 
 export type UpdateEntityGroupMutationVariables = Exact<{
   token: string;
   request: EntityGroupUpdateRequest;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
-export type UpdateEntityGroupMutation = { updateEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string } };
+export type UpdateEntityGroupMutation = { updateEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, memberType: string } };
 
 export type DeleteEntityGroupMutationVariables = Exact<{
   token: string;
@@ -3331,6 +3335,7 @@ export const AreasDocument = new TypedDocumentString(`
       description
       metadata
       createdAt
+      updatedAt
       areaType {
         id
         token
@@ -3358,6 +3363,7 @@ export const AreaByTokenDocument = new TypedDocumentString(`
     description
     metadata
     createdAt
+    updatedAt
     areaType {
       id
       token
@@ -3379,6 +3385,7 @@ export const CreateAreaDocument = new TypedDocumentString(`
     description
     metadata
     createdAt
+    updatedAt
     areaType {
       id
       token
@@ -3392,14 +3399,19 @@ export const CreateAreaDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateAreaMutation, CreateAreaMutationVariables>;
 export const UpdateAreaDocument = new TypedDocumentString(`
-    mutation UpdateArea($token: String!, $request: AreaUpdateRequest!) {
-  updateArea(token: $token, request: $request) {
+    mutation UpdateArea($token: String!, $request: AreaUpdateRequest!, $expectedUpdatedAt: String) {
+  updateArea(
+    token: $token
+    request: $request
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     id
     token
     name
     description
     metadata
     createdAt
+    updatedAt
     areaType {
       id
       token
@@ -3508,6 +3520,7 @@ export const AssetsDocument = new TypedDocumentString(`
       metadata
       properties
       createdAt
+      updatedAt
       assetType {
         id
         token
@@ -3536,6 +3549,7 @@ export const AssetByTokenDocument = new TypedDocumentString(`
     metadata
     properties
     createdAt
+    updatedAt
     assetType {
       id
       token
@@ -3558,6 +3572,7 @@ export const CreateAssetDocument = new TypedDocumentString(`
     metadata
     properties
     createdAt
+    updatedAt
     assetType {
       id
       token
@@ -3571,8 +3586,12 @@ export const CreateAssetDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateAssetMutation, CreateAssetMutationVariables>;
 export const UpdateAssetDocument = new TypedDocumentString(`
-    mutation UpdateAsset($token: String!, $request: AssetUpdateRequest!) {
-  updateAsset(token: $token, request: $request) {
+    mutation UpdateAsset($token: String!, $request: AssetUpdateRequest!, $expectedUpdatedAt: String) {
+  updateAsset(
+    token: $token
+    request: $request
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     id
     token
     name
@@ -3580,6 +3599,7 @@ export const UpdateAssetDocument = new TypedDocumentString(`
     metadata
     properties
     createdAt
+    updatedAt
     assetType {
       id
       token
@@ -4268,6 +4288,7 @@ export const CustomersDocument = new TypedDocumentString(`
       description
       metadata
       createdAt
+      updatedAt
       customerType {
         id
         token
@@ -4295,6 +4316,7 @@ export const CustomerByTokenDocument = new TypedDocumentString(`
     description
     metadata
     createdAt
+    updatedAt
     customerType {
       id
       token
@@ -4324,6 +4346,7 @@ export const CreateCustomerDocument = new TypedDocumentString(`
     description
     metadata
     createdAt
+    updatedAt
     customerType {
       id
       token
@@ -4337,14 +4360,19 @@ export const CreateCustomerDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateCustomerMutation, CreateCustomerMutationVariables>;
 export const UpdateCustomerDocument = new TypedDocumentString(`
-    mutation UpdateCustomer($token: String!, $request: CustomerUpdateRequest!) {
-  updateCustomer(token: $token, request: $request) {
+    mutation UpdateCustomer($token: String!, $request: CustomerUpdateRequest!, $expectedUpdatedAt: String) {
+  updateCustomer(
+    token: $token
+    request: $request
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     id
     token
     name
     description
     metadata
     createdAt
+    updatedAt
     customerType {
       id
       token
@@ -4883,6 +4911,7 @@ export const EntityGroupsDocument = new TypedDocumentString(`
       imageUrl
       metadata
       createdAt
+      updatedAt
       memberType
     }
     pagination {
@@ -4907,6 +4936,7 @@ export const EntityGroupByTokenDocument = new TypedDocumentString(`
     imageUrl
     metadata
     createdAt
+    updatedAt
     memberType
   }
 }
@@ -4925,13 +4955,18 @@ export const CreateEntityGroupDocument = new TypedDocumentString(`
     imageUrl
     metadata
     createdAt
+    updatedAt
     memberType
   }
 }
     `) as unknown as TypedDocumentString<CreateEntityGroupMutation, CreateEntityGroupMutationVariables>;
 export const UpdateEntityGroupDocument = new TypedDocumentString(`
-    mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!) {
-  updateEntityGroup(token: $token, request: $request) {
+    mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!, $expectedUpdatedAt: String) {
+  updateEntityGroup(
+    token: $token
+    request: $request
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     id
     token
     name
@@ -4943,6 +4978,7 @@ export const UpdateEntityGroupDocument = new TypedDocumentString(`
     imageUrl
     metadata
     createdAt
+    updatedAt
     memberType
   }
 }

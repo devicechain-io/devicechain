@@ -40,7 +40,7 @@ export const areaGroupResource: RegistryResource<AreaGroup> = {
       // is partial now, so an unnamed field is left alone — and re-sending a value
       // the operator never saw would be a write over whatever it has become since.
       update={(token, req) =>
-        updateAreaGroup(token, { name: req.name, description: req.description })
+        updateAreaGroup(token, { name: req.name, description: req.description }, g?.updatedAt)
       }
       onDone={onDone}
     />

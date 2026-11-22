@@ -129,6 +129,7 @@
   "updateState_UNKNOWN": "Unknown",
   "signerState_ACTIVE": "Active",
   "signerState_REVOKED": "Revoked",
+  "staleWrite": "This item changed since you opened it. Copy your unsaved edits, reload it, then reapply your edits and save again.",
   "artifactKind_FIRMWARE": "Firmware",
   "artifactKind_SOFTWARE": "Software",
   "artifactKind_CONFIGURATION": "Configuration",
