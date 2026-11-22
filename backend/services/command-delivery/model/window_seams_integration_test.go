@@ -65,7 +65,7 @@ func newPostgresApi(t *testing.T) *Api {
 		}
 	})
 	sys := mgr.Database.WithContext(core.WithSystemContext(context.Background()))
-	for _, table := range []string{"commands", "command_batches", "device_gates"} {
+	for _, table := range []string{"commands", "command_batches", "device_gates", "agent_proposals", "agent_actuation_fences"} {
 		require.NoError(t, sys.Exec(fmt.Sprintf(`TRUNCATE TABLE "command-delivery".%q CASCADE`, table)).Error,
 			"truncate %s", table)
 	}

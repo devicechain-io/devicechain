@@ -49,5 +49,6 @@ var (
 		NewDeviceIncarnationSchema(),
 		NewCommandCauseSchema(),
 		NewAgentCommandProposalsSchema(),
+		NewAgentProposalDecidedIndexSchema(),
 	}
 )

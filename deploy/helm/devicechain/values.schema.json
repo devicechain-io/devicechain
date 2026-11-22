@@ -207,7 +207,7 @@
                   "properties": {
                     "commandProposals": {
                       "type": "boolean",
-                      "description": "Reserved for agent command proposals (Preview). False by default; nothing reads it yet, so setting it changes nothing. When it is used, turn it on in an upgrade of its own after the release rollout completes: pods from an earlier release refuse this key."
+                      "description": "FIXED, default off. Turns on agent command proposals (Preview). Enable it in an upgrade of its own after the release rollout completes: pods from an earlier release refuse this key. While it is off, command-delivery refuses command proposals and approvals; rejecting, reading, expiry and the kill path keep working."
                     }
                   }
                 },

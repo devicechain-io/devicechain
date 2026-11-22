@@ -10,7 +10,7 @@ import (
 )
 
 // AgentProposal is one action an AI agent asked for in this area: the ledger row (agentic
-// actions). The command proposal path is not enabled by this model.
+// actions). Admission is guarded by Api.CommandProposalsEnabled.
 //
 // 🔴 IT DECLARES NO SCOPE RULE, ON PURPOSE. A model that does not implement rdb.ScopedModel is
 // refused to every scoped caller, so a member limited to part of the tenant (or an agent acting for
