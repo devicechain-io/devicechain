@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -27,6 +28,9 @@ type Api struct {
 	// the same DataLifecyclePolicy that ApplyDataLifecyclePolicies reconciles,
 	// so the retention job and read floor cannot be configured apart.
 	RollupRetentionDays int
+
+	// rollup1hFrom caches the hour the one-hour rollup is complete from (see rollup1hCompleteFrom).
+	rollup1hFrom atomic.Pointer[time.Time]
 
 	// now is the rollup read clock; nil defaults to time.Now.
 	now func() time.Time
