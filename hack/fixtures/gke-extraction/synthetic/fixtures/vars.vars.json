@@ -1,0 +1,5 @@
+{
+  "project_id": "example-project",
+  "cluster_name": "dc-fixture",
+  "location": "us-central1-a"
+}

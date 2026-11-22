@@ -11,7 +11,7 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Trash2 } from 'lucide-react';
+import { FileUp, Plus, Trash2 } from 'lucide-react';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   listFacetKeys,
@@ -38,6 +38,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
 import { errMessage, useReload } from '@/routes/common';
 import { FormDrawer } from '@/components/registry';
+import { FacetImportForm } from '@/routes/facets/FacetImportForm';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import {
   DataTable,
@@ -47,6 +48,8 @@ import {
   DataTableHeaderCell,
   DataTableRow,
 } from '@/components/ui/data-table';
+
+const IMPORT_DRAWER_WIDTH = 'sm:max-w-2xl';
 
 // Value types are technical enum tokens (STRING/LONG/…), never localized.
 const VALUE_TYPE_OPTIONS: ComboboxOption[] = FACET_VALUE_TYPES.map((vt) => ({
@@ -73,6 +76,7 @@ export default function FacetKeysPage() {
   const canWrite = hasAuthority(claims, 'device:write');
   const [filter, setFilter] = useState<string | undefined>(undefined);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [version, reload] = useReload();
   const { data, loading, error } = useQuery(() => listFacetKeys(filter), [filter, version]);
 
@@ -109,9 +113,14 @@ export default function FacetKeysPage() {
       banner="dashboard"
       action={
         canWrite ? (
-          <Button onClick={() => setCreating(true)} data-shot="new-button">
-            <Plus size={16} /> {t('newFacet')}
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setImporting(true)} data-shot="import-values-button">
+              <FileUp size={16} /> {t('importValues')}
+            </Button>
+            <Button onClick={() => setCreating(true)} data-shot="new-button">
+              <Plus size={16} /> {t('newFacet')}
+            </Button>
+          </div>
         ) : undefined
       }
     >
@@ -120,6 +129,21 @@ export default function FacetKeysPage() {
           onDone={() => {
             setCreating(false);
             reload();
+          }}
+        />
+      </FormDrawer>
+
+      <FormDrawer
+        shot="facet-values-import"
+        open={importing}
+        onOpenChange={setImporting}
+        title={t('importTitle')}
+        contentClassName={IMPORT_DRAWER_WIDTH}
+      >
+        <FacetImportForm
+          onDone={(m) => {
+            toast(m);
+            setImporting(false);
           }}
         />
       </FormDrawer>

@@ -187,7 +187,7 @@ namespace DeviceChain.Harborpulse.Tests
         [Test]
         public void HomePosesAndDisclosures()
         {
-            var m = new PresentationMap(Kit.Layout()); Assert.That(m.Pose("pose:home").Camera.Z, Is.EqualTo(-420)); Assert.That(m.Pose("pose:home:portrait").VerticalFov, Is.EqualTo(52));
+            var m = new PresentationMap(Kit.Layout()); Assert.That(m.Pose("pose:home").Camera.Z, Is.EqualTo(-420)); Assert.That(m.Pose("pose:home").VerticalFov, Is.EqualTo(35)); Assert.That(m.Pose("pose:home:portrait").VerticalFov, Is.EqualTo(44));
             Assert.That(m.Disclosure("hp-light-east-3"), Is.EqualTo("manifest 49.80200 N, 12.15800 W · drawn here (compact layout)"));
             Assert.That(m.Disclosure("hp-pump-north"), Does.Not.Contain("manifest")); Assert.That(m.Disclosure("hp-truck-1", Kit.Layout().Depot), Does.Contain(Kit.Layout().Depot.Lat.ToString("0.00000", System.Globalization.CultureInfo.InvariantCulture)));
         }

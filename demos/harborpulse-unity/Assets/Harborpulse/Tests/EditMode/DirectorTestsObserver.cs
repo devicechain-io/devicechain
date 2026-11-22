@@ -44,7 +44,7 @@ namespace DeviceChain.Harborpulse.Tests
             => new DirectorRead(name, scope, probe, At(sim), error, Json("{" + Q(DirectorProbeEvaluation.Roots[name]) + ":" + body + "}"), new[] { new ReadSpan(Epoch, At(sim), false) });
         static DirectorInputs Inputs(double sim, Source source = null) => new DirectorInputs { Run = "run", RecordingEpoch = Epoch, Now = At(sim), Sim = sim, Source = source ?? new Source() };
         static string Alarm(string state = "ACTIVE", double raised = 11, string device = "hp-light-east-3", string key = "lamp-flicker", string stamp = "service", string severity = "MINOR")
-            => "{\"token\":\"alarm-real\",\"originatorToken\":" + Q(device) + ",\"alarmKey\":" + Q(key) + ",\"state\":" + Q(state) + ",\"severity\":" + Q(severity) + ",\"raisedTime\":" + Q(Ts(raised)) + ",\"clearedTime\":" + (state == "CLEARED" ? Q(Ts(11.6)) : "null") + ",\"raisedDuringSuppression\":" + (stamp == null ? "null" : Q(stamp)) + "}";
+            => "{\"token\":\"alarm-real\",\"originatorToken\":" + Q(device) + ",\"originatorId\":\"device-row\",\"alarmKey\":" + Q(key) + ",\"state\":" + Q(state) + ",\"severity\":" + Q(severity) + ",\"raisedTime\":" + Q(Ts(raised)) + ",\"clearedTime\":" + (state == "CLEARED" ? Q(Ts(11.6)) : "null") + ",\"raisedDuringSuppression\":" + (stamp == null ? "null" : Q(stamp)) + "}";
         static string Window(string state = "ACTIVE") => "{\"token\":\"service\",\"kind\":\"ONE_SHOT\",\"status\":" + Q(state) + ",\"startTime\":" + Q(Ts(10.75)) + ",\"endTime\":" + Q(Ts(11.5)) + ",\"endedAt\":null,\"targets\":[{\"type\":\"DEVICE\",\"token\":\"hp-light-east-3\"}],\"alarmKeys\":[\"lamp-flicker\"]}";
         static string Journal() => "{\"id\":\"journal-real\",\"occurredTime\":" + Q(Ts(12.5)) + ",\"retiredCredentialTokens\":[\"old-real\"],\"newCredentialToken\":\"new-real\",\"device\":{\"id\":\"device-real\",\"token\":\"hp-gauge-north-3\",\"externalId\":\"hp-gauge-north-3\"}}";
         static string Credential(string enabled = "false") => "{\"token\":\"old-real\",\"enabled\":" + enabled + ",\"device\":{\"token\":\"hp-gauge-north-3\"}}";
@@ -230,7 +230,7 @@ namespace DeviceChain.Harborpulse.Tests
         [Test]
         public void CommandWithoutPlatformAlarmJoinDoesNotInventOne()
         {
-            var command = "{\"token\":\"command-real\",\"deviceToken\":\"hp-pump-north\",\"name\":\"start-pump\",\"status\":\"SUCCESSFUL\",\"queuedTime\":" + Q(Ts(17.51)) + ",\"sentTime\":" + Q(Ts(17.52)) + ",\"respondedTime\":" + Q(Ts(17.53)) + ",\"payload\":null,\"metadata\":null}";
+            var command = "{\"token\":\"command-real\",\"deviceToken\":\"hp-pump-north\",\"name\":\"start-pump\",\"status\":\"SUCCESSFUL\",\"queuedTime\":" + Q(Ts(17.51)) + ",\"sentTime\":" + Q(Ts(17.52)) + ",\"respondedTime\":" + Q(Ts(17.53)) + ",\"payload\":null,\"cause\":null}";
             var snapshot = new DirectorReadSnapshot(new[] { Read("commands", 17.6, Page(command)) }); var obs = new List<Observation>();
             new DirectorObserver(Kit.Layout(), () => snapshot).Update(Inputs(17.6), obs.Add, _ => { });
             Assert.That(obs.Where(o => o.Kind == "command").Select(o => o.Status), Is.EquivalentTo(new[] { "QUEUED", "SENT", "SUCCESSFUL" }));

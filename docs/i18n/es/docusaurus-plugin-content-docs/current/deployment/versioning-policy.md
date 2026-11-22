@@ -96,6 +96,11 @@ herramienta MCP de acción; las herramientas MCP de lectura siguen en el catálo
 - **Saltarse una versión menor** no es una ruta probada. Para ir de `1.4.x` a `1.7.0`, actualiza primero a través de `1.5.x`
   y `1.6.x`. La sección de actualización de una versión indica cuándo exige antes una versión concreta, como hace hoy la sección
   del [formato de eventos en el cable](./releases-and-upgrades.md#event-wire-format).
+  `dcctl upgrade` lo exige: rechaza un salto de más de una versión menor por encima de la versión
+  que ejecutan las cargas de trabajo de la instancia (leída de las imágenes en ejecución, no de la
+  versión declarada) y, al cruzar una versión mayor, solo permite su primera versión menor (`x.0`).
+  La opción `--allow-skipped-minor` anula el rechazo; esa ruta no tiene soporte ni está probada, y
+  la opción nunca desactiva una protección que aplique la base de datos.
 - **Las migraciones de base de datos siempre actualizan.** A partir de la v1.0.0 nunca se recrea una instancia para adoptar una
   versión nueva. Un cambio de esquema es una migración que se añade a la cadena del área, nunca una edición de una anterior, y
   toda migración puede volver a ejecutarse tras un fallo. Antes de la v1.0.0, a algunas versiones no se podía actualizar en

@@ -60,6 +60,9 @@ type UpgradeOptions struct {
 	// AllowEnvelopeDowngrade skips the refusal to move below the first release that reads event
 	// envelopes while the streams may hold one. See envelopedowngrade.go.
 	AllowEnvelopeDowngrade bool
+	// AllowSkippedMinor moves an instance more than one minor release ahead of the version its
+	// workloads run. Unsupported: see skippedminor.go.
+	AllowSkippedMinor bool
 
 	// AlertRouting replaces where the cluster's Alertmanager sends alerts. The zero value
 	// changes nothing. See AlertRoutingRequest.
@@ -258,6 +261,12 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// 🔴 A MOVE BELOW THE FIRST RELEASE THAT READS EVENT ENVELOPES IS REFUSED WHILE THE HOT
 	// STREAMS MAY HOLD ONE, before the declaration is written. See envelopedowngrade.go.
 	if err := precheckEnvelopeDowngrade(ctx, st, opts.AllowEnvelopeDowngrade); err != nil {
+		return err
+	}
+
+	// 🔴 ONE MINOR AT A TIME, judged on what the workloads run, before the declaration is written.
+	// See skippedminor.go.
+	if err := precheckSkippedMinor(ctx, typed, st, opts.AllowSkippedMinor); err != nil {
 		return err
 	}
 

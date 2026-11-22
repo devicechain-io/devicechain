@@ -124,6 +124,13 @@ func decode(data []byte, convert func(runtime.Object) (unstructured.Unstructured
 }
 
 func ApplyUnstructured(ctx context.Context, dynamicClient dynamic.Interface, restMapper meta.RESTMapper, unstructuredObj unstructured.Unstructured, serverSide bool) (*unstructured.Unstructured, error) {
+	force := true
+	return ApplyUnstructuredWithOptions(ctx, dynamicClient, restMapper, unstructuredObj, serverSide, metav1.PatchOptions{FieldManager: "k8sutil", Force: &force})
+}
+
+// ApplyUnstructuredWithOptions uses the same apply engine with an explicit
+// server-side ownership policy. Existing callers retain their historical policy.
+func ApplyUnstructuredWithOptions(ctx context.Context, dynamicClient dynamic.Interface, restMapper meta.RESTMapper, unstructuredObj unstructured.Unstructured, serverSide bool, options metav1.PatchOptions) (*unstructured.Unstructured, error) {
 
 	if len(unstructuredObj.GetName()) == 0 {
 		metadata, _ := meta.Accessor(unstructuredObj)
@@ -169,9 +176,7 @@ func ApplyUnstructured(ctx context.Context, dynamicClient dynamic.Interface, res
 		unstructuredObj.SetManagedFields(nil)
 		klog.V(4).Infof("Need remove managedFields before apply, %#v", unstructuredObj)
 
-		force := true
-		opts := metav1.PatchOptions{FieldManager: "k8sutil", Force: &force}
-		if _, err := dri.Patch(ctx, unstructuredObj.GetName(), types.ApplyPatchType, b, opts); err != nil {
+		if _, err := dri.Patch(ctx, unstructuredObj.GetName(), types.ApplyPatchType, b, options); err != nil {
 			if isIncompatibleServerError(err) {
 				err = fmt.Errorf("server-side apply not available on the server: (%v)", err)
 			}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/processor"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
 )
 
 // storeIngest is what takes delivery from the MQTT gateway's message store: the gateway source
@@ -88,6 +89,10 @@ func (s *storeIngest) start(ctx context.Context, nmgr *messaging.NatsManager) er
 	}
 	StoreSource.SetReader(events)
 	StoreSource.SetWriter(writer)
+	if err := configureStoreEnvelopes(nmgr); err != nil {
+		s.closeReaders()
+		return err
+	}
 	if err := StoreSource.Initialize(ctx); err != nil {
 		s.closeReaders()
 		return err
@@ -103,6 +108,22 @@ func (s *storeIngest) start(ctx context.Context, nmgr *messaging.NatsManager) er
 	s.started = true
 	log.Info().Msg("Reading the platform durables on the MQTT message store: device events, command responses and device reports")
 	return nil
+}
+
+// Both switches are required so the existing envelope rollout/downgrade guard remains
+// authoritative. The prototype cannot introduce envelopes behind that guard's back.
+func configureStoreEnvelopes(nmgr *messaging.NatsManager) error {
+	if !Configuration.Capture.MqttStoreEnvelopes || !envelopesInbound() {
+		return nil
+	}
+	rounds, err := nmgr.NewRoundPublisher(streams.InboundEvents)
+	if err != nil {
+		return err
+	}
+	return StoreSource.UseEnvelopes(processor.CaptureEnvelopes{
+		Rounds: rounds, Former: inboundFormerConfig(), Metrics: InboundEnvelopeMetrics,
+		TenantGone: TenantGone, AllowMessageStore: true,
+	})
 }
 
 // stop stops what start started, before the broker connection drains.

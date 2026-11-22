@@ -4,6 +4,8 @@
 resources:
 - bases/core.devicechain.io_instances.yaml
 - bases/core.devicechain.io_instanceconfigurations.yaml
+- bases/core.devicechain.io_executorenrollments.yaml
+- bases/core.devicechain.io_instanceoperations.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patchesStrategicMerge:

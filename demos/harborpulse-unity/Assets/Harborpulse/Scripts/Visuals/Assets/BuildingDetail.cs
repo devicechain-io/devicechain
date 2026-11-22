@@ -5,36 +5,15 @@ using UnityEngine;
 
 namespace DeviceChain.Harborpulse.Visuals
 {
-    /// <summary>Small architectural geometry written into shared town tiles, with a fixed distance detail tier.</summary>
+    /// <summary>
+    /// The far level's architectural geometry, written into shared town tiles: the stone base, the corner boards and the door frame. The fine
+    /// detail (window frames and sashes, shutters, clapboard courses, steps, rails) is the near level's, built per building by the detail
+    /// manager from the model's near plans, so it costs nothing at HOME.
+    /// </summary>
     internal static class BuildingDetail
     {
         static readonly Color Trim = new Color(.86f,.84f,.77f);
         static readonly Color Granite = new Color(.49f,.47f,.44f);
-        public static void Window(SceneryMesh mesh, Vector3 at, float yaw, Vector3 center, Vector3 along, Vector3 face, Vector2 size, bool rich)
-        {
-            var r = Quaternion.Euler(0,yaw,0);
-            Vector3 P(float x,float y) => at+r*(center+along*x+Vector3.up*y+face*.085f);
-            void Panel(float x0,float x1,float y0,float y1,Color c) => mesh.Quad(P(x0,y0),P(x0,y1),P(x1,y1),P(x1,y0),c);
-            // Two-sided facade axes have opposite winding. Boxes for the narrow frame keep every facade visible.
-            var w = size.x*.5f; var h = size.y*.5f; const float t=.12f;
-            var horizontal = new Vector3(Mathf.Abs(along.x)*(size.x+.28f)+Mathf.Abs(face.x)*.14f,.12f,Mathf.Abs(along.z)*(size.x+.28f)+Mathf.Abs(face.z)*.14f);
-            mesh.Box(at+r*(center+face*.08f+Vector3.up*(h+.06f)),horizontal,Trim,r);
-            mesh.Box(at+r*(center+face*.13f-Vector3.up*(h+.08f)),horizontal+new Vector3(Mathf.Abs(face.x)*.25f,.04f,Mathf.Abs(face.z)*.25f),Trim,r);
-            if (!rich) return;
-            foreach(var s in new[]{-1,1})
-            {
-                var side = new Vector3(Mathf.Abs(along.x)*t+Mathf.Abs(face.x)*.14f,size.y,Mathf.Abs(along.z)*t+Mathf.Abs(face.z)*.14f);
-                mesh.Box(at+r*(center+along*(s*(w+.08f))+face*.08f),side,Trim,r);
-                if (face.z < 0)
-                {
-                    var shutter = new Vector3(.34f,size.y+.1f,.1f);
-                    mesh.Box(at+r*(center+along*(s*(w+.37f))+face*.1f),shutter,new Color(.25f,.32f,.28f),r);
-                }
-            }
-            // One cross rail rather than a grid of invisible individual panes.
-            if(face.z < 0) Panel(-w,w,-.035f,.035f,Trim);
-        }
-
         public static void Envelope(SceneryMesh mesh, Vector3 at,float yaw,float w,float d,float h,Color paint,bool clapboard,bool rich,float doorX)
         {
             var r=Quaternion.Euler(0,yaw,0);
@@ -43,23 +22,8 @@ namespace DeviceChain.Harborpulse.Visuals
             if(!rich) return;
             foreach(var x in new[]{-1,1}) foreach(var z in new[]{-1,1})
                 Box(new Vector3(x*(w/2+.025f),h/2,z*(d/2+.025f)),new Vector3(.2f,h,.2f),Trim);
-            if(clapboard)
-            {
-                // Broad weathered courses read at HOME; close views reveal individual board edges.
-                for(var y=.65f;y<h;y+=.65f)
-                {
-                    var shade=paint*(.88f+.08f*Mathf.Sin(y*7));
-                    foreach(var z in new[]{-1,1})
-                    {
-                        Vector3 P(float x,float yy) => at+r*new Vector3(x,yy,z*(d/2+.015f));
-                        if(z<0) mesh.Quad(P(-w/2,y),P(-w/2,y+.07f),P(w/2,y+.07f),P(w/2,y),shade);
-                        else mesh.Quad(P(w/2,y),P(w/2,y+.07f),P(-w/2,y+.07f),P(-w/2,y),shade);
-                    }
-                }
-            }
             foreach(var x in new[]{-1,1}) Box(new Vector3(doorX+x*.67f,1.15f,-d/2-.12f),new Vector3(.18f,2.45f,.2f),Trim);
             Box(new Vector3(doorX,2.4f,-d/2-.12f),new Vector3(1.52f,.18f,.2f),Trim);
-            for(var i=0;i<3;i++) Box(new Vector3(doorX,.10f+i*.14f,-d/2-.65f+(i-1)*.30f),new Vector3(1.9f,.2f+i*.28f,.34f),Granite);
         }
 
         public static void Roof(MeshKit mesh,float w,float d,float h,float rise,int style)

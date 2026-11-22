@@ -56,7 +56,17 @@ func (api *Api) repairAttribute(ctx context.Context, row PendingAttributeRepair)
 	var minted *DeviceConfigurationRevision
 	var attr EntityAttribute
 	var device *Device
-	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	err := api.runAttributeEntityTx(ctx, row.EntityType, "repair", func(tx *gorm.DB) error {
+		change, minted, attr, device = membershipChange{}, nil, EntityAttribute{}, nil
+		// The device's attribute lock and row come BEFORE the queue row. Tenant purge
+		// deletes devices before the repair queue, so a repair that held its queue row
+		// while waiting on a purged device would close a cycle with the purge.
+		if err := lockAttributeOwnerTx(ctx, tx, row.EntityType, row.EntityId); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return tx.Where("id = ?", row.ID).Delete(&PendingAttributeRepair{}).Error
+			}
+			return err
+		}
 		// Serialize drainers; another replica may already have completed this row.
 		var pending PendingAttributeRepair
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&pending, row.ID).Error
@@ -75,12 +85,18 @@ func (api *Api) repairAttribute(ctx context.Context, row PendingAttributeRepair)
 			return tx.Delete(&pending).Error
 		}
 		device, _ = owner.(*Device)
-		// Match the writer's lock order: attribute, family, configuration.
-		err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+		// Match the owner: advisory, device row, NOWAIT attribute, family, configuration.
+		read := tx
+		if row.EntityType == "device" && tx.Dialector.Name() == "postgres" {
+			read = read.Clauses(clause.Locking{Strength: "UPDATE", Options: "NOWAIT"})
+		} else if row.EntityType != "device" {
+			read = read.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		err = read.Where(
 			"entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
 			row.EntityType, row.EntityId, row.Scope, row.AttrKey).First(&attr).Error
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
+			return attributeRowError(err)
 		}
 		if membershipScopeEligible(row.EntityType, row.Scope) {
 			change, err = api.recomputeMembershipForAttr(ctx, tx, row.EntityType, row.EntityId, row.AttrKey)

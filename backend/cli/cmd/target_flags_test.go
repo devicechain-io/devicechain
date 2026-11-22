@@ -64,6 +64,7 @@ func TestEveryInstanceTargetingCommandAcceptsTheSameSelectorFlags(t *testing.T) 
 func TestEverySelectorInstanceFlagComesWithServer(t *testing.T) {
 	exempt := map[string]string{
 		"dcctl ha verify":                       "names the instance the HA drill ran against, in the cluster",
+		"dcctl ha leaders":                      "names the instance whose broker is read, in the cluster, as ha verify does",
 		"dcctl instances break-glass mfa-reset": "names the instance whose pod runs the reset",
 		"dcctl secrets escrow verify":           "names the instance an escrow artifact is checked against",
 	}

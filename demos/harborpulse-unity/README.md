@@ -89,8 +89,8 @@ its gauges' median and how many contributed, and the lights switch with the plat
 on from 18:00, and East Quay's go silent through its feeder outage, 19:45 to 21:15).
 
 With the director off (`D`), presets: `0` overview, `1`-`3` the quays, `4` an East Quay gauge, `5` the promenade, `6` North Quay pump,
-`7` Basin pump, `8` North Quay chargers, `9` North Quay gauge 3, `F1` East lamp 3, `F2` the following truck shot.
-Drag to orbit, wheel to dolly. Shot indices for batch stills are 0-11 (`F1` = 10, `F2` = 11).
+`7` Basin pump, `8` North Quay chargers, `9` North Quay gauge 3, `F1` East lamp 3, `F2` the following truck shot, `F3` the night sky
+over the basin. Drag to orbit, wheel to dolly. Shot indices for batch stills are 0-12 (`F1` = 10, `F2` = 11, `F3` = 12).
 
 ## Layout
 
@@ -175,7 +175,7 @@ All platform requests use the runner's operator authority. The scene sends these
 | Device management | `devicesByExternalId` with device type/profile metric and command definitions for binding; `alarms`; `alarmStream` subscription |
 | Device state | `latestMeasurements` initial snapshots; `latestLocations` with latitude/longitude, heading and speed each second; `deviceStatesByDeviceToken` presence every five seconds |
 | Event management | `measurementStream` subscription |
-| Command delivery | shared observer `commands` and `commandsByToken` every second; harborpulse also reads the newest ten commands per bound pump in one aliased query every two seconds, including terminal records and their platform timestamps |
+| Command delivery | shared observer `commands` and `commandsByToken` every second; harborpulse also reads the newest ten commands per bound pump in one aliased query every two seconds, including terminal records and their platform timestamps; the director's command read selects each command's recorded `cause` |
 | Device management supplements | `alarmSuppressionWindowsByToken` for declared lamp jobs and numeric SHARED `entityAttributes` for each pump's `well_alarm_m`, every five seconds |
 | Update management | `updateRollout` and bounded `updateRolloutTargets` every two seconds after a runner rollout declaration |
 
@@ -516,6 +516,9 @@ under `.build/u2b/review-mutants/`. The normal verification gate also runs the P
 
 ## U3 art pass: town, hills and water
 
+> The hills, forest, rocks and HOME cameras described in this and the next two sections were superseded by
+> [U5 landform, forest, outcrops and cameras](#u5-art-pass-landform-forest-outcrops-and-cameras) below.
+
 The U2b town was a uniform grid of identical houses on six terraces, and the water mirrored it as a hard grid.
 U3 replaces both. `Scripts/Visuals/Assets/TownBuilder.cs` builds everything behind the waterfront, and it is all
 WORLD scenery: no device stands there and nothing in it reads the platform.
@@ -671,3 +674,454 @@ before forest savings and add no renderers. The seeded plan now has 444 trees (8
 
 Round-3 gates: locked restore, Release build, all 421 sidecar tests, and desktop/WebGL compile checks.
 No Unity run or commit was made.
+
+## U5 art pass: landform, forest, outcrops and cameras
+
+The U4 look read as one bare lawn of hill with no sky behind the story cameras. U5 lowers the ground, closes the view in
+haze, plants a wooded coast, seats the rock in the slope and drops the story cameras to eye level. It is all WORLD
+scenery and camera framing: presentation anchors, quays, device positions and the U4 prop-overlap checks did not move.
+
+- **Landform** (`Model/CoastalTerrain.cs`). The core is still the deck. Outside it the ground rises about 9 m across
+  the first 450 m (the town's apron), then rolls in knolls and hollows of 6-16 m with a smooth ceiling at 32 m above
+  the deck; nothing within 1,300 m of the core is higher than 34 m (the measured maximum is 18.4 m). From 6 m above
+  North Quay the bare-ground skyline is under 1 degree (limit 2.5), and from the East Quay and Basin eyes under 0.7
+  (limit 3). The skyline is a separate, distant ridge instead (`RidgeBuilder`, 155 quads = 310 triangles, no trees):
+  two or three overlapping hills 2.35-3.05 km out, with dome, cusp and plateau profiles, the highest crest 2.54 degrees
+  above the horizontal from the harbour and shoulders 1-1.8, falling to nothing at both ends. It sits under the HOME
+  checker's "ridge" mask with the terrain. The terrain mesh is the plan's own grid (`Model/TerrainGrid.cs`: 10 m cells
+  round the town, 20 m on the rolling ground, 50-100 m beyond, 200 m flat flanks to x = +-3.8 km), 125,688 vertices.
+  `TerrainGrid.MeshHeight` is the height of the two triangles actually drawn, which is what rocks and trees stand on.
+  The 4.8 km continuation is gone. A west headland where the near land falls to the sea was skipped: the far-water ring
+  covers only the sea south of the coast, so a falling coast would open holes rather than a horizon.
+- **View distance.** Scenery fog counts from the camera (no 900 m dead zone) and ramps in with the distance outside
+  the core (120-420 m), so the town and its yards stay crisp: about 54 % fog at 900 m and 88 % at 1,500 m at noon, 53 %
+  at 550 m in the storm. The shader multiplies the density by `SceneryFogGain` (6): the engine's own fog on the lit
+  materials and the water reads the same density and must stay light, so only the scenery gains it. The ridge has its
+  own lighter fog (vertex alpha 0.6 selects it; `RidgeFogScale`) and its foot dissolves into the haze by height: about
+  40 % transmission at noon, 13 % in the storm. Every camera far clip is 3,600 m.
+- **Forest.** 9,674 trees (the U4 plan had 444), 60 % conifers by count (spruce, fir, pine in deep greens, a few
+  blue-green, lighter toward the top tiers), 40 % broadleaf in three shapes (round maple, tall oval birch with a pale
+  trunk, broad oak) whose autumn colour follows a slow position noise, so gold, orange, crimson, russet and green-olive
+  come in drifts. Heights are 8-16 m in the forest and 5-10 m in yards. About 70 % of the open land 250-1,100 m out is
+  woodland in broad stands, with twelve clearings of 60-200 m (some touching the town's edge, one on a knoll summit),
+  planted on a jittered 8 m grid thinned to a 12 m crown spacing near the town (the vertex budget's price for full-detail
+  crowns) and 15-21 m beyond, fading to nothing at 1,250 m so nothing pops. Yard trees stand behind and beside about one
+  house in two, and the park carries trees on its perimeter only. No tree stands on a street, a lot, a quay, a park path
+  or lawn, within 14 m of an anchor, in a rock footprint, or on a story camera's line of sight. Detail is by distance
+  from the core, baked per tile: within 380 m 4-5 conifer tiers or a full crown with a side lobe; 380-800 m two tiers
+  or one low-poly crown with a short trunk; beyond, one or two four-sided cones or an eight-face blob (`TreeStyle`).
+  2,765 near, 4,433 medium and 2,476 far trees cost 393,116 + 215,235 + 50,196 = 658,547 vertices (limit 700,000) in
+  48 tile meshes. Trees still cast no shadows and sit on layer 29.
+- **Rock.** 62 outcrops in 16 clusters of 2-5 (the shore outside the quays, clearing flanks, woodland edges), each a
+  stepped, faceted granite ledge of 8-30 m in plan and 0.6-4 m high (never more than 0.4 of its plan radius), whose long
+  axis follows the contour. `Model/Outcrop.cs` fits each against the drawn terrain: the base ring is sunk until every
+  point along its edges, sampled every half metre, is below the surface (the tightest margin is 0.58 m), the tops follow
+  the fitted terrain plane, and the ground in a skirt round it is darkened. Footprints are in the registry, so trees and
+  props avoid them. They share the terrain tiles (4,560 vertices in all).
+- **Ground colour.** Forest floor under the wood, dry straw-green meadow in warmer and greener drifts between, heath
+  tone on steeper facets, lawn green only on the park and in yards, worn earth at the street edges. Per-facet variation
+  is a smooth noise plus under 1 %, so there is no checkerboard.
+- **Cameras.** HOME 16:9 is (0, 100, -420) looking at (0, 4, 50), vertical FOV 35: horizon 17.6 % down, sky 19.6 % by
+  the analytic silhouette (terrain, ridge and tree tops), flat-plane water 42 % (the same estimate gives 45 % for the U4
+  pose, where the mask measured 43.5 %), every device but the truck inside the frame with a 3 % margin, both breakwater
+  lighthouses, the mouth and most of each quay in frame, and the frame's bottom edge on the water at z = -240. HOME 9:16
+  is (-560, 300, -60) looking at (40, -25, 10), FOV 52: all 37 devices inside, sky 11.5 %. The land now stands far below
+  that eye, so the far ground ends well under the true horizon; the look is steepened a little rather than raised to keep
+  the sky share down. The ground-level story poses (`kiosk-ext`, `pair`, `close`, `wide`, `promenade`, `insert` for each
+  device, and `east-quay:mouth-wide`, `plain:wide`, `truck:chase`, `depot:wide`) now stand 6.5-10 m up with the look
+  flattened so the horizon falls 29-36 % from the top and the subject is in the middle third. A few step sideways so their
+  sight line passes beside a lamp or a gauge mast instead of through it. `well` and `well-locked` still look down into
+  the well.
+
+`U5CameraTests`, `U5ForestTests` and the extended `CoastalSceneryTests` pin these numbers: the terrain apron, ceiling and
+skyline rays, the ridge's crest angles, woodland cover, fog at 900 m, 1,500 m and 550 m, the ridge's fog, the 60/40
+species ratio, heights, no tree on any reservation (each check has a planted negative control), the vertex budget per band,
+the rock fit (a lifted base ring fails it), the HOME frames from pose, FOV and aspect, and every ground pose's horizon,
+middle third and line of sight. A literal-checksum test proves the 104 building lots and 71 street lamps are exactly what
+origin/main generated: the town's random stream is never read by the new rock and tree generation, which has its own
+seeds.
+
+Not verified without Unity (the sidecar and both compile checks do not run it): the shader's syntax and look, the HOME
+masks and the actual renderer and vertex totals (estimated at about 870 renderers and 1.29 M vertices against the
+budgets of 950 and 1.5 M), frame time, the rendered colours and silhouettes, and whether the far-clip edge of the sea and
+fogged ground meets the sky's below-horizon colour without a visible seam: the fog and the sky share the horizon colour,
+but the sky blends toward its ground colour just under the horizon.
+
+## U5 level of detail: richer buildings and vehicles near the camera
+
+HOME sees the town from 450-900 m, where a window frame is a fraction of a pixel; the ground-level story cameras
+see the first row of buildings, the sheds, the terminal, the lofts, the parked cars, the truck and the moored boats
+from 20-45 m. Each building and vehicle therefore has two levels.
+
+- **FAR (what HOME and every distant view draws).** The same merged tile meshes as before, with the fine detail taken
+  out: no window frames, sills, shutters or mullions, no clapboard courses, no steps. What stays is the silhouette
+  and what the night is carried by: walls, the real roof shape and overhang, chimneys, the porch slab and roof and its
+  end posts, the stone base, corner boards and door frames, the flat window panes (the shared `Windows`, `EastWindows`
+  and `WindowsDark` materials, so the night's lit windows are untouched), shop glass and awnings. The far town loses
+  about 171,000 vertices (an estimate, from the generation order: 1,585 windows lose a frame each, the rest is
+  courses, steps and one post per porch), and the renderer count is unchanged.
+- **NEAR (within 110 m of the active camera).** An extra set per building or vehicle, drawn on top of the far level:
+  window frames, sashes, mullions, sills and heads, shutters on some houses (chosen from a hash of the building's
+  position, never from the town's seeded streams), flower boxes, panelled doors with lights and transoms, stoops,
+  porch rails with balusters, newel posts and stairs, a bench, pots, firewood or a barrel on some porches, clapboard
+  and brick courses, board-and-batten, corrugated ribs, friezes, gutters and downpipes, shingle courses, dormer frames
+  and a second dormer, an attic window in some front gables, chimney flashing, corbels and pots, shopfront bays over a
+  bulkhead with a valance and brackets, sliding shed doors on their track with ramps, lobster pots and buoys, the lofts'
+  entrance, string courses, pilasters, loading doors and roof plant, the church's framed and pointed windows,
+  buttresses, louvres and finial, the terminal's entrance, the depot's roller doors, the ferry berth (pontoon planks,
+  rails, gangway, bollards) and the ferry itself (portholes, fenders, window frames, rails, bridge, funnel, life
+  rings). Vehicles get wheels with arch liners, rims and hubs (the cars' far boxes have none), glazing pillars, lamps,
+  mirrors, bumpers, door seams and handles; the truck gets a roof rack load (sandbags, cones, a hose coil, a pump,
+  cans) and chevrons; boats get lifelines and pulpits or a wheelhouse with frames, radar, aerials, buoys, a hauler,
+  an outboard, oars, planking and cleats; the hauled-out boat gets props, rails, window frames, a rudder and propeller.
+  No text or signage anywhere.
+- **The switch is additive.** A near set only adds parts over the far level's own walls, roof and window panes, so
+  nothing has to be hidden while it is shown: no hole can open, nothing pops but the added detail, the same windows
+  are lit in both levels, and at HOME every set is inactive. This is why the far meshes stay merged per tile (a
+  `LODGroup` would need a renderer per building, hundreds of extra renderers at HOME) and why there is no list of
+  buildings whose far mesh must disappear.
+- **Who decides.** `Model/DetailSwitch` is the whole decision and has no engine in it: a set enters at 110 m and
+  leaves at 130 m measured to the set's nearest edge (centre distance less its radius), at most 25 sets are near
+  at once (the nearest win, a set already near has a 6 m head start so the cap cannot flicker), the work allocates
+  nothing after construction, and it is retaken every four frames or when the camera has moved a metre.
+  `Visuals/DetailManager` owns the sets: it builds each one the first time it is wanted (or at load, inactive, when a
+  story camera can bring it within reach: the authored poses, 20 m of margin on each camera and 130 m about each
+  look point, from `DetailCandidates`) and switches the root on and off. The truck and a charger's car follow
+  their own transform every refresh; a car the view has hidden is never near. The planar reflection draws whichever
+  level the main camera has.
+- **The stills path.** `HarborpulseApp.Tick` refreshes the switch every frame; `RenderReflectionNow`, which every
+  Editor still calls just before `Camera.Render`, refreshes it forced for the camera's final position. A still shot
+  after `Rig.Select` or `DirectorCamera.ForcePose` therefore shows the level that camera would have in play. At HOME
+  nothing is near; `HarborHomeCheck` logs the near sets (built hidden, shown) and fails if any is shown at HOME. Its
+  world renderer and vertex counts leave the near roots out (they are hidden at HOME), so they remain comparable with
+  the earlier captures. Near roots sit under the town, the device rigs or a boat, so the HOME mask classes them with
+  their parent; they are scenery and never hide a device (they stay inside the lot the building reserved).
+- **Budget.** A near set is one vertex-coloured renderer (no shadows: it is all small trim, and the far body keeps
+  casting) plus one more per window material only where a set has windows of its own (the attic window and the second
+  dormer). Typical vertices per set: house 5.8 k (2.7-9.1 k), shopfront 4.6 k, commercial block 10.2 k, inn 13.8 k,
+  shed 2.6 k, church 3.2 k, lofts 12.6 k, terminal 6.8 k, depot 3.3 k, ferry berth 5.2 k, truck 3.9 k, parked or
+  charging car 2.1 k or 1.8 k, hauled boat 1.9 k, moored boats 0.6-1.7 k. From each authored ground-level pose
+  the sidecar tests find 6-17 near sets and about 23-90 k vertices, and bound every plan so twenty-five of the largest
+  houses stay under the 250 k budget.
+
+`NearDetailTests` pin: the hysteresis band (no change anywhere between 110 and 130 m), the 25-set cap and its
+stability, the range measured to the edge, a moving set switching by its position, an inactive set never near,
+the retake schedule, no allocation per decision, HOME in both aspects selecting nothing, every ground-level pose
+selecting something, every set a story camera or its 20 m margin can bring near being a load-time candidate,
+every near plan staying inside the lot or footprint the building reserved (and vehicles inside theirs plus
+6 cm of trim), no near box covering a far window pane, a frame for every lofts pane, bounded vertex cost per kind,
+and that the per-house choices come from the position and repeat. The sidecar and compile gates establish none of
+the visual result: the look of the near sets, HOME pixels, the stills' switch timing and frame time need the Unity
+capture rig (the budget to hold is the earlier 4-5 ms mean at 1920x1080).
+
+### U5 round 2: haze range, visible meadows and granite, lighter conifers, lamp and mouth poses
+
+This supersedes the fog, forest, rock and pose numbers above where they differ.
+
+- **Haze range.** Scenery fog starts 350 m from the camera (`SceneryFogStartM`) with a gain of 3.5. From HOME at noon transmission
+  is 0.87 at 1,000 m, 0.83 at 1,100 m, 0.53 at 1,750 m and 0.23 at 2,500 m; in the storm half falls at about 1,000 m. The ridge
+  (own fog, scale 0.40, darker bands) keeps about 0.6 at noon and about 0.1 in the storm. The engine's fog density is back to
+  its pre-U5 value. The planted forest runs to 1,700 m from the core (minimal detail, spacing growing to about 29 m, faded from
+  1,250 m); the terrain grid is 20 m to 1.2 km and 30 m to 1.9 km.
+- **Counts.** 12,276 trees (59.5 % conifers), 721 k vertices (2,877 near, 4,259 mid, 5,140 far). Woodland covers 68 %.
+- **Meadows and granite.** Six meadows of 85-130 m sit where HOME looks (two touch the town's edge), with a cluster of granite ledges
+  at each; lead ledges are 18-35 m. 78 outcrops in all. A test projects them through the HOME pose.
+- **Conifers.** Greens from (.16,.34,.19) to (.28,.44,.24), about 15 % blue-green, top tiers 25 % lighter, whole stands drifting
+  in tone; far broadleaf crowns are brightened and more saturated.
+- **Poses.** Lamp subjects (`lamp-east`, `north-quay`) stand 14-18 m off, 30 degrees round from the quay's axis at eye 5-6 m, the
+  look just under the head so the whole lamp sits upper-middle of the frame. `east-quay:mouth-wide` stands inside the harbour at
+  (-130, 9.5, 70) looking at the quay (150, -10) with FOV 56; no breakwater or lighthouse is within 80 m of its axis.
+
+## U5 sky and weather
+
+The sky is a pure function of the scenario hour and the layout's `storm` beat (`DayLighting.Evaluate`), and the light follows the same
+cloud the sky draws.
+
+- **Cloud cover** is no longer a constant. `DayLighting.FairCloud` gives the fair-weather cover of the hour (about a fifth of the sky in
+  the small hours, two fifths in the early afternoon). `Weather.Front` is the storm's cloud front: it builds over the three hours before
+  the beat, is closed through it, and breaks up over the two hours after it, on either side of midnight.
+- **The sky shader** (`HarborSky.shader`) draws a three-stop gradient, the low sun's glow along the horizon, sun and moon discs that
+  cloud hides, stars, a high streaky layer and a low cumulus layer shaded in three flat tones, and rain curtains under the storm deck.
+  The cloud drifts on a daily circle driven by the scenario clock, so a still of an hour is always the same sky. The horizon line is the
+  fog colour, so the haze over the land meets the sky without a seam.
+- **The moon's arc is continuous.** The hidden part of an arc now has its own length; the moon's direction used to jump once a day.
+- **Dim daylight is lit.** A storm dusk and the hour before dawn have neither sun nor moon as a key light. The ambient floor is lifted
+  then (`KeylessFloorLift`), and the grade opens up for dim daylight (`SkyState.ExposureLift`), without changing noon or the night.
+- **Rain** is a box of slanted streaks that follows the camera and wraps seamlessly; it is off whenever the weather is dry.
+- **Lamp poses** stand 20-24 m off and look up a little (`PresentationMap.LampHorizon`), so the lantern, 8.3 m above the deck, stands
+  against the sky. This supersedes the 14-18 m lamp stand-off described above.
+
+`SkyWeatherTests` pins the cover through the day, continuity across every minute and across midnight, distinct skies at the seven
+reviewed hours, noon exposure within 15 % of the earlier grade, the night floor, and the sun's and moon's continuity. Shader output,
+the masks and frame time still need the Unity capture rig.
+
+## U6 depth, light and coast
+
+U5 left six things short: the 9:16 HOME was mostly haze under an out-of-frame horizon, the land between the last trees and the
+ridge was one pale band, the hour was hard to tell from HOME (it looks north, and the sun and the moon cross the south), the
+granite read as pale patches, a lit lamp was a faceted blob and the truck's near level was trim over a box, and the browser
+build had only ever been compiled. This supersedes the U5 numbers for the 9:16 HOME, the ridge and the haze where they differ.
+
+- **Layered backdrop** (`CoastalTerrain.HillLayer`, `RidgeBuilder`). Two more ranges stand in front of the U5 ridge: wooded
+  foothills 1.88-2.13 km out with crests of 30-44 m, and a middle range 2.15-2.45 km out with crests of 30-76 m. Their summits
+  stand between the ridge's, so the three crest lines cross; from HOME their highest points are at about -1.1, -0.3 and
+  +0.5 degrees, so the nearer two stay under HOME's eye line and the skyline is still the ridge's. Each layer has the ridge's
+  lighter fog (transmission 0.72, 0.64 and 0.60 at their summits at noon, 0.23, 0.14 and 0.10 in the storm) and its foot
+  dissolves into the ground haze over its own height (14, 26 and 50 m; the layer's vertex alpha, 0.72, 0.66 or 0.6, tells the
+  shader which). The same kind of layer runs north from the coast on each side of the town (`CoastalTerrain.Uplands`: east
+  and west foothills at |x| 1.96-2.21 km and ranges at 2.4-2.94 km, crests to 124 m): the 16:9 HOME holds none of them, the
+  9:16 HOME looks straight at the eastern pair, and a ground-level camera that looks east or west has a skyline. Seven layers,
+  about 1,800 quads in all, no trees, none within the plantation (which ends 1,700 m from the core), none more than 3 degrees
+  above the horizontal from a quay.
+- **Haze with depth** (`SkyState.GroundHaze`, `HazeColor`). The haze a view ray fades into now depends on its elevation: the
+  horizon's colour at and above the horizon, and a darker, bluer ground haze from 2.9 degrees below it down. The scenery shader,
+  the water shader and the sky's own below-horizon part draw the same function, so far ground fades to a tone that is darker
+  than the sky above it, the land keeps an edge against the horizon, and no seam shows where the terrain or the sea ends.
+- **The sea fades too** (`SkyState.SeaTransmission`). Open water now takes the scenery's distance haze (from 350 m out, no
+  height term) in place of the engine's fog: it was dark to its far edge, which drew a hard line under the sky and along the hazed coast in any view that
+  held the sea horizon. From HOME the harbour's own water is unchanged (transmission above 0.95 at 700 m).
+- **The sky is held back from the exposure lift** (`SkyState.SkyGain`). The grade opens up by `ExposureLift` for a dim town at
+  dawn, at dusk and under the storm; the sky, its cloud and the haze are now multiplied by 2^(-0.8 x the dim-light and storm
+  lift) when they are drawn, so a dawn sky keeps its rose and a storm sky is slate instead of white. The light on the town,
+  the night and a fair noon are unchanged.
+- **The hour, from a camera that looks north.** A low sun is a key light sooner (`LowSunKey`: 0.62 of full at 7 degrees, where
+  the plain curve gave a third of that) and is warm rather than red (2,500 K at the horizon), with slightly darker shadows:
+  for an hour at each end of the day the faces turned east or west are plainly lit and the others are not. The sky-coloured
+  ambient loses most of its blue while the sun is low, so flat ground does not turn periwinkle. The cloud's bases are lit
+  from below while the sun is within 13 degrees of the horizon (`CloudUnderlight`), all round the sky and more strongly
+  towards the sun, so the east and west halves of HOME's sky differ; a closed storm front leaves 7 % of it. At night the moon
+  silvers the faces of the cloud everywhere and the cloud round itself most (`MoonCloudGlow`), off under the storm's deck.
+- **A pose that sees the moon.** `pose:basin:night-sky` (rig shot 12, `F3`) stands just off the east quay's north end and looks
+  west-south-west across the water with the horizon 62 % of the way down; at 04:00 (`StoryPoses.NightSkyHour`) the moon stands
+  18 degrees up in the middle of the frame, over its own glitter path. It is not a story pose.
+- **9:16 HOME.** (-520, 260, 30) looking east at (0, 67.1, 10), vertical FOV 52: the horizon is 12 % of the way down
+  (`PresentationMap.PortraitHorizon`), so the sky is in the frame, and so is the sunrise (the sun rises due east). All 37
+  devices stand between 40 % and 90 % of the way down; above them are the eastern woods, the foothills and range in the
+  haze, the sea horizon and the sky. The masks measure sky 19.5 % (it was 4.5 %) and water 25.3 %.
+- **Rocky foreshore** (`CoastalTerrain.ShoreReach`, `ShoreBuilder`). The open coast is a straight line in the terrain's grid.
+  A faceted granite foreshore now runs out from it, 6-60 m wide along most of the coast and up to 190 m at five named points,
+  level with the land's own edge at the coast and 3 m under the datum at its seaward edge, so the tide draws the waterline; eight skerries stand off it; and the
+  terrain's own coastal strip is turf and heath of uneven width instead of forest floor ruled off at the water. It starts
+  290 m either side of the harbour's middle, clear of the breakwater roots and the depot, and nothing of it is inside the
+  16:9 HOME frame, whose water share and masks are untouched.
+- **Granite that reads as rock** (`TerrainBuilder.DrawOutcrop`, scenery code 0.9). Three values of warm grey chosen facet by
+  facet, ledge tops lighter than the walls, every wall darkening to a shadowed foot, north-facing walls darker again, lichen,
+  rust and moss on a few facets and a dark fissure across the crown. The scenery mesh casts and takes no shadow, so that
+  shading is in the vertex colours. Close up the shader adds blotches, speckle, bedding cracks and lichen rosettes from the
+  world position (no texture); they fade out by 220 m and 900 m. The outcrops' geometry, fit and count are U5's.
+- **Lamp glow** (`Resources/HarborGlow.shader`). A lit lamp's halo is a camera-facing disc with a bright core and a soft skirt
+  that reaches zero at its rim, added to what is behind it, instead of an emissive ball of 32 triangles. Its four vertices sit
+  at the lamp and the corner is in the UV, so it faces whichever camera draws it (the water's reflection camera included). It
+  is 1.7 m in radius close up and never smaller than 4 mrad, so a lit lamp still shows from HOME.
+- **The truck's near level is a truck** (`NearVehicles.Truck`, 7.3 k vertices). It replaces the far boxes while it is shown,
+  as the cars' near sets do (the far light bar stays: the platform's reports switch it): a cab with a raked windscreen and
+  glass in body-coloured frames, a grille, lamps, bumper, mirrors and steps, external mudguards over tyres with rims and hubs,
+  chassis rails, a tank and an exhaust, a service body of two side cabinets with compartment doors round an open bed carrying
+  sandbags, a pump, a hose reel, cans and cones, a ladder rack with a ladder, and the fleet stripe.
+- **Browser build.** `HarborBuild.BuildWebGLPlayer -hp-build-dir OUT` builds for WebGL. A browser has no command line, so the
+  page address carries the preview's options: `index.html?hp-offline&hp-start-hour=17.3&hp-speed=4` (`Model/WebOptions`:
+  `hp-offline`, `hp-portrait`, `hp-frame-stats`, `hp-start-hour`, `hp-speed`, `hp-quit-after-sim`; any other `hp-` key is
+  refused, never ignored; nothing in a page address names a file or a runner). WebGL now defaults to the Laptop quality
+  tier: the water needs the depth and opaque textures, which the Mobile tier's pipeline asset turns off, and on it the first
+  browser run drew the whole harbour as foam. Run in Chrome on Windows (WebGL 2 through ANGLE on Direct3D 11) from the offline
+  preview at four start hours, the sky, the cloud, the layered haze, the water, the rain, the lamp glow and the bloom all draw
+  as they do in the Windows player. No other browser, no phone and no live link have been tried, and no frame time was taken
+  there.
+- **Stills.** A shot in `-hp-stills` may be a free camera, `hour:@x/y/z/lookX/lookY/lookZ/fov/name`, and `-hp-stills-hud 0`
+  renders the scene alone under the burnt-in stamp. Shot indices are 0-12.
+
+`U6DepthTests` pins: three northern ranges nearest first, each behind the last tree and inside the far clip; their crest
+angles from HOME stepping up and crossing; no range above 3 degrees from a quay; the far ridge's U5 profile exactly; the haze
+darker below the horizon at every reviewed hour and one monotone function of ray elevation; each range keeping more of
+itself than the one behind at noon and in the storm; the sky held back while the town is lifted, with the horizon under white;
+the low-sun key, its warmth and its side; the underlight at dawn, at a clear dusk and under the front; the moon's glow and the
+night-sky pose framing the moon; the foreshore leaving the harbour and the 16:9 HOME frame alone while breaking the coast; the
+truck's near set being a whole truck on the far wheels' places; and the page-address options, including every refusal.
+`U5CameraTests` now pins the 9:16 HOME's horizon, its sky share and every device in the lower two thirds, and its sky helper
+counts the sea horizon where no land stands in a column.
+
+Measured with the capture rig (Unity 6000.5.3f1, Windows, D3D11): the HOME masks pass at both aspects (16:9 water 40.2 %, sky
+19.1 %, 36 of 37 devices, the truck being in its depot; 9:16 water 25.3 %, sky 19.5 %, 37 of 37). The 16:9 sky was 19.6 % in U5:
+the new ranges fill the ridge's saddles. The world is 901 renderers and 1.06 M vertices (U5: 892 and 1.05 M). Frame time at
+1920x1080 over 120 s, the U5 and U6 players run alternately four times each: the mean of the 10 s windows was 5.27-5.99 ms for U5
+(5.55 on average) and 5.65-5.91 ms for U6 (5.80 on average), so U6 is about a quarter of a millisecond higher, inside the spread
+of U5's own runs. The player's captures of a day page (lamp work), a storm page and a night page (the feeder outage) were read
+frame by frame.
+
+## U7 light, crests, rock and crews
+
+U6 left nine things short. This supersedes the U6 numbers for both HOME poses, the ambient light and the crews where they differ.
+
+- **The storm's dusk** (`SkyState.HorizonBreak`). The scenario's storm (16:00-22:30) covers every sunset, and nothing here moves it:
+  the beats, the cues and everything the rig judges are untouched. The front now stops short of the horizon towards the low sun. While
+  the sun is between 15 degrees up and 6 degrees under, a band of clear lit sky shows under the deck, about 6 degrees tall towards the
+  sun and tapering to nothing 110 degrees round from it (`SkyState.BreakReach`), gold while the sun is up and ember after. The 16:9
+  HOME looks north, so it holds the band's northern taper: tall at the frame's western edge, gone before the eastern one. Once the sun
+  is inside the band (under about 7 degrees) it reaches the town as a warm key again (`BreakKeyShare`: three quarters of what the storm
+  took), the deck's bases above the band are lit, the rain between the eye and the band is lit from behind, the rain in the air turns
+  from the WORLD cue's cool white towards gold (`HarborMaterials.SetRain`), and the water mirrors the band. The storm's cloud at dusk
+  is slate; it was the brown a drained rose leaves.
+- **Rain shafts** (`Shaders/HarborHaze.hlsl`). The haze a ray fades into is now one function in one file, included by the sky, the
+  scenery and the water. In the rain it carries shafts, slanted bands up to 42 % darker, sampled round the compass and moved by the
+  scenario clock, above the horizon and below it: the far land and sea under a storm are no longer one grey field.
+- **A fair-weather look check.** `-hp-stills-weather fair` (and `HarborpulseApp.PreviewFairWeather`) draws the OFFLINE PREVIEW's sky,
+  light, rain and sea for a dry day, so an hour the storm always covers can be judged as a clear one. It is a still tool: the stamp
+  reads `FAIR-WEATHER LOOK CHECK, STORM NOT DRAWN`, the file name ends `-fair`, the preview's readings and cues are the scenario's
+  own (a gauge still reads the storm's tide), a live scene refuses it, and any value but `fair` or `scenario` is refused.
+- **Dawn and white balance.** At 06:24 the sun is two degrees up: a key, but a weak and grazing one, so the flat ground had only an
+  ambient a third of the keyless hour's. The floor now carries a clear dawn and dusk as well (`TwilightFloorShare`), and once the sky
+  is light the floor is near neutral instead of the night's blue (the night keeps its blue). By day the sky-coloured ambient keeps
+  0.42 of the sky's colour (`DayAmbientKeep`), and less in the first and last hours: flat ground is lit by the whole sky, not the
+  zenith. The scenery shader divides its direct light by pi and not its ambient, so on the quays that ambient outweighed the sun and
+  turned concrete lavender. The grade's daytime temperature is +3 where it was -3. Measured on the 16:9 HOME stills, the west quay's
+  top was (46, 32, 37) at 06:24 and is (83, 67, 61); (62, 80, 122) at 07:06 and is (75, 79, 90); (95, 102, 128) at 12:30 and is
+  (102, 102, 107). The storm dusk's ambient has no violet left (blue was 1.6 times red at 18:18).
+- **The wood on the ranges** (`CoastalTerrain.HillLayer.CrestTrees`, `RidgeBuilder`). Each of the seven backdrop layers carries a line
+  of tree tops on its crest and two more down the face in front, 5,000 in all: flat cut-outs that face the harbour, one triangle a
+  conifer and three a broadleaf, 8.5-17 m tall, six conifers to four broadleaves, in stands with gaps. The broadleaves' colour and the
+  faces' own rust and gold follow a slow noise along the range, where a per-face hash scattered single faces. A crest's ground is
+  still under 3 degrees from a quay; its trees add under half a degree.
+- **16:9 HOME.** The look is raised from y = 4 to 7.5 (`PresentationMap.HomeLookY`), under half a degree: the horizon is 18.9 % down
+  (17.6 %). The mask reads sky 20.1 % (U5 19.6 %, U6 19.1 %) with the ranges at their U6 height and their tree line on top, water 39.1 %.
+- **9:16 HOME.** (-700, 235, -60) looking at (0, 22.2, -5), vertical FOV 44, horizon 12.5 % down. The devices stand between 46 % and
+  66 % of the way down (U6: 49-83 %), the farthest drawn no smaller than U6 drew it; below them are the western woods and houses,
+  above them the eastern woods, the uplands, the sea horizon and the sky. A backdrop layer seen from well above now lies in the same
+  haze as the ground round it (it stood out of it as a dark lens), and the coastal turf strip is weighed at each corner of a facet
+  and blended across it, where one weight a facet drew the grid as a staircase. The mask reads sky 19.4 %, water 15.6 %, 36 of 37
+  devices: from this lower eye the Basin's second charger is behind the ferry terminal.
+- **Granite** (`Outcrop.Blocks`). Every ledge of 10 m or more carries two to five loose blocks on its shoulders, and most ledges of
+  22 m or more a tor: two or three slabs stacked on the crown, up to 8 m above the ledge's top. Each block is a prism whose bottom is
+  half a metre under the drawn ground at every corner, inside the ledge's own rectangle: 192 blocks, 9 tors, about 7 k vertices in the
+  terrain tiles. Walls darken to their foot and tops are light, so a block shows as a lit cap over a dark side.
+- **Glass and the crews.** A vehicle's pane carries the sky in its upper part and a narrow glint (`NearPlan.Glazed`), cut from the
+  pane's own outline. The WORLD crew is a utility van with a cab, a bonnet, side cabinets and the fleet stripe, six cones with
+  collars and a two-board barrier; at a street light it has a bucket lift on outriggers with a technician at the lantern. It keeps the
+  WORLD cue's cool palette. A crew is built when the scenario first sends one (there was a hidden van at every lamp and gauge): the
+  world is 796 renderers and 1.06 M vertices (U6: 901 and 1.06 M).
+- **The well's view and its tags.** A pump's `well` and `well-locked` poses now look at the well. They were aimed at the pump's
+  anchor, and since the well moved 13 m along the quay to clear a lamp they framed the pump house's door with the well outside the
+  frame, under the caption about the well filling. East Quay's well stands behind a charger bay, so there the eye is nearer and
+  higher (9 m off, 13 m up) and looks over the canopy, which still covers the frame's lower left. The level tags are text, which the
+  font's material draws through the deck; they are now drawn only for a camera that frames the well (`WellFootprint.TagsInView`:
+  within 24 m and 20 degrees of the camera's axis), so a lamp or gauge shot beside a well no longer shows them at its edge. A still
+  decides them again at render time, for the camera it finally has.
+
+`U7LightTests` pins: the break opening only at a storm dusk, never in fair weather and never with a jump; the sun's key through it
+only once the sun is inside the band; the band's reach across the 16:9 HOME and its absence from the 9:16 one; the dawn's ambient and
+the ratio of blue to red in the ambient at the reviewed hours; no step in the ambient, the key or the exposure through either end of
+the day; both HOME frames; every layer's crest trees standing on it, sunk into it, in the forest's mix, in stands with gaps and with
+their colour in drifts; the tree line's cost in sky and its angle from a quay; every block under the drawn ground at every corner and
+inside its ledge (a lifted block fails the same check); tors inside the HOME frame; the sky and the glint lying inside each pane; a
+pump's well pose holding the well in the middle of the frame where the old aim did not; and the tags hidden from every lamp, gauge,
+charger and HOME pose.
+
+Measured with the capture rig (Unity 6000.5.3f1, Windows, D3D11): the HOME masks pass at both aspects (16:9 water 39.1 %, sky 20.1 %,
+36 of 37 devices, the truck being in its depot; 9:16 water 15.6 %, sky 19.4 %, 36 of 37, the Basin's second charger being behind the
+ferry terminal). The world is 796 renderers and 1.06 M vertices. Frame time at 1920x1080 over 120 s, the U6 and U7 players run
+alternately four times each: the mean of the 10 s windows was 5.27-6.12 ms for U6 (5.56 on average) and 5.31-5.78 ms for U7 (5.55 on
+average; three runs of the build before the well-view fix and one of the final build). The player's captures of the lamp-work page,
+the storm page and the night page were read frame by frame. In Chrome on Windows (WebGL 2 through ANGLE on Direct3D 11) the browser build draws the
+storm page and the night page as the Windows player does, and at 1920x1080 from HOME at noon it holds the display's 60 Hz (10 s
+windows of 16.67 ms mean, 17-18 ms at the 95th percentile); with the frame-rate limit and vsync switched off in Chrome its windows
+were 8.6-12.5 ms mean, on a Quadro P2200, by the scene's own `hp-frame-stats` log, which has a 1 ms clock in a browser. The first
+frame took 13 s. No other browser, no phone and no live link have been tried.
+
+## U8 the derate, live, and six things U7 left short
+
+### Why the platform sent the command
+
+Page 3b says "Running hot. The platform tells it to derate." A served command had no link to the alarm whose rule sent it, so the
+claim could only bind through an `alarmToken` in the command's `metadata`, which nothing writes: in a live day the caption never
+appeared, and the page showed its fallback, "Running hot. Alarm raised." A command sent by a rule now carries the cause the platform
+recorded with it, and the director reads that.
+
+- **The reads.** `DirectorCommands` selects `cause { kind ruleId ruleToken profileToken detectionKind detectedAt value alarmKey deviceId }`
+  (and no longer `metadata`); `DirectorAlarms` selects `originatorId`.
+- **The join** (`DirectorObserver.TryCauseCycle`). The cause holds what the rule knew when it sent the command: an alarm KEY, the device
+  row and the detection's time, never an alarm token. For a cause of kind `ALARM` the alarm is the row with the command's device token
+  and the cause's `alarmKey` whose `originatorId` equals the cause's `deviceId` (a device token can be reused by a later device). The
+  cycle is named only when that row's `raisedTime` is at or before `detectedAt` and it was not cleared at or before it; an earlier
+  cycle than the row's counts only if its own cached record shows a `clearedTime` after the detection. Anything else is emitted as a
+  command with no alarm and a `causeUnresolved` reason (the cached lifecycles are not a complete ledger of an alarm's cycles), and a
+  cause of kind `RULE`, or none, names no alarm at all. A complete alarm read older than the detection is followed by a newer one
+  within a poll, so the command waits for that; with no complete alarm read at all it does not wait, and is emitted unresolved and
+  tied to its alarm when the reads come back. A cause is resolved once per new alarm read, never per frame
+  (`DirectorObserver.CauseResolutions`), a cause that cannot be read (no kind, no usable `detectedAt`) costs the link and is
+  reported, never the command's own states, and a cycle once named is not moved by the alarm's later life. `detectedAt` carries up to
+  nine fractional digits; it is cut (never rounded up) to the 100 ns this runtime holds, so it still meets an alarm stored at
+  microseconds. The alarm is looked for in the run's alarm read, which is the read the page's trigger comes from: an alarm that
+  read does not hold cannot start the page either.
+- **What shows.** The derate caption needs the command (`derate`, `SUCCESSFUL`, `max_kw` 11) bound to the triggering alarm's identity
+  and cycle, and "Cooler now. Alarm cleared." needs the same command; without the link both stay unmet and the page shows "Running
+  hot. Alarm raised." Page 4's `start-pump sent` rail node binds the same way.
+- **The page's timing on a real day.** The first live day with the join in place bound the command to its alarm and still showed
+  only "Alarm raised." The rule averages a minute of readings, so the alarm is raised about forty seconds after the overheating
+  starts at 14:00, and the scene sees it, and the command a moment later, some 45 s after the page is staged: in the page's second
+  shot. The derate caption belongs to the first shot and was offered for 40 s from that shot's start, so its offer had run out four
+  seconds before there was anything to say. The first shot now holds its offer for 80 s (`holdMaxS`). The last shot holds its own
+  for 80 s too and the page's window runs to 16:00: the alarm clears on a minute's average at about 15:25 and the scene reads
+  that some ten seconds after the platform's time for it, which on the second live day was 0.7 s after a 40 s offer had run out.
+  "Running hot. Alarm raised." carries `unlessShown: derate`: a
+  caption is no longer offered once the stronger one it stands in for has been shown in that presentation of the page
+  (`StoryCaption.UnlessShown`, which must name another claim of the page). On a live day the page reads "Running hot. Alarm
+  raised.", then "Running hot. The platform tells it to derate.", then "Cooler now. Alarm cleared."; without the link it keeps to
+  the first. The authored timeline the other director tests run (alarm at 14:00 sharp) shows what it did.
+- **Who can read a cause.** The platform serves a command's cause to a reader that holds `device:read` and `alarm:read`
+  (`location:read` too for a rule that fires on position) and is not scoped to a customer; to any other reader it is `null`, and the
+  scene falls back. The scene reads with the token the runner serves, a tenant-admin member, which is all of that.
+  `hack/harborpulse-rig.sh run` now checks each sim's served token before the day starts and fails the run on one that could not
+  read a cause: any `scp` claim, authorities that are not a list of strings, or a list without the three and without `*`. Its
+  offline controls feed the check each of those, which it must refuse.
+- **A control.** `-hp-control-no-cause` makes a live player read commands without their cause (`DirectorCommandsNoCause`). The banner
+  turns to `TEST CONTROL: CONTROL command cause not read`, and every claim that needs the link must fall back.
+- An instance older than the cause (before v1.9) refuses the command read's `cause` selection: the commands probe fails, which the
+  banner reports, and the pump and derate claims stay unmet for the run.
+
+`DirectorTestsCause` pins: the bound command's identity and cycle; nine ways an `ALARM` cause does not bind (another device record,
+no originator, another key, no alarm, raised after the detection, cleared before it and at it, no device id, no alarm key), each
+reported unresolved with the command still evidence; a `RULE` cause and no cause; the wait for an alarm read that reaches the
+detection; an earlier cycle counting only when it was seen cleared after the detection; a bound cycle surviving a re-raise;
+nanosecond instants; a command with no alarm read to resolve it against, emitted and later tied; a cause with no kind or no usable
+time; one resolution per alarm read over thirty frames; and, from the observer's records through the storyboard's own predicates,
+the derate caption holding with the link and "Running hot. Alarm raised." holding without it. Three more run page 3b through the
+scheduler on a real day's timing: with the link the three captions in order (and the weaker one never after the stronger, when
+both are read in one frame), without it "Alarm raised." alone, and under U7's 40 s the derate caption absent, as the live day
+showed. `ControlsChangeOnlyDeclaredEmittedOutputs("command-cause-not-read")` runs a whole authored day without the link: only page
+3b's two caption slots and page 4's `start-pump sent` node change.
+
+### The six
+
+- **The storm seen from the 9:16 HOME** (`Shaders/HarborHaze.hlsl`, `HarborSquall`). That frame looks east from 230 m up and held one
+  grey field from the horizon to the near shore. Below the horizon the rain's haze now carries squalls: narrow streaks that lean with
+  the wind, in ranks one behind another, up to a third darker than the haze between them, which is a little paler than it was. The
+  eastern uplands keep a ghost of their shape in the rain when seen from above (`HarborScenery.shader`). Seen edge-on, from the 16:9
+  HOME and the quays, the ranges fade as they did; the squalls show there too, in the band under the horizon.
+- **37 of 37 from the 9:16 HOME.** The ferry terminal's hall was 56 m long and its south bay stood between that eye and the Basin's
+  second charger, the one the derate page is about. It is 42 m (`NearLandmarks.TerminalW`) with its north gable where it was
+  (`TerminalOffsetX`), so the charger shows over open quay. The meter stays inside its building.
+- **A tor that is a landmark** (`Outcrop.Landmark`, `WorldPropPlan.PlaceLandmark`). At the back of the meadow on the town's east edge,
+  830 m from the 16:9 HOME's eye: a main stack of six slabs 25 m high, a second of three and a third of two beside it, a table stone
+  and clitter, on a ledge 40 m by 28 m. From HOME it is about 55 pixels tall at 1080 lines (U7's tallest tor was about 15). The lowest
+  slab of a stack comes up through the ground like every other block; each one above starts 0.9 m inside the slab it stands on. A
+  block's wall is now two quads that meet along a line, dark below and lit above: the lit band used to be laid 3 cm over the dark
+  one, which on a tall twisted wall sank through it and at HOME's range was under the depth buffer's step. It is outside the 9:16
+  HOME's frame, which looks along the coast.
+- **The storm's deck** (`HarborSky.shader`). A raining deck's relief is two close slates: the lit tone, which stood in it as pale
+  patches, is cut to a third of its strength by the rain.
+- **The wells' view.** A charging bay is never placed in front of a wet well's cut-away (`WorldPropPlan.InWellView`: the strip from
+  the well to where the view's eye stands). East Quay's first charger had its bay there, and its canopy stood between the eye and the
+  well; the bay is now on the other side of its charger, and East Quay's well is seen from the same stand-off as the other two
+  (16 m off, 10 m up). All three look at a point at the datum, under the deck (`PresentationMap.WellViewLookY`), so the well and its
+  level tags stand higher in the frame: "low cut-off" is 34 % of the way up a 16:9 frame, above the caption's box (the lower 8-24 %),
+  where it was 20 % up and written across the caption. The attribute rule's tag hangs 0.8 m under its own ring; at the low cut-off's
+  level the two tags were one smear. In a 9:16 frame the caption's box is higher (23-37 %) and "low cut-off" is still inside it.
+- **07:06** (`DayLighting.EarlySkyDrain`, `EarlyWallDrain`). Until the sun stands about 30 degrees up, the sky's light on flat ground
+  gives up most of its colour and the horizon's light on the walls half of it. A quay's top in the 16:9 HOME still read (75, 82, 93)
+  at 07:06 and reads (81, 80, 82); 06:24 and noon are unchanged at (82, 67, 62) and (102, 104, 110).
+- **The derate page's own view.** A tide gauge's mast on the quay edge stood between the eye and the Basin's second charger in the
+  page's close and insert shots; the eye steps 14 m towards the quay's north end (`PresentationMap.Sidestep`).
+
+`U8Tests` pins the landmark's height, its place in the 16:9 HOME frame and its stacking; the sight lines from the 9:16 HOME to both
+Basin chargers past the terminal (and that the same check sees U7's hall hide the second); no bay in any well's view, and the view's
+strip being the line from the well to the eye; the level tags above the caption's box and the far rim under the banner (and that the
+same check sees U7's overlap); and the ratio of blue to red in the light through the morning, without a step.

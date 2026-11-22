@@ -8,12 +8,13 @@ namespace DeviceChain.Harborpulse.Visuals
 {
     public sealed class LampView
     {
-        readonly AssetRig rig; readonly HarborMaterials mats; readonly Transform crew; readonly Light light;
+        readonly AssetRig rig; readonly HarborMaterials mats; readonly Light light;
+        // built the first time the scenario sends a crew to this lamp: one lamp in the day has one, and a van for each of them was a cost every frame paid for
+        Transform crew;
         readonly MaterialPropertyBlock fadeBlock = new MaterialPropertyBlock();
         public LampView(AssetRig rig, HarborMaterials mats)
         {
             this.rig = rig; this.mats = mats; light = rig["Lantern"].GetComponentInChildren<Light>();
-            crew = CrewBuilder.Build(rig.Root, mats, true, new Vector3(4, 0, -3));
         }
         public void Apply(LampState p, HarborFrame frame, SkyState sky, Vector3 camera)
         {
@@ -27,15 +28,16 @@ namespace DeviceChain.Harborpulse.Visuals
             rig["Halo"].gameObject.SetActive(on && power > 0);
             var halo = rig["Halo"].GetComponent<MeshRenderer>();
             fadeBlock.Clear();
-            fadeBlock.SetColor("_EmissionColor", mats.LampHalo.GetColor("_EmissionColor") * power);
-            fadeBlock.SetColor("_BaseColor", Color.Lerp(new Color(0.10f, 0.12f, 0.15f), mats.LampHalo.GetColor("_BaseColor"), power));
+            fadeBlock.SetFloat(HarborMaterials.GlowPower, power);
             halo.SetPropertyBlock(fadeBlock);
             light.enabled = on && power > 0 && (rig.Root.position - camera).sqrMagnitude < 520 * 520;
             light.intensity = power * 16 * (float)(p.DimPct ?? 100) / 100 * Mathf.Lerp(0.15f, 1, (float)sky.Night);
             var job = frame.LampService?.RunnerPlan;
             var target = job != null && (job.Device == rig.Placement.Device.Token || job.Device == rig.Placement.Device.ExternalId);
             var worldTarget = frame.World.LampCrewDevice == rig.Placement.Device.Token || frame.World.LampCrewDevice == rig.Placement.Device.ExternalId;
-            crew.gameObject.SetActive(worldTarget && frame.World.LampCrew);
+            var crewHere = worldTarget && frame.World.LampCrew;
+            if (crewHere && crew == null) crew = CrewBuilder.Build(rig.Root, mats, true, new Vector3(4, 0, -3));
+            if (crew != null) crew.gameObject.SetActive(crewHere);
             rig["PlatformWindow"].gameObject.SetActive(target && frame.LampService.PlatformWindow != null);
             rig["PlatformWindow"].GetComponent<MeshRenderer>().sharedMaterial = frame.LampService?.WindowOpen == true ? mats.StatusGreen : mats.Steel;
         }
