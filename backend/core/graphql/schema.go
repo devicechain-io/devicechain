@@ -43,6 +43,9 @@ import (
 // forwards, and the pump is the only place those responses are typed.
 type Schema struct {
 	inner *graphql.Schema
+	// capabilitySchema is the exact served SDL, available only to authenticated
+	// capability discovery. Developer introspection stays disabled by default.
+	capabilitySchema string
 
 	maxQueryLength   int
 	maxQueryRoots    int

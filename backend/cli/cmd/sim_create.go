@@ -199,7 +199,7 @@ func runSimCreate(cmd *cobra.Command, args []string) (retErr error) {
 	endpoints := sim.ResolveEndpoints(server, ingress, mqttBroker, tls)
 	adminURL := sim.AdminURL(server, tls)
 	hostHeader := resolveHostHeader(cmd, server, instance)
-	admin := newSimAdmin(hostHeader, endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
+	admin := newSimAdmin(cmd, instance, hostHeader, endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
 
 	ctx := cmd.Context()
 	if err := admin.EnsureSuperuser(ctx); err != nil {

@@ -1,0 +1,631 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+#
+# Device State GraphQL Schema
+#
+
+"""Fields common to every stored row."""
+# Base elements in gorm RDB model.
+interface Model {
+    """Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by device token."""
+    id: ID!
+    """When the row was first created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the row was last modified, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """
+    When the row was deleted, as an RFC 3339 timestamp. Deleted rows are not returned by this
+    API, so this is null in practice.
+    """
+    deletedAt: String
+}
+
+"""
+Where one page of search results sits within the full result set. Positions are 1-based and
+inclusive.
+"""
+# Pagination info for search results.
+type SearchResultsPagination {
+	"""Position of the first result of this page within the full result set (1-based)."""
+	pageStart: Int
+	"""
+	Position of the last result of this page within the full result set (1-based, inclusive).
+	Capped at totalRecords.
+	"""
+	pageEnd: Int
+	"""Number of records matching the criteria across all pages."""
+	totalRecords: Int
+}
+
+"""
+The live connectivity and activity state of one device, projected from its events. One row per
+device, created when the device first produces an event or presence signal.
+"""
+# Live current-state projection for a single device (connectivity + activity).
+type DeviceState implements Model {
+    """
+    Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by
+    device token; this id is also the cursor for assertedDeviceStates and
+    demoteAssertedPresence.
+    """
+    id: ID!
+    """When the row was first created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the row was last modified, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """
+    When the row was deleted, as an RFC 3339 timestamp. Deleted rows are not returned by this
+    API, so this is null in practice.
+    """
+    deletedAt: String
+    """Token of the device this state belongs to."""
+    deviceToken: String!
+    """
+    Whether the device is currently considered connected. For an INFERRED device it becomes true
+    on activity and false when no activity arrives within inactivityTimeout. For an ASSERTED
+    device it follows only the connect and disconnect signals of its event source.
+    """
+    active: Boolean!
+    """
+    When the device was last considered to have connected, as an RFC 3339 timestamp; null if it
+    has not.
+    """
+    lastConnectTime: String
+    """
+    When the device was last considered to have disconnected, as an RFC 3339 timestamp. For an
+    INFERRED device this is the moment the inactivity check marked it inactive, not the time of
+    its last event. Null if it has not disconnected.
+    """
+    lastDisconnectTime: String
+    """
+    Time of the most recent event from the device, as an RFC 3339 timestamp; null if none. Taken
+    from the event's own occurrence time, so an older event delivered late does not move it
+    backwards.
+    """
+    lastActivityTime: String
+    """
+    When the inactivity sweep marked the device inactive for going silent, as an RFC 3339
+    timestamp. Cleared when the device becomes active again; null otherwise, including for a
+    device that went offline by a disconnect report rather than by silence. Deprecated: it
+    keeps working as before until the next major release.
+    """
+    inactivityAlarmTime: String @deprecated(reason: "Use lastDisconnectTime, which holds the same instant when the sweep marked the device inactive, unless a disconnect report followed, and also covers a disconnect report. This field keeps its behaviour until the next major release.")
+    """
+    Seconds without activity after which an INFERRED device is marked inactive. One value for
+    the whole platform (600); it is not configurable per device. It does not apply to an
+    ASSERTED device.
+    """
+    inactivityTimeout: Int!
+    """
+    The device's transport-native identity, copied from the events it sends; null when the
+    device has no external id.
+    """
+    # externalId is the device's transport-native identity, denormalized from the
+    # resolved event (ADR-049); null when the device has no external id.
+    externalId: String
+    """
+    The event source that last drove this device; null before the device has produced an event
+    carrying one. MQTT and HTTP report the event source's own configured id (for example mqtt1),
+    LwM2M reports lwm2m, and Sparkplug reports sparkplug:{hostId}. To classify a device by
+    transport, cut at the first ':' and compare that part, because the first two forms are
+    operator-chosen. Pass this value exactly as reported when you need a source argument
+    elsewhere.
+    """
+    # source is the event source that last drove this device, denormalized from the
+    # resolved event. Its form is `transport` or `transport:qualifier`:
+    #   - MQTT and HTTP project the EVENT SOURCE'S OWN ID, which you choose in
+    #     configuration (the shipped defaults are "mqtt1" and "http1"). The literal
+    #     "mqtt" is not a value this field takes.
+    #   - LwM2M projects the fixed string "lwm2m".
+    #   - Sparkplug projects "sparkplug:{hostId}", carrying the host application id.
+    # To classify a device BY TRANSPORT, cut at the first ":" and compare that; do not
+    # compare the whole value, which for two of the three cases is operator-chosen.
+    # An event source id EQUAL to a source value the platform files rows under itself —
+    # "lwm2m" today — is rejected when the configuration loads, because that source and
+    # that transport would re-file each other's presence rows. An id that merely CUTS to
+    # a transport the platform mints, such as "sparkplug:plant-a" or "lwm2m:site-a", is
+    # accepted with a warning: it is reserved and should be renamed, but nothing refuses
+    # those devices today. Ids cutting to anything else — including your own namespaced
+    # "acme:line3" — are yours to choose.
+    #
+    # Treat none of that as a guarantee about what you are READING. It governs what can be
+    # written from now on; a value stored before the rules existed is still served as it
+    # was recorded, and a warned-about id is served exactly like any other.
+    # Null before the device has produced an event carrying one. It answers "which transport is this
+    # device on", which callers need to know whether a command can reach it at all —
+    # the transports differ in whether they have a command path, not only in whether
+    # the device is currently connected.
+    source: String
+    """
+    How presence is decided: INFERRED (from activity and the inactivity timeout) or ASSERTED
+    (the event source states connect and disconnect explicitly, and activity alone cannot change
+    it).
+    """
+    # presenceSource discriminates authoritative presence from inferred (ADR-067):
+    # INFERRED (activity + inactivity sweep) or ASSERTED (Active driven only by a
+    # StateChange). sessionId is the last-applied transition's ordering epoch, returned
+    # as a String because it is a UnixNano value that overflows a 32-bit GraphQL Int
+    # (0 until the first StateChange). presenceTime is that transition's time.
+    presenceSource: String!
+    """
+    Ordering epoch of the last applied presence transition, serialized as a string because it is
+    a nanosecond-scale integer too large for a GraphQL Int. "0" until the first presence signal.
+    """
+    sessionId: String!
+    """
+    Time of the last applied presence transition, as an RFC 3339 timestamp; null until one has
+    been applied.
+    """
+    presenceTime: String
+    """
+    How many distinct measurement keys from this device are being discarded: the number of
+    (key, reason) rows droppedMeasurements returns for it, not a count of events. Zero when
+    nothing is. A badge, cheap enough to ask for on a page of devices. Counts what the
+    caller can see, so it is zero for a member whose access is limited to some customers when
+    none of them owns the device now.
+    """
+    droppedMeasurementCount: Int!
+}
+
+"""
+Why a measurement key sent by a device is discarded while the rest of its message is stored.
+In every case the remedy is the same: declare the key as a numeric metric on the device's
+profile to store it.
+"""
+enum DroppedMeasurementReason {
+    """The key is not declared on the profile and its value is not a number, for example the text "ok"."""
+    UNDECLARED_NON_NUMERIC
+    """
+    The key is not declared on the profile and its value is a number that cannot be stored: not
+    a number (NaN), infinite, or beyond the range of a stored measurement.
+    """
+    UNDECLARED_UNSTORABLE
+    """The key is declared on the profile with a data type that is not a time-series metric."""
+    DECLARED_NOT_STORABLE
+}
+
+"""
+A measurement key a device sent that the platform discarded while it stored the rest of the
+message, and why. One row per device, key and reason, so a device that sends the same text key
+in every message is one row with a growing count. At most 32 rows are kept per device; past that
+the row last seen longest ago is dropped. Declare the key as a numeric metric on the device's
+profile to store it.
+"""
+type DroppedMeasurement implements Model {
+    """Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by device token."""
+    id: ID!
+    """When the row was first created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the row was last modified, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """
+    When the row was deleted, as an RFC 3339 timestamp. Deleted rows are not returned by this
+    API, so this is null in practice.
+    """
+    deletedAt: String
+    """Token of the device that sent the key."""
+    deviceToken: String!
+    """The measurement key that was discarded, for example status_text."""
+    name: String!
+    """Why it was discarded."""
+    reason: DroppedMeasurementReason!
+    """
+    The value the device last sent under this key, cut to 64 bytes. It is the device's own
+    content and is visible to the same readers as the device's latest measurement values.
+    """
+    lastValue: String!
+    """
+    How many times the key was discarded. A message the platform delivers twice can count twice,
+    so read it as how often, not as an exact total. Stops growing at 2147483647.
+    """
+    count: Int!
+    """When the key was first discarded, as an RFC 3339 timestamp: the earliest the device sent it."""
+    firstTime: String!
+    """
+    When the key was last discarded, as an RFC 3339 timestamp: the latest time the device sent it.
+    A message delivered late does not move it back.
+    """
+    lastTime: String!
+}
+
+"""
+The most recent value of one named measurement for a device: the live "what is it now?" view
+that sits beside the append-only measurement history. One row per device and measurement name.
+"""
+# Current (most-recent) value of a single named measurement for a device — the
+# live "what is it now?" projection beside the append-only history. occurredTime
+# is the RFC3339 time of the reading; value is null only for a non-numeric reading
+# (not stored in v1).
+type LatestMeasurement implements Model {
+    """Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by device token."""
+    id: ID!
+    """When the row was first created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the row was last modified, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """
+    When the row was deleted, as an RFC 3339 timestamp. Deleted rows are not returned by this
+    API, so this is null in practice.
+    """
+    deletedAt: String
+    """Token of the device the reading belongs to."""
+    deviceToken: String!
+    """Name of the measurement, for example a metric name such as temperature."""
+    name: String!
+    """
+    The numeric value of the most recent reading. Only numeric readings are stored, so in
+    practice this is always set.
+    """
+    value: Float
+    """
+    Id of the metric definition the reading was bound to; null for a measurement with no
+    definition.
+    """
+    classifier: Int
+    """
+    Unit of measure copied from the bound metric definition; null for an undeclared measurement.
+    """
+    # unit + dataType are denormalized from the bound metric definition (ADR-016) so
+    # the last-known value is self-describing; both are null for an undeclared
+    # measurement. dataType lets a consumer render a 0/1 BOOLEAN value as false/true.
+    unit: String
+    """
+    Data type copied from the bound metric definition (it lets a consumer render a 0/1 BOOLEAN
+    value as false/true); null for an undeclared measurement.
+    """
+    dataType: String
+    """
+    When the reading was taken, as an RFC 3339 timestamp. An older reading delivered late does
+    not replace a newer stored one.
+    """
+    occurredTime: String!
+}
+
+"""
+The last-known position of a device: the "where is it right now?" view that sits beside the
+append-only location history. One row per device. Coordinates are WGS84 decimal degrees;
+elevation and accuracy are in metres, speed in metres per second, heading in degrees clockwise
+from true north. Reading it requires location:read, which is separate from state:read.
+"""
+# Last-known position of a device — the O(1) "where is it right now?" projection
+# beside the append-only location history. One per device. Coordinates are WGS84 /
+# EPSG:4326 decimal degrees; elevation and accuracy are metres (elevation above the
+# ellipsoid, not mean sea level), speed is metres per second, heading is degrees
+# clockwise from true north in [0, 360). Every coordinate is nullable because a fix
+# reports only what its sensor produced — null means "not reported", which is not the
+# same claim as 0. occurredTime is the RFC3339 time of the fix itself.
+#
+# Reading this requires the location:read authority, which is separate from the
+# state:read that covers the rest of this API and is not part of the read-only
+# baseline: where a device is differs in kind from what it is measuring.
+type LatestLocation implements Model {
+    """Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by device token."""
+    id: ID!
+    """When the row was first created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the row was last modified, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """
+    When the row was deleted, as an RFC 3339 timestamp. Deleted rows are not returned by this
+    API, so this is null in practice.
+    """
+    deletedAt: String
+    """Token of the device the position belongs to."""
+    deviceToken: String!
+    """
+    Latitude in decimal degrees (WGS84, EPSG:4326); null when the fix did not report it. Null is
+    not the same as 0.
+    """
+    latitude: Float
+    """
+    Longitude in decimal degrees (WGS84, EPSG:4326); null when the fix did not report it. Null
+    is not the same as 0.
+    """
+    longitude: Float
+    """Elevation in metres above the ellipsoid (not mean sea level); null when not reported."""
+    elevation: Float
+    """Accuracy of the fix in metres; null when not reported."""
+    accuracy: Float
+    """Speed in metres per second; null when not reported."""
+    speed: Float
+    """
+    Heading in degrees clockwise from true north, in the range 0 to 360 (360 excluded); null
+    when not reported.
+    """
+    heading: Float
+    """
+    When the fix was taken, as an RFC 3339 timestamp. An older fix delivered late does not
+    replace a newer stored one.
+    """
+    occurredTime: String!
+}
+
+"""
+Filter and paging for searching device states. Results are newest first (by row creation). To
+look up specific devices use deviceStatesByDeviceToken.
+"""
+# Criteria used when searching for device states. Device-token lookups are served
+# by the deviceStatesByDeviceToken query instead of a criteria field.
+input DeviceStateSearchCriteria {
+    """Page to return, starting at 1; values below 1 are treated as 1."""
+    pageNumber: Int!
+    """Results per page. Values below 1 become 100; values above 1000 are capped at 1000."""
+    pageSize: Int!
+    """Only devices whose active flag equals this value. Omit to include both."""
+    active: Boolean
+}
+
+"""One page of device states."""
+# Search results returned from device state query.
+type DeviceStateSearchResults {
+    """The device states on this page."""
+    results: [DeviceState!]!
+    """Where this page sits within all matching device states."""
+    pagination: SearchResultsPagination!
+}
+
+# Queries for accessing device state.
+type Query {
+    """
+    Returns the states of the given devices, in no particular order. Devices with no state yet
+    are omitted. Requires state:read. A member whose access is limited to some customers sees
+    only the devices those customers own now; any other device is omitted.
+    """
+    # Get device states for one or more devices by device token.
+    deviceStatesByDeviceToken(
+        """Tokens of the devices. More than 1000 is refused with LIMIT_EXCEEDED."""
+        deviceTokens: [String!]!
+    ): [DeviceState!]!
+    """
+    Returns the states of the devices carrying the given external ids, in no particular order.
+    External ids that match nothing are omitted. Requires state:read. A member whose access is
+    limited to some customers sees only the devices those customers own now.
+    """
+    # Get device states for one or more devices by their (denormalized) external id.
+    deviceStatesByExternalId(
+        """
+        External ids of the devices, as reported in DeviceState.externalId. More than 1000 is
+        refused with LIMIT_EXCEEDED.
+        """
+        externalIds: [String!]!
+    ): [DeviceState!]!
+    """
+    Returns one page of the ASSERTED device states that belong to one event source, in ascending
+    id order: the set an adapter reconciles against after a failover. Walk it with a cursor:
+    pass the id of the last row of the previous page as afterId and keep asking until a page
+    comes back with fewer rows than pageSize. A pageSize outside 1 to 1000 is an error, not
+    adjusted. Requires state:read, and is refused to a member whose access is limited to some
+    customers.
+    """
+    # ASSERTED device states for the calling tenant AND the given event source — the
+    # set an adapter reconciles against on failover (ADR-067 SP4b): it enumerates the
+    # devices the platform believes that source has online, floors its epoch generator
+    # from the max sessionId here, and probes each for liveness. The source scope stops
+    # two sources on one tenant from cross-disconnecting each other's devices.
+    #
+    # activeOnly:true answers "who does the projection believe is online". false adds
+    # the asserted devices it believes are OFFLINE, whose stored sessionId a repair
+    # needs in order to be one presence ordering will accept — a broker node with a
+    # trailing clock mints a LOWER session on reconnect, and a lower session is
+    # rejected forever. There is no default: the two are different questions.
+    #
+    # The result is a PAGE, walked from a cursor: pass afterId as the id of the last
+    # row of the previous page (omit it for the first), and keep asking until a page
+    # comes back holding fewer rows than pageSize. Paging is mandatory because this
+    # set is as large as the tenant's fleet, and a response larger than the caller's
+    # read limit is cut off rather than shortened — a truncated presence set would
+    # silently under-report who is online, which in a reconciler means devices marked
+    # offline while connected.
+    #
+    # pageSize is required and must be between 1 and 1000. It is refused rather than
+    # quietly adjusted, because a caller that stops when a page comes back short would
+    # read a silently reduced page as the end of the set and stop with the fleet only
+    # half read.
+    assertedDeviceStates(
+        """The event source, exactly as DeviceState.source reports it."""
+        source: String!
+        """
+        Required. True returns only the devices the projection believes are online; false also
+        returns the ones it believes are offline.
+        """
+        activeOnly: Boolean!
+        """
+        Cursor: the id of the last row of the previous page. Omit for the first page. A
+        non-numeric value is an error.
+        """
+        afterId: ID
+        """Rows per page, between 1 and 1000 inclusive; anything else is an error."""
+        pageSize: Int!
+    ): [DeviceState!]!
+    """
+    Searches device states, newest first, one page at a time. Requires state:read. A member whose
+    access is limited to some customers sees, and has counted, only the devices those customers
+    own now.
+    """
+    # Search for device states that match the given criteria.
+    deviceStates(
+        """Filter and page to return."""
+        criteria: DeviceStateSearchCriteria!
+    ): DeviceStateSearchResults!
+    """
+    Returns the current value of every measurement the device has reported, ordered by
+    measurement name. Empty when the device has reported none. Requires state:read. Empty for a
+    member whose access is limited to some customers when none of them owns the device now.
+    """
+    # Current value of every measurement name for a device (live readings).
+    latestMeasurements(
+        """Token of the device."""
+        deviceToken: String!
+    ): [LatestMeasurement!]!
+    """
+    Returns the measurement keys this device sent that the platform discarded, ordered by key
+    then reason, each with the reason, the last value, how often and when. Empty when nothing
+    is being discarded. Declare a key as a numeric metric on the device's profile to store it.
+    Requires state:read. Empty for a member whose access is limited to some customers when none
+    of them owns the device now.
+    """
+    droppedMeasurements(
+        """Token of the device."""
+        deviceToken: String!
+    ): [DroppedMeasurement!]!
+    """
+    Returns the last-known position of one device, or null when it has never been located.
+    Requires location:read. Null for a member whose access is limited to some customers when
+    none of them owns the device now.
+    """
+    # Last-known position of one device; null when it has never been located.
+    # Requires location:read.
+    latestLocation(
+        """Token of the device."""
+        deviceToken: String!
+    ): LatestLocation
+    """
+    Returns the last-known position of each of the given devices, ordered by device token. A
+    device that has never been located is absent from the result. Requires location:read. A
+    member whose access is limited to some customers sees only the devices those customers own
+    now.
+    """
+    # Last-known position of each of the given devices — the fleet-map batch. A device
+    # that has never been located is absent from the result rather than present with
+    # null coordinates. Requires location:read.
+    latestLocations(
+        """Tokens of the devices. More than 1000 is refused with LIMIT_EXCEEDED."""
+        deviceTokens: [String!]!
+    ): [LatestLocation!]!
+}
+
+"""The outcome of one page of a presence demotion."""
+# The outcome of ONE PAGE of a presence demotion (ADR-067 demotion). It is flat —
+# four scalars, no refusal union — because everything that can go wrong short of an
+# error is a per-row condition a count answers better than a type would.
+type PresenceDemotionResult {
+    """
+    How many ASSERTED rows this page examined. Keep walking while it equals the limit you asked
+    for; stop on the first page that comes back short. Do not use demoted as the stop signal.
+    """
+    # How many ASSERTED rows this page examined.
+    #
+    # 🔴 THIS IS THE TERMINATION SIGNAL, NOT `demoted`. Keep walking while `scanned`
+    # equals the `limit` you asked for; stop on the first page that comes back short.
+    # A page whose rows were all skippable demotes nothing and is not the end of the
+    # set, so a loop keyed on `demoted` stops with most of the source untouched.
+    scanned: Int!
+    """
+    How many demotion events were published, handing those devices back to inferred presence.
+    The events are applied asynchronously.
+    """
+    # How many demotion events were published — the devices handed back to inferred
+    # presence by this page.
+    demoted: Int!
+    """
+    Rows this page examined but could not release, which is scanned minus demoted. A row is
+    skipped when it holds no presence time, or when its presence time is not in the past. A page
+    that skips everything is a signal, not a failure.
+    """
+    # `scanned` minus `demoted`: rows this page could not release. A row is skipped when
+    # it holds no presence time (the ordering guard has nothing to judge a demotion
+    # against), or when its presence time is not in the past (a demotion stamped now
+    # would be refused as stale by a producer whose clock leads the platform's). Both are
+    # states in which an emitted demotion could not have applied; each is logged with the
+    # device it concerns. A row holding no SESSION is deliberately NOT skipped — a
+    # producer may send no session id, so such a row holds zero and zero is what releases
+    # it. A page that skips everything is a signal, not a failure.
+    skipped: Int!
+    """
+    Id of the last row scanned: pass it as afterId on the next call. Null when the page was
+    empty.
+    """
+    # The id of the last row SCANNED — the cursor to pass as the next call's `afterId`.
+    # Null when the page was empty. It is the last row scanned rather than the last one
+    # demoted deliberately: resuming from the last row KEPT would re-read every skipped
+    # row on the next page, and a permanently-skippable row would make the walk never
+    # end.
+    lastId: ID
+}
+
+# Mutations for device state.
+type Mutation {
+    """
+    Returns one page of an event source's ASSERTED device states to INFERRED presence, releasing
+    that source's custody of them so the ordinary activity and inactivity rules apply again. It
+    asserts nothing about connectivity: active and the connect, disconnect and alarm timestamps
+    are unchanged. Walk the source by passing the previous result's lastId as afterId. Requires
+    state:demote, which is separate from state:read.
+    """
+    # Return one page of an event source's ASSERTED device states to INFERRED presence,
+    # releasing that source's custody of them (ADR-067 demotion).
+    #
+    # 🔴 WHAT THIS IS FOR. A device whose presence source stops running keeps whatever
+    # presence it had, forever: the inactivity sweep skips ASSERTED rows and a data
+    # event cannot flip one, so the two mechanisms that repair a stale row are both
+    # suppressed while the source that stopped speaking still holds custody. Demoting
+    # returns the row to INFERRED and asserts NOTHING about connectivity — active, both
+    # connect timestamps and the alarm stamp are untouched — which hands the device back
+    # to the ordinary inference machinery. A stale-online row becomes sweepable again;
+    # a wedged-offline row is reconnected by its next data event.
+    #
+    # 🔴 THE BLAST RADIUS IS AN ENTIRE EVENT SOURCE, so `source` is required and is
+    # never inferred. Pass it EXACTLY as `DeviceState.source` reports it — for MQTT and
+    # HTTP that is the event source's own configured id ("mqtt1", "http1"), for
+    # Sparkplug "sparkplug:{hostId}", for LwM2M "lwm2m". A source nobody uses is not an
+    # error: it simply matches no rows, which is why a caller should treat a first page
+    # of zero as a probable typo rather than as a finished walk.
+    #
+    # 🔴 `deviceTokens` IS NULLABLE AND AN EMPTY LIST DEMOTES NOTHING. Omit it to demote
+    # the whole source; pass a non-empty list to narrow WITHIN the source (a token
+    # belonging to another source is not found, never demoted); pass an empty list and
+    # nothing happens at all. That is the opposite of what `CommandSearchCriteria.statuses`
+    # does with an empty list, and the divergence is deliberate: that one is a read
+    # filter, where "I built a list and it came out empty" almost always means "no
+    # preference", while this is a write over a whole fleet — so the same slip has to
+    # fail in the direction that does nothing.
+    #
+    # `limit` is required and must be between 1 and 1000, refused rather than clamped,
+    # for the reason `assertedDeviceStates` records: a caller that stops on a short page
+    # would read a silently reduced one as the end of the set. Walk the source by
+    # passing the previous result's `lastId` as `afterId`; the keyset cursor stays
+    # correct while rows are written underneath the walk, which OFFSET would not.
+    #
+    # `reason` is required and must not be blank. It is stamped onto every emitted event
+    # alongside the authenticated subject and logged with the call — the only record of
+    # a fleet-wide presence write.
+    #
+    # Requires state:demote, which is separate from the state:read that covers every
+    # other operation here and is not part of the read-only baseline: this is the only
+    # thing outside the event pipeline that writes this projection.
+    demoteAssertedPresence(
+        """
+        The event source whose devices to demote, exactly as DeviceState.source reports it.
+        Required and never inferred. A source nobody uses matches no rows.
+        """
+        source: String!
+        """
+        Optional narrowing within the source. Omit or null to demote the whole source; a
+        non-empty list restricts to those devices (a token belonging to another source is not
+        found, never demoted); an empty list demotes nothing; more than 1000 is refused with
+        LIMIT_EXCEEDED.
+        """
+        deviceTokens: [String!]
+        """
+        Rows to examine on this page, between 1 and 1000 inclusive; anything else is an error,
+        not clamped.
+        """
+        limit: Int!
+        """
+        Cursor: the lastId of the previous page. Omit for the first page. A non-numeric value is
+        an error.
+        """
+        afterId: ID
+        """
+        Why the source is being demoted. Required and must not be blank; it is stamped onto
+        every emitted event with your identity and logged, and is the only record of the change.
+        """
+        reason: String!
+    ): PresenceDemotionResult!
+}
+
+schema {
+    query: Query
+    mutation: Mutation
+}

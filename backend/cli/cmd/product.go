@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dcctl/apiclient"
 	"github.com/devicechain-io/dcctl/product"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/fatih/color"
@@ -164,7 +164,7 @@ func productSession(cmd *cobra.Command) (product.Client, product.Endpoints, erro
 		return nil, product.Endpoints{}, fmt.Errorf("--email and --password are required: the change is authorized as the identity that makes it")
 	}
 	e := sim.ResolveEndpoints(server, "", "", tls)
-	session := userclient.NewTenantSession(nil, e.UserGraphQL, productEmail, productPassword, productTenant).
+	session := apiclient.NewTenantSession(nil, e.UserGraphQL, productEmail, productPassword, productTenant, recordedEndpointVersions(cmd, e.DeviceMgmtGraphQL, connectorsURL(e.DashboardMgmtGraphQL), e.DashboardMgmtGraphQL)...).
 		WithOTP(otpFunc(otpFlag(cmd)))
 	return session, product.Endpoints{
 		DeviceManagement: e.DeviceMgmtGraphQL,

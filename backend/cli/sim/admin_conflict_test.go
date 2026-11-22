@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/devicechain-io/dcctl/internal/apitest"
 )
 
 // `dcctl sim create` is idempotent because the admin mutations it wraps tolerate the
@@ -28,6 +30,9 @@ import (
 func adminStub(t *testing.T, adminErrors string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if apitest.ServeCapabilities(t, w, r) {
+			return
+		}
 		raw, _ := io.ReadAll(r.Body)
 		var body struct {
 			Query string `json:"query"`
