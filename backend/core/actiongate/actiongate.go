@@ -45,14 +45,15 @@ import (
 type Kind string
 
 const (
-	KindAlarmAck   Kind = "ALARM_ACK"
-	KindAlarmClear Kind = "ALARM_CLEAR"
+	KindAlarmAck    Kind = "ALARM_ACK"
+	KindAlarmClear  Kind = "ALARM_CLEAR"
+	KindCommandSend Kind = "COMMAND_SEND"
 )
 
-// Kinds is every kind this release can propose.
-var Kinds = []Kind{KindAlarmAck, KindAlarmClear}
+// Kinds is the shared proposal vocabulary. Each owning area restricts its supported kinds.
+var Kinds = []Kind{KindAlarmAck, KindAlarmClear, KindCommandSend}
 
-// Valid reports whether k is a kind this release can propose.
+// Valid reports whether k is a recognized proposal kind.
 func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
 
 // State is a proposal's lifecycle state.

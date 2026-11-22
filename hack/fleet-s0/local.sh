@@ -1,0 +1,332 @@
+#!/usr/bin/env bash
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+# Local-only PostgreSQL and kind probes. Every database/role/cluster is run-specific.
+pg_admin() { psql "$S0_PG_ADMIN" -X -v ON_ERROR_STOP=1 "$@"; }
+pg_fixture() {
+  required FLEET_S0_PG_ADMIN_URL
+  unset PGHOST PGHOSTADDR PGDATABASE PGSERVICE PGSERVICEFILE PGPORT
+  python3 - "$FLEET_S0_PG_ADMIN_URL" <<'PY'
+import urllib.parse,sys
+u=urllib.parse.urlsplit(sys.argv[1])
+assert u.scheme in ("postgres","postgresql") and u.hostname in ("localhost","127.0.0.1","::1"), "Tier K PostgreSQL must be local"
+# libpq parameters can override the host or database named in the URI (hostaddr, host, dbname, service).
+allowed={"sslmode","connect_timeout","application_name"}
+bad=set(urllib.parse.parse_qs(u.query))-allowed
+assert not bad, "unsupported connection parameters: "+",".join(sorted(bad))
+PY
+  local db="fleet_s0_$$_$RANDOM"
+  S0_PG_OWNER="s0_owner_$$_$RANDOM"
+  S0_PG_RUNNER="s0_runner_$$_$RANDOM"
+  S0_PG_PASS="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
+  psql "$FLEET_S0_PG_ADMIN_URL" -X -v ON_ERROR_STOP=1 -v db="$db" <<'SQL'
+CREATE DATABASE :"db";
+SQL
+  # Ownership starts only after the CREATE succeeded: a name that already existed is never dropped.
+  S0_PG_DB="$db"
+  S0_PG_ADMIN="$(python3 - "$FLEET_S0_PG_ADMIN_URL" "$S0_PG_DB" <<'PY'
+import urllib.parse,sys
+u=urllib.parse.urlsplit(sys.argv[1])
+print(urllib.parse.urlunsplit(u._replace(path="/"+sys.argv[2])))
+PY
+)"
+  pg_admin -v owner="$S0_PG_OWNER" -v runner="$S0_PG_RUNNER" -v password="$S0_PG_PASS" <<'SQL'
+CREATE ROLE :"owner" NOLOGIN;
+CREATE ROLE :"runner" LOGIN INHERIT PASSWORD :'password';
+GRANT :"owner" TO :"runner";
+CREATE SCHEMA s0 AUTHORIZATION :"owner";
+CREATE SEQUENCE public.global_states_id_seq AS bigint;
+GRANT USAGE ON SCHEMA public TO :"owner";
+GRANT USAGE, SELECT ON SEQUENCE public.global_states_id_seq TO :"owner";
+SET ROLE :"owner";
+CREATE TABLE s0.states (
+  id bigint NOT NULL DEFAULT nextval('public.global_states_id_seq') PRIMARY KEY,
+  name text UNIQUE,
+  data text
+);
+CREATE UNIQUE INDEX states_by_name ON s0.states (name);
+RESET ROLE;
+CREATE SCHEMA other;
+CREATE TABLE other.secret (value text);
+INSERT INTO other.secret VALUES ('negative control');
+REVOKE ALL ON SCHEMA other FROM PUBLIC;
+REVOKE ALL ON other.secret FROM PUBLIC;
+SQL
+  S0_PG_ROLES_OWNED=true
+  export PG_CONN_STR
+  PG_CONN_STR="$(python3 - "$S0_PG_ADMIN" "$S0_PG_RUNNER" "$S0_PG_PASS" <<'PY'
+import urllib.parse,sys
+u=urllib.parse.urlsplit(sys.argv[1])
+host=u.hostname
+if ":" in host: host="["+host+"]"
+if u.port: host+=":"+str(u.port)
+print(urllib.parse.urlunsplit(u._replace(netloc=sys.argv[2]+":"+sys.argv[3]+"@"+host,
+query=urllib.parse.urlencode(dict(urllib.parse.parse_qsl(u.query),application_name="fleet-s0")))))
+PY
+)"
+  export PG_SCHEMA_NAME=s0 PG_SKIP_SCHEMA_CREATION=true PG_SKIP_TABLE_CREATION=true PG_SKIP_INDEX_CREATION=true
+  mkdir "$S0_OUT/pg"
+  cat >"$S0_OUT/pg/main.tf" <<'HCL'
+terraform {
+  required_version = "= 1.10.10"
+  backend "pg" {
+    skip_schema_creation = true
+    skip_table_creation  = true
+    skip_index_creation  = true
+  }
+}
+variable "pause" {
+  default = false
+}
+resource "terraform_data" "probe" {
+  triggers_replace = [var.pause]
+  provisioner "local-exec" {
+    command = var.pause ? "touch started; while [ ! -f release ]; do sleep 1; done" : "true"
+  }
+}
+resource "terraform_data" "after" {
+  triggers_replace = [var.pause]
+  depends_on = [terraform_data.probe]
+  provisioner "local-exec" {
+    command = "echo provider-called > after"
+  }
+}
+HCL
+  tofu -chdir="$S0_OUT/pg" init -input=false
+}
+pg_cleanup() {
+  # Only objects this run created are ever dropped (see pg_fixture: the flags are set after each CREATE succeeded).
+  [[ -n ${S0_PG_DB:-} ]] || return 0
+  psql "$FLEET_S0_PG_ADMIN_URL" -X -v ON_ERROR_STOP=1 -v db="$S0_PG_DB" <<'SQL'
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=:'db' AND pid<>pg_backend_pid();
+DROP DATABASE :"db";
+SQL
+  [[ ${S0_PG_ROLES_OWNED:-} == true ]] || return 0
+  psql "$FLEET_S0_PG_ADMIN_URL" -X -v ON_ERROR_STOP=1 -v owner="$S0_PG_OWNER" -v runner="$S0_PG_RUNNER" <<'SQL'
+DROP ROLE :"runner";
+DROP ROLE :"owner";
+SQL
+}
+pg_drop_sessions() {
+  S0_PG_TERMINATED="$(pg_admin -At -v runner="$S0_PG_RUNNER" <<'SQL'
+SELECT count(*) FROM (
+  SELECT pg_terminate_backend(pid) AS stopped FROM pg_stat_activity
+  WHERE usename=:'runner' AND pid<>pg_backend_pid()
+) sessions WHERE stopped;
+SQL
+)"
+  [[ $S0_PG_TERMINATED =~ ^[0-9]+$ ]] && (( S0_PG_TERMINATED > 0 )) || die "no PostgreSQL session was terminated"
+  [[ $(pg_admin -At -v runner="$S0_PG_RUNNER" <<'SQL'
+SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a USING (pid)
+WHERE a.usename=:'runner' AND l.locktype='advisory' AND l.granted;
+SQL
+) == 0 ]] || die "advisory lock survived session termination"
+}
+pg_hash() { pg_admin -At -c "SELECT coalesce(md5(data),'empty') FROM s0.states WHERE name='default'"; }
+pg_live() {
+  rm -f "$S0_OUT/pg/started" "$S0_OUT/pg/release" "$S0_OUT/pg/after"
+  tofu -chdir="$S0_OUT/pg" apply -input=false -auto-approve -var=pause=true >"$S0_OUT/pg-live.log" 2>&1 &
+  S0_WRITER_PID=$!
+  wait_file "$S0_OUT/pg/started" "$S0_WRITER_PID"
+  S0_PG_LOCKS_BEFORE="$(pg_admin -At -v runner="$S0_PG_RUNNER" <<'SQL'
+SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a USING (pid)
+WHERE a.usename=:'runner' AND l.locktype='advisory' AND l.granted;
+SQL
+)"
+  [[ $S0_PG_LOCKS_BEFORE =~ ^[0-9]+$ ]] && (( S0_PG_LOCKS_BEFORE > 0 )) || die "writer had no advisory lock at checkpoint"
+}
+probe_g_pg() {
+  pg_fixture
+  tofu -chdir="$S0_OUT/pg" apply -input=false -auto-approve
+  local before after rc=0 called=false survived=false
+  pg_live
+  before="$(pg_hash)"
+  pg_drop_sessions
+  if kill -0 "$S0_WRITER_PID" 2>/dev/null; then survived=true; fi
+  touch "$S0_OUT/pg/release"
+  wait "$S0_WRITER_PID" || rc=$?
+  S0_WRITER_PID=
+  after="$(pg_hash)"
+  [[ ! -f $S0_OUT/pg/after ]] || called=true
+  # Independent reconnect control uses the same unrevoked per-run credential.
+  [[ $(psql "$PG_CONN_STR" -X -At -v ON_ERROR_STOP=1 -c 'SELECT 1') == 1 ]] || die "reconnect control failed"
+  # The spec's expectation (section 2.2 exit gate): the process survives the session drop and can write state
+  # afterwards. A different observation is recorded, but it is not this premise, so it is INCONCLUSIVE.
+  local verdict=INCONCLUSIVE
+  [[ $survived == true && $rc == 0 && $called == true && $before != "$after" ]] && verdict=HOLDS
+  result E-g-pg "$verdict" '["tofu"]' "{\"process_survived_session_drop\":$survived,\"exit_code\":$rc,\"provider_called_after_drop\":$called,\"state_before\":\"$before\",\"state_after\":\"$after\",\"credential_can_reconnect\":true,\"state_changed\":$([[ $before != "$after" ]] && echo true || echo false),\"expectation\":\"the process can write state after its session dropped\"}"
+}
+encryption_fixture() {
+  mkdir -p "$S0_OUT/encryption/tests"
+  cat >"$S0_OUT/encryption/encryption.tf" <<'HCL'
+terraform {
+  encryption {
+    state {
+      enforced = true
+    }
+    plan {
+      enforced = true
+    }
+  }
+}
+HCL
+  cat >"$S0_OUT/encryption/main.tf" <<'HCL'
+terraform {
+  required_version = "= 1.10.10"
+}
+resource "terraform_data" "probe" {
+  input = "local encryption probe"
+}
+HCL
+  cat >"$S0_OUT/encryption/tests/probe.tftest.hcl" <<'HCL'
+run "probe" {
+  command = plan
+}
+HCL
+  export TF_ENCRYPTION
+  TF_ENCRYPTION='key_provider "pbkdf2" "s0" {
+  passphrase = "fleet-s0-ephemeral-local-test-passphrase"
+}
+method "aes_gcm" "s0" {
+  keys = key_provider.pbkdf2.s0
+}
+state {
+  method = method.aes_gcm.s0
+}
+plan {
+  method = method.aes_gcm.s0
+}'
+}
+expect_encryption_failure() {
+  local rc=0
+  env -u TF_ENCRYPTION "$@" >"$S0_OUT/no-key.log" 2>&1 || rc=$?
+  [[ $rc != 0 ]] || die "missing encryption key was accepted"
+  grep -qi 'encryption.tf\|encrypt\|decrypt\|key.provider' "$S0_OUT/no-key.log" || die "no-key command failed for an unrelated reason"
+}
+offline_google() {
+  local dir="$S0_OUT/offline"
+  mkdir "$dir"
+  python3 - "$dir" "$FLEET_S0_PROVIDER_VERSION" <<'PY'
+import json,pathlib,re,sys
+d=pathlib.Path(sys.argv[1]); v=sys.argv[2]
+assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+",v)
+(d/"main.tf.json").write_text(json.dumps({
+"terraform":{"required_version":"= 1.10.10","required_providers":{"google":{"source":"hashicorp/google","version":"= "+v}}},
+"provider":{"google":{"project":"s0-sanitized","region":"us-central1","access_token":"dummy-offline-token"}},
+"resource":{"google_compute_network":{"probe":{"name":"s0-sanitized","project":"s0-sanitized","auto_create_subnetworks":False}}}}))
+(d/"terraform.tfstate").write_text(json.dumps({"version":4,"terraform_version":"1.10.10",
+"serial":1,"lineage":"00000000-0000-0000-0000-000000000001","outputs":{},"resources":[{
+"mode":"managed","type":"google_compute_network","name":"probe",
+"provider":'provider["registry.opentofu.org/hashicorp/google"]',"instances":[{
+"schema_version":0,"attributes":{"id":"projects/s0-sanitized/global/networks/s0-sanitized",
+"name":"s0-sanitized","project":"s0-sanitized","auto_create_subnetworks":False,
+"routing_mode":"REGIONAL","mtu":1460,"description":""}}]}]}))
+PY
+  env -u TF_ENCRYPTION tofu -chdir="$dir" init -input=false
+  # A new network namespace enforces the offline condition, rather than trusting -refresh=false.
+  env -u TF_ENCRYPTION unshare --user --map-root-user --net tofu -chdir="$dir" plan -refresh=false -input=false
+}
+probe_j() {
+  encryption_fixture
+  tofu -chdir="$S0_OUT/encryption" init -input=false
+  tofu -chdir="$S0_OUT/encryption" apply -auto-approve -input=false
+  tofu -chdir="$S0_OUT/encryption" plan -input=false -out=saved.plan
+  expect_encryption_failure tofu -chdir="$S0_OUT/encryption" plan -input=false
+  expect_encryption_failure tofu -chdir="$S0_OUT/encryption" show -json saved.plan
+  result E-j-1 HOLDS '["tofu"]' '{"state_no_key_refused":true,"saved_plan_no_key_refused":true,"keyed_apply_and_plan":true}'
+  # E-j(4) is judged where CI judges a fleet root: a clean checkout with no state file. A directory
+  # that already holds an encrypted local state makes `init` read it (measured below, kept apart).
+  local command rc key clean="$S0_OUT/encryption-clean" verdict=HOLDS
+  mkdir -p "$clean/tests"
+  cp "$S0_OUT/encryption/encryption.tf" "$S0_OUT/encryption/main.tf" "$clean/"
+  cp "$S0_OUT/encryption/tests/probe.tftest.hcl" "$clean/tests/"
+  : >"$S0_OUT/init-validate-test.jsonl"
+  for key in present absent; do
+    for command in init validate test plan; do
+      rc=0
+      local args=("$command")
+      [[ $command != init ]] || args=(init -backend=false -input=false)
+      [[ $command != plan ]] || args=(plan -input=false)
+      if [[ $key == present ]]; then
+        tofu -chdir="$clean" "${args[@]}" >"$S0_OUT/clean-$key-$command.log" 2>&1 || rc=$?
+      else
+        env -u TF_ENCRYPTION tofu -chdir="$clean" "${args[@]}" >"$S0_OUT/clean-$key-$command.log" 2>&1 || rc=$?
+      fi
+      printf '{"key":"%s","command":"%s","exit_code":%s}
+' "$key" "$command" "$rc" >>"$S0_OUT/init-validate-test.jsonl"
+      # Expected: everything but a keyless plan succeeds; the keyless plan is refused naming the encryption config.
+      if [[ $key == absent && $command == plan ]]; then
+        [[ $rc != 0 ]] && grep -q 'encryption.tf' "$S0_OUT/clean-$key-$command.log" || verdict=FAILS
+      else
+        [[ $rc == 0 ]] || verdict=FAILS
+      fi
+    done
+  done
+  rc=0
+  tofu -chdir="$S0_OUT/encryption" init -backend=false -input=false >"$S0_OUT/stateful-init.log" 2>&1 || rc=$?
+  S0_STATEFUL_INIT_RC=$rc
+  result E-j-4 "$verdict" '["tofu"]' "$(python3 - "$S0_OUT/init-validate-test.jsonl" "$S0_STATEFUL_INIT_RC" "$S0_OUT/clean-absent-plan.log" <<'PY'
+import json,re,sys
+msg=[l for l in open(sys.argv[3]).read().splitlines() if "encryption.tf" in l]
+print(json.dumps(dict(clean_directory=[json.loads(x) for x in open(sys.argv[1])],
+keyless_plan_names_encryption_tf=bool(msg),
+init_backend_false_with_existing_encrypted_state_exit_code=int(sys.argv[2]))))
+PY
+)"
+  offline_google
+  result E-j-3 HOLDS '["tofu","provider"]' '{"sanitized_local_state":true,"dummy_access_token":true,"refresh":false,"network_namespace":"no interfaces"}'
+  unset TF_ENCRYPTION
+  pg_fixture
+  tofu -chdir="$S0_OUT/pg" plan -input=false -out=pg.plan
+  tofu -chdir="$S0_OUT/pg" apply -input=false pg.plan
+  local code=0 before after
+  psql "$PG_CONN_STR" -X -v ON_ERROR_STOP=1 -c 'SELECT * FROM other.secret' >"$S0_OUT/cross-schema.log" 2>&1 || code=$?
+  [[ $code != 0 ]] && grep -qi 'permission denied' "$S0_OUT/cross-schema.log" || die "other-schema read was not refused"
+  [[ $(pg_admin -At -v runner="$S0_PG_RUNNER" <<'SQL'
+SELECT count(*) FROM pg_class WHERE relowner=(SELECT oid FROM pg_roles WHERE rolname=:'runner');
+SQL
+) == 0 ]] || die "per-run role owns objects"
+  # Control (PostgreSQL 16: INHERIT is a property of the GRANT, so ALTER ROLE ... NOINHERIT does not change an existing grant): the same membership granted WITH INHERIT FALSE is refused, so it is the inherited provider role that authorizes the apply.
+  pg_admin -v runner="$S0_PG_RUNNER" -v owner="$S0_PG_OWNER" <<'SQL'
+REVOKE :"owner" FROM :"runner";
+GRANT :"owner" TO :"runner" WITH INHERIT FALSE;
+SQL
+  code=0
+  tofu -chdir="$S0_OUT/pg" plan -input=false >"$S0_OUT/noinherit.log" 2>&1 || code=$?
+  pg_admin -v runner="$S0_PG_RUNNER" -v owner="$S0_PG_OWNER" <<'SQL'
+REVOKE :"owner" FROM :"runner";
+GRANT :"owner" TO :"runner" WITH INHERIT TRUE;
+SQL
+  [[ $code != 0 ]] && grep -qi 'permission denied' "$S0_OUT/noinherit.log" || die "NOINHERIT control: the role still worked without inheriting"
+  local pgver
+  pgver="$(pg_admin -At -c 'SHOW server_version')"
+  result E-j-2 HOLDS '["tofu"]' "{\"precreated_schema_tables_indexes\":true,\"all_skip_creation\":true,\"inherited_provider_role_apply\":true,\"cross_schema_read_refused\":true,\"noinherit_control_refused\":true,\"pg_server_version\":\"$pgver\",\"runner_owned_objects\":0}"
+  pg_live
+  before="$(pg_hash)"
+  pg_admin -v runner="$S0_PG_RUNNER" <<'SQL'
+ALTER ROLE :"runner" NOLOGIN;
+SQL
+  pg_drop_sessions
+  [[ $(pg_admin -At -v runner="$S0_PG_RUNNER" <<'SQL'
+SELECT count(*) FROM pg_stat_activity WHERE usename=:'runner';
+SQL
+) == 0 ]] || die "cut left a session alive"
+  kill -0 "$S0_WRITER_PID" || die "process was already dead at cut"
+  code=0
+  psql "$PG_CONN_STR" -X -v ON_ERROR_STOP=1 -c 'SELECT 1' >"$S0_OUT/reconnect.log" 2>&1 || code=$?
+  [[ $code != 0 ]] && grep -qi 'not permitted to log in' "$S0_OUT/reconnect.log" || die "NOLOGIN did not refuse reconnect"
+  touch "$S0_OUT/pg/release"
+  code=0
+  wait "$S0_WRITER_PID" || code=$?
+  S0_WRITER_PID=
+  [[ $code != 0 ]] || die "revoked live tofu writer succeeded"
+  after="$(pg_hash)"
+  [[ $before == "$after" ]] || die "revoked live tofu writer changed state"
+  local called=false persist=false unlock=false errored=false
+  [[ ! -f $S0_OUT/pg/after ]] || called=true
+  ! grep -q 'Failed to persist state to backend' "$S0_OUT/pg-live.log" || persist=true
+  ! grep -q 'Error releasing the state lock' "$S0_OUT/pg-live.log" || unlock=true
+  [[ ! -f $S0_OUT/pg/errored.tfstate ]] || errored=true
+  [[ $persist == true ]] || die "revoked writer did not fail at the state write"
+  result E-j-5 HOLDS '["tofu"]' "{\"nologin\":true,\"sessions_after_termination\":0,\"reconnect_refused\":true,\"live_writer_failed\":true,\"state_unchanged\":true,\"provider_call_completed_after_cut\":$called,\"failed_to_persist_state\":$persist,\"lock_release_errored\":$unlock,\"errored_tfstate_written_locally\":$errored}"
+}

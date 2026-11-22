@@ -23,6 +23,7 @@ backend/cli/bootstrap/destroy_name_test.go
 backend/cli/bootstrap/diskbudget_test.go
 backend/cli/bootstrap/escrow.go
 backend/cli/bootstrap/escrow_test.go
+backend/cli/bootstrap/executor_apiserver_test.go
 backend/cli/bootstrap/fence_test.go
 backend/cli/bootstrap/install_test.go
 backend/cli/bootstrap/instances.go
@@ -83,12 +84,18 @@ backend/core/test/storagegrowth_repo_test.go
 backend/core/webhooksig/keys.go
 backend/edge/dc-edge-agent/agent/dashboard_test.go
 backend/edge/dc-edge-agent/agent/gateway_test.go
+backend/k8s/api/v1beta1/executor_crd_test.go
+backend/k8s/api/v1beta1/executor_schema_test.go
 backend/k8s/api/v1beta1/instance_crd_test.go
+backend/k8s/config/executor_security_test.go
+backend/k8s/controllers/executor_test.go
 backend/k8s/controllers/instance_cel_test.go
 backend/k8s/controllers/instance_status_test.go
 backend/k8s/controllers/snapshotretention_helm_test.go
 backend/k8s/controllers/snapshotretention_test.go
 backend/k8s/controllers/suite_test.go
+backend/k8s/executor/foundation_execution_test.go
+backend/k8s/executor/foundation_test.go
 backend/k8s/functionalarea/release_contract_test.go
 backend/k8s/functionalarea/release_images_contract_test.go
 backend/services/ai-inference/inference/documents_test.go
@@ -193,6 +200,9 @@ backend/tools/redlines/deps.go
 backend/tools/redlines/deps_test.go
 backend/tools/vocabgen/vocabgen_test.go
 deploy/assets.go
+deploy/fleet_premises_test.go
+deploy/plan_fixtures_test.go
+deploy/tofu_roots_test.go
 examples/ota-device/internal/device/device_test.go
 examples/ota-device/internal/testutil/testutil.go
 examples/ota-device/internal/verify/verify_test.go

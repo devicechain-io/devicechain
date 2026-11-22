@@ -204,6 +204,18 @@ On Windows neither suite is built: envtest does not compile there at the pinned 
 so `apiserver_render_test.go` carries `//go:build !windows` (the rest of `bootstrap` still builds,
 and CI's `go vet (windows)` step keeps it that way), and `backend/k8s/controllers` does not build.
 
+🔴 **`backend/fleet`'s real-Postgres tests are behind the build tag `fleetpg` and need `DC_FLEET_PG_DSN`.**
+The fleet schema and its writer-exclusion protocol are row locks, triggers, partial indexes and roles,
+which SQLite cannot test. Point the variable at any throwaway Postgres superuser URL and run the tagged
+suite; under the tag a missing or unreachable DSN **fails** the test, it never skips. Without the tag the
+files are not compiled, so the sweep below is unaffected. CI runs it inside `hack/migration-diff.sh verify`
+on both supported Postgres majors and requires a non-zero count of passed `TestFleetPG*` tests
+(`hack/check-fleetpg-count.sh`), so a mistyped tag cannot go green over nothing:
+
+```bash
+cd backend/fleet && DC_FLEET_PG_DSN='postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable'   go test -tags fleetpg -count=1 ./...
+```
+
 Full sweep before committing — the workspace enumerates its own modules, so this needs no list to
 keep in step with `go.work`. **Save it to a file and run it; do not paste it into your shell** (it
 ends in `exit`). The details below are load-bearing, and they are the same trap in different

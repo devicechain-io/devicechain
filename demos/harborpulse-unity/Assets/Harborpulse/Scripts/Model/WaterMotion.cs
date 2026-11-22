@@ -12,6 +12,23 @@ namespace DeviceChain.Harborpulse.Model
         // The attached well clears North Quay lamp 2; the pump's PresentationMap anchor stays fixed.
         public const double LocalX = 13, LocalZ = 6, RadiusM = 2.45;
         public WellFootprint(Ground pump) { Center = new Ground(pump.X + LocalX, pump.Z + LocalZ); }
+
+        /// <summary>A camera frames a well when the well is within this distance and this far off the camera's axis, in degrees.</summary>
+        public const double TagRangeM = 24, TagHalfAngleDeg = 20;
+
+        /// <summary>
+        /// Whether the well's level tags are drawn: only for a camera that frames the well. The tags are text, which the font's own material
+        /// draws over whatever stands in front, and they sit below the deck inside the cut-away; from a camera that merely stood beside a well
+        /// (a lamp shot, a gauge shot) they showed through the quay at the frame's edge. <paramref name="dx"/>.. is the well's centre at deck
+        /// level less the camera's position, <paramref name="fx"/>.. the camera's unit forward.
+        /// </summary>
+        public static bool TagsInView(double dx, double dy, double dz, double fx, double fy, double fz)
+        {
+            var d = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            if (d > TagRangeM) return false;
+            if (d < 1e-6) return true;
+            return (dx * fx + dy * fy + dz * fz) / d >= Math.Cos(TagHalfAngleDeg * Math.PI / 180);
+        }
         public Ground Center { get; }
         public bool Contains(Ground point) => (point.X - Center.X) * (point.X - Center.X) + (point.Z - Center.Z) * (point.Z - Center.Z) < RadiusM * RadiusM;
     }

@@ -61,10 +61,10 @@ namespace DeviceChain.Harborpulse.Model
                 V(-cw + .15f, roof, rr), V(cw - .15f, roof, rr), V(cw - .15f, roof, rf), V(-cw + .15f, roof, rf) };
             p.Hex(NearTone.Paint, cabin);
             var mid = V(0, (bt + roof) / 2, s.CabinZ);
-            p.Pane(NearTone.Glass, cabin[3], cabin[2], cabin[6], cabin[7], mid, .13f, .012f);   // windscreen
-            p.Pane(NearTone.Glass, cabin[0], cabin[1], cabin[5], cabin[4], mid, .15f, .012f);   // rear window
-            p.Pane(NearTone.Glass, cabin[0], cabin[3], cabin[7], cabin[4], mid, .11f, .012f);   // left side
-            p.Pane(NearTone.Glass, cabin[1], cabin[2], cabin[6], cabin[5], mid, .11f, .012f);   // right side
+            p.Glazed(cabin[3], cabin[2], cabin[6], cabin[7], mid, .13f, .012f);   // windscreen
+            p.Glazed(cabin[0], cabin[1], cabin[5], cabin[4], mid, .15f, .012f);   // rear window
+            p.Glazed(cabin[0], cabin[3], cabin[7], cabin[4], mid, .11f, .012f);   // left side
+            p.Glazed(cabin[1], cabin[2], cabin[6], cabin[5], mid, .11f, .012f);   // right side
             // bumpers, lamps, grille and plates
             p.Box(NearTone.Black, 0, bb + .2f, f * (bl - .02f), s.BodyW - .08f, .22f, .13f).Box(NearTone.Black, 0, bb + .2f, -f * (bl - .02f), s.BodyW - .08f, .22f, .13f);
             p.Box(NearTone.Black, 0, bt - .3f, f * (bl + .012f), .95f, .16f, .03f).Box(NearTone.Metal, 0, bt - .3f, f * (bl + .03f), .9f, .02f, .02f)
@@ -150,10 +150,11 @@ namespace DeviceChain.Harborpulse.Model
                 V(-hw + .1f, roof, zr + .04f), V(hw - .1f, roof, zr + .04f), V(hw - .1f, roof, zf - .44f), V(-hw + .1f, roof, zf - .44f) };
             p.Hex(NearTone.Paint, house);
             var mid = V(0, (belt + roof) / 2, (zr + zf) / 2);
-            p.Pane(NearTone.Glass, house[3], house[2], house[6], house[7], mid, .09f, .012f);   // windscreen
-            p.Pane(NearTone.Glass, house[0], house[1], house[5], house[4], mid, .32f, .012f);   // rear window
-            p.Pane(NearTone.Glass, house[0], house[3], house[7], house[4], mid, .15f, .012f);   // left side
-            p.Pane(NearTone.Glass, house[1], house[2], house[6], house[5], mid, .15f, .012f);   // right side
+            p.Glazed(house[3], house[2], house[6], house[7], mid, .09f, .012f);   // windscreen
+            p.Glazed(house[0], house[1], house[5], house[4], mid, .32f, .012f);   // rear window
+            p.Glazed(house[0], house[3], house[7], house[4], mid, .15f, .012f);   // left side
+            p.Glazed(house[1], house[2], house[6], house[5], mid, .15f, .012f);   // right side
+
             // wipers lie on the screen, which leans back 0.41 m over its 0.98 m of height
             float Screen(float y) => zf - .03f - (y - belt) * .418f + .03f;
             p.Beam(NearTone.Black, -.12f, belt + .1f, Screen(belt + .1f), -.72f, belt + .52f, Screen(belt + .52f), .03f);
