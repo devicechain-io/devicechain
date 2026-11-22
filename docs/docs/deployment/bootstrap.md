@@ -1002,6 +1002,21 @@ before anything is running under it.
 `http://localhost/`, with no hosts-file entry and no certificate warning.
 :::
 
+
+:::tip A second local instance by hostname
+`localhost` serves one instance. To run another beside it, give each its own name under
+`localtest.me`, a public domain whose every name resolves to `127.0.0.1`, so it needs no
+hosts-file entry either:
+
+```bash
+dcctl bootstrap local alpha --host alpha.localtest.me --no-tls
+dcctl bootstrap local beta --host beta.localtest.me --no-tls
+```
+
+The consoles are then at `http://alpha.localtest.me/` and `http://beta.localtest.me/`. The name
+must resolve through DNS, so it needs network access; offline, use a `*.localhost` name instead.
+:::
+
 ### `--ha` {#ha}
 
 `--ha` is chosen at install, and every instance on the cluster follows it. Each instance runs
