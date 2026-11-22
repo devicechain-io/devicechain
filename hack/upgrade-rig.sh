@@ -3260,6 +3260,18 @@ attrlock_hold() {
   attrlock_pids+=("$!")
 }
 
+# attrlock_diagnose prints what the database holds when a write was expected to wait and did not: the advisory
+# locks and who holds them, the devices that share the seeded token, and the write's own output.
+attrlock_diagnose() {
+  local pod="$1" id="$2" tenant="$3"
+  {
+    echo "device id used: $id (tenant $tenant)"
+    kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- psql -U postgres -d "$rdb_db" -At       -c "SELECT 'advisory', pid, granted, mode, objid FROM pg_locks WHERE locktype = 'advisory'"       -c "SELECT 'device', id, tenant_id, token FROM \"device-management\".devices WHERE token = 'apiprobe-device'" 2>&1
+    echo "--- the write's output:"
+    cat "$work/attrlock-wait.log" 2>&1
+  } >&2
+}
+
 cmd_attrlock() {
   need kubectl
   need jq
@@ -3328,6 +3340,7 @@ $(cat "$work/attrlock-new.log")"
   sleep 3
   waiters="$(attrlock_psql "$pod" "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted")"
   rc=1; kill -0 "$p_new" 2>/dev/null && rc=0
+  attrlock_waiting "$waiters" "$((1 - rc))" || attrlock_diagnose "$pod" "$dev_id" "$tenant"
   attrlock_waiting "$waiters" "$((1 - rc))" || fail "NO WRITE WAS WAITING ON THE DEVICE LOCK while it was held (advisory waiters: $waiters, write still running: $((1 - rc))).
 The upgraded pods' attribute protocol did not take the lock, so it is not in force."
   rc=0; wait "$p_new" || rc=$?
