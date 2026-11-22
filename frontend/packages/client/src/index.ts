@@ -25,6 +25,17 @@ export {
   type TypedDocument,
 } from './transport';
 
+// Schema-skew negotiation: opt-in checks of each authenticated operation against the schema the
+// connected instance serves, refusing (never rewriting) what it cannot serve.
+export {
+  enableSchemaNegotiation,
+  disableSchemaNegotiation,
+  resetSchemaNegotiation,
+  isSchemaSkewError,
+  SchemaSkewError,
+  type SchemaSkewKind,
+} from './skew';
+
 export { isForbiddenError, isScopeUnsupportedError, isStaleWrite, errorCode } from './errors';
 
 // The client half of the basemap cascade (ADR-079). Lives in the SDK because the

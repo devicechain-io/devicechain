@@ -1,0 +1,15 @@
+---
+section: whats-new
+---
+
+## en
+
+- **The console and `@devicechain/client` refuse requests an instance cannot serve.** A console built for a newer release, pointed at an older instance, used to send requests the instance did not understand and fail with an opaque error. The console now asks each GraphQL endpoint for the schema it serves, using an authenticated `OPTIONS` request, and checks every request against it before sending. A request that uses a field or input the instance lacks is refused, nothing is sent, and the error names what is missing and the release needed. Nothing is trimmed or rewritten. An instance older than v1.9.0 does not offer this discovery, so its release cannot be confirmed: the console refuses with an error naming v1.9.0 and does not guess. Served by its own instance, the console is unaffected. Sign-in and token refresh are not checked, and neither are live subscriptions. For your own application, `@devicechain/client` adds `enableSchemaNegotiation`, `disableSchemaNegotiation`, `resetSchemaNegotiation`, `SchemaSkewError` and `isSchemaSkewError`; it is off unless you enable it, and it needs the `graphql` peer package you already install. The `/dash` viewer app does not enable it yet.
+
+## es
+
+- **La consola y `@devicechain/client` rechazan las solicitudes que una instancia no puede atender.** Una consola creada para una versión más reciente y conectada a una instancia más antigua enviaba solicitudes que la instancia no entendía y fallaba con un error poco claro. Ahora la consola pide a cada endpoint GraphQL el esquema que sirve, mediante una solicitud `OPTIONS` autenticada, y comprueba cada solicitud con él antes de enviarla. Una solicitud que usa un campo o una entrada que la instancia no tiene se rechaza, no se envía nada y el error indica qué falta y qué versión se necesita. No se recorta ni se reescribe nada. Una instancia anterior a v1.9.0 no ofrece este descubrimiento, por lo que no se puede confirmar su versión: la consola rechaza la solicitud con un error que menciona v1.9.0 y no adivina. Cuando la sirve su propia instancia, la consola no se ve afectada. No se comprueban el inicio de sesión ni la renovación de tokens, ni las suscripciones en vivo. Para su propia aplicación, `@devicechain/client` añade `enableSchemaNegotiation`, `disableSchemaNegotiation`, `resetSchemaNegotiation`, `SchemaSkewError` e `isSchemaSkewError`; está desactivado salvo que lo habilite y requiere el paquete par `graphql` que ya instala. La aplicación de visualización `/dash` todavía no lo habilita.
+
+## zh-CN
+
+- **控制台和 `@devicechain/client` 会拒绝实例无法处理的请求。** 为较新版本构建的控制台连接到较旧的实例时，过去会发送实例无法理解的请求，并以难以理解的错误失败。现在控制台通过经过身份验证的 `OPTIONS` 请求，向每个 GraphQL 端点获取其提供的 schema，并在发送前用它检查每个请求。使用了实例所没有的字段或输入的请求会被拒绝，不会发送任何内容，错误信息会指出缺少什么以及需要哪个版本。不会裁剪或改写任何内容。早于 v1.9.0 的实例不提供这种发现，因此无法确认其版本：控制台会拒绝请求，并给出提到 v1.9.0 的错误，而不会猜测。由其自身实例提供服务的控制台不受影响。登录、令牌刷新以及实时订阅不做检查。对于您自己的应用，`@devicechain/client` 新增了 `enableSchemaNegotiation`、`disableSchemaNegotiation`、`resetSchemaNegotiation`、`SchemaSkewError` 和 `isSchemaSkewError`；除非您启用，否则默认关闭，并且需要您已安装的 `graphql` 对等依赖包。`/dash` 查看器应用暂未启用该功能。
