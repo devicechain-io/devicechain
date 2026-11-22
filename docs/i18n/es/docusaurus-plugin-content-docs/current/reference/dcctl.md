@@ -263,6 +263,14 @@ Freeze writers before export. This does not coordinate database recovery cutoffs
 dcctl backup <instance> --destination <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl backup acme --destination ./acme-backup
+  dcctl backup acme --destination ./acme-backup --kube-context prod
+  dcctl backup acme --destination ./acme-backup --blob-directory /mnt/acme-blobs
+```
+
 ### Options
 
 ```
@@ -292,6 +300,12 @@ it does not establish inventory completeness or checkpoint consistency.
 dcctl backup inspect <backup-set-dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl backup inspect ./acme-backup --verify
+```
+
 ### Options
 
 ```
@@ -313,6 +327,21 @@ Provisions a usable DeviceChain instance on the given provider (e.g. "local")
 
 ```
 dcctl bootstrap <provider> <instance> [flags]
+```
+
+### Examples
+
+```
+  # a local kind cluster prepared with "dcctl install local"
+  dcctl bootstrap local my-instance
+  # an existing cluster (any cloud) prepared with "dcctl install local --kube-context prod"
+  dcctl bootstrap local prod --kube-context prod --host iot.example.com
+  # see what would happen first
+  dcctl bootstrap local my-instance --dry-run
+  # deploy a functional area on top of the profile
+  dcctl bootstrap local my-instance --enable-area outbound-connectors
+  # the local-developer preset
+  dcctl bootstrap local scratch --dev
 ```
 
 ### Options
@@ -783,6 +812,17 @@ Use --all to destroy every instance on this machine.
 dcctl destroy <provider> <instance> [flags]
 ```
 
+### Examples
+
+```
+  dcctl destroy local my-instance
+  # see what would be removed first
+  dcctl destroy local my-instance --dry-run
+  # keep the event-store backups, to rebuild the instance from them
+  dcctl destroy local my-instance --keep-backups --yes
+  dcctl destroy --all --yes
+```
+
 ### Options
 
 ```
@@ -934,15 +974,20 @@ There is no command that disables an area. An enabled area may hold data, and
 taking it out of the deployment would leave that data with nothing serving it.
 
 ```
+dcctl enable-area <provider> <instance> <area> [<area>...] [flags]
+```
+
+### Examples
+
+```
   # Add the outbound connectors area to an instance
   dcctl enable-area local devicechain outbound-connectors
 
   # Add two areas at once, and see what would happen first
   dcctl enable-area local devicechain outbound-connectors mcp --dry-run
-```
 
-```
-dcctl enable-area <provider> <instance> <area> [<area>...] [flags]
+  # name the cluster explicitly; it must be the one recorded at bootstrap
+  dcctl enable-area local prod update-management --kube-context prod
 ```
 
 ### Options
@@ -1442,6 +1487,18 @@ the cluster, with one exception: the connection budget may be raised.
 
 ```
 dcctl install <provider> [flags]
+```
+
+### Examples
+
+```
+  # a local kind cluster named "devicechain"
+  dcctl install local
+  # a small-footprint cluster, for a laptop
+  dcctl install local --compact
+  # an existing cluster (any cloud): dcctl never creates or deletes it
+  dcctl install local --kube-context prod
+  dcctl install local --kube-context prod --ha --dry-run
 ```
 
 ### Options
@@ -2298,6 +2355,14 @@ Freeze target writers while planning; this is an observation, not a reservation 
 dcctl restore <instance> --from <backup-set> --plan [flags]
 ```
 
+### Examples
+
+```
+  dcctl restore acme --from ./acme-backup --plan
+  dcctl restore acme --from ./acme-backup --plan --kube-context prod
+  dcctl restore acme-copy --from ./acme-backup --plan --force-foreign
+```
+
 ### Options
 
 ```
@@ -3150,6 +3215,15 @@ store), says so when it rises, and warns when the volume has less free space tha
 
 ```
 dcctl upgrade <provider> <instance> [flags]
+```
+
+### Examples
+
+```
+  dcctl upgrade local my-instance --dry-run
+  dcctl upgrade local my-instance
+  # name the cluster explicitly; it must be the one recorded at bootstrap
+  dcctl upgrade local prod --kube-context prod
 ```
 
 ### Options
