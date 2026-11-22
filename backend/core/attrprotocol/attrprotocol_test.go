@@ -49,21 +49,31 @@ func TestRegisterPurge(t *testing.T) {
 		calls := []string{}
 		plan := &tenantpurge.Plan{
 			Entries:      []tenantpurge.Entry{{Table: tenantpurge.Table{Schema: Schema, Name: table}}},
-			BeforeDelete: func(*gorm.DB) error { calls = append(calls, "previous"); return nil },
+			BeforeDelete: func(*gorm.DB, string) error { calls = append(calls, "previous"); return nil },
 		}
 		RegisterPurge(plan)
 		if plan.BeforeDelete == nil {
 			t.Fatalf("%s: the plan must be marked", table)
 		}
 		db := openTestDB(t)
-		if err := db.Transaction(func(tx *gorm.DB) error { return plan.BeforeDelete(tx) }); err != nil {
+		if err := db.Transaction(func(tx *gorm.DB) error { return plan.BeforeDelete(tx, "t") }); err != nil {
 			t.Fatalf("%s: %v", table, err)
 		}
 		if len(calls) != 1 {
 			t.Fatalf("%s: the existing hook must still run once, ran %d times", table, len(calls))
 		}
-		if err := plan.BeforeDelete(db); !errors.Is(err, ErrNotInTransaction) {
+		if err := plan.BeforeDelete(db, "t"); !errors.Is(err, ErrNotInTransaction) {
 			t.Fatalf("%s: the purge hook must refuse a root handle: %v", table, err)
 		}
+	}
+}
+
+// A plan that deletes devices (and their configuration children) but neither attribute table
+// still gets the hook: the parent-first lock is what prevents the purge/report cycle.
+func TestRegisterPurgeOnADevicesOnlyPlan(t *testing.T) {
+	plan := &tenantpurge.Plan{Entries: []tenantpurge.Entry{{Table: tenantpurge.Table{Schema: Schema, Name: DevicesTable}}}}
+	RegisterPurge(plan)
+	if plan.BeforeDelete == nil {
+		t.Fatal("a plan that deletes devices must lock them first")
 	}
 }

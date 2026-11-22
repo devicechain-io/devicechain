@@ -57,6 +57,9 @@ already exist where the bundle is applied.
 
 An opt-in area this instance does not serve (outbound connectors) is skipped with a warning
 unless you name it in --kinds.`,
+	Example: `  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>'
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>' --kinds device-types,profiles
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>' --name "Acme product"`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runProductExport,
 	SilenceUsage: true,
@@ -75,6 +78,9 @@ left alone and reported as a note.
 
 Against a tenant that already holds the bundle the plan reports no changes. Use
 --fail-on-changes to make that an exit status, for drift detection in CI.`,
+	Example: `  dcctl product plan ./acme --tenant acme-prod --email you@example.com --password '<password>'
+  # exits non-zero when the tenant has drifted from the bundle, for CI
+  dcctl product plan ./acme --tenant acme-prod --email you@example.com --password '<password>' --fail-on-changes`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runProductPlan,
 	SilenceUsage: true,
@@ -104,6 +110,11 @@ Credentials: a connector's credential is sent only to a connector that has none,
 environment variable its handle names; --rotate-secrets sends it to every connector. A new
 inbound integration gets a server-generated bearer token that this command does not capture;
 run 'dcctl product rotate-integration-token <integration-token>' to issue one.`,
+	Example: `  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>'
+  # converge drafts and stop, without publishing
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>' --no-publish
+  # apply without printing the plan first
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>' --yes`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runProductApply,
 	SilenceUsage: true,
@@ -117,6 +128,8 @@ The old token stops working immediately with no overlap. The new token is shown 
 
 Only the issued token is printed to stdout, followed by a newline, so it can be captured by
 a shell. A warning is written to stderr. This command does not save the token to a file.`,
+	Example: `  dcctl product rotate-integration-token chirpstack-1 --tenant acme --email you@example.com --password '<password>'
+  dcctl product rotate-integration-token chirpstack-1 --tenant acme --email you@example.com --password '<password>' --server dc.example.com --tls`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runProductRotateIntegrationToken,
 	SilenceUsage: true,
