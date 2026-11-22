@@ -60,6 +60,9 @@
 #   hack/upgrade-rig.sh executor  the in-cluster executor is installed as resource
 #                                 definitions only and is inert, shown to fail against
 #                                 a planted InstanceOperation
+#   hack/upgrade-rig.sh attrlock  a BASELINE device-management pod and the upgraded pods write one
+#                                 device's attribute at once, the new pods' lock is in force, and no
+#                                 orphan row or generation head is left; each shown to fail
 #   hack/upgrade-rig.sh all      up, then whichever drill `mode` names
 #   hack/upgrade-rig.sh down      dcctl destroy the instance (with the working tree's
 #                                 dcctl), then delete the cluster, dcctl's local state
@@ -3186,12 +3189,220 @@ $problems"
   say "EXECUTOR INERT — installed as resource definitions only, and the check was shown to fail"
 }
 
+# ---------------------------------------------------------------------------
+# attrlock — a baseline device-management pod writes attributes beside the upgraded ones
+# ---------------------------------------------------------------------------
+#
+# THE CLAIM (the campaign-ledger foundation's roll window): while an instance rolls from the
+# baseline to this release, pods of BOTH versions write device attributes, and the new pods'
+# attribute protocol (a per-device lock and a generation head on every write) must not break the old
+# pods' writes or leave rows behind. So, on the upgraded instance:
+#
+#   1. a pod running the BASELINE's device-management image and a pod running this release's write the
+#      same device's attribute at the same time, and every write on both succeeds;
+#   2. a new pod's write really does WAIT on the device's attribute lock while something holds it, which
+#      is the protocol being in force rather than merely present, and an unrelated device's lock does not
+#      delay it (the negative control);
+#   3. nothing is left over: no attribute row and no generation head names a device that is gone, which
+#      is what the readiness probe counts (dcctl fleet-op readiness, when it exists; the SQL it runs
+#      otherwise), and the same query is shown to count a planted orphan.
+#
+# WHAT THIS DOES NOT COVER, said plainly: it drives attribute WRITES through the old pod, not its device
+# DELETE. The delete-versus-writer window (the old delete order orphans a row, the sweep removes it) needs
+# a controlled interleaving a live cluster cannot give, and is T-del-2 in
+# backend/services/device-management/model/attribute_old_delete_integration_test.go.
+attrlock_port=18461
+attrlock_port_new=18462
+attrlock_pids=()
+
+attrlock_cleanup() {
+  local pid
+  for pid in "${attrlock_pids[@]}"; do
+    kill "$pid" >/dev/null 2>&1 || true
+  done
+  attrlock_pids=()
+  oldpod_cleanup oldpod-device-management
+}
+
+# attrlock_orphan_sql counts the attribute rows and generation heads whose device is gone: the same
+# two predicates CountOrphanedDeviceAttributes (device-management/model/api_attribute_orphans.go) uses.
+attrlock_orphan_sql='SELECT (SELECT count(*) FROM "device-management".entity_attributes a WHERE a.entity_type = '"'"'device'"'"' AND NOT EXISTS (SELECT 1 FROM "device-management".devices d WHERE d.id = a.entity_id)) + (SELECT count(*) FROM "device-management".entity_attribute_generations g WHERE NOT EXISTS (SELECT 1 FROM "device-management".devices d WHERE d.id = g.device_id))'
+
+# attrlock_waiting <advisory waiters> <writer still running 0|1> says whether a write is observed WAITING on
+# the lock: at least one waiter, and the write has not finished. Pure, so the selftest can hand it the states
+# it must tell apart.
+attrlock_waiting() {
+  local waiters="$1" alive="$2"
+  [[ "$waiters" =~ ^[0-9]+$ && "$alive" =~ ^[01]$ ]] || return 2
+  [[ "$waiters" -ge 1 && "$alive" -eq 1 ]]
+}
+
+# attrlock_last_number prints the last line of its input that is only digits. psql prints command tags
+# (BEGIN, INSERT 0 1, ROLLBACK) around a query's result, and the number the caller wants is the result
+# between them. Pure, so the selftest can feed it that shape.
+attrlock_last_number() {
+  grep -E '^[0-9]+$' | tail -n 1
+}
+
+# attrlock_psql <pod> <sql> runs a batch against the platform database, and prints the last number it printed.
+attrlock_psql() {
+  local pod="$1" sql="$2" out
+  out="$(kubectl --context "$kube_context" -n dc-system exec -i "$pod" --     psql -U postgres -d "$rdb_db" -Atq <<<"$sql")" || fail "psql failed on $pod: $sql"
+  attrlock_last_number <<<"$out"
+}
+
+# attrlock_hold <pod> <device id> <seconds> holds the device's attribute lock in an open transaction, in
+# the background, through the ONE SQL definition the platform's own writers call.
+attrlock_hold() {
+  local pod="$1" id="$2" secs="$3"
+  kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- psql -U postgres -d "$rdb_db" -Atq \
+    -c "BEGIN; SELECT \"device-management\".dc_entity_attr_lock('device', $id); SELECT pg_sleep($secs); COMMIT;" \
+    >/dev/null 2>&1 &
+  attrlock_pids+=("$!")
+}
+
+# attrlock_diagnose prints what the database holds when a write was expected to wait and did not: the advisory
+# locks and who holds them, the devices that share the seeded token, and the write's own output.
+attrlock_diagnose() {
+  local pod="$1" id="$2" tenant="$3"
+  {
+    echo "device id used: $id (tenant $tenant)"
+    kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- psql -U postgres -d "$rdb_db" -At       -c "SELECT 'advisory', pid, granted, mode, objid FROM pg_locks WHERE locktype = 'advisory'"       -c "SELECT 'device', id, tenant_id, token FROM \"device-management\".devices WHERE token = 'apiprobe-device'" 2>&1
+    echo "--- the write's output:"
+    cat "$work/attrlock-wait.log" 2>&1
+  } >&2
+}
+
+cmd_attrlock() {
+  need kubectl
+  need jq
+  resolve_baseline_tag
+  [[ -s "$receipt" ]] || fail "$receipt is missing; run 'up' and 'upgrade' first: the writes are to the device the seed made"
+  [[ -x "$apiprobe" ]] || build_apiprobe
+  local ns deploy json live image pod dev_id tenant waiters p_old p_new p_hold rc i
+  ns="$(instance_namespace)"
+  say "ATTRIBUTE LOCK — a $baseline_tag device-management pod beside the upgraded ones"
+  trap attrlock_cleanup EXIT
+
+  deploy="$(kubectl --context "$kube_context" -n "$ns" get deployments \
+    -l "devicechain.io/functional-area=device-management" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || deploy=""
+  [[ -n "$deploy" ]] || fail "this instance runs no device-management Deployment"
+  json="$(kubectl --context "$kube_context" -n "$ns" get deployment "$deploy" -o json)" ||
+    fail "could not read deployment $deploy"
+  live="$(jq -r '.spec.template.spec.containers[0].image' <<<"$json")"
+  image="$(oldpod_image "$live" "$baseline_tag")" || fail "cannot derive $baseline_tag's device-management image from '$live'"
+  oldpod_manifest "$json" oldpod-device-management "$image" | kubectl --context "$kube_context" -n "$ns" apply -f - >/dev/null ||
+    fail "could not create the $baseline_tag device-management copy ($image)"
+  oldpod_wait oldpod-device-management 300 || {
+    kubectl --context "$kube_context" -n "$ns" logs deployment/oldpod-device-management --tail=30 >&2 2>/dev/null || true
+    fail "the $baseline_tag device-management copy did not become Ready ($image)"
+  }
+  kubectl --context "$kube_context" -n "$ns" port-forward deployment/oldpod-device-management "${attrlock_port}:8080" \
+    >"$work/attrlock-forward.log" 2>&1 &
+  attrlock_pids+=("$!")
+  for i in $(seq 1 30); do
+    (exec 3<>"/dev/tcp/127.0.0.1/$attrlock_port") 2>/dev/null && break
+    sleep 1
+  done
+  (exec 3<>"/dev/tcp/127.0.0.1/$attrlock_port") 2>/dev/null ||
+    fail "the port-forward to the $baseline_tag pod never opened on $attrlock_port: $(cat "$work/attrlock-forward.log")"
+
+  # 🔴 THE UPGRADED PODS ARE REACHED THROUGH THEIR OWN PORT-FORWARD, NOT THE INGRESS. The baseline copy keeps the
+  # live pods' labels (the network policy selects on them), so the Service routes to it too, and a write
+  # through the ingress lands on it about half the time: the lock-wait check below then saw a v1.8 pod, which
+  # takes no lock, answer instantly. A forward to the ORIGINAL Deployment can only reach a pod of this release.
+  kubectl --context "$kube_context" -n "$ns" port-forward "deployment/$deploy" "${attrlock_port_new}:8080"     >"$work/attrlock-forward-new.log" 2>&1 &
+  attrlock_pids+=("$!")
+  for i in $(seq 1 30); do
+    (exec 3<>"/dev/tcp/127.0.0.1/$attrlock_port_new") 2>/dev/null && break
+    sleep 1
+  done
+  (exec 3<>"/dev/tcp/127.0.0.1/$attrlock_port_new") 2>/dev/null ||
+    fail "the port-forward to the upgraded pod never opened on $attrlock_port_new: $(cat "$work/attrlock-forward-new.log")"
+
+  # 1. BOTH versions write the same device at once, and every write succeeds.
+  local old_url="http://127.0.0.1:$attrlock_port/graphql" new_url="http://127.0.0.1:$attrlock_port_new/graphql" args
+  args=(--server "$api_server" --scheme "$api_scheme" --receipt "$receipt")
+  "$apiprobe" attrwrite "${args[@]}" --url "$old_url" --count 40 >"$work/attrlock-old.log" 2>&1 &
+  p_old=$!
+  "$apiprobe" attrwrite "${args[@]}" --url "$new_url" --count 40 >"$work/attrlock-new.log" 2>&1 &
+  p_new=$!
+  rc=0; wait "$p_old" || rc=$?
+  [[ "$rc" -eq 0 ]] || fail "WRITES THROUGH THE $baseline_tag POD FAILED while the upgraded pods write the same device (exit $rc):
+$(cat "$work/attrlock-old.log")
+A baseline pod's attribute write must keep succeeding through the roll."
+  rc=0; wait "$p_new" || rc=$?
+  [[ "$rc" -eq 0 ]] || fail "WRITES THROUGH THE UPGRADED PODS FAILED while a $baseline_tag pod writes the same device (exit $rc):
+$(cat "$work/attrlock-new.log")"
+  note "40 writes through a $baseline_tag pod and 40 through the upgraded pods, to one device at the same time, all accepted ✓"
+
+  # 2. The protocol is in force: a write waits on the device's lock while it is held.
+  pod="$(pg_pod)"
+  rdb_db="$(rdb_database "$pod" entity_attribute_generations)"
+  # The seed's tenant, not any tenant: the table sweep later seeds a second tenant whose device has the
+  # same token, and the lock is per device id, so the wrong one holds a lock the write never asks for.
+  tenant="$(jq -r '.tenant' "$receipt")"
+  [[ -n "$tenant" && "$tenant" != null && "$tenant" =~ ^[A-Za-z0-9_-]+$ ]] || fail "the receipt names no usable tenant ('$tenant')"
+  dev_id="$(attrlock_psql "$pod" "SELECT id FROM \"device-management\".devices WHERE tenant_id = '$tenant' AND token = 'apiprobe-device'")"
+  [[ "$dev_id" =~ ^[0-9]+$ ]] || fail "could not find the seeded device's id in tenant $tenant (got '$dev_id')"
+
+  attrlock_hold "$pod" "$dev_id" 14
+  p_hold=$!
+  sleep 3
+  "$apiprobe" attrwrite "${args[@]}" --url "$new_url" --count 1 >"$work/attrlock-wait.log" 2>&1 &
+  p_new=$!
+  sleep 3
+  waiters="$(attrlock_psql "$pod" "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted")"
+  rc=1; kill -0 "$p_new" 2>/dev/null && rc=0
+  attrlock_waiting "$waiters" "$((1 - rc))" || attrlock_diagnose "$pod" "$dev_id" "$tenant"
+  attrlock_waiting "$waiters" "$((1 - rc))" || fail "NO WRITE WAS WAITING ON THE DEVICE LOCK while it was held (advisory waiters: $waiters, write still running: $((1 - rc))).
+The upgraded pods' attribute protocol did not take the lock, so it is not in force."
+  rc=0; wait "$p_new" || rc=$?
+  [[ "$rc" -eq 0 ]] || fail "the write that waited on the lock did not succeed once it was released (exit $rc): $(cat "$work/attrlock-wait.log")"
+  wait "$p_hold" 2>/dev/null || true
+  note "a write through the upgraded pods WAITED on the held device lock and succeeded when it was released ✓"
+
+  # THE NEGATIVE CONTROL: the lock held is a DIFFERENT device's. The write must not wait.
+  attrlock_hold "$pod" "$((dev_id + 1000000))" 14
+  p_hold=$!
+  sleep 3
+  rc=0
+  "$apiprobe" attrwrite "${args[@]}" --url "$new_url" --count 1 >"$work/attrlock-ctl.log" 2>&1 &
+  p_new=$!
+  for i in $(seq 1 8); do kill -0 "$p_new" 2>/dev/null || break; sleep 1; done
+  if kill -0 "$p_new" 2>/dev/null; then
+    waiters="$(attrlock_psql "$pod" "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted")"
+    fail "THE CONTROL WAITED: a lock held on ANOTHER device delayed this device's write (advisory waiters: $waiters). So the
+wait seen above does not show the protocol locking per device; it shows something slower."
+  fi
+  wait "$p_new" || fail "the control write failed: $(cat "$work/attrlock-ctl.log")"
+  wait "$p_hold" 2>/dev/null || true
+  note "control: a lock held on another device does NOT delay this device's write ✓ (the wait above is the device's own lock)"
+
+  # 3. Nothing left over, and the query is shown to count one.
+  local orphans planted
+  orphans="$(attrlock_psql "$pod" "$attrlock_orphan_sql")"
+  [[ "$orphans" == "0" ]] || fail "ORPHANED ATTRIBUTE ROWS OR GENERATION HEADS AFTER THE ROLL WINDOW: $orphans name a device that is gone.
+The sweep removes them, and dcctl fleet-op readiness reports them; a roll that writes attributes from both
+versions must leave none."
+  planted="$(attrlock_psql "$pod" "BEGIN; INSERT INTO \"device-management\".entity_attribute_generations (id, tenant_id, device_id, scope, attr_key, generation) VALUES ((SELECT COALESCE(max(id), 0) + 1000000 FROM \"device-management\".entity_attribute_generations), 'drill-orphan-control', 999999999, 'SHARED', 'drill-control', 1); $attrlock_orphan_sql; ROLLBACK")"
+  [[ "$planted" =~ ^[0-9]+$ && "$planted" -ge 1 ]] ||
+    fail "THE ORPHAN CHECK DID NOT SEE A PLANTED ORPHAN (it counted '$planted' with one planted), so its 0 above says nothing."
+  orphans="$(attrlock_psql "$pod" "$attrlock_orphan_sql")"
+  [[ "$orphans" == "0" ]] || fail "the planted orphan was not rolled back cleanly ($orphans left)"
+  note "no orphaned attribute row or generation head, and the same query counts a planted one ✓ (it can fail)"
+
+  attrlock_cleanup
+  trap - EXIT
+  say "ATTRIBUTE LOCK HOLDS — $baseline_tag and upgraded pods wrote one device at once, the lock was in force, and nothing was left behind"
+}
+
 # selftest_v19 covers the pure halves of the two phases above: the manifest builder, the image
 # derivation and the inert verdict, each against the input it must refuse as well as the one it
 # must accept.
 selftest_v19() {
   say "SELF-TEST: the v1.9 old-pod and executor checks"
-  local img json out
+  local img json out rc
   img="$(oldpod_image "localhost:5000/dc-event-sources:dev-123" "v1.8.0")"
   [[ "$img" == "$published_registry/dc-event-sources:v1.8.0" ]] ||
     fail "SELF-TEST FAILED: oldpod_image of a tagged live image gave '$img'"
@@ -3239,6 +3450,23 @@ selftest_v19() {
   [[ -n "$(executor_problems "$crds" "" "" "" $'Preview: x\nSome other text')" ]] ||
     fail "SELF-TEST FAILED: a status that does not say not-enrolled was accepted"
   note "the inert verdict accepts the inert state and names each way it is not ✓"
+
+  attrlock_waiting 1 1 || fail "SELF-TEST FAILED: a waiter beside a running write was not read as waiting"
+  attrlock_waiting 0 1 && fail "SELF-TEST FAILED: no waiter was read as waiting"
+  attrlock_waiting 1 0 && fail "SELF-TEST FAILED: a finished write was read as waiting"
+  rc=0; attrlock_waiting x 1 || rc=$?
+  [[ "$rc" -eq 2 ]] || fail "SELF-TEST FAILED: an unreadable waiter count was not reported as unreadable (rc=$rc)"
+  [[ "$(attrlock_last_number <<<$'BEGIN
+INSERT 0 1
+3
+ROLLBACK')" == "3" ]] ||
+    fail "SELF-TEST FAILED: the result number was not read from between psql's command tags"
+  [[ -z "$(attrlock_last_number <<<$'BEGIN
+ROLLBACK')" ]] ||
+    fail "SELF-TEST FAILED: a batch with no result printed a number"
+  grep -q "entity_attributes" <<<"$attrlock_orphan_sql" && grep -q "entity_attribute_generations" <<<"$attrlock_orphan_sql" ||
+    fail "SELF-TEST FAILED: the orphan query no longer counts both attribute rows and generation heads"
+  note "the lock-wait verdict, the psql result reader and the orphan query are pinned ✓"
 }
 
 # ---------------------------------------------------------------------------
@@ -4397,6 +4625,7 @@ operator) cmd_operator ;;
 infra) cmd_infra ;;
 oldpods) cmd_oldpods ;;
 executor) cmd_executor ;;
+attrlock) cmd_attrlock ;;
 selftest) selftest ;;
 down) cmd_down ;;
 all)
@@ -4458,7 +4687,8 @@ and event history belongs to the DR drill, not this one."
   cmd_infra
   cmd_oldpods
   cmd_executor
+  cmd_attrlock
   say "UPGRADE DRILL COMPLETE — data survived, the operator is in step, and the broker and event store carry this release's settings."
   ;;
-*) fail "unknown command ${1}; try mode | up | upgrade | logins | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | infra | oldpods | executor | all | selftest | down" ;;
+*) fail "unknown command ${1}; try mode | up | upgrade | logins | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | infra | oldpods | executor | attrlock | all | selftest | down" ;;
 esac

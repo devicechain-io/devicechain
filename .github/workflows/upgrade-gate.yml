@@ -640,6 +640,15 @@ jobs:
         if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh executor
 
+      # A baseline device-management pod and the upgraded pods write the same device's
+      # attribute at once; the upgraded pods' per-device lock is observed in force (a write
+      # waits while the lock is held, and not while another device's is), and no orphan
+      # attribute row or generation head is left. The wait and the orphan count are each
+      # shown to fail against a control. The delete-versus-writer window is T-del-2, a test.
+      - name: A baseline pod must write attributes beside the upgraded ones
+        if: env.DC_UPGRADE_MODE == 'data'
+        run: hack/upgrade-rig.sh attrlock
+
       # -------------------------------------------------------------------
       # DRILL B -- the recreate drill. This release does not upgrade onto the
       # baseline, so what is measured is the refusal an operator will actually meet.
