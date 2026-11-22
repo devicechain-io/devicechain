@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -546,5 +547,41 @@ func TestS3PutFailedCompleteWithASuccessfulAbortLooksForNothing(t *testing.T) {
 	_, err := putData(t, newMP(f, 4), context.Background(), bytes.NewReader(make([]byte, 20)), PutOptions{})
 	if err == nil || len(f.delKeys) != 0 || len(f.aborts) != 1 {
 		t.Fatalf("err=%v deleted=%v aborts=%d", err, f.delKeys, len(f.aborts))
+	}
+}
+
+// A failed abort while a panic unwinds (no cause yet) is reported as the abort's own failure,
+// not wrapped as a nil cause; with a cause, both are kept.
+func TestAFailedAbortWithNoCauseIsNotWrappedAsNil(t *testing.T) {
+	aerr := errors.New("abort refused")
+	got := withAbortFailure(nil, aerr)
+	if strings.Contains(got.Error(), "%!") || !errors.Is(got, aerr) {
+		t.Fatalf("withAbortFailure(nil) = %q, want the abort failure alone, wrapped", got)
+	}
+	cause := errors.New("part refused")
+	got = withAbortFailure(cause, aerr)
+	if !errors.Is(got, cause) || !strings.Contains(got.Error(), "abort refused") {
+		t.Fatalf("withAbortFailure(cause) = %q, want the cause wrapped and the abort named", got)
+	}
+}
+
+// A panic mid-upload still sends the abort before it carries on.
+func TestS3PutAbortsWhenAPanicUnwinds(t *testing.T) {
+	f := &mpFake{abortEr: errors.New("abort refused")}
+	f.onPart = func(n int32) {
+		if n == 2 {
+			panic("reader exploded")
+		}
+	}
+	func() {
+		defer func() {
+			if r := recover(); r != "reader exploded" {
+				t.Fatalf("recovered %v, want the original panic", r)
+			}
+		}()
+		_, _ = putData(t, newMP(f, 4), context.Background(), bytes.NewReader(make([]byte, 20)), PutOptions{})
+	}()
+	if len(f.aborts) != 1 {
+		t.Fatalf("aborts = %d, want 1 while the panic unwinds", len(f.aborts))
 	}
 }

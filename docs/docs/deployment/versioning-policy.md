@@ -70,7 +70,7 @@ compatibility checks: it is declared there as an intended break, the same way as
 preview change ships unnoticed. A file format in the preview tier carries a version, such as
 `v1alpha1`, and a tool that does not know the version refuses the file rather than guessing.
 
-Today the preview tier holds three surfaces. The rule tests: the `evaluateRules` operation of the
+Today the preview tier holds four surfaces. The rule tests: the `evaluateRules` operation of the
 event-processing API, the scenario and test file formats, and the `dcctl test` command that reads them
 (see [Testing your rules](../guides/testing-your-rules.md)). Product as code: `dcctl product export`,
 `plan` and `apply`, and their bundle format (see [Product as Code](../guides/product-as-code.md)). And
@@ -86,6 +86,11 @@ The GraphQL preview surfaces include their dedicated input and result types, fie
 enum values. The `ServiceAccount.agent` field is not in preview: it is covered from the release that
 adds it. Ordinary service-account roles remain covered. No MCP action tool is served yet; the MCP
 read tools remain in the not-covered catalog above.
+
+Fleet operation readiness joins the preview tier in **v1.9**, when its preview clock starts: the
+`fleetOperationReadiness` query, `FleetOperationReadiness` and `FleetOperationEnforcement`,
+including their fields and enum values, and `dcctl fleet-op readiness`. They require
+`fleet:operate`; scoped members are refused.
 
 ## Supported upgrade paths {#upgrade-paths}
 

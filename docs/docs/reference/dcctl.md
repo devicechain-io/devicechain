@@ -28,6 +28,7 @@ dcctl [command]
 * [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
 * [dcctl events](#dcctl-events)	 - Inspect a tenant's events
 * [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
+* [dcctl fleet-op](#dcctl-fleet-op)	 - Preview. Inspect fleet operation capabilities
 * [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
 * [dcctl install](#dcctl-install)	 - Prepare a cluster for DeviceChain instances
 * [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
@@ -649,6 +650,12 @@ cross-field constraints.
 dcctl config-schema [flags]
 ```
 
+### Examples
+
+```
+  dcctl config-schema > instance-config.schema.json
+```
+
 ### Options
 
 ```
@@ -1207,6 +1214,76 @@ dcctl executor unenroll [flags]
 ### SEE ALSO
 
 * [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
+
+## dcctl fleet-op {#dcctl-fleet-op}
+
+Preview. Inspect fleet operation capabilities
+
+### Synopsis
+
+Preview. Inspect this instance's fleet operation capabilities using your tenant identity.
+
+### Options
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              help for fleet-op
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to inspect (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl fleet-op readiness](#dcctl-fleet-op-readiness)	 - Preview. Report whether this instance can run fleet operations
+
+## dcctl fleet-op readiness {#dcctl-fleet-op-readiness}
+
+Preview. Report whether this instance can run fleet operations
+
+### Synopsis
+
+Preview. Report the writer protocol version, fresh database enforcement state,
+executable operation kinds and orphaned device attribute and generation rows in your tenant.
+Requires fleet:operate; scoped members are refused.
+
+Exit status is zero only when enforcement is ENFORCED and orphanedAttributeRows is zero; that
+says the database enforces the writer protocol, not that any operation kind is executable. If the
+orphan count cannot be read the command reports the error and exits non-zero. The query is an
+expensive diagnostic (it counts rows); run it when you need the answer, do not poll it.
+In v1.9 enforcement is not installed and no kind is executable. The non-zero exit is
+expected until the release that installs enforcement. Use -o json for the four facts as JSON.
+
+```
+dcctl fleet-op readiness [flags]
+```
+
+### Options
+
+```
+  -h, --help            help for readiness
+  -o, --output string   output format: table or json (default "table")
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to inspect (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl fleet-op](#dcctl-fleet-op)	 - Preview. Inspect fleet operation capabilities
 
 ## dcctl ha {#dcctl-ha}
 
@@ -1986,6 +2063,16 @@ run 'dcctl product rotate-integration-token \<integration-token>' to issue one.
 dcctl product apply <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>'
+  # converge drafts and stop, without publishing
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>' --no-publish
+  # apply without printing the plan first
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>' --yes
+```
+
 ### Options
 
 ```
@@ -2038,6 +2125,14 @@ unless you name it in --kinds.
 dcctl product export <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>'
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>' --kinds device-types,profiles
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>' --name "Acme product"
+```
+
 ### Options
 
 ```
@@ -2083,6 +2178,14 @@ Against a tenant that already holds the bundle the plan reports no changes. Use
 dcctl product plan <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl product plan ./acme --tenant acme-prod --email you@example.com --password '<password>'
+  # exits non-zero when the tenant has drifted from the bundle, for CI
+  dcctl product plan ./acme --tenant acme-prod --email you@example.com --password '<password>' --fail-on-changes
+```
+
 ### Options
 
 ```
@@ -2125,6 +2228,13 @@ a shell. A warning is written to stderr. This command does not save the token to
 
 ```
 dcctl product rotate-integration-token <integration-token> [flags]
+```
+
+### Examples
+
+```
+  dcctl product rotate-integration-token chirpstack-1 --tenant acme --email you@example.com --password '<password>'
+  dcctl product rotate-integration-token chirpstack-1 --tenant acme --email you@example.com --password '<password>' --server dc.example.com --tls
 ```
 
 ### Options
@@ -2430,6 +2540,13 @@ artifact against a live instance, use "dcctl secrets escrow verify".
 dcctl secrets escrow show <file> [flags]
 ```
 
+### Examples
+
+```
+  dcctl secrets escrow show ~/.devicechain/escrow/prod.escrow
+  dcctl secrets escrow show ./prod-rootkey.escrow
+```
+
 ### Options
 
 ```
@@ -2463,6 +2580,14 @@ the instance has no usable escrow. The command exits non-zero in that case.
 
 ```
 dcctl secrets escrow verify <file> [flags]
+```
+
+### Examples
+
+```
+  # exits non-zero when the artifact does not hold the key the instance is running
+  dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow
+  dcctl secrets escrow verify --instance prod --kube-context prod ./prod-rootkey.escrow
 ```
 
 ### Options
@@ -3028,6 +3153,15 @@ of the shell history and the process list.
 
 ```
 dcctl test <path> [flags]
+```
+
+### Examples
+
+```
+  dcctl test ./tests --tenant acme --email you@example.com --password '<password>'
+  # the password from the environment, and a JUnit report for CI
+  DCCTL_PASSWORD='<password>' dcctl test ./tests/low-battery.test.yaml --tenant acme --email you@example.com --junit results.xml
+  dcctl test ./tests --tenant acme --email you@example.com --password '<password>' --server dc.example.com --tls
 ```
 
 ### Options

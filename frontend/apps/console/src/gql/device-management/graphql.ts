@@ -102,19 +102,29 @@ export type AlarmSearchCriteria = {
   state?: string | null | undefined;
 };
 
+/** Data required to create an area. */
 export type AreaCreateRequest = {
+  /** Token of the area type to create it under. An unknown token is refused. */
   areaTypeToken: string;
   /** The token of the geofence that bounds the area. It must name an existing fence. */
   boundaryFenceToken?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new area, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing areas. */
 export type AreaSearchCriteria = {
+  /** Only areas of the area type with this token. Omit for every area. */
   areaTypeToken?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
@@ -185,30 +195,58 @@ export type AreaTypeUpdateRequest = {
   semanticTypes?: Array<string> | null | undefined;
 };
 
+/**
+ * A partial update of an area. Each field has three states: omit it to keep the stored value, send
+ * null to clear it, or send a value to set it. There is no token field: the mutation's token argument
+ * names the record, so a token cannot be moved.
+ */
 export type AreaUpdateRequest = {
+  /**
+   * Re-points the area at a different area type. Omit to keep the current one. Null is refused,
+   * because every area must reference a type, and so is an unknown token; a refusal writes nothing.
+   */
   areaTypeToken?: string | null | undefined;
   /**
    * Links the area to the geofence that bounds it: omit to keep the link, send null to remove
    * it, send a token to set it. The token must name an existing fence.
    */
   boundaryFenceToken?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
 };
 
+/** Data required to create an asset. */
 export type AssetCreateRequest = {
+  /** Token of the asset type to create it under. An unknown token is refused. */
   assetTypeToken: string;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The asset's property document, validated against the asset type's active published contract
+   * before anything is written. Refused when the type has no published contract, when a key is not
+   * declared, when a value does not fit its declared type, bounds or allowed values, or when a
+   * required property is missing; a refusal is total, so no asset is created.
+   */
   properties?: string | null | undefined;
+  /** Identifier for the new asset, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing assets. */
 export type AssetSearchCriteria = {
+  /** Only assets of the asset type with this token. Omit for every asset. */
   assetTypeToken?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
@@ -291,11 +329,28 @@ export type AssetTypeUpdateRequest = {
   semanticTypes?: Array<string> | null | undefined;
 };
 
+/**
+ * A partial update of an asset. Each field has three states: omit it to keep the stored value, send
+ * null to clear it, or send a value to set it. There is no token field: the mutation's token argument
+ * names the record, so a token cannot be moved.
+ */
 export type AssetUpdateRequest = {
+  /**
+   * Re-points the asset at a different asset type. Omit to keep the current one. Null is refused,
+   * because every asset must reference a type, and so is an unknown token; a refusal writes nothing.
+   */
   assetTypeToken?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
+  /**
+   * Replaces the asset's property document wholesale; null clears it. Omit to keep what is stored.
+   * Omitting it does not skip the check: moving to another asset type re-validates the properties
+   * the asset already carries against that type's contract.
+   */
   properties?: string | null | undefined;
 };
 
@@ -603,17 +658,27 @@ export type ConfigurationKeyInput = {
   valueType: string;
 };
 
+/** Data required to create a customer. */
 export type CustomerCreateRequest = {
+  /** Token of the customer type to create it under. An unknown token is refused. */
   customerTypeToken: string;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new customer, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing customers. */
 export type CustomerSearchCriteria = {
+  /** Only customers of the customer type with this token. Omit for every customer. */
   customerTypeToken?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
@@ -687,10 +752,23 @@ export type CustomerTypeUpdateRequest = {
   semanticTypes?: Array<string> | null | undefined;
 };
 
+/**
+ * A partial update of a customer. Each field has three states: omit it to keep the stored value, send
+ * null to clear it, or send a value to set it. There is no token field: the mutation's token argument
+ * names the record, so a token cannot be moved.
+ */
 export type CustomerUpdateRequest = {
+  /**
+   * Re-points the customer at a different customer type. Omit to keep the current one. Null is
+   * refused, because every customer must reference a type, and so is an unknown token; a refusal
+   * writes nothing.
+   */
   customerTypeToken?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
 };
 

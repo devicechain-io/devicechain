@@ -1285,3 +1285,24 @@ Se generarán páginas de referencia detalladas por tipo a partir de los esquema
 estabilicen.
 
 `SECRET_RESUPPLY_REQUIRED` indica que una actualización cambiaría el destino o la presentación de una credencial almacenada. En `updateConnector`, `updateNotificationChannel` o `updateAiProvider`, vuelve a enviar `secret` en la misma solicitud o bórralo con `secret: null`. Para restaurar un conector con otro destino, usa `updateConnector` con la configuración de destino y su credencial.
+
+## Preparación de operaciones de flota (Preview) {#fleet-operation-readiness}
+
+Preview. El plano de datos por inquilino de device-management ofrece `fleetOperationReadiness`
+a quienes tienen `fleet:operate`; rechaza a los miembros con ámbito limitado. Informa de la
+versión del protocolo de escritura, el estado actual de cumplimiento en la base de datos, los
+tipos de operación ejecutables y un recuento actualizado de filas huérfanas de atributos y
+generaciones de dispositivos del inquilino del solicitante, incluidos los atributos borrados
+lógicamente. En v1.9 devuelve `NOT_INSTALLED` y ningún tipo ejecutable; es lo esperado hasta
+la versión que instale el cumplimiento. Un error de lectura del catálogo devuelve `UNREADABLE`
+y conserva los demás datos. Solo un trigger habilitado `ALWAYS` cuenta como `ENFORCED`;
+los modos ordinario, solo réplica y deshabilitado devuelven `DISABLED`. La ausencia o falta de
+coincidencia devuelve `NOT_INSTALLED`. La consulta cuenta filas, así que trátela como un diagnóstico que se ejecuta cuando se necesita la respuesta, no como algo que consultar periódicamente. El plazo de vista previa comienza en v1.9.
+
+El comando Preview muestra los mismos cuatro datos y solo termina con éxito si el estado es
+`ENFORCED` y no hay filas huérfanas. En v1.9 se espera una salida distinta de cero. Utiliza
+las mismas opciones de inicio de sesión e instancia que `dcctl attr`:
+
+```bash
+dcctl fleet-op readiness --tenant acme --email ops@example.com --password <password> -o json
+```

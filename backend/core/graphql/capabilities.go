@@ -8,6 +8,9 @@ import (
 	"net/http"
 )
 
+// Format 1 of this media type is permanent. Deployed clients (dcctl, the console, embedders on
+// @devicechain/client) read exactly {"format":1,"schema":<SDL>} and refuse any other format, so a
+// change to the manifest shape is a NEW media type, never a new "format" value served here.
 const schemaCapabilityMediaType = "application/vnd.devicechain.schema+json"
 
 func isSchemaCapabilityRequest(r *http.Request) bool {
