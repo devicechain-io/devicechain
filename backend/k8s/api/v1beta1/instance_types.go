@@ -271,8 +271,10 @@ type InstanceSpec struct {
 
 	// GrafanaSSO has no effect. Grafana's login is configured for the whole cluster
 	// by the OpenTofu cluster configuration (its monitoring_grafana_oauth_* settings),
-	// not per instance, and nothing in dcctl or the operator writes or reads this
-	// field. It is kept so a declaration that carries it is still accepted.
+	// not per instance. Nothing in dcctl or the operator reads it, and dcctl does not carry
+	// it: a dcctl re-run writes the declaration without it, so a value set by hand is
+	// dropped then. It is kept in the schema so a declaration that carries it is still
+	// accepted.
 	//
 	// +optional
 	GrafanaSSO bool `json:"grafanaSSO,omitempty"`

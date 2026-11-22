@@ -118,15 +118,20 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return result, nil
 	}
 	// A merge patch from the object as read, with no resourceVersion precondition.
-	// Status has one writer, but not always one process. The shipped manager runs one
-	// replica with --leader-elect (config/manager/manager.yaml), so only the lease holder
-	// reconciles; but during a rollout of the operator itself the outgoing leader can
-	// still be finishing a pass when the incoming one takes the lease, and a manager
-	// started without --leader-elect (`make run`) has no lease at all. Two writers then
-	// compute status from what each has cached and the patch replaces whole fields, so
-	// the LAST write wins: a pass from a stale cache can briefly publish an older
-	// observation, which the next reconcile corrects. A spec or annotation write by
-	// dcctl between the read and here must not fail the status write.
+	// Status has one writer, and normally one process. The shipped manager runs one
+	// replica with --leader-elect and LeaderElectionReleaseOnCancel (config/manager/
+	// manager.yaml, internal/manageropts), so only the lease holder reconciles, and an
+	// ordinary rollout does not overlap: the outgoing pod stops its controllers and gives
+	// the lease up before the incoming one can take it. Two writers happen only when that
+	// handover is skipped: a leader that loses the lease without releasing it (a partition,
+	// an API server it cannot reach to renew) while its last pass is still running, a pod
+	// killed before it released (past its 10s termination grace, manager.yaml, which is
+	// shorter than the manager's own graceful-shutdown timeout), or a manager started
+	// without --leader-elect (`make run`) beside another. Each then computes status from
+	// its own cache and the patch replaces whole fields, so the LAST write wins: a pass
+	// from a stale cache can briefly publish an older observation, which the next
+	// reconcile corrects. A spec or annotation write by dcctl between the read and here
+	// must not fail the status write.
 	patch := client.MergeFrom(instance.DeepCopy())
 	instance.Status = desired
 	if err := r.Status().Patch(ctx, instance, patch); err != nil {
