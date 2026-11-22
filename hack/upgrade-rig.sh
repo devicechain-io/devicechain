@@ -3414,6 +3414,12 @@ versions must leave none."
   # its JSON is read and its exit status is not. The SQL above is kept as the cross-check: it counts every
   # tenant, this counts the seed's, and the two must agree here because only this tenant wrote.
   [[ -x "$target_dcctl" ]] || build_target_dcctl
+  # 🔴 THE BASELINE COPY MUST BE GONE FIRST. dcctl reaches device-management through the ingress, the copy keeps
+  # the live pods' labels, and a v1.8 pod serves no fleetOperationReadiness: a query routed to it would fail for
+  # a reason that is not the release's. Deleted and waited on, not merely asked to go.
+  attrlock_cleanup
+  kubectl --context "$kube_context" -n "$ns" wait --for=delete pod -l "$oldpod_label=oldpod-device-management" --timeout=120s >/dev/null 2>&1 ||
+    fail "the $baseline_tag device-management copy did not terminate, so readiness could be answered by it"
   local ready
   ready="$(attrlock_readiness "$tenant")" ||
     fail "dcctl fleet-op readiness reported no orphan count (it must answer for the seed's tenant, as that tenant's administrator)"
