@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/fatih/color"
@@ -22,8 +23,16 @@ import (
 )
 
 // localMQTTNodePort is the node port the local kind configuration maps host 1883 to
-// (deploy/local/kind-cluster.yaml). One cluster has one of it.
+// (deploy/local/kind-cluster.yaml). It is the first of localMQTTNodePorts, and the one every
+// local instance had before there were more.
 const localMQTTNodePort = 31883
+
+// localMQTTNodePorts are the node ports a local instance's MQTT gateway may be given, in the order
+// a new instance tries them. The embedded kind configuration maps each to a host port (31883 to
+// 1883, 31884 to 1884, 31885 to 1885), so a second and a third instance on one local cluster
+// reach their brokers from the host too. A cluster created before the extra maps publishes only
+// the first; which ones a cluster publishes is read from it (publishedMQTTNodePorts), never assumed.
+var localMQTTNodePorts = []int32{localMQTTNodePort, 31884, 31885}
 
 // clusterSingletons are the things on a cluster only one instance can hold: the local MQTT
 // node port, and an ingress host. Everything else an instance runs is in its own
@@ -32,6 +41,12 @@ type clusterSingletons struct {
 	// MQTTNodePortHolder is the namespace of a Service already holding localMQTTNodePort,
 	// other than this instance's own. Empty when the port is free for this instance.
 	MQTTNodePortHolder string
+	// MQTTNodePortHolders maps each of localMQTTNodePorts another instance's Service holds to that
+	// instance's namespace. Nil when none is held.
+	MQTTNodePortHolders map[int32]string
+	// OwnMQTTNodePort is the one of localMQTTNodePorts this instance's own Service already holds,
+	// or 0. An instance keeps the port it has.
+	OwnMQTTNodePort int32
 	// HostHolder is the namespace of an Ingress, Gateway or HTTPRoute already serving this instance's host,
 	// other than this instance's own. Empty when no other instance serves it.
 	HostHolder string
@@ -117,10 +132,18 @@ func singletonsFrom(svcs []corev1.Service, ings []networkingv1.Ingress, claims [
 	var out clusterSingletons
 	own := InstanceNamespace(instance)
 	for _, s := range svcs {
-		if s.Namespace == own {
-			continue
-		}
 		for _, p := range s.Spec.Ports {
+			if !isLocalMQTTNodePort(p.NodePort) {
+				continue
+			}
+			if s.Namespace == own {
+				out.OwnMQTTNodePort = p.NodePort
+				continue
+			}
+			if out.MQTTNodePortHolders == nil {
+				out.MQTTNodePortHolders = map[int32]string{}
+			}
+			out.MQTTNodePortHolders[p.NodePort] = s.Namespace
 			if p.NodePort == localMQTTNodePort {
 				out.MQTTNodePortHolder = s.Namespace
 			}
@@ -142,6 +165,151 @@ func singletonsFrom(svcs []corev1.Service, ings []networkingv1.Ingress, claims [
 		}
 	}
 	return out
+}
+
+func isLocalMQTTNodePort(p int32) bool {
+	for _, c := range localMQTTNodePorts {
+		if c == p {
+			return true
+		}
+	}
+	return false
+}
+
+// mqttNodePortTaken reports whether another instance holds node port p.
+func (h clusterSingletons) mqttNodePortTaken(p int32) bool {
+	if p == localMQTTNodePort && h.MQTTNodePortHolder != "" {
+		return true
+	}
+	_, taken := h.MQTTNodePortHolders[p]
+	return taken
+}
+
+// chooseNewMQTTNodePort is the node port a NEW local instance's MQTT gateway gets: the one its
+// own Service already holds (a re-run keeps its port), else the first of the ports the cluster
+// publishes that no other instance holds, else none (0), and the instance is reachable in-cluster
+// only.
+func chooseNewMQTTNodePort(held clusterSingletons, published []int32) int32 {
+	if held.OwnMQTTNodePort != 0 {
+		return held.OwnMQTTNodePort
+	}
+	for _, p := range published {
+		if !held.mqttNodePortTaken(p) {
+			return p
+		}
+	}
+	return 0
+}
+
+// keptMQTTNodePort is the node port an UPGRADED instance's MQTT gateway keeps. An upgrade never
+// hands an instance a port it did not have: it keeps the one its own Service holds, else the one
+// the instance record says it was given (its Service may have been deleted by hand), else what
+// every upgrade did before there were more ports: localMQTTNodePort when no other instance holds
+// it, and none otherwise.
+func keptMQTTNodePort(held clusterSingletons, recorded int32) int32 {
+	if held.OwnMQTTNodePort != 0 {
+		return held.OwnMQTTNodePort
+	}
+	if recorded != 0 && isLocalMQTTNodePort(recorded) && !held.mqttNodePortTaken(recorded) {
+		return recorded
+	}
+	if !held.mqttNodePortTaken(localMQTTNodePort) {
+		return localMQTTNodePort
+	}
+	return 0
+}
+
+// publishedMQTTNodePorts are the localMQTTNodePorts the kind cluster behind kubeContext publishes
+// on the host, in order. A context that is not kind's, or a cluster whose published ports cannot
+// be read, gets localMQTTNodePort alone: what every local instance got before there were more.
+//
+// ONE `docker port` read answers for all of them: a read per port could fail for the first and
+// succeed for a later one, and a new instance would then skip a free localMQTTNodePort.
+var publishedMQTTNodePorts = func(kubeContext string) []int32 {
+	published, ok := KindPublishedHostPorts(kubeContext)
+	if !ok {
+		return []int32{localMQTTNodePort}
+	}
+	var out []int32
+	for _, p := range localMQTTNodePorts {
+		if _, ok := published[int(p)]; ok {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return []int32{localMQTTNodePort}
+	}
+	return out
+}
+
+// recordMQTTNodePort writes the node port an instance's MQTT gateway was given into its local
+// instance record, beside the cluster and context it was built on. A missing record (an instance
+// built elsewhere) is not an error: the instance's own Service is what an upgrade reads first.
+var recordMQTTNodePort = func(instance string, port int32) error {
+	rec, err := ReadInstanceRecord(instance)
+	if errors.Is(err, ErrNoInstanceRecord) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if rec.MQTTNodePort == int(port) {
+		return nil
+	}
+	rec.MQTTNodePort = int(port)
+	return WriteInstanceRecord(rec)
+}
+
+// recordedMQTTNodePort is the node port the local instance record says the instance was given,
+// or 0.
+//
+// The record is a file a person can edit, so its value is compared against the set rather than
+// narrowed: anything that is not one of localMQTTNodePorts reads as none.
+var recordedMQTTNodePort = func(instance string) int32 {
+	rec, err := ReadInstanceRecord(instance)
+	if err != nil {
+		return 0
+	}
+	for _, p := range localMQTTNodePorts {
+		if int(p) == rec.MQTTNodePort {
+			return p
+		}
+	}
+	return 0
+}
+
+// recordMQTTNodePortAfterApply writes the node port the apply just exposed into the local instance
+// record. Only after a successful apply, so the record never names a port the instance does not
+// have, never in a rehearsal, and only where a port was decided at all. A failure to write it is a
+// warning and never fails the run: the instance's own Service is what the next upgrade reads
+// first, and the record is bookkeeping, as the bootstrap's own record write treats it.
+func recordMQTTNodePortAfterApply(st *State) {
+	if st.DryRun || !monitoringSlim(st) {
+		return
+	}
+	if _, decided := st.Values[mqttNodePortKey]; !decided {
+		return
+	}
+	if err := recordMQTTNodePort(st.Instance, mqttNodePortOf(st)); err != nil {
+		fmt.Println(color.YellowString("  warning: could not record this instance's MQTT node port (%v); "+
+			"`dcctl sim create` falls back to %d until it is", err, localMQTTNodePort))
+	}
+}
+
+// mqttNodePortsHeldBy names who holds which local MQTT node ports, for the message that says
+// none was free.
+func mqttNodePortsHeldBy(held clusterSingletons, published []int32) string {
+	var parts []string
+	for _, p := range published {
+		ns, ok := held.MQTTNodePortHolders[p]
+		if !ok && p == localMQTTNodePort {
+			ns, ok = held.MQTTNodePortHolder, held.MQTTNodePortHolder != ""
+		}
+		if ok {
+			parts = append(parts, fmt.Sprintf("%d by namespace %q", p, ns))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // refuseAHostAnotherInstanceServes stops a bootstrap whose ingress host is already
@@ -422,10 +590,21 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 		}
 	}
 	done()
-	if held.MQTTNodePortHolder != "" {
-		st.Values[mqttNodePortHolderKey] = held.MQTTNodePortHolder
-		fmt.Printf("  %s\n", color.WhiteString(fmt.Sprintf("MQTT node port %d is held by the instance in "+
-			"namespace %q, so this instance's broker is reachable in-cluster only", localMQTTNodePort, held.MQTTNodePortHolder)))
+	if !monitoringSlim(st) {
+		return nil
+	}
+	published := publishedMQTTNodePorts(st.KubeContext)
+	port := chooseNewMQTTNodePort(held, published)
+	st.Values[mqttNodePortKey] = strconv.Itoa(int(port))
+	switch {
+	case port == 0:
+		fmt.Printf("  %s\n", color.WhiteString(fmt.Sprintf("every MQTT node port this cluster publishes on the "+
+			"host is held by another instance (%s), so this instance's broker is reachable in-cluster only. "+
+			"A local cluster created by this dcctl publishes %d of them", mqttNodePortsHeldBy(held, published),
+			len(localMQTTNodePorts))))
+	case port != localMQTTNodePort:
+		fmt.Printf("  %s\n", color.WhiteString(fmt.Sprintf("MQTT node port %d is held by another instance, so "+
+			"this instance takes node port %d", localMQTTNodePort, port)))
 	}
 	return nil
 }

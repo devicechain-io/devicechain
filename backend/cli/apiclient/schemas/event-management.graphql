@@ -158,9 +158,9 @@ type MeasurementEvent {
     """Name of the measurement, for example a metric key such as temperature."""
     name: String!
     """
-    The numeric value of the reading. A stored measurement always has one, because a non-numeric
-    reading is rejected and not stored; on measurementStream such a reading is delivered with a
-    null value.
+    The numeric value of the reading. Null for a reading whose value is text: event-management
+    stores such a value in a separate column that this schema does not yet expose, and on
+    measurementStream the reading is delivered with a null value.
     """
     value: Float
     """

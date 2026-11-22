@@ -206,7 +206,8 @@ CREATE TABLE "event-management".measurement_events (
  value numeric(20,8),
  classifier bigint,
  unit text,
- data_type character varying(32)
+ data_type character varying(32),
+ text_value text
 );
 CREATE TABLE "event-management".purged_tenants (
  token character varying(128) NOT NULL,

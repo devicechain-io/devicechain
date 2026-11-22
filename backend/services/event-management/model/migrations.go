@@ -96,7 +96,9 @@ var (
 		// once the token has been created again (device_incarnation.go).
 		NewDeviceTokenHoldersSchema(),
 		NewHolderCheckBackoffSchema(),
-		// The one-hour continuous aggregate over measurement_rollups (see its doc comment): additive,
+		// Where a STRING reading keeps its value (see its doc comment): nullable, no default.
+		NewMeasurementTextValueSchema(),
+		// The one-hour continuous aggregate over measurement_rollups (see its doc comment): DDL only,
 		// read only by bucketed reads whose interval is a whole number of hours.
 		NewRollup1hSchema(),
 	}

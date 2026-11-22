@@ -215,6 +215,12 @@ type MeasurementEvent struct {
 	// enum (max "BOOLEAN"), so a tight bound is safe.
 	Unit     *string `gorm:"type:text"`
 	DataType *string `gorm:"type:varchar(32)"`
+	// TextValue is a STRING reading's value, kept apart from Value because a string is not
+	// a number and the numeric column feeds every aggregate. A row has exactly one of the
+	// two: Value for DOUBLE, INT and BOOLEAN, TextValue for STRING. Nullable with no
+	// default, so rows written before the column existed, and by pods that predate it,
+	// read NULL (see NewMeasurementTextValueSchema).
+	TextValue *string `gorm:"type:text"`
 }
 
 // DefaultOrder implements rdb.Sortable. Time-then-identity, tiebroken on payload_id
@@ -236,6 +242,9 @@ type MeasurementEventCreateRequest struct {
 	Classifier        *uint
 	Unit              *string
 	DataType          *string
+	// TextValue is a STRING reading's value; Value is nil when it is set. See
+	// MeasurementEvent.TextValue.
+	TextValue *string
 	// Derived marks a calculated metric's value (ADR-082), computed by device-management
 	// from the other readings of the same sample. It is not stored as a column — the
 	// classifier names a calculated definition, which is fixed as calculated at creation —

@@ -450,6 +450,7 @@ func BuildMeasurementRows(requests []*MeasurementEventCreateRequest) ([]*Event, 
 			Classifier:   request.Classifier,
 			Unit:         request.Unit,
 			DataType:     request.DataType,
+			TextValue:    request.TextValue,
 		})
 	}
 	return parents, rows, nil

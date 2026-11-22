@@ -138,6 +138,7 @@ const sidebars: SidebarsConfig = {
         'user-guide/dashboards',
         'user-guide/viewing-dashboards-in-dash',
         'user-guide/alarms',
+        'user-guide/ingest-failures',
         'user-guide/notification-policies',
         // Devices
         'user-guide/devices',

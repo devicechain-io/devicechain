@@ -20,16 +20,16 @@ namespace DeviceChain.Harborpulse.Visuals
             tags = found.ToArray();
         }
         /// <summary>Text is drawn through the deck, so beside a lamp or a gauge the tags of a well at the frame's edge used to float over the quay.</summary>
-        public void FrameTags(Vector3 camera, Vector3 forward)
+        public void FrameTags(Vector3 camera, Vector3 forward, bool tallFrame)
         {
             var well = rig.Root.TransformPoint(new Vector3((float)WellFootprint.LocalX, 0, (float)WellFootprint.LocalZ));
-            var show = WellFootprint.TagsInView(well.x - camera.x, well.y - camera.y, well.z - camera.z, forward.x, forward.y, forward.z);
+            var show = WellFootprint.TagsInView(well.x - camera.x, well.y - camera.y, well.z - camera.z, forward.x, forward.y, forward.z, tallFrame);
             foreach (var tag in tags) if (tag.enabled != show) tag.enabled = show;
         }
 
-        public void Apply(PumpPresentation p, float dt, float time, Vector3 camera, Vector3 forward)
+        public void Apply(PumpPresentation p, float dt, float time, Vector3 camera, Vector3 forward, bool tallFrame)
         {
-            FrameTags(camera, forward);
+            FrameTags(camera, forward, tallFrame);
             var surface = rig["WellSurface"]; surface.gameObject.SetActive(p.WetWell.HasValue);
             if (p.WetWell.HasValue) surface.localPosition = new Vector3((float)WellFootprint.LocalX, PumpStationBuilder.WellFloor + (float)p.WetWell.Value.Value, (float)WellFootprint.LocalZ);
             if (p.ImpellerSpeed.HasValue) rig["Impeller"].Rotate(Vector3.up, (float)p.ImpellerSpeed.Value * 720 * dt, Space.Self);

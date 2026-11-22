@@ -90,6 +90,8 @@ title: 双重身份验证
 对这样的账号，`LoginAsync` 会抛出 `MfaRequiredException`。把它的 `Challenge` 连同代码传给 `VerifyMfaAsync`：
 
 ```csharp
+using DeviceChain.Sdk.Auth;
+
 try
 {
     await client.LoginAsync(email, password);
