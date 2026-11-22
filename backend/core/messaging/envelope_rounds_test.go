@@ -88,7 +88,56 @@ func (r fakeRoundPub) Get(_ context.Context, tenant string, seq uint64) (StoredM
 	if !ok {
 		return StoredMessage{}, fmt.Errorf("no message at %d: %w", seq, nats.ErrMsgNotFound)
 	}
-	return StoredMessage{Sequence: seq, Subject: "i." + tenant + ".inbound-events", Value: m.Value, Headers: m.Headers}, nil
+	headers := map[string]string{nats.MsgIdHdr: m.DedupID}
+	for k, v := range m.Headers {
+		headers[k] = v
+	}
+	return StoredMessage{Sequence: seq, Subject: "i." + tenant + ".inbound-events", Value: m.Value, Headers: headers}, nil
+}
+
+// A placement move can put a different round of the same tenant and kind at the
+// PubAck's sequence. Neither an envelope nor a singleton there proves settlement.
+func TestRoundRecoveryRejectsAnotherRoundsMessageAtTheSameSequence(t *testing.T) {
+	for _, count := range []int{1, 2} {
+		for _, wrongID := range []string{"", "C:acme:other:0"} {
+			t.Run(fmt.Sprintf("members=%d/id=%q", count, wrongID), func(t *testing.T) {
+				b := newFakeBroker()
+				k, _, _ := RoundKeyOf("acme", 515, time.Time{})
+				members := func(o *roundOutcomes, redelivered bool) []RoundMember {
+					var ms []RoundMember
+					for i := 1; i <= count; i++ {
+						ms = append(ms, o.member(uint32(i), redelivered))
+					}
+					return ms
+				}
+				first := newTestEngine(t, b)
+				first.Publish(context.Background(), k, members(newRoundOutcomes(), false))
+				first.Wait()
+				original := b.bySeq[1]
+				other := original
+				other.DedupID = wrongID
+				b.bySeq[1] = other
+				o := newRoundOutcomes()
+				next := newTestEngine(t, b)
+				next.Publish(context.Background(), k, members(o, true))
+				next.Wait()
+				for i := 1; i <= count; i++ {
+					require.Equal(t, 1, o.n[uint32(i)])
+					require.Error(t, o.errs[uint32(i)], "an unrelated stored message must not settle this source")
+				}
+				require.Len(t, b.bySeq, 1)
+				// The refused probe must not enter the settlement cache.
+				b.bySeq[1] = original
+				o = newRoundOutcomes()
+				next.Publish(context.Background(), k, members(o, true))
+				next.Wait()
+				for i := 1; i <= count; i++ {
+					require.NoError(t, o.errs[uint32(i)])
+					require.Equal(t, 1, o.n[uint32(i)])
+				}
+			})
+		}
+	}
 }
 
 // pb is a well-formed PUnresolvedEvent-shaped message: field 1 = a string.

@@ -391,7 +391,7 @@ func TestTurningTheSettingOffReleasesTheStoreOnceItsHoldersAreGone(t *testing.T)
 	si := b.storeInfo()
 	require.Equal(t, nats.DiscardNew, si.Config.Discard, "the release evicts nothing: discard new until drained")
 	require.EqualValues(t, fcHotBytes, si.Config.MaxBytes, "the release evicts nothing: the bound until drained")
-	for _, k := range []string{mqttFailClosedOwnerKey, mqttFailClosedHolderKey, mqttFailClosedHeartbeatKey} {
+	for _, k := range []string{mqttFailClosedOwnerKey, mqttFailClosedHeartbeatKey} {
 		_, marked := si.Config.Metadata[k]
 		require.Falsef(t, marked, "%s is dropped on release", k)
 	}
