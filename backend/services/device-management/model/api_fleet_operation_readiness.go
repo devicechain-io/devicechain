@@ -5,6 +5,8 @@ package model
 
 import (
 	"context"
+
+	"github.com/rs/zerolog/log"
 )
 
 // FleetOperationEnforcement reads the catalog afresh on every request. This is
@@ -31,6 +33,7 @@ WHERE n.nspname = 'device-management' AND c.relname = 'entity_attributes'
 func fleetOperationEnforcement(read func() ([]string, error)) string {
 	states, err := read()
 	if err != nil {
+		log.Warn().Err(err).Msg("Unable to read the database catalog for fleet operation readiness; reporting UNREADABLE")
 		return "UNREADABLE"
 	}
 	for _, state := range states {

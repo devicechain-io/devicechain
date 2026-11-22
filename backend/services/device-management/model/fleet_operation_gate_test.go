@@ -43,6 +43,10 @@ func TestNoExecutableKindWithoutARolledFoundation(t *testing.T) {
 		}
 		sources[file] = string(data)
 	}
+	// An empty or misdirected glob must not read as "no enforcing migration".
+	if _, ok := sources["../schema/baseline.go"]; !ok {
+		t.Fatalf("the gate did not read the schema package (got %d files)", len(sources))
+	}
 	trigger := fleetEnforcementInSources(sources)
 	kinds := ledger.ExecutableKinds()
 	version := ""
@@ -88,7 +92,7 @@ func fleetGit(args ...string) (string, error) {
 
 func fleetEnforcementInSources(sources map[string]string) bool {
 	for name, source := range sources {
-		if strings.HasSuffix(name, "_test.go") || name == "fleet_operation_readiness_constants.go" {
+		if strings.HasSuffix(name, "_test.go") || filepath.Base(name) == "fleet_operation_readiness_constants.go" {
 			continue
 		}
 		if strings.Contains(source, FleetOperationEnforcementTrigger) || strings.Contains(source, FleetOperationEnforcementFunction) ||

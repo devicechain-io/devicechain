@@ -1294,7 +1294,7 @@ lógicamente. En v1.9 devuelve `NOT_INSTALLED` y ningún tipo ejecutable; es lo 
 la versión que instale el cumplimiento. Un error de lectura del catálogo devuelve `UNREADABLE`
 y conserva los demás datos. Solo un trigger habilitado `ALWAYS` cuenta como `ENFORCED`;
 los modos ordinario, solo réplica y deshabilitado devuelven `DISABLED`. La ausencia o falta de
-coincidencia devuelve `NOT_INSTALLED`. El plazo de vista previa comienza en v1.9.
+coincidencia devuelve `NOT_INSTALLED`. La consulta cuenta filas, así que trátela como un diagnóstico que se ejecuta cuando se necesita la respuesta, no como algo que consultar periódicamente. El plazo de vista previa comienza en v1.9.
 
 El comando Preview muestra los mismos cuatro datos y solo termina con éxito si el estado es
 `ENFORCED` y no hay filas huérfanas. En v1.9 se espera una salida distinta de cero. Utiliza

@@ -1008,7 +1008,7 @@ Preview. device-management 租户数据平面提供 `fleetOperationReadiness` �
 这是安装强制执行机制的版本发布之前的预期结果。目录读取失败时返回 `UNREADABLE`，
 并保留其余信息。只有启用 `ALWAYS` 的触发器才算 `ENFORCED`；普通启用、仅副本启用和
 禁用状态均返回 `DISABLED`。缺少或不匹配的强制执行机制返回 `NOT_INSTALLED`。
-预览期限从 v1.9 开始。
+该查询会统计行数，因此应将其视为需要答案时才运行的诊断，而不是用于轮询。预览期限从 v1.9 开始。
 
 Preview 命令显示相同的四项信息，仅在状态为 `ENFORCED` 且孤立行数为零时成功退出。
 v1.9 中非零退出码是预期行为。登录及实例选项与 `dcctl attr` 相同：

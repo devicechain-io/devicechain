@@ -5748,7 +5748,7 @@ type AutomationReviewBreakGlass {
 }
 
 type Query {
-    """Preview. Report this build's fleet operation capabilities and fresh database enforcement and tenant orphan facts. Requires fleet:operate; scoped members are refused."""
+    """Preview. Report this build's fleet operation capabilities and fresh database enforcement and tenant orphan facts. Requires fleet:operate; scoped members are refused. An expensive diagnostic (it counts rows): query it when you need the answer, do not poll it."""
     fleetOperationReadiness: FleetOperationReadiness!
     """(Preview: may change in a minor release.) Read automation protection settings. Requires device:read and an unscoped caller; an unknown profile returns NOT_FOUND."""
     automationReviewPolicy(

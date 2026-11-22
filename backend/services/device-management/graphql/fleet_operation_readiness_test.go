@@ -40,3 +40,19 @@ func TestFleetOperationReadinessAuthorizationAndCatalogFailure(t *testing.T) {
 	// SQLite has no pg_catalog: a catalog error must preserve the other facts.
 	require.JSONEq(t, `{"fleetOperationReadiness":{"protocolVersion":1,"enforcement":"UNREADABLE","executableKinds":[],"orphanedAttributeRows":0}}`, string(res.Data))
 }
+
+// GraphQL aliases may select orphanedAttributeRows many times in one request; the count must run
+// once per resolver, its value and its error both reused.
+func TestFleetOperationReadinessCountsOrphansOnce(t *testing.T) {
+	calls := 0
+	r := &FleetOperationReadinessResolver{orphans: func() (int64, error) { calls++; return 3, nil }}
+	for range 200 {
+		n, err := r.OrphanedAttributeRows()
+		if err != nil || n == nil || *n != 3 {
+			t.Fatalf("got %v, %v", n, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("the orphan count ran %d times for one resolver, want 1", calls)
+	}
+}

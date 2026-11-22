@@ -20,8 +20,15 @@ func TestFleetOperationReadinessIsPreviewAndAdditive(t *testing.T) {
 	sdl := string(data)
 	base, _, found := strings.Cut(sdl, "# Fleet operation readiness (Preview)")
 	if !found {
-		t.Fatal("readiness extension missing")
+		t.Fatal("readiness types missing")
 	}
+	// The query field lives in the Query type; the "before" schema has neither it nor its
+	// description.
+	const field = "    \"\"\"Preview. Report this build's fleet operation capabilities and fresh database enforcement and tenant orphan facts. Requires fleet:operate; scoped members are refused. An expensive diagnostic (it counts rows): query it when you need the answer, do not poll it.\"\"\"\n    fleetOperationReadiness: FleetOperationReadiness!\n"
+	if !strings.Contains(base, field) {
+		t.Fatal("Query.fleetOperationReadiness and its description not found where expected")
+	}
+	base = strings.Replace(base, field, "", 1)
 	elements, err := sdldesc.Parse(sdl)
 	if err != nil {
 		t.Fatal(err)

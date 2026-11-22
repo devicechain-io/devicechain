@@ -1229,7 +1229,7 @@ In v1.9 enforcement is `NOT_INSTALLED` and no kind is executable; this is expect
 release that installs enforcement. A failed catalog read reports `UNREADABLE` while preserving
 the other facts. Only a trigger enabled `ALWAYS` counts as `ENFORCED`; ordinary, replica-only
 and disabled triggers report `DISABLED`. Missing or mismatched enforcement reports `NOT_INSTALLED`.
-The preview clock starts at v1.9.
+The query counts rows, so treat it as a diagnostic to run when you need the answer, not something to poll. The preview clock starts at v1.9.
 
 The Preview command prints the same four facts and exits successfully only when enforcement is
 `ENFORCED` and the orphan count is zero. The v1.9 non-zero exit is expected. Use the same login
