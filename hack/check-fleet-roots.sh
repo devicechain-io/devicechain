@@ -73,7 +73,8 @@ for root in "${roots[@]}"; do
 		TF_ENCRYPTION="$KEY" tofu plan -refresh=false -input=false -no-color "${VARS[@]}" -out=with-key.plan >/dev/null
 		grep -aq . with-key.plan
 		# The saved plan is ENCRYPTED: it must not be plain JSON or a plain zip.
-		if head -c 2 with-key.plan | grep -aq 'PK'; then
+		magic="$(head -c 2 with-key.plan)"
+		if [ "$magic" = 'PK' ]; then
 			echo "FAIL: $root: the saved plan is a plain archive, not encrypted" >&2
 			exit 1
 		fi
@@ -85,7 +86,7 @@ for root in "${roots[@]}"; do
 		fi
 		if ! grep -q 'encryption' <<<"$out"; then
 			echo "FAIL: $root: the plan was refused, but not by the encryption configuration:" >&2
-			echo "$out" | head -20 >&2
+			sed -n '1,20p' <<<"$out" >&2
 			exit 1
 		fi
 		echo "  no key: plan refused by the encryption configuration, as it must be"

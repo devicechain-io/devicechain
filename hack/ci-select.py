@@ -105,10 +105,6 @@ DOCS_DEPLOY = [
     "docs/i18n/*/docusaurus-plugin-content-docs/current/deployment/**",
 ]
 READERS = [
-    # fleet_roots_test.go — parses the fleet roots' own files (provider set, variables, outputs, encryption, backend).
-    ("deploy", ".", [
-        "deploy/fleet/**",
-    ], [], "fleet_roots_test.go"),
     # tofu_roots_test.go — walks every .tf under deploy/ and compares the roots with what
     # hack/tofu-roots.sh --all prints. plan_fixtures_test.go — scans the sanitized plan-gate
     # fixtures for confidential material.

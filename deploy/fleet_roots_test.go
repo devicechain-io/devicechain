@@ -71,7 +71,12 @@ func TestFleetRootsExistAndAreTheOnesThisTestKnows(t *testing.T) {
 	}
 	var found []string
 	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		// A directory with no .tf file is not a root (fleet/premises is the Go package that
+		// reads the recorded premises), so it is not for this test to review.
+		if tf, _ := filepath.Glob(filepath.Join("fleet", e.Name(), "*.tf")); len(tf) > 0 {
 			found = append(found, e.Name())
 		}
 	}
