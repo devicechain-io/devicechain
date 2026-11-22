@@ -101,15 +101,16 @@ func (r *SchemaResolver) CreateAsset(ctx context.Context, args struct {
 // update naming no fields was a caller error; nothing enforced that, and nothing
 // should.
 func (r *SchemaResolver) UpdateAsset(ctx context.Context, args struct {
-	Token   string
-	Request model.AssetUpdateRequest
+	Token             string
+	ExpectedUpdatedAt *string
+	Request           model.AssetUpdateRequest
 }) (*AssetResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateAsset(ctx, args.Token, &args.Request)
+	updated, err := api.UpdateAsset(ctx, args.Token, args.ExpectedUpdatedAt, &args.Request)
 	if err != nil {
 		return nil, err
 	}

@@ -246,7 +246,8 @@ mutation {
 
 部分更新缩小了并发冲突，但没有消除冲突。
 修改不同字段的两个写入者不再相互覆盖，修改同一字段仍会覆盖。
-`updateDashboard`、`updateConnector`、`updateAiProvider` 和 `updateNotificationPolicy`
+`updateDashboard`、`updateConnector`、`updateAiProvider`、`updateNotificationPolicy`、`updateArea`、
+`updateAsset`、`updateCustomer` 和 `updateEntityGroup`
 接受可选的 `expectedUpdatedAt`；存储时间戳在读取后发生变化时会拒绝写入。
 传入最近读取的 `updatedAt`，或省略以采用最后写入者获胜的语义。
 不要直接发送 `create*` 响应中的 `updatedAt`：先重新读取记录，否则即使没有其他修改，第一次受保护更新也可能被判定过时。
