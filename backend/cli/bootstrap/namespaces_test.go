@@ -121,8 +121,11 @@ func TestSingletonsAreAttributedToOtherInstancesOnly(t *testing.T) {
 		[]corev1.Service{svc(InstanceNamespace("alpha"), localMQTTNodePort)},
 		[]networkingv1.Ingress{ing(InstanceNamespace("alpha"), "localhost")},
 		nil, "alpha", "localhost")
-	if own != (clusterSingletons{}) {
+	if own.MQTTNodePortHolder != "" || len(own.MQTTNodePortHolders) != 0 || own.HostHolder != "" {
 		t.Errorf("alpha's own port and host were reported as taken: %+v", own)
+	}
+	if own.OwnMQTTNodePort != localMQTTNodePort {
+		t.Errorf("alpha's own node port read as %d, want %d: a re-run must keep it", own.OwnMQTTNodePort, localMQTTNodePort)
 	}
 	if err := refuseAHostAnotherInstanceServes(got, "beta", "localhost"); err == nil ||
 		!strings.Contains(err.Error(), "--host") {
@@ -140,7 +143,7 @@ func TestOnlyTheFirstLocalInstanceAsksForTheMQTTNodePort(t *testing.T) {
 	if !slices.Contains(infraVars(first), want) {
 		t.Errorf("the first local instance does not ask for the MQTT node port: %v", infraVars(first))
 	}
-	second := &State{Instance: "beta", KubeContext: "kind-dev", Values: map[string]string{mqttNodePortHolderKey: "alpha"}}
+	second := &State{Instance: "beta", KubeContext: "kind-dev", Values: map[string]string{mqttNodePortKey: "0"}}
 	for _, v := range infraVars(second) {
 		if strings.HasPrefix(v, "nats_mqtt_node_port=") {
 			t.Errorf("a second instance asks for a node port another instance holds: %s", v)
@@ -397,7 +400,7 @@ func TestTheSingletonStepRefusesAnInstanceTheStoreHasNoBudgetFor(t *testing.T) {
 	if *calls != 1 {
 		t.Errorf("the budget was checked %d time(s), want once", *calls)
 	}
-	if _, ok := st.Values[mqttNodePortHolderKey]; ok {
+	if _, ok := st.Values[mqttNodePortKey]; ok {
 		t.Error("a refused run still decided the node port, as though it would be built")
 	}
 
