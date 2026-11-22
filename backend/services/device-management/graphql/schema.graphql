@@ -3515,14 +3515,33 @@ type FacetKeySearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Represents rotatable authentication material for a device (ADR-014).
+"""
+Authentication material for a device, which can be rotated. A device has any number of credentials;
+each is one of ACCESS_TOKEN, MQTT_BASIC or X509_CERTIFICATE. Secrets are stored only as keyed
+digests: an access token is returned once, in the response to the write that set it, and no password
+or secret is ever returned on a read. Reading credentials requires device:write, because whoever
+could read them could impersonate the device.
+"""
 type DeviceCredential implements Model & TokenReference & MetadataEntity {
+    """
+    Server-assigned numeric identifier, as a string. Address a credential by its token instead where
+    you can.
+    """
     id: ID!
+    """When the credential was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the credential was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: a deleted credential is removed outright and is not returned."""
     deletedAt: String
+    """
+    Identifier of the credential record, unique within the tenant. It is not what a device presents;
+    see credentialId.
+    """
     token: String!
+    """The device this credential authenticates."""
     device: Device!
+    """The kind of credential: ACCESS_TOKEN, MQTT_BASIC or X509_CERTIFICATE."""
     credentialType: String!
     """
     What the device presents. For MQTT_BASIC, the username. For ACCESS_TOKEN, the access
@@ -3535,12 +3554,16 @@ type DeviceCredential implements Model & TokenReference & MetadataEntity {
     device presents.
     """
     credentialId: String!
-    # Write-only: accepted on create/update but never returned on read (always
-    # null), so a stored secret (e.g. an MQTT_BASIC password) cannot be read back
-    # out through the API.
+    """
+    Always null. It is accepted when a credential is written but never returned, so a stored secret
+    such as an MQTT_BASIC password cannot be read back out through the API.
+    """
     credentialValue: String
+    """Whether the credential can authenticate. A disabled credential is kept but refused at connect."""
     enabled: Boolean!
+    """When the credential stops authenticating, as an RFC 3339 timestamp. Null means it never expires."""
     expiresAt: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
     """
     The provisioning profile whose registration issued this credential, or null for a credential
@@ -3568,10 +3591,13 @@ type X509Certificate {
     trustAnchor: DeviceTrustAnchor
 }
 
-# Data required to create a device credential.
+"""Data required to create a device credential."""
 input DeviceCredentialCreateRequest {
+    """Identifier for the new credential record, unique within the tenant."""
     token: String!
+    """Token of the device the credential authenticates. An unknown token is refused."""
     deviceToken: String!
+    """The kind of credential: ACCESS_TOKEN, MQTT_BASIC or X509_CERTIFICATE. Any other value is refused."""
     credentialType: String!
     """
     The MQTT username, or the access token for ACCESS_TOKEN (at most 256 bytes). The token
@@ -3585,8 +3611,11 @@ input DeviceCredentialCreateRequest {
     working until it is next changed.
     """
     credentialValue: String
+    """Whether the credential can authenticate. A disabled credential is kept but refused at connect."""
     enabled: Boolean!
+    """When the credential stops authenticating, as an RFC 3339 timestamp. Omit for never."""
     expiresAt: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
     """
     X509_CERTIFICATE only: the device certificate in PEM, optionally followed by the
@@ -3599,21 +3628,18 @@ input DeviceCredentialCreateRequest {
     trustAnchorToken: String
 }
 
-# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
-# the stored value untouched, send null to clear it, send a value to set it.
-#
-# There is deliberately no `token` field — the record is identified by the mutation's
-# `token` argument, and an update cannot move it.
-#
-# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
-# arrive already-populated for a caller who never sent it, which collapses "omitted" back
-# into "sent", and turns this input back into the full replace it replaces.
+"""
+A partial update of a device credential. Each field has three states: omit it to keep the stored
+value, send null to clear it, or send a value to set it. The token is not here because the
+mutation's token argument names the credential and an update cannot move it.
+"""
 input DeviceCredentialUpdateRequest {
-    # Re-points the credential at another device. Null is refused; an unknown token
-    # refuses the whole update.
+    """
+    Re-points the credential at another device. Null is refused, and an unknown token refuses the
+    whole update.
+    """
     deviceToken: String
-    # Required and unclearable. credentialType is validated against the known vocabulary
-    # when sent; credentialId is what a device presents at connect time.
+    """The kind of credential. Required: null is refused. Validated against the known types when sent."""
     credentialType: String
     """
     The MQTT username, or the new access token for ACCESS_TOKEN. Setting it on an
@@ -3634,75 +3660,105 @@ input DeviceCredentialUpdateRequest {
     working until it is next changed.
     """
     credentialValue: String
-    # Required and unclearable: null is refused rather than read as false, which would
-    # silently disable the credential and take the device offline at its next reconnect.
+    """
+    Whether the credential can authenticate. Null is refused rather than read as false, which would
+    silently disable the credential and take the device offline at its next reconnect.
+    """
     enabled: Boolean
-    # An RFC3339 timestamp. Null — or an empty string, which is what a cleared form field
-    # sends — means "never expires".
+    """
+    When the credential stops authenticating, as an RFC 3339 timestamp. Null, or an empty string
+    such as a cleared form field sends, means never expires.
+    """
     expiresAt: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
 
-# Criteria used when searching for device credentials.
+"""Criteria for listing device credentials. Every facet is optional and they AND together."""
 input DeviceCredentialSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Only credentials of the device with this token."""
     device: String
+    """Only credentials of this type: ACCESS_TOKEN, MQTT_BASIC or X509_CERTIFICATE."""
     credentialType: String
     """
     An MQTT username, or for ACCESS_TOKEN either the access token or the fingerprint a read
     returns. The token is matched through its digest; it is never stored or compared as sent.
     """
     credentialId: String
+    """True selects enabled credentials and false disabled ones. Omit for either."""
     enabled: Boolean
 }
 
-# Search results returned from device credential query.
+"""One page of device credentials."""
 type DeviceCredentialSearchResults {
+    """The credentials on this page."""
     results: [DeviceCredential!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
-# One append-only record of a physical unit swap: the failed hardware was retired
-# and a new unit bound to the SAME logical device identity, so the device's events,
-# alarms, relationships, group membership and command vocabulary carry forward
-# unbroken. Written only by replaceDevice; there is no update or delete for it, and
-# it carries no token, so it cannot be re-pointed.
+"""
+One append-only record of a physical unit swap: the failed hardware was retired and a new unit bound
+to the same logical device identity, so the device's events, alarms, relationships, group membership
+and command vocabulary carry forward unbroken. Written only by replaceDevice; it can be neither
+updated nor deleted and carries no token.
+"""
 type DeviceReplacement {
+    """Server-assigned numeric identifier, as a string."""
     id: ID!
+    """When the record was written, as an RFC 3339 timestamp."""
     createdAt: String
     # The logical identity that survived the swap - unchanged by the operation.
+    """The logical device identity that survived the swap, unchanged by it."""
     device: Device!
-    # When the replacement was applied, from the server's clock. Never caller-supplied.
+    """
+    When the replacement was applied, as an RFC 3339 timestamp from the server's clock. Never
+    supplied by the caller.
+    """
     occurredTime: String!
-    # The authenticated subject that performed the replacement, from the caller's
-    # token rather than the request body.
+    """
+    The authenticated subject that performed the replacement, taken from the caller's token rather
+    than the request.
+    """
     actor: String!
-    # The operator's free-text note ("water ingress", "RMA 41822").
+    """The operator's free-text note, for example water ingress or an RMA number. Null when none was given."""
     reason: String
-    # The incoming physical unit's own identifier - a manufacturer serial or IMEI.
-    # Recorded here and deliberately NOT written onto the device's externalId, which
-    # is the stable business key of the logical thing and must survive a swap.
+    """
+    The incoming physical unit's own identifier, such as a manufacturer serial or IMEI. Recorded
+    here and deliberately not written onto the device's external id, which is the stable business
+    key of the logical thing and survives a swap. Null when none was given.
+    """
     unitIdentifier: String
-    # Entity tokens of the credentials this replacement disabled. Tokens, never
-    # credential ids: the id of an ACCESS_TOKEN credential is the device's token.
+    """
+    Tokens of the credential records this replacement disabled. Tokens rather than credential ids,
+    because the id of an ACCESS_TOKEN credential is the device's token.
+    """
     retiredCredentialTokens: [String!]!
-    # Entity token of the credential minted for the incoming unit.
+    """Token of the credential record minted for the incoming unit."""
     newCredentialToken: String!
+    """Type of the credential minted for the incoming unit."""
     newCredentialType: String!
 }
 
-# Criteria used when searching the device-replacement journal.
+"""Criteria for listing device replacement records."""
 input DeviceReplacementSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
-    # Narrow to one device by its token.
+    """Only the replacements of the device with this token. Omit for every device."""
     device: String
 }
 
-# Search results returned from a device-replacement query, newest first.
+"""One page of device replacement records, newest first."""
 type DeviceReplacementSearchResults {
+    """The records on this page."""
     results: [DeviceReplacement!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -3822,22 +3878,21 @@ type DeviceConfigurationRevisionSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# What a caller sends to swap the physical unit behind a device identity.
-#
-# It carries NO device identity fields, and that is the contract rather than an
-# omission: there is no token, externalId, device type or name here, so a
-# replacement cannot move the identity, the business key or the profile binding.
-# "Rotate credentials, not identity" is unrepresentable to violate, not merely
-# refused.
+"""
+What a caller sends to swap the physical unit behind a device identity. It carries no device
+identity fields on purpose: there is no token, external id, device type or name, so a replacement
+cannot move the identity, the business key or the profile binding. Rotate credentials, not identity.
+"""
 input DeviceReplaceRequest {
-    # The surviving logical identity.
+    """Token of the surviving logical device. An unknown token is refused."""
     deviceToken: String!
-    # Credential type minted for the incoming unit. Defaults to ACCESS_TOKEN.
+    """Type of the credential minted for the incoming unit. Defaults to ACCESS_TOKEN."""
     credentialType: String
-    # The identifier the new unit presents at connect time. Optional only for
-    # ACCESS_TOKEN, where a fresh random token is minted and returned once in
-    # newCredential; required for every other type, since the server cannot invent
-    # an MQTT username.
+    """
+    The identifier the new unit presents at connect time. Optional only for ACCESS_TOKEN, where a
+    random token is minted and returned once in newCredential; required for every other type, since
+    the server cannot invent an MQTT username.
+    """
     credentialId: String
     # Secret material for types that carry one separately (an MQTT password).
     # Write-only, as on any credential.
@@ -3848,49 +3903,89 @@ input DeviceReplaceRequest {
     working until it is next changed.
     """
     credentialValue: String
-    # Entity token for the new credential row. A UUID is minted when absent.
+    """Token for the new credential record. A UUID is generated when omitted."""
     credentialToken: String
-    # Optional expiry for the new credential (RFC3339).
+    """When the new credential stops authenticating, as an RFC 3339 timestamp. Omit for never."""
     expiresAt: String
+    """
+    The operator's free-text note, for example water ingress or an RMA number. Recorded on the
+    replacement.
+    """
     reason: String
+    """
+    The incoming physical unit's own identifier, such as a manufacturer serial or IMEI. Recorded on
+    the replacement, not on the device.
+    """
     unitIdentifier: String
 }
 
-# What replaceDevice returns.
+"""What replaceDevice returns."""
 type DeviceReplaceResult {
-    # The surviving identity, unchanged.
+    """The surviving device identity, unchanged."""
     device: Device!
-    # The append-only record this call wrote.
+    """The append-only record this call wrote."""
     replacement: DeviceReplacement!
-    # The credential minted for the incoming unit. This is the one moment the
-    # material the new unit must be programmed with is readable (an access token is
-    # stored only as a digest and cannot be read again), so copy it from here.
+    """
+    The credential minted for the incoming unit. This is the one moment the material the new unit
+    must be programmed with can be read: an access token is stored only as a digest and cannot be
+    read again, so copy it from here.
+    """
     newCredential: DeviceCredential!
-    # Entity tokens of the credentials this call disabled. Tokens only: the
-    # credential rows themselves stay behind the gated credential queries.
+    """
+    Tokens of the credential records this call disabled. Tokens only: the records themselves stay
+    behind the credential queries.
+    """
     retiredCredentialTokens: [String!]!
 }
 
-# A device provisioning profile (ADR-012): the shared key+secret a fleet presents to
-# self-register at POST /api/device-management/provisioning/{tenant}/register, the strategy
-# governing whether unknown devices may be created, and the device type stamped onto
-# auto-created devices. The provision secret is generated by the server, returned once by
-# createProvisioningProfile and rotateProvisioningProfileSecret, and never exposed on this
-# type: only its digest is stored.
+"""
+A device provisioning profile: the shared key and secret a fleet presents to register itself at the
+provisioning registration endpoint, the strategy that decides whether unknown devices may be
+created, and the device type stamped onto auto-created devices. The provision secret is generated by
+the server, returned once by createProvisioningProfile and rotateProvisioningProfileSecret, and
+never exposed on this type: only its digest is stored.
+"""
 type ProvisioningProfile implements Model & TokenReference & NamedEntity & MetadataEntity {
+    """
+    Server-assigned numeric identifier, as a string. Address a profile by its token instead where
+    you can.
+    """
     id: ID!
+    """When the profile was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the profile was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: a deleted profile is removed outright and is not returned."""
     deletedAt: String
+    """Identifier of the profile, unique within the tenant. It cannot be changed after creation."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """The key a fleet presents, with the provision secret, to register itself. Unique within the tenant."""
     provisionKey: String!
+    """
+    Whether unknown devices may be created. ALLOW_NEW registers a device that does not exist yet and
+    adopts an earmarked one; CHECK_PRE_PROVISIONED registers only earmarked devices that already
+    exist. Neither adopts a device that was not earmarked for the profile.
+    """
     strategy: String!
+    """The device type of every device the profile registers, and the only type it will adopt."""
     deviceType: DeviceType!
+    """
+    The type of credential the profile issues to the devices it registers: ACCESS_TOKEN for a
+    profile that authenticates by secret, X509_CERTIFICATE for a certificate profile.
+    """
     credentialType: String!
+    """Whether the profile accepts registrations. A disabled profile refuses them."""
     enabled: Boolean!
+    """
+    When the profile stops accepting registrations, as an RFC 3339 timestamp. Null means it never
+    expires.
+    """
     expiresAt: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
     """
     The most devices the profile may register, or null for no cap. Devices holding a
@@ -3930,23 +4025,43 @@ type ProvisioningProfileSecretResult {
     issuedSecret: String
 }
 
-# Data required to create a provisioning profile.
+"""
+Data required to create a provisioning profile. The provision secret is not chosen by the caller:
+the server generates it and returns it once in the response.
+"""
 input ProvisioningProfileCreateRequest {
+    """Identifier for the new profile, unique within the tenant. Cannot be changed later."""
     token: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
-    # Refused when empty or whitespace-only. Unique within the tenant. A padded value is stored
-    # exactly as sent. The provision secret is not chosen: the server generates it.
+    """
+    The key a fleet presents to register itself. Refused when empty or whitespace-only, and unique
+    within the tenant. A padded value is stored exactly as sent.
+    """
     provisionKey: String!
-    # ALLOW_NEW registers a device that does not exist yet and adopts an earmarked one;
-    # CHECK_PRE_PROVISIONED registers only earmarked devices that already exist. Neither adopts a
-    # device that was not earmarked for the profile.
+    """
+    ALLOW_NEW registers a device that does not exist yet and adopts an earmarked one;
+    CHECK_PRE_PROVISIONED registers only earmarked devices that already exist. Neither adopts a
+    device that was not earmarked for the profile.
+    """
     strategy: String!
-    # The type of every device the profile registers, and the only type it will adopt.
+    """
+    Token of the device type of every device the profile registers, and the only type it will adopt.
+    An unknown token is refused.
+    """
     deviceTypeToken: String!
+    """
+    Type of credential to issue. When sent it must be a type provisioning can mint; for a
+    certificate profile it must be X509_CERTIFICATE.
+    """
     credentialType: String
+    """Whether the profile accepts registrations."""
     enabled: Boolean!
+    """When the profile stops accepting registrations, as an RFC 3339 timestamp. Omit for never."""
     expiresAt: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
     """The most devices the profile may register; at least 1. Omit or send null for no cap."""
     maxDevices: Int
@@ -3960,39 +4075,50 @@ input ProvisioningProfileCreateRequest {
     trustAnchorToken: String
 }
 
-# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
-# the stored value untouched, send null to clear it, send a value to set it.
-#
-# There is deliberately no `token` field — the record is identified by the mutation's
-# `token` argument, and an update cannot move it.
-#
-# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
-# arrive already-populated for a caller who never sent it, which collapses "omitted" back
-# into "sent", and turns this input back into the full replace it replaces.
+"""
+A partial update of a provisioning profile. Each field has three states: omit it to keep the stored
+value, send null to clear it, or send a value to set it. The token is not here because the
+mutation's token argument names the profile. The credential type cannot be edited and the secret is
+replaced only by rotateProvisioningProfileSecret.
+"""
 input ProvisioningProfileUpdateRequest {
+    """Human-readable name; null clears it."""
     name: String
+    """Free-text description; null clears it."""
     description: String
-    # The key a fleet presents to self-register. Required and unclearable: a blank key
-    # authenticates nothing. The secret is not editable here; rotateProvisioningProfileSecret
-    # replaces it.
+    """
+    The key a fleet presents to register itself. Required: null is refused, because a blank key
+    authenticates nothing. The secret is not editable here; rotateProvisioningProfileSecret replaces
+    it.
+    """
     provisionKey: String
-    # Required and unclearable; validated against the strategy vocabulary when sent.
+    """
+    ALLOW_NEW or CHECK_PRE_PROVISIONED. Required: null is refused. Validated against the known
+    strategies when sent.
+    """
     strategy: String
-    # Stamped onto auto-created devices. Null is refused; an unknown token refuses the
-    # whole update.
+    """
+    Device type stamped onto auto-created devices. Null is refused, and an unknown token refuses the
+    whole update.
+    """
     deviceTypeToken: String
     # credentialType is deliberately absent. Provisioning can mint exactly one credential
     # type today (ACCESS_TOKEN), so every stored value is that one and an update naming
     # the field could only restate it or be refused — a field with no useful request does
     # not belong in an update input. It returns additively when a second type is mintable.
+    """Whether the profile accepts registrations. Null is refused rather than read as false."""
     enabled: Boolean
-    # An RFC3339 timestamp. Null or an empty string means "never expires".
+    """
+    When the profile stops accepting registrations, as an RFC 3339 timestamp. Null, or an empty
+    string, means never expires.
+    """
     expiresAt: String
     """
     The most devices the profile may register; at least 1. Null removes the cap. Lowering it
     below the number already registered only refuses further registrations.
     """
     maxDevices: Int
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
     """
     Re-points a certificate profile at another trust anchor. Null is refused, and so is naming
@@ -4001,18 +4127,25 @@ input ProvisioningProfileUpdateRequest {
     trustAnchorToken: String
 }
 
-# Criteria used when searching for provisioning profiles.
+"""Criteria for listing provisioning profiles. Every facet is optional and they AND together."""
 input ProvisioningProfileSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Only profiles that register devices of the device type with this token."""
     deviceType: String
+    """Only profiles with this strategy: ALLOW_NEW or CHECK_PRE_PROVISIONED."""
     strategy: String
+    """True selects enabled profiles and false disabled ones. Omit for either."""
     enabled: Boolean
 }
 
-# Search results returned from provisioning profile query.
+"""One page of provisioning profiles."""
 type ProvisioningProfileSearchResults {
+    """The profiles on this page."""
     results: [ProvisioningProfile!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -4606,34 +4739,69 @@ type UnregisteredIntegrationDeviceSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# A device's possession claim (ADR-012): a one-time, optionally expiring secret an
-# eventual owner presents to assign the device to a customer. The claim secret is
-# write-only and is never exposed on this type.
+"""
+A device's possession claim: a one-time, optionally expiring secret that an eventual owner presents
+to assign the device to a customer. The claim secret is write-only and is never exposed on this
+type; only a keyed digest is stored.
+"""
 type DeviceClaim implements Model {
+    """Server-assigned numeric identifier, as a string."""
     id: ID!
+    """When the claim was first opened, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the claim was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """When the claim was deleted, as an RFC 3339 timestamp; null for a live claim."""
     deletedAt: String
+    """The device the claim is on. A device has a single claim, which initiating again reopens."""
     device: Device!
+    """
+    OPEN while the claim can be redeemed, CLAIMED once it has been redeemed, CANCELED once it was
+    closed without assigning the device.
+    """
     status: String!
+    """
+    When the claim stops being redeemable, as an RFC 3339 timestamp. Null means it does not expire.
+    Redeeming an expired claim is refused.
+    """
     expiresAt: String
+    """When the claim was redeemed, as an RFC 3339 timestamp. Null unless the claim has been redeemed."""
     claimedTime: String
+    """
+    The customer the device was assigned to when the claim was redeemed. Null unless the claim has
+    been redeemed.
+    """
     claimedByCustomer: Customer
 }
 
-# Data required to open (or reopen) a device claim.
+"""
+Data required to open, or reopen, a device claim. Reopening a claimed or canceled device, for
+example after resale, clears the earlier redemption record.
+"""
 input DeviceClaimInitiateRequest {
+    """Token of the device to open a claim on. An unknown token is refused."""
     deviceToken: String!
+    """
+    The secret an eventual owner must present to redeem the claim. Refused when empty or whitespace-
+    only; at most 256 bytes, taken exactly as sent. Stored only as a keyed digest and never
+    returned.
+    """
     claimSecret: String!
+    """When the claim stops being redeemable, as an RFC 3339 timestamp. Omit for no expiry."""
     expiresAt: String
 }
 
-# Data required to redeem a device claim: the device, the claim secret (proof of
-# possession), the customer to assign the device to, and the relationship type for
-# the resulting device→customer ownership edge.
+"""
+Data required to redeem a device claim: the device, the claim secret as proof of possession, the
+customer to assign the device to, and the relationship type of the resulting device-to-customer
+edge. Redeeming is one-time: a concurrent or repeated redemption of the same claim fails.
+"""
 input DeviceClaimRequest {
+    """Token of the device being claimed."""
     deviceToken: String!
+    """The claim secret that proves possession. It must match the secret the claim was opened with."""
     claimSecret: String!
+    """Token of the customer to assign the device to. An unknown token is refused."""
     customerToken: String!
     """
     The relationship type of the edge the claim writes. Omit it to use the built-in
@@ -7139,16 +7307,40 @@ type Query {
         """Number of versions to skip, not negative. Use with limit to page further."""
         offset: Int
     ): [EntityGroupVersion!]!
-    # Find device credentials by unique id.
-    deviceCredentialsById(ids: [ID!]!): [DeviceCredential!]!
-    # Find device credentials by unique token.
-    deviceCredentialsByToken(tokens: [String!]!): [DeviceCredential!]!
-    # List device credentials that meet criteria.
-    deviceCredentials(criteria: DeviceCredentialSearchCriteria!): DeviceCredentialSearchResults!
-    # List device-replacement records, newest first, optionally narrowed to one
-    # device. There is no by-id or by-token door: a replacement is never addressed
-    # on its own, only read as part of a device's history.
-    deviceReplacements(criteria: DeviceReplacementSearchCriteria!): DeviceReplacementSearchResults!
+    """
+    Reads device credentials by numeric id. Ids naming no credential are omitted. Requires
+    device:write rather than device:read: whoever could read credentials could impersonate the
+    device. An access token is never returned by a read, only a fingerprint.
+    """
+    deviceCredentialsById(
+        """Numeric ids of the device credentials to read."""
+        ids: [ID!]!
+    ): [DeviceCredential!]!
+    """
+    Reads device credentials by token. Tokens naming no credential are omitted. Requires
+    device:write, as deviceCredentialsById does.
+    """
+    deviceCredentialsByToken(
+        """Tokens of the device credentials to read."""
+        tokens: [String!]!
+    ): [DeviceCredential!]!
+    """
+    Lists the device credentials that match the criteria, one page at a time. Requires device:write,
+    as deviceCredentialsById does.
+    """
+    deviceCredentials(
+        """The facets the listed device credentials must match, and the page to return."""
+        criteria: DeviceCredentialSearchCriteria!
+    ): DeviceCredentialSearchResults!
+    """
+    Lists device replacement records, newest first, optionally narrowed to one device. There is no
+    by-id or by-token query: a replacement is never addressed on its own, only read as part of a
+    device's history. Requires device:read.
+    """
+    deviceReplacements(
+        """The facets the listed device replacements must match, and the page to return."""
+        criteria: DeviceReplacementSearchCriteria!
+    ): DeviceReplacementSearchResults!
     """
     A device's configuration: its latest revision, its last report and whether they
     agree. Null when no device has this token. Reading mints nothing.
@@ -7199,10 +7391,22 @@ type Query {
         """The page of children to return."""
         pagination: PaginationInput!
     ): AssetSearchResults!
-    # Find provisioning profiles by unique id.
-    provisioningProfilesById(ids: [ID!]!): [ProvisioningProfile!]!
-    # Find provisioning profiles by unique token.
-    provisioningProfilesByToken(tokens: [String!]!): [ProvisioningProfile!]!
+    """
+    Reads provisioning profiles by numeric id. Ids naming no profile are omitted. Requires
+    device:read. The provision secret is never returned.
+    """
+    provisioningProfilesById(
+        """Numeric ids of the provisioning profiles to read."""
+        ids: [ID!]!
+    ): [ProvisioningProfile!]!
+    """
+    Reads provisioning profiles by token. Tokens naming no profile are omitted. Requires
+    device:read. The provision secret is never returned.
+    """
+    provisioningProfilesByToken(
+        """Tokens of the provisioning profiles to read."""
+        tokens: [String!]!
+    ): [ProvisioningProfile!]!
     """Find one integration by token, or null when there is none."""
     integration(
         """Token of the integration."""
@@ -7305,8 +7509,14 @@ type Query {
         """The integration and the page."""
         criteria: UnregisteredIntegrationDeviceSearchCriteria!
     ): UnregisteredIntegrationDeviceSearchResults!
-    # List provisioning profiles that meet criteria.
-    provisioningProfiles(criteria: ProvisioningProfileSearchCriteria!): ProvisioningProfileSearchResults!
+    """
+    Lists the provisioning profiles that match the criteria, one page at a time. Requires
+    device:read. The provision secret is never returned.
+    """
+    provisioningProfiles(
+        """The facets the listed provisioning profiles must match, and the page to return."""
+        criteria: ProvisioningProfileSearchCriteria!
+    ): ProvisioningProfileSearchResults!
     """Find trust anchors by unique id."""
     deviceTrustAnchorsById(
         """Ids of the anchors."""
@@ -7329,8 +7539,14 @@ type Query {
         """Paging and filters."""
         criteria: DeviceRevokedCertificateSearchCriteria!
     ): DeviceRevokedCertificateSearchResults!
-    # Get a device's current possession claim, or null if it has none.
-    deviceClaim(deviceToken: String!): DeviceClaim
+    """
+    Reads a device's current possession claim, or null when it has none. The claim secret is never
+    returned. Requires device:read.
+    """
+    deviceClaim(
+        """Token of the device."""
+        deviceToken: String!
+    ): DeviceClaim
 
     # Find entity relationship types by unique id.
     entityRelationshipTypesById(ids: [String!]!): [EntityRelationshipType!]!
@@ -8285,18 +8501,47 @@ type Mutation {
     # Delete a facet key by its natural key. Returns whether a row was removed; a
     # system facet is non-deletable and its removal is refused.
     deleteFacetKey(memberType: String!, key: String!): Boolean!
-    # Create a new device credential.
-    createDeviceCredential(request: DeviceCredentialCreateRequest): DeviceCredential!
-    # Update an existing device credential.
-    updateDeviceCredential(token: String!, request: DeviceCredentialUpdateRequest!): DeviceCredential!
-    # Delete a single device credential.
-    deleteDeviceCredential(token: String!): Boolean!
-    # Bind a NEW physical unit to an EXISTING logical device identity: retire every
-    # credential the outgoing unit could authenticate with, mint one for the
-    # incoming unit, and write an append-only record of the swap - all in one
-    # transaction. The device's history, alarms, relationships, group membership and
-    # command vocabulary carry forward because none of them are touched.
-    replaceDevice(request: DeviceReplaceRequest!): DeviceReplaceResult!
+    """
+    Creates a credential for a device. For ACCESS_TOKEN the token is returned once, in this
+    response, and only a keyed digest is stored. For MQTT_BASIC the password is write-only. For
+    X509_CERTIFICATE the certificate chain is verified against the named trust anchor when created.
+    Requires device:write.
+    """
+    createDeviceCredential(
+        """The device credential to create."""
+        request: DeviceCredentialCreateRequest
+    ): DeviceCredential!
+    """
+    Applies a partial update to a device credential, identified by token. Setting credentialId on an
+    ACCESS_TOKEN credential rotates the token: the old one stops working at once and the new one is
+    returned once, in this response. Omitting credentialValue leaves the stored secret in place.
+    Requires device:write.
+    """
+    updateDeviceCredential(
+        """Token of the device credential to update."""
+        token: String!
+        """The fields to change."""
+        request: DeviceCredentialUpdateRequest!
+    ): DeviceCredential!
+    """
+    Deletes a device credential outright; it stops authenticating at once. Returns true when it was
+    deleted and false when nothing has the token. Requires device:write.
+    """
+    deleteDeviceCredential(
+        """Token of the device credential to delete."""
+        token: String!
+    ): Boolean!
+    """
+    Binds a new physical unit to an existing logical device identity: it retires every credential
+    the outgoing unit could authenticate with, mints one for the incoming unit and writes an append-
+    only replacement record, all in one transaction. The device's history, alarms, relationships,
+    group membership and command vocabulary carry forward because none of them are touched. The new
+    credential's secret material is readable only in this response. Requires device:write.
+    """
+    replaceDevice(
+        """The surviving device and the credential for the incoming unit."""
+        request: DeviceReplaceRequest!
+    ): DeviceReplaceResult!
     """
     Places an asset under a parent, replacing whatever parent it had, and returns the relationship
     edge. Refused when it would make an asset its own ancestor, give it a second parent, or push the
@@ -8316,9 +8561,15 @@ type Mutation {
         """Token of the asset to detach from its parent."""
         childToken: String!
     ): Boolean!
-    # Create a new provisioning profile. The response carries the provision secret the server
-    # generated, once.
-    createProvisioningProfile(request: ProvisioningProfileCreateRequest): ProvisioningProfileSecretResult!
+    """
+    Creates a provisioning profile. The response carries the provision secret the server generated,
+    once; it cannot be read again, so rotate it if it is lost. A certificate profile, made by naming
+    a trust anchor, has no secret. Requires device:write.
+    """
+    createProvisioningProfile(
+        """The provisioning profile to create."""
+        request: ProvisioningProfileCreateRequest
+    ): ProvisioningProfileSecretResult!
     """
     Replace a profile's provision secret with a new one, returned once. The old secret stops
     working at once and there is no overlap (overlap is a second profile with its own key).
@@ -8348,10 +8599,26 @@ type Mutation {
         """Token of the device."""
         deviceToken: String!
     ): Int!
-    # Update an existing provisioning profile.
-    updateProvisioningProfile(token: String!, request: ProvisioningProfileUpdateRequest!): ProvisioningProfile!
-    # Delete a single provisioning profile.
-    deleteProvisioningProfile(token: String!): Boolean!
+    """
+    Applies a partial update to a provisioning profile, identified by token. It cannot change the
+    credential type or the secret. Requires device:write.
+    """
+    updateProvisioningProfile(
+        """Token of the provisioning profile to update."""
+        token: String!
+        """The fields to change."""
+        request: ProvisioningProfileUpdateRequest!
+    ): ProvisioningProfile!
+    """
+    Deletes a provisioning profile outright. Refused while any credential it issued still exists,
+    revoked and expired ones included; remove them by resetting the devices' provisioning or
+    deleting the devices. Devices earmarked for the profile fall back to no earmark. Returns true
+    when it was deleted and false when nothing has the token. Requires device:write.
+    """
+    deleteProvisioningProfile(
+        """Token of the provisioning profile to delete."""
+        token: String!
+    ): Boolean!
     """Create a trust anchor from a CA certificate. Refused when the tenant already holds 32."""
     createDeviceTrustAnchor(
         """The anchor to create."""
@@ -8528,15 +8795,30 @@ type Mutation {
         """Token of the integration, as it appears in the sender's URL."""
         integration: String!
     ): Boolean!
-    # Open (or reopen) a possession claim on a device with a secret an eventual
-    # owner will present.
-    initiateDeviceClaim(request: DeviceClaimInitiateRequest!): DeviceClaim!
-    # Redeem a device's claim by presenting its secret, assigning the device to a
-    # customer via a relationship of the given type. Returns the created edge.
+    """
+    Opens, or reopens, a possession claim on a device with a secret that an eventual owner will
+    present. A device has a single claim; reopening a claimed or canceled one clears its earlier
+    redemption. The secret is stored only as a keyed digest. Requires device:write.
+    """
+    initiateDeviceClaim(
+        """The device and the secret an eventual owner must present."""
+        request: DeviceClaimInitiateRequest!
+    ): DeviceClaim!
+    """
+    Redeems a device's claim by presenting its secret, assigning the device to a customer over a
+    relationship of the given type, and returns the created edge. The claim is consumed in the same
+    transaction, so one secret can never produce two ownership edges. Refused when the claim is
+    expired, not open, or the secret does not match. Requires device:write.
+    """
     claimDevice(request: DeviceClaimRequest!): EntityRelationship!
-    # Cancel a device's open claim without assigning it. Returns whether an open
-    # claim was closed.
-    cancelDeviceClaim(deviceToken: String!): Boolean!
+    """
+    Cancels a device's open claim without assigning the device. Returns true when an open claim was
+    closed and false when there was none. Requires device:write.
+    """
+    cancelDeviceClaim(
+        """Token of the device whose open claim to cancel."""
+        deviceToken: String!
+    ): Boolean!
 
     # Create a new entity relationship type.
     createEntityRelationshipType(request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
