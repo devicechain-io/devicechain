@@ -6295,12 +6295,18 @@ type Query {
     Reads alarms by numeric id. Ids naming no alarm, or an alarm the caller may not see, are
     omitted. Requires alarm:read.
     """
-    alarmsById(ids: [ID!]!): [Alarm!]!
+    alarmsById(
+        """Numeric ids of the alarms to read."""
+        ids: [ID!]!
+    ): [Alarm!]!
     """
     Reads alarms by token. Tokens naming no alarm, or an alarm the caller may not see, are omitted.
     Requires alarm:read.
     """
-    alarmsByToken(tokens: [String!]!): [Alarm!]!
+    alarmsByToken(
+        """Tokens of the alarms to read."""
+        tokens: [String!]!
+    ): [Alarm!]!
     """
     Service plane. Returns existence and lifecycle state only, including alarms derived from
     position and alarms whose position classification is pending. Omits unknown tokens.
@@ -6314,7 +6320,10 @@ type Query {
     Lists the alarms that match the criteria, one page at a time. Requires alarm:read; a member
     whose access is limited to some customers sees only the alarms of its own devices.
     """
-    alarms(criteria: AlarmSearchCriteria!): AlarmSearchResults!
+    alarms(
+        """The facets the listed alarms must match, and the page to return."""
+        criteria: AlarmSearchCriteria!
+    ): AlarmSearchResults!
     """
     Lists alarm disposition labels, newest labelled cycle first: every labelled cycle, including
     those before an alarm's current one. It is the read a backtest scores a rule against.
@@ -7193,7 +7202,10 @@ type Mutation {
     alarm returns it unchanged. The acknowledging identity is the authenticated subject, recorded
     server-side. Refused when the token names no alarm. Requires alarm:write.
     """
-    acknowledgeAlarm(token: String!): Alarm!
+    acknowledgeAlarm(
+        """Token of the alarm to acknowledge."""
+        token: String!
+    ): Alarm!
     """
     Acknowledges many alarms at once, the bulk counterpart of acknowledgeAlarm with the same
     authority, transition and recorded identity. It is partial: a token naming no alarm is refused
@@ -7201,13 +7213,19 @@ type Mutation {
     nothing. At most 2000 tokens per request; more is an error rather than a per-alarm refusal.
     Duplicate tokens are collapsed. Requires alarm:write.
     """
-    acknowledgeAlarms(tokens: [String!]!): BulkAcknowledgeAlarmsResult!
+    acknowledgeAlarms(
+        """Tokens of the alarms to acknowledge, at most 2000. An empty list acknowledges nothing."""
+        tokens: [String!]!
+    ): BulkAcknowledgeAlarmsResult!
     """
     Clears an alarm by hand, moving it to CLEARED. A manual override: the detection engine also
     clears an alarm when its conditions resolve. Idempotent on an alarm that is already CLEARED. It
     does not acknowledge the alarm. Refused when the token names no alarm. Requires alarm:write.
     """
-    clearAlarm(token: String!): Alarm!
+    clearAlarm(
+        """Token of the alarm to clear."""
+        token: String!
+    ): Alarm!
     """
     Labels the CURRENT cycle of an alarm with an operator's verdict (see AlarmDisposition) and
     returns the alarm. Only the current cycle can be labelled: once the alarm is raised again,
@@ -7860,10 +7878,18 @@ type Subscription {
     to its id once at subscribe time.
     """
     alarmStream(
+        """
+        Entity type of the originator to follow, for example device. Required when originatorToken
+        is set.
+        """
         originatorType: String
+        """Only events of the originator with this token. Requires originatorType."""
         originatorToken: String
+        """Only events whose alarm is in this state after the change: ACTIVE or CLEARED."""
         state: String
+        """Only events whose alarm is at this severity after the change."""
         severity: String
+        """Only events of alarms with this alarm key."""
         alarmKey: String
         """
         Only events of alarms stamped with this anchor (see AlarmAnchor), judged on every pushed
