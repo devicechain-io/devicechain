@@ -650,6 +650,21 @@ graphql(`
     state
     pauseReason
     targetCount
+    cohorts {
+      name
+      deviceTokens
+      percentage
+      manualPromotion
+    }
+    currentCohort
+    failureRate {
+      percentage
+      windowSeconds
+      minimumSamples
+    }
+    haltSequence
+    haltFailures
+    haltSamples
     createdAt
     createdBy
     startedAt
@@ -689,6 +704,7 @@ const ROLLOUT_TARGETS = graphql(`
   query UpdateRolloutTargets($token: String!, $criteria: UpdateRolloutTargetSearchCriteria!) {
     updateRolloutTargets(token: $token, criteria: $criteria) {
       results {
+        cohort
         deviceToken
         outcome
         assignmentToken

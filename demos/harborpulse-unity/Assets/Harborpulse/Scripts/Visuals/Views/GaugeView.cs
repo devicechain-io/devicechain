@@ -14,7 +14,8 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly MeshRenderer counterRenderer;
         readonly GameObject counterPlate;
         int lastCount = -1;
-        readonly Transform crew, replacementLabel;
+        readonly Transform replacementLabel; readonly double wallZ;
+        Transform crew;
         public GaugeView(AssetRig rig, HarborMaterials mats, double wallZ)
         {
             this.rig = rig; this.mats = mats;
@@ -30,8 +31,7 @@ namespace DeviceChain.Harborpulse.Visuals
             counterPlate = plate.Spawn("AlarmCountPlate", t, mats.AlarmPlate, false);
             replacementLabel = AssetRig.Node("ReplacementLabel", rig["Plate"], new Vector3(0, 0.2f, 0.04f));
             AssetRig.Tag("replacement (runner)", replacementLabel, Vector3.zero, 0.08f);
-            var at = SitePlan.GaugeCrewAt(new Ground(0, 0), wallZ);
-            crew = CrewBuilder.Build(rig.Root, mats, false, new Vector3((float)at.X, 0, (float)at.Z));
+            this.wallZ = wallZ;
         }
         public void Apply(HarborFrame f)
         {
@@ -51,7 +51,14 @@ namespace DeviceChain.Harborpulse.Visuals
             var replaced = f.Replacement?.ExternalId == id;
             rig["Plate"].GetComponent<MeshRenderer>().sharedMaterial = replaced ? mats.WorldCue : mats.Steel;
             replacementLabel.gameObject.SetActive(replaced);
-            crew.gameObject.SetActive(replaced && f.World.ReplacementCrew);
+            // the crew is built when the scenario first sends one here (see LampView)
+            var crewHere = replaced && f.World.ReplacementCrew;
+            if (crewHere && crew == null)
+            {
+                var at = SitePlan.GaugeCrewAt(new Ground(0, 0), wallZ);
+                crew = CrewBuilder.Build(rig.Root, mats, false, new Vector3((float)at.X, 0, (float)at.Z));
+            }
+            if (crew != null) crew.gameObject.SetActive(crewHere);
         }
     }
 }

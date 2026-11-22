@@ -37,6 +37,11 @@ namespace DeviceChain.Harborpulse.Visuals
         static readonly int CloudDrift = Shader.PropertyToID("_HarborCloudDrift");
         static readonly int SceneryFog = Shader.PropertyToID("_HarborSceneryFog");
         static readonly int SceneryFogColor = Shader.PropertyToID("_HarborSceneryFogColor");
+        static readonly int SceneryFogLow = Shader.PropertyToID("_HarborSceneryFogLow");
+        static readonly int CloudUnder = Shader.PropertyToID("_HarborCloudUnder");
+        static readonly int MoonGlow = Shader.PropertyToID("_HarborMoonGlow");
+        static readonly int Break = Shader.PropertyToID("_HarborBreak");
+        static readonly int BreakEdge = Shader.PropertyToID("_HarborBreakEdge");
 
         readonly Light sun, moon;
         readonly Material skybox;
@@ -51,7 +56,10 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly Color previousFogColor;
         readonly float previousFogDensity;
         readonly Vector4 previousSceneryFog;
-        readonly Color previousSceneryFogColor;
+        readonly Color previousSceneryFogColor, previousSceneryFogLow, previousCloudUnder;
+        readonly float previousMoonGlow;
+        readonly Color previousBreak, previousBreakEdge;
+        readonly Vector4 previousCloud, previousCloudDrift;
 
         public HarborSkyController(Transform parent, Shader skyShader)
         {
@@ -65,6 +73,14 @@ namespace DeviceChain.Harborpulse.Visuals
             previousFogDensity = RenderSettings.fogDensity;
             previousSceneryFog = Shader.GetGlobalVector(SceneryFog);
             previousSceneryFogColor = Shader.GetGlobalColor(SceneryFogColor);
+            previousSceneryFogLow = Shader.GetGlobalColor(SceneryFogLow);
+            previousCloudUnder = Shader.GetGlobalColor(CloudUnder);
+            previousMoonGlow = Shader.GetGlobalFloat(MoonGlow);
+            previousBreak = Shader.GetGlobalColor(Break);
+            previousBreakEdge = Shader.GetGlobalColor(BreakEdge);
+            // the scenery and the water read the rain and the cloud's drift now (the haze's rain shafts), so they are put back as well
+            previousCloud = Shader.GetGlobalVector(Cloud);
+            previousCloudDrift = Shader.GetGlobalVector(CloudDrift);
             sun = MakeLight("Sun", parent, LightShadows.Soft);
             moon = MakeLight("Moon", parent, LightShadows.None);
             var shader = skyShader != null ? skyShader : Shader.Find("Harborpulse/Sky");
@@ -90,6 +106,13 @@ namespace DeviceChain.Harborpulse.Visuals
             RenderSettings.fogDensity = previousFogDensity;
             Shader.SetGlobalVector(SceneryFog, previousSceneryFog);
             Shader.SetGlobalColor(SceneryFogColor, previousSceneryFogColor);
+            Shader.SetGlobalColor(SceneryFogLow, previousSceneryFogLow);
+            Shader.SetGlobalColor(CloudUnder, previousCloudUnder);
+            Shader.SetGlobalFloat(MoonGlow, previousMoonGlow);
+            Shader.SetGlobalColor(Break, previousBreak);
+            Shader.SetGlobalColor(BreakEdge, previousBreakEdge);
+            Shader.SetGlobalVector(Cloud, previousCloud);
+            Shader.SetGlobalVector(CloudDrift, previousCloudDrift);
             MeshKit.Release(skybox);
             if (sun != null) MeshKit.Release(sun.gameObject);
             if (moon != null) MeshKit.Release(moon.gameObject);
@@ -136,9 +159,11 @@ namespace DeviceChain.Harborpulse.Visuals
             sun.shadowStrength = moon.shadowStrength = (float)s.ShadowStrength;
             RenderSettings.sun = sunLeads ? sun : moon;
 
-            Shader.SetGlobalColor(Zenith, C(s.Zenith));
-            Shader.SetGlobalColor(Horizon, C(s.Horizon));
-            Shader.SetGlobalColor(GroundCol, C(s.Ground));
+            // the sky, its cloud and the haze are held back from the grade's dim-light lift (SkyState.SkyGain); the light on the town is not
+            var g = (float)s.SkyGain;
+            Shader.SetGlobalColor(Zenith, C(s.Zenith, g));
+            Shader.SetGlobalColor(Horizon, C(s.Horizon, g));
+            Shader.SetGlobalColor(GroundCol, C(s.Ground, g));
             // the discs are whole whenever they are up: the sky shader hides them behind the cloud it draws, where the cloud is
             Shader.SetGlobalVector(SunDir, new Vector4(toSun.x, toSun.y, toSun.z, Mathf.Clamp01((float)(s.SunElevationDeg + 1) / 2)));
             Shader.SetGlobalColor(SunColor, C(s.SunColor));
@@ -149,14 +174,20 @@ namespace DeviceChain.Harborpulse.Visuals
             Shader.SetGlobalFloat(SkyTime, time);
             Shader.SetGlobalFloat(Night, (float)s.Night);
             // the sky the shader draws: the clear gradient, the cloud in front of it and where the scenario clock has carried that cloud
-            Shader.SetGlobalColor(SkyTop, C(s.ClearZenith));
-            Shader.SetGlobalColor(SkyMid, C(s.ClearMid));
-            Shader.SetGlobalColor(SkyLow, C(s.ClearHorizon));
-            Shader.SetGlobalColor(SkyHaze, C(s.FogColor));
-            var glow = C(s.TwilightGlow); glow.a = (float)s.TwilightStrength;
+            Shader.SetGlobalColor(SkyTop, C(s.ClearZenith, g));
+            Shader.SetGlobalColor(SkyMid, C(s.ClearMid, g));
+            Shader.SetGlobalColor(SkyLow, C(s.ClearHorizon, g));
+            Shader.SetGlobalColor(SkyHaze, C(s.FogColor, g));
+            var glow = C(s.TwilightGlow, g); glow.a = (float)s.TwilightStrength;
             Shader.SetGlobalColor(SkyGlow, glow);
-            Shader.SetGlobalColor(CloudLit, C(s.CloudLit));
-            Shader.SetGlobalColor(CloudShade, C(s.CloudShade));
+            Shader.SetGlobalColor(CloudLit, C(s.CloudLit, g));
+            Shader.SetGlobalColor(CloudShade, C(s.CloudShade, g));
+            var under = C(s.CloudUnderlight, g); under.a = (float)s.CloudUnderlightStrength;
+            Shader.SetGlobalColor(CloudUnder, under);
+            Shader.SetGlobalFloat(MoonGlow, (float)s.MoonCloudGlow);
+            var breakSky = C(s.BreakColor, g); breakSky.a = (float)s.HorizonBreak;
+            Shader.SetGlobalColor(Break, breakSky);
+            Shader.SetGlobalColor(BreakEdge, C(s.BreakEdgeColor, g));
             var toLight = s.SunElevationDeg > -4 ? toSun : toMoon;
             Shader.SetGlobalVector(CloudLight, new Vector4(toLight.x, toLight.y, toLight.z, 0));
             Shader.SetGlobalVector(Cloud, new Vector4((float)s.CloudCover, (float)s.CloudDepth, (float)s.Rain, 0));
@@ -168,9 +199,10 @@ namespace DeviceChain.Harborpulse.Visuals
             RenderSettings.ambientGroundColor = C(s.AmbientGround);
             // what still reflects the environment (glass, steel) reflects less of the probe's daylight as the day goes
             RenderSettings.reflectionIntensity = Mathf.Lerp(1f, 0.08f, (float)s.Night);
-            RenderSettings.fogColor = C(s.FogColor);
+            RenderSettings.fogColor = C(s.FogColor, g);
             RenderSettings.fogDensity = (float)s.FogDensity;
-            Shader.SetGlobalColor(SceneryFogColor, C(s.FogColor));
+            Shader.SetGlobalColor(SceneryFogColor, C(s.FogColor, g));
+            Shader.SetGlobalColor(SceneryFogLow, C(s.GroundHaze, g));
             Shader.SetGlobalVector(SceneryFog, new Vector4((float)s.FogDensity, (float)s.HeightFogDensity,
                 (float)s.HeightFogBase, (float)s.HeightFogFalloff));
         }

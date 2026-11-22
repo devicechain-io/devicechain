@@ -42,7 +42,9 @@ namespace DeviceChain.Harborpulse.Tests
         public static double SkyShare(CameraPose pose, double aspect, WorldPropPlan plan, int columns = 240)
         {
             var top = new double[columns];
-            for (var i = 0; i < columns; i++) top[i] = -1;
+            // where no land stands in a column the sea (or the far flats) runs to the flat horizon, and the sky begins there
+            var horizon = Math.Max(-1, Math.Min(1, 1 - 2 * CameraMath.HorizonFromTop(pose)));
+            for (var i = 0; i < columns; i++) top[i] = horizon;
             void P(double x, double y, double z)
             {
                 if (!CameraMath.Project(pose, aspect, x, y, z, out var nx, out var ny) || nx <= -1 || nx >= 1) return;
@@ -52,9 +54,14 @@ namespace DeviceChain.Harborpulse.Tests
             for (var z = -140.0; z <= CoastalTerrain.TerrainReachM; z += 8)
                 for (var x = -CoastalTerrain.TerrainHalfWidthM; x <= CoastalTerrain.TerrainHalfWidthM; x += 8)
                     P(x, plan.Terrain.MeshHeight(x, z), z);
-            for (var zi = 0; zi < CoastalTerrain.RidgeRowZ.Length - 1; zi++)
-                for (var z = CoastalTerrain.RidgeRowZ[zi]; z < CoastalTerrain.RidgeRowZ[zi + 1]; z += 20)
-                    for (var x = -CoastalTerrain.RidgeHalfWidth; x <= CoastalTerrain.RidgeHalfWidth; x += 8) P(x, CoastalTerrain.RidgeHeight(x, z), z);
+            foreach (var layer in CoastalTerrain.HillLayers)
+                for (var zi = 0; zi < layer.RowZ.Length - 1; zi++)
+                    for (var back = layer.RowZ[zi]; back < layer.RowZ[zi + 1]; back += 20)
+                        for (var along = layer.AlongCentre - layer.HalfWidth; along <= layer.AlongCentre + layer.HalfWidth; along += 8)
+                        {
+                            layer.World(along, back, out var x, out var z);
+                            P(x, layer.Height(x, z), z);
+                        }
             foreach (var t in plan.Props)
                 if (t.Kind == "Tree") P(t.At.X, plan.Terrain.MeshHeight(t.At.X, t.At.Z) + t.Height, t.At.Z);
             return top.Select(y => Math.Max(0, Math.Min(1, (1 - y) / 2))).Average();
@@ -148,11 +155,22 @@ namespace DeviceChain.Harborpulse.Tests
             var sky = SkyShare(pose, Tall, U5Plan.Plan);
             var water = WaterShare(pose, Tall, 72, 128);
             TestContext.WriteLine("HOME 9:16: horizon " + CameraMath.HorizonFromTop(pose).ToString("P1") + ", sky " + sky.ToString("P1") + ", flat-plane water " + water.ToString("P1"));
-            Assert.That(sky, Is.InRange(.08, .14), "sky 8-14 % of the tall frame");
+            Assert.That(CameraMath.HorizonFromTop(pose), Is.EqualTo(PresentationMap.PortraitHorizon).Within(1e-9));
+            Assert.That(sky, Is.InRange(.10, .13), "sky 10-13 % of the tall frame: the horizon is an eighth of the way down and the eastern uplands stand a little above it");
             Assert.That(water, Is.LessThanOrEqualTo(.40));
             // the terrain's far edge (x = 2400) must end in haze, not in the frame's air: by then the scenery fog has taken it all
             var noon = DayLighting.Evaluate(12.5, new Weather(0, 0));
-            Assert.That(noon.SceneryTransmission(Math.Sqrt(2960.0 * 2960 + 290 * 290), 300, 2.4, 2160), Is.LessThan(.15));
+            Assert.That(noon.SceneryTransmission(Math.Sqrt(2920.0 * 2920 + 258 * 258), 260, 2.4, 2160), Is.LessThan(.15));
+            // the sea beside it fades by the same curve, and is gone before the 3.6 km far clip
+            Assert.That(noon.SeaTransmission(3500), Is.LessThan(.05));
+            Assert.That(noon.SeaTransmission(700), Is.GreaterThan(.95), "the harbour's own water is untouched from HOME");
+            // every device stands in the lower two thirds: the top third is the far land, the uplands and the sky
+            foreach (var d in Devices)
+            {
+                var a = U5Plan.Map.Anchors[d.Token];
+                CameraMath.Project(pose, Tall, a.X, Deck + 1, a.Z, out _, out var y);
+                Assert.That((1 - y) / 2, Is.InRange(.40, .90), d.Token + " height in the frame");
+            }
             // and the night and storm homes are the daytime frames
             Assert.That(U5Plan.Map.Pose("pose:night-home"), Is.SameAs(U5Plan.Map.Pose("pose:home")));
             Assert.That(U5Plan.Map.Pose("pose:storm-home"), Is.SameAs(U5Plan.Map.Pose("pose:home")));
@@ -226,7 +244,7 @@ namespace DeviceChain.Harborpulse.Tests
                 {
                     var p = U5Plan.Map.Pose("pose:" + f.Family + ":" + s);
                     Assert.That(CameraMath.PitchDegrees(p), Is.LessThan(-20), f.Family + ":" + s);
-                    Assert.That(p.Look.Y, Is.EqualTo(2));
+                    Assert.That(p.Look.Y, Is.EqualTo(PresentationMap.WellViewLookY));
                     Assert.That(p.VerticalFov, Is.EqualTo(42));
                 }
         }

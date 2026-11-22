@@ -102,8 +102,28 @@ namespace DeviceChain.Harborpulse.Model
             var north=token=="hp-north-quay";var east=token=="hp-east-quay";
             return new PropFootprint(token,north?new Ground((x0+x1)/2,z0):new Ground(east?x0:x1,(z0+z1)/2),north?x1-x0:z1-z0,north?z1-z0:x1-x0,QuayYaw(token));
         }
+        /// <summary>
+        /// The strip a wet well is looked into across: from the well's water-side edge out past where the well view's eye stands
+        /// (<see cref="PresentationMap.WellViewBackM"/>), and <see cref="WellViewHalfWidthM"/> either side of that line. Nothing with a roof is placed in it.
+        /// </summary>
+        public const double WellViewHalfWidthM=5.2;
+        public bool InWellView(Ground p)
+        {
+            foreach(var pump in layoutDevices)
+            {
+                if(pump.Kind!=DeviceKind.Pump)continue;
+                var frame=new PropFootprint(pump.Token,map.Anchors[pump.Token],1,1,QuayYaw(map.QuayFor(pump)));
+                // into the pump's own frame: the well is at (LocalX, LocalZ) and its open front faces local +z
+                var a=frame.Yaw*Math.PI/180;double dx=p.X-frame.At.X,dz=p.Z-frame.At.Z;
+                double lx=dx*Math.Cos(a)-dz*Math.Sin(a),lz=dx*Math.Sin(a)+dz*Math.Cos(a);
+                if(Math.Abs(lx-WellFootprint.LocalX)<=WellViewHalfWidthM&&lz>=WellFootprint.LocalZ&&lz<=WellFootprint.LocalZ+PresentationMap.WellViewBackM+2)return true;
+            }
+            return false;
+        }
+        LayoutDevice[] layoutDevices=new LayoutDevice[0];
         void Devices(HarborLayout layout)
         {
+            layoutDevices=layout.Devices.ToArray();
             foreach(var device in layout.Devices)
             {
                 var at=map.Anchors[device.Token];var yaw=device.Kind==DeviceKind.Truck?0:QuayYaw(map.QuayFor(device));
@@ -111,7 +131,7 @@ namespace DeviceChain.Harborpulse.Model
                 void Fixed(string suffix,double x,double z,double w,double d) => Registry.AddFixed(new PropFootprint("device:"+device.Token+suffix,frame.Local(x,z),w,d,yaw));
                 switch(device.Kind)
                 {
-                    case DeviceKind.Meter: Fixed("",0,0,device.Index==1?39.2:57,device.Index==1?19.2:23);break;
+                    case DeviceKind.Meter: Fixed("",device.Index==1?0:NearLandmarks.TerminalOffsetX,0,device.Index==1?39.2:NearLandmarks.TerminalW+1,device.Index==1?19.2:23);break;
                     case DeviceKind.Pump:
                         Fixed("",-.7,-.7,11.8,8.6); Fixed(":well",WellFootprint.LocalX,WellFootprint.LocalZ,5.6,5.6);break;
                     case DeviceKind.Truck: Fixed("",0,0,3.4,7.6);break;
@@ -133,7 +153,11 @@ namespace DeviceChain.Harborpulse.Model
                 foreach(var z in new[]{4.0,7.0})
                 {
                     foreach(var x in new[]{0.0,-3.0,3.0,-6.0,6.0})
+                    {
+                        // never in front of a wet well's cut-away: the bay's canopy stood between the well view's eye and East Quay's well
+                        if(InWellView(frame.Local(x,z)))continue;
                         if(Add("ChargingCar",frame.Local(x,z),CarWidth,CarDepth,frame.Yaw,area:device.Token,id:"car:"+device.Token)) { placed=true; break; }
+                    }
                     if(placed)break;
                 }
                 if(!placed) throw new InvalidOperationException("No clear charging bay for "+device.Token);
@@ -278,6 +302,10 @@ namespace DeviceChain.Harborpulse.Model
             }
             candidates.Sort((a,b)=>a.Rank.CompareTo(b.Rank));
             var caps=new[]{4,7,5};var taken=new int[3];var centres=new List<Ground>();var cluster=0;
+            // The landmark tor first, so every cluster seats itself round it: at the back of the meadow on the town's east edge, 830 m from
+            // the 16:9 HOME's eye and clear of the trees in front of it.
+            var landmark=PlaceLandmark();
+            if(landmark.HasValue){centres.Add(landmark.Value);}
             // The meadows HOME looks at each get a cluster of large ledges inside or at the edge of the clearing, so the rock reads from there.
             for(var i=0;i<CoastalTerrain.VisibleMeadows;i++)
             {
@@ -290,6 +318,35 @@ namespace DeviceChain.Harborpulse.Model
                 if(taken[c.Class]>=caps[c.Class]||centres.Any(o=>SceneryStreet.Distance(o,c.At)<190))continue;
                 if(PlaceCluster(c.At,c.Class,cluster)>=2){taken[c.Class]++;centres.Add(c.At);cluster++;}
             }
+        }
+
+        /// <summary>The meadow the landmark tor stands in (<see cref="CoastalTerrain.Meadow"/>) and where in it, as a share of its radius from its centre.</summary>
+        public const int LandmarkMeadow=1; public const double LandmarkOffsetX=-.20,LandmarkOffsetZ=.42;
+
+        /// <summary>The one landmark tor (<see cref="Outcrop.Landmark"/>): seated at the first of a few spots round its place that can take its ledge.</summary>
+        Ground? PlaceLandmark()
+        {
+            var m=CoastalTerrain.Meadow(LandmarkMeadow);
+            for(var attempt=0;attempt<9;attempt++)
+            {
+                var at=new Ground(m.X+m.R*LandmarkOffsetX+(attempt%3-1)*14*(attempt==0?0:1),m.Z+m.R*LandmarkOffsetZ+(attempt/3)*-12);
+                if(!Free(at,Outcrop.LandmarkHalfX))continue;
+                var gx=(Terrain.MeshHeight(at.X+10,at.Z)-Terrain.MeshHeight(at.X-10,at.Z));
+                var gz=(Terrain.MeshHeight(at.X,at.Z+10)-Terrain.MeshHeight(at.X,at.Z-10));
+                // its long axis lies across HOME's line of sight (east-west), turned a little with the contour
+                var yaw=Math.Max(-18,Math.Min(18,(gx==0&&gz==0)?0:Math.Atan2(gx,gz)*180/Math.PI*.3));
+                var outcrop=Outcrop.FitLandmark(Terrain,at,yaw,7001+attempt);
+                if(outcrop==null)continue;
+                var near=false;
+                foreach(var ring in outcrop.Rings)foreach(var q in ring)if(Clearance(new Ground(q.X,q.Z))<2.5||Reserved(new Ground(q.X,q.Z),2))near=true;
+                if(near)continue;
+                var footprint=outcrop.Footprint("rock:landmark");
+                if(!Registry.TryAdd(footprint))continue;
+                props.Add(new WorldProp("Rock",footprint,at,yaw,2*Outcrop.LandmarkHalfX,2*Outcrop.LandmarkHalfZ,outcrop.Peak-outcrop.GroundAtCentre,"outcrop",outcrops.Count));
+                outcrops.Add(outcrop);
+                return at;
+            }
+            return null;
         }
 
         /// <summary>Places one cluster; returns how many ledges were seated (the first is the largest).</summary>

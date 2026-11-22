@@ -130,8 +130,10 @@ namespace DeviceChain.Harborpulse.Visuals
             // the plan's own grid (10 m cells round the town, 20 m across the rolling ground, coarser out to the ridge's foot, flat far
             // flanks past the far clip), so every rock and tree stands on exactly the surface drawn here; quads inside the core are left out
             TerrainBuilder.Build(Backdrop, scenery, plan, Height);
-            // the one distant hazy ridge that carries the skyline
+            // the backdrop behind the last trees: foothills, a middle range and the distant hazy ridge that carries the skyline
             RidgeBuilder.Build(Backdrop, scenery);
+            // the rocky foreshore along the open coast, and the skerries off it
+            ShoreBuilder.Build(Backdrop, scenery);
             // the coast's face where the side lands meet the sea, and the strips that join the terrain to the quays' deck
             var reach = (float)CoastalTerrain.TerrainHalfWidthM;
             new MeshKit().Slab(-reach, -CoreHalfX, CoastZ - 1, CoastZ, HarborWorld.SeabedY, Deck)
