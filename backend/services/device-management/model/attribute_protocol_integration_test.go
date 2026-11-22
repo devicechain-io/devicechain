@@ -363,6 +363,8 @@ func TestTenantPurgeTakesDeviceRowsFirstPostgres(t *testing.T) {
 	require.NoError(t, holder.Error)
 	defer holder.Rollback()
 	require.NoError(t, holder.Exec(`SELECT id FROM devices WHERE id = ? FOR KEY SHARE`, f.device.ID).Error)
+	var holderPID int
+	require.NoError(t, holder.Raw("SELECT pg_backend_pid()").Scan(&holderPID).Error)
 
 	sys := core.WithSystemContext(context.Background())
 	plan, err := tenantpurge.Classify(sys, db)
@@ -376,7 +378,8 @@ func TestTenantPurgeTakesDeviceRowsFirstPostgres(t *testing.T) {
 	// The purge waits on the device row the holder shares ...
 	require.Eventually(t, func() bool {
 		var waiting int64
-		_ = db.Raw(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%FROM "device-management".devices%FOR UPDATE%'`).Scan(&waiting).Error
+		_ = db.Raw(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'
+			AND query ILIKE '%FROM "device-management".devices%FOR UPDATE%' AND ? = ANY(pg_blocking_pids(pid))`, holderPID).Scan(&waiting).Error
 		return waiting > 0
 	}, 10*time.Second, 20*time.Millisecond, "purge must wait on the tenant's device rows first")
 	// ... while it holds no child row: the holder can still update its configuration row.

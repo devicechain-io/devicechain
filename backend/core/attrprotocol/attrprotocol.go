@@ -79,7 +79,7 @@ func RegisterPurge(plan *tenantpurge.Plan) {
 		return
 	}
 	for _, entry := range plan.Entries {
-		if entry.Table.Schema != Schema || (entry.Table.Name != AttributesTable && entry.Table.Name != GenerationsTable) {
+		if entry.Table.Schema != Schema || (entry.Table.Name != AttributesTable && entry.Table.Name != GenerationsTable && entry.Table.Name != DevicesTable) {
 			continue
 		}
 		previous := plan.BeforeDelete

@@ -67,3 +67,13 @@ func TestRegisterPurge(t *testing.T) {
 		}
 	}
 }
+
+// A plan that deletes devices (and their configuration children) but neither attribute table
+// still gets the hook: the parent-first lock is what prevents the purge/report cycle.
+func TestRegisterPurgeOnADevicesOnlyPlan(t *testing.T) {
+	plan := &tenantpurge.Plan{Entries: []tenantpurge.Entry{{Table: tenantpurge.Table{Schema: Schema, Name: DevicesTable}}}}
+	RegisterPurge(plan)
+	if plan.BeforeDelete == nil {
+		t.Fatal("a plan that deletes devices must lock them first")
+	}
+}
