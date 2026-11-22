@@ -37,6 +37,7 @@ namespace DeviceChain.Harborpulse.Visuals
             Set(NearTone.Cream, new Color(.90f, .86f, .74f)); Set(NearTone.Rope, new Color(.62f, .52f, .36f));
             Set(NearTone.Hull, hull); Set(NearTone.HullDark, Dim(hull, .7f));
             Set(NearTone.Window, new Color(.1f, .12f, .15f));
+            Set(NearTone.GlassSky, new Color(.36f, .46f, .55f)); Set(NearTone.GlassGlint, new Color(.52f, .61f, .68f));
         }
 
         public Color Of(NearTone tone) => table[(int)tone];

@@ -105,11 +105,15 @@ DOCS_DEPLOY = [
     "docs/i18n/*/docusaurus-plugin-content-docs/current/deployment/**",
 ]
 READERS = [
-    # plan_fixtures_test.go — scans the sanitized plan-gate fixtures for confidential material.
+    # tofu_roots_test.go — walks every .tf under deploy/ and compares the roots with what
+    # hack/tofu-roots.sh --all prints. plan_fixtures_test.go — scans the sanitized plan-gate
+    # fixtures for confidential material.
     ("deploy", ".", [
+        "deploy/**/*.tf",
+        "hack/tofu-roots.sh",
         "deploy/gke/fixtures/**",
         "hack/fixtures/gke-extraction/**",
-    ], [], "plan_fixtures_test.go"),
+    ], [], "tofu_roots_test.go, plan_fixtures_test.go"),
     # build_paths_test.go:22-81 — the reproducible-build settings in every place the broker image is built.
     ("backend/broker/dc-nats-server", ".", [
         "deploy/local/build-images.sh",
@@ -140,6 +144,9 @@ READERS = [
     ], NONTEST, "bootstrap/*_test.go"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
     ("backend/cli", "product", [SDL], [], "product/documents_test.go:32"),
+    # deploy/fleet_premises_test.go:82 pins the recorded premises to the toolchain versions in ci.yml and
+    # to the kind node image in hack/fleet-s0/kind.sh.
+    ("deploy", ".", [".github/workflows/ci.yml", "hack/fleet-s0/kind.sh"], [], "fleet_premises_test.go:82"),
     ("backend/cli", "failedevents", ["backend/services/event-management/graphql/**"], [], "failedevents/*_test.go"),
     ("backend/cli", "sim", ["backend/sims/dc-simulator/sim/handshake.go"], [], "sim/handshake_lockstep_test.go:30"),
     # core/test walks every .go file in the repository (logsink, defaultorder, sharedcache, ...).

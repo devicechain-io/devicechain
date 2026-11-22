@@ -762,6 +762,7 @@ type BlobConfiguration struct {
 
 // Infrastructure configuration section
 type InfrastructureConfiguration struct {
+	Mcp              McpConfiguration
 	Tracing          TracingConfiguration
 	Nats             NatsConfiguration
 	Metrics          MetricsConfiguration
@@ -793,6 +794,16 @@ type UpdateManagementConfiguration struct {
 	// ignore rate halts, and cannot serve the new pause reasons. After ALL
 	// update-management replicas are upgraded, enable it in a separate config roll.
 	RolloutSafety bool
+}
+
+// McpConfiguration contains FIXED MCP capability switches.
+type McpConfiguration struct {
+	// CommandProposals is RESERVED for agent command proposals and defaults OFF.
+	// Nothing reads it yet, so setting it changes nothing until the proposal path lands.
+	// Enable it only after the release rollout completes, in a separate config roll:
+	// every service strict-loads the whole instance document, so pods from an
+	// earlier release refuse this key.
+	CommandProposals bool
 }
 
 // HttpConfiguration is how the instance's HTTP servers read a request's origin.

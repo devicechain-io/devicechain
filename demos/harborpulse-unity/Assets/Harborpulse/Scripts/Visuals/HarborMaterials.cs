@@ -107,6 +107,7 @@ namespace DeviceChain.Harborpulse.Visuals
 
             Flow = Emissive("flow", new Color(0.1f, 0.55f, 1f), 1.2f);
             WorldCue = Emissive("world-cue", new Color(0.55f, 0.75f, 0.88f), 1.1f);
+            Rain = Emissive("rain", RainCool, 1.1f);
             Failed = Emissive("failed", new Color(1f, 0.32f, 0.25f), 1.2f);
             EastWindows = Emissive("east-windows", new Color(1f, 0.78f, 0.48f), 0);
             WellGlass = Make("well-glass", new Color(0.55f, 0.8f, 0.85f, 0.12f), 0.85f);
@@ -140,6 +141,9 @@ namespace DeviceChain.Harborpulse.Visuals
         public Material AlarmPlate { get; }
         public Material Flow { get; }
         public Material WorldCue { get; }
+        /// <summary>The rain in the air: the WORLD cue's cool white, warmed when the low sun lights it through the break under the deck.</summary>
+        public Material Rain { get; }
+        static readonly Color RainCool = new Color(0.55f, 0.75f, 0.88f);
         public Material Failed { get; }
         public Material EastWindows { get; }
         public Material WellGlass { get; }
@@ -246,6 +250,15 @@ namespace DeviceChain.Harborpulse.Visuals
             EastTownLamp.SetColor(BaseColor, Color.Lerp(new Color(0.55f, 0.55f, 0.52f), new Color(1.0f, 0.85f, 0.6f), lit * (1 - outage)));
             EastWindows.SetColor(BaseColor, Color.Lerp(new Color(0.10f, 0.12f, 0.15f), new Color(0.55f, 0.45f, 0.30f), night * (1 - outage)));
             Windows.SetColor(BaseColor, Color.Lerp(new Color(0.16f, 0.20f, 0.24f), new Color(0.55f, 0.45f, 0.30f), night));
+        }
+
+        /// <summary>Colours the rain by the sky: cool by default, gold while the break under the storm's deck lights it from behind.</summary>
+        public void SetRain(DeviceChain.Harborpulse.Model.SkyState sky)
+        {
+            var warm = new Color((float)sky.BreakColor.R, (float)sky.BreakColor.G, (float)sky.BreakColor.B);
+            var c = Color.Lerp(RainCool, warm, (float)sky.HorizonBreak * 0.7f);
+            Rain.SetColor(BaseColor, c);
+            Rain.SetColor(EmissionColor, c * 1.1f);
         }
 
         Material Make(string name, Color color, float smoothness, float metallic = 0)
