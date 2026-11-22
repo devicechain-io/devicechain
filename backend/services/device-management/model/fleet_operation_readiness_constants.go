@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package schema
+package model
 
 // FleetOperationWriterProtocolVersion is the device attribute writer protocol
 // this device-management build follows, independently of database enforcement.

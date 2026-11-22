@@ -5,8 +5,6 @@ package model
 
 import (
 	"context"
-
-	"github.com/devicechain-io/dc-device-management/schema"
 )
 
 // FleetOperationEnforcement reads the catalog afresh on every request. This is
@@ -24,7 +22,7 @@ JOIN pg_catalog.pg_namespace f ON f.oid = p.pronamespace
 WHERE n.nspname = 'device-management' AND c.relname = 'entity_attributes'
   AND f.nspname = 'device-management' AND p.proname = ? AND p.pronargs = 0
   AND t.tgname = ? AND NOT t.tgisinternal
-  AND (t.tgtype::integer & 28) = 28 AND t.tgqual IS NULL`, schema.FleetOperationEnforcementFunction, schema.FleetOperationEnforcementTrigger).Scan(&states).Error
+  AND (t.tgtype::integer & 28) = 28 AND t.tgqual IS NULL`, FleetOperationEnforcementFunction, FleetOperationEnforcementTrigger).Scan(&states).Error
 		return states, err
 	})
 }

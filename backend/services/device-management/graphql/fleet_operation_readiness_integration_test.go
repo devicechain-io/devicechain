@@ -51,8 +51,8 @@ func TestFleetOperationReadinessPostgres(t *testing.T) {
 		require.Zero(t, out.Readiness.OrphanedAttributeRows)
 		return out.Readiness.Enforcement
 	}
-	fn := `"device-management".` + schema.FleetOperationEnforcementFunction
-	trigger := schema.FleetOperationEnforcementTrigger
+	fn := `"device-management".` + model.FleetOperationEnforcementFunction
+	trigger := model.FleetOperationEnforcementTrigger
 	table := `"device-management".entity_attributes`
 	other := `"device-management".readiness_test_other`
 	wrong := `"device-management".readiness_test_wrong`

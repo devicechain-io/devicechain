@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/devicechain-io/dc-device-management/schema"
+	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/ledger"
 )
@@ -46,7 +46,7 @@ func (r *SchemaResolver) FleetOperationReadiness(ctx context.Context) (*FleetOpe
 	api := r.GetApi(ctx)
 	enforcement := api.FleetOperationEnforcement(ctx)
 	return &FleetOperationReadinessResolver{
-		protocolVersion: schema.FleetOperationWriterProtocolVersion,
+		protocolVersion: model.FleetOperationWriterProtocolVersion,
 		enforcement:     enforcement,
 		executableKinds: ledger.ExecutableKinds(),
 		orphans:         func() (int64, error) { return api.CountOrphanedDeviceAttributes(ctx) },

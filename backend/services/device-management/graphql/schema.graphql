@@ -5748,6 +5748,8 @@ type AutomationReviewBreakGlass {
 }
 
 type Query {
+    """Preview. Report this build's fleet operation capabilities and fresh database enforcement and tenant orphan facts. Requires fleet:operate; scoped members are refused."""
+    fleetOperationReadiness: FleetOperationReadiness!
     """(Preview: may change in a minor release.) Read automation protection settings. Requires device:read and an unscoped caller; an unknown profile returns NOT_FOUND."""
     automationReviewPolicy(
         """(Preview: may change in a minor release.) The profile token."""
@@ -7965,8 +7967,4 @@ enum FleetOperationEnforcement {
   ENFORCED
   """Preview. The database catalog could not be read. Enforcement cannot be confirmed."""
   UNREADABLE
-}
-extend type Query {
-  """Preview. Report this build's fleet operation capabilities and fresh database enforcement and tenant orphan facts. Requires fleet:operate; scoped members are refused."""
-  fleetOperationReadiness: FleetOperationReadiness!
 }

@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package schema
+package model
 
 import (
 	"errors"
@@ -31,7 +31,7 @@ var fleetStableTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // version to classify. The release workflow must supply its target through
 // DC_UPGRADE_TAG (or test the tagged commit) to enforce patch refusal there.
 func TestNoExecutableKindWithoutARolledFoundation(t *testing.T) {
-	files, err := filepath.Glob("*.go")
+	files, err := filepath.Glob("../schema/*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
