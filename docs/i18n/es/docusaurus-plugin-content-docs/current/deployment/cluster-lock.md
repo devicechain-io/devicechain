@@ -51,7 +51,7 @@ primera.
 | `dcctl install` | Se niega, antes de tocar el operador o los requisitos previos del clúster. |
 | `dcctl bootstrap` | Se niega, en su segundo paso, antes de tocar la infraestructura o el chart. |
 | `dcctl destroy` | Avisa y continúa: *«pero si esa ejecución está viva, esto peleará con ella»*. |
-| `dcctl upgrade` | Avisa y continúa, con el mismo aviso. |
+| `dcctl upgrade` | Se niega, antes de escribir nada, y nombra la ejecución que tiene el bloqueo. |
 | `dcctl bootstrap --dry-run` | No toma ningún bloqueo, e informa de la reclamación que *se habría* encontrado. |
 
 Un arranque inicial toma el bloqueo en su segundo paso, no en el primero. El primer paso es
@@ -59,25 +59,27 @@ la compilación de imágenes de la ruta de desarrollo `--build`, que no necesita
 del clúster y produce las imágenes que después despliega el chart. En la ruta de imágenes
 publicadas ese paso no hace nada en absoluto.
 
-`dcctl upgrade` avisa en lugar de negarse por el bloqueo, pero tiene una negativa aparte
-que no tiene nada que ver con el bloqueo. No moverá una instancia a una versión si el
-clúster no tiene operador, o tiene uno identificablemente de otra versión, y nombra
-`dcctl install` como el camino a seguir. Un operador instalado a mano se deja pasar con una
-nota. Consulta [Versiones y actualizaciones](./releases-and-upgrades.md#rolling-upgrades).
+`dcctl upgrade` toma el bloqueo antes de su primera escritura y vuelve a comprobar el operador
+del clúster mientras lo tiene. No moverá una instancia a una versión si el clúster no tiene
+operador, o tiene uno identificablemente de otra versión, y nombra `dcctl install` como el
+camino a seguir. Un operador instalado a mano se deja pasar con una nota. Como `dcctl install`
+toma el mismo bloqueo, el operador no puede cambiar bajo una actualización que lo tiene.
+Consulta [Versiones y actualizaciones](./releases-and-upgrades.md#rolling-upgrades).
 
-Como una actualización también aplica el bróker y el almacén de eventos de la instancia desde el
-estado de OpenTofu de la máquina que la ejecuta, una segunda actualización de la misma instancia
-desde otra máquina, pasando el aviso, aplica a la vez la copia del estado de esa máquina.
-Actualiza una instancia desde una sola máquina a la vez.
+Una ejecución que murió suelta el bloqueo sola en un minuto aproximadamente, cuando deja de
+renovarlo. Una ejecución que sigue viva pero atascada es para lo que sirve
+[reclamar](#reclaim).
 
 La asimetría es deliberada:
 
-- **Install y bootstrap se niegan.** Un segundo arranque inicial ejecutándose junto al
-  primero produce una instancia construida mitad de cada uno, así que negarse es la única
-  respuesta útil.
-- **Destroy y upgrade avisan.** Un desmontaje es algo que un operador ya ha decidido hacer,
-  a menudo porque algo va mal. No poder preguntarle antes al clúster con educación no debe
-  ser lo que se lo impida, así que estos dos lo dicen alto y continúan.
+- **Install, bootstrap y upgrade se niegan.** Un segundo arranque inicial ejecutándose junto al
+  primero produce una instancia construida mitad de cada uno. Una actualización reescribe la
+  declaración, la configuración y la release de la instancia, y una segunda ejecución que hace
+  lo mismo a la vez, o una instalación que mueve el operador por debajo, deja una instancia que
+  no coincide con ninguna de las dos.
+- **Destroy avisa.** Un desmontaje es algo que un operador ya ha decidido hacer, a menudo porque
+  algo va mal. No poder preguntarle antes al clúster con educación no debe ser lo que se lo
+  impida, así que lo dice alto y continúa.
 - **Una ejecución en seco no toma bloqueo.** Una ejecución en seco es un plan, y un plan
   que muta el clúster no lo es. No escribe nada, el bloqueo incluido. Aun así informa de
   quién tiene el bloqueo, porque «ya hay otra persona ejecutando» forma parte de la

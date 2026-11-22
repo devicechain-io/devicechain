@@ -111,8 +111,8 @@
       "translationSha256": "6a3b17b6d93571a19517bbcb0b056d8a0d4b45b84659748ed3025a087380e435"
     },
     "deployment/cluster-lock.md": {
-      "sourceSha256": "1f023271ebfdba3cbab4a140db9606d0827bd12f7c96000c5c6bc946b588b148",
-      "translationSha256": "930b8ceb9fa126e278b533eb8fef833e67b5d4664dc9fc681b61ce5267857e98"
+      "sourceSha256": "17710f747f9d12d7d529b6801d620240be69ec67173e7f81b4130742cb1f3486",
+      "translationSha256": "c3f19a2599032b870318ad535ed9b89bb66558110bbbdee677d982953f4ded90"
     },
     "deployment/connecting-from-outside.md": {
       "sourceSha256": "eef042cd33321265162d5b810600196a1ec28011a4f792e1ce1ee2a964b893d7",

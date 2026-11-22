@@ -134,6 +134,12 @@ func runRelease(ctx context.Context, out io.Writer, in io.Reader, kubeContext, i
 	if err := bootstrap.ValidateInstanceName(instance); err != nil {
 		return err
 	}
+	// Asked before the prompt: a release from a dcctl that does not match the cluster's operator
+	// is refused (run it from the dcctl that does), while a cluster with no operator at all is
+	// let through, because that is the case this command exists for.
+	if err := requireOperatorForRelease(ctx, kubeContext, "`dcctl instances release`", "dcctl install"); err != nil {
+		return err
+	}
 
 	fmt.Fprintln(out, color.HiYellowString(
 		"This removes the declaration for instance %q and nothing else.", instance))
@@ -211,3 +217,7 @@ func confirmHolder(out io.Writer, in io.Reader, lease *coordinationv1.Lease) (st
 	}
 	return holder, nil
 }
+
+// requireOperatorForRelease is the seam runRelease checks the operator through, so its wiring
+// is reachable without a cluster.
+var requireOperatorForRelease = bootstrap.RequireOperatorUnlessAbsent

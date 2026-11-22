@@ -137,3 +137,46 @@ func short(id string) string {
 	}
 	return id
 }
+
+// RequireOperatorUnlessAbsent is RequireOperator for `dcctl instances release`, the escape hatch a
+// finalizer obliges.
+//
+// 🔴 A MISSING OPERATOR IS NOT A REFUSAL HERE, AND THAT IS THE COMMAND'S WHOLE REASON TO EXIST:
+// release is for a declaration whose finalizer nobody will clear because the operator is gone.
+// What it does refuse is a cluster whose operator is a DIFFERENT one: definitions a newer `dcctl
+// install` put there are definitions this dcctl was not built for, and a release run from an old
+// binary should be run from the one that matches. An unstamped operator gets the same note as
+// everywhere else.
+func RequireOperatorUnlessAbsent(ctx context.Context, kubeContext, verb, installCommand string) error {
+	manifests, err := operator.Render(operatorless)
+	if err != nil {
+		return fmt.Errorf("rendering the operator overlay to check this cluster against it: %w", err)
+	}
+	want, err := operator.Identity(manifests)
+	if err != nil {
+		return fmt.Errorf("reading the identity of the operator this dcctl carries: %w", err)
+	}
+	dyn, _, _, err := kubeClients(kubeContext)
+	if err != nil {
+		return fmt.Errorf("connecting to the cluster to check which operator it has: %w", err)
+	}
+	have, err := operator.ReadInstalled(ctx, dyn, manifests)
+	if err != nil {
+		return err
+	}
+	note, err := judgeOperatorUnlessAbsent(have, want, verb, installCommand)
+	if note != "" {
+		fmt.Println(color.YellowString(note))
+	}
+	return err
+}
+
+// judgeOperatorUnlessAbsent is judgeOperator with an absent operator answered by a note.
+func judgeOperatorUnlessAbsent(have operator.Installed, want, verb, installCommand string) (string, error) {
+	if !have.Present {
+		return fmt.Sprintf("  note: this cluster has no DeviceChain operator (missing: %v), so there is "+
+			"nothing to check %s against; going ahead, since a declaration left without one is what "+
+			"%s is for.", have.Missing, verb, verb), nil
+	}
+	return judgeOperator(have, want, verb, installCommand)
+}
