@@ -184,9 +184,9 @@ func TestHarborpulseManifestShape(t *testing.T) {
 		t.Fatal("a device-count override was accepted; the planted faults name devices a resize cannot keep")
 	}
 	devices := m.Expand(1)
-	// 33 on the HTTP ingress, and four LoRaWAN gauges behind the network server.
-	if len(devices) != 37 {
-		t.Fatalf("%d devices, want 37", len(devices))
+	// Original 33 HTTP plus four LoRaWAN gauges; S6 adds four MQTT chargers and two pull lamps.
+	if len(devices) != 43 {
+		t.Fatalf("%d devices, want 43", len(devices))
 	}
 	quays := map[string]bool{HarborpulseNorthQuay: true, HarborpulseEastQuay: true, HarborpulseBasin: true}
 	owners := map[string]string{harborLoftsMeter: HarborpulseLoftsToken, harborFerryMeter: HarborpulseFerryToken}
@@ -228,6 +228,7 @@ func TestHarborpulseCELReadsOnlyDeclaredMetrics(t *testing.T) {
 		}
 		for _, r := range p.DetectionRules {
 			var doc struct {
+				Type string `json:"type"`
 				When struct {
 					CEL string `json:"cel"`
 				} `json:"when"`
@@ -235,6 +236,12 @@ func TestHarborpulseCELReadsOnlyDeclaredMetrics(t *testing.T) {
 			_ = json.Unmarshal([]byte(r.Definition), &doc)
 			reads := regexp.MustCompile(`m\["([^"]+)"\]`).FindAllStringSubmatch(doc.When.CEL, -1)
 			if r.ReadsNoMetric {
+				if doc.Type == "connectivity" {
+					if len(reads) != 0 || doc.When.CEL != "" || r.Metric != "" {
+						t.Errorf("connectivity rule %s must be leaf-less", r.Token)
+					}
+					continue
+				}
 				// A position rule: it must read no measurement at all, or the gate refuses it.
 				if len(reads) > 0 || !strings.Contains(doc.When.CEL, "geo.inFence(") {
 					t.Errorf("rule %s says it reads no metric; its condition is %q", r.Token, doc.When.CEL)

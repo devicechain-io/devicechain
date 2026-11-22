@@ -122,6 +122,7 @@ type Backfill struct {
 
 // Observations is everything the verifier read about one sim day.
 type Observations struct {
+	S6    S6    `json:"-"`
 	Clock Clock `json:"-"`
 	Day   int   `json:"day"`
 	// Alarms is every poll of the alarm list from the start of the watch to its end.
@@ -147,7 +148,7 @@ type Observations struct {
 
 // The watch: from before the first judged beat to after the last one clears, sim hours.
 const (
-	WatchFrom = 13.5
+	WatchFrom = 11.5 // S6's authoritative MQTT disconnect begins at noon.
 	WatchTo   = 23.5
 	// stormFrom is the start of the storm's beats.
 	stormFrom = 16.0

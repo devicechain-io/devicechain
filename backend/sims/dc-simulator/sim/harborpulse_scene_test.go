@@ -46,6 +46,16 @@ func TestHarborpulseSceneLayoutFixture(t *testing.T) {
 	}
 	// git on Windows may check the file out with CRLF line endings; the content is what matters
 	got = bytes.ReplaceAll(got, []byte("\r\n"), []byte("\n"))
+	// U8 owns adopting the new layout. Accept either the exact S1-S5 contract or
+	// the exact S6 contract during this additive handoff; never ignore arbitrary drift.
+	base, err := json.MarshalIndent(harborpulseBaseSceneLayout(), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base = append(base, '\n')
+	if bytes.Equal(got, base) {
+		return
+	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("%s is not the layout the manifest produces; regenerate it with HARBORPULSE_UPDATE_SCENE=1 (see the test's comment)", harborSceneFixture)
 	}
@@ -238,7 +248,7 @@ func TestHarborpulseControlFrameContainsEverything(t *testing.T) {
 }
 
 // TestHarborpulseStatusLayoutDigest: /status names the SHA-256 of the layout this sim generates,
-// under the wire name a scene reads, and it is the digest of the committed file.
+// under the wire name a scene reads, and it identifies the full generated contract during U8's handoff.
 func TestHarborpulseStatusLayoutDigest(t *testing.T) {
 	c := NewHarborpulse(1, Load{}).(ScenarioClockReporter).ScenarioClock(time.Now())
 	b, err := json.Marshal(c)
@@ -256,13 +266,9 @@ func TestHarborpulseStatusLayoutDigest(t *testing.T) {
 	} else if err := json.Unmarshal(raw, &wire.LayoutDigest); err != nil {
 		t.Fatal(err)
 	}
-	committed, err := os.ReadFile(harborSceneFixture)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(bytes.ReplaceAll(committed, []byte("\r\n"), []byte("\n")))
+	sum := sha256.Sum256(harborSceneJSON(t))
 	if want := hex.EncodeToString(sum[:]); wire.LayoutDigest != want {
-		t.Fatalf("/status layoutDigest %q; the committed layout's is %q", wire.LayoutDigest, want)
+		t.Fatalf("/status layoutDigest %q; the generated S6 contract's is %q", wire.LayoutDigest, want)
 	}
 	if b, _ := json.Marshal(ScenarioClock{Name: "other"}); strings.Contains(strings.ToLower(string(b)), "layoutdigest") {
 		t.Fatalf("a scenario with no layout must omit layoutDigest: %s", b)

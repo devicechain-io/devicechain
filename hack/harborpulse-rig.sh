@@ -37,6 +37,11 @@
 #   burst-caught-up             refused entries are retried and stored exactly with original values
 #   replacement-identity       one physical replacement preserves logical identity and readings
 #   replacement-credential     retired credentials disabled and refused by ingress; new one enabled
+#   charger-mqtt-stored         token MQTT chargers store readings and have asserted ONLINE presence
+#   charger-x509-admitted       pinned certificate chargers store; revoked charger is refused afterwards
+#   connectivity-alarm         the planted MQTT disconnect raises, reconnect clears
+#   config-applied             current desired revision/digest APPLIED; planted rejection REJECTED
+#   pull-commands-complete     HTTP_PULL lamps act on and complete pulled commands
 #   truck-fence                 truck-in-flood-plain while the truck is in the flood plain fence
 #   well-fill-calculated        each pump's calculated well fill is its level over its well's depth
 #   lora-decoded                each LoRaWAN gauge's uplinks decoded to exactly the level it sent
@@ -112,6 +117,15 @@
 #   lofts-under-basin   --scenario-defect lofts-under-basin asset-hierarchy
 #   feeder-miswired     --scenario-defect feeder-miswired   feeder-blast-radius
 #   suppression-wrong-device --scenario-defect suppression-wrong-device maintenance-holds-page
+#   mqtt-wrong-topic    --scenario-defect mqtt-wrong-topic charger-mqtt-stored
+#   x509-revocation-skipped --scenario-defect x509-revocation-skipped charger-x509-admitted
+#   mqtt-never-disconnect --scenario-defect mqtt-never-disconnect connectivity-alarm
+#   config-report-stale --scenario-defect config-report-stale config-applied
+#   pull-polling-stopped --scenario-defect pull-polling-stopped pull-commands-complete
+#
+# S6 controls require EXACTLY their own invariant red; legacy controls retain their documented
+# collateral failures. The existing MQTT host mapping and the default DeviceChain broker are
+# required; run also verifies the broker build, MQTT TLS and client-certificate request gauges.
 #
 # The clean day must exit 0. Each control must exit 1 WITH its own invariant red; a control that
 # exits 0 means the invariant cannot fail, and the rig fails. Other invariants a control turns red
@@ -297,6 +311,11 @@ runs=(
   "burst-drop-on-429|--scenario-defect burst-drop-on-429|burst-caught-up"
   "replacement-new-device|--scenario-defect replacement-new-device|replacement-identity"
   "replacement-old-credential-left-live|--scenario-defect replacement-old-credential-left-live|replacement-credential"
+  "mqtt-wrong-topic|--scenario-defect mqtt-wrong-topic|charger-mqtt-stored"
+  "x509-revocation-skipped|--scenario-defect x509-revocation-skipped|charger-x509-admitted"
+  "mqtt-never-disconnect|--scenario-defect mqtt-never-disconnect|connectivity-alarm"
+  "config-report-stale|--scenario-defect config-report-stale|config-applied"
+  "pull-polling-stopped|--scenario-defect pull-polling-stopped|pull-commands-complete"
 )
 
 # ---------------------------------------------------------------------------
@@ -322,7 +341,15 @@ judge() {
   esac
   passed="$(jq -r --arg n "$want" '[.invariants[] | select(.name == $n) | .passed] | if length == 1 then .[0] else "missing" end' "$report" 2>/dev/null || echo unreadable)"
   case "$passed" in
-    false) return 0 ;;
+    false)
+      case "$want" in
+        charger-mqtt-stored|charger-x509-admitted|connectivity-alarm|config-applied|pull-commands-complete)
+          local other
+          other="$(jq -r --arg n "$want" '[.invariants[] | select(.passed == false and .name != $n) | .name] | join(",")' "$report")"
+          [[ -z "$other" ]] || { echo "S6 control also turned $other red"; return 1; }
+          ;;
+      esac
+      return 0 ;;
     true) echo "the control failed, but not on $want, which stayed green: $want cannot fail" ;;
     *) echo "the report has no single $want invariant ($passed)" ;;
   esac
@@ -335,6 +362,7 @@ offline_controls() {
     go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestEachS3bControlTurnsExactlyItsInvariantRed|TestEachS4ControlTurnsExactlyItsInvariantRed|TestEachS5OTAControlModelsLiveEvidence|TestEachS5BurstControlModelsLiveEvidence|TestEachS5ReplacementControlModelsLiveEvidence|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures|TestFoldedGrowthOfOne|TestNotificationAttemptsAreJudgedOnTheWatchedDayOnly|TestDutyMailIsAttributed|TestMaintenance|TestHarborLamp' ./scenarioverify/ ./sim/ >/dev/null &&
     go test -count=1 ./scenariosink/ >/dev/null) ||
     fail "the verifier's or the sink's own controls failed (go test ./scenarioverify/ ./scenariosink/ in backend/sims/dc-simulator)"
+  (cd "$repo_root/backend/sims/dc-simulator" && go test -count=1 -run 'TestEachS6ControlTurnsExactlyItsInvariantRed|TestS6|TestHarborpulseS6' ./scenarioverify/ ./sim/ >/dev/null) || fail "S6 controls failed"
   pass "the verifier: a clean day passes, each planted defect turns exactly its invariant red"
   pass "the sink: what real MQTT, SMTP and HTTP clients deliver is recorded exactly"
 
@@ -354,6 +382,27 @@ offline_controls() {
     if out="$(judge "$want" "$rc" "$d/$file")"; then fail "judge: ${c##*:} was accepted"; fi
     red "${c##*:} -> $out"
   done
+  local invariant
+  for invariant in charger-mqtt-stored charger-x509-admitted connectivity-alarm config-applied pull-commands-complete; do
+    jq -n --arg n "$invariant" '{invariants:[{name:$n,passed:false},{name:"flood-escalates",passed:true}]}' >"$d/s6-red.json"
+    judge "$invariant" 1 "$d/s6-red.json" >/dev/null || fail "S6 judge refused $invariant alone red"
+    jq '.invariants[1].passed=false' "$d/s6-red.json" >"$d/s6-collateral.json"
+    if judge "$invariant" 1 "$d/s6-collateral.json" >/dev/null; then fail "S6 judge accepted collateral red for $invariant"; fi
+    if judge "$invariant" 0 "$d/s6-red.json" >/dev/null; then fail "S6 judge accepted a passing control"; fi
+    if judge "$invariant" 1 "$d/flood-red.json" >/dev/null; then fail "S6 judge accepted a missing invariant"; fi
+  done
+}
+
+require_s6_broker() {
+  local pods p body metric
+  pods="$(k get pods -A -l 'app.kubernetes.io/name=nats,app.kubernetes.io/component=nats' -o json | jq -r '.items[] | select(.status.phase=="Running") | "\(.metadata.namespace)/\(.metadata.name)"')"
+  [[ -n "$pods" ]] || fail "S6: no running default broker"
+  while IFS= read -r p; do
+    body="$(k get --raw "/api/v1/namespaces/${p%%/*}/pods/${p##*/}:7778/proxy/metrics")" || fail "S6: broker metrics unavailable"
+    for metric in dc_broker_info dc_broker_mqtt_tls dc_broker_mqtt_client_auth_request; do
+      awk -v m="$metric" '$1==m || index($1,m"{")==1 {if ($NF==1) found=1} END {exit !found}' <<<"$body" || fail "S6: $p lacks $metric=1 (requires the default DeviceChain broker image with MQTT TLS and client certificates)"
+    done
+  done <<<"$pods"
 }
 
 # ---------------------------------------------------------------------------
@@ -491,6 +540,7 @@ VALUES
   say "bootstrapping $instance with LPWAN downlink and calculated backfill"
   "$dcctl" bootstrap local "$instance" --yes --no-escrow --cluster "$cluster" --host localhost --no-tls \
     --enable-area outbound-connectors --dev-allow-egress "$ip" --values "$(winpath "$state_dir/harborpulse-values.yaml")" "${images[@]}"
+  require_s6_broker
   say "UP COMPLETE: run 'hack/harborpulse-rig.sh run'"
 }
 
@@ -595,6 +645,7 @@ cmd_run() {
   offline_controls
   guard_live
   k get ns "$namespace" >/dev/null 2>&1 || fail "no instance $instance on $kube_context: run 'hack/harborpulse-rig.sh up' first"
+  require_s6_broker
   build_tools
   if ! k -n "$sink_ns" get deploy hp-sink >/dev/null 2>&1; then
     say "deploying the scenario sink"

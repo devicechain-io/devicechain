@@ -573,7 +573,8 @@ here: a presence drop is the Unity device plane's business.
 runs a fictional harbour district of three quays (North Quay, East Quay, the Basin): 9 tide
 gauges, 3 stormwater pump controllers, 12 street lights, 6 EV chargers, 2 building meters (each
 owned by a customer, one of whom gets a login limited to their building), a flood-response
-truck, and 4 LoRaWAN tide gauges behind a network server this process plays: 37 named devices. It
+truck, and 4 LoRaWAN tide gauges behind a network server this process plays. S6 adds two token MQTT
+chargers, two certificate chargers and two HTTP-pull lamps: 43 named devices. It
 plays one **compressed day** on a loop, 24 sim hours in 24 minutes, starting at 06:00:
 
 | Sim time | What happens | What the platform does |
@@ -785,6 +786,37 @@ probe is also read back from storage. An unsigned artifact is refused, so that c
 fails targets, concurrency and outcomes. Moving the gauge to a separate logical device also
 fails flood escalation, MQTT bulletins and notification escalation, which require the original
 gauge identity. Offline fixtures explicitly model those unavoidable collateral failures.
+
+### Harborpulse MQTT, certificate chargers, configuration and pull lamps (S6)
+
+The original HTTP fleet keeps its outage, backfill, six-charger signed rollout and campaign beats.
+Six additional North Quay devices have their own channels. Two chargers publish over authenticated
+MQTT; one disconnects at 12:00 and reconnects at 13:00, raising and clearing a connectivity rule.
+Two chargers use client certificates minted by `x509sim`, registered with a trust anchor and pinned
+credentials through the tenant API. Their token credentials are disabled. At 14:00 the second
+certificate credential is disabled; subsequent connects with that same certificate must be refused.
+
+The certificate profile declares `max_kw` as a DOUBLE configuration key. Both devices receive 22
+initially and a desired change to 11 at 09:00. `updater.ConfigAgent` uses the desired/reports topics
+and its own wire structs: one reports APPLIED at the current revision/digest, the other REJECTED.
+The two additional lamps use `HTTP_PULL`; at 10:00 each pulls a set-dim command, acknowledges it,
+applies 35 %, then reports success over HTTP. They never attach the generic MQTT command receiver.
+
+The handshake must supply a reachable TLS `mqttBroker`. Older chart-route records derive
+`deviceStateGraphQL` automatically; custom routes must supply it explicitly. The rig preserves
+its MQTT NodePort mapping and default broker image, and checks the broker's TLS/client-certificate
+gauges. The throwaway PKI is retained under the user cache, scoped by instance and tenant; set
+`DC_SIM_HARBORPULSE_PKI_DIR` to choose its root. No private key is exposed on `/status`.
+
+The oracle adds `charger-mqtt-stored`, `charger-x509-admitted`, `connectivity-alarm`, `config-applied`
+and `pull-commands-complete`, judged from platform stores and tenant GraphQL. Their controls are
+`mqtt-wrong-topic`, `x509-revocation-skipped`, `mqtt-never-disconnect`, `config-report-stale` and
+`pull-polling-stopped`; each must turn exactly its own invariant red.
+
+The sim's scene contract generator adds these six devices and five timing cues. U8 owns adopting
+the generated `demos/harborpulse-unity/Assets/Harborpulse/Resources/harbor_layout.json`; this slice
+does not edit the Unity project. The cues live inside that JSON, and `/status.scenario.layoutDigest`
+automatically identifies the generated S6 contract.
 
 ### Harborpulse shared thresholds, downlinks and calculated backfill (S3b)
 
