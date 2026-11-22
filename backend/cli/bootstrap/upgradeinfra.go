@@ -661,8 +661,14 @@ func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
 	if err != nil {
 		return err
 	}
-	if held.MQTTNodePortHolder != "" {
-		st.Values[mqttNodePortHolderKey] = held.MQTTNodePortHolder
+	// An upgrade keeps the node port the instance has and never hands it a new one; see
+	// keptMQTTNodePort. Only a local apply asks for one at all (mqttNodePortOf, infraVars).
+	if monitoringSlim(st) {
+		port := keptMQTTNodePort(held, recordedMQTTNodePort(st.Instance))
+		st.Values[mqttNodePortKey] = strconv.Itoa(int(port))
+		if err := recordMQTTNodePort(st.Instance, port); err != nil {
+			return fmt.Errorf("recording the instance's MQTT node port: %w", err)
+		}
 	}
 
 	infra, err := readLiveInfra(ctx, st.KubeContext, st.Instance)

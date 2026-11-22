@@ -260,11 +260,12 @@ func (d *doctor) checkDocker(opts doctorOpts) string {
 func (d *doctor) checkPorts() {
 	section("Ports & registry", "🔌")
 	registryUp := strings.Contains(runCmd("docker", "ps", "--format", "{{.Names}}"), "kind-registry")
-	// A cluster dcctl is about to CREATE publishes 80, 443 and 1883 on the host (ingress
-	// HTTP, ingress HTTPS, MQTT). If something else holds one, the create dies on Docker's
-	// bind error, so say so here; a cluster that already exists holds them itself.
+	// A cluster dcctl is about to CREATE publishes 80, 443 and 1883-1885 on the host (ingress
+	// HTTP, ingress HTTPS, and one MQTT port for each of up to three local instances). If
+	// something else holds one, the create dies on Docker's bind error, so say so here; a
+	// cluster that already exists holds them itself.
 	clusterExists := d.cluster != "" && containsLine(runCmd("kind", "get", "clusters"), d.cluster)
-	for _, p := range []int{80, 443, 1883, 5000} {
+	for _, p := range []int{80, 443, 1883, 1884, 1885, 5000} {
 		inUse := portInUse(p)
 		switch {
 		case p == 5000 && inUse && registryUp:

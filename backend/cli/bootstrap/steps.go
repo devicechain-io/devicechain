@@ -1207,6 +1207,9 @@ func stepReport(ctx context.Context, st *State) error {
 		scheme := st.Values["scheme"]
 		fmt.Printf("  %s %s\n", color.WhiteString("Console:"), color.GreenString("%s", ConsoleURL(st.KubeContext, scheme, host)))
 		fmt.Printf("  %s %s\n", color.WhiteString("GraphQL:"), color.GreenString("%s/api/<area>/graphql", IngressBase(st.KubeContext, scheme, host)))
+		if line := mqttReportLine(st); line != "" {
+			fmt.Printf("  %s %s\n", color.WhiteString("MQTT:"), color.GreenString("%s", line))
+		}
 		if note := ssoUnavailableNote(scheme, host); note != "" {
 			fmt.Printf("  %s %s\n", color.WhiteString("Single sign-on:"), color.YellowString("%s", note))
 		}
@@ -1457,4 +1460,21 @@ func run(ctx context.Context, name string, args ...string) error {
 func outputOf(ctx context.Context, name string, args ...string) (string, error) {
 	out, err := exec.CommandContext(ctx, name, args...).Output()
 	return string(out), err
+}
+
+// mqttReportLine is where a device on this machine reaches a LOCAL instance's MQTT gateway: the
+// host port the kind cluster publishes for the node port the instance was given, or a note that
+// it has none. Empty off a local context, where the broker is reached by its Service.
+func mqttReportLine(st *State) string {
+	if !monitoringSlim(st) {
+		return ""
+	}
+	port := mqttNodePortOf(st)
+	if port == 0 {
+		return "in-cluster only: every MQTT node port this cluster publishes is another instance's"
+	}
+	if hp, ok := KindPublishedHostPort(st.KubeContext, int(port)); ok {
+		return fmt.Sprintf("ssl://localhost:%d (node port %d)", hp, port)
+	}
+	return fmt.Sprintf("node port %d", port)
 }

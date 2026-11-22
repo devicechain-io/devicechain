@@ -441,10 +441,25 @@ const (
 	databaseNamespaceKey       = "databaseNamespace"
 	databaseBackupOffsiteKey   = "databaseBackupOffsite"
 	cnpgNamespaceKey           = "cnpgNamespace"
-	// mqttNodePortHolderKey is the namespace of another instance already holding the
-	// local MQTT node port, set by the render step. Empty means this instance may take it.
-	mqttNodePortHolderKey = "mqttNodePortHolder"
+	// mqttNodePortKey is the node port this local instance's MQTT gateway is exposed on, decided
+	// from the cluster by the render step (a new instance) or the upgrade (an existing one). "0"
+	// means none: every port the cluster publishes is another instance's. Absent, a local apply
+	// asks for localMQTTNodePort, as it always has.
+	mqttNodePortKey = "mqttNodePort"
 )
+
+// mqttNodePortOf is the node port a local apply asks for (see mqttNodePortKey), 0 for none.
+func mqttNodePortOf(st *State) int32 {
+	v, ok := st.Values[mqttNodePortKey]
+	if !ok {
+		return localMQTTNodePort
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return int32(n)
+}
 
 // databaseNamespaceFor is where the SHARED relational store exports its metrics from.
 //
@@ -561,11 +576,12 @@ func infraVarsIn(st *State, rootdir string) []string {
 		// listener is not an open relay. A provider-based gate would be a stronger
 		// signal than the name if this heuristic is ever tightened.
 		//
-		// 🔴 ONLY ONE INSTANCE PER CLUSTER CAN HAVE IT: a node port is cluster-wide, and
-		// an apply asking for one another Service holds fails. The first instance keeps
-		// it; the others get none, and the render step says so.
-		if st.Values[mqttNodePortHolderKey] == "" {
-			vars = append(vars, fmt.Sprintf("nats_mqtt_node_port=%d", localMQTTNodePort))
+		// 🔴 ONE INSTANCE PER NODE PORT: a node port is cluster-wide, and an apply asking for
+		// one another Service holds fails. The render step gives a new instance the first free
+		// one the cluster publishes, an upgrade keeps the one the instance has, and an instance
+		// for which none is free gets none, which the render step says.
+		if port := mqttNodePortOf(st); port != 0 {
+			vars = append(vars, fmt.Sprintf("nats_mqtt_node_port=%d", port))
 		}
 	}
 	// Which ingress controllers the cluster root runs, planned by install from what the cluster

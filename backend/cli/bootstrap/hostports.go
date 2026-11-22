@@ -18,6 +18,16 @@ const (
 	KindMQTTNodePort     = localMQTTNodePort
 )
 
+// InstanceMQTTNodePort is the node port a local instance's MQTT gateway was given, as its local
+// instance record says, and KindMQTTNodePort for an instance whose record names none (one built
+// before the record carried it, when every local instance that had a port had that one).
+func InstanceMQTTNodePort(instance string) int {
+	if p := recordedMQTTNodePort(instance); p != 0 {
+		return int(p)
+	}
+	return KindMQTTNodePort
+}
+
 // dockerPortOutput is the one window onto `docker port`, a variable so a test can
 // present any published-port table without a Docker daemon.
 var dockerPortOutput = func(container string) (string, error) {
