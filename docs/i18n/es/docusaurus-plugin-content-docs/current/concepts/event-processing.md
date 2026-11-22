@@ -200,6 +200,8 @@ Ambos se alimentan de suscripciones en vivo, de modo que los cambios de estado a
 
 El propio editor de un perfil también muestra la **salud de las reglas** (estado por regla, hora del último disparo y conteo de disparos) junto a un **feed en vivo** de detecciones a medida que ocurren. Puedes confirmar que una regla recién publicada se comporta bien antes de que llegue a levantar una alarma.
 
+Cada versión publicada conserva sus propias estadísticas. Las de una versión que fue reemplazada se eliminan cuando sus reglas llevan una semana sin dispararse. Si una reversión vuelve a activar más tarde esa versión, la salud de las reglas indica que su historial se eliminó y cuándo, y la hora del último disparo y los conteos de disparos que muestra solo incluyen los disparos desde entonces.
+
 ## Cómo se opera el servicio {#running-it}
 
 El servicio que evalúa las reglas mantiene estado vivo en memoria y detecta desde una única instancia activa; las réplicas adicionales quedan en espera. Eso le da algunas propiedades operativas que conviene conocer antes de depender de él en producción: qué cuesta un reinicio, con qué rapidez puede dispararse una regla de silencio, por qué una alarma podría no limpiarse y cómo encontrar una regla que está fallando al evaluarse. **[Cómo operar el motor de detección](../deployment/detection-engine.md)** las cubre.
