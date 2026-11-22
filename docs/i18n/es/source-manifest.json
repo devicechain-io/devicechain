@@ -198,6 +198,10 @@
       "sourceSha256": "afe424503a36f137586695e18a84afaf83c6e3fca72e57e9535ef702f980b67f",
       "translationSha256": "214b9239cf0e188d106d85a212f96ade0efc912c38cae30ff1ee8b4d1677f912"
     },
+    "guides/alarm-maintenance.md": {
+      "sourceSha256": "e36f168a6c053253d3e4961cd721a159deedf190e62b7c8a6d9c122d5815868e",
+      "translationSha256": "de4c8bb8f0cfaf4039c2cade6974beac9be51300f58937db7f77f41d3c3091b8"
+    },
     "guides/building-an-updatable-device.md": {
       "sourceSha256": "20d1753acf2e8a59369457b53da17606719ee47385ab389aea163c3d2b7361cf",
       "translationSha256": "5b2d9aaab0232b00274fb04dd5d6c7441a227363ffba9d70bf06258e26315e1a"
@@ -211,8 +215,8 @@
       "translationSha256": "4313d0722784b73777a0a36af1253a4d3ba808dd7509d7a8b4d5798e834984ab"
     },
     "guides/configuring-sso.md": {
-      "sourceSha256": "d2a6fb960a21f15f96a507615ef7e4f3109f211d265bc60d9592a01bb1738776",
-      "translationSha256": "619d7c62303bf3327a67fdb7540bf430208c599daec1d403f8d488ba11f03201"
+      "sourceSha256": "fc32ff9a8d7bc89321a4ec6d8d9b7b0396f813422ed96ce32c1dd7511a006bd4",
+      "translationSha256": "584f81a1a67e85273654fa886940ee6d53921e056ed4980bfec31a42e2e89570"
     },
     "guides/connecting-a-device.md": {
       "sourceSha256": "9d36c737892532237e9a715676d33331ce55bd3cb69c5ae0241480334b1f0c04",
@@ -227,8 +231,8 @@
       "translationSha256": "a1dffd817de93e9d6ed97fda75bae9a56a5303dbd3ac0e498909a705f6427e14"
     },
     "guides/device-x509.md": {
-      "sourceSha256": "eb58e56b61dd49274e05cc21666cef16c70af9611af5a91d07597c506da49826",
-      "translationSha256": "8a5fa6db45ef4e018a2d1c5690138b559a1ba32e577d35e3ec1e10bef240e720"
+      "sourceSha256": "f9e6e1ee4cd42ebecfb6344b4d5cfef618f02b92d4785e03a0ea748ff327add9",
+      "translationSha256": "ba6a7197fcb7bf089dd1388b87dc93056f544cef9d40d56c2c6410e189a94d19"
     },
     "guides/importing-devices.md": {
       "sourceSha256": "3f5c76b6c73e7e8559f152e44a6e6d9c1ce237eac185771e721c51a06a063e2e",
@@ -243,12 +247,12 @@
       "translationSha256": "52e59a3beccf58d131edaac5cd874237a32e96a88a427f8dadd0a01ce5df575b"
     },
     "guides/lorawan-uplink-to-alarm.md": {
-      "sourceSha256": "d80a118d20fc545cc4abcd2bcd5e13faa13f9f62359ebd009566cccc3a99c230",
-      "translationSha256": "fbdf88b472da84d66eb02e0d4f02472928d4c0815d1a3148b4c75b8e72ccf843"
+      "sourceSha256": "f14ed78706e78abac3aebd9ae63fb43421218d6239a685a7e04facd1a982c049",
+      "translationSha256": "bd7f9f83f6dd021c9fbd867c5e69ad39b74aa89623e2543d1ddc608599ea2bca"
     },
     "guides/maintenance-windows.md": {
-      "sourceSha256": "1168eb0fd4d4c3887e5519523500da2d7f61b71c4a58f0337c56d19741cff7d4",
-      "translationSha256": "da4d253e94791a29a03b37b3d766a259a18564063490d3e7f9e81cc716700fe5"
+      "sourceSha256": "70e2d850b03893617b9a7204ba3c9941ec9d9de15ab56f568e031dd2c5c46f7f",
+      "translationSha256": "41ecd7b0caca2978fea9928e3b21e81eec4c2e6713aa3f8ec383a89d5066d28d"
     },
     "guides/managing-assignments.md": {
       "sourceSha256": "0a4c2689b2020c482e8fe4deb779011f06fdefb6d65b7b83b1688ffc18cac0ec",
@@ -259,28 +263,28 @@
       "translationSha256": "f807025f79aac6f218158e78cb116cd461e24364d27e8c54181a58f74ebbdeb5"
     },
     "guides/notification-channels.md": {
-      "sourceSha256": "02506921a681ed5281c17e3b36041048aaa92af4f96eeb15749a2d8e3e12b70e",
-      "translationSha256": "b45d8f9945dd43978f9219dc3059404c3fd106e6f25b2d6f68e73bbadbb105dd"
+      "sourceSha256": "3460afefac72536786fb55f1054c2251300023416dc50f28ac513971e133128a",
+      "translationSha256": "9a11daef3003e2e71ce4edb040ac44d011cb1888ebb4013ffc2c2c0867283bc4"
     },
     "guides/payload-decoders.md": {
-      "sourceSha256": "add2ce52d7d71c26b3b3233368dd344b4810782ccb3fc3f10a5ba9fb2235f5e9",
-      "translationSha256": "a5fe71cc9e27bb5718164946c92e30fabf2a6ad38142fe4ad861f129192b9931"
+      "sourceSha256": "5d37848058e9ffcffa7811a3d767659157d5e5792848ca552a93827d7ba7d6b3",
+      "translationSha256": "3a399276eedfec33867c07087c26170c00840cc6ba8d57d1a3e5629722a6ee4e"
     },
     "guides/product-as-code.md": {
       "sourceSha256": "1cadedbcf6605b579a43352368dc42bd72d0d641554ac70e1376309de620c3f4",
       "translationSha256": "15f07cd77249f11bba93792cbba352ca8bdf66fb1b73b76c79364f944ea27acc"
     },
     "guides/reviewing-a-rule-change.md": {
-      "sourceSha256": "f78d3e4090190a11002cc2794635f7d40d854fe55da491acecd4ebc850f05746",
-      "translationSha256": "732857a952b21fcf29925fe96532c3865824992a44c507103313bfd0a98dabca"
+      "sourceSha256": "70b506db63bed5eca132a7ba09b26081fed36da7e7061f74d2c0d22572d58e31",
+      "translationSha256": "b7ce683b2007471a2270b9165b47e9f036db44d417d2a9fc9e17ba4c8357f5f9"
     },
     "guides/scheduling-a-fleet.md": {
-      "sourceSha256": "d7287a63ae6e57a6f1ecc72efd0e298e85c6212fab2e8b541ead56f7787a4753",
-      "translationSha256": "14298680337455209f02e3e3cf1c0f2a389490ecf2503c60f42407a918050ac2"
+      "sourceSha256": "f0646b73931575b7742423baf8d694e28eb701d9356bf161944ac38c3836d6fe",
+      "translationSha256": "fae9dbdf8973d84c85a1906674a8f7b35cc2a95ec2ec8f2bcd2f83c3bc6cf5c3"
     },
     "guides/sending-commands.md": {
-      "sourceSha256": "07622b79499402cf9049e915b7a3bb0b0670d618c7a5d751f12c558201831bfd",
-      "translationSha256": "c32a6a051f17ebddc0b27e4e8ff14f49701cbbe3c2b3cfcd125111dfe8b628d1"
+      "sourceSha256": "e7aa4b23301f241042d076986fae7b0ac9015d5f931548cd7a74f058abcd829e",
+      "translationSha256": "4924f3fa1f327dc7a30507725006be5f47b1a33d43e961ae6b3d65f6a45505d7"
     },
     "guides/signed-webhooks.md": {
       "sourceSha256": "37b2f7e3183aa5e0678ecb056ee4b787400a7c659948865a54a3275d606c064e",
@@ -303,20 +307,20 @@
       "translationSha256": "678f102287c60d116ebf79337bc1021f78108bceb1eabd97dcb49d93b2226c10"
     },
     "guides/two-factor-authentication.md": {
-      "sourceSha256": "b8693123ad02660806202824d31131974bdce968f7a37fc9c3a4c358a4d9023b",
-      "translationSha256": "18d034b6a18721a8917b923d42d405f251b8c8a24f88e95c07c433beda0b5f4a"
+      "sourceSha256": "3950cea0f2a79e2bbffa8700cbfa781c4146829e6b794ef2ddf57aa8f116d396",
+      "translationSha256": "970357c81121f1d58ee4bcc38977ecea20b6e92d8747424f276e0585a98a2785"
     },
     "guides/why-isnt-my-data-showing-up.md": {
-      "sourceSha256": "36ba3285930d8b5baf67cca205c865c92b54b741cb4c5c5667fdbce7d5e3a539",
-      "translationSha256": "5b24bd09dafc08003c590aae57ee5f97409fb2d6cfe15c7f1ddcd8940a8d7ce9"
+      "sourceSha256": "bae2f147664cdbf9092584e4da0d147925bddebfe58a3b789aec7de22e23e9ec",
+      "translationSha256": "2a5ff412bc95d4e8680f9bbc2864ade7b5313e070c78e762f08a0a3c677c9fd6"
     },
     "guides/widget-versions-and-compatibility.md": {
       "sourceSha256": "11cdfdffa5b333142fb41b13646e9aa523d0abb5c605fe55835569c2232a0098",
       "translationSha256": "aee6f7037ebd63131dbc3596b14a55d0b5bc4f6114b7981ae0f66ee361fbccb1"
     },
     "guides/writing-a-custom-widget.md": {
-      "sourceSha256": "21ccb611623465b5b37384b173fd8a6a56027d6cff1be23d93665660429211bc",
-      "translationSha256": "ae831a00b6ee3aa3b4500bfc14ad68dbedaddb521d351dc61f602b872eeb6e9a"
+      "sourceSha256": "07b6db4edba7c1f856bc81899d96cea2c33e42be7b21a16def9e2af02acba96c",
+      "translationSha256": "beebc15ed66ba92cda7886b57abd8176a3faf85ef370e5563a24382d0229a3a6"
     },
     "intro.md": {
       "sourceSha256": "d5e95234d801cb09efca7ee8ea7d310535526fcadecd5c4b004f38a18b310c70",

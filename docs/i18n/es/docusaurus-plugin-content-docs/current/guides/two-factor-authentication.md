@@ -90,6 +90,8 @@ Para la automatización, o mantén un superusuario **sin** segundo factor y úsa
 `LoginAsync` lanza `MfaRequiredException` para una cuenta así. Su `Challenge` se pasa a `VerifyMfaAsync` junto con el código:
 
 ```csharp
+using DeviceChain.Sdk.Auth;
+
 try
 {
     await client.LoginAsync(email, password);

@@ -197,6 +197,7 @@ Como en todos los rechazos de dispositivos, el dispositivo solo ve el código de
 El SDK de C# (`DeviceChain.Sdk`, y el paquete de Unity que se apoya en él) presenta un certificado de cliente en el handshake TLS. Carga el certificado y su clave, asigna el certificado a la sesión y apunta la confianza a la CA de tu instancia:
 
 ```csharp
+using System;
 using DeviceChain.Sdk.Mqtt;
 using DeviceChain.Sdk.Transport;
 
