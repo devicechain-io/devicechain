@@ -12,7 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	dccore "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 

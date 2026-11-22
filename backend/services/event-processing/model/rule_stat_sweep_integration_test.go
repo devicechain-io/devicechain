@@ -144,8 +144,9 @@ func TestSweepStrandedMatchesActiveVersionsWithinTheTenantOnPostgres(t *testing.
 	old := sweepBefore.Add(-time.Hour)
 	seedActive(t, db, "acme", "p", "p@2")
 	seedActive(t, db, "beta", "p", "p@1") // beta's active p@1 must not keep acme's p@1
+	seedActive(t, db, "beta", "q", "q@2") // beta's profile q must not make acme's q@1 stranded
 	seedStat(t, db, "acme", "acme/p@1/a", old)
-	seedStat(t, db, "acme", "acme/q@1/a", old) // acme has no active q; beta's p does not count
+	seedStat(t, db, "acme", "acme/q@1/a", old) // acme has no active q; beta's q@2 does not count
 	if n, err := s.SweepStranded(context.Background(), "acme", sweepBefore, 100); err != nil || n != 1 {
 		t.Fatalf("SweepStranded = %d, %v; want 1", n, err)
 	}

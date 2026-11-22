@@ -393,6 +393,9 @@ func (s *RuleStatStore) LoadSweptAt(ctx context.Context, tenant, profileVersionT
 }
 
 // SweepTenants lists the tenants that have stat rows, for the sweep to visit one at a time.
+// It is the one read under a system context, because it has to see every tenant to list
+// them; it reads only the distinct tenant column, and every statement the sweep then makes
+// runs under that one tenant (SweepStranded).
 func (s *RuleStatStore) SweepTenants(ctx context.Context) ([]string, error) {
 	var tenants []string
 	err := s.rdb.DB(dccore.WithSystemContext(ctx)).Model(&RuleStat{}).Distinct("tenant").Order("tenant").Pluck("tenant", &tenants).Error
