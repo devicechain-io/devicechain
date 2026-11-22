@@ -149,7 +149,7 @@
   "rolloutOutcome_SKIPPED": "已跳过",
   "rolloutPauseReason_OPERATOR": "已由操作员暂停",
   "rolloutPauseReason_FAILURE_THRESHOLD": "已达到失败阈值",
-  "rolloutPauseReason_ARTIFACT_NOT_ASSIGNABLE": "更新包已无法再分配",
+  "rolloutPauseReason_ARTIFACT_NOT_ASSIGNABLE": "制品已无法再分配",
   "rolloutPauseReason_FAILURE_RATE": "已达到失败率阈值",
   "rolloutPauseReason_COHORT_READY": "批次已完成，可以推进",
   "rolloutPauseReason_COHORT_FAILED": "批次已结束，但存在失败"
