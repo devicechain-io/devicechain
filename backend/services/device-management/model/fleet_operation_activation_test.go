@@ -25,7 +25,9 @@ func TestEnforcementFunctionHashIsPinned(t *testing.T) {
 func TestActivationCheckRefusesWithoutAGuardItCanSee(t *testing.T) {
 	db := sqlitetest.OpenMemory(t, nil)
 	// Outside a transaction it cannot take the lock that makes its answer last.
-	require.Error(t, CheckFleetOperationActivation(db))
+	err := CheckFleetOperationActivation(db)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrFleetOperationNotActivated, "refusing to answer is not the same as answering no")
 	require.Error(t, CheckFleetOperationActivation(nil))
 	// Inside one, SQLite has no such guard to find: fail closed, never a plausible yes.
 	require.ErrorIs(t, db.Transaction(CheckFleetOperationActivation), ErrFleetOperationNotActivated)

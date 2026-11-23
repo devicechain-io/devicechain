@@ -232,6 +232,11 @@ func TestTheWriterProtocolMigrationReplaysAndRepairs(t *testing.T) {
 		"trigger disabled":      {`ALTER TABLE ` + table + ` DISABLE TRIGGER ` + trigger},
 		"trigger dropped":       {`DROP TRIGGER ` + trigger + ` ON ` + table},
 		"function body changed": {`CREATE OR REPLACE FUNCTION "device-management".dc_require_attr_protocol() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`},
+		// The lookup is qualified by table: a trigger of the same name on ANOTHER table must not satisfy it.
+		"same name on another table": {
+			`CREATE TABLE "device-management".dcap_other (id bigint, entity_type text, scope text)`,
+			`CREATE TRIGGER ` + trigger + ` BEFORE INSERT OR UPDATE OR DELETE ON "device-management".dcap_other FOR EACH ROW EXECUTE FUNCTION "device-management".dc_require_attr_protocol()`,
+			`DROP TRIGGER ` + trigger + ` ON ` + table},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := db.Transaction(func(tx *gorm.DB) error {
@@ -247,4 +252,39 @@ func TestTheWriterProtocolMigrationReplaysAndRepairs(t *testing.T) {
 		})
 	}
 	require.Equal(t, "ENFORCED", api.FleetOperationEnforcement(ctx))
+}
+
+// The check takes its lock BEFORE it reads the catalog. A DISABLE TRIGGER that is in flight when the
+// check starts (it holds SHARE ROW EXCLUSIVE, so the check's ROW EXCLUSIVE waits) must be seen by the
+// check: reading first would answer from the state before it, and the lock would then be granted
+// over a guard that is already gone.
+func TestTheActivationCheckSeesADisableThatCommitsWhileItWaits(t *testing.T) {
+	api := NewApi(newPostgresRdbManager(t))
+	db := api.RDB.Database
+	ddl := db.Begin()
+	require.NoError(t, ddl.Error)
+	defer ddl.Rollback()
+	require.NoError(t, ddl.Exec(`ALTER TABLE "device-management".entity_attributes DISABLE TRIGGER dc_enforce_attr_protocol`).Error)
+	t.Cleanup(func() {
+		require.NoError(t, db.Exec(`ALTER TABLE "device-management".entity_attributes ENABLE ALWAYS TRIGGER dc_enforce_attr_protocol`).Error)
+	})
+
+	result := make(chan error, 1)
+	go func() {
+		result <- db.Transaction(func(tx *gorm.DB) error { return CheckFleetOperationActivation(tx) })
+	}()
+	// The check must be waiting on the table lock before the DDL commits.
+	waitForBlockedBackend(t, db)
+	select {
+	case err := <-result:
+		t.Fatalf("the check answered while a DISABLE was in flight: %v", err)
+	default:
+	}
+	require.NoError(t, ddl.Commit().Error)
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, ErrFleetOperationNotActivated, "the check read the catalog after it held the lock")
+	case <-time.After(20 * time.Second):
+		t.Fatal("the check did not finish after the DDL committed")
+	}
 }
