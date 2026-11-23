@@ -65,7 +65,7 @@ BEGIN
  RAISE EXCEPTION 'writer_slot_transitions is append-only' USING ERRCODE = 'integrity_constraint_violation';
 CREATE INDEX idx_audit_tenant_time ON fleet.audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX ix_cloud_identities_onboarding_id ON fleet.cloud_identities USING btree (onboarding_id);
-CREATE INDEX ix_cloud_operations_unsettled ON fleet.cloud_operations USING btree (cluster_uid) WHERE (NOT ((status = 'DONE'::text) AND ((error_code IS NULL) OR (resolution IS NOT NULL))));
+CREATE INDEX ix_cloud_operations_unsettled ON fleet.cloud_operations USING btree (cluster_uid) WHERE (NOT ((status = 'DONE'::text) AND ((error_code IS NULL) OR (resolution = ANY (ARRAY['RECONCILED'::text, 'QUARANTINED'::text])))));
 CREATE INDEX ix_import_records_cluster_uid ON fleet.import_records USING btree (cluster_uid);
 CREATE INDEX ix_writer_slot_transitions_cluster_uid ON fleet.writer_slot_transitions USING btree (cluster_uid);
 CREATE SCHEMA fleet;
@@ -143,6 +143,7 @@ CREATE TABLE fleet.cloud_identities (
  recovered_at timestamp with time zone,
  created_at timestamp with time zone NOT NULL,
  updated_at timestamp with time zone NOT NULL,
+ CONSTRAINT ck_cloud_identities_cloud_resource_id_nonempty_v1 CHECK (((cloud_resource_id IS NULL) OR (cloud_resource_id <> ''::text))),
  CONSTRAINT ck_cloud_identities_cloud_v1 CHECK ((cloud = 'gke'::text)),
  CONSTRAINT ck_cloud_identities_data_class_v1 CHECK ((data_class = ANY (ARRAY['disposable'::text, 'retained'::text]))),
  CONSTRAINT ck_cloud_identities_lifecycle_v1 CHECK ((lifecycle = ANY (ARRAY['INTENT'::text, 'ACTIVE'::text, 'TEARING_DOWN'::text, 'DESTROYED'::text]))),

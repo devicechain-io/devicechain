@@ -250,6 +250,9 @@ func writerExclusionChecks() []check {
 			`(management_mode = 'managed' AND ownership_nonce IS NOT NULL AND state_backend IS NOT NULL AND state_ref IS NOT NULL)` +
 				` OR (management_mode = 'observe_only' AND ownership_nonce IS NULL AND state_backend IS NULL AND state_ref IS NULL)`},
 		{"cloud_identities", "ck_cloud_identities_recovery_pair_v1", `(cloud_resource_id IS NULL) = (recovered_via IS NULL)`},
+		// A set resource id is a real one: the empty string would satisfy the pair rule and the
+		// immutability trigger while naming nothing.
+		{"cloud_identities", "ck_cloud_identities_cloud_resource_id_nonempty_v1", `cloud_resource_id IS NULL OR cloud_resource_id <> ''`},
 
 		{"writer_slots", "ck_writer_slots_state_v1", `state IN (` + slotStates + `)`},
 		{"writer_slots", "ck_writer_slots_doubted_from_v1", `doubted_from IS NULL OR doubted_from IN ('HELD','RECOVERING')`},
@@ -316,6 +319,13 @@ func writerExclusionForeignKeys() []foreignKey {
 
 // Statements that are individually re-runnable on their own: IF NOT EXISTS, CREATE OR REPLACE,
 // or DROP IF EXISTS followed by CREATE.
+// UnsettledPredicateV1 is the SQL text of "this cloud operation is not settled": settled is DONE
+// with no error, or with a recorded resolution. It is the predicate of ix_cloud_operations_unsettled
+// AND of every query that counts unsettled operations, so the planner can use the partial index
+// (a query's predicate must imply the index's). It is frozen with this migration: changing the
+// meaning needs a new migration and a V2 name, never an edit here.
+const UnsettledPredicateV1 = `NOT (status = 'DONE' AND (error_code IS NULL OR resolution IN ('RECONCILED', 'QUARANTINED')))`
+
 var writerExclusionStatements = []string{
 	// One live identity per cloud cluster name; a destroyed record frees its name.
 	`CREATE UNIQUE INDEX IF NOT EXISTS ux_cloud_identities_ownership_nonce ON cloud_identities (ownership_nonce) WHERE ownership_nonce IS NOT NULL`,
@@ -323,8 +333,9 @@ var writerExclusionStatements = []string{
 	// A second recovery import for one address is refused.
 	`CREATE UNIQUE INDEX IF NOT EXISTS ux_import_records_imported_address ON import_records (cluster_uid, address) WHERE decision = 'IMPORTED'`,
 	// The Observer and the admission check read the unsettled operations of one cluster. Settled
-	// means DONE and (no error, or a recorded resolution).
-	`CREATE INDEX IF NOT EXISTS ix_cloud_operations_unsettled ON cloud_operations (cluster_uid) WHERE NOT (status = 'DONE' AND (error_code IS NULL OR resolution IS NOT NULL))`,
+	// means DONE and (no error, or a recorded resolution). The text is shared with the admission
+	// and finish-recovery queries so the planner can use this partial index for them.
+	`CREATE INDEX IF NOT EXISTS ix_cloud_operations_unsettled ON cloud_operations (cluster_uid) WHERE ` + UnsettledPredicateV1,
 
 	// Identity is immutable once set: a later TTL or teardown design must start from a fact
 	// that cannot be flipped.
