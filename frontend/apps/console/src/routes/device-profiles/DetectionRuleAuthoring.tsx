@@ -51,7 +51,8 @@ export function DetectionRuleAuthoring({
     let cancelled = false;
     listMetricDefinitions(profileToken)
       .then((ms) => {
-        if (!cancelled) setMetrics(ms.map((m) => m.metricKey));
+        // A STRING metric is text: a rule never sees it as a number, so it is not offered.
+        if (!cancelled) setMetrics(ms.filter((m) => m.dataType !== 'STRING').map((m) => m.metricKey));
       })
       .catch(() => {
         /* no metric hints: the presets still open, with the metric left for the author to choose */

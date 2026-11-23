@@ -81,10 +81,9 @@ usually faster than waiting on a reply.
   - A *declared* measurement whose value does not match its declared type is worse: the whole event
     is dead-lettered. So is one that is `NaN`, infinite, or 1,000,000,000,000 or more in magnitude.
 
-  Declaring the metric on the profile as `BOOLEAN` fixes the boolean. Text such as `"ok"` cannot be
-  stored as a measurement whether or not it is declared (a `STRING` metric is refused when you declare
-  it), because a text value is device state, not a time-series measurement. Declaring does not help a
-  value the store cannot hold: that is refused either way, and declaring it only means the whole
+  Declaring the metric on the profile as `BOOLEAN` fixes the boolean. Text such as `"ok"` is
+  stored only when the key is declared as a `STRING` metric on the profile; undeclared text is
+  dropped. Declaring does not help a number the store cannot hold: that is refused either way, and declaring it only means the whole
   event goes with it.
 - **You are looking at a different tenant** than the one the device reports into.
 

@@ -482,7 +482,7 @@ type MetricDefinition implements Model & TokenReference & NamedEntity & Metadata
     128 characters.
     """
     metricKey: String!
-    """The value type: DOUBLE, INT or BOOLEAN. A BOOLEAN value is stored as 0 or 1."""
+    """The value type: DOUBLE, INT, BOOLEAN or STRING. A BOOLEAN value is stored as 0 or 1, and a STRING value as text."""
     dataType: String!
     """
     Unit of measure, such as a UCUM code (Cel, kW). It is carried with each measurement
@@ -552,8 +552,8 @@ input MetricDefinitionCreateRequest {
     """Free-text description, up to 1024 characters."""
     description: String
     """
-    The value type: DOUBLE, INT or BOOLEAN. STRING is refused, because a metric must be
-    numeric; report string values as attributes instead.
+    The value type: DOUBLE, INT, BOOLEAN or STRING. DOUBLE, INT and BOOLEAN (stored as 0 or 1) are
+    numeric readings; a STRING reading is stored as text (up to 4096 bytes) and is never aggregated.
     """
     dataType: String!
     """Unit of measure, such as a UCUM code (Cel, kW)."""
@@ -626,7 +626,7 @@ input MetricDefinitionUpdateRequest {
     name: String
     """New description, or null to clear it."""
     description: String
-    """New value type: DOUBLE, INT or BOOLEAN. An explicit null is refused."""
+    """New value type: DOUBLE, INT, BOOLEAN or STRING. An explicit null is refused."""
     dataType: String
     """New unit, or null to clear it."""
     unit: String
@@ -1298,7 +1298,7 @@ type DeviceMetricVocabulary {
 type PublishedMetric {
     """The key a measurement uses to report this metric."""
     metricKey: String!
-    """DOUBLE, INT or BOOLEAN; a measurement's value must parse as this type."""
+    """DOUBLE, INT, BOOLEAN or STRING; a measurement's value must parse as this type (any text is a STRING)."""
     dataType: String!
     """The unit, or null when none is declared."""
     unit: String
@@ -1921,7 +1921,7 @@ type DeviceConstantsEntry {
 type CalculatedMetricPlanInput {
     """The metric's key."""
     key: String!
-    """The metric's data type: DOUBLE, INT or BOOLEAN."""
+    """The metric's data type: DOUBLE, INT, BOOLEAN or STRING."""
     dataType: String!
 }
 
