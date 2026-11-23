@@ -100,6 +100,31 @@ const COMMANDS = graphql(`
   }
 `);
 
+// One command by token, for a link that names a command the history's first page does not hold.
+// The same selection as the history, so a row paints identically wherever it came from.
+const COMMAND_BY_TOKEN = graphql(`
+  query CommandByToken($tokens: [String!]!) {
+    commandsByToken(tokens: $tokens) {
+      id
+      token
+      deviceToken
+      batchToken
+      name
+      payload
+      status
+      queuedTime
+      sentTime
+      respondedTime
+      expiresAt
+      dispatchAfter
+      maintenanceWindowToken
+      responsePayload
+      error
+      outcome
+    }
+  }
+`);
+
 const CREATE_COMMAND = graphql(`
   mutation CreateCommand($request: CommandCreateRequest!) {
     createCommand(request: $request) {
@@ -317,6 +342,13 @@ export async function listCommands(opts: {
       },
     })
   ).commands;
+}
+
+// Read one command by token; null when nothing has that token (an unknown token is omitted
+// from the answer rather than refused). Requires the command:read authority.
+export async function getCommandByToken(token: string): Promise<Command | null> {
+  const found = (await gql('command-delivery', COMMAND_BY_TOKEN, { tokens: [token] })).commandsByToken;
+  return found[0] ?? null;
 }
 
 // List the per-device commands ONE BATCH created, paged. Requires command:read.

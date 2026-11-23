@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using DeviceChain.Harborpulse.Model.Director;
 
 namespace DeviceChain.Harborpulse.Model
 {
@@ -225,6 +226,16 @@ namespace DeviceChain.Harborpulse.Model
                 case DeviceKind.Charger:
                     at = new Ground(q.CenterX + 70 + 9 * (d.Index - 1), promenadeZ - 22);
                     yaw = 180;
+                    break;
+                case DeviceKind.MqttCharger:
+                case DeviceKind.CertCharger:
+                    // further along the same car park, past the district's chargers
+                    at = new Ground(q.CenterX + 70 + 9 * (PresentationMap.LinkedBay(d.Kind, d.Index) - 1), promenadeZ - 22);
+                    yaw = 180;
+                    break;
+                case DeviceKind.PullLight:
+                    // by the wall at the quay's east end
+                    at = new Ground(q.XMax - 30 + 12 * (Math.Max(1, d.Index) - 1), plan.WallZ - 3);
                     break;
                 case DeviceKind.Meter:
                     // the meter's building: the Lofts set back from North Quay, the Ferry Terminal on the Basin

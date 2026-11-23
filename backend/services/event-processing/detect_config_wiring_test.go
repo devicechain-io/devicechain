@@ -6,7 +6,10 @@ package main
 import (
 	"testing"
 
+	core "github.com/devicechain-io/dc-microservice/core"
+
 	"github.com/devicechain-io/dc-event-processing/config"
+	"github.com/devicechain-io/dc-event-processing/graphql"
 )
 
 // The shard count a deployment configures is the one the processor is built with. A processor
@@ -49,5 +52,40 @@ func TestReactWorkersCarriesTheConfiguredCount(t *testing.T) {
 	}
 	if got := reactWorkers(config.NewEventProcessingConfiguration()); got != config.DefaultReactWorkers || got < 2 {
 		t.Fatalf("default react workers = %d, want %d", got, config.DefaultReactWorkers)
+	}
+}
+
+// The preview cap a deployment configures is the one the replay gate enforces; an absent one is
+// the default. A main that never installed it would run every instance at the default while the
+// setting and the docs looked right.
+func TestConfigurePreviewCapInstallsTheConfiguredCap(t *testing.T) {
+	t.Cleanup(func() { graphql.SetPreviewInstanceCap(config.DefaultPreviewMaxConcurrent) })
+	c := config.NewEventProcessingConfiguration()
+	n := 3
+	c.Preview.MaxConcurrent = &n
+	configurePreviewCap(c)
+	if got := graphql.PreviewInstanceCap(); got != 3 {
+		t.Fatalf("preview cap = %d, want the configured 3", got)
+	}
+	configurePreviewCap(config.NewEventProcessingConfiguration())
+	if got := graphql.PreviewInstanceCap(); got != config.DefaultPreviewMaxConcurrent {
+		t.Fatalf("default preview cap = %d, want %d", got, config.DefaultPreviewMaxConcurrent)
+	}
+}
+
+// Loading the service's configuration installs the preview cap it carries: this is the path
+// startup takes, so a main that parsed the key and never applied it fails here.
+func TestParseConfigurationInstallsThePreviewCap(t *testing.T) {
+	oldMs, oldCfg := Microservice, Configuration
+	t.Cleanup(func() {
+		Microservice, Configuration = oldMs, oldCfg
+		graphql.SetPreviewInstanceCap(config.DefaultPreviewMaxConcurrent)
+	})
+	Microservice = &core.Microservice{MicroserviceConfigurationRaw: []byte(`{"preview":{"maxConcurrent":3}}`)}
+	if err := parseConfiguration(); err != nil {
+		t.Fatal(err)
+	}
+	if got := graphql.PreviewInstanceCap(); got != 3 {
+		t.Fatalf("preview cap after loading the configuration = %d, want 3", got)
 	}
 }

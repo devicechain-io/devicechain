@@ -12,7 +12,7 @@ namespace DeviceChain.Harborpulse.Live
 {
     /// <summary>
     /// The scene's READ-ONLY link to a DeviceChain instance running the harborpulse simulation. It fetches the runner's <c>/config.json</c> for the
-    /// platform's address and the operator token (refreshed by the shared <see cref="TokenBroker"/>), resolves the layout's 37 devices by external
+    /// platform's address and the operator token (refreshed by the shared <see cref="TokenBroker"/>), resolves the layout's 43 devices by external
     /// ID with the shared binder's query and contract, and runs the shared <see cref="PlatformObserver"/> over the ones that bound: measurement and
     /// alarm subscriptions, location, command and presence polls, all through the DeviceChain C# SDK.
     ///
