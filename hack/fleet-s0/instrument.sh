@@ -465,7 +465,9 @@ h_failed_create() {
   h_op_seen "$name" DELETE_CLUSTER && deleted=true
   (( $(h_count "$name") > 0 )) && present=true
   local tainted=false
-  tofu -chdir="$d" state show "google_container_cluster.c[\"$name\"]" 2>/dev/null | grep -qi tainted && tainted=true
+  local shown
+  shown="$(tofu -chdir="$d" state show "google_container_cluster.c[\"$name\"]" 2>/dev/null || true)"
+  ! grep -qi tainted <<<"$shown" || tainted=true
   python3 - "$d/record.json" "$deleted" "$present" "$tainted" <<'PY'
 import json,sys
 o,d,p,t=sys.argv[1:]
@@ -630,7 +632,7 @@ YAML
   pv="$(kubectl get pv -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["spec"]["csi"]["volumeHandle"].split("/")[-1])')"
   [[ $pv =~ ^[a-z0-9-]+$ ]] || die "no workload disk"
   S0_I_DISK="$pv"
-  S0_I_NODE="$(gcloud compute instances list --project="$FLEET_S0_PROJECT" --filter='name~gke-s0-e-i' --format='value(name)' | head -1)"
+  S0_I_NODE="$(gcloud compute instances list --project="$FLEET_S0_PROJECT" --filter='name~gke-s0-e-i' --limit=1 --format='value(name)')"
   [[ $S0_I_NODE =~ ^[a-z0-9-]+$ ]] || die "no node instance"
   S0_I_ENDPOINT="$(cluster_gc describe s0-e-i --format='value(endpoint)')"
   S0_I_CA="$(cluster_gc describe s0-e-i --format='value(masterAuth.clusterCaCertificate)')"
