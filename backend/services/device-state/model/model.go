@@ -170,9 +170,11 @@ type LatestMeasurement struct {
 	Name        string `gorm:"uniqueIndex:idx_latest_measurement_tenant_device_name,priority:3"`
 	Value       sql.NullFloat64
 	// TextValue is a STRING reading's value, kept apart from Value because a string is not a
-	// number. A row has exactly one of the two. Nullable with no default, so rows written
-	// before the column existed, and by pods that predate it, read NULL (see
-	// NewLatestMeasurementTextValueSchema).
+	// number. A row written by this code has exactly one of the two. Nullable with no default,
+	// so rows written before the column existed, and by pods that predate it, read NULL (see
+	// NewLatestMeasurementTextValueSchema). During a rolling upgrade a row can briefly hold both:
+	// an unchanged v1.9 pod parses a numeric-looking STRING into Value and leaves the old text in
+	// place until a newer pod writes the row again.
 	TextValue  *string `gorm:"type:text"`
 	Classifier *uint
 	// Unit + DataType are denormalized from the bound metric definition (ADR-016),

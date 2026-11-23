@@ -35,7 +35,7 @@ func TestMeasurementInputsKeepATextReadingAsText(t *testing.T) {
 		resolvedevent.ResolvedMeasurementEntry{Name: "words", Value: "not a number"},
 		resolvedevent.ResolvedMeasurementEntry{Name: "nul", Value: "a\x00b", DataType: strp("STRING")},
 		resolvedevent.ResolvedMeasurementEntry{Name: "bad", Value: "a\xffb", DataType: strp("STRING")},
-		resolvedevent.ResolvedMeasurementEntry{Name: "big", Value: strings.Repeat("x", model.MaxTextValueBytes+1), DataType: strp("STRING")},
+		resolvedevent.ResolvedMeasurementEntry{Name: "big", Value: strings.Repeat("x", resolvedevent.MaxStringValueBytes+1), DataType: strp("STRING")},
 	))
 	byName := map[string]model.LatestMeasurementInput{}
 	for _, m := range in {

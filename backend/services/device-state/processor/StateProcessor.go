@@ -877,10 +877,10 @@ func measurementInputs(event *resolvedevent.ResolvedEvent) []model.LatestMeasure
 				DataType:     mx.DataType,
 				OccurredTime: occurredAt,
 			}
-			if mx.DataType != nil && *mx.DataType == model.DataTypeString {
+			if mx.DataType != nil && *mx.DataType == "STRING" {
 				// Event-management refuses the same values and records why; here the reading
 				// is not kept, rather than poisoning the batch it would be merged in.
-				if !model.StorableTextValue(mx.Value) {
+				if !resolvedevent.StorableStringValue(mx.Value) {
 					continue
 				}
 				text := mx.Value

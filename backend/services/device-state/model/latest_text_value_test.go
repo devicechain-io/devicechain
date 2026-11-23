@@ -5,7 +5,6 @@ package model
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +21,7 @@ func TestALatestTextReadingIsKeptAndReplacedAsAPair(t *testing.T) {
 	api := newSQLiteProjectionApi(t, "db")
 	ctx := core.WithTenant(context.Background(), "acme")
 	t0 := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
-	dt := str(DataTypeString)
+	dt := str("STRING")
 
 	require.NoError(t, api.MergeLatestMeasurements(ctx, "d1", []LatestMeasurementInput{
 		{Name: "mode", TextValue: str("heating"), DataType: dt, OccurredTime: t0}}))
@@ -59,13 +58,4 @@ func TestCoalescingCarriesTheNewerReadingsText(t *testing.T) {
 	})
 	require.Len(t, rows, 1)
 	require.Equal(t, "b", *rows[0].TextValue)
-}
-
-func TestStorableTextValue(t *testing.T) {
-	require.True(t, StorableTextValue(""))
-	require.True(t, StorableTextValue("heating é中"))
-	require.True(t, StorableTextValue(strings.Repeat("a", MaxTextValueBytes)))
-	require.False(t, StorableTextValue(strings.Repeat("a", MaxTextValueBytes+1)))
-	require.False(t, StorableTextValue("a\x00b"), "PostgreSQL refuses a NUL byte (22021)")
-	require.False(t, StorableTextValue("a\xffb"), "PostgreSQL refuses invalid UTF-8 (22021)")
 }

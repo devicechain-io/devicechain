@@ -41,7 +41,7 @@ func TestLatestMeasurementTextValueOnPostgres(t *testing.T) {
 	require.NoError(t, mig.Migrate(api.RDB.Database))
 
 	t0 := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
-	dt := str(DataTypeString)
+	dt := str("STRING")
 	u := data("acme", "d1", t0)
 	u.Measurements = []LatestMeasurementInput{
 		{Name: "mode", TextValue: str("heating"), DataType: dt, OccurredTime: t0},
@@ -88,7 +88,7 @@ func TestAnOldPodsLatestMeasurementUpsertStillWritesOnPostgres(t *testing.T) {
 	require.Nil(t, got.TextValue, "a row an old pod wrote has no text")
 }
 
-// Why StorableTextValue exists: PostgreSQL refuses a NUL byte for the WHOLE statement, so one such
+// Why resolvedevent.StorableStringValue exists: PostgreSQL refuses a NUL byte for the WHOLE statement, so one such
 // reading would fail every other reading merged in its batch.
 func TestPostgresRefusesANulByteInATextReading(t *testing.T) {
 	api := newPostgresProjectionApi(t, "textnul")

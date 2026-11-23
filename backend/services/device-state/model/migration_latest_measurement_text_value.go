@@ -21,9 +21,10 @@ import (
 //     exactly where an upgraded database has it.
 //  3. Nullable with NO default and no backfill. A pod from before this release never names the
 //     column, so the rows it writes are the rows it always wrote; old rows hold no text
-//     because nothing wrote any. The old pods' upsert leaves an existing text_value in place
-//     when it overwrites the numeric value, which cannot occur while a metric keeps its data
-//     type (see the producer slice in device-management, which is what first writes text).
+//     because nothing wrote any. During a rolling upgrade an unchanged v1.9 pod parses a numeric-
+//     looking STRING value ("12") into value and, since its upsert never names text_value, leaves
+//     the previous text_value in place: for that window a row can hold both, until a pod that
+//     knows the column writes the row again (its upsert always sets both columns together).
 //
 // The column is unused until device-management starts emitting STRING readings.
 func NewLatestMeasurementTextValueSchema() *gormigrate.Migration {

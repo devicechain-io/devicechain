@@ -235,8 +235,8 @@ that sits beside the append-only measurement history. One row per device and mea
 """
 # Current (most-recent) value of a single named measurement for a device — the
 # live "what is it now?" projection beside the append-only history. occurredTime
-# is the RFC3339 time of the reading; value is null for a text (STRING) reading,
-# whose value is in textValue.
+# is the RFC3339 time of the reading; value is null only for a non-numeric reading
+# (not stored in v1).
 type LatestMeasurement implements Model {
     """Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by device token."""
     id: ID!
@@ -254,15 +254,10 @@ type LatestMeasurement implements Model {
     """Name of the measurement, for example a metric name such as temperature."""
     name: String!
     """
-    The numeric value of the most recent reading; null for a text (STRING) reading, whose value
-    is in textValue.
+    The numeric value of the most recent reading. Only numeric readings are stored, so in
+    practice this is always set.
     """
     value: Float
-    """
-    The value of the most recent reading when it is text (a STRING metric); null for a numeric
-    reading, whose value is in value.
-    """
-    textValue: String
     """
     Id of the metric definition the reading was bound to; null for a measurement with no
     definition.
