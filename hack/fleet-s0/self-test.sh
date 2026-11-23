@@ -143,7 +143,9 @@ PY
     grep -q "$1 HOLDS" "$d/out" || fail "$1 produced no HOLDS verdict"
     if [[ $1 == E-h ]]; then
       # The import into a copy of the state is a RECORDED finding, so no verdict guards it: check it here.
-      python3 -c 'import json,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[0]); assert all(p["import_succeeded"] for p in r["measured"]["points"]), "import never succeeded"'         "$(ls -td "$d"/run.* | head -1)/results.jsonl" || fail "E-h import into a copy of the state did not run"
+      newest=""
+      for r in "$d"/run.*; do if [[ -z $newest || $r -nt $newest ]]; then newest=$r; fi; done
+      python3 -c 'import json,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[0]); assert all(p["import_succeeded"] for p in r["measured"]["points"]), "import never succeeded"' "$newest/results.jsonl" || fail "E-h import into a copy of the state did not run"
     fi
     # Each scripted defect must turn THIS probe red with a FAILS verdict.
     case "$1" in
