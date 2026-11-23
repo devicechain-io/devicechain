@@ -1279,3 +1279,29 @@ apron, and that no trench runs under a footprint (with a planted trench that doe
 bollards (with a planted ladder that is not), and no trench to it; what each kind reads and never reads; reporting, silent and
 never heard on the 45 s window; the pips for every quarter; the preview's day for the six, hour by hour; and the fixed eye's
 parsing with every malformed form refused.
+
+### Their page in the guided tour
+
+Page `3c` of `Resources/storyboard.json` is the tour's stop at these six. It is a live page: neither recorded cut uses it. Its
+trigger is the platform clearing the `mqtt-charger-disconnected` alarm, which happens when the charger that dropped its MQTT
+session at 12:00 reconnects at 13:00, so on a day when the session never drops the page is not shown. It uses poses that already
+exist (`pose:charger-north:wide` for the two chargers on a token, three of the `pose:gauge-north` family for the lamps and the
+chargers on a certificate), and a test projects each shot's subjects into a 16:9 frame.
+
+| Shot | From | Says | On what |
+| --- | --- | --- | --- |
+| `3c-1` | the trigger | "At noon a charger's MQTT session dropped. The platform raised an alarm.", then "It is back. The alarm clears itself." | claims: the raise and the clear of the alarm that triggered the page |
+| `3c-2` | 13:18 | "Two lamps here keep no connection. They ask the platform for orders.", then "The order to dim waited for them. Both now report the new level." | the second is a claim: both lamps' own `dim_pct` readings at the level the 10:00 command set |
+| `3c-3` | 13:36 | "These chargers sign in with their own certificates. No shared secret.", "This morning their power limit was halved, as a setting, not a command.", "One applied it, one declined, and each reported which." | the scenario's word |
+| `3c-4` | 13:54 | nothing | a wide view to wait on |
+| `3c-5` | after page 3b | "One certificate was disabled at two. That charger alone is locked out." | the scenario's word |
+
+Three of the five lines about the chargers on a certificate are the scenario's word and not claims, because the director has no
+read that shows them: it reads a credential only for a recorded replacement, and it does not read a device's configuration. The
+simulator's own verifier judges both (`config-applied`, `charger-x509-admitted`).
+
+The certificate is disabled at 14:00, the beat on which page 3b (the hot connector) starts, and page 3b is in the five-minute
+cut at the clean day's times. So page `3c` ranks below it and is waiting on a shot with no caption when 14:00 comes: page 3b takes
+the camera on its own second with nothing cut off, and `3c-5` follows when it is done. By then the charger has stood silent for
+longer than the 45 s window and is drawn so. `DirectorTestsStoryboard` pins this: every other page's shots and captions are the
+same to the second with and without page `3c`, on a clean day and on the two days that keep page 3b up longest.

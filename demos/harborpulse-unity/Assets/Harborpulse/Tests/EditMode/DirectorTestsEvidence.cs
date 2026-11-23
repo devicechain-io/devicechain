@@ -96,6 +96,8 @@ namespace DeviceChain.Harborpulse.Tests
         [TestCase("2", "work-sent", "attempt", "alarmToken")]
         [TestCase("2", "work-sent", "attempt", "cycle")]
         [TestCase("1b", "peak-clear", "alarm", "identity")]
+        [TestCase("3c", "dropped", "alarm", "identity")]
+        [TestCase("3c", "back", "alarm", "identity")]
         [TestCase("3", "same", "measure", "identity")]
         [TestCase("4", "platform-start", "chip", "alarmToken")]
         [TestCase("8", "signed", "artifact", "identity")]
