@@ -449,3 +449,39 @@ func TestEachCreateBudgetRefusesOnItsOwn(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+func TestAReplayRacingTheLastSlotIsAnsweredAsAReplayNotRefused(t *testing.T) {
+	openTheEngine(t)
+	api, ctx := fleetFixture(t, 1)
+	req := setReq("twin", "d1")
+	n, err := normalizeFleetRequest(req)
+	require.NoError(t, err)
+	plan, err := api.planNormalized(ctx, n)
+	require.NoError(t, err)
+	first, err := api.fleetCreateStepOne(ctx, "acme", req, n, plan, "alice")
+	require.NoError(t, err)
+	// Fill the waiting-operations budget to the brim with other operations (aged out of the hourly rate).
+	db := api.RDB.DB(ctx)
+	for i := 1; i < ledger.TenantUnstartedOperations; i++ {
+		other := &FleetOperation{Token: fmt.Sprintf("fill%d", i), Name: "f", Kind: FleetKindConfigSet, Dispatch: FleetDispatchReady, Evidence: "OPEN",
+			RequestDigest: "d", Intent: "{}", DriverProtocol: 1, TargetKind: fleetTargetKindDeviceList, TargetCount: 1, MaxPostsPerSecond: 1,
+			EffPostsPerSecond: 1, SettleDeadlineS: 60, Initiator: "x", ContractVersion: 1}
+		require.NoError(t, db.Create(other).Error)
+	}
+	// The twin arrives after the winner committed, with the budget full: it is a replay, not a refusal.
+	again, err := api.fleetCreateStepOne(ctx, "acme", req, n, plan, "alice")
+	require.NoError(t, err)
+	require.Equal(t, first.ID, again.ID)
+	// A different request under that token is still a conflict, never a quota answer.
+	req2 := setReq("twin", "d1", "d1x")
+	n2, err := normalizeFleetRequest(req2)
+	require.NoError(t, err)
+	_, err = api.fleetCreateStepOne(ctx, "acme", req2, n2, plan, "alice")
+	requireFleetCode(t, err, FleetCodeConflict)
+	// Negative control: a NEW token with the budget full is refused for the budget.
+	req3 := setReq("brand-new", "d1")
+	n3, err := normalizeFleetRequest(req3)
+	require.NoError(t, err)
+	_, err = api.fleetCreateStepOne(ctx, "acme", req3, n3, plan, "alice")
+	requireFleetCode(t, err, FleetCodeQuotaExceeded)
+}

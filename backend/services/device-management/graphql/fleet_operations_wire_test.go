@@ -291,3 +291,15 @@ func TestCreateOverTheWireRefusesAKindTheBuildCannotExecute(t *testing.T) {
 	_, errs = execFleet(t, ctx, fleetWirePlan, fleetWireRequest("op1", "d1"))
 	require.Empty(t, errs)
 }
+
+func TestAScopedMemberIsRefusedEvenWhenNoAuthorityIsAsked(t *testing.T) {
+	scoped := person(auth.DeviceRead, auth.DeviceWrite, auth.FleetOperate)
+	scoped.ScopeAnchors = []string{"customer:acme"}
+	ctx, _ := fleetWireCtx(t, scoped)
+	_, err := fleetCaller(ctx)
+	require.ErrorIs(t, err, auth.ErrScopeUnsupported)
+	// Negative control: the same caller unscoped passes with no authority asked.
+	ok, _ := fleetWireCtx(t, person())
+	_, err = fleetCaller(ok)
+	require.NoError(t, err)
+}

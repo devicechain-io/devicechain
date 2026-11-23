@@ -27,6 +27,9 @@ func fleetCaller(ctx context.Context, required ...auth.Authority) (string, error
 	if !ok || claims == nil {
 		return "", auth.ErrUnauthenticated
 	}
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		return "", auth.ErrScopeUnsupported
+	}
 	if auth.IsAgentOrigin(claims) || claims.TokenType == auth.TokenTypeService {
 		return "", &model.FleetOperationError{Code: model.FleetCodeAgentNotPermitted,
 			Message: "fleet operations are run by a person acting under their own access token"}

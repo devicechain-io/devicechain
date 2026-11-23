@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -155,6 +156,18 @@ func (api *Api) fleetCreateStepOne(ctx context.Context, tenant string, req *Flee
 				return err
 			}
 		}
+		// A racing create of the same request may have finished while this one waited for the locks: it is
+		// a replay and must be answered as one, not refused for the budget its twin just used.
+		var twin FleetOperation
+		if err := tx.Where("token = ?", req.Token).First(&twin).Error; err == nil {
+			if twin.RequestDigest != n.requestDigest {
+				return fleetErr(FleetCodeConflict, "operation token %q is already used by a different request", req.Token)
+			}
+			created = &twin
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
 		if err := api.fleetAdmit(ctx, tx, len(plan.Lines)); err != nil {
 			return err
 		}
@@ -213,6 +226,10 @@ func nullInt32(v *int64) sql.NullInt32 {
 func (api *Api) fleetAdmit(ctx context.Context, tx *gorm.DB, lines int) error {
 	exceeded := func(quota string, format string, args ...any) error {
 		e := fleetErr(FleetCodeQuotaExceeded, format, args...)
+		if strings.HasPrefix(quota, "instance.") {
+			// What the instance as a whole holds is other tenants' business: say which limit, not how full.
+			e.Message = "the instance-wide limit " + strings.TrimPrefix(quota, "instance.") + " is reached; retry later"
+		}
 		e.Quota = quota
 		return e
 	}
@@ -224,8 +241,10 @@ func (api *Api) fleetAdmit(ctx context.Context, tx *gorm.DB, lines int) error {
 	sysCtx := core.WithSystemContext(ctx)
 	scopes := []scope{
 		{"tenant", tx, ledger.TenantUnstartedOperations, ledger.TenantUnpostedLines, ledger.TenantRetainedLines, ledger.TenantCreatesPerHour, ledger.TenantCreatesPerDay},
-		// Instance counts select counts only, under a system context: no row of any tenant is read.
-		{"instance", api.RDB.DB(sysCtx), ledger.InstanceUnstartedOperations, ledger.InstanceUnpostedLines, ledger.InstanceRetainedLines, 0, 0},
+		// Instance counts select counts only, under a system context: no row of any tenant is read. They run
+		// on the SAME transaction as the tenant counts, so the connection that holds the admission locks
+		// never waits for a second one from the pool.
+		{"instance", tx.WithContext(sysCtx), ledger.InstanceUnstartedOperations, ledger.InstanceUnpostedLines, ledger.InstanceRetainedLines, 0, 0},
 	}
 	for _, s := range scopes {
 		db := s.db
