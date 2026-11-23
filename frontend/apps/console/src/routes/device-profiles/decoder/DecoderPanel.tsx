@@ -390,7 +390,7 @@ function DecoderEditor(props: {
                     <Trash2 size={14} />
                   </IconButton>
                   {built.issues.filter((x) => x.path.startsWith(`let[${i}]`)).map((x, n) => (
-                    <span key={n} className="sr-only">{t(`decIssue.${x.code}`, x.params)}</span>
+                    <span key={n} className="sr-only">{t(`decIssue.${x.code}`, x.params ?? {})}</span>
                   ))}
                 </div>
               ))}

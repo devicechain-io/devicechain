@@ -13,6 +13,8 @@
 // password / AWS secret access key) is NEVER part of `config` — it travels as the
 // write-only `secret` and is sealed in the ADR-059 store.
 
+import type { TranslateFn } from '@/lib/translate';
+
 export type FieldKind = 'text' | 'list' | 'qos' | 'bool';
 
 export interface ConfigField {
@@ -282,7 +284,7 @@ export function deserializeConfig(spec: ConnectorTypeSpec, config: string): Conf
 export function validateConfigForm(
   spec: ConnectorTypeSpec,
   state: ConfigFormState,
-  t: (key: string, options?: Record<string, unknown>) => string,
+  t: TranslateFn,
 ): string | null {
   for (const f of spec.fields) {
     if (!f.required) continue;
