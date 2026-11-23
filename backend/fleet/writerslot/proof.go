@@ -91,6 +91,21 @@ func (m *Manager) Prove(ctx context.Context, runUID string, p Proof) error {
 			if p.State.Method == CutProcessTerminated {
 				return proofRefused("EXPIRY cannot imply the process is terminated")
 			}
+			// A second pod seen under this run is a second writer whose credentials the recorded
+			// pod's refresh cut says nothing about. EXPIRY has no per-pod evidence to offer (it is
+			// time since ONE recorded cut), so any SECOND_POD evidence refuses it; the way out is
+			// TERMINATION with every pod shown terminated.
+			recordedPod := ""
+			if run.PodUID != nil {
+				recordedPod = *run.PodUID
+			}
+			extra, err := otherPods(tx, slot.ClusterUID, runUID, recordedPod)
+			if err != nil {
+				return err
+			}
+			if len(extra) > 0 {
+				return proofRefused("EXPIRY is refused: pod %s was also observed for this run and the refresh cut covers only the recorded pod; prove every pod terminated instead", extra[0])
+			}
 			residual := time.Duration(run.KsaTokenTTLSec+run.StsTokenTTLSec+run.AccessTokenTTLSec)*time.Second + m.cfg.ClockSkewMargin
 			var elapsed bool
 			if err := tx.Raw(`SELECT clock_timestamp() >= ?::timestamptz + (? * interval '1 millisecond')`, *slot.RefreshCutAt, residual.Milliseconds()).Scan(&elapsed).Error; err != nil {
@@ -146,7 +161,7 @@ func (m *Manager) Prove(ctx context.Context, runUID string, p Proof) error {
 		}
 		proof, cut := p.Cloud.Proof, p.State.Method
 		return m.appendTransition(tx, transition{ClusterUID: slot.ClusterUID, Epoch: slot.Epoch, RunUID: &runUID, From: &fromState, To: StateExcluded,
-			CloudCutProof: &proof, StateCutMethod: &cut, Evidence: evidenceJSON(evidence), Reason: "both cuts proven", Actor: actor})
+			CloudCutProof: &proof, StateCutMethod: &cut, EvidenceMap: evidence, Reason: "both cuts proven", Actor: actor})
 	})
 }
 

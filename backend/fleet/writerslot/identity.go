@@ -71,6 +71,10 @@ func CheckClusterIdentity(in Intent, got ObservedCluster) string {
 		return ReasonNonceMismatch
 	case in.FirstSubmitAt.IsZero() || got.CreateTime.Before(in.FirstSubmitAt.Add(-defaultImportSkew)):
 		return ReasonCreateBeforeIntent
+	case got.ResourceID == "":
+		// A cluster read that names no id cannot be recorded as THE cluster: the empty string
+		// would be stored as cloud_resource_id and every later check would compare against it.
+		return ReasonIdentityMismatch
 	case in.CloudResourceID != "" && got.ResourceID != in.CloudResourceID:
 		return ReasonIdentityMismatch
 	}
@@ -135,11 +139,15 @@ func (m *Manager) RecordClusterImport(ctx context.Context, runUID, address strin
 		if reason == ReasonVerified {
 			out.Decision = DecisionImported
 		}
-		evidence, _ := json.Marshal(map[string]any{
+		evidence, merr := json.Marshal(map[string]any{
 			"observed_name": got.Name, "observed_project": got.Project, "observed_location": got.Location,
-			"nonce_label_matches": reason != ReasonNonceMismatch && reason != ReasonNameMismatch && reason != ReasonProjectMismatch && reason != ReasonLocationMismatch,
+			// Computed from the labels directly, not inferred from which reason fired first.
+			"nonce_label_matches": in.Nonce != "" && got.NonceLabel == in.Nonce,
 			"create_time":         got.CreateTime.UTC().Format(time.RFC3339Nano), "resource_id": got.ResourceID,
 		})
+		if merr != nil {
+			return fmt.Errorf("writerslot: marshal import evidence: %w", merr)
+		}
 		if err := m.insertImport(tx, slot.ClusterUID, run.ID, address, got.ResourceID, string(evidence), out, a, requestID); err != nil {
 			return err
 		}
@@ -194,7 +202,10 @@ func (m *Manager) RecordPoolImport(ctx context.Context, runUID, address, poolNam
 		if reason == ReasonVerified {
 			out.Decision = DecisionImported
 		}
-		evidence, _ := json.Marshal(map[string]any{"pool": poolName, "parent": parentResourceID})
+		evidence, merr := json.Marshal(map[string]any{"pool": poolName, "parent": parentResourceID})
+		if merr != nil {
+			return fmt.Errorf("writerslot: marshal import evidence: %w", merr)
+		}
 		return m.insertImport(tx, slot.ClusterUID, run.ID, address, "", string(evidence), out, a, requestID)
 	})
 	return out, err

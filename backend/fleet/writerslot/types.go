@@ -116,9 +116,13 @@ type Actor struct {
 	Issuer string
 }
 
-// Premises answers what the S0 premise record says. EXPIRY is accepted only in a credential mode
-// whose refresh cut has been measured; the default refuses, so an unmeasured mode can only end in
-// quarantine.
+// Premises is the seam through which the S0 premise record will decide whether EXPIRY is
+// admissible in a credential mode. NOTHING READS THE RECORD YET: the only implementation in this
+// package is NoPremises, which answers false for every mode, so EXPIRY is refused everywhere and an
+// unmeasured mode can only end in TERMINATION or quarantine. A Config may be handed any Premises,
+// and nothing here checks that it agrees with a record, so wiring a real one is the slice that
+// binds E-f; a test scans this package so that no implementation but the refusing one lands before
+// that.
 type Premises interface {
 	// ExpiryHolds reports whether the premise record has the refresh-cut experiment HOLDS for the
 	// credential mode.

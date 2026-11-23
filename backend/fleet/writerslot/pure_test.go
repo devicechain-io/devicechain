@@ -6,11 +6,17 @@ package writerslot
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 func TestAllTerminatedIsOnlyEverContainerStatuses(t *testing.T) {
@@ -60,6 +66,7 @@ func TestCheckClusterIdentityRefusesEachElementWithItsOwnReason(t *testing.T) {
 		"location":                       {mut(func(o *ObservedCluster) { o.Location = "m" }), ReasonLocationMismatch},
 		"nonce":                          {mut(func(o *ObservedCluster) { o.NonceLabel = "wrong" }), ReasonNonceMismatch},
 		"no label":                       {mut(func(o *ObservedCluster) { o.NonceLabel = "" }), ReasonNonceMismatch},
+		"no resource id observed":        {mut(func(o *ObservedCluster) { o.ResourceID = "" }), ReasonIdentityMismatch},
 		"created long before the intent": {mut(func(o *ObservedCluster) { o.CreateTime = first.Add(-10 * time.Minute) }), ReasonCreateBeforeIntent},
 	}
 	for name, c := range cases {
@@ -86,6 +93,11 @@ func TestCheckClusterIdentityRefusesEachElementWithItsOwnReason(t *testing.T) {
 		t.Errorf("a different id under the same name: %s", r)
 	}
 	// No create time recorded for the intent is not a pass.
+	noID := good
+	noID.ResourceID = ""
+	if r := CheckClusterIdentity(known, noID); r != ReasonIdentityMismatch {
+		t.Errorf("a read naming no id was accepted against a known id: %s", r)
+	}
 	noIntent := intent
 	noIntent.FirstSubmitAt = time.Time{}
 	if r := CheckClusterIdentity(noIntent, good); r != ReasonCreateBeforeIntent {
@@ -190,4 +202,89 @@ func TestVocabularyHelpers(t *testing.T) {
 	if !lifecyclePermits(LifecycleTearingDown, KindRecover) || lifecyclePermits(LifecycleTearingDown, KindChange) {
 		t.Error("TEARING_DOWN must permit only RECOVER (and the refused DESTROY)")
 	}
+}
+
+// Nothing in this package reads the premise record yet, so the only ExpiryHolds a non-test file may
+// declare is one that returns false. A permissive implementation landing here would let EXPIRY
+// through without anything binding it to what E-f measured. Negative control: the helper
+// expiryHoldsAlwaysFalse rejects a body that returns true.
+func TestNoPremisesImplementationButTheRefusingOneExists(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	var found int
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, f, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range file.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || fn.Name.Name != "ExpiryHolds" {
+				continue
+			}
+			found++
+			if !expiryHoldsAlwaysFalse(fn) {
+				t.Errorf("%s: ExpiryHolds must be `return false` until a slice binds it to the premise record", fset.Position(fn.Pos()))
+			}
+		}
+	}
+	if found == 0 {
+		t.Fatal("found no ExpiryHolds method: the scan is not looking at NoPremises")
+	}
+	// The control: a permissive body is recognised as one.
+	src := `package x
+type P struct{}
+func (P) ExpiryHolds(string) bool { return true }
+`
+	cf, err := parser.ParseFile(token.NewFileSet(), "control.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expiryHoldsAlwaysFalse(cf.Decls[1].(*ast.FuncDecl)) {
+		t.Fatal("the scan accepts `return true`: it cannot fail")
+	}
+}
+
+func expiryHoldsAlwaysFalse(fn *ast.FuncDecl) bool {
+	if fn.Body == nil || len(fn.Body.List) != 1 {
+		return false
+	}
+	ret, ok := fn.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 {
+		return false
+	}
+	id, ok := ret.Results[0].(*ast.Ident)
+	return ok && id.Name == "false"
+}
+
+func TestEachManagerIsItsOwnIncarnation(t *testing.T) {
+	a, err := NewManager(nopDB(), "replica-1", Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewManager(nopDB(), "replica-1", Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.HolderID() == b.HolderID() {
+		t.Fatalf("two managers with one name share a lease holder id %q: a restart would renew a dead incarnation's lease", a.HolderID())
+	}
+	if !strings.HasPrefix(a.HolderID(), "replica-1#") {
+		t.Fatalf("holder id %q lost the replica name", a.HolderID())
+	}
+}
+
+// nopDB is a handle that never connects: gorm opens lazily and the automatic ping is disabled.
+func nopDB() *gorm.DB {
+	db, err := gorm.Open(postgres.New(postgres.Config{DSN: "host=127.0.0.1 port=1 user=x dbname=x sslmode=disable"}), &gorm.Config{DisableAutomaticPing: true})
+	if err != nil {
+		panic(err)
+	}
+	return db
 }

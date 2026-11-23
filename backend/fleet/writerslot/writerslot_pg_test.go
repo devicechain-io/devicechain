@@ -45,6 +45,9 @@ type fx struct {
 	mgr     *Manager
 	ctx     context.Context
 	backend string
+	// beforeRunning, when set, runs after Acquire and before the Job's pod is observed: the point
+	// at which a per-run state role may be created.
+	beforeRunning func()
 }
 
 // premiseSet is a Premises with a fixed answer.
@@ -496,8 +499,8 @@ func TestFleetPGReleaseGuards(t *testing.T) {
 	s.StateRoleName = role
 	_, err = f.mgr.Acquire(f.ctx, s)
 	require.NoError(t, err)
-	f.running(run1, podA)
 	require.NoError(t, f.mgr.CreateStateRole(f.ctx, run1, "postgres", "a-sufficiently-long-password"))
+	f.running(run1, podA)
 	require.NoError(t, f.mgr.Exit(f.ctx, run1, ExitSpec{Pod: terminated(podA), Succeeded: true, Head: StateHead{Lineage: "l", Serial: 1}}))
 
 	refused(t, f.mgr.Release(f.ctx, run1), ErrTransitionRefused) // the role still exists
@@ -521,6 +524,9 @@ func (f *fx) uncertainRun(runUID, pod string, mutate func(*RunSpec)) {
 	}
 	_, err := f.mgr.Acquire(f.ctx, s)
 	require.NoError(f.t, err)
+	if f.beforeRunning != nil {
+		f.beforeRunning()
+	}
 	f.running(runUID, pod)
 	require.NoError(f.t, f.mgr.Doubt(f.ctx, runUID, "lost"))
 }
@@ -601,6 +607,9 @@ func TestFleetPGExclusionNeedsBothCuts(t *testing.T) {
 		cfg := Config{Premises: premiseSet{ModeKindJWKS: true}, ClockSkewMargin: 10 * time.Millisecond}
 		f := newFx(t, BackendPG, cfg)
 		role, _ := StateRoleName(run1)
+		f.beforeRunning = func() {
+			require.NoError(t, f.mgr.CreateStateRole(f.ctx, run1, "postgres", "a-sufficiently-long-password"))
+		}
 		f.uncertainRun(run1, podA, func(s *RunSpec) {
 			s.StateRoleName = role
 			s.KsaTokenTTL, s.StsTokenTTL, s.AccessTokenTTL = time.Second, time.Second, time.Second
@@ -612,7 +621,6 @@ func TestFleetPGExclusionNeedsBothCuts(t *testing.T) {
 		refused(t, f.mgr.Prove(f.ctx, run1, Proof{Cloud: CloudCut{Proof: ProofExpiry}, State: StateCut{Method: CutProcessTerminated}}), ErrProofRefused)
 		// PG_ROLE_REVOKED but the role was never cut: it does not exist / can still log in.
 		refused(t, f.mgr.Prove(f.ctx, run1, Proof{Cloud: CloudCut{Proof: ProofExpiry}, State: StateCut{Method: CutPGRoleRevoked}}), ErrProofRefused)
-		require.NoError(t, f.mgr.CreateStateRole(f.ctx, run1, "postgres", "a-sufficiently-long-password"))
 		refused(t, f.mgr.Prove(f.ctx, run1, Proof{Cloud: CloudCut{Proof: ProofExpiry}, State: StateCut{Method: CutPGRoleRevoked}}), ErrProofRefused) // can still log in
 		require.NoError(t, f.mgr.RevokeStateRole(f.ctx, run1))
 		require.NoError(t, f.mgr.Prove(f.ctx, run1, Proof{Cloud: CloudCut{Proof: ProofExpiry}, State: StateCut{Method: CutPGRoleRevoked}}))
@@ -928,10 +936,14 @@ func TestFleetPGStateCutIsReal(t *testing.T) {
 		role, err := StateRoleName(run1)
 		require.NoError(t, err)
 		const pw = "a-sufficiently-long-password"
+		f.acquire(run1, KindCreate)
 		require.NoError(t, f.mgr.CreateStateRole(f.ctx, run1, "fleet_provider", pw))
 		db, err := f.asRole(role, pw)
 		require.NoError(t, err, "the per-run role must be able to log in before the cut")
 		require.NoError(t, db.Exec(`INSERT INTO tf_x.states (name, data) VALUES ('s', 'v1')`).Error)
+		// The slot is doubted, which is where a state cut is made.
+		f.running(run1, podA)
+		require.NoError(t, f.mgr.Doubt(f.ctx, run1, "lost"))
 		return f, pw, db
 	}
 
@@ -965,6 +977,9 @@ func TestFleetPGStateCutIsReal(t *testing.T) {
 	t.Run("the role is dropped at release", func(t *testing.T) {
 		f, _, _ := setup(t)
 		require.NoError(t, f.mgr.RevokeStateRole(f.ctx, run1))
+		// While the run is live its role is the writer's credential: dropping it is refused.
+		refused(t, f.mgr.DropStateRole(f.ctx, run1), ErrTransitionRefused)
+		require.NoError(t, f.mgr.Prove(f.ctx, run1, Proof{Cloud: CloudCut{Proof: ProofTermination, Pod: terminated(podA)}, State: StateCut{Method: CutProcessTerminated}}))
 		require.NoError(t, f.mgr.DropStateRole(f.ctx, run1))
 		var n int
 		role, _ := StateRoleName(run1)
@@ -1074,6 +1089,7 @@ func TestFleetPGStaleEpochOfTheSameHolderFails(t *testing.T) {
 	f := newFx(t, BackendGCS, Config{})
 	stale, err := NewManager(f.db, "manager-a", Config{})
 	require.NoError(t, err)
+	stale.holderID = f.mgr.holderID // the SAME holder id: NewManager mints a fresh incarnation suffix
 	require.NoError(t, stale.Take(f.ctx, 300*time.Millisecond))
 	time.Sleep(450 * time.Millisecond) // the lease lapses
 	require.NoError(t, f.mgr.Take(f.ctx, time.Hour))
@@ -1279,7 +1295,7 @@ func (r *recordingLogger) text() string {
 
 // Confidential values never reach a log: a cloud operation's error message, and a role's password.
 func TestFleetPGManagerStatementsAreNeverLogged(t *testing.T) {
-	f := newFx(t, BackendGCS, Config{})
+	f := newFx(t, BackendPG, Config{})
 	rec := &recordingLogger{}
 	noisy := f.db.Session(&gorm.Session{Logger: rec})
 	const secret = "SECRET-ERROR-MESSAGE-7f3a"
@@ -1294,19 +1310,150 @@ func TestFleetPGManagerStatementsAreNeverLogged(t *testing.T) {
 	rec2 := &recordingLogger{}
 	m, err := NewManager(f.db.Session(&gorm.Session{Logger: rec2}), "manager-a", Config{})
 	require.NoError(t, err)
+	m.holderID = f.mgr.holderID
 	require.NoError(t, m.Take(f.ctx, time.Hour)) // the same holder renews
 
 	// An operation naming a cluster that does not exist fails on the foreign key, with the error
 	// message among the bound values.
 	require.Error(t, m.RecordOperation(f.ctx, "99999999-9999-9999-9999-999999999999", CloudOperation{Name: "x", Status: OpDone, ErrorCode: "1", ErrorMessage: secret, Source: SourceRunnerLog}))
 	// A role created twice fails the second time, with the password in the statement.
-	run := "bbbbbbbb-0000-0000-0000-000000000009"
-	rname, _ := StateRoleName(run)
+	rname, _ := StateRoleName(run1)
 	dropRolesAfter(t, rname)
-	require.NoError(t, m.CreateStateRole(f.ctx, run, "postgres", password))
-	require.Error(t, m.CreateStateRole(f.ctx, run, "postgres", password))
+	f.acquire(run1, KindCreate)
+	require.NoError(t, m.CreateStateRole(f.ctx, run1, "postgres", password))
+	require.Error(t, m.CreateStateRole(f.ctx, run1, "postgres", password))
 
 	require.NotContains(t, rec2.text(), secret, "a cloud operation's error message must never be logged")
 	require.NotContains(t, rec2.text(), password, "a role's password must never be logged")
 	require.Empty(t, rec2.logs, "the manager's connection logs nothing at all")
+}
+
+// ---- second review round ----------------------------------------------------------------------
+
+// A refresh cut is time since ONE recorded cut of ONE pod: a SECOND pod seen under the run is
+// outside it, so EXPIRY must refuse while SECOND_POD evidence exists (the way out is TERMINATION
+// with every pod shown terminated). The control, in TestFleetPGRefreshCutFromQuarantine, is the same
+// proof with no second pod being accepted.
+func TestFleetPGExpiryRefusedWhenASecondPodWasSeen(t *testing.T) {
+	cfg := Config{Premises: premiseSet{ModeKindJWKS: true}, ClockSkewMargin: 10 * time.Millisecond}
+	f := newFx(t, BackendGCS, cfg)
+	f.uncertainRun(run1, podA, func(s *RunSpec) {
+		s.KsaTokenTTL, s.StsTokenTTL, s.AccessTokenTTL = time.Second, time.Second, time.Second
+	})
+	// The second pod is seen WHILE the slot is UNCERTAIN: the evidence must still be appended.
+	refused(t, f.mgr.Observe(f.ctx, run1, "fleet", "job-"+run1, podB, "n2"), ErrQuarantined)
+	require.Equal(t, StateQuarantined, f.state())
+	require.NoError(t, f.mgr.RecordRefreshCut(f.ctx, run1))
+	f.exec(`UPDATE writer_slots SET refresh_cut_at = now() - interval '1 hour'`)
+
+	err := f.mgr.Prove(f.ctx, run1, Proof{Cloud: CloudCut{Proof: ProofExpiry}, State: StateCut{Method: CutCloudCredential}})
+	refused(t, err, ErrProofRefused)
+	require.Contains(t, err.Error(), podB)
+	require.Equal(t, StateQuarantined, f.state())
+
+	// TERMINATION with the second pod shown terminated is the way out.
+	require.NoError(t, f.mgr.Prove(f.ctx, run1, Proof{Cloud: CloudCut{Proof: ProofTermination, Pod: terminated(podA), MorePods: []PodObservation{terminated(podB)}},
+		State: StateCut{Method: CutProcessTerminated}}))
+}
+
+// A different pod UID observed for a run whose slot is UNCERTAIN or already QUARANTINED is evidence
+// of a second writer and is appended either way; before this it was refused and left no trace.
+func TestFleetPGSecondPodEvidenceIsAppendedInEveryState(t *testing.T) {
+	secondPodRows := func(f *fx) int {
+		var n int
+		require.NoError(t, f.db.Raw(`SELECT count(*) FROM writer_slot_transitions WHERE reason = ? AND evidence->>'observed_pod_uid' IS NOT NULL`, QuarantineSecondPod).Scan(&n).Error)
+		return n
+	}
+	t.Run("UNCERTAIN", func(t *testing.T) {
+		f := newFx(t, BackendGCS, Config{})
+		f.uncertainRun(run1, podA, nil)
+		refused(t, f.mgr.Observe(f.ctx, run1, "fleet", "job-"+run1, podB, "n2"), ErrQuarantined)
+		require.Equal(t, StateQuarantined, f.state())
+		require.Equal(t, QuarantineSecondPod, *f.slot(clusterA).QuarantineReason)
+		require.Equal(t, 1, secondPodRows(f))
+	})
+	t.Run("QUARANTINED for another reason keeps its reason and still records the pod", func(t *testing.T) {
+		f := newFx(t, BackendGCS, Config{})
+		f.uncertainRun(run1, podA, nil)
+		require.NoError(t, f.mgr.Quarantine(f.ctx, clusterA, QuarantineNoProof, Actor{}))
+		refused(t, f.mgr.Observe(f.ctx, run1, "fleet", "job-"+run1, podB, "n2"), ErrQuarantined)
+		require.Equal(t, QuarantineNoProof, *f.slot(clusterA).QuarantineReason)
+		require.Equal(t, 1, secondPodRows(f))
+		// The proof of the recorded pod alone no longer excludes the slot.
+		refused(t, f.mgr.Prove(f.ctx, run1, Proof{Cloud: CloudCut{Proof: ProofTermination, Pod: terminated(podA)}, State: StateCut{Method: CutProcessTerminated}}), ErrProofRefused)
+	})
+	t.Run("the recorded pod seen again on an UNCERTAIN slot is still refused", func(t *testing.T) {
+		f := newFx(t, BackendGCS, Config{})
+		f.uncertainRun(run1, podA, nil)
+		refused(t, f.mgr.Observe(f.ctx, run1, "fleet", "job-"+run1, podA, "n1"), ErrTransitionRefused)
+		require.Equal(t, 0, secondPodRows(f))
+	})
+}
+
+// A recovery run is not admitted while the excluded holder's per-run role still exists, and is
+// admitted once it is dropped.
+func TestFleetPGRecoveryNeedsTheExcludedHoldersRoleDropped(t *testing.T) {
+	f := newFx(t, BackendPG, Config{})
+	r1, _ := StateRoleName(run1)
+	dropRolesAfter(t, r1)
+	f.beforeRunning = func() {
+		require.NoError(t, f.mgr.CreateStateRole(f.ctx, run1, "postgres", "a-sufficiently-long-password"))
+	}
+	f.uncertainRun(run1, podA, nil)
+	require.NoError(t, f.mgr.Prove(f.ctx, run1, Proof{Cloud: CloudCut{Proof: ProofTermination, Pod: terminated(podA)}, State: StateCut{Method: CutProcessTerminated}}))
+	require.Equal(t, StateExcluded, f.state())
+
+	_, err := f.mgr.Acquire(f.ctx, f.spec(run2, KindRecover))
+	refused(t, err, ErrNotAdmitted)
+	require.Contains(t, err.Error(), r1)
+	require.Equal(t, StateExcluded, f.state(), "a refused admission changes nothing")
+
+	require.NoError(t, f.mgr.DropStateRole(f.ctx, run1))
+	f.acquire(run2, KindRecover)
+	require.Equal(t, StateRecovering, f.state())
+
+	// And a role that comes back before the recovery finishes blocks the release of the slot.
+	f.exec(`CREATE ROLE "` + r1 + `" NOLOGIN`)
+	require.NoError(t, f.mgr.VerifyRecoveryStart(f.ctx, run2, StateHead{Lineage: "l1", Serial: 1}))
+	r2, _ := StateRoleName(run2)
+	dropRolesAfter(t, r2)
+	require.NoError(t, f.mgr.CreateStateRole(f.ctx, run2, "postgres", "a-sufficiently-long-password"))
+	f.running(run2, "recovery-pod")
+	require.NoError(t, f.mgr.Exit(f.ctx, run2, ExitSpec{Pod: terminated("recovery-pod"), Succeeded: true, Head: StateHead{Lineage: "l1", Serial: 2}}))
+	require.NoError(t, f.mgr.DropStateRole(f.ctx, run2))
+	refused(t, f.mgr.FinishRecovery(f.ctx, run2, LockAbsent), ErrTransitionRefused)
+	f.exec(`DROP ROLE "` + r1 + `"`)
+	require.NoError(t, f.mgr.FinishRecovery(f.ctx, run2, LockAbsent))
+	require.Equal(t, StateFree, f.state())
+}
+
+// The role functions are lease-checked and phase-checked like every other state change.
+func TestFleetPGStateRoleFunctionsAreFencedAndPhased(t *testing.T) {
+	f := newFx(t, BackendPG, Config{})
+	r1, _ := StateRoleName(run1)
+	dropRolesAfter(t, r1)
+	const pw = "a-sufficiently-long-password"
+
+	// No slot, no run: nothing is created.
+	refused(t, f.mgr.CreateStateRole(f.ctx, run1, "postgres", pw), ErrTransitionRefused)
+	f.acquire(run1, KindCreate)
+
+	// A deposed manager (same replica name, a later incarnation took the lease) cannot create it.
+	rival, err := NewManager(f.db, "manager-b", Config{})
+	require.NoError(t, err)
+	f.exec(`UPDATE manager_lease SET expires_at = now() - interval '1 second'`)
+	require.NoError(t, rival.Take(f.ctx, time.Hour))
+	refused(t, f.mgr.CreateStateRole(f.ctx, run1, "postgres", pw), ErrLeaseLost)
+	var n int
+	require.NoError(t, f.db.Raw(`SELECT count(*) FROM pg_roles WHERE rolname = ?`, r1).Scan(&n).Error)
+	require.Zero(t, n, "a deposed manager created a role")
+	f.exec(`UPDATE manager_lease SET expires_at = now() - interval '1 second'`)
+	require.NoError(t, f.mgr.Take(f.ctx, time.Hour)) // an expired lease is taken back under a new epoch
+
+	// The phase: a role is created before the Job exists, cut only from doubt, dropped only after the run.
+	f.running(run1, podA)
+	refused(t, f.mgr.CreateStateRole(f.ctx, run1, "postgres", pw), ErrTransitionRefused) // the pod already exists
+	refused(t, f.mgr.RevokeStateRole(f.ctx, run1), ErrTransitionRefused)                 // HELD, not doubted
+	refused(t, f.mgr.DropStateRole(f.ctx, run1), ErrTransitionRefused)                   // live
+	refused(t, f.mgr.CreateStateRole(f.ctx, run2, "postgres", pw), ErrTransitionRefused) // not the holder
 }

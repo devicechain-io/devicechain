@@ -5,6 +5,9 @@ package writerslot
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,7 +35,13 @@ type Manager struct {
 	afterLease func()
 }
 
-// NewManager returns a manager with the given lease holder id. It holds no lease until Take.
+// NewManager returns a manager. It holds no lease until Take.
+//
+// holderID names the replica (a pod name, for instance). The lease holder id the manager actually
+// uses is that name plus a random per-incarnation suffix, minted here: a restarted process with the
+// same name is a DIFFERENT holder, so it takes over (and bumps the epoch) instead of silently
+// renewing the lease of a previous incarnation that may still be alive, which would leave two
+// processes acting under one epoch. HolderID returns the full id.
 func NewManager(db *gorm.DB, holderID string, cfg Config) (*Manager, error) {
 	if db == nil {
 		return nil, errors.New("writerslot: a database is required")
@@ -40,6 +49,11 @@ func NewManager(db *gorm.DB, holderID string, cfg Config) (*Manager, error) {
 	if strings.TrimSpace(holderID) == "" {
 		return nil, errors.New("writerslot: a lease holder id is required")
 	}
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return nil, fmt.Errorf("writerslot: mint the incarnation suffix: %w", err)
+	}
+	holderID = holderID + "#" + hex.EncodeToString(suffix[:])
 	if cfg.Premises == nil {
 		cfg.Premises = NoPremises{}
 	}
@@ -119,14 +133,17 @@ func (m *Manager) requireLease(tx *gorm.DB, epoch int64) error {
 // txEpochKey is the transaction setting that carries the lease epoch captured when it began.
 const txEpochKey = "fleet:lease_epoch"
 
-// txEpoch is the lease epoch this transaction captured when it began.
-func (m *Manager) txEpoch(tx *gorm.DB) int64 {
+// txEpoch is the lease epoch this transaction captured when it began. There is deliberately no
+// fallback to the manager's current epoch: a renewal landing mid-transaction would then stamp an
+// audit row with an epoch the lease check never saw. A transaction that did not start in do has no
+// epoch, and the caller refuses.
+func txEpoch(tx *gorm.DB) (int64, bool) {
 	if v, ok := tx.Get(txEpochKey); ok {
-		if e, ok := v.(int64); ok {
-			return e
+		if e, ok := v.(int64); ok && e > 0 {
+			return e, true
 		}
 	}
-	return m.epoch.Load()
+	return 0, false
 }
 
 // do runs fn in one transaction that starts with the lease check. No Kubernetes, cloud or
@@ -140,7 +157,9 @@ func (m *Manager) do(ctx context.Context, fn func(tx *gorm.DB) error) error {
 		if err := m.requireLease(tx, epoch); err != nil {
 			return err
 		}
-		tx.Set(txEpochKey, epoch)
+		// Store on the statement's settings: tx.Set returns a NEW handle and the transaction's own
+		// would keep no epoch (the value was silently dropped here before).
+		tx.Statement.Settings.Store(txEpochKey, epoch)
 		if m.afterLease != nil {
 			m.afterLease()
 		}
@@ -343,7 +362,8 @@ type transition struct {
 	To             string
 	CloudCutProof  *string
 	StateCutMethod *string
-	Evidence       string // JSON
+	Evidence       string // JSON; EvidenceMap is marshalled into it by appendTransition
+	EvidenceMap    map[string]any
 	Reason         string
 	Actor          Actor
 	RequestID      *string
@@ -353,8 +373,20 @@ type transition struct {
 func (m *Manager) appendTransition(tx *gorm.DB, t transition) error {
 	if t.Evidence == "" {
 		t.Evidence = "{}"
+		if t.EvidenceMap != nil {
+			// A marshal failure is returned, not replaced with "{}": an audit row whose evidence
+			// silently vanished is worse than a transition that refuses.
+			b, err := json.Marshal(t.EvidenceMap)
+			if err != nil {
+				return fmt.Errorf("writerslot: marshal evidence: %w", err)
+			}
+			t.Evidence = string(b)
+		}
 	}
-	leaseEpoch := m.txEpoch(tx)
+	leaseEpoch, ok := txEpoch(tx)
+	if !ok {
+		return errors.New("writerslot: appendTransition outside a lease-checked transaction")
+	}
 	var reason *string
 	if t.Reason != "" {
 		reason = &t.Reason

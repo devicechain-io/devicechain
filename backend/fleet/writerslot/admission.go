@@ -5,17 +5,21 @@ package writerslot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"gorm.io/gorm"
+
+	"github.com/devicechain-io/dc-fleet/schema"
 )
 
-// unsettledPredicate is the SQL form of "not settled". A cloud operation is settled when it is DONE
-// and either carries no error or has a recorded resolution. A DONE operation that carries an error
-// is NOT settled: it routes the slot to recovery or quarantine, and only a recorded resolution
-// settles it. It is also the predicate of the partial index ix_cloud_operations_unsettled.
-const unsettledPredicate = `NOT (status = 'DONE' AND (error_code IS NULL OR COALESCE(resolution IN ('RECONCILED', 'QUARANTINED'), false)))`
+// unsettledPredicate is the SQL form of "not settled": the text the schema migration freezes as
+// the predicate of the partial index ix_cloud_operations_unsettled, so every count here can use that
+// index. A cloud operation is settled when it is DONE and either carries no error or has a recorded
+// resolution. A DONE operation that carries an error is NOT settled: it routes the slot to recovery
+// or quarantine, and only a recorded resolution settles it.
+const unsettledPredicate = schema.UnsettledPredicateV1
 
 // clearSlotSQL resets everything a finished or abandoned holder left on the slot.
 const clearSlotSQL = `holder_run_uid = NULL, doubted_from = NULL, uncertain_since = NULL, refresh_cut_at = NULL,
@@ -156,6 +160,14 @@ func (m *Manager) Acquire(ctx context.Context, spec RunSpec) (*Run, error) {
 				return admitRefused("RECOVER is admitted only from EXCLUDED, slot is %s", slot.State)
 			}
 			to = StateRecovering
+			// The excluded holder's per-run state role must be gone before a recovery run takes the
+			// slot: it was cut (NOLOGIN, no session) as proof, but a role that still exists can be
+			// made LOGIN again, and the recovery run is about to be handed the state.
+			if left, err := staleStateRoles(tx, spec.ClusterUID, spec.RunUID); err != nil {
+				return err
+			} else if len(left) > 0 {
+				return admitRefused("the previous holder's per-run state role %s still exists: drop it (DropStateRole) before a recovery run is admitted", left[0])
+			}
 		default:
 			if slot.State != StateFree {
 				return admitRefused("slot is %s, not FREE", slot.State)
@@ -184,6 +196,10 @@ func (m *Manager) Acquire(ctx context.Context, spec RunSpec) (*Run, error) {
 			return fmt.Errorf("writerslot: record first submit: %w", err)
 		}
 
+		epochNow, ok := txEpoch(tx)
+		if !ok {
+			return errors.New("writerslot: acquire outside a lease-checked transaction")
+		}
 		epoch := slot.Epoch + 1
 		var stateRole *string
 		if spec.StateRoleName != "" {
@@ -196,7 +212,7 @@ func (m *Manager) Acquire(ctx context.Context, spec RunSpec) (*Run, error) {
 			VALUES (?, ?, ?, ?, ?, ?, ?, 'INTENT', ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?)`,
 			spec.RunUID, spec.ClusterUID, epoch, spec.RequestID, actor.ID, actor.Issuer, spec.Kind, spec.CredentialMode, spec.CloudIdentityRole,
 			spec.CloudPrincipal, int(spec.KsaTokenTTL/time.Second), int(spec.StsTokenTTL/time.Second), int(spec.AccessTokenTTL/time.Second), stateRole,
-			spec.RunnerImageDigest, spec.TofuVersion, spec.ProviderLockHash, spec.ModuleDigest, m.txEpoch(tx)).Error; err != nil {
+			spec.RunnerImageDigest, spec.TofuVersion, spec.ProviderLockHash, spec.ModuleDigest, epochNow).Error; err != nil {
 			return fmt.Errorf("writerslot: record run: %w", err)
 		}
 		if err := tx.Exec(`UPDATE writer_slots SET epoch = ?, state = ?, holder_run_uid = ?, doubted_from = NULL, uncertain_since = NULL, refresh_cut_at = NULL,

@@ -5,7 +5,6 @@ package writerslot
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -68,12 +67,16 @@ func heldByLocked(tx *gorm.DB, runUID string, locks lockSet, states ...string) (
 	return slot, run, id, head, nil
 }
 
-func evidenceJSON(v map[string]any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "{}"
+// staleStateRoles lists the per-run state roles of this cluster's OTHER runs that still exist in
+// the catalog. A role outlives its run until DropStateRole, and a surviving role can be given LOGIN
+// again.
+func staleStateRoles(tx *gorm.DB, clusterUID, exceptRunUID string) ([]string, error) {
+	var roles []string
+	if err := tx.Raw(`SELECT r.state_role_name FROM runs r JOIN pg_roles p ON p.rolname = r.state_role_name
+		WHERE r.cluster_uid = ? AND r.run_uid <> ? AND r.state_role_name IS NOT NULL`, clusterUID, exceptRunUID).Scan(&roles).Error; err != nil {
+		return nil, fmt.Errorf("writerslot: read roles: %w", err)
 	}
-	return string(b)
+	return roles, nil
 }
 
 // quarantineTx moves the slot to QUARANTINED inside an open transaction. It leaves the holder in
@@ -92,7 +95,7 @@ func (m *Manager) quarantineTx(tx *gorm.DB, slot *slotRow, runUID *string, reaso
 	}
 	from := slot.State
 	return m.appendTransition(tx, transition{ClusterUID: slot.ClusterUID, Epoch: slot.Epoch, RunUID: runUID, From: &from, To: StateQuarantined,
-		Reason: reason, Evidence: evidenceJSON(evidence), Actor: actor})
+		Reason: reason, EvidenceMap: evidence, Actor: actor})
 }
 
 // Quarantine is T7: no proof is obtainable, or an identity, state-head or lock mismatch was found.
@@ -122,9 +125,26 @@ func (m *Manager) Observe(ctx context.Context, runUID, jobNamespace, jobUID, pod
 	}
 	var quarantined bool
 	err := m.do(ctx, func(tx *gorm.DB) error {
-		slot, run, err := heldBy(tx, runUID, StateHeld, StateRecovering)
+		// UNCERTAIN and QUARANTINED are admitted here for ONE reason: a pod UID that is not the
+		// recorded one is evidence of a second writer, and that evidence is what a later TERMINATION
+		// proof (and now EXPIRY) must account for, so it is appended whatever the slot's state.
+		slot, run, err := heldBy(tx, runUID, StateHeld, StateRecovering, StateUncertain, StateQuarantined)
 		if err != nil {
 			return err
+		}
+		if run.PodUID != nil && *run.PodUID != podUID {
+			quarantined = true
+			secondPod := map[string]any{"recorded_pod_uid": *run.PodUID, "observed_pod_uid": podUID}
+			if slot.State == StateQuarantined {
+				// Already quarantined (for any reason, which stays): only the evidence row is new.
+				st := slot.State
+				return m.appendTransition(tx, transition{ClusterUID: slot.ClusterUID, Epoch: slot.Epoch, RunUID: &runUID, From: &st, To: StateQuarantined,
+					Reason: QuarantineSecondPod, EvidenceMap: secondPod, Actor: Actor{ID: m.holderID, Issuer: reservedSystemIssuer}})
+			}
+			return m.quarantineTx(tx, slot, &runUID, QuarantineSecondPod, Actor{ID: m.holderID, Issuer: reservedSystemIssuer}, secondPod)
+		}
+		if !in(slot.State, StateHeld, StateRecovering) {
+			return transitionRefused("slot is %s: only a pod other than the recorded one is recorded against it", slot.State)
 		}
 		if !in(run.Phase, PhaseIntent, PhaseJobCreating, PhaseRunning) {
 			return transitionRefused("run is %s", run.Phase)
@@ -134,11 +154,6 @@ func (m *Manager) Observe(ctx context.Context, runUID, jobNamespace, jobUID, pod
 		// anything noticed. See VerifyRecoveryStart.
 		if run.Kind == KindRecover && run.Phase == PhaseIntent {
 			return transitionRefused("a RECOVER run's starting state head has not been verified (VerifyRecoveryStart)")
-		}
-		if run.PodUID != nil && *run.PodUID != podUID {
-			quarantined = true
-			return m.quarantineTx(tx, slot, &runUID, QuarantineSecondPod, Actor{ID: m.holderID, Issuer: reservedSystemIssuer},
-				map[string]any{"recorded_pod_uid": *run.PodUID, "observed_pod_uid": podUID})
 		}
 		if run.JobUID != nil && *run.JobUID != jobUID {
 			return transitionRefused("run %s already has a different Job", runUID)
@@ -228,7 +243,7 @@ func (m *Manager) ReconcileStateHead(ctx context.Context, clusterUID string, hea
 		}
 		st := slot.State
 		return m.appendTransition(tx, transition{ClusterUID: clusterUID, Epoch: slot.Epoch, From: &st, To: slot.State, Reason: "STATE_HEAD_RECONCILED: " + reason,
-			Evidence: evidenceJSON(map[string]any{"lineage": head.Lineage, "serial": head.Serial}), Actor: operator})
+			EvidenceMap: map[string]any{"lineage": head.Lineage, "serial": head.Serial}, Actor: operator})
 	})
 }
 
@@ -406,7 +421,10 @@ func (m *Manager) Resume(ctx context.Context, runUID string, obs *PodObservation
 }
 
 // RecordRefreshCut records that the pod object has been force-deleted and the credential refresh
-// is cut. From here the slot cannot be reaffirmed, and an EXPIRY proof's residual runs from now,
+// is cut. ORDER MATTERS to the caller: force-delete the pod object FIRST, then call this. The
+// recorded instant starts the EXPIRY residual, so recording it before the delete would start the
+// clock while the kubelet could still refresh the token, and EXPIRY would be proven early. (The
+// converse, a delete with no recording yet, only delays the proof.) From here the slot cannot be reaffirmed, and an EXPIRY proof's residual runs from now,
 // on the database clock.
 func (m *Manager) RecordRefreshCut(ctx context.Context, runUID string) error {
 	return m.do(ctx, func(tx *gorm.DB) error {
@@ -469,6 +487,11 @@ func (m *Manager) FinishRecovery(ctx context.Context, runUID string, lock LockRe
 		}
 		if err := stateRoleGone(tx, run); err != nil {
 			return err
+		}
+		if left, err := staleStateRoles(tx, slot.ClusterUID, runUID); err != nil {
+			return err
+		} else if len(left) > 0 {
+			return transitionRefused("the excluded holder's per-run state role %s still exists; drop it before the slot is freed", left[0])
 		}
 		return m.freeSlot(tx, slot, runUID, "recovery finished")
 	})
