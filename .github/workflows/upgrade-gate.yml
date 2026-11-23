@@ -649,6 +649,16 @@ jobs:
         if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh attrlock
 
+      # The attribute guard: a database trigger refuses any write to a device's SHARED attribute that
+      # skips the writer protocol, which is only safe because every pod of the baseline already follows
+      # it. The step reads the guard ENFORCED through the API, has a baseline pod write 40 attributes
+      # under it, and shows the negative control: an unmarked write is refused, the same write marked
+      # is accepted, and the unmarked write is accepted with the trigger off (rolled back), so the
+      # refusal is the trigger's. The pure halves are covered by the rig's self-test.
+      - name: The attribute guard must pass a baseline pod's writes and refuse an unmarked one
+        if: env.DC_UPGRADE_MODE == 'data'
+        run: hack/upgrade-rig.sh attrguard
+
       # -------------------------------------------------------------------
       # DRILL B -- the recreate drill. This release does not upgrade onto the
       # baseline, so what is measured is the refusal an operator will actually meet.
