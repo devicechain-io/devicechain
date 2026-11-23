@@ -67,7 +67,7 @@ func TestADeclaredStringMetricResolvesAsAReading(t *testing.T) {
 // message it would take every other reading down with it.
 func TestAStringValueThatCannotBeStoredIsDroppedAlone(t *testing.T) {
 	for name, bad := range map[string]string{
-		"over the bound": strings.Repeat("x", model.MaxStringMetricBytes+1),
+		"over the bound": strings.Repeat("x", resolvedevent.MaxStringValueBytes+1),
 		"a NUL byte":     "a\x00b",
 		"invalid UTF-8":  "a\xffb",
 	} {
@@ -84,6 +84,6 @@ func TestAStringValueThatCannotBeStoredIsDroppedAlone(t *testing.T) {
 
 	// A value at the bound is kept.
 	rez := NewEventResolver(1, nil, "", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
-	got := resolveDeclared(t, rez, map[string]string{"mode": strings.Repeat("x", model.MaxStringMetricBytes)})
+	got := resolveDeclared(t, rez, map[string]string{"mode": strings.Repeat("x", resolvedevent.MaxStringValueBytes)})
 	assert.Equal(t, []string{"mode"}, names(got))
 }

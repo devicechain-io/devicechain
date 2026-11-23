@@ -181,7 +181,7 @@ enum DroppedMeasurementReason {
     a number (NaN), infinite, or beyond the range of a stored measurement.
     """
     UNDECLARED_UNSTORABLE
-    """The key is declared on the profile with a data type that is not a time-series metric."""
+    """The key is declared on the profile, but its value cannot be stored: a data type no reading can be stored as, or a STRING value over 4096 bytes, not valid UTF-8 or holding a NUL byte."""
     DECLARED_NOT_STORABLE
 }
 

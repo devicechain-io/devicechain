@@ -37,6 +37,9 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 	}
 
 	if request.Expression != nil {
+		if MetricDataType(request.DataType) == MetricString {
+			return nil, fmt.Errorf("a STRING metric cannot be calculated: a formula reads and produces numbers and booleans, never text")
+		}
 		if err := checkMetricExpression(*request.Expression); err != nil {
 			return nil, err
 		}
@@ -145,6 +148,11 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 	expression, err := applyMetricExpression(request.Expression, updated.Expression)
 	if err != nil {
 		return nil, err
+	}
+	// Only when the caller named the type or the formula (see above): a STRING metric is never
+	// calculated, because a formula reads and produces numbers and booleans, never text.
+	if (request.DataType.Set || request.Expression.Set) && MetricDataType(dataType) == MetricString && expression.Valid {
+		return nil, fmt.Errorf("a STRING metric cannot be calculated: a formula reads and produces numbers and booleans, never text")
 	}
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {

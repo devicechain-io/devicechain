@@ -35,7 +35,7 @@ func (t Type) String() string {
 func (t Type) valid() bool { return t == Double || t == Integer || t == Boolean }
 
 // ParseType maps a device-management metric DataType ("DOUBLE", "INT", "BOOLEAN") to a
-// Type. Any other value — including "STRING", which is device state and never a formula
+// Type. Any other value — including "STRING", which is stored as text and is never a formula
 // input or result — reports false.
 func ParseType(dataType string) (Type, bool) {
 	switch dataType {

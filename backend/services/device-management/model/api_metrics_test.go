@@ -4,7 +4,6 @@
 package model
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -38,23 +37,6 @@ func TestMetricDataTypeStorableAsMetric(t *testing.T) {
 	for _, dt := range notStorable {
 		if dt.StorableAsMetric() {
 			t.Errorf("expected metric data type %q to not be storable", dt)
-		}
-	}
-}
-
-func TestStorableStringValue(t *testing.T) {
-	for _, ok := range []string{"", "heating", "déjà vu 中", strings.Repeat("a", MaxStringMetricBytes)} {
-		if !StorableStringValue(ok) {
-			t.Errorf("expected %q to be storable", ok)
-		}
-	}
-	for name, bad := range map[string]string{
-		"over the bound": strings.Repeat("a", MaxStringMetricBytes+1),
-		"a NUL byte":     "a\x00b",
-		"invalid UTF-8":  "a\xffb",
-	} {
-		if StorableStringValue(bad) {
-			t.Errorf("expected a value with %s to be refused", name)
 		}
 	}
 }

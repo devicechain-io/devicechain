@@ -5,8 +5,6 @@ package model
 
 import (
 	"database/sql"
-	"strings"
-	"unicode/utf8"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -49,20 +47,6 @@ func (t MetricDataType) StorableAsMetric() bool {
 	default:
 		return false
 	}
-}
-
-// MaxStringMetricBytes bounds a STRING reading's value. It is the bound event-management applies
-// to the stored row and device-state to the last-known value, so the three never disagree about
-// whether a reading exists: a value over it is dropped at resolution, with the rest of its
-// event kept, rather than refused downstream where it would take the event's other readings
-// with it.
-const MaxStringMetricBytes = 4096
-
-// StorableStringValue reports whether v can be stored as a STRING reading's value: within
-// MaxStringMetricBytes, valid UTF-8, and free of NUL bytes. PostgreSQL refuses a NUL byte or an
-// invalid UTF-8 sequence (22021) for the whole statement it appears in.
-func StorableStringValue(v string) bool {
-	return len(v) <= MaxStringMetricBytes && utf8.ValidString(v) && strings.IndexByte(v, 0) < 0
 }
 
 // String returns the underlying string value.

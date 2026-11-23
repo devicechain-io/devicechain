@@ -590,7 +590,7 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 					dropped = append(dropped, rez.dropMeasurement(ctx, device.Token, mxkey, mxvalue, dropDeclaredNotStorable, "declared metric data type is not storable"))
 					continue
 				}
-				if model.MetricDataType(def.DataType()) == model.MetricString && !model.StorableStringValue(mxvalue) {
+				if model.MetricDataType(def.DataType()) == model.MetricString && !resolvedevent.StorableStringValue(mxvalue) {
 					// A STRING value event-management would refuse as deterministic (over the
 					// bound, not UTF-8, or holding a NUL) and that would take every other reading
 					// of this message down with it. Drop just this entry, as an undeclared key
