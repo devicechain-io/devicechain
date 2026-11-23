@@ -1227,7 +1227,8 @@ with `fleet:operate`; scoped members are refused. It reports the build's writer 
 fresh database enforcement state, executable operation kinds and a fresh count of orphaned
 device attribute and generation rows in the caller's tenant (including soft-deleted attributes).
 In v1.9 enforcement is `NOT_INSTALLED` and no kind is executable; this is expected until the
-release that installs enforcement. A failed catalog read reports `UNREADABLE` while preserving
+release that installs enforcement, which is v1.10: once an instance has finished upgrading to it,
+enforcement reads `ENFORCED`. A failed catalog read reports `UNREADABLE` while preserving
 the other facts. Only a trigger enabled `ALWAYS` counts as `ENFORCED`; ordinary, replica-only
 and disabled triggers report `DISABLED`. Missing or mismatched enforcement reports `NOT_INSTALLED`.
 The query counts rows, so treat it as a diagnostic to run when you need the answer, not something to poll. The preview clock starts at v1.9.
