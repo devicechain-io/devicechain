@@ -283,7 +283,7 @@ function SettingPanel({
       {/* The blocking reason is stated even when nothing is dirty yet: an operator
           who opens a tab on a value that is already broken should be told why,
           not left to discover it by editing something unrelated. */}
-      {issue && <ErrorBanner message={t(issue.key, issue.values)} />}
+      {issue && <ErrorBanner message={t(issue.key, issue.values ?? {})} />}
 
       {setting.overridden && setting.updatedBy && (
         <p className="text-xs text-muted-foreground">

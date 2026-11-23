@@ -11,6 +11,7 @@
 // durations are Go duration strings ("10m0s"), the leaf bound is a literal `threshold` number
 // or a `thresholdAttr` string, and operator/agg/mode values are the rules-native tokens.
 
+import type { TranslateFn } from '@/lib/translate';
 import {
   CANVAS_SCHEMA_VERSION,
   isConditionType,
@@ -243,8 +244,8 @@ export interface SynthesisResult {
 // cannot call useTranslation itself; callers with hook access (CanvasEditor) pass their real `t`
 // (already scoped to the `deviceProfiles` namespace). defaultTranslate is the fallback used when
 // no `t` is supplied — e.g. roundtrip.test.ts, which asserts on the literal English `error` text.
-type Translate = (key: string, options?: Record<string, unknown>) => string;
-const defaultTranslate: Translate = (key, options) => {
+type Translate = TranslateFn;
+const defaultTranslate: Translate = (key: string, options?: Record<string, unknown>): string => {
   switch (key) {
     case 'canvasErrorInvalidJson':
       return 'The rule definition is not valid JSON.';

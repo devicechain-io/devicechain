@@ -80,7 +80,7 @@ export function DefinitionsPanel<TDef extends { id: string; token: string }>({
   const confirm = useConfirm();
   const { t } = useTranslation(['deviceProfiles', 'common']);
   // Resolve one of this definition-kind's noun-bearing strings by its fixed suffix.
-  const e = (suffix: string, opts?: Record<string, unknown>) => t(`deviceProfiles:${i18nKey}${suffix}`, opts);
+  const e = (suffix: string, opts: Record<string, unknown> = {}) => t(`deviceProfiles:${i18nKey}${suffix}`, opts);
   const [version, reload] = useReload();
   const { data, loading, error } = useQuery(() => load(profileToken), [profileToken, version]);
   const [drawer, setDrawer] = useState<{ open: boolean; entity?: TDef }>({ open: false });

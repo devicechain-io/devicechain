@@ -9,6 +9,7 @@
 // command. Two forms over one contract that disagreed about coercion would produce
 // commands that behave differently depending on where an operator clicked.
 
+import type { TranslateFn } from '@/lib/translate';
 import { useTranslation } from 'react-i18next';
 import type { CommandParameter } from '@devicechain/dashboards';
 import { isScalar } from '@devicechain/widgets';
@@ -53,7 +54,7 @@ function boolTriStateValue(raw: string | undefined): '' | 'true' | 'false' {
 // nothing — an empty hint is visual noise, not help.
 function describe(
   param: CommandParameter,
-  t: (key: string, options?: Record<string, unknown>) => string,
+  t: TranslateFn,
 ): string | undefined {
   const parts: string[] = [];
   if (param.description) parts.push(param.description);

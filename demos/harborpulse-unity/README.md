@@ -84,7 +84,7 @@ speed up the preview's day.
    `-hp-expect-tenant <tenant>` refuses a runner serving another tenant.
 
 The banner turns LIVE with the tenant and instance once `/status` answers; the platform line counts the bound
-devices (37 of 37) and the measurement and alarm streams. Within a few seconds each quay's tide line shows
+devices (43 of 43) and the measurement and alarm streams. Within a few seconds each quay's tide line shows
 its gauges' median and how many contributed, and the lights switch with the platform's reports (off by day,
 on from 18:00, and East Quay's go silent through its feeder outage, 19:45 to 21:15).
 
@@ -1184,3 +1184,98 @@ it draws the tags in a tall frame; the wide view (no point of the ferry in the f
 the quay's edge in front of either, and that the same check sees U8's ferry); a derate command read late in the last shot still
 captioned, and the no-link page's end with the first shot's offer; the west tor's place in the 9:16 HOME and out of the
 16:9 one, its stacking and its being its sister's mirror; the joint's share and tones; and the squalls' eye heights against every pose.
+
+## U10 the six that hold their own session
+
+The simulator's S6 slice provisions six devices the scene did not draw: two chargers that hold an MQTT session under a device token,
+two that hold it under a client certificate, and two lamps that ask the platform for their commands over HTTP. The presentation is
+authored for an exact count of anchors (`PresentationMap.DeviceCount`, 37 until now) and refuses any other, so the simulator kept the
+six out of the layout file and its test pinned them as provisioned but not drawn. They are drawn now: the layout carries 43 devices,
+that test's undrawn set is gone, and the first page's caption reads "43 devices, one platform." The second tenant of the S7 slice is
+another tenant's fleet and stays out of this scene.
+
+### Three kinds of their own
+
+The binder resolves one device type to a scene kind and requires that type's profile to define the metrics the kind reads. The six
+are three device types whose profiles report less than the district's chargers and street lights do (a charging power; a dim level),
+so the layout names three kinds, `mqtt-charger`, `cert-charger` and `pull-light` (`DeviceKind`, and `harborpulse_s6_scene.go` in the
+simulator), and none of the six is read or counted as a district charger or a street light: the rollout still has six chargers and
+the campaigns twelve lamps.
+
+- **A charger with its own session** (`LinkedChargerBoard`) reports its charging power and nothing else. The scene says three things
+  of it: reporting, silent (its last report is older than the platform's 45 s silence window), or never heard. A car stands in its
+  bay only while it reports more than 0.5 kW. Why a silent one is silent is the platform's to say: the first charger on a token drops
+  its session from 12:00 to 13:00 and the platform's connectivity rule raises `mqtt-charger-disconnected` on it, which the scene
+  draws as that alarm's beacon; the second charger on a certificate is refused from 14:00 and simply falls silent.
+- **A pull lamp** (`PullLampState`) reports its dim level and not whether it is lit. Four pips on its post show the level it last
+  reported, one for each quarter the level reaches into (all four at 100 %, two at the 35 % it fetches at 10:00), by day and by night,
+  and none once the report is stale. The lantern is the scene's own: it burns with the dusk, as a lamp on a photocell does, at the
+  reported level and only while the report is current. The device card says which of the two is the platform's.
+
+### Where they stand
+
+All six are on North Quay, the area the manifest gives them, and the scene checks that against the platform's membership as it does
+for every device (a membership that names a side quay moves the chargers to a row of their own behind that wall and the lamps to a
+landing near its southern end).
+
+- **The chargers continue North Quay's charging row** at its 9 m pitch (`PresentationMap.LinkedBay`): the district's two bays, the
+  two on a token, one bay's width left to the fourth street light, then the two on a certificate.
+- **The pull lamps flank a landing at the wall's east end** (`PullLampFromEndM`, `PullLampDepthM`), 3 m behind the wall and 12 m
+  apart, east of every charger and street light on the quay.
+
+Nothing that stood on the quay or in the town moved for them. Measured once against U9's tree: every registered footprint (430),
+every prop with its place, turn and size (12 585, the forest's trees among them), every district anchor and every story pose hash to
+the same SHA-256 in both. What the suite keeps is the reason it holds: `TheSixDisplaceNothingThatStoodOnTheQuayOrInTheTown` builds
+the world again with the six standing somewhere else on the quay and compares every registered footprint, so no scenery is placed
+round them, and its control stands them by the town, where they do move a house lot.
+
+### Read apart at a glance
+
+- **On a token** (`LinkedChargerBuilder`): a teal post under a small pitched hood, a whip aerial on the hood's ridge, three signal
+  bars on its door, and a bar under the eave that is cyan while it reports.
+- **On a certificate**: the same post in navy, its hood ridged in brass, a brass shield with a keyhole on its door, and a seal at
+  the gable's apex that is gold while it reports.
+- **Silent**, either shows violet on its lamp and its screen, the colour a silent street light has; never heard, both are dark.
+- **A pull lamp** (`PullLampBuilder`): a galvanised post two thirds the height of a street light's column, its own solar panel
+  tilted south above it, a battery box strapped to the post, the board of four pips facing the water, and a small lantern on a
+  short arm.
+
+The hood is also what both HOME frames hold. A bare post of this size is 7 pixels high from the 9:16 HOME's 780 m, under the 8 pixel
+floor the HOME check counts from; with the hood each charger is 10 to 18.
+
+### Ground laid for them
+
+`QuayFittings` plans, from the same anchors the devices are drawn at, what is laid on the quay round them, and
+`QuayFittingsBuilder` draws that plan and nothing else.
+
+- **Under each pair of chargers**: a court of granite setts with a stone kerb, asphalt in each bay between its painted lines, a
+  hatched panel between the two bays, and two short yellow posts in front of each pedestal.
+- **Behind each pair**: a feeder cabinet banded in its chargers' colour (the pair on a token has an uplink mast beside it, the pair
+  on a certificate a brass plate and hasp), a chequer-plate trench from the cabinet to each pedestal, and a feeder trench from the
+  cabinet back to the kerb of the quay road. The cabinets are ground props and are registered as such; no trench runs under
+  anything that stands on the quay.
+- **At the pull lamps**: a landing of darker setts from the coping's inland edge, a ladder head on the wall between the two lamps
+  with timber fenders down the wall's face, and a lifebuoy on a post. The wall's railing now stops at a post either side of a ladder
+  head (`QuayFittings.RailOpeningHalfM`); the other quays' railings are the single runs they were. No trench is laid to these
+  lamps: a lamp that asks for its commands is on no feeder and no signal cable, and the ground says so.
+
+### HOME, measured
+
+`HarborStills.HomeCheckFromCommandLine`, preview at 12:30: 16:9 water 39.05 %, sky 20.07 %, 42 of 43 devices (the truck is in its
+depot, as before); 9:16 water 15.62 %, sky 19.41 %, 43 of 43. Water and sky are U9's to the second decimal. At 12:30 the first
+charger on a token is inside its dropped hour, so its mask includes its alarm beacon.
+
+### A rig's fixed eye
+
+`-hp-eye x/y/z/lookX/lookY/lookZ/fov` holds a live or preview player's camera at one pose for the whole run, whatever shot the
+director calls, while the director, its captions and its recording run as they would. It is for a rig that has to watch one place
+through a day (U10's live day watched the six with `-hp-eye 72/20/20/72/3/88/50`). A malformed eye stops the scene with a message:
+seven finite numbers, each coordinate within 100 km of the origin, the eye at least a centimetre from what it looks at, a field of
+view of 5 to 120 degrees. A browser build's page address cannot carry the option.
+
+`U10Tests` pins the six in the layout under three kinds and three device types; the row, the landing and both HOME frames holding
+them; the world built with the six on either side quay; nothing displaced, with its control; each court's cabinet, trenches and
+apron, and that no trench runs under a footprint (with a planted trench that does); the landing, its ladder clear of the wall's
+bollards (with a planted ladder that is not), and no trench to it; what each kind reads and never reads; reporting, silent and
+never heard on the 45 s window; the pips for every quarter; the preview's day for the six, hour by hour; and the fixed eye's
+parsing with every malformed form refused.

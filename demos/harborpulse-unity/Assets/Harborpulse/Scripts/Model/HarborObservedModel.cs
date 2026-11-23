@@ -26,6 +26,48 @@ namespace DeviceChain.Harborpulse.Model
         public DateTimeOffset? OtaObservedAt { get; internal set; }
     }
 
+    /// <summary>
+    /// A charger that holds its own MQTT session (under a device token, or under a client certificate) as the platform last heard it. It
+    /// reports one thing, its charging power, so that is all the scene says of it: reporting, silent for longer than the platform's own
+    /// silence window, or never heard. Why a silent one is silent (a dropped session, a revoked certificate) is the platform's to say, in
+    /// its alarms and its credential record; the scene does not guess it from the quiet.
+    /// </summary>
+    public sealed class LinkedChargerBoard
+    {
+        /// <summary>Above this the charger is drawn delivering: a car in its bay, the cable out.</summary>
+        public const double DeliveringKw = 0.5;
+        public Reading? Power { get; internal set; }
+        public bool NoReading => !Power.HasValue;
+        public bool Stale { get; internal set; }
+        public bool Reporting => !NoReading && !Stale;
+        public bool Delivering => Reporting && Power.Value.Value > DeliveringKw;
+        public string Link => NoReading ? "never reported" : Stale ? "silent" : "reporting";
+        public static LinkedChargerBoard From(Reading? power, DateTimeOffset now) =>
+            new LinkedChargerBoard { Power = power, Stale = power.HasValue && now - power.Value.OccurredAt > LampBoard.Silence };
+    }
+
+    /// <summary>
+    /// A lamp that asks the platform for its commands, as the platform last heard it. It reports its dim level and nothing else: not whether
+    /// it is lit. The level is shown as it was reported; whether the lantern burns is the scene's own (it lights with the dusk, like any
+    /// lamp on a photocell) and is never read back as platform state.
+    /// </summary>
+    public sealed class PullLampState
+    {
+        public const int PipCount = 4;
+        public Reading? Dim { get; internal set; }
+        public bool NoReading => !Dim.HasValue;
+        public bool Stale { get; internal set; }
+        public bool Reporting => !NoReading && !Stale;
+        /// <summary>The reported level, 0 to 100, while it is current; null when the platform has none that is.</summary>
+        public double? DimPct => Reporting ? Math.Max(0, Math.Min(100, Dim.Value.Value)) : (double?)null;
+        /// <summary>How many of the post's four level pips are lit: one for each quarter the level reaches into.</summary>
+        public int Pips => PipsFor(DimPct);
+        public static int PipsFor(double? pct) => !pct.HasValue || pct.Value <= 0 ? 0 : Math.Min(PipCount, (int)Math.Ceiling(pct.Value / (100.0 / PipCount) - 1e-9));
+        public string Link => NoReading ? "never reported" : Stale ? "silent" : "reporting";
+        public static PullLampState From(Reading? dim, DateTimeOffset now) =>
+            new PullLampState { Dim = dim, Stale = dim.HasValue && now - dim.Value.OccurredAt > LampBoard.Silence };
+    }
+
     public sealed class TruckTrack
     {
         public Ground At { get; internal set; }
@@ -99,6 +141,10 @@ namespace DeviceChain.Harborpulse.Model
         public IReadOnlyDictionary<string, LampState> Lamps { get; internal set; }
         public IReadOnlyDictionary<string, PumpPresentation> Pumps { get; internal set; }
         public IReadOnlyDictionary<string, ChargerBoard> Chargers { get; internal set; }
+        /// <summary>The chargers that hold their own session, by external ID. None of them is in <see cref="Chargers"/>.</summary>
+        public IReadOnlyDictionary<string, LinkedChargerBoard> LinkedChargers { get; internal set; }
+        /// <summary>The lamps that ask for their commands, by external ID. None of them is in <see cref="Lamps"/>.</summary>
+        public IReadOnlyDictionary<string, PullLampState> PullLamps { get; internal set; }
         public IReadOnlyDictionary<string, IReadOnlyDictionary<string, Reading>> Measurements { get; internal set; }
         public IReadOnlyDictionary<string, int> AlarmCounts { get; internal set; }
         public IReadOnlyList<AlarmBeacon> Beacons { get; internal set; }
@@ -137,6 +183,8 @@ namespace DeviceChain.Harborpulse.Model
         static readonly IReadOnlyList<string> MeterMetrics = Array.AsReadOnly(new[] { Metrics.MeterKw, Metrics.MeterKwh });
         static readonly IReadOnlyList<string> TruckMetrics = Array.AsReadOnly(new[] { Metrics.Speed });
         static readonly IReadOnlyList<string> GaugeMetrics = Array.AsReadOnly(new[] { Metrics.WaterLevel, Metrics.Battery });
+        static readonly IReadOnlyList<string> LinkedChargerMetrics = Array.AsReadOnly(new[] { Metrics.ChargerPower });
+        static readonly IReadOnlyList<string> PullLightMetrics = Array.AsReadOnly(new[] { Metrics.Dim });
         public static IReadOnlyList<string> MetricsFor(string kind)
         {
             switch (kind)
@@ -146,6 +194,8 @@ namespace DeviceChain.Harborpulse.Model
                 case DeviceKind.Light: return LightMetrics;
                 case DeviceKind.Meter: return MeterMetrics;
                 case DeviceKind.Truck: return TruckMetrics;
+                case DeviceKind.MqttCharger: case DeviceKind.CertCharger: return LinkedChargerMetrics;
+                case DeviceKind.PullLight: return PullLightMetrics;
                 default: return DeviceKind.IsGauge(kind) ? GaugeMetrics : Array.Empty<string>();
             }
         }
@@ -165,6 +215,8 @@ namespace DeviceChain.Harborpulse.Model
             var all = new Dictionary<string, IReadOnlyDictionary<string, Reading>>();
             var pumpFrame = new Dictionary<string, PumpPresentation>();
             var chargerFrame = new Dictionary<string, ChargerBoard>();
+            var linkedFrame = new Dictionary<string, LinkedChargerBoard>();
+            var pullFrame = new Dictionary<string, PullLampState>();
             foreach (var d in layout.Devices)
             {
                 var readings = new Dictionary<string, Reading>();
@@ -192,6 +244,8 @@ namespace DeviceChain.Harborpulse.Model
                         ConnectorTemperature = Get(readings, Metrics.ConnectorTemp), Stale = power.HasValue && now - power.Value.OccurredAt > LampBoard.Silence,
                         OtaOutcome = ota?.Outcome, AttemptState = ota?.AttemptState, OtaObservedAt = rollout?.ObservedAt });
                 }
+                if (DeviceKind.IsLinkedCharger(d.Kind)) linkedFrame.Add(d.ExternalId, LinkedChargerBoard.From(Get(readings, Metrics.ChargerPower), now));
+                if (d.Kind == DeviceKind.PullLight) pullFrame.Add(d.ExternalId, PullLampState.From(Get(readings, Metrics.Dim), now));
                 if (d.Kind == DeviceKind.Truck && source.TryLocation(d.ExternalId, out var fix) && fix.Latitude.HasValue && fix.Longitude.HasValue && (!truckFix.HasValue || fix.OccurredAt >= truckFix.Value.OccurredAt)) truckFix = fix;
             }
             var tideFrame = new Dictionary<string, RegionLevel>();
@@ -207,7 +261,7 @@ namespace DeviceChain.Harborpulse.Model
             foreach (var a in alarms) if (a.Device == lampId && a.Key == "lamp-flicker" && a.Active) flickerSeverity = a.Severity;
             var world = StoryCues.At(layout, status, clock, settleWorldFades);
             return new HarborFrame { Overtopping = WaterMotion.Overtopping(tides.Regions, layout.Levels.QuayFloodingM), ReflectionLevelM = WaterMotion.ReflectionLevel(tides.Regions), Spray = motion.Update(tides.Regions, world.Weather.Storm), Clock = clock, ObservedAt = now, World = world, Tides = ReadOnly(tideFrame), Lamps = ReadOnly(lampFrame),
-                Pumps = ReadOnly(pumpFrame), Chargers = ReadOnly(chargerFrame), Measurements = ReadOnly(all), AlarmCounts = ReadOnly(counts), Beacons = beaconFrame, Commands = CommandHistory.Snapshot(),
+                Pumps = ReadOnly(pumpFrame), Chargers = ReadOnly(chargerFrame), LinkedChargers = ReadOnly(linkedFrame), PullLamps = ReadOnly(pullFrame), Measurements = ReadOnly(all), AlarmCounts = ReadOnly(counts), Beacons = beaconFrame, Commands = CommandHistory.Snapshot(),
                 Rollout = rollout, Truck = TruckTrack.From(plan, truckFix, flood, now), Replacement = Replacement(source, all, now), LampService = LampService.From(job, lampToken, source.Suppressions, source.AlarmObservation, flickerSeverity, now), ReadProblem = source.ReadProblem };
         }
         string ExternalId(string runnerDevice)

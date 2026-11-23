@@ -133,7 +133,7 @@ func TestFleetGoldenHoldsNoTenantColumn(t *testing.T) {
 // prevReleaseTag is the tag the previous-release compatibility fixtures were captured from. It
 // duplicates the integration-tagged prevRelease constant on purpose: this guard has to run in the
 // plain unit build, and TestPrevReleaseTagAgreesWithTheIntegrationConstant keeps the two in step.
-const prevReleaseTag = "v1.8.0"
+const prevReleaseTag = "v1.9.0"
 
 // TestPrevReleaseFixturesCoverFleetOnceAReleaseShipsIt is the guard the fleet spec (section 4.2)
 // promises: from the release after the one that first ships the fleet migration, the previous-release

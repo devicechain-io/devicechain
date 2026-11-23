@@ -10,6 +10,7 @@
 // LoadError variant is a TYPE ERROR here until it has a key — the compiler, not a
 // reviewer, is what stops a new failure mode from rendering as a blank line.
 
+import type { TranslateFn } from './translate';
 import { MAX_PASTE_BYTES, type LoadError } from '../load';
 
 /** A catalog key plus the values it interpolates. Never prose. */
@@ -88,7 +89,7 @@ export function loadErrorKey(error: LoadError): LoadErrorKey {
  */
 export function loadErrorMessage(
   error: LoadError,
-  t: (key: string, params?: Record<string, unknown>) => string,
+  t: TranslateFn,
 ): string {
   const { key, params } = loadErrorKey(error);
   const filled =

@@ -1,0 +1,379 @@
+---
+title: 你的第一台设备
+---
+
+import YouTubeLite from '@site/src/components/YouTubeLite';
+
+# 你的第一台设备 {#your-first-device-end-to-end}
+
+完成本页后，你创建的设备将发送一条读数，而你能在控制台中看到它。无需硬件，也无需固件。“设备”就是一个 `curl` 命令；从平台的角度看，这已经足够。
+
+请预留大约半小时，其中大部分时间用于等待初始化完成。
+
+**想看视频?** 视频与本页内容一致:在笔记本电脑上安装 DeviceChain,并发送第一条设备读数。视频为英文配音,带有英文和西班牙文字幕及章节。
+
+<YouTubeLite id="fWnVhI7icOk" title="在笔记本电脑上安装 DeviceChain 并发送第一条设备读数" />
+
+:::note 本页的前提条件
+你需要 `dcctl`，以及 `PATH` 中的四个工具：`docker`、`kubectl`、
+[`kind`](https://kind.sigs.k8s.io/) 和 **1.10 或更高版本**的 [OpenTofu](https://opentofu.org/)（即 `tofu` 二进制文件；
+也可以使用 1.10 或更高版本的 `terraform`）。无需事先准备集群。具体要求见下文的[前提条件](#prerequisites)。下载步骤之后的命令按 bash shell 编写；在 Windows 上，请在 Git Bash 或 WSL 中运行。
+:::
+
+## 前提条件 {#prerequisites}
+
+`dcctl install` 和 `dcctl bootstrap` 都会先运行预检。如果这四个工具中有任何一个缺失，命令就会**停止**。这样你只会花十秒发现缺失，而不是等上十分钟。
+
+- **OpenTofu 1.10 或更高版本。** 预检会确认 `tofu`（或 `terraform`）存在，并拒绝早于 1.10 的版本，因此旧的二进制文件会在创建任何资源之前就让运行停止。`tofu version` 会打印你的版本。
+- **足够的集群资源。** 当 Docker 的 CPU 少于 4 个或内存少于 8 GiB 时，预检会发出警告；镜像和数据库卷需要 40 GiB 可用磁盘。在 Docker Desktop 中，可在 **Settings → Resources** 中设置。第 1 步使用 `--compact` 安装，它会降低每个 Pod 的资源请求，使实例能在笔记本电脑上运行。
+- 不需要 `helm` 命令。`dcctl` 自带 Chart，并通过 Helm 的 Go 库安装，预检不会检查这个二进制文件。
+- 缺少 `ko` 和 `cloud-provider-kind` 只会产生警告。只有从源码构建镜像（`--build`）时才需要 `ko`。
+- 无需事先准备集群。`dcctl install local` 会查找名为 `devicechain` 的 kind 集群（或通过 `--cluster` 指定的名称）；如果不存在，就会询问是否创建。`--kube-context <name>` 可指向你已有的集群，该命令绝不会创建或删除这个集群。
+- 本机的 **80**、**443** 和 **1883** 端口必须空闲。kind 集群会将它们发布出来，分别用于控制台、HTTPS 和 MQTT；如果其他程序（通常是另一个本地 Kubernetes 集群）已占用其中任何一个，创建集群就会失败。`dcctl preflight local` 会在开始之前指出占用者。
+- **在 Linux 上，需要调高 inotify 限制。** 对于本地 kind 集群，`dcctl preflight local` 要求 `fs.inotify.max_user_instances` 至少为 256，而原装 Ubuntu 24.04 默认只有 128，因此它会在此处失败并打印要运行的命令。第一行调高该限制（第二行 `max_user_watches` 仅是警告），`/etc/sysctl.d` 使其在重启后依然有效：
+
+  ```bash
+  echo 'fs.inotify.max_user_instances=512' | sudo tee /etc/sysctl.d/99-kind.conf
+  echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.d/99-kind.conf
+  sudo sysctl --system
+  ```
+- 无论采用哪种方式，都需要 Kubernetes **1.29 或更新版本**。旧版本会被拒绝，因为数据库 Chart 不支持它们。
+
+`dcctl preflight local` 会运行相同的检查，并检查 Docker 引擎、内核限制、磁盘和端口，但不初始化任何内容。[初始化指南](../deployment/bootstrap.md#prerequisites)提供了详细说明。
+
+下列命令假设实例可以通过 `localhost` 上的普通 HTTP 访问，这正是第 1 步中的参数所配置的方式。
+
+## 获取 dcctl {#get-dcctl}
+
+`dcctl` 是单个文件，作为 `dcctl_<version>_<os>_<arch>` 附在每个 [GitHub 发布版本](https://github.com/devicechain-io/devicechain/releases)上：Linux 和 macOS 为 `.tar.gz`，Windows 为 `.zip`；`<os>` 为 `linux`、`darwin` 或 `windows`，`<arch>` 为 `amd64` 或 `arm64`。发布版本中的 `checksums.txt` 列出了每个文件的 SHA-256 摘要。`<version>` 是不带前导 `v` 的版本号（标签为 `v1.6.0` 的版本写作 `1.6.0`）。
+
+在 Linux 或 macOS 上：
+
+```bash
+curl -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/dcctl_<version>_<os>_<arch>.tar.gz
+curl -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/checksums.txt
+sha256sum --ignore-missing -c checksums.txt   # macOS 上：shasum -a 256 --ignore-missing -c checksums.txt
+tar -xzf dcctl_<version>_<os>_<arch>.tar.gz
+sudo mv dcctl /usr/local/bin/
+```
+
+在 Windows 的 PowerShell 中：
+
+```powershell
+curl.exe -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/dcctl_<version>_windows_amd64.zip
+curl.exe -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/checksums.txt
+(Get-FileHash dcctl_<version>_windows_amd64.zip -Algorithm SHA256).Hash.ToLower()
+Select-String windows_amd64 checksums.txt
+Expand-Archive dcctl_<version>_windows_amd64.zip -DestinationPath .
+```
+
+两个摘要必须一致。然后把 `dcctl.exe` 放到 `PATH` 中的某个目录。`dcctl version` 会输出它所属的发布版本，也就是它所安装镜像的版本。如需同时校验发布版本的签名，请参阅[验证发布版本](../deployment/verifying-releases.md)。
+
+## 1. 启动实例 {#1-bring-up-an-instance}
+
+先准备一次集群，再在其中创建实例：
+
+```bash
+dcctl install local --compact
+dcctl bootstrap local devicechain --host localhost --no-tls
+```
+
+`--compact` 按笔记本电脑的规模配置集群：更低的资源请求、不安装监控栈、不安装 cert-manager，因此也没有数据库备份。不加该参数时，仅处理事件的服务就请求约 4 个 CPU，放不下的 Pod 会一直处于 `Pending`，直到安装超时。在资源充足的机器上，可以去掉它以获得监控和备份。这一选择属于集群，集群上有实例运行时无法更改。参见 [`--compact`](../deployment/bootstrap.md#--compact)。
+
+:::tip 在笔记本上保留备份
+如果笔记本有空间容纳 20Gi 的备份存储，安装时加上 `--no-tls=false`，即可在紧凑集群上保留 cert-manager，从而保留数据库备份：
+
+```bash
+dcctl install local --compact --no-tls=false
+```
+
+bootstrap 命令保持不变：它的 `--no-tls` 只让该实例通过普通 HTTP 提供服务。根密钥托管不受这一选择影响；只要不传 `--no-escrow` 或 `--dev`，上面的步骤已经保留了它。
+:::
+
+:::note 在脚本或 CI 任务中
+`dcctl bootstrap` 会要求输入口令，用来封存根密钥托管（escrow）制品。没有终端可供询问时，它会报错 `no escrow passphrase and no terminal to ask at` 并停止。可以不经交互提供口令，用文件或环境变量均可：
+
+```bash
+dcctl bootstrap local devicechain --host localhost --no-tls --escrow-passphrase-file ./escrow.pass
+# 或
+DCCTL_ESCROW_PASSPHRASE='<passphrase>' dcctl bootstrap local devicechain --host localhost --no-tls
+```
+
+对于一次性实例，可以用 `--no-escrow` 跳过托管（`--dev` 隐含该选项）。代价是：实例的密钥库根密钥只存在于集群内部，集群一旦丢失，实例存储的所有密钥都将永久无法读取，即使有数据库备份也无济于事。参见[根密钥托管](../deployment/bootstrap.md#escrow)。
+:::
+
+在本地 kind 集群上，本机的 **1883** 端口连到你首个引导的实例的 MQTT 代理。它使用 TLS；连接方法参见[发布事件](../guides/connecting-a-device.md#publishing-an-event)。
+
+`dcctl install` 创建 kind 集群，并安装集群中所有实例共享的组件：DeviceChain Operator 及其自定义资源定义、关系数据库、CloudNativePG Operator 和入口；不使用 `--compact` 时还包括 cert-manager 和监控。每个集群只需运行一次；如果集群尚未完成这一步，`dcctl bootstrap` 就会拒绝执行。参见[安装集群](../deployment/bootstrap.md#install)。
+
+实例 ID（这里是 `devicechain`）用于两个地方：
+
+- 它为实例的 Kubernetes 命名空间命名，前面加上 `dci-` 前缀（`dci-devicechain`）。
+- 它是本页所有设备主题和接入路径的第一个片段。
+
+如果你选择其他 ID，请替换本页所有相应位置：主题和路径中使用 ID 本身，命令中的命名空间则在 ID 前加上 `dci-` 前缀。
+
+初始化完成后，会输出命名空间、控制台 URL 和超级用户凭据。超级用户是 `superuser@devicechain.local`。没有默认密码：初始化会为该实例生成一个密码，并在输出末尾打印一次。之后若要再次读取：
+
+```bash
+kubectl -n dci-devicechain get secret dci-devicechain-superuser -o jsonpath='{.data.password}' | base64 -d
+```
+
+这个 Secret 保存的是超级用户**最初**获得的密码。如果你在控制台中修改密码，Secret 不会更新。
+
+打开引导程序打印的 URL 上的控制台（默认安装为 `http://localhost/`）并登录。以超级用户身份登录后进入的是实例**管理（Admin）**控制台，其中没有租户页面，也没有任何设备，因为还没有租户，而每台设备都必须属于一个租户。超级用户负责管理实例，不是租户用户。要使用租户控制台，需要一个租户管理员身份，下一步会创建它。
+
+## 2. 创建租户 {#2-create-a-tenant}
+
+创建租户属于实例级管理。无需手动调用管理 API，使用以下命令一步完成：
+
+```bash
+dcctl sim create demo
+```
+
+`dcctl sim create` 默认访问 `localhost` 上的实例。如果控制台在其他端口提供服务，请在 `--server` 中给出主机和端口，同时也要给出设备平面的接入端点，因为后者由主机推导而来，并不知道该端口：
+`dcctl sim create demo --server localhost:8080 --ingress http://localhost:8081`。
+
+这个命令会：
+
+- 创建租户 `sim-demo`；
+- 创建限定于该租户的身份 `demo@sim.devicechain.local`，赋予租户管理员角色，但不授予任何实例级权限；
+- 在 `~/.devicechain/sims/demo.json` 写入握手文件。
+
+从握手文件中读取为该身份生成的密码：
+
+```bash
+cat ~/.devicechain/sims/demo.json
+```
+
+`simPassword` 字段是 `demo@sim.devicechain.local` 的密码。下一步会用到这两项。
+
+要在控制台中查看该租户，请退出超级用户，并以 `demo@sim.devicechain.local` 和该密码登录。这个身份才能打开租户控制台。如果不想使用 `dcctl sim create`，可以通过实例管理 API 的 `createTenant` 变更操作创建租户，用 `createIdentity` 创建身份，再用 `addMembership` 在该租户中授予其租户管理员角色。
+
+:::tip 借用模拟器的命令
+`dcctl sim create` 是[模拟器](#where-to-go-next)工作流的前半部分。这里使用它，是因为它会创建租户及限定于该租户的身份，正好满足需求；手动操作则需要调用实例管理 API 的三个变更操作。此后的步骤都使用任何应用都能使用的普通租户 API。
+:::
+
+## 3. 获取租户令牌 {#3-get-a-tenant-token}
+
+认证需要两次调用。第一次证明你是谁。第二次选择你在哪个租户中操作，因为一个人可以属于多个租户。
+
+```bash
+curl -s -X POST http://localhost/api/user-management/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"mutation($e:String!,$p:String!){login(email:$e,password:$p){identityToken}}",
+       "variables":{"e":"demo@sim.devicechain.local","p":"<simPassword from step 2>"}}'
+```
+
+这会返回 `identityToken`。它说明你是谁，但不说明你在哪个租户中操作。将它换取限定于租户的 `accessToken`：
+
+```bash
+curl -s -X POST http://localhost/api/user-management/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"mutation($t:String!,$n:String!){selectTenant(identityToken:$t,tenant:$n){accessToken}}",
+       "variables":{"t":"<identityToken>","n":"sim-demo"}}'
+```
+
+保存这个 `accessToken`。之后的每次调用都携带它：
+
+```bash
+export DC_TOKEN='<accessToken>'
+```
+
+访问令牌的有效期为 **15 分钟**。当调用开始返回认证错误时，重复上面的两个请求（先 `login`，再 `selectTenant`），然后导出新的 `accessToken`。
+
+## 4. 创建设备 {#4-create-the-device}
+
+设备都有类型，因此先创建设备类型。所有对象都通过你选择的 **令牌**寻址：它是稳定、可读的标识，而不是自动生成的 ID。
+
+```bash
+curl -s -X POST http://localhost/api/device-management/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"mutation($r:DeviceTypeCreateRequest){createDeviceType(request:$r){token}}",
+       "variables":{"r":{"token":"temp-probe","name":"Temperature probe"}}}'
+```
+
+```bash
+curl -s -X POST http://localhost/api/device-management/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"mutation($r:DeviceCreateRequest){createDevice(request:$r){token}}",
+       "variables":{"r":{"token":"sensor-001","deviceTypeToken":"temp-probe","name":"Bench sensor"}}}'
+```
+
+现在给设备添加凭据。设备提交凭据来证明自己的身份，平台默认要求提供凭据。
+
+先生成凭据 ID 并保存在 shell 变量中，这样本步骤和第 6 步会使用同一个值：
+
+```bash
+export DC_CRED_ID="$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)"
+```
+
+```bash
+curl -s -X POST http://localhost/api/device-management/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"mutation($r:DeviceCredentialCreateRequest!){createDeviceCredential(request:$r){token}}",
+       "variables":{"r":{"token":"sensor-001-cred","deviceToken":"sensor-001",
+                         "credentialType":"ACCESS_TOKEN",
+                         "credentialId":"'"$DC_CRED_ID"'",
+                         "enabled":true}}}'
+```
+
+`credentialId` 可以是任意不可猜测的字符串；上面的命令已为你生成了一个，因此每位读者得到的密钥都不同。对于 `ACCESS_TOKEN` 凭据，`credentialId` **本身就是**设备提交的密钥，因此应像保护密码一样保护它，而不是把它当成名称。平台只保存它的单向摘要，所以请自己保留一份：这次请求的响应是它最后一次可被读取。
+
+刷新控制台的**设备（Devices）**列表。`sensor-001` 已出现在列表中，但还没有数据。
+
+## 5. 打通接入端点的访问路径 {#5-open-a-path-to-the-ingest-endpoint}
+
+设备流量与 API 不使用同一个入口。Ingress 对外提供控制台和 `/api/…`。设备接入监听器使用独立端口，默认安装**不会**将它暴露到集群外。通过端口转发访问：
+
+```bash
+kubectl -n dci-devicechain port-forward svc/event-sources 8081:8081
+```
+
+让这个命令在独立终端中持续运行。
+
+:::note 为什么需要这一步
+这是默认安装的行为，而不是你的环境有问题。是否让设备群的接入端点可从公网访问，应由运营方明确决定，平台不会代你做出选择。真实部署会有意暴露它；如果只是从笔记本发送一次 `curl`，端口转发是更简单的做法。
+:::
+
+## 6. 发送读数 {#6-send-a-reading}
+
+这个 `curl` 就是设备：
+
+```bash
+curl -i -X POST http://localhost:8081/devicechain/sim-demo/events \
+  -H 'Content-Type: application/json' \
+  -d '{"device":"sensor-001",
+       "eventType":"Measurement",
+       "credentialType":"ACCESS_TOKEN",
+       "credentialId":"'"$DC_CRED_ID"'",
+       "payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
+```
+
+`202 Accepted` 表示事件已入队。请求体中有两条规则，几乎每个人都会至少踩一次坑：
+
+- **所有载荷都要将读数放入 `entries`**，即使只有一条读数。
+- **所有数值都要写成 JSON 字符串：**使用 `"21.5"`，而不是 `21.5`。裸数字会被拒绝。
+
+路径是 `/{instanceId}/{tenant}/events`。`devicechain` 是第 1 步的实例，`sim-demo` 是第 2 步的租户。这里的 `404` 表示**实例 ID**有误，因为路由只存在于当前实例自己的 ID 下。
+
+错误的**租户**不会返回 `404`。在正常连接相关服务的实例上，权威查询确认租户不存在或凭据被拒绝时，会在发布前返回 `401`，响应体同为 `{"error":"unauthorized"}`。如果验证依赖无法确定结果，这些检查会放行，因此 `202` 只确认入队，并不确认租户和凭据验证成功或处理完成。
+
+再发送几条不同数值的读数，这样看到的就是一条曲线，而不是一个点：
+
+```bash
+for t in 21.9 22.4 22.1 23.0; do
+  curl -s -o /dev/null -X POST http://localhost:8081/devicechain/sim-demo/events \
+    -H 'Content-Type: application/json' \
+    -d "{\"device\":\"sensor-001\",\"eventType\":\"Measurement\",
+         \"credentialType\":\"ACCESS_TOKEN\",
+         \"credentialId\":\"$DC_CRED_ID\",
+         \"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"$t\"}}]}}"
+  sleep 1
+done
+```
+
+## 7. 查看数据 {#7-see-your-data}
+
+在控制台中打开 `http://localhost/devices/sensor-001`。设备现在显示为**在线（Online）**，并显示 `temperature` 及其最新值。没有任何组件主动声明它在线：对于使用 HTTP 的设备，在线状态是根据收到事件这一事实推断的。
+
+通过 API 查看同样的最新值：
+
+```bash
+curl -s -X POST http://localhost/api/device-state/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"{latestMeasurements(deviceToken:\"sensor-001\"){name value unit occurredTime}}"}'
+```
+
+查看历史数据，而不仅是最新值：
+
+```bash
+curl -s -X POST http://localhost/api/event-management/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"{measurementEvents(criteria:{pageNumber:1,pageSize:20,deviceToken:\"sensor-001\"}){results{name value occurredTime} pagination{totalRecords}}}"}'
+```
+
+现在，你已经打通设备的完整流程：注册、配置凭据、上报数据并查询数据。
+
+## 故障排查 {#if-something-did-not-work}
+
+| 现象 | 常见原因 |
+| --- | --- |
+| 接入 `POST` 返回 `404` | 路径中的**实例 ID**有误。如果你没有修改，它应是 `devicechain`。错误的租户不会产生这个状态码。 |
+| `:8081` 连接被拒绝 | 第 5 步的端口转发没有运行。 |
+| 接入 `POST` 返回 `400` | 使用了裸数字而非字符串、读数未放入 `entries`，或租户路径片段不是有效的令牌。 |
+| 接入 `POST` 返回 `401` | 权威查询确认租户不存在，或凭据被拒绝。请检查租户和第 4 步的凭据；两种情况返回相同的未授权响应体。 |
+| 返回 `202`，但没有数据显示 | 入队成功，处理是异步的。请检查处理诊断信息、租户和第 4 步的凭据。如果验证依赖无法确定结果，检查会放行。 |
+| 接入 `POST` 返回 `429` | 租户超过接入上限：你每秒发送的读数多于其层级允许的数量。事件未被接受。响应带有 `Retry-After` 标头，请退避后重试。 |
+| 接入 `POST` 返回带 `Retry-After` 标头的 `503` | 平台正在拒绝所有租户的新事件（[背压](../deployment/observability.md#ingest-backpressure)）。事件**没有**被存储。等待 `Retry-After` 指定的秒数（10），再重新发送。`curl -i` 会输出响应标头。 |
+| 接入 `POST` 返回不带 `Retry-After` 标头的 `503` | 事件无法交给消息流，但仍**可能**已被存储。请重新发送，不过除非事件包含 `altId` 和 `occurredTime`，否则重发会存储第二份副本（参见[服务质量](../guides/connecting-a-device.md#quality-of-service)）。 |
+| API 调用返回未授权 | 访问令牌已过期，或你发送的是第 3 步第一次调用返回的 `identityToken`，而不是第二次返回的 `accessToken`。 |
+
+`202`、`400` 和 `404` 对于该次请求都是终止结果：不要原样重发。对于 `429` 和两种 `503`，请按上文说明重试。
+
+## 下一步：告警和命令 {#next-an-alarm-and-a-command}
+
+继续使用 `sim-demo` 中的 `sensor-001`，并以 `demo@sim.devicechain.local` 登录。第 4 步创建的设备没有配置文件：可以存储读数，但没有检测规则或声明的命令。如果 `DC_TOKEN` 已过期，请按第 3 步刷新。
+
+### 触发第一条告警 {#first-alarm}
+
+1. 在 **Devices → Device Profiles** 中创建配置文件，令牌为 `temp-probe-profile`，名称为 **Temperature probe profile**，类别为 **sensor**。在 **Metrics** 中添加指标，令牌和键均为 `temperature`，数据类型为 **Double**，单位为 `Cel`。
+2. 在 **Devices → Device Types** 中打开 `temp-probe`，在 **Profile** 中关联 `temp-probe-profile`。参见[设备类型和配置文件](../user-guide/device-types-and-profiles.md)。
+3. 在配置文件的 **Detection Rules** 中选择 **New detection rule → Form**。令牌设为 `temperature-high`，名称为 **Temperature high**，类型为 **Threshold**，严重程度为 **Warning**，勾选 **Enabled**。条件设为 `temperature > 25`，添加 **Raise alarm** 操作，告警键为 `temperature-high`。保存规则，然后在 **Versions** 中选择 **Publish**。保存的草稿不会运行。参见[检测规则](../user-guide/detection-rules.md)。
+4. 重复第 6 步的 HTTP 请求，将读数改为 `"temperature":"30.0"`；第 5 步的端口转发必须仍在运行。在 **Monitor → Alarms** 中找到 `sensor-001` 的活动告警，再发送 `"temperature":"21.5"` 清除它。必须在发布后发送新读数；旧读数不会自动回放。
+
+### 发送第一条命令 {#first-command}
+
+1. 在同一配置文件的 **Commands** 中添加命令，令牌和命令键均为 `identify`，名称为 **Identify**，影响为 **Normal**，不设置参数模式。再次 **Publish** 配置文件。
+2. 第 6 步的 HTTP `curl` 无法接收命令。发送前，按[接收命令](../guides/connecting-a-device.md#receiving-commands)启动 MQTT 订阅客户端（安装 Mosquitto 客户端，并按该指南使用实例 CA）。使用主机 `localhost`、客户端 ID `devicechain:sim-demo:sensor-001:sub`、用户名 `sim-demo:$DC_CRED_ID`（展开 shell 变量）、不设密码（`ACCESS_TOKEN` 凭证只凭用户名连接；同时发送密码的连接会按 `MQTT_BASIC` 凭证校验并被拒绝），以及主题 `devicechain/sim-demo/device-commands/sensor-001`。保持连接。本地连接 `localhost` 时，还需按照指南处理 TLS 主机名验证。
+3. 在租户 API 上发出这条无害的测试命令：
+
+```bash
+curl -s -X POST http://localhost/api/command-delivery/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"mutation { createCommand(request: {token: \"first-identify\", deviceToken: \"sensor-001\", name: \"identify\", payload: \"{}\"}) { command { token status } rejection { code reason } } }"}'
+```
+
+4. 检查 `rejection`：应为 null，且必须存在 `command`。读取订阅客户端收到的派发信封。按[响应命令](../guides/connecting-a-device.md#responding-to-a-command)，向 `devicechain/sim-demo/command-responses/sensor-001` 发布 `success: true`。使用相同的 MQTT 凭证、不同的客户端 ID 后缀，以及信封中实际的 `token` 和 `dispatchNonce`。这只确认测试，没有物理设备执行操作。
+5. 在 `sensor-001` 的 **Commands** 页签中，确认 `first-identify` 达到 **SUCCESSFUL**。没有响应时会保持 **SENT** 直到超时；没有接收连接时可能保持 **HELD**。[发送命令](../guides/sending-commands.md)介绍拒绝、轮询和取消。再次测试时，请使用新的命令令牌。
+
+## 下一步 {#where-to-go-next}
+
+- **运行模拟设备群。** 一台设备还不算设备群。第 2 步的 `dcctl sim create` 同时配置了一个模拟场景。下载并运行模拟器，让它创建包含完整数据的租户并持续发送数据。无需 Go 工具链：每个 [GitHub 发布版本](https://github.com/devicechain-io/devicechain/releases)都附带 `dc-simulator_<版本>_<操作系统>_<架构>`（`.tar.gz`，Windows 为 `.zip`），支持 Linux、macOS 和 Windows 的 `amd64` 与 `arm64`，其 SHA-256 摘要位于同一发布版本的 `dc-simulator_checksums.txt` 中。解压后，将它放入 `PATH`，或让 `dcctl` 指向它：
+
+  ```bash
+  tar -xzf dc-simulator_<版本>_<操作系统>_<架构>.tar.gz
+  dcctl sim run demo --simulator ./dc-simulator
+  ```
+
+  `dcctl sim run` 会自行找到该模拟的 handshake 文件和控制端口；省略 `--simulator` 时，它会在 `PATH` 中查找 `dc-simulator`。从源码检出构建的贡献者可以运行 `cd backend/sims/dc-simulator && make build`，并改用 `./build/dc-simulator`。
+
+  然后使用 `dcctl sim status demo`、`dcctl sim stop demo` 和 `dcctl sim start demo` 控制它。模拟器访问的是同一个接入端点，因此同样需要第 5 步的端口转发。
+
+  `demo` 模拟运行的是默认场景，它会发送读数，但没有声明任何检测规则，因此不会产生告警。若想要会产生告警的场景，请用 `dcctl sim create building --manifest buildingpulse` 创建第二个模拟，并用 `dcctl sim run building` 运行：十二个温控器的温度会升到 30 以上再回落，在租户 `sim-building` 的 **Monitor → Alarms** 中产生并清除 `bp-over-temp` 告警。以 `building@sim.devicechain.local` 和 `~/.devicechain/sims/building.json` 中的 `simPassword` 登录即可查看。
+
+- **[功能导览](./feature-tour.md)**：从这里继续，依次完成仪表板、会触发告警并下发命令的规则、设备对命令的应答，以及只能看到自己设备的客户用户，然后以第二个租户再运行一遍同样的导览。
+
+- **[连接设备](../guides/connecting-a-device.md)**：使用真实传输方式 MQTT，在连接和事件中都提供凭据，并了解所有载荷格式和流水线执行的规则。
+- **[传输能力矩阵](../reference/transport-matrix.md)**：在选定传输方式之前，了解各方式在两个方向上支持的功能。
+- **[发送命令](../guides/sending-commands.md)**：了解另一个方向的通信。
+- **[事件处理](../concepts/event-processing.md)**：将这些读数转化为告警。
+
+## 清理 {#cleaning-up}
+
+```bash
+dcctl sim destroy demo
+dcctl destroy local devicechain
+```
+
+`dcctl destroy` 删除实例，保留已安装的集群，方便下一次初始化。它会等待实例命名空间完全消失，因此集群可以立即使用相同名称重新初始化。如果命令被中断，再次运行就能完成清理。
+
+:::warning 先移走密钥托管文件
+再次使用相同名称初始化之前，请移走 `destroy` 指出的密钥托管文件。下一个实例会生成自己的密钥，初始化不会覆盖旧文件。
+:::
+
+如果还要删除集群：
+
+```bash
+kind delete cluster --name devicechain
+```

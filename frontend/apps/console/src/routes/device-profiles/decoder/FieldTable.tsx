@@ -67,7 +67,7 @@ function IssueList({ issues, path, id }: { issues: Issue[]; path: string; id: st
   return (
     <ul id={id} className="mt-2 space-y-0.5 text-xs text-destructive">
       {mine.map((i, n) => (
-        <li key={n}>{t(`decIssue.${i.code}`, i.params)}</li>
+        <li key={n}>{t(`decIssue.${i.code}`, i.params ?? {})}</li>
       ))}
     </ul>
   );
@@ -340,7 +340,7 @@ function SectionEditor(props: {
       {sectionIssues.length > 0 && (
         <ul className="space-y-0.5 text-xs text-destructive">
           {sectionIssues.map((i, n) => (
-            <li key={n}>{t(`decIssue.${i.code}`, i.params)}</li>
+            <li key={n}>{t(`decIssue.${i.code}`, i.params ?? {})}</li>
           ))}
         </ul>
       )}

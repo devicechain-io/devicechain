@@ -52,7 +52,7 @@ function MembershipContent({
   loadCandidates: () => Promise<Candidate[]>;
 }) {
   const { t } = useTranslation(['entities', 'common']);
-  const e = (suffix: string, opts?: Record<string, unknown>) =>
+  const e = (suffix: string, opts: Record<string, unknown> = {}) =>
     t(`entities:${memberI18nKey}${suffix}`, opts);
   const { toast } = useToast();
   const [version, reload] = useReload();

@@ -1,0 +1,244 @@
+---
+title: Viewing dashboards in /dash
+sidebar_position: 17
+---
+
+import GuideShot from '@site/src/components/GuideShot';
+
+# Viewing dashboards in /dash
+
+Besides the console, the instance serves a separate dashboard viewer at `/dash/`. It shows a
+published dashboard and nothing else: no sidebar, no editor, no draft. Use it for a wall display in a
+control room, for a bookmark that opens straight onto one board, or for people who only need to look
+at a dashboard. This chapter is for anyone who opens it, and for whoever sets up a wall display.
+
+Dashboards themselves are built and published in the console; see [Dashboards](/user-guide/dashboards).
+
+## Signing in
+
+The viewer has its own sign-in form, with **Email**, **Password**, **Sign in** and **Sign in with
+SSO**, and a language switch. For single sign-on, type your email address first, then choose **Sign
+in with SSO**. If your account belongs to several tenants, the viewer asks you to choose one.
+
+<GuideShot id="dash-signin" alt="The /dash sign-in card with an Email field holding sam.rivera@widgetlab.example, an empty Password field, a Sign in button, a Sign in with SSO button, and EN English and ES Español language buttons." />
+
+The viewer keeps its session in the page's memory only. It does not share the console's session:
+being signed in to the console does not sign you in here, and signing out of one leaves the other
+alone. Reloading the page, or opening `/dash/` in another tab, asks you to sign in again.
+
+## Loading a dashboard
+
+After you sign in, **Load a dashboard** lists **Your dashboards**: the published dashboards you may
+open. Choose one to open it. If your access is limited to some of the tenant's customers or groups
+of devices, the list holds the published dashboards shared with those customers or groups;
+otherwise it holds every published dashboard in the tenant. The list shows the first 200, and says so when there are more.
+
+{/* TODO(screenshot): dash-list, the Your dashboards list above the token field. */}
+
+Below the list, you can also open a dashboard by its **Dashboard token**, which you can copy from its
+page in the console: type it and choose **Load published**. The viewer fetches the version that was
+last published. A dashboard that has never been published cannot be opened here; the viewer asks
+you to have an author publish it.
+
+<GuideShot id="dash-load" alt="The Load a dashboard page. The Dashboard token field holds wl-gallery, with the hint Fetches the version of this dashboard that was last published, and a Load published button. Below, under Or paste an exported definition, are a Definition (JSON) box, a Binding manifest (JSON, optional) box with a sample of its shape, and a Render button. The header has the language buttons and Sign out." />
+
+The lower half takes a dashboard you exported from the console instead: paste the definition and,
+optionally, a binding manifest that points its slots at particular devices, then choose **Render**.
+See [Exporting](/user-guide/dashboards#exporting) and, for binding manifests,
+[Embedding](/concepts/dashboards#embedding-definitions-slots-and-binding-manifests).
+
+## The board
+
+The loaded board fills the page under a slim header. The header shows the dashboard's title, the
+time range and **Pause** (see [Time range and pause](#time-range-and-pause)) and a connection
+indicator, and offers the language switch, **Dark theme** (or **Light theme**), **Change**, which
+returns to the load form, and **Sign out**.
+
+<GuideShot id="dash-view" alt="The Widget Lab board in the /dash viewer, light theme. The header shows Widget Lab, the time ranges 15m, 1h (selected), 6h, 24h and 7d, a Pause button, a Live indicator, and the buttons English, Español, Dark theme, Change and Sign out. Below: a title card, a temperature readout, a temperature gauge, an Active alarms count, an image, a line chart of temperature and humidity marked 15m, and a Latest values table." />
+
+The widgets are live: values, charts and alarms update as data arrives. The connection indicator
+reads **Live** while the board's live connection is up; a device that is merely quiet does not change
+it. If the connection drops it reads **Reconnecting**, then **Offline** once it has been down for 20
+seconds, or straight away if the browser itself goes offline, and the widgets pick up again on their
+own when it returns. The viewer cannot change the
+dashboard, but widget actions still work for those allowed to use them. Someone whose role grants
+`alarm:write` can acknowledge and clear alarms from the board, and someone with `command:write` can
+send commands to real devices. The server checks those rights for every action. See
+[Actions and permissions](/concepts/dashboards#actions-and-permissions).
+
+Dashboard and widget titles are text the dashboard's author wrote, so they stay as written whatever
+language the viewer is set to.
+
+### Light and dark
+
+The theme button switches the board between light and dark, and this browser remembers your choice
+for next time.
+
+<GuideShot id="dash-dark" alt="The same Widget Lab board in the dark theme: dark backgrounds, light text, the header button now reading Light theme, and the readout, gauge, alarm count, chart and table restyled for the dark background." />
+
+## Time range and pause {#time-range-and-pause}
+
+The header carries a time range: **15m**, **1h**, **6h**, **24h** and **7d**. It sets how much
+history the charts draw, counted back from now. The board opens on the span its author chose, one
+hour if they chose none, and the span you pick applies to every chart that follows the board's
+range. A chart whose author pinned its own span keeps that span, and shows it in its corner (for
+example **1h**) whenever it differs from the range in the header, so a pinned hour never reads as a
+day of data. Long ranges are drawn from averaged points rather than every reading, so a week stays
+quick to load.
+
+A chart holds at most 2,000 readings. On a long range over a busy device that can be fewer than the
+whole range: the oldest readings are let go first, and the chart then says where it starts (for
+example **from 14:03**) in its corner, so a partial window is never mistaken for the full range.
+
+**Pause** freezes the board. Values, charts, alarm counts, alarm tables and maps stop where they
+are, and a **Paused** badge with the time you paused appears next to the controls. Time keeps
+passing on a frozen board: the age beside a value ("12 sec. ago") keeps counting from the reading
+you are looking at, so a paused value never looks current. Choose **Resume** and the board catches
+up with everything that arrived in the meantime. While paused you can still change the range; the
+board shows that span as it stood at the moment you paused.
+
+Pause freezes what the board shows, not what it does. Command buttons keep working while paused,
+and so does the list of recent commands they show, which is why the **Paused** badge also reads
+"commands still send": a command sent from a frozen board goes out at once.
+
+### Custom range {#custom-range}
+
+**Custom range** opens a small panel with a **From** and a **To** field, for looking at a fixed
+stretch of the past, such as the two hours around an incident. The fields use your own time zone,
+and the panel prints it ("Times are in Europe/Berlin (UTC+02:00)") so "02:00" is never ambiguous.
+**Apply** shows the window; it is refused, with the reason shown in place, when the start is not
+before the end, the window is shorter than a minute or longer than 31 days, the end is in the
+future, or the start is before the year 2000.
+
+While a custom range shows, the header says **Fixed window** with both ends and their time zone,
+and the board does not follow new data: charts and values stay on that window, the way they do
+when paused. Nothing is paused, so there is no **Paused** badge, and commands still send. **Back
+to live**, or any of the 15m to 7d buttons, returns to a live board. **Copy link** copies an
+address that opens the same window for anyone, with the times written in UTC.
+
+A chart that follows the board's range draws the window. A chart whose author pinned its own span
+keeps that span, counted back from the end of the window, and shows it in its corner as usual. A
+custom widget written before custom ranges existed sees the window as a frozen board and draws the
+right data, with no change.
+
+Alarm widgets, maps and device status widgets keep no history to read back, so they cannot show
+the window: they show the current state, and say so with a **Now** badge in their corner while a
+custom range is showing. Today's active alarms are not the ones that were active during the window.
+
+## Kiosk mode and links for wall displays
+
+The viewer's address can carry parameters, so a bookmark or a wall display opens the right board in
+the right mode:
+
+```text
+/dash/?dashboard=<token>&kiosk=1&theme=dark
+```
+
+| Parameter | Values | Effect |
+| --- | --- | --- |
+| `dashboard` | a dashboard token | Loads that dashboard straight after sign-in, including after single sign-on. |
+| `kiosk` | `1` or `true` | Kiosk mode: hides the header and its controls, and shows a **Fullscreen** button instead. |
+| `chrome` | `0` or `false` | With `kiosk`, also hides the connection indicator and the **Fullscreen** button, for a page that frames the board itself. The indicator still appears whenever the board is not live. |
+| `theme` | `dark` or `light` | Sets the theme. Unlike the theme button, the parameter is not remembered. |
+| `density` | `compact`, `comfortable` or `wall` | Scales the board's text and spacing: `compact` is smaller, `wall` is larger, for a display read from across a room. Overrides the density the board was saved with. |
+| `range` | `15m`, `1h`, `6h`, `24h` or `7d` | Opens the board on that time range instead of the board's own. |
+| `paused` | `1` | Opens the board frozen at the moment it loads, with the **Paused** badge showing. Any other value opens it live. |
+| `from`, `to` | two times, each ISO 8601 with a zone, such as `2026-10-22T02:00:00Z` or `2026-10-22T04:00:00+02:00` | Opens the board on that fixed window instead of a live range; see [Custom range](#custom-range). Both are needed. A time with no zone is refused, because "02:00" means a different moment in each place. It wins over `range` and `paused`. |
+| `bind.<slot>` | a device token | Opens the board with that device chosen for the slot. See [Linking to a board with a device chosen](#linking-to-a-device). |
+| `rotate` | two to 24 dashboard tokens, separated by commas | Cycles through those boards; see [Rotating through several boards](#rotating-boards). It implies `kiosk`, and wins over `dashboard`. |
+| `every` | seconds, 10 to 3600 | How long each board of a `rotate` playlist shows. 60 when absent. |
+
+A parameter with a value the viewer does not recognize is ignored, and the other parameters still
+apply.
+
+A `from` and `to` pair that cannot be used (only one of them, no zone, the start not before the end,
+a window outside one minute to 31 days, or an end in the future) is ignored, and a note under the
+time range controls names the values and the reason, so the board is never silently showing
+something else. The board opens live.
+
+In kiosk mode the board takes the whole page. The connection indicator sits in the top left corner.
+The only control is **Fullscreen** in the top right corner, which turns into **Exit fullscreen**; it
+is hidden if the browser cannot go full screen.
+There is no sign-out control in kiosk mode, so a wall display stays on its board. Kiosk mode has no
+time-range or pause controls either, but a board opened with `paused=1` still shows its **Paused**
+badge beside the connection indicator, so a frozen wall display says so.
+
+<GuideShot id="dash-kiosk" alt="The Widget Lab board in kiosk mode: no header, a Live indicator in the top left corner, a Fullscreen button in the top right corner, and the title card and the same live widgets below." />
+
+## Rotating through several boards {#rotating-boards}
+
+A wall display that should show several boards in turn takes a playlist:
+
+```text
+/dash/?rotate=<token-a>,<token-b>,<token-c>&every=45
+```
+
+Each board shows for `every` seconds, then the next takes over, and the playlist starts again after
+the last. The page is in kiosk mode. A thin bar along the bottom edge shows how far through the
+current board it is. Beside it a small strip names the board and its place in the playlist (for
+example *Board 2 of 3*) and has **Previous board**, **Pause rotation** and **Next board** buttons;
+`chrome=0` hides the strip and keeps the bar.
+
+- The next board is read in the last ten seconds of the current one, so the switch is to a board
+  that is already loaded. Each board's live version is read again every pass: a dashboard you
+  publish appears the next time the playlist reaches it.
+- Using the board pauses the rotation. A click, a key press, a scroll or a touch holds the playlist,
+  so nobody is carried off a widget they are reading, and it resumes after 30 seconds without any of
+  those. **Pause rotation** holds it until you choose **Resume rotation**. A paused playlist always
+  says so, even with `chrome=0`.
+- A board that cannot be opened (not published, not shared with you, deleted) is skipped, and a note
+  on the page names it and the reason. The other boards keep playing. If none can be opened, the page
+  says so and offers **Try again**.
+- The rest of the link applies to every board: the same `range`, or the same fixed `from` and `to`
+  window, the same `theme` and `density`. A `bind.<slot>` parameter chooses that device on the
+  boards that have a slot of that name and is left off the others, so one link can choose a device
+  for several boards.
+- A part of the link the playlist cannot use is ignored, and a note on the page says which and why,
+  so the wall display never quietly plays something else: a token that is not a dashboard token is
+  skipped, an `every` outside 10 to 3600 seconds (or not a whole number) falls back to 60, boards
+  past 24 are left out, and fewer than two usable boards is no playlist (a single board opens as if
+  it had been named in `dashboard`). Dismiss a note with its **×**; the playlist keeps playing.
+
+## Linking to a board with a device chosen {#linking-to-a-device}
+
+A link can also open a board with a device already chosen, by naming the board's slot and the
+device's token:
+
+```text
+/dash/?dashboard=<token>&bind.machine=hauler-7
+```
+
+Repeat `bind.<slot>` for each slot you want to set. The `<slot>` is the slot's name as the board's
+author gave it. The viewer shows the board only after it has checked, with your own permissions, that
+every device in the link exists and is one you may see. Otherwise it shows why instead of the board:
+a device that does not exist and a device you may not see read the same, so a link cannot be used to
+find out which devices exist. **Open the board without it** then opens the board on its own default
+device. A link that names a slot the board does not have, or something that is not a device token, is
+refused the same way. So is a link that names the same slot twice, and one that names a slot whose device follows another
+slot, since the board would show the device it derives rather than the one in the link.
+
+Choosing a device on the board (clicking a marker on a map, a row in a fleet table, or a selector)
+updates the address in place, without adding browser history entries, so the address in the bar is
+always a link to what is on screen. Following **Back** or **Forward** to an address that names another
+device chooses that device. **Change**, which returns to the load form, drops the chosen devices from
+the address. The same link works in the console, at `/dashboards/<token>?bind.<slot>=<device token>`;
+see [Choosing a device, and sharing a link](/user-guide/dashboards#sharing-a-link).
+
+## Staying signed in
+
+A wall display can run unattended for days, so the viewer renews its session on its own, a couple of
+minutes before it would expire. A network blip, such as a Wi-Fi reconnect, does not end the session:
+the viewer keeps retrying until its current access lapses.
+
+If the session cannot be renewed, because the sign-in was ended on the server or the outage lasted
+too long, the board is replaced by a full-screen **Your session has ended** notice with a **Sign in
+again** button. The display never sits frozen on old values. When the address carries a `dashboard`
+parameter, signing in again brings the same board straight back.
+
+More detail is in [Session refresh and kiosk mode](/concepts/dashboards#session-refresh-and-kiosk-mode).
+
+## Related
+
+- [Dashboards](/user-guide/dashboards): building, publishing and exporting dashboards in the console.
+- [Dashboards](/concepts/dashboards): widgets, data sources, versioning and embedding.
+- [Signing in](/user-guide/signing-in): the console's own sign-in.

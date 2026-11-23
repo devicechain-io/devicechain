@@ -172,16 +172,13 @@ describe('applyTenantDefaultLocale (ADR-066 rung-2 seam)', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  // 🔴 CASE. i18next case-normalizes only the REGION half of a hyphenated tag —
-  // `lowerCaseLng` is off — so `ES` is NOT a supported code and renders English. A
-  // hand-rolled `.toLowerCase()` fold declared it resolvable, handed it to
-  // changeLanguage, and the seam selected a language that renders raw keys by its own
-  // definition. Unreachable through the wired path (the server canonicalizes) but a
-  // contract this function states about itself.
-  it('does not claim an upper-cased language is resolvable, because i18next does not', () => {
-    const spy = vi.spyOn(i18n, 'changeLanguage');
+  // 🔴 CASE. i18next 27 folds the case of the language half as well as the region, so `ES`
+  // is a supported code and renders Spanish. (Under i18next 26 only the region was folded and
+  // `ES` fell back to English, so this seam refused it.) The guard asks i18next, so it follows;
+  // the oracle test below pins that guard and renderer keep agreeing.
+  it('accepts a mis-cased language subtag, because i18next folds its case', async () => {
     applyTenantDefaultLocale('ES');
-    expect(spy).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(i18n.resolvedLanguage).toBe('es'));
   });
 
   // The other half of the same measurement, and the reason the fold cannot simply be
@@ -206,17 +203,9 @@ describe('isShippedLocale agrees with what i18next actually resolves', () => {
   // because its base is `es`, so the case property is still covered; the dedicated
   // upper-case test above covers `ES` directly.
 
-  // 🔴 AND ONE CLASS IS EXCLUDED BECAUSE THE TWO GENUINELY DISAGREE, not because it was
-  // not thought of: `ES-MX`, `eS-mx` and `ES-419` are refused here and rendered as Spanish
-  // by changeLanguage — i18next's isSupportedCode splits the tag before formatting it,
-  // while its resolve hierarchy canonicalises the whole tag first. Adding them would redden
-  // this test against a defect that is not ours and cannot be fixed here without
-  // reintroducing the hand-rolled normalisation this seam exists to be rid of. The
-  // disagreement is fail-CLOSED and its reasoning is recorded on isShippedLocale itself; if
-  // a later i18next release aligns the two, that comment and this exclusion come out
-  // together.
   const TAGS = [
     'en', 'es', 'ES',
+    'ES-MX', 'eS-mx', 'ES-419',
     'es-MX', 'es-mx', 'es-419', 'es-Latn-MX',
     'pt-BR', 'fr', 'fr-CA', 'ja-JP',
   ];

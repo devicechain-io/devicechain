@@ -9,6 +9,7 @@
 // Kept out of the component so the rules are testable, the same split TierForm's
 // tierConfig.ts uses.
 
+import type { TranslateFn } from '@/lib/translate';
 import type { AiProviderTierGrant } from '@/lib/api/ai-inference-admin';
 
 // The tier fields this screen needs. Structural rather than the generated
@@ -170,7 +171,7 @@ export function tierWarning(tier: PackagingTier): PackagingWarning | null {
 export function warningText(
   w: PackagingWarning,
   tier: PackagingTier,
-  t: (key: string, options?: Record<string, unknown>) => string,
+  t: TranslateFn,
 ): string {
   const empty = tier.tenantCount === 0;
   switch (w.kind) {
