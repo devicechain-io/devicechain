@@ -76,7 +76,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		"globex": {"gateway"},
 	}}
 	api := NewApi(&rdb.RdbManager{Database: db}, store, Limits{
-		MaxArtifactBytes: 1 << 20, ConfiguredMaxArtifactBytes: 1 << 20, MaxTenantArtifactBytes: 3 << 20,
+		MaxArtifactBytes: 1 << 20, MaxTenantArtifactBytes: 3 << 20,
 	})
 	api.Profiles = profiles
 	return &testEnv{api: api, profiles: profiles, store: store}
@@ -254,12 +254,11 @@ func TestSizeCeilings(t *testing.T) {
 	_, err := env.api.CreateArtifact(ctx, r)
 	requireRefusal(t, err, CodeArtifactTooLarge)
 
-	// The backend clamp is distinct from the configured ceiling: the S3 buffering limit.
 	env.api.Limits.MaxArtifactBytes = 512
 	r = validRequest("fw-clamped", []byte("x"))
 	r.SizeBytes = 513
 	_, err = env.api.CreateArtifact(ctx, r)
-	requireRefusal(t, err, CodeArtifactTooLargeForBackend)
+	requireRefusal(t, err, CodeArtifactTooLarge)
 	r.SizeBytes = 512
 	_, err = env.api.CreateArtifact(ctx, r)
 	require.NoError(t, err, "exactly the ceiling is allowed")
