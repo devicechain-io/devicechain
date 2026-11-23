@@ -53,8 +53,9 @@ type fleetOperationSnapshot struct {
 
 	// DriverProtocol is the lowest engine protocol that may drive this operation. Every
 	// driver claim, reconciler pass, deadline pass and retention pass filters on it, so a pod
-	// of an older release never works an operation a newer release defined.
-	DriverProtocol int32 `gorm:"not null;default:1;check:chk_fleet_operations_driver_protocol,driver_protocol >= 1"`
+	// of an older release never works an operation a newer release defined. It has NO default:
+	// every insert states it (core/ledger.RequiredProtocol), and the CHECK refuses less than 1.
+	DriverProtocol int32 `gorm:"not null;check:chk_fleet_operations_driver_protocol,driver_protocol >= 1"`
 
 	Intent      string `gorm:"not null;type:text"`
 	TargetKind  string `gorm:"not null;size:16"`
@@ -206,7 +207,8 @@ func (fleetOperationEventSnapshot) TableName() string { return "fleet_operation_
 // # driver_protocol
 //
 // fleet_operations.driver_protocol records the lowest engine protocol that may drive an
-// operation (1 for everything this release creates). It exists in the FIRST release that has
+// operation (1 for everything this release creates, stated by the creator through
+// ledger.RequiredProtocol; the column has no default, so a creator that forgets is refused). It exists in the FIRST release that has
 // journals because the pods that must honour it are this release's own: a later release that
 // defines protocol 2 can only be kept off by pods that already filter on the column.
 //
@@ -249,6 +251,7 @@ func NewFleetOperationsSchema() *gormigrate.Migration {
 // partialIndex is a literal index definition. Table, columns and predicate are written out
 // here rather than derived, because the DDL IS the snapshot.
 type partialIndex struct {
+	Model   any
 	Table   string
 	Name    string
 	Unique  bool
@@ -257,28 +260,28 @@ type partialIndex struct {
 }
 
 var fleetOperationPartialIndexes = []partialIndex{
-	{Table: "fleet_operations", Name: "idx_fleet_operations_closed", Columns: []string{"tenant_id", "closed_at"}, Where: "evidence = 'CLOSED'"},
-	{Table: "fleet_operations", Name: "idx_fleet_operations_ready_expiry", Columns: []string{"tenant_id", "expires_at"}, Where: "dispatch = 'READY'"},
+	{Model: &fleetOperationSnapshot{}, Table: "fleet_operations", Name: "idx_fleet_operations_closed", Columns: []string{"tenant_id", "closed_at"}, Where: "evidence = 'CLOSED'"},
+	{Model: &fleetOperationSnapshot{}, Table: "fleet_operations", Name: "idx_fleet_operations_ready_expiry", Columns: []string{"tenant_id", "expires_at"}, Where: "dispatch = 'READY'"},
 
-	{Table: "fleet_operation_lines", Name: "uix_fleet_operation_lines_target", Unique: true, Columns: []string{"operation_id", "target_id"}, Where: "target_id IS NOT NULL"},
-	{Table: "fleet_operation_lines", Name: "uix_fleet_operation_lines_reverses", Unique: true, Columns: []string{"reverses_line_id"}, Where: "posting = 'POSTED'"},
-	{Table: "fleet_operation_lines", Name: "idx_fleet_operation_lines_planned", Columns: []string{"operation_id", "next_attempt_at", "ordinal"}, Where: "posting = 'PLANNED'"},
-	{Table: "fleet_operation_lines", Name: "idx_fleet_operation_lines_posted", Columns: []string{"operation_id", "posted_at"}, Where: "posting = 'POSTED'"},
-	{Table: "fleet_operation_lines", Name: "idx_fleet_operation_lines_deadline", Columns: []string{"tenant_id", "settle_by"}, Where: "posting = 'POSTED' AND settlement IS NULL"},
-	{Table: "fleet_operation_lines", Name: "idx_fleet_operation_lines_awaiting_evidence", Columns: []string{"target_id"}, Where: "posting = 'POSTED' AND evidence_revision IS NULL AND redacted_at IS NULL"},
+	{Model: &fleetOperationLineSnapshot{}, Table: "fleet_operation_lines", Name: "uix_fleet_operation_lines_target", Unique: true, Columns: []string{"operation_id", "target_id"}, Where: "target_id IS NOT NULL"},
+	{Model: &fleetOperationLineSnapshot{}, Table: "fleet_operation_lines", Name: "uix_fleet_operation_lines_reverses", Unique: true, Columns: []string{"reverses_line_id"}, Where: "posting = 'POSTED'"},
+	{Model: &fleetOperationLineSnapshot{}, Table: "fleet_operation_lines", Name: "idx_fleet_operation_lines_planned", Columns: []string{"operation_id", "next_attempt_at", "ordinal"}, Where: "posting = 'PLANNED'"},
+	{Model: &fleetOperationLineSnapshot{}, Table: "fleet_operation_lines", Name: "idx_fleet_operation_lines_posted", Columns: []string{"operation_id", "posted_at"}, Where: "posting = 'POSTED'"},
+	{Model: &fleetOperationLineSnapshot{}, Table: "fleet_operation_lines", Name: "idx_fleet_operation_lines_deadline", Columns: []string{"tenant_id", "settle_by"}, Where: "posting = 'POSTED' AND settlement IS NULL"},
+	{Model: &fleetOperationLineSnapshot{}, Table: "fleet_operation_lines", Name: "idx_fleet_operation_lines_awaiting_evidence", Columns: []string{"target_id"}, Where: "posting = 'POSTED' AND evidence_revision IS NULL AND redacted_at IS NULL"},
 
-	{Table: "fleet_operation_events", Name: "uix_fleet_operation_events_contradiction", Unique: true, Columns: []string{"line_id", "kind"}, Where: "kind = 'CONTRADICTING_EVIDENCE'"},
+	{Model: &fleetOperationEventSnapshot{}, Table: "fleet_operation_events", Name: "uix_fleet_operation_events_contradiction", Unique: true, Columns: []string{"line_id", "kind"}, Where: "kind = 'CONTRADICTING_EVIDENCE'"},
 }
 
 func createPartialIndexIfNotExists(tx *gorm.DB, ix partialIndex) error {
-	unique := ""
 	if ix.Unique {
-		unique = "UNIQUE "
+		// This package's own helper (a deliberate copy of the rdb one, see baseline.go).
+		return createPartialUniqueIndexWhere(tx, ix.Model, ix.Name, ix.Where, ix.Columns...)
 	}
 	quoted := make([]string, len(ix.Columns))
 	for i, c := range ix.Columns {
 		quoted[i] = `"` + c + `"`
 	}
-	return tx.Exec(fmt.Sprintf(`CREATE %sINDEX IF NOT EXISTS "%s" ON "%s" (%s) WHERE %s`,
-		unique, ix.Name, ix.Table, strings.Join(quoted, ", "), ix.Where)).Error
+	return tx.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS "%s" ON "%s" (%s) WHERE %s`,
+		ix.Name, ix.Table, strings.Join(quoted, ", "), ix.Where)).Error
 }

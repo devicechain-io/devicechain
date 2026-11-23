@@ -29,11 +29,14 @@ func TestFleetOperationJournalsOnPostgres(t *testing.T) {
 
 	op := &FleetOperation{Token: "t1", Kind: "config.set", Name: "n", Dispatch: "READY", RequestDigest: "sha256:x",
 		Intent: "{}", TargetKind: "DEVICE_LIST", TargetCount: 1, MaxPostsPerSecond: 10, EffPostsPerSecond: 10,
-		SettleDeadlineS: 60, Initiator: "u"}
+		SettleDeadlineS: 60, Initiator: "u", DriverProtocol: 1}
 	require.NoError(t, db.WithContext(ctx).Create(op).Error)
 	var stored FleetOperation
 	require.NoError(t, db.WithContext(ctx).First(&stored, op.ID).Error)
-	require.Equal(t, int32(1), stored.DriverProtocol, "an operation this release creates is protocol 1")
+	require.Equal(t, int32(1), stored.DriverProtocol)
+	var nodefault int64
+	require.NoError(t, db.WithContext(ctx).Raw(`SELECT count(*) FROM information_schema.columns WHERE table_schema = 'device-management' AND table_name = 'fleet_operations' AND column_name = 'driver_protocol' AND column_default IS NOT NULL`).Scan(&nodefault).Error)
+	require.Zero(t, nodefault, "driver_protocol has no default")
 	require.Equal(t, "OPEN", stored.Evidence)
 
 	dup := *op

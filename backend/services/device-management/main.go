@@ -1189,7 +1189,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			AppendOnly: []any{&model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{},
 				&model.DeviceProfileVersion{}, &model.DeviceProfileActivation{}, &model.EntityGroupVersion{}, &model.AssetTypeVersion{},
 				&model.DeviceConfigurationRevision{}, &model.DeviceConfigurationReport{},
-				&model.FleetOperationContract{}, &model.FleetOperationLine{}, &model.FleetOperationEvent{}},
+				&model.FleetOperation{}, &model.FleetOperationRuntime{}, &model.FleetOperationContract{}, &model.FleetOperationLine{}, &model.FleetOperationEvent{}},
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Migrations: schema.Migrations,
 			Config:     Configuration.RdbConfiguration,

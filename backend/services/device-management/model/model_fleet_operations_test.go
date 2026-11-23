@@ -7,11 +7,13 @@ import (
 	"context"
 	"database/sql"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/stretchr/testify/require"
@@ -44,6 +46,41 @@ func tableShape(t *testing.T, db *gorm.DB, table string) map[string]columnShape 
 	return shape
 }
 
+// checkConstraints returns name -> expression of every CHECK in the table's stored CREATE statement.
+func checkConstraints(t *testing.T, db *gorm.DB, table string) map[string]string {
+	t.Helper()
+	var ddl string
+	require.NoError(t, db.Raw(`SELECT sql FROM sqlite_master WHERE type='table' AND name = ?`, table).Scan(&ddl).Error)
+	out := map[string]string{}
+	for rest := ddl; ; {
+		i := strings.Index(rest, "CONSTRAINT ")
+		if i < 0 {
+			return out
+		}
+		rest = rest[i+len("CONSTRAINT "):]
+		name := strings.Trim(rest[:strings.IndexAny(rest, " \t\n")], "`\"")
+		k := strings.Index(rest, "CHECK")
+		if k < 0 || k > 80 {
+			continue
+		}
+		open := strings.Index(rest[k:], "(") + k
+		depth := 0
+		for j := open; j < len(rest); j++ {
+			switch rest[j] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					out[name] = strings.Join(strings.Fields(rest[open+1:j]), " ")
+					rest = rest[j:]
+					j = len(rest)
+				}
+			}
+		}
+	}
+}
+
 func indexNames(t *testing.T, db *gorm.DB, table string) []string {
 	t.Helper()
 	var names []string
@@ -67,10 +104,15 @@ func TestFleetOperationModelsMatchTheMigration(t *testing.T) {
 		got := tableShape(t, live, table)
 		require.NotEmpty(t, want, table)
 		require.Equal(t, want, got, table)
-		// The migration adds its partial indexes by hand, so only the ones both sides declare through
-		// tags are compared here; each side must have every tag-declared index the other has.
+		// The migration adds its partial indexes by hand, so the live models (which declare only
+		// tag indexes) must be a subset of what the migration built.
 		for _, name := range indexNames(t, live, table) {
 			require.Contains(t, indexNames(t, migrated, table), name, table)
+		}
+		// And the CHECK constraints must be the same, expression for expression.
+		require.Equal(t, checkConstraints(t, migrated, table), checkConstraints(t, live, table), table)
+		if table == "fleet_operations" || table == "fleet_operation_lines" {
+			require.NotEmpty(t, checkConstraints(t, migrated, table), "the comparison must not be vacuous: "+table)
 		}
 	}
 }
@@ -81,7 +123,7 @@ func TestFleetOperationModelsAreInTheTenantScopeAndAuditJournalAsDesigned(t *tes
 
 	op := &FleetOperation{Token: "t1", Kind: "config.set", Name: "n", Dispatch: "PLANNING", RequestDigest: "sha256:x",
 		Intent: "{}", TargetKind: "DEVICE_LIST", TargetCount: 1, MaxPostsPerSecond: 10, EffPostsPerSecond: 10,
-		SettleDeadlineS: 60, Initiator: "u", DriverProtocol: 1}
+		SettleDeadlineS: 60, Initiator: "u", DriverProtocol: int32(ledger.RequiredProtocol(ledger.ProtocolFeatures{}))}
 	require.NoError(t, db.WithContext(ctx).Create(op).Error)
 	require.Equal(t, "acme", op.TenantId, "the tenant is stamped from the context")
 
@@ -91,6 +133,7 @@ func TestFleetOperationModelsAreInTheTenantScopeAndAuditJournalAsDesigned(t *tes
 		return n
 	}
 	require.Equal(t, int64(1), audited("fleet_operations"), "the header is audited (negative control: the exemption is per model)")
+	require.Equal(t, int64(0), audited("fleet_operation_contracts"))
 
 	require.NoError(t, db.WithContext(ctx).Create(&FleetOperationRuntime{OperationId: int64(op.ID)}).Error)
 	require.NoError(t, db.WithContext(ctx).Create(&FleetOperationContract{OperationId: int64(op.ID), Version: 1, Digest: "d", Body: "{}",
@@ -98,7 +141,9 @@ func TestFleetOperationModelsAreInTheTenantScopeAndAuditJournalAsDesigned(t *tes
 	require.NoError(t, db.WithContext(ctx).Create(&FleetOperationLine{OperationId: int64(op.ID), Ordinal: 1, Posting: "PLANNED",
 		TargetId: sql.NullInt64{Int64: 5, Valid: true}}).Error)
 	require.NoError(t, db.WithContext(ctx).Create(&FleetOperationEvent{OperationId: int64(op.ID), At: time.Now(), Kind: "CREATE"}).Error)
-	for _, table := range []string{"fleet_operation_runtime", "fleet_operation_contracts", "fleet_operation_lines", "fleet_operation_events"} {
+	// The contract records who approved what, so it IS audited; the rest are not.
+	require.Equal(t, int64(1), audited("fleet_operation_contracts"), "the contract is audited")
+	for _, table := range []string{"fleet_operation_runtime", "fleet_operation_lines", "fleet_operation_events"} {
 		require.Zero(t, audited(table), "%s must stay out of the audit journal", table)
 	}
 

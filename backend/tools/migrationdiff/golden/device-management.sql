@@ -1839,7 +1839,7 @@ CREATE TABLE "device-management".fleet_operations (
  plan_digest character varying(71) DEFAULT ''::character varying NOT NULL,
  contract_version integer DEFAULT 1 NOT NULL,
  contract_digest character varying(71) DEFAULT ''::character varying NOT NULL,
- driver_protocol integer DEFAULT 1 NOT NULL,
+ driver_protocol integer NOT NULL,
  intent text NOT NULL,
  target_kind character varying(16) NOT NULL,
  target_count integer NOT NULL,

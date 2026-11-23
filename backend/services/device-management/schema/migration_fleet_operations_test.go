@@ -18,8 +18,13 @@ var fleetTables = []string{
 }
 
 const insertOperation = `INSERT INTO fleet_operations (tenant_id, token, kind, name, dispatch, request_digest, intent,
- target_kind, target_count, max_posts_per_second, eff_posts_per_second, settle_deadline_s, initiator %s)
- VALUES ('acme', '%s', 'config.set', 'n', '%s', 'sha256:x', '{}', 'DEVICE_LIST', 1, 10, 10, 60, 'u' %s)`
+ target_kind, target_count, max_posts_per_second, eff_posts_per_second, settle_deadline_s, initiator, driver_protocol %s)
+ VALUES ('acme', '%s', 'config.set', 'n', '%s', 'sha256:x', '{}', 'DEVICE_LIST', 1, 10, 10, 60, 'u', 1 %s)`
+
+// protocolInsert states the protocol itself, for the tests of the column.
+const protocolInsert = `INSERT INTO fleet_operations (tenant_id, token, kind, name, dispatch, request_digest, intent,
+ target_kind, target_count, max_posts_per_second, eff_posts_per_second, settle_deadline_s, initiator, driver_protocol)
+ VALUES ('acme', '%s', 'config.set', 'n', 'READY', 'sha256:x', '{}', 'DEVICE_LIST', 1, 10, 10, 60, 'u', %s)`
 
 func insertOp(db *gorm.DB, token, dispatch string) error {
 	return db.Exec(fmt.Sprintf(insertOperation, "", token, dispatch, "")).Error
@@ -83,17 +88,26 @@ func indexExists(t *testing.T, db *gorm.DB, name string) bool {
 	return n == 1
 }
 
-func TestFleetOperationsDriverProtocolDefaultsToOneAndRefusesLessThanOne(t *testing.T) {
+func TestFleetOperationsDriverProtocolIsStatedAndAtLeastOne(t *testing.T) {
 	db := sqlitetest.OpenMemory(t, nil)
 	require.NoError(t, NewFleetOperationsSchema().Migrate(db))
 	require.NoError(t, insertOp(db, "t1", "READY"))
 	var protocol int
 	require.NoError(t, db.Raw(`SELECT driver_protocol FROM fleet_operations WHERE token='t1'`).Scan(&protocol).Error)
 	require.Equal(t, 1, protocol)
-	// Negative controls: a higher protocol is fine, zero and below are not.
-	require.NoError(t, db.Exec(fmt.Sprintf(insertOperation, ", driver_protocol", "t2", "READY", ", 2")).Error)
-	require.Error(t, db.Exec(fmt.Sprintf(insertOperation, ", driver_protocol", "t3", "READY", ", 0")).Error)
-	require.Error(t, db.Exec(fmt.Sprintf(insertOperation, ", driver_protocol", "t4", "READY", ", -1")).Error)
+	// There is no default: an insert that does not state the protocol is refused, so a creator
+	// that forgets cannot silently produce a protocol-1 operation a later feature needed 2 for.
+	const noProtocol = `INSERT INTO fleet_operations (tenant_id, token, kind, name, dispatch, request_digest, intent,
+ target_kind, target_count, max_posts_per_second, eff_posts_per_second, settle_deadline_s, initiator)
+ VALUES ('acme', 'np', 'config.set', 'n', 'READY', 'sha256:x', '{}', 'DEVICE_LIST', 1, 10, 10, 60, 'u')`
+	require.Error(t, db.Exec(noProtocol).Error)
+	// Negative controls: any stated protocol of at least 1 is fine; zero and below are refused.
+	for i, p := range []string{"2", "7"} {
+		require.NoError(t, db.Exec(fmt.Sprintf(protocolInsert, fmt.Sprintf("p%d", i), p)).Error, p)
+	}
+	for i, p := range []string{"0", "-1"} {
+		require.Error(t, db.Exec(fmt.Sprintf(protocolInsert, fmt.Sprintf("bad%d", i), p)).Error, p)
+	}
 }
 
 func TestFleetOperationsVocabularyChecks(t *testing.T) {

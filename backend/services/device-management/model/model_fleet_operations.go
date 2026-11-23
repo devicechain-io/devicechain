@@ -17,10 +17,12 @@ import (
 // There is deliberately no foreign key anywhere (a journal must not block or cascade a device
 // delete) and the names are not part of any served schema.
 //
-// Audit: the operation header is audited like every other control-plane entity. The runtime row
-// (pacer, heartbeat, holds: written many times a minute), the contracts and the events (their own
-// append-only journals), and the lines (one write per device, with their own state machine) are
-// data-plane facts and opt out, as the configuration report history does.
+// Audit: the operation header AND the contracts (approver, authorities, step-up: who approved what)
+// are audited like every other control-plane entity. The runtime row (pacer, heartbeat, holds:
+// written many times a minute), the lines (one write per device, with their own state machine) and
+// the events opt out, as the configuration report history does. The events exemption is a
+// deliberate deviation from the slice spec: the events are themselves the append-only journal of
+// every control transition and verdict, so auditing them would record each fact twice.
 
 type FleetOperation struct {
 	ID        uint      `gorm:"primarykey"`
@@ -45,7 +47,7 @@ type FleetOperation struct {
 	// DriverProtocol is the lowest engine protocol that may drive this operation. Every
 	// driver claim, reconciler pass, deadline pass and retention pass filters on it, so a pod
 	// of an older release never works an operation a newer release defined.
-	DriverProtocol int32 `gorm:"not null;default:1;check:chk_fleet_operations_driver_protocol,driver_protocol >= 1"`
+	DriverProtocol int32 `gorm:"not null;check:chk_fleet_operations_driver_protocol,driver_protocol >= 1"`
 
 	Intent      string `gorm:"not null;type:text"`
 	TargetKind  string `gorm:"not null;size:16"`
@@ -188,9 +190,6 @@ func (FleetOperationEvent) TableName() string { return "fleet_operation_events" 
 
 // AuditExempt keeps the runtime row's heartbeat writes out of the operator audit stream.
 func (FleetOperationRuntime) AuditExempt() bool { return true }
-
-// AuditExempt: the contracts are their own append-only journal of approvals.
-func (FleetOperationContract) AuditExempt() bool { return true }
 
 // AuditExempt: one line is written per device, and its transitions are its own state machine.
 func (FleetOperationLine) AuditExempt() bool { return true }
