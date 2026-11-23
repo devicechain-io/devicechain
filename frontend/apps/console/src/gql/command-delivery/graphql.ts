@@ -273,6 +273,13 @@ export type CommandsQueryVariables = Exact<{
 
 export type CommandsQuery = { commands: { results: Array<{ id: string, token: string, deviceToken: string, batchToken: string | null, name: string, payload: string | null, status: string, queuedTime: string | null, sentTime: string | null, respondedTime: string | null, expiresAt: string | null, dispatchAfter: string | null, maintenanceWindowToken: string | null, responsePayload: string | null, error: string | null, outcome: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
+export type CommandByTokenQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type CommandByTokenQuery = { commandsByToken: Array<{ id: string, token: string, deviceToken: string, batchToken: string | null, name: string, payload: string | null, status: string, queuedTime: string | null, sentTime: string | null, respondedTime: string | null, expiresAt: string | null, dispatchAfter: string | null, maintenanceWindowToken: string | null, responsePayload: string | null, error: string | null, outcome: string | null }> };
+
 export type CreateCommandMutationVariables = Exact<{
   request: CommandCreateRequest;
 }>;
@@ -414,6 +421,28 @@ export const CommandsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CommandsQuery, CommandsQueryVariables>;
+export const CommandByTokenDocument = new TypedDocumentString(`
+    query CommandByToken($tokens: [String!]!) {
+  commandsByToken(tokens: $tokens) {
+    id
+    token
+    deviceToken
+    batchToken
+    name
+    payload
+    status
+    queuedTime
+    sentTime
+    respondedTime
+    expiresAt
+    dispatchAfter
+    maintenanceWindowToken
+    responsePayload
+    error
+    outcome
+  }
+}
+    `) as unknown as TypedDocumentString<CommandByTokenQuery, CommandByTokenQueryVariables>;
 export const CreateCommandDocument = new TypedDocumentString(`
     mutation CreateCommand($request: CommandCreateRequest!) {
   createCommand(request: $request) {

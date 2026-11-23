@@ -40,3 +40,17 @@ func TestAiDraftChainNests(t *testing.T) {
 			AiInferenceDefaultCallTimeout, AiInferenceMaxCallTimeout)
 	}
 }
+
+// A preview's client must outwait the server's budget (so the server's own truncated answer
+// reaches the caller) yet still end inside the request edge (so no gateway answers first).
+func TestPreviewClientOutwaitsTheServerBudget(t *testing.T) {
+	if !(PreviewBudget < PreviewClientHeaderTimeout) {
+		t.Fatalf("preview header timeout %v must outwait the server budget %v", PreviewClientHeaderTimeout, PreviewBudget)
+	}
+	if !(PreviewClientHeaderTimeout < RequestEdgeTimeout) {
+		t.Fatalf("preview header timeout %v must end inside the request edge %v", PreviewClientHeaderTimeout, RequestEdgeTimeout)
+	}
+	if !(PreviewClientHeaderTimeout < PreviewClientTimeout) {
+		t.Fatalf("preview call timeout %v must exceed its header timeout %v", PreviewClientTimeout, PreviewClientHeaderTimeout)
+	}
+}

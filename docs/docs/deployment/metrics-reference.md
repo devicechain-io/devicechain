@@ -207,6 +207,19 @@ defect to investigate, not load. `react_actions_not_enabled_total` should never 
 | `react_events_poison_dropped_total` | Derived events dropped after the redelivery cap, because their dispatch kept failing. They are also written to the dead-letter stream, so this counts the same events as `react_events_dead_lettered_total`; it is kept because the `ReactPoisonDropping` alert fires on it. |
 | `react_workers` | How many derived events REACT may dispatch at once (`react.workers`). Events of one device are dispatched one after another, in stream order, except that an event left for redelivery is dispatched again after the events behind it. |
 
+## Device state {#device-state}
+
+Prefix: `devicechain_devicestate_`.
+
+Every ten minutes one replica at a time sweeps each tenant's last-known-state rows against device-management and corrects the ones that no longer match a device.
+
+| Metric | Means |
+| --- | --- |
+| `orphan_sweep_deleted_total` | Counter. Device state rows the sweep removed, because their device no longer exists or was recreated under the same token. A burst right after devices are purged or deleted is expected, and a steady non-zero rate while you are deleting devices is normal. A rate that keeps climbing when no device has been deleted is a fault: something is removing devices without telling device-state. Look at the sweep's log lines (`Orphan sweep reconciled device states`) for the counts per pass. |
+| `orphan_sweep_stamped_total` | Counter. Device state rows the sweep stamped with the incarnation of the device they belong to, so a later device recreated under the same token is recognised as a different one. Each row is stamped once, so a burst on the first passes after an upgrade, while rows written before the incarnation was recorded catch up, is expected and then falls to zero. A rate that does not settle is worth a look. |
+
+A pass that cannot reach device-management skips that tenant's remaining pages and is retried at the next pass; it is not counted in either metric. The pass itself shows in the `orphan_sweep` series described under [maintenance passes](./observability.md#maintenance-passes).
+
 ## Event management {#event-management}
 
 Prefix: `devicechain_eventmanagement_`.

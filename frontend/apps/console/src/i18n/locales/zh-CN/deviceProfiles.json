@@ -91,6 +91,7 @@
   "defParamSchemaHint": "可选的参数 JSON 数组，每项形如 { \"name\", \"dataType\", … }。无参数命令请留空。",
   "defParamSchemaLabel": "参数模式",
   "defParamSchemaPlaceholder": "[{\"name\":\"level\",\"dataType\":\"INT\",\"required\":true}]",
+  "defStringMetricHint": "文本读数，例如模式或状态。它没有单位、范围或公式，也不会被求平均或按数字绘图。",
   "defTokenLockedHint": "标识符，不可更改。",
   "defUnitHint": "UCUM，例如 Cel",
   "defUnitPlaceholder": "Cel",
