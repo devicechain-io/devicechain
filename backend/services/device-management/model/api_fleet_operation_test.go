@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
@@ -358,4 +359,93 @@ func TestAdmissionLineBudgetCountsPlannedLines(t *testing.T) {
 	require.NoError(t, db.Where("operation_id = ? AND ordinal <= 2", filler.ID).Delete(&FleetOperationLine{}).Error)
 	_, err = api.CreateFleetOperation(ctx, setReq("t", "d1"), "alice")
 	require.NoError(t, err)
+}
+
+func TestPlanRefusesALaterTokenThatNamesTheSameDevice(t *testing.T) {
+	// Tokens are unique per tenant, so this cannot come from the database today; the planner still
+	// dedupes on the resolved id, so the unique index on (operation, device) is never what answers.
+	n, err := normalizeFleetRequest(setReq("t", "a", "b", "c"))
+	require.NoError(t, err)
+	plan, err := buildFleetPlan(n, map[string]uint{"a": 1, "b": 1, "c": 2})
+	require.NoError(t, err)
+	require.Equal(t, 2, plan.Admitted)
+	require.Equal(t, map[string]int{FleetLineDuplicateTarget: 1}, plan.RefusalCounts)
+	require.Nil(t, plan.Lines[1].TargetId)
+	require.Equal(t, FleetLineDuplicateTarget, plan.Lines[1].Code)
+	require.NotNil(t, plan.Lines[0].TargetId, "the first occurrence is the one admitted")
+	// Negative control: distinct devices are all admitted.
+	clean, err := buildFleetPlan(n, map[string]uint{"a": 1, "b": 3, "c": 2})
+	require.NoError(t, err)
+	require.Equal(t, 3, clean.Admitted)
+	require.Empty(t, clean.RefusalCounts)
+}
+
+func TestPlanDigestSeparatesRefusalReasons(t *testing.T) {
+	n, err := normalizeFleetRequest(setReq("t", "a", "b"))
+	require.NoError(t, err)
+	// In both plans the second line has no device; only the reason differs.
+	notFound, err := buildFleetPlan(n, map[string]uint{"a": 1})
+	require.NoError(t, err)
+	duplicate, err := buildFleetPlan(n, map[string]uint{"a": 1, "b": 1})
+	require.NoError(t, err)
+	require.NotEqual(t, notFound.PlanDigest, duplicate.PlanDigest)
+	require.NotEqual(t, notFound.ContractDigest, duplicate.ContractDigest)
+}
+
+func TestReplayIsNotRefusedByAnExhaustedBudget(t *testing.T) {
+	openTheEngine(t)
+	api, ctx := fleetFixture(t, 2)
+	var first *FleetOperation
+	for i := 0; i < ledger.TenantCreatesPerHour; i++ {
+		op, err := api.CreateFleetOperation(ctx, setReq(fmt.Sprintf("b%d", i), "d1"), "alice")
+		require.NoError(t, err)
+		if i == 0 {
+			first = op
+		}
+	}
+	// A new operation is over budget; a replay of an existing one is not a new operation.
+	_, err := api.CreateFleetOperation(ctx, setReq("new", "d1"), "alice")
+	requireFleetCode(t, err, FleetCodeQuotaExceeded)
+	again, err := api.CreateFleetOperation(ctx, setReq("b0", "d1"), "alice")
+	require.NoError(t, err)
+	require.Equal(t, first.ID, again.ID)
+}
+
+func TestEachCreateBudgetRefusesOnItsOwn(t *testing.T) {
+	openTheEngine(t)
+	fill := func(api *Api, ctx context.Context) {
+		for i := 0; i < ledger.TenantCreatesPerHour; i++ {
+			_, err := api.CreateFleetOperation(ctx, setReq(fmt.Sprintf("f%d", i), "d1"), "alice")
+			require.NoError(t, err)
+		}
+	}
+	quota := func(err error) string {
+		var fe *FleetOperationError
+		require.True(t, errors.As(err, &fe), "%v", err)
+		require.Equal(t, FleetCodeQuotaExceeded, fe.Code)
+		return fe.Quota
+	}
+	t.Run("operations waiting to start", func(t *testing.T) {
+		api, ctx := fleetFixture(t, 1)
+		fill(api, ctx)
+		// Age them out of the hourly window: only the waiting-operations budget can refuse now.
+		require.NoError(t, api.RDB.DB(ctx).Model(&FleetOperation{}).Where("1 = 1").Update("created_at", time.Now().Add(-2*time.Hour)).Error)
+		_, err := api.CreateFleetOperation(ctx, setReq("next", "d1"), "alice")
+		require.Equal(t, "tenant.unstartedOperations", quota(err))
+	})
+	t.Run("creates per hour", func(t *testing.T) {
+		api, ctx := fleetFixture(t, 1)
+		fill(api, ctx)
+		// Nothing is waiting to start any more: only the hourly rate can refuse now.
+		require.NoError(t, api.RDB.DB(ctx).Model(&FleetOperation{}).Where("1 = 1").Update("dispatch", "ABORTED").Error)
+		_, err := api.CreateFleetOperation(ctx, setReq("next", "d1"), "alice")
+		require.Equal(t, "tenant.createsPerHour", quota(err))
+	})
+	t.Run("negative control: neither budget full", func(t *testing.T) {
+		api, ctx := fleetFixture(t, 1)
+		fill(api, ctx)
+		require.NoError(t, api.RDB.DB(ctx).Model(&FleetOperation{}).Where("1 = 1").Updates(map[string]any{"dispatch": "ABORTED", "created_at": time.Now().Add(-2 * time.Hour)}).Error)
+		_, err := api.CreateFleetOperation(ctx, setReq("next", "d1"), "alice")
+		require.NoError(t, err)
+	})
 }

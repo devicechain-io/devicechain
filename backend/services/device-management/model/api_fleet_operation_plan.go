@@ -277,6 +277,12 @@ func (api *Api) planNormalized(ctx context.Context, n *fleetNormalized) (*FleetP
 		}
 	}
 
+	return buildFleetPlan(n, ids)
+}
+
+// buildFleetPlan turns the resolved tokens into lines and digests. It is pure: ids maps a token to
+// the device it names, and a token missing from the map names none in this tenant.
+func buildFleetPlan(n *fleetNormalized, ids map[string]uint) (*FleetPlan, error) {
 	plan := &FleetPlan{Kind: n.kind, Intent: n.intentJSON, Safety: n.safety, RefusalCounts: map[string]int{}}
 	taken := make(map[uint]struct{}, len(ids))
 	digestLines := make([]ledger.PlanLine, 0, len(n.tokens))
