@@ -23,7 +23,7 @@ export type DeviceStateSearchCriteria = {
  * profile to store it.
  */
 export type DroppedMeasurementReason =
-  /** The key is declared on the profile with a data type that is not a time-series metric. */
+  /** The key is declared on the profile, but its value cannot be stored: a data type no reading can be stored as, or a STRING value over 4096 bytes, not valid UTF-8 or holding a NUL byte. */
   | 'DECLARED_NOT_STORABLE'
   /** The key is not declared on the profile and its value is not a number, for example the text "ok". */
   | 'UNDECLARED_NON_NUMERIC'
