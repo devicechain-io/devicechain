@@ -159,3 +159,10 @@ func TestAnInventoryWithoutARunningVersionRecordsNothing(t *testing.T) {
 	e.mustApply(t, "acme", "dev-1", ota.Report{V: 1, Kind: ota.KindInventory, Component: "firmware", BootID: "b", Running: &ota.Running{Version: ""}}, VerdictUnknownAssignment)
 	require.Empty(t, installed(t, e, "acme", "dev-1"), "an empty version is not an observation")
 }
+
+func TestAnObservationNeedsTheDevicesIncarnation(t *testing.T) {
+	e := newUpdateEnv(t)
+	err := e.api.recordInstalled(tenantCtx("acme"), "dev-1", 0, "firmware", "1.0.0", "", e.clock, InstalledSourceInventory)
+	require.Error(t, err, "an incarnation of zero would let a replaced device inherit the old one's versions")
+	require.Empty(t, installed(t, e, "acme", "dev-1"))
+}
