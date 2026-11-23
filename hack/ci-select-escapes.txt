@@ -190,6 +190,7 @@ backend/tools/apiprobe/readsweep_test.go
 backend/tools/apiprobe/signer_baseline_test.go
 backend/tools/apiprobe/sso_receipt_test.go
 backend/tools/apiprobe/sso_test.go
+backend/tools/apiprobe/stringmetric_test.go
 backend/tools/apiprobe/tablesweep_test.go
 backend/tools/apiprobe/tenant_admin_rows_test.go
 backend/tools/docsgql/apicompat/export/export.go
