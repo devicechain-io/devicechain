@@ -126,7 +126,7 @@ func TestRolloutPendingDeletionCannotTargetReplacementOnPostgres(t *testing.T) {
 
 // replica is one service replica: its own Api over the shared database.
 func (e *pgRollouts) replica() *Api {
-	a := NewApi(e.mgr, e.store, Limits{MaxArtifactBytes: 1 << 20, ConfiguredMaxArtifactBytes: 1 << 20, MaxTenantArtifactBytes: 1 << 30})
+	a := NewApi(e.mgr, e.store, Limits{MaxArtifactBytes: 1 << 20, MaxTenantArtifactBytes: 1 << 30})
 	a.Devices, a.Groups, a.Desired = e.devices, e.groups, e.desired
 	a.Incarnations = e.devices
 	a.Policy, a.AllowUnverified = testPolicy, true
