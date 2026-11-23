@@ -45,7 +45,7 @@ export type LatestMeasurementsQueryVariables = Exact<{
 }>;
 
 
-export type LatestMeasurementsQuery = { latestMeasurements: Array<{ id: string, name: string, value: number | null, occurredTime: string }> };
+export type LatestMeasurementsQuery = { latestMeasurements: Array<{ id: string, name: string, value: number | null, textValue: string | null, occurredTime: string }> };
 
 export type DroppedMeasurementsQueryVariables = Exact<{
   deviceToken: string;
@@ -108,6 +108,7 @@ export const LatestMeasurementsDocument = new TypedDocumentString(`
     id
     name
     value
+    textValue
     occurredTime
   }
 }

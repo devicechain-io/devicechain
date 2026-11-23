@@ -209,6 +209,11 @@ func (r *LatestMeasurementResolver) Name() string {
 	return r.M.Name
 }
 
+// TextValue is a STRING reading's value; null for a numeric one.
+func (r *LatestMeasurementResolver) TextValue() *string {
+	return r.M.TextValue
+}
+
 func (r *LatestMeasurementResolver) Value() *float64 {
 	if r.M.Value.Valid {
 		return &r.M.Value.Float64
