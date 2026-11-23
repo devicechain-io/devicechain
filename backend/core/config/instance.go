@@ -664,6 +664,22 @@ const (
 	AiInferenceCallerTimeout = AiInferenceMaxCallTimeout + AiInferencePreCallBound + 10*time.Second
 )
 
+// The timeout pair on a replay preview (previewRule), defined here so the server's budget and
+// the client's patience cannot drift apart: the server answers within PreviewBudget, with a
+// typed truncated result when the replay runs out, so a caller that gives up before that
+// replaces the answer with its own transport error. A client that reads the answer over the
+// service-to-service transport (30s response-header timeout) must give this one call more
+// headroom, but still end inside the request edge so a gateway never answers first.
+const (
+	// PreviewBudget is the most time one preview replay is given.
+	PreviewBudget = 45 * time.Second
+	// PreviewClientHeaderTimeout is how long a client waits for a preview's response headers:
+	// above PreviewBudget, below RequestEdgeTimeout.
+	PreviewClientHeaderTimeout = PreviewBudget + 10*time.Second
+	// PreviewClientTimeout bounds the whole preview call, body included.
+	PreviewClientTimeout = PreviewClientHeaderTimeout + 10*time.Second
+)
+
 // ServiceAuthConfiguration carries the shared secret backing the synchronous
 // cross-service call primitive (ADR-044 amendment). A caller presents Secret to
 // user-management's mint endpoint to obtain a short-lived service token; the mint
