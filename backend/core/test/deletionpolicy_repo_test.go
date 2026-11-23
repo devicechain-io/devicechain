@@ -73,6 +73,8 @@ var repositoryDeletionPolicies = map[string]deletionPolicy{
 		deletionTerminate, "The deletion outbox publishes a CLEARED alarm event (clear_reason ORIGINATOR_DELETED) for each active alarm, which ends the lifecycle; the escalation backstop and the orphan sweep end states whose alarm device-management no longer has. A failed lookup pages anyway (deliberate fail-open), so this row may page once more before it ends."},
 	"backend/services/outbound-connectors/lpwan/pending.go:LpwanPendingAck": {
 		deletionBounded, "No entity-deletion consumer; LPWAN report settlement or the deadline sweep claims and deletes pending acknowledgements at DeadlineAt. Responses carry command token and dispatch nonce."},
+	"backend/services/update-management/model/api_installed_components.go:DeviceInstalledComponent": {
+		deletionPurge, "DeviceDeleted (entity-deleted consumer) calls forgetInstalled, hard-deleting the device's rows for every incarnation up to the deleted one; a row recorded late for a deleted incarnation is never read (queries use the current incarnation) and the tenant purge erases it."},
 	"backend/services/update-management/model/model_rollouts.go:UpdateRolloutTarget": {
 		deletionTerminate, "DeviceDeleted (entity-deleted consumer) marks the dispatched targets of the deleted device's ended assignments CANCELLED."},
 	"backend/services/update-management/model/model_updates.go:UpdateAssignment": {
