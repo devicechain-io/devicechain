@@ -18,7 +18,7 @@ it('loads Chinese widget prose through the real lazy catalog and sets the langua
   expect(i18n.t('dashboards:timeRangeAbsProblemOrder')).toBe('开始时间必须早于结束时间。');
   expect(i18n.t('dashboards:widgetDerivedFromParentWithSlot', { slotName: 'pump-3' }))
     .toContain('<mono>pump-3</mono>');
-  expect(i18n.t('common:back')).toBe('Back'); // Unrelated namespaces retain their English fallback.
+  expect(i18n.t('common:back')).toBe('返回'); // common is translated too
 });
 
 it('preserves every interpolation and markup token in the Chinese dashboard catalog', () => {

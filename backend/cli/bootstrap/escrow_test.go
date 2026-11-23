@@ -1339,10 +1339,16 @@ func TestAPartialArtifactDoesNotBlockItsOwnReplacement(t *testing.T) {
 
 	err := WriteEscrow(EscrowPlan{Path: path, Passphrase: "pw"}, testRootKey, "prod", time.Now().UTC())
 	if err == nil {
-		t.Skip("an empty stub is now overwritten outright, which also resolves this")
+		// Overwriting the stub would also end the trap, but only if what replaced it is a real
+		// artifact. This branch used to SKIP, so a change that started accepting stubs would have
+		// turned this test into a skip instead of checking the file it wrote.
+		if verr := verifyWrittenArtifact(path, "pw", testRootKey); verr != nil {
+			t.Fatalf("the stub was replaced by something that does not open with its passphrase: %v", verr)
+		}
+		return
 	}
-	// It still refuses — but it must describe what is actually there, and tell the
-	// operator how to get out of it.
+	// It refuses today: it must describe what is actually there, and tell the operator how
+	// to get out of it.
 	if strings.Contains(err.Error(), "only copy") {
 		t.Errorf("the refusal calls an unreadable stub the only copy of a root key:\n%v", err)
 	}

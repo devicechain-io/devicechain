@@ -246,7 +246,8 @@ mutation {
 
 部分更新缩小了并发冲突，但没有消除冲突。
 修改不同字段的两个写入者不再相互覆盖，修改同一字段仍会覆盖。
-`updateDashboard`、`updateConnector`、`updateAiProvider` 和 `updateNotificationPolicy`
+`updateDashboard`、`updateConnector`、`updateAiProvider`、`updateNotificationPolicy`、`updateArea`、
+`updateAsset`、`updateCustomer` 和 `updateEntityGroup`
 接受可选的 `expectedUpdatedAt`；存储时间戳在读取后发生变化时会拒绝写入。
 传入最近读取的 `updatedAt`，或省略以采用最后写入者获胜的语义。
 不要直接发送 `create*` 响应中的 `updatedAt`：先重新读取记录，否则即使没有其他修改，第一次受保护更新也可能被判定过时。
@@ -590,6 +591,8 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 - 用已有 token 创建命令不会拒绝，而是返回原命令。参见[发送命令](../guides/sending-commands.md#issue-it)。
 - 删除仍被其他记录引用的记录会携带 `REFERENCE_VIOLATION`。参见[引用或值被拒绝](#reference-and-invalid-values)。
 
+对设备属性的写入如果发现其中某个属性被另一次写入占用，并且在五次短暂重试后仍然如此，会被拒绝，并将 `errors[*].extensions.code` 设为 `ATTRIBUTE_WRITE_BUSY`。它可能来自 `setEntityAttribute`、`deleteEntityAttribute`、`restoreDeviceConfiguration` 和 `copyDeviceConfiguration`。此时没有写入任何内容，可以安全地重试该请求。在升级滚动进行期间最可能出现这种情况，因为尚未升级的 pod 可能正在写入同一个属性。
+
 如果更新的前置条件（例如 `expectedUpdatedAt`）与记录不再一致（即在你读取之后有人修改了它），该更新会被拒绝，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。所有服务都以这种方式响应过时写入：连接器、仪表盘、AI 提供方、通知策略、客户类型、实体组、角色和告警均是如此。不会写入任何内容，消息与引入该代码之前相同：`<记录> was modified by another writer; reload and try again`，例如 `dashboard was modified by another writer; reload and try again`。`CONFLICT` 仍表示唯一值冲突，从不用于过时写入。请根据代码而非消息文本分类；`@devicechain/client` 中的 `isStaleWrite(err)` 会这样做，并在较旧的服务器上回退为匹配消息。控制台在所有带前置条件的保存中都会识别该代码。
 
 ### 引用或值被拒绝 {#reference-and-invalid-values}
@@ -708,7 +711,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 | `ESCALATION` | 该更改会授予你自己并不拥有的权限：你定义或分配的角色只能包含你拥有的权限，租户角色只能包含租户级权限，并且你不能更改拥有你所没有的权限的成员。 |
 | `SELF_MODIFICATION` | 该更改针对你自己的成员关系。任何人都不能通过此 API 更改自己的角色、范围或状态，也不能移除自己。 |
 | `LAST_ADMIN` | 该更改会使租户中不再有任何已启用、可查看整个租户且能管理成员的成员。 |
-| `MANAGED_BY_IDP` | 该成员关系由租户的身份提供方管理，只能在那里更改。 |
+| `MANAGED_BY_IDP` | 该成员关系由租户的身份提供商管理，只能在那里更改。 |
 | `READ_ONLY` | 该角色属于实例运营者。它可以在你的租户中分配，但你的租户不能更改它。 |
 | `INVALID_INVITATION` | 该邀请码无法使用。所有原因（未知、已过期、已撤销、已使用，或由非受邀者提交）都使用同一个代码，因此无法据此探测具体原因。 |
 
@@ -996,3 +999,21 @@ DeviceChain 提供的每个客户端每次请求只发送一次登录，所以�
 Schema 稳定后，将根据它们生成详细的逐类型参考页面。
 
 `SECRET_RESUPPLY_REQUIRED` 表示更新会改变已存储凭据的目标或发送方式。使用 `updateConnector`、`updateNotificationChannel` 或 `updateAiProvider` 时，请在同一请求中重新发送 `secret`，或使用 `secret: null` 删除凭据。若连接器回滚的目标不同，请改用 `updateConnector` 并提供目标配置和凭据。
+
+## 设备群操作就绪检查（Preview） {#fleet-operation-readiness}
+
+Preview. device-management 租户数据平面提供 `fleetOperationReadiness` 查询，需要
+`fleet:operate` 权限；具有受限范围的成员无法使用。查询返回构建遵循的写入协议版本、
+数据库当前的强制执行状态、可执行的操作类型，以及调用者租户中设备属性和代际孤立行的
+实时计数（包括软删除属性）。在 v1.9 中，状态为 `NOT_INSTALLED`，且没有可执行类型；
+这是安装强制执行机制的版本发布之前的预期结果。目录读取失败时返回 `UNREADABLE`，
+并保留其余信息。只有启用 `ALWAYS` 的触发器才算 `ENFORCED`；普通启用、仅副本启用和
+禁用状态均返回 `DISABLED`。缺少或不匹配的强制执行机制返回 `NOT_INSTALLED`。
+该查询会统计行数，因此应将其视为需要答案时才运行的诊断，而不是用于轮询。预览期限从 v1.9 开始。
+
+Preview 命令显示相同的四项信息，仅在状态为 `ENFORCED` 且孤立行数为零时成功退出。
+v1.9 中非零退出码是预期行为。登录及实例选项与 `dcctl attr` 相同：
+
+```bash
+dcctl fleet-op readiness --tenant acme --email ops@example.com --password <password> -o json
+```

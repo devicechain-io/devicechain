@@ -138,6 +138,7 @@ const sidebars: SidebarsConfig = {
         'user-guide/dashboards',
         'user-guide/viewing-dashboards-in-dash',
         'user-guide/alarms',
+        'user-guide/ingest-failures',
         'user-guide/notification-policies',
         // Devices
         'user-guide/devices',
@@ -189,6 +190,7 @@ const sidebars: SidebarsConfig = {
             'guides/device-self-registration',
             'guides/importing-devices',
             'guides/migrating-from-another-platform',
+            'guides/product-as-code',
             'guides/inbound-integrations',
             'guides/chirpstack-uplinks',
             'guides/the-things-stack-uplinks',

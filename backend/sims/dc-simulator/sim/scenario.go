@@ -61,6 +61,7 @@ type ScenarioBeat struct {
 // 🔴 THE JSON TAGS ARE THE CONTRACT with cmd/scenario-verify, which maps a beat's sim time to wall
 // time as StartedAt + ((Day*24 + hour) - StartHour) / 24 * DayLength.
 type ScenarioClock struct {
+	S6   *ScenarioS6 `json:"s6,omitempty"`
 	S5   *ScenarioS5 `json:"s5,omitempty"`
 	Name string      `json:"name"`
 	// Started is false until the first tick, which is the instant the day is measured from.

@@ -32,6 +32,10 @@ it gracefully.
 --play-devices (sitepulse only) makes the simulator play the device plane itself, the
 scene's machine model driving the scene's fleet tracks, instead of a Unity player. Do not
 run a player against the same sim while it is on.`,
+	Example: `  dcctl sim run demo
+  dcctl sim run harbor --day-length 48m
+  dcctl sim run site --play-devices --publish-log ./published.ndjson
+  dcctl sim run demo --emit-interval 3s --simulator ./bin/dc-simulator`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runSim,
 	SilenceUsage: true,

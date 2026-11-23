@@ -57,6 +57,7 @@ const ASSETS = graphql(`
         metadata
         properties
         createdAt
+        updatedAt
         assetType {
           id
           token
@@ -99,6 +100,7 @@ const ASSET_BY_TOKEN = graphql(`
       metadata
       properties
       createdAt
+      updatedAt
       assetType {
         id
         token
@@ -127,6 +129,7 @@ const CREATE_ASSET = graphql(`
       metadata
       properties
       createdAt
+      updatedAt
       assetType {
         id
         token
@@ -146,8 +149,8 @@ export async function createAsset(request: AssetCreateRequest): Promise<Asset> {
 }
 
 const UPDATE_ASSET = graphql(`
-  mutation UpdateAsset($token: String!, $request: AssetUpdateRequest!) {
-    updateAsset(token: $token, request: $request) {
+  mutation UpdateAsset($token: String!, $request: AssetUpdateRequest!, $expectedUpdatedAt: String) {
+    updateAsset(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {
       id
       token
       name
@@ -155,6 +158,7 @@ const UPDATE_ASSET = graphql(`
       metadata
       properties
       createdAt
+      updatedAt
       assetType {
         id
         token
@@ -176,11 +180,19 @@ const UPDATE_ASSET = graphql(`
 // WRONG one now: a form that re-sends fields it never showed is writing them back
 // from a snapshot it read minutes ago, so two operators on two tabs each silently
 // overwrite the other. Absence is the carry-forward.
+// expectedUpdatedAt is an optimistic-concurrency precondition: pass the updatedAt the
+// caller loaded and the update is refused (STALE_WRITE) if another writer changed it since.
+// Omitted (undefined or null), the update is last-write-wins, as before.
 export async function updateAsset(
   token: string,
   request: AssetUpdateRequest,
+  expectedUpdatedAt?: string | null,
 ): Promise<Asset> {
-  const data = await gql('device-management', UPDATE_ASSET, { token, request });
+  const data = await gql('device-management', UPDATE_ASSET, {
+    token,
+    request,
+    expectedUpdatedAt: expectedUpdatedAt ?? null,
+  });
   return data.updateAsset;
 }
 
@@ -339,8 +351,11 @@ export const listAssetGroups = (opts: { pageNumber: number; pageSize: number }) 
 export const getAssetGroup = (token: string) => getEntityGroupOfType(token, 'asset');
 export const createAssetGroup = (request: GroupFormRequest) =>
   createEntityGroup({ ...request, memberType: 'asset' });
-export const updateAssetGroup = (token: string, request: EntityGroupUpdateRequest) =>
-  updateEntityGroup(token, request);
+export const updateAssetGroup = (
+  token: string,
+  request: EntityGroupUpdateRequest,
+  expectedUpdatedAt?: string | null,
+) => updateEntityGroup(token, request, expectedUpdatedAt);
 export const deleteAssetGroup = deleteEntityGroup;
 
 // ── Asset hierarchy (parent/child over the relationship graph) ──────────────

@@ -143,7 +143,7 @@ export type RuleHealthQueryVariables = Exact<{
 }>;
 
 
-export type RuleHealthQuery = { ruleHealth: Array<{ ruleId: string, ruleToken: string, name: string, status: RuleStatus, lastFiredAt: string | null, fireCount: number, lastSignal: string | null, message: string | null }> };
+export type RuleHealthQuery = { ruleHealth: Array<{ ruleId: string, ruleToken: string, name: string, status: RuleStatus, lastFiredAt: string | null, fireCount: number, lastSignal: string | null, message: string | null, historyRemovedAt: string | null }> };
 
 export type DetectionStreamSubscriptionVariables = Exact<{
   profileToken: string;
@@ -274,6 +274,7 @@ export const RuleHealthDocument = new TypedDocumentString(`
     fireCount
     lastSignal
     message
+    historyRemovedAt
   }
 }
     `) as unknown as TypedDocumentString<RuleHealthQuery, RuleHealthQueryVariables>;

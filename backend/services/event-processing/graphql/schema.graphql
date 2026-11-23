@@ -851,6 +851,16 @@ type RuleHealth {
     """Why the rule does not compile when status is COMPILE_ERROR; null otherwise."""
     # A human-readable diagnostic when status is COMPILE_ERROR, else null.
     message: String
+    """
+    When the rule's firing history was removed, as an RFC 3339 timestamp; null if it never was.
+    The history of a superseded profile version is removed once its rules have stopped firing.
+    When a rollback makes that version active again, this is set, and lastFiredAt, lastSignal
+    and fireCount cover only the fires since this time: a fireCount of 0 then means no fire
+    since, not that the rule never fired.
+    """
+    # Set when the stranded rule-stat sweep removed this version's history (see
+    # model.RuleStatSweepRecord); the firing fields then count only from this time.
+    historyRemovedAt: String
 }
 
 type Subscription {

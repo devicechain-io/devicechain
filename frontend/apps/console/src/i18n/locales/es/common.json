@@ -129,6 +129,7 @@
   "updateState_UNKNOWN": "Desconocida",
   "signerState_ACTIVE": "Activo",
   "signerState_REVOKED": "Revocado",
+  "staleWrite": "Este elemento cambió desde que lo abriste. Copia tus cambios sin guardar, recárgalo, vuelve a aplicarlos y guarda de nuevo.",
   "artifactKind_FIRMWARE": "Firmware",
   "artifactKind_SOFTWARE": "Software",
   "artifactKind_CONFIGURATION": "Configuración",

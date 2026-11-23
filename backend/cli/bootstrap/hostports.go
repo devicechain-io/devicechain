@@ -4,9 +4,12 @@
 package bootstrap
 
 import (
+	"context"
 	"os/exec"
 	"strconv"
 	"strings"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Container ports a kind cluster built from the embedded topology publishes on the
@@ -17,6 +20,59 @@ const (
 	KindIngressHTTPSPort = 443
 	KindMQTTNodePort     = localMQTTNodePort
 )
+
+// MQTTNodePortNone is what an instance record holds for a local instance that was given NO MQTT
+// node port (every port the cluster publishes was another instance's). Recorded explicitly, so it
+// is told apart from a record that predates the field.
+const MQTTNodePortNone = -1
+
+// ResolveInstanceMQTTNodePort is the node port a local instance's MQTT gateway is exposed on, or 0
+// when it has none (its broker is reachable in-cluster only).
+//
+//   - a recorded port of the set is the answer, and a recorded "none" (MQTTNodePortNone) is 0;
+//   - a record that predates the field (or none at all) is settled by the instance's own Services:
+//     the one of localMQTTNodePorts it holds, and 0 when it holds none, which is how an instance
+//     built before there were more ports, second on its cluster, is told apart from the first;
+//   - only when the cluster cannot be read does it fall back to KindMQTTNodePort, the port every
+//     local instance that had one had before.
+func ResolveInstanceMQTTNodePort(ctx context.Context, kubeContext, instance string) int {
+	if rec, err := ReadInstanceRecord(instance); err == nil {
+		if rec.MQTTNodePort == MQTTNodePortNone {
+			return 0
+		}
+		for _, p := range localMQTTNodePorts {
+			if int(p) == rec.MQTTNodePort {
+				return int(p)
+			}
+		}
+	}
+	own, err := instanceOwnMQTTNodePort(ctx, kubeContext, instance)
+	if err != nil {
+		return KindMQTTNodePort
+	}
+	return int(own)
+}
+
+// instanceOwnMQTTNodePort is the one of localMQTTNodePorts a Service in the instance's own namespace
+// holds, or 0. A variable so a test can answer without a cluster.
+var instanceOwnMQTTNodePort = func(ctx context.Context, kubeContext, instance string) (int32, error) {
+	_, _, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return 0, err
+	}
+	svcs, err := typed.CoreV1().Services(InstanceNamespace(instance)).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return 0, err
+	}
+	for _, s := range svcs.Items {
+		for _, p := range s.Spec.Ports {
+			if isLocalMQTTNodePort(p.NodePort) {
+				return p.NodePort, nil
+			}
+		}
+	}
+	return 0, nil
+}
 
 // dockerPortOutput is the one window onto `docker port`, a variable so a test can
 // present any published-port table without a Docker daemon.
@@ -39,6 +95,36 @@ func KindPublishedHostPort(kubeContext string, containerPort int) (int, bool) {
 		return 0, false
 	}
 	return parseDockerPort(out, containerPort)
+}
+
+// KindPublishedHostPorts reads every container-port to host-port mapping the kind cluster behind
+// kubeContext publishes, from ONE `docker port` call. ok is false when it cannot be read.
+func KindPublishedHostPorts(kubeContext string) (map[int]int, bool) {
+	cluster := clusterNameFromKindContext(kubeContext)
+	if cluster == "" {
+		return nil, false
+	}
+	out, err := dockerPortOutput(cluster + "-control-plane")
+	if err != nil {
+		return nil, false
+	}
+	m := map[int]int{}
+	for _, line := range strings.Split(out, "\n") {
+		left, _, found := strings.Cut(line, "->")
+		if !found {
+			continue
+		}
+		cp, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(left), "/tcp"))
+		if err != nil {
+			continue
+		}
+		if hp, ok := parseDockerPort(line, cp); ok {
+			if _, seen := m[cp]; !seen {
+				m[cp] = hp
+			}
+		}
+	}
+	return m, true
 }
 
 // parseDockerPort reads `docker port` lines ("80/tcp -> 0.0.0.0:8080", possibly

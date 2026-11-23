@@ -50,7 +50,9 @@ func (r Restarter) Restart(ctx context.Context, now time.Time) error {
 	req.Header.Set("Content-Type", "application/strategic-merge-patch+json")
 	c := r.Client
 	if c == nil {
-		c = http.DefaultClient
+		// Never http.DefaultClient: it has no timeout, and an API server that accepts the
+		// connection and never answers would hang the nightly reset with nothing to say so.
+		c = &http.Client{Timeout: restartTimeout}
 	}
 	resp, err := c.Do(req)
 	if err != nil {
@@ -63,6 +65,10 @@ func (r Restarter) Restart(ctx context.Context, now time.Time) error {
 	}
 	return nil
 }
+
+// restartTimeout bounds one restart patch made without a client of the caller's own; the
+// in-cluster restarter uses the same bound. A variable so a test can shorten it.
+var restartTimeout = 30 * time.Second
 
 const saDir = "/var/run/secrets/kubernetes.io/serviceaccount"
 
@@ -93,7 +99,7 @@ func InClusterRestarter(deployment string) (Restarter, error) {
 		Token:      strings.TrimSpace(string(tok)),
 		Namespace:  strings.TrimSpace(string(ns)),
 		Deployment: deployment,
-		Client: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
+		Client: &http.Client{Timeout: restartTimeout, Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 		}},
 	}, nil

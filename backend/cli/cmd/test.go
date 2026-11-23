@@ -64,6 +64,10 @@ change in a minor release, with the change in the release notes.
 The server authorizes the evaluation as the identity you sign in with (device:read). The password
 may be given in the DCCTL_PASSWORD environment variable instead of --password, which keeps it out
 of the shell history and the process list.`,
+	Example: `  dcctl test ./tests --tenant acme --email you@example.com --password '<password>'
+  # the password from the environment, and a JUnit report for CI
+  DCCTL_PASSWORD='<password>' dcctl test ./tests/low-battery.test.yaml --tenant acme --email you@example.com --junit results.xml
+  dcctl test ./tests --tenant acme --email you@example.com --password '<password>' --server dc.example.com --tls`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runTest,
 	SilenceUsage: true,

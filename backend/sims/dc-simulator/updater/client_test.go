@@ -421,3 +421,22 @@ func TestTheDeviceAcceptsEveryDesiredFixture(t *testing.T) {
 	var obj map[string]any
 	require.NoError(t, json.Unmarshal([]byte(got), &obj))
 }
+
+// A grant that arrived before the device asks is the answer to an earlier ask: asking again sends a
+// second request, which the platform answers with a second grant. Drive reads the grant box and then
+// asks, and the answer is handled on another goroutine, so this is the interleaving "the answer landed
+// between the two": the box is full and the outstanding flag already cleared.
+func TestAGrantThatAlreadyArrivedIsNotRequestedAgain(t *testing.T) {
+	r := newClientRig(t)
+	r.deliver(r.asg)
+	r.grant(10 * time.Minute) // the answer is here, though this device never asked
+	require.NoError(t, r.client.RequestGrant(context.Background()))
+	require.Equal(t, 0, r.cap.count(ota.KindDownloadRequest), "a request was sent for a grant the device already holds")
+
+	// the control: with no grant held, the same call does ask, once
+	r2 := newClientRig(t)
+	r2.deliver(r2.asg)
+	require.NoError(t, r2.client.RequestGrant(context.Background()))
+	require.NoError(t, r2.client.RequestGrant(context.Background()))
+	require.Equal(t, 1, r2.cap.count(ota.KindDownloadRequest))
+}

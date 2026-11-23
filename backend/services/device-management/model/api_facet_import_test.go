@@ -282,6 +282,7 @@ func TestFacetDeclarationAndImportShareTransactionLock(t *testing.T) {
 				api, ctx := facetImportFixture(t)
 				db := api.RDB.Database
 				db.Dialector = membershipPostgresDialect{db.Dialector}
+				stubAttributeProtocolPostgresSQL(t, db)
 				locked, reads, writes := false, 0, 0
 				var pool gorm.ConnPool
 				require.NoError(t, db.Callback().Raw().Before("gorm:raw").Register("test:facet-lock", func(tx *gorm.DB) {

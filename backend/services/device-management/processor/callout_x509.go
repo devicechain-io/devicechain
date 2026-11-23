@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/x509trust/ocspclient"
 	"github.com/nats-io/jwt/v2"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -200,6 +201,13 @@ func (c *CalloutResponder) authorizeX509(req jwt.AuthorizationRequest, tenant st
 		return c.grantX509(ctx, req, tenant, chain, found, result, obs)
 	}
 	if result := c.x509LookupRefusal(tenant, req, err); result != "" {
+		if result == x509ResultRevoked {
+			// Public certificate identity and a platform timestamp let external rigs prove
+			// this refusal independently of their own transport errors or device snapshots.
+			c.evidence().Info().Str("event", "x509_credential_rejected").Str("tenant", tenant).
+				Str("fingerprint", pin).Str("rejectedAt", c.now().UTC().Format(time.RFC3339Nano)).
+				Msg("Disabled certificate rejected by auth callout.")
+		}
 		return c.refuseX509(obs, result)
 	}
 	return c.grantX509(ctx, req, tenant, chain, found, x509ResultOK, obs)
@@ -361,4 +369,12 @@ func newX509Counter(ms *core.Microservice) *prometheus.CounterVec {
 		v.WithLabelValues(r)
 	}
 	return v
+}
+
+// evidence is the logger the platform-evidence records go to: the injected one, else the process logger.
+func (c *CalloutResponder) evidence() *zerolog.Logger {
+	if c.evidenceLog != nil {
+		return c.evidenceLog
+	}
+	return &log.Logger
 }

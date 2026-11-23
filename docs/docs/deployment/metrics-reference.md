@@ -85,6 +85,7 @@ bus: read them with `dcctl dead-letters`.
 | `suppression_invalid_windows_total` | Counter. Invalid stored alarm suppression windows skipped during evaluation; alarms continue to page. |
 | `suppression_evaluation_failures_total{phase}` | Counter. Alarm suppression evaluations that failed, by `phase`: `cycle_start` (cycle-start stamp evaluation) or `live` (current suppression evaluation). A failed live evaluation allows paging. `status` (per-alarm status evaluation) also fails toward paging for that alarm while preserving the rest of the batch. |
 | `suppression_refresh_total{outcome}` | Counter. Refreshes of an alarm suppression window's visibility after a target device's ownership changed: `refreshed` (the stored scope was rewritten), `unchanged` (it was already current) or `failed`. A failure never delays the ownership change itself; the window may stay hidden from the new owner's scoped members until the device's ownership changes again or the window's targets are edited. All three outcomes are seeded at zero. |
+| `device_configuration_reports_pruned_total{reason}` | Counter. Device configuration verdict history rows removed by the maintenance pass that runs on every replica every ten minutes, by `reason`: `orphan` (the report's device no longer exists, left behind by a pod that deleted the device without its history) or `retention` (older than 200 days; the row matching the device's current revision and status is kept however old). Both are seeded at zero. This is the full metric name, not prefixed with `devicechain_devicemanagement_`. A steady `retention` rate is normal in a fleet older than 200 days. An `orphan` rate that persists after every pod runs the same release means something is still deleting devices without their history. A pass that fails is not counted here: it shows in the `configuration_report_maintenance` series described under [maintenance passes](./observability.md#maintenance-passes). |
 | `agent_proposals_total{kind, outcome}` | Preview (agent actions). Non-dry-run proposal calls by kind (`ALARM_ACK`, `ALARM_CLEAR`, `unknown`) and outcome (`created`, `existing`, `refused`); errors count as `refused`. |
 | `agent_approvals_total{outcome}` | Preview (agent actions). Approval calls by final outcome (`recorded`, `executed`, `refused`, `concurrent`, `step_up_required`, `forbidden`, `fence_closed`), counted once across internal retries. Errors without a more specific outcome count as `refused`. |
 | `agent_executions_total{kind, result}` | Preview (agent actions). Final-approval executions by kind (`ALARM_ACK`, `ALARM_CLEAR`, `unknown`) and result (`executed`, `dependency_changed`, `policy_refused`, `fence_closed`, `refused`, `failed`), counted once per execution including a fence re-enable retry. `failed` means the transaction could not complete (database or statement timeout, policy service or kill feed unavailable); a lock conflict is `refused` as a concurrent approval. |
@@ -400,3 +401,13 @@ the replication alerts under [Replication](./observability.md#replication) are b
 | `jetstream_stream_limit_messages{stream}` | Configured MaxMsgs ceiling for a JetStream stream. |
 | `jetstream_stream_used_bytes{stream}` | Current on-disk bytes stored in a JetStream stream. |
 | `jetstream_stream_used_messages{stream}` | Current message count in a JetStream stream. |
+
+### Cross-service client {#cross-service-client}
+
+Every service that calls another service through the shared client exports one more series. It is
+the only one here with its own prefix, `devicechain_svcclient_`, and its `peer` label is the base URL of
+the service being called, so it is bounded by the deployment and never by tenant or device.
+
+| Metric | Means |
+| --- | --- |
+| `devicechain_svcclient_responses_truncated_total{peer}` | Counter. Successful (HTTP 200) responses from `peer` that exceeded the client's 1 MiB read cap, so the call failed with a "response too large" error and the caller must page the query. Error statuses are never counted here. Expected to be zero. A nonzero rate means a caller asks one service for more than fits in one answer, usually a fleet that has grown past what a single unpaged read returns; the log line of the failing service names the call. No setting raises the cap, so the fix is a narrower or paged request. |

@@ -11,6 +11,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/devicechain-io/dc-microservice/attrprotocol"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/tenantpurge"
 )
@@ -86,6 +87,8 @@ func (r *Relational) Erase(ctx context.Context, tenant string, epoch time.Time) 
 	if err != nil {
 		return Outcome{}, fmt.Errorf("classifying %s: %w", r.name, err)
 	}
+
+	attrprotocol.RegisterPurge(plan)
 
 	var pre tenantpurge.Precondition
 	if r.pre != nil {

@@ -335,6 +335,16 @@ func NewMqttEventSource(id string, clientID string, config map[string]string, tl
 	return es, nil
 }
 
+const (
+	// mqttKeepAlive is the keep-alive the source's paho client states explicitly (paho's own
+	// default, kept so it is a decision rather than an accident).
+	mqttKeepAlive = 30 * time.Second
+	// mqttWriteTimeout bounds one socket write to the broker, matching outbound-connectors'
+	// publish client. At zero paho installs no write deadline, so a write to a dead peer
+	// blocks for good.
+	mqttWriteTimeout = 5 * time.Second
+)
+
 // clientOptions is the paho configuration the source connects with.
 func (es *MqttEventSource) clientOptions(clientID string) *mqtt.ClientOptions {
 	opts := mqtt.NewClientOptions()
@@ -354,6 +364,11 @@ func (es *MqttEventSource) clientOptions(clientID string) *mqtt.ClientOptions {
 		opts.SetUsername(es.username)
 		opts.SetPassword(es.password)
 	}
+	// Bound one socket write and state the keep-alive. paho's default is no write timeout:
+	// a PINGREQ written to a dead peer's full socket would block forever and the ping
+	// timeout would never be checked. See messaging.BrokerWriteTimeout's comment.
+	opts.SetKeepAlive(mqttKeepAlive)
+	opts.SetWriteTimeout(mqttWriteTimeout)
 	opts.SetDefaultPublishHandler(es.onMessage)
 	// Every connection subscribes, the first included; see onConnect.
 	opts.OnConnect = es.onConnect

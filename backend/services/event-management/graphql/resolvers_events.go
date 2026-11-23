@@ -255,6 +255,11 @@ func (r *MeasurementEventResolver) Value() *float64 {
 	return nullFloat(r.M.Value)
 }
 
+// TextValue is a STRING reading's value; null for a numeric reading.
+func (r *MeasurementEventResolver) TextValue() *string {
+	return r.M.TextValue
+}
+
 func (r *MeasurementEventResolver) Classifier() *string {
 	return uintPtrStr(r.M.Classifier)
 }

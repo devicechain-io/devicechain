@@ -33,6 +33,8 @@ Un decodificador pertenece a un perfil de dispositivo y viaja con él:
 
 El decodificador es un documento de expresiones en un lenguaje pequeño y sin bucles (CEL). Tiene un tipo de **entrada** que lee, **valores compartidos** opcionales y una o más **secciones**; cada sección tiene **filas**, y cada fila indica qué métrica escribe y cómo calcular el valor. El lenguaje no tiene reloj, ni aleatoriedad, ni efectos secundarios, así que la misma entrada da siempre las mismas lecturas.
 
+DeviceChain no ejecuta JavaScript, Python ni otros scripts proporcionados por el usuario como decodificadores de carga útil. Un códec JavaScript de ChirpStack se ejecuta en ChirpStack; DeviceChain recibe su objeto ya decodificado mediante la [integración de entrada](./inbound-integrations.md#chirpstack). Para un script existente, reescribe las lecturas de bytes y los mapeos JSON admitidos como filas de decodificador CEL. Mantén la lógica que este lenguaje no admite en el códec del servidor de red o en un puente externo que reenvíe [eventos de dispositivo](../reference/device-protocol.md).
+
 Un decodificador puede tener como máximo 8 secciones, 16 valores compartidos y 20 vectores guardados, y el documento completo ocupa como máximo 32 KiB. La [referencia de funciones](../reference/decoder-functions.md#decoder-functions-limits) enumera los límites.
 
 ## Entradas {#inputs}

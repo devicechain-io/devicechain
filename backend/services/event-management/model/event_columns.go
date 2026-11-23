@@ -57,6 +57,7 @@ var measurementColumns = rdb.NewColumnTable(
 	rdb.NullUintColumn("classifier", func(m *MeasurementEvent) *uint { return m.Classifier }),
 	rdb.NullTextColumn("unit", func(m *MeasurementEvent) *string { return m.Unit }),
 	rdb.NullTextColumn("data_type", func(m *MeasurementEvent) *string { return m.DataType }),
+	rdb.NullTextColumn("text_value", func(m *MeasurementEvent) *string { return m.TextValue }),
 )
 
 var locationColumns = rdb.NewColumnTable(
