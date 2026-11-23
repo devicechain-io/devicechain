@@ -92,6 +92,7 @@
   "defParamSchemaHint": "Optional JSON array of parameters, each { \"name\", \"dataType\", … }. Leave blank for a no-argument command.",
   "defParamSchemaLabel": "Parameter schema",
   "defParamSchemaPlaceholder": "[{\"name\":\"level\",\"dataType\":\"INT\",\"required\":true}]",
+  "defStringMetricHint": "A text reading, such as a mode or state. It has no unit, bounds or formula, and is never averaged or charted as a number.",
   "defTokenLockedHint": "The id; it cannot change.",
   "defUnitHint": "UCUM, e.g. Cel",
   "defUnitPlaceholder": "Cel",
