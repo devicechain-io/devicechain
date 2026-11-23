@@ -255,7 +255,8 @@ CREATE TABLE "update-management".update_rollout_targets (
  dispatched_at timestamp with time zone,
  skip_code character varying(64) NOT NULL,
  skip_detail character varying(512) NOT NULL,
- device_incarnation bigint
+ device_incarnation bigint,
+ cohort bigint DEFAULT 0 NOT NULL
 );
 CREATE TABLE "update-management".update_rollouts (
  id bigint NOT NULL,
@@ -276,7 +277,15 @@ CREATE TABLE "update-management".update_rollouts (
  started_at timestamp with time zone,
  finished_at timestamp with time zone,
  state_changed_by character varying(256),
- state_changed_at timestamp with time zone
+ state_changed_at timestamp with time zone,
+ cohort_plan text,
+ current_cohort bigint DEFAULT 0 NOT NULL,
+ failure_rate_plan text,
+ halt_sequence bigint DEFAULT 0 NOT NULL,
+ halt_failures bigint DEFAULT 0 NOT NULL,
+ halt_samples bigint DEFAULT 0 NOT NULL,
+ rate_override_at timestamp with time zone,
+ halt_failure_evidence text
 );
 CREATE UNIQUE INDEX uix_artifact_signatures_artifact_signer ON "update-management".artifact_signatures USING btree (artifact_id, signer_id);
 CREATE UNIQUE INDEX uix_artifact_signers_tenant_key ON "update-management".artifact_signers USING btree (tenant_id, key_id);
