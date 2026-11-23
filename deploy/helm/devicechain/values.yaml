@@ -2314,6 +2314,14 @@ functionalAreas:
     # size, since each worker may hold one connection. 1 is the old one-at-a-time consumer.
     # react:
     #   workers: 8                    # 1 to 64
+    # Rule previews, version comparisons and `dcctl test` evaluations one event-processing
+    # process (replica) runs at once, across every tenant (each tenant is also held to two;
+    # N replicas run up to N times the setting; the three share one allowance). One that
+    # finds no free slot is refused as busy, never queued. 8 by default. Leave it absent
+    # until every pod of the instance runs a release that knows the key: an older pod
+    # refuses a document that carries it.
+    # preview:
+    #   maxConcurrent: 8              # 1 to 256
   mcp:
     # The MCP server (ADR-047): an OAuth 2.1 Resource Server fronting the per-area
     # GraphQL over the Model Context Protocol. Held back from the `default` profile

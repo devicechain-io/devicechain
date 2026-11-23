@@ -79,8 +79,13 @@ func (r *SchemaResolver) CompareRuleVersions(ctx context.Context, args struct{ I
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !globalPreviewGate.acquire(tenant) {
+	switch globalPreviewGate.tryAcquire(tenant) {
+	case previewRefusedTenant:
 		return compareRefused(refusalBusy, "too many concurrent previews"), nil
+	case previewRefusedInstance:
+		return compareRefused(refusalBusy, previewInstanceBusy), nil
+	case previewRefusedBurst:
+		return compareRefused(refusalBusy, previewBurstBusy), nil
 	}
 	defer globalPreviewGate.release(tenant)
 	in := args.Input

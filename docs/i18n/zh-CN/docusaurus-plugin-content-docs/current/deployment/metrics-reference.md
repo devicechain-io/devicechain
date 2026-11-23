@@ -97,6 +97,7 @@ title: 指标参考
 | --- | --- |
 | `detect_applied_stream_seq` | 已提交快照中捕获的最高 JetStream 流序号。 |
 | `detect_checkpoint_failures_total{stage}` | 未能提交的计划 DETECT 检查点，按阶段区分（publish、serialize、save）。超过截止时间的检查点调用计入其卡住的阶段。过期写入者的拒绝不在此计数：那会结束进程。 |
+| `detect_checkpoint_min_spacing_seconds` | 仪表。引擎允许两次由计数触发的检查点之间至少间隔的时间：最近一次已提交快照耗时的四倍，且不超过 `checkpointIntervalSeconds`。它跟随 `detect_checkpoint_seconds`，因此会随引擎状态及其快照变大而增大。当它停在 `checkpointIntervalSeconds` 时，按计数触发的检查点已稀疏到设置所允许的程度，此时若 `detect_consumer_ack_pending` 上升、`detect_consumer_pending` 增长，就说明检查点正在拖慢消费者：请查看 `detect_snapshot_bytes` 以及序列化和保存耗时。 |
 | `detect_checkpoint_save_seconds` | 每个已提交快照写入数据库所用的时间（分布）：检查点开销中序列化之后的第二部分。 |
 | `detect_checkpoint_serialize_seconds` | 每个已提交快照序列化引擎状态所用的时间（分布）：检查点开销的第一部分。 |
 | `detect_checkpoints_total` | 已提交的 DETECT 快照检查点。 |
@@ -122,6 +123,9 @@ title: 指标参考
 | `detect_fence_geometry_cache_vertices` | 已编译几何缓存中保存的顶点总数，即其上限所计量的数量。 |
 | `detect_fence_geometry_hash_mismatch_total` | 哈希与其被请求时所用内容地址不符的地理围栏几何文档。永远是缺陷，从不是暂时的：对端返回了错误的行、传输中有东西重新编码了文档，或归档已损坏。 |
 | `detect_fence_geometry_unresolved_total` | 无法从设备管理的归档取得几何数据的地理围栏清单条目。每一条都使该围栏报告无法解析而不是给出答案，如果原因是暂时的，则在下一次协调扫描时修复。 |
+| `detect_group_shard_busy_seconds_total{group, shard}` | 每个分片组中每个检测分片用于应用操作的秒数。请按速率读取：它就是该分片的利用率，速率 0.5 表示该分片一半时间处于忙碌。健康的状态是每个分片都远低于 0.9，且数值相近。同一组内某个分片远高于其余分片，说明有热点键（某个设备或关联锚点发送的数据远多于其他）；所有分片都接近 1，说明限制在 `detectShards`，该组正在落后，表现为 `detect_consumer_pending` 增长。 |
+| `detect_group_shard_live_keys{group, shard}` | 仪表。每个分片组中每个检测分片持有的活动窗口、定时器和锁存器数量。健康的状态是同一组内各分片大致均匀。某个分片持有的键远多于其他分片就是键倾斜：上升的将是它的队列和忙碌时间。 |
+| `detect_group_shard_queue_depth{group, shard}` | 仪表。每个分片组中每个检测分片排队的操作数，按循环的周期采样。健康时保持在接近零。队列持续偏高的分片最慢，该组的循环在每次检查点、规则变更和查询时都要等待它，表现为该组落后（`detect_group_consumer_pending` 和 `detect_group_watermark_lag_seconds`）。 |
 | `detect_idle_advances_total` | 产生了至少一次检测的挂钟空闲推进。 |
 | `detect_idle_detections_total` | 由挂钟空闲推进产生的检测（缺席/持续时间/会话在静默时触发）。 |
 | `detect_is_leader` | 此副本持有 DETECT 分区租约期间为 1，从取得租约起算，而不是从任期构建结束起算。 |
@@ -170,6 +174,19 @@ title: 指标参考
 | `react_events_orphaned_total` | 其规则已不在投影中的派生事件（未分发任何内容）。 |
 | `react_events_poison_dropped_total` | 因分发持续失败而在达到重投递上限后被丢弃的派生事件。它们同时也写入死信流，因此这与 `react_events_dead_lettered_total` 统计的是同一批事件；保留它是因为 `ReactPoisonDropping` 告警依据它触发。 |
 | `react_workers` | REACT 可同时分发的派生事件数（`react.workers`）。同一设备的事件按流中顺序逐个分发，但留待重新投递的事件会在其后的事件之后再次分发。 |
+
+## 设备状态 {#device-state}
+
+前缀：`devicechain_devicestate_`。
+
+每十分钟由一个副本将每个租户的最近已知状态行与 device-management 比对，并修正不再对应任何设备的行。
+
+| 指标 | 含义 |
+| --- | --- |
+| `orphan_sweep_deleted_total` | 计数器。清扫移除的设备状态行数，原因是其设备已不存在，或已用同一令牌重新创建。清除或删除设备之后立即出现一阵增长是预期的，删除设备期间保持非零的稳定速率也是正常的。若没有删除任何设备而速率持续上升，则是故障：有东西在删除设备却没有通知 device-state。每一轮的数量见清扫的日志行（`Orphan sweep reconciled device states`）。 |
+| `orphan_sweep_stamped_total` | 计数器。清扫为其所属设备打上其版本标记（incarnation）的设备状态行数，这样之后用同一令牌重新创建的设备就会被识别为另一台设备。每行只打一次标记，因此升级后最初几轮出现一阵增长是预期的（在记录该标记之前写入的行在此补上），随后回落为零。速率一直不稳定则值得检查。 |
+
+无法连接 device-management 的一轮会跳过该租户剩余的分页，并在下一轮重试；这不会计入上述任何一个指标。该轮本身显示在[维护任务](./observability.md#maintenance-passes)所述的 `orphan_sweep` 序列中。
 
 ## Event management {#event-management}
 

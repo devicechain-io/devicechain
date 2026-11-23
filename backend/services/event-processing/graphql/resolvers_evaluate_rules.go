@@ -227,8 +227,17 @@ func (r *SchemaResolver) EvaluateRules(ctx context.Context, args struct{ Input e
 	// both bounded replays of the same detection core, and a tenant's allowance of that work is one
 	// number, not one per door. Then the process-wide evaluation bound.
 	const busy = "the maximum number of previews and evaluations are already running; try again in a moment"
-	if !globalPreviewGate.acquire(tenant) {
+	switch globalPreviewGate.tryAcquire(tenant) {
+	case previewRefusedTenant:
 		res := refused(refusalBusy, busy)
+		res.skipped = skipped
+		return res, nil
+	case previewRefusedInstance:
+		res := refused(refusalBusy, previewInstanceBusy)
+		res.skipped = skipped
+		return res, nil
+	case previewRefusedBurst:
+		res := refused(refusalBusy, previewBurstBusy)
 		res.skipped = skipped
 		return res, nil
 	}

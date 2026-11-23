@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/httptransport"
 	"github.com/devicechain-io/dc-microservice/userclient"
 	"github.com/devicechain-io/dc-simulator/sim"
 )
@@ -58,13 +60,16 @@ const (
 
 // Reader reads platform truth as the sim's own tenant identity.
 type Reader struct {
-	session   *userclient.TenantSession
-	endpoints sim.Endpoints
-	events    string
-	ingress   string
-	http      *http.Client
-	seed      int64
-	tenant    string
+	session *userclient.TenantSession
+	// previewSession is a second sign-in over a transport that outwaits previewRule's server budget.
+	previewSession *userclient.TenantSession
+	previewClient  *http.Client
+	endpoints      sim.Endpoints
+	events         string
+	ingress        string
+	http           *http.Client
+	seed           int64
+	tenant         string
 }
 
 // NewReader signs in as the handshake's sim identity.
@@ -84,13 +89,30 @@ func NewReader(hs *sim.Handshake, httpc *http.Client) (*Reader, error) {
 			return nil, fmt.Errorf("the handshake carries no %s endpoint, which the verifier reads", name)
 		}
 	}
+	pc := previewHTTP(hs.HostHeader)
 	return &Reader{
-		http: httpc, seed: hs.Seed, tenant: hs.Tenant,
-		session:   userclient.NewTenantSession(httpc, hs.Endpoints.UserGraphQL, hs.SimEmail, hs.SimPassword, hs.Tenant),
-		endpoints: hs.Endpoints,
-		events:    httpFromWS(hs.Endpoints.EventMgmtWS),
-		ingress:   fmt.Sprintf("%s/%s/%s/events", strings.TrimRight(hs.Endpoints.Ingress, "/"), hs.InstanceId, hs.Tenant),
+		previewClient: pc,
+		http:          httpc, seed: hs.Seed, tenant: hs.Tenant,
+		session:        userclient.NewTenantSession(httpc, hs.Endpoints.UserGraphQL, hs.SimEmail, hs.SimPassword, hs.Tenant),
+		previewSession: userclient.NewTenantSession(pc, hs.Endpoints.UserGraphQL, hs.SimEmail, hs.SimPassword, hs.Tenant),
+		endpoints:      hs.Endpoints,
+		events:         httpFromWS(hs.Endpoints.EventMgmtWS),
+		ingress:        fmt.Sprintf("%s/%s/%s/events", strings.TrimRight(hs.Endpoints.Ingress, "/"), hs.InstanceId, hs.Tenant),
 	}, nil
+}
+
+// previewHTTP is the client for previewRule alone. The platform transport waits 30 s for
+// response headers, but the server may spend config.PreviewBudget (45 s) on one replay and then
+// answers with a typed truncated result; a client that gives up first turns a judgeable day into
+// NO VERDICT. Only this call gets the longer wait, derived from the server's own budget.
+func previewHTTP(hostHeader string) *http.Client {
+	tr := httptransport.New()
+	tr.ResponseHeaderTimeout = config.PreviewClientHeaderTimeout
+	c := &http.Client{Timeout: config.PreviewClientTimeout, Transport: tr}
+	if hostHeader != "" {
+		c.Transport = httptransport.PresentHost(tr, hostHeader)
+	}
+	return c
 }
 
 // httpFromWS is event-management's HTTP GraphQL endpoint: the same path as the graphql-ws one.
@@ -270,7 +292,7 @@ func (r *Reader) Preview(ctx context.Context, definition, profile string, from, 
 		"ruleDefinition": definition, "profileToken": profile,
 		"start": from.UTC().Format(time.RFC3339), "end": to.UTC().Format(time.RFC3339),
 	}}
-	if err := r.session.Query(ctx, r.endpoints.EventProcessingGraphQL, queryPreview, vars, &resp); err != nil {
+	if err := r.previewSession.Query(ctx, r.endpoints.EventProcessingGraphQL, queryPreview, vars, &resp); err != nil {
 		return Preview{}, fmt.Errorf("previewRule: %w", err)
 	}
 	p := Preview{OK: resp.PreviewRule.OK}

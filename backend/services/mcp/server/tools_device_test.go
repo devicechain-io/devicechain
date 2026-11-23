@@ -323,15 +323,17 @@ func TestGetLatestMeasurementsCarriesATextReadingUntrusted(t *testing.T) {
 	}
 }
 
-// An over-long text reading is bounded the way every other free-text field is, by the response
-// ceiling: the whole result is refused, never returned truncated or unmarked.
-func TestAnOverLongTextReadingIsRefusedNotReturned(t *testing.T) {
-	tools, done := toolsAgainst(t, `{"data":{"latestMeasurements":[{"name":"mode","value":null,"textValue":"`+
-		strings.Repeat("x", 300<<10)+`","unit":"","dataType":"STRING","occurredTime":"2026-07-12T00:00:00Z"}]}}`)
+// A page of large text readings is bounded by the response ceiling like any other result: the
+// whole result is refused, never returned truncated or unmarked. 80 readings of the 4 KiB a
+// STRING value may be is 320 KiB, over the 256 KiB ceiling.
+func TestAPageOfLargeTextReadingsIsRefusedWhole(t *testing.T) {
+	row := `{"name":"mode","value":null,"textValue":"` + strings.Repeat("x", 4096) +
+		`","unit":"","dataType":"STRING","occurredTime":"2026-07-12T00:00:00Z"}`
+	tools, done := toolsAgainst(t, `{"data":{"latestMeasurements":[`+strings.TrimSuffix(strings.Repeat(row+",", 80), ",")+`]}}`)
 	defer done()
 
 	_, out, err := tools.GetLatestMeasurements(context.Background(), authedReq("tok"), GetLatestMeasurementsInput{DeviceToken: "d1"})
 	if err == nil || !strings.Contains(err.Error(), "narrow the request") {
-		t.Fatalf("an over-long text reading must be refused at the ceiling, got %v / %+v", err, out)
+		t.Fatalf("a page of large text readings must be refused at the ceiling, got %v / %d rows", err, len(out.Measurements))
 	}
 }

@@ -21,7 +21,7 @@ import { errMessage } from '@/routes/common';
 import { Textarea } from '@/components/ui/textarea';
 import { SegmentedControl, type SegmentedOption } from '@/components/ui/segmented-control';
 import { FormulaEditor } from './FormulaEditor';
-import { METRIC_DATA_TYPES, COMMAND_IMPACTS } from '@/lib/vocab';
+import { METRIC_DATA_TYPES, METRIC_TEXT_TYPE, COMMAND_IMPACTS } from '@/lib/vocab';
 import {
   createMetricDefinition,
   updateMetricDefinition,
@@ -68,10 +68,11 @@ function SubmitRow({
 // ── Metric definition ─────────────────────────────────────────────────────
 
 // Declared outside the JSX so the literal-string lint reads the wire values as data.
-function metricKindOptions(t: (key: string) => string, locked: boolean): SegmentedOption<MetricKind>[] {
+function metricKindOptions(t: (key: string) => string, locked: boolean, text: boolean): SegmentedOption<MetricKind>[] {
   return [
     { value: 'measured', label: t('deviceProfiles:metricKindMeasured'), disabled: locked },
-    { value: 'calculated', label: t('deviceProfiles:metricKindCalculated'), disabled: locked },
+    // A formula reads and produces numbers, so a text metric is always a measured one.
+    { value: 'calculated', label: t('deviceProfiles:metricKindCalculated'), disabled: locked || text },
   ];
 }
 
@@ -102,6 +103,19 @@ export function MetricDefinitionForm({
   const [expression, setExpression] = useState(entity?.expression ?? '');
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A text metric has no unit, bounds or formula.
+  const isText = dataType === METRIC_TEXT_TYPE;
+
+  const chooseDataType = (next: string) => {
+    setDataType(next);
+    if (next === METRIC_TEXT_TYPE) {
+      // Clear what the numeric fields held so a stale value is never sent for a text metric.
+      setUnit('');
+      setMinValue('');
+      setMaxValue('');
+      if (!editing) setCalculated(false);
+    }
+  };
 
   const submit = async () => {
     setFormError(null);
@@ -118,9 +132,9 @@ export function MetricDefinitionForm({
         name: opt(name),
         description: opt(description),
         dataType,
-        unit: opt(unit),
-        minValue: optNum(minValue),
-        maxValue: optNum(maxValue),
+        unit: isText ? null : opt(unit),
+        minValue: isText ? null : optNum(minValue),
+        maxValue: isText ? null : optNum(maxValue),
       };
       if (editing) {
         // A measured metric's update names no formula at all: the API refuses one.
@@ -134,7 +148,7 @@ export function MetricDefinitionForm({
           enum: null,
           descriptor: null,
           metadata: null,
-          expression: calculated ? expression.trim() : null,
+          expression: calculated && !isText ? expression.trim() : null,
           semanticProperty: null,
           semanticPointClass: null,
         };
@@ -148,7 +162,7 @@ export function MetricDefinitionForm({
     }
   };
 
-  const kindOptions = metricKindOptions(t, editing);
+  const kindOptions = metricKindOptions(t, editing, isText);
 
   return (
     <div className="space-y-4">
@@ -186,23 +200,31 @@ export function MetricDefinitionForm({
           />
         )}
       </FormField>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <FormField label={t('deviceProfiles:defDataTypeLabel')} htmlFor="m-type">
-          <Combobox id="m-type" value={dataType} onChange={setDataType} options={METRIC_DATA_TYPES} allowClear={false} />
+      <div className={isText ? 'grid grid-cols-1 gap-4' : 'grid grid-cols-1 gap-4 sm:grid-cols-3'}>
+        <FormField
+          label={t('deviceProfiles:defDataTypeLabel')}
+          htmlFor="m-type"
+          description={isText ? t('deviceProfiles:defStringMetricHint') : undefined}
+        >
+          <Combobox id="m-type" value={dataType} onChange={chooseDataType} options={METRIC_DATA_TYPES} allowClear={false} />
         </FormField>
-        <FormField label={t('deviceProfiles:defColUnit')} htmlFor="m-unit" description={t('deviceProfiles:defUnitHint')}>
-          <Input id="m-unit" value={unit} onChange={(e) => setUnit(e.target.value)} placeholder={t('deviceProfiles:defUnitPlaceholder')} />
-        </FormField>
-        <div className="grid grid-cols-2 gap-2">
-          <FormField label={t('deviceProfiles:defMinLabel')} htmlFor="m-min">
-            <Input id="m-min" type="number" value={minValue} onChange={(e) => setMinValue(e.target.value)} />
-          </FormField>
-          <FormField label={t('deviceProfiles:defMaxLabel')} htmlFor="m-max">
-            <Input id="m-max" type="number" value={maxValue} onChange={(e) => setMaxValue(e.target.value)} />
-          </FormField>
-        </div>
+        {!isText && (
+          <>
+            <FormField label={t('deviceProfiles:defColUnit')} htmlFor="m-unit" description={t('deviceProfiles:defUnitHint')}>
+              <Input id="m-unit" value={unit} onChange={(e) => setUnit(e.target.value)} placeholder={t('deviceProfiles:defUnitPlaceholder')} />
+            </FormField>
+            <div className="grid grid-cols-2 gap-2">
+              <FormField label={t('deviceProfiles:defMinLabel')} htmlFor="m-min">
+                <Input id="m-min" type="number" value={minValue} onChange={(e) => setMinValue(e.target.value)} />
+              </FormField>
+              <FormField label={t('deviceProfiles:defMaxLabel')} htmlFor="m-max">
+                <Input id="m-max" type="number" value={maxValue} onChange={(e) => setMaxValue(e.target.value)} />
+              </FormField>
+            </div>
+          </>
+        )}
       </div>
-      {calculated && (
+      {calculated && !isText && (
         <FormulaEditor
           profileToken={profileToken}
           metricKey={metricKey}
@@ -223,7 +245,7 @@ export function MetricDefinitionForm({
         editing={editing}
         createLabel={t('deviceProfiles:defMetricCreateButton')}
         busy={busy}
-        disabled={busy || !metricKey.trim() || (!editing && !token.trim()) || (calculated && !expression.trim())}
+        disabled={busy || !metricKey.trim() || (!editing && !token.trim()) || (calculated && !isText && !expression.trim())}
         onClick={submit}
       />
     </div>

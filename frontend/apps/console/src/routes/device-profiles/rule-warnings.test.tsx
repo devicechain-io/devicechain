@@ -223,3 +223,46 @@ describe('the canvas keeps a warning apart from an error', () => {
     expect(painted.size).toBe(1);
   });
 });
+
+describe('a rule that names a STRING metric', () => {
+  const warning = { code: 'namesStringMetric', params: ['mode'], message: 'english fallback' };
+
+  it('reads in English and Spanish, naming the metric', async () => {
+    const { ruleWarningText } = await import('@/lib/ruleWarnings');
+    const original = i18n.language;
+    try {
+      await i18n.changeLanguage('en');
+      expect(ruleWarningText(i18n.t.bind(i18n), warning)).toContain('“mode”');
+      expect(ruleWarningText(i18n.t.bind(i18n), warning)).toContain('never fire');
+      await i18n.changeLanguage('es');
+      const es = ruleWarningText(i18n.t.bind(i18n), warning);
+      expect(es).toContain('«mode»');
+      expect(es).not.toBe('english fallback');
+    } finally {
+      await i18n.changeLanguage(original);
+    }
+  });
+
+  it('is sent the profile metrics with their types by the authoring door', async () => {
+    const { listMetricDefinitions } = await import('@/lib/api/device-management');
+    vi.mocked(listMetricDefinitions).mockResolvedValue([
+      { metricKey: 'mode', dataType: 'STRING' },
+      { metricKey: 't', dataType: 'DOUBLE' },
+    ] as never);
+    validateDetectionRule.mockResolvedValue({ ok: true, message: null, warnings: [warning] });
+    render(<DetectionRuleAuthoring profileToken="p" entity={stored} onDone={() => {}} />);
+
+    await waitFor(
+      () => {
+        const last = validateDetectionRule.mock.calls[validateDetectionRule.mock.calls.length - 1];
+        expect(last?.[3]).toEqual([
+          { key: 'mode', dataType: 'STRING' },
+          { key: 't', dataType: 'DOUBLE' },
+        ]);
+      },
+      { timeout: 4000 },
+    );
+    expect((await screen.findByTestId('rule-warnings')).textContent).toContain('“mode”');
+    vi.mocked(listMetricDefinitions).mockResolvedValue([]);
+  });
+});

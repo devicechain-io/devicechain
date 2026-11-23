@@ -240,6 +240,59 @@ type EventProcessingConfiguration struct {
 	// React sizes the REACT stage's consumer of the derived-event stream. See
 	// ReactConfiguration.
 	React ReactConfiguration
+
+	// Preview bounds the replays this service runs for authoring (previewRule, compareRuleVersions,
+	// evaluateRules), all tenants together. See PreviewConfiguration.
+	Preview PreviewConfiguration
+}
+
+// DefaultPreviewMaxConcurrent is how many authoring replays one event-processing process runs at
+// once, all tenants together, when preview.maxConcurrent is absent. MaxPreviewMaxConcurrent is the
+// most it may be set to.
+//
+// A replay reads the resolved-events stream, and on an instance whose stream is not sharded by
+// tenant that is every tenant's traffic, filtered here. Each tenant was already held to two at a
+// time, which bounds one tenant but not their sum: N tenants could run 2N whole-stream replays at
+// once. Eight is a replica's worth of replay work that leaves live detection its CPU.
+const (
+	DefaultPreviewMaxConcurrent = 8
+	MaxPreviewMaxConcurrent     = 256
+)
+
+// PreviewConfiguration is functionalAreas.event-processing.config.preview. Its one field is
+// optional and takes its default when absent; a value that IS given must be inside its bounds,
+// zero included, or the service refuses to start.
+//
+// 🔴 A FIXED key, absent by default. A pod from before this key existed refuses a document that
+// carries it (the strict decode), so set it only once every pod of the instance is on a release
+// that knows it; leaving it absent is always safe in a rolling upgrade.
+type PreviewConfiguration struct {
+	// MaxConcurrent is how many previews, comparisons and evaluations one event-processing process
+	// runs at once across every tenant: 1 to 256, default 8. A request that finds no free slot is
+	// refused as busy at once, never queued. Each tenant is also held to two at a time, and the
+	// slots are shared fairly: see the preview gate.
+	MaxConcurrent *int
+}
+
+// MaxConcurrentCount is the cap in effect, an absent one as its default.
+func (p PreviewConfiguration) MaxConcurrentCount() int {
+	if p.MaxConcurrent == nil {
+		return DefaultPreviewMaxConcurrent
+	}
+	return *p.MaxConcurrent
+}
+
+func (p *PreviewConfiguration) applyDefaults() {
+	if p.MaxConcurrent == nil {
+		p.MaxConcurrent = intPtr(DefaultPreviewMaxConcurrent)
+	}
+}
+
+func (p PreviewConfiguration) validate() error {
+	if n := p.MaxConcurrentCount(); n < 1 || n > MaxPreviewMaxConcurrent {
+		return fmt.Errorf("preview.maxConcurrent must be between 1 and %d, got %d", MaxPreviewMaxConcurrent, n)
+	}
+	return nil
 }
 
 // DefaultReactWorkers is how many derived events REACT dispatches at once when react.workers is
@@ -520,6 +573,7 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	c.RuleHealth.applyDefaults()
 	c.DerivedPublishing.applyDefaults()
 	c.React.applyDefaults(c.RdbConfiguration)
+	c.Preview.applyDefaults()
 }
 
 // RetiredConfigKeys names the keys this service accepted in an earlier release and has
@@ -671,6 +725,9 @@ func (c *EventProcessingConfiguration) Validate() error {
 		return err
 	}
 	if err := c.React.validate(c.RdbConfiguration); err != nil {
+		return err
+	}
+	if err := c.Preview.validate(); err != nil {
 		return err
 	}
 	return nil

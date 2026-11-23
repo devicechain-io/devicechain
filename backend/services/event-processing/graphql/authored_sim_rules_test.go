@@ -113,7 +113,7 @@ func validateAuthored(t *testing.T, rules []authoredRule) *DetectionRuleValidati
 			Token: r.RuleToken, Definition: r.Definition, GroupScoped: false})
 	}
 	res, err := (&SchemaResolver{}).ValidateDetectionRules(
-		authedContext(auth.DeviceRead), struct{ Rules []detectionRuleInput }{Rules: inputs})
+		authedContext(auth.DeviceRead), validateArgs{Rules: inputs})
 	if err != nil {
 		t.Fatalf("the validation gate itself errored: %v", err)
 	}

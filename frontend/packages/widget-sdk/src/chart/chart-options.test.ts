@@ -493,3 +493,20 @@ describe('buildLineOption across an interruption of the live feed', () => {
     ]);
   });
 });
+
+describe('buildLineOption with a text reading', () => {
+  it('draws only the numeric points of a stream that also carries a text sample', () => {
+    const text: MeasurementSample = { ...sample('mode', null, '2026-07-02T10:00:30Z'), textValue: 'eco' };
+    const option = buildLineOption(
+      [sample('temperature', 20, '2026-07-02T10:00:00Z'), text, sample('temperature', 21, '2026-07-02T10:01:00Z')],
+      theme,
+    );
+    const series = seriesOf(option);
+    // The text sample's name does get a series (it was seen), but it has no point: not a zero, not a gap.
+    expect(series.find((s) => s.name === 'temperature').data).toEqual([
+      ['2026-07-02T10:00:00Z', 20],
+      ['2026-07-02T10:01:00Z', 21],
+    ]);
+    expect(series.find((s) => s.name === 'mode').data).toEqual([]);
+  });
+});

@@ -124,13 +124,14 @@ type LatestMeasurement struct {
 	Value        *float64 `json:"value,omitempty"`
 	DataType     string   `json:"dataType,omitempty" prov:"platform"`
 	OccurredTime string   `json:"occurredTime" prov:"platform"`
-	// Untrusted holds the metric name, which a device reports, and the unit, which the
-	// profile declares.
+	// Untrusted holds the metric name, which a device reports, the unit, which the profile
+	// declares, and the text of a STRING metric's reading, which a device chose.
 	Untrusted *MeasurementUntrusted `json:"untrusted,omitempty"`
 }
 
-// MeasurementUntrusted is the free text of a measurement: its name (device-reported) and its
-// unit (operator-declared).
+// MeasurementUntrusted is the free text of a measurement: its name (device-reported), its
+// unit (operator-declared) and, for a STRING metric, its text (device-reported). An empty text
+// is absent, not a marked empty string.
 type MeasurementUntrusted struct {
 	Name *Marked `json:"name,omitempty" prov:"device-reported"`
 	// Unit is the profile's declared unit for the metric, written by an operator, which is how

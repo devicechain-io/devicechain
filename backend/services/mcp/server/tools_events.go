@@ -21,7 +21,7 @@ type QueryMeasurementsInput struct {
 }
 
 // MeasurementEvent is one raw reading. The metric name and unit are what the device reported,
-// so they sit under Untrusted.
+// and a STRING metric's text is what it chose, so they sit under Untrusted.
 type MeasurementEvent struct {
 	DeviceToken  string                `json:"deviceToken" prov:"id"`
 	Value        *float64              `json:"value,omitempty"`

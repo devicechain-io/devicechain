@@ -49,7 +49,7 @@ import {
   type ScopeGroupVersion,
 } from '@/lib/api/device-management';
 import { previewSelector } from '@/lib/api/browse';
-import { validateDetectionRule, type RuleWarning } from '@/lib/api/event-processing';
+import { validateDetectionRule, type ProfileMetric, type RuleWarning } from '@/lib/api/event-processing';
 import { ruleWarningText } from '@/lib/ruleWarnings';
 import { lostFields, ruleSurvivesRoundTrip, sameLogicalRule } from './rule-equal';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -330,12 +330,16 @@ function ConditionEditor({
 
 export function DetectionRuleForm({
   profileToken,
+  profileMetrics,
   entity,
   initialDefinition,
   initialWarnings,
   onDone,
 }: {
   profileToken: string;
+  // The profile's metrics with their data types, sent with the inline check so a rule that names a
+  // STRING metric is warned about. Omitted: the check gives no such warning.
+  profileMetrics?: ProfileMetric[];
   entity?: DetectionRule;
   // An unsaved rules.Rule definition JSON to pre-fill a NEW rule from — the seam the NL door
   // (ADR-056 slice 1) hands its compiled draft through. Unlike `entity` it does NOT flip the
@@ -582,7 +586,7 @@ export function DetectionRuleForm({
           // Pass the actual scoped state (a group is chosen) so the gate rejects a scope on an
           // unsupported kind (absence/correlation) inline, not only at publish (ADR-062 S4).
           // Keyed on the group being chosen, not the checkbox — an empty scope saves unscoped.
-          validateDetectionRule(validateToken, definition, scoped && !!scopeGroupToken),
+          validateDetectionRule(validateToken, definition, scoped && !!scopeGroupToken, profileMetrics),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('validate timeout')), 10_000)),
         ]);
         if (cancelled) return;
@@ -595,7 +599,7 @@ export function DetectionRuleForm({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [definition, validateToken, scoped, scopeGroupToken]);
+  }, [definition, validateToken, scoped, scopeGroupToken, profileMetrics]);
 
   // Load the dynamic groups a rule can scope to, the first time scoping is turned on.
   useEffect(() => {
