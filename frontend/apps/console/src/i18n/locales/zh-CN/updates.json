@@ -188,7 +188,6 @@
   "cohortStatus_done": "已完成",
   "cohortStatus_current": "当前",
   "cohortStatus_upcoming": "待进行",
-  "cohortProgressHint": "下方的计数涵盖推出中的所有设备，而非单个批次。当某批次中没有设备处于待处理或更新中时，该批次即为完成。",
   "cohortPromote": "晋级到下一批次",
   "cohortReadyHint": "{{name}} 已无失败完成。晋级将放行下一批次。",
   "cohortReadyLastHint": "这是最后一个批次。晋级将完成此推出。",
@@ -200,5 +199,9 @@
   "cohortHaltHint": "最近 {{samples}} 台设备中有 {{failures}} 台结果不佳，超过了 {{percentage}}% 的限制。恢复只覆盖这一次中止；新的不良结果仍可能再次使其中止。",
   "cohortHaltConfirmTitle": "覆盖失败率中止？",
   "cohortHaltConfirmBody": "最近 {{samples}} 台设备中有 {{failures}} 台结果不佳，超过了 {{percentage}}% 的限制。推出将恢复并继续进行，除非后续的不良结果再次使其中止。",
-  "rolloutColCohort": "批次"
+  "rolloutColCohort": "批次",
+  "cohortColTargets": "设备",
+  "cohortColFailures": "失败或未知",
+  "rolloutAnyCohort": "任意批次",
+  "rolloutCohortFilterLabel": "按批次筛选设备"
 }

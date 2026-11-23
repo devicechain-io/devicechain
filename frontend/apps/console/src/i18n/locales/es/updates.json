@@ -188,7 +188,6 @@
   "cohortStatus_done": "Completada",
   "cohortStatus_current": "Actual",
   "cohortStatus_upcoming": "Pendiente",
-  "cohortProgressHint": "Los recuentos de abajo abarcan todos los dispositivos del despliegue, no una sola cohorte. Una cohorte está completa cuando ninguno de sus dispositivos está pendiente ni actualizándose.",
   "cohortPromote": "Promover a la siguiente cohorte",
   "cohortReadyHint": "{{name}} terminó sin fallos. Al promoverla se libera la siguiente cohorte.",
   "cohortReadyLastHint": "Es la última cohorte. Al promoverla se completa el despliegue.",
@@ -200,5 +199,9 @@
   "cohortHaltHint": "{{failures}} de {{samples}} dispositivos recientes tuvieron un mal resultado, por encima del límite del {{percentage}} %. Reanudar anula solo esta parada; un nuevo mal resultado puede volver a detenerlo.",
   "cohortHaltConfirmTitle": "¿Anular la parada por tasa de fallos?",
   "cohortHaltConfirmBody": "{{failures}} de {{samples}} dispositivos recientes tuvieron un mal resultado, por encima del límite del {{percentage}} %. El despliegue se reanuda y continúa salvo que nuevos malos resultados lo detengan de nuevo.",
+  "cohortColTargets": "Dispositivos",
+  "cohortColFailures": "Fallidos o desconocidos",
+  "rolloutAnyCohort": "Cualquier cohorte",
+  "rolloutCohortFilterLabel": "Filtrar dispositivos por cohorte",
   "rolloutColCohort": "Cohorte"
 }
