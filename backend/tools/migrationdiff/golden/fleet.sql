@@ -65,7 +65,7 @@ BEGIN
  RAISE EXCEPTION 'writer_slot_transitions is append-only' USING ERRCODE = 'integrity_constraint_violation';
 CREATE INDEX idx_audit_tenant_time ON fleet.audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX ix_cloud_identities_onboarding_id ON fleet.cloud_identities USING btree (onboarding_id);
-CREATE INDEX ix_cloud_operations_unsettled ON fleet.cloud_operations USING btree (cluster_uid) WHERE (NOT ((status = 'DONE'::text) AND ((error_code IS NULL) OR (resolution = ANY (ARRAY['RECONCILED'::text, 'QUARANTINED'::text])))));
+CREATE INDEX ix_cloud_operations_unsettled ON fleet.cloud_operations USING btree (cluster_uid) WHERE (NOT ((status = 'DONE'::text) AND ((error_code IS NULL) OR COALESCE((resolution = ANY (ARRAY['RECONCILED'::text, 'QUARANTINED'::text])), false))));
 CREATE INDEX ix_import_records_cluster_uid ON fleet.import_records USING btree (cluster_uid);
 CREATE INDEX ix_writer_slot_transitions_cluster_uid ON fleet.writer_slot_transitions USING btree (cluster_uid);
 CREATE SCHEMA fleet;
