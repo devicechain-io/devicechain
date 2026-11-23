@@ -66,6 +66,17 @@ namespace DeviceChain.Harborpulse.Visuals
                 s.Append("\nOTA ").Append(charger.OtaOutcome ?? "not reported").Append(" · attempt ").Append(charger.AttemptState ?? "not reported");
                 s.Append(" · ").Append(Age(charger.OtaObservedAt, f));
             }
+            else if (f.LinkedChargers.TryGetValue(id, out var linked))
+            {
+                s.Append(linked.Link).Append(" · power ").Append(Value(linked.Power, " kW", f));
+                s.Append("\ntype ").Append(device.DeviceType).Append(device.Kind == DeviceKind.CertCharger ? " · its own MQTT session, under a client certificate" : " · its own MQTT session, under a device token");
+            }
+            else if (f.PullLamps.TryGetValue(id, out var pull))
+            {
+                s.Append(pull.Link).Append(" · dim ").Append(Value(pull.Dim, " %", f));
+                s.Append("\ntype ").Append(device.DeviceType).Append(" · asks the platform for its commands");
+                s.Append("\nlantern: lit with the dusk (scene), at the reported level");
+            }
             else if (f.Lamps.TryGetValue(id, out var lamp))
             {
                 s.Append(lamp.Condition).Append(" · dim ").Append(Number(lamp.DimPct, " %")).Append(" · ").Append(Age(lamp.LastAt, f));
