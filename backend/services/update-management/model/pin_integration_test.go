@@ -60,7 +60,7 @@ func newPinFixture(t *testing.T) *pinFixture {
 	})
 	store, err := blob.New(ctx, blob.Config{Backend: blob.BackendFilesystem, Directory: t.TempDir()}, instance)
 	require.NoError(t, err)
-	api := NewApi(mgr, store, Limits{MaxArtifactBytes: 1000, ConfiguredMaxArtifactBytes: 1000, MaxTenantArtifactBytes: 1000})
+	api := NewApi(mgr, store, Limits{MaxArtifactBytes: 1000, MaxTenantArtifactBytes: 1000})
 	api.Profiles = &fakeProfiles{known: map[string][]string{"acme": {"gateway"}}}
 
 	tctx := tenantCtx("acme")

@@ -176,8 +176,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		GraphQL: &service.GraphQLSpec{
 			Schema: graphql.SchemaContent,
 			Resolver: func() interface{} {
-				return newSchemaResolver(Configuration, string(Microservice.FunctionalArea),
-					Microservice.InstanceConfiguration.Infrastructure.Blob.Backend)
+				return newSchemaResolver(Configuration, string(Microservice.FunctionalArea))
 			},
 			Providers: func() map[gqlcore.ContextKey]interface{} {
 				return map[gqlcore.ContextKey]interface{}{
@@ -269,18 +268,12 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 	if err != nil {
 		return nil, err
 	}
-	backend := Microservice.InstanceConfiguration.Infrastructure.Blob.Backend
 	api := model.NewApi(RdbManager, store, model.Limits{
-		MaxArtifactBytes:           Configuration.EffectiveMaxArtifactBytes(backend),
-		ConfiguredMaxArtifactBytes: Configuration.Updates.MaxArtifactBytes,
-		MaxTenantArtifactBytes:     Configuration.Updates.MaxTenantArtifactBytes,
+		MaxArtifactBytes:       Configuration.Updates.MaxArtifactBytes,
+		MaxTenantArtifactBytes: Configuration.Updates.MaxTenantArtifactBytes,
 	})
 	if store == nil {
 		log.Warn().Msg("Object store not configured (infrastructure.blob) - artifacts cannot be declared or uploaded until it is.")
-	}
-	if backend == blob.BackendS3 && Configuration.Updates.MaxArtifactBytes > config.S3BufferedPutCap {
-		log.Warn().Int64("configured", Configuration.Updates.MaxArtifactBytes).Int64("effective", config.S3BufferedPutCap).
-			Msg("The S3 object store buffers an upload in memory, so artifacts are limited to the effective ceiling until streaming multipart upload lands.")
 	}
 
 	api.Policy = Configuration.Policy()
@@ -494,11 +487,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 
 // newSchemaResolver is the data-plane root resolver for a configuration: what updateManagementInfo
 // reports is read from the configuration here, in one place a test can pin.
-func newSchemaResolver(cfg *config.UpdateManagementConfiguration, area, blobBackend string) *graphql.SchemaResolver {
+func newSchemaResolver(cfg *config.UpdateManagementConfiguration, area string) *graphql.SchemaResolver {
 	return &graphql.SchemaResolver{
 		Area:                     area,
 		AllowUnverifiedArtifacts: cfg.Updates.AllowUnverifiedArtifacts,
 		DownloadsConfigured:      cfg.Updates.DownloadBaseURL != "",
-		MaxArtifactBytes:         cfg.EffectiveMaxArtifactBytes(blobBackend),
+		MaxArtifactBytes:         cfg.Updates.MaxArtifactBytes,
 	}
 }

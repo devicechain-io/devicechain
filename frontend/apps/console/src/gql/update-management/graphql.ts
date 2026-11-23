@@ -215,6 +215,8 @@ export type UpdateRolloutState =
 
 /** Criteria for paging a rollout's targets. */
 export type UpdateRolloutTargetSearchCriteria = {
+  /** Only targets in this zero-based cohort. Null includes all cohorts; an index beyond the frozen cohorts returns no targets. Negative values are rejected. */
+  cohort?: number | null | undefined;
   /** Only targets with this outcome. */
   outcome?: UpdateRolloutOutcome | null | undefined;
   /** Page to return, starting at 1. A value below 1 is treated as 1. */
@@ -384,16 +386,16 @@ export type UpdateRolloutsQueryVariables = Exact<{
 }>;
 
 
-export type UpdateRolloutsQuery = { updateRollouts: { results: Array<{ id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type UpdateRolloutsQuery = { updateRollouts: { results: Array<{ id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
-export type RolloutFieldsFragment = { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } };
+export type RolloutFieldsFragment = { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } };
 
 export type UpdateRolloutQueryVariables = Exact<{
   token: string;
 }>;
 
 
-export type UpdateRolloutQuery = { updateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } | null };
+export type UpdateRolloutQuery = { updateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } | null };
 
 export type UpdateRolloutTargetsQueryVariables = Exact<{
   token: string;
@@ -408,21 +410,21 @@ export type CreateUpdateRolloutMutationVariables = Exact<{
 }>;
 
 
-export type CreateUpdateRolloutMutation = { createUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
+export type CreateUpdateRolloutMutation = { createUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
 
 export type StartUpdateRolloutMutationVariables = Exact<{
   token: string;
 }>;
 
 
-export type StartUpdateRolloutMutation = { startUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
+export type StartUpdateRolloutMutation = { startUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
 
 export type PauseUpdateRolloutMutationVariables = Exact<{
   token: string;
 }>;
 
 
-export type PauseUpdateRolloutMutation = { pauseUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
+export type PauseUpdateRolloutMutation = { pauseUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
 
 export type ResumeUpdateRolloutMutationVariables = Exact<{
   token: string;
@@ -430,7 +432,7 @@ export type ResumeUpdateRolloutMutationVariables = Exact<{
 }>;
 
 
-export type ResumeUpdateRolloutMutation = { resumeUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
+export type ResumeUpdateRolloutMutation = { resumeUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
 
 export type PromoteUpdateRolloutMutationVariables = Exact<{
   token: string;
@@ -439,7 +441,7 @@ export type PromoteUpdateRolloutMutationVariables = Exact<{
 }>;
 
 
-export type PromoteUpdateRolloutMutation = { promoteUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
+export type PromoteUpdateRolloutMutation = { promoteUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
 
 export type ResumeHaltedUpdateRolloutMutationVariables = Exact<{
   token: string;
@@ -448,14 +450,14 @@ export type ResumeHaltedUpdateRolloutMutationVariables = Exact<{
 }>;
 
 
-export type ResumeHaltedUpdateRolloutMutation = { resumeHaltedUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
+export type ResumeHaltedUpdateRolloutMutation = { resumeHaltedUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
 
 export type AbortUpdateRolloutMutationVariables = Exact<{
   token: string;
 }>;
 
 
-export type AbortUpdateRolloutMutation = { abortUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
+export type AbortUpdateRolloutMutation = { abortUpdateRollout: { id: string, token: string, name: string, groupToken: string, groupVersion: number | null, maxInFlight: number, failureThreshold: number | null, state: UpdateRolloutState, pauseReason: UpdateRolloutPauseReason | null, targetCount: number, currentCohort: number, haltSequence: number, haltFailures: number, haltSamples: number, createdAt: string | null, createdBy: string | null, startedAt: string | null, finishedAt: string | null, stateChangedBy: string | null, stateChangedAt: string | null, cohorts: Array<{ name: string, deviceTokens: Array<string>, percentage: number, manualPromotion: boolean, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } }>, failureRate: { percentage: number, windowSeconds: number, minimumSamples: number } | null, artifact: { token: string, name: string, version: string, component: string, state: ArtifactState, trustStatus: ArtifactTrustStatus }, progress: { total: number, pending: number, inFlight: number, succeeded: number, failed: number, unknown: number, cancelled: number, skipped: number } } };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -492,6 +494,16 @@ export const RolloutFieldsFragmentDoc = new TypedDocumentString(`
     deviceTokens
     percentage
     manualPromotion
+    progress {
+      total
+      pending
+      inFlight
+      succeeded
+      failed
+      unknown
+      cancelled
+      skipped
+    }
   }
   currentCohort
   failureRate {
@@ -1187,6 +1199,16 @@ export const UpdateRolloutsDocument = new TypedDocumentString(`
     deviceTokens
     percentage
     manualPromotion
+    progress {
+      total
+      pending
+      inFlight
+      succeeded
+      failed
+      unknown
+      cancelled
+      skipped
+    }
   }
   currentCohort
   failureRate {
@@ -1244,6 +1266,16 @@ export const UpdateRolloutDocument = new TypedDocumentString(`
     deviceTokens
     percentage
     manualPromotion
+    progress {
+      total
+      pending
+      inFlight
+      succeeded
+      failed
+      unknown
+      cancelled
+      skipped
+    }
   }
   currentCohort
   failureRate {
@@ -1322,6 +1354,16 @@ export const CreateUpdateRolloutDocument = new TypedDocumentString(`
     deviceTokens
     percentage
     manualPromotion
+    progress {
+      total
+      pending
+      inFlight
+      succeeded
+      failed
+      unknown
+      cancelled
+      skipped
+    }
   }
   currentCohort
   failureRate {
@@ -1379,6 +1421,16 @@ export const StartUpdateRolloutDocument = new TypedDocumentString(`
     deviceTokens
     percentage
     manualPromotion
+    progress {
+      total
+      pending
+      inFlight
+      succeeded
+      failed
+      unknown
+      cancelled
+      skipped
+    }
   }
   currentCohort
   failureRate {
@@ -1436,6 +1488,16 @@ export const PauseUpdateRolloutDocument = new TypedDocumentString(`
     deviceTokens
     percentage
     manualPromotion
+    progress {
+      total
+      pending
+      inFlight
+      succeeded
+      failed
+      unknown
+      cancelled
+      skipped
+    }
   }
   currentCohort
   failureRate {
@@ -1493,6 +1555,16 @@ export const ResumeUpdateRolloutDocument = new TypedDocumentString(`
     deviceTokens
     percentage
     manualPromotion
+    progress {
+      total
+      pending
+      inFlight
+      succeeded
+      failed
+      unknown
+      cancelled
+      skipped
+    }
   }
   currentCohort
   failureRate {
@@ -1554,6 +1626,16 @@ export const PromoteUpdateRolloutDocument = new TypedDocumentString(`
     deviceTokens
     percentage
     manualPromotion
+    progress {
+      total
+      pending
+      inFlight
+      succeeded
+      failed
+      unknown
+      cancelled
+      skipped
+    }
   }
   currentCohort
   failureRate {
@@ -1615,6 +1697,16 @@ export const ResumeHaltedUpdateRolloutDocument = new TypedDocumentString(`
     deviceTokens
     percentage
     manualPromotion
+    progress {
+      total
+      pending
+      inFlight
+      succeeded
+      failed
+      unknown
+      cancelled
+      skipped
+    }
   }
   currentCohort
   failureRate {
@@ -1672,6 +1764,16 @@ export const AbortUpdateRolloutDocument = new TypedDocumentString(`
     deviceTokens
     percentage
     manualPromotion
+    progress {
+      total
+      pending
+      inFlight
+      succeeded
+      failed
+      unknown
+      cancelled
+      skipped
+    }
   }
   currentCohort
   failureRate {

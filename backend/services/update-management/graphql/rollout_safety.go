@@ -45,8 +45,8 @@ func (r *UpdateRolloutResolver) Cohorts() ([]*cohortResolver, error) {
 		return nil, err
 	}
 	out := make([]*cohortResolver, 0, len(plan))
-	for _, c := range plan {
-		out = append(out, &cohortResolver{c})
+	for i, c := range plan {
+		out = append(out, &cohortResolver{c: c, progress: r.M.CohortProgress[i]})
 	}
 	return out, nil
 }
@@ -59,7 +59,14 @@ func (r *UpdateRolloutResolver) FailureRate() (*failureRateResolver, error) {
 	return &failureRateResolver{*f}, nil
 }
 
-type cohortResolver struct{ c model.RolloutCohort }
+type cohortResolver struct {
+	c        model.RolloutCohort
+	progress model.RolloutProgress
+}
+
+func (r *cohortResolver) Progress() *rolloutProgressResolver {
+	return &rolloutProgressResolver{m: r.progress}
+}
 
 func (r *cohortResolver) Name() string          { return r.c.Name }
 func (r *cohortResolver) Percentage() int32     { return r.c.Percentage }

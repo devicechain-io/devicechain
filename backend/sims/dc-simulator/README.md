@@ -833,6 +833,45 @@ the generated `demos/harborpulse-unity/Assets/Harborpulse/Resources/harbor_layou
 does not edit the Unity project. The cues live inside that JSON, and `/status.scenario.layoutDigest`
 automatically identifies the generated S6 contract.
 
+### Harborpulse tenant isolation and MCP fleet questions (S7)
+
+The rig starts a second harborpulse sim in its own tenant, with the same device tokens and
+external ids. The inventories carry tenant-specific descriptions and pumps store an
+`hp_tenant_marker` measurement. These witnesses distinguish two otherwise identical fleets;
+the oracle reads devices, alarms, event ids, broker state and aggregates from the platform.
+
+`tenant-isolation` rejects foreign inventory, alarm originators, event ids and measurements.
+Tenant B's real MCP session exercises `list_devices`, `list_alarms`, `get_device_state` and
+`aggregate_measurements` against independent tenant GraphQL reads. Broker admission timestamps
+distinguish the state of the two tenants. `mcp-fleet-qa` asks which quay is flooding and which
+pumps ran: critical flood alarms identify East Quay, while stored `pump_running` aggregates and
+successful command history answer the pump question. Collection runs beside the original alarm
+watch so MCP cannot introduce a gap in S1-S6 observations. The rig waits for every sim to
+bootstrap before starting their clocks; MCP collection waits for the selected primary watch.
+
+`up` enables the MCP area and requires its OAuth challenge and protected-resource metadata to
+serve. Each rig run registers a public OAuth client through user-management's admin registry,
+then the verifier POSTs B's member login and consent to the real authorization endpoint and
+redeems the authorization code with S256 PKCE and the MCP resource indicator. The MCP bearer is
+that member's token with explicit `read-only location` consent. The separate `location` scope
+allows the truck's geofence alarm to participate in the full tenant alarm comparison; a
+`read-only` grant alone legitimately withholds position-derived alarms. The operator credential
+is used only for client registration and deletion. Tokens, the identity proof, authorization
+code and PKCE verifier stay in memory and
+never enter reports or logs; a public client has no client secret. Teardown deletes the client.
+
+For a standalone verifier, add `--peer-handshake <B.json> --peer-sim <B-control-URL>`,
+`--mcp <MCP-endpoint> --oauth-client <per-run-client-id>`. Operator setup can use
+`--oauth-client-action create` (and `delete`) with `DC_ADMIN_PASSWORD`; it does not run the
+oracle. Without a peer, both S7 invariants are explicitly omitted. The rig enables them on the
+clean run and the two S7 controls; legacy control batches retain their existing observations to
+stay below MCP's per-caller session ceiling.
+
+Controls `--scenario-defect isolation-cross-read` and `--scenario-defect mcp-wrong-answer`
+each must turn exactly one invariant red, including when every S1-S6 invariant is evaluated.
+The former actually reads B with B's identity in A's observation slot; the latter changes only
+the scripted flooding answer. S7 adds no devices to the scene layout.
+
 ### Harborpulse shared thresholds, downlinks and calculated backfill (S3b)
 
 #### Shared attribute thresholds

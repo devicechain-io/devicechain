@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/blob"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/ota"
 )
@@ -47,13 +46,6 @@ const (
 	MaxCapabilityTTLSeconds     = 15 * 60
 	// DefaultSweepIntervalSeconds is how often the deadline sweep looks for stalled attempts.
 	DefaultSweepIntervalSeconds = 30
-
-	// S3BufferedPutCap is the largest object the S3 backend can store today: its Put
-	// buffers the object to hand PutObject a known length, so a larger one would be held
-	// in memory. Until the streaming multipart upload lands, an artifact bigger than this
-	// is refused at create on that backend rather than at upload time, so a declared
-	// size that can never be stored never produces an UPLOADING row that can never finish.
-	S3BufferedPutCap int64 = 64 << 20 // 64 MiB
 )
 
 // UpdateManagementConfiguration is the typed configuration of the update-management
@@ -238,17 +230,6 @@ func (c *UpdateManagementConfiguration) Validate() error {
 			c.Updates.MaxArtifactBytes, c.Updates.MaxTenantArtifactBytes)
 	}
 	return nil
-}
-
-// EffectiveMaxArtifactBytes is the per-artifact ceiling in force on the given blob
-// backend: the configured ceiling, clamped to what the backend can store without
-// buffering the object in memory.
-func (c *UpdateManagementConfiguration) EffectiveMaxArtifactBytes(backend string) int64 {
-	max := c.Updates.MaxArtifactBytes
-	if backend == blob.BackendS3 && max > S3BufferedPutCap {
-		return S3BufferedPutCap
-	}
-	return max
 }
 
 // DownloadBaseIsInsecure reports a configured download base that is plain http on a host other

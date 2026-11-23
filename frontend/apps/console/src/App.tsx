@@ -13,6 +13,7 @@ import Home from '@/routes/Home';
 import { AreaGate } from '@/components/AreaUnavailable';
 import { RouteSuspense } from '@/components/RouteSuspense';
 import { AREA } from '@/lib/capabilities';
+import { COMMAND_PROPOSAL_AREA } from '@/lib/proposal-areas';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { scopedRouteAllowed } from '@/lib/scope';
 
@@ -143,6 +144,7 @@ export default function App() {
           <Route path="alarms" element={<AlarmsPage />} />
           <Route path="approvals" element={<ApprovalsPage />} />
           <Route path="approvals/:token" element={<ApprovalDetailPage />} />
+          <Route path="approvals/command-delivery/:token" element={<ApprovalDetailPage area={COMMAND_PROPOSAL_AREA} />} />
           <Route path="automation-reviews/:token" element={<AutomationReviewPage />} />
           {/* Not wrapped in AreaGate: the page renders its own "not deployed" state on
               status === 'absent', before any query fires. */}

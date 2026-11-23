@@ -36,8 +36,7 @@ puede recibir una actualización gestionada si además se conecta como dispositi
 `update-management` forma parte del perfil `default` (y por tanto de `full`); solo los perfiles
 `telemetry` e `ingest-only` lo dejan fuera, y `enabledFunctionalAreas` puede nombrarlo allí. Depende de `device-management` y guarda el contenido de los artefactos
 en el [almacén de objetos](./object-storage.md): sin almacén configurado, declarar un artefacto se
-rechaza con `OBJECT_STORE_NOT_CONFIGURED`. En el backend S3 una subida se almacena en memoria, así
-que allí los artefactos están limitados a 64 MiB sea cual sea el límite configurado.
+rechaza con `OBJECT_STORE_NOT_CONFIGURED`.
 
 ### Antes de la primera actualización {#first-update}
 

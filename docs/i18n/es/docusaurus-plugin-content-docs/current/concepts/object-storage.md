@@ -58,7 +58,7 @@ En una instancia creada con `dcctl`, nada de esto se escribe a mano: `dcctl boot
 
 El white-labeling de inquilino es la primera funcionalidad construida sobre el almacén de objetos. El logo de un inquilino se sube al almacén y se referencia por handle desde la configuración de marca del inquilino. Los activos muy pequeños aún pueden suministrarse en línea (un data-URI acotado) en despliegues sin almacenamiento configurado, pero los activos de imagen reales pasan por el almacén. El campo `background` del registro de marca es un color hexadecimal, no una imagen.
 
-El segundo consumidor son las [actualizaciones over-the-air](./over-the-air-updates.md). El contenido de cada artefacto de actualización se guarda aquí: entra en streaming al subirse, se verifica contra el tamaño y el digest declarados, y se sirve a los dispositivos mediante una concesión de descarga de corta duración. En el backend S3 una subida se almacena en memoria, así que allí los artefactos están limitados a 64 MiB.
+El segundo consumidor son las [actualizaciones over-the-air](./over-the-air-updates.md). El contenido de cada artefacto de actualización se guarda aquí: entra en streaming al subirse, se verifica contra el tamaño y el digest declarados, y se sirve a los dispositivos mediante una concesión de descarga de corta duración.
 
 ## Relacionado
 

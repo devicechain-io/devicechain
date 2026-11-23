@@ -88,6 +88,11 @@ func TestEveryMCPDocumentValidatesAgainstTheSchemaItIsSentTo(t *testing.T) {
 		}
 	}
 
+	for _, want := range []string{"ProposeCommand", "GetCommandProposal", "ListMyCommandProposals"} {
+		if names[want] != "command-delivery" {
+			t.Fatalf("registry has no %s for command-delivery", want)
+		}
+	}
 	schemas := map[string]*graphql.Schema{}
 	for _, d := range documents {
 		s, ok := schemas[d.area]

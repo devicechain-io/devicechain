@@ -34,7 +34,7 @@ type ServiceInfo {
     allowUnverifiedArtifacts: Boolean!
     """
     The largest artifact this deployment accepts, in bytes, as a decimal string: the configured
-    ceiling already clamped to what the object store can take in one upload.
+    ceiling.
     """
     maxArtifactBytes: String!
     """
@@ -557,6 +557,8 @@ input UpdateRolloutCreateRequest {
 
 """A named cohort in an immutable rollout plan."""
 type UpdateRolloutCohort {
+    """This cohort's frozen targets counted by outcome, using the same rules as rollout progress; all counts are zero before targets are frozen."""
+    progress: UpdateRolloutProgress!
     """Unique cohort label."""
     name: String!
     """Explicit canary device tokens; empty for a percentage cohort."""
@@ -619,6 +621,8 @@ type UpdateRolloutSearchResults {
 
 """Criteria for paging a rollout's targets."""
 input UpdateRolloutTargetSearchCriteria {
+    """Only targets in this zero-based cohort. Null includes all cohorts; an index beyond the frozen cohorts returns no targets. Negative values are rejected."""
+    cohort: Int
     """Page to return, starting at 1. A value below 1 is treated as 1."""
     pageNumber: Int!
     """Records per page."""
