@@ -55,6 +55,8 @@ namespace DeviceChain.Harborpulse.Model
                     reading = new Reading(LampsOn(h) || outage ? 1 : 0, at);
                     return true;
                 case Metrics.Dim:
+                    // a pull lamp holds full level until it fetches the day's set-dim command
+                    if (d.Kind == DeviceKind.PullLight) { reading = new Reading(h >= PullDimHour ? PullDimPct : 100, now); return true; }
                     if (d.Kind != DeviceKind.Light) return false;
                     reading = new Reading(100, now);
                     return true;
@@ -62,6 +64,17 @@ namespace DeviceChain.Harborpulse.Model
                     return TryPreviewMetric(d, metric, h, outage, out reading);
             }
         }
+
+        /// <summary>
+        /// The stand-in day of the devices that hold their own session, after the simulator's: the lamps fetch a set-dim to 35 % at 10:00, the
+        /// first charger on a token drops its session from 12:00 to 13:00, and the second charger on a certificate is refused from 14:00.
+        /// </summary>
+        public const double PullDimHour = 10, PullDimPct = 35, MqttDropFrom = 12, MqttDropTo = 13, CertRefusedFrom = 14, LinkedChargerKw = 7.2;
+
+        /// <summary>The hour a linked charger's stand-in fell silent, when it is silent at <paramref name="h"/>.</summary>
+        public static double? LinkedSilentSince(LayoutDevice d, double h) =>
+            d.Kind == DeviceKind.MqttCharger && d.Index == 1 && h >= MqttDropFrom && h < MqttDropTo ? MqttDropFrom :
+            d.Kind == DeviceKind.CertCharger && d.Index == 2 && h >= CertRefusedFrom ? CertRefusedFrom : (double?)null;
 
         static double Tide(double h) => 0.5 + 0.5 * Math.Cos(2 * Math.PI * (h - 19) / 12);
 

@@ -85,10 +85,11 @@ namespace DeviceChain.Harborpulse.Model.Director
             return layout.Devices.Where(d => frame.AlarmCounts.TryGetValue(d.ExternalId, out var n) && n > 0)
                 .Take(Math.Min(4, limit)).Select(d => new WorldTag { Token = d.Token, Text = HumanName(d) + " · alarm" }).ToArray();
         }
-        static string HumanName(LayoutDevice d)
+        public static string HumanName(LayoutDevice d)
         {
             var quay = d.Quay == "hp-east-quay" ? "E" : d.Quay == "hp-basin" ? "B" : "N";
-            return (d.Kind == DeviceKind.Light ? "Lamp " : d.Kind == DeviceKind.Charger ? "Charger " : DeviceKind.IsGauge(d.Kind) ? "Gauge " : d.Kind == DeviceKind.Pump ? "Pump " : "Building ") + quay + (d.Index > 0 ? d.Index.ToString(CultureInfo.InvariantCulture) : "");
+            return (d.Kind == DeviceKind.Light ? "Lamp " : d.Kind == DeviceKind.Charger ? "Charger " : d.Kind == DeviceKind.MqttCharger ? "MQTT charger " :
+                d.Kind == DeviceKind.CertCharger ? "Cert charger " : d.Kind == DeviceKind.PullLight ? "Pull lamp " : DeviceKind.IsGauge(d.Kind) ? "Gauge " : d.Kind == DeviceKind.Pump ? "Pump " : "Building ") + quay + (d.Index > 0 ? d.Index.ToString(CultureInfo.InvariantCulture) : "");
         }
         /// <summary>Whether a recording may end now: no caption is visible, or the visible one has had its 3 s floor.</summary>
         public static bool QuitAllowed(DirectorView view, double nowS) => view == null || QuitAllowed(view.Caption, view.CaptionAtS, nowS);

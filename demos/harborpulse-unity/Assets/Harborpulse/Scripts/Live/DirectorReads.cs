@@ -164,7 +164,7 @@ namespace DeviceChain.Harborpulse.Live
                 if (probe.Result.Probe == DirectorProbe.PROBE_FAILED) continue;
                 if (probe.Result.Probe == DirectorProbe.Waiting) { if (!probe.Busy) { probe.Busy = true; _ = Poll(probe); } continue; }
                 // Per-device reads (one per alarm originator, notification alarm, history device) run several at once, so one
-                // round of 37 alarm reads does not take 37 round trips; a fleet-wide read keeps one request in flight.
+                // round of alarm reads, one for each device, does not take that many round trips; a fleet-wide read keeps one request in flight.
                 var limit = Parallel(name);
                 var inFlight = jobs.Values.Count(j => j.Name == name && j.Busy);
                 foreach (var due in jobs.Values.Where(j => j.Name == name && j.Scope != "__probe" && j.Next <= now && !j.Busy).OrderBy(j => j.Next).Take(Math.Max(0, limit - inFlight)).ToArray())

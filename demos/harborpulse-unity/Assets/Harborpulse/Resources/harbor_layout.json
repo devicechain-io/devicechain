@@ -362,6 +362,54 @@
       "kind": "legacy-gauge",
       "quay": "hp-basin",
       "index": 1
+    },
+    {
+      "token": "hp-charger-mqtt-1",
+      "externalId": "hp-charger-mqtt-1",
+      "deviceType": "hp-mqtt-charger",
+      "kind": "mqtt-charger",
+      "quay": "hp-north-quay",
+      "index": 1
+    },
+    {
+      "token": "hp-charger-mqtt-2",
+      "externalId": "hp-charger-mqtt-2",
+      "deviceType": "hp-mqtt-charger",
+      "kind": "mqtt-charger",
+      "quay": "hp-north-quay",
+      "index": 2
+    },
+    {
+      "token": "pv-PAW-CERT-CHARGER-pin-0001-59e6c9cfa974",
+      "externalId": "PAW-CERT-CHARGER-pin-0001",
+      "deviceType": "hp-x509-charger",
+      "kind": "cert-charger",
+      "quay": "hp-north-quay",
+      "index": 1
+    },
+    {
+      "token": "pv-PAW-CERT-CHARGER-pin-0002-13a96fd1a263",
+      "externalId": "PAW-CERT-CHARGER-pin-0002",
+      "deviceType": "hp-x509-charger",
+      "kind": "cert-charger",
+      "quay": "hp-north-quay",
+      "index": 2
+    },
+    {
+      "token": "hp-light-pull-1",
+      "externalId": "hp-light-pull-1",
+      "deviceType": "hp-pull-light",
+      "kind": "pull-light",
+      "quay": "hp-north-quay",
+      "index": 1
+    },
+    {
+      "token": "hp-light-pull-2",
+      "externalId": "hp-light-pull-2",
+      "deviceType": "hp-pull-light",
+      "kind": "pull-light",
+      "quay": "hp-north-quay",
+      "index": 2
     }
   ],
   "fences": [

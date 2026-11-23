@@ -182,12 +182,12 @@ namespace DeviceChain.Harborpulse.Tests
             var scheduler = new Scheduler(DirectorKit.Story(), Kit.Layout()); var store = DirectorTimeline.Clean();
             scheduler.Tick(new DirectorSample("run", 6, 0, defects: new[] { "reconnect-test" }), store);
             scheduler.Tick(new DirectorSample("run", 6, 1, stale: true), store); scheduler.Tick(new DirectorSample("run", 6, 3, stale: true), store);
-            store.Add(DirectorKit.O("binding", status: "READY", sim: 6, wall: 61, fields: new Dictionary<string, string> { ["freshDevices"] = "37" }));
+            store.Add(DirectorKit.O("binding", status: "READY", sim: 6, wall: 61, fields: new Dictionary<string, string> { ["freshDevices"] = "43" }));
             for (var t = 61; t <= 67; t++) {
-                store.Add(DirectorKit.O("binding", status: "READY", sim: 6, wall: t, fields: new Dictionary<string, string> { ["freshDevices"] = "37" }));
+                store.Add(DirectorKit.O("binding", status: "READY", sim: 6, wall: t, fields: new Dictionary<string, string> { ["freshDevices"] = "43" }));
                 scheduler.Tick(new DirectorSample("run", 6, t), store);
             }
-            Assert.That(scheduler.Log.Any(e => e.Kind == "caption" && e.ShowS >= 61 && e.Value.Contains("37 devices")), Is.True);
+            Assert.That(scheduler.Log.Any(e => e.Kind == "caption" && e.ShowS >= 61 && e.Value.Contains("43 devices")), Is.True);
         }
         [TestCase("caption")][TestCase("title")][TestCase("visible-caption")]
         public void CaptionCheckerRejectsFinalShortCaptionAtEofIncludingTitle(string kind)

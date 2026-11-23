@@ -61,14 +61,8 @@ func TestHarborpulseSceneLayoutIsTheManifestFleet(t *testing.T) {
 			provisioned[in.ExternalId] = p.OfType
 		}
 	}
-	// The S6 devices are provisioned but deliberately not drawn (the Unity scene authors one
-	// presentation anchor per drawn device and refuses any other count): exactly those, no others.
-	for _, d := range harborS6SceneDevices() {
-		if provisioned[d.ExternalId] != d.DeviceType {
-			t.Errorf("S6 device %s is not provisioned as %s", d.ExternalId, d.DeviceType)
-		}
-		delete(provisioned, d.ExternalId)
-	}
+	// Nothing the manifest provisions is left undrawn (the S6 chargers and pull lamps were, until the
+	// scene authored their anchors): the two sets below are compared whole, in both directions.
 	layout := HarborpulseSceneLayout()
 	drawn := map[string]string{}
 	for _, d := range layout.Devices {
@@ -95,6 +89,27 @@ func TestHarborpulseSceneLayoutIsTheManifestFleet(t *testing.T) {
 		case !isLight && d.Position != nil:
 			t.Errorf("%s: the scene gives a position the manifest does not", d.Token)
 		}
+	}
+
+	// the S6 populations are drawn as their own kinds, never as a district charger or street light:
+	// the scene binds one device type to a kind and reads that kind's metrics
+	kinds := map[string]string{HarborpulseMQTTChargerType: harborSceneMQTTCharger, HarborpulseX509ChargerType: harborSceneCertCharger, HarborpulsePullLightType: harborScenePullLight}
+	typeOf := map[string]string{}
+	s6 := 0
+	for _, d := range layout.Devices {
+		if want, ok := kinds[d.DeviceType]; ok {
+			s6++
+			if d.Kind != want {
+				t.Errorf("%s: type %s is drawn as kind %q, want %q", d.Token, d.DeviceType, d.Kind, want)
+			}
+		}
+		if other, seen := typeOf[d.Kind]; seen && other != d.DeviceType {
+			t.Errorf("kind %q is drawn for two device types, %s and %s", d.Kind, other, d.DeviceType)
+		}
+		typeOf[d.Kind] = d.DeviceType
+	}
+	if want := len(HarborpulseMQTTChargers()) + len(HarborpulseX509Chargers()) + len(HarborpulsePullLights()); s6 != want {
+		t.Errorf("the scene draws %d S6 devices, the scenario has %d", s6, want)
 	}
 
 	// the beats are the ones /status names

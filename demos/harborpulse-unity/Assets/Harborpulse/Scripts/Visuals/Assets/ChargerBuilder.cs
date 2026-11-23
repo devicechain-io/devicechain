@@ -28,6 +28,19 @@ namespace DeviceChain.Harborpulse.Visuals
             }
             r.Part("Holster", fittings, m.DarkSteel, Vector3.zero);
             r.Box("Connector", new Vector3(0.45f, 1.2f, 0.4f), new Vector3(0.12f, 0.25f, 0.22f), m.Flow);
+            Bay(r, m, carAt, detail);
+            r.Part("MaintenanceRing", new MeshKit().Ring(Vector3.zero, 3.4f, 0.06f), m.WorldCue, Vector3.up * 0.08f, false);
+            r["CardAnchor"].localPosition = Vector3.up * 2.8f;
+            r.MergeFixed("Holster", "BayMarkings");
+            return r;
+        }
+
+        /// <summary>
+        /// The bay in front of any charger: the car and the cable out to it (both shown only while the charger is seen delivering), and the
+        /// bay's painted lines. The parts are named Car, Cable and BayMarkings.
+        /// </summary>
+        internal static void Bay(AssetRig r, HarborMaterials m, Vector3 carAt, DetailManager detail)
+        {
             var car = r.Add("Car", carAt);
             new MeshKit().Box(new Vector3(0, 0.65f, 0), new Vector3((float)WorldPropPlan.CarBodyWidth, 0.65f, (float)WorldPropPlan.CarDepth)).Box(new Vector3(0, 1.16f, -0.2f), new Vector3(1.6f, 0.65f, 1.9f)).Spawn("UnbrandedHatchback", car, m.Render);
             new MeshKit().Box(new Vector3(0, 1.2f, 0.79f), new Vector3(1.5f, 0.45f, 0.04f)).Spawn("CarWindows", car, m.Glass);
@@ -45,10 +58,6 @@ namespace DeviceChain.Harborpulse.Visuals
             for (var side = -1; side <= 1; side += 2) bay.Box(carAt+new Vector3(side * 1.35f, 0.05f, -.9f), new Vector3(0.08f, 0.03f, 5.8f));
             bay.Box(carAt+new Vector3(0,.05f,2), new Vector3(2.7f, 0.03f, 0.08f));
             r.Part("BayMarkings", bay, m.GaugeBoard, Vector3.zero);
-            r.Part("MaintenanceRing", new MeshKit().Ring(Vector3.zero, 3.4f, 0.06f), m.WorldCue, Vector3.up * 0.08f, false);
-            r["CardAnchor"].localPosition = Vector3.up * 2.8f;
-            r.MergeFixed("Holster", "BayMarkings");
-            return r;
         }
     }
 }

@@ -80,7 +80,7 @@ namespace DeviceChain.Harborpulse.EditorTools
                     Render(app.sceneCamera,Path.Combine(dir,name+"-beauty.png"),width,height,"OFFLINE PREVIEW - HOME 12:30",app);
                     if(app.Hud!=null)app.Hud.Visible=hudShown;
                     var check=Mask(app,Path.Combine(dir,name+"-masks.png"),width,height);checks.Add(check);
-                    Debug.Log("[harborpulse] "+name+" water="+check.Water.ToString("P2",CultureInfo.InvariantCulture)+" sky="+check.Sky.ToString("P2",CultureInfo.InvariantCulture)+" devices="+check.Devices+"/37 "+(check.Passed?"PASS":"FAIL"));
+                    Debug.Log("[harborpulse] "+name+" water="+check.Water.ToString("P2",CultureInfo.InvariantCulture)+" sky="+check.Sky.ToString("P2",CultureInfo.InvariantCulture)+" devices="+check.Devices+"/"+app.World.Rigs.Count+" "+(check.Passed?"PASS":"FAIL"));
                 }
                 File.WriteAllText(Path.Combine(dir,"home-check.json"),DirectorWire.Json(w=>
                 {
