@@ -612,6 +612,9 @@ dcctl upgrade local devicechain --version v1.9.0
 - **Site Pulse 演示中的推土机现在有自己的设备配置文件。** 推土机不载货也没有轮胎，却与装载机和运输卡车共用同一个设备配置文件，因此车队表为它声明了载重和胎压，并显示“范围内无数据”。推土机类型现在使用独立的配置文件，仅声明燃油、发动机温度和发动机小时数，命令以及低油量和过热规则保持不变，但没有轮胎规则，因此这些单元格显示“不上报此项”。由早期版本创建的演示实例在重新创建之前仍使用共用的配置文件。
 - **拒绝单点登录链接请求现在会被审计。** 使用 `rejectSsoLinkRequest` 拒绝待处理的请求时，认证审计日志会记录一条 `identity_link_rejected`，与批准请求时记录 `identity_linked` 的方式一致。该记录包含执行拒绝的管理员、请求和连接，不会记录提供方声明的邮箱或 subject。拒绝已不存在的请求，或被拒绝执行的操作，不会产生记录。
 - **每个概念统一使用一个中文术语。** 简体中文控制台与文档现在对同一事物使用相同的词：预配配置文件、制品、分面、推出、身份提供商、机密和签名者不再在不同页面之间、或控制台与文档之间出现不同译法。
+- **故障关闭模式下的 MQTT 可以写入事件信封（可选，默认关闭）。** 开启 `infrastructure.nats.mqttFailClosed` 时，`event-sources` 此前总是把每条 MQTT 消息单独写入 inbound-events 流，即使已开启[事件信封](#event-envelopes)。新的 `event-sources` 设置 `capture.mqttStoreEnvelopes` 让它改为以信封写入，从而减少代理为每个事件所做的工作。只有当 `infrastructure.nats.mqttFailClosed` 和 `infrastructure.messaging.envelopes.inbound` 都开启时它才生效，否则不改变任何行为。只有当消息所在的信封已写入 inbound-events 流后，该消息才会在 MQTT 消息存储中被确认；重新投递的消息会被识别，不会被写入两次。请在每个 `event-sources` Pod 都运行本版本之后，通过单独一次 `dcctl upgrade` 开启它，在值文件中设置 `functionalAreas.event-sources.config.capture.mqttStoreEnvelopes`（参见[调优实例](./tuning-an-instance.md)）。设置改变时，`event-sources` 会先等待按旧设置处理中的消息完成，再按新方式写入。
+- **Harborpulse 模拟器：** 新增 MQTT 和证书认证充电桩、连接状态告警、期望与上报配置，以及通过 HTTP 拉取命令的路灯。新增基于平台数据的验证和相互独立的负面控制，并保留原有设备群及其升级和停电流程。
+- **按批次查看更新进度。** 更新管理 GraphQL API 现在提供每个更新批次的结果计数，并支持按批次筛选目标设备。批次计数与整体更新进度采用相同的结果统计规则。
 
 ### v1.8.0 — 维护窗口暂存告警通知，投递可安然度过中断 {#v180-upgrade}
 
