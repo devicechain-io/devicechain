@@ -57,6 +57,7 @@
   "digest": "Resumen criptográfico",
   "policyVersion": "Versión de la política",
   "reasons": "Motivos",
+  "moreReasons": "+{{count}} más",
   "decision": "Decisión y aprobaciones",
   "created": "Creada",
   "decided": "Fecha de decisión",

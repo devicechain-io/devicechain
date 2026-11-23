@@ -89,6 +89,43 @@ describe('command proposals in the same approvals inbox', () => {
     expect(h.list).toHaveBeenLastCalledWith('command-delivery', { pageNumber: 1, pageSize: 25, state: 'PROPOSED' });
     expect(screen.getByText('Send command')).toBeTruthy();
   });
+  describe('reasons in an inbox row', () => {
+    const listWith = (commandRow: object) => h.list.mockImplementation(async (...args: unknown[]) => ({
+      results: args[0] === 'command-delivery' ? [commandRow] : [{ ...proposal, reasons: ['ALARM_ONLY_REASON'] }],
+      pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } }));
+    const openCommands = async () => {
+      show('/approvals'); await screen.findByRole('link', { name: 'agent-7' });
+      fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+      await screen.findByText('Send command');
+    };
+    it('shows the reasons of a command proposal on the Commands tab', async () => {
+      listWith({ ...commandProposal, reasons: ['TWO_APPROVERS', 'DESTRUCTIVE_NEEDS_TWO_APPROVERS'] });
+      await openCommands();
+      const list = screen.getByRole('list', { name: 'Reasons' });
+      expect(within(list).getAllByRole('listitem').map(li => li.textContent)).toEqual(['TWO_APPROVERS', 'DESTRUCTIVE_NEEDS_TWO_APPROVERS']);
+      expect(screen.queryByText(/more$/)).toBeNull();
+    });
+    it('shows the first two reasons and a count of the rest when there are more', async () => {
+      listWith({ ...commandProposal, reasons: ['R1', 'R2', 'R3', 'R4', 'R5'] });
+      await openCommands();
+      const list = screen.getByRole('list', { name: 'Reasons' });
+      expect(within(list).getAllByRole('listitem').map(li => li.textContent)).toEqual(['R1', 'R2']);
+      expect(screen.getByText('+3 more')).toBeTruthy();
+      expect(screen.queryByText('R3')).toBeNull();
+    });
+    it('shows nothing when a command proposal has no reasons', async () => {
+      listWith({ ...commandProposal, reasons: [] });
+      await openCommands();
+      expect(screen.queryByRole('list', { name: 'Reasons' })).toBeNull();
+      expect(screen.queryByText(/more$/)).toBeNull();
+    });
+    it('leaves alarm rows as they were: no reasons in the row', async () => {
+      listWith({ ...commandProposal, reasons: ['R1'] });
+      show('/approvals'); await screen.findByRole('link', { name: 'agent-7' });
+      expect(screen.queryByText('ALARM_ONLY_REASON')).toBeNull();
+      expect(screen.queryByRole('list', { name: 'Reasons' })).toBeNull();
+    });
+  });
   it('shows an unavailable command area as an error and preserves the alarm tab', async () => {
     h.list.mockImplementation(async (...args: unknown[]) => {
       if (args[0] === 'command-delivery') throw new GraphQLRequestError('Command proposals unavailable', 503);

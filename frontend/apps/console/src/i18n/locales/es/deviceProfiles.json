@@ -92,6 +92,7 @@
   "defParamSchemaHint": "Arreglo JSON opcional de parámetros, cada uno { \"name\", \"dataType\", … }. Déjalo en blanco para un comando sin argumentos.",
   "defParamSchemaLabel": "Esquema de parámetros",
   "defParamSchemaPlaceholder": "[{\"name\":\"level\",\"dataType\":\"INT\",\"required\":true}]",
+  "defStringMetricHint": "Una lectura de texto, como un modo o un estado. No tiene unidad, límites ni fórmula, y nunca se promedia ni se grafica como número.",
   "defTokenLockedHint": "El id; no se puede cambiar.",
   "defUnitHint": "UCUM, p. ej. Cel",
   "defUnitPlaceholder": "Cel",
