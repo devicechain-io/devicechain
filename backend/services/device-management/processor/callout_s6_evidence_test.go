@@ -12,7 +12,6 @@ import (
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,9 +22,8 @@ func TestDisabledCertificateRejectionIdentifiesCertificate(t *testing.T) {
 	r.pin("c-1", "sensor-001", "maker", leaf)
 	require.NoError(t, r.api.RDB.DB(r.ctx).Model(&model.DeviceCredential{}).Where("token = ?", "c-1").Update("enabled", false).Error)
 	var output bytes.Buffer
-	previous := log.Logger
-	log.Logger = zerolog.New(&output).Level(zerolog.InfoLevel)
-	defer func() { log.Logger = previous }()
+	logger := zerolog.New(&output).Level(zerolog.InfoLevel)
+	r.resp.evidenceLog = &logger
 	before := time.Now()
 	_, why := r.authorize(r.clientID("SN-0001"), leaf)
 	require.NotEmpty(t, why)
