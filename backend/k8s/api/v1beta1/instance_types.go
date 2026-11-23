@@ -711,6 +711,7 @@ const (
 //+kubebuilder:object:root=true
 //+kubebuilder:resource:scope=Cluster,shortName=dci
 //+kubebuilder:subresource:status
+//+kubebuilder:storageversion
 //+kubebuilder:printcolumn:name="Provider",type=string,JSONPath=`.spec.provider`
 //+kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=`.spec.cluster`
 //+kubebuilder:printcolumn:name="Profile",type=string,JSONPath=`.spec.profile`
