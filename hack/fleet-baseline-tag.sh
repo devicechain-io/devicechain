@@ -20,7 +20,7 @@ self="$(git tag --points-at HEAD || true)"
 tag="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
   grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
   grep -vxF -f <(printf '%s\n' "$self") |
-  head -n 1 || true)"
+  sed -n '1p' || true)"
 if [ -z "$tag" ]; then
   echo "no stable release tag is visible; fetch tags (actions/checkout fetch-tags: true)" >&2
   exit 1
