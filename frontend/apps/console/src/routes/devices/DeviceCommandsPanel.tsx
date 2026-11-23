@@ -430,7 +430,7 @@ export function DeviceCommandsPanel({
           </DataTableHead>
           <DataTableBody>
             {commands.map((command) => (
-              <DataTableRow key={command.id}>
+              <DataTableRow key={command.id} id={`command-${command.token}`}>
                 <DataTableCell className="whitespace-nowrap text-muted-foreground" data-shot-mask>
                   {formatTime(command.queuedTime)}
                 </DataTableCell>

@@ -12,8 +12,9 @@ export interface Option {
   description?: string;
 }
 
-// Metric data types storable as a time-series measurement (ADR-016 amd): STRING is
-// device state, not a metric, so it is deliberately not offered here.
+// Metric data types the authoring form offers: the numeric ones. STRING (a text reading) is
+// valid in the API but is not offered here, because the form has no unit, bounds or allow-list
+// handling for text; declare a STRING metric through the API or dcctl.
 export const METRIC_DATA_TYPES: Option[] = [
   { value: 'DOUBLE', label: 'Double', description: 'Floating-point measurement' },
   { value: 'INT', label: 'Integer', description: 'Whole-number measurement' },

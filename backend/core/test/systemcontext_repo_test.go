@@ -75,6 +75,10 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/api_group_enroll_reconcile.go": {"Api.reconcileMembershipEnrollment"},
 	// The attribute-repair drain lists the tenants that have queued repairs (no row is read), then repairs each tenant's rows under core.WithTenant.
 	"backend/services/device-management/model/api_attribute_repairs.go": {"Api.DrainAttributeRepairs"},
+	// The configuration-report maintenance lists the tenants that have report history (no row is read), then removes orphans and expired rows under each tenant's own core.WithTenant.
+	"backend/services/device-management/model/api_configuration_report_maintenance.go": {"Api.configurationReportTenants"},
+	// The attribute orphan sweep takes its one-replica session lock and lists the tenants that hold device attribute or generation rows (no row content is read), then removes each tenant's orphans under its own core.WithTenant.
+	"backend/services/device-management/model/api_attribute_orphans.go": {"Api.SweepAllDeviceAttributeOrphans", "Api.attributeOrphanTenants"},
 	// The agent-effect relay lists the tenants that have queued effects, then drains each tenant's rows under core.WithTenant.
 	"backend/services/device-management/model/agent_effect_outbox.go":        {"Api.DrainAgentEffects"},
 	"backend/services/device-management/model/api_profile_decoder_health.go": {"Api.TrimDecoderHealth"},
@@ -86,6 +90,10 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/api_x509_revocation_markers.go": {"Api.tenantsOwingMarkers"},
 	// The agent-proposal reaper: one conditional update that can only move overdue PROPOSED rows to EXPIRED.
 	"backend/services/device-management/model/api_agent_proposals.go": {"Api.ExpireAgentProposals"},
+	// command-delivery's agent-command-proposal reaper (the same expiry, stop-only) and the ruled
+	// 30-day retention purge: one bounded DELETE of proposals decided more than 30 days ago,
+	// never a PROPOSED one; neither reads a row back nor writes anything but that.
+	"backend/services/command-delivery/model/agent_approval.go": {"Api.ExpireAgentProposals", "Api.PurgeAgentProposals"},
 	"backend/services/device-management/schema/migration_credential_secret_digest.go": {
 		"CountForeignCredentialDigests", "DigestPlaintextCredentialSecrets",
 	},
@@ -114,6 +122,7 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/event-processing/model/device_attribute_store.go":          {"DeviceAttributeStore.LoadAll"},
 	"backend/services/event-processing/model/device_roster_store.go":             {"DeviceRosterStore.LoadAll", "DeviceRosterStore.LoadAllLifecycle"},
 	"backend/services/event-processing/model/profile_active_store.go":            {"ProfileActiveStore.LoadAll"},
+	"backend/services/event-processing/model/rule_stat_store.go":                 {"RuleStatStore.SweepTenants"},
 	"backend/services/notification-management/processor/escalation_scheduler.go": {"EscalationScheduler.runOnce"},
 	"backend/services/user-management/deadletters/context.go":                    {"systemCtx"},
 	"backend/services/user-management/iam/purge.go":                              {"Store.PurgeRecords"},

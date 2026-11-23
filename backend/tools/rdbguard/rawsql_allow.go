@@ -91,6 +91,12 @@ var rawSQLAllowList = []siteEntry{
 			"configuration with no tenant predicate by design; it reads and writes no row itself",
 	},
 
+	{
+		Path: "backend/services/event-management/model/rollup_hourly.go", Func: "Api.orderNames", Count: 1,
+		Why: "sorts a list of measurement NAMES the read already returned, in the database's own collation: a " +
+			"VALUES list of bound text values with no table in it, so it reads and writes no row of any tenant",
+	},
+
 	// --- metering ---
 	{
 		Path: "backend/services/event-management/model/usage.go", Func: "rollupHour", Count: 4,
@@ -172,6 +178,34 @@ var rawSQLAllowList = []siteEntry{
 			"name is a package constant naming the temp table.",
 	},
 	{
+		Path: "backend/services/device-management/model/api_configuration_report_maintenance.go", Func: "Api.configurationReportTenants", Count: 1,
+		Why: "the configuration-report maintenance's tenant listing, which spans tenants on purpose under a system " +
+			"context: a loose index scan (recursive CTE) over device_configuration_reports' (tenant_id, created_at) " +
+			"index that returns only the distinct tenant_id values and reads no row content. Every row it then " +
+			"removes is removed through the model under that tenant's own core.WithTenant. The only formatted-in " +
+			"text is the model's quoted table name.",
+	},
+	{
+		Path: "backend/services/device-management/model/api_attribute_owner.go", Func: "lockDeviceAttributes", Count: 1,
+		Why: "sets the transaction-local device attribute writer protocol marker (attrprotocol.MarkerSQL, " +
+			"SELECT set_config('devicechain.attr_protocol', '1', true)). It reads and writes no table; the SQL is " +
+			"\"dynamic\" only because the constant lives in core/attrprotocol, its one definition.",
+	},
+	{
+		Path: "backend/services/device-management/model/api_attribute_orphans.go", Func: "Api.attributeOrphanTenants", Count: 1,
+		Why: "the attribute orphan sweep's tenant listing, which spans tenants on purpose under a system context: " +
+			"a loose index scan (recursive CTE) over entity_attributes' and entity_attribute_generations' tenant_id " +
+			"indexes that returns only the distinct tenant_id values and reads no row content. Every row the sweep " +
+			"then removes is removed through the model under that tenant's own core.WithTenant. The only " +
+			"formatted-in text is the model's quoted table name.",
+	},
+	{
+		Path: "backend/services/device-management/model/api_fleet_operation_readiness.go", Func: "Api.FleetOperationEnforcement", Count: 1,
+		Why: "a catalog read (pg_trigger, pg_class, pg_namespace, pg_proc) that names entity_attributes only as the " +
+			"relation whose triggers it inspects. It reads no row of entity_attributes or of any tenant table, so " +
+			"there is no tenant predicate to bypass.",
+	},
+	{
 		Path: "backend/services/device-management/model/position_classify.go", Func: "Api.ClassifyUnclassifiedAlarms", Count: 1,
 		Why: "the alarm position classifier's periodic pass, which spans tenants on purpose: it classifies every " +
 			"alarm whose position_derived is NULL (what a replica older than the column writes during a rolling " +
@@ -187,6 +221,14 @@ var rawSQLAllowList = []siteEntry{
 			"classifier constant plus a literal WHERE binding a.tenant_id from the request context and a.id. " +
 			"It writes only that row's position_derived and position_classified_version, and its joins equate p.tenant_id with the alarm's " +
 			"tenant_id, as for Api.ClassifyUnclassifiedAlarms.",
+	},
+	{
+		Path: "backend/services/event-processing/model/rule_stat_store.go", Func: "RuleStatStore.SweepStranded", Count: 1,
+		Why: "the stranded rule-stat sweep's DELETE for ONE tenant: both the outer statement and its bounding " +
+			"subquery repeat ruleStatStrandedPredicate, whose first clause binds rule_stats.tenant to the " +
+			"tenant the call names (the context carries the same tenant), and its profile_actives subqueries " +
+			"equate pp.tenant and pa.tenant with the row's own tenant. It deletes only that tenant's rows, and only derived " +
+			"health counters. Raw because the anti-join and the re-checked bounded subquery have no gorm form.",
 	},
 
 	// --- erasure ---
@@ -209,6 +251,13 @@ var rawSQLAllowList = []siteEntry{
 		Path: "backend/core/tenantpurge/sweep.go", Func: "Residue", Count: 2,
 		Why: "counts what the sweep left behind for the purged tenant, binding the tenant explicitly, " +
 			"under a system context",
+	},
+	{
+		Path: "backend/core/attrprotocol/attrprotocol.go", Func: "lockTenantDevices", Count: 1,
+		Why: "the tenant purge's BeforeDelete hook: locks the purged tenant's device rows FOR UPDATE in id " +
+			"order before the sweep deletes them, so the purge and a device attribute writer take the device " +
+			"row first and cannot deadlock. The tenant is a bound parameter; it reads only ids, under the " +
+			"purge's system context",
 	},
 
 	// --- control-plane ---

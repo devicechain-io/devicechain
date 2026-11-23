@@ -61,10 +61,10 @@ func replacementTestApi(t *testing.T) (*Api, context.Context) {
 	// fails the delete for the wrong reason and hides the one under test.
 	require.NoError(t, db.AutoMigrate(&EntityGroupFacetRef{},
 		&DeviceType{}, &Device{}, &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{},
-		&DeviceConfigurationRevision{}, &DeviceConfigurationState{},
+		&DeviceConfigurationRevision{}, &DeviceConfigurationReport{}, &DeviceConfigurationState{},
 		&AssetType{}, &Asset{},
 		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{},
-		&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupMembership{},
+		&EntityAttribute{}, &AttributeGeneration{}, &Alarm{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupMembership{},
 	), "migrate")
 	if err := rdb.CreatePartialUniqueIndex(db, &EntityAttribute{}, "uix_entity_attributes_key", "tenant_id", "entity_type", "entity_id", "scope", "attr_key"); err != nil {
 		t.Fatal(err)

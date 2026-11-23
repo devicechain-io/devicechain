@@ -127,7 +127,7 @@ func TestAPublishAndARollbackAnnounceTheDevicesTheyMove(t *testing.T) {
 	require.Equal(t, []string{"group:arid"}, fact.Anchors)
 
 	// v2 selects the humid device instead: d-arid leaves, d-humid enters.
-	_, err = api.UpdateEntityGroup(ctx, "arid", &EntityGroupUpdateRequest{Selector: dcgraphql.OptionalStringOf(`attr["climate"] == "humid"`)})
+	_, err = api.UpdateEntityGroup(ctx, "arid", nil, &EntityGroupUpdateRequest{Selector: dcgraphql.OptionalStringOf(`attr["climate"] == "humid"`)})
 	require.NoError(t, err)
 	from := pub.count()
 	v2, err := api.PublishEntityGroup(ctx, "arid", nil, nil, "tester")

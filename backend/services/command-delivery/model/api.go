@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/actiongate"
+
 	"github.com/devicechain-io/dc-command-delivery/config"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -183,7 +185,21 @@ type HeldCommandCeilingResolver interface {
 }
 
 type Api struct {
-	RDB *rdb.RdbManager
+	AgentDecider            actiongate.Decider
+	CommandProposalsEnabled bool
+	ProposalTargets         ProposalTargetReader
+	KillFeed                *KillFeed
+	beforeFenceForTest      func(*gorm.DB) error
+	afterFenceForTest       func(*gorm.DB) error
+	afterDecisionForTest    func(*gorm.DB) error
+	// afterKillProposalsForTest runs inside a kill, after the proposals are locked and before
+	// the fence is judged: the window a concurrent re-enable must not slip through.
+	afterKillProposalsForTest func()
+	// dryRuns bounds command-proposal dry runs per agent client and person (DryRunsPerMinute).
+	// A pointer, created on first use (dryRunLimit), so an Api stays copyable.
+	dryRuns     *dryRunLimiter
+	proposalNow func() time.Time
+	RDB         *rdb.RdbManager
 	// EnqueueValidator, when set, gates CreateCommand on the target device existing
 	// and on the command matching the device profile's published vocabulary.
 	EnqueueValidator CommandEnqueueValidator
@@ -274,7 +290,7 @@ type Api struct {
 	// builds an Api by literal, and it is nil in a binary whose processor has not been
 	// constructed yet — which is why nudgeDispatch checks rather than assuming.
 	//
-	// 🔴 IT IS DELIBERATELY REACHED ONLY FROM CreateCommand. CreateCommandBatch inserts
+	// 🔴 IT IS REACHED FROM CreateCommand AND FINAL PROPOSAL APPROVAL. CreateCommandBatch inserts
 	// through CreateInBatches (insertBatchCommands) and never through CreateCommand, so a
 	// fleet write of 50,000 devices issues NO nudges — see the comment there, which is the
 	// standing record of a property that could otherwise change silently.
@@ -1218,6 +1234,7 @@ func (api *Api) MarkSent(ctx context.Context, id uint) (string, bool, error) {
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
 		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Where(heldSQL, heldArgs...).
+		Scopes(func(q *gorm.DB) *gorm.DB { return api.withAgentDispatchFence(ctx, q) }).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
 			"sent_time":      sql.NullTime{Time: now, Valid: true},
@@ -1811,6 +1828,7 @@ func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit
 		Where(heldSQL, heldArgs...).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
 		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
+		Scopes(api.agentDispatchScope(ctx)).
 		Order("id ASC").
 		Limit(limit).
 		Find(&found)
@@ -1881,6 +1899,7 @@ func (api *Api) MarkSentByToken(ctx context.Context, token string) (string, bool
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
 		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
 		Where(heldSQL, heldArgs...).
+		Scopes(func(q *gorm.DB) *gorm.DB { return api.withAgentDispatchFence(ctx, q) }).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
 			"sent_time":      sql.NullTime{Time: now, Valid: true},
@@ -2021,6 +2040,8 @@ func (api *Api) rotateDispatch(ctx context.Context, where string, args []any) (s
 		// cancel does not reach it; the confirmation is the last point before the transport
 		// acts, and a device re-created at the token must not receive it.
 		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
+		// A killed tenant's agent command must not be actuated even from an envelope already out.
+		Scopes(func(q *gorm.DB) *gorm.DB { return api.withAgentDispatchFence(ctx, q) }).
 		Updates(map[string]any{
 			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
 			"dispatch_nonce": sql.NullString{String: next, Valid: true},
@@ -2663,6 +2684,7 @@ func (api *Api) PendingCommands(ctx context.Context) ([]*Command, error) {
 	result := api.RDB.DB(ctx).Where("status IN ?", sweepableStatusStrings()).
 		Where(heldSQL, heldArgs...).
 		Where("NOT EXISTS (?)", api.deletedCovers(ctx)).
+		Scopes(api.agentDispatchScope(ctx)).
 		Order("id ASC").Find(&found)
 	if result.Error != nil {
 		return nil, result.Error

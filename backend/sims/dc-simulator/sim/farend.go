@@ -203,6 +203,9 @@ func (l *Lifecycle) attachCommandFarEnd(ctx context.Context) error {
 		if integrationFarEnd(d) {
 			continue
 		}
+		if owner, ok := l.sim.(interface{ OwnsDeviceSession(string) bool }); ok && owner.OwnsDeviceSession(d.Token) {
+			continue
+		}
 		if err := fe.Subscribe(ctx, d.Token, d.CredentialId); err != nil {
 			// Close what did attach: leaving half a cohort connected to a broker on a
 			// failed bootstrap leaks connections across a Reset loop.
@@ -298,6 +301,9 @@ func (l *Lifecycle) Close() {
 		fe.Close()
 	}
 	l.closeUpdateFleet()
+	if closer, ok := l.sim.(interface{ CloseDeviceSessions() }); ok {
+		closer.CloseDeviceSessions()
+	}
 }
 
 // integrationFarEnd identifies devices whose network server owns command delivery. Connecting

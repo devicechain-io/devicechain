@@ -129,6 +129,7 @@
   "updateState_UNKNOWN": "Desconocida",
   "signerState_ACTIVE": "Activo",
   "signerState_REVOKED": "Revocado",
+  "staleWrite": "Este elemento cambió desde que lo abriste. Copia tus cambios sin guardar, recárgalo, vuelve a aplicarlos y guarda de nuevo.",
   "artifactKind_FIRMWARE": "Firmware",
   "artifactKind_SOFTWARE": "Software",
   "artifactKind_CONFIGURATION": "Configuración",
@@ -149,5 +150,8 @@
   "rolloutOutcome_SKIPPED": "Omitido",
   "rolloutPauseReason_OPERATOR": "Pausado por un operador",
   "rolloutPauseReason_FAILURE_THRESHOLD": "Se alcanzó el umbral de fallos",
-  "rolloutPauseReason_ARTIFACT_NOT_ASSIGNABLE": "El artefacto ya no se puede asignar"
+  "rolloutPauseReason_ARTIFACT_NOT_ASSIGNABLE": "El artefacto ya no se puede asignar",
+  "rolloutPauseReason_FAILURE_RATE": "Se alcanzó el umbral de tasa de fallos",
+  "rolloutPauseReason_COHORT_READY": "Cohorte completada, lista para promover",
+  "rolloutPauseReason_COHORT_FAILED": "La cohorte terminó con fallos"
 }

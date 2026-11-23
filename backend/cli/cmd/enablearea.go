@@ -58,13 +58,15 @@ model provider registered by an administrator, for example. Enabling the area
 deploys it; it does not configure it.
 
 There is no command that disables an area. An enabled area may hold data, and
-taking it out of the deployment would leave that data with nothing serving it.
-
-  # Add the outbound connectors area to an instance
+taking it out of the deployment would leave that data with nothing serving it.`,
+	Example: `  # Add the outbound connectors area to an instance
   dcctl enable-area local devicechain outbound-connectors
 
   # Add two areas at once, and see what would happen first
-  dcctl enable-area local devicechain outbound-connectors mcp --dry-run`,
+  dcctl enable-area local devicechain outbound-connectors mcp --dry-run
+
+  # name the cluster explicitly; it must be the one recorded at bootstrap
+  dcctl enable-area local prod update-management --kube-context prod`,
 	Args: cobra.MinimumNArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		provider, err := bootstrap.Get(args[0])

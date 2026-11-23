@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dcctl/apiclient"
 	"github.com/devicechain-io/dcctl/presence"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/fatih/color"
@@ -84,6 +84,11 @@ the totals. It is safe to re-run: an interrupted walk resumes by running it agai
 a device that is already inferred is not matched a second time.
 
 Start with --dry-run, which writes nothing and lists the devices in scope.`,
+	Example: `  # first, list the devices in scope and write nothing
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source mqtt1 --reason "broker replaced" --dry-run
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source mqtt1 --reason "broker replaced"
+  # narrow the run to two devices within the source
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source sparkplug:plant1 --reason "host retired" --device pump-7 --device pump-8`,
 	Args:         cobra.NoArgs,
 	RunE:         runPresenceDemote,
 	SilenceUsage: true,
@@ -147,7 +152,7 @@ func runPresenceDemote(cmd *cobra.Command, args []string) error {
 		},
 	}
 
-	session := userclient.NewTenantSession(nil, endpoints.UserGraphQL, presenceEmail, presencePassword, presenceTenant).
+	session := apiclient.NewTenantSession(nil, endpoints.UserGraphQL, presenceEmail, presencePassword, presenceTenant, recordedEndpointVersions(cmd, opts.Endpoint)...).
 		WithOTP(otpFunc(otpFlag(cmd)))
 	sum, err := presence.Run(cmd.Context(), session, opts)
 	if errors.Is(err, presence.ErrDeclined) {

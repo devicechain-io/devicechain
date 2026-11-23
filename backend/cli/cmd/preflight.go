@@ -260,17 +260,32 @@ func (d *doctor) checkDocker(opts doctorOpts) string {
 func (d *doctor) checkPorts() {
 	section("Ports & registry", "🔌")
 	registryUp := strings.Contains(runCmd("docker", "ps", "--format", "{{.Names}}"), "kind-registry")
-	// A cluster dcctl is about to CREATE publishes 80, 443 and 1883 on the host (ingress
-	// HTTP, ingress HTTPS, MQTT). If something else holds one, the create dies on Docker's
-	// bind error, so say so here; a cluster that already exists holds them itself.
+	// A cluster dcctl is about to CREATE publishes 80, 443 and 1883-1885 on the host (ingress
+	// HTTP, ingress HTTPS, and one MQTT port for each of up to three local instances). If
+	// something else holds one, the create dies on Docker's bind error, so say so here; a
+	// cluster that already exists holds them itself.
 	clusterExists := d.cluster != "" && containsLine(runCmd("kind", "get", "clusters"), d.cluster)
-	for _, p := range []int{80, 443, 1883, 5000} {
+	// A cluster created before the extra MQTT maps does not publish 1884 or 1885, so a holder of
+	// either is not that cluster: it is noted, and it blocks nothing, since no cluster is created.
+	publishes := map[int]bool{}
+	if clusterExists {
+		if out := runCmd("docker", "port", d.cluster+"-control-plane"); out != "" {
+			for _, p := range []int{1884, 1885} {
+				publishes[p] = strings.Contains(out, fmt.Sprintf(":%d\n", p)) || strings.HasSuffix(strings.TrimSpace(out), fmt.Sprintf(":%d", p))
+			}
+		}
+	}
+	for _, p := range []int{80, 443, 1883, 1884, 1885, 5000} {
 		inUse := portInUse(p)
+		extraMQTT := p == 1884 || p == 1885
 		switch {
 		case p == 5000 && inUse && registryUp:
 			d.pass("port 5000 in use by the kind-registry container (expected)")
 		case inUse && p == 5000:
 			d.warn("port 5000 already in use", "free it or it may conflict with the local image registry")
+		case inUse && clusterExists && extraMQTT && !publishes[p]:
+			d.warn(portHolderMessage(p)+fmt.Sprintf(", and not by the existing kind cluster %q, which does not publish it", d.cluster),
+				"nothing needs it on this cluster; a new local cluster would, for a second or third instance's MQTT port")
 		case inUse && clusterExists:
 			d.pass(fmt.Sprintf("port %d in use (by the existing kind cluster %q, expected)", p, d.cluster))
 		case inUse:
@@ -508,6 +523,9 @@ var preflightCmd = &cobra.Command{
 	Long: `Proactively diagnoses local-system prerequisites (tools, docker, kernel limits, disk, ports, kube contexts) before 'dcctl install' prepares a cluster, with an actionable fix for each problem found.
 
 These are the prerequisites for standing a cluster up, not for building an instance on one: a bootstrap runs against a cluster 'dcctl install' has already prepared, so run this before the install.`,
+	Example: `  dcctl preflight local
+  dcctl preflight local --kube-context prod
+  dcctl preflight local --cluster scratch --build`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		provider := ""

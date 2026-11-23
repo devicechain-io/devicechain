@@ -285,6 +285,15 @@ func HarborpulseDefaultIngestBaseline() HarborpulseIngestBaseline {
 			}
 			n += 2
 		}
+		// S6 adds four one-metric MQTT chargers and two one-metric HTTP lamps. The
+		// revoked charger and the dropped session stop reporting at their planted beats.
+		n += 6
+		if harborHour(elapsed) >= HarborpulseX509RevokeHour {
+			n--
+		}
+		if harborHour(elapsed) >= HarborpulseMQTTDropFrom && harborHour(elapsed) < HarborpulseMQTTDropTo {
+			n--
+		}
 		b.MinTick, b.MaxTick = min(b.MinTick, n), max(b.MaxTick, n)
 		h := harborHour(elapsed)
 		if h >= harborOutageTo-0.25 && h < harborOutageTo {

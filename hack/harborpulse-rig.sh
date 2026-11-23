@@ -37,6 +37,11 @@
 #   burst-caught-up             refused entries are retried and stored exactly with original values
 #   replacement-identity       one physical replacement preserves logical identity and readings
 #   replacement-credential     retired credentials disabled and refused by ingress; new one enabled
+#   charger-mqtt-stored         token MQTT chargers store readings and have asserted ONLINE presence
+#   charger-x509-admitted       pinned certificate chargers store; revoked charger is refused afterwards
+#   connectivity-alarm         the planted MQTT disconnect raises, reconnect clears
+#   config-applied             current desired revision/digest APPLIED; planted rejection REJECTED
+#   pull-commands-complete     HTTP_PULL lamps act on and complete pulled commands
 #   truck-fence                 truck-in-flood-plain while the truck is in the flood plain fence
 #   well-fill-calculated        each pump's calculated well fill is its level over its well's depth
 #   lora-decoded                each LoRaWAN gauge's uplinks decoded to exactly the level it sent
@@ -112,6 +117,21 @@
 #   lofts-under-basin   --scenario-defect lofts-under-basin asset-hierarchy
 #   feeder-miswired     --scenario-defect feeder-miswired   feeder-blast-radius
 #   suppression-wrong-device --scenario-defect suppression-wrong-device maintenance-holds-page
+#   mqtt-wrong-topic    --scenario-defect mqtt-wrong-topic charger-mqtt-stored
+#   x509-revocation-skipped --scenario-defect x509-revocation-skipped charger-x509-admitted
+#   mqtt-never-disconnect --scenario-defect mqtt-never-disconnect connectivity-alarm
+#   config-report-stale --scenario-defect config-report-stale config-applied
+#   pull-polling-stopped --scenario-defect pull-polling-stopped pull-commands-complete
+#
+# S7 also runs a clean witness sim in tenant B, reusing every device token/external id.
+# A per-run public OAuth client is registered through user-management; B's member
+# completes login + consent + authorization-code/PKCE over HTTP. MCP always carries
+# that user's resource-bound token. No service account or service token is used.
+#   isolation-cross-read --scenario-defect isolation-cross-read tenant-isolation
+#   mcp-wrong-answer   --scenario-defect mcp-wrong-answer mcp-fleet-qa
+# S6 and S7 controls require EXACTLY their own invariant red; legacy controls retain their documented
+# collateral failures. The existing MQTT host mapping and the default DeviceChain broker are
+# required; run also verifies the broker build, MQTT TLS and client-certificate request gauges.
 #
 # The clean day must exit 0. Each control must exit 1 WITH its own invariant red; a control that
 # exits 0 means the invariant cannot fail, and the rig fails. Other invariants a control turns red
@@ -136,9 +156,18 @@
 # and a TSDB pool holding persistence.writers + 1 + 4 connections, and allow the sink's ClusterIP (`dcctl upgrade --dev-allow-egress <ip>` on a
 # local cluster), or every delivery is refused and the sink invariants are red.
 #
+# THE OBSERVER'S CREDENTIAL. A scene that watches a day (demos/harborpulse-unity) reads the platform
+# with the token each sim's runner serves at /config.json, and the scene's "the platform tells it to
+# derate" needs the cause the platform recorded with the command. The platform serves a command's
+# cause only to a reader that holds device:read and alarm:read (and location:read where the rule is a
+# geofence one) and is not scoped to a customer; to any other reader the cause is null, and the scene
+# falls back to "alarm raised". `dcctl sim create` gives the runner a tenant-admin member, which is
+# all of that, and `run` checks it on every sim before the day starts: a runner whose token could
+# not read a cause fails the run instead of showing a day that can only fall back.
+#
 # OFFLINE CONTROLS (`controls`, and run first by `run`): the verifier's own unit controls (a clean
-# day passes; each planted defect turns exactly its invariant red), and this script's judge fed
-# fabricated reports.
+# day passes; each planted defect turns exactly its invariant red), this script's judge fed
+# fabricated reports, and the observer-credential check fed fabricated tokens.
 #
 # Knobs: DC_HPRIG_CONTROLS=none runs the clean day alone, or a comma list of control names runs
 # those (all control sims at once is a lot for a laptop: with the 34 runs S5 brings, a --compact instance answers previewRule late or partially and every day loses its verdict, so run it in batches, e.g. the eight S5 controls, then the rest); DC_HPRIG_KEEP=1 keeps the sims' tenants
@@ -297,6 +326,14 @@ runs=(
   "burst-drop-on-429|--scenario-defect burst-drop-on-429|burst-caught-up"
   "replacement-new-device|--scenario-defect replacement-new-device|replacement-identity"
   "replacement-old-credential-left-live|--scenario-defect replacement-old-credential-left-live|replacement-credential"
+  "mqtt-wrong-topic|--scenario-defect mqtt-wrong-topic|charger-mqtt-stored"
+  "x509-revocation-skipped|--scenario-defect x509-revocation-skipped|charger-x509-admitted"
+  "mqtt-never-disconnect|--scenario-defect mqtt-never-disconnect|connectivity-alarm"
+  "config-report-stale|--scenario-defect config-report-stale|config-applied"
+  "pull-polling-stopped|--scenario-defect pull-polling-stopped|pull-commands-complete"
+  "witness||"
+  "isolation-cross-read|--scenario-defect isolation-cross-read|tenant-isolation"
+  "mcp-wrong-answer|--scenario-defect mcp-wrong-answer|mcp-fleet-qa"
 )
 
 # ---------------------------------------------------------------------------
@@ -322,11 +359,47 @@ judge() {
   esac
   passed="$(jq -r --arg n "$want" '[.invariants[] | select(.name == $n) | .passed] | if length == 1 then .[0] else "missing" end' "$report" 2>/dev/null || echo unreadable)"
   case "$passed" in
-    false) return 0 ;;
+    false)
+      case "$want" in
+        charger-mqtt-stored|charger-x509-admitted|connectivity-alarm|config-applied|pull-commands-complete|tenant-isolation|mcp-fleet-qa)
+          local other
+          other="$(jq -r --arg n "$want" '[.invariants[] | select(.passed == false and .name != $n) | .name] | join(",")' "$report")"
+          [[ -z "$other" ]] || { echo "control also turned $other red"; return 1; }
+          ;;
+      esac
+      return 0 ;;
     true) echo "the control failed, but not on $want, which stayed green: $want cannot fail" ;;
     *) echo "the report has no single $want invariant ($passed)" ;;
   esac
   return 1
+}
+
+# ---------------------------------------------------------------------------
+# The observer's credential. Pure: it reads a token's claims and prints why they are not enough.
+#   observer_grant <access token>
+# A command's cause is served to a reader holding device:read and alarm:read (location:read too when
+# the rule's firing depends on position), and never to one scoped to a customer.
+# ---------------------------------------------------------------------------
+observer_grant() {
+  local payload claims missing
+  payload="$(cut -s -d. -f2 <<<"$1" | tr '_-' '/+')"
+  [[ -n "$payload" ]] || { echo "not a JWT"; return 1; }
+  while ((${#payload} % 4)); do payload+="="; done
+  claims="$(base64 -d <<<"$payload" 2>/dev/null)" && jq -e 'type == "object"' <<<"$claims" >/dev/null 2>&1 ||
+    { echo "its claims are not readable"; return 1; }
+  # An unscoped member's token carries no scp claim at all (the platform omits an empty one), so any scp claim is refused, whatever
+  # it holds: the check must not have to know which values the platform would read as "no scope".
+  if jq -e 'has("scp")' <<<"$claims" >/dev/null; then
+    echo "it carries a customer scope ($(jq -c '.scp' <<<"$claims")): a scoped reader is never served a cause"
+    return 1
+  fi
+  # The authorities are a list of strings or the check does not pass: a jq that fails on another shape prints nothing, and
+  # "nothing is missing" would read as a pass.
+  jq -e '(.authorities // []) | type == "array" and all(.[]; type == "string")' <<<"$claims" >/dev/null 2>&1 ||
+    { echo "its authorities are not a list of strings"; return 1; }
+  missing="$(jq -r '(.authorities // []) as $a | if ($a | index("*")) then [] else ["device:read", "alarm:read", "location:read"] - $a end | join(", ")' <<<"$claims")" ||
+    { echo "its authorities could not be read"; return 1; }
+  [[ -z "$missing" ]] || { echo "it lacks $missing"; return 1; }
 }
 
 offline_controls() {
@@ -335,6 +408,8 @@ offline_controls() {
     go test -count=1 -run 'TestCleanDayPassesEveryInvariant|TestEachControlTurnsExactlyItsInvariantRed|TestEachS3ControlTurnsExactlyItsInvariantRed|TestEachS3bControlTurnsExactlyItsInvariantRed|TestEachS4ControlTurnsExactlyItsInvariantRed|TestEachS5OTAControlModelsLiveEvidence|TestEachS5BurstControlModelsLiveEvidence|TestEachS5ReplacementControlModelsLiveEvidence|TestWithoutASinkTheSinkInvariantsAreNotJudged|TestCorrelationJudgesANonFiringRed|TestCoverageRefusesAGapATierCouldHideIn|TestFoldedDecodeFailures|TestFoldedGrowthOfOne|TestNotificationAttemptsAreJudgedOnTheWatchedDayOnly|TestDutyMailIsAttributed|TestMaintenance|TestHarborLamp' ./scenarioverify/ ./sim/ >/dev/null &&
     go test -count=1 ./scenariosink/ >/dev/null) ||
     fail "the verifier's or the sink's own controls failed (go test ./scenarioverify/ ./scenariosink/ in backend/sims/dc-simulator)"
+  (cd "$repo_root/backend/sims/dc-simulator" && go test -count=1 -run 'TestEachS6ControlTurnsExactlyItsInvariantRed|TestS6|TestHarborpulseS6' ./scenarioverify/ ./sim/ >/dev/null) || fail "S6 controls failed"
+  (cd "$repo_root/backend/sims/dc-simulator" && go test -count=1 -run 'TestEachS7Control|TestS7|TestHarborpulseS7' ./scenarioverify/ ./sim/ >/dev/null) || fail "S7 controls failed"
   pass "the verifier: a clean day passes, each planted defect turns exactly its invariant red"
   pass "the sink: what real MQTT, SMTP and HTTP clients deliver is recorded exactly"
 
@@ -354,6 +429,48 @@ offline_controls() {
     if out="$(judge "$want" "$rc" "$d/$file")"; then fail "judge: ${c##*:} was accepted"; fi
     red "${c##*:} -> $out"
   done
+  local invariant
+  for invariant in charger-mqtt-stored charger-x509-admitted connectivity-alarm config-applied pull-commands-complete tenant-isolation mcp-fleet-qa; do
+    jq -n --arg n "$invariant" '{invariants:[{name:$n,passed:false},{name:"flood-escalates",passed:true}]}' >"$d/s6-red.json"
+    judge "$invariant" 1 "$d/s6-red.json" >/dev/null || fail "S6 judge refused $invariant alone red"
+    jq '.invariants[1].passed=false' "$d/s6-red.json" >"$d/s6-collateral.json"
+    if judge "$invariant" 1 "$d/s6-collateral.json" >/dev/null; then fail "S6 judge accepted collateral red for $invariant"; fi
+    if judge "$invariant" 0 "$d/s6-red.json" >/dev/null; then fail "S6 judge accepted a passing control"; fi
+    if judge "$invariant" 1 "$d/flood-red.json" >/dev/null; then fail "S6 judge accepted a missing invariant"; fi
+  done
+
+  jwt() { printf 'h.%s.s' "$(printf '%s' "$1" | base64 | tr -d '=\n' | tr '/+' '_-')"; }
+  observer_grant "$(jwt '{"tenant":"t","authorities":["*"]}')" >/dev/null || fail "observer: a tenant-admin token was refused"
+  observer_grant "$(jwt '{"tenant":"t","authorities":["device:read","alarm:read","location:read","command:read"]}')" >/dev/null ||
+    fail "observer: a token holding the three authorities was refused"
+  pass "observer: a tenant-admin token and one holding device:read, alarm:read and location:read are accepted"
+  for c in '{"tenant":"t","authorities":["*"],"scp":["customer-1"]}|a token scoped to a customer' \
+    '{"tenant":"t","authorities":["device:read","location:read","command:read"]}|a token without alarm:read' \
+    '{"tenant":"t","authorities":["alarm:read","location:read"]}|a token without device:read' \
+    '{"tenant":"t","authorities":["device:read","alarm:read"]}|a token without location:read' \
+    '{"tenant":"t","authorities":["*"],"scp":[]}|a token with an empty customer scope' \
+    '{"tenant":"t","authorities":["*"],"scp":null}|a token with a null customer scope' \
+    '{"tenant":"t","authorities":{}}|a token whose authorities are an object' \
+    '{"tenant":"t","authorities":"*"}|a token whose authorities are one string' \
+    '{"tenant":"t","authorities":["*",7]}|a token with an authority that is no string' \
+    '{"tenant":"t"}|a token with no authorities'; do
+    if out="$(observer_grant "$(jwt "${c%|*}")")"; then fail "observer: ${c##*|} was accepted"; fi
+    red "${c##*|} -> $out"
+  done
+  if out="$(observer_grant "not-a-token")"; then fail "observer: a string that is no JWT was accepted"; fi
+  red "a string that is no JWT -> $out"
+}
+
+require_s6_broker() {
+  local pods p body metric
+  pods="$(k get pods -n "$namespace" -l 'app.kubernetes.io/name=nats,app.kubernetes.io/component=nats' -o json | jq -r '.items[] | select(.status.phase=="Running") | "\(.metadata.namespace)/\(.metadata.name)"')"
+  [[ -n "$pods" ]] || fail "S6: no running default broker"
+  while IFS= read -r p; do
+    body="$(k get --raw "/api/v1/namespaces/${p%%/*}/pods/${p##*/}:7778/proxy/metrics")" || fail "S6: broker metrics unavailable"
+    for metric in dc_broker_info dc_broker_mqtt_tls dc_broker_mqtt_client_auth_request; do
+      awk -v m="$metric" '$1==m || index($1,m"{")==1 {if ($NF==1) found=1} END {exit !found}' <<<"$body" || fail "S6: $p lacks $metric=1 (requires the default DeviceChain broker image with MQTT TLS and client certificates)"
+    done
+  done <<<"$pods"
 }
 
 # ---------------------------------------------------------------------------
@@ -429,7 +546,7 @@ sink_ip() { k -n "$sink_ns" get svc hp-sink -o jsonpath='{.spec.clusterIP}'; }
 
 cmd_up() {
   ((own_cluster)) || fail "DC_HPRIG_KUBECONFIG is set: this rig uses that instance and does not create one"
-  need kind; need kubectl; need docker; need jq; need go
+  need kind; need kubectl; need docker; need jq; need curl; need go
   need ko
   disk_guard
   if ! cluster_exists; then
@@ -490,7 +607,11 @@ functionalAreas:
 VALUES
   say "bootstrapping $instance with LPWAN downlink and calculated backfill"
   "$dcctl" bootstrap local "$instance" --yes --no-escrow --cluster "$cluster" --host localhost --no-tls \
-    --enable-area outbound-connectors --dev-allow-egress "$ip" --values "$(winpath "$state_dir/harborpulse-values.yaml")" "${images[@]}"
+    --enable-area outbound-connectors --enable-area mcp --dev-allow-egress "$ip" --values "$(winpath "$state_dir/harborpulse-values.yaml")" "${images[@]}"
+  require_s6_broker
+  forward forward-up-mcp.log traefik svc/traefik "$http_port:80"
+  require_s7_mcp
+  stop_forwards
   say "UP COMPLETE: run 'hack/harborpulse-rig.sh run'"
 }
 
@@ -525,6 +646,9 @@ cmd_down() {
 bg_pids=()      # sims and verifiers
 fwd_pids=()     # port-forward loops
 created_sims=() # every sim this run asked dcctl to create, whose tenant it must destroy
+s7_oauth_client=""
+s7_peer_handshake=""
+s7_peer_port=""
 last_bg=""
 start_bg() { # start_bg <log> <command...>; leaves the pid (= its process group) in last_bg
   local log="$1"
@@ -547,8 +671,31 @@ stop_forwards() {
   ((${#fwd_pids[@]} == 0)) || stop_group "${fwd_pids[@]}"
   fwd_pids=()
 }
-destroy_sims() { # destroy every sim's tenant this run created, once; a failure is noted, not fatal
-  local sname
+destroy_sims() { # destroy tenants; an unresolved OAuth client makes the rig fail
+  local sname attempt recovery cleanup_rc=0 deleted=0
+  if [[ -n "$s7_oauth_client" ]]; then
+    recovery="$state_dir/$s7_oauth_client.oauth-client-id"
+    # Keep the public client id before attempting deletion, including on EXIT.
+    # Never overwrite another run's recovery record, or remove it before success.
+    if ! printf '%s\n' "$s7_oauth_client" >"$recovery"; then
+      printf '\nFAIL: could not save OAuth recovery id %s to %s\n' "$s7_oauth_client" "$recovery" >&2
+      cleanup_rc=1
+    fi
+    for attempt in 1 2 3; do
+      if [[ -n "$s7_peer_handshake" ]] && s7_registry delete; then
+        deleted=1
+        break
+      fi
+      ((attempt == 3)) || sleep 2
+    done
+    if ((deleted)); then
+      rm -f "$recovery" || cleanup_rc=1
+      s7_oauth_client=""
+    else
+      printf '\nFAIL: could not delete OAuth client %s; recovery id retained at %s\n' "$s7_oauth_client" "$recovery" >&2
+      cleanup_rc=1
+    fi
+  fi
   if [[ "${DC_HPRIG_KEEP:-0}" != 1 ]]; then
     for sname in ${created_sims[@]+"${created_sims[@]}"}; do
       "$dcctl" sim destroy "$sname" -i "$instance" -s "localhost:$http_port" --kube-context "$kube_context" \
@@ -556,11 +703,15 @@ destroy_sims() { # destroy every sim's tenant this run created, once; a failure 
     done
   fi
   created_sims=()
+  return "$cleanup_rc"
 }
 stop_all() {
+  local original_rc=$? cleanup_rc=0
   stop_procs
-  destroy_sims
+  destroy_sims || cleanup_rc=1
   stop_forwards
+  ((original_rc == 0)) || return "$original_rc"
+  return "$cleanup_rc"
 }
 trap stop_all EXIT
 
@@ -584,8 +735,30 @@ build_tools() {
   [[ -x "$dcctl" ]] || make -C "$(winpath "$repo_root")/backend/cli" build >/dev/null
 }
 
+require_s7_mcp() {
+  k -n "$namespace" rollout status deployment/mcp --timeout=120s >/dev/null ||
+    fail "S7: mcp deployment is not ready"
+  local code
+  code="$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "http://localhost:$http_port/api/mcp")" ||
+    fail "S7: mcp is not serving"
+  [[ "$code" == 401 ]] || fail "S7: MCP must serve an OAuth challenge (got HTTP $code)"
+  curl -fsS --max-time 10 "http://localhost:$http_port/.well-known/oauth-protected-resource/api/mcp" |
+    jq -e '.resource | type == "string" and endswith("/api/mcp")' >/dev/null ||
+    fail "S7: mcp protected-resource metadata is not serving"
+}
+
+s7_registry() {
+  local password="${DC_ADMIN_PASSWORD:-}"
+  if [[ -z "$password" ]]; then
+    password="$(k -n "$namespace" get secret "dci-$instance-superuser" -o jsonpath='{.data.password}' | base64 --decode)" || return 1
+  fi
+  [[ -n "$password" ]] || return 1
+  DC_ADMIN_PASSWORD="$password" "$verifier" --handshake "$s7_peer_handshake" \
+    --oauth-client "$s7_oauth_client" --oauth-client-action "$1" >/dev/null
+}
+
 selected() { # selected <run-name>: whether DC_HPRIG_CONTROLS includes it
-  [[ "$1" == clean || "$controls" == all ]] && return 0
+  [[ "$1" == clean || "$1" == witness || "$controls" == all ]] && return 0
   [[ "$controls" == none ]] && return 1
   [[ ",$controls," == *",$1,"* ]]
 }
@@ -595,6 +768,7 @@ cmd_run() {
   offline_controls
   guard_live
   k get ns "$namespace" >/dev/null 2>&1 || fail "no instance $instance on $kube_context: run 'hack/harborpulse-rig.sh up' first"
+  require_s6_broker
   build_tools
   if ! k -n "$sink_ns" get deploy hp-sink >/dev/null 2>&1; then
     say "deploying the scenario sink"
@@ -604,6 +778,16 @@ cmd_run() {
   forward forward-http.log traefik svc/traefik "$http_port:80"
   forward forward-ingest.log "$namespace" svc/event-sources "$ingest_port:8081"
   forward forward-sink.log "$sink_ns" svc/hp-sink "$sink_port:8080"
+  require_s7_mcp
+
+  # The callout, rather than the sim's dial error, supplies certificate rejection evidence.
+  # Derive the selector from this instance's deployment so every current replica is read.
+  local auth_selector auth_log="$state_dir/auth-callout.jsonl"
+  auth_selector="$(k -n "$namespace" get deployment device-management -o json | jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')"
+  [[ -n "$auth_selector" ]] || fail "S6: no device-management pod selector"
+  start_bg "$auth_log" k -n "$namespace" logs -l "$auth_selector" --all-containers=true \
+    --max-log-requests=50 --since=1m --follow=true --prefix=false
+  bg_pids+=("$last_bg")
 
   local stamp r name flags want port i=0 sims=() hs tier tier_config
   stamp="$(date -u +%H%M%S)"
@@ -625,6 +809,7 @@ cmd_run() {
       --manifest harborpulse "${tier_flags[@]}" --control-addr "http://127.0.0.1:$port" >"$state_dir/$sname.create.log" 2>&1 ||
       { tail -5 "$state_dir/$sname.create.log" >&2; fail "dcctl sim create $sname failed"; }
     hs="$(winpath "$HOME/.devicechain/sims/$sname.json")"
+    if [[ "$name" == witness ]]; then s7_peer_handshake="$hs"; s7_peer_port="$port"; fi
     # shellcheck disable=SC2086 # the flags are words on purpose
     start_bg "$state_dir/$sname.sim.log" env "DC_SIM_HARBORPULSE_SINK_URL=http://127.0.0.1:$sink_port" "$simulator" --handshake "$hs" --port "$port" $flags
     bg_pids+=("$last_bg")
@@ -643,16 +828,37 @@ cmd_run() {
     done
     [[ "$state" == BOOTSTRAPPED || "$state" == RUNNING ]] ||
       { tail -20 "$state_dir/$sname.sim.log" >&2; fail "$sname did not bootstrap (state '$state')"; }
+    # What a scene watching this sim would read with: it must be able to read a command's cause.
+    local why_not
+    why_not="$(observer_grant "$(curl -s --max-time 5 "http://127.0.0.1:$port/config.json" | jq -r '.token // empty')")" ||
+      fail "$sname: the token its runner serves cannot read a command's cause: $why_not"
+  done
+  # Bootstrap and observer checks are a barrier: no fleet starts its compressed
+  # clock while another fleet is still provisioning.
+  for s in "${sims[@]}"; do
+    IFS='|' read -r sname port want_inv hsp <<<"$s"
     curl -s -X POST --max-time 10 "http://127.0.0.1:$port/start" >/dev/null || fail "could not start $sname"
     note "$sname running on :$port"
   done
 
+  s7_oauth_client="hprig-s7-$stamp-$$"
+  s7_registry create || fail "could not register this run's PKCE client"
   say "verifying (the next whole sim day of each run; about 30 minutes)"
   local vpids=()
   for s in "${sims[@]}"; do
     IFS='|' read -r sname port want_inv hsp <<<"$s"
+    [[ "$hsp" != "$s7_peer_handshake" ]] || continue
+    # Only the clean run and S7 controls need the shared B session. This keeps
+    # legacy control batches below MCP's per-caller session/rate ceilings.
+    local s7_flags=()
+    case "$want_inv" in
+      ""|tenant-isolation|mcp-fleet-qa)
+        s7_flags=(--peer-handshake "$s7_peer_handshake" --peer-sim "http://127.0.0.1:$s7_peer_port"
+          --mcp "http://localhost:$http_port/api/mcp" --oauth-client "$s7_oauth_client") ;;
+    esac
     start_bg "$state_dir/$sname.verify.log" "$verifier" --handshake "$hsp" --sim "http://127.0.0.1:$port" \
-      --sink "http://127.0.0.1:$sink_port" --report "$(winpath "$state_dir/$sname.report.json")"
+      "${s7_flags[@]}" \
+      --sink "http://127.0.0.1:$sink_port" --auth-callout-log "$(winpath "$auth_log")" --report "$(winpath "$state_dir/$sname.report.json")"
     bg_pids+=("$last_bg")
     vpids+=("$last_bg")
   done
@@ -661,6 +867,7 @@ cmd_run() {
   for s in "${sims[@]}"; do
     IFS='|' read -r sname port want_inv hsp <<<"$s"
     rc=0
+    [[ "$hsp" != "$s7_peer_handshake" ]] || continue
     wait "${vpids[$idx]}" || rc=$?
     idx=$((idx + 1))
     if why="$(judge "$want_inv" "$rc" "$state_dir/$sname.report.json")"; then
@@ -679,7 +886,7 @@ cmd_run() {
   done
 
   stop_procs
-  destroy_sims
+  destroy_sims || bad=1
   stop_forwards
   ((bad == 0)) || fail "the harborpulse rig is red"
   say "ALL CHECKS PASSED"

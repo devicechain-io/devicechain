@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,6 +24,36 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
+
+// reactRegistries remembers the metrics registry reactBrokerClock gave each service, so a test can read
+// what its reader counted.
+var reactRegistries sync.Map
+
+// readerBufferDrops is how many deliveries the service's capacity reader fetched and then dropped
+// before handing them to a worker, because the broker had already redelivered them
+// (reader_held_past_ack_wait_total, stage=buffer). The broker counted each one as a delivery, and no
+// attempt ran for it.
+func readerBufferDrops(t *testing.T, ms *core.Microservice) int64 {
+	t.Helper()
+	reg, ok := reactRegistries.Load(ms)
+	require.True(t, ok, "no registry was kept for this service")
+	families, err := reg.(*prometheus.Registry).Gather()
+	require.NoError(t, err)
+	var total float64
+	for _, f := range families {
+		if !strings.HasSuffix(f.GetName(), "reader_held_past_ack_wait_total") {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "stage" && l.GetValue() == "buffer" {
+					total += m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return int64(total)
+}
 
 // alarmRule raises (and, on the falling edge, clears) one alarm: the shape of the r19 mix, where
 // every derived event is a raise or a clear.
@@ -273,7 +304,9 @@ func reactBrokerClock(t *testing.T, ackWait time.Duration, workers int, resolver
 	t.Helper()
 	b = startDetectBroker(t)
 	ms = &core.Microservice{InstanceId: b.instance, FunctionalArea: "event-processing"}
-	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
+	reactRegistries.Store(ms, reg)
 	ms.InstanceConfiguration.Infrastructure.Nats = b.natsConfig()
 	var reader messaging.MessageReader
 	nmgr := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(m *messaging.NatsManager) error {
@@ -570,7 +603,7 @@ func TestLanesDeadLetterAnExhaustedEventOnce(t *testing.T) {
 	// is missed often enough to make THIS test's dispatcher letter intermittent. A clock that never
 	// reaches a deadline takes the machine's load out of which of the two paths the event takes.
 	neverLate := func() time.Time { return time.Time{} }
-	publish, start, ms, _ := reactBrokerClock(t, ackWait, config.DefaultReactWorkers, reactFakeResolver{rule: alarmRule(), found: true},
+	publish, start, ms, b := reactBrokerClock(t, ackWait, config.DefaultReactWorkers, reactFakeResolver{rule: alarmRule(), found: true},
 		func(*messaging.NatsManager) react.AlarmSink { return router.or(others) }, dead, neverLate)
 	subject := messaging.ScopedSubject(ms.InstanceId, "acme", streams.DerivedEvents)
 	const lanes = config.DefaultReactWorkers
@@ -589,19 +622,77 @@ func TestLanesDeadLetterAnExhaustedEventOnce(t *testing.T) {
 	require.Eventually(t, func() bool { return others.done.Load() == 5 }, 30*time.Second, 5*time.Millisecond,
 		"the other devices waited on the failing one")
 	close(allOthers)
-	var letters []deadletter.Envelope
+	// A letter exists once EITHER writer has written one: the dispatcher, on the final attempt, or the
+	// max-delivery recorder, when the final delivery never ran (below).
 	require.Eventually(t, func() bool {
-		letters = dead.letters(t)
-		return len(letters) > 0
+		return len(dead.letters(t)) > 0 || b.streamHeld(t, streams.DeadLetters) > 0
 	}, time.Duration(messaging.MaxDeliver+2)*ackWait+5*time.Second, 20*time.Millisecond, "no exhausted letter was written")
 	time.Sleep(2 * ackWait)
-	letters = dead.letters(t)
-	require.Len(t, letters, 1, "the exhausted event must be lettered exactly once")
-	require.Equal(t, deadletter.ReasonExhausted, letters[0].Reason)
-	require.Regexp(t, `^raiseAlarm/failed/[0-9a-f]{64}$`, letters[0].Detail)
-	require.Equal(t, "acme/p@1/r1", letters[0].Reference)
+
+	// 🔴 A DELIVERY CAN LEGITIMATELY BE DROPPED, and that is what this used to assume away. The broker
+	// counts every delivery, but the capacity reader refuses to hand out a copy whose ack-wait ran out
+	// while it sat in its buffer (the broker is already redelivering it), and a stall of the size the
+	// ackWait above leaves room for happens on a loaded runner. The event then reaches MaxDeliver after
+	// fewer ATTEMPTS, and if the dropped delivery is the last one the recorder letters it (no-outcome)
+	// instead of the dispatcher. Both are the system working as designed. What must hold either way is
+	// the accounting: every delivery was attempted or dropped, and the event was lettered exactly once.
+	drops := readerBufferDrops(t, ms)
+	attempts := failing.attempts.Load()
+	require.Equal(t, int64(messaging.MaxDeliver), attempts+drops,
+		"every one of the %d deliveries is either attempted (%d) or dropped by the reader as already redelivering (%d)",
+		messaging.MaxDeliver, attempts, drops)
+	letters := dead.letters(t)
+	recorded := b.streamHeld(t, streams.DeadLetters)
+	require.Equal(t, 1, len(letters)+int(recorded), "the exhausted event must be lettered exactly once (dispatcher %d, recorder %d)", len(letters), recorded)
+	if recorded == 0 {
+		require.Equal(t, deadletter.ReasonExhausted, letters[0].Reason)
+		require.Regexp(t, `^raiseAlarm/failed/[0-9a-f]{64}$`, letters[0].Detail)
+		require.Equal(t, "acme/p@1/r1", letters[0].Reference)
+	} else {
+		// The final delivery was the dropped one, so no attempt of it ran and the recorder lettered it.
+		require.NotZero(t, drops, "the recorder lettered an event whose every delivery was attempted")
+		require.Empty(t, letters, "both writers lettered the one event")
+	}
 	require.True(t, failing.gated.Load(), "the failing attempt ended at its deadline: the others did not finish while it was open")
-	require.Equal(t, int64(messaging.MaxDeliver), failing.attempts.Load(), "attempted %d times, want MaxDeliver", failing.attempts.Load())
+	if drops == 0 {
+		require.Equal(t, int64(messaging.MaxDeliver), attempts, "attempted %d times, want MaxDeliver", attempts)
+	} else {
+		t.Logf("%d of %d deliveries were dropped by the reader (attempted %d); lettered by the %s", drops, messaging.MaxDeliver, attempts,
+			map[bool]string{true: "recorder", false: "dispatcher"}[recorded > 0])
+	}
+}
+
+// The accounting the test above relies on, forced rather than waited for: an ackWait far below the
+// reader's 1 s fetch long-poll means every REDELIVERED copy reaches the reader after the ack-wait its
+// slot was stamped with has run out, so the reader drops it as already redelivering. The broker still
+// counts each one, so the event reaches MaxDeliver having been attempted only as often as the reader
+// let it through, and with its final delivery dropped it is lettered by the recorder (no-outcome), not
+// by the dispatcher. It must still be lettered exactly once, and every delivery must be accounted for as
+// attempted or dropped. The control is that the drop path really ran (drops > 0): a run in which the
+// reader dropped nothing would prove nothing about the accounting.
+func TestLanesAccountForEveryDeliveryTheReaderDrops(t *testing.T) {
+	t.Parallel()
+	const ackWait = 150 * time.Millisecond
+	dead := &ctxDeadRecorder{}
+	failing := &failingAlarms{}
+	neverLate := func() time.Time { return time.Time{} }
+	publish, start, ms, b := reactBrokerClock(t, ackWait, config.DefaultReactWorkers, reactFakeResolver{rule: alarmRule(), found: true},
+		func(*messaging.NatsManager) react.AlarmSink { return failing }, dead, neverLate)
+	publish(edgeEvent("device-0", 0))
+	start()
+
+	require.Eventually(t, func() bool {
+		return len(dead.letters(t)) > 0 || b.streamHeld(t, streams.DeadLetters) > 0
+	}, time.Duration(messaging.MaxDeliver+2)*ackWait+15*time.Second, 20*time.Millisecond, "no letter was written by either writer")
+	time.Sleep(2 * time.Second)
+
+	drops := readerBufferDrops(t, ms)
+	attempts := failing.attempts.Load()
+	require.NotZero(t, drops, "the reader dropped no delivery: this run did not exercise the drop path")
+	require.Equal(t, int64(messaging.MaxDeliver), attempts+drops, "attempted %d, dropped %d", attempts, drops)
+	letters := dead.letters(t)
+	recorded := b.streamHeld(t, streams.DeadLetters)
+	require.Equal(t, 1, len(letters)+int(recorded), "lettered exactly once (dispatcher %d, recorder %d)", len(letters), recorded)
 }
 
 // A delivery the lane dequeues past its ack deadline is skipped, and that includes the FINAL one.

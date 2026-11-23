@@ -5,10 +5,12 @@ package model
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/gorm/schema"
 )
 
 // Event with token references resolved. DeviceToken names the originating device
@@ -213,6 +215,12 @@ type MeasurementEvent struct {
 	// enum (max "BOOLEAN"), so a tight bound is safe.
 	Unit     *string `gorm:"type:text"`
 	DataType *string `gorm:"type:varchar(32)"`
+	// TextValue is a STRING reading's value, kept apart from Value because a string is not
+	// a number and the numeric column feeds every aggregate. A row has exactly one of the
+	// two: Value for DOUBLE, INT and BOOLEAN, TextValue for STRING. Nullable with no
+	// default, so rows written before the column existed, and by pods that predate it,
+	// read NULL (see NewMeasurementTextValueSchema).
+	TextValue *string `gorm:"type:text"`
 }
 
 // DefaultOrder implements rdb.Sortable. Time-then-identity, tiebroken on payload_id
@@ -234,6 +242,9 @@ type MeasurementEventCreateRequest struct {
 	Classifier        *uint
 	Unit              *string
 	DataType          *string
+	// TextValue is a STRING reading's value; Value is nil when it is set. See
+	// MeasurementEvent.TextValue.
+	TextValue *string
 	// Derived marks a calculated metric's value (ADR-082), computed by device-management
 	// from the other readings of the same sample. It is not stored as a column — the
 	// classifier names a calculated definition, which is fixed as calculated at creation —
@@ -260,6 +271,23 @@ type MeasurementRollup struct {
 	MinValue    sql.NullFloat64
 	MaxValue    sql.NullFloat64
 	CountValue  int64
+}
+
+// MeasurementRollupHourly is one row of the measurement_rollups_1h continuous aggregate: the
+// same partials as MeasurementRollup, one hour per row, built over the one-minute level. It
+// carries the same tenant column, so a read of it is fail-closed tenant-scoped exactly like
+// the level beneath. Like that level it declares no scope rule: a scoped caller never reads
+// it (see useMeasurementRollup).
+type MeasurementRollupHourly struct {
+	MeasurementRollup
+}
+
+// TableName is measurement_rollups_1h under the functional-area prefix. It takes the namer so
+// gorm applies that prefix exactly as it does to MeasurementRollup (an explicit string would
+// bypass it): the namer names the minute level, and this swaps that table's own name for the
+// hourly one, so the prefix is whatever the namer says it is.
+func (MeasurementRollupHourly) TableName(namer schema.Namer) string {
+	return strings.TrimSuffix(namer.TableName("MeasurementRollup"), RollupAggregate) + RollupAggregate1h
 }
 
 // Alert event fields.

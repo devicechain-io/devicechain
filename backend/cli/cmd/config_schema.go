@@ -17,7 +17,8 @@ this binary's build; use the exact target release's dcctl or download
 instance-config.schema.json from that GitHub Release. It is not a Helm values
 or per-service config schema. Startup additionally checks semantic and
 cross-field constraints.`,
-	Args: cobra.NoArgs,
+	Example: `  dcctl config-schema > instance-config.schema.json`,
+	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		_, err := cmd.OutOrStdout().Write(config.InstanceJSONSchema())
 		return err

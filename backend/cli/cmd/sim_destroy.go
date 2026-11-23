@@ -59,6 +59,8 @@ session already established keeps its broker-issued credential until it expires 
 12 hours by default — though its ingest is refused at admission regardless. And a device
 still holding a lifetime or a subscription drops off on its own schedule, so presence can
 read connected for a while after the data stops.`,
+	Example: `  dcctl sim destroy demo
+  dcctl sim destroy demo --instance my-instance --server dc.example.com --tls`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runSimDestroy,
 	SilenceUsage: true,
@@ -219,7 +221,7 @@ func runSimDestroy(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(hostHeader) == "" {
 		hostHeader = rec.HostHeader
 	}
-	admin := newSimAdmin(hostHeader, rec.Endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
+	admin := newSimAdmin(cmd, instance, hostHeader, rec.Endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
 	ctx := cmd.Context()
 	if err := admin.EnsureSuperuser(ctx); err != nil {
 		// The record's own login URL names the address create dialled, which is what the

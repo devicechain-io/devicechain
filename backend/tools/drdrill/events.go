@@ -28,19 +28,33 @@ const areaEvent = "event-management"
 // rollupView is the continuous aggregate under test, as the migration names it.
 const rollupView = "measurement_rollups"
 
+// rollupView1h is the second rollup level, a continuous aggregate over rollupView
+// (event-management's migration_rollup_1h.go). It is refreshed from the minute level,
+// so the seed refreshes the minute level first.
+const rollupView1h = "measurement_rollups_1h"
+
+// rollupViews are the continuous aggregates the drill checks, in refresh order.
+var rollupViews = []string{rollupView, rollupView1h}
+
+// rollupLevel1h is the hour level's row in rollup_levels: the hour the read path
+// serves the hour level from. Everything older is read from the minute level.
+const rollupLevel1h = "1h"
+
 // The hypertables event-management persists into. Listed here rather than
 // discovered, because the point of the check is that the restore brought back the
 // set the platform expects — a discovered list would happily report that all zero
 // of the hypertables it found are healthy.
 //
-// 🔴 SIX, not the four in the initial schema. event_anchors and
+// 🔴 SEVEN, not the four in the initial schema. event_anchors and
 // state_change_events were each converted by a LATER migration, and a list
 // written from NewInitialSchema alone silently under-checks by a third. That is
 // why assertEventSchema cross-checks this against the count in the database
-// rather than only looking up the names it knows.
+// rather than only looking up the names it knows. failed_event_records (the
+// failed-events index, a hypertable since v1.1.0) is the one that count caught
+// after the list was written: seed-events refused every run until it was added.
 var eventHypertables = []string{
 	"events", "location_events", "measurement_events", "alert_events",
-	"event_anchors", "state_change_events",
+	"event_anchors", "state_change_events", "failed_event_records",
 }
 
 // EventPasswordEnv is the environment variable the event half reads its Postgres
@@ -209,7 +223,7 @@ return zero rows, silently, while the Cluster reports healthy and the API answer
 // differs between the seeded cluster and the restored one only if something has
 // gone wrong — which is exactly the thing under test, and therefore not something
 // to assume in the lookup.
-func materializationTable(ctx context.Context, db *gorm.DB, schema string) (string, error) {
+func materializationTable(ctx context.Context, db *gorm.DB, schema, view string) (string, error) {
 	// The two outcomes are returned as DIFFERENT errors, and the caller maps them
 	// to different exit codes. "The catalog has no materialization for this
 	// aggregate" is a finding about the restore; "the query failed" is not a
@@ -221,12 +235,12 @@ func materializationTable(ctx context.Context, db *gorm.DB, schema string) (stri
 		FROM _timescaledb_catalog.continuous_agg ca
 		JOIN _timescaledb_catalog.hypertable ht ON ht.id = ca.mat_hypertable_id
 		WHERE ca.user_view_schema = ? AND ca.user_view_name = ?`,
-		schema, rollupView).Row().Scan(&qualified)
+		schema, view).Row().Scan(&qualified)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", errNoMaterialization
 	}
 	if err != nil {
-		return "", fmt.Errorf("resolving the materialization hypertable behind %s.%s: %w", schema, rollupView, err)
+		return "", fmt.Errorf("resolving the materialization hypertable behind %s.%s: %w", schema, view, err)
 	}
 	return qualified, nil
 }
@@ -296,8 +310,11 @@ func isHypertable(ctx context.Context, db *gorm.DB, schema, table string) (bool,
 // timescaleJob is one row of timescaledb_information.jobs, plus the run counter
 // that is the only field here capable of proving anything.
 type timescaleJob struct {
-	ID        int
-	Proc      string
+	ID   int
+	Proc string
+	// View is the hypertable the job is attached to; for a refresh policy that is the
+	// aggregate's user view (measurement_rollups or measurement_rollups_1h).
+	View      string
 	Scheduled bool
 	// NextStart and TotalRuns both come from _timescaledb_internal.bgw_job_stat.
 	//
@@ -341,7 +358,7 @@ type timescaleJob struct {
 // the SAME schema, which is `A OR (B AND A)` — dead, and dressed as coverage.)
 func eventStoreJobs(ctx context.Context, db *gorm.DB, schema string) ([]timescaleJob, error) {
 	rows, err := db.WithContext(ctx).Raw(`
-		SELECT j.job_id, j.proc_name, j.scheduled, j.next_start::text,
+		SELECT j.job_id, j.proc_name, coalesce(j.hypertable_name, ''), j.scheduled, j.next_start::text,
 		       coalesce(s.total_runs, 0)
 		FROM timescaledb_information.jobs j
 		LEFT JOIN timescaledb_information.job_stats s ON s.job_id = j.job_id
@@ -355,7 +372,7 @@ func eventStoreJobs(ctx context.Context, db *gorm.DB, schema string) ([]timescal
 	var out []timescaleJob
 	for rows.Next() {
 		var j timescaleJob
-		if err := rows.Scan(&j.ID, &j.Proc, &j.Scheduled, &j.NextStart, &j.TotalRuns); err != nil {
+		if err := rows.Scan(&j.ID, &j.Proc, &j.View, &j.Scheduled, &j.NextStart, &j.TotalRuns); err != nil {
 			return nil, fmt.Errorf("reading a background job row: %w", err)
 		}
 		out = append(out, j)
@@ -405,4 +422,47 @@ func schedulerIsRunning(ctx context.Context, db *gorm.DB, jobID int) (before, af
 		}
 	}
 	return before, after, nil
+}
+
+// refreshJobsByView maps each of views to the id of the refresh policy attached to
+// it, and lists the views that have none.
+//
+// 🔴 PER VIEW, because one refresh job proves nothing about the other aggregate. The
+// check used to keep the first policy_refresh_continuous_aggregate it saw, so a
+// restore that brought back the minute level's policy and lost the hour level's
+// passed: the hour level would stop advancing, and the read path would go on
+// serving it.
+func refreshJobsByView(jobs []timescaleJob, views []string) (map[string]int, []string) {
+	found := map[string]int{}
+	for _, j := range jobs {
+		if j.Proc != "policy_refresh_continuous_aggregate" {
+			continue
+		}
+		if _, seen := found[j.View]; !seen {
+			found[j.View] = j.ID
+		}
+	}
+	var missing []string
+	for _, v := range views {
+		if _, ok := found[v]; !ok {
+			missing = append(missing, v)
+		}
+	}
+	return found, missing
+}
+
+// rollupLevelCompleteFrom reads the hour the given level is complete from, and
+// whether the row exists.
+func rollupLevelCompleteFrom(ctx context.Context, db *gorm.DB, level string) (string, bool, error) {
+	var at string
+	err := db.WithContext(ctx).Raw(
+		`SELECT to_char(complete_from AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') FROM "`+areaEvent+`".rollup_levels WHERE level = ?`,
+		level).Row().Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("reading the %q row of %s.rollup_levels: %w", level, areaEvent, err)
+	}
+	return at, true, nil
 }

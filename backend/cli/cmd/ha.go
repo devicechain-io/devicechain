@@ -4,7 +4,9 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -22,7 +24,50 @@ var (
 	haExpectFail  bool
 	haProbeMqtt   bool
 	haSettle      time.Duration
+	haLeadersJSON bool
+	haJSON        bool
 )
+
+// haReport is what verify and verify-db share: a verdict and a human rendering.
+type haReport interface {
+	OK() bool
+	Format() string
+}
+
+// concludeHaReport prints a verify report and returns the process exit code.
+//
+// With asJSON the report is the ONLY thing written to out, so a script can pipe stdout
+// straight into a parser; the negative-control sentence moves to errOut, as it does for
+// `ha leaders --json`. --expect-fail inverts the status identically in both modes: a
+// check that passes when it was expected to fail is still a red control.
+func concludeHaReport(out, errOut io.Writer, rep haReport, asJSON, expectFail bool, failedControl, heldControl string) int {
+	msgOut := out
+	if asJSON {
+		raw, err := json.MarshalIndent(rep, "", "  ")
+		if err != nil {
+			fmt.Fprintln(errOut, "could not encode the report:", err)
+			return 1
+		}
+		fmt.Fprintln(out, string(raw))
+		msgOut = errOut
+	} else {
+		fmt.Fprint(out, rep.Format())
+	}
+	if expectFail {
+		if rep.OK() {
+			fmt.Fprintln(msgOut, color.RedString("NEGATIVE CONTROL FAILED: "+failedControl+
+				". The suite is not detecting the state it exists to detect, so every "+
+				"green run of it means nothing."))
+			return 1
+		}
+		fmt.Fprintln(msgOut, color.GreenString("negative control held: "+heldControl))
+		return 0
+	}
+	if !rep.OK() {
+		return 1
+	}
+	return 0
+}
 
 var haCmd = &cobra.Command{
 	Use:   "ha",
@@ -50,11 +95,17 @@ Exit status is the result: 0 when every assertion holds, 1 when any does not.
 
   dcctl ha verify --instance default
 
-Use --expect-fail to invert that, for the negative control. A check suite that
+Use --json to print the report as JSON (the only thing written to stdout). Use
+--expect-fail to invert that, for the negative control. A check suite that
 cannot fail asserts nothing, so the drill runs the SAME command against a
 single-node instance and requires it to report failures:
 
   dcctl ha verify --instance default --replicas 3 --expect-fail`,
+	Example: `  # exits 0 when every assertion holds, 1 when any does not
+  dcctl ha verify --instance default
+  # the negative control: exits 0 only when the check fails, so a suite that cannot fail is caught
+  dcctl ha verify --instance default --replicas 3 --expect-fail
+  dcctl ha verify --instance default --kube-context prod --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		rep, err := bootstrap.VerifyReplication(cmd.Context(), bootstrap.HaVerifyOptions{
 			KubeContext: haKubeContext,
@@ -72,18 +123,77 @@ single-node instance and requires it to report failures:
 			// never ran.
 			return err
 		}
-		fmt.Print(rep.Format())
+		if code := concludeHaReport(os.Stdout, os.Stderr, rep, haJSON, haExpectFail,
+			"this instance PASSED a check it was expected to fail",
+			"the suite failed the instance it was expected to fail."); code != 0 {
+			os.Exit(code)
+		}
+		return nil
+	},
+}
 
+var haLeadersCmd = &cobra.Command{
+	Use:   "leaders",
+	Short: "Report where the broker's per-event stream leaders sit, and whether they could be separated further",
+	Long: `Report, from live broker state, which broker server leads each stream every device event passes
+through (the capture stream, the inbound stream, the resolved stream and the broker's MQTT message
+store), which server leads each consumer of the resolved stream, and how many streams and consumers
+each server leads.
+
+Each of those streams costs its leader a replicated write per event. When one server leads several
+of them it becomes the broker's bottleneck long before the others are busy, and nothing in the
+deployment shows it.
+
+The verdict is a dry run of ` + "`dcctl broker rebalance`" + `, under the same rules, and moves nothing:
+
+  PASS       no leader move the rebalance may make would separate them further
+  FAIL       it would move the resolved stream or one of its consumers to a server leading fewer
+             of these streams; the moves are listed. ` + "`dcctl broker rebalance`" + ` makes them
+  UNSETTLED  one of the instance's per-event streams or a leader is missing, or a replica is
+             offline or behind where the rebalance would wait on it, so it cannot be judged now
+
+The capture stream, the inbound stream and the MQTT message store are never moved: a leader change
+on them can lose messages already acknowledged to a device. When two of them share a server, the
+report says so; it is not a failure.
+
+Exit status is the result: 0 on PASS, 1 otherwise. A failure to read the broker is an error, never a
+verdict. --json prints the report as JSON. --expect-fail inverts the status for the negative
+control, and succeeds only on FAIL (never on UNSETTLED).
+
+  dcctl ha leaders --instance default`,
+	Example: `  # exits 0 on PASS; 1 on FAIL or UNSETTLED
+  dcctl ha leaders --instance default
+  # the report as JSON on stdout, for a script; the exit status is unchanged
+  dcctl ha leaders --instance default --json
+  # the negative control: exits 0 only on FAIL, never on UNSETTLED
+  dcctl ha leaders --instance default --expect-fail`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		rep, err := bootstrap.InspectLeadership(cmd.Context(), bootstrap.LeadersOptions{
+			KubeContext: haKubeContext,
+			InstanceId:  haInstanceId,
+			NatsUrl:     haNatsUrl,
+			Settle:      haSettle,
+			Timeout:     haTimeout,
+		})
+		if err != nil {
+			return err
+		}
+		if haLeadersJSON {
+			raw, err := json.MarshalIndent(rep, "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(raw))
+		} else {
+			fmt.Print(rep.Format())
+		}
 		if haExpectFail {
-			if rep.OK() {
-				fmt.Println(color.RedString(
-					"NEGATIVE CONTROL FAILED: this instance PASSED a check it was expected to " +
-						"fail. The suite is not detecting the state it exists to detect, so every " +
-						"green run of it means nothing."))
+			if rep.Verdict != bootstrap.LeadersFail {
+				fmt.Fprintln(os.Stderr, color.RedString(
+					"NEGATIVE CONTROL FAILED: the check reported %s on a broker it was expected to FAIL.", rep.Verdict))
 				os.Exit(1)
 			}
-			fmt.Println(color.GreenString(
-				"negative control held: the suite failed the instance it was expected to fail."))
+			fmt.Fprintln(os.Stderr, color.GreenString("negative control held: the check failed the broker it was expected to fail."))
 			return nil
 		}
 		if !rep.OK() {
@@ -127,9 +237,15 @@ Exit status is the result: 0 when every assertion holds, 1 when any does not.
 
   dcctl ha verify-db --cluster dc-rdb --require-synchronous
 
-Use --expect-fail for the negative control, stating the topology the store is
+Use --json to print the report as JSON (the only thing written to stdout). Use
+--expect-fail for the negative control, stating the topology the store is
 expected NOT to hold:
 
+  dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --expect-fail`,
+	Example: `  # exits 0 when every assertion holds, 1 when any does not
+  dcctl ha verify-db --cluster dc-rdb --require-synchronous
+  dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --json
+  # the negative control: exits 0 only when the store does NOT hold the stated topology
   dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --expect-fail`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// A stated expectation that is never tested is the failure this whole
@@ -162,22 +278,10 @@ expected NOT to hold:
 			// recorded as either answer.
 			return err
 		}
-		fmt.Print(rep.Format())
-
-		if haExpectFail {
-			if rep.OK() {
-				fmt.Println(color.RedString(
-					"NEGATIVE CONTROL FAILED: this store PASSED a check it was expected to " +
-						"fail. The suite is not detecting the state it exists to detect, so every " +
-						"green run of it means nothing."))
-				os.Exit(1)
-			}
-			fmt.Println(color.GreenString(
-				"negative control held: the suite failed the store it was expected to fail."))
-			return nil
-		}
-		if !rep.OK() {
-			os.Exit(1)
+		if code := concludeHaReport(os.Stdout, os.Stderr, rep, haJSON, haExpectFail,
+			"this store PASSED a check it was expected to fail",
+			"the suite failed the store it was expected to fail."); code != 0 {
+			os.Exit(code)
 		}
 		return nil
 	},
@@ -187,6 +291,23 @@ func init() {
 	rootCmd.AddCommand(haCmd)
 	haCmd.AddCommand(haVerifyCmd)
 	haCmd.AddCommand(haVerifyDbCmd)
+	haCmd.AddCommand(haLeadersCmd)
+
+	haLeadersCmd.Flags().StringVar(&haInstanceId, "instance", "default",
+		"instance id; its services and broker run in namespace dci-<instance>")
+	haLeadersCmd.Flags().StringVar(&haKubeContext, "kube-context", "",
+		"kubeconfig context (default: current context)")
+	haLeadersCmd.Flags().StringVar(&haNatsUrl, "nats-url", "",
+		"dial this NATS URL instead of opening a port-forward")
+	haLeadersCmd.Flags().DurationVar(&haSettle, "settle", 30*time.Second,
+		"keep re-reading for this long while the broker is UNSETTLED (an election under way, a replica "+
+			"behind). A FAIL is reported at once. 0 disables it")
+	haLeadersCmd.Flags().DurationVar(&haTimeout, "timeout", 2*time.Minute,
+		"bound the whole check")
+	haLeadersCmd.Flags().BoolVar(&haExpectFail, "expect-fail", false,
+		"invert the exit status: succeed only if the check FAILS (the negative control)")
+	haLeadersCmd.Flags().BoolVar(&haLeadersJSON, "json", false,
+		"print the report as JSON")
 
 	haVerifyDbCmd.Flags().StringVar(&haKubeContext, "kube-context", "",
 		"kubeconfig context (default: current context)")
@@ -224,6 +345,8 @@ func init() {
 		"bound the whole check")
 	haVerifyDbCmd.Flags().BoolVar(&haExpectFail, "expect-fail", false,
 		"invert the exit status: succeed only if the check FAILS (the negative control)")
+	haVerifyDbCmd.Flags().BoolVar(&haJSON, "json", false,
+		"print the report as JSON")
 
 	haVerifyCmd.Flags().StringVar(&haInstanceId, "instance", "default",
 		"instance id; its services and broker run in namespace dci-<instance>")
@@ -241,6 +364,8 @@ func init() {
 		"bound the whole check")
 	haVerifyCmd.Flags().BoolVar(&haExpectFail, "expect-fail", false,
 		"invert the exit status: succeed only if the check FAILS (the negative control)")
+	haVerifyCmd.Flags().BoolVar(&haJSON, "json", false,
+		"print the report as JSON")
 	haVerifyCmd.Flags().BoolVar(&haProbeMqtt, "probe-mqtt", false,
 		"open one MQTT connection first so the broker's $MQTT_* streams exist and their "+
 			"replica factor can be observed. MUTATES the broker (it creates those streams "+

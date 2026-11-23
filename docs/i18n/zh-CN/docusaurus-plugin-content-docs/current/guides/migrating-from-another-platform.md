@@ -16,7 +16,7 @@ title: 从其他物联网平台迁移到 DeviceChain
 | --- | --- | --- |
 | **设备** | [设备](../concepts/domain-model.md#core-entities)，由你选择的 **token** 标识 | token 即身份，不会改变。你原来的设备名称或序列号可以放在 `externalId`（在租户内唯一），原来的标识符可以放在[别名](../user-guide/devices.md#aliases)中。 |
 | **设备配置文件或设备类型** | 一个[设备类型](../user-guide/device-types-and-profiles.md)，引用一个带版本的[设备配置文件](../user-guide/device-types-and-profiles.md) | DeviceChain 把这个概念拆成两部分。**类型**负责对设备分类和展示。**配置文件**是带版本的契约：它包含指标定义、命令、检测规则和配置键。多个类型可以共用一个配置文件。 |
-| **遥测键** | 在配置文件上声明的**指标**，带数据类型和单位 | 读数以 `measurements` 的形式到达，以指标名称为键。指标类型为 `DOUBLE`、`INT` 或 `BOOLEAN`，并以时间序列存储（布尔值存为 0 或 1）。参见[载荷结构](./connecting-a-device.md#payload-shapes)和[测量](./connecting-a-device.md#measurement)。 |
+| **遥测键** | 在配置文件上声明的**指标**，带数据类型和单位 | 读数以 `measurements` 的形式到达，以指标名称为键。指标类型为 `DOUBLE`、`INT`、`BOOLEAN` 或 `STRING`：前三种以时间序列存储（布尔值存为 0 或 1），`STRING` 读数则以文本存储。参见[载荷结构](./connecting-a-device.md#payload-shapes)和[测量](./connecting-a-device.md#measurement)。 |
 | **属性**（客户端、服务端、共享） | [属性](../concepts/domain-model.md#attributes-vs-events)，作用域为 `CLIENT`、`SERVER` 和 `SHARED` | 作用域含义相同：由设备上报、仅平台可见、由平台为设备设置。配置文件声明为配置的共享属性会下发给设备，参见[配置下发](./connecting-a-device.md#reserved-device-topics)。属性也可以作为[分面](../user-guide/groups-facets-browse.md)，用于浏览和分组。 |
 | **资产** | [资产](../user-guide/assets-customers-areas.md)，由资产类型分类 | 资产类型可以发布带版本的[属性契约](../user-guide/assets-customers-areas.md#asset-types)。资产可以嵌套，每个资产只有一个父级。 |
 | 实体之间的**关系** | [有类型、有方向的关系](../concepts/domain-model.md#relationships) | 关系类型可以标记为**tracked**（被跟踪）。来自设备的被跟踪关系会作为锚点记录在每个事件上，因此可以按客户、区域或资产查询读数，即使之后重新分配设备，历史也保持不变。分组成员关系使用同一张图。参见[管理设备分配](./managing-assignments.md)。 |
@@ -118,7 +118,7 @@ title: 从其他物联网平台迁移到 DeviceChain
 - **其他平台文件的转换工具。** DeviceChain 没有针对其他平台导出格式、仪表板或规则定义的导入器，这些都需要重建。
 - **自由形式的节点图规则。** 检测规则是针对事件的条件，可以用表单、画布或检测引擎使用的同一种表达式语言编写，执行的动作是触发告警、发送命令、调用 webhook 或发布到连接器。没有在流程中途运行任意脚本代码的节点，也没有通用的流程引擎。一条同时做数据增强、分支和外部调用的链，通常会变成几条规则加一个计算指标，更复杂的逻辑则应放在你通过 webhook 调用的服务中。规划迁移之前，请先阅读[事件处理](../concepts/event-processing.md)。
 - **设备载荷解码脚本。** 平台不会运行你提供的任意解码脚本。请将受支持的二进制布局和 JSON 映射迁移为声明式的[配置文件载荷解码器](./payload-decoders.md)。需要超出该解码语言能力的逻辑的布局，仍可在网络服务器的编解码器或桥接中解码。参见[入站集成](./inbound-integrations.md)。
-- **文本读数作为历史。** 数值和布尔读数以时间序列存储，文本读数则不会，所以字符串类型的信号会作为状态（例如属性）保存，而不是作为历史绘图。
+- **文本读数用于图表和聚合。** 数值和布尔读数以时间序列存储，可以绘制图表并进行聚合。文本读数（`STRING` 指标）会被存储，并作为设备的最新值保留，但绝不会被求平均、求和或按数字绘图，检测规则也不会把它当作数字来比较。
 - **嵌套客户。** 客户没有父级。资产可以嵌套，关系可以表达其他结构。如果你依赖客户层级来控制可见性，请用分组和带范围的成员资格来建模，并测试用户实际能看到什么。
 - **某些平台提供的若干空中升级行为。** 推出没有分批、金丝雀晋级或计划任务，并且只有通过 MQTT 连接的设备能接收托管更新。参见[空中升级](../concepts/over-the-air-updates.md)。
 - **工业协议驱动、SNMP 和原生移动应用。** 限制与[为什么选择 DeviceChain](../why-devicechain.md#not-yet)中相同：使用能讲该协议的网关，并通过 MQTT 或 HTTP 转发。

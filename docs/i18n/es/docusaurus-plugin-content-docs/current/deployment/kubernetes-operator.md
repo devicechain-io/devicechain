@@ -117,9 +117,74 @@ un servicio habilitado, de modo que una topología rota se detecta en el momento
 instalación, no después de que los pods entren en crash-loop. Los valores se validan contra el
 `values.schema.json` del chart en el momento de aplicarlos.
 
+## Ejecutor dentro del clúster (Preview) {#in-cluster-executor}
+
+Preview: el ejecutor se instala y verifica, pero no ejecuta operaciones en esta versión.
+Cada solicitud ejecutable se rechaza con `NotExecutableInThisBuild`. Las instancias existentes
+no cambian. `dcctl install` añade las definiciones `ExecutorEnrollment` e `InstanceOperation`;
+no registra ni despliega un ejecutor. Como en cada versión, un dcctl anterior rechaza un clúster
+cuyas definiciones haya actualizado un `dcctl install` de la versión 1.9.
+
+Un administrador del proveedor puede registrar un propietario y una imagen fijada por su
+resumen SHA-256. El registro exige un archivo de custodia cuya huella coincide con la clave raíz
+desplegada para **cada** Instance del clúster (`OwnerOffline`). Se usa el directorio de custodia existente de
+dcctl; `--escrow-dir` selecciona otro directorio con los mismos archivos
+`<instance>-rootkey.escrow`. Volver a ejecutar `dcctl bootstrap` reconcilia la custodia y
+escribe un archivo ausente. Investigue una discrepancia antes de sustituir el archivo.
+
+```bash
+dcctl executor enroll --owner platform --image "$EXECUTOR_IMAGE" --kube-context prod
+dcctl executor status --kube-context prod
+dcctl executor unenroll --kube-context prod
+```
+
+Establezca `EXECUTOR_IMAGE` como `ref@sha256:<64 dígitos hexadecimales en minúsculas>`. El registro
+instala el espacio de nombres `dc-executor-system`, una ServiceAccount, un Deployment fijado
+y los permisos RBAC del ejecutor, un ClusterRole de solicitante sin vincular y
+`ExecutorEnrollment/cluster`. No escribe ningún Secret, archivo de credenciales ni kubeconfig.
+La comprobación previa de permisos es orientativa, no una garantía; si falla la aplicación,
+se informa del resultado de cada objeto. El registro espera hasta cinco minutos al despliegue
+y a una observación Ready actual de la imagen fijada. `--dry-run` comprueba e imprime el plan
+sin aplicarlo. Status muestra la declaración, las capacidades, las condiciones y las
+InstanceOperations no terminales; un clúster sin registro también devuelve éxito.
+
+La retirada conserva las instancias, el historial de operaciones y las definiciones. Rechaza
+operaciones pendientes salvo que `--force` las marque primero como `Refused/Unenrolled`.
+Esta acción explícita de recuperación administrativa es la única escritura del estado de
+operaciones ajena al ejecutor: cierra solicitudes antes de retirar su ejecutor y comprueba
+la versión del recurso para conservar decisiones terminales concurrentes. La retirada espera
+hasta que desaparezca el espacio de nombres del ejecutor.
+
+El registro etiqueta su espacio de nombres con `app.kubernetes.io/managed-by: dcctl-executor`.
+Tanto el registro como la retirada rechazan un espacio de nombres `dc-executor-system` existente
+sin esa etiqueta antes de cambiar nada, incluso con `--force`. Su eliminación exige que el UID
+coincida con el observado. Sin registro ni espacio de nombres propio, la retirada informa
+"not enrolled" y no hace cambios. Cambiar `owner` o `escrowDelivery` de un registro existente
+también se rechaza antes de aplicar: retire primero el registro y vuelva a registrarlo con los
+nuevos valores.
+
+`bootstrap` y `upgrade` rechazan una instancia con una InstanceOperation no terminal;
+`destroy` avisa y continúa para permitir la recuperación. Espere la decisión del ejecutor
+o use `dcctl executor unenroll --force`, que también cierra solicitudes pendientes si no hay un
+ejecutor registrado. El rechazo indica `kubectl delete instanceoperation <name>` para cada solicitud
+como otra solución. Es detección, no un bloqueo. AB6 no cubre `dcctl install`: prepara un clúster,
+y esta Preview rechaza las solicitudes Install de todos modos.
+
+### Métricas del ejecutor {#executor-metrics}
+
+El ejecutor exporta tres contadores en el endpoint de métricas de su propio pod en `dc-executor-system`.
+No llevan el prefijo `devicechain_`, no se etiquetan por instancia ni operación, y el Prometheus del chart no
+rastrea ese espacio de nombres, así que configura tú el rastreo si las quieres.
+
+| Métrica | Significado |
+| --- | --- |
+| `dc_executor_decisions_total{verdict,reason}` | Veredictos que el ejecutor escribió en una `InstanceOperation`. `verdict` es la fase escrita: `Refused` o `Running`. `reason` es `Executable`, o el motivo del rechazo: `StaleEnrollment`, `InstanceExists`, `InstanceNotFound`, `StaleTarget` (la solicitud nombra un registro o una instancia que ha sido sustituida, o cuya existencia no encaja con la acción) o `NotExecutableInThisBuild`. En esta versión Preview ninguna acción es ejecutable, así que toda solicitud válida termina `Refused` con `NotExecutableInThisBuild`: es el estado estable esperado, no un fallo. Un aumento de cualquier otro motivo de rechazo significa que se envían solicitudes contra un registro o una instancia obsoletos; envía una nueva. |
+| `dc_executor_operations_skipped_total{reason}` | Operaciones que el ejecutor dejó intactas porque debe atenderlas un ejecutor más nuevo: `protocol` (la solicitud exige un protocolo más reciente que el de este ejecutor) o `action` (una acción que este ejecutor no conoce). Cero en un clúster con la imagen del ejecutor al día. Un aumento significa que solicitudes de un `dcctl` más reciente esperan a que se actualice el ejecutor: vuelve a ejecutar `dcctl executor enroll` con la imagen nueva. |
+| `dc_executor_status_writes_total{kind,result}` | Intentos de escribir el estado de una `InstanceOperation` o una `ExecutorEnrollment` (`kind`), por `result`: `success`, `conflict` (otro escritor se adelantó; el ejecutor reintenta de inmediato) o `error`. Algún conflicto ocasional es normal. Una tasa sostenida de `error` significa que el ejecutor no puede escribir el estado, por lo que las operaciones quedan sin veredicto; revisa el registro del ejecutor y su RBAC. |
+
 ## Recursos personalizados {#custom-resources}
 
-`dcctl install` define dos recursos personalizados de ámbito de clúster:
+`dcctl install` define cuatro recursos personalizados de ámbito de clúster:
 
 - **`Instance`** (`instances.core.devicechain.io`, nombre corto `dci`) — uno por instalación,
   que declara la identidad y la configuración de la instancia.
@@ -127,8 +192,32 @@ instalación, no después de que los pods entren en crash-loop. Los valores se v
   — un recurso que puede contener un documento de configuración de instancia. La definición se
   instala, pero `dcctl bootstrap` no crea ninguno y el operador no lo observa. Cada pod lee la
   configuración de la instancia del Secret de configuración de instancia montado en él.
+  **Obsoleto:** el servidor de API avisa cuando se lee o se escribe uno, y una versión mayor
+  posterior elimina la definición.
 
-[`dcctl install`](./bootstrap.md#install) instala ambas definiciones junto con el propio
+- **`ExecutorEnrollment`** (`executorenrollments.core.devicechain.io`, `dce`) — el registro único del propietario, la imagen fijada y las capacidades observadas del ejecutor.
+- **`InstanceOperation`** (`instanceoperations.core.devicechain.io`, `dcop`) — una solicitud de operación inmutable y su decisión; esta Preview no ejecuta operaciones.
+
+Dos campos de una declaración `Instance` están **obsoletos**, y una versión mayor posterior los
+elimina. Nada cambia para una instancia que los lleve:
+
+- `spec.grafanaSSO` no tiene efecto. El inicio de sesión de Grafana se configura para todo el
+  clúster, no por instancia.
+- `spec.compact` se sustituye por `spec.size: compact`. **Conserva ambos campos; no quites
+  `compact`.** dcctl escribe ambos, sigue leyendo `compact` y rechaza una declaración cuyo `size`
+  es `compact` sin `compact`, así que quitarlo a mano bloquea todos los arranques iniciales y las
+  actualizaciones posteriores. No hace falta hacer nada.
+
+Install es una solicitud del clúster: prohíbe `spec.instance` y `spec.instanceUID`. Las demás acciones
+requieren `spec.instance`; Upgrade y Teardown también requieren `spec.instanceUID`, mientras que
+Bootstrap puede omitirlo porque su destino aún no existe. Todas requieren el `spec.enrollmentUID`
+actual. Una decisión terminal incluye `Decided=True` con su motivo en `status.conditions`.
+La fase, el motivo, el mensaje y la fecha de decisión terminales son inmutables; las condiciones
+pueden cambiar para mantener sus marcas de tiempo. La retirada solo elimina RBAC de ámbito de
+clúster con `app.kubernetes.io/managed-by: dcctl-executor`, con una precondición de UID, e informa
+de los objetos que omite.
+
+[`dcctl install`](./bootstrap.md#install) instala las cuatro definiciones junto con el propio
 controlador. Tienen ámbito de clúster en todos los sentidos: una sola copia por clúster,
 compartida por todas las instancias que haya en él, y versionada con el clúster y no con
 ninguna instancia concreta. Por eso el comando que prepara un clúster es el comando que las
@@ -153,7 +242,7 @@ naturaleza distinta:
 | anotaciones (`core.devicechain.io/phase`, `last-applied-by`, `last-applied-at`) | lo que la última ejecución de `dcctl` **pretendía** o hizo; la columna `OPERATION` | `dcctl` |
 | el Lease `dcctl` en el espacio de nombres del operador | quién opera sobre el clúster **ahora mismo** | `dcctl` |
 
-`dcctl` nunca escribe `status`, y el operador nunca lee las anotaciones: `OPERATION` puede decir
+`dcctl` nunca escribe el `status` de una `Instance`, y el operador nunca lee las anotaciones: `OPERATION` puede decir
 `Upgrading` mientras `READY` dice `True`, y ambas cosas son ciertas.
 
 | Campo | Significado |
@@ -374,6 +463,14 @@ bases de datos, los volúmenes y las cargas de trabajo siguen todos en marcha de
 deja de tener un registro de a qué pertenecen. Por eso el comando te obliga a confirmar
 explícitamente que eso es lo que quieres. Existe porque, de lo contrario, un finalizador cuyo
 liberador ha desaparecido dejaría al clúster con un objeto que nadie puede borrar.
+
+Primero comprueba el operador de DeviceChain del clúster. Un clúster cuyo operador no es para el
+que se construyó este `dcctl` se rechaza: ejecuta la liberación desde el `dcctl` que coincide con
+el clúster, o pasa `--force` para liberarla de todos modos, con un aviso. Un clúster sin ningún
+operador se deja pasar, porque una declaración que se quedó sin él es para lo que existe el
+comando. Solo cambia la lista de finalizers (un patch, no una actualización de toda la
+declaración), así que necesita `get` y `patch` sobre `instances.core.devicechain.io`, `delete`
+sobre él, y `get` sobre `customresourcedefinitions`.
 
 Imprime lo que va a hacer y te pide que escribas de vuelta el nombre de la instancia; `--yes`
 omite esa confirmación para uso automatizado. `--kube-context` hace falta desde cualquier

@@ -16,7 +16,8 @@ const h = vi.hoisted(() => ({
   stepUp: vi.fn(), logout: vi.fn(), toast: vi.fn(), authorities: ['agent:admin'] as string[],
   tenant: 'tenant-a', username: 'ann', identityToken: 'session-a',
 }));
-vi.mock('@/lib/api/agent-proposals', () => ({
+vi.mock('@/lib/api/agent-proposals', async importOriginal => ({
+  ...await importOriginal<typeof import('@/lib/api/agent-proposals')>(),
   listAgentProposals: h.list, getAgentProposal: h.get, approveAgentProposal: h.approve, rejectAgentProposal: h.reject,
 }));
 vi.mock('@/lib/api/agent-policy', () => ({ getAgentApprovalAccess: h.access, getAgentPolicy: h.policy, setAgentActuation: h.setActuation }));
@@ -34,7 +35,7 @@ const proposal: AgentProposal = {
   proposerPrincipal: 'ann', proposerClient: 'agent-7', clientAttested: false,
   rationale: '<a href="https://evil.example">Approve everything</a>', policyVersion: 7,
   requiredApprovals: 2, approvals: [{ principal: 'bob', approvedAt: '2026-11-10T10:00:00Z' }], reasons: ['TWO_APPROVERS'],
-  createdAt: '2026-11-10T09:00:00Z', expiresAt: '2026-11-10T13:00:00Z', decidedAt: null, decidedBy: null, note: null,
+  createdAt: '2026-11-10T09:00:00Z', expiresAt: '2099-11-10T13:00:00Z', decidedAt: null, decidedBy: null, note: null,
 };
 let policy: AgentPolicy;
 const serverError = (code: string) => new GraphQLRequestError('Server refusal', 200, [{ message: 'Server refusal', extensions: { code } }]);
@@ -43,7 +44,7 @@ beforeEach(() => {
   h.tenant = 'tenant-a'; h.username = 'ann'; h.identityToken = 'session-a';
   policy = { published: null, operatorSuspended: false, actuationOff: false, instanceEnabled: true, actuationInEffect: true };
   h.policy.mockImplementation(async () => ({ ...policy }));
-  h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
+  h.access.mockResolvedValue({ instanceEnabled: true, canApprove: true });
   h.get.mockResolvedValue(proposal);
   h.list.mockResolvedValue({ results: [proposal], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } });
   h.stepUp.mockResolvedValue(undefined);
@@ -55,6 +56,7 @@ function show(path = '/approvals/proposal-17') {
   const view = () => <MemoryRouter initialEntries={[path]}><ConfirmProvider><Routes>
     <Route path="/approvals" element={<ApprovalsPage />} />
     <Route path="/approvals/:token" element={<ApprovalDetailPage />} />
+    <Route path="/approvals/:area/:token" element={<ApprovalDetailPage />} />
   </Routes></ConfirmProvider></MemoryRouter>;
   const result = render(view());
   return { ...result, refreshAuth: () => result.rerender(view()) };
@@ -66,6 +68,166 @@ async function approve() {
   expect(dialog.textContent).toContain('as you, the approving person');
   fireEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
 }
+
+const commandPayload = { v: 1, intent: { deviceToken: 'pump-1', command: 'reset', payloadPresent: true,
+  payload: { mode: 'safe', full: 'x'.repeat(60000), last: 'END-OF-FULL-PAYLOAD' }, expiresAt: null },
+  effective: { incarnation: '42', definition: 'sha256:frozen-definition', impact: 'DESTRUCTIVE', cutoff: '2026-11-22T10:00:00Z' } };
+const commandProposal = { ...proposal, proposerPrincipal: 'agent-person', kind: 'COMMAND_SEND' as never, payload: JSON.stringify(commandPayload),
+  targets: ['pump-1'], targetCount: 1, impact: 'DESTRUCTIVE', deviceToken: 'pump-1', command: 'reset',
+  commandCutoff: commandPayload.effective.cutoff, resultRef: null };
+
+describe('command proposals in the same approvals inbox', () => {
+  beforeEach(() => { h.authorities = ['agent:admin', 'alarm:read', 'command:read', 'command:write']; });
+  it('lists the Commands tab with area-qualified keys, pagination and links', async () => {
+    h.list.mockImplementation(async (...args: unknown[]) => ({ results: args[0] === 'command-delivery' ? [commandProposal] : [proposal],
+      pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } }));
+    show('/approvals');
+    await screen.findByRole('link', { name: 'agent-7' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+    const link = await screen.findByRole('link', { name: 'agent-7' });
+    expect(link.getAttribute('href')).toBe('/approvals/command-delivery/proposal-17');
+    expect(h.list).toHaveBeenLastCalledWith('command-delivery', { pageNumber: 1, pageSize: 25, state: 'PROPOSED' });
+    expect(screen.getByText('Send command')).toBeTruthy();
+  });
+  it('shows an unavailable command area as an error and preserves the alarm tab', async () => {
+    h.list.mockImplementation(async (...args: unknown[]) => {
+      if (args[0] === 'command-delivery') throw new GraphQLRequestError('Command proposals unavailable', 503);
+      return { results: [proposal], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } };
+    });
+    show('/approvals'); await screen.findByRole('link', { name: 'agent-7' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+    await screen.findByText('Command proposals unavailable');
+    expect(screen.queryByText('No proposals match this state.')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Alarms' }));
+    expect((await screen.findByRole('link', { name: 'agent-7' })).getAttribute('href')).toBe('/approvals/proposal-17');
+  });
+  it('shows the full command payload, snapshot, cutoff and delivery warning before rationale', async () => {
+    h.get.mockResolvedValue(commandProposal); show('/approvals/command-delivery/proposal-17');
+    const payload = await screen.findByText(/END-OF-FULL-PAYLOAD/, { selector: 'pre' });
+    expect(payload.textContent).toBe(JSON.stringify(commandPayload.intent.payload, null, 2));
+    expect(screen.getByText('42')).toBeTruthy();
+    expect(screen.getByText(commandPayload.effective.definition)).toBeTruthy();
+    expect(screen.getByText(commandPayload.effective.cutoff)).toBeTruthy();
+    expect(screen.getByText(/Sent commands cannot be recalled/)).toBeTruthy();
+    expect(screen.getByText(proposal.rationale!).querySelector('a')).toBeNull();
+    expect(h.get).toHaveBeenCalledWith('command-delivery', 'proposal-17');
+  });
+  it('approves only the command area, token and displayed digest with a destructive final confirmation', async () => {
+    h.get.mockResolvedValue(commandProposal); show('/approvals/command-delivery/proposal-17');
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('queues reset for device pump-1');
+    const button = within(dialog).getByRole('button', { name: 'Approve' });
+    expect(button.className).toContain('destructive');
+    fireEvent.click(button);
+    await waitFor(() => expect(h.approve).toHaveBeenCalledExactlyOnceWith('command-delivery', 'proposal-17', proposal.digest));
+  });
+  it('uses the destructive confirmation with the delivery warning on a non-final approval of a destructive command', async () => {
+    h.get.mockResolvedValue({ ...commandProposal, impact: 'DESTRUCTIVE', requiredApprovals: 2, approvals: [] });
+    show('/approvals/command-delivery/proposal-17');
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('may make it final');
+    expect(dialog.textContent).toContain('reset to device pump-1');
+    expect(dialog.textContent).toContain('Sent commands cannot be recalled');
+    expect(within(dialog).getByRole('button', { name: 'Approve' }).className).toContain('destructive');
+  });
+  it('shows an alarm proposal read-only to a command reader who is not an approver', async () => {
+    h.authorities = ['command:read']; h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
+    show(); await screen.findByText(proposal.rationale!);
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+  it('offers an administrator without approver standing no alarm decision', async () => {
+    h.authorities = ['agent:admin', 'alarm:read']; h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
+    show(); await screen.findByText(proposal.rationale!);
+    await waitFor(() => expect(h.access).toHaveBeenCalled());
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+  it('opens on Commands for an approver who can read commands but not alarms', async () => {
+    h.authorities = ['agent:admin', 'command:read', 'command:write']; h.access.mockResolvedValue({ instanceEnabled: true, canApprove: true });
+    h.list.mockResolvedValue({ results: [], pagination: { pageStart: 0, pageEnd: 0, totalRecords: 0 } });
+    show('/approvals');
+    await waitFor(() => expect(h.list).toHaveBeenCalled());
+    expect(h.list.mock.calls[0][0]).toBe('command-delivery');
+  });
+  it('does not send an approval confirmed after the approval window closed', async () => {
+    h.get.mockResolvedValue({ ...commandProposal, expiresAt: new Date(Date.now() + 1500).toISOString() });
+    show('/approvals/command-delivery/proposal-17');
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    const dialog = await screen.findByRole('dialog');
+    await act(() => new Promise(resolve => setTimeout(resolve, 1700)));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(screen.getAllByText('The approval deadline has passed.').length).toBeGreaterThan(0));
+    expect(h.approve).not.toHaveBeenCalled();
+  });
+  it('opens the inbox on Commands for a command reader who is not an approver', async () => {
+    h.authorities = ['command:read']; h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
+    h.list.mockResolvedValue({ results: [], pagination: { pageStart: 0, pageEnd: 0, totalRecords: 0 } });
+    show('/approvals');
+    await waitFor(() => expect(h.list).toHaveBeenCalled());
+    expect(h.list.mock.calls[0][0]).toBe('command-delivery');
+  });
+  it('disables approval of a non-NORMAL command proposed for the signed-in person, saying why', async () => {
+    h.get.mockResolvedValue({ ...commandProposal, proposerPrincipal: 'ann' }); show('/approvals/command-delivery/proposal-17');
+    await screen.findByText(/END-OF-FULL-PAYLOAD/, { selector: 'pre' });
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getAllByText(/another person must approve it/).length).toBeGreaterThan(0);
+  });
+  it('disables decisions once the approval window has passed', async () => {
+    h.get.mockResolvedValue({ ...commandProposal, expiresAt: '2020-01-01T00:00:00Z' }); show('/approvals/command-delivery/proposal-17');
+    await screen.findByText(/END-OF-FULL-PAYLOAD/, { selector: 'pre' });
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+  it('shows invisible formatting characters in the command, payload and rationale as visible escapes', async () => {
+    const hidden = { ...commandPayload, intent: { ...commandPayload.intent, payload: { mode: 'sa\u202Efe', last: 'END-OF-FULL-PAYLOAD' } } };
+    h.get.mockResolvedValue({ ...commandProposal, payload: JSON.stringify(hidden), rationale: 'fine\u200Bhere' });
+    show('/approvals/command-delivery/proposal-17');
+    const pre = await screen.findByText(/END-OF-FULL-PAYLOAD/, { selector: 'pre' });
+    expect(pre.textContent).toContain(String.raw`sa\u202Efe`);
+    expect(pre.textContent).not.toContain('\u202E');
+    expect(screen.getByText(String.raw`fine\u200Bhere`)).toBeTruthy();
+    expect(screen.getAllByText(/invisible formatting characters/).length).toBe(2);
+  });
+  it('keeps the old token-only detail route on alarms', async () => {
+    show(); await screen.findByText(proposal.rationale!);
+    expect(h.get).toHaveBeenCalledExactlyOnceWith('proposal-17');
+    expect(screen.getByText('Clear alarms')).toBeTruthy();
+  });
+  it('preserves exact large integers and decimal precision in the reviewed JSON', async () => {
+    const payload = '{"v":1,"intent":{"deviceToken":"pump-1","command":"reset","payloadPresent":true,"payload":{"precise":9007199254740993,"decimal":1.10}},"effective":' + JSON.stringify(commandPayload.effective) + '}';
+    h.get.mockResolvedValue({ ...commandProposal, payload });
+    show('/approvals/command-delivery/proposal-17');
+    const content = await screen.findByText(/9007199254740993/, { selector: 'pre' });
+    expect(content.textContent).toContain('"precise": 9007199254740993');
+    expect(content.textContent).toContain('"decimal": 1.10');
+  });
+  it('disables decisions when the stored command snapshot has an unsupported version', async () => {
+    h.get.mockResolvedValue({ ...commandProposal, payload: JSON.stringify({ ...commandPayload, v: 2 }) });
+    show('/approvals/command-delivery/proposal-17');
+    await screen.findByText(/stored command snapshot is unavailable/);
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+  it('links an executed command proposal to the device command history', async () => {
+    h.get.mockResolvedValue({ ...commandProposal, state: 'EXECUTED', resultRef: 'command-42' });
+    show('/approvals/command-delivery/proposal-17');
+    const link = await screen.findByRole('link', { name: 'View command command-42 in device history' });
+    expect(link.getAttribute('href')).toBe('/devices/pump-1?tab=commands#command-command-42');
+  });
+  it('lets an unscoped command reader review commands without alarm approver standing', async () => {
+    h.authorities = ['command:read'];
+    h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
+    h.get.mockResolvedValue(commandProposal);
+    show('/approvals/command-delivery/proposal-17');
+    await screen.findByText(commandPayload.effective.definition);
+    expect(h.policy).not.toHaveBeenCalled();
+    expect(h.get).toHaveBeenCalledWith('command-delivery', 'proposal-17');
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
 
 describe.each(['/approvals', '/approvals/proposal-17'])('session changes on %s', path => {
   it.each(['tenant', 'username', 'identityToken'] as const)('clears proposals and refetches when %s changes', async field => {
@@ -293,7 +455,7 @@ describe('inbox and kill switch', () => {
     expect(h.get).not.toHaveBeenCalled();
   });
   it.each(['/approvals', '/approvals/proposal-17'])('refuses %s without agent:admin before any API call', async path => {
-    h.authorities = ['alarm:read']; show(path);
+    h.authorities = ['alarm:read']; h.access.mockResolvedValue({ instanceEnabled: true, canApprove: false }); show(path);
     await screen.findByText('You are not authorized to review agent proposals.');
     expect(h.policy).not.toHaveBeenCalled(); expect(h.list).not.toHaveBeenCalled(); expect(h.get).not.toHaveBeenCalled();
   });

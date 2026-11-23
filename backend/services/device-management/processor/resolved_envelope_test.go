@@ -107,7 +107,11 @@ func (r *fakeRounds) Get(_ context.Context, tenant string, seq uint64) (messagin
 	if !ok {
 		return messaging.StoredMessage{}, fmt.Errorf("no message at %d", seq)
 	}
-	return messaging.StoredMessage{Sequence: seq, Subject: "i." + tenant + ".resolved-events", Value: m.Value, Headers: m.Headers}, nil
+	headers := map[string]string{"Nats-Msg-Id": m.DedupID}
+	for k, v := range m.Headers {
+		headers[k] = v
+	}
+	return messaging.StoredMessage{Sequence: seq, Subject: "i." + tenant + ".resolved-events", Value: m.Value, Headers: headers}, nil
 }
 
 type envSrcAck struct{ n atomic.Int32 }
@@ -485,15 +489,15 @@ func TestCarriedReadsSettledElsewhereAndRefusesTheWrongEnvelope(t *testing.T) {
 			[]eventenvelope.Event{{Index: 3, Bytes: ev}})
 		require.NoError(t, err)
 		h.w.seq++
-		h.w.bySeq[h.w.seq] = messaging.Message{Value: body, Headers: map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue}}
+		h.w.bySeq[h.w.seq] = messaging.Message{Value: body, DedupID: "test-round", Headers: map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue}}
 		return h.w.seq
 	}
-	got, err := h.eng.Carried(context.Background(), "acme", store("acme", eventenvelope.KindResolved))
+	got, err := h.eng.Carried(context.Background(), "acme", store("acme", eventenvelope.KindResolved), "test-round")
 	require.NoError(t, err)
 	assert.Equal(t, map[uint32]struct{}{3: {}, 9: {}}, got)
-	_, err = h.eng.Carried(context.Background(), "acme", store("globex", eventenvelope.KindResolved))
+	_, err = h.eng.Carried(context.Background(), "acme", store("globex", eventenvelope.KindResolved), "test-round")
 	assert.Error(t, err, "another tenant's envelope")
-	_, err = h.eng.Carried(context.Background(), "acme", store("acme", eventenvelope.KindUnresolved))
+	_, err = h.eng.Carried(context.Background(), "acme", store("acme", eventenvelope.KindUnresolved), "test-round")
 	assert.Error(t, err, "an inbound envelope")
 }
 

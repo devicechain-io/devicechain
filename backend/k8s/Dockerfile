@@ -31,7 +31,7 @@
 # Keep this pin rolling anyway: `make docker-build` in this module is a real
 # local path, and Dependabot's `docker` ecosystem covers this directory. It is
 # hygiene for a developer convenience, not a supply-chain control.
-FROM golang:1.27.4@sha256:08bcb99a38f85a265f9a93d1d3323e2440eec333380f3ea26ee0dec9264bb41c AS builder
+FROM golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS builder
 
 WORKDIR /workspace
 # Copy the Go Modules manifests

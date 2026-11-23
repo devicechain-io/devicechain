@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.48.0
-	github.com/aws/aws-sdk-go-v2/credentials v1.21.0
+	github.com/aws/aws-sdk-go-v2/credentials v1.21.2
 	github.com/aws/aws-sdk-go-v2/service/sns v1.48.0
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.53.0
 	github.com/devicechain-io/dc-event-processing v0.0.1
@@ -13,7 +13,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-	github.com/graph-gophers/graphql-go v1.11.0
+	github.com/graph-gophers/graphql-go v1.11.1
 	github.com/nats-io/nats-server/v2 v2.15.3
 	github.com/prometheus/client_golang v1.25.0
 	github.com/rs/zerolog v1.35.1
@@ -21,7 +21,7 @@ require (
 	github.com/twmb/franz-go v1.22.3
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260915001422-21ef8a4103bb
 	github.com/twmb/franz-go/pkg/kmsg v1.15.1
-	golang.org/x/net v0.62.0
+	golang.org/x/net v0.63.0
 	golang.org/x/time v0.16.0
 	gorm.io/datatypes v1.2.7
 	gorm.io/gorm v1.31.2
@@ -60,7 +60,7 @@ require (
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/jwt/v2 v2.8.3 // indirect
-	github.com/nats-io/nats.go v1.55.0 // indirect
+	github.com/nats-io/nats.go v1.56.0 // indirect
 	github.com/nats-io/nkeys v0.4.17 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

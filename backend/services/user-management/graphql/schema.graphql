@@ -1094,6 +1094,8 @@ input AgentApproverSessionInput {
 under what approval rules, read now from this service's records.
 """
 type AgentExecutionDecision {
+    """(Preview: may change in a minor release.) When set, the groups every target device must belong to. Null for no group restriction."""
+    groupRestriction: [String!]
     """The current actuation generation, advanced by each tenant or operator switch call."""
     actuationGeneration: Int!
     """(Preview: may change in a minor release.) What the current policy says. Never AUTO."""

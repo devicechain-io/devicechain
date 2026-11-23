@@ -36,5 +36,6 @@ var (
 		NewInactivityAlarmTimeRestoreSchema(),
 		NewInactivityAlarmTimeRestoreFinalPassSchema(),
 		NewDeviceStateIncarnationSchema(),
+		NewLatestMeasurementTextValueSchema(),
 	}
 )

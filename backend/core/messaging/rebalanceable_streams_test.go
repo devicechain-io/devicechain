@@ -58,3 +58,14 @@ func TestPerEventStreams(t *testing.T) {
 		require.Equal(t, n == StreamName("INST", streams.ResolvedEvents), slices.Contains(movable, n), n)
 	}
 }
+
+// Leader placement keeps the movable per-event stream away from the broker's MQTT message store as
+// well: every QoS 1 publish is a replicated write there (r34: its leader shared a server with capture
+// and resolved at 3.5-3.7 cores of 4). It is an anchor, read and never moved.
+func TestPerEventLeaderStreamsAddTheMqttMessageStore(t *testing.T) {
+	got := PerEventLeaderStreams("INST")
+	want := append(PerEventStreams("INST"), MqttMessageStore)
+	slices.Sort(want)
+	require.Equal(t, want, got)
+	require.NotContains(t, RebalanceableStreams("INST"), MqttMessageStore)
+}

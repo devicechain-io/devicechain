@@ -305,7 +305,7 @@ func TestHarborTickReturnsWhileRestoreIngressIsBlocked(t *testing.T) {
 func TestHarborpulseGovernedTierCoversMeasuredDayAndRefusesRestore(t *testing.T) {
 	b := HarborpulseDefaultIngestBaseline()
 	t.Log(b)
-	if b.MaxTick != 116 || b.MinTick != 90 || b.BeforeRestoreMin != 90 || b.BeforeRestoreMax != 92 || b.AfterRestoreMin != 114 || b.AfterRestoreMax != 116 || b.RestoreOffered != 720 || b.TickAtRestore != 116 {
+	if b.MaxTick != 122 || b.MinTick != 95 || b.BeforeRestoreMin != 95 || b.BeforeRestoreMax != 97 || b.AfterRestoreMin != 119 || b.AfterRestoreMax != 121 || b.RestoreOffered != 720 || b.TickAtRestore != 121 {
 		t.Fatalf("baseline changed: %v; remeasure and size tier", b)
 	}
 	source, err := os.ReadFile("../../../cli/sim/tier.go")

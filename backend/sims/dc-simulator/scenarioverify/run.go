@@ -80,7 +80,7 @@ func (r *Report) Human() string {
 		fmt.Fprintf(&b, "  %s %-32s %s\n", mark, inv.Name, inv.Detail)
 	}
 	if len(r.Omitted) > 0 {
-		fmt.Fprintf(&b, "  NOT JUDGED (no --sink): %s\n", strings.Join(r.Omitted, ", "))
+		fmt.Fprintf(&b, "  NOT JUDGED (supply --sink or --peer-handshake as appropriate): %s\n", strings.Join(r.Omitted, ", "))
 	}
 	switch r.ExitCode() {
 	case ExitPass:
@@ -93,6 +93,7 @@ func (r *Report) Human() string {
 
 // Config is one verification run.
 type Config struct {
+	S7        *S7Config
 	Handshake *sim.Handshake
 	// SimURL is the sim's control API, which carries the scenario clock.
 	SimURL string
@@ -113,6 +114,8 @@ type Config struct {
 	SinkURL string
 	// SinkHTTP reaches the sink.
 	SinkHTTP *http.Client
+	// AuthCalloutLog is a JSON-lines log collected directly from device-management.
+	AuthCalloutLog string
 }
 
 func (c Config) withDefaults() Config {
@@ -168,6 +171,8 @@ func Run(ctx context.Context, cfg Config) (*Report, error) {
 }
 
 func run(ctx context.Context, cfg Config, rep *Report) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	if cfg.Handshake.ManifestId != "harborpulse" {
 		return noVerdictf("the handshake is for scenario %q; this verifier judges harborpulse", cfg.Handshake.ManifestId)
 	}
@@ -203,6 +208,24 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 	}
 	if cfg.SinkURL == "" {
 		rep.Omitted = append([]string(nil), SinkInvariants...)
+	}
+	type s7Result struct {
+		evidence *S7
+		err      error
+	}
+	var s7Results chan s7Result
+	if cfg.S7 != nil {
+		s7Results = make(chan s7Result, 1)
+		go func() {
+			if err := sleepUntil(ctx, from); err != nil {
+				s7Results <- s7Result{err: err}
+				return
+			}
+			evidence, err := collectS7(ctx, cfg, reader, rep.Defects)
+			s7Results <- s7Result{evidence, err}
+		}()
+	} else {
+		rep.Omitted = append(rep.Omitted, InvTenantIsolation, InvMCPFleetQA)
 	}
 	log.Info().Int("day", day).Time("from", from).Time("to", to).Strs("defects", rep.Defects).
 		Msg("waiting for the watch to begin")
@@ -252,6 +275,13 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 				return noVerdict{err}
 			}
 			obs.S3.GapBefore = gap
+		}
+		capturingS6 := obs.S6.Ledger == nil
+		if err := captureS6(ctx, reader, &obs, status.Scenario.S6, now); err != nil {
+			return noVerdict{err}
+		}
+		if capturingS6 && obs.S6.Ledger != nil && !s6InDay(obs, time.Now()) {
+			return noVerdictf("S6 state snapshot crossed midnight on day %d", day)
 		}
 		rep.Polls++
 		select {
@@ -367,6 +397,24 @@ func run(ctx context.Context, cfg Config, rep *Report) error {
 		return noVerdict{err}
 	}
 	rep.WatchTo = time.Now()
+	if err := readS6(ctx, reader, &obs); err != nil {
+		return noVerdict{err}
+	}
+	obs.S6.Rejections, err = readS6Rejections(cfg.AuthCalloutLog, cfg.Handshake.Tenant)
+	if err != nil {
+		return noVerdict{err}
+	}
+	if s7Results != nil {
+		select {
+		case result := <-s7Results:
+			if result.err != nil {
+				return noVerdict{result.err}
+			}
+			obs.S7 = result.evidence
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	rep.Invariants = Evaluate(obs)
 	return nil
 }

@@ -573,7 +573,8 @@ here: a presence drop is the Unity device plane's business.
 runs a fictional harbour district of three quays (North Quay, East Quay, the Basin): 9 tide
 gauges, 3 stormwater pump controllers, 12 street lights, 6 EV chargers, 2 building meters (each
 owned by a customer, one of whom gets a login limited to their building), a flood-response
-truck, and 4 LoRaWAN tide gauges behind a network server this process plays: 37 named devices. It
+truck, and 4 LoRaWAN tide gauges behind a network server this process plays. S6 adds two token MQTT
+chargers, two certificate chargers and two HTTP-pull lamps: 43 named devices. It
 plays one **compressed day** on a loop, 24 sim hours in 24 minutes, starting at 06:00:
 
 | Sim time | What happens | What the platform does |
@@ -785,6 +786,91 @@ probe is also read back from storage. An unsigned artifact is refused, so that c
 fails targets, concurrency and outcomes. Moving the gauge to a separate logical device also
 fails flood escalation, MQTT bulletins and notification escalation, which require the original
 gauge identity. Offline fixtures explicitly model those unavoidable collateral failures.
+
+### Harborpulse MQTT, certificate chargers, configuration and pull lamps (S6)
+
+The original HTTP fleet keeps its outage, backfill, six-charger signed rollout and campaign beats.
+Six additional North Quay devices have their own channels. Two chargers publish over authenticated
+MQTT; one disconnects at 12:00 and reconnects at 13:00, raising and clearing a connectivity rule.
+Two chargers use client certificates minted by `x509sim`, registered with a trust anchor and pinned
+credentials through the tenant API. Their token credentials are disabled. At 14:00 the second
+certificate credential is disabled; subsequent connects with that same certificate must be refused.
+
+The certificate profile declares `max_kw` as a DOUBLE configuration key. Both devices receive 22
+initially and a desired change to 11 at 09:00. `updater.ConfigAgent` uses the desired/reports topics
+and its own wire structs: one reports APPLIED at the current revision/digest, the other REJECTED.
+The two additional lamps use `HTTP_PULL`; at 10:00 each pulls a set-dim command, acknowledges it,
+applies 35 %, then reports success over HTTP. They never attach the generic MQTT command receiver.
+
+The handshake must supply a reachable TLS `mqttBroker`. Older chart-route records derive
+`deviceStateGraphQL` automatically; custom routes must supply it explicitly. The rig preserves
+its MQTT NodePort mapping and default broker image, and checks the broker's TLS/client-certificate
+gauges. The throwaway PKI is retained under the user cache, scoped by instance and tenant; set
+`DC_SIM_HARBORPULSE_PKI_DIR` to choose its root. No private key is exposed on `/status`.
+
+The oracle adds `charger-mqtt-stored`, `charger-x509-admitted`, `connectivity-alarm`, `config-applied`
+and `pull-commands-complete`, judged from platform stores and tenant GraphQL. Their controls are
+`mqtt-wrong-topic`, `x509-revocation-skipped`, `mqtt-never-disconnect`, `config-report-stale` and
+`pull-polling-stopped`; each must turn exactly its own invariant red.
+
+A failed post-disable certificate connect (including the broker's TLS/connection EOF) is a
+candidate refusal. The verifier requires a matching platform `x509_credential_rejected` record
+for this tenant and fingerprint after disable; a transport failure alone cannot pass. Like
+`hack/x509-rig.sh`, it combines client failure with independent platform refusal and store evidence.
+An empty HTTP pull is `204 No Content`; `200` carries the command list. Unexpected statuses fail.
+
+The verifier snapshots mutable S6 platform rows at 22:00, before the next day's reset. S5's
+rollout watch extends to at least 26:00, so reading latest credentials, presence and configuration
+after it would judge the next day's enabled/reconnected charger and reset `max_kw=22` revision.
+Stored readings and command history are read afterwards and judged within the watched day. A missed
+snapshot gives no verdict. Configuration uses MQTT desired/reports at 09:00, before revocation
+at 14:00; the APPLIED and planted REJECTED reports must both match that day's revision.
+Bootstrap may admit a charger before the scenario clock starts; its last admission must still
+precede credential disable, with stored pre-revocation telemetry during the watched day.
+
+The sim's scene contract generator adds these six devices and five timing cues. U8 owns adopting
+the generated `demos/harborpulse-unity/Assets/Harborpulse/Resources/harbor_layout.json`; this slice
+does not edit the Unity project. The cues live inside that JSON, and `/status.scenario.layoutDigest`
+automatically identifies the generated S6 contract.
+
+### Harborpulse tenant isolation and MCP fleet questions (S7)
+
+The rig starts a second harborpulse sim in its own tenant, with the same device tokens and
+external ids. The inventories carry tenant-specific descriptions and pumps store an
+`hp_tenant_marker` measurement. These witnesses distinguish two otherwise identical fleets;
+the oracle reads devices, alarms, event ids, broker state and aggregates from the platform.
+
+`tenant-isolation` rejects foreign inventory, alarm originators, event ids and measurements.
+Tenant B's real MCP session exercises `list_devices`, `list_alarms`, `get_device_state` and
+`aggregate_measurements` against independent tenant GraphQL reads. Broker admission timestamps
+distinguish the state of the two tenants. `mcp-fleet-qa` asks which quay is flooding and which
+pumps ran: critical flood alarms identify East Quay, while stored `pump_running` aggregates and
+successful command history answer the pump question. Collection runs beside the original alarm
+watch so MCP cannot introduce a gap in S1-S6 observations. The rig waits for every sim to
+bootstrap before starting their clocks; MCP collection waits for the selected primary watch.
+
+`up` enables the MCP area and requires its OAuth challenge and protected-resource metadata to
+serve. Each rig run registers a public OAuth client through user-management's admin registry,
+then the verifier POSTs B's member login and consent to the real authorization endpoint and
+redeems the authorization code with S256 PKCE and the MCP resource indicator. The MCP bearer is
+that member's token with explicit `read-only location` consent. The separate `location` scope
+allows the truck's geofence alarm to participate in the full tenant alarm comparison; a
+`read-only` grant alone legitimately withholds position-derived alarms. The operator credential
+is used only for client registration and deletion. Tokens, the identity proof, authorization
+code and PKCE verifier stay in memory and
+never enter reports or logs; a public client has no client secret. Teardown deletes the client.
+
+For a standalone verifier, add `--peer-handshake <B.json> --peer-sim <B-control-URL>`,
+`--mcp <MCP-endpoint> --oauth-client <per-run-client-id>`. Operator setup can use
+`--oauth-client-action create` (and `delete`) with `DC_ADMIN_PASSWORD`; it does not run the
+oracle. Without a peer, both S7 invariants are explicitly omitted. The rig enables them on the
+clean run and the two S7 controls; legacy control batches retain their existing observations to
+stay below MCP's per-caller session ceiling.
+
+Controls `--scenario-defect isolation-cross-read` and `--scenario-defect mcp-wrong-answer`
+each must turn exactly one invariant red, including when every S1-S6 invariant is evaluated.
+The former actually reads B with B's identity in A's observation slot; the latter changes only
+the scripted flooding answer. S7 adds no devices to the scene layout.
 
 ### Harborpulse shared thresholds, downlinks and calculated backfill (S3b)
 

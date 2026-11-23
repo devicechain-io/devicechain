@@ -79,7 +79,8 @@ func (c *AgentKillConsumer) ExecuteStart(context.Context) error {
 }
 
 // Backlog is a broker round trip, safe alongside ReadMessage. Only a caught-up
-// durable proves an idle stream healthy: unhandled or failed kills stop the beat.
+// durable may beat the feed. An exhausted kill keeps the shared feed latched
+// stale even once the broker stops counting it as unacknowledged.
 func (c *AgentKillConsumer) poll(ctx context.Context) {
 	r, ok := c.Reader.(interface {
 		Backlog(context.Context) (uint64, uint64, error)
@@ -123,12 +124,35 @@ func (c *AgentKillConsumer) handle(ctx context.Context, msg messaging.Message) {
 			_ = msg.Ack()
 			return
 		}
-		// A storage failure is never acknowledged, even after the redelivery cap.
+		// Before the cap, leave storage failures unacked for redelivery. At the
+		// cap JetStream retires the pending entry even without an ack, so an idle
+		// poll could beat the feed despite this unapplied kill. Latch the shared
+		// feed stale BEFORE dead-lettering; only process restart clears the latch.
+		if messaging.FinalDelivery(msg) {
+			c.Feed.LatchStale()
+			log.Error().Err(err).Str("tenant", tenant).Msg("Agent kill was not applied on its final delivery; kill feed latched stale until process restart")
+			if c.dead != nil {
+				payload := msg.Value[:min(len(msg.Value), 4096)]
+				if e := c.dead.WriteFor(msgctx, msg, deadletter.Envelope{
+					Reason:     deadletter.ReasonUnprocessable,
+					Summary:    "Agent kill was not applied; repeat the kill after storage recovers, then restart device-management",
+					Detail:     err.Error(),
+					Reference:  ev.EventID,
+					OccurredAt: c.Feed.Now(),
+					Payload:    payload,
+				}); e != nil {
+					log.Error().Err(e).Str("tenant", tenant).Msg("Failed to dead-letter unapplied agent kill; kill feed remains latched stale")
+					return
+				}
+			}
+			_ = msg.Ack()
+			return
+		}
 		log.Warn().Err(err).Str("tenant", tenant).Msg("Agent kill was not applied; leaving it unacknowledged")
 		return
 	}
-	// No Beat here. Freshness means "the durable has nothing pending or unacknowledged" (poll), so a
-	// message that applied cleanly must not vouch for another tenant's kill that is still failing.
+	// No Beat here: only a caught-up poll can vouch for the feed, and a latched
+	// feed stays stale. One clean kill must not mask another tenant's failed kill.
 	_ = msg.Ack()
 }
 

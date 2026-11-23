@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/ruletest"
-	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dcctl/apiclient"
 	"github.com/devicechain-io/dcctl/ruletestrun"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
@@ -64,6 +64,10 @@ change in a minor release, with the change in the release notes.
 The server authorizes the evaluation as the identity you sign in with (device:read). The password
 may be given in the DCCTL_PASSWORD environment variable instead of --password, which keeps it out
 of the shell history and the process list.`,
+	Example: `  dcctl test ./tests --tenant acme --email you@example.com --password '<password>'
+  # the password from the environment, and a JUnit report for CI
+  DCCTL_PASSWORD='<password>' dcctl test ./tests/low-battery.test.yaml --tenant acme --email you@example.com --junit results.xml
+  dcctl test ./tests --tenant acme --email you@example.com --password '<password>' --server dc.example.com --tls`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runTest,
 	SilenceUsage: true,
@@ -114,7 +118,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return ruletestrun.Errored(err)
 	}
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
-	session := userclient.NewTenantSession(nil, endpoints.UserGraphQL, testEmail, password, testTenant).
+	session := apiclient.NewTenantSession(nil, endpoints.UserGraphQL, testEmail, password, testTenant, recordedEndpointVersions(cmd, endpoints.EventProcessingGraphQL)...).
 		WithOTP(otpFunc(otpFlag(cmd)))
 	cases, err := ruletestrun.Run(cmd.Context(), plan, ruletestrun.Options{
 		Client: session, Endpoint: endpoints.EventProcessingGraphQL, Out: cmd.OutOrStdout(),

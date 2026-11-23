@@ -253,7 +253,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.work
           cache: true
@@ -622,6 +622,32 @@ jobs:
       - name: The instance's broker and event store must carry the release's settings
         if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh infra
+
+      # A pod of the BASELINE release must still start on the configuration the upgrade
+      # wrote. A rolling upgrade overlaps old and new pods, and a baseline pod that
+      # restarts in that window reads the NEW release's configuration through a strict
+      # loader that refuses a key it has never heard of. The step builds a copy of each
+      # area's Deployment on the baseline's own image and requires it to become Ready, and
+      # it shows itself to fail by planting a v1.9-only key and requiring that copy NOT to.
+      - name: A baseline pod must start on the upgraded configuration
+        if: env.DC_UPGRADE_MODE == 'data'
+        run: hack/upgrade-rig.sh oldpods
+
+      # The in-cluster executor is a Preview that executes nothing: an upgrade installs its
+      # two resource definitions and no executor, enrollment or operation. The step checks
+      # exactly that, and shows itself to fail against a planted InstanceOperation.
+      - name: The in-cluster executor must be installed as resource definitions only
+        if: env.DC_UPGRADE_MODE == 'data'
+        run: hack/upgrade-rig.sh executor
+
+      # A baseline device-management pod and the upgraded pods write the same device's
+      # attribute at once; the upgraded pods' per-device lock is observed in force (a write
+      # waits while the lock is held, and not while another device's is), and no orphan
+      # attribute row or generation head is left. The wait and the orphan count are each
+      # shown to fail against a control. The delete-versus-writer window is T-del-2, a test.
+      - name: A baseline pod must write attributes beside the upgraded ones
+        if: env.DC_UPGRADE_MODE == 'data'
+        run: hack/upgrade-rig.sh attrlock
 
       # -------------------------------------------------------------------
       # DRILL B -- the recreate drill. This release does not upgrade onto the

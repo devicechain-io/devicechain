@@ -42,11 +42,11 @@ prod   local      kind-devicechain  default   v1.0.3      Ready       True    v1
 | `telemetry` | user-management、device-management、event-sources、event-management、device-state、dashboard-management |
 | `ingest-only` | user-management、device-management、event-sources |
 
-### 秘密存储根密钥 {#root-key}
+### 机密存储根密钥 {#root-key}
 
-每种配置档都需要实例的**秘密存储根密钥**。所有配置档都运行的 `user-management` 会用它封装登录令牌签名密钥。存储集成凭据的功能域也用它封装凭据。缺少时，Chart 会使渲染失败，而不是让 `user-management` 陷入崩溃重启循环。
+每种配置档都需要实例的**机密存储根密钥**。所有配置档都运行的 `user-management` 会用它封装登录令牌签名密钥。存储集成凭据的功能域也用它封装凭据。缺少时，Chart 会使渲染失败，而不是让 `user-management` 陷入崩溃重启循环。
 
-生成一个值（`openssl rand -base64 32`），妥善保存，并在每次安装和升级时传入**同一个**值。新密钥会使旧密钥保护的已有秘密不可读，并阻止所有人登录。`dcctl bootstrap` 会代你生成并托管保管此密钥；只有直接操作 Chart 时才需自行提供。
+生成一个值（`openssl rand -base64 32`），妥善保存，并在每次安装和升级时传入**同一个**值。新密钥会使旧密钥保护的已有机密不可读，并阻止所有人登录。`dcctl bootstrap` 会代你生成并托管保管此密钥；只有直接操作 Chart 时才需自行提供。
 
 ```bash
 DC_ROOT_KEY="$(openssl rand -base64 32)"   # generate ONCE, then keep it
@@ -81,14 +81,87 @@ helm install dc deploy/helm/devicechain \
 
 `user-management` 和 `device-management` 是必需核心。`event-management`、`device-state` 和 `command-delivery` 各自可选。如果选择中遗漏必需核心服务，或遗漏已启用服务的硬依赖，Chart 会**使渲染失败**，因此安装时就能发现无效拓扑，而不是等到 Pod 崩溃重启。应用时根据 Chart 的 `values.schema.json` 验证配置值。
 
+## 集群内执行器（Preview） {#in-cluster-executor}
+
+Preview：本版本会安装并验证执行器，但不会执行任何操作。
+每个可执行请求都会被拒绝，原因为 `NotExecutableInThisBuild`。现有实例保持不变。
+`dcctl install` 会新增 `ExecutorEnrollment` 和 `InstanceOperation` 两种资源定义，
+但不会注册或部署执行器。与每次发布一样，旧版 dcctl 会拒绝操作已由 1.9 版
+`dcctl install` 更新资源定义的集群。
+
+提供方管理员可以注册一个所有者以及按 SHA-256 摘要固定的镜像。注册要求集群中
+**每个** Instance 都有指纹与已部署根密钥匹配的托管文件（`OwnerOffline`）。
+默认使用现有的 dcctl 托管目录；`--escrow-dir` 可指定另一个目录，其中仍使用
+`<instance>-rootkey.escrow` 文件名。重新运行 `dcctl bootstrap` 会核对托管文件并补写
+缺失文件。发现不匹配时，应先调查原因再替换文件。
+
+```bash
+dcctl executor enroll --owner platform --image "$EXECUTOR_IMAGE" --kube-context prod
+dcctl executor status --kube-context prod
+dcctl executor unenroll --kube-context prod
+```
+
+将 `EXECUTOR_IMAGE` 设置为完整的 `ref@sha256:<64 位小写十六进制数字>`。注册会安装
+`dc-executor-system` 命名空间、ServiceAccount、固定镜像的 Deployment、执行器 RBAC、
+未绑定的请求方 ClusterRole 以及 `ExecutorEnrollment/cluster`。
+它不会写入 Secret、凭据文件或 kubeconfig。权限预检仅供提前检查，不能保证应用成功；
+应用失败时会逐个报告对象结果。注册最多等待五分钟，确认部署完成，且 Ready 状态是针对
+当前代数及固定镜像的观察结果。`--dry-run` 执行检查并打印计划，但不应用。
+Status 显示声明、能力、条件及非终态 InstanceOperation；集群未注册时也成功退出。
+
+注销会保留实例、操作历史和资源定义。存在未完成操作时，必须先用 `--force` 将其标记为
+`Refused/Unenrolled`。这一显式管理员恢复操作是唯一由执行器之外的主体写入操作状态的
+情况：在移除执行器前关闭请求，并通过资源版本检查保留并发产生的终态裁决。
+注销会等待执行器命名空间消失。
+
+注册会为命名空间添加 `app.kubernetes.io/managed-by: dcctl-executor` 标签。
+如果已有的 `dc-executor-system` 命名空间缺少该标签，注册和注销都会在任何更改前拒绝，
+即使使用 `--force` 也一样。删除命名空间时会以已观察到的 UID 为前提条件。
+如果既无注册资源也无自有命名空间，注销会报告 "not enrolled"，且不作任何更改。
+修改已有注册的 `owner` 或 `escrowDelivery` 也会在应用前被拒绝；请先注销，再用新值注册。
+
+存在非终态 InstanceOperation 时，`bootstrap` 和 `upgrade` 会拒绝操作对应实例；
+`destroy` 会警告并继续，以保证仍可恢复。请等待执行器裁决，或运行
+`dcctl executor unenroll --force`；即使执行器未注册，该命令也会关闭待处理请求。
+拒绝信息还会为每个请求列出 `kubectl delete instanceoperation <name>`，作为另一种恢复方法。
+这只是检测，不是互斥锁。AB6 不覆盖 `dcctl install`：该命令准备的是集群，
+而本 Preview 无论如何都会拒绝 Install 请求。
+
+### 执行器指标 {#executor-metrics}
+
+执行器在 `dc-executor-system` 中自己 Pod 的指标端点上导出三个计数器。它们没有 `devicechain_` 前缀，
+也不按实例或操作打标签，而且 chart 的 Prometheus 不会抓取该命名空间，如需使用请自行配置抓取。
+
+| 指标 | 含义 |
+| --- | --- |
+| `dc_executor_decisions_total{verdict,reason}` | 执行器写入 `InstanceOperation` 的判定。`verdict` 是写入的阶段：`Refused` 或 `Running`。`reason` 为 `Executable`，或拒绝的原因：`StaleEnrollment`、`InstanceExists`、`InstanceNotFound`、`StaleTarget`（请求指向已被替换的注册或实例，或其存在与否与该操作不符）或 `NotExecutableInThisBuild`。本 Preview 版本中没有任何操作可执行，因此每个有效请求都以 `Refused` 和 `NotExecutableInThisBuild` 结束：这是预期的稳态，不是故障。其他任何拒绝原因上升，说明请求是针对过期的注册或实例提交的；请提交新的请求。 |
+| `dc_executor_operations_skipped_total{reason}` | 执行器未处理、须留给更新版执行器的操作：`protocol`（请求需要比本执行器所构建的更新的协议）或 `action`（本执行器不认识的操作）。执行器镜像为最新时为零。上升表示来自更新版 `dcctl` 的请求在等待执行器升级：用新镜像再次运行 `dcctl executor enroll`。 |
+| `dc_executor_status_writes_total{kind,result}` | 写入 `InstanceOperation` 或 `ExecutorEnrollment`（`kind`）状态的尝试，按 `result` 区分：`success`、`conflict`（另一个写入者抢先；执行器立即重试）或 `error`。偶尔的冲突属正常。`error` 速率持续偏高，说明执行器无法写入状态，操作因此一直没有判定；请检查执行器的日志及其 RBAC。 |
+
 ## 自定义资源 {#custom-resources}
 
-`dcctl install` 定义两种集群范围的自定义资源：
+`dcctl install` 定义四种集群范围的自定义资源：
 
 - **`Instance`**（`instances.core.devicechain.io`，短名 `dci`）：每次安装一个，声明实例身份和配置。
-- **`InstanceConfiguration`**（`instanceconfigurations.core.devicechain.io`，短名 `dcic`）：可保存实例配置文档的资源。定义会被安装，但 `dcctl bootstrap` 不会创建该资源，Operator 也不监视它。每个 Pod 从挂载的实例配置 Secret 读取实例配置。
+- **`InstanceConfiguration`**（`instanceconfigurations.core.devicechain.io`，短名 `dcic`）：可保存实例配置文档的资源。定义会被安装，但 `dcctl bootstrap` 不会创建该资源，Operator 也不监视它。每个 Pod 从挂载的实例配置 Secret 读取实例配置。**已弃用：**读取或写入该资源时 API 服务器会发出警告，后续的主版本将删除该定义。
 
-[`dcctl install`](./bootstrap.md#install) 将两种定义和控制器一起安装。它们在各方面都是集群范围的：每个集群一份，由其上的所有实例共享，版本跟随集群，而不是某个实例。因此，准备集群的命令也是升级它们的命令。
+- **`ExecutorEnrollment`**（`executorenrollments.core.devicechain.io`，`dce`）——执行器的唯一注册资源，记录所有者、固定镜像和观察到的能力。
+- **`InstanceOperation`**（`instanceoperations.core.devicechain.io`，`dcop`）——不可变的操作请求及其裁决；本 Preview 不执行任何操作。
+
+`Instance` 声明中有两个字段已**弃用**，后续的主版本将删除它们。带有这两个字段的实例不受任何影响：
+
+- `spec.grafanaSSO` 不起作用。Grafana 的登录针对整个集群配置，而不是按实例配置。
+- `spec.compact` 由 `spec.size: compact` 取代。**请保留两个字段，不要删除 `compact`。** dcctl 会同时写入两者，仍读取 `compact`，并拒绝 `size` 为 `compact` 但未设置 `compact` 的声明，因此手动删除它会阻止之后的每次初始化和升级。无需任何操作。
+
+Install 是集群级请求，禁止提供 `spec.instance` 和 `spec.instanceUID`。其他动作必须提供
+`spec.instance`；Upgrade 和 Teardown 还必须提供 `spec.instanceUID`，Bootstrap 可省略它，
+因为目标实例尚不存在。每个请求都必须提供当前的 `spec.enrollmentUID`。终态裁决会在
+`status.conditions` 中设置 `Decided=True`，并附上裁决原因。终态的 phase、reason、message
+和决定时间不可更改；条件仍可更改，以维护其时间戳。注销仅删除带有
+`app.kubernetes.io/managed-by: dcctl-executor` 标签的集群级 RBAC，并使用 UID 前置条件，
+同时报告跳过的对象。
+
+[`dcctl install`](./bootstrap.md#install) 将四种定义和控制器一起安装。它们在各方面都是集群范围的：每个集群一份，由其上的所有实例共享，版本跟随集群，而不是某个实例。因此，准备集群的命令也是升级它们的命令。
 
 `dcctl bootstrap` 和 `dcctl upgrade` 只读取定义。集群没有定义，或定义能够识别为来自不同发布版本时，它们会拒绝操作，并指出应运行的安装命令。手动安装的定义没有安装版本记录，因此允许通过，但会提示同一个命令，而不是拒绝。
 
@@ -102,7 +175,7 @@ Operator 是 `Instance` 的 `status` 的唯一写入者，记录它**观察到**
 | 注解（`core.devicechain.io/phase`、`last-applied-by`、`last-applied-at`） | 上次 `dcctl` 运行**意图**或所做的事；即 `OPERATION` 列 | `dcctl` |
 | Operator 命名空间中的 `dcctl` Lease | **此刻**谁在操作该集群 | `dcctl` |
 
-`dcctl` 从不写入 `status`，Operator 也从不读取这些注解：`OPERATION` 可以显示 `Upgrading`，而 `READY` 显示 `True`，两者同时成立。
+`dcctl` 从不写入 `Instance` 的 `status`，Operator 也从不读取这些注解：`OPERATION` 可以显示 `Upgrading`，而 `READY` 显示 `True`，两者同时成立。
 
 | 字段 | 含义 |
 |---|---|
@@ -248,6 +321,8 @@ dcctl instances release <id> --kube-context <kube-context>
 ```
 
 这会清除 finalizer 并删除声明。**它不销毁任何内容。** 命名空间、数据库、卷和工作负载之后仍在运行，而 `dcctl` 不再有记录说明它们属于什么。因此命令要求你明确确认这正是想要的结果。它之所以存在，是因为负责移除 finalizer 的工具消失时，否则集群会留下无人能够删除的对象。
+
+它首先检查集群的 DeviceChain Operator。如果集群的 Operator 不是当前 `dcctl` 所对应的版本，命令会拒绝执行：请使用与集群匹配的 `dcctl` 执行释放，或传入 `--force` 在警告后继续释放。完全没有 Operator 的集群会被放行，因为这正是该命令的用途。它只修改 finalizer 列表（使用 patch，而不是更新整个声明），因此需要对 `instances.core.devicechain.io` 的 `get`、`patch` 和 `delete` 权限，以及对 `customresourcedefinitions` 的 `get` 权限。
 
 命令会打印即将执行的操作，并要求再次输入实例名称；脚本使用时可用 `--yes` 跳过提示。任何未引导该实例的机器都需要 `--kube-context`，因为它告诉 `dcctl` 哪个集群保存声明。
 

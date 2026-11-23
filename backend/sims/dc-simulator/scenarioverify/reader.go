@@ -27,7 +27,7 @@ const (
 
 	queryCommands = `query ScenarioCommands($c: CommandSearchCriteria!) {
   commands(criteria: $c) {
-    results { deviceToken name status queuedTime respondedTime }
+    results { deviceToken name status queuedTime respondedTime createdAt updatedAt }
     pagination { totalRecords }
   }
 }`
@@ -64,11 +64,15 @@ type Reader struct {
 	ingress   string
 	http      *http.Client
 	seed      int64
+	tenant    string
 }
 
 // NewReader signs in as the handshake's sim identity.
 func NewReader(hs *sim.Handshake, httpc *http.Client) (*Reader, error) {
 	if err := hs.Endpoints.ResolveUpdateManagement(); err != nil {
+		return nil, err
+	}
+	if err := hs.Endpoints.ResolveDeviceState(); err != nil {
 		return nil, err
 	}
 	for name, v := range map[string]string{
@@ -81,7 +85,7 @@ func NewReader(hs *sim.Handshake, httpc *http.Client) (*Reader, error) {
 		}
 	}
 	return &Reader{
-		http: httpc, seed: hs.Seed,
+		http: httpc, seed: hs.Seed, tenant: hs.Tenant,
 		session:   userclient.NewTenantSession(httpc, hs.Endpoints.UserGraphQL, hs.SimEmail, hs.SimPassword, hs.Tenant),
 		endpoints: hs.Endpoints,
 		events:    httpFromWS(hs.Endpoints.EventMgmtWS),
@@ -161,6 +165,8 @@ func (r *Reader) Commands(ctx context.Context, device string) ([]Command, error)
 					Status        string  `json:"status"`
 					QueuedTime    *string `json:"queuedTime"`
 					RespondedTime *string `json:"respondedTime"`
+					CreatedAt     *string `json:"createdAt"`
+					UpdatedAt     *string `json:"updatedAt"`
 				} `json:"results"`
 				Pagination struct {
 					TotalRecords *int `json:"totalRecords"`
@@ -183,7 +189,7 @@ func (r *Reader) Commands(ctx context.Context, device string) ([]Command, error)
 			if err != nil {
 				return nil, fmt.Errorf("command of %s: respondedTime: %w", device, err)
 			}
-			out = append(out, Command{Device: c.DeviceToken, Name: c.Name, Status: c.Status, Queued: queued, Responded: responded})
+			out = append(out, Command{Device: c.DeviceToken, Name: c.Name, Status: c.Status, Queued: queued, Responded: responded, CreatedAt: str(c.CreatedAt), UpdatedAt: str(c.UpdatedAt)})
 		}
 		if len(out) >= *resp.Commands.Pagination.TotalRecords || len(resp.Commands.Results) < commandPageSize {
 			return out, nil

@@ -225,6 +225,11 @@ type InstanceSpec struct {
 
 	// Compact applies the small-footprint sizing preset.
 	//
+	// Deprecated: size: compact replaces it, but keep both fields: do not remove compact. dcctl
+	// writes both, still reads compact, and refuses a declaration whose size is compact while
+	// compact is not set, so removing it by hand would block every later bootstrap and upgrade.
+	// No action is needed. It will not be removed before v3.0.
+	//
 	// +optional
 	Compact bool `json:"compact,omitempty"`
 
@@ -269,12 +274,15 @@ type InstanceSpec struct {
 	// +optional
 	CNPG bool `json:"cnpg,omitempty"`
 
-	// GrafanaSSO reports whether Grafana's login is wired to DeviceChain SSO.
+	// GrafanaSSO has no effect. Grafana's login is configured for the whole cluster
+	// by the OpenTofu cluster configuration (its monitoring_grafana_oauth_* settings),
+	// not per instance. Nothing in dcctl or the operator reads it, and dcctl does not carry
+	// it: a dcctl re-run writes the declaration without it, so a value set by hand is
+	// dropped then. It is kept in the schema so a declaration that carries it is still
+	// accepted.
 	//
-	// Recorded for the same reason and with a sharper edge: this seeds an OAuth
-	// client into the user-management config and turns the integration on in the
-	// infrastructure apply, so a re-run without it does not merely skip the feature
-	// — it removes both halves from a live instance.
+	// Deprecated: has no effect; configure Grafana's login with the cluster configuration
+	// instead. It will not be removed before v3.0.
 	//
 	// +optional
 	GrafanaSSO bool `json:"grafanaSSO,omitempty"`
@@ -703,6 +711,7 @@ const (
 //+kubebuilder:object:root=true
 //+kubebuilder:resource:scope=Cluster,shortName=dci
 //+kubebuilder:subresource:status
+//+kubebuilder:storageversion
 //+kubebuilder:printcolumn:name="Provider",type=string,JSONPath=`.spec.provider`
 //+kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=`.spec.cluster`
 //+kubebuilder:printcolumn:name="Profile",type=string,JSONPath=`.spec.profile`

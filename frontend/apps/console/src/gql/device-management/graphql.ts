@@ -56,8 +56,14 @@ export type AlarmAnchor = {
   type: string;
 };
 
+/**
+ * Criteria for searching alarms. Every facet is optional and they AND together. originatorType and
+ * originatorToken restrict to one entity.
+ */
 export type AlarmSearchCriteria = {
+  /** True selects acknowledged alarms and false unacknowledged ones. Omit for either. */
   acknowledged?: boolean | null | undefined;
+  /** Only alarms with this alarm key. */
   alarmKey?: string | null | undefined;
   /** Only alarms stamped with this anchor (see AlarmAnchor). */
   anchor?: AlarmAnchor | null | undefined;
@@ -74,12 +80,17 @@ export type AlarmSearchCriteria = {
    * no upper bound. A value that is not RFC 3339 is an error.
    */
   endTime?: string | null | undefined;
+  /** Only alarms of this originator, by its token. An unknown token finds nothing. */
   originatorToken?: string | null | undefined;
+  /** Entity type of the originator, for example device. Required when originatorToken is set. */
   originatorType?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
   /** True selects current cycles raised under suppression; false selects cycles without a stamp. Omit for either. */
   raisedDuringSuppression?: boolean | null | undefined;
+  /** Only alarms at this severity: CRITICAL, MAJOR, MINOR, WARNING or INDETERMINATE. */
   severity?: string | null | undefined;
   /**
    * Only alarms active at some point at or after this instant (inclusive), as an RFC 3339
@@ -87,33 +98,53 @@ export type AlarmSearchCriteria = {
    * active then is included. Omit for no lower bound. A value that is not RFC 3339 is an error.
    */
   startTime?: string | null | undefined;
+  /** Only alarms in this state: ACTIVE or CLEARED. */
   state?: string | null | undefined;
 };
 
+/** Data required to create an area. */
 export type AreaCreateRequest = {
+  /** Token of the area type to create it under. An unknown token is refused. */
   areaTypeToken: string;
   /** The token of the geofence that bounds the area. It must name an existing fence. */
   boundaryFenceToken?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new area, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing areas. */
 export type AreaSearchCriteria = {
+  /** Only areas of the area type with this token. Omit for every area. */
   areaTypeToken?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/** Data required to create an area type. */
 export type AreaTypeCreateRequest = {
+  /** Background colour to display the area type with, up to 32 characters. Not validated. */
   backgroundColor?: string | null | undefined;
+  /** Border colour to display the area type with, up to 32 characters. Not validated. */
   borderColor?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Foreground (text) colour to display the area type with, up to 32 characters. Not validated. */
   foregroundColor?: string | null | undefined;
+  /** Name of an icon representing the area type, up to 128 characters. Not checked against any icon set. */
   icon?: string | null | undefined;
+  /** URL of an image representing the area type, up to 512 characters. */
   imageUrl?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
   /**
    * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
@@ -123,22 +154,39 @@ export type AreaTypeCreateRequest = {
    * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
    */
   semanticTypes?: Array<string> | null | undefined;
+  /** Identifier for the new area type, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing area types. */
 export type AreaTypeSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of an area type. Each field has three states: omit it to keep the stored value,
+ * send null to clear it, or send a value to set it. There is no token field: the mutation's token
+ * argument names the record, so a token cannot be moved.
+ */
 export type AreaTypeUpdateRequest = {
+  /** Background colour; null clears it. */
   backgroundColor?: string | null | undefined;
+  /** Border colour; null clears it. */
   borderColor?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** Foreground colour; null clears it. */
   foregroundColor?: string | null | undefined;
+  /** Icon name; null clears it. */
   icon?: string | null | undefined;
+  /** Image URL; null clears it. */
   imageUrl?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
   /**
    * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
@@ -147,42 +195,85 @@ export type AreaTypeUpdateRequest = {
   semanticTypes?: Array<string> | null | undefined;
 };
 
+/**
+ * A partial update of an area. Each field has three states: omit it to keep the stored value, send
+ * null to clear it, or send a value to set it. There is no token field: the mutation's token argument
+ * names the record, so a token cannot be moved.
+ */
 export type AreaUpdateRequest = {
+  /**
+   * Re-points the area at a different area type. Omit to keep the current one. Null is refused,
+   * because every area must reference a type, and so is an unknown token; a refusal writes nothing.
+   */
   areaTypeToken?: string | null | undefined;
   /**
    * Links the area to the geofence that bounds it: omit to keep the link, send null to remove
    * it, send a token to set it. The token must name an existing fence.
    */
   boundaryFenceToken?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
 };
 
+/** Data required to create an asset. */
 export type AssetCreateRequest = {
+  /** Token of the asset type to create it under. An unknown token is refused. */
   assetTypeToken: string;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The asset's property document, validated against the asset type's active published contract
+   * before anything is written. Refused when the type has no published contract, when a key is not
+   * declared, when a value does not fit its declared type, bounds or allowed values, or when a
+   * required property is missing; a refusal is total, so no asset is created.
+   */
   properties?: string | null | undefined;
+  /** Identifier for the new asset, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing assets. */
 export type AssetSearchCriteria = {
+  /** Only assets of the asset type with this token. Omit for every asset. */
   assetTypeToken?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/** Data required to create an asset type. */
 export type AssetTypeCreateRequest = {
+  /** Background colour to display the asset type with, up to 32 characters. Not validated. */
   backgroundColor?: string | null | undefined;
+  /** Border colour to display the asset type with, up to 32 characters. Not validated. */
   borderColor?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Foreground (text) colour to display the asset type with, up to 32 characters. Not validated. */
   foregroundColor?: string | null | undefined;
+  /** Name of an icon representing the asset type, up to 128 characters. Not checked against any icon set. */
   icon?: string | null | undefined;
+  /** URL of an image representing the asset type, up to 512 characters. */
   imageUrl?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The draft property contract, as on AssetType.propertySchema. Refused if it is not a JSON array
+   * of descriptors, if it carries a key no descriptor declares (so a mistyped key is refused rather
+   * than dropped), or if it declares a contract nothing could satisfy, such as a duplicate name, an
+   * unknown data type or a default outside its own enum.
+   */
   propertySchema?: string | null | undefined;
   /**
    * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
@@ -192,23 +283,44 @@ export type AssetTypeCreateRequest = {
    * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
    */
   semanticTypes?: Array<string> | null | undefined;
+  /** Identifier for the new asset type, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing asset types. */
 export type AssetTypeSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of an asset type. Each field has three states: omit it to keep the stored value,
+ * send null to clear it, or send a value to set it. There is no token field: the mutation's token
+ * argument names the record, so a token cannot be moved.
+ */
 export type AssetTypeUpdateRequest = {
+  /** Background colour; null clears it. */
   backgroundColor?: string | null | undefined;
+  /** Border colour; null clears it. */
   borderColor?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** Foreground colour; null clears it. */
   foregroundColor?: string | null | undefined;
+  /** Icon name; null clears it. */
   icon?: string | null | undefined;
+  /** Image URL; null clears it. */
   imageUrl?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
+  /**
+   * Replaces the draft property contract wholesale; null withdraws it. Omit to keep the stored
+   * draft. Validated as on create, and a refusal writes nothing.
+   */
   propertySchema?: string | null | undefined;
   /**
    * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
@@ -217,24 +329,53 @@ export type AssetTypeUpdateRequest = {
   semanticTypes?: Array<string> | null | undefined;
 };
 
+/**
+ * A partial update of an asset. Each field has three states: omit it to keep the stored value, send
+ * null to clear it, or send a value to set it. There is no token field: the mutation's token argument
+ * names the record, so a token cannot be moved.
+ */
 export type AssetUpdateRequest = {
+  /**
+   * Re-points the asset at a different asset type. Omit to keep the current one. Null is refused,
+   * because every asset must reference a type, and so is an unknown token; a refusal writes nothing.
+   */
   assetTypeToken?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
+  /**
+   * Replaces the asset's property document wholesale; null clears it. Omit to keep what is stored.
+   * Omitting it does not skip the check: moving to another asset type re-validates the properties
+   * the asset already carries against that type's contract.
+   */
   properties?: string | null | undefined;
 };
 
+/**
+ * Criteria for querying the audit journal. Every filter is optional; a bounded startTime and endTime
+ * range is recommended.
+ */
 export type AuditEventSearchCriteria = {
   /** Only entries whose actor contains this text. The match ignores case. At most 256 bytes; longer input is refused with LIMIT_EXCEEDED. */
   actor?: string | null | undefined;
+  /** Only entries of this category: mutation or auth. */
   category?: string | null | undefined;
+  /** Only entries at or before this instant, as an RFC 3339 timestamp. */
   endTime?: string | null | undefined;
+  /** Only entries that affected the row with this primary key. */
   entityPk?: string | null | undefined;
+  /** Only entries of this operation: create, update or delete. */
   operation?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
+  /** Only entries at or after this instant, as an RFC 3339 timestamp. */
   startTime?: string | null | undefined;
+  /** Only entries that mutated this table. */
   tableName?: string | null | undefined;
 };
 
@@ -529,28 +670,50 @@ export type ConfigurationKeyInput = {
   valueType: string;
 };
 
+/** Data required to create a customer. */
 export type CustomerCreateRequest = {
+  /** Token of the customer type to create it under. An unknown token is refused. */
   customerTypeToken: string;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new customer, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing customers. */
 export type CustomerSearchCriteria = {
+  /** Only customers of the customer type with this token. Omit for every customer. */
   customerTypeToken?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/** Data required to create a customer type. */
 export type CustomerTypeCreateRequest = {
+  /** Background colour to display the customer type with, up to 32 characters. Not validated. */
   backgroundColor?: string | null | undefined;
+  /** Border colour to display the customer type with, up to 32 characters. Not validated. */
   borderColor?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Foreground (text) colour to display the customer type with, up to 32 characters. Not validated. */
   foregroundColor?: string | null | undefined;
+  /**
+   * Name of an icon representing the customer type, up to 128 characters. Not checked against any
+   * icon set.
+   */
   icon?: string | null | undefined;
+  /** URL of an image representing the customer type, up to 512 characters. */
   imageUrl?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
   /**
    * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
@@ -560,22 +723,39 @@ export type CustomerTypeCreateRequest = {
    * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
    */
   semanticTypes?: Array<string> | null | undefined;
+  /** Identifier for the new customer type, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing customer types. */
 export type CustomerTypeSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of a customer type. Each field has three states: omit it to keep the stored value,
+ * send null to clear it, or send a value to set it. There is no token field: the mutation's token
+ * argument names the record, so a token cannot be moved.
+ */
 export type CustomerTypeUpdateRequest = {
+  /** Background colour; null clears it. */
   backgroundColor?: string | null | undefined;
+  /** Border colour; null clears it. */
   borderColor?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** Foreground colour; null clears it. */
   foregroundColor?: string | null | undefined;
+  /** Icon name; null clears it. */
   icon?: string | null | undefined;
+  /** Image URL; null clears it. */
   imageUrl?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
   /**
    * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
@@ -584,41 +764,110 @@ export type CustomerTypeUpdateRequest = {
   semanticTypes?: Array<string> | null | undefined;
 };
 
+/**
+ * A partial update of a customer. Each field has three states: omit it to keep the stored value, send
+ * null to clear it, or send a value to set it. There is no token field: the mutation's token argument
+ * names the record, so a token cannot be moved.
+ */
 export type CustomerUpdateRequest = {
+  /**
+   * Re-points the customer at a different customer type. Omit to keep the current one. Null is
+   * refused, because every customer must reference a type, and so is an unknown token; a refusal
+   * writes nothing.
+   */
   customerTypeToken?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
 };
 
+/**
+ * Data required to create a detection rule on a device profile. The definition is checked to be well-
+ * formed JSON on write; the detection engine does the authoritative validation when the profile is
+ * published.
+ */
 export type DetectionRuleCreateRequest = {
+  /**
+   * The visual automation canvas document the rule was authored with. Omit for a rule authored as a
+   * form. When present it must be a JSON object; it is stored verbatim and not interpreted.
+   */
   authoringGraph?: string | null | undefined;
+  /** The rule as a JSON document in the detection engine's rule language. Must be well-formed JSON. */
   definition: string;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Token of the device profile to declare the rule on. An unknown token is refused. */
   deviceProfileToken: string;
+  /** Whether the rule is live. A disabled rule is kept but not run. */
   enabled: boolean;
+  /**
+   * Token of a dynamic entity group to scope the rule to. Omit both scope fields for a rule that
+   * covers every device of the profile, or set both together. Checked on save: it must name a
+   * published dynamic group version.
+   */
   entityGroupToken?: string | null | undefined;
+  /** Published version of the entity group to scope the rule to. Set together with entityGroupToken. */
   entityGroupVersion?: number | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new rule, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing detection rules. */
 export type DetectionRuleSearchCriteria = {
+  /** Only rules declared on the device profile with this token. Omit for every rule. */
   deviceProfile?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of a detection rule. Each field has three states: omit it to keep the stored value,
+ * send null to clear it, or send a value to set it. The rule's token is not here because the
+ * mutation's token argument names the rule and an update cannot move it.
+ */
 export type DetectionRuleUpdateRequest = {
+  /**
+   * The visual canvas document. Null drops it, which is what a form edit of a canvas-authored rule
+   * needs since the graph is then stale; omitting it keeps it.
+   */
   authoringGraph?: string | null | undefined;
+  /**
+   * The rule JSON document. Required: null is refused, because a rule with no definition detects
+   * nothing.
+   */
   definition?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /**
+   * Moves the rule to this device profile. Null is refused, and an unknown token refuses the whole
+   * update.
+   */
   deviceProfileToken?: string | null | undefined;
+  /**
+   * Whether the rule is live. Null is refused rather than read as false, which would silently park a
+   * live rule.
+   */
   enabled?: boolean | null | undefined;
+  /**
+   * Entity group scope. The two scope fields are applied independently and then checked as a pair
+   * against what the rule ends up with, so naming one without the other is refused. Null on either
+   * removes the scope.
+   */
   entityGroupToken?: string | null | undefined;
+  /** Published version of the scoping entity group. See entityGroupToken for how the pair is applied. */
   entityGroupVersion?: number | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
 };
 
@@ -708,6 +957,7 @@ export type DeviceCreateRequest = {
   token: string;
 };
 
+/** Data required to create a device credential. */
 export type DeviceCredentialCreateRequest = {
   /**
    * X509_CERTIFICATE only: the device certificate in PEM, optionally followed by the
@@ -721,6 +971,7 @@ export type DeviceCredentialCreateRequest = {
    * is stored only as a keyed digest and is returned once, in this mutation's response.
    */
   credentialId: string;
+  /** The kind of credential: ACCESS_TOKEN, MQTT_BASIC or X509_CERTIFICATE. Any other value is refused. */
   credentialType: string;
   /**
    * The password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
@@ -729,28 +980,44 @@ export type DeviceCredentialCreateRequest = {
    * working until it is next changed.
    */
   credentialValue?: string | null | undefined;
+  /** Token of the device the credential authenticates. An unknown token is refused. */
   deviceToken: string;
+  /** Whether the credential can authenticate. A disabled credential is kept but refused at connect. */
   enabled: boolean;
+  /** When the credential stops authenticating, as an RFC 3339 timestamp. Omit for never. */
   expiresAt?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Identifier for the new credential record, unique within the tenant. */
   token: string;
   /** X509_CERTIFICATE only: the trust anchor the certificate's chain must reach, at creation and at every connect. */
   trustAnchorToken?: string | null | undefined;
 };
 
+/** Criteria for listing device credentials. Every facet is optional and they AND together. */
 export type DeviceCredentialSearchCriteria = {
   /**
    * An MQTT username, or for ACCESS_TOKEN either the access token or the fingerprint a read
    * returns. The token is matched through its digest; it is never stored or compared as sent.
    */
   credentialId?: string | null | undefined;
+  /** Only credentials of this type: ACCESS_TOKEN, MQTT_BASIC or X509_CERTIFICATE. */
   credentialType?: string | null | undefined;
+  /** Only credentials of the device with this token. */
   device?: string | null | undefined;
+  /** True selects enabled credentials and false disabled ones. Omit for either. */
   enabled?: boolean | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of a device credential. Each field has three states: omit it to keep the stored
+ * value, send null to clear it, or send a value to set it. The token is not here because the
+ * mutation's token argument names the credential and an update cannot move it.
+ */
 export type DeviceCredentialUpdateRequest = {
   /**
    * The MQTT username, or the new access token for ACCESS_TOKEN. Setting it on an
@@ -760,6 +1027,7 @@ export type DeviceCredentialUpdateRequest = {
    * extensions.code INVALID_VALUE.
    */
   credentialId?: string | null | undefined;
+  /** The kind of credential. Required: null is refused. Validated against the known types when sent. */
   credentialType?: string | null | undefined;
   /**
    * The new password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
@@ -769,9 +1037,22 @@ export type DeviceCredentialUpdateRequest = {
    * working until it is next changed.
    */
   credentialValue?: string | null | undefined;
+  /**
+   * Re-points the credential at another device. Null is refused, and an unknown token refuses the
+   * whole update.
+   */
   deviceToken?: string | null | undefined;
+  /**
+   * Whether the credential can authenticate. Null is refused rather than read as false, which would
+   * silently disable the credential and take the device offline at its next reconnect.
+   */
   enabled?: boolean | null | undefined;
+  /**
+   * When the credential stops authenticating, as an RFC 3339 timestamp. Null, or an empty string
+   * such as a cleared form field sends, means never expires.
+   */
   expiresAt?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
 };
 
@@ -932,9 +1213,21 @@ export type DeviceProfileUpdateRequest = {
   name?: string | null | undefined;
 };
 
+/**
+ * What a caller sends to swap the physical unit behind a device identity. It carries no device
+ * identity fields on purpose: there is no token, external id, device type or name, so a replacement
+ * cannot move the identity, the business key or the profile binding. Rotate credentials, not identity.
+ */
 export type DeviceReplaceRequest = {
+  /**
+   * The identifier the new unit presents at connect time. Optional only for ACCESS_TOKEN, where a
+   * random token is minted and returned once in newCredential; required for every other type, since
+   * the server cannot invent an MQTT username.
+   */
   credentialId?: string | null | undefined;
+  /** Token for the new credential record. A UUID is generated when omitted. */
   credentialToken?: string | null | undefined;
+  /** Type of the credential minted for the incoming unit. Defaults to ACCESS_TOKEN. */
   credentialType?: string | null | undefined;
   /**
    * The password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
@@ -943,15 +1236,29 @@ export type DeviceReplaceRequest = {
    * working until it is next changed.
    */
   credentialValue?: string | null | undefined;
+  /** Token of the surviving logical device. An unknown token is refused. */
   deviceToken: string;
+  /** When the new credential stops authenticating, as an RFC 3339 timestamp. Omit for never. */
   expiresAt?: string | null | undefined;
+  /**
+   * The operator's free-text note, for example water ingress or an RMA number. Recorded on the
+   * replacement.
+   */
   reason?: string | null | undefined;
+  /**
+   * The incoming physical unit's own identifier, such as a manufacturer serial or IMEI. Recorded on
+   * the replacement, not on the device.
+   */
   unitIdentifier?: string | null | undefined;
 };
 
+/** Criteria for listing device replacement records. */
 export type DeviceReplacementSearchCriteria = {
+  /** Only the replacements of the device with this token. Omit for every device. */
   device?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
@@ -1210,112 +1517,260 @@ export type DeviceUpdateRequest = {
   name?: string | null | undefined;
 };
 
+/** Criteria for listing entity attributes. Every facet is optional and they AND together. */
 export type EntityAttributeSearchCriteria = {
+  /** Only attributes whose key is one of these, at most 1000 keys. */
   attrKeys?: Array<string> | null | undefined;
+  /**
+   * Only attributes of the entity with this token. It takes effect only together with entityType; an
+   * entity that does not exist finds nothing.
+   */
   entity?: string | null | undefined;
+  /** Only attributes of entities of this type, for example device. */
   entityType?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
+  /** Only attributes in this scope: CLIENT, SERVER or SHARED. */
   scope?: string | null | undefined;
 };
 
+/**
+ * Data required to set, or replace, an entity attribute. The owner is resolved from its type and
+ * token, which must name an existing entity.
+ */
 export type EntityAttributeSetRequest = {
+  /** The attribute's key, up to 128 bytes. */
   attrKey: string;
+  /** Token of the entity the attribute belongs to. */
   entity: string;
+  /** Entity type of the owner, for example device. */
   entityType: string;
+  /** CLIENT, SERVER or SHARED. See EntityAttribute.scope. Any other value is refused. */
   scope: string;
+  /** The attribute's value as text, up to 64 KiB. Omit or send null for none. */
   value?: string | null | undefined;
+  /** How to read value: STRING, LONG, DOUBLE, BOOLEAN or JSON. Any other value is refused. */
   valueType: string;
 };
 
+/**
+ * Data required to create an entity group. membershipMode defaults to static; a selector is required
+ * for a dynamic group and refused for a static one. Edit a group afterwards with
+ * EntityGroupUpdateRequest.
+ */
 export type EntityGroupCreateRequest = {
+  /** Background colour to display the group with, up to 32 characters. Not validated. */
   backgroundColor?: string | null | undefined;
+  /** Border colour to display the group with, up to 32 characters. Not validated. */
   borderColor?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Foreground (text) colour to display the group with, up to 32 characters. Not validated. */
   foregroundColor?: string | null | undefined;
+  /** Name of an icon representing the group, up to 128 characters. Not checked against any icon set. */
   icon?: string | null | undefined;
+  /** URL of an image representing the group, up to 512 characters. */
   imageUrl?: string | null | undefined;
+  /** The entity family the group collects: device, asset, area or customer. Cannot be changed later. */
   memberType: string;
+  /** static or dynamic. Omitted means static. Cannot be changed later. */
   membershipMode?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The CEL membership selector. Required, and only allowed, when membershipMode is dynamic. It is
+   * compiled and cost-checked on create.
+   */
   selector?: string | null | undefined;
+  /** Identifier for the new group, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing entity groups. memberType and membershipMode are optional filters. */
 export type EntityGroupSearchCriteria = {
   /** Keep only the groups that are (true) or are not (false) access scopes. Omit it for both. */
   accessScope?: boolean | null | undefined;
+  /** Only groups collecting this entity family: device, asset, area or customer. */
   memberType?: string | null | undefined;
+  /** Only groups with this membership mode: static or dynamic. */
   membershipMode?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of an entity group. Each field has three states: omit it to keep the stored value,
+ * send null to clear it, or send a value to set it. The token, memberType and membershipMode are
+ * absent because they are identity: changing the family would leave members that do not belong, and
+ * converting between static and dynamic would orphan the members.
+ */
 export type EntityGroupUpdateRequest = {
+  /** Background colour; null clears it. */
   backgroundColor?: string | null | undefined;
+  /** Border colour; null clears it. */
   borderColor?: string | null | undefined;
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /** Foreground colour; null clears it. */
   foregroundColor?: string | null | undefined;
+  /** Icon name; null clears it. */
   icon?: string | null | undefined;
+  /** Image URL; null clears it. */
   imageUrl?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
+  /**
+   * The membership selector of a dynamic group; refused for a static group. A provided selector is
+   * recompiled and cost-checked before it replaces the stored draft. Null is refused, because a
+   * dynamic group with no selector matches nothing.
+   */
   selector?: string | null | undefined;
 };
 
+/**
+ * Data required to create an entity relationship. The source and target are resolved from their types
+ * and tokens, which must name existing entities.
+ */
 export type EntityRelationshipCreateRequest = {
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Token of the relationship type. An unknown token is refused. */
   relationshipType: string;
+  /** Token of the source entity. */
   source: string;
+  /** Entity type of the source entity, for example device. */
   sourceType: string;
+  /** Token of the target entity. */
   target: string;
+  /** Entity type of the target entity, for example customer. */
   targetType: string;
+  /** Identifier for the new relationship, unique within the tenant. */
   token: string;
 };
 
+/** Criteria for listing entity relationships. Every facet is optional and they AND together. */
 export type EntityRelationshipSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
+  /** Only relationships of the relationship type with this token. */
   relationshipType?: string | null | undefined;
+  /** Only relationships whose source has this token. It takes effect only together with sourceType. */
   source?: string | null | undefined;
+  /** Only relationships whose source is of this entity type. */
   sourceType?: string | null | undefined;
+  /** Only relationships whose target has this token. It takes effect only together with targetType. */
   target?: string | null | undefined;
+  /** Only relationships whose target is of this entity type. */
   targetType?: string | null | undefined;
+  /** True selects relationships of tracked types and false those of untracked types. Omit for either. */
   tracked?: boolean | null | undefined;
 };
 
+/** Criteria for listing declared facet keys. */
 export type FacetKeySearchCriteria = {
+  /**
+   * Only facet keys declared for this entity family: device, asset, area or customer. Omit for every
+   * family.
+   */
   memberType?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * Data required to declare, or redeclare, a facet key. The natural key, memberType and key, selects
+ * the row and the remaining fields are rewritten. Only attribute-source facets can be written, so
+ * there is no source field.
+ */
 export type FacetKeySetRequest = {
+  /** The attribute key the facet declares. */
   key: string;
+  /** An optional human display label for the axis. Omit to fall back to the key. */
   label?: string | null | undefined;
+  /** The entity family the facet classifies: device, asset, area or customer. */
   memberType: string;
+  /** The value type of the facet's attribute values: STRING, LONG, DOUBLE, BOOLEAN or JSON. */
   valueType: string;
+  /** An optional vocabulary of values for the console typeahead. Omit for free-form values. */
   values?: Array<string> | null | undefined;
 };
 
+/**
+ * One facet value on an existing device, asset, area or customer, addressed by token.
+ * The server uses SHARED scope and the facet declaration's value type. Text is trimmed
+ * as on a single attribute write; blank values are INVALID. This operation does not
+ * clear attributes or create entities.
+ */
+export type FacetValueImportRow = {
+  /** A facet key declared for this member family. */
+  key: string;
+  /** The member family: device, asset, area or customer. */
+  memberType: string;
+  /** The existing entity's token in the caller's tenant. */
+  token: string;
+  /** Text to validate and normalize under the facet's declared type. */
+  value: string;
+};
+
+/**
+ * Data required to create a geofence. The geometry is validated on write: its kind, GeoJSON shape,
+ * coordinate ranges and size. Two ceilings are enforced at authoring time: the positions one fence may
+ * carry (512 by default) and the fences a tenant may hold (100 by default), both set by the tenant's
+ * tier. A stored geometry document is also limited to 32 KiB.
+ */
 export type GeoFenceCreateRequest = {
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /**
+   * The geometry document, as described on GeoFence.geometry. Must declare kind POLYGON_2D; reserved
+   * kinds are refused.
+   */
   geometry: string;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new fence, unique within the tenant. Cannot be changed later. */
   token: string;
 };
 
+/** Criteria for listing geofences. */
 export type GeoFenceSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update of a geofence. Each field has three states: omit it to keep the stored value, send
+ * null to clear it, or send a value to set it. A fence's token is immutable, so there is no token
+ * field: create the new fence first and delete the old one if a different token is wanted.
+ */
 export type GeoFenceUpdateRequest = {
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /**
+   * The geometry document. Required: null is refused, because a fence with no shape is not a fence.
+   * Omitting it leaves the shape alone, so a rename or metadata edit is not held to the tenant's
+   * position ceiling, which refuses growth rather than size.
+   */
   geometry?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
 };
 
@@ -1436,8 +1891,8 @@ export type MaintenanceWindowUpdateRequest = {
 /** Fields for a new metric definition. */
 export type MetricDefinitionCreateRequest = {
   /**
-   * The value type: DOUBLE, INT or BOOLEAN. STRING is refused, because a metric must be
-   * numeric; report string values as attributes instead.
+   * The value type: DOUBLE, INT, BOOLEAN or STRING. DOUBLE, INT and BOOLEAN (stored as 0 or 1) are
+   * numeric readings; a STRING reading is stored as text (up to 4096 bytes) and is never aggregated.
    */
   dataType: string;
   /** Free-text description, up to 1024 characters. */
@@ -1508,7 +1963,7 @@ export type MetricDefinitionSearchCriteria = {
  * token here. Any refusal leaves the definition unchanged.
  */
 export type MetricDefinitionUpdateRequest = {
-  /** New value type: DOUBLE, INT or BOOLEAN. An explicit null is refused. */
+  /** New value type: DOUBLE, INT, BOOLEAN or STRING. An explicit null is refused. */
   dataType?: string | null | undefined;
   /** New description, or null to clear it. */
   description?: string | null | undefined;
@@ -1628,18 +2083,45 @@ export type PayloadDecoderTestInput = {
   webhookBody?: string | null | undefined;
 };
 
+/**
+ * Data required to create a provisioning profile. The provision secret is not chosen by the caller:
+ * the server generates it and returns it once in the response.
+ */
 export type ProvisioningProfileCreateRequest = {
+  /**
+   * Type of credential to issue. When sent it must be a type provisioning can mint; for a
+   * certificate profile it must be X509_CERTIFICATE.
+   */
   credentialType?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /**
+   * Token of the device type of every device the profile registers, and the only type it will adopt.
+   * An unknown token is refused.
+   */
   deviceTypeToken: string;
+  /** Whether the profile accepts registrations. */
   enabled: boolean;
+  /** When the profile stops accepting registrations, as an RFC 3339 timestamp. Omit for never. */
   expiresAt?: string | null | undefined;
   /** The most devices the profile may register; at least 1. Omit or send null for no cap. */
   maxDevices?: number | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The key a fleet presents to register itself. Refused when empty or whitespace-only, and unique
+   * within the tenant. A padded value is stored exactly as sent.
+   */
   provisionKey: string;
+  /**
+   * ALLOW_NEW registers a device that does not exist yet and adopts an earmarked one;
+   * CHECK_PRE_PROVISIONED registers only earmarked devices that already exist. Neither adopts a
+   * device that was not earmarked for the profile.
+   */
   strategy: string;
+  /** Identifier for the new profile, unique within the tenant. Cannot be changed later. */
   token: string;
   /**
    * Makes this a certificate profile: its devices authenticate by a client certificate whose
@@ -1651,27 +2133,60 @@ export type ProvisioningProfileCreateRequest = {
   trustAnchorToken?: string | null | undefined;
 };
 
+/** Criteria for listing provisioning profiles. Every facet is optional and they AND together. */
 export type ProvisioningProfileSearchCriteria = {
+  /** Only profiles that register devices of the device type with this token. */
   deviceType?: string | null | undefined;
+  /** True selects enabled profiles and false disabled ones. Omit for either. */
   enabled?: boolean | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
+  /** Only profiles with this strategy: ALLOW_NEW or CHECK_PRE_PROVISIONED. */
   strategy?: string | null | undefined;
 };
 
+/**
+ * A partial update of a provisioning profile. Each field has three states: omit it to keep the stored
+ * value, send null to clear it, or send a value to set it. The token is not here because the
+ * mutation's token argument names the profile. The credential type cannot be edited and the secret is
+ * replaced only by rotateProvisioningProfileSecret.
+ */
 export type ProvisioningProfileUpdateRequest = {
+  /** Free-text description; null clears it. */
   description?: string | null | undefined;
+  /**
+   * Device type stamped onto auto-created devices. Null is refused, and an unknown token refuses the
+   * whole update.
+   */
   deviceTypeToken?: string | null | undefined;
+  /** Whether the profile accepts registrations. Null is refused rather than read as false. */
   enabled?: boolean | null | undefined;
+  /**
+   * When the profile stops accepting registrations, as an RFC 3339 timestamp. Null, or an empty
+   * string, means never expires.
+   */
   expiresAt?: string | null | undefined;
   /**
    * The most devices the profile may register; at least 1. Null removes the cap. Lowering it
    * below the number already registered only refuses further registrations.
    */
   maxDevices?: number | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** Human-readable name; null clears it. */
   name?: string | null | undefined;
+  /**
+   * The key a fleet presents to register itself. Required: null is refused, because a blank key
+   * authenticates nothing. The secret is not editable here; rotateProvisioningProfileSecret replaces
+   * it.
+   */
   provisionKey?: string | null | undefined;
+  /**
+   * ALLOW_NEW or CHECK_PRE_PROVISIONED. Required: null is refused. Validated against the known
+   * strategies when sent.
+   */
   strategy?: string | null | undefined;
   /**
    * Re-points a certificate profile at another trust anchor. Null is refused, and so is naming
@@ -1790,29 +2305,30 @@ export type AreasQueryVariables = Exact<{
 }>;
 
 
-export type AreasQuery = { areas: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AreasQuery = { areas: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AreaByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AreaByTokenQuery = { areasByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type AreaByTokenQuery = { areasByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateAreaMutationVariables = Exact<{
   request?: AreaCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAreaMutation = { createArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateAreaMutation = { createArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateAreaMutationVariables = Exact<{
   token: string;
   request: AreaUpdateRequest;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
-export type UpdateAreaMutation = { updateArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateAreaMutation = { updateArea: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, areaType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteAreaMutationVariables = Exact<{
   token: string;
@@ -1862,29 +2378,30 @@ export type AssetsQueryVariables = Exact<{
 }>;
 
 
-export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, updatedAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AssetByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, updatedAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateAssetMutationVariables = Exact<{
   request?: AssetCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, updatedAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateAssetMutationVariables = Exact<{
   token: string;
   request: AssetUpdateRequest;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
-export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, updatedAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteAssetMutationVariables = Exact<{
   token: string;
@@ -2135,14 +2652,14 @@ export type CustomersQueryVariables = Exact<{
 }>;
 
 
-export type CustomersQuery = { customers: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type CustomersQuery = { customers: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CustomerByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type CustomerByTokenQuery = { customersByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type CustomerByTokenQuery = { customersByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CustomerNamesQueryVariables = Exact<{
   tokens: Array<string> | string;
@@ -2156,15 +2673,16 @@ export type CreateCustomerMutationVariables = Exact<{
 }>;
 
 
-export type CreateCustomerMutation = { createCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateCustomerMutation = { createCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateCustomerMutationVariables = Exact<{
   token: string;
   request: CustomerUpdateRequest;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
-export type UpdateCustomerMutation = { updateCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateCustomerMutation = { updateCustomer: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteCustomerMutationVariables = Exact<{
   token: string;
@@ -2381,29 +2899,30 @@ export type EntityGroupsQueryVariables = Exact<{
 }>;
 
 
-export type EntityGroupsQuery = { entityGroups: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type EntityGroupsQuery = { entityGroups: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, memberType: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type EntityGroupByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type EntityGroupByTokenQuery = { entityGroupsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string }> };
+export type EntityGroupByTokenQuery = { entityGroupsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, memberType: string }> };
 
 export type CreateEntityGroupMutationVariables = Exact<{
   request?: EntityGroupCreateRequest | null | undefined;
 }>;
 
 
-export type CreateEntityGroupMutation = { createEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string } };
+export type CreateEntityGroupMutation = { createEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, memberType: string } };
 
 export type UpdateEntityGroupMutationVariables = Exact<{
   token: string;
   request: EntityGroupUpdateRequest;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
-export type UpdateEntityGroupMutation = { updateEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, memberType: string } };
+export type UpdateEntityGroupMutation = { updateEntityGroup: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null, updatedAt: string | null, memberType: string } };
 
 export type DeleteEntityGroupMutationVariables = Exact<{
   token: string;
@@ -2715,6 +3234,14 @@ export type DeleteEntityAttributeMutationVariables = Exact<{
 
 
 export type DeleteEntityAttributeMutation = { deleteEntityAttribute: boolean };
+
+export type ImportFacetValuesMutationVariables = Exact<{
+  rows: Array<FacetValueImportRow> | FacetValueImportRow;
+  dryRun: boolean;
+}>;
+
+
+export type ImportFacetValuesMutation = { importFacetValues: Array<{ row: number, memberType: string, token: string, key: string, outcome: string, code: string | null, message: string | null }> };
 
 export type FacetKeysQueryVariables = Exact<{
   criteria: FacetKeySearchCriteria;
@@ -3294,6 +3821,7 @@ export const AreasDocument = new TypedDocumentString(`
       description
       metadata
       createdAt
+      updatedAt
       areaType {
         id
         token
@@ -3321,6 +3849,7 @@ export const AreaByTokenDocument = new TypedDocumentString(`
     description
     metadata
     createdAt
+    updatedAt
     areaType {
       id
       token
@@ -3342,6 +3871,7 @@ export const CreateAreaDocument = new TypedDocumentString(`
     description
     metadata
     createdAt
+    updatedAt
     areaType {
       id
       token
@@ -3355,14 +3885,19 @@ export const CreateAreaDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateAreaMutation, CreateAreaMutationVariables>;
 export const UpdateAreaDocument = new TypedDocumentString(`
-    mutation UpdateArea($token: String!, $request: AreaUpdateRequest!) {
-  updateArea(token: $token, request: $request) {
+    mutation UpdateArea($token: String!, $request: AreaUpdateRequest!, $expectedUpdatedAt: String) {
+  updateArea(
+    token: $token
+    request: $request
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     id
     token
     name
     description
     metadata
     createdAt
+    updatedAt
     areaType {
       id
       token
@@ -3471,6 +4006,7 @@ export const AssetsDocument = new TypedDocumentString(`
       metadata
       properties
       createdAt
+      updatedAt
       assetType {
         id
         token
@@ -3499,6 +4035,7 @@ export const AssetByTokenDocument = new TypedDocumentString(`
     metadata
     properties
     createdAt
+    updatedAt
     assetType {
       id
       token
@@ -3521,6 +4058,7 @@ export const CreateAssetDocument = new TypedDocumentString(`
     metadata
     properties
     createdAt
+    updatedAt
     assetType {
       id
       token
@@ -3534,8 +4072,12 @@ export const CreateAssetDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateAssetMutation, CreateAssetMutationVariables>;
 export const UpdateAssetDocument = new TypedDocumentString(`
-    mutation UpdateAsset($token: String!, $request: AssetUpdateRequest!) {
-  updateAsset(token: $token, request: $request) {
+    mutation UpdateAsset($token: String!, $request: AssetUpdateRequest!, $expectedUpdatedAt: String) {
+  updateAsset(
+    token: $token
+    request: $request
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     id
     token
     name
@@ -3543,6 +4085,7 @@ export const UpdateAssetDocument = new TypedDocumentString(`
     metadata
     properties
     createdAt
+    updatedAt
     assetType {
       id
       token
@@ -4231,6 +4774,7 @@ export const CustomersDocument = new TypedDocumentString(`
       description
       metadata
       createdAt
+      updatedAt
       customerType {
         id
         token
@@ -4258,6 +4802,7 @@ export const CustomerByTokenDocument = new TypedDocumentString(`
     description
     metadata
     createdAt
+    updatedAt
     customerType {
       id
       token
@@ -4287,6 +4832,7 @@ export const CreateCustomerDocument = new TypedDocumentString(`
     description
     metadata
     createdAt
+    updatedAt
     customerType {
       id
       token
@@ -4300,14 +4846,19 @@ export const CreateCustomerDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateCustomerMutation, CreateCustomerMutationVariables>;
 export const UpdateCustomerDocument = new TypedDocumentString(`
-    mutation UpdateCustomer($token: String!, $request: CustomerUpdateRequest!) {
-  updateCustomer(token: $token, request: $request) {
+    mutation UpdateCustomer($token: String!, $request: CustomerUpdateRequest!, $expectedUpdatedAt: String) {
+  updateCustomer(
+    token: $token
+    request: $request
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     id
     token
     name
     description
     metadata
     createdAt
+    updatedAt
     customerType {
       id
       token
@@ -4846,6 +5397,7 @@ export const EntityGroupsDocument = new TypedDocumentString(`
       imageUrl
       metadata
       createdAt
+      updatedAt
       memberType
     }
     pagination {
@@ -4870,6 +5422,7 @@ export const EntityGroupByTokenDocument = new TypedDocumentString(`
     imageUrl
     metadata
     createdAt
+    updatedAt
     memberType
   }
 }
@@ -4888,13 +5441,18 @@ export const CreateEntityGroupDocument = new TypedDocumentString(`
     imageUrl
     metadata
     createdAt
+    updatedAt
     memberType
   }
 }
     `) as unknown as TypedDocumentString<CreateEntityGroupMutation, CreateEntityGroupMutationVariables>;
 export const UpdateEntityGroupDocument = new TypedDocumentString(`
-    mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!) {
-  updateEntityGroup(token: $token, request: $request) {
+    mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!, $expectedUpdatedAt: String) {
+  updateEntityGroup(
+    token: $token
+    request: $request
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     id
     token
     name
@@ -4906,6 +5464,7 @@ export const UpdateEntityGroupDocument = new TypedDocumentString(`
     imageUrl
     metadata
     createdAt
+    updatedAt
     memberType
   }
 }
@@ -5431,6 +5990,19 @@ export const DeleteEntityAttributeDocument = new TypedDocumentString(`
   )
 }
     `) as unknown as TypedDocumentString<DeleteEntityAttributeMutation, DeleteEntityAttributeMutationVariables>;
+export const ImportFacetValuesDocument = new TypedDocumentString(`
+    mutation ImportFacetValues($rows: [FacetValueImportRow!]!, $dryRun: Boolean!) {
+  importFacetValues(rows: $rows, dryRun: $dryRun) {
+    row
+    memberType
+    token
+    key
+    outcome
+    code
+    message
+  }
+}
+    `) as unknown as TypedDocumentString<ImportFacetValuesMutation, ImportFacetValuesMutationVariables>;
 export const FacetKeysDocument = new TypedDocumentString(`
     query FacetKeys($criteria: FacetKeySearchCriteria!) {
   facetKeys(criteria: $criteria) {

@@ -34,9 +34,7 @@ edge node can take a managed update only if it also connects as an ordinary MQTT
 `update-management` is part of the `default` profile (and so of `full`); only the `telemetry` and
 `ingest-only` profiles leave it out, and `enabledFunctionalAreas` can name it there. It depends on
 `device-management`, and it stores artifact content in the [object store](./object-storage.md):
-with no store configured, declaring an artifact is refused with `OBJECT_STORE_NOT_CONFIGURED`. On the
-S3 backend an upload is buffered in memory, so artifacts are limited to 64 MiB there whatever the
-configured ceiling.
+with no store configured, declaring an artifact is refused with `OBJECT_STORE_NOT_CONFIGURED`.
 
 ### Before the first update {#first-update}
 

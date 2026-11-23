@@ -117,12 +117,36 @@ type DeviceConfigurationState struct {
 
 	DeviceId uint `gorm:"not null;uniqueIndex:uix_dcs_device"`
 
-	ReportedRevision sql.NullInt64
-	ReportedDigest   sql.NullString `gorm:"size:71"`
-	ReportedStatus   sql.NullString `gorm:"size:16"`
-	ReportedErrors   datatypes.JSON
-	ReportedAt       sql.NullTime
-	LastSyncAt       sql.NullTime
+	ReportedRevision     sql.NullInt64
+	ReportedDigest       sql.NullString `gorm:"size:71"`
+	ReportedStatus       sql.NullString `gorm:"size:16"`
+	ReportedErrors       datatypes.JSON
+	ReportedAt           sql.NullTime
+	LastSyncAt           sql.NullTime
+	CapturedRevision     sql.NullInt64
+	CapturedStatus       sql.NullString `gorm:"size:16"`
+	CaptureGapThrough    sql.NullInt64
+	CaptureCompleteSince sql.NullTime
+	// CapturedReportedAt is the reported_at the last CAPTURING writer left. A previous-release
+	// pod rewrites reported_at on every report it accepts, so a mismatch reveals its write even
+	// when it restored the same (revision, status) pair.
+	CapturedReportedAt sql.NullTime
+}
+
+// DeviceConfigurationReport retains the first accepted verdict for each
+// (device, revision, status). It has no device FK so an older pod can delete a
+// device during a rolling upgrade. The cascade and orphan sweep remove history.
+// This model is internal; no GraphQL field reads it.
+type DeviceConfigurationReport struct {
+	ID        uint      `gorm:"primarykey"`
+	CreatedAt time.Time `gorm:"not null;index:idx_configuration_reports_tenant_created,priority:2"`
+	TenantId  string    `gorm:"not null;size:128;index:idx_configuration_reports_tenant_created,priority:1"`
+	DeviceId  uint      `gorm:"type:bigint;not null;uniqueIndex:uix_configuration_reports_device_revision_status,priority:1"`
+	Revision  int64     `gorm:"not null;uniqueIndex:uix_configuration_reports_device_revision_status,priority:2"`
+	Digest    string    `gorm:"not null;size:71"`
+	Status    string    `gorm:"not null;size:16;uniqueIndex:uix_configuration_reports_device_revision_status,priority:3;check:chk_configuration_reports_status,status IN ('APPLIED','REJECTED')"`
+	Errors    datatypes.JSON
+	Source    string `gorm:"not null;size:16"`
 }
 
 // ReportedErrorList decodes the stored error list; a missing or unreadable value is an
@@ -405,3 +429,6 @@ func writeCanonicalJSON(buf *bytes.Buffer, v any) error {
 	}
 	return nil
 }
+
+// Reports are data-plane facts; keep capture and pruning out of the operator audit stream.
+func (DeviceConfigurationReport) AuditExempt() bool { return true }

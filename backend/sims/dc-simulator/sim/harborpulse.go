@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -72,6 +73,7 @@ type harborpulse struct {
 
 	s3b     harborS3bState
 	s5      harborS5State
+	s6      harborS6State
 	restore harborRestoreQueue
 }
 
@@ -119,7 +121,7 @@ const (
 
 // HarborpulseDefects lists every defect harborpulse knows, sorted.
 func HarborpulseDefects() []string {
-	return []string{
+	out := []string{
 		HarborpulseDefectAirLockBasin, HarborpulseDefectAttributeNotUpdated, HarborpulseDefectBackfillWrongWindow,
 		HarborpulseDefectBurstDropOn429, HarborpulseDefectBurstUnthrottled,
 		HarborpulseDefectDownlinkNack, HarborpulseDefectDropBackfill, HarborpulseDefectEastLampMislabelled,
@@ -132,6 +134,10 @@ func HarborpulseDefects() []string {
 		HarborpulseDefectSilenceNorthLamp, HarborpulseDefectSuppressionWrongDevice, HarborpulseDefectTruckStaysHome, HarborpulseDefectUnscopedWatch,
 		HarborpulseDefectUnsignedWebhook, HarborpulseDefectWrongWellDepth,
 	}
+	out = append(out, harborS6Defects...)
+	out = append(out, HarborpulseDefectIsolationCrossRead, HarborpulseDefectMCPWrongAnswer)
+	sort.Strings(out)
+	return out
 }
 
 // HarborpulseFloodSplitAlarmKey is the alarm key the flood-split-key defect files the critical
@@ -313,6 +319,7 @@ func (s *harborpulse) ScenarioClock(now time.Time) *ScenarioClock {
 	}
 	c.Jobs = s.jobLedger()
 	c.S5 = s.s5Ledger()
+	c.S6 = s.s6Ledger()
 	c.LayoutDigest = HarborpulseLayoutDigest()
 	return c
 }
@@ -628,6 +635,8 @@ func (s *harborpulse) Manifest() SimManifest {
 		Campaigns:     s.harborpulseSolarCampaigns(s.now()),
 	})
 	// The operator's board and the Lofts owner's, bound to the devices this manifest provisions.
+	s.addS6Manifest(&manifest)
+	s.addS7Manifest(&manifest)
 	manifest.NumericAttributes = harborAttributes()
 	manifest.Connectors = append(manifest.Connectors, harborDownlinkConnector())
 	manifest.Dashboards = harborpulseDashboards(manifest.Expand(manifest.Seed))
@@ -872,7 +881,13 @@ func (s *harborpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
 	if err := s.bootstrapMaintenance(ctx, rt); err != nil {
 		return err
 	}
-	return s.provisionChargerOTA(ctx, rt)
+	if err := s.provisionChargerOTA(ctx, rt); err != nil {
+		return err
+	}
+	if err := s.bootstrapS6(ctx, rt); err != nil {
+		return err
+	}
+	return s.bootstrapS7(ctx, rt)
 }
 
 func (s *harborpulse) ensureModel() *harborModel {
@@ -908,10 +923,17 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	shedBefore := rt.Stats.Shed.Load()
 
 	measErr := EmitAll(ctx, rt, workers, func(_ int, d DeviceInstance) map[string]float64 {
+		if s.OwnsDeviceSession(d.Token) {
+			return nil
+		}
 		if d.Token == HarborpulseReplacementSeparateDevice {
 			d.Token = HarborpulseReplacementDevice
 		}
-		return model.reading(d.Token, elapsed, now)
+		reading := model.reading(d.Token, elapsed, now)
+		if reading != nil && d.DeviceTypeToken == HarborpulsePumpType {
+			reading[HarborpulseTenantMarkerKey] = HarborpulseTenantMarker(rt.Tenant)
+		}
+		return reading
 	})
 	if measErr != nil {
 		log.Error().Err(measErr).Msg("emit harborpulse measurements failed")
@@ -926,6 +948,7 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	if loraErr != nil {
 		log.Error().Err(loraErr).Msg("send harborpulse LoRaWAN uplinks failed")
 	}
+	s6Err := s.tickS6(ctx, rt, now, elapsed)
 	backErr := s.flushBackfill(ctx, rt, model, elapsed)
 	s.restore.completeTick(s, harborDayOf(elapsed, s.dayLength), rt.Stats.Shed.Load()-shedBefore)
 	jobErr := s.scheduleDay(ctx, rt, now)
@@ -936,7 +959,7 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 	if maintErr != nil {
 		log.Error().Err(maintErr).Msg("schedule lamp maintenance failed; retrying next tick")
 	}
-	return errors.Join(beatErr, measErr, locErr, backErr, loraErr, jobErr, maintErr)
+	return errors.Join(beatErr, measErr, locErr, backErr, loraErr, jobErr, maintErr, s6Err)
 }
 
 // startedAt is the first tick, the instant the day is measured from.
@@ -991,6 +1014,9 @@ func HarborpulseFleet() []HarborpulseDevice {
 	out := make([]HarborpulseDevice, 0, len(layout))
 	for _, d := range layout {
 		out = append(out, HarborpulseDevice{Token: d.token, DeviceType: d.deviceType, Quay: d.quay})
+	}
+	for _, d := range harborS6SceneDevices() {
+		out = append(out, HarborpulseDevice{Token: d.Token, DeviceType: d.DeviceType, Quay: d.Quay})
 	}
 	return out
 }

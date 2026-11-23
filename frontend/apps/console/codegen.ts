@@ -29,6 +29,7 @@ const config: CodegenConfig = {
         'src/lib/api/agent-proposals.ts',
         'src/lib/api/automation-reviews.ts',
         'src/lib/api/facet-keys.ts',
+        'src/lib/api/facet-import.ts',
         'src/lib/api/entity-attributes.ts',
         'src/lib/api/browse.ts',
         'src/lib/api/geofences.ts',
@@ -75,7 +76,7 @@ const config: CodegenConfig = {
     },
     './src/gql/command-delivery/': {
       schema: '../../../backend/services/command-delivery/graphql/schema.graphql',
-      documents: ['src/lib/api/command-delivery.ts'],
+      documents: ['src/lib/api/command-delivery.ts', 'src/lib/api/command-proposals.ts'],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },

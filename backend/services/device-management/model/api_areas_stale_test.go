@@ -55,7 +55,7 @@ func TestUpdateAreaNameOnlyStaleDoesNotRestoreRemovedBoundary(t *testing.T) {
 	}))
 	t.Cleanup(func() { require.NoError(t, db.Callback().Query().Remove(callback)) })
 
-	updated, err := api.UpdateArea(ctx, "a", &AreaUpdateRequest{Name: dcgraphql.OptionalStringOf("Renamed")})
+	updated, err := api.UpdateArea(ctx, "a", nil, &AreaUpdateRequest{Name: dcgraphql.OptionalStringOf("Renamed")})
 	require.NoError(t, err)
 	require.Equal(t, 1, fired, "the stale-read interleaving must actually execute once")
 	require.Equal(t, "Renamed", updated.Name.String)
@@ -101,7 +101,7 @@ func TestUpdateAreaBoundaryPartialWrites(t *testing.T) {
 			writes++
 		}))
 		t.Cleanup(func() { require.NoError(t, db.Callback().Update().Remove(updateCallback)) })
-		updated, err := api.UpdateArea(ctx, "a", &AreaUpdateRequest{BoundaryFenceToken: dcgraphql.OptionalStringOf("f")})
+		updated, err := api.UpdateArea(ctx, "a", nil, &AreaUpdateRequest{BoundaryFenceToken: dcgraphql.OptionalStringOf("f")})
 		require.NoError(t, err)
 		require.Equal(t, 1, locks)
 		require.Equal(t, 1, writes)
@@ -112,7 +112,7 @@ func TestUpdateAreaBoundaryPartialWrites(t *testing.T) {
 	t.Run("unknown fence refuses the entire write", func(t *testing.T) {
 		api, ctx, original := newAreaBoundaryTestApi(t, false)
 		writes := captureAreaBoundaryUpdates(t, api)
-		_, err := api.UpdateArea(ctx, "a", &AreaUpdateRequest{
+		_, err := api.UpdateArea(ctx, "a", nil, &AreaUpdateRequest{
 			Name: dcgraphql.OptionalStringOf("Refused"), BoundaryFenceToken: dcgraphql.OptionalStringOf("missing"),
 		})
 		require.ErrorIs(t, err, gorm.ErrRecordNotFound)
@@ -127,7 +127,7 @@ func TestUpdateAreaBoundaryPartialWrites(t *testing.T) {
 
 	t.Run("explicit null unlinks", func(t *testing.T) {
 		api, ctx, _ := newAreaBoundaryTestApi(t, true)
-		updated, err := api.UpdateArea(ctx, "a", &AreaUpdateRequest{BoundaryFenceToken: dcgraphql.OptionalString{Set: true}})
+		updated, err := api.UpdateArea(ctx, "a", nil, &AreaUpdateRequest{BoundaryFenceToken: dcgraphql.OptionalString{Set: true}})
 		require.NoError(t, err)
 		require.False(t, updated.BoundaryFenceToken.Valid)
 		var stored Area
@@ -138,7 +138,7 @@ func TestUpdateAreaBoundaryPartialWrites(t *testing.T) {
 	t.Run("empty request does not write or advance updated_at", func(t *testing.T) {
 		api, ctx, original := newAreaBoundaryTestApi(t, true)
 		writes := captureAreaBoundaryUpdates(t, api)
-		updated, err := api.UpdateArea(ctx, "a", &AreaUpdateRequest{})
+		updated, err := api.UpdateArea(ctx, "a", nil, &AreaUpdateRequest{})
 		require.NoError(t, err)
 		require.Empty(t, *writes)
 		require.True(t, original.UpdatedAt.Equal(updated.UpdatedAt))
@@ -150,7 +150,7 @@ func TestUpdateAreaBoundaryPartialWrites(t *testing.T) {
 	t.Run("rename SQL omits all unrequested fields", func(t *testing.T) {
 		api, ctx, original := newAreaBoundaryTestApi(t, true)
 		writes := captureAreaBoundaryUpdates(t, api)
-		updated, err := api.UpdateArea(ctx, "a", &AreaUpdateRequest{Name: dcgraphql.OptionalStringOf("Renamed")})
+		updated, err := api.UpdateArea(ctx, "a", nil, &AreaUpdateRequest{Name: dcgraphql.OptionalStringOf("Renamed")})
 		require.NoError(t, err)
 		require.Len(t, *writes, 1, "associations must not be updated")
 		sql := (*writes)[0]
@@ -183,7 +183,7 @@ func captureAreaBoundaryUpdates(t *testing.T, api *Api) *[]string {
 func TestUpdateAreaStaleUnknownTypeRefusesWithoutWrites(t *testing.T) {
 	api, ctx, original := newAreaBoundaryTestApi(t, true)
 	writes := captureAreaBoundaryUpdates(t, api)
-	_, err := api.UpdateArea(ctx, "a", &AreaUpdateRequest{
+	_, err := api.UpdateArea(ctx, "a", nil, &AreaUpdateRequest{
 		AreaTypeToken: dcgraphql.OptionalStringOf("missing"), Name: dcgraphql.OptionalStringOf("Refused"),
 		BoundaryFenceToken: dcgraphql.OptionalString{Set: true},
 	})

@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dcctl/apiclient"
 )
 
 // Admin drives the instance admin surface (/admin/graphql) as a superuser to mint
@@ -23,15 +24,15 @@ type Admin struct {
 
 // NewAdmin builds an Admin authenticating as email/password (a superuser) against
 // userGraphQL for login and adminURL for the admin mutations.
-func NewAdmin(userGraphQL, adminURL, email, password string) *Admin {
-	return NewAdminWithClient(nil, userGraphQL, adminURL, email, password)
+func NewAdmin(userGraphQL, adminURL, email, password string, versions ...apiclient.EndpointVersion) *Admin {
+	return NewAdminWithClient(nil, userGraphQL, adminURL, email, password, versions...)
 }
 
 // NewAdminWithClient is NewAdmin over a caller-supplied HTTP client (nil = the shared
 // default), so the Host header the Gateway routes on can differ from the address dialled.
-func NewAdminWithClient(httpc *http.Client, userGraphQL, adminURL, email, password string) *Admin {
+func NewAdminWithClient(httpc *http.Client, userGraphQL, adminURL, email, password string, versions ...apiclient.EndpointVersion) *Admin {
 	return &Admin{
-		session:  userclient.NewAdminSession(httpc, userGraphQL, email, password),
+		session:  apiclient.NewAdminSession(httpc, userGraphQL, email, password, versions...),
 		adminURL: adminURL,
 	}
 }

@@ -1,0 +1,522 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# The node pools this configuration plans, against a mocked provider: no
+# credentials and no cluster. What is held here is the plan's shape -- which
+# pools exist, which one is tainted, and what the outputs tell an install --
+# that `validate` cannot see.
+
+mock_provider "google" {}
+
+# The module has no defaults: each root passes every value. These are the public root's defaults
+# (deploy/gke/variables.tf), restated so that the runs below can name only what they change.
+variables {
+  project_id                         = "test-project"
+  location                           = "us-east4-b"
+  cluster_name                       = "devicechain"
+  release_channel                    = "REGULAR"
+  database_machine_type              = "n2-standard-4"
+  database_node_count                = 3
+  database_disk_type                 = "pd-standard"
+  database_disk_size_gb              = 100
+  services_machine_type              = "t2d-standard-4"
+  services_node_count                = 3
+  services_disk_type                 = "pd-standard"
+  services_disk_size_gb              = 100
+  loadgen_node_count                 = 0
+  loadgen_machine_type               = "n2-standard-4"
+  loadgen_disk_type                  = "pd-standard"
+  loadgen_disk_size_gb               = 100
+  wait_for_cluster_operations        = true
+  cluster_operations_timeout_seconds = 1800
+  labels                             = { app = "devicechain" }
+  spot                               = false
+  node_service_account               = null
+  workload_pool                      = null
+  network                            = null
+  subnetwork                         = null
+  ownership_labels                   = {}
+}
+
+run "the_default_cluster_has_a_database_and_a_services_pool" {
+  command = plan
+
+  assert {
+    condition     = join(",", sort(keys(google_container_node_pool.this))) == "database,services"
+    error_message = "The default cluster should have exactly a database and a services pool."
+  }
+  assert {
+    condition     = google_container_node_pool.this["database"].node_config[0].machine_type == "n2-standard-4"
+    error_message = "The database pool should default to n2-standard-4."
+  }
+  assert {
+    condition     = google_container_node_pool.this["database"].node_count == 3
+    error_message = "The database pool should default to 3 nodes."
+  }
+  assert {
+    condition     = google_container_node_pool.this["services"].node_config[0].machine_type == "t2d-standard-4"
+    error_message = "The services pool should default to t2d-standard-4 (4 vCPU, 16 GB)."
+  }
+  assert {
+    condition     = google_container_node_pool.this["services"].node_count == 3
+    error_message = "The services pool should default to 3 nodes."
+  }
+}
+
+# Boot disks stay out of SSD_TOTAL_GB, which the install's volumes need: every
+# pool, the optional load generator included, boots from a 100 GB pd-standard
+# disk by default. A standard disk's speed grows with its size, hence not 50.
+run "every_pool_boots_from_a_standard_disk_by_default" {
+  command = plan
+
+  variables {
+    loadgen_node_count = 1
+  }
+
+  assert {
+    condition = join(",", [
+      for name in ["database", "services", "loadgen"] :
+      "${name}=${google_container_node_pool.this[name].node_config[0].disk_type}/${google_container_node_pool.this[name].node_config[0].disk_size_gb}"
+    ]) == "database=pd-standard/100,services=pd-standard/100,loadgen=pd-standard/100"
+    error_message = "Every pool's boot disk should default to a 100 GB pd-standard disk."
+  }
+}
+
+run "only_the_database_pool_is_tainted" {
+  command = plan
+
+  assert {
+    condition = join(",", [
+      for t in google_container_node_pool.this["database"].node_config[0].taint : "${t.key}=${t.value}:${t.effect}"
+    ]) == "dedicated=database:NO_SCHEDULE"
+    error_message = "The database pool should carry exactly the taint dedicated=database:NO_SCHEDULE."
+  }
+  assert {
+    condition     = length(google_container_node_pool.this["services"].node_config[0].taint) == 0
+    error_message = "The services pool should carry no taint: everything that is not placed elsewhere runs there."
+  }
+}
+
+run "the_outputs_name_the_database_placement" {
+  command = plan
+
+  assert {
+    condition     = output.database_node_selector == "cloud.google.com/gke-nodepool=database"
+    error_message = "database_node_selector should be the database pool's GKE node-pool label, as key=value."
+  }
+  assert {
+    condition     = output.database_taint == "dedicated=database:NoSchedule"
+    error_message = "database_taint should be the database pool's taint in the Kubernetes spelling, key=value:Effect."
+  }
+}
+
+run "a_load_generator_pool_is_tainted_for_itself" {
+  command = plan
+
+  variables {
+    loadgen_node_count = 1
+  }
+
+  assert {
+    condition     = join(",", sort(keys(google_container_node_pool.this))) == "database,loadgen,services"
+    error_message = "loadgen_node_count = 1 should add a loadgen pool beside the other two."
+  }
+  assert {
+    condition = join(",", [
+      for t in google_container_node_pool.this["loadgen"].node_config[0].taint : "${t.key}=${t.value}:${t.effect}"
+    ]) == "dedicated=loadgen:NO_SCHEDULE"
+    error_message = "The loadgen pool should carry exactly the taint dedicated=loadgen:NO_SCHEDULE."
+  }
+}
+
+# Every value is the default of no pool and no other pool's value, so a pool that
+# reads another pool's variable shows up as a wrong value here.
+run "each_pool_takes_its_own_settings" {
+  command = plan
+
+  variables {
+    database_machine_type = "n2-highmem-8"
+    database_node_count   = 5
+    database_disk_type    = "pd-ssd"
+    database_disk_size_gb = 61
+    services_machine_type = "n2-highcpu-8"
+    services_node_count   = 4
+    services_disk_type    = "pd-balanced"
+    services_disk_size_gb = 41
+    loadgen_machine_type  = "n4-standard-2" # N4 boots only from hyperdisk-balanced
+    loadgen_node_count    = 2
+    loadgen_disk_type     = "hyperdisk-balanced"
+    loadgen_disk_size_gb  = 31
+  }
+
+  assert {
+    condition = join("/", [
+      google_container_node_pool.this["database"].node_config[0].machine_type,
+      google_container_node_pool.this["database"].node_count,
+      google_container_node_pool.this["database"].node_config[0].disk_type,
+      google_container_node_pool.this["database"].node_config[0].disk_size_gb,
+    ]) == "n2-highmem-8/5/pd-ssd/61"
+    error_message = "The database pool should take the database_* settings."
+  }
+  assert {
+    condition = join("/", [
+      google_container_node_pool.this["services"].node_config[0].machine_type,
+      google_container_node_pool.this["services"].node_count,
+      google_container_node_pool.this["services"].node_config[0].disk_type,
+      google_container_node_pool.this["services"].node_config[0].disk_size_gb,
+    ]) == "n2-highcpu-8/4/pd-balanced/41"
+    error_message = "The services pool should take the services_* settings."
+  }
+  assert {
+    condition = join("/", [
+      google_container_node_pool.this["loadgen"].node_config[0].machine_type,
+      google_container_node_pool.this["loadgen"].node_count,
+      google_container_node_pool.this["loadgen"].node_config[0].disk_type,
+      google_container_node_pool.this["loadgen"].node_config[0].disk_size_gb,
+    ]) == "n4-standard-2/2/hyperdisk-balanced/31"
+    error_message = "The loadgen pool should take the loadgen_* settings."
+  }
+}
+
+run "the_database_pool_cannot_be_empty" {
+  command = plan
+
+  variables {
+    database_node_count = 0
+  }
+
+  expect_failures = [var.database_node_count]
+}
+
+run "the_services_pool_cannot_be_empty" {
+  command = plan
+
+  variables {
+    services_node_count = 0
+  }
+
+  expect_failures = [var.services_node_count]
+}
+
+# The counterweight to the two refusals above: a one-node pool is accepted.
+run "one_node_pools_are_accepted" {
+  command = plan
+
+  variables {
+    database_node_count = 1
+    services_node_count = 1
+  }
+
+  assert {
+    condition     = google_container_node_pool.this["database"].node_count == 1 && google_container_node_pool.this["services"].node_count == 1
+    error_message = "One-node database and services pools should be accepted."
+  }
+}
+
+# A node count is a whole number: a fraction is refused, not rounded by the provider.
+run "the_database_pool_size_is_a_whole_number" {
+  command = plan
+
+  variables {
+    database_node_count = 2.5
+  }
+
+  expect_failures = [var.database_node_count]
+}
+
+run "the_services_pool_size_is_a_whole_number" {
+  command = plan
+
+  variables {
+    services_node_count = 2.5
+  }
+
+  expect_failures = [var.services_node_count]
+}
+
+run "the_loadgen_pool_size_is_a_whole_number" {
+  command = plan
+
+  variables {
+    loadgen_node_count = 1.5
+  }
+
+  expect_failures = [var.loadgen_node_count]
+}
+
+# apply returned while GKE was still applying the cluster's settings, and the next install timed
+# out against a RECONCILING cluster. The wait is the last thing the apply does, on by default.
+run "apply_waits_for_the_cluster_operations_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(terraform_data.cluster_settled) == 1
+    error_message = "The configuration should wait for the cluster's operations unless told not to."
+  }
+}
+
+# The counterpart: the wait is the only thing the flag removes, and it can be removed.
+run "the_wait_can_be_turned_off" {
+  command = plan
+
+  variables {
+    wait_for_cluster_operations = false
+  }
+
+  assert {
+    condition     = length(terraform_data.cluster_settled) == 0
+    error_message = "wait_for_cluster_operations = false should remove the wait."
+  }
+  assert {
+    condition     = join(",", sort(keys(google_container_node_pool.this))) == "database,services"
+    error_message = "Turning the wait off should not change the node pools."
+  }
+}
+
+run "the_wait_has_a_floor" {
+  command = plan
+
+  variables {
+    cluster_operations_timeout_seconds = 10
+  }
+
+  expect_failures = [var.cluster_operations_timeout_seconds]
+}
+
+# The wait that ends the apply must run again after an in-place update, not only when an ID or a
+# node count changes: a new release channel or a pool's machine settings leaves the cluster
+# RECONCILING while the apply is already done. Plan-only, so what is held is that those settings
+# are in the waiter's triggers (a change to any of them changes the trigger map and so replaces
+# it), and that settings with no operation of their own are not.
+run "the_waiter_is_keyed_to_the_release_channel" {
+  command = plan
+
+  variables {
+    release_channel = "STABLE"
+  }
+
+  assert {
+    condition     = terraform_data.cluster_settled[0].triggers_replace.release_channel == "STABLE"
+    error_message = "The waiter's triggers should carry the release channel, so changing it replaces the waiter."
+  }
+}
+
+run "the_waiter_is_keyed_to_every_pools_settings" {
+  command = plan
+
+  variables {
+    services_machine_type = "n2-standard-8"
+    services_disk_size_gb = 200
+  }
+
+  assert {
+    condition     = strcontains(terraform_data.cluster_settled[0].triggers_replace.pool_settings, "n2-standard-8")
+    error_message = "The waiter's triggers should carry each pool's machine type."
+  }
+  assert {
+    condition     = strcontains(terraform_data.cluster_settled[0].triggers_replace.pool_settings, "\"disk_size_gb\":200")
+    error_message = "The waiter's triggers should carry each pool's disk size."
+  }
+}
+
+run "the_waiter_is_keyed_to_the_labels" {
+  command = plan
+
+  variables {
+    labels = { team = "perf" }
+  }
+
+  assert {
+    condition     = terraform_data.cluster_settled[0].triggers_replace.labels == "{\"team\":\"perf\"}"
+    error_message = "The waiter's triggers should carry the cluster's labels."
+  }
+}
+
+# Not every variable is a cluster change. The wait's own timeout does not start an operation, so
+# it stays out of the triggers: a no-change apply, or one that only moves the timeout, does not
+# run the waiter again.
+run "the_waiters_own_timeout_is_not_a_trigger" {
+  command = plan
+
+  variables {
+    cluster_operations_timeout_seconds = 600
+  }
+
+  assert {
+    condition     = join(",", sort(keys(terraform_data.cluster_settled[0].triggers_replace))) == "cluster,labels,pool_settings,pools,release_channel"
+    error_message = "The waiter should be keyed to exactly the cluster, its pools, the release channel, the labels and the pool settings."
+  }
+}
+
+# ---- module options -------------------------------------------------------------------------------
+
+# spot reaches EVERY pool, the optional one included, and is off by default.
+run "spot_reaches_every_pool" {
+  command = plan
+
+  variables {
+    spot               = true
+    loadgen_node_count = 1
+  }
+
+  assert {
+    condition     = alltrue([for name in ["database", "services", "loadgen"] : google_container_node_pool.this[name].node_config[0].spot])
+    error_message = "spot = true should put every pool on spot VMs."
+  }
+}
+
+run "pools_are_not_spot_by_default" {
+  command = plan
+
+  assert {
+    condition     = !anytrue([for pool in google_container_node_pool.this : pool.node_config[0].spot])
+    error_message = "No pool should be spot unless asked."
+  }
+}
+
+# Ownership labels are the CLUSTER's: they reach resource_labels and not the pools' node labels,
+# and a label there must not move the waiter's triggers (it would replace the waiter).
+run "ownership_labels_reach_the_cluster_only" {
+  command = plan
+
+  variables {
+    ownership_labels = { "dc-fleet-cluster" = "abc", "dc-fleet-owner" = "xyz" }
+  }
+
+  assert {
+    condition     = google_container_cluster.this.resource_labels == tomap({ app = "devicechain", dc-fleet-cluster = "abc", dc-fleet-owner = "xyz" })
+    error_message = "The cluster's labels should be the labels plus the ownership labels."
+  }
+  assert {
+    condition     = alltrue([for pool in google_container_node_pool.this : pool.node_config[0].labels == tomap({ app = "devicechain" })])
+    error_message = "A pool's node labels must not carry the ownership labels."
+  }
+  assert {
+    condition     = terraform_data.cluster_settled[0].triggers_replace.labels == "{\"app\":\"devicechain\"}"
+    error_message = "The waiter's triggers must not read the ownership labels."
+  }
+}
+
+run "no_ownership_labels_leave_the_cluster_labels_alone" {
+  command = plan
+
+  assert {
+    condition     = google_container_cluster.this.resource_labels == tomap({ app = "devicechain" })
+    error_message = "An empty ownership_labels should leave the cluster's labels as they were."
+  }
+}
+
+run "ownership_label_keys_are_checked" {
+  command = plan
+
+  variables {
+    ownership_labels = { "Bad Key" = "x" }
+  }
+
+  expect_failures = [var.ownership_labels]
+}
+
+run "a_node_service_account_reaches_every_pool" {
+  command = plan
+
+  variables {
+    node_service_account = "dcf-node@example-project.iam.gserviceaccount.com"
+    loadgen_node_count   = 1
+  }
+
+  assert {
+    condition     = alltrue([for pool in google_container_node_pool.this : pool.node_config[0].service_account == "dcf-node@example-project.iam.gserviceaccount.com"])
+    error_message = "node_service_account should be every pool's node identity."
+  }
+}
+
+run "a_malformed_node_service_account_is_refused" {
+  command = plan
+
+  variables {
+    node_service_account = "not-an-email"
+  }
+
+  expect_failures = [var.node_service_account]
+}
+
+run "workload_identity_is_off_unless_a_pool_is_named" {
+  command = plan
+
+  assert {
+    condition     = length(google_container_cluster.this.workload_identity_config) == 0
+    error_message = "Workload identity should be off unless a workload pool is named."
+  }
+}
+
+run "a_workload_pool_turns_workload_identity_on" {
+  command = plan
+
+  variables {
+    workload_pool = "example-project.svc.id.goog"
+  }
+
+  assert {
+    condition     = google_container_cluster.this.workload_identity_config[0].workload_pool == "example-project.svc.id.goog"
+    error_message = "workload_pool should reach the cluster's workload identity configuration."
+  }
+}
+
+run "a_malformed_workload_pool_is_refused" {
+  command = plan
+
+  variables {
+    workload_pool = "example-project"
+  }
+
+  expect_failures = [var.workload_pool]
+}
+
+run "network_inputs_pass_through" {
+  command = plan
+
+  variables {
+    network    = "projects/example-project/global/networks/fleet"
+    subnetwork = "projects/example-project/regions/us-central1/subnetworks/fleet-a"
+  }
+
+  assert {
+    condition     = google_container_cluster.this.network == "projects/example-project/global/networks/fleet" && google_container_cluster.this.subnetwork == "projects/example-project/regions/us-central1/subnetworks/fleet-a"
+    error_message = "network and subnetwork should reach the cluster."
+  }
+}
+
+run "a_workload_pool_puts_every_pool_on_the_gke_metadata_server" {
+  command = plan
+
+  variables {
+    workload_pool = "example-project.svc.id.goog"
+  }
+
+  assert {
+    condition     = alltrue([for k, p in google_container_node_pool.this : p.node_config[0].workload_metadata_config[0].mode == "GKE_METADATA"])
+    error_message = "every pool should use the GKE metadata server once a workload pool is named."
+  }
+}
+
+run "no_workload_pool_leaves_the_pools_metadata_mode_alone" {
+  command = plan
+
+  assert {
+    condition     = alltrue([for k, p in google_container_node_pool.this : length(p.node_config[0].workload_metadata_config) == 0])
+    error_message = "the public root's pools should carry no workload_metadata_config."
+  }
+}
+
+run "a_node_service_account_reaches_the_bootstrap_pool" {
+  command = plan
+
+  variables {
+    node_service_account = "dcf-node@example-project.iam.gserviceaccount.com"
+  }
+
+  assert {
+    condition     = google_container_cluster.this.node_config[0].service_account == "dcf-node@example-project.iam.gserviceaccount.com"
+    error_message = "the cluster's temporary default pool should use the named node service account."
+  }
+}

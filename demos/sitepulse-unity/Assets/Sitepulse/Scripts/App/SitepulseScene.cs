@@ -63,12 +63,12 @@ namespace DeviceChain.Sitepulse.App
             return zones;
         }
 
-        // a machine takes the equipment metrics and commands, and its goto-area lists areas; the plant takes its own
+        // a machine takes its profile's metrics (a dozer's are the three without payload and tyres) and the equipment commands, and its goto-area lists areas; the plant takes its own
         // metrics and flags, and no command
-        static KindContract Equipment(string typeToken) => new KindContract
+        static KindContract Equipment(string typeToken, IReadOnlyList<string> metrics) => new KindContract
         {
             TypeToken = typeToken,
-            NumericMetrics = MeasurementKeys.Equipment,
+            NumericMetrics = metrics,
             Commands = CommandKeys.Equipment,
             AreaCommand = CommandKeys.GotoArea,
         };
@@ -77,9 +77,9 @@ namespace DeviceChain.Sitepulse.App
         {
             Kinds = new Dictionary<string, KindContract>
             {
-                [SceneKind.Hauler] = Equipment(HaulerType),
-                [SceneKind.Loader] = Equipment(LoaderType),
-                [SceneKind.Dozer] = Equipment(DozerType),
+                [SceneKind.Hauler] = Equipment(HaulerType, MeasurementKeys.Equipment),
+                [SceneKind.Loader] = Equipment(LoaderType, MeasurementKeys.Equipment),
+                [SceneKind.Dozer] = Equipment(DozerType, MeasurementKeys.Dozer),
                 [SceneKind.Plant] = new KindContract
                 {
                     TypeToken = PlantType,

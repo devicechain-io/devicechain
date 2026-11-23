@@ -68,6 +68,7 @@ func TestFlagUsageCarriesNoBackquotes(t *testing.T) {
 		}
 		c.Flags().VisitAll(check)
 		c.PersistentFlags().VisitAll(check)
+		c.InheritedFlags().VisitAll(check)
 	})
 
 	// THE COVERAGE GUARD, and `checked == 0` is not it.
@@ -92,6 +93,9 @@ func TestFlagUsageCarriesNoBackquotes(t *testing.T) {
 		"dcctl bootstrap",
 		"dcctl destroy",
 		"dcctl install",
+		"dcctl executor enroll",
+		"dcctl executor status",
+		"dcctl executor unenroll",
 		"dcctl ha verify",
 		"dcctl ha verify-db",
 		"dcctl presence demote",

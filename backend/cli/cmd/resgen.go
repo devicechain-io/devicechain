@@ -46,6 +46,11 @@ func getInstanceResources() ([]gen.ConfigurationResource, error) {
 	resources := make([]gen.ConfigurationResource, 0)
 
 	name := "dcic-default"
+	// The kind is deprecated (nothing reads it; each pod reads its mounted Secret), so the
+	// file this emits is a sample of an unused resource, and saying so is part of emitting it.
+	fmt.Println("note: InstanceConfiguration (dcic) is deprecated and unused; " +
+		"each service reads the instance configuration from its mounted Secret. " +
+		"This sample will stop being generated when the kind is removed (not before v3.0).")
 	config := ms.NewDefaultInstanceConfiguration()
 	content, err := gen.GenerateInstanceConfig(name, config)
 	if err != nil {

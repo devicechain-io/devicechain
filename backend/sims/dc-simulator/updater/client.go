@@ -230,7 +230,13 @@ func (c *Client) currentAssignment() string {
 // sent at most once until an answer arrives, so a device that polls does not flood the channel.
 func (c *Client) RequestGrant(ctx context.Context) error {
 	c.mu.Lock()
-	if c.requested {
+	// 🔴 A grant that has ALREADY arrived is the answer to a request, so none is sent. Drive reads the
+	// box in Step and asks here afterwards, and the platform answer is handled on another goroutine
+	// that sets the grant and THEN clears requested: a grant landing between Drive's read and this
+	// check left requested false and the box full, and the device asked again, which the platform
+	// answered with a second grant. Deciding on both under the one lock closes it: the grant is set
+	// before requested is cleared, so a cleared flag with an empty box is a request never sent.
+	if c.requested || c.grants.usable() {
 		c.mu.Unlock()
 		return nil
 	}

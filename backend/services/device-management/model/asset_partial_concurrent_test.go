@@ -73,7 +73,7 @@ func TestAssetPartialConcurrentRenamePreservesProperties(t *testing.T) {
 		return api.RDB.DB(ctx).Model(&Asset{}).Where("token = ?", "p-1").
 			Update("properties", `{"vendor":"new"}`).Error
 	})
-	updated, err := api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+	updated, err := api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{
 		Name: dcgraphql.OptionalStringOf("Renamed"),
 	})
 	require.NoError(t, err)
@@ -106,7 +106,7 @@ func TestAssetPartialConcurrentClearProperties(t *testing.T) {
 		t.Run("clear", func(t *testing.T) {
 			api, ctx, _ := assetPartialFixture(t)
 			before := reloadPartialAsset(t, api, ctx)
-			updated, err := api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{Properties: field})
+			updated, err := api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{Properties: field})
 			require.NoError(t, err)
 			for _, row := range []*Asset{updated, reloadPartialAsset(t, api, ctx)} {
 				require.Nil(t, row.Properties)
@@ -133,7 +133,7 @@ func TestAssetPartialConcurrentInvalidRequestWritesNothing(t *testing.T) {
 			api, ctx, statements := assetPartialFixture(t)
 			before := reloadPartialAsset(t, api, ctx)
 			tc.request.Name = dcgraphql.OptionalStringOf("Refused")
-			_, err := api.UpdateAsset(ctx, "p-1", &tc.request)
+			_, err := api.UpdateAsset(ctx, "p-1", nil, &tc.request)
 			require.Error(t, err)
 			require.Empty(t, assetPartialWrites(statements))
 			stored := reloadPartialAsset(t, api, ctx)
@@ -148,12 +148,12 @@ func TestAssetPartialConcurrentInvalidRequestWritesNothing(t *testing.T) {
 func TestAssetPartialEmptyWritesNothing(t *testing.T) {
 	api, ctx, statements := assetPartialFixture(t)
 	before := reloadPartialAsset(t, api, ctx)
-	updated, err := api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{})
+	updated, err := api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{})
 	require.NoError(t, err)
 	require.Empty(t, assetPartialWrites(statements))
 	require.True(t, before.UpdatedAt.Equal(updated.UpdatedAt))
 	require.True(t, before.UpdatedAt.Equal(reloadPartialAsset(t, api, ctx).UpdatedAt))
-	_, err = api.UpdateAsset(ctx, "missing", &AssetUpdateRequest{})
+	_, err = api.UpdateAsset(ctx, "missing", nil, &AssetUpdateRequest{})
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
@@ -165,7 +165,7 @@ func TestAssetPartialConcurrentRenameAfterRollback(t *testing.T) {
 	require.NoError(t, err)
 	_, err = api.PublishAssetType(ctx, "pump", nil, nil, "tester")
 	require.NoError(t, err)
-	_, err = api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+	_, err = api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{
 		Properties: dcgraphql.OptionalStringOf(`{"serial":"SN-1"}`),
 	})
 	require.NoError(t, err)
@@ -175,7 +175,7 @@ func TestAssetPartialConcurrentRenameAfterRollback(t *testing.T) {
 	statements = rdbtest.NewStatementCounter(" ")
 	statements.Record(true)
 	api.RDB.Database = api.RDB.Database.Session(&gorm.Session{Logger: statements})
-	updated, err := api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{Name: dcgraphql.OptionalStringOf("Renamed")})
+	updated, err := api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{Name: dcgraphql.OptionalStringOf("Renamed")})
 	require.NoError(t, err)
 	for _, row := range []*Asset{updated, reloadPartialAsset(t, api, ctx)} {
 		require.Equal(t, "Renamed", row.Name.String)
@@ -188,7 +188,7 @@ func TestAssetPartialConcurrentRenameAfterRollback(t *testing.T) {
 		require.False(t, strings.HasPrefix(sql, "INSERT INTO asset_types "))
 	}
 	beforeWrites := len(assetPartialWrites(statements))
-	_, err = api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+	_, err = api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{
 		AssetTypeToken: dcgraphql.OptionalStringOf("pump"),
 	})
 	require.Error(t, err, "explicit retyping must validate even when it names the current type")
@@ -210,7 +210,7 @@ func TestAssetPartialConcurrentRetypeValidatesCurrentProperties(t *testing.T) {
 			fired := assetPartialOtherWriter(t, api, func() error {
 				return api.RDB.DB(ctx).Model(&Asset{}).Where("token = ?", "p-1").Update("properties", `{"vendor":"new"}`).Error
 			})
-			updated, err := api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{AssetTypeToken: dcgraphql.OptionalStringOf("valve")})
+			updated, err := api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{AssetTypeToken: dcgraphql.OptionalStringOf("valve")})
 			require.True(t, *fired)
 			stored := reloadPartialAsset(t, api, ctx)
 			require.NotNil(t, stored.Properties)
@@ -259,7 +259,7 @@ func TestAssetPartialConcurrentPropertiesValidateCurrentType(t *testing.T) {
 			if compatible {
 				document = `{"serial":"SN-2"}`
 			}
-			updated, err := api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{Properties: dcgraphql.OptionalStringOf(document)})
+			updated, err := api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{Properties: dcgraphql.OptionalStringOf(document)})
 			require.True(t, *fired)
 			stored := reloadPartialAsset(t, api, ctx)
 			require.Equal(t, destination.ID, stored.AssetTypeId)

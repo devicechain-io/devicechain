@@ -29,7 +29,7 @@ func newGroupVersionTestApi(t *testing.T) (*Api, context.Context) {
 	}
 	if err := db.AutoMigrate(&EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{},
 		&EntityGroupMembership{}, &EntityGroupFacetRef{},
-		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &EntityAttribute{}, &Alarm{},
+		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &EntityAttribute{}, &AttributeGeneration{}, &Alarm{},
 		&DetectionRule{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{}, &DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestPublishEntityGroup_MonotonicAndActivePointer(t *testing.T) {
 
 	// Edit the draft, then publish v2 — monotonic, and the active pointer advances.
 	newSel := `attr["climate"] == "humid"`
-	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{Selector: dcgraphql.OptionalStringOf(newSel)}); err != nil {
+	if _, err := api.UpdateEntityGroup(ctx, "g1", nil, &EntityGroupUpdateRequest{Selector: dcgraphql.OptionalStringOf(newSel)}); err != nil {
 		t.Fatalf("edit draft: %v", err)
 	}
 	v2, err := api.PublishEntityGroup(ctx, "g1", nil, nil, "bob")
@@ -131,7 +131,7 @@ func TestRollbackEntityGroup(t *testing.T) {
 		t.Fatalf("publish v1: %v", err)
 	}
 	newSel := `attr["climate"] == "humid"`
-	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{Selector: dcgraphql.OptionalStringOf(newSel)}); err != nil {
+	if _, err := api.UpdateEntityGroup(ctx, "g1", nil, &EntityGroupUpdateRequest{Selector: dcgraphql.OptionalStringOf(newSel)}); err != nil {
 		t.Fatalf("edit draft: %v", err)
 	}
 	if _, err := api.PublishEntityGroup(ctx, "g1", nil, nil, "bob"); err != nil {
@@ -217,7 +217,7 @@ func TestUpdateEntityGroup_DoesNotRevertActiveVersion(t *testing.T) {
 
 	// Edit the draft selector after publishing.
 	newSel := `attr["climate"] == "humid"`
-	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{Selector: dcgraphql.OptionalStringOf(newSel)}); err != nil {
+	if _, err := api.UpdateEntityGroup(ctx, "g1", nil, &EntityGroupUpdateRequest{Selector: dcgraphql.OptionalStringOf(newSel)}); err != nil {
 		t.Fatalf("edit draft: %v", err)
 	}
 

@@ -671,6 +671,9 @@ Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带十条告警规则，见[随�
 | `tenant_mismatched_total` | 指向 `uplink.tenant` 之外租户的设备发布。它们不会缓冲或转发。 |
 | `body_credentials_stripped_total` | 转发前从事件正文中移除的凭据成员数。设备应停止发送它们。 |
 | `refused_total{reason}` | **为该网关被拒绝的事件。** `not_gateway_child`：平台因事件所属设备未分配给该网关或不存在而拒绝它。`gateway_self` 和 `invalid_device_token`：代理不愿发送。`over_ceiling`：平台因租户摄取上限丢弃了该事件。`other`：此版本代理不认识的原因。任何增长都需要关注；参见[网关身份](#gateway-identity)。 |
+| `commands_refused_total{reason}` | 代理拒绝的来自平台的命令；每条被拒绝的命令都会告知云端其未送达。所有原因都以 0 预先存在。`inbox_full`：设备本地的命令收件箱已达到 `commands.inboxMaxBytes`，且绝不会为腾出空间而驱逐较旧的命令，因此命令无法送达该站点的设备。这是需要处理的一项：设备没有消费其命令，或者上限过小。`bad_envelope`、`device_mismatch`、`too_large` 和 `gateway_self`：平台发来了代理无法处理的命令（格式错误、指向另一台设备、超过 256 KiB，或发给网关自身）；预期为 0，上升即平台侧故障。`forged` 和 `token_reused`：代理之外的东西写入了代理的命令主题，或将命令令牌重用于另一台设备；通常是本地 MQTT 客户端所致。预期为 0。 |
+| `command_responses_refused_total{reason}` | 代理不愿转发给云端的本地设备命令应答。所有原因都以 0 预先存在。`duplicate` 属于常规噪声：设备应答了代理已处理完毕的命令，代理会重放其已记录的应答。`unknown_command` 出现在数据目录被替换或清空之后，或针对本代理从未持有的命令的应答。其余表示设备行为异常或有本地客户端：`not_owner`（应答另一台设备的命令）、`not_dispatched`（应答代理从未交给它的命令）、`nonce_mismatch`（引用了错误的下发）、`undecodable`、`bad_subject` 和 `forged`（并非由本代理写入）。除 `duplicate` 之外的拒绝持续出现时，相应命令会一直没有应答，直到超时。 |
+| `command_inbox_depth` | 已持久保存在本机、尚未送达或过期的命令数，在代理的周期性清扫中刷新。两次命令之间应回到 0。`uplink_connected` 为 1 而深度持续偏高，说明本地设备没有取走其命令；深度达到收件箱上限时就会出现 `commands_refused_total{reason="inbox_full"}`。 |
 | `accepted_total` / `awaiting_accept` | 使用 `retireOn: accept` 时：平台表示已持有的事件数，以及已发布但仍在等待其答复的事件数。`awaiting_accept` 持续上升而 `accepted_total` 不增长，说明平台没有发送接受确认。 |
 | `over_ceiling_total` / `unaccepted_total` | 使用 `retireOn: accept` 时：平台因租户摄取上限丢弃的事件数（每个都被保留并再次提供），以及因未及时收到答复而再次提供的事件数。 |
 | `keyless_retired_total` | 使用 `retireOn: accept` 时：载荷不是 JSON 对象的事件数。它们没有幂等键，平台无法对其确认；代理在消息代理确认发布时清除它们，并在此计数。 |

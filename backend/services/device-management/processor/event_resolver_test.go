@@ -651,11 +651,11 @@ func (suite *EventResolverTestSuite) TestMeasurementUndeclaredUnstorableDropped(
 	}
 }
 
-// A declared but non-storable metric (STRING is device state, not a time-series
-// metric) is dropped rather than dead-lettering the whole event — a defensive
-// backstop, since creating such a definition is already rejected (ADR-016).
+// A declared metric whose data type no reading can be stored as is dropped rather than
+// dead-lettering the whole event — a defensive backstop, since creating such a definition is
+// already rejected (ADR-016). STRING is storable (as text), so the stand-in is a type that is not.
 func (suite *EventResolverTestSuite) TestMeasurementDeclaredNonStorableDropped() {
-	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 9}, MetricKey: "label", DataType: "STRING"}
+	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 9}, MetricKey: "label", DataType: "OBJECT"}
 
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",

@@ -678,6 +678,9 @@ var sweepExemptions = map[string]string{
 	"user-management.agentExecutionDecision": "takes what a stored agent proposal recorded (its proposer, " +
 		"client and grant session) and is asked by device-management when a person approves one; it holds no " +
 		"row of its own, and the policy rows it reads are swept through agentPolicy",
+	"command-delivery.agentProposal": "addressed by a server-generated proposal token, and only an AI " +
+		"agent's token can create a command proposal (and only while infrastructure.mcp.commandProposals is " +
+		"on), so the sweep holds no token it can defend; the ledger is swept through agentProposals",
 	"device-management.agentProposal": "addressed by a server-generated proposal token, and only an AI " +
 		"agent's token can create a proposal, so the sweep holds no token it can defend; the ledger is swept " +
 		"through agentProposals",

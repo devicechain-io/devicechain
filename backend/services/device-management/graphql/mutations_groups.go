@@ -31,15 +31,16 @@ func (r *SchemaResolver) CreateEntityGroup(ctx context.Context, args struct {
 
 // Update an existing entity group's presentation fields.
 func (r *SchemaResolver) UpdateEntityGroup(ctx context.Context, args struct {
-	Token   string
-	Request model.EntityGroupUpdateRequest
+	Token             string
+	ExpectedUpdatedAt *string
+	Request           model.EntityGroupUpdateRequest
 }) (*EntityGroupResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateEntityGroup(ctx, args.Token, &args.Request)
+	updated, err := api.UpdateEntityGroup(ctx, args.Token, args.ExpectedUpdatedAt, &args.Request)
 	if err != nil {
 		return nil, err
 	}

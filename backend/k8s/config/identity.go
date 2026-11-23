@@ -47,6 +47,14 @@ import (
 // that are in fact identical, and the refusal would fire on a difference that
 // cannot hurt anyone.
 //
+// ⚠️ IT IS A STAMP, NOT A RE-MEASUREMENT. The digest is computed from the
+// manifests dcctl RENDERS and written onto the objects it applies; the guard
+// (cli/operator.ReadInstalled) reads that annotation back and compares it. It does
+// not recompute the digest from the live objects, so a CRD or ClusterRole edited by
+// hand after an install still carries the stamp of the install and compares equal.
+// It also says nothing about whether the controller Deployment has rolled out, or
+// about the executor, which is installed and upgraded separately (render_executor.go).
+//
 // ⚠️ BEHAVIOUR THAT NEEDS NO NEW PERMISSION AND NO NEW SCHEMA IS NOT SEEN. A
 // controller change that reads and writes only what the ClusterRole and the CRD
 // already allow does not move this digest; if such a change must be adopted
