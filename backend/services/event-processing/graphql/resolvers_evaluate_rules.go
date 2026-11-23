@@ -236,6 +236,10 @@ func (r *SchemaResolver) EvaluateRules(ctx context.Context, args struct{ Input e
 		res := refused(refusalBusy, previewInstanceBusy)
 		res.skipped = skipped
 		return res, nil
+	case previewRefusedBurst:
+		res := refused(refusalBusy, previewBurstBusy)
+		res.skipped = skipped
+		return res, nil
 	}
 	defer globalPreviewGate.release(tenant)
 	if !acquireEvaluationSlot() {

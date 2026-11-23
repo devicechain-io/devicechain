@@ -16,7 +16,11 @@ const maxConcurrentPreviewsPerTenant = 2
 
 // previewInstanceBusy is the refusal text when the instance-wide cap is reached. It is a typed
 // busy/degraded answer, never an empty success: the caller must retry, not read it as "no firings".
-const previewInstanceBusy = "the maximum number of previews are already running on this instance; try again in a moment"
+const previewInstanceBusy = "the maximum number of previews are already running on this replica; try again in a moment"
+
+// previewBurstBusy is the refusal text for a tenant's second concurrent slot when the replica is
+// past half full: the replica still has room for tenants holding none, but not for a second.
+const previewBurstBusy = "this tenant already has a preview running and the replica is busy; try again when it finishes"
 
 // previewAdmission is the gate's answer to one request.
 type previewAdmission int
@@ -27,10 +31,13 @@ const (
 	previewRefusedTenant
 	// previewRefusedInstance: the process-wide cap leaves no slot for this request.
 	previewRefusedInstance
+	// previewRefusedBurst: the tenant holds a slot and the process is at least half full, so its
+	// second (burst) slot is withheld for tenants holding none.
+	previewRefusedBurst
 )
 
-// previewGate limits the replays (previews, comparisons, evaluations) one process runs: per
-// tenant, and across every tenant together.
+// previewGate limits the replays one process runs: per tenant, and across every tenant together.
+// Previews, comparisons and evaluations share ONE allowance.
 //
 // The instance cap exists because a replay reads the resolved-events stream and, on an instance
 // that is not sharded by tenant, that is every tenant's traffic: the per-tenant limit alone lets
@@ -68,8 +75,8 @@ func (g *previewGate) tryAcquire(tenant string) previewAdmission {
 	if g.total >= limit {
 		return previewRefusedInstance
 	}
-	if held >= 1 && g.total >= limit/2 {
-		return previewRefusedInstance
+	if held >= 1 && 2*g.total >= limit {
+		return previewRefusedBurst
 	}
 	g.inUse[tenant]++
 	g.total++

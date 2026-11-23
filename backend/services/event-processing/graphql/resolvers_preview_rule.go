@@ -246,6 +246,8 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 		return withWarnings(degradedPreview("the maximum number of previews are already running for this tenant; try again in a moment")), nil
 	case previewRefusedInstance:
 		return withWarnings(degradedPreview(previewInstanceBusy)), nil
+	case previewRefusedBurst:
+		return withWarnings(degradedPreview(previewBurstBusy)), nil
 	}
 	defer globalPreviewGate.release(tenant)
 

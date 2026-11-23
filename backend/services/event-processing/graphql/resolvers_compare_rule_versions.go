@@ -84,6 +84,8 @@ func (r *SchemaResolver) CompareRuleVersions(ctx context.Context, args struct{ I
 		return compareRefused(refusalBusy, "too many concurrent previews"), nil
 	case previewRefusedInstance:
 		return compareRefused(refusalBusy, previewInstanceBusy), nil
+	case previewRefusedBurst:
+		return compareRefused(refusalBusy, previewBurstBusy), nil
 	}
 	defer globalPreviewGate.release(tenant)
 	in := args.Input

@@ -70,7 +70,7 @@ func TestPreviewGateBurstSlotIsRefusedAboveHalfButFirstSlotIsNot(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		require.Equal(t, previewAdmitted, g.tryAcquire(fmt.Sprintf("t%d", i)))
 	}
-	require.Equal(t, previewRefusedInstance, g.tryAcquire("t0"), "a second slot above half the cap")
+	require.Equal(t, previewRefusedBurst, g.tryAcquire("t0"), "a second slot above half the cap")
 	require.Equal(t, previewAdmitted, g.tryAcquire("fresh"), "a first slot while the instance has room")
 }
 
@@ -113,6 +113,8 @@ func TestPreviewGateSetCapIgnoresNonPositive(t *testing.T) {
 	require.Equal(t, 8, g.limit(), "a cap can never be switched off")
 	g.setCap(2)
 	require.Equal(t, 2, g.limit())
+	g.setCap(0)
+	require.Equal(t, 2, g.limit(), "a later non-positive cap leaves the installed one alone")
 }
 
 // previewRule at the instance cap is a typed degraded answer (never an empty success), and the
@@ -136,7 +138,7 @@ func TestPreviewRuleRefusedAtInstanceCapThenRunsAfterRelease(t *testing.T) {
 	r := &SchemaResolver{Profiles: publishedProfiles(t, true), Replay: emptyReplay{first: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)}}
 	res := previewWith(t, r, previewFallbackRule)
 	require.NotNil(t, res.Degraded(), "a refused preview must say so, not read as an empty success")
-	assert.Contains(t, *res.Degraded(), "on this instance")
+	assert.Contains(t, *res.Degraded(), "on this replica")
 
 	release()
 	res = previewWith(t, r, previewFallbackRule)
@@ -164,7 +166,7 @@ func TestEvaluateRefusedAtInstanceCap(t *testing.T) {
 	require.False(t, got.Ok)
 	require.NotNil(t, got.Refusal)
 	assert.Equal(t, "BUSY", *got.Refusal)
-	assert.Contains(t, got.Diagnostics[0].Message, "on this instance")
+	assert.Contains(t, got.Diagnostics[0].Message, "on this replica")
 	assert.Empty(t, got.Edges)
 	globalPreviewGate.mu.Lock()
 	defer globalPreviewGate.mu.Unlock()
@@ -184,5 +186,43 @@ func TestCompareRefusedAtInstanceCap(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, out.Ok())
 	require.Equal(t, refusalBusy, out.Refusal().Reason())
-	assert.Contains(t, out.Refusal().Message(), "on this instance")
+	assert.Contains(t, out.Refusal().Message(), "on this replica")
+}
+
+// A refused burst slot says the tenant already has one running, not that the replica is full; the
+// two refusals carry different wording on every door.
+func TestPreviewRuleBurstRefusalWordingDiffersFromInstanceFull(t *testing.T) {
+	old := globalPreviewGate.cap
+	globalPreviewGate.setCap(4)
+	t.Cleanup(func() { globalPreviewGate.cap = old })
+	// acme holds one, another tenant holds one: total 2 = half of 4, so acme's second is a burst refusal.
+	require.Equal(t, previewAdmitted, globalPreviewGate.tryAcquire("acme"))
+	require.Equal(t, previewAdmitted, globalPreviewGate.tryAcquire("other"))
+	r := &SchemaResolver{Profiles: publishedProfiles(t, true), Replay: emptyReplay{first: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)}}
+	res := previewWith(t, r, previewFallbackRule)
+	require.NotNil(t, res.Degraded())
+	assert.Contains(t, *res.Degraded(), "already has a preview running")
+	assert.NotContains(t, *res.Degraded(), "already running on this replica")
+	globalPreviewGate.release("other")
+	globalPreviewGate.release("acme")
+
+	// Full replica: the instance wording.
+	globalPreviewGate.setCap(1)
+	require.Equal(t, previewAdmitted, globalPreviewGate.tryAcquire("other"))
+	t.Cleanup(func() { globalPreviewGate.release("other") })
+	res = previewWith(t, r, previewFallbackRule)
+	require.NotNil(t, res.Degraded())
+	assert.Contains(t, *res.Degraded(), "already running on this replica")
+}
+
+// Half-full rounds the way the prose says: a second slot needs strictly fewer than half in use.
+func TestPreviewGateBurstThresholdIsStrictlyHalf(t *testing.T) {
+	g := newTestGate(3)
+	require.Equal(t, previewAdmitted, g.tryAcquire("a"))
+	// total 1 of 3: 1 < 1.5, so a's second slot is granted.
+	require.Equal(t, previewAdmitted, g.tryAcquire("a"))
+	// total 2 of 3: not fewer than half, so b's second is a burst refusal while its first is fine.
+	require.Equal(t, previewAdmitted, g.tryAcquire("b"))
+	require.Equal(t, previewRefusedTenant, g.tryAcquire("a"))
+	require.Equal(t, previewRefusedInstance, g.tryAcquire("c"))
 }
