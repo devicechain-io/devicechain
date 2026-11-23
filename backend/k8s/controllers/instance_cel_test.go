@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	sigsyaml "sigs.k8s.io/yaml"
 
+	dcv1 "github.com/devicechain-io/dc-k8s/api/v1"
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
 
@@ -57,6 +58,11 @@ func withAPIServer(t *testing.T) client.Client {
 	t.Cleanup(func() { _ = env.Stop() })
 
 	if err := dcv1beta1.AddToScheme(scheme.Scheme); err != nil {
+		t.Fatal(err)
+	}
+	// The CRD serves v1 beside v1beta1, so a typed v1 client has to be possible
+	// from the same scheme (instance_v1_test.go).
+	if err := dcv1.AddToScheme(scheme.Scheme); err != nil {
 		t.Fatal(err)
 	}
 	c, err := client.New(cfg, client.Options{Scheme: scheme.Scheme})

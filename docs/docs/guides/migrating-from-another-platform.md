@@ -25,7 +25,7 @@ partial.
 | --- | --- | --- |
 | **Device** | [Device](../concepts/domain-model.md#core-entities), addressed by a **token** you choose | The token is the identity and does not change. Your old device name or serial number can go in `externalId` (unique per tenant) and your old identifier in an [alias](../user-guide/devices.md#aliases). |
 | **Device profile or device type** | A [device type](../user-guide/device-types-and-profiles.md) that references a versioned [device profile](../user-guide/device-types-and-profiles.md) | DeviceChain splits the idea in two. The **type** classifies and displays devices. The **profile** is the versioned contract: it owns the metric definitions, the commands, the detection rules and the configuration keys. Many types can share one profile. |
-| **Telemetry key** | A **metric** declared on the profile, with a data type and unit | Readings arrive as `measurements` keyed by metric name. A metric is `DOUBLE`, `INT` or `BOOLEAN` and is stored as a time series (a boolean is stored as 0 or 1). See [payload shapes](./connecting-a-device.md#payload-shapes) and [measurement](./connecting-a-device.md#measurement). |
+| **Telemetry key** | A **metric** declared on the profile, with a data type and unit | Readings arrive as `measurements` keyed by metric name. A metric is `DOUBLE`, `INT`, `BOOLEAN` or `STRING`: the first three are stored as a time series (a boolean is stored as 0 or 1), and a `STRING` reading is stored as text. See [payload shapes](./connecting-a-device.md#payload-shapes) and [measurement](./connecting-a-device.md#measurement). |
 | **Attributes** (client-side, server-side, shared) | [Attributes](../concepts/domain-model.md#attributes-vs-events) with the scopes `CLIENT`, `SERVER` and `SHARED` | The scopes mean the same: reported by the device, platform-only, and set by the platform for the device. Shared attributes a profile declares as configuration are delivered to the device; see [configuration delivery](./connecting-a-device.md#reserved-device-topics). Attributes also serve as [facets](../user-guide/groups-facets-browse.md) for browsing and grouping. |
 | **Asset** | [Asset](../user-guide/assets-customers-areas.md), classified by an asset type | An asset type can publish a versioned [property contract](../user-guide/assets-customers-areas.md#asset-types). Assets nest, with one parent each. |
 | **Relations** between entities | [Typed, directed relationships](../concepts/domain-model.md#relationships) | A relationship type can be marked **tracked**. A tracked relationship from a device is stamped on each event as an anchor, so readings can be queried by customer, area or asset and keep that history if you reassign the device later. Group membership uses the same graph. See [managing assignments](./managing-assignments.md). |
@@ -207,9 +207,10 @@ current deployment relies on before you commit to a date.
   [profile payload decoders](./payload-decoders.md). Layouts that need logic outside that
   decoder language can still be decoded in the network server's codec or in a bridge. See
   [inbound integrations](./inbound-integrations.md).
-- **Text readings as history.** Numeric and boolean readings are stored as time series. A text
-  reading is not, so a string-valued signal is held as state, such as an attribute, and not charted
-  as history.
+- **Text readings in charts and aggregates.** Numeric and boolean readings are stored as time
+  series and can be charted and aggregated. A text reading (a `STRING` metric) is stored, and kept as
+  the device's latest value, but it is never averaged, summed or charted as a number, and a
+  detection rule does not compare it as one.
 - **Nested customers.** Customers do not have parents. Assets nest, and relationships can express
   other structure. If you relied on a customer hierarchy for visibility, model it with groups and
   scoped memberships and test what a user sees.

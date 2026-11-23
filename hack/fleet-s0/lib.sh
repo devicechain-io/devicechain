@@ -4,7 +4,7 @@
 # Shared S0 primitives. Creation is possible only inside the current runner's shell.
 set -euo pipefail
 S0_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-S0_CLUSTER_NAMES=(s0-e-b-control s0-e-b s0-e-c s0-e-e s0-e-f2 s0-e-k)
+S0_CLUSTER_NAMES=(s0-e-b-control s0-e-b s0-e-c s0-e-e s0-e-f2 s0-e-k s0-e-h-1 s0-e-h-2 s0-e-h-3 s0-e-h-4 s0-e-h-5 s0-e-h-fc s0-e-h-dp s0-e-i)
 die() { echo "fleet-s0 ERROR[PRECONDITION]: $*" >&2; exit 2; }
 not_implemented() { echo "fleet-s0 ERROR[NOT_IMPLEMENTED]: not implemented: $*" >&2; exit 78; }
 required() { [[ -n ${!1:-} ]] || die "required: $1"; }

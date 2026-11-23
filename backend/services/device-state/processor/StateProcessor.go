@@ -847,9 +847,10 @@ func ownersOf(event *resolvedevent.ResolvedEvent) model.Owners {
 	return model.Owners{Anchors: anchors, At: event.ProcessedTime}
 }
 
-// measurementInputs extracts the numeric measurements from a resolved measurement event,
-// for the per-key latest-value projection. Non-numeric values are skipped (v1 is
-// numeric-only). Each sample is stamped at ITS
+// measurementInputs extracts the readings of a resolved measurement event for the per-key
+// latest-value projection: a numeric reading keeps its number, and a STRING reading (by its
+// declared data type, so "12" declared STRING stays text) keeps its text. Anything else, and a
+// STRING value that cannot be stored, is skipped. Each sample is stamped at ITS
 // OWN time, which the resolver already decided and bounded — this reads the entry's
 // time and never falls back to the envelope or re-clamps, so the projection cannot
 // disagree with the history table about the same reading. A measurement event whose
@@ -864,24 +865,35 @@ func measurementInputs(event *resolvedevent.ResolvedEvent) []model.LatestMeasure
 	for _, entry := range payload.Entries {
 		occurredAt := entry.OccurredTime
 		for _, mx := range entry.Entries {
-			f, err := strconv.ParseFloat(mx.Value, 64)
-			if err != nil {
-				// Not a numeric reading: outside the v1 latest-value projection.
-				continue
-			}
 			var classifier *uint
 			if mx.Classifier != nil {
 				c := uint(*mx.Classifier)
 				classifier = &c
 			}
-			inputs = append(inputs, model.LatestMeasurementInput{
+			in := model.LatestMeasurementInput{
 				Name:         mx.Name,
-				Value:        sql.NullFloat64{Float64: f, Valid: true},
 				Classifier:   classifier,
 				Unit:         mx.Unit,
 				DataType:     mx.DataType,
 				OccurredTime: occurredAt,
-			})
+			}
+			if mx.DataType != nil && *mx.DataType == "STRING" {
+				// Event-management refuses the same values and records why; here the reading
+				// is not kept, rather than poisoning the batch it would be merged in.
+				if !resolvedevent.StorableStringValue(mx.Value) {
+					continue
+				}
+				text := mx.Value
+				in.TextValue = &text
+			} else {
+				f, err := strconv.ParseFloat(mx.Value, 64)
+				if err != nil {
+					// Neither a number nor a declared STRING: not a latest-value reading.
+					continue
+				}
+				in.Value = sql.NullFloat64{Float64: f, Valid: true}
+			}
+			inputs = append(inputs, in)
 		}
 	}
 	return inputs

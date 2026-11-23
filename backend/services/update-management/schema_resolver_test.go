@@ -15,9 +15,9 @@ import (
 // configured, and one with a base must say they are.
 func TestSchemaResolverReportsWhetherADownloadBaseIsSet(t *testing.T) {
 	unset := config.NewUpdateManagementConfiguration()
-	require.False(t, newSchemaResolver(unset, "update-management", "filesystem").DownloadsConfigured)
+	require.False(t, newSchemaResolver(unset, "update-management").DownloadsConfigured)
 
 	set := config.NewUpdateManagementConfiguration()
 	set.Updates.DownloadBaseURL = "https://dc.example.com/api/update-management"
-	require.True(t, newSchemaResolver(set, "update-management", "filesystem").DownloadsConfigured)
+	require.True(t, newSchemaResolver(set, "update-management").DownloadsConfigured)
 }

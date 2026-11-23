@@ -145,7 +145,9 @@ func parseCoord(raw *string) (float64, bool) {
 // sampleMetrics folds one sample's numeric readings into an M map. ADR-016: measurements are
 // numeric by design, so a non-numeric value is not a metric and is skipped rather than surfaced
 // as a spurious 0; a non-finite reading is likewise skipped so a NaN/±Inf can never fold into
-// serializable aggregate state (the core guards this too — defense in depth). A duplicate name
+// serializable aggregate state (the core guards this too — defense in depth). A reading declared
+// STRING is text however it looks, so it is skipped before it is parsed: "12" is a mode, not a
+// twelve a rule can compare. A duplicate name
 // within a single sample keeps the last reading (a degenerate case; distinct samples are separate
 // Inputs).
 func sampleMetrics(entry resolvedevent.ResolvedMeasurementsEntry) map[string]float64 {
@@ -154,6 +156,9 @@ func sampleMetrics(entry resolvedevent.ResolvedMeasurementsEntry) map[string]flo
 	}
 	m := make(map[string]float64, len(entry.Entries))
 	for _, mx := range entry.Entries {
+		if mx.DataType != nil && *mx.DataType == "STRING" {
+			continue
+		}
 		v, err := strconv.ParseFloat(mx.Value, 64)
 		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
 			continue

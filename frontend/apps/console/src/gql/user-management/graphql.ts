@@ -1,9 +1,9 @@
 /* eslint-disable */
+import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 /** Internal type. DO NOT USE DIRECTLY. */
 type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
-import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 /** (Preview: may change in a minor release.) How a version of the agent policy came to be published. */
 export type AgentPolicyOrigin =
   /** (Preview: may change in a minor release.) The version in force was republished with only agent actuation turned on or off. */

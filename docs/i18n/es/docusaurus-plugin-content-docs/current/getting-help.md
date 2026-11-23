@@ -86,10 +86,9 @@ suele ser más rápido que esperar una respuesta.
     completo se envía a la cola de mensajes no entregados. Lo mismo ocurre con un valor `NaN`,
     infinito o de magnitud igual o superior a 1.000.000.000.000.
 
-  Declarar la métrica en el perfil como `BOOLEAN` resuelve el booleano. Un texto como `"ok"` no
-  puede almacenarse como medición, esté o no declarado (una métrica `STRING` se rechaza al declararla),
-  porque un valor de texto es estado del dispositivo, no una medición de serie temporal. Declarar no
-  sirve para un valor que el almacén no puede guardar: se rechaza en cualquier caso, y declararla solo
+  Declarar la métrica en el perfil como `BOOLEAN` resuelve el booleano. Un texto como `"ok"` solo
+  se almacena cuando la clave está declarada como métrica `STRING` en el perfil; el texto no declarado
+  se descarta. Declarar no sirve para un número que el almacén no puede guardar: se rechaza en cualquier caso, y declararla solo
   hace que el evento completo se pierda con él.
 - **Estás consultando un inquilino distinto** de aquel al que reporta el dispositivo.
 

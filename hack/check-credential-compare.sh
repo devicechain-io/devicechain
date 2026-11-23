@@ -83,6 +83,8 @@ EXEMPTIONS=(
 
   "backend/sims/dc-simulator/lorawan.Downlink.ServeHTTP@subtle.ConstantTimeCompare=test instrument: the simulator's fake network-server queue checks the API key its own operator set in DC_SIM_LORAWAN_API_KEY for one run on a developer machine; it guards no account and no platform principal, so there is nothing to back off"
 
+  "backend/fleet/writerslot.CheckClusterIdentity@subtle.ConstantTimeCompare=not a guessable credential check: the ownership nonce is a random label the fleet manager itself wrote on the cluster it asked the cloud to create, and the value compared is read back from the cloud's own listing of that cluster. There is no presenter, no principal to back off and no verdict returned to whoever supplied the value; a mismatch is recorded as a reason and the import is refused. The compare is constant-time only because the nonce is a secret until the first successful read"
+
   "backend/edge/dc-edge-agent/agent.Agent.sealed@subtle.ConstantTimeCompare=not a guessable credential check: the seal is a random per-box token, minted into the agent's own store directory, that tells a message the agent published from one a local MQTT client wrote to the same subject. It is not an account password, there is no principal to back off, and a wrong seal is refused and counted, never admitted"
 )
 
