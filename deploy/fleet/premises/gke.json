@@ -56,14 +56,13 @@
         "cloud"
       ],
       "measured": {
-        "blocked": "U2",
-        "reason": "WIF from a kind pod with uploaded JWKS: needs a throwaway project (and the JWKS fixture is not built)",
-        "digest_covers": "the notice text, not a transcript"
+        "blocked": "ATTEMPTED",
+        "reason": "calibration: the workloadIdentityUser binding had not propagated when the baseline ran (it was added seconds earlier). STS accepted the bound subject's token, but impersonation answered 403 iam.serviceAccounts.getAccessToken, so the controls prove nothing. Partial: a wrong audience and a wrong issuer were each refused at STS (HTTP 400). The probe now waits for the binding before its baseline; a rerun needs its own approval."
       },
       "tofu_version": "1.10.10",
       "provider_version": "8.4.0",
-      "date": "2026-11-21",
-      "transcript_sha256": "11ced606ba052e57bff04257e8a5c9beb24ef1a7261f8eb2a66aa581b66c7e53"
+      "date": "2026-11-23",
+      "transcript_sha256": "308d3273445ede5114f3aba3fd51a9491595e09e53761d201e7b141b854819cd"
     },
     {
       "id": "E-e",
@@ -83,19 +82,28 @@
     },
     {
       "id": "E-f",
-      "verdict": "INCONCLUSIVE",
+      "verdict": "HOLDS",
       "binds": [
-        "cloud"
+        "cloud",
+        "kubernetes"
       ],
       "measured": {
-        "blocked": "U2",
-        "reason": "H08 token-chain expiry bound (KSA, STS, access token): the STS and access-token lifetimes are cloud-side. Only the local half is measured: see E-l (the process survives partition, node delete, PodGC and force-delete)",
-        "digest_covers": "the notice text, not a transcript"
+        "credential_mode": "kind_jwks",
+        "ksa_ttl_s": 600,
+        "sts_ttl_s": 59,
+        "access_ttl_s": 600,
+        "skew_margin_s": 60,
+        "computed_bound_s": 1319,
+        "first_refusal_after_cut_s": 1197,
+        "observed_until_s": 4868,
+        "control_authorized_at_or_after_bound": true,
+        "process_survived_cut": true
       },
+      "kubernetes_version": "1.37.0",
       "tofu_version": "1.10.10",
       "provider_version": "8.4.0",
-      "date": "2026-11-21",
-      "transcript_sha256": "666713460aceda78f7a32843b12e8d1029c92a0e662dfcee4523561643b5d6ce"
+      "date": "2026-11-23",
+      "transcript_sha256": "e458197e0e9e4b03d1047656a9a10f08be3c87de581371cbe78516c2d1de104b"
     },
     {
       "id": "E-f2",
@@ -158,14 +166,13 @@
         "cloud"
       ],
       "measured": {
-        "blocked": "U2",
-        "reason": "crash points of a first cluster create: needs a throwaway project (and the crash checkpoints are not built)",
-        "digest_covers": "the notice text, not a transcript"
+        "blocked": "ATTEMPTED",
+        "reason": "harness defect: one user access token was exported for a probe that runs about two hours; it expired during point 3's create (HTTP 401) and the writer exited before its kill point. Points 1 and 2 matched the premise (plan proposes the create, retry failed ALREADY_EXISTS, one cluster), but their import into a copy of the state never ran (tofu import argument order). Both defects are fixed; a rerun needs its own approval."
       },
       "tofu_version": "1.10.10",
       "provider_version": "8.4.0",
-      "date": "2026-11-21",
-      "transcript_sha256": "82507b2dffc812d5bb43e5a5a623af07ef8f2eb93374164e08dcc5c6109dd66d"
+      "date": "2026-11-23",
+      "transcript_sha256": "c0b9ac0138605ccdca028d0911c1a0d561ec14b435a2e99a163e3b1a412b3ff5"
     },
     {
       "id": "E-i",
@@ -174,14 +181,13 @@
         "cloud"
       ],
       "measured": {
-        "blocked": "U2",
-        "reason": "indirect paths from the candidate apply role to workload data: needs a throwaway project",
-        "digest_covers": "the notice text, not a transcript"
+        "blocked": "ATTEMPTED",
+        "reason": "calibration: GKE refused actAs of the foreign identity with HTTP 400 'The user does not have access to service account', a wording the refusal classifier did not recognise, so no verdict. Every other refuse path was refused with the operator control succeeding, the must_succeed calibration (actAs the designated node identity) passed, and legacy ABAC and disabling workload identity were open as designed. The candidate role file named five container.nodePools.* permissions IAM does not have; the run used the nine valid ones. A rerun needs its own approval."
       },
       "tofu_version": "1.10.10",
       "provider_version": "8.4.0",
-      "date": "2026-11-21",
-      "transcript_sha256": "ef4c88859880c7da45bff6eca16ded87a9b9c08db3c1896dd2b17dcf1e46deec"
+      "date": "2026-11-23",
+      "transcript_sha256": "d3a48cca02322248b68cd747777a82f1df94c9a649507489b35647e9e6afac95"
     },
     {
       "id": "E-j-1",
