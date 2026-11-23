@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/calcfield"
+	"github.com/devicechain-io/dc-microservice/config"
 	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
@@ -542,7 +543,7 @@ func (r *PreviewStatsResolver) RecalculatedSamples() int32 { return r.recalculat
 func (r *PreviewStatsResolver) CalculatedSkips() int32 { return r.calcSkips }
 
 // previewTimeBudget is the most time one preview replay is given.
-const previewTimeBudget = 45 * time.Second
+const previewTimeBudget = config.PreviewBudget
 
 // previewBudget is the replay's time budget: previewTimeBudget, or three quarters of what is left
 // of the request's deadline when that is shorter, so the response is still deliverable.
