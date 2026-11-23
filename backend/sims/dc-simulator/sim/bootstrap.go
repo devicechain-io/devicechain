@@ -343,6 +343,13 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 		}
 	}
 
+	if p.ConfigurationKeys != nil {
+		if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationS6Declaration,
+			map[string]any{"token": p.Token, "keys": p.ConfigurationKeys}, &struct{}{}); err != nil {
+			return fmt.Errorf("setDeviceProfileConfigurationDeclaration: %w", err)
+		}
+	}
+
 	// Publish when the ACTIVE version does not already carry THIS content.
 	//
 	// The obvious formulation — publish when this run created something — is wrong
@@ -442,6 +449,12 @@ func profileContentMarker(p ProfileSpec) string { return profileContentMarkerSco
 // pinned to: a group republished at a new version re-pins its rules, and that is new content.
 func profileContentMarkerScoped(p ProfileSpec, groupVersions map[string]int) string {
 	h := sha256.New()
+	if p.ConfigurationKeys != nil {
+		fmt.Fprintln(h, "configuration-declaration")
+	}
+	for _, k := range p.ConfigurationKeys {
+		fmt.Fprintf(h, "configuration\x00%s\x00%s\n", k.Key, k.ValueType)
+	}
 	for _, m := range p.Metrics {
 		fmt.Fprintf(h, "metric\x00%s\x00%s\x00%s\x00%s\n", m.Key, m.Name, m.DataType, m.Unit)
 	}
@@ -865,6 +878,12 @@ func ensureDeviceType(ctx context.Context, rt *Runtime, dt DeviceTypeSpec) error
 		return fmt.Errorf("deviceTypesByToken: %w", err)
 	}
 	if len(existing.DeviceTypesByToken) > 0 {
+		if dt.CommandChannel != "" {
+			if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationS6TypeChannel,
+				map[string]any{"token": dt.Token, "channel": dt.CommandChannel}, &struct{}{}); err != nil {
+				return fmt.Errorf("converge command channel: %w", err)
+			}
+		}
 		// Only the maintenance window is converged on an existing type: it is what decides when
 		// the type's disruptive commands may start.
 		have := ""
@@ -894,6 +913,9 @@ func ensureDeviceType(ctx context.Context, rt *Runtime, dt DeviceTypeSpec) error
 	}
 	if dt.MaintenanceWindowToken != "" {
 		req["maintenanceWindowToken"] = dt.MaintenanceWindowToken
+	}
+	if dt.CommandChannel != "" {
+		req["commandChannel"] = dt.CommandChannel
 	}
 	var created struct {
 		CreateDeviceType struct {

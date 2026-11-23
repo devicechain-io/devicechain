@@ -59,11 +59,15 @@ function rollout(over: Record<string, unknown> = {}) {
   };
 }
 
+function cohortCounts(total: number, over: Record<string, number>) {
+  return { total, pending: 0, inFlight: 0, succeeded: 0, failed: 0, unknown: 0, cancelled: 0, skipped: 0, ...over };
+}
+
 const staged = {
   cohorts: [
-    { name: 'canary', deviceTokens: ['dev-1', 'dev-2'], percentage: 0, manualPromotion: true },
-    { name: 'quarter', deviceTokens: [], percentage: 25, manualPromotion: true },
-    { name: 'everyone', deviceTokens: [], percentage: 100, manualPromotion: false },
+    { name: 'canary', deviceTokens: ['dev-1', 'dev-2'], percentage: 0, manualPromotion: true, progress: cohortCounts(2, { succeeded: 2 }) },
+    { name: 'quarter', deviceTokens: [], percentage: 25, manualPromotion: true, progress: cohortCounts(5, { succeeded: 1, inFlight: 2, failed: 1, unknown: 1 }) },
+    { name: 'everyone', deviceTokens: [], percentage: 100, manualPromotion: false, progress: cohortCounts(3, { pending: 3 }) },
   ],
 };
 
@@ -198,6 +202,30 @@ describe('RolloutDetailPage', () => {
     expect(within(panel as HTMLElement).getByText('Upcoming')).toBeTruthy();
     expect(within(panel as HTMLElement).getByText('Up to 25% of the fleet')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^Resume$/ })).toBeNull();
+  });
+
+  it('shows each cohort its own counts and no longer claims the counts are rollout-wide', async () => {
+    world.rollout = rollout({ ...staged, state: 'RUNNING', currentCohort: 1 });
+    renderPage();
+    await screen.findByText('Cohorts and safety gates');
+    const row = (i: number) => screen.getByTestId(`cohort-counts-${i}`).closest('tr') as HTMLElement;
+    const cells = (i: number) => within(row(i)).getAllByRole('cell').map((c) => c.textContent);
+    // #, name, size, promotion, status, devices, updated, in flight, pending, failed or unknown
+    expect(cells(0).slice(5)).toEqual(['2', '2', '0', '0', '0']);
+    expect(cells(1).slice(5)).toEqual(['5', '1', '2', '0', '2']);
+    expect(cells(2).slice(5)).toEqual(['3', '0', '0', '3', '0']);
+    expect(screen.queryByText(/cover every device in the rollout/)).toBeNull();
+  });
+
+  it('filters the devices table by cohort with criteria.cohort', async () => {
+    world.rollout = rollout({ ...staged, state: 'RUNNING', currentCohort: 1 });
+    renderPage();
+    await screen.findByText('dev-1');
+    const targetCalls = () => world.calls.filter((c) => c.op === 'UpdateRolloutTargets');
+    expect((targetCalls()[targetCalls().length - 1].vars.criteria as Record<string, unknown>).cohort).toBeUndefined();
+    fireEvent.click(screen.getByRole('button', { name: /Filter devices by cohort/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '2 · quarter' }));
+    await waitFor(() => expect((targetCalls()[targetCalls().length - 1].vars.criteria as Record<string, unknown>).cohort).toBe(1));
   });
 
   it('promotes with the cohort on screen as expectedCohort and no override', async () => {

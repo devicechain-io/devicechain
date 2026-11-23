@@ -66,6 +66,7 @@ func (r *SchemaResolver) UpdateRolloutTargets(ctx context.Context, args struct {
 		PageNumber int32
 		PageSize   int32
 		Outcome    *string
+		Cohort     *int32
 	}
 }) (*UpdateRolloutTargetSearchResultsResolver, error) {
 	if err := auth.Authorize(ctx, auth.ArtifactRead); err != nil {
@@ -78,6 +79,7 @@ func (r *SchemaResolver) UpdateRolloutTargets(ctx context.Context, args struct {
 	found, err := api.RolloutTargets(ctx, args.Token, model.RolloutTargetCriteria{
 		Pagination: rdb.Pagination{PageNumber: args.Criteria.PageNumber, PageSize: args.Criteria.PageSize},
 		Outcome:    args.Criteria.Outcome,
+		Cohort:     args.Criteria.Cohort,
 	})
 	if err != nil || found == nil {
 		return nil, err

@@ -366,20 +366,23 @@ func TestHarborpulseS3bDocumentsUseServedSchemas(t *testing.T) {
 }
 
 func TestHarborpulseNetworkServerOwnsGaugeCommands(t *testing.T) {
-	m := NewHarborpulse(1, Load{}).Manifest()
-	integration, mqtt := 0, 0
+	s := NewHarborpulse(1, Load{}).(*harborpulse)
+	m := s.Manifest()
+	integration, mqtt, owned := 0, 0, 0
 	for _, d := range m.Expand(1) {
 		if integrationFarEnd(d) {
 			integration++
 			if d.DeviceTypeToken != HarborpulseLoraGaugeType && d.DeviceTypeToken != HarborpulseLegacyGaugeType {
 				t.Fatalf("unexpected integration device %s", d.Token)
 			}
+		} else if s.OwnsDeviceSession(d.Token) {
+			owned++
 		} else {
 			mqtt++
 		}
 	}
-	if integration != 4 || mqtt != 33 {
-		t.Fatalf("far ends: %d integration, %d MQTT", integration, mqtt)
+	if integration != 4 || mqtt != 33 || owned != 6 {
+		t.Fatalf("far ends: %d integration, %d generic MQTT, %d scenario-owned", integration, mqtt, owned)
 	}
 }
 
