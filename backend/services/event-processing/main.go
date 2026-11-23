@@ -143,6 +143,9 @@ func parseConfiguration() error {
 		return err
 	}
 	Configuration = cfg
+	// The instance-wide limit on concurrent replays, installed with the configuration, before the
+	// GraphQL surface serves.
+	configurePreviewCap(cfg)
 	return nil
 }
 
@@ -524,6 +527,12 @@ func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
 // per term would also put its bind failures on the DETECT term-build fuse.
 func newReactReader(nmgr *messaging.NatsManager, workers int) (messaging.MessageReader, error) {
 	return nmgr.NewReader(streams.DerivedEvents, processor.ReactReaderOptions(DetectTermGate.Held, workers)...)
+}
+
+// configurePreviewCap installs preview.maxConcurrent (its default when absent) as the limit on
+// replays this process runs at once, all tenants together.
+func configurePreviewCap(c *config.EventProcessingConfiguration) {
+	graphql.SetPreviewInstanceCap(c.Preview.MaxConcurrentCount())
 }
 
 // reactWorkers is how many derived events REACT dispatches at once: react.workers, or its default
