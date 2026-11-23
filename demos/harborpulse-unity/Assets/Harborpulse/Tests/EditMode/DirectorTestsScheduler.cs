@@ -63,7 +63,7 @@ namespace DeviceChain.Harborpulse.Tests
                 s.Add(DirectorKit.O(kind, device, key, status, sim, (sim - 6) * layout.DayLengthSeconds / 24, id ?? kind + ":" + device + ":" + key + ":" + status,
                     cycle: cycle, attempt: sim >= 26 ? "ota-attempt" : "", source: source, fields: fields, sets: sets));
             }
-            Add("binding", "", "", "READY", 6, fields: new Dictionary<string, string> { ["freshDevices"] = "37" });
+            Add("binding", "", "", "READY", 6, fields: new Dictionary<string, string> { ["freshDevices"] = "43" });
             Add("alarm", "hp-meter-ferry-terminal", "peak-demand", "RAISED", 8.5);
             Add("alarm", "hp-meter-ferry-terminal", "peak-demand", "CLEARED", 8.65);
             Add("window", "hp-light-east-3", "lamp-flicker", "ACTIVE", 10.75, "service-this-run");
@@ -156,7 +156,7 @@ namespace DeviceChain.Harborpulse.Tests
         static Scheduler Arbitrate(double lowEnd = 10, double ttl = 300, double captionHold = 3)
         {
             var scheduler = new Scheduler(ArbitrationStory(lowEnd, ttl, captionHold), Kit.Layout()); var store = new ObservationStore();
-            store.Add(DirectorKit.O("binding", status: "READY", sim: 6, wall: 0, fields: new Dictionary<string, string> { ["freshDevices"] = "37" }));
+            store.Add(DirectorKit.O("binding", status: "READY", sim: 6, wall: 0, fields: new Dictionary<string, string> { ["freshDevices"] = "43" }));
             store.Add(DirectorKit.O("alarm", key: "1", status: "RAISED", sim: 6, wall: 0));
             for (var t = 0; t <= 250; t++)
             {
@@ -371,7 +371,7 @@ namespace DeviceChain.Harborpulse.Tests
             foreach (var other in DirectorKit.Arr(root["pages"]).Skip(2)) DirectorKit.Obj(other)["windowSim"] = new List<object> { 40, 41 };
             var scheduler = new Scheduler(Storyboard.Parse(DirectorKit.Json(root), new PresentationMap(Kit.Layout())), Kit.Layout()); var store = new ObservationStore();
             store.Add(DirectorKit.O("alarm", key: "repeat", status: "RAISED", sim: 6, wall: 0));
-            store.Add(DirectorKit.O("binding", status: "READY", sim: 6, wall: 0, fields: new Dictionary<string, string> { ["freshDevices"] = "37" }));
+            store.Add(DirectorKit.O("binding", status: "READY", sim: 6, wall: 0, fields: new Dictionary<string, string> { ["freshDevices"] = "43" }));
             for (var t = 0; t <= 300; t++)
             {
                 if (t == 200 || t == 210 || t == 220) store.Add(DirectorKit.O("alarm", key: "repeat", status: "RAISED", sim: 6 + t / 60.0, wall: t, id: "repeat-" + t, cycle: "cycle-" + t));
@@ -408,11 +408,11 @@ namespace DeviceChain.Harborpulse.Tests
             DirectorKit.Arr(page["captions"]).Add(pre); DirectorKit.Arr(DirectorKit.Obj(DirectorKit.Arr(page["shots"])[0])["captions"]).Add("waiting");
             var scheduler = new Scheduler(Storyboard.Parse(DirectorKit.Json(root), new PresentationMap(Kit.Layout())), Kit.Layout()); var store = new ObservationStore();
             for (var t = 0; t <= 50; t++) {
-                if (t == arrival) store.Add(DirectorKit.O("binding", status: "READY", wall: t, sim: 6 + t / 60.0, fields: new Dictionary<string, string> { ["freshDevices"] = "37" }));
+                if (t == arrival) store.Add(DirectorKit.O("binding", status: "READY", wall: t, sim: 6 + t / 60.0, fields: new Dictionary<string, string> { ["freshDevices"] = "43" }));
                 scheduler.Tick(new DirectorSample("run", 6 + t / 60.0, t), store);
             }
-            Assert.That(scheduler.Log.Any(e => e.Kind == "caption" && e.Value.Contains("37 devices")), Is.EqualTo(visible));
-            if (visible) Assert.That(scheduler.Log.Single(e => e.Kind == "caption" && e.Value.Contains("37 devices")).ShowS, Is.EqualTo(arrival));
+            Assert.That(scheduler.Log.Any(e => e.Kind == "caption" && e.Value.Contains("43 devices")), Is.EqualTo(visible));
+            if (visible) Assert.That(scheduler.Log.Single(e => e.Kind == "caption" && e.Value.Contains("43 devices")).ShowS, Is.EqualTo(arrival));
         }
         [TestCase("E")] [TestCase("D")] [TestCase("H")] [TestCase("Space")]
         public void ReservedAndNavigationInSameFrameStillOwnCamera(string key)
@@ -473,14 +473,14 @@ namespace DeviceChain.Harborpulse.Tests
         {
             var currentStory = ArbitrationStory(current: true);
             var scheduler = new Scheduler(currentStory, Kit.Layout()); var store = new ObservationStore();
-            store.Add(DirectorKit.O("binding", status: "READY", wall: 0, sim: 6, fields: new Dictionary<string, string> { ["freshDevices"] = "37" }));
+            store.Add(DirectorKit.O("binding", status: "READY", wall: 0, sim: 6, fields: new Dictionary<string, string> { ["freshDevices"] = "43" }));
             for (var t = 0; t <= 180; t++) {
                 if (t == 1) store.Add(DirectorKit.O("alarm", key: "1b", status: "RAISED", sim: 6.01, wall: 1));
                 if (t == 4) store.Add(DirectorKit.O("binding", status: "ENDED", wall: 4, sim: 6));
                 scheduler.Tick(new DirectorSample("run", 6 + t / 60.0, t), store);
             }
             Assert.That(scheduler.Log.Any(e => e.Kind == "resume" && e.Page == "1"), Is.True);
-            Assert.That(scheduler.Log.Count(e => e.Kind == "caption" && e.Page == "1" && e.Value.Contains("37 devices")), Is.EqualTo(1));
+            Assert.That(scheduler.Log.Count(e => e.Kind == "caption" && e.Page == "1" && e.Value.Contains("43 devices")), Is.EqualTo(1));
         }
     }
 }

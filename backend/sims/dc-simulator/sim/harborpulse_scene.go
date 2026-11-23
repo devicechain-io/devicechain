@@ -128,6 +128,11 @@ const (
 	harborSceneCharger     = "charger"
 	harborSceneMeter       = "meter"
 	harborSceneTruck       = "truck"
+	// The S6 populations (harborpulse_s6_scene.go): a charger that holds an MQTT session under a
+	// token, one that holds it under a client certificate, and a lamp that asks for its commands.
+	harborSceneMQTTCharger = "mqtt-charger"
+	harborSceneCertCharger = "cert-charger"
+	harborScenePullLight   = "pull-light"
 )
 
 func harborSceneKind(d harborDevice) string {
@@ -191,6 +196,7 @@ func HarborpulseSceneLayout() HarborSceneLayout {
 		}
 		out.Devices = append(out.Devices, dev)
 	}
+	out.Devices = append(out.Devices, harborS6SceneDevices()...)
 	for _, f := range harborpulseGeoFences() {
 		out.Fences = append(out.Fences, HarborSceneFence{Token: f.Token, Name: f.Name, Ring: f.Ring})
 	}

@@ -15,6 +15,8 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly Dictionary<string, GaugeView> gauges = new Dictionary<string, GaugeView>();
         readonly Dictionary<string, ChargerView> chargers = new Dictionary<string, ChargerView>();
         readonly Dictionary<string, LampView> lamps = new Dictionary<string, LampView>();
+        readonly Dictionary<string, LinkedChargerView> linked = new Dictionary<string, LinkedChargerView>();
+        readonly Dictionary<string, PullLampView> pullLamps = new Dictionary<string, PullLampView>();
         readonly Dictionary<string, BeaconView> beacons = new Dictionary<string, BeaconView>();
         readonly Dictionary<string, int> slots = new Dictionary<string, int>();
         readonly List<(string Quay, Transform Spray, Transform Overtop)> sea = new List<(string, Transform, Transform)>();
@@ -33,6 +35,8 @@ namespace DeviceChain.Harborpulse.Visuals
                     case DeviceKind.Pump: pumps.Add(id, new PumpStationView(r)); break;
                     case DeviceKind.Charger: chargers.Add(id, new ChargerView(r, mats)); break;
                     case DeviceKind.Light: lamps.Add(id, new LampView(r, mats)); break;
+                    case DeviceKind.MqttCharger: case DeviceKind.CertCharger: linked.Add(id, new LinkedChargerView(r, mats)); break;
+                    case DeviceKind.PullLight: pullLamps.Add(id, new PullLampView(r, mats)); break;
                     case DeviceKind.Truck: truck = new TruckView(r); break;
                     default: if (DeviceKind.IsGauge(r.Placement.Device.Kind)) gauges.Add(id, new GaugeView(r, mats, 0)); break;
                 }
@@ -93,6 +97,8 @@ namespace DeviceChain.Harborpulse.Visuals
             foreach (var p in gauges) p.Value.Apply(f);
             foreach (var p in chargers) p.Value.Apply(f.Chargers[p.Key], f.World);
             foreach (var p in lamps) p.Value.Apply(f.Lamps[p.Key], f, sky, camera);
+            foreach (var p in linked) p.Value.Apply(f.LinkedChargers[p.Key]);
+            foreach (var p in pullLamps) p.Value.Apply(f.PullLamps[p.Key], sky);
             truck?.Apply(f.Truck, dt, time);
             foreach (var b in beacons.Values) b.Hide();
             foreach (var alarm in f.Beacons)

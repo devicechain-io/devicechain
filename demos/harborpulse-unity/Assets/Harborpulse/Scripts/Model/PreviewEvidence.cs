@@ -69,6 +69,9 @@ namespace DeviceChain.Harborpulse.Model
                     Alarm(d, d.Kind == DeviceKind.Light ? "light-silent" : "charger-offline", "MAJOR", h < 21.25, h < 21.25 ? 19.75 + 45 * 24 / layout.DayLengthSeconds : 21.25);
                 // The stand-in alarm tracks the fault through the paging hold, just as it does after the hold ends.
                 if (d.Token == lamp && h >= 11 + 10.0 / 60) Alarm(d, "lamp-flicker", "MAJOR", h < 12 + 50.0 / 60, h < 12 + 50.0 / 60 ? 11 + 10.0 / 60 : 12 + 50.0 / 60);
+                // the platform's connectivity rule, on the charger whose session dropped
+                if (d.Kind == DeviceKind.MqttCharger && d.Index == 1 && h >= MqttDropFrom)
+                    Alarm(d, "mqtt-charger-disconnected", "WARNING", h < MqttDropTo, h < MqttDropTo ? MqttDropFrom : MqttDropTo);
                 if (d.Kind == DeviceKind.Truck && h >= layout.Cues.TruckInPlainSim)
                 {
                     var inPlain = h < layout.Cues.TruckOutPlainSim;
@@ -125,6 +128,13 @@ namespace DeviceChain.Harborpulse.Model
                     case Metrics.ConnectorTemp: value = hotCharger && h >= 14 && h < 15 ? 76 - 16 * Rgb.Clamp01((h - 14.1) / 0.9) : 18; break;
                     default: return false;
                 }
+            }
+            else if (DeviceKind.IsLinkedCharger(d.Kind))
+            {
+                if (metric != Metrics.ChargerPower) return false;
+                // a silent one keeps its last report, from the hour it fell silent
+                var since = LinkedSilentSince(d, h);
+                reading = new Reading(LinkedChargerKw, since.HasValue ? Wall(DayClock.DayIndex(simSeconds) * 24 + since.Value) : now); return true;
             }
             else if (d.Kind == DeviceKind.Meter) { if (metric == Metrics.MeterKw) value = h >= 8 && h < 18 ? 48 : 12; else if (metric == Metrics.MeterKwh) value = simSeconds / 3600 * 24; else return false; }
             else if (d.Kind == DeviceKind.Truck && metric == Metrics.Speed) { value = h >= 17 && h < 18 || h >= 21.5 && h < 22.5 ? 8 : 0; }

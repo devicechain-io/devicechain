@@ -42,6 +42,12 @@ namespace DeviceChain.Harborpulse.Visuals
             QuayBuilder.Build(map, w.Root, mats, w.props);
             foreach (var token in map.Quays.Keys) w.Mark(token, w.Root.Find(token));
             foreach (var d in layout.Devices) w.Device(d, layout);
+            // what is laid on the quays round the devices that hold their own session: part of the quay they are on
+            foreach (var token in map.Quays.Keys)
+            {
+                var fittings = QuayFittingsBuilder.Build(w.Root, mats, w.props.Fittings, token);
+                if (fittings != null) w.Mark(token, fittings);
+            }
             // The mapped depot sits just south of the eastern breakwater. Give its yard
             // a real foundation and connect it by the mapped road causeway, never a floating slab.
             w.Slab("Depot headland", (float)map.Depot.X - 36, (float)map.Depot.X + 36,
@@ -162,6 +168,14 @@ namespace DeviceChain.Harborpulse.Visuals
                     r.Box("CarPark", localCar+new Vector3(0, -.035f, -1), new Vector3(5, .05f, 9), mats.Asphalt);
                     r.Box("ChargeCanopy", localCar+new Vector3(0, 3.1f, -2.5f), new Vector3(3.8f, .15f, 4), mats.Steel);
                     break;
+                case DeviceKind.MqttCharger: case DeviceKind.CertCharger:
+                    var bay=props.Find("car:"+d.Token);
+                    var localBay=f.Local(V(bay.At))-f.Local(V(at));
+                    r = LinkedChargerBuilder.Build(local, parent, mats, localBay, d.Kind==DeviceKind.CertCharger, Detail);
+                    // the bay's asphalt, laid on the court's setts between its painted lines
+                    r.Box("CarPark", localBay+new Vector3(0, .014f, -.9f), new Vector3(2.7f, .02f, 5.8f), mats.Asphalt);
+                    break;
+                case DeviceKind.PullLight: r = PullLampBuilder.Build(local, parent, mats); break;
                 case DeviceKind.Truck: r = TruckBuilder.Build(local, parent, mats, Detail); break;
                 case DeviceKind.Meter:
                     r = new AssetRig(local, parent);
