@@ -209,6 +209,19 @@ nunca debería mostrar `raiseAlarm` ni `clearAlarm`, porque ese sumidero siempre
 | `react_events_poison_dropped_total` | Eventos derivados descartados tras el tope de reentregas, porque su despacho seguía fallando. También se escriben en el flujo de mensajes no entregados, así que esto cuenta los mismos eventos que `react_events_dead_lettered_total`; se mantiene porque la alerta `ReactPoisonDropping` se dispara sobre él. |
 | `react_workers` | Cuántos eventos derivados puede despachar REACT a la vez (`react.workers`). Los eventos de un mismo dispositivo se despachan uno tras otro, en el orden del flujo, salvo que un evento dejado para reentrega se despacha de nuevo después de los eventos que le siguen. |
 
+## Device state {#device-state}
+
+Prefijo: `devicechain_devicestate_`.
+
+Cada diez minutos, una réplica a la vez compara las filas de último estado conocido de cada inquilino con device-management y corrige las que ya no corresponden a un dispositivo.
+
+| Métrica | Significa |
+| --- | --- |
+| `orphan_sweep_deleted_total` | Contador. Filas de estado de dispositivo que el barrido eliminó porque su dispositivo ya no existe o se recreó con el mismo token. Una ráfaga justo después de purgar o eliminar dispositivos es lo esperado, y una tasa constante distinta de cero mientras se eliminan dispositivos es normal. Una tasa que sigue subiendo cuando no se ha eliminado ningún dispositivo es un fallo: algo elimina dispositivos sin avisar a device-state. Mira las líneas de registro del barrido (`Orphan sweep reconciled device states`) para ver los recuentos de cada pasada. |
+| `orphan_sweep_stamped_total` | Contador. Filas de estado de dispositivo que el barrido marcó con la encarnación del dispositivo al que pertenecen, de modo que un dispositivo recreado después con el mismo token se reconozca como distinto. Cada fila se marca una sola vez, así que una ráfaga en las primeras pasadas tras una actualización, mientras se ponen al día las filas escritas antes de que se registrara la encarnación, es lo esperado y luego vuelve a cero. Una tasa que no se estabiliza merece una revisión. |
+
+Una pasada que no puede llegar a device-management omite las páginas restantes de ese inquilino y se reintenta en la siguiente; no cuenta en ninguna de las dos métricas. La propia pasada aparece en la serie `orphan_sweep` descrita en [pasadas de mantenimiento](./observability.md#maintenance-passes).
+
 ## Event management {#event-management}
 
 Prefijo: `devicechain_eventmanagement_`.

@@ -1,0 +1,15 @@
+---
+section: whats-new
+---
+
+## en
+
+- **Rule previews, version comparisons and `dcctl test` evaluations are now capped per event-processing process.** Each tenant was already held to two at a time, but nothing bounded their sum, so on an instance whose resolved-events stream is not sharded by tenant, N busy tenants could run 2N whole-stream replays at once and slow detection for everyone. One event-processing process now runs at most 8 at a time across all tenants (`preview.maxConcurrent`, 1 to 256); the three share one allowance, and each replica has its own allowance, so N replicas run up to N × the setting. A request that finds no free slot is refused at once as busy, as a degraded preview result or a refusal on a comparison or evaluation, never as an empty success, and the author retries. Slots are shared fairly: a tenant's second concurrent slot is granted only while fewer than half the slots are in use, so tenants running two at a time cannot lock out a tenant running none. The key is absent by default. Set it only once every pod of the instance runs a release that knows it, because an older pod refuses a configuration document that carries an unknown key.
+
+## es
+
+- **Las previsualizaciones de reglas, las comparaciones de versiones y las evaluaciones de `dcctl test` quedan ahora limitadas por proceso de event-processing.** Cada inquilino ya estaba limitado a dos a la vez, pero nada acotaba su suma, así que en una instancia cuyo flujo de eventos resueltos no está fragmentado por inquilino, N inquilinos ocupados podían ejecutar 2N reproducciones del flujo completo a la vez y ralentizar la detección de todos. Ahora un proceso de event-processing ejecuta como máximo 8 a la vez entre todos los inquilinos (`preview.maxConcurrent`, de 1 a 256); las tres comparten una sola cuota y cada réplica tiene la suya, así que N réplicas ejecutan hasta N × el valor. Una solicitud que no encuentra un hueco libre se rechaza al instante como ocupada, como un resultado de previsualización degradado o un rechazo en una comparación o evaluación, nunca como un éxito vacío, y el autor reintenta. Los huecos se reparten de forma justa: el segundo hueco simultáneo de un inquilino solo se concede mientras se use menos de la mitad de los huecos, de modo que los inquilinos que ejecutan dos a la vez no puedan dejar fuera a uno que no ejecuta ninguno. La clave está ausente por defecto. Indíquela solo cuando todos los pods de la instancia ejecuten una versión que la conozca, porque un pod anterior rechaza un documento de configuración con una clave desconocida.
+
+## zh-CN
+
+- **规则预览、版本比较和 `dcctl test` 评估现在按 event-processing 进程设有上限。** 每个租户原本已限制为同时两个，但它们的总和没有任何限制，因此在已解析事件流未按租户分片的实例上，N 个繁忙租户可能同时运行 2N 次整条事件流的重放，拖慢所有人的检测。现在，一个 event-processing 进程在所有租户之间同时最多运行 8 个（`preview.maxConcurrent`，范围 1 到 256）；三者共用同一份额度，每个副本有各自的额度，因此 N 个副本最多同时运行 N × 该设置值。找不到空闲名额的请求会立即被拒绝并标记为繁忙，预览返回降级结果，比较或评估返回拒绝，绝不会作为空的成功结果返回，作者稍后重试即可。名额按公平方式分配：同一租户的第二个并发名额只在已用名额少于一半时授予，因此各自同时运行两个的租户无法把一个没有运行任何任务的租户挡在外面。该键默认不存在。仅在实例的所有 Pod 都运行了认识该键的版本之后再设置，因为较旧的 Pod 会拒绝包含未知键的配置文档。

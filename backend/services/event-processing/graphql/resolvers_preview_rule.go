@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
@@ -20,44 +19,11 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/calcfield"
+	"github.com/devicechain-io/dc-microservice/config"
 	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 )
-
-// maxConcurrentPreviewsPerTenant bounds how many replay previews one tenant may run at once (ADR-023):
-// a preview is a bounded but non-trivial replay job, so "replay 24h per keystroke" must not be a
-// self-inflicted DoS. Excess previews are refused with a degraded result rather than queued.
-const maxConcurrentPreviewsPerTenant = 2
-
-// previewGate is a tiny per-tenant concurrency limiter for previewRule.
-type previewGate struct {
-	mu    sync.Mutex
-	inUse map[string]int
-}
-
-func (g *previewGate) acquire(tenant string) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.inUse[tenant] >= maxConcurrentPreviewsPerTenant {
-		return false
-	}
-	g.inUse[tenant]++
-	return true
-}
-
-func (g *previewGate) release(tenant string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.inUse[tenant] > 0 {
-		g.inUse[tenant]--
-		if g.inUse[tenant] == 0 {
-			delete(g.inUse, tenant)
-		}
-	}
-}
-
-var globalPreviewGate = &previewGate{inUse: map[string]int{}}
 
 // previewRuleInput is the previewRule query input (a GraphQL input object). Exactly one of Graph (a
 // CanvasDefinition JSON) or RuleDefinition (a rules.Rule JSON) names the DRAFT to preview.
@@ -275,9 +241,14 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 		return withWarnings(degradedPreview("this profile has no published version yet, so there is no history to preview against")), nil
 	}
 
-	// Per-tenant concurrency guard.
-	if !globalPreviewGate.acquire(tenant) {
+	// Per-tenant and instance-wide concurrency guard.
+	switch globalPreviewGate.tryAcquire(tenant) {
+	case previewRefusedTenant:
 		return withWarnings(degradedPreview("the maximum number of previews are already running for this tenant; try again in a moment")), nil
+	case previewRefusedInstance:
+		return withWarnings(degradedPreview(previewInstanceBusy)), nil
+	case previewRefusedBurst:
+		return withWarnings(degradedPreview(previewBurstBusy)), nil
 	}
 	defer globalPreviewGate.release(tenant)
 
@@ -542,7 +513,7 @@ func (r *PreviewStatsResolver) RecalculatedSamples() int32 { return r.recalculat
 func (r *PreviewStatsResolver) CalculatedSkips() int32 { return r.calcSkips }
 
 // previewTimeBudget is the most time one preview replay is given.
-const previewTimeBudget = 45 * time.Second
+const previewTimeBudget = config.PreviewBudget
 
 // previewBudget is the replay's time budget: previewTimeBudget, or three quarters of what is left
 // of the request's deadline when that is shorter, so the response is still deliverable.
