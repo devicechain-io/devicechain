@@ -42,12 +42,25 @@ create and remove a dedicated database and per-run roles. Cloud clusters
 are zonal, one-node fixtures; keep the spike below the spec's 25 USD budget.
 The outer project reaper remains armed on every error.
 
-E-d, E-f, E-h and E-i currently exit 78 with a named
-`ERROR[NOT_IMPLEMENTED]: not implemented: ...` instrumentation/fixture gap.
-They never emit a verdict. Their self-tests assert that refusal. The WIF/JWKS
-publisher, full token-chain partition rig, provider crash checkpoints and
-candidate-role workload-data attack fixtures need cloud calibration before
-those probes can report. No cloud experiment has run in this slice.
+E-d, E-f, E-h and E-i are instrumented (`instrument.sh`, with their verdict functions in
+`instrument.py`) but have **not run against a cloud**: every Tier C record stays INCONCLUSIVE with
+`blocked: "U2"` until the maintainer approves the grants listed for each in the IAM request. Their
+self-tests use scripted CLIs and make no cloud calls; each one shows the probe recording HOLDS, then
+recording FAILS under each scripted defect, then recording NO verdict when its negative control cannot
+fail (exit non-zero, nothing written to `results.jsonl`: INCONCLUSIVE is an absent entry, never a pass).
+
+| Probe | Measures | Negative control (a scripted run must turn it FAILS or void) |
+| --- | --- | --- |
+| E-d | A kind pod (apiserver pinned to a known issuer, its public JWKS read from `/openid/v1/jwks`, checked to hold no private member, and uploaded with the provider) exchanges its projected token through STS and impersonation. Another KSA subject, a wrong audience and a token forged under a wrong issuer must each be refused. A deleted and recreated same-name KSA is RECORDED, never judged. | Any refused-control accepted gives FAILS. A baseline exchange that is itself refused gives no verdict. |
+| E-f | A runner on a 3-node kind cluster refreshes the full chain (KSA token, STS, access token) and calls the cloud every 5 s. Its node is partitioned both ways, the node deleted, the pod force-deleted (E-l shows the process survives). The three lifetimes are recorded separately with the first 401/403 after the cut. Mode `kind_jwks` only. | The bound `ksa + sts + access + skew` is COMPUTED. A refusal after it, or none, gives FAILS. An uncut runner must still be authorized at or after the bound or there is no verdict. |
+| E-h | Five kill points of a first create (cluster accepted, default pool removal, between cluster and first pool, between pools, after the last pool), each followed by the next plain plan, the next plain apply (must fail ALREADY_EXISTS, no duplicate), and a verified import into a copy of the state. Also: whether the provider deletes after a failed create (30 s create timeout), whether the API id is stable across delete and recreate, and whether `deletion_protection = true` in state makes an orphan cluster delete fail. | A second cluster, a retry that did not fail ALREADY_EXISTS, or an orphan delete not refused gives FAILS. The same orphan delete with protection off must really delete the cluster, or there is no verdict. |
+| E-i | The candidate apply identity attempts each indirect path of the H14 table: secrets through the Kubernetes API, getCredentials, disk snapshot/image/attach, node ssh keys and OS Login, actAs a foreign identity, and the trust-changing updates IAM cannot separate (recorded open, with the control that closes them). | Every attempt also runs as the invoking operator and must SUCCEED (else no verdict: the attempt was malformed). A `must_succeed` calibration (actAs the designated node identity) that is refused also gives no verdict. An open `refuse` path gives FAILS. |
+
+E-i needs `FLEET_S0_APPLY_IDENTITY`, `FLEET_S0_NODE_IDENTITY` and `FLEET_S0_OTHER_IDENTITY`;
+`candidate-apply-role.txt` is the permission list under test. Tunables: `FLEET_S0_KSA_TTL_S` (>= 600),
+`FLEET_S0_ACCESS_TTL_S` (<= 3600), `FLEET_S0_SKEW_SECONDS`. E-f waits roughly the bound (about 80
+minutes at the defaults). The gcloud flags of E-i's trust-changing attempts are calibrated by the first
+real run: an attempt that fails for a reason other than a permission refusal yields no verdict, never a pass.
 
 ## Tier K, reproducibly
 
