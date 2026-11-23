@@ -523,7 +523,9 @@ function DeviceReadingsPanel({ deviceToken }: { deviceToken: string }) {
         {readings.map((m) => (
           <DataTableRow key={m.id}>
             <DataTableCell className="font-medium text-foreground">{m.name}</DataTableCell>
-            <DataTableCell className="max-w-[24rem] truncate font-mono text-foreground" title={m.value === null || m.value === undefined ? (m.textValue ?? undefined) : undefined} data-shot-mask>{m.value ?? m.textValue ?? '—'}</DataTableCell>
+            <DataTableCell className="max-w-[24rem] truncate font-mono text-foreground" data-shot-mask>
+              <span title={m.value == null ? (m.textValue ?? undefined) : undefined}>{m.value ?? m.textValue ?? '—'}</span>
+            </DataTableCell>
             <DataTableCell className="text-muted-foreground" data-shot-mask>{formatTime(m.occurredTime)}</DataTableCell>
           </DataTableRow>
         ))}
