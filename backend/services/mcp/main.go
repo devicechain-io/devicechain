@@ -85,7 +85,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// This service's whole HTTP surface, registered in the INITIALIZE phase. See
 	// registerHttpRoutes for why it is here and not where the server starts.
 	registerHttpRoutes(Configuration.ResourceUrl, Configuration.IssuerUrl, validator,
-		server.NewGraphQLClient(), Configuration.Limits(), server.WithActuation(Configuration.AgentActuation.Enabled))
+		server.NewGraphQLClient(), Configuration.Limits(), server.WithActuation(Configuration.AgentActuation.Enabled),
+		server.WithCommandProposals(Microservice.InstanceConfiguration.Infrastructure.Mcp.CommandProposals))
 	return initializeService(ctx)
 }
 

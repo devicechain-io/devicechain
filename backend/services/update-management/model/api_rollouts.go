@@ -632,6 +632,7 @@ func (api *Api) AbortRollout(ctx context.Context, token string) (*UpdateRolloutV
 // progressRow is one group of the progress aggregate.
 type progressRow struct {
 	RolloutId    uint
+	Cohort       int
 	Status       string
 	AttemptState sql.NullString
 	N            int
@@ -641,16 +642,23 @@ type progressRow struct {
 // the device's outcome; the rollout never copies it.
 func progressQuery(db *gorm.DB, ids []uint) *gorm.DB {
 	return db.Model(&UpdateRolloutTarget{}).
-		Select("update_rollout_targets.rollout_id AS rollout_id, update_rollout_targets.status AS status, "+
+		Select("update_rollout_targets.rollout_id AS rollout_id, update_rollout_targets.cohort AS cohort, update_rollout_targets.status AS status, "+
 			"update_attempts.state AS attempt_state, COUNT(*) AS n").
 		Joins("LEFT JOIN update_attempts ON update_attempts.assignment_id = update_rollout_targets.assignment_id "+
 			"AND update_attempts.tenant_id = update_rollout_targets.tenant_id").
 		Where("update_rollout_targets.rollout_id IN ?", ids).
-		Group("update_rollout_targets.rollout_id, update_rollout_targets.status, update_attempts.state")
+		Group("update_rollout_targets.rollout_id, update_rollout_targets.cohort, update_rollout_targets.status, update_attempts.state")
 }
 
-func (api *Api) progressOf(db *gorm.DB, ids []uint) (map[uint]RolloutProgress, error) {
-	out := map[uint]RolloutProgress{}
+type rolloutProgressCounts struct {
+	Total   RolloutProgress
+	Cohorts map[int]RolloutProgress
+}
+
+// progressCounts reads all requested rollouts and cohorts in one tenant-scoped aggregate.
+// Both views use the same outcome classifier and counter, including missing attempts.
+func progressCounts(db *gorm.DB, ids []uint) (map[uint]rolloutProgressCounts, error) {
+	out := map[uint]rolloutProgressCounts{}
 	if len(ids) == 0 {
 		return out, nil
 	}
@@ -660,8 +668,27 @@ func (api *Api) progressOf(db *gorm.DB, ids []uint) (map[uint]RolloutProgress, e
 	}
 	for _, row := range rows {
 		p := out[row.RolloutId]
-		p.add(outcomeOf(row.Status, row.AttemptState), row.N)
+		if p.Cohorts == nil {
+			p.Cohorts = map[int]RolloutProgress{}
+		}
+		outcome := outcomeOf(row.Status, row.AttemptState)
+		p.Total.add(outcome, row.N)
+		cohort := p.Cohorts[row.Cohort]
+		cohort.add(outcome, row.N)
+		p.Cohorts[row.Cohort] = cohort
 		out[row.RolloutId] = p
+	}
+	return out, nil
+}
+
+func (api *Api) progressOf(db *gorm.DB, ids []uint) (map[uint]RolloutProgress, error) {
+	counts, err := progressCounts(db, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uint]RolloutProgress, len(counts))
+	for id, p := range counts {
+		out[id] = p.Total
 	}
 	return out, nil
 }
@@ -699,13 +726,14 @@ func (api *Api) viewsOfRollouts(ctx context.Context, rs []UpdateRollout) ([]Upda
 	for _, a := range artifacts {
 		byID[a.ID] = a
 	}
-	progress, err := api.progressOf(api.RDB.DB(ctx), ids)
+	progress, err := progressCounts(api.RDB.DB(ctx), ids)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]UpdateRolloutView, 0, len(rs))
 	for _, r := range rs {
-		out = append(out, UpdateRolloutView{Rollout: r, Artifact: byID[r.ArtifactId], Progress: progress[r.ID]})
+		out = append(out, UpdateRolloutView{Rollout: r, Artifact: byID[r.ArtifactId],
+			Progress: progress[r.ID].Total, CohortProgress: progress[r.ID].Cohorts})
 	}
 	return out, nil
 }
@@ -775,9 +803,12 @@ type targetRow struct {
 	AssignmentToken sql.NullString
 }
 
-// RolloutTargets pages a rollout's targets in the order they were frozen, optionally by outcome.
+// RolloutTargets pages a rollout's targets in the order they were frozen, optionally by outcome and cohort.
 // It answers nil for a rollout the tenant does not have.
 func (api *Api) RolloutTargets(ctx context.Context, token string, c RolloutTargetCriteria) (*RolloutTargetResults, error) {
+	if c.Cohort != nil && *c.Cohort < 0 {
+		return nil, refuse(CodeInvalidRollout, "cohort must be nonnegative (got %d)", *c.Cohort)
+	}
 	if c.Outcome != nil && !slices.Contains(Outcomes, *c.Outcome) {
 		return nil, refuse(CodeInvalidRollout, "outcome must be one of %s", strings.Join(Outcomes, ", "))
 	}
@@ -793,6 +824,9 @@ func (api *Api) RolloutTargets(ctx context.Context, token string, c RolloutTarge
 			Joins("LEFT JOIN update_assignments ON update_assignments.id = update_rollout_targets.assignment_id "+
 				"AND update_assignments.tenant_id = update_rollout_targets.tenant_id").
 			Where("update_rollout_targets.rollout_id = ?", r.ID)
+		if c.Cohort != nil {
+			q = q.Where("update_rollout_targets.cohort = ?", *c.Cohort)
+		}
 		if c.Outcome != nil {
 			q = outcomeFilter(q, *c.Outcome)
 		}

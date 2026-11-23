@@ -45,14 +45,16 @@ const rollupLevel1h = "1h"
 // set the platform expects — a discovered list would happily report that all zero
 // of the hypertables it found are healthy.
 //
-// 🔴 SIX, not the four in the initial schema. event_anchors and
+// 🔴 SEVEN, not the four in the initial schema. event_anchors and
 // state_change_events were each converted by a LATER migration, and a list
 // written from NewInitialSchema alone silently under-checks by a third. That is
 // why assertEventSchema cross-checks this against the count in the database
-// rather than only looking up the names it knows.
+// rather than only looking up the names it knows. failed_event_records (the
+// failed-events index, a hypertable since v1.1.0) is the one that count caught
+// after the list was written: seed-events refused every run until it was added.
 var eventHypertables = []string{
 	"events", "location_events", "measurement_events", "alert_events",
-	"event_anchors", "state_change_events",
+	"event_anchors", "state_change_events", "failed_event_records",
 }
 
 // EventPasswordEnv is the environment variable the event half reads its Postgres

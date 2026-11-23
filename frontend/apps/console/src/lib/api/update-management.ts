@@ -655,6 +655,16 @@ graphql(`
       deviceTokens
       percentage
       manualPromotion
+      progress {
+        total
+        pending
+        inFlight
+        succeeded
+        failed
+        unknown
+        cancelled
+        skipped
+      }
     }
     currentCohort
     failureRate {

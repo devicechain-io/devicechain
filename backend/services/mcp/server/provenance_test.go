@@ -207,7 +207,7 @@ func sourceMismatches(v reflect.Value, path string) []string {
 
 func catalogOf(t *testing.T) *Catalog {
 	t.Helper()
-	_, c := newServer(testClient("http://unused.invalid"), WithActuation(true))
+	_, c := newServer(testClient("http://unused.invalid"), WithActuation(true), WithCommandProposals(true))
 	return c
 }
 

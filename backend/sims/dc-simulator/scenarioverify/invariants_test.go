@@ -159,8 +159,12 @@ func backfillOf(device string) Backfill {
 }
 
 func (d *day) observe() Observations {
-	o := Observations{Clock: testClock, Day: 0, Commands: d.commands, Readings: d.readings,
+	o := Observations{S7: cleanS7(), Clock: testClock, Day: 0, Commands: d.commands, Readings: d.readings,
 		Correlation: d.corr, CorrelationControl: d.control, Backfill: d.backfill, S3: d.s3, S4: d.s4, S5: d.s5, S6: d.s6, Maint: d.maint}
+	if d.s5.Ledger != nil && d.s5.Ledger.Replacement != nil && d.s5.Ledger.Replacement.Device == sim.HarborpulseReplacementSeparateDevice {
+		o.S7.A.Devices = append(o.S7.A.Devices, S7Device{ID: "s5-extra", Token: sim.HarborpulseReplacementSeparateDevice, ExternalID: "PAW-GAUGE-NORTH-3-NEW", Description: sim.HarborpulseTenantDescription(o.S7.TenantA)})
+		o.S7.ObservedA = o.S7.A
+	}
 	for t := at(WatchFrom); !t.After(at(WatchTo).Add(20 * time.Second)); t = t.Add(2 * time.Second) {
 		o.Polls = append(o.Polls, t)
 		for _, l := range d.alarms {

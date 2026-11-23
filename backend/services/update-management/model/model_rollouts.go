@@ -192,9 +192,10 @@ func (p RolloutProgress) Failures() int { return p.Failed + p.Unknown }
 
 // UpdateRolloutView is a rollout with its artifact and progress, the shape the GraphQL plane returns.
 type UpdateRolloutView struct {
-	Rollout  UpdateRollout
-	Artifact Artifact
-	Progress RolloutProgress
+	Rollout        UpdateRollout
+	Artifact       Artifact
+	Progress       RolloutProgress
+	CohortProgress map[int]RolloutProgress
 }
 
 // RolloutTargetView is one target with its derived outcome and, once dispatched, the assignment
@@ -234,6 +235,8 @@ type RolloutSearchResults struct {
 type RolloutTargetCriteria struct {
 	rdb.Pagination
 	Outcome *string
+	// Cohort is a zero-based frozen cohort index; nil includes every cohort.
+	Cohort *int32
 }
 
 // RolloutTargetResults is a page of targets.
