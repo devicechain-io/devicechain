@@ -100,6 +100,7 @@ bus: read them with `dcctl dead-letters`.
 | `config_reports_rejected_total{reason}` | Messages on the [device-reports topic](../guides/connecting-a-device.md#reserved-device-topics) that device-management refused: `malformed` (did not decode), `throttled` (a sync inside the per-device cooldown), `unattributable` (no tenant or device in the topic), `unknown_device`, `unknown_revision`, `digest_mismatch`, `stale` (older than what is recorded) and `device_disabled` (the device is [disabled](../guides/device-credentials.md#disabling-a-device)). A steady rate from one fleet is a device-side bug. |
 | `credential_misconfigured_total{path}` | Device credential checks refused because the stored secret can never match: none is stored, or its digest was made under a different key than this instance's root key derives (most likely a database restored next to the wrong root key). path="connect" is the MQTT auth callout, path="event" the per-event check. Wrong passwords are not counted here. |
 | `device_reports_dead_lettered_total` | Device messages written to the dead-letter stream because they could not be understood or named a configuration revision the device does not have. Read them with `dcctl dead-letters`. |
+| `live_subscription_dropped_total{suffix}` | Counter. Live values dropped because a subscriber could not keep up, by the stream the subscription follows. Here `suffix` is `alarm-events`, for the `alarmStream` subscription. A slow viewer loses the live values it was too slow to take; nothing stored is affected, and an ordinary query still returns the same history. A steady rate from one viewer usually means a console tab or client that is stuck or on a poor link. A rate across many viewers means the pod is overloaded. `event-management` exports the same metric for its measurement subscription (`suffix` is `resolved-events`) and `event-processing` for detections (`derived-events`), each under its own prefix. |
 | `geofence_set_publish_failures_total` | Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine. |
 | `provisioning_in_flight` | Gauge. Device self-registrations this replica is working on right now, after the request body was read and before the answer. A request still sending its body is not counted. A value pinned at `provisioning.maxInFlight` means new requests are being answered `503`. |
 | `provisioning_request_duration_seconds{result}` | Histogram. Time to answer a self-registration request, by result, from the moment the handler starts (a slow body is included). |
@@ -307,6 +308,14 @@ because a node that publishes only values with no numeric sample otherwise looks
 | `devices_registered_total` | Devices auto-registered on first sight of their Sparkplug identity. |
 | `samples_skipped_total{reason}` | Metrics of accepted Sparkplug messages that produced no sample, by reason: non_numeric (a boolean, string, bytes, dataset or template value), null (is_null), unnamed (no name and no resolvable alias), untyped (an integer whose datatype neither the message nor its birth declared, and whose value reads differently as signed and unsigned, so it is not guessed; the service logs a rate-limited warning naming the topic and metric) or oversize (the message carried more than 16,384 metrics, so none of its readings were stored; the service logs a warning naming the topic). A node publishing only such metrics otherwise looks identical to an idle one. |
 
+## Outbound connectors {#outbound-connectors}
+
+Prefix: `devicechain_outboundconnectors_`. The service runs the [outbound connectors](../concepts/outbound-connectors.md) that REACT actions dispatch through.
+
+| Metric | Means |
+| --- | --- |
+| `connector_dispatch_unlettered_total{action, outcome}` | Counter. Dispatches that ended in a terminal outcome and were not given an individual dead letter, because the dead-letter budget was used up (a tenant may write one a second, with a burst of 60, and the whole service ten a second, with a burst of 100). The dispatch is finished and acknowledged, so it cannot be replayed from the dead-letter list. `action` is `httpCall`, `publish` or `unknown`, and `outcome` is the dispatch's terminal outcome (`rate_limited`, `invalid`, `blocked`, `unsupported` and so on). Once a minute each affected tenant gets one summary dead letter with the counts per action and outcome, readable with `dcctl dead-letters`. A rise means something is failing in bulk: read the outcome. `rate_limited` means the tenant's connector traffic is over its egress ceiling, `blocked` means a connector points at an address a tenant may not reach, and `invalid` means a connector's stored configuration cannot be run. Fix the cause; the [`ConnectorDispatchRateLimited`](./alert-runbook.md#connectordispatchratelimited) alert watches the first. |
+
 ## Notification management {#notification-management}
 
 Prefix: `devicechain_notificationmanagement_`.
@@ -361,6 +370,12 @@ These count [two-factor authentication](../guides/two-factor-authentication.md).
 | `mfa_challenges_total` | Password sign-ins held for a code. |
 | `mfa_enrollments_total{result}` | Setup events: `begun`, `confirmed`, `disabled` by the person, `reset` by an operator. |
 | `mfa_identity_locks_total` | Attempts that armed an account-wide lock. Any increase means an account's password is in use by someone failing its second factor. `MfaIdentityLocked` watches it. |
+
+These count how each replica follows the instance signing keys, which every user-management pod does every thirty seconds so that tokens signed by one pod verify on the others.
+
+| Metric | Means |
+| --- | --- |
+| `signing_key_follow_failures_total` | Counter. Passes in which a pod could not read or install the instance's signing keys. The pod keeps the keys it last had, so a miss alone changes nothing. A failure that coincides with a key rotation is usually the pod racing the rotation, and the next pass clears it. A rate that continues means that pod's keys are going stale: after the next rotation, tokens signed with the new key may fail to verify on it. Look for `Signing-key follow failed` in its log, which names the cause (usually the database). |
 
 ## Update management {#update-management}
 

@@ -76,6 +76,7 @@ title: 指标参考
 | `config_reports_rejected_total{reason}` | device-management 拒绝的 [device-reports 主题](../guides/connecting-a-device.md#reserved-device-topics)消息：`malformed`（无法解码）、`throttled`（在单设备冷却期内的 sync）、`unattributable`（主题中没有租户或设备）、`unknown_device`、`unknown_revision`、`digest_mismatch`、`stale`（比已记录的更旧）和 `device_disabled`（设备已被[停用](../guides/device-credentials.md#disabling-a-device)）。某一批设备持续产生此类拒绝，说明设备端存在缺陷。 |
 | `credential_misconfigured_total{path}` | 因存储的密钥永远无法匹配而被拒绝的设备凭据检查：未存储任何密钥，或其摘要由与本实例根密钥所派生的不同密钥生成（最可能是数据库被恢复到了错误的根密钥旁）。path="connect" 是 MQTT 认证标注，path="event" 是逐事件检查。错误密码不在此计数。 |
 | `device_reports_dead_lettered_total` | 因无法理解或引用了设备没有的配置修订而写入死信流的设备消息。使用 `dcctl dead-letters` 查看。 |
+| `live_subscription_dropped_total{suffix}` | 计数器。因订阅者跟不上而被丢弃的实时值，按订阅所跟随的流区分。此处 `suffix` 为 `alarm-events`，对应 `alarmStream` 订阅。速度慢的查看者会丢失它来不及接收的实时值；已存储的内容不受影响，普通查询仍会返回同样的历史。来自单个查看者的稳定速率通常意味着某个控制台标签页或客户端卡住了，或网络链路较差。许多查看者同时出现，则说明该 Pod 过载。`event-management` 为其测量订阅导出同一指标（`suffix` 为 `resolved-events`），`event-processing` 为检测订阅导出（`derived-events`），各自使用自己的前缀。 |
 | `geofence_set_publish_failures_total` | 无法发布的地理围栏集清单：序列化错误、代理拒绝或传输故障。每一条都表示事件处理未被告知某次围栏编辑，因此该租户的包含判定沿用先前的围栏集，直到协调扫描将其修复。持续的非零速率表示围栏编辑没有到达检测引擎。 |
 | `provisioning_in_flight` | Gauge。此刻本副本正在处理的设备自注册数，从读完请求体之后到应答之前。仍在发送请求体的请求不计入。该值固定在 `provisioning.maxInFlight` 表示新请求正在被应答 `503`。 |
 | `provisioning_request_duration_seconds{result}` | 直方图。按结果统计的自注册请求应答耗时，从处理程序开始计时（包含缓慢的请求体）。 |
@@ -263,6 +264,14 @@ title: 指标参考
 | `devices_registered_total` | 首次见到其 Sparkplug 身份时自动注册的设备。 |
 | `samples_skipped_total{reason}` | 被接受的 Sparkplug 消息中没有产生样本的指标，按原因区分：non_numeric（布尔、字符串、字节、数据集或模板值）、null（is_null）、unnamed（没有名称且没有可解析的别名）、untyped（整数的数据类型既未在消息中声明，也未在其 birth 中声明，且其值按有符号和无符号读取时不同，因此不做猜测；服务会记录一条限频警告，指明主题和指标）或 oversize（消息携带的指标超过 16,384 个，因此其读数均未存储；服务会记录一条指明主题的警告）。只发布此类指标的节点，否则看起来与空闲节点完全相同。 |
 
+## 出站连接器 {#outbound-connectors}
+
+前缀：`devicechain_outboundconnectors_`。该服务运行 REACT 动作所经过的[出站连接器](../concepts/outbound-connectors.md)。
+
+| 指标 | 含义 |
+| --- | --- |
+| `connector_dispatch_unlettered_total{action, outcome}` | 计数器。以终态结束但没有获得单独死信的分发数，原因是死信额度已用尽（每个租户每秒可写一条，突发 60 条；整个服务每秒十条，突发 100 条）。该分发已经结束并确认，因此无法从死信列表重放。`action` 为 `httpCall`、`publish` 或 `unknown`，`outcome` 是该分发的终态结果（`rate_limited`、`invalid`、`blocked`、`unsupported` 等）。每分钟，每个受影响的租户会得到一条汇总死信，记录按动作和结果统计的数量，可用 `dcctl dead-letters` 读取。数值上升说明有东西在大批量失败：请看 outcome。`rate_limited` 表示该租户的连接器流量超出其出站上限，`blocked` 表示某个连接器指向了租户不得访问的地址，`invalid` 表示连接器已存储的配置无法运行。请修复原因；[`ConnectorDispatchRateLimited`](./alert-runbook.md#connectordispatchratelimited) 告警监控第一种情况。 |
+
 ## 通知管理 {#notification-management}
 
 前缀：`devicechain_notificationmanagement_`。
@@ -314,6 +323,12 @@ title: 指标参考
 | `mfa_challenges_total` | 因等待代码而被挂起的密码登录。 |
 | `mfa_enrollments_total{result}` | 设置事件：`begun`、`confirmed`、用户自行 `disabled`、运维人员 `reset`。 |
 | `mfa_identity_locks_total` | 触发账号全局锁定的尝试。任何增长都意味着有人在使用某个账号的密码，却无法通过它的第二因素。由 `MfaIdentityLocked` 监视。 |
+
+这些指标统计各副本对实例签名密钥的跟随情况。每个 user-management Pod 每三十秒执行一次，以便一个 Pod 签发的令牌能在其他 Pod 上通过验证。
+
+| 指标 | 含义 |
+| --- | --- |
+| `signing_key_follow_failures_total` | 计数器。某个 Pod 无法读取或安装实例签名密钥的轮次。该 Pod 会保留它最近一次拥有的密钥，因此偶尔一次失败不会改变任何事情。恰逢密钥轮换时的失败通常是该 Pod 与轮换发生竞争，下一轮就会恢复。若持续出现，则说明该 Pod 的密钥正在过期：下一次轮换之后，用新密钥签发的令牌可能无法在它上面通过验证。请在其日志中查找 `Signing-key follow failed`，其中会指明原因（通常是数据库）。 |
 
 ## 更新管理 {#update-management}
 
