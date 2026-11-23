@@ -4,6 +4,40 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/** (Preview: may change in a minor release.) The kind of action an agent proposal asks for. */
+export type AgentProposalKind =
+  /** (Preview: may change in a minor release.) Send one command to one addressed device. */
+  | 'COMMAND_SEND';
+
+/** (Preview: may change in a minor release.) Filters for listing agent proposals. */
+export type AgentProposalSearchCriteria = {
+  /** (Preview: may change in a minor release.) Only proposals of this kind. */
+  kind?: AgentProposalKind | null | undefined;
+  /** (Preview: may change in a minor release.) The page to return, starting at 1. */
+  pageNumber: number;
+  /** (Preview: may change in a minor release.) How many proposals a page holds. */
+  pageSize: number;
+  /** (Preview: may change in a minor release.) Only proposals in this state. */
+  state?: AgentProposalState | null | undefined;
+};
+
+/** (Preview: may change in a minor release.) Where an agent proposal is in its life. */
+export type AgentProposalState =
+  /** (Preview: may change in a minor release.) Withdrawn by the agent that proposed it. */
+  | 'CANCELLED'
+  /** (Preview: may change in a minor release.) Approved and carried out. */
+  | 'EXECUTED'
+  /** (Preview: may change in a minor release.) Nobody approved it before it expired. */
+  | 'EXPIRED'
+  /** (Preview: may change in a minor release.) Ended by an agent-actions switch being turned off. */
+  | 'KILLED'
+  /** (Preview: may change in a minor release.) Waiting for people to approve it. The only state that changes. */
+  | 'PROPOSED'
+  /** (Preview: may change in a minor release.) The tenant's agent policy, or a check made when a person approved it, refused it. The reasons say why. */
+  | 'REFUSED'
+  /** (Preview: may change in a minor release.) A person rejected it. */
+  | 'REJECTED';
+
 /**
  * Fields for issuing one command to many devices. Supply exactly one of deviceTokens and
  * groupToken; both or neither is refused with BATCH_TARGET_AMBIGUOUS.
@@ -302,6 +336,36 @@ export type CancelDeviceCommandsMutationVariables = Exact<{
 
 export type CancelDeviceCommandsMutation = { cancelDeviceCommands: { cancelled: number } };
 
+export type CommandAgentProposalsQueryVariables = Exact<{
+  criteria: AgentProposalSearchCriteria;
+}>;
+
+
+export type CommandAgentProposalsQuery = { agentProposals: { results: Array<{ token: string, kind: AgentProposalKind, state: AgentProposalState, targets: Array<string>, digest: string, impact: string, targetCount: number, proposerPrincipal: string, proposerClient: string, clientAttested: boolean, policyVersion: number, requiredApprovals: number, reasons: Array<string>, createdAt: string, expiresAt: string, decidedAt: string | null, decidedBy: string | null, note: string | null, deviceToken: string, command: string, commandCutoff: string, resultRef: string | null, approvals: Array<{ principal: string, approvedAt: string }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type CommandAgentProposalDetailQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type CommandAgentProposalDetailQuery = { agentProposal: { token: string, kind: AgentProposalKind, state: AgentProposalState, payload: string, targets: Array<string>, digest: string, impact: string, targetCount: number, proposerPrincipal: string, proposerClient: string, clientAttested: boolean, rationale: string | null, policyVersion: number, requiredApprovals: number, reasons: Array<string>, createdAt: string, expiresAt: string, decidedAt: string | null, decidedBy: string | null, note: string | null, deviceToken: string, command: string, commandCutoff: string, resultRef: string | null, approvals: Array<{ principal: string, approvedAt: string }> } };
+
+export type ApproveCommandAgentProposalMutationVariables = Exact<{
+  token: string;
+  digest: string;
+}>;
+
+
+export type ApproveCommandAgentProposalMutation = { approveAgentProposal: { token: string, state: AgentProposalState, reasons: Array<string> } };
+
+export type RejectCommandAgentProposalMutationVariables = Exact<{
+  token: string;
+  note?: string | null | undefined;
+}>;
+
+
+export type RejectCommandAgentProposalMutation = { rejectAgentProposal: { token: string } };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -507,3 +571,92 @@ export const CancelDeviceCommandsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CancelDeviceCommandsMutation, CancelDeviceCommandsMutationVariables>;
+export const CommandAgentProposalsDocument = new TypedDocumentString(`
+    query CommandAgentProposals($criteria: AgentProposalSearchCriteria!) {
+  agentProposals(criteria: $criteria) {
+    results {
+      token
+      kind
+      state
+      targets
+      digest
+      impact
+      targetCount
+      proposerPrincipal
+      proposerClient
+      clientAttested
+      policyVersion
+      requiredApprovals
+      approvals {
+        principal
+        approvedAt
+      }
+      reasons
+      createdAt
+      expiresAt
+      decidedAt
+      decidedBy
+      note
+      deviceToken
+      command
+      commandCutoff
+      resultRef
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CommandAgentProposalsQuery, CommandAgentProposalsQueryVariables>;
+export const CommandAgentProposalDetailDocument = new TypedDocumentString(`
+    query CommandAgentProposalDetail($token: String!) {
+  agentProposal(token: $token) {
+    token
+    kind
+    state
+    payload
+    targets
+    digest
+    impact
+    targetCount
+    proposerPrincipal
+    proposerClient
+    clientAttested
+    rationale
+    policyVersion
+    requiredApprovals
+    approvals {
+      principal
+      approvedAt
+    }
+    reasons
+    createdAt
+    expiresAt
+    decidedAt
+    decidedBy
+    note
+    deviceToken
+    command
+    commandCutoff
+    resultRef
+  }
+}
+    `) as unknown as TypedDocumentString<CommandAgentProposalDetailQuery, CommandAgentProposalDetailQueryVariables>;
+export const ApproveCommandAgentProposalDocument = new TypedDocumentString(`
+    mutation ApproveCommandAgentProposal($token: String!, $digest: String!) {
+  approveAgentProposal(token: $token, digest: $digest) {
+    token
+    state
+    reasons
+  }
+}
+    `) as unknown as TypedDocumentString<ApproveCommandAgentProposalMutation, ApproveCommandAgentProposalMutationVariables>;
+export const RejectCommandAgentProposalDocument = new TypedDocumentString(`
+    mutation RejectCommandAgentProposal($token: String!, $note: String) {
+  rejectAgentProposal(token: $token, note: $note) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<RejectCommandAgentProposalMutation, RejectCommandAgentProposalMutationVariables>;

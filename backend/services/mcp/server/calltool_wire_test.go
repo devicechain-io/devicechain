@@ -77,9 +77,10 @@ func servedToolSession(t *testing.T, upstreamURL string) (*mcp.ClientSession, st
 // recordingUpstream stands in for device-management's /graphql, recording the single
 // call made to it and answering with body.
 type recordingUpstream struct {
-	auth string
-	vars map[string]any
-	hits int
+	query string
+	auth  string
+	vars  map[string]any
+	hits  int
 }
 
 func newRecordingUpstream(t *testing.T, body string) (*recordingUpstream, string) {
@@ -90,10 +91,12 @@ func newRecordingUpstream(t *testing.T, body string) (*recordingUpstream, string
 		up.auth = r.Header.Get("Authorization")
 		raw, _ := io.ReadAll(r.Body)
 		var envelope struct {
+			Query     string         `json:"query"`
 			Variables map[string]any `json:"variables"`
 		}
 		_ = json.Unmarshal(raw, &envelope)
 		up.vars = envelope.Variables
+		up.query = envelope.Query
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(ts.Close)

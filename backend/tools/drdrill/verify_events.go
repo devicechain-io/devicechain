@@ -155,8 +155,8 @@ func runVerifyEvents(ctx context.Context, argv []string) error {
 	return nil
 }
 
-// checkHypertables proves the six event tables came back AS HYPERTABLES holding
-// the seeded rows.
+// checkHypertables proves the event tables came back AS HYPERTABLES, and the
+// tables the seed writes came back holding the seeded rows.
 //
 // The hypertable question is asked separately from, and before, the row counts,
 // because the two are different findings. A plain table with every row in it

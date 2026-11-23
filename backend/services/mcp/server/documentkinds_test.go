@@ -261,14 +261,14 @@ func notExactlyOneQuery(docs []document) []string {
 		switch {
 		case err != nil:
 			bad = append(bad, fmt.Sprintf("%s (%s): unreadable: %v", name, d.area, err))
-		case len(ops) != 1 || ops[0] != "query" && !(d.area == "device-management" && d.text == allowedProposalMutation && ops[0] == "mutation"):
+		case len(ops) != 1 || ops[0] != "query" && !((d.area == "device-management" && d.text == allowedProposalMutation || d.area == "command-delivery" && d.text == allowedCommandProposalMutation) && ops[0] == "mutation"):
 			bad = append(bad, fmt.Sprintf("%s (%s): operations %v, want exactly [query]", name, d.area, ops))
 		}
 	}
 	return bad
 }
 
-// Every document is exactly one query, except the explicitly pinned alarm proposal mutation.
+// Every document is exactly one query, except the two explicitly pinned proposal mutations.
 func TestReadToolsIssueOnlyQueries(t *testing.T) {
 	if len(documents) < 10 {
 		t.Fatalf("only %d documents are registered; a ratchet over an empty registry passes anything", len(documents))
@@ -338,17 +338,24 @@ const allowedProposalMutation = `mutation ProposeAlarmAction($input: AgentAlarmP
  proposeAlarmAction(input: $input) { status verdict requiredApprovals reasons digest expiresAt targetCount preview { alarmToken state acknowledged hidesLiveCondition } proposal { token kind state targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note } }
 }`
 
+const allowedCommandProposalMutation = `mutation ProposeCommand($input: AgentCommandProposalInput!) {
+ proposeCommand(input: $input) { status verdict requiredApprovals reasons digest expiresAt targetCount preview { deviceToken incarnation command payload payloadPresent impact definition cutoff dispatchAfter windowToken } proposal { token kind state targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note payload deviceToken command commandCutoff resultRef } }
+}`
+
 func TestProposalMutationExceptionIsExact(t *testing.T) {
-	if bad := notExactlyOneQuery([]document{proposeAlarmActionMutation}); len(bad) != 0 {
-		t.Fatal(bad)
-	}
-	for _, d := range []document{
-		{area: "other-area", text: proposeAlarmActionMutation.text},
-		{area: "device-management", text: proposeAlarmActionMutation.text + " mutation Execute { execute }"},
-		{area: "device-management", text: "mutation ProposeAlarmAction { approveAgentProposal(token: \"p\", digest: \"d\") { token } }"},
-	} {
-		if len(notExactlyOneQuery([]document{d})) == 0 {
-			t.Fatal("mutation exception admitted an unrelated document")
+	for _, allowed := range []document{proposeAlarmActionMutation, proposeCommandMutation} {
+		if bad := notExactlyOneQuery([]document{allowed}); len(bad) != 0 {
+			t.Fatal(bad)
+		}
+		for _, d := range []document{
+			{area: "other-area", text: allowed.text},
+			{area: allowed.area, text: allowed.text + " mutation Execute { execute }"},
+			{area: allowed.area, text: "mutation ProposeCommand { approveAgentProposal(token: \"p\", digest: \"d\") { token } }"},
+			{area: allowed.area, text: strings.Replace(allowed.text, "proposeCommand(input: $input)", "createCommand(request: $input)", 1) + " "},
+		} {
+			if len(notExactlyOneQuery([]document{d})) == 0 {
+				t.Fatal("mutation exception admitted an unrelated document")
+			}
 		}
 	}
 	count := 0
@@ -359,12 +366,12 @@ func TestProposalMutationExceptionIsExact(t *testing.T) {
 		}
 		if len(ops) == 1 && ops[0] == "mutation" {
 			count++
-			if d != proposeAlarmActionMutation {
+			if d != proposeAlarmActionMutation && d != proposeCommandMutation {
 				t.Fatal("unexpected mutation")
 			}
 		}
 	}
-	if count != 1 {
-		t.Fatalf("mutations=%d want 1", count)
+	if count != 2 {
+		t.Fatalf("mutations=%d want 2", count)
 	}
 }

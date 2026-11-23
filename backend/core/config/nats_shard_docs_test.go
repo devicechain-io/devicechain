@@ -14,14 +14,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Keep the current upgrade guidance in every locale consistent with validation.
+// Keep the published placementTags guidance in every locale consistent with validation.
 // The shared range notation lets this check avoid depending on translated prose.
+//
+// The guidance is the v1.6 upgrade note that introduced shard groups. From v1.9 the living
+// releases page keeps v1.6 only as a stub under Older releases and links to the 1.6 docs
+// snapshot, so the snapshot is where an operator reads the range, and where it is held here.
 func TestNatsShardGroupsDocumentedPlacementRange(t *testing.T) {
 	docs := filepath.Join("..", "..", "..", "docs")
 	for _, page := range []string{
-		"docs/deployment/releases-and-upgrades.md",
-		"i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md",
-		"i18n/zh-CN/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md",
+		"versioned_docs/version-1.6/deployment/releases-and-upgrades.md",
+		"i18n/es/docusaurus-plugin-content-docs/version-1.6/deployment/releases-and-upgrades.md",
+		"i18n/zh-CN/docusaurus-plugin-content-docs/version-1.6/deployment/releases-and-upgrades.md",
 	} {
 		t.Run(page, func(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join(docs, filepath.FromSlash(page)))

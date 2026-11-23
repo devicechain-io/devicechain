@@ -346,14 +346,14 @@ export function AppSidebar() {
   const { pathname } = useLocation();
   const { t } = useTranslation('nav');
   const { claims, identityToken } = useAuth();
-  const askApprovalAccess = !isScoped(claims) && !hasAuthority(claims, 'agent:admin') && hasAuthority(claims, 'alarm:write');
+  const askApprovalAccess = !isScoped(claims) && !hasAuthority(claims, 'agent:admin') && (hasAuthority(claims, 'alarm:write') || hasAuthority(claims, 'command:read'));
   const approvalAccess = useQuery(() => askApprovalAccess ? getAgentApprovalAccess() : Promise.resolve(null),
     [askApprovalAccess, claims?.tenant, claims?.username, identityToken]);
   const tenant = useCurrentTenant();
   const brandLogo = useBrandingLogoSrc(tenant?.branding?.logo);
   const brandHeight = tenant?.branding?.logoMaxHeight ?? 24;
   const updates = useUpdateAccess();
-  const nav = visibleNav(claims, updates.canRead, !!approvalAccess.current?.instanceEnabled && approvalAccess.current.canApprove);
+  const nav = visibleNav(claims, updates.canRead, !!approvalAccess.current?.instanceEnabled && (approvalAccess.current.canApprove || hasAuthority(claims, 'command:read')));
   // Remembered per browser; read once. Absent or unreadable storage yields {} and the defaults.
   const [stored, setStored] = useState<NavOpenState>(readNavState);
 

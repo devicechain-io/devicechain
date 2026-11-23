@@ -349,22 +349,35 @@ function TargetsPanel({ rollout, reloadKey }: { rollout: UpdateRollout; reloadKe
   const { t } = useTranslation('updates');
   const [pageNumber, setPageNumber] = useState(1);
   const [outcome, setOutcome] = useState('');
+  const [cohort, setCohort] = useState('');
   const staged = rollout.cohorts.length > 0;
-  useEffect(() => setPageNumber(1), [outcome]);
+  useEffect(() => setPageNumber(1), [outcome, cohort]);
   const { data, loading, error } = useQuery(
     () =>
       listRolloutTargets(rollout.token, {
         pageNumber,
         pageSize: targetsPageSize,
         outcome: (outcome || undefined) as UpdateRolloutOutcome | undefined,
+        cohort: cohort === '' ? undefined : Number(cohort),
       }),
-    [rollout.token, pageNumber, outcome, reloadKey],
+    [rollout.token, pageNumber, outcome, cohort, reloadKey],
   );
 
   return (
     <SectionPanel
       title={t('rolloutTargetsTitle')}
       action={
+        <div className="flex flex-wrap gap-2">
+          {staged && (
+            <Combobox
+              className="h-9 w-44"
+              options={rollout.cohorts.map((c, i) => ({ value: String(i), label: `${i + 1} · ${c.name}` }))}
+              value={cohort}
+              onChange={setCohort}
+              placeholder={t('rolloutAnyCohort')}
+              ariaLabel={t('rolloutCohortFilterLabel')}
+            />
+          )}
         <Combobox
           className="h-9 w-44"
           options={OUTCOMES.map((o) => ({ value: o, label: rolloutOutcomeLabel(t, o) }))}
@@ -373,6 +386,7 @@ function TargetsPanel({ rollout, reloadKey }: { rollout: UpdateRollout; reloadKe
           placeholder={t('rolloutAnyOutcome')}
           ariaLabel={t('rolloutOutcomeFilterLabel')}
         />
+        </div>
       }
     >
       {loading && !data ? (
