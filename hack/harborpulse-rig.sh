@@ -140,7 +140,7 @@
 #   hack/harborpulse-rig.sh up        create the kind cluster dc-hprig (its own kubeconfig and host
 #                                     ports) and install and bootstrap an instance: images built
 #                                     from THIS tree, or a published release with DC_HPRIG_VERSION
-#   hack/harborpulse-rig.sh run       the offline controls, then the clean day and every control
+#   hack/harborpulse-rig.sh run       the offline controls, then the clean day and every control, in batches
 #   hack/harborpulse-rig.sh all       up + run
 #   hack/harborpulse-rig.sh controls  the offline controls only (no cluster)
 #   hack/harborpulse-rig.sh down      delete the cluster and dcctl's local state for it
@@ -170,13 +170,15 @@
 # fabricated reports, and the observer-credential check fed fabricated tokens.
 #
 # Knobs: DC_HPRIG_CONTROLS=none runs the clean day alone, or a comma list of control names runs
-# those (all control sims at once is a lot for a laptop: with the 34 runs S5 brings, a --compact instance answers previewRule late or partially and every day loses its verdict, so run it in batches, e.g. the eight S5 controls, then the rest); DC_HPRIG_KEEP=1 keeps the sims' tenants
-# afterwards; DC_HPRIG_SIM_PORT is the first sim's control port (the rest follow);
-# DC_HPRIG_SINK_PORT is the loopback port-forward to the sink.
+# those; DC_HPRIG_BATCH is how many runs share the instance at once (default 12; at least 4, or 0
+# for every run at once, which a --compact instance cannot carry: see "Batches" below);
+# DC_HPRIG_KEEP=1 keeps the sims' tenants afterwards; DC_HPRIG_SIM_PORT is the first sim's control
+# port (the rest of a batch follow); DC_HPRIG_SINK_PORT is the loopback port-forward to the sink.
 #
 # Requires: kind, kubectl, docker, jq, curl, go and ko (ko builds the sink image).
-# A run can take about 50 minutes: the verifier waits for a complete watch, continues through
+# A batch can take about 50 minutes: the verifier waits for a complete watch, continues through
 # 02:00 the following night and then watches the once-per-run rollout (up to six more minutes).
+# Every run (42 at S7) is four batches of 12.
 
 set -euo pipefail
 
@@ -193,6 +195,7 @@ sink_port="${DC_HPRIG_SINK_PORT:-28182}" # loopback port-forward to the in-clust
 sink_ns=harborpulse-sinks
 version="${DC_HPRIG_VERSION:-}"
 controls="${DC_HPRIG_CONTROLS:-all}"
+batch_size="${DC_HPRIG_BATCH:-12}"
 min_free_gb="${DC_HPRIG_MIN_FREE_GB:-60}"
 exe="$(go env GOEXE 2>/dev/null || true)"
 dcctl="$repo_root/backend/cli/build/dcctl$exe"
@@ -459,6 +462,43 @@ offline_controls() {
   done
   if out="$(observer_grant "not-a-token")"; then fail "observer: a string that is no JWT was accepted"; fi
   red "a string that is no JWT -> $out"
+
+  # The batch plan `run` follows, for the real run table at every size it is likely to be given.
+  local all_runs=() rr nm size plan why
+  for rr in "${runs[@]}"; do
+    IFS='|' read -r nm _ <<<"$rr"
+    all_runs+=("$nm")
+  done
+  for size in 0 "$batch_min" 12 "$batch_size" "${#all_runs[@]}"; do
+    plan="$(plan_batches "$size" "${all_runs[@]}")" || fail "batches: no plan for batch size $size"
+    why="$(check_plan "$size" "$plan" "${all_runs[@]}")" || fail "batches: the plan for batch size $size is wrong: $why"
+  done
+  plan="$(plan_batches 12 "${all_runs[@]}")"
+  [[ "$(wc -l <<<"$plan" | tr -d ' ')" == $(((${#all_runs[@]} + 11) / 12)) ]] ||
+    fail "batches: ${#all_runs[@]} runs in batches of 12 should take $(((${#all_runs[@]} + 11) / 12)) batches, the plan has $(wc -l <<<"$plan" | tr -d ' ')"
+  plan="$(plan_batches 12 clean flood-split-key witness)"
+  why="$(check_plan 12 "$plan" clean flood-split-key witness)" || fail "batches: a short DC_HPRIG_CONTROLS selection is planned wrong: $why"
+  pass "batches: every run is planned exactly once, no batch above its size, the witness's readers in the first"
+  local f4=$'clean witness isolation-cross-read mcp-wrong-answer\na b c d\ne'
+  why="$(check_plan 4 "$f4" clean a b c d e witness isolation-cross-read mcp-wrong-answer)" ||
+    fail "batches: the hand-made plan the controls below break was refused: $why"
+  for c in $'clean witness isolation-cross-read mcp-wrong-answer\na b c d|a run in no batch' \
+    $'clean witness isolation-cross-read mcp-wrong-answer\na b c d\ne clean|a run in two batches' \
+    $'clean witness isolation-cross-read mcp-wrong-answer\na b c d e|a batch above its size' \
+    $'clean witness isolation-cross-read a\nb c d e\nmcp-wrong-answer|an S7 control away from the witness' \
+    $'clean witness isolation-cross-read mcp-wrong-answer\na b c d\ne bogus|a run that was not selected' \
+    $'clean witness isolation-cross-read mcp-wrong-answer\n\na b c d\ne|an empty batch' \
+    '|no batch at all'; do
+    if out="$(check_plan 4 "${c%|*}" clean a b c d e witness isolation-cross-read mcp-wrong-answer)"; then
+      fail "batches: ${c##*|} was accepted"
+    fi
+    red "batches: ${c##*|} -> $out"
+  done
+  if out="$(check_plan 0 "$f4" clean a b c d e witness isolation-cross-read mcp-wrong-answer)"; then fail "batches: batch size 0 accepted three batches"; fi
+  red "batches: batch size 0 split in three -> $out"
+  if plan_batches 3 clean witness >/dev/null 2>&1; then fail "batches: a batch size below $batch_min was planned"; fi
+  if out="$(check_plan 3 "clean witness" clean witness)"; then fail "batches: a batch size below $batch_min was accepted"; fi
+  red "batches: batch size 3 -> $out"
 }
 
 require_s6_broker() {
@@ -643,7 +683,8 @@ cmd_down() {
 # takes for its own forward. Sims and verifiers are stopped before the tenants are destroyed; the
 # forwards, which the destroy goes through, after. The exit trap keeps that order, so a run that
 # fails part-way still removes the tenants it created (unless DC_HPRIG_KEEP=1).
-bg_pids=()      # sims and verifiers
+bg_pids=()      # sims and verifiers (of the current batch)
+aux_pids=()     # followers that outlive every batch
 fwd_pids=()     # port-forward loops
 created_sims=() # every sim this run asked dcctl to create, whose tenant it must destroy
 s7_oauth_client=""
@@ -668,6 +709,8 @@ stop_procs() {
   bg_pids=()
 }
 stop_forwards() {
+  ((${#aux_pids[@]} == 0)) || stop_group "${aux_pids[@]}"
+  aux_pids=()
   ((${#fwd_pids[@]} == 0)) || stop_group "${fwd_pids[@]}"
   fwd_pids=()
 }
@@ -763,37 +806,98 @@ selected() { # selected <run-name>: whether DC_HPRIG_CONTROLS includes it
   [[ ",$controls," == *",$1,"* ]]
 }
 
-cmd_run() {
-  need kubectl; need jq; need curl; need go
-  offline_controls
-  guard_live
-  k get ns "$namespace" >/dev/null 2>&1 || fail "no instance $instance on $kube_context: run 'hack/harborpulse-rig.sh up' first"
-  require_s6_broker
-  build_tools
-  if ! k -n "$sink_ns" get deploy hp-sink >/dev/null 2>&1; then
-    say "deploying the scenario sink"
-    deploy_sinks
-    note "the sink is at $(sink_ip): the instance must admit it (dcctl upgrade --dev-allow-egress) and run outbound-connectors"
-  fi
-  forward forward-http.log traefik svc/traefik "$http_port:80"
-  forward forward-ingest.log "$namespace" svc/event-sources "$ingest_port:8081"
-  forward forward-sink.log "$sink_ns" svc/hp-sink "$sink_port:8080"
-  require_s7_mcp
+# ---------------------------------------------------------------------------
+# Batches. Every sim is a tenant writing into the instance's ONE resolved-events stream, and every
+# verifier ends its day with two previewRule replays, each of which reads that stream - every
+# tenant's events - across the storm. So what a set of concurrent runs asks of the instance grows
+# with the square of its size, while the stream holds a fixed number of bytes: on a --compact
+# instance (64 MiB a hot stream) the 41 runs S7 brings, started together, had evicted the storm
+# before the previews read it ("history before the earliest retained event is unavailable") and
+# made the replays outlast the verifier's 30-second wait for response headers, so most days had
+# no verdict. That is the rig asking more of the instance than it is sized for; the preview
+# reported it correctly.
+#
+# So `run` creates, runs, judges and destroys one batch before it creates the next. The clean
+# day, the witness (S7's tenant B) and the S7 controls share the first batch, because their
+# verifiers read the witness's live sim.
+#   plan_batches <size> <run-name...>       one line per batch, its run names separated by spaces;
+#                                           size 0 is one batch of every run
+#   check_plan <size> <plan> <run-name...>  prints why plan is not a batching of exactly those runs
+# ---------------------------------------------------------------------------
+batch_min=4 # the first batch's own runs must fit it
+first_batch_runs=(clean witness isolation-cross-read mcp-wrong-answer)
 
-  # The callout, rather than the sim's dial error, supplies certificate rejection evidence.
-  # Derive the selector from this instance's deployment so every current replica is read.
-  local auth_selector auth_log="$state_dir/auth-callout.jsonl"
-  auth_selector="$(k -n "$namespace" get deployment device-management -o json | jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')"
-  [[ -n "$auth_selector" ]] || fail "S6: no device-management pod selector"
-  start_bg "$auth_log" k -n "$namespace" logs -l "$auth_selector" --all-containers=true \
-    --max-log-requests=50 --since=1m --follow=true --prefix=false
-  bg_pids+=("$last_bg")
+batch_size_ok() { [[ "$1" =~ ^[0-9]+$ ]] && { (($1 == 0)) || (($1 >= batch_min)); }; }
 
+in_first_batch() {
+  local f
+  for f in "${first_batch_runs[@]}"; do [[ "$1" == "$f" ]] && return 0; done
+  return 1
+}
+
+plan_batches() {
+  local size="$1" r line="" n=0
+  shift
+  batch_size_ok "$size" || { echo "batch size '$size' is neither 0 (one batch) nor at least $batch_min" >&2; return 1; }
+  for r in "$@"; do
+    in_first_batch "$r" || continue
+    line+="${line:+ }$r"
+    n=$((n + 1))
+  done
+  for r in "$@"; do
+    in_first_batch "$r" && continue
+    if ((size > 0 && n >= size)); then
+      printf '%s\n' "$line"
+      line="" n=0
+    fi
+    line+="${line:+ }$r"
+    n=$((n + 1))
+  done
+  [[ -z "$line" ]] || printf '%s\n' "$line"
+}
+
+check_plan() {
+  local size="$1" plan="$2" line r b=0 count first="" seen=" "
+  shift 2
+  batch_size_ok "$size" || { echo "batch size '$size' is neither 0 (one batch) nor at least $batch_min"; return 1; }
+  [[ -n "$plan" ]] || { echo "the plan has no batch"; return 1; }
+  while IFS= read -r line; do
+    b=$((b + 1))
+    [[ -n "$line" ]] || { echo "batch $b is empty"; return 1; }
+    ((b > 1)) || first=" $line "
+    count=0
+    for r in $line; do
+      count=$((count + 1))
+      [[ "$seen" != *" $r "* ]] || { echo "$r is in more than one batch"; return 1; }
+      seen+="$r "
+    done
+    ((size == 0 || count <= size)) || { echo "batch $b holds $count runs, above the batch size $size"; return 1; }
+  done <<<"$plan"
+  ((size > 0 || b == 1)) || { echo "batch size 0 is one batch, but the plan has $b"; return 1; }
+  for r in "$@"; do
+    [[ "$seen" == *" $r "* ]] || { echo "$r is in no batch"; return 1; }
+  done
+  for r in $seen; do
+    [[ " $* " == *" $r "* ]] || { echo "$r is in a batch but was not selected"; return 1; }
+    ! in_first_batch "$r" || [[ "$first" == *" $r "* ]] ||
+      { echo "$r is not in the first batch, which the readers of the witness share"; return 1; }
+  done
+}
+
+# run_batch <n> <of> <run-name...>: create, run, judge and destroy one batch (see plan_batches).
+# A run that fails its judgement sets rig_bad; a broken environment still fails at once. It is
+# never called in a condition, which would switch errexit off for everything it runs.
+rig_bad=0
+run_batch() {
+  local batch_no="$1" nbatches="$2"
+  shift 2
+  local members=" $* "
   local stamp r name flags want port i=0 sims=() hs tier tier_config
   stamp="$(date -u +%H%M%S)"
+  say "batch $batch_no of $nbatches: $*"
   for r in "${runs[@]}"; do
     IFS='|' read -r name flags want tier tier_config <<<"$r"
-    selected "$name" || continue
+    [[ "$members" == *" $name "* ]] || continue
     port=$((sim_port + i))
     i=$((i + 1))
     local sname="hprig-$name-$stamp"
@@ -841,8 +945,10 @@ cmd_run() {
     note "$sname running on :$port"
   done
 
-  s7_oauth_client="hprig-s7-$stamp-$$"
-  s7_registry create || fail "could not register this run's PKCE client"
+  if [[ -n "$s7_peer_handshake" ]]; then
+    s7_oauth_client="hprig-s7-$stamp-$$"
+    s7_registry create || fail "could not register this run's PKCE client"
+  fi
   say "verifying (the next whole sim day of each run; about 30 minutes)"
   local vpids=()
   for s in "${sims[@]}"; do
@@ -887,8 +993,54 @@ cmd_run() {
 
   stop_procs
   destroy_sims || bad=1
+  s7_peer_handshake="" s7_peer_port=""
+  ((bad == 0)) || rig_bad=1
+}
+
+cmd_run() {
+  need kubectl; need jq; need curl; need go
+  offline_controls
+  guard_live
+  k get ns "$namespace" >/dev/null 2>&1 || fail "no instance $instance on $kube_context: run 'hack/harborpulse-rig.sh up' first"
+  require_s6_broker
+  build_tools
+  if ! k -n "$sink_ns" get deploy hp-sink >/dev/null 2>&1; then
+    say "deploying the scenario sink"
+    deploy_sinks
+    note "the sink is at $(sink_ip): the instance must admit it (dcctl upgrade --dev-allow-egress) and run outbound-connectors"
+  fi
+  forward forward-http.log traefik svc/traefik "$http_port:80"
+  forward forward-ingest.log "$namespace" svc/event-sources "$ingest_port:8081"
+  forward forward-sink.log "$sink_ns" svc/hp-sink "$sink_port:8080"
+  require_s7_mcp
+
+  # The callout, rather than the sim's dial error, supplies certificate rejection evidence.
+  # Derive the selector from this instance's deployment so every current replica is read.
+  local auth_selector auth_log="$state_dir/auth-callout.jsonl"
+  auth_selector="$(k -n "$namespace" get deployment device-management -o json | jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')"
+  [[ -n "$auth_selector" ]] || fail "S6: no device-management pod selector"
+  start_bg "$auth_log" k -n "$namespace" logs -l "$auth_selector" --all-containers=true \
+    --max-log-requests=50 --since=1m --follow=true --prefix=false
+  aux_pids+=("$last_bg")
+
+  local selected_runs=() r name plan why b batches=()
+  for r in "${runs[@]}"; do
+    IFS='|' read -r name _ <<<"$r"
+    if selected "$name"; then selected_runs+=("$name"); fi
+  done
+  plan="$(plan_batches "$batch_size" "${selected_runs[@]}")" || fail "DC_HPRIG_BATCH: batch size '$batch_size' is neither 0 (one batch) nor at least $batch_min"
+  why="$(check_plan "$batch_size" "$plan" "${selected_runs[@]}")" || fail "the batch plan is wrong: $why"
+  # Read whole before any batch runs: a batch must not run with the plan on its stdin.
+  mapfile -t batches <<<"$plan"
+  rig_bad=0
+  for b in "${!batches[@]}"; do
+    # shellcheck disable=SC2086 # a batch line is its run names
+    run_batch "$((b + 1))" "${#batches[@]}" ${batches[$b]}
+  done
+
+  stop_procs
   stop_forwards
-  ((bad == 0)) || fail "the harborpulse rig is red"
+  ((rig_bad == 0)) || fail "the harborpulse rig is red"
   say "ALL CHECKS PASSED"
 }
 
