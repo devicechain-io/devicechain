@@ -71,7 +71,7 @@ func TestTheDeprecatedInstanceFieldsSayWhatReplacesThem(t *testing.T) {
 }
 
 // The deprecations are of FIELDS of Instance, never of its version: Instance v1beta1 stays the
-// served, undeprecated version until v1 exists.
+// served, undeprecated version while it is the stored one.
 func TestTheInstanceVersionItselfIsNotDeprecated(t *testing.T) {
 	versions := loadInstanceCRD(t)["spec"].(map[string]interface{})["versions"].([]interface{})
 	for _, v := range versions {

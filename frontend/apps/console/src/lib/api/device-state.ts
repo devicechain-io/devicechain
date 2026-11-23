@@ -66,6 +66,7 @@ const LATEST_MEASUREMENTS = graphql(`
       id
       name
       value
+      textValue
       occurredTime
     }
   }

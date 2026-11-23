@@ -16,7 +16,7 @@ title: 空中（OTA）更新
 
 ## 启用 {#enabling}
 
-`update-management` 属于 `default` 配置档（因此也属于 `full`）；只有 `telemetry` 和 `ingest-only` 不包含它，可在 `enabledFunctionalAreas` 中列出。它依赖 `device-management`，并将制品内容保存在[对象存储](./object-storage.md)中：未配置存储时，声明制品会以 `OBJECT_STORE_NOT_CONFIGURED` 被拒绝。在 S3 后端上，上传内容会缓冲在内存中，因此无论配置的上限是多少，制品在该后端上都限制为 64 MiB。
+`update-management` 属于 `default` 配置档（因此也属于 `full`）；只有 `telemetry` 和 `ingest-only` 不包含它，可在 `enabledFunctionalAreas` 中列出。它依赖 `device-management`，并将制品内容保存在[对象存储](./object-storage.md)中：未配置存储时，声明制品会以 `OBJECT_STORE_NOT_CONFIGURED` 被拒绝。
 
 ### 第一次更新之前 {#first-update}
 

@@ -58,7 +58,7 @@ On an instance built with `dcctl`, none of this is hand-written: `dcctl bootstra
 
 Tenant white-labeling is the first feature built on the object store. A tenant's logo uploads into the store and is referenced by handle from the tenant's branding configuration. Very small assets can still be supplied inline (a bounded data-URI) for deployments with no storage wired up, but real image assets go through the store. The branding record's `background` is a hex color, not an image.
 
-The second consumer is [over-the-air updates](./over-the-air-updates.md). Each update artifact's content is stored here: streamed in on upload, verified against its declared size and digest, and served to devices through a short-lived download grant. On the S3 backend an upload is buffered in memory, so artifacts are limited to 64 MiB there.
+The second consumer is [over-the-air updates](./over-the-air-updates.md). Each update artifact's content is stored here: streamed in on upload, verified against its declared size and digest, and served to devices through a short-lived download grant.
 
 ## Related
 

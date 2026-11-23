@@ -1,9 +1,9 @@
 /* eslint-disable */
+import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 /** Internal type. DO NOT USE DIRECTLY. */
 type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
-import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 /**
  * Filter and paging for searching device states. Results are newest first (by row creation). To
  * look up specific devices use deviceStatesByDeviceToken.
@@ -23,7 +23,7 @@ export type DeviceStateSearchCriteria = {
  * profile to store it.
  */
 export type DroppedMeasurementReason =
-  /** The key is declared on the profile with a data type that is not a time-series metric. */
+  /** The key is declared on the profile, but its value cannot be stored: a data type no reading can be stored as, or a STRING value over 4096 bytes, not valid UTF-8 or holding a NUL byte. */
   | 'DECLARED_NOT_STORABLE'
   /** The key is not declared on the profile and its value is not a number, for example the text "ok". */
   | 'UNDECLARED_NON_NUMERIC'
@@ -45,7 +45,7 @@ export type LatestMeasurementsQueryVariables = Exact<{
 }>;
 
 
-export type LatestMeasurementsQuery = { latestMeasurements: Array<{ id: string, name: string, value: number | null, occurredTime: string }> };
+export type LatestMeasurementsQuery = { latestMeasurements: Array<{ id: string, name: string, value: number | null, textValue: string | null, occurredTime: string }> };
 
 export type DroppedMeasurementsQueryVariables = Exact<{
   deviceToken: string;
@@ -108,6 +108,7 @@ export const LatestMeasurementsDocument = new TypedDocumentString(`
     id
     name
     value
+    textValue
     occurredTime
   }
 }

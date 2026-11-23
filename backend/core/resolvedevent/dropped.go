@@ -17,8 +17,9 @@ const (
 	// DropUndeclaredUnstorable: the key is not on the profile and its value is numeric but
 	// cannot be stored (NaN, +/-Inf, or beyond decimal(20,8)).
 	DropUndeclaredUnstorable = "undeclared_unstorable"
-	// DropDeclaredNotStorable: the key is declared with a data type that is not a time-series
-	// metric (defensive: creating such a definition is already refused).
+	// DropDeclaredNotStorable: the key is declared, but its value cannot be stored: a data type no
+	// reading can be stored as (defensive: creating such a definition is already refused), or a
+	// STRING value over the size bound, not valid UTF-8 or holding a NUL byte.
 	DropDeclaredNotStorable = "declared_not_storable"
 )
 

@@ -304,13 +304,13 @@ experiment() {
     E-a) probe_a ;;
     E-b) probe_b ;;
     E-c) probe_c ;;
-    E-d) not_implemented "E-d: pinned-issuer JWKS publisher and kind runner credential fixtures, including recreated KSA UID and three rejected exchanges" ;;
+    E-d) probe_d ;;
     E-e) probe_e ;;
-    E-f) not_implemented "E-f: surviving partitioned runner instrumentation for KSA, STS and access-token lifetimes and no-cut control beyond computed bound" ;;
+    E-f) probe_f ;;
     E-f2) probe_f2 ;;
     E-g) if [[ $S0_BACKEND == pg ]]; then probe_g_pg; else probe_g_gcs; fi ;;
-    E-h) not_implemented "E-h: provider checkpoint instrumentation for five crash points, recovery import and unplanned-delete capture" ;;
-    E-i) not_implemented "E-i: candidate apply-role fixture and workload-data targets for every indirect access path in spec section 3.4" ;;
+    E-h) probe_h ;;
+    E-i) probe_i ;;
     E-j) probe_j ;;
     E-k) probe_k ;;
     E-l) probe_l ;;

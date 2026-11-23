@@ -66,7 +66,7 @@ func newEnvWith(t *testing.T, maxConcurrent int) *env {
 	store, err := blob.New(context.Background(), blob.Config{Backend: blob.BackendFilesystem, Directory: dir}, "inst")
 	require.NoError(t, err)
 	api := model.NewApi(&rdb.RdbManager{Database: db}, store, model.Limits{
-		MaxArtifactBytes: 64 << 20, ConfiguredMaxArtifactBytes: 64 << 20, MaxTenantArtifactBytes: 1 << 30,
+		MaxArtifactBytes: 64 << 20, MaxTenantArtifactBytes: 1 << 30,
 	})
 	api.Profiles = profiles{}
 

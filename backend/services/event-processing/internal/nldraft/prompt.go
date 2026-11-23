@@ -90,7 +90,9 @@ func buildSystemPrompt(metrics []MetricHint) string {
 	b.WriteString(systemPromptBase)
 	b.WriteString("\n\nAvailable metrics for this device profile (use these keys EXACTLY):")
 	for _, m := range metrics {
-		if m.Key == "" {
+		// A STRING metric is text: a rule never sees it as a number, so offering it would draft
+		// a rule that can never fire.
+		if m.Key == "" || m.DataType == "STRING" {
 			continue
 		}
 		b.WriteString("\n- ")

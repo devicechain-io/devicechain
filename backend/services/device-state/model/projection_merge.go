@@ -195,7 +195,7 @@ func coalesceMeasurements(deviceToken string, inputs []LatestMeasurementInput) [
 		at := storedTime(in.OccurredTime)
 		if i, ok := byName[in.Name]; ok {
 			if at.After(rows[i].OccurredTime) {
-				rows[i].Value, rows[i].Classifier, rows[i].Unit, rows[i].DataType = in.Value, in.Classifier, in.Unit, in.DataType
+				rows[i].Value, rows[i].TextValue, rows[i].Classifier, rows[i].Unit, rows[i].DataType = in.Value, in.TextValue, in.Classifier, in.Unit, in.DataType
 				rows[i].OccurredTime = at
 			}
 			continue
@@ -205,6 +205,7 @@ func coalesceMeasurements(deviceToken string, inputs []LatestMeasurementInput) [
 			DeviceToken:  deviceToken,
 			Name:         in.Name,
 			Value:        in.Value,
+			TextValue:    in.TextValue,
 			Classifier:   in.Classifier,
 			Unit:         in.Unit,
 			DataType:     in.DataType,

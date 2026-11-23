@@ -13,6 +13,7 @@ import (
 	devicestate "github.com/devicechain-io/dc-device-state/model"
 	eventmanagement "github.com/devicechain-io/dc-event-management/model"
 	eventprocessing "github.com/devicechain-io/dc-event-processing/model"
+	fleet "github.com/devicechain-io/dc-fleet/schema"
 	notificationmanagement "github.com/devicechain-io/dc-notification-management/schema"
 	outboundconnectors "github.com/devicechain-io/dc-outbound-connectors/schema"
 	updatemanagement "github.com/devicechain-io/dc-update-management/schema"
@@ -36,7 +37,17 @@ type area struct {
 	// those bodies — dropping the tenant predicate, say — and `verify` would report
 	// every area green, because it would never have looked.
 	extraSchemas []string
+
+	// dbSuffix is appended to the database name this area is migrated into. Empty for every tenant
+	// area, which share one database the way an instance's areas do. A non-tenant instance type
+	// (fleet) is migrated into a database of its own, because the tenant-purge classification
+	// reads EVERY table in EVERY non-system schema of the database it is given and a fleet table,
+	// which has no tenant column by design, would be reported as an unclassified tenant table.
+	dbSuffix string
 }
+
+// database is the database this area is migrated into, given the run's base database.
+func (a area) database(base string) string { return base + a.dbSuffix }
 
 // schemas is every Postgres schema this area's golden covers, area schema first.
 func (a area) schemas() []string {
@@ -66,4 +77,20 @@ var areas = []area{
 	{name: "outbound-connectors", migrations: outboundconnectors.Migrations},
 	{name: "update-management", migrations: updatemanagement.Migrations},
 	{name: "user-management", migrations: usermanagement.Migrations},
+}
+
+// fleetAreas are the migration chains of NON-TENANT instance types. They are deliberately a
+// separate list from areas: `verify`, `snapshot` and `replay` visit both, but everything that is
+// about tenant data (the previous-release fixtures, the state-writer check, the tenant-purge
+// coverage and drill) iterates areas only. A fleet table is not tenant-scoped, and adding it to
+// areas would make each of those fail until someone decided where it belongs, which is the point
+// of keeping it out. runtime asserts no fleet schema holds a tenant_id column.
+var fleetAreas = []area{
+	{name: "fleet", migrations: fleet.Migrations, dbSuffix: "_fleet"},
+}
+
+// allAreas is every area the schema gates (verify, snapshot, replay) visit: the tenant areas,
+// then the non-tenant ones.
+func allAreas() []area {
+	return append(append([]area(nil), areas...), fleetAreas...)
 }

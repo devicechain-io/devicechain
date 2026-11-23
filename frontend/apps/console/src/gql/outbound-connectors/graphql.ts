@@ -1,9 +1,9 @@
 /* eslint-disable */
+import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 /** Internal type. DO NOT USE DIRECTLY. */
 type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
-import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 /**
  * Fields for a new connector. The type must be one this deployment can deliver to, and
  * the config must be valid for that type; either failing rejects the create.
