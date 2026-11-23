@@ -81,6 +81,8 @@ jobs:
       # Whether the two `migrations` jobs run: true unless no changed file reaches a package
       # hack/migration-diff.sh compiles (or its operand image). Always true off a pull request.
       migrations: ${{ steps.select.outputs.migrations }}
+      # Whether the fleet-runner job runs: true unless the diff reaches nothing it builds or runs against.
+      fleet_runner: ${{ steps.select.outputs.fleet_runner }}
       # The image-smoke legs this run executes: the images whose module runs whole (or one of
       # their image inputs changed), from hack/ci-select.py; every image off a pull request.
       smoke: ${{ steps.select.outputs.smoke }}
@@ -440,12 +442,14 @@ jobs:
           case "$frontend" in true|false) ;; *) echo "::error::frontend verdict is '$frontend'"; exit 1 ;; esac
           migrations="$(jq -r '.migrations' <<<"$sel")"
           case "$migrations" in true|false) ;; *) echo "::error::migrations verdict is '$migrations'"; exit 1 ;; esac
+          fleet_runner="$(jq -r '.fleet_runner' <<<"$sel")"
+          case "$fleet_runner" in true|false) ;; *) echo "::error::fleet_runner verdict is '$fleet_runner'"; exit 1 ;; esac
           smoke="$(jq -c '.smoke' <<<"$sel")"
           jq -e 'type == "array"' <<<"$smoke" >/dev/null || { echo "::error::smoke plan is '$smoke'"; exit 1; }
           draft="$(jq -r '.draft' <<<"$sel")"
           case "$draft" in true|false) ;; *) echo "::error::draft verdict is '$draft'"; exit 1 ;; esac
           # A run that is not a pull request must plan every module; the script asserts the same.
-          if [ "$GITHUB_EVENT_NAME" != pull_request ] && { [ "$(jq -r '.full' <<<"$sel")" != true ] || [ "$migrations" != true ] || [ "$draft" != false ] || [ "$smoke" != "$SMOKE_MODULES" ] \
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] && { [ "$(jq -r '.full' <<<"$sel")" != true ] || [ "$migrations" != true ] || [ "$fleet_runner" != true ] || [ "$draft" != false ] || [ "$smoke" != "$SMOKE_MODULES" ] \
              || ! jq -e '[.go[] | (.batch // [.])[]] | all(.race_scope == "all")' <<<"$sel" >/dev/null; }; then
             echo "::error::a $GITHUB_EVENT_NAME run selected a subset"
             exit 1
@@ -455,6 +459,7 @@ jobs:
             echo "integration=$integ"
             echo "frontend=$frontend"
             echo "migrations=$migrations"
+            echo "fleet_runner=$fleet_runner"
             echo "smoke=$smoke"
             echo "draft=$draft"
           } >> "$GITHUB_OUTPUT"
@@ -3807,6 +3812,10 @@ jobs:
   # nothing. A missing tofu or a missing database FAILS those tests; they never skip.
   # ---------------------------------------------------------------------------
   fleet-runner:
+    needs: discover
+    # Skipped when the diff reaches nothing the runner builds from or runs against (hack/ci-select.py
+    # FLEET_RUNNER_INPUTS); ci-complete accepts the skip only with a successful discover that said so.
+    if: needs.discover.outputs.fleet_runner == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -3846,8 +3855,8 @@ jobs:
           set -o pipefail
           DC_FLEET_TOFU="$(command -v tofu)"
           export DC_FLEET_TOFU
-          go test -tags fleetpg -count=1 -timeout 20m -json ./tofurun | ../../hack/check-fleetpg-count.sh TestFleetPG 8
-          go test -tags fleetpg -count=1 -timeout 20m -json ./tofurun/slotfence | ../../hack/check-fleetpg-count.sh TestFleetPG 5
+          go test -tags fleetpg -count=1 -timeout 20m -json ./tofurun | ../../hack/check-fleetpg-count.sh TestFleetPG 1 9
+          go test -tags fleetpg -count=1 -timeout 20m -json ./tofurun/slotfence | ../../hack/check-fleetpg-count.sh TestFleetPG 1 5
 
       # The image itself, built for real: the pinned tofu verified against its checksum, the roots
       # baked with their lock files and providers mirrored, the runner's own layout check run in
@@ -3938,6 +3947,7 @@ jobs:
                 elif $job == "integration" and $d.outputs.integration == "[]" then "discover planned no integration legs"
                 elif $job == "image-smoke" and $d.outputs.smoke == "[]" then "discover planned no image-smoke legs"
                 elif $job == "frontend" and $d.outputs.frontend == "false" then "the diff reaches nothing the frontend reads"
+                elif $job == "fleet-runner" and $d.outputs.fleet_runner == "false" then "the diff reaches nothing the fleet runner builds from or runs against"
                 elif ($job == "migrations" or $job == "migrations-timescaledb-next") and $d.outputs.migrations == "false" then "the diff reaches nothing migration-diff.sh compiles"
                 else empty end' <<<"$NEEDS"
           }

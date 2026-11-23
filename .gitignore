@@ -53,6 +53,9 @@ config.local.yaml
 # OpenTofu / Terraform
 .terraform/
 .terraform.lock.hcl
+# ...except the fleet roots': the runner image bakes them and initialises with -lockfile=readonly,
+# so the providers a run executes are the ones a reviewer saw.
+!deploy/fleet/*/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfplan

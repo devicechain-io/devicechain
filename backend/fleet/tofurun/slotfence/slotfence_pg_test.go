@@ -106,9 +106,9 @@ func newFx(t *testing.T) *fx {
 	})
 	require.NoError(t, err)
 
-	apply, err := tofurun.NewCredential(tofurun.ClassApply, "fleet-apply@example", map[string]string{"FLEET_FAKE_CLOUD_TOKEN": "apply-token"})
+	apply, err := tofurun.NewCredentialAllowing(tofurun.ClassApply, "fleet-apply@example", map[string]string{"FLEET_FAKE_CLOUD_TOKEN": "apply-token"}, "FLEET_FAKE_")
 	require.NoError(t, err)
-	destroy, err := tofurun.NewCredential(tofurun.ClassDestroy, "fleet-destroy@example", map[string]string{"FLEET_FAKE_CLOUD_TOKEN": "destroy-token"})
+	destroy, err := tofurun.NewCredentialAllowing(tofurun.ClassDestroy, "fleet-destroy@example", map[string]string{"FLEET_FAKE_CLOUD_TOKEN": "destroy-token"}, "FLEET_FAKE_")
 	require.NoError(t, err)
 
 	work := t.TempDir()

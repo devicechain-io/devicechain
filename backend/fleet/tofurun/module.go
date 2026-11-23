@@ -38,7 +38,8 @@ func refusedName(rel string) string {
 		return "a variable file (inputs arrive as environment, never from the tree)"
 	case base == ".terraformrc" || base == "terraform.rc":
 		return "a CLI config file"
-	case strings.HasSuffix(base, ".override.tf") || base == "override.tf" || strings.HasSuffix(base, "_override.tf"):
+	case strings.HasSuffix(base, ".override.tf") || base == "override.tf" || strings.HasSuffix(base, "_override.tf") ||
+		strings.HasSuffix(base, ".override.tofu") || base == "override.tofu" || strings.HasSuffix(base, "_override.tofu"):
 		return "an override file"
 	}
 	return ""
@@ -95,6 +96,17 @@ func walkModule(root string) ([]moduleFile, error) {
 		return nil, err
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].rel < files[j].rel })
+	// OpenTofu reads foo.tofu INSTEAD of foo.tf when both exist: a .tofu file beside a .tf of the
+	// same name would silently replace the baked one.
+	have := make(map[string]bool, len(files))
+	for _, f := range files {
+		have[f.rel] = true
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f.rel, ".tofu") && have[strings.TrimSuffix(f.rel, ".tofu")+".tf"] {
+			return nil, fmt.Errorf("%w: %s shadows %s.tf", ErrModuleRefused, f.rel, strings.TrimSuffix(f.rel, ".tofu"))
+		}
+	}
 	return files, nil
 }
 

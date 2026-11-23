@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -84,22 +85,49 @@ func scrub(s string, secrets []string) string {
 	return s
 }
 
+// diagnosticTail is the one diagnostic returned from a failed command: the SECRETS ARE SCRUBBED
+// FROM THE WHOLE BUFFER FIRST and the end of it is cut afterwards, so a secret that straddles the
+// cut is replaced, not half-shown.
+func diagnosticTail(raw []byte, secrets []string) string {
+	tail := scrub(string(raw), secrets)
+	if len(tail) > tailCap {
+		tail = tail[len(tail)-tailCap:]
+	}
+	return strings.TrimSpace(tail)
+}
+
+// graceFor is how long a command may take to stop after its context is cancelled: tofu is sent an
+// interrupt (it finishes the operation it is in and writes state), and the process group is killed
+// only after the grace. An apply gets the long one.
+func (s *Session) graceFor(sub string) time.Duration {
+	if sub == "apply" {
+		return s.r.cfg.ApplyGrace
+	}
+	return 30 * time.Second
+}
+
 // exec runs tofu with the session's environment. okCodes are exit codes treated as success
-// (`plan -detailed-exitcode` answers 2 for "changes").
+// (`plan -detailed-exitcode` answers 2 for "changes"). Output is held only when capture is set;
+// otherwise it is discarded (a plan or apply prints far more than any cap, and none of it is wanted).
 func (s *Session) exec(ctx context.Context, sub string, args []string, capture bool, okCodes ...int) ([]byte, int, error) {
 	cmd := exec.CommandContext(ctx, s.bin, append([]string{sub}, args...)...)
 	cmd.Dir = s.moduleDir
 	cmd.Env = s.env
-	stdout := &capBuffer{cap: 4096}
+	var stdout *capBuffer
 	if capture {
-		stdout.cap = stdoutCap
+		stdout = &capBuffer{cap: stdoutCap}
+		cmd.Stdout = stdout
+	} else {
+		cmd.Stdout = io.Discard
 	}
 	stderr := &tailBuffer{}
-	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	// A cancelled context kills tofu; a provider or provisioner it spawned may still hold the
-	// output pipes, and without a bound Run would wait on them for as long as they live.
-	cmd.WaitDelay = 15 * time.Second
+	grace := s.graceFor(sub)
+	stop := controlProcess(cmd, grace)
+	defer stop()
+	// A provider or provisioner tofu spawned may still hold the output pipes after tofu is gone;
+	// without a bound Run would wait on them for as long as they live.
+	cmd.WaitDelay = grace + 15*time.Second
 	err := cmd.Run()
 	code := 0
 	if err != nil {
@@ -115,18 +143,14 @@ func (s *Session) exec(ctx context.Context, sub string, args []string, capture b
 			}
 		}
 		if !ok {
-			tail := string(stderr.b)
-			if len(tail) > tailCap {
-				tail = tail[len(tail)-tailCap:]
-			}
-			return nil, code, &ExitError{Command: sub, Code: code, Tail: strings.TrimSpace(scrub(tail, s.secrets))}
+			return nil, code, &ExitError{Command: sub, Code: code, Tail: diagnosticTail(stderr.b, s.secrets)}
 		}
-	}
-	if stdout.overflow {
-		return nil, code, fmt.Errorf("tofurun: tofu %s produced more than the output cap", sub)
 	}
 	if !capture {
 		return nil, code, nil
+	}
+	if stdout.overflow {
+		return nil, code, fmt.Errorf("tofurun: tofu %s produced more than the output cap", sub)
 	}
 	return stdout.buf.Bytes(), code, nil
 }

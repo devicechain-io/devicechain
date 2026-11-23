@@ -127,7 +127,7 @@ func TestGateMatrix(t *testing.T) {
 		{"unlisted type changing is forbidden in create", KindCreate, facts(t, foreign), false},
 		{"unlisted type is forbidden in destroy too", KindDestroy, facts(t, rc("other.a", "other", []string{"delete"}, nil, nil)), false},
 		{"unlisted type that does nothing is not a change", KindCreate, facts(t, foreignNoop), true},
-		{"unknown kind", Kind("UNPROTECT"), facts(t, noop), false},
+		{"unknown kind", Kind("DETACH"), facts(t, noop), false},
 	}
 	for _, c := range cases {
 		v := allowT.Judge(c.kind, c.plan)

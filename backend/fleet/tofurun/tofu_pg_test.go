@@ -69,7 +69,7 @@ func tokenCred(t *testing.T, class IdentityClass, token string) Credential {
 	if token != "" {
 		env["FLEET_FAKE_CLOUD_TOKEN"] = token
 	}
-	c, err := NewCredential(class, "fleet-"+string(class)+"@example", env)
+	c, err := NewCredentialAllowing(class, "fleet-"+string(class)+"@example", env, "FLEET_FAKE_")
 	require.NoError(t, err)
 	return c
 }
@@ -575,4 +575,19 @@ func TestFleetPGTofuRootPathKeepsRelativeModulesResolving(t *testing.T) {
 	q.ModuleDir = tofutest.Tree(t, "reltree") + "/roots/app"
 	_, err = e.runner.Open(ctx, q)
 	require.Error(t, err, "copying the root alone loses ../../modules/inner")
+}
+
+// A real plan and a real apply print far more than any output cap. Output that is not captured must
+// be discarded, not counted against a cap and turned into a failure after a SUCCESSFUL command.
+func TestFleetPGTofuLargeOutputDoesNotFailASuccessfulRun(t *testing.T) {
+	e := newEnv(t, nil)
+	ctx := context.Background()
+	s := e.open(run1, KindCreate, map[string]string{"noise": "200"})
+	pr, err := s.Plan(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 201, pr.Facts.ChangeCount)
+	_, err = s.Apply(ctx, Approval{FactsDigest: pr.Digest, Head: pr.Head})
+	require.NoError(t, err, "a long apply that succeeded is a success")
+	require.NoError(t, s.Close(ctx))
+	require.True(t, e.fence.completed[0].Succeeded)
 }

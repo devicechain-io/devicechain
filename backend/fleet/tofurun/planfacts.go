@@ -53,6 +53,7 @@ func Extract(doc []byte) PlanFacts {
 	}
 	var p struct {
 		FormatVersion   string            `json:"format_version"`
+		Errored         bool              `json:"errored"`
 		ResourceChanges []json.RawMessage `json:"resource_changes"`
 		ResourceDrift   []json.RawMessage `json:"resource_drift"`
 	}
@@ -62,6 +63,10 @@ func Extract(doc []byte) PlanFacts {
 	pf.FormatVer = p.FormatVersion
 	if major, _, _ := strings.Cut(p.FormatVersion, "."); major != "1" {
 		return refuse(fmt.Sprintf("unknown plan format_version %q", truncate(p.FormatVersion, 20)))
+	}
+	if p.Errored {
+		// A plan tofu marked errored is not a plan to act on, however few changes it lists.
+		return refuse("the plan is marked errored")
 	}
 	pf.DriftCount = len(p.ResourceDrift)
 	for _, raw := range p.ResourceChanges {

@@ -6,6 +6,7 @@ package tofurun
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // Class is how a change is judged. Unclassified is not a class: it is a refusal.
@@ -62,11 +63,47 @@ func isPureDelete(actions []string) bool {
 	return len(actions) == 1 && actions[0] == "delete"
 }
 
+// protectedPaths are attribute names only the teardown protocol's UNPROTECT and REPROTECT runs may
+// change on an existing resource: flipping deletion_protection is what makes a cluster deletable.
+var protectedPaths = []string{"deletion_protection"}
+
+func touchesProtected(f Fact) bool {
+	if len(f.Actions) == 1 && f.Actions[0] == "create" {
+		return false // a new resource is born with its protection; that is not a change of it
+	}
+	for _, p := range f.ChangedPaths {
+		for _, pp := range protectedPaths {
+			if p == pp || strings.HasSuffix(p, "."+pp) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func onlyProtected(f Fact) bool {
+	if len(f.ChangedPaths) == 0 {
+		return false
+	}
+	for _, p := range f.ChangedPaths {
+		ok := false
+		for _, pp := range protectedPaths {
+			ok = ok || p == pp || strings.HasSuffix(p, "."+pp)
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // Judge applies the rules for kind to facts:
 //
 //   - CREATE, CHANGE, UPGRADE: create and update only. Any delete or replacement is refused.
 //   - DRIFT_CHECK, RECOVER: refresh-only. Any change, and any drift on a RECOVER, is refused.
 //   - DESTROY: pure deletes only; an update or create in a destroy plan is refused.
+//   - UNPROTECT, REPROTECT: updates that change deletion_protection and nothing else.
+//   - every other kind: a change to deletion_protection is forbidden (the per-kind forbidden path).
 //   - any kind: a refusal fact, an unlisted type or an unknown action set is forbidden.
 func (g Gate) Judge(kind Kind, p PlanFacts) Verdict {
 	v := Verdict{Allowed: true, Worst: ClassSafe}
@@ -103,7 +140,15 @@ func (g Gate) Judge(kind Kind, p PlanFacts) Verdict {
 		if isInert(f.Actions) {
 			continue
 		}
+		if kind != KindUnprotect && kind != KindReprotect && touchesProtected(f) {
+			deny(ClassForbidden, "%s: changes deletion_protection, which only an UNPROTECT or REPROTECT run may", f.Address)
+			continue
+		}
 		switch kind {
+		case KindUnprotect, KindReprotect:
+			if !(len(f.Actions) == 1 && f.Actions[0] == "update" && onlyProtected(f)) {
+				deny(ClassForbidden, "%s: %v is not a change of deletion_protection alone", f.Address, f.Actions)
+			}
 		case KindCreate, KindChange, KindUpgrade:
 			if c != ClassSafe {
 				deny(ClassDestructive, "%s: %v is refused in a %s run", f.Address, f.Actions, kind)

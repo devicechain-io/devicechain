@@ -45,9 +45,10 @@ RUN set -eu; \
 
 # The tree: the roots AND the module they reference by relative path
 # ("../../opentofu/modules/gke-cluster"), laid out as in the repository so the reference resolves.
-# Then each root's lock file (for both platforms the image is built for) and a provider mirror for
-# the platform this image runs on. `init -backend=false` installs the local module and the provider
-# so the lock file has the hashes; it configures no state.
+# Each root's COMMITTED lock file (linux_amd64 and linux_arm64 hashes) is what the build installs
+# under: `-lockfile=readonly` fails the build if the provider does not match it, and never rewrites
+# it. The providers are then mirrored for the platform this image runs on, and `fleet-runner check`
+# re-initialises every root offline from that mirror.
 COPY deploy/fleet/gke-gcs /out/opt/fleet/tree/fleet/gke-gcs
 COPY deploy/fleet/gke-pg /out/opt/fleet/tree/fleet/gke-pg
 COPY deploy/opentofu/modules/gke-cluster /out/opt/fleet/tree/opentofu/modules/gke-cluster
@@ -56,8 +57,7 @@ RUN set -eu; \
     rm -rf /out/opt/fleet/tree/fleet/*/tests; \
     for r in /out/opt/fleet/tree/fleet/*; do \
       ( cd "$r" && \
-        /out/usr/local/bin/tofu init -backend=false -input=false -no-color && \
-        /out/usr/local/bin/tofu providers lock -platform=linux_amd64 -platform=linux_arm64 && \
+        /out/usr/local/bin/tofu init -backend=false -input=false -no-color -lockfile=readonly && \
         /out/usr/local/bin/tofu providers mirror -platform="linux_${TARGETARCH}" /out/opt/fleet/providers && \
         rm -rf .terraform ); \
     done

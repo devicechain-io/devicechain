@@ -22,6 +22,11 @@ const (
 	KindDriftCheck Kind = "DRIFT_CHECK"
 	KindDestroy    Kind = "DESTROY"
 	KindRecover    Kind = "RECOVER"
+	// KindUnprotect and KindReprotect are the only kinds that may change deletion_protection (the
+	// teardown protocol's UNPROTECT and RE-PROTECT). The writer slot does not admit them in this
+	// build, so a run of either is refused at the fence.
+	KindUnprotect Kind = "UNPROTECT"
+	KindReprotect Kind = "REPROTECT"
 )
 
 // IdentityClass is the cloud identity a run may hold. Apply cannot delete a cluster (that is the
@@ -41,7 +46,7 @@ var ErrUnknownKind = errors.New("tofurun: unknown run kind")
 // ClassFor is the identity class a kind runs under: DESTROY runs as destroy, everything else as apply.
 func ClassFor(k Kind) (IdentityClass, error) {
 	switch k {
-	case KindCreate, KindChange, KindUpgrade, KindDriftCheck, KindRecover:
+	case KindCreate, KindChange, KindUpgrade, KindDriftCheck, KindRecover, KindUnprotect, KindReprotect:
 		return ClassApply, nil
 	case KindDestroy:
 		return ClassDestroy, nil
@@ -73,10 +78,21 @@ type Credential struct {
 	env       map[string]string
 }
 
-// NewCredential validates and builds a Credential. Names are upper-case identifiers; PATH, HOME,
-// the temp variables, PG_CONN_STR and every TF_ name are the runner's own and are refused, so a
-// credential cannot redirect tofu's data dir, its CLI config or its backend.
+// credentialPrefixes are the variable names a credential may set by default: the Google client
+// libraries' own (GOOGLE_*, CLOUDSDK_*). Anything else must be allowed explicitly.
+var credentialPrefixes = []string{"GOOGLE_", "CLOUDSDK_"}
+
+// NewCredential validates and builds a Credential. Names are upper-case identifiers beginning
+// GOOGLE_ or CLOUDSDK_; PATH, HOME, the temp variables, PG_CONN_STR and every TF_ name are the
+// runner's own and are refused, so a credential cannot redirect tofu's data dir, its CLI config or
+// its backend, or smuggle in a variable no provider reads for authentication.
 func NewCredential(class IdentityClass, principal string, env map[string]string) (Credential, error) {
+	return NewCredentialAllowing(class, principal, env)
+}
+
+// NewCredentialAllowing is NewCredential with further allowed name prefixes (a provider that reads
+// its token from another variable, or a test's fake cloud). Every prefix is a decision to review.
+func NewCredentialAllowing(class IdentityClass, principal string, env map[string]string, extraPrefixes ...string) (Credential, error) {
 	if class != ClassApply && class != ClassDestroy {
 		return Credential{}, fmt.Errorf("%w: %q", ErrIdentityClass, string(class))
 	}
@@ -85,7 +101,7 @@ func NewCredential(class IdentityClass, principal string, env map[string]string)
 	}
 	cp := make(map[string]string, len(env))
 	for k, v := range env {
-		if !envNameRe.MatchString(k) || reservedEnv[k] || strings.HasPrefix(k, "TF_") {
+		if !envNameRe.MatchString(k) || reservedEnv[k] || strings.HasPrefix(k, "TF_") || !hasPrefix(k, credentialPrefixes, extraPrefixes) {
 			return Credential{}, fmt.Errorf("tofurun: credential variable %q is not allowed", k)
 		}
 		if strings.ContainsRune(v, 0) {
@@ -117,4 +133,15 @@ func (c Credential) MarshalText() ([]byte, error) { return []byte(c.String()), n
 // a source must hand out only its own class, and the runner checks it did.
 type Credentials interface {
 	For(class IdentityClass) (Credential, error)
+}
+
+func hasPrefix(name string, sets ...[]string) bool {
+	for _, set := range sets {
+		for _, p := range set {
+			if p != "" && strings.HasPrefix(name, p) {
+				return true
+			}
+		}
+	}
+	return false
 }

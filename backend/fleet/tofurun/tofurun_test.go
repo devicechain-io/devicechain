@@ -122,14 +122,14 @@ func TestClassFor(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got, k)
 	}
-	_, err := ClassFor("UNPROTECT")
+	_, err := ClassFor("DETACH")
 	require.ErrorIs(t, err, ErrUnknownKind)
 	_, err = ClassFor("")
 	require.ErrorIs(t, err, ErrUnknownKind)
 }
 
 func TestCredentialNeverPrintsAValue(t *testing.T) {
-	c, err := NewCredential(ClassApply, "fleet-apply@example", map[string]string{"FLEET_FAKE_CLOUD_TOKEN": "s3cr3t-token-value"})
+	c, err := NewCredential(ClassApply, "fleet-apply@example", map[string]string{"GOOGLE_OAUTH_ACCESS_TOKEN": "s3cr3t-token-value"})
 	require.NoError(t, err)
 	for _, s := range []string{c.String(), c.GoString(), fmt.Sprintf("%v", c), fmt.Sprintf("%+v", c), fmt.Sprintf("%#v", c), fmt.Sprintf("%s", c)} {
 		require.NotContains(t, s, "s3cr3t-token-value")
@@ -138,7 +138,7 @@ func TestCredentialNeverPrintsAValue(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(b), "s3cr3t-token-value")
 
-	for _, bad := range []string{"PATH", "HOME", "PG_CONN_STR", "TF_DATA_DIR", "TF_VAR_x", "TF_ENCRYPTION", "lower", "A B", ""} {
+	for _, bad := range []string{"PATH", "HOME", "PG_CONN_STR", "TF_DATA_DIR", "TF_VAR_x", "TF_ENCRYPTION", "lower", "A B", "", "FLEET_FAKE_CLOUD_TOKEN", "AWS_SECRET_ACCESS_KEY", "LD_PRELOAD", "GOOGLE_A B"} {
 		_, err := NewCredential(ClassApply, "p", map[string]string{bad: "v"})
 		require.Error(t, err, bad)
 	}

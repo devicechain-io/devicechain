@@ -73,6 +73,9 @@ func problems(df string) []string {
 			}
 		}
 	}
+	if !strings.Contains(df, "-lockfile=readonly") || strings.Contains(df, "providers lock") {
+		out = append(out, "the build does not install under the committed lock files (init -lockfile=readonly)")
+	}
 	if !strings.Contains(df, "fleet-runner check") {
 		out = append(out, "the build does not run the layout check")
 	}
@@ -87,18 +90,19 @@ func TestRunnerImageDefinition(t *testing.T) {
 
 	// The checker can fail: each defect, planted in a copy of the real file, is seen.
 	mutate := map[string]string{
-		"a version that is not the pin":  strings.Replace(df, "ARG TOFU_VERSION="+PinnedVersion, "ARG TOFU_VERSION=1.9.0", 1),
-		"no archive verification":        strings.Replace(df, "sha256sum -c -", "true", 1),
-		"a malformed checksum":           strings.Replace(df, "ARG TOFU_SHA256_AMD64=", "ARG TOFU_SHA256_AMD64=xx", 1),
-		"an unpinned base":               strings.Replace(df, "FROM gcr.io/distroless/static-debian12:nonroot@sha256:", "FROM gcr.io/distroless/static-debian12:nonroot #", 1),
-		"a root final stage":             strings.Replace(df, "USER 65532:65532", "USER 0", 1),
-		"a terraform binary":             df + "\nRUN apt-get install -y terraform\n",
-		"a downloading final stage":      df + "\nRUN curl -fsSL https://example.invalid/x\n",
-		"a different entrypoint":         strings.Replace(df, `ENTRYPOINT ["/usr/local/bin/fleet-runner"]`, `ENTRYPOINT ["/usr/local/bin/tofu"]`, 1),
-		"a build that never checks":      strings.ReplaceAll(df, "fleet-runner check", "fleet-runner noop"),
-		"a gcloud in the image":          df + "\nCOPY --from=x /gcloud /usr/bin/gcloud\n",
-		"a kubectl in the image":         df + "\nCOPY --from=x /kubectl /usr/bin/kubectl\n",
-		"a final stage that is not slim": strings.Replace(df, "gcr.io/distroless/static-debian12", "debian", 1),
+		"a version that is not the pin":        strings.Replace(df, "ARG TOFU_VERSION="+PinnedVersion, "ARG TOFU_VERSION=1.9.0", 1),
+		"no archive verification":              strings.Replace(df, "sha256sum -c -", "true", 1),
+		"a malformed checksum":                 strings.Replace(df, "ARG TOFU_SHA256_AMD64=", "ARG TOFU_SHA256_AMD64=xx", 1),
+		"an unpinned base":                     strings.Replace(df, "FROM gcr.io/distroless/static-debian12:nonroot@sha256:", "FROM gcr.io/distroless/static-debian12:nonroot #", 1),
+		"a root final stage":                   strings.Replace(df, "USER 65532:65532", "USER 0", 1),
+		"a terraform binary":                   df + "\nRUN apt-get install -y terraform\n",
+		"a downloading final stage":            df + "\nRUN curl -fsSL https://example.invalid/x\n",
+		"a different entrypoint":               strings.Replace(df, `ENTRYPOINT ["/usr/local/bin/fleet-runner"]`, `ENTRYPOINT ["/usr/local/bin/tofu"]`, 1),
+		"a build that never checks":            strings.ReplaceAll(df, "fleet-runner check", "fleet-runner noop"),
+		"a build that rewrites the lock files": strings.ReplaceAll(df, "-lockfile=readonly", "-upgrade"),
+		"a gcloud in the image":                df + "\nCOPY --from=x /gcloud /usr/bin/gcloud\n",
+		"a kubectl in the image":               df + "\nCOPY --from=x /kubectl /usr/bin/kubectl\n",
+		"a final stage that is not slim":       strings.Replace(df, "gcr.io/distroless/static-debian12", "debian", 1),
 	}
 	for name, bad := range mutate {
 		require.NotEqual(t, df, bad, name+": the mutation must change the file")

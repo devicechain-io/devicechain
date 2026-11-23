@@ -63,3 +63,15 @@ resource "terraform_data" "extra" {
   count = var.extra
   input = count.index
 }
+
+# Padding: enough resources that plan and apply print far more than any output cap, which a real
+# fleet plan always does.
+variable "noise" {
+  type    = number
+  default = 0
+}
+
+resource "terraform_data" "noise" {
+  count = var.noise
+  input = "padding-padding-padding-padding-${count.index}"
+}

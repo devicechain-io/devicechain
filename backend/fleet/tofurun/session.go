@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -76,6 +77,10 @@ type Config struct {
 	AllowPlaintextState bool
 	// LockTimeout is how long a command waits for the backend lock. Default 20s.
 	LockTimeout time.Duration
+	// ApplyGrace is how long a cancelled apply may take to stop after tofu is interrupted, before
+	// its process group is killed. Default 10 minutes. The wrapper must forward SIGTERM to this
+	// package's context (and reap children when it is PID 1 of the container).
+	ApplyGrace time.Duration
 	// RunnerImageDigest is recorded with the run.
 	RunnerImageDigest string
 }
@@ -99,6 +104,9 @@ func New(ctx context.Context, cfg Config) (*Runner, error) {
 	}
 	if cfg.LockTimeout <= 0 {
 		cfg.LockTimeout = 20 * time.Second
+	}
+	if cfg.ApplyGrace <= 0 {
+		cfg.ApplyGrace = 10 * time.Minute
 	}
 	if fi, err := os.Stat(cfg.WorkRoot); err != nil || !fi.IsDir() {
 		return nil, fmt.Errorf("tofurun: the work root %q is not a directory", cfg.WorkRoot)
@@ -127,6 +135,7 @@ type OpenParams struct {
 	RootPath string
 	Backend  Backend
 	// Vars are root input variables, delivered as TF_VAR_ environment (never on a command line).
+	// They are NOT scrubbed from diagnostics: a variable is not a place for a secret.
 	Vars map[string]string
 }
 
@@ -176,7 +185,7 @@ func (s *Session) Info() RunInfo { return s.info }
 // Open admits the run and prepares it. Every refusal that needs no process is decided before the
 // fence is asked, and the fence is asked before the work directory exists, so a refused run leaves
 // nothing behind.
-func (r *Runner) Open(ctx context.Context, p OpenParams) (*Session, error) {
+func (r *Runner) Open(ctx context.Context, p OpenParams) (sess *Session, err error) {
 	if !runUIDRe.MatchString(p.RunUID) || !uuidRe.MatchString(p.ClusterUID) {
 		return nil, errors.New("tofurun: the cluster and run uids must be uuids")
 	}
@@ -220,6 +229,16 @@ func (r *Runner) Open(ctx context.Context, p OpenParams) (*Session, error) {
 	}
 
 	s := &Session{r: r, bin: r.bin, info: info, kind: p.Kind}
+	// The slot is held from here. A panic below must not leave it held with nothing running: the
+	// fence is told the run failed, and the panic becomes an error (its value is not echoed: it
+	// may carry a secret).
+	defer func() {
+		if rec := recover(); rec != nil {
+			s.failed = true
+			sess = nil
+			err = errors.Join(fmt.Errorf("tofurun: panic while opening the run (%T)", rec), s.Close(ctx))
+		}
+	}()
 	if err := s.prepare(ctx, p, cred); err != nil {
 		s.failed = true
 		return nil, errors.Join(err, s.Close(ctx))
@@ -267,8 +286,21 @@ func (s *Session) prepare(ctx context.Context, p OpenParams, cred Credential) er
 		return fmt.Errorf("tofurun: cli config: %w", err)
 	}
 
-	env := minimalEnv()
+	tmp := filepath.Join(dir, "tmp")
+	if err := os.MkdirAll(tmp, 0o700); err != nil {
+		return fmt.Errorf("tofurun: work directory: %w", err)
+	}
+	var env []string
+	for _, kv := range minimalEnv() {
+		if k, _, _ := strings.Cut(kv, "="); k != "TMPDIR" && k != "TEMP" && k != "TMP" {
+			env = append(env, kv)
+		}
+	}
 	set := func(k, v string) { env = append(env, k+"="+v) }
+	// Scratch files (provider plugins unpack here) land in the run's own directory, removed with it.
+	set("TMPDIR", tmp)
+	set("TEMP", tmp)
+	set("TMP", tmp)
 	set("HOME", home)
 	set("USERPROFILE", home)
 	set("TF_DATA_DIR", filepath.Join(dir, "data"))
@@ -462,7 +494,7 @@ type ApplyResult struct {
 //  1. the kind applies at all;
 //  2. the approval binds this plan's facts digest and state head;
 //  3. the gate still allows the retained facts for this kind;
-//  4. the plan file is the bytes that were planned;
+//  4. the plan file is the bytes that were planned (checked at the last moment, then applied from a copy);
 //  5. the state's lineage and serial are what the plan was made against;
 //  6. a fresh plan of the same inputs has the same facts digest.
 //
@@ -489,10 +521,6 @@ func (s *Session) Apply(ctx context.Context, ap Approval) (*ApplyResult, error) 
 	if v := s.r.cfg.Gate.Judge(s.kind, pl.facts); !v.Allowed {
 		return nil, s.fail(fmt.Errorf("%w: %s", ErrGateRefused, strings.Join(v.Reasons, "; ")))
 	}
-	sum, err := fileSum(pl.file)
-	if err != nil || sum != pl.checksum {
-		return nil, s.fail(ErrPlanTampered)
-	}
 	now, err := s.Head(ctx)
 	if err != nil {
 		return nil, s.fail(err)
@@ -514,13 +542,27 @@ func (s *Session) Apply(ctx context.Context, ap Approval) (*ApplyResult, error) 
 		return nil, s.fail(ErrReplanRequired)
 	}
 
+	// The plan is read ONCE, here, immediately before apply: the bytes hashed are the bytes applied,
+	// from a fresh read-only copy, so the file cannot be swapped between the check and the apply.
+	planBytes, err := os.ReadFile(pl.file)
+	if err != nil {
+		return nil, s.fail(ErrPlanTampered)
+	}
+	if sum := sha256.Sum256(planBytes); hex.EncodeToString(sum[:]) != pl.checksum {
+		return nil, s.fail(ErrPlanTampered)
+	}
+	applyFile := filepath.Join(s.dir, "apply.tfplan")
+	if err := os.WriteFile(applyFile, planBytes, 0o400); err != nil {
+		return nil, s.fail(fmt.Errorf("tofurun: stage the plan: %w", err))
+	}
 	s.applied = true
 	s.plan = nil // a saved plan is single use, whatever the outcome
-	if _, _, err := s.exec(ctx, "apply", []string{"-input=false", "-no-color", s.lockArg(), pl.file}, false); err != nil {
-		_ = os.Remove(pl.file)
+	_ = os.Remove(pl.file)
+	_, _, err = s.exec(ctx, "apply", []string{"-input=false", "-no-color", s.lockArg(), applyFile}, false)
+	_ = os.Remove(applyFile)
+	if err != nil {
 		return nil, s.fail(err)
 	}
-	_ = os.Remove(pl.file)
 	head, err := s.Head(ctx)
 	if err != nil {
 		return nil, s.fail(err)
@@ -586,3 +628,32 @@ func cliConfig(mirror string) string {
 	}
 	return fmt.Sprintf("provider_installation {\n  filesystem_mirror {\n    path = %q\n  }\n  direct {\n    exclude = [\"*/*/*\"]\n  }\n}\n", filepath.ToSlash(mirror))
 }
+
+// The types below carry secrets (the encryption key, the child environment, per-run credentials).
+// A value that reaches a log or an error formatter, with any verb, prints its identity only.
+
+func (s *Session) String() string {
+	return "tofurun.Session{run=" + s.info.RunUID + " kind=" + string(s.info.Kind) + "}"
+}
+
+// GoString is String.
+func (s *Session) GoString() string { return s.String() }
+
+// Format is String for every verb.
+func (s *Session) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, s.String()) }
+
+func (Config) String() string { return "tofurun.Config{redacted}" }
+
+// GoString is String.
+func (c Config) GoString() string { return c.String() }
+
+// Format is String for every verb.
+func (c Config) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, c.String()) }
+
+func (*Runner) String() string { return "tofurun.Runner{redacted}" }
+
+// GoString is String.
+func (r *Runner) GoString() string { return r.String() }
+
+// Format is String for every verb.
+func (r *Runner) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, r.String()) }

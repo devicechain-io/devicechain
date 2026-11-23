@@ -50,6 +50,8 @@ func run(args []string, stdout, stderr *os.File) int {
 //	FLEET_RUNNER_TOFU      absolute path of the tofu binary (default /usr/local/bin/tofu)
 //	FLEET_RUNNER_TREE      the baked tree (default /opt/fleet/tree); every directory under its fleet/
 //	                       is one root, and the roots' relative module sources resolve inside the tree
+//	FLEET_RUNNER_MIRROR    the baked provider mirror (default /opt/fleet/providers); each root must
+//	                       initialise offline from it under its committed lock file
 //	FLEET_RUNNER_EXPECTED  the expected OpenTofu version (default the pinned one)
 func check(ctx context.Context, getenv func(string) string) error {
 	def := func(k, d string) string {
@@ -70,6 +72,7 @@ func check(ctx context.Context, getenv func(string) string) error {
 		return fmt.Errorf("a terraform binary is present at %s", p)
 	}
 	tree := def("FLEET_RUNNER_TREE", "/opt/fleet/tree")
+	mirror := def("FLEET_RUNNER_MIRROR", "/opt/fleet/providers")
 	roots := filepath.Join(tree, "fleet")
 	entries, err := os.ReadDir(roots)
 	if err != nil {
@@ -82,6 +85,9 @@ func check(ctx context.Context, getenv func(string) string) error {
 		}
 		n++
 		if err := tofurun.CheckRoot(tree, "fleet/"+e.Name()); err != nil {
+			return fmt.Errorf("root %s: %w", e.Name(), err)
+		}
+		if err := tofurun.CheckMirror(ctx, bin, tree, "fleet/"+e.Name(), mirror); err != nil {
 			return fmt.Errorf("root %s: %w", e.Name(), err)
 		}
 	}
