@@ -643,8 +643,7 @@ FRONTEND_INPUTS = [
 # go.mod and go.sum, the fleet roots and the shared gke-cluster module; the count check is its gate.
 FLEET_RUNNER_INPUTS = [
     "backend/fleet/**",
-    "backend/core/go.mod",
-    "backend/core/go.sum",
+    "backend/core/**",  # the runner imports core/rdb, which pulls in ~14 core packages
     "deploy/fleet/**",
     "deploy/opentofu/modules/gke-cluster/**",
     "hack/check-fleetpg-count.sh",
@@ -1575,6 +1574,7 @@ def self_test():
         expect(not select(ws, ["docs/x.md"]).fleet_runner, "a docs change skips the fleet runner")
         expect(not select(ws, ["backend/core/x.go"]).fleet_runner, "a core Go change that is not go.mod/go.sum skips the fleet runner")
         expect(select(ws, ["backend/core/go.mod"]).fleet_runner, "the image copies core's go.mod: it runs the fleet runner")
+        expect(select(ws, ["backend/core/rdb/x.go"]).fleet_runner, "the runner imports core/rdb: a core code change runs the fleet runner")
         expect(select(ws, ["deploy/fleet/gke-pg/main.tf"]).fleet_runner, "a fleet root change runs the fleet runner")
         print("==> frontend")
         expect(select(ws, ["frontend/apps/x.ts"]).frontend, "a frontend change runs frontend")
