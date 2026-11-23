@@ -29,7 +29,7 @@ vi.mock('@/lib/api/notifications', async (orig) => ({
 
 import NotificationChannelsPage from './NotificationChannelsPage';
 
-const t = (key: string, opts?: Record<string, unknown>) => i18n.t(key, opts);
+const t = (key: string, opts: Record<string, unknown> = {}) => i18n.t(key, opts);
 
 function row() {
   return {

@@ -13,7 +13,7 @@ import type { Loaded, LoadError } from './load';
 import { Playlist, type PlaylistProps } from './Playlist';
 import { IDLE_RESUME_MS } from './rotation';
 
-const t = (key: string, params?: Record<string, unknown>) => i18n.t(key, params);
+const t = (key: string, params: Record<string, unknown> = {}) => i18n.t(key, params);
 
 const boardOf = (title: string, slots: string[] = []): Loaded =>
   ({

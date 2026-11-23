@@ -57,7 +57,7 @@ vi.mock('@devicechain/client', async (orig) => ({
 
 import SecurityPage from './SecurityPage';
 
-const t = (key: string, o?: Record<string, unknown>) => i18n.t(key, o);
+const t = (key: string, o: Record<string, unknown> = {}) => i18n.t(key, o);
 
 const SECRET = 'JBSWY3DPEHPK3PXP';
 const URI = `otpauth://totp/DeviceChain:me@example.com?secret=${SECRET}&issuer=DeviceChain`;
