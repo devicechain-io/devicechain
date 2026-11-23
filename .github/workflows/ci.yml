@@ -3855,7 +3855,7 @@ jobs:
           set -o pipefail
           DC_FLEET_TOFU="$(command -v tofu)"
           export DC_FLEET_TOFU
-          go test -tags fleetpg -count=1 -timeout 20m -json ./tofurun | ../../hack/check-fleetpg-count.sh TestFleetPG 1 9
+          go test -tags fleetpg -count=1 -timeout 20m -json ./tofurun | ../../hack/check-fleetpg-count.sh TestFleetPG 1 10
           go test -tags fleetpg -count=1 -timeout 20m -json ./tofurun/slotfence | ../../hack/check-fleetpg-count.sh TestFleetPG 1 5
 
       # The image itself, built for real: the pinned tofu verified against its checksum, the roots
