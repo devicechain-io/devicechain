@@ -532,7 +532,7 @@ dcctl upgrade local devicechain --version v1.9.0
 
 适用[版本与升级策略](./versioning-policy.md)。本版本新增受保障的接口，且不移除任何接口。它弃用了 `InstanceConfiguration` 自定义资源，以及 `Instance` 声明的 `spec.grafanaSSO` 和 `spec.compact` 字段，这些在后续主版本之前仍可继续使用。GraphQL 库的更新会拒绝一些此前被接受的数字字面量；新增的拒绝情形和行为变化列在[升级到 v1.9.0 之前](#v190-before-upgrade)和 [v1.9.0 的新增内容](#v190-whats-new)中。Helm values 和实例配置不在受保障的兼容范围内。
 
-亮点：OTA 推出可以按具名金丝雀批次和累计百分比逐步推进，并在失败率达到阈值时暂停，控制台可直接操作。`dcctl` 和控制台在发送请求之前会检查实例所提供的架构，每个版本还会发布其实例配置的 JSON Schema。代理可以提出设备命令并由人批准（预览功能，默认关闭），自动化发送的命令会记录发送原因。分面值可以批量导入，控制台也支持从 CSV 文件导入，关系可以通过 `dcctl` 管理，长时间范围的图表读取一小时汇总。通过重新创建的设备的令牌读取时，不再返回已删除设备的事件；`device-management` 短暂不可用时，入站集成仍会继续接收上行数据；安装时会均衡代理的主节点分布。
+亮点：OTA 推出可以按具名金丝雀批次和累计百分比逐步推进，并在失败率达到阈值时暂停，控制台可直接操作。`dcctl` 和控制台在发送请求之前会检查实例所提供的架构，每个版本还会发布其实例配置的 JSON Schema。代理可以通过 MCP 提出设备命令，并由人在控制台中批准（预览功能，默认关闭），自动化发送的命令会记录发送原因。开启故障关闭模式的 MQTT 时，`event-sources` 现在可以写入事件信封（可选，默认关闭）。分面值可以批量导入，控制台也支持从 CSV 文件导入，关系可以通过 `dcctl` 管理，长时间范围的图表读取一小时汇总。通过重新创建的设备的令牌读取时，不再返回已删除设备的事件；`device-management` 短暂不可用时，入站集成仍会继续接收上行数据；安装时会均衡代理的主节点分布。
 
 新增内容：
 
@@ -594,11 +594,6 @@ dcctl upgrade local devicechain --version v1.9.0
 - **每个版本均提供实例配置模式。** 从目标版本的 GitHub Release 下载 `instance-config.schema.json`，或运行该版本的 `dcctl config-schema` 离线获取相同模式。该模式从 Go 配置类型生成，用于验证实例文档的结构并拒绝未知键。启动时仍会检查语义约束和跨字段约束。
 - **在 device-management 短暂不可用期间，入站集成会继续接受上行消息。** event-sources 会将集成标识符解析到的设备记住五分钟。在此版本之前，一旦该结果超过五分钟，在无法连接 device-management 时到达的上行消息会得到 `503` 响应。现在，最近一次结果会在 device-management 给出后最多使用 15 分钟（与集成令牌和负载解码器查询已经使用的上限相同），上行消息会被接受，并在 device-management 恢复后处理。device-management 仍会针对每个事件检查集成、设备及其标识符，因此在此期间被禁用、删除或改用其他标识符的设备会在那时被拒绝。device-management 实际给出的结果（例如标识符未注册或集成已禁用）绝不会被较早的结果替代。下行报告（网络服务器发送的确认）不在此列：在无法查询 device-management 时，仍会像以前一样得到 `503` 响应。以这种方式处理的请求会计入 `integration_requests_total` 新增的 `resolve_stale` 结果（同时也计入其通常的结果），并且 event-sources 会记录一条警告。
 - **第二个和第三个本地实例也有各自的 MQTT 端口。** 在本地 kind 集群上，`dcctl bootstrap` 现在会为每个新实例分配集群发布的第一个空闲 MQTT 节点端口。此前只有第一个实例能从主机访问，其余实例只能在集群内访问。本版本创建的集群发布三个端口：主机端口 1883、1884 和 1885。较早创建的集群只发布 1883，行为与以前相同。bootstrap 摘要会打印地址（`MQTT: ssl://localhost:<端口>`）。该端口会记录在实例中，因此 `dcctl sim create` 会使用它。升级会保留实例已有的端口，绝不会分配新端口。创建新的本地集群现在除 1883 外还需要主机端口 1884 和 1885 空闲；`dcctl preflight` 会检查这些端口。
-- **代理命令提案（Preview）。** 命令新增 `causeDetails` 和 `proposal` 字段。原有 `cause` 保持检测来源的含义，对于代理提案创建的命令返回 null。
-
-- Command-delivery 提供 `proposeCommand`、`approveAgentProposal`、`rejectAgentProposal`、`agentProposal` 和 `agentProposals`（Preview）。`infrastructure.mcp.commandProposals` 默认关闭；关闭时拒绝提案和批准。仅在版本滚动部署全部完成后，通过单独的一次升级启用：较早版本的 Pod 会拒绝该配置键。Command-delivery 对代理终止消息流的新增读取权限由消息代理的授权回调授予，因此启用前必须完成包含授权回调在内的整个版本部署。
-- 每个提案仅面向一个指定设备。人员通过 `approveAgentProposal` 根据设备已发布命令定义的快照批准提案，批准时会重新检查该定义。此即时检查并非跨服务锁：后续远程定义变更仍可能与事务提交并发发生。命令交付截止时间在提出提案时固定：默认一小时，最长 24 小时。
-- 平台默认限制为：每个代理客户端和每个人分别每小时 50 次执行；每个租户 100 个待决提案、每小时 1000 个提案及每小时 200 次执行。已决提案及其请求键保留 30 天。租户级终止操作会结束待决提案，并取消仍在等待的代理命令（排队、暂缓或停放）；无法撤回已发送的命令。
 - **失效的 MQTT 代理不再卡住繁忙的客户端。** 外部 MQTT 事件源、Sparkplug 主机以及边缘代理的云端上行链路现在会将每次向代理的套接字写入限制为 5 秒，并显式声明 30 秒的 keep-alive。此前，如果发布方已向不再响应的对端写满套接字，可能会在该写入上无限期阻塞且察觉不到连接已失效；现在它会断开连接并重新连接。
 - **分阶段 OTA 发布。** 可先指定具名金丝雀设备，再按累计设备百分比分阶段发布。SKIPPED 和 CANCELLED 目标不会阻止下一阶段。失败或 UNKNOWN 结果会以 `COHORT_FAILED` 暂停推进；必须通过 `promoteUpdateRollout` 的 `overrideFailure: true` 显式接受，待处理或执行中的目标仍会阻止推进。UNKNOWN 仍占用并发名额。如果 UNKNOWN 在所有金丝雀设备分配完成前占满并发名额，发布会明确暂停；解决或放弃该尝试后，恢复发布以完成待处理的金丝雀设备。支持手动推进。可选的失败率策略采用观察窗口和最小样本数，阈值范围为 1–99，严格超过才暂停。显式恢复会保留相关证据；仅更改已确认尝试的版本不会再次触发暂停。
 - **升级后启用。** 固定实例设置 `infrastructure.updateManagement.rolloutSafety` 默认为 false。关闭时，创建或启动带 cohort 或 `failureRate` 的发布将返回 `ROLLOUT_SAFETY_DISABLED`。版本滚动升级期间必须保持关闭。待**所有 update-management 副本升级完成后**，再通过**单独的配置滚动更新**设为 true。旧副本会绕过阶段和失败率保护、允许普通恢复操作，也无法表示新的暂停原因。普通发布的默认行为及并发限制保持不变。
@@ -615,6 +610,15 @@ dcctl upgrade local devicechain --version v1.9.0
 - **故障关闭模式下的 MQTT 可以写入事件信封（可选，默认关闭）。** 开启 `infrastructure.nats.mqttFailClosed` 时，`event-sources` 此前总是把每条 MQTT 消息单独写入 inbound-events 流，即使已开启[事件信封](#event-envelopes)。新的 `event-sources` 设置 `capture.mqttStoreEnvelopes` 让它改为以信封写入，从而减少代理为每个事件所做的工作。只有当 `infrastructure.nats.mqttFailClosed` 和 `infrastructure.messaging.envelopes.inbound` 都开启时它才生效，否则不改变任何行为。只有当消息所在的信封已写入 inbound-events 流后，该消息才会在 MQTT 消息存储中被确认；重新投递的消息会被识别，不会被写入两次。请在每个 `event-sources` Pod 都运行本版本之后，通过单独一次 `dcctl upgrade` 开启它，在值文件中设置 `functionalAreas.event-sources.config.capture.mqttStoreEnvelopes`（参见[调优实例](./tuning-an-instance.md)）。设置改变时，`event-sources` 会先等待按旧设置处理中的消息完成，再按新方式写入。
 - **Harborpulse 模拟器：** 新增 MQTT 和证书认证充电桩、连接状态告警、期望与上报配置，以及通过 HTTP 拉取命令的路灯。新增基于平台数据的验证和相互独立的负面控制，并保留原有设备群及其升级和停电流程。
 - **按批次查看更新进度。** 更新管理 GraphQL API 现在提供每个更新批次的结果计数，并支持按批次筛选目标设备。批次计数与整体更新进度采用相同的结果统计规则。
+- **Harborpulse 租户隔离和 MCP 问答。** 验证工具现可检查使用相同设备标识符的两个租户，并将真实 MCP 服务返回的设备群答案与 GraphQL 数据比较。每次运行都会注册一个公共 OAuth 客户端，并使用租户成员通过 PKCE 获取的用户令牌。两个植入缺陷分别验证两项新检查能够独立发现错误。
+- **代理命令提案（Preview）。** 命令新增 `causeDetails` 和 `proposal` 字段。原有 `cause` 保持检测来源的含义，对于代理提案创建的命令返回 null。
+
+- MCP 新增静态工具 `propose_command`，要求 `act:commands`，且仅在 MCP 操作开关与 `infrastructure.mcp.commandProposals` 同时开启时提供。`get_proposal` 和 `list_my_proposals` 接受 `area: "command-delivery"`；省略时保持告警行为。启用配置键后 MCP 会话须刷新工具列表。控制台批准收件箱新增独立分页的命令页签，显示完整 JSON 参数、设备实例标识、影响、定义指纹、截止时间、批准倒计时及不可信纯文本理由。批准仅提交提议令牌和显示的摘要，将命令加入常规交付队列；命令仍可能等待维护窗口、到期或失败，且批准绝不能撤回已发送命令。
+- Command-delivery 使用调用方自己的令牌读取设备信息：提出提议的代理和批准人员都需要 `device:read`，否则以 `FORBIDDEN` 拒绝。每个客户端及每个人分别每小时最多提交 200 个提议，每个客户端最多保留 20 个待决提议；策略可收紧限制。代理通过 `get_proposal(area: "command-delivery").resultRef` 跟踪已执行提议；`list_commands` 不显示命令来自哪个提议。
+
+- Command-delivery 提供 `proposeCommand`、`approveAgentProposal`、`rejectAgentProposal`、`agentProposal` 和 `agentProposals`（Preview）。`infrastructure.mcp.commandProposals` 默认关闭；关闭时拒绝提案和批准。仅在版本滚动部署全部完成后，通过单独的一次升级启用：较早版本的 Pod 会拒绝该配置键。Command-delivery 对代理终止消息流的新增读取权限由消息代理的授权回调授予，因此启用前必须完成包含授权回调在内的整个版本部署。
+- 每个提案仅面向一个指定设备。人员在控制台中根据设备已发布命令定义的快照批准提案，批准时会重新检查该定义。此即时检查并非跨服务锁：后续远程定义变更仍可能与事务提交并发发生。命令交付截止时间在提出提案时固定：默认一小时，最长 24 小时。
+- 平台默认限制为：每个代理客户端和每个人分别每小时 50 次执行；每个租户 100 个待决提案、每小时 1000 个提案及每小时 200 次执行；试运行（dry run）另有限额，每个代理客户端和每个人每分钟 60 次。已决提案及其请求键保留 30 天，代理的 `requestId` 在此期间会被记住。租户级终止操作会结束待决提案，并取消仍在等待的代理命令（排队、暂缓或停放）；无法撤回已发送的命令。
 
 ### v1.8.0 — 维护窗口暂存告警通知，投递可安然度过中断 {#v180-upgrade}
 

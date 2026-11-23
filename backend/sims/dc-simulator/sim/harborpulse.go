@@ -135,6 +135,7 @@ func HarborpulseDefects() []string {
 		HarborpulseDefectUnsignedWebhook, HarborpulseDefectWrongWellDepth,
 	}
 	out = append(out, harborS6Defects...)
+	out = append(out, HarborpulseDefectIsolationCrossRead, HarborpulseDefectMCPWrongAnswer)
 	sort.Strings(out)
 	return out
 }
@@ -635,6 +636,7 @@ func (s *harborpulse) Manifest() SimManifest {
 	})
 	// The operator's board and the Lofts owner's, bound to the devices this manifest provisions.
 	s.addS6Manifest(&manifest)
+	s.addS7Manifest(&manifest)
 	manifest.NumericAttributes = harborAttributes()
 	manifest.Connectors = append(manifest.Connectors, harborDownlinkConnector())
 	manifest.Dashboards = harborpulseDashboards(manifest.Expand(manifest.Seed))
@@ -882,7 +884,10 @@ func (s *harborpulse) Bootstrap(ctx context.Context, rt *Runtime) error {
 	if err := s.provisionChargerOTA(ctx, rt); err != nil {
 		return err
 	}
-	return s.bootstrapS6(ctx, rt)
+	if err := s.bootstrapS6(ctx, rt); err != nil {
+		return err
+	}
+	return s.bootstrapS7(ctx, rt)
 }
 
 func (s *harborpulse) ensureModel() *harborModel {
@@ -924,7 +929,11 @@ func (s *harborpulse) Tick(ctx context.Context, rt *Runtime) error {
 		if d.Token == HarborpulseReplacementSeparateDevice {
 			d.Token = HarborpulseReplacementDevice
 		}
-		return model.reading(d.Token, elapsed, now)
+		reading := model.reading(d.Token, elapsed, now)
+		if reading != nil && d.DeviceTypeToken == HarborpulsePumpType {
+			reading[HarborpulseTenantMarkerKey] = HarborpulseTenantMarker(rt.Tenant)
+		}
+		return reading
 	})
 	if measErr != nil {
 		log.Error().Err(measErr).Msg("emit harborpulse measurements failed")

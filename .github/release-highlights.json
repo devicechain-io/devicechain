@@ -65,7 +65,7 @@
     "Upgrade in place from v1.8.x with the v1.9.0 dcctl: install with your cluster settings, then upgrade each instance. The configuration keys this release adds are optional, v1.8 pods keep working while the upgrade rolls, and dcctl upgrade now refuses to skip a minor release.",
     "Staged update rollouts: declare named canaries followed by cumulative fleet percentages, and a rollout pauses when a cohort fails or a failure-rate window trips. The console shows each cohort and promotes it, and an operator can override a halt deliberately.",
     "dcctl and the console ask an instance which schema it serves before sending a request, and report an upgrade remedy instead of an opaque error. Each release now publishes a JSON Schema of its instance configuration.",
-    "Agents can propose a device command and a person approves it before anything is sent (Preview, off by default), and a command sent by an automation records which rule fired and why.",
+    "Agents can propose a device command over MCP and a person approves it in the console before anything is sent (Preview, off by default), and a command sent by an automation records which rule fired and why.",
     "Facet values import in batches through the API or from a CSV file in the console, relationships can be managed from dcctl, and charts over long ranges read a one-hour rollup instead of tens of thousands of rows.",
     "A read by a re-created device's token returns only the new device's events, inbound integrations keep accepting uplinks while device-management is briefly unavailable, and broker leadership is evened out at install and shown by the HA guide."
   ]

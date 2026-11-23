@@ -82,6 +82,9 @@ type Command struct {
 	Status    string    `json:"status"`
 	Queued    time.Time `json:"queued"`
 	Responded time.Time `json:"responded"`
+	// Raw diagnostic-only timestamps: malformed values must not alter a verdict.
+	CreatedAt string `json:"createdAt,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
 }
 
 // Reading is one stored measurement.
@@ -123,6 +126,7 @@ type Backfill struct {
 
 // Observations is everything the verifier read about one sim day.
 type Observations struct {
+	S7    *S7   `json:"-"`
 	S6    S6    `json:"-"`
 	Clock Clock `json:"-"`
 	Day   int   `json:"day"`

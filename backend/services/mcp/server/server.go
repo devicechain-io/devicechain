@@ -173,6 +173,7 @@ func newServer(gql *GraphQLClient, opts ...Option) (*mcp.Server, *Catalog) {
 		opt(&o)
 	}
 	registerProposals(s, c, t, o.actuation)
+	registerCommandProposals(s, c, t, o.actuation && o.commandProposals)
 	s.AddReceivingMiddleware(filterActionScopes(c))
 	s.AddReceivingMiddleware(limitToolExecution)
 	// Every tools/call this server answers writes one audit record (audit.go). It is a

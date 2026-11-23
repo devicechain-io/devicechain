@@ -496,6 +496,7 @@ type ListCommandsOutput struct {
 	TotalRecords     int              `json:"totalRecords"`
 }
 
+// Agents cannot see Command.proposal/causeDetails (human-only); follow their own proposal through get_proposal.resultRef.
 var listCommandsQuery = newDocument("command-delivery", `query ListCommands($criteria: CommandSearchCriteria!) {
   commands(criteria: $criteria) {
     results { token deviceToken name status queuedTime sentTime respondedTime error }

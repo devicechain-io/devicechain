@@ -802,7 +802,7 @@ type McpConfiguration struct {
 	// Enable it in an upgrade of its own after the release rollout completes:
 	// pods from an earlier release refuse this key. While it is off, command-delivery
 	// refuses command proposals and approvals; rejecting, reading, expiry and the kill
-	// path keep working.
+	// path keep working, and MCP offers propose_command only while it is on.
 	CommandProposals bool
 }
 
