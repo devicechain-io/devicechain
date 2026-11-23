@@ -83,7 +83,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 // A ladder head on this wall (QuayFittings) opens the railing: the rail stops at a post either side of it. With no ladder
                 // the railing is the one run it always was.
                 const float opening = (float)QuayFittings.RailOpeningHalfM;
-                var ladders = plan.Fittings.Landings.Where(l => map.QuayFor(l.Lamps[0]) == token)
+                var ladders = plan.Fittings.Landings.Where(l => l.Quay == token)
                     .Select(l => frame.Local(new Vector3((float)l.Ladder.X, 0, (float)l.Ladder.Z)).x).OrderBy(x => x).ToArray();
                 foreach (var edge in new[] { (float)q.XMin, (float)q.XMax - 35 })
                 {

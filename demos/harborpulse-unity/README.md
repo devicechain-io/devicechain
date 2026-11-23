@@ -1215,16 +1215,19 @@ the campaigns twelve lamps.
 ### Where they stand
 
 All six are on North Quay, the area the manifest gives them, and the scene checks that against the platform's membership as it does
-for every device (a membership that names another quay moves them to a row of their own there).
+for every device (a membership that names a side quay moves the chargers to a row of their own behind that wall and the lamps to a
+landing near its southern end).
 
 - **The chargers continue North Quay's charging row** at its 9 m pitch (`PresentationMap.LinkedBay`): the district's two bays, the
   two on a token, one bay's width left to the fourth street light, then the two on a certificate.
 - **The pull lamps flank a landing at the wall's east end** (`PullLampFromEndM`, `PullLampDepthM`), 3 m behind the wall and 12 m
   apart, east of every charger and street light on the quay.
 
-Nothing that stood on the quay or in the town moved for them: `TheSixDisplaceNothingThatStoodOnTheQuayOrInTheTown` builds the world
-again with the six standing somewhere else and compares every registered footprint, and its control stands them by the town, where
-they do move a house lot.
+Nothing that stood on the quay or in the town moved for them. Measured once against U9's tree: every registered footprint (430),
+every prop with its place, turn and size (12 585, the forest's trees among them), every district anchor and every story pose hash to
+the same SHA-256 in both. What the suite keeps is the reason it holds: `TheSixDisplaceNothingThatStoodOnTheQuayOrInTheTown` builds
+the world again with the six standing somewhere else on the quay and compares every registered footprint, so no scenery is placed
+round them, and its control stands them by the town, where they do move a house lot.
 
 ### Read apart at a glance
 
@@ -1266,8 +1269,9 @@ charger on a token is inside its dropped hour, so its mask includes its alarm be
 
 `-hp-eye x/y/z/lookX/lookY/lookZ/fov` holds a live or preview player's camera at one pose for the whole run, whatever shot the
 director calls, while the director, its captions and its recording run as they would. It is for a rig that has to watch one place
-through a day (U10's live day watched the six with `-hp-eye 72/20/20/72/3/88/50`). A malformed eye stops the scene with a message;
-a browser build's page address cannot carry the option.
+through a day (U10's live day watched the six with `-hp-eye 72/20/20/72/3/88/50`). A malformed eye stops the scene with a message:
+seven finite numbers, each coordinate within 100 km of the origin, the eye at least a centimetre from what it looks at, a field of
+view of 5 to 120 degrees. A browser build's page address cannot carry the option.
 
 `U10Tests` pins the six in the layout under three kinds and three device types; the row, the landing and both HOME frames holding
 them; the world built with the six on either side quay; nothing displaced, with its control; each court's cabinet, trenches and

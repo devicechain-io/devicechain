@@ -35,6 +35,13 @@ namespace DeviceChain.Harborpulse.Model.Director
         public const float CaptionBottomWide = .08f, CaptionTopWide = .24f, CaptionBottomTall = .23f, CaptionTopTall = .37f;
         public const float RailRowTop = .758f, RailRowHeight = .078f, RailRowStep = .082f;
         public const int RailRowsTall = 2, RailRowsWide = 5;
+
+        /// <summary>
+        /// A world tag's box, in the HUD's reference pixels: wide enough for the names the district had ("Charger N1 · alarm"), and wider
+        /// for a longer one, which the fixed box wrapped onto a second line it then cut off ("MQTT charger N1 ·").
+        /// </summary>
+        public const float TagBoxWidth = 250, TagBoxHeight = 40, TagGlyphWidth = 11.8f, TagPadding = 24;
+        public static float TagWidth(string text) => Math.Max(TagBoxWidth, TagPadding + TagGlyphWidth * (text ?? "").Length);
         public const float RailBottomTall = RailRowTop - RailRowHeight - RailRowStep * (RailRowsTall - 1);
 
         readonly List<RailNode> rail = new List<RailNode>();

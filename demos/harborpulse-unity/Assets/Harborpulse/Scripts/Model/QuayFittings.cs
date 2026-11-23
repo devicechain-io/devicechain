@@ -31,6 +31,8 @@ namespace DeviceChain.Harborpulse.Model
     public sealed class ChargingCourt
     {
         public string Kind { get; internal set; }
+        /// <summary>The quay the pair stands on, as the presentation has it.</summary>
+        public string Quay { get; internal set; }
         public IReadOnlyList<LayoutDevice> Devices { get; internal set; }
         /// <summary>The pair's own frame: its origin midway between the two pedestals, +z towards the water.</summary>
         public PropFootprint Frame { get; internal set; }
@@ -48,6 +50,7 @@ namespace DeviceChain.Harborpulse.Model
     public sealed class LampLanding
     {
         public IReadOnlyList<LayoutDevice> Lamps { get; internal set; }
+        public string Quay { get; internal set; }
         public PropFootprint Frame { get; internal set; }
         public PropFootprint Apron { get; internal set; }
         public Ground Ladder { get; internal set; }
@@ -104,7 +107,7 @@ namespace DeviceChain.Harborpulse.Model
                     ducts.Add(new DuctRun(frame.Local(0, -CabinetBackM - CabinetDepthM / 2), frame.Local(0, roadZ), DuctWidthM));
                 courts.Add(new ChargingCourt
                 {
-                    Kind = group.Key.Kind, Devices = devices, Frame = frame,
+                    Kind = group.Key.Kind, Quay = group.Key.Quay, Devices = devices, Frame = frame,
                     Apron = new PropFootprint(frame.Id + ":apron", frame.Local(0, (ApronFrontM - ApronBackM) / 2), 2 * (half + ApronSideM), ApronFrontM + ApronBackM, frame.Yaw),
                     CabinetFootprint = new PropFootprint(frame.Id + ":cabinet", frame.Local(0, -CabinetBackM), CabinetWidthM, CabinetDepthM, frame.Yaw),
                     Ducts = ducts.AsReadOnly(),
@@ -121,7 +124,7 @@ namespace DeviceChain.Harborpulse.Model
                 var front = behind - LandingFromWallM; var back = front - LandingDepthM;
                 landings.Add(new LampLanding
                 {
-                    Lamps = lamps, Frame = frame,
+                    Lamps = lamps, Quay = group.Key, Frame = frame,
                     Apron = new PropFootprint(frame.Id + ":apron", frame.Local(0, (front + back) / 2), 2 * (half + LandingSideM), LandingDepthM, frame.Yaw),
                     Ladder = frame.Local(0, behind), Lifebuoy = frame.Local(-LifebuoyAlongM, behind - LifebuoyBehindWallM),
                 });

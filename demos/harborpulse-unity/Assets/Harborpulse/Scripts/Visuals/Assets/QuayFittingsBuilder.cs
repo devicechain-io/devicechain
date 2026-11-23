@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+using System.Linq;
 using DeviceChain.Harborpulse.Model;
 using UnityEngine;
 
@@ -22,11 +23,14 @@ namespace DeviceChain.Harborpulse.Visuals
 
         static Vector3 V(Ground p, float y) => new Vector3((float)p.X, y, (float)p.Z);
 
-        public static Transform Build(Transform root, HarborMaterials m, QuayFittings fittings)
+        /// <summary>One quay's fittings under one node, or null when the plan lays nothing on that quay.</summary>
+        public static Transform Build(Transform root, HarborMaterials m, QuayFittings fittings, string quay)
         {
-            var node = AssetRig.Node("Quay fittings", root, Vector3.zero);
+            var courts = fittings.Courts.Where(c => c.Quay == quay).ToArray(); var landings = fittings.Landings.Where(l => l.Quay == quay).ToArray();
+            if (courts.Length == 0 && landings.Length == 0) return null;
+            var node = AssetRig.Node("Quay fittings " + quay, root, Vector3.zero);
             var flat = new SceneryMesh();
-            foreach (var court in fittings.Courts)
+            foreach (var court in courts)
             {
                 Apron(flat, court.Apron, CourtSetts, Deck + .012f);
                 foreach (var duct in court.Ducts) Trench(flat, duct);
@@ -36,7 +40,7 @@ namespace DeviceChain.Harborpulse.Visuals
                     flat.Box(V(court.Frame.Local(0, 3.1 + i * .62), Deck + .03f), new Vector3(1.5f, .014f, .09f), BayPaint, rot * Quaternion.Euler(0, 38, 0));
                 Cabinet(node, m, court);
             }
-            foreach (var landing in fittings.Landings)
+            foreach (var landing in landings)
             {
                 // over the promenade's own strip, so a little higher than the chargers' apron
                 Apron(flat, landing.Apron, LandingSetts, Deck + .024f);

@@ -43,9 +43,11 @@ namespace DeviceChain.Harborpulse.Visuals
             foreach (var token in map.Quays.Keys) w.Mark(token, w.Root.Find(token));
             foreach (var d in layout.Devices) w.Device(d, layout);
             // what is laid on the quays round the devices that hold their own session: part of the quay they are on
-            var fittings = QuayFittingsBuilder.Build(w.Root, mats, w.props.Fittings);
-            var fittingsQuay = w.props.Fittings.Courts.Select(c => map.QuayFor(c.Devices[0])).Concat(w.props.Fittings.Landings.Select(l => map.QuayFor(l.Lamps[0]))).FirstOrDefault();
-            if (fittingsQuay != null) w.Mark(fittingsQuay, fittings);
+            foreach (var token in map.Quays.Keys)
+            {
+                var fittings = QuayFittingsBuilder.Build(w.Root, mats, w.props.Fittings, token);
+                if (fittings != null) w.Mark(token, fittings);
+            }
             // The mapped depot sits just south of the eastern breakwater. Give its yard
             // a real foundation and connect it by the mapped road causeway, never a floating slab.
             w.Slab("Depot headland", (float)map.Depot.X - 36, (float)map.Depot.X + 36,

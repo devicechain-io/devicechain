@@ -111,7 +111,21 @@ namespace DeviceChain.Harborpulse.Tests
                 var plan = WorldPropPlan.Generate(map, U5Plan.Layout);
                 Assert.That(FootprintRegistry.FindOverlaps(plan.Registry.Entries.Where(e => e.Id.StartsWith("device:", StringComparison.Ordinal) || e.Id.StartsWith("car:", StringComparison.Ordinal) || e.Id.StartsWith("court:", StringComparison.Ordinal)).ToArray()), Is.Empty, quay);
                 Assert.That(plan.Fittings.Courts.Count, Is.EqualTo(2), quay);
-                Assert.That(plan.Fittings.Landings.Count, Is.EqualTo(1), quay);
+                Assert.That(plan.Fittings.Courts.Select(c => c.Quay).Distinct(), Is.EqualTo(new[] { quay }));
+                // the lamps are by that quay's wall too, on their landing, and the ladder between them is clear of the wall's fittings
+                var landing = plan.Fittings.Landings.Single();
+                Assert.That(landing.Quay, Is.EqualTo(quay));
+                foreach (var d in landing.Lamps) Assert.That(Inside(landing.Apron, map.Anchors[d.Token]), Is.True, d.Token + " on its landing on " + quay);
+                foreach (var apron in plan.Fittings.Courts.Select(c => c.Apron).Concat(new[] { landing.Apron }))
+                    foreach (var c in Corners(apron)) Assert.That(PresentationMap.Contains(map.Quays[quay], c), Is.True, apron.Id + " on " + quay);
+                var wallX = quay == "hp-east-quay" ? map.Quays[quay].Min(p => p.X) : map.Quays[quay].Max(p => p.X);
+                Assert.That(landing.Ladder.X, Is.EqualTo(wallX).Within(1e-9), quay);
+                var ladder = new PropFootprint("ladder", landing.Ladder, 1.6, 1.0);
+                foreach (var p in plan.Props.Where(p => (p.Kind == "Bollard" || p.Kind == "Cleat") && p.Area == quay))
+                    Assert.That(ladder.Intersects(p.Footprint, 0), Is.False, p.Footprint.Id + " on " + quay);
+                foreach (var duct in plan.Fittings.DuctFootprints())
+                    foreach (var e in plan.Registry.Entries.Where(e => !Six.Any(d => e.Id == "device:" + d.Token) && !e.Id.EndsWith(":cabinet", StringComparison.Ordinal)))
+                        Assert.That(duct.Intersects(e, 0), Is.False, duct.Id + " under " + e.Id + " on " + quay);
             }
         }
 
@@ -400,7 +414,9 @@ namespace DeviceChain.Harborpulse.Tests
                 Assert.That(CameraMath.Project(eye, Wide, a.X, Deck + 1, a.Z, out var nx, out var ny), Is.True, d.Token);
                 Assert.That(Math.Max(Math.Abs(nx), Math.Abs(ny)), Is.LessThan(.95), d.Token);
             }
-            foreach (var bad in new[] { null, "", "1/2/3/4/5/6", "1/2/3/4/5/6/50/8", "1/2/3/4/5/x/50", "1/2/3/NaN/5/6/50", "1/2/3/4/5/Infinity/50", "1/2/3/1/2/3/50", "1/2/3/4/5/6/4", "1/2/3/4/5/6/121", "1,5/2/3/4/5/6/50" })
+            foreach (var bad in new[] { null, "", "1/2/3/4/5/6", "1/2/3/4/5/6/50/8", "1/2/3/4/5/x/50", "1/2/3/NaN/5/6/50", "1/2/3/4/5/Infinity/50", "1/2/3/1/2/3/50", "1/2/3/4/5/6/4", "1/2/3/4/5/6/121", "1,5/2/3/4/5/6/50",
+                // finite, but not a place a single-precision engine can stand or look from: out of reach, or eye and look a millimetre apart
+                "1e40/0/0/0/0/0/50", "0/0/0/0/-100001/0/50", "1/2/3/1/2/3.001/50" })
                 Assert.Throws<FormatException>(() => CameraMath.ParsePose(bad), bad ?? "(null)");
         }
 
@@ -417,6 +433,16 @@ namespace DeviceChain.Harborpulse.Tests
             var old = U5Plan.Layout.Devices.Where(d => !New.Contains(d.Kind)).Select(HudModel.HumanName).ToArray();
             foreach (var d in Six) Assert.That(old, Does.Not.Contain(HudModel.HumanName(d)), d.Token);
             Assert.That(Six.Select(HudModel.HumanName).Distinct().Count(), Is.EqualTo(6));
+            // a world tag's box is as wide as it was for every name the district had, and wider for these longer ones
+            foreach (var d in U5Plan.Layout.Devices.Where(d => !New.Contains(d.Kind)))
+                Assert.That(HudModel.TagWidth(HudModel.HumanName(d) + " · alarm"), Is.EqualTo(HudModel.TagBoxWidth), d.Token);
+            foreach (var d in Six)
+            {
+                var text = HudModel.HumanName(d) + " · alarm";
+                Assert.That(HudModel.TagWidth(text), Is.GreaterThan(HudModel.TagBoxWidth), d.Token);
+                Assert.That(HudModel.TagWidth(text), Is.GreaterThanOrEqualTo(HudModel.TagPadding + HudModel.TagGlyphWidth * text.Length), d.Token);
+            }
+            Assert.That(HudModel.TagWidth(null), Is.EqualTo(HudModel.TagBoxWidth));
         }
     }
 }
