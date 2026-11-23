@@ -254,3 +254,21 @@ describe('anchor measurement groups', () => {
     expect(h.operations).toHaveLength(1);
   });
 });
+
+describe('a text reading on the stream', () => {
+  it('both stream documents select textValue, and a text sample reaches the subscriber with it', async () => {
+    expect(String(MEASUREMENT_STREAM)).toContain('textValue');
+    expect(String(MEASUREMENT_STREAM_MULTI)).toContain('textValue');
+
+    setup();
+    const s = sink();
+    hub.subscribeWidget(device('a'), s);
+    await flush();
+    const text: MeasurementSample = { id: 'a-mode', deviceToken: 'a', name: 'mode', value: null, textValue: 'eco', eventType: 0, occurredTime: null, classifier: null };
+    h.operations[0].sink.next({ measurementStream: text });
+    emit(0, 'a', 'temp');
+    expect(s.next).toHaveBeenCalledTimes(2);
+    expect(s.next).toHaveBeenNthCalledWith(1, expect.objectContaining({ name: 'mode', value: null, textValue: 'eco' }));
+    expect(s.next).toHaveBeenNthCalledWith(2, expect.objectContaining({ name: 'temp', value: 42 }));
+  });
+});
