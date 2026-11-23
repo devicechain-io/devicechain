@@ -317,15 +317,17 @@ func writerExclusionForeignKeys() []foreignKey {
 	}
 }
 
-// Statements that are individually re-runnable on their own: IF NOT EXISTS, CREATE OR REPLACE,
-// or DROP IF EXISTS followed by CREATE.
 // UnsettledPredicateV1 is the SQL text of "this cloud operation is not settled": settled is DONE
 // with no error, or with a recorded resolution. It is the predicate of ix_cloud_operations_unsettled
 // AND of every query that counts unsettled operations, so the planner can use the partial index
-// (a query's predicate must imply the index's). It is frozen with this migration: changing the
+// (a query's predicate must imply the index's). The COALESCE is load-bearing: without it a DONE
+// operation with an error and NO resolution evaluates to NULL, and NOT NULL is not true, so it would
+// count as settled. It is frozen with this migration: changing the
 // meaning needs a new migration and a V2 name, never an edit here.
-const UnsettledPredicateV1 = `NOT (status = 'DONE' AND (error_code IS NULL OR resolution IN ('RECONCILED', 'QUARANTINED')))`
+const UnsettledPredicateV1 = `NOT (status = 'DONE' AND (error_code IS NULL OR COALESCE(resolution IN ('RECONCILED', 'QUARANTINED'), false)))`
 
+// Statements that are individually re-runnable on their own: IF NOT EXISTS, CREATE OR REPLACE,
+// or DROP IF EXISTS followed by CREATE.
 var writerExclusionStatements = []string{
 	// One live identity per cloud cluster name; a destroyed record frees its name.
 	`CREATE UNIQUE INDEX IF NOT EXISTS ux_cloud_identities_ownership_nonce ON cloud_identities (ownership_nonce) WHERE ownership_nonce IS NOT NULL`,
