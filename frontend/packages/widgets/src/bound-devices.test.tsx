@@ -22,13 +22,27 @@ import { effectiveBindings } from '@devicechain/dashboards';
 import { useResolvedBindings } from '@devicechain/widget-sdk';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useMemo, useState } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
   markers: [] as Array<{ element: HTMLElement }>,
 }));
 
-vi.mock('maplibre-gl', () => {
+// How long the first import of a lazily loaded module takes. A loaded machine takes this long (or
+// far longer) for real; making it a fixed delay here means the test does not depend on the machine
+// being slow to catch a mount that does not wait for its imports: it fails every time without the
+// beforeAll below, and passes every time with it.
+const SLOW_IMPORT_MS = 150;
+const slowImport = () => new Promise<void>((resolve) => setTimeout(resolve, SLOW_IMPORT_MS));
+
+// The bundled world geometry: the real module, delivered late.
+vi.mock('./widgets/natural-earth-data', async (importActual) => {
+  await slowImport();
+  return importActual();
+});
+
+vi.mock('maplibre-gl', async () => {
+  await slowImport();
   class FakeMap {
     constructor(options: { container: HTMLElement }) {
       options.container.appendChild(document.createElement('div'));
@@ -59,8 +73,29 @@ vi.mock('maplibre-gl', () => {
 
 import { BoundDevicesNotice, describeBoundDevicesProblems } from './bound-devices-notice';
 import { DashboardRenderer } from './dashboard-renderer';
+import { defaultWidgetRegistry } from './default-registry';
 import { MapRuntimeProvider } from './map-runtime-context';
+import { preloadWidgets } from './preload';
 import { useBoundDevices } from './use-bound-devices';
+
+// The board's widgets load code on first mount, and every one of those loads is a dynamic import
+// that resolves through the module runner: real I/O and a transform, not a microtask. The map
+// alone makes three: the maplibre-gl module, and the bundled world geometry (~150 KiB, which the
+// default basemap fetches through loadLandStyle). `settle` below waits a fixed two macrotasks, so
+// on a loaded machine the first mount could still be waiting on one of them when the first
+// assertion ran (markers: 0). A host that must draw a complete first frame awaits preloadWidgets,
+// and the test does what that host does, and makes the map's two own imports the same way, so that
+// every import a mount makes is already resolved and the render is driven by `act` alone.
+beforeAll(async () => {
+  await Promise.all([
+    preloadWidgets(
+      defaultWidgetRegistry(),
+      definition.widgets.map((w) => w.type),
+    ),
+    import('maplibre-gl'),
+    import('./widgets/natural-earth-data'),
+  ]);
+});
 
 afterEach(cleanup);
 beforeEach(() => {

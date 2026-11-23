@@ -1622,7 +1622,7 @@ exports three series under its own service's name, `devicechain_<area>_<task>_â€
 | user-management | `dead_letter_sweep`, `tenant_purge` |
 | notification-management | `retention_sweep`, `escalation_scheduler` |
 | event-management | `anchor_sweep` |
-| device-state | `inactivity_sweep` |
+| device-state | `inactivity_sweep`, `orphan_sweep` |
 | event-sources | `presence_demote`, `presence_reconcile`, `presence_canary` |
 | device-management | `ownership_drain`, `session_kick_drain` |
 | command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile`, `campaign_scheduler` |

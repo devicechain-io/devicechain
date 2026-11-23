@@ -218,12 +218,27 @@ func TestCommittedRecordTruthfulness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Tier C experiments cannot have run: the spike project is unruled (U2).
+	// Tier C experiments need a throwaway cloud project. Only the C0a set (E-d, E-f, E-h, E-i) was approved
+	// to run; every other one stays blocked on U2. A C0a experiment either carries a measured verdict, or,
+	// when the attempt produced none, stays INCONCLUSIVE with the attempt's own cause (never U2, never a pass).
 	cloud := map[string]bool{"E-a": true, "E-b": true, "E-c": true, "E-d": true, "E-e": true, "E-f": true, "E-f2": true,
 		"E-g-gcs": true, "E-h": true, "E-i": true, "E-k": true}
+	c0a := map[string]bool{"E-d": true, "E-f": true, "E-h": true, "E-i": true}
 	for _, p := range r.Experiments {
-		if cloud[p.ID] && (p.Verdict != Inconclusive || p.Measured["blocked"] != "U2") {
-			t.Errorf("%s needs cloud but is recorded as %s without a U2 block", p.ID, p.Verdict)
+		switch {
+		case !cloud[p.ID]:
+		case !c0a[p.ID]:
+			if p.Verdict != Inconclusive || p.Measured["blocked"] != "U2" {
+				t.Errorf("%s needs cloud but is recorded as %s without a U2 block", p.ID, p.Verdict)
+			}
+		case p.Verdict == Inconclusive:
+			if b, _ := p.Measured["blocked"].(string); b == "" || b == "U2" || p.Measured["reason"] == nil {
+				t.Errorf("%s was attempted without a verdict: it must name its own cause, not U2", p.ID)
+			}
+		default:
+			if p.Measured["blocked"] != nil {
+				t.Errorf("%s carries a verdict and a block", p.ID)
+			}
 		}
 	}
 	if err := r.RequireHolds("E-j-1", "E-j-2", "E-j-4"); err != nil {
