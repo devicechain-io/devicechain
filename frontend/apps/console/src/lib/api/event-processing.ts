@@ -37,6 +37,33 @@ const VALIDATE_DETECTION_RULES = graphql(`
   }
 `);
 
+// The same gate, with the profile's metric types so a rule naming a STRING metric is warned about.
+// A separate document, not an optional variable on the first: a server that predates the argument
+// rejects a document that declares a type it does not know, so the plain one stays what it was.
+const VALIDATE_DETECTION_RULES_WITH_METRICS = graphql(`
+  query ValidateDetectionRulesWithMetrics($rules: [DetectionRuleInput!]!, $metrics: [DetectionMetricInput!]) {
+    validateDetectionRules(rules: $rules, metrics: $metrics) {
+      valid
+      errors {
+        index
+        token
+        message
+      }
+      warnings {
+        code
+        params
+        message
+      }
+    }
+  }
+`);
+
+// A metric of the profile the rule belongs to, as the gate needs it.
+export interface ProfileMetric {
+  key: string;
+  dataType: string;
+}
+
 // The outcome of validating one rule: ok, or the compiler's console-surfaceable reason.
 export interface RuleValidation {
   ok: boolean;
@@ -62,13 +89,17 @@ export async function validateDetectionRule(
   token: string,
   definition: string,
   groupScoped = false,
+  metrics: ProfileMetric[] = [],
 ): Promise<RuleValidation> {
-  const data = await gql('event-processing', VALIDATE_DETECTION_RULES, {
-    // groupScoped lets the gate reject a scope on an unsupported kind (absence/correlation)
-    // inline (ADR-062 S4), so the author sees it in the editor, not only at publish.
-    rules: [{ token, definition, groupScoped }],
-  });
-  const result = data.validateDetectionRules;
+  // groupScoped lets the gate reject a scope on an unsupported kind (absence/correlation)
+  // inline (ADR-062 S4), so the author sees it in the editor, not only at publish.
+  const rules = [{ token, definition, groupScoped }];
+  // The types are sent only when a STRING metric exists: that is the one case they change the answer
+  // for, and a profile without one validates exactly as it always did, even against a server that
+  // does not know the argument yet.
+  const result = metrics.some((m) => m.dataType === 'STRING')
+    ? (await gql('event-processing', VALIDATE_DETECTION_RULES_WITH_METRICS, { rules, metrics })).validateDetectionRules
+    : (await gql('event-processing', VALIDATE_DETECTION_RULES, { rules })).validateDetectionRules;
   const warnings = result.warnings.map((w) => ({ code: w.code, params: w.params, message: w.message }));
   if (result.valid) return { ok: true, message: null, warnings };
   return { ok: false, message: result.errors[0]?.message ?? 'The rule did not compile.', warnings: [] };

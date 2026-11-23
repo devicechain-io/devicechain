@@ -91,6 +91,7 @@
   "defParamSchemaHint": "可选的参数 JSON 数组，每项形如 { \"name\", \"dataType\", … }。无参数命令请留空。",
   "defParamSchemaLabel": "参数模式",
   "defParamSchemaPlaceholder": "[{\"name\":\"level\",\"dataType\":\"INT\",\"required\":true}]",
+  "defStringMetricHint": "文本读数，例如模式或状态。它没有单位、范围或公式，也不会被求平均或按数字绘图。",
   "defTokenLockedHint": "标识符，不可更改。",
   "defUnitHint": "UCUM，例如 Cel",
   "defUnitPlaceholder": "Cel",
@@ -949,5 +950,6 @@
   "decIssue.tooManyVectors": "向量最多 {{max}} 个。",
   "decIssue.tooManyReadings": "一个分段最多可产生 {{max}} 条读数。",
   "decIssue.documentTooLarge": "解码器过大：最多 {{max}} 字节。",
-  "decIssue.noSections": "请至少添加一个分段。"
+  "decIssue.noSections": "请至少添加一个分段。",
+  "ruleWarning.namesStringMetric": "指标“{{p0}}”在此配置文件中被声明为文本（STRING），而规则从不读取文本读数，因此此规则永远不会触发。请使用数值指标，或将该指标声明为 DOUBLE、INT 或 BOOLEAN。"
 }

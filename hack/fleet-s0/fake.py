@@ -121,7 +121,7 @@ if tool == "gcloud":
         if "value(labels.fleet-s0)" in " ".join(args):
             emit("production" if case == "wrong-project" else "throwaway")
         emit("123456789")
-    if args[:2] == ["resource-manager", "liens"]:
+    if args[:3] == ["alpha", "resource-manager", "liens"]:
         emit("lien-1" if case == "lien" else "")
     if args[:3] == ["iam", "roles", "create"]:
         mark("canary-role")
@@ -239,6 +239,11 @@ if tool == "tofu" and args and args[0].startswith("-chdir=") and portable(args[0
     if action == "state" and args[2] == "show":
         emit("tainted" if case == "failed-create-tainted" else "")
     if action == "import":
+        # Real tofu: ADDR ID are the last two arguments, and a flag after them is a usage error.
+        tail = args[args.index("import")+1:]
+        if len(tail) < 2 or any(a.startswith("-") for a in tail[-2:]) or any(not a.startswith("-") for a in tail[:-2]):
+            print("The import command expects two arguments.", file=sys.stderr)
+            sys.exit(1)
         write_state(resources + ["google_container_cluster.c"])
         emit("")
     if action == "plan":
