@@ -340,6 +340,8 @@ IN_MODULE = {
     ("examples/ota-device", "internal/testutil"): "runtime.Caller root is its own module",
     ("backend/core", "test/frontend"): "build-tagged `frontend`, so the go job never compiles it; the frontend job runs the same vitest suites",
     ("backend/core", "replication"): "\"..\" appears only in a comment",
+    ("backend/fleet", "tofurun"): "\"..\" is the refused root-path segment and the \"../x\" fixtures of its tests; its fixture trees are its own testdata/",
+    ("backend/fleet", "internal/tofutest"): "runtime.Caller locates tofurun/testdata inside backend/fleet",
     ("backend/core", "webhooksig"): "\"..\" is a refused path segment",
     ("backend/k8s", "api/v1"): "schema_identity_test.go reads ../../config/crd/bases inside backend/k8s",
     ("backend/k8s", "api/v1beta1"): "instance_crd_test.go, deprecations_test.go, executor_crd_test.go and executor_schema_test.go read ../../config/crd/bases inside backend/k8s",
@@ -600,6 +602,8 @@ class Selection:
         self.frontend_why = ""
         self.migrations = True
         self.migrations_why = "runs: everything runs"
+        self.fleet_runner = True
+        self.fleet_runner_why = "runs: everything runs"
         self.draft = False
         # The race step's scope on a pull request: {module: set of package dirs to race}, a module
         # missing from it racing nothing; None races every leg in full. See race_select.
@@ -634,6 +638,22 @@ FRONTEND_INPUTS = [
     "package.json",
     "package-lock.json",
 ]
+# The `fleet-runner` job (backend/fleet/tofurun against a real OpenTofu and PostgreSQL, then the runner
+# image built for real): what it builds from or runs against. The image copies backend/fleet, backend/core's
+# go.mod and go.sum, the fleet roots and the shared gke-cluster module; the count check is its gate.
+FLEET_RUNNER_INPUTS = [
+    "backend/fleet/**",
+    "backend/core/go.mod",
+    "backend/core/go.sum",
+    "deploy/fleet/**",
+    "deploy/opentofu/modules/gke-cluster/**",
+    "hack/check-fleetpg-count.sh",
+    "go.work",
+    "go.work.sum",
+    ".gitignore",
+]
+
+
 # ---------------------------------------------------------------------------------------------
 # The `migrations` and `migrations-timescaledb-next` jobs: what they run, so what can change them.
 # ---------------------------------------------------------------------------------------------
@@ -922,6 +942,10 @@ def select(ws, changed_files, graph=None):
                     s.readers.setdefault(module, {}).setdefault(norm_pkg(pkg), "%s (read by %s)" % (f, why))
         if not owner and not read and not match(f, INERT):
             s.everything("%s is outside every module and no reader row or inert glob accounts for it" % f)
+
+    fr_hits = [f for f in files if match(f, FLEET_RUNNER_INPUTS)]
+    s.fleet_runner = s.full or bool(fr_hits)
+    s.fleet_runner_why = "runs: everything runs" if s.full else (("runs: " + fr_hits[0]) if fr_hits else "skipped: no changed file is a fleet-runner input (backend/fleet, the fleet roots, the gke-cluster module)")
 
     if s.full:
         s.modules = set(ws.dirs)
@@ -1239,6 +1263,7 @@ def report(ws, s, go, integ, integration_plan, smoke=(), smoke_all=(), out=sys.s
         p("  %s %-45s %s" % ("run " if m in smoke else "SKIP", m, why.get(m, "its module does not run and no image input changed")))
     p("frontend: " + s.frontend_why)
     p("migrations: " + s.migrations_why)
+    p("fleet-runner: " + s.fleet_runner_why)
 
 
 def full_selection(ws, why):
@@ -1294,7 +1319,7 @@ def cmd_plan():
     report(ws, s, go, integ, integration_plan, smoke, smoke_all)
     if s.full and not s.draft and not s.migrations:
         raise RuntimeError("a full run skipped the migrations jobs")
-    print(json.dumps({"go": go, "integration": integ, "smoke": smoke, "frontend": s.frontend, "migrations": s.migrations,
+    print(json.dumps({"go": go, "integration": integ, "smoke": smoke, "frontend": s.frontend, "migrations": s.migrations, "fleet_runner": s.fleet_runner,
                       "full": s.full, "draft": s.draft}, separators=(",", ":")))
 
 
@@ -1302,6 +1327,7 @@ def mark_draft(s):
     """A draft pull request: plan none of the heavy jobs (go, integration, image-smoke, migrations)."""
     s.draft = True
     s.migrations, s.migrations_why = False, "skipped: the pull request is a draft (runs when it is marked ready)"
+    s.fleet_runner, s.fleet_runner_why = False, "skipped: the pull request is a draft (runs when it is marked ready)"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1545,6 +1571,11 @@ def self_test():
         expect(not s.full and not s.modules and set(s.readers) == {"backend/cli"} and not s.frontend,
                "a docs change runs only the docs-reading package, no frontend: %s %s" % (sorted(s.modules), s.readers))
 
+        print("==> fleet-runner")
+        expect(not select(ws, ["docs/x.md"]).fleet_runner, "a docs change skips the fleet runner")
+        expect(not select(ws, ["backend/core/x.go"]).fleet_runner, "a core Go change that is not go.mod/go.sum skips the fleet runner")
+        expect(select(ws, ["backend/core/go.mod"]).fleet_runner, "the image copies core's go.mod: it runs the fleet runner")
+        expect(select(ws, ["deploy/fleet/gke-pg/main.tf"]).fleet_runner, "a fleet root change runs the fleet runner")
         print("==> frontend")
         expect(select(ws, ["frontend/apps/x.ts"]).frontend, "a frontend change runs frontend")
         expect(select(ws, ["backend/services/svc-a/graphql/schema.graphql"]).frontend, "a schema change runs frontend")
