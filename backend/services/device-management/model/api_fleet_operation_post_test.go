@@ -42,6 +42,13 @@ func postFixture(t *testing.T, value string, unset bool) *postEnv {
 	require.NoError(t, err)
 	op, err = api.StartFleetOperation(ctx, "p1", op.ContractDigest, alice)
 	require.NoError(t, err)
+	// An in-memory database lives only while some connection to it is open, and a transaction cut short by its
+	// deadline closes the connection it ran on: pin one for the length of the test.
+	if sqlDB, derr := api.RDB.Database.DB(); derr == nil {
+		pin, perr := sqlDB.Conn(context.Background())
+		require.NoError(t, perr)
+		t.Cleanup(func() { _ = pin.Close() })
+	}
 	e := &postEnv{api: api, ctx: ctx, dev: dev, op: op, lease: FleetLease{Epoch: op.ExecutionEpoch, Grantee: alice.Name, Deadline: time.Now().Add(time.Minute)}}
 	require.NoError(t, api.RDB.DB(ctx).Where("operation_id = ?", op.ID).First(&e.line).Error)
 	return e

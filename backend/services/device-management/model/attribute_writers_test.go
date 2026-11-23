@@ -884,7 +884,7 @@ func scanAttributeWriterPackages(sources map[string][]byte) ([]string, error) {
 func attributeRestrictedReference(file, function, name string) bool {
 	switch name {
 	case "attrprotocol":
-		return !(file == "model/api_attribute_owner.go" && function == "lockDeviceAttributes") &&
+		return !(file == "model/api_attribute_owner.go" && (function == "lockDeviceAttributes" || function == "tryLockDeviceAttributes")) &&
 			!(file == "model/api_attribute_orphans.go" && function == "markAttributeOrphanSweep")
 	case "markAttributeOrphanSweep", "deleteAttributeOrphanBatch":
 		return !(file == "model/api_attribute_orphans.go" && function == "SweepDeviceAttributeOrphans")
