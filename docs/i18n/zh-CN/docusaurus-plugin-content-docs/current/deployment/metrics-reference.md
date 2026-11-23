@@ -171,6 +171,19 @@ title: 指标参考
 | `react_events_poison_dropped_total` | 因分发持续失败而在达到重投递上限后被丢弃的派生事件。它们同时也写入死信流，因此这与 `react_events_dead_lettered_total` 统计的是同一批事件；保留它是因为 `ReactPoisonDropping` 告警依据它触发。 |
 | `react_workers` | REACT 可同时分发的派生事件数（`react.workers`）。同一设备的事件按流中顺序逐个分发，但留待重新投递的事件会在其后的事件之后再次分发。 |
 
+## 设备状态 {#device-state}
+
+前缀：`devicechain_devicestate_`。
+
+每十分钟由一个副本将每个租户的最近已知状态行与 device-management 比对，并修正不再对应任何设备的行。
+
+| 指标 | 含义 |
+| --- | --- |
+| `orphan_sweep_deleted_total` | 计数器。清扫移除的设备状态行数，原因是其设备已不存在，或已用同一令牌重新创建。清除或删除设备之后立即出现一阵增长是预期的，删除设备期间保持非零的稳定速率也是正常的。若没有删除任何设备而速率持续上升，则是故障：有东西在删除设备却没有通知 device-state。每一轮的数量见清扫的日志行（`Orphan sweep reconciled device states`）。 |
+| `orphan_sweep_stamped_total` | 计数器。清扫为其所属设备打上其版本标记（incarnation）的设备状态行数，这样之后用同一令牌重新创建的设备就会被识别为另一台设备。每行只打一次标记，因此升级后最初几轮出现一阵增长是预期的（在记录该标记之前写入的行在此补上），随后回落为零。速率一直不稳定则值得检查。 |
+
+无法连接 device-management 的一轮会跳过该租户剩余的分页，并在下一轮重试；这不会计入上述任何一个指标。该轮本身显示在[维护任务](./observability.md#maintenance-passes)所述的 `orphan_sweep` 序列中。
+
 ## Event management {#event-management}
 
 前缀：`devicechain_eventmanagement_`。
