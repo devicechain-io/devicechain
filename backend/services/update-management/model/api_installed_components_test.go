@@ -4,6 +4,7 @@
 package model
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -45,8 +46,8 @@ func TestAnInventoryWhileUnknownRecordsAndReconciles(t *testing.T) {
 	v, err := e.api.AssignArtifact(tenantCtx("acme"), "dev-2", "fw-2")
 	require.NoError(t, err)
 	e.mustApply(t, "acme", "dev-2", progress(v, 1, ota.StageInstalling, "b"), ota.VerdictApplied)
-	e.advance(25 * time.Minute)
-	_, err = e.api.SweepDeadlines(tenantCtx("acme"), 100)
+	e.advance(40 * time.Minute)
+	_, err = e.api.SweepDeadlines(context.Background(), 100)
 	require.NoError(t, err)
 	require.Equal(t, ota.StateUnknown, e.state(t, "acme", v))
 	require.Empty(t, installed(t, e, "acme", "dev-2"), "an attempt alone says nothing about what runs")
