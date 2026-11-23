@@ -16,26 +16,21 @@ import (
 )
 
 //go:embed schema.graphql
-var baseSchema string
+var SchemaContent string
 
-//go:embed schema_fleet_operations.graphql
-var fleetOperationSchema string
-
-// SchemaContent is the schema this build serves. The fleet-operation fragment is part of it only
-// when the engine behind it is served (ledger.Served): a served createFleetOperation with no driver
-// behind it would be a plausible answer from an unimplemented feature, so until the engine ships the
-// fragment is built and tested (SchemaContentWithFleetOperations) and not served.
-var SchemaContent = baseSchema + servedFleetOperationSchema()
-
-// SchemaContentWithFleetOperations is the schema with the fleet-operation fragment included, for the
+// SchemaContentWithFleetOperations is the schema with the fleet-operation fragment appended, for the
 // tests that exercise it before it is served.
-var SchemaContentWithFleetOperations = baseSchema + "\n" + fleetOperationSchema
+var SchemaContentWithFleetOperations = SchemaContent + "\n" + fleetOperationSchema
 
-func servedFleetOperationSchema() string {
+// ServedSchema is the schema this build serves. The fleet-operation fragment is part of it only when
+// the engine behind it is served (ledger.Served): a served createFleetOperation with no driver behind
+// it would be a plausible answer from an unimplemented feature, so until the engine ships the fragment
+// is built and tested and not served.
+func ServedSchema() string {
 	if ledger.Served {
-		return "\n" + fleetOperationSchema
+		return SchemaContentWithFleetOperations
 	}
-	return ""
+	return SchemaContent
 }
 
 // ContextCachedApiKey carries the caching *model.CachedApi decorator into the

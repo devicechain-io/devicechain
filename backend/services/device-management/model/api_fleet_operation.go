@@ -54,11 +54,11 @@ func fleetLock(tx *gorm.DB, key int64, shared bool) error {
 	if tx.Dialector.Name() != "postgres" {
 		return nil
 	}
-	fn := "pg_advisory_xact_lock"
+	// Two constant statements, so the SQL is readable statically (the raw-SQL guard needs that).
 	if shared {
-		fn = "pg_advisory_xact_lock_shared"
+		return tx.Exec("SELECT pg_advisory_xact_lock_shared(?)", key).Error
 	}
-	return tx.Exec("SELECT "+fn+"(?)", key).Error
+	return tx.Exec("SELECT pg_advisory_xact_lock(?)", key).Error
 }
 
 // fleetAdmissionLockTimeout bounds how long create waits for the admission locks.

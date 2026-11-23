@@ -1,3 +1,14 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package graphql
+
+// fleetOperationSchema is the fleet-operation fragment of the schema. It is a Go string and not a
+// .graphql file on purpose: nothing may publish, mount or document it as served until the engine behind
+// it is served, and every tool that walks the schema files (the compatibility check, the published
+// reference, the data-access guard) would otherwise treat it as a schema of its own. Descriptions begin
+// "Preview." and contain no backtick.
+const fleetOperationSchema = `
 """Preview. Where an operation is in dispatching its lines. A paused or dispatched operation is a resting state, not a failure."""
 enum FleetOperationDispatch {
   """Preview. Reserved for a later release."""
@@ -384,3 +395,4 @@ extend type Mutation {
   """
   createFleetOperation(request: FleetOperationCreateRequest!): FleetOperation!
 }
+`

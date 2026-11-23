@@ -102,7 +102,8 @@ func withEngine(t *testing.T) {
 }
 
 func TestTheFleetFragmentIsNotServedUntilTheEngineIs(t *testing.T) {
-	require.NotContains(t, SchemaContent, "createFleetOperation", "an unserved engine must not be reachable")
+	require.NotContains(t, ServedSchema(), "createFleetOperation", "an unserved engine must not be reachable")
+	require.NotContains(t, ServedSchema(), "FleetOperationDispatch")
 	require.NotContains(t, SchemaContent, "FleetOperationDispatch")
 	// The fragment itself must parse with the base schema, and the base schema without it still does.
 	require.Contains(t, SchemaContentWithFleetOperations, "createFleetOperation")

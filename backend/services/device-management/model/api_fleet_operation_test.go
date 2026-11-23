@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fleetFixture is a database with devices "d1".."dN" in tenant acme and "other1" in tenant globex.
+// fleetFixture is a database with devices d1 to dN in tenant acme and "other1" in tenant globex.
 func fleetFixture(t *testing.T, devices int) (*Api, context.Context) {
 	t.Helper()
 	db := sqlitetest.OpenDSN(t, sqlitetest.MemoryDSN(t), nil)
