@@ -153,9 +153,9 @@ func (DeviceState) AuditExempt() bool { return true }
 // LatestMeasurement is the current (most-recent) value of one named measurement
 // for one device — the O(1) "what is it right now?" projection beside the
 // append-only measurement history in event-management. One row per
-// (tenant, device, name). Numeric measurements only for v1;
-// a non-numeric reading is skipped upstream. Position has its own sibling
-// projection, LatestLocation. Bounded by (devices × metrics-per-device), so it
+// (tenant, device, name). A row has one value column set: Value for a numeric
+// reading, TextValue for a STRING one; a reading that is neither is skipped
+// upstream. Position has its own sibling projection, LatestLocation. Bounded by (devices × metrics-per-device), so it
 // never grows with history.
 type LatestMeasurement struct {
 	gorm.Model
@@ -169,7 +169,14 @@ type LatestMeasurement struct {
 	DeviceToken string `gorm:"uniqueIndex:idx_latest_measurement_tenant_device_name,priority:2"`
 	Name        string `gorm:"uniqueIndex:idx_latest_measurement_tenant_device_name,priority:3"`
 	Value       sql.NullFloat64
-	Classifier  *uint
+	// TextValue is a STRING reading's value, kept apart from Value because a string is not a
+	// number. A row written by this code has exactly one of the two. Nullable with no default,
+	// so rows written before the column existed, and by pods that predate it, read NULL (see
+	// NewLatestMeasurementTextValueSchema). During a rolling upgrade a row can briefly hold both:
+	// an unchanged v1.9 pod parses a numeric-looking STRING into Value and leaves the old text in
+	// place until a newer pod writes the row again.
+	TextValue  *string `gorm:"type:text"`
+	Classifier *uint
 	// Unit + DataType are denormalized from the bound metric definition (ADR-016),
 	// mirroring the measurement_events history projection, so the last-known value is
 	// self-describing without a cross-service hop into device-management. Both are
@@ -191,8 +198,10 @@ func (LatestMeasurement) ScopedBy() rdb.ScopeRule { return deviceOwners }
 // LatestMeasurementInput is one (name, value, occurredAt) reading to upsert into
 // the latest-value projection.
 type LatestMeasurementInput struct {
-	Name         string
-	Value        sql.NullFloat64
+	Name  string
+	Value sql.NullFloat64
+	// TextValue is a STRING reading's value; Value is not Valid when it is set.
+	TextValue    *string
 	Classifier   *uint
 	Unit         *string
 	DataType     *string
