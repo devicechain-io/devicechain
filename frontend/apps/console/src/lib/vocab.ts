@@ -12,14 +12,17 @@ export interface Option {
   description?: string;
 }
 
-// Metric data types the authoring form offers: the numeric ones. STRING (a text reading) is
-// valid in the API but is not offered here, because the form has no unit, bounds or allow-list
-// handling for text; declare a STRING metric through the API or dcctl.
+// Metric data types the authoring form offers. STRING is a text reading (a mode, a state): the
+// form hides the numeric fields (unit, bounds) and the formula for it, because text has none.
 export const METRIC_DATA_TYPES: Option[] = [
   { value: 'DOUBLE', label: 'Double', description: 'Floating-point measurement' },
   { value: 'INT', label: 'Integer', description: 'Whole-number measurement' },
   { value: 'BOOLEAN', label: 'Boolean', description: 'On/off, stored as 0/1' },
+  { value: 'STRING', label: 'String', description: 'Text, such as a mode or state' },
 ];
+
+// The one metric data type that carries text rather than a number.
+export const METRIC_TEXT_TYPE = 'STRING';
 
 // How disruptive a command is. DISRUPTIVE and DESTRUCTIVE commands wait for the device
 // type's maintenance window; NORMAL never does. Wire strings, localized where shown
