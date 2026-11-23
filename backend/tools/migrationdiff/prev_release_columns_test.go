@@ -21,7 +21,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const prevRelease = "v1.8.0"
+const prevRelease = "v1.9.0"
 
 var (
 	prevMigrateOnce sync.Once

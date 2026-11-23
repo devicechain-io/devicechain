@@ -20,6 +20,7 @@ ALTER SEQUENCE "device-management".detection_rule_scope_refs_id_seq OWNED BY "de
 ALTER SEQUENCE "device-management".detection_rules_id_seq OWNED BY "device-management".detection_rules.id;
 ALTER SEQUENCE "device-management".device_aliases_id_seq OWNED BY "device-management".device_aliases.id;
 ALTER SEQUENCE "device-management".device_claims_id_seq OWNED BY "device-management".device_claims.id;
+ALTER SEQUENCE "device-management".device_configuration_reports_id_seq OWNED BY "device-management".device_configuration_reports.id;
 ALTER SEQUENCE "device-management".device_configuration_revisions_id_seq OWNED BY "device-management".device_configuration_revisions.id;
 ALTER SEQUENCE "device-management".device_configuration_states_id_seq OWNED BY "device-management".device_configuration_states.id;
 ALTER SEQUENCE "device-management".device_credentials_id_seq OWNED BY "device-management".device_credentials.id;
@@ -33,6 +34,7 @@ ALTER SEQUENCE "device-management".device_revoked_certificates_id_seq OWNED BY "
 ALTER SEQUENCE "device-management".device_trust_anchors_id_seq OWNED BY "device-management".device_trust_anchors.id;
 ALTER SEQUENCE "device-management".device_types_id_seq OWNED BY "device-management".device_types.id;
 ALTER SEQUENCE "device-management".devices_id_seq OWNED BY "device-management".devices.id;
+ALTER SEQUENCE "device-management".entity_attribute_generations_id_seq OWNED BY "device-management".entity_attribute_generations.id;
 ALTER SEQUENCE "device-management".entity_attributes_id_seq OWNED BY "device-management".entity_attributes.id;
 ALTER SEQUENCE "device-management".entity_group_facet_refs_id_seq OWNED BY "device-management".entity_group_facet_refs.id;
 ALTER SEQUENCE "device-management".entity_group_memberships_id_seq OWNED BY "device-management".entity_group_memberships.id;
@@ -144,6 +146,9 @@ ALTER TABLE ONLY "device-management".device_aliases ALTER COLUMN id SET DEFAULT 
 ALTER TABLE ONLY "device-management".device_claims
  ADD CONSTRAINT device_claims_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_claims ALTER COLUMN id SET DEFAULT nextval('"device-management".device_claims_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".device_configuration_reports
+ ADD CONSTRAINT device_configuration_reports_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".device_configuration_reports ALTER COLUMN id SET DEFAULT nextval('"device-management".device_configuration_reports_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".device_configuration_revisions
  ADD CONSTRAINT device_configuration_revisions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_configuration_revisions ALTER COLUMN id SET DEFAULT nextval('"device-management".device_configuration_revisions_id_seq'::regclass);
@@ -215,6 +220,9 @@ ALTER TABLE ONLY "device-management".devices
 ALTER TABLE ONLY "device-management".devices
  ADD CONSTRAINT fk_devices_expected_provisioning_profile FOREIGN KEY (expected_provisioning_profile_id) REFERENCES "device-management".provisioning_profiles(id) ON DELETE SET NULL;
 ALTER TABLE ONLY "device-management".devices ALTER COLUMN id SET DEFAULT nextval('"device-management".devices_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".entity_attribute_generations
+ ADD CONSTRAINT entity_attribute_generations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".entity_attribute_generations ALTER COLUMN id SET DEFAULT nextval('"device-management".entity_attribute_generations_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".entity_attributes
  ADD CONSTRAINT entity_attributes_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".entity_attributes ALTER COLUMN id SET DEFAULT nextval('"device-management".entity_attributes_id_seq'::regclass);
@@ -336,6 +344,11 @@ CREATE FUNCTION "device-management".automation_review_policy_required(p_profile 
  AS $$
  SELECT EXISTS (SELECT 1 FROM "device-management".automation_review_policies
  WHERE device_profile_id = p_profile AND required)
+$$;
+CREATE FUNCTION "device-management".dc_entity_attr_lock(p_type text, p_id bigint) RETURNS void
+ LANGUAGE sql
+ AS $$
+ SELECT pg_advisory_xact_lock(hashtextextended('dc.attr|' || p_type || '|' || p_id::text, 0))
 $$;
 CREATE INDEX "idx_device-management_agent_effect_outboxes_created_at" ON "device-management".agent_effect_outboxes USING btree (created_at);
 CREATE INDEX "idx_device-management_agent_proposals_deleted_at" ON "device-management".agent_proposals USING btree (deleted_at);
@@ -483,6 +496,7 @@ CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btr
 CREATE INDEX idx_automation_review_break_glass_device_profile_id ON "device-management".automation_review_break_glass USING btree (device_profile_id);
 CREATE INDEX idx_automation_review_break_glass_tenant_id ON "device-management".automation_review_break_glass USING btree (tenant_id);
 CREATE INDEX idx_automation_review_break_glass_txid ON "device-management".automation_review_break_glass USING btree (txid);
+CREATE INDEX idx_configuration_reports_tenant_created ON "device-management".device_configuration_reports USING btree (tenant_id, created_at);
 CREATE INDEX idx_device_credentials_provisioning_profile ON "device-management".device_credentials USING btree (provisioning_profile_id) WHERE (provisioning_profile_id IS NOT NULL);
 CREATE INDEX idx_device_credentials_trust_anchor ON "device-management".device_credentials USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
 CREATE INDEX idx_devices_device_type ON "device-management".devices USING btree (tenant_id, device_type_id) WHERE (deleted_at IS NULL);
@@ -518,6 +532,8 @@ CREATE INDEX ix_entity_attributes_facet_value ON "device-management".entity_attr
 CREATE INDEX ix_entity_attributes_list_order ON "device-management".entity_attributes USING btree (tenant_id, created_at DESC, id DESC) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_entity_relationships_list_order ON "device-management".entity_relationships USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_geo_fences_list_order ON "device-management".geo_fences USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
+CREATE INDEX ix_profile_decoder_healths_profile_window ON "device-management".profile_decoder_healths USING btree (tenant_id, device_profile_id, window_start);
+CREATE INDEX ix_profile_decoder_healths_window_start ON "device-management".profile_decoder_healths USING btree (window_start);
 CREATE SCHEMA "device-management";
 CREATE SEQUENCE "device-management".agent_proposals_id_seq
  START WITH 1
@@ -651,6 +667,12 @@ CREATE SEQUENCE "device-management".device_claims_id_seq
  NO MINVALUE
  NO MAXVALUE
  CACHE 1;
+CREATE SEQUENCE "device-management".device_configuration_reports_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
 CREATE SEQUENCE "device-management".device_configuration_revisions_id_seq
  START WITH 1
  INCREMENT BY 1
@@ -724,6 +746,18 @@ CREATE SEQUENCE "device-management".device_types_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".devices_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".entity_attribute_generation_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".entity_attribute_generations_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -1283,6 +1317,18 @@ CREATE TABLE "device-management".device_claims (
  claimed_by_customer_id bigint,
  claim_secret_digest character varying(128)
 );
+CREATE TABLE "device-management".device_configuration_reports (
+ id bigint NOT NULL,
+ created_at timestamp with time zone NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ device_id bigint NOT NULL,
+ revision bigint NOT NULL,
+ digest character varying(71) NOT NULL,
+ status character varying(16) NOT NULL,
+ errors jsonb,
+ source character varying(16) NOT NULL,
+ CONSTRAINT chk_configuration_reports_status CHECK (((status)::text = ANY ((ARRAY['APPLIED'::character varying, 'REJECTED'::character varying])::text[])))
+);
 CREATE TABLE "device-management".device_configuration_revisions (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -1305,7 +1351,12 @@ CREATE TABLE "device-management".device_configuration_states (
  reported_status character varying(16),
  reported_errors jsonb,
  reported_at timestamp with time zone,
- last_sync_at timestamp with time zone
+ last_sync_at timestamp with time zone,
+ captured_revision bigint,
+ captured_status character varying(16),
+ capture_gap_through bigint,
+ capture_complete_since timestamp with time zone,
+ captured_reported_at timestamp with time zone
 );
 CREATE TABLE "device-management".device_credential_chain_links (
  credential_id bigint NOT NULL,
@@ -1506,6 +1557,15 @@ CREATE TABLE "device-management".devices (
  installed_accuracy numeric(12,4),
  installed_source text,
  installed_updated_at timestamp with time zone
+);
+CREATE TABLE "device-management".entity_attribute_generations (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ device_id bigint NOT NULL,
+ scope character varying(32) NOT NULL,
+ attr_key character varying(256) NOT NULL,
+ generation bigint NOT NULL,
+ updated_at timestamp with time zone
 );
 CREATE TABLE "device-management".entity_attributes (
  id bigint NOT NULL,
@@ -1894,12 +1954,14 @@ CREATE UNIQUE INDEX uix_areas_tenant_token ON "device-management".areas USING bt
 CREATE UNIQUE INDEX uix_asset_type_versions_type_version ON "device-management".asset_type_versions USING btree (asset_type_id, version);
 CREATE UNIQUE INDEX uix_asset_types_tenant_token ON "device-management".asset_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_assets_tenant_token ON "device-management".assets USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_attribute_generation_key ON "device-management".entity_attribute_generations USING btree (tenant_id, device_id, scope, attr_key);
 CREATE UNIQUE INDEX uix_automation_review_policies_profile ON "device-management".automation_review_policies USING btree (tenant_id, device_profile_id);
 CREATE UNIQUE INDEX uix_automation_review_policy_changes_token ON "device-management".automation_review_policy_changes USING btree (tenant_id, token);
 CREATE UNIQUE INDEX uix_automation_reviews_request ON "device-management".automation_reviews USING btree (tenant_id, request_id);
 CREATE UNIQUE INDEX uix_automation_reviews_tenant_token ON "device-management".automation_reviews USING btree (tenant_id, token);
 CREATE UNIQUE INDEX uix_command_definitions_tenant_profile_key ON "device-management".command_definitions USING btree (tenant_id, device_profile_id, command_key) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_command_definitions_tenant_token ON "device-management".command_definitions USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_configuration_reports_device_revision_status ON "device-management".device_configuration_reports USING btree (device_id, revision, status);
 CREATE UNIQUE INDEX uix_customer_types_tenant_token ON "device-management".customer_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_customers_tenant_token ON "device-management".customers USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_dcr_device_revision ON "device-management".device_configuration_revisions USING btree (device_id, revision);

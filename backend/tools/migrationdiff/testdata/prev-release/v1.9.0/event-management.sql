@@ -6,6 +6,8 @@ ALTER TABLE ONLY "event-management".audit_events ALTER COLUMN id SET DEFAULT nex
 ALTER TABLE ONLY "event-management".calculated_backfills
  ADD CONSTRAINT calculated_backfills_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "event-management".calculated_backfills ALTER COLUMN id SET DEFAULT nextval('"event-management".calculated_backfills_id_seq'::regclass);
+ALTER TABLE ONLY "event-management".device_token_holders
+ ADD CONSTRAINT device_token_holders_pkey PRIMARY KEY (tenant_id, device_token);
 ALTER TABLE ONLY "event-management".entity_deletion_watermarks
  ADD CONSTRAINT entity_deletion_watermarks_pkey PRIMARY KEY (tenant_id, entity_type, entity_token);
 ALTER TABLE ONLY "event-management".event_management_migrations
@@ -14,6 +16,8 @@ ALTER TABLE ONLY "event-management".events
  ADD CONSTRAINT events_pkey PRIMARY KEY (tenant_id, occurred_time, event_id);
 ALTER TABLE ONLY "event-management".purged_tenants
  ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
+ALTER TABLE ONLY "event-management".rollup_levels
+ ADD CONSTRAINT rollup_levels_pkey PRIMARY KEY (level);
 ALTER TABLE ONLY "event-management".tenant_usage_daily
  ADD CONSTRAINT tenant_usage_daily_pkey PRIMARY KEY (tenant_id, day);
 ALTER TABLE ONLY "event-management".tenant_usage_devices
@@ -125,13 +129,21 @@ CREATE TABLE "event-management".calculated_backfills (
  CONSTRAINT chk_calculated_backfills_phase CHECK ((phase = ANY (ARRAY['FILL'::text, 'REFRESH'::text]))),
  CONSTRAINT chk_calculated_backfills_status CHECK ((status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text, 'SUCCEEDED'::text, 'CANCELLED'::text, 'FAILED'::text])))
 );
+CREATE TABLE "event-management".device_token_holders (
+ tenant_id character varying(128) NOT NULL,
+ device_token character varying(128) NOT NULL,
+ held_since timestamp with time zone NOT NULL
+);
 CREATE TABLE "event-management".entity_deletion_watermarks (
  tenant_id character varying(128) NOT NULL,
  entity_type character varying(64) NOT NULL,
  entity_token character varying(128) NOT NULL,
  deleted_time timestamp with time zone NOT NULL,
  resweep_after timestamp with time zone,
- armed_at timestamp with time zone
+ armed_at timestamp with time zone,
+ holder_checked_deletion timestamp with time zone,
+ holder_check_after timestamp with time zone,
+ holder_check_delay_seconds integer DEFAULT 0 NOT NULL
 );
 CREATE TABLE "event-management".event_anchors (
  tenant_id character varying(128) NOT NULL,
@@ -194,13 +206,18 @@ CREATE TABLE "event-management".measurement_events (
  value numeric(20,8),
  classifier bigint,
  unit text,
- data_type character varying(32)
+ data_type character varying(32),
+ text_value text
 );
 CREATE TABLE "event-management".purged_tenants (
  token character varying(128) NOT NULL,
  epoch timestamp with time zone NOT NULL,
  planted_at timestamp with time zone NOT NULL,
  completed_at timestamp with time zone
+);
+CREATE TABLE "event-management".rollup_levels (
+ level character varying(32) NOT NULL,
+ complete_from timestamp with time zone NOT NULL
 );
 CREATE TABLE "event-management".state_change_events (
  tenant_id character varying(128) NOT NULL,
@@ -277,6 +294,31 @@ UNION ALL
  FROM "event-management".measurement_events
  WHERE (measurement_events.occurred_time >= COALESCE(_timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(N)), '-infinity'::timestamp with time zone))
  GROUP BY measurement_events.tenant_id, measurement_events.device_token, measurement_events.event_type, measurement_events.name, (public.time_bucket('00:01:00'::interval, measurement_events.occurred_time));
+CREATE VIEW "event-management".measurement_rollups_1h AS
+ SELECT _materialized_hypertable_N.tenant_id,
+ _materialized_hypertable_N.device_token,
+ _materialized_hypertable_N.event_type,
+ _materialized_hypertable_N.name,
+ _materialized_hypertable_N.bucket,
+ _materialized_hypertable_N.sum_value,
+ _materialized_hypertable_N.min_value,
+ _materialized_hypertable_N.max_value,
+ _materialized_hypertable_N.count_value
+ FROM _timescaledb_internal._materialized_hypertable_N
+ WHERE (_materialized_hypertable_N.bucket < COALESCE(_timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(N)), '-infinity'::timestamp with time zone))
+UNION ALL
+ SELECT measurement_rollups.tenant_id,
+ measurement_rollups.device_token,
+ measurement_rollups.event_type,
+ measurement_rollups.name,
+ public.time_bucket('01:00:00'::interval, measurement_rollups.bucket) AS bucket,
+ sum(measurement_rollups.sum_value) AS sum_value,
+ min(measurement_rollups.min_value) AS min_value,
+ max(measurement_rollups.max_value) AS max_value,
+ (sum(measurement_rollups.count_value))::bigint AS count_value
+ FROM "event-management".measurement_rollups
+ WHERE (measurement_rollups.bucket >= COALESCE(_timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(N)), '-infinity'::timestamp with time zone))
+ GROUP BY measurement_rollups.tenant_id, measurement_rollups.device_token, measurement_rollups.event_type, measurement_rollups.name, (public.time_bucket('01:00:00'::interval, measurement_rollups.bucket));
 CREATE VIEW analytics.alert_events WITH (security_barrier='true') AS
  SELECT tenant_id,
  event_id,
@@ -364,6 +406,7 @@ CREATE VIEW analytics.state_change_events WITH (security_barrier='true') AS
  FROM "event-management".state_change_events
  WHERE ((tenant_id)::text = analytics.reader_tenant());
 TIMESCALE CONTINUOUS AGGREGATE measurement_rollups MATERIALIZED_ONLY f MATERIALIZATION _materialized_hypertable_N;
+TIMESCALE CONTINUOUS AGGREGATE measurement_rollups_1h MATERIALIZED_ONLY f MATERIALIZATION _materialized_hypertable_N;
 TIMESCALE HYPERTABLE alert_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE event_anchors DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
@@ -372,3 +415,4 @@ TIMESCALE HYPERTABLE location_events DIMENSION occurred_time INTERVAL 7 days COM
 TIMESCALE HYPERTABLE measurement_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE state_change_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE POLICY policy_refresh_continuous_aggregate ON measurement_rollups SCHEDULE 00:01:00 CONFIG {"end_offset": "00:01:00", "start_offset": "30 days", "mat_hypertable_id": N};
+TIMESCALE POLICY policy_refresh_continuous_aggregate ON measurement_rollups_1h SCHEDULE 00:01:00 CONFIG {"end_offset": "01:00:00", "start_offset": "30 days", "mat_hypertable_id": N};
