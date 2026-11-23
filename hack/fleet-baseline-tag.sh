@@ -12,6 +12,10 @@
 # A tag that points at HEAD is the release under test and must never witness its own foundation, so
 # it is skipped here exactly as the test skips it.
 #
+# It reads tag NAMES, so it approximates the baseline: a newer stable tag cut on a backport branch would be
+# picked although it is not an ancestor. That is harmless for the witness, which only needs the writer-protocol
+# migration to exist at the tag, and it is why this runs only where `git tag --merged HEAD` cannot (a shallow clone).
+#
 # Used as:  echo "DC_BASELINE_TAG=$(hack/fleet-baseline-tag.sh)" >> "$GITHUB_ENV"
 # Prints nothing and exits 1 when there is no such tag, which the gate then reports by name.
 set -euo pipefail

@@ -21,8 +21,10 @@ func (api *Api) FleetOperationEnforcement(ctx context.Context) string {
 
 // fleetOperationEnforcementStates returns the tgenabled letter of every trigger on the device
 // attribute table that is the expected enforcing trigger: the reserved name, a BEFORE row trigger
-// on INSERT, UPDATE and DELETE, with no WHEN condition, calling a zero-argument function of the
-// reserved name in this area's schema whose body is the one this release ships.
+// on INSERT, UPDATE and DELETE, with no WHEN condition, calling a zero-argument plpgsql function of the
+// reserved name in this area's schema whose body is the one this release ships and which carries no
+// settings of its own (an ALTER FUNCTION ... SET that supplies the marker would silence the guard
+// without changing a byte of the body).
 func fleetOperationEnforcementStates(db *gorm.DB) ([]string, error) {
 	var states []string
 	err := db.Raw(`SELECT t.tgenabled::text
@@ -34,8 +36,10 @@ JOIN pg_catalog.pg_namespace f ON f.oid = p.pronamespace
 WHERE n.nspname = 'device-management' AND c.relname = 'entity_attributes'
   AND f.nspname = 'device-management' AND p.proname = ? AND p.pronargs = 0
   AND md5(p.prosrc) = ?
+  AND p.proconfig IS NULL
+  AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'plpgsql')
   AND t.tgname = ? AND NOT t.tgisinternal
-  AND (t.tgtype::integer & 29) = 29 AND t.tgqual IS NULL`,
+  AND (t.tgtype::integer & 31) = 31 AND t.tgqual IS NULL`,
 		FleetOperationEnforcementFunction, FleetOperationEnforcementFunctionMD5, FleetOperationEnforcementTrigger).Scan(&states).Error
 	return states, err
 }

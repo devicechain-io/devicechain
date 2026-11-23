@@ -104,7 +104,26 @@ END
 $dcap$`).Error; err != nil {
 				return err
 			}
-			return tx.Exec(`ALTER TABLE "device-management".entity_attributes ENABLE ALWAYS TRIGGER dc_enforce_attr_protocol`).Error
+			if err := tx.Exec(`ALTER TABLE "device-management".entity_attributes ENABLE ALWAYS TRIGGER dc_enforce_attr_protocol`).Error; err != nil {
+				return err
+			}
+			// A trigger of that name that was already there with another shape (an AFTER trigger, a WHEN
+			// condition, a missing event, another function) was skipped by the guarded CREATE above. Say so
+			// now, loudly, rather than leave readiness reading NOT_INSTALLED for ever with no replay able to fix it.
+			var ok int64
+			if err := tx.Raw(`SELECT count(*) FROM pg_catalog.pg_trigger t
+JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+WHERE t.tgrelid = '"device-management".entity_attributes'::regclass AND t.tgname = 'dc_enforce_attr_protocol'
+  AND NOT t.tgisinternal AND (t.tgtype::integer & 31) = 31 AND t.tgqual IS NULL AND t.tgenabled = 'A'
+  AND n.nspname = 'device-management' AND p.proname = 'dc_require_attr_protocol' AND p.prosrc = ?`, AttributeWriterProtocolFunctionSource).Scan(&ok).Error; err != nil {
+				return err
+			}
+			if ok != 1 {
+				return errors.New("a trigger named dc_enforce_attr_protocol already exists on entity_attributes with another shape: " +
+					"drop it and re-run, so the attribute writer guard is the one this release ships")
+			}
+			return nil
 		},
 		Rollback: func(*gorm.DB) error {
 			return errors.New("the attribute writer protocol guard cannot be rolled back during rolling upgrades")

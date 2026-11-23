@@ -7,6 +7,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
@@ -287,4 +288,54 @@ func TestTheActivationCheckSeesADisableThatCommitsWhileItWaits(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("the check did not finish after the DDL committed")
 	}
+}
+
+// Switching the guard off without touching the trigger or the body: a default for the marker, supplied
+// by the function itself, the database or a role, would mark every writer. None may read as ENFORCED.
+func TestAGuardSilencedBySettingsInsteadOfByItsBodyIsNotEnforcement(t *testing.T) {
+	api := NewApi(newPostgresRdbManager(t))
+	db := api.RDB.Database
+	errRollback := errors.New("rollback")
+	for name, ddl := range map[string]string{
+		"function setting": `ALTER FUNCTION "device-management".dc_require_attr_protocol() SET devicechain.attr_protocol = '1'`,
+		"database default": `DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET devicechain.attr_protocol = ''1''', current_database()); END $$`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := db.Transaction(func(tx *gorm.DB) error {
+				require.NoError(t, tx.Exec(ddl).Error)
+				require.ErrorIs(t, CheckFleetOperationActivation(tx), ErrFleetOperationNotActivated)
+				return errRollback
+			})
+			require.Equal(t, errRollback, err)
+		})
+	}
+	// Negative control: nothing changed after the rollbacks.
+	require.NoError(t, db.Transaction(func(tx *gorm.DB) error { return CheckFleetOperationActivation(tx) }))
+}
+
+func TestTheActivationCheckRefusesASnapshotThatIsAlreadyFixed(t *testing.T) {
+	api := NewApi(newPostgresRdbManager(t))
+	db := api.RDB.Database
+	tx := db.Begin(&sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	require.NoError(t, tx.Error)
+	defer tx.Rollback()
+	err := CheckFleetOperationActivation(tx)
+	require.ErrorIs(t, err, ErrFleetOperationNotActivated)
+	require.Contains(t, err.Error(), "READ COMMITTED")
+}
+
+func TestTheMigrationRefusesATriggerOfTheRightNameAndTheWrongShape(t *testing.T) {
+	api := NewApi(newPostgresRdbManager(t))
+	db := api.RDB.Database
+	errRollback := errors.New("rollback")
+	err := db.Transaction(func(tx *gorm.DB) error {
+		require.NoError(t, tx.Exec(`DROP TRIGGER dc_enforce_attr_protocol ON "device-management".entity_attributes`).Error)
+		require.NoError(t, tx.Exec(`CREATE TRIGGER dc_enforce_attr_protocol AFTER INSERT OR UPDATE OR DELETE ON "device-management".entity_attributes
+ FOR EACH ROW WHEN (false) EXECUTE FUNCTION "device-management".dc_require_attr_protocol()`).Error)
+		merr := schema.NewAttributeWriterProtocolSchema().Migrate(tx)
+		require.Error(t, merr, "a wrong guard must not be recorded as installed")
+		require.Contains(t, merr.Error(), "another shape")
+		return errRollback
+	})
+	require.Equal(t, errRollback, err)
 }
