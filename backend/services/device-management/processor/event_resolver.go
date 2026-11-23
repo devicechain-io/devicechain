@@ -583,12 +583,19 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 					continue
 				}
 				if !model.MetricDataType(def.DataType()).StorableAsMetric() {
-					// Declared but non-storable (STRING is device state, not a
-					// time-series metric — ADR-016). Creating such a definition is
-					// already rejected, so this is a defensive backstop: drop the entry
-					// rather than stamp a classifier onto a value that would then
+					// Declared with a type no reading can be stored as. Creating such a
+					// definition is already rejected, so this is a defensive backstop: drop
+					// the entry rather than stamp a classifier onto a value that would then
 					// dead-letter the whole batch at persist.
 					dropped = append(dropped, rez.dropMeasurement(ctx, device.Token, mxkey, mxvalue, dropDeclaredNotStorable, "declared metric data type is not storable"))
+					continue
+				}
+				if model.MetricDataType(def.DataType()) == model.MetricString && !model.StorableStringValue(mxvalue) {
+					// A STRING value event-management would refuse as deterministic (over the
+					// bound, not UTF-8, or holding a NUL) and that would take every other reading
+					// of this message down with it. Drop just this entry, as an undeclared key
+					// that cannot be stored is.
+					dropped = append(dropped, rez.dropMeasurement(ctx, device.Token, mxkey, mxvalue, dropDeclaredNotStorable, "declared STRING value is over the size bound, not valid UTF-8, or holds a NUL byte"))
 					continue
 				}
 				// The classifier is the metric definition's id AS OF the profile's

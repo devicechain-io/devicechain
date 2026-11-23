@@ -5,6 +5,8 @@ package model
 
 import (
 	"database/sql"
+	"strings"
+	"unicode/utf8"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -33,20 +35,34 @@ func (t MetricDataType) Valid() bool {
 	}
 }
 
-// StorableAsMetric reports whether a measurement of this type can be stored in the
-// numeric time-series column (ADR-016 amd). Metrics are numeric, aggregatable
-// time-series: DOUBLE and INT store directly and BOOLEAN stores as 0/1 (a
-// duty-cycle-aggregatable value). STRING is not storable — a string-valued signal
-// can not be averaged/min/maxed, so it is device state (an attribute /
-// latest-value), not a metric. (The full MetricDataType set is still valid for
-// command parameters, ADR-043, which are not time-series.)
+// StorableAsMetric reports whether a measurement of this type can be stored as a reading:
+// DOUBLE and INT store directly and BOOLEAN stores as 0/1 (a duty-cycle-aggregatable value)
+// in the numeric time-series column, and STRING stores as text in its own column. A STRING
+// reading is a state or a mode, not a quantity: it is kept as history and as the device's
+// last-known value, and it is never averaged, summed or compared as a number (an aggregate
+// over it is refused, and a detection rule does not see it as a number). The full
+// MetricDataType set is also valid for command parameters (ADR-043), which are not readings.
 func (t MetricDataType) StorableAsMetric() bool {
 	switch t {
-	case MetricDouble, MetricInt, MetricBoolean:
+	case MetricDouble, MetricInt, MetricBoolean, MetricString:
 		return true
 	default:
 		return false
 	}
+}
+
+// MaxStringMetricBytes bounds a STRING reading's value. It is the bound event-management applies
+// to the stored row and device-state to the last-known value, so the three never disagree about
+// whether a reading exists: a value over it is dropped at resolution, with the rest of its
+// event kept, rather than refused downstream where it would take the event's other readings
+// with it.
+const MaxStringMetricBytes = 4096
+
+// StorableStringValue reports whether v can be stored as a STRING reading's value: within
+// MaxStringMetricBytes, valid UTF-8, and free of NUL bytes. PostgreSQL refuses a NUL byte or an
+// invalid UTF-8 sequence (22021) for the whole statement it appears in.
+func StorableStringValue(v string) bool {
+	return len(v) <= MaxStringMetricBytes && utf8.ValidString(v) && strings.IndexByte(v, 0) < 0
 }
 
 // String returns the underlying string value.

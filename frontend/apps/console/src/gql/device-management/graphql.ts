@@ -1891,8 +1891,8 @@ export type MaintenanceWindowUpdateRequest = {
 /** Fields for a new metric definition. */
 export type MetricDefinitionCreateRequest = {
   /**
-   * The value type: DOUBLE, INT or BOOLEAN. STRING is refused, because a metric must be
-   * numeric; report string values as attributes instead.
+   * The value type: DOUBLE, INT, BOOLEAN or STRING. DOUBLE, INT and BOOLEAN (stored as 0 or 1) are
+   * numeric readings; a STRING reading is stored as text (up to 4096 bytes) and is never aggregated.
    */
   dataType: string;
   /** Free-text description, up to 1024 characters. */
@@ -1963,7 +1963,7 @@ export type MetricDefinitionSearchCriteria = {
  * token here. Any refusal leaves the definition unchanged.
  */
 export type MetricDefinitionUpdateRequest = {
-  /** New value type: DOUBLE, INT or BOOLEAN. An explicit null is refused. */
+  /** New value type: DOUBLE, INT, BOOLEAN or STRING. An explicit null is refused. */
   dataType?: string | null | undefined;
   /** New description, or null to clear it. */
   description?: string | null | undefined;

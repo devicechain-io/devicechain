@@ -630,5 +630,5 @@
   "droppedLastSeenColumn": "Visto por última vez",
   "droppedReason_UNDECLARED_NON_NUMERIC": "No está declarada en el perfil y el valor no es un número",
   "droppedReason_UNDECLARED_UNSTORABLE": "No está declarada en el perfil y el número no se puede guardar",
-  "droppedReason_DECLARED_NOT_STORABLE": "Declarada con un tipo de dato que no es una métrica de serie temporal"
+  "droppedReason_DECLARED_NOT_STORABLE": "Declarada con un tipo de dato que no se puede almacenar, o un valor de texto (STRING) demasiado largo o que no es texto válido"
 }

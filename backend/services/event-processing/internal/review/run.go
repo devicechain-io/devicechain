@@ -382,6 +382,9 @@ func readWindow(ctx context.Context, p Params, w Window, lead time.Duration, dev
 					addReason(&types, *m.DataType)
 					c.MetricTypes[m.Name] = types
 				}
+				if m.DataType != nil && *m.DataType == "STRING" {
+					continue // text however it looks: never a number a rule can compare
+				}
 				v, err := strconv.ParseFloat(m.Value, 64)
 				if err == nil && !math.IsNaN(v) && !math.IsInf(v, 0) {
 					e.Metrics = append(e.Metrics, evaluate.Metric{Name: m.Name, Value: v})
