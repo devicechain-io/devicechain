@@ -340,6 +340,8 @@ IN_MODULE = {
     ("examples/ota-device", "internal/testutil"): "runtime.Caller root is its own module",
     ("backend/core", "test/frontend"): "build-tagged `frontend`, so the go job never compiles it; the frontend job runs the same vitest suites",
     ("backend/core", "replication"): "\"..\" appears only in a comment",
+    ("backend/fleet", "tofurun"): "\"..\" is the refused root-path segment and the \"../x\" fixtures of its tests; its fixture trees are its own testdata/",
+    ("backend/fleet", "internal/tofutest"): "runtime.Caller locates tofurun/testdata inside backend/fleet",
     ("backend/core", "webhooksig"): "\"..\" is a refused path segment",
     ("backend/k8s", "api/v1"): "schema_identity_test.go reads ../../config/crd/bases inside backend/k8s",
     ("backend/k8s", "api/v1beta1"): "instance_crd_test.go, deprecations_test.go, executor_crd_test.go and executor_schema_test.go read ../../config/crd/bases inside backend/k8s",
