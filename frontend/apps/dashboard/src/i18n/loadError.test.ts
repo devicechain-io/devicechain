@@ -84,7 +84,7 @@ describe('every load failure has real text in every shipped locale', () => {
     it.each(ALL_SAMPLES)(`${code}: $code renders as prose, not as its key`, async (error) => {
       await i18n.changeLanguage(code);
       const { key } = loadErrorKey(error);
-      const text = loadErrorMessage(error, (k, p) => i18n.t(k, p));
+      const text = loadErrorMessage(error, (k: string, p: Record<string, unknown> = {}) => i18n.t(k, p));
 
       // i18next answers a MISSING key with the key's own name, so "did it resolve?" is
       // exactly "is the answer something other than the key". Without this the whole
@@ -105,7 +105,7 @@ describe('loadErrorMessage', () => {
     await i18n.changeLanguage('en');
     const text = loadErrorMessage(
       { code: 'definitionInvalid', detail: 'widgets must be an array' },
-      (k, p) => i18n.t(k, p),
+      (k: string, p: Record<string, unknown> = {}) => i18n.t(k, p),
     );
     // The diagnostic is the parser's own words and stays untranslated on purpose — it
     // names a field in the document the viewer pasted.
@@ -118,7 +118,7 @@ describe('loadErrorMessage', () => {
     // which reads as a broken parser rather than as an unusual failure.
     for (const { code } of SUPPORTED_LOCALES) {
       await i18n.changeLanguage(code);
-      const text = loadErrorMessage({ code: 'definitionInvalid', detail: null }, (k, p) =>
+      const text = loadErrorMessage({ code: 'definitionInvalid', detail: null }, (k: string, p: Record<string, unknown> = {}) =>
         i18n.t(k, p),
       );
       expect(text, `${code} rendered a bare null`).not.toMatch(/\bnull\b/);
@@ -134,14 +134,14 @@ describe('loadErrorMessage', () => {
     '%s: states the cap the code actually enforces',
     async (code) => {
       await i18n.changeLanguage(code);
-      const text = loadErrorMessage({ code: 'definitionTooLarge' }, (k, p) => i18n.t(k, p));
+      const text = loadErrorMessage({ code: 'definitionTooLarge' }, (k: string, p: Record<string, unknown> = {}) => i18n.t(k, p));
       expect(text).toContain(`${MAX_PASTE_BYTES / (1 << 20)} MiB`);
     },
   );
 
   it('quotes each dropped slot so the viewer can find it in what they pasted', async () => {
     await i18n.changeLanguage('en');
-    const text = loadErrorMessage({ code: 'manifestDropped', slots: ['zone', 'sensor'] }, (k, p) =>
+    const text = loadErrorMessage({ code: 'manifestDropped', slots: ['zone', 'sensor'] }, (k: string, p: Record<string, unknown> = {}) =>
       i18n.t(k, p),
     );
     expect(text).toContain('"zone", "sensor"');
@@ -154,7 +154,7 @@ describe('loadErrorMessage', () => {
     // config.test.ts, where the actual wording lives.
     for (const { code } of SUPPORTED_LOCALES) {
       await i18n.changeLanguage(code);
-      const t = (k: string, p?: Record<string, unknown>) => i18n.t(k, p);
+      const t = (k: string, p: Record<string, unknown> = {}) => i18n.t(k, p);
       const one = loadErrorMessage({ code: 'manifestDropped', slots: ['zone'] }, t);
       const many = loadErrorMessage({ code: 'manifestDropped', slots: ['zone', 'sensor'] }, t);
       expect(one, `${code} renders one and many identically`).not.toBe(many);

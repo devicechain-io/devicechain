@@ -7,6 +7,7 @@
 // cleartext secret — only whether one exists (`existingHasSecret`) — matching the
 // ADR-059 write-only contract.
 
+import type { TranslateFn } from '@/lib/translate';
 import type { ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FormField } from '@/components/ui/form-field';
@@ -92,7 +93,7 @@ export function secretRequiredForState(state: ConnectorEditorState): boolean {
 // a component, so it can't call useTranslation itself.
 export function validateEditor(
   state: ConnectorEditorState,
-  t: (key: string, options?: Record<string, unknown>) => string,
+  t: TranslateFn,
   existingHasSecret = false,
 ): string | null {
   const spec = specForType(state.type);

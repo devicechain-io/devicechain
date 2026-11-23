@@ -194,17 +194,14 @@ export function applyTenantDefaultLocale(locale: string | null | undefined): voi
  *
  * `isSupportedCode` applies `nonExplicitSupportedLngs` itself, so the regional fold comes
  * for free and stays correct if that option ever changes. Measured, not assumed — `es-MX`,
- * `es-mx`, `es-419` and `es-Latn-MX` are supported and render Spanish; `ES`, `pt-BR`,
- * `fr-CA` and `zh-Hans-CN` are not and render English.
+ * `es-mx`, `es-419`, `es-Latn-MX` and the upper-cased `ES` are supported and render Spanish;
+ * `pt-BR`, `fr-CA` and `zh-Hans-CN` are not and render English.
  *
- * 🔴 ONE CLASS OF TAG WHERE THE TWO STILL DISAGREE, measured the same way and recorded
- * because "asks i18next" reads like it cannot: `ES-MX`, `eS-mx` and `ES-419` are answered
- * NO here and rendered as Spanish by changeLanguage. It is i18next's own seam —
- * isSupportedCode splits the tag before formatting it, while the resolve hierarchy
- * canonicalises the whole tag first — not a fold of ours. The disagreement is FAIL-CLOSED
- * (a tag that would have worked is refused, never a tag that would render raw keys) and no
- * browser sends an upper-cased language subtag. Left as is rather than papered over with a
- * second normalisation, which is the thing this function exists to not have.
+ * i18next 27 folds the case of the language half too, in `isSupportedCode` and in the resolve
+ * hierarchy alike, so the two now agree on every tag measured — including `ES`, `ES-MX`,
+ * `eS-mx` and `ES-419`, which i18next 26 answered inconsistently (the guard said NO while
+ * `changeLanguage` rendered Spanish for the regional ones, and rendered English for bare
+ * `ES`). The oracle test in config.test.ts holds the two together.
  *
  * The full tag is still what gets passed to changeLanguage, never a folded base: i18next
  * does the folding, so the day an `es-MX` catalog ships it is picked up with no change

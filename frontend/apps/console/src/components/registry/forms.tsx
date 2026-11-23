@@ -118,7 +118,7 @@ export function RegistryTypeForm<T extends NamedEntity>({
   onDone: (message: string) => void;
 }) {
   const { t } = useTranslation(['entities', 'common']);
-  const e = (suffix: string, opts?: Record<string, unknown>) =>
+  const e = (suffix: string, opts: Record<string, unknown> = {}) =>
     t(`entities:${i18nKey}${suffix}`, opts);
   const editing = entity != null;
   const [token, setToken] = useState(entity?.token ?? '');
@@ -237,7 +237,7 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   extraInvalid?: boolean;
 }) {
   const { t } = useTranslation(['entities', 'common']);
-  const e = (suffix: string, opts?: Record<string, unknown>) =>
+  const e = (suffix: string, opts: Record<string, unknown> = {}) =>
     t(`entities:${i18nKey}${suffix}`, opts);
   const editing = entity != null;
   const [token, setToken] = useState(entity?.token ?? '');

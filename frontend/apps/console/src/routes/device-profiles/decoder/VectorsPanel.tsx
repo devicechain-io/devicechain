@@ -114,7 +114,7 @@ function VectorEditor(props: {
       {mine.length > 0 && (
         <ul className="space-y-0.5 text-xs text-destructive">
           {mine.map((i, n) => (
-            <li key={n}>{t(`decIssue.${i.code}`, i.params)}</li>
+            <li key={n}>{t(`decIssue.${i.code}`, i.params ?? {})}</li>
           ))}
         </ul>
       )}
