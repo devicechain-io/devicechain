@@ -196,3 +196,13 @@ func (FleetOperationLine) AuditExempt() bool { return true }
 
 // AuditExempt: the events are the operation's own append-only journal.
 func (FleetOperationEvent) AuditExempt() bool { return true }
+
+// DefaultOrder implements rdb.Sortable: newest first, with the id for a stable page.
+func (FleetOperation) DefaultOrder() string {
+	return "fleet_operations.created_at DESC, fleet_operations.id DESC"
+}
+
+// DefaultOrder implements rdb.Sortable: a line's ordinal is its position in the operator's input.
+func (FleetOperationLine) DefaultOrder() string {
+	return "fleet_operation_lines.ordinal ASC, fleet_operation_lines.id ASC"
+}

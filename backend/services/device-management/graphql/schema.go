@@ -10,12 +10,33 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 //go:embed schema.graphql
-var SchemaContent string
+var baseSchema string
+
+//go:embed schema_fleet_operations.graphql
+var fleetOperationSchema string
+
+// SchemaContent is the schema this build serves. The fleet-operation fragment is part of it only
+// when the engine behind it is served (ledger.Served): a served createFleetOperation with no driver
+// behind it would be a plausible answer from an unimplemented feature, so until the engine ships the
+// fragment is built and tested (SchemaContentWithFleetOperations) and not served.
+var SchemaContent = baseSchema + servedFleetOperationSchema()
+
+// SchemaContentWithFleetOperations is the schema with the fleet-operation fragment included, for the
+// tests that exercise it before it is served.
+var SchemaContentWithFleetOperations = baseSchema + "\n" + fleetOperationSchema
+
+func servedFleetOperationSchema() string {
+	if ledger.Served {
+		return "\n" + fleetOperationSchema
+	}
+	return ""
+}
 
 // ContextCachedApiKey carries the caching *model.CachedApi decorator into the
 // GraphQL context. The plain *model.Api backs reads/writes (ContextApiKey); only
