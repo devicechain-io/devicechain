@@ -142,7 +142,8 @@ CREATE TABLE "device-state".latest_measurements (
  classifier bigint,
  occurred_time timestamp with time zone NOT NULL,
  unit text,
- data_type character varying(32)
+ data_type character varying(32),
+ text_value text
 )
 WITH (fillfactor='75', autovacuum_vacuum_scale_factor='0', autovacuum_vacuum_threshold='10000', autovacuum_vacuum_cost_limit='2000', autovacuum_analyze_scale_factor='0.02', autovacuum_analyze_threshold='10000');
 CREATE TABLE "device-state".purged_tenants (
