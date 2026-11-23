@@ -5,6 +5,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -126,5 +127,43 @@ func TestFleetGoldenHoldsNoTenantColumn(t *testing.T) {
 	}
 	if owned < 9 {
 		t.Fatalf("found %d fleet-owned tables in the golden, want at least 9", owned)
+	}
+}
+
+// prevReleaseTag is the tag the previous-release compatibility fixtures were captured from. It
+// duplicates the integration-tagged prevRelease constant on purpose: this guard has to run in the
+// plain unit build, and TestPrevReleaseTagAgreesWithTheIntegrationConstant keeps the two in step.
+const prevReleaseTag = "v1.8.0"
+
+// TestPrevReleaseFixturesCoverFleetOnceAReleaseShipsIt is the guard the fleet spec (section 4.2)
+// promises: from the release after the one that first ships the fleet migration, the previous-release
+// fixtures must cover fleet. When the previous-release tag contains the fleet schema package and the
+// fixture directory has no fleet.sql, this fails and names the fix.
+func TestPrevReleaseFixturesCoverFleetOnceAReleaseShipsIt(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not available; the release-fixture guard cannot run here")
+	}
+	if err := exec.Command("git", "rev-parse", "--verify", "--quiet", prevReleaseTag+"^{commit}").Run(); err != nil {
+		t.Skipf("tag %s is not present in this checkout (shallow clone without tags); the release-fixture guard cannot run here", prevReleaseTag)
+	}
+	err := exec.Command("git", "cat-file", "-e", prevReleaseTag+":backend/fleet/schema/migrations.go").Run()
+	shipped := err == nil
+	_, statErr := os.Stat(filepath.Join("testdata", "prev-release", prevReleaseTag, "fleet.sql"))
+	hasFixture := statErr == nil
+	if shipped && !hasFixture {
+		t.Fatalf("release %s contains the fleet migration but testdata/prev-release/%s has no fleet.sql: capture the fleet fixture (and extend the previous-release tests to cover fleetAreas)", prevReleaseTag, prevReleaseTag)
+	}
+	if !shipped && hasFixture {
+		t.Fatalf("testdata/prev-release/%s/fleet.sql exists but release %s does not contain the fleet migration: the fixture was captured from the wrong tag", prevReleaseTag, prevReleaseTag)
+	}
+}
+
+func TestPrevReleaseTagAgreesWithTheIntegrationConstant(t *testing.T) {
+	src, err := os.ReadFile("prev_release_columns_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), `const prevRelease = "`+prevReleaseTag+`"`) {
+		t.Fatalf("prev_release_columns_test.go no longer declares prevRelease = %q; update prevReleaseTag in fleet_test.go with it", prevReleaseTag)
 	}
 }

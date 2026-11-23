@@ -154,6 +154,9 @@ func TestFleetPGEveryCheckRefusesItsIllegalRow(t *testing.T) {
 			idCase("ck_cloud_identities_mode_columns_v1", "state_ref=NULL")
 			idCase("ck_cloud_identities_mode_columns_v1", "management_mode='observe_only'") // still has a nonce
 		},
+		"ck_cloud_identities_cloud_resource_id_nonempty_v1": func() {
+			idCase("ck_cloud_identities_cloud_resource_id_nonempty_v1", "cloud_resource_id='';recovered_via='apply'")
+		},
 		"ck_cloud_identities_recovery_pair_v1": func() {
 			idCase("ck_cloud_identities_recovery_pair_v1", "cloud_resource_id='r'")
 			idCase("ck_cloud_identities_recovery_pair_v1", "recovered_via='apply'")

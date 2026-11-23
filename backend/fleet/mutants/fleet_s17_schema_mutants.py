@@ -17,6 +17,7 @@ MUT = [
   ('drop-the-nonce-unique-index', '\t`CREATE UNIQUE INDEX IF NOT EXISTS ux_cloud_identities_ownership_nonce ON cloud_identities (ownership_nonce) WHERE ownership_nonce IS NOT NULL`,\n', '', 'TestFleetPGUniqueIndexes|TestFleetPGReplay'),
   ('drop-the-imported-address-index', '\t`CREATE UNIQUE INDEX IF NOT EXISTS ux_import_records_imported_address ON import_records (cluster_uid, address) WHERE decision = \'IMPORTED\'`,\n', '', 'TestFleetPGUniqueIndexes'),
   ('drop-a-foreign-key', '\t\t{"runs", "fk_runs_cluster_uid", "cluster_uid", "cloud_identities", "cluster_uid"},\n', '', 'TestFleetPGForeignKeys|TestFleetPGReplay'),
+  ('weaken-the-empty-resource-id-check', "`cloud_resource_id IS NULL OR cloud_resource_id <> ''`", "`cloud_resource_id IS NULL OR cloud_resource_id = cloud_resource_id`", 'TestFleetPGEveryCheck'),
   ('seed-the-lease-row', '\t\t\treturn applyWriterExclusionDDL(tx)\n', '\t\t\tif err := applyWriterExclusionDDL(tx); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\treturn tx.Exec(`INSERT INTO manager_lease (id, holder_id, expires_at, updated_at) VALUES (1, \'seed\', now(), now()) ON CONFLICT DO NOTHING`).Error\n', 'TestFleetPGMigrationAppliesAndReapplies'),
 ]
 env = dict(os.environ)
