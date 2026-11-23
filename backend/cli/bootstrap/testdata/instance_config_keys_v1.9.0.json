@@ -73,6 +73,11 @@
               "Level": {}
             }
           },
+          "Mcp": {
+            "fields": {
+              "CommandProposals": {}
+            }
+          },
           "Messaging": {
             "fields": {
               "Envelopes": {
@@ -152,6 +157,13 @@
                       "elem": {}
                     }
                   },
+                  "seed": {
+                    "fields": {
+                      "weights": {
+                        "elem": {}
+                      }
+                    }
+                  },
                   "suffixes": {
                     "elem": {}
                   }
@@ -197,6 +209,11 @@
               "Insecure": {},
               "Protocol": {},
               "SamplingRatio": {}
+            }
+          },
+          "UpdateManagement": {
+            "fields": {
+              "RolloutSafety": {}
             }
           },
           "UserManagement": {

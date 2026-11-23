@@ -19,9 +19,9 @@ import (
 // area runs v1.9. This pins that the default render, for every way dcctl installs, does not carry them.
 //
 // The broader frozen-schema tests (TestDefaultInstanceConfigDocumentDecodesOnV130 and
-// TestAreaConfigDocumentsDecodeOnV130) already refuse ANY key v1.8.0 does not know. This names
-// the four, so the check reads as the drill's MUST-CHECK and does not depend on the snapshot
-// listing them as unknown.
+// TestAreaConfigDocumentsDecodeOnV130) pin the release an upgrade starts from. This
+// historical drill names the four keys explicitly, so its omission check and negative
+// control keep working when the previous-release snapshot advances.
 var v19FixedKeys = []struct {
 	name string
 	// doc is "instance" for the instance configuration document, or the area whose
@@ -129,15 +129,14 @@ func TestV19FixedKeysAreAbsentFromEveryDefaultRender(t *testing.T) {
 }
 
 // THE NEGATIVE CONTROL. A check that has never failed certifies nothing, so each key is turned ON
-// the way an operator (or, for the seed, a sharding level) would, and the check above must SEE it. The
-// frozen v1.8.0 schema must also call it unknown, which is what makes it crash a v1.8.0 pod.
+// the way an operator (or, for the seed, a sharding level) would, and the check above must SEE it.
+// The moving previous-release snapshots now know these keys; this control pins the explicit
+// presence check independently of those snapshots.
 func TestV19FixedKeysAreSeenWhenTurnedOn(t *testing.T) {
 	ch, err := loadEmbeddedChart()
 	if err != nil {
 		t.Fatal(err)
 	}
-	instanceSnap := loadV130ConfigSnapshot(t)
-	areaSnap := loadV130AreaConfigSnapshot(t)
 	base := renderProfiles[0]
 
 	nested := func(path string, value interface{}) map[string]interface{} {
@@ -152,7 +151,6 @@ func TestV19FixedKeysAreSeenWhenTurnedOn(t *testing.T) {
 	for _, k := range v19FixedKeys {
 		t.Run(k.name, func(t *testing.T) {
 			var docs v19Documents
-			var unknown []string
 			st := base.st(profileInstance(0))
 			switch {
 			case k.name == "nats.shardGroups.seed":
@@ -177,26 +175,8 @@ func TestV19FixedKeysAreSeenWhenTurnedOn(t *testing.T) {
 				}
 				docs.areas[area] = d
 			}
-			if k.doc == "instance" {
-				unknown = unknownV130ConfigPaths(docs.instance, instanceSnap.Tree, instanceSnap.Retired, "")
-			} else if tree, ok := areaSnap[k.doc]; ok {
-				unknown = unknownV130ConfigPaths(docs.areas[k.doc], tree.Tree, tree.Retired, "")
-			}
 			if !docs.has(struct{ name, doc, path string }(k)) {
 				t.Fatalf("with %s turned on the render does not carry it, so the absence check above could never fail", k.name)
-			}
-			// The walker reports the shallowest unknown key: the key itself, or the whole block
-			// v1.8.0 never had (updateManagement, mcp, shardGroups).
-			found := false
-			want := strings.ToLower(k.path)
-			for _, u := range unknown {
-				u = strings.ToLower(u)
-				if want == u || strings.HasPrefix(want, u+".") {
-					found = true
-				}
-			}
-			if !found {
-				t.Errorf("the frozen v1.8.0 schema does not call %s unknown (%v): a v1.8.0 pod would accept it, and this key would not be a rolling-upgrade hazard", k.name, unknown)
 			}
 		})
 	}
