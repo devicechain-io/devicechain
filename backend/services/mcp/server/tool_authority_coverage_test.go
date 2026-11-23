@@ -57,8 +57,10 @@ var toolAuthorities = map[string][]coreauth.Authority{
 	"list_commands": {coreauth.CommandRead},
 	// device-management/graphql: agent proposal resolvers.
 	"propose_alarm_action": {coreauth.AlarmPropose},
-	"get_proposal":         {coreauth.AlarmPropose},
-	"list_my_proposals":    {coreauth.AlarmPropose},
+	// command-delivery/graphql/agent_proposals.go and caller-token device facts.
+	"propose_command":   {coreauth.CommandPropose, coreauth.DeviceRead},
+	"get_proposal":      {coreauth.AlarmPropose, coreauth.CommandPropose},
+	"list_my_proposals": {coreauth.AlarmPropose, coreauth.CommandPropose},
 }
 
 // registeredToolNames asks the server THIS SERVICE SERVES what it exposes, over a real
@@ -67,7 +69,7 @@ var toolAuthorities = map[string][]coreauth.Authority{
 // listing a server the test built for itself, which is what this used to do.
 func registeredToolNames(t *testing.T) []string {
 	t.Helper()
-	cs, _ := proposalSession(t, "http://unused.invalid", true, coreauth.ScopeReadOnly+" "+coreauth.ScopeActAlarms)
+	cs, _ := commandProposalSession(t, "http://unused.invalid", true, true, coreauth.ScopeReadOnly+" "+coreauth.ScopeActAlarms+" "+coreauth.ScopeActCommands)
 	res, err := cs.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)

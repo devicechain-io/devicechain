@@ -70,6 +70,12 @@ function GoTo({ to }: { to: string }) {
 }
 
 describe('DeviceDetailPage across a direct device-to-device navigation', () => {
+  it('opens command history from a proposal result link', async () => {
+    render(<MemoryRouter initialEntries={['/devices/dev-1?tab=commands#command-c1']}>
+      <ConfirmProvider><Routes><Route path="/devices/:token" element={<DeviceDetailPage />} /></Routes></ConfirmProvider>
+    </MemoryRouter>);
+    expect((await screen.findByRole('tab', { name: 'Commands' })).getAttribute('aria-selected')).toBe('true');
+  });
   it('reads and shows the device the URL names', async () => {
     render(
       <MemoryRouter initialEntries={['/devices/dev-1']}>

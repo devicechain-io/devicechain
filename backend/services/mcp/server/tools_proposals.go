@@ -22,7 +22,7 @@ const proposalNotice = "Preview. A person must approve in the console Approvals 
 
 func registerProposals(s *mcp.Server, c *Catalog, t *Tools, enabled bool) {
 	registerAction(s, c, &mcp.Tool{Name: "propose_alarm_action", InputSchema: proposalInputSchema(), Description: proposalNotice + " Propose acknowledging or clearing 1 to 100 alarms. Supply your own requestId idempotency key unchanged on retries; dryRun checks without storing."}, []string{coreauth.ScopeActAlarms}, ActionRisk{Impact: ImpactNormal, Reversible: false, Discloses: "stores a request for people to review, including alarm targets and the agent's rationale"}, enabled, t.ProposeAlarmAction)
-	registerAction(s, c, &mcp.Tool{Name: "get_proposal", Description: proposalNotice + " Read one proposal by token."}, nil, ActionRisk{Impact: ImpactNormal, Reversible: true, ReadOnly: true, Discloses: "reveals a proposal's targets, author and approval state"}, enabled, t.GetProposal)
+	registerAction(s, c, &mcp.Tool{Name: "get_proposal", InputSchema: proposalGetSchema(), Description: proposalNotice + " Read one proposal by token. area defaults to device-management; command-delivery requires act:commands. Follow your own executed command proposal through get_proposal(area: \"command-delivery\").resultRef (the command token)."}, nil, ActionRisk{Impact: ImpactNormal, Reversible: true, ReadOnly: true, Discloses: "reveals a proposal's targets, author and approval state"}, enabled, t.GetProposal)
 	registerAction(s, c, &mcp.Tool{Name: "list_my_proposals", InputSchema: proposalListSchema(), Description: proposalNotice + " List your own proposals, paged and optionally filtered by state and kind."}, nil, ActionRisk{Impact: ImpactNormal, Reversible: true, ReadOnly: true, Discloses: "reveals your own proposals and their approval states a page at a time"}, enabled, t.ListMyProposals)
 }
 
@@ -40,6 +40,9 @@ type AlarmProposalPreview struct {
 	HidesLiveCondition bool   `json:"hidesLiveCondition"`
 }
 type ProposalUntrusted struct {
+	Command      *Marked   `json:"command,omitempty" prov:"agent"`
+	Payload      *Marked   `json:"payload,omitempty" prov:"agent"`
+	DeviceToken  *Marked   `json:"deviceToken,omitempty" prov:"device-reported"`
 	Rationale    *Marked   `json:"rationale,omitempty" prov:"agent"`
 	Note         *Marked   `json:"note,omitempty" prov:"operator"`
 	OtherTargets []*Marked `json:"otherTargets,omitempty" prov:"device-reported"`
@@ -49,6 +52,10 @@ type ProposalApproval struct {
 	ApprovedAt string `json:"approvedAt" prov:"platform"`
 }
 type Proposal struct {
+	Owner             *ProposalOwner     `json:"owner,omitempty"`
+	DeviceToken       string             `json:"deviceToken,omitempty" prov:"id"`
+	CommandCutoff     *string            `json:"commandCutoff,omitempty" prov:"platform"`
+	ResultRef         *string            `json:"resultRef,omitempty" prov:"id"`
 	Token             string             `json:"token" prov:"id"`
 	Kind              string             `json:"kind" prov:"platform"`
 	State             string             `json:"state" prov:"platform"`
@@ -72,8 +79,13 @@ type Proposal struct {
 }
 type proposalResponse struct {
 	Proposal
-	Rationale string `json:"rationale"`
-	Note      string `json:"note"`
+	DeviceToken   string  `json:"deviceToken"`
+	Command       string  `json:"command"`
+	Payload       string  `json:"payload"`
+	CommandCutoff *string `json:"commandCutoff"`
+	ResultRef     *string `json:"resultRef"`
+	Rationale     string  `json:"rationale"`
+	Note          string  `json:"note"`
 }
 
 func (p proposalResponse) output() Proposal {
@@ -184,26 +196,39 @@ func (t *Tools) ProposeAlarmAction(ctx context.Context, req *mcp.CallToolRequest
 }
 
 type GetProposalInput struct {
+	Area  string `json:"area,omitempty"`
 	Token string `json:"token"`
 }
 
 func (t *Tools) GetProposal(ctx context.Context, req *mcp.CallToolRequest, in GetProposalInput) (*mcp.CallToolResult, Proposal, error) {
 	var out Proposal
-	token, err := proposalCaller(req, nil)
+	command, err := proposalArea(in.Area)
+	if err != nil {
+		return nil, out, err
+	}
+	token, err := proposalReadCaller(req, command)
 	if err != nil {
 		return nil, out, err
 	}
 	var resp struct {
 		Proposal proposalResponse `json:"agentProposal"`
 	}
-	if err = t.gql.Query(ctx, getProposalQuery, token, map[string]any{"token": in.Token}, &resp); err != nil {
+	doc := getProposalQuery
+	if command {
+		doc = getCommandProposalQuery
+	}
+	if err = t.gql.Query(ctx, doc, token, map[string]any{"token": in.Token}, &resp); err != nil {
 		return nil, out, err
 	}
 	out = resp.Proposal.output()
+	if command {
+		out = resp.Proposal.commandOutput()
+	}
 	return provenanceResult(out), out, nil
 }
 
 type ListMyProposalsInput struct {
+	Area       string `json:"area,omitempty"`
 	PageNumber int    `json:"pageNumber,omitempty"`
 	PageSize   int    `json:"pageSize,omitempty"`
 	State      string `json:"state,omitempty" jsonschema:"optional proposal state"`
@@ -216,7 +241,11 @@ type ListMyProposalsOutput struct {
 
 func (t *Tools) ListMyProposals(ctx context.Context, req *mcp.CallToolRequest, in ListMyProposalsInput) (*mcp.CallToolResult, ListMyProposalsOutput, error) {
 	out := ListMyProposalsOutput{Proposals: []Proposal{}}
-	token, err := proposalCaller(req, nil)
+	command, err := proposalArea(in.Area)
+	if err != nil {
+		return nil, out, err
+	}
+	token, err := proposalReadCaller(req, command)
 	if err != nil {
 		return nil, out, err
 	}
@@ -230,12 +259,10 @@ func (t *Tools) ListMyProposals(ctx context.Context, req *mcp.CallToolRequest, i
 		}
 	}
 	if in.Kind != "" {
-		switch in.Kind {
-		case "ALARM_ACK", "ALARM_CLEAR":
-			criteria["kind"] = in.Kind
-		default:
+		if command && in.Kind != "COMMAND_SEND" || !command && in.Kind != "ALARM_ACK" && in.Kind != "ALARM_CLEAR" {
 			return nil, out, invalidProposalInput("invalid proposal kind")
 		}
+		criteria["kind"] = in.Kind
 	}
 	var resp struct {
 		Proposals struct {
@@ -245,12 +272,20 @@ func (t *Tools) ListMyProposals(ctx context.Context, req *mcp.CallToolRequest, i
 			} `json:"pagination"`
 		} `json:"agentProposals"`
 	}
-	if err = t.gql.Query(ctx, listMyProposalsQuery, token, map[string]any{"criteria": criteria}, &resp); err != nil {
+	doc := listMyProposalsQuery
+	if command {
+		doc = listMyCommandProposalsQuery
+	}
+	if err = t.gql.Query(ctx, doc, token, map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, out, err
 	}
 	out.TotalRecords = resp.Proposals.Pagination.TotalRecords
 	for _, p := range resp.Proposals.Results {
-		out.Proposals = append(out.Proposals, p.output())
+		if command {
+			out.Proposals = append(out.Proposals, p.commandOutput())
+		} else {
+			out.Proposals = append(out.Proposals, p.output())
+		}
 	}
 	return provenanceResult(out), out, nil
 }
@@ -266,8 +301,9 @@ func proposalInputSchema() map[string]any {
 }
 func proposalListSchema() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
+		"area":       proposalAreaSchema(),
 		"pageNumber": map[string]any{"type": "integer"}, "pageSize": map[string]any{"type": "integer"},
 		"state": map[string]any{"type": "string", "enum": []string{"PROPOSED", "EXECUTED", "REJECTED", "EXPIRED", "REFUSED", "CANCELLED", "KILLED"}},
-		"kind":  map[string]any{"type": "string", "enum": []string{"ALARM_ACK", "ALARM_CLEAR"}},
+		"kind":  map[string]any{"type": "string", "enum": []string{"ALARM_ACK", "ALARM_CLEAR", "COMMAND_SEND"}},
 	}}
 }

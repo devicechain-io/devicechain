@@ -560,6 +560,12 @@ describe('the Approvals entry', () => {
 });
 
 describe('approver navigation visibility', () => {
+  it('shows command reviews to a command reader without alarm approver standing', async () => {
+    access.mockResolvedValue({ instanceEnabled: true, canApprove: false });
+    renderWith(['command:read'], '/');
+    await waitFor(() => expect(entry('Approvals')).toBeTruthy());
+    expect(access).toHaveBeenCalledTimes(1);
+  });
   it('shows an approver without agent:admin', async () => {
     access.mockResolvedValue({ instanceEnabled: true, canApprove: true });
     renderWith(['alarm:write'], '/');
