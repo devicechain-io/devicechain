@@ -9,11 +9,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // TestFleetOperationJournalsOnPostgres runs the appended migration through the real chain on a
@@ -51,4 +53,48 @@ func TestFleetOperationJournalsOnPostgres(t *testing.T) {
 		"a settlement exists only on a posted line")
 	require.NoError(t, db.WithContext(ctx).Create(&FleetOperationLine{OperationId: id, Ordinal: 4, Posting: "POSTED", Settlement: sql.NullString{String: "AMBIGUOUS", Valid: true}}).Error)
 	require.Error(t, db.WithContext(ctx).Create(&FleetOperationLine{OperationId: id, Ordinal: 4, Posting: "PLANNED"}).Error, "one line per ordinal")
+}
+
+// TestFleetOperationModelsMatchThePostgresSchema compares every live model field with the column
+// the migration built on a real server. SQLite cannot: it stores int32 and int64 alike, so a
+// model whose integer width drifted from the DDL would pass the unit comparison.
+func TestFleetOperationModelsMatchThePostgresSchema(t *testing.T) {
+	api := NewApi(newPostgresRdbManager(t))
+	db := api.RDB.Database.WithContext(core.WithSystemContext(context.Background()))
+	base := map[string]string{
+		"integer": "int4", "bigint": "int8", "bigserial": "int8", "varchar": "varchar", "text": "text",
+		"timestamptz": "timestamptz", "boolean": "bool",
+	}
+	for _, m := range []any{&FleetOperation{}, &FleetOperationRuntime{}, &FleetOperationContract{}, &FleetOperationLine{}, &FleetOperationEvent{}} {
+		stmt := &gorm.Statement{DB: db}
+		require.NoError(t, stmt.Parse(m))
+		columns, err := db.Migrator().ColumnTypes(m)
+		require.NoError(t, err)
+		byName := map[string]gorm.ColumnType{}
+		for _, c := range columns {
+			byName[c.Name()] = c
+		}
+		require.Len(t, byName, len(stmt.Schema.DBNames), stmt.Table)
+		for _, f := range stmt.Schema.Fields {
+			if f.DBName == "" {
+				continue
+			}
+			col, ok := byName[f.DBName]
+			require.True(t, ok, "%s.%s is not a column", stmt.Table, f.DBName)
+			dt := string(db.Migrator().FullDataTypeOf(f).SQL)
+			want := strings.ToLower(strings.Fields(dt)[0])
+			size := ""
+			if i := strings.Index(want, "("); i >= 0 {
+				size = strings.TrimSuffix(want[i+1:], ")")
+				want = want[:i]
+			}
+			require.Equal(t, base[want], col.DatabaseTypeName(), "%s.%s", stmt.Table, f.DBName)
+			if size != "" && want == "varchar" {
+				length, _ := col.Length()
+				require.Equal(t, size, fmt.Sprint(length), "%s.%s", stmt.Table, f.DBName)
+			}
+			nullable, _ := col.Nullable()
+			require.Equal(t, !f.NotNull && !f.PrimaryKey, nullable, "%s.%s nullability", stmt.Table, f.DBName)
+		}
+	}
 }
