@@ -455,8 +455,11 @@ func TestTheCELRulesRefuseAnInvalidCreateThroughEitherVersion(t *testing.T) {
 			n++
 			spec := celBase()
 			plant(spec)
-			if err := createThrough(ctx, c, v, fmt.Sprintf("bad-%d", n), spec); err == nil {
+			err := createThrough(ctx, c, v, fmt.Sprintf("bad-%d", n), spec)
+			if err == nil {
 				t.Errorf("%s was accepted through %s", what, v)
+			} else if !apierrors.IsInvalid(err) {
+				t.Errorf("%s through %s was refused, but not as a validation error: %v", what, v, err)
 			}
 		}
 	}
