@@ -214,6 +214,12 @@ const usage = `apiprobe — write one of every creatable entity, then prove it r
         assignment need the instance to allow unverified artifacts, so a rig asks
         before it makes that edit.
 
+  apiprobe attrwrite --receipt <file> [--url <graphql>] [--count N]
+        Rewrite the seeded device's attribute with the value it already holds, N times,
+        signed in as the seed's tenant identity. --url sends the writes to one pod rather
+        than the ingress. The upgrade drill's attrlock phase uses it to drive a
+        previous-release pod and a current one at the same device.
+
   apiprobe areas
         Print the functional areas the table writes to, one per line, so a rig can
         deploy them. Not every one is in the 'default' profile.
@@ -264,6 +270,8 @@ func main() {
 		err = runTableSweep(ctx, os.Args[2:])
 	case "tamper":
 		err = runTamper(ctx, os.Args[2:])
+	case "attrwrite":
+		err = runAttrWrite(ctx, os.Args[2:])
 	case "ssobaseline":
 		err = runSSOBaseline(os.Args[2:])
 	case "signerbaseline":

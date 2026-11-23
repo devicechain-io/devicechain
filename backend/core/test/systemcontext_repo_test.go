@@ -77,6 +77,8 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/api_attribute_repairs.go": {"Api.DrainAttributeRepairs"},
 	// The configuration-report maintenance lists the tenants that have report history (no row is read), then removes orphans and expired rows under each tenant's own core.WithTenant.
 	"backend/services/device-management/model/api_configuration_report_maintenance.go": {"Api.configurationReportTenants"},
+	// The attribute orphan sweep takes its one-replica session lock and lists the tenants that hold device attribute or generation rows (no row content is read), then removes each tenant's orphans under its own core.WithTenant.
+	"backend/services/device-management/model/api_attribute_orphans.go": {"Api.SweepAllDeviceAttributeOrphans", "Api.attributeOrphanTenants"},
 	// The agent-effect relay lists the tenants that have queued effects, then drains each tenant's rows under core.WithTenant.
 	"backend/services/device-management/model/agent_effect_outbox.go":        {"Api.DrainAgentEffects"},
 	"backend/services/device-management/model/api_profile_decoder_health.go": {"Api.TrimDecoderHealth"},
@@ -120,6 +122,7 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/event-processing/model/device_attribute_store.go":          {"DeviceAttributeStore.LoadAll"},
 	"backend/services/event-processing/model/device_roster_store.go":             {"DeviceRosterStore.LoadAll", "DeviceRosterStore.LoadAllLifecycle"},
 	"backend/services/event-processing/model/profile_active_store.go":            {"ProfileActiveStore.LoadAll"},
+	"backend/services/event-processing/model/rule_stat_store.go":                 {"RuleStatStore.SweepTenants"},
 	"backend/services/notification-management/processor/escalation_scheduler.go": {"EscalationScheduler.runOnce"},
 	"backend/services/user-management/deadletters/context.go":                    {"systemCtx"},
 	"backend/services/user-management/iam/purge.go":                              {"Store.PurgeRecords"},

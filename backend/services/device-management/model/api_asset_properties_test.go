@@ -461,7 +461,7 @@ func TestAssetRetypeRevalidatesTheStoredProperties(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+	_, err = api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{
 		AssetTypeToken: dcgraphql.OptionalStringOf("valve"),
 	})
 	require.Error(t, err, "a retype must not strand properties the new type never declared")
@@ -474,7 +474,7 @@ func TestAssetRetypeRevalidatesTheStoredProperties(t *testing.T) {
 
 	// Retyping WITH a document the destination declares succeeds, which is what shows
 	// the refusal above is about conformance rather than about retyping at all.
-	_, err = api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+	_, err = api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{
 		AssetTypeToken: dcgraphql.OptionalStringOf("valve"),
 		Properties:     dcgraphql.OptionalStringOf(`{"bore":50}`),
 	})
@@ -525,7 +525,7 @@ func TestRenameAfterRollbackIsNotRefused(t *testing.T) {
 	// asset is non-conformant and the `old` one is not, so a test that renamed only
 	// one of them would pass with the gate half-removed.
 	for _, token := range []string{"old", "new"} {
-		_, err := api.UpdateAsset(ctx, token, &AssetUpdateRequest{
+		_, err := api.UpdateAsset(ctx, token, nil, &AssetUpdateRequest{
 			Name: dcgraphql.OptionalStringOf("Renamed " + token),
 		})
 		require.NoError(t, err, "renaming %q was refused for stored non-conformance", token)
@@ -561,14 +561,14 @@ func TestSendingPropertiesIsStillValidatedAfterARollback(t *testing.T) {
 	// Re-sending the stored document is now a WRITE of a non-conformant document, and
 	// it is refused — the operator is choosing to write it, which is the moment the
 	// contract applies.
-	_, err = api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+	_, err = api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{
 		Properties: dcgraphql.OptionalStringOf(`{"serial":"SN-2"}`),
 	})
 	require.Error(t, err, "sending a document must still be checked against the active contract")
 
 	// And writing one that DOES satisfy v1 succeeds, which is how the asset is
 	// brought back into conformance.
-	_, err = api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+	_, err = api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{
 		Properties: dcgraphql.OptionalStringOf(`{"vendor":"Acme"}`),
 	})
 	require.NoError(t, err)
@@ -584,7 +584,7 @@ func TestAssetPropertiesCanBeCleared(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	updated, err := api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+	updated, err := api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{
 		Properties: dcgraphql.ClearedString(),
 	})
 	require.NoError(t, err)
@@ -610,11 +610,11 @@ func TestALiteralNullPropertyDocumentIsStoredAsNone(t *testing.T) {
 	require.Nil(t, created.Properties, "the literal null was stored as a document")
 
 	// And on the update path, which reaches the column through a different projection.
-	_, err = api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+	_, err = api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{
 		Properties: dcgraphql.OptionalStringOf(`{"psi":40}`),
 	})
 	require.NoError(t, err)
-	updated, err := api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+	updated, err := api.UpdateAsset(ctx, "p-1", nil, &AssetUpdateRequest{
 		Properties: dcgraphql.OptionalStringOf(` null `),
 	})
 	require.NoError(t, err)

@@ -236,6 +236,27 @@ mask, falling back to `masks.default` and then `'{slug}'`. `parseMask`, `maskToR
 the token's lifetime). `read()` must return the same pair object until replacement,
 so a late refresh can be discarded after a session switch.
 
+## Checking requests against the instance you are connected to
+
+An application built against one release can be pointed at an instance running another.
+`enableSchemaNegotiation()` (off unless you call it) makes `gql()` ask each GraphQL endpoint
+for the schema it serves, with an authenticated `OPTIONS` request, and check every
+authenticated operation against it before sending: a field, argument, type or input field the
+instance does not define throws a `SchemaSkewError` (`kind: 'unsupported'`) and nothing is sent.
+Any other way the operation fails to validate is `kind: 'invalid-request'`. Nothing is trimmed
+or rewritten. `enableSchemaNegotiation({ release })` names your release in the refusal;
+`resetSchemaNegotiation()` forgets the cached contracts, and a refusal from a cached contract is
+re-checked once against a fresh one first, so an instance upgraded under a running page heals.
+
+- An instance older than v1.9.0 has no discovery, so its release cannot be confirmed:
+  the operation is refused as `kind: 'undiscoverable'` instead of being sent on a guess.
+- 🔴 **Negotiation fails closed.** If a CORS proxy or a web application firewall in front of
+  the instance answers `OPTIONS` itself (a preflight handler, a blanket 200 or 405), discovery
+  fails and every authenticated operation is refused. Let `OPTIONS` through to the GraphQL
+  endpoints, or leave negotiation off.
+- Login, token refresh and subscriptions are not checked. `graphql` (already a peer
+  dependency) is loaded on the first check, not before.
+
 ## Compatibility
 
 ESM only, built for bundler resolution (Vite, webpack, Rollup, esbuild). The

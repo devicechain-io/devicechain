@@ -42,6 +42,10 @@ dcctl bootstrap seeds only the platform tiers, so a load run that needs a bigger
 the tier the same way, raising but never lowering it. A tier that already exists must state
 every limit the config names (dcctl cannot see an inherited default), or create refuses and
 names the missing key.`,
+	Example: `  dcctl sim create demo
+  dcctl sim create demo --manifest harborpulse --instance my-instance --server dc.example.com --tls
+  dcctl sim create tower --manifest towerpulse --episode night-shift
+  dcctl sim create load --tier rc-100k --tier-config '{"ingestReadingsPerSecond":100000}'`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runSimCreate,
 	SilenceUsage: true,
@@ -194,7 +198,9 @@ func runSimCreate(cmd *cobra.Command, args []string) (retErr error) {
 	}
 
 	if strings.TrimSpace(mqttBroker) == "" {
-		mqttBroker = clusterMqttBroker(cmd, server, instance)
+		if mqttBroker, err = clusterMqttBroker(cmd, server, instance); err != nil {
+			return err
+		}
 	}
 	endpoints := sim.ResolveEndpoints(server, ingress, mqttBroker, tls)
 	adminURL := sim.AdminURL(server, tls)
@@ -299,10 +305,18 @@ func simCreateNextSteps(name string) []string {
 	}
 }
 
+// resolveInstanceMQTTNodePort is bootstrap.ResolveInstanceMQTTNodePort, a variable so a test can
+// answer without a cluster.
+var resolveInstanceMQTTNodePort = bootstrap.ResolveInstanceMQTTNodePort
+
 // clusterMqttBroker derives the MQTT gateway address from the kind cluster's actual
 // published host port, for a loopback --server only. Empty means "could not tell",
 // and the caller keeps the conventional ssl://<server>:1883.
-func clusterMqttBroker(cmd *cobra.Command, server, instance string) string {
+//
+// 🔴 AN INSTANCE WITH NO MQTT NODE PORT IS REFUSED, NOT ADDRESSED AT 31883. Its broker is
+// reachable in-cluster only, and the cluster's first MQTT port belongs to another instance: a sim
+// pointed there would drive that instance's broker with this instance's credentials.
+func clusterMqttBroker(cmd *cobra.Command, server, instance string) (string, error) {
 	host := server
 	if h, _, err := net.SplitHostPort(server); err == nil {
 		host = h
@@ -310,19 +324,26 @@ func clusterMqttBroker(cmd *cobra.Command, server, instance string) string {
 	switch host {
 	case "localhost", "127.0.0.1", "::1":
 	default:
-		return ""
+		return "", nil
 	}
 	kubeContext, _ := cmd.Flags().GetString("kube-context")
 	if kubeContext == "" {
 		binding, source := bootstrap.ResolveBinding(bootstrap.Options{Instance: instance})
 		if source == bootstrap.BindingUnreadable {
-			return ""
+			return "", nil
 		}
 		kubeContext = binding.KubeContext
 	}
-	p, ok := bootstrap.KindPublishedHostPort(kubeContext, bootstrap.KindMQTTNodePort)
-	if !ok || p == 1883 {
-		return ""
+	nodePort := resolveInstanceMQTTNodePort(cmd.Context(), kubeContext, instance)
+	if nodePort == 0 {
+		return "", fmt.Errorf("instance %q has no MQTT node port: every MQTT port this local cluster publishes "+
+			"belongs to another instance, so its broker is reachable in-cluster only. Pass --%s with an address "+
+			"that reaches it (for example a port-forward to the dc-nats Service in namespace %s)",
+			instance, flagMqttBroker, bootstrap.InstanceNamespace(instance))
 	}
-	return fmt.Sprintf("ssl://%s:%d", host, p)
+	p, ok := bootstrap.KindPublishedHostPort(kubeContext, nodePort)
+	if !ok || p == 1883 {
+		return "", nil
+	}
+	return fmt.Sprintf("ssl://%s:%d", host, p), nil
 }

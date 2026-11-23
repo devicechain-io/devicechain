@@ -120,9 +120,10 @@ func DeriveMeasurementPayloadId(request *MeasurementEventCreateRequest) ([]byte,
 		Value          *float64
 		Classifier     *uint
 		Unit, DataType *string
+		TextValue      *string `json:",omitempty"`
 		Occurred       time.Time
 	}{request.Name, request.Value, request.Classifier, request.Unit, request.DataType,
-		request.EntryOccurredTime})
+		request.TextValue, request.EntryOccurredTime})
 	if err != nil {
 		return nil, fmt.Errorf("canonicalizing a MeasurementEvent for its payload identity: %w", err)
 	}

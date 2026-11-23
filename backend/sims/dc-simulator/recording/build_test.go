@@ -315,8 +315,9 @@ func TestTheWatchAsksForEveryFieldItRecords(t *testing.T) {
 	}
 }
 
-// The recording carries what each kind's profile declares: the crusher plant declares no fuel, so a
-// replayed fleet table says it does not report fuel rather than that it sent none.
+// The recording carries what each kind's profile declares: the crusher plant declares no fuel and a dozer
+// no payload or tyres, so a replayed fleet table says it does not report them rather than that it
+// sent none.
 func TestBuildCarriesEachKindsDeclaredMeasurements(t *testing.T) {
 	p, o := fixture()
 	m := sim.NewSitepulse(1, sim.Load{}).Manifest()
@@ -327,7 +328,7 @@ func TestBuildCarriesEachKindsDeclaredMeasurements(t *testing.T) {
 	}
 	machine := []string{sim.SitepulseFuelKey, sim.SitepulseEngineTempKey, sim.SitepulseEngineHoursKey, sim.SitepulsePayloadKey, sim.SitepulseTyreKey}
 	want := map[string][]string{
-		"Hauler": machine, "Loader": machine, "Dozer": machine,
+		"Hauler": machine, "Loader": machine, "Dozer": machine[:3],
 		"Plant": {sim.SitepulseThroughputKey, sim.SitepulsePlantRunningKey},
 	}
 	if !reflect.DeepEqual(rec.DeclaredMetrics, want) {

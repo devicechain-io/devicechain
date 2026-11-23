@@ -74,6 +74,13 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly List<float> frameTimes = new List<float>();
         float frameStatsAt;
         bool engineer, hidden, portrait;
+
+        /// <summary>
+        /// Whether the frame is a tall one: asked for (<c>-hp-portrait</c>) or simply drawn taller than wide. One answer for the three things
+        /// that differ in a tall frame, so they cannot disagree: the camera's poses (the 9:16 HOME, a well's tall view), where the HUD
+        /// writes, and the range at which a well's tags are drawn.
+        /// </summary>
+        public bool TallFrame => portrait || (sceneCamera != null && sceneCamera.aspect < 1);
         readonly List<TimedFix> fixes = new List<TimedFix>();
         DateTimeOffset lastFix;
         public Func<IDirectorFeed> DirectorFeedFactory { get; set; }
@@ -164,7 +171,7 @@ namespace DeviceChain.Harborpulse.Visuals
             // the stills path never runs Update: bring the near detail to this camera before anything is drawn
             world?.Detail.Refresh(sceneCamera.transform.position, true);
             // and the wells' tags: the last Tick decided them for the camera it had, which a still may have moved since
-            views?.FrameWells(sceneCamera.transform.position, sceneCamera.transform.forward);
+            views?.FrameWells(sceneCamera.transform.position, sceneCamera.transform.forward, TallFrame);
             reflection?.RenderNow();
         }
         void LateUpdate() => reflection?.LateTick();
@@ -359,7 +366,7 @@ namespace DeviceChain.Harborpulse.Visuals
             mats.SetNight((float)state.Night, (float)frame.World.EastFeederOutage);
             mats.SetRain(state);
             grading.Apply(state);
-            views.Apply(frame, state, sceneCamera.transform.position, dt, waterTime, weather, sceneCamera.transform.forward);
+            views.Apply(frame, state, sceneCamera.transform.position, dt, waterTime, weather, sceneCamera.transform.forward, TallFrame);
             TickDirector(source, now, dt);
             ApplyMappedTruck(source, now);
             world.Detail.Refresh(sceneCamera.transform.position);
@@ -374,7 +381,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 b.rotation = Quaternion.Euler(Mathf.Sin(waterTime * 0.9f + i) * 6 * (0.3f + (float)weather.Storm), 0, Mathf.Cos(waterTime * 0.7f + i * 1.3f) * 6 * (0.3f + (float)weather.Storm));
             }
 
-            if (director != null) directorCamera.Tick(directorView, director, directorSeconds, dt, fixes);
+            if (director != null) { directorCamera.Portrait = TallFrame; directorCamera.Tick(directorView, director, directorSeconds, dt, fixes); }
             if (Application.isPlaying && captureDir != null && directorSeconds >= nextCapture)
             {
                 nextCapture = directorSeconds + captureEvery;

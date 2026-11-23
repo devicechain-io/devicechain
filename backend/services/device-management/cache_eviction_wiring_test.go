@@ -32,7 +32,7 @@ import (
 
 func evictionTables() []any {
 	return append(credentialTables(), &model.DeviceReplacement{}, &model.DeviceAlias{}, &model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{},
-		&model.EntityRelationshipType{}, &model.EntityAttribute{}, &model.Alarm{},
+		&model.EntityRelationshipType{}, &model.EntityAttribute{}, &model.AttributeGeneration{}, &model.Alarm{},
 		&model.EntityGroupMembership{}, &model.GeoFence{}, &model.Area{}, &model.GeoFenceSetVersion{},
 		&model.GeoFenceGeometryBlob{},
 		// A device delete removes the device's configuration revisions and reported state in

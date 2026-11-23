@@ -54,6 +54,7 @@ const CUSTOMERS = graphql(`
         description
         metadata
         createdAt
+        updatedAt
         customerType {
           id
           token
@@ -95,6 +96,7 @@ const CUSTOMER_BY_TOKEN = graphql(`
       description
       metadata
       createdAt
+      updatedAt
       customerType {
         id
         token
@@ -144,6 +146,7 @@ const CREATE_CUSTOMER = graphql(`
       description
       metadata
       createdAt
+      updatedAt
       customerType {
         id
         token
@@ -163,14 +166,15 @@ export async function createCustomer(request: CustomerCreateRequest): Promise<Cu
 }
 
 const UPDATE_CUSTOMER = graphql(`
-  mutation UpdateCustomer($token: String!, $request: CustomerUpdateRequest!) {
-    updateCustomer(token: $token, request: $request) {
+  mutation UpdateCustomer($token: String!, $request: CustomerUpdateRequest!, $expectedUpdatedAt: String) {
+    updateCustomer(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {
       id
       token
       name
       description
       metadata
       createdAt
+      updatedAt
       customerType {
         id
         token
@@ -192,11 +196,19 @@ const UPDATE_CUSTOMER = graphql(`
 // WRONG one now: a form that re-sends fields it never showed is writing them back
 // from a snapshot it read minutes ago, so two operators on two tabs each silently
 // overwrite the other. Absence is the carry-forward.
+// expectedUpdatedAt is an optimistic-concurrency precondition: pass the updatedAt the
+// caller loaded and the update is refused (STALE_WRITE) if another writer changed it since.
+// Omitted (undefined or null), the update is last-write-wins, as before.
 export async function updateCustomer(
   token: string,
   request: CustomerUpdateRequest,
+  expectedUpdatedAt?: string | null,
 ): Promise<Customer> {
-  const data = await gql('device-management', UPDATE_CUSTOMER, { token, request });
+  const data = await gql('device-management', UPDATE_CUSTOMER, {
+    token,
+    request,
+    expectedUpdatedAt: expectedUpdatedAt ?? null,
+  });
   return data.updateCustomer;
 }
 
@@ -346,6 +358,9 @@ export const listCustomerGroups = (opts: { pageNumber: number; pageSize: number 
 export const getCustomerGroup = (token: string) => getEntityGroupOfType(token, 'customer');
 export const createCustomerGroup = (request: GroupFormRequest) =>
   createEntityGroup({ ...request, memberType: 'customer' });
-export const updateCustomerGroup = (token: string, request: EntityGroupUpdateRequest) =>
-  updateEntityGroup(token, request);
+export const updateCustomerGroup = (
+  token: string,
+  request: EntityGroupUpdateRequest,
+  expectedUpdatedAt?: string | null,
+) => updateEntityGroup(token, request, expectedUpdatedAt);
 export const deleteCustomerGroup = deleteEntityGroup;

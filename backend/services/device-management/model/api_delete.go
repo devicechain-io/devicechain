@@ -297,6 +297,9 @@ func deleteEntityAttributesOnTx(tx *gorm.DB, etype entity.Type, id uint) error {
 			return err
 		}
 	}
+	if etype == entity.TypeDevice {
+		return tx.Where("device_id = ?", id).Delete(&AttributeGeneration{}).Error
+	}
 	return nil
 }
 

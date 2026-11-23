@@ -292,6 +292,10 @@ store), says so when it rises, and warns when the volume has less free space tha
   # Turn the fail-closed MQTT acknowledgement on (kept by later upgrades), or back off
   dcctl upgrade local devicechain --mqtt-fail-closed
   dcctl upgrade local devicechain --mqtt-fail-closed=false`,
+	Example: `  dcctl upgrade local my-instance --dry-run
+  dcctl upgrade local my-instance
+  # name the cluster explicitly; it must be the one recorded at bootstrap
+  dcctl upgrade local prod --kube-context prod`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// The provider is resolved rather than ignored: it is validated here, so a

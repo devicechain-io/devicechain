@@ -1002,6 +1002,21 @@ before anything is running under it.
 `http://localhost/`, with no hosts-file entry and no certificate warning.
 :::
 
+
+:::tip A second local instance by hostname
+`localhost` serves one instance. To run another beside it, give each its own name under
+`localtest.me`, a public domain whose every name resolves to `127.0.0.1`, so it needs no
+hosts-file entry either:
+
+```bash
+dcctl bootstrap local alpha --host alpha.localtest.me --no-tls
+dcctl bootstrap local beta --host beta.localtest.me --no-tls
+```
+
+The consoles are then at `http://alpha.localtest.me/` and `http://beta.localtest.me/`. The name
+must resolve through DNS, so it needs network access; offline, use a `*.localhost` name instead.
+:::
+
 ### `--ha` {#ha}
 
 `--ha` is chosen at install, and every instance on the cluster follows it. Each instance runs
@@ -1157,6 +1172,22 @@ carries the declared replica factor **with all peers current**, and that the thr
 on three distinct nodes. It exits non-zero if anything falls short, and prints what it examined
 so that a pass over an empty set is not mistaken for a pass.
 
+Where the stream leaders sit matters as much as how many replicas there are. Every device event
+costs the server that leads each stream it passes through a replicated write, so one server
+leading several of them limits the broker long before the others are busy:
+
+```bash
+dcctl ha leaders --instance my-instance
+```
+
+This reports which server leads the capture, inbound and resolved streams, the broker's MQTT
+message store and the resolved stream's consumers. **PASS** means no leader move the rebalance
+is allowed to make would spread them further. **FAIL** lists the moves, and
+`dcctl broker rebalance my-instance` makes them. **UNSETTLED** means a stream, a leader or a
+current replica is missing, so the layout cannot be judged yet; run it again once
+`dcctl ha verify` passes. The capture and inbound streams and the MQTT message store are never
+moved, because a leader change on them can lose messages already acknowledged to a device.
+
 #### Losing a node, and getting it back {#ha-node-loss}
 
 `--ha` survives the loss of one node. This is what that looks like from outside, in the order it
@@ -1220,7 +1251,9 @@ happens:
   is lost, and the services re-attach on their own.
 
 Plan a node's return the way you plan its loss, and do not take a second node down until
-`dcctl ha verify` passes again.
+`dcctl ha verify` passes again. Then run `dcctl ha leaders`: leaders stay where the elections
+left them, so the returning server leads nothing until something moves leadership back, and a
+FAIL there is put right with `dcctl broker rebalance`.
 
 #### Maintaining a database node {#ha-database-node-maintenance}
 

@@ -276,7 +276,17 @@ var bootstrapCmd = &cobra.Command{
 	Use:   "bootstrap <provider> <instance>",
 	Short: "Bootstrap a DeviceChain instance",
 	Long:  `Provisions a usable DeviceChain instance on the given provider (e.g. "local")`,
-	Args:  cobra.ExactArgs(2),
+	Example: `  # a local kind cluster prepared with "dcctl install local"
+  dcctl bootstrap local my-instance
+  # an existing cluster (any cloud) prepared with "dcctl install local --kube-context prod"
+  dcctl bootstrap local prod --kube-context prod --host iot.example.com
+  # see what would happen first
+  dcctl bootstrap local my-instance --dry-run
+  # deploy a functional area on top of the profile
+  dcctl bootstrap local my-instance --enable-area outbound-connectors
+  # the local-developer preset
+  dcctl bootstrap local scratch --dev`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		provider, err := bootstrap.Get(args[0])
 		if err != nil {
@@ -619,6 +629,11 @@ var bootstrapCmd = &cobra.Command{
 				EscrowPath:   bootstrap.EscrowPlanPathToRecord(opts.Instance, escrowPlan),
 				CreatedAt:    time.Now().UTC(),
 				DcctlVersion: Version,
+			}
+			// A re-run rewrites the record; the MQTT node port the earlier run recorded is still
+			// the instance's until this run's apply records it again.
+			if old, err := bootstrap.ReadInstanceRecord(opts.Instance); err == nil {
+				rec.MQTTNodePort = old.MQTTNodePort
 			}
 			if err := bootstrap.WriteInstanceRecord(rec); err != nil {
 				fmt.Println(color.YellowString(

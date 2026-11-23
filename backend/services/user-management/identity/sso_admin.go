@@ -797,7 +797,22 @@ func (m *Manager) ApproveSsoLinkRequestFor(ctx context.Context, requestID uint, 
 	return err
 }
 
-// RejectSsoLinkRequest deletes a request without linking anything.
+// RejectSsoLinkRequest deletes a request without linking anything, and audits it when it
+// was there. A request that is already gone (or never existed) answers false and writes no
+// row, since nothing was decided.
 func (m *Manager) RejectSsoLinkRequest(ctx context.Context, requestID uint) (bool, error) {
-	return m.iam.DeleteSsoLinkRequest(ctx, requestID)
+	label := fmt.Sprintf("request=%d", requestID)
+	if req, err := m.iam.SsoLinkRequestByID(ctx, requestID); err == nil {
+		if conn, cerr := m.iam.IdpConnectionByID(ctx, req.ConnectionID); cerr == nil {
+			label += " connection=" + conn.Token
+		}
+	}
+	removed, err := m.iam.DeleteSsoLinkRequest(ctx, requestID)
+	if err != nil {
+		return false, err
+	}
+	if removed {
+		m.recordAuthLabeled(ctx, rdb.AuditOpIdentityLinkRejected, actor(ctx), "", label)
+	}
+	return removed, nil
 }

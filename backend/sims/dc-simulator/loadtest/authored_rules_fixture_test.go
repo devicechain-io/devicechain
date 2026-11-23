@@ -222,6 +222,8 @@ var mirroredAlarmSeverityWire = map[string]string{
 	mirrorKey("sitepulse", sim.SitepulseRuleToken):              sim.SitepulseAlarmSeverityWire,
 	mirrorKey("sitepulse", sim.SitepulseOverheatRuleToken):      sim.SitepulseOverheatAlarmSeverityWire,
 	mirrorKey("sitepulse", sim.SitepulseTyreRuleToken):          sim.SitepulseTyreAlarmSeverityWire,
+	mirrorKey("sitepulse", sim.SitepulseDozerRuleToken):         sim.SitepulseAlarmSeverityWire,
+	mirrorKey("sitepulse", sim.SitepulseDozerOverheatRuleToken): sim.SitepulseOverheatAlarmSeverityWire,
 	mirrorKey("towerpulse", sim.TowerpulseZoneHotRuleToken):     sim.AlarmSeverityMajorWire,
 	mirrorKey("towerpulse", sim.TowerpulseCO2RuleToken):         sim.AlarmSeverityMinorWire,
 	mirrorKey("towerpulse", sim.TowerpulseFilterRuleToken):      sim.AlarmSeverityMinorWire,

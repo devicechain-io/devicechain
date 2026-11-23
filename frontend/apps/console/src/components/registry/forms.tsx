@@ -66,6 +66,7 @@ import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { AsyncCombobox, type AsyncComboboxPage } from '@/components/ui/async-combobox';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage } from '@/routes/common';
+import { isStaleWrite } from '@devicechain/client';
 import { Textarea } from '@/components/ui/textarea';
 
 // Capitalize the first letter. Still used by device-profile definition toasts
@@ -140,7 +141,9 @@ export function RegistryTypeForm<T extends NamedEntity>({
         onDone(e('CreatedToast', { token: trimmed }));
       }
     } catch (err) {
-      setFormError(errMessage(err));
+      // A save the server refused because the item changed since the form opened: say
+      // so, and keep the operator's input, rather than show the raw refusal.
+      setFormError(isStaleWrite(err) ? t('common:staleWrite') : errMessage(err));
     } finally {
       setBusy(false);
     }
@@ -270,7 +273,9 @@ export function RegistryInstanceForm<T extends NamedEntity>({
         onDone(e('CreatedToast', { token: trimmed }));
       }
     } catch (err) {
-      setFormError(errMessage(err));
+      // A save the server refused because the item changed since the form opened: say
+      // so, and keep the operator's input, rather than show the raw refusal.
+      setFormError(isStaleWrite(err) ? t('common:staleWrite') : errMessage(err));
     } finally {
       setBusy(false);
     }

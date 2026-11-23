@@ -20,6 +20,7 @@ import (
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -92,6 +93,9 @@ type CalloutResponder struct {
 	// (infrastructure.nats.mqttDeviceUplinks; UseDeviceUplinks). False mints the grant every earlier
 	// build minted.
 	deviceUplinks bool
+	// evidenceLog, when set, receives the platform-evidence records (x509_credential_rejected)
+	// instead of the process logger. A test injects it so it never swaps the global logger.
+	evidenceLog *zerolog.Logger
 	// creds compares every MQTT password behind DeviceCredentialPolicy's backoff. Never
 	// nil: NewCalloutResponder refuses to build a responder without one.
 	creds *credential.Checker

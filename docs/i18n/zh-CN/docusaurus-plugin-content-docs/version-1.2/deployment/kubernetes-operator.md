@@ -42,11 +42,11 @@ prod   local      kind-devicechain  default   v1.0.3      Ready       True    v1
 | `telemetry` | user-management、device-management、event-sources、event-management、device-state、dashboard-management |
 | `ingest-only` | user-management、device-management、event-sources |
 
-### 秘密存储根密钥 {#root-key}
+### 机密存储根密钥 {#root-key}
 
-每种配置档都需要实例的**秘密存储根密钥**。所有配置档都运行的 `user-management` 会用它封装登录令牌签名密钥。存储集成凭据的功能域也用它封装凭据。缺少时，Chart 会使渲染失败，而不是让 `user-management` 陷入崩溃重启循环。
+每种配置档都需要实例的**机密存储根密钥**。所有配置档都运行的 `user-management` 会用它封装登录令牌签名密钥。存储集成凭据的功能域也用它封装凭据。缺少时，Chart 会使渲染失败，而不是让 `user-management` 陷入崩溃重启循环。
 
-生成一个值（`openssl rand -base64 32`），妥善保存，并在每次安装和升级时传入**同一个**值。新密钥会使旧密钥保护的已有秘密不可读，并阻止所有人登录。`dcctl bootstrap` 会代你生成并托管保管此密钥；只有直接操作 Chart 时才需自行提供。
+生成一个值（`openssl rand -base64 32`），妥善保存，并在每次安装和升级时传入**同一个**值。新密钥会使旧密钥保护的已有机密不可读，并阻止所有人登录。`dcctl bootstrap` 会代你生成并托管保管此密钥；只有直接操作 Chart 时才需自行提供。
 
 ```bash
 DC_ROOT_KEY="$(openssl rand -base64 32)"   # generate ONCE, then keep it

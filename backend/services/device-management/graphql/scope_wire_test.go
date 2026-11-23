@@ -67,7 +67,7 @@ func seedScopeFixture(t *testing.T, db *gorm.DB, extra ...any) scopeFixture {
 	if err := db.AutoMigrate(append([]any{&model.EntityGroupFacetRef{}, &model.DeviceType{}, &model.Device{}, &model.DeviceAlias{}, &model.DeviceProfile{},
 		&model.CustomerType{}, &model.Customer{}, &model.IssuedCustomerToken{}, &model.Area{}, &model.EntityRelationshipType{},
 		&model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{}, &model.DeviceClaim{}, &model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{},
-		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.Alarm{}, &model.EntityAttribute{},
+		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.Alarm{}, &model.EntityAttribute{}, &model.AttributeGeneration{},
 		&model.AreaType{}, &model.Asset{}, &model.AssetType{}}, extra...)...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

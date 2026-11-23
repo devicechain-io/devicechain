@@ -249,6 +249,20 @@ namespace DeviceChain.Harborpulse.Model
         /// <summary>Scenery fog starts this far from the camera: HOME already stands 550-900 m from the town, so nothing nearer is hazed.</summary>
         public const double SceneryFogStartM = 350;
 
+        /// <summary>
+        /// The squalls in a storm's haze (HarborHaze.hlsl, which holds the same two numbers) are drawn for an eye above the first height
+        /// and in full above the second. The 9:16 HOME stands above both; the 16:9 HOME and every ground-level camera stand below both,
+        /// where the band the squalls lie in is too shallow to read as anything but smudges on the ranges.
+        /// </summary>
+        public const double SquallEyeFromM = 120, SquallEyeFullM = 190;
+
+        /// <summary>0 .. 1: how much of the squalls an eye at a height sees.</summary>
+        public static double SquallsFromEye(double eyeHeightM)
+        {
+            var t = Math.Max(0, Math.Min(1, (Math.Abs(eyeHeightM) - SquallEyeFromM) / (SquallEyeFullM - SquallEyeFromM)));
+            return t * t * (3 - 2 * t);
+        }
+
         /// <summary>The scenery shader multiplies <see cref="FogDensity"/> by this (the planar and URP fog on every other material keep the plain value).</summary>
         public const double SceneryFogGain = 3.5;
 

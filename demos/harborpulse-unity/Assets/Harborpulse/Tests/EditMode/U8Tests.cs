@@ -26,7 +26,7 @@ namespace DeviceChain.Harborpulse.Tests
         public void OneTorIsALandmarkInTheMiddleOfWhatHomeSees()
         {
             var plan = U5Plan.Plan;
-            var tor = plan.Outcrops.Single(o => o.Landmark);
+            var tor = plan.EastTor;
             // taller than anything else of rock by a wide margin, and than the terminal's ridge and the lofts
             var rise = tor.Peak - tor.GroundAtCentre;
             Assert.That(rise, Is.InRange(22, 32));
@@ -49,7 +49,7 @@ namespace DeviceChain.Harborpulse.Tests
         [Test]
         public void TheLandmarkIsStacksOfSlabsEachStandingOnTheOneUnderIt()
         {
-            var tor = U5Plan.Plan.Outcrops.Single(o => o.Landmark);
+            var tor = U5Plan.Plan.EastTor;
             // the main stack: six slabs, each one's foot the top of the one under it, each narrower
             var tops = tor.Blocks.Select(b => Enumerable.Range(4, 4).Max(i => b[i].Y)).ToArray();
             var grid = U5Plan.Plan.Terrain;
@@ -76,7 +76,7 @@ namespace DeviceChain.Harborpulse.Tests
             // the lesser stacks are lower, so the outline steps down either side
             Assert.That(tops.Skip(6).Max(), Is.LessThan(tor.Peak * .75 + tor.Top * .25));
             // the same seed, the same tor
-            var again = WorldPropPlan.Generate(U5Plan.Map, U5Plan.Layout).Outcrops.Single(o => o.Landmark);
+            var again = WorldPropPlan.Generate(U5Plan.Map, U5Plan.Layout).EastTor;
             Assert.That(again.Blocks.Sum(b => b.Sum(p => p.X + p.Y + p.Z)), Is.EqualTo(tor.Blocks.Sum(b => b.Sum(p => p.X + p.Y + p.Z))));
         }
 

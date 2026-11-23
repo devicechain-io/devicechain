@@ -376,10 +376,10 @@ dcctl bootstrap local scratch --dev
 ```
 
 :::danger 需要保留的实例必须保存此文件
-根密钥加密实例保存的所有秘密，仅存在于集群 etcd，且 **DeviceChain 备份不包含 etcd**。没有此文件，将数据库备份恢复到新集群后，恢复的秘密将无法解密。请提前阅读[灾难恢复](./disaster-recovery.md)。
+根密钥加密实例保存的所有机密，仅存在于集群 etcd，且 **DeviceChain 备份不包含 etcd**。没有此文件，将数据库备份恢复到新集群后，恢复的机密将无法解密。请提前阅读[灾难恢复](./disaster-recovery.md)。
 :::
 
-保存秘密的领域无法解密凭据时拒绝启动。用户管理服务也在其中：它封存令牌签名密钥，因此所有用户无法登录。问题会立即显现，但届时已无法补救。[灾难恢复](./disaster-recovery.md)说明完整流程。
+保存机密的领域无法解密凭据时拒绝启动。用户管理服务也在其中：它封存令牌签名密钥，因此所有用户无法登录。问题会立即显现，但届时已无法补救。[灾难恢复](./disaster-recovery.md)说明完整流程。
 
 使用 `--no-escrow` 或 `--dev` 创建的无托管实例可之后补充，无需重建。向 `dcctl upgrade` 提供口令会写入缺失文件，每次升级也检查已有文件。见[托管协调](./disaster-recovery.md#escrow-reconcile)。
 
@@ -526,6 +526,18 @@ JetStream 卷大小由各 stream 预先保留的容量上限之和推导。两�
 `dcctl bootstrap local my-instance --build --host localhost --no-tls` 将控制台开放在 `http://localhost/`，无须修改 hosts 文件，也不会出现证书警告。
 :::
 
+
+:::tip 按主机名运行第二个本地实例
+`localhost` 只能服务一个实例。要在其旁边再运行一个，请为每个实例使用 `localtest.me` 下各自的名称。这是一个公共域名，其下所有名称都解析到 `127.0.0.1`，同样无须修改 hosts 文件：
+
+```bash
+dcctl bootstrap local alpha --host alpha.localtest.me --no-tls
+dcctl bootstrap local beta --host beta.localtest.me --no-tls
+```
+
+控制台随后位于 `http://alpha.localtest.me/` 和 `http://beta.localtest.me/`。该名称通过 DNS 解析，因此需要网络访问；离线时请改用 `*.localhost` 名称。
+:::
+
 ### `--ha` {#ha}
 
 `--ha` 在安装时选择，集群中每个实例都遵循。每个实例的消息代理运行为三节点 RAFT 集群，每节点一台服务器，**每个 JetStream stream 和 KV 桶都在其中复制**。实例能够在一个节点丢失后保留消息、设备会话和实时状态。
@@ -585,6 +597,14 @@ dcctl ha verify --instance my-instance
 
 该命令读取实际消息代理，检查每个 stream、KV 桶和 durable consumer 都具有声明的副本因子，**所有 peer 都已追赶**，且三台服务器位于不同节点。任何条件不足都会非零退出，并打印检查对象，避免将空集合检查误认为有效通过。
 
+stream leader 的分布与副本数量同样重要。每个设备事件都会让其经过的每个 stream 的 leader 服务器承担一次复制写入，因此一台服务器同时担任其中多个 stream 的 leader 时，会在其他服务器还很空闲时就成为消息代理的瓶颈：
+
+```bash
+dcctl ha leaders --instance my-instance
+```
+
+该命令报告哪台服务器担任捕获、入站和已解析 stream、消息代理的 MQTT 消息存储以及已解析 stream 的 consumer 的 leader。**PASS** 表示再平衡允许的任何 leader 迁移都无法让它们分布得更开。**FAIL** 会列出迁移，由 `dcctl broker rebalance my-instance` 执行。**UNSETTLED** 表示缺少某个 stream、leader 或已追赶的副本，暂时无法判断分布；请在 `dcctl ha verify` 通过后再次运行。捕获和入站 stream 以及 MQTT 消息存储永远不会迁移，因为在它们上切换 leader 可能丢失已向设备确认的消息。
+
 #### 节点丢失和重新加入 {#ha-node-loss}
 
 `--ha` 容忍一个节点丢失。外部可按以下顺序观察到：
@@ -598,7 +618,7 @@ dcctl ha verify --instance my-instance
 - **丢失节点上已驱逐的 Pod 保持 `Terminating`，直到节点返回。** Kubernetes 无法确认其停止，因此保留。不要强制删除不可达节点的 Pod：数据库或消息代理可能仍在故障另一侧运行，强制删除会让替代实例同时启动。如果机器永久消失，先确认已断电，再删除 Node 对象，Kubernetes 随后移除其 Pod。数据库节点返回后作为 standby 加入。
 - **节点返回本身也有短暂扰动。** 被隔离的消息代理服务器一直自行选举，重新加入时，其他服务器 stream 和 consumer 再次选举 leader。节点返回约 45 秒后，JetStream 可能数秒返回“temporarily unavailable”，HTTP 接入在窗口内拒绝部分发布，已有事件可能延迟处理最多一分钟。不会丢失数据，服务自行重新连接。
 
-应像规划节点丢失一样规划其返回。在 `dcctl ha verify` 再次通过之前，不要让第二个节点停机。
+应像规划节点丢失一样规划其返回。在 `dcctl ha verify` 再次通过之前，不要让第二个节点停机。之后运行 `dcctl ha leaders`：leader 会停留在选举结束时的位置，因此返回的服务器在有人迁移 leader 之前不担任任何 leader，出现 FAIL 时用 `dcctl broker rebalance` 纠正。
 
 #### 维护数据库节点 {#ha-database-node-maintenance}
 

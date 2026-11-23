@@ -126,7 +126,7 @@ READERS = [
         "docs/**", "README.md", "**/go.mod", SDL,
         "backend/services/event-management/model/analytics.go",
         "backend/core/config/instance-config.schema.json",  # config_schema_test.go: the released schema asset
-    ], [], "cmd/docs_*_test.go, cmd/config_schema_test.go"),
+    ], [], "cmd/docs_*_test.go, cmd/config_schema_test.go, cmd/relationship_test.go via apitest"),
     # bootstrap: README.md and deployment docs (fence/backupsizing/diskbudget/size_docs), every service's non-test
     # source (install_test.go:432), service configs (sizing/sparkplug), user-management go.mod
     # (breakglass), core/rdb/postgres.go (install_test.go:473), the broker's main.go/go.mod
@@ -143,6 +143,7 @@ READERS = [
         "hack/harborpulse-rig.sh",  # valuesoverlay_test.go: the rig's --values heredoc
     ], NONTEST, "bootstrap/*_test.go"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
+    ("backend/cli", "fleetop", ["backend/services/device-management/graphql/**"], [], "fleetop/documents_test.go:16"),
     ("backend/cli", "product", [SDL], [], "product/documents_test.go:32"),
     # internal/apitest/capabilities.go:44-48 serves the real SDL from every service's graphql dir; the cmd and
     # sim tests (cmd/product_rotate_test.go, sim/*_test.go) call it through their fixtures.
@@ -340,7 +341,7 @@ IN_MODULE = {
     ("backend/core", "test/frontend"): "build-tagged `frontend`, so the go job never compiles it; the frontend job runs the same vitest suites",
     ("backend/core", "replication"): "\"..\" appears only in a comment",
     ("backend/core", "webhooksig"): "\"..\" is a refused path segment",
-    ("backend/k8s", "api/v1beta1"): "instance_crd_test.go, executor_crd_test.go and executor_schema_test.go read ../../config/crd/bases inside backend/k8s",
+    ("backend/k8s", "api/v1beta1"): "instance_crd_test.go, deprecations_test.go, executor_crd_test.go and executor_schema_test.go read ../../config/crd/bases inside backend/k8s",
     ("backend/services/command-delivery", "processor"): "reads ../contract inside its own module",
     ("backend/services/event-processing", "internal/review"): "reads ../replayinput inside its own module",
     ("backend/services/device-management", "graphql"): "\"../x\" is a refused-key fixture",
