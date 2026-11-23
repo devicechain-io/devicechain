@@ -60,3 +60,32 @@ func compileWarnings(pred *predicate.Predicate) []Warning {
 	}
 	return out
 }
+
+// WarnNamesStringMetric is the code of a rule whose condition names a metric the profile declares
+// STRING. A detection rule never reads a text reading, so the rule never fires. Params: [metric key].
+const WarnNamesStringMetric = "namesStringMetric"
+
+// StringMetricWarnings returns one advisory per metric key the compiled rule names (as a constant
+// key of `m`) that is in stringKeys, the profile's STRING metric keys. It is separate from
+// compileWarnings because it needs input Compile does not have: the metric types live on the
+// profile, which only the caller knows. A nil or empty set yields none, which is what a caller that
+// did not send the types gets.
+func StringMetricWarnings(cr *CompiledRule, stringKeys map[string]bool) []Warning {
+	if cr == nil || cr.Predicate == nil || len(stringKeys) == 0 {
+		return nil
+	}
+	refs, _ := cr.Predicate.MetricRefs()
+	var out []Warning
+	for _, k := range refs {
+		if !stringKeys[k] {
+			continue
+		}
+		out = append(out, Warning{
+			Code:   WarnNamesStringMetric,
+			Params: []string{k},
+			Message: fmt.Sprintf("this rule names the metric %q, which is declared STRING on the profile, so it never "+
+				"fires: a detection rule does not read text readings, even when the text looks like a number.", k),
+		})
+	}
+	return out
+}
