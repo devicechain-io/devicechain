@@ -57,6 +57,7 @@
   "digest": "Digest",
   "policyVersion": "Policy version",
   "reasons": "Reasons",
+  "moreReasons": "+{{count}} more",
   "decision": "Decision and approvals",
   "created": "Created",
   "decided": "Decided at",

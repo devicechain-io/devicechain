@@ -57,6 +57,7 @@
   "digest": "摘要",
   "policyVersion": "策略版本",
   "reasons": "原因",
+  "moreReasons": "另有 {{count}} 项",
   "decision": "决定与审批",
   "created": "创建时间",
   "decided": "决定时间",

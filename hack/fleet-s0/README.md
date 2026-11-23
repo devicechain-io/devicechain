@@ -13,7 +13,8 @@ Tier C requires all of `FLEET_S0_ADMIN_PROJECT`, `FLEET_S0_PROJECT`,
 `FLEET_S0_CANARY_PROJECT`, and `FLEET_S0_TEST_IDENTITY`. The spike project
 must already exist, be dedicated to this spike, and carry
 `fleet-s0=throwaway`. The canary project ID must be unused. The admin project
-is deliberately required, with no default. Provision
+is deliberately required, with no default. `FLEET_S0_FOLDER` is the canary's parent: a folder ID,
+or `organizations/ID` when the projects sit directly under the organization. Provision
 `s0-reaper@ADMIN.iam.gserviceaccount.com` and
 `s0-cluster-reaper@ADMIN.iam.gserviceaccount.com` there and enable Scheduler,
 Resource Manager and the relevant APIs. The invoking user needs project
@@ -43,8 +44,9 @@ are zonal, one-node fixtures; keep the spike below the spec's 25 USD budget.
 The outer project reaper remains armed on every error.
 
 E-d, E-f, E-h and E-i are instrumented (`instrument.sh`, with their verdict functions in
-`instrument.py`) but have **not run against a cloud**: every Tier C record stays INCONCLUSIVE with
-`blocked: "U2"` until the maintainer approves the grants listed for each in the IAM request. Their
+`instrument.py`), and each has been run ONCE against a throwaway project under the grants of the IAM
+request. A run that produced no verdict is recorded INCONCLUSIVE with `blocked: "ATTEMPTED"` and its own
+cause; it is rerun only on a new approval. Every other Tier C record stays `blocked: "U2"`. Their
 self-tests use scripted CLIs and make no cloud calls; each one shows the probe recording HOLDS, then
 recording FAILS under each scripted defect, then recording NO verdict when its negative control cannot
 fail (exit non-zero, nothing written to `results.jsonl`: INCONCLUSIVE is an absent entry, never a pass).
@@ -58,7 +60,7 @@ fail (exit non-zero, nothing written to `results.jsonl`: INCONCLUSIVE is an abse
 
 E-i needs `FLEET_S0_APPLY_IDENTITY`, `FLEET_S0_NODE_IDENTITY` and `FLEET_S0_OTHER_IDENTITY`;
 `candidate-apply-role.txt` is the permission list under test. Tunables: `FLEET_S0_KSA_TTL_S` (>= 600),
-`FLEET_S0_ACCESS_TTL_S` (<= 3600), `FLEET_S0_SKEW_SECONDS`. E-f waits roughly the bound (about 80
+`FLEET_S0_ACCESS_TTL_S` (<= 3600), `FLEET_S0_SKEW_SECONDS`, `FLEET_S0_IAM_PROPAGATION_SECONDS` (E-d waits up to this, default 420, for a new binding to take effect before its baseline). E-f waits roughly the bound (about 80
 minutes at the defaults). The gcloud flags of E-i's trust-changing attempts are calibrated by the first
 real run: an attempt that fails for a reason other than a permission refusal yields no verdict, never a pass.
 
@@ -73,7 +75,9 @@ container. Evidence lands in `FLEET_S0_OUTPUT_DIR` (default `./fleet-s0-<run>-ou
 `python3 hack/fleet-s0/assemble.py OUT.json RUN_DIR...` folds the runs' candidate records into
 the reviewed record and adds every Tier C experiment as `INCONCLUSIVE` with
 `measured.blocked = "U2"`: a refusal to measure, never a pass. A blocked entry's digest covers its
-notice text, since it has no transcript.
+notice text, since it has no transcript. `--base gke.json` carries forward the checked-in measured
+entries (their run directories are private), and `--attempted ID RUN_DIR REASON` records a run that
+produced no verdict as `blocked: "ATTEMPTED"`, digested over that run's transcript.
 
 ## Premise record format (schema version 1)
 
