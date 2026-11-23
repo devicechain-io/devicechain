@@ -69,7 +69,7 @@ COPY backend/fleet /src/backend/fleet
 RUN cd /src/backend/fleet && GOWORK=off CGO_ENABLED=0 go build -trimpath -o /out/usr/local/bin/fleet-runner ./tofurun/cmd/fleet-runner
 
 # Prove the layout before it ships: the check is the one command this image runs.
-RUN FLEET_RUNNER_TOFU=/out/usr/local/bin/tofu FLEET_RUNNER_TREE=/out/opt/fleet/tree /out/usr/local/bin/fleet-runner check
+RUN FLEET_RUNNER_TOFU=/out/usr/local/bin/tofu FLEET_RUNNER_TREE=/out/opt/fleet/tree FLEET_RUNNER_MIRROR=/out/opt/fleet/providers /out/usr/local/bin/fleet-runner check
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /out/ /
