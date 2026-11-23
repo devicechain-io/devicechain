@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 const fleetWireCreate = `mutation ($request: FleetOperationCreateRequest!) {
@@ -302,4 +303,131 @@ func TestAScopedMemberIsRefusedEvenWhenNoAuthorityIsAsked(t *testing.T) {
 	ok, _ := fleetWireCtx(t, person())
 	_, err = fleetCaller(ok)
 	require.NoError(t, err)
+}
+
+const fleetWireControlFields = `token dispatch pauseReason executionEpoch grantee safety { effectivePostsPerSecond maxPostsPerSecond }`
+
+func withGuard(t *testing.T) {
+	t.Helper()
+	t.Cleanup(model.OpenFleetActivationForTest(func(*gorm.DB) error { return nil }))
+}
+
+func TestControlTransitionsOverTheWire(t *testing.T) {
+	withEngine(t)
+	withGuard(t)
+	ctx, _ := fleetWireCtx(t, person(auth.DeviceRead, auth.DeviceWrite, auth.FleetOperate))
+	data, errs := execFleet(t, ctx, fleetWireCreate, fleetWireRequest("c1", "d1", "d2"))
+	require.Empty(t, errs)
+	var created struct {
+		Op struct{ ContractDigest string } `json:"createFleetOperation"`
+	}
+	require.NoError(t, json.Unmarshal(data, &created))
+	digest := created.Op.ContractDigest
+
+	type op struct {
+		Token, Dispatch string
+		PauseReason     *string
+		ExecutionEpoch  int
+		Grantee         *string
+		Safety          struct{ EffectivePostsPerSecond, MaxPostsPerSecond int }
+	}
+	call := func(q string, vars map[string]any, field string) (op, []string) {
+		data, errs := execFleet(t, ctx, q, vars)
+		var out map[string]op
+		if len(errs) == 0 {
+			require.NoError(t, json.Unmarshal(data, &out))
+		}
+		return out[field], errs
+	}
+	startQ := `mutation ($t: String!, $d: String!) { startFleetOperation(token: $t, contractDigest: $d) { ` + fleetWireControlFields + ` } }`
+	pauseQ := `mutation ($t: String!) { pauseFleetOperation(token: $t) { ` + fleetWireControlFields + ` } }`
+	resumeQ := `mutation ($t: String!, $d: String!, $s: FleetOperationSafetyInput) { resumeFleetOperation(token: $t, contractDigest: $d, safety: $s) { ` + fleetWireControlFields + ` } }`
+	abortQ := `mutation ($t: String!) { abortFleetOperation(token: $t) { ` + fleetWireControlFields + ` } }`
+
+	_, errs = call(startQ, map[string]any{"t": "c1", "d": "sha256:nope"}, "startFleetOperation")
+	require.Len(t, errs, 1)
+	require.True(t, strings.HasPrefix(errs[0], "CONTRACT_DIGEST_MISMATCH|"), errs[0])
+
+	started, errs := call(startQ, map[string]any{"t": "c1", "d": digest}, "startFleetOperation")
+	require.Empty(t, errs)
+	require.Equal(t, "RUNNING", started.Dispatch)
+	require.Equal(t, "alice@example.com", *started.Grantee)
+	require.Equal(t, 1, started.ExecutionEpoch)
+
+	paused, errs := call(pauseQ, map[string]any{"t": "c1"}, "pauseFleetOperation")
+	require.Empty(t, errs)
+	require.Equal(t, "PAUSED", paused.Dispatch)
+	require.Equal(t, "USER", *paused.PauseReason)
+
+	prev, errs2 := execFleet(t, ctx, `query ($t: String!, $s: FleetOperationSafetyInput) { previewFleetOperationResume(token: $t, safety: $s) { withinContract contractDigest stepUpRequired thresholdStillExceeded } }`,
+		map[string]any{"t": "c1", "s": map[string]any{"maxPostsPerSecond": 50}})
+	require.Empty(t, errs2)
+	require.Contains(t, string(prev), `"withinContract":false`)
+
+	_, errs = call(resumeQ, map[string]any{"t": "c1", "d": digest, "s": map[string]any{"maxPostsPerSecond": 50}}, "resumeFleetOperation")
+	require.Len(t, errs, 1)
+	require.True(t, strings.HasPrefix(errs[0], "CONTRACT_WIDENED|"), errs[0])
+
+	resumed, errs := call(resumeQ, map[string]any{"t": "c1", "d": digest, "s": map[string]any{"maxPostsPerSecond": 4}}, "resumeFleetOperation")
+	require.Empty(t, errs)
+	require.Equal(t, "RUNNING", resumed.Dispatch)
+	require.Equal(t, 4, resumed.Safety.EffectivePostsPerSecond)
+	require.Equal(t, 10, resumed.Safety.MaxPostsPerSecond)
+
+	aborted, errs := call(abortQ, map[string]any{"t": "c1"}, "abortFleetOperation")
+	require.Empty(t, errs)
+	require.Equal(t, "ABORTED", aborted.Dispatch)
+	_, errs = call(abortQ, map[string]any{"t": "c1"}, "abortFleetOperation")
+	require.Len(t, errs, 1)
+	require.True(t, strings.HasPrefix(errs[0], "ILLEGAL_TRANSITION|"), errs[0])
+}
+
+func TestStoppingNeedsOnlyDeviceWriteButStartingAndResumingNeedFleetOperate(t *testing.T) {
+	withEngine(t)
+	withGuard(t)
+	owner, api := fleetWireCtx(t, person(auth.DeviceRead, auth.DeviceWrite, auth.FleetOperate))
+	data, errs := execFleet(t, owner, fleetWireCreate, fleetWireRequest("m1", "d1"))
+	require.Empty(t, errs)
+	var created struct {
+		Op struct{ ContractDigest string } `json:"createFleetOperation"`
+	}
+	require.NoError(t, json.Unmarshal(data, &created))
+	digest := created.Op.ContractDigest
+
+	asWriter := auth.WithClaims(owner, person(auth.DeviceRead, auth.DeviceWrite)) // lost fleet:operate
+	asReader := auth.WithClaims(owner, person(auth.DeviceRead))
+	asAgent := func() context.Context {
+		c := person(auth.DeviceRead, auth.DeviceWrite, auth.FleetOperate)
+		c.ClientId = "agent-1"
+		return auth.WithClaims(owner, c)
+	}()
+	start := `mutation ($t: String!, $d: String!) { startFleetOperation(token: $t, contractDigest: $d) { dispatch } }`
+	pause := `mutation ($t: String!) { pauseFleetOperation(token: $t) { dispatch } }`
+	abort := `mutation ($t: String!) { abortFleetOperation(token: $t) { dispatch } }`
+	resume := `mutation ($t: String!, $d: String!) { resumeFleetOperation(token: $t, contractDigest: $d) { dispatch } }`
+	preview := `query ($t: String!) { previewFleetOperationResume(token: $t) { withinContract } }`
+
+	// Without fleet:operate: cannot start, resume or preview a resume.
+	for name, q := range map[string]string{"start": start, "resume": resume, "preview": preview} {
+		_, errs := execFleet(t, asWriter, q, map[string]any{"t": "m1", "d": digest})
+		require.Len(t, errs, 1, name)
+		require.True(t, strings.HasPrefix(errs[0], "FORBIDDEN|"), name+errs[0])
+	}
+	// Nobody who is not a writer may stop it, an agent included.
+	for name, c := range map[string]context.Context{"reader": asReader, "agent": asAgent} {
+		for op, q := range map[string]string{"pause": pause, "abort": abort} {
+			_, errs := execFleet(t, c, q, map[string]any{"t": "m1"})
+			require.Len(t, errs, 1, name+" "+op)
+		}
+	}
+	// Negative control: the owner starts it, and a writer who lost fleet:operate can still stop it.
+	_, errs = execFleet(t, owner, start, map[string]any{"t": "m1", "d": digest})
+	require.Empty(t, errs)
+	_, errs = execFleet(t, asWriter, pause, map[string]any{"t": "m1"})
+	require.Empty(t, errs, "an administrator who lost fleet:operate can still stop an operation")
+	_, errs = execFleet(t, asWriter, abort, map[string]any{"t": "m1"})
+	require.Empty(t, errs)
+	var n int64
+	require.NoError(t, api.RDB.DB(owner).Model(&model.FleetOperationEvent{}).Where("kind IN ?", []string{"PAUSE", "ABORT"}).Count(&n).Error)
+	require.Equal(t, int64(2), n)
 }

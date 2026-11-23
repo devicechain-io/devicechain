@@ -376,6 +376,36 @@ input FleetLineSearchCriteria {
   code: String
 }
 
+"""Preview. A change to the limits an operation runs under when it is resumed. Anything looser than the approved contract is refused."""
+input FleetOperationSafetyInput {
+  """Preview. The most lines applied per second. At most the approved rate."""
+  maxPostsPerSecond: Int
+  """Preview. Failed lines that pause the operation. At most the approved limit."""
+  failureThreshold: Int
+  """Preview. Ambiguous lines that pause the operation. At most the approved limit."""
+  ambiguityThreshold: Int
+  """Preview. Remove the failure limit. Only where the contract has none."""
+  clearFailureThreshold: Boolean
+  """Preview. Remove the ambiguity limit. Only where the contract has none."""
+  clearAmbiguityThreshold: Boolean
+}
+
+"""Preview. What resuming an operation with a given change would do, computed without writing anything."""
+type FleetResumePreview {
+  """Preview. Whether the change stays within what was approved."""
+  withinContract: Boolean!
+  """Preview. Version of the contract in force."""
+  contractVersion: Int!
+  """Preview. Digest to present to resume."""
+  contractDigest: String!
+  """Preview. The contract in force, as canonical JSON."""
+  contract: String!
+  """Preview. Whether the change needs a fresh second factor. Always false in this release."""
+  stepUpRequired: Boolean!
+  """Preview. Whether the failure or ambiguity limit is still reached, which refuses a resume."""
+  thresholdStillExceeded: Boolean!
+}
+
 extend type Query {
   """Preview. One fleet operation by token. Null when the tenant has none. Needs device:read."""
   fleetOperation(token: String!): FleetOperation
@@ -385,6 +415,8 @@ extend type Query {
   fleetOperationLines(token: String!, criteria: FleetLineSearchCriteria!): FleetLineSearchResults!
   """Preview. What an operation would do, without writing anything. Needs device:write and fleet:operate."""
   planFleetOperation(request: FleetOperationCreateRequest!): FleetOperationPlan!
+  """Preview. What resuming a paused operation with this change would do, without writing anything. Needs device:write and fleet:operate."""
+  previewFleetOperationResume(token: String!, safety: FleetOperationSafetyInput): FleetResumePreview!
 }
 
 extend type Mutation {
@@ -394,5 +426,28 @@ extend type Mutation {
   CONFLICT. Needs device:write and fleet:operate.
   """
   createFleetOperation(request: FleetOperationCreateRequest!): FleetOperation!
+  """
+  Preview. Starts a READY operation. The caller presents the contract digest they reviewed; a different one is
+  CONTRACT_DIGEST_MISMATCH. The caller approves the contract and the operation runs on their behalf. Refused with
+  FLEET_OPERATIONS_NOT_ACTIVATED when the database does not enforce the device attribute writer protocol. Needs
+  device:write and fleet:operate.
+  """
+  startFleetOperation(token: String!, contractDigest: String!): FleetOperation!
+  """
+  Preview. Pauses a RUNNING operation. When it returns, no line is applied under the old state. A wait that times out
+  is FENCE_PENDING and changes nothing. Needs device:write only, so someone who has lost fleet:operate can still stop it.
+  """
+  pauseFleetOperation(token: String!): FleetOperation!
+  """
+  Preview. Resumes a PAUSED operation on the caller's behalf. The digest must be the current contract's. A change to the
+  limits is applied only if it stays within the approved contract (CONTRACT_WIDENED otherwise); a limit that is still
+  reached is THRESHOLD_STILL_EXCEEDED. Needs device:write and fleet:operate.
+  """
+  resumeFleetOperation(token: String!, contractDigest: String!, safety: FleetOperationSafetyInput): FleetOperation!
+  """
+  Preview. Aborts a READY, RUNNING or PAUSED operation: lines not yet applied are cancelled and applied lines keep
+  settling. Needs device:write only.
+  """
+  abortFleetOperation(token: String!): FleetOperation!
 }
 `
