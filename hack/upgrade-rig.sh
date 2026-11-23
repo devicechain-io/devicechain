@@ -2950,12 +2950,16 @@ $gone"
 # baseline has never heard of is refused and the pod crash-loops: an upgrade that looks healthy
 # until the first node drain. (This is the v1.4 drill-5 failure mode.)
 #
-# v1.9 added four such keys, and each must stay ABSENT from what an upgrade renders until an
-# operator turns it on in a separate roll: infrastructure.updateManagement.rolloutSafety,
-# infrastructure.mcp.commandProposals, capture.mqttStoreEnvelopes and nats.shardGroups.seed.
-# backend/cli/bootstrap/v19_fixed_keys_test.go proves that for every way dcctl renders; this
-# is the part only a cluster can say: that the baseline's own binaries, given the configuration
-# this instance really carries, start.
+# A release that adds a FIXED key must keep it ABSENT from what an upgrade renders until an
+# operator turns it on in a separate roll. (v1.9 added four: infrastructure.updateManagement.
+# rolloutSafety, infrastructure.mcp.commandProposals, capture.mqttStoreEnvelopes and
+# nats.shardGroups.seed; backend/cli/bootstrap/v19_fixed_keys_test.go proves that for every way
+# dcctl renders.) This phase is the part only a cluster can say: that the baseline's own
+# binaries, given the configuration this instance really carries, start. It names no key list,
+# so it stays meaningful for whichever release is the baseline: the verdict is the baseline
+# binary's own strict loader. The keys the release under test added over the baseline are
+# DERIVED from the instance configuration schema each release ships (oldpod_new_keys) and
+# reported, so a reader sees what the check is standing guard over.
 #
 # HOW: a COPY of each area's live Deployment, renamed, one replica, its image swapped for the
 # baseline's published image of the same service, applied beside the original and waited on.
@@ -2964,14 +2968,42 @@ $gone"
 # its own for its selector, so the original's ReplicaSet never adopts it.
 #
 # 🔴 THE CHECK IS SHOWN TO FAIL, TWICE, BEFORE IT IS TRUSTED. First, a copy whose area ConfigMap
-# carries a key the baseline does not know (capture.mqttStoreEnvelopes, which is exactly the
-# v1.9 key an upgrade must not render) must NOT start. Second, the selftest feeds the manifest
-# builder and the verdict planted inputs. A check whose only evidence is a pass has never been
-# seen to do anything.
+# carries a key NO release knows (oldpod_control_key, a synthetic name) must NOT start. The
+# control used to plant a real key of one release (capture.mqttStoreEnvelopes); once that
+# release became the baseline the key was known, the control pod started, and the drill failed
+# for a reason that had nothing to do with the upgrade. A control must not depend on which
+# release is the baseline. Second, the selftest feeds the manifest builder and the verdict
+# planted inputs. A check whose only evidence is a pass has never been seen to do anything.
 oldpod_label="devicechain.io/oldpod"
-# The areas whose configuration carries a v1.9 key: update-management (rolloutSafety),
-# command-delivery (commandProposals), event-sources (mqttStoreEnvelopes) and user-management,
-# which creates the placement table the shard seed describes. Others read the same documents.
+# The control's planted key, at the root of event-sources' own document. No release has ever
+# defined it, so any release's strict loader (core.LoadConfiguration, DisallowUnknownFields)
+# refuses it. (event-sources' document has no `infrastructure` section; its root is the
+# service's own configuration, so the root is where an unknown key is refused.)
+oldpod_control_key="zzDrillControlUnknownKey"
+
+# oldpod_new_keys <baseline schema> <new schema> prints, one per line and sorted, the keys the
+# new instance configuration schema defines that the baseline's does not, as Definition.key
+# (the schema is a graph of $defs, so a key is named by the definition that owns it). Both
+# arguments are the schema's JSON TEXT. Empty output means the release added none. It is the
+# derivation of "what is new over the baseline" from what each release ships, so no list of one
+# release's keys is kept here to go stale.
+oldpod_new_keys() {
+  # Files, not --argjson: the schema is far larger than one argument may be.
+  local o n rc=0
+  o="$(mktemp)" n="$(mktemp)"
+  printf '%s' "$1" >"$o"
+  printf '%s' "$2" >"$n"
+  jq -r -n --slurpfile old "$o" --slurpfile new "$n" '
+    def keys_of($s): [ $s["$defs"] // {} | to_entries[]
+                       | .key as $d | (.value.properties // {}) | keys[] | "\($d).\(.)" ];
+    (keys_of($new[0]) - keys_of($old[0])) | unique | .[]' | tr -d '\r' || rc=$?
+  rm -f "$o" "$n"
+  return "$rc"
+}
+
+# The areas that read the keys a release adds: update-management (rolloutSafety),
+# command-delivery (commandProposals), event-sources (capture) and user-management, which
+# creates the placement table the shard seed describes. Others read the same documents.
 oldpod_areas="update-management command-delivery event-sources user-management"
 
 # oldpod_image <live image> <tag> prints the baseline's published image of the same service:
@@ -3026,9 +3058,16 @@ cmd_oldpods() {
   need kubectl
   need jq
   resolve_baseline_tag
-  local ns area deploy json live image cm planted copy ran=0 names=()
+  local ns area deploy json live image cm planted copy ran=0 names=() oldschema newkeys
   ns="$(instance_namespace)"
   say "OLD PODS — does a $baseline_tag pod start on the configuration the upgrade wrote?"
+  if oldschema="$(git -C "$repo_root" show "$baseline_tag:backend/core/config/instance-config.schema.json" 2>/dev/null)"; then
+    newkeys="$(oldpod_new_keys "$oldschema" "$(cat "$repo_root/backend/core/config/instance-config.schema.json")")" ||
+      fail "could not compare $baseline_tag's instance configuration schema with this release's"
+    note "keys this release defines that $baseline_tag does not (derived from the shipped schemas): $(tr '\n' ' ' <<<"${newkeys:-none}")"
+  else
+    note "$baseline_tag ships no instance configuration schema, so the new-key set is not derived"
+  fi
 
   for area in $oldpod_areas; do
     if [[ ! -d "$baseline_src/backend/services/$area" ]]; then
@@ -3069,6 +3108,7 @@ it on in a separate roll."
 
   # THE NEGATIVE CONTROL, on event-sources: the same copy with a key the baseline does not know
   # planted in its area ConfigMap. It must NOT start; if it does, the pass above says nothing.
+  # The key is synthetic (oldpod_control_key), so this holds whichever release is the baseline.
   if [[ -d "$baseline_src/backend/services/event-sources" ]]; then
     deploy="$(kubectl --context "$kube_context" -n "$ns" get deployments \
       -l "devicechain.io/functional-area=event-sources" -o jsonpath='{.items[0].metadata.name}')" || deploy=""
@@ -3080,11 +3120,11 @@ it on in a separate roll."
       [[ -n "$cm" ]] || fail "the control cannot find the microservice-config volume of $deploy"
       planted="oldpod-control-config"
       kubectl --context "$kube_context" -n "$ns" get configmap "$cm" -o json |
-        jq --arg name "$planted" '
+        jq --arg name "$planted" --arg key "$oldpod_control_key" '
           del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp,
               .metadata.annotations, .metadata.ownerReferences, .metadata.managedFields)
           | .metadata.name = $name
-          | .data["event-sources"] |= (fromjson | .capture.mqttStoreEnvelopes = true | tojson)' |
+          | .data["event-sources"] |= (fromjson | .[$key] = true | tojson)' |
         kubectl --context "$kube_context" -n "$ns" apply -f - >/dev/null ||
         fail "the control could not plant its ConfigMap"
       names+=("oldpod-control")
@@ -3095,10 +3135,11 @@ it on in a separate roll."
         oldpod_cleanup "${names[@]}"
         kubectl --context "$kube_context" -n "$ns" delete configmap "$planted" --ignore-not-found >/dev/null 2>&1 || true
         fail "THE CONTROL DID NOT FAIL: a $baseline_tag event-sources pod started on a configuration carrying
-capture.mqttStoreEnvelopes, a key $baseline_tag does not know. So the 'started' verdicts above would
-have read the same had a v1.9 key leaked into the rendered configuration: they prove nothing."
+$oldpod_control_key, a key no release knows. So the 'started' verdicts above would have read
+the same had a key the baseline does not know leaked into the rendered configuration: they
+prove nothing."
       fi
-      note "control: a $baseline_tag pod does NOT start when capture.mqttStoreEnvelopes is planted ✓ (the check can fail)"
+      note "control: a $baseline_tag pod does NOT start when the unknown key $oldpod_control_key is planted ✓ (the check can fail)"
       kubectl --context "$kube_context" -n "$ns" delete configmap "$planted" --ignore-not-found >/dev/null 2>&1 || true
     fi
   fi
@@ -3477,6 +3518,22 @@ selftest_v19() {
      "$(jq -r '.spec.template.spec.volumes[1].secret.secretName' <<<"$out")" == "s" ]] ||
     fail "SELF-TEST FAILED: the control did not repoint exactly the microservice-config volume"
   note "the old-pod copy is renamed, single-replica, re-imaged, uniquely selected and unadopted ✓"
+
+  # The control's planted key must be one NO release defines, and the new-key derivation must tell
+  # a key one schema adds from one both share. The pair of schemas is planted, so the derivation is
+  # shown to find an addition and to find nothing when there is none.
+  local old new
+  [[ "$oldpod_control_key" == zz* ]] || fail "SELF-TEST FAILED: the control key is not the synthetic one"
+  new="$(cat "$repo_root/backend/core/config/instance-config.schema.json")"
+  [[ "$(jq -r --arg k "$oldpod_control_key" '[.["$defs"][].properties // {} | keys[] | select(ascii_downcase == ($k | ascii_downcase))] | length' <<<"$new")" == 0 ]] ||
+    fail "SELF-TEST FAILED: the control key $oldpod_control_key is DEFINED by the instance configuration schema, so a release knows it"
+  old='{"$defs":{"A":{"properties":{"x":{},"y":{}}},"B":{"properties":{"z":{}}}}}'
+  new='{"$defs":{"A":{"properties":{"x":{},"y":{},"n":{}}},"B":{"properties":{"z":{}}},"C":{"properties":{"w":{}}}}}'
+  [[ "$(oldpod_new_keys "$old" "$new" | tr '\n' ' ')" == "A.n C.w " ]] ||
+    fail "SELF-TEST FAILED: oldpod_new_keys did not name exactly the keys the new schema added"
+  [[ -z "$(oldpod_new_keys "$new" "$new")" ]] || fail "SELF-TEST FAILED: oldpod_new_keys named a key two identical schemas share"
+  [[ -z "$(oldpod_new_keys "$new" "$old")" ]] || fail "SELF-TEST FAILED: oldpod_new_keys named a key that was REMOVED as new"
+  note "the control key is defined by no release; the new-key derivation finds additions only ✓"
 
   local crds ok
   crds=$'executorenrollments.core.devicechain.io\ninstanceoperations.core.devicechain.io\nother.example.com'

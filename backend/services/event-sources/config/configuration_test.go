@@ -219,3 +219,15 @@ func TestTheDownlinkFeedDefaultsOffAndIsReadFromTheDocument(t *testing.T) {
 
 	assert.Error(t, core.LoadConfiguration([]byte(`{"lpwanDownlinks":true}`), &EventSourcesConfiguration{}))
 }
+
+// hack/upgrade-rig.sh's oldpods phase plants this key in event-sources' document and requires a
+// baseline pod to refuse to start. The control must hold for ANY baseline, so the key is one no
+// release defines; this pins that the strict load refuses it, which is the property the control
+// leans on. (Planting a real release's key instead went stale the day that release became the
+// baseline.)
+func TestUnknownRootKeyIsRefused(t *testing.T) {
+	cfg := NewEventSourcesConfiguration()
+	err := core.LoadConfiguration([]byte(`{"zzDrillControlUnknownKey":true}`), cfg)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "zzDrillControlUnknownKey")
+}
