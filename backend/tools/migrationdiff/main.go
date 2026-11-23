@@ -62,8 +62,11 @@ func main() {
 		fatalf("-mode must be snapshot, verify, coverage or replay, got %q", *mode)
 	}
 
-	selected, err := selectAreas(*only)
+	selected, err := selectAreas(*only, *mode)
 	if err != nil {
+		fatalf("%v", err)
+	}
+	if err := assertEveryAreaSelected(*mode, *only != "", selected); err != nil {
 		fatalf("%v", err)
 	}
 
@@ -104,17 +107,23 @@ func run(mode, container, host string, port int, user, password, db, goldenDir s
 	failures := 0
 
 	for _, a := range selected {
-		if err := migrateChain(ctx, a, host, port, user, password, db); err != nil {
+		adb := a.database(db)
+		if err := migrateChain(ctx, a, host, port, user, password, adb); err != nil {
 			return fmt.Errorf("running %s migrations: %w", a.name, err)
 		}
-		dump, err := dumpSchema(container, user, db, a.schemas()...)
+		if isFleetArea(a) {
+			if err := assertNoTenantColumns(ctx, host, port, user, password, adb, a.schemas()); err != nil {
+				return err
+			}
+		}
+		dump, err := dumpSchema(container, user, adb, a.schemas()...)
 		if err != nil {
 			return fmt.Errorf("dumping %s schema: %w", a.name, err)
 		}
 		// Appended BEFORE normalization so the probe's lines are scrubbed and sorted
 		// with everything else — Timescale's internal materialization-hypertable number
 		// appears in both the dumped view and the probed catalog row.
-		probe, err := probeTimescale(container, user, db, a.name)
+		probe, err := probeTimescale(container, user, adb, a.name)
 		if err != nil {
 			return fmt.Errorf("probing %s timescale objects: %w", a.name, err)
 		}
@@ -275,21 +284,27 @@ func assertGoldensCovered(goldenDir string, selected []area, filtered bool) erro
 	}
 	if filtered {
 		fmt.Printf("NOTE     -only is in force: %d of %d area(s) verified. This run is NOT full coverage.\n",
-			len(selected), len(areas))
+			len(selected), len(allAreas()))
 	}
 	return nil
 }
 
-func selectAreas(only string) ([]area, error) {
+// selectAreas returns the areas a run visits. The schema gates (snapshot, verify, replay) visit
+// every area, fleet included. coverage is about the tenant purge and visits the tenant areas only.
+func selectAreas(only, mode string) ([]area, error) {
+	universe := allAreas()
+	if mode == "coverage" {
+		universe = areas
+	}
 	if only == "" {
-		return areas, nil
+		return universe, nil
 	}
 	want := map[string]bool{}
 	for _, n := range strings.Split(only, ",") {
 		want[strings.TrimSpace(n)] = true
 	}
 	var out []area
-	for _, a := range areas {
+	for _, a := range universe {
 		if want[a.name] {
 			out = append(out, a)
 			delete(want, a.name)

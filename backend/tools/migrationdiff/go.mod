@@ -10,6 +10,7 @@ require (
 	github.com/devicechain-io/dc-device-state v0.0.1
 	github.com/devicechain-io/dc-event-management v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-event-processing v0.0.1
+	github.com/devicechain-io/dc-fleet v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/devicechain-io/dc-notification-management v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-outbound-connectors v0.0.0-00010101000000-000000000000
@@ -102,6 +103,8 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
 )
+
+replace github.com/devicechain-io/dc-fleet => ../../fleet
 
 replace github.com/devicechain-io/dc-microservice => ../../core
 

@@ -108,20 +108,39 @@ func runReplay(ctx context.Context, container, host string, port int, user, pass
 	}
 
 	replayDB := db + "_replay"
-	if err := ensureDatabase(ctx, host, port, user, password, replayDB); err != nil {
-		return err
+	// One database per distinct destination: the tenant areas share replayDB, and an area with a
+	// database suffix (fleet) replays in its own, as it is verified in its own.
+	admins := map[string]*gorm.DB{}
+	adminFor := func(name string) (*gorm.DB, error) {
+		if c, ok := admins[name]; ok {
+			return c, nil
+		}
+		if err := ensureDatabase(ctx, host, port, user, password, name); err != nil {
+			return nil, err
+		}
+		c, err := openDatabase(host, port, user, password, name)
+		if err != nil {
+			return nil, err
+		}
+		admins[name] = c
+		return c, nil
 	}
-	admin, err := openDatabase(host, port, user, password, replayDB)
-	if err != nil {
-		return err
-	}
-	defer closeDatabase(admin)
+	defer func() {
+		for _, c := range admins {
+			closeDatabase(c)
+		}
+	}()
 
 	checked, confirmed, failures := 0, 0, 0
 	for _, a := range selected {
+		adb := a.database(replayDB)
+		admin, aerr := adminFor(adb)
+		if aerr != nil {
+			return aerr
+		}
 		for k := 1; k <= len(a.migrations); k++ {
 			id := a.migrations[k-1].ID
-			err := replayOne(ctx, admin, a, k, container, host, port, user, password, replayDB)
+			err := replayOne(ctx, admin, a, k, container, host, port, user, password, adb)
 
 			if ex, isExempt := replayExemptionFor(a.name, id); isExempt {
 				if msg := exemptionVerdict(ex, err); msg != "" {
