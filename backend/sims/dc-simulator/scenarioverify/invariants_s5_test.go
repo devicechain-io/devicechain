@@ -79,10 +79,10 @@ func (d *day) modelRestore(dropBackfill, drop429, unthrottled bool) {
 		if tick > 0 {
 			tokens = min(burst, tokens+rate*sim.DefaultEmitInterval.Seconds())
 		}
-		if tokens < 108 {
+		if tokens < 110 {
 			panic("fixture sheds ordinary HTTP tick")
 		}
-		tokens -= 108
+		tokens -= 110 // The two additional HTTP_PULL lamps each report one dim reading.
 		for len(pending) > 0 {
 			e := pending[0]
 			b := &d.backfill[e.b]

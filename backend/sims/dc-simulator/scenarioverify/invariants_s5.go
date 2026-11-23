@@ -47,9 +47,9 @@ func s5Checks() []struct {
 }
 
 // Size from the offered metric readings and the governed tier's conservative net
-// headroom (all transports counted): 40 - 116/5 = 16.8 readings/s. Twice the
+// headroom (all transports counted): 40 - 122/5 = 15.6 readings/s. Twice the
 // fluid drain time plus two ticks allows tick quantization and ingress latency.
-// At 720 readings this is 96s; outage-duration/90 keeps it valid at a 24h day too.
+// At 720 readings this is about 103s; outage-duration/90 keeps it valid at a 24h day too.
 func restoreDeadline(o Observations) time.Duration {
 	entries := 0
 	if l := restoreDay(o); l != nil {

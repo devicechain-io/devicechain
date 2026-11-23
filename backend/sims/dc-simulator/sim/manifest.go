@@ -110,6 +110,13 @@ type ProfileSpec struct {
 	// saved to the draft before the publish and frozen by it, so a device of this profile
 	// whose uplink arrives through an inbound integration is decoded by it.
 	Decoder string
+	// ConfigurationKeys declares the shared attributes sent to a device's desired channel.
+	ConfigurationKeys []ConfigurationKeySpec
+}
+
+type ConfigurationKeySpec struct {
+	Key       string `json:"key"`
+	ValueType string `json:"valueType"`
 }
 
 // EnabledDetectionRuleCount is how many ENABLED detection rules this manifest publishes
@@ -145,6 +152,8 @@ type DeviceTypeSpec struct {
 	Token        string
 	Name         string
 	ProfileToken string
+	// CommandChannel is HTTP_PULL, or empty for the platform's PUBLISH default.
+	CommandChannel string
 	// MaintenanceWindowToken names the maintenance window that holds this type's disruptive
 	// commands until it opens, or "" for none.
 	MaintenanceWindowToken string
