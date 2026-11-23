@@ -304,8 +304,18 @@ namespace DeviceChain.Harborpulse.Model
             var caps=new[]{4,7,5};var taken=new int[3];var centres=new List<Ground>();var cluster=0;
             // The landmark tor first, so every cluster seats itself round it: at the back of the meadow on the town's east edge, 830 m from
             // the 16:9 HOME's eye and clear of the trees in front of it.
-            var landmark=PlaceLandmark();
-            if(landmark.HasValue){centres.Add(landmark.Value);}
+            var m1=CoastalTerrain.Meadow(LandmarkMeadow);
+            var landmark=PlaceLandmark("rock:landmark",new Ground(m1.X+m1.R*LandmarkOffsetX,m1.Z+m1.R*LandmarkOffsetZ),7001,Outcrop.LandmarkRiseM,false,0);
+            if(landmark!=null){centres.Add(landmark.Center);EastTor=landmark;}
+            // and its lesser sister in the wood west of the Basin, 360 m in front of the 9:16 HOME's eye, which looks east along the harbour and
+            // never held the first: its long axis lies north-south, across that eye's line of sight
+            var west=PlaceLandmark("rock:landmark-west",new Ground(WestTorX,WestTorZ),7101,Outcrop.WestTorRiseM,true,90);
+            if(west!=null)
+            {
+                centres.Add(west.Center);WestTor=west;
+                // with a few low ledges at its foot, on the side the harbour is: a tor is the highest of an outcrop, not a stack alone in a wood
+                PlaceCluster(new Ground(west.Center.X+WestTorLedgesDX,west.Center.Z+WestTorLedgesDZ),0,WestTorLedgesSeed);
+            }
             // The meadows HOME looks at each get a cluster of large ledges inside or at the edge of the clearing, so the rock reads from there.
             for(var i=0;i<CoastalTerrain.VisibleMeadows;i++)
             {
@@ -323,28 +333,36 @@ namespace DeviceChain.Harborpulse.Model
         /// <summary>The meadow the landmark tor stands in (<see cref="CoastalTerrain.Meadow"/>) and where in it, as a share of its radius from its centre.</summary>
         public const int LandmarkMeadow=1; public const double LandmarkOffsetX=-.20,LandmarkOffsetZ=.42;
 
-        /// <summary>The one landmark tor (<see cref="Outcrop.Landmark"/>): seated at the first of a few spots round its place that can take its ledge.</summary>
-        Ground? PlaceLandmark()
+        /// <summary>Where the west tor stands (<see cref="Outcrop.WestTorRiseM"/>): in the wood between the Basin and the western streets.</summary>
+        public const double WestTorX=-345,WestTorZ=-15;
+        /// <summary>The cluster of low ledges at the west tor's foot: its centre from the tor's, and its seed.</summary>
+        public const double WestTorLedgesDX=34,WestTorLedgesDZ=-26;public const int WestTorLedgesSeed=93;
+
+        /// <summary>The landmark tor on the town's east edge, which the 16:9 HOME looks at, and the lesser one west of the Basin, which the 9:16 HOME does.</summary>
+        public Outcrop EastTor{get;private set;}
+        public Outcrop WestTor{get;private set;}
+
+        /// <summary>A landmark tor (<see cref="Outcrop.Landmark"/>): seated at the first of a few spots round its place that can take its ledge.</summary>
+        Outcrop PlaceLandmark(string id,Ground place,int seed,double riseM,bool mirrored,double baseYaw)
         {
-            var m=CoastalTerrain.Meadow(LandmarkMeadow);
             for(var attempt=0;attempt<9;attempt++)
             {
-                var at=new Ground(m.X+m.R*LandmarkOffsetX+(attempt%3-1)*14*(attempt==0?0:1),m.Z+m.R*LandmarkOffsetZ+(attempt/3)*-12);
+                var at=new Ground(place.X+(attempt%3-1)*14*(attempt==0?0:1),place.Z+(attempt/3)*-12);
                 if(!Free(at,Outcrop.LandmarkHalfX))continue;
                 var gx=(Terrain.MeshHeight(at.X+10,at.Z)-Terrain.MeshHeight(at.X-10,at.Z));
                 var gz=(Terrain.MeshHeight(at.X,at.Z+10)-Terrain.MeshHeight(at.X,at.Z-10));
-                // its long axis lies across HOME's line of sight (east-west), turned a little with the contour
-                var yaw=Math.Max(-18,Math.Min(18,(gx==0&&gz==0)?0:Math.Atan2(gx,gz)*180/Math.PI*.3));
-                var outcrop=Outcrop.FitLandmark(Terrain,at,yaw,7001+attempt);
+                // its long axis lies across its viewer's line of sight (east-west for the 16:9 HOME), turned a little with the contour
+                var yaw=baseYaw+Math.Max(-18,Math.Min(18,(gx==0&&gz==0)?0:Math.Atan2(gx,gz)*180/Math.PI*.3));
+                var outcrop=Outcrop.FitLandmark(Terrain,at,yaw,seed+attempt,riseM,mirrored);
                 if(outcrop==null)continue;
                 var near=false;
                 foreach(var ring in outcrop.Rings)foreach(var q in ring)if(Clearance(new Ground(q.X,q.Z))<2.5||Reserved(new Ground(q.X,q.Z),2))near=true;
                 if(near)continue;
-                var footprint=outcrop.Footprint("rock:landmark");
+                var footprint=outcrop.Footprint(id);
                 if(!Registry.TryAdd(footprint))continue;
                 props.Add(new WorldProp("Rock",footprint,at,yaw,2*Outcrop.LandmarkHalfX,2*Outcrop.LandmarkHalfZ,outcrop.Peak-outcrop.GroundAtCentre,"outcrop",outcrops.Count));
                 outcrops.Add(outcrop);
-                return at;
+                return outcrop;
             }
             return null;
         }

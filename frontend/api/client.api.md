@@ -155,6 +155,30 @@ export interface ResolvedBasemap {
 }
 ```
 
+## `.:SchemaNegotiationOptions`
+
+```ts
+export interface SchemaNegotiationOptions {
+    release?: string;
+}
+```
+
+## `.:SchemaSkewError`
+
+```ts
+export declare class SchemaSkewError extends GraphQLRequestError {
+    kind: SchemaSkewKind;
+    endpoint: string;
+    constructor(message: string, kind: SchemaSkewKind, endpoint: string);
+}
+```
+
+## `.:SchemaSkewKind`
+
+```ts
+export type SchemaSkewKind = 'unsupported' | 'invalid-request' | 'undiscoverable' | 'invalid-contract';
+```
+
 ## `.:ScopeAnchorRef`
 
 ```ts
@@ -257,10 +281,22 @@ export declare function createSessionTokens(opts: SessionTokensOptions): Managed
 export declare function decodeToken(token: string): DecodedClaims | null;
 ```
 
+## `.:disableSchemaNegotiation`
+
+```ts
+export declare function disableSchemaNegotiation(): void;
+```
+
 ## `.:disposeSubscriptions`
 
 ```ts
 export declare function disposeSubscriptions(): void;
+```
+
+## `.:enableSchemaNegotiation`
+
+```ts
+export declare function enableSchemaNegotiation(options?: SchemaNegotiationOptions): void;
 ```
 
 ## `.:errorCode`
@@ -317,6 +353,12 @@ export declare function isExpired(token: string, skewSeconds?: number): boolean;
 export declare function isForbiddenError(err: unknown): boolean;
 ```
 
+## `.:isSchemaSkewError`
+
+```ts
+export declare function isSchemaSkewError(err: unknown): err is SchemaSkewError;
+```
+
 ## `.:isScopeUnsupportedError`
 
 ```ts
@@ -363,6 +405,12 @@ export declare function parseMask(mask: string): MaskSegment[];
 
 ```ts
 export declare function renderableBasemap(b: Basemap | null | undefined): ResolvedBasemap | null;
+```
+
+## `.:resetSchemaNegotiation`
+
+```ts
+export declare function resetSchemaNegotiation(): void;
 ```
 
 ## `.:resolveAuthToken`

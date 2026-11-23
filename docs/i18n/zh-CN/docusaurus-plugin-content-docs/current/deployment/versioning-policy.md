@@ -54,7 +54,12 @@ v1.0.0 之前，本页内容均不适用。v1.0.0 之前的发布可能改变什
 它会被提升并与其他接口一样受到承诺保护。对预览接口的不兼容变更并不豁免于项目的兼容性检查：它要像其他任何变更一样，在那里声明为有意的破坏性变更，
 因此预览变更不会在无人察觉的情况下发布。预览层级的文件格式带有版本号，例如 `v1alpha1`，不认识该版本的工具会拒绝该文件，而不是去猜测。
 
-目前预览层级包含三类接口。一是规则测试：event-processing API 的 `evaluateRules` 操作、场景文件和测试文件的格式，以及读取它们的 `dcctl test` 命令（参见[测试你的规则](../guides/testing-your-rules.md)）。二是产品即代码：`dcctl product export`、`plan` 和 `apply` 命令及其包格式（参见[产品即代码](../guides/product-as-code.md)）。三是代理操作：`act:*` OAuth 作用域及其派生的提议权限；代理策略操作（`agentPolicy`、`agentPolicyVersions`、`saveAgentPolicyDraft`、`publishAgentPolicy`、`rollbackAgentPolicy`、`setAgentActuation`）及其文档（格式 `v1alpha1`）；`agentActuationDecision` 和 `agentExecutionDecision` 查询；运维人员的按租户控制（`tenantAgentActuation`、`setTenantAgentActuationSuspended`）；代理服务账户的创建（`ServiceAccountCreateRequest.agent`）和 `ServiceAccount.roles` 中描述的代理令牌权限；以及代理提议操作（`proposeAlarmAction`、`approveAgentProposal`、`rejectAgentProposal`、`agentProposals`、`agentProposal`）（参见[代理操作](../concepts/mcp.md#agent-actions)）。GraphQL 预览接口包括其专用的输入和结果类型、字段、参数及枚举值。`ServiceAccount.agent` 字段不属于预览：从引入它的版本起即受兼容性承诺保护。普通服务账户的角色仍受保障。目前尚未提供 MCP 操作工具；MCP 读取工具仍属于上述不受保障的工具目录。
+目前预览层级包含四类接口。一是规则测试：event-processing API 的 `evaluateRules` 操作、场景文件和测试文件的格式，以及读取它们的 `dcctl test` 命令（参见[测试你的规则](../guides/testing-your-rules.md)）。二是产品即代码：`dcctl product export`、`plan` 和 `apply` 命令及其包格式（参见[产品即代码](../guides/product-as-code.md)）。三是代理操作：`act:*` OAuth 作用域及其派生的提议权限；代理策略操作（`agentPolicy`、`agentPolicyVersions`、`saveAgentPolicyDraft`、`publishAgentPolicy`、`rollbackAgentPolicy`、`setAgentActuation`）及其文档（格式 `v1alpha1`）；`agentActuationDecision` 和 `agentExecutionDecision` 查询；运维人员的按租户控制（`tenantAgentActuation`、`setTenantAgentActuationSuspended`）；代理服务账户的创建（`ServiceAccountCreateRequest.agent`）和 `ServiceAccount.roles` 中描述的代理令牌权限；以及代理提议操作（`proposeAlarmAction`、`approveAgentProposal`、`rejectAgentProposal`、`agentProposals`、`agentProposal`）（参见[代理操作](../concepts/mcp.md#agent-actions)）。GraphQL 预览接口包括其专用的输入和结果类型、字段、参数及枚举值。`ServiceAccount.agent` 字段不属于预览：从引入它的版本起即受兼容性承诺保护。普通服务账户的角色仍受保障。目前尚未提供 MCP 操作工具；MCP 读取工具仍属于上述不受保障的工具目录。
+
+设备群操作就绪检查从 **v1.9** 起进入预览阶段，预览期限也从该版本开始：
+`fleetOperationReadiness` 查询、`FleetOperationReadiness` 和 `FleetOperationEnforcement` 类型
+及其字段和枚举值，以及 `dcctl fleet-op readiness` 命令。它们需要 `fleet:operate` 权限；
+具有受限范围的成员无法使用。
 
 ## 支持的升级路径 {#upgrade-paths}
 

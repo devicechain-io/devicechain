@@ -28,12 +28,14 @@ dcctl [command]
 * [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
 * [dcctl events](#dcctl-events)	 - Inspect a tenant's events
 * [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
+* [dcctl fleet-op](#dcctl-fleet-op)	 - Preview. Inspect fleet operation capabilities
 * [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
 * [dcctl install](#dcctl-install)	 - Prepare a cluster for DeviceChain instances
 * [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
 * [dcctl preflight](#dcctl-preflight)	 - Check local prerequisites for installing a cluster
 * [dcctl presence](#dcctl-presence)	 - Inspect and repair device presence
 * [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
+* [dcctl relationship](#dcctl-relationship)	 - Add, list and remove typed entity relationships
 * [dcctl resgen](#dcctl-resgen)	 - Generate configuration resources
 * [dcctl restore](#dcctl-restore)	 - Verify a backup and print a read-only restore plan
 * [dcctl secrets](#dcctl-secrets)	 - Inspect and verify instance secret material
@@ -106,6 +108,14 @@ result is not proof the entity exists.
 dcctl attr get <kind> <token> [key] [flags]
 ```
 
+### Examples
+
+```
+  dcctl attr get device meter-0042 -t acme --email you@example.com --password <password>
+  dcctl attr get device meter-0042 floor -t acme --email you@example.com --password <password>
+  dcctl attr get asset pump-7 --scope SHARED -o json -t acme --email you@example.com --password <password>
+```
+
 ### Options
 
 ```
@@ -160,6 +170,14 @@ Writing one key never touches another: this is an upsert on (entity, scope, key)
 dcctl attr set <kind> <token> <key> <value> [flags]
 ```
 
+### Examples
+
+```
+  dcctl attr set device meter-0042 floor 3 -t acme --email you@example.com --password <password>
+  dcctl attr set device meter-0042 region arid --scope SHARED -t acme --email you@example.com --password <password>
+  dcctl attr set device meter-0042 note "east wall" --type STRING -t acme --email you@example.com --password <password>
+```
+
 ### Options
 
 ```
@@ -199,6 +217,13 @@ still count as a value. Removing a key that is not set succeeds and says so.
 dcctl attr unset <kind> <token> <key> [flags]
 ```
 
+### Examples
+
+```
+  dcctl attr unset device meter-0042 floor -t acme --email you@example.com --password <password>
+  dcctl attr unset customer acme-hq region --scope SHARED -t acme --email you@example.com --password <password>
+```
+
 ### Options
 
 ```
@@ -235,6 +260,14 @@ Freeze writers before export. This does not coordinate database recovery cutoffs
 dcctl backup <instance> --destination <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl backup acme --destination ./acme-backup
+  dcctl backup acme --destination ./acme-backup --kube-context prod
+  dcctl backup acme --destination ./acme-backup --blob-directory /mnt/acme-blobs
+```
+
 ### Options
 
 ```
@@ -264,6 +297,12 @@ it does not establish inventory completeness or checkpoint consistency.
 dcctl backup inspect <backup-set-dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl backup inspect ./acme-backup --verify
+```
+
 ### Options
 
 ```
@@ -285,6 +324,21 @@ Provisions a usable DeviceChain instance on the given provider (e.g. "local")
 
 ```
 dcctl bootstrap <provider> <instance> [flags]
+```
+
+### Examples
+
+```
+  # a local kind cluster prepared with "dcctl install local"
+  dcctl bootstrap local my-instance
+  # an existing cluster (any cloud) prepared with "dcctl install local --kube-context prod"
+  dcctl bootstrap local prod --kube-context prod --host iot.example.com
+  # see what would happen first
+  dcctl bootstrap local my-instance --dry-run
+  # deploy a functional area on top of the profile
+  dcctl bootstrap local my-instance --enable-area outbound-connectors
+  # the local-developer preset
+  dcctl bootstrap local scratch --dev
 ```
 
 ### Options
@@ -596,6 +650,12 @@ cross-field constraints.
 dcctl config-schema [flags]
 ```
 
+### Examples
+
+```
+  dcctl config-schema > instance-config.schema.json
+```
+
 ### Options
 
 ```
@@ -650,7 +710,8 @@ List dead letters, newest first
 
 List dead letters, newest first.
 
-Narrow with --tenant, --kind, --source and --since. Reading is bounded by --pages:
+Narrow with --tenant, --kind, --source and --since. -o json prints the same records
+as one JSON object (letters, total, truncated) and nothing else on stdout. Reading is bounded by --pages:
 when more records exist than were fetched, the output says so rather than letting a
 truncated list read as a complete one.
 
@@ -658,11 +719,20 @@ truncated list read as a complete one.
 dcctl dead-letters list [flags]
 ```
 
+### Examples
+
+```
+  dcctl dead-letters list --email ops@example.com --password <password>
+  dcctl dead-letters list --tenant acme --kind detection-action --email ops@example.com --password <password>
+  dcctl dead-letters list --source event-processing --since 2026-11-01T00:00:00Z --email ops@example.com --password <password> -o json
+```
+
 ### Options
 
 ```
   -h, --help            help for list
       --kind string     only this kind: detection-action, notification, command-response, connector-dispatch, event, command, control-fact
+  -o, --output string   output format: table or json (default "table")
       --page int        records per server round-trip (default 50)
       --pages int       how many pages to fetch before stopping (default 4)
       --since string    only records from this RFC3339 time onward (e.g. 2026-09-04T00:00:00Z)
@@ -743,6 +813,17 @@ Use --all to destroy every instance on this machine.
 
 ```
 dcctl destroy <provider> <instance> [flags]
+```
+
+### Examples
+
+```
+  dcctl destroy local my-instance
+  # see what would be removed first
+  dcctl destroy local my-instance --dry-run
+  # keep the event-store backups, to rebuild the instance from them
+  dcctl destroy local my-instance --keep-backups --yes
+  dcctl destroy --all --yes
 ```
 
 ### Options
@@ -896,15 +977,20 @@ There is no command that disables an area. An enabled area may hold data, and
 taking it out of the deployment would leave that data with nothing serving it.
 
 ```
+dcctl enable-area <provider> <instance> <area> [<area>...] [flags]
+```
+
+### Examples
+
+```
   # Add the outbound connectors area to an instance
   dcctl enable-area local devicechain outbound-connectors
 
   # Add two areas at once, and see what would happen first
   dcctl enable-area local devicechain outbound-connectors mcp --dry-run
-```
 
-```
-dcctl enable-area <provider> <instance> <area> [<area>...] [flags]
+  # name the cluster explicitly; it must be the one recorded at bootstrap
+  dcctl enable-area local prod update-management --kube-context prod
 ```
 
 ### Options
@@ -1129,6 +1215,76 @@ dcctl executor unenroll [flags]
 
 * [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
 
+## dcctl fleet-op {#dcctl-fleet-op}
+
+Preview. Inspect fleet operation capabilities
+
+### Synopsis
+
+Preview. Inspect this instance's fleet operation capabilities using your tenant identity.
+
+### Options
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              help for fleet-op
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to inspect (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl fleet-op readiness](#dcctl-fleet-op-readiness)	 - Preview. Report whether this instance can run fleet operations
+
+## dcctl fleet-op readiness {#dcctl-fleet-op-readiness}
+
+Preview. Report whether this instance can run fleet operations
+
+### Synopsis
+
+Preview. Report the writer protocol version, fresh database enforcement state,
+executable operation kinds and orphaned device attribute and generation rows in your tenant.
+Requires fleet:operate; scoped members are refused.
+
+Exit status is zero only when enforcement is ENFORCED and orphanedAttributeRows is zero; that
+says the database enforces the writer protocol, not that any operation kind is executable. If the
+orphan count cannot be read the command reports the error and exits non-zero. The query is an
+expensive diagnostic (it counts rows); run it when you need the answer, do not poll it.
+In v1.9 enforcement is not installed and no kind is executable. The non-zero exit is
+expected until the release that installs enforcement. Use -o json for the four facts as JSON.
+
+```
+dcctl fleet-op readiness [flags]
+```
+
+### Options
+
+```
+  -h, --help            help for readiness
+  -o, --output string   output format: table or json (default "table")
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to inspect (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl fleet-op](#dcctl-fleet-op)	 - Preview. Inspect fleet operation capabilities
+
 ## dcctl ha {#dcctl-ha}
 
 Inspect an instance's high-availability posture
@@ -1187,6 +1343,17 @@ control, and succeeds only on FAIL (never on UNSETTLED).
 dcctl ha leaders [flags]
 ```
 
+### Examples
+
+```
+  # exits 0 on PASS; 1 on FAIL or UNSETTLED
+  dcctl ha leaders --instance default
+  # the report as JSON on stdout, for a script; the exit status is unchanged
+  dcctl ha leaders --instance default --json
+  # the negative control: exits 0 only on FAIL, never on UNSETTLED
+  dcctl ha leaders --instance default --expect-fail
+```
+
 ### Options
 
 ```
@@ -1230,7 +1397,8 @@ Exit status is the result: 0 when every assertion holds, 1 when any does not.
   dcctl ha verify --instance default
 ```
 
-Use --expect-fail to invert that, for the negative control. A check suite that
+Use --json to print the report as JSON (the only thing written to stdout). Use
+--expect-fail to invert that, for the negative control. A check suite that
 cannot fail asserts nothing, so the drill runs the SAME command against a
 single-node instance and requires it to report failures:
 
@@ -1242,12 +1410,23 @@ single-node instance and requires it to report failures:
 dcctl ha verify [flags]
 ```
 
+### Examples
+
+```
+  # exits 0 when every assertion holds, 1 when any does not
+  dcctl ha verify --instance default
+  # the negative control: exits 0 only when the check fails, so a suite that cannot fail is caught
+  dcctl ha verify --instance default --replicas 3 --expect-fail
+  dcctl ha verify --instance default --kube-context prod --json
+```
+
 ### Options
 
 ```
       --expect-fail           invert the exit status: succeed only if the check FAILS (the negative control)
   -h, --help                  help for verify
       --instance string       instance id; its services and broker run in namespace dci-<instance> (default "default")
+      --json                  print the report as JSON
       --kube-context string   kubeconfig context (default: current context)
       --nats-url string       dial this NATS URL instead of opening a port-forward
       --probe-mqtt            open one MQTT connection first so the broker's $MQTT_* streams exist and their replica factor can be observed. MUTATES the broker (it creates those streams if no client has ever connected), so it is off by default
@@ -1291,7 +1470,8 @@ Exit status is the result: 0 when every assertion holds, 1 when any does not.
   dcctl ha verify-db --cluster dc-rdb --require-synchronous
 ```
 
-Use --expect-fail for the negative control, stating the topology the store is
+Use --json to print the report as JSON (the only thing written to stdout). Use
+--expect-fail for the negative control, stating the topology the store is
 expected NOT to hold:
 
 ```
@@ -1300,6 +1480,16 @@ expected NOT to hold:
 
 ```
 dcctl ha verify-db [flags]
+```
+
+### Examples
+
+```
+  # exits 0 when every assertion holds, 1 when any does not
+  dcctl ha verify-db --cluster dc-rdb --require-synchronous
+  dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --json
+  # the negative control: exits 0 only when the store does NOT hold the stated topology
+  dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --expect-fail
 ```
 
 ### Options
@@ -1311,6 +1501,7 @@ dcctl ha verify-db [flags]
       --expect-fail            invert the exit status: succeed only if the check FAILS (the negative control)
   -h, --help                   help for verify-db
       --instances int          expected instance count (default: read from the live Cluster spec). State it explicitly for the negative control — read from the spec, a single-instance store expects one instance and duly has one, so it can never fail
+      --json                   print the report as JSON
       --kube-context string    kubeconfig context (default: current context)
       --namespace string       namespace holding the CloudNativePG Cluster: dc-system for the shared relational store (dc-rdb), dci-<instance> for that instance's event store (dc-tsdb) (default "dc-system")
       --require-synchronous    demand synchronous replication. Deliberately NOT derived from the Cluster spec: a pruned or misspelled field leaves a spec that asks for nothing, which a spec-derived check would happily confirm
@@ -1369,6 +1560,18 @@ the cluster, with one exception: the connection budget may be raised.
 
 ```
 dcctl install <provider> [flags]
+```
+
+### Examples
+
+```
+  # a local kind cluster named "devicechain"
+  dcctl install local
+  # a small-footprint cluster, for a laptop
+  dcctl install local --compact
+  # an existing cluster (any cloud): dcctl never creates or deletes it
+  dcctl install local --kube-context prod
+  dcctl install local --kube-context prod --ha --dry-run
 ```
 
 ### Options
@@ -1481,6 +1684,15 @@ by "break-glass:pod-exec".
 dcctl instances break-glass mfa-reset [email] [flags]
 ```
 
+### Examples
+
+```
+  dcctl instances break-glass mfa-reset --instance acme --email superuser@devicechain.local
+  dcctl instances break-glass mfa-reset superuser@devicechain.local --instance acme --kube-context prod
+  # choose the password yourself: the first line of stdin, and nothing is printed
+  dcctl instances break-glass mfa-reset --instance acme --email superuser@devicechain.local --password-stdin --yes
+```
+
 ### Options
 
 ```
@@ -1514,14 +1726,25 @@ A row reading "cluster gone" is an instance whose cluster has been deleted out f
 under it, leaving only local state. That is the normal end state of a validation rig
 run, and clearing it is what `dcctl destroy` does.
 
+-o json prints an array with one object per instance (instance, namespace, provider, cluster,
+kubeContext, status, hasRecord) and nothing else on stdout; an empty array when there are none.
+
 ```
 dcctl instances list [flags]
+```
+
+### Examples
+
+```
+  dcctl instances list
+  dcctl instances list -o json
 ```
 
 ### Options
 
 ```
-  -h, --help   help for list
+  -h, --help            help for list
+  -o, --output string   output format: table or json (default "table")
 ```
 
 ### SEE ALSO
@@ -1555,6 +1778,13 @@ read it.
 dcctl instances reclaim [flags]
 ```
 
+### Examples
+
+```
+  dcctl instances reclaim
+  dcctl instances reclaim --kube-context prod
+```
+
 ### Options
 
 ```
@@ -1583,13 +1813,30 @@ finalizer is gone.
 If what you want is to remove the instance, use `dcctl destroy`, which
 clears the finalizer itself as its last step.
 
+It first checks the cluster's DeviceChain operator. A cluster whose operator is not
+the one this dcctl was built for is refused: run the release from the dcctl that
+matches it, or pass --force to release anyway. A cluster with no operator at all is
+let through, because a declaration left without one is what this command is for.
+
+It needs get on customresourcedefinitions (to read the operator's definitions),
+get and patch on instances.core.devicechain.io (it patches the finalizer list rather
+than updating the whole declaration), and delete on it.
+
 ```
 dcctl instances release <instance> [flags]
+```
+
+### Examples
+
+```
+  dcctl instances release acme
+  dcctl instances release acme --kube-context prod --yes
 ```
 
 ### Options
 
 ```
+      --force                 release even when the cluster's operator does not match this dcctl
   -h, --help                  help for release
       --kube-context string   kube context of the cluster holding the declaration
       --yes                   skip the confirmation prompt
@@ -1611,6 +1858,14 @@ These are the prerequisites for standing a cluster up, not for building an insta
 
 ```
 dcctl preflight [provider] [flags]
+```
+
+### Examples
+
+```
+  dcctl preflight local
+  dcctl preflight local --kube-context prod
+  dcctl preflight local --cluster scratch --build
 ```
 
 ### Options
@@ -1701,6 +1956,16 @@ Start with --dry-run, which writes nothing and lists the devices in scope.
 
 ```
 dcctl presence demote [flags]
+```
+
+### Examples
+
+```
+  # first, list the devices in scope and write nothing
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source mqtt1 --reason "broker replaced" --dry-run
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source mqtt1 --reason "broker replaced"
+  # narrow the run to two devices within the source
+  dcctl presence demote -t acme --email ops@example.com --password <password> --source sparkplug:plant1 --reason "host retired" --device pump-7 --device pump-8
 ```
 
 ### Options
@@ -1808,6 +2073,16 @@ run 'dcctl product rotate-integration-token \<integration-token>' to issue one.
 dcctl product apply <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>'
+  # converge drafts and stop, without publishing
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>' --no-publish
+  # apply without printing the plan first
+  dcctl product apply ./acme --tenant acme-prod --email you@example.com --password '<password>' --yes
+```
+
 ### Options
 
 ```
@@ -1860,6 +2135,14 @@ unless you name it in --kinds.
 dcctl product export <dir> [flags]
 ```
 
+### Examples
+
+```
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>'
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>' --kinds device-types,profiles
+  dcctl product export ./acme --tenant acme --email you@example.com --password '<password>' --name "Acme product"
+```
+
 ### Options
 
 ```
@@ -1903,6 +2186,14 @@ Against a tenant that already holds the bundle the plan reports no changes. Use
 
 ```
 dcctl product plan <dir> [flags]
+```
+
+### Examples
+
+```
+  dcctl product plan ./acme --tenant acme-prod --email you@example.com --password '<password>'
+  # exits non-zero when the tenant has drifted from the bundle, for CI
+  dcctl product plan ./acme --tenant acme-prod --email you@example.com --password '<password>' --fail-on-changes
 ```
 
 ### Options
@@ -1949,6 +2240,13 @@ a shell. A warning is written to stderr. This command does not save the token to
 dcctl product rotate-integration-token <integration-token> [flags]
 ```
 
+### Examples
+
+```
+  dcctl product rotate-integration-token chirpstack-1 --tenant acme --email you@example.com --password '<password>'
+  dcctl product rotate-integration-token chirpstack-1 --tenant acme --email you@example.com --password '<password>' --server dc.example.com --tls
+```
+
 ### Options
 
 ```
@@ -1971,6 +2269,166 @@ dcctl product rotate-integration-token <integration-token> [flags]
 ### SEE ALSO
 
 * [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
+
+## dcctl relationship {#dcctl-relationship}
+
+Add, list and remove typed entity relationships
+
+### Synopsis
+
+Manage a tenant's typed entity relationship graph as the identity you sign in with.
+Endpoints are identified by entity type and token. The relationship type must already exist;
+the server validates entity types, endpoints and permissions.
+
+### Options
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              help for relationship
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --json              print JSON (equivalent to --output json)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+  -o, --output string     output format: table or json (default "table")
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant that owns the relationships (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl relationship add](#dcctl-relationship-add)	 - Create one typed entity relationship
+* [dcctl relationship list](#dcctl-relationship-list)	 - List one page of typed entity relationships
+* [dcctl relationship remove](#dcctl-relationship-remove)	 - Remove relationships by their tokens
+
+## dcctl relationship add {#dcctl-relationship-add}
+
+Create one typed entity relationship
+
+### Synopsis
+
+Create a relationship with its own token between a source and a target entity.
+Give --source-type, --source, --target-type, --target and --relationship-type.
+Optional --metadata is passed as the API's metadata string.
+
+```
+dcctl relationship add <token> [flags]
+```
+
+### Options
+
+```
+  -h, --help                       help for add
+      --metadata string            optional relationship metadata string
+      --relationship-type string   relationship type token
+      --source string              source entity token
+      --source-type string         source entity type
+      --target string              target entity token
+      --target-type string         target entity type
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --json              print JSON (equivalent to --output json)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+  -o, --output string     output format: table or json (default "table")
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant that owns the relationships (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl relationship](#dcctl-relationship)	 - Add, list and remove typed entity relationships
+
+## dcctl relationship list {#dcctl-relationship-list}
+
+List one page of typed entity relationships
+
+### Synopsis
+
+List one page of relationships, including pagination totals in table and JSON output.
+Narrow by source, target, relationship type or whether the relationship type is tracked.
+An endpoint token filter requires its corresponding entity type. --tracked=false selects
+untracked relationships; omitting --tracked includes both.
+
+```
+dcctl relationship list [flags]
+```
+
+### Options
+
+```
+  -h, --help                       help for list
+      --page-number int            page to read (starting at 1) (default 1)
+      --page-size int              number of relationships per page (default 100)
+      --relationship-type string   relationship type token
+      --source string              source entity token
+      --source-type string         source entity type
+      --target string              target entity token
+      --target-type string         target entity type
+      --tracked                    filter by whether the relationship type is tracked (default: both)
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --json              print JSON (equivalent to --output json)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+  -o, --output string     output format: table or json (default "table")
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant that owns the relationships (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl relationship](#dcctl-relationship)	 - Add, list and remove typed entity relationships
+
+## dcctl relationship remove {#dcctl-relationship-remove}
+
+Remove relationships by their tokens
+
+### Synopsis
+
+Remove the relationships named by their own tokens in one API request.
+If none of the tokens match, the command succeeds and reports that nothing was removed.
+
+```
+dcctl relationship remove <token> [token...] [flags]
+```
+
+### Options
+
+```
+  -h, --help   help for remove
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --json              print JSON (equivalent to --output json)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+  -o, --output string     output format: table or json (default "table")
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant that owns the relationships (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl relationship](#dcctl-relationship)	 - Add, list and remove typed entity relationships
 
 ## dcctl resgen {#dcctl-resgen}
 
@@ -2011,6 +2469,14 @@ Freeze target writers while planning; this is an observation, not a reservation 
 
 ```
 dcctl restore <instance> --from <backup-set> --plan [flags]
+```
+
+### Examples
+
+```
+  dcctl restore acme --from ./acme-backup --plan
+  dcctl restore acme --from ./acme-backup --plan --kube-context prod
+  dcctl restore acme-copy --from ./acme-backup --plan --force-foreign
 ```
 
 ### Options
@@ -2084,6 +2550,13 @@ artifact against a live instance, use "dcctl secrets escrow verify".
 dcctl secrets escrow show <file> [flags]
 ```
 
+### Examples
+
+```
+  dcctl secrets escrow show ~/.devicechain/escrow/prod.escrow
+  dcctl secrets escrow show ./prod-rootkey.escrow
+```
+
 ### Options
 
 ```
@@ -2117,6 +2590,14 @@ the instance has no usable escrow. The command exits non-zero in that case.
 
 ```
 dcctl secrets escrow verify <file> [flags]
+```
+
+### Examples
+
+```
+  # exits non-zero when the artifact does not hold the key the instance is running
+  dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow
+  dcctl secrets escrow verify --instance prod --kube-context prod ./prod-rootkey.escrow
 ```
 
 ### Options
@@ -2208,6 +2689,15 @@ names the missing key.
 dcctl sim create <name> [flags]
 ```
 
+### Examples
+
+```
+  dcctl sim create demo
+  dcctl sim create demo --manifest harborpulse --instance my-instance --server dc.example.com --tls
+  dcctl sim create tower --manifest towerpulse --episode night-shift
+  dcctl sim create load --tier rc-100k --tier-config '{"ingestReadingsPerSecond":100000}'
+```
+
 ### Options
 
 ```
@@ -2292,6 +2782,13 @@ read connected for a while after the data stops.
 dcctl sim destroy <name> [flags]
 ```
 
+### Examples
+
+```
+  dcctl sim destroy demo
+  dcctl sim destroy demo --instance my-instance --server dc.example.com --tls
+```
+
 ### Options
 
 ```
@@ -2336,6 +2833,15 @@ run a player against the same sim while it is on.
 dcctl sim run <name> [flags]
 ```
 
+### Examples
+
+```
+  dcctl sim run demo
+  dcctl sim run harbor --day-length 48m
+  dcctl sim run site --play-devices --publish-log ./published.ndjson
+  dcctl sim run demo --emit-interval 3s --simulator ./bin/dc-simulator
+```
+
 ### Options
 
 ```
@@ -2372,6 +2878,13 @@ Start (resume) a stopped sim's emit loop
 dcctl sim start <name> [flags]
 ```
 
+### Examples
+
+```
+  dcctl sim start demo
+  dcctl sim start harbor
+```
+
 ### Options
 
 ```
@@ -2401,6 +2914,13 @@ Show a running sim's lifecycle state
 
 ```
 dcctl sim status <name> [flags]
+```
+
+### Examples
+
+```
+  dcctl sim status demo
+  dcctl sim status harbor
 ```
 
 ### Options
@@ -2434,6 +2954,13 @@ Stop a running sim's emit loop (tenant + data are kept)
 dcctl sim stop <name> [flags]
 ```
 
+### Examples
+
+```
+  dcctl sim stop demo
+  dcctl sim stop harbor
+```
+
 ### Options
 
 ```
@@ -2463,6 +2990,12 @@ Print the recorded episode windows (role, start, end)
 
 ```
 dcctl sim windows <name> [flags]
+```
+
+### Examples
+
+```
+  dcctl sim windows tower
 ```
 
 ### Options
@@ -2524,6 +3057,9 @@ list of blockers. It comes before the deletion completes, because the tenant's t
 for a further period (12 hours by default) before it can be reused. Use --until complete to wait
 for that release instead.
 
+-o json prints the deletion record as JSON on stdout (progress and errors go to stderr); the
+exit status is unchanged.
+
 With --wait the command polls until the target is reached, and exits non-zero if --timeout passes
 first. A tenant with no deletion record is an error, never a success.
 
@@ -2541,12 +3077,21 @@ This reads the operator plane and authenticates as an identity, not as a tenant.
 dcctl tenant-deletion status <token> [flags]
 ```
 
+### Examples
+
+```
+  dcctl tenant-deletion status acme --email ops@example.com --password <password>
+  dcctl tenant-deletion status acme --wait --timeout 1h --email ops@example.com --password <password>
+  dcctl tenant-deletion status acme --until complete -o json --email ops@example.com --password <password>
+```
+
 ### Options
 
 ```
       --epoch string        bind to the deletion at exactly this epoch (RFC 3339, as printed by this command)
   -h, --help                help for status
       --interval duration   how often --wait polls (default 10s)
+  -o, --output string       output format: table or json (default "table")
       --timeout duration    how long --wait polls before giving up (default 30m0s)
       --until string        what to wait for and require: erased (data established as gone) or complete (token released) (default "erased")
       --wait                poll until the target is reached
@@ -2618,6 +3163,15 @@ of the shell history and the process list.
 
 ```
 dcctl test <path> [flags]
+```
+
+### Examples
+
+```
+  dcctl test ./tests --tenant acme --email you@example.com --password '<password>'
+  # the password from the environment, and a JUnit report for CI
+  DCCTL_PASSWORD='<password>' dcctl test ./tests/low-battery.test.yaml --tenant acme --email you@example.com --junit results.xml
+  dcctl test ./tests --tenant acme --email you@example.com --password '<password>' --server dc.example.com --tls
 ```
 
 ### Options
@@ -2801,6 +3355,15 @@ store), says so when it rises, and warns when the volume has less free space tha
 
 ```
 dcctl upgrade <provider> <instance> [flags]
+```
+
+### Examples
+
+```
+  dcctl upgrade local my-instance --dry-run
+  dcctl upgrade local my-instance
+  # name the cluster explicitly; it must be the one recorded at bootstrap
+  dcctl upgrade local prod --kube-context prod
 ```
 
 ### Options

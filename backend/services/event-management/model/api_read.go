@@ -430,6 +430,10 @@ func boundBucketedRows(buckets, names int64) error {
 //
 // The read is bounded before it runs: at most MaxMeasurementBuckets buckets, and at
 // most MaxMeasurementRows rows (buckets x measurement names).
+//
+// Only numeric readings aggregate. A measurement whose readings are text (a STRING metric) is
+// refused with NOT_AGGREGATABLE when the request names it, and left out when the request asks
+// for every name (see numericBucketsOnly).
 func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
 	if err := checkEventTypeFilter(criteria.EventTypes); err != nil {
 		return nil, err
@@ -468,7 +472,10 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 	} else {
 		out, err = api.bucketedMeasurementsFromRaw(ctx, criteria, incarnation)
 	}
-	return out, boundedReadError(ctx, err, bound)
+	if err != nil {
+		return nil, boundedReadError(ctx, err, bound)
+	}
+	return numericBucketsOnly(out, criteria.Name)
 }
 
 // distinctMeasurementNames counts the measurement names a read with no name filter will
@@ -550,7 +557,23 @@ func (api *Api) rawMeasurementScope(ctx context.Context, criteria MeasurementAgg
 // the bucket column, so at the range edges the result is bucket-granular (an interval
 // boundary that falls mid-bucket includes/excludes the whole base bucket) — immaterial
 // for charts and the price of reading pre-bucketed rollups.
+//
+// A read whose interval is a whole number of hours takes the hour level for the hours its
+// range holds whole (see rollup_hourly.go) and returns the same result.
 func (api *Api) bucketedMeasurementsFromRollup(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
+	span, ok, err := api.hourlySpan(ctx, criteria)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return api.bucketedMeasurementsFromHourly(ctx, criteria, span)
+	}
+	return api.bucketedMeasurementsFromMinuteRollup(ctx, criteria)
+}
+
+// bucketedMeasurementsFromMinuteRollup re-buckets the one-minute level alone. It is the level the
+// hourly path must agree with, and the whole read when the interval is not whole hours.
+func (api *Api) bucketedMeasurementsFromMinuteRollup(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
 	results := make([]MeasurementBucket, 0)
 	db := api.rollupMeasurementScope(ctx, criteria).
 		Select("time_bucket(make_interval(secs => ?), bucket) AS bucket_start, "+
@@ -571,25 +594,8 @@ func (api *Api) bucketedMeasurementsFromRollup(ctx context.Context, criteria Mea
 // rollupMeasurementScope is the filtered measurement_rollups relation a rollup-served
 // aggregation reads, tenant-scoped through the MeasurementRollup model like the raw path.
 func (api *Api) rollupMeasurementScope(ctx context.Context, criteria MeasurementAggregationCriteria) *gorm.DB {
-	db := api.RDB.DB(ctx).Model(&MeasurementRollup{})
-	// Retention jobs drop whole chunks, and materialization chunks are 10x raw
-	// chunks. Without this floor expired buckets remain readable for up to that long.
-	if api.RollupRetentionDays > 0 {
-		now := time.Now
-		if api.now != nil {
-			now = api.now
-		}
-		db = db.Where("bucket >= ?", now().Add(-time.Duration(api.RollupRetentionDays)*24*time.Hour))
-	}
-	if criteria.DeviceToken != nil {
-		db = db.Where("device_token = ?", *criteria.DeviceToken)
-	}
-	if len(criteria.EventTypes) > 0 {
-		db = db.Where("event_type IN ?", criteria.EventTypes)
-	}
-	if criteria.Name != nil {
-		db = db.Where("name = ?", *criteria.Name)
-	}
+	floor, hasFloor := api.rollupRetentionFloor()
+	db := api.rollupFilters(ctx, criteria, &MeasurementRollup{}, floor, hasFloor)
 	// The rollup carries only whole base buckets, so floor the range bounds to the
 	// base-bucket boundary: a mid-bucket StartTime/EndTime then includes the whole
 	// overlapping base bucket rather than silently dropping its partial data. This is
@@ -600,6 +606,41 @@ func (api *Api) rollupMeasurementScope(ctx context.Context, criteria Measurement
 	}
 	if criteria.EndTime != nil {
 		db = db.Where("bucket <= ?", criteria.EndTime.Truncate(bucketWidth))
+	}
+	return db
+}
+
+// rollupRetentionFloor is the oldest instant a rollup read may return, and false when
+// retention is off. Retention jobs drop whole chunks, and materialization chunks are 10x
+// raw chunks, so without this floor expired buckets remain readable for up to that long.
+func (api *Api) rollupRetentionFloor() (time.Time, bool) {
+	if api.RollupRetentionDays <= 0 {
+		return time.Time{}, false
+	}
+	now := time.Now
+	if api.now != nil {
+		now = api.now
+	}
+	return now().Add(-time.Duration(api.RollupRetentionDays) * 24 * time.Hour), true
+}
+
+// rollupFilters is the part of a rollup read that does not depend on the level it reads: the
+// model (the minute or the hour aggregate, each tenant-scoped through its own type), the
+// retention floor, and the device, event-type and name filters. Time bounds are the caller's.
+func (api *Api) rollupFilters(ctx context.Context, criteria MeasurementAggregationCriteria, model any,
+	floor time.Time, hasFloor bool) *gorm.DB {
+	db := api.RDB.DB(ctx).Model(model)
+	if hasFloor {
+		db = db.Where("bucket >= ?", floor)
+	}
+	if criteria.DeviceToken != nil {
+		db = db.Where("device_token = ?", *criteria.DeviceToken)
+	}
+	if len(criteria.EventTypes) > 0 {
+		db = db.Where("event_type IN ?", criteria.EventTypes)
+	}
+	if criteria.Name != nil {
+		db = db.Where("name = ?", *criteria.Name)
 	}
 	return db
 }

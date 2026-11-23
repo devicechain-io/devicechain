@@ -117,7 +117,11 @@ type InstanceRecord struct {
 	// `dcctl upgrade` looks here before the default, so it does not report "no escrow" for
 	// an artifact an operator deliberately put elsewhere. Omitted when empty, so an instance
 	// from before this existed, or one on the default path, reads as default.
-	EscrowPath   string    `json:"escrowPath,omitempty"`
+	EscrowPath string `json:"escrowPath,omitempty"`
+	// MQTTNodePort is the node port a LOCAL instance's MQTT gateway was given (see
+	// localMQTTNodePorts), so tools on this machine find the host port that reaches it. Omitted
+	// when empty: an instance from before this existed, a cloud instance, or one that got none.
+	MQTTNodePort int       `json:"mqttNodePort,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
 	DcctlVersion string    `json:"dcctlVersion,omitempty"`
 }

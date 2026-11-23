@@ -15,7 +15,8 @@ namespace DeviceChain.Sitepulse.Domain
     /// </summary>
     public static class MeasurementKeys
     {
-        // the equipment profile (dozers, loaders, haul trucks)
+        // the equipment profile (loaders, haul trucks); a dozer has a profile of its own that declares
+        // the first three only, since a tracked machine has no payload or tyres
         public const string FuelPct = "fuel_pct";
         public const string EngineTempC = "engine_temp_c";
         public const string EngineHours = "engine_hours";
@@ -28,6 +29,7 @@ namespace DeviceChain.Sitepulse.Domain
         public const string PlantRunning = "plant_running";
 
         public static readonly IReadOnlyList<string> Equipment = new[] { FuelPct, EngineTempC, EngineHours, PayloadT, TyrePressureKpa };
+        public static readonly IReadOnlyList<string> Dozer = new[] { FuelPct, EngineTempC, EngineHours };
         public static readonly IReadOnlyList<string> Plant = new[] { ThroughputTph };
         public static readonly IReadOnlyList<string> PlantFlags = new[] { PlantRunning };
 

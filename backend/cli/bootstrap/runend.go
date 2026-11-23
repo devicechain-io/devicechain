@@ -62,9 +62,11 @@ func finishBootstrapPhase(ctx context.Context, st *State, runErr error, connect 
 // live and doing well. CheckHeld is what establishes that — asked of the API server
 // here, not read from the renewal loop's cached flag, which can be a full interval out
 // of date at exactly this moment ("Wait for readiness" runs without a fence). A run
-// that never HELD the lock (claim == nil) DOES stamp: beginUpgradeClaim warns and
-// continues when it cannot take one, so such a run has already rewritten the
-// declaration unfenced, and refusing it the terminal phase buys no safety.
+// that never HELD the lock (claim == nil) DOES stamp. An upgrade now refuses rather than
+// run without one (takeUpgradeClaim), so for it that is only a dry run, which records
+// nothing; destroy still warns and continues when it cannot take one, so such a run has
+// already rewritten the declaration unfenced, and refusing it the terminal phase buys no
+// safety.
 //
 // 🔴 AND NOT OVER A TEARDOWN. Destroying is the phase value another command ACTS on —
 // writeInstanceCR refuses a rebuild over it and hydrateUpgradeState refuses an upgrade

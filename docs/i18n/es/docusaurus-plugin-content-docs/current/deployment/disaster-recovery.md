@@ -333,8 +333,8 @@ SELECT hypertable_schema, hypertable_name FROM timescaledb_information.hypertabl
 Tus tablas de eventos viven en el esquema `event-management` y todas deberían aparecer. Una tabla
 que volvió como tabla ordinaria es el fallo que esto detecta. Es invisible en un volcado de
 esquema, donde una tabla normal y una hypertable se ven idénticas. (No busques
-`measurement_rollups`. Es un agregado continuo, y la hypertable que lo respalda es interna, así que
-su ausencia de esta lista es normal.)
+`measurement_rollups` ni `measurement_rollups_1h`. Son agregados continuos, y las hypertables que
+los respaldan son internas, así que su ausencia de esta lista es normal.)
 
 Segundo, y esta es la que importa: ¿está realmente ejecutándose el planificador de trabajos _en
 este clúster_? Ejecuta esto, espera un minuto o dos y ejecútalo de nuevo:

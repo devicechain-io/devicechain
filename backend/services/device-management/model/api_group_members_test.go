@@ -29,7 +29,7 @@ func newGroupMemberTestApi(t *testing.T) (*Api, context.Context) {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
 	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{},
-		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &EntityAttribute{},
+		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &EntityAttribute{}, &AttributeGeneration{},
 		&EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{}, &EntityGroupFacetRef{},
 		&DetectionRuleScopeRef{},
 		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &EntityRelationshipType{}); err != nil {

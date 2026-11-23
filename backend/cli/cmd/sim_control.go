@@ -21,7 +21,9 @@ import (
 var simStatusCmd = &cobra.Command{
 	Use:   "status <name>",
 	Short: "Show a running sim's lifecycle state",
-	Args:  cobra.ExactArgs(1),
+	Example: `  dcctl sim status demo
+  dcctl sim status harbor`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return simControl(cmd, args[0], http.MethodGet, "/status")
 	},
@@ -31,7 +33,9 @@ var simStatusCmd = &cobra.Command{
 var simStartCmd = &cobra.Command{
 	Use:   "start <name>",
 	Short: "Start (resume) a stopped sim's emit loop",
-	Args:  cobra.ExactArgs(1),
+	Example: `  dcctl sim start demo
+  dcctl sim start harbor`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return simControl(cmd, args[0], http.MethodPost, "/start")
 	},
@@ -41,7 +45,9 @@ var simStartCmd = &cobra.Command{
 var simStopCmd = &cobra.Command{
 	Use:   "stop <name>",
 	Short: "Stop a running sim's emit loop (tenant + data are kept)",
-	Args:  cobra.ExactArgs(1),
+	Example: `  dcctl sim stop demo
+  dcctl sim stop harbor`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return simControl(cmd, args[0], http.MethodPost, "/stop")
 	},

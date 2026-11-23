@@ -61,6 +61,14 @@ func TestHarborpulseSceneLayoutIsTheManifestFleet(t *testing.T) {
 			provisioned[in.ExternalId] = p.OfType
 		}
 	}
+	// The S6 devices are provisioned but deliberately not drawn (the Unity scene authors one
+	// presentation anchor per drawn device and refuses any other count): exactly those, no others.
+	for _, d := range harborS6SceneDevices() {
+		if provisioned[d.ExternalId] != d.DeviceType {
+			t.Errorf("S6 device %s is not provisioned as %s", d.ExternalId, d.DeviceType)
+		}
+		delete(provisioned, d.ExternalId)
+	}
 	layout := HarborpulseSceneLayout()
 	drawn := map[string]string{}
 	for _, d := range layout.Devices {

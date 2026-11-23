@@ -336,7 +336,8 @@ destructivo — consulta [el aviso de más abajo](#where-the-default-does-not-ho
 
 Una actualización parcial reduce los conflictos de concurrencia sin eliminarlos. Dos escritores que
 tocan campos distintos ya no se pisan, pero dos que tocan el mismo campo sí. `updateDashboard`,
-`updateConnector`, `updateAiProvider` y `updateNotificationPolicy` aceptan un `expectedUpdatedAt`
+`updateConnector`, `updateAiProvider`, `updateNotificationPolicy`, `updateArea`, `updateAsset`,
+`updateCustomer` y `updateEntityGroup` aceptan un `expectedUpdatedAt`
 opcional y rechazan la escritura si la marca de tiempo almacenada se ha movido desde que la leíste.
 Envía el `updatedAt` que leíste por última vez, u omítelo para que gane la última escritura. El
 `updatedAt` que devuelve una respuesta `create*` no sirve para esto: vuelve a leer el registro
@@ -766,6 +767,8 @@ Algunos rechazos parecen similares y no llevan `CONFLICT`:
 - Eliminar un registro al que otros registros todavía se refieren lleva `REFERENCE_VIOLATION`.
   Consulta [Una referencia o un valor que se rechaza](#reference-and-invalid-values).
 
+Una escritura de los atributos de un dispositivo que encuentra uno de ellos ocupado por otra escritura, y lo sigue encontrando tras cinco reintentos breves, se rechaza con `errors[*].extensions.code` igual a `ATTRIBUTE_WRITE_BUSY`. Puede proceder de `setEntityAttribute`, `deleteEntityAttribute`, `restoreDeviceConfiguration` y `copyDeviceConfiguration`. No se escribió nada y la solicitud puede repetirse sin riesgo. Es más probable mientras se despliega una actualización, cuando un pod que aún no se ha actualizado puede estar escribiendo el mismo atributo.
+
 Una actualización cuya precondición, como `expectedUpdatedAt`, ya no coincide con el registro porque alguien lo cambió después de que lo leyeras, se rechaza con `errors[*].extensions.code` igual a `STALE_WRITE`. Todos los servicios responden así a una escritura obsoleta: conectores, paneles, proveedores de IA, políticas de notificación, tipos de cliente, grupos de entidades, roles y alarmas por igual. No se escribe nada, y el mensaje es el mismo que antes de que existiera el código: `<registro> was modified by another writer; reload and try again`, por ejemplo `dashboard was modified by another writer; reload and try again`. `CONFLICT` sigue indicando una colisión de unicidad y nunca se usa para una escritura obsoleta. Clasifica por código, no por el texto del mensaje; `isStaleWrite(err)` de `@devicechain/client` lo hace, y recurre al mensaje con un servidor anterior. La consola reconoce el código en todos los guardados con precondición.
 
 ### Una referencia o un valor que se rechaza {#reference-and-invalid-values}
@@ -988,7 +991,7 @@ mutation Verify($challenge: String!, $code: String!) {
 
 `verifyMfa` devuelve lo mismo que `login`, y el cliente continúa con `selectTenant` como antes. `code` es el código de seis dígitos de la aplicación o un código de recuperación (`ABCD-EFGH-JKMN-PQRS`, en mayúsculas o minúsculas, con o sin guiones). Un desafío dura cinco minutos, admite cinco intentos e inicia sesión una sola vez.
 
-**Verificación adicional dentro de la sesión (Vista previa: puede cambiar en una versión menor).** Si una aprobación de agente o una relajación de política devuelve `STEP_UP_REQUIRED`, envía tu token de acceso del inquilino en `Authorization: Bearer ...` y tu propio token de actualización con un código nuevo:
+**Verificación adicional dentro de la sesión (Vista previa: puede cambiar en una versión menor).** Si una aprobación de agente o una relajación de política devuelve `STEP_UP_REQUIRED`, envía tu propio token de acceso del inquilino en `Authorization: Bearer ...` y tu token de actualización de la consola con un código nuevo del autenticador:
 
 ```graphql
 mutation StepUp($refreshToken: String!, $code: String!) {
@@ -1000,7 +1003,9 @@ mutation StepUp($refreshToken: String!, $code: String!) {
 }
 ```
 
-Devuelve el mismo par `AuthToken` que `refresh`. Guarda ambos tokens y vuelve a intentar la acción sin cerrar sesión. Conserva el identificador y la época de la sesión y actualiza `mfa_time`; una actualización normal no renueva la verificación. Los tokens deben pertenecer al mismo usuario e inquilino. Se rechazan los tokens de agentes, servicio, identidad o actualización como autorización, los tokens de actualización OAuth, las sesiones terminadas y las épocas revocadas.
+`stepUp` devuelve el mismo par `AuthToken` que `refresh`. Guarda ambos tokens de reemplazo y vuelve a intentar la acción. Conserva el identificador y la época de la sesión y actualiza `mfa_time`; una actualización normal no renueva la vigencia del factor. El token de actualización debe pertenecer al mismo nombre de usuario e inquilino que el token de acceso. Los tokens de agentes, de servicio, de identidad y de actualización no pueden autorizar esta operación, y los tokens de actualización OAuth no pueden nombrar la sesión. Se rechazan las sesiones terminadas y las épocas de sesión rotadas.
+
+Solo se aceptan códigos TOTP: los códigos de recuperación se rechazan **sin evaluarse ni consumirse**. Los códigos incorrectos, repetidos y bloqueados devuelven `invalid code` y comparten el bloqueo de factor del inicio de sesión; un código incorrecto deja utilizable el token de actualización. Se permite una verificación por solicitud. Las sesiones de inicio de sesión único devuelven `STEP_UP_SSO`; las cuentas sin factor devuelven `MFA_NOT_ENROLLED`. El cuadro de aprobación de la consola verifica sin cerrar sesión y te indica que reintentes; solo ofrece volver a iniciar sesión cuando la mutación no está disponible, incluidos servidores anteriores, caídas de red o del almacén, el inicio de sesión único y la falta de inscripción.
 
 
 Las operaciones están en el endpoint de user-management. `mfaStatus`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` y `disableTotp` toman el token de identidad como argumento (no en una cabecera `Authorization`), no un token de inquilino. `verifyMfa` no toma ningún token. `setTenantMfaRequired` del plano del inquilino toma el token de acceso del inquilino y requiere `member:write` y un llamador sin alcance restringido. `resetIdentityMfa` y el `setTenantMfaRequired` de la API de administración están en la API de administración y requieren `user:write`:
@@ -1280,3 +1285,24 @@ Se generarán páginas de referencia detalladas por tipo a partir de los esquema
 estabilicen.
 
 `SECRET_RESUPPLY_REQUIRED` indica que una actualización cambiaría el destino o la presentación de una credencial almacenada. En `updateConnector`, `updateNotificationChannel` o `updateAiProvider`, vuelve a enviar `secret` en la misma solicitud o bórralo con `secret: null`. Para restaurar un conector con otro destino, usa `updateConnector` con la configuración de destino y su credencial.
+
+## Preparación de operaciones de flota (Preview) {#fleet-operation-readiness}
+
+Preview. El plano de datos por inquilino de device-management ofrece `fleetOperationReadiness`
+a quienes tienen `fleet:operate`; rechaza a los miembros con ámbito limitado. Informa de la
+versión del protocolo de escritura, el estado actual de cumplimiento en la base de datos, los
+tipos de operación ejecutables y un recuento actualizado de filas huérfanas de atributos y
+generaciones de dispositivos del inquilino del solicitante, incluidos los atributos borrados
+lógicamente. En v1.9 devuelve `NOT_INSTALLED` y ningún tipo ejecutable; es lo esperado hasta
+la versión que instale el cumplimiento. Un error de lectura del catálogo devuelve `UNREADABLE`
+y conserva los demás datos. Solo un trigger habilitado `ALWAYS` cuenta como `ENFORCED`;
+los modos ordinario, solo réplica y deshabilitado devuelven `DISABLED`. La ausencia o falta de
+coincidencia devuelve `NOT_INSTALLED`. La consulta cuenta filas, así que trátela como un diagnóstico que se ejecuta cuando se necesita la respuesta, no como algo que consultar periódicamente. El plazo de vista previa comienza en v1.9.
+
+El comando Preview muestra los mismos cuatro datos y solo termina con éxito si el estado es
+`ENFORCED` y no hay filas huérfanas. En v1.9 se espera una salida distinta de cero. Utiliza
+las mismas opciones de inicio de sesión e instancia que `dcctl attr`:
+
+```bash
+dcctl fleet-op readiness --tenant acme --email ops@example.com --password <password> -o json
+```

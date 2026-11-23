@@ -53,13 +53,10 @@ import (
 // Long-lived connections NOT covered here, and why:
 //
 //   - the paho MQTT clients (event-sources' external source, sparkplug-ingest's host, the
-//     edge agent's uplink) keep paho's defaults: a 30 s keep-alive, a 10 s ping timeout and
-//     NO write timeout. That bounds an IDLE or receive-mostly connection to a dead peer at
-//     roughly 40 s, but NOT a loaded publisher: paho writes its PINGREQ straight to the
-//     socket with no deadline, so once a publisher has filled the socket against a dead
-//     peer that write blocks for good and the ping timeout is never checked. The edge
-//     agent's uplink, which publishes upstream, is the one exposed. Bounding it needs
-//     SetWriteTimeout on those clients, which is not done here and is an open follow-up;
+//     edge agent's uplink) set an explicit 30 s keep-alive and a 5 s write timeout, as
+//     outbound-connectors' client does. paho writes its PINGREQ straight to the socket, so
+//     without a write timeout a loaded publisher that has filled the socket against a dead
+//     peer blocks on that write for good and the ping timeout is never checked;
 //   - outbound-connectors' MQTT client sets its own keep-alive and write timeout;
 //   - event-sources' presence canary is per probe and short-lived;
 //   - a Postgres connection is not on the ingest path (event-sources opens no database).

@@ -1,6 +1,9 @@
+# A minimal InstanceConfiguration. The configuration document is schemaless here; the services read
+# their instance configuration from the file dcctl renders and mounts, and validate it there, so an
+# empty document is the smallest valid one.
 apiVersion: core.devicechain.io/v1beta1
 kind: InstanceConfiguration
 metadata:
   name: instanceconfiguration-sample
 spec:
-  # TODO(user): Add fields here
+  configuration: {}

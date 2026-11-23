@@ -222,7 +222,7 @@ func TestEditingTheDraftDoesNotChangeWhatABatchTargets(t *testing.T) {
 
 	// Someone edits the draft to mean something else entirely, and does not publish.
 	edited := `attr["climate"] == "humid"`
-	if _, err := api.UpdateEntityGroup(ctx, "target", &EntityGroupUpdateRequest{Selector: dcgraphql.OptionalStringOf(edited)}); err != nil {
+	if _, err := api.UpdateEntityGroup(ctx, "target", nil, &EntityGroupUpdateRequest{Selector: dcgraphql.OptionalStringOf(edited)}); err != nil {
 		t.Fatalf("edit draft: %v", err)
 	}
 

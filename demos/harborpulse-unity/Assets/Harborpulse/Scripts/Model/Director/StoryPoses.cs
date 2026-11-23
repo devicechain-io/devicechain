@@ -24,6 +24,9 @@ namespace DeviceChain.Harborpulse.Model.Director
         /// <summary>The cut-away views into the wet well, which keep their steep downward look.</summary>
         public static readonly string[] WellSuffixes = { "well", "well-locked" };
 
+        /// <summary>Added to a pose's name: its 9:16 version (<see cref="PresentationMap.Tall"/>). Only the wells' views have one.</summary>
+        public const string TallSuffix = ":tall";
+
         /// <summary>The ground-level poses that are not a family of device views.</summary>
         public static readonly string[] SpecialGround = { "pose:east-quay:mouth-wide", "pose:plain:wide", "pose:truck:chase", "pose:depot:wide" };
 

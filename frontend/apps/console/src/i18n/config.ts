@@ -79,7 +79,7 @@ export interface Locale {
 export const SUPPORTED_LOCALES: Locale[] = [
   { code: 'en', label: 'English', badge: 'EN' },
   { code: 'es', label: 'Español', badge: 'ES' },
-  { code: 'zh-CN', label: '简体中文', badge: 'ZH', namespaces: ['nav', 'alarmMaintenance', 'approvals', 'adminSettings', 'dashboards', 'devices', 'identities'] },
+  { code: 'zh-CN', label: '简体中文', badge: 'ZH', namespaces: ['adminAudit', 'adminNav', 'adminSettings', 'aiPackaging', 'aiProviders', 'alarmMaintenance', 'alarms', 'approvals', 'audit', 'automationReview', 'basemap', 'branding', 'browse', 'commandBatches', 'common', 'connectors', 'dashboards', 'deviceProfiles', 'devices', 'entities', 'facets', 'identities', 'identityProviders', 'ingestFailures', 'integrations', 'locale', 'login', 'members', 'nav', 'provisioning', 'roles', 'security', 'tenants', 'theme', 'tiers', 'trustAnchors', 'updateSigners', 'updates', 'userMenu', 'versions'] },
 ];
 
 export const DEFAULT_LOCALE = 'en';

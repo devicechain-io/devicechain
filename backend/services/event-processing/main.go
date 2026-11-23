@@ -93,6 +93,9 @@ var (
 	// reaches inside a checkpoint blob — so an instance running DETECT without this responder
 	// is one whose tenant purges can never complete.
 	TenantPurgeResponder *processor.TenantPurgeResponder
+	// RuleStatSweep removes the rule-health stat rows a re-publish strands (superseded versions
+	// that have stopped firing). One replica sweeps at a time, under an advisory lock.
+	RuleStatSweep *core.PeriodicTask
 
 	// The Prometheus instruments this service exports — roughly thirty-five collectors
 	// between them. Both are built ONCE, in the initialize phase, and shared by every
@@ -712,7 +715,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		// Every store below wraps that manager, and both the NATS oncreate callback and
 		// the GraphQL resolver read them — which is what makes this the one point in the
 		// sequence where this service has to run.
-		AfterRdb: func(_ context.Context, m *service.Managers) error {
+		AfterRdb: func(ctx context.Context, m *service.Managers) error {
 			RdbManager = m.Rdb
 
 			SnapshotStore = model.NewSnapshotStore(RdbManager)
@@ -721,6 +724,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// restart independent of the finite-retention fact stream.
 			DetectRuleStore = model.NewDetectRuleStore(RdbManager)
 			RuleStatStore = model.NewRuleStatStore(RdbManager)
+			// The hourly sweep of the stat rows a re-publish strands. Started with the processor.
+			RuleStatSweep = processor.NewRuleStatSweep(Microservice, RuleStatStore)
+			if err := RuleStatSweep.Initialize(ctx); err != nil {
+				return err
+			}
 			// The dead-man read-models (ADR-051 slice 4c-2b): the devices expected to report and which
 			// version is active per profile token (with its publish time, the grace base). The roster/
 			// entity-deleted/rule consumers maintain them before acking; slice 4c-2b-2's engine arming is
@@ -824,6 +832,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := ResolvedEventsProcessor.Start(ctx); err != nil {
 		return err
 	}
+	if err := RuleStatSweep.Start(ctx); err != nil {
+		return err
+	}
 	// AFTER the processor, never before, and the reason has changed shape now that Start no
 	// longer blocks on the first leadership term.
 	//
@@ -870,6 +881,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 			return err
 		}
 	}
+	if RuleStatSweep != nil {
+		if err := RuleStatSweep.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	if err := ResolvedEventsProcessor.Stop(ctx); err != nil {
 		return err
 	}
@@ -907,6 +923,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 func beforeMicroserviceTerminated(ctx context.Context) error {
 	if err := ResolvedEventsProcessor.Terminate(ctx); err != nil {
 		return err
+	}
+	if RuleStatSweep != nil {
+		if err := RuleStatSweep.Terminate(ctx); err != nil {
+			return err
+		}
 	}
 	// GraphQL, then NATS, then Rdb — the same order as the stop above.
 	//

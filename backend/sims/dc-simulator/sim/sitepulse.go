@@ -73,10 +73,18 @@ const (
 // binds — and a literal repeated at each of those is a rename that succeeds partially
 // and provisions a half-connected topology no gate objects to.
 const (
-	SitepulseProfileToken    = "sp-equipment-profile"
-	SitepulseDozerTypeToken  = "sp-dozer"
-	SitepulseLoaderTypeToken = "sp-loader"
-	SitepulseHaulerTypeToken = "sp-hauler"
+	SitepulseProfileToken = "sp-equipment-profile"
+	// The dozer's own profile. A dozer is a tracked machine: it carries no load and has no
+	// tyres, so it must not be DECLARED to report payload or tyre pressure — the fleet
+	// widgets decide "does not report this" from what the profile declares, not from what
+	// the device has sent. It still takes the same command vocabulary (by KEY: the scene
+	// and the enqueue gate resolve keys, not definition tokens) and the fuel and overheat
+	// rules, under tokens of its own because command and rule tokens share one namespace
+	// across the manifest.
+	SitepulseDozerProfileToken = "sp-dozer-profile"
+	SitepulseDozerTypeToken    = "sp-dozer"
+	SitepulseLoaderTypeToken   = "sp-loader"
+	SitepulseHaulerTypeToken   = "sp-hauler"
 
 	// The processing plant is a device with its own profile and type, because it reports
 	// metrics no machine does and answers no commands. Not to be confused with
@@ -149,6 +157,13 @@ const (
 	// SitepulseRefuelCommandExpiry bounds how long the refuel command may wait for the machine.
 	SitepulseRefuelCommandExpiry = "15m"
 
+	// The dozer profile's own definition and rule tokens (see SitepulseDozerProfileToken).
+	// The keys, names and thresholds are the equipment profile's.
+	SitepulseDozerGotoCommandDef    = "sp-dozer-cmd-goto"
+	SitepulseDozerRefuelCommandDef  = "sp-dozer-cmd-refuel"
+	SitepulseDozerRuleToken         = "sp-dozer-rule-lowfuel"
+	SitepulseDozerOverheatRuleToken = "sp-dozer-rule-overheat"
+
 	SitepulseRuleToken = "sp-rule-lowfuel"
 	SitepulseAlarmKey  = "low-fuel"
 	sitepulseRuleName  = "Site Pulse low fuel"
@@ -216,9 +231,31 @@ const SitepulseLowFuelThreshold = 15.0
 // alarm and send nothing. Every rule is Enabled, because publish-time validation only
 // gates ENABLED rules.
 func sitepulseMachineRules() []DetectionRuleSpec {
+	return append(sitepulseFuelAndHeatRules(SitepulseRuleToken, SitepulseOverheatRuleToken),
+		ThresholdAlarmRule{
+			Token:     SitepulseTyreRuleToken,
+			Name:      sitepulseTyreRuleName,
+			Metric:    SitepulseTyreKey,
+			Op:        OpLt,
+			Threshold: SitepulseTyrePressureThreshold,
+			Severity:  SitepulseTyreSeverity,
+			AlarmKey:  SitepulseTyreAlarmKey,
+			Enabled:   true,
+		}.Spec())
+}
+
+// sitepulseDozerRules is the dozer profile's rules: low fuel and overheat, and no tyre rule,
+// because a dozer has no tyres.
+func sitepulseDozerRules() []DetectionRuleSpec {
+	return sitepulseFuelAndHeatRules(SitepulseDozerRuleToken, SitepulseDozerOverheatRuleToken)
+}
+
+// sitepulseFuelAndHeatRules builds the low-fuel and overheat rules under the given tokens, so
+// the two profiles that carry them cannot drift apart in key, threshold or severity.
+func sitepulseFuelAndHeatRules(fuelToken, overheatToken string) []DetectionRuleSpec {
 	return []DetectionRuleSpec{
 		ThresholdAlarmRule{
-			Token:      SitepulseRuleToken,
+			Token:      fuelToken,
 			Name:       sitepulseRuleName,
 			Metric:     SitepulseFuelKey,
 			Op:         OpLt,
@@ -232,7 +269,7 @@ func sitepulseMachineRules() []DetectionRuleSpec {
 			Enabled:             true,
 		}.Spec(),
 		ThresholdAlarmRule{
-			Token:     SitepulseOverheatRuleToken,
+			Token:     overheatToken,
 			Name:      sitepulseOverheatRuleName,
 			Metric:    SitepulseEngineTempKey,
 			Op:        OpGt,
@@ -241,16 +278,25 @@ func sitepulseMachineRules() []DetectionRuleSpec {
 			AlarmKey:  SitepulseOverheatAlarmKey,
 			Enabled:   true,
 		}.Spec(),
-		ThresholdAlarmRule{
-			Token:     SitepulseTyreRuleToken,
-			Name:      sitepulseTyreRuleName,
-			Metric:    SitepulseTyreKey,
-			Op:        OpLt,
-			Threshold: SitepulseTyrePressureThreshold,
-			Severity:  SitepulseTyreSeverity,
-			AlarmKey:  SitepulseTyreAlarmKey,
-			Enabled:   true,
-		}.Spec(),
+	}
+}
+
+// sitepulseMachineCommands is the machines' command vocabulary under the given definition
+// tokens: goto-area and goto-refuel. Both profiles that carry it build it here, so the keys
+// and the parameter schema — the contract with the scene — are one definition.
+func sitepulseMachineCommands(gotoToken, refuelToken string) []CommandSpec {
+	return []CommandSpec{
+		{
+			Token:           gotoToken,
+			CommandKey:      SitepulseGotoCommandKey,
+			Name:            "Go To Area",
+			ParameterSchema: sitepulseGotoParameterSchema,
+		},
+		{
+			Token:      refuelToken,
+			CommandKey: SitepulseRefuelCommandKey,
+			Name:       "Go Refuel",
+		},
 	}
 }
 
@@ -386,19 +432,7 @@ func (s *sitepulse) Manifest() SimManifest {
 				// action UI enqueue against — and because a profile's command vocabulary is
 				// what an external far end SUBSCRIBES for, so a command that appears later is a
 				// contract change to a client in another process.
-				Commands: []CommandSpec{
-					{
-						Token:           SitepulseGotoCommandDef,
-						CommandKey:      SitepulseGotoCommandKey,
-						Name:            "Go To Area",
-						ParameterSchema: sitepulseGotoParameterSchema,
-					},
-					{
-						Token:      SitepulseRefuelCommandDef,
-						CommandKey: SitepulseRefuelCommandKey,
-						Name:       "Go Refuel",
-					},
-				},
+				Commands: sitepulseMachineCommands(SitepulseGotoCommandDef, SitepulseRefuelCommandDef),
 				// Three rules. The low-fuel rule is the first in the tree to both ALARM and ACT.
 				//
 				// CommandKey is SitepulseRefuelCommandKey — the command's KEY, never its Token
@@ -415,6 +449,21 @@ func (s *sitepulse) Manifest() SimManifest {
 				DetectionRules: sitepulseMachineRules(),
 			},
 			{
+				// The dozer's profile: the equipment profile minus payload, tyre pressure and
+				// the tyre rule, which a tracked machine has no use for. Same commands (by key)
+				// and the same fuel and overheat rules, under tokens of its own.
+				Token:    SitepulseDozerProfileToken,
+				Name:     "Site Pulse Dozer Profile",
+				Category: "vehicle",
+				Metrics: []MetricSpec{
+					{Key: SitepulseFuelKey, Name: "Fuel Level", DataType: "DOUBLE", Unit: "%"},
+					{Key: SitepulseEngineTempKey, Name: "Engine Temperature", DataType: "DOUBLE", Unit: "C"},
+					{Key: SitepulseEngineHoursKey, Name: "Engine Hours", DataType: "DOUBLE", Unit: "h"},
+				},
+				Commands:       sitepulseMachineCommands(SitepulseDozerGotoCommandDef, SitepulseDozerRefuelCommandDef),
+				DetectionRules: sitepulseDozerRules(),
+			},
+			{
 				// The crusher plant's profile. Its own profile rather than the equipment one
 				// because it reports metrics no machine does (and the equipment profile's
 				// fuel and tyre metrics mean nothing to it). No commands: nothing commands
@@ -429,11 +478,10 @@ func (s *sitepulse) Manifest() SimManifest {
 				},
 			},
 		},
-		// Three machine device types over ONE shared equipment profile — they differ in what a
-		// viewer sees and what the scene binds a prefab to, not in what they can report —
-		// and a fixed plant type over its own profile.
+		// The loader and the hauler share the equipment profile; the dozer has its own, since
+		// it carries no load and has no tyres; and a fixed plant type has its own too.
 		DeviceTypes: []DeviceTypeSpec{
-			{Token: SitepulseDozerTypeToken, Name: "Site Pulse Dozer", ProfileToken: SitepulseProfileToken},
+			{Token: SitepulseDozerTypeToken, Name: "Site Pulse Dozer", ProfileToken: SitepulseDozerProfileToken},
 			{Token: SitepulseLoaderTypeToken, Name: "Site Pulse Wheel Loader", ProfileToken: SitepulseProfileToken},
 			{Token: SitepulseHaulerTypeToken, Name: "Site Pulse Haul Truck", ProfileToken: SitepulseProfileToken},
 			{Token: SitepulsePlantTypeToken, Name: "Site Pulse Crusher Plant", ProfileToken: SitepulsePlantProfileToken},

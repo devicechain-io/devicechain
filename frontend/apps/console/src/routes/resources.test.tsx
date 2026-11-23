@@ -555,3 +555,43 @@ describe('a device-type tab sends only the fields it edits', () => {
     expect(request.manufacturer, 'the identity tab discarded the edit').toBe('Acme');
   });
 });
+
+// 🔴 THE FOUR FAMILIES WITH A PRECONDITION SEND THE updatedAt THEY LOADED. An area, asset,
+// customer or entity group saved without it is last-write-wins, so an edit made from a
+// page opened before someone else's change silently overwrites that change. The server
+// accepts the optional argument; these are the forms that have to pass it.
+const PRECONDITIONED = ['/areas', '/assets', '/customers', '/area-groups', '/asset-groups', '/customer-groups', '/device-groups'];
+
+describe('the area, asset, customer and group editors send the updatedAt they loaded', () => {
+  it('found every one of them', () => {
+    const paths = REGISTRY_RESOURCES.map((r) => r.basePath);
+    for (const p of PRECONDITIONED) expect(paths, `${p} is not a registry resource`).toContain(p);
+  });
+
+  it.each(PRECONDITIONED)('%s', async (path) => {
+    const resource = REGISTRY_RESOURCES.find((r) => r.basePath === path)!;
+    await saveEdit(resource.renderForm(ENTITY, vi.fn()));
+    const sent = gqlMock.mock.calls.filter((c) => (c[2] as { request?: unknown } | undefined)?.request != null);
+    const call = sent[sent.length - 1];
+    expect((call[2] as { expectedUpdatedAt?: unknown }).expectedUpdatedAt, `${path} did not send the updatedAt it loaded`)
+      .toBe(ENTITY.updatedAt);
+  });
+
+  it('says a stale save is stale and keeps what the operator typed', async () => {
+    const { GraphQLRequestError } = await import('@devicechain/client');
+    const resource = REGISTRY_RESOURCES.find((r) => r.basePath === '/areas')!;
+    gqlMock.mockImplementation((service: string, doc: unknown, vars?: { request?: unknown }) => {
+      if (service === 'user-management/settings') return Promise.resolve({ tokenMasks: '{}' });
+      if (vars?.request != null) {
+        return Promise.reject(new GraphQLRequestError('Reworded refusal', 200, [
+          { message: 'Reworded refusal', extensions: { code: 'STALE_WRITE' } },
+        ]));
+      }
+      return Promise.resolve(answerFor(doc));
+    });
+    await saveEdit(resource.renderForm(ENTITY, vi.fn()));
+    await screen.findByText(/changed since you opened it/);
+    expect(screen.queryByText('Reworded refusal')).toBeNull();
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe(RENAMED);
+  });
+});
