@@ -136,7 +136,12 @@ probe_d() {
   wif_pool
   wif_workloads
   good="$(wif_read s0-wif-bound good)"
-  baseline="$(wif_chain "$good")"
+  # The workloadIdentityUser binding was added seconds ago and IAM takes minutes to propagate it: wait for
+  # the baseline to be accepted (or for the deadline) BEFORE the controls, so a refusal means the control.
+  local deadline=$((SECONDS + ${FLEET_S0_IAM_PROPAGATION_SECONDS:-420}))
+  while baseline="$(wif_chain "$good")"; [[ $baseline != 200 ]] && (( SECONDS < deadline )); do
+    sleep "${FLEET_S0_POLL_SECONDS:-15}"
+  done
   c_other="$(wif_chain "$(wif_read s0-wif-other good)")"
   c_aud="$(wif_chain "$(wif_read s0-wif-bound wrongaud)")"
   forged="$(inst jwt-forge "https://forged-$S0_RUN.invalid" "$S0_WIF_AUD" system:serviceaccount:default:s0-bound)"
@@ -372,12 +377,18 @@ resource "google_container_node_pool" "p2" {
 HCL
 }
 h_vars() { H_VARS=(-var="project=$FLEET_S0_PROJECT" -var="location=$FLEET_S0_LOCATION"); }
+# The provider takes a STATIC user access token, and the probe outlives one (a token gcloud hands back
+# may already be half spent): mint it for every tofu invocation, or a later point dies on a 401.
+h_token() { export GOOGLE_OAUTH_ACCESS_TOKEN; GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)"; }
 h_tofu() { # dir action args...  (local state, no lock: the writer is killed, so a lock file would be stale)
   local d="$1" action="$2"
   shift 2
   h_vars
+  h_token
   case "$action" in
     init) tofu -chdir="$d" init -input=false -lock=false "$@" ;;
+    # import takes ADDR ID as its LAST two arguments: every flag, the variables included, must precede them.
+    import) tofu -chdir="$d" import -input=false -lock=false "${H_VARS[@]}" "$@" ;;
     *) tofu -chdir="$d" "$action" -input=false -lock=false "$@" "${H_VARS[@]}" ;;
   esac
 }
@@ -418,6 +429,7 @@ h_point() { # N -> writes $S0_OUT/h/pN/record.json
   h_root "$d"
   h_tofu "$d" init -no-color >/dev/null
   h_vars
+  h_token
   tofu -chdir="$d" apply -auto-approve -input=false -lock=false -json -var="names=[\"$name\"]" "${H_VARS[@]}" >"$d/apply.jsonl" 2>"$d/apply.err" &
   pid=$!
   h_await "$n" "$name" "$d/apply.jsonl" "$pid"
@@ -498,8 +510,7 @@ PY
 probe_h() {
   require_preflight
   required FLEET_S0_PROVIDER_VERSION
-  export GOOGLE_OAUTH_ACCESS_TOKEN
-  GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+  h_token
   mkdir -p "$S0_OUT/h"
   local n id1 id2 d
   for n in 1 2 3 4 5; do h_point "$n"; done

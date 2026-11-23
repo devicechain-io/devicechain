@@ -127,6 +127,15 @@ A reported timestamp may not run far ahead of the platform's own clock. One that
 "payload": { "entries": [ { "measurements": { "temperature": "21.5", "humidity": "48" } } ] }
 ```
 
+#### Text readings {#text-readings}
+
+A measurement value is a JSON string whether it is a number or not, but the platform stores it as text only when the metric is declared with the data type `STRING` on the device type's profile. A device that reports `"heating"` under a key the profile declares `STRING` has that value kept in its history, as its last-known value (`textValue` on `latestMeasurements` and on the event queries), and on its page in the console. It is never averaged, summed or charted as a number.
+
+- **Undeclared text is dropped.** A text value for a key the profile does not declare is not stored. The rest of the message is kept, the device is acknowledged normally, and the drop is counted as `undeclared_non_numeric` on `resolve_measurement_dropped_total`. The device's page in the console lists the dropped metric, so declare it on the profile to store it.
+- **A value is at most 4,096 bytes** of valid UTF-8 with no NUL byte. One that is longer or invalid is dropped on its own, counted as `declared_not_storable`, and the other readings in the message are kept.
+
+See the [metrics reference](../deployment/metrics-reference.md#device-management) for the counter and [Getting help](../getting-help.md) for how to find out why a reading is missing.
+
 ### Location {#location}
 
 **`Location`** — where the device is:

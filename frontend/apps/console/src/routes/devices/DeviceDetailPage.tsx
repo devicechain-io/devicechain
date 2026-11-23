@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, HelpCircle, Trash2, Wifi, WifiOff } from 'lucide-react';
 import { StartMaintenanceAction, MaintenanceBanner } from '@/routes/alarm-maintenance/EntityMaintenance';
@@ -39,7 +39,7 @@ import { errMessage, useReload } from '@/routes/common';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
 import { DeviceEnabledAction } from '@/routes/devices/DeviceEnabledAction';
 import { DeviceGatewayPanel } from '@/routes/devices/DeviceGatewayPanel';
-import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
+import { DeviceCommandsPanel, commandAnchor } from '@/routes/devices/DeviceCommandsPanel';
 import { DeviceCredentialsPanel } from '@/routes/devices/DeviceCredentialsPanel';
 import { DeviceConnectPanel } from '@/routes/devices/DeviceConnectPanel';
 import { DeviceReplacementPanel } from '@/routes/devices/DeviceReplacementPanel';
@@ -95,6 +95,7 @@ export default function DeviceDetailPage() {
   // yields no notice (see DroppedMeasurementsNotice) rather than breaking the page.
   const { current: dropped } = useQuery(() => getDroppedMeasurements(token), [token, version]);
   const [searchParams] = useSearchParams();
+  const { hash } = useLocation();
   const [tab, setTab] = useState(() => searchParams.get('tab') === 'commands' ? 'commands' : 'basic');
 
   if (loading && !device) {
@@ -288,7 +289,7 @@ export default function DeviceDetailPage() {
         )}
         <TabsContent value="commands">
           <SectionPanel>
-            <DeviceCommandsPanel deviceToken={device.token} canIssue={canSend} canCancel={canSend && !scoped} />
+            <DeviceCommandsPanel deviceToken={device.token} canIssue={canSend} canCancel={canSend && !scoped} anchorToken={commandAnchor(hash)} />
           </SectionPanel>
         </TabsContent>
         <TabsContent value="configuration">

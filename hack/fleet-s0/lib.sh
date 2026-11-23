@@ -21,7 +21,8 @@ create_cluster() {
 }
 assert_no_lien() {
   local liens
-  liens="$(gcloud resource-manager liens list --project="$1" --format='value(name)')"
+  # Liens are an alpha-track command group in current gcloud; the GA spelling is "Invalid choice".
+  liens="$(gcloud alpha resource-manager liens list --project="$1" --format='value(name)')"
   [[ -z $liens ]] || die "project $1 carries a lien"
 }
 assert_deny() {
@@ -104,7 +105,10 @@ reaper_preflight() {
   done
   # The canary and its reaper are the only bootstrap creations before the capability is issued.
   # Never use Scheduler 'run': the scheduled job itself must actually fire.
-  gcloud projects create "$FLEET_S0_CANARY_PROJECT" --folder="$FLEET_S0_FOLDER" --labels=fleet-s0=canary --quiet
+  # The parent is a folder ID, or organizations/ID when the projects sit directly under the organization.
+  local parent=(--folder="$FLEET_S0_FOLDER")
+  [[ $FLEET_S0_FOLDER != organizations/* ]] || parent=(--organization="${FLEET_S0_FOLDER#organizations/}")
+  gcloud projects create "$FLEET_S0_CANARY_PROJECT" "${parent[@]}" --labels=fleet-s0=canary --quiet
   assert_no_lien "$FLEET_S0_CANARY_PROJECT"
   arm_outer "$FLEET_S0_CANARY_PROJECT" 300 "$(date +%s)"
   deadline=$((SECONDS + ${FLEET_S0_TIMEOUT_SECONDS:-900}))
