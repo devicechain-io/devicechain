@@ -43,7 +43,8 @@ func updateInstanceMetadata(ctx context.Context, dyn dynamic.Interface, instance
 	mutate func(*dcv1beta1.Instance) (bool, error)) error {
 	var first *dcv1beta1.Instance
 	for attempt := 0; ; attempt++ {
-		inst, err := readInstanceCR(ctx, dyn, instance)
+		// Read for WRITE: the Update below sends the whole object back.
+		inst, err := readInstanceCRForWrite(ctx, dyn, instance)
 		if err != nil {
 			return err
 		}

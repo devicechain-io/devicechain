@@ -56,14 +56,14 @@ var HarborpulseShowcaseTier = TierSpec{
 }
 
 // HarborpulseGovernedTier fits ordinary ticks but deliberately sheds the restore burst.
-// HarborpulseDefaultIngestBaseline measures 90..116 readings/tick (116 at restore),
+// HarborpulseDefaultIngestBaseline measures 95..122 readings/tick (121 at restore),
 // and 720 restore readings (90 local log entries per East charger, four metrics).
-// R*interval = 40*5 = 200 >= 1.25*116. Effective burst is max(256,256),
-// and 720 >= 2*256 forces throttling. Net headroom >= 40-116/5 = 16.8/s
+// R*interval = 40*5 = 200 >= 1.25*122. Effective burst is max(256,256),
+// and 720 >= 2*256 forces throttling. Net headroom >= 40-122/5 = 15.6/s
 // drains 720 readings in about a minute, allowing tick boundaries and latency.
 // event-sources' limiters are process-local, with separate buckets for HTTP and
 // integrations, not distributed across replicas. The baseline conservatively counts
-// both; HTTP alone offers 108 at restore and the restore exceeds its remaining bucket.
+// all transports; HTTP alone offers 110 at restore and the restore exceeds its remaining bucket.
 // The rig uses a compact, single-replica instance.
 var HarborpulseGovernedTier = TierSpec{
 	Token:       "hp-governed",

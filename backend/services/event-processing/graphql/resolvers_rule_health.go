@@ -67,6 +67,12 @@ func (r *SchemaResolver) RuleHealth(ctx context.Context, args struct {
 	if err != nil {
 		return nil, fmt.Errorf("rule health: load stats: %w", err)
 	}
+	// A rollback can make a version active again after the stranded-stat sweep removed its
+	// history; the counts then cover only the fires since, and the row says so.
+	sweptAt, swept, err := r.RuleStats.LoadSweptAt(ctx, tenant, active.ActiveVersionToken)
+	if err != nil {
+		return nil, fmt.Errorf("rule health: load sweep record: %w", err)
+	}
 
 	// Share the same platform compile limits the publish gate + runtime use, so the recompile
 	// check agrees with what the engine would accept.
@@ -74,7 +80,12 @@ func (r *SchemaResolver) RuleHealth(ctx context.Context, args struct {
 	out := make([]*RuleHealthResolver, 0, len(rulesRows))
 	for _, rr := range rulesRows {
 		stat, hasStat := stats[rr.RuleId]
-		out = append(out, buildRuleHealth(rr, stat, hasStat, limits))
+		rh := buildRuleHealth(rr, stat, hasStat, limits)
+		if swept {
+			rh.historyRemovedAt = sweptAt
+			rh.historyRemoved = true
+		}
+		out = append(out, rh)
 	}
 	return out, nil
 }
@@ -125,6 +136,19 @@ type RuleHealthResolver struct {
 	fireCount   int64
 	lastFiredAt time.Time
 	lastSignal  string
+	// historyRemoved is set when the stranded-stat sweep removed this version's firing history
+	// at historyRemovedAt (the version was superseded and later made active again).
+	historyRemoved   bool
+	historyRemovedAt time.Time
+}
+
+// HistoryRemovedAt returns when the rule's firing history was removed, or null when it never was.
+func (r *RuleHealthResolver) HistoryRemovedAt() *string {
+	if !r.historyRemoved {
+		return nil
+	}
+	s := r.historyRemovedAt.UTC().Format(time.RFC3339Nano)
+	return &s
 }
 
 func (r *RuleHealthResolver) RuleId() string    { return r.ruleID }

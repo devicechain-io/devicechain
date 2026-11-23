@@ -70,7 +70,7 @@ compatibility checks: it is declared there as an intended break, the same way as
 preview change ships unnoticed. A file format in the preview tier carries a version, such as
 `v1alpha1`, and a tool that does not know the version refuses the file rather than guessing.
 
-Today the preview tier holds three surfaces. The rule tests: the `evaluateRules` operation of the
+Today the preview tier holds four surfaces. The rule tests: the `evaluateRules` operation of the
 event-processing API, the scenario and test file formats, and the `dcctl test` command that reads them
 (see [Testing your rules](../guides/testing-your-rules.md)). Product as code: `dcctl product export`,
 `plan` and `apply`, and their bundle format (see [Product as Code](../guides/product-as-code.md)). And
@@ -87,6 +87,11 @@ enum values. The `ServiceAccount.agent` field is not in preview: it is covered f
 adds it. Ordinary service-account roles remain covered. No MCP action tool is served yet; the MCP
 read tools remain in the not-covered catalog above.
 
+Fleet operation readiness joins the preview tier in **v1.9**, when its preview clock starts: the
+`fleetOperationReadiness` query, `FleetOperationReadiness` and `FleetOperationEnforcement`,
+including their fields and enum values, and `dcctl fleet-op readiness`. They require
+`fleet:operate`; scoped members are refused.
+
 ## Supported upgrade paths {#upgrade-paths}
 
 - **Within a minor** (`1.4.0` to `1.4.3`) and **to the next minor** (`1.4.x` to `1.5.0`) are the supported paths.
@@ -95,6 +100,11 @@ read tools remain in the not-covered catalog above.
 - **Skipping a minor** is not a tested path. To go from `1.4.x` to `1.7.0`, upgrade through `1.5.x`
   and `1.6.x` first. A release's upgrade section says when it requires a particular release first, as the
   [event wire format](./releases-and-upgrades.md#event-wire-format) section does today.
+  `dcctl upgrade` enforces this: it refuses a move more than one minor ahead of the version the
+  instance's workloads run (read from the running images, not from the declared version), and
+  across a major allows only the major's first minor (`x.0`). The `--allow-skipped-minor` flag
+  overrides the refusal; that path is unsupported and untested, and the flag never disables a
+  protection the database enforces.
 - **Database migrations always upgrade.** From v1.0.0 an instance is never recreated to take a new
   release. A schema change is a migration that is appended to the area's chain, never an edit to an
   earlier one, and every migration can be re-run after a failure. Before v1.0.0 a few releases

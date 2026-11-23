@@ -105,6 +105,8 @@
   "healthEdgeResolved": "resuelta",
   "healthEmpty": "No hay reglas de detección publicadas. Crea reglas en la pestaña Reglas de detección y publica el perfil.",
   "healthFeedEmpty": "Esperando detecciones… los disparos aparecerán aquí a medida que se activen las reglas.",
+  "healthFiresSinceRemoved": "desde entonces",
+  "healthHistoryRemoved": "El historial de disparos de esta versión anterior al {{date}} se eliminó: la versión fue reemplazada por otra posterior y sus reglas habían dejado de dispararse, y una reversión la ha vuelto a activar. La hora del último disparo y los recuentos de disparos solo incluyen los disparos desde entonces.",
   "healthIntro": "Estado por regla de la versión activa publicada de este perfil. Una regla solo se dispara contra telemetría en vivo después de publicar el perfil. Los recuentos de disparos y la hora del último disparo son aproximados: se escriben en segundo plano, así que pueden ir unos segundos retrasados y pueden perder disparos mientras la base de datos tiene problemas. La última señal es la más reciente que vieron los contadores, no el estado actual de la alarma de la regla.",
   "healthLiveDetectionsHeading": "Detecciones en vivo",
   "healthLoading": "Cargando estado de reglas…",

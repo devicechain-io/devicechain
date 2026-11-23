@@ -70,7 +70,7 @@ intencionada, igual que cualquier otra, de modo que ningún cambio en vista prev
 note. Un formato de archivo en vista previa lleva una versión, como `v1alpha1`, y una herramienta que no
 conoce la versión rechaza el archivo en lugar de adivinar.
 
-Hoy el nivel de vista previa contiene tres superficies. Las pruebas de reglas: la operación `evaluateRules`
+Hoy el nivel de vista previa contiene cuatro superficies. Las pruebas de reglas: la operación `evaluateRules`
 de la API de event-processing, los formatos de archivo de escenario y de prueba, y el comando `dcctl test`
 que los lee (consulta [Probar tus reglas](../guides/testing-your-rules.md)). El producto como código:
 `dcctl product export`, `plan` y `apply`, y su formato de paquete (consulta [Producto como código](../guides/product-as-code.md)).
@@ -88,6 +88,11 @@ El campo `ServiceAccount.agent` no está en vista previa: está cubierto desde l
 Los roles de las cuentas de servicio ordinarias siguen cubiertos. Todavía no se ofrece ninguna
 herramienta MCP de acción; las herramientas MCP de lectura siguen en el catálogo no cubierto anterior.
 
+La preparación de operaciones de flota entra en vista previa en **v1.9**, cuando comienza su
+plazo de vista previa: la consulta `fleetOperationReadiness`, los tipos `FleetOperationReadiness`
+y `FleetOperationEnforcement`, incluidos sus campos y valores de enumeración, y
+`dcctl fleet-op readiness`. Requieren `fleet:operate`; se rechazan los miembros con ámbito limitado.
+
 ## Rutas de actualización admitidas {#upgrade-paths}
 
 - **Dentro de una versión menor** (`1.4.0` a `1.4.3`) y **a la siguiente versión menor** (`1.4.x` a `1.5.0`) son las rutas admitidas.
@@ -96,6 +101,11 @@ herramienta MCP de acción; las herramientas MCP de lectura siguen en el catálo
 - **Saltarse una versión menor** no es una ruta probada. Para ir de `1.4.x` a `1.7.0`, actualiza primero a través de `1.5.x`
   y `1.6.x`. La sección de actualización de una versión indica cuándo exige antes una versión concreta, como hace hoy la sección
   del [formato de eventos en el cable](./releases-and-upgrades.md#event-wire-format).
+  `dcctl upgrade` lo exige: rechaza un salto de más de una versión menor por encima de la versión
+  que ejecutan las cargas de trabajo de la instancia (leída de las imágenes en ejecución, no de la
+  versión declarada) y, al cruzar una versión mayor, solo permite su primera versión menor (`x.0`).
+  La opción `--allow-skipped-minor` anula el rechazo; esa ruta no tiene soporte ni está probada, y
+  la opción nunca desactiva una protección que aplique la base de datos.
 - **Las migraciones de base de datos siempre actualizan.** A partir de la v1.0.0 nunca se recrea una instancia para adoptar una
   versión nueva. Un cambio de esquema es una migración que se añade a la cadena del área, nunca una edición de una anterior, y
   toda migración puede volver a ejecutarse tras un fallo. Antes de la v1.0.0, a algunas versiones no se podía actualizar en

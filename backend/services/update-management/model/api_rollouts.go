@@ -24,6 +24,7 @@ import (
 
 // Refusal codes of the rollout plane.
 const (
+	CodeRolloutSafetyDisabled       = "ROLLOUT_SAFETY_DISABLED"
 	CodeRolloutNotFound             = "ROLLOUT_NOT_FOUND"
 	CodeRolloutExists               = "ROLLOUT_ALREADY_EXISTS"
 	CodeRolloutStateConflict        = "ROLLOUT_STATE_CONFLICT"
@@ -155,6 +156,12 @@ func (api *Api) artifactAssignable(a *Artifact) error {
 
 // CreateRollout declares a rollout in DRAFT. Nothing is resolved or dispatched until it starts.
 func (api *Api) CreateRollout(ctx context.Context, req RolloutCreateRequest) (*UpdateRolloutView, error) {
+	if err := api.requireRolloutSafety(len(req.Cohorts) > 0 || req.FailureRate != nil); err != nil {
+		return nil, err
+	}
+	if err := validateSafety(req); err != nil {
+		return nil, err
+	}
 	if err := api.RefuseDeletedTenant(ctx); err != nil {
 		return nil, err
 	}
@@ -204,6 +211,12 @@ func (api *Api) CreateRollout(ctx context.Context, req RolloutCreateRequest) (*U
 	}
 	r := UpdateRollout{Token: req.Token, Name: name, ArtifactId: artifact.ID, GroupToken: req.GroupToken,
 		MaxInFlight: req.MaxInFlight, FailureThreshold: threshold, State: RolloutDraft, CreatedBy: actorOf(ctx)}
+	if len(req.Cohorts) > 0 {
+		r.CohortPlan = safetyJSON(req.Cohorts)
+	}
+	if req.FailureRate != nil {
+		r.FailureRatePlan = safetyJSON(req.FailureRate)
+	}
 	if err := api.RDB.DB(ctx).Create(&r).Error; err != nil {
 		if again, qerr := api.rolloutByToken(api.RDB.DB(ctx), req.Token); qerr == nil && again != nil {
 			return nil, refuse(CodeRolloutExists, "a rollout with token %q already exists", req.Token)
@@ -302,6 +315,9 @@ func (api *Api) StartRollout(ctx context.Context, token string) (*UpdateRolloutV
 	if r == nil {
 		return nil, refuse(CodeRolloutNotFound, "no rollout with token %q", token)
 	}
+	if err := api.requireRolloutSafety(r.CohortPlan.Valid || r.FailureRatePlan.Valid); err != nil {
+		return nil, err
+	}
 	if r.State != RolloutDraft {
 		return nil, refuse(CodeRolloutStateConflict, "rollout %q is %s; only a %s rollout can be started", token, r.State, RolloutDraft)
 	}
@@ -358,6 +374,10 @@ func (api *Api) StartRollout(ctx context.Context, token string) (*UpdateRolloutV
 	if len(devices) == 0 {
 		return nil, refuse(CodeInvalidRollout, "group %q has no devices throughout rollout freeze", r.GroupToken)
 	}
+	cohorts, err := freezeCohorts(*r, devices)
+	if err != nil {
+		return nil, err
+	}
 	now := api.now()
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		cur, ok, err := api.lockRollout(tx, r.ID, false)
@@ -369,7 +389,7 @@ func (api *Api) StartRollout(ctx context.Context, token string) (*UpdateRolloutV
 		}
 		targets := make([]UpdateRolloutTarget, 0, len(devices))
 		for _, d := range devices {
-			t := UpdateRolloutTarget{RolloutId: r.ID, DeviceToken: d, Status: TargetPending}
+			t := UpdateRolloutTarget{RolloutId: r.ID, DeviceToken: d, Status: TargetPending, Cohort: cohorts[d]}
 			if id, found := identities[d]; found {
 				t.DeviceIncarnation = sql.NullInt64{Int64: int64(id), Valid: true}
 			} else {
@@ -474,6 +494,10 @@ func (api *Api) PauseRollout(ctx context.Context, token string) (*UpdateRolloutV
 // past the failures counted: the accounting is never reset by resuming. failureThreshold, when
 // given, replaces the rollout's threshold (journaled with the resume).
 func (api *Api) ResumeRollout(ctx context.Context, token string, failureThreshold *int) (*UpdateRolloutView, error) {
+	return api.resumeRollout(ctx, token, failureThreshold, nil)
+}
+
+func (api *Api) resumeRollout(ctx context.Context, token string, failureThreshold *int, haltSequence *int) (*UpdateRolloutView, error) {
 	if err := api.requireUpdatePlane(); err != nil {
 		return nil, err
 	}
@@ -498,7 +522,17 @@ func (api *Api) ResumeRollout(ctx context.Context, token string, failureThreshol
 	}
 	var resumed *UpdateRollout
 	_, err = api.transition(ctx, token, func(tx *gorm.DB, r *UpdateRollout) (map[string]any, error) {
+		if haltSequence != nil && (*haltSequence < 1 || *haltSequence != r.HaltSequence) {
+			return nil, refuse(CodeRolloutStateConflict, "haltSequence does not match the current halt")
+		}
 		switch r.State {
+		case RolloutCompleted:
+			if haltSequence == nil || !r.RateOverrideAt.Valid {
+				return nil, refuse(CodeRolloutStateConflict, "rollout %q is %s; only a %s rollout can be resumed", token, r.State, RolloutPaused)
+			}
+			// A successful explicit override may complete inline before its caller retries.
+			// Validate any repeated threshold just as for a still-running override.
+			fallthrough
 		case RolloutRunning:
 			// Already running: a repeated resume is a no-op, but only if it asks for nothing more. A
 			// threshold the caller passed and this answer did not apply would read as accepted.
@@ -513,6 +547,28 @@ func (api *Api) ResumeRollout(ctx context.Context, token string, failureThreshol
 			return nil, refuse(CodeRolloutStateConflict, "rollout %q is %s; only a %s rollout can be resumed", token, r.State, RolloutPaused)
 		}
 		cols := map[string]any{"state": RolloutRunning, "pause_reason": ""}
+		if r.PauseReason == PauseCohortReady {
+			return nil, refuse(CodeRolloutStateConflict, "use promoteUpdateRollout to advance the cohort")
+		}
+		if r.PauseReason == PauseCohortFailed {
+			cohort, err := cohortProgress(tx, r)
+			if err != nil {
+				return nil, err
+			}
+			// An UNKNOWN at the cap can pause before the cohort is fully dispatched.
+			// Once resolved or abandoned, resume may finish those pending targets.
+			if cohort.Failures() > 0 || cohort.Pending == 0 {
+				return nil, refuse(CodeRolloutStateConflict, "use promoteUpdateRollout with overrideFailure for settled failures; resolve or abandon UNKNOWN attempts before resuming pending cohort targets")
+			}
+		}
+		if r.PauseReason == PauseFailureRate {
+			if haltSequence == nil {
+				return nil, refuse(CodeRolloutStateConflict, "use resumeHaltedUpdateRollout with the current haltSequence")
+			}
+			cols["rate_override_at"] = api.now()
+		} else if haltSequence != nil {
+			return nil, refuse(CodeRolloutStateConflict, "this is not a failure-rate halt")
+		}
 		threshold := r.FailureThreshold
 		if failureThreshold != nil {
 			threshold = sql.NullInt32{Int32: int32(*failureThreshold), Valid: true}
@@ -576,6 +632,7 @@ func (api *Api) AbortRollout(ctx context.Context, token string) (*UpdateRolloutV
 // progressRow is one group of the progress aggregate.
 type progressRow struct {
 	RolloutId    uint
+	Cohort       int
 	Status       string
 	AttemptState sql.NullString
 	N            int
@@ -585,16 +642,23 @@ type progressRow struct {
 // the device's outcome; the rollout never copies it.
 func progressQuery(db *gorm.DB, ids []uint) *gorm.DB {
 	return db.Model(&UpdateRolloutTarget{}).
-		Select("update_rollout_targets.rollout_id AS rollout_id, update_rollout_targets.status AS status, "+
+		Select("update_rollout_targets.rollout_id AS rollout_id, update_rollout_targets.cohort AS cohort, update_rollout_targets.status AS status, "+
 			"update_attempts.state AS attempt_state, COUNT(*) AS n").
 		Joins("LEFT JOIN update_attempts ON update_attempts.assignment_id = update_rollout_targets.assignment_id "+
 			"AND update_attempts.tenant_id = update_rollout_targets.tenant_id").
 		Where("update_rollout_targets.rollout_id IN ?", ids).
-		Group("update_rollout_targets.rollout_id, update_rollout_targets.status, update_attempts.state")
+		Group("update_rollout_targets.rollout_id, update_rollout_targets.cohort, update_rollout_targets.status, update_attempts.state")
 }
 
-func (api *Api) progressOf(db *gorm.DB, ids []uint) (map[uint]RolloutProgress, error) {
-	out := map[uint]RolloutProgress{}
+type rolloutProgressCounts struct {
+	Total   RolloutProgress
+	Cohorts map[int]RolloutProgress
+}
+
+// progressCounts reads all requested rollouts and cohorts in one tenant-scoped aggregate.
+// Both views use the same outcome classifier and counter, including missing attempts.
+func progressCounts(db *gorm.DB, ids []uint) (map[uint]rolloutProgressCounts, error) {
+	out := map[uint]rolloutProgressCounts{}
 	if len(ids) == 0 {
 		return out, nil
 	}
@@ -604,8 +668,27 @@ func (api *Api) progressOf(db *gorm.DB, ids []uint) (map[uint]RolloutProgress, e
 	}
 	for _, row := range rows {
 		p := out[row.RolloutId]
-		p.add(outcomeOf(row.Status, row.AttemptState), row.N)
+		if p.Cohorts == nil {
+			p.Cohorts = map[int]RolloutProgress{}
+		}
+		outcome := outcomeOf(row.Status, row.AttemptState)
+		p.Total.add(outcome, row.N)
+		cohort := p.Cohorts[row.Cohort]
+		cohort.add(outcome, row.N)
+		p.Cohorts[row.Cohort] = cohort
 		out[row.RolloutId] = p
+	}
+	return out, nil
+}
+
+func (api *Api) progressOf(db *gorm.DB, ids []uint) (map[uint]RolloutProgress, error) {
+	counts, err := progressCounts(db, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uint]RolloutProgress, len(counts))
+	for id, p := range counts {
+		out[id] = p.Total
 	}
 	return out, nil
 }
@@ -643,13 +726,14 @@ func (api *Api) viewsOfRollouts(ctx context.Context, rs []UpdateRollout) ([]Upda
 	for _, a := range artifacts {
 		byID[a.ID] = a
 	}
-	progress, err := api.progressOf(api.RDB.DB(ctx), ids)
+	progress, err := progressCounts(api.RDB.DB(ctx), ids)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]UpdateRolloutView, 0, len(rs))
 	for _, r := range rs {
-		out = append(out, UpdateRolloutView{Rollout: r, Artifact: byID[r.ArtifactId], Progress: progress[r.ID]})
+		out = append(out, UpdateRolloutView{Rollout: r, Artifact: byID[r.ArtifactId],
+			Progress: progress[r.ID].Total, CohortProgress: progress[r.ID].Cohorts})
 	}
 	return out, nil
 }
@@ -719,9 +803,12 @@ type targetRow struct {
 	AssignmentToken sql.NullString
 }
 
-// RolloutTargets pages a rollout's targets in the order they were frozen, optionally by outcome.
+// RolloutTargets pages a rollout's targets in the order they were frozen, optionally by outcome and cohort.
 // It answers nil for a rollout the tenant does not have.
 func (api *Api) RolloutTargets(ctx context.Context, token string, c RolloutTargetCriteria) (*RolloutTargetResults, error) {
+	if c.Cohort != nil && *c.Cohort < 0 {
+		return nil, refuse(CodeInvalidRollout, "cohort must be nonnegative (got %d)", *c.Cohort)
+	}
 	if c.Outcome != nil && !slices.Contains(Outcomes, *c.Outcome) {
 		return nil, refuse(CodeInvalidRollout, "outcome must be one of %s", strings.Join(Outcomes, ", "))
 	}
@@ -737,6 +824,9 @@ func (api *Api) RolloutTargets(ctx context.Context, token string, c RolloutTarge
 			Joins("LEFT JOIN update_assignments ON update_assignments.id = update_rollout_targets.assignment_id "+
 				"AND update_assignments.tenant_id = update_rollout_targets.tenant_id").
 			Where("update_rollout_targets.rollout_id = ?", r.ID)
+		if c.Cohort != nil {
+			q = q.Where("update_rollout_targets.cohort = ?", *c.Cohort)
+		}
 		if c.Outcome != nil {
 			q = outcomeFilter(q, *c.Outcome)
 		}
@@ -824,8 +914,11 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 		// step, and at most MaxRolloutTargets rows per circuit; a held prefix cannot starve
 		// later targets. A replica restart merely starts a new circuit from the oldest row.
 		for {
-			if err := api.RDB.DB(ctx).Where("rollout_id = ? AND status = ? AND id > ?", id, TargetPending, after).
-				Order("id ASC").Limit(want).Find(&pending).Error; err != nil {
+			q := api.RDB.DB(ctx).Where("rollout_id = ? AND status = ? AND id > ?", id, TargetPending, after)
+			if pre[0].CohortPlan.Valid {
+				q = q.Where("cohort = ?", pre[0].CurrentCohort)
+			}
+			if err := q.Order("id ASC").Limit(want).Find(&pending).Error; err != nil {
 				return res, err
 			}
 			if len(pending) != 0 || after == 0 {
@@ -879,6 +972,39 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 		if r.FailureThreshold.Valid && p.Failures() >= int(r.FailureThreshold.Int32) {
 			return pause(PauseFailureThreshold)
 		}
+		halted, err := api.rateHalt(tx, r)
+		if err != nil {
+			return err
+		}
+		if halted {
+			return pause(PauseFailureRate)
+		}
+		plan, err := r.Cohorts()
+		if err != nil {
+			return err
+		}
+		if len(plan) > 0 && r.CurrentCohort < len(plan)-1 {
+			cohort, err := cohortProgress(tx, r)
+			if err != nil {
+				return err
+			}
+			if cohort.Unknown > 0 && cohort.InFlight == 0 && p.Occupied() >= r.MaxInFlight {
+				return pause(PauseCohortFailed)
+			}
+			if cohort.Total > 0 && cohort.Pending == 0 && cohort.InFlight == 0 {
+				if cohort.Failures() > 0 {
+					return pause(PauseCohortFailed)
+				}
+				if plan[r.CurrentCohort].ManualPromotion {
+					return pause(PauseCohortReady)
+				}
+				r.CurrentCohort++
+				if err := tx.Model(&UpdateRollout{ID: r.ID, Token: r.Token}).Where("id = ?", r.ID).
+					Updates(map[string]any{"current_cohort": r.CurrentCohort, "state_changed_by": "", "state_changed_at": api.now()}).Error; err != nil {
+					return err
+				}
+			}
+		}
 		if p.Pending == 0 && p.Occupied() == 0 {
 			res.Transition = RolloutCompleted
 			return tx.Model(&UpdateRollout{ID: r.ID, Token: r.Token}).Where("id = ?", r.ID).
@@ -900,6 +1026,9 @@ func (api *Api) StepRollout(ctx context.Context, id uint) (RolloutStepResult, er
 			return fmt.Errorf("artifact %q has an unreadable compatibleProfiles document: %w", artifact.Token, err)
 		}
 		for _, c := range cands {
+			if len(plan) > 0 && c.target.Cohort != r.CurrentCohort {
+				continue
+			}
 			if slots == 0 {
 				break
 			}

@@ -650,6 +650,31 @@ graphql(`
     state
     pauseReason
     targetCount
+    cohorts {
+      name
+      deviceTokens
+      percentage
+      manualPromotion
+      progress {
+        total
+        pending
+        inFlight
+        succeeded
+        failed
+        unknown
+        cancelled
+        skipped
+      }
+    }
+    currentCohort
+    failureRate {
+      percentage
+      windowSeconds
+      minimumSamples
+    }
+    haltSequence
+    haltFailures
+    haltSamples
     createdAt
     createdBy
     startedAt
@@ -689,6 +714,7 @@ const ROLLOUT_TARGETS = graphql(`
   query UpdateRolloutTargets($token: String!, $criteria: UpdateRolloutTargetSearchCriteria!) {
     updateRolloutTargets(token: $token, criteria: $criteria) {
       results {
+        cohort
         deviceToken
         outcome
         assignmentToken
@@ -733,6 +759,22 @@ const PAUSE_ROLLOUT = graphql(`
 const RESUME_ROLLOUT = graphql(`
   mutation ResumeUpdateRollout($token: String!, $failureThreshold: Int) {
     resumeUpdateRollout(token: $token, failureThreshold: $failureThreshold) {
+      ...RolloutFields
+    }
+  }
+`);
+
+const PROMOTE_ROLLOUT = graphql(`
+  mutation PromoteUpdateRollout($token: String!, $expectedCohort: Int!, $overrideFailure: Boolean! = false) {
+    promoteUpdateRollout(token: $token, expectedCohort: $expectedCohort, overrideFailure: $overrideFailure) {
+      ...RolloutFields
+    }
+  }
+`);
+
+const RESUME_HALTED_ROLLOUT = graphql(`
+  mutation ResumeHaltedUpdateRollout($token: String!, $haltSequence: Int!, $failureThreshold: Int) {
+    resumeHaltedUpdateRollout(token: $token, haltSequence: $haltSequence, failureThreshold: $failureThreshold) {
       ...RolloutFields
     }
   }
@@ -876,6 +918,24 @@ export async function pauseRollout(token: string): Promise<UpdateRollout> {
 export async function resumeRollout(opts: { token: string; failureThreshold?: number }): Promise<UpdateRollout> {
   const data = await gql('update-management', RESUME_ROLLOUT, opts);
   return data.resumeUpdateRollout;
+}
+
+export async function promoteRollout(opts: {
+  token: string;
+  expectedCohort: number;
+  overrideFailure?: boolean;
+}): Promise<UpdateRollout> {
+  const data = await gql('update-management', PROMOTE_ROLLOUT, opts);
+  return data.promoteUpdateRollout;
+}
+
+export async function resumeHaltedRollout(opts: {
+  token: string;
+  haltSequence: number;
+  failureThreshold?: number;
+}): Promise<UpdateRollout> {
+  const data = await gql('update-management', RESUME_HALTED_ROLLOUT, opts);
+  return data.resumeHaltedUpdateRollout;
 }
 
 export async function abortRollout(token: string): Promise<UpdateRollout> {

@@ -321,7 +321,8 @@ destructive — see [the warning below](#where-the-default-does-not-hold).
 
 A partial update narrows concurrency conflicts without removing them. Two writers who touch
 different fields no longer overwrite each other, but two who touch the same field still do.
-`updateDashboard`, `updateConnector`, `updateAiProvider` and `updateNotificationPolicy` take an
+`updateDashboard`, `updateConnector`, `updateAiProvider`, `updateNotificationPolicy`, `updateArea`,
+`updateAsset`, `updateCustomer` and `updateEntityGroup` take an
 optional `expectedUpdatedAt` and refuse the write when the stored timestamp has moved since you read
 it. Pass the `updatedAt` you last read, or omit it for last-write-wins. The `updatedAt` a `create*`
 response carries is not one to send: read the record back first, or the first guarded update may be
@@ -724,6 +725,8 @@ Some refusals look similar and do not carry `CONFLICT`:
   command back. See [Issue a command](../guides/sending-commands.md#issue-it).
 - Deleting a record that other records still refer to carries `REFERENCE_VIOLATION`. See
   [A reference or a value that is refused](#reference-and-invalid-values).
+
+A write of a device's attributes that finds one of them held by another write, and keeps finding it after five short retries, is refused with `errors[*].extensions.code` set to `ATTRIBUTE_WRITE_BUSY`. It can come from `setEntityAttribute`, `deleteEntityAttribute`, `restoreDeviceConfiguration` and `copyDeviceConfiguration`. Nothing was written, and the request is safe to retry. It is most likely while an upgrade is rolling out, when a pod that has not been upgraded yet may be writing the same attribute.
 
 An update whose precondition, such as `expectedUpdatedAt`, no longer matches the record because someone changed it after you read it is refused with `errors[*].extensions.code` set to `STALE_WRITE`. Every service answers a stale write this way: connectors, dashboards, AI providers, notification policies, customer types, entity groups, roles and alarms alike. Nothing is written, and the message is the same as before the code existed: `<record> was modified by another writer; reload and try again`, such as `dashboard was modified by another writer; reload and try again`. `CONFLICT` continues to mean a uniqueness collision and is never used for a stale write. Classify by code rather than message text; `isStaleWrite(err)` in `@devicechain/client` does that, and falls back to the message for an older server. The console recognizes the code wherever it saves with a precondition.
 
@@ -1216,3 +1219,23 @@ When the alert fires, someone is most likely trying many addresses:
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.
 
 `SECRET_RESUPPLY_REQUIRED` means an update would send a stored credential to a different destination or present it differently. On `updateConnector`, `updateNotificationChannel` or `updateAiProvider`, supply `secret` again in the same request, or clear it with `secret: null`. For a connector rollback with a different binding, use `updateConnector` with the target configuration and its credential instead.
+
+## Fleet operation readiness (Preview) {#fleet-operation-readiness}
+
+Preview. The device-management tenant data plane exposes `fleetOperationReadiness` to callers
+with `fleet:operate`; scoped members are refused. It reports the build's writer protocol version,
+fresh database enforcement state, executable operation kinds and a fresh count of orphaned
+device attribute and generation rows in the caller's tenant (including soft-deleted attributes).
+In v1.9 enforcement is `NOT_INSTALLED` and no kind is executable; this is expected until the
+release that installs enforcement. A failed catalog read reports `UNREADABLE` while preserving
+the other facts. Only a trigger enabled `ALWAYS` counts as `ENFORCED`; ordinary, replica-only
+and disabled triggers report `DISABLED`. Missing or mismatched enforcement reports `NOT_INSTALLED`.
+The query counts rows, so treat it as a diagnostic to run when you need the answer, not something to poll. The preview clock starts at v1.9.
+
+The Preview command prints the same four facts and exits successfully only when enforcement is
+`ENFORCED` and the orphan count is zero. The v1.9 non-zero exit is expected. Use the same login
+and instance flags as `dcctl attr`:
+
+```bash
+dcctl fleet-op readiness --tenant acme --email ops@example.com --password <password> -o json
+```

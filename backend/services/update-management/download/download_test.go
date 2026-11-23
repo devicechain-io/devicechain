@@ -130,7 +130,7 @@ func newEnv(t *testing.T, maxConcurrent int) *env {
 
 	e := &env{store: store, clock: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)}
 	api := model.NewApi(&rdb.RdbManager{Database: db}, store, model.Limits{
-		MaxArtifactBytes: 64 << 20, ConfiguredMaxArtifactBytes: 64 << 20, MaxTenantArtifactBytes: 256 << 20,
+		MaxArtifactBytes: 64 << 20, MaxTenantArtifactBytes: 256 << 20,
 	})
 	api.Profiles = profiles{}
 	e.devices = &fakeDevices{profiles: map[string]string{"acme/dev-1": "gateway", "acme/dev-2": "gateway", "globex/dev-1": "gateway"},

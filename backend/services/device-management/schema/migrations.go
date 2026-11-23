@@ -79,5 +79,9 @@ var (
 		NewDeletionAlarmCascadeSchema(),
 		NewAlarmSuppressionSchema(),
 		NewPendingAlarmEventsSchema(),
+		NewDeviceAttributeLockSchema(),
+		NewDeviceConfigurationReportsSchema(),
+		NewDecoderHealthWindowIndexesSchema(),
+		NewAttributeGenerationsSchema(),
 	}
 )

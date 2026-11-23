@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, HelpCircle, Trash2, Wifi, WifiOff } from 'lucide-react';
 import { StartMaintenanceAction, MaintenanceBanner } from '@/routes/alarm-maintenance/EntityMaintenance';
@@ -94,7 +94,8 @@ export default function DeviceDetailPage() {
   // the tabs and the table on the Connectivity tab. A role without state:read, or any failure,
   // yields no notice (see DroppedMeasurementsNotice) rather than breaking the page.
   const { current: dropped } = useQuery(() => getDroppedMeasurements(token), [token, version]);
-  const [tab, setTab] = useState('basic');
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState(() => searchParams.get('tab') === 'commands' ? 'commands' : 'basic');
 
   if (loading && !device) {
     return (
@@ -523,7 +524,9 @@ function DeviceReadingsPanel({ deviceToken }: { deviceToken: string }) {
         {readings.map((m) => (
           <DataTableRow key={m.id}>
             <DataTableCell className="font-medium text-foreground">{m.name}</DataTableCell>
-            <DataTableCell className="font-mono text-foreground" data-shot-mask>{m.value ?? '—'}</DataTableCell>
+            <DataTableCell className="max-w-[24rem] truncate font-mono text-foreground" data-shot-mask>
+              <span title={m.value == null ? (m.textValue ?? undefined) : undefined}>{m.value ?? m.textValue ?? '—'}</span>
+            </DataTableCell>
             <DataTableCell className="text-muted-foreground" data-shot-mask>{formatTime(m.occurredTime)}</DataTableCell>
           </DataTableRow>
         ))}

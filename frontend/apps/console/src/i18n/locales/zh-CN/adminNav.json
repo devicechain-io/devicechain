@@ -1,0 +1,15 @@
+{
+  "adminPlatform": "平台",
+  "adminTenants": "租户",
+  "adminList": "列表",
+  "adminTiers": "层级",
+  "adminIdentities": "身份",
+  "adminRoles": "角色",
+  "adminIdentityProviders": "身份提供商",
+  "adminAiProviders": "AI 提供商",
+  "adminAiPackaging": "AI 打包",
+  "adminSettings": "设置",
+  "adminBadge": "管理员",
+  "adminTooltip": "DeviceChain 管理员",
+  "adminDeletions": "删除记录"
+}

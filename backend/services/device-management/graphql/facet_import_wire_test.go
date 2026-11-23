@@ -23,7 +23,7 @@ const wireImportFacets = `mutation ($rows: [FacetValueImportRow!]!, $dryRun: Boo
 func TestImportFacetValuesUsesFacetMemberTypeOverTheWire(t *testing.T) {
 	ctx := withAuthorities(importWireCtx(t), auth.DeviceWrite)
 	api := (&SchemaResolver{}).GetApi(ctx)
-	if err := api.RDB.DB(ctx).AutoMigrate(&model.EntityAttribute{}, &model.FacetKey{}, &model.EntityGroup{},
+	if err := api.RDB.DB(ctx).AutoMigrate(&model.EntityAttribute{}, &model.AttributeGeneration{}, &model.FacetKey{}, &model.EntityGroup{},
 		&model.EntityGroupVersion{}, &model.EntityGroupMembership{}, &model.DeviceConfigurationRevision{}); err != nil {
 		t.Fatal(err)
 	}

@@ -148,3 +148,12 @@ describe('Facet declaration type warning', () => {
     expect(transport.setFacetKey).not.toHaveBeenCalled();
   });
 });
+
+describe('Facet value import entry point', () => {
+  it('opens the import drawer from the page action', async () => {
+    render(<MemoryRouter><ConfirmProvider><FacetKeysPage /></ConfirmProvider></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Import values' }));
+    expect(await screen.findByText('Import facet values from CSV')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Choose a CSV file' })).toBeTruthy();
+  });
+});

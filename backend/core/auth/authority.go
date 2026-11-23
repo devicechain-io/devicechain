@@ -123,6 +123,24 @@ const (
 	DeviceRead  Authority = "device:read"
 	DeviceWrite Authority = "device:write"
 
+	// FleetOperate is reserved for starting, pausing, resuming and aborting fleet
+	// operations over a tenant's devices, in addition to each effect's own authority.
+	//
+	// SEPARATE FROM device:write BECAUSE OF BLAST RADIUS: one call can change every
+	// device in a tenant. Permission to edit one device must not thereby permit a
+	// fleet-wide change.
+	//
+	// It is tenant-tier: it acts within ONE tenant and confers nothing over clusters,
+	// the fleet manager or any cloud identity. Holders of "*" satisfy it. It is not
+	// seeded into any built-in role; custom roles may grant it explicitly.
+	//
+	// In this release it gates only the read-only, Preview fleetOperationReadiness query
+	// (and `dcctl fleet-op readiness`); no fleet operation exists yet. It ships ahead of
+	// those operations because role writes validate the whole authority set: a
+	// previous-release user-management pod refuses a role containing a name it does not
+	// know, even when the edit changes something unrelated to that authority.
+	FleetOperate Authority = "fleet:operate"
+
 	// Event history (event-management) + live state (device-state).
 	EventRead Authority = "event:read"
 	StateRead Authority = "state:read"
@@ -494,6 +512,7 @@ var vocabulary = map[Authority]Tiers{
 	// it reachable at all from the data plane the mutation is served on; the reason
 	// it is not simply state:read is on the constant.
 	StateDemote:           tenant,
+	FleetOperate:          tenant,
 	LocationRead:          tenant,
 	LocationInstalledRead: tenant,
 	AlarmRead:             tenant,

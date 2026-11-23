@@ -105,6 +105,15 @@ DOCS_DEPLOY = [
     "docs/i18n/*/docusaurus-plugin-content-docs/current/deployment/**",
 ]
 READERS = [
+    # tofu_roots_test.go — walks every .tf under deploy/ and compares the roots with what
+    # hack/tofu-roots.sh --all prints. plan_fixtures_test.go — scans the sanitized plan-gate
+    # fixtures for confidential material.
+    ("deploy", ".", [
+        "deploy/**/*.tf",
+        "hack/tofu-roots.sh",
+        "deploy/gke/fixtures/**",
+        "hack/fixtures/gke-extraction/**",
+    ], [], "tofu_roots_test.go, plan_fixtures_test.go"),
     # build_paths_test.go:22-81 — the reproducible-build settings in every place the broker image is built.
     ("backend/broker/dc-nats-server", ".", [
         "deploy/local/build-images.sh",
@@ -117,7 +126,7 @@ READERS = [
         "docs/**", "README.md", "**/go.mod", SDL,
         "backend/services/event-management/model/analytics.go",
         "backend/core/config/instance-config.schema.json",  # config_schema_test.go: the released schema asset
-    ], [], "cmd/docs_*_test.go, cmd/config_schema_test.go"),
+    ], [], "cmd/docs_*_test.go, cmd/config_schema_test.go, cmd/relationship_test.go via apitest"),
     # bootstrap: README.md and deployment docs (fence/backupsizing/diskbudget/size_docs), every service's non-test
     # source (install_test.go:432), service configs (sizing/sparkplug), user-management go.mod
     # (breakglass), core/rdb/postgres.go (install_test.go:473), the broker's main.go/go.mod
@@ -129,10 +138,20 @@ READERS = [
         "backend/core/rdb/postgres.go",
         "backend/broker/dc-nats-server/main.go",
         "backend/broker/dc-nats-server/go.mod",
+        # executor_apiserver_test.go installs the release CRDs in envtest.
+        "backend/k8s/config/crd/bases/**",
         "hack/harborpulse-rig.sh",  # valuesoverlay_test.go: the rig's --values heredoc
     ], NONTEST, "bootstrap/*_test.go"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
+    ("backend/cli", "fleetop", ["backend/services/device-management/graphql/**"], [], "fleetop/documents_test.go:16"),
     ("backend/cli", "product", [SDL], [], "product/documents_test.go:32"),
+    # internal/apitest/capabilities.go:44-48 serves the real SDL from every service's graphql dir; the cmd and
+    # sim tests (cmd/product_rotate_test.go, sim/*_test.go) call it through their fixtures.
+    ("backend/cli", "internal/apitest", [SDL], [], "internal/apitest/capabilities_test.go"),
+    ("backend/cli", "sim", [SDL], [], "sim/admin_conflict_test.go, hostheader_test.go, tier_test.go via apitest"),
+    # deploy/fleet_premises_test.go:82 pins the recorded premises to the toolchain versions in ci.yml and
+    # to the kind node image in hack/fleet-s0/kind.sh.
+    ("deploy", ".", [".github/workflows/ci.yml", "hack/fleet-s0/kind.sh"], [], "fleet_premises_test.go:82"),
     ("backend/cli", "failedevents", ["backend/services/event-management/graphql/**"], [], "failedevents/*_test.go"),
     ("backend/cli", "sim", ["backend/sims/dc-simulator/sim/handshake.go"], [], "sim/handshake_lockstep_test.go:30"),
     # core/test walks every .go file in the repository (logsink, defaultorder, sharedcache, ...).
@@ -173,13 +192,20 @@ READERS = [
         "deploy/opentofu/modules/nats/main.tf",
         "**/RUNBOOK.md",
     ], [], "functionalarea/release_*contract_test.go"),
-    ("backend/k8s", "controllers", ["deploy/opentofu/modules/cnpg-cluster/chart/**"], [], "controllers/snapshotretention_helm_test.go:31"),
+    ("backend/k8s", "controllers", ["deploy/opentofu/modules/cnpg-cluster/chart/**"], [], "controllers/snapshotretention_helm_test.go:31; executor_test.go reads ../config/executor/requester-role.yaml inside the module"),
+    # executor_security_test.go walks every Helm manifest for requester bindings
+    # and the chart templates for accidental executor installation.
+    ("backend/k8s", "config", ["deploy/helm/**"], [], "config/executor_security_test.go"),
+    # Both tests copy/read the current CLI refusal probe; git baseline trees are
+    # mocked temporary fixtures, not additional current-tree dependencies.
+    ("backend/k8s", "executor", ["backend/cli/bootstrap/foundation_probe_test.go"], [], "executor/foundation_test.go, executor/foundation_execution_test.go"),
     ("backend/services/command-delivery", ".", [
         "frontend/apps/console/src/routes/command-batches/CreateBatchForm.tsx",
         "frontend/apps/console/src/routes/devices/DeviceCommandsPanel.tsx",
         "deploy/helm/devicechain/dashboards/command-delivery.json",
     ], [], "console_submission_contract_test.go:17, dashboard_series_test.go:43"),
     ("backend/services/command-delivery", "model", ["backend/testdata/authored-rules/**"], [], "model/authored_sim_command_wire_test.go:30"),
+    ("backend/services/command-delivery", "verify", ["backend/services/device-management/graphql/schema.graphql"], [], "verify/proposal_target_test.go:143"),
     ("backend/services/device-management", "config", ["deploy/helm/devicechain/values.yaml"], [], "config/chart_floor_test.go:25"),
     ("backend/services/device-management", "model", [
         "backend/testdata/authored-rules/**",
@@ -257,6 +283,8 @@ READERS = [
         "backend/services/notification-management/graphql/**",
         "backend/services/update-management/graphql/**",
     ], [], "scenarioverify/documents_test.go:21"),
+    # scenarioverify/rig_s7_test.go:17 extracts the rig's OAuth-client cleanup from hack/harborpulse-rig.sh and runs it.
+    ("backend/sims/dc-simulator", "scenarioverify", ["hack/harborpulse-rig.sh"], [], "scenarioverify/rig_s7_test.go:17"),
     ("backend/sims/dc-simulator", "updater", ["backend/core/ota/testdata/**"], [], "updater/*_test.go"),
     # signer_baseline_test.go:24 loads ../../services as a baseline tree: each area's served graphql SDL.
     ("backend/tools/apiprobe", ".", [SDL, "backend/services/ai-inference/**"], [], "baseline_test.go, readsweep_test.go, documents_test.go, signer_baseline_test.go:24, tablesweep_test.go (ai-inference secret-scope guard)"),
@@ -313,7 +341,8 @@ IN_MODULE = {
     ("backend/core", "test/frontend"): "build-tagged `frontend`, so the go job never compiles it; the frontend job runs the same vitest suites",
     ("backend/core", "replication"): "\"..\" appears only in a comment",
     ("backend/core", "webhooksig"): "\"..\" is a refused path segment",
-    ("backend/k8s", "api/v1beta1"): "reads ../../config/crd inside backend/k8s",
+    ("backend/k8s", "api/v1"): "schema_identity_test.go reads ../../config/crd/bases inside backend/k8s",
+    ("backend/k8s", "api/v1beta1"): "instance_crd_test.go, deprecations_test.go, executor_crd_test.go and executor_schema_test.go read ../../config/crd/bases inside backend/k8s",
     ("backend/services/command-delivery", "processor"): "reads ../contract inside its own module",
     ("backend/services/event-processing", "internal/review"): "reads ../replayinput inside its own module",
     ("backend/services/device-management", "graphql"): "\"../x\" is a refused-key fixture",

@@ -56,15 +56,6 @@ func TestUpdatesCeilingsDefaultAndValidate(t *testing.T) {
 	require.Error(t, core.LoadConfiguration([]byte(`{"updates":{"maxArtifactByte":1}}`), typo))
 }
 
-// On S3 the Put buffers, so the effective ceiling is clamped; the filesystem backend streams.
-func TestEffectiveCeilingIsClampedOnS3Only(t *testing.T) {
-	cfg := config.NewUpdateManagementConfiguration()
-	require.Equal(t, config.DefaultMaxArtifactBytes, cfg.EffectiveMaxArtifactBytes("filesystem"))
-	require.Equal(t, config.S3BufferedPutCap, cfg.EffectiveMaxArtifactBytes("s3"))
-	cfg.Updates.MaxArtifactBytes = 1 << 20
-	require.Equal(t, int64(1<<20), cfg.EffectiveMaxArtifactBytes("s3"))
-}
-
 func TestDownloadBaseIsInsecureOnlyForPlainHttpOffLoopback(t *testing.T) {
 	for base, want := range map[string]bool{
 		"": false,

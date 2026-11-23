@@ -34,6 +34,11 @@ const (
 	// (or, for a self-service link, the identity itself).
 	AuditOpIdentityLinked   = "identity_linked"
 	AuditOpIdentityUnlinked = "identity_unlinked"
+	// AuditOpIdentityLinkRejected records an administrator rejecting a pending single
+	// sign-on link request, which deletes it and links nothing. The actor is the
+	// administrator; the label names the request and its connection, never the asserted
+	// email or subject.
+	AuditOpIdentityLinkRejected = "identity_link_rejected"
 	// AuditOpSsoLogin and AuditOpSsoRefused record a single sign-on completing, and one
 	// being refused after the provider vouched for the person. The actor is the email the
 	// provider asserted; no token, code or claim value is ever recorded.

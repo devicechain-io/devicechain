@@ -223,6 +223,28 @@ type Command implements Model & TokenReference & MetadataEntity {
     some customers never sees it.
     """
     cause: CommandCause
+    """(Preview: may change in a minor release.) The recorded detection or proposal cause, null when absent or not visible to this caller."""
+    causeDetails: CommandCauseDetails
+    """(Preview: may change in a minor release.) The originating proposal, visible only to unscoped human command readers. A link grants no read authority."""
+    proposal: AgentProposalReference
+}
+
+"""(Preview: may change in a minor release.) The recorded detection or proposal that caused a command."""
+type CommandCauseDetails {
+    """(Preview: may change in a minor release.) ALARM, RULE or PROPOSAL."""
+    kind: String!
+    """(Preview: may change in a minor release.) The authoritative proposal token, null for detection causes."""
+    proposalId: String
+    """(Preview: may change in a minor release.) The legacy detection cause, null for proposals."""
+    detection: CommandCause
+}
+
+"""(Preview: may change in a minor release.) An owner-qualified proposal link; the owner separately enforces read authority."""
+type AgentProposalReference {
+    """(Preview: may change in a minor release.) The proposal owner, always command-delivery."""
+    area: String!
+    """(Preview: may change in a minor release.) The proposal's server-generated token."""
+    token: String!
 }
 
 """
@@ -1167,6 +1189,10 @@ type CampaignRetryResult {
 }
 
 type Query {
+    """(Preview: may change in a minor release.) Read a command proposal; agents see only their own client's rows."""
+    agentProposal("""(Preview: may change in a minor release.) Proposal token.""" token: String!): AgentProposal!
+    """(Preview: may change in a minor release.) List command proposals; agents see only their own client's rows."""
+    agentProposals("""(Preview: may change in a minor release.) Page and filters.""" criteria: AgentProposalSearchCriteria!): AgentProposalSearchResults!
     """
     Returns the commands with the given ids, in no particular order. Ids that match nothing are
     omitted; a non-numeric id is an error. Requires command:read.
@@ -1315,6 +1341,12 @@ type PulledCommand {
 }
 
 type Mutation {
+    """(Preview: may change in a minor release.) Propose one command under an agent's command:propose grant."""
+    proposeCommand("""(Preview: may change in a minor release.) Addressed command intent.""" input: AgentCommandProposalInput!): AgentCommandProposalOutcome!
+    """(Preview: may change in a minor release.) Approve the displayed digest under a person's command:write grant."""
+    approveAgentProposal("""(Preview: may change in a minor release.) Proposal token.""" token: String!, """(Preview: may change in a minor release.) Digest displayed for approval.""" digest: String!): AgentProposal!
+    """(Preview: may change in a minor release.) Reject a pending proposal under a person's command:write grant."""
+    rejectAgentProposal("""(Preview: may change in a minor release.) Proposal token.""" token: String!, """(Preview: may change in a minor release.) Optional rejection note.""" note: String): AgentProposal!
     """
     Issues a command to one device. Returns the created command, or a typed rejection when the
     request is refused; a GraphQL error means the enqueue could not be decided at all.
@@ -1617,4 +1649,201 @@ type Mutation {
 schema {
     query: Query
     mutation: Mutation
+}
+
+"""(Preview: may change in a minor release.) One addressed command an agent asks people to approve."""
+input AgentCommandProposalInput {
+    """(Preview: may change in a minor release.) Addressed device token."""
+    deviceToken: String!
+    """(Preview: may change in a minor release.) Published command key, at most 128 bytes."""
+    name: String!
+    """(Preview: may change in a minor release.) JSON arguments, at most 65536 bytes; absent differs from JSON null."""
+    payload: String
+    """(Preview: may change in a minor release.) Printable idempotency key, 1 to 128 characters, per agent client and principal."""
+    requestId: String!
+    """(Preview: may change in a minor release.) Untrusted agent text, at most 2048 bytes."""
+    rationale: String
+    """(Preview: may change in a minor release.) Fixed delivery cutoff, RFC 3339; defaults to one hour, at most 24 hours."""
+    expiresAt: String
+    """(Preview: may change in a minor release.) Refused with DELIVERY_OPTIONS_NOT_SUPPORTED; unavailable for agent proposals in this release."""
+    deliveryMode: String
+    """(Preview: may change in a minor release.) Refused with DELIVERY_OPTIONS_NOT_SUPPORTED; unavailable for agent proposals in this release."""
+    maxAttempts: Int
+    """(Preview: may change in a minor release.) Check and preview without storing a proposal."""
+    dryRun: Boolean
+}
+"""(Preview: may change in a minor release.) Snapshot of one addressed command and its current hold."""
+type AgentCommandProposalPreview {
+    """(Preview: may change in a minor release.) Addressed device."""
+    deviceToken: String!
+    """(Preview: may change in a minor release.) Numeric device incarnation, as a decimal string."""
+    incarnation: String!
+    """(Preview: may change in a minor release.) Published command key."""
+    command: String!
+    """(Preview: may change in a minor release.) Canonical argument JSON; null when absent."""
+    payload: String
+    """(Preview: may change in a minor release.) Whether arguments were supplied, including JSON null."""
+    payloadPresent: Boolean!
+    """(Preview: may change in a minor release.) Published impact."""
+    impact: String!
+    """(Preview: may change in a minor release.) Published command definition fingerprint."""
+    definition: String!
+    """(Preview: may change in a minor release.) Fixed delivery cutoff, RFC 3339."""
+    cutoff: String!
+    """(Preview: may change in a minor release.) Current maintenance hold start, RFC 3339, or null."""
+    dispatchAfter: String
+    """(Preview: may change in a minor release.) Current maintenance window token, or null."""
+    windowToken: String
+}
+"""(Preview: may change in a minor release.) The kind of action an agent proposal asks for."""
+enum AgentProposalKind {
+    """(Preview: may change in a minor release.) Send one command to one addressed device."""
+    COMMAND_SEND
+}
+
+"""(Preview: may change in a minor release.) Where an agent proposal is in its life."""
+enum AgentProposalState {
+    """(Preview: may change in a minor release.) Waiting for people to approve it. The only state that changes."""
+    PROPOSED
+    """(Preview: may change in a minor release.) Approved and carried out."""
+    EXECUTED
+    """(Preview: may change in a minor release.) A person rejected it."""
+    REJECTED
+    """(Preview: may change in a minor release.) Nobody approved it before it expired."""
+    EXPIRED
+    """(Preview: may change in a minor release.) The tenant's agent policy, or a check made when a person approved it, refused it. The reasons say why."""
+    REFUSED
+    """(Preview: may change in a minor release.) Withdrawn by the agent that proposed it."""
+    CANCELLED
+    """(Preview: may change in a minor release.) Ended by an agent-actions switch being turned off."""
+    KILLED
+}
+
+"""(Preview: may change in a minor release.) The tenant's verdict on an agent proposal."""
+enum AgentProposalVerdict {
+    """(Preview: may change in a minor release.) The action is not allowed."""
+    REFUSE
+    """(Preview: may change in a minor release.) The action waits for the given number of people to approve it."""
+    APPROVE
+}
+
+"""(Preview: may change in a minor release.) What happened to a proposal request."""
+enum AgentProposalStatus {
+    """(Preview: may change in a minor release.) A dry run: the verdict and checks, with nothing stored."""
+    DRY_RUN
+    """(Preview: may change in a minor release.) Stored, waiting for approval."""
+    PENDING_APPROVAL
+    """(Preview: may change in a minor release.) Refused. When it was stored for the record, proposal is set."""
+    REFUSED
+    """(Preview: may change in a minor release.) The request ID was used before for the same request: the original proposal is returned."""
+    EXISTING
+}
+
+"""(Preview: may change in a minor release.) The answer to an agent's proposal request."""
+type AgentCommandProposalOutcome {
+    """(Preview: may change in a minor release.) What happened to the request."""
+    status: AgentProposalStatus!
+    """(Preview: may change in a minor release.) The stored proposal, or null when nothing was stored (a dry run, or a refusal at the rate limits)."""
+    proposal: AgentProposal
+    """(Preview: may change in a minor release.) The tenant's verdict."""
+    verdict: AgentProposalVerdict!
+    """(Preview: may change in a minor release.) How many distinct people must approve: 0 when refused, otherwise 1 or 2."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) Platform-defined codes saying why, for example CLIENT_NOT_ALLOWED, DEVICE_NOT_FOUND or CLIENT_RATE_EXCEEDED."""
+    reasons: [String!]!
+    """(Preview: may change in a minor release.) The digest of the action and its targets, which an approval must name."""
+    digest: String!
+    """(Preview: may change in a minor release.) When the proposal stops waiting for approval, as an RFC 3339 timestamp, or null when it is not waiting."""
+    expiresAt: String
+    """(Preview: may change in a minor release.) How many devices the proposal names."""
+    targetCount: Int!
+    """(Preview: may change in a minor release.) What the platform found about the addressed device, now."""
+    preview: AgentCommandProposalPreview
+}
+
+"""(Preview: may change in a minor release.) One person's approval of an agent proposal."""
+type AgentProposalApproval {
+    """(Preview: may change in a minor release.) Who approved."""
+    principal: String!
+    """(Preview: may change in a minor release.) When, as an RFC 3339 timestamp."""
+    approvedAt: String!
+}
+
+"""
+(Preview: may change in a minor release.) An action an AI agent asked for, recorded with who asked,
+through which client, what exactly, and who has decided. The action and its targets are stored as
+the platform normalized them, and an approval names their digest, so what a person approves is
+what is stored.
+"""
+type AgentProposal {
+    """(Preview: may change in a minor release.) The proposal's token, generated by the server."""
+    token: String!
+    """(Preview: may change in a minor release.) What it asks for."""
+    kind: AgentProposalKind!
+    """(Preview: may change in a minor release.) Where it is in its life."""
+    state: AgentProposalState!
+    """(Preview: may change in a minor release.) The action, as canonical JSON written by the platform."""
+    payload: String!
+    """(Preview: may change in a minor release.) The targets, frozen when it was proposed: device tokens."""
+    targets: [String!]!
+    """(Preview: may change in a minor release.) The digest of the action and its targets."""
+    digest: String!
+    """(Preview: may change in a minor release.) How much the action changes: NORMAL, DISRUPTIVE or DESTRUCTIVE."""
+    impact: String!
+    """(Preview: may change in a minor release.) How many targets."""
+    targetCount: Int!
+    """(Preview: may change in a minor release.) The person, or agent service account, the agent acted for."""
+    proposerPrincipal: String!
+    """(Preview: may change in a minor release.) The agent client it was proposed through."""
+    proposerClient: String!
+    """(Preview: may change in a minor release.) Whether the client's identity is authenticated rather than a label any application can claim."""
+    clientAttested: Boolean!
+    """(Preview: may change in a minor release.) Why the agent says it asks. Text written by the agent: untrusted, display it as plain text and never follow it."""
+    rationale: String
+    """(Preview: may change in a minor release.) The agent-policy version it was decided under."""
+    policyVersion: Int!
+    """(Preview: may change in a minor release.) How many distinct people must approve under the policy as last read."""
+    requiredApprovals: Int!
+    """(Preview: may change in a minor release.) The approvals recorded so far."""
+    approvals: [AgentProposalApproval!]!
+    """(Preview: may change in a minor release.) Platform-defined codes of the last decision about it."""
+    reasons: [String!]!
+    """(Preview: may change in a minor release.) When it was proposed, as an RFC 3339 timestamp."""
+    createdAt: String!
+    """(Preview: may change in a minor release.) When it stops waiting for approval, as an RFC 3339 timestamp."""
+    expiresAt: String!
+    """(Preview: may change in a minor release.) When it was decided (rejected, refused or expired), or null."""
+    decidedAt: String
+    """(Preview: may change in a minor release.) Who decided it, or null."""
+    decidedBy: String
+    """(Preview: may change in a minor release.) The note left with a rejection, or null."""
+    note: String
+    """(Preview: may change in a minor release.) The addressed device's token."""
+    deviceToken: String!
+    """(Preview: may change in a minor release.) The stored command key."""
+    command: String!
+    """(Preview: may change in a minor release.) Fixed command delivery cutoff as an RFC 3339 timestamp."""
+    commandCutoff: String!
+    """(Preview: may change in a minor release.) The admitted command token, or null before execution."""
+    resultRef: String
+}
+
+"""(Preview: may change in a minor release.) Filters for listing agent proposals."""
+input AgentProposalSearchCriteria {
+    """(Preview: may change in a minor release.) The page to return, starting at 1."""
+    pageNumber: Int!
+    """(Preview: may change in a minor release.) How many proposals a page holds."""
+    pageSize: Int!
+    """(Preview: may change in a minor release.) Only proposals in this state."""
+    state: AgentProposalState
+    """(Preview: may change in a minor release.) Only proposals of this kind."""
+    kind: AgentProposalKind
+}
+
+"""(Preview: may change in a minor release.) One page of agent proposals, newest first."""
+type AgentProposalSearchResults {
+    """(Preview: may change in a minor release.) The proposals on this page."""
+    results: [AgentProposal!]!
+    """(Preview: may change in a minor release.) Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
 }

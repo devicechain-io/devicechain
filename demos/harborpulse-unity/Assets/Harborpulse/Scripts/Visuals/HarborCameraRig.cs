@@ -32,8 +32,8 @@ namespace DeviceChain.Harborpulse.Visuals
         public HarborCameraRig(Camera camera, PresentationMap map)
         {
             cam = camera;
-            var names = new[] { "Overview", "North Quay", "East Quay", "Basin", "East Quay gauge", "Promenade", "North Quay pump", "Basin pump", "North Quay chargers", "North Quay gauge 3", "East lamp 3", "Truck" };
-            var poses = new[] { "pose:home", "pose:north-quay:wide", "pose:east-quay:mouth-wide", "pose:terminal:wide", "pose:gauge-east:close", "pose:north-quay:promenade", "pose:pump-north:well", "pose:pump-basin:well", "pose:charger-north:pair", "pose:gauge-north:close", "pose:lamp-east:close", "pose:truck:chase" };
+            var names = new[] { "Overview", "North Quay", "East Quay", "Basin", "East Quay gauge", "Promenade", "North Quay pump", "Basin pump", "North Quay chargers", "North Quay gauge 3", "East lamp 3", "Truck", "Night sky" };
+            var poses = new[] { "pose:home", "pose:north-quay:wide", "pose:east-quay:mouth-wide", "pose:terminal:wide", "pose:gauge-east:close", "pose:north-quay:promenade", "pose:pump-north:well", "pose:pump-basin:well", "pose:charger-north:pair", "pose:gauge-north:close", "pose:lamp-east:close", "pose:truck:chase", StoryPoses.NightSky };
             for (var i = 0; i < names.Length; i++)
             {
                 var p = map.Pose(poses[i]);
@@ -67,9 +67,9 @@ namespace DeviceChain.Harborpulse.Visuals
                 Select(e.keyCode - KeyCode.Alpha0, false);
                 e.Use();
             }
-            else if (e.type == EventType.KeyDown && (e.keyCode == KeyCode.F1 || e.keyCode == KeyCode.F2))
+            else if (e.type == EventType.KeyDown && (e.keyCode == KeyCode.F1 || e.keyCode == KeyCode.F2 || e.keyCode == KeyCode.F3))
             {
-                Select(e.keyCode == KeyCode.F1 ? 10 : 11, false); e.Use();
+                Select(e.keyCode == KeyCode.F1 ? 10 : e.keyCode == KeyCode.F2 ? 11 : 12, false); e.Use();
             }
             else if (e.type == EventType.MouseDrag && (e.button == 0 || e.button == 1))
             {

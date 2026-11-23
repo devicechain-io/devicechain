@@ -90,6 +90,14 @@
     },
     {
       "producer": "harborpulse",
+      "ruleToken": "hp-mqtt-connectivity",
+      "profileToken": "hp-mqtt-charger-profile",
+      "enabled": true,
+      "alarmSeverityWire": "WARNING",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"mqtt-charger-disconnected\"},\"type\":\"raiseAlarm\"}],\"name\":\"MQTT charger disconnected\",\"severity\":\"warning\",\"type\":\"connectivity\"}"
+    },
+    {
+      "producer": "harborpulse",
       "ruleToken": "hp-peak-demand",
       "profileToken": "hp-meter-profile",
       "enabled": true,
@@ -159,6 +167,22 @@
       "enabled": true,
       "alarmSeverityWire": "MAJOR",
       "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"harness-overtemp\"},\"type\":\"raiseAlarm\"}],\"name\":\"Load-test harness over-temp\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"temp\",\"op\":\"gt\",\"threshold\":30}}"
+    },
+    {
+      "producer": "sitepulse",
+      "ruleToken": "sp-dozer-rule-lowfuel",
+      "profileToken": "sp-dozer-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MAJOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"low-fuel\"},\"type\":\"raiseAlarm\"},{\"sendCommand\":{\"command\":\"goto-refuel\",\"expiresAfter\":\"15m\"},\"type\":\"sendCommand\"}],\"name\":\"Site Pulse low fuel\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"fuel_pct\",\"op\":\"lt\",\"threshold\":15}}"
+    },
+    {
+      "producer": "sitepulse",
+      "ruleToken": "sp-dozer-rule-overheat",
+      "profileToken": "sp-dozer-profile",
+      "enabled": true,
+      "alarmSeverityWire": "CRITICAL",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"engine-overheat\"},\"type\":\"raiseAlarm\"}],\"name\":\"Site Pulse engine overheat\",\"severity\":\"critical\",\"type\":\"threshold\",\"when\":{\"metric\":\"engine_temp_c\",\"op\":\"gt\",\"threshold\":105}}"
     },
     {
       "producer": "sitepulse",

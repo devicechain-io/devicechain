@@ -77,6 +77,12 @@ func main() {
 	reportPath := flag.String("report", "", "write the JSON report to this path (the human one goes to stderr)")
 	sinkURL := flag.String("sink", "", "the scenario sink's HTTP address (scenario-sink, usually through a port-forward); "+
 		"without it the deliveries out of the tenant are not judged")
+	authCalloutLog := flag.String("auth-callout-log", "", "device-management JSON-lines log; required to prove S6 certificate rejection after disable")
+	peerPath := flag.String("peer-handshake", "", "second harborpulse tenant's handshake; enables S7")
+	peerSimURL := flag.String("peer-sim", "", "second harborpulse sim control API")
+	mcpURL := flag.String("mcp", "", "real MCP Streamable HTTP endpoint")
+	oauthClient := flag.String("oauth-client", "", "OAuth client registered for this run")
+	clientAction := flag.String("oauth-client-action", "", "operator setup only: create or delete the per-run public PKCE client (DC_ADMIN_PASSWORD)")
 	flag.Parse()
 
 	if *handshakePath == "" {
@@ -95,12 +101,32 @@ func main() {
 	// The sim's own control API is local and needs no Host override.
 	simHTTP := &http.Client{Timeout: 10 * time.Second}
 
+	var s7 *scenarioverify.S7Config
+	if *peerPath != "" {
+		peer, err := sim.LoadHandshake(*peerPath)
+		if err != nil {
+			log.Error().Msg("load S7 peer handshake failed")
+			os.Exit(scenarioverify.ExitNoVerdict)
+		}
+		s7 = &scenarioverify.S7Config{Peer: peer, PeerSimURL: *peerSimURL, MCPURL: *mcpURL, ClientID: *oauthClient}
+	}
+	if *clientAction != "" {
+		if *clientAction != "create" && *clientAction != "delete" {
+			log.Error().Msg("invalid OAuth client action")
+			os.Exit(scenarioverify.ExitNoVerdict)
+		}
+		if err := scenarioverify.S7RegisterClient(context.Background(), hs, httpc, *oauthClient, *clientAction == "delete"); err != nil {
+			log.Error().Err(err).Msg("OAuth client registry setup failed")
+			os.Exit(scenarioverify.ExitNoVerdict)
+		}
+		return
+	}
 	ctx, cancel, stop := stopsig.Notify(context.Background())
 	defer cancel()
 
 	report, err := scenarioverify.Run(ctx, scenarioverify.Config{
-		Handshake: hs, SimURL: *simURL, HTTP: httpc, StatusHTTP: simHTTP,
-		Poll: *poll, Settle: *settle, StartTimeout: *startTimeout, Day: *day, SinkURL: *sinkURL,
+		Handshake: hs, SimURL: *simURL, HTTP: httpc, StatusHTTP: simHTTP, S7: s7,
+		Poll: *poll, Settle: *settle, StartTimeout: *startTimeout, Day: *day, SinkURL: *sinkURL, AuthCalloutLog: *authCalloutLog,
 	})
 	if err != nil {
 		if code, ok := stop.ExitCode(); ok {

@@ -61,6 +61,7 @@ title: 指标参考
 | `suppression_invalid_windows_total` | 计数器。评估时跳过的无效已存储告警抑制窗口；继续发送告警通知。 |
 | `suppression_evaluation_failures_total{phase}` | 计数器。告警抑制评估失败次数，按 `phase` 区分：`cycle_start`（周期开始时的记录评估）或 `live`（当前抑制评估）。当前评估失败时允许发送通知。 `status`：单个告警状态评估失败时允许通知，批次中的其他告警继续返回。 |
 | `suppression_refresh_total{outcome}` | 计数器。目标设备归属变更后，告警抑制窗口可见性的刷新结果：`refreshed`（已重写存储的范围）、`unchanged`（已是最新）或 `failed`。失败绝不会延迟归属变更本身；在设备归属再次变更或窗口目标被编辑之前，新归属方的受限成员可能看不到该窗口。三种结果均从零开始。 |
+| `device_configuration_reports_pruned_total{reason}` | 计数器。由每个副本每十分钟运行一次的维护轮次删除的设备配置判定历史行数，按 `reason` 区分：`orphan`（该报告所属设备已不存在，由删除了设备却没有删除其历史的 Pod 遗留）或 `retention`（超过 200 天；与设备当前修订版本和状态匹配的那一行无论多旧都会保留）。两者均以零预先存在。这是完整的指标名称，没有 `devicechain_devicemanagement_` 前缀。设备群已运行超过 200 天时，`retention` 速率平稳属正常。所有 Pod 都运行同一版本后 `orphan` 速率仍持续，说明仍有东西在删除设备却不删除其历史。失败的轮次不在此计数：它出现在[维护轮次](./observability.md#maintenance-passes)所述的 `configuration_report_maintenance` 系列中。 |
 | `agent_proposals_total{kind, outcome}` | Preview（代理操作）。非试运行的提案调用数，按类型（`ALARM_ACK`、`ALARM_CLEAR`、`unknown`）和结果（`created`、`existing`、`refused`）区分；错误计为 `refused`。 |
 | `agent_approvals_total{outcome}` | Preview（代理操作）。审批调用数，按最终结果（`recorded`、`executed`、`refused`、`concurrent`、`step_up_required`、`forbidden`、`fence_closed`）区分，内部重试仅计一次。没有更具体结果的错误计为 `refused`。 |
 | `agent_executions_total{kind, result}` | Preview（代理操作）。最终审批执行数，按类型（`ALARM_ACK`、`ALARM_CLEAR`、`unknown`）和结果（`executed`、`dependency_changed`、`policy_refused`、`fence_closed`、`refused`、`failed`）区分，每次执行仅计一次，包括重新启用围栏后的重试。`failed` 表示事务未能完成（数据库或语句超时、策略服务或停用事件流不可用）；锁冲突作为并发审批计为 `refused`。 |
@@ -83,7 +84,7 @@ title: 指标参考
 | `resolve_device_disabled_total` | 因设备已[停用](../guides/device-credentials.md#disabling-a-device)而被拒绝的事件。这些事件被丢弃，不进入死信。 |
 | `resolve_relationship_refused_total` | 设备发起的跟踪或包含关系在第一次投递时被拒绝的次数。每个事件都携带载荷和原因 `Invalid` 记录到 `failed-events`，不会重试。不带租户或设备标签；Warn 日志会记录租户和关联标识。 |
 | `resolve_event_time_bounded_total` | 因报告的事件时间领先服务器时钟超过配置的容差而被拒绝、并被替换为容差允许的最晚时间的情况。 |
-| `resolve_measurement_dropped_total{reason}` | 解析时被丢弃、而同一事件的其余部分已被存储的测量条目：`undeclared_non_numeric`（配置文件未声明的键携带文本值或布尔字面量）、`undeclared_unstorable`（未声明的键携带 `NaN`、无穷大或超出范围的数值）和 `declared_not_storable`（已声明的键，其数据类型不是时间序列指标）。设备会收到正常的确认，也不会进入死信队列，因此这是设备载荷正在丢失数据的信号。该指标不带租户、设备或指标标签；日志行（每个设备和指标一条）会指明它们，控制台中的设备页面也会列出。在配置文件中声明该指标即可存储。 |
+| `resolve_measurement_dropped_total{reason}` | 解析时被丢弃、而同一事件的其余部分已被存储的测量条目：`undeclared_non_numeric`（配置文件未声明的键携带文本值或布尔字面量）、`undeclared_unstorable`（未声明的键携带 `NaN`、无穷大或超出范围的数值）和 `declared_not_storable`（已声明的键，其数据类型无法存储，或 `STRING` 值超过 4,096 字节、不是有效的 UTF-8 或包含 NUL 字节）。设备会收到正常的确认，也不会进入死信队列，因此这是设备载荷正在丢失数据的信号。该指标不带租户、设备或指标标签；日志行（每个设备和指标一条）会指明它们，控制台中的设备页面也会列出。在配置文件中声明该指标即可存储。 |
 | `resolve_not_gateway_child_total` | 因[网关](./edge-services.md#gateway-identity)为未分配给它的设备或不存在的设备发布事件，或网关已停用而被拒绝的事件数。每个事件连同载荷记录到 `failed-events` 流（原因 `NotGatewayChild`），不会重试，并通过网关的通知主题告知网关。该指标不带租户或网关标签；日志行（每个网关和设备每分钟最多一条）会指明它们。增长通常意味着某台设备从未分配给其网关，或被分配给了另一个网关。 |
 
 ## 事件处理：检测 {#event-processing-detect}
@@ -351,3 +352,12 @@ title: 指标参考
 | `jetstream_stream_limit_messages{stream}` | JetStream 流配置的 MaxMsgs 上限。 |
 | `jetstream_stream_used_bytes{stream}` | JetStream 流中当前存储的磁盘字节数。 |
 | `jetstream_stream_used_messages{stream}` | JetStream 流中当前的消息数。 |
+
+### 跨服务客户端 {#cross-service-client}
+
+每个通过共享客户端调用其他服务的服务都会多导出一个系列。它是这里唯一带有自己前缀 `devicechain_svcclient_` 的系列，
+其 `peer` 标签是被调用服务的基础 URL，因此由部署决定其数量，绝不随租户或设备增长。
+
+| 指标 | 含义 |
+| --- | --- |
+| `devicechain_svcclient_responses_truncated_total{peer}` | 计数器。来自 `peer`、超出客户端 1 MiB 读取上限的成功（HTTP 200）响应，调用因此以“响应过大”错误失败，调用方必须对查询分页。错误状态码从不在此计数。预期为零。非零速率表示某个调用方向某服务请求的内容超出一次响应所能容纳的量，通常是设备群已增长到超过一次未分页读取所能返回的规模；失败服务的日志会指出该调用。没有任何设置可以调高该上限，解决办法是缩小请求范围或分页。 |

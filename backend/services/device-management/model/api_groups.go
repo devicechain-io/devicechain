@@ -18,6 +18,9 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// ErrEntityGroupConflict refuses an entity group save made from a stale copy.
+var ErrEntityGroupConflict = rdb.NewStaleWriteError("entity group")
+
 // resolvedMembership is the validated outcome of a create/update request's membership
 // fields. For a dynamic group Sel is the compiled, cost-gated, guaranteed-lowerable
 // selector (nil for static).
@@ -174,7 +177,10 @@ func retireGroupToken(tx *gorm.DB, token string) error {
 // The member family, the membership mode and the token are IDENTITY and are not in the
 // input at all, so changing one is unrepresentable rather than refused — see
 // EntityGroupUpdateRequest for why that is the stronger form of the same rule.
-func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
+//
+// When expectedUpdatedAt is supplied, refuse a stale copy before validation and
+// guard the write against another writer moving the row after the read.
+func (api *Api) UpdateEntityGroup(ctx context.Context, token string, expectedUpdatedAt *string,
 	request *EntityGroupUpdateRequest) (*EntityGroup, error) {
 	matches, err := api.EntityGroupsByToken(ctx, []string{token})
 	if err != nil {
@@ -185,6 +191,9 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 	}
 
 	updated := matches[0]
+	if err := rdb.RefuseIfMoved(updated.UpdatedAt, expectedUpdatedAt, ErrEntityGroupConflict); err != nil {
+		return nil, err
+	}
 	assignments := make(map[string]any)
 	// A dynamic group's selector is live-editable (SD-4 — a browse/filter consumer needs
 	// no frozen version yet); a provided selector is re-compiled + cost-gated before it
@@ -243,9 +252,13 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 
 	// Write only named mutable columns: omitted values may already be stale.
 	// In particular, only publish/rollback may move active_version (ADR-062).
-	result := api.RDB.DB(ctx).Model(updated).Omit(clause.Associations).Updates(assignments)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if expectedUpdatedAt != nil {
+			return rdb.UpdateIfUnmoved(tx, updated, updated.UpdatedAt, assignments, ErrEntityGroupConflict)
+		}
+		return rdb.AdvancingFrom(tx, updated.UpdatedAt).Model(updated).Omit(clause.Associations).Updates(assignments).Error
+	}); err != nil {
+		return nil, err
 	}
 	reloaded, err := api.EntityGroupsById(ctx, []uint{updated.ID})
 	if err != nil {

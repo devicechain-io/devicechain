@@ -206,7 +206,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		blob.Key{Tenant: claims.Tenant, Purpose: model.BlobPurpose, ID: id},
 		sr, blob.PutOptions{ContentType: artifact.MediaType, MaxSize: artifact.SizeBytes})
 	if err != nil {
-		// Put cleans up after itself on failure, so nothing is stored.
+		// Put cleans up after itself on failure: the filesystem backend removes its temporary
+		// file, and the S3 backend aborts its multipart upload. Only a CompleteMultipartUpload
+		// whose answer was lost can leave an object, and Put then deletes it or says in the
+		// error that it may have been stored; the key is random, so nothing else owns it.
 		switch {
 		case errors.Is(err, blob.ErrTooLarge) || errors.Is(err, errBodyTooLong):
 			refuse(w, r, http.StatusRequestEntityTooLarge, "the body is longer than the artifact's declared size")

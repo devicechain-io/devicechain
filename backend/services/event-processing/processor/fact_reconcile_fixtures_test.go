@@ -169,10 +169,10 @@ func newDmWorld(t *testing.T) *dmWorld {
 	singleConnection(t, db)
 	if err := db.AutoMigrate(&dmmodel.Device{}, &dmmodel.DeviceType{}, &dmmodel.DeviceProfile{},
 		&dmmodel.DeviceProfileVersion{}, &dmmodel.AutomationReviewPolicy{}, &dmmodel.AutomationReviewPolicyChange{}, &dmmodel.AutomationReviewBreakGlass{}, &dmmodel.DeviceProfileActivation{}, &dmmodel.MetricDefinition{}, &dmmodel.CommandDefinition{},
-		&dmmodel.DetectionRule{}, &dmmodel.DetectionRuleScopeRef{}, &dmmodel.EntityAttribute{},
+		&dmmodel.DetectionRule{}, &dmmodel.DetectionRuleScopeRef{}, &dmmodel.EntityAttribute{}, &dmmodel.AttributeGeneration{},
 		&dmmodel.EntityGroupMembership{}, &dmmodel.EntityGroupFacetRef{}, &dmmodel.EntityRelationship{},
 		&dmmodel.EntityRelationshipType{}, &dmmodel.Alarm{}, &dmmodel.DeviceCredential{}, &dmmodel.DeviceReplacement{}, &dmmodel.DeviceAlias{},
-		&dmmodel.DeviceConfigurationRevision{}, &dmmodel.DeviceConfigurationState{},
+		&dmmodel.DeviceConfigurationRevision{}, &dmmodel.DeviceConfigurationState{}, &dmmodel.DeviceConfigurationReport{},
 		// A device delete queues its deletion fact in the same transaction (the outbox).
 		&dmmodel.PendingEntityDeletion{}); err != nil {
 		t.Fatalf("migrate device-management: %v", err)

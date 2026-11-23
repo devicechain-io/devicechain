@@ -333,6 +333,9 @@ func (api *Api) DeviceConfigurationRevisions(ctx context.Context, deviceToken st
 
 // deleteDeviceConfigurationOnTx removes a device's revisions and reported state with it.
 func deleteDeviceConfigurationOnTx(tx *gorm.DB, deviceId uint) error {
+	if err := tx.Where("device_id = ?", deviceId).Delete(&DeviceConfigurationReport{}).Error; err != nil {
+		return err
+	}
 	if err := tx.Where("device_id = ?", deviceId).Delete(&DeviceConfigurationRevision{}).Error; err != nil {
 		return err
 	}

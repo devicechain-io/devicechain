@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dcctl/internal/apitest"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
 )
@@ -84,6 +85,9 @@ func aHostRecordingGateway(t *testing.T) (*httptest.Server, func() []string) {
 	var mu sync.Mutex
 	var hosts []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if apitest.ServeCapabilities(t, w, r) {
+			return
+		}
 		mu.Lock()
 		hosts = append(hosts, r.Host)
 		mu.Unlock()

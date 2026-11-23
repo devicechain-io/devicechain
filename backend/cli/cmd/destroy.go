@@ -77,6 +77,12 @@ the normal uninstall runs and fails if the cluster cannot be reached. Pass
 if its cluster is really gone.
 
 Use --all to destroy every instance on this machine.`,
+	Example: `  dcctl destroy local my-instance
+  # see what would be removed first
+  dcctl destroy local my-instance --dry-run
+  # keep the event-store backups, to rebuild the instance from them
+  dcctl destroy local my-instance --keep-backups --yes
+  dcctl destroy --all --yes`,
 	// Not ExactArgs(2): `--all` takes no instance, because the whole point of it is that
 	// the operator does not have to know what is there. Validated below so the error says
 	// which form was wrong rather than "accepts 2 arg(s)".

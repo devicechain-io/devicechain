@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"time"
 
@@ -181,6 +182,9 @@ func (api *Api) SyncDeviceConfiguration(ctx context.Context, deviceToken string,
 	}
 	var current *DeviceConfigurationRevision
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockConfigurationParent(tx, deviceId); err != nil {
+			return err
+		}
 		if err := lockDeviceConfiguration(ctx, tx, deviceId); err != nil {
 			return err
 		}
@@ -256,6 +260,12 @@ func (api *Api) ApplyDeviceConfigurationReport(ctx context.Context, deviceToken 
 		return err
 	}
 	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockConfigurationParent(tx, deviceId); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return &ConfigurationReportRefusal{Reason: ReportRejectedUnknownDevice}
+			}
+			return err
+		}
 		if err := lockDeviceConfiguration(ctx, tx, deviceId); err != nil {
 			return err
 		}
@@ -277,36 +287,65 @@ func (api *Api) ApplyDeviceConfigurationReport(ctx context.Context, deviceToken 
 		if err != nil {
 			return err
 		}
+		cur := &DeviceConfigurationState{DeviceId: deviceId}
+		identical := false
 		if len(states) == 1 {
-			cur := &states[0]
+			cur = &states[0]
 			if cur.ReportedRevision.Valid {
 				switch {
 				case revision < cur.ReportedRevision.Int64:
 					return &ConfigurationReportRefusal{Reason: ReportRejectedStale}
 				case revision == cur.ReportedRevision.Int64:
-					if sameReport(cur, digest, status, encoded) {
-						return nil
-					}
+					identical = sameReport(cur, digest, status, encoded)
 					if status == ConfigurationReceived && cur.ReportedStatus.String != string(ConfigurationReceived) {
 						return &ConfigurationReportRefusal{Reason: ReportRejectedStale}
 					}
 				}
 			}
-			return tx.Model(cur).Updates(map[string]any{
+		}
+		now := time.Now().UTC()
+		reportedAt := sql.NullTime{Time: now, Valid: true}
+		if identical {
+			reportedAt = cur.ReportedAt
+		}
+		captured := configurationCaptureFields(cur)
+		if err := captureConfigurationReport(tx, cur, revision, digest, status, encoded, now, reportedAt); err != nil {
+			return err
+		}
+		if identical {
+			// Keep the identical-report early return, after gap/backfill and REPORT capture.
+			// UpdateColumns preserves the original reported_at and updated_at no-op semantics, and
+			// a repeat that changed none of the capture fields writes nothing at all.
+			if fields := configurationCaptureFields(cur); !reflect.DeepEqual(fields, captured) {
+				return tx.Model(cur).UpdateColumns(fields).Error
+			}
+			return nil
+		}
+		if len(states) == 1 {
+			fields := configurationCaptureFields(cur)
+			for key, value := range map[string]any{
 				"reported_revision": sql.NullInt64{Int64: revision, Valid: true},
 				"reported_digest":   sql.NullString{String: digest, Valid: true},
 				"reported_status":   sql.NullString{String: string(status), Valid: true},
 				"reported_errors":   encoded,
-				"reported_at":       sql.NullTime{Time: time.Now().UTC(), Valid: true},
-			}).Error
+				"reported_at":       reportedAt,
+			} {
+				fields[key] = value
+			}
+			return tx.Model(cur).Updates(fields).Error
 		}
 		return tx.Create(&DeviceConfigurationState{
-			DeviceId:         deviceId,
-			ReportedRevision: sql.NullInt64{Int64: revision, Valid: true},
-			ReportedDigest:   sql.NullString{String: digest, Valid: true},
-			ReportedStatus:   sql.NullString{String: string(status), Valid: true},
-			ReportedErrors:   encoded,
-			ReportedAt:       sql.NullTime{Time: time.Now().UTC(), Valid: true},
+			DeviceId:             deviceId,
+			ReportedRevision:     sql.NullInt64{Int64: revision, Valid: true},
+			ReportedDigest:       sql.NullString{String: digest, Valid: true},
+			ReportedStatus:       sql.NullString{String: string(status), Valid: true},
+			ReportedErrors:       encoded,
+			ReportedAt:           reportedAt,
+			CapturedRevision:     cur.CapturedRevision,
+			CapturedStatus:       cur.CapturedStatus,
+			CaptureGapThrough:    cur.CaptureGapThrough,
+			CaptureCompleteSince: cur.CaptureCompleteSince,
+			CapturedReportedAt:   cur.CapturedReportedAt,
 		}).Error
 	})
 }

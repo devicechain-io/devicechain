@@ -59,6 +59,8 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevAlarmEvents := AlarmEventDrain
 	prevCallout, prevBackoff, prevKickDrain, prevTenants := CalloutResponder, MqttStoreBackoff, SessionKickDrain, ProvisioningTenants
 	prevReaper, prevClassifier, prevMarkerHeal := AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal
+	prevReportMaintenance := ConfigurationReportMaintenance
+	prevOrphanSweep := AttributeOrphanSweep
 	prevPeers := servicePeers
 	prevPin := IssuerPin
 	ProvisioningTenants = nil
@@ -73,6 +75,8 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		AlarmEventDrain = prevAlarmEvents
 		CalloutResponder, MqttStoreBackoff, SessionKickDrain = prevCallout, prevBackoff, prevKickDrain
 		AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal = prevReaper, prevClassifier, prevMarkerHeal
+		ConfigurationReportMaintenance = prevReportMaintenance
+		AttributeOrphanSweep = prevOrphanSweep
 	})
 
 	issuer, err := nkeys.CreateAccount()
@@ -105,7 +109,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 	safetyGates = service.FromManagers(Microservice, service.Managers{}).SafetyGates()
 
-	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{})...)
+	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.EntityAttribute{}, &model.AttributeGeneration{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{}, &model.DeviceConfigurationReport{})...)
 	RdbManager = &rdb.RdbManager{Database: db}
 	DeviceSecretKey = dmtest.DeviceSecretKey()
 	SecretTransit = testTransit(t)
@@ -141,6 +145,12 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 				return err
 			}
 			if err = initCreateEnrollMarkerHeal(); err != nil {
+				return err
+			}
+			if err = initConfigurationReportMaintenance(); err != nil {
+				return err
+			}
+			if err = initAttributeOrphanSweep(); err != nil {
 				return err
 			}
 			if err = initDecodeAccounting(); err != nil {

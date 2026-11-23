@@ -256,7 +256,7 @@ func TestARolloutTurningTheSettingOnConvergesAndTheOldPodsLeaveItAlone(t *testin
 		f.round(MqttFailClosedWatchInterval, fmt.Sprintf("only new pods, round %d", i))
 		require.Equal(t, nats.DiscardNew, f.store().Config.Discard, "the store was released under its holders")
 	}
-	require.Equal(t, mqttFailClosedSignature(fcHotBytes, 1), f.store().Config.Metadata[mqttFailClosedHolderKey])
+	require.Equal(t, mqttFailClosedSignature(fcHotBytes, 1, MqttStoreWriterPerMessage), f.store().Config.Metadata[mqttFailClosedHolderKey])
 	_ = a1
 	_ = a2
 }
@@ -296,7 +296,7 @@ func TestPodsWithDifferentBoundsDoNotFightOverTheStore(t *testing.T) {
 		f.round(MqttFailClosedWatchInterval, fmt.Sprintf("both bounds, round %d", i))
 		si := f.store()
 		require.EqualValuesf(t, fcHotBytes, si.Config.MaxBytes, "round %d: the bound moved while its holder was alive", i)
-		require.Equal(t, mqttFailClosedSignature(fcHotBytes, 1), si.Config.Metadata[mqttFailClosedHolderKey])
+		require.Equal(t, mqttFailClosedSignature(fcHotBytes, 1, MqttStoreWriterPerMessage), si.Config.Metadata[mqttFailClosedHolderKey])
 	}
 	f.stop(old)
 	for i := 0; i < 6 && f.store().Config.MaxBytes != 2*fcHotBytes; i++ {
@@ -304,7 +304,7 @@ func TestPodsWithDifferentBoundsDoNotFightOverTheStore(t *testing.T) {
 	}
 	si := f.store()
 	require.EqualValues(t, 2*fcHotBytes, si.Config.MaxBytes, "the remaining pods' bound never took over")
-	require.Equal(t, mqttFailClosedSignature(2*fcHotBytes, 1), si.Config.Metadata[mqttFailClosedHolderKey])
+	require.Equal(t, mqttFailClosedSignature(2*fcHotBytes, 1, MqttStoreWriterPerMessage), si.Config.Metadata[mqttFailClosedHolderKey])
 	for _, s := range mqttFailClosedSettings {
 		require.EqualValuesf(t, 0, testutil.ToFloat64(neu.m.storeRepaired.WithLabelValues(s)),
 			"the take-over counted %s as repaired", s)

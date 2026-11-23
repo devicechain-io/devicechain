@@ -28,8 +28,8 @@ func newScopingTestApi(t *testing.T) (*Api, context.Context) {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{}, &DeviceConfigurationRevision{}, &DeviceConfigurationState{}, &Area{}, &AreaType{},
-		&EntityAttribute{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{},
+	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{}, &DeviceConfigurationRevision{}, &DeviceConfigurationReport{}, &DeviceConfigurationState{}, &Area{}, &AreaType{},
+		&EntityAttribute{}, &AttributeGeneration{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{},
 		&EntityGroupFacetRef{}, &EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &Alarm{}, &AlarmSuppressionWindow{},
 		&DetectionRule{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &AutomationReviewPolicy{}, &AutomationReviewPolicyChange{}, &AutomationReviewBreakGlass{}, &AutomationReview{}, &DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)

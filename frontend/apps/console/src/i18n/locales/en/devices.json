@@ -630,5 +630,5 @@
   "droppedLastSeenColumn": "Last seen",
   "droppedReason_UNDECLARED_NON_NUMERIC": "Not declared on the profile, and the value is not a number",
   "droppedReason_UNDECLARED_UNSTORABLE": "Not declared on the profile, and the number cannot be stored",
-  "droppedReason_DECLARED_NOT_STORABLE": "Declared with a data type that is not a time-series metric"
+  "droppedReason_DECLARED_NOT_STORABLE": "Declared with a data type that cannot be stored, or a text (STRING) value that is too long or not valid text"
 }

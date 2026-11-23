@@ -124,6 +124,8 @@ var tunableValues = []string{
 	// platform the authorization server may issue for (externalResources). The two the chart
 	// derives are refused below (ownedWithinTunable).
 	"instance.config.infrastructure.tokenAudience",
+	// Default-off command proposals are enabled in a separate configuration roll.
+	"instance.config.infrastructure.mcp.commandProposals",
 	// How event-sources meters a message against its tenant's ingest ceiling (legacy, the default,
 	// or lagCredit). It is rendered into the event-sources pods alone and is not an instance
 	// configuration key; the chart's schema bounds the values.

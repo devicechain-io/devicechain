@@ -112,7 +112,7 @@ func downlinkAcknowledged(o Observations) error {
 		}
 	}
 	if len(commands) != 1 || commands[0].Status != "SUCCESSFUL" || commands[0].Responded.IsZero() {
-		return fmt.Errorf("sampling command: want exactly one SUCCESSFUL acknowledged command, got %+v", commands)
+		return fmt.Errorf("sampling command: want exactly one SUCCESSFUL acknowledged command: %s", samplingCommandDiagnostic(o, len(commands)))
 	}
 	cmd := commands[0]
 	queued := 0

@@ -209,6 +209,11 @@ var tableSweepExemptions = map[string]string{
 		"Delivery and reporting are proven end to end by the device-management delivery tests. The " +
 		"revision a report would answer is covered: entity-attribute-configuration mints " +
 		"device_configuration_revisions through the real API.",
+	"device-management.device_configuration_reports": "the accepted APPLIED/REJECTED verdict history, " +
+		"written in the same transaction as device_configuration_states by the device-reports consumer and " +
+		"by nothing else, so it is empty for exactly the reason that table is: no GraphQL mutation reaches " +
+		"it and the drill opens no device session. Capture, the previous-release gap rule and the " +
+		"maintenance pass are proven by device-management's own unit and Postgres tests.",
 	"update-management.secrets": "the per-tenant download-capability signing key, created on first " +
 		"use by GrantDownload -- and the only caller is update-management's consumer of the " +
 		"device-reports channel, answering a DEVICE's request to download its current assignment. " +
@@ -248,6 +253,10 @@ var tableSweepExemptions = map[string]string{
 		"so nothing is attempted and nothing is recorded.",
 	"event-processing.rule_stats": "written only by RuleStatStore.RecordFire, i.e. when a rule actually " +
 		"FIRES. No telemetry, no fire, no row.",
+	"event-processing.rule_stat_sweeps": "written only by the hourly stranded rule-stat sweep, in the " +
+		"transaction that deletes a superseded version's rule_stats rows after a week without a fire. " +
+		"No fire means no rule_stats row to sweep (see event-processing.rule_stats), so no record. The " +
+		"record and its delete are proved by event-processing's Postgres sweep tests.",
 
 	// ---- everything downstream of a rule that RUNS ---------------------------
 	//
@@ -320,6 +329,15 @@ var tableSweepExemptions = map[string]string{
 		"has acknowledged it. Only an executed agent proposal writes one and the seed proposes nothing " +
 		"(actuation is off by default), so empty is the normal state; a row that stays here means executed " +
 		"effects are not reaching the broker, which is a finding this bucket should report.",
+	"command-delivery.agent_proposals": "the agent command-proposal ledger. Only an AI agent's access token " +
+		"carrying command:propose may write it, and only while infrastructure.mcp.commandProposals is on " +
+		"(off by default and on no drill instance); a person's console token, like the tenant administrator " +
+		"this probe runs as, is refused by design. The table's tenant column is proved by the purge " +
+		"coverage gate.",
+	"command-delivery.agent_actuation_fences": "command-delivery's per-tenant local kill fence: a row " +
+		"appears when the first agent command execution of a tenant seeds it or when a kill event for the " +
+		"tenant is applied. The seed neither executes an agent proposal nor kills one, so no row is " +
+		"expected; an absent row means \"never killed\".",
 	"device-management.agent_actuation_fences": "the per-tenant local kill fence: a row appears when the " +
 		"first agent execution of a tenant seeds it or when a kill event for the tenant is applied. Agent " +
 		"actuation is off by default and the seed neither executes an agent proposal nor kills one, so no " +
@@ -329,9 +347,12 @@ var tableSweepExemptions = map[string]string{
 	"device-management.profile_decoder_healths": "per-replica decode tallies, written by the resolver's " +
 		"accounting flusher when an integration uplink is decoded by a profile's published decoder. The " +
 		"seed ingests no uplink through an integration, so no decode runs and no tally exists.",
-	"device-management.profile_decoder_samples": "stored failing uplinks. Nothing writes a row until the " +
-		"decode accounting slice (B3b) lands the sample writer. TODO(B3b): seed one failing decode through " +
-		"an integration and drop this exemption.",
+	"device-management.profile_decoder_samples": "stored failing uplinks, kept for the decoder test panel. " +
+		"The only writer is the decode accounting flusher (processor/decode_accounting.go, through " +
+		"StoreDecoderSample), when a profile's published decoder FAILS an uplink an integration posted. " +
+		"The seed ingests no uplink through an integration, so no decode runs, none fails, and no sample " +
+		"exists. The write, its per-profile cap and its trim are proved by device-management's model and " +
+		"Postgres tests, and hack/decoder-rig.sh drives a real failing decode end to end.",
 
 	// ---- per-area journals, correctly empty ----------------------------------
 	//

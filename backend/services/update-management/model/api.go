@@ -42,7 +42,9 @@ var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // Stable refusal codes (extensions.code on the GraphQL plane).
 const (
-	CodeArtifactTooLarge           = "ARTIFACT_TOO_LARGE"
+	CodeArtifactTooLarge = "ARTIFACT_TOO_LARGE"
+	// CodeArtifactTooLargeForBackend is no longer returned: every object store backend streams an
+	// upload, so the only size ceiling is CodeArtifactTooLarge. Kept so the code stays reserved.
 	CodeArtifactTooLargeForBackend = "ARTIFACT_TOO_LARGE_FOR_BACKEND"
 	CodeTenantArtifactQuota        = "TENANT_ARTIFACT_QUOTA_EXCEEDED"
 	CodeUnknownCompatibleProfile   = "UNKNOWN_COMPATIBLE_PROFILE"
@@ -82,12 +84,8 @@ type ProfileChecker interface {
 
 // Limits are the fixed ceilings the catalogue enforces.
 type Limits struct {
-	// MaxArtifactBytes is the effective per-artifact ceiling (already clamped for the
-	// blob backend).
+	// MaxArtifactBytes is the per-artifact ceiling.
 	MaxArtifactBytes int64
-	// ConfiguredMaxArtifactBytes is the unclamped, configured ceiling; it is only used to
-	// tell "over the ceiling" from "over what this backend can store".
-	ConfiguredMaxArtifactBytes int64
 	// MaxTenantArtifactBytes caps the summed size of one tenant's artifacts.
 	MaxTenantArtifactBytes int64
 }
@@ -98,6 +96,9 @@ type Api struct {
 	// behind their trust (a pin it cannot read, or an unsigned assignment while the instance
 	// refuses unverified artifacts). Each one is also logged.
 	Undelivered atomic.Int64
+
+	// RolloutSafety is fixed instance opt-in, enabled only after all replicas upgrade.
+	RolloutSafety bool
 
 	RDB    *rdb.RdbManager
 	Blobs  blob.Store
@@ -374,12 +375,8 @@ func (api *Api) checkSize(size int64) error {
 	if size <= 0 {
 		return refuse(CodeInvalidArtifact, "sizeBytes must be positive")
 	}
-	if size > api.Limits.ConfiguredMaxArtifactBytes {
-		return refuse(CodeArtifactTooLarge, "sizeBytes %d exceeds the %d-byte artifact ceiling", size, api.Limits.ConfiguredMaxArtifactBytes)
-	}
 	if size > api.Limits.MaxArtifactBytes {
-		return refuse(CodeArtifactTooLargeForBackend,
-			"sizeBytes %d exceeds the %d bytes this deployment's object store can accept in one upload", size, api.Limits.MaxArtifactBytes)
+		return refuse(CodeArtifactTooLarge, "sizeBytes %d exceeds the %d-byte artifact ceiling", size, api.Limits.MaxArtifactBytes)
 	}
 	return nil
 }

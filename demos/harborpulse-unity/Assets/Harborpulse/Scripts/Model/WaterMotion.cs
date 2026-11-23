@@ -12,6 +12,32 @@ namespace DeviceChain.Harborpulse.Model
         // The attached well clears North Quay lamp 2; the pump's PresentationMap anchor stays fixed.
         public const double LocalX = 13, LocalZ = 6, RadiusM = 2.45;
         public WellFootprint(Ground pump) { Center = new Ground(pump.X + LocalX, pump.Z + LocalZ); }
+
+        /// <summary>A camera frames a well when the well is within this distance and this far off the camera's axis, in degrees.</summary>
+        public const double TagRangeM = 24, TagHalfAngleDeg = 20;
+
+        /// <summary>The range in a 9:16 frame, whose view of a well stands further back (<see cref="Director.PresentationMap.WellViewTallScale"/>): its text is as large on the screen from there as a 16:9 frame's is from <see cref="TagRangeM"/>.</summary>
+        public const double TagRangeTallM = 42;
+
+        /// <summary>
+        /// The longer range holds only for a camera that looks down into the well, by this much of its unit forward or more (20 degrees). A
+        /// ground-level view looks nearly level, and one of a charger beside a well, from 36 m, is not the well's view.
+        /// </summary>
+        public const double TagTallDownward = .342;
+
+        /// <summary>
+        /// Whether the well's level tags are drawn: only for a camera that frames the well. The tags are text, which the font's own material
+        /// draws over whatever stands in front, and they sit below the deck inside the cut-away; from a camera that merely stood beside a well
+        /// (a lamp shot, a gauge shot) they showed through the quay at the frame's edge. <paramref name="dx"/>.. is the well's centre at deck
+        /// level less the camera's position, <paramref name="fx"/>.. the camera's unit forward.
+        /// </summary>
+        public static bool TagsInView(double dx, double dy, double dz, double fx, double fy, double fz, bool tallFrame = false)
+        {
+            var d = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            if (d > (tallFrame && fy <= -TagTallDownward ? TagRangeTallM : TagRangeM)) return false;
+            if (d < 1e-6) return true;
+            return (dx * fx + dy * fy + dz * fz) / d >= Math.Cos(TagHalfAngleDeg * Math.PI / 180);
+        }
         public Ground Center { get; }
         public bool Contains(Ground point) => (point.X - Center.X) * (point.X - Center.X) + (point.Z - Center.Z) * (point.Z - Center.Z) < RadiusM * RadiusM;
     }

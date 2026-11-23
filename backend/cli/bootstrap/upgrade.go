@@ -60,6 +60,9 @@ type UpgradeOptions struct {
 	// AllowEnvelopeDowngrade skips the refusal to move below the first release that reads event
 	// envelopes while the streams may hold one. See envelopedowngrade.go.
 	AllowEnvelopeDowngrade bool
+	// AllowSkippedMinor moves an instance more than one minor release ahead of the version its
+	// workloads run. Unsupported: see skippedminor.go.
+	AllowSkippedMinor bool
 
 	// AlertRouting replaces where the cluster's Alertmanager sends alerts. The zero value
 	// changes nothing. See AlertRoutingRequest.
@@ -261,6 +264,12 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return err
 	}
 
+	// 🔴 ONE MINOR AT A TIME, judged on what the workloads run, before the declaration is written.
+	// See skippedminor.go.
+	if err := precheckSkippedMinor(ctx, typed, st, opts.AllowSkippedMinor); err != nil {
+		return err
+	}
+
 	// Asked before the first write: a cluster whose Alertmanager reads no Secret of ours has
 	// nothing for the alert flags to change, and finding that out after the services moved
 	// would leave an upgrade that did half of what was asked.
@@ -268,17 +277,42 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return err
 	}
 
-	// 🔴 THE DECLARATION IS UPDATED BEFORE ANYTHING MOVES, AND BOTH HALVES OF THAT
-	// ARE DELIBERATE. See recordUpgradedVersion.
-	if err := recordUpgradedVersion(ctx, dyn, opts.Instance, st); err != nil {
-		return err
+	// 🔴 THE CLUSTER LOCK IS TAKEN BEFORE THE FIRST WRITE, AND IT IS ENFORCED. It used to be
+	// taken after the declaration had been written and only announced when it could not be,
+	// and both halves of that left a gap: the operator check above ran during hydration, so a
+	// `dcctl install` that moved the cluster's definitions between that check and this write
+	// was invisible to it, and an install takes this same lock -- so holding it is what keeps
+	// the definitions still for the rest of the run. Taken here, the check is asked AGAIN under
+	// the lock, against what the cluster holds now.
+	//
+	// The old reason for not enforcing was that a run repairing a stuck instance must not be
+	// blocked by the lock the stuck run holds. That case has its own command: a run that was
+	// KILLED leaves its Lease behind, and `dcctl instances reclaim` takes it (it waits a lease
+	// duration to see the holder is not renewing, and asks for the holder to be typed back). A
+	// run that is still ALIVE keeps renewing and cannot be reclaimed, and must be stopped
+	// first. The refusal says both. A dry run writes nothing and takes nothing.
+	var upgradeClaim *Claim
+	if !opts.DryRun {
+		c, err := takeUpgradeClaim(ctx, kubeContext, opts.Instance, func(ctx context.Context) error {
+			return requireOperatorFor(ctx, kubeContext, "an upgrade", InstallCommand(provider.Name(), binding))
+		})
+		if err != nil {
+			return err
+		}
+		upgradeClaim = c
 	}
 
-	// Declared here and taken further down: the deferred call closes over the
-	// VARIABLE, so the lock the run takes later is the lock this hands back — and
-	// the exits between the two (a dry run) reach the deferred call with nothing to
-	// release, which is the truth.
-	var upgradeClaim *Claim
+	// 🔴 THE DECLARATION IS UPDATED BEFORE ANYTHING MOVES, AND BOTH HALVES OF THAT
+	// ARE DELIBERATE. See recordUpgradedVersion.
+	//
+	// Its refusal is the one exit between taking the lock and finishUpgradePhase owning it
+	// (registered below, and not before, for the reason given there), so it gives the lock back
+	// itself. That is not a second release racing the phase stamp: nothing has been stamped and
+	// nothing will be.
+	if err := recordUpgradedVersion(ctx, dyn, opts.Instance, st); err != nil {
+		giveBackUpgradeClaim(ctx, upgradeClaim)
+		return err
+	}
 
 	// 🔴 REGISTERED HERE AND NOT ONE LINE EARLIER, BECAUSE WHAT IS ABOVE IS NOT THIS
 	// RUN'S TO OVERWRITE. recordUpgradedVersion refuses a declaration reading
@@ -336,22 +370,16 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		}
 	}
 
-	// 🔴 UPGRADE TAKES THE CLUSTER LOCK TOO. It no longer applies the cluster-scoped
-	// operator objects that first justified this — that is `dcctl install`'s now — but
-	// it still rewrites the instance's configuration document and its Helm release,
-	// and a concurrent bootstrap of the same instance writes both. A lock that only
-	// bootstrap and destroy take is a lock with a documented bypass.
-	//
-	// It is announced and not enforced, for the same reason destroy's is: an
-	// operator repairing a stuck instance must not be blocked by a lock held by
-	// the very run that got stuck.
+	// 🔴 UPGRADE HOLDS THE CLUSTER LOCK, taken before the declaration was written (above). It no
+	// longer applies the cluster-scoped operator objects that first justified this — that is
+	// `dcctl install`'s now — but it still rewrites the instance's configuration document and its
+	// Helm release, and a concurrent bootstrap of the same instance writes both.
 	//
 	// It is given back by finishUpgradePhase rather than by a defer of its own, and
 	// that is ordering rather than tidiness: Release DELETES the Lease, and a
 	// deleted Lease reads as a LOST claim — so a release registered after the phase
 	// write would run before it (defers unwind backwards) and fence out the very
 	// stamp it is meant to permit.
-	upgradeClaim = beginUpgradeClaim(ctx, kubeContext, opts.Instance)
 
 	// THE SERVICES, AND THE DOCUMENT THEY READ.
 	//
@@ -1140,22 +1168,45 @@ func currentRevisionPods(ctx context.Context, typed kubernetes.Interface, d *app
 	return out, true
 }
 
-// beginUpgradeClaim takes the cluster lock for an operator upgrade, warning rather
-// than refusing when it cannot. See the call site for why it does not enforce.
-func beginUpgradeClaim(ctx context.Context, kubeContext, instance string) *Claim {
-	ns, typed, err := ClaimClients(kubeContext)
+// takeUpgradeClaim takes the cluster lock for an upgrade and then asks recheck, under the lock,
+// whether the cluster is still one this dcctl may write to. It REFUSES when either fails, with
+// nothing written: the lock is given back if the recheck refuses.
+func takeUpgradeClaim(ctx context.Context, kubeContext, instance string, recheck func(context.Context) error) (*Claim, error) {
+	ns, typed, err := claimClientsFor(kubeContext)
 	if err != nil {
-		fmt.Println(color.YellowString("warning: could not take the cluster lock before upgrading (%v); continuing", err))
-		return nil
+		return nil, fmt.Errorf("could not take the cluster lock before upgrading: %w. Nothing has been changed", err)
 	}
-	claim, err := AcquireClaim(ctx, typed, ns, instance, kubeContext)
+	claim, err := acquireClaimFor(ctx, typed, ns, instance, kubeContext)
 	if err != nil {
-		fmt.Println(color.YellowString("warning: %v", err))
-		fmt.Println(color.YellowString("  continuing with the upgrade anyway — but if that run is live, this will fight it"))
-		return nil
+		return nil, fmt.Errorf("%w\n  Nothing has been changed. A run that was killed leaves the lock behind: take it "+
+			"with `dcctl instances reclaim` (it waits a lease duration and asks you to type the holder back). A run "+
+			"that is still alive keeps renewing and cannot be reclaimed: stop that process first", err)
 	}
-	return claim
+	if err := recheck(ctx); err != nil {
+		release, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		claim.Release(release)
+		return nil, err
+	}
+	return claim, nil
 }
+
+// giveBackUpgradeClaim releases a claim that finishUpgradePhase does not yet own, on a context the
+// caller's cancellation does not reach. A nil claim (a dry run) is nothing to give back.
+func giveBackUpgradeClaim(ctx context.Context, claim *Claim) {
+	if claim == nil {
+		return
+	}
+	release, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	claim.Release(release)
+}
+
+// The seams takeUpgradeClaim takes the lock through, so its refusals are reachable without a cluster.
+var (
+	claimClientsFor = ClaimClients
+	acquireClaimFor = AcquireClaim
+)
 
 // brokerExpiryUnverified reports whether the broker's certificate expiry cannot be published yet
 // because the servers' StatefulSet is gone (deleted to grow its volume): the renewal skipped the

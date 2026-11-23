@@ -359,7 +359,7 @@ La instalación del clúster configura un controlador de ingress y cada instanci
 el borde es un control de seguridad: el emisor de tokens de servicio y el conjunto de claves de firma los sirve
 `user-management` en un puerto interno al que no apunta ninguna ruta del ingress, de modo que el puerto público
 responde 404 para ellos detrás de cualquier controlador. El emisor está protegido por el secreto de servicio
-compartido, que se compara en tiempo constante. Las rutas del chart no llevan ningún snippet de configuración. En un clúster que conserva `ingress-nginx`, `dcctl install` desactiva los snippets y restablece el nivel de riesgo de anotaciones predeterminado del controlador. Primero se niega a continuar mientras algún Ingress de la clase de ese controlador lleve una anotación `*-snippet`, e identifica cada uno: actualiza su instancia propietaria con `dcctl upgrade`, o elimina la anotación, y vuelve a ejecutar `dcctl install`. Consulta [las notas de actualización de v1.6.0](./releases-and-upgrades.md#v160-nginx-snippets-off).
+compartido, que se compara en tiempo constante. Las rutas del chart no llevan ningún snippet de configuración. En un clúster que conserva `ingress-nginx`, `dcctl install` desactiva los snippets y restablece el nivel de riesgo de anotaciones predeterminado del controlador. Primero se niega a continuar mientras algún Ingress de la clase de ese controlador lleve una anotación `*-snippet`, e identifica cada uno: actualiza su instancia propietaria con `dcctl upgrade`, o elimina la anotación, y vuelve a ejecutar `dcctl install`. Consulta [las notas de actualización de v1.6.0](/1.6/deployment/releases-and-upgrades#v160-nginx-snippets-off).
 
 Si traes tu propio controlador, enruta los cinco ingress del chart. Un controlador que implemente la Gateway API puede servir en su lugar el Gateway y los HTTPRoutes que genera el chart (`ingress.controller: gateway`; el README del chart lista lo que debe hacer ese controlador):
 
@@ -1058,6 +1058,22 @@ clúster: `--compact` se decide una vez, antes de que haya nada ejecutándose ba
 `http://localhost/`, sin entrada en el archivo hosts y sin advertencia de certificado.
 :::
 
+
+:::tip Una segunda instancia local por nombre de host
+`localhost` sirve una sola instancia. Para ejecutar otra a su lado, dé a cada una su propio nombre
+bajo `localtest.me`, un dominio público cuyos nombres resuelven todos a `127.0.0.1`, por lo que
+tampoco necesita entrada en el archivo hosts:
+
+```bash
+dcctl bootstrap local alpha --host alpha.localtest.me --no-tls
+dcctl bootstrap local beta --host beta.localtest.me --no-tls
+```
+
+Las consolas quedan entonces en `http://alpha.localtest.me/` y `http://beta.localtest.me/`. El
+nombre se resuelve por DNS, así que requiere acceso a la red; sin conexión, use un nombre
+`*.localhost`.
+:::
+
 ### `--ha` {#ha}
 
 `--ha` se elige al instalar, y lo sigue toda instancia del clúster. Cada instancia ejecuta su
@@ -1227,6 +1243,24 @@ tres nodos distintos. Termina con código distinto de cero si algo se queda cort
 qué examinó para que un resultado correcto sobre un conjunto vacío no se confunda con un éxito
 real.
 
+Dónde están los líderes de los streams importa tanto como cuántas réplicas hay. Cada evento de
+dispositivo le cuesta una escritura replicada al servidor que lidera cada stream por el que pasa,
+así que un servidor que lidera varios de ellos limita el broker mucho antes de que los demás estén
+ocupados:
+
+```bash
+dcctl ha leaders --instance my-instance
+```
+
+Esto indica qué servidor lidera los streams de captura, de entrada y de eventos resueltos, el
+almacén de mensajes MQTT del broker y los consumidores del stream de eventos resueltos. **PASS**
+significa que ningún cambio de líder que el rebalanceo puede hacer los repartiría más. **FAIL**
+enumera los movimientos, y `dcctl broker rebalance my-instance` los hace. **UNSETTLED** significa
+que falta un stream, un líder o una réplica al día, así que la distribución todavía no se puede
+juzgar; vuelve a ejecutarlo cuando `dcctl ha verify` pase. Los streams de captura y de entrada y el
+almacén de mensajes MQTT nunca se mueven, porque un cambio de líder en ellos puede perder mensajes
+ya confirmados a un dispositivo.
+
 #### Perder un nodo y recuperarlo {#ha-node-loss}
 
 `--ha` sobrevive a la pérdida de un nodo. Así se ve desde fuera, en el orden en que ocurre:
@@ -1299,7 +1333,9 @@ real.
   nada, y los servicios se vuelven a enlazar solos.
 
 Planifica la vuelta de un nodo como planificas su pérdida, y no retires un segundo nodo hasta
-que `dcctl ha verify` vuelva a pasar.
+que `dcctl ha verify` vuelva a pasar. Después ejecuta `dcctl ha leaders`: los líderes se quedan
+donde los dejaron las elecciones, así que el servidor que vuelve no lidera nada hasta que algo
+mueva el liderazgo, y un FAIL ahí se corrige con `dcctl broker rebalance`.
 
 #### Mantenimiento de un nodo de base de datos {#ha-database-node-maintenance}
 

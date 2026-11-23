@@ -282,20 +282,42 @@ func ReadInstanceCR(ctx context.Context, kubeContext, id string) (*dcv1beta1.Ins
 }
 
 func readInstanceCR(ctx context.Context, dyn dynamic.Interface, id string) (*dcv1beta1.Instance, error) {
+	inst, _, err := readInstanceCRObject(ctx, dyn, id)
+	return inst, err
+}
+
+// readInstanceCRForWrite is readInstanceCR for a caller about to write the declaration back
+// WHOLE. It refuses a declaration carrying fields this dcctl does not know, because the write
+// would erase them (see unknownDeclarationFields). A reader that only reads keeps using
+// readInstanceCR: refusing to READ a newer declaration would block destroy and status, which
+// lose nothing by ignoring a field.
+func readInstanceCRForWrite(ctx context.Context, dyn dynamic.Interface, id string) (*dcv1beta1.Instance, error) {
+	inst, obj, err := readInstanceCRObject(ctx, dyn, id)
+	if err != nil || inst == nil {
+		return inst, err
+	}
+	if unknown := unknownDeclarationFields(obj); len(unknown) > 0 {
+		return nil, errDeclarationFromNewerDcctl(id, unknown)
+	}
+	return inst, nil
+}
+
+// readInstanceCRObject reads the declaration, returning it decoded and as the cluster holds it.
+func readInstanceCRObject(ctx context.Context, dyn dynamic.Interface, id string) (*dcv1beta1.Instance, map[string]interface{}, error) {
 	obj, err := dyn.Resource(instanceGVR).Get(ctx, id, metav1.GetOptions{})
 	if err != nil {
 		if isInstanceNotFound(err, id) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("reading the instance declaration %q: %w. Refusing to continue: "+
+		return nil, nil, fmt.Errorf("reading the instance declaration %q: %w. Refusing to continue: "+
 			"if a declaration IS there, treating this as a fresh install would re-bootstrap over "+
 			"a live instance", id, err)
 	}
 	inst := &dcv1beta1.Instance{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, inst); err != nil {
-		return nil, fmt.Errorf("decoding the instance declaration %q: %w", id, err)
+		return nil, nil, fmt.Errorf("decoding the instance declaration %q: %w", id, err)
 	}
-	return inst, nil
+	return inst, obj.Object, nil
 }
 
 // isInstanceNotFound distinguishes "this instance is not declared" from "the
@@ -436,7 +458,9 @@ func writeInstanceDecl(ctx context.Context, dyn dynamic.Interface, id string, sp
 	if err := ValidateInstanceSpec(spec); err != nil {
 		return err
 	}
-	existing, err := readInstanceCR(ctx, dyn, id)
+	// Read for WRITE: this replaces the declaration whole, so a field this dcctl does not know
+	// would not survive it. See unknownDeclarationFields.
+	existing, err := readInstanceCRForWrite(ctx, dyn, id)
 	if err != nil {
 		return err
 	}
@@ -675,6 +699,12 @@ func ReleaseInstanceDeclaration(ctx context.Context, kubeContext, id string) (re
 	if err != nil {
 		return false, fmt.Errorf("connecting to the cluster to release the instance declaration: %w", err)
 	}
+	return releaseInstanceDeclaration(ctx, dyn, id)
+}
+
+// releaseInstanceDeclaration is ReleaseInstanceDeclaration with the client supplied, so the
+// writes it makes can be watched by a test.
+func releaseInstanceDeclaration(ctx context.Context, dyn dynamic.Interface, id string) (released bool, err error) {
 	existing, err := readInstanceCR(ctx, dyn, id)
 	if err != nil {
 		return false, err
@@ -686,21 +716,47 @@ func ReleaseInstanceDeclaration(ctx context.Context, kubeContext, id string) (re
 	if !removeFinalizer(inst) && inst.DeletionTimestamp == nil {
 		return false, nil
 	}
-	obj, err := instanceToUnstructured(inst)
+	// 🔴 A PATCH OF THE FINALIZERS ALONE, NOT AN UPDATE OF THE WHOLE OBJECT. This is the escape
+	// hatch for a cluster whose operator is gone or moved, which is exactly when the declaration
+	// may carry fields this dcctl does not know; a whole-object Update would erase them on the
+	// way out. The resourceVersion in the patch makes it a compare-and-swap, so a finalizer or
+	// spec change made since the read is refused rather than overwritten.
+	patch, err := finalizerPatch(existing.ResourceVersion, inst.Finalizers)
 	if err != nil {
 		return false, err
 	}
-	if _, err := dyn.Resource(instanceGVR).Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
+	if _, err := dyn.Resource(instanceGVR).Patch(ctx, id, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		if apierrors.IsConflict(err) {
+			return false, fmt.Errorf("the declaration for instance %q changed while it was being released; "+
+				"something else is editing it -- re-run once you know what", id)
+		}
 		return false, fmt.Errorf("removing the finalizer from instance %q: %w", id, err)
 	}
 	// With the finalizer gone a pending delete completes on its own. When there is
 	// no pending delete the caller asked to release a live declaration, so delete
 	// it explicitly — otherwise the command would report success having done
-	// nothing a reader can see.
+	// nothing a reader can see. The UID precondition keeps the delete to the object
+	// that was read: a declaration recreated under the same name in between is not it.
 	if inst.DeletionTimestamp == nil {
-		if err := dyn.Resource(instanceGVR).Delete(ctx, id, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		uid := existing.UID
+		if err := dyn.Resource(instanceGVR).Delete(ctx, id, metav1.DeleteOptions{
+			Preconditions: &metav1.Preconditions{UID: &uid},
+		}); err != nil && !apierrors.IsNotFound(err) {
 			return false, fmt.Errorf("deleting the declaration for instance %q: %w", id, err)
 		}
 	}
 	return true, nil
+}
+
+// finalizerPatch is the merge patch that sets the finalizer list to exactly finalizers, guarded
+// by the resourceVersion it was computed from. A merge patch REPLACES a list, so the list sent is
+// the whole of what should remain; an empty one is sent as null, which removes the field.
+func finalizerPatch(resourceVersion string, finalizers []string) ([]byte, error) {
+	meta := map[string]interface{}{"resourceVersion": resourceVersion}
+	if len(finalizers) == 0 {
+		meta["finalizers"] = nil
+	} else {
+		meta["finalizers"] = finalizers
+	}
+	return json.Marshal(map[string]interface{}{"metadata": meta})
 }

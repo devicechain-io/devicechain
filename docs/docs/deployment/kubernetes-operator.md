@@ -112,18 +112,104 @@ render** if a selection omits a required core service or an enabled service's ha
 so a broken topology is caught at install time, not after pods crash-loop. Values are
 validated against the chart's `values.schema.json` at apply time.
 
+## In-cluster executor (Preview) {#in-cluster-executor}
+
+Preview: the executor is installed and verified but executes no operations in this release.
+Every executable request is refused as `NotExecutableInThisBuild`. Existing instances remain
+unchanged. `dcctl install` adds the `ExecutorEnrollment` and `InstanceOperation` definitions;
+it does not enroll or deploy an executor. As with every release, an older dcctl refuses a
+cluster whose definitions a 1.9 `dcctl install` has moved.
+
+A provider administrator can enroll an owner and an image pinned by SHA-256 digest. Enrollment
+requires an escrow artifact whose fingerprint matches the deployed root key for **every**
+Instance in the cluster (`OwnerOffline`).
+The default is the existing dcctl escrow directory; `--escrow-dir` selects another directory
+containing the same `<instance>-rootkey.escrow` files. Re-running `dcctl bootstrap` reconciles
+escrow and writes a missing artifact. A mismatch must be investigated before replacing the file.
+
+```bash
+dcctl executor enroll --owner platform --image "$EXECUTOR_IMAGE" --kube-context prod
+dcctl executor status --kube-context prod
+dcctl executor unenroll --kube-context prod
+```
+
+Set `EXECUTOR_IMAGE` to a full `ref@sha256:<64 lowercase hex digits>`. Enrollment installs
+the `dc-executor-system` namespace, ServiceAccount, pinned Deployment and executor RBAC,
+an unbound requester ClusterRole, and `ExecutorEnrollment/cluster`. It writes no Secret,
+credential file or kubeconfig. Its privilege pre-check is advisory, not a guarantee; an apply
+failure reports each object's result. Enrollment waits up to five minutes for rollout and a
+current Ready observation of the pinned image. `--dry-run` performs the checks and prints
+the plan without applying it. Status shows the declaration, capability, conditions and
+non-terminal InstanceOperations; an unenrolled cluster is a successful status result.
+
+Unenrollment leaves instances, operation history and resource definitions in place. It refuses
+outstanding operations unless `--force` first marks them `Refused/Unenrolled`. This explicit
+administrator recovery action is the one non-executor writer of operation status: it closes
+requests before removing their executor, using resource-version checks to preserve concurrent
+terminal verdicts. Unenrollment waits for the executor namespace to disappear.
+
+Enrollment labels its namespace `app.kubernetes.io/managed-by: dcctl-executor`. Both enrollment
+and unenrollment refuse an existing `dc-executor-system` namespace without that label before
+changing anything, including when using `--force`. Namespace deletion uses its observed UID
+as a precondition. With no enrollment and no owned namespace, unenrollment reports "not enrolled"
+and makes no changes. Changing an existing enrollment's `owner` or `escrowDelivery` also refuses
+before apply; unenroll first, then enroll again with the new values.
+
+`bootstrap` and `upgrade` refuse an instance with a non-terminal InstanceOperation; `destroy`
+warns and proceeds so recovery stays possible. Wait for the executor's verdict, or use
+`dcctl executor unenroll --force`, which also closes pending requests when no executor is enrolled.
+The refusal names `kubectl delete instanceoperation <name>` for each request as another remedy.
+This is detection, not a lock. AB6 does not cover `dcctl install`: it prepares a cluster,
+and this Preview refuses Install requests anyway.
+
+### Executor metrics {#executor-metrics}
+
+The executor exports three counters on the metrics endpoint of its own pod in `dc-executor-system`.
+They are not prefixed with `devicechain_` and are not labelled by instance or operation, and the
+chart's Prometheus does not scrape that namespace, so scrape it yourself if you want them.
+
+| Metric | Means |
+| --- | --- |
+| `dc_executor_decisions_total{verdict,reason}` | Verdicts the executor wrote to an `InstanceOperation`. `verdict` is the phase written: `Refused` or `Running`. `reason` is `Executable`, or why it was refused: `StaleEnrollment`, `InstanceExists`, `InstanceNotFound`, `StaleTarget` (the request names an enrollment or instance that has since been replaced, or whose existence does not suit the action) or `NotExecutableInThisBuild`. In this Preview release no action is executable, so every valid request ends `Refused` with `NotExecutableInThisBuild`: that is the expected steady state, not a fault. A rise in any other refusal reason means requests are being submitted against a stale enrollment or instance; submit a new one. |
+| `dc_executor_operations_skipped_total{reason}` | Operations the executor left untouched because a newer executor must handle them: `protocol` (the request needs a newer protocol than this executor was built for) or `action` (an action this executor does not know). Zero in a cluster whose executor image is current. A rise means requests from a newer `dcctl` are waiting on an executor upgrade: run `dcctl executor enroll` again with the newer image. |
+| `dc_executor_status_writes_total{kind,result}` | Attempts to write status on an `InstanceOperation` or `ExecutorEnrollment` (`kind`), by `result`: `success`, `conflict` (another writer got there first; the executor retries at once) or `error`. Occasional conflicts are normal. A sustained `error` rate means the executor cannot write status, so operations stay without a verdict; check the executor's log and its RBAC. |
+
 ## Custom resources {#custom-resources}
 
-`dcctl install` defines two cluster-scoped custom resources:
+`dcctl install` defines four cluster-scoped custom resources:
 
 - **`Instance`** (`instances.core.devicechain.io`, short name `dci`) — one per installation,
   declaring the instance identity and configuration.
 - **`InstanceConfiguration`** (`instanceconfigurations.core.devicechain.io`, short name `dcic`)
   — a resource that can hold an instance configuration document. The definition is installed,
   but `dcctl bootstrap` does not create one and the operator does not watch it. Each pod reads
-  the instance configuration from the instance config Secret mounted into it.
+  the instance configuration from the instance config Secret mounted into it. **Deprecated:**
+  the API server warns when one is read or written, and a later major release removes the
+  definition.
 
-[`dcctl install`](./bootstrap.md#install) installs both definitions together with the
+- **`ExecutorEnrollment`** (`executorenrollments.core.devicechain.io`, `dce`) — the singleton executor owner, pinned image and capability observation.
+- **`InstanceOperation`** (`instanceoperations.core.devicechain.io`, `dcop`) — an immutable operation request and its verdict; this Preview executes no operations.
+
+Two fields of an `Instance` declaration are **deprecated**, and a later major release removes them.
+Nothing changes for an instance carrying them:
+
+- `spec.grafanaSSO` has no effect. Grafana's login is configured for the whole cluster, not per
+  instance.
+- `spec.compact` is replaced by `spec.size: compact`. **Keep both fields; do not remove `compact`.**
+  dcctl writes both, still reads `compact`, and refuses a declaration whose `size` is `compact`
+  while `compact` is not set, so removing it by hand blocks every later bootstrap and upgrade. No
+  action is needed.
+
+Install is a cluster-level request: `spec.instance` and `spec.instanceUID` are forbidden.
+Every other action requires `spec.instance`; Upgrade and Teardown also require `spec.instanceUID`,
+while Bootstrap may omit it because its target does not yet exist. Every request requires the
+current `spec.enrollmentUID`. A terminal verdict includes `Decided=True` with its reason in
+`status.conditions`. The terminal phase, reason, message and decision time remain immutable;
+conditions may change independently so their timestamps can be maintained. Unenrollment only
+deletes cluster-scoped RBAC carrying `app.kubernetes.io/managed-by: dcctl-executor`, using a UID
+precondition, and reports objects it skips.
+
+[`dcctl install`](./bootstrap.md#install) installs all four definitions together with the
 controller itself. They are cluster-scoped in every sense: one copy per cluster, shared by
 every instance on it, and versioned with the cluster rather than with any one instance. That is
 why the command that prepares a cluster is the command that moves them.
@@ -146,7 +232,7 @@ different in kind:
 | annotations (`core.devicechain.io/phase`, `last-applied-by`, `last-applied-at`) | what the last `dcctl` run **intended** or did; the `OPERATION` column | `dcctl` |
 | the `dcctl` Lease in the operator's namespace | who is operating on the cluster **right now** | `dcctl` |
 
-`dcctl` never writes `status`, and the operator never reads the annotations: `OPERATION` can say
+`dcctl` never writes an `Instance`'s `status`, and the operator never reads the annotations: `OPERATION` can say
 `Upgrading` while `READY` says `True`, and both are true.
 
 | Field | Meaning |
@@ -363,6 +449,14 @@ databases, volumes and workloads are all still running afterwards, and `dcctl` n
 record of what they belong to. That is why the command makes you confirm explicitly that this
 is what you want. It exists because a finalizer whose remover is gone would otherwise leave the
 cluster holding an object nobody can delete.
+
+It first checks the cluster's DeviceChain operator. A cluster whose operator is not the one
+this `dcctl` was built for is refused: run the release from the `dcctl` that matches the
+cluster, or pass `--force` to release anyway, with a warning. A cluster with no operator at all
+is let through, because a declaration left without one is what the command is for. It changes
+only the finalizer list (a patch, not an update of the whole declaration), so it needs `get` and
+`patch` on `instances.core.devicechain.io`, `delete` on it, and `get` on
+`customresourcedefinitions`.
 
 It prints what it is about to do and asks you to type the instance name back; `--yes` skips
 that prompt for scripted use. `--kube-context` is needed from any machine that did not

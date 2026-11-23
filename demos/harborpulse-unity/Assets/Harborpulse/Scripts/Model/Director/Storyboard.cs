@@ -19,6 +19,12 @@ namespace DeviceChain.Harborpulse.Model.Director
         public Needs Needs { get; internal set; }
         public string Slot { get; internal set; }
         public double HoldS { get; internal set; }
+        /// <summary>
+        /// Another caption of the page: once that one has been shown in a presentation of the page, this one is no longer offered. A
+        /// weaker statement of the same fact ("alarm raised") must not follow the stronger one it stands in for ("the platform tells it
+        /// to derate"), whichever shot's slot would offer it.
+        /// </summary>
+        public string UnlessShown { get; internal set; }
         public string Render(EvidenceResult evidence)
         {
             var text = string.Join("\n", Lines);
@@ -150,6 +156,8 @@ namespace DeviceChain.Harborpulse.Model.Director
                 Once = Bool(e, "once"), CutsOnly = Bool(e, "cutsOnly"), Watch = Predicate(e, "watch"), Trigger = Predicate(e, "trigger"), Terminal = Predicate(e, "terminal") };
             if (page.PreRollS < 0 || page.TriggerTimeoutS < 3 || page.QueueTtlS < 0) throw new FormatException("page duration invalid " + page.Id);
             page.Captions = StrictJson.Array(e, "captions").Select(ReadCaption).ToArray(); Unique(page.Captions.Select(c => c.Id), "caption");
+            foreach (var c in page.Captions.Where(c => c.UnlessShown != null))
+                if (c.UnlessShown == c.Id || !page.Captions.Any(o => o.Id == c.UnlessShown && o.Kind == "claim")) throw new FormatException("unlessShown must name another claim of the page: " + c.Id);
             page.Shots = StrictJson.Array(e, "shots").Select(s => ReadShot(s, page, map)).ToArray(); Unique(page.Shots.Select(s => s.Id), "shot");
             if (page.Shots.Count == 0) throw new FormatException("page has no shots " + page.Id);
             var chain = e.GetProperty("chain"); StrictJson.Keys(chain, "nodes", "links");
@@ -174,8 +182,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         }
         static StoryCaption ReadCaption(JsonElement e)
         {
-            StrictJson.Keys(e, "id", "kind", "source", "slot", "lines", "needs", "holdS");
-            var c = new StoryCaption { Id = StrictJson.Str(e, "id"), Kind = StrictJson.Str(e, "kind"), Source = StrictJson.Str(e, "source"), Slot = StrictJson.Str(e, "slot"), HoldS = StrictJson.Num(e, "holdS"), Needs = Predicate(e, "needs") };
+            StrictJson.Keys(e, "id", "kind", "source", "slot", "lines", "needs", "holdS", "unlessShown");
+            var c = new StoryCaption { UnlessShown = e.TryGetProperty("unlessShown", out _) ? StrictJson.Str(e, "unlessShown") : null, Id = StrictJson.Str(e, "id"), Kind = StrictJson.Str(e, "kind"), Source = StrictJson.Str(e, "source"), Slot = StrictJson.Str(e, "slot"), HoldS = StrictJson.Num(e, "holdS"), Needs = Predicate(e, "needs") };
             EvidenceSource.Check(c.Source);
             if (!new[] { "pre", "scenario", "fallback", "claim" }.Contains(c.Kind)) throw new FormatException("unknown caption kind " + c.Kind);
             c.Lines = StrictJson.Array(e, "lines").Select(v => v.ValueKind == JsonValueKind.String ? v.GetString() : throw new FormatException("caption line must be string")).ToArray();

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/deadletter"
-	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dcctl/apiclient"
 	"github.com/devicechain-io/dcctl/deadletters"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
@@ -25,6 +25,7 @@ var (
 	dlSince    string
 	dlPageSize int
 	dlPages    int
+	dlOutput   string
 )
 
 var deadLettersCmd = &cobra.Command{
@@ -49,9 +50,13 @@ var deadLettersListCmd = &cobra.Command{
 	Short: "List dead letters, newest first",
 	Long: `List dead letters, newest first.
 
-Narrow with --tenant, --kind, --source and --since. Reading is bounded by --pages:
+Narrow with --tenant, --kind, --source and --since. -o json prints the same records
+as one JSON object (letters, total, truncated) and nothing else on stdout. Reading is bounded by --pages:
 when more records exist than were fetched, the output says so rather than letting a
 truncated list read as a complete one.`,
+	Example: `  dcctl dead-letters list --email ops@example.com --password <password>
+  dcctl dead-letters list --tenant acme --kind detection-action --email ops@example.com --password <password>
+  dcctl dead-letters list --source event-processing --since 2026-11-01T00:00:00Z --email ops@example.com --password <password> -o json`,
 	Args:         cobra.NoArgs,
 	RunE:         runDeadLettersList,
 	SilenceUsage: true,
@@ -78,6 +83,8 @@ func init() {
 	deadLettersListCmd.Flags().IntVar(&dlPageSize, "page", 50, "records per server round-trip")
 	deadLettersListCmd.Flags().IntVar(&dlPages, "pages", 4, "how many pages to fetch before stopping")
 
+	deadLettersListCmd.Flags().StringVarP(&dlOutput, "output", "o", "table", "output format: table or json")
+
 	deadLettersCmd.AddCommand(deadLettersListCmd)
 	rootCmd.AddCommand(deadLettersCmd)
 }
@@ -89,6 +96,9 @@ func runDeadLettersList(cmd *cobra.Command, args []string) error {
 	}
 	if dlEmail == "" || dlPassword == "" {
 		return fmt.Errorf("--email and --password are required")
+	}
+	if dlOutput != "table" && dlOutput != "json" {
+		return fmt.Errorf("--output must be table or json, not %q", dlOutput)
 	}
 	if dlPageSize < 1 || dlPages < 1 {
 		return fmt.Errorf("--page and --pages must both be at least 1")
@@ -109,7 +119,7 @@ func runDeadLettersList(cmd *cobra.Command, args []string) error {
 	}
 
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
-	session := userclient.NewAdminSession(nil, endpoints.UserGraphQL, dlEmail, dlPassword).WithOTP(otpFunc(otpFlag(cmd)))
+	session := apiclient.NewAdminSession(nil, endpoints.UserGraphQL, dlEmail, dlPassword, recordedEndpointVersions(cmd, opts.AdminURL)...).WithOTP(otpFunc(otpFlag(cmd)))
 
 	// 🔴 NO SUPERUSER PRE-CHECK HERE, and an earlier version had one. The server gates
 	// this on audit:read, which is deliberately grantable on a non-superuser system role —
@@ -121,6 +131,9 @@ func runDeadLettersList(cmd *cobra.Command, args []string) error {
 	sum, err := deadletters.Run(ctx, session, opts)
 	if err != nil {
 		return err
+	}
+	if dlOutput == "json" {
+		return deadletters.PrintJSON(cmd.OutOrStdout(), sum)
 	}
 	deadletters.Print(cmd.OutOrStdout(), opts, sum)
 	return nil

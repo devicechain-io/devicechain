@@ -165,6 +165,13 @@ func TestBuildSystemPrompt_MetricHints(t *testing.T) {
 	assert.Equal(t, 2, strings.Count(withHints[strings.Index(withHints, "Available metrics"):], "\n- "))
 }
 
+// A STRING metric is never offered to the drafter: a rule over text can never fire.
+func TestBuildSystemPrompt_OmitsStringMetrics(t *testing.T) {
+	p := buildSystemPrompt([]MetricHint{{Key: "tempC", DataType: "DOUBLE"}, {Key: "zzmodezz", DataType: "STRING"}})
+	assert.Contains(t, p, "tempC")
+	assert.NotContains(t, p, "zzmodezz")
+}
+
 func TestNewDrafter_DefaultsMaxAttempts(t *testing.T) {
 	f := &fakeInferer{outputs: []InferOutput{{Candidate: invalidRule}}}
 	d := NewDrafter(f, rules.DefaultLimits(), 0) // 0 ⇒ default

@@ -81,6 +81,7 @@ type mqttStoreSnapshot struct {
 	// owned is this instance's owner mark: the fail-closed store in force. marked is either of
 	// this instance's marks (owner or released): the store has platform durables to read.
 	owned, marked bool
+	holder        string
 	// from is each direct stream's mark (suffix -> sequence), present only while owned.
 	from map[string]uint64
 }
@@ -110,6 +111,7 @@ func (v *mqttStoreView) observe(info *nats.StreamInfo, at time.Time) {
 	snap := mqttStoreSnapshot{at: at}
 	if info != nil {
 		snap.present = true
+		snap.holder = info.Config.Metadata[mqttFailClosedHolderKey]
 		snap.created = info.Created
 		snap.lastTime = info.State.LastTime
 		me := v.nmgr.Microservice.InstanceId
@@ -178,6 +180,27 @@ func (v *mqttStoreView) look() (mqttStoreSnapshot, error) {
 func (nmgr *NatsManager) MqttMessageStoreMarked() bool {
 	s := nmgr.mqttView().current()
 	return s.present && s.marked
+}
+
+// writerModeReady uses the same refreshed store view as the direct-copy gate.
+// A failed or stale look never grants a new writer permission to fetch. The
+// reconcile writes a changed mode only after the old holder's ack-pending is zero.
+func (v *mqttStoreView) writerModeReady() bool {
+	if time.Since(v.current().at) >= mqttStoreViewRefresh {
+		v.tryRefresh()
+	}
+	s := v.current()
+	if s.at.IsZero() || time.Since(s.at) >= mqttStoreViewTTL || !s.present {
+		return false
+	}
+	if !s.marked {
+		return v.nmgr.mqttWriterMode() == MqttStoreWriterPerMessage
+	}
+	if !s.owned && s.holder == "" {
+		// Released stores created before writer modes used per-message ids.
+		return v.nmgr.mqttWriterMode() == MqttStoreWriterPerMessage
+	}
+	return mqttFailClosedWriterMode(s.holder) == v.nmgr.mqttWriterMode()
 }
 
 // carriedByStore reports whether a message a reader took from the direct stream suffix, with

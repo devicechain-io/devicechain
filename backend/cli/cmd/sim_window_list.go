@@ -14,6 +14,7 @@ import (
 
 var simWindowsCmd = &cobra.Command{
 	Use: "windows <name>", Short: "Print the recorded episode windows (role, start, end)", Args: cobra.ExactArgs(1),
+	Example: `  dcctl sim windows tower`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		rec, err := sim.Load(args[0])
 		if err != nil {

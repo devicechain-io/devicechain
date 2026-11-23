@@ -22,6 +22,7 @@ var (
 	upgradeSkipInfra   bool
 
 	upgradeAllowEnvelopeDowngrade bool
+	upgradeAllowSkippedMinor      bool
 
 	upgradeMqttFailClosed    bool
 	upgradeMqttDeviceUplinks bool
@@ -129,6 +130,7 @@ func upgradeOptions(instance string, mqttFailClosed, mqttDeviceUplinks *bool, va
 		SkipInfrastructure:   upgradeSkipInfra,
 
 		AllowEnvelopeDowngrade: upgradeAllowEnvelopeDowngrade,
+		AllowSkippedMinor:      upgradeAllowSkippedMinor,
 		AlertRouting:           upgradeAlertRequest,
 	}
 }
@@ -290,6 +292,10 @@ store), says so when it rises, and warns when the volume has less free space tha
   # Turn the fail-closed MQTT acknowledgement on (kept by later upgrades), or back off
   dcctl upgrade local devicechain --mqtt-fail-closed
   dcctl upgrade local devicechain --mqtt-fail-closed=false`,
+	Example: `  dcctl upgrade local my-instance --dry-run
+  dcctl upgrade local my-instance
+  # name the cluster explicitly; it must be the one recorded at bootstrap
+  dcctl upgrade local prod --kube-context prod`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// The provider is resolved rather than ignored: it is validated here, so a
@@ -365,6 +371,7 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeEscrowFile, "escrow-file", "", "where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on")
 	upgradeCmd.Flags().BoolVar(&upgradeSkipInfra, "skip-infrastructure", false, "move only the services: leave this instance's message broker and event store on the configuration they were built with")
 	upgradeCmd.Flags().BoolVar(&upgradeAllowEnvelopeDowngrade, "allow-envelope-downgrade", false, "move to a release below the first one that reads event envelopes even though the streams may still hold one: a service on such a release dead-letters an envelope and the events in it are lost to that service")
+	upgradeCmd.Flags().BoolVar(&upgradeAllowSkippedMinor, "allow-skipped-minor", false, "UNSUPPORTED: move more than one minor release ahead of the version the instance's workloads run. Skipping a minor is untested, and this never disables a protection the database enforces")
 	upgradeCmd.Flags().StringArrayVar(&upgradeValues, "values", nil, valuesUsage)
 	upgradeCmd.Flags().StringVar(&upgradeLwm2mIdentities, "lwm2m-identities", "", lwm2mIdentitiesUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeWithdrawLwm2m, "withdraw-lwm2m-identities", false, withdrawLwm2mUsage)

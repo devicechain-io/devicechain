@@ -2,13 +2,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using DeviceChain.Harborpulse.Model;
+using DeviceChain.Harborpulse.Model.Director;
 using NUnit.Framework;
 
 namespace DeviceChain.Harborpulse.Tests
 {
+    /// <summary>One generated plan for every U5 test that only reads it: the plan is seeded and immutable once built.</summary>
+    static class U5Plan
+    {
+        static WorldPropPlan plan; static PresentationMap map; static HarborLayout layout;
+        public static HarborLayout Layout => layout ?? (layout = Kit.Layout());
+        public static PresentationMap Map => map ?? (map = new PresentationMap(Layout));
+        public static WorldPropPlan Plan => plan ?? (plan = WorldPropPlan.Generate(Map, Layout));
+    }
+
     public class CoastalSceneryTests
     {
+        const double Deck = SitePlan.DeckHeightM;
+
         [Test]
         public void MappedCoreAndCoastStayAtDeckHeight()
         {
@@ -20,69 +34,209 @@ namespace DeviceChain.Harborpulse.Tests
         }
 
         [Test]
-        public void SummitHasShouldersAndASaddleBelowTheHomeUpperRay()
+        public void TerrainIsContinuousWithTheCoreAndHasNoCliffsOrHoles()
         {
-            var summit=CoastalTerrain.Height(-90,1050);
-            Assert.That(summit,Is.GreaterThan(CoastalTerrain.Height(-340,980)+25));
-            Assert.That(summit,Is.GreaterThan(CoastalTerrain.Height(650,700)+16));
-            var upperAngle=Math.Atan2(-110,460)+15*Math.PI/180;
-            var upperRay=110+(1050+420)*Math.Tan(upperAngle);
-            Assert.That(summit,Is.LessThan(upperRay-5),"sky above the rounded summit from the fixed HOME camera");
-            // Sample the whole north-facing skyline: no far rising wall may swallow that upper ray.
-            for(var z=600;z<=3400;z+=50)
-                for(var x=-1200;x<=1200;x+=50)
-                    Assert.That(CoastalTerrain.Height(x,z),Is.LessThan(110+(z+420)*Math.Tan(upperAngle)));
-            Assert.That(CoastalTerrain.Clearing(-90,1050),Is.True,"summit ledges remain exposed");
-            Assert.That(CoastalTerrain.Clearing(-300,650),Is.True,"a meadow breaks the forest behind town");
-        }
-
-        [Test]
-        public void LandformIsFiniteRepeatableAndKeepsTheTownSlope()
-        {
-            for(var z=-140;z<=3400;z+=71)
-                for(var x=-3400;x<=3400;x+=79)
-                {
-                    var h=CoastalTerrain.Height(x,z);
-                    Assert.That(double.IsNaN(h)||double.IsInfinity(h),Is.False);
-                    Assert.That(h,Is.InRange(SitePlan.DeckHeightM,150));
-                    Assert.That(CoastalTerrain.Height(x,z),Is.EqualTo(h));
-                }
-            foreach(var z in new[]{160,200,280,400})
-                Assert.That(CoastalTerrain.Height(0,z),Is.EqualTo(SitePlan.DeckHeightM+30*CoastalTerrain.Smooth(0,400,z-140)).Within(1e-9));
-        }
-
-        [Test]
-        public void ThinningRetainsSixtyPercentOfHousesAndAtMostTwentyPercentOfTrees()
-        {
-            var houses=0;var trees=0;
-            for(var i=0;i<1000;i++)
+            // pins: no step at the core edge (the quay deck meets the ground without a cliff) and no cliff anywhere on the grid
+            for(var t=-240;t<=240;t+=10)
             {
-                if(CoastalTerrain.KeepHouse(i))houses++;
-                if(CoastalTerrain.KeepTree(i))trees++;
+                Assert.That(CoastalTerrain.Height(t,140.001)-Deck,Is.LessThan(.05),"north edge at x="+t);
+                Assert.That(Math.Abs(CoastalTerrain.Height(t,141)-Deck),Is.LessThan(.2));
             }
+            for(var z=-139;z<=140;z+=10)
+            {
+                Assert.That(CoastalTerrain.Height(240.001,z)-Deck,Is.LessThan(.05),"east edge at z="+z);
+                Assert.That(CoastalTerrain.Height(-240.001,z)-Deck,Is.LessThan(.05));
+            }
+            var grid=TerrainGrid.Standard();
+            var worst=0.0;
+            for(var z=-140;z<2400;z+=10)for(var x=-3800;x<3800;x+=10)
+            {
+                var h=CoastalTerrain.Height(x,z);
+                Assert.That(double.IsNaN(h)||double.IsInfinity(h),Is.False);
+                Assert.That(h,Is.InRange(Deck,Deck+CoastalTerrain.MaxReliefM));
+                worst=Math.Max(worst,Math.Abs(CoastalTerrain.Height(x+10,z)-h));
+                worst=Math.Max(worst,Math.Abs(CoastalTerrain.Height(x,z+10)-h));
+            }
+            TestContext.WriteLine("Steepest 10 m step on the terrain: "+worst.ToString("F2")+" m");
+            Assert.That(worst,Is.LessThan(2.6));
+            // grid lines fall exactly on the core's edges, so the visual mesh has no gap or T-junction there
+            foreach(var line in new[]{-240f,240f})Assert.That(grid.Xs.Contains(line),Is.True);
+            foreach(var line in new[]{-140f,140f})Assert.That(grid.Zs.Contains(line),Is.True);
+            Assert.That(grid.Xs.Last(),Is.EqualTo((float)CoastalTerrain.TerrainHalfWidthM),"flat far flanks reach past the far clip; no 4.8 km continuation");
+            Assert.That(grid.Zs.Last(),Is.EqualTo((float)CoastalTerrain.TerrainReachM));
+            Assert.That((grid.Xs.Count-1)*(grid.Zs.Count-1),Is.LessThan(40000),"terrain quads");
+        }
+
+        [Test]
+        public void MeshHeightIsTheDrawnSurfaceAndMatchesTheFieldAtEveryVertex()
+        {
+            var grid=TerrainGrid.Standard();
+            for(var j=0;j<grid.Zs.Count;j+=7)for(var i=0;i<grid.Xs.Count;i+=7)
+                Assert.That(grid.MeshHeight(grid.Xs[i],grid.Zs[j]),Is.EqualTo(CoastalTerrain.Height(grid.Xs[i],grid.Zs[j])).Within(1e-9));
+            // between vertices it is the two-triangle surface: the midpoint of a quad's shared diagonal is the mean of its ends
+            double x0=grid.Xs[200],x1=grid.Xs[201],z0=grid.Zs[90],z1=grid.Zs[91];
+            var diagonal=(CoastalTerrain.Height(x0,z0)+CoastalTerrain.Height(x1,z1))/2;
+            Assert.That(grid.MeshHeight((x0+x1)/2,(z0+z1)/2),Is.EqualTo(diagonal).Within(1e-9));
+        }
+
+        [Test]
+        public void TownApronRisesNoMoreThanTenMetresInTheFirstFourHundredOutsideTheCore()
+        {
+            // pins A1: the old ground rose 30 m here and filled the frame with hill
+            for(var z=-139;z<2400;z+=9)for(var x=-2400;x<2400;x+=11)
+                if(CoastalTerrain.CoreDistance(x,z)<=400)
+                    Assert.That(CoastalTerrain.Height(x,z)-Deck,Is.LessThan(10.01),"at "+x+","+z);
+        }
+
+        [Test]
+        public void NothingWithinThirteenHundredMetresStandsMoreThanThirtyFourMetresAboveTheDeck()
+        {
+            var highest=0.0;
+            for(var z=-139;z<=3000;z+=7)for(var x=-3000;x<=3000;x+=7)
+                if(CoastalTerrain.CoreDistance(x,z)<=1300)highest=Math.Max(highest,CoastalTerrain.Height(x,z)-Deck);
+            TestContext.WriteLine("Highest ground within 1300 m of the core: "+highest.ToString("F1")+" m above the deck");
+            Assert.That(highest,Is.LessThanOrEqualTo(34));
+            Assert.That(highest,Is.GreaterThan(14),"the knolls still stand (6-16 m of relief above the apron)");
+        }
+
+        /// <summary>The steepest elevation angle, degrees, at which bare ground rises above the horizontal from an eye, over a fan of azimuths.</summary>
+        static double Skyline(double eyeX,double eyeZ,double centreAzimuthDegrees,double halfFanDegrees)
+        {
+            var eye=Deck+6;var best=-90.0;
+            for(var a=-halfFanDegrees;a<=halfFanDegrees;a+=1)
+            {
+                var az=(centreAzimuthDegrees+a)*Math.PI/180;
+                for(var d=8.0;d<=2400;d+=8)
+                {
+                    var x=eyeX+Math.Sin(az)*d;var z=eyeZ+Math.Cos(az)*d;
+                    best=Math.Max(best,Math.Atan2(CoastalTerrain.Height(x,z)-eye,d)*180/Math.PI);
+                }
+            }
+            return best;
+        }
+
+        [Test]
+        public void BareGroundSkylineIsLowFromTheQuays()
+        {
+            // pins A1: from 6 m above North Quay looking north (+-35 degrees) the bare ground is within 2.5 degrees of the horizontal
+            var north=0.0;
+            foreach(var x in new[]{-110.0,-60,0,60,100})north=Math.Max(north,Skyline(x,100,0,35));
+            // ...and within 3 degrees from the East Quay and Basin eyes looking east and west
+            var east=Math.Max(Skyline(150,0,90,35),Math.Max(Skyline(160,-40,90,35),Skyline(150,40,90,35)));
+            var west=Math.Max(Skyline(-190,0,-90,35),Math.Max(Skyline(-190,-60,-90,35),Skyline(-190,60,-90,35)));
+            TestContext.WriteLine("Bare-ground skyline: north "+north.ToString("F2")+" deg, east "+east.ToString("F2")+", west "+west.ToString("F2"));
+            Assert.That(north,Is.LessThanOrEqualTo(2.5));
+            Assert.That(east,Is.LessThanOrEqualTo(3.0));
+            Assert.That(west,Is.LessThanOrEqualTo(3.0));
+            Assert.That(north,Is.GreaterThan(.5),"the land still has some shape");
+        }
+
+        [Test]
+        public void ADistantRidgeCarriesTheSkylineWithSeveralDistinctHills()
+        {
+            // pins A1: one hazy ridge 2400-3000 m out, the highest crest about 2.6 degrees above the horizontal from the harbour,
+            // lower shoulders 1-1.8 degrees, nothing at the two ends
+            var eye=Deck+6;
+            double Angle(double x)=>Math.Atan2(CoastalTerrain.RidgeHeight(x,2760)-eye,2760-100)*180/Math.PI;
+            var peak=-90.0;var angles=new List<double>();
+            for(var x=-2400.0;x<=2400;x+=50){var a=Angle(x);angles.Add(a);peak=Math.Max(peak,a);}
+            TestContext.WriteLine("Ridge crest: highest "+peak.ToString("F2")+" deg");
+            Assert.That(peak,Is.InRange(2.4,2.8));
+            var summits=new List<double>();
+            for(var i=2;i<angles.Count-2;i++)
+                if(angles[i]>angles[i-1]&&angles[i]>=angles[i+1]&&angles[i]>angles[i-2]&&angles[i]>=angles[i+2]&&angles[i]>.6)summits.Add(angles[i]);
+            Assert.That(summits.Count,Is.InRange(2,5),"two or three overlapping hills (plus a low far shoulder)");
+            Assert.That(summits.Count(a=>a>=.9&&a<=1.9),Is.GreaterThanOrEqualTo(1),"a lower shoulder of 1-1.8 degrees");
+            Assert.That(summits.Distinct().Count(),Is.EqualTo(summits.Count),"distinct profiles");
+            Assert.That(CoastalTerrain.RidgeHeight(-2400,2760)-Deck,Is.LessThan(.5));
+            Assert.That(CoastalTerrain.RidgeHeight(2400,2760)-Deck,Is.LessThan(.5),"open sky and sea horizon beside it");
+            // inside the viewing range: from the HOME eye it stays clear of the 3,600 m far clip
+            Assert.That(Math.Sqrt(3050.0*3050+420*420+130*130),Is.LessThan(3600));
+            Assert.That(CoastalTerrain.RidgeRowZ[0],Is.GreaterThanOrEqualTo(2300));
+            Assert.That(CoastalTerrain.RidgeRowZ.Last(),Is.LessThanOrEqualTo(3100));
+            var columns=(int)(2*CoastalTerrain.RidgeHalfWidth/CoastalTerrain.RidgeColumnStep);
+            Assert.That(columns*(CoastalTerrain.RidgeRowZ.Length-1)*2,Is.LessThan(700),"a few hundred triangles");
+        }
+
+        [Test]
+        public void WoodlandCoversAboutSeventyPercentOfTheOpenLandInBroadConnectedStands()
+        {
+            var woods=0;var land=0;var neighbours=0;
+            for(var z=-80;z<1300;z+=15)for(var x=-1500;x<1500;x+=15)
+            {
+                var d=CoastalTerrain.CoreDistance(x,z);
+                if(d<250||d>1100)continue;
+                land++;
+                if(CoastalTerrain.Woodland(x,z)){woods++;if(CoastalTerrain.Woodland(x+15,z))neighbours++;}
+            }
+            var cover=woods/(double)land;
+            TestContext.WriteLine("Woodland covers "+cover.ToString("P1")+" of the land 250-1100 m out");
+            Assert.That(cover,Is.InRange(.60,.70));
+            Assert.That(neighbours/(double)woods,Is.GreaterThan(.8),"stands are connected, not scattered");
+            // clearings: several open patches of 60-200 m, some touching the town edge
+            Assert.That(CoastalTerrain.Clearing(-80,1060),Is.True,"a clearing on a knoll");
+            Assert.That(CoastalTerrain.ClearingWeight(-250,372),Is.GreaterThan(.9));
+            Assert.That(CoastalTerrain.ClearingWeight(330,370),Is.GreaterThan(.9));
+            Assert.That(CoastalTerrain.ForestCover(0,2000),Is.InRange(0,1));
+        }
+
+        [Test]
+        public void ThinningRetainsSixtyPercentOfHouses()
+        {
+            var houses=0;
+            for(var i=0;i<1000;i++)if(CoastalTerrain.KeepHouse(i))houses++;
             Assert.That(houses,Is.EqualTo(600));
-            Assert.That(trees,Is.EqualTo(200));
         }
 
         [TestCase(12.5,0)]
         [TestCase(17.5,1)]
         [TestCase(23,0)]
         [TestCase(23,1)]
-        public void FogProtectsTheTownAndDissolvesTheFarForest(double hour,double storm)
+        public void FogProtectsTheTownAndDissolvesTheFarWorld(double hour,double storm)
         {
             var s=DayLighting.Evaluate(hour,new Weather(storm,storm));
             Assert.That(s.FogColor,Is.EqualTo(s.Horizon),"fog follows the actual day, night and storm horizon");
-            Assert.That(s.SceneryTransmission(600,110,20,80),Is.EqualTo(1));
-            Assert.That(s.SceneryTransmission(900,300,15,140),Is.GreaterThan(.96),"portrait foreground stays crisp");
-            Assert.That(s.SceneryTransmission(1500,110,80,1000),Is.GreaterThan(.99),"near and middle hillside stay clear");
-            Assert.That(s.SceneryTransmission(2300,110,90,1900),Is.InRange(.2,.8),"far woodland retains form through haze");
-            Assert.That(s.SceneryTransmission(3800,110,40,3000),Is.LessThan(.4));
-            var low=s.SceneryTransmission(2100,110,40,1700);
-            var high=s.SceneryTransmission(2100,110,170,1700);
-            Assert.That(low,Is.LessThan(high),"height fog pools below the upper slopes");
+            Assert.That(s.SceneryTransmission(600,110,20,80),Is.EqualTo(1),"inside the town ramp: crisp");
+            Assert.That(s.SceneryTransmission(900,300,15,100),Is.EqualTo(1),"portrait foreground stays crisp");
+            Assert.That(s.SceneryTransmission(700,100,10,140),Is.GreaterThan(.95),"the town's edge is barely touched");
+            Assert.That(s.SceneryTransmission(2800,100,5,2000),Is.LessThan(.2));
+            var low=s.SceneryTransmission(1000,100,10,800);
+            var high=s.SceneryTransmission(1000,100,170,800);
+            Assert.That(low,Is.LessThanOrEqualTo(high),"height fog pools below the upper slopes");
             Assert.That(high,Is.InRange(0,1));
         }
 
+        [Test]
+        public void HazeRangeFromHome_ClearAt1000m_HalfAt1750m_FifthBy2500mAtNoon_HalfAt1000mInTheStorm()
+        {
+            // pins the retuned range: from the HOME camera (z=-420, y=100) the forest 300 m behind the town (about 1,000-1,100 m away) keeps its
+            // colour; the haze closes in beyond it
+            var noon=DayLighting.Evaluate(12.5,new Weather(0,0));
+            var storm=DayLighting.Evaluate(12.5,new Weather(1,1));
+            double At(SkyState s,double d)=>s.SceneryTransmission(d,100,25,Math.Max(0,d-600));
+            TestContext.WriteLine("Noon transmission: 1000 m "+At(noon,1000).ToString("F3")+", 1100 "+At(noon,1100).ToString("F3")+", 1750 "+At(noon,1750).ToString("F3")+", 2500 "+At(noon,2500).ToString("F3")+"; storm 1000 m "+At(storm,1000).ToString("F3"));
+            Assert.That(At(noon,1000),Is.GreaterThanOrEqualTo(.8));
+            Assert.That(At(noon,1100),Is.GreaterThanOrEqualTo(.8));
+            Assert.That(At(noon,1750),Is.InRange(.42,.58));
+            Assert.That(At(noon,2500),Is.InRange(.10,.25));
+            Assert.That(At(storm,1000),Is.InRange(.40,.60));
+            Assert.That(At(storm,1500),Is.LessThan(.2),"the storm closes the view further");
+            // ground-level eye (8 m): the same curve
+            Assert.That(noon.SceneryTransmission(1750,8,20,1500),Is.InRange(.40,.60));
+        }
+
+        [Test]
+        public void TheRidgeIsADefiniteSilhouetteAtNoonAndFaintButPresentInTheStorm()
+        {
+            var noon=DayLighting.Evaluate(12.5,new Weather(0,0));
+            var storm=DayLighting.Evaluate(12.5,new Weather(1,1));
+            foreach(var d in new[]{3000.0,3200,3400})
+            {
+                Assert.That(noon.RidgeTransmission(d),Is.InRange(.45,.70),"a soft but definite shape at "+d+" m");
+                Assert.That(noon.RidgeTransmission(d),Is.GreaterThan(noon.SceneryTransmission(d,100,40,2500)*3),"lighter fog than the shared curve");
+                Assert.That(storm.RidgeTransmission(d),Is.InRange(.02,.2),"faint but present in the storm");
+            }
+        }
 
         [Test]
         public void NoonHazeIsCoolAndMatchesTheHorizon()
@@ -93,49 +247,12 @@ namespace DeviceChain.Harborpulse.Tests
         }
 
         [Test]
-        public void FixedLandscapeHomeHasSkyAboveTheTerrainAndExposedSummit()
+        public void ShaderFogGainMatchesTheStrengthTheLitMaterialsKeep()
         {
-            const int columns=100;
-            var top=new double[columns];
-            for(var i=0;i<columns;i++)top[i]=-1;
-            var pitch=Math.Atan2(-110,460);var fy=Math.Sin(pitch);var fz=Math.Cos(pitch);
-            var tan=Math.Tan(15*Math.PI/180);
-            void Project(double x,double y,double z)
-            {
-                var depth=(z+420)*fz+(y-110)*fy;
-                var nx=x/(depth*tan*16/9);
-                if(nx<=-1||nx>=1)return;
-                var col=(int)((nx+1)*.5*columns);
-                var ny=((y-110)*fz-(z+420)*fy)/(depth*tan);
-                top[col]=Math.Max(top[col],ny);
-            }
-            for(var z=500;z<=4800;z+=10)
-                for(var x=-4800;x<=4800;x+=10)Project(x,CoastalTerrain.Height(x,z),z);
-            var sky=0.0;foreach(var y in top)sky+=(1-y)*.5/columns;
-            TestContext.WriteLine("Landscape terrain sky estimate: "+sky.ToString("P5"));
-            Assert.That(sky,Is.InRange(.08,.16),"analytic terrain silhouette; actual HOME masks still require Unity");
-            var summit=CoastalTerrain.Height(-90,1050);
-            Assert.That(summit,Is.GreaterThan(CoastalTerrain.Height(-90,790)+25));
-            Assert.That(summit,Is.GreaterThan(CoastalTerrain.Height(-90,1310)+25));
-            // The summit must make a visible central bulge, rather than merely being high in WORLD metres.
-            var center=0.0;for(var i=30;i<60;i++)center+=top[i]/30;
-            var sides=(top[5]+top[95])*.5;
-            Assert.That(center-sides,Is.GreaterThan(.025),"central summit silhouette has at least 13.5 px mean prominence at 1080p");
-        }
-
-        [Test]
-        public void WoodlandHasConnectedStandsAndBroadGaps()
-        {
-            var trees=0;var neighbors=0;var gaps=0;
-            for(var z=500;z<1600;z+=20)for(var x=-1000;x<1000;x+=20)
-            {
-                if(CoastalTerrain.Woodland(x,z))
-                {trees++;if(CoastalTerrain.Woodland(x+20,z))neighbors++;}
-                else gaps++;
-            }
-            Assert.That(neighbors/(double)trees,Is.GreaterThan(.7));
-            Assert.That(gaps,Is.GreaterThan(trees));
-            Assert.That(CoastalTerrain.Woodland(160,1080),Is.False);
+            // The planar and URP fog on every other material read FogDensity itself: it must stay small, so the town and the water are not hazed.
+            var noon=DayLighting.Evaluate(12.5,new Weather(0,0));
+            Assert.That(noon.FogDensity,Is.LessThan(.0003));
+            Assert.That(Math.Exp(-Math.Pow(noon.FogDensity*700,2)),Is.GreaterThan(.97),"the lit town at 700 m under the URP fog");
         }
 
         [TestCase(0,-420)]
@@ -156,33 +273,6 @@ namespace DeviceChain.Harborpulse.Tests
             }
             var again=new OceanPatch[OceanRing.PatchCount];OceanRing.Fill(cx,cz,720,9000,again);
             Assert.That(again,Is.EqualTo(patches));
-        }
-
-        [Test]
-        public void WoodlandStopsBeforeTheSummitAndIncludesTheWholeCrown()
-        {
-            var plan=WorldPropPlan.Generate(new Model.Director.PresentationMap(Kit.Layout()),Kit.Layout());
-            var trees=0;var rocks=0;
-            foreach(var tree in plan.Props)
-            {
-                if(tree.Kind=="Tree")trees++;
-                if(tree.Kind=="Rock")rocks++;
-                if(tree.Kind=="Tree" && tree.Area=="forest")
-                    Assert.That(CoastalTerrain.ForestFits(tree.At.X,tree.At.Z,tree.Height),Is.True);
-            }
-            Assert.That(trees,Is.LessThanOrEqualTo(806),"round-2 tree count is the placement budget");
-            TestContext.WriteLine("Round-3 plan: "+trees+" trees, "+rocks+" granite clusters");
-            Assert.That(CoastalTerrain.ForestFits(0,990,30),Is.False);
-            Assert.That(CoastalTerrain.ForestFits(0,1800,20),Is.False);
-        }
-
-        [Test]
-        public void StormThickensBothFogTerms()
-        {
-            var day=DayLighting.Evaluate(12.5,new Weather(0,0));
-            var storm=DayLighting.Evaluate(12.5,new Weather(1,1));
-            Assert.That(storm.HeightFogDensity,Is.GreaterThan(day.HeightFogDensity));
-            Assert.That(storm.SceneryTransmission(2300,110,120,1900),Is.LessThan(day.SceneryTransmission(2300,110,120,1900)));
         }
     }
 }

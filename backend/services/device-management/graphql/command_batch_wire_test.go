@@ -38,7 +38,7 @@ func newBatchWireCtx(t *testing.T) context.Context {
 	}
 	if err := db.AutoMigrate(&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{},
 		&model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{}, &model.CommandDefinition{}, &model.MetricDefinition{},
-		&model.DetectionRule{}, &model.EntityAttribute{}, &model.EntityGroup{}, &model.IssuedGroupToken{},
+		&model.DetectionRule{}, &model.EntityAttribute{}, &model.AttributeGeneration{}, &model.EntityGroup{}, &model.IssuedGroupToken{},
 		&model.EntityGroupVersion{}, &model.EntityGroupMembership{}, &model.EntityGroupFacetRef{},
 		&model.DetectionRuleScopeRef{}, &model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{},
 		&model.EntityRelationshipType{}); err != nil {

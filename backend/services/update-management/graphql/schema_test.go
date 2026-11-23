@@ -67,7 +67,7 @@ func TestTheOperationSetIsExactlyTheCatalogue(t *testing.T) {
 		return out
 	}
 	require.Equal(t, []string{"artifact", "artifactSigner", "artifactSigners", "artifacts", "updateAssignment", "updateAssignments", "updateManagementInfo", "updateRollout", "updateRolloutTargets", "updateRollouts"}, names(got.Schema.QueryType.Fields))
-	require.Equal(t, []string{"abandonUnknownUpdate", "abortUpdateRollout", "addArtifactSignature", "assignArtifact", "cancelUpdate", "createArtifact", "createUpdateRollout", "pauseUpdateRollout", "registerArtifactSigner", "resumeUpdateRollout", "retireArtifact", "revokeArtifactSigner", "startUpdateRollout"}, names(got.Schema.MutationType.Fields))
+	require.Equal(t, []string{"abandonUnknownUpdate", "abortUpdateRollout", "addArtifactSignature", "assignArtifact", "cancelUpdate", "createArtifact", "createUpdateRollout", "pauseUpdateRollout", "promoteUpdateRollout", "registerArtifactSigner", "resumeHaltedUpdateRollout", "resumeUpdateRollout", "retireArtifact", "revokeArtifactSigner", "startUpdateRollout"}, names(got.Schema.MutationType.Fields))
 	require.Nil(t, got.Schema.SubscriptionType)
 }
 
@@ -167,7 +167,7 @@ func newPlane(t *testing.T) *plane {
 	store, err := blob.New(context.Background(), blob.Config{Backend: blob.BackendFilesystem, Directory: t.TempDir()}, "inst")
 	require.NoError(t, err)
 	api := model.NewApi(&rdb.RdbManager{Database: db}, store, model.Limits{
-		MaxArtifactBytes: 1 << 20, ConfiguredMaxArtifactBytes: 1 << 20, MaxTenantArtifactBytes: 1 << 30,
+		MaxArtifactBytes: 1 << 20, MaxTenantArtifactBytes: 1 << 30,
 	})
 	api.Profiles = fakeProfiles{}
 	return &plane{t: t, api: api, schema: gql.MustParseSchema(SchemaContent, &SchemaResolver{Area: "update-management"})}

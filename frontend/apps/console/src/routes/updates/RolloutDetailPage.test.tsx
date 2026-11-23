@@ -41,6 +41,12 @@ function rollout(over: Record<string, unknown> = {}) {
     state: 'RUNNING',
     pauseReason: null,
     targetCount: 10,
+    cohorts: [],
+    currentCohort: 0,
+    failureRate: null,
+    haltSequence: 0,
+    haltFailures: 0,
+    haltSamples: 0,
     createdAt: '2026-10-01T10:00:00Z',
     createdBy: 'ops@example.com',
     startedAt: '2026-10-01T10:01:00Z',
@@ -52,6 +58,18 @@ function rollout(over: Record<string, unknown> = {}) {
     ...over,
   };
 }
+
+function cohortCounts(total: number, over: Record<string, number>) {
+  return { total, pending: 0, inFlight: 0, succeeded: 0, failed: 0, unknown: 0, cancelled: 0, skipped: 0, ...over };
+}
+
+const staged = {
+  cohorts: [
+    { name: 'canary', deviceTokens: ['dev-1', 'dev-2'], percentage: 0, manualPromotion: true, progress: cohortCounts(2, { succeeded: 2 }) },
+    { name: 'quarter', deviceTokens: [], percentage: 25, manualPromotion: true, progress: cohortCounts(5, { succeeded: 1, inFlight: 2, failed: 1, unknown: 1 }) },
+    { name: 'everyone', deviceTokens: [], percentage: 100, manualPromotion: false, progress: cohortCounts(3, { pending: 3 }) },
+  ],
+};
 
 const world = {
   rollout: rollout(),
@@ -78,8 +96,8 @@ beforeEach(() => {
         return Promise.resolve({
           updateRolloutTargets: {
             results: [
-              { deviceToken: 'dev-1', outcome: 'SUCCEEDED', assignmentToken: 'asg-1', attemptState: 'UPDATED', skipCode: null, skipDetail: null, dispatchedAt: '2026-10-01T10:01:00Z' },
-              { deviceToken: 'dev-2', outcome: 'SKIPPED', assignmentToken: null, attemptState: null, skipCode: 'DEVICE_DISABLED', skipDetail: 'device "dev-2" is disabled', dispatchedAt: null },
+              { cohort: 0, deviceToken: 'dev-1', outcome: 'SUCCEEDED', assignmentToken: 'asg-1', attemptState: 'UPDATED', skipCode: null, skipDetail: null, dispatchedAt: '2026-10-01T10:01:00Z' },
+              { cohort: 1, deviceToken: 'dev-2', outcome: 'SKIPPED', assignmentToken: null, attemptState: null, skipCode: 'DEVICE_DISABLED', skipDetail: 'device "dev-2" is disabled', dispatchedAt: null },
             ],
             pagination: { pageStart: 1, pageEnd: 2, totalRecords: 2 },
           },
@@ -90,6 +108,12 @@ beforeEach(() => {
       case 'ResumeUpdateRollout':
         world.rollout = rollout({ state: 'RUNNING' });
         return Promise.resolve({ resumeUpdateRollout: world.rollout });
+      case 'PromoteUpdateRollout':
+        world.rollout = rollout({ ...staged, state: 'RUNNING', currentCohort: 2 });
+        return Promise.resolve({ promoteUpdateRollout: world.rollout });
+      case 'ResumeHaltedUpdateRollout':
+        world.rollout = rollout({ state: 'RUNNING', haltSequence: 3 });
+        return Promise.resolve({ resumeHaltedUpdateRollout: world.rollout });
       case 'AbortUpdateRollout':
         world.rollout = rollout({ state: 'ABORTED' });
         return Promise.resolve({ abortUpdateRollout: world.rollout });
@@ -165,6 +189,123 @@ describe('RolloutDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Resume with this threshold/ }));
     await waitFor(() => expect(sent('ResumeUpdateRollout')).toHaveLength(1));
     expect(sent('ResumeUpdateRollout')[0].vars).toEqual({ token: 'spring', failureThreshold: 6 });
+  });
+
+  it('lists the cohort plan and marks done, current and upcoming cohorts', async () => {
+    world.rollout = rollout({ ...staged, state: 'PAUSED', pauseReason: 'COHORT_READY', currentCohort: 1 });
+    renderPage();
+    const panel = (await screen.findByText('Cohorts and safety gates')).closest('section') ?? document.body;
+    expect(screen.getByTestId('cohort-current').textContent).toContain('Cohort 2 of 3: quarter');
+    expect(screen.getByTestId('cohort-current').textContent).toContain('Cohort complete, ready to promote');
+    expect(within(panel as HTMLElement).getByText('Complete')).toBeTruthy();
+    expect(within(panel as HTMLElement).getByText('Current')).toBeTruthy();
+    expect(within(panel as HTMLElement).getByText('Upcoming')).toBeTruthy();
+    expect(within(panel as HTMLElement).getByText('Up to 25% of the fleet')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Resume$/ })).toBeNull();
+  });
+
+  it('shows each cohort its own counts and no longer claims the counts are rollout-wide', async () => {
+    world.rollout = rollout({ ...staged, state: 'RUNNING', currentCohort: 1 });
+    renderPage();
+    await screen.findByText('Cohorts and safety gates');
+    const row = (i: number) => screen.getByTestId(`cohort-counts-${i}`).closest('tr') as HTMLElement;
+    const cells = (i: number) => within(row(i)).getAllByRole('cell').map((c) => c.textContent);
+    // #, name, size, promotion, status, devices, updated, in flight, pending, failed or unknown
+    expect(cells(0).slice(5)).toEqual(['2', '2', '0', '0', '0']);
+    expect(cells(1).slice(5)).toEqual(['5', '1', '2', '0', '2']);
+    expect(cells(2).slice(5)).toEqual(['3', '0', '0', '3', '0']);
+    expect(screen.queryByText(/cover every device in the rollout/)).toBeNull();
+  });
+
+  it('filters the devices table by cohort with criteria.cohort', async () => {
+    world.rollout = rollout({ ...staged, state: 'RUNNING', currentCohort: 1 });
+    renderPage();
+    await screen.findByText('dev-1');
+    const targetCalls = () => world.calls.filter((c) => c.op === 'UpdateRolloutTargets');
+    expect((targetCalls()[targetCalls().length - 1].vars.criteria as Record<string, unknown>).cohort).toBeUndefined();
+    fireEvent.click(screen.getByRole('button', { name: /Filter devices by cohort/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '2 · quarter' }));
+    await waitFor(() => expect((targetCalls()[targetCalls().length - 1].vars.criteria as Record<string, unknown>).cohort).toBe(1));
+  });
+
+  it('promotes with the cohort on screen as expectedCohort and no override', async () => {
+    world.rollout = rollout({ ...staged, state: 'PAUSED', pauseReason: 'COHORT_READY', currentCohort: 1 });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Promote to next cohort/ }));
+    await waitFor(() => expect(sent('PromoteUpdateRollout')).toHaveLength(1));
+    expect(sent('PromoteUpdateRollout')[0].vars).toEqual({ token: 'spring', expectedCohort: 1 });
+  });
+
+  it('shows a stale-promotion refusal from the service instead of advancing', async () => {
+    world.rollout = rollout({ ...staged, state: 'PAUSED', pauseReason: 'COHORT_READY', currentCohort: 0 });
+    const base = gqlMock.getMockImplementation()!;
+    gqlMock.mockImplementation((area: string, doc: unknown, vars: Record<string, unknown>) =>
+      opName(String(doc)) === 'PromoteUpdateRollout'
+        ? Promise.reject(new Error('expected cohort 0 but the rollout is at cohort 1'))
+        : base(area, doc, vars),
+    );
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Promote to next cohort/ }));
+    expect(await screen.findByText(/expected cohort 0/)).toBeTruthy();
+  });
+
+  it('needs a confirmation before promoting past failures, and only then sets overrideFailure', async () => {
+    world.rollout = rollout({
+      ...staged,
+      state: 'PAUSED',
+      pauseReason: 'COHORT_FAILED',
+      currentCohort: 0,
+      progress: { total: 10, pending: 8, inFlight: 0, succeeded: 1, failed: 1, unknown: 0, cancelled: 0, skipped: 0 },
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Promote despite failures/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('1 device(s) in this cohort failed');
+    expect(sent('PromoteUpdateRollout')).toHaveLength(0);
+    // Dismissing the dialog promotes nothing.
+    fireEvent.click(within(dialog).getByRole('button', { name: /Cancel/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(sent('PromoteUpdateRollout')).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /Promote despite failures/ }));
+    const again = await screen.findByRole('dialog');
+    fireEvent.click(within(again).getByRole('button', { name: /Promote despite failures/ }));
+    await waitFor(() => expect(sent('PromoteUpdateRollout')).toHaveLength(1));
+    expect(sent('PromoteUpdateRollout')[0].vars).toEqual({ token: 'spring', expectedCohort: 0, overrideFailure: true });
+  });
+
+  it('overrides a failure-rate halt only after confirmation, naming the halt it saw', async () => {
+    world.rollout = rollout({
+      state: 'PAUSED',
+      pauseReason: 'FAILURE_RATE',
+      failureRate: { percentage: 20, windowSeconds: 600, minimumSamples: 5 },
+      haltSequence: 2,
+      haltFailures: 3,
+      haltSamples: 10,
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Override failure-rate halt and resume/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(sent('ResumeHaltedUpdateRollout')).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole('button', { name: /Override failure-rate halt and resume/ }));
+    await waitFor(() => expect(sent('ResumeHaltedUpdateRollout')).toHaveLength(1));
+    expect(sent('ResumeHaltedUpdateRollout')[0].vars).toEqual({ token: 'spring', haltSequence: 2 });
+    expect(screen.queryByRole('button', { name: /^Resume$/ })).toBeNull();
+  });
+
+  it('offers a plain Resume (not Promote) to a COHORT_FAILED pause only alongside the override', async () => {
+    world.rollout = rollout({ ...staged, state: 'PAUSED', pauseReason: 'COHORT_FAILED' });
+    renderPage();
+    expect(await screen.findByRole('button', { name: /^Resume$/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Promote to next cohort/ })).toBeNull();
+  });
+
+  it('gives a reader the cohort plan but no promote or override controls', async () => {
+    authorities.value = ['artifact:read'];
+    world.rollout = rollout({ ...staged, state: 'PAUSED', pauseReason: 'COHORT_READY' });
+    renderPage();
+    expect(await screen.findByText('Cohorts and safety gates')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Promote/ })).toBeNull();
   });
 
   it('starts a draft after confirmation and shows no device table before the start', async () => {

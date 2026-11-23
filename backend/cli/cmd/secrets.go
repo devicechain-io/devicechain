@@ -47,6 +47,8 @@ was created, its cipher and key-derivation parameters, and the digest of the roo
 Everything printed is cleartext and needs no passphrase; nothing is decrypted. The header is
 bound to the encrypted key, so an edit to it fails at restore, but show does not check that. Use it to tell which of several files belongs to which instance. To check an
 artifact against a live instance, use "dcctl secrets escrow verify".`,
+	Example: `  dcctl secrets escrow show ~/.devicechain/escrow/prod.escrow
+  dcctl secrets escrow show ./prod-rootkey.escrow`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		art, err := readEscrowArtifact(args[0])
@@ -91,6 +93,9 @@ was re-bootstrapped after the file was written, or the file belongs to another i
 the instance has no usable escrow. The command exits non-zero in that case.
 
   dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow`,
+	Example: `  # exits non-zero when the artifact does not hold the key the instance is running
+  dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow
+  dcctl secrets escrow verify --instance prod --kube-context prod ./prod-rootkey.escrow`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if escrowInstance == "" {

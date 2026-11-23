@@ -22,15 +22,17 @@ const (
 
 // ActionRisk declares a proposal's effect, or a ledger read's disclosure.
 type ActionRisk struct {
-	Impact     Impact
-	Reversible bool
-	Discloses  string
-	ReadOnly   bool
+	Impact          Impact
+	Reversible      bool
+	Discloses       string
+	ReadOnly        bool
+	DestructiveHint bool
 }
 
 type options struct {
-	actuation   bool
-	sessionCaps *sessionCaps // unexported small-cap test seam; no typed-config key
+	actuation        bool
+	commandProposals bool
+	sessionCaps      *sessionCaps // unexported small-cap test seam; no typed-config key
 }
 
 // Option configures optional MCP capabilities.
@@ -38,6 +40,11 @@ type Option func(*options)
 
 // WithActuation enables Preview proposal tools; each caller still needs an act scope.
 func WithActuation(enabled bool) Option { return func(o *options) { o.actuation = enabled } }
+
+// WithCommandProposals enables command proposals only alongside WithActuation.
+func WithCommandProposals(enabled bool) Option {
+	return func(o *options) { o.commandProposals = enabled }
+}
 
 func (r ActionRisk) validate(name string) error {
 	switch r.Impact {
@@ -94,7 +101,7 @@ func registerAction[In, Out any](s *mcp.Server, c *Catalog, tool *mcp.Tool, requ
 	if !strings.Contains(tool.Description, untrustedNotice) {
 		tool.Description = strings.TrimSpace(tool.Description) + " " + untrustedNotice
 	}
-	destructive := false
+	destructive := risk.DestructiveHint
 	tool.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: risk.ReadOnly, DestructiveHint: &destructive, IdempotentHint: risk.ReadOnly}
 	tool.Meta = mcp.Meta{riskMetaKey: map[string]any{"impact": string(risk.Impact), "reversible": risk.Reversible, "discloses": risk.Discloses, "readOnly": risk.ReadOnly}}
 	finishRegistration(s, c, tool, func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {

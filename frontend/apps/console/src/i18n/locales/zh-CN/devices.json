@@ -630,5 +630,5 @@
   "droppedLastSeenColumn": "最后出现",
   "droppedReason_UNDECLARED_NON_NUMERIC": "未在配置文件中声明，且值不是数字",
   "droppedReason_UNDECLARED_UNSTORABLE": "未在配置文件中声明，且该数字无法存储",
-  "droppedReason_DECLARED_NOT_STORABLE": "声明的数据类型不是时间序列指标"
+  "droppedReason_DECLARED_NOT_STORABLE": "声明的数据类型无法存储，或文本（STRING）值过长或不是有效文本"
 }

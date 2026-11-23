@@ -158,3 +158,30 @@ func TestBuildInputsBatchedLocationFixes(t *testing.T) {
 		}
 	}
 }
+
+// A reading declared STRING is text even when it parses as a number: a rule never sees "12" as a
+// twelve, while a numeric reading and an undeclared numeric one still feed M.
+func TestBuildInputsSkipsADeclaredStringReadingThatLooksNumeric(t *testing.T) {
+	base := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	str, dbl := "STRING", "DOUBLE"
+	ev := &resolvedevent.ResolvedEvent{
+		SourceDeviceToken: "d1",
+		OccurredTime:      base,
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
+			OccurredTime: base,
+			Entries: []resolvedevent.ResolvedMeasurementEntry{
+				{Name: "code", Value: "12", DataType: &str},
+				{Name: "mode", Value: "heating", DataType: &str},
+				{Name: "temp", Value: "21.5", DataType: &dbl},
+				{Name: "undeclared", Value: "7"},
+			},
+		}}},
+	}
+	in := BuildInputs(ev, base)[0]
+	if _, ok := in.M["code"]; ok {
+		t.Fatalf("a STRING reading that parses as a number reached M: %v", in.M)
+	}
+	if len(in.M) != 2 || in.M["temp"] != 21.5 || in.M["undeclared"] != 7 {
+		t.Fatalf("M = %v; want temp and undeclared only", in.M)
+	}
+}

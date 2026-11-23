@@ -109,6 +109,9 @@ const (
 	ResolveFound                            // the device already existed
 	ResolveCreated                          // the device was auto-registered on this call
 	ResolveTenantGone                       // the tenant has been deleted (ADR-077) — do not ingest
+	// ResolveRegisterBackoff: the device's auto-registration failed recently and it is waiting
+	// out its backoff window (see register_backoff.go) — do not ingest, and do not retry.
+	ResolveRegisterBackoff
 )
 
 // Ingestible reports whether an outcome produced a device token to emit under.
@@ -144,6 +147,8 @@ type Registrar struct {
 	tokenPrefix string
 
 	cache *tokenCache
+	// backoff holds the devices whose auto-registration failed recently; see register_backoff.go.
+	backoff *registerBackoff
 	// now is the cache's clock (time.Now), replaced in tests so an entry's expiry can be
 	// reached without sleeping through tokenCacheTTL.
 	now func() time.Time
@@ -167,7 +172,7 @@ func NewRegistrar(client GraphQLClient, graphqlURL, tokenPrefix string, tenantDe
 	}
 	return &Registrar{
 		client: client, url: graphqlURL, tokenPrefix: tokenPrefix,
-		cache: newTokenCache(), now: time.Now, tenantDeleted: tenantDeleted,
+		cache: newTokenCache(), backoff: newRegisterBackoff(), now: time.Now, tenantDeleted: tenantDeleted,
 	}
 }
 
@@ -190,6 +195,7 @@ func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, poli
 	// would have the source retry this message for the lifetime of its session.
 	if r.tenantDeleted(tenant) {
 		r.cache.invalidateTenant(tenant)
+		r.backoff.invalidateTenant(tenant)
 		return "", ResolveTenantGone, nil
 	}
 	if tok, ok := r.cache.get(tenant, externalId, r.now()); ok {
@@ -201,18 +207,20 @@ func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, poli
 	}
 	if found {
 		r.cache.put(tenant, externalId, tok, r.now())
+		r.backoff.clear(tenant, externalId)
 		return tok, ResolveFound, nil
 	}
 	if !policy.AutoRegister {
 		return "", ResolveDropped, nil
 	}
+	// A device whose create failed recently waits out its window without another create: a
+	// persistently failing one (a device type that names no existing type) would otherwise spend
+	// a lookup, a create and a re-lookup on every message it sends. See register_backoff.go.
+	if _, waiting := r.backoff.blocked(tenant, externalId, r.now()); waiting {
+		return "", ResolveRegisterBackoff, nil
+	}
 
 	token := core.DeriveDeviceToken(externalId, r.tokenPrefix)
-	// TODO (follow-up): a persistently-failing create (e.g. a deviceTypeToken that
-	// passes the grammar check but names no existing type) is retried by the caller on
-	// every message from that device, spending the full bounded budget each time. It is
-	// visible (device-management errors + IngestFailures), but a short per-externalId
-	// negative backoff here would keep one config mistake from throttling a source.
 	if err := r.create(ctx, tenant, token, externalId, policy.DeviceTypeToken); err != nil {
 		// A create can fail because a concurrent burst already registered this device
 		// (the deterministic token collides on the unique index). Re-look-up: if the
@@ -221,11 +229,18 @@ func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, poli
 		// the caller to retry.
 		if again, found2, lerr := r.lookup(ctx, tenant, externalId); lerr == nil && found2 {
 			r.cache.put(tenant, externalId, again, r.now())
+			r.backoff.clear(tenant, externalId)
 			return again, ResolveFound, nil
+		} else if lerr == nil {
+			// device-management answered and the device is still not there: the create itself is
+			// what fails, so the device backs off. (A failed re-look-up says nothing about the
+			// create, and backs nothing off.)
+			r.backoff.fail(tenant, externalId, r.now())
 		}
 		return "", ResolveDropped, err
 	}
 	r.cache.put(tenant, externalId, token, r.now())
+	r.backoff.clear(tenant, externalId)
 	return token, ResolveCreated, nil
 }
 
@@ -966,6 +981,13 @@ func (ing *Ingester) meterDrop(outcome ResolveOutcome, tenant, externalId string
 		incr(ing.metrics.TenantGoneDropped, n)
 		log.Debug().Str("tenant", tenant).Str("externalId", externalId).Int("events", n).
 			Msg("Dropping ingest for a tenant that has been deleted; its data is being reclaimed.")
+		return
+	}
+	if outcome == ResolveRegisterBackoff {
+		incr(ing.metrics.UnknownDropped, n)
+		log.Debug().Str("tenant", tenant).Str("externalId", externalId).Int("events", n).
+			Msg("Dropping ingest for a device whose auto-registration failed moments ago; it is retried " +
+				"when its backoff window ends. device-management's error for the failed create says why.")
 		return
 	}
 	incr(ing.metrics.UnknownDropped, n)
