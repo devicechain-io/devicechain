@@ -220,6 +220,14 @@ const usage = `apiprobe — write one of every creatable entity, then prove it r
         than the ingress. The upgrade drill's attrlock phase uses it to drive a
         previous-release pod and a current one at the same device.
 
+  apiprobe stringmetric --receipt <file> --schemas <dir> [--events-url <url>] [--control read-value]
+        The STRING metric phase, gated on what --schemas (the DEPLOYED release's tree) serves.
+        A target that serves the text producer: declare a STRING metric, post a text reading over
+        the HTTP ingress, read it back through latestMeasurements and measurementEvents (textValue
+        set, value null) and require an aggregate over it to be refused. A target that does not
+        (v1.9): require the declaration to be REFUSED. --control read-value plants the defect of a
+        probe that reads value, and the phase must then fail.
+
   apiprobe areas
         Print the functional areas the table writes to, one per line, so a rig can
         deploy them. Not every one is in the 'default' profile.
@@ -270,6 +278,8 @@ func main() {
 		err = runTableSweep(ctx, os.Args[2:])
 	case "tamper":
 		err = runTamper(ctx, os.Args[2:])
+	case "stringmetric":
+		err = runStringMetric(ctx, os.Args[2:])
 	case "attrwrite":
 		err = runAttrWrite(ctx, os.Args[2:])
 	case "ssobaseline":
