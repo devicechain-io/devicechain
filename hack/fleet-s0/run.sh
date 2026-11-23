@@ -8,6 +8,7 @@ source "$here/lib.sh"
 source "$here/probes.sh"
 source "$here/local.sh"
 source "$here/kind.sh"
+source "$here/instrument.sh"
 unset S0_PREFLIGHT S0_KIND_NAME S0_PG_DB S0_PG_OWNER S0_PG_RUNNER S0_PG_ROLES_OWNED S0_WRITER_PID
 S0_BACKEND=pg
 S0_REAPER_ONLY=false
@@ -71,7 +72,6 @@ main() {
   local needs_cloud=false id
   for id in "${ids[@]}"; do
     case "$id" in
-      E-d|E-f|E-h|E-i) experiment "$id" ;;
       E-j|E-l) ;;
       E-g) [[ $S0_BACKEND != gcs ]] || needs_cloud=true ;;
       *) needs_cloud=true ;;
