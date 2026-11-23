@@ -233,11 +233,17 @@ if [ "$MODE" = "verify" ]; then
   # its own database on this server, so nothing here touches the one `verify` asserted.
   #
   # 🔴 The COUNT of passed TestFleetPG* tests is asserted, not just the exit status: without the
-  # tag the tests are not compiled, so a mistyped tag reports success over an empty suite.
+  # tag the tests are not compiled, so a mistyped tag reports success over an empty suite. The floor
+  # is per PACKAGE (schema, writerslot): one package's tests running does not vouch for the other's,
+  # and a package that stopped compiling its tagged files would otherwise hide behind the rest.
+  # Raise a floor when tests are added; never lower it.
   # `pipefail` keeps go test's own status.
   echo "==> Running the fleet module's real-Postgres suite"
   ( cd "$ROOT/backend/fleet" && set -o pipefail &&
-      DC_FLEET_PG_DSN="postgres://postgres:$PASSWORD@127.0.0.1:$HOST_PORT/postgres?sslmode=disable"       go test -tags fleetpg -count=1 -timeout 20m -json ./... | "$ROOT/hack/check-fleetpg-count.sh" TestFleetPG 1 ) || {
+      export DC_FLEET_PG_DSN="postgres://postgres:$PASSWORD@127.0.0.1:$HOST_PORT/postgres?sslmode=disable" &&
+      go test -tags fleetpg -count=1 -timeout 20m -json ./schema | "$ROOT/hack/check-fleetpg-count.sh" TestFleetPG 10 &&
+      go test -tags fleetpg -count=1 -timeout 20m -json ./writerslot | "$ROOT/hack/check-fleetpg-count.sh" TestFleetPG 59 &&
+      go test -tags fleetpg -count=1 -timeout 20m ./internal/... ) || {
     echo "the fleet module's real-Postgres suite FAILED" >&2
     exit 1
   }
