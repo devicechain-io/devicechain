@@ -205,6 +205,7 @@ var purgeSeedExemptions = map[string]string{
 	"update-management.artifact_signatures":                      representedTenantPredicate,
 	"update-management.artifact_signers":                         representedTenantPredicate,
 	"update-management.artifacts":                                representedTenantPredicate,
+	"update-management.device_installed_components":              representedTenantPredicate,
 	"update-management.audit_events":                             sharedJournal,
 	"update-management.purged_tenants":                           purgeTombstone,
 	"update-management.secrets":                                  representedTenantPredicate,

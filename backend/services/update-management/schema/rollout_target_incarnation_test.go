@@ -11,8 +11,8 @@ import (
 
 func TestRolloutTargetIncarnationMigrationIsNullableRerunnableAndLast(t *testing.T) {
 	require.Equal(t, "20261118000100", RolloutTargetIncarnationID)
-	require.Equal(t, RolloutTargetIncarnationID, Migrations[len(Migrations)-2].ID)
-	for _, m := range Migrations[:len(Migrations)-2] {
+	require.Equal(t, RolloutTargetIncarnationID, Migrations[len(Migrations)-3].ID)
+	for _, m := range Migrations[:len(Migrations)-3] {
 		require.Greater(t, RolloutTargetIncarnationID, m.ID)
 	}
 	db := openDB(t)
