@@ -942,6 +942,13 @@ func (api *Api) ApplyReport(ctx context.Context, deviceToken string, rep ota.Rep
 			return "", err
 		}
 		if won {
+			if next.State == ota.StateUpdated {
+				// The device reached the target: that is also an observation of what it runs, written
+				// with the attempt so the two cannot disagree for long. The artifact is what it was told.
+				if err := api.recordUpdated(ctx, deviceToken, facts, *asg, *row); err != nil {
+					return "", err
+				}
+			}
 			return ota.VerdictApplied, nil
 		}
 	}
@@ -952,6 +959,14 @@ func (api *Api) ApplyReport(ctx context.Context, deviceToken string, rep ota.Rep
 // is UNKNOWN. An inventory is attempt-independent truth: with nothing to reconcile it changes
 // nothing and says so.
 func (api *Api) applyInventory(ctx context.Context, deviceToken string, rep ota.Report, facts DeviceFacts) (ota.Verdict, error) {
+	// Whatever the device says it runs is recorded first, whether or not there is an attempt to reconcile:
+	// the installed version is an observation in its own right.
+	if rep.Running != nil && rep.Running.Version != "" {
+		if err := api.recordInstalled(ctx, deviceToken, facts.Incarnation, rep.Component, rep.Running.Version, rep.Running.Digest,
+			api.now(), InstalledSourceInventory); err != nil {
+			return "", err
+		}
+	}
 	for range casRetries {
 		var current []UpdateAssignment
 		if err := api.RDB.DB(ctx).Where("device_token = ? AND component = ? AND superseded_at IS NULL",
@@ -1359,4 +1374,14 @@ func (api *Api) tickOne(ctx context.Context, attemptID uint) (ota.State, error) 
 		return next.State, nil
 	}
 	return "", nil
+}
+
+// recordUpdated writes the version an assignment's artifact carries as installed, once the device's
+// attempt for it has reached UPDATED.
+func (api *Api) recordUpdated(ctx context.Context, deviceToken string, facts DeviceFacts, asg UpdateAssignment, row UpdateAttempt) error {
+	var artifact Artifact
+	if err := api.RDB.DB(ctx).First(&artifact, asg.ArtifactId).Error; err != nil {
+		return err
+	}
+	return api.recordInstalled(ctx, deviceToken, facts.Incarnation, asg.Component, artifact.Version, row.TargetDigest, api.now(), InstalledSourceUpdated)
 }
