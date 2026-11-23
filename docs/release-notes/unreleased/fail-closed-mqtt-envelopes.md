@@ -1,0 +1,15 @@
+---
+section: whats-new
+---
+
+## en
+
+- **Fail-closed MQTT can write event envelopes (opt-in, off by default).** With `infrastructure.nats.mqttFailClosed` on, `event-sources` has until now written each MQTT message to the inbound-events stream on its own, even when [event envelopes](#event-envelopes) are on. The new `event-sources` setting `capture.mqttStoreEnvelopes` lets it write them as envelopes instead, which cuts the broker's work per event. It takes effect only when `infrastructure.nats.mqttFailClosed` and `infrastructure.messaging.envelopes.inbound` are both on, and changes nothing otherwise. A message is acknowledged in the MQTT message store only once its envelope is on the inbound-events stream, and a redelivered message is recognised and not written twice. Turn it on in a separate `dcctl upgrade`, after every `event-sources` pod runs this release, under `functionalAreas.event-sources.config.capture.mqttStoreEnvelopes` in a values file (see [Tuning an instance](./tuning-an-instance.md)). When the setting changes, `event-sources` waits for the messages it had in flight under the old setting to settle before it writes the new way.
+
+## es
+
+- **MQTT con cierre ante fallos puede escribir sobres de eventos (opcional, desactivado por defecto).** Con `infrastructure.nats.mqttFailClosed` activado, `event-sources` escribía hasta ahora cada mensaje MQTT por separado en el stream inbound-events, aunque los [sobres de eventos](#event-envelopes) estuvieran activados. El nuevo ajuste de `event-sources` `capture.mqttStoreEnvelopes` le permite escribirlos como sobres, lo que reduce el trabajo del broker por evento. Solo tiene efecto cuando `infrastructure.nats.mqttFailClosed` e `infrastructure.messaging.envelopes.inbound` están ambos activados, y no cambia nada en otro caso. Un mensaje se confirma en el almacén de mensajes MQTT solo cuando su sobre está en el stream inbound-events, y un mensaje reentregado se reconoce y no se escribe dos veces. Actívelo en un `dcctl upgrade` aparte, después de que todos los pods de `event-sources` ejecuten esta versión, en `functionalAreas.event-sources.config.capture.mqttStoreEnvelopes` en un archivo de valores (consulte [Ajustar una instancia](./tuning-an-instance.md)). Cuando el ajuste cambia, `event-sources` espera a que se resuelvan los mensajes que tenía en curso con el ajuste anterior antes de escribir de la nueva forma.
+
+## zh-CN
+
+- **故障关闭模式下的 MQTT 可以写入事件信封（可选，默认关闭）。** 开启 `infrastructure.nats.mqttFailClosed` 时，`event-sources` 此前总是把每条 MQTT 消息单独写入 inbound-events 流，即使已开启[事件信封](#event-envelopes)。新的 `event-sources` 设置 `capture.mqttStoreEnvelopes` 让它改为以信封写入，从而减少代理为每个事件所做的工作。只有当 `infrastructure.nats.mqttFailClosed` 和 `infrastructure.messaging.envelopes.inbound` 都开启时它才生效，否则不改变任何行为。只有当消息所在的信封已写入 inbound-events 流后，该消息才会在 MQTT 消息存储中被确认；重新投递的消息会被识别，不会被写入两次。请在每个 `event-sources` Pod 都运行本版本之后，通过单独一次 `dcctl upgrade` 开启它，在值文件中设置 `functionalAreas.event-sources.config.capture.mqttStoreEnvelopes`（参见[调优实例](./tuning-an-instance.md)）。设置改变时，`event-sources` 会先等待按旧设置处理中的消息完成，再按新方式写入。
