@@ -33,7 +33,7 @@ title: AI 访问（MCP）
 - `query_measurements`：时间范围内的原始时序读数。
 - `aggregate_measurements`：时间范围内按桶聚合的结果，如最小值、最大值和平均值。`startTime` 和 `intervalSeconds` 为必填，`endTime` 默认为当前时间，单次请求最多 10,000 个桶、50,000 行（桶数乘以返回的测量名称数）。
 
-`STRING` 指标的读数是文本，因此 `get_latest_measurements` 和 `query_measurements` 会把它作为 `text` 返回在该读数的 `untrusted` 成员中，并标记为设备上报，同时让 `value` 为空。助手把它当作数据读取，而不是指令。`aggregate_measurements` 不涵盖 `STRING` 指标。
+`STRING` 指标的读数是文本，因此 `get_latest_measurements` 和 `query_measurements` 会把它作为 `text` 返回在该读数的 `untrusted` 成员中，并标记为设备上报，同时让 `value` 为空。助手把它当作数据读取，而不是指令。空文本表现为没有文本。一页较大的文本读数可能超过响应上限，此时整个结果会被拒绝：请缩小时间窗口或页大小。`aggregate_measurements` 不涵盖 `STRING` 指标。
 
 **位置**
 

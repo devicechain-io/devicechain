@@ -237,7 +237,7 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	}, t.GetDeviceCapabilities)
 	register(s, c, &mcp.Tool{
 		Name:        "query_measurements",
-		Description: "Query raw measurement history for a device over an optional time window (paged). For trends over a window prefer aggregate_measurements — it returns far fewer rows for the same insight.",
+		Description: "Query raw measurement history for a device over an optional time window (paged); the metric name, unit, and a STRING reading's text are under `untrusted`. A page of large text readings can exceed the response limit and is then refused whole: narrow the request (a shorter window or a smaller page). For trends over a window prefer aggregate_measurements — it returns far fewer rows for the same insight.",
 	}, ToolRisk{
 		Exposure: ExposureTelemetry, Scale: ScalePage,
 		Discloses: "a device's raw reading history, a page at a time, from which an operating pattern over time can be reconstructed rather than only a current state",
