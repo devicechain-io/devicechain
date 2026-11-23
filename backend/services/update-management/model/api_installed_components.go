@@ -28,7 +28,7 @@ type DeviceInstalledComponent struct {
 
 	TenantId string `gorm:"not null;size:128;uniqueIndex:uix_installed_component,priority:1;index:idx_installed_component_version,priority:1"`
 
-	DeviceToken       string `gorm:"not null;size:128;uniqueIndex:uix_installed_component,priority:2;index"`
+	DeviceToken       string `gorm:"not null;size:128;uniqueIndex:uix_installed_component,priority:2"`
 	DeviceIncarnation int64  `gorm:"not null;type:bigint;uniqueIndex:uix_installed_component,priority:3"`
 	Component         string `gorm:"not null;size:64;uniqueIndex:uix_installed_component,priority:4;index:idx_installed_component_version,priority:2"`
 
@@ -42,6 +42,26 @@ func (DeviceInstalledComponent) TableName() string { return "device_installed_co
 
 // AuditExempt: an observation a device made, one row rewritten per report, is a data-plane fact.
 func (DeviceInstalledComponent) AuditExempt() bool { return true }
+
+type observedAtKey struct{}
+
+// WithObservedAt stamps the context with the time an observation was made, for the ordering rule below.
+// The reports consumer passes the BROKER's append time of the message: it is the same on every redelivery
+// and comes from the stream, not from the replica's clock, so a redelivered older report can never look
+// newer than the one that overtook it. Without a stamp the platform's own clock is used.
+func WithObservedAt(ctx context.Context, t time.Time) context.Context {
+	if t.IsZero() {
+		return ctx
+	}
+	return context.WithValue(ctx, observedAtKey{}, t.UTC())
+}
+
+func (api *Api) observedAt(ctx context.Context) time.Time {
+	if t, ok := ctx.Value(observedAtKey{}).(time.Time); ok {
+		return t
+	}
+	return api.now()
+}
 
 // recordInstalled stores what a device reported running. The newer observation wins, so a report that
 // arrives late cannot move the version back; an equal timestamp keeps the row as it is. A replaced
@@ -69,14 +89,17 @@ func (api *Api) InstalledComponents(ctx context.Context, deviceToken string) ([]
 	return rows, err
 }
 
-// forgetInstalled removes what a deleted device reported: every incarnation up to the one deleted, or,
-// for a deletion fact that names none, every observation made before the deletion.
+// forgetInstalled removes what a deleted device reported: every incarnation up to the one deleted.
+//
+// Known leak, stated: a replica whose device-facts cache still holds the old incarnation can record an
+// observation for a deleted incarnation after this ran, and a replica of the previous release does not run
+// it at all. Such a row is never read (queries join on the device's CURRENT incarnation) and the tenant purge
+// removes it with the tenant; it costs storage, not correctness.
 func (api *Api) forgetInstalled(ctx context.Context, token string, incarnation uint64, deleted time.Time) error {
-	q := api.RDB.DB(ctx).Where("device_token = ?", token)
-	if incarnation > 0 {
-		q = q.Where("device_incarnation <= ?", incarnation)
-	} else {
-		q = q.Where("observed_at <= ?", deleted)
+	if incarnation == 0 {
+		// This table never holds a row without an incarnation, so a fact that names none covers nothing
+		// here; comparing observation times with another service's clock would delete rows of any incarnation.
+		return nil
 	}
-	return q.Delete(&DeviceInstalledComponent{}).Error
+	return api.RDB.DB(ctx).Where("device_token = ? AND device_incarnation <= ?", token, incarnation).Delete(&DeviceInstalledComponent{}).Error
 }

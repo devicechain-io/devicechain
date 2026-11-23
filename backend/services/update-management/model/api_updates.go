@@ -935,6 +935,14 @@ func (api *Api) ApplyReport(ctx context.Context, deviceToken string, rep ota.Rep
 		}
 		next, verdict := ota.Apply(row.ToOTA(asg.Token), rep, api.now())
 		if verdict != ota.VerdictApplied {
+			if verdict == ota.VerdictDuplicate && ota.State(row.State) == ota.StateUpdated {
+				// The attempt reached UPDATED earlier, and the write of the installed version may be what
+				// failed (the two are separate statements): a redelivery re-issues it. It is idempotent and
+				// ordered by the observation time, so it cannot move a newer version back.
+				if err := api.recordUpdated(ctx, deviceToken, facts, *asg, *row); err != nil {
+					return "", err
+				}
+			}
 			return verdict, nil
 		}
 		won, err := api.saveAttempt(ctx, *row, next)
@@ -943,8 +951,8 @@ func (api *Api) ApplyReport(ctx context.Context, deviceToken string, rep ota.Rep
 		}
 		if won {
 			if next.State == ota.StateUpdated {
-				// The device reached the target: that is also an observation of what it runs, written
-				// with the attempt so the two cannot disagree for long. The artifact is what it was told.
+				// The device reached the target: that is also an observation of what it runs. It is a separate
+				// statement from the attempt's, so a failure here is retried by the redelivery (see above).
 				if err := api.recordUpdated(ctx, deviceToken, facts, *asg, *row); err != nil {
 					return "", err
 				}
@@ -963,7 +971,7 @@ func (api *Api) applyInventory(ctx context.Context, deviceToken string, rep ota.
 	// the installed version is an observation in its own right.
 	if rep.Running != nil && rep.Running.Version != "" {
 		if err := api.recordInstalled(ctx, deviceToken, facts.Incarnation, rep.Component, rep.Running.Version, rep.Running.Digest,
-			api.now(), InstalledSourceInventory); err != nil {
+			api.observedAt(ctx), InstalledSourceInventory); err != nil {
 			return "", err
 		}
 	}
@@ -1383,5 +1391,5 @@ func (api *Api) recordUpdated(ctx context.Context, deviceToken string, facts Dev
 	if err := api.RDB.DB(ctx).First(&artifact, asg.ArtifactId).Error; err != nil {
 		return err
 	}
-	return api.recordInstalled(ctx, deviceToken, facts.Incarnation, asg.Component, artifact.Version, row.TargetDigest, api.now(), InstalledSourceUpdated)
+	return api.recordInstalled(ctx, deviceToken, facts.Incarnation, asg.Component, artifact.Version, row.TargetDigest, api.observedAt(ctx), InstalledSourceUpdated)
 }

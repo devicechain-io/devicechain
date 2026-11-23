@@ -61,7 +61,6 @@ CREATE INDEX "idx_update-management_update_rollout_targets_tenant_id" ON "update
 CREATE INDEX "idx_update-management_update_rollouts_artifact_id" ON "update-management".update_rollouts USING btree (artifact_id);
 CREATE INDEX "idx_update-management_update_rollouts_tenant_id" ON "update-management".update_rollouts USING btree (tenant_id);
 CREATE INDEX idx_audit_tenant_time ON "update-management".audit_events USING btree (tenant_id, occurred_time DESC);
-CREATE INDEX idx_device_installed_components_device_token ON "update-management".device_installed_components USING btree (device_token);
 CREATE INDEX idx_installed_component_version ON "update-management".device_installed_components USING btree (tenant_id, component, version);
 CREATE INDEX idx_update_assignments_scope_anchors ON "update-management".update_assignments USING gin (scope_anchors);
 CREATE INDEX ix_update_attempts_state_report ON "update-management".update_attempts USING btree (state, last_report_at);

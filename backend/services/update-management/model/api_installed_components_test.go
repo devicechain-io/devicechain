@@ -166,3 +166,55 @@ func TestAnObservationNeedsTheDevicesIncarnation(t *testing.T) {
 	require.Error(t, err, "an incarnation of zero would let a replaced device inherit the old one's versions")
 	require.Empty(t, installed(t, e, "acme", "dev-1"))
 }
+
+func TestARedeliveredOlderReportKeepsItsBrokerTimeAndCannotRegressTheVersion(t *testing.T) {
+	e := newUpdateEnv(t)
+	t0 := e.clock
+	at := func(d time.Duration) context.Context { return WithObservedAt(tenantCtx("acme"), t0.Add(d)) }
+	apply := func(ctx context.Context, version string) {
+		v, err := e.api.ApplyReport(ctx, "dev-1", inventoryOf("firmware", version, ""))
+		require.NoError(t, err)
+		require.Equal(t, VerdictUnknownAssignment, v)
+	}
+	apply(at(1*time.Minute), "1.0.0")
+	apply(at(2*time.Minute), "2.0.0")
+	// The first report is delivered AGAIN, long after (the platform's own clock has moved on), but it
+	// carries the broker time it was first appended with.
+	e.advance(time.Hour)
+	apply(at(1*time.Minute), "1.0.0")
+	require.Equal(t, "2.0.0", installed(t, e, "acme", "dev-1")["firmware"].Version)
+	// Negative control: with no stamp the platform's clock is used, and a fresh report is the newest.
+	_, err := e.api.ApplyReport(tenantCtx("acme"), "dev-1", inventoryOf("firmware", "3.0.0", ""))
+	require.NoError(t, err)
+	require.Equal(t, "3.0.0", installed(t, e, "acme", "dev-1")["firmware"].Version)
+}
+
+func TestARetriedUpdatedReportRestoresAnInstalledVersionThatFailedToWrite(t *testing.T) {
+	e := newUpdateEnv(t)
+	e.availableArtifact(t, "acme", "fw-3", "3.1.0", []byte("firmware three"))
+	v, err := e.api.AssignArtifact(tenantCtx("acme"), "dev-1", "fw-3")
+	require.NoError(t, err)
+	e.mustApply(t, "acme", "dev-1", progress(v, 1, ota.StageInstalling, "b"), ota.VerdictApplied)
+	report := running(v, 2, "b2")
+	e.mustApply(t, "acme", "dev-1", report, ota.VerdictApplied)
+	require.Equal(t, "3.1.0", installed(t, e, "acme", "dev-1")["firmware"].Version)
+	// The write of the installed version is what failed after the attempt committed.
+	require.NoError(t, e.api.RDB.DB(tenantCtx("acme")).Where("device_token = ?", "dev-1").Delete(&DeviceInstalledComponent{}).Error)
+	require.Empty(t, installed(t, e, "acme", "dev-1"))
+	// The redelivery is a duplicate for the attempt, and still repairs the observation.
+	e.mustApply(t, "acme", "dev-1", report, ota.VerdictDuplicate)
+	require.Equal(t, "3.1.0", installed(t, e, "acme", "dev-1")["firmware"].Version)
+}
+
+func TestADeletionFactNeverTouchesAnotherTenantOrAnUnnamedIncarnation(t *testing.T) {
+	e := newUpdateEnv(t)
+	e.mustApply(t, "acme", "dev-1", inventoryOf("firmware", "1.0.0", ""), VerdictUnknownAssignment)
+	e.mustApply(t, "globex", "dev-1", inventoryOf("firmware", "1.0.0", ""), VerdictUnknownAssignment)
+	// A fact that names no incarnation covers nothing here.
+	require.NoError(t, e.api.DeviceDeleted(tenantCtx("acme"), "dev-1", 0, e.clock.Add(time.Hour)))
+	require.Len(t, installed(t, e, "acme", "dev-1"), 1)
+	// Acme's deletion leaves globex's device of the same token alone.
+	require.NoError(t, e.api.DeviceDeleted(tenantCtx("acme"), "dev-1", 1, e.clock))
+	require.Empty(t, installed(t, e, "acme", "dev-1"))
+	require.Len(t, installed(t, e, "globex", "dev-1"), 1)
+}

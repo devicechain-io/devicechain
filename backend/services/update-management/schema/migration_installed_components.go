@@ -22,8 +22,9 @@ const InstalledComponentsID = "20261123000100"
 // with nothing and never inherits the old device's versions. There is no foreign key: a device
 // deletion fact removes the rows, and a previous-release pod never touches the table.
 //
-// Self-contained down to the mixins, like every snapshot here, with no TableName method for the
-// reason given on artifact.
+// Self-contained down to the mixins, like every snapshot here. It names its table with TableName, as
+// entity_attribute_generations does in device-management, so the table and its derived index names are
+// not prefixed with the area.
 type deviceInstalledComponent struct {
 	ID        uint `gorm:"primarykey"`
 	CreatedAt time.Time
@@ -31,7 +32,7 @@ type deviceInstalledComponent struct {
 
 	TenantId string `gorm:"not null;size:128;uniqueIndex:uix_installed_component,priority:1;index:idx_installed_component_version,priority:1"`
 
-	DeviceToken       string `gorm:"not null;size:128;uniqueIndex:uix_installed_component,priority:2;index"`
+	DeviceToken       string `gorm:"not null;size:128;uniqueIndex:uix_installed_component,priority:2"`
 	DeviceIncarnation int64  `gorm:"not null;type:bigint;uniqueIndex:uix_installed_component,priority:3"`
 	Component         string `gorm:"not null;size:64;uniqueIndex:uix_installed_component,priority:4;index:idx_installed_component_version,priority:2"`
 
