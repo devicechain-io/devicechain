@@ -29,7 +29,7 @@ import {
 import * as queries from './queries';
 
 const sdl = (service: string) =>
-  readFileSync(path.resolve(__dirname, '../../../../backend/services', service, 'graphql/schema.graphql'), 'utf8');
+  readFileSync(path.resolve(__dirname, `../../../../backend/services/${service}/graphql/schema.graphql`), 'utf8');
 
 // The service that serves each document. Every operation exported by queries.ts must appear here,
 // so a new document cannot be added without naming where it is served (and being checked there).
