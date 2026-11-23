@@ -12,7 +12,7 @@
 | 症状 | 首先检查 | 操作指南 |
 | --- | --- | --- |
 | 安装或引导在服务启动前停止 | 运行 `dcctl preflight`；查看失败步骤和 Kubernetes 事件。集群可能正由其他操作员占用。 | [引导](./bootstrap.md)、[集群锁](./cluster-lock.md)和[继续失败的引导](./disaster-recovery.md#resuming-a-bootstrap)。 |
-| Pod 处于 Pending、反复重启或未就绪 | 查看受影响 Pod 的描述，检查调度、镜像、卷和探针故障。如果发生重启，在替换之前检查上一个容器的日志。 | [容器重启](./observability.md#container-restarts)和[升级说明中的启动拒绝条件](./releases-and-upgrades.md#v160-before-upgrade)。 |
+| Pod 处于 Pending、反复重启或未就绪 | 查看受影响 Pod 的描述，检查调度、镜像、卷和探针故障。如果发生重启，在替换之前检查上一个容器的日志。 | [容器重启](./observability.md#container-restarts)和[升级说明中的启动拒绝条件](/1.6/deployment/releases-and-upgrades#v160-before-upgrade)。 |
 | 恢复后 user-management 拒绝启动，其他服务始终未就绪 | 查看 user-management 的启动错误。错误的根密钥无法解开已存储的签名密钥；重启无法修复。 | [根密钥恢复](./disaster-recovery.md#root-key)和[验证托管文件](./disaster-recovery.md#verify)。 |
 | 登录成功，但 API 调用返回 401 | 检查客户端令牌的受众和接收服务的拒绝日志；有效令牌也可能绑定到了其他资源。 | [令牌受众检查](./observability.md#token-audience-checks)。 |
 | 用户无法通过第二因素验证 | 检查时钟同步和账户审计记录。如果在密码验证成功后的猜测尝试中被锁定，应先重置密码，再重置第二因素。 | [第二因素锁定](./observability.md#mfa-alerts)。 |
