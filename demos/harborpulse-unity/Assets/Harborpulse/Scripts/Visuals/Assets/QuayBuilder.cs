@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using System.Linq;
 using DeviceChain.Harborpulse.Model;
 using UnityEngine;
 
@@ -79,10 +80,23 @@ namespace DeviceChain.Harborpulse.Visuals
                     for (var z = wall + 2; z < end; z += 4) steel.Cylinder(new Vector3(jx + s * 2.1f, deck, z), 0.04f, 1.1f, 6);
                     steel.Rod(new Vector3(jx + s * 2.1f, deck + 1.1f, wall), new Vector3(jx + s * 2.1f, deck + 1.1f, end));
                 }
+                // A ladder head on this wall (QuayFittings) opens the railing: the rail stops at a post either side of it. With no ladder
+                // the railing is the one run it always was.
+                const float opening = (float)QuayFittings.RailOpeningHalfM;
+                var ladders = plan.Fittings.Landings.Where(l => l.Quay == token)
+                    .Select(l => frame.Local(new Vector3((float)l.Ladder.X, 0, (float)l.Ladder.Z)).x).OrderBy(x => x).ToArray();
                 foreach (var edge in new[] { (float)q.XMin, (float)q.XMax - 35 })
                 {
-                    for (var x = edge; x <= edge + 35; x += 5) steel.Cylinder(new Vector3(x, deck + 0.55f, wall - 0.8f), 0.04f, 1.0f, 6);
-                    steel.Rod(new Vector3(edge, deck + 1.55f, wall - 0.8f), new Vector3(edge + 35, deck + 1.55f, wall - 0.8f));
+                    for (var x = edge; x <= edge + 35; x += 5)
+                        if (!ladders.Any(l => Mathf.Abs(x - l) < opening)) steel.Cylinder(new Vector3(x, deck + 0.55f, wall - 0.8f), 0.04f, 1.0f, 6);
+                    var from = edge;
+                    foreach (var l in ladders.Where(l => l - opening > edge && l + opening < edge + 35))
+                    {
+                        steel.Rod(new Vector3(from, deck + 1.55f, wall - 0.8f), new Vector3(l - opening, deck + 1.55f, wall - 0.8f));
+                        foreach (var x in new[] { l - opening, l + opening }) steel.Cylinder(new Vector3(x, deck + 0.55f, wall - 0.8f), 0.04f, 1.0f, 6);
+                        from = l + opening;
+                    }
+                    steel.Rod(new Vector3(from, deck + 1.55f, wall - 0.8f), new Vector3(edge + 35, deck + 1.55f, wall - 0.8f));
                 }
                 var lx = (float)q.CenterX - 15;
                 for (var s = -1; s <= 1; s += 2) steel.Rod(new Vector3(lx + s * 0.35f, -2, wall + 0.6f), new Vector3(lx + s * 0.35f, deck + 1, wall + 0.6f), 0.035f);

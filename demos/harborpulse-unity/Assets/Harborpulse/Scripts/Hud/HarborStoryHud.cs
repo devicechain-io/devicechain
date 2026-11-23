@@ -124,7 +124,7 @@ namespace DeviceChain.Harborpulse.Hud
                 if (screen.z <= 0 || screen.x < .05f || screen.x > .95f || screen.y < .3f || screen.y > .78f) continue;
                 var t = tags[tagIndex++]; Show(t, tag.Text);
                 var rect = t.transform.parent.GetComponent<RectTransform>();
-                rect.anchorMin = rect.anchorMax = new Vector2(screen.x, screen.y); rect.sizeDelta = new Vector2(250, 40);
+                rect.anchorMin = rect.anchorMax = new Vector2(screen.x, screen.y); rect.sizeDelta = new Vector2(HudModel.TagWidth(tag.Text), HudModel.TagBoxHeight);
             }
             for (; tagIndex < tags.Length; tagIndex++) Show(tags[tagIndex], "");
         }
