@@ -33,6 +33,8 @@ title: AI 访问（MCP）
 - `query_measurements`：时间范围内的原始时序读数。
 - `aggregate_measurements`：时间范围内按桶聚合的结果，如最小值、最大值和平均值。`startTime` 和 `intervalSeconds` 为必填，`endTime` 默认为当前时间，单次请求最多 10,000 个桶、50,000 行（桶数乘以返回的测量名称数）。
 
+`STRING` 指标的读数是文本，因此 `get_latest_measurements` 和 `query_measurements` 会把它作为 `text` 返回在该读数的 `untrusted` 成员中，并标记为设备上报，同时让 `value` 为空。助手把它当作数据读取，而不是指令。`aggregate_measurements` 不涵盖 `STRING` 指标。
+
 **位置**
 
 - `query_locations`：设备在可选时间窗口内上报的位置，支持分页并有数量限制。结果按最新优先排列，因此第一条是最新已知位置；不指定时间窗口并只请求一条，就能回答“现在在哪里”。每个位置包含纬度和经度。如果接收器上报了，也包含海拔、精度、速度和航向。缺失字段表示未上报，即未知，而不是零。读取位置需要其他工具不需要的两项条件：客户端还必须获得独立 `location` 作用域，想同时使用两者时请求 `read-only location`；用户还必须拥有 **location**（位置）权限，该权限有意不包含在只读查看者基础权限中。因此，其他读取工具都可用的调用方，也可能被此工具拒绝。
