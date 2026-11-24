@@ -1188,7 +1188,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		Rdb: &service.RdbSpec{
 			AppendOnly: []any{&model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{},
 				&model.DeviceProfileVersion{}, &model.DeviceProfileActivation{}, &model.EntityGroupVersion{}, &model.AssetTypeVersion{},
-				&model.DeviceConfigurationRevision{}, &model.DeviceConfigurationReport{}},
+				&model.DeviceConfigurationRevision{}, &model.DeviceConfigurationReport{},
+				&model.FleetOperation{}, &model.FleetOperationRuntime{}, &model.FleetOperationContract{}, &model.FleetOperationLine{}, &model.FleetOperationEvent{}},
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Migrations: schema.Migrations,
 			Config:     Configuration.RdbConfiguration,
@@ -1289,7 +1290,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			return nil
 		},
 		GraphQL: &service.GraphQLSpec{
-			Schema:   graphql.SchemaContent,
+			Schema:   graphql.ServedSchema(),
 			Resolver: func() interface{} { return &graphql.SchemaResolver{} },
 			// Evaluated after the broker manager is built, so the live alarm subscription
 			// resolver (SubscribeLive, ADR-037) gets one that is already connected, before
