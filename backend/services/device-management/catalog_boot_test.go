@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,8 @@ import (
 	"github.com/devicechain-io/dc-device-management/processor"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-microservice/core"
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -45,6 +48,18 @@ import (
 // standing in for Postgres. The one lazy path left, the alarm subscription, is opened
 // directly below.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
+	catalogBoot(t, "")
+}
+
+func TestCatalogBootCleanupAfterStartupFailure(t *testing.T) {
+	for _, stage := range []string{"readers", "consumers", "callout", "initialize"} {
+		t.Run(stage, func(t *testing.T) { catalogBoot(t, stage) })
+	}
+}
+
+func catalogBoot(t *testing.T, failStage string) {
+	t.Helper()
+	injected := errors.New("injected catalog startup failure: " + failStage)
 	instance := fmt.Sprintf("catalogboot%d", time.Now().UnixNano())
 	// The broker holds the area's login to exactly the permissions natsauth generates for it, so
 	// this is also the area's permission test: the real wiring runs against it and the broker's
@@ -63,7 +78,15 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevOrphanSweep := AttributeOrphanSweep
 	prevPeers := servicePeers
 	prevPin := IssuerPin
+	prevKill, prevAccounting, prevAccountant, prevSharding := AgentKillConsumer, DecodeAccounting, DecodeAccountant, stopStreamSharding
 	ProvisioningTenants = nil
+	// A failed start must not inherit another test's consumers or background tasks.
+	NatsManager, Api, CachedApi = nil, nil, nil
+	InboundEventsProcessor, RaiseAlarmConsumer, DeviceReportsConsumer, AgentKillConsumer = nil, nil, nil, nil
+	AgentEffectsDrain, EntityDeletionDrain, AlarmEventDrain, OwnershipDrain = nil, nil, nil, nil
+	SessionKickDrain, AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal = nil, nil, nil, nil
+	ConfigurationReportMaintenance, AttributeOrphanSweep, DecodeAccounting = nil, nil, nil
+	CalloutResponder, IssuerPin, MqttStoreBackoff, stopStreamSharding = nil, nil, nil, nil
 	t.Cleanup(func() {
 		servicePeers = prevPeers
 		ProvisioningTenants, IssuerPin = prevTenants, prevPin
@@ -77,6 +100,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal = prevReaper, prevClassifier, prevMarkerHeal
 		ConfigurationReportMaintenance = prevReportMaintenance
 		AttributeOrphanSweep = prevOrphanSweep
+		AgentKillConsumer, DecodeAccounting, DecodeAccountant, stopStreamSharding = prevKill, prevAccounting, prevAccountant, prevSharding
 	})
 
 	issuer, err := nkeys.CreateAccount()
@@ -115,8 +139,25 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	SecretTransit = testTransit(t)
 
 	Svc = service.New(Microservice, service.Spec{
-		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
+		Nats: &service.NatsSpec{OnCreate: func(nmgr *messaging.NatsManager) error {
+			if failStage == "readers" {
+				if err := createInboundReaders(nmgr); err != nil {
+					return err
+				}
+				return injected
+			}
+			if err := createNatsComponents(nmgr); err != nil {
+				return err
+			}
+			if failStage == "consumers" {
+				return injected
+			}
+			return nil
+		}},
 		AfterNats: func(_ context.Context, m *service.Managers) error {
+			if failStage == "initialize" {
+				return injected
+			}
 			// The two steps of the production AfterNats that open broker resources.
 			var err error
 			Api, CachedApi, err = buildApis(m.Nats, RdbManager, DeviceSecretKey, EnrollmentKeys, Configuration)
@@ -164,16 +205,63 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	buildMetrics()
 
 	ctx := context.Background()
-	require.NoError(t, Svc.Initialize(ctx), "initialize under the catalog: entity-cache KV buckets")
-	dctest.UseFreeTCPPort(t, &service.ProbesPort)
-	NatsManager = Svc.Nats
-	t.Cleanup(func() {
-		_ = beforeMicroserviceStopped(ctx)
-		if c := NatsManager.Conn(); c != nil && !c.IsClosed() {
-			c.Close()
+	cleanup := func() error { return nil }
+	t.Cleanup(func() { require.NoError(t, cleanup(), "catalog cleanup after stage %q", failStage) })
+	checkCleanup := func() {
+		t.Helper()
+		conn := Svc.Nats.Conn()
+		captured := cleanup
+		// The explicit check owns this one cleanup.
+		cleanup = func() error { return nil }
+		// Teardown must use the captured fixture, not the package global.
+		NatsManager = nil
+		if failStage == "consumers" {
+			// An uninitialized HTTP manager refuses Stop before the NATS manager is
+			// reached. The captured connection still has to close on that error.
+			svc := Svc
+			svc.GraphQL = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(), nil, nil, Microservice.Readiness)
+			defer func() {
+				svc.GraphQL = nil
+				require.NoError(t, svc.Stop(ctx), "finish managers after the deliberately refused stop")
+			}()
 		}
-	})
-	require.NoError(t, afterMicroserviceStarted(ctx),
+		var cleanupErr error
+		require.NotPanics(t, func() { cleanupErr = captured() }, "cleanup after stage %q", failStage)
+		if failStage == "consumers" {
+			require.ErrorContains(t, cleanupErr, "service managers")
+		} else {
+			require.NoError(t, cleanupErr)
+		}
+		require.True(t, conn.IsClosed(), "the initialized broker connection leaked after %q", failStage)
+	}
+	t.Log("catalog boot: initializing")
+	err = Svc.Initialize(ctx)
+	cleanup = captureCatalogBootCleanup(ctx, Svc)
+	NatsManager = Svc.Nats
+	if failStage == "initialize" {
+		require.ErrorIs(t, err, injected)
+		checkCleanup()
+		return
+	}
+	require.NoError(t, err, "initialize under the catalog: entity-cache KV buckets")
+	dctest.UseFreeTCPPort(t, &service.ProbesPort)
+	if failStage == "callout" {
+		t.Setenv(envCalloutIssuerSeed, "invalid-seed")
+	}
+	t.Log("catalog boot: starting managers, consumers and callout")
+	err = afterMicroserviceStarted(ctx)
+	cleanup = captureCatalogBootCleanup(ctx, Svc)
+	if failStage != "" {
+		if failStage == "callout" {
+			require.ErrorContains(t, err, "seed")
+			require.NotNil(t, InboundEventsProcessor)
+		} else {
+			require.ErrorIs(t, err, injected)
+		}
+		checkCleanup()
+		return
+	}
+	require.NoError(t, err,
 		"start under the catalog: readers, writers, callout responder, credential-attempt bucket, store back-off")
 
 	require.NotNil(t, CalloutResponder, "the callout responder (and its credential-attempt bucket) was not started")
@@ -262,9 +350,21 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 
 	// The alarm subscription opens its live feed on first request, not at start:
 	// graphql/subscriptions_alarms.go:139.
-	live, err := NatsManager.SubscribeLive(ctx, "acme", streams.AlarmEvents)
+	liveCtx, cancelLive := context.WithCancel(ctx)
+	t.Cleanup(cancelLive)
+	live, err := NatsManager.SubscribeLive(liveCtx, "acme", streams.AlarmEvents)
 	require.NoError(t, err, "live subscription on %s", streams.AlarmEvents)
-	_ = live
+	t.Cleanup(func() {
+		cancelLive()
+		require.Eventually(t, func() bool {
+			select {
+			case _, open := <-live:
+				return !open
+			default:
+				return false
+			}
+		}, 5*time.Second, 10*time.Millisecond, "the live subscription did not finish before manager cleanup")
+	})
 	broker.RequireNoViolations(t)
 
 	// The self-registration route survived the whole start path. This test never derives the
@@ -277,4 +377,98 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, "the registration route is not mounted by the start path")
+}
+
+type catalogBootStop struct {
+	name string
+	stop func(context.Context) error
+}
+
+func runCatalogBootStops(ctx context.Context, steps []catalogBootStop) error {
+	var errs []error
+	for _, step := range steps {
+		if err := step.stop(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", step.name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Capture at each lifecycle boundary, before checking its error: Initialize opens a
+// connection, AfterNats initializes tasks, and Start constructs the consumers. A full
+// production stop assumes all of them exist. A failed test start cannot assume that,
+// nor may its cleanup read globals that another cleanup can restore. Stop through the
+// components' lifecycle guards, including initialized components whose Start failed.
+func captureCatalogBootCleanup(ctx context.Context, svc *service.Service) func() error {
+	var steps []catalogBootStop
+	add := func(name string, present bool, stop func(context.Context) error) {
+		if present {
+			steps = append(steps, catalogBootStop{name, stop})
+		}
+	}
+	callout, pin, backoff, sharding := CalloutResponder, IssuerPin, MqttStoreBackoff, stopStreamSharding
+	add("callout", callout != nil, func(context.Context) error { return callout.Stop() })
+	add("issuer pin", pin != nil, func(context.Context) error {
+		pin.stop()
+		return nil
+	})
+	add("MQTT back-off", backoff != nil, func(context.Context) error {
+		backoff.Stop()
+		return nil
+	})
+	add("agent effects", AgentEffectsDrain != nil, AgentEffectsDrain.Stop)
+	add("entity deletion", EntityDeletionDrain != nil, EntityDeletionDrain.Stop)
+	add("alarm events", AlarmEventDrain != nil, AlarmEventDrain.Stop)
+	add("alarm relay", Api != nil, Api.StopAlarmEventRelay)
+	add("ownership", OwnershipDrain != nil, OwnershipDrain.Stop)
+	add("session kicks", SessionKickDrain != nil, SessionKickDrain.Stop)
+	add("proposal reaper", AgentProposalReaper != nil, AgentProposalReaper.Stop)
+	add("alarm positions", AlarmPositionClassifier != nil, AlarmPositionClassifier.Stop)
+	add("enrollment heal", CreateEnrollMarkerHeal != nil, CreateEnrollMarkerHeal.Stop)
+	add("report maintenance", ConfigurationReportMaintenance != nil, ConfigurationReportMaintenance.Stop)
+	add("attribute orphans", AttributeOrphanSweep != nil, AttributeOrphanSweep.Stop)
+	add("inbound events", InboundEventsProcessor != nil, InboundEventsProcessor.Stop)
+	add("decode accounting", DecodeAccounting != nil, DecodeAccounting.Stop)
+	add("decode flush", DecodeAccounting != nil && DecodeAccountant != nil, DecodeAccountant.Flush)
+	add("raise alarm", RaiseAlarmConsumer != nil, RaiseAlarmConsumer.Stop)
+	add("agent kills", AgentKillConsumer != nil, AgentKillConsumer.Stop)
+	add("device reports", DeviceReportsConsumer != nil, DeviceReportsConsumer.Stop)
+	// Managers stop after their users; placement remains available through that stop.
+	add("service managers", true, svc.Stop)
+	add("stream placement", sharding != nil, func(context.Context) error {
+		sharding()
+		return nil
+	})
+	var closeConn func()
+	if svc.Nats != nil {
+		if conn := svc.Nats.Conn(); conn != nil {
+			closeConn = conn.Close
+		}
+	}
+	return func() error {
+		// Even a stop error must not leak the already-open broker connection.
+		if closeConn != nil {
+			defer closeConn()
+		}
+		return runCatalogBootStops(ctx, steps)
+	}
+}
+
+func TestCatalogBootStopsContinueInOrderAndReportErrors(t *testing.T) {
+	first, second := errors.New("first stop failed"), errors.New("second stop failed")
+	var order []string
+	step := func(name string, err error) catalogBootStop {
+		return catalogBootStop{name, func(context.Context) error {
+			order = append(order, name)
+			return err
+		}}
+	}
+	err := runCatalogBootStops(context.Background(), []catalogBootStop{
+		step("callout", first), step("consumer", second), step("managers", nil), step("placement", nil),
+	})
+	require.Equal(t, []string{"callout", "consumer", "managers", "placement"}, order)
+	require.ErrorIs(t, err, first)
+	require.ErrorIs(t, err, second)
+	require.ErrorContains(t, err, "callout: first stop failed")
+	require.ErrorContains(t, err, "consumer: second stop failed")
 }
