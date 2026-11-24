@@ -1286,9 +1286,14 @@ estabilicen.
 
 `SECRET_RESUPPLY_REQUIRED` indica que una actualización cambiaría el destino o la presentación de una credencial almacenada. En `updateConnector`, `updateNotificationChannel` o `updateAiProvider`, vuelve a enviar `secret` en la misma solicitud o bórralo con `secret: null`. Para restaurar un conector con otro destino, usa `updateConnector` con la configuración de destino y su credencial.
 
-## Preparación de operaciones de flota (Preview) {#fleet-operation-readiness}
+## Preparación de cambios masivos (Preview) {#fleet-operation-readiness}
 
-Preview. El plano de datos por inquilino de device-management ofrece `fleetOperationReadiness`
+En v1.10, las operaciones de flota de dispositivos se llaman **cambios masivos**. Utiliza `bulkChangeReadiness: BulkChangeReadiness!`
+y `BulkChangeEnforcement`. La consulta obsoleta `fleetOperationReadiness` y sus tipos
+`FleetOperationReadiness` / `FleetOperationEnforcement` siguen funcionando para clientes v1.9.
+`dcctl fleet-op readiness` también sigue funcionando y escribe un aviso de una línea en stderr.
+
+Preview. El plano de datos por inquilino de device-management ofrece `bulkChangeReadiness`
 a quienes tienen `fleet:operate`; rechaza a los miembros con ámbito limitado. Informa de la
 versión del protocolo de escritura, el estado actual de cumplimiento en la base de datos, los
 tipos de operación ejecutables y un recuento actualizado de filas huérfanas de atributos y
@@ -1305,5 +1310,5 @@ El comando Preview muestra los mismos cuatro datos y solo termina con éxito si 
 las mismas opciones de inicio de sesión e instancia que `dcctl attr`:
 
 ```bash
-dcctl fleet-op readiness --tenant acme --email ops@example.com --password <password> -o json
+dcctl bulk-change readiness --tenant acme --email ops@example.com --password <password> -o json
 ```

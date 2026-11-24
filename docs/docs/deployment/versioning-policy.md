@@ -109,10 +109,13 @@ enum values. The `ServiceAccount.agent` field is not in preview: it is covered f
 adds it. Ordinary service-account roles remain covered. No MCP action tool is served yet; the MCP
 read tools remain in the not-covered catalog above.
 
-Fleet operation readiness joins the preview tier in **v1.9**, when its preview clock starts: the
-`fleetOperationReadiness` query, `FleetOperationReadiness` and `FleetOperationEnforcement`,
-including their fields and enum values, and `dcctl fleet-op readiness`. They require
-`fleet:operate`; scoped members are refused.
+Bulk change readiness joined the preview tier in **v1.9**, when its preview clock started.
+In **v1.10** the device-side surface is called bulk changes: the `bulkChangeReadiness` query,
+`BulkChangeReadiness` and `BulkChangeEnforcement`, including their fields and enum values,
+and `dcctl bulk-change readiness`. The deprecated `fleetOperationReadiness`,
+`FleetOperationReadiness`, `FleetOperationEnforcement` and `dcctl fleet-op readiness` keep
+working for compatibility, including v1.9 clients. The rename does not restart the preview
+clock. They require `fleet:operate`; scoped members are refused.
 
 ## Supported upgrade paths {#upgrade-paths}
 

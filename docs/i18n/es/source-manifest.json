@@ -187,8 +187,8 @@
       "translationSha256": "79153d4f39bb25b56070631a828ab176727f38f19d9eeab3ab0ec13c5fa489be"
     },
     "deployment/versioning-policy.md": {
-      "sourceSha256": "31dcc8cdd5503856b8c02daa868a03c17e5b8654913041fdccf43f393a0a2b1e",
-      "translationSha256": "ed6f55f92d193282c1e79b714faa9088c9da9bd041cccac2164150b350dcab38"
+      "sourceSha256": "9f1bd4b6cd007b307e2f87f65e38c4aa436d653803bc468f2d7d83d4651a42fd",
+      "translationSha256": "28b47de359c6ae878c13d6c941c7053b2ca8d219e294b7e3874edbb39909d49f"
     },
     "getting-help.md": {
       "sourceSha256": "86f2e15e38177a3ae5d53300a5ed6d2a1705f827bc29ab820fd9756020dc78f1",
@@ -339,8 +339,8 @@
       "translationSha256": "80ece6ceebb95ded7fc681e7a9e80693873cc631103c19dc691c8773e847ffee"
     },
     "reference/dcctl.md": {
-      "sourceSha256": "56be3298bd0b5382c20252ec30f5e119780e0ecdb73cb87d164600e1717e9c37",
-      "translationSha256": "a82ebadc11812e6ccc3b4111279f6a33a5bd72cdb8412ecfdaed6c771ef0257d"
+      "sourceSha256": "3a2f5b94a26799c7bf629b04db2316e9c565d2fdbdacf3a6247fb1249b430aad",
+      "translationSha256": "f0d6aaf88fee9f9d0f05901c323af9ad69f5981932647e90f8bd71b778ec2db3"
     },
     "reference/decoder-functions.md": {
       "sourceSha256": "bb81d5aef7ef2113c92b075e6fdc877b61365e9a22e2acb9911625dd096c7314",
@@ -355,8 +355,8 @@
       "translationSha256": "06692f75919527366e6aa4c8de0c7cf378dea24aaf15d28bcedd725241498c28"
     },
     "reference/graphql-api.md": {
-      "sourceSha256": "7bbcd89865224c17268b5b14cc70eb101e0a3910cadc87e60ecfe3d3b060d936",
-      "translationSha256": "e19d7e9f432138cfe4b98b1a26ec7cfdb33fa5618f3a3dd143ebe1d0b1060447"
+      "sourceSha256": "b2d846bd25f3d9a3c83c99d3f42278faa59f02450d84930b2fdd7c152136ca40",
+      "translationSha256": "215815a301cff4643d10403769acb1f0c4b04940a60a7ffc806012a9b488c69d"
     },
     "reference/npm-packages.md": {
       "sourceSha256": "7f85fa2f5e06d3aa61b4f06b28705aec695014407aaed1f4910fb323a9952ba2",
@@ -435,8 +435,8 @@
       "translationSha256": "674fdf54f86db1959d4ba632b412738f31f37426a1d45e937456f706a4331ec4"
     },
     "user-guide/members-roles-and-customer-users.md": {
-      "sourceSha256": "2a301ad59a9f54eb474b487f244b6d26f44bbd4d0096984ace8950bf2a2dd169",
-      "translationSha256": "bba3d8ac9e98d9d79c6a29a9b2c3b48ae8cdfa2a33f07a95876fe3dd9d6bcd4d"
+      "sourceSha256": "e8746f24efd49589505fecf5d3145e409184c4543df9445c9ce78890fadca3f4",
+      "translationSha256": "4e25390e5c69763393191c97f3c9fe26074a0ae2bd1a76d177230450fcf90b91"
     },
     "user-guide/notification-policies.md": {
       "sourceSha256": "80857bb1447d0a7d01819d4c3f335d6ba2a78f2fe780dfa7149e576647003b9c",

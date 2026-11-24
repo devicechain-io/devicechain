@@ -25,6 +25,7 @@ dcctl [command]
 * [dcctl backup](#dcctl-backup)	 - Export instance streams and blobs, or inspect a local backup set
 * [dcctl bootstrap](#dcctl-bootstrap)	 - Bootstrap a DeviceChain instance
 * [dcctl broker](#dcctl-broker)	 - Message broker operations
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Inspect bulk change capabilities
 * [dcctl config-schema](#dcctl-config-schema)	 - Print this release's instance configuration JSON Schema
 * [dcctl dead-letters](#dcctl-dead-letters)	 - Inspect work the platform accepted and then gave up on
 * [dcctl destroy](#dcctl-destroy)	 - Destroy a DeviceChain instance
@@ -32,7 +33,6 @@ dcctl [command]
 * [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
 * [dcctl events](#dcctl-events)	 - Inspect a tenant's events
 * [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
-* [dcctl fleet-op](#dcctl-fleet-op)	 - Preview. Inspect fleet operation capabilities
 * [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
 * [dcctl install](#dcctl-install)	 - Prepare a cluster for DeviceChain instances
 * [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
@@ -637,6 +637,78 @@ dcctl broker reconcile <instance> [flags]
 
 * [dcctl broker](#dcctl-broker)	 - Message broker operations
 
+## dcctl bulk-change {#dcctl-bulk-change}
+
+Preview. Inspect bulk change capabilities
+
+### Synopsis
+
+Preview. Inspect this instance's bulk change capabilities using your tenant identity.
+
+In v1.10, device fleet operations are called bulk changes. The deprecated dcctl fleet-op readiness alias keeps working and prints a one-line deprecation notice to stderr.
+
+### Options
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              help for bulk-change
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to inspect (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl bulk-change readiness](#dcctl-bulk-change-readiness)	 - Preview. Report whether this instance can run bulk changes
+
+## dcctl bulk-change readiness {#dcctl-bulk-change-readiness}
+
+Preview. Report whether this instance can run bulk changes
+
+### Synopsis
+
+Preview. Report the writer protocol version, fresh database enforcement state,
+executable operation kinds and orphaned device attribute and generation rows in your tenant.
+Requires fleet:operate; scoped members are refused.
+
+Exit status is zero only when enforcement is ENFORCED and orphanedAttributeRows is zero; that
+says the database enforces the writer protocol, not that any operation kind is executable. If the
+orphan count cannot be read the command reports the error and exits non-zero. The query is an
+expensive diagnostic (it counts rows); run it when you need the answer, do not poll it.
+In v1.9 enforcement is not installed and no kind is executable. The non-zero exit is
+expected until the release that installs enforcement. Use -o json for the four facts as JSON.
+
+```
+dcctl bulk-change readiness [flags]
+```
+
+### Options
+
+```
+  -h, --help            help for readiness
+  -o, --output string   output format: table or json (default "table")
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to inspect (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Inspect bulk change capabilities
+
 ## dcctl config-schema {#dcctl-config-schema}
 
 Print this release's instance configuration JSON Schema
@@ -1218,76 +1290,6 @@ dcctl executor unenroll [flags]
 ### SEE ALSO
 
 * [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
-
-## dcctl fleet-op {#dcctl-fleet-op}
-
-Preview. Inspect fleet operation capabilities
-
-### Synopsis
-
-Preview. Inspect this instance's fleet operation capabilities using your tenant identity.
-
-### Options
-
-```
-      --email string      identity to authenticate as; it must be a member of the tenant (required)
-  -h, --help              help for fleet-op
-  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
-      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
-      --password string   password for the identity (required)
-  -s, --server string     instance host for platform API calls (default "localhost")
-  -t, --tenant string     tenant to inspect (required)
-      --tls               use https for platform endpoints
-```
-
-### SEE ALSO
-
-* [dcctl](#dcctl)	 - DeviceChain CLI
-* [dcctl fleet-op readiness](#dcctl-fleet-op-readiness)	 - Preview. Report whether this instance can run fleet operations
-
-## dcctl fleet-op readiness {#dcctl-fleet-op-readiness}
-
-Preview. Report whether this instance can run fleet operations
-
-### Synopsis
-
-Preview. Report the writer protocol version, fresh database enforcement state,
-executable operation kinds and orphaned device attribute and generation rows in your tenant.
-Requires fleet:operate; scoped members are refused.
-
-Exit status is zero only when enforcement is ENFORCED and orphanedAttributeRows is zero; that
-says the database enforces the writer protocol, not that any operation kind is executable. If the
-orphan count cannot be read the command reports the error and exits non-zero. The query is an
-expensive diagnostic (it counts rows); run it when you need the answer, do not poll it.
-In v1.9 enforcement is not installed and no kind is executable. The non-zero exit is
-expected until the release that installs enforcement. Use -o json for the four facts as JSON.
-
-```
-dcctl fleet-op readiness [flags]
-```
-
-### Options
-
-```
-  -h, --help            help for readiness
-  -o, --output string   output format: table or json (default "table")
-```
-
-### Options inherited from parent commands
-
-```
-      --email string      identity to authenticate as; it must be a member of the tenant (required)
-  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
-      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
-      --password string   password for the identity (required)
-  -s, --server string     instance host for platform API calls (default "localhost")
-  -t, --tenant string     tenant to inspect (required)
-      --tls               use https for platform endpoints
-```
-
-### SEE ALSO
-
-* [dcctl fleet-op](#dcctl-fleet-op)	 - Preview. Inspect fleet operation capabilities
 
 ## dcctl ha {#dcctl-ha}
 

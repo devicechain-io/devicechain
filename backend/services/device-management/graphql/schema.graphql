@@ -6756,8 +6756,10 @@ alarms, entity groups, geofences and the rest of device management. A field's de
 authority it needs.
 """
 type Query {
-    """Preview. Report this build's fleet operation capabilities and fresh database enforcement and tenant orphan facts. Requires fleet:operate; scoped members are refused. An expensive diagnostic (it counts rows): query it when you need the answer, do not poll it."""
-    fleetOperationReadiness: FleetOperationReadiness!
+    """Preview. Report this build's bulk change capabilities and fresh database enforcement and tenant orphan facts. Requires fleet:operate; scoped members are refused. An expensive diagnostic (it counts rows): query it when you need the answer, do not poll it."""
+    bulkChangeReadiness: BulkChangeReadiness!
+    """Preview. Report this build's bulk change capabilities and fresh database enforcement and tenant orphan facts. Requires fleet:operate; scoped members are refused. An expensive diagnostic (it counts rows): query it when you need the answer, do not poll it."""
+    fleetOperationReadiness: FleetOperationReadiness! @deprecated(reason: "Use bulkChangeReadiness.")
     """(Preview: may change in a minor release.) Read automation protection settings. Requires device:read and an unscoped caller; an unknown profile returns NOT_FOUND."""
     automationReviewPolicy(
         """(Preview: may change in a minor release.) The profile token."""
@@ -9699,19 +9701,43 @@ schema {
 }
 
 # Fleet operation readiness (Preview)
-"""Preview. Whether this instance can run fleet operations. May change in a minor release while in preview."""
+"""Preview. Deprecated; use BulkChangeReadiness via bulkChangeReadiness. Whether this instance can run bulk changes. May change in a minor release while in preview."""
 type FleetOperationReadiness {
-  """Preview. Highest fleet-operation protocol version the answering service build follows."""
+  """Preview. Highest bulk-change protocol version the answering service build follows."""
   protocolVersion: Int!
   """Preview. Whether the database enforces the device attribute writer protocol."""
   enforcement: FleetOperationEnforcement!
   """Preview. Operation kinds the answering service build can execute. Empty until a kind ships."""
   executableKinds: [String!]!
-  """Preview. Device attribute and generation rows in the caller's tenant whose device no longer exists, counted fresh for this request, including soft-deleted attributes. Fleet operations are not activated while this is above zero. Null when the count could not be read; the error names why, and the other facts are still answered."""
+  """Preview. Device attribute and generation rows in the caller's tenant whose device no longer exists, counted fresh for this request, including soft-deleted attributes. Bulk changes are not activated while this is above zero. Null when the count could not be read; the error names why, and the other facts are still answered."""
+  orphanedAttributeRows: Int
+}
+"""Preview. Deprecated; use BulkChangeEnforcement via bulkChangeReadiness. Database enforcement of the device attribute writer protocol."""
+enum FleetOperationEnforcement {
+  """Preview. The expected enforcing trigger and function are not installed on the device attribute table."""
+  NOT_INSTALLED
+  """Preview. The expected enforcing trigger exists but is disabled or enabled without ALWAYS."""
+  DISABLED
+  """Preview. The expected enforcing trigger covers INSERT, UPDATE and DELETE, has no WHEN condition and is enabled ALWAYS."""
+  ENFORCED
+  """Preview. The database catalog could not be read. Enforcement cannot be confirmed."""
+  UNREADABLE
+}
+
+# Bulk change readiness (Preview)
+"""Preview. Whether this instance can run bulk changes. May change in a minor release while in preview."""
+type BulkChangeReadiness {
+  """Preview. Highest bulk-change protocol version the answering service build follows."""
+  protocolVersion: Int!
+  """Preview. Whether the database enforces the device attribute writer protocol."""
+  enforcement: BulkChangeEnforcement!
+  """Preview. Operation kinds the answering service build can execute. Empty until a kind ships."""
+  executableKinds: [String!]!
+  """Preview. Device attribute and generation rows in the caller's tenant whose device no longer exists, counted fresh for this request, including soft-deleted attributes. Bulk changes are not activated while this is above zero. Null when the count could not be read; the error names why, and the other facts are still answered."""
   orphanedAttributeRows: Int
 }
 """Preview. Database enforcement of the device attribute writer protocol."""
-enum FleetOperationEnforcement {
+enum BulkChangeEnforcement {
   """Preview. The expected enforcing trigger and function are not installed on the device attribute table."""
   NOT_INSTALLED
   """Preview. The expected enforcing trigger exists but is disabled or enabled without ALWAYS."""

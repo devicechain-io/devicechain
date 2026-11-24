@@ -159,7 +159,7 @@ every tenant authority, including ones added in later releases.
 
 {/* TODO(screenshot): role-detail, a tenant role with the grouped authority checklist. */}
 
-`fleet:operate` is reserved for fleet operations; no API uses it in this release. It is not seeded into any built-in role, though `*` already satisfies it. Grant it to custom roles only after the upgrade has finished rolling out: an older user-management pod rejects any role edit containing an unknown authority, even an unrelated edit to a role that already holds it.
+`fleet:operate` authorizes bulk change readiness (Preview). It is not seeded into any built-in role, though `*` already satisfies it. Grant it to custom roles only after the upgrade has finished rolling out: an older user-management pod rejects any role edit containing an unknown authority, even an unrelated edit to a role that already holds it.
 
 Authorities you do not hold yourself are greyed out: nobody can grant more than they have. A role
 can only carry tenant authorities, so instance-level permissions are never offered.
