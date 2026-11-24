@@ -35,6 +35,7 @@ type measurementEventRaw struct {
 	DeviceToken  string   `json:"deviceToken"`
 	Name         string   `json:"name"`
 	Value        *float64 `json:"value"`
+	TextValue    *string  `json:"textValue"`
 	Unit         string   `json:"unit"`
 	DataType     string   `json:"dataType"`
 	OccurredTime string   `json:"occurredTime"`
@@ -47,7 +48,7 @@ type QueryMeasurementsOutput struct {
 
 var queryMeasurementsQuery = newDocument("event-management", `query QueryMeasurements($criteria: EventSearchCriteria!) {
   measurementEvents(criteria: $criteria) {
-    results { deviceToken name value unit dataType occurredTime }
+    results { deviceToken name value textValue unit dataType occurredTime }
     pagination { totalRecords }
   }
 }`)
@@ -88,7 +89,7 @@ func (t *Tools) QueryMeasurements(ctx context.Context, req *mcp.CallToolRequest,
 	for _, m := range resp.MeasurementEvents.Results {
 		out.Measurements = append(out.Measurements, MeasurementEvent{
 			DeviceToken: m.DeviceToken, Value: m.Value, DataType: m.DataType, OccurredTime: m.OccurredTime,
-			Untrusted: newMeasurementUntrusted(m.Name, m.Unit, ""),
+			Untrusted: newMeasurementUntrusted(m.Name, m.Unit, deref(m.TextValue)),
 		})
 	}
 	return provenanceResult(out), out, nil
