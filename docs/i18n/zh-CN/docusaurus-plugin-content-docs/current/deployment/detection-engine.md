@@ -245,9 +245,9 @@ dcctl dead-letters list --server <host> --email <you> --password <secret> \
 | `maxRulesPerTenant` | 500 | 运行时报告阈值。发布和回滚**仅在租户层级显式设置 `rulesPerTenant` 时**执行规则上限；缺失或 `null` 时仅报告，不拒绝操作。 |
 | `maxLiveKeysPerTenant` | 1000000 | 每租户活动窗口和定时器上限，同样仅测量。 |
 | `maxRetainedSamplesPerTenant` | 5000000 | 每租户打开窗口中保留读数上限，同样仅测量。 |
-| `outboundCallsPerSecond` | 100 | 每租户对外连接器动作派发速率，按触发遥测到达平台时刻计量。 |
+| `outboundCallsPerSecond` | 100 | 每租户发送命令与对外连接器动作合计的派发速率，按触发遥测到达平台时刻计量。租户自定义上限优先。 |
 | `outboundBurst` | 200 | 上述速率的突发额度。 |
-| `shedLetterPerSecond` | 1 | 每租户被丢弃对外动作单独记录为死信的速率。 |
+| `shedLetterPerSecond` | 1 | 每租户被拒绝的命令和被丢弃对外动作单独记录为死信的速率。 |
 | `shedLetterBurst` | 60 | 上述速率的突发额度。 |
 | `shedLetterGlobalPerSecond` | 10 | 所有租户的总记录速率。超过任一预算的丢弃动作计数后，每租户每分钟汇总一封死信。 |
 | `shedLetterGlobalBurst` | 100 | 上述速率的突发额度。 |

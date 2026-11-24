@@ -623,9 +623,11 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			d.dropped(DropMissingVariant)
 			return
 		}
-		if resolved || ev.Replayed {
+		if resolved {
 			// A command has no falling-edge twin: the Resolved reports the condition ceased, which is
 			// not a fresh trigger to re-send. Skip (no metric — it is a routine non-effect, not a drop).
+			// A REPLAYED Raised is not skipped: it may be the only delivery of a command the crash
+			// interrupted, and its idempotency token collapses it downstream if it was not.
 			return
 		}
 		if d.commands == nil {
@@ -662,7 +664,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			// the command waits for delivery, and that wait starts when the command is enqueued.
 			req.ExpiresAt = sentAt.Add(expiry)
 		}
-		if code := d.commandRefusal(ev.Tenant, ev.RuleID, ev.Series, ev.TriggeredAt, sentAt); code != "" {
+		if code := d.commandRefusal(ev, sentAt); code != "" {
 			d.metrics.RecordCommandRefused(code)
 			res.Shed = append(res.Shed, ShedAction{Kind: "sendCommand", Token: req.Token, Code: code})
 			// The metric counts every refusal; the consumer budgets individual dead

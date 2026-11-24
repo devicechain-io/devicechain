@@ -13,6 +13,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
@@ -24,13 +25,18 @@ func governedCommandRule() rules.Rule {
 	return r
 }
 
-func TestStartupReplayCannotActuateCommands(t *testing.T) {
+// Deliver-before-checkpoint: a detection drained before a crash and not yet published
+// is re-derived by startup replay, and that replay is its ONLY delivery. Its command
+// must still reach command-delivery (whose idempotency token collapses it if the
+// first delivery did happen), without charging the outbound budget, which is closed
+// here so that a charge would refuse it.
+func TestStartupReplayRecoversCommandsWithoutCharging(t *testing.T) {
 	for _, shards := range []int{1, 2} {
-		t.Run(fmt.Sprint(shards), func(t *testing.T) { startupReplayCannotActuate(t, shards) })
+		t.Run(fmt.Sprint(shards), func(t *testing.T) { startupReplayRecoversCommands(t, shards) })
 	}
 }
 
-func startupReplayCannotActuate(t *testing.T, shards int) {
+func startupReplayRecoversCommands(t *testing.T, shards int) {
 	w := &derivedCapture{}
 	rp := stampingProcessor(t, diffRegistry(t), w)
 	rp.cfg.Shards = shards
@@ -46,25 +52,37 @@ func startupReplayCannotActuate(t *testing.T, shards int) {
 		t.Fatal("replay fixture produced no detection")
 	}
 	sink := &reactFakeSink{}
-	gate := &meterGate{admit: true}
+	gate := &meterGate{admit: false}
 	rd, _ := reactWithConnectors(t, governedCommandRule(), sink, nil, gate, &deadRecorder{}, testShedBudget)
+	raised := 0
 	for _, ev := range w.events {
+		if !ev.Replayed {
+			t.Fatal("a detection derived during startup replay was not marked replayed")
+		}
+		if ev.Edge != runtime.EdgeResolved {
+			raised++
+		}
 		rd.handle(derivedMsg(t, "acme", ev, 1, &fakeAck{}))
 	}
-	if len(sink.sent) != 0 || len(gate.at) != 0 {
-		t.Fatal("startup replay reached command-delivery or spent the outbound budget")
+	if raised == 0 || len(sink.sent) != raised || len(gate.at) != 0 {
+		t.Fatalf("startup replay sent %d of %d recovered commands and charged %d times; want all sent, none charged", len(sink.sent), raised, len(gate.at))
 	}
+	gate.admit = true
+	recovered := len(sink.sent)
 	// The replay path must leave no sticky suppression on the live detector.
 	rp.handle(resolvedMessage(t, diffEvent{device: "device-1", occurred: testBase.Add(time.Second), value: "20"}, 2, testBase.Add(time.Second), &fakeAck{}))
 	rp.handle(resolvedMessage(t, diffEvent{device: "device-1", occurred: testBase.Add(2 * time.Second), value: "40"}, 3, testBase.Add(2*time.Second), &fakeAck{}))
 	rp.checkpoint(context.Background())
 	for _, ev := range w.events {
 		if ev.OccurredTime.After(testBase) {
+			if ev.Replayed {
+				t.Fatal("a live detection after replay was marked replayed, which would exempt it from the guards")
+			}
 			rd.handle(derivedMsg(t, "acme", ev, 1, &fakeAck{}))
 		}
 	}
-	if len(sink.sent) == 0 {
-		t.Fatal("live detection did not resume sending after replay")
+	if len(sink.sent) <= recovered || len(gate.at) == 0 {
+		t.Fatal("live detection after replay was not sent through the outbound gate")
 	}
 }
 
@@ -138,9 +156,9 @@ func TestCommandSyntheticFeedbackLoopIsCutAndRecorded(t *testing.T) {
 	}
 }
 
-func TestReplayedCommandsNeverSendOrCharge(t *testing.T) {
+func TestReplayedCommandsAreSentWithoutCharging(t *testing.T) {
 	sink := &reactFakeSink{}
-	gate := &meterGate{admit: true}
+	gate := &meterGate{admit: false}
 	rd, _ := reactWithConnectors(t, governedCommandRule(), sink, nil, gate, &deadRecorder{}, testShedBudget)
 	ev := sendCmdEvent()
 	for i := 0; i < 121; i++ {
@@ -159,15 +177,16 @@ func TestReplayedCommandsNeverSendOrCharge(t *testing.T) {
 		}
 		rd.handle(messaging.NewConsumedMessage("dc.acme.derived-events", b, 1, nil, &fakeAck{}))
 	}
-	if len(sink.sent) != 0 || len(gate.at) != 0 {
-		t.Fatalf("replay sent %d commands and charged %d times", len(sink.sent), len(gate.at))
+	if len(sink.sent) != 121 || len(gate.at) != 0 {
+		t.Fatalf("replay sent %d commands of 121 and charged %d times", len(sink.sent), len(gate.at))
 	}
 	// Replay must not use any of the live device/rule loop allowance either.
+	gate.admit = true
 	for i := 0; i < 120; i++ {
 		ev.OccurredTime = ev.OccurredTime.Add(time.Nanosecond)
 		rd.handle(derivedMsg(t, "acme", ev, 1, &fakeAck{}))
 	}
-	if len(sink.sent) != 120 || len(gate.at) != 120 {
+	if len(sink.sent) != 241 || len(gate.at) != 120 {
 		t.Fatal("replay consumed the live command allowance")
 	}
 }

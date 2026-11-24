@@ -6,6 +6,8 @@ package react
 import (
 	"sync"
 	"time"
+
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 )
 
 const (
@@ -39,9 +41,12 @@ type commandLoopEntry struct {
 // retries, rather than trusting a device to echo a correlation or hop counter.
 //
 // This is side-effect safety state, outside the replay-correct DETECT engine and
-// its snapshots. Replay never enters it; preview has no live sinks and evaluation
-// uses recording sinks with WithCommandSimulation. It uses the server clock,
-// never device event time (a device must not advance its own allowance).
+// its snapshots. A detection the engine re-derives on startup replay is still SENT
+// (deliver-before-checkpoint: it may never have left before the crash, and the
+// idempotency token collapses it downstream if it did) but never enters this state
+// or the outbound gate; preview has no live sinks and evaluation uses recording
+// sinks with WithCommandSimulation. It uses the server clock, never device event
+// time (a device must not advance its own allowance).
 //
 // HA: state is PER REPLICA, not shared or checkpointed. REACT's DETECT term gate
 // normally leaves only the lease holder dispatching. Restart/failover starts a
@@ -93,18 +98,52 @@ func (g *commandLoopGuard) admit(tenant, rule, device string, now time.Time) str
 	return ""
 }
 
+// refund returns the allowance admit just took for an attempt another policy then
+// refused, so a send that never happened neither shortens the key's allowance nor,
+// for a key admit created, holds one of the bounded slots. Events of one device are
+// dispatched one after another, so nothing else moves the key in between.
+func (g *commandLoopGuard) refund(tenant, rule, device string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	key := commandLoopKey{tenant: tenant, rule: stableContributorID(rule), device: device}
+	entry, found := g.keys[key]
+	if !found {
+		return
+	}
+	if entry.sends <= 1 {
+		delete(g.keys, key)
+		return
+	}
+	entry.sends--
+	g.keys[key] = entry
+}
+
 // WithCommandSimulation is used only by the isolated rule evaluator, whose sinks
 // record intents. It neither spends live governance tokens nor holds loop state.
 func WithCommandSimulation() Option {
 	return func(d *Dispatcher) { d.commandSimulation = true }
 }
 
-func (d *Dispatcher) commandRefusal(evTenant, rule, device string, at, sentAt time.Time) string {
-	if d.commandSimulation {
+// commandRefusal decides whether source policy refuses one command, and charges
+// what it admits. The loop guard is asked FIRST: a looping rule's refused attempts
+// must not keep drawing on the tenant's outbound budget, or the guard would contain
+// the loop for its device while the loop starved every other command, webhook and
+// publish of the tenant. An attempt the guard admits and the rate gate then refuses
+// is refunded to the guard, so a tenant over its rate creates no loop state either.
+//
+// A replayed detection is exempt from both: it is a re-derivation of output that may
+// never have been delivered, not a fresh trigger, and the idempotency token is what
+// stops it from actuating twice.
+func (d *Dispatcher) commandRefusal(ev runtime.DerivedEvent, sentAt time.Time) string {
+	if d.commandSimulation || ev.Replayed {
 		return ""
 	}
-	if d.connectorRate != nil && !d.connectorRate.AllowAt(evTenant, at) {
+	if code := d.commandLoop.admit(ev.Tenant, ev.RuleID, ev.Series, sentAt); code != "" {
+		return code
+	}
+	if d.connectorRate != nil && !d.connectorRate.AllowAt(ev.Tenant, ev.TriggeredAt) {
+		d.commandLoop.refund(ev.Tenant, ev.RuleID, ev.Series)
 		return CommandRateLimited
 	}
-	return d.commandLoop.admit(evTenant, rule, device, sentAt)
+	return ""
 }

@@ -43,25 +43,90 @@ func TestCommandLoopBound(t *testing.T) {
 	}
 }
 
-func TestCommandReplayDoesNotSendOrCount(t *testing.T) {
+// A detection re-derived by startup replay may be the only delivery of a command a
+// crash interrupted (deliver-before-checkpoint), so it is SENT, with the same
+// idempotency token as the live dispatch it may duplicate. It is not a fresh
+// trigger, so it neither charges the outbound gate (closed here, to prove it is not
+// asked) nor spends the live loop allowance.
+func TestReplayedCommandIsSentWithoutSpendingEitherBudget(t *testing.T) {
 	sink := &fakeSink{}
-	gate := &fakeGate{admit: true}
+	gate := &fakeGate{admit: false}
 	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, sink, nil, nil, gate, newFakeMetrics())
+	live := evt()
 	var ev runtime.DerivedEvent
-	if err := json.Unmarshal([]byte(`{"tenant":"acme","ruleId":"acme/p@1/r1","series":"device-1","replayed":true}`), &ev); err != nil {
+	b, err := json.Marshal(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatal(err)
+	}
+	wire["replayed"] = true
+	if b, err = json.Marshal(wire); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &ev); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 121; i++ {
+		if res := d.Dispatch(context.Background(), ev); res.Outcome != Done || len(res.Shed) != 0 {
+			t.Fatalf("replayed command refused: %+v", res)
+		}
+	}
+	if len(sink.sent) != 121 || len(gate.charged) != 0 || len(d.commandLoop.keys) != 0 {
+		t.Fatalf("replay sent=%d charged=%d loopKeys=%d; want 121 sent, nothing charged", len(sink.sent), len(gate.charged), len(d.commandLoop.keys))
+	}
+	if sink.sent[0].Token != idempotencyToken(live, governedCommandRule().Actions[0]) {
+		t.Fatal("a replayed command must carry the live dispatch's idempotency token")
+	}
+	gate.admit = true
+	for i := 0; i < 120; i++ {
+		live.OccurredTime = live.OccurredTime.Add(time.Nanosecond)
+		d.Dispatch(context.Background(), live)
+	}
+	if len(sink.sent) != 241 {
+		t.Fatalf("replay spent the live loop budget: %d live sends of 120", len(sink.sent)-121)
+	}
+}
+
+// A looping rule's refused attempts must not keep drawing on the tenant's outbound
+// budget: the loop guard is asked before the gate.
+func TestLoopRefusalDoesNotSpendTenantBudget(t *testing.T) {
+	sink := &fakeSink{}
+	gate := &fakeGate{admit: true}
+	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, sink, nil, nil, gate, newFakeMetrics())
+	ev := evt()
+	for i := 0; i < commandLoopSends+50; i++ {
+		ev.OccurredTime = ev.OccurredTime.Add(time.Nanosecond)
 		d.Dispatch(context.Background(), ev)
 	}
-	if len(sink.sent) != 0 || len(gate.charged) != 0 {
-		t.Fatalf("replay sent=%d charged=%d", len(sink.sent), len(gate.charged))
+	if len(sink.sent) != commandLoopSends || len(gate.charged) != commandLoopSends {
+		t.Fatalf("sent=%d charged=%d; a loop-refused attempt must not charge the tenant's outbound budget", len(sink.sent), len(gate.charged))
 	}
-	for i := 0; i < 120; i++ {
-		d.Dispatch(context.Background(), evt())
+}
+
+// An attempt the rate gate refuses was never sent, so it gives its loop allowance
+// back and holds no slot of the bounded guard.
+func TestRateRefusalRefundsLoopAllowance(t *testing.T) {
+	sink := &fakeSink{}
+	gate := &fakeGate{admit: false}
+	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, sink, nil, nil, gate, newFakeMetrics())
+	ev := evt()
+	for i := 0; i < 50; i++ {
+		ev.OccurredTime = ev.OccurredTime.Add(time.Nanosecond)
+		d.Dispatch(context.Background(), ev)
 	}
-	if len(sink.sent) != 120 {
-		t.Fatalf("replay spent the live loop budget: %d sends", len(sink.sent))
+	if len(sink.sent) != 0 || len(d.commandLoop.keys) != 0 {
+		t.Fatalf("rate-refused attempts left loop state: sent=%d keys=%d", len(sink.sent), len(d.commandLoop.keys))
+	}
+	gate.admit = true
+	for i := 0; i < commandLoopSends; i++ {
+		ev.OccurredTime = ev.OccurredTime.Add(time.Nanosecond)
+		d.Dispatch(context.Background(), ev)
+	}
+	if len(sink.sent) != commandLoopSends {
+		t.Fatalf("rate refusals spent the loop allowance: %d of %d sent", len(sink.sent), commandLoopSends)
 	}
 }
 

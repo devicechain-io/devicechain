@@ -43,8 +43,11 @@ func wireEdge(e core.EdgeKind) string {
 // JSON envelope for slice 4a; the wire may harden to protobuf when the client subscription lands
 // (slice 7) — pre-GA, changeable.
 type DerivedEvent struct {
-	// Replayed marks startup reconstruction, not a fresh actuation. It is additive
-	// on the wire and excluded from DedupID; pre-upgrade events decode as live.
+	// Replayed marks a detection re-derived by startup replay rather than a fresh
+	// trigger. REACT still dispatches it (it may never have been delivered) but does
+	// not charge it to the command loop guard or the outbound budget. It is additive
+	// on the wire and excluded from DedupID; pre-upgrade events decode as live, and a
+	// pre-upgrade REACT ignores it and dispatches as before.
 	Replayed bool `json:"replayed,omitempty"`
 	// RuleID is the tenant-prefixed id of the rule that fired.
 	RuleID string `json:"ruleId"`
