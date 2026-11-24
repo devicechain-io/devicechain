@@ -194,6 +194,9 @@ title: 指标参考
 
 | 指标 | 计数内容与处理方式 |
 | --- | --- |
+| `rollup_hour_backfill_complete_from_timestamp_seconds` | Gauge。已完全刷新的最早小时边界（Unix 秒）。更早的小时在补齐前继续使用分钟汇总。仅在此副本首次获得回填锁并读取进度后导出。 |
+| `rollup_hour_backfill_remaining_windows` | Gauge。直到最早源数据块、分钟汇总或汇总保留边界之间仍需补齐的小时窗口数。零表示已补齐。仅在首次持锁读取进度后导出。 |
+| `rollup_hour_backfill_windows_total` | Counter。此副本已刷新并记录完成的小时窗口数。与刷新策略发生锁冲突时，窗口留待下一轮重试。 |
 | `failed_events_recorded_total{source,reason}` | [失败事件索引](../guides/why-isnt-my-data-showing-up.md)读取到的、平台拒绝或无法存储的事件记录数，按写入该记录的区域和原因划分。每条记录都计数，包括被洪泛上限并入已有行的记录，因此它是平台拒绝事件的真实速率。`FailedEventsSustained` 依据它触发。 |
 | `failed_events_suppressed_total{reason}` | 因设备或原因达到每小时上限而并入已有行计数、未新增行的记录数。持续偏高说明某个设备或某种原因在大量拒绝事件。 |
 | `failed_events_unindexed_total{cause}` | 索引完全没有存储的记录数：`no_tenant`（主题未指明租户）、`undecodable`（记录无法解码）、`erased`（该租户的数据已被擦除）、`gave_up`（存储在每次投递时都拒绝了该记录）。只有 `gave_up` 值得排查；该记录会保留在失败流中，直到被滚动淘汰。 |

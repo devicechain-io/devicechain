@@ -226,6 +226,9 @@ Prefix: `devicechain_eventmanagement_`.
 
 | Metric | What it counts and what to do |
 | --- | --- |
+| `rollup_hour_backfill_complete_from_timestamp_seconds` | Gauge. Earliest fully refreshed hour boundary (Unix seconds). Older hours remain on minute rollups until filled. Exported only after this replica first acquires the backfill lock and reads progress. |
+| `rollup_hour_backfill_remaining_windows` | Gauge. Hour windows still owed down to the earliest source chunk/minute bucket or rollup retention floor. Zero means caught up. Exported only after the first locked progress read. |
+| `rollup_hour_backfill_windows_total` | Counter. Hour windows refreshed and recorded complete by this replica. Policy lock conflicts leave the window owed for the next pass. |
 | `failed_events_recorded_total{source,reason}` | Records of events the platform refused or could not store that the [failed-events index](../guides/why-isnt-my-data-showing-up.md) read, by the area that wrote them and the reason. Every record counts, including those the flood bound folded into an existing row, so this is the platform's true rate of refusing events. `FailedEventsSustained` fires on it. |
 | `failed_events_suppressed_total{reason}` | Records folded into an existing row's count instead of adding a row, because the device or the reason reached its hourly bound. A sustained rate here means one device, or one cause, is refusing events in volume. |
 | `failed_events_unindexed_total{cause}` | Records the index did not store at all: `no_tenant` (the subject named no tenant), `undecodable` (the record would not decode), `erased` (the tenant's data has been erased) or `gave_up` (the store refused the record on every delivery). Only `gave_up` is a fault worth looking at; the record stays on the failure stream until it rolls off. |
