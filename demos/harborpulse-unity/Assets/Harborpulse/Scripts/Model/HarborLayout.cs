@@ -14,11 +14,24 @@ namespace DeviceChain.Harborpulse.Model
         public const string Gauge = "gauge", LoraGauge = "lora-gauge", LegacyGauge = "legacy-gauge", Pump = "pump", Light = "light", Charger = "charger",
             Meter = "meter", Truck = "truck";
 
-        static readonly string[] Known = { Gauge, LoraGauge, LegacyGauge, Pump, Light, Charger, Meter, Truck };
+        /// <summary>
+        /// The kinds that hold their own session with the platform or ask it for their orders: a charger on MQTT under a device token, one on
+        /// MQTT under a client certificate, and a lamp that fetches its commands over HTTP. Each has its own device type and reports less than
+        /// the district's chargers and street lights (a charging power; a dim level), so none of them is drawn, or read, as one of those.
+        /// </summary>
+        public const string MqttCharger = "mqtt-charger", CertCharger = "cert-charger", PullLight = "pull-light";
+
+        static readonly string[] Known = { Gauge, LoraGauge, LegacyGauge, Pump, Light, Charger, Meter, Truck, MqttCharger, CertCharger, PullLight };
 
         public static IReadOnlyList<string> All => Known;
 
         public static bool IsGauge(string kind) => kind == Gauge || kind == LoraGauge || kind == LegacyGauge;
+
+        /// <summary>A charger that reports its charging power over its own MQTT session and nothing else.</summary>
+        public static bool IsLinkedCharger(string kind) => kind == MqttCharger || kind == CertCharger;
+
+        /// <summary>Any charger: it stands at the head of a parking bay.</summary>
+        public static bool HasBay(string kind) => kind == Charger || IsLinkedCharger(kind);
 
         public static bool IsKnown(string kind) => Array.IndexOf(Known, kind) >= 0;
     }

@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using DeviceChain.Demos.Platform;
 using DeviceChain.Harborpulse.Model;
+using DeviceChain.Harborpulse.Model.Director;
 using NUnit.Framework;
 
 namespace DeviceChain.Harborpulse.Tests
@@ -36,7 +37,7 @@ namespace DeviceChain.Harborpulse.Tests
 
         public static string Status(string state = "RUNNING", bool started = true, string startedAt = "2026-11-19T11:50:00.123456789Z", int day = 0, double simHour = 12.5,
             string beat = "quiet", string name = "harborpulse") =>
-            "{\"state\":\"" + state + "\",\"tenant\":\"sim-hp\",\"instanceId\":\"dc\",\"deviceCount\":37,\"emitIntervalMs\":5000,\"scenario\":{\"name\":\"" + name +
+            "{\"state\":\"" + state + "\",\"tenant\":\"sim-hp\",\"instanceId\":\"dc\",\"deviceCount\":43,\"emitIntervalMs\":5000,\"scenario\":{\"name\":\"" + name +
             "\",\"started\":" + (started ? "true" : "false") + (started ? ",\"startedAt\":\"" + startedAt + "\"" : "") +
             ",\"dayLengthSeconds\":1440,\"startHour\":6,\"day\":" + day + ",\"simHour\":" + simHour.ToString(System.Globalization.CultureInfo.InvariantCulture) +
             ",\"simTime\":\"12:30\",\"beat\":\"" + beat + "\"}}";
@@ -57,7 +58,8 @@ namespace DeviceChain.Harborpulse.Tests
         public void TheCommittedLayoutIsTheWholeFleet()
         {
             var l = Kit.Layout();
-            Assert.That(l.Devices.Count, Is.EqualTo(37));
+            Assert.That(l.Devices.Count, Is.EqualTo(PresentationMap.DeviceCount));
+            Assert.That(PresentationMap.DeviceCount, Is.EqualTo(43), "the district's 37 and the six that hold their own session");
             Assert.That(l.Quays.Count, Is.EqualTo(3));
             var lights = 0;
             foreach (var d in l.Devices)

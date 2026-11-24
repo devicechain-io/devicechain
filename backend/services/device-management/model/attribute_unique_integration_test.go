@@ -70,6 +70,7 @@ func TestRestoreAttributeConcurrentFirstWritePostgres(t *testing.T) {
 	tx := api.RDB.DB(ctx).Begin()
 	require.NoError(t, tx.Error)
 	defer tx.Rollback()
+	markAsProtocolWriter(t, tx)
 	north := "north"
 	first := &EntityAttribute{EntityType: "device", EntityId: device.ID, Scope: "SHARED", AttrKey: "site",
 		ValueType: "STRING", Value: rdb.NullStrOf(&north)}

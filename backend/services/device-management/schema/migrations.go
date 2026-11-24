@@ -84,5 +84,6 @@ var (
 		NewDecoderHealthWindowIndexesSchema(),
 		NewAttributeGenerationsSchema(),
 		NewFleetOperationsSchema(),
+		NewAttributeWriterProtocolSchema(),
 	}
 )

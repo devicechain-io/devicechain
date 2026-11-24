@@ -2,12 +2,18 @@
 +540|3b|caption-end|hot-only|
 +541|3b|caption|Running hot. Alarm raised.|3:run5:alarm38:alarm:hp-charger-basin-2:connector-hot18:hp-charger-basin-213:connector-hot12:derate-cycle0:0:6:RAISED8:PLATFORM
 +561|3b|caption-end|hot-only|
++565|3c|shot|3c-5|
++566|3c|caption|One certificate was disabled at two. / That charger alone is locked out.|
++571|3c|caption-end|locked-out|
 -482|3b|caption|Running hot. The platform / tells it to derate.|3:run7:command44:command:hp-charger-basin-2:derate:SUCCESSFUL18:hp-charger-basin-26:derate12:derate-cycle0:0:10:SUCCESSFUL8:PLATFORM
 -510|3b|caption-end|derate|
 -511|3b|caption|Cooler now. Alarm cleared.|3:run7:command44:command:hp-charger-basin-2:derate:SUCCESSFUL18:hp-charger-basin-26:derate12:derate-cycle0:0:10:SUCCESSFUL8:PLATFORM,3:run5:alarm38:alarm:hp-charger-basin-2:connector-hot18:hp-charger-basin-213:connector-hot12:derate-cycle0:0:7:CLEARED8:PLATFORM,3:run7:measure34:measure:hp-charger-basin-2:max_kw:18:hp-charger-basin-26:max_kw12:derate-cycle0:0:0:8:PLATFORM
 -540|3b|caption-end|cool|
 -541|3b|caption|Cooler now. Alarm cleared.|3:run7:command44:command:hp-charger-basin-2:derate:SUCCESSFUL18:hp-charger-basin-26:derate12:derate-cycle0:0:10:SUCCESSFUL8:PLATFORM,3:run5:alarm38:alarm:hp-charger-basin-2:connector-hot18:hp-charger-basin-213:connector-hot12:derate-cycle0:0:7:CLEARED8:PLATFORM,3:run7:measure34:measure:hp-charger-basin-2:max_kw:18:hp-charger-basin-26:max_kw12:derate-cycle0:0:0:8:PLATFORM
 -546|3b|caption-end|cool|
+-550|3c|shot|3c-5|
+-551|3c|caption|One certificate was disabled at two. / That charger alone is locked out.|
+-556|3c|caption-end|locked-out|
 -691|4|link|well->command|
 -691|4|node-label|start-pump sent|3:run7:command37:command:hp-pump-north:start-pump:SENT13:hp-pump-north10:start-pump10:pump-cycle0:0:4:SENT8:PLATFORM
 -691|4|node|command|3:run7:command37:command:hp-pump-north:start-pump:SENT13:hp-pump-north10:start-pump10:pump-cycle0:0:4:SENT8:PLATFORM

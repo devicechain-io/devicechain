@@ -200,10 +200,16 @@ var rawSQLAllowList = []siteEntry{
 			"formatted-in text is the model's quoted table name.",
 	},
 	{
-		Path: "backend/services/device-management/model/api_fleet_operation_readiness.go", Func: "Api.FleetOperationEnforcement", Count: 1,
+		Path: "backend/services/device-management/model/api_fleet_operation_readiness.go", Func: "fleetOperationEnforcementStates", Count: 1,
 		Why: "a catalog read (pg_trigger, pg_class, pg_namespace, pg_proc) that names entity_attributes only as the " +
-			"relation whose triggers it inspects. It reads no row of entity_attributes or of any tenant table, so " +
-			"there is no tenant predicate to bypass.",
+			"relation whose triggers it inspects, shared by readiness and the posting-time activation check. It reads " +
+			"no row of entity_attributes or of any tenant table, so there is no tenant predicate to bypass.",
+	},
+	{
+		Path: "backend/services/device-management/model/fleet_operation_activation.go", Func: "CheckFleetOperationActivation", Count: 1,
+		Why: "LOCK TABLE entity_attributes IN ROW EXCLUSIVE MODE: a table-level lock taken before the guard's catalog " +
+			"is read, so that DISABLE or DROP TRIGGER waits for the transaction. It reads and writes no row of " +
+			"the table, so there is no tenant predicate to bypass; the SQL is a constant.",
 	},
 	{
 		Path: "backend/services/device-management/model/position_classify.go", Func: "Api.ClassifyUnclassifiedAlarms", Count: 1,

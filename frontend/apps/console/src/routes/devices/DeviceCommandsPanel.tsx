@@ -45,6 +45,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
 import {
   listCommands,
+  getCommandByToken,
   createCommand,
   cancelCommand,
   type Command,
@@ -58,6 +59,21 @@ const pageSize = 25;
 // shape for a record that changes server-side (see RolloutDetailPage): poll while something
 // is outstanding, stop once everything has settled.
 export const COMMAND_POLL_MS = 3000;
+
+// How long a linked command's row stays highlighted after the page scrolls to it.
+export const COMMAND_HIGHLIGHT_MS = 2500;
+
+// The command a URL fragment names: `#command-<token>`, the token percent-encoded as the approvals
+// inbox writes it. Anything else, or a fragment that does not decode, names none.
+export function commandAnchor(hash: string): string | undefined {
+  const prefix = '#command-';
+  if (!hash.startsWith(prefix) || hash.length === prefix.length) return undefined;
+  try {
+    return decodeURIComponent(hash.slice(prefix.length));
+  } catch {
+    return undefined;
+  }
+}
 
 // Four states are still in flight — QUEUED / HELD / SENT / PARKED — but only THREE of
 // them can still be cancelled. SENT is the exception: the command is already at the
@@ -85,14 +101,20 @@ export const COMMAND_POLL_MS = 3000;
 // `canIssue` is command:write (a customer user holding it may send to their devices);
 // `canCancel` is the same authority without a scope, because cancelling is refused to a
 // member limited to part of the tenant.
+//
+// `anchorToken` is the command a link named (`#command-<token>` on the device page). The panel
+// scrolls to its row and highlights it once the history has loaded; a command that is not on the
+// loaded page is read by token and shown above the history, and one that is gone is said so.
 export function DeviceCommandsPanel({
   deviceToken,
   canIssue,
   canCancel,
+  anchorToken,
 }: {
   deviceToken: string;
   canIssue: boolean;
   canCancel: boolean;
+  anchorToken?: string;
 }) {
   const { t } = useTranslation('devices');
   const { toast } = useToast();
@@ -141,6 +163,57 @@ export function DeviceCommandsPanel({
     const id = setTimeout(() => setPollTick((n) => n + 1), COMMAND_POLL_MS);
     return () => clearTimeout(id);
   }, [refreshing, loading, pollTick]);
+
+  // A link to one command (the approvals inbox builds `#command-<token>`). The scroll waits for
+  // the history to have LOADED, because the hash is read before the rows exist, and happens once
+  // per linked token: a poll that repaints the rows must not pull the page back to it.
+  //
+  // A command that is not among the loaded rows is read on its own rather than by paging the
+  // history, so an old command costs one request however many pages sit in front of it. It is
+  // shown above the history and is not polled; a command that is not this device's, or that no
+  // longer exists, is reported rather than quietly ignored.
+  const [linked, setLinked] = useState<
+    { token: string; state: 'loading' | 'gone' | 'failed' } | { token: string; state: 'found'; command: Command } | null
+  >(null);
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  const handledAnchor = useRef<string | null>(null);
+  const anchorOnPage = anchorToken != null && commands.some((c) => c.token === anchorToken);
+  useEffect(() => {
+    if (!anchorToken || !history) return;
+    // The device is part of the key: the same token on another device's page is another link.
+    const key = `${deviceToken}/${anchorToken}`;
+    if (handledAnchor.current === key) return;
+    handledAnchor.current = key;
+    if (anchorOnPage) {
+      setLinked(null);
+      setHighlighted(anchorToken);
+      return;
+    }
+    setLinked({ token: anchorToken, state: 'loading' });
+    // An answer that arrives after the link moved on is ignored.
+    const current = () => handledAnchor.current === key;
+    getCommandByToken(anchorToken).then(
+      (command) => {
+        if (!current()) return;
+        if (command && command.deviceToken === deviceToken) {
+          setLinked({ token: anchorToken, state: 'found', command });
+          setHighlighted(anchorToken);
+        } else {
+          setLinked({ token: anchorToken, state: 'gone' });
+        }
+      },
+      () => current() && setLinked({ token: anchorToken, state: 'failed' }),
+    );
+  }, [anchorToken, history != null, anchorOnPage, deviceToken]);
+  const shownLinked = linked && linked.token === anchorToken ? linked : null;
+
+  // Scroll once the row is in the document, then let the highlight fade.
+  useEffect(() => {
+    if (!highlighted) return;
+    document.getElementById(`command-${highlighted}`)?.scrollIntoView?.({ block: 'center' });
+    const id = setTimeout(() => setHighlighted(null), COMMAND_HIGHLIGHT_MS);
+    return () => clearTimeout(id);
+  }, [highlighted]);
 
   // The device's PUBLISHED vocabulary — what the enqueue gate will actually accept.
   // Loaded separately from the history so a vocabulary failure degrades the form
@@ -304,6 +377,59 @@ export function DeviceCommandsPanel({
     }
   };
 
+  // One history row. `pinned` is the linked command shown above the history: read once, not polled,
+  // so it never offers Cancel on a status that may since have moved.
+  const renderCommandRow = (command: Command, pinned = false) => (
+    <DataTableRow
+      key={pinned ? `linked-${command.id}` : command.id}
+      id={`command-${command.token}`}
+      className={highlighted === command.token ? 'bg-primary/10 ring-1 ring-primary/40' : undefined}
+    >
+          <DataTableCell className="whitespace-nowrap text-muted-foreground" data-shot-mask>
+            {formatTime(command.queuedTime)}
+          </DataTableCell>
+          <DataTableCell className="font-medium text-foreground">
+            {command.name}
+            {/* 🔴 THE LINK IS GATED ON `batchToken` BEING NON-NULL, and on nothing
+                else. That field is the service's own record of which fleet write
+                minted this command; a command issued one at a time has it null.
+                Nothing else on the row can stand in for it — a batch sends the same
+                command key, to the same device, with the same payload shape a
+                one-off would have — so sniffing the name or the token would both
+                miss real batches and invent ones that never existed.
+
+                Worth the row it takes because the batch answers what this table
+                structurally cannot: this device got the command, and the devices
+                that were REFUSED have no row here or on any other device page. Only
+                the batch knows they were targeted at all. */}
+            {command.batchToken && (
+              <Link
+                to={`/command-batches/${encodeURIComponent(command.batchToken)}`}
+                title={t('commandFromBatchHint')}
+                className="mt-0.5 flex w-fit items-center gap-1 text-xs font-normal text-primary hover:underline"
+              >
+                {t('commandFromBatch')} <ArrowRight size={12} />
+              </Link>
+            )}
+          </DataTableCell>
+          <DataTableCell>
+            <Badge variant={commandStatusVariant(command.status)}>{commandStatusLabel(t, command.status)}</Badge>
+            <CommandWaitingNote command={command} />
+            <SparkplugOutcomeNote command={command} />
+          </DataTableCell>
+          <DataTableCell className="max-w-xs truncate text-muted-foreground">
+            {command.error || command.responsePayload || '—'}
+          </DataTableCell>
+          <DataTableCell className="text-right">
+            {!pinned && canCancel && isCancellableCommandStatus(command.status) && (
+              <Button variant="outline" size="sm" onClick={() => cancel(command)}>
+                {t('cancel')}
+              </Button>
+            )}
+          </DataTableCell>
+    </DataTableRow>
+  );
+
   return (
     <div className="space-y-6">
       {/* Commands queued for a DISABLED device are held, not sent and not cancelled. */}
@@ -412,12 +538,30 @@ export function DeviceCommandsPanel({
         </Button>
       </div>}
 
+      {shownLinked && shownLinked.state !== 'found' && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {t(
+            shownLinked.state === 'loading'
+              ? 'linkedCommandLoading'
+              : shownLinked.state === 'gone'
+                ? 'linkedCommandGone'
+                : 'linkedCommandFailed',
+            { token: shownLinked.token },
+          )}
+        </p>
+      )}
+      {shownLinked?.state === 'found' && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {t('linkedCommandOlder', { token: shownLinked.command.token })}
+        </p>
+      )}
+
       {/* History / audit trail. */}
       {loading && !history ? (
         <LoadingState description={t('loadingCommands')} />
       ) : error && !history ? (
         <ErrorState description={error} />
-      ) : commands.length === 0 ? (
+      ) : commands.length === 0 && shownLinked?.state !== 'found' ? (
         <EmptyState description={t('noCommandsIssued')} />
       ) : (
         <DataTable>
@@ -429,52 +573,8 @@ export function DeviceCommandsPanel({
             <DataTableHeaderCell>&nbsp;</DataTableHeaderCell>
           </DataTableHead>
           <DataTableBody>
-            {commands.map((command) => (
-              <DataTableRow key={command.id} id={`command-${command.token}`}>
-                <DataTableCell className="whitespace-nowrap text-muted-foreground" data-shot-mask>
-                  {formatTime(command.queuedTime)}
-                </DataTableCell>
-                <DataTableCell className="font-medium text-foreground">
-                  {command.name}
-                  {/* 🔴 THE LINK IS GATED ON `batchToken` BEING NON-NULL, and on nothing
-                      else. That field is the service's own record of which fleet write
-                      minted this command; a command issued one at a time has it null.
-                      Nothing else on the row can stand in for it — a batch sends the same
-                      command key, to the same device, with the same payload shape a
-                      one-off would have — so sniffing the name or the token would both
-                      miss real batches and invent ones that never existed.
-
-                      Worth the row it takes because the batch answers what this table
-                      structurally cannot: this device got the command, and the devices
-                      that were REFUSED have no row here or on any other device page. Only
-                      the batch knows they were targeted at all. */}
-                  {command.batchToken && (
-                    <Link
-                      to={`/command-batches/${encodeURIComponent(command.batchToken)}`}
-                      title={t('commandFromBatchHint')}
-                      className="mt-0.5 flex w-fit items-center gap-1 text-xs font-normal text-primary hover:underline"
-                    >
-                      {t('commandFromBatch')} <ArrowRight size={12} />
-                    </Link>
-                  )}
-                </DataTableCell>
-                <DataTableCell>
-                  <Badge variant={commandStatusVariant(command.status)}>{commandStatusLabel(t, command.status)}</Badge>
-                  <CommandWaitingNote command={command} />
-                  <SparkplugOutcomeNote command={command} />
-                </DataTableCell>
-                <DataTableCell className="max-w-xs truncate text-muted-foreground">
-                  {command.error || command.responsePayload || '—'}
-                </DataTableCell>
-                <DataTableCell className="text-right">
-                  {canCancel && isCancellableCommandStatus(command.status) && (
-                    <Button variant="outline" size="sm" onClick={() => cancel(command)}>
-                      {t('cancel')}
-                    </Button>
-                  )}
-                </DataTableCell>
-              </DataTableRow>
-            ))}
+            {shownLinked?.state === 'found' && renderCommandRow(shownLinked.command, true)}
+            {commands.map((command) => renderCommandRow(command))}
           </DataTableBody>
         </DataTable>
       )}

@@ -678,6 +678,11 @@ export interface MeasurementSample {
   occurredTime: string | null;
   name: string;
   value: number | null;
+  // The reading of a STRING metric, which is text rather than a number; a reading has exactly one
+  // of `value` and `textValue`. Absent (or null) on a numeric reading and on a sample from an
+  // older server. A widget that plots or aggregates numbers skips a sample whose `value` is null,
+  // so a text reading is never drawn as a gap or a zero.
+  textValue?: string | null;
   classifier: string | null;
   // Set only on a point that is a bucket AVERAGE rather than a reading: the bucket's width in seconds.
   // Stored history is drawn (and exported) per bucket, and a point read live is the reading itself;

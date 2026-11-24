@@ -73,11 +73,11 @@ namespace DeviceChain.Harborpulse.Tests
             anchors["unknown"] = new Ground(0, 0);
             Assert.Throws<FormatException>(() => PresentationMap.ValidateAnchors(l, anchors));
         }
-        [TestCase(36)] [TestCase(38)]
+        [TestCase(42)] [TestCase(44)]
         public void M1_RejectsChangedManifest(int count)
         {
             var json = DirectorKit.Object(Kit.LayoutText()); var devices = DirectorKit.Arr(json["devices"]);
-            if (count == 36) devices.RemoveAt(0);
+            if (count == 42) devices.RemoveAt(0);
             else { var d = new Dictionary<string, object>(DirectorKit.Obj(devices[0])); d["token"] = "hp-new-device"; d["externalId"] = "NEW-DEVICE"; devices.Add(d); }
             Assert.Throws<FormatException>(() => new PresentationMap(HarborLayout.Parse(DirectorKit.Json(json))));
         }

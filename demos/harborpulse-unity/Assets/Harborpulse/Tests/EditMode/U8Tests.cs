@@ -132,7 +132,7 @@ namespace DeviceChain.Harborpulse.Tests
         {
             var plan = U5Plan.Plan;
             var cars = plan.Registry.Entries.Where(f => f.Id.StartsWith("car:", StringComparison.Ordinal)).ToArray();
-            Assert.That(cars.Length, Is.EqualTo(6), "every charger keeps a bay");
+            Assert.That(cars.Length, Is.EqualTo(10), "every charger keeps a bay: the district's six and the four that hold their own session");
             foreach (var car in cars) Assert.That(plan.InWellView(car.At), Is.False, car.Id);
             // East Quay's first charger is the one whose bay was in the line
             var east = cars.Single(f => f.Id == "car:hp-charger-east-1"); var well = plan.Registry.Entries.Single(f => f.Id == "device:hp-pump-east:well").At;

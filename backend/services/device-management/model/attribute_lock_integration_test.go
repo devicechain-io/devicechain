@@ -96,6 +96,7 @@ func TestAttributeLockT1BeforeImageUnderLock(t *testing.T) {
 	if err := helper.Exec(`SELECT "device-management".dc_entity_attr_lock('device', ?)`, dev.ID).Error; err != nil {
 		t.Fatal(err)
 	}
+	markAsProtocolWriter(t, helper) // the helper plays a protocol writer holding the lock
 	row := &EntityAttribute{EntityType: "device", EntityId: dev.ID, Scope: "SHARED", AttrKey: "k", ValueType: "STRING", LastUpdated: time.Now()}
 	row.Value.Valid, row.Value.String = true, "V1"
 	if err := upsertAttributeOnTx(helper, row); err != nil {

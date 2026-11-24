@@ -124,23 +124,27 @@ type LatestMeasurement struct {
 	Value        *float64 `json:"value,omitempty"`
 	DataType     string   `json:"dataType,omitempty" prov:"platform"`
 	OccurredTime string   `json:"occurredTime" prov:"platform"`
-	// Untrusted holds the metric name, which a device reports, and the unit, which the
-	// profile declares.
+	// Untrusted holds the metric name, which a device reports, the unit, which the profile
+	// declares, and the text of a STRING metric's reading, which a device chose.
 	Untrusted *MeasurementUntrusted `json:"untrusted,omitempty"`
 }
 
-// MeasurementUntrusted is the free text of a measurement: its name (device-reported) and its
-// unit (operator-declared).
+// MeasurementUntrusted is the free text of a measurement: its name (device-reported), its
+// unit (operator-declared) and, for a STRING metric, its text (device-reported). An empty text
+// is absent, not a marked empty string.
 type MeasurementUntrusted struct {
 	Name *Marked `json:"name,omitempty" prov:"device-reported"`
 	// Unit is the profile's declared unit for the metric, written by an operator, which is how
 	// get_device_capabilities classifies the same value.
 	Unit *Marked `json:"unit,omitempty" prov:"operator"`
+	// Text is the reading of a STRING metric. A device chose it, so it is device-reported and
+	// never a plain field beside value. A numeric reading carries none.
+	Text *Marked `json:"text,omitempty" prov:"device-reported"`
 }
 
-func newMeasurementUntrusted(name, unit string) *MeasurementUntrusted {
-	u := &MeasurementUntrusted{Name: mark(SourceDevice, name), Unit: mark(SourceOperator, unit)}
-	if u.Name == nil && u.Unit == nil {
+func newMeasurementUntrusted(name, unit, text string) *MeasurementUntrusted {
+	u := &MeasurementUntrusted{Name: mark(SourceDevice, name), Unit: mark(SourceOperator, unit), Text: mark(SourceDevice, text)}
+	if u.Name == nil && u.Unit == nil && u.Text == nil {
 		return nil
 	}
 	return u
@@ -152,7 +156,7 @@ type GetLatestMeasurementsOutput struct {
 
 var latestMeasurementsQuery = newDocument("device-state", `query LatestMeasurements($deviceToken: String!) {
   latestMeasurements(deviceToken: $deviceToken) {
-    name value unit dataType occurredTime
+    name value textValue unit dataType occurredTime
   }
 }`)
 
@@ -169,6 +173,7 @@ func (t *Tools) GetLatestMeasurements(ctx context.Context, req *mcp.CallToolRequ
 		LatestMeasurements []struct {
 			Name         string   `json:"name"`
 			Value        *float64 `json:"value"`
+			TextValue    *string  `json:"textValue"`
 			Unit         string   `json:"unit"`
 			DataType     string   `json:"dataType"`
 			OccurredTime string   `json:"occurredTime"`
@@ -181,7 +186,7 @@ func (t *Tools) GetLatestMeasurements(ctx context.Context, req *mcp.CallToolRequ
 	for _, m := range resp.LatestMeasurements {
 		out.Measurements = append(out.Measurements, LatestMeasurement{
 			Value: m.Value, DataType: m.DataType, OccurredTime: m.OccurredTime,
-			Untrusted: newMeasurementUntrusted(m.Name, m.Unit),
+			Untrusted: newMeasurementUntrusted(m.Name, m.Unit, deref(m.TextValue)),
 		})
 	}
 	return provenanceResult(out), out, nil

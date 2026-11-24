@@ -25,8 +25,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Run on the real Postgres integration database. No production enforcement DDL
-// ships: the expected names exist only for this test and cleanup removes them.
+// Run on the real Postgres integration database. The migration chain installs the production
+// guard, so the test first reads it as ENFORCED, then takes it apart and builds the lookalikes
+// readiness must not accept; cleanup replays the migration, which restores the production guard
+// exactly (the test owns its own database, so nothing else observes the gap).
 func TestFleetOperationReadinessPostgres(t *testing.T) {
 	api := newReadinessPostgresApi(t)
 	db := api.RDB.Database
@@ -67,11 +69,15 @@ func TestFleetOperationReadinessPostgres(t *testing.T) {
 	t.Cleanup(func() {
 		cleanup()
 		require.NoError(t, db.Exec(`DROP TABLE `+other).Error)
+		require.NoError(t, schema.NewAttributeWriterProtocolSchema().Migrate(db), "restore the production guard")
+		require.Equal(t, "ENFORCED", probe())
 	})
+	// The production guard, as the chain installed it.
+	require.Equal(t, "ENFORCED", probe())
+	cleanup()
 	require.Equal(t, "NOT_INSTALLED", probe())
-	for _, name := range []string{fn, wrong} {
-		require.NoError(t, db.Exec(`CREATE FUNCTION `+name+`() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP = 'DELETE' THEN RETURN OLD; END IF; RETURN NEW; END; $$`).Error)
-	}
+	require.NoError(t, db.Exec(`CREATE FUNCTION `+fn+`() RETURNS trigger LANGUAGE plpgsql AS $dcap$`+schema.AttributeWriterProtocolFunctionSource+`$dcap$`).Error)
+	require.NoError(t, db.Exec(`CREATE FUNCTION `+wrong+`() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP = 'DELETE' THEN RETURN OLD; END IF; RETURN NEW; END; $$`).Error)
 	install := func(target, function, events string) {
 		require.NoError(t, db.Exec(fmt.Sprintf(`CREATE TRIGGER %s BEFORE %s ON %s FOR EACH ROW EXECUTE FUNCTION %s()`, trigger, events, target, function)).Error)
 		require.NoError(t, db.Exec(`ALTER TABLE `+target+` ENABLE ALWAYS TRIGGER `+trigger).Error)
@@ -95,6 +101,17 @@ func TestFleetOperationReadinessPostgres(t *testing.T) {
 		require.Equal(t, "NOT_INSTALLED", probe())
 		require.NoError(t, db.Exec(`DROP TRIGGER `+trigger+` ON `+tc.target).Error)
 	}
+	// A statement-level trigger never sees a row, so it is not enforcement either.
+	require.NoError(t, db.Exec(fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT OR UPDATE OR DELETE ON %s FOR EACH STATEMENT EXECUTE FUNCTION %s()`, trigger, table, fn)).Error)
+	require.NoError(t, db.Exec(`ALTER TABLE `+table+` ENABLE ALWAYS TRIGGER `+trigger).Error)
+	require.Equal(t, "NOT_INSTALLED", probe())
+	require.NoError(t, db.Exec(`DROP TRIGGER `+trigger+` ON `+table).Error)
+	// The right NAME with another body is not the shipped function: readiness hashes the body.
+	install(table, fn, "INSERT OR UPDATE OR DELETE")
+	require.Equal(t, "ENFORCED", probe())
+	require.NoError(t, db.Exec(`CREATE OR REPLACE FUNCTION `+fn+`() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`).Error)
+	require.Equal(t, "NOT_INSTALLED", probe())
+	require.NoError(t, db.Exec(`DROP TRIGGER `+trigger+` ON `+table).Error)
 	// A conditional trigger is not enforcement: WHEN (false) keeps the function from ever running,
 	// and the catalog cannot judge a condition.
 	require.NoError(t, db.Exec(fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT OR UPDATE OR DELETE ON %s FOR EACH ROW WHEN (false) EXECUTE FUNCTION %s()`, trigger, table, fn)).Error)
