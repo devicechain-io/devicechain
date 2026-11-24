@@ -160,6 +160,7 @@ var purgeSeedExemptions = map[string]string{
 	"device-management.provisioning_profiles":                    representedTenantPredicate,
 	"device-management.purged_tenants":                           purgeTombstone,
 	"device-management.semantic_contexts":                        representedTenantPredicate,
+	"device-management.static_membership_generations":            representedTenantPredicate,
 	"device-state.audit_events":                                  sharedJournal,
 	"device-state.device_state_migrations":                       migrationTable,
 	"device-state.device_states":                                 representedTenantPredicate,
