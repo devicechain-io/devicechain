@@ -370,6 +370,11 @@ CREATE FUNCTION "device-management".dc_entity_attr_lock(p_type text, p_id bigint
  AS $$
  SELECT pg_advisory_xact_lock(hashtextextended('dc.attr|' || p_type || '|' || p_id::text, 0))
 $$;
+CREATE FUNCTION "device-management".dc_entity_attr_try_lock(p_type text, p_id bigint) RETURNS boolean
+ LANGUAGE sql
+ AS $$
+ SELECT pg_try_advisory_xact_lock(hashtextextended('dc.attr|' || p_type || '|' || p_id::text, 0))
+$$;
 CREATE FUNCTION "device-management".dc_require_attr_protocol() RETURNS trigger
  LANGUAGE plpgsql
  AS $$
