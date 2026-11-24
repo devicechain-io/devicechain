@@ -518,6 +518,12 @@ jobs:
           # checkout into a failure rather than a skip.
           fetch-tags: true
 
+      # The fleet-operation foundation gate (device-management/model/fleet_operation_gate_test.go) needs
+      # the release this build upgrades from, and a shallow clone has the tags but not their history, so
+      # `git tag --merged HEAD` finds none. The newest stable tag that is not HEAD is the baseline.
+      - name: Resolve the fleet-operation baseline tag
+        run: echo "DC_BASELINE_TAG=$(hack/fleet-baseline-tag.sh)" >> "$GITHUB_ENV"
+
       # 🔴 THE GO BUILD CACHE IS RESTORED HERE AND SAVED BY ONE LEG PER GROUP, ON main ONLY.
       #
       # setup-go's own cache (`cache: true`) restores AND saves, on every event: each pull request
@@ -1506,6 +1512,14 @@ jobs:
         leg: ${{ fromJson(needs.discover.outputs.integration) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-tags: true
+
+      # The fleet-operation foundation gate (device-management/model/fleet_operation_gate_test.go) needs
+      # the release this build upgrades from, and a shallow clone has the tags but not their history, so
+      # `git tag --merged HEAD` finds none. The newest stable tag that is not HEAD is the baseline.
+      - name: Resolve the fleet-operation baseline tag
+        run: echo "DC_BASELINE_TAG=$(hack/fleet-baseline-tag.sh)" >> "$GITHUB_ENV"
 
       # Restore-only: the go job's entry for the cache group of this leg's first module (see the
       # restore step there). Nothing here saves, so no integration leg competes for that key or
