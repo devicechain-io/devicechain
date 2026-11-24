@@ -143,7 +143,7 @@ READERS = [
         "hack/harborpulse-rig.sh",  # valuesoverlay_test.go: the rig's --values heredoc
     ], NONTEST, "bootstrap/*_test.go"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
-    ("backend/cli", "fleetop", ["backend/services/device-management/graphql/**"], [], "fleetop/documents_test.go:16"),
+    ("backend/cli", "bulkchange", ["backend/services/device-management/graphql/**"], [], "bulkchange/documents_test.go:16"),
     ("backend/cli", "product", [SDL], [], "product/documents_test.go:32"),
     # internal/apitest/capabilities.go:44-48 serves the real SDL from every service's graphql dir; the cmd and
     # sim tests (cmd/product_rotate_test.go, sim/*_test.go) call it through their fixtures.

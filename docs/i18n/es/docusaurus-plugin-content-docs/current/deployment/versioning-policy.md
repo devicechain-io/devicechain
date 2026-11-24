@@ -112,10 +112,14 @@ El campo `ServiceAccount.agent` no está en vista previa: está cubierto desde l
 Los roles de las cuentas de servicio ordinarias siguen cubiertos. Todavía no se ofrece ninguna
 herramienta MCP de acción; las herramientas MCP de lectura siguen en el catálogo no cubierto anterior.
 
-La preparación de operaciones de flota entra en vista previa en **v1.9**, cuando comienza su
-plazo de vista previa: la consulta `fleetOperationReadiness`, los tipos `FleetOperationReadiness`
-y `FleetOperationEnforcement`, incluidos sus campos y valores de enumeración, y
-`dcctl fleet-op readiness`. Requieren `fleet:operate`; se rechazan los miembros con ámbito limitado.
+La preparación de cambios masivos entró en vista previa en **v1.9**, cuando comenzó su plazo.
+En **v1.10**, la superficie de dispositivos se llama cambios masivos: la consulta
+`bulkChangeReadiness`, los tipos `BulkChangeReadiness` y `BulkChangeEnforcement`, incluidos
+sus campos y valores de enumeración, y `dcctl bulk-change readiness`. Los nombres obsoletos
+`fleetOperationReadiness`, `FleetOperationReadiness`, `FleetOperationEnforcement` y
+`dcctl fleet-op readiness` siguen funcionando por compatibilidad, incluidos los clientes v1.9.
+El cambio de nombre no reinicia el plazo de vista previa. Requieren `fleet:operate`; se rechazan
+los miembros con ámbito limitado.
 
 ## Rutas de actualización admitidas {#upgrade-paths}
 

@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package fleetop
+package bulkchange
 
 import (
 	"path/filepath"
@@ -22,7 +22,9 @@ func TestReadinessDocumentMatchesServedSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if errs := schema.Validate(readinessQuery); len(errs) != 0 {
-		t.Fatal(errs)
+	for _, query := range []string{readinessQuery, legacyReadinessQuery} {
+		if errs := schema.Validate(query); len(errs) != 0 {
+			t.Fatal(errs)
+		}
 	}
 }

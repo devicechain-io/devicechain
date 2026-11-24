@@ -35,6 +35,7 @@ backend/cli/bootstrap/sparkplug_test.go
 backend/cli/bootstrap/steps_test.go
 backend/cli/bootstrap/tofu.go
 backend/cli/bootstrap/valuesoverlay_test.go
+backend/cli/bulkchange/documents_test.go
 backend/cli/cmd/backup_test.go
 backend/cli/cmd/config_schema_test.go
 backend/cli/cmd/destroy.go
@@ -49,7 +50,6 @@ backend/cli/dcdir/dcdir.go
 backend/cli/dcdir/dcdir_test.go
 backend/cli/failedevents/documents_test.go
 backend/cli/failedevents/failedevents_test.go
-backend/cli/fleetop/documents_test.go
 backend/cli/internal/apitest/capabilities.go
 backend/cli/product/bundle.go
 backend/cli/product/documents_test.go
