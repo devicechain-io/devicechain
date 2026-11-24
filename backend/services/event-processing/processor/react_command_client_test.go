@@ -268,5 +268,6 @@ func (nopMetrics) RecordDispatched(string)          {}
 func (nopMetrics) RecordOrphan()                    {}
 func (nopMetrics) RecordNotEnabled(string)          {}
 func (nopMetrics) RecordConnectorShed(string)       {}
+func (nopMetrics) RecordCommandRefused(string)      {}
 func (nopMetrics) RecordPermanentlyRejected(string) {}
 func (nopMetrics) RecordDropped(string)             {}

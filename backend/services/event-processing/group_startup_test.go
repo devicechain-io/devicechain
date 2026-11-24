@@ -77,14 +77,14 @@ func mainGroupStartup(t *testing.T, scenario string) {
 	prevDetect, prevReact, prevReader := ResolvedEventsProcessor, ReactDispatcher, ResolvedEventsReader
 	prevSnap, prevRules, prevStats, prevRoster, prevActive, prevAttr, prevReg := SnapshotStore, DetectRuleStore, RuleStatStore, DeviceRosterStore, ProfileActiveStore, DeviceAttributeStore, RuleRegistry
 	prevDM, prevFS, prevCFS, prevFM := DeviceManagementFacts, FenceSets, CurrentFenceSets, FenceManifests
-	prevDetM, prevReM, prevEU, prevDL, prevGate := DetectMetrics, ReactMetrics, EgressUnresolved, DeadLetters, DetectTermGate
+	prevDetM, prevReM, prevEU, prevCU, prevDL, prevGate := DetectMetrics, ReactMetrics, EgressUnresolved, CommandEgressUnresolved, DeadLetters, DetectTermGate
 	prevStop, prevPurge := stopStreamSharding, TenantPurgeResponder
 	t.Cleanup(func() {
 		Microservice, Configuration, Svc = prevMs, prevCfg, prevSvc
 		ResolvedEventsProcessor, ReactDispatcher, ResolvedEventsReader = prevDetect, prevReact, prevReader
 		SnapshotStore, DetectRuleStore, RuleStatStore, DeviceRosterStore, ProfileActiveStore, DeviceAttributeStore, RuleRegistry = prevSnap, prevRules, prevStats, prevRoster, prevActive, prevAttr, prevReg
 		DeviceManagementFacts, FenceSets, CurrentFenceSets, FenceManifests = prevDM, prevFS, prevCFS, prevFM
-		DetectMetrics, ReactMetrics, EgressUnresolved, DeadLetters, DetectTermGate = prevDetM, prevReM, prevEU, prevDL, prevGate
+		DetectMetrics, ReactMetrics, EgressUnresolved, CommandEgressUnresolved, DeadLetters, DetectTermGate = prevDetM, prevReM, prevEU, prevCU, prevDL, prevGate
 		stopStreamSharding, TenantPurgeResponder = prevStop, prevPurge
 	})
 	instance := fmt.Sprintf("maingroups%d", time.Now().UnixNano())

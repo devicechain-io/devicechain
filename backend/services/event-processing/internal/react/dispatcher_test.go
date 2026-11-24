@@ -76,10 +76,11 @@ func newFakeMetrics() *fakeMetrics {
 		connectorShed: map[string]int{}, permanent: map[string]int{}, dropped: map[string]int{}}
 }
 
-func (m *fakeMetrics) RecordDispatched(a string)    { m.dispatched[a]++ }
-func (m *fakeMetrics) RecordOrphan()                { m.orphan++ }
-func (m *fakeMetrics) RecordNotEnabled(a string)    { m.notEnabled[a]++ }
-func (m *fakeMetrics) RecordConnectorShed(a string) { m.connectorShed[a]++ }
+func (m *fakeMetrics) RecordDispatched(a string)          { m.dispatched[a]++ }
+func (m *fakeMetrics) RecordOrphan()                      { m.orphan++ }
+func (m *fakeMetrics) RecordNotEnabled(a string)          { m.notEnabled[a]++ }
+func (m *fakeMetrics) RecordConnectorShed(a string)       { m.connectorShed[a]++ }
+func (m *fakeMetrics) RecordCommandRefused(reason string) { m.dropped[reason]++ }
 
 func (m *fakeMetrics) RecordPermanentlyRejected(a string) { m.permanent[a]++ }
 func (m *fakeMetrics) RecordDropped(reason string)        { m.dropped[reason]++ }
