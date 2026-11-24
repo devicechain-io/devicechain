@@ -98,11 +98,12 @@ var (
 		NewHolderCheckBackoffSchema(),
 		// The one-hour continuous aggregate over measurement_rollups (see its doc comment): DDL only,
 		// read only by bucketed reads whose interval is a whole number of hours. It sits BEFORE the
-		// text-value migration because that one is pinned as the last of the chain
-		// (TestMeasurementTextValueMigrationIsAppendedLast); the two touch unrelated objects, and
+		// text-value migration because that one was appended after it; the two touch unrelated objects, and
 		// IDs only have to be unique.
 		NewRollup1hSchema(),
 		// Where a STRING reading keeps its value (see its doc comment): nullable, no default.
 		NewMeasurementTextValueSchema(),
+		// Generation metadata lets rolling pods preserve a newer analytics surface.
+		NewAnalyticsGenerationSchema(),
 	}
 )
