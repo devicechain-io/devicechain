@@ -85,5 +85,6 @@ var (
 		NewAttributeGenerationsSchema(),
 		NewFleetOperationsSchema(),
 		NewAttributeWriterProtocolSchema(),
+		NewDeviceAttributeTryLockSchema(),
 	}
 )

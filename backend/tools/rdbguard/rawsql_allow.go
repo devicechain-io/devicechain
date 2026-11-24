@@ -192,6 +192,12 @@ var rawSQLAllowList = []siteEntry{
 			"\"dynamic\" only because the constant lives in core/attrprotocol, its one definition.",
 	},
 	{
+		Path: "backend/services/device-management/model/api_attribute_owner.go", Func: "tryLockDeviceAttributes", Count: 1,
+		Why: "sets the transaction-local device attribute writer protocol marker, exactly as lockDeviceAttributes does " +
+			"(attrprotocol.MarkerSQL, SELECT set_config('devicechain.attr_protocol', '1', true)). It reads and writes " +
+			"no table; the SQL is \"dynamic\" only because the constant lives in core/attrprotocol, its one definition.",
+	},
+	{
 		Path: "backend/services/device-management/model/api_attribute_orphans.go", Func: "Api.attributeOrphanTenants", Count: 1,
 		Why: "the attribute orphan sweep's tenant listing, which spans tenants on purpose under a system context: " +
 			"a loose index scan (recursive CTE) over entity_attributes' and entity_attribute_generations' tenant_id " +
