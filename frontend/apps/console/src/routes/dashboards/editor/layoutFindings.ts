@@ -10,7 +10,11 @@
 
 import {
   blockingLayoutFindings,
+  DEFAULT_CANVAS_DENSITY,
+  DENSITY_SCALE,
+  effectiveLayout,
   lintLayout,
+  resolvePlacement,
   spanLimitsOfLayout,
   UNKNOWN_WIDGET_TYPE,
   type DashboardDefinition,
@@ -30,7 +34,27 @@ export function spanLimitsFor(registry: EditorWidgetRegistry): (widget: WidgetIn
 }
 
 // Every finding on a definition, advice included.
-export function layoutFindingsOf(def: DashboardDefinition, registry: EditorWidgetRegistry): LayoutFinding[] {
+export function layoutFindingsOf(def: DashboardDefinition, registry: EditorWidgetRegistry, viewportWidth?: number): LayoutFinding[] {
+  if (viewportWidth !== undefined) {
+    // Match the viewer's fixed-width cap, density, breakpoint selection and automatic reflow.
+    // Flatten only the rendered placements into a temporary base layout so lint does not also
+    // report placements belonging to other widths. The authored definition is never changed.
+    const sizing = def.canvas.sizing;
+    const width = typeof sizing === 'object' && 'width' in sizing ? Math.min(viewportWidth, sizing.width) : viewportWidth;
+    const layout = effectiveLayout(def, width, {
+      scale: DENSITY_SCALE[def.canvas.density ?? DEFAULT_CANVAS_DENSITY],
+      limitsOf: spanLimitsFor(registry),
+    });
+    const rendered: DashboardDefinition = {
+      ...def,
+      canvas: { ...def.canvas, grid: { ...def.canvas.grid, columns: layout.columns }, breakpoints: { base: 0 } },
+      widgets: def.widgets.map((widget) => ({
+        ...widget,
+        layout: { base: layout.grid.get(widget.id) ?? resolvePlacement(widget.layout, layout.breakpoint) },
+      })),
+    };
+    return lintLayout(rendered, { columns: layout.columns, spanLimitsOf: spanLimitsFor(registry) });
+  }
   return lintLayout(def, { columns: def.canvas.grid.columns, spanLimitsOf: spanLimitsFor(registry) });
 }
 

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -75,6 +76,8 @@ type GeoFenceCapRefusalCounter interface {
 
 type Api struct {
 	suppressionCache suppressionCache
+	// fleetExpiryCursor is where the next expiry pass resumes its tenant discovery.
+	fleetExpiryCursor fleetExpiryCursor
 	// DeviceCredentialChecker shares password backoff between HTTP uplinks and MQTT connects.
 	DeviceCredentialChecker *credential.Checker
 
@@ -85,6 +88,10 @@ type Api struct {
 	skipReviewGuardForOldPodTest bool
 
 	RDB *rdb.RdbManager
+
+	// FleetNatsConfig supplies informational broker evidence at START and RESUME.
+	// Nil means fail-closed MQTT is off; it never gates execution or settlement.
+	FleetNatsConfig *config.NatsConfiguration
 
 	// AgentDecider asks user-management for the tenant's decisions on agent proposals, under the
 	// caller's own token (actiongate.CallerDecider). Nil refuses every proposal and approval with

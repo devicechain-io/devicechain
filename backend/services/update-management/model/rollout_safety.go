@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/ledger/waves"
 	"github.com/devicechain-io/dc-microservice/ota"
 	"gorm.io/gorm"
 )
@@ -33,39 +33,21 @@ type RolloutFailureRate struct {
 }
 
 func validateSafety(req RolloutCreateRequest) error {
-	if len(req.Cohorts) > 20 {
-		return refuse(CodeInvalidRollout, "at most 20 cohorts are allowed")
-	}
-	names, devices := map[string]bool{}, map[string]bool{}
-	lastPercentage := int32(0)
-	for _, c := range req.Cohorts {
-		if c.Name == "" || len(c.Name) > 128 || names[c.Name] || (len(c.DeviceTokens) == 0) == (c.Percentage == 0) {
-			return refuse(CodeInvalidRollout, "cohorts need unique names and exactly one selector")
-		}
-		names[c.Name] = true
-		if len(c.DeviceTokens) > MaxRolloutTargets {
-			return refuse(CodeInvalidRollout, "too many canary devices")
-		}
-		for _, d := range c.DeviceTokens {
-			if core.ValidateToken(d) != nil || devices[d] || lastPercentage != 0 {
-				return refuse(CodeInvalidRollout, "canaries must be unique and precede percentage cohorts")
-			}
-			devices[d] = true
-		}
-		if c.Percentage != 0 {
-			if c.Percentage <= lastPercentage || c.Percentage > 100 {
-				return refuse(CodeInvalidRollout, "percentages must increase through 100")
-			}
-			lastPercentage = c.Percentage
-		}
-	}
-	if len(req.Cohorts) > 0 && lastPercentage != 100 {
-		return refuse(CodeInvalidRollout, "the last cohort must cover 100 percent")
+	if err := waves.Validate(wavePlan(req.Cohorts)); err != nil {
+		return refuse(CodeInvalidRollout, "%v", err)
 	}
 	if f := req.FailureRate; f != nil && (f.Percentage < 1 || f.Percentage > 99 || f.WindowSeconds < 1 || f.WindowSeconds > 86400 || f.MinimumSamples < 1 || f.MinimumSamples > MaxRolloutTargets) {
 		return refuse(CodeInvalidRollout, "failure rate requires percentage 1..99, windowSeconds 1..86400 and minimumSamples 1..10000")
 	}
 	return nil
+}
+
+func wavePlan(cohorts []RolloutCohort) []waves.Cohort {
+	plan := make([]waves.Cohort, len(cohorts))
+	for i, c := range cohorts {
+		plan[i] = waves.Cohort{Name: c.Name, DeviceTokens: c.DeviceTokens, Percentage: c.Percentage}
+	}
+	return plan
 }
 
 func safetyJSON(v any) sql.NullString {
@@ -103,33 +85,9 @@ func freezeCohorts(r UpdateRollout, devices []string) (map[string]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]int{}
-	members := map[string]bool{}
-	for _, d := range devices {
-		members[d] = true
-	}
-	for i, c := range plan {
-		before := len(out)
-		for _, d := range c.DeviceTokens {
-			if !members[d] {
-				return nil, refuse(CodeInvalidRollout, "canary %q is outside the frozen fleet", d)
-			}
-			out[d] = i
-		}
-		if c.Percentage > 0 {
-			limit := (len(devices)*int(c.Percentage) + 99) / 100
-			for _, d := range devices {
-				if len(out) >= limit {
-					break
-				}
-				if _, assigned := out[d]; !assigned {
-					out[d] = i
-				}
-			}
-		}
-		if len(out) == before {
-			return nil, refuse(CodeInvalidRollout, "cohort %q is empty for this fleet", c.Name)
-		}
+	out, err := waves.Assign(wavePlan(plan), devices)
+	if err != nil {
+		return nil, refuse(CodeInvalidRollout, "%v", err)
 	}
 	return out, nil
 }

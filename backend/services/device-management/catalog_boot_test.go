@@ -76,6 +76,7 @@ func catalogBoot(t *testing.T, failStage string) {
 	prevReaper, prevClassifier, prevMarkerHeal := AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal
 	prevReportMaintenance := ConfigurationReportMaintenance
 	prevOrphanSweep := AttributeOrphanSweep
+	prevFleetExpirySweep := FleetExpirySweep
 	prevPeers := servicePeers
 	prevPin := IssuerPin
 	prevKill, prevAccounting, prevAccountant, prevSharding := AgentKillConsumer, DecodeAccounting, DecodeAccountant, stopStreamSharding
@@ -101,6 +102,7 @@ func catalogBoot(t *testing.T, failStage string) {
 		ConfigurationReportMaintenance = prevReportMaintenance
 		AttributeOrphanSweep = prevOrphanSweep
 		AgentKillConsumer, DecodeAccounting, DecodeAccountant, stopStreamSharding = prevKill, prevAccounting, prevAccountant, prevSharding
+		FleetExpirySweep = prevFleetExpirySweep
 	})
 
 	issuer, err := nkeys.CreateAccount()
@@ -133,7 +135,7 @@ func catalogBoot(t *testing.T, failStage string) {
 	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 	safetyGates = service.FromManagers(Microservice, service.Managers{}).SafetyGates()
 
-	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.EntityAttribute{}, &model.AttributeGeneration{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{}, &model.DeviceConfigurationReport{})...)
+	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.EntityAttribute{}, &model.AttributeGeneration{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{}, &model.DeviceConfigurationReport{}, &model.FleetOperation{}, &model.FleetOperationLine{}, &model.FleetOperationEvent{})...)
 	RdbManager = &rdb.RdbManager{Database: db}
 	DeviceSecretKey = dmtest.DeviceSecretKey()
 	SecretTransit = testTransit(t)
@@ -192,6 +194,9 @@ func catalogBoot(t *testing.T, failStage string) {
 				return err
 			}
 			if err = initAttributeOrphanSweep(); err != nil {
+				return err
+			}
+			if err = initFleetExpirySweep(); err != nil {
 				return err
 			}
 			if err = initDecodeAccounting(); err != nil {

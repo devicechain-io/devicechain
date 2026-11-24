@@ -166,9 +166,14 @@ func illegal(op *FleetOperation, to string) error {
 	return fleetErr(FleetCodeIllegalTransition, "an operation that is %s cannot be %s", op.Dispatch, to)
 }
 
+func (api *Api) fleetBrokerFailClosed() bool {
+	return api.FleetNatsConfig != nil && api.FleetNatsConfig.MqttFailClosed
+}
+
 // StartFleetOperation moves a READY operation to RUNNING, on the strength of the contract digest the
 // caller presents: what the person reviewed is what runs. The starter approves contract version 1 and
-// becomes the grantee the engine runs on behalf of.
+// becomes the grantee the engine runs on behalf of. Broker fail-closed is snapshotted as informational
+// evidence only; it does not affect admission, dispatch or settlement.
 func (api *Api) StartFleetOperation(ctx context.Context, token, contractDigest string, by FleetApprover) (*FleetOperation, error) {
 	tenant, _ := core.TenantFromContext(ctx)
 	return api.fleetControl(ctx, token, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
@@ -197,7 +202,7 @@ func (api *Api) StartFleetOperation(ctx context.Context, token, contractDigest s
 		return map[string]any{
 			"dispatch": FleetDispatchRunning, "pause_reason": "", "grantee": by.Name,
 			"grant_bound_at": sql.NullTime{Time: now, Valid: true}, "started_at": sql.NullTime{Time: now, Valid: true},
-			"state_changed_by": by.Name,
+			"state_changed_by": by.Name, "broker_fail_closed": api.fleetBrokerFailClosed(),
 		}, &FleetOperationEvent{Kind: fleetEventStart, Actor: sql.NullString{String: by.Name, Valid: true},
 			ContractVersion: sql.NullInt32{Int32: op.ContractVersion, Valid: true}}, nil
 	})
@@ -483,6 +488,8 @@ func (api *Api) ResumeFleetOperation(ctx context.Context, token, contractDigest 
 		}
 		changes := map[string]any{"dispatch": FleetDispatchRunning, "pause_reason": "", "eff_posts_per_second": rate,
 			"eff_failure_threshold": failure, "eff_ambiguity_threshold": ambiguity, "state_changed_by": by.Name}
+		// Re-read the instance setting on every resume, including a handover. Evidence can only weaken.
+		changes["broker_fail_closed"] = op.BrokerFailClosed && api.fleetBrokerFailClosed()
 		event := &FleetOperationEvent{Kind: fleetEventResume, Actor: sql.NullString{String: by.Name, Valid: true},
 			ContractVersion: sql.NullInt32{Int32: op.ContractVersion, Valid: true}}
 		if op.Grantee != by.Name {
@@ -502,22 +509,22 @@ func (api *Api) ResumeFleetOperation(ctx context.Context, token, contractDigest 
 // each through the same fence as any other control transition. It returns how many it aborted.
 func (api *Api) ExpireFleetOperations(ctx context.Context, now time.Time) (int, error) {
 	var due []FleetOperation
-	if err := api.RDB.DB(ctx).Where("(dispatch = ? AND expires_at IS NOT NULL AND expires_at <= ?) OR (dispatch = ? AND created_at <= ?)",
-		FleetDispatchReady, now, FleetDispatchPlanning, now.Add(-ledger.PlanningAbandonedAfter)).Order("id").Limit(100).Find(&due).Error; err != nil {
+	if err := fleetExpiryCandidates(api.RDB.DB(ctx), now).Order("id").Limit(100).Find(&due).Error; err != nil {
 		return 0, err
 	}
 	aborted := 0
+	var lastErr error
 	for _, d := range due {
-		reason := FleetAbortExpiredUnstarted
-		if d.Dispatch == FleetDispatchPlanning {
-			reason = FleetAbortPlanningDropped
-		}
 		_, err := api.fleetControl(ctx, d.Token, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
 			// Re-judged under the fence: a start or a finisher may have got here first.
 			stillReady := op.Dispatch == FleetDispatchReady && op.ExpiresAt.Valid && !op.ExpiresAt.Time.After(now)
 			stillPlanning := op.Dispatch == FleetDispatchPlanning && !op.CreatedAt.After(now.Add(-ledger.PlanningAbandonedAfter))
-			if !stillReady && !stillPlanning {
+			if (!stillReady && !stillPlanning) || !ledger.Drivable(ledger.DriverProtocol(op.DriverProtocol)) {
 				return nil, nil, errFleetNotDue
+			}
+			reason := FleetAbortExpiredUnstarted
+			if stillPlanning {
+				reason = FleetAbortPlanningDropped
 			}
 			return fleetAbortChanges(tx, op, "", reason, fleetEventExpire)
 		})
@@ -529,11 +536,16 @@ func (api *Api) ExpireFleetOperations(ctx context.Context, now time.Time) (int, 
 			continue // one busy operation must not starve the rest of the sweep
 		}
 		if err != nil {
-			return aborted, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return aborted, ctxErr
+			}
+			// One operation that keeps failing must not hold back the tenant's others, which sort after it.
+			lastErr = err
+			continue
 		}
 		aborted++
 	}
-	return aborted, nil
+	return aborted, lastErr
 }
 
 var errFleetNotDue = errors.New("the operation is no longer due")
