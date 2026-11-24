@@ -87,3 +87,73 @@ func TestFleetPostgresConnectionLossRecordsARetry(t *testing.T) {
 	require.True(t, line.NextAttemptAt.Valid)
 	require.Zero(t, p.attrCount(t, 0))
 }
+
+func TestFleetPostgresABusyHeadDoesNotStarveTheNextDueLine(t *testing.T) {
+	for _, code := range []string{"DEVICE_BUSY", "ATTRIBUTE_ROW_BUSY"} {
+		t.Run(code, func(t *testing.T) {
+			p := newPostPG(t, "v1")
+			p.api.PrincipalStanding = &fakeStanding{answer: map[string]bool{alice.Name: true}}
+			require.NoError(t, p.api.RDB.DB(p.ctx).Model(&FleetOperation{}).Where("id = ?", p.op.ID).
+				Update("eff_posts_per_second", 1).Error)
+			// The head has already failed once, so the next generated backoff spans two seconds
+			// even with zero jitter: there is a whole fresh permit window before it is due.
+			require.NoError(t, p.api.RDB.DB(p.ctx).Model(&FleetOperationLine{}).Where("id = ?", p.lines[0].ID).
+				Update("attempts", 1).Error)
+			if code == "ATTRIBUTE_ROW_BUSY" {
+				value := "before"
+				_, err := p.api.SetEntityAttribute(p.ctx, &EntityAttributeSetRequest{EntityType: "device", Entity: p.devs[0].Token,
+					Scope: "SHARED", AttrKey: "k", ValueType: "STRING", Value: &value})
+				require.NoError(t, err)
+			}
+			holder := p.api.RDB.DB(p.ctx).Begin()
+			require.NoError(t, holder.Error)
+			defer holder.Rollback()
+			if code == "DEVICE_BUSY" {
+				require.NoError(t, holder.Exec(`SELECT "device-management".dc_entity_attr_lock('device', ?)`, p.devs[0].ID).Error)
+			} else {
+				// A previous-release writer holds only the row, without the device advisory lock.
+				require.NoError(t, holder.Exec(`SELECT id FROM entity_attributes
+					WHERE entity_type = 'device' AND entity_id = ? AND scope = 'SHARED' AND attr_key = 'k' FOR UPDATE`, p.devs[0].ID).Error)
+			}
+			now := time.Now()
+			previousClock := fleetClock
+			fleetClock = func() time.Time { return now }
+			t.Cleanup(func() { fleetClock = previousClock })
+			r, err := p.api.DriveFleetOperation(p.ctx, p.op.Token, DefaultFleetCaps)
+			require.NoError(t, err)
+			require.Equal(t, 1, r.Busy+r.Retried)
+			require.Zero(t, r.Posted)
+			var head FleetOperationLine
+			require.NoError(t, p.api.RDB.DB(p.ctx).First(&head, p.lines[0].ID).Error)
+			require.Equal(t, FleetPostingPlanned, head.Posting)
+			require.Equal(t, int32(2), head.Attempts)
+			require.Equal(t, code, head.LastErrorCode)
+			require.True(t, head.NextAttemptAt.Valid)
+			require.True(t, head.NextAttemptAt.Time.After(now))
+			// The generated backoff spans a new permit window. Keep holding the real lock: only
+			// selection excluding the head lets the second line use that window's sole permit.
+			now = head.NextAttemptAt.Time.Add(-time.Microsecond)
+			r, err = p.api.DriveFleetOperation(p.ctx, p.op.Token, DefaultFleetCaps)
+			require.NoError(t, err)
+			require.Equal(t, 1, r.Posted)
+			require.Zero(t, r.Busy+r.Retried)
+			require.Equal(t, FleetPostingPosted, p.posting(t, 1))
+			// With only the backed-off head left, another pass must spend no permit.
+			before, err := p.api.FleetOperationRuntimeOf(p.ctx, p.op)
+			require.NoError(t, err)
+			r, err = p.api.DriveFleetOperation(p.ctx, p.op.Token, DefaultFleetCaps)
+			require.NoError(t, err)
+			require.Zero(t, r.Posted+r.Busy+r.Retried)
+			after, err := p.api.FleetOperationRuntimeOf(p.ctx, p.op)
+			require.NoError(t, err)
+			require.Equal(t, before.PaceIssued, after.PaceIssued)
+			require.Equal(t, before.PaceWindowStart, after.PaceWindowStart)
+			require.NoError(t, holder.Rollback().Error)
+			now = head.NextAttemptAt.Time.Add(2 * time.Second)
+			r, err = p.api.DriveFleetOperation(p.ctx, p.op.Token, DefaultFleetCaps)
+			require.NoError(t, err)
+			require.Equal(t, 1, r.Posted)
+			require.True(t, r.Dispatched)
+		})
+	}
+}

@@ -319,3 +319,22 @@ func TestAPostRecordsConnectionLossAsARetry(t *testing.T) {
 	_, present := attrOf(t, e)
 	require.False(t, present, "the unsuccessful transaction left no effect")
 }
+
+func TestABusyDeviceLockRecordsItsFirstRetry(t *testing.T) {
+	e := postFixture(t, "v1", false)
+	original := fleetTryDeviceLock
+	fleetTryDeviceLock = func(context.Context, *gorm.DB, uint) (bool, error) { return false, nil }
+	t.Cleanup(func() { fleetTryDeviceLock = original })
+	before := fleetClock()
+	r := e.post(t)
+	require.Equal(t, FleetPostBusy, r.Outcome)
+	require.Equal(t, "DEVICE_BUSY", r.Code)
+	l := e.reload(t)
+	require.Equal(t, FleetPostingPlanned, l.Posting)
+	require.Equal(t, int32(1), l.Attempts)
+	require.Equal(t, "DEVICE_BUSY", l.LastErrorCode)
+	require.True(t, l.NextAttemptAt.Valid)
+	require.False(t, l.NextAttemptAt.Time.Before(before.Add(time.Second)))
+	_, present := attrOf(t, e)
+	require.False(t, present, "a busy lock leaves no effect")
+}

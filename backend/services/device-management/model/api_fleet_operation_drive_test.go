@@ -280,6 +280,69 @@ func TestALineBackingOffIsNotHintedUntilItIsDue(t *testing.T) {
 	require.True(t, r.Dispatched)
 }
 
+func TestABusyHeadBacksOffAndDueLinesKeepTheirOrder(t *testing.T) {
+	for _, busy := range []string{"DEVICE_BUSY", "ATTRIBUTE_ROW_BUSY"} {
+		t.Run(busy, func(t *testing.T) {
+			rate := int32(1)
+			e := driveFixture(t, 3, FleetSafetyRequest{MaxPostsPerSecond: &rate})
+			var lines []FleetOperationLine
+			require.NoError(t, e.api.RDB.DB(e.ctx).Where("operation_id = ?", e.op.ID).Order("ordinal").Find(&lines).Error)
+			// A repeatedly busy head gets at least four seconds of backoff, enough to
+			// inspect several fresh permit windows without depending on random jitter.
+			require.NoError(t, e.api.RDB.DB(e.ctx).Model(&FleetOperationLine{}).Where("id = ?", lines[0].ID).
+				Update("attempts", 2).Error)
+			head := uint(lines[0].TargetId.Int64)
+			original := fleetTryDeviceLock
+			fleetTryDeviceLock = func(ctx context.Context, tx *gorm.DB, id uint) (bool, error) {
+				if id == head {
+					if busy == "DEVICE_BUSY" {
+						return false, nil
+					}
+					return false, &AttributeWriteBusyError{}
+				}
+				return original(ctx, tx, id)
+			}
+			t.Cleanup(func() { fleetTryDeviceLock = original })
+
+			r := e.drive(t)
+			require.Equal(t, 1, r.Busy+r.Retried)
+			require.Zero(t, r.Posted)
+			line := e.reloadLine(t, lines[0].ID)
+			require.Equal(t, FleetPostingPlanned, line.Posting)
+			require.Equal(t, int32(3), line.Attempts)
+			require.Equal(t, busy, line.LastErrorCode)
+			require.True(t, line.NextAttemptAt.Valid)
+			require.True(t, line.NextAttemptAt.Time.After(e.now))
+			// Later due lines must advance in the original order during that backoff,
+			// rather than the head spending each window's only permit.
+			for i := 1; i < len(lines); i++ {
+				e.now = e.now.Add(time.Second)
+				require.Equal(t, 1, e.drive(t).Posted)
+				require.Equal(t, FleetPostingPosted, e.reloadLine(t, lines[i].ID).Posting)
+				if i+1 < len(lines) {
+					require.Equal(t, FleetPostingPlanned, e.reloadLine(t, lines[i+1].ID).Posting)
+				}
+			}
+			// A pass with only future work must leave the permit count/window untouched.
+			before, err := e.api.FleetOperationRuntimeOf(e.ctx, e.op)
+			require.NoError(t, err)
+			e.now = e.now.Add(time.Second)
+			r = e.drive(t)
+			require.Zero(t, r.Posted+r.Busy+r.Retried)
+			after, err := e.api.FleetOperationRuntimeOf(e.ctx, e.op)
+			require.NoError(t, err)
+			require.Equal(t, before.PaceIssued, after.PaceIssued)
+			require.Equal(t, before.PaceWindowStart, after.PaceWindowStart)
+			require.Equal(t, int32(3), e.reloadLine(t, line.ID).Attempts)
+			fleetTryDeviceLock = original
+			e.now = e.reloadLine(t, line.ID).NextAttemptAt.Time
+			r = e.drive(t)
+			require.Equal(t, 1, r.Posted)
+			require.True(t, r.Dispatched)
+		})
+	}
+}
+
 func (e *driveEnv) reloadLine(t *testing.T, id uint) FleetOperationLine {
 	t.Helper()
 	var l FleetOperationLine
