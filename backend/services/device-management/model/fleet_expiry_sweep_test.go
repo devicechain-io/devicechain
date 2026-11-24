@@ -189,3 +189,54 @@ func TestFleetExpirySweepBoundsItsDeadline(t *testing.T) {
 	require.Greater(t, remaining, 40*time.Second)
 	require.LessOrEqual(t, remaining, 45*time.Second)
 }
+
+// A tenant whose expiry keeps failing must not hold one of the ten places in every pass: discovery
+// resumes after the last tenant visited, so the eleventh tenant is reached on the next pass.
+func TestFleetExpirySweepRotatesPastFailingTenants(t *testing.T) {
+	api, _ := fleetFixture(t, 0)
+	now := time.Now()
+	for i := 0; i < 11; i++ {
+		ctx := core.WithTenant(context.Background(), fmt.Sprintf("tenant%02d", i))
+		seedExpiryOperation(t, api, ctx, "expired", FleetDispatchReady, now)
+	}
+	const hook = "test:expiry-poison"
+	require.NoError(t, api.RDB.Database.Callback().Create().Before("gorm:create").Register(hook, func(tx *gorm.DB) {
+		if ev, ok := tx.Statement.Dest.(*FleetOperationEvent); ok && ev.Kind == fleetEventExpire {
+			if tenant, _ := core.TenantFromContext(tx.Statement.Context); tenant == "tenant10" {
+				return
+			}
+			tx.AddError(fmt.Errorf("poisoned"))
+		}
+	}))
+	t.Cleanup(func() { api.RDB.Database.Callback().Create().Remove(hook) })
+	require.Error(t, api.SweepExpiredFleetOperations(context.Background()))
+	require.Error(t, api.SweepExpiredFleetOperations(context.Background()))
+	last := core.WithTenant(context.Background(), "tenant10")
+	got, err := api.fleetOperationByToken(last, "expired")
+	require.NoError(t, err)
+	require.Equal(t, FleetDispatchAborted, got.Dispatch, "failing tenants must not starve the rest of the instance")
+}
+
+// One operation that keeps failing must not hold back the tenant's later operations.
+func TestFleetExpiryContinuesPastAFailingOperation(t *testing.T) {
+	api, ctx := fleetFixture(t, 0)
+	now := time.Now()
+	poison := seedExpiryOperation(t, api, ctx, "a-poison", FleetDispatchReady, now)
+	next := seedExpiryOperation(t, api, ctx, "b-next", FleetDispatchReady, now)
+	const hook = "test:expiry-poison-op"
+	require.NoError(t, api.RDB.Database.Callback().Create().Before("gorm:create").Register(hook, func(tx *gorm.DB) {
+		if ev, ok := tx.Statement.Dest.(*FleetOperationEvent); ok && ev.OperationId == int64(poison.ID) {
+			tx.AddError(fmt.Errorf("poisoned"))
+		}
+	}))
+	t.Cleanup(func() { api.RDB.Database.Callback().Create().Remove(hook) })
+	n, err := api.ExpireFleetOperations(ctx, now)
+	require.Error(t, err)
+	require.Equal(t, 1, n)
+	got, err := api.fleetOperationByToken(ctx, next.Token)
+	require.NoError(t, err)
+	require.Equal(t, FleetDispatchAborted, got.Dispatch)
+	got, err = api.fleetOperationByToken(ctx, poison.Token)
+	require.NoError(t, err)
+	require.Equal(t, FleetDispatchReady, got.Dispatch)
+}

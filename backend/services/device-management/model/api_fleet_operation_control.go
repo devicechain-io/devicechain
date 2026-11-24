@@ -506,6 +506,7 @@ func (api *Api) ExpireFleetOperations(ctx context.Context, now time.Time) (int, 
 		return 0, err
 	}
 	aborted := 0
+	var lastErr error
 	for _, d := range due {
 		_, err := api.fleetControl(ctx, d.Token, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
 			// Re-judged under the fence: a start or a finisher may have got here first.
@@ -528,11 +529,16 @@ func (api *Api) ExpireFleetOperations(ctx context.Context, now time.Time) (int, 
 			continue // one busy operation must not starve the rest of the sweep
 		}
 		if err != nil {
-			return aborted, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return aborted, ctxErr
+			}
+			// One operation that keeps failing must not hold back the tenant's others, which sort after it.
+			lastErr = err
+			continue
 		}
 		aborted++
 	}
-	return aborted, nil
+	return aborted, lastErr
 }
 
 var errFleetNotDue = errors.New("the operation is no longer due")

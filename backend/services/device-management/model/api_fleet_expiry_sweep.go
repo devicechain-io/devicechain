@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -18,10 +19,44 @@ const (
 	fleetExpirySweepLockName  = "device-management-fleet-expiry-sweep"
 )
 
+// fleetExpiryCursor is the last tenant a pass visited. Discovery resumes after it and wraps, so a
+// tenant whose expiry keeps failing cannot hold one of the ten places in every pass. It lives in
+// memory: a replica that takes the singleton over starts from the beginning, which costs one pass.
+type fleetExpiryCursor struct {
+	sync.Mutex
+	after string
+}
+
 func fleetExpiryCandidates(db *gorm.DB, now time.Time) *gorm.DB {
 	return db.Where("driver_protocol >= ? AND driver_protocol <= ?", 1, ledger.SupportedDriverProtocol).
 		Where("(dispatch = ? AND expires_at IS NOT NULL AND expires_at <= ?) OR (dispatch = ? AND created_at <= ?)",
 			FleetDispatchReady, now, FleetDispatchPlanning, now.Add(-ledger.PlanningAbandonedAfter))
+}
+
+// fleetExpiryTenants discovers at most ten tenants with due operations, after the cursor first and
+// then wrapping to the beginning. Only tenant IDs cross scopes.
+func (api *Api) fleetExpiryTenants(ctx context.Context, now time.Time) ([]string, error) {
+	api.fleetExpiryCursor.Lock()
+	after := api.fleetExpiryCursor.after
+	api.fleetExpiryCursor.Unlock()
+	discover := func(where string, limit int) ([]string, error) {
+		var tenants []string
+		err := fleetExpiryCandidates(api.RDB.DB(core.WithSystemContext(ctx)).Model(&FleetOperation{}), now).
+			Where(where, after).Distinct("tenant_id").Order("tenant_id").Limit(limit).Pluck("tenant_id", &tenants).Error
+		return tenants, err
+	}
+	tenants, err := discover("tenant_id > ?", fleetExpiryTenantsPerPass)
+	if err != nil {
+		return nil, err
+	}
+	if len(tenants) < fleetExpiryTenantsPerPass && after != "" {
+		wrapped, err := discover("tenant_id <= ?", fleetExpiryTenantsPerPass-len(tenants))
+		if err != nil {
+			return nil, err
+		}
+		tenants = append(tenants, wrapped...)
+	}
+	return tenants, nil
 }
 
 // SweepExpiredFleetOperations expires at most 100 operations for each of at most 10 tenants.
@@ -33,11 +68,9 @@ func (api *Api) SweepExpiredFleetOperations(ctx context.Context) error {
 	defer cancel()
 	pass := func() error {
 		now := time.Now()
-		var tenants []string
-		// Only tenant IDs cross scopes; operation reads and transitions below use a fresh
-		// tenant context derived from the original non-system context.
-		err := fleetExpiryCandidates(api.RDB.DB(core.WithSystemContext(ctx)).Model(&FleetOperation{}), now).
-			Distinct("tenant_id").Order("tenant_id").Limit(fleetExpiryTenantsPerPass).Pluck("tenant_id", &tenants).Error
+		// Operation reads and transitions below use a fresh tenant context derived from the
+		// original non-system context.
+		tenants, err := api.fleetExpiryTenants(ctx, now)
 		if err != nil {
 			return err
 		}
@@ -51,6 +84,9 @@ func (api *Api) SweepExpiredFleetOperations(ctx context.Context) error {
 				failed++
 				lastErr = err
 			}
+			api.fleetExpiryCursor.Lock()
+			api.fleetExpiryCursor.after = tenant
+			api.fleetExpiryCursor.Unlock()
 		}
 		return core.PassResult(len(tenants), failed, lastErr)
 	}
