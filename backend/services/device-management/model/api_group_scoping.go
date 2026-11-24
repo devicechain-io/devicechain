@@ -138,20 +138,13 @@ func assertMembershipDeviceOwner(tx *gorm.DB, id uint) error {
 	if !writerHeld && !creatorHeld {
 		return missing
 	}
-	// ROLLBACK TO SAVEPOINT can release K_dev without undoing the Go state.
-	// Assert the actual granted lock as well. This is the SQL function's key,
-	// computed by Postgres (never a Go implementation of its hash); the integration
-	// tests acquire through dc_entity_attr_lock and check this probe stays in step.
+	// ROLLBACK TO SAVEPOINT can release K_dev without undoing the Go state. The owner
+	// setting is set right after K_dev is granted and reverts with it, so read that rather
+	// than pg_locks: the view copies the whole lock table under every lock-partition lock,
+	// a server-wide stall paid on each write that this lock mode exists to speed up.
 	if tx.Dialector.Name() == "postgres" {
 		var held bool
-		err := tx.Raw(`SELECT EXISTS (SELECT 1 FROM pg_locks,
-			(SELECT hashtextextended('dc.attr|device|' || CAST(CAST(? AS bigint) AS text), 0) AS k) device_key
-			WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted
-			AND mode = 'ExclusiveLock' AND objsubid = 1
-			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-			AND classid::bigint = ((k >> 32) & 4294967295)
-			AND objid::bigint = (k & 4294967295))`, id).Scan(&held).Error
-		if err != nil {
+		if err := tx.Raw("SELECT COALESCE(current_setting('"+deviceOwnerSetting+"', true), '') = CAST(CAST(? AS bigint) AS text)", id).Scan(&held).Error; err != nil {
 			return err
 		}
 		if !held {

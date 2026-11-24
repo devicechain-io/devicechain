@@ -193,7 +193,7 @@ func lockDeviceAttributes(ctx context.Context, tx *gorm.DB, id uint) error {
 	}
 	// Reacquire and mark even for the same owner: ROLLBACK TO SAVEPOINT can undo
 	// both database effects without undoing the Go state. Never trust that cache.
-	if err := tx.Exec(attrprotocol.MarkerSQL).Error; err != nil {
+	if err := tx.Exec(attrprotocol.MarkerSQL+deviceOwnerColumnSQL, id).Error; err != nil {
 		return err
 	}
 	state.owner, state.locked, state.pool = id, true, tx.Statement.ConnPool
@@ -203,6 +203,17 @@ func lockDeviceAttributes(ctx context.Context, tx *gorm.DB, id uint) error {
 func acquireDeviceAttributeLock(tx *gorm.DB, id uint) error {
 	return tx.Exec(`SELECT "device-management".dc_entity_attr_lock('device', ?)`, id).Error
 }
+
+// deviceOwnerSetting names, transaction-locally, the device whose K_dev this transaction
+// most recently took. It is set right after the lock and, like the lock, is undone by a
+// ROLLBACK TO SAVEPOINT taken before it (a local setting reverts with its subtransaction),
+// so assertMembershipDeviceOwner can read it instead of scanning pg_locks: that view
+// copies the server's whole lock table under every lock-partition lock, on every write.
+const deviceOwnerSetting = "devicechain.attr_device"
+
+// deviceOwnerColumnSQL sets that setting. The lock helpers append it to the protocol
+// marker's SELECT, so both are set by one statement right after K_dev is granted.
+const deviceOwnerColumnSQL = ", set_config('" + deviceOwnerSetting + "', CAST(CAST(? AS bigint) AS text), true)"
 
 type createdDeviceMembershipOwnerKey struct{}
 type createdDeviceMembershipOwner struct {
@@ -224,6 +235,9 @@ func lockCreatedDeviceForMembership(tx *gorm.DB, id uint) (*gorm.DB, error) {
 	}
 	if tx.Dialector.Name() == "postgres" {
 		if err := acquireDeviceAttributeLock(tx, id); err != nil {
+			return nil, err
+		}
+		if err := tx.Exec("SELECT TRUE"+deviceOwnerColumnSQL, id).Error; err != nil {
 			return nil, err
 		}
 	}
@@ -262,7 +276,7 @@ func tryLockDeviceAttributes(ctx context.Context, tx *gorm.DB, id uint) (bool, e
 	if !got {
 		return false, nil
 	}
-	if err := tx.Exec(attrprotocol.MarkerSQL).Error; err != nil {
+	if err := tx.Exec(attrprotocol.MarkerSQL+deviceOwnerColumnSQL, id).Error; err != nil {
 		return false, err
 	}
 	state.owner, state.locked, state.pool = id, true, tx.Statement.ConnPool

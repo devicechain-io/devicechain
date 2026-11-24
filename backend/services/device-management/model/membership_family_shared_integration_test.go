@@ -170,3 +170,69 @@ func TestMembershipSharedRejectsRolledBackDeviceLockPostgres(t *testing.T) {
 		return api.lockMembershipWriterFamily(ctx, tx, "device", id)
 	}))
 }
+
+// The ownership assertion runs on every eligible device write, the path shared mode exists to
+// speed up. pg_locks copies the server's whole lock table under every lock-partition lock, so
+// the assertion must read the transaction-local owner setting instead. The shared-lock count
+// keeps this from passing vacuously (a write that never asserted would also read no pg_locks).
+func TestMembershipSharedOwnerCheckDoesNotScanPgLocksPostgres(t *testing.T) {
+	api, ctx := membershipPostgres(t)
+	membershipRaceEntity(t, api, ctx, "device", "member")
+	type writerKey struct{}
+	var mu sync.Mutex
+	scans, shared := 0, 0
+	count := func(db *gorm.DB) {
+		if db.Statement.Context.Value(writerKey{}) != true {
+			return
+		}
+		sql := db.Statement.SQL.String()
+		mu.Lock()
+		defer mu.Unlock()
+		if strings.Contains(sql, "pg_locks") {
+			scans++
+		}
+		if strings.Contains(sql, "pg_advisory_xact_lock_shared(") {
+			shared++
+		}
+	}
+	require.NoError(t, api.RDB.Database.Callback().Raw().After("gorm:raw").Register("test:owner-check-raw", count))
+	require.NoError(t, api.RDB.Database.Callback().Row().After("gorm:row").Register("test:owner-check-row", count))
+	t.Cleanup(func() {
+		api.RDB.Database.Callback().Raw().Remove("test:owner-check-raw")
+		api.RDB.Database.Callback().Row().Remove("test:owner-check-row")
+	})
+	writerCtx := context.WithValue(ctx, writerKey{}, true)
+	require.NoError(t, membershipRaceWrite(api, writerCtx, "device", "member", "a", "x"))
+	_, err := api.CreateDevice(writerCtx, &DeviceCreateRequest{Token: "created", DeviceTypeToken: "member-type"})
+	require.NoError(t, err)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 2, shared, "the write and the create each take the family lock shared")
+	require.Zero(t, scans, "the K_dev assertion must not read pg_locks")
+}
+
+// The counterweight to the rolled-back case: a savepoint rolled back AFTER K_dev was taken
+// leaves both the lock and the owner setting, so the writer is not refused.
+func TestMembershipSharedKeepsOwnerAcrossLaterSavepointPostgres(t *testing.T) {
+	api, ctx := membershipPostgres(t)
+	id := membershipRaceEntity(t, api, ctx, "device", "member")
+	other := membershipRaceEntity(t, api, ctx, "device", "other")
+	require.NoError(t, api.runDeviceAttributeTx(ctx, "set", func(tx *gorm.DB) error {
+		require.NoError(t, lockDeviceAttributes(ctx, tx, id))
+		require.NoError(t, tx.SavePoint("after_owner").Error)
+		require.NoError(t, tx.RollbackTo("after_owner").Error)
+		require.NoError(t, api.lockMembershipWriterFamily(ctx, tx, "device", id))
+		// The setting names one device: it is no proof for another.
+		var held bool
+		require.NoError(t, tx.Raw("SELECT COALESCE(current_setting('"+deviceOwnerSetting+"', true), '') = CAST(CAST(? AS bigint) AS text)", other).Scan(&held).Error)
+		require.False(t, held)
+		return nil
+	}))
+	// The setting is transaction-local: the next transaction on a pooled connection starts without it.
+	require.NoError(t, api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		var held bool
+		require.NoError(t, tx.Raw("SELECT COALESCE(current_setting('"+deviceOwnerSetting+"', true), '') = CAST(CAST(? AS bigint) AS text)", id).Scan(&held).Error)
+		require.False(t, held)
+		return nil
+	}))
+}

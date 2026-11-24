@@ -22,7 +22,7 @@ func TestMembershipSharedChecksDatabaseOwnership(t *testing.T) {
 	// A unit-level database witness: exercise the real ownership decision with
 	// both answers, while leaving the two-connection Postgres tests unmodified.
 	require.NoError(t, api.RDB.Database.Callback().Row().Before("gorm:row").Register("test:membership-lock-probe", func(db *gorm.DB) {
-		if !strings.Contains(db.Statement.SQL.String(), "FROM pg_locks") {
+		if !strings.Contains(db.Statement.SQL.String(), "current_setting('devicechain.attr_device'") {
 			return
 		}
 		probes++

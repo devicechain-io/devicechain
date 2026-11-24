@@ -99,14 +99,15 @@ func stubAttributeProtocolPostgresSQL(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	require.NoError(t, db.Callback().Raw().Before("gorm:raw").Register("test:attribute-protocol-functions", func(tx *gorm.DB) {
 		sql := tx.Statement.SQL.String()
-		if strings.Contains(sql, "dc_entity_attr_lock") || strings.Contains(sql, "set_config('devicechain.attr_protocol'") {
+		if strings.Contains(sql, "dc_entity_attr_lock") || strings.Contains(sql, "set_config('devicechain.attr_protocol'") ||
+			strings.Contains(sql, "set_config('devicechain.attr_device'") {
 			tx.Statement.SQL.Reset()
 			tx.Statement.SQL.WriteString("SELECT 1")
 			tx.Statement.Vars = nil
 		}
 	}))
 	require.NoError(t, db.Callback().Row().Before("gorm:row").Register("test:attribute-generation-sequence", func(tx *gorm.DB) {
-		if strings.Contains(tx.Statement.SQL.String(), "FROM pg_locks") {
+		if strings.Contains(tx.Statement.SQL.String(), "current_setting('devicechain.attr_device'") {
 			// This fixture emulates successful acquisition of K_dev above.
 			// Missing ownership and savepoint rollback have their own tests.
 			tx.Statement.SQL.Reset()
