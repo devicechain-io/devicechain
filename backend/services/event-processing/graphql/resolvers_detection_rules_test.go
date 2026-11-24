@@ -23,7 +23,7 @@ func authedContext(authorities ...auth.Authority) context.Context {
 // A well-formed threshold rule compiles; the gate reports valid with no errors.
 func TestValidateDetectionRules_Valid(t *testing.T) {
 	r := &SchemaResolver{}
-	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), struct{ Rules []detectionRuleInput }{
+	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), validateArgs{
 		Rules: []detectionRuleInput{
 			{Token: "hot", Definition: `{"name":"hot","type":"threshold","when":{"metric":"temperature","op":"gt","threshold":80}}`},
 		},
@@ -44,7 +44,7 @@ func TestValidateDetectionRules_Valid(t *testing.T) {
 // the good rule is not reported.
 func TestValidateDetectionRules_MixedRejections(t *testing.T) {
 	r := &SchemaResolver{}
-	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), struct{ Rules []detectionRuleInput }{
+	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), validateArgs{
 		Rules: []detectionRuleInput{
 			{Token: "ok", Definition: `{"name":"ok","type":"threshold","when":{"metric":"t","op":"gt","threshold":1}}`},
 			{Token: "garbage", Definition: `{"type":`}, // undecodable
@@ -80,7 +80,7 @@ func TestValidateDetectionRules_RejectsScopeOnUnsupportedKind(t *testing.T) {
 	absence := `{"name":"gone","type":"absence","timeout":"5m"}`
 	correlation := `{"name":"co","type":"correlation","anchorType":"site","count":3,"window":"100s"}`
 	threshold := `{"name":"hot","type":"threshold","when":{"metric":"t","op":"gt","threshold":1}}`
-	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), struct{ Rules []detectionRuleInput }{
+	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), validateArgs{
 		Rules: []detectionRuleInput{
 			{Token: "scoped-abs", Definition: absence, GroupScoped: true},
 			{Token: "scoped-corr", Definition: correlation, GroupScoped: true},
@@ -110,7 +110,7 @@ func TestValidateDetectionRules_RejectsScopeOnUnsupportedKind(t *testing.T) {
 // id, so a rule the author stored without the runtime-composed id is not spuriously rejected.
 func TestValidateDetectionRules_TokenSuppliesId(t *testing.T) {
 	r := &SchemaResolver{}
-	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), struct{ Rules []detectionRuleInput }{
+	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), validateArgs{
 		Rules: []detectionRuleInput{
 			{Token: "the-token", Definition: `{"name":"n","type":"threshold","when":{"metric":"t","op":"gt","threshold":1}}`},
 		},
@@ -126,7 +126,7 @@ func TestValidateDetectionRules_TokenSuppliesId(t *testing.T) {
 // The gate is authz-gated: a caller without device:read is refused before any compilation.
 func TestValidateDetectionRules_RequiresAuth(t *testing.T) {
 	r := &SchemaResolver{}
-	_, err := r.ValidateDetectionRules(authedContext(auth.CommandRead), struct{ Rules []detectionRuleInput }{
+	_, err := r.ValidateDetectionRules(authedContext(auth.CommandRead), validateArgs{
 		Rules: []detectionRuleInput{{Token: "x", Definition: `{"name":"n","type":"threshold"}`}},
 	})
 	if err == nil {

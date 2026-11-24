@@ -32,6 +32,7 @@ export const MEASUREMENT_STREAM = `
       occurredTime
       name
       value
+      textValue
       classifier
     }
   }
@@ -46,6 +47,7 @@ export const MEASUREMENT_STREAM_MULTI = `
       occurredTime
       name
       value
+      textValue
       classifier
     }
   }

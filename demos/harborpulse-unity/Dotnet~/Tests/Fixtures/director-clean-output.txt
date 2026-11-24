@@ -1,5 +1,5 @@
 0|1|shot|1a|
-0|1|caption|Port Alder's waterfront. / 37 devices, one platform.|3:run7:binding15:binding:::READY0:0:6:cycle-0:0:5:READY8:PLATFORM
+0|1|caption|Port Alder's waterfront. / 43 devices, one platform.|3:run7:binding15:binding:::READY0:0:6:cycle-0:0:5:READY8:PLATFORM
 132|1|caption-end|baseline|
 132|1|shot|1b|
 135|1|caption|A quiet morning raises nothing.|
@@ -56,6 +56,24 @@
 405|3|link|same->disabled|
 405|3|caption|The old unit's credentials / are disabled.|3:run11:replacement19:replacement-journal16:hp-gauge-north-30:17:replacement-cycle0:0:8:RECORDED8:PLATFORM,3:run10:credential14:old-credential16:hp-gauge-north-30:17:replacement-cycle0:0:0:8:PLATFORM
 410|3|caption-end|disabled|
+422|3c|shot|3c-1|
+422|3c|caption|At noon a charger's MQTT session dropped. / The platform raised an alarm.|3:run5:alarm49:alarm:hp-charger-mqtt-1:mqtt-charger-disconnected17:hp-charger-mqtt-125:mqtt-charger-disconnected48:cycle-hp-charger-mqtt-1mqtt-charger-disconnected0:0:6:RAISED8:PLATFORM
+427|3c|caption-end|dropped|
+427|3c|caption|It is back. The alarm clears itself.|3:run5:alarm49:alarm:hp-charger-mqtt-1:mqtt-charger-disconnected17:hp-charger-mqtt-125:mqtt-charger-disconnected48:cycle-hp-charger-mqtt-1mqtt-charger-disconnected0:0:7:CLEARED8:PLATFORM
+438|3c|caption-end|back|
+438|3c|shot|3c-2|
+439|3c|caption|Two lamps here keep no connection. / They ask the platform for orders.|
+444|3c|caption-end|pull|
+444|3c|caption|The order to dim waited for them. / Both now report the new level.|3:run7:measure32:measure:hp-light-pull-1:dim_pct:15:hp-light-pull-17:dim_pct28:cycle-hp-light-pull-1dim_pct0:0:0:8:PLATFORM,3:run7:measure32:measure:hp-light-pull-2:dim_pct:15:hp-light-pull-27:dim_pct28:cycle-hp-light-pull-2dim_pct0:0:0:8:PLATFORM
+456|3c|caption-end|dimmed|
+456|3c|shot|3c-3|
+457|3c|caption|These chargers sign in with their / own certificates. No shared secret.|
+462|3c|caption-end|certificate|
+462|3c|caption|This morning their power limit was / halved, as a setting, not a command.|
+467|3c|caption-end|limit|
+467|3c|caption|One applied it, one declined, / and each reported which.|
+474|3c|caption-end|reported|
+474|3c|shot|3c-4|
 480|3b|shot|3b-1|
 482|3b|caption|Running hot. The platform / tells it to derate.|3:run7:command44:command:hp-charger-basin-2:derate:SUCCESSFUL18:hp-charger-basin-26:derate12:derate-cycle0:0:10:SUCCESSFUL8:PLATFORM
 510|3b|caption-end|derate|
@@ -65,6 +83,9 @@
 540|3b|shot|3b-3|
 541|3b|caption|Cooler now. Alarm cleared.|3:run7:command44:command:hp-charger-basin-2:derate:SUCCESSFUL18:hp-charger-basin-26:derate12:derate-cycle0:0:10:SUCCESSFUL8:PLATFORM,3:run5:alarm38:alarm:hp-charger-basin-2:connector-hot18:hp-charger-basin-213:connector-hot12:derate-cycle0:0:7:CLEARED8:PLATFORM,3:run7:measure34:measure:hp-charger-basin-2:max_kw:18:hp-charger-basin-26:max_kw12:derate-cycle0:0:0:8:PLATFORM
 546|3b|caption-end|cool|
+550|3c|shot|3c-5|
+551|3c|caption|One certificate was disabled at two. / That charger alone is locked out.|
+556|3c|caption-end|locked-out|
 600|4|shot|4a|
 600|4|caption|Evening. A storm and a king tide.|
 660|4|node|water|3:run7:measure38:measure:hp-gauge-east-1:water_level_m:15:hp-gauge-east-113:water_level_m34:cycle-hp-gauge-east-1water_level_m0:0:0:8:PLATFORM

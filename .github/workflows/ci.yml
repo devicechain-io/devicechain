@@ -81,6 +81,8 @@ jobs:
       # Whether the two `migrations` jobs run: true unless no changed file reaches a package
       # hack/migration-diff.sh compiles (or its operand image). Always true off a pull request.
       migrations: ${{ steps.select.outputs.migrations }}
+      # Whether the fleet-runner job runs: true unless the diff reaches nothing it builds or runs against.
+      fleet_runner: ${{ steps.select.outputs.fleet_runner }}
       # The image-smoke legs this run executes: the images whose module runs whole (or one of
       # their image inputs changed), from hack/ci-select.py; every image off a pull request.
       smoke: ${{ steps.select.outputs.smoke }}
@@ -440,12 +442,14 @@ jobs:
           case "$frontend" in true|false) ;; *) echo "::error::frontend verdict is '$frontend'"; exit 1 ;; esac
           migrations="$(jq -r '.migrations' <<<"$sel")"
           case "$migrations" in true|false) ;; *) echo "::error::migrations verdict is '$migrations'"; exit 1 ;; esac
+          fleet_runner="$(jq -r '.fleet_runner' <<<"$sel")"
+          case "$fleet_runner" in true|false) ;; *) echo "::error::fleet_runner verdict is '$fleet_runner'"; exit 1 ;; esac
           smoke="$(jq -c '.smoke' <<<"$sel")"
           jq -e 'type == "array"' <<<"$smoke" >/dev/null || { echo "::error::smoke plan is '$smoke'"; exit 1; }
           draft="$(jq -r '.draft' <<<"$sel")"
           case "$draft" in true|false) ;; *) echo "::error::draft verdict is '$draft'"; exit 1 ;; esac
           # A run that is not a pull request must plan every module; the script asserts the same.
-          if [ "$GITHUB_EVENT_NAME" != pull_request ] && { [ "$(jq -r '.full' <<<"$sel")" != true ] || [ "$migrations" != true ] || [ "$draft" != false ] || [ "$smoke" != "$SMOKE_MODULES" ] \
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] && { [ "$(jq -r '.full' <<<"$sel")" != true ] || [ "$migrations" != true ] || [ "$fleet_runner" != true ] || [ "$draft" != false ] || [ "$smoke" != "$SMOKE_MODULES" ] \
              || ! jq -e '[.go[] | (.batch // [.])[]] | all(.race_scope == "all")' <<<"$sel" >/dev/null; }; then
             echo "::error::a $GITHUB_EVENT_NAME run selected a subset"
             exit 1
@@ -455,6 +459,7 @@ jobs:
             echo "integration=$integ"
             echo "frontend=$frontend"
             echo "migrations=$migrations"
+            echo "fleet_runner=$fleet_runner"
             echo "smoke=$smoke"
             echo "draft=$draft"
           } >> "$GITHUB_OUTPUT"
@@ -512,6 +517,12 @@ jobs:
           # `git tag --list` needs; DC_REQUIRE_TAGS on the go test step turns a tagless
           # checkout into a failure rather than a skip.
           fetch-tags: true
+
+      # The fleet-operation foundation gate (device-management/model/fleet_operation_gate_test.go) needs
+      # the release this build upgrades from, and a shallow clone has the tags but not their history, so
+      # `git tag --merged HEAD` finds none. The newest stable tag that is not HEAD is the baseline.
+      - name: Resolve the fleet-operation baseline tag
+        run: echo "DC_BASELINE_TAG=$(hack/fleet-baseline-tag.sh)" >> "$GITHUB_ENV"
 
       # 🔴 THE GO BUILD CACHE IS RESTORED HERE AND SAVED BY ONE LEG PER GROUP, ON main ONLY.
       #
@@ -1501,6 +1512,14 @@ jobs:
         leg: ${{ fromJson(needs.discover.outputs.integration) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-tags: true
+
+      # The fleet-operation foundation gate (device-management/model/fleet_operation_gate_test.go) needs
+      # the release this build upgrades from, and a shallow clone has the tags but not their history, so
+      # `git tag --merged HEAD` finds none. The newest stable tag that is not HEAD is the baseline.
+      - name: Resolve the fleet-operation baseline tag
+        run: echo "DC_BASELINE_TAG=$(hack/fleet-baseline-tag.sh)" >> "$GITHUB_ENV"
 
       # Restore-only: the go job's entry for the cache group of this leg's first module (see the
       # restore step there). Nothing here saves, so no integration leg competes for that key or
@@ -3799,6 +3818,78 @@ jobs:
   # That is the same drift hazard one level up, so hack/check-ci-gate-complete.sh
   # asserts the list names every job in this file, and runs in the `actions` job.
   # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # The fleet runner (backend/fleet/tofurun): the server-side OpenTofu runner library, run against
+  # a real OpenTofu at the pinned version and a real PostgreSQL (state backend and writer slot).
+  # Behind the build tag fleetpg; the COUNT of passed TestFleetPG* tests is asserted per package,
+  # because without the tag the tests are not compiled and a mistyped tag would report success over
+  # nothing. A missing tofu or a missing database FAILS those tests; they never skip.
+  # ---------------------------------------------------------------------------
+  fleet-runner:
+    needs: discover
+    # Skipped when the diff reaches nothing the runner builds from or runs against (hack/ci-select.py
+    # FLEET_RUNNER_INPUTS); ci-complete accepts the skip only with a successful discover that said so.
+    if: needs.discover.outputs.fleet_runner == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
+        with:
+          go-version-file: go.work
+          cache: false
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
+        with:
+          # The action's default Node wrapper sits ahead of the real binary on PATH and breaks
+          # stdin handling; the runner library execs the binary itself.
+          tofu_wrapper: false
+          # The premise record's version, and tofurun.PinnedVersion.
+          tofu_version: 1.10.10
+
+      - name: go mod download
+        run: hack/go-mod-download.sh --workspace
+
+      - name: PostgreSQL
+        run: |
+          docker run -d --name fleet-runner-pg -e POSTGRES_PASSWORD=postgres -p 127.0.0.1:55432:5432 postgres:16
+          for _ in $(seq 1 60); do
+            docker exec fleet-runner-pg pg_isready -U postgres && exit 0
+            sleep 1
+          done
+          echo "::error::PostgreSQL did not become ready"
+          exit 1
+
+      - name: runner suite (real OpenTofu, real PostgreSQL)
+        working-directory: backend/fleet
+        env:
+          DC_FLEET_PG_DSN: postgres://postgres:postgres@127.0.0.1:55432/postgres?sslmode=disable
+        run: |
+          set -o pipefail
+          DC_FLEET_TOFU="$(command -v tofu)"
+          export DC_FLEET_TOFU
+          go test -tags fleetpg -count=1 -timeout 20m -json ./tofurun | ../../hack/check-fleetpg-count.sh TestFleetPG 1 10
+          go test -tags fleetpg -count=1 -timeout 20m -json ./tofurun/slotfence | ../../hack/check-fleetpg-count.sh TestFleetPG 1 5
+
+      # The image itself, built for real: the pinned tofu verified against its checksum, the roots
+      # baked with their lock files and providers mirrored, the runner's own layout check run in
+      # the build. The context is only what the Dockerfile copies.
+      - name: runner image builds and checks itself
+        run: |
+          ctx="$(mktemp -d)"
+          mkdir -p "$ctx/backend/core" "$ctx/deploy/opentofu/modules"
+          cp backend/core/go.mod backend/core/go.sum "$ctx/backend/core/"
+          cp -r backend/fleet "$ctx/backend/fleet"
+          cp -r deploy/fleet "$ctx/deploy/fleet"
+          cp -r deploy/opentofu/modules/gke-cluster "$ctx/deploy/opentofu/modules/gke-cluster"
+          docker build -f "$ctx/backend/fleet/tofurun/image/Dockerfile" -t fleet-runner:ci "$ctx"
+          docker run --rm fleet-runner:ci check
+
+      - name: remove PostgreSQL
+        if: always()
+        run: docker rm -f fleet-runner-pg
+
   ci-complete:
     name: ci-complete
     if: always()
@@ -3824,6 +3915,7 @@ jobs:
       - harborpulse-model
       - helm
       - opentofu
+      - fleet-runner
       - image-smoke
       - api-compat
       - payloaddecode-arm64
@@ -3869,6 +3961,7 @@ jobs:
                 elif $job == "integration" and $d.outputs.integration == "[]" then "discover planned no integration legs"
                 elif $job == "image-smoke" and $d.outputs.smoke == "[]" then "discover planned no image-smoke legs"
                 elif $job == "frontend" and $d.outputs.frontend == "false" then "the diff reaches nothing the frontend reads"
+                elif $job == "fleet-runner" and $d.outputs.fleet_runner == "false" then "the diff reaches nothing the fleet runner builds from or runs against"
                 elif ($job == "migrations" or $job == "migrations-timescaledb-next") and $d.outputs.migrations == "false" then "the diff reaches nothing migration-diff.sh compiles"
                 else empty end' <<<"$NEEDS"
           }

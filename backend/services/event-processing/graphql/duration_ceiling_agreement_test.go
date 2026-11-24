@@ -32,7 +32,7 @@ func ceilingAgreementRule(window time.Duration) string {
 func publishGateAccepts(t *testing.T, def string) bool {
 	t.Helper()
 	res, err := (&SchemaResolver{}).ValidateDetectionRules(authedContext(auth.DeviceRead),
-		struct{ Rules []detectionRuleInput }{Rules: []detectionRuleInput{{Token: "slide", Definition: def}}})
+		validateArgs{Rules: []detectionRuleInput{{Token: "slide", Definition: def}}})
 	if err != nil {
 		t.Fatalf("publish gate returned a transport error: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestDurationCeilingIsReportedToTheAuthor(t *testing.T) {
 	t.Cleanup(func() { rules.SetPlatformMaxRuleDuration(0) })
 
 	res, err := (&SchemaResolver{}).ValidateDetectionRules(authedContext(auth.DeviceRead),
-		struct{ Rules []detectionRuleInput }{Rules: []detectionRuleInput{
+		validateArgs{Rules: []detectionRuleInput{
 			{Token: "slide", Definition: ceilingAgreementRule(30 * 24 * time.Hour)},
 		}})
 	if err != nil {

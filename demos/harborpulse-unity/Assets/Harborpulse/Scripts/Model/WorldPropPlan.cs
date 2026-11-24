@@ -121,6 +121,8 @@ namespace DeviceChain.Harborpulse.Model
             return false;
         }
         LayoutDevice[] layoutDevices=new LayoutDevice[0];
+        /// <summary>The cabinets, ducts and paving round the chargers that hold their own session and the pull lamps (see <see cref="QuayFittings"/>).</summary>
+        public QuayFittings Fittings { get; private set; }
         void Devices(HarborLayout layout)
         {
             layoutDevices=layout.Devices.ToArray();
@@ -136,7 +138,8 @@ namespace DeviceChain.Harborpulse.Model
                         Fixed("",-.7,-.7,11.8,8.6); Fixed(":well",WellFootprint.LocalX,WellFootprint.LocalZ,5.6,5.6);break;
                     case DeviceKind.Truck: Fixed("",0,0,3.4,7.6);break;
                     case DeviceKind.Light: Fixed("",0,.8,.8,2.8);break;
-                    case DeviceKind.Charger: Fixed("",0,.55,1.9,2.1);break;
+                    case DeviceKind.Charger: case DeviceKind.MqttCharger: case DeviceKind.CertCharger: Fixed("",0,.55,1.9,2.1);break;
+                    case DeviceKind.PullLight: Fixed("",0,0,1.1,1.1);break;
                     default:
                         Fixed("",0,0,1.5,1.5);
                         var token=map.QuayFor(device);var wall=QuayFrame(map,token);
@@ -146,7 +149,10 @@ namespace DeviceChain.Harborpulse.Model
                         break;
                 }
             }
-            foreach(var device in layout.Devices.Where(d=>d.Kind==DeviceKind.Charger))
+            // what is laid round the devices that hold their own session: a cabinet for each pair of chargers, standing on the ground like any prop
+            Fittings=QuayFittings.Plan(map,layout);
+            foreach(var court in Fittings.Courts) Registry.AddFixed(court.CabinetFootprint);
+            foreach(var device in layout.Devices.Where(d=>DeviceKind.HasBay(d.Kind)))
             {
                 var frame=new PropFootprint(device.Token,map.Anchors[device.Token],1,1,QuayYaw(map.QuayFor(device)));
                 var placed=false;

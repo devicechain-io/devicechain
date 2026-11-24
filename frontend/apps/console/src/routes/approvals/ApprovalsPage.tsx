@@ -74,6 +74,18 @@ function KillSwitch({ onChanged }: { onChanged: () => void }) {
     {stepUp && <StepUpPrompt path="/approvals" />}
   </SectionPanel>;
 }
+// A command proposal's row says why the proposal needs deciding the way it does; the detail page has them
+// all, so the row keeps two and counts the rest. Alarm rows show none.
+const ROW_REASON_LIMIT = 2;
+function RowReasons({ reasons }: { reasons: string[] }) {
+  const { t } = useTranslation('approvals');
+  if (!reasons.length) return null;
+  const more = reasons.length - ROW_REASON_LIMIT;
+  return <div className="mt-1 text-sm text-muted-foreground">
+    <ul aria-label={t('reasons')}>{reasons.slice(0, ROW_REASON_LIMIT).map(reason => <li key={reason}>{reason}</li>)}</ul>
+    {more > 0 && <p>{t('moreReasons', { count: more })}</p>}
+  </div>;
+}
 function Inbox() {
   const { claims } = useAuth();
   const isAdmin = hasAuthority(claims, 'agent:admin');
@@ -113,7 +125,9 @@ function Inbox() {
             <DataTableCell>{t('approvalCount', { done: p.approvals.length, required: p.requiredApprovals })}
               <ul>{p.approvals.map(a => <li key={a.principal}>{t('recordedApproval', { principal: a.principal, when: formatTime(a.approvedAt) })}</li>)}</ul>
             </DataTableCell>
-            <DataTableCell>{t(p.state)}{p.decidedBy && <div>{t('decisionBy', { principal: p.decidedBy })}</div>}</DataTableCell>
+            <DataTableCell>{t(p.state)}{p.decidedBy && <div>{t('decisionBy', { principal: p.decidedBy })}</div>}
+              {area === COMMAND_PROPOSAL_AREA && <RowReasons reasons={p.reasons} />}
+            </DataTableCell>
             <DataTableCell><ProposalResult proposal={p} /></DataTableCell>
             <DataTableCell><p className="max-w-xs truncate">{'rationale' in p ? p.rationale : null}</p></DataTableCell>
           </DataTableRow>)}</DataTableBody></DataTable>

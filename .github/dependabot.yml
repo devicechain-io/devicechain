@@ -148,6 +148,7 @@ updates:
     directories:
       - "/backend/k8s"
       - "/frontend"
+      - "/backend/fleet/tofurun/image"
     schedule:
       interval: "weekly"
       day: "monday"

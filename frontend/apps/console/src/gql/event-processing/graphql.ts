@@ -4,6 +4,14 @@ import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
+/** A metric of the profile a rule belongs to, as the validation gate needs it. */
+export type DetectionMetricInput = {
+  /** The metric's data type: DOUBLE, INT, BOOLEAN or STRING. */
+  dataType: string;
+  /** The metric key, as a measurement names it. */
+  key: string;
+};
+
 /** One detection rule submitted for validation. */
 export type DetectionRuleInput = {
   /** The rule definition, as a JSON document serialized to a string. */
@@ -116,6 +124,14 @@ export type ValidateDetectionRulesQueryVariables = Exact<{
 
 export type ValidateDetectionRulesQuery = { validateDetectionRules: { valid: boolean, errors: Array<{ index: number, token: string, message: string }>, warnings: Array<{ code: string, params: Array<string>, message: string }> } };
 
+export type ValidateDetectionRulesWithMetricsQueryVariables = Exact<{
+  rules: Array<DetectionRuleInput> | DetectionRuleInput;
+  metrics?: Array<DetectionMetricInput> | DetectionMetricInput | null | undefined;
+}>;
+
+
+export type ValidateDetectionRulesWithMetricsQuery = { validateDetectionRules: { valid: boolean, errors: Array<{ index: number, token: string, message: string }>, warnings: Array<{ code: string, params: Array<string>, message: string }> } };
+
 export type CompileCanvasQueryVariables = Exact<{
   graph: string;
   profileToken: string;
@@ -188,6 +204,23 @@ export const ValidateDetectionRulesDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<ValidateDetectionRulesQuery, ValidateDetectionRulesQueryVariables>;
+export const ValidateDetectionRulesWithMetricsDocument = new TypedDocumentString(`
+    query ValidateDetectionRulesWithMetrics($rules: [DetectionRuleInput!]!, $metrics: [DetectionMetricInput!]) {
+  validateDetectionRules(rules: $rules, metrics: $metrics) {
+    valid
+    errors {
+      index
+      token
+      message
+    }
+    warnings {
+      code
+      params
+      message
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<ValidateDetectionRulesWithMetricsQuery, ValidateDetectionRulesWithMetricsQueryVariables>;
 export const CompileCanvasDocument = new TypedDocumentString(`
     query CompileCanvas($graph: String!, $profileToken: String!) {
   compileCanvas(graph: $graph, profileToken: $profileToken) {

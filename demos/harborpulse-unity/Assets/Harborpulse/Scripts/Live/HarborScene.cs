@@ -34,7 +34,10 @@ namespace DeviceChain.Harborpulse.Live
                 var k = new KindContract { TypeToken = d.DeviceType };
                 if (DeviceKind.IsGauge(d.Kind)) k.NumericMetrics = new[] { Metrics.WaterLevel };
                 if (d.Kind == DeviceKind.Light) k.NumericMetrics = new[] { Metrics.LampOn, Metrics.Dim, Metrics.LampFault, Metrics.LampPower };
-                if (d.Kind == DeviceKind.Pump || d.Kind == DeviceKind.Charger || d.Kind == DeviceKind.Meter || d.Kind == DeviceKind.Truck)
+                // the chargers that hold their own session and the pull lamps each resolve to their own type, whose profile defines
+                // the one metric the scene reads of them
+                if (d.Kind == DeviceKind.Pump || d.Kind == DeviceKind.Charger || d.Kind == DeviceKind.Meter || d.Kind == DeviceKind.Truck ||
+                    DeviceKind.IsLinkedCharger(d.Kind) || d.Kind == DeviceKind.PullLight)
                     k.NumericMetrics = new List<string>(HarborObservedModel.MetricsFor(d.Kind)).ToArray();
                 kinds[d.Kind] = k;
             }

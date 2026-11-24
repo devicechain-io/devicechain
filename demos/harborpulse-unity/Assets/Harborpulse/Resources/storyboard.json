@@ -135,7 +135,7 @@
           "needs": {
             "binding": {
               "fields": {
-                "freshDevices": "37"
+                "freshDevices": "43"
               },
               "bind": {
                 "n": "freshDevices"
@@ -941,6 +941,253 @@
             "disabled"
           ]
         ]
+      }
+    },
+    {
+      "id": "3c",
+      "priority": 40,
+      "windowSim": [
+        13,
+        15.9
+      ],
+      "plannedSim": null,
+      "preRollS": 3,
+      "triggerTimeoutS": 120,
+      "queueTtlS": 30,
+      "once": false,
+      "cutsOnly": false,
+      "watch": null,
+      "trigger": {
+        "alarm": {
+          "key": "mqtt-charger-disconnected",
+          "status": "CLEARED",
+          "mode": "occurred",
+          "fromSim": 12.9,
+          "toSim": 15.9
+        }
+      },
+      "terminal": null,
+      "shots": [
+        {
+          "id": "3c-1",
+          "from": "pose:charger-north:wide",
+          "to": "pose:charger-north:wide",
+          "moveS": 0,
+          "holdMinS": 10,
+          "holdMaxS": 20,
+          "cueSim": 13,
+          "until": null,
+          "captions": [
+            "dropped",
+            "back"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "3c-2",
+          "from": "pose:gauge-north:wide",
+          "to": "pose:gauge-north:wide",
+          "moveS": 0,
+          "holdMinS": 11,
+          "holdMaxS": 20,
+          "cueSim": 13.3,
+          "until": null,
+          "captions": [
+            "pull",
+            "dimmed"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "3c-3",
+          "from": "pose:gauge-north:pair",
+          "to": "pose:gauge-north:pair",
+          "moveS": 0,
+          "holdMinS": 16,
+          "holdMaxS": 24,
+          "cueSim": 13.6,
+          "until": null,
+          "captions": [
+            "certificate",
+            "limit",
+            "reported"
+          ],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "3c-4",
+          "from": "pose:gauge-north:wide",
+          "to": "pose:gauge-north:wide",
+          "moveS": 0,
+          "holdMinS": 3,
+          "holdMaxS": 3,
+          "cueSim": 13.9,
+          "until": null,
+          "captions": [],
+          "followDeviceFromTrigger": "none"
+        },
+        {
+          "id": "3c-5",
+          "from": "pose:gauge-north:close",
+          "to": "pose:gauge-north:close",
+          "moveS": 0,
+          "holdMinS": 6,
+          "holdMaxS": 8,
+          "cueSim": 14.75,
+          "until": null,
+          "captions": [
+            "locked-out"
+          ],
+          "followDeviceFromTrigger": "none"
+        }
+      ],
+      "captions": [
+        {
+          "id": "dropped",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "dropped",
+          "lines": [
+            "At noon a charger's MQTT session dropped.",
+            "The platform raised an alarm."
+          ],
+          "needs": {
+            "alarm": {
+              "key": "mqtt-charger-disconnected",
+              "status": "RAISED",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "identity": "$trigger.identity",
+              "fromSim": 11.9,
+              "toSim": 15.9
+            }
+          },
+          "holdS": 5
+        },
+        {
+          "id": "back",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "back",
+          "lines": [
+            "It is back. The alarm clears itself."
+          ],
+          "needs": {
+            "alarm": {
+              "key": "mqtt-charger-disconnected",
+              "status": "CLEARED",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "identity": "$trigger.identity",
+              "fromSim": 12.9,
+              "toSim": 15.9
+            }
+          },
+          "holdS": 5
+        },
+        {
+          "id": "pull",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "pull",
+          "lines": [
+            "Two lamps here keep no connection.",
+            "They ask the platform for orders."
+          ],
+          "needs": null,
+          "holdS": 5
+        },
+        {
+          "id": "dimmed",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "dimmed",
+          "lines": [
+            "The order to dim waited for them.",
+            "Both now report the new level."
+          ],
+          "needs": {
+            "all": [
+              {
+                "measure": {
+                  "fields": {
+                    "value": "35"
+                  },
+                  "device": "hp-light-pull-1",
+                  "key": "dim_pct",
+                  "mode": "occurred",
+                  "fromSim": 9.9,
+                  "toSim": 15.9
+                }
+              },
+              {
+                "measure": {
+                  "fields": {
+                    "value": "35"
+                  },
+                  "device": "hp-light-pull-2",
+                  "key": "dim_pct",
+                  "mode": "occurred",
+                  "fromSim": 9.9,
+                  "toSim": 15.9
+                }
+              }
+            ]
+          },
+          "holdS": 5
+        },
+        {
+          "id": "certificate",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "certificate",
+          "lines": [
+            "These chargers sign in with their",
+            "own certificates. No shared secret."
+          ],
+          "needs": null,
+          "holdS": 5
+        },
+        {
+          "id": "limit",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "limit",
+          "lines": [
+            "This morning their power limit was",
+            "halved, as a setting, not a command."
+          ],
+          "needs": null,
+          "holdS": 5
+        },
+        {
+          "id": "reported",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "reported",
+          "lines": [
+            "One applied it, one declined,",
+            "and each reported which."
+          ],
+          "needs": null,
+          "holdS": 5
+        },
+        {
+          "id": "locked-out",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "locked-out",
+          "lines": [
+            "One certificate was disabled at two.",
+            "That charger alone is locked out."
+          ],
+          "needs": null,
+          "holdS": 5
+        }
+      ],
+      "chain": {
+        "nodes": [],
+        "links": []
       }
     },
     {

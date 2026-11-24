@@ -223,7 +223,7 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	}, t.GetDeviceState)
 	register(s, c, &mcp.Tool{
 		Name:        "get_latest_measurements",
-		Description: "Read the latest (last-known) value of every metric for a device, with its data type and time; the metric name and unit are under `untrusted`. Prefer this over querying raw history for a current snapshot.",
+		Description: "Read the latest (last-known) value of every metric for a device, with its data type and time; the metric name, unit, and a STRING metric's text are under `untrusted`. Prefer this over querying raw history for a current snapshot.",
 	}, ToolRisk{
 		Exposure: ExposureTelemetry, Scale: ScaleAddressed,
 		Discloses: "the current value of every metric a named device reports — the tenant's live product data for that device, though only its present state and not its history",

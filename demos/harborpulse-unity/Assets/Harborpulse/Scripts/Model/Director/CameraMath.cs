@@ -22,6 +22,30 @@ namespace DeviceChain.Harborpulse.Model.Director
 
         static double Dot(Point3 a, Point3 b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
 
+        /// <summary>
+        /// A pose written as seven numbers, <c>x/y/z/lookX/lookY/lookZ/fov</c> (metres, and a vertical field of view in degrees): a rig's
+        /// fixed eye. Anything else is refused: a count that is not seven, a number that is not finite or is further than
+        /// <see cref="PoseReachM"/> from the origin (the scene is a few kilometres across, and an engine holds a coordinate in single
+        /// precision), an eye less than a centimetre from what it looks at, or a field of view outside 5 to 120 degrees.
+        /// </summary>
+        public const double PoseReachM = 100000;
+
+        public static CameraPose ParsePose(string text)
+        {
+            var parts = (text ?? "").Split('/');
+            if (parts.Length != 7) throw new FormatException("an eye is x/y/z/lookX/lookY/lookZ/fov");
+            var n = new double[7];
+            for (var i = 0; i < 7; i++)
+                if (!double.TryParse(parts[i], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out n[i]) || double.IsNaN(n[i]) || double.IsInfinity(n[i]))
+                    throw new FormatException("an eye is seven finite numbers; this is not one: " + parts[i]);
+            for (var i = 0; i < 6; i++)
+                if (Math.Abs(n[i]) > PoseReachM) throw new FormatException("an eye and what it looks at stand within " + PoseReachM.ToString(System.Globalization.CultureInfo.InvariantCulture) + " m of the origin; this does not: " + parts[i]);
+            double dx = n[3] - n[0], dy = n[4] - n[1], dz = n[5] - n[2];
+            if (Math.Sqrt(dx * dx + dy * dy + dz * dz) < .01) throw new FormatException("an eye must look somewhere other than at itself");
+            if (n[6] < 5 || n[6] > 120) throw new FormatException("an eye's field of view is 5 to 120 degrees");
+            return new CameraPose(new Point3(n[0], n[1], n[2]), new Point3(n[3], n[4], n[5]), n[6]);
+        }
+
         public static Basis BasisOf(CameraPose pose)
         {
             var fx = pose.Look.X - pose.Camera.X; var fy = pose.Look.Y - pose.Camera.Y; var fz = pose.Look.Z - pose.Camera.Z;
