@@ -254,7 +254,7 @@ func (api *Api) fleetAdmitDispatching(ctx context.Context, tx *gorm.DB, tenant s
 		return err
 	}
 	if instanceCount+1 > ledger.InstanceDispatchingOperations {
-		e := fleetErr(FleetCodeQuotaExceeded, "the instance already has %d operations running or paused (limit %d)", instanceCount, ledger.InstanceDispatchingOperations)
+		e := fleetErr(FleetCodeQuotaExceeded, "the instance-wide limit dispatchingOperations is reached; retry later")
 		e.Quota = "instance.dispatchingOperations"
 		return e
 	}
@@ -503,7 +503,7 @@ func (api *Api) ResumeFleetOperation(ctx context.Context, token, contractDigest 
 func (api *Api) ExpireFleetOperations(ctx context.Context, now time.Time) (int, error) {
 	var due []FleetOperation
 	if err := api.RDB.DB(ctx).Where("(dispatch = ? AND expires_at IS NOT NULL AND expires_at <= ?) OR (dispatch = ? AND created_at <= ?)",
-		FleetDispatchReady, now, FleetDispatchPlanning, now.Add(-ledger.PlanningAbandonedAfter)).Limit(100).Find(&due).Error; err != nil {
+		FleetDispatchReady, now, FleetDispatchPlanning, now.Add(-ledger.PlanningAbandonedAfter)).Order("id").Limit(100).Find(&due).Error; err != nil {
 		return 0, err
 	}
 	aborted := 0
@@ -523,6 +523,10 @@ func (api *Api) ExpireFleetOperations(ctx context.Context, now time.Time) (int, 
 		})
 		if errors.Is(err, errFleetNotDue) {
 			continue
+		}
+		var fe *FleetOperationError
+		if errors.As(err, &fe) && fe.Code == FleetCodeFencePending {
+			continue // one busy operation must not starve the rest of the sweep
 		}
 		if err != nil {
 			return aborted, err
