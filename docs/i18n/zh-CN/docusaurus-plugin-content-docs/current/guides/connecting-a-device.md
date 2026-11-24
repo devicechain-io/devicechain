@@ -173,13 +173,17 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 
 ### 告警 {#alert}
 
-**`Alert`**：设备希望让人或规则注意到的情况：
+**`Alert`**：设备上报的告警：
 
 ```json
 "payload": { "entries": [ { "type": "overheat", "level": 5, "message": "coolant over limit", "source": "ecu" } ] }
 ```
 
-`type` 必填。通知策略、规则和控制台过滤器都依据该分类字段路由，因此无类型的告警是无法采取行动的记录。`level`、`message` 和 `source` 可选。
+`type` 必填，用于对设备上报的告警分类。`level`、`message` 和 `source` 可选。
+
+设备上报的告警**会被存储并可查询**，可通过 event-management 的 GraphQL 查询 `alertEvents` 读取。
+**检测规则不会评估这些告警**：规则无法读取其 `type`、`level`、`message` 或 `source` 字段。
+设备上报的告警与检测规则触发的报警不同。
 
 ## MQTT {#mqtt}
 

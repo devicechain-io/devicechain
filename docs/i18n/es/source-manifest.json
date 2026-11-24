@@ -187,8 +187,8 @@
       "translationSha256": "79153d4f39bb25b56070631a828ab176727f38f19d9eeab3ab0ec13c5fa489be"
     },
     "deployment/versioning-policy.md": {
-      "sourceSha256": "9f1bd4b6cd007b307e2f87f65e38c4aa436d653803bc468f2d7d83d4651a42fd",
-      "translationSha256": "28b47de359c6ae878c13d6c941c7053b2ca8d219e294b7e3874edbb39909d49f"
+      "sourceSha256": "1cdacec7c864b3e0246b930b9ee69d1732ebf544a7adf90798b5122b4642380c",
+      "translationSha256": "3fad91dedb5f64b0df8356f743d4f26d34076c8e79e5a2cb008799b867bcd9cb"
     },
     "getting-help.md": {
       "sourceSha256": "86f2e15e38177a3ae5d53300a5ed6d2a1705f827bc29ab820fd9756020dc78f1",
@@ -219,8 +219,8 @@
       "translationSha256": "584f81a1a67e85273654fa886940ee6d53921e056ed4980bfec31a42e2e89570"
     },
     "guides/connecting-a-device.md": {
-      "sourceSha256": "60ea20c4af2ceb5fc043842bbac72f1714a078e0882e63de4474ac1232e244dc",
-      "translationSha256": "8739fdba7d7e9768590a9ba3f48982c9ad291ab14b8cf1cdeafec4623bbb6e6f"
+      "sourceSha256": "637bed2b00df8a1598d6d91f22b9dca9440ee4adf471fb5e3d550034d9c5e8f0",
+      "translationSha256": "3d1c4db86bb776e57b1a3c87d321812b1da1193c9f34ac3c9337da308fae14ad"
     },
     "guides/device-credentials.md": {
       "sourceSha256": "6ede441808d3660e93fba14b9a15afe02b3c64e23dca147a06347d83f0cc2cd3",

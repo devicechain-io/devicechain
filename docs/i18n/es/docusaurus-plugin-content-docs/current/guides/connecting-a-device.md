@@ -173,13 +173,17 @@ Un valor fuera de su rango se rechaza como dato inválido en la primera entrega 
 
 ### Alert {#alert}
 
-**`Alert`** — algo que el dispositivo quiere que vea una persona o una regla:
+**`Alert`** — una alerta enviada por el dispositivo:
 
 ```json
 "payload": { "entries": [ { "type": "overheat", "level": 5, "message": "coolant over limit", "source": "ecu" } ] }
 ```
 
-`type` es obligatorio. Es el clasificador por el que enrutan las políticas de notificación, las reglas y los filtros de la consola, así que una alerta sin tipo es un registro sobre el que nada puede actuar. `level`, `message` y `source` son opcionales.
+`type` es obligatorio y clasifica la alerta enviada por el dispositivo. `level`, `message` y `source` son opcionales.
+
+Las alertas enviadas por dispositivos **se almacenan y se pueden consultar** mediante la consulta GraphQL
+`alertEvents` de event-management. **Las reglas de detección no las evalúan**: no pueden leer sus campos
+`type`, `level`, `message` ni `source`. Una alerta enviada por un dispositivo es distinta de una alarma generada por una regla de detección.
 
 ## MQTT
 

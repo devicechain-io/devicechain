@@ -51,8 +51,9 @@ v1.0.0 之前，本页内容均不适用。v1.0.0 之前的发布可能改变什
 
 新增的对外接口可以先在**预览**层级中度过第一个次版本，之后才纳入上述承诺。处于预览层级的接口会在你阅读它的地方说明这一点：
 在其参考或指南页面中，对于该接口中的每个 GraphQL 操作、字段、参数、类型和枚举值，则写在各自的描述里。接口处于预览期间，可能在次版本中发生不兼容的变更；发生时，该版本在
-[发布与升级](./releases-and-upgrades.md)中的小节会说明变更内容和应对办法。接口最多在预览层级停留两个次版本（下文所述执行器类型除外）；到第二个次版本结束时，
-它会被提升并与其他接口一样受到承诺保护。对预览接口的不兼容变更并不豁免于项目的兼容性检查：它要像其他任何变更一样，在那里声明为有意的破坏性变更，
+[发布与升级](./releases-and-upgrades.md)中的小节会说明变更内容和应对办法。接口在满足自身规定的提升条件后纳入保障。
+**默认**条件是进入预览层级后经过两个次版本；接口可以在下文规定不同的条件。每个列出的接口都说明适用的条件。
+对预览接口的不兼容变更并不豁免于项目的兼容性检查：它要像其他任何变更一样，在那里声明为有意的破坏性变更，
 因此预览变更不会在无人察觉的情况下发布。预览层级的文件格式带有版本号，例如 `v1alpha1`，不认识该版本的工具会拒绝该文件，而不是去猜测。
 
 #### Instance API 兼容性 {#instance-api-compatibility}
@@ -73,14 +74,23 @@ v2.0 不会移除 `spec.grafanaSSO`、`spec.compact` 和 `InstanceConfiguration`
 当前构建中没有可执行的执行器操作：其他条件均有效的请求会以 `NotExecutableInThisBuild` 被拒绝
 （参见[集群内执行器](./kubernetes-operator.md#in-cluster-executor)）。
 
-其他预览接口包括规则测试：event-processing API 的 `evaluateRules` 操作、场景文件和测试文件的格式，以及读取它们的 `dcctl test` 命令（参见[测试你的规则](../guides/testing-your-rules.md)）。二是产品即代码：`dcctl product export`、`plan` 和 `apply` 命令及其包格式（参见[产品即代码](../guides/product-as-code.md)）。三是代理操作：`act:*` OAuth 作用域及其派生的提议权限；代理策略操作（`agentPolicy`、`agentPolicyVersions`、`saveAgentPolicyDraft`、`publishAgentPolicy`、`rollbackAgentPolicy`、`setAgentActuation`）及其文档（格式 `v1alpha1`）；`agentActuationDecision` 和 `agentExecutionDecision` 查询；运维人员的按租户控制（`tenantAgentActuation`、`setTenantAgentActuationSuspended`）；代理服务账户的创建（`ServiceAccountCreateRequest.agent`）和 `ServiceAccount.roles` 中描述的代理令牌权限；以及代理提议操作（`proposeAlarmAction`、`approveAgentProposal`、`rejectAgentProposal`、`agentProposals`、`agentProposal`）（参见[代理操作](../concepts/mcp.md#agent-actions)）。GraphQL 预览接口包括其专用的输入和结果类型、字段、参数及枚举值。`ServiceAccount.agent` 字段不属于预览：从引入它的版本起即受兼容性承诺保护。普通服务账户的角色仍受保障。目前尚未提供 MCP 操作工具；MCP 读取工具仍属于上述不受保障的工具目录。
+规则测试和产品即代码**从 v1.10 起受兼容性承诺保障**，从该版本起不再属于预览。
+规则测试包括 event-processing API 的 `evaluateRules` 操作、场景文件和测试文件的格式，以及读取它们的 `dcctl test` 命令（参见[测试你的规则](../guides/testing-your-rules.md)）。
+产品即代码包括 `dcctl product export`、`plan` 和 `apply` 命令及其包格式（参见[产品即代码](../guides/product-as-code.md)）；这两类接口均在 v1.3 进入预览。
+
+其他预览接口包括代理操作：`act:*` OAuth 作用域及其派生的提议权限；代理策略操作（`agentPolicy`、`agentPolicyVersions`、`saveAgentPolicyDraft`、`publishAgentPolicy`、`rollbackAgentPolicy`、`setAgentActuation`）及其文档（格式 `v1alpha1`）；`agentActuationDecision` 和 `agentExecutionDecision` 查询；运维人员的按租户控制（`tenantAgentActuation`、`setTenantAgentActuationSuspended`）；代理服务账户的创建（`ServiceAccountCreateRequest.agent`）和 `ServiceAccount.roles` 中描述的代理令牌权限；以及代理提议操作（`proposeAlarmAction`、`approveAgentProposal`、`rejectAgentProposal`、`agentProposals`、`agentProposal`）和 command-delivery 的 `proposeCommand`、`approveAgentProposal`、`rejectAgentProposal`、`agentProposals`、`agentProposal`（参见[代理操作](../concepts/mcp.md#agent-actions)）；提升条件：**从 v2.0 起受兼容性承诺保障，届时审批将采用通用审批模型**。
+启用后，MCP 提供预览提议工具 `propose_alarm_action` 和 `propose_command`（调用 `proposeCommand`），以及读取提议的 `get_proposal` 和 `list_my_proposals`。
+它们的提升条件为**从 v2.0 起受兼容性承诺保障，届时审批将采用通用审批模型**。由人在控制台批准；MCP 不提供批准、拒绝或执行工具。普通 MCP 读取工具仍属于上述不受保障的工具目录。
+
+自动化审查：device-management 的 `automationReviewPolicy`、`automationReviewBreakGlass`、`automationReview`、`automationReviews`、`setAutomationReviewPolicy`、`approveAutomationReviewPolicyChange`、`cancelAutomationReviewPolicyChange`、`runAutomationReview`、`approveAutomationReview`、`rejectAutomationReview`，以及 event-processing 的 `compareRuleVersions`（仅限服务身份；参见[自动化变更审查](../concepts/automation-change-review.md)）；提升条件：**从 v2.0 起受兼容性承诺保障，届时审批将采用通用审批模型**。
+GraphQL 预览接口包括其专用的输入和结果类型、字段、参数及枚举值，提升条件与所属操作相同。`ServiceAccount.agent` 字段不属于预览：从引入它的版本起即受兼容性承诺保护。普通服务账户的角色仍受保障。
 
 批量变更就绪检查从 **v1.9** 起进入预览阶段，预览期限也从该版本开始。
 在 **v1.10** 中，设备侧功能称为批量变更：`bulkChangeReadiness` 查询、
 `BulkChangeReadiness` 和 `BulkChangeEnforcement` 类型及其字段和枚举值，以及
 `dcctl bulk-change readiness` 命令。已弃用的 `fleetOperationReadiness`、
 `FleetOperationReadiness`、`FleetOperationEnforcement` 和 `dcctl fleet-op readiness`
-仍可使用，以兼容包括 v1.9 在内的客户端。更名不会重新计算预览期限。
+仍可使用，以兼容包括 v1.9 在内的客户端。更名不会重新计算预览期限。提升条件：**进入预览后经过两个次版本（默认）**。
 它们需要 `fleet:operate` 权限；具有受限范围的成员无法使用。
 
 ## 支持的升级路径 {#upgrade-paths}
