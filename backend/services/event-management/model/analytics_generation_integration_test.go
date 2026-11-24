@@ -166,3 +166,34 @@ func TestIntegrationAnalyticsEqualLowerGenerationRepairsAndStores(t *testing.T) 
 		require.Zero(t, testutil.ToFloat64(metrics.NewerSurfaceSkips))
 	}
 }
+
+// A reconcile that fails AFTER applying a repair refuses the boot without
+// advertising its generation, and without undoing the repair: an unfiltered view
+// that was rebuilt, or a stray grant that was revoked, must stay fixed while the
+// pods crash-loop on the later failure. A transaction around the reconcile rolled
+// the probe below back with the injected failure.
+func TestIntegrationAnalyticsGenerationFailureKeepsAppliedRepairs(t *testing.T) {
+	mgr := newPostgresManager(t, "dcanalyticsgenerationfailureit")
+	ctx := context.Background()
+	db := mgr.DB(core.WithSystemContext(ctx))
+	require.NoError(t, db.Exec(`UPDATE "event-management".analytics_surface_generation SET generation = 0 WHERE id = 1`).Error)
+	require.NoError(t, db.Exec(`DROP VIEW IF EXISTS analytics.generation_failure_probe`).Error)
+	t.Cleanup(func() {
+		require.NoError(t, db.Exec(`DROP VIEW IF EXISTS analytics.generation_failure_probe`).Error)
+	})
+	failure := fmt.Errorf("injected later failure")
+	err := withAnalyticsGeneration(ctx, mgr, AnalyticsSurfaceGeneration, newTestAnalyticsMetrics(), func(db *gorm.DB) error {
+		if err := db.Exec(`CREATE VIEW analytics.generation_failure_probe AS SELECT 1 AS repaired`).Error; err != nil {
+			return err
+		}
+		return failure
+	})
+	require.ErrorIs(t, err, failure)
+	var repaired int
+	require.NoError(t, db.Raw(`SELECT repaired FROM analytics.generation_failure_probe`).Scan(&repaired).Error,
+		"the repair applied before the failure must survive it")
+	require.Equal(t, 1, repaired)
+	var stored int
+	require.NoError(t, db.Raw(`SELECT generation FROM "event-management".analytics_surface_generation WHERE id = 1`).Scan(&stored).Error)
+	require.Zero(t, stored, "a failed reconciliation must not advertise its generation")
+}

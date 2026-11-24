@@ -21,26 +21,36 @@ import (
 const AnalyticsSurfaceGeneration = 1
 
 // withAnalyticsGeneration keeps the comparison, DDL and generation write under
-// the existing analytics advisory lock. A transaction commits the surface and
-// its generation together: a failed reconciliation must not advertise success.
-// The callback receives that transaction and must use it for every statement.
+// the existing analytics advisory lock, so every generation-aware pod serializes
+// on it and an older one can never act on a comparison a newer one has outdated.
+// The generation is written only after reconcile returns nil, so a failed
+// reconciliation never advertises success.
+//
+// 🔴 THE RECONCILE IS DELIBERATELY NOT WRAPPED IN A TRANSACTION. Each repair it
+// makes (a view rebuilt with its tenant predicate, a stray grant revoked) is a
+// tenant-isolation fix that must stay applied even when a LATER step refuses the
+// boot: a failed grant, a refused platform role. One transaction around the
+// whole reconcile rolled those fixes back with the failure and left the leak in
+// place while the pods crash-looped (TestIntegrationAnalyticsPrefixArmRefusesThePlatformRole
+// measured it). The lock, not a transaction, makes the compare-and-write safe;
+// the WHERE in storeAnalyticsGeneration is the second line of defence against a
+// writer that bypassed it.
 func withAnalyticsGeneration(ctx context.Context, mgr *rdb.RdbManager, generation int, metrics *AnalyticsMetrics, reconcile func(*gorm.DB) error) error {
 	var stored struct{ Generation int }
 	skipped := false
 	err := mgr.WithAdvisoryLock(ctx, rdb.AdvisoryLockKey(analyticsLockName), func() error {
-		return mgr.DB(core.WithSystemContext(ctx)).Transaction(func(tx *gorm.DB) error {
-			if err := tx.Raw(`SELECT generation FROM "event-management".analytics_surface_generation WHERE id = 1`).Scan(&stored).Error; err != nil {
-				return fmt.Errorf("reading the analytics surface generation: %w", err)
-			}
-			if stored.Generation > generation {
-				skipped = true
-				return nil
-			}
-			if err := reconcile(tx); err != nil {
-				return err
-			}
-			return storeAnalyticsGeneration(tx, generation)
-		})
+		db := mgr.DB(core.WithSystemContext(ctx))
+		if err := db.Raw(`SELECT generation FROM "event-management".analytics_surface_generation WHERE id = 1`).Scan(&stored).Error; err != nil {
+			return fmt.Errorf("reading the analytics surface generation: %w", err)
+		}
+		if stored.Generation > generation {
+			skipped = true
+			return nil
+		}
+		if err := reconcile(db); err != nil {
+			return err
+		}
+		return storeAnalyticsGeneration(db, generation)
 	})
 	if err == nil && skipped {
 		log.Info().Int("storedGeneration", stored.Generation).Int("buildGeneration", generation).
@@ -51,7 +61,7 @@ func withAnalyticsGeneration(ctx context.Context, mgr *rdb.RdbManager, generatio
 }
 
 // The WHERE is a second line of defence: even a stale writer must never lower
-// the generation. A rejected write also rolls back any DDL in its transaction.
+// the generation.
 func storeAnalyticsGeneration(db *gorm.DB, generation int) error {
 	result := db.Exec(`INSERT INTO "event-management".analytics_surface_generation (id, generation)
 		VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET generation = EXCLUDED.generation

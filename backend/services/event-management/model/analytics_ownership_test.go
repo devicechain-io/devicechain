@@ -105,7 +105,6 @@ func TestAnalyticsOwnershipStopsReconciliation(t *testing.T) {
 			key := rdb.AdvisoryLockKey(analyticsLockName)
 			mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_lock($1)")).
 				WithArgs(key).WillReturnResult(sqlmock.NewResult(0, 1))
-			mock.ExpectBegin()
 			mock.ExpectQuery(`SELECT generation FROM "event-management".analytics_surface_generation WHERE id = 1`).
 				WillReturnRows(sqlmock.NewRows([]string{"generation"}).AddRow(0))
 			// The existing identity-function refresh precedes view inspection.
@@ -114,7 +113,6 @@ func TestAnalyticsOwnershipStopsReconciliation(t *testing.T) {
 			}
 			expectAnalyticsOwnershipViews(mock, "measurement_rollups", "", damagedFirst)
 			// No repair or grant DDL is allowed after the ownership diagnosis.
-			mock.ExpectRollback()
 			mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_unlock($1)")).
 				WithArgs(key).WillReturnResult(sqlmock.NewResult(0, 1))
 

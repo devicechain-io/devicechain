@@ -27,12 +27,10 @@ func TestAnalyticsNewerGenerationLeavesSurfaceUntouched(t *testing.T) {
 	key := rdb.AdvisoryLockKey(analyticsLockName)
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_lock($1)")).
 		WithArgs(key).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT generation FROM "event-management".analytics_surface_generation WHERE id = 1`).
 		WillReturnRows(sqlmock.NewRows([]string{"generation"}).AddRow(2147483647))
 	// No function/view/grant DDL, integrity inspection, or generation write is
 	// permitted: a future surface must remain completely untouched.
-	mock.ExpectCommit()
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_unlock($1)")).
 		WithArgs(key).WillReturnResult(sqlmock.NewResult(0, 1))
 	metrics := newTestAnalyticsMetrics()
@@ -53,7 +51,6 @@ func TestAnalyticsNewerGenerationLeavesSurfaceUntouched(t *testing.T) {
 func expectAnalyticsGenerationLock(mock sqlmock.Sqlmock) {
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_lock($1)")).
 		WithArgs(rdb.AdvisoryLockKey(analyticsLockName)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectBegin()
 }
 
 func expectAnalyticsGenerationUnlock(mock sqlmock.Sqlmock) {
@@ -89,7 +86,6 @@ func TestAnalyticsEqualLowerAndUnrecordedGenerationReconcile(t *testing.T) {
 				}
 				mock.ExpectExec(`INSERT INTO "event-management".analytics_surface_generation`).
 					WithArgs(AnalyticsSurfaceGeneration).WillReturnResult(sqlmock.NewResult(0, 1))
-				mock.ExpectCommit()
 				expectAnalyticsGenerationUnlock(mock)
 				metrics := newTestAnalyticsMetrics()
 				require.NoError(t, ReconcileAnalyticsSurface(context.Background(), &rdb.RdbManager{Database: db}, metrics))
@@ -100,8 +96,13 @@ func TestAnalyticsEqualLowerAndUnrecordedGenerationReconcile(t *testing.T) {
 	}
 }
 
-func TestAnalyticsGenerationFailuresRollback(t *testing.T) {
-	for _, stage := range []string{"read", "surface", "store", "commit"} {
+// A failure anywhere refuses the boot and leaves the generation unwritten, but it
+// must NOT roll back what the reconcile already applied: each statement is a
+// tenant-isolation repair (a rebuilt view, a revoked grant) that has to survive a
+// later step refusing the boot. sqlmock fails any BEGIN/ROLLBACK it was not told
+// to expect, so a transaction around the reconcile turns every case here red.
+func TestAnalyticsGenerationFailuresKeepAppliedRepairs(t *testing.T) {
+	for _, stage := range []string{"read", "surface", "later", "store", "lowered"} {
 		t.Run(stage, func(t *testing.T) {
 			db, mock := analyticsOwnershipDB(t)
 			expectAnalyticsGenerationLock(mock)
@@ -116,25 +117,34 @@ func TestAnalyticsGenerationFailuresRollback(t *testing.T) {
 					ddl.WillReturnError(failure)
 				} else {
 					ddl.WillReturnResult(sqlmock.NewResult(0, 0))
-					store := mock.ExpectExec(`INSERT INTO "event-management".analytics_surface_generation`).WithArgs(AnalyticsSurfaceGeneration)
-					if stage == "store" {
-						store.WillReturnError(failure)
+					later := mock.ExpectExec("later DDL")
+					if stage == "later" {
+						later.WillReturnError(failure)
 					} else {
-						store.WillReturnResult(sqlmock.NewResult(0, 1))
+						later.WillReturnResult(sqlmock.NewResult(0, 0))
+						store := mock.ExpectExec(`INSERT INTO "event-management".analytics_surface_generation`).WithArgs(AnalyticsSurfaceGeneration)
+						switch stage {
+						case "store":
+							store.WillReturnError(failure)
+						case "lowered":
+							store.WillReturnResult(sqlmock.NewResult(0, 0))
+						}
 					}
 				}
 			}
-			if stage == "commit" {
-				mock.ExpectCommit().WillReturnError(failure)
-			} else {
-				mock.ExpectRollback()
-			}
 			expectAnalyticsGenerationUnlock(mock)
 			metrics := newTestAnalyticsMetrics()
-			err := withAnalyticsGeneration(context.Background(), &rdb.RdbManager{Database: db}, AnalyticsSurfaceGeneration, metrics, func(tx *gorm.DB) error {
-				return tx.Exec("surface DDL").Error
+			err := withAnalyticsGeneration(context.Background(), &rdb.RdbManager{Database: db}, AnalyticsSurfaceGeneration, metrics, func(db *gorm.DB) error {
+				if err := db.Exec("surface DDL").Error; err != nil {
+					return err
+				}
+				return db.Exec("later DDL").Error
 			})
-			require.ErrorIs(t, err, failure)
+			if stage == "lowered" {
+				require.ErrorContains(t, err, "refusing to lower")
+			} else {
+				require.ErrorIs(t, err, failure)
+			}
 			require.NoError(t, mock.ExpectationsWereMet())
 			require.Zero(t, testutil.ToFloat64(metrics.NewerSurfaceSkips))
 		})
