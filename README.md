@@ -50,6 +50,7 @@ More on the [DeviceChain YouTube channel](https://www.youtube.com/@devicechain-i
 [![Latest release](https://img.shields.io/github/v/release/devicechain-io/devicechain)](https://github.com/devicechain-io/devicechain/releases/latest)
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/devicechain)](https://artifacthub.io/packages/search?repo=devicechain)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/devicechain-io/devicechain/badge)](https://scorecard.dev/viewer/?uri=github.com/devicechain-io/devicechain)
+[![devicechain-io/devicechain MCP server](https://glama.ai/mcp/servers/devicechain-io/devicechain/badges/score.svg)](https://glama.ai/mcp/servers/devicechain-io/devicechain)
 
 - **Closes the loop.** A rule can raise an alarm and command the device, and a command is tracked until the device reports the result or its time-to-live runs out ([commands](https://docs.devicechain.io/concepts/commands), [event processing](https://docs.devicechain.io/concepts/event-processing)).
 - **Measured, with the results published.** Throughput was measured on Google Kubernetes Engine and every stored event was checked, with the setup and the limits of each run stated ([measured throughput](https://docs.devicechain.io/deployment/bootstrap#measured-throughput)). Container images and the Helm chart are signed ([verifying releases](https://docs.devicechain.io/deployment/verifying-releases)).
