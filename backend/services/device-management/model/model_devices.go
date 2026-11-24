@@ -307,7 +307,8 @@ type Device struct {
 	DisabledAt sql.NullTime
 
 	// StateGeneration advances on every explicit enabled write, including a
-	// same-value write. NULL is legacy history, never proof of unchanged state.
+	// same-value write. NULL reads as 0: no generation-aware writer has written the
+	// enabled state since the column existed (effect_generations.go states the rule).
 	StateGeneration sql.NullInt64
 
 	// GatewayId is the id of the GATEWAY device that fronts this one: the only device whose

@@ -4,10 +4,14 @@
 package model
 
 import (
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestStateGenerationOrdinaryAPI(t *testing.T) {
@@ -170,4 +174,66 @@ func TestStaticMembershipGenerationCascade(t *testing.T) {
 		Where("tenant_id = ? AND group_id = ? AND member_type = ? AND member_id = ?", "acme", g.ID, "device", d).
 		Pluck("generation", &generation).Error)
 	require.EqualValues(t, 2, generation, "cascade deletion preserves the removed edge's head")
+}
+
+// A group's deletion removes every member edge in one call. Its bookkeeping must not cost
+// statements per member: the classification is memoized and the heads advance in one
+// multi-row upsert per chunk, so a large static group deletes in a handful of statements
+// rather than three per member, inside the transaction that holds the group's locks.
+// A logical edge stored twice (two tokens, same group and member) advances its head once
+// per row, exactly as two single removals would.
+func TestStaticMembershipCascadeIsSetBased(t *testing.T) {
+	api, ctx := newScopingTestApi(t)
+	const members = 40
+	g, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{Token: "big", MemberType: "device"})
+	require.NoError(t, err)
+	requests := make([]*EntityRelationshipCreateRequest, 0, members+1)
+	ids := make([]uint, 0, members)
+	for i := 0; i < members; i++ {
+		token := fmt.Sprintf("big-%02d", i)
+		ids = append(ids, seedDeviceWithClimate(t, api, ctx, token, ""))
+		requests = append(requests, &EntityRelationshipCreateRequest{Token: "edge-" + token, SourceType: "group",
+			Source: "big", TargetType: "device", Target: token, RelationshipType: MembershipRelationshipType})
+	}
+	requests = append(requests, &EntityRelationshipCreateRequest{Token: "edge-dup", SourceType: "group",
+		Source: "big", TargetType: "device", Target: "big-00", RelationshipType: MembershipRelationshipType})
+	_, err = api.CreateEntityRelationships(ctx, requests)
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	var bookkeeping []string
+	name := fmt.Sprintf("test:effect-generation-statements-%d", stmtCounterSeq.Add(1))
+	record := func(tx *gorm.DB) {
+		sql := tx.Statement.SQL.String()
+		if strings.Contains(sql, "static_membership_generations") || strings.Contains(sql, "entity_relationship_types") ||
+			(strings.Contains(sql, "entity_groups") && !strings.Contains(sql, "entity_group_")) {
+			mu.Lock()
+			bookkeeping = append(bookkeeping, sql)
+			mu.Unlock()
+		}
+	}
+	require.NoError(t, api.RDB.Database.Callback().Query().After("gorm:query").Register(name+"-q", record))
+	require.NoError(t, api.RDB.Database.Callback().Create().After("gorm:create").Register(name+"-c", record))
+	removed, err := api.DeleteEntityGroup(ctx, "big")
+	require.NoError(t, err)
+	require.True(t, removed)
+	require.NoError(t, api.RDB.Database.Callback().Query().Remove(name+"-q"))
+	require.NoError(t, api.RDB.Database.Callback().Create().Remove(name+"-c"))
+	mu.Lock()
+	taken := append([]string(nil), bookkeeping...)
+	mu.Unlock()
+	require.Less(t, len(taken), 12, "generation bookkeeping must not scale with the member count:\n%s",
+		strings.Join(taken, "\n"))
+
+	heads := map[uint]int64{}
+	var rows []StaticMembershipGeneration
+	require.NoError(t, api.RDB.DB(ctx).Where("group_id = ?", g.ID).Find(&rows).Error)
+	for _, row := range rows {
+		heads[row.MemberId] = row.Generation
+	}
+	require.Len(t, heads, members)
+	require.EqualValues(t, 4, heads[ids[0]], "two adds and two removals of one logical edge")
+	for _, id := range ids[1:] {
+		require.EqualValues(t, 2, heads[id])
+	}
 }
