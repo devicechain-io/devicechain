@@ -15,10 +15,10 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
-const prevRelease = "v1.8.0"
+const prevRelease = "v1.9.0"
 
-// Source commit: 17222e56f556d7c11495dbc1a80e3e87b1304487 (all v1.8.0 citations below).
-// Frozen from v1.8.0:backend/core/cmddownlink/wire.go:ResponseEnvelope.
+// Source commit: 796ecfaaa44846f44752fc9335bcb9c4573a720a (all v1.9.0 citations below).
+// Frozen from v1.9.0:backend/core/cmddownlink/wire.go:ResponseEnvelope.
 // Field order and tags are verbatim; PublishResponseContext marshals this struct.
 type responseEnvelopePrev struct {
 	CommandToken string  `json:"commandToken"`
@@ -50,16 +50,15 @@ const (
 // reasonPayload encodes {"reason":"X"}; success maps marshal with sorted keys.
 // Variable error inputs are pinned to concrete examples: ErrBadLink, an out-of-range
 // fPort, HTTP 400 with no gRPC name, and the egress guard's ErrBlocked.
-// Re-generated from the source commit above by invoking Adapter.handle/awaitAck,
-// AckFeed.handle/Sweep and capturing ResponseWriter message bytes in a disposable
-// lpwan test. All 25 cases compared byte for byte unchanged, including the confirmed
-// webhook correlation refusal and final-delivery capacity-wait refusal; none added or removed.
+// The producer sources at the commit above are byte-identical to v1.8.0.
+// All 25 frozen cases are retained unchanged, including the confirmed webhook
+// correlation refusal and final-delivery capacity-wait refusal.
 // HTTP 400 used ChirpStack.Enqueue; the blocked error used classifyTransport.
 // Their text originates in adapter.go, params.go:ParamError.Error/ParseParams and
 // chirpstack.go:ChirpStack.Enqueue/classifyTransport in the same tag.
-// Producers: v1.8.0:backend/services/outbound-connectors/lpwan/adapter.go:
-// Adapter.handle/refuse/finish/awaitAck; v1.8.0:backend/services/outbound-connectors/lpwan/ackfeed.go:
-// AckFeed.handle/respond/Sweep; v1.8.0:backend/core/cmddownlink/wire.go:PublishResponseContext.
+// Producers: v1.9.0:backend/services/outbound-connectors/lpwan/adapter.go:
+// Adapter.handle/refuse/finish/awaitAck; v1.9.0:backend/services/outbound-connectors/lpwan/ackfeed.go:
+// AckFeed.handle/respond/Sweep; v1.9.0:backend/core/cmddownlink/wire.go:PublishResponseContext.
 // Concrete inputs also include a confirmed webhook with no correlation template, and
 // a final delivery cancelled while waiting for tenant capacity (context canceled).
 const (

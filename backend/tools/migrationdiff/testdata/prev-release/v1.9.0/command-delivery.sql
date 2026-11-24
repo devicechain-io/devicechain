@@ -1,3 +1,4 @@
+ALTER SEQUENCE "command-delivery".agent_proposals_id_seq OWNED BY "command-delivery".agent_proposals.id;
 ALTER SEQUENCE "command-delivery".audit_events_id_seq OWNED BY "command-delivery".audit_events.id;
 ALTER SEQUENCE "command-delivery".campaign_cycles_id_seq OWNED BY "command-delivery".campaign_cycles.id;
 ALTER SEQUENCE "command-delivery".campaign_elements_id_seq OWNED BY "command-delivery".campaign_elements.id;
@@ -6,6 +7,11 @@ ALTER SEQUENCE "command-delivery".command_batches_id_seq OWNED BY "command-deliv
 ALTER SEQUENCE "command-delivery".commands_id_seq OWNED BY "command-delivery".commands.id;
 ALTER SEQUENCE "command-delivery".device_gate_syncs_id_seq OWNED BY "command-delivery".device_gate_syncs.id;
 ALTER SEQUENCE "command-delivery".device_gates_id_seq OWNED BY "command-delivery".device_gates.id;
+ALTER TABLE ONLY "command-delivery".agent_actuation_fences
+ ADD CONSTRAINT agent_actuation_fences_pkey PRIMARY KEY (tenant_id);
+ALTER TABLE ONLY "command-delivery".agent_proposals
+ ADD CONSTRAINT agent_proposals_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "command-delivery".agent_proposals ALTER COLUMN id SET DEFAULT nextval('"command-delivery".agent_proposals_id_seq'::regclass);
 ALTER TABLE ONLY "command-delivery".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "command-delivery".audit_events ALTER COLUMN id SET DEFAULT nextval('"command-delivery".audit_events_id_seq'::regclass);
@@ -34,6 +40,13 @@ ALTER TABLE ONLY "command-delivery".device_gates
 ALTER TABLE ONLY "command-delivery".device_gates ALTER COLUMN id SET DEFAULT nextval('"command-delivery".device_gates_id_seq'::regclass);
 ALTER TABLE ONLY "command-delivery".purged_tenants
  ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
+CREATE INDEX "idx_command-delivery_agent_proposals_deleted_at" ON "command-delivery".agent_proposals USING btree (deleted_at);
+CREATE INDEX "idx_command-delivery_agent_proposals_expires_at" ON "command-delivery".agent_proposals USING btree (expires_at);
+CREATE INDEX "idx_command-delivery_agent_proposals_proposer_client" ON "command-delivery".agent_proposals USING btree (proposer_client);
+CREATE INDEX "idx_command-delivery_agent_proposals_proposer_sub" ON "command-delivery".agent_proposals USING btree (proposer_sub);
+CREATE INDEX "idx_command-delivery_agent_proposals_state" ON "command-delivery".agent_proposals USING btree (state);
+CREATE INDEX "idx_command-delivery_agent_proposals_tenant_id" ON "command-delivery".agent_proposals USING btree (tenant_id);
+CREATE INDEX "idx_command-delivery_agent_proposals_token" ON "command-delivery".agent_proposals USING btree (token);
 CREATE INDEX "idx_command-delivery_campaign_cycles_tenant_id" ON "command-delivery".campaign_cycles USING btree (tenant_id);
 CREATE INDEX "idx_command-delivery_campaign_elements_tenant_id" ON "command-delivery".campaign_elements USING btree (tenant_id);
 CREATE INDEX "idx_command-delivery_campaigns_deleted_at" ON "command-delivery".campaigns USING btree (deleted_at);
@@ -46,6 +59,7 @@ CREATE INDEX "idx_command-delivery_commands_deleted_at" ON "command-delivery".co
 CREATE INDEX "idx_command-delivery_commands_device_token" ON "command-delivery".commands USING btree (device_token);
 CREATE INDEX "idx_command-delivery_commands_status" ON "command-delivery".commands USING btree (status);
 CREATE INDEX "idx_command-delivery_commands_token" ON "command-delivery".commands USING btree (token);
+CREATE INDEX idx_agent_proposals_decided_at ON "command-delivery".agent_proposals USING btree (decided_at, id) WHERE (decided_at IS NOT NULL);
 CREATE INDEX idx_audit_tenant_time ON "command-delivery".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_campaign_cycles_created ON "command-delivery".campaign_cycles USING btree (tenant_id, created_at);
 CREATE INDEX idx_campaign_elements_batch ON "command-delivery".campaign_elements USING btree (tenant_id, batch_token) WHERE (batch_token IS NOT NULL);
@@ -65,6 +79,12 @@ CREATE INDEX idx_commands_tenant_status ON "command-delivery".commands USING btr
 CREATE INDEX idx_commands_window_waiting ON "command-delivery".commands USING btree (tenant_id, window_token) WHERE ((deleted_at IS NULL) AND (window_token IS NOT NULL) AND ((status)::text = ANY ((ARRAY['QUEUED'::character varying, 'HELD'::character varying, 'PARKED'::character varying])::text[])));
 CREATE INDEX idx_device_gates_disabled ON "command-delivery".device_gates USING btree (tenant_id, device_token) WHERE disabled;
 CREATE SCHEMA "command-delivery";
+CREATE SEQUENCE "command-delivery".agent_proposals_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
 CREATE SEQUENCE "command-delivery".audit_events_id_seq
  START WITH 1
  INCREMENT BY 1
@@ -113,6 +133,48 @@ CREATE SEQUENCE "command-delivery".device_gates_id_seq
  NO MINVALUE
  NO MAXVALUE
  CACHE 1;
+CREATE TABLE "command-delivery".agent_actuation_fences (
+ tenant_id character varying(128) NOT NULL,
+ enabled boolean NOT NULL,
+ killed_at_generation bigint NOT NULL,
+ epoch bigint NOT NULL,
+ updated_at timestamp with time zone NOT NULL
+);
+CREATE TABLE "command-delivery".agent_proposals (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ token character varying(64) NOT NULL,
+ request_id character varying(128) NOT NULL,
+ effect_token character varying(64) NOT NULL,
+ kind character varying(32) NOT NULL,
+ state character varying(16) NOT NULL,
+ payload jsonb NOT NULL,
+ target_set jsonb NOT NULL,
+ dependencies jsonb NOT NULL,
+ digest character varying(80) NOT NULL,
+ impact character varying(16) NOT NULL,
+ target_count bigint NOT NULL,
+ proposer_sub character varying(320) NOT NULL,
+ proposer_client character varying(255) NOT NULL,
+ client_attested boolean NOT NULL,
+ proposer_sid character varying(64),
+ provenance jsonb,
+ rationale character varying(2048),
+ policy_version bigint NOT NULL,
+ required_approvals bigint NOT NULL,
+ approvals jsonb NOT NULL,
+ revision bigint NOT NULL,
+ reasons jsonb NOT NULL,
+ expires_at timestamp with time zone NOT NULL,
+ result_ref character varying(128),
+ decided_at timestamp with time zone,
+ decided_by character varying(320),
+ note character varying(512),
+ executed_at timestamp with time zone
+);
 CREATE TABLE "command-delivery".audit_events (
  id bigint NOT NULL,
  occurred_time timestamp with time zone NOT NULL,
@@ -234,7 +296,15 @@ CREATE TABLE "command-delivery".commands (
  delivery_mode character varying(16),
  max_attempts integer,
  delivery_attempts integer,
- device_incarnation bigint
+ device_incarnation bigint,
+ cause_kind character varying(16),
+ cause_rule_id text,
+ cause_detection_kind character varying(64),
+ cause_detected_at character varying(64),
+ cause_value double precision,
+ cause_alarm_key text,
+ cause_position_derived boolean,
+ proposal_token character varying(64)
 );
 CREATE TABLE "command-delivery".device_gate_syncs (
  id bigint NOT NULL,
@@ -256,11 +326,14 @@ CREATE TABLE "command-delivery".purged_tenants (
  planted_at timestamp with time zone NOT NULL,
  completed_at timestamp with time zone
 );
+CREATE UNIQUE INDEX uix_agent_proposals_request ON "command-delivery".agent_proposals USING btree (tenant_id, proposer_client, proposer_sub, request_id) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_agent_proposals_tenant_token ON "command-delivery".agent_proposals USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_campaign_cycles_key ON "command-delivery".campaign_cycles USING btree (tenant_id, campaign_id, cycle_key);
 CREATE UNIQUE INDEX uix_campaign_elements_device ON "command-delivery".campaign_elements USING btree (tenant_id, cycle_id, step, device_token);
 CREATE UNIQUE INDEX uix_campaigns_tenant_token ON "command-delivery".campaigns USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_command_batches_tenant_token ON "command-delivery".command_batches USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_commands_batch_device ON "command-delivery".commands USING btree (tenant_id, batch_id, device_token) WHERE ((batch_id IS NOT NULL) AND (deleted_at IS NULL));
+CREATE UNIQUE INDEX uix_commands_tenant_proposal ON "command-delivery".commands USING btree (tenant_id, proposal_token) WHERE (proposal_token IS NOT NULL);
 CREATE UNIQUE INDEX uix_commands_tenant_token ON "command-delivery".commands USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_device_gate_syncs_tenant ON "command-delivery".device_gate_syncs USING btree (tenant_id);
 CREATE UNIQUE INDEX uix_device_gates_tenant_device ON "command-delivery".device_gates USING btree (tenant_id, device_token);
