@@ -40,7 +40,7 @@ func newBatchWireCtx(t *testing.T) context.Context {
 		&model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{}, &model.DeviceProfileActivation{}, &model.CommandDefinition{}, &model.MetricDefinition{},
 		&model.DetectionRule{}, &model.EntityAttribute{}, &model.AttributeGeneration{}, &model.EntityGroup{}, &model.IssuedGroupToken{},
 		&model.EntityGroupVersion{}, &model.EntityGroupMembership{}, &model.EntityGroupFacetRef{},
-		&model.DetectionRuleScopeRef{}, &model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{},
+		&model.DetectionRuleScopeRef{}, &model.EntityRelationship{}, &model.StaticMembershipGeneration{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{},
 		&model.EntityRelationshipType{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
