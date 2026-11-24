@@ -278,8 +278,8 @@ whether an alarm that nobody acknowledges is re-sent. Policies apply to every de
 the tenant.
 """
 # A tenant's routing policy: which raised alarms get delivered, to whom, through
-# which channels. Every policy is tenant-wide: `deviceTypeToken` is NOT honoured
-# yet and is refused at write (see NotificationPolicyCreateRequest), so it is null
+# which channels. Every policy is tenant-wide: `deviceTypeToken` was never applied
+# and is deprecated; it is refused at write (see NotificationPolicyCreateRequest), so it is null
 # on any policy that exists. `throttleSeconds` is the minimum gap between
 # notifications for the same alarm (null = no throttle). `escalateAfterSeconds`, when
 # set (> 0), re-notifies an alarm that stays unacknowledged and uncleared that long
@@ -310,8 +310,8 @@ type NotificationPolicy {
     name: String
     """Free-text description of what the policy is for."""
     description: String
-    """Always null: policies cannot yet be limited to a device type, and a request that tries is refused."""
-    deviceTypeToken: String
+    """Always null: device-type scoping was never applied, and a non-blank value is refused at write. Scoping by anchor or group is planned."""
+    deviceTypeToken: String @deprecated(reason: "Deprecated in v1.10: device-type scoping was never applied. Will be removed in a future major. Leave unset for tenant-wide policies; scoping by anchor or group is planned.")
     """
     Minimum number of seconds between notifications about the same alarm; a notification
     inside the window is suppressed, except when the alarm's severity has escalated. Null
@@ -403,12 +403,12 @@ input NotificationPolicyCreateRequest {
     name: String
     """Free-text description of what the policy is for."""
     description: String
-    """Not supported yet: any non-blank value is rejected. Leave it unset to create a policy that applies to every device."""
-    # NOT HONOURED YET — a non-empty value is REJECTED at write. The dispatcher
+    """Device-type scoping was never applied: any non-blank value is rejected. Leave it unset to create a policy that applies to every device. Scoping by anchor or group is planned."""
+    # DEPRECATED — a non-empty value is REJECTED at write. The dispatcher
     # skips a device-type-scoped policy rather than applying it tenant-wide, so
     # accepting this would return success on a policy that delivers nothing.
     # Leave it unset for a tenant-wide policy.
-    deviceTypeToken: String
+    deviceTypeToken: String @deprecated(reason: "Deprecated in v1.10: device-type scoping was never applied. Will be removed in a future major. Leave unset for tenant-wide policies; scoping by anchor or group is planned.")
     """Minimum seconds between notifications about the same alarm. Omit it for no throttle."""
     throttleSeconds: Int
     """Seconds after an alarm's last notification before an unacknowledged, uncleared alarm is re-sent. Omit it or use 0 for no escalation."""
@@ -519,8 +519,8 @@ input NotificationPolicySearchCriteria {
     pageNumber: Int!
     """Policies per page. A value below 1 is treated as 100; a value above 1000 is capped at 1000."""
     pageSize: Int!
-    """Return only policies scoped to this device type. Policies cannot yet be scoped, so any value matches nothing."""
-    deviceTypeToken: String
+    """Device-type scoping was never applied. Any supplied value matches no API-created policy; omit this filter to include tenant-wide policies. Scoping by anchor or group is planned."""
+    deviceTypeToken: String @deprecated(reason: "Deprecated in v1.10: device-type scoping was never applied. Will be removed in a future major. Leave unset for tenant-wide policies; scoping by anchor or group is planned.")
     """Return only enabled (true) or only disabled (false) policies. Omit it to return both."""
     enabled: Boolean
 }
