@@ -1220,9 +1220,14 @@ Detailed, per-type reference pages will be generated from the schemas as they st
 
 `SECRET_RESUPPLY_REQUIRED` means an update would send a stored credential to a different destination or present it differently. On `updateConnector`, `updateNotificationChannel` or `updateAiProvider`, supply `secret` again in the same request, or clear it with `secret: null`. For a connector rollback with a different binding, use `updateConnector` with the target configuration and its credential instead.
 
-## Fleet operation readiness (Preview) {#fleet-operation-readiness}
+## Bulk change readiness (Preview) {#fleet-operation-readiness}
 
-Preview. The device-management tenant data plane exposes `fleetOperationReadiness` to callers
+In v1.10, device fleet operations are called **bulk changes**. Use `bulkChangeReadiness: BulkChangeReadiness!` and
+`BulkChangeEnforcement`. The deprecated `fleetOperationReadiness` field and its
+`FleetOperationReadiness` / `FleetOperationEnforcement` types keep working for v1.9 clients.
+`dcctl fleet-op readiness` also keeps working and prints a one-line deprecation notice to stderr.
+
+Preview. The device-management tenant data plane exposes `bulkChangeReadiness` to callers
 with `fleet:operate`; scoped members are refused. It reports the build's writer protocol version,
 fresh database enforcement state, executable operation kinds and a fresh count of orphaned
 device attribute and generation rows in the caller's tenant (including soft-deleted attributes).
@@ -1238,5 +1243,5 @@ The Preview command prints the same four facts and exits successfully only when 
 and instance flags as `dcctl attr`:
 
 ```bash
-dcctl fleet-op readiness --tenant acme --email ops@example.com --password <password> -o json
+dcctl bulk-change readiness --tenant acme --email ops@example.com --password <password> -o json
 ```

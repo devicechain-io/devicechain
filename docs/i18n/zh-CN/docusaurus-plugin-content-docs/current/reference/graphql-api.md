@@ -1000,9 +1000,15 @@ Schema 稳定后，将根据它们生成详细的逐类型参考页面。
 
 `SECRET_RESUPPLY_REQUIRED` 表示更新会改变已存储凭据的目标或发送方式。使用 `updateConnector`、`updateNotificationChannel` 或 `updateAiProvider` 时，请在同一请求中重新发送 `secret`，或使用 `secret: null` 删除凭据。若连接器回滚的目标不同，请改用 `updateConnector` 并提供目标配置和凭据。
 
-## 设备群操作就绪检查（Preview） {#fleet-operation-readiness}
+## 批量变更就绪检查（Preview） {#fleet-operation-readiness}
 
-Preview. device-management 租户数据平面提供 `fleetOperationReadiness` 查询，需要
+从 v1.10 起，设备群操作称为**批量变更**。
+请使用 `bulkChangeReadiness: BulkChangeReadiness!` 和 `BulkChangeEnforcement`。
+已弃用的 `fleetOperationReadiness` 字段及其 `FleetOperationReadiness` /
+`FleetOperationEnforcement` 类型仍可供 v1.9 客户端使用。
+`dcctl fleet-op readiness` 也仍可使用，并向 stderr 输出一行弃用提示。
+
+Preview. device-management 租户数据平面提供 `bulkChangeReadiness` 查询，需要
 `fleet:operate` 权限；具有受限范围的成员无法使用。查询返回构建遵循的写入协议版本、
 数据库当前的强制执行状态、可执行的操作类型，以及调用者租户中设备属性和代际孤立行的
 实时计数（包括软删除属性）。在 v1.9 中，状态为 `NOT_INSTALLED`，且没有可执行类型；
@@ -1015,5 +1021,5 @@ Preview 命令显示相同的四项信息，仅在状态为 `ENFORCED` 且孤立
 v1.9 中非零退出码是预期行为。登录及实例选项与 `dcctl attr` 相同：
 
 ```bash
-dcctl fleet-op readiness --tenant acme --email ops@example.com --password <password> -o json
+dcctl bulk-change readiness --tenant acme --email ops@example.com --password <password> -o json
 ```
