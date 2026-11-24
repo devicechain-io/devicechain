@@ -119,6 +119,7 @@ var sanctionedSystemContexts = map[string][]string{
 		"Api.RollupUsagePass"},
 	"backend/services/event-management/processor/backfill/worker.go": {"Worker.pass"},
 	"backend/services/event-management/processor/backfill/tail.go":   {"TailSweeper.sweep", "TailSweeper.refreshWithLock"},
+	"backend/services/event-management/processor/backfill/hourly.go": {"hourlyDBProgress.scoped"},
 	// The DETECT engine is a per-Instance singleton. At startup it holds no tenant and
 	// must rebuild its rule set, dead-man arming and dynamic-threshold view from every
 	// tenant's rows, so each of these four reads the whole projection. They are the only

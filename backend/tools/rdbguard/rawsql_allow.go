@@ -97,6 +97,13 @@ var rawSQLAllowList = []siteEntry{
 			"VALUES list of bound text values with no table in it, so it reads and writes no row of any tenant",
 	},
 
+	{
+		Path: "backend/services/event-management/processor/backfill/hourly.go", Func: "hourlyDBProgress.bounds", Count: 1,
+		Why: "the hour backfill finds the EARLIEST bucket any tenant still holds, under a system context, to " +
+			"set the floor of a refresh that is itself instance-wide (a continuous aggregate refresh has no " +
+			"tenant predicate): constant text returning one min() timestamp, no row of any tenant leaves it",
+	},
+
 	// --- metering ---
 	{
 		Path: "backend/services/event-management/model/usage.go", Func: "rollupHour", Count: 4,
