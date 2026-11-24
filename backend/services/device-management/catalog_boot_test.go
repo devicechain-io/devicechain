@@ -61,6 +61,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevReaper, prevClassifier, prevMarkerHeal := AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal
 	prevReportMaintenance := ConfigurationReportMaintenance
 	prevOrphanSweep := AttributeOrphanSweep
+	prevFleetExpirySweep := FleetExpirySweep
 	prevPeers := servicePeers
 	prevPin := IssuerPin
 	ProvisioningTenants = nil
@@ -77,6 +78,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		AgentProposalReaper, AlarmPositionClassifier, CreateEnrollMarkerHeal = prevReaper, prevClassifier, prevMarkerHeal
 		ConfigurationReportMaintenance = prevReportMaintenance
 		AttributeOrphanSweep = prevOrphanSweep
+		FleetExpirySweep = prevFleetExpirySweep
 	})
 
 	issuer, err := nkeys.CreateAccount()
@@ -109,7 +111,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	servicePeers = svcclient.NewPeers(Microservice.InstanceConfiguration.Infrastructure, Microservice.FunctionalArea)
 	safetyGates = service.FromManagers(Microservice, service.Managers{}).SafetyGates()
 
-	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.EntityAttribute{}, &model.AttributeGeneration{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{}, &model.DeviceConfigurationReport{})...)
+	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.EntityAttribute{}, &model.AttributeGeneration{}, &model.PendingOwnershipFact{}, &model.PendingEntityDeletion{}, &model.PendingAlarmEvent{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationExpansion{}, &model.PendingRevocationExpansionSerial{}, &model.AgentProposal{}, &model.DeviceConfigurationReport{}, &model.FleetOperation{}, &model.FleetOperationLine{}, &model.FleetOperationEvent{})...)
 	RdbManager = &rdb.RdbManager{Database: db}
 	DeviceSecretKey = dmtest.DeviceSecretKey()
 	SecretTransit = testTransit(t)
@@ -151,6 +153,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 				return err
 			}
 			if err = initAttributeOrphanSweep(); err != nil {
+				return err
+			}
+			if err = initFleetExpirySweep(); err != nil {
 				return err
 			}
 			if err = initDecodeAccounting(); err != nil {

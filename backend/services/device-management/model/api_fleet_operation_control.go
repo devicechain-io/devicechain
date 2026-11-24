@@ -509,22 +509,22 @@ func (api *Api) ResumeFleetOperation(ctx context.Context, token, contractDigest 
 // each through the same fence as any other control transition. It returns how many it aborted.
 func (api *Api) ExpireFleetOperations(ctx context.Context, now time.Time) (int, error) {
 	var due []FleetOperation
-	if err := api.RDB.DB(ctx).Where("(dispatch = ? AND expires_at IS NOT NULL AND expires_at <= ?) OR (dispatch = ? AND created_at <= ?)",
-		FleetDispatchReady, now, FleetDispatchPlanning, now.Add(-ledger.PlanningAbandonedAfter)).Order("id").Limit(100).Find(&due).Error; err != nil {
+	if err := fleetExpiryCandidates(api.RDB.DB(ctx), now).Order("id").Limit(100).Find(&due).Error; err != nil {
 		return 0, err
 	}
 	aborted := 0
+	var lastErr error
 	for _, d := range due {
-		reason := FleetAbortExpiredUnstarted
-		if d.Dispatch == FleetDispatchPlanning {
-			reason = FleetAbortPlanningDropped
-		}
 		_, err := api.fleetControl(ctx, d.Token, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
 			// Re-judged under the fence: a start or a finisher may have got here first.
 			stillReady := op.Dispatch == FleetDispatchReady && op.ExpiresAt.Valid && !op.ExpiresAt.Time.After(now)
 			stillPlanning := op.Dispatch == FleetDispatchPlanning && !op.CreatedAt.After(now.Add(-ledger.PlanningAbandonedAfter))
-			if !stillReady && !stillPlanning {
+			if (!stillReady && !stillPlanning) || !ledger.Drivable(ledger.DriverProtocol(op.DriverProtocol)) {
 				return nil, nil, errFleetNotDue
+			}
+			reason := FleetAbortExpiredUnstarted
+			if stillPlanning {
+				reason = FleetAbortPlanningDropped
 			}
 			return fleetAbortChanges(tx, op, "", reason, fleetEventExpire)
 		})
@@ -536,11 +536,16 @@ func (api *Api) ExpireFleetOperations(ctx context.Context, now time.Time) (int, 
 			continue // one busy operation must not starve the rest of the sweep
 		}
 		if err != nil {
-			return aborted, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return aborted, ctxErr
+			}
+			// One operation that keeps failing must not hold back the tenant's others, which sort after it.
+			lastErr = err
+			continue
 		}
 		aborted++
 	}
-	return aborted, nil
+	return aborted, lastErr
 }
 
 var errFleetNotDue = errors.New("the operation is no longer due")

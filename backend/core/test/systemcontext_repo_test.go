@@ -77,6 +77,8 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/api_attribute_repairs.go": {"Api.DrainAttributeRepairs"},
 	// The configuration-report maintenance lists the tenants that have report history (no row is read), then removes orphans and expired rows under each tenant's own core.WithTenant.
 	"backend/services/device-management/model/api_configuration_report_maintenance.go": {"Api.configurationReportTenants"},
+	// Expiry discovers at most ten tenant IDs (no row is read); every operation read and transition then uses that tenant's own context.
+	"backend/services/device-management/model/api_fleet_expiry_sweep.go": {"Api.fleetExpiryTenants"},
 	// Create admission counts the instance-wide fleet-operation budgets (counts only, no row of any tenant is read) under the tenant and instance admission locks.
 	"backend/services/device-management/model/api_fleet_operation.go": {"Api.fleetAdmit"},
 	// Start admission counts the instance-wide dispatching budget (a count only, no row of any tenant is read) under the tenant and instance admission locks.

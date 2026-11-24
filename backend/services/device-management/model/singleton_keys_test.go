@@ -19,6 +19,7 @@ func TestSingletonLockKeys(t *testing.T) {
 		{entityDeletionDrainLockName, -8927562942761546113},
 		{ownershipDrainLockName, 5481199707940735846},
 		{sessionKickDrainLockName, 286895151743108058},
+		{fleetExpirySweepLockName, 2192865227929526989},
 	} {
 		if got := rdb.AdvisoryLockKey(tc.name); got != tc.want {
 			t.Errorf("%s: key %d, want %d", tc.name, got, tc.want)
