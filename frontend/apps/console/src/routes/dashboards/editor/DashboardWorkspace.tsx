@@ -84,6 +84,7 @@ import { PageShell } from '@/components/ui/page-shell';
 import { CopyToken } from '@/components/ui/copy-token';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Select, SelectItem } from '@/components/ui/select';
 import { Combobox } from '@/components/ui/combobox';
 import {
   DropdownMenu,
@@ -101,7 +102,7 @@ import { DashboardCanvas } from './DashboardCanvas';
 import { UnknownWidgetPanel, WidgetConfigPanel } from './WidgetConfigPanel';
 import { VersionHistorySheet } from './VersionHistorySheet';
 import { AddWidgetMenu } from './AddWidgetMenu';
-import { publishLayoutBlockers, spanLimitsFor } from './layoutFindings';
+import { inlineFindings, layoutFindingsOf, LAYOUT_FINDING_KEYS, publishLayoutBlockers, spanLimitsFor } from './layoutFindings';
 import { WorkspaceConnection } from './WorkspaceConnection';
 import { exportDefinitionJson } from './exportDefinition';
 import { DashboardImportDrawer } from '../import/DashboardImportDrawer';
@@ -112,6 +113,8 @@ import { readWidgetClipboard, writeWidgetClipboard } from './widgetClipboard';
 import '@/i18n/lazy/dashboards';
 
 type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; message: string };
+
+const PREVIEW_WIDTHS = [390, 768, 960, 1366, 1920, 3840] as const;
 
 // useDebouncedValue returns `value`, but only advances the returned value `ms` after
 // `key` stops changing (rapid changes reset the timer). The initial value applies
@@ -494,6 +497,12 @@ export function DashboardWorkspace({
   // can validate layout/scales/thresholds before any device reports. It's a view
   // concern only — it never touches the definition, so it can't affect dirty/save.
   const [preview, setPreview] = useState(false);
+  // Local display state: changing the preview never enters the definition or undo history.
+  const [viewportWidth, setViewportWidth] = useState<number | undefined>();
+  const viewportFindings = useMemo(
+    () => viewportWidth === undefined ? [] : inlineFindings(layoutFindingsOf(working, registry, viewportWidth)),
+    [working, registry, viewportWidth],
+  );
   const [generator, setGenerator] = useState<SyntheticGenerator>('sine');
   const synthetic = useMemo(() => new SyntheticDataSource({ generator }), [generator]);
   useEffect(() => () => synthetic.disposeAll(), [synthetic]);
@@ -917,6 +926,18 @@ export function DashboardWorkspace({
   // can lay out against synthetic data or review it.
   const previewControl = (
     <div className="flex items-center gap-2">
+      <div className="w-40">
+        <Select
+          ariaLabel={t('workspaceViewportLabel')}
+          value={viewportWidth === undefined ? 'container' : String(viewportWidth)}
+          onChange={(value) => setViewportWidth(value === 'container' ? undefined : Number(value))}
+        >
+          <SelectItem value="container">{t('workspaceViewportContainer')}</SelectItem>
+          {PREVIEW_WIDTHS.map((width) => (
+            <SelectItem key={width} value={String(width)}>{t('workspaceViewportWidth', { width })}</SelectItem>
+          ))}
+        </Select>
+      </div>
       {preview && (
         <Combobox
           options={SYNTHETIC_GENERATORS.map((g) => ({ value: g, label: t(`syntheticGenerator_${g}`) }))}
@@ -983,7 +1004,7 @@ export function DashboardWorkspace({
   );
 
   const editActions = (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center justify-end gap-2">
       {!preview && <WorkspaceConnection hub={liveHub} />}
       {statusEl}
       <div role="group" aria-label={t('workspaceHistoryControls')} className="flex gap-1">
@@ -1125,7 +1146,21 @@ export function DashboardWorkspace({
       }
       fullBleed
     >
-      {mode === 'edit' ? (
+      {viewportWidth !== undefined && (
+        <div role="status" aria-live="polite" className="shrink-0 border-b border-border px-6 py-2 text-sm">
+          <p className="font-medium">{t('workspaceViewportFindings', { width: viewportWidth })}</p>
+          {viewportFindings.length === 0 ? <p>{t('workspaceViewportNoFindings')}</p> : (
+            <ul className="list-inside list-disc">
+              {viewportFindings.map((finding) => (
+                <li key={`${finding.widgetId}:${finding.code}`}>
+                  {widgetName(working.widgets.find((widget) => widget.id === finding.widgetId))}: {t(LAYOUT_FINDING_KEYS[finding.code])}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {mode === 'edit' && viewportWidth === undefined ? (
         <div className="flex h-full min-h-0">
           <div className="sr-only" role="status" aria-live="polite" data-testid="editor-announcer">
             {announcement}
@@ -1197,10 +1232,14 @@ export function DashboardWorkspace({
           )}
         </div>
       ) : (
-        // Fill the page-shell's flex body (full-bleed) so the renderer's own
-        // overflow:auto is the single scroll region — no bounded/fixed height that
-        // double-scrolls against an outer container.
-        <div className="h-full min-h-0 p-4">
+        // The runtime measures the selected width even when it exceeds this pane.
+        // Only fixed previews need an outer horizontal scroll region.
+        <div className={viewportWidth === undefined ? 'h-full min-h-0 p-4' : 'h-full min-h-0 min-w-0 overflow-auto p-4'}>
+          <div
+            data-testid={viewportWidth === undefined ? undefined : 'viewport-surface'}
+            className="h-full"
+            style={viewportWidth === undefined ? undefined : { width: viewportWidth }}
+          >
           {/* A deep link that cannot be honoured replaces the board: showing the board's default
               device under a link that names another would be showing the wrong device. */}
           {linkPhase === 'checking' ? (
@@ -1229,19 +1268,20 @@ export function DashboardWorkspace({
             definition={working}
             hub={dataHub}
             registry={registry}
-            actions={dataHub}
+            actions={viewportWidth === undefined ? dataHub : undefined}
             seedHistory={!preview}
             timeRange={timeRange}
-            bindings={bindings}
+            bindings={mode === 'edit' ? editBindings : bindings}
             // No drill in preview: synthetic alarm rows carry fabricated originator
             // tokens, and a drill would poison the live selection overlay with a token
             // that's not a real member (blanking the widgets after preview is turned off).
-            select={preview ? undefined : select}
+            select={preview || viewportWidth !== undefined || mode === 'edit' ? undefined : select}
             // Selector candidates likewise off in preview — synthetic data has no real
             // entities to offer, and a pick would poison the live overlay.
-            candidates={preview ? undefined : candidates}
+            candidates={preview || viewportWidth !== undefined || mode === 'edit' ? undefined : candidates}
           />
           )}
+          </div>
         </div>
       )}
     </PageShell>
