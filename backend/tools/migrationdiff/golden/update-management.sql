@@ -2,6 +2,7 @@ ALTER SEQUENCE "update-management".artifact_signatures_id_seq OWNED BY "update-m
 ALTER SEQUENCE "update-management".artifact_signers_id_seq OWNED BY "update-management".artifact_signers.id;
 ALTER SEQUENCE "update-management".artifacts_id_seq OWNED BY "update-management".artifacts.id;
 ALTER SEQUENCE "update-management".audit_events_id_seq OWNED BY "update-management".audit_events.id;
+ALTER SEQUENCE "update-management".device_installed_components_id_seq OWNED BY "update-management".device_installed_components.id;
 ALTER SEQUENCE "update-management".secrets_id_seq OWNED BY "update-management".secrets.id;
 ALTER SEQUENCE "update-management".update_assignments_id_seq OWNED BY "update-management".update_assignments.id;
 ALTER SEQUENCE "update-management".update_attempts_id_seq OWNED BY "update-management".update_attempts.id;
@@ -19,6 +20,9 @@ ALTER TABLE ONLY "update-management".artifacts ALTER COLUMN id SET DEFAULT nextv
 ALTER TABLE ONLY "update-management".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "update-management".audit_events ALTER COLUMN id SET DEFAULT nextval('"update-management".audit_events_id_seq'::regclass);
+ALTER TABLE ONLY "update-management".device_installed_components
+ ADD CONSTRAINT device_installed_components_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "update-management".device_installed_components ALTER COLUMN id SET DEFAULT nextval('"update-management".device_installed_components_id_seq'::regclass);
 ALTER TABLE ONLY "update-management".purged_tenants
  ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
 ALTER TABLE ONLY "update-management".secrets
@@ -57,6 +61,7 @@ CREATE INDEX "idx_update-management_update_rollout_targets_tenant_id" ON "update
 CREATE INDEX "idx_update-management_update_rollouts_artifact_id" ON "update-management".update_rollouts USING btree (artifact_id);
 CREATE INDEX "idx_update-management_update_rollouts_tenant_id" ON "update-management".update_rollouts USING btree (tenant_id);
 CREATE INDEX idx_audit_tenant_time ON "update-management".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_installed_component_version ON "update-management".device_installed_components USING btree (tenant_id, component, version);
 CREATE INDEX idx_update_assignments_scope_anchors ON "update-management".update_assignments USING gin (scope_anchors);
 CREATE INDEX ix_update_attempts_state_report ON "update-management".update_attempts USING btree (state, last_report_at);
 CREATE INDEX ix_update_rollout_targets_rollout_status ON "update-management".update_rollout_targets USING btree (rollout_id, status, id);
@@ -81,6 +86,12 @@ CREATE SEQUENCE "update-management".artifacts_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "update-management".audit_events_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "update-management".device_installed_components_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -176,6 +187,20 @@ CREATE TABLE "update-management".audit_events (
  session_id text,
  on_behalf_of text,
  proposal text
+);
+CREATE TABLE "update-management".device_installed_components (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ device_token character varying(128) NOT NULL,
+ device_incarnation bigint NOT NULL,
+ component character varying(64) NOT NULL,
+ version character varying(128) NOT NULL,
+ digest character varying(71) DEFAULT ''::character varying NOT NULL,
+ observed_at timestamp with time zone NOT NULL,
+ source character varying(16) NOT NULL,
+ CONSTRAINT chk_installed_component_source CHECK (((source)::text = ANY ((ARRAY['INVENTORY'::character varying, 'UPDATED'::character varying])::text[])))
 );
 CREATE TABLE "update-management".purged_tenants (
  token character varying(128) NOT NULL,
@@ -292,6 +317,7 @@ CREATE UNIQUE INDEX uix_artifact_signers_tenant_key ON "update-management".artif
 CREATE UNIQUE INDEX uix_artifact_signers_tenant_token ON "update-management".artifact_signers USING btree (tenant_id, token);
 CREATE UNIQUE INDEX uix_artifacts_tenant_identity ON "update-management".artifacts USING btree (tenant_id, name, component, version) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_artifacts_tenant_token ON "update-management".artifacts USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_installed_component ON "update-management".device_installed_components USING btree (tenant_id, device_token, device_incarnation, component);
 CREATE UNIQUE INDEX uix_secrets_tenant_scope_name ON "update-management".secrets USING btree (tenant_id, scope, name) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_update_assignments_current ON "update-management".update_assignments USING btree (tenant_id, device_token, component) WHERE (superseded_at IS NULL);
 CREATE UNIQUE INDEX uix_update_assignments_tenant_token ON "update-management".update_assignments USING btree (tenant_id, token);

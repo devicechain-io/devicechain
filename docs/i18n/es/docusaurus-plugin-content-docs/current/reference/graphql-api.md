@@ -1294,7 +1294,8 @@ versión del protocolo de escritura, el estado actual de cumplimiento en la base
 tipos de operación ejecutables y un recuento actualizado de filas huérfanas de atributos y
 generaciones de dispositivos del inquilino del solicitante, incluidos los atributos borrados
 lógicamente. En v1.9 devuelve `NOT_INSTALLED` y ningún tipo ejecutable; es lo esperado hasta
-la versión que instale el cumplimiento. Un error de lectura del catálogo devuelve `UNREADABLE`
+la versión que instale el cumplimiento, que es v1.10: cuando una instancia termina de actualizarse a
+ella, el cumplimiento devuelve `ENFORCED`. Un error de lectura del catálogo devuelve `UNREADABLE`
 y conserva los demás datos. Solo un trigger habilitado `ALWAYS` cuenta como `ENFORCED`;
 los modos ordinario, solo réplica y deshabilitado devuelven `DISABLED`. La ausencia o falta de
 coincidencia devuelve `NOT_INSTALLED`. La consulta cuenta filas, así que trátela como un diagnóstico que se ejecuta cuando se necesita la respuesta, no como algo que consultar periódicamente. El plazo de vista previa comienza en v1.9.

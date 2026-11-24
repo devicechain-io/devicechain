@@ -159,3 +159,30 @@ func TestAggregateMeasurementsRequiresStartTime(t *testing.T) {
 		t.Fatalf("the startTime description must say it is required, got %q", tag)
 	}
 }
+
+func TestQueryMeasurementsCarriesATextReadingUntrusted(t *testing.T) {
+	tools, done := toolsAgainst(t, `{"data":{"measurementEvents":{"results":[`+
+		`{"deviceToken":"d1","name":"mode","value":null,"textValue":"eco","unit":"","dataType":"STRING","occurredTime":"2026-07-12T00:00:00Z"},`+
+		`{"deviceToken":"d1","name":"temp","value":2,"textValue":null,"unit":"C","dataType":"DOUBLE","occurredTime":"2026-07-12T00:00:00Z"}],`+
+		`"pagination":{"totalRecords":2}}}}`)
+	defer done()
+
+	_, out, err := tools.QueryMeasurements(context.Background(), authedReq("tok"), QueryMeasurementsInput{DeviceToken: "d1"})
+	if err != nil {
+		t.Fatalf("QueryMeasurements: %v", err)
+	}
+	if len(out.Measurements) != 2 {
+		t.Fatalf("want 2, got %+v", out.Measurements)
+	}
+	text, num := out.Measurements[0], out.Measurements[1]
+	if text.Value != nil || text.Untrusted.Text == nil || text.Untrusted.Text.Value != "eco" || text.Untrusted.Text.Source != SourceDevice {
+		t.Errorf("a text reading must arrive as a device-reported Marked under untrusted: %+v", text)
+	}
+	if num.Untrusted.Text != nil || num.Value == nil || *num.Value != 2 {
+		t.Errorf("a numeric reading must be unchanged: %+v", num)
+	}
+	raw, _ := json.Marshal(out)
+	if strings.Contains(string(raw), `"textValue"`) {
+		t.Errorf("the text must not be served as a plain member: %s", raw)
+	}
+}

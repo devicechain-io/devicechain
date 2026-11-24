@@ -16,7 +16,7 @@
 set -euo pipefail
 
 check() {
-	local prefix="${1:-TestFleetPG}" min="${2:-1}" input passed failed skipped
+	local prefix="${1:-TestFleetPG}" min="${2:-1}" exact_top="${3:-}" input passed failed skipped top
 	input="$(cat)"
 	# Every line must parse: truncated or non-JSON output (a build failure prints plain text)
 	# is not evidence that tests passed.
@@ -34,6 +34,16 @@ check() {
 	if [ "$skipped" -ne 0 ]; then
 		echo "FAIL: $skipped $prefix* test(s) SKIPPED; the real-Postgres suite must never skip" >&2
 		return 1
+	fi
+	# EXACT_TOP (third argument): the number of TOP-LEVEL tests (no subtest) that passed must be
+	# exactly this. A floor lets a test be deleted and another added with the count unchanged, or a
+	# test go missing while its subtests keep the total up; an exact top-level count notices both.
+	if [ -n "$exact_top" ]; then
+		top="$(printf '%s\n' "$input" | jq -s --arg p "$prefix" '[.[] | select(.Action == "pass" and (.Test // "" | startswith($p)) and ((.Test | contains("/")) | not))] | length')"
+		if [ "$top" -ne "$exact_top" ]; then
+			echo "FAIL: $top top-level $prefix* test(s) passed, want exactly $exact_top: a test was added, removed or renamed without updating the count" >&2
+			return 1
+		fi
 	fi
 	if [ "$passed" -lt "$min" ]; then
 		echo "FAIL: only $passed $prefix* test(s) passed, want at least $min: the tagged suite did not run (a mistyped build tag?)" >&2
@@ -64,6 +74,11 @@ self_test() {
 	if printf 'build failed\n' | check >/dev/null 2>&1; then echo "SELF-TEST FAIL: non-JSON input was accepted" >&2; rc=1; fi
 	# MIN is honoured.
 	if printf '%s\n' "$good" | check TestFleetPG 2 >/dev/null 2>&1; then echo "SELF-TEST FAIL: min=2 accepted one test" >&2; rc=1; fi
+	# EXACT_TOP: a subtest is not a top-level test; too many and too few both fail.
+	sub='{"Action":"pass","Test":"TestFleetPGOne/sub"}'
+	if ! printf '%s\n%s\n' "$good" "$sub" | check TestFleetPG 1 1 >/dev/null 2>&1; then echo "SELF-TEST FAIL: a subtest was counted as a top-level test" >&2; rc=1; fi
+	if printf '%s\n' "$good" | check TestFleetPG 1 2 >/dev/null 2>&1; then echo "SELF-TEST FAIL: exact=2 accepted one top-level test" >&2; rc=1; fi
+	if printf '%s\n%s\n' "$good" '{"Action":"pass","Test":"TestFleetPGTwo"}' | check TestFleetPG 1 1 >/dev/null 2>&1; then echo "SELF-TEST FAIL: exact=1 accepted two top-level tests" >&2; rc=1; fi
 	[ "$rc" -eq 0 ] && echo "SELF-TEST PASS: the count check refuses zero, skipped, failed, foreign-prefix and non-JSON runs"
 	return "$rc"
 }

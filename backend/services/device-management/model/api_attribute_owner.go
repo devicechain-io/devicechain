@@ -199,6 +199,44 @@ func lockDeviceAttributes(ctx context.Context, tx *gorm.DB, id uint) error {
 	return nil
 }
 
+// tryLockDeviceAttributes is lockDeviceAttributes without the wait: it answers false, having taken and
+// marked nothing, when another transaction holds the device's lock. A fleet operation's posting transaction
+// uses it so it never queues ahead of an interactive writer. The key is the same one (the try function
+// repeats the hash, and a test holds the two in step). When it answers true the transaction owns the device
+// and carries the writer-protocol marker exactly as if lockDeviceAttributes had run, so the primitive's own
+// later acquire of the same lock is a free re-acquire.
+func tryLockDeviceAttributes(ctx context.Context, tx *gorm.DB, id uint) (bool, error) {
+	if tx == nil || tx.Statement == nil {
+		return false, errors.New("device attribute protocol requires a transaction")
+	}
+	if _, ok := tx.Statement.ConnPool.(gorm.TxCommitter); !ok {
+		return false, errors.New("device attribute protocol requires a transaction")
+	}
+	state, _ := tx.Statement.Context.Value(attributeTxContextKey{}).(*attributeTxState)
+	if state == nil {
+		return false, errors.New("device attribute protocol requires runDeviceAttributeTx")
+	}
+	if state.locked && state.owner != id {
+		return false, errors.New("device attribute transaction cannot own two devices")
+	}
+	if tx.Dialector.Name() != "postgres" {
+		state.owner, state.locked = id, true
+		return true, nil
+	}
+	var got bool
+	if err := tx.WithContext(tx.Statement.Context).Raw(`SELECT "device-management".dc_entity_attr_try_lock('device', ?)`, id).Scan(&got).Error; err != nil {
+		return false, err
+	}
+	if !got {
+		return false, nil
+	}
+	if err := tx.Exec(attrprotocol.MarkerSQL).Error; err != nil {
+		return false, err
+	}
+	state.owner, state.locked = id, true
+	return true, nil
+}
+
 // lockAttributeOwnerTx may precede declaration discovery, which itself reads the
 // device. The primitive reuses that lock in the same attempt. A runner transaction
 // never locks two devices, including copy's source and target.

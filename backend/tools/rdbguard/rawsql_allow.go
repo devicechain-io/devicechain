@@ -192,6 +192,12 @@ var rawSQLAllowList = []siteEntry{
 			"\"dynamic\" only because the constant lives in core/attrprotocol, its one definition.",
 	},
 	{
+		Path: "backend/services/device-management/model/api_attribute_owner.go", Func: "tryLockDeviceAttributes", Count: 1,
+		Why: "sets the transaction-local device attribute writer protocol marker, exactly as lockDeviceAttributes does " +
+			"(attrprotocol.MarkerSQL, SELECT set_config('devicechain.attr_protocol', '1', true)). It reads and writes " +
+			"no table; the SQL is \"dynamic\" only because the constant lives in core/attrprotocol, its one definition.",
+	},
+	{
 		Path: "backend/services/device-management/model/api_attribute_orphans.go", Func: "Api.attributeOrphanTenants", Count: 1,
 		Why: "the attribute orphan sweep's tenant listing, which spans tenants on purpose under a system context: " +
 			"a loose index scan (recursive CTE) over entity_attributes' and entity_attribute_generations' tenant_id " +
@@ -200,10 +206,16 @@ var rawSQLAllowList = []siteEntry{
 			"formatted-in text is the model's quoted table name.",
 	},
 	{
-		Path: "backend/services/device-management/model/api_fleet_operation_readiness.go", Func: "Api.FleetOperationEnforcement", Count: 1,
+		Path: "backend/services/device-management/model/api_fleet_operation_readiness.go", Func: "fleetOperationEnforcementStates", Count: 1,
 		Why: "a catalog read (pg_trigger, pg_class, pg_namespace, pg_proc) that names entity_attributes only as the " +
-			"relation whose triggers it inspects. It reads no row of entity_attributes or of any tenant table, so " +
-			"there is no tenant predicate to bypass.",
+			"relation whose triggers it inspects, shared by readiness and the posting-time activation check. It reads " +
+			"no row of entity_attributes or of any tenant table, so there is no tenant predicate to bypass.",
+	},
+	{
+		Path: "backend/services/device-management/model/fleet_operation_activation.go", Func: "CheckFleetOperationActivation", Count: 1,
+		Why: "LOCK TABLE entity_attributes IN ROW EXCLUSIVE MODE: a table-level lock taken before the guard's catalog " +
+			"is read, so that DISABLE or DROP TRIGGER waits for the transaction. It reads and writes no row of " +
+			"the table, so there is no tenant predicate to bypass; the SQL is a constant.",
 	},
 	{
 		Path: "backend/services/device-management/model/position_classify.go", Func: "Api.ClassifyUnclassifiedAlarms", Count: 1,
