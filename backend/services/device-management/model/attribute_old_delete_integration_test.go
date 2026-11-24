@@ -141,6 +141,9 @@ func TestAttributeOldDeleteT2DeadlockIsResolvedNeverSilent(t *testing.T) {
 	attributeAwait(t, entered)
 
 	old := attributeRawTx(t, api, ctx)
+	// "Old" means a v1.9 pod: it marks its writes and only takes its locks in the old order. A pod
+	// from before the marker is refused by the database instead (attribute_writer_protocol_integration_test).
+	markAsProtocolWriter(t, old)
 	step1, step2 := oldDeleteSteps(old, tenant, dev.ID)
 	deleteDone := make(chan error, 1)
 	go func() {

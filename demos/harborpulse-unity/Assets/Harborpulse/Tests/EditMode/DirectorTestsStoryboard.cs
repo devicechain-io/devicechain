@@ -14,7 +14,7 @@ namespace DeviceChain.Harborpulse.Tests
         [Test]
         public void CommittedStoryboardPassesTimingAndClaimLint()
         {
-            var story = DirectorKit.Story(); Assert.That(story.Pages.Select(p => p.Id), Is.EqualTo(new[] { "0", "1", "1b", "2", "3", "3b", "4", "5", "4b", "6", "7", "8", "9" }));
+            var story = DirectorKit.Story(); Assert.That(story.Pages.Select(p => p.Id), Is.EqualTo(new[] { "0", "1", "1b", "2", "3", "3c", "3b", "4", "5", "4b", "6", "7", "8", "9" }));
             Assert.That(story.Cuts.Single(c => c.Id == "c90").Segments.Select(s => s.Page).Distinct(), Is.EqualTo(new[] { "0", "1", "4", "6", "7", "8", "9" }));
             foreach (var cut in story.Cuts) { Assert.That(cut.Segments.Sum(s => s.DurS), Is.EqualTo(cut.TargetS).Within(0.5)); foreach (var segment in cut.Segments) foreach (var c in segment.Captions) Assert.That(c.HoldS, Is.GreaterThanOrEqualTo(3)); }
         }
@@ -34,7 +34,7 @@ namespace DeviceChain.Harborpulse.Tests
         [TestCase("cut-gauge-chain")] [TestCase("unknown-cut-node")] [TestCase("unknown-follow")]
         public void StrictLoaderRefusesEachViolation(string rule)
         {
-            var r = DirectorKit.Object(DirectorKit.StoryText()); var pages = DirectorKit.Arr(r["pages"]); var page4 = DirectorKit.Obj(pages[6]);
+            var r = DirectorKit.Object(DirectorKit.StoryText()); var pages = DirectorKit.Arr(r["pages"]); var page4 = DirectorKit.Obj(pages[7]);
             var cut = First(r, "cuts"); var segment = Segment(r);
             var captionSegment = DirectorKit.Obj(DirectorKit.Arr(cut["segments"])[1]);
             var cutCaption = First(captionSegment, "captions");
@@ -134,6 +134,92 @@ namespace DeviceChain.Harborpulse.Tests
                     if (D(wa[0]) < D(wb[1]) && D(wb[0]) < D(wa[1]))
                         Assert.That(D(a["priority"]), Is.GreaterThan(D(b["priority"])), "page " + a["id"] + " vs " + b["id"]);
                 }
+        }
+
+        static readonly string[] OwnSession = { "hp-charger-mqtt-1", "hp-charger-mqtt-2", "pv-PAW-CERT-CHARGER-pin-0001-59e6c9cfa974", "pv-PAW-CERT-CHARGER-pin-0002-13a96fd1a263", "hp-light-pull-1", "hp-light-pull-2" };
+        static readonly string[] OwnSessionShots = { "3c-1", "3c-2", "3c-3", "3c-4", "3c-5" };
+        static readonly string[] Shown = { "shot", "caption", "caption-end", "node", "node-label", "link", "skip-page", "follow", "missed" };
+        static Scheduler Day(Func<Observation, bool> keep, string defect = "")
+        {
+            var layout = Kit.Layout(); var s = new Scheduler(DirectorKit.Story(), layout); var source = DirectorTimeline.Clean(defect); var store = new ObservationStore();
+            for (var wall = 0; wall <= 11 * layout.DayLengthSeconds / 24; wall++) {
+                foreach (var o in source.Records.Where(o => o.ObservedAtS <= wall && keep(o))) store.Add(o);
+                s.Tick(new DirectorSample("run", 6 + wall * 24 / layout.DayLengthSeconds, wall), store);
+            }
+            return s;
+        }
+        static string[] Others(Scheduler s) => s.Log.Where(e => e.Page != "3c" && e.Page != "" && Shown.Contains(e.Kind)).Select(e => e.ShowS + "|" + e.Page + "|" + e.Kind + "|" + e.Value).ToArray();
+        [Test]
+        public void NorthQuayOwnSessionPageParsesAndFramesItsDevices()
+        {
+            // Page 3c: the six North Quay devices that hold their own session (two chargers on an MQTT token, two on a client certificate,
+            // two lamps that fetch their commands). It adds no pose, so each shot's existing pose must have its subjects in a 16:9 frame.
+            var layout = Kit.Layout(); var map = new PresentationMap(layout); var page = Storyboard.Parse(DirectorKit.StoryText(), map).Page("3c");
+            Assert.That(page.Shots.Select(s => s.Id), Is.EqualTo(OwnSessionShots));
+            Assert.That(page.Shots.Select(s => s.CueSim), Is.Ordered.Ascending); Assert.That(page.Shots.All(s => s.CueSim >= page.FromSim && s.CueSim < page.ToSim), Is.True);
+            Assert.That(page.Captions.Select(c => c.Id), Is.EquivalentTo(page.Shots.SelectMany(s => s.Captions)), "every caption has a shot");
+            Assert.That(OwnSession.All(token => layout.Devices.Any(d => d.Token == token)), Is.True);
+            // a claim names the platform's own records; what no director read can show (the configuration report, the refused certificate) is the scenario's word
+            Assert.That(page.Captions.Where(c => c.Kind == "claim").Select(c => c.Id), Is.EqualTo(new[] { "dropped", "back", "dimmed" }));
+            Assert.That(page.Captions.Where(c => c.Kind != "claim").All(c => c.Kind == "scenario" && c.Source == EvidenceSource.Scenario), Is.True);
+            var subjects = new[] { OwnSession.Take(2), OwnSession.Skip(4), OwnSession.Skip(2).Take(2), OwnSession, OwnSession.Skip(2).Take(2) };
+            for (var i = 0; i < page.Shots.Count; i++)
+                foreach (var token in subjects[i]) {
+                    Assert.That(page.Shots[i].To, Is.EqualTo(page.Shots[i].From));
+                    var pose = map.Pose(page.Shots[i].To); var a = map.Anchors[token];
+                    Assert.That(CameraMath.Project(pose, 16.0 / 9, a.X, 1.5, a.Z, out var nx, out var ny) && Math.Abs(nx) < .95 && Math.Abs(ny) < .95, Is.True, page.Shots[i].Id + " does not frame " + token);
+                }
+            // it is a live page: neither recorded cut borrows it, so neither cut's length moves
+            Assert.That(DirectorKit.Story().Cuts.SelectMany(c => c.Segments).Any(s => s.Page == "3c"), Is.False);
+        }
+        [Test]
+        public void NorthQuayOwnSessionPageIsScheduledInsideItsWindowAndYieldsToTheHotConnector()
+        {
+            var layout = Kit.Layout(); var page = DirectorKit.Story().Page("3c"); var hot = DirectorKit.Story().Page("3b");
+            double Sim(double wall) => 6 + wall * 24 / layout.DayLengthSeconds;
+            var s = Day(o => true); var own = s.Log.Where(e => e.Page == "3c").ToArray();
+            Assert.That(own.Where(e => e.Kind == "shot").Select(e => e.Value), Is.EqualTo(OwnSessionShots));
+            Assert.That(own.Where(e => e.Kind == "caption").Select(e => e.Value.Replace("\n", " ")), Is.EqualTo(page.Captions.Select(c => string.Join(" ", c.Lines))), "each caption once, in the authored order");
+            foreach (var e in own.Where(e => Shown.Contains(e.Kind) || e.Kind == "resume"))
+                Assert.That(Sim(e.ShowS), Is.InRange(page.FromSim, page.ToSim), e.Kind + " " + e.Value);
+            Assert.That(own.Any(e => e.Kind == "missed"), Is.False);
+            // each shot waits for its beat
+            var shots = own.Where(e => e.Kind == "shot").ToArray();
+            for (var i = 0; i < shots.Length; i++) Assert.That(Sim(shots[i].ShowS), Is.GreaterThanOrEqualTo(page.Shots[i].CueSim), shots[i].Value);
+            // the claims are tied to the alarm that triggered the page and to both lamps' own readings
+            Assert.That(own.Where(e => e.Kind == "caption" && e.Evidence.Count > 0).Select(e => e.Value.Split('\n')[0]), Is.EqualTo(new[] { page.Captions[0].Lines[0], page.Captions[1].Lines[0], page.Captions[3].Lines[0] }));
+            Assert.That(own.Single(e => e.Kind == "caption" && e.Value.StartsWith(page.Captions[3].Lines[0])).Evidence.Count, Is.EqualTo(2));
+            // The certificate is disabled on the hot connector's beat (14:00), and that page is in both recorded cuts at the clean day's
+            // times. So this page ranks below it and waits on a shot with no caption: it gives the camera up on that very second, with
+            // nothing cut off, and says its last line once that page is done and the charger has stood silent long enough to be drawn so.
+            Assert.That(page.Priority, Is.LessThan(hot.Priority));
+            var preempt = own.Single(e => e.Kind == "preempt"); var resume = own.Single(e => e.Kind == "resume");
+            Assert.That(preempt.Value, Is.EqualTo("3b")); Assert.That(preempt.ShowS, Is.EqualTo((hot.FromSim - 6) * layout.DayLengthSeconds / 24));
+            Assert.That(resume.Value, Is.EqualTo("3c-4")); Assert.That(page.Shots[3].Captions, Is.Empty);
+            Assert.That(own.Last(e => e.Kind == "caption-end" && e.ShowS <= preempt.ShowS).ShowS, Is.LessThan(preempt.ShowS), "no caption is cut by the hand-over");
+            Assert.That(resume.ShowS, Is.EqualTo(s.Log.Last(e => e.Page == "3b" && e.Kind == "state" && e.Value == "Presented").ShowS).Within(1));
+            Assert.That(shots[4].ShowS, Is.InRange(resume.ShowS + 3, resume.ShowS + 4));
+            // every other page's shots and captions are the same, to the second, as on a day when this page never plays
+            Assert.That(Others(s), Is.EqualTo(Others(Day(o => o.Key != "mqtt-charger-disconnected"))));
+        }
+        [Test]
+        public void NorthQuayOwnSessionPageStaysOffScreenWithoutItsAlarmAndClaimsOnlyWhatWasRead()
+        {
+            // The session never dropped (the simulator's mqtt-never-disconnect control): no cleared alarm, so the page never takes the camera.
+            var quiet = Day(o => o.Key != "mqtt-charger-disconnected");
+            Assert.That(quiet.Log.Any(e => e.Page == "3c" && (Shown.Contains(e.Kind) || e.Kind == "queue")), Is.False);
+            // One lamp never fetched its command (pull-polling-stopped): the page plays, and the dim claim is not made.
+            var page = DirectorKit.Story().Page("3c"); var dark = Day(o => !(o.Kind == "measure" && o.Device == "hp-light-pull-2"));
+            var captions = dark.Log.Where(e => e.Page == "3c" && e.Kind == "caption").Select(e => e.Value.Split('\n')[0]).ToArray();
+            Assert.That(captions, Does.Contain(page.Captions.Single(c => c.Id == "pull").Lines[0])); Assert.That(captions, Does.Not.Contain(page.Captions.Single(c => c.Id == "dimmed").Lines[0]));
+            Assert.That(dark.Log.Where(e => e.Page == "3c" && e.Kind == "shot").Select(e => e.Value), Is.EqualTo(OwnSessionShots));
+            // A day when the derate command never ties to its alarm keeps the hot connector's page up longest: the last line still fits its window.
+            foreach (var control in new[] { "refuse-derate", "command-cause-not-read" }) {
+                var late = Day(o => true, control); var last = late.Log.Single(e => e.Page == "3c" && e.Kind == "shot" && e.Value == "3c-5");
+                Assert.That(Others(late), Is.EqualTo(Others(Day(o => o.Key != "mqtt-charger-disconnected", control))), control);
+                Assert.That(late.Log.Any(e => e.Page == "3c" && e.Kind == "missed"), Is.False, control);
+                Assert.That(late.Log.Last(e => e.Page == "3c" && e.Kind == "caption-end").ShowS, Is.InRange(last.ShowS + 5, (page.ToSim - 6) * Kit.Layout().DayLengthSeconds / 24), control);
+            }
         }
 }
 }
