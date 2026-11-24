@@ -80,13 +80,12 @@ Instance `v1beta1` remains served throughout v2.x and is to be deprecated at v2.
 `spec.grafanaSSO`, `spec.compact` and the `InstanceConfiguration` kind are not removed at v2.0.
 They remain available while deprecated; removal is a v3 project and must satisfy the two-minor
 deprecation window in [Deprecation](#deprecation). Storage is still `v1beta1`; storage migration has not shipped.
-Serving v1 alongside v1beta1 does not prove that stored objects have migrated.
 
 #### Executor API promotion {#executor-api-promotion}
 
 **`ExecutorEnrollment` and `InstanceOperation` remain `core.devicechain.io/v1beta1` through v2.0.**
 They are an explicit exception to the two-minor Preview limit: promotion is triggered
-when action execution is enabled in a released build, after the refusal foundation has shipped and
+when action execution is enabled in a released build, after the checks that refuse unsafe instance actions have shipped and
 explicit provider privileges are in place. Their served interfaces are covered from that release;
 any later API-version promotion must preserve existing persisted objects. Instance v1 promotion
 alone does not promote the executor kinds. No executor action is executable in the current build:

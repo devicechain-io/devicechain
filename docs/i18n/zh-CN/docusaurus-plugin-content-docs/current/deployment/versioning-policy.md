@@ -62,13 +62,13 @@ v1.0.0 之前，本页内容均不适用。v1.0.0 之前的发布可能改变什
 Instance `v1beta1` 将在整个 v2.x 系列继续提供服务，并计划在 v2.0 中弃用。
 v2.0 不会移除 `spec.grafanaSSO`、`spec.compact` 和 `InstanceConfiguration` 类型。
 它们在弃用期间仍然可用；移除属于 v3 的工作，且必须满足[弃用](#deprecation)章节规定的两个次版本的弃用期。
-存储版本仍为 `v1beta1`；存储迁移尚未发布。同时提供 v1 和 v1beta1 服务并不能证明已存储的对象完成了迁移。
+存储版本仍为 `v1beta1`；存储迁移尚未发布。
 
 #### 执行器 API 的提升 {#executor-api-promotion}
 
 **`ExecutorEnrollment` 和 `InstanceOperation` 在 v2.0 及之前保持 `core.devicechain.io/v1beta1`。**
 它们是两个次版本预览期限的明确例外：在已发布版本中启用操作执行时触发提升，前提是
-拒绝机制已发布并且已具备明确的提供方权限。它们提供的接口从该版本起受兼容性承诺保障；
+拒绝不安全实例操作的检查已发布并且已具备明确的提供方权限。它们提供的接口从该版本起受兼容性承诺保障；
 之后任何 API 版本提升都必须保留现有持久化对象。仅提升 Instance v1 不会提升执行器类型。
 当前构建中没有可执行的执行器操作：其他条件均有效的请求会以 `NotExecutableInThisBuild` 被拒绝
 （参见[集群内执行器](./kubernetes-operator.md#in-cluster-executor)）。

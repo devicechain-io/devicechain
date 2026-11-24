@@ -81,14 +81,13 @@ Instance `v1beta1` seguirá ofreciéndose durante toda la serie v2.x y se declar
 Siguen disponibles mientras están obsoletos; su eliminación es un proyecto de v3 y debe respetar las
 dos versiones menores de obsolescencia descritas en [Obsolescencia](#deprecation).
 El almacenamiento sigue en `v1beta1`; la migración de almacenamiento aún no se ha publicado.
-Ofrecer v1 junto a v1beta1 no demuestra que se hayan migrado los objetos almacenados.
 
 #### Promoción de la API del ejecutor {#executor-api-promotion}
 
 **`ExecutorEnrollment` e `InstanceOperation` siguen en `core.devicechain.io/v1beta1` hasta v2.0 inclusive.**
 Son una excepción explícita al límite de dos versiones menores en vista previa: se promueven
 cuando se habilite la ejecución de acciones en una versión publicada, una vez que la
-base de rechazos se haya publicado y existan privilegios explícitos del proveedor.
+comprobaciones que rechazan las acciones inseguras sobre instancias se hayan publicado y existan privilegios explícitos del proveedor.
 Sus interfaces ofrecidas quedan cubiertas desde esa versión; cualquier promoción posterior de la
 versión de la API debe conservar los objetos persistidos existentes. La promoción de Instance v1
 por sí sola no promueve los tipos del ejecutor. Ninguna acción del ejecutor es ejecutable en la compilación actual:
