@@ -107,7 +107,16 @@ func (api *Api) lockMembershipFamilySQL(ctx context.Context, tx *gorm.DB, member
 	}
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(tenant + "\x00" + memberType))
-	return tx.Exec(sql, int64(h.Sum64())).Error
+	key := int64(h.Sum64())
+	// Each mode is its own literal statement so the raw-SQL guard can read it statically.
+	switch sql {
+	case "SELECT pg_advisory_xact_lock(?)":
+		return tx.Exec("SELECT pg_advisory_xact_lock(?)", key).Error
+	case "SELECT pg_advisory_xact_lock_shared(?)":
+		return tx.Exec("SELECT pg_advisory_xact_lock_shared(?)", key).Error
+	default:
+		return fmt.Errorf("membership family lock: unknown lock statement %q", sql)
+	}
 }
 
 // membershipWriterLockSQL asserts the owner protocol before selecting shared mode.
