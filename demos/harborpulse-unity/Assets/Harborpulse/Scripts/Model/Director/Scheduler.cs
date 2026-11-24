@@ -358,7 +358,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             switch (id)
             {
                 case "1": return "Morning"; case "1b": return "Terminal demand"; case "2": return "Planned work";
-                case "3": return "Gauge replacement"; case "3b": return "Hot connector"; case "4": return "Storm";
+                case "3": return "Gauge replacement"; case "3b": return "Hot connector"; case "3c": return "North Quay"; case "4": return "Storm";
                 case "5": return "Flood plain"; case "4b": return "Pump flow"; case "6": return "East Quay";
                 case "7": return "Power restored"; case "8": return "Overnight update"; default: return "Harbour";
             }

@@ -34,6 +34,13 @@ namespace DeviceChain.Harborpulse.Visuals
         public const string StartHourFlag = "-hp-start-hour", SpeedFlag = "-hp-speed", ExpectTenantFlag = "-hp-expect-tenant";
         /// <summary>A labelled CONTROL for a live run: the director reads commands without their recorded cause, so a claim that needs the cause must fall back.</summary>
         public const string NoCauseControlFlag = "-hp-control-no-cause";
+        /// <summary>
+        /// A rig's fixed eye, <c>-hp-eye x/y/z/lookX/lookY/lookZ/fov</c>: the camera is held there for the whole run, whatever shot the
+        /// director calls, so a rig can watch one place through a day. The director, its captions and its recording run as they would.
+        /// Command line only: a page address cannot carry it.
+        /// </summary>
+        public const string EyeFlag = "-hp-eye";
+        CameraPose fixedEye;
         bool omitCommandCause;
 
         [Tooltip("Run the labelled offline preview instead of following a runner.")]
@@ -209,6 +216,8 @@ namespace DeviceChain.Harborpulse.Visuals
                 if (optionProblem != null) throw new FormatException(optionProblem);
                 localDigest = LayoutDigest.Override(LayoutDigest.Compute(text.bytes), CommandLineArgs.Get(options, "-hp-layout-digest-override", out _));
                 portrait = Array.IndexOf(options, "-hp-portrait") >= 0;
+                var eye = CommandLineArgs.Get(options, EyeFlag, out _);
+                if (eye != null) fixedEye = CameraMath.ParsePose(eye);
                 recordRoot = CommandLineArgs.Get(options, "-hp-record-dir", out _) ?? Path.Combine(Application.persistentDataPath, "recordings");
                 captureDir = CommandLineArgs.Get(options, "-hp-capture-dir", out _);
                 captureEvery = Number(options, "-hp-capture-every", 10, .1, 86400);
@@ -382,6 +391,12 @@ namespace DeviceChain.Harborpulse.Visuals
             }
 
             if (director != null) { directorCamera.Portrait = TallFrame; directorCamera.Tick(directorView, director, directorSeconds, dt, fixes); }
+            if (fixedEye != null)
+            {
+                var eyeAt = DirectorCamera.V(fixedEye.Camera);
+                sceneCamera.transform.SetPositionAndRotation(eyeAt, Quaternion.LookRotation(DirectorCamera.V(fixedEye.Look) - eyeAt));
+                sceneCamera.fieldOfView = (float)fixedEye.VerticalFov;
+            }
             if (Application.isPlaying && captureDir != null && directorSeconds >= nextCapture)
             {
                 nextCapture = directorSeconds + captureEvery;

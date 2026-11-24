@@ -134,7 +134,28 @@ namespace DeviceChain.Harborpulse.Visuals
             WindowsDark = Make("windows-dark", new Color(0.10f, 0.12f, 0.15f), 0.85f);
             StatusGreen = Emissive("status-green", new Color(0.15f, 0.95f, 0.35f), 1.4f);
             Beacon = Emissive("beacon-amber", new Color(1.0f, 0.55f, 0.05f), 1.0f);
+            // The devices that hold their own session. A charger on a token is teal and one on a certificate is navy with brass, so the
+            // two read apart from each other and from the district's blue at a glance; each wears a band that is lit while it reports.
+            ChargerLink = Make("charger-link", new Color(0.09f, 0.46f, 0.44f), 0.5f);
+            ChargerCert = Make("charger-cert", new Color(0.12f, 0.16f, 0.30f), 0.55f);
+            Brass = Make("brass", new Color(0.80f, 0.62f, 0.24f), 0.65f, 0.8f);
+            SolarGlass = Make("solar-glass", new Color(0.06f, 0.11f, 0.24f), 0.9f, 0.3f);
+            LinkOn = Emissive("link-on", new Color(0.15f, 0.90f, 0.85f), 1.3f);
+            SealOn = Emissive("seal-on", new Color(1.0f, 0.74f, 0.25f), 1.2f);
+            PipOn = Emissive("pip-on", new Color(1.0f, 0.86f, 0.62f), 1.6f);
         }
+
+        /// <summary>The body of a charger that holds an MQTT session under a device token, and of one that holds it under a client certificate.</summary>
+        public Material ChargerLink { get; }
+        public Material ChargerCert { get; }
+        public Material Brass { get; }
+        /// <summary>A pull lamp's own solar panel.</summary>
+        public Material SolarGlass { get; }
+        /// <summary>The band on a reporting charger: cyan on a token, gold on a certificate.</summary>
+        public Material LinkOn { get; }
+        public Material SealOn { get; }
+        /// <summary>A lit pip of a pull lamp's level board.</summary>
+        public Material PipOn { get; }
 
         public Material Surfaces { get; }
         public Material AlarmText { get; }

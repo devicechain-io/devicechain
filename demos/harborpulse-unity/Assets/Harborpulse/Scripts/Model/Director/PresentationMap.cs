@@ -107,7 +107,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             IReadOnlyDictionary<string, Ground> anchorOverrides = null, IReadOnlyDictionary<int, Ground> vertexOverrides = null)
         {
             this.layout = layout ?? throw new ArgumentNullException(nameof(layout));
-            if (layout.Devices.Count != 37) throw new FormatException("M1: authored presentation expects 37 device anchors");
+            if (layout.Devices.Count != DeviceCount) throw new FormatException("M1: authored presentation expects " + DeviceCount + " device anchors");
             frame = new WorldFrame(layout.ControlFrame[0]);
             regions.Add("hp-north-quay", Rect(-120, 75, 105, 130));
             regions.Add("hp-east-quay", Rect(140, -80, 225, 65));
@@ -132,6 +132,29 @@ namespace DeviceChain.Harborpulse.Model.Director
                 }
             AddPoses();
         }
+
+        /// <summary>
+        /// How many devices the presentation is authored for: the district's 37 and the six that hold their own session (two chargers on MQTT
+        /// under a token, two under a certificate, two lamps that ask for their commands). Any other count is refused.
+        /// </summary>
+        public const int DeviceCount = 43;
+
+        /// <summary>North Quay's charging row: the first bay's share of the wall's length, and each next bay's (9 m).</summary>
+        public const double NorthChargerRow = .6, NorthChargerPitch = .04;
+
+        /// <summary>
+        /// Where a charger with its own session stands in North Quay's row, counting bays from the district's first: the two on a token take
+        /// the third and fourth, the fifth is left to the fourth street light, and the two on a certificate take the sixth and seventh.
+        /// </summary>
+        public static int LinkedBay(string kind, int index) => (kind == DeviceKind.CertCharger ? 5 : 2) + Math.Max(1, index);
+
+        /// <summary>The pull lamps stand at North Quay's east end, by the wall: how far the first is from the end, their spacing, and their depth behind the wall.</summary>
+        public const double PullLampFromEndM = 14.5, PullLampSpacingM = 12, PullLampDepthM = 3;
+        /// <summary>
+        /// On a side quay, should the platform put them there: how far the first pull lamp stands from the wall's southern end. The ladder
+        /// between the two is then 26 m from that end, clear of the bollards and cleats set every 28 m along either side quay's wall.
+        /// </summary>
+        public const double SidePullLampFromEndM = 20;
 
         // Authored monotone strip maps keep the plain inland of East Quay and the depot further inland.
         static readonly double[] Lon = { -12.236, -12.230, -12.212, -12.200, -12.182, -12.170, -12.1655, -12.1616, -12.161, -12.1604, -12.1565, -12.152, -12.146 };
@@ -224,6 +247,15 @@ namespace DeviceChain.Harborpulse.Model.Director
                 case DeviceKind.Pump: return At(north ? 0.43 : 0.62, 28);
                 case DeviceKind.Charger: return north ? At(0.6 + 0.04 * i, 18) : At(0.68 + 0.06 * i, 18);
                 case DeviceKind.Meter: return At(north ? 0.12 : 0.88, 38);
+                // The manifest puts the six on North Quay, where they are authored: the chargers continue the charging row, the lamps
+                // flank the landing at the wall's east end. Should the platform report one on a side quay, the chargers stand in a row
+                // of their own well behind the wall there, clear of everything that quay was laid out with, and the lamps by the wall
+                // near its southern end, the same distance behind it and apart: a landing is at the water wherever it is.
+                case DeviceKind.MqttCharger: case DeviceKind.CertCharger:
+                    return north ? At(NorthChargerRow + NorthChargerPitch * LinkedBay(d.Kind, i), 18) : At((d.Kind == DeviceKind.CertCharger ? .34 : .10) + .08 * i, 46);
+                case DeviceKind.PullLight:
+                    return north ? new Ground(maxX - PullLampFromEndM + PullLampSpacingM * (i - 1), minZ + PullLampDepthM)
+                        : At((SidePullLampFromEndM + PullLampSpacingM * (i - 1)) / (maxZ - minZ), PullLampDepthM);
                 default: throw new FormatException("no presentation anchor for " + d.Kind);
             }
         }
@@ -291,7 +323,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             poses.Add("pose:home", new CameraPose(new Point3(0, 100, -420), new Point3(0, HomeLookY, 50), 35));
             // The 9:16 HOME looks east along the horseshoe from over the western town: the harbour's long (x) axis then runs up
             // the tall frame. The storyboard's first draft, (0, 160, -330) looking north, holds only North Quay at 9:16 (its
-            // horizontal half-angle is about 15 degrees), so 12 of 37 devices were in frame; this pose holds all three quays.
+            // horizontal half-angle is about 15 degrees), so 12 of the then 37 devices were in frame; this pose holds all three quays.
             // The land now stands far below this eye, so the haze-covered far ground ends well under the true horizon; the look is
             // steepened slightly (the horizon just above the frame) so the air over it is 8-14 % of the frame and the fog closes the view.
             // U6: the eye is lower and nearer and the look is flattened, so the horizon falls an eighth of the way down the frame: the

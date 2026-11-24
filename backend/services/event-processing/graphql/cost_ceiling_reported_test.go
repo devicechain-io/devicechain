@@ -25,7 +25,7 @@ func TestCostCeilingIsReportedToTheAuthor(t *testing.T) {
 	}
 
 	cheap, err := (&SchemaResolver{}).ValidateDetectionRules(authedContext(auth.DeviceRead),
-		struct{ Rules []detectionRuleInput }{Rules: []detectionRuleInput{
+		validateArgs{Rules: []detectionRuleInput{
 			{Token: "cheap", Definition: rule(`"t" in m && m["t"] > 1.0`)},
 		}})
 	if err != nil {
@@ -36,7 +36,7 @@ func TestCostCeilingIsReportedToTheAuthor(t *testing.T) {
 	}
 
 	res, err := (&SchemaResolver{}).ValidateDetectionRules(authedContext(auth.DeviceRead),
-		struct{ Rules []detectionRuleInput }{Rules: []detectionRuleInput{
+		validateArgs{Rules: []detectionRuleInput{
 			{Token: "costly", Definition: rule(`m.all(k, m[k] > 0.0)`)},
 		}})
 	if err != nil {

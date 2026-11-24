@@ -36,6 +36,14 @@ type Query {
     validateDetectionRules(
         """The rules to check, in order; the index in each error and warning refers to this list. At most 1,000."""
         rules: [DetectionRuleInput!]!
+        """
+        Optional: the metrics of the profile the rules belong to, with their data types. A rule that
+        names a metric declared STRING gets a namesStringMetric warning, because a detection rule
+        never reads text readings. Omit it and no such warning is given. A data type other than
+        DOUBLE, INT, BOOLEAN or STRING, or a key listed twice with different types, is refused. At most
+        1,000; a longer list is refused with LIMIT_EXCEEDED.
+        """
+        metrics: [DetectionMetricInput!]
     ): DetectionRuleValidationResult!
 
     """
@@ -977,7 +985,7 @@ type CanvasDiagnostic {
     # The severity: "error" rejects the graph; "warning" is advisory and the graph still compiled.
     severity: String!
     """
-    Stable code identifying a rule-compiler warning (for example negatedAttributeGuard); null
+    Stable code identifying a rule-compiler warning (for example negatedAttributeGuard or namesStringMetric); null
     for a diagnostic that has none.
     """
     # The stable code of a rule-compiler warning (e.g. "negatedAttributeGuard"), null for a
@@ -1017,6 +1025,14 @@ input DetectionRuleInput {
     # (absence / correlation) with an author-facing error, rather than the runtime silently
     # skipping the rule. Defaults to false (unscoped) when omitted.
     groupScoped: Boolean = false
+}
+
+"""A metric of the profile a rule belongs to, as the validation gate needs it."""
+input DetectionMetricInput {
+    """The metric key, as a measurement names it."""
+    key: String!
+    """The metric's data type: DOUBLE, INT, BOOLEAN or STRING."""
+    dataType: String!
 }
 
 """The outcome of validating a batch of detection rules."""

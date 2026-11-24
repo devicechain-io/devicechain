@@ -132,6 +132,7 @@ está bloqueado dentro de una llamada.
 | --- | --- |
 | `detect_applied_stream_seq` | Mayor secuencia de flujo de JetStream capturada en la instantánea confirmada. |
 | `detect_checkpoint_failures_total{stage}` | Puntos de control programados de DETECT que no se confirmaron, por etapa (publish, serialize, save). Una llamada de punto de control que supera su plazo cuenta contra la etapa en la que se quedó atascada. Un rechazo por escritor obsoleto no se cuenta aquí: eso termina el proceso. |
+| `detect_checkpoint_min_spacing_seconds` | Gauge. El tiempo mínimo que el motor deja pasar entre dos checkpoints activados por recuento: cuatro veces el coste del último snapshot confirmado, y nunca más de `checkpointIntervalSeconds`. Sigue a `detect_checkpoint_seconds`, así que crece a medida que crecen el estado del motor y su snapshot. Cuando se queda en `checkpointIntervalSeconds`, los checkpoints por recuento son tan escasos como permite el ajuste, de modo que un `detect_consumer_ack_pending` al alza y un `detect_consumer_pending` creciente a su lado significan que los checkpoints están frenando al consumidor: mira `detect_snapshot_bytes` y los tiempos de serialización y guardado. |
 | `detect_checkpoint_save_seconds` | Tiempo que cada instantánea confirmada tardó en escribirse en la base de datos, como distribución: la segunda parte del coste de un punto de control, tras la serialización. |
 | `detect_checkpoint_serialize_seconds` | Tiempo que cada instantánea confirmada tardó en serializar el estado del motor, como distribución: la primera parte del coste de un punto de control. |
 | `detect_checkpoints_total` | Puntos de control de instantánea de DETECT confirmados. |
@@ -157,6 +158,9 @@ está bloqueado dentro de una llamada.
 | `detect_fence_geometry_cache_vertices` | Total de vértices que contiene la caché de geometrías compiladas: la cantidad en la que se cuenta su cota. |
 | `detect_fence_geometry_hash_mismatch_total` | Documentos de geometría de geocercas cuyo hash no coincidió con la dirección de contenido bajo la que se pidieron. Siempre es un defecto, nunca transitorio: el par sirvió la fila equivocada, algo recodificó el documento en tránsito, o el archivo está corrupto. |
 | `detect_fence_geometry_unresolved_total` | Entradas de manifiesto de geocercas cuya geometría no se pudo obtener del archivo de device-management. Cada una deja esa geocerca informando que es irresoluble en lugar de responder, y la repara la siguiente pasada de reconciliación si la causa era transitoria. |
+| `detect_group_shard_busy_seconds_total{group, shard}` | Segundos que cada shard de detección de cada grupo de shards ha dedicado a aplicar operaciones. Léelo como una tasa: es la utilización del shard, así que una tasa de 0,5 es un shard ocupado a la mitad. Lo sano es que todos los shards estén muy por debajo de 0,9 y con valores parecidos. Un shard muy por encima del resto de su grupo es una clave caliente (un dispositivo o ancla de correlación que envía mucho más que los demás); todos los shards cerca de 1 significan que el límite es `detectShards` y el grupo se está retrasando, lo que se ve como un `detect_consumer_pending` creciente. |
+| `detect_group_shard_live_keys{group, shard}` | Gauge. Ventanas, temporizadores y cerrojos activos que mantiene cada shard de detección de cada grupo de shards. Lo sano es un reparto más o menos uniforme entre los shards de un grupo. Un shard con muchas más claves que los demás es un sesgo de claves: su cola y su tiempo ocupado serán los que suban. |
+| `detect_group_shard_queue_depth{group, shard}` | Gauge. Operaciones en cola para cada shard de detección de cada grupo de shards, muestreadas en el tick del bucle. Lo sano es que se mantenga cerca de cero. Un shard cuya cola sigue alta es el más lento, y el bucle del grupo lo espera en cada checkpoint, cambio de regla y consulta, lo que se ve como un grupo retrasado (`detect_group_consumer_pending` y `detect_group_watermark_lag_seconds`). |
 | `detect_idle_advances_total` | Avances por inactividad según el reloj de pared que produjeron al menos una detección. |
 | `detect_idle_detections_total` | Detecciones producidas por avance por inactividad según el reloj de pared (ausencia/duración/sesión que se disparan por silencio). |
 | `detect_is_leader` | 1 mientras esta réplica tiene el arrendamiento de la partición DETECT, desde que lo adquiere y no desde el final de la construcción del turno. |
@@ -208,6 +212,19 @@ nunca debería mostrar `raiseAlarm` ni `clearAlarm`, porque ese sumidero siempre
 | `react_events_orphaned_total` | Eventos derivados cuya regla ya no estaba en la proyección (no se despachó nada). |
 | `react_events_poison_dropped_total` | Eventos derivados descartados tras el tope de reentregas, porque su despacho seguía fallando. También se escriben en el flujo de mensajes no entregados, así que esto cuenta los mismos eventos que `react_events_dead_lettered_total`; se mantiene porque la alerta `ReactPoisonDropping` se dispara sobre él. |
 | `react_workers` | Cuántos eventos derivados puede despachar REACT a la vez (`react.workers`). Los eventos de un mismo dispositivo se despachan uno tras otro, en el orden del flujo, salvo que un evento dejado para reentrega se despacha de nuevo después de los eventos que le siguen. |
+
+## Device state {#device-state}
+
+Prefijo: `devicechain_devicestate_`.
+
+Cada diez minutos, una réplica a la vez compara las filas de último estado conocido de cada inquilino con device-management y corrige las que ya no corresponden a un dispositivo.
+
+| Métrica | Significa |
+| --- | --- |
+| `orphan_sweep_deleted_total` | Contador. Filas de estado de dispositivo que el barrido eliminó porque su dispositivo ya no existe o se recreó con el mismo token. Una ráfaga justo después de purgar o eliminar dispositivos es lo esperado, y una tasa constante distinta de cero mientras se eliminan dispositivos es normal. Una tasa que sigue subiendo cuando no se ha eliminado ningún dispositivo es un fallo: algo elimina dispositivos sin avisar a device-state. Mira las líneas de registro del barrido (`Orphan sweep reconciled device states`) para ver los recuentos de cada pasada. |
+| `orphan_sweep_stamped_total` | Contador. Filas de estado de dispositivo que el barrido marcó con la encarnación del dispositivo al que pertenecen, de modo que un dispositivo recreado después con el mismo token se reconozca como distinto. Cada fila se marca una sola vez, así que una ráfaga en las primeras pasadas tras una actualización, mientras se ponen al día las filas escritas antes de que se registrara la encarnación, es lo esperado y luego vuelve a cero. Una tasa que no se estabiliza merece una revisión. |
+
+Una pasada que no puede llegar a device-management omite las páginas restantes de ese inquilino y se reintenta en la siguiente; no cuenta en ninguna de las dos métricas. La propia pasada aparece en la serie `orphan_sweep` descrita en [pasadas de mantenimiento](./observability.md#maintenance-passes).
 
 ## Event management {#event-management}
 

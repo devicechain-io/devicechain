@@ -63,6 +63,10 @@
 #   hack/upgrade-rig.sh attrlock  a BASELINE device-management pod and the upgraded pods write one
 #                                 device's attribute at once, the new pods' lock is in force, and no
 #                                 orphan row or generation head is left; each shown to fail
+#   hack/upgrade-rig.sh attrguard the attribute guard (the database trigger that refuses a write to a
+#                                 device's SHARED attribute made outside the writer protocol) reads ENFORCED
+#                                 after the upgrade, a BASELINE pod's attribute writes still pass under it,
+#                                 and an unmarked write is refused; the refusal is shown to be the trigger's
 #   hack/upgrade-rig.sh all      up, then whichever drill `mode` names
 #   hack/upgrade-rig.sh down      dcctl destroy the instance (with the working tree's
 #                                 dcctl), then delete the cluster, dcctl's local state
@@ -3482,6 +3486,162 @@ versions must leave none."
   say "ATTRIBUTE LOCK HOLDS — $baseline_tag and upgraded pods wrote one device at once, the lock was in force, and nothing was left behind"
 }
 
+# ---------------------------------------------------------------------------
+# attrguard — the database guard behind the attribute writer protocol, across the roll (I-17)
+# ---------------------------------------------------------------------------
+#
+# THE CLAIM: this release installs a trigger on entity_attributes that refuses (SQLSTATE DCAP1) any write to a
+# device's SHARED attribute that is not made inside a transaction that set devicechain.attr_protocol to 1.
+# That is only safe because every pod of the release before this one already sets it. So, on the upgraded
+# instance:
+#
+#   1. the platform reports the guard ENFORCED (dcctl fleet-op readiness), so the checks below run against a
+#      guard that is in force rather than one that is merely present;
+#   2. a pod running the BASELINE's device-management image, which is what keeps writing through a roll, still
+#      has every one of its attribute writes accepted under the trigger;
+#   3. THE NEGATIVE CONTROL: an unmarked writer is refused with DCAP1, the same write marked is accepted, and the
+#      same unmarked write is accepted with the trigger switched off inside a rolled-back transaction. The third
+#      is what shows the refusal came from the trigger and not from something else about the write.
+#
+# WHAT THIS DOES NOT COVER, said plainly: a pod from BEFORE the marker shipped (a skipped minor) is not run, so
+# its refusal is shown with plain SQL standing in for it; it is the release notes' warning, not a supported roll.
+attrguard_port=18463
+attrguard_pids=()
+
+attrguard_cleanup() {
+  local pid
+  for pid in "${attrguard_pids[@]}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+  attrguard_pids=()
+  kubectl --context "$kube_context" -n "${attrguard_ns:-dc-system}" delete deployment oldpod-device-management \
+    --ignore-not-found >/dev/null 2>&1 || true
+}
+
+# attrguard_refused <psql output> says whether a statement was refused by the guard: SQLSTATE DCAP1, or the
+# guard's own message. Pure, so the selftest can feed it a refusal, a success and an unrelated error.
+attrguard_refused() {
+  grep -qE 'DCAP1|without the writer protocol marker' <<<"$1"
+}
+
+# attrguard_enforcement reads the enforcement state out of `dcctl fleet-op readiness -o json` on stdin, and fails for
+# anything that is not a string: a missing field or no JSON must never read as enforced. Pure.
+attrguard_enforcement() {
+  jq -er '.enforcement | select(type == "string")' 2>/dev/null
+}
+
+# attrguard_sql <pod> <sql> runs a batch against the platform database and prints everything psql said, errors
+# included, then the exit status on the last line. It never fails the rig itself: the caller judges the output.
+attrguard_sql() {
+  local pod="$1" sql="$2" out rc=0
+  out="$(kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- \
+    psql -U postgres -d "$rdb_db" -v ON_ERROR_STOP=1 -Atq <<<"$sql" 2>&1)" || rc=$?
+  printf '%s\nrc=%s\n' "$out" "$rc"
+}
+
+# attrguard_insert_sql <tenant> <device id> <key> is one unmarked write to a device's SHARED attribute.
+attrguard_insert_sql() {
+  printf "INSERT INTO \"device-management\".entity_attributes (created_at, updated_at, tenant_id, entity_type, entity_id, scope, attr_key, value_type, value, last_updated) VALUES (now(), now(), '%s', 'device', %s, 'SHARED', '%s', 'STRING', 'v', now())" "$1" "$2" "$3"
+}
+
+cmd_attrguard() {
+  need kubectl
+  need jq
+  resolve_baseline_tag
+  [[ -s "$receipt" ]] || fail "$receipt is missing; run 'up' and 'upgrade' first: the writes are to the device the seed made"
+  [[ -x "$apiprobe" ]] || build_apiprobe
+  [[ -x "$target_dcctl" ]] || build_target_dcctl
+  local ns deploy json live image pod dev_id tenant out i rc enforcement
+  ns="$(instance_namespace)"
+  attrguard_ns="$ns"
+  say "ATTRIBUTE GUARD — the database refuses unmarked writes, and a $baseline_tag pod's writes still pass"
+  trap attrguard_cleanup EXIT
+
+  tenant="$(jq -r '.tenant' "$receipt")"
+  [[ -n "$tenant" && "$tenant" != null && "$tenant" =~ ^[A-Za-z0-9_-]+$ ]] || fail "the receipt names no usable tenant ('$tenant')"
+
+  # 1. The guard is in force, as an operator is told it: read BEFORE the baseline copy exists, because the copy
+  # keeps the live pods' labels and a v1.9 pod could answer the readiness query.
+  local email pw tls=()
+  email="$(jq -r '.identity.email' "$receipt")"
+  pw="$(jq -r '.identity.password' "$receipt")"
+  [[ "$api_scheme" == https ]] && tls=(--tls)
+  out="$("$target_dcctl" fleet-op readiness -o json -s "$api_server" ${tls[@]+"${tls[@]}"} -t "$tenant" \
+    --email "$email" --password "$pw" 2>/dev/null)" || true
+  enforcement="$(attrguard_enforcement <<<"$out")" || enforcement=""
+  [[ "$enforcement" == "ENFORCED" ]] ||
+    fail "THE GUARD IS NOT ENFORCED after the upgrade (dcctl fleet-op readiness reports '${enforcement:-nothing}'): $out
+Every check below would be run against a database that does not refuse anything."
+  note "dcctl fleet-op readiness reports the attribute guard ENFORCED ✓"
+
+  pod="$(pg_pod)"
+  rdb_db="$(rdb_database "$pod" entity_attributes)"
+  dev_id="$(attrlock_psql "$pod" "SELECT id FROM \"device-management\".devices WHERE tenant_id = '$tenant' AND token = 'apiprobe-device'")"
+  [[ "$dev_id" =~ ^[0-9]+$ ]] || fail "could not find the seeded device's id in tenant $tenant (got '$dev_id')"
+
+  # 2. A baseline pod's writes still pass under the trigger.
+  deploy="$(kubectl --context "$kube_context" -n "$ns" get deployments \
+    -l "devicechain.io/functional-area=device-management" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || deploy=""
+  [[ -n "$deploy" ]] || fail "this instance runs no device-management Deployment"
+  json="$(kubectl --context "$kube_context" -n "$ns" get deployment "$deploy" -o json)" || fail "could not read deployment $deploy"
+  live="$(jq -r '.spec.template.spec.containers[0].image' <<<"$json")"
+  image="$(oldpod_image "$live" "$baseline_tag")" || fail "cannot derive $baseline_tag's device-management image from '$live'"
+  oldpod_manifest "$json" oldpod-device-management "$image" | kubectl --context "$kube_context" -n "$ns" apply -f - >/dev/null ||
+    fail "could not create the $baseline_tag device-management copy ($image)"
+  oldpod_wait oldpod-device-management 300 || {
+    kubectl --context "$kube_context" -n "$ns" logs deployment/oldpod-device-management --tail=30 >&2 2>/dev/null || true
+    fail "the $baseline_tag device-management copy did not become Ready ($image)"
+  }
+  kubectl --context "$kube_context" -n "$ns" port-forward deployment/oldpod-device-management "${attrguard_port}:8080" \
+    >"$work/attrguard-forward.log" 2>&1 &
+  attrguard_pids+=("$!")
+  for i in $(seq 1 30); do
+    (exec 3<>"/dev/tcp/127.0.0.1/$attrguard_port") 2>/dev/null && break
+    sleep 1
+  done
+  (exec 3<>"/dev/tcp/127.0.0.1/$attrguard_port") 2>/dev/null ||
+    fail "the port-forward to the $baseline_tag pod never opened on $attrguard_port: $(cat "$work/attrguard-forward.log")"
+
+  local args
+  args=(--server "$api_server" --scheme "$api_scheme" --receipt "$receipt")
+  rc=0
+  "$apiprobe" attrwrite "${args[@]}" --url "http://127.0.0.1:$attrguard_port/graphql" --count 40 >"$work/attrguard-old.log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] || fail "WRITES THROUGH THE $baseline_tag POD WERE REFUSED once the guard is installed (exit $rc):
+$(cat "$work/attrguard-old.log")
+A baseline pod marks its attribute writes, so the trigger must pass them; if it does not, the roll breaks every
+attribute write that reaches an old pod."
+  note "40 attribute writes through a $baseline_tag pod, under the guard, all accepted ✓"
+
+  # 3. The negative control.
+  out="$(attrguard_sql "$pod" "BEGIN; $(attrguard_insert_sql "$tenant" "$dev_id" drill-guard-unmarked); ROLLBACK;")"
+  attrguard_refused "$out" ||
+    fail "AN UNMARKED WRITE WAS NOT REFUSED: the guard is installed and reported ENFORCED but a write that skips the writer protocol was accepted:
+$out"
+  note "control: an unmarked write to a device's SHARED attribute is refused (DCAP1) ✓"
+  out="$(attrguard_sql "$pod" "BEGIN; SELECT set_config('devicechain.attr_protocol', '1', true); $(attrguard_insert_sql "$tenant" "$dev_id" drill-guard-marked); ROLLBACK;")"
+  attrguard_refused "$out" && fail "A MARKED WRITE WAS REFUSED, so the refusal above says nothing about the marker:
+$out"
+  [[ "$out" == *"rc=0" ]] || fail "the marked control write failed for another reason:
+$out"
+  note "control: the same write, marked, is accepted ✓"
+  out="$(attrguard_sql "$pod" "BEGIN; ALTER TABLE \"device-management\".entity_attributes DISABLE TRIGGER dc_enforce_attr_protocol; $(attrguard_insert_sql "$tenant" "$dev_id" drill-guard-disabled); ROLLBACK;")"
+  attrguard_refused "$out" && fail "THE WRITE WAS REFUSED WITH THE TRIGGER SWITCHED OFF, so the refusal does not come from the trigger:
+$out"
+  [[ "$out" == *"rc=0" ]] || fail "the trigger-off control failed for another reason:
+$out"
+  note "control: with the trigger off (rolled back) the unmarked write is accepted, so the refusal is the trigger's ✓"
+  # And nothing was left: the control writes were all rolled back, and the trigger is still enforcing (read below).
+  attrguard_cleanup
+  kubectl --context "$kube_context" -n "$ns" wait --for=delete pod -l "$oldpod_label=oldpod-device-management" --timeout=120s >/dev/null 2>&1 ||
+    fail "the $baseline_tag device-management copy did not terminate"
+  out="$("$target_dcctl" fleet-op readiness -o json -s "$api_server" ${tls[@]+"${tls[@]}"} -t "$tenant" \
+    --email "$email" --password "$pw" 2>/dev/null)" || true
+  enforcement="$(attrguard_enforcement <<<"$out")" || enforcement=""
+  [[ "$enforcement" == "ENFORCED" ]] || fail "the guard is no longer ENFORCED after the controls ('${enforcement:-nothing}'); a control left it changed"
+  trap - EXIT
+  say "ATTRIBUTE GUARD HOLDS — enforced, $baseline_tag pods' writes pass, an unmarked writer is refused, and the refusal is the trigger's"
+}
+
 # selftest_v19 covers the pure halves of the two phases above: the manifest builder, the image
 # derivation and the inert verdict, each against the input it must refuse as well as the one it
 # must accept.
@@ -3552,6 +3712,17 @@ selftest_v19() {
     fail "SELF-TEST FAILED: a status that does not say not-enrolled was accepted"
   note "the inert verdict accepts the inert state and names each way it is not ✓"
 
+  attrguard_refused $'ERROR:  DCAP1: device attribute write without the writer protocol marker\nrc=3' ||
+    fail "SELF-TEST FAILED: a DCAP1 refusal was not read as the guard's"
+  attrguard_refused $'ERROR:  device attribute write without the writer protocol marker\nrc=3' ||
+    fail "SELF-TEST FAILED: the guard's own message was not read as its refusal"
+  attrguard_refused $'rc=0' && fail "SELF-TEST FAILED: a success was read as a refusal"
+  attrguard_refused $'ERROR:  duplicate key value violates unique constraint\nrc=3' && fail "SELF-TEST FAILED: an unrelated error was read as the guard's refusal"
+  [[ "$(attrguard_enforcement <<<'{"enforcement":"ENFORCED","orphanedAttributeRows":0}')" == "ENFORCED" ]] ||
+    fail "SELF-TEST FAILED: the enforcement state was not read from the readiness JSON"
+  attrguard_enforcement <<<'{"orphanedAttributeRows":0}' >/dev/null && fail "SELF-TEST FAILED: a missing enforcement field was read as a state"
+  attrguard_enforcement <<<'not json' >/dev/null && fail "SELF-TEST FAILED: no JSON was read as a state"
+  note "the guard checks read a refusal and an enforcement state, and nothing else counts as either ✓"
   attrlock_waiting 1 1 || fail "SELF-TEST FAILED: a waiter beside a running write was not read as waiting"
   attrlock_waiting 0 1 && fail "SELF-TEST FAILED: no waiter was read as waiting"
   attrlock_waiting 1 0 && fail "SELF-TEST FAILED: a finished write was read as waiting"
@@ -4734,6 +4905,7 @@ infra) cmd_infra ;;
 oldpods) cmd_oldpods ;;
 executor) cmd_executor ;;
 attrlock) cmd_attrlock ;;
+attrguard) cmd_attrguard ;;
 selftest) selftest ;;
 down) cmd_down ;;
 all)
@@ -4796,7 +4968,8 @@ and event history belongs to the DR drill, not this one."
   cmd_oldpods
   cmd_executor
   cmd_attrlock
+  cmd_attrguard
   say "UPGRADE DRILL COMPLETE — data survived, the operator is in step, and the broker and event store carry this release's settings."
   ;;
-*) fail "unknown command ${1}; try mode | up | upgrade | logins | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | infra | oldpods | executor | attrlock | all | selftest | down" ;;
+*) fail "unknown command ${1}; try mode | up | upgrade | logins | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | infra | oldpods | executor | attrlock | attrguard | all | selftest | down" ;;
 esac

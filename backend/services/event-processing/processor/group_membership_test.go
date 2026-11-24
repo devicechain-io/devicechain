@@ -6,8 +6,10 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -203,11 +205,90 @@ func membershipRuleMessage(t *testing.T, tenant string) messaging.Message {
 	return messaging.NewConsumedMessage("dc."+tenant+".detection-rules-published", b, 0, nil, &fakeAck{})
 }
 
+// lastSeen remembers what a polling wait last observed, so a wait that times out says what the store
+// or the broker held rather than only that the condition never became true. because returns the
+// failure message as a lazily formatted argument: require.Eventually formats its message when it
+// fails, and the observation is read then.
+type lastSeen struct {
+	mu    sync.Mutex
+	what  string
+	reads int
+}
+
+func (l *lastSeen) note(what string) {
+	l.mu.Lock()
+	l.what, l.reads = what, l.reads+1
+	l.mu.Unlock()
+}
+
+type seenMessage struct {
+	seen *lastSeen
+	msg  string
+}
+
+func (l *lastSeen) because(format string, args ...any) fmt.Stringer {
+	return seenMessage{seen: l, msg: fmt.Sprintf(format, args...)}
+}
+
+func (m seenMessage) String() string {
+	m.seen.mu.Lock()
+	defer m.seen.mu.Unlock()
+	return fmt.Sprintf("%s; last observed (after %d reads): %s", m.msg, m.seen.reads, m.seen.what)
+}
+
+// describeSnapshot is a committed snapshot row as a wait saw it: its stream sequence and the
+// series it expected.
+func describeSnapshot(row *model.DetectSnapshot, ok bool, err error) string {
+	switch {
+	case err != nil:
+		return "load error: " + err.Error()
+	case !ok:
+		return "no row"
+	}
+	var snap struct {
+		Expected []struct{ Rule, Series string }
+	}
+	if json.Unmarshal(row.Payload, &snap) != nil {
+		return fmt.Sprintf("stream_seq=%d, undecodable payload", row.StreamSeq)
+	}
+	keys := make([]string, 0, len(snap.Expected))
+	for _, k := range snap.Expected {
+		keys = append(keys, k.Rule+"#"+k.Series)
+	}
+	return fmt.Sprintf("stream_seq=%d expected=[%s]", row.StreamSeq, strings.Join(keys, ","))
+}
+
+// describeBacklog is a reader's pending and unacked counts, or the error that stopped the read.
+func describeBacklog(reader messaging.MessageReader) string {
+	pending, acks, err := reader.(consumerBacklog).Backlog(context.Background())
+	if err != nil {
+		return "backlog error: " + err.Error()
+	}
+	return fmt.Sprintf("reader pending=%d unacked=%d", pending, acks)
+}
+
 // This exercises the supervisor's real all-worker build and delayed singleton
 // consumer launch, over two terms. Assertions read committed SQLite snapshots.
-func TestGroupMembershipSupervisor(t *testing.T) {
+func TestGroupMembershipSupervisor(t *testing.T) { runGroupMembershipSupervisor(t, 0) }
+
+// The same flow with snapshots that take 100 ms to serialize. The checkpoint spacing is four times
+// the last snapshot's cost, so here it is 400 ms, far longer than the gap between two events: this
+// is the loaded-machine case made certain, and it is what a checkpoint-per-event test must survive.
+func TestGroupMembershipSupervisorSlowSnapshots(t *testing.T) {
+	runGroupMembershipSupervisor(t, 100*time.Millisecond)
+}
+
+func runGroupMembershipSupervisor(t *testing.T, snapshotCost time.Duration) {
 	r := newGroupRig(t)
 	p0, p1 := membershipFixture(t, r)
+	if snapshotCost > 0 {
+		for _, p := range []*ResolvedEventsProcessor{p0, p1} {
+			p.snapshotFn = func() ([]byte, error) {
+				time.Sleep(snapshotCost)
+				return p.engine.Snapshot()
+			}
+		}
+	}
 	r.b.brokerManager(t, func(nm *messaging.NatsManager) error {
 		var err error
 		p0.RuleUpdatesReader, err = nm.NewReader(streams.DetectionRulesPublished, messaging.ReaderWithTermGate(r.gate.Held))
@@ -226,6 +307,14 @@ func TestGroupMembershipSupervisor(t *testing.T) {
 	p0.Lease = dl
 	for _, p := range []*ResolvedEventsProcessor{p0, p1} {
 		p.cfg.CheckpointEvents = 1
+		// CheckpointEvents = 1 asks for a commit per event, but the count trigger is also spaced by
+		// four times the last snapshot's measured cost (capped at CheckpointInterval): an event that
+		// arrives sooner than that is NOT checkpointed, and with the ticker and the interval an hour
+		// out (newTestProcessor) nothing else would commit it until the next event. On a loaded
+		// machine one slow save is enough for that to outlast the gap to the next event, and the
+		// wait for that event's snapshot then never ends. Capping the interval at a nanosecond makes
+		// the spacing always met; the ticker is untouched, so the tick adds no commit of its own.
+		p.cfg.CheckpointInterval = time.Nanosecond
 	}
 	require.NoError(t, p0.ExecuteInitialize(context.Background()))
 	prior, err := dl.Acquire(singletonPartition)
@@ -242,8 +331,10 @@ func TestGroupMembershipSupervisor(t *testing.T) {
 		publish(tenant, streams.DeviceRoster, rosterMsg(t, tenant, "never", "p", testBase, &fakeAck{}))
 	}
 	waitSnapshot := func(g int, seq int64, hasLive bool) {
+		seen := &lastSeen{}
 		require.Eventually(t, func() bool {
 			row, ok, err := r.store.Load(context.Background(), groupPartition(g))
+			seen.note(describeSnapshot(row, ok, err))
 			if err != nil || !ok || row.StreamSeq != seq {
 				return false
 			}
@@ -265,13 +356,16 @@ func TestGroupMembershipSupervisor(t *testing.T) {
 				return true
 			}
 			return false
-		}, 5*time.Second, 10*time.Millisecond, "group %d seq %d live %v did not checkpoint its own membership", g, seq, hasLive)
+		}, 5*time.Second, 10*time.Millisecond, seen.because("group %d seq %d live %v did not checkpoint its own membership", g, seq, hasLive))
 	}
 	settled := func(reader messaging.MessageReader) {
+		seen := &lastSeen{}
 		require.Eventually(t, func() bool {
 			pending, acks, err := reader.(consumerBacklog).Backlog(context.Background())
+			seen.note(fmt.Sprintf("pending=%d unacked=%d err=%v arm=%d/%d drops=%d/%d", pending, acks, err,
+				len(p0.armUpdates), len(p1.armUpdates), len(p0.seriesDrops), len(p1.seriesDrops)))
 			return err == nil && pending == 0 && acks == 0 && len(p0.armUpdates) == 0 && len(p1.armUpdates) == 0 && len(p0.seriesDrops) == 0 && len(p1.seriesDrops) == 0
-		}, 5*time.Second, 10*time.Millisecond, "fact handoffs did not settle on owner loops")
+		}, 5*time.Second, 10*time.Millisecond, seen.because("fact handoffs did not settle on owner loops"))
 	}
 	for term := 1; term <= 2; term++ {
 		h, err := p0.beginTerm()
@@ -283,15 +377,17 @@ func TestGroupMembershipSupervisor(t *testing.T) {
 			}
 			// Wait for projection writes before resolved input prompts a checkpoint.
 			// The committed snapshot proves the loop applied the membership recheck.
+			projected := &lastSeen{}
 			require.Eventually(t, func() bool {
 				for _, tenant := range []string{"acme", "other"} {
 					row, ok, err := p0.RosterStore.Load(context.Background(), tenant, "live")
 					if err != nil || !ok || !row.ExpectedSince.Equal(testBase.Add(time.Duration(term)*2*time.Hour)) {
+						projected.note(fmt.Sprintf("%s/live row=%+v found=%v err=%v; %s", tenant, row, ok, err, describeBacklog(p0.RosterReader)))
 						return false
 					}
 				}
 				return true
-			}, 5*time.Second, 10*time.Millisecond)
+			}, 5*time.Second, 10*time.Millisecond, projected.because("term %d: the roster facts were not projected", term))
 			settled(p0.RosterReader)
 			for g := 0; g < 2; g++ {
 				seq := 2*term - 1
@@ -305,15 +401,17 @@ func TestGroupMembershipSupervisor(t *testing.T) {
 			for _, tenant := range []string{"acme", "other"} {
 				publish(tenant, streams.EntityDeleted, messaging.NewConsumedMessage("", b, 0, nil, &fakeAck{}))
 			}
+			deleted := &lastSeen{}
 			require.Eventually(t, func() bool {
 				for _, tenant := range []string{"acme", "other"} {
 					row, live, err := p0.RosterStore.Load(context.Background(), tenant, "live")
 					if err != nil || live || !row.Deleted {
+						deleted.note(fmt.Sprintf("%s/live row=%+v live=%v err=%v; %s", tenant, row, live, err, describeBacklog(p0.EntityDeletedReader)))
 						return false
 					}
 				}
 				return true
-			}, 5*time.Second, 10*time.Millisecond)
+			}, 5*time.Second, 10*time.Millisecond, deleted.because("term %d: the entity-deleted facts were not projected", term))
 			settled(p0.EntityDeletedReader)
 			for g := 0; g < 2; g++ {
 				seq := 2 * term

@@ -1,16 +1,14 @@
 # Candidate apply role under test by E-i (pending S5, which fixes the final role from the result).
-# One permission per line. Deliberately absent: anything mapping to a Kubernetes verb (container.secrets.*,
+# One permission per line. Node-pool create/update/delete have no IAM permission of their own: GKE
+# authorizes them as container.clusters.update (and reads as container.clusters.get), and IAM rejects a
+# custom role naming container.nodePools.*, as the first real run of E-i found.
+# Deliberately absent: anything mapping to a Kubernetes verb (container.secrets.*,
 # container.pods.*), container.clusters.getCredentials, compute.disks.createSnapshot, compute.images.create,
 # compute.instances.attachDisk/setMetadata/osLogin/osAdminLogin, iam.serviceAccounts.getAccessToken.
 container.clusters.create
 container.clusters.get
 container.clusters.list
 container.clusters.update
-container.nodePools.create
-container.nodePools.get
-container.nodePools.list
-container.nodePools.update
-container.nodePools.delete
 container.operations.get
 container.operations.list
 compute.networks.get

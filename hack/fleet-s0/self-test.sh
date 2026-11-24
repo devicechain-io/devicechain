@@ -27,7 +27,7 @@ export FLEET_S0_ADMIN_PROJECT=s0-admin FLEET_S0_PROJECT=s0-spike FLEET_S0_FOLDER
 export FLEET_S0_LOCATION=us-central1-a FLEET_S0_SCHEDULER_LOCATION=us-central1
 export FLEET_S0_TEST_IDENTITY=test@s0-spike.iam.gserviceaccount.com
 export FLEET_S0_CANARY_PROJECT=s0-canary FLEET_S0_POLL_SECONDS=0 FLEET_S0_TIMEOUT_SECONDS=1
-export FLEET_S0_DENY_SETTLE_SECONDS=0
+export FLEET_S0_DENY_SETTLE_SECONDS=0 FLEET_S0_IAM_PROPAGATION_SECONDS=1
 export FLEET_S0_PROVIDER_VERSION=6.49.0 FLEET_S0_HEARTBEAT_SECONDS=0
 export FLEET_S0_PG_ADMIN_URL=postgres://admin@localhost/s0
 export FLEET_S0_APPLY_IDENTITY=apply@s0-spike.iam.gserviceaccount.com FLEET_S0_NODE_IDENTITY=node@s0-spike.iam.gserviceaccount.com
@@ -132,6 +132,8 @@ if which == "E-i":
     assert I.exposure_verdict(open_)["verdict"] == "FAILS" and I.exposure_verdict(open_)["measured"]["open_paths"] == ["snap"]
     assert raises(I.exposure_verdict, dict(ok, attempts=[a("snap", "refuse", 1, 1)] + ok["attempts"][1:])), "control refused"
     assert raises(I.exposure_verdict, dict(ok, attempts=[a("node", "must_succeed", 1)])), "role too narrow"
+    gke = a("other", "refuse", 1); gke["subject"]["output"] = 'ResponseError: code=400, message=The user does not have access to service account "o@p.iam.gserviceaccount.com".'
+    assert I.exposure_verdict(dict(ok, attempts=[gke]))["verdict"] == "HOLDS", "GKE's actAs refusal is a refusal"
     bad = a("snap", "refuse", 1); bad["subject"]["output"] = "NOT_FOUND"
     assert raises(I.exposure_verdict, dict(ok, attempts=[bad])), "a failure that is not a permission refusal"
     assert raises(I.exposure_verdict, dict(ok, attempts=[a("abac", "open_by_design", 0, ctl="")])), "an open path with no control"
@@ -139,6 +141,12 @@ PY
     : >"$d/calls"
     run "$1" >"$d/out" 2>&1 || fail "$1 positive control"
     grep -q "$1 HOLDS" "$d/out" || fail "$1 produced no HOLDS verdict"
+    if [[ $1 == E-h ]]; then
+      # The import into a copy of the state is a RECORDED finding, so no verdict guards it: check it here.
+      newest=""
+      for r in "$d"/run.*; do if [[ -z $newest || $r -nt $newest ]]; then newest=$r; fi; done
+      python3 -c 'import json,sys; r=json.loads(open(sys.argv[1]).read().splitlines()[0]); assert all(p["import_succeeded"] for p in r["measured"]["points"]), "import never succeeded"' "$newest/results.jsonl" || fail "E-h import into a copy of the state did not run"
+    fi
     # Each scripted defect must turn THIS probe red with a FAILS verdict.
     case "$1" in
       E-d) fails=(wif-aud-open wif-iss-open wif-subject-open); inconclusive=(wif-baseline-refused jwks-private) ;;
