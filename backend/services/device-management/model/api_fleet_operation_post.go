@@ -51,7 +51,7 @@ const (
 	FleetPosted FleetPostOutcome = "POSTED"
 	// FleetPostRefused: a gate refused the line (REFUSED) or its target is gone (SKIPPED), and that is recorded.
 	FleetPostRefused FleetPostOutcome = "REFUSED"
-	// FleetPostBusy: the device's lock is held by another writer. Nothing was written; requeue.
+	// FleetPostBusy: the device's lock is held by another writer. Nothing was written; back off.
 	FleetPostBusy FleetPostOutcome = "BUSY"
 	// FleetPostLostRace: another poster or a cancel got the line first. Nothing was written.
 	FleetPostLostRace FleetPostOutcome = "LOST_RACE"
@@ -92,6 +92,8 @@ var (
 	// fleetPostHook lets a test interleave a competing session at a named point of the posting transaction
 	// ("read": after the unlocked line read; "claim": just before the claim; "claimed": just after it). Nil in production.
 	fleetPostHook func(stage string, tx *gorm.DB)
+	// fleetTryDeviceLock is the real try-lock; tests can model a held lock on SQLite.
+	fleetTryDeviceLock = tryLockDeviceAttributes
 )
 
 // fleetValueImage is the before-image and the posted value of a line, as stored.
@@ -184,7 +186,7 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 			return errors.New("a PLANNED line has no target")
 		}
 		devID = uint(line.TargetId.Int64)
-		got, err := tryLockDeviceAttributes(postCtx, tx, devID)
+		got, err := fleetTryDeviceLock(postCtx, tx, devID)
 		if err != nil {
 			return err
 		}
@@ -314,12 +316,20 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		api.afterMembershipRecompute(ctx, "device", devID, change)
 		return result, nil
 	case errors.Is(err, errPostAbandoned):
+		if result.Outcome == FleetPostBusy {
+			// A try-lock miss is a retryable posting attempt too. Without backoff a busy
+			// head can spend every pass's permits before later due lines are selected.
+			if rerr := api.RecordFleetLineRetry(ctx, lineID, "DEVICE_BUSY", fleetClock()); rerr != nil {
+				return FleetPostResult{}, rerr
+			}
+			result.Code = "DEVICE_BUSY"
+		}
 		return result, nil
 	case errors.Is(err, errPostDecided):
 		return api.recordFleetRefusal(ctx, tenant, opID, lineID, lease, *decided)
 	}
 	if code, retryable := fleetRetryableCode(err); retryable {
-		if rerr := api.RecordFleetLineRetry(ctx, lineID, code, time.Now()); rerr != nil {
+		if rerr := api.RecordFleetLineRetry(ctx, lineID, code, fleetClock()); rerr != nil {
 			return FleetPostResult{}, rerr
 		}
 		return FleetPostResult{Outcome: FleetPostRetry, Code: code}, nil
