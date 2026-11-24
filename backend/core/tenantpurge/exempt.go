@@ -228,6 +228,11 @@ var exemptions = []Exemption{
 			"tenant and holds no tenant's figures; the aggregates it describes are classified " +
 			"through their own materializations.",
 	},
+	{
+		Schema: "event-management", Name: "analytics_surface_generation", Class: ClassExempt,
+		Reason: "a single instance-wide row recording which build generation last reconciled the " +
+			"SQL/BI analytics surface. It names no tenant and holds no tenant's data.",
+	},
 
 	// ---- event-processing: the DETECT engine's own state --------------------
 	// detect_stream_topology was listed one release AHEAD of the migration that creates it,

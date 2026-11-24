@@ -116,7 +116,7 @@ func TestAToolCallWritesOneAuditRecordNamingTheCaller(t *testing.T) {
 
 	rec := onlyAuditLine(t, buf)
 	want := map[string]any{
-		"schema":    float64(2),
+		"schema":    float64(3),
 		"tenant":    "acme",
 		"actor":     "a@b.c",
 		"client_id": "claude-desktop",

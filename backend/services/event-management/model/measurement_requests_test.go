@@ -102,10 +102,17 @@ func TestTextValueIsInThePayloadIdentityOnlyWhenPresent(t *testing.T) {
 	assert.Equal(t, ida, again)
 }
 
-// The migration is appended last; its SQL (nullable, no default, re-runnable) is exercised against
+// The migration follows the previous chain; its SQL (nullable, no default, re-runnable) is exercised against
 // a real database by hack/migration-diff.sh verify and replay.
-func TestMeasurementTextValueMigrationIsAppendedLast(t *testing.T) {
-	assert.Equal(t, NewMeasurementTextValueSchema().ID, Migrations[len(Migrations)-1].ID)
+func TestMeasurementTextValueMigrationRemainsAfterRollup1h(t *testing.T) {
+	for i, migration := range Migrations {
+		if migration.ID == NewMeasurementTextValueSchema().ID {
+			require.Greater(t, i, 0)
+			assert.Equal(t, NewRollup1hSchema().ID, Migrations[i-1].ID)
+			return
+		}
+	}
+	t.Fatal("measurement text-value migration is missing")
 }
 
 // A STRING value the store cannot hold is refused HERE, as deterministic. PostgreSQL rejects a NUL

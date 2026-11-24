@@ -155,6 +155,7 @@ func (t *Tools) ProposeCommand(ctx context.Context, req *mcp.CallToolRequest, in
 		} `json:"proposeCommand"`
 	}
 	if err = t.gql.Query(ctx, proposeCommandMutation, token, map[string]any{"input": input}, &resp); err != nil {
+		recordProposalError(ctx, err)
 		return nil, out, err
 	}
 	if resp.Outcome == nil || resp.Outcome.Status == "" || resp.Outcome.Verdict == "" {
@@ -166,6 +167,7 @@ func (t *Tools) ProposeCommand(ctx context.Context, req *mcp.CallToolRequest, in
 		return nil, out, invalidProposalInput("command proposal response is unavailable or incomplete")
 	}
 	out = resp.Outcome.CommandProposalOutcome
+	recordProposalDecision(ctx, resp.Outcome.Stored, resp.Outcome.Verdict, resp.Outcome.Reasons)
 	if resp.Outcome.Preview != nil {
 		out.Preview = resp.Outcome.Preview.output()
 	}

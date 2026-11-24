@@ -282,6 +282,9 @@ func newTestAnalyticsMetrics() *AnalyticsMetrics {
 	return &AnalyticsMetrics{PlatformCollisions: prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "analytics_reconcile_platform_collisions_total",
 		Help: "Superuser reader-name collisions skipped during analytics reconciliation.",
+	}), NewerSurfaceSkips: prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "analytics_reconcile_newer_surface_skips_total",
+		Help: "Analytics reconciliations skipped because the database surface generation is newer than this build.",
 	})}
 }
 
