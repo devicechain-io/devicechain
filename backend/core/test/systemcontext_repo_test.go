@@ -79,6 +79,8 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/api_configuration_report_maintenance.go": {"Api.configurationReportTenants"},
 	// Create admission counts the instance-wide fleet-operation budgets (counts only, no row of any tenant is read) under the tenant and instance admission locks.
 	"backend/services/device-management/model/api_fleet_operation.go": {"Api.fleetAdmit"},
+	// Start admission counts the instance-wide dispatching budget (a count only, no row of any tenant is read) under the tenant and instance admission locks.
+	"backend/services/device-management/model/api_fleet_operation_control.go": {"Api.fleetAdmitDispatching"},
 	// The attribute orphan sweep takes its one-replica session lock and lists the tenants that hold device attribute or generation rows (no row content is read), then removes each tenant's orphans under its own core.WithTenant.
 	"backend/services/device-management/model/api_attribute_orphans.go": {"Api.SweepAllDeviceAttributeOrphans", "Api.attributeOrphanTenants"},
 	// The agent-effect relay lists the tenants that have queued effects, then drains each tenant's rows under core.WithTenant.
