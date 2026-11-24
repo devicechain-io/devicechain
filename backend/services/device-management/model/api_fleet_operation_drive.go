@@ -38,6 +38,7 @@ const (
 	FleetHoldAuthorityUnavailable = "AUTHORITY_UNAVAILABLE"
 	FleetHoldNotActivated         = "NOT_ACTIVATED"
 	FleetHoldRateLimit            = "RATE_LIMIT"
+	FleetHoldPostError            = "POST_ERROR"
 
 	fleetEventAutoPause  = "AUTO_PAUSE"
 	fleetEventDispatched = "DISPATCHED"
@@ -73,7 +74,7 @@ type FleetDriveResult struct {
 var fleetStandingAuthorities = []string{string("device:write"), string("fleet:operate")}
 
 // DriveFleetOperation runs one pass for one operation. A token that names no RUNNING operation is a no-op.
-func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps FleetCaps) (*FleetDriveResult, error) {
+func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps FleetCaps) (_ *FleetDriveResult, passErr error) {
 	res := &FleetDriveResult{}
 	op, err := api.fleetOperationByToken(ctx, token)
 	if err != nil {
@@ -83,6 +84,17 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 		return res, nil
 	}
 	api.touchFleetRuntime(ctx, op, nil, nil) // the heartbeat alone: a hold is not cleared by looking
+	defer func() {
+		// Every exit records this pass's progress, and every exit that decided its hold records that hold. A
+		// pass that failed before deciding one has not shown the operation is unheld, and leaves the hold (and
+		// how long it has lasted) alone: a hold is not cleared by failing to look either.
+		posted := res.Posted > 0
+		if passErr != nil && res.Hold == "" {
+			api.touchFleetRuntime(ctx, op, &posted, nil)
+			return
+		}
+		api.touchFleetRuntime(ctx, op, &posted, &res.Hold)
+	}()
 
 	// 1. The lease.
 	lease, hold, err := api.fleetLease(ctx, op)
@@ -91,7 +103,6 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	}
 	if hold != "" {
 		res.Hold = hold
-		api.touchFleetRuntime(ctx, op, nil, &hold)
 		return res, nil
 	}
 	if lease == nil {
@@ -143,7 +154,11 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 		return nil, err
 	}
 	if len(due) == 0 {
-		return res, nil // every remaining line is backing off
+		// Every remaining line is backing off. One waiting out an undecided failure keeps its hold.
+		if err := api.holdForUndecidedLines(db, op, res); err != nil {
+			return res, err
+		}
+		return res, nil
 	}
 	granted, err := api.AcquireFleetPermits(ctx, op.ID, len(due), allowed, now)
 	if err != nil {
@@ -151,8 +166,6 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	}
 	if granted == 0 {
 		res.Hold = FleetHoldRateLimit
-		rl := FleetHoldRateLimit
-		api.touchFleetRuntime(ctx, op, nil, &rl)
 		return res, nil
 	}
 	due = due[:granted]
@@ -169,7 +182,7 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	var firstErr error
 	for _, line := range due {
 		mu.Lock()
-		halted := stop || firstErr != nil
+		halted := stop
 		mu.Unlock()
 		if halted {
 			break
@@ -180,14 +193,23 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 			defer wg.Done()
 			defer func() { <-sem }()
 			r, perr := api.PostFleetLine(ctx, op.ID, lineID, *lease)
-			mu.Lock()
-			defer mu.Unlock()
 			if perr != nil {
+				// An undecided error is neither a refusal nor a reason to starve later lines. Keep it
+				// visible with its own code and backoff, and return the error after pass bookkeeping.
+				rerr := api.RecordFleetLineRetry(ctx, lineID, FleetHoldPostError, fleetClock())
+				mu.Lock()
+				defer mu.Unlock()
+				res.Hold = FleetHoldPostError
 				if firstErr == nil {
 					firstErr = perr
 				}
+				if rerr != nil {
+					firstErr = errors.Join(firstErr, rerr)
+				}
 				return
 			}
+			mu.Lock()
+			defer mu.Unlock()
 			switch r.Outcome {
 			case FleetPosted:
 				res.Posted++
@@ -210,9 +232,6 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	if firstErr != nil {
 		return res, firstErr
 	}
-	posted := res.Posted > 0
-	api.touchFleetRuntime(ctx, op, &posted, &res.Hold)
-
 	// 6. Completion.
 	if res.Hold == "" && !stop {
 		if err := db.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPlanned).Count(&planned).Error; err != nil {
@@ -221,8 +240,29 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 		if planned == 0 {
 			return api.finishDriven(ctx, res, op)
 		}
+		if err := api.holdForUndecidedLines(db, op, res); err != nil {
+			return res, err
+		}
 	}
 	return res, nil
+}
+
+// holdForUndecidedLines holds a pass under POST_ERROR while any PLANNED line's last attempt failed undecided,
+// so the hold and its start survive the passes that only wait out that line's backoff or post other lines.
+// A line that is retried and posts, or fails again for a retryable reason, stops holding it.
+func (api *Api) holdForUndecidedLines(db *gorm.DB, op *FleetOperation, res *FleetDriveResult) error {
+	if res.Hold != "" {
+		return nil
+	}
+	var n int64
+	if err := db.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ? AND last_error_code = ?",
+		op.ID, FleetPostingPlanned, FleetHoldPostError).Limit(1).Count(&n).Error; err != nil {
+		return err
+	}
+	if n > 0 {
+		res.Hold = FleetHoldPostError
+	}
+	return nil
 }
 
 func isStaleDecision(err error) bool {
