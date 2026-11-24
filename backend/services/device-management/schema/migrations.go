@@ -83,5 +83,6 @@ var (
 		NewDeviceConfigurationReportsSchema(),
 		NewDecoderHealthWindowIndexesSchema(),
 		NewAttributeGenerationsSchema(),
+		NewAttributeWriterProtocolSchema(),
 	}
 )

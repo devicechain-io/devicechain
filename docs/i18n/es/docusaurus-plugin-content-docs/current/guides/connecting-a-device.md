@@ -127,6 +127,15 @@ Una marca de tiempo informada no puede adelantarse demasiado al propio reloj de 
 "payload": { "entries": [ { "measurements": { "temperature": "21.5", "humidity": "48" } } ] }
 ```
 
+#### Lecturas de texto {#text-readings}
+
+El valor de una medición es una cadena JSON, sea o no un número, pero la plataforma la almacena como texto solo cuando la métrica se declara con el tipo de dato `STRING` en el perfil del tipo de dispositivo. Un dispositivo que notifica `"heating"` bajo una clave que el perfil declara `STRING` tiene ese valor guardado en su historial, como su último valor conocido (`textValue` en `latestMeasurements` y en las consultas de eventos) y en su página de la consola. Nunca se promedia, se suma ni se grafica como número.
+
+- **El texto no declarado se descarta.** Un valor de texto para una clave que el perfil no declara no se almacena. El resto del mensaje se conserva, el dispositivo recibe la confirmación normal y el descarte se cuenta como `undeclared_non_numeric` en `resolve_measurement_dropped_total`. La página del dispositivo en la consola muestra la métrica descartada, así que decláralo en el perfil para almacenarlo.
+- **Un valor ocupa como máximo 4.096 bytes** de UTF-8 válido sin bytes NUL. Uno más largo o no válido se descarta por sí solo, se cuenta como `declared_not_storable` y las demás lecturas del mensaje se conservan.
+
+Consulta la [referencia de métricas](../deployment/metrics-reference.md#device-management) para el contador y [Obtener ayuda](../getting-help.md) para averiguar por qué falta una lectura.
+
 ### Location {#location}
 
 **`Location`** — dónde está el dispositivo:

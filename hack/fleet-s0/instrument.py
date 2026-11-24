@@ -169,7 +169,10 @@ def crash_verdict(cfg):
     return dict(verdict="FAILS" if problems else "HOLDS", measured=measured)
 
 
-REFUSAL = re.compile(r"PERMISSION_DENIED|Forbidden|403|does not have permission|Required '[a-z.]+' permission", re.I)
+# GKE refuses actAs of a service account the caller may not use with HTTP 400 "does not have access to
+# service account" (the first real run of E-i found it): a refusal, though not spelled as a 403.
+REFUSAL = re.compile(r"PERMISSION_DENIED|Forbidden|403|does not have permission|Required '[a-z.]+' permission"
+                     r"|does not have access to service account", re.I)
 
 
 def classify(exit_code, output):

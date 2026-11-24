@@ -128,6 +128,7 @@ it is stale while `detect_is_leader` and `detect_live` both read 1, the loop is 
 | --- | --- |
 | `detect_applied_stream_seq` | Highest JetStream stream sequence captured in the committed snapshot. |
 | `detect_checkpoint_failures_total{stage}` | Scheduled DETECT checkpoints that did not commit, by stage (publish, serialize, save). A checkpoint call that outlives its deadline counts against the stage it was stuck in. A stale-writer refusal is not counted here: that ends the process. |
+| `detect_checkpoint_min_spacing_seconds` | Gauge. The shortest time the engine lets pass between two count-triggered checkpoints: four times the cost of the last committed snapshot, never more than `checkpointIntervalSeconds`. It tracks `detect_checkpoint_seconds`, so it grows as the engine's state, and its snapshot, grows. When it sits at `checkpointIntervalSeconds`, count-triggered checkpoints are as rare as the setting allows, so a rising `detect_consumer_ack_pending` and a growing `detect_consumer_pending` alongside it mean checkpoints are slowing the consumer: look at `detect_snapshot_bytes` and the serialize and save times. |
 | `detect_checkpoint_save_seconds` | Time each committed snapshot spent being written to the database, as a distribution: the second part of a checkpoint's cost, after serialization. |
 | `detect_checkpoint_serialize_seconds` | Time each committed snapshot spent serializing the engine's state, as a distribution: the first part of a checkpoint's cost. |
 | `detect_checkpoints_total` | Committed DETECT snapshot checkpoints. |
@@ -153,6 +154,9 @@ it is stale while `detect_is_leader` and `detect_live` both read 1, the loop is 
 | `detect_fence_geometry_cache_vertices` | Total vertices held in the compiled-geometry cache — the quantity its bound is counted in. |
 | `detect_fence_geometry_hash_mismatch_total` | Geofence geometry documents that did not hash to the content address they were requested under. Always a bug, never transient: the peer served the wrong row, something re-encoded the document in transit, or the archive is corrupt. |
 | `detect_fence_geometry_unresolved_total` | Geofence manifest entries whose geometry could not be obtained from device-management's archive. Each one leaves that fence reporting unresolvable rather than answering, repaired by the next reconcile sweep if the cause was transient. |
+| `detect_group_shard_busy_seconds_total{group, shard}` | Seconds each detection shard of each shard group has spent applying operations. Read it as a rate: it is the shard's utilisation, so a rate of 0.5 is a shard half busy. Healthy is every shard well under 0.9 with similar values. One shard far above the rest in its group is a hot key (one device or correlation anchor sending far more than the others); every shard near 1 means `detectShards` is the limit and the group is falling behind, which shows as a growing `detect_consumer_pending`. |
+| `detect_group_shard_live_keys{group, shard}` | Gauge. Live windows, timers and latches held by each detection shard of each shard group. Healthy is a roughly even spread across the shards of a group. One shard holding far more than the others is key skew: its queue and busy time will be the ones that climb. |
+| `detect_group_shard_queue_depth{group, shard}` | Gauge. Operations queued for each detection shard of each shard group, sampled on the loop's tick. Healthy stays near zero. A shard whose queue stays high is the slowest, and the group's loop waits on it at every checkpoint, rule change and query, which shows as a lagging group (`detect_group_consumer_pending` and `detect_group_watermark_lag_seconds`). |
 | `detect_idle_advances_total` | Wall-clock idle advances that produced at least one detection. |
 | `detect_idle_detections_total` | Detections produced by wall-clock idle advance (absence/duration/session firing on silence). |
 | `detect_is_leader` | 1 while this replica holds the DETECT partition lease, from acquisition rather than from the end of the term build. |
@@ -204,6 +208,19 @@ defect to investigate, not load. `react_actions_not_enabled_total` should never 
 | `react_events_orphaned_total` | Derived events whose rule was gone from the projection (nothing dispatched). |
 | `react_events_poison_dropped_total` | Derived events dropped after the redelivery cap, because their dispatch kept failing. They are also written to the dead-letter stream, so this counts the same events as `react_events_dead_lettered_total`; it is kept because the `ReactPoisonDropping` alert fires on it. |
 | `react_workers` | How many derived events REACT may dispatch at once (`react.workers`). Events of one device are dispatched one after another, in stream order, except that an event left for redelivery is dispatched again after the events behind it. |
+
+## Device state {#device-state}
+
+Prefix: `devicechain_devicestate_`.
+
+Every ten minutes one replica at a time sweeps each tenant's last-known-state rows against device-management and corrects the ones that no longer match a device.
+
+| Metric | Means |
+| --- | --- |
+| `orphan_sweep_deleted_total` | Counter. Device state rows the sweep removed, because their device no longer exists or was recreated under the same token. A burst right after devices are purged or deleted is expected, and a steady non-zero rate while you are deleting devices is normal. A rate that keeps climbing when no device has been deleted is a fault: something is removing devices without telling device-state. Look at the sweep's log lines (`Orphan sweep reconciled device states`) for the counts per pass. |
+| `orphan_sweep_stamped_total` | Counter. Device state rows the sweep stamped with the incarnation of the device they belong to, so a later device recreated under the same token is recognised as a different one. Each row is stamped once, so a burst on the first passes after an upgrade, while rows written before the incarnation was recorded catch up, is expected and then falls to zero. A rate that does not settle is worth a look. |
+
+A pass that cannot reach device-management skips that tenant's remaining pages and is retried at the next pass; it is not counted in either metric. The pass itself shows in the `orphan_sweep` series described under [maintenance passes](./observability.md#maintenance-passes).
 
 ## Event management {#event-management}
 

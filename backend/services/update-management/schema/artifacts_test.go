@@ -13,7 +13,7 @@ import (
 )
 
 func TestTheArtifactsMigrationIsAppendedAfterTheBaselineWithItsOwnID(t *testing.T) {
-	require.Len(t, Migrations, 12)
+	require.Len(t, Migrations, 13)
 	require.Equal(t, BaselineID, Migrations[0].ID)
 	require.Equal(t, ArtifactsID, Migrations[1].ID)
 	require.Equal(t, UploadLeaseID, Migrations[2].ID)

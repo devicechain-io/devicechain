@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -50,14 +51,39 @@ func buildBinary(t *testing.T) string {
 	return bin
 }
 
-func freePort(t *testing.T) int {
+// reservation holds the listeners that picked a fixture's ports, so no other process, and no other
+// call in this one, can be handed a port between choosing it and the server binding it. Picking a
+// port by listening on :0 and closing at once leaves the port free for as long as the fixture takes
+// to be used: Prepare mints a PKI first, which under load takes seconds, and the kernel is free to
+// give the same port to the next :0 listener (including the fixture's own next port) or to any
+// outgoing connection in that window. The server then dies with "address already in use". The
+// listeners are closed by release, immediately before the server starts.
+type reservation struct {
+	mu  sync.Mutex
+	lns []net.Listener
+}
+
+// reserve listens on a free port and keeps the listener open until release.
+func (r *reservation) reserve(t *testing.T) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	r.mu.Lock()
+	r.lns = append(r.lns, ln)
+	r.mu.Unlock()
 	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// release closes every held listener. It is safe to call again.
+func (r *reservation) release() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ln := range r.lns {
+		_ = ln.Close()
+	}
+	r.lns = nil
 }
 
 type proc struct {
@@ -69,14 +95,20 @@ type proc struct {
 }
 
 // fixture is a prepared config directory on free ports, which a test may start more than once.
+// The ports stay reserved until the first launch (see reservation); a later launch of the same
+// fixture finds them free again once the earlier server has exited.
 type fixture struct {
 	dir, pid                     string
 	client, mqtt, http, metricsP int
+	res                          *reservation
 }
 
 func newFixture(t *testing.T) fixture {
 	t.Helper()
-	f := fixture{dir: t.TempDir(), client: freePort(t), mqtt: freePort(t), http: freePort(t), metricsP: freePort(t)}
+	res := &reservation{}
+	t.Cleanup(res.release)
+	f := fixture{dir: t.TempDir(), res: res}
+	f.client, f.mqtt, f.http, f.metricsP = res.reserve(t), res.reserve(t), res.reserve(t), res.reserve(t)
 	f.pid = filepath.Join(f.dir, "nats.pid")
 	if err := smoke.Prepare(f.dir, smoke.PrepareOptions{
 		PidFile: f.pid, StoreDir: filepath.Join(f.dir, "js"),
@@ -107,6 +139,8 @@ func launch(t *testing.T, f fixture, logName string) *proc {
 		t.Fatal(err)
 	}
 	cmd.Stdout, cmd.Stderr = logf, logf
+	// The last moment: the build and the log file above are inside the reservation too.
+	f.res.release()
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -615,4 +649,46 @@ func TestCheckReloadFlag(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFixturePortsStayReservedUntilLaunch: the four ports a fixture hands out are held, not merely
+// observed free, from the moment they are chosen until the server is started. The control is the
+// shape this replaced: a port read from a listener that was then closed is free to anyone, and a
+// second :0 listener can be given the very same number.
+func TestFixturePortsStayReservedUntilLaunch(t *testing.T) {
+	f := newFixture(t)
+	ports := []int{f.client, f.mqtt, f.http, f.metricsP}
+	seen := map[int]bool{}
+	for _, p := range ports {
+		if seen[p] {
+			t.Fatalf("two of the fixture's ports are both %d: %v", p, ports)
+		}
+		seen[p] = true
+		if ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(p)); err == nil {
+			ln.Close()
+			t.Fatalf("port %d was free while the fixture still had to start its server", p)
+		}
+	}
+	f.res.release()
+	for _, p := range ports {
+		ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(p))
+		if err != nil {
+			t.Fatalf("port %d was not free after release: %v", p, err)
+		}
+		ln.Close()
+	}
+	f.res.release() // a second release is harmless
+
+	// Control: the old pick-and-close leaves the port free to the next taker.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	thief, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	if err != nil {
+		t.Fatalf("control: a closed listener's port should be takeable, got %v", err)
+	}
+	thief.Close()
 }

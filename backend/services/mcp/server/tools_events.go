@@ -21,7 +21,7 @@ type QueryMeasurementsInput struct {
 }
 
 // MeasurementEvent is one raw reading. The metric name and unit are what the device reported,
-// so they sit under Untrusted.
+// and a STRING metric's text is what it chose, so they sit under Untrusted.
 type MeasurementEvent struct {
 	DeviceToken  string                `json:"deviceToken" prov:"id"`
 	Value        *float64              `json:"value,omitempty"`
@@ -88,7 +88,7 @@ func (t *Tools) QueryMeasurements(ctx context.Context, req *mcp.CallToolRequest,
 	for _, m := range resp.MeasurementEvents.Results {
 		out.Measurements = append(out.Measurements, MeasurementEvent{
 			DeviceToken: m.DeviceToken, Value: m.Value, DataType: m.DataType, OccurredTime: m.OccurredTime,
-			Untrusted: newMeasurementUntrusted(m.Name, m.Unit),
+			Untrusted: newMeasurementUntrusted(m.Name, m.Unit, ""),
 		})
 	}
 	return provenanceResult(out), out, nil
@@ -178,7 +178,7 @@ func (t *Tools) AggregateMeasurements(ctx context.Context, req *mcp.CallToolRequ
 	for _, b := range resp.BucketedMeasurements {
 		out.Buckets = append(out.Buckets, MeasurementBucket{
 			BucketStart: b.BucketStart, Avg: b.Avg, Min: b.Min, Max: b.Max, Sum: b.Sum, Count: b.Count,
-			Untrusted: newMeasurementUntrusted(b.Name, ""),
+			Untrusted: newMeasurementUntrusted(b.Name, "", ""),
 		})
 	}
 	return provenanceResult(out), out, nil

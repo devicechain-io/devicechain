@@ -29,7 +29,7 @@ const (
 
 func TestValidateDetectionRules_CarriesTheNegatedGuardWarning(t *testing.T) {
 	r := &SchemaResolver{}
-	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), struct{ Rules []detectionRuleInput }{
+	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), validateArgs{
 		Rules: []detectionRuleInput{
 			{Token: "guarded", Definition: guardedRule},
 			{Token: "fallback", Definition: fallbackRule},

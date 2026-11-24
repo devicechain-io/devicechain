@@ -1,3 +1,4 @@
+$$;
 ALTER SEQUENCE "device-management".agent_proposals_id_seq OWNED BY "device-management".agent_proposals.id;
 ALTER SEQUENCE "device-management".alarm_cycle_suppressions_id_seq OWNED BY "device-management".alarm_cycle_suppressions.id;
 ALTER SEQUENCE "device-management".alarm_dispositions_id_seq OWNED BY "device-management".alarm_dispositions.id;
@@ -58,6 +59,7 @@ ALTER SEQUENCE "device-management".profile_decoder_healths_id_seq OWNED BY "devi
 ALTER SEQUENCE "device-management".profile_decoder_samples_id_seq OWNED BY "device-management".profile_decoder_samples.id;
 ALTER SEQUENCE "device-management".provisioning_profiles_id_seq OWNED BY "device-management".provisioning_profiles.id;
 ALTER SEQUENCE "device-management".semantic_contexts_id_seq OWNED BY "device-management".semantic_contexts.id;
+ALTER TABLE "device-management".entity_attributes ENABLE ALWAYS TRIGGER dc_enforce_attr_protocol;
 ALTER TABLE ONLY "device-management".agent_actuation_fences
  ADD CONSTRAINT agent_actuation_fences_pkey PRIMARY KEY (tenant_id);
 ALTER TABLE ONLY "device-management".agent_effect_outboxes
@@ -350,6 +352,15 @@ CREATE FUNCTION "device-management".dc_entity_attr_lock(p_type text, p_id bigint
  AS $$
  SELECT pg_advisory_xact_lock(hashtextextended('dc.attr|' || p_type || '|' || p_id::text, 0))
 $$;
+CREATE FUNCTION "device-management".dc_require_attr_protocol() RETURNS trigger
+ LANGUAGE plpgsql
+ AS $$
+BEGIN
+ IF TG_OP IN ('INSERT', 'UPDATE') THEN
+ IF NEW.entity_type = 'device' AND NEW.scope = 'SHARED'
+ AND current_setting('devicechain.attr_protocol', true) IS DISTINCT FROM '1' THEN
+ RAISE EXCEPTION 'device attribute write without the writer protocol marker'
+ USING ERRCODE = 'DCAP1';
 CREATE INDEX "idx_device-management_agent_effect_outboxes_created_at" ON "device-management".agent_effect_outboxes USING btree (created_at);
 CREATE INDEX "idx_device-management_agent_proposals_deleted_at" ON "device-management".agent_proposals USING btree (deleted_at);
 CREATE INDEX "idx_device-management_agent_proposals_expires_at" ON "device-management".agent_proposals USING btree (expires_at);
@@ -1938,6 +1949,7 @@ CREATE TRIGGER automation_review_guard_profile_update BEFORE UPDATE ON "device-m
 CREATE TRIGGER automation_review_guard_type_update BEFORE UPDATE OF profile_id ON "device-management".device_types FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
 CREATE TRIGGER automation_review_guard_version_insert BEFORE INSERT ON "device-management".device_profile_versions FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
 CREATE TRIGGER automation_review_guard_version_update BEFORE UPDATE ON "device-management".device_profile_versions FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
+CREATE TRIGGER dc_enforce_attr_protocol BEFORE INSERT OR DELETE OR UPDATE ON "device-management".entity_attributes FOR EACH ROW EXECUTE FUNCTION "device-management".dc_require_attr_protocol();
 CREATE UNIQUE INDEX idx_command_definition_profile_key ON "device-management".command_definitions USING btree (device_profile_id, command_key);
 CREATE UNIQUE INDEX idx_device_claim_device ON "device-management".device_claims USING btree (device_id);
 CREATE UNIQUE INDEX idx_device_credential_lookup ON "device-management".device_credentials USING btree (tenant_id, credential_type, credential_id) WHERE (deleted_at IS NULL);
@@ -2032,7 +2044,13 @@ END IF;
 END IF;
 END IF;
 END IF;
+END IF;
+END IF;
+END IF;
+END IF;
+END IF;
 END LOOP;
+END;
 FOREACH p IN ARRAY ARRAY[OLD.profile_id, NEW.profile_id] LOOP
  CONTINUE WHEN p IS NULL;
 IF "device-management".automation_review_policy_required(NEW.device_profile_id) AND NOT EXISTS (
@@ -2079,6 +2097,13 @@ IF OLD.snapshot IS DISTINCT FROM NEW.snapshot
  OR OLD.deleted_at IS DISTINCT FROM NEW.deleted_at THEN
  IF current_setting('transaction_isolation') <> 'read committed' THEN
  RAISE EXCEPTION USING ERRCODE = 'DCR02', MESSAGE = 'PROFILE_PROTECTED: changing device profiles, their versions or bindings requires READ COMMITTED isolation';
+IF TG_OP = 'DELETE' THEN
+ RETURN OLD;
+IF TG_OP IN ('UPDATE', 'DELETE') THEN
+ IF OLD.entity_type = 'device' AND OLD.scope = 'SHARED'
+ AND current_setting('devicechain.attr_protocol', true) IS DISTINCT FROM '1' THEN
+ RAISE EXCEPTION 'device attribute write without the writer protocol marker'
+ USING ERRCODE = 'DCAP1';
 IF TG_TABLE_NAME = 'device_profiles' THEN
  IF TG_OP = 'DELETE' THEN
  IF current_setting('transaction_isolation') <> 'read committed' THEN
@@ -2096,6 +2121,7 @@ IF p IS NOT NULL THEN
 PERFORM 1 FROM "device-management".device_profiles WHERE id = NEW.device_profile_id FOR NO KEY UPDATE;
 PERFORM 1 FROM "device-management".device_profiles WHERE id = p FOR SHARE;
 PERFORM 1 FROM "device-management".device_profiles WHERE id IN (OLD.device_profile_id, NEW.device_profile_id) FOR SHARE;
+RETURN NEW;
 RETURN NEW;
 RETURN NEW;
 RETURN NEW;

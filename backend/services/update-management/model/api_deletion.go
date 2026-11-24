@@ -25,6 +25,10 @@ func (api *Api) DeviceDeleted(ctx context.Context, token string, incarnation uin
 		return nil
 	}
 	ctx = rdb.WithAuditActor(ctx, "device deleted")
+	// What the deleted device reported running goes with it.
+	if err := api.forgetInstalled(ctx, token, incarnation, deletedTime); err != nil {
+		return err
+	}
 	// A legacy target is covered by the rollout's freeze time, never the target row's creation
 	// time. Explicit tenant scoping also fences the subquery. NULL StartedAt cannot prove coverage.
 	started := api.RDB.DB(ctx).Model(&UpdateRollout{}).Select("id").

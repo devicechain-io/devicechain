@@ -82,7 +82,10 @@ func testMembershipFamilyRace(t *testing.T, registration bool) {
 					if registration {
 						// a is already committed; the race is registration's empty
 						// backfill versus the final b write, before refs commit.
-						require.NoError(t, api.RDB.DB(ctx).Create(attr).Error)
+						require.NoError(t, api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+							markAsProtocolWriter(t, tx)
+							return tx.Create(attr).Error
+						}))
 					}
 					ready, release := make(chan int, 1), make(chan struct{})
 					var once sync.Once

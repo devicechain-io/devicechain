@@ -127,6 +127,15 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 "payload": { "entries": [ { "measurements": { "temperature": "21.5", "humidity": "48" } } ] }
 ```
 
+#### 文本读数 {#text-readings}
+
+测量值无论是否为数字，都是 JSON 字符串，但只有当该指标在设备类型的配置文件中声明为 `STRING` 数据类型时，平台才会把它存储为文本。设备在配置文件声明为 `STRING` 的键下上报 `"heating"`，该值会保存在其历史中，并作为其最近已知值保留（`latestMeasurements` 和事件查询中的 `textValue`），也会显示在控制台的设备页面上。它绝不会被求平均、求和或按数字绘图。
+
+- **未声明的文本会被丢弃。** 配置文件未声明的键所带的文本值不会被存储。消息的其余部分会保留，设备会收到正常的确认，该丢弃会计入 `resolve_measurement_dropped_total` 的 `undeclared_non_numeric`。控制台中设备页面会列出被丢弃的指标，在配置文件中声明它即可存储。
+- **值最多 4,096 字节**，必须是有效的 UTF-8 且不含 NUL 字节。过长或无效的值会被单独丢弃，计入 `declared_not_storable`，消息中的其他读数会保留。
+
+计数器见[指标参考](../deployment/metrics-reference.md#device-management)；要查明读数为何缺失，请参阅[获取帮助](../getting-help.md)。
+
 ### 位置 {#location}
 
 **`Location`**：设备所在位置：

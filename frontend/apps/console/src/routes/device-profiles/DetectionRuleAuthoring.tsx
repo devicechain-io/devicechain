@@ -20,7 +20,7 @@ import { DetectionRuleNLDraft } from './DetectionRuleNLDraft';
 import { CanvasEditor } from './canvas/CanvasEditor';
 import { listMetricDefinitions, type DetectionRule } from '@/lib/api/device-management';
 import { PRESET_IDS, BATTERY_HOLD, BATTERY_LOW_BELOW, HELD_HOLD, SILENT_TIMEOUT, buildPreset, type PresetId } from './rule-presets';
-import type { RuleWarning } from '@/lib/api/event-processing';
+import type { ProfileMetric, RuleWarning } from '@/lib/api/event-processing';
 import '@/i18n/lazy/deviceProfiles';
 
 type Mode = 'form' | 'canvas' | 'nl';
@@ -61,6 +61,23 @@ export function DetectionRuleAuthoring({
       cancelled = true;
     };
   }, [creating, profileToken]);
+
+  // Every metric of the profile with its type (the list above leaves STRING out), so the form's inline
+  // check can warn about a rule that names a text metric.
+  const [profileMetrics, setProfileMetrics] = useState<ProfileMetric[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    listMetricDefinitions(profileToken)
+      .then((ms) => {
+        if (!cancelled) setProfileMetrics(ms.map((m) => ({ key: m.metricKey, dataType: m.dataType })));
+      })
+      .catch(() => {
+        /* no types: the check runs without them and gives no text-metric warning */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileToken]);
 
   const pickPreset = (id: PresetId) => {
     const out = buildPreset(
@@ -123,6 +140,7 @@ export function DetectionRuleAuthoring({
           <DetectionRuleForm
             key={presetNonce}
             profileToken={profileToken}
+            profileMetrics={profileMetrics}
             entity={entity}
             initialDefinition={entity ? undefined : (preset?.definition ?? nlDraft)}
             initialWarnings={entity || preset ? undefined : nlWarnings}

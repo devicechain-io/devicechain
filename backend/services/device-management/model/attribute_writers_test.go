@@ -40,6 +40,7 @@ var attributeWriterFrozenMigrations = map[string]bool{
 	"schema/migration_anchor_ocsp.go":                       true,
 	"schema/migration_asset_property_schema.go":             true,
 	"schema/migration_attribute_generations.go":             true,
+	"schema/migration_attribute_writer_protocol.go":         true,
 	"schema/migration_automation_review_enforcement.go":     true,
 	"schema/migration_automation_reviews.go":                true,
 	"schema/migration_command_encoder.go":                   true,
