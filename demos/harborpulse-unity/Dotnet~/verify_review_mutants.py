@@ -15,14 +15,14 @@ OUT = BASE / ".build/u2b/review-mutants"
 CASES = [
     ("1 complete terminal children", MODEL / "DirectorObserver.cs", "if (!countsComplete)", "if (!countsComplete && targets.Length < 0)", "TerminalWithoutCompleteChildrenNeverInventsCounts"),
     ("3 retain every measurement", MODEL / "DirectorReadSnapshot.cs", "records.Add(measurement);", "records.Clear(); records.Add(measurement);", "MeasurementTapRetainsIntermediateAboveFloatAndRecording"),
-    ("4 lifecycle covers own instant", MODEL / "DirectorObserver.cs", 'r.Name == "alarms" && r.AsOf >= at', 'r.Name == "alarms" && r.AsOf <= input.Now', "ReorderedCycleRecordsDeferUntilAlarmReadCoversOwnInstant"),
+    ("4 lifecycle covers own instant", MODEL / "DirectorObserver.cs", "h.Read.AsOf >= at && (", "h.Read.AsOf <= input.Now && (", "ReorderedCycleRecordsDeferUntilAlarmReadCoversOwnInstant"),
     ("5 snapshots cannot order", MODEL / "Evidence.cs", "c.Trigger.HasOccurrence && o.HasOccurrence &&", "", "SnapshotStatesCannotManufactureOccurrenceOrderingOrArtifactHistory"),
     ("8 backend suppression enum", MODEL / "DirectorObserver.cs", 'S(target, "type") != "DEVICE"', 'S(target, "type") != "device"', "SuppressionBackendEnumsProducePlatformWindow"),
     ("12 C# final caption boundary", MODEL / "DirectorLogCheck.cs", "Close(eof);", "Close(eof + 3);", "CaptionCheckerRejectsFinalShortCaptionAtEofIncludingTitle"),
     ("12 Python final caption boundary", BASE / "check_director_log.py", "close(eof)", "close(eof + 3)", "test_final_caption_eof_and_title"),
 
     ("2 recorded wording", BASE.parent / "Assets/Harborpulse/Resources/storyboard.json", '"No notification recorded",', '"No notification happened",', "PageTwoClaimsOnlyRecordedAbsenceAndKeepsAuthoredLaw"),
-    ("6 empty membership replaces state", MODEL / "DirectorObserver.cs", 'complete.Where(r => r.Name == "membership")', 'complete.Where(r => r.Name == "membership" && Rows("membership").Any(row => row.Read == r))', "EmptyMembershipReplacesExpectedSetAndAllQuaysControlMap"),
+    ("6 empty membership replaces state", MODEL / "DirectorObserver.cs", 'foreach (var h in names["membership"].Now)', 'foreach (var h in names["membership"].Now.Where(x => x.Rows.Length > 0))', "EmptyMembershipReplacesExpectedSetAndAllQuaysControlMap"),
     ("10 persistent recording problem", MODEL / "LiveReadiness.cs", 'Problem = "recording IO: " + e.Message;', 'Problem = e.Message.Substring(0, 0);', "RecordingFailureSurvivesDigestChecksUntilEstablished"),
     ("11 frozen opportunity deadline", MODEL / "Scheduler.cs", 'opportunity.DeadlineS += now - staleAtS;', 'opportunity.DeadlineS += 0;', "SixtySecondReconnectRetainsFrozenCaptionOpportunity"),
 ]

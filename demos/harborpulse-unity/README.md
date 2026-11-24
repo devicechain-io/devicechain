@@ -465,6 +465,19 @@ the platform's identities. Offline preview emits only supplied stand-ins with SC
 and platform-read gaps. Restore-set identities use the verifier's database microsecond precision;
 unexpected stored times remain in the observed set and prevent an exact tally.
 
+`Update` runs on every frame and the reads are republished every few seconds, so the observer does on a
+frame only what changed: a read is parsed once per distinct answer (a poll that brings back the same bytes
+keeps its rows and moves its as-of), and each join (alarms, attempts, the replacement, commands, the
+rollout, membership, the measurement histories, the runner's declarations) runs again only when something
+it reads has changed or an instant it was waiting for has come: a record stamped after "now", a service
+window's end, the minute a replacement waits for its first reading. A join that found a record unreadable
+restates that gap on the frames it sleeps through. `Dotnet~/Tests/DirectorObserverChangeTests.cs` holds
+this to a fixture day shaped like a recorded one (`DirectorFixtureDay`): the records emitted are the same
+with every join run on every frame (`RunEveryJoin`), their digests are those of the observer before it
+waited for changes, and a frame's record visits do not grow with what unchanged reads hold. To see where
+a tick's time goes, minute by minute:
+`HP_FRAME_PROFILE=1 dotnet test -c Release --filter FullyQualifiedName~DirectorFrameProfile --logger "console;verbosity=detailed"`.
+
 Two storyboard predicate corrections are covered by real-identity regressions: page 6 groups each
 device's own alarm cycle within the outage interval, and page 8 joins a post-failure reading to that
 device's actual attempt, rather than treating a rollout as an attempt shared by all targets.
