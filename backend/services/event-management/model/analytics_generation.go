@@ -39,6 +39,8 @@ func withAnalyticsGeneration(ctx context.Context, mgr *rdb.RdbManager, generatio
 	var stored struct{ Generation int }
 	skipped := false
 	err := mgr.WithAdvisoryLock(ctx, rdb.AdvisoryLockKey(analyticsLockName), func() error {
+		// System context: the analytics surface and its generation row are instance-wide
+		// DDL and bookkeeping with no tenant rows, serialized by the advisory lock above.
 		db := mgr.DB(core.WithSystemContext(ctx))
 		if err := db.Raw(`SELECT generation FROM "event-management".analytics_surface_generation WHERE id = 1`).Scan(&stored).Error; err != nil {
 			return fmt.Errorf("reading the analytics surface generation: %w", err)

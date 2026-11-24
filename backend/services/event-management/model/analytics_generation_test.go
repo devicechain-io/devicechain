@@ -4,20 +4,18 @@
 package model
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -34,15 +32,17 @@ func TestAnalyticsNewerGenerationLeavesSurfaceUntouched(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_unlock($1)")).
 		WithArgs(key).WillReturnResult(sqlmock.NewResult(0, 1))
 	metrics := newTestAnalyticsMetrics()
-	var output bytes.Buffer
-	previous := log.Logger
-	log.Logger = zerolog.New(&output)
-	t.Cleanup(func() { log.Logger = previous })
+	output := logSink.Capture(t)
 	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), &rdb.RdbManager{Database: db}, metrics))
 	require.NoError(t, mock.ExpectationsWereMet())
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.NewerSurfaceSkips))
 	var entry map[string]interface{}
-	require.NoError(t, json.Unmarshal(output.Bytes(), &entry))
+	for _, line := range strings.Split(output.String(), "\n") {
+		if strings.Contains(line, "storedGeneration") {
+			require.NoError(t, json.Unmarshal([]byte(line), &entry))
+		}
+	}
+	require.NotNil(t, entry, "the newer-surface skip must be logged")
 	require.Equal(t, "info", entry["level"])
 	require.Equal(t, float64(2147483647), entry["storedGeneration"])
 	require.Equal(t, float64(AnalyticsSurfaceGeneration), entry["buildGeneration"])
