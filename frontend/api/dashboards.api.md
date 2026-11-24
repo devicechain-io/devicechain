@@ -1461,6 +1461,7 @@ export interface MeasurementSample {
     occurredTime: string | null;
     name: string;
     value: number | null;
+    textValue?: string | null;
     classifier: string | null;
     bucketSeconds?: number;
 }

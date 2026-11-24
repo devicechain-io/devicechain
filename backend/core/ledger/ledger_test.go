@@ -419,3 +419,29 @@ func TestUnservedRegistry(t *testing.T) {
 		t.Fatal("exposed mutable registry")
 	}
 }
+
+func TestRequiredProtocolIsOneUntilAFeatureNeedsTwo(t *testing.T) {
+	if got := RequiredProtocol(ProtocolFeatures{}); got != 1 {
+		t.Fatalf("no features = %d, want 1", got)
+	}
+	for name, f := range map[string]ProtocolFeatures{
+		"counters": {Counters: true}, "waves": {Waves: true}, "snapshot": {Snapshot: true}, "multikey": {MultiKey: true},
+		"all": {true, true, true, true},
+	} {
+		if got := RequiredProtocol(f); got != 2 {
+			t.Fatalf("%s = %d, want 2", name, got)
+		}
+	}
+}
+
+func TestDrivableRefusesNewerAndNonPositiveProtocols(t *testing.T) {
+	for p, want := range map[DriverProtocol]bool{-1: false, 0: false, 1: true, 2: false, 3: false} {
+		if got := Drivable(p); got != want {
+			t.Fatalf("Drivable(%d) = %v, want %v", p, got, want)
+		}
+	}
+	// A build only drives what it can: the protocol an unfeatured operation needs is drivable.
+	if !Drivable(RequiredProtocol(ProtocolFeatures{})) {
+		t.Fatal("this build cannot drive its own ordinary operation")
+	}
+}
