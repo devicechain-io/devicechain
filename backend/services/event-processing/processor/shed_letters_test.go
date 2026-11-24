@@ -31,6 +31,19 @@ type meterGate struct {
 	at    []time.Time
 }
 
+// alternatingGate exercises a refused connector beside an admitted command (or
+// vice versa). Both actions now charge the same source gate on every delivery.
+type alternatingGate struct {
+	admitFirst bool
+	calls      int
+}
+
+func (g *alternatingGate) AllowAt(_ string, _ time.Time) bool {
+	admit := g.calls%2 == 0
+	g.calls++
+	return admit == g.admitFirst
+}
+
 func (g *meterGate) AllowAt(_ string, at time.Time) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -178,7 +191,7 @@ func TestTwoShedActionsInOneEventWriteTwoLetters(t *testing.T) {
 func TestARetriedEventWritesNoShedLetter(t *testing.T) {
 	dead := &deadRecorder{}
 	rd, _ := reactWithConnectors(t, connectorRule(httpCallAction(), sendCommandAction()),
-		&reactFakeSink{fail: true}, &connSink{}, &meterGate{}, dead, testShedBudget)
+		&reactFakeSink{fail: true}, &connSink{}, &alternatingGate{}, dead, testShedBudget)
 	ack := &fakeAck{}
 	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), 1, ack))
 

@@ -265,7 +265,7 @@ type ConnectorSink interface {
 }
 
 // ConnectorRateGate is the per-tenant OUTBOUND egress cost-gate charged at the SOURCE (ADR-060
-// SD-3). Before REACT publishes a connector-dispatch (httpCall/publish), the dispatcher charges the
+// SD-3). Before REACT sends a command or publishes a connector-dispatch (httpCall/publish), it charges the
 // tenant's outbound budget; a false result means over-quota, and the action is SHED at the source,
 // NOT retried — so a runaway rule cannot flood the connector-dispatch stream and the downstream
 // outbound-connectors service. It is a non-blocking test, never a wait: REACT's at-least-once
@@ -318,11 +318,22 @@ type ConnectorRateGate interface {
 	AllowAt(tenant string, at time.Time) bool
 }
 
-// ShedAction is one connector action the source gate shed: its kind ("httpCall" or "publish", the
+// ShedAction is one action refused at the source: its kind (sendCommand, httpCall or publish, the
 // metric enum) and its idempotency token, which is what distinguishes two shed actions of one event.
 type ShedAction struct {
 	Kind  string
 	Token string
+	// Code is the command policy reason; empty retains the connector "shed" vocabulary.
+	Code string
+}
+
+// ReasonCode preserves the existing connector outcome while distinguishing
+// command-rate refusals, feedback loops, and safety-state capacity refusals.
+func (s ShedAction) ReasonCode() string {
+	if s.Code != "" {
+		return s.Code
+	}
+	return "shed"
 }
 
 // FailedAction is one action whose sink failed on this attempt: its kind (the metric enum:
@@ -334,7 +345,7 @@ type FailedAction struct {
 }
 
 // Result is the disposition of one derived event's dispatch: whether the consumer may ack it, the
-// connector actions the source gate shed on this attempt, and the actions whose sink failed on it.
+// actions source policy refused on this attempt, and the actions whose sink failed on it.
 // Shed is reported on a Retry too, but a consumer letters each shed only on Done — a Retry re-runs
 // the whole event, sheds included — and names the final attempt's sheds in the exhausted letter.
 type Result struct {
@@ -368,6 +379,8 @@ type Metrics interface {
 	// a later one. action is the same "httpCall"/"publish" enum — no per-tenant label (the ADR-023 G.3
 	// cardinality lesson).
 	RecordConnectorShed(action string)
+	// RecordCommandRefused counts a policy refusal (result="unwanted"), by a fixed reason.
+	RecordCommandRefused(reason string)
 	// RecordPermanentlyRejected: one action DROPPED because the downstream service returned a
 	// typed rejection that a retry cannot change (a *PermanentRejection) — today, a
 	// send-command for a device that no longer exists or a command outside the device's
@@ -424,9 +437,11 @@ type Dispatcher struct {
 	alarms     AlarmSink
 	connectors ConnectorSink
 	// connectorRate is the SOURCE-side per-tenant outbound egress cost-gate (ADR-060 SD-3); nil
-	// disables source-charging (every connector dispatch admitted). See ConnectorRateGate.
-	connectorRate ConnectorRateGate
-	metrics       Metrics
+	// disables rate charging for commands and connectors. See ConnectorRateGate.
+	connectorRate     ConnectorRateGate
+	commandLoop       *commandLoopGuard
+	commandSimulation bool
+	metrics           Metrics
 
 	// now is the clock a command's expiry is measured from. Injectable so a test can pin it.
 	now func() time.Time
@@ -478,7 +493,7 @@ type Dispatcher struct {
 // is the SOURCE-side outbound egress cost-gate (ADR-060 SD-3); a nil gate disables source-charging
 // (every connector dispatch admitted, metered only by the downstream outbound-connectors egress limiter).
 func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink, connectors ConnectorSink, connectorRate ConnectorRateGate, metrics Metrics, opts ...Option) *Dispatcher {
-	d := &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, connectors: connectors, connectorRate: connectorRate, metrics: metrics, now: time.Now, log: log.Logger}
+	d := &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, connectors: connectors, connectorRate: connectorRate, metrics: metrics, now: time.Now, log: log.Logger, commandLoop: newCommandLoopGuard()}
 	for _, o := range opts {
 		o(d)
 	}
@@ -488,7 +503,7 @@ func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink
 // Option configures a Dispatcher at construction.
 type Option func(*Dispatcher)
 
-// WithClock replaces the clock a command's expiry is measured from (time.Now by default). It exists
+// WithClock replaces the clock for command expiry and the loop window (time.Now by default). It exists
 // for the one caller that dispatches into recording sinks in VIRTUAL time, the rule evaluator
 // (internal/evaluate), where an expiry computed from the wall clock would differ on every run and a
 // test of "the command expires in 15m" could never be repeated. The function is called once per
@@ -608,7 +623,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			d.dropped(DropMissingVariant)
 			return
 		}
-		if resolved {
+		if resolved || ev.Replayed {
 			// A command has no falling-edge twin: the Resolved reports the condition ceased, which is
 			// not a fresh trigger to re-send. Skip (no metric — it is a routine non-effect, not a drop).
 			return
@@ -633,6 +648,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			d.dropped(DropInvalidAction)
 			return
 		}
+		sentAt := d.now()
 		req := CommandRequest{
 			Tenant:      ev.Tenant,
 			Token:       idempotencyToken(ev, a),
@@ -644,7 +660,15 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		if expiry > 0 {
 			// Wall clock at enqueue, deliberately NOT the event's time: the expiry bounds how long
 			// the command waits for delivery, and that wait starts when the command is enqueued.
-			req.ExpiresAt = d.now().Add(expiry)
+			req.ExpiresAt = sentAt.Add(expiry)
+		}
+		if code := d.commandRefusal(ev.Tenant, ev.RuleID, ev.Series, ev.TriggeredAt, sentAt); code != "" {
+			d.metrics.RecordCommandRefused(code)
+			res.Shed = append(res.Shed, ShedAction{Kind: "sendCommand", Token: req.Token, Code: code})
+			// The metric counts every refusal; the consumer budgets individual dead
+			// letters and summarizes excess, just like connector sheds. No per-refusal
+			// log: a looping rule must not turn this into another unbounded sink.
+			return
 		}
 		if err := d.commands.Send(ctx, req); err != nil {
 			var permanent *PermanentRejection

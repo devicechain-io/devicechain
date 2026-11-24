@@ -102,7 +102,7 @@ var (
 	// component the NATS manager's oncreate callback builds. See buildMetrics.
 	DetectMetrics *processor.DetectMetrics
 	ReactMetrics  *processor.ReactMetrics
-	// EgressUnresolved counts REACT connector admissions metered at the platform default
+	// EgressUnresolved counts REACT command/connector admissions metered at the platform default
 	// for want of the tenant's own outbound ceiling. Built once, in buildMetrics.
 	EgressUnresolved func(core.CeilingSource)
 
@@ -441,10 +441,13 @@ func wireReactDispatcher(nmgr *messaging.NatsManager, peers *svcclient.Peers) er
 	connectors := processor.NewConnectorClient(connectorWriter)
 	log.Info().Msg("REACT connector dispatch ENABLED (ADR-060): httpCall/publish actions publish to the outbound-connectors service.")
 
-	// SOURCE-side outbound egress cost-gate (ADR-060 SD-3): REACT charges the tenant's outbound
+	// SOURCE-side outbound egress cost-gate (ADR-060 SD-3): REACT charges sendCommand,
+	// httpCall and publish against ONE tenant budget (100/s, burst 200 by default).
+	// REACT charges the tenant's outbound
 	// budget before publishing a connector-dispatch, dropping over-quota actions at the source so a
 	// runaway rule cannot flood the connector-dispatch stream. Always non-nil (fail-open to the
 	// platform default when per-tenant overrides are not wired) — never unlimited.
+	// No separate command limiter or governance dimension: the dispatcher shares this instance.
 	connectorRate := buildEgressLimiter(Configuration, peers, EgressUnresolved)
 
 	// One value sizes both the reader's slots and the dispatcher's lanes (react.workers).

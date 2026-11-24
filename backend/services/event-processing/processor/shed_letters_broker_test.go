@@ -72,7 +72,7 @@ func TestAShedLetterDoesNotSwallowTheExhaustedLetter(t *testing.T) {
 
 	commands := &flakySink{}
 	rd, _ := reactWithConnectors(t, connectorRule(httpCallAction(), sendCommandAction()), commands, &connSink{},
-		&meterGate{}, deadWriter, testShedBudget)
+		&alternatingGate{}, deadWriter, testShedBudget)
 
 	commands.fail = false
 	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), 1, &fakeAck{})) // Done: the shed letter

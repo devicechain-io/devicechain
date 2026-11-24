@@ -113,5 +113,6 @@ func (nopReactMetrics) RecordDispatched(string)          {}
 func (nopReactMetrics) RecordOrphan()                    {}
 func (nopReactMetrics) RecordNotEnabled(string)          {}
 func (nopReactMetrics) RecordConnectorShed(string)       {}
+func (nopReactMetrics) RecordCommandRefused(string)      {}
 func (nopReactMetrics) RecordPermanentlyRejected(string) {}
 func (nopReactMetrics) RecordDropped(string)             {}

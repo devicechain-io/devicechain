@@ -28,7 +28,7 @@ const shedSummaryWindow = time.Minute
 // shedFlushTimeout bounds the summary flush Stop makes on its way out.
 const shedFlushTimeout = 10 * time.Second
 
-// ShedLetterBudget bounds the dead letters REACT writes about connector actions its source gate
+// ShedLetterBudget bounds the dead letters REACT writes about actions its source gate
 // shed: a per-tenant budget and one across every tenant. main passes the typed configuration's
 // values, which ApplyDefaults has already filled (config.DefaultShedLetterPerSecond and friends).
 // A zero budget is NOT defaulted here: it letters nothing, and every shed is counted and
@@ -40,7 +40,7 @@ type ShedLetterBudget struct {
 	GlobalBurst        int
 }
 
-// shedLetterer records each connector action REACT's source gate shed as a dead letter with reason
+// shedLetterer records each action REACT's source gate shed as a dead letter with reason
 // shed, so a shed is something an operator can inspect rather than only a counter.
 //
 // 🔴 IT IS BUDGETED, AND THE BUDGET IS THE POINT. A shed means a tenant is over its outbound
@@ -126,18 +126,25 @@ func (s *shedLetterer) letter(ctx context.Context, msg messaging.Message, ev run
 				byKind = map[string]int{}
 				s.unlettered[ev.Tenant] = byKind
 			}
-			byKind[shed.Kind]++
+			key := shed.Kind
+			if shed.Code != "" {
+				key = shed.Code
+			}
+			byKind[key]++
 			s.mu.Unlock()
 			continue
 		}
 		if s.dead == nil {
 			continue
 		}
+		summary := "a detection's outbound connector action was refused at the source because the tenant was over its outbound rate"
+		if shed.Kind == string(rules.ActionSendCommand) {
+			summary = "a detection's command was refused by source policy: " + shed.ReasonCode()
+		}
 		err := s.dead.WriteForPart(ctx, msg, shed.Token, deadletter.Envelope{
-			Reason: deadletter.ReasonShed,
-			Summary: "a detection's outbound connector action was refused at the source because the " +
-				"tenant was over its outbound rate",
-			Detail:     shed.Kind + "/shed/" + shed.Token,
+			Reason:     deadletter.ReasonShed,
+			Summary:    summary,
+			Detail:     shed.Kind + "/" + shed.ReasonCode() + "/" + shed.Token,
 			Reference:  ev.RuleID,
 			OccurredAt: s.now(),
 			Payload:    msg.Value,
@@ -145,7 +152,7 @@ func (s *shedLetterer) letter(ctx context.Context, msg messaging.Message, ev run
 		if err != nil {
 			// Counted on dead_letter_lost_total by the sink.
 			log.Error().Err(err).Str("rule", ev.RuleID).Str("action", shed.Kind).
-				Msg("LOST the dead letter for a shed connector action.")
+				Msg("LOST the dead letter for a refused REACT action.")
 			continue
 		}
 		s.metrics.recordShedDeadLettered(shed.Kind)
@@ -197,18 +204,24 @@ func (s *shedLetterer) flush(ctx context.Context) error {
 	var lastErr error
 	for _, tenant := range tenants {
 		byKind := counts[tenant]
+		detail := fmt.Sprintf("httpCall=%d publish=%d window=%s/%s", byKind[string(rules.ActionHTTPCall)],
+			byKind[string(rules.ActionPublish)], start.Format(time.RFC3339), end.Format(time.RFC3339))
+		for _, code := range []string{react.CommandRateLimited, react.CommandLoop, react.CommandGuardFull} {
+			if n := byKind[code]; n > 0 {
+				detail += fmt.Sprintf(" %s=%d", code, n)
+			}
+		}
 		err := s.dead.Write(core.WithTenant(ctx, tenant), deadletter.Envelope{
 			Kind:   kind,
 			Reason: deadletter.ReasonShed,
-			Summary: "outbound connector actions refused at the source were counted but not " +
+			Summary: "REACT actions refused at the source were counted but not " +
 				"individually recorded, because the tenant exceeded its dead-letter budget",
-			Detail: fmt.Sprintf("httpCall=%d publish=%d window=%s/%s", byKind[string(rules.ActionHTTPCall)],
-				byKind[string(rules.ActionPublish)], start.Format(time.RFC3339), end.Format(time.RFC3339)),
+			Detail:     detail,
 			OccurredAt: end,
 		})
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).
-				Msg("LOST the summary dead letter for over-budget shed connector actions.")
+				Msg("LOST the summary dead letter for over-budget refused REACT actions.")
 			failed++
 			lastErr = err
 		}

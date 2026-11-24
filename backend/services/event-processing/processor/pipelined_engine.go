@@ -97,7 +97,7 @@ func (rp *ResolvedEventsProcessor) absorb(dets []detectcore.TaggedDetection) int
 		}
 		rp.detOrd++
 		rp.pendingDets = append(rp.pendingDets, pendingDetection{
-			Detection: td.Detection, triggeredAt: at, ord: rp.detOrd,
+			Detection: td.Detection, triggeredAt: at, ord: rp.detOrd, replayed: rp.replaying,
 			early: td.Tag.Replayable && rp.earlyPublishable(td.Detection),
 		})
 	}

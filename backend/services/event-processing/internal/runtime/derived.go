@@ -43,6 +43,9 @@ func wireEdge(e core.EdgeKind) string {
 // JSON envelope for slice 4a; the wire may harden to protobuf when the client subscription lands
 // (slice 7) — pre-GA, changeable.
 type DerivedEvent struct {
+	// Replayed marks startup reconstruction, not a fresh actuation. It is additive
+	// on the wire and excluded from DedupID; pre-upgrade events decode as live.
+	Replayed bool `json:"replayed,omitempty"`
 	// RuleID is the tenant-prefixed id of the rule that fired.
 	RuleID string `json:"ruleId"`
 	// Tenant is the owning tenant (redundant with the subject, carried for convenience).
@@ -225,7 +228,7 @@ func (p *Publisher) SetFireRecorder(r FireRecorder) { p.recorder = r }
 // time. The processor's publisher calls the four itself, so that it can overlap the broker waits
 // of independent series while keeping everything except Send on its own loop.
 func (p *Publisher) Publish(ctx context.Context, det core.Detection, triggeredAt time.Time) error {
-	po, ok := p.Prepare(det, triggeredAt)
+	po, ok := p.Prepare(det, triggeredAt, false)
 	if !ok {
 		return nil
 	}
@@ -271,7 +274,7 @@ type PreparedOutput struct {
 // nothing to publish or retry.
 //
 // It reads the registry, so it runs on the processor's loop, never in a publish callback.
-func (p *Publisher) Prepare(det core.Detection, triggeredAt time.Time) (PreparedOutput, bool) {
+func (p *Publisher) Prepare(det core.Detection, triggeredAt time.Time, replayed bool) (PreparedOutput, bool) {
 	// ADR-057 two-edge model (6d-pre-2b): BOTH edges are now published — a Raised on the rising edge
 	// and a Resolved on the falling edge, discriminated by DerivedEvent.Edge and dedup-distinct even at
 	// a shared OccurredTime. The REACT dispatcher routes a Resolved to a clear (skipping send-command,
@@ -292,6 +295,7 @@ func (p *Publisher) Prepare(det core.Detection, triggeredAt time.Time) (Prepared
 	// not a correctness break. Accepted; noted for honesty. A detection already PREPARED keeps the
 	// type it was prepared with on every retry (see PreparedOutput).
 	de := DerivedEvent{
+		Replayed:     replayed,
 		RuleID:       det.RuleID,
 		Tenant:       sr.Tenant,
 		Kind:         string(sr.Compiled.Type),

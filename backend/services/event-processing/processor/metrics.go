@@ -506,6 +506,7 @@ type ReactMetrics struct {
 	dispatched          *prometheus.CounterVec
 	notEnabled          *prometheus.CounterVec
 	connectorShed       *prometheus.CounterVec
+	commandRefused      *prometheus.CounterVec
 	permanentlyRejected *prometheus.CounterVec
 	dropped             *prometheus.CounterVec
 	// causeOmitted counts commands enqueued WITHOUT their cause, by reason (commandClient).
@@ -553,6 +554,7 @@ func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 		return nil
 	}
 	return &ReactMetrics{
+		commandRefused:      ms.NewCounterVec("react_command_refused_total", "Command send attempts refused by source policy, by bounded reason and result (unwanted).", []string{"reason", "result"}),
 		shedSummaryPass:     ms.NewPeriodicTaskMetrics("shed_summary"),
 		dispatched:          ms.NewCounterVec("react_actions_dispatched_total", "REACT actions handed to their sink, by action type (includes idempotent replays).", []string{"action"}),
 		notEnabled:          ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but dropped because this deployment has no sink for them, by action type: sendCommand without command-delivery configured, or httpCall/publish without outbound connectors enabled. The alarm sink is always wired, so raiseAlarm/clearAlarm should never appear here.", []string{"action"}),
@@ -712,6 +714,15 @@ func (m *ReactMetrics) RecordConnectorShed(action string) {
 		return
 	}
 	m.connectorShed.WithLabelValues(action).Inc()
+}
+
+// RecordCommandRefused records policy refusals, not exhausted dispatches. The
+// core vocabulary reserves result=dropped for giving up after failures.
+func (m *ReactMetrics) RecordCommandRefused(reason string) {
+	if m == nil {
+		return
+	}
+	m.commandRefused.WithLabelValues(reason, core.ResultUnwanted).Inc()
 }
 
 // RecordOrphan records one derived event whose rule was gone (react.Metrics).

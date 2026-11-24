@@ -584,7 +584,7 @@ func undispatchedDetail(res react.Result) string {
 		parts = append(parts, f.Kind+"/failed/"+f.Token)
 	}
 	for _, s := range res.Shed {
-		parts = append(parts, s.Kind+"/shed/"+s.Token)
+		parts = append(parts, s.Kind+"/"+s.ReasonCode()+"/"+s.Token)
 	}
 	return strings.Join(parts, "; ")
 }
