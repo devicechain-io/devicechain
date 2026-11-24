@@ -203,7 +203,7 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 				TargetToken:        request.Target,
 				RelationshipTypeId: rt.ID,
 			}
-			if err := tx.Create(edge).Error; err != nil {
+			if err := createRelationshipWithGenerationTx(tx, edge); err != nil {
 				return err
 			}
 			edge.RelationshipType = *rt
@@ -248,9 +248,9 @@ func (api *Api) RemoveEntityRelationships(ctx context.Context, tokens []string) 
 		if err != nil {
 			return err
 		}
-		result := tx.Unscoped().Where("token in ?", tokens).Delete(&EntityRelationship{})
-		if result.Error != nil || result.RowsAffected == 0 {
-			return result.Error
+		count, err := removeRelationshipsWithGenerationTx(tx, "token in ?", tokens)
+		if err != nil || count == 0 {
+			return err
 		}
 		removed = true
 		queued, err = queueOwnershipOnTx(tx, sources)
