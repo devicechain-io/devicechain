@@ -7,6 +7,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -235,4 +236,44 @@ func TestMembershipSharedKeepsOwnerAcrossLaterSavepointPostgres(t *testing.T) {
 		require.False(t, held)
 		return nil
 	}))
+}
+
+// A bulk create keeps one exclusive family lock and takes no per-device K_dev: shared mode
+// would hold a K_dev per created device (up to MaxBulkDeviceCount in one transaction).
+func TestMembershipBulkCreateKeepsOneExclusiveFamilyLockPostgres(t *testing.T) {
+	api, ctx := membershipPostgres(t)
+	_, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: "bulk-type"})
+	require.NoError(t, err)
+	type bulkKey struct{}
+	var mu sync.Mutex
+	var devLocks, exclusive, shared int
+	require.NoError(t, api.RDB.Database.Callback().Raw().After("gorm:raw").Register("test:bulk-create-locks", func(db *gorm.DB) {
+		if db.Statement.Context.Value(bulkKey{}) != true {
+			return
+		}
+		sql := db.Statement.SQL.String()
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.Contains(sql, "dc_entity_attr_lock"):
+			devLocks++
+		case strings.Contains(sql, "pg_advisory_xact_lock_shared("):
+			shared++
+		case strings.Contains(sql, "pg_advisory_xact_lock("):
+			exclusive++
+		}
+	}))
+	t.Cleanup(func() { api.RDB.Database.Callback().Raw().Remove("test:bulk-create-locks") })
+	requests := make([]*DeviceCreateRequest, 0, 3)
+	for i := range 3 {
+		requests = append(requests, &DeviceCreateRequest{Token: fmt.Sprintf("bulk-%d", i), DeviceTypeToken: "bulk-type"})
+	}
+	created, err := api.CreateDevices(context.WithValue(ctx, bulkKey{}, true), requests)
+	require.NoError(t, err)
+	require.Len(t, created, 3)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Zero(t, devLocks, "a bulk create takes no per-device K_dev")
+	require.Zero(t, shared)
+	require.Equal(t, 1, exclusive, "one exclusive family lock for the whole batch")
 }

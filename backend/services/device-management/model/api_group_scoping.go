@@ -504,15 +504,18 @@ func (api *Api) enrollNewEntitiesOnTx(ctx context.Context, tx *gorm.DB, entityTy
 	// cannot deadlock with Register: a family-lock holder never waits on a row lock
 	// held by another creator; registration reads member rows without locking them.
 	// Ownership queuing must remain LAST, after enrollment and all other locks.
-	if entityType == string(entity.TypeDevice) {
-		for _, id := range ids {
-			ownerTx, err := lockCreatedDeviceForMembership(tx, id)
-			if err != nil {
-				return membershipChange{}, err
-			}
-			if err := api.lockMembershipWriterFamily(ctx, ownerTx, entityType, id); err != nil {
-				return membershipChange{}, err
-			}
+	// Shared mode is for the one-device create (provisioning, import, CreateDevice). A bulk
+	// create keeps the single exclusive lock: shared would cost it a K_dev, an owner setting
+	// and a family request per device (up to MaxBulkDeviceCount locks held in one
+	// transaction, and several times the base create's latency) to gain concurrency that
+	// one amortized exclusive lock already makes moot.
+	if entityType == string(entity.TypeDevice) && len(ids) == 1 {
+		ownerTx, err := lockCreatedDeviceForMembership(tx, ids[0])
+		if err != nil {
+			return membershipChange{}, err
+		}
+		if err := api.lockMembershipWriterFamily(ctx, ownerTx, entityType, ids[0]); err != nil {
+			return membershipChange{}, err
 		}
 	} else {
 		if err := api.lockMembershipFamily(ctx, tx, entityType); err != nil {
