@@ -176,6 +176,110 @@ func (r *SchemaResolver) CreateFleetOperation(ctx context.Context, args struct {
 	return &FleetOperationResolver{M: *op, S: r, C: ctx}, nil
 }
 
+type FleetOperationSafetyInputArg struct {
+	MaxPostsPerSecond       *int32
+	FailureThreshold        *int32
+	AmbiguityThreshold      *int32
+	ClearFailureThreshold   *bool
+	ClearAmbiguityThreshold *bool
+}
+
+func (in *FleetOperationSafetyInputArg) toModel() *model.FleetResumeSafety {
+	if in == nil {
+		return nil
+	}
+	out := &model.FleetResumeSafety{MaxPostsPerSecond: in.MaxPostsPerSecond, FailureThreshold: in.FailureThreshold, AmbiguityThreshold: in.AmbiguityThreshold}
+	out.ClearFailureThreshold = in.ClearFailureThreshold != nil && *in.ClearFailureThreshold
+	out.ClearAmbiguityThreshold = in.ClearAmbiguityThreshold != nil && *in.ClearAmbiguityThreshold
+	return out
+}
+
+// fleetApprover is who the caller is, for a call that approves or takes over an operation.
+func fleetApprover(ctx context.Context, name string) model.FleetApprover {
+	by := model.FleetApprover{Name: name, Authorities: "device:write fleet:operate"}
+	if claims, ok := auth.ClaimsFromContext(ctx); ok && claims != nil {
+		by.Session = string(claims.SessionID)
+	}
+	return by
+}
+
+func (r *SchemaResolver) PreviewFleetOperationResume(ctx context.Context, args struct {
+	Token  string
+	Safety *FleetOperationSafetyInputArg
+}) (*FleetResumePreviewResolver, error) {
+	if _, err := fleetCaller(ctx, fleetWriteAuthorities...); err != nil {
+		return nil, err
+	}
+	p, err := r.GetApi(ctx).PreviewFleetOperationResume(ctx, args.Token, args.Safety.toModel())
+	if err != nil {
+		return nil, err
+	}
+	return &FleetResumePreviewResolver{M: *p}, nil
+}
+
+func (r *SchemaResolver) StartFleetOperation(ctx context.Context, args struct{ Token, ContractDigest string }) (*FleetOperationResolver, error) {
+	name, err := fleetCaller(ctx, fleetWriteAuthorities...)
+	if err != nil {
+		return nil, err
+	}
+	op, err := r.GetApi(ctx).StartFleetOperation(ctx, args.Token, args.ContractDigest, fleetApprover(ctx, name))
+	if err != nil {
+		return nil, err
+	}
+	return &FleetOperationResolver{M: *op, S: r, C: ctx}, nil
+}
+
+// Pause and abort need device:write only: an administrator who has lost fleet:operate can still stop an
+// operation, and stopping never widens anything.
+func (r *SchemaResolver) PauseFleetOperation(ctx context.Context, args struct{ Token string }) (*FleetOperationResolver, error) {
+	name, err := fleetCaller(ctx, auth.DeviceWrite)
+	if err != nil {
+		return nil, err
+	}
+	op, err := r.GetApi(ctx).PauseFleetOperation(ctx, args.Token, name)
+	if err != nil {
+		return nil, err
+	}
+	return &FleetOperationResolver{M: *op, S: r, C: ctx}, nil
+}
+
+func (r *SchemaResolver) AbortFleetOperation(ctx context.Context, args struct{ Token string }) (*FleetOperationResolver, error) {
+	name, err := fleetCaller(ctx, auth.DeviceWrite)
+	if err != nil {
+		return nil, err
+	}
+	op, err := r.GetApi(ctx).AbortFleetOperation(ctx, args.Token, name)
+	if err != nil {
+		return nil, err
+	}
+	return &FleetOperationResolver{M: *op, S: r, C: ctx}, nil
+}
+
+func (r *SchemaResolver) ResumeFleetOperation(ctx context.Context, args struct {
+	Token          string
+	ContractDigest string
+	Safety         *FleetOperationSafetyInputArg
+}) (*FleetOperationResolver, error) {
+	name, err := fleetCaller(ctx, fleetWriteAuthorities...)
+	if err != nil {
+		return nil, err
+	}
+	op, err := r.GetApi(ctx).ResumeFleetOperation(ctx, args.Token, args.ContractDigest, args.Safety.toModel(), fleetApprover(ctx, name))
+	if err != nil {
+		return nil, err
+	}
+	return &FleetOperationResolver{M: *op, S: r, C: ctx}, nil
+}
+
+type FleetResumePreviewResolver struct{ M model.FleetResumePreview }
+
+func (r *FleetResumePreviewResolver) WithinContract() bool         { return r.M.WithinContract }
+func (r *FleetResumePreviewResolver) ContractVersion() int32       { return r.M.ContractVersion }
+func (r *FleetResumePreviewResolver) ContractDigest() string       { return r.M.ContractDigest }
+func (r *FleetResumePreviewResolver) Contract() string             { return r.M.Contract }
+func (r *FleetResumePreviewResolver) StepUpRequired() bool         { return r.M.StepUpRequired }
+func (r *FleetResumePreviewResolver) ThresholdStillExceeded() bool { return r.M.ThresholdStillExceeded }
+
 // ---- resolvers ----
 
 type FleetOperationResolver struct {
