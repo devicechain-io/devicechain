@@ -415,11 +415,19 @@ func TestAnUndecidedPostErrorBacksOffWithoutAbortingThePass(t *testing.T) {
 	require.True(t, rt.HoldSince.Valid)
 	require.True(t, rt.HoldSeenAt.Valid)
 
-	// Just before the recorded deadline, another pass must not try the broken line.
+	// Just before the recorded deadline, another pass must not try the broken line, and the hold stands
+	// with its start unmoved: waiting out the backoff is still waiting on the undecided line.
+	heldSince := rt.HoldSince.Time
 	e.now = l.NextAttemptAt.Time.Add(-time.Nanosecond)
-	require.Zero(t, e.drive(t).Posted)
+	waiting := e.drive(t)
+	require.Zero(t, waiting.Posted)
+	require.Equal(t, FleetHoldPostError, waiting.Hold)
 	require.Equal(t, 1, attempts)
 	require.Equal(t, int32(1), e.reloadLine(t, first.ID).Attempts)
+	rt, err = e.api.FleetOperationRuntimeOf(e.ctx, e.op)
+	require.NoError(t, err)
+	require.Equal(t, FleetHoldPostError, rt.HoldCode)
+	require.True(t, rt.HoldSince.Time.Equal(heldSince), "a backoff pass does not restart the hold")
 	// Once due, a repaired dependency can make progress and clear the hold.
 	attributeBeforeCommitHook = nil
 	e.now = l.NextAttemptAt.Time.Add(time.Second)
@@ -462,4 +470,41 @@ func TestEarlyPassReturnsClearStaleHolds(t *testing.T) {
 			require.True(t, rt.DriverSeenAt.Time.Equal(e.now))
 		})
 	}
+}
+
+func TestAPassThatFailsBeforeDecidingLeavesTheHoldAlone(t *testing.T) {
+	rate := int32(1)
+	e := driveFixture(t, 3, FleetSafetyRequest{MaxPostsPerSecond: &rate})
+	require.Equal(t, 1, e.drive(t).Posted)
+	e.now = e.now.Add(100 * time.Millisecond)
+	require.Equal(t, FleetHoldRateLimit, e.drive(t).Hold)
+	held, err := e.api.FleetOperationRuntimeOf(e.ctx, e.op)
+	require.NoError(t, err)
+	require.Equal(t, FleetHoldRateLimit, held.HoldCode)
+
+	// The next pass gets its lease and then fails reading the lines: it decided nothing about the hold.
+	broken := errors.New("lines unreadable")
+	failing := true
+	require.NoError(t, e.api.RDB.DB(e.ctx).Callback().Query().After("gorm:query").Register("test:fail_lines", func(d *gorm.DB) {
+		if failing && d.Statement.Table == "fleet_operation_lines" {
+			_ = d.AddError(broken)
+		}
+	}))
+	t.Cleanup(func() { _ = e.api.RDB.DB(e.ctx).Callback().Query().Remove("test:fail_lines") })
+	e.now = e.now.Add(100 * time.Millisecond)
+	_, err = e.api.DriveFleetOperation(e.ctx, "drv", DefaultFleetCaps)
+	require.ErrorIs(t, err, broken)
+	failing = false
+	rt, err := e.api.FleetOperationRuntimeOf(e.ctx, e.op)
+	require.NoError(t, err)
+	require.Equal(t, FleetHoldRateLimit, rt.HoldCode, "a failed pass does not clear a hold it never re-examined")
+	require.True(t, rt.HoldSince.Time.Equal(held.HoldSince.Time))
+	require.True(t, rt.DriverSeenAt.Time.Equal(e.now), "the heartbeat still moves")
+
+	// Held again on the next pass, the hold keeps its original start.
+	e.now = e.now.Add(100 * time.Millisecond)
+	require.Equal(t, FleetHoldRateLimit, e.drive(t).Hold)
+	rt, err = e.api.FleetOperationRuntimeOf(e.ctx, e.op)
+	require.NoError(t, err)
+	require.True(t, rt.HoldSince.Time.Equal(held.HoldSince.Time), "how long it has been held survives a failed pass")
 }
