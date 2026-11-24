@@ -76,6 +76,10 @@ namespace DeviceChain.Harborpulse.Tests
             Add("replacement", "hp-gauge-north-3", "", "", 12.5, source: EvidenceSource.Scenario);
             Add("measure", "hp-gauge-north-3", "water_level_m", "", 12.51, fields: new Dictionary<string, string> { ["afterReplacement"] = "true" });
             Add("credential", "hp-gauge-north-3", "", "", 12.51, "old-credential", fields: new Dictionary<string, string> { ["enabled"] = "false" });
+            // the devices that hold their own session (page 3c): both pull lamps report the level they fetched at 10:00, and one MQTT charger's session drops for an hour
+            foreach (var lamp in new[] { "hp-light-pull-1", "hp-light-pull-2" }) Add("measure", lamp, "dim_pct", "", 10.05, fields: new Dictionary<string, string> { ["value"] = "35" });
+            Add("alarm", "hp-charger-mqtt-1", "mqtt-charger-disconnected", "RAISED", 12.02);
+            Add("alarm", "hp-charger-mqtt-1", "mqtt-charger-disconnected", "CLEARED", 13.02);
             Add("alarm", "hp-charger-basin-2", "connector-hot", "RAISED", 14);
             Add("command", "hp-charger-basin-2", "derate", "SUCCESSFUL", 14.02, fields: new Dictionary<string, string> { ["max_kw"] = "11" });
             Add("measure", "hp-charger-basin-2", "max_kw", "", 14.1, fields: new Dictionary<string, string> { ["value"] = "11" });
@@ -204,7 +208,7 @@ namespace DeviceChain.Harborpulse.Tests
             var s = DirectorTimeline.Run();
             AssertCleanOutput(s);
             var actual = s.Log.Where(e => e.Kind == "shot").Select(e => e.Page + ":" + e.Value).ToArray();
-            var expected = new[] { "1:1a", "1:1b", "1b:1b-1", "2:2a", "2:2b", "2:2c", "2:2d", "2:2e", "3:3a", "3:3b", "3:3c", "3b:3b-1", "3b:3b-2", "3b:3b-3", "4:4a", "4:4b", "4:4c", "4:4d", "4:4e", "4:4f", "4:4g", "5:5a", "5:5b", "4b:4b-1", "6:6a", "6:6b", "6:6c", "6:6d", "7:7a", "7:7b", "7:7c", "7:7d", "7:7e", "7:7f", "8:8a", "8:8b", "8:8c", "8:8d", "9:9a" };
+            var expected = new[] { "1:1a", "1:1b", "1b:1b-1", "2:2a", "2:2b", "2:2c", "2:2d", "2:2e", "3:3a", "3:3b", "3:3c", "3c:3c-1", "3c:3c-2", "3c:3c-3", "3c:3c-4", "3b:3b-1", "3b:3b-2", "3b:3b-3", "3c:3c-5", "4:4a", "4:4b", "4:4c", "4:4d", "4:4e", "4:4f", "4:4g", "5:5a", "5:5b", "4b:4b-1", "6:6a", "6:6b", "6:6c", "6:6d", "7:7a", "7:7b", "7:7c", "7:7d", "7:7e", "7:7f", "8:8a", "8:8b", "8:8c", "8:8d", "9:9a" };
             Assert.That(actual, Is.EqualTo(expected), string.Join(", ", actual));
             var outputPath = System.IO.Path.Combine(DirectorKit.FixtureDirectory(), "director-clean-output.txt");
             if (Environment.GetEnvironmentVariable("HARBORPULSE_UPDATE_FIXTURES") == "1") System.IO.File.WriteAllLines(outputPath, Output(s));
@@ -279,8 +283,9 @@ namespace DeviceChain.Harborpulse.Tests
             {
                 case "truck-stays-home": return new[] { "5:*", "7:slot:truck-out" };
                 case "silence-north-lamp": case "stream-cut": return new[] { "6:slot:absence", "6:node:absence", "6:link:outage->absence", "6:link:absence->notify" };
-                case "refuse-derate": return new[] { "3b:slot:derate", "3b:slot:cool" };
-                case "command-cause-not-read": return new[] { "3b:slot:derate", "3b:slot:cool", "4:node:command", "4:link:well->command", "4:link:command->running" };
+                // page 3c says its last line (3c-5) when page 3b hands the camera back, so a day that keeps 3b up longer moves that one shot
+                case "refuse-derate": return new[] { "3b:slot:derate", "3b:slot:cool", "3c:shot:3c-5", "3c:slot:locked-out" };
+                case "command-cause-not-read": return new[] { "3b:slot:derate", "3b:slot:cool", "3c:shot:3c-5", "3c:slot:locked-out", "4:node:command", "4:link:well->command", "4:link:command->running" };
                 case "no-command-far-end": return new[] { "4:slot:start", "4:slot:before-float", "4:node:command", "4:node:running", "4:link:well->command", "4:link:command->running", "4:link:running->falling" };
                 case "air-lock-basin": return new[] { "4b:follow:hp-pump-east", "4b:follow:hp-pump-basin", "4b:slot:air" };
                 case "drop-backfill": return new[] { "7:slot:tally", "7:node:stored", "7:link:paced->stored", "7:link:stored->clear" };

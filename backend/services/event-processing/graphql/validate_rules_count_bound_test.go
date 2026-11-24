@@ -22,7 +22,7 @@ func TestValidateDetectionRules_RefusesMoreThanTheBoundBeforeCompiling(t *testin
 	// On main this returns a result carrying 1,001 per-rule decode errors and no
 	// refusal: every entry was processed. A refusal with no result proves none was.
 	r := &SchemaResolver{}
-	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), struct{ Rules []detectionRuleInput }{Rules: inputs})
+	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), validateArgs{Rules: inputs})
 	if res != nil {
 		t.Fatalf("expected no result for an oversized batch, got one carrying %d per-rule errors", len(res.Errors()))
 	}
@@ -55,7 +55,7 @@ func TestValidateDetectionRules_AcceptsExactlyTheBound(t *testing.T) {
 		}
 	}
 	r := &SchemaResolver{}
-	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), struct{ Rules []detectionRuleInput }{Rules: inputs})
+	res, err := r.ValidateDetectionRules(authedContext(auth.DeviceRead), validateArgs{Rules: inputs})
 	if err != nil {
 		t.Fatalf("unexpected error at the bound: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestValidateDetectionRules_BoundIsOneThousand(t *testing.T) {
 func TestValidateDetectionRules_CountBoundComesAfterAuth(t *testing.T) {
 	inputs := make([]detectionRuleInput, MaxRulesPerValidation+1)
 	r := &SchemaResolver{}
-	res, err := r.ValidateDetectionRules(authedContext(), struct{ Rules []detectionRuleInput }{Rules: inputs})
+	res, err := r.ValidateDetectionRules(authedContext(), validateArgs{Rules: inputs})
 	if res != nil {
 		t.Fatalf("expected no result without device:read, got one carrying %d per-rule errors", len(res.Errors()))
 	}

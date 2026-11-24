@@ -289,7 +289,7 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 	case rep.Update != nil:
 		var verdict ota.Verdict
 		err := rc.held(msgctx, msg, func(c context.Context) (e error) {
-			verdict, e = rc.Api.ApplyReport(c, token, *rep.Update)
+			verdict, e = rc.Api.ApplyReport(model.WithObservedAt(c, msg.AppendTime), token, *rep.Update)
 			return e
 		})
 		if err != nil {

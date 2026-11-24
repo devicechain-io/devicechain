@@ -7,7 +7,6 @@
   "celPresetFilter": "Filtro: comparar una lectura",
   "celPresetExists": "Existe: comprobar si hay una lectura",
   "celPresetApply": "Usar expresión",
-
   "canvasAddLabel": "Añadir:",
   "canvasChecking": "Comprobando…",
   "canvasCompiles": "Compila",
@@ -951,5 +950,6 @@
   "decIssue.tooManyVectors": "Como máximo {{max}} vectores.",
   "decIssue.tooManyReadings": "Una sección puede producir como máximo {{max}} lecturas.",
   "decIssue.documentTooLarge": "El decodificador es demasiado grande: como máximo {{max}} bytes.",
-  "decIssue.noSections": "Añade al menos una sección."
+  "decIssue.noSections": "Añade al menos una sección.",
+  "ruleWarning.namesStringMetric": "La métrica «{{p0}}» está declarada como texto (STRING) en este perfil, y una regla nunca lee una lectura de texto, así que esta regla nunca se activará. Usa una métrica numérica o declara la métrica como DOUBLE, INT o BOOLEAN."
 }

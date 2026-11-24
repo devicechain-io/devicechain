@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -30,6 +31,22 @@ type detectionRuleInput struct {
 	GroupScoped bool
 }
 
+// detectionMetricInput is one metric of the profile the rules belong to: its key and data type.
+type detectionMetricInput struct {
+	Key      string
+	DataType string
+}
+
+// validateArgs are validateDetectionRules' arguments. Metrics is optional: omitted means the
+// caller did not send the profile's metric types and no STRING-metric warning is given.
+type validateArgs = struct {
+	Rules   []detectionRuleInput
+	Metrics *[]detectionMetricInput
+}
+
+// MaxMetricsPerValidation bounds the optional metric list of one validation call.
+const MaxMetricsPerValidation = 1000
+
 // ValidateDetectionRules compiles and cost-gates a batch of detection-rule definitions —
 // the ADR-044 synchronous validation gate device-management calls at profile publish
 // (ADR-051 slice 4b) so a profile carrying an uncompilable rule fails closed. It is the
@@ -42,14 +59,25 @@ type detectionRuleInput struct {
 // only it). The compile is pure: no state is read or written, so a hostile caller can gain
 // nothing beyond a CEL-compilation oracle, which the cost gate and auth already bound;
 // the rule count is bounded by MaxRulesPerValidation.
-func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct {
-	Rules []detectionRuleInput
-}) (*DetectionRuleValidationResultResolver, error) {
+func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args validateArgs) (*DetectionRuleValidationResultResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 	if len(args.Rules) > MaxRulesPerValidation {
 		return nil, limit.Exceeded("detection rules in one validation", len(args.Rules), MaxRulesPerValidation)
+	}
+
+	// The profile's STRING metric keys, when the caller sent its metric types. Omitted means no
+	// warning, so a caller that predates the argument is unaffected.
+	var stringKeys map[string]bool
+	if args.Metrics != nil {
+		if len(*args.Metrics) > MaxMetricsPerValidation {
+			return nil, limit.Exceeded("metrics in one validation", len(*args.Metrics), MaxMetricsPerValidation)
+		}
+		var err error
+		if stringKeys, err = stringMetricKeys(*args.Metrics); err != nil {
+			return nil, err
+		}
 	}
 
 	// Platform-default compile limits, shared verbatim with the runtime fact-consumer
@@ -90,7 +118,7 @@ func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct
 			errs = append(errs, newValidationError(i, in.Token, err))
 			continue
 		}
-		for _, w := range compiled.Warnings {
+		for _, w := range append(append([]rules.Warning{}, compiled.Warnings...), rules.StringMetricWarnings(compiled, stringKeys)...) {
 			warns = append(warns, &DetectionRuleValidationWarningResolver{
 				index: int32(i), token: in.Token, code: w.Code, params: append([]string{}, w.Params...), message: w.Message,
 			})
@@ -185,3 +213,28 @@ func (r *DetectionRuleValidationErrorResolver) Token() string { return r.token }
 
 // Message resolves the console-surfaceable failure reason.
 func (r *DetectionRuleValidationErrorResolver) Message() string { return r.message }
+
+// stringMetricKeys returns the keys of the STRING metrics in the list, failing closed on a data type
+// outside the metric vocabulary (the error names the key: a type this gate does not know would
+// otherwise read as "not STRING" and quietly drop the warning) and on a key listed twice with
+// different types.
+func stringMetricKeys(metrics []detectionMetricInput) (map[string]bool, error) {
+	types := make(map[string]string, len(metrics))
+	out := map[string]bool{}
+	for _, m := range metrics {
+		dt := strings.ToUpper(m.DataType)
+		switch dt {
+		case "DOUBLE", "INT", "BOOLEAN", "STRING":
+		default:
+			return nil, fmt.Errorf("metric %q has the unknown data type %q; use DOUBLE, INT, BOOLEAN or STRING", m.Key, m.DataType)
+		}
+		if prev, dup := types[m.Key]; dup && prev != dt {
+			return nil, fmt.Errorf("metric %q is listed with conflicting data types %s and %s", m.Key, prev, dt)
+		}
+		types[m.Key] = dt
+		if dt == "STRING" {
+			out[m.Key] = true
+		}
+	}
+	return out, nil
+}

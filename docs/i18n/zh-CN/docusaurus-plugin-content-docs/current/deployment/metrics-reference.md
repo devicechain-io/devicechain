@@ -67,6 +67,7 @@ title: 指标参考
 | `agent_executions_total{kind, result}` | Preview（代理操作）。最终审批执行数，按类型（`ALARM_ACK`、`ALARM_CLEAR`、`unknown`）和结果（`executed`、`dependency_changed`、`policy_refused`、`fence_closed`、`refused`、`failed`）区分，每次执行仅计一次，包括重新启用围栏后的重试。`failed` 表示事务未能完成（数据库或语句超时、策略服务或停用事件流不可用）；锁冲突作为并发审批计为 `refused`。 |
 | `agent_execution_seconds` | 直方图。Preview（代理操作）。执行最终审批所用的时间，包括拒绝、失败及重新启用围栏后的重试。 |
 | `agent_proposals_expired_total` | Preview（代理操作）。由过期清理任务转为 `EXPIRED` 的提案数。 |
+| `agent_effects_exhausted_total` | Preview（代理操作）。用尽全部 100 次发布尝试的代理效果发件箱行数。已批准的代理操作已经改变了告警；发件箱中的这一行是通知平台其余部分的消息。失败 100 次的行会连同导致失败的错误一起保留，不再重试，因此这次告警变更永远不会被广播。每行只计一次，服务会记录 `Agent effect exhausted its attempts`，并带上租户和效果 id。没有随附告警监控它：只要增加，就说明代理长时间拒绝了这些发布，请先检查消息代理，再查看待处理的行。 |
 | `alarm_event_dead_lettered_total` | 保留此计数器，但自告警事件改由 outbox 转发后不再递增。请参阅 `alarm_events_quarantined`。 |
 | `alarm_events_pending` | Gauge。已提交、等待 broker 确认的告警状态转换数，不包括隔离行。 |
 | `alarm_event_oldest_age_seconds` | Gauge。按 id 排序的最早待发送转换的等待秒数；队列为空时为零，表示通知的延迟。 |
@@ -78,6 +79,7 @@ title: 指标参考
 | `device_reports_dead_lettered_total` | 因无法理解或引用了设备没有的配置修订而写入死信流的设备消息。使用 `dcctl dead-letters` 查看。 |
 | `live_subscription_dropped_total{suffix}` | 计数器。因订阅者跟不上而被丢弃的实时值，按订阅所跟随的流区分。此处 `suffix` 为 `alarm-events`，对应 `alarmStream` 订阅。速度慢的查看者会丢失它来不及接收的实时值；已存储的内容不受影响，普通查询仍会返回同样的历史。来自单个查看者的稳定速率通常意味着某个控制台标签页或客户端卡住了，或网络链路较差。许多查看者同时出现，则说明该 Pod 过载。`event-management` 为其测量订阅导出同一指标（`suffix` 为 `resolved-events`），`event-processing` 为检测订阅导出（`derived-events`），各自使用自己的前缀。 |
 | `geofence_set_publish_failures_total` | 无法发布的地理围栏集清单：序列化错误、代理拒绝或传输故障。每一条都表示事件处理未被告知某次围栏编辑，因此该租户的包含判定沿用先前的围栏集，直到协调扫描将其修复。持续的非零速率表示围栏编辑没有到达检测引擎。 |
+| `fact_publish_failures_total{fact}` | 计数器。已提交的变更，其通知无法发布，按 `fact` 区分：`detection_rules`、`device_roster`、`device_attribute`、`device_desired` 和 `device_ownership`。五个值在启动时即以 0 存在。变更本身已保存；延迟的只是它的通知。检测规则、设备名册或属性的未发布，会在 event-processing 下次与 device-management 比对时修复，通常在几分钟内。`device_desired` 的未发布由设备下一次同步修复，`device_ownership` 的未发布仍留在队列中，下一轮处理（约一秒后）会再次发布。持续出现意味着变更要等几分钟才生效，请检查消息代理。任何持续十分钟的速率都会触发 [`DeviceFactPublishFailing`](./alert-runbook.md#devicefactpublishfailing) 告警。 |
 | `provisioning_in_flight` | Gauge。此刻本副本正在处理的设备自注册数，从读完请求体之后到应答之前。仍在发送请求体的请求不计入。该值固定在 `provisioning.maxInFlight` 表示新请求正在被应答 `503`。 |
 | `provisioning_request_duration_seconds{result}` | 直方图。按结果统计的自注册请求应答耗时，从处理程序开始计时（包含缓慢的请求体）。 |
 | `provisioning_requests_total{result}` | 按结果统计的设备自注册请求：`created`、`adopted`、`replayed`、`auth_failed`（配置密钥或密文被拒绝的所有情形，有意合并计数）、`invalid`、`read_timeout`、`rate_limited_source`、`rate_limited_tenant`、`busy`、`not_registered`、`not_earmarked`、`disabled`、`type_mismatch`、`token_collision`、`already_provisioned`、`limit_exceeded`、`unavailable`、`misconfigured`、`unsupported_type` 和 `error`。每个结果从启动起就存在。没有租户标签，因为请求在通过认证之前没有可信的租户。 |
@@ -98,6 +100,7 @@ title: 指标参考
 | --- | --- |
 | `detect_applied_stream_seq` | 已提交快照中捕获的最高 JetStream 流序号。 |
 | `detect_checkpoint_failures_total{stage}` | 未能提交的计划 DETECT 检查点，按阶段区分（publish、serialize、save）。超过截止时间的检查点调用计入其卡住的阶段。过期写入者的拒绝不在此计数：那会结束进程。 |
+| `detect_checkpoint_min_spacing_seconds` | 仪表。引擎允许两次由计数触发的检查点之间至少间隔的时间：最近一次已提交快照耗时的四倍，且不超过 `checkpointIntervalSeconds`。它跟随 `detect_checkpoint_seconds`，因此会随引擎状态及其快照变大而增大。当它停在 `checkpointIntervalSeconds` 时，按计数触发的检查点已稀疏到设置所允许的程度，此时若 `detect_consumer_ack_pending` 上升、`detect_consumer_pending` 增长，就说明检查点正在拖慢消费者：请查看 `detect_snapshot_bytes` 以及序列化和保存耗时。 |
 | `detect_checkpoint_save_seconds` | 每个已提交快照写入数据库所用的时间（分布）：检查点开销中序列化之后的第二部分。 |
 | `detect_checkpoint_serialize_seconds` | 每个已提交快照序列化引擎状态所用的时间（分布）：检查点开销的第一部分。 |
 | `detect_checkpoints_total` | 已提交的 DETECT 快照检查点。 |
@@ -123,6 +126,9 @@ title: 指标参考
 | `detect_fence_geometry_cache_vertices` | 已编译几何缓存中保存的顶点总数，即其上限所计量的数量。 |
 | `detect_fence_geometry_hash_mismatch_total` | 哈希与其被请求时所用内容地址不符的地理围栏几何文档。永远是缺陷，从不是暂时的：对端返回了错误的行、传输中有东西重新编码了文档，或归档已损坏。 |
 | `detect_fence_geometry_unresolved_total` | 无法从设备管理的归档取得几何数据的地理围栏清单条目。每一条都使该围栏报告无法解析而不是给出答案，如果原因是暂时的，则在下一次协调扫描时修复。 |
+| `detect_group_shard_busy_seconds_total{group, shard}` | 每个分片组中每个检测分片用于应用操作的秒数。请按速率读取：它就是该分片的利用率，速率 0.5 表示该分片一半时间处于忙碌。健康的状态是每个分片都远低于 0.9，且数值相近。同一组内某个分片远高于其余分片，说明有热点键（某个设备或关联锚点发送的数据远多于其他）；所有分片都接近 1，说明限制在 `detectShards`，该组正在落后，表现为 `detect_consumer_pending` 增长。 |
+| `detect_group_shard_live_keys{group, shard}` | 仪表。每个分片组中每个检测分片持有的活动窗口、定时器和锁存器数量。健康的状态是同一组内各分片大致均匀。某个分片持有的键远多于其他分片就是键倾斜：上升的将是它的队列和忙碌时间。 |
+| `detect_group_shard_queue_depth{group, shard}` | 仪表。每个分片组中每个检测分片排队的操作数，按循环的周期采样。健康时保持在接近零。队列持续偏高的分片最慢，该组的循环在每次检查点、规则变更和查询时都要等待它，表现为该组落后（`detect_group_consumer_pending` 和 `detect_group_watermark_lag_seconds`）。 |
 | `detect_idle_advances_total` | 产生了至少一次检测的挂钟空闲推进。 |
 | `detect_idle_detections_total` | 由挂钟空闲推进产生的检测（缺席/持续时间/会话在静默时触发）。 |
 | `detect_is_leader` | 此副本持有 DETECT 分区租约期间为 1，从取得租约起算，而不是从任期构建结束起算。 |

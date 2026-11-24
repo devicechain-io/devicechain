@@ -7,7 +7,6 @@
   "celPresetFilter": "Filter: compare a reading",
   "celPresetExists": "Exists: check for a reading",
   "celPresetApply": "Use expression",
-
   "canvasAddLabel": "Add:",
   "canvasChecking": "Checking…",
   "canvasCompiles": "Compiles",
@@ -951,5 +950,6 @@
   "decIssue.tooManyVectors": "At most {{max}} vectors.",
   "decIssue.tooManyReadings": "A section may produce at most {{max}} readings.",
   "decIssue.documentTooLarge": "The decoder is too large: at most {{max}} bytes.",
-  "decIssue.noSections": "Add at least one section."
+  "decIssue.noSections": "Add at least one section.",
+  "ruleWarning.namesStringMetric": "The metric “{{p0}}” is declared as text (STRING) on this profile, and a rule never reads a text reading, so this rule will never fire. Use a numeric metric, or declare the metric as DOUBLE, INT or BOOLEAN."
 }
