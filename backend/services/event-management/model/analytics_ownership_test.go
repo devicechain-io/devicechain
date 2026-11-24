@@ -105,6 +105,8 @@ func TestAnalyticsOwnershipStopsReconciliation(t *testing.T) {
 			key := rdb.AdvisoryLockKey(analyticsLockName)
 			mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_lock($1)")).
 				WithArgs(key).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectQuery(`SELECT generation FROM "event-management".analytics_surface_generation WHERE id = 1`).
+				WillReturnRows(sqlmock.NewRows([]string{"generation"}).AddRow(0))
 			// The existing identity-function refresh precedes view inspection.
 			for _, stmt := range []string{createAnalyticsSchemaStmt(), createReaderTenantFnStmt()} {
 				mock.ExpectExec(regexp.QuoteMeta(stmt)).WillReturnResult(sqlmock.NewResult(0, 0))

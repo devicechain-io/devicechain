@@ -185,8 +185,10 @@ func (t *Tools) ProposeAlarmAction(ctx context.Context, req *mcp.CallToolRequest
 		} `json:"proposeAlarmAction"`
 	}
 	if err = t.gql.Query(ctx, proposeAlarmActionMutation, token, map[string]any{"input": input}, &resp); err != nil {
+		recordProposalError(ctx, err)
 		return nil, out, err
 	}
+	recordProposalDecision(ctx, resp.Outcome.Stored, resp.Outcome.Verdict, resp.Outcome.Reasons)
 	out = resp.Outcome.ProposalOutcome
 	if resp.Outcome.Stored != nil {
 		p := resp.Outcome.Stored.output()

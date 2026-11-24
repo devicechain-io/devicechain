@@ -165,6 +165,7 @@ var purgeSeedExemptions = map[string]string{
 	"device-state.device_states":                                 representedTenantPredicate,
 	"device-state.latest_locations":                              representedTenantPredicate,
 	"event-management.alert_events":                              representedTenantPredicate,
+	"event-management.analytics_surface_generation":              indirectTable,
 	"event-management.audit_events":                              sharedJournal,
 	"event-management.calculated_backfills":                      representedTenantPredicate,
 	"event-management.entity_deletion_watermarks":                representedTenantPredicate,

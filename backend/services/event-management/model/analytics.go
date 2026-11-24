@@ -650,10 +650,11 @@ func revokeAreaStatements(role string) []string {
 	}
 }
 
-// AnalyticsMetrics counts superuser naming collisions skipped during reconciliation.
+// AnalyticsMetrics counts skips during reconciliation.
 // Role names belong in logs rather than unbounded metric labels.
 type AnalyticsMetrics struct {
 	PlatformCollisions prometheus.Counter
+	NewerSurfaceSkips  prometheus.Counter
 }
 
 // NewAnalyticsMetrics registers the instruments once for the process.
@@ -661,6 +662,8 @@ func NewAnalyticsMetrics(ms *core.Microservice) *AnalyticsMetrics {
 	return &AnalyticsMetrics{
 		PlatformCollisions: ms.NewCounter("analytics_reconcile_platform_collisions_total",
 			"Superuser reader-name collisions skipped during analytics reconciliation."),
+		NewerSurfaceSkips: ms.NewCounter("analytics_reconcile_newer_surface_skips_total",
+			"Analytics reconciliations skipped because the database surface generation is newer than this build."),
 	}
 }
 
@@ -760,7 +763,7 @@ func analyticsRolePattern() string {
 }
 
 // ReconcileAnalyticsSurface converges the read surface — the views AND the privileges
-// — on every boot.
+// — on every boot, unless a newer build has already reconciled its generation.
 //
 // It is a reconciler rather than a migration step for one reason that decides the
 // design: the group role is created by the DATABASE CLUSTER, asynchronously, and a
@@ -787,8 +790,8 @@ func analyticsRolePattern() string {
 // it is reported and startup continues. A failed rebuild or REVOKE is different —
 // each leaves a way to read another tenant's rows — so both refuse the boot.
 func ReconcileAnalyticsSurface(ctx context.Context, mgr *rdb.RdbManager, metrics *AnalyticsMetrics) error {
-	if metrics == nil || metrics.PlatformCollisions == nil {
-		return fmt.Errorf("analytics reconciliation requires metrics with a platform collision counter")
+	if metrics == nil || metrics.PlatformCollisions == nil || metrics.NewerSurfaceSkips == nil {
+		return fmt.Errorf("analytics reconciliation requires platform collision and newer surface skip counters")
 	}
 	// Checked before the lock is taken, because it is a property of this BUILD rather
 	// than of the database: a view with no grantee is a mistake made in this file, and
@@ -796,9 +799,7 @@ func ReconcileAnalyticsSurface(ctx context.Context, mgr *rdb.RdbManager, metrics
 	if err := analyticsViewsDeclareTheirGrantee(); err != nil {
 		return err
 	}
-	return mgr.WithAdvisoryLock(ctx, rdb.AdvisoryLockKey(analyticsLockName), func() error {
-		db := mgr.DB(core.WithSystemContext(ctx))
-
+	return withAnalyticsGeneration(ctx, mgr, AnalyticsSurfaceGeneration, metrics, func(db *gorm.DB) error {
 		// 🔴 THE FUNCTION IS REBUILT UNCONDITIONALLY, THE VIEWS ARE NOT, AND THE
 		// ASYMMETRY IS THE POINT RATHER THAN AN INCONSISTENCY.
 		//

@@ -226,13 +226,13 @@ Conecta un asistente y podrá *leer dispositivos, estado, mediciones y alarmas* 
 Cada llamada a una herramienta escribe una línea en el registro del servicio `mcp`, sea cual sea su resultado. Las lecturas no son entradas del diario de auditoría, que registra cambios e inicios de sesión, así que estas líneas son el único registro de lo que leyó un asistente. Una línea tiene este aspecto:
 
 ```json
-{"instance":"prod","area":"mcp","audit":"mcp_tool_call","schema":2,"tenant":"acme","actor":"ana@example.com","client_id":"claude-desktop","scopes":["read-only"],"sudo":false,"tool":"query_measurements","args_sha256":"5f1c…","outcome":"ok","duration_ms":42,"time":"2026-10-16T09:12:03Z","message":"MCP tool call"}
+{"instance":"prod","area":"mcp","audit":"mcp_tool_call","schema":3,"tenant":"acme","actor":"ana@example.com","client_id":"claude-desktop","scopes":["read-only"],"sudo":false,"tool":"query_measurements","args_sha256":"5f1c…","outcome":"ok","proposal":"","verdict":"","duration_ms":42,"time":"2026-10-16T09:12:03Z","message":"MCP tool call"}
 ```
 
 | Campo | Significado |
 | --- | --- |
 | `audit` | Siempre `mcp_tool_call`. Selecciona los registros por este campo: no llevan `level`. |
-| `schema` | La versión de este formato, `2`. Un cambio en los campos se anuncia en las notas de la versión con un número nuevo. La versión 2 solo añade `scopes`; todos los campos de la versión 1 permanecen igual. |
+| `schema` | La versión de este formato, `3`. La versión 2 añadió `scopes`; la versión 3 añade `proposal` y `verdict`. Los campos existentes conservan su significado. |
 | `tenant`, `actor` | El inquilino y el usuario que nombra el token de acceso. El actor es el correo electrónico del usuario. |
 | `client_id` | El cliente OAuth registrado al que se emitió el token, que indica qué aplicación hizo la llamada. |
 | `scopes` | Los ámbitos OAuth que se concedieron al token de acceso, como lista, por ejemplo `["read-only"]`. |
@@ -241,6 +241,8 @@ Cada llamada a una herramienta escribe una línea en el registro del servicio `m
 | `args_sha256` | El SHA-256 de los argumentos de la llamada, con las claves ordenadas y sin espacios, de modo que solicitudes idénticas comparten valor. Los argumentos nunca se escriben. |
 | `outcome` | `ok`, `error` (la herramienta rechazó la llamada o falló, incluidos argumentos que no acepta y un rechazo porque el usuario no tiene el permiso) o `rejected` (una llamada a una herramienta que el servidor no tiene). Una solicitud tan mal formada que ni siquiera nombra una herramienta la rechaza la capa de protocolo antes de que llegue a ninguna herramienta, y no escribe ninguna línea. |
 | `duration_ms` | Cuánto tardó la llamada. |
+| `proposal` | El token guardado que devuelve una herramienta de propuestas en Preview, si está presente y es válido. Vacío para lecturas, simulaciones y rechazos que no guardan una propuesta. |
+| `verdict` | `APPROVE` o `REFUSE` según la plataforma, con códigos de rechazo permitidos en la forma `REFUSE:CODE,CODE`. Los rechazos GraphQL codificados usan la misma forma, por ejemplo `REFUSE:POLICY_UNAVAILABLE`. Vacío para lecturas o si no hay una decisión reconocida. Solo se copian identificadores y códigos enumerados, nunca justificaciones, cargas útiles ni mensajes de error. |
 
 Algunas propiedades de estas líneas importan cuando dependes de ellas:
 

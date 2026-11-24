@@ -102,6 +102,7 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	prevAlarmEvents := AlarmEventDrain
 	prevReportMaintenance := ConfigurationReportMaintenance
 	prevOrphanSweep := AttributeOrphanSweep
+	prevFleetExpirySweep := FleetExpirySweep
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, Svc = prevMs, prevGql, prevNats, prevSvc
 		InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer = prevIep, prevRac, prevCallout, prevDrc
@@ -111,6 +112,7 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 		AlarmEventDrain = prevAlarmEvents
 		ConfigurationReportMaintenance = prevReportMaintenance
 		AttributeOrphanSweep = prevOrphanSweep
+		FleetExpirySweep = prevFleetExpirySweep
 	})
 
 	area := fmt.Sprintf("device-management-shutdown-%d", time.Now().UnixNano())
@@ -194,6 +196,7 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	AttributeOrphanSweep = core.NewPeriodicTask(area, "device-attribute-orphan-sweep", time.Hour,
 		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks(), Microservice.NewPeriodicTaskMetrics("device_attribute_orphan_sweep"))
 	require.NoError(t, AttributeOrphanSweep.Initialize(context.Background()))
+	require.NoError(t, initFleetExpirySweep())
 	// And the decode accounting, which the stopper stops and then flushes. A fresh one: an earlier test of
 	// the package may have left the global stopped.
 	prevAccountant, prevAccounting := DecodeAccountant, DecodeAccounting
