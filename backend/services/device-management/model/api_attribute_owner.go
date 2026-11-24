@@ -89,6 +89,7 @@ type attributeTxState struct {
 	path   string
 	owner  uint
 	locked bool
+	pool   gorm.ConnPool
 }
 
 func attributeSQLState(err error) string {
@@ -175,13 +176,13 @@ func lockDeviceAttributes(ctx context.Context, tx *gorm.DB, id uint) error {
 		return errors.New("device attribute transaction cannot own two devices")
 	}
 	if tx.Dialector.Name() != "postgres" {
-		state.owner, state.locked = id, true
+		state.owner, state.locked, state.pool = id, true, tx.Statement.ConnPool
 		return nil
 	}
 	path := state.path
 	reacquire := state.locked && state.owner == id
 	started := time.Now()
-	err := tx.WithContext(tx.Statement.Context).Exec(`SELECT "device-management".dc_entity_attr_lock('device', ?)`, id).Error
+	err := acquireDeviceAttributeLock(tx, id)
 	if !reacquire {
 		// A same-owner re-acquire is free (the transaction already holds the lock); observing it
 		// would skew the wait histogram toward zero.
@@ -195,8 +196,39 @@ func lockDeviceAttributes(ctx context.Context, tx *gorm.DB, id uint) error {
 	if err := tx.Exec(attrprotocol.MarkerSQL).Error; err != nil {
 		return err
 	}
-	state.owner, state.locked = id, true
+	state.owner, state.locked, state.pool = id, true, tx.Statement.ConnPool
 	return nil
+}
+
+func acquireDeviceAttributeLock(tx *gorm.DB, id uint) error {
+	return tx.Exec(`SELECT "device-management".dc_entity_attr_lock('device', ?)`, id).Error
+}
+
+type createdDeviceMembershipOwnerKey struct{}
+type createdDeviceMembershipOwner struct {
+	id   uint
+	pool gorm.ConnPool
+}
+
+// lockCreatedDeviceForMembership is only for IDs inserted by the current create
+// transaction, before enrollment. Those IDs are not yet visible to other writers.
+// Batch creation can own several new devices; it must not relax the attribute
+// runner's one-existing-device rule or manufacture an attribute writer state.
+// No attributes are written here, so no writer-protocol marker is needed.
+func lockCreatedDeviceForMembership(tx *gorm.DB, id uint) (*gorm.DB, error) {
+	if tx == nil || tx.Statement == nil {
+		return nil, errors.New("new device membership requires a transaction")
+	}
+	if _, ok := tx.Statement.ConnPool.(gorm.TxCommitter); !ok {
+		return nil, errors.New("new device membership requires a transaction")
+	}
+	if tx.Dialector.Name() == "postgres" {
+		if err := acquireDeviceAttributeLock(tx, id); err != nil {
+			return nil, err
+		}
+	}
+	owner := createdDeviceMembershipOwner{id: id, pool: tx.Statement.ConnPool}
+	return tx.WithContext(context.WithValue(tx.Statement.Context, createdDeviceMembershipOwnerKey{}, owner)), nil
 }
 
 // tryLockDeviceAttributes is lockDeviceAttributes without the wait: it answers false, having taken and
@@ -220,7 +252,7 @@ func tryLockDeviceAttributes(ctx context.Context, tx *gorm.DB, id uint) (bool, e
 		return false, errors.New("device attribute transaction cannot own two devices")
 	}
 	if tx.Dialector.Name() != "postgres" {
-		state.owner, state.locked = id, true
+		state.owner, state.locked, state.pool = id, true, tx.Statement.ConnPool
 		return true, nil
 	}
 	var got bool
@@ -233,7 +265,7 @@ func tryLockDeviceAttributes(ctx context.Context, tx *gorm.DB, id uint) (bool, e
 	if err := tx.Exec(attrprotocol.MarkerSQL).Error; err != nil {
 		return false, err
 	}
-	state.owner, state.locked = id, true
+	state.owner, state.locked, state.pool = id, true, tx.Statement.ConnPool
 	return true, nil
 }
 

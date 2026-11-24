@@ -74,8 +74,8 @@ func (api *Api) isMemberBySelector(ctx context.Context, db *gorm.DB, memberType,
 }
 
 // lockMembershipFamily takes a transaction-scoped exclusive advisory lock keyed on
-// (tenant, memberType), serializing ALL membership maintenance for one family within the
-// tenant (both an incremental recompute and a Register). This is what makes same-txn
+// (tenant, memberType), excluding all other membership maintenance for that family.
+// Group-level work and non-device writers use this mode. This makes same-txn
 // recompute actually diverge-free: same-txn alone is not serializable, so two concurrent
 // writes to DIFFERENT facets of the same entity — or a write racing a Register — could
 // write-skew the read-model into a permanent stale/missed membership (there is no reconcile
@@ -90,11 +90,14 @@ func (api *Api) isMemberBySelector(ctx context.Context, db *gorm.DB, memberType,
 // the skew reopens silently — do NOT raise default_transaction_isolation for these connections
 // without revisiting recomputeMembershipForAttr and registerGroupVersionOnTx.
 //
-// Taken by each Register/Deregister and by every eligible (SHARED-scope, anchor-able)
-// attribute-write recompute — which now acquires it BEFORE reading the reverse index (see
-// recomputeMembershipForAttr), so an eligible write pays an uncontended lock even absent scoped
-// groups. Entity creation takes it too, before reading the empty-match sentinel refs.
+// Device writers use the same key in shared mode, only after K_dev; different
+// devices can then proceed together, while writers of the same device serialize
+// on K_dev. Both modes precede the reverse-index read, even without scoped groups.
 func (api *Api) lockMembershipFamily(ctx context.Context, tx *gorm.DB, memberType string) error {
+	return api.lockMembershipFamilySQL(ctx, tx, memberType, "SELECT pg_advisory_xact_lock(?)")
+}
+
+func (api *Api) lockMembershipFamilySQL(ctx context.Context, tx *gorm.DB, memberType, sql string) error {
 	if tx.Dialector.Name() != "postgres" {
 		return nil
 	}
@@ -104,7 +107,66 @@ func (api *Api) lockMembershipFamily(ctx context.Context, tx *gorm.DB, memberTyp
 	}
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(tenant + "\x00" + memberType))
-	return tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(h.Sum64())).Error
+	return tx.Exec(sql, int64(h.Sum64())).Error
+}
+
+// membershipWriterLockSQL asserts the owner protocol before selecting shared mode.
+// A missing/wrong owner is a programming error, never an exclusive-mode fallback.
+// Check even on SQLite, so the protocol cannot disappear from unit coverage.
+func membershipWriterLockSQL(tx *gorm.DB, memberType string, entityID uint) (string, error) {
+	if memberType != string(entity.TypeDevice) {
+		return "SELECT pg_advisory_xact_lock(?)", nil
+	}
+	if err := assertMembershipDeviceOwner(tx, entityID); err != nil {
+		return "", err
+	}
+	return "SELECT pg_advisory_xact_lock_shared(?)", nil
+}
+
+func assertMembershipDeviceOwner(tx *gorm.DB, id uint) error {
+	missing := fmt.Errorf("shared membership family lock requires K_dev for device %d on this transaction", id)
+	if tx == nil || tx.Statement == nil {
+		return missing
+	}
+	if _, ok := tx.Statement.ConnPool.(gorm.TxCommitter); !ok {
+		return missing
+	}
+	state, _ := tx.Statement.Context.Value(attributeTxContextKey{}).(*attributeTxState)
+	writerHeld := state != nil && state.locked && state.owner == id && state.pool == tx.Statement.ConnPool
+	created, ok := tx.Statement.Context.Value(createdDeviceMembershipOwnerKey{}).(createdDeviceMembershipOwner)
+	creatorHeld := ok && created.id == id && created.pool == tx.Statement.ConnPool
+	if !writerHeld && !creatorHeld {
+		return missing
+	}
+	// ROLLBACK TO SAVEPOINT can release K_dev without undoing the Go state.
+	// Assert the actual granted lock as well. This is the SQL function's key,
+	// computed by Postgres (never a Go implementation of its hash); the integration
+	// tests acquire through dc_entity_attr_lock and check this probe stays in step.
+	if tx.Dialector.Name() == "postgres" {
+		var held bool
+		err := tx.Raw(`SELECT EXISTS (SELECT 1 FROM pg_locks,
+			(SELECT hashtextextended('dc.attr|device|' || CAST(CAST(? AS bigint) AS text), 0) AS k) device_key
+			WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted
+			AND mode = 'ExclusiveLock' AND objsubid = 1
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+			AND classid::bigint = ((k >> 32) & 4294967295)
+			AND objid::bigint = (k & 4294967295))`, id).Scan(&held).Error
+		if err != nil {
+			return err
+		}
+		if !held {
+			return missing
+		}
+	}
+	return nil
+}
+
+func (api *Api) lockMembershipWriterFamily(ctx context.Context, tx *gorm.DB, memberType string, id uint) error {
+	sql, err := membershipWriterLockSQL(tx, memberType, id)
+	if err != nil {
+		return err
+	}
+	return api.lockMembershipFamilySQL(ctx, tx, memberType, sql)
 }
 
 // membersMatchingFrozenOnTx resolves the full member set of a frozen version's selector on
@@ -374,13 +436,11 @@ func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, ent
 	//   (b) orphan resurrection — a stale ref read before a concurrent Deregister committed
 	//       re-upserted a membership row for a group@v whose reverse index was being torn down,
 	//       leaving a membership row with no facet ref.
-	// Taking the family lock first forces whichever transaction holds it to commit before the
-	// other reads, so the ref set read here reflects all committed Register/Deregister work and
-	// the backfill-vs-attribute race resolves deterministically in the lock holder's favor. The
-	// cost is that an eligible (SHARED-scope, anchor-able) attribute write now takes the
-	// tenant+family advisory lock even for a tenant with no scoped groups; attribute writes are
-	// low-volume metadata ops and the lock is uncontended in that case, so it is acceptable.
-	if err := api.lockMembershipFamily(ctx, db, entityType); err != nil {
+	// The family lock excludes Register/Deregister before this ref read, so their
+	// committed work is visible here. Writers of the same device also serialize on
+	// K_dev. The lock is shared only for device writers already holding this entity's K_dev.
+	// Non-device writers remain exclusive to prevent different-facet write skew.
+	if err := api.lockMembershipWriterFamily(ctx, db, entityType, entityId); err != nil {
 		return membershipChange{}, err
 	}
 	refs := make([]EntityGroupFacetRef, 0)
@@ -446,13 +506,25 @@ func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, ent
 func (api *Api) enrollNewEntitiesOnTx(ctx context.Context, tx *gorm.DB, entityType string, ids []uint) (membershipChange, error) {
 	// Lock BEFORE the indexed ref read: uncommitted registration refs are invisible
 	// to MVCC (see recomputeMembershipForAttr). Accept one uncontended advisory lock
-	// per create even without groups on Postgres; SQLite's lock is a no-op.
+	// per create even without groups on Postgres; SQLite checks ownership but takes no SQL lock.
 	// Creators insert first, retaining their existing locks before this lock. This
 	// cannot deadlock with Register: a family-lock holder never waits on a row lock
 	// held by another creator; registration reads member rows without locking them.
 	// Ownership queuing must remain LAST, after enrollment and all other locks.
-	if err := api.lockMembershipFamily(ctx, tx, entityType); err != nil {
-		return membershipChange{}, err
+	if entityType == string(entity.TypeDevice) {
+		for _, id := range ids {
+			ownerTx, err := lockCreatedDeviceForMembership(tx, id)
+			if err != nil {
+				return membershipChange{}, err
+			}
+			if err := api.lockMembershipWriterFamily(ctx, ownerTx, entityType, id); err != nil {
+				return membershipChange{}, err
+			}
+		}
+	} else {
+		if err := api.lockMembershipFamily(ctx, tx, entityType); err != nil {
+			return membershipChange{}, err
+		}
 	}
 	var refs []EntityGroupFacetRef
 	if err := tx.Where("facet_key = ? AND member_type = ?", createEnrollFacetKey, entityType).Find(&refs).Error; err != nil {
