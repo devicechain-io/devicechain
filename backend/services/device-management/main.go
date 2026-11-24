@@ -499,6 +499,7 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	// Wrap api around rdb manager, then wrap a caching decorator over it for the hot
 	// inbound-event resolution path.
 	api := model.NewApi(rdbm)
+	api.FleetNatsConfig = &nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats
 	api.AgentMetrics = AgentMetrics
 	api.AgentEffectsExhausted = AgentEffectsExhausted
 	api.EnableCeilingMetrics(nmgr.Microservice)
