@@ -195,11 +195,11 @@ func (api *Api) StartFleetOperation(ctx context.Context, token, contractDigest s
 			return nil, nil, err
 		}
 		return map[string]any{
-				"dispatch": FleetDispatchRunning, "pause_reason": "", "grantee": by.Name,
-				"grant_bound_at": sql.NullTime{Time: now, Valid: true}, "started_at": sql.NullTime{Time: now, Valid: true},
-				"state_changed_by": by.Name,
-			}, &FleetOperationEvent{Kind: fleetEventStart, Actor: sql.NullString{String: by.Name, Valid: true},
-				ContractVersion: sql.NullInt32{Int32: op.ContractVersion, Valid: true}}, nil
+			"dispatch": FleetDispatchRunning, "pause_reason": "", "grantee": by.Name,
+			"grant_bound_at": sql.NullTime{Time: now, Valid: true}, "started_at": sql.NullTime{Time: now, Valid: true},
+			"state_changed_by": by.Name,
+		}, &FleetOperationEvent{Kind: fleetEventStart, Actor: sql.NullString{String: by.Name, Valid: true},
+			ContractVersion: sql.NullInt32{Int32: op.ContractVersion, Valid: true}}, nil
 	})
 }
 
