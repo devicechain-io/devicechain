@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 type fakeStanding struct {
@@ -370,4 +371,95 @@ func TestAHoldKeepsItsStartAcrossPassesAndIsClearedOnlyByAPassThatIsNotHeld(t *t
 	require.NoError(t, err)
 	require.Empty(t, cleared.HoldCode)
 	require.False(t, cleared.HoldSince.Valid)
+}
+
+func TestAnUndecidedPostErrorBacksOffWithoutAbortingThePass(t *testing.T) {
+	e := driveFixture(t, 4, FleetSafetyRequest{})
+	var first FleetOperationLine
+	require.NoError(t, e.api.RDB.DB(e.ctx).Where("operation_id = ?", e.op.ID).Order("ordinal").First(&first).Error)
+	undecided := errors.New("undecided posting failure")
+	attempts := 0
+	attributeBeforeCommitHook = func(tx *gorm.DB) error {
+		var n int64
+		if err := tx.Model(&FleetOperationLine{}).Where("id = ? AND posting = ?", first.ID, FleetPostingPosted).Count(&n).Error; err != nil {
+			return err
+		}
+		if n == 1 {
+			attempts++
+			return undecided
+		}
+		return nil
+	}
+	t.Cleanup(func() { attributeBeforeCommitHook = nil })
+
+	r, err := e.api.DriveFleetOperation(e.ctx, "drv", DefaultFleetCaps)
+	require.ErrorIs(t, err, undecided, "the original failure remains observable")
+	require.Equal(t, 3, r.Posted, "all later lines still advance")
+	require.Equal(t, "POST_ERROR", r.Hold)
+	require.False(t, r.Dispatched)
+	require.Equal(t, FleetDispatchRunning, e.current(t).Dispatch)
+	l := e.reloadLine(t, first.ID)
+	require.Equal(t, FleetPostingPlanned, l.Posting)
+	require.Equal(t, "POST_ERROR", l.LastErrorCode, "an undecided failure has its own code, distinct from retryable errors and refusals")
+	require.Equal(t, int32(1), l.Attempts)
+	require.True(t, l.NextAttemptAt.Valid)
+	require.GreaterOrEqual(t, l.NextAttemptAt.Time.Sub(e.now), time.Second)
+	require.Less(t, l.NextAttemptAt.Time.Sub(e.now), 2*time.Second)
+	rt, err := e.api.FleetOperationRuntimeOf(e.ctx, e.op)
+	require.NoError(t, err)
+	require.True(t, rt.DriverSeenAt.Valid)
+	require.True(t, rt.DriverSeenAt.Time.Equal(e.now))
+	require.True(t, rt.LastProgressAt.Valid)
+	require.True(t, rt.LastProgressAt.Time.Equal(e.now))
+	require.Equal(t, "POST_ERROR", rt.HoldCode)
+	require.True(t, rt.HoldSince.Valid)
+	require.True(t, rt.HoldSeenAt.Valid)
+
+	// Just before the recorded deadline, another pass must not try the broken line.
+	e.now = l.NextAttemptAt.Time.Add(-time.Nanosecond)
+	require.Zero(t, e.drive(t).Posted)
+	require.Equal(t, 1, attempts)
+	require.Equal(t, int32(1), e.reloadLine(t, first.ID).Attempts)
+	// Once due, a repaired dependency can make progress and clear the hold.
+	attributeBeforeCommitHook = nil
+	e.now = l.NextAttemptAt.Time.Add(time.Second)
+	r = e.drive(t)
+	require.Equal(t, 1, r.Posted)
+	require.True(t, r.Dispatched)
+	rt, err = e.api.FleetOperationRuntimeOf(e.ctx, e.op)
+	require.NoError(t, err)
+	require.Empty(t, rt.HoldCode)
+}
+
+func TestEarlyPassReturnsClearStaleHolds(t *testing.T) {
+	for _, path := range []string{"backoff", "finished", "revoked", "threshold"} {
+		t.Run(path, func(t *testing.T) {
+			e := driveFixture(t, 1, FleetSafetyRequest{})
+			e.standing.err = errors.New("standing unavailable")
+			require.Equal(t, FleetHoldAuthorityUnavailable, e.drive(t).Hold)
+			e.standing.err = nil
+			e.now = e.now.Add(time.Second)
+			switch path {
+			case "backoff":
+				var line FleetOperationLine
+				require.NoError(t, e.api.RDB.DB(e.ctx).Where("operation_id = ?", e.op.ID).First(&line).Error)
+				require.NoError(t, e.api.RecordFleetLineRetry(e.ctx, line.ID, "DEADLOCK", e.now))
+			case "finished":
+				require.NoError(t, e.api.RDB.DB(e.ctx).Model(&FleetOperationLine{}).Where("operation_id = ?", e.op.ID).Update("posting", FleetPostingRefused).Error)
+			case "revoked":
+				e.standing.answer[alice.Name] = false
+			case "threshold":
+				require.NoError(t, e.api.RDB.DB(e.ctx).Model(&FleetOperation{}).Where("id = ?", e.op.ID).Update("eff_failure_threshold", 1).Error)
+				require.NoError(t, e.api.RDB.DB(e.ctx).Model(&FleetOperationLine{}).Where("operation_id = ?", e.op.ID).Update("posting", FleetPostingRefused).Error)
+			}
+			r := e.drive(t)
+			require.Empty(t, r.Hold)
+			rt, err := e.api.FleetOperationRuntimeOf(e.ctx, e.op)
+			require.NoError(t, err)
+			require.Empty(t, rt.HoldCode)
+			require.False(t, rt.HoldSince.Valid)
+			require.False(t, rt.HoldSeenAt.Valid)
+			require.True(t, rt.DriverSeenAt.Time.Equal(e.now))
+		})
+	}
 }

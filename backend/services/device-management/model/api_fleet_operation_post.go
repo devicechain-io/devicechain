@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand/v2"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -349,7 +350,8 @@ func fleetTxTimeouts(tx *gorm.DB) error {
 }
 
 // fleetRetryableCode names a failure that leaves a line PLANNED to try again: a deadlock, a
-// serialization failure, a lock or statement timeout, the transaction's own deadline, a busy row.
+// serialization failure, a lock or statement timeout, the transaction's own deadline, a busy row,
+// or a lost connection. After an uncertain commit, the next post re-reads the line's durable claim.
 // Anything else is an error the caller sees, never a REFUSED line (a retryable error is never a refusal).
 func fleetRetryableCode(err error) (string, bool) {
 	var busy *AttributeWriteBusyError
@@ -358,8 +360,12 @@ func fleetRetryableCode(err error) (string, bool) {
 		return "ATTRIBUTE_ROW_BUSY", true
 	case errors.Is(err, context.DeadlineExceeded):
 		return "POST_DEADLINE", true
+	case connectionLost(err), strings.HasPrefix(attributeSQLState(err), "08"):
+		return "CONNECTION_LOST", true
 	}
 	switch attributeSQLState(err) {
+	case "57P01", "57P02", "57P03": // server shutdown, crash or temporarily unavailable
+		return "CONNECTION_LOST", true
 	case "40P01":
 		return "DEADLOCK", true
 	case "40001":

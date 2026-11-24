@@ -38,6 +38,7 @@ const (
 	FleetHoldAuthorityUnavailable = "AUTHORITY_UNAVAILABLE"
 	FleetHoldNotActivated         = "NOT_ACTIVATED"
 	FleetHoldRateLimit            = "RATE_LIMIT"
+	FleetHoldPostError            = "POST_ERROR"
 
 	fleetEventAutoPause  = "AUTO_PAUSE"
 	fleetEventDispatched = "DISPATCHED"
@@ -83,6 +84,11 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 		return res, nil
 	}
 	api.touchFleetRuntime(ctx, op, nil, nil) // the heartbeat alone: a hold is not cleared by looking
+	defer func() {
+		// Every exit records this pass's progress and current hold, including errors and early returns.
+		posted := res.Posted > 0
+		api.touchFleetRuntime(ctx, op, &posted, &res.Hold)
+	}()
 
 	// 1. The lease.
 	lease, hold, err := api.fleetLease(ctx, op)
@@ -91,7 +97,6 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	}
 	if hold != "" {
 		res.Hold = hold
-		api.touchFleetRuntime(ctx, op, nil, &hold)
 		return res, nil
 	}
 	if lease == nil {
@@ -151,8 +156,6 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	}
 	if granted == 0 {
 		res.Hold = FleetHoldRateLimit
-		rl := FleetHoldRateLimit
-		api.touchFleetRuntime(ctx, op, nil, &rl)
 		return res, nil
 	}
 	due = due[:granted]
@@ -169,7 +172,7 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	var firstErr error
 	for _, line := range due {
 		mu.Lock()
-		halted := stop || firstErr != nil
+		halted := stop
 		mu.Unlock()
 		if halted {
 			break
@@ -180,14 +183,23 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 			defer wg.Done()
 			defer func() { <-sem }()
 			r, perr := api.PostFleetLine(ctx, op.ID, lineID, *lease)
-			mu.Lock()
-			defer mu.Unlock()
 			if perr != nil {
+				// An undecided error is neither a refusal nor a reason to starve later lines. Keep it
+				// visible with its own code and backoff, and return the error after pass bookkeeping.
+				rerr := api.RecordFleetLineRetry(ctx, lineID, FleetHoldPostError, fleetClock())
+				mu.Lock()
+				defer mu.Unlock()
+				res.Hold = FleetHoldPostError
 				if firstErr == nil {
 					firstErr = perr
 				}
+				if rerr != nil {
+					firstErr = errors.Join(firstErr, rerr)
+				}
 				return
 			}
+			mu.Lock()
+			defer mu.Unlock()
 			switch r.Outcome {
 			case FleetPosted:
 				res.Posted++
@@ -210,9 +222,6 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	if firstErr != nil {
 		return res, firstErr
 	}
-	posted := res.Posted > 0
-	api.touchFleetRuntime(ctx, op, &posted, &res.Hold)
-
 	// 6. Completion.
 	if res.Hold == "" && !stop {
 		if err := db.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPlanned).Count(&planned).Error; err != nil {

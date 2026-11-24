@@ -5,12 +5,18 @@ package model
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/ledger"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -283,4 +289,33 @@ func TestOnlyRetryableFailuresAreRetried(t *testing.T) {
 		_, ok := fleetRetryableCode(err)
 		require.False(t, ok, "%v must surface, never be retried or refused", err)
 	}
+}
+
+func TestFleetConnectionLossIsRetryable(t *testing.T) {
+	for _, cause := range []error{driver.ErrBadConn, io.EOF, io.ErrUnexpectedEOF, net.ErrClosed, syscall.ECONNRESET, syscall.EPIPE, pgconn.ErrConnClosed,
+		&pgconn.PgError{Code: "08006"}, &pgconn.PgError{Code: "08003"}, &pgconn.PgError{Code: "57P01"}, &pgconn.PgError{Code: "57P02"}} {
+		for _, err := range []error{cause, fmt.Errorf("posting: %w", cause)} {
+			code, retryable := fleetRetryableCode(err)
+			require.True(t, retryable, "%v must leave the line retryable", err)
+			require.Equal(t, "CONNECTION_LOST", code)
+		}
+	}
+	_, retryable := fleetRetryableCode(&pgconn.PgError{Code: "23505"})
+	require.False(t, retryable, "a constraint error is not connection loss")
+}
+
+func TestAPostRecordsConnectionLossAsARetry(t *testing.T) {
+	e := postFixture(t, "v1", false)
+	attributeBeforeCommitHook = func(*gorm.DB) error { return fmt.Errorf("commit: %w", driver.ErrBadConn) }
+	t.Cleanup(func() { attributeBeforeCommitHook = nil })
+	r := e.post(t)
+	require.Equal(t, FleetPostRetry, r.Outcome)
+	require.Equal(t, "CONNECTION_LOST", r.Code)
+	l := e.reload(t)
+	require.Equal(t, FleetPostingPlanned, l.Posting)
+	require.Equal(t, "CONNECTION_LOST", l.LastErrorCode)
+	require.Equal(t, int32(1), l.Attempts)
+	require.True(t, l.NextAttemptAt.Valid)
+	_, present := attrOf(t, e)
+	require.False(t, present, "the unsuccessful transaction left no effect")
 }
