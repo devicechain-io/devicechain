@@ -39,6 +39,7 @@ ajuste y de operación, y pueden cambiar en una versión menor siempre que las n
 | **Paquetes npm** | Las exportaciones públicas de `@devicechain/client`, `@devicechain/dashboards`, `@devicechain/widgets`, `@devicechain/widget-sdk` y `@devicechain/brand`. El SDK de widgets tiene además su propio `sdkApiVersion`, que decide si un widget guardado se sigue mostrando; consulta [Versiones de widgets y compatibilidad](../guides/widget-versions-and-compatibility.md). |
 | **SDK de C#** | La API pública del paquete NuGet `DeviceChain.Sdk`, sobre el que se construye el paquete de Unity. |
 | **`dcctl`** | Sus comandos, subcomandos e indicadores. Una versión menor no elimina un indicador ni le cambia el significado. |
+| **API Instance (desde v2.0)** | `core.devicechain.io/v1 Instance`: campos de spec y status, tipos y motivos de condiciones, y las anotaciones y el finalizador documentados. La cobertura comienza en v2.0; v1 está actualmente en vista previa, como se explica abajo. |
 
 Dos reglas se aplican a lo que una versión menor puede añadir, así que escribe tus clientes para tolerarlo:
 
@@ -63,14 +64,38 @@ página de referencia o de guía y, para cada operación, campo, argumento, tipo
 de GraphQL de esa superficie, en su descripción. Mientras una superficie
 está en vista previa puede cambiar de forma incompatible en una versión menor; cuando lo hace, la sección
 de esa versión en [Versiones y actualizaciones](./releases-and-upgrades.md) dice qué cambió y qué hacer.
-Una superficie permanece en vista previa como máximo durante dos versiones menores; al terminar la segunda
+Una superficie permanece en vista previa como máximo durante dos versiones menores (salvo los tipos del ejecutor descritos abajo); al terminar la segunda
 se promueve y queda cubierta como todo lo demás. Un cambio incompatible en una superficie en vista previa
 no queda exento de las comprobaciones de compatibilidad del proyecto: se declara allí como una ruptura
 intencionada, igual que cualquier otra, de modo que ningún cambio en vista previa se publica sin que se
 note. Un formato de archivo en vista previa lleva una versión, como `v1alpha1`, y una herramienta que no
 conoce la versión rechaza el archivo en lugar de adivinar.
 
-Hoy el nivel de vista previa contiene cuatro superficies. Las pruebas de reglas: la operación `evaluateRules`
+#### Compatibilidad de la API Instance {#instance-api-compatibility}
+
+**Instance v1 está en vista previa en v1.10; queda cubierta desde v2.0.** Este compromiso es prospectivo.
+La promesa existente sobre status continúa: todos sus campos son opcionales, los cambios solo añaden
+elementos y los lectores tratan los tipos y motivos de condiciones desconocidos como Unknown.
+Instance `v1beta1` seguirá ofreciéndose durante toda la serie v2.x y se declarará obsoleta en v2.0.
+`spec.grafanaSSO`, `spec.compact` y el tipo `InstanceConfiguration` no se eliminan en v2.0.
+Siguen disponibles mientras están obsoletos; su eliminación es un proyecto de v3 y debe respetar las
+dos versiones menores de obsolescencia descritas en [Obsolescencia](#deprecation).
+El almacenamiento sigue en `v1beta1`; la migración de almacenamiento aún no se ha publicado.
+Ofrecer v1 junto a v1beta1 no demuestra que se hayan migrado los objetos almacenados.
+
+#### Promoción de la API del ejecutor {#executor-api-promotion}
+
+**`ExecutorEnrollment` e `InstanceOperation` siguen en `core.devicechain.io/v1beta1` hasta v2.0 inclusive.**
+Son una excepción explícita al límite de dos versiones menores en vista previa: se promueven
+cuando se habilite la ejecución de acciones en una versión publicada, una vez que la
+base de rechazos se haya publicado y existan privilegios explícitos del proveedor.
+Sus interfaces ofrecidas quedan cubiertas desde esa versión; cualquier promoción posterior de la
+versión de la API debe conservar los objetos persistidos existentes. La promoción de Instance v1
+por sí sola no promueve los tipos del ejecutor. Ninguna acción del ejecutor es ejecutable en la compilación actual:
+las solicitudes que serían válidas se rechazan con `NotExecutableInThisBuild` (consulta
+[Ejecutor en el clúster](./kubernetes-operator.md#in-cluster-executor)).
+
+Otras superficies en vista previa incluyen las pruebas de reglas: la operación `evaluateRules`
 de la API de event-processing, los formatos de archivo de escenario y de prueba, y el comando `dcctl test`
 que los lee (consulta [Probar tus reglas](../guides/testing-your-rules.md)). El producto como código:
 `dcctl product export`, `plan` y `apply`, y su formato de paquete (consulta [Producto como código](../guides/product-as-code.md)).

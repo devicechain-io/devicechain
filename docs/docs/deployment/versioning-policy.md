@@ -40,6 +40,7 @@ release notes say so.
 | **npm packages** | The public exports of `@devicechain/client`, `@devicechain/dashboards`, `@devicechain/widgets`, `@devicechain/widget-sdk` and `@devicechain/brand`. The widget SDK also carries its own `sdkApiVersion`, which decides whether a stored widget still renders; see [Widget versions and compatibility](../guides/widget-versions-and-compatibility.md). |
 | **C# SDK** | The public API of the `DeviceChain.Sdk` NuGet package, which the Unity package builds on. |
 | **`dcctl`** | Its commands, subcommands and flags. A flag is not removed or given a different meaning in a minor release. |
+| **Instance API (from v2.0)** | `core.devicechain.io/v1 Instance`: spec and status fields, condition types and reasons, and the documented annotations and finalizer. Coverage starts at v2.0; v1 is currently Preview, as described below. |
 
 Two rules apply to what a minor release may add, so write your clients to tolerate them:
 
@@ -64,13 +65,35 @@ guide page and, for each GraphQL operation, field, argument, type and enum value
 in its description. While a surface is in preview it can change
 incompatibly in a minor release; when it does, that release's section in
 [Releases & Upgrades](./releases-and-upgrades.md) says what changed and what to do. A surface stays in
-preview for at most two minor releases; by the end of the second it is promoted, and covered like
-everything else. An incompatible change to a preview surface is not exempt from the project's
+preview for at most two minor releases (except the executor kinds described below); by the end of
+the second it is promoted, and covered like everything else. An incompatible change to a preview surface is not exempt from the project's
 compatibility checks: it is declared there as an intended break, the same way as any other, so no
 preview change ships unnoticed. A file format in the preview tier carries a version, such as
 `v1alpha1`, and a tool that does not know the version refuses the file rather than guessing.
 
-Today the preview tier holds four surfaces. The rule tests: the `evaluateRules` operation of the
+#### Instance API compatibility {#instance-api-compatibility}
+
+**Instance v1 is Preview in v1.10; it becomes covered at v2.0.** This commitment is prospective.
+The existing status promise continues: all status fields are optional, changes are additive only,
+and readers treat unknown condition types and reasons as Unknown.
+Instance `v1beta1` remains served throughout v2.x and is to be deprecated at v2.0.
+`spec.grafanaSSO`, `spec.compact` and the `InstanceConfiguration` kind are not removed at v2.0.
+They remain available while deprecated; removal is a v3 project and must satisfy the two-minor
+deprecation window in [Deprecation](#deprecation). Storage is still `v1beta1`; storage migration has not shipped.
+Serving v1 alongside v1beta1 does not prove that stored objects have migrated.
+
+#### Executor API promotion {#executor-api-promotion}
+
+**`ExecutorEnrollment` and `InstanceOperation` remain `core.devicechain.io/v1beta1` through v2.0.**
+They are an explicit exception to the two-minor Preview limit: promotion is triggered
+when action execution is enabled in a released build, after the refusal foundation has shipped and
+explicit provider privileges are in place. Their served interfaces are covered from that release;
+any later API-version promotion must preserve existing persisted objects. Instance v1 promotion
+alone does not promote the executor kinds. No executor action is executable in the current build:
+otherwise-valid requests are refused as `NotExecutableInThisBuild` (see
+[In-cluster executor](./kubernetes-operator.md#in-cluster-executor)).
+
+Other Preview surfaces include the rule tests: the `evaluateRules` operation of the
 event-processing API, the scenario and test file formats, and the `dcctl test` command that reads them
 (see [Testing your rules](../guides/testing-your-rules.md)). Product as code: `dcctl product export`,
 `plan` and `apply`, and their bundle format (see [Product as Code](../guides/product-as-code.md)). And
