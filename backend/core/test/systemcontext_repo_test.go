@@ -115,8 +115,9 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-state/processor/StateProcessor.go": {"StateProcessor.runInactivityMonitor"},
 	// The deletion resweep reads due watermark keys of every tenant in one bounded read (no event or anchor data); every cleanup and schedule write runs under that row's own core.WithTenant.
 	"backend/services/event-management/model/entity_deletion_watermarks.go": {"Api.DueEntityDeletionWatermarks"},
-	"backend/services/event-management/model/analytics.go":                  {"ReconcileAnalyticsSurface"},
-	"backend/services/event-management/model/lifecycle.go":                  {"ApplyDataLifecyclePolicies"},
+	// The analytics surface (functions, views, grants and its generation row) is instance-wide DDL with no tenant rows; the reconcile runs under one advisory lock for the whole instance.
+	"backend/services/event-management/model/analytics_generation.go": {"withAnalyticsGeneration"},
+	"backend/services/event-management/model/lifecycle.go":            {"ApplyDataLifecyclePolicies"},
 	"backend/services/event-management/model/usage.go": {"Api.PruneUsageWorkingTables", "Api.RollupUsageHours",
 		"Api.RollupUsagePass"},
 	"backend/services/event-management/processor/backfill/worker.go": {"Worker.pass"},
