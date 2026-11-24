@@ -43,16 +43,16 @@
       "translationSha256": "fc24e86ee61a0932e1348896649045d0a0cfc5478062f0eb4816632eb46b1859"
     },
     "concepts/event-processing.md": {
-      "sourceSha256": "21df19db95eea335cf9ebcf8acb702887204bc7091250423719a1ab3d90f7176",
-      "translationSha256": "0f41b0a329cfa598de5fb444effe7ad0bfeb20269f1869f65d9d15c18c1ade6b"
+      "sourceSha256": "dcc5d9a99b42b159e94a428ab8316c14006129ca7b8749da649f8985f269673c",
+      "translationSha256": "0431e69566246cf8bfea0de057563905212e9ebf52b854117f94315724da2c4f"
     },
     "concepts/geofencing.md": {
       "sourceSha256": "a6977f892a2f4734e5b9df1753b1c3ddb041243ea92c40097635775c15c3e732",
       "translationSha256": "f997db67c7b0561b701a3a09716cbf7b2bb035a8109791dde8453fec515b788f"
     },
     "concepts/governance.md": {
-      "sourceSha256": "01b94e0e55adb5e19ec106155bae48a9a8adc430d16b1b0bbe502319b70f299a",
-      "translationSha256": "8dc062491743c62796852d0686b43f614d34ece3f7c6f57650ea92b9262ab676"
+      "sourceSha256": "7918b531a9453cd63da30c1eb5873d9d9e38814096599c81eb3ac990fe48ab50",
+      "translationSha256": "a262a52e44105025ed13a908ea7287bd486e1104e16c2ae24c8bed97176d0205"
     },
     "concepts/lwm2m.md": {
       "sourceSha256": "72b7ea16f0013bc1688fd081466cc1fa7b9f6588c94f8a316667116f0bbc4dd7",
@@ -119,8 +119,8 @@
       "translationSha256": "762abe202f692f6063b0d16465175d42157f63a31a9cea9ecacefc39e5db2dbd"
     },
     "deployment/detection-engine.md": {
-      "sourceSha256": "7438e25d0895ffd34828e1dcbd89743bad7dcfee1086ac194e8a3166ddbb143f",
-      "translationSha256": "b8205315bbba6ae731c08ab54131d1b85e31f6e09e6bd840aa9d68c14b70bd20"
+      "sourceSha256": "6f9edd22630c2698500bfd7aae9b81a901902f8041c97b2a1be42667f40be630",
+      "translationSha256": "7524250fb755685dd492a8b0a5910e856bdf221e3fcc36229ba80a58970ef578"
     },
     "deployment/device-certificates.md": {
       "sourceSha256": "212e36ecd37d1dd16279fba65a77381bbb81771064f940fb25b8f77714a9a816",

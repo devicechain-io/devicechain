@@ -52,8 +52,8 @@ type commandLoopEntry struct {
 // normally leaves only the lease holder dispatching. Restart/failover starts a
 // fresh allowance; the documented ~5s lease-handover overlap can admit both
 // replicas' allowances. This is containment within a term, not a cluster-wide
-// exactly-once or durable loop guarantee. The outbound governance gate is shared
-// with connector actions in the same process and has the same HA limitation.
+// exactly-once or durable loop guarantee. The command rate gate has the same HA
+// limitation, with a separate budget of the same size as connector actions.
 type commandLoopGuard struct {
 	mu        sync.Mutex
 	keys      map[commandLoopKey]commandLoopEntry
@@ -126,9 +126,9 @@ func WithCommandSimulation() Option {
 
 // commandRefusal decides whether source policy refuses one command, and charges
 // what it admits. The loop guard is asked FIRST: a looping rule's refused attempts
-// must not keep drawing on the tenant's outbound budget, or the guard would contain
-// the loop for its device while the loop starved every other command, webhook and
-// publish of the tenant. An attempt the guard admits and the rate gate then refuses
+// must not keep drawing on the tenant's command budget, or the guard would contain
+// the loop for its device while the loop starved every other command of the tenant.
+// An attempt the guard admits and the rate gate then refuses
 // is refunded to the guard, so a tenant over its rate creates no loop state either.
 //
 // A replayed detection is exempt from both: it is a re-derivation of output that may
@@ -141,7 +141,7 @@ func (d *Dispatcher) commandRefusal(ev runtime.DerivedEvent, sentAt time.Time) s
 	if code := d.commandLoop.admit(ev.Tenant, ev.RuleID, ev.Series, sentAt); code != "" {
 		return code
 	}
-	if d.connectorRate != nil && !d.connectorRate.AllowAt(ev.Tenant, ev.TriggeredAt) {
+	if d.commandRate != nil && !d.commandRate.AllowAt(ev.Tenant, ev.TriggeredAt) {
 		d.commandLoop.refund(ev.Tenant, ev.RuleID, ev.Series)
 		return CommandRateLimited
 	}

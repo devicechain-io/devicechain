@@ -265,7 +265,7 @@ type ConnectorSink interface {
 }
 
 // ConnectorRateGate is the per-tenant OUTBOUND egress cost-gate charged at the SOURCE (ADR-060
-// SD-3). Before REACT sends a command or publishes a connector-dispatch (httpCall/publish), it charges the
+// SD-3). Before REACT publishes a connector-dispatch (httpCall/publish), it charges the
 // tenant's outbound budget; a false result means over-quota, and the action is SHED at the source,
 // NOT retried — so a runaway rule cannot flood the connector-dispatch stream and the downstream
 // outbound-connectors service. It is a non-blocking test, never a wait: REACT's at-least-once
@@ -437,8 +437,10 @@ type Dispatcher struct {
 	alarms     AlarmSink
 	connectors ConnectorSink
 	// connectorRate is the SOURCE-side per-tenant outbound egress cost-gate (ADR-060 SD-3); nil
-	// disables rate charging for commands and connectors. See ConnectorRateGate.
-	connectorRate     ConnectorRateGate
+	// disables rate charging for connectors. See ConnectorRateGate.
+	connectorRate ConnectorRateGate
+	// commandRate has the same sizing as connectorRate, but an independent allowance.
+	commandRate       ConnectorRateGate
 	commandLoop       *commandLoopGuard
 	commandSimulation bool
 	metrics           Metrics
@@ -502,6 +504,13 @@ func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink
 
 // Option configures a Dispatcher at construction.
 type Option func(*Dispatcher)
+
+// WithCommandRateGate sets the command-only source gate. Production supplies a separate
+// limiter with the same defaults and tenant overrides as the connector gate. A nil gate
+// disables command rate charging; it never falls back to the connector allowance.
+func WithCommandRateGate(gate ConnectorRateGate) Option {
+	return func(d *Dispatcher) { d.commandRate = gate }
+}
 
 // WithClock replaces the clock for command expiry and the loop window (time.Now by default). It exists
 // for the one caller that dispatches into recording sinks in VIRTUAL time, the rule evaluator

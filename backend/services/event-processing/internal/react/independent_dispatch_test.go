@@ -220,23 +220,24 @@ func TestAlarmTokenIsEdgeScopedAndRedeliveryStable(t *testing.T) {
 	}
 }
 
-// A retried detection charges the outbound gate for commands and connector actions on EVERY attempt, not
+// A retried detection charges the separate command and connector gates on EVERY attempt, not
 // once: the re-publish is collapsed at the stream, but the charge is not. This is a decision
 // (the alternative lets an action shed on its first delivery out uncharged on a retry), and this
 // test is what makes changing it one rather than an accident.
 func TestARetriedDetectionChargesItsOutboundActionsOnEveryAttempt(t *testing.T) {
 	const attempts = 5
 	gate := &fakeGate{admit: true}
+	commandGate := &fakeGate{admit: true}
 	conn := &fakeConnectorSink{}
 	rule := rules.Rule{ID: "acme/p@1/r1", Name: "r", Type: rules.TypeThreshold, Actions: []rules.Action{indCmd, indHTTP}}
-	d := NewDispatcher(fakeResolver{rule: rule, found: true}, &fakeSink{failFirst: 1 << 30}, nil, conn, gate, newFakeMetrics())
+	d := NewDispatcher(fakeResolver{rule: rule, found: true}, &fakeSink{failFirst: 1 << 30}, nil, conn, gate, newFakeMetrics(), WithCommandRateGate(commandGate))
 	for i := 0; i < attempts; i++ {
 		if res := d.Dispatch(context.Background(), evt()); res.Outcome != Retry {
 			t.Fatalf("attempt %d: %v, want Retry", i+1, res.Outcome)
 		}
 	}
-	if len(gate.charged) != 2*attempts {
-		t.Fatalf("the gate was charged %d times over %d attempts, want command and connector charged on each", len(gate.charged), attempts)
+	if len(gate.charged) != attempts || len(commandGate.charged) != attempts {
+		t.Fatalf("connector charged %d times, command charged %d times over %d attempts; want each charged on every attempt", len(gate.charged), len(commandGate.charged), attempts)
 	}
 	if len(conn.got) != attempts {
 		t.Fatalf("the connector action was published %d times, want once per attempt", len(conn.got))

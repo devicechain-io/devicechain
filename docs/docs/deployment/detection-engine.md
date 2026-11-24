@@ -524,8 +524,8 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 | `maxRulesPerTenant` | 500 | Runtime reporting threshold. Publish and rollback enforce a rule ceiling **only when the tenant tier explicitly sets `rulesPerTenant`**; an absent or `null` tier value keeps reporting without refusal. |
 | `maxLiveKeysPerTenant` | 1000000 | Per-tenant ceiling on live windows and timers. Also measured, not enforced. |
 | `maxRetainedSamplesPerTenant` | 5000000 | Per-tenant ceiling on readings held inside open windows. Also measured, not enforced. |
-| `outboundCallsPerSecond` | 100 | Per-tenant rate at which sent commands and outbound connector actions, together, are dispatched, metered on the time the triggering telemetry reached the platform. A per-tenant override takes precedence. |
-| `outboundBurst` | 200 | Burst allowance for the above. |
+| `outboundCallsPerSecond` | 100 | Per-tenant dispatch rate for connector calls (`httpCall` and `publish`). Commands get a separate budget of the same size, using the same settings and tenant overrides; both budgets are metered on the time the triggering telemetry reached the platform. A per-tenant override takes precedence. |
+| `outboundBurst` | 200 | Burst allowance for each of the two separate budgets. |
 | `shedLetterPerSecond` | 1 | Per-tenant rate at which refused commands and shed outbound actions are recorded as individual dead letters. |
 | `shedLetterBurst` | 60 | Burst allowance for the above. |
 | `shedLetterGlobalPerSecond` | 10 | The same, across every tenant. Shed actions past either budget are counted and summarised in one dead letter per tenant per minute. |

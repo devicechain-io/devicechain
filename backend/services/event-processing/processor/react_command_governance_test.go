@@ -53,7 +53,7 @@ func startupReplayRecoversCommands(t *testing.T, shards int) {
 	}
 	sink := &reactFakeSink{}
 	gate := &meterGate{admit: false}
-	rd, _ := reactWithConnectors(t, governedCommandRule(), sink, nil, gate, &deadRecorder{}, testShedBudget)
+	rd, _ := reactWithConnectors(t, governedCommandRule(), sink, nil, nil, &deadRecorder{}, testShedBudget, react.WithCommandRateGate(gate))
 	raised := 0
 	for _, ev := range w.events {
 		if !ev.Replayed {
@@ -90,7 +90,7 @@ func TestCommandCeilingRefusesAndRecords(t *testing.T) {
 	sink := &reactFakeSink{}
 	dead := &deadRecorder{}
 	gate := core.NewTenantRateLimiter(core.StaticCeiling(1, 2))
-	rd, reg := reactWithConnectors(t, governedCommandRule(), sink, nil, gate, dead, testShedBudget)
+	rd, reg := reactWithConnectors(t, governedCommandRule(), sink, nil, nil, dead, testShedBudget, react.WithCommandRateGate(gate))
 	ev := sendCmdEvent()
 	ev.TriggeredAt = ev.OccurredTime
 	for i := 0; i < 3; i++ {
@@ -125,7 +125,7 @@ func TestCommandCeilingRefusesAndRecords(t *testing.T) {
 func TestCommandSyntheticFeedbackLoopIsCutAndRecorded(t *testing.T) {
 	sink := &reactFakeSink{}
 	dead := &deadRecorder{}
-	rd, reg := reactWithConnectors(t, governedCommandRule(), sink, nil, &meterGate{admit: true}, dead, testShedBudget)
+	rd, reg := reactWithConnectors(t, governedCommandRule(), sink, nil, nil, dead, testShedBudget, react.WithCommandRateGate(&meterGate{admit: true}))
 	ev := sendCmdEvent()
 	for i := 0; i < 121; i++ {
 		if len(sink.sent) != i {
@@ -159,7 +159,7 @@ func TestCommandSyntheticFeedbackLoopIsCutAndRecorded(t *testing.T) {
 func TestReplayedCommandsAreSentWithoutCharging(t *testing.T) {
 	sink := &reactFakeSink{}
 	gate := &meterGate{admit: false}
-	rd, _ := reactWithConnectors(t, governedCommandRule(), sink, nil, gate, &deadRecorder{}, testShedBudget)
+	rd, _ := reactWithConnectors(t, governedCommandRule(), sink, nil, nil, &deadRecorder{}, testShedBudget, react.WithCommandRateGate(gate))
 	ev := sendCmdEvent()
 	for i := 0; i < 121; i++ {
 		b, err := json.Marshal(ev)
@@ -193,7 +193,7 @@ func TestReplayedCommandsAreSentWithoutCharging(t *testing.T) {
 
 func TestCommandOrdinarySendPreservesRequest(t *testing.T) {
 	sink := &reactFakeSink{}
-	rd, _ := reactWithConnectors(t, governedCommandRule(), sink, nil, &meterGate{admit: true}, &deadRecorder{}, testShedBudget)
+	rd, _ := reactWithConnectors(t, governedCommandRule(), sink, nil, nil, &deadRecorder{}, testShedBudget, react.WithCommandRateGate(&meterGate{admit: true}))
 	ev := sendCmdEvent()
 	rd.handle(derivedMsg(t, "acme", ev, 1, &fakeAck{}))
 	if len(sink.sent) != 1 || sink.sent[0].DeviceToken != ev.Series || sink.sent[0].Command != "setMode" || sink.sent[0].Cause == nil || sink.sent[0].Cause.Kind != react.CauseKindRule {
@@ -201,27 +201,57 @@ func TestCommandOrdinarySendPreservesRequest(t *testing.T) {
 	}
 }
 
-func TestCommandsAndConnectorsShareOneTenantBudget(t *testing.T) {
-	sink := &reactFakeSink{}
+// A storm in either action family must shed within its own bucket and leave
+// the other family's equally sized allowance intact.
+func TestConnectorStormStillAdmitsCommand(t *testing.T) {
+	connectorGate := core.NewTenantRateLimiter(core.StaticCeiling(1, 2))
+	commandGate := core.NewTenantRateLimiter(core.StaticCeiling(1, 2))
+	commands := &reactFakeSink{}
 	connectors := &connSink{}
 	dead := &deadRecorder{}
-	gate := core.NewTenantRateLimiter(core.StaticCeiling(1, 1))
-	rd, _ := reactWithConnectors(t, connectorRule(sendCommandAction(), httpCallAction()), sink, connectors, gate, dead, testShedBudget)
+	storm, _ := reactWithConnectors(t, connectorRule(httpCallAction()), nil, connectors, connectorGate, dead, testShedBudget)
+	target, _ := reactWithConnectors(t, connectorRule(sendCommandAction()), commands, nil, connectorGate, dead, testShedBudget, react.WithCommandRateGate(commandGate))
 	ev := sendCmdEvent()
 	ev.TriggeredAt = ev.OccurredTime
-	rd.handle(derivedMsg(t, "acme", ev, 1, &fakeAck{}))
-	if len(sink.sent) != 1 || len(connectors.got) != 0 {
-		t.Fatal("commands and connectors did not spend the same tenant budget")
+	for i := 0; i < 3; i++ {
+		ev.OccurredTime = ev.OccurredTime.Add(time.Nanosecond)
+		storm.handle(derivedMsg(t, "acme", ev, 1, &fakeAck{}))
 	}
-	letters := dead.letters(t)
-	if len(letters) != 1 || !strings.HasPrefix(letters[0].Detail, "httpCall/shed/") {
-		t.Fatalf("shared-budget connector refusal not recorded: %+v", letters)
+	if len(connectors.got) != 2 || len(dead.letters(t)) != 1 {
+		t.Fatal("connector storm did not exhaust and shed from its bucket")
+	}
+	target.handle(derivedMsg(t, "acme", ev, 1, &fakeAck{}))
+	if len(commands.sent) != 1 || len(dead.letters(t)) != 1 {
+		t.Fatal("connector storm spent the command budget")
+	}
+}
+
+func TestCommandStormStillAdmitsHTTPCall(t *testing.T) {
+	connectorGate := core.NewTenantRateLimiter(core.StaticCeiling(1, 2))
+	commandGate := core.NewTenantRateLimiter(core.StaticCeiling(1, 2))
+	commands := &reactFakeSink{}
+	connectors := &connSink{}
+	dead := &deadRecorder{}
+	storm, _ := reactWithConnectors(t, connectorRule(sendCommandAction()), commands, nil, connectorGate, dead, testShedBudget, react.WithCommandRateGate(commandGate))
+	target, _ := reactWithConnectors(t, connectorRule(httpCallAction()), nil, connectors, connectorGate, dead, testShedBudget)
+	ev := sendCmdEvent()
+	ev.TriggeredAt = ev.OccurredTime
+	for i := 0; i < 3; i++ {
+		ev.OccurredTime = ev.OccurredTime.Add(time.Nanosecond)
+		storm.handle(derivedMsg(t, "acme", ev, 1, &fakeAck{}))
+	}
+	if len(commands.sent) != 2 || len(dead.letters(t)) != 1 {
+		t.Fatal("command storm did not exhaust and shed from its bucket")
+	}
+	target.handle(derivedMsg(t, "acme", ev, 1, &fakeAck{}))
+	if len(connectors.got) != 1 || len(dead.letters(t)) != 1 {
+		t.Fatal("command storm spent the connector budget")
 	}
 }
 
 func TestCommandRefusalSummariesKeepReasonCodes(t *testing.T) {
 	dead := &deadRecorder{}
-	rd, _ := reactWithConnectors(t, governedCommandRule(), &reactFakeSink{}, nil, &meterGate{}, dead, ShedLetterBudget{})
+	rd, _ := reactWithConnectors(t, governedCommandRule(), &reactFakeSink{}, nil, nil, dead, ShedLetterBudget{}, react.WithCommandRateGate(&meterGate{}))
 	msg := derivedMsg(t, "acme", sendCmdEvent(), 1, &fakeAck{})
 	rd.sheds.letter(context.Background(), msg, sendCmdEvent(), []react.ShedAction{
 		{Kind: "sendCommand", Token: "a", Code: react.CommandRateLimited},

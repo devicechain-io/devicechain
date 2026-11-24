@@ -102,9 +102,11 @@ var (
 	// component the NATS manager's oncreate callback builds. See buildMetrics.
 	DetectMetrics *processor.DetectMetrics
 	ReactMetrics  *processor.ReactMetrics
-	// EgressUnresolved counts REACT command/connector admissions metered at the platform default
+	// EgressUnresolved counts REACT connector admissions metered at the platform default
 	// for want of the tenant's own outbound ceiling. Built once, in buildMetrics.
 	EgressUnresolved func(core.CeilingSource)
+	// CommandEgressUnresolved counts the independent command budget's fallback admissions.
+	CommandEgressUnresolved func(core.CeilingSource)
 
 	// DeadLetters is this service's identity as a dead-letter producer: the source its
 	// letters are stamped with and the dead_letter_lost_total their losses count on. Built by
@@ -165,9 +167,27 @@ func buildMetrics() {
 	DetectMetrics = processor.NewDetectMetrics(Microservice)
 	ReactMetrics = processor.NewReactMetrics(Microservice)
 	EgressUnresolved = governance.NewUnresolvedAdmissions(Microservice, governance.Outbound)
+	CommandEgressUnresolved = newCommandUnresolvedAdmissions(Microservice)
 	// core/service built it: the platform's max-delivery recorder letters under it too,
 	// and a second NewProducer here would panic on the duplicate counter.
 	DeadLetters = Svc.DeadLetters
+}
+
+// newCommandUnresolvedAdmissions keeps command fallback admissions distinct from connector
+// admissions without registering a second collector under the connector metric's name.
+func newCommandUnresolvedAdmissions(ms *core.Microservice) func(core.CeilingSource) {
+	vec := ms.NewCounterVec("react_command_governance_unresolved_admissions_total",
+		"Count of command admissions metered at the platform default because the tenant's ceiling was not known, by cause",
+		[]string{"cause"})
+	for _, source := range []core.CeilingSource{core.CeilingPending, core.CeilingUnreachable, core.CeilingUnknownTenant} {
+		vec.WithLabelValues(source.String())
+	}
+	return func(source core.CeilingSource) {
+		switch source {
+		case core.CeilingPending, core.CeilingUnreachable, core.CeilingUnknownTenant:
+			vec.WithLabelValues(source.String()).Inc()
+		}
+	}
 }
 
 func createNatsComponents(nmgr *messaging.NatsManager, peers *svcclient.Peers) error {
@@ -441,14 +461,14 @@ func wireReactDispatcher(nmgr *messaging.NatsManager, peers *svcclient.Peers) er
 	connectors := processor.NewConnectorClient(connectorWriter)
 	log.Info().Msg("REACT connector dispatch ENABLED (ADR-060): httpCall/publish actions publish to the outbound-connectors service.")
 
-	// SOURCE-side outbound egress cost-gate (ADR-060 SD-3): REACT charges sendCommand,
-	// httpCall and publish against ONE tenant budget (100/s, burst 200 by default).
-	// REACT charges the tenant's outbound
-	// budget before publishing a connector-dispatch, dropping over-quota actions at the source so a
+	// SOURCE-side outbound egress cost-gates (ADR-060 SD-3): httpCall/publish and
+	// sendCommand each get a separate tenant budget (100/s, burst 200 by default).
+	// REACT charges before publishing, dropping over-quota actions at the source so a
 	// runaway rule cannot flood the connector-dispatch stream. Always non-nil (fail-open to the
 	// platform default when per-tenant overrides are not wired) — never unlimited.
-	// No separate command limiter or governance dimension: the dispatcher shares this instance.
+	// Commands get an independent allowance of the same size, with the same tenant overrides.
 	connectorRate := buildEgressLimiter(Configuration, peers, EgressUnresolved)
+	commandRate := buildEgressLimiter(Configuration, peers, CommandEgressUnresolved)
 
 	// One value sizes both the reader's slots and the dispatcher's lanes (react.workers).
 	workers := reactWorkers(Configuration)
@@ -472,7 +492,7 @@ func wireReactDispatcher(nmgr *messaging.NatsManager, peers *svcclient.Peers) er
 			PerTenantBurst:     Configuration.ShedLetterBurst,
 			GlobalPerSecond:    Configuration.ShedLetterGlobalPerSecond,
 			GlobalBurst:        Configuration.ShedLetterGlobalBurst,
-		}, ReactMetrics)
+		}, ReactMetrics, react.WithCommandRateGate(commandRate))
 	// The same gate the reader is built on: deliveries the reader handed to lanes before the term
 	// was lost must not start on a replica that no longer detects.
 	ReactDispatcher.SetTermGate(DetectTermGate.Held)
@@ -499,7 +519,7 @@ func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
 //
 // 🔑 REACT IS GATED FOR THE CEILING, NOT FOR SINGLE-WRITER SAFETY. It holds no ordered
 // state, and every replica could dispatch correctly on its own. What it does hold is
-// connectorRate — the source-side outbound ceiling, which is in memory per process. With
+// independent command and connector rate gates, which are in memory per process. With
 // every replica consuming, each replica charged its own copy of every tenant's ceiling, so a
 // warm standby doubled it. Gating on the DETECT lease makes the replica that detects the only
 // one that reacts, so the ceiling is charged once. During a lease handover both replicas can

@@ -20,13 +20,13 @@ func governedCommandRule() rules.Rule {
 	return r
 }
 
-func TestCommandUsesOutboundGate(t *testing.T) {
+func TestCommandUsesCommandGate(t *testing.T) {
 	sink := &fakeSink{}
 	gate := &fakeGate{}
-	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, sink, nil, nil, gate, newFakeMetrics())
+	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, sink, nil, nil, nil, newFakeMetrics(), WithCommandRateGate(gate))
 	res := d.Dispatch(context.Background(), evt())
 	if len(sink.sent) != 0 || len(res.Shed) != 1 || len(gate.charged) != 1 || res.Outcome != Done {
-		t.Fatalf("command bypassed outbound gate: sends=%d result=%+v charges=%d", len(sink.sent), res, len(gate.charged))
+		t.Fatalf("command bypassed command gate: sends=%d result=%+v charges=%d", len(sink.sent), res, len(gate.charged))
 	}
 }
 
@@ -50,8 +50,9 @@ func TestCommandLoopBound(t *testing.T) {
 // asked) nor spends the live loop allowance.
 func TestReplayedCommandIsSentWithoutSpendingEitherBudget(t *testing.T) {
 	sink := &fakeSink{}
+	connectorGate := &fakeGate{admit: false}
 	gate := &fakeGate{admit: false}
-	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, sink, nil, nil, gate, newFakeMetrics())
+	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, sink, nil, nil, connectorGate, newFakeMetrics(), WithCommandRateGate(gate))
 	live := evt()
 	var ev runtime.DerivedEvent
 	b, err := json.Marshal(live)
@@ -74,7 +75,7 @@ func TestReplayedCommandIsSentWithoutSpendingEitherBudget(t *testing.T) {
 			t.Fatalf("replayed command refused: %+v", res)
 		}
 	}
-	if len(sink.sent) != 121 || len(gate.charged) != 0 || len(d.commandLoop.keys) != 0 {
+	if len(sink.sent) != 121 || len(gate.charged) != 0 || len(connectorGate.charged) != 0 || len(d.commandLoop.keys) != 0 {
 		t.Fatalf("replay sent=%d charged=%d loopKeys=%d; want 121 sent, nothing charged", len(sink.sent), len(gate.charged), len(d.commandLoop.keys))
 	}
 	if sink.sent[0].Token != idempotencyToken(live, governedCommandRule().Actions[0]) {
@@ -95,7 +96,7 @@ func TestReplayedCommandIsSentWithoutSpendingEitherBudget(t *testing.T) {
 func TestLoopRefusalDoesNotSpendTenantBudget(t *testing.T) {
 	sink := &fakeSink{}
 	gate := &fakeGate{admit: true}
-	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, sink, nil, nil, gate, newFakeMetrics())
+	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, sink, nil, nil, nil, newFakeMetrics(), WithCommandRateGate(gate))
 	ev := evt()
 	for i := 0; i < commandLoopSends+50; i++ {
 		ev.OccurredTime = ev.OccurredTime.Add(time.Nanosecond)
@@ -111,7 +112,7 @@ func TestLoopRefusalDoesNotSpendTenantBudget(t *testing.T) {
 func TestRateRefusalRefundsLoopAllowance(t *testing.T) {
 	sink := &fakeSink{}
 	gate := &fakeGate{admit: false}
-	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, sink, nil, nil, gate, newFakeMetrics())
+	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, sink, nil, nil, nil, newFakeMetrics(), WithCommandRateGate(gate))
 	ev := evt()
 	for i := 0; i < 50; i++ {
 		ev.OccurredTime = ev.OccurredTime.Add(time.Nanosecond)
@@ -163,13 +164,14 @@ func TestCommandLoopStateIsBoundedWithoutEvictingLiveKeys(t *testing.T) {
 }
 
 func TestCommandSimulationDoesNotSpendEitherBudget(t *testing.T) {
+	connectorGate := &fakeGate{admit: true}
 	gate := &fakeGate{admit: true}
 	recording := &fakeSink{}
-	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, recording, nil, nil, gate, newFakeMetrics(), WithCommandSimulation())
+	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, recording, nil, nil, connectorGate, newFakeMetrics(), WithCommandRateGate(gate), WithCommandSimulation())
 	for i := 0; i < 121; i++ {
 		d.Dispatch(context.Background(), evt())
 	}
-	if len(recording.sent) != 121 || len(gate.charged) != 0 || len(d.commandLoop.keys) != 0 {
+	if len(recording.sent) != 121 || len(gate.charged) != 0 || len(connectorGate.charged) != 0 || len(d.commandLoop.keys) != 0 {
 		t.Fatal("simulation spent governance tokens or recorded loop state")
 	}
 }
