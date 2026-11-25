@@ -138,7 +138,6 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	}
 
 	// 3-4. Permits, then the due lines.
-	now := fleetClock()
 	var planned int64
 	if err := db.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPlanned).Count(&planned).Error; err != nil {
 		return nil, err
@@ -152,7 +151,7 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	}
 	var due []FleetOperationLine
 	if err := db.Select("id", "ordinal").Where("operation_id = ? AND posting = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)",
-		op.ID, FleetPostingPlanned, now).Order("ordinal").Limit(allowed).Find(&due).Error; err != nil {
+		op.ID, FleetPostingPlanned, fleetTimestamp(db)).Order("ordinal").Limit(allowed).Find(&due).Error; err != nil {
 		return nil, err
 	}
 	if len(due) == 0 {
@@ -162,7 +161,7 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 		}
 		return res, nil
 	}
-	granted, err := api.AcquireFleetPermits(ctx, op.ID, len(due), allowed, now)
+	granted, err := api.AcquireFleetPermits(ctx, op.ID, len(due), allowed, time.Time{})
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +197,7 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 			if perr != nil {
 				// An undecided error is neither a refusal nor a reason to starve later lines. Keep it
 				// visible with its own code and backoff, and return the error after pass bookkeeping.
-				rerr := api.RecordFleetLineRetry(ctx, lineID, FleetHoldPostError, fleetClock())
+				rerr := api.RecordFleetLineRetry(ctx, lineID, FleetHoldPostError, time.Time{})
 				mu.Lock()
 				defer mu.Unlock()
 				res.Hold = FleetHoldPostError
@@ -319,9 +318,27 @@ func (api *Api) fleetAllowed(ctx context.Context, op *FleetOperation, caps Fleet
 // AcquireFleetPermits takes up to want posting permits for one operation from its one-second window, under
 // the runtime row's lock so replicas share the count. A permit is one posting ATTEMPT, whatever its outcome,
 // so the pacing bounds lock traffic and not only successful posts. It returns how many it granted.
+// now is a SQLite fixture input only; PostgreSQL ignores the caller's clock.
 func (api *Api) AcquireFleetPermits(ctx context.Context, opID uint, want, allowed int, now time.Time) (int, error) {
+	db := api.RDB.DB(ctx)
+	if db.Dialector.Name() == "postgres" {
+		tenant, ok := core.TenantFromContext(ctx)
+		if !ok || tenant == "" {
+			return 0, core.ErrNoTenant
+		}
+		var granted int
+		err := db.Raw(fleetAcquirePermitsSQL, sql.Named("id", opID), sql.Named("tenant", tenant),
+			sql.Named("want", max(want, 0)), sql.Named("allowed", max(allowed, 0))).Row().Scan(&granted)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = gorm.ErrRecordNotFound
+		}
+		return granted, err
+	}
+	if now.IsZero() {
+		now = fleetClock()
+	}
 	granted := 0
-	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	err := db.Transaction(func(tx *gorm.DB) error {
 		var rt FleetOperationRuntime
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("operation_id = ?", opID).First(&rt).Error; err != nil {
 			return err
@@ -341,26 +358,24 @@ func (api *Api) AcquireFleetPermits(ctx context.Context, opID uint, want, allowe
 // touchFleetRuntime records the driver's heartbeat, progress and hold with single autocommit statements:
 // it never runs inside a transaction that holds another lock, so it sits outside the lock order.
 func (api *Api) touchFleetRuntime(ctx context.Context, op *FleetOperation, progressed *bool, hold *string) {
-	now := fleetClock()
-	changes := map[string]any{"driver_seen_at": sql.NullTime{Time: now, Valid: true}}
+	db := api.RDB.DB(ctx)
+	now := fleetTimestamp(db)
+	changes := map[string]any{"driver_seen_at": now}
 	if hold != nil {
 		changes["hold_code"] = *hold
-		changes["hold_seen_at"] = sql.NullTime{Time: now, Valid: *hold != ""}
 		if *hold != "" {
-			var rt FleetOperationRuntime
 			// hold_since is when THIS hold began: it moves only when the code changes.
-			if err := api.RDB.DB(ctx).Select("hold_code", "hold_since").Where("operation_id = ?", op.ID).First(&rt).Error; err == nil && rt.HoldCode != *hold {
-				changes["hold_since"] = sql.NullTime{Time: now, Valid: true}
-			}
+			changes["hold_seen_at"] = now
+			changes["hold_since"] = gorm.Expr("CASE WHEN hold_code <> ? THEN ? ELSE hold_since END", *hold, now)
 		} else {
-			changes["hold_since"] = sql.NullTime{}
+			changes["hold_seen_at"], changes["hold_since"] = nil, nil
 		}
 	}
 	if progressed != nil && *progressed {
-		changes["last_progress_at"] = sql.NullTime{Time: now, Valid: true}
+		changes["last_progress_at"] = now
 	}
 	// Best effort by design: a missed heartbeat is visible as STALLED, and must never fail the pass.
-	_ = api.RDB.DB(ctx).Model(&FleetOperationRuntime{}).Where("operation_id = ?", op.ID).Updates(changes).Error
+	_ = db.Model(&FleetOperationRuntime{}).Where("operation_id = ?", op.ID).Updates(changes).Error
 }
 
 // fleetAutoPause moves a RUNNING operation to PAUSED with a reason, through the same fence as any control
@@ -402,10 +417,10 @@ func (api *Api) finishDriven(ctx context.Context, res *FleetDriveResult, op *Fle
 		if err := tx.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", cur.ID, FleetPostingPosted).Count(&posted).Error; err != nil {
 			return nil, nil, err
 		}
-		now := time.Now()
-		changes := map[string]any{"dispatch": FleetDispatchDispatched, "dispatched_at": sql.NullTime{Time: now, Valid: true}}
+		now := fleetTimestamp(tx)
+		changes := map[string]any{"dispatch": FleetDispatchDispatched, "dispatched_at": now}
 		if posted == 0 {
-			changes["evidence"], changes["closed_at"] = fleetEvidenceClosedText, sql.NullTime{Time: now, Valid: true}
+			changes["evidence"], changes["closed_at"] = fleetEvidenceClosedText, now
 		}
 		return changes, &FleetOperationEvent{Kind: fleetEventDispatched}, nil
 	})
@@ -415,9 +430,6 @@ func (api *Api) finishDriven(ctx context.Context, res *FleetDriveResult, op *Fle
 	res.Dispatched = err == nil
 	return res, nil
 }
-
-// fleetClock is the platform clock the driver reads for its windows and heartbeats; a variable so a test can move it.
-var fleetClock = time.Now
 
 // FleetDispatchDispatched is the state an operation rests in once every line has been decided.
 const FleetDispatchDispatched = string(ledger.DispatchDispatched)

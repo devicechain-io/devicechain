@@ -9,7 +9,6 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -18,10 +17,7 @@ import (
 func TestFleetPostgresUndecidedErrorDoesNotAbortThePass(t *testing.T) {
 	p := newPostPG(t, "v1")
 	p.api.PrincipalStanding = &fakeStanding{answer: map[string]bool{alice.Name: true}}
-	now := time.Now()
-	previousClock := fleetClock
-	fleetClock = func() time.Time { return now }
-	t.Cleanup(func() { fleetClock = previousClock })
+	now := fleetPGNow(t, p.api.RDB.DB(p.ctx))
 	undecided := errors.New("undecided posting failure")
 	var attempts atomic.Int32
 	attributeBeforeCommitHook = func(tx *gorm.DB) error {
@@ -55,13 +51,13 @@ func TestFleetPostgresUndecidedErrorDoesNotAbortThePass(t *testing.T) {
 	require.True(t, rt.LastProgressAt.Valid)
 	require.Equal(t, "POST_ERROR", rt.HoldCode)
 
-	now = line.NextAttemptAt.Time.Add(-time.Millisecond)
 	r, err = p.api.DriveFleetOperation(p.ctx, p.op.Token, DefaultFleetCaps)
 	require.NoError(t, err)
 	require.Zero(t, r.Posted)
 	require.Equal(t, int32(1), attempts.Load())
 	attributeBeforeCommitHook = nil
-	now = line.NextAttemptAt.Time.Add(time.Second)
+	require.NoError(t, p.api.RDB.DB(p.ctx).Model(&FleetOperationLine{}).Where("id = ?", line.ID).
+		Update("next_attempt_at", gorm.Expr("clock_timestamp() - interval '1 second'")).Error)
 	r, err = p.api.DriveFleetOperation(p.ctx, p.op.Token, DefaultFleetCaps)
 	require.NoError(t, err)
 	require.Equal(t, 1, r.Posted)
@@ -115,10 +111,7 @@ func TestFleetPostgresABusyHeadDoesNotStarveTheNextDueLine(t *testing.T) {
 				require.NoError(t, holder.Exec(`SELECT id FROM entity_attributes
 					WHERE entity_type = 'device' AND entity_id = ? AND scope = 'SHARED' AND attr_key = 'k' FOR UPDATE`, p.devs[0].ID).Error)
 			}
-			now := time.Now()
-			previousClock := fleetClock
-			fleetClock = func() time.Time { return now }
-			t.Cleanup(func() { fleetClock = previousClock })
+			now := fleetPGNow(t, p.api.RDB.DB(p.ctx))
 			r, err := p.api.DriveFleetOperation(p.ctx, p.op.Token, DefaultFleetCaps)
 			require.NoError(t, err)
 			require.Equal(t, 1, r.Busy+r.Retried)
@@ -132,7 +125,10 @@ func TestFleetPostgresABusyHeadDoesNotStarveTheNextDueLine(t *testing.T) {
 			require.True(t, head.NextAttemptAt.Time.After(now))
 			// The generated backoff spans a new permit window. Keep holding the real lock: only
 			// selection excluding the head lets the second line use that window's sole permit.
-			now = head.NextAttemptAt.Time.Add(-time.Microsecond)
+			// Move the stored window, not a process clock: the head is still
+			// backing off when the next DB permit window begins.
+			require.NoError(t, p.api.RDB.DB(p.ctx).Model(&FleetOperationRuntime{}).Where("operation_id = ?", p.op.ID).
+				Update("pace_window_start", gorm.Expr("clock_timestamp() - interval '1 second'")).Error)
 			r, err = p.api.DriveFleetOperation(p.ctx, p.op.Token, DefaultFleetCaps)
 			require.NoError(t, err)
 			require.Equal(t, 1, r.Posted)
@@ -149,7 +145,10 @@ func TestFleetPostgresABusyHeadDoesNotStarveTheNextDueLine(t *testing.T) {
 			require.Equal(t, before.PaceIssued, after.PaceIssued)
 			require.Equal(t, before.PaceWindowStart, after.PaceWindowStart)
 			require.NoError(t, holder.Rollback().Error)
-			now = head.NextAttemptAt.Time.Add(2 * time.Second)
+			require.NoError(t, p.api.RDB.DB(p.ctx).Model(&FleetOperationLine{}).Where("id = ?", head.ID).
+				Update("next_attempt_at", gorm.Expr("clock_timestamp() - interval '1 second'")).Error)
+			require.NoError(t, p.api.RDB.DB(p.ctx).Model(&FleetOperationRuntime{}).Where("operation_id = ?", p.op.ID).
+				Update("pace_window_start", gorm.Expr("clock_timestamp() - interval '1 second'")).Error)
 			r, err = p.api.DriveFleetOperation(p.ctx, p.op.Token, DefaultFleetCaps)
 			require.NoError(t, err)
 			require.Equal(t, 1, r.Posted)
