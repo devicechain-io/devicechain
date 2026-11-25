@@ -159,7 +159,11 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 				break
 			}
 		}
-		for _, request := range requests {
+		// Resolve endpoints before taking any head locks. The writes below must stay
+		// in request order for containment admission and the tracked-edge ceiling,
+		// but overlapping batches must acquire their membership heads in key order.
+		resolved := make([]EntityRelationship, len(requests))
+		for i, request := range requests {
 			rt := typesByToken[request.RelationshipType]
 			if rt == nil {
 				return gorm.ErrRecordNotFound
@@ -172,6 +176,18 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 			if err != nil {
 				return fmt.Errorf("target: %w", err)
 			}
+			resolved[i] = EntityRelationship{SourceType: request.SourceType, SourceId: sourceId,
+				TargetType: request.TargetType, TargetId: targetId, RelationshipTypeId: rt.ID}
+		}
+		// Advance every head before any edge write, so missing heads also acquire their
+		// unique-index locks in key order. A later refusal rolls these advances back.
+		generations, err := advanceStaticMembershipHeadsTx(tx, newStaticMembershipClassifier(tx), resolved)
+		if err != nil {
+			return err
+		}
+		for i, request := range requests {
+			rt := typesByToken[request.RelationshipType]
+			sourceId, targetId := resolved[i].SourceId, resolved[i].TargetId
 			// The asset hierarchy's structural contract (ADR-072), enforced on the bulk
 			// path too. It is checked INSIDE the loop and inside the transaction, so an
 			// earlier edge in this same batch is visible to a later one's single-parent
@@ -194,16 +210,17 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 				return fmt.Errorf("relationship %q: %w", request.Token, err)
 			}
 			edge := &EntityRelationship{
-				TokenReference:     rdb.TokenReference{Token: request.Token},
-				MetadataEntity:     rdb.MetadataEntity{Metadata: metadataJSON},
-				SourceType:         request.SourceType,
-				SourceId:           sourceId,
-				TargetType:         request.TargetType,
-				TargetId:           targetId,
-				TargetToken:        request.Target,
-				RelationshipTypeId: rt.ID,
+				TokenReference:       rdb.TokenReference{Token: request.Token},
+				MetadataEntity:       rdb.MetadataEntity{Metadata: metadataJSON},
+				SourceType:           request.SourceType,
+				SourceId:             sourceId,
+				TargetType:           request.TargetType,
+				TargetId:             targetId,
+				TargetToken:          request.Target,
+				RelationshipTypeId:   rt.ID,
+				MembershipGeneration: generations[i],
 			}
-			if err := createRelationshipWithGenerationTx(tx, edge); err != nil {
+			if err := tx.Create(edge).Error; err != nil {
 				return err
 			}
 			edge.RelationshipType = *rt
@@ -217,7 +234,6 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 				sources = append(sources, edge.SourceId)
 			}
 		}
-		var err error
 		queued, err = queueOwnershipOnTx(tx, sources)
 		return err
 	})

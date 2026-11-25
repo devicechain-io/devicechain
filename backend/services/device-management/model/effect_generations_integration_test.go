@@ -6,11 +6,14 @@
 package model
 
 import (
+	"context"
 	"database/sql"
+	"sync"
 	"testing"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // The roll window, on the real server. A v1.9 pod writes devices and edges without knowing
@@ -86,4 +89,131 @@ func TestIntegrationEffectGenerationsAcrossTheRoll(t *testing.T) {
 	require.True(t, removed)
 	require.EqualValues(t, 3, headOf(dev.ID))
 	require.EqualValues(t, 1, headOf(other.ID), "a missing head reads as 0; the first aware write stores 1")
+}
+
+type membershipBatchLockRole struct{}
+
+// Both retained heads and missing heads contend when two callers add the same members.
+// Park the first batch after its first edge, then observe the second waiting in
+// PostgreSQL before releasing it. With request-order upserts (even with a SELECT
+// pre-lock of existing heads), the missing-head case owns the opposite head at
+// this point, so resuming the first creates a 40P01 cycle.
+func TestIntegrationStaticMembershipOppositeBatchOrder(t *testing.T) {
+	t.Run("existing-heads", func(t *testing.T) {
+		testStaticMembershipOppositeBatchOrder(t, 7)
+	})
+	t.Run("missing-heads", func(t *testing.T) {
+		testStaticMembershipOppositeBatchOrder(t, 0)
+	})
+}
+
+func testStaticMembershipOppositeBatchOrder(t *testing.T, initialGeneration int64) {
+	t.Helper()
+	api, ctx, first := attributeLockFixture(t)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	other, err := api.CreateDevice(ctx, &DeviceCreateRequest{Token: "other", DeviceTypeToken: "sensor"})
+	require.NoError(t, err)
+	group, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{Token: "fleet", MemberType: "device"})
+	require.NoError(t, err)
+	_, err = api.EnsureMembershipType(ctx)
+	require.NoError(t, err)
+	db := api.RDB.DB(ctx)
+	if initialGeneration > 0 {
+		for _, id := range []uint{first.ID, other.ID} {
+			require.NoError(t, db.Create(&StaticMembershipGeneration{GroupId: group.ID,
+				MemberType: "device", MemberId: id, Generation: initialGeneration}).Error)
+		}
+	} else {
+		var count int64
+		require.NoError(t, db.Model(&StaticMembershipGeneration{}).Where("group_id = ?", group.ID).Count(&count).Error)
+		require.Zero(t, count, "neither member has a head before the concurrent adds")
+	}
+	member := func(token, target string) *EntityRelationshipCreateRequest {
+		return &EntityRelationshipCreateRequest{Token: token, SourceType: "group", Source: group.Token,
+			TargetType: "device", Target: target, RelationshipType: MembershipRelationshipType}
+	}
+	firstWritten, release := make(chan struct{}), make(chan struct{})
+	secondPID := make(chan int, 1)
+	var releaseOnce, pidOnce sync.Once
+	var workers sync.WaitGroup
+	resume := func() { releaseOnce.Do(func() { close(release) }) }
+	name := "test:membership-batch-order"
+	// Capture the second transaction's PID before its first head upsert.
+	beforeHead := func(tx *gorm.DB) {
+		if tx.Statement.Table != "static_membership_generations" ||
+			tx.Statement.Context.Value(membershipBatchLockRole{}) != "second" {
+			return
+		}
+		pidOnce.Do(func() {
+			var pid int
+			err := tx.Session(&gorm.Session{NewDB: true}).Raw("SELECT pg_backend_pid()").Scan(&pid).Error
+			if err != nil {
+				tx.AddError(err)
+				return
+			}
+			secondPID <- pid
+		})
+	}
+	require.NoError(t, api.RDB.Database.Callback().Create().Before("gorm:create").Register(name+"-pid", beforeHead))
+	require.NoError(t, api.RDB.Database.Callback().Create().After("gorm:create").Register(name, func(tx *gorm.DB) {
+		if tx.Error != nil || tx.Statement.Table != "entity_relationships" ||
+			tx.Statement.Context.Value(membershipBatchLockRole{}) != "first" {
+			return
+		}
+		if tx.Statement.Dest.(*EntityRelationship).Token != "first-a" {
+			return
+		}
+		close(firstWritten)
+		select {
+		case <-release:
+		case <-tx.Statement.Context.Done():
+			tx.AddError(tx.Statement.Context.Err())
+		}
+	}))
+	t.Cleanup(func() {
+		resume()
+		cancel()
+		workers.Wait()
+		_ = api.RDB.Database.Callback().Create().Remove(name + "-pid")
+		_ = api.RDB.Database.Callback().Create().Remove(name)
+	})
+	firstDone, secondDone := make(chan error, 1), make(chan error, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		_, err := api.CreateEntityRelationships(context.WithValue(ctx, membershipBatchLockRole{}, "first"),
+			[]*EntityRelationshipCreateRequest{member("first-a", first.Token), member("first-b", other.Token)})
+		firstDone <- err
+	}()
+	attributeAwait(t, firstWritten)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		_, err := api.CreateEntityRelationships(context.WithValue(ctx, membershipBatchLockRole{}, "second"),
+			[]*EntityRelationshipCreateRequest{member("second-b", other.Token), member("second-a", first.Token)})
+		secondDone <- err
+	}()
+	attributeWaitPID(t, db, attributeAwait(t, secondPID), "transactionid")
+	resume()
+	firstErr, secondErr := attributeAwait(t, firstDone), attributeAwait(t, secondDone)
+	require.NoError(t, firstErr, "first batch must succeed without 40P01")
+	require.NoError(t, secondErr, "opposite-order batch must succeed without 40P01")
+	var heads []StaticMembershipGeneration
+	require.NoError(t, db.Where("group_id = ?", group.ID).Find(&heads).Error)
+	require.Len(t, heads, 2)
+	for _, head := range heads {
+		require.Equal(t, initialGeneration+2, head.Generation, "each of the two adds advances its head exactly once")
+	}
+	edges, err := api.EntityRelationshipsByToken(ctx, []string{"first-a", "first-b", "second-a", "second-b"})
+	require.NoError(t, err)
+	require.Len(t, edges, 4)
+	for _, edge := range edges {
+		require.True(t, edge.MembershipGeneration.Valid)
+		want := initialGeneration + 1
+		if edge.Token == "second-a" || edge.Token == "second-b" {
+			want++
+		}
+		require.Equal(t, want, edge.MembershipGeneration.Int64)
+	}
 }

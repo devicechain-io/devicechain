@@ -46,6 +46,19 @@ type staticMembershipKey struct {
 	memberId   uint
 }
 
+func sortStaticMembershipKeys(keys []staticMembershipKey) {
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := keys[i], keys[j]
+		if a.groupId != b.groupId {
+			return a.groupId < b.groupId
+		}
+		if a.memberType != b.memberType {
+			return a.memberType < b.memberType
+		}
+		return a.memberId < b.memberId
+	})
+}
+
 // staticMembershipClassifier decides whether an edge is a static-group membership. It
 // memoizes both lookups: a group's deletion removes every member edge in one call, and
 // each edge would otherwise ask the same two questions of the same two rows.
@@ -102,34 +115,32 @@ const staticMembershipHeadsPerStatement = 500
 // advanceStaticMembershipHeadsTx advances each logical edge's head by the number of times
 // it occurs in edges (an edge row's add or removal is one write of its logical edge), in
 // one multi-row upsert per chunk rather than one statement per edge. Keys are written in
-// a fixed order, so two transactions that touch overlapping heads take their row locks in
-// the same order.
-func advanceStaticMembershipHeadsTx(tx *gorm.DB, c *staticMembershipClassifier, edges []EntityRelationship) error {
+// a fixed order, including missing heads: locking only existing rows would leave new-head
+// inserts able to deadlock on the unique index. A missing head starts at its positive count.
+// The returned stamps follow input order, exactly as sequential per-edge bumps would;
+// non-memberships carry NULL. The caller must roll back the transaction on any later failure.
+func advanceStaticMembershipHeadsTx(tx *gorm.DB, c *staticMembershipClassifier, edges []EntityRelationship) ([]sql.NullInt64, error) {
 	counts := map[staticMembershipKey]int64{}
 	keys := make([]staticMembershipKey, 0)
+	edgeKeys := make([]staticMembershipKey, len(edges))
+	generations := make([]sql.NullInt64, len(edges))
 	for i := range edges {
 		key, ok, err := c.keyOf(&edges[i])
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !ok {
 			continue
 		}
+		edgeKeys[i] = key
+		generations[i].Valid = true
 		if counts[key] == 0 {
 			keys = append(keys, key)
 		}
 		counts[key]++
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		a, b := keys[i], keys[j]
-		if a.groupId != b.groupId {
-			return a.groupId < b.groupId
-		}
-		if a.memberType != b.memberType {
-			return a.memberType < b.memberType
-		}
-		return a.memberId < b.memberId
-	})
+	sortStaticMembershipKeys(keys)
+	nextGeneration := make(map[staticMembershipKey]int64, len(keys))
 	for start := 0; start < len(keys); start += staticMembershipHeadsPerStatement {
 		chunk := keys[start:min(start+staticMembershipHeadsPerStatement, len(keys))]
 		heads := make([]StaticMembershipGeneration, 0, len(chunk))
@@ -137,11 +148,22 @@ func advanceStaticMembershipHeadsTx(tx *gorm.DB, c *staticMembershipClassifier, 
 			heads = append(heads, StaticMembershipGeneration{GroupId: key.groupId, MemberType: key.memberType,
 				MemberId: key.memberId, Generation: counts[key]})
 		}
-		if err := tx.Clauses(staticMembershipHeadUpsert(true)).Create(&heads).Error; err != nil {
-			return err
+		if err := tx.Clauses(staticMembershipHeadUpsert(true), clause.Returning{}).Create(&heads).Error; err != nil {
+			return nil, err
+		}
+		for _, head := range heads {
+			key := staticMembershipKey{head.GroupId, head.MemberType, head.MemberId}
+			// RETURNING gives g0+c; the first occurrence must be stamped g0+1.
+			nextGeneration[key] = head.Generation - counts[key] + 1
 		}
 	}
-	return nil
+	for i, key := range edgeKeys {
+		if generations[i].Valid {
+			generations[i].Int64 = nextGeneration[key]
+			nextGeneration[key]++
+		}
+	}
+	return generations, nil
 }
 
 // staticMembershipHeadUpsert inserts a head at the row's own Generation, or advances an
@@ -191,7 +213,7 @@ func removeRelationshipsWithGenerationTx(tx *gorm.DB, predicate string, args ...
 		Where(predicate, args...).Order("id ASC").Find(&edges).Error; err != nil {
 		return 0, err
 	}
-	if err := advanceStaticMembershipHeadsTx(tx, newStaticMembershipClassifier(tx), edges); err != nil {
+	if _, err := advanceStaticMembershipHeadsTx(tx, newStaticMembershipClassifier(tx), edges); err != nil {
 		return 0, err
 	}
 	ids := make([]uint, 0, len(edges))
