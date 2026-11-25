@@ -330,3 +330,25 @@ func TestReviewValidationAndDecoderCoverKeylessRulesInEitherSnapshot(t *testing.
 		})
 	}
 }
+
+// A rule's save doors are provenance, not content: a door-only save, or an old pod that
+// writes no AuthoredVia key at all, must not change what a review is bound to, nor list
+// the rule as changed.
+func TestSnapshotDigestIgnoresRuleProvenance(t *testing.T) {
+	base := reviewSnapshot()
+	want, err := SnapshotDigest(reviewSnapshotBytes(t, base))
+	require.NoError(t, err)
+	draft := reviewSnapshot()
+	draft.Rules[0].AuthoredVia = datatypes.JSON(`["DESCRIBE","FORM"]`)
+	got, err := SnapshotDigest(reviewSnapshotBytes(t, draft))
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	classified, err := classifyAutomationReview(base, draft)
+	require.NoError(t, err)
+	require.Empty(t, classified.Changes)
+	// Content is still bound: the same door history with another definition differs.
+	draft.Rules[0].Definition = datatypes.JSON(`{"metric":"temp_c","threshold":27}`)
+	got, err = SnapshotDigest(reviewSnapshotBytes(t, draft))
+	require.NoError(t, err)
+	require.NotEqual(t, want, got)
+}
