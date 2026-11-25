@@ -287,12 +287,12 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		if fleetPostHook != nil {
 			fleetPostHook("claim", tx)
 		}
-		now := time.Now()
+		now := fleetTimestamp(tx)
 		res := tx.Model(&FleetOperationLine{}).Where("id = ? AND posting = ?", lineID, FleetPostingPlanned).Updates(map[string]any{
 			"posting": FleetPostingPosted, "prior": sql.NullString{String: string(priorJSON), Valid: true},
 			"posted_value": sql.NullString{String: string(postedJSON), Valid: true}, "posted_revision": revision,
-			"posted_epoch": sql.NullInt64{Int64: op.ExecutionEpoch, Valid: true}, "posted_at": sql.NullTime{Time: now, Valid: true},
-			"settle_by": sql.NullTime{Time: now.Add(time.Duration(op.SettleDeadlineS) * time.Second), Valid: true},
+			"posted_epoch": sql.NullInt64{Int64: op.ExecutionEpoch, Valid: true}, "posted_at": now,
+			"settle_by": fleetTimestampAfter(tx, time.Duration(op.SettleDeadlineS)*time.Second, time.Time{}),
 		})
 		if res.Error != nil {
 			return res.Error
@@ -319,7 +319,7 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		if result.Outcome == FleetPostBusy {
 			// A try-lock miss is a retryable posting attempt too. Without backoff a busy
 			// head can spend every pass's permits before later due lines are selected.
-			if rerr := api.RecordFleetLineRetry(ctx, lineID, "DEVICE_BUSY", fleetClock()); rerr != nil {
+			if rerr := api.RecordFleetLineRetry(ctx, lineID, "DEVICE_BUSY", time.Time{}); rerr != nil {
 				return FleetPostResult{}, rerr
 			}
 			result.Code = "DEVICE_BUSY"
@@ -329,7 +329,7 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		return api.recordFleetRefusal(ctx, tenant, opID, lineID, lease, *decided)
 	}
 	if code, retryable := fleetRetryableCode(err); retryable {
-		if rerr := api.RecordFleetLineRetry(ctx, lineID, code, fleetClock()); rerr != nil {
+		if rerr := api.RecordFleetLineRetry(ctx, lineID, code, time.Time{}); rerr != nil {
 			return FleetPostResult{}, rerr
 		}
 		return FleetPostResult{Outcome: FleetPostRetry, Code: code}, nil
@@ -454,6 +454,7 @@ func fleetRetryDelay(attempts int) time.Duration {
 // RecordFleetLineRetry notes a retryable failure on a line: one more attempt, the code, and when it may be
 // tried again (a jittered backoff). It never changes the line's posting, and its predicate keeps it from
 // touching a line that was cancelled, refused or redacted meanwhile.
+// now is a SQLite fixture input only; PostgreSQL schedules from its own clock.
 func (api *Api) RecordFleetLineRetry(ctx context.Context, lineID uint, code string, now time.Time) error {
 	var line FleetOperationLine
 	if err := api.RDB.DB(ctx).Select("attempts").First(&line, lineID).Error; err != nil {
@@ -463,5 +464,5 @@ func (api *Api) RecordFleetLineRetry(ctx context.Context, lineID uint, code stri
 	delay += time.Duration(rand.Int64N(int64(delay)/4 + 1))
 	return api.RDB.DB(ctx).Model(&FleetOperationLine{}).Where("id = ? AND posting = ?", lineID, FleetPostingPlanned).
 		Updates(map[string]any{"attempts": gorm.Expr("attempts + 1"), "last_error_code": code,
-			"next_attempt_at": sql.NullTime{Time: now.Add(delay), Valid: true}}).Error
+			"next_attempt_at": fleetTimestampAfter(api.RDB.DB(ctx), delay, now)}).Error
 }
