@@ -80,6 +80,10 @@ func InstallSteps() []StepID {
 // identifier grammar, checked at the hub, so free text cannot ride in them.
 type MessageCode string
 
+// QuestionCreateKindCluster asks whether to create the managed kind cluster an
+// install found missing. Param "cluster" names it. --yes answers it.
+const QuestionCreateKindCluster MessageCode = "install.create-kind-cluster"
+
 // ErrorCode is a stable, safe identifier for a failure.
 type ErrorCode string
 

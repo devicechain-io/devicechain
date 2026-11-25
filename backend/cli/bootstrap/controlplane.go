@@ -96,23 +96,24 @@ func controlPlaneNames(keys []string) []string {
 // the stack is not installed, when the slim profile switches them all off anyway, or when there is
 // no client to ask.
 func settleControlPlaneScrapes(ctx context.Context, st *State, typed kubernetes.Interface) {
+	c := out(ctx)
 	// Reset first, so a reused State cannot carry a previous run's list.
 	st.UnscrapedControlPlane = nil
 	if st.NoMonitoring || monitoringSlim(st) || typed == nil {
 		return
 	}
-	doing("checking which control-plane components run in the cluster")
+	c.doing("checking which control-plane components run in the cluster")
 	off, err := unscrapedControlPlane(ctx, typed)
 	st.UnscrapedControlPlane = off
 	if err != nil {
-		fmt.Println(color.YellowString("incomplete."))
-		fmt.Println(color.YellowString("warning: could not tell whether these run in kube-system, so they stay "+
+		c.println(color.YellowString("incomplete."))
+		c.println(color.YellowString("warning: could not tell whether these run in kube-system, so they stay "+
 			"scraped; if the cluster runs them elsewhere their *Down alerts will fire: %v", err))
 	} else {
-		done()
+		c.done()
 	}
 	if len(off) > 0 {
-		fmt.Printf("  not scraping %s: the monitoring chart's selector finds no pod for them in %s, "+
+		c.printf("  not scraping %s: the monitoring chart's selector finds no pod for them in %s, "+
 			"so their scrapes could never succeed\n",
 			strings.Join(controlPlaneNames(off), ", "), controlPlaneNamespace)
 	}
