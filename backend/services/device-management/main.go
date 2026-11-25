@@ -1412,11 +1412,14 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err = FleetExpirySweep.Start(ctx); err != nil {
 		return err
 	}
-	for _, task := range []*core.PeriodicTask{FleetSettlement, FleetSettlementDeadline} {
-		if task != nil {
-			if err = task.Start(ctx); err != nil {
-				return err
-			}
+	if FleetSettlement != nil {
+		if err = FleetSettlement.Start(ctx); err != nil {
+			return err
+		}
+	}
+	if FleetSettlementDeadline != nil {
+		if err = FleetSettlementDeadline.Start(ctx); err != nil {
+			return err
 		}
 	}
 
@@ -1549,11 +1552,14 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := FleetExpirySweep.Stop(ctx); err != nil {
 		return err
 	}
-	for _, task := range []*core.PeriodicTask{FleetSettlement, FleetSettlementDeadline} {
-		if task != nil {
-			if err := task.Stop(ctx); err != nil {
-				return err
-			}
+	if FleetSettlement != nil {
+		if err := FleetSettlement.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	if FleetSettlementDeadline != nil {
+		if err := FleetSettlementDeadline.Stop(ctx); err != nil {
+			return err
 		}
 	}
 
