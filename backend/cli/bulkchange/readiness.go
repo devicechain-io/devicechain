@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package bulkchange implements the Preview bulk change readiness client.
+// Package bulkchange implements the Preview device bulk change client.
 package bulkchange
 
 import (
