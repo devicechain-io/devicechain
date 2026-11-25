@@ -165,7 +165,7 @@ func TestRuleActionReviewedPublishChecksPublisherNotApprover(t *testing.T) {
 	publisher, person := reviewIdentity("publisher")
 	person.Claims.Authorities = append(person.Claims.Authorities, string(auth.CommandWrite))
 	publisher = auth.WithClaims(publisher, person.Claims)
-	_, err = r.api.PublishDeviceProfileReviewed(publisher, "profile", nil, nil, "publisher", &row.Token)
+	_, err = r.api.PublishDeviceProfileReviewed(publisher, "profile", nil, nil, "publisher", &row.Token, nil)
 	require.NoError(t, err)
 }
 

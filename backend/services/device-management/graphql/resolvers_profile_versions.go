@@ -58,6 +58,12 @@ func (r *DeviceProfileVersionResolver) PublishedBy() *string {
 	return &r.M.PublishedBy
 }
 
+func (r *DeviceProfileVersionResolver) PublishedById() *string { return r.M.PublishedById }
+
+func (r *DeviceProfileVersionResolver) AuthoredVia() ([]model.AuthoredVia, error) {
+	return model.AuthoredViaValues(r.M.AuthoredVia)
+}
+
 // ThingModel renders the version as a W3C WoT Thing Model. A snapshot that cannot be
 // rendered is an error, never an empty model.
 func (r *DeviceProfileVersionResolver) ThingModel(args struct {

@@ -334,6 +334,7 @@ export function DetectionRuleForm({
   entity,
   initialDefinition,
   initialWarnings,
+  authoredVia = 'FORM',
   onDone,
 }: {
   profileToken: string;
@@ -350,6 +351,8 @@ export function DetectionRuleForm({
   // needs a token before it runs) takes over — so a "Describe" draft is reviewed with its warnings
   // from the first render, not only after the author has named it.
   initialWarnings?: RuleWarning[];
+  // Keep the Describe origin through human review and edits before the first save.
+  authoredVia?: 'FORM' | 'DESCRIBE';
   onDone: (message: string) => void;
 }) {
   const { t } = useTranslation('deviceProfiles');
@@ -711,6 +714,7 @@ export function DetectionRuleForm({
       // form re-emits its own key order, not the canvas's canonical bytes. (Fable 9b-1 MED.)
       const keepGraph = editing && entity.authoringGraph != null && sameLogicalRule(definition, entity.definition);
       const edited = {
+        authoredVia,
         deviceProfileToken: profileToken,
         name: name.trim() || null,
         description: description.trim() || null,
@@ -798,6 +802,7 @@ export function DetectionRuleForm({
       try {
         // Partial update: no definition, no authoringGraph, no scope — only what this view edits.
         await updateDetectionRule(entity!.token, {
+          authoredVia,
           name: name.trim() || null,
           description: description.trim() || null,
           enabled,

@@ -972,6 +972,9 @@ func detectionRuleFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:  "detectionRule",
 		Token: "dr-1",
+		FieldLimitations: map[string]string{
+			"authoredVia": "Append-only door history defaults saves to API, rather than replacing or clearing. TestRuleProvenanceDoorsRoundTrip, TestRuleProvenanceMixedDoorsStayFrozen and TestRuleProvenanceStoredHistory drive its states.",
+		},
 		Migrate: append(append([]any{}, deviceProfileTables...),
 			&EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{}, &EntityGroupFacetRef{},
 			&EntityAttribute{}),
