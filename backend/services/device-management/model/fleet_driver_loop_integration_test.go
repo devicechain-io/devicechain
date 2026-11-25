@@ -103,6 +103,40 @@ func runDriverReplicas(t *testing.T, apis []*Api, ctx context.Context, done func
 
 type driverReplicaKey struct{}
 
+// logCommittedEffects installs a test-only AFTER trigger that appends one row per committed attribute
+// generation bump. A rolled-back effect leaves no row, so the log holds exactly the committed effects.
+func logCommittedEffects(t *testing.T, mgr *rdb.RdbManager) *gorm.DB {
+	t.Helper()
+	sys := mgr.Database.WithContext(core.WithSystemContext(context.Background()))
+	require.NoError(t, sys.Exec(`CREATE TABLE "device-management".test_committed_effects (device_id bigint NOT NULL)`).Error)
+	require.NoError(t, sys.Exec(`CREATE FUNCTION "device-management".test_log_effect() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO "device-management".test_committed_effects (device_id) VALUES (NEW.device_id);
+  RETURN NEW;
+END $$`).Error)
+	require.NoError(t, sys.Exec(`CREATE TRIGGER test_log_effect AFTER INSERT OR UPDATE ON "device-management".entity_attribute_generations
+FOR EACH ROW EXECUTE FUNCTION "device-management".test_log_effect()`).Error)
+	return sys
+}
+
+// requireOneCommittedEffectPerLine judges exactly-once by what COMMITTED: every line's device has
+// exactly one logged effect.
+func requireOneCommittedEffectPerLine(t *testing.T, sys *gorm.DB, opID uint, lines int) {
+	t.Helper()
+	type effects struct {
+		DeviceID int64
+		N        int64
+	}
+	var perDevice []effects
+	require.NoError(t, sys.Raw(`SELECT device_id, count(*) AS n FROM "device-management".test_committed_effects
+WHERE device_id IN (SELECT target_id FROM "device-management".fleet_operation_lines WHERE operation_id = ?)
+GROUP BY device_id`, opID).Scan(&perDevice).Error)
+	require.Len(t, perDevice, lines, "every line's effect committed")
+	for _, e := range perDevice {
+		require.Equal(t, int64(1), e.N, "device %d has more than one committed effect", e.DeviceID)
+	}
+}
+
 func TestFleetDriverPostgresThreeReplicasExactlyOnce2000(t *testing.T) {
 	for _, crash := range []bool{false, true} {
 		t.Run(fmt.Sprintf("crash=%t", crash), func(t *testing.T) {
@@ -114,6 +148,7 @@ func TestFleetDriverPostgresThreeReplicasExactlyOnce2000(t *testing.T) {
 			}
 			tenant := fmt.Sprintf("driver%d", time.Now().UnixNano())
 			tenantCtx, op := driverPGOperation(t, apis[0], tenant, 2000)
+			sys := logCommittedEffects(t, mgr)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 			killedCtx, kill := context.WithCancel(context.WithValue(ctx, driverReplicaKey{}, true))
@@ -158,9 +193,11 @@ func TestFleetDriverPostgresThreeReplicasExactlyOnce2000(t *testing.T) {
 			victim.Wait()
 			if crash {
 				require.True(t, killed.Load(), "a replica must actually die at claim")
-			} else {
-				require.Equal(t, int64(2000), invocations.Load(), "effect-invocation log: exactly one effect per line")
 			}
+			// Attempts are not the oracle: a post whose lease lapses at commit (a loaded host) rolls its
+			// effect back and is legitimately attempted again. What committed is judged below.
+			require.GreaterOrEqual(t, invocations.Load(), int64(2000))
+			requireOneCommittedEffectPerLine(t, sys, op.ID, 2000)
 			var posted int64
 			require.NoError(t, mgr.DB(tenantCtx).Model(&FleetOperationLine{}).
 				Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPosted).Count(&posted).Error)
@@ -243,15 +280,7 @@ func TestFleetDriverPostgresContendedReplicasCommitOneEffectPerLine(t *testing.T
 	}
 	tenant := fmt.Sprintf("contend%d", time.Now().UnixNano())
 	tenantCtx, op := driverPGOperation(t, apis[0], tenant, lines)
-	sys := mgr.Database.WithContext(core.WithSystemContext(context.Background()))
-	require.NoError(t, sys.Exec(`CREATE TABLE "device-management".test_committed_effects (device_id bigint NOT NULL)`).Error)
-	require.NoError(t, sys.Exec(`CREATE FUNCTION "device-management".test_log_effect() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-  INSERT INTO "device-management".test_committed_effects (device_id) VALUES (NEW.device_id);
-  RETURN NEW;
-END $$`).Error)
-	require.NoError(t, sys.Exec(`CREATE TRIGGER test_log_effect AFTER INSERT OR UPDATE ON "device-management".entity_attribute_generations
-FOR EACH ROW EXECUTE FUNCTION "device-management".test_log_effect()`).Error)
+	sys := logCommittedEffects(t, mgr)
 	fleetEffectHook = func() { time.Sleep(100 * time.Millisecond) }
 	defer func() { fleetEffectHook = nil }()
 
@@ -270,17 +299,6 @@ FOR EACH ROW EXECUTE FUNCTION "device-management".test_log_effect()`).Error)
 	require.NoError(t, mgr.DB(tenantCtx).Model(&FleetOperationLine{}).
 		Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPosted).Count(&posted).Error)
 	require.Equal(t, int64(lines), posted)
-	type effects struct {
-		DeviceID int64
-		N        int64
-	}
-	var perDevice []effects
-	require.NoError(t, sys.Raw(`SELECT device_id, count(*) AS n FROM "device-management".test_committed_effects
-WHERE device_id IN (SELECT target_id FROM "device-management".fleet_operation_lines WHERE operation_id = ?)
-GROUP BY device_id`, op.ID).Scan(&perDevice).Error)
-	require.Len(t, perDevice, lines, "every line's effect committed")
-	for _, e := range perDevice {
-		require.Equal(t, int64(1), e.N, "device %d has more than one committed effect", e.DeviceID)
-	}
+	requireOneCommittedEffectPerLine(t, sys, op.ID, lines)
 	t.Logf("%d of %d lines were contended by a second replica", contended, lines)
 }
