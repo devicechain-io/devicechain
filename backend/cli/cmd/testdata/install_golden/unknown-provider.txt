@@ -1,0 +1,11 @@
+args: install gcp --skip-preflight
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (58 bytes) --
+Error: unknown provider "gcp"; available providers: local
+
+-- engine (11 bytes) --
+not called
+

@@ -391,10 +391,16 @@ the cluster, with one exception: the connection budget may be raised.`,
 		if err != nil {
 			return err
 		}
-		return bootstrap.Install(cmd.Context(), provider, opts)
+		return installEngine(cmd.Context(), provider, opts)
 	},
 	SilenceUsage: true,
 }
+
+// installEngine is what RunE hands the settled options to: bootstrap.Install, held in a
+// variable so the characterisation goldens (install_golden_test.go) can stand a recording
+// fake in for the cluster work and pin what the command layer prints and decides on its
+// own. Production never reassigns it.
+var installEngine = bootstrap.Install
 
 func installRelationalWALFromArgv() *int {
 	if installRelationalWALGiven == nil || !*installRelationalWALGiven {
