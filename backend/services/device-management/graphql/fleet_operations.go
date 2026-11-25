@@ -273,6 +273,33 @@ func (r *SchemaResolver) ResumeBulkChange(ctx context.Context, args struct {
 
 type FleetResumePreviewResolver struct{ M model.FleetResumePreview }
 
+type FleetAmbiguityResolutionInput struct {
+	Token        string
+	Ordinals     *[]int32
+	AllAmbiguous *bool
+	Verdict      string
+	Note         string
+}
+
+func (r *SchemaResolver) ResolveAmbiguousBulkChangeLines(ctx context.Context, args struct {
+	Request FleetAmbiguityResolutionInput
+}) (*FleetOperationResolver, error) {
+	if _, err := fleetCaller(ctx, fleetWriteAuthorities...); err != nil {
+		return nil, err
+	}
+	in := args.Request
+	req := model.FleetAmbiguityResolution{Token: in.Token, Verdict: in.Verdict, Note: in.Note,
+		AllAmbiguous: in.AllAmbiguous != nil && *in.AllAmbiguous}
+	if in.Ordinals != nil {
+		req.Ordinals = *in.Ordinals
+	}
+	op, err := r.GetApi(ctx).ResolveAmbiguousFleetLines(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return &FleetOperationResolver{M: *op, S: r, C: ctx}, nil
+}
+
 func (r *FleetResumePreviewResolver) WithinContract() bool         { return r.M.WithinContract }
 func (r *FleetResumePreviewResolver) ContractVersion() int32       { return r.M.ContractVersion }
 func (r *FleetResumePreviewResolver) ContractDigest() string       { return r.M.ContractDigest }
@@ -487,7 +514,7 @@ type FleetLineSearchResultsResolver struct {
 func (r *FleetLineSearchResultsResolver) Results() []*FleetOperationLineResolver {
 	out := make([]*FleetOperationLineResolver, 0, len(r.M.Results))
 	for _, m := range r.M.Results {
-		out = append(out, &FleetOperationLineResolver{M: m})
+		out = append(out, &FleetOperationLineResolver{M: m, S: r.S, C: r.C})
 	}
 	return out
 }
@@ -496,7 +523,15 @@ func (r *FleetLineSearchResultsResolver) Pagination() *SearchResultsPaginationRe
 	return &SearchResultsPaginationResolver{M: r.M.Pagination, S: r.S, C: r.C}
 }
 
-type FleetOperationLineResolver struct{ M model.FleetOperationLine }
+type FleetOperationLineResolver struct {
+	M model.FleetOperationLine
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *FleetOperationLineResolver) ResolutionNote() (*string, error) {
+	return r.S.GetApi(r.C).FleetResolutionNote(r.C, &r.M)
+}
 
 func fleetStr(s string) *string {
 	if s == "" {

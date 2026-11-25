@@ -21,7 +21,9 @@ func settlementFixture(t *testing.T) (*Api, context.Context, *FleetOperationLine
 	t.Helper()
 	openTheEngine(t)
 	api, ctx := fleetFixture(t, 1)
-	require.NoError(t, api.RDB.Database.AutoMigrate(&DeviceConfigurationState{}, &DeviceConfigurationReport{}, &DeviceConfigurationRevision{}))
+	// fleetFixture already creates the report table. Inspecting an existing table
+	// during AutoMigrate is instance-scoped, just like the service's migrations.
+	require.NoError(t, api.RDB.DB(core.WithSystemContext(ctx)).AutoMigrate(&DeviceConfigurationState{}, &DeviceConfigurationReport{}, &DeviceConfigurationRevision{}))
 	op := readyOp(t, api, ctx, "settle", FleetSafetyRequest{}, "d1")
 	db := api.RDB.DB(ctx)
 	require.NoError(t, db.Model(op).Update("dispatch", "DISPATCHED").Error)

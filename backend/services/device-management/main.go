@@ -1269,6 +1269,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initFleetSettlement(); err != nil {
 				return err
 			}
+			if err = initFleetMaintenance(); err != nil {
+				return err
+			}
 			if err = initDecodeAccounting(); err != nil {
 				return err
 			}
@@ -1430,6 +1433,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 			return err
 		}
 	}
+	if FleetMaintenance != nil {
+		if err = FleetMaintenance.Start(ctx); err != nil {
+			return err
+		}
+	}
 
 	// Start flushing the payload decoders' health and failure samples.
 	if DecodeAccounting != nil {
@@ -1560,6 +1568,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := FleetExpirySweep.Stop(ctx); err != nil {
 		return err
 	}
+	if FleetMaintenance != nil {
+		if err := FleetMaintenance.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	if FleetDriver != nil {
 		if err := FleetDriver.Stop(ctx); err != nil {
 			return err
@@ -1655,6 +1668,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 	if err := FleetExpirySweep.Terminate(ctx); err != nil {
 		return err
+	}
+	if FleetMaintenance != nil {
+		if err := FleetMaintenance.Terminate(ctx); err != nil {
+			return err
+		}
 	}
 	if FleetDriver != nil {
 		if err := FleetDriver.Terminate(ctx); err != nil {

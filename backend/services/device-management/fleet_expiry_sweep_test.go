@@ -129,6 +129,7 @@ func TestFleetExpiryTaskCallsRealExpiryRepeatedly(t *testing.T) {
 			Dispatch: model.FleetDispatchReady, DriverProtocol: 1,
 			ExpiresAt: sql.NullTime{Time: time.Now().Add(-time.Minute), Valid: true}}
 		require.NoError(t, db.WithContext(ctx).Create(op).Error)
+		// Like the real create path, provide the runtime row where expiry publishes its control request.
 		require.NoError(t, db.WithContext(ctx).Create(&model.FleetOperationRuntime{OperationId: int64(op.ID)}).Error)
 		return op.ID
 	}
