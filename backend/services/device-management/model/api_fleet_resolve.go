@@ -25,10 +25,52 @@ const (
 )
 
 func fleetResolveFresh(claims *auth.Claims, now time.Time) error {
+	return fleetStepUpFresh(claims, now, "resolving a bulk change")
+}
+
+// fleetStepUpFresh is the step-up rule: the second factor (mfa_time, never iat) was verified within
+// the last five minutes of now, which is database time.
+func fleetStepUpFresh(claims *auth.Claims, now time.Time, doing string) error {
 	if !auth.StepUpFresh(claims, auth.StepUp{MaxAge: fleetResolveMaxAge}, now) {
-		return fleetErr(FleetCodeStepUpRequired, "resolving a bulk change needs a second factor verified within the last five minutes")
+		return fleetErr(FleetCodeStepUpRequired, "%s needs a second factor verified within the last five minutes", doing)
 	}
 	return nil
+}
+
+// fleetSecondFactor admits a call that needs step-up: a person's own access token (never an agent
+// or service token) that signed in with a second factor verified within five minutes. doing and
+// done name the call in its refusals ("resolving a bulk change", "resolved"). It answers the
+// claims and the database time it judged freshness at.
+func (api *Api) fleetSecondFactor(ctx context.Context, doing, done string) (*auth.Claims, time.Time, error) {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims == nil {
+		return nil, time.Time{}, auth.ErrUnauthenticated
+	}
+	if auth.IsAgentOrigin(claims) || claims.TokenType == auth.TokenTypeService ||
+		strings.HasPrefix(claims.Username, auth.ServiceAccountSubjectPrefix) || strings.HasPrefix(claims.Subject, auth.ServiceAccountSubjectPrefix) {
+		return nil, time.Time{}, fleetErr(FleetCodeAgentNotPermitted, "a bulk change must be %s by a person acting under their own access token", done)
+	}
+	if claims.TokenType != auth.TokenTypeAccess {
+		return nil, time.Time{}, auth.ErrForbidden
+	}
+	if !claims.Mfa() {
+		return nil, time.Time{}, fleetErr(FleetCodeSecondFactorRequired, "%s needs a sign-in with a second factor", doing)
+	}
+	db := api.RDB.DB(ctx)
+	// The database wall clock is shared by every replica. Refreshing a token
+	// changes iat, never mfa_time. The process clock is only a SQLite test seam.
+	var now time.Time
+	if db.Dialector.Name() == "postgres" {
+		if err := db.Raw("SELECT clock_timestamp()").Scan(&now).Error; err != nil {
+			return nil, time.Time{}, err
+		}
+	} else {
+		now = fleetClock()
+	}
+	if err := fleetStepUpFresh(claims, now, doing); err != nil {
+		return nil, time.Time{}, err
+	}
+	return claims, now, nil
 }
 
 // FleetAmbiguityResolution selects either explicit ordinals or every ambiguous
@@ -45,34 +87,11 @@ type FleetAmbiguityResolution struct {
 // evidence or another person's verdict. The resolver checks both authorities;
 // this path also requires a person's access token and fresh MFA before any write.
 func (api *Api) ResolveAmbiguousFleetLines(ctx context.Context, req FleetAmbiguityResolution) (*FleetOperation, error) {
-	claims, ok := auth.ClaimsFromContext(ctx)
-	if !ok || claims == nil {
-		return nil, auth.ErrUnauthenticated
-	}
-	if auth.IsAgentOrigin(claims) || claims.TokenType == auth.TokenTypeService ||
-		strings.HasPrefix(claims.Username, auth.ServiceAccountSubjectPrefix) || strings.HasPrefix(claims.Subject, auth.ServiceAccountSubjectPrefix) {
-		return nil, fleetErr(FleetCodeAgentNotPermitted, "a bulk change must be resolved by a person acting under their own access token")
-	}
-	if claims.TokenType != auth.TokenTypeAccess {
-		return nil, auth.ErrForbidden
-	}
-	if !claims.Mfa() {
-		return nil, fleetErr(FleetCodeSecondFactorRequired, "resolving a bulk change needs a sign-in with a second factor")
-	}
-	db := api.RDB.DB(ctx)
-	// The database wall clock is shared by every replica. Refreshing a token
-	// changes iat, never mfa_time. The process clock is only a SQLite test seam.
-	var now time.Time
-	if db.Dialector.Name() == "postgres" {
-		if err := db.Raw("SELECT clock_timestamp()").Scan(&now).Error; err != nil {
-			return nil, err
-		}
-	} else {
-		now = fleetClock()
-	}
-	if err := fleetResolveFresh(claims, now); err != nil {
+	claims, now, err := api.fleetSecondFactor(ctx, "resolving a bulk change", "resolved")
+	if err != nil {
 		return nil, err
 	}
+	db := api.RDB.DB(ctx)
 	if strings.TrimSpace(req.Note) == "" || !utf8.ValidString(req.Note) || utf8.RuneCountInString(req.Note) > 1000 {
 		return nil, fleetErr(FleetCodeNoteRequired, "a resolution needs a note of 1 to 1000 characters")
 	}
