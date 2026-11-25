@@ -34,7 +34,8 @@ type fleetDriverCandidate struct {
 
 // Rank each tenant's operations before ordering tenants after the cursor. A tenant with many
 // operations cannot fill the bounded list ahead of another tenant's first operation.
-// Only tenant/token hints cross the system scope; Drive rechecks each header in tenant scope.
+// Only tenant/token hints cross the system scope (a declared isolation bypass, core/test
+// sanctionedSystemContexts); Drive rechecks each header and writes only in tenant scope.
 func (api *Api) fleetDriverCandidates(ctx context.Context) ([]fleetDriverCandidate, error) {
 	state := &api.fleetDriver
 	state.Lock()
