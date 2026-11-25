@@ -37,7 +37,7 @@ const (
 	FleetCodeContractWidened        = "CONTRACT_WIDENED"
 	FleetCodeThresholdStillExceeded = "THRESHOLD_STILL_EXCEEDED"
 	// FleetCodeNotActivated is answered when the database does not enforce the device attribute
-	// writer protocol, so no operation may start or resume.
+	// writer protocol or the caller's tenant still has orphaned attribute rows.
 	FleetCodeNotActivated = "BULK_CHANGES_NOT_ACTIVATED"
 	FleetCodeExpired      = "OPERATION_EXPIRED"
 )
@@ -73,6 +73,27 @@ var fleetFenceWait = "15s"
 // fleetActivationCheck is the posting-time check of the database guard; a variable only so a test of the
 // transitions on a database that has no such guard (the SQLite fixtures) can stand in for it.
 var fleetActivationCheck = CheckFleetOperationActivation
+
+// Fixed release budgets; tests may lower them to exercise upgrades and quota boundaries
+// without inserting a million lines. These are not operator configuration.
+var fleetAdmissionBudgets = struct {
+	tenantDispatching, instanceDispatching, tenantEvidenceOpen, instanceEvidenceOpen int64
+}{ledger.TenantDispatchingOperations, ledger.InstanceDispatchingOperations,
+	ledger.TenantEvidenceOpenLines, ledger.InstanceEvidenceOpenLines}
+
+// The bounded orphan scan is an activation gate, never part of a fenced transaction.
+// A previous-release delete can leave these rows behind during a rolling upgrade;
+// they cannot affect a live device's before-image, so posting does not repeat this scan.
+func (api *Api) fleetCheckOrphans(ctx context.Context) error {
+	if tenant, ok := core.TenantFromContext(ctx); !ok || tenant == "" {
+		return errors.New("a bulk change needs a tenant in the context")
+	}
+	orphans, err := api.CountOrphanedDeviceAttributes(ctx)
+	if err != nil || orphans > 0 {
+		return fleetErr(FleetCodeNotActivated, "orphaned device attribute rows remain; the sweep removes them")
+	}
+	return nil
+}
 
 // OpenFleetActivationForTest replaces the activation check and returns the function that restores it.
 func OpenFleetActivationForTest(check func(tx *gorm.DB) error) (restore func()) {
@@ -112,7 +133,7 @@ type FleetResumeSafety struct {
 func (api *Api) fleetControl(ctx context.Context, token string, fn func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error)) (*FleetOperation, error) {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok || tenant == "" {
-		return nil, errors.New("a fleet operation needs a tenant in the context")
+		return nil, errors.New("a bulk change needs a tenant in the context")
 	}
 	head, err := api.fleetOperationByToken(ctx, token)
 	if err != nil {
@@ -175,6 +196,9 @@ func (api *Api) fleetBrokerFailClosed() bool {
 // becomes the grantee the engine runs on behalf of. Broker fail-closed is snapshotted as informational
 // evidence only; it does not affect admission, dispatch or settlement.
 func (api *Api) StartFleetOperation(ctx context.Context, token, contractDigest string, by FleetApprover) (*FleetOperation, error) {
+	if err := api.fleetCheckOrphans(ctx); err != nil {
+		return nil, err
+	}
 	tenant, _ := core.TenantFromContext(ctx)
 	return api.fleetControl(ctx, token, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
 		if op.Dispatch != FleetDispatchReady {
@@ -192,7 +216,7 @@ func (api *Api) StartFleetOperation(ctx context.Context, token, contractDigest s
 			}
 			return nil, nil, err
 		}
-		if err := api.fleetAdmitDispatching(ctx, tx, tenant); err != nil {
+		if err := api.fleetAdmitDispatching(ctx, tx, tenant, op); err != nil {
 			return nil, nil, err
 		}
 		now := time.Now()
@@ -226,16 +250,18 @@ func (api *Api) fleetApproveContract(tx *gorm.DB, op *FleetOperation, by FleetAp
 	return nil
 }
 
-// fleetAdmitDispatching counts the operations already RUNNING or PAUSED, under the tenant then the
-// instance admission lock, so two replicas cannot both start the last slot.
-func (api *Api) fleetAdmitDispatching(ctx context.Context, tx *gorm.DB, tenant string) error {
+// fleetAdmitDispatching recounts dispatch slots and evidence exposure under K_adm(tenant)
+// then K_adm(instance), on the transaction holding both locks until the transition commits.
+// Excluding the candidate before adding one makes start and resume share the same rule,
+// including when a later release lowers a budget below the already-admitted population.
+func (api *Api) fleetAdmitDispatching(ctx context.Context, tx *gorm.DB, tenant string, op *FleetOperation) error {
 	if err := fleetSetLockTimeout(tx, fleetAdmissionLockTimeout); err != nil {
 		return err
 	}
 	for _, key := range []int64{fleetAdmissionTenantKey(tenant), fleetAdmissionInstanceKey()} {
 		if err := fleetLock(tx, key, false); err != nil {
 			if lockTimedOut(err) {
-				return fleetErr(FleetCodeAdmissionBusy, "fleet operation admission is busy; retry")
+				return fleetErr(FleetCodeAdmissionBusy, "bulk change admission is busy; retry")
 			}
 			return err
 		}
@@ -246,24 +272,54 @@ func (api *Api) fleetAdmitDispatching(ctx context.Context, tx *gorm.DB, tenant s
 	}
 	dispatching := []string{FleetDispatchRunning, FleetDispatchPaused}
 	var tenantCount int64
-	if err := tx.Model(&FleetOperation{}).Where("dispatch IN ?", dispatching).Count(&tenantCount).Error; err != nil {
+	if err := tx.Model(&FleetOperation{}).Where("dispatch IN ? AND id <> ?", dispatching, op.ID).Count(&tenantCount).Error; err != nil {
 		return err
 	}
-	if tenantCount+1 > ledger.TenantDispatchingOperations {
-		e := fleetErr(FleetCodeQuotaExceeded, "the tenant already has %d operations running or paused (limit %d)", tenantCount, ledger.TenantDispatchingOperations)
+	if tenantCount+1 > fleetAdmissionBudgets.tenantDispatching {
+		e := fleetErr(FleetCodeQuotaExceeded, "the tenant already has %d operations running or paused (limit %d)", tenantCount, fleetAdmissionBudgets.tenantDispatching)
 		e.Quota = "tenant.dispatchingOperations"
 		return e
 	}
 	var instanceCount int64
-	if err := tx.WithContext(core.WithSystemContext(ctx)).Model(&FleetOperation{}).Where("dispatch IN ?", dispatching).Count(&instanceCount).Error; err != nil {
+	// System context reads counts only for the instance budgets, on this same locked transaction.
+	systemTx := tx.WithContext(core.WithSystemContext(ctx))
+	if err := systemTx.Model(&FleetOperation{}).Where("dispatch IN ? AND id <> ?", dispatching, op.ID).Count(&instanceCount).Error; err != nil {
 		return err
 	}
-	if instanceCount+1 > ledger.InstanceDispatchingOperations {
+	if instanceCount+1 > fleetAdmissionBudgets.instanceDispatching {
 		e := fleetErr(FleetCodeQuotaExceeded, "the instance-wide limit dispatchingOperations is reached; retry later")
 		e.Quota = "instance.dispatchingOperations"
 		return e
 	}
+	tenantOpen, err := fleetEvidenceOpenCount(tx, op)
+	if err != nil {
+		return err
+	}
+	if tenantOpen > fleetAdmissionBudgets.tenantEvidenceOpen {
+		e := fleetErr(FleetCodeQuotaExceeded, "the tenant evidence-open line limit is reached; retry after evidence settles")
+		e.Quota = "tenant.evidenceOpenLines"
+		return e
+	}
+	instanceOpen, err := fleetEvidenceOpenCount(systemTx, op)
+	if err != nil {
+		return err
+	}
+	if instanceOpen > fleetAdmissionBudgets.instanceEvidenceOpen {
+		e := fleetErr(FleetCodeQuotaExceeded, "the instance-wide evidence-open line limit is reached; retry after evidence settles")
+		e.Quota = "instance.evidenceOpenLines"
+		return e
+	}
 	return nil
+}
+
+// Count line state, irrespective of the header's dispatch/evidence: aborted operations
+// can still be awaiting evidence. Only the candidate's remaining plans add new exposure.
+func fleetEvidenceOpenCount(tx *gorm.DB, op *FleetOperation) (int64, error) {
+	var n int64
+	err := tx.Model(&FleetOperationLine{}).Where(`((posting = ? AND (settlement IS NULL OR settlement = ?) AND code <> ?)
+		OR (operation_id = ? AND posting = ?))`, FleetPostingPosted, string(ledger.SettlementAmbiguous), "TARGET_ERASED",
+		op.ID, FleetPostingPlanned).Count(&n).Error
+	return n, err
 }
 
 // PauseFleetOperation moves a RUNNING operation to PAUSED. Once it returns, no line of the operation
@@ -447,6 +503,9 @@ func (api *Api) PreviewFleetOperationResume(ctx context.Context, token string, i
 // contract, because widening a contract is a new approval this release does not offer. A resumer who is
 // not the grantee must hold the authorities (the resolver checks them) and becomes the grantee.
 func (api *Api) ResumeFleetOperation(ctx context.Context, token, contractDigest string, in *FleetResumeSafety, by FleetApprover) (*FleetOperation, error) {
+	if err := api.fleetCheckOrphans(ctx); err != nil {
+		return nil, err
+	}
 	tenant, _ := core.TenantFromContext(ctx)
 	return api.fleetControl(ctx, token, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
 		if op.Dispatch != FleetDispatchPaused {
@@ -479,12 +538,8 @@ func (api *Api) ResumeFleetOperation(ctx context.Context, token, contractDigest 
 		if (failure.Valid && failures >= int64(failure.Int32)) || (ambiguity.Valid && ambiguities >= int64(ambiguity.Int32)) {
 			return nil, nil, fleetErr(FleetCodeThresholdStillExceeded, "the failure or ambiguity limit is still reached; raise it within the contract or abort")
 		}
-		if err := api.fleetAdmitDispatching(ctx, tx, tenant); err != nil {
-			// A resumed operation was already counted as PAUSED: only the lock wait matters here.
-			var fe *FleetOperationError
-			if !errors.As(err, &fe) || fe.Code != FleetCodeQuotaExceeded {
-				return nil, nil, err
-			}
+		if err := api.fleetAdmitDispatching(ctx, tx, tenant, op); err != nil {
+			return nil, nil, err
 		}
 		changes := map[string]any{"dispatch": FleetDispatchRunning, "pause_reason": "", "eff_posts_per_second": rate,
 			"eff_failure_threshold": failure, "eff_ambiguity_threshold": ambiguity, "state_changed_by": by.Name}
