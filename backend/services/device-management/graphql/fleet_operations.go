@@ -32,7 +32,7 @@ func fleetCaller(ctx context.Context, required ...auth.Authority) (string, error
 	}
 	if auth.IsAgentOrigin(claims) || claims.TokenType == auth.TokenTypeService {
 		return "", &model.FleetOperationError{Code: model.FleetCodeAgentNotPermitted,
-			Message: "fleet operations are run by a person acting under their own access token"}
+			Message: "bulk changes are run by a person acting under their own access token"}
 	}
 	for _, a := range required {
 		if err := auth.Authorize(ctx, a); err != nil {
@@ -109,7 +109,7 @@ type FleetLineSearchCriteriaInput struct {
 
 // ---- queries and mutations ----
 
-func (r *SchemaResolver) FleetOperation(ctx context.Context, args struct{ Token string }) (*FleetOperationResolver, error) {
+func (r *SchemaResolver) BulkChange(ctx context.Context, args struct{ Token string }) (*FleetOperationResolver, error) {
 	if _, err := fleetCaller(ctx, fleetReadAuthorities...); err != nil {
 		return nil, err
 	}
@@ -120,7 +120,7 @@ func (r *SchemaResolver) FleetOperation(ctx context.Context, args struct{ Token 
 	return &FleetOperationResolver{M: *op, S: r, C: ctx}, nil
 }
 
-func (r *SchemaResolver) FleetOperations(ctx context.Context, args struct {
+func (r *SchemaResolver) BulkChanges(ctx context.Context, args struct {
 	Criteria FleetOperationSearchCriteriaInput
 }) (*FleetOperationSearchResultsResolver, error) {
 	if _, err := fleetCaller(ctx, fleetReadAuthorities...); err != nil {
@@ -134,7 +134,7 @@ func (r *SchemaResolver) FleetOperations(ctx context.Context, args struct {
 	return &FleetOperationSearchResultsResolver{M: *results, S: r, C: ctx}, nil
 }
 
-func (r *SchemaResolver) FleetOperationLines(ctx context.Context, args struct {
+func (r *SchemaResolver) BulkChangeLines(ctx context.Context, args struct {
 	Token    string
 	Criteria FleetLineSearchCriteriaInput
 }) (*FleetLineSearchResultsResolver, error) {
@@ -149,7 +149,7 @@ func (r *SchemaResolver) FleetOperationLines(ctx context.Context, args struct {
 	return &FleetLineSearchResultsResolver{M: *results, S: r, C: ctx}, nil
 }
 
-func (r *SchemaResolver) PlanFleetOperation(ctx context.Context, args struct {
+func (r *SchemaResolver) PlanBulkChange(ctx context.Context, args struct {
 	Request FleetOperationCreateRequestInput
 }) (*FleetOperationPlanResolver, error) {
 	if _, err := fleetCaller(ctx, fleetWriteAuthorities...); err != nil {
@@ -162,7 +162,7 @@ func (r *SchemaResolver) PlanFleetOperation(ctx context.Context, args struct {
 	return &FleetOperationPlanResolver{M: plan}, nil
 }
 
-func (r *SchemaResolver) CreateFleetOperation(ctx context.Context, args struct {
+func (r *SchemaResolver) CreateBulkChange(ctx context.Context, args struct {
 	Request FleetOperationCreateRequestInput
 }) (*FleetOperationResolver, error) {
 	initiator, err := fleetCaller(ctx, fleetWriteAuthorities...)
@@ -203,7 +203,7 @@ func fleetApprover(ctx context.Context, name string) model.FleetApprover {
 	return by
 }
 
-func (r *SchemaResolver) PreviewFleetOperationResume(ctx context.Context, args struct {
+func (r *SchemaResolver) PreviewBulkChangeResume(ctx context.Context, args struct {
 	Token  string
 	Safety *FleetOperationSafetyInputArg
 }) (*FleetResumePreviewResolver, error) {
@@ -217,7 +217,7 @@ func (r *SchemaResolver) PreviewFleetOperationResume(ctx context.Context, args s
 	return &FleetResumePreviewResolver{M: *p}, nil
 }
 
-func (r *SchemaResolver) StartFleetOperation(ctx context.Context, args struct{ Token, ContractDigest string }) (*FleetOperationResolver, error) {
+func (r *SchemaResolver) StartBulkChange(ctx context.Context, args struct{ Token, ContractDigest string }) (*FleetOperationResolver, error) {
 	name, err := fleetCaller(ctx, fleetWriteAuthorities...)
 	if err != nil {
 		return nil, err
@@ -231,7 +231,7 @@ func (r *SchemaResolver) StartFleetOperation(ctx context.Context, args struct{ T
 
 // Pause and abort need device:write only: an administrator who has lost fleet:operate can still stop an
 // operation, and stopping never widens anything.
-func (r *SchemaResolver) PauseFleetOperation(ctx context.Context, args struct{ Token string }) (*FleetOperationResolver, error) {
+func (r *SchemaResolver) PauseBulkChange(ctx context.Context, args struct{ Token string }) (*FleetOperationResolver, error) {
 	name, err := fleetCaller(ctx, auth.DeviceWrite)
 	if err != nil {
 		return nil, err
@@ -243,7 +243,7 @@ func (r *SchemaResolver) PauseFleetOperation(ctx context.Context, args struct{ T
 	return &FleetOperationResolver{M: *op, S: r, C: ctx}, nil
 }
 
-func (r *SchemaResolver) AbortFleetOperation(ctx context.Context, args struct{ Token string }) (*FleetOperationResolver, error) {
+func (r *SchemaResolver) AbortBulkChange(ctx context.Context, args struct{ Token string }) (*FleetOperationResolver, error) {
 	name, err := fleetCaller(ctx, auth.DeviceWrite)
 	if err != nil {
 		return nil, err
@@ -255,7 +255,7 @@ func (r *SchemaResolver) AbortFleetOperation(ctx context.Context, args struct{ T
 	return &FleetOperationResolver{M: *op, S: r, C: ctx}, nil
 }
 
-func (r *SchemaResolver) ResumeFleetOperation(ctx context.Context, args struct {
+func (r *SchemaResolver) ResumeBulkChange(ctx context.Context, args struct {
 	Token          string
 	ContractDigest string
 	Safety         *FleetOperationSafetyInputArg

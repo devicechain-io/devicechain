@@ -19,8 +19,8 @@ import (
 	"gorm.io/gorm"
 )
 
-const fleetWireCreate = `mutation ($request: FleetOperationCreateRequest!) {
-  createFleetOperation(request: $request) {
+const fleetWireCreate = `mutation ($request: BulkChangeCreateRequest!) {
+  createBulkChange(request: $request) {
     token name kind dispatch evidence targetCount planDigest contractDigest contractVersion contract initiator
     safety { maxPostsPerSecond effectivePostsPerSecond settleDeadlineSeconds failureThreshold }
     progress { planned refused posted }
@@ -29,8 +29,8 @@ const fleetWireCreate = `mutation ($request: FleetOperationCreateRequest!) {
   }
 }`
 
-const fleetWirePlan = `query ($request: FleetOperationCreateRequest!) {
-  planFleetOperation(request: $request) {
+const fleetWirePlan = `query ($request: BulkChangeCreateRequest!) {
+  planBulkChange(request: $request) {
     admittedCount refusedCount requestDigest planDigest contractDigest
     refusals { ordinal token code } refusalCounts { code count }
   }
@@ -102,12 +102,19 @@ func withEngine(t *testing.T) {
 	t.Cleanup(restore)
 }
 
-func TestTheFleetFragmentIsNotServedUntilTheEngineIs(t *testing.T) {
-	require.NotContains(t, ServedSchema(), "createFleetOperation", "an unserved engine must not be reachable")
-	require.NotContains(t, ServedSchema(), "FleetOperationDispatch")
-	require.NotContains(t, SchemaContent, "FleetOperationDispatch")
+func TestBulkChangeFragmentNames(t *testing.T) {
+	fragment := strings.ReplaceAll(strings.ToLower(fleetOperationSchema), "fleet:operate", "")
+	for _, forbidden := range []string{"fleet", "ledger"} {
+		require.False(t, strings.Contains(fragment, forbidden), "fragment contains %q", forbidden)
+	}
+}
+
+func TestTheBulkChangeFragmentIsNotServedUntilTheEngineIs(t *testing.T) {
+	require.NotContains(t, ServedSchema(), "createBulkChange", "an unserved engine must not be reachable")
+	require.NotContains(t, ServedSchema(), "BulkChangeDispatch")
+	require.NotContains(t, SchemaContent, "BulkChangeDispatch")
 	// The fragment itself must parse with the base schema, and the base schema without it still does.
-	require.Contains(t, SchemaContentWithFleetOperations, "createFleetOperation")
+	require.Contains(t, SchemaContentWithFleetOperations, "createBulkChange")
 	_ = fleetSchema()
 	_ = gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{})
 }
@@ -130,7 +137,7 @@ func TestPlanAndCreateOverTheWire(t *testing.T) {
 				Code  string
 				Count int
 			}
-		} `json:"planFleetOperation"`
+		} `json:"planBulkChange"`
 	}
 	require.NoError(t, json.Unmarshal(data, &plan))
 	require.Equal(t, 2, plan.P.AdmittedCount)
@@ -149,7 +156,7 @@ func TestPlanAndCreateOverTheWire(t *testing.T) {
 				FailureThreshold                                                  *int
 			}
 			Progress struct{ Planned, Refused, Posted int }
-		} `json:"createFleetOperation"`
+		} `json:"createBulkChange"`
 	}
 	require.NoError(t, json.Unmarshal(data, &created))
 	op := created.Op
@@ -174,18 +181,18 @@ func TestPlanAndCreateOverTheWire(t *testing.T) {
 	require.True(t, strings.HasPrefix(errs[0], "CONFLICT|"), errs[0])
 
 	// Reads need only device:read (see the authorization matrix).
-	data, errs = execFleet(t, ctx, `{ fleetOperation(token: "op1") { token dispatch } fleetOperations(criteria: {pageNumber: 1, pageSize: 10}) { results { token } pagination { totalRecords } }
-	  fleetOperationLines(token: "op1", criteria: {pageNumber: 1, pageSize: 10}) { results { ordinal targetToken posting code } } missing: fleetOperation(token: "nope") { token } }`, nil)
+	data, errs = execFleet(t, ctx, `{ bulkChange(token: "op1") { token dispatch } bulkChanges(criteria: {pageNumber: 1, pageSize: 10}) { results { token } pagination { totalRecords } }
+	  bulkChangeLines(token: "op1", criteria: {pageNumber: 1, pageSize: 10}) { results { ordinal targetToken posting code } } missing: bulkChange(token: "nope") { token } }`, nil)
 	require.Empty(t, errs)
 	var reads struct {
-		Op    *struct{ Token, Dispatch string }          `json:"fleetOperation"`
-		Ops   struct{ Results []struct{ Token string } } `json:"fleetOperations"`
+		Op    *struct{ Token, Dispatch string }          `json:"bulkChange"`
+		Ops   struct{ Results []struct{ Token string } } `json:"bulkChanges"`
 		Lines struct {
 			Results []struct {
 				Ordinal                    int
 				TargetToken, Posting, Code *string
 			}
-		} `json:"fleetOperationLines"`
+		} `json:"bulkChangeLines"`
 		Missing *struct{} `json:"missing"`
 	}
 	require.NoError(t, json.Unmarshal(data, &reads))
@@ -198,7 +205,7 @@ func TestPlanAndCreateOverTheWire(t *testing.T) {
 	require.Nil(t, reads.Missing)
 }
 
-func TestFleetOperationAuthorizationMatrix(t *testing.T) {
+func TestBulkChangeAuthorizationMatrix(t *testing.T) {
 	withEngine(t)
 	type tc struct {
 		name   string
@@ -231,7 +238,7 @@ func TestFleetOperationAuthorizationMatrix(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctx, _ := fleetWireCtx(t, c.claims)
-			_, errs := execFleet(t, ctx, `{ fleetOperations(criteria: {pageNumber: 1, pageSize: 5}) { results { token } } }`, nil)
+			_, errs := execFleet(t, ctx, `{ bulkChanges(criteria: {pageNumber: 1, pageSize: 5}) { results { token } } }`, nil)
 			if c.read {
 				require.Empty(t, errs)
 			} else {
@@ -251,7 +258,7 @@ func TestFleetOperationAuthorizationMatrix(t *testing.T) {
 	}
 	t.Run("no claims", func(t *testing.T) {
 		bare := importWireCtx(t) // an API and a tenant, and no claims
-		_, errs := execFleet(t, bare, `{ fleetOperations(criteria: {pageNumber: 1, pageSize: 5}) { results { token } } }`, nil)
+		_, errs := execFleet(t, bare, `{ bulkChanges(criteria: {pageNumber: 1, pageSize: 5}) { results { token } } }`, nil)
 		require.NotEmpty(t, errs)
 	})
 }
@@ -262,9 +269,9 @@ func TestAScopedMemberIsRefusedEverywhere(t *testing.T) {
 	scoped.ScopeAnchors = []string{"customer:acme"}
 	ctx, _ := fleetWireCtx(t, scoped)
 	for name, q := range map[string]string{
-		"list":   `{ fleetOperations(criteria: {pageNumber: 1, pageSize: 5}) { results { token } } }`,
-		"one":    `{ fleetOperation(token: "x") { token } }`,
-		"lines":  `{ fleetOperationLines(token: "x", criteria: {pageNumber: 1, pageSize: 5}) { results { ordinal } } }`,
+		"list":   `{ bulkChanges(criteria: {pageNumber: 1, pageSize: 5}) { results { token } } }`,
+		"one":    `{ bulkChange(token: "x") { token } }`,
+		"lines":  `{ bulkChangeLines(token: "x", criteria: {pageNumber: 1, pageSize: 5}) { results { ordinal } } }`,
 		"plan":   fleetWirePlan,
 		"create": fleetWireCreate,
 	} {
@@ -319,7 +326,7 @@ func TestControlTransitionsOverTheWire(t *testing.T) {
 	data, errs := execFleet(t, ctx, fleetWireCreate, fleetWireRequest("c1", "d1", "d2"))
 	require.Empty(t, errs)
 	var created struct {
-		Op struct{ ContractDigest string } `json:"createFleetOperation"`
+		Op struct{ ContractDigest string } `json:"createBulkChange"`
 	}
 	require.NoError(t, json.Unmarshal(data, &created))
 	digest := created.Op.ContractDigest
@@ -339,47 +346,63 @@ func TestControlTransitionsOverTheWire(t *testing.T) {
 		}
 		return out[field], errs
 	}
-	startQ := `mutation ($t: String!, $d: String!) { startFleetOperation(token: $t, contractDigest: $d) { ` + fleetWireControlFields + ` } }`
-	pauseQ := `mutation ($t: String!) { pauseFleetOperation(token: $t) { ` + fleetWireControlFields + ` } }`
-	resumeQ := `mutation ($t: String!, $d: String!, $s: FleetOperationSafetyInput) { resumeFleetOperation(token: $t, contractDigest: $d, safety: $s) { ` + fleetWireControlFields + ` } }`
-	abortQ := `mutation ($t: String!) { abortFleetOperation(token: $t) { ` + fleetWireControlFields + ` } }`
+	startQ := `mutation ($t: String!, $d: String!) { startBulkChange(token: $t, contractDigest: $d) { ` + fleetWireControlFields + ` } }`
+	pauseQ := `mutation ($t: String!) { pauseBulkChange(token: $t) { ` + fleetWireControlFields + ` } }`
+	resumeQ := `mutation ($t: String!, $d: String!, $s: BulkChangeSafetyInput) { resumeBulkChange(token: $t, contractDigest: $d, safety: $s) { ` + fleetWireControlFields + ` } }`
+	abortQ := `mutation ($t: String!) { abortBulkChange(token: $t) { ` + fleetWireControlFields + ` } }`
 
-	_, errs = call(startQ, map[string]any{"t": "c1", "d": "sha256:nope"}, "startFleetOperation")
+	_, errs = call(startQ, map[string]any{"t": "c1", "d": "sha256:nope"}, "startBulkChange")
 	require.Len(t, errs, 1)
 	require.True(t, strings.HasPrefix(errs[0], "CONTRACT_DIGEST_MISMATCH|"), errs[0])
 
-	started, errs := call(startQ, map[string]any{"t": "c1", "d": digest}, "startFleetOperation")
+	started, errs := call(startQ, map[string]any{"t": "c1", "d": digest}, "startBulkChange")
 	require.Empty(t, errs)
 	require.Equal(t, "RUNNING", started.Dispatch)
 	require.Equal(t, "alice@example.com", *started.Grantee)
 	require.Equal(t, 1, started.ExecutionEpoch)
 
-	paused, errs := call(pauseQ, map[string]any{"t": "c1"}, "pauseFleetOperation")
+	paused, errs := call(pauseQ, map[string]any{"t": "c1"}, "pauseBulkChange")
 	require.Empty(t, errs)
 	require.Equal(t, "PAUSED", paused.Dispatch)
 	require.Equal(t, "USER", *paused.PauseReason)
 
-	prev, errs2 := execFleet(t, ctx, `query ($t: String!, $s: FleetOperationSafetyInput) { previewFleetOperationResume(token: $t, safety: $s) { withinContract contractDigest stepUpRequired thresholdStillExceeded } }`,
+	prev, errs2 := execFleet(t, ctx, `query ($t: String!, $s: BulkChangeSafetyInput) { previewBulkChangeResume(token: $t, safety: $s) { withinContract contractDigest stepUpRequired thresholdStillExceeded } }`,
 		map[string]any{"t": "c1", "s": map[string]any{"maxPostsPerSecond": 50}})
 	require.Empty(t, errs2)
 	require.Contains(t, string(prev), `"withinContract":false`)
 
-	_, errs = call(resumeQ, map[string]any{"t": "c1", "d": digest, "s": map[string]any{"maxPostsPerSecond": 50}}, "resumeFleetOperation")
+	_, errs = call(resumeQ, map[string]any{"t": "c1", "d": digest, "s": map[string]any{"maxPostsPerSecond": 50}}, "resumeBulkChange")
 	require.Len(t, errs, 1)
 	require.True(t, strings.HasPrefix(errs[0], "CONTRACT_WIDENED|"), errs[0])
 
-	resumed, errs := call(resumeQ, map[string]any{"t": "c1", "d": digest, "s": map[string]any{"maxPostsPerSecond": 4}}, "resumeFleetOperation")
+	resumed, errs := call(resumeQ, map[string]any{"t": "c1", "d": digest, "s": map[string]any{"maxPostsPerSecond": 4}}, "resumeBulkChange")
 	require.Empty(t, errs)
 	require.Equal(t, "RUNNING", resumed.Dispatch)
 	require.Equal(t, 4, resumed.Safety.EffectivePostsPerSecond)
 	require.Equal(t, 10, resumed.Safety.MaxPostsPerSecond)
 
-	aborted, errs := call(abortQ, map[string]any{"t": "c1"}, "abortFleetOperation")
+	aborted, errs := call(abortQ, map[string]any{"t": "c1"}, "abortBulkChange")
 	require.Empty(t, errs)
 	require.Equal(t, "ABORTED", aborted.Dispatch)
-	_, errs = call(abortQ, map[string]any{"t": "c1"}, "abortFleetOperation")
+	_, errs = call(abortQ, map[string]any{"t": "c1"}, "abortBulkChange")
 	require.Len(t, errs, 1)
 	require.True(t, strings.HasPrefix(errs[0], "ILLEGAL_TRANSITION|"), errs[0])
+}
+
+func TestBulkChangeActivationCodeOverTheWire(t *testing.T) {
+	withEngine(t)
+	ctx, _ := fleetWireCtx(t, person(auth.DeviceRead, auth.DeviceWrite, auth.FleetOperate))
+	data, errs := execFleet(t, ctx, fleetWireCreate, fleetWireRequest("inactive", "d1"))
+	require.Empty(t, errs)
+	var created struct {
+		Op struct{ ContractDigest string } `json:"createBulkChange"`
+	}
+	require.NoError(t, json.Unmarshal(data, &created))
+	t.Cleanup(model.OpenFleetActivationForTest(func(*gorm.DB) error { return model.ErrFleetOperationNotActivated }))
+	_, errs = execFleet(t, ctx, `mutation ($digest: String!) { startBulkChange(token: "inactive", contractDigest: $digest) { dispatch } }`,
+		map[string]any{"digest": created.Op.ContractDigest})
+	require.Len(t, errs, 1)
+	require.True(t, strings.HasPrefix(errs[0], "BULK_CHANGES_NOT_ACTIVATED|"), errs[0])
 }
 
 func TestStoppingNeedsOnlyDeviceWriteButStartingAndResumingNeedFleetOperate(t *testing.T) {
@@ -389,7 +412,7 @@ func TestStoppingNeedsOnlyDeviceWriteButStartingAndResumingNeedFleetOperate(t *t
 	data, errs := execFleet(t, owner, fleetWireCreate, fleetWireRequest("m1", "d1"))
 	require.Empty(t, errs)
 	var created struct {
-		Op struct{ ContractDigest string } `json:"createFleetOperation"`
+		Op struct{ ContractDigest string } `json:"createBulkChange"`
 	}
 	require.NoError(t, json.Unmarshal(data, &created))
 	digest := created.Op.ContractDigest
@@ -401,11 +424,11 @@ func TestStoppingNeedsOnlyDeviceWriteButStartingAndResumingNeedFleetOperate(t *t
 		c.ClientId = "agent-1"
 		return auth.WithClaims(owner, c)
 	}()
-	start := `mutation ($t: String!, $d: String!) { startFleetOperation(token: $t, contractDigest: $d) { dispatch } }`
-	pause := `mutation ($t: String!) { pauseFleetOperation(token: $t) { dispatch } }`
-	abort := `mutation ($t: String!) { abortFleetOperation(token: $t) { dispatch } }`
-	resume := `mutation ($t: String!, $d: String!) { resumeFleetOperation(token: $t, contractDigest: $d) { dispatch } }`
-	preview := `query ($t: String!) { previewFleetOperationResume(token: $t) { withinContract } }`
+	start := `mutation ($t: String!, $d: String!) { startBulkChange(token: $t, contractDigest: $d) { dispatch } }`
+	pause := `mutation ($t: String!) { pauseBulkChange(token: $t) { dispatch } }`
+	abort := `mutation ($t: String!) { abortBulkChange(token: $t) { dispatch } }`
+	resume := `mutation ($t: String!, $d: String!) { resumeBulkChange(token: $t, contractDigest: $d) { dispatch } }`
+	preview := `query ($t: String!) { previewBulkChangeResume(token: $t) { withinContract } }`
 
 	// Without fleet:operate: cannot start, resume or preview a resume.
 	for name, q := range map[string]string{"start": start, "resume": resume, "preview": preview} {

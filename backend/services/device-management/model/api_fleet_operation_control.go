@@ -38,7 +38,7 @@ const (
 	FleetCodeThresholdStillExceeded = "THRESHOLD_STILL_EXCEEDED"
 	// FleetCodeNotActivated is answered when the database does not enforce the device attribute
 	// writer protocol, so no operation may start or resume.
-	FleetCodeNotActivated = "FLEET_OPERATIONS_NOT_ACTIVATED"
+	FleetCodeNotActivated = "BULK_CHANGES_NOT_ACTIVATED"
 	FleetCodeExpired      = "OPERATION_EXPIRED"
 )
 
