@@ -6,9 +6,11 @@ package model
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -225,4 +227,148 @@ func TestSettlementProtocolAndResolvedAndTail(t *testing.T) {
 			}
 		})
 	}
+}
+
+// settlementRawOp writes a DISPATCHED operation with one POSTED line on a synthetic target,
+// that target's revision 5 document and an APPLIED report at revision 5, all in ctx's tenant.
+// postedValue is the line's posted image; a malformed one makes the line undecodable.
+func settlementRawOp(t *testing.T, api *Api, ctx context.Context, target int64, dispatch, postedValue string) *FleetOperationLine {
+	t.Helper()
+	db := api.RDB.DB(ctx)
+	op := &FleetOperation{Token: fmt.Sprintf("raw%d", target), Kind: "config.set", Name: "raw", Dispatch: dispatch, Evidence: "OPEN", DriverProtocol: 1, RequestDigest: "x", Intent: `{"key":"k"}`, TargetKind: "DEVICE_LIST", TargetCount: 1, MaxPostsPerSecond: 50, EffPostsPerSecond: 50, SettleDeadlineS: 60, Initiator: "test"}
+	require.NoError(t, db.Create(op).Error)
+	line := &FleetOperationLine{OperationId: int64(op.ID), Ordinal: 1, TargetId: sql.NullInt64{Int64: target, Valid: true}, Posting: "POSTED", PostedRevision: sql.NullInt64{Int64: 5, Valid: true}, PostedValue: sql.NullString{String: postedValue, Valid: true}, SettleBy: sql.NullTime{Time: time.Now().Add(-time.Minute), Valid: true}}
+	require.NoError(t, db.Create(line).Error)
+	require.NoError(t, db.Create(&DeviceConfigurationRevision{DeviceId: uint(target), Revision: 5, Document: `{"k":"v"}`, Digest: "x"}).Error)
+	settlementReport(t, db, line, 5, "APPLIED", "REPORT")
+	return line
+}
+
+const settlementGoodValue = `{"present":true,"valueType":"STRING","value":"v"}`
+
+// One undecodable line must neither stall the lines after it nor roll back the deadline
+// transaction that settles every other due line; the pass still reports it.
+func TestSettlementUndecodableLineDoesNotStallTheTenant(t *testing.T) {
+	for _, pass := range []string{"deadline", "sweep", "fast"} {
+		t.Run(pass, func(t *testing.T) {
+			api, ctx, _ := settlementFixture(t)
+			db := api.RDB.DB(ctx)
+			poison := settlementRawOp(t, api, ctx, 900001, "DISPATCHED", `{"present":`)
+			good := settlementRawOp(t, api, ctx, 900002, "DISPATCHED", settlementGoodValue)
+			require.Less(t, poison.ID, good.ID, "the undecodable line is met first")
+			var err error
+			switch pass {
+			case "deadline":
+				_, err = api.DeadlineFleetLines(ctx)
+			case "sweep":
+				_, err = api.ReconcileFleetLines(ctx, false)
+			default:
+				_, err = api.ReconcileFleetLines(ctx, true)
+			}
+			require.ErrorContains(t, err, "could not be decided")
+			require.NoError(t, db.First(good, good.ID).Error)
+			require.Equal(t, "CONFIRMED", good.Settlement.String)
+			require.NoError(t, db.First(poison, poison.ID).Error)
+			require.False(t, poison.Settlement.Valid, "the undecodable line is left awaiting evidence, never AMBIGUOUS")
+			require.False(t, poison.EvidenceRevision.Valid)
+		})
+	}
+}
+
+// The full sweep visits every tenant even when one tenant's pass fails.
+func TestSettlementSweepContinuesPastAFailingTenant(t *testing.T) {
+	api, _, _ := settlementFixture(t)
+	bad := core.WithTenant(context.Background(), "a-bad")
+	good := core.WithTenant(context.Background(), "b-good")
+	settlementRawOp(t, api, bad, 900001, "DISPATCHED", `{"present":`)
+	line := settlementRawOp(t, api, good, 900002, "DISPATCHED", settlementGoodValue)
+	require.Error(t, api.SweepFleetSettlement(context.Background()))
+	require.NoError(t, api.RDB.DB(good).First(line, line.ID).Error)
+	require.Equal(t, "CONFIRMED", line.Settlement.String)
+}
+
+// A PAUSED operation's posted lines settle on the fast path, not five minutes later.
+func TestSettlementFastPathSettlesAPausedOperation(t *testing.T) {
+	api, ctx, _ := settlementFixture(t)
+	line := settlementRawOp(t, api, ctx, 900001, "PAUSED", settlementGoodValue)
+	n, err := api.ReconcileFleetLines(ctx, true)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, n)
+	require.NoError(t, api.RDB.DB(ctx).First(line, line.ID).Error)
+	require.Equal(t, "CONFIRMED", line.Settlement.String)
+}
+
+// One fast tick reaches more than ten active tenants: at ten per tick a tenant beyond the
+// sixtieth would be revisited only after its reports left the 30 s window.
+func TestSettlementFastTickReachesEveryActiveTenant(t *testing.T) {
+	api, _, _ := settlementFixture(t)
+	lines := map[string]*FleetOperationLine{}
+	for i := range 25 {
+		tenant := fmt.Sprintf("tenant%02d", i)
+		lines[tenant] = settlementRawOp(t, api, core.WithTenant(context.Background(), tenant), int64(900001+i), "RUNNING", settlementGoodValue)
+	}
+	require.NoError(t, api.RunFleetSettlement(context.Background(), true, false))
+	for tenant, line := range lines {
+		require.NoError(t, api.RDB.DB(core.WithTenant(context.Background(), tenant)).First(line, line.ID).Error)
+		require.Equal(t, "CONFIRMED", line.Settlement.String, tenant)
+	}
+}
+
+// The deadline pass bounds one transaction to 10,000 lines per tenant (exercised here at a
+// smaller bound); the rest wait for the next pass.
+func TestSettlementDeadlineBoundsOneTransaction(t *testing.T) {
+	require.Equal(t, 10000, fleetSettlementDeadlineBound, "the plan's per-transaction bound")
+	prev := fleetSettlementDeadlineBound
+	fleetSettlementDeadlineBound = 2 * fleetSettlementBatch
+	t.Cleanup(func() { fleetSettlementDeadlineBound = prev })
+	api, ctx, line := settlementFixture(t)
+	db := api.RDB.DB(ctx)
+	lines := make([]FleetOperationLine, fleetSettlementDeadlineBound)
+	for i := range lines {
+		lines[i] = FleetOperationLine{OperationId: line.OperationId, Ordinal: int32(i + 2), TargetId: sql.NullInt64{Int64: int64(900001 + i), Valid: true}, Posting: "POSTED", PostedRevision: sql.NullInt64{Int64: 5, Valid: true}, PostedValue: sql.NullString{String: settlementGoodValue, Valid: true}, SettleBy: sql.NullTime{Time: time.Now().Add(-time.Minute), Valid: true}}
+	}
+	require.NoError(t, db.CreateInBatches(lines, 500).Error)
+	// The fixture's own line plus these: one more than the bound is due.
+	n, err := api.DeadlineFleetLines(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, fleetSettlementDeadlineBound, n)
+	n, err = api.DeadlineFleetLines(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, n)
+}
+
+// The log decides whenever it holds a report at or above the posted revision, even when the
+// state row carries a newer, uncaptured terminal tail (an older pod's write) that displaced
+// the value: the state row is consulted only when the log has nothing (M9).
+func TestSettlementLogBeatsAnUncapturedStateTail(t *testing.T) {
+	api, ctx, line := settlementFixture(t)
+	db := api.RDB.DB(ctx)
+	settlementReport(t, db, line, 5, "APPLIED", "REPORT")
+	require.NoError(t, db.Create(&DeviceConfigurationRevision{DeviceId: uint(line.TargetId.Int64), Revision: 6, Document: `{"site":99}`, Digest: "later"}).Error)
+	captured := time.Now().Add(-time.Minute)
+	require.NoError(t, db.Create(&DeviceConfigurationState{DeviceId: uint(line.TargetId.Int64),
+		ReportedRevision: sql.NullInt64{Int64: 6, Valid: true}, ReportedStatus: sql.NullString{String: "APPLIED", Valid: true}, ReportedAt: sql.NullTime{Time: time.Now(), Valid: true},
+		CapturedRevision: sql.NullInt64{Int64: 5, Valid: true}, CapturedStatus: sql.NullString{String: "APPLIED", Valid: true}, CapturedReportedAt: sql.NullTime{Time: captured, Valid: true}}).Error)
+	n, err := api.ReconcileFleetLines(ctx, false)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, n)
+	require.NoError(t, db.First(line, line.ID).Error)
+	require.Equal(t, "CONFIRMED", line.Settlement.String)
+	require.Equal(t, "REPORT_LOG", line.EvidenceBasis.String)
+	require.EqualValues(t, 5, line.EvidenceRevision.Int64)
+}
+
+// The deciding report is the LOWEST revision at or above the posted one, not the latest: a
+// later revision that displaced the value does not turn an applied line SUPERSEDED (M22).
+func TestSettlementLowestRevisionDecidesNotTheLatest(t *testing.T) {
+	api, ctx, line := settlementFixture(t)
+	db := api.RDB.DB(ctx)
+	require.NoError(t, db.Create(&DeviceConfigurationRevision{DeviceId: uint(line.TargetId.Int64), Revision: 6, Document: `{"site":99}`, Digest: "later"}).Error)
+	settlementReport(t, db, line, 5, "APPLIED", "REPORT")
+	settlementReport(t, db, line, 6, "APPLIED", "REPORT")
+	_, err := api.ReconcileFleetLines(ctx, false)
+	require.NoError(t, err)
+	require.NoError(t, db.First(line, line.ID).Error)
+	require.Equal(t, "CONFIRMED", line.Settlement.String)
+	require.EqualValues(t, 5, line.EvidenceRevision.Int64)
 }

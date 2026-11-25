@@ -35,6 +35,22 @@ func init() {
 
 const fleetSettlementBatch = 1000
 
+// fleetSettlementFastDispatch is every dispatch state that can hold a POSTED line. A PAUSED
+// operation's posted lines keep settling: scope is the line, never the header's dispatch.
+const fleetSettlementFastDispatch = "('RUNNING','PAUSED','DISPATCHED','ABORTED')"
+
+// Tenants visited per tick. A fast tick must reach every active tenant well inside the
+// 30 s report window (5 s cadence: up to five ticks), or a tenant's reports fall out of
+// it and wait for the five-minute sweep; 100 per tick covers 500 active tenants.
+// fleetSettlementDeadlineBound caps the lines one deadline transaction reads per tenant
+// (≤ 10,000). A variable only so a test can exercise the bound without 10k rows.
+var fleetSettlementDeadlineBound = 10000
+
+const (
+	fleetSettlementFastTenants     = 100
+	fleetSettlementDeadlineTenants = 10
+)
+
 // Shared by SQL reads and the conditional writers. No joined line/report table
 // has this column, so the predicate is unambiguous in the batched queries too.
 const fleetSettlementProtocol = "driver_protocol >= 1 AND driver_protocol <= ?"
@@ -87,7 +103,7 @@ func fleetSettlementRead(db *gorm.DB, tenant string, after uint, limit int, fast
 		// targets. max(revision) admits candidates only; it NEVER decides them.
 		recent = "recent AS (SELECT device_id, max(revision) revision FROM " + r + " WHERE tenant_id=? AND created_at>=? GROUP BY device_id), "
 		recentJoin = " JOIN recent ON recent.device_id=l.target_id AND recent.revision>=l.posted_revision"
-		where += " AND o.dispatch IN ('RUNNING','DISPATCHED','ABORTED') AND o.evidence = 'OPEN'"
+		where += " AND o.dispatch IN " + fleetSettlementFastDispatch + " AND o.evidence = 'OPEN'"
 		cutoff := fleetSettlementCutoff(db, 30*time.Second)
 		args = append([]any{tenant, cutoff}, args...)
 	}
@@ -165,7 +181,7 @@ func (row *fleetSettlementRow) verdict(documents map[fleetSettlementDocumentKey]
 		if err != nil {
 			return ledger.Verdict{}, err
 		}
-		raw := ledger.Raw(b)
+		raw := json.RawMessage(b)
 		p.Value = &raw
 	}
 	var intent FleetConfigSetIntent
@@ -305,6 +321,8 @@ func (api *Api) settleFleetLines(ctx context.Context, fast, due bool) (int64, er
 	db := api.RDB.DB(ctx)
 	var total int64
 	var after uint
+	undecided := 0
+	var lastUndecided error
 	touched := map[int64]bool{}
 	documents := make(map[fleetSettlementDocumentKey]map[string]ledger.Raw)
 	pass := func(tx *gorm.DB) error {
@@ -313,22 +331,45 @@ func (api *Api) settleFleetLines(ctx context.Context, fast, due bool) (int64, er
 			if err != nil {
 				return err
 			}
-			for i := range rows {
-				row := &rows[i]
-				after = row.ID
-				touched[row.OperationId] = true
-				verdict, err := row.verdict(documents)
-				if err != nil {
-					return err
+			decide := func(w *gorm.DB) error {
+				for i := range rows {
+					row := &rows[i]
+					after = row.ID
+					touched[row.OperationId] = true
+					verdict, err := row.verdict(documents)
+					if err != nil {
+						// One undecodable line must not stall the tenant, nor roll back a
+						// deadline transaction for every other due line. It stays awaiting
+						// evidence and the pass reports it.
+						undecided++
+						lastUndecided = err
+						continue
+					}
+					n, err := applyFleetSettlement(w, row, verdict, due)
+					if err != nil {
+						return err
+					}
+					total += n
 				}
-				n, err := applyFleetSettlement(tx, row, verdict, due)
-				if err != nil {
-					return err
+				return nil
+			}
+			// One commit per chunk, not one per line: a per-line autocommit costs a
+			// round trip and a WAL flush each and measured well under the 500
+			// decisions/s target. Each UPDATE is still its own CAS; the chunk's row
+			// locks are taken in id order, as the deadline transaction takes them.
+			if due {
+				err = decide(tx)
+			} else {
+				before := total
+				if err = tx.Transaction(decide); err != nil {
+					total = before
 				}
-				total += n
+			}
+			if err != nil {
+				return err
 			}
 			scanned += len(rows)
-			if len(rows) < fleetSettlementBatch || (due && scanned >= 10000) || (fast && scanned >= 3000) {
+			if len(rows) < fleetSettlementBatch || (due && scanned >= fleetSettlementDeadlineBound) || (fast && scanned >= 3000) {
 				return nil
 			}
 		}
@@ -353,7 +394,13 @@ func (api *Api) settleFleetLines(ctx context.Context, fast, due bool) (int64, er
 		touched[int64(op.ID)] = true
 	}
 	// Autocommit: never close a header while retaining line locks.
-	return total, closeFleetEvidence(db, touched)
+	if err := closeFleetEvidence(db, touched); err != nil {
+		return total, err
+	}
+	if undecided > 0 {
+		return total, fmt.Errorf("%d bulk change lines could not be decided (last: %w)", undecided, lastUndecided)
+	}
+	return total, nil
 }
 
 // FleetReportCaptureComplete answers only for this operation's targets and its
@@ -378,7 +425,8 @@ func (api *Api) FleetReportCaptureComplete(ctx context.Context, op *FleetOperati
 }
 
 // Settlement passes discover ids under system context, then leave that context
-// before reading evidence. Ten tenants per tick, cursor plus wrap for fairness.
+// before reading evidence. A bounded number of tenants per tick, cursor plus wrap
+// for fairness.
 func (api *Api) settlementTenants(ctx context.Context, cursor *fleetSettlementCursor, fast, due bool) ([]string, error) {
 	cursor.Lock()
 	after := cursor.after
@@ -388,7 +436,7 @@ func (api *Api) settlementTenants(ctx context.Context, cursor *fleetSettlementCu
 		db := api.RDB.DB(core.WithSystemContext(ctx))
 		q := db.Model(&FleetOperation{}).Where(fleetSettlementProtocol, ledger.SupportedDriverProtocol)
 		if fast {
-			q = q.Where("dispatch IN ('RUNNING','DISPATCHED','ABORTED') AND evidence='OPEN'")
+			q = q.Where("dispatch IN " + fleetSettlementFastDispatch + " AND evidence='OPEN'")
 		}
 		if due {
 			l, o := fleetSettlementTable(db, "FleetOperationLine"), fleetSettlementTable(db, "FleetOperation")
@@ -397,12 +445,16 @@ func (api *Api) settlementTenants(ctx context.Context, cursor *fleetSettlementCu
 		err := q.Where(predicate, after).Distinct("tenant_id").Order("tenant_id").Limit(limit).Pluck("tenant_id", &tenants).Error
 		return tenants, err
 	}
-	tenants, err := discover("tenant_id > ?", 10)
+	limit := fleetSettlementDeadlineTenants
+	if fast {
+		limit = fleetSettlementFastTenants
+	}
+	tenants, err := discover("tenant_id > ?", limit)
 	if err != nil {
 		return nil, err
 	}
-	if after != "" && len(tenants) < 10 {
-		more, err := discover("tenant_id <= ?", 10-len(tenants))
+	if after != "" && len(tenants) < limit {
+		more, err := discover("tenant_id <= ?", limit-len(tenants))
 		if err != nil {
 			return nil, err
 		}
@@ -485,16 +537,24 @@ func (api *Api) FleetReconcilerLag(ctx context.Context) (time.Duration, error) {
 func (api *Api) SweepFleetSettlement(ctx context.Context) error {
 	pass := func() error {
 		var tenants []string
+		// System context lists tenant IDs only; each tenant's sweep runs under core.WithTenant.
 		err := api.RDB.DB(core.WithSystemContext(ctx)).Model(&FleetOperation{}).Where(fleetSettlementProtocol, ledger.SupportedDriverProtocol).Distinct("tenant_id").Order("tenant_id").Pluck("tenant_id", &tenants).Error
 		if err != nil {
 			return err
 		}
+		// One tenant's failure must not starve the tenants after it.
+		failed := 0
+		var last error
 		for _, tenant := range tenants {
-			if _, err := api.ReconcileFleetLines(core.WithTenant(ctx, tenant), false); err != nil {
+			if err := ctx.Err(); err != nil {
 				return err
 			}
+			if _, err := api.ReconcileFleetLines(core.WithTenant(ctx, tenant), false); err != nil {
+				failed++
+				last = err
+			}
 		}
-		return nil
+		return core.PassResult(len(tenants), failed, last)
 	}
 	if api.RDB.Database.Dialector.Name() != "postgres" {
 		return pass()
