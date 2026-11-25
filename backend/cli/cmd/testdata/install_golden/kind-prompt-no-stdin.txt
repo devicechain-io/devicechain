@@ -1,0 +1,11 @@
+args: install local --skip-preflight
+stdin: ""
+exit: 1
+-- stdout (59 bytes) --
+No kind cluster "devicechain" found. Create it now? [y/N]: 
+-- stderr (217 bytes) --
+Error: no kind cluster "devicechain", and it was not created (the prompt was declined, or there is no terminal to answer it); re-run with --yes to create it, or pass --kube-context to install into an existing cluster
+
+-- engine (11 bytes) --
+not called
+

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -44,7 +45,7 @@ func driveFixture(t *testing.T, n int, safety FleetSafetyRequest) *driveEnv {
 	t.Helper()
 	armed(t)
 	api, ctx := configTestApi(t)
-	require.NoError(t, api.RDB.DB(ctx).AutoMigrate(&FleetOperation{}, &FleetOperationRuntime{}, &FleetOperationContract{},
+	require.NoError(t, api.RDB.DB(core.WithSystemContext(ctx)).AutoMigrate(&FleetOperation{}, &FleetOperationRuntime{}, &FleetOperationContract{},
 		&FleetOperationLine{}, &FleetOperationEvent{}))
 	d0 := seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "k", ValueType: "STRING"}})
 	devs := []*Device{d0}

@@ -1,0 +1,11 @@
+args: install local --max-connections 50
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (55 bytes) --
+Error: --max-connections must be at least 100 (got 50)
+
+-- engine (11 bytes) --
+not called
+

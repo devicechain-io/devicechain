@@ -1,0 +1,11 @@
+args: install local --no-tls
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (202 bytes) --
+Error: --no-tls on dcctl install only takes effect with --compact (it drops cert-manager and, with it, database backups). Without --compact, choose plain HTTP per instance with dcctl bootstrap --no-tls
+
+-- engine (11 bytes) --
+not called
+

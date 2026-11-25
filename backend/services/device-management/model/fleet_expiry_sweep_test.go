@@ -23,6 +23,7 @@ func seedExpiryOperation(t *testing.T, api *Api, ctx context.Context, token, dis
 		MaxPostsPerSecond: 10, EffPostsPerSecond: 10, SettleDeadlineS: 60, Initiator: "u",
 		CreatedAt: now.Add(-time.Hour), ExpiresAt: sql.NullTime{Time: now.Add(-time.Minute), Valid: true}}
 	require.NoError(t, api.RDB.DB(ctx).Create(op).Error)
+	require.NoError(t, api.RDB.DB(ctx).Create(&FleetOperationRuntime{OperationId: int64(op.ID)}).Error)
 	require.NoError(t, api.RDB.DB(ctx).Create(&FleetOperationLine{OperationId: int64(op.ID), Ordinal: 1, Posting: FleetPostingPlanned}).Error)
 	return op
 }
