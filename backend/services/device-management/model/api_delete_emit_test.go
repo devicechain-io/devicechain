@@ -39,7 +39,7 @@ func newDeleteEmitTestApi(t *testing.T) *Api {
 	// deleteEdgeEntity resolves the token, then cascades relationship edges,
 	// attributes, alarms, and (for a device) credentials before the row — so every
 	// table it touches must exist.
-	if err := db.AutoMigrate(&EntityGroupFacetRef{}, &Device{}, &DeviceType{}, &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{}, &IntegrationUnregisteredDevice{}, &DeviceConfigurationRevision{}, &DeviceConfigurationReport{}, &DeviceConfigurationState{}, &PendingSessionKick{}, &PendingRevocationKick{}, &PendingRevocationExpansion{}, &PendingRevocationExpansionSerial{},
+	if err := db.AutoMigrate(&EntityGroupFacetRef{}, &Device{}, &DeviceType{}, &DeviceCredential{}, &DeviceReplacement{}, &DeviceAlias{}, &IntegrationUnregisteredDevice{}, &FleetOperationLine{}, &FleetOperationEvent{}, &DeviceConfigurationRevision{}, &DeviceConfigurationReport{}, &DeviceConfigurationState{}, &PendingSessionKick{}, &PendingRevocationKick{}, &PendingRevocationExpansion{}, &PendingRevocationExpansionSerial{},
 		&EntityRelationship{}, &PendingOwnershipFact{}, &PendingEntityDeletion{}, &PendingAlarmEvent{}, &EntityAttribute{}, &AttributeGeneration{}, &Alarm{}, &EntityGroupMembership{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

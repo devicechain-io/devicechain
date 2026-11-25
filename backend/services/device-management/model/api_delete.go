@@ -525,7 +525,14 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 			}
 			// The configuration revisions and reported state are records ABOUT this
 			// device; they go with it.
-			return nil, deleteDeviceConfigurationOnTx(tx, id)
+			if err := deleteDeviceConfigurationOnTx(tx, id); err != nil {
+				return nil, err
+			}
+			// The line locks follow the device's owned-row cleanup, under K_dev.
+			if !api.skipFleetErasureForOldPodTest {
+				return nil, redactFleetDeviceOnTx(tx, id)
+			}
+			return nil, nil
 		})
 	if err == nil && deleted {
 		api.evictCredentialOwners(ctx, credentials)

@@ -18,16 +18,18 @@ import (
 // The control fence. Every control transition (start, pause, resume, abort, expire) runs the same
 // protocol, and it is the ONLY way the dispatch state of an operation changes:
 //
+//	(a) autocommit a database-time control request marker, before taking any lock;
 //	(b) BEGIN; take the operation's fence (K_op) EXCLUSIVE, waiting at most 15 s;
 //	(c) read the operation row FOR UPDATE and check the transition is legal;
 //	(d) apply it, bump the execution epoch, append the event;
-//	(e) COMMIT.
+//	(e) COMMIT, then autocommit a conditional clear of this request's marker.
 //
 // Every posting transaction takes the same fence SHARED and re-reads dispatch and epoch after it holds
 // it, so once a control call returns, no line is applied under the old state. A wait that times out
-// answers FENCE_PENDING and has changed nothing. The posting path (a later change) never touches the
-// operation row; the lock order is: fence, then operation row, then (start and resume only) the
-// admission locks.
+// answers FENCE_PENDING without changing dispatch or lines, leaving the marker so the driver backs
+// off for up to 30 s and the caller's retry can win. Other errors clear this request's marker too.
+// The posting path never touches the operation row; the lock order is: fence, then operation row,
+// then (start and resume only) the admission locks.
 
 // Control refusals. They ride extensions.code.
 const (
@@ -146,7 +148,20 @@ func (api *Api) fleetControl(ctx context.Context, token, transition string, fn f
 	if head == nil {
 		return nil, gorm.ErrRecordNotFound
 	}
-	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	// The runtime row is outside the fence's lock order. Publish in autocommit and
+	// capture exactly the value written, so completion cannot clear a newer caller.
+	db := api.RDB.DB(ctx).Session(&gorm.Session{SkipDefaultTransaction: true})
+	var request FleetOperationRuntime
+	written := db.Model(&request).Where("operation_id = ?", head.ID).
+		Clauses(clause.Returning{Columns: []clause.Column{{Name: "control_requested_at"}}}).
+		Update("control_requested_at", fleetTimestamp(db))
+	if written.Error != nil {
+		return nil, written.Error
+	}
+	if written.RowsAffected != 1 || !request.ControlRequestedAt.Valid {
+		return nil, gorm.ErrRecordNotFound
+	}
+	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := fleetSetLockTimeout(tx, fleetFenceWait); err != nil {
 			return err
 		}
@@ -180,11 +195,24 @@ func (api *Api) fleetControl(ctx context.Context, token, transition string, fn f
 		}
 		return nil
 	})
-	if err != nil {
-		if lockTimedOut(err) {
-			// Nothing has changed: the caller may retry, and may pause first to stop further posting.
-			return nil, fleetErr(FleetCodeFencePending, "the operation is still draining in-flight work; retry")
+	if lockTimedOut(err) {
+		err = fleetErr(FleetCodeFencePending, "the operation is still draining in-flight work; retry")
+	}
+	var refusal *FleetOperationError
+	fencePending := errors.As(err, &refusal) && refusal.Code == FleetCodeFencePending
+	if !fencePending {
+		// A canceled caller is a non-retry outcome too. Cleanup keeps the tenant
+		// context, outlives that request, and has its own bounded database wait.
+		clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		clearErr := api.RDB.DB(clearCtx).Session(&gorm.Session{SkipDefaultTransaction: true}).Model(&FleetOperationRuntime{}).
+			Where("operation_id = ? AND control_requested_at = ?", head.ID, request.ControlRequestedAt).
+			Update("control_requested_at", nil).Error
+		if clearErr != nil {
+			err = errors.Join(err, clearErr)
 		}
+	}
+	if err != nil {
 		return nil, err
 	}
 	return api.fleetOperationByToken(ctx, token)

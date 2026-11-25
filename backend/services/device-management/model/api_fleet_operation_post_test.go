@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
@@ -36,7 +37,7 @@ func postFixture(t *testing.T, value string, unset bool) *postEnv {
 	t.Helper()
 	armed(t)
 	api, ctx := configTestApi(t)
-	require.NoError(t, api.RDB.DB(ctx).AutoMigrate(&FleetOperation{}, &FleetOperationRuntime{}, &FleetOperationContract{},
+	require.NoError(t, api.RDB.DB(core.WithSystemContext(ctx)).AutoMigrate(&FleetOperation{}, &FleetOperationRuntime{}, &FleetOperationContract{},
 		&FleetOperationLine{}, &FleetOperationEvent{}))
 	dev := seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "k", ValueType: "STRING"}})
 	req := &FleetOperationCreateRequest{Token: "p1", Name: "n", Kind: FleetKindConfigSet, DeviceTokens: []string{dev.Token},
