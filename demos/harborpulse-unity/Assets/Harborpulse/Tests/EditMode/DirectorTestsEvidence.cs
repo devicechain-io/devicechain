@@ -108,8 +108,11 @@ namespace DeviceChain.Harborpulse.Tests
         {
             var story = DirectorKit.Story(); var page = story.Page(pageId); var clean = DirectorTimeline.Clean();
             foreach (var stream in new[] { "alarms", "notifications", "credentials", "pump", "measurements" }) clean.AddCoverage(new CoverageInterval("run", stream, 6, 30, false));
-            var trigger = page.Trigger.Evaluate(clean, page.Context("run", (page.ToSim - 6) * 60)).Records.Last();
-            var context = page.Context("run", (page.ToSim - 6) * 60, trigger: trigger); var caption = page.Captions.Single(c => c.Id == captionId);
+            // The rollout page's window now runs to the end of a real rollout (about two wall minutes); its "keeps working" claim
+            // asks for a reading within a minute, so it is judged where the scripted rollout ends, not at the window's end.
+            var at = pageId == "8" ? 27 : page.ToSim;
+            var trigger = page.Trigger.Evaluate(clean, page.Context("run", (at - 6) * 60)).Records.Last();
+            var context = page.Context("run", (at - 6) * 60, trigger: trigger); var caption = page.Captions.Single(c => c.Id == captionId);
             Assert.That(caption.Needs.Evaluate(clean, context).Holds, Is.True, "green causal baseline");
             var wrong = new ObservationStore();
             foreach (var o in clean.Records) {

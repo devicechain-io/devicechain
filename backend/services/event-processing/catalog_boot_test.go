@@ -53,7 +53,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	prevSnap, prevRules, prevStats, prevRoster, prevActive, prevAttr, prevReg :=
 		SnapshotStore, DetectRuleStore, RuleStatStore, DeviceRosterStore, ProfileActiveStore, DeviceAttributeStore, RuleRegistry
 	prevDM, prevFS, prevCFS, prevFM := DeviceManagementFacts, FenceSets, CurrentFenceSets, FenceManifests
-	prevDetM, prevReM, prevEU, prevDL, prevGate := DetectMetrics, ReactMetrics, EgressUnresolved, DeadLetters, DetectTermGate
+	prevDetM, prevReM, prevEU, prevCU, prevDL, prevGate := DetectMetrics, ReactMetrics, EgressUnresolved, CommandEgressUnresolved, DeadLetters, DetectTermGate
 	t.Cleanup(func() {
 		Microservice, Configuration, NatsManager, RdbManager, Svc = prevMs, prevCfg, prevNats, prevRdb, prevSvc
 		ResolvedEventsProcessor, ReactDispatcher, TenantPurgeResponder, ResolvedEventsReader = prevDetect, prevReact, prevPurge, prevReader
@@ -61,7 +61,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		SnapshotStore, DetectRuleStore, RuleStatStore, DeviceRosterStore, ProfileActiveStore, DeviceAttributeStore, RuleRegistry =
 			prevSnap, prevRules, prevStats, prevRoster, prevActive, prevAttr, prevReg
 		DeviceManagementFacts, FenceSets, CurrentFenceSets, FenceManifests = prevDM, prevFS, prevCFS, prevFM
-		DetectMetrics, ReactMetrics, EgressUnresolved, DeadLetters, DetectTermGate = prevDetM, prevReM, prevEU, prevDL, prevGate
+		DetectMetrics, ReactMetrics, EgressUnresolved, CommandEgressUnresolved, DeadLetters, DetectTermGate = prevDetM, prevReM, prevEU, prevCU, prevDL, prevGate
 	})
 
 	Microservice = &core.Microservice{

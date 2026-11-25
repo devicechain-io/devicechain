@@ -499,6 +499,7 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	// Wrap api around rdb manager, then wrap a caching decorator over it for the hot
 	// inbound-event resolution path.
 	api := model.NewApi(rdbm)
+	api.FleetNatsConfig = &nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats
 	api.AgentMetrics = AgentMetrics
 	api.AgentEffectsExhausted = AgentEffectsExhausted
 	api.EnableCeilingMetrics(nmgr.Microservice)
@@ -1188,7 +1189,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		Rdb: &service.RdbSpec{
 			AppendOnly: []any{&model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{},
 				&model.DeviceProfileVersion{}, &model.DeviceProfileActivation{}, &model.EntityGroupVersion{}, &model.AssetTypeVersion{},
-				&model.DeviceConfigurationRevision{}, &model.DeviceConfigurationReport{}},
+				&model.DeviceConfigurationRevision{}, &model.DeviceConfigurationReport{},
+				&model.FleetOperation{}, &model.FleetOperationRuntime{}, &model.FleetOperationContract{}, &model.FleetOperationLine{}, &model.FleetOperationEvent{}},
 			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Migrations: schema.Migrations,
 			Config:     Configuration.RdbConfiguration,
@@ -1258,6 +1260,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initAttributeOrphanSweep(); err != nil {
 				return err
 			}
+			if err = initFleetExpirySweep(); err != nil {
+				return err
+			}
+			if err = initFleetSettlement(); err != nil {
+				return err
+			}
 			if err = initDecodeAccounting(); err != nil {
 				return err
 			}
@@ -1289,7 +1297,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			return nil
 		},
 		GraphQL: &service.GraphQLSpec{
-			Schema:   graphql.SchemaContent,
+			Schema:   graphql.ServedSchema(),
 			Resolver: func() interface{} { return &graphql.SchemaResolver{} },
 			// Evaluated after the broker manager is built, so the live alarm subscription
 			// resolver (SubscribeLive, ADR-037) gets one that is already connected, before
@@ -1400,6 +1408,19 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	}
 	if err = AttributeOrphanSweep.Start(ctx); err != nil {
 		return err
+	}
+	if err = FleetExpirySweep.Start(ctx); err != nil {
+		return err
+	}
+	if FleetSettlement != nil {
+		if err = FleetSettlement.Start(ctx); err != nil {
+			return err
+		}
+	}
+	if FleetSettlementDeadline != nil {
+		if err = FleetSettlementDeadline.Start(ctx); err != nil {
+			return err
+		}
 	}
 
 	// Start flushing the payload decoders' health and failure samples.
@@ -1528,6 +1549,19 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := AttributeOrphanSweep.Stop(ctx); err != nil {
 		return err
 	}
+	if err := FleetExpirySweep.Stop(ctx); err != nil {
+		return err
+	}
+	if FleetSettlement != nil {
+		if err := FleetSettlement.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	if FleetSettlementDeadline != nil {
+		if err := FleetSettlementDeadline.Stop(ctx); err != nil {
+			return err
+		}
+	}
 
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
@@ -1605,6 +1639,16 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 	if err := AttributeOrphanSweep.Terminate(ctx); err != nil {
 		return err
+	}
+	if err := FleetExpirySweep.Terminate(ctx); err != nil {
+		return err
+	}
+	for _, task := range []*core.PeriodicTask{FleetSettlement, FleetSettlementDeadline} {
+		if task != nil {
+			if err := task.Terminate(ctx); err != nil {
+				return err
+			}
+		}
 	}
 	if DecodeAccounting != nil {
 		if err := DecodeAccounting.Terminate(ctx); err != nil {

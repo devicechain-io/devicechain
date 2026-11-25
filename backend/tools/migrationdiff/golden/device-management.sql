@@ -44,6 +44,10 @@ ALTER SEQUENCE "device-management".entity_groups_id_seq OWNED BY "device-managem
 ALTER SEQUENCE "device-management".entity_relationship_types_id_seq OWNED BY "device-management".entity_relationship_types.id;
 ALTER SEQUENCE "device-management".entity_relationships_id_seq OWNED BY "device-management".entity_relationships.id;
 ALTER SEQUENCE "device-management".facet_keys_id_seq OWNED BY "device-management".facet_keys.id;
+ALTER SEQUENCE "device-management".fleet_operation_contracts_id_seq OWNED BY "device-management".fleet_operation_contracts.id;
+ALTER SEQUENCE "device-management".fleet_operation_events_id_seq OWNED BY "device-management".fleet_operation_events.id;
+ALTER SEQUENCE "device-management".fleet_operation_lines_id_seq OWNED BY "device-management".fleet_operation_lines.id;
+ALTER SEQUENCE "device-management".fleet_operations_id_seq OWNED BY "device-management".fleet_operations.id;
 ALTER SEQUENCE "device-management".geo_fence_geometry_blobs_id_seq OWNED BY "device-management".geo_fence_geometry_blobs.id;
 ALTER SEQUENCE "device-management".geo_fence_set_versions_id_seq OWNED BY "device-management".geo_fence_set_versions.id;
 ALTER SEQUENCE "device-management".geo_fences_id_seq OWNED BY "device-management".geo_fences.id;
@@ -59,6 +63,7 @@ ALTER SEQUENCE "device-management".profile_decoder_healths_id_seq OWNED BY "devi
 ALTER SEQUENCE "device-management".profile_decoder_samples_id_seq OWNED BY "device-management".profile_decoder_samples.id;
 ALTER SEQUENCE "device-management".provisioning_profiles_id_seq OWNED BY "device-management".provisioning_profiles.id;
 ALTER SEQUENCE "device-management".semantic_contexts_id_seq OWNED BY "device-management".semantic_contexts.id;
+ALTER SEQUENCE "device-management".static_membership_generations_id_seq OWNED BY "device-management".static_membership_generations.id;
 ALTER TABLE "device-management".entity_attributes ENABLE ALWAYS TRIGGER dc_enforce_attr_protocol;
 ALTER TABLE ONLY "device-management".agent_actuation_fences
  ADD CONSTRAINT agent_actuation_fences_pkey PRIMARY KEY (tenant_id);
@@ -251,6 +256,20 @@ ALTER TABLE ONLY "device-management".entity_relationships ALTER COLUMN id SET DE
 ALTER TABLE ONLY "device-management".facet_keys
  ADD CONSTRAINT facet_keys_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".facet_keys ALTER COLUMN id SET DEFAULT nextval('"device-management".facet_keys_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".fleet_operation_contracts
+ ADD CONSTRAINT fleet_operation_contracts_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".fleet_operation_contracts ALTER COLUMN id SET DEFAULT nextval('"device-management".fleet_operation_contracts_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".fleet_operation_events
+ ADD CONSTRAINT fleet_operation_events_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".fleet_operation_events ALTER COLUMN id SET DEFAULT nextval('"device-management".fleet_operation_events_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".fleet_operation_lines
+ ADD CONSTRAINT fleet_operation_lines_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".fleet_operation_lines ALTER COLUMN id SET DEFAULT nextval('"device-management".fleet_operation_lines_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".fleet_operation_runtime
+ ADD CONSTRAINT fleet_operation_runtime_pkey PRIMARY KEY (operation_id);
+ALTER TABLE ONLY "device-management".fleet_operations
+ ADD CONSTRAINT fleet_operations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".fleet_operations ALTER COLUMN id SET DEFAULT nextval('"device-management".fleet_operations_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".geo_fence_geometry_blobs
  ADD CONSTRAINT geo_fence_geometry_blobs_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".geo_fence_geometry_blobs ALTER COLUMN id SET DEFAULT nextval('"device-management".geo_fence_geometry_blobs_id_seq'::regclass);
@@ -324,6 +343,9 @@ ALTER TABLE ONLY "device-management".purged_tenants
 ALTER TABLE ONLY "device-management".semantic_contexts
  ADD CONSTRAINT semantic_contexts_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".semantic_contexts ALTER COLUMN id SET DEFAULT nextval('"device-management".semantic_contexts_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".static_membership_generations
+ ADD CONSTRAINT static_membership_generations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".static_membership_generations ALTER COLUMN id SET DEFAULT nextval('"device-management".static_membership_generations_id_seq'::regclass);
 BEGIN
  IF TG_TABLE_NAME = 'device_profile_versions' THEN
  IF TG_OP = 'INSERT' THEN
@@ -351,6 +373,11 @@ CREATE FUNCTION "device-management".dc_entity_attr_lock(p_type text, p_id bigint
  LANGUAGE sql
  AS $$
  SELECT pg_advisory_xact_lock(hashtextextended('dc.attr|' || p_type || '|' || p_id::text, 0))
+$$;
+CREATE FUNCTION "device-management".dc_entity_attr_try_lock(p_type text, p_id bigint) RETURNS boolean
+ LANGUAGE sql
+ AS $$
+ SELECT pg_try_advisory_xact_lock(hashtextextended('dc.attr|' || p_type || '|' || p_id::text, 0))
 $$;
 CREATE FUNCTION "device-management".dc_require_attr_protocol() RETURNS trigger
  LANGUAGE plpgsql
@@ -525,6 +552,17 @@ CREATE INDEX idx_entity_rel_target ON "device-management".entity_relationships U
 CREATE INDEX idx_facet_keys_deleted_at ON "device-management".facet_keys USING btree (deleted_at);
 CREATE INDEX idx_facet_keys_member_type ON "device-management".facet_keys USING btree (member_type);
 CREATE INDEX idx_facet_keys_tenant_id ON "device-management".facet_keys USING btree (tenant_id);
+CREATE INDEX idx_fleet_operation_events_operation ON "device-management".fleet_operation_events USING btree (operation_id, id);
+CREATE INDEX idx_fleet_operation_lines_awaiting_evidence ON "device-management".fleet_operation_lines USING btree (target_id) WHERE (((posting)::text = 'POSTED'::text) AND (evidence_revision IS NULL) AND (redacted_at IS NULL));
+CREATE INDEX idx_fleet_operation_lines_deadline ON "device-management".fleet_operation_lines USING btree (tenant_id, settle_by) WHERE (((posting)::text = 'POSTED'::text) AND (settlement IS NULL));
+CREATE INDEX idx_fleet_operation_lines_planned ON "device-management".fleet_operation_lines USING btree (operation_id, next_attempt_at, ordinal) WHERE ((posting)::text = 'PLANNED'::text);
+CREATE INDEX idx_fleet_operation_lines_posted ON "device-management".fleet_operation_lines USING btree (operation_id, posted_at) WHERE ((posting)::text = 'POSTED'::text);
+CREATE INDEX idx_fleet_operation_lines_settlement ON "device-management".fleet_operation_lines USING btree (operation_id, settlement, ordinal);
+CREATE INDEX idx_fleet_operation_lines_tenant_target ON "device-management".fleet_operation_lines USING btree (tenant_id, target_id);
+CREATE INDEX idx_fleet_operations_closed ON "device-management".fleet_operations USING btree (tenant_id, closed_at) WHERE ((evidence)::text = 'CLOSED'::text);
+CREATE INDEX idx_fleet_operations_ready_expiry ON "device-management".fleet_operations USING btree (tenant_id, expires_at) WHERE ((dispatch)::text = 'READY'::text);
+CREATE INDEX idx_fleet_operations_tenant_created ON "device-management".fleet_operations USING btree (tenant_id, created_at);
+CREATE INDEX idx_fleet_operations_tenant_dispatch ON "device-management".fleet_operations USING btree (tenant_id, dispatch);
 CREATE INDEX idx_pending_alarm_events_tenant_id ON "device-management".pending_alarm_events USING btree (tenant_id, id) WHERE (quarantined_at IS NULL);
 CREATE INDEX idx_pending_entity_deletions_tenant_id ON "device-management".pending_entity_deletions USING btree (tenant_id, id);
 CREATE INDEX idx_profile_decoder_samples_profile_created ON "device-management".profile_decoder_samples USING btree (tenant_id, device_profile_id, created_at DESC);
@@ -822,6 +860,30 @@ CREATE SEQUENCE "device-management".facet_keys_id_seq
  NO MINVALUE
  NO MAXVALUE
  CACHE 1;
+CREATE SEQUENCE "device-management".fleet_operation_contracts_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".fleet_operation_events_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".fleet_operation_lines_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".fleet_operations_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
 CREATE SEQUENCE "device-management".geo_fence_geometry_blobs_id_seq
  START WITH 1
  INCREMENT BY 1
@@ -907,6 +969,12 @@ CREATE SEQUENCE "device-management".provisioning_profiles_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".semantic_contexts_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".static_membership_generations_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -1304,7 +1372,8 @@ CREATE TABLE "device-management".detection_rules (
  enabled boolean DEFAULT true NOT NULL,
  authoring_graph jsonb,
  entity_group_token text,
- entity_group_version integer
+ entity_group_version integer,
+ authored_via jsonb
 );
 CREATE TABLE "device-management".device_aliases (
  id bigint NOT NULL,
@@ -1422,7 +1491,9 @@ CREATE TABLE "device-management".device_profile_versions (
  description character varying(1024),
  snapshot jsonb NOT NULL,
  published_by character varying(256),
- automation_review_token character varying(64)
+ automation_review_token character varying(64),
+ published_by_id text,
+ authored_via jsonb
 );
 CREATE TABLE "device-management".device_profiles (
  id bigint NOT NULL,
@@ -1567,7 +1638,8 @@ CREATE TABLE "device-management".devices (
  installed_elev numeric(12,4),
  installed_accuracy numeric(12,4),
  installed_source text,
- installed_updated_at timestamp with time zone
+ installed_updated_at timestamp with time zone,
+ state_generation bigint
 );
 CREATE TABLE "device-management".entity_attribute_generations (
  id bigint NOT NULL,
@@ -1680,7 +1752,8 @@ CREATE TABLE "device-management".entity_relationships (
  target_type character varying(32) NOT NULL,
  target_id bigint NOT NULL,
  relationship_type_id bigint NOT NULL,
- target_token character varying(128)
+ target_token character varying(128),
+ membership_generation bigint
 );
 CREATE TABLE "device-management".facet_keys (
  id bigint NOT NULL,
@@ -1694,6 +1767,138 @@ CREATE TABLE "device-management".facet_keys (
  source character varying(16) DEFAULT 'attribute'::character varying NOT NULL,
  "values" jsonb,
  label text
+);
+CREATE TABLE "device-management".fleet_operation_contracts (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ operation_id bigint NOT NULL,
+ version integer NOT NULL,
+ digest character varying(71) NOT NULL,
+ body text NOT NULL,
+ approval_kind character varying(16) NOT NULL,
+ policy_version integer NOT NULL,
+ proposed_by character varying(320) NOT NULL,
+ approved_by character varying(320),
+ authorities character varying(256),
+ actor_session character varying(128),
+ step_up_at timestamp with time zone,
+ approved_at timestamp with time zone,
+ expires_at timestamp with time zone,
+ activated_at timestamp with time zone
+);
+CREATE TABLE "device-management".fleet_operation_events (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ operation_id bigint NOT NULL,
+ line_id bigint,
+ epoch bigint,
+ at timestamp with time zone NOT NULL,
+ kind character varying(32) NOT NULL,
+ reason character varying(32) DEFAULT ''::character varying NOT NULL,
+ actor character varying(320),
+ from_grantee character varying(320),
+ to_grantee character varying(320),
+ contract_version integer,
+ revision bigint,
+ status character varying(16),
+ ref_event_id bigint,
+ note character varying(1000),
+ note_redacted_at timestamp with time zone
+);
+CREATE TABLE "device-management".fleet_operation_lines (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ operation_id bigint NOT NULL,
+ ordinal integer NOT NULL,
+ target_key character varying(128) DEFAULT ''::character varying NOT NULL,
+ target_id bigint,
+ refused_at_plan boolean DEFAULT false NOT NULL,
+ posting character varying(24) NOT NULL,
+ settlement character varying(24),
+ code character varying(64) DEFAULT ''::character varying NOT NULL,
+ detail character varying(512) DEFAULT ''::character varying NOT NULL,
+ prior text,
+ posted_value text,
+ posted_revision bigint,
+ posted_epoch bigint,
+ reverses_line_id bigint,
+ override_changed boolean DEFAULT false NOT NULL,
+ attempts integer DEFAULT 0 NOT NULL,
+ next_attempt_at timestamp with time zone,
+ last_error_code character varying(64) DEFAULT ''::character varying NOT NULL,
+ posted_at timestamp with time zone,
+ settle_by timestamp with time zone,
+ settled_at timestamp with time zone,
+ redacted_at timestamp with time zone,
+ evidence_basis character varying(16),
+ evidence_revision bigint,
+ evidence_flag character varying(40) DEFAULT ''::character varying NOT NULL,
+ resolution_id bigint,
+ resolved_by character varying(320),
+ resolved_at timestamp with time zone,
+ CONSTRAINT chk_fleet_operation_lines_posting CHECK (((posting)::text = ANY ((ARRAY['PLANNED'::character varying, 'POSTED'::character varying, 'REFUSED'::character varying, 'SKIPPED'::character varying, 'CANCELLED'::character varying, 'DISPATCHING'::character varying, 'POSTING_UNKNOWN'::character varying])::text[]))),
+ CONSTRAINT chk_fleet_operation_lines_prior CHECK (((prior IS NULL) OR ((posting)::text = 'POSTED'::text))),
+ CONSTRAINT chk_fleet_operation_lines_settlement CHECK (((settlement IS NULL) OR (((posting)::text = 'POSTED'::text) AND ((settlement)::text = ANY ((ARRAY['CONFIRMED'::character varying, 'FAILED'::character varying, 'SUPERSEDED'::character varying, 'AMBIGUOUS'::character varying, 'RESOLVED_CONFIRMED'::character varying, 'RESOLVED_FAILED'::character varying])::text[])))))
+);
+CREATE TABLE "device-management".fleet_operation_runtime (
+ operation_id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ pace_window_start timestamp with time zone,
+ pace_issued integer DEFAULT 0 NOT NULL,
+ control_requested_at timestamp with time zone,
+ driver_seen_at timestamp with time zone,
+ last_progress_at timestamp with time zone,
+ hold_code character varying(32) DEFAULT ''::character varying NOT NULL,
+ hold_since timestamp with time zone,
+ hold_seen_at timestamp with time zone,
+ last_error_code character varying(64) DEFAULT ''::character varying NOT NULL,
+ last_error_at timestamp with time zone
+);
+CREATE TABLE "device-management".fleet_operations (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ token character varying(128) NOT NULL,
+ kind character varying(64) NOT NULL,
+ name character varying(128) NOT NULL,
+ dispatch character varying(16) NOT NULL,
+ evidence character varying(8) DEFAULT 'OPEN'::character varying NOT NULL,
+ pause_reason character varying(32) DEFAULT ''::character varying NOT NULL,
+ execution_epoch bigint DEFAULT 0 NOT NULL,
+ request_digest character varying(71) NOT NULL,
+ plan_digest character varying(71) DEFAULT ''::character varying NOT NULL,
+ contract_version integer DEFAULT 1 NOT NULL,
+ contract_digest character varying(71) DEFAULT ''::character varying NOT NULL,
+ driver_protocol integer NOT NULL,
+ intent text NOT NULL,
+ target_kind character varying(16) NOT NULL,
+ target_count integer NOT NULL,
+ max_posts_per_second integer NOT NULL,
+ eff_posts_per_second integer NOT NULL,
+ failure_threshold integer,
+ eff_failure_threshold integer,
+ ambiguity_threshold integer,
+ eff_ambiguity_threshold integer,
+ settle_deadline_s integer NOT NULL,
+ initiator character varying(320) NOT NULL,
+ grantee character varying(320) DEFAULT ''::character varying NOT NULL,
+ grant_bound_at timestamp with time zone,
+ reversal_of bigint,
+ broker_fail_closed boolean DEFAULT false NOT NULL,
+ expires_at timestamp with time zone,
+ started_at timestamp with time zone,
+ dispatched_at timestamp with time zone,
+ closed_at timestamp with time zone,
+ lines_purged_at timestamp with time zone,
+ posted_line_count integer DEFAULT 0 NOT NULL,
+ reversed_line_count integer DEFAULT 0 NOT NULL,
+ created_by character varying(320),
+ state_changed_by character varying(320),
+ state_changed_at timestamp with time zone,
+ CONSTRAINT chk_fleet_operations_dispatch CHECK (((dispatch)::text = ANY ((ARRAY['PLANNING'::character varying, 'READY'::character varying, 'RUNNING'::character varying, 'PAUSED'::character varying, 'DISPATCHED'::character varying, 'ABORTED'::character varying, 'DRAFT'::character varying])::text[]))),
+ CONSTRAINT chk_fleet_operations_driver_protocol CHECK ((driver_protocol >= 1)),
+ CONSTRAINT chk_fleet_operations_evidence CHECK (((evidence)::text = ANY ((ARRAY['OPEN'::character varying, 'CLOSED'::character varying])::text[])))
 );
 CREATE TABLE "device-management".geo_fence_geometry_blobs (
  id bigint NOT NULL,
@@ -1942,6 +2147,14 @@ CREATE TABLE "device-management".semantic_contexts (
  custom_prefixes jsonb NOT NULL,
  pack_versions jsonb NOT NULL
 );
+CREATE TABLE "device-management".static_membership_generations (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ group_id bigint NOT NULL,
+ member_type character varying(32) NOT NULL,
+ member_id bigint NOT NULL,
+ generation bigint NOT NULL
+);
 CREATE TRIGGER alarm_position_stale BEFORE UPDATE OF contributor_version ON "device-management".alarms FOR EACH ROW EXECUTE FUNCTION "device-management".alarm_position_stale();
 CREATE TRIGGER automation_review_guard_device_update BEFORE UPDATE OF device_type_id ON "device-management".devices FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
 CREATE TRIGGER automation_review_guard_profile_delete BEFORE DELETE ON "device-management".device_profiles FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
@@ -2000,6 +2213,12 @@ CREATE UNIQUE INDEX uix_entity_groups_tenant_token ON "device-management".entity
 CREATE UNIQUE INDEX uix_entity_relationship_types_tenant_token ON "device-management".entity_relationship_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_entity_relationships_tenant_token ON "device-management".entity_relationships USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_facet_keys_tenant_member_key ON "device-management".facet_keys USING btree (tenant_id, member_type, attr_key) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_fleet_operation_contracts_version ON "device-management".fleet_operation_contracts USING btree (operation_id, version);
+CREATE UNIQUE INDEX uix_fleet_operation_events_contradiction ON "device-management".fleet_operation_events USING btree (line_id, kind) WHERE ((kind)::text = 'CONTRADICTING_EVIDENCE'::text);
+CREATE UNIQUE INDEX uix_fleet_operation_lines_ordinal ON "device-management".fleet_operation_lines USING btree (operation_id, ordinal);
+CREATE UNIQUE INDEX uix_fleet_operation_lines_reverses ON "device-management".fleet_operation_lines USING btree (reverses_line_id) WHERE ((posting)::text = 'POSTED'::text);
+CREATE UNIQUE INDEX uix_fleet_operation_lines_target ON "device-management".fleet_operation_lines USING btree (operation_id, target_id) WHERE (target_id IS NOT NULL);
+CREATE UNIQUE INDEX uix_fleet_operations_tenant_token ON "device-management".fleet_operations USING btree (tenant_id, token);
 CREATE UNIQUE INDEX uix_geo_fence_geometry_blobs_tenant_hash ON "device-management".geo_fence_geometry_blobs USING btree (tenant_id, hash);
 CREATE UNIQUE INDEX uix_geo_fence_set_versions_tenant_version ON "device-management".geo_fence_set_versions USING btree (tenant_id, version);
 CREATE UNIQUE INDEX uix_geo_fences_tenant_token ON "device-management".geo_fences USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
@@ -2013,6 +2232,7 @@ CREATE UNIQUE INDEX uix_profile_decoder_healths_window ON "device-management".pr
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_provision_key ON "device-management".provisioning_profiles USING btree (tenant_id, provision_key) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_token ON "device-management".provisioning_profiles USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_semantic_contexts_tenant ON "device-management".semantic_contexts USING btree (tenant_id) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_static_membership_generation ON "device-management".static_membership_generations USING btree (tenant_id, group_id, member_type, member_id);
 END
 $$;
 END

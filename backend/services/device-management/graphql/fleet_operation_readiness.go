@@ -47,6 +47,10 @@ func (r *FleetOperationReadinessResolver) OrphanedAttributeRows() (*int32, error
 }
 
 func (r *SchemaResolver) FleetOperationReadiness(ctx context.Context) (*FleetOperationReadinessResolver, error) {
+	return r.BulkChangeReadiness(ctx)
+}
+
+func (r *SchemaResolver) BulkChangeReadiness(ctx context.Context) (*FleetOperationReadinessResolver, error) {
 	// Authorize also refuses scoped members, using this service's existing rule.
 	if err := auth.Authorize(ctx, auth.FleetOperate); err != nil {
 		return nil, err

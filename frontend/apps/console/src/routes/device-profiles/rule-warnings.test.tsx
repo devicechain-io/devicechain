@@ -46,7 +46,7 @@ vi.mock('@/lib/api/event-processing', () => ({
 
 import { DetectionRuleAuthoring } from './DetectionRuleAuthoring';
 import { DetectionRuleForm } from './DetectionRuleForm';
-import { updateDetectionRule } from '@/lib/api/device-management';
+import { updateDetectionRule, createDetectionRule } from '@/lib/api/device-management';
 import { paintDiagnostics } from './canvas/diagnostics';
 import type { DetectionRule } from '@/lib/api/device-management';
 
@@ -154,6 +154,14 @@ describe('the Describe door hands its draft and warnings to the form', () => {
     expect(list.textContent).toContain('“lim”');
     expect((screen.getByPlaceholderText('Overheating') as HTMLInputElement).value).toBe('hot');
     expect(validateDetectionRule).not.toHaveBeenCalled();
+    // A person may revise the proposed draft before saving; that does not hide Describe.
+    fireEvent.change(screen.getByPlaceholderText('Overheating'), { target: { value: 'reviewed' } });
+    fireEvent.change(document.getElementById('dr-token') as HTMLElement, { target: { value: 'reviewed-rule' } });
+    const create = screen.getByRole('button', { name: 'Create detection rule' }) as HTMLButtonElement;
+    await waitFor(() => expect(create.disabled).toBe(false));
+    fireEvent.click(create);
+    await waitFor(() => expect(vi.mocked(createDetectionRule)).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createDetectionRule).mock.calls[0][0]).toMatchObject({ authoredVia: 'DESCRIBE' });
   });
 });
 

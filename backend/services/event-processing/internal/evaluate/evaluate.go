@@ -351,6 +351,7 @@ func Run(ctx context.Context, p Params) (Result, error) {
 	run := &runState{pub: pub, rec: rec, maxIntents: maxIntents, maxEdges: maxEdges, drops: map[string]int{}}
 	commands, alarms, connectors := newSinks(rec)
 	run.disp = react.NewDispatcher(defResolver(defs), commands, alarms, connectors, nil, nopReactMetrics{},
+		react.WithCommandSimulation(),
 		react.WithClock(func() time.Time { return run.clock }),
 		// Quiet: a tenant's malformed rule is reported in the result, not logged once per edge.
 		react.WithLogger(zerolog.Nop()),
@@ -579,7 +580,7 @@ type runState struct {
 // virtual platform time of the input that moved the engine.
 func (s *runState) collect(dets []core.Detection, triggeredAt time.Time) {
 	for _, det := range dets {
-		po, ok := s.pub.Prepare(det, triggeredAt)
+		po, ok := s.pub.Prepare(det, triggeredAt, false)
 		if !ok {
 			s.unattributed++
 			continue

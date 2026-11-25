@@ -21,6 +21,7 @@ dcctl [command]
 * [dcctl backup](#dcctl-backup)	 - Export instance streams and blobs, or inspect a local backup set
 * [dcctl bootstrap](#dcctl-bootstrap)	 - Bootstrap a DeviceChain instance
 * [dcctl broker](#dcctl-broker)	 - Message broker operations
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
 * [dcctl config-schema](#dcctl-config-schema)	 - Print this release's instance configuration JSON Schema
 * [dcctl dead-letters](#dcctl-dead-letters)	 - Inspect work the platform accepted and then gave up on
 * [dcctl destroy](#dcctl-destroy)	 - Destroy a DeviceChain instance
@@ -28,7 +29,6 @@ dcctl [command]
 * [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
 * [dcctl events](#dcctl-events)	 - Inspect a tenant's events
 * [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
-* [dcctl fleet-op](#dcctl-fleet-op)	 - Preview. Inspect fleet operation capabilities
 * [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
 * [dcctl install](#dcctl-install)	 - Prepare a cluster for DeviceChain instances
 * [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
@@ -633,6 +633,424 @@ dcctl broker reconcile <instance> [flags]
 
 * [dcctl broker](#dcctl-broker)	 - Message broker operations
 
+## dcctl bulk-change {#dcctl-bulk-change}
+
+Preview. Plan, run and inspect device bulk changes
+
+### Synopsis
+
+Preview. Plan, run and inspect device bulk changes using your tenant identity.
+
+The commands probe this instance for support. The deprecated dcctl fleet-op readiness alias keeps working and prints a one-line deprecation notice to stderr.
+
+### Options
+
+```
+      --email string      Preview. identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              Preview. help for bulk changes
+  -i, --instance string   Preview. instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        Preview. one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   Preview. password for the identity (required)
+  -s, --server string     Preview. instance host for platform API calls (default "localhost")
+  -t, --tenant string     Preview. tenant to inspect (required)
+      --tls               Preview. use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl bulk-change abort](#dcctl-bulk-change-abort)	 - Preview. Abort a bulk change
+* [dcctl bulk-change create](#dcctl-bulk-change-create)	 - Preview. Create a device configuration bulk change
+* [dcctl bulk-change lines](#dcctl-bulk-change-lines)	 - Preview. List every page of a bulk change's lines
+* [dcctl bulk-change pause](#dcctl-bulk-change-pause)	 - Preview. Pause a bulk change
+* [dcctl bulk-change plan](#dcctl-bulk-change-plan)	 - Preview. Plan a device configuration bulk change
+* [dcctl bulk-change readiness](#dcctl-bulk-change-readiness)	 - Preview. Report whether this instance can run bulk changes
+* [dcctl bulk-change resume](#dcctl-bulk-change-resume)	 - Preview. Resume a paused bulk change within its approved contract
+* [dcctl bulk-change start](#dcctl-bulk-change-start)	 - Preview. Start a reviewed READY bulk change
+* [dcctl bulk-change status](#dcctl-bulk-change-status)	 - Preview. Inspect dispatch and evidence for a bulk change
+
+## dcctl bulk-change abort {#dcctl-bulk-change-abort}
+
+Preview. Abort a bulk change
+
+### Synopsis
+
+Preview. Abort a bulk change.
+
+Pause stops new posts until resume. Abort cancels unposted lines permanently; posted lines keep settling. A fence timeout is reported as an error.
+
+```
+dcctl bulk-change abort TOKEN [flags]
+```
+
+### Options
+
+```
+  -o, --output string   Preview. Output format: table or json (default "table")
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      Preview. identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              Preview. help for bulk changes
+  -i, --instance string   Preview. instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        Preview. one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   Preview. password for the identity (required)
+  -s, --server string     Preview. instance host for platform API calls (default "localhost")
+  -t, --tenant string     Preview. tenant to inspect (required)
+      --tls               Preview. use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
+
+## dcctl bulk-change create {#dcctl-bulk-change-create}
+
+Preview. Create a device configuration bulk change
+
+### Synopsis
+
+Preview. Create a device configuration bulk change.
+
+Use --kind config.set and --key with either --value and --type or --unset.
+Targets are repeated --device tokens or a UTF-8 --devices-file with one token per nonempty line.
+The default token is SHA-256 of tenant, exact file bytes (or the ordered JSON array of --device values), kind and canonical intent, concatenated in that order. Reusing the token with a changed request is refused.
+Planning writes nothing. Creating freezes a READY bulk change; review its contract and present the server's contractDigest to start it.
+
+```
+dcctl bulk-change create [flags]
+```
+
+### Options
+
+```
+      --ambiguity-threshold int    Preview. Positive ambiguous line count that pauses dispatch; omitted on create: no limit
+      --device stringArray         Preview. Device token; repeat for each device, preserving order
+      --devices-file string        Preview. UTF-8 file containing one device token per nonempty line
+      --failure-threshold int      Preview. Positive failed/refused line count that pauses dispatch; omitted on create: no limit
+      --key string                 Preview. Declared SHARED configuration key (required)
+      --kind string                Preview. Change kind: config.set (required)
+      --max-posts-per-second int   Preview. Maximum posts per second, from 1 to 50; omitted on resume: unchanged (default 10)
+      --name string                Preview. Display name; defaults to the bulk change token
+  -o, --output string              Preview. Output format: table or json (default "table")
+      --settle-deadline string     Preview. Evidence deadline: duration such as 24h or integer seconds, from 60s to 168h (default "24h")
+      --token string               Preview. Idempotency token; defaults to the input-derived SHA-256
+      --type string                Preview. Value type: STRING, LONG, DOUBLE, BOOLEAN or JSON
+      --unset                      Preview. Remove the key instead of setting a value
+      --value string               Preview. Value as text; use with --type, including for an empty value
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      Preview. identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              Preview. help for bulk changes
+  -i, --instance string   Preview. instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        Preview. one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   Preview. password for the identity (required)
+  -s, --server string     Preview. instance host for platform API calls (default "localhost")
+  -t, --tenant string     Preview. tenant to inspect (required)
+      --tls               Preview. use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
+
+## dcctl bulk-change lines {#dcctl-bulk-change-lines}
+
+Preview. List every page of a bulk change's lines
+
+### Synopsis
+
+Preview. List every page of a bulk change's lines.
+
+Filter by posting or settlement. JSON includes the full line evidence; CSV quotes embedded commas, quotes and newlines.
+
+```
+dcctl bulk-change lines TOKEN [flags]
+```
+
+### Options
+
+```
+      --devices-file string   Preview. Original UTF-8 device input file to join by ordinal; erased identifiers stay erased
+  -o, --output string         Preview. Output format: table, json or csv (default "table")
+      --posting string        Preview. Filter by posting state, for example POSTED
+      --settlement string     Preview. Filter by settlement state, for example AMBIGUOUS
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      Preview. identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              Preview. help for bulk changes
+  -i, --instance string   Preview. instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        Preview. one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   Preview. password for the identity (required)
+  -s, --server string     Preview. instance host for platform API calls (default "localhost")
+  -t, --tenant string     Preview. tenant to inspect (required)
+      --tls               Preview. use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
+
+## dcctl bulk-change pause {#dcctl-bulk-change-pause}
+
+Preview. Pause a bulk change
+
+### Synopsis
+
+Preview. Pause a bulk change.
+
+Pause stops new posts until resume. Abort cancels unposted lines permanently; posted lines keep settling. A fence timeout is reported as an error.
+
+```
+dcctl bulk-change pause TOKEN [flags]
+```
+
+### Options
+
+```
+  -o, --output string   Preview. Output format: table or json (default "table")
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      Preview. identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              Preview. help for bulk changes
+  -i, --instance string   Preview. instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        Preview. one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   Preview. password for the identity (required)
+  -s, --server string     Preview. instance host for platform API calls (default "localhost")
+  -t, --tenant string     Preview. tenant to inspect (required)
+      --tls               Preview. use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
+
+## dcctl bulk-change plan {#dcctl-bulk-change-plan}
+
+Preview. Plan a device configuration bulk change
+
+### Synopsis
+
+Preview. Plan a device configuration bulk change.
+
+Use --kind config.set and --key with either --value and --type or --unset.
+Targets are repeated --device tokens or a UTF-8 --devices-file with one token per nonempty line.
+The default token is SHA-256 of tenant, exact file bytes (or the ordered JSON array of --device values), kind and canonical intent, concatenated in that order. Reusing the token with a changed request is refused.
+Planning writes nothing. Creating freezes a READY bulk change; review its contract and present the server's contractDigest to start it.
+
+```
+dcctl bulk-change plan [flags]
+```
+
+### Options
+
+```
+      --ambiguity-threshold int    Preview. Positive ambiguous line count that pauses dispatch; omitted on create: no limit
+      --device stringArray         Preview. Device token; repeat for each device, preserving order
+      --devices-file string        Preview. UTF-8 file containing one device token per nonempty line
+      --failure-threshold int      Preview. Positive failed/refused line count that pauses dispatch; omitted on create: no limit
+      --key string                 Preview. Declared SHARED configuration key (required)
+      --kind string                Preview. Change kind: config.set (required)
+      --max-posts-per-second int   Preview. Maximum posts per second, from 1 to 50; omitted on resume: unchanged (default 10)
+      --name string                Preview. Display name; defaults to the bulk change token
+  -o, --output string              Preview. Output format: table or json (default "table")
+      --settle-deadline string     Preview. Evidence deadline: duration such as 24h or integer seconds, from 60s to 168h (default "24h")
+      --token string               Preview. Idempotency token; defaults to the input-derived SHA-256
+      --type string                Preview. Value type: STRING, LONG, DOUBLE, BOOLEAN or JSON
+      --unset                      Preview. Remove the key instead of setting a value
+      --value string               Preview. Value as text; use with --type, including for an empty value
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      Preview. identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              Preview. help for bulk changes
+  -i, --instance string   Preview. instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        Preview. one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   Preview. password for the identity (required)
+  -s, --server string     Preview. instance host for platform API calls (default "localhost")
+  -t, --tenant string     Preview. tenant to inspect (required)
+      --tls               Preview. use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
+
+## dcctl bulk-change readiness {#dcctl-bulk-change-readiness}
+
+Preview. Report whether this instance can run bulk changes
+
+### Synopsis
+
+Preview. Report the writer protocol version, fresh database enforcement state,
+executable operation kinds and orphaned device attribute and generation rows in your tenant.
+Requires fleet:operate; scoped members are refused.
+
+Exit status is zero only when enforcement is ENFORCED and orphanedAttributeRows is zero; that
+says the database enforces the writer protocol, not that any operation kind is executable. If the
+orphan count cannot be read the command reports the error and exits non-zero. The query is an
+expensive diagnostic (it counts rows); run it when you need the answer, do not poll it.
+In v1.9 enforcement is not installed and no kind is executable. The non-zero exit is
+expected until the release that installs enforcement. Use -o json for the four facts as JSON.
+
+```
+dcctl bulk-change readiness [flags]
+```
+
+### Options
+
+```
+  -o, --output string   Preview. Output format: table or json (default "table")
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      Preview. identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              Preview. help for bulk changes
+  -i, --instance string   Preview. instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        Preview. one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   Preview. password for the identity (required)
+  -s, --server string     Preview. instance host for platform API calls (default "localhost")
+  -t, --tenant string     Preview. tenant to inspect (required)
+      --tls               Preview. use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
+
+## dcctl bulk-change resume {#dcctl-bulk-change-resume}
+
+Preview. Resume a paused bulk change within its approved contract
+
+### Synopsis
+
+Preview. Resume a paused bulk change within its approved contract.
+
+Omitted limits remain unchanged. Without --contract-digest, the client asks the server for a resume preview and uses its digest. A wider contract is refused in this release.
+
+```
+dcctl bulk-change resume TOKEN [flags]
+```
+
+### Options
+
+```
+      --ambiguity-threshold int    Preview. Positive ambiguous line count that pauses dispatch; omitted on create: no limit
+      --contract-digest string     Preview. Reviewed server contract digest; default: request a server resume preview
+      --failure-threshold int      Preview. Positive failed/refused line count that pauses dispatch; omitted on create: no limit
+      --max-posts-per-second int   Preview. Maximum posts per second, from 1 to 50; omitted on resume: unchanged (default 10)
+  -o, --output string              Preview. Output format: table or json (default "table")
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      Preview. identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              Preview. help for bulk changes
+  -i, --instance string   Preview. instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        Preview. one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   Preview. password for the identity (required)
+  -s, --server string     Preview. instance host for platform API calls (default "localhost")
+  -t, --tenant string     Preview. tenant to inspect (required)
+      --tls               Preview. use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
+
+## dcctl bulk-change start {#dcctl-bulk-change-start}
+
+Preview. Start a reviewed READY bulk change
+
+### Synopsis
+
+Preview. Start a reviewed READY bulk change.
+
+Present --contract-digest exactly as returned by the server after reviewing its contract. The client never computes an approval digest.
+
+```
+dcctl bulk-change start TOKEN [flags]
+```
+
+### Options
+
+```
+      --contract-digest string   Preview. Exact server contract digest you reviewed (required)
+  -o, --output string            Preview. Output format: table or json (default "table")
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      Preview. identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              Preview. help for bulk changes
+  -i, --instance string   Preview. instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        Preview. one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   Preview. password for the identity (required)
+  -s, --server string     Preview. instance host for platform API calls (default "localhost")
+  -t, --tenant string     Preview. tenant to inspect (required)
+      --tls               Preview. use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
+
+## dcctl bulk-change status {#dcctl-bulk-change-status}
+
+Preview. Inspect dispatch and evidence for a bulk change
+
+### Synopsis
+
+Preview. Inspect dispatch and evidence for a bulk change.
+
+Exit 0 only for DISPATCHED with CLOSED evidence, 3 for PAUSED, 4 for ABORTED, and 1 for other states or errors. DISPATCHED with OPEN evidence is still awaiting verdicts.
+--watch polls until completion, pause, abort or interruption. JSON watch output is one object per line.
+
+```
+dcctl bulk-change status TOKEN [flags]
+```
+
+### Options
+
+```
+  -o, --output string   Preview. Output format: table or json (default "table")
+      --watch           Preview. Wait for DISPATCHED+CLOSED, pause or abort; interrupt to stop waiting
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      Preview. identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              Preview. help for bulk changes
+  -i, --instance string   Preview. instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        Preview. one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   Preview. password for the identity (required)
+  -s, --server string     Preview. instance host for platform API calls (default "localhost")
+  -t, --tenant string     Preview. tenant to inspect (required)
+      --tls               Preview. use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
+
 ## dcctl config-schema {#dcctl-config-schema}
 
 Print this release's instance configuration JSON Schema
@@ -1214,76 +1632,6 @@ dcctl executor unenroll [flags]
 ### SEE ALSO
 
 * [dcctl executor](#dcctl-executor)	 - Manage the in-cluster executor (Preview)
-
-## dcctl fleet-op {#dcctl-fleet-op}
-
-Preview. Inspect fleet operation capabilities
-
-### Synopsis
-
-Preview. Inspect this instance's fleet operation capabilities using your tenant identity.
-
-### Options
-
-```
-      --email string      identity to authenticate as; it must be a member of the tenant (required)
-  -h, --help              help for fleet-op
-  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
-      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
-      --password string   password for the identity (required)
-  -s, --server string     instance host for platform API calls (default "localhost")
-  -t, --tenant string     tenant to inspect (required)
-      --tls               use https for platform endpoints
-```
-
-### SEE ALSO
-
-* [dcctl](#dcctl)	 - DeviceChain CLI
-* [dcctl fleet-op readiness](#dcctl-fleet-op-readiness)	 - Preview. Report whether this instance can run fleet operations
-
-## dcctl fleet-op readiness {#dcctl-fleet-op-readiness}
-
-Preview. Report whether this instance can run fleet operations
-
-### Synopsis
-
-Preview. Report the writer protocol version, fresh database enforcement state,
-executable operation kinds and orphaned device attribute and generation rows in your tenant.
-Requires fleet:operate; scoped members are refused.
-
-Exit status is zero only when enforcement is ENFORCED and orphanedAttributeRows is zero; that
-says the database enforces the writer protocol, not that any operation kind is executable. If the
-orphan count cannot be read the command reports the error and exits non-zero. The query is an
-expensive diagnostic (it counts rows); run it when you need the answer, do not poll it.
-In v1.9 enforcement is not installed and no kind is executable. The non-zero exit is
-expected until the release that installs enforcement. Use -o json for the four facts as JSON.
-
-```
-dcctl fleet-op readiness [flags]
-```
-
-### Options
-
-```
-  -h, --help            help for readiness
-  -o, --output string   output format: table or json (default "table")
-```
-
-### Options inherited from parent commands
-
-```
-      --email string      identity to authenticate as; it must be a member of the tenant (required)
-  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
-      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
-      --password string   password for the identity (required)
-  -s, --server string     instance host for platform API calls (default "localhost")
-  -t, --tenant string     tenant to inspect (required)
-      --tls               use https for platform endpoints
-```
-
-### SEE ALSO
-
-* [dcctl fleet-op](#dcctl-fleet-op)	 - Preview. Inspect fleet operation capabilities
 
 ## dcctl ha {#dcctl-ha}
 

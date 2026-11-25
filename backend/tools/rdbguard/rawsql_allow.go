@@ -97,6 +97,13 @@ var rawSQLAllowList = []siteEntry{
 			"VALUES list of bound text values with no table in it, so it reads and writes no row of any tenant",
 	},
 
+	{
+		Path: "backend/services/event-management/processor/backfill/hourly.go", Func: "hourlyDBProgress.bounds", Count: 1,
+		Why: "the hour backfill finds the EARLIEST bucket any tenant still holds, under a system context, to " +
+			"set the floor of a refresh that is itself instance-wide (a continuous aggregate refresh has no " +
+			"tenant predicate): constant text returning one min() timestamp, no row of any tenant leaves it",
+	},
+
 	// --- metering ---
 	{
 		Path: "backend/services/event-management/model/usage.go", Func: "rollupHour", Count: 4,
@@ -192,12 +199,45 @@ var rawSQLAllowList = []siteEntry{
 			"\"dynamic\" only because the constant lives in core/attrprotocol, its one definition.",
 	},
 	{
+		Path: "backend/services/device-management/model/api_attribute_owner.go", Func: "tryLockDeviceAttributes", Count: 1,
+		Why: "sets the transaction-local device attribute writer protocol marker, exactly as lockDeviceAttributes does " +
+			"(attrprotocol.MarkerSQL, SELECT set_config('devicechain.attr_protocol', '1', true)). It reads and writes " +
+			"no table; the SQL is \"dynamic\" only because the constant lives in core/attrprotocol, its one definition.",
+	},
+	{
 		Path: "backend/services/device-management/model/api_attribute_orphans.go", Func: "Api.attributeOrphanTenants", Count: 1,
 		Why: "the attribute orphan sweep's tenant listing, which spans tenants on purpose under a system context: " +
 			"a loose index scan (recursive CTE) over entity_attributes' and entity_attribute_generations' tenant_id " +
 			"indexes that returns only the distinct tenant_id values and reads no row content. Every row the sweep " +
 			"then removes is removed through the model under that tenant's own core.WithTenant. The only " +
 			"formatted-in text is the model's quoted table name.",
+	},
+	{
+		Path: "backend/services/device-management/model/api_fleet_operation_drive.go", Func: "Api.AcquireFleetPermits", Count: 1,
+		Why: "the bulk-change pacer: ONE statement that locks the operation's runtime row, reads the database clock " +
+			"after the lock and grants permits from it, so replicas with skewed process clocks share one window. " +
+			"The SQL is a constant that binds the tenant explicitly (tenant_id = @tenant, from core.TenantFromContext, " +
+			"refusing core.ErrNoTenant before it runs); the UPDATE touches only the row that predicate locked.",
+	},
+	{
+		Path: "backend/services/device-management/model/api_fleet_settlement.go", Func: "fleetSettlementRead", Count: 1,
+		Why: "the bulk-change settlement candidate read: one statement so the report log, the state row's gap " +
+			"marker and the deciding revision's document are read in one snapshot. It binds l.tenant_id (and, on the " +
+			"fast path, the report window's tenant_id) from the caller, and every other table is joined on " +
+			"tenant_id = the candidate line's tenant_id, including the correlated deciding-report subquery. The only " +
+			"formatted-in text is the models' quoted table names and package constants.",
+	},
+	{
+		Path: "backend/services/device-management/model/api_fleet_settlement.go", Func: "Api.FleetReportCaptureComplete", Count: 1,
+		Why: "counts one operation's lines whose target's report capture is incomplete: binds l.tenant_id from the " +
+			"request context and joins the configuration state on tenant_id = l.tenant_id. Only the models' quoted " +
+			"table names are formatted in.",
+	},
+	{
+		Path: "backend/services/device-management/model/api_fleet_settlement.go", Func: "Api.FleetReconcilerLag", Count: 1,
+		Why: "the settlement lag gauge's oldest undecided report: binds r.tenant_id from the context and joins lines " +
+			"and operations on tenant_id equal to the report's. It returns one timestamp; only the models' quoted " +
+			"table names and the protocol predicate constant are formatted in.",
 	},
 	{
 		Path: "backend/services/device-management/model/api_fleet_operation_readiness.go", Func: "fleetOperationEnforcementStates", Count: 1,

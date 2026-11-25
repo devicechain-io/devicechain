@@ -1351,6 +1351,28 @@ func TestDocsGatePassesWhatIsReal(t *testing.T) {
 	}
 }
 
+func TestDocsGateBulkChangeCommands(t *testing.T) {
+	md := "```bash\n" + strings.Join([]string{
+		"dcctl bulk-change plan --kind config.set --key mode --value eco --type STRING --device d1",
+		"dcctl bulk-change create --kind config.set --key mode --unset --devices-file devices.txt",
+		"dcctl bulk-change start change-1 --contract-digest sha256:reviewed",
+		"dcctl bulk-change status change-1 --watch -o json",
+		"dcctl bulk-change lines change-1 --posting POSTED --settlement FAILED --devices-file devices.txt -o csv",
+		"dcctl bulk-change pause change-1",
+		"dcctl bulk-change resume change-1 --max-posts-per-second 1",
+		"dcctl bulk-change abort change-1",
+	}, "\n") + "\n```\n"
+	s := scanOne(t, md)
+	if len(s.findings) != 0 || s.dcctlChecked != 8 {
+		t.Fatalf("bulk-change guide commands: count=%d %s", s.dcctlChecked, findingTexts(s))
+	}
+	for _, bad := range []string{"dcctl fleet-op create", "dcctl bulk-change status", "dcctl bulk-change reverse t", "dcctl bulk-change resolve t"} {
+		if s := scanOne(t, "```bash\n"+bad+"\n```\n"); len(s.findings) == 0 {
+			t.Errorf("docs accepted unavailable command %q", bad)
+		}
+	}
+}
+
 // TestDocsGateDoesNotTouchRealFlags: parsing the docs' arguments must not write into
 // the command's real flag variables, which other tests and the binary read.
 func TestDocsGateDoesNotTouchRealFlags(t *testing.T) {

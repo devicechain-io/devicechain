@@ -1,5 +1,7 @@
 ALTER SEQUENCE "event-management".audit_events_id_seq OWNED BY "event-management".audit_events.id;
 ALTER SEQUENCE "event-management".calculated_backfills_id_seq OWNED BY "event-management".calculated_backfills.id;
+ALTER TABLE ONLY "event-management".analytics_surface_generation
+ ADD CONSTRAINT analytics_surface_generation_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "event-management".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "event-management".audit_events ALTER COLUMN id SET DEFAULT nextval('"event-management".audit_events_id_seq'::regclass);
@@ -73,6 +75,12 @@ CREATE TABLE "event-management".alert_events (
  level bigint NOT NULL,
  message text,
  source text
+);
+CREATE TABLE "event-management".analytics_surface_generation (
+ id integer NOT NULL,
+ generation integer NOT NULL,
+ CONSTRAINT analytics_surface_generation_generation_check CHECK ((generation >= 0)),
+ CONSTRAINT analytics_surface_generation_id_check CHECK ((id = 1))
 );
 CREATE TABLE "event-management".audit_events (
  id bigint NOT NULL,

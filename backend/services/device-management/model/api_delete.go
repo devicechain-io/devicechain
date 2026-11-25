@@ -180,9 +180,9 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		if err != nil {
 			return err
 		}
-		if err := tx.Unscoped().Where(
+		if _, err := removeRelationshipsWithGenerationTx(tx,
 			"(source_type = ? AND source_id = ?) OR (target_type = ? AND target_id = ?)",
-			string(etype), id, string(etype), id).Delete(&EntityRelationship{}).Error; err != nil {
+			string(etype), id, string(etype), id); err != nil {
 			return err
 		}
 		// Cascade the entity's attributes: they address their owner by
@@ -792,9 +792,9 @@ func (api *Api) RemoveEntityRelationship(ctx context.Context, token string) (boo
 		if err != nil {
 			return err
 		}
-		res := tx.Unscoped().Where("token = ?", token).Delete(&EntityRelationship{})
-		if res.Error != nil || res.RowsAffected == 0 {
-			return res.Error
+		count, err := removeRelationshipsWithGenerationTx(tx, "token = ?", token)
+		if err != nil || count == 0 {
+			return err
 		}
 		deleted = true
 		queued, err = queueOwnershipOnTx(tx, sources)

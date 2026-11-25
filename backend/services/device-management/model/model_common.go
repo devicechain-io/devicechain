@@ -112,6 +112,10 @@ type EntityRelationship struct {
 	TargetToken        string `gorm:"size:128"`
 	RelationshipTypeId uint
 	RelationshipType   EntityRelationshipType
+
+	// MembershipGeneration is the add's retained logical-edge head. Removes
+	// advance the head in StaticMembershipGeneration before deleting this row.
+	MembershipGeneration sql.NullInt64
 }
 
 // DefaultOrder implements rdb.Sortable with the registry default: newest edge first,

@@ -190,29 +190,29 @@
 1209|8|link|cap->updated|
 1209|8|caption-end|signed|
 1209|8|shot|8b|
-1210|8|caption|A few chargers at a time.|3:run6:target18:target:::SUCCEEDED0:0:9:ota-cycle0:11:ota-attempt9:SUCCEEDED8:PLATFORM
 1218|8|node|refused|3:run7:attempt34:attempt:hp-charger-north-1::FAILED18:hp-charger-north-10:9:ota-cycle0:11:ota-attempt6:FAILED8:PLATFORM
 1218|8|node-label|Refused by its own check|3:run7:attempt34:attempt:hp-charger-north-1::FAILED18:hp-charger-north-10:9:ota-cycle0:11:ota-attempt6:FAILED8:PLATFORM
 1218|8|link|updated->refused|
-1220|8|caption-end|few|
 1220|8|shot|8c|
 1221|8|caption|One download fails its check. / The charger refuses it.|3:run7:attempt34:attempt:hp-charger-north-1::FAILED18:hp-charger-north-10:9:ota-cycle0:11:ota-attempt6:FAILED8:PLATFORM
 1224|8|caption-end|refused|
 1224|8|caption|It keeps working. / The failure is recorded.|3:run7:attempt34:attempt:hp-charger-north-1::FAILED18:hp-charger-north-10:9:ota-cycle0:11:ota-attempt6:FAILED8:PLATFORM,3:run7:measure36:measure:hp-charger-north-1:power_kw:18:hp-charger-north-18:power_kw9:ota-cycle0:11:ota-attempt0:8:PLATFORM
 1236|8|caption-end|working|
 1236|8|shot|8d|
-1237|8|caption|Rollout done. Nothing hidden.|3:run7:rollout16:rollout-this-run0:0:9:ota-cycle0:11:ota-attempt8:TERMINAL8:PLATFORM
-1240|8|caption-end|done|
-1240|8|caption|5 updated · 1 refused / concurrency limit 2|3:run7:rollout16:rollout-this-run0:0:9:ota-cycle0:11:ota-attempt6:COUNTS8:PLATFORM
-1244|8|caption-end|ota-summary|
-1245|9|shot|9a|
-1245|9|caption|Every rule you saw was written and / published by a person.|
-1248|9|caption-end|bridge|
-1248|9|caption|Agents read the fleet. / People approve the action.|
-1251|9|caption-end|tagline|
-1251|9|caption|DeviceChain: open-source IoT platform, / ready for AI agents.|
-1254|9|caption-end|subline|
-1254|9|caption|Port Alder is fictional. / The district is drawn compact;|
-1257|9|caption-end|fiction|
-1257|9|caption|the platform holds each device's / own position.|
-1260|9|caption-end|positions|
+1237|8|caption|A few chargers at a time.|3:run6:target18:target:::SUCCEEDED0:0:9:ota-cycle0:11:ota-attempt9:SUCCEEDED8:PLATFORM
+1240|8|caption-end|few|
+1240|8|caption|Rollout done. Nothing hidden.|3:run7:rollout16:rollout-this-run0:0:9:ota-cycle0:11:ota-attempt8:TERMINAL8:PLATFORM
+1243|8|caption-end|done|
+1243|8|caption|5 updated · 1 refused / concurrency limit 2|3:run7:rollout16:rollout-this-run0:0:9:ota-cycle0:11:ota-attempt6:COUNTS8:PLATFORM
+1246|8|caption-end|ota-summary|
+1296|9|shot|9a|
+1296|9|caption|Every rule you saw was written and / published by a person.|
+1299|9|caption-end|bridge|
+1299|9|caption|Agents read the fleet. / People approve the action.|
+1302|9|caption-end|tagline|
+1302|9|caption|DeviceChain: open-source IoT platform, / ready for AI agents.|
+1305|9|caption-end|subline|
+1305|9|caption|Port Alder is fictional. / The district is drawn compact;|
+1308|9|caption-end|fiction|
+1308|9|caption|the platform holds each device's / own position.|
+1311|9|caption-end|positions|

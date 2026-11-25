@@ -29,8 +29,8 @@ type Api struct {
 	// so the retention job and read floor cannot be configured apart.
 	RollupRetentionDays int
 
-	// rollup1hFrom caches the hour the one-hour rollup is complete from (see rollup1hCompleteFrom).
-	rollup1hFrom atomic.Pointer[time.Time]
+	// rollup1hFrom briefly caches completeness; replicas must discover background backfill progress.
+	rollup1hFrom atomic.Pointer[rollup1hCompleteness]
 
 	// now is the rollup read clock; nil defaults to time.Now.
 	now func() time.Time

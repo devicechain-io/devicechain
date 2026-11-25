@@ -633,7 +633,7 @@ func TestATenantPurgeRemovesItsKnownSuccessesToo(t *testing.T) {
 func TestTheByteBudgetBoundsWhatIsOutstanding(t *testing.T) {
 	probe := runtime.NewPublisher(nil, oracleFixture.registry(t), nil)
 	po, ok := probe.Prepare(detectcore.Detection{RuleID: oracleFixture.ruleID("acme", 0), Series: "d0", At: outputBase,
-		Edge: detectcore.EdgeRaised, Kind: detectcore.Threshold}, outputBase)
+		Edge: detectcore.EdgeRaised, Kind: detectcore.Threshold}, outputBase, false)
 	require.True(t, ok)
 	size := int64(len(po.Payload))
 	for _, tc := range []struct {

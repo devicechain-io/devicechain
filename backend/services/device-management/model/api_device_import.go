@@ -759,7 +759,8 @@ func (api *Api) createImportedDevice(ctx context.Context, p *importRow, dt *Devi
 			Name:        sqlnull.Text(p.row.Name),
 			Description: sqlnull.Text(p.row.Description),
 		},
-		DeviceTypeId: dt.ID,
+		DeviceTypeId:    dt.ID,
+		StateGeneration: newStateGeneration(),
 	}
 	if p.metadata != nil {
 		raw := json.RawMessage(*p.metadata)

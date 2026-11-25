@@ -211,7 +211,7 @@ type EventProcessingConfiguration struct {
 
 	// OutboundCallsPerSecond and OutboundBurst are the platform-default per-tenant OUTBOUND
 	// egress ceiling REACT charges at the SOURCE (ADR-060 SD-3): the sustained rate and burst of
-	// connector-dispatch publishes (httpCall/publish actions) a tenant may emit before REACT drops
+	// sendCommand plus connector-dispatch publishes (httpCall/publish actions) a tenant may emit before REACT refuses
 	// them. Unset (0) defaults to the platform ceilings (DefaultOutboundCallsPerSecond /
 	// DefaultOutboundBurst) — fail-safe: never unlimited; a non-positive configured value is rejected
 	// at Validate. Per-tenant overrides read from user-management take precedence at runtime; this is

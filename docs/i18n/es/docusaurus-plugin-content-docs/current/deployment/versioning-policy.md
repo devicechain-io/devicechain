@@ -39,6 +39,7 @@ ajuste y de operación, y pueden cambiar en una versión menor siempre que las n
 | **Paquetes npm** | Las exportaciones públicas de `@devicechain/client`, `@devicechain/dashboards`, `@devicechain/widgets`, `@devicechain/widget-sdk` y `@devicechain/brand`. El SDK de widgets tiene además su propio `sdkApiVersion`, que decide si un widget guardado se sigue mostrando; consulta [Versiones de widgets y compatibilidad](../guides/widget-versions-and-compatibility.md). |
 | **SDK de C#** | La API pública del paquete NuGet `DeviceChain.Sdk`, sobre el que se construye el paquete de Unity. |
 | **`dcctl`** | Sus comandos, subcomandos e indicadores. Una versión menor no elimina un indicador ni le cambia el significado. |
+| **API Instance (desde v2.0)** | `core.devicechain.io/v1 Instance`: campos de spec y status, tipos y motivos de condiciones, y las anotaciones y el finalizador documentados. La cobertura comienza en v2.0; v1 está actualmente en vista previa, como se explica abajo. |
 
 Dos reglas se aplican a lo que una versión menor puede añadir, así que escribe tus clientes para tolerarlo:
 
@@ -63,35 +64,79 @@ página de referencia o de guía y, para cada operación, campo, argumento, tipo
 de GraphQL de esa superficie, en su descripción. Mientras una superficie
 está en vista previa puede cambiar de forma incompatible en una versión menor; cuando lo hace, la sección
 de esa versión en [Versiones y actualizaciones](./releases-and-upgrades.md) dice qué cambió y qué hacer.
-Una superficie permanece en vista previa como máximo durante dos versiones menores; al terminar la segunda
-se promueve y queda cubierta como todo lo demás. Un cambio incompatible en una superficie en vista previa
+Una superficie permanece en vista previa hasta cumplir su propia condición de promoción y entonces queda cubierta.
+La condición **predeterminada** es dos versiones menores después de entrar en vista previa; una superficie
+puede indicar otra condición abajo. Cada superficie enumerada indica qué condición se aplica. Un cambio incompatible en una superficie en vista previa
 no queda exento de las comprobaciones de compatibilidad del proyecto: se declara allí como una ruptura
 intencionada, igual que cualquier otra, de modo que ningún cambio en vista previa se publica sin que se
 note. Un formato de archivo en vista previa lleva una versión, como `v1alpha1`, y una herramienta que no
 conoce la versión rechaza el archivo en lugar de adivinar.
 
-Hoy el nivel de vista previa contiene cuatro superficies. Las pruebas de reglas: la operación `evaluateRules`
+#### Compatibilidad de la API Instance {#instance-api-compatibility}
+
+**Instance v1 está en vista previa en v1.10; queda cubierta desde v2.0.** Este compromiso es prospectivo.
+La promesa existente sobre status continúa: todos sus campos son opcionales, los cambios solo añaden
+elementos y los lectores tratan los tipos y motivos de condiciones desconocidos como Unknown.
+Instance `v1beta1` seguirá ofreciéndose durante toda la serie v2.x y se declarará obsoleta en v2.0.
+`spec.grafanaSSO`, `spec.compact` y el tipo `InstanceConfiguration` no se eliminan en v2.0.
+Siguen disponibles mientras están obsoletos; su eliminación es un proyecto de v3 y debe respetar las
+dos versiones menores de obsolescencia descritas en [Obsolescencia](#deprecation).
+El almacenamiento sigue en `v1beta1`; la migración de almacenamiento aún no se ha publicado.
+
+#### Promoción de la API del ejecutor {#executor-api-promotion}
+
+**`ExecutorEnrollment` e `InstanceOperation` siguen en `core.devicechain.io/v1beta1` hasta v2.0 inclusive.**
+Son una excepción explícita al límite de dos versiones menores en vista previa: se promueven
+cuando se habilite la ejecución de acciones en una versión publicada, una vez que la
+comprobaciones que rechazan las acciones inseguras sobre instancias se hayan publicado y existan privilegios explícitos del proveedor.
+Sus interfaces ofrecidas quedan cubiertas desde esa versión; cualquier promoción posterior de la
+versión de la API debe conservar los objetos persistidos existentes. La promoción de Instance v1
+por sí sola no promueve los tipos del ejecutor. Ninguna acción del ejecutor es ejecutable en la compilación actual:
+las solicitudes que serían válidas se rechazan con `NotExecutableInThisBuild` (consulta
+[Ejecutor en el clúster](./kubernetes-operator.md#in-cluster-executor)).
+
+Las pruebas de reglas y el producto como código están **cubiertos desde v1.10** y dejan de estar en vista previa desde esa versión.
+Las pruebas de reglas incluyen la operación `evaluateRules`
 de la API de event-processing, los formatos de archivo de escenario y de prueba, y el comando `dcctl test`
-que los lee (consulta [Probar tus reglas](../guides/testing-your-rules.md)). El producto como código:
-`dcctl product export`, `plan` y `apply`, y su formato de paquete (consulta [Producto como código](../guides/product-as-code.md)).
-Y las acciones de agentes: los alcances OAuth `act:*` y sus permisos de propuesta derivados;
+que los lee (consulta [Probar tus reglas](../guides/testing-your-rules.md)).
+El producto como código incluye `dcctl product export`, `plan` y `apply`, y su formato de paquete
+(consulta [Producto como código](../guides/product-as-code.md)); ambas superficies entraron en vista previa en v1.3.
+
+Otras superficies en vista previa incluyen las acciones de agentes: los alcances OAuth `act:*` y sus permisos de propuesta derivados;
 las operaciones de la política de agentes (`agentPolicy`, `agentPolicyVersions`, `saveAgentPolicyDraft`,
 `publishAgentPolicy`, `rollbackAgentPolicy`, `setAgentActuation`) y su documento (formato `v1alpha1`);
 las consultas `agentActuationDecision` y `agentExecutionDecision`; los controles del operador por
 inquilino (`tenantAgentActuation`, `setTenantAgentActuationSuspended`); la creación de cuentas de
 servicio de agentes (`ServiceAccountCreateRequest.agent`) y los permisos de sus tokens descritos en
 `ServiceAccount.roles`; y las operaciones de propuestas de agentes (`proposeAlarmAction`,
-`approveAgentProposal`, `rejectAgentProposal`, `agentProposals`, `agentProposal`) (consulta
-[Acciones de agentes](../concepts/mcp.md#agent-actions)). Las superficies GraphQL en vista previa
-incluyen sus tipos de entrada y resultado exclusivos, campos, argumentos y valores de enumeración.
-El campo `ServiceAccount.agent` no está en vista previa: está cubierto desde la versión que lo añade.
-Los roles de las cuentas de servicio ordinarias siguen cubiertos. Todavía no se ofrece ninguna
-herramienta MCP de acción; las herramientas MCP de lectura siguen en el catálogo no cubierto anterior.
+`approveAgentProposal`, `rejectAgentProposal`, `agentProposals`, `agentProposal`) y `proposeCommand`,
+`approveAgentProposal`, `rejectAgentProposal`, `agentProposals` y `agentProposal` de command-delivery
+(consulta [Acciones de agentes](../concepts/mcp.md#agent-actions)); promoción: **cubiertas desde v2.0, cuando las aprobaciones pasen a un modelo común de aprobación**.
+Cuando están habilitadas, MCP ofrece las herramientas de propuesta en vista previa `propose_alarm_action`
+y `propose_command` (que llama a `proposeCommand`), además de `get_proposal` y `list_my_proposals` para leer propuestas.
+Su condición de promoción es **cubiertas desde v2.0, cuando las aprobaciones pasen a un modelo común de aprobación**.
+Las personas aprueban en la consola; MCP no ofrece herramientas de aprobación, rechazo ni ejecución.
+Las herramientas MCP de lectura ordinarias siguen en el catálogo no cubierto anterior.
 
-La preparación de operaciones de flota entra en vista previa en **v1.9**, cuando comienza su
-plazo de vista previa: la consulta `fleetOperationReadiness`, los tipos `FleetOperationReadiness`
-y `FleetOperationEnforcement`, incluidos sus campos y valores de enumeración, y
-`dcctl fleet-op readiness`. Requieren `fleet:operate`; se rechazan los miembros con ámbito limitado.
+La revisión de automatizaciones: `automationReviewPolicy`, `automationReviewBreakGlass`,
+`automationReview`, `automationReviews`, `setAutomationReviewPolicy`,
+`approveAutomationReviewPolicyChange`, `cancelAutomationReviewPolicyChange`, `runAutomationReview`,
+`approveAutomationReview` y `rejectAutomationReview` de device-management, y `compareRuleVersions`
+de event-processing (solo para la identidad de servicio; consulta [Revisión de cambios de automatización](../concepts/automation-change-review.md));
+promoción: **cubierta desde v2.0, cuando las aprobaciones pasen a un modelo común de aprobación**.
+Las superficies GraphQL en vista previa incluyen sus tipos de entrada y resultado exclusivos, campos,
+argumentos y valores de enumeración, con la misma condición de promoción que sus operaciones.
+El campo `ServiceAccount.agent` no está en vista previa: está cubierto desde la versión que lo añade.
+Los roles de las cuentas de servicio ordinarias siguen cubiertos.
+
+La preparación de cambios masivos entró en vista previa en **v1.9**, cuando comenzó su plazo.
+En **v1.10**, la superficie de dispositivos se llama cambios masivos: la consulta
+`bulkChangeReadiness`, los tipos `BulkChangeReadiness` y `BulkChangeEnforcement`, incluidos
+sus campos y valores de enumeración, y `dcctl bulk-change readiness`. Los nombres obsoletos
+`fleetOperationReadiness`, `FleetOperationReadiness`, `FleetOperationEnforcement` y
+`dcctl fleet-op readiness` siguen funcionando por compatibilidad, incluidos los clientes v1.9.
+El cambio de nombre no reinicia el plazo de vista previa. Promoción: **dos versiones menores después de entrar (predeterminada)**. Requieren `fleet:operate`; se rechazan
+los miembros con ámbito limitado.
 
 ## Rutas de actualización admitidas {#upgrade-paths}
 

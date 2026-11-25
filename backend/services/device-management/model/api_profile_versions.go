@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/payloaddecode"
@@ -232,11 +233,16 @@ func (api *Api) deviceProfileByToken(ctx context.Context, token string) (*Device
 // the unique (device_profile_id, version) index rejects a duplicate version number.
 func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 	label, description *string, publishedBy string) (*DeviceProfileVersion, error) {
-	return api.PublishDeviceProfileReviewed(ctx, token, label, description, publishedBy, nil)
+	var publishedById *string
+	if claims, ok := auth.ClaimsFromContext(ctx); ok && claims.Subject != "" {
+		id := claims.Subject
+		publishedById = &id
+	}
+	return api.PublishDeviceProfileReviewed(ctx, token, label, description, publishedBy, nil, publishedById)
 }
 
 func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
-	label, description *string, publishedBy string, automationReviewToken *string) (*DeviceProfileVersion, error) {
+	label, description *string, publishedBy string, automationReviewToken *string, publishedById *string) (*DeviceProfileVersion, error) {
 	profile, err := api.deviceProfileByToken(ctx, token)
 	if err != nil {
 		return nil, err
@@ -282,6 +288,7 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 		Description:     rdb.NullStrOf(description),
 		Snapshot:        snapshot,
 		PublishedBy:     publishedBy,
+		PublishedById:   publishedById,
 	}
 	// Parse the just-built snapshot to extract its ENABLED scoped rules — the live scope
 	// references this new active version carries (ADR-062 S4). A parse failure fails the
@@ -365,6 +372,10 @@ func (api *Api) PublishDeviceProfileReviewed(ctx context.Context, token string,
 		}
 		activeSince = nextActivationInstant(floor)
 		version.CreatedAt = activeSince
+		version.AuthoredVia, err = snapshotAuthoredVia(newSnap)
+		if err != nil {
+			return err
+		}
 		if err := tx.Create(version).Error; err != nil {
 			return err
 		}

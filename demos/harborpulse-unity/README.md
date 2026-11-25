@@ -465,6 +465,19 @@ the platform's identities. Offline preview emits only supplied stand-ins with SC
 and platform-read gaps. Restore-set identities use the verifier's database microsecond precision;
 unexpected stored times remain in the observed set and prevent an exact tally.
 
+`Update` runs on every frame and the reads are republished every few seconds, so the observer does on a
+frame only what changed: a read is parsed once per distinct answer (a poll that brings back the same bytes
+keeps its rows and moves its as-of), and each join (alarms, attempts, the replacement, commands, the
+rollout, membership, the measurement histories, the runner's declarations) runs again only when something
+it reads has changed or an instant it was waiting for has come: a record stamped after "now", a service
+window's end, the minute a replacement waits for its first reading. A join that found a record unreadable
+restates that gap on the frames it sleeps through. `Dotnet~/Tests/DirectorObserverChangeTests.cs` holds
+this to a fixture day shaped like a recorded one (`DirectorFixtureDay`): the records emitted are the same
+with every join run on every frame (`RunEveryJoin`), their digests are those of the observer before it
+waited for changes, and a frame's record visits do not grow with what unchanged reads hold. To see where
+a tick's time goes, minute by minute:
+`HP_FRAME_PROFILE=1 dotnet test -c Release --filter FullyQualifiedName~DirectorFrameProfile --logger "console;verbosity=detailed"`.
+
 Two storyboard predicate corrections are covered by real-identity regressions: page 6 groups each
 device's own alarm cycle within the outage interval, and page 8 joins a post-failure reading to that
 device's actual attempt, rather than treating a rollout as an attempt shared by all targets.
@@ -1305,3 +1318,63 @@ cut at the clean day's times. So page `3c` ranks below it and is waiting on a sh
 the camera on its own second with nothing cut off, and `3c-5` follows when it is done. By then the charger has stood silent for
 longer than the 45 s window and is drawn so. `DirectorTestsStoryboard` pins this: every other page's shots and captions are the
 same to the second with and without page `3c`, on a clean day and on the two days that keep page 3b up longest.
+
+## U5b replay and cut rendering
+
+The player renders the storyboard's authored cuts (`cuts.c90`, `cuts.c300` in `storyboard.json`) from a recorded live day, with no network:
+
+```bash
+Harborpulse.exe -hp-resolution 1920x1080 -hp-replay <recording directory or compact file> -hp-cut c90 \
+  -hp-render-dir <frames> -hp-render-fps 30
+ffmpeg -framerate 30 -i <frames>/frame-%06d.png -c:v libx264 -crf 17 -pix_fmt yuv420p -movflags +faststart harborpulse-c90.mp4
+```
+
+Rendering is offline: every frame is one step of the frame rate whatever the machine's speed (`Time.captureFramerate`), the show clock is
+the frame's number, and the player quits after the last frame. Beside the PNGs it writes `render.json` (every segment, its recorded span
+and its rate), `frame_check.json` (every caption the cut authored: shown or not, the recorded second, and the event keys of the records
+behind each claim) and `ui_text.txt` (every distinct string drawn). Without `-hp-render-dir` the cut plays on screen.
+
+`Model/Director/RecordedDay` loads a recording once (observations into one `ObservationStore`, `/status` samples as the clock);
+`ReplaySource` is the scene's `IHarborSource` at one recorded instant; `CutPlayer` is the cut's director. It selects nothing: the cut
+lists its shots and when each caption appears. It decides one thing per caption: whether the recording supports it, with the same
+predicates the live director uses, read at the recorded instant the caption appears.
+
+- A caption appears at its authored instant, or as soon after it as the recording supports it while its hold still fits in the shot.
+- Captions authored for the same instant and slot are alternatives, strongest first.
+- A claim the recording does not support is not shown. `frame_check.json` says so, and when (if ever) the day would have supported it,
+  which is what a cut's spans are authored against.
+- A segment whose rate is not 1 carries a rate chip; a shot borrowed out of order carries its disclosure.
+- At each shot the observed model is rebuilt and led in over the previous half minute of the recording, so alarms, command history and
+  pump start evidence stand as they did.
+
+What a recording does not hold stays absent. A recording made before the `/status` samples carried them has no alarm severities (such
+an alarm is drawn as the weakest one, one ring) and no truck fixes (the truck stands at the depot with "no fix"). The reported
+`well_alarm_m` attribute is not recorded.
+
+**A cut's spans are authored against one recorded day.** `Dotnet~/Tests/RecordedDayTool.cs` is the authoring aid:
+
+```bash
+cd demos/harborpulse-unity/Dotnet~
+HARBORPULSE_RECORDING=<recording directory> HARBORPULSE_COMPACT=<day.ndjson> \
+  dotnet test -c Release --filter FullyQualifiedName~RecordedDayTool --logger "console;verbosity=detailed"
+```
+
+It prints each caption's fate in both cuts and writes the day as one compact stream (a live recording writes about seven coverage rows
+a frame; merged they are a few thousand rows, so the compact file is the one to hand the player). The committed spans fit the clean day recorded on 2026-11-25, whose reduced copy is `Dotnet~/Tests/Fixtures/day-20261125.ndjson.gz`;
+`RecordedDayCutTests` pins both cuts' captions over it. (`day-20261124.ndjson.gz` is the first recorded day, made before a recording
+sampled severities and truck fixes; it keeps the "absent stays absent" path under test.) A recording whose last row was cut off by a
+crash loads without that row.
+
+### Context lines, rain and the cleared tick
+
+Each storyboard page may carry a `context` line ("North Quay · the storm drain pump and its well"), drawn under the top bar while the
+page is up, live and in a cut. It says where the viewer is and what is in frame. It is orientation, never evidence: the loader refuses
+a platform verb or a digit in it, as it does in a `pre` caption, so it cannot say what the platform did.
+
+The rain is `Model/RainField`: every drop falls through the world at its own terminal speed (8 to 10 m/s), pushed by the storm's wind,
+and is drawn as a streak one exposure long where it is inside a box around the eye. It is a pure function of the wave clock, so a
+replay at any frame rate draws the same drop in the same place; a stronger rain draws more drops and never moves one. (The first rain
+was one sheet of streaks that repeated every few metres and wrapped: in light rain it fell further per frame than its own repeat, and
+read as standing still or climbing.)
+
+A cleared alarm's green tick turns to the eye (`AlarmBeacons.TickYawDeg`), so it reads left to right from every side of its device.

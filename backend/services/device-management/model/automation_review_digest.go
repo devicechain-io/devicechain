@@ -70,9 +70,13 @@ func SnapshotDigest(raw []byte) (string, error) {
 	return reviewHash(b), nil
 }
 
+// stripReviewBookkeeping also drops a rule's AuthoredVia. It records which doors saved
+// the rule, not what the rule does, and a build that predates it writes no key at all:
+// keeping it would let a door-only save, or a review and publish served by pods either
+// side of a rolling upgrade, invalidate a review of unchanged content.
 func stripReviewBookkeeping(item any) {
 	if m, ok := item.(map[string]any); ok {
-		for _, k := range []string{"ID", "CreatedAt", "UpdatedAt", "DeletedAt", "TenantId", "DeviceProfileId", "DeviceProfile"} {
+		for _, k := range []string{"ID", "CreatedAt", "UpdatedAt", "DeletedAt", "TenantId", "DeviceProfileId", "DeviceProfile", "AuthoredVia"} {
 			delete(m, k)
 		}
 	}

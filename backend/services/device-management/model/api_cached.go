@@ -813,8 +813,8 @@ func (capi *CachedApi) evictProfileResolution(ctx context.Context, profileId uin
 	})
 }
 
-func (capi *CachedApi) PublishDeviceProfileReviewed(ctx context.Context, token string, label, description *string, publishedBy string, automationReviewToken *string) (*DeviceProfileVersion, error) {
-	version, err := capi.Api.PublishDeviceProfileReviewed(ctx, token, label, description, publishedBy, automationReviewToken)
+func (capi *CachedApi) PublishDeviceProfileReviewed(ctx context.Context, token string, label, description *string, publishedBy string, automationReviewToken *string, publishedById *string) (*DeviceProfileVersion, error) {
+	version, err := capi.Api.PublishDeviceProfileReviewed(ctx, token, label, description, publishedBy, automationReviewToken, publishedById)
 	if err != nil {
 		return nil, err
 	}

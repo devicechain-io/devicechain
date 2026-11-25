@@ -33,6 +33,8 @@ The server exposes twelve **read** tools. Each one is a query against the same G
 - `query_measurements` — raw time-series readings over a time range.
 - `aggregate_measurements` — bucketed aggregates (min/max/avg and the like) over a range. `startTime` and `intervalSeconds` are required, `endTime` defaults to now, and a request is capped at 10,000 buckets and at 50,000 rows (buckets multiplied by the number of measurement names returned).
 
+A reading from a `STRING` metric is text, so `get_latest_measurements` and `query_measurements` return it as `text` inside the reading's `untrusted` member, marked as device-reported, and leave `value` empty. An assistant reads it as data, never as instructions. An empty text arrives as no text. A page of large text readings can exceed the response limit, in which case the result is refused whole: narrow the window or the page size. `aggregate_measurements` does not cover a `STRING` metric.
+
 **Position**
 
 - `query_locations` — a device's reported positions over an optional time window, paged and bounded. Results are newest first, so the first one is the device's last known position; asking for a single result with no window answers "where is it now". Each position carries latitude and longitude. When the receiver reported them, it also carries elevation, accuracy, speed and heading. An absent field was not reported, and means unknown rather than zero. Reading positions needs two things the other tools do not. The client must also be authorized for the separate `location` scope; a client that wants both asks for `read-only location`. The user must also hold the **location** permission, which is deliberately not part of the read-only viewer baseline. This one tool can therefore be refused for a caller whose other read tools all work.
@@ -217,13 +219,13 @@ Connect an assistant, and it can *read devices, state, measurements, and alarms*
 Every tool call writes one line to the `mcp` service's log, whatever the call's outcome. Reads are not entries in the audit journal, which records changes and sign-ins, so these lines are the only record of what an assistant read. A line looks like this:
 
 ```json
-{"instance":"prod","area":"mcp","audit":"mcp_tool_call","schema":2,"tenant":"acme","actor":"ana@example.com","client_id":"claude-desktop","scopes":["read-only"],"sudo":false,"tool":"query_measurements","args_sha256":"5f1c…","outcome":"ok","duration_ms":42,"time":"2026-10-16T09:12:03Z","message":"MCP tool call"}
+{"instance":"prod","area":"mcp","audit":"mcp_tool_call","schema":3,"tenant":"acme","actor":"ana@example.com","client_id":"claude-desktop","scopes":["read-only"],"sudo":false,"tool":"query_measurements","args_sha256":"5f1c…","outcome":"ok","proposal":"","verdict":"","duration_ms":42,"time":"2026-10-16T09:12:03Z","message":"MCP tool call"}
 ```
 
 | Field | Meaning |
 | --- | --- |
 | `audit` | Always `mcp_tool_call`. Select the records on this field: they carry no `level`. |
-| `schema` | The version of this layout, `2`. A change to the fields is announced in the release notes with a new number. Version 2 only adds `scopes`; every field of version 1 is unchanged. |
+| `schema` | The version of this layout, `3`. Version 2 added `scopes`; version 3 adds `proposal` and `verdict`. Existing fields retain their meanings. |
 | `tenant`, `actor` | The tenant and user the access token names. The actor is the user's email. |
 | `client_id` | The registered OAuth client the token was issued to, which tells you which application made the call. |
 | `scopes` | The OAuth scopes the access token was granted, as a list, for example `["read-only"]`. |
@@ -232,6 +234,8 @@ Every tool call writes one line to the `mcp` service's log, whatever the call's 
 | `args_sha256` | The SHA-256 of the call's arguments, with keys sorted and whitespace removed, so identical requests share a value. The arguments themselves are never written. |
 | `outcome` | `ok`, `error` (the tool refused or failed the call, including arguments it does not accept and a refusal because the user lacks the permission) or `rejected` (a call to a tool the server does not have). A request too malformed to name a tool at all is refused by the protocol layer before it reaches any tool, and writes no line. |
 | `duration_ms` | How long the call took. |
+| `proposal` | The stored proposal token returned by a Preview proposal tool, if present and valid. Empty for reads, dry runs, and refusals that store no proposal. |
+| `verdict` | The platform's `APPROVE` or `REFUSE`, with allowlisted refusal codes appended as `REFUSE:CODE,CODE`. Coded GraphQL refusals use the same form, for example `REFUSE:POLICY_UNAVAILABLE`. Empty for reads or when no recognized decision is available. Only identifiers and enumerated codes are copied, never rationale, payloads or error messages. |
 
 Some properties of these lines matter when you rely on them:
 

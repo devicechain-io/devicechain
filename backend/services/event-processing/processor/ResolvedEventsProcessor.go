@@ -575,6 +575,9 @@ type ResolvedEventsProcessor struct {
 	// diverge on replay — while it is set, the loop refuses to apply further live events until a
 	// checkpoint commits (see the items branch and checkpoint).
 	idleUncommitted bool
+	// replaying is loop-owned startup reconstruction mode; captured on each
+	// pending output so a deferred publish cannot turn replay into live actuation.
+	replaying bool
 	// gapHeld is the live message the loop is parked on: its stream sequence was more than one
 	// past the engine's and the range in between could not be read (live_gap.go). While it is
 	// set the loop receives no live messages and idle-advance does not run; the ticker retries
@@ -1676,6 +1679,13 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 // resets the engine to empty rather than replaying against sequences the stream no
 // longer holds.
 func (rp *ResolvedEventsProcessor) replayToHead() error {
+	rp.replaying = true
+	defer func() {
+		// Concurrent shards may still hold detections after a failed checkpoint.
+		// Capture their replay mode before returning to live consumption.
+		rp.syncDetector()
+		rp.replaying = false
+	}()
 	// The duplicate guard first: it reads the stream before LastSeq, and the replay reader below
 	// is the last one opened (a snapshot ahead of the stream head primes nothing; the reset below
 	// replaces the guard with the engine).
@@ -2299,6 +2309,7 @@ func (rp *ResolvedEventsProcessor) skipPoison(seq uint64) bool {
 // must never hold a wall-derived value.
 type pendingDetection struct {
 	detectcore.Detection
+	replayed    bool
 	triggeredAt time.Time
 	// early is whether the tick may publish this detection ahead of the checkpoint (see
 	// earlyPublishable). It is decided where the detection is buffered and never revisited.
@@ -2361,7 +2372,7 @@ func (rp *ResolvedEventsProcessor) drainDetections(triggeredAt time.Time, replay
 	for _, d := range dets {
 		rp.detOrd++
 		rp.pendingDets = append(rp.pendingDets, pendingDetection{
-			Detection: d, triggeredAt: triggeredAt, ord: rp.detOrd,
+			Detection: d, triggeredAt: triggeredAt, ord: rp.detOrd, replayed: rp.replaying,
 			early: replayable && rp.earlyPublishable(d),
 		})
 	}

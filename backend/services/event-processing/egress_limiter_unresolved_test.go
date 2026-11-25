@@ -66,7 +66,7 @@ func unreachableAdmissions(t *testing.T, reg *prometheus.Registry, name, dim str
 	return -1
 }
 
-// The ONE construction site of this service's limiter must report admissions made at the
+// The shared builder for this service's limiters must report admissions made at the
 // platform default because user-management could not be asked — with this service's
 // dimension, and as the cause that pages.
 func TestBuildEgressLimiterCountsUnresolvedAdmissions(t *testing.T) {
@@ -90,4 +90,23 @@ func TestBuildEgressLimiterCountsUnresolvedAdmissions(t *testing.T) {
 	}
 	require.Equal(t, float64(1), unreachableAdmissions(t, reg, series, "outbound"),
 		"exactly the one admission made after the failure")
+}
+
+// Commands and connector calls have independent fallback-admission counters, just
+// as they have independent buckets. Register both on the same service registry.
+func TestCommandFallbackAdmissionsAreSeparate(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ms := &core.Microservice{FunctionalArea: "event-processing"}
+	ms.UseMetricsRegistry(reg)
+	connectorUnresolved := governance.NewUnresolvedAdmissions(ms, governance.Outbound)
+	commandUnresolved := newCommandUnresolvedAdmissions(ms)
+	const connectorSeries = "devicechain_eventprocessing_governance_unresolved_admissions_total"
+	const commandSeries = "devicechain_eventprocessing_react_command_governance_unresolved_admissions_total"
+	require.Equal(t, float64(0), unreachableAdmissions(t, reg, commandSeries, ""))
+	commandUnresolved(core.CeilingUnreachable)
+	require.Equal(t, float64(1), unreachableAdmissions(t, reg, commandSeries, ""))
+	require.Equal(t, float64(0), unreachableAdmissions(t, reg, connectorSeries, "outbound"))
+	connectorUnresolved(core.CeilingUnreachable)
+	require.Equal(t, float64(1), unreachableAdmissions(t, reg, connectorSeries, "outbound"))
+	require.Equal(t, float64(1), unreachableAdmissions(t, reg, commandSeries, ""))
 }

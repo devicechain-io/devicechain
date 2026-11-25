@@ -107,7 +107,7 @@ sidebar_position: 19
 
 {/* TODO(screenshot): role-detail, a tenant role with the grouped authority checklist. */}
 
-`fleet:operate` 为设备群操作预留；本版本尚无任何 API 使用它。它不会预置到任何内置角色中，但 `*` 已满足该权限。请仅在升级的滚动部署全部完成后才将其授予自定义角色：旧版 user-management Pod 会拒绝包含未知权限的任何角色编辑，即使该角色已持有此权限，且此次编辑与该权限无关。
+`fleet:operate` 用于批量变更就绪检查（Preview）。它不会预置到任何内置角色中，但 `*` 已满足该权限。请仅在升级的滚动部署全部完成后才将其授予自定义角色：旧版 user-management Pod 会拒绝包含未知权限的任何角色编辑，即使该角色已持有此权限，且此次编辑与该权限无关。
 
 你自己未持有的权限项显示为灰色：任何人都不能授予超出自己所拥有的权限。角色只能携带租户权限项，因此实例级权限从不会出现在可选项中。
 

@@ -225,3 +225,22 @@ declaration does not record makes the declaration wrong for everyone who reads i
 			strings.Join(want, ", "), strings.Join(found, ", "))
 	}
 }
+
+// Bulk-change flags describe a tenant API request, never an instance deployment.
+// Keep their disposition explicit without adding them to the bootstrap declaration.
+func TestBulkChangeFlagsAreRunScoped(t *testing.T) {
+	runtimeFlags := map[string]bool{
+		"kind": true, "key": true, "value": true, "type": true, "unset": true,
+		"device": true, "devices-file": true, "token": true, "name": true,
+		"max-posts-per-second": true, "failure-threshold": true, "ambiguity-threshold": true,
+		"settle-deadline": true, "contract-digest": true, "watch": true,
+		"posting": true, "settlement": true, "output": true, "help": true,
+	}
+	for _, c := range bulkChangeCmd.Commands() {
+		c.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
+			if !runtimeFlags[f.Name] {
+				t.Errorf("bulk-change %s --%s needs an explicit run-scoped disposition", c.Name(), f.Name)
+			}
+		})
+	}
+}

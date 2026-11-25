@@ -7,16 +7,29 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/devicechain-io/dcctl/fleetop"
+	"github.com/devicechain-io/dcctl/bulkchange"
 	"github.com/spf13/cobra"
 )
 
 type fleetReadinessClient struct {
 	state   string
 	orphans int
+}
+
+type spellingReadinessClient struct {
+	fleetReadinessClient
+	bulk bool
+}
+
+func (c spellingReadinessClient) Query(ctx context.Context, endpoint, query string, vars map[string]any, out any) error {
+	if strings.Contains(query, "bulkChangeReadiness") != c.bulk {
+		return fmt.Errorf("wrong query for command spelling: %s", query)
+	}
+	return c.fleetReadinessClient.Query(ctx, endpoint, query, vars, out)
 }
 
 func (c fleetReadinessClient) Query(_ context.Context, _ string, _ string, _ map[string]any, out any) error {
@@ -34,7 +47,7 @@ func TestFleetOperationReadinessCommandStatus(t *testing.T) {
 	t.Cleanup(func() { fleetOpSession = previous })
 	for _, state := range []string{"NOT_INSTALLED", "DISABLED", "UNREADABLE", "ENFORCED"} {
 		for _, orphans := range []int{0, 2} {
-			fleetOpSession = func(*cobra.Command) (fleetop.Client, string, error) {
+			fleetOpSession = func(*cobra.Command) (bulkchange.Client, string, error) {
 				return fleetReadinessClient{state, orphans}, "test", nil
 			}
 			var out bytes.Buffer
@@ -68,6 +81,45 @@ func TestFleetOperationReadinessCommandRegistration(t *testing.T) {
 	for _, name := range []string{"tenant", "server", "tls", "email", "password", "otp"} {
 		if fleetOpCmd.PersistentFlags().Lookup(name) == nil {
 			t.Fatalf("missing session flag --%s", name)
+		}
+	}
+}
+
+func TestBulkChangeReadinessSpellings(t *testing.T) {
+	previous := fleetOpSession
+	t.Cleanup(func() { fleetOpSession = previous })
+	for _, spelling := range []string{"bulk-change", "fleet-op"} {
+		for _, state := range []string{"ENFORCED", "NOT_INSTALLED"} {
+			t.Run(spelling+"/"+state, func(t *testing.T) {
+				fleetOpSession = func(*cobra.Command) (bulkchange.Client, string, error) {
+					return spellingReadinessClient{fleetReadinessClient{state, 0}, spelling == "bulk-change"}, "test", nil
+				}
+				cmd, args, err := rootCmd.Find([]string{spelling, "readiness"})
+				if err != nil || len(args) != 0 || cmd.Name() != "readiness" {
+					t.Fatalf("%s readiness missing: %v %v", spelling, args, err)
+				}
+				var out, stderr bytes.Buffer
+				testRoot := &cobra.Command{Use: "dcctl", SilenceErrors: true, SilenceUsage: true}
+				parent, _ := newBulkChangeCommand(spelling)
+				testRoot.AddCommand(parent)
+				testRoot.SetOut(&out)
+				testRoot.SetErr(&stderr)
+				testRoot.SetArgs([]string{spelling, "readiness", "-o", "json"})
+				err = testRoot.ExecuteContext(context.Background())
+				if (err == nil) != (state == "ENFORCED") || !json.Valid(out.Bytes()) {
+					t.Fatalf("%s: err=%v output=%s", spelling, err, out.String())
+				}
+				want := ""
+				if spelling == "fleet-op" {
+					want = "dcctl fleet-op is deprecated; use dcctl bulk-change.\n"
+					if cmd.Parent().Deprecated == "" {
+						t.Fatal("legacy command is not marked deprecated")
+					}
+				}
+				if stderr.String() != want {
+					t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+				}
+			})
 		}
 	}
 }

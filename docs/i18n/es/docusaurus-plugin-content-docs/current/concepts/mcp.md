@@ -33,6 +33,8 @@ El servidor expone doce herramientas de **lectura**. Cada una es una consulta co
 - `query_measurements` — lecturas de series temporales sin procesar en un rango de tiempo.
 - `aggregate_measurements` — agregados por intervalos (min/max/promedio y similares) en un rango. `startTime` e `intervalSeconds` son obligatorios, `endTime` toma por defecto la hora actual y una solicitud tiene un máximo de 10 000 intervalos y de 50 000 filas (los intervalos multiplicados por el número de nombres de medición devueltos).
 
+Una lectura de una métrica `STRING` es texto, así que `get_latest_measurements` y `query_measurements` la devuelven como `text` dentro del miembro `untrusted` de la lectura, marcada como notificada por el dispositivo, y dejan `value` vacío. Un asistente la lee como un dato, nunca como instrucciones. Un texto vacío llega como ausencia de texto. Una página de lecturas de texto grandes puede superar el límite de respuesta, y entonces el resultado se rechaza completo: reduce la ventana o el tamaño de página. `aggregate_measurements` no cubre una métrica `STRING`.
+
 **Posición**
 
 - `query_locations` — las posiciones reportadas de un dispositivo en una ventana de tiempo opcional, paginadas y acotadas. Los resultados vienen de más reciente a más antiguo, así que el primero es la última posición conocida del dispositivo; pedir un único resultado sin ventana responde «¿dónde está ahora?». Cada posición lleva latitud y longitud. Cuando el receptor los reportó, también lleva elevación, precisión, velocidad y rumbo. Un campo ausente no se reportó, y significa desconocido, no cero. Leer posiciones requiere dos cosas que las demás herramientas no necesitan. El cliente también debe estar autorizado para el alcance aparte `location`; un cliente que quiera ambos pide `read-only location`. Además, el usuario debe tener el permiso **location**, que deliberadamente no forma parte de la base de solo lectura de un visor. Por eso esta herramienta en concreto puede rechazarse para un solicitante al que el resto de herramientas de lectura le funcionan.
@@ -224,13 +226,13 @@ Conecta un asistente y podrá *leer dispositivos, estado, mediciones y alarmas* 
 Cada llamada a una herramienta escribe una línea en el registro del servicio `mcp`, sea cual sea su resultado. Las lecturas no son entradas del diario de auditoría, que registra cambios e inicios de sesión, así que estas líneas son el único registro de lo que leyó un asistente. Una línea tiene este aspecto:
 
 ```json
-{"instance":"prod","area":"mcp","audit":"mcp_tool_call","schema":2,"tenant":"acme","actor":"ana@example.com","client_id":"claude-desktop","scopes":["read-only"],"sudo":false,"tool":"query_measurements","args_sha256":"5f1c…","outcome":"ok","duration_ms":42,"time":"2026-10-16T09:12:03Z","message":"MCP tool call"}
+{"instance":"prod","area":"mcp","audit":"mcp_tool_call","schema":3,"tenant":"acme","actor":"ana@example.com","client_id":"claude-desktop","scopes":["read-only"],"sudo":false,"tool":"query_measurements","args_sha256":"5f1c…","outcome":"ok","proposal":"","verdict":"","duration_ms":42,"time":"2026-10-16T09:12:03Z","message":"MCP tool call"}
 ```
 
 | Campo | Significado |
 | --- | --- |
 | `audit` | Siempre `mcp_tool_call`. Selecciona los registros por este campo: no llevan `level`. |
-| `schema` | La versión de este formato, `2`. Un cambio en los campos se anuncia en las notas de la versión con un número nuevo. La versión 2 solo añade `scopes`; todos los campos de la versión 1 permanecen igual. |
+| `schema` | La versión de este formato, `3`. La versión 2 añadió `scopes`; la versión 3 añade `proposal` y `verdict`. Los campos existentes conservan su significado. |
 | `tenant`, `actor` | El inquilino y el usuario que nombra el token de acceso. El actor es el correo electrónico del usuario. |
 | `client_id` | El cliente OAuth registrado al que se emitió el token, que indica qué aplicación hizo la llamada. |
 | `scopes` | Los ámbitos OAuth que se concedieron al token de acceso, como lista, por ejemplo `["read-only"]`. |
@@ -239,6 +241,8 @@ Cada llamada a una herramienta escribe una línea en el registro del servicio `m
 | `args_sha256` | El SHA-256 de los argumentos de la llamada, con las claves ordenadas y sin espacios, de modo que solicitudes idénticas comparten valor. Los argumentos nunca se escriben. |
 | `outcome` | `ok`, `error` (la herramienta rechazó la llamada o falló, incluidos argumentos que no acepta y un rechazo porque el usuario no tiene el permiso) o `rejected` (una llamada a una herramienta que el servidor no tiene). Una solicitud tan mal formada que ni siquiera nombra una herramienta la rechaza la capa de protocolo antes de que llegue a ninguna herramienta, y no escribe ninguna línea. |
 | `duration_ms` | Cuánto tardó la llamada. |
+| `proposal` | El token guardado que devuelve una herramienta de propuestas en Preview, si está presente y es válido. Vacío para lecturas, simulaciones y rechazos que no guardan una propuesta. |
+| `verdict` | `APPROVE` o `REFUSE` según la plataforma, con códigos de rechazo permitidos en la forma `REFUSE:CODE,CODE`. Los rechazos GraphQL codificados usan la misma forma, por ejemplo `REFUSE:POLICY_UNAVAILABLE`. Vacío para lecturas o si no hay una decisión reconocida. Solo se copian identificadores y códigos enumerados, nunca justificaciones, cargas útiles ni mensajes de error. |
 
 Algunas propiedades de estas líneas importan cuando dependes de ellas:
 

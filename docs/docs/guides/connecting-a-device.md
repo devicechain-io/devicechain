@@ -173,13 +173,17 @@ A value outside its range is rejected as bad data on the first delivery rather t
 
 ### Alert {#alert}
 
-**`Alert`** — something the device wants a human or a rule to see:
+**`Alert`** — an alert reported by the device:
 
 ```json
 "payload": { "entries": [ { "type": "overheat", "level": 5, "message": "coolant over limit", "source": "ecu" } ] }
 ```
 
-`type` is required. It is the classifier that notification policies, rules and console filters route on, so an untyped alert is a record nothing can act on. `level`, `message` and `source` are optional.
+`type` is required and classifies the device-reported alert. `level`, `message` and `source` are optional.
+
+Device-reported alerts are **stored and queryable** through the event-management GraphQL query
+`alertEvents`. They are **not evaluated by detection rules**: rules cannot read their `type`, `level`,
+`message` or `source`. An alert reported by a device is distinct from an alarm raised by a detection rule.
 
 ## MQTT
 

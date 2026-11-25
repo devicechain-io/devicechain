@@ -308,7 +308,9 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 		return created, nil
 	}
 	if created.SourceType != string(entity.TypeDevice) {
-		if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
+		if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+			return createRelationshipWithGenerationTx(tx, created)
+		}); err != nil {
 			return nil, err
 		}
 		created.RelationshipType = *rtmatches[0]

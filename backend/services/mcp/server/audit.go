@@ -46,14 +46,13 @@ import (
 const (
 	auditField         = "audit"
 	auditKindToolCall  = "mcp_tool_call"
-	auditSchemaVersion = 2
+	auditSchemaVersion = 3
 )
 
-// Schema 2 is a SUPERSET of schema 1: it adds `scopes`, the OAuth scopes the verified token
-// was granted, and changes nothing else. Two more members are RESERVED for the day an action
-// exists and are written by nothing yet: `proposal` (the token of the proposal a call was made
-// under) and `verdict` (what the gate decided). A log pipeline that selects on "audit" and
-// parses the members it knows keeps working across the bump.
+// Schema 2 added `scopes`, the OAuth scopes the verified token was granted. Schema 3
+// populates the formerly reserved `proposal` and `verdict` members for Preview proposal
+// tools. Reads intentionally leave both empty. Existing members keep their meanings;
+// a log pipeline that parses the members it knows keeps working across the bump.
 
 // Outcomes recorded on the line. They are the three things a tools/call can come back as,
 // told apart by what the client receives, not by why:
@@ -96,8 +95,10 @@ func auditToolCalls(registered map[string]bool) mcp.Middleware {
 				return next(ctx, method, req)
 			}
 			start := time.Now()
+			decision := &proposalAuditDecision{}
+			ctx = context.WithValue(ctx, proposalAuditKey{}, decision)
 			res, err := next(ctx, method, req)
-			writeToolCallRecord(call, registered, res, err, time.Since(start))
+			writeToolCallRecord(call, registered, res, err, time.Since(start), *decision)
 			return res, err
 		}
 	}
@@ -105,7 +106,7 @@ func auditToolCalls(registered map[string]bool) mcp.Middleware {
 
 // writeToolCallRecord writes the line for one call.
 func writeToolCallRecord(req *mcp.CallToolRequest, registered map[string]bool, res mcp.Result,
-	err error, elapsed time.Duration) {
+	err error, elapsed time.Duration, decision proposalAuditDecision) {
 	tool, args := auditUnregisteredTool, json.RawMessage(nil)
 	if req.Params != nil {
 		if registered[req.Params.Name] {
@@ -135,6 +136,8 @@ func writeToolCallRecord(req *mcp.CallToolRequest, registered map[string]bool, r
 		Str("tool", tool).
 		Str("args_sha256", argumentsDigest(args)).
 		Str("outcome", outcome).
+		Str("proposal", decision.proposal).
+		Str("verdict", decision.verdict).
 		Int64("duration_ms", elapsed.Milliseconds()).
 		Msg("MCP tool call")
 }

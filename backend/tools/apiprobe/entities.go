@@ -1277,6 +1277,30 @@ var entities = []entity{
 			return map[string]any{"req": []any{probeEdge(s, "entity-relationships-bulk")}}
 		},
 	},
+	{
+		// Depends on: entity-group (the STATIC one), device. The probe's device made a
+		// member of the static group through the reserved "member" type. A static group's
+		// membership is these edges, and adding one is what writes
+		// static_membership_generations, the head a later reversal compares against. The
+		// group's campaign is created disabled, so a member gives it nothing to run.
+		Name:     "entity-group-member",
+		Area:     "device-management",
+		Mutation: "createEntityRelationship",
+		Input:    "EntityRelationshipCreateRequest!",
+		Read:     "entityRelationshipsByToken",
+		Fields:   "token sourceType targetType metadata source{token} target{token} relationshipType{token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":            s.tok("entity-group-member"),
+				"sourceType":       "group",
+				"source":           s.tokens["entity-group"],
+				"targetType":       "device",
+				"target":           s.tokens["device"],
+				"relationshipType": "member",
+				"metadata":         meta("entity-group-member"),
+			}}
+		},
+	},
 
 	// ---- command-delivery -------------------------------------------------
 	{

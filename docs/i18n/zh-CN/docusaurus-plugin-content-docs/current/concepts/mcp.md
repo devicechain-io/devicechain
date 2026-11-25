@@ -33,6 +33,8 @@ title: AI 访问（MCP）
 - `query_measurements`：时间范围内的原始时序读数。
 - `aggregate_measurements`：时间范围内按桶聚合的结果，如最小值、最大值和平均值。`startTime` 和 `intervalSeconds` 为必填，`endTime` 默认为当前时间，单次请求最多 10,000 个桶、50,000 行（桶数乘以返回的测量名称数）。
 
+`STRING` 指标的读数是文本，因此 `get_latest_measurements` 和 `query_measurements` 会把它作为 `text` 返回在该读数的 `untrusted` 成员中，并标记为设备上报，同时让 `value` 为空。助手把它当作数据读取，而不是指令。空文本表现为没有文本。一页较大的文本读数可能超过响应上限，此时整个结果会被拒绝：请缩小时间窗口或页大小。`aggregate_measurements` 不涵盖 `STRING` 指标。
+
 **位置**
 
 - `query_locations`：设备在可选时间窗口内上报的位置，支持分页并有数量限制。结果按最新优先排列，因此第一条是最新已知位置；不指定时间窗口并只请求一条，就能回答“现在在哪里”。每个位置包含纬度和经度。如果接收器上报了，也包含海拔、精度、速度和航向。缺失字段表示未上报，即未知，而不是零。读取位置需要其他工具不需要的两项条件：客户端还必须获得独立 `location` 作用域，想同时使用两者时请求 `read-only location`；用户还必须拥有 **location**（位置）权限，该权限有意不包含在只读查看者基础权限中。因此，其他读取工具都可用的调用方，也可能被此工具拒绝。
@@ -206,13 +208,13 @@ MCP 正逐渐成为赋予 AI 助手实际能力的标准方式。风险在于，
 每次工具调用都会在 `mcp` 服务的日志中写入一行，无论调用结果如何。读取操作不会进入审计日志（审计日志记录的是变更和登录），因此这些日志行是助手读取了什么的唯一记录。一行日志如下所示：
 
 ```json
-{"instance":"prod","area":"mcp","audit":"mcp_tool_call","schema":2,"tenant":"acme","actor":"ana@example.com","client_id":"claude-desktop","scopes":["read-only"],"sudo":false,"tool":"query_measurements","args_sha256":"5f1c…","outcome":"ok","duration_ms":42,"time":"2026-10-16T09:12:03Z","message":"MCP tool call"}
+{"instance":"prod","area":"mcp","audit":"mcp_tool_call","schema":3,"tenant":"acme","actor":"ana@example.com","client_id":"claude-desktop","scopes":["read-only"],"sudo":false,"tool":"query_measurements","args_sha256":"5f1c…","outcome":"ok","proposal":"","verdict":"","duration_ms":42,"time":"2026-10-16T09:12:03Z","message":"MCP tool call"}
 ```
 
 | 字段 | 含义 |
 | --- | --- |
 | `audit` | 始终为 `mcp_tool_call`。请按此字段筛选这些记录：它们不带 `level`。 |
-| `schema` | 此格式的版本，`2`。字段的变化会在发行说明中以新的编号公布。版本 2 只新增了 `scopes`，版本 1 的所有字段保持不变。 |
+| `schema` | 此格式的版本，`3`。版本 2 新增了 `scopes`，版本 3 新增了 `proposal` 和 `verdict`。现有字段的含义保持不变。 |
 | `tenant`、`actor` | 访问令牌所指明的租户和用户。actor 是用户的电子邮件地址。 |
 | `client_id` | 令牌所签发给的已注册 OAuth 客户端，可据此判断是哪个应用发起了调用。 |
 | `scopes` | 访问令牌被授予的 OAuth 范围，以列表形式给出，例如 `["read-only"]`。 |
@@ -221,6 +223,8 @@ MCP 正逐渐成为赋予 AI 助手实际能力的标准方式。风险在于，
 | `args_sha256` | 调用参数的 SHA-256，键已排序且去除空白，因此相同的请求具有相同的值。参数本身从不写入。 |
 | `outcome` | `ok`、`error`（工具拒绝了调用或执行失败，包括其不接受的参数，以及因用户缺少权限而被拒绝）或 `rejected`（调用了服务器上不存在的工具）。格式错误到连工具名都无法解析的请求，会在到达任何工具之前被协议层拒绝，且不会写入任何记录行。 |
 | `duration_ms` | 调用耗时。 |
+| `proposal` | Preview 提议工具返回的已保存提议令牌（若存在且有效）。读取、试运行和未保存提议的拒绝均为空。 |
+| `verdict` | 平台返回的 `APPROVE` 或 `REFUSE`，允许记录的拒绝代码以 `REFUSE:CODE,CODE` 形式附加。带代码的 GraphQL 拒绝使用相同格式，例如 `REFUSE:POLICY_UNAVAILABLE`。读取操作或没有可识别裁决时为空。仅复制标识符和枚举代码，绝不复制理由、载荷或错误消息。 |
 
 依赖这些日志行时，需要注意以下几点：
 

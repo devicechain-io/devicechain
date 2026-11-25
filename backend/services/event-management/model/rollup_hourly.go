@@ -32,6 +32,12 @@ import (
 
 const rollupHourSeconds = rollup1hBucketSeconds
 
+const rollup1hCacheTTL = time.Minute
+
+type rollup1hCompleteness struct {
+	from, until time.Time
+}
+
 // rollupLevel is one row of rollup_levels: the instant from which a rollup level is complete.
 type rollupLevel struct {
 	Level        string
@@ -44,10 +50,15 @@ func (rollupLevel) TableName(namer schema.Namer) string { return namer.TableName
 // rollup1hCompleteFrom is the hour from which the hour level holds every hour it should, and
 // false when the migration has not recorded one (the level is then not read at all). The
 // aggregate is created without history, so hours before this instant are the minute level's.
-// The value never changes once written, so it is read once and kept.
+// Cache for at most a minute: a background worker on any replica can move the marker
+// back. A stale marker is conservative (more minute reads), but must not last forever.
 func (api *Api) rollup1hCompleteFrom(ctx context.Context) (time.Time, bool, error) {
-	if cached := api.rollup1hFrom.Load(); cached != nil {
-		return *cached, true, nil
+	now := time.Now()
+	if api.now != nil {
+		now = api.now()
+	}
+	if cached := api.rollup1hFrom.Load(); cached != nil && now.Before(cached.until) {
+		return cached.from, true, nil
 	}
 	var rows []rollupLevel
 	if err := api.RDB.DB(ctx).Where("level = ?", rollup1hLevel).Limit(1).Find(&rows).Error; err != nil {
@@ -57,7 +68,7 @@ func (api *Api) rollup1hCompleteFrom(ctx context.Context) (time.Time, bool, erro
 		return time.Time{}, false, nil
 	}
 	from := rows[0].CompleteFrom
-	api.rollup1hFrom.Store(&from)
+	api.rollup1hFrom.Store(&rollup1hCompleteness{from: from, until: now.Add(rollup1hCacheTTL)})
 	return from, true, nil
 }
 

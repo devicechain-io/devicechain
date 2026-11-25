@@ -77,6 +77,16 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/api_attribute_repairs.go": {"Api.DrainAttributeRepairs"},
 	// The configuration-report maintenance lists the tenants that have report history (no row is read), then removes orphans and expired rows under each tenant's own core.WithTenant.
 	"backend/services/device-management/model/api_configuration_report_maintenance.go": {"Api.configurationReportTenants"},
+	// Expiry discovers at most ten tenant IDs (no row is read); every operation read and transition then uses that tenant's own context.
+	"backend/services/device-management/model/api_fleet_expiry_sweep.go": {"Api.fleetExpiryTenants"},
+	// Bulk-change settlement discovers only tenant IDs (no line, report or document is read); every candidate read, decision and evidence close then runs under that tenant's own core.WithTenant.
+	"backend/services/device-management/model/api_fleet_settlement.go": {"Api.settlementTenants", "Api.SweepFleetSettlement"},
+	// Create admission counts the instance-wide fleet-operation budgets (counts only, no row of any tenant is read) under the tenant and instance admission locks.
+	"backend/services/device-management/model/api_fleet_operation.go": {"Api.fleetAdmit"},
+	// Start admission counts the instance-wide dispatching budget (a count only, no row of any tenant is read) under the tenant and instance admission locks.
+	"backend/services/device-management/model/api_fleet_operation_control.go": {"Api.fleetAdmitDispatching"},
+	// The pass reads the tenant and instance posting-permit caps and the running-operation counts (counts only, no row of any tenant is read).
+	"backend/services/device-management/model/api_fleet_operation_drive.go": {"Api.fleetAllowed"},
 	// The attribute orphan sweep takes its one-replica session lock and lists the tenants that hold device attribute or generation rows (no row content is read), then removes each tenant's orphans under its own core.WithTenant.
 	"backend/services/device-management/model/api_attribute_orphans.go": {"Api.SweepAllDeviceAttributeOrphans", "Api.attributeOrphanTenants"},
 	// The agent-effect relay lists the tenants that have queued effects, then drains each tenant's rows under core.WithTenant.
@@ -107,12 +117,14 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-state/processor/StateProcessor.go": {"StateProcessor.runInactivityMonitor"},
 	// The deletion resweep reads due watermark keys of every tenant in one bounded read (no event or anchor data); every cleanup and schedule write runs under that row's own core.WithTenant.
 	"backend/services/event-management/model/entity_deletion_watermarks.go": {"Api.DueEntityDeletionWatermarks"},
-	"backend/services/event-management/model/analytics.go":                  {"ReconcileAnalyticsSurface"},
-	"backend/services/event-management/model/lifecycle.go":                  {"ApplyDataLifecyclePolicies"},
+	// The analytics surface (functions, views, grants and its generation row) is instance-wide DDL with no tenant rows; the reconcile runs under one advisory lock for the whole instance.
+	"backend/services/event-management/model/analytics_generation.go": {"withAnalyticsGeneration"},
+	"backend/services/event-management/model/lifecycle.go":            {"ApplyDataLifecyclePolicies"},
 	"backend/services/event-management/model/usage.go": {"Api.PruneUsageWorkingTables", "Api.RollupUsageHours",
 		"Api.RollupUsagePass"},
 	"backend/services/event-management/processor/backfill/worker.go": {"Worker.pass"},
 	"backend/services/event-management/processor/backfill/tail.go":   {"TailSweeper.sweep", "TailSweeper.refreshWithLock"},
+	"backend/services/event-management/processor/backfill/hourly.go": {"hourlyDBProgress.scoped"},
 	// The DETECT engine is a per-Instance singleton. At startup it holds no tenant and
 	// must rebuild its rule set, dead-man arming and dynamic-threshold view from every
 	// tenant's rows, so each of these four reads the whole projection. They are the only

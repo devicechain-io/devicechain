@@ -306,6 +306,11 @@ type Device struct {
 	// Nullable with no default, for the reason migration_device_disabled.go records.
 	DisabledAt sql.NullTime
 
+	// StateGeneration advances on every explicit enabled write, including a
+	// same-value write. NULL reads as 0: no generation-aware writer has written the
+	// enabled state since the column existed (effect_generations.go states the rule).
+	StateGeneration sql.NullInt64
+
 	// GatewayId is the id of the GATEWAY device that fronts this one: the only device whose
 	// broker login may publish on this device's behalf (on its own gateway namespace), and
 	// nil for a device that is not behind one. It is the single authority for that: the

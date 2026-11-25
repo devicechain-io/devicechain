@@ -106,7 +106,10 @@ export type NotificationChannelUpdateRequest = {
 export type NotificationPolicyCreateRequest = {
   /** Free-text description of what the policy is for. */
   description?: string | null | undefined;
-  /** Not supported yet: any non-blank value is rejected. Leave it unset to create a policy that applies to every device. */
+  /**
+   * Device-type scoping was never applied: any non-blank value is rejected. Leave it unset to create a policy that applies to every device. Scoping by anchor or group is planned.
+   * @deprecated Deprecated in v1.10: device-type scoping was never applied. Will be removed in a future major. Leave unset for tenant-wide policies; scoping by anchor or group is planned.
+   */
   deviceTypeToken?: string | null | undefined;
   /** Whether the policy is active. A disabled policy sends nothing. */
   enabled: boolean;
@@ -149,7 +152,10 @@ export type NotificationPolicyCreateRequest = {
 
 /** Filters and paging for the notificationPolicies query. */
 export type NotificationPolicySearchCriteria = {
-  /** Return only policies scoped to this device type. Policies cannot yet be scoped, so any value matches nothing. */
+  /**
+   * Device-type scoping was never applied. Any supplied value matches no API-created policy; omit this filter to include tenant-wide policies. Scoping by anchor or group is planned.
+   * @deprecated Deprecated in v1.10: device-type scoping was never applied. Will be removed in a future major. Leave unset for tenant-wide policies; scoping by anchor or group is planned.
+   */
   deviceTypeToken?: string | null | undefined;
   /** Return only enabled (true) or only disabled (false) policies. Omit it to return both. */
   enabled?: boolean | null | undefined;
