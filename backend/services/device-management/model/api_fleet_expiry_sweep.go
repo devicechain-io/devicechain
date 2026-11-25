@@ -28,7 +28,7 @@ type fleetExpiryCursor struct {
 }
 
 func fleetExpiryCandidates(db *gorm.DB, now time.Time) *gorm.DB {
-	return db.Where("driver_protocol >= ? AND driver_protocol <= ?", 1, ledger.SupportedDriverProtocol).
+	return db.Scopes(fleetDrivableScope).
 		Where("(dispatch = ? AND expires_at IS NOT NULL AND expires_at <= ?) OR (dispatch = ? AND created_at <= ?)",
 			FleetDispatchReady, now, FleetDispatchPlanning, now.Add(-ledger.PlanningAbandonedAfter))
 }

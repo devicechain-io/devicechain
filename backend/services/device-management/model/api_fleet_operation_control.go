@@ -40,6 +40,9 @@ const (
 	// writer protocol, so no operation may start or resume.
 	FleetCodeNotActivated = "FLEET_OPERATIONS_NOT_ACTIVATED"
 	FleetCodeExpired      = "OPERATION_EXPIRED"
+
+	// FleetCodeNewerThanServer refuses control that requires understanding the operation's protocol.
+	FleetCodeNewerThanServer = "OPERATION_NEWER_THAN_SERVER"
 )
 
 // Pause reasons this release writes.
@@ -109,7 +112,8 @@ type FleetResumeSafety struct {
 
 // fleetControl runs one control transition under the fence. fn runs with the operation row locked and
 // the transition not yet applied; it returns the changes and the event to append.
-func (api *Api) fleetControl(ctx context.Context, token string, fn func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error)) (*FleetOperation, error) {
+// Only an explicit pause may touch a newer protocol: it changes no lines.
+func (api *Api) fleetControl(ctx context.Context, token, transition string, fn func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error)) (*FleetOperation, error) {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok || tenant == "" {
 		return nil, errors.New("a fleet operation needs a tenant in the context")
@@ -131,6 +135,9 @@ func (api *Api) fleetControl(ctx context.Context, token string, fn func(tx *gorm
 		var op FleetOperation
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&op, head.ID).Error; err != nil {
 			return err
+		}
+		if transition != fleetEventPause && !ledger.Drivable(ledger.DriverProtocol(op.DriverProtocol)) {
+			return fleetErr(FleetCodeNewerThanServer, "this bulk change was created by a newer release; retry, or pause it")
 		}
 		changes, event, err := fn(tx, &op)
 		if err != nil {
@@ -176,7 +183,7 @@ func (api *Api) fleetBrokerFailClosed() bool {
 // evidence only; it does not affect admission, dispatch or settlement.
 func (api *Api) StartFleetOperation(ctx context.Context, token, contractDigest string, by FleetApprover) (*FleetOperation, error) {
 	tenant, _ := core.TenantFromContext(ctx)
-	return api.fleetControl(ctx, token, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	return api.fleetControl(ctx, token, fleetEventStart, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
 		if op.Dispatch != FleetDispatchReady {
 			return nil, nil, illegal(op, "started")
 		}
@@ -270,7 +277,7 @@ func (api *Api) fleetAdmitDispatching(ctx context.Context, tx *gorm.DB, tenant s
 // is applied or refused under the old state. Stopping never widens anything, so it needs no more
 // authority than writing a device.
 func (api *Api) PauseFleetOperation(ctx context.Context, token, actor string) (*FleetOperation, error) {
-	return api.fleetControl(ctx, token, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	return api.fleetControl(ctx, token, fleetEventPause, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
 		if op.Dispatch != FleetDispatchRunning {
 			return nil, nil, illegal(op, "paused")
 		}
@@ -282,7 +289,7 @@ func (api *Api) PauseFleetOperation(ctx context.Context, token, actor string) (*
 // AbortFleetOperation stops an operation for good. Lines not yet applied are cancelled; applied lines
 // keep settling. An aborted operation can still be reversed.
 func (api *Api) AbortFleetOperation(ctx context.Context, token, actor string) (*FleetOperation, error) {
-	return api.fleetControl(ctx, token, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	return api.fleetControl(ctx, token, fleetEventAbort, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
 		switch op.Dispatch {
 		case FleetDispatchReady, FleetDispatchRunning, FleetDispatchPaused:
 		default:
@@ -448,7 +455,7 @@ func (api *Api) PreviewFleetOperationResume(ctx context.Context, token string, i
 // not the grantee must hold the authorities (the resolver checks them) and becomes the grantee.
 func (api *Api) ResumeFleetOperation(ctx context.Context, token, contractDigest string, in *FleetResumeSafety, by FleetApprover) (*FleetOperation, error) {
 	tenant, _ := core.TenantFromContext(ctx)
-	return api.fleetControl(ctx, token, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	return api.fleetControl(ctx, token, fleetEventResume, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
 		if op.Dispatch != FleetDispatchPaused {
 			return nil, nil, illegal(op, "resumed")
 		}
@@ -515,11 +522,11 @@ func (api *Api) ExpireFleetOperations(ctx context.Context, now time.Time) (int, 
 	aborted := 0
 	var lastErr error
 	for _, d := range due {
-		_, err := api.fleetControl(ctx, d.Token, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+		_, err := api.fleetControl(ctx, d.Token, fleetEventExpire, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
 			// Re-judged under the fence: a start or a finisher may have got here first.
 			stillReady := op.Dispatch == FleetDispatchReady && op.ExpiresAt.Valid && !op.ExpiresAt.Time.After(now)
 			stillPlanning := op.Dispatch == FleetDispatchPlanning && !op.CreatedAt.After(now.Add(-ledger.PlanningAbandonedAfter))
-			if (!stillReady && !stillPlanning) || !ledger.Drivable(ledger.DriverProtocol(op.DriverProtocol)) {
+			if !stillReady && !stillPlanning {
 				return nil, nil, errFleetNotDue
 			}
 			reason := FleetAbortExpiredUnstarted
@@ -532,8 +539,8 @@ func (api *Api) ExpireFleetOperations(ctx context.Context, now time.Time) (int, 
 			continue
 		}
 		var fe *FleetOperationError
-		if errors.As(err, &fe) && fe.Code == FleetCodeFencePending {
-			continue // one busy operation must not starve the rest of the sweep
+		if errors.As(err, &fe) && (fe.Code == FleetCodeFencePending || fe.Code == FleetCodeNewerThanServer) {
+			continue // a busy operation or a protocol changed after discovery must not starve the sweep
 		}
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
