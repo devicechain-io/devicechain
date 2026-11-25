@@ -1,0 +1,17 @@
+{
+    "name": "DeviceChain.Demos.Hud",
+    "rootNamespace": "DeviceChain.Demos.Hud",
+    "references": [
+        "DeviceChain.Demos.Hud.Model",
+        "Unity.ugui"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
