@@ -1318,3 +1318,48 @@ cut at the clean day's times. So page `3c` ranks below it and is waiting on a sh
 the camera on its own second with nothing cut off, and `3c-5` follows when it is done. By then the charger has stood silent for
 longer than the 45 s window and is drawn so. `DirectorTestsStoryboard` pins this: every other page's shots and captions are the
 same to the second with and without page `3c`, on a clean day and on the two days that keep page 3b up longest.
+
+## U5b replay and cut rendering
+
+The player renders the storyboard's authored cuts (`cuts.c90`, `cuts.c300` in `storyboard.json`) from a recorded live day, with no network:
+
+```bash
+Harborpulse.exe -hp-resolution 1920x1080 -hp-replay <recording directory or compact file> -hp-cut c90 \
+  -hp-render-dir <frames> -hp-render-fps 30
+ffmpeg -framerate 30 -i <frames>/frame-%06d.png -c:v libx264 -crf 17 -pix_fmt yuv420p -movflags +faststart harborpulse-c90.mp4
+```
+
+Rendering is offline: every frame is one step of the frame rate whatever the machine's speed (`Time.captureFramerate`), the show clock is
+the frame's number, and the player quits after the last frame. Beside the PNGs it writes `render.json` (every segment, its recorded span
+and its rate), `frame_check.json` (every caption the cut authored: shown or not, the recorded second, and the event keys of the records
+behind each claim) and `ui_text.txt` (every distinct string drawn). Without `-hp-render-dir` the cut plays on screen.
+
+`Model/Director/RecordedDay` loads a recording once (observations into one `ObservationStore`, `/status` samples as the clock);
+`ReplaySource` is the scene's `IHarborSource` at one recorded instant; `CutPlayer` is the cut's director. It selects nothing: the cut
+lists its shots and when each caption appears. It decides one thing per caption: whether the recording supports it, with the same
+predicates the live director uses, read at the recorded instant the caption appears.
+
+- A caption appears at its authored instant, or as soon after it as the recording supports it while its hold still fits in the shot.
+- Captions authored for the same instant and slot are alternatives, strongest first.
+- A claim the recording does not support is not shown. `frame_check.json` says so, and when (if ever) the day would have supported it,
+  which is what a cut's spans are authored against.
+- A segment whose rate is not 1 carries a rate chip; a shot borrowed out of order carries its disclosure.
+- At each shot the observed model is rebuilt and led in over the previous half minute of the recording, so alarms, command history and
+  pump start evidence stand as they did.
+
+What a recording does not hold stays absent. A recording made before the `/status` samples carried them has no alarm severities (such
+an alarm is drawn as the weakest one, one ring) and no truck fixes (the truck stands at the depot with "no fix"). The reported
+`well_alarm_m` attribute is not recorded.
+
+**A cut's spans are authored against one recorded day.** `Dotnet~/Tests/RecordedDayTool.cs` is the authoring aid:
+
+```bash
+cd demos/harborpulse-unity/Dotnet~
+HARBORPULSE_RECORDING=<recording directory> HARBORPULSE_COMPACT=<day.ndjson> \
+  dotnet test -c Release --filter FullyQualifiedName~RecordedDayTool --logger "console;verbosity=detailed"
+```
+
+It prints each caption's fate in both cuts and writes the day as one compact stream (a live recording writes about seven coverage rows
+a frame; merged they are a few thousand rows, so the compact file is the one to hand the player). The committed spans fit the day
+recorded on 2026-11-24, whose reduced copy is `Dotnet~/Tests/Fixtures/day-20261124.ndjson.gz`; `RecordedDayCutTests` pins both cuts'
+captions over it.

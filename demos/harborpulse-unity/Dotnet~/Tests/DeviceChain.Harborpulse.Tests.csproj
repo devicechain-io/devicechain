@@ -25,6 +25,8 @@
 
   <ItemGroup>
     <Compile Include="DirectorCostTests.cs" />
+    <Compile Include="RecordedDayTool.cs" />
+    <Compile Include="RecordedDayCutTests.cs" />
     <Compile Include="DirectorFixtureDay.cs" />
     <Compile Include="DirectorFrameProfile.cs" />
     <Compile Include="DirectorObserverChangeTests.cs" />
