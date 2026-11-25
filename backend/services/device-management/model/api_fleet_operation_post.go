@@ -155,7 +155,7 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		if err := tx.First(&op, opID).Error; err != nil {
 			return err
 		}
-		if op.Dispatch != FleetDispatchRunning || op.ExecutionEpoch != lease.Epoch || op.Grantee != lease.Grantee {
+		if !ledger.Drivable(ledger.DriverProtocol(op.DriverProtocol)) || op.Dispatch != FleetDispatchRunning || op.ExecutionEpoch != lease.Epoch || op.Grantee != lease.Grantee {
 			return abandon(FleetPostFenceRefused)
 		}
 		// 3. The erasure fence, then the guard.
@@ -408,9 +408,9 @@ func (api *Api) recordFleetRefusal(ctx context.Context, tenant string, opID, lin
 		if err := tx.First(&op, opID).Error; err != nil {
 			return err
 		}
-		if op.Dispatch != FleetDispatchRunning || op.ExecutionEpoch != lease.Epoch || op.Grantee != lease.Grantee {
+		if !ledger.Drivable(ledger.DriverProtocol(op.DriverProtocol)) || op.Dispatch != FleetDispatchRunning || op.ExecutionEpoch != lease.Epoch || op.Grantee != lease.Grantee {
 			result = FleetPostResult{Outcome: FleetPostFenceRefused}
-			return nil
+			return errPostAbandoned
 		}
 		res := tx.Model(&FleetOperationLine{}).Where("id = ? AND posting = ?", lineID, FleetPostingPlanned).
 			Updates(map[string]any{"posting": d.posting, "code": d.code, "detail": d.detail})
@@ -424,6 +424,9 @@ func (api *Api) recordFleetRefusal(ctx context.Context, tenant string, opID, lin
 		result = FleetPostResult{Outcome: FleetPostRefused, Code: d.code}
 		return nil
 	})
+	if errors.Is(err, errPostAbandoned) {
+		return result, nil
+	}
 	if err != nil {
 		if lockTimedOut(err) {
 			return FleetPostResult{Outcome: FleetPostFenceBusy}, nil
