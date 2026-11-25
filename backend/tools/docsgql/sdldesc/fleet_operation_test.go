@@ -102,3 +102,48 @@ func TestBulkChangeRenamePreservesV19Contract(t *testing.T) {
 		}
 	}
 }
+
+func TestBulkChangeFragmentDescriptionsArePreview(t *testing.T) {
+	base, err := os.ReadFile("../../../services/device-management/graphql/schema.graphql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.ReadFile("../../../services/device-management/graphql/fleet_operations_schema.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The unserved fragment deliberately lives in a Go raw string, outside the published SDL.
+	_, fragment, found := strings.Cut(string(source), "const fleetOperationSchema = `")
+	if !found {
+		t.Fatal("fragment constant missing")
+	}
+	fragment, _, found = strings.Cut(fragment, "`")
+	if !found {
+		t.Fatal("fragment constant is not terminated")
+	}
+	before, err := sdldesc.Parse(string(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := map[string]bool{}
+	for _, e := range before {
+		existing[e.Coord] = true
+	}
+	after, err := sdldesc.Parse(string(base) + "\n" + fragment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, e := range after {
+		if existing[e.Coord] || e.Desc == "" {
+			continue
+		}
+		count++
+		if !strings.HasPrefix(e.Desc, "Preview.") {
+			t.Errorf("%s description does not begin Preview.", e.Coord)
+		}
+	}
+	if count == 0 {
+		t.Fatal("no fragment descriptions checked")
+	}
+}
