@@ -81,7 +81,14 @@ namespace DeviceChain.Harborpulse.Model.Director
         public JsonElement? Data { get; }
         public IReadOnlyList<ReadSpan> Coverage { get; }
         public string State => Probe == DirectorProbe.PROBE_FAILED ? "PROBE_FAILED" : Error != null ? "failed" : LastSuccess.HasValue ? "healthy" : "waiting";
-        public bool Healthy(DateTimeOffset now) => Probe == DirectorProbe.PROBE_OK && Error == null && Data.HasValue && LastSuccess.HasValue && now >= LastSuccess.Value && now - LastSuccess.Value <= TimeSpan.FromSeconds(6);
+        /// <summary>
+        /// How far a success may be stamped after the frame that reads it. The poll stamps the system clock; the frame's "now" is a
+        /// recording epoch plus a monotonic timer, and the two differ by milliseconds. Refusing every success stamped after "now"
+        /// made each completed poll unhealthy for the next frame, a one-frame gap in every stream about every three seconds,
+        /// and one gap is enough to refuse every "none happened" and "exactly" claim of the day.
+        /// </summary>
+        public static readonly TimeSpan ClockSlack = TimeSpan.FromSeconds(1);
+        public bool Healthy(DateTimeOffset now) => Probe == DirectorProbe.PROBE_OK && Error == null && Data.HasValue && LastSuccess.HasValue && now + ClockSlack >= LastSuccess.Value && now - LastSuccess.Value <= TimeSpan.FromSeconds(6);
     }
 
     public sealed class DirectorReadSnapshot
