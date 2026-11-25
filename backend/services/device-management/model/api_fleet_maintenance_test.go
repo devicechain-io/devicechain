@@ -133,7 +133,7 @@ func TestFleetRetentionWindowsAndTombstone(t *testing.T) {
 	} {
 		t.Run(tc.token, func(t *testing.T) {
 			op := seedExpiryOperation(t, api, ctx, tc.token, tc.dispatch, now)
-			require.NoError(t, api.RDB.DB(ctx).Create(&FleetOperationRuntime{OperationId: int64(op.ID)}).Error)
+			// seedExpiryOperation already creates the runtime row, as the real create path does.
 			changes := map[string]any{"evidence": tc.evidence, "created_at": now.Add(-time.Duration(tc.age) * 24 * time.Hour), "closed_at": now.Add(-time.Duration(tc.age) * 24 * time.Hour)}
 			if tc.posted {
 				changes["posted_line_count"] = 1
