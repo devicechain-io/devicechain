@@ -602,6 +602,7 @@ func createProvisionedDevice(tx *gorm.DB, profile *ProvisioningProfile, request 
 		MetadataEntity:                rdb.MetadataEntity{Metadata: metadata},
 		DeviceTypeId:                  profile.DeviceTypeId,
 		ExpectedProvisioningProfileId: &id,
+		StateGeneration:               newStateGeneration(),
 	}
 	if err := tx.Create(device).Error; err != nil {
 		return nil, err
