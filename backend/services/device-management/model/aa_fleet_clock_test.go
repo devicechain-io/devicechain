@@ -230,3 +230,25 @@ func TestFleetPacerRollsAWindowThatStartsInTheFuture(t *testing.T) {
 	require.True(t, rt.PaceWindowStart.Time.Equal(e.now), "the new window starts now, not at the stored future start")
 	require.EqualValues(t, 3, rt.PaceIssued)
 }
+
+// The lease is the one clock that stays in the process: it measures how long THIS process has been running
+// on a standing answer, so it is granted and checked on time.Now's monotonic reading, never on the
+// platform clock the shared state uses. A platform clock an hour off must neither stretch nor expire it.
+func TestFleetLeaseStaysOnTheProcessMonotonicClock(t *testing.T) {
+	for _, skew := range []time.Duration{-time.Hour, time.Hour} {
+		t.Run(skew.String(), func(t *testing.T) {
+			e := postFixture(t, "v1", false)
+			old := fleetClock
+			fleetClock = func() time.Time { return time.Now().Add(skew) }
+			t.Cleanup(func() { fleetClock = old })
+			e.api.PrincipalStanding = &fakeStanding{answer: map[string]bool{alice.Name: true}}
+			lease, hold, err := e.api.fleetLease(e.ctx, e.op)
+			require.NoError(t, err)
+			require.Empty(t, hold)
+			require.NotNil(t, lease)
+			require.WithinDuration(t, time.Now().Add(FleetLeaseTTL), lease.Deadline, time.Second, "granted from the process clock")
+			e.lease = *lease
+			require.Equal(t, FleetPosted, e.post(t).Outcome, "checked at commit against the process clock")
+		})
+	}
+}
