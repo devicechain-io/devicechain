@@ -379,6 +379,15 @@ export type AuditEventSearchCriteria = {
   tableName?: string | null | undefined;
 };
 
+/** The door through which a rule draft was saved. This is origin metadata, not proof of human review. */
+export type AuthoredVia =
+  | 'API'
+  | 'CANVAS'
+  | 'DESCRIBE'
+  | 'FORM'
+  | 'PRODUCT_AS_CODE'
+  | 'UNKNOWN';
+
 /** (Preview: may change in a minor release.) An activation change made outside review. */
 export type AutomationReviewBreakGlassAction =
   /** (Preview: may change in a minor release.) Moving a device out of a protected type. */
@@ -790,6 +799,8 @@ export type CustomerUpdateRequest = {
  * published.
  */
 export type DetectionRuleCreateRequest = {
+  /** Door used for this save; omitted or null means API. Adds to the recorded set and never erases earlier doors, including DESCRIBE. */
+  authoredVia?: AuthoredVia | null | undefined;
   /**
    * The visual automation canvas document the rule was authored with. Omit for a rule authored as a
    * form. When present it must be a JSON object; it is stored verbatim and not interpreted.
@@ -832,9 +843,12 @@ export type DetectionRuleSearchCriteria = {
 /**
  * A partial update of a detection rule. Each field has three states: omit it to keep the stored value,
  * send null to clear it, or send a value to set it. The rule's token is not here because the
- * mutation's token argument names the rule and an update cannot move it.
+ * mutation's token argument names the rule and an update cannot move it. The authoredVia field
+ * records this save's door instead: omitted or null means API, and previous doors are retained.
  */
 export type DetectionRuleUpdateRequest = {
+  /** Door used for this save; omitted or null means API. Adds to the recorded set and never erases earlier doors, including DESCRIBE. */
+  authoredVia?: AuthoredVia | null | undefined;
   /**
    * The visual canvas document. Null drops it, which is what a form edit of a canvas-authored rule
    * needs since the graph is then stale; omitting it keeps it.

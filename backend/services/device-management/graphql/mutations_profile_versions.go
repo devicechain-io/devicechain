@@ -25,6 +25,17 @@ func publisher(ctx context.Context) string {
 	return claims.Email
 }
 
+// publisherID records the authenticated subject for a person or service account.
+// Never substitute the mutable display name/email or accept a client argument.
+func publisherID(ctx context.Context) *string {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims.Subject == "" {
+		return nil
+	}
+	id := claims.Subject
+	return &id
+}
+
 // PublishDeviceProfile freezes the profile's current draft into a new immutable
 // version and makes it the version devices resolve (ADR-045 versioning).
 func (r *SchemaResolver) PublishDeviceProfile(ctx context.Context, args struct {
@@ -40,7 +51,7 @@ func (r *SchemaResolver) PublishDeviceProfile(ctx context.Context, args struct {
 	// Route through the cached decorator so publishing evicts the shared ingest
 	// cache (a publish changes what devices resolve); reads use the plain api.
 	api := r.GetCachedApi(ctx)
-	version, err := api.PublishDeviceProfileReviewed(ctx, args.Token, args.Label, args.Description, publisher(ctx), args.AutomationReviewToken)
+	version, err := api.PublishDeviceProfileReviewed(ctx, args.Token, args.Label, args.Description, publisher(ctx), args.AutomationReviewToken, publisherID(ctx))
 	if err != nil {
 		return nil, err
 	}

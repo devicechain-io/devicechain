@@ -725,6 +725,10 @@ func (pl *planner) profile(d Profile, live *LiveProfile, liveAt map[Kind]map[str
 				if len(names) == 0 {
 					continue
 				}
+				// Provenance is sent with saves, not compared as product content.
+				if w.kind == KindRule {
+					changed["authoredVia"] = "PRODUCT_AS_CODE"
+				}
 				mark(Change{Kind: kind, Token: w.token, Parent: d.Token, Action: ActionUpdate, Fields: names, Note: note},
 					"update "+label[w.kind]+" "+w.token, func(ctx context.Context) error {
 						return pl.send(ctx, pl.ep.DeviceManagement, docs[w.kind][1], map[string]any{"token": w.token, "request": changed})
@@ -735,6 +739,9 @@ func (pl *planner) profile(d Profile, live *LiveProfile, liveAt map[Kind]map[str
 					continue
 				}
 				in := createInput(w.input, map[string]any{"token": w.token, "deviceProfileToken": d.Token})
+				if w.kind == KindRule {
+					in["authoredVia"] = "PRODUCT_AS_CODE"
+				}
 				mark(Change{Kind: kind, Token: w.token, Parent: d.Token, Action: ActionCreate},
 					"create "+label[w.kind]+" "+w.token, func(ctx context.Context) error {
 						return pl.send(ctx, pl.ep.DeviceManagement, docs[w.kind][0], map[string]any{"request": in})

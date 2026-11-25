@@ -405,6 +405,10 @@ type DeviceProfileVersion {
     publishedAt: String!
     """Who published it: their username, or their email when there is no username."""
     publishedBy: String
+    """Stable authenticated principal id (token subject) of the publisher, including service accounts. Null for versions published before it was recorded. Never supplied by a client."""
+    publishedById: String
+    """Sorted set of save doors of all frozen draft rules, including disabled rules. A later save adds a door and never erases DESCRIBE. UNKNOWN includes legacy rules; an empty rule set reads UNKNOWN. Frozen at publish."""
+    authoredVia: [AuthoredVia!]!
     """
     The device-visible configuration declaration frozen into this version: the shared
     attribute keys a device of the profile may see. Empty when the version declared
@@ -1468,6 +1472,18 @@ type CommandDefinitionSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# AGENT_PROPOSAL is reserved for the later agent rule-changeset slice. Do not
+# expose it yet; adding it when that slice ships must remain an additive change.
+"""The door through which a rule draft was saved. This is origin metadata, not proof of human review."""
+enum AuthoredVia {
+    FORM
+    CANVAS
+    DESCRIBE
+    PRODUCT_AS_CODE
+    API
+    UNKNOWN
+}
+
 """
 A detection rule declared on a device profile. The rule body, definition, is an opaque JSON
 document: device-management stores it with the profile's draft but does not interpret the detection
@@ -1504,6 +1520,8 @@ type DetectionRule implements Model & TokenReference & NamedEntity & MetadataEnt
     freezes.
     """
     authoringGraph: String
+    """Sorted set of all recorded save doors. Saves accumulate doors, so editing through FORM never hides DESCRIBE. Legacy NULLs read UNKNOWN."""
+    authoredVia: [AuthoredVia!]!
     """
     Whether the rule is live. A disabled rule is kept on the profile but is left out of the rules a
     published version runs.
@@ -1545,6 +1563,8 @@ input DetectionRuleCreateRequest {
     form. When present it must be a JSON object; it is stored verbatim and not interpreted.
     """
     authoringGraph: String
+    """Door used for this save; omitted or null means API. Adds to the recorded set and never erases earlier doors, including DESCRIBE."""
+    authoredVia: AuthoredVia
     """Whether the rule is live. A disabled rule is kept but not run."""
     enabled: Boolean!
     """Caller-defined metadata. Must be valid JSON; an empty string means none."""
@@ -1571,7 +1591,8 @@ input DetectionRuleCreateRequest {
 """
 A partial update of a detection rule. Each field has three states: omit it to keep the stored value,
 send null to clear it, or send a value to set it. The rule's token is not here because the
-mutation's token argument names the rule and an update cannot move it.
+mutation's token argument names the rule and an update cannot move it. The authoredVia field
+records this save's door instead: omitted or null means API, and previous doors are retained.
 """
 input DetectionRuleUpdateRequest {
     """
@@ -1593,6 +1614,8 @@ input DetectionRuleUpdateRequest {
     needs since the graph is then stale; omitting it keeps it.
     """
     authoringGraph: String
+    """Door used for this save; omitted or null means API. Adds to the recorded set and never erases earlier doors, including DESCRIBE."""
+    authoredVia: AuthoredVia
     """
     Whether the rule is live. Null is refused rather than read as false, which would silently park a
     live rule.
