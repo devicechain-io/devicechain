@@ -237,7 +237,11 @@ func TestFleetDriverPostgresTenantBFinishesWithinTwiceSolo(t *testing.T) {
 	}
 	solo := measure(false)
 	mixed := measure(true)
-	require.LessOrEqual(t, mixed, 2*solo)
+	// Both replicas' four posting slots are shared by A's and B's permits, so B's posts take about
+	// twice as long per pass: 2x is the expected cost, not a margin. Passes run once a second, so a
+	// finish time is quantized to that tick; one tick of allowance keeps a 1.4 s solo from failing at
+	// 2.85 s. Starvation (B waiting on A's 2,000 lines) is tens of seconds and still fails.
+	require.LessOrEqual(t, mixed, 2*solo+time.Second, "solo %s, mixed %s", solo, mixed)
 }
 
 func TestFleetDriverPostgresDependencyPauseUsesDatabaseClock(t *testing.T) {
