@@ -213,6 +213,13 @@ var rawSQLAllowList = []siteEntry{
 			"formatted-in text is the model's quoted table name.",
 	},
 	{
+		Path: "backend/services/device-management/model/api_fleet_operation_drive.go", Func: "Api.AcquireFleetPermits", Count: 1,
+		Why: "the bulk-change pacer: ONE statement that locks the operation's runtime row, reads the database clock " +
+			"after the lock and grants permits from it, so replicas with skewed process clocks share one window. " +
+			"The SQL is a constant that binds the tenant explicitly (tenant_id = @tenant, from core.TenantFromContext, " +
+			"refusing core.ErrNoTenant before it runs); the UPDATE touches only the row that predicate locked.",
+	},
+	{
 		Path: "backend/services/device-management/model/api_fleet_operation_readiness.go", Func: "fleetOperationEnforcementStates", Count: 1,
 		Why: "a catalog read (pg_trigger, pg_class, pg_namespace, pg_proc) that names entity_attributes only as the " +
 			"relation whose triggers it inspects, shared by readiness and the posting-time activation check. It reads " +
