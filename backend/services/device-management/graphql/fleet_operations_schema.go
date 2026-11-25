@@ -69,6 +69,28 @@ enum BulkChangeLineSettlement {
   RESOLVED_FAILED
 }
 
+"""Preview. A person's verdict on an ambiguous line."""
+enum BulkChangeVerdict {
+  """Preview. The person confirmed the change."""
+  CONFIRMED
+  """Preview. The person judged the change failed."""
+  FAILED
+}
+
+"""Preview. Resolve selected ambiguous lines with a fresh second factor and a note."""
+input BulkChangeAmbiguityResolution {
+  """Preview. Token of the bulk change."""
+  token: String!
+  """Preview. Positions to resolve, starting at 1. Select this or allAmbiguous."""
+  ordinals: [Int!]
+  """Preview. Resolve every ambiguous line instead of selecting ordinals."""
+  allAmbiguous: Boolean
+  """Preview. The person's verdict."""
+  verdict: BulkChangeVerdict!
+  """Preview. Reason for the verdict, from 1 to 1000 characters."""
+  note: String!
+}
+
 """Preview. Whether the engine that applies the operation is making progress."""
 enum BulkChangeExecutorState {
   IDLE
@@ -252,6 +274,8 @@ type BulkChangeLine {
   overrideChanged: Boolean!
   """Preview. Sign-in name of the person who resolved the line."""
   resolvedBy: String
+  """Preview. The resolution's shared note. Null once redacted."""
+  resolutionNote: String
   """Preview. When it was resolved."""
   resolvedAt: String
 }
@@ -449,5 +473,11 @@ extend type Mutation {
   settling. Needs device:write only.
   """
   abortBulkChange(token: String!): BulkChange!
+  """
+  Preview. Resolves ambiguous lines as confirmed or failed. Other lines are unchanged. Needs device:write and
+  fleet:operate, a person's access token, a second factor verified within five minutes, and a note of 1 to 1000
+  characters. Refused with SECOND_FACTOR_REQUIRED, STEP_UP_REQUIRED or NOTE_REQUIRED otherwise.
+  """
+  resolveAmbiguousBulkChangeLines(request: BulkChangeAmbiguityResolution!): BulkChange!
 }
 `
