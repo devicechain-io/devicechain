@@ -514,7 +514,7 @@ func TestEarlyPassReturnsClearStaleHolds(t *testing.T) {
 			case "backoff":
 				var line FleetOperationLine
 				require.NoError(t, e.api.RDB.DB(e.ctx).Where("operation_id = ?", e.op.ID).First(&line).Error)
-				require.NoError(t, e.api.RecordFleetLineRetry(e.ctx, line.ID, "DEADLOCK", e.now))
+				require.NoError(t, e.api.RecordFleetLineRetry(e.ctx, line.ID, "DEVICE_BUSY", e.now))
 			case "finished":
 				require.NoError(t, e.api.RDB.DB(e.ctx).Model(&FleetOperationLine{}).Where("operation_id = ?", e.op.ID).Update("posting", FleetPostingRefused).Error)
 			case "revoked":

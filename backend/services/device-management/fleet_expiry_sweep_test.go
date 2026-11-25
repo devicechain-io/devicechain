@@ -121,7 +121,7 @@ func TestFleetExpiryTaskCallsRealExpiryRepeatedly(t *testing.T) {
 	require.NoError(t, err)
 	pool.SetMaxOpenConns(1)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&model.FleetOperation{}, &model.FleetOperationLine{}, &model.FleetOperationEvent{}))
+	require.NoError(t, db.AutoMigrate(&model.FleetOperation{}, &model.FleetOperationRuntime{}, &model.FleetOperationLine{}, &model.FleetOperationEvent{}))
 	api := model.NewApi(&rdb.RdbManager{Database: db})
 	ctx := core.WithTenant(context.Background(), "expiry")
 	seed := func(token string) uint {
@@ -129,6 +129,7 @@ func TestFleetExpiryTaskCallsRealExpiryRepeatedly(t *testing.T) {
 			Dispatch: model.FleetDispatchReady, DriverProtocol: 1,
 			ExpiresAt: sql.NullTime{Time: time.Now().Add(-time.Minute), Valid: true}}
 		require.NoError(t, db.WithContext(ctx).Create(op).Error)
+		require.NoError(t, db.WithContext(ctx).Create(&model.FleetOperationRuntime{OperationId: int64(op.ID)}).Error)
 		return op.ID
 	}
 	ms := &core.Microservice{FunctionalArea: "device-management"}

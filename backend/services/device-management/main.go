@@ -1263,6 +1263,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initFleetExpirySweep(); err != nil {
 				return err
 			}
+			if err = initFleetDriver(); err != nil {
+				return err
+			}
 			if err = initFleetSettlement(); err != nil {
 				return err
 			}
@@ -1412,6 +1415,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err = FleetExpirySweep.Start(ctx); err != nil {
 		return err
 	}
+	if FleetDriver != nil {
+		if err = FleetDriver.Start(ctx); err != nil {
+			return err
+		}
+	}
 	if FleetSettlement != nil {
 		if err = FleetSettlement.Start(ctx); err != nil {
 			return err
@@ -1552,6 +1560,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := FleetExpirySweep.Stop(ctx); err != nil {
 		return err
 	}
+	if FleetDriver != nil {
+		if err := FleetDriver.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	if FleetSettlement != nil {
 		if err := FleetSettlement.Stop(ctx); err != nil {
 			return err
@@ -1643,11 +1656,19 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	if err := FleetExpirySweep.Terminate(ctx); err != nil {
 		return err
 	}
-	for _, task := range []*core.PeriodicTask{FleetSettlement, FleetSettlementDeadline} {
-		if task != nil {
-			if err := task.Terminate(ctx); err != nil {
-				return err
-			}
+	if FleetDriver != nil {
+		if err := FleetDriver.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if FleetSettlement != nil {
+		if err := FleetSettlement.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if FleetSettlementDeadline != nil {
+		if err := FleetSettlementDeadline.Terminate(ctx); err != nil {
+			return err
 		}
 	}
 	if DecodeAccounting != nil {

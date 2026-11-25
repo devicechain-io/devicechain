@@ -234,8 +234,8 @@ func TestGatesRefuseWithACodeAndAReplannedLineNeverRetries(t *testing.T) {
 	e = postFixture(t, "v1", false)
 	require.NoError(t, e.api.RDB.DB(e.ctx).Delete(&Device{}, e.dev.ID).Error)
 	r = e.post(t)
-	require.Equal(t, FleetPostRefused, r.Outcome)
 	require.Equal(t, FleetLineTargetGone, r.Code)
+	require.Equal(t, FleetPostSkipped, r.Outcome)
 	require.Equal(t, string(ledger.PostingSkipped), e.reload(t).Posting)
 }
 
