@@ -353,7 +353,10 @@ namespace DeviceChain.Harborpulse.Visuals
                 }
                 cutSegment = cutFrame.Segment; model = new HarborObservedModel(layout); fixes.Clear(); lastFix = default;
                 for (var t = Math.Max(0, cutFrame.RecordedWallS - 30); t < cutFrame.RecordedWallS; t += 0.5)
-                { replaySource.Seek(t); model.Update(replaySource, new ClockReading(replayDay.SimAt(t) * 3600, ClockMode.Live, ""), replayDay.At(t)); }
+                {
+                    // the truck's fixes too: its drawn place is interpolated between the fix before and the fix after
+                    replaySource.Seek(t); model.Update(replaySource, new ClockReading(replayDay.SimAt(t) * 3600, ClockMode.Live, ""), replayDay.At(t)); CollectFix(replaySource);
+                }
             }
             replaySource.Seek(cutFrame.RecordedWallS);
             directorSeconds = cutFrame.RecordedWallS; now = replayDay.At(cutFrame.RecordedWallS);
@@ -377,7 +380,7 @@ namespace DeviceChain.Harborpulse.Visuals
             directorView = DirectorView.ForCut(cutFrame);
             Hud?.Apply(directorView, "RECORDED", cutFrame.Sim, cutFrame.RateChip, HudModel.Tags(layout, frame, sceneCamera.aspect < 1 ? 2 : 4),
                 string.Join(" | ", new[] { digestProblem }.Concat(map.ReadinessWarnings).Where(p => !string.IsNullOrEmpty(p))));
-            foreach (var text in new[] { directorView.Caption, directorView.Overlay, directorView.UpNext, cutFrame.RateChip, digestProblem }.Concat(directorView.Rail.Select(n => n.Label + " (" + n.Tag + ")"))
+            foreach (var text in new[] { directorView.Context, directorView.Caption, directorView.Overlay, directorView.UpNext, cutFrame.RateChip, digestProblem }.Concat(directorView.Rail.Select(n => n.Label + " (" + n.Tag + ")"))
                 .Concat(HudModel.Tags(layout, frame).Select(t => t.Text)))
                 if (!string.IsNullOrEmpty(text)) uiText.Add(text.Replace("\n", " / "));
             renderCaptured = false;
@@ -579,15 +582,17 @@ namespace DeviceChain.Harborpulse.Visuals
             rig = new HarborCameraRig(sceneCamera, map);
             directorCamera = new DirectorCamera(sceneCamera, map, portrait);
         }
+        void CollectFix(IHarborSource source)
+        {
+            if (!source.TryLocation("PAW-TRUCK-1", out var location) || !location.Latitude.HasValue || !location.Longitude.HasValue || location.OccurredAt == lastFix) return;
+            var atS = (location.OccurredAt - recordingEpoch).TotalSeconds;
+            if (fixes.Count == 0 || atS > fixes[fixes.Count - 1].WallS)
+                fixes.Add(new TimedFix(atS, new LatLon(location.Latitude.Value, location.Longitude.Value)));
+            lastFix = location.OccurredAt;
+        }
         void ApplyMappedTruck(IHarborSource source, DateTimeOffset now)
         {
-            if (source.TryLocation("PAW-TRUCK-1", out var location) && location.Latitude.HasValue && location.Longitude.HasValue && location.OccurredAt != lastFix)
-            {
-                var atS = (location.OccurredAt - recordingEpoch).TotalSeconds;
-                if (fixes.Count == 0 || atS > fixes[fixes.Count - 1].WallS)
-                    fixes.Add(new TimedFix(atS, new LatLon(location.Latitude.Value, location.Longitude.Value)));
-                lastFix = location.OccurredAt;
-            }
+            CollectFix(source);
             try
             {
                 // Both consumers sample this monotonic instant. Keep the predecessor and
