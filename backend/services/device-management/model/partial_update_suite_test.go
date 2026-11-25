@@ -81,6 +81,8 @@ func TestPartialUpdate(t *testing.T) {
 		Context:  putest.TenantContext(partialUpdateTenant),
 		Families: partialUpdateFamilies(),
 		ExternallyDriven: map[string]string{
+			"DetectionRuleUpdateRequest.authoredVia": "Append-only provenance has save-door semantics; TestOptionalAuthoredViaStates, TestRuleProvenanceDoorsRoundTrip and TestRuleProvenanceMixedDoorsStayFrozen drive absence, null, values and mixed history.",
+
 			"AlarmSuppressionUpdateRequest.kind": "Switching kind requires an atomic schedule edit; TestSuppressionPartialNullableFieldsAndScheduleSwitch and TestAlarmSuppressionWireThreeStatesAndOwnedFields drive it.",
 		},
 

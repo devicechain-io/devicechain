@@ -45,6 +45,11 @@ type DeviceProfileVersion struct {
 	// email).
 	PublishedBy           string  `gorm:"size:256"`
 	AutomationReviewToken *string `gorm:"size:64"`
+
+	// Server-derived token subject, never supplied by a GraphQL client.
+	PublishedById *string `gorm:"type:text"`
+	// Union of the frozen rules' save doors; NULL on legacy versions.
+	AuthoredVia datatypes.JSON
 }
 
 // ProfileSnapshot is the serialized capability set frozen into a

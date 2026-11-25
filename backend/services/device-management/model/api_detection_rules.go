@@ -114,6 +114,10 @@ func authoringGraphStr(graph datatypes.JSON) *string {
 // Create a new detection rule (ADR-051 slice 4b).
 func (api *Api) CreateDetectionRule(ctx context.Context,
 	request *DetectionRuleCreateRequest) (*DetectionRule, error) {
+	door, err := ruleSaveDoor(request.AuthoredVia)
+	if err != nil {
+		return nil, err
+	}
 	matches, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
 	if err != nil {
 		return nil, err
@@ -157,6 +161,7 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 		DeviceProfile:      matches[0],
 		Definition:         datatypes.JSON(request.Definition),
 		AuthoringGraph:     authoringGraphJSON(request.AuthoringGraph),
+		AuthoredVia:        ruleDoorJSON(door),
 		Enabled:            request.Enabled,
 		EntityGroupToken:   scopeToken,
 		EntityGroupVersion: scopeVersion,
@@ -181,6 +186,14 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 // place that check can apply.
 func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	request *DetectionRuleUpdateRequest) (*DetectionRule, error) {
+	var doorInput *AuthoredVia
+	if request.AuthoredVia.Set {
+		doorInput = request.AuthoredVia.Value
+	}
+	door, err := ruleSaveDoor(doorInput)
+	if err != nil {
+		return nil, err
+	}
 	matches, err := api.DetectionRulesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -276,10 +289,20 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 		}
 		assignments["device_profile_id"] = profileID
 	}
-	if len(assignments) == 0 {
+	if len(assignments) == 0 && !request.AuthoredVia.Set {
 		return updated, nil
 	}
 	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// Merge under the row lock: concurrent doors must not erase each other.
+		var current DetectionRule
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "authored_via").First(&current, updated.ID).Error; err != nil {
+			return err
+		}
+		provenance, err := mergeAuthoredVia(current.AuthoredVia, ruleDoorJSON(door))
+		if err != nil {
+			return err
+		}
+		assignments["authored_via"] = provenance
 		res := rdb.AdvancingFrom(tx, updated.UpdatedAt).Model(updated).Omit(clause.Associations).
 			Where("id = ?", updated.ID).Updates(assignments)
 		if res.Error != nil {

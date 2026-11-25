@@ -220,6 +220,26 @@ var rawSQLAllowList = []siteEntry{
 			"refusing core.ErrNoTenant before it runs); the UPDATE touches only the row that predicate locked.",
 	},
 	{
+		Path: "backend/services/device-management/model/api_fleet_settlement.go", Func: "fleetSettlementRead", Count: 1,
+		Why: "the bulk-change settlement candidate read: one statement so the report log, the state row's gap " +
+			"marker and the deciding revision's document are read in one snapshot. It binds l.tenant_id (and, on the " +
+			"fast path, the report window's tenant_id) from the caller, and every other table is joined on " +
+			"tenant_id = the candidate line's tenant_id, including the correlated deciding-report subquery. The only " +
+			"formatted-in text is the models' quoted table names and package constants.",
+	},
+	{
+		Path: "backend/services/device-management/model/api_fleet_settlement.go", Func: "Api.FleetReportCaptureComplete", Count: 1,
+		Why: "counts one operation's lines whose target's report capture is incomplete: binds l.tenant_id from the " +
+			"request context and joins the configuration state on tenant_id = l.tenant_id. Only the models' quoted " +
+			"table names are formatted in.",
+	},
+	{
+		Path: "backend/services/device-management/model/api_fleet_settlement.go", Func: "Api.FleetReconcilerLag", Count: 1,
+		Why: "the settlement lag gauge's oldest undecided report: binds r.tenant_id from the context and joins lines " +
+			"and operations on tenant_id equal to the report's. It returns one timestamp; only the models' quoted " +
+			"table names and the protocol predicate constant are formatted in.",
+	},
+	{
 		Path: "backend/services/device-management/model/api_fleet_operation_readiness.go", Func: "fleetOperationEnforcementStates", Count: 1,
 		Why: "a catalog read (pg_trigger, pg_class, pg_namespace, pg_proc) that names entity_attributes only as the " +
 			"relation whose triggers it inspects, shared by readiness and the posting-time activation check. It reads " +

@@ -234,7 +234,7 @@ func TestPGTwoReplicasPublishOneVersion(t *testing.T) {
 		for _, api := range []*Api{r.api, other} {
 			go func(api *Api) {
 				<-start
-				v, err := api.PublishDeviceProfileReviewed(r.ctx, "profile", nil, nil, "publisher", &row.Token)
+				v, err := api.PublishDeviceProfileReviewed(r.ctx, "profile", nil, nil, "publisher", &row.Token, nil)
 				done <- result{v, err}
 			}(api)
 		}
@@ -961,7 +961,7 @@ func TestPGInFlightEditAuthorIsCountedWithoutAJournalLock(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.api.PublishDeviceProfileReviewed(publishCtx, "profile", nil, nil, "publisher", &row.Token)
+		_, err := r.api.PublishDeviceProfileReviewed(publishCtx, "profile", nil, nil, "publisher", &row.Token, nil)
 		done <- err
 	}()
 	select {
@@ -1001,7 +1001,7 @@ func TestPGProtectedPublishDoesNotBlockOtherTenantsJournal(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.api.PublishDeviceProfileReviewed(publishCtx, "profile", nil, nil, "publisher", &row.Token)
+		_, err := r.api.PublishDeviceProfileReviewed(publishCtx, "profile", nil, nil, "publisher", &row.Token, nil)
 		done <- err
 	}()
 	select {

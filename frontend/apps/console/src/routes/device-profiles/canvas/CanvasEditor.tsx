@@ -355,6 +355,7 @@ function CanvasEditorInner({
     try {
       const meta = conditionMeta(nodes);
       const edited = {
+        authoredVia: 'CANVAS' as const,
         deviceProfileToken: profileToken,
         name: meta.name ?? null,
         description: meta.description ?? null,
