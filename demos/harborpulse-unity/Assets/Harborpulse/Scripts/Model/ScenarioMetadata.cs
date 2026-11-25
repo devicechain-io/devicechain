@@ -102,6 +102,22 @@ namespace DeviceChain.Harborpulse.Model
             return StartedAt.Value.AddSeconds((simSeconds / 3600 - StartHour) / 24 * DayLengthSeconds);
         }
 
+        /// <summary>
+        /// A recorded run's status at one recorded instant, for a replay: the clock, the beat and the runner's plans as a recording
+        /// holds them. The beats are the committed layout's (a recording does not carry the runner's own list).
+        /// </summary>
+        public static ScenarioStatus Recorded(DateTimeOffset startedAt, double dayLengthSeconds, double startHour, double simHours, string beat, string layoutDigest,
+            IEnumerable<string> defects, IEnumerable<StoryJob> jobs, StoryReplacement replacement, StoryOta ota)
+        {
+            var day = (int)Math.Floor(simHours / 24);
+            return new ScenarioStatus
+            {
+                RunnerState = "RUNNING", Started = true, StartedAt = startedAt, DayLengthSeconds = dayLengthSeconds, StartHour = startHour, Day = day, SimHour = simHours - day * 24, Beat = beat,
+                LayoutDigest = layoutDigest, Defects = new List<string>(defects ?? Array.Empty<string>()).AsReadOnly(), Jobs = new List<StoryJob>(jobs ?? Array.Empty<StoryJob>()).AsReadOnly(),
+                Replacement = replacement, Ota = ota, HasS5 = replacement != null || ota != null
+            };
+        }
+
         void ParseMetadata(JsonElement c)
         {
             if (c.TryGetProperty("defects", out var defects))

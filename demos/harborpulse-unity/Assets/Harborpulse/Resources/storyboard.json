@@ -3169,8 +3169,8 @@
           "shot": "1b-1",
           "durS": 12,
           "moveS": 1,
-          "recordedWallFromS": 150.0,
-          "recordedWallToS": 162.0,
+          "recordedWallFromS": 198,
+          "recordedWallToS": 210,
           "borrowed": "none",
           "captions": [
             {
@@ -3220,8 +3220,8 @@
           "shot": "2b",
           "durS": 9,
           "moveS": 0,
-          "recordedWallFromS": 300,
-          "recordedWallToS": 309,
+          "recordedWallFromS": 302,
+          "recordedWallToS": 311,
           "borrowed": "none",
           "captions": [],
           "nodes": [
@@ -3240,8 +3240,8 @@
           "shot": "2c",
           "durS": 9,
           "moveS": 0,
-          "recordedWallFromS": 309,
-          "recordedWallToS": 318.0,
+          "recordedWallFromS": 311,
+          "recordedWallToS": 320,
           "borrowed": "none",
           "captions": [
             {
@@ -3276,8 +3276,8 @@
           "shot": "2d",
           "durS": 9,
           "moveS": 0,
-          "recordedWallFromS": 330.0,
-          "recordedWallToS": 339.0,
+          "recordedWallFromS": 355,
+          "recordedWallToS": 364,
           "borrowed": "none",
           "captions": [
             {
@@ -3302,8 +3302,8 @@
           "shot": "2e",
           "durS": 4,
           "moveS": 0,
-          "recordedWallFromS": 339.0,
-          "recordedWallToS": 345.0,
+          "recordedWallFromS": 364,
+          "recordedWallToS": 370,
           "borrowed": "none",
           "captions": [],
           "nodes": [
@@ -3397,8 +3397,8 @@
           "shot": "3b-1",
           "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 480,
-          "recordedWallToS": 488,
+          "recordedWallFromS": 524,
+          "recordedWallToS": 532,
           "borrowed": "none",
           "captions": [
             {
@@ -3417,8 +3417,8 @@
           "shot": "3b-2",
           "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 510.0,
-          "recordedWallToS": 518.0,
+          "recordedWallFromS": 532,
+          "recordedWallToS": 540,
           "borrowed": "none",
           "captions": [
             {
@@ -3442,8 +3442,8 @@
           "shot": "3b-3",
           "durS": 6,
           "moveS": 0,
-          "recordedWallFromS": 540,
-          "recordedWallToS": 546,
+          "recordedWallFromS": 570,
+          "recordedWallToS": 576,
           "borrowed": "none",
           "captions": [
             {
@@ -3474,33 +3474,6 @@
             {
               "id": "storm",
               "atS": 0,
-              "holdS": 3
-            }
-          ],
-          "nodes": [
-            "well",
-            "command",
-            "running",
-            "falling",
-            "water",
-            "flood"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "4",
-          "shot": "4b",
-          "durS": 8,
-          "moveS": 1,
-          "recordedWallFromS": 660,
-          "recordedWallToS": 668,
-          "borrowed": "none",
-          "captions": [
-            {
-              "id": "flood",
-              "atS": 1,
               "holdS": 3
             }
           ],
@@ -3624,11 +3597,38 @@
         },
         {
           "page": "4",
+          "shot": "4b",
+          "durS": 8,
+          "moveS": 1,
+          "recordedWallFromS": 713,
+          "recordedWallToS": 721,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "flood",
+              "atS": 1,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "well",
+            "command",
+            "running",
+            "falling",
+            "water",
+            "flood"
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
+        },
+        {
+          "page": "4",
           "shot": "4g",
           "durS": 6,
           "moveS": 1,
-          "recordedWallFromS": 711.0,
-          "recordedWallToS": 717.0,
+          "recordedWallFromS": 721,
+          "recordedWallToS": 727,
           "borrowed": "none",
           "captions": [],
           "nodes": [
@@ -3682,8 +3682,8 @@
           "shot": "4b-1",
           "durS": 12,
           "moveS": 0,
-          "recordedWallFromS": 810.0,
-          "recordedWallToS": 822.0,
+          "recordedWallFromS": 826,
+          "recordedWallToS": 838,
           "borrowed": "none",
           "captions": [
             {
@@ -3746,8 +3746,8 @@
           "shot": "6c",
           "durS": 10,
           "moveS": 0,
-          "recordedWallFromS": 870.0,
-          "recordedWallToS": 880.0,
+          "recordedWallFromS": 876,
+          "recordedWallToS": 886,
           "borrowed": "none",
           "captions": [
             {
@@ -3771,8 +3771,8 @@
           "shot": "6d",
           "durS": 6,
           "moveS": 0,
-          "recordedWallFromS": 880.0,
-          "recordedWallToS": 886.0,
+          "recordedWallFromS": 886,
+          "recordedWallToS": 892,
           "borrowed": "none",
           "captions": [
             {
@@ -3984,18 +3984,12 @@
         {
           "page": "8",
           "shot": "8b",
-          "durS": 11,
+          "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 1209.0,
-          "recordedWallToS": 1220.0,
+          "recordedWallFromS": 1209,
+          "recordedWallToS": 1217,
           "borrowed": "none",
-          "captions": [
-            {
-              "id": "few",
-              "atS": 0,
-              "holdS": 3
-            }
-          ],
+          "captions": [],
           "nodes": [
             "signed",
             "cap",
@@ -4011,8 +4005,8 @@
           "shot": "8c",
           "durS": 11,
           "moveS": 0,
-          "recordedWallFromS": 1220.0,
-          "recordedWallToS": 1231.0,
+          "recordedWallFromS": 1225,
+          "recordedWallToS": 1236,
           "borrowed": "none",
           "captions": [
             {
@@ -4044,20 +4038,25 @@
         {
           "page": "8",
           "shot": "8d",
-          "durS": 8,
+          "durS": 11,
           "moveS": 0,
-          "recordedWallFromS": 1236.0,
-          "recordedWallToS": 1244.0,
+          "recordedWallFromS": 1236,
+          "recordedWallToS": 1247,
           "borrowed": "none",
           "captions": [
             {
-              "id": "done",
+              "id": "few",
               "atS": 0,
               "holdS": 3
             },
             {
-              "id": "ota-summary",
+              "id": "done",
               "atS": 3,
+              "holdS": 3
+            },
+            {
+              "id": "ota-summary",
+              "atS": 6,
               "holdS": 3
             }
           ],
@@ -4076,8 +4075,8 @@
           "shot": "9a",
           "durS": 10,
           "moveS": 0,
-          "recordedWallFromS": 1244.0,
-          "recordedWallToS": 1254.0,
+          "recordedWallFromS": 1250,
+          "recordedWallToS": 1260,
           "borrowed": "none",
           "captions": [
             {
@@ -4331,8 +4330,8 @@
           "shot": "6c",
           "durS": 4,
           "moveS": 0,
-          "recordedWallFromS": 870.0,
-          "recordedWallToS": 876.0,
+          "recordedWallFromS": 879,
+          "recordedWallToS": 885,
           "borrowed": "none",
           "captions": [
             {
@@ -4356,8 +4355,8 @@
           "shot": "6d",
           "durS": 3,
           "moveS": 0,
-          "recordedWallFromS": 876.0,
-          "recordedWallToS": 882.0,
+          "recordedWallFromS": 885,
+          "recordedWallToS": 891,
           "borrowed": "none",
           "captions": [
             {
@@ -4495,8 +4494,8 @@
           "shot": "8a",
           "durS": 3,
           "moveS": 0,
-          "recordedWallFromS": 1200,
-          "recordedWallToS": 1206,
+          "recordedWallFromS": 1201.4,
+          "recordedWallToS": 1207.4,
           "borrowed": "none",
           "captions": [
             {
@@ -4522,36 +4521,11 @@
         },
         {
           "page": "8",
-          "shot": "8b",
-          "durS": 3,
-          "moveS": 0,
-          "recordedWallFromS": 1209.0,
-          "recordedWallToS": 1215.0,
-          "borrowed": "none",
-          "captions": [
-            {
-              "id": "few",
-              "atS": 0,
-              "holdS": 3
-            }
-          ],
-          "nodes": [
-            "signed",
-            "cap",
-            "updated",
-            "refused"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "8",
           "shot": "8c",
           "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 1218.0,
-          "recordedWallToS": 1226.0,
+          "recordedWallFromS": 1227,
+          "recordedWallToS": 1235,
           "borrowed": "none",
           "captions": [
             {
@@ -4582,11 +4556,36 @@
         },
         {
           "page": "8",
+          "shot": "8b",
+          "durS": 3,
+          "moveS": 0,
+          "recordedWallFromS": 1238,
+          "recordedWallToS": 1244,
+          "borrowed": "none",
+          "captions": [
+            {
+              "id": "few",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "nodes": [
+            "signed",
+            "cap",
+            "updated",
+            "refused"
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
+        },
+        {
+          "page": "8",
           "shot": "8d",
           "durS": 4,
           "moveS": 0,
-          "recordedWallFromS": 1236.0,
-          "recordedWallToS": 1242.0,
+          "recordedWallFromS": 1244,
+          "recordedWallToS": 1250,
           "borrowed": "none",
           "captions": [
             {
@@ -4616,8 +4615,8 @@
           "shot": "9a",
           "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 1242.0,
-          "recordedWallToS": 1250.0,
+          "recordedWallFromS": 1250,
+          "recordedWallToS": 1258,
           "borrowed": "none",
           "captions": [
             {

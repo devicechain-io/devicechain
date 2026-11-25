@@ -32,6 +32,18 @@ namespace DeviceChain.Harborpulse.Model.Director
         public string UpNext { get; internal set; }
         public DirectorMode Mode { get; internal set; }
         public double DirectorWeight { get; internal set; }
+        /// <summary>A cut's disclosure overlays (the opening and end cards' lines), shown beside the caption; empty live.</summary>
+        public string Overlay { get; internal set; } = "";
+        /// <summary>
+        /// The view of one frame of a rendered cut: the same surface the live director fills, from the cut player's frame. The
+        /// chip of a shot borrowed out of order takes the idle "up next" place, which a cut never uses.
+        /// </summary>
+        public static DirectorView ForCut(CutFrame frame) => new DirectorView
+        {
+            Page = frame.Page.Id, Shot = frame.Shot.Id, From = frame.From, To = frame.To, MoveS = frame.Authored.MoveS, ShotAtS = frame.ShowS - frame.IntoS,
+            Caption = frame.Caption, CaptionKind = frame.CaptionKind, CaptionAtS = frame.CaptionAtS, Rail = frame.Rail, Links = frame.Links,
+            Banner = "", Problem = "", UpNext = frame.BorrowedChip, Mode = DirectorMode.Active, DirectorWeight = 1, Overlay = frame.Overlay
+        };
     }
     /// <summary>One instance per runner run. Only IDirectorFeed may add observations.</summary>
     public sealed class DirectorHost

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using DeviceChain.Harborpulse.Model.Director;
 using System.Collections.Generic;
 
 namespace DeviceChain.Harborpulse.Model
@@ -28,7 +29,9 @@ namespace DeviceChain.Harborpulse.Model
         readonly Dictionary<(string, string), Held> held = new Dictionary<(string, string), Held>();
         public static double Period(string severity)
         {
-            switch (severity) { case "WARNING": return 1.5; case "MINOR": return 1; case "MAJOR": return 0.7; case "CRITICAL": return 0.4; default: throw new ArgumentException("unknown alarm severity: " + severity); }
+            // A replay of a recording that did not sample severities draws such an alarm as the weakest one (one ring, the slowest
+            // pulse): never a guess upwards. Any other unknown word is still refused.
+            switch (severity) { case ReplaySource.UnrecordedSeverity: case "WARNING": return 1.5; case "MINOR": return 1; case "MAJOR": return 0.7; case "CRITICAL": return 0.4; default: throw new ArgumentException("unknown alarm severity: " + severity); }
         }
         public static int RingCount(string severity) { Period(severity); return severity == "CRITICAL" ? 3 : severity == "MAJOR" ? 2 : 1; }
 
