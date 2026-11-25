@@ -42,9 +42,9 @@ func (r *fleetSQLRecorder) QueryContext(ctx context.Context, q string, args ...a
 func (r *fleetSQLRecorder) QueryRowContext(ctx context.Context, q string, args ...any) *sql.Row {
 	r.calls = append(r.calls, fleetSQLCall{q, args})
 	if r.noRows {
-		return r.ConnPool.QueryRowContext(ctx, "SELECT 7 AS granted WHERE 0")
+		return r.ConnPool.QueryRowContext(ctx, "SELECT 7 AS granted, NULL AS window_start WHERE 0")
 	}
-	return r.ConnPool.QueryRowContext(ctx, "SELECT 7 AS granted")
+	return r.ConnPool.QueryRowContext(ctx, "SELECT 7 AS granted, NULL AS window_start")
 }
 
 func TestFleetPostgresPacerFailsClosedWithoutItsTenantRow(t *testing.T) {
@@ -109,7 +109,7 @@ func TestFleetPostgresPacerIsOneDatabaseTimedStatement(t *testing.T) {
 	require.Equal(t, 7, granted, "the grant must come from RETURNING, not local bookkeeping")
 	require.Len(t, recorder.calls, 1, "one atomic statement, without a client read/modify/write transaction")
 	q := strings.ToLower(recorder.calls[0].query)
-	for _, part := range []string{"update fleet_operation_runtime", "clock_timestamp()", "returning", "pace_issued", "least(", "greatest(", "for update", "as materialized", "tenant_id"} {
+	for _, part := range []string{"update fleet_operation_runtime", "clock_timestamp()", "returning", "pace_issued", "least(", "greatest(", "for update", "as materialized", "tenant_id", "pace_window_start > now"} {
 		require.Contains(t, q, part)
 	}
 	for _, arg := range recorder.calls[0].args {
@@ -213,4 +213,20 @@ func TestFleetPacerChargesRefusedAndBusyAttempts(t *testing.T) {
 			require.Equal(t, FleetHoldRateLimit, second.Hold)
 		})
 	}
+}
+
+// A spent window stamped in the future (a failover onto a primary whose clock is behind, a clock stepped back)
+// must roll at once: kept, it would hold the operation at RATE_LIMIT until wall time caught up with it.
+func TestFleetPacerRollsAWindowThatStartsInTheFuture(t *testing.T) {
+	rate := int32(5)
+	e := driveFixture(t, 1, FleetSafetyRequest{MaxPostsPerSecond: &rate})
+	require.NoError(t, e.api.RDB.DB(e.ctx).Model(&FleetOperationRuntime{}).Where("operation_id = ?", e.op.ID).
+		Updates(map[string]any{"pace_window_start": e.now.Add(time.Hour), "pace_issued": 5}).Error)
+	granted, err := e.api.AcquireFleetPermits(e.ctx, e.op.ID, 3, 5, time.Time{})
+	require.NoError(t, err)
+	require.Equal(t, 3, granted)
+	rt, err := e.api.FleetOperationRuntimeOf(e.ctx, e.current(t))
+	require.NoError(t, err)
+	require.True(t, rt.PaceWindowStart.Time.Equal(e.now), "the new window starts now, not at the stored future start")
+	require.EqualValues(t, 3, rt.PaceIssued)
 }

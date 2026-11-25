@@ -20,12 +20,28 @@ import (
 )
 
 type fleetAttemptTime struct {
-	At          time.Time
-	WindowStart time.Time
+	At time.Time
 }
 
-// I-14: the invocation witness is outside the posting transaction's rollback:
-// refused and busy attempts remain in the log. It uses DB time, never pg_stat.
+type fleetGrant struct {
+	Window  time.Time // the window the statement charged the grant to
+	At      time.Time // the database clock read straight after the grant, on the witness's own connection
+	Granted int
+}
+
+// I-14: three replicas on one operation at 50/s, against a postable, a refusing and a busy fixture, with
+// and without skewed process clocks. Two witnesses, both on database time and neither from pg_stat:
+//
+//   - the GRANTS: each grant the pacer makes and the window it charged it to. A window holds at most 50,
+//     and any 750 ms of database time sees at most 100 granted (two windows; the stamp is read just after
+//     the grant, so the 250 ms margin absorbs that read's delay without reaching into a third window);
+//   - the ATTEMPTS: the invocation log, outside the posting transaction's rollback, so refused and busy
+//     attempts stay in it. Every attempt spent a permit: attempts never exceed what was granted.
+//
+// The attempts are NOT bucketed by time. A permit is spent after it is granted, by a worker that may run
+// late, so under load one window's attempts spill into the next one's interval. Bucketing them by the
+// window current at invocation measures that lag, not the pacer: it failed at 58 and 84 attempts in one
+// "window" on a loaded host.
 func TestFleetPostgresI14DatabaseClock(t *testing.T) {
 	for _, skewed := range []bool{false, true} {
 		for _, fixture := range []string{"postable", "refusing", "busy"} {
@@ -44,6 +60,7 @@ func TestFleetPostgresI14DatabaseClock(t *testing.T) {
 				}
 				require.NoError(t, db.Model(&FleetOperation{}).Where("id = ?", p.op.ID).
 					Updates(map[string]any{"eff_posts_per_second": 50, "target_count": targets}).Error)
+				releaseDispatchSlot(t, p)
 				if fixture == "refusing" {
 					require.NoError(t, db.Model(&FleetOperation{}).Where("id = ?", p.op.ID).
 						Update("intent", `{"key":"undeclared","valueType":"STRING","value":"v"}`).Error)
@@ -70,25 +87,51 @@ func TestFleetPostgresI14DatabaseClock(t *testing.T) {
 				t.Cleanup(func() { fleetClock = oldClock })
 				var mu sync.Mutex
 				var log []fleetAttemptTime
-				var logErr error
+				var grants []fleetGrant
+				var witnessErr error
+				fleetPermitHook = func(window time.Time, granted int) {
+					var at time.Time
+					err := db.Raw("SELECT clock_timestamp()").Row().Scan(&at)
+					mu.Lock()
+					defer mu.Unlock()
+					if err != nil && witnessErr == nil {
+						witnessErr = err
+					}
+					grants = append(grants, fleetGrant{Window: window, At: at, Granted: granted})
+				}
+				t.Cleanup(func() { fleetPermitHook = nil })
 				fleetPostHook = func(stage string, tx *gorm.DB) {
 					if stage != "read" {
 						return
 					}
 					var row fleetAttemptTime
-					err := tx.Raw(`SELECT clock_timestamp() AS at, pace_window_start AS window_start
-						FROM fleet_operation_runtime WHERE operation_id = ? AND tenant_id = ?`, p.op.ID, p.tenant).Scan(&row).Error
+					err := tx.Raw(`SELECT clock_timestamp() AS at`).Scan(&row).Error
 					mu.Lock()
 					defer mu.Unlock()
-					if err != nil {
-						logErr = err
+					if err != nil && witnessErr == nil {
+						witnessErr = err
 					}
 					log = append(log, row)
 				}
 				t.Cleanup(func() { fleetPostHook = nil })
+				// Enough evidence, whatever the host's load: more than one window's worth granted, across
+				// at least two windows. Run at least 3.2 s, and stop gathering it after 30 s.
+				evidence := func() bool {
+					mu.Lock()
+					defer mu.Unlock()
+					total, windows := 0, map[time.Time]bool{}
+					for _, g := range grants {
+						if g.Granted > 0 {
+							total += g.Granted
+							windows[g.Window] = true
+						}
+					}
+					return total > 50 && len(windows) >= 2
+				}
 				var wg sync.WaitGroup
 				errs := make(chan error, 3)
 				start := make(chan struct{})
+				began := time.Now()
 				for replica := 0; replica < 3; replica++ {
 					// Separate pools/connections, the same operation and runtime row.
 					api := NewApi(newPostgresRdbManager(t))
@@ -97,8 +140,7 @@ func TestFleetPostgresI14DatabaseClock(t *testing.T) {
 					go func() {
 						defer wg.Done()
 						<-start
-						end := time.Now().Add(3200 * time.Millisecond)
-						for time.Now().Before(end) {
+						for time.Since(began) < 3200*time.Millisecond || (!evidence() && time.Since(began) < 30*time.Second) {
 							// Other integration fixtures may leave RUNNING operations in
 							// other tenants. Isolate this operation's 50/s cap from them.
 							caps := FleetCaps{TenantPostsPerSecond: 50, InstancePostsPerSecond: 1000000}
@@ -116,22 +158,29 @@ func TestFleetPostgresI14DatabaseClock(t *testing.T) {
 				for err := range errs {
 					require.NoError(t, err)
 				}
-				require.NoError(t, logErr)
-				require.Greater(t, len(log), 50, "exercise a rollover, not an empty or single-window pass")
-				windows := map[time.Time]int{}
-				for _, row := range log {
-					windows[row.WindowStart]++
+				require.NoError(t, witnessErr)
+				require.True(t, evidence(), "exercise a rollover: more than 50 granted, across two windows")
+
+				granted, perWindow := 0, map[time.Time]int{}
+				for _, g := range grants {
+					granted += g.Granted
+					perWindow[g.Window] += g.Granted
 				}
-				for window, count := range windows {
-					require.LessOrEqual(t, count, 50, "fixed DB pacer window %s", window)
+				for window, n := range perWindow {
+					require.LessOrEqual(t, n, 50, "fixed DB pacer window %s", window)
 				}
-				sort.Slice(log, func(i, j int) bool { return log[i].At.Before(log[j].At) })
-				for left, right := 0, 0; right < len(log); right++ {
-					for !log[right].At.Before(log[left].At.Add(time.Second)) {
+				sort.Slice(grants, func(i, j int) bool { return grants[i].At.Before(grants[j].At) })
+				sum := 0
+				for left, right := 0, 0; right < len(grants); right++ {
+					sum += grants[right].Granted
+					for !grants[right].At.Before(grants[left].At.Add(750 * time.Millisecond)) {
+						sum -= grants[left].Granted
 						left++
 					}
-					require.LessOrEqual(t, right-left+1, 100, "sliding 1s DB-time window")
+					require.LessOrEqual(t, sum, 100, "granted in the 750ms of DB time ending %s", grants[right].At)
 				}
+				require.NotEmpty(t, log)
+				require.LessOrEqual(t, len(log), granted, "every posting attempt spent a permit")
 				if fixture != "postable" {
 					var posted int64
 					require.NoError(t, db.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = 'POSTED'", p.op.ID).Count(&posted).Error)
@@ -140,6 +189,16 @@ func TestFleetPostgresI14DatabaseClock(t *testing.T) {
 			})
 		}
 	}
+}
+
+// releaseDispatchSlot moves the fixture's operation to DISPATCHED when the test ends. A RUNNING operation left behind
+// counts against the instance's dispatching limit for every later fixture on the same database, so a
+// second run against one server (-count=2, or a mutant loop) failed in fixture setup, not in the code.
+func releaseDispatchSlot(t *testing.T, p *postPG) {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = p.api.RDB.DB(p.ctx).Model(&FleetOperation{}).Where("id = ?", p.op.ID).Update("dispatch", FleetDispatchDispatched).Error
+	})
 }
 
 func fleetPGNow(t *testing.T, db *gorm.DB) time.Time {
@@ -197,4 +256,23 @@ func TestFleetPostgresDeadlineAndRuntimeIgnoreProcessSkew(t *testing.T) {
 			require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 		})
 	}
+}
+
+// The PostgreSQL half of TestFleetPacerRollsAWindowThatStartsInTheFuture: the statement's own rollover.
+func TestFleetPostgresPacerRollsAWindowThatStartsInTheFuture(t *testing.T) {
+	p := newPostPG(t, "v1")
+	releaseDispatchSlot(t, p)
+	db := p.api.RDB.DB(p.ctx)
+	require.NoError(t, db.Model(&FleetOperationRuntime{}).Where("operation_id = ?", p.op.ID).
+		Updates(map[string]any{"pace_window_start": gorm.Expr("clock_timestamp() + interval '1 hour'"), "pace_issued": 50}).Error)
+	before := fleetPGNow(t, db)
+	granted, err := p.api.AcquireFleetPermits(p.ctx, p.op.ID, 3, 50, time.Time{})
+	require.NoError(t, err)
+	require.Equal(t, 3, granted)
+	after := fleetPGNow(t, db)
+	rt, err := p.api.FleetOperationRuntimeOf(p.ctx, p.op)
+	require.NoError(t, err)
+	require.False(t, rt.PaceWindowStart.Time.Before(before))
+	require.False(t, rt.PaceWindowStart.Time.After(after))
+	require.EqualValues(t, 3, rt.PaceIssued)
 }

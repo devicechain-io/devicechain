@@ -327,10 +327,14 @@ func (api *Api) AcquireFleetPermits(ctx context.Context, opID uint, want, allowe
 			return 0, core.ErrNoTenant
 		}
 		var granted int
+		var window sql.NullTime
 		err := db.Raw(fleetAcquirePermitsSQL, sql.Named("id", opID), sql.Named("tenant", tenant),
-			sql.Named("want", max(want, 0)), sql.Named("allowed", max(allowed, 0))).Row().Scan(&granted)
+			sql.Named("want", max(want, 0)), sql.Named("allowed", max(allowed, 0))).Row().Scan(&granted, &window)
 		if errors.Is(err, sql.ErrNoRows) {
 			err = gorm.ErrRecordNotFound
+		}
+		if err == nil && fleetPermitHook != nil {
+			fleetPermitHook(window.Time, granted)
 		}
 		return granted, err
 	}
@@ -345,12 +349,19 @@ func (api *Api) AcquireFleetPermits(ctx context.Context, opID uint, want, allowe
 		}
 		issued := int(rt.PaceIssued)
 		start := rt.PaceWindowStart
-		if !start.Valid || !start.Time.After(now.Add(-time.Second)) {
+		// A window that starts in the future rolls, as in the PostgreSQL statement.
+		if !start.Valid || !start.Time.After(now.Add(-time.Second)) || start.Time.After(now) {
 			start, issued = sql.NullTime{Time: now, Valid: true}, 0
 		}
 		granted = max(min(want, allowed-issued), 0)
-		return tx.Model(&FleetOperationRuntime{}).Where("operation_id = ?", opID).
-			Updates(map[string]any{"pace_window_start": start, "pace_issued": issued + granted}).Error
+		if err := tx.Model(&FleetOperationRuntime{}).Where("operation_id = ?", opID).
+			Updates(map[string]any{"pace_window_start": start, "pace_issued": issued + granted}).Error; err != nil {
+			return err
+		}
+		if fleetPermitHook != nil {
+			fleetPermitHook(start.Time, granted)
+		}
+		return nil
 	})
 	return granted, err
 }
