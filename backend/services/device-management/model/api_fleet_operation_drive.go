@@ -292,9 +292,11 @@ posting:
 		if planned == 0 {
 			return api.finishDriven(ctx, res, op)
 		}
-		if err := api.holdForUndecidedLines(db, op, res); err != nil {
-			return res, err
-		}
+	}
+	// A pass cut short (an expired lease, a busy fence) has not shown the undecided lines recovered:
+	// clearing POST_ERROR here would restart the dependency auto-pause clock on every slow pass.
+	if err := api.holdForUndecidedLines(db, op, res); err != nil {
+		return res, err
 	}
 	return res, nil
 }

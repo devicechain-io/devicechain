@@ -107,3 +107,61 @@ func TestFleetDriverSharesFourPostingSlotsAndCancelsWaiters(t *testing.T) {
 	require.Equal(t, int64(2), e.count(t, FleetPostingPlanned), "every operation uses the replica's slots")
 	require.Zero(t, e.count(t, FleetPostingPosted))
 }
+
+// A resume is the operator saying "try again". The POST_ERROR hold an operator's pause interrupted
+// (no pass runs while PAUSED, so nothing clears it) must not re-pause the operation on its first pass
+// after the resume: the dependency clock restarts there.
+func TestFleetResumeRestartsTheDependencyClock(t *testing.T) {
+	e := driveFixture(t, 2, FleetSafetyRequest{})
+	db := e.api.RDB.DB(e.ctx)
+	require.NoError(t, db.Model(&FleetOperationLine{}).Where("operation_id = ?", e.op.ID).
+		Updates(map[string]any{"attempts": 10, "last_error_code": "CONNECTION_LOST", "next_attempt_at": e.now.Add(96 * time.Hour)}).Error)
+	require.NoError(t, db.Model(&FleetOperationRuntime{}).Where("operation_id = ?", e.op.ID).
+		Updates(map[string]any{"hold_code": "POST_ERROR", "hold_since": e.now}).Error)
+	e.now = e.now.Add(23 * time.Hour)
+	require.Equal(t, FleetHoldPostError, e.drive(t).Hold)
+	op, err := e.api.PauseFleetOperation(e.ctx, "drv", "operator")
+	require.NoError(t, err)
+
+	e.now = e.now.Add(2 * time.Hour)
+	_, err = e.api.ResumeFleetOperation(e.ctx, op.Token, op.ContractDigest, nil, alice)
+	require.NoError(t, err)
+	resumedAt := e.now
+	r := e.drive(t)
+	require.Empty(t, r.Paused, "a resumed operation gets a fresh 24 hours")
+	require.Equal(t, FleetHoldPostError, r.Hold)
+	rt, err := e.api.FleetOperationRuntimeOf(e.ctx, e.op)
+	require.NoError(t, err)
+	require.True(t, rt.HoldSince.Time.Equal(resumedAt), "the hold restarts at the first pass after the resume")
+
+	e.now = resumedAt.Add(24*time.Hour - time.Second)
+	require.Empty(t, e.drive(t).Paused)
+	e.now = resumedAt.Add(24 * time.Hour)
+	require.Equal(t, FleetPauseDependency, e.drive(t).Paused, "and the clock still runs")
+}
+
+// A pass cut short by an expired lease has not seen the undecided lines recover, so it keeps
+// POST_ERROR and its start: a dependency slow enough to outlast leases must still reach 24 h.
+func TestFleetPassCutShortKeepsTheDependencyHold(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits out a lease")
+	}
+	e := driveFixture(t, 2, FleetSafetyRequest{})
+	db := e.api.RDB.DB(e.ctx)
+	var first FleetOperationLine
+	require.NoError(t, db.Where("operation_id = ?", e.op.ID).Order("ordinal").First(&first).Error)
+	require.NoError(t, db.Model(&FleetOperationLine{}).Where("id = ?", first.ID).
+		Updates(map[string]any{"attempts": 3, "last_error_code": "CONNECTION_LOST", "next_attempt_at": e.now.Add(time.Hour)}).Error)
+	since := e.now.Add(-time.Hour)
+	require.NoError(t, db.Model(&FleetOperationRuntime{}).Where("operation_id = ?", e.op.ID).
+		Updates(map[string]any{"hold_code": "POST_ERROR", "hold_since": since}).Error)
+	// The answer arrives after the lease it grants has lapsed: the due line's post is abandoned.
+	e.api.PrincipalStanding = slowStanding{delay: FleetLeaseTTL + 100*time.Millisecond}
+	r := e.drive(t)
+	require.Zero(t, r.Posted)
+	require.Equal(t, FleetHoldPostError, r.Hold)
+	rt, err := e.api.FleetOperationRuntimeOf(e.ctx, e.op)
+	require.NoError(t, err)
+	require.Equal(t, FleetHoldPostError, rt.HoldCode)
+	require.True(t, rt.HoldSince.Time.Equal(since), "the dependency clock is not restarted by a cut-short pass")
+}

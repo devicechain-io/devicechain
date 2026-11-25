@@ -83,13 +83,6 @@ func TestNoExecutableKindWithoutARolledFoundation(t *testing.T) {
 }
 
 func fleetGit(args ...string) (string, error) {
-	// A container cannot follow a Windows worktree's external .git pointer. The gate
-	// runner may supply a disposable copy of the real Git objects, HEAD and tags here.
-	// Use it explicitly (also avoiding VCS discovery during builds); all foundation
-	// checks still run against those objects. Normal checkouts use their own Git data.
-	if info, err := os.Stat("../.gate-git/HEAD"); err == nil && !info.IsDir() {
-		args = append([]string{"--git-dir=../.gate-git"}, args...)
-	}
 	data, err := exec.Command("git", args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %v: %w: %s", args, err, data)
