@@ -35,6 +35,19 @@ func newReversalPG(t *testing.T) *reversalEnv {
 	f.devs = append(f.devs, seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "k", ValueType: "STRING"}}))
 	f.setK(t, f.devs[0], ptr("v0"))
 	f.orig = f.runOriginal(t, "orig", false, true)
+	// The dispatching budget is instance-wide and the database outlives the test: leave nothing running.
+	t.Cleanup(func() {
+		var live []FleetOperation
+		if err := api.RDB.DB(ctx).Where("dispatch IN ?", []string{"READY", "RUNNING", "PAUSED"}).Find(&live).Error; err != nil {
+			t.Errorf("list live operations: %v", err)
+			return
+		}
+		for _, op := range live {
+			if _, err := api.AbortFleetOperation(ctx, op.Token, alice.Name); err != nil {
+				t.Errorf("abort %s: %v", op.Token, err)
+			}
+		}
+	})
 	return f
 }
 

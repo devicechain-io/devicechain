@@ -371,16 +371,8 @@ func (api *Api) PreviewFleetReversal(ctx context.Context, req *FleetReversalRequ
 	out := &FleetReversalPreview{ReversibleCount: counts.reversible, RedactedCount: counts.redacted,
 		AlreadyReversedCount: counts.alreadyReversed, NotPostedCount: counts.notPosted,
 		RequestDigest: plan.RequestDigest, PlanDigest: plan.PlanDigest, ContractDigest: plan.ContractDigest}
-	db := api.RDB.DB(ctx)
-	for i := range counts.admitted {
-		l := &counts.admitted[i]
-		changed, err := fleetChangedSince(db, uint(l.TargetId.Int64), n.reversal.key, l)
-		if err != nil {
-			return nil, err
-		}
-		if changed {
-			out.ChangedSinceCount++
-		}
+	if out.ChangedSinceCount, err = fleetCountChangedSince(api.RDB.DB(ctx), n.reversal.key, counts.admitted); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -549,6 +541,67 @@ func fleetChangedSince(db *gorm.DB, devID uint, key string, orig *FleetOperation
 		return true, nil
 	}
 	return fleetRevisionsChangedKey(db, devID, key, orig.PostedRevision)
+}
+
+// fleetCountChangedSince counts, for a preview, the original lines whose key changed since they were
+// applied. It asks the same two questions as fleetChangedSince, but in batches: the generation heads and
+// the latest revision of every device in one read per chunk, and the revision walk only for a device that
+// minted a revision after the original's. A device with no newer revision and the same generation is
+// unchanged without a walk, which is the common case for an undo soon after the change.
+func fleetCountChangedSince(db *gorm.DB, key string, lines []FleetOperationLine) (int, error) {
+	changed := 0
+	for start := 0; start < len(lines); start += rdb.MaxLookupKeys {
+		chunk := lines[start:min(start+rdb.MaxLookupKeys, len(lines))]
+		ids := make([]int64, len(chunk))
+		for i, l := range chunk {
+			ids[i] = l.TargetId.Int64
+		}
+		var heads []AttributeGeneration
+		if err := db.Select("device_id", "generation").Where("scope = ? AND attr_key = ? AND device_id IN ?", string(AttributeScopeShared), key, ids).
+			Find(&heads).Error; err != nil {
+			return 0, err
+		}
+		gens := make(map[int64]int64, len(heads))
+		for _, h := range heads {
+			gens[int64(h.DeviceId)] = h.Generation
+		}
+		var latest []struct {
+			DeviceId int64
+			Revision int64
+		}
+		if err := db.Model(&DeviceConfigurationRevision{}).Select("device_id, MAX(revision) AS revision").Where("device_id IN ?", ids).
+			Group("device_id").Scan(&latest).Error; err != nil {
+			return 0, err
+		}
+		newest := make(map[int64]int64, len(latest))
+		for _, r := range latest {
+			newest[r.DeviceId] = r.Revision
+		}
+		for i := range chunk {
+			l := &chunk[i]
+			var posted fleetValueImage
+			if err := json.Unmarshal([]byte(l.PostedValue.String), &posted); err != nil {
+				return 0, err
+			}
+			dev := l.TargetId.Int64
+			if gens[dev] != posted.Generation {
+				changed++
+				continue
+			}
+			top, minted := newest[dev]
+			if (!minted && !l.PostedRevision.Valid) || (minted && l.PostedRevision.Valid && top <= l.PostedRevision.Int64) {
+				continue // no revision after the original's: nothing to walk
+			}
+			moved, err := fleetRevisionsChangedKey(db, uint(dev), key, l.PostedRevision)
+			if err != nil {
+				return 0, err
+			}
+			if moved {
+				changed++
+			}
+		}
+	}
+	return changed, nil
 }
 
 // fleetRevisionWalkChunk bounds how many revision documents one read of the walk holds.
