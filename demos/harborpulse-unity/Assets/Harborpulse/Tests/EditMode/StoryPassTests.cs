@@ -312,5 +312,61 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(RainField.Count(new Weather(1, 1)), Is.GreaterThan(RainField.Count(new Weather(1, 0.3))), "density is still the cue for intensity");
             Assert.That(RainField.Count(new Weather(0, 0)), Is.EqualTo(0));
         }
+
+        [Test]
+        public void PlanningAndDispatchingTheReadsDoesNotHappenEveryFrameHoweverLongTheDayHasRun()
+        {
+            // 100 s at 100 frames a second: a new status every second, each of 60 reads answering every three seconds
+            long Run(int reads, out long dispatches)
+            {
+                var gate = new ReadPlanGate(); var start = DateTimeOffset.Parse("2026-01-01T00:00:00Z"); object status = new object();
+                var next = new DateTimeOffset[reads]; for (var i = 0; i < reads; i++) next[i] = start.AddSeconds(i * 3.0 / reads);
+                for (var frame = 0; frame < 10000; frame++)
+                {
+                    var now = start.AddSeconds(frame / 100.0);
+                    if (frame % 100 == 0) status = new object();
+                    for (var i = 0; i < reads; i++) if (next[i] <= now.AddSeconds(-0.05)) { next[i] = now.AddSeconds(3); gate.Answered(); } // an answer, 50 ms after it was asked for
+                    if (gate.ShouldPlan(status, now)) { }
+                    if (gate.ShouldDispatch(now)) { DateTimeOffset? idle = null; foreach (var t in next) if (t > now && (!idle.HasValue || t < idle.Value)) idle = t; gate.Dispatched(now, idle); }
+                }
+                dispatches = gate.Dispatches; return gate.Plans;
+            }
+            var few = Run(15, out var fewDispatches); var many = Run(120, out var manyDispatches);
+            // the work follows the answers (reads / 3 s) and the status (1 / s), never the frame rate: 10,000 frames, far fewer passes
+            Assert.That(few, Is.LessThan(700)); Assert.That(fewDispatches, Is.LessThan(1400));
+            Assert.That(many, Is.LessThan(4300), "120 reads answering every 3 s over 100 s is 4,000 answers"); Assert.That(manyDispatches, Is.LessThan(8300));
+            // and with nothing new, a frame plans nothing and dispatches nothing
+            var idle2 = new ReadPlanGate(); var t0 = DateTimeOffset.Parse("2026-01-01T00:00:00Z"); var same = new object();
+            Assert.That(idle2.ShouldPlan(same, t0), Is.True); Assert.That(idle2.ShouldDispatch(t0), Is.True); idle2.Dispatched(t0, t0.AddSeconds(3));
+            for (var frame = 1; frame < 90; frame++) { Assert.That(idle2.ShouldPlan(same, t0.AddSeconds(frame / 100.0)), Is.False); Assert.That(idle2.ShouldDispatch(t0.AddSeconds(frame / 100.0)), Is.False); }
+            Assert.That(idle2.ShouldPlan(same, t0.AddSeconds(1)), Is.True, "a second has passed: a device that bound late is planned for");
+            idle2.Dispatched(t0.AddSeconds(1), t0.AddSeconds(3));
+            Assert.That(idle2.ShouldDispatch(t0.AddSeconds(2.9)), Is.False); Assert.That(idle2.ShouldDispatch(t0.AddSeconds(3)), Is.True, "the earliest idle read is due");
+            idle2.Dispatched(t0.AddSeconds(3), null); idle2.Answered(); Assert.That(idle2.ShouldDispatch(t0.AddSeconds(3.01)), Is.True, "an answer frees a slot");
+            Assert.That(idle2.ShouldPlan(same, t0.AddSeconds(3.01)), Is.True, "and may bring a new alarm to ask about");
+            // a new status object is a change even inside the second
+            idle2.Dispatched(t0.AddSeconds(3.01), null); Assert.That(idle2.ShouldPlan(new object(), t0.AddSeconds(3.02)), Is.True);
+        }
+
+        [Test]
+        public void AFrameInWhichNoReadAnsweredCopiesNeitherTheReadsNorTheAlarmChanges()
+        {
+            var t0 = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+            var reads = Enumerable.Range(0, 400).Select(i => new DirectorRead("alarms", "device-" + i)).ToArray();
+            var changes = Enumerable.Range(0, 300).Select(i => new DirectorAlarmChange("alarm-" + i, "device-" + i, "key", t0.AddSeconds(i))).ToList();
+            var tap = new DirectorMeasurementTap(); tap.Watch(new DirectorMeasurement("device-1", "level", 1.0, t0));
+            var first = new DirectorReadSnapshot(reads, true, 0, 0, changes, tap.Records);
+            // the next frame: nothing answered, nothing was added
+            var next = first.Observed(true, 0, 0, changes, tap.Records);
+            Assert.That(next.Reads, Is.SameAs(first.Reads), "the reads are not copied"); Assert.That(next.Problems, Is.SameAs(first.Problems));
+            Assert.That(next.AlarmChanges, Is.SameAs(first.AlarmChanges), "nor the alarm changes, however many the day has seen");
+            // a new measurement and a new alarm change are both seen, and what was published before is not disturbed
+            tap.Watch(new DirectorMeasurement("device-2", "level", 2.0, t0.AddSeconds(1))); changes.Add(new DirectorAlarmChange("alarm-x", "device-x", "key", t0.AddSeconds(400)));
+            var later = next.Observed(false, 2, 1, changes, tap.Records);
+            Assert.That(later.Measurements.Count, Is.EqualTo(2)); Assert.That(next.Measurements.Count, Is.EqualTo(1));
+            Assert.That(later.AlarmChanges.Count, Is.EqualTo(301)); Assert.That(next.AlarmChanges.Count, Is.EqualTo(300));
+            Assert.That(later.MeasurementsLive, Is.False); Assert.That(later.MeasurementReconnects, Is.EqualTo(2)); Assert.That(later.AlarmReconnects, Is.EqualTo(1));
+            Assert.That(later.Reads, Is.SameAs(first.Reads));
+        }
     }
 }

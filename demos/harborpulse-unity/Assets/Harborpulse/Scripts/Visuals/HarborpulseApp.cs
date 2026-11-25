@@ -118,6 +118,11 @@ namespace DeviceChain.Harborpulse.Visuals
         Unity.Profiling.ProfilerRecorder loopRecorder, gcRecorder;
         double loopMs, gcBytes, modelMs; long statsFrames;
         readonly System.Diagnostics.Stopwatch tickWatch = new System.Diagnostics.Stopwatch();
+        // the tick's parts, in order: the platform link, the observed model, the views, the director, the HUD, the water
+        static readonly string[] PartNames = { "link", "model", "views", "director", "hud", "water" };
+        readonly double[] partMs = new double[6];
+        double lapAt;
+        void Lap(int part) { if (!frameStats) return; var now = tickWatch.Elapsed.TotalMilliseconds; partMs[part] += now - lapAt; lapAt = now; }
         bool engineer, hidden, portrait;
 
         /// <summary>
@@ -531,7 +536,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 }
                 return;
             }
-            tickWatch.Restart();
+            tickWatch.Restart(); lapAt = 0;
             Tick(Time.deltaTime);
             modelMs += tickWatch.Elapsed.TotalMilliseconds;
             if (frameStats) FrameStats(Time.unscaledDeltaTime);
@@ -552,7 +557,9 @@ namespace DeviceChain.Harborpulse.Visuals
                 + " · sim " + (clock.SimSeconds / 3600).ToString("0.00", CultureInfo.InvariantCulture)
                 + " · scene tick " + (modelMs / statsFrames).ToString("0.00", CultureInfo.InvariantCulture) + " ms"
                 + " · player loop " + (loopMs / statsFrames).ToString("0.00", CultureInfo.InvariantCulture) + " ms"
-                + " · GC " + (gcBytes / statsFrames / 1024).ToString("0", CultureInfo.InvariantCulture) + " kB/frame");
+                + " · GC " + (gcBytes / statsFrames / 1024).ToString("0", CultureInfo.InvariantCulture) + " kB/frame"
+                + " · " + string.Join(" ", PartNames.Select((name, i) => name + " " + (partMs[i] / statsFrames).ToString("0.00", CultureInfo.InvariantCulture))));
+            Array.Clear(partMs, 0, partMs.Length);
             frameTimes.Clear(); frameStatsAt = 0; loopMs = gcBytes = modelMs = 0; statsFrames = 0;
         }
 
@@ -578,6 +585,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 source = live.Source;
             }
 
+            Lap(0);
             var started = source.Status?.StartedAt;
             if (Replay) { }
             else if (!Offline && modelRun.HasValue && modelRun != started)
@@ -593,6 +601,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 model = new HarborObservedModel(layout); modelRun = started;
             }
             frame = model.Update(source, clock, now, Offline && previewHeld);
+            Lap(1);
             if (!Offline && !Replay) ApplyMembership(source, now);
             var hour = clock.HourOfDay;
             weather = PreviewFairWeather ? new Weather(0, 0) : frame.World.Weather;
@@ -608,7 +617,9 @@ namespace DeviceChain.Harborpulse.Visuals
             // coordinates and the map then puts it where it is drawn; the HUD used to read it between the two, so the truck's pin
             // stood off the truck and swung about as it drove.
             ApplyMappedTruck(source, now);
+            Lap(2);
             if (Replay) ApplyCut(); else TickDirector(source, now, dt);
+            Lap(4);
             world.Detail.Refresh(sceneCamera.transform.position);
 
             reflection.Level = (float)frame.ReflectionLevelM;
@@ -621,6 +632,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 b.rotation = Quaternion.Euler(Mathf.Sin(waterTime * 0.9f + i) * 6 * (0.3f + (float)weather.Storm), 0, Mathf.Cos(waterTime * 0.7f + i * 1.3f) * 6 * (0.3f + (float)weather.Storm));
             }
 
+            Lap(5);
             if (Replay) renderFrame += renderDir == null ? 1 : 0;
             else if (director != null) { directorCamera.Portrait = TallFrame; directorCamera.Tick(directorView, director, directorSeconds, dt, fixes); }
             if (fixedEye != null)
@@ -725,6 +737,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 // director show second to the runner clock without changing the U2a wire format.
                 recording.Recorder.World(directorSeconds, StatusSample(source.Status, sim, source));
             }
+            Lap(3);
             RefreshHud();
         }
         public void RefreshHud()

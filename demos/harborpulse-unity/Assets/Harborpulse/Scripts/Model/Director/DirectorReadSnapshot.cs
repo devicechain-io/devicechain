@@ -103,6 +103,23 @@ namespace DeviceChain.Harborpulse.Model.Director
             Problems = Array.AsReadOnly(Reads.Where(r => r.Error != null || r.Probe == DirectorProbe.PROBE_FAILED)
                 .Select(r => r.Name + "/" + r.Scope + ": " + r.Probe + ": " + r.Error).ToArray());
         }
+        DirectorReadSnapshot(DirectorReadSnapshot reads, bool? measurementsLive, int measurementReconnects, int alarmReconnects,
+            IReadOnlyList<DirectorAlarmChange> alarmChanges, IReadOnlyList<DirectorMeasurement> measurements)
+        {
+            Reads = reads.Reads; Problems = reads.Problems;
+            MeasurementsLive = measurementsLive; MeasurementReconnects = measurementReconnects; AlarmReconnects = alarmReconnects;
+            AlarmChanges = alarmChanges; Measurements = measurements;
+        }
+        /// <summary>
+        /// This snapshot's reads with the streams as they stand now. A frame in which no read answered publishes through here:
+        /// the reads and their problems are the same objects, and the alarm changes (a list that is only ever appended to) are
+        /// copied only when one was added. So what a frame costs does not grow with the reads or the alarms the day has piled up.
+        /// </summary>
+        public DirectorReadSnapshot Observed(bool? measurementsLive, int measurementReconnects, int alarmReconnects,
+            IReadOnlyList<DirectorAlarmChange> alarmChanges, IEnumerable<DirectorMeasurement> measurements)
+            => new DirectorReadSnapshot(this, measurementsLive, measurementReconnects, alarmReconnects,
+                alarmChanges == null || alarmChanges.Count == AlarmChanges.Count ? AlarmChanges : Array.AsReadOnly(alarmChanges.ToArray()),
+                measurements is DirectorMeasurementTap.Prefix prefix ? prefix : Array.AsReadOnly((measurements ?? Array.Empty<DirectorMeasurement>()).ToArray()));
         public IReadOnlyList<DirectorRead> Reads { get; }
         public IReadOnlyList<string> Problems { get; }
         public bool? MeasurementsLive { get; }

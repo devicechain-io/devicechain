@@ -607,6 +607,14 @@ visible: 16:9 water 43.5 %, sky 0 %, 36/37 devices (the truck is in its depot); 
   lamps go dark through the east feeder outage, a WORLD cue like `EastWindows` before.
 - **Frame stats.** `-hp-frame-stats` turns vsync off and logs the mean, 95th-percentile and worst frame time every
   10 s.
+  Each line also carries the sim hour, the scene's own tick in milliseconds (the number to read in an unfocused
+  Editor, which caps the frame itself near 50 ms), managed allocation per frame, and the tick split by part: link,
+  model, views, director, HUD, water.
+- **Per-frame work that does not grow with the day.** The director's platform reads are planned and dispatched
+  when the runner's status or a read's answer changed (`ReadPlanGate`), not every frame, and a frame in which no read
+  answered publishes a snapshot that reuses the reads and the alarm changes (`DirectorReadSnapshot.Observed`)
+  instead of copying them. Both used to cost more with every alarm the day raised. Each has a guard test in
+  `StoryPassTests`.
 
 ### Quay surfaces and prop clearance
 
