@@ -188,16 +188,18 @@ func fleetDeleteTombstone(tx *gorm.DB, op *FleetOperation) error {
 }
 
 // MaintainFleetOperations is a nonblocking singleton per pass, not a leader.
-// Tenant IDs alone cross the discovery scope; all content is processed scoped.
+// Discovery is the shared tenant-ID listing, so no row content crosses tenants
+// and no new isolation bypass is needed; repair and retention each run under
+// that tenant's own context and apply their own driver-protocol filter.
 func (api *Api) MaintainFleetOperations(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	pass := func() error {
-		var tenants []string
-		if err := fleetMaintenanceProtocol(api.RDB.DB(core.WithSystemContext(ctx)).Model(&FleetOperation{})).Distinct("tenant_id").Order("tenant_id").Pluck("tenant_id", &tenants).Error; err != nil {
+		tenants, err := api.RDB.TenantsWith(ctx, &FleetOperation{})
+		if err != nil {
 			return err
 		}
-		_, err := core.ForEachTenant(ctx, tenants, func(tctx context.Context, _ string) error {
+		_, err = core.ForEachTenant(ctx, tenants, func(tctx context.Context, _ string) error {
 			repairErr := api.RepairFleetErasure(tctx)
 			now, err := fleetMaintenanceNow(api.RDB.DB(tctx))
 			if err != nil {

@@ -51,14 +51,17 @@ func TestFleetI19PostgresErasureAndDisabledHookRepair(t *testing.T) {
 			deleted, err := p.api.DeleteDevice(p.ctx, p.devs[0].Token)
 			require.NoError(t, err)
 			require.True(t, deleted)
-			var line FleetOperationLine
-			require.NoError(t, p.api.RDB.DB(p.ctx).First(&line, p.lines[0].ID).Error)
+			line := reloadFleetLine(t, p, p.lines[0].ID)
 			require.Equal(t, !disabled, line.RedactedAt.Valid)
 			if disabled {
 				require.Equal(t, p.devs[0].Token, line.TargetKey)
+				require.True(t, line.Prior.Valid, "the old pod's delete leaves the before-image behind")
+				require.True(t, line.PostedValue.Valid)
 				require.NoError(t, p.api.RepairFleetErasure(p.ctx))
 			}
-			require.NoError(t, p.api.RDB.DB(p.ctx).First(&line, p.lines[0].ID).Error)
+			// A fresh struct each read: gorm leaves a sql.Null* field untouched when
+			// the column scans NULL into an already populated struct.
+			line = reloadFleetLine(t, p, p.lines[0].ID)
 			require.Empty(t, line.TargetKey)
 			require.False(t, line.Prior.Valid)
 			require.False(t, line.PostedValue.Valid)
@@ -102,15 +105,37 @@ func TestFleetI19PostgresV19DeleteSQLRepair(t *testing.T) {
 		}
 		return nil
 	}))
-	var line FleetOperationLine
-	require.NoError(t, p.api.RDB.DB(p.ctx).First(&line, p.lines[0].ID).Error)
+	line := reloadFleetLine(t, p, p.lines[0].ID)
 	require.Equal(t, p.devs[0].Token, line.TargetKey)
+	require.True(t, line.Prior.Valid)
+	require.True(t, line.PostedValue.Valid)
 	require.False(t, line.RedactedAt.Valid)
-	require.NoError(t, p.api.RepairFleetErasure(p.ctx))
-	require.NoError(t, p.api.RDB.DB(p.ctx).First(&line, p.lines[0].ID).Error)
+	// Every replica runs the pass; a second run must change nothing.
+	for range 2 {
+		require.NoError(t, p.api.RepairFleetErasure(p.ctx))
+	}
+	line = reloadFleetLine(t, p, p.lines[0].ID)
 	require.Empty(t, line.TargetKey)
+	require.False(t, line.Prior.Valid)
+	require.False(t, line.PostedValue.Valid)
+	require.Empty(t, line.Detail)
 	require.True(t, line.RedactedAt.Valid)
 	require.Equal(t, "TARGET_ERASED", line.Code)
+	require.Equal(t, "AMBIGUOUS", line.Settlement.String, "a posted, unsettled line can no longer be settled")
+	var redacted int64
+	require.NoError(t, p.api.RDB.DB(p.ctx).Model(&FleetOperationEvent{}).
+		Where("line_id = ? AND kind = 'REDACTED'", line.ID).Count(&redacted).Error)
+	require.Equal(t, int64(1), redacted)
+	survivor := reloadFleetLine(t, p, p.lines[1].ID)
+	require.Equal(t, p.devs[1].Token, survivor.TargetKey)
+	require.False(t, survivor.RedactedAt.Valid)
+}
+
+func reloadFleetLine(t *testing.T, p *postPG, id uint) FleetOperationLine {
+	t.Helper()
+	var line FleetOperationLine
+	require.NoError(t, p.api.RDB.DB(p.ctx).First(&line, id).Error)
+	return line
 }
 
 func TestFleetI25PostgresAbortRetentionAndReplay(t *testing.T) {

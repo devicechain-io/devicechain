@@ -155,16 +155,7 @@ func (api *Api) RepairFleetErasure(ctx context.Context) error {
 			failures = append(failures, err)
 		}
 	}
-	// Capture rows can also outlive a device after a previous-minor delete.
-	// The existing report maintenance owns their separate 200-day age limit.
-	reports := q("DeviceConfigurationReport")
-	liveDevice := db.Model(&Device{}).Select("1").
-		Where(q("Device") + ".id = " + reports + ".device_id").
-		Where(q("Device") + ".tenant_id = " + reports + ".tenant_id")
-	orphans := db.Model(&DeviceConfigurationReport{}).Select("id").Where("NOT EXISTS (?)", liveDevice).
-		Order("id").Limit(fleetMaintenanceChunk)
-	if err := db.Where("id IN (?)", orphans).Delete(&DeviceConfigurationReport{}).Error; err != nil {
-		failures = append(failures, err)
-	}
+	// Report rows a previous-minor delete leaves behind are not this pass's:
+	// MaintainDeviceConfigurationReports already removes orphans on every replica.
 	return errors.Join(failures...)
 }

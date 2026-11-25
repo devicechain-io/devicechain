@@ -76,10 +76,14 @@ ON fleet_operation_lines (operation_id, target_id) WHERE target_id IS NOT NULL`)
 	require.NoError(t, api.RDB.DB(ctx).First(&note, note.ID).Error)
 	require.Empty(t, note.Note.String)
 	require.True(t, note.NoteRedactedAt.Valid)
-	require.NoError(t, api.RDB.DB(ctx).First(&shared, shared.ID).Error)
-	require.Equal(t, survivor.Token, shared.TargetKey)
-	require.Equal(t, "keep", shared.Prior.String)
-	require.Equal(t, int64(note.ID), shared.ResolutionId.Int64)
+	// A fresh struct: gorm would leave the created Prior in place if the column
+	// had been wrongly cleared to NULL.
+	var kept FleetOperationLine
+	require.NoError(t, api.RDB.DB(ctx).First(&kept, shared.ID).Error)
+	require.Equal(t, survivor.Token, kept.TargetKey)
+	require.Equal(t, "keep", kept.Prior.String)
+	require.False(t, kept.RedactedAt.Valid)
+	require.Equal(t, int64(note.ID), kept.ResolutionId.Int64)
 	var count int64
 	require.NoError(t, api.RDB.DB(ctx).Model(&FleetOperationEvent{}).Where("operation_id IN ? AND kind = 'REDACTED'", ids).Count(&count).Error)
 	require.Equal(t, int64(4), count)

@@ -40,17 +40,3 @@ func TestFleetRepairFiltersEachOperationProtocol(t *testing.T) {
 	require.NoError(t, api.RDB.DB(ctx).First(&line, line.ID).Error)
 	require.False(t, line.RedactedAt.Valid)
 }
-
-func TestFleetRepairRemovesOrphanCaptureRows(t *testing.T) {
-	api, ctx := fleetFixture(t, 1)
-	var dev Device
-	require.NoError(t, api.RDB.DB(ctx).Where("token = 'd1'").First(&dev).Error)
-	for _, id := range []uint{dev.ID, 999} {
-		require.NoError(t, api.RDB.DB(ctx).Create(&DeviceConfigurationReport{DeviceId: id, Revision: 1, Status: "APPLIED", Source: "REPORT"}).Error)
-	}
-	require.NoError(t, api.RepairFleetErasure(ctx))
-	var reports []DeviceConfigurationReport
-	require.NoError(t, api.RDB.DB(ctx).Find(&reports).Error)
-	require.Len(t, reports, 1)
-	require.Equal(t, dev.ID, reports[0].DeviceId)
-}
