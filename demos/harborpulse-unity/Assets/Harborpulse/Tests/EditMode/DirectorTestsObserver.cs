@@ -340,7 +340,7 @@ namespace DeviceChain.Harborpulse.Tests
         static ScenarioStatus RestoreStatus() => ScenarioStatus.Parse("{\"state\":\"RUNNING\",\"scenario\":{\"name\":\"harborpulse\",\"started\":true,\"startedAt\":" + Q(Ts(6)) + ",\"dayLengthSeconds\":1440,\"startHour\":6,\"simHour\":21.6,\"day\":0,\"defects\":[\"drop-backfill\"],\"layoutDigest\":" + Q(new string('a', 64)) + ",\"backfill\":[{\"device\":\"hp-charger-east-1\",\"day\":0,\"buffered\":2,\"first\":" + Q(Ts(20)) + ",\"last\":" + Q(Ts(20.1)) + ",\"times\":[" + Q(Ts(20)) + "," + Q(Ts(20.1)) + "]}],\"s5\":{\"replacement\":{\"device\":\"hp-gauge-north-3\",\"at\":" + Q(Ts(12.5)) + ",\"unitIdentifier\":\"unit\"},\"restoreDrains\":[{\"day\":0,\"offered\":2,\"accepted\":2,\"refused429\":3,\"firstRefusalAt\":" + Q(Ts(21.26)) + ",\"caughtUpAt\":" + Q(Ts(21.3)) + "}]}}}");
         [TestCase(false)]
         [TestCase(true)]
-        public void RestoreLedgerSourcesAndExactSetsIncludeUnexpectedPlatformTimes(bool extra)
+        public void RestoreLedgerSourcesIncludeUnexpectedPlatformTimesAndEveryBufferedReadingIsAtLeastTheLedger(bool extra)
         {
             var source = new Source { Status = RestoreStatus() }; var records = new List<string> {
                 Measure("buffer-1", 20, device: "hp-charger-east-1", metric: "power_kw"), Measure("buffer-2", 20.1, device: "hp-charger-east-1", metric: "power_kw") };
@@ -352,8 +352,16 @@ namespace DeviceChain.Harborpulse.Tests
             var metadata = store.Records.Single(o => o.Kind == "ledger" && o.Key == "run"); Assert.That(metadata.Field("layoutDigest"), Is.EqualTo(new string('a', 64))); Assert.That(metadata.Sets["defects"], Is.EqualTo(new[] { "drop-backfill" }));
             Assert.That(store.Records.Single(o => o.Kind == "replacement").Source, Is.EqualTo(EvidenceSource.Scenario));
             var back = store.Records.Where(o => o.Key == "backfill" && o.Kind == "measure").ToArray(); Assert.That(back.Length, Is.EqualTo(extra ? 3 : 2)); Assert.That(back[0].OccurredAtS, Is.EqualTo(840)); Assert.That(back[0].ObservedAtS, Is.EqualTo(936));
-            store.AddCoverage(new CoverageInterval("run", "measurements", 19.75, 21.6, false)); var page = DirectorKit.Story().Page("7");
-            Assert.That(page.Captions.Single(c => c.Id == "all-buffered").Needs.Evaluate(store, page.Context("run", 936)).Holds, Is.EqualTo(!extra));
+            var page = DirectorKit.Story().Page("7"); // no stream coverage is added: an at-least set asks for none
+            // "Every buffered reading, stored at the time it was taken": every time in the sender's ledger is read back. A reading the
+            // ledger does not list (on a live day, the one taken at the outage's first instant) is still observed and still counted,
+            // and does not refute it; a ledger time that is NOT read back does.
+            var every = page.Captions.Single(c => c.Id == "all-buffered").Needs;
+            Assert.That(every.Evaluate(store, page.Context("run", 936)).Holds, Is.True);
+            Assert.That(every.Explain(store, page.Context("run", 936)), Does.Contain("observed " + (extra ? 3 : 2) + ", expected 2, missing 0, extra " + (extra ? "1" : "0")));
+            var short1 = new ObservationStore(); foreach (var o in store.Records.Where(o => !(o.Kind == "measure" && o.Key == "backfill" && o.Identity == "buffer-2"))) short1.Add(o);
+            Assert.That(every.Evaluate(short1, page.Context("run", 936)).Holds, Is.False, "one buffered reading never stored");
+            Assert.That(every.Explain(short1, page.Context("run", 936)), Does.Contain("missing 1"));
         }
         [Test]
         public void ReadFailureAndReconnectCountersPreserveGapsBetweenUpdates()

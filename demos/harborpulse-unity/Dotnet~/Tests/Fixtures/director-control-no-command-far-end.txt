@@ -1,13 +1,17 @@
 +692|4|caption|The well reached the float level.|3:run4:chip36:chip:hp-pump-north::FLOAT-CONSISTENT13:hp-pump-north0:10:pump-cycle0:0:16:FLOAT-CONSISTENT8:PLATFORM
++697|4|node-label|Well falling|3:run7:measure12:well-falling13:hp-pump-north10:wet_well_m10:pump-cycle0:0:0:8:PLATFORM
++697|4|node|falling|3:run7:measure12:well-falling13:hp-pump-north10:wet_well_m10:pump-cycle0:0:0:8:PLATFORM
 +705|4|caption-end|float|
--691|4|link|well->command|
--691|4|node-label|start-pump sent|3:run7:command37:command:hp-pump-north:start-pump:SENT13:hp-pump-north10:start-pump10:pump-cycle0:0:4:SENT8:PLATFORM
--691|4|node|command|3:run7:command37:command:hp-pump-north:start-pump:SENT13:hp-pump-north10:start-pump10:pump-cycle0:0:4:SENT8:PLATFORM
 -692|4|caption|The platform starts the pump.|3:run4:chip28:chip:hp-pump-north::PLATFORM13:hp-pump-north0:10:pump-cycle0:0:8:PLATFORM8:PLATFORM
--694|4|link|command->running|
--694|4|node-label|Pump running (platform first)|3:run4:chip28:chip:hp-pump-north::PLATFORM13:hp-pump-north0:10:pump-cycle0:0:8:PLATFORM8:PLATFORM
--694|4|node|running|3:run4:chip28:chip:hp-pump-north::PLATFORM13:hp-pump-north0:10:pump-cycle0:0:8:PLATFORM8:PLATFORM
+-693|4|link|well->command|
+-693|4|node-label|Start command sent|3:run7:command37:command:hp-pump-north:start-pump:SENT13:hp-pump-north10:start-pump10:pump-cycle0:0:4:SENT8:PLATFORM
+-693|4|node|command|3:run7:command37:command:hp-pump-north:start-pump:SENT13:hp-pump-north10:start-pump10:pump-cycle0:0:4:SENT8:PLATFORM
 -695|4|caption-end|platform-start|
 -695|4|caption|Before its own float switch would.|3:run7:measure33:measure:hp-pump-north:wet_well_m:13:hp-pump-north10:wet_well_m10:pump-cycle0:0:0:8:PLATFORM,3:run4:chip28:chip:hp-pump-north::PLATFORM13:hp-pump-north0:10:pump-cycle0:0:8:PLATFORM8:PLATFORM
--697|4|link|running->falling|
+-696|4|link|command->running|
+-696|4|node-label|Pump running|3:run4:chip28:chip:hp-pump-north::PLATFORM13:hp-pump-north0:10:pump-cycle0:0:8:PLATFORM8:PLATFORM
+-696|4|node|running|3:run4:chip28:chip:hp-pump-north::PLATFORM13:hp-pump-north0:10:pump-cycle0:0:8:PLATFORM8:PLATFORM
+-699|4|link|running->falling|
+-699|4|node-label|Well falling|3:run7:measure12:well-falling13:hp-pump-north10:wet_well_m10:pump-cycle0:0:0:8:PLATFORM
+-699|4|node|falling|3:run7:measure12:well-falling13:hp-pump-north10:wet_well_m10:pump-cycle0:0:0:8:PLATFORM
 -705|4|caption-end|before-float|

@@ -35,6 +35,7 @@ namespace DeviceChain.Harborpulse.Visuals
         HarborWorld(PresentationMap map, HarborMaterials mats) { this.map = map; this.mats = mats; }
         public static HarborWorld Build(PresentationMap map, HarborLayout layout, HarborMaterials mats, Transform parent)
         {
+            WorldTags.Clear(); // the tags of a world built before this one went with it
             var w = new HarborWorld(map, mats);
             w.props = WorldPropPlan.Generate(map, layout);
             w.Root = AssetRig.Node("Waterfront", parent, Vector3.zero);

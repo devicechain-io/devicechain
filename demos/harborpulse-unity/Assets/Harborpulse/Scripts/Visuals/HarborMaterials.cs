@@ -107,7 +107,14 @@ namespace DeviceChain.Harborpulse.Visuals
 
             Flow = Emissive("flow", new Color(0.1f, 0.55f, 1f), 1.2f);
             WorldCue = Emissive("world-cue", new Color(0.55f, 0.75f, 0.88f), 1.1f);
-            Rain = Emissive("rain", RainCool, 1.1f);
+            // translucent: a streak lets the scene through (it was an opaque emissive ribbon and overpowered everything behind it)
+            Rain = Emissive("rain", RainCool, 0.45f);
+            Rain.SetFloat("_Surface", 1);
+            Rain.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            Rain.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            Rain.SetFloat("_ZWrite", 0);
+            Rain.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            Rain.renderQueue = 3100;
             Failed = Emissive("failed", new Color(1f, 0.32f, 0.25f), 1.2f);
             EastWindows = Emissive("east-windows", new Color(1f, 0.78f, 0.48f), 0);
             WellGlass = Make("well-glass", new Color(0.55f, 0.8f, 0.85f, 0.12f), 0.85f);
@@ -278,8 +285,9 @@ namespace DeviceChain.Harborpulse.Visuals
         {
             var warm = new Color((float)sky.BreakColor.R, (float)sky.BreakColor.G, (float)sky.BreakColor.B);
             var c = Color.Lerp(RainCool, warm, (float)sky.HorizonBreak * 0.7f);
+            c.a = (float)DeviceChain.Harborpulse.Model.RainField.Opacity;
             Rain.SetColor(BaseColor, c);
-            Rain.SetColor(EmissionColor, c * 1.1f);
+            Rain.SetColor(EmissionColor, c * 0.45f);
         }
 
         Material Make(string name, Color color, float smoothness, float metallic = 0)

@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using DeviceChain.Demos.Hud;
 
 namespace DeviceChain.Harborpulse.Model.Director
 {
@@ -15,12 +16,20 @@ namespace DeviceChain.Harborpulse.Model.Director
         public string Source { get; internal set; }
         public double AtS { get; internal set; }
         public double SincePreviousS { get; internal set; }
+        /// <summary>
+        /// Recorded seconds between this row's fact and the fact of the row above it: the platform's own latency, read from the
+        /// records, never from when the rows happened to be drawn. Null for a first row, or when the record carries no instant.
+        /// </summary>
+        public double? CueS { get; internal set; }
+        /// <summary>The row as the chain card draws it: a scenario row is the trigger, a sender's count keeps its own mark.</summary>
+        public ChainRow Row => new ChainRow(Id, Label, Source == EvidenceSource.Scenario ? ChainRowKind.ScenarioTrigger : Source == EvidenceSource.DeviceSide ? ChainRowKind.SenderCount : ChainRowKind.Platform, CueS);
         public string Tag => Source == EvidenceSource.Scenario ? "scenario" : Source == EvidenceSource.DeviceSide ? "sender's count" : "platform";
         public string Shape => Source == EvidenceSource.Scenario ? "◇" : Source == EvidenceSource.DeviceSide ? "▧" : "■";
     }
     public sealed class WorldTag
     {
         public string Token { get; set; }
+        public string ExternalId { get; set; }
         public string Text { get; set; }
     }
     /// <summary>All story text and visibility rules. Rendering has no evidence decisions.</summary>
@@ -71,12 +80,15 @@ namespace DeviceChain.Harborpulse.Model.Director
         }
         public void Tick(double now)
         { if (pending && now - CaptionAtS >= 3) SetCaption(pendingText, pendingKind, pendingPage, now); }
-        public void ClearRail() { rail.Clear(); links.Clear(); }
-        public void AddNode(string id, string label, string source, double now)
+        public void ClearRail() { rail.Clear(); links.Clear(); instants.Clear(); }
+        readonly Dictionary<string, double> instants = new Dictionary<string, double>(StringComparer.Ordinal);
+        public void AddNode(string id, string label, string source, double now, double? instantS = null)
         {
             if (rail.Any(n => n.Id == id)) return;
             var previous = rail.LastOrDefault();
-            rail.Add(new RailNode { Id = id, Label = label, Source = source, AtS = now, SincePreviousS = previous == null ? 0 : now - previous.AtS });
+            if (instantS.HasValue) instants[id] = instantS.Value;
+            rail.Add(new RailNode { Id = id, Label = label, Source = source, AtS = now, SincePreviousS = previous == null ? 0 : now - previous.AtS,
+                CueS = previous != null && instantS.HasValue && instants.TryGetValue(previous.Id, out var before) ? instantS.Value - before : (double?)null });
             while (rail.Count > 5) rail.RemoveAt(0);
             links.RemoveWhere(l => !rail.Any(n => n.Id == l.Split('>')[0].TrimEnd('-')) || !rail.Any(n => n.Id == l.Split('>')[1]));
         }
@@ -86,11 +98,44 @@ namespace DeviceChain.Harborpulse.Model.Director
         { var minutes = (int)Math.Floor(sim * 60) % 1440; return (minutes / 60).ToString("00", CultureInfo.InvariantCulture) + ":" + (minutes % 60).ToString("00", CultureInfo.InvariantCulture); }
         public static string Beat(double hour)
         { hour %= 24; return hour < 5.75 ? "Night" : hour < 7.5 ? "Dawn" : hour < 15.5 ? "Day" : hour < 22.5 ? "Storm" : "Night"; }
-        public static IReadOnlyList<WorldTag> Tags(HarborLayout layout, HarborFrame frame, int limit = 4)
+        /// <summary>
+        /// The names written in the world: only a shot's subject devices, at most four, and only the name. That a device has an alarm
+        /// is said by its pin, not by a suffix on its name.
+        /// </summary>
+        public static IReadOnlyList<WorldTag> Tags(HarborLayout layout, IEnumerable<string> subjectTokens, int limit = 4)
         {
-            if (frame == null) return Array.Empty<WorldTag>();
-            return layout.Devices.Where(d => frame.AlarmCounts.TryGetValue(d.ExternalId, out var n) && n > 0)
-                .Take(Math.Min(4, limit)).Select(d => new WorldTag { Token = d.Token, Text = HumanName(d) + " · alarm" }).ToArray();
+            if (subjectTokens == null) return Array.Empty<WorldTag>();
+            return subjectTokens.Select(t => layout.Devices.FirstOrDefault(d => d.Token == t)).Where(d => d != null)
+                .Take(Math.Min(4, limit)).Select(d => new WorldTag { Token = d.Token, ExternalId = d.ExternalId, Text = ViewerName(d, layout) }).ToArray();
+        }
+        /// <summary>
+        /// One pin per device with an active alarm: its worst recorded severity, how many alarms it has, and whether all of them are
+        /// acknowledged. A cleared alarm is not active: the pin board turns it into a tick by itself.
+        /// </summary>
+        public static IReadOnlyList<PinInput> Pins(HarborFrame frame)
+        {
+            if (frame == null) return Array.Empty<PinInput>();
+            return frame.Beacons.Where(b => !b.Cleared).GroupBy(b => b.Device, StringComparer.Ordinal)
+                .Select(g => new PinInput(g.Key, g.Max(b => AlarmPins.Severity(b.Severity)), g.Count(), g.All(b => b.Acknowledged))).ToArray();
+        }
+        /// <summary>The top strip's one line: what the picture is, the place, the scene's clock, and the chips.</summary>
+        public static string Strip(string badge, double sim, string rateChip, string chip) => TopStrip.Text(badge, Place, Clock(sim), rateChip, chip);
+        public const string Place = "Port Alder";
+        /// <summary>
+        /// A device's name for a viewer: what it is, its quay's letter and its number on that quay. How a device connects (its own MQTT
+        /// session, a certificate, a pull) is not part of its name; such a charger or lamp is numbered after its quay's other ones.
+        /// </summary>
+        public static string ViewerName(LayoutDevice d, HarborLayout layout)
+        {
+            var quay = d.Quay == "hp-east-quay" ? "E" : d.Quay == "hp-basin" ? "B" : "N";
+            int Count(params string[] kinds) => layout.Devices.Count(o => o.Quay == d.Quay && kinds.Contains(o.Kind));
+            if (d.Kind == DeviceKind.MqttCharger) return "Charger " + quay + (Count(DeviceKind.Charger) + d.Index).ToString(CultureInfo.InvariantCulture);
+            if (d.Kind == DeviceKind.CertCharger) return "Charger " + quay + (Count(DeviceKind.Charger, DeviceKind.MqttCharger) + d.Index).ToString(CultureInfo.InvariantCulture);
+            if (d.Kind == DeviceKind.PullLight) return "Lamp " + quay + (Count(DeviceKind.Light) + d.Index).ToString(CultureInfo.InvariantCulture);
+            if (d.Kind == DeviceKind.LoraGauge) return "Gauge " + quay + (Count(DeviceKind.Gauge) + 1).ToString(CultureInfo.InvariantCulture);
+            if (d.Kind == DeviceKind.LegacyGauge) return "Gauge " + quay + (Count(DeviceKind.Gauge, DeviceKind.LoraGauge) + 1).ToString(CultureInfo.InvariantCulture);
+            if (d.Kind == DeviceKind.Truck) return "Works truck";
+            return HumanName(d);
         }
         public static string HumanName(LayoutDevice d)
         {
