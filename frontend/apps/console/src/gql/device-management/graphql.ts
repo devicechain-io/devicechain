@@ -379,7 +379,7 @@ export type AuditEventSearchCriteria = {
   tableName?: string | null | undefined;
 };
 
-/** The door through which a rule draft was saved. This is origin metadata, not proof of human review. */
+/** The door through which a rule draft was saved. The door is declared by the client that saves the rule, so it is advisory origin metadata, not proof of how the content was produced and not proof of human review. Recorded doors are only ever added to, so a later save through another door never removes one, DESCRIBE included. */
 export type AuthoredVia =
   | 'API'
   | 'CANVAS'

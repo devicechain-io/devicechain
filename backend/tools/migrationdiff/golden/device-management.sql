@@ -1362,7 +1362,8 @@ CREATE TABLE "device-management".detection_rules (
  enabled boolean DEFAULT true NOT NULL,
  authoring_graph jsonb,
  entity_group_token text,
- entity_group_version integer
+ entity_group_version integer,
+ authored_via jsonb
 );
 CREATE TABLE "device-management".device_aliases (
  id bigint NOT NULL,
@@ -1480,7 +1481,9 @@ CREATE TABLE "device-management".device_profile_versions (
  description character varying(1024),
  snapshot jsonb NOT NULL,
  published_by character varying(256),
- automation_review_token character varying(64)
+ automation_review_token character varying(64),
+ published_by_id text,
+ authored_via jsonb
 );
 CREATE TABLE "device-management".device_profiles (
  id bigint NOT NULL,

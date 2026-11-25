@@ -405,7 +405,7 @@ type DeviceProfileVersion {
     publishedAt: String!
     """Who published it: their username, or their email when there is no username."""
     publishedBy: String
-    """Stable authenticated principal id (token subject) of the publisher, including service accounts. Null for versions published before it was recorded. Never supplied by a client."""
+    """Authenticated principal id (the token subject) of the publisher, taken from the caller's token and never supplied by a client. For a person it is their sign-in email, which cannot be changed; for a service account it is service-account: followed by the account's token. A superuser acting in a tenant through break-glass is recorded by their own sign-in email. Null for versions published before it was recorded."""
     publishedById: String
     """Sorted set of save doors of all frozen draft rules, including disabled rules. A later save adds a door and never erases DESCRIBE. UNKNOWN includes legacy rules; an empty rule set reads UNKNOWN. Frozen at publish."""
     authoredVia: [AuthoredVia!]!
@@ -1474,7 +1474,7 @@ type CommandDefinitionSearchResults {
 
 # AGENT_PROPOSAL is reserved for the later agent rule-changeset slice. Do not
 # expose it yet; adding it when that slice ships must remain an additive change.
-"""The door through which a rule draft was saved. This is origin metadata, not proof of human review."""
+"""The door through which a rule draft was saved. The door is declared by the client that saves the rule, so it is advisory origin metadata, not proof of how the content was produced and not proof of human review. Recorded doors are only ever added to, so a later save through another door never removes one, DESCRIBE included."""
 enum AuthoredVia {
     FORM
     CANVAS
