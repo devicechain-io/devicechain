@@ -146,6 +146,11 @@ type Hub struct {
 	ring  logRing
 	stats Stats
 	done  chan struct{}
+
+	// inflight is the order of the entry being handed to the sink, 0 when none;
+	// delivered is closed (and replaced) after each hand-off. Flush waits on them.
+	inflight  uint64
+	delivered chan struct{}
 }
 
 // NewHub starts a hub delivering to opts.Sink.
@@ -192,7 +197,7 @@ func NewHub(opts Options) (*Hub, error) {
 		wake:     make(chan struct{}, 1), space: make(chan struct{}),
 		steps: map[StepID]*stepState{}, prompts: map[PromptID]bool{},
 		ring: logRing{maxLines: opts.LogLines, maxBytes: opts.LogBytes},
-		done: make(chan struct{}),
+		done: make(chan struct{}), delivered: make(chan struct{}),
 	}
 	go h.pump()
 	return h, nil
@@ -367,6 +372,10 @@ func (h *Hub) emitLocked(ev Event, kind Kind, p Payload) error {
 	case LogLine:
 		h.logLocked(ev.Step, pl, now)
 		return nil
+	case PreflightObservation:
+		if err := h.checkActiveLocked(ev); err != nil {
+			return err
+		}
 	case PromptRequested:
 		if _, seen := h.prompts[pl.ID]; seen {
 			return fmt.Errorf("%w: prompt id reused", ErrLifecycle)
@@ -647,13 +656,63 @@ func (h *Hub) pump() {
 			StepID: e.step, ParentID: e.parent, Attempt: e.attempt, Payload: e.payload,
 		}
 		h.stats.Delivered++
+		h.inflight = e.order
 		h.mu.Unlock()
 		h.sink.Deliver(env)
+		h.mu.Lock()
+		h.inflight = 0
+		close(h.delivered)
+		h.delivered = make(chan struct{})
+		h.mu.Unlock()
 		if e.kind == KindRunSummary {
 			close(h.done)
 			return
 		}
 	}
+}
+
+// Flush waits until every event emitted before the call has been handed to the
+// sink, or dropped by the log and progress bounds. Progress still held back by
+// coalescing is not waited for.
+//
+// It exists for a presenter that writes some output directly and renders the
+// rest from events, as the plain presenter does: flushing before each direct
+// write keeps the two in the order the engine produced them. It must never be
+// called from a Sink, which is the goroutine it waits on.
+func (h *Hub) Flush() {
+	h.mu.Lock()
+	mark := h.order
+	for h.pendingThroughLocked(mark) {
+		ch := h.delivered
+		h.mu.Unlock()
+		select {
+		case <-ch:
+		case <-h.done:
+			return
+		}
+		h.mu.Lock()
+	}
+	h.mu.Unlock()
+}
+
+// pendingThroughLocked reports whether any entry with an order at or before
+// mark is still queued or being delivered.
+func (h *Hub) pendingThroughLocked(mark uint64) bool {
+	if h.inflight != 0 && h.inflight <= mark {
+		return true
+	}
+	if len(h.control) > 0 && h.control[0].order <= mark {
+		return true
+	}
+	if len(h.logs) > 0 && h.logs[0].order <= mark {
+		return true
+	}
+	for _, e := range h.queued {
+		if e.order <= mark {
+			return true
+		}
+	}
+	return false
 }
 
 // StepView is one step in the projection.
