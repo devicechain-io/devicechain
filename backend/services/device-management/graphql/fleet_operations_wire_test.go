@@ -57,7 +57,7 @@ func fleetWireCtx(t *testing.T, claims *auth.Claims) (context.Context, *model.Ap
 	require.NoError(t, db.AutoMigrate(&model.EntityGroupFacetRef{}, &model.Device{}, &model.DeviceAlias{}, &model.DeviceType{}, &model.DeviceProfile{},
 		&model.DeviceProfileVersion{}, &model.AutomationReviewPolicy{}, &model.AutomationReviewPolicyChange{}, &model.AutomationReviewBreakGlass{},
 		&model.DeviceProfileActivation{}, &model.DeviceCredential{}, &model.ProvisioningProfile{},
-		&model.FleetOperation{}, &model.FleetOperationRuntime{}, &model.FleetOperationContract{}, &model.FleetOperationLine{}, &model.FleetOperationEvent{}))
+		&model.FleetOperation{}, &model.FleetOperationRuntime{}, &model.FleetOperationContract{}, &model.FleetOperationLine{}, &model.FleetOperationEvent{}, &model.DeviceConfigurationState{}))
 	api := keyedApi(db)
 	ctx := core.WithTenant(context.Background(), "acme")
 	_, err := api.CreateDeviceType(ctx, &model.DeviceTypeCreateRequest{Token: "sensor"})

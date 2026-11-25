@@ -1263,6 +1263,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initFleetExpirySweep(); err != nil {
 				return err
 			}
+			if err = initFleetSettlement(); err != nil {
+				return err
+			}
 			if err = initDecodeAccounting(); err != nil {
 				return err
 			}
@@ -1409,6 +1412,13 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err = FleetExpirySweep.Start(ctx); err != nil {
 		return err
 	}
+	for _, task := range []*core.PeriodicTask{FleetSettlement, FleetSettlementDeadline} {
+		if task != nil {
+			if err = task.Start(ctx); err != nil {
+				return err
+			}
+		}
+	}
 
 	// Start flushing the payload decoders' health and failure samples.
 	if DecodeAccounting != nil {
@@ -1539,6 +1549,13 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := FleetExpirySweep.Stop(ctx); err != nil {
 		return err
 	}
+	for _, task := range []*core.PeriodicTask{FleetSettlement, FleetSettlementDeadline} {
+		if task != nil {
+			if err := task.Stop(ctx); err != nil {
+				return err
+			}
+		}
+	}
 
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
@@ -1619,6 +1636,13 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 	if err := FleetExpirySweep.Terminate(ctx); err != nil {
 		return err
+	}
+	for _, task := range []*core.PeriodicTask{FleetSettlement, FleetSettlementDeadline} {
+		if task != nil {
+			if err := task.Terminate(ctx); err != nil {
+				return err
+			}
+		}
 	}
 	if DecodeAccounting != nil {
 		if err := DecodeAccounting.Terminate(ctx); err != nil {

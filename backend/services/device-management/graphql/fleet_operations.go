@@ -385,8 +385,12 @@ func (r *FleetOperationResolver) Safety() *FleetOperationSafetyResolver {
 	return &FleetOperationSafetyResolver{M: r.M}
 }
 
-func (r *FleetOperationResolver) EvidenceCapability() *FleetEvidenceCapabilityResolver {
-	return &FleetEvidenceCapabilityResolver{brokerFailClosed: r.M.BrokerFailClosed}
+func (r *FleetOperationResolver) EvidenceCapability() (*FleetEvidenceCapabilityResolver, error) {
+	complete, err := r.S.GetApi(r.C).FleetReportCaptureComplete(r.C, &r.M)
+	if err != nil {
+		return nil, err
+	}
+	return &FleetEvidenceCapabilityResolver{brokerFailClosed: r.M.BrokerFailClosed, reportLog: complete}, nil
 }
 
 func (r *FleetOperationResolver) Progress() (*FleetOperationProgressResolver, error) {
@@ -429,11 +433,14 @@ func nullable32(valid bool, v int32) *int32 {
 	return &v
 }
 
-type FleetEvidenceCapabilityResolver struct{ brokerFailClosed bool }
+type FleetEvidenceCapabilityResolver struct{ brokerFailClosed, reportLog bool }
 
 func (r *FleetEvidenceCapabilityResolver) BrokerFailClosed() bool { return r.brokerFailClosed }
-func (r *FleetEvidenceCapabilityResolver) ReportLog() bool        { return true }
+func (r *FleetEvidenceCapabilityResolver) ReportLog() bool        { return r.reportLog }
 func (r *FleetEvidenceCapabilityResolver) Note() string {
+	if !r.reportLog {
+		return "Report capture is incomplete for one or more targeted devices. Evidence may rely on latest reported state; intermediate reports may be missing."
+	}
 	return "A verdict is derived from the first report the device sent for the revision the platform wrote, " +
 		"or from its latest reported state where the history is incomplete. A device that never reports is ambiguous, " +
 		"not failed. The platform does not claim that every report a device sent was received."
