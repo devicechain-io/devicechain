@@ -10,7 +10,7 @@ package graphql
 // "Preview." and contain no backtick.
 const fleetOperationSchema = `
 """Preview. Where an operation is in dispatching its lines. A paused or dispatched operation is a resting state, not a failure."""
-enum FleetOperationDispatch {
+enum BulkChangeDispatch {
   """Preview. Reserved for a later release."""
   DRAFT
   """Preview. The lines are being written."""
@@ -28,7 +28,7 @@ enum FleetOperationDispatch {
 }
 
 """Preview. Whether the devices have yet answered for the lines that were applied."""
-enum FleetOperationEvidence {
+enum BulkChangeEvidence {
   """Preview. At least one applied line has no verdict, or is ambiguous."""
   OPEN
   """Preview. Every applied line has a verdict."""
@@ -36,7 +36,7 @@ enum FleetOperationEvidence {
 }
 
 """Preview. What happened to a line when it was applied."""
-enum FleetLinePosting {
+enum BulkChangeLinePosting {
   """Preview. Not applied yet."""
   PLANNED
   """Preview. Reserved for a later release."""
@@ -54,7 +54,7 @@ enum FleetLinePosting {
 }
 
 """Preview. The device's answer for an applied line."""
-enum FleetLineSettlement {
+enum BulkChangeLineSettlement {
   """Preview. The device reported it applied the value."""
   CONFIRMED
   """Preview. The device reported it rejected the value."""
@@ -70,7 +70,7 @@ enum FleetLineSettlement {
 }
 
 """Preview. Whether the engine that applies the operation is making progress."""
-enum FleetExecutorState {
+enum BulkChangeExecutorState {
   IDLE
   WORKING
   HELD
@@ -79,7 +79,7 @@ enum FleetExecutorState {
 }
 
 """Preview. What kind of report decided a line's settlement."""
-enum FleetEvidenceBasis {
+enum BulkChangeEvidenceBasis {
   """Preview. The full log of accepted reports covers the line."""
   REPORT_LOG
   """Preview. Only the device's latest reported state was available."""
@@ -87,7 +87,7 @@ enum FleetEvidenceBasis {
 }
 
 """Preview. The limits an operation was approved to run under, and the values currently in force."""
-type FleetOperationSafety {
+type BulkChangeSafety {
   """Preview. The most lines applied per second that was approved."""
   maxPostsPerSecond: Int!
   """Preview. The rate currently in force, never above the approved one."""
@@ -105,7 +105,7 @@ type FleetOperationSafety {
 }
 
 """Preview. What the operation can and cannot claim about the devices' answers."""
-type FleetEvidenceCapability {
+type BulkChangeEvidenceCapability {
   """Preview. Whether the broker was configured to refuse rather than drop when the operation started."""
   brokerFailClosed: Boolean!
   """Preview. Whether the history of accepted reports is kept."""
@@ -115,7 +115,7 @@ type FleetEvidenceCapability {
 }
 
 """Preview. Line counts of one operation, grouped by state, as of this read."""
-type FleetOperationProgress {
+type BulkChangeProgress {
   """Preview. Lines not applied yet."""
   planned: Int!
   """Preview. Lines applied."""
@@ -141,7 +141,7 @@ type FleetOperationProgress {
 }
 
 """Preview. One change applied to many devices, as one reviewed decision."""
-type FleetOperation implements Model & TokenReference {
+type BulkChange implements Model & TokenReference {
   """Preview. Server-assigned numeric identifier, as a string."""
   id: ID!
   """Preview. When the operation was created."""
@@ -157,9 +157,9 @@ type FleetOperation implements Model & TokenReference {
   """Preview. What the operation does, for example config.set."""
   kind: String!
   """Preview. Where the operation is in dispatching its lines."""
-  dispatch: FleetOperationDispatch!
+  dispatch: BulkChangeDispatch!
   """Preview. Whether the devices have answered for every applied line."""
-  evidence: FleetOperationEvidence!
+  evidence: BulkChangeEvidence!
   """Preview. Why a paused operation is paused. Null when it is not."""
   pauseReason: String
   """Preview. Why a running operation is waiting. Null when it is not."""
@@ -167,7 +167,7 @@ type FleetOperation implements Model & TokenReference {
   """Preview. Since when it has been waiting."""
   holdSince: String
   """Preview. Whether the engine applying the operation is making progress."""
-  executor: FleetExecutorState!
+  executor: BulkChangeExecutorState!
   """Preview. When a line was last applied."""
   lastProgressAt: String
   """Preview. The code of the last error the engine met."""
@@ -191,11 +191,11 @@ type FleetOperation implements Model & TokenReference {
   """Preview. Number of lines, refused ones included."""
   targetCount: Int!
   """Preview. The limits it was approved to run under."""
-  safety: FleetOperationSafety!
+  safety: BulkChangeSafety!
   """Preview. What its verdicts can and cannot prove."""
-  evidenceCapability: FleetEvidenceCapability!
+  evidenceCapability: BulkChangeEvidenceCapability!
   """Preview. Line counts by state, as of this read."""
-  progress: FleetOperationProgress!
+  progress: BulkChangeProgress!
   """Preview. Sign-in name of the person the operation currently runs on behalf of. Null until it is started."""
   grantee: String
   """Preview. Sign-in name of the person who created the operation."""
@@ -211,7 +211,7 @@ type FleetOperation implements Model & TokenReference {
 }
 
 """Preview. One device and one change within an operation."""
-type FleetOperationLine {
+type BulkChangeLine {
   """Preview. Position in the creator's own input, starting at 1."""
   ordinal: Int!
   """Preview. Token of the target device. Null for an input that named no device and once the device has been deleted."""
@@ -219,9 +219,9 @@ type FleetOperationLine {
   """Preview. Whether the line's identifiers were erased."""
   redacted: Boolean!
   """Preview. What happened when the line was applied."""
-  posting: FleetLinePosting!
+  posting: BulkChangeLinePosting!
   """Preview. The device's answer, once there is one."""
-  settlement: FleetLineSettlement
+  settlement: BulkChangeLineSettlement
   """Preview. Why the line was refused or skipped."""
   code: String
   """Preview. Detail for the code."""
@@ -239,7 +239,7 @@ type FleetOperationLine {
   """Preview. When the line was settled."""
   settledAt: String
   """Preview. What decided the settlement."""
-  evidenceBasis: FleetEvidenceBasis
+  evidenceBasis: BulkChangeEvidenceBasis
   """Preview. The revision of the report that decided it."""
   evidenceRevision: Int
   """Preview. Set when a later report contradicts a person's verdict."""
@@ -257,23 +257,23 @@ type FleetOperationLine {
 }
 
 """Preview. One page of an operation's lines."""
-type FleetLineSearchResults {
+type BulkChangeLineSearchResults {
   """Preview. The lines on this page, in ordinal order."""
-  results: [FleetOperationLine!]!
+  results: [BulkChangeLine!]!
   """Preview. Where this page sits in the full result."""
   pagination: SearchResultsPagination!
 }
 
 """Preview. One page of operations."""
-type FleetOperationSearchResults {
+type BulkChangeSearchResults {
   """Preview. The operations on this page, newest first."""
-  results: [FleetOperation!]!
+  results: [BulkChange!]!
   """Preview. Where this page sits in the full result."""
   pagination: SearchResultsPagination!
 }
 
 """Preview. An input a plan refused."""
-type FleetPlanRefusal {
+type BulkChangePlanRefusal {
   """Preview. Position in the creator's input."""
   ordinal: Int!
   """Preview. The token as supplied."""
@@ -283,7 +283,7 @@ type FleetPlanRefusal {
 }
 
 """Preview. How many inputs a plan refused for one code."""
-type FleetPlanRefusalCount {
+type BulkChangePlanRefusalCount {
   """Preview. The refusal code."""
   code: String!
   """Preview. How many inputs were refused for it, in full."""
@@ -291,15 +291,15 @@ type FleetPlanRefusalCount {
 }
 
 """Preview. What an operation would do, computed without writing anything."""
-type FleetOperationPlan {
+type BulkChangePlan {
   """Preview. Lines that would be applied."""
   admittedCount: Int!
   """Preview. Lines that were refused at plan time."""
   refusedCount: Int!
   """Preview. Refusals by code, counted in full."""
-  refusalCounts: [FleetPlanRefusalCount!]!
+  refusalCounts: [BulkChangePlanRefusalCount!]!
   """Preview. The first 100 refusals of each code, each with the token supplied."""
-  refusals: [FleetPlanRefusal!]!
+  refusals: [BulkChangePlanRefusal!]!
   """Preview. Digest of the request."""
   requestDigest: String!
   """Preview. Digest of the plan."""
@@ -309,7 +309,7 @@ type FleetOperationPlan {
 }
 
 """Preview. The change a config.set operation makes: one declared SHARED configuration key, set or unset."""
-input FleetConfigSetInput {
+input BulkChangeConfigSetInput {
   """Preview. The configuration key."""
   key: String!
   """Preview. The value, as text. Omit when unsetting."""
@@ -321,7 +321,7 @@ input FleetConfigSetInput {
 }
 
 """Preview. The limits an operation asks to run under."""
-input FleetOperationCreateSafety {
+input BulkChangeCreateSafety {
   """Preview. The most lines applied per second. Default 10; at most 50."""
   maxPostsPerSecond: Int
   """Preview. Failed lines that pause the operation. Omit for no limit."""
@@ -332,8 +332,8 @@ input FleetOperationCreateSafety {
   settleDeadlineSeconds: Int
 }
 
-"""Preview. A request to plan or create a fleet operation."""
-input FleetOperationCreateRequest {
+"""Preview. A request to plan or create a bulk change."""
+input BulkChangeCreateRequest {
   """Preview. Identifier for the operation, unique within the tenant."""
   token: String!
   """Preview. Name shown to people."""
@@ -341,15 +341,15 @@ input FleetOperationCreateRequest {
   """Preview. The kind of operation. This release knows config.set."""
   kind: String!
   """Preview. The change, for kind config.set."""
-  configSet: FleetConfigSetInput
+  configSet: BulkChangeConfigSetInput
   """Preview. Tokens of the devices to change, at most 10000. A token that names no device in this tenant becomes a refused line."""
   deviceTokens: [String!]!
   """Preview. The limits to run under."""
-  safety: FleetOperationCreateSafety
+  safety: BulkChangeCreateSafety
 }
 
 """Preview. Criteria for listing operations."""
-input FleetOperationSearchCriteria {
+input BulkChangeSearchCriteria {
   """Preview. 1-based page number."""
   pageNumber: Int!
   """Preview. Rows per page."""
@@ -363,7 +363,7 @@ input FleetOperationSearchCriteria {
 }
 
 """Preview. Criteria for listing one operation's lines."""
-input FleetLineSearchCriteria {
+input BulkChangeLineSearchCriteria {
   """Preview. 1-based page number."""
   pageNumber: Int!
   """Preview. Rows per page."""
@@ -377,7 +377,7 @@ input FleetLineSearchCriteria {
 }
 
 """Preview. A change to the limits an operation runs under when it is resumed. Anything looser than the approved contract is refused."""
-input FleetOperationSafetyInput {
+input BulkChangeSafetyInput {
   """Preview. The most lines applied per second. At most the approved rate."""
   maxPostsPerSecond: Int
   """Preview. Failed lines that pause the operation. At most the approved limit."""
@@ -391,7 +391,7 @@ input FleetOperationSafetyInput {
 }
 
 """Preview. What resuming an operation with a given change would do, computed without writing anything."""
-type FleetResumePreview {
+type BulkChangeResumePreview {
   """Preview. Whether the change stays within what was approved."""
   withinContract: Boolean!
   """Preview. Version of the contract in force."""
@@ -407,47 +407,47 @@ type FleetResumePreview {
 }
 
 extend type Query {
-  """Preview. One fleet operation by token. Null when the tenant has none. Needs device:read."""
-  fleetOperation(token: String!): FleetOperation
-  """Preview. Fleet operations, newest first. Needs device:read."""
-  fleetOperations(criteria: FleetOperationSearchCriteria!): FleetOperationSearchResults!
+  """Preview. One bulk change by token. Null when the tenant has none. Needs device:read."""
+  bulkChange(token: String!): BulkChange
+  """Preview. Bulk changes, newest first. Needs device:read."""
+  bulkChanges(criteria: BulkChangeSearchCriteria!): BulkChangeSearchResults!
   """Preview. The lines of one operation in input order. Needs device:read."""
-  fleetOperationLines(token: String!, criteria: FleetLineSearchCriteria!): FleetLineSearchResults!
+  bulkChangeLines(token: String!, criteria: BulkChangeLineSearchCriteria!): BulkChangeLineSearchResults!
   """Preview. What an operation would do, without writing anything. Needs device:write and fleet:operate."""
-  planFleetOperation(request: FleetOperationCreateRequest!): FleetOperationPlan!
+  planBulkChange(request: BulkChangeCreateRequest!): BulkChangePlan!
   """Preview. What resuming a paused operation with this change would do, without writing anything. Needs device:write and fleet:operate."""
-  previewFleetOperationResume(token: String!, safety: FleetOperationSafetyInput): FleetResumePreview!
+  previewBulkChangeResume(token: String!, safety: BulkChangeSafetyInput): BulkChangeResumePreview!
 }
 
 extend type Mutation {
   """
-  Preview. Creates a fleet operation in READY. Creating again with the same token and the same
+  Preview. Creates a bulk change in READY. Creating again with the same token and the same
   request returns the original and writes nothing; a different request under the token is a
   CONFLICT. Needs device:write and fleet:operate.
   """
-  createFleetOperation(request: FleetOperationCreateRequest!): FleetOperation!
+  createBulkChange(request: BulkChangeCreateRequest!): BulkChange!
   """
   Preview. Starts a READY operation. The caller presents the contract digest they reviewed; a different one is
   CONTRACT_DIGEST_MISMATCH. The caller approves the contract and the operation runs on their behalf. Refused with
-  FLEET_OPERATIONS_NOT_ACTIVATED when the database does not enforce the device attribute writer protocol. Needs
+  BULK_CHANGES_NOT_ACTIVATED when the database does not enforce the device attribute writer protocol. Needs
   device:write and fleet:operate.
   """
-  startFleetOperation(token: String!, contractDigest: String!): FleetOperation!
+  startBulkChange(token: String!, contractDigest: String!): BulkChange!
   """
   Preview. Pauses a RUNNING operation. When it returns, no line is applied under the old state. A wait that times out
   is FENCE_PENDING and changes nothing. Needs device:write only, so someone who has lost fleet:operate can still stop it.
   """
-  pauseFleetOperation(token: String!): FleetOperation!
+  pauseBulkChange(token: String!): BulkChange!
   """
   Preview. Resumes a PAUSED operation on the caller's behalf. The digest must be the current contract's. A change to the
   limits is applied only if it stays within the approved contract (CONTRACT_WIDENED otherwise); a limit that is still
   reached is THRESHOLD_STILL_EXCEEDED. Needs device:write and fleet:operate.
   """
-  resumeFleetOperation(token: String!, contractDigest: String!, safety: FleetOperationSafetyInput): FleetOperation!
+  resumeBulkChange(token: String!, contractDigest: String!, safety: BulkChangeSafetyInput): BulkChange!
   """
   Preview. Aborts a READY, RUNNING or PAUSED operation: lines not yet applied are cancelled and applied lines keep
   settling. Needs device:write only.
   """
-  abortFleetOperation(token: String!): FleetOperation!
+  abortBulkChange(token: String!): BulkChange!
 }
 `

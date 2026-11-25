@@ -77,7 +77,7 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 	// from-version path is ever added, this absence becomes data loss and this is the line
 	// that should stop it.
 	wantRule := []string{
-		"CreatedAt", "DeletedAt", "Definition", "Description", "DeviceProfile",
+		"AuthoredVia", "CreatedAt", "DeletedAt", "Definition", "Description", "DeviceProfile",
 		"DeviceProfileId", "Enabled", "EntityGroupToken", "EntityGroupVersion", "ID",
 		"Metadata", "Name", "TenantId", "Token", "UpdatedAt",
 	}
@@ -139,6 +139,7 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 			DeviceProfileId: 7,
 			Definition:      datatypes.JSON([]byte(`{"type":"threshold"}`)),
 			AuthoringGraph:  graph,
+			AuthoredVia:     datatypes.JSON(`["DESCRIBE"]`),
 			Enabled:         true,
 		}},
 		Location: &LocationDeclaration{

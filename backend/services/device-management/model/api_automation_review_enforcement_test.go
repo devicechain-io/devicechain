@@ -60,7 +60,7 @@ func approveRigReview(t *testing.T, r *automationReviewRig, row *AutomationRevie
 	return out
 }
 func publishRigReview(r *automationReviewRig, row *AutomationReview) (*DeviceProfileVersion, error) {
-	return r.api.PublishDeviceProfileReviewed(r.ctx, "profile", nil, nil, "publisher", &row.Token)
+	return r.api.PublishDeviceProfileReviewed(r.ctx, "profile", nil, nil, "publisher", &row.Token, nil)
 }
 func withoutReviewMFA(name string) context.Context {
 	ctx, _ := reviewIdentity(name)
@@ -133,7 +133,7 @@ func TestPublishUnprotectedIgnoresReviewToken(t *testing.T) {
 	_, err := r.api.PublishDeviceProfile(r.ctx, "profile", nil, nil, "publisher")
 	require.NoError(t, err)
 	bogus := "missing"
-	version, err := r.api.PublishDeviceProfileReviewed(r.ctx, "profile", nil, nil, "publisher", &bogus)
+	version, err := r.api.PublishDeviceProfileReviewed(r.ctx, "profile", nil, nil, "publisher", &bogus, nil)
 	require.NoError(t, err)
 	require.Nil(t, version.AutomationReviewToken)
 }

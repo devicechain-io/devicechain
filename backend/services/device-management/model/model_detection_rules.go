@@ -59,6 +59,10 @@ type DetectionRule struct {
 	// two are kept coherent by the editor, not by a cross-field check here.
 	AuthoringGraph datatypes.JSON `json:"-"`
 
+	// AuthoredVia accumulates save doors and travels in the immutable snapshot.
+	// NULL or an absent key in an old snapshot means UNKNOWN.
+	AuthoredVia datatypes.JSON `json:",omitempty"`
+
 	// Enabled — a disabled rule is retained so an author can park a rule without deleting
 	// it. The publish snapshot deliberately captures disabled rules too (buildProfileSnapshot
 	// does NOT filter): the flag travels frozen with the version, so a rollback restores the
@@ -116,6 +120,9 @@ type DetectionRuleCreateRequest struct {
 	Definition         string
 	Enabled            bool
 	Metadata           *string
+	// AuthoredVia is this save's door; nil means API. Earlier doors are retained.
+	AuthoredVia *AuthoredVia
+
 	// AuthoringGraph is the optional opaque CanvasDefinition JSON (ADR-053 slice 9b). Nil ⇒ a
 	// form-authored rule with no canvas sidecar; when present it must be a JSON object. It is
 	// stored verbatim and never parsed here.
@@ -144,6 +151,9 @@ type DetectionRuleUpdateRequest struct {
 	// false, which would park a live rule and report success.
 	Enabled  dcgraphql.OptionalBool
 	Metadata dcgraphql.OptionalString
+	// AuthoredVia is this save's door; nil means API. Earlier doors are retained.
+	AuthoredVia OptionalAuthoredVia
+
 	// AuthoringGraph is the nullable canvas sidecar. Null DROPS it — what a form edit
 	// of a canvas-authored rule needs, since the graph is then stale. Omitting it now
 	// KEEPS it; the full-replace shape dropped it on every edit that did not restate it,

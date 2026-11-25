@@ -352,6 +352,7 @@ describe('opening a rule the canvas CAN show in full', () => {
     fireEvent.click(saveBtn());
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
     expect(JSON.parse(savedRequest().authoringGraph as string)).toEqual(compiledGraphs()[0]);
+      expect(savedRequest().authoredVia).toBe('CANVAS');
   });
 
   it('keeps an alarm-key template, which the canvas carries, through a save', async () => {
