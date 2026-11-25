@@ -24,7 +24,7 @@ func fleetFixture(t *testing.T, devices int) (*Api, context.Context) {
 	db := sqlitetest.OpenDSN(t, sqlitetest.MemoryDSN(t), nil)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, db.AutoMigrate(&Device{}, &DeviceType{}, &FleetOperation{}, &FleetOperationRuntime{},
-		&FleetOperationContract{}, &FleetOperationLine{}, &FleetOperationEvent{}, &DeviceConfigurationReport{}))
+		&FleetOperationContract{}, &FleetOperationLine{}, &FleetOperationEvent{}, &DeviceConfigurationReport{}, &EntityAttribute{}, &AttributeGeneration{}))
 	api := NewApi(&rdb.RdbManager{Database: db})
 	ctx := core.WithTenant(context.Background(), "acme")
 	seed := func(c context.Context, token string, n int) {

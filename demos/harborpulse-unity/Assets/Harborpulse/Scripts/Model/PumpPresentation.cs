@@ -33,6 +33,12 @@ namespace DeviceChain.Harborpulse.Model
             // pulse): never a guess upwards. Any other unknown word is still refused.
             switch (severity) { case ReplaySource.UnrecordedSeverity: case "WARNING": return 1.5; case "MINOR": return 1; case "MAJOR": return 0.7; case "CRITICAL": return 0.4; default: throw new ArgumentException("unknown alarm severity: " + severity); }
         }
+        /// <summary>
+        /// The yaw, degrees about the vertical, that faces a cleared alarm's tick to the eye. The tick is drawn reading left to right
+        /// along its own +x (short stroke down, long stroke up); standing with its device, it read mirrored from every eye on the
+        /// device's far side. Turned so its forward points from the eye to the tick, its +x is the eye's right wherever the eye is.
+        /// </summary>
+        public static double TickYawDeg(double atX, double atZ, double eyeX, double eyeZ) => Math.Atan2(atX - eyeX, atZ - eyeZ) * 180 / Math.PI;
         public static int RingCount(string severity) { Period(severity); return severity == "CRITICAL" ? 3 : severity == "MAJOR" ? 2 : 1; }
 
         public IReadOnlyList<AlarmBeacon> Update(IReadOnlyList<HarborAlarm> alarms, DateTimeOffset now)

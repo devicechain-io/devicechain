@@ -70,6 +70,12 @@ namespace DeviceChain.Harborpulse.Model.Director
         public string FallbackPolicy { get; internal set; } = "show-fallback";
         public bool Once { get; internal set; }
         public bool CutsOnly { get; internal set; }
+        /// <summary>
+        /// The page's context line: where the viewer is and what they are looking at ("North Quay · the storm drain pump and its
+        /// well"). It is orientation, never evidence: like a pre caption it may carry no platform verb and no digit, so it cannot
+        /// say what the platform did. Empty for a page that needs none.
+        /// </summary>
+        public string ContextLine { get; internal set; } = "";
         public Needs Watch { get; internal set; }
         public Needs Trigger { get; internal set; }
         public Needs Terminal { get; internal set; }
@@ -143,7 +149,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         static Needs Predicate(JsonElement e, string key) => e.TryGetProperty(key, out var v) && v.ValueKind != JsonValueKind.Null ? Needs.Parse(v) : null;
         static StoryPage ReadPage(JsonElement e, PresentationMap map)
         {
-            StrictJson.Keys(e, "fallbackPolicy", "id", "priority", "windowSim", "plannedSim", "preRollS", "triggerTimeoutS", "queueTtlS", "once", "cutsOnly", "watch", "trigger", "terminal", "shots", "captions", "chain");
+            StrictJson.Keys(e, "fallbackPolicy", "id", "priority", "windowSim", "plannedSim", "preRollS", "triggerTimeoutS", "queueTtlS", "once", "cutsOnly", "watch", "trigger", "terminal", "shots", "captions", "chain", "context");
             var window = StrictJson.Array(e, "windowSim").ToArray();
             if (window.Length != 2 || !window[0].TryGetDouble(out var from) || !window[1].TryGetDouble(out var to) || !double.IsFinite(from) || !double.IsFinite(to) || to <= from) throw new FormatException("windowSim requires increasing finite pair");
             var priority = StrictJson.Num(e, "priority");
@@ -154,6 +160,9 @@ namespace DeviceChain.Harborpulse.Model.Director
                 PlannedSim = e.GetProperty("plannedSim").ValueKind == JsonValueKind.Null ? (double?)null : StrictJson.Num(e, "plannedSim"),
                 PreRollS = StrictJson.Num(e, "preRollS"), TriggerTimeoutS = StrictJson.Num(e, "triggerTimeoutS"), QueueTtlS = StrictJson.Num(e, "queueTtlS"),
                 Once = Bool(e, "once"), CutsOnly = Bool(e, "cutsOnly"), Watch = Predicate(e, "watch"), Trigger = Predicate(e, "trigger"), Terminal = Predicate(e, "terminal") };
+            page.ContextLine = StrictJson.Str(e, "context", "");
+            if (page.ContextLine.Length > 64 || page.ContextLine.Contains("\n") || PlatformVerb.IsMatch(page.ContextLine) || page.ContextLine.Any(char.IsDigit))
+                throw new FormatException("context line: at most 64 characters on one line, no platform verb, no digit: " + page.Id);
             if (page.PreRollS < 0 || page.TriggerTimeoutS < 3 || page.QueueTtlS < 0) throw new FormatException("page duration invalid " + page.Id);
             page.Captions = StrictJson.Array(e, "captions").Select(ReadCaption).ToArray(); Unique(page.Captions.Select(c => c.Id), "caption");
             foreach (var c in page.Captions.Where(c => c.UnlessShown != null))

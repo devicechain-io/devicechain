@@ -33,8 +33,9 @@ namespace DeviceChain.Harborpulse.Visuals
             shaft = new MeshKit().Cylinder(Vector3.zero, 0.05f, 6f, 8).Spawn("Shaft", root, mats.Critical, false).transform;
             tick = new MeshKit().Rod(new Vector3(-0.3f, 0, 0), new Vector3(-0.05f, -0.25f, 0), 0.05f).Rod(new Vector3(-0.05f, -0.25f, 0), new Vector3(0.4f, 0.3f, 0), 0.05f).Spawn("ClearedTick", root, mats.StatusGreen, false).transform;
         }
-        public void Apply(AlarmBeacon alarm, DateTimeOffset now)
+        public void Apply(AlarmBeacon alarm, DateTimeOffset now, Vector3 eye)
         {
+            if (alarm.Cleared) tick.rotation = Quaternion.Euler(0, (float)AlarmBeacons.TickYawDeg(tick.position.x, tick.position.z, eye.x, eye.z), 0);
             root.gameObject.SetActive(true); tick.gameObject.SetActive(alarm.Cleared); core.gameObject.SetActive(!alarm.Cleared);
             var material = alarm.Severity == "CRITICAL" ? mats.Critical : alarm.Severity == "MAJOR" ? mats.Major : mats.Minor;
             coreRenderer.sharedMaterial = material;

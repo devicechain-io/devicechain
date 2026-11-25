@@ -95,6 +95,7 @@ export function DetectionRuleAuthoring({
   // Mode discriminant rather than user text, and a literal inside a JSX attribute is
   // what the i18n lint rule is watching for. The labels beside them ARE display text
   // and stay translated. The "Describe" door only exists while creating.
+  const authoredVia = !entity && !preset && nlDraft != null ? 'DESCRIBE' : 'FORM';
   const modeOptions: SegmentedOption<Mode>[] = [
     { value: 'form', label: t('ruleModeForm') },
     { value: 'canvas', label: t('ruleModeCanvas') },
@@ -122,6 +123,7 @@ export function DetectionRuleAuthoring({
           profileToken={profileToken}
           onDrafted={(definition, warnings) => {
             // Land the compiled draft in the form for the human to review and save.
+            setPreset(null);
             setNlDraft(definition);
             setNlWarnings(warnings);
             // eslint-disable-next-line i18next/no-literal-string -- 'form' is the Mode discriminant.
@@ -144,6 +146,7 @@ export function DetectionRuleAuthoring({
             entity={entity}
             initialDefinition={entity ? undefined : (preset?.definition ?? nlDraft)}
             initialWarnings={entity || preset ? undefined : nlWarnings}
+            authoredVia={authoredVia}
             onDone={onDone}
           />
         </>

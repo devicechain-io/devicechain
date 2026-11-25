@@ -101,3 +101,8 @@ func (r *DetectionRuleSearchResultsResolver) Results() []*DetectionRuleResolver 
 func (r *DetectionRuleSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
 	return &SearchResultsPaginationResolver{M: r.M.Pagination, S: r.S, C: r.C}
 }
+
+// AuthoredVia includes every recorded save door, including Describe after form edits.
+func (r *DetectionRuleResolver) AuthoredVia() ([]model.AuthoredVia, error) {
+	return model.AuthoredViaValues(r.M.AuthoredVia)
+}

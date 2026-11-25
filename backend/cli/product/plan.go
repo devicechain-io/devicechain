@@ -6,6 +6,7 @@ package product
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -216,6 +217,37 @@ func (pl *planner) block(format string, a ...any) {
 func (pl *planner) send(ctx context.Context, endpoint, doc string, vars map[string]any) error {
 	var sink json.RawMessage
 	return pl.c.Query(ctx, endpoint, doc, vars, &sink)
+}
+
+// ruleDoor is the authoredVia a rule save made by product apply declares.
+const ruleDoor = "PRODUCT_AS_CODE"
+
+// sendRule saves a rule declaring the product-as-code door. An instance released
+// before the door was recorded refuses the field during schema negotiation, which
+// rejects the request before it is sent; the save is then made without it, as that
+// instance has nothing to record it in. Any other refusal is returned unchanged.
+func (pl *planner) sendRule(ctx context.Context, doc string, vars map[string]any) error {
+	err := pl.send(ctx, pl.ep.DeviceManagement, doc, vars)
+	var unsupported *userclient.UnsupportedFeatureError
+	if err == nil || !errors.As(err, &unsupported) || !strings.Contains(unsupported.Detail, "authoredVia") {
+		return err
+	}
+	request, ok := vars["request"].(map[string]any)
+	if !ok || request["authoredVia"] != ruleDoor {
+		return err
+	}
+	without := make(map[string]any, len(request))
+	for k, v := range request {
+		if k != "authoredVia" {
+			without[k] = v
+		}
+	}
+	retry := make(map[string]any, len(vars))
+	for k, v := range vars {
+		retry[k] = v
+	}
+	retry["request"] = without
+	return pl.send(ctx, pl.ep.DeviceManagement, doc, retry)
 }
 
 // BuildPlan compares a bundle with a live read and returns what applying it would do. It
@@ -725,9 +757,18 @@ func (pl *planner) profile(d Profile, live *LiveProfile, liveAt map[Kind]map[str
 				if len(names) == 0 {
 					continue
 				}
+				// Provenance is sent with saves, not compared as product content.
+				isRule := w.kind == KindRule
+				if isRule {
+					changed["authoredVia"] = ruleDoor
+				}
 				mark(Change{Kind: kind, Token: w.token, Parent: d.Token, Action: ActionUpdate, Fields: names, Note: note},
 					"update "+label[w.kind]+" "+w.token, func(ctx context.Context) error {
-						return pl.send(ctx, pl.ep.DeviceManagement, docs[w.kind][1], map[string]any{"token": w.token, "request": changed})
+						vars := map[string]any{"token": w.token, "request": changed}
+						if isRule {
+							return pl.sendRule(ctx, docs[w.kind][1], vars)
+						}
+						return pl.send(ctx, pl.ep.DeviceManagement, docs[w.kind][1], vars)
 					})
 			}
 			if pass == "create" && !exists {
@@ -735,9 +776,17 @@ func (pl *planner) profile(d Profile, live *LiveProfile, liveAt map[Kind]map[str
 					continue
 				}
 				in := createInput(w.input, map[string]any{"token": w.token, "deviceProfileToken": d.Token})
+				isRule := w.kind == KindRule
+				if isRule {
+					in["authoredVia"] = ruleDoor
+				}
 				mark(Change{Kind: kind, Token: w.token, Parent: d.Token, Action: ActionCreate},
 					"create "+label[w.kind]+" "+w.token, func(ctx context.Context) error {
-						return pl.send(ctx, pl.ep.DeviceManagement, docs[w.kind][0], map[string]any{"request": in})
+						vars := map[string]any{"request": in}
+						if isRule {
+							return pl.sendRule(ctx, docs[w.kind][0], vars)
+						}
+						return pl.send(ctx, pl.ep.DeviceManagement, docs[w.kind][0], vars)
 					})
 			}
 		}

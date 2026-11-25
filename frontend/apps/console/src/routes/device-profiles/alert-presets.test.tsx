@@ -305,5 +305,6 @@ describe('creating from a preset saves a draft rule', () => {
     const sent = vi.mocked(createDetectionRule).mock.calls[0][0] as { definition: string; entityGroupToken: string | null };
     expect(JSON.parse(sent.definition)).toMatchObject({ type: 'absence', timeout: '15m', severity: 'major' });
     expect(sent.entityGroupToken).toBeNull();
+    expect(vi.mocked(createDetectionRule).mock.calls[0][0]).toMatchObject({ authoredVia: 'FORM' });
   });
 });
