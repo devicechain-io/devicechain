@@ -30,7 +30,7 @@ func (ruleProvenanceVersion) TableName() string { return "device_profile_version
 // without defaults or backfills: old rows and old-pod writes remain truthful UNKNOWNs.
 // Migrations run without a transaction, so each column is checked independently on replay.
 func NewRuleProvenanceSchema() *gormigrate.Migration {
-	return &gormigrate.Migration{ID: "20261226120000", Migrate: func(tx *gorm.DB) error {
+	return &gormigrate.Migration{ID: "20261230120000", Migrate: func(tx *gorm.DB) error {
 		for _, column := range []struct {
 			model any
 			name  string

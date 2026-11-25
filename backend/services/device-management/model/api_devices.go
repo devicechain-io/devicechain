@@ -409,8 +409,9 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
-		DeviceType: matches[0],
-		DisabledAt: disabledAtOnCreate(request.Enabled, time.Now()),
+		DeviceType:      matches[0],
+		DisabledAt:      disabledAtOnCreate(request.Enabled, time.Now()),
+		StateGeneration: newStateGeneration(),
 	}
 	// A device created behind a gateway is checked and inserted in ONE transaction holding the
 	// gateway's row lock, the lock AssignDeviceGateway and DeleteDevice take: checked outside it,
@@ -570,8 +571,9 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 				MetadataEntity: rdb.MetadataEntity{Metadata: metadataJSON},
 				// Set the FK by id (not the association) so a bulk create of N
 				// devices sharing a type does not re-touch device_types per row.
-				DeviceTypeId: dt.ID,
-				DisabledAt:   disabledAtOnCreate(request.Enabled, now),
+				DeviceTypeId:    dt.ID,
+				DisabledAt:      disabledAtOnCreate(request.Enabled, now),
+				StateGeneration: newStateGeneration(),
 
 				ExpectedProvisioningProfileId: earmarkId,
 			}
@@ -997,6 +999,7 @@ func (api *Api) UpdateDeviceWithBreakGlass(ctx context.Context, token string, re
 	}
 	if request.Enabled.Set {
 		assignments["disabled_at"] = updated.DisabledAt
+		assignments["state_generation"] = gorm.Expr("COALESCE(state_generation, 0) + 1")
 	}
 	// The row and its alias set are written in ONE transaction, so an alias another device holds
 	// (CONFLICT) refuses the whole update rather than applying the fields it liked first.

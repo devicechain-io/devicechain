@@ -9,10 +9,44 @@ using System.Text.Json;
 
 namespace DeviceChain.Harborpulse.Model.Director
 {
-    /// <summary>Read-only evidence adapter. Joins use platform identities; runner plans never establish platform outcomes.</summary>
+    /// <summary>
+    /// Read-only evidence adapter. Joins use platform identities; runner plans never establish platform outcomes.
+    ///
+    /// A frame costs what CHANGED, never what is held. The polled reads are republished every few seconds and looked at every
+    /// frame, and most of the time nothing in them has moved: so a read is parsed once per distinct answer (a poll that brings
+    /// back the same bytes is the same answer with a newer as-of), and each join below runs again only when something it reads
+    /// has changed or a clock it waits on has come due (<see cref="Section"/>). What a join found wrong it restates on the
+    /// frames it sleeps through, so a gap is as wide as it was when every frame recomputed it.
+    /// </summary>
     public sealed class DirectorObserver : IDirectorFeed
     {
-        sealed class Row { public string Name, Scope; public JsonElement Value; public DirectorRead Read; }
+        sealed class Row { public string Name, Scope; public JsonElement Value; public Held Owner; public DirectorRead Read => Owner?.Read; }
+        /// <summary>One polled read as last parsed. A newer poll with the same answer keeps the rows and moves <see cref="Read"/>.</summary>
+        sealed class Held { public string Scope; public DirectorRead Read; public string Raw, Failure; public Row[] Rows = Array.Empty<Row>(); public long Revision; }
+        struct Seen { public Held Held; public long Revision; public DirectorRead Read; }
+        /// <summary>The reads of one name this frame. Content moves when the usable rows do; Version also when only an as-of did.</summary>
+        sealed class Named
+        {
+            public readonly List<DirectorRead> Group = new List<DirectorRead>();
+            public readonly List<Held> Slots = new List<Held>(), Now = new List<Held>();
+            public readonly List<Seen> Last = new List<Seen>();
+            public readonly List<Row> Rows = new List<Row>();
+            public long Content, Version;
+            public bool Healthy;
+        }
+        /// <summary>
+        /// One join and what its last run left behind. It runs when its stamp (the sum of the versions of everything it reads,
+        /// each of which only ever grows) has moved, or when the earliest instant it was waiting for has arrived: a record
+        /// stamped after "now", a service window's end, the minute a replacement waits for its first reading.
+        /// </summary>
+        sealed class Section
+        {
+            public long Stamp = -1;
+            public DateTimeOffset Wake = DateTimeOffset.MaxValue;
+            public readonly List<string> Gaps = new List<string>(), Current = new List<string>();
+        }
+        sealed class Cycle { public JsonElement Row; public string Raw, Token, Originator, Key; public DateTimeOffset Raised; }
+        sealed class Chip { public readonly Section Section = new Section(); public bool Seen, Has; public DateTimeOffset At; public PumpStartKind Kind; }
         readonly HarborLayout layout;
         readonly Func<DirectorReadSnapshot> reads;
         // Sticky problems (a malformed record, a missing instant) last the run; current ones restate this frame's read state.
@@ -20,6 +54,9 @@ namespace DeviceChain.Harborpulse.Model.Director
         readonly HashSet<string> current = new HashSet<string>(StringComparer.Ordinal);
         readonly Dictionary<string, string> emitted = new Dictionary<string, string>();
         readonly Dictionary<string, JsonElement> alarmHistory = new Dictionary<string, JsonElement>();
+        // The same lifecycles with their instants parsed, by alarm token and by originator, in the order they were first read.
+        readonly Dictionary<string, Cycle> cycles = new Dictionary<string, Cycle>();
+        readonly Dictionary<string, List<Cycle>> cyclesByToken = new Dictionary<string, List<Cycle>>(), cyclesByOriginator = new Dictionary<string, List<Cycle>>();
         readonly Dictionary<string, Reading> previous = new Dictionary<string, Reading>();
         readonly Dictionary<string, Dictionary<string, string>> trends = new Dictionary<string, Dictionary<string, string>>();
         readonly Dictionary<string, JsonElement> wellHistory = new Dictionary<string, JsonElement>();
@@ -33,13 +70,40 @@ namespace DeviceChain.Harborpulse.Model.Director
         // A command whose cause did not name a cycle: the alarm reads it was tried against, and why not (null while it waits for a later read).
         readonly Dictionary<string, KeyValuePair<long, string>> causeTried = new Dictionary<string, KeyValuePair<long, string>>();
         long alarmStamp;
+        readonly Dictionary<string, Named> names = Streams.Keys.ToDictionary(n => n, _ => new Named());
+        readonly Section alarmRows = new Section(), escalations = new Section(), windows = new Section(), notifications = new Section(), replacements = new Section(),
+            credentials = new Section(), commands = new Section(), rollouts = new Section(), memberships = new Section(), measured = new Section(), runner = new Section();
+        readonly Dictionary<string, Chip> chips = new Dictionary<string, Chip>();
+        readonly List<Row> streamRows = new List<Row>();
+        readonly List<DirectorAlarmChange> changesSeen = new List<DirectorAlarmChange>();
+        readonly Dictionary<string, string> deviceByToken = new Dictionary<string, string>(StringComparer.Ordinal), runnerDevices = new Dictionary<string, string>(StringComparer.Ordinal);
+        readonly Dictionary<string, List<JsonElement>> replacementsByDevice = new Dictionary<string, List<JsonElement>>(), assignmentsByDevice = new Dictionary<string, List<JsonElement>>();
+        readonly Dictionary<string, JsonElement> newestReplacement = new Dictionary<string, JsonElement>();
+        readonly string[] bound;
+        Section active;
+        ScenarioStatus statusSeen;
+        string backfillSeen;
+        DateTimeOffset lastNow;
+        bool rewound;
+        long revisions, alarmVersion, pumpOffVersion, bindingVersion, statusVersion, backfillVersion, changesVersion, wellsSeen = -1, replacementsIndexed = -1, assignmentsIndexed = -1;
+        int bindingFresh = -1;
+        /// <summary>
+        /// Records of polled reads visited: one for each record parsed out of a new answer, and one each time a join handles a
+        /// read's record. A frame on which no read brought anything new and no clock came due adds none.
+        /// </summary>
+        public long ReadWorkUnits { get; private set; }
+        /// <summary>
+        /// Runs every join on every frame, as the observer did before its joins waited for a change. The records emitted must be
+        /// the same either way, and a test holds the two against each other: a join that comes to read something its stamp does
+        /// not name is caught there, not on a live day.
+        /// </summary>
+        public bool RunEveryJoin { get; set; }
         /// <summary>How many times a command's cause has been resolved against the alarm reads: once per command per new alarm read, never per frame.</summary>
         public long CauseResolutions { get; private set; }
         DirectorInputs input;
         Action<Observation> observe;
         Action<CoverageInterval> cover;
-        List<Row> rows;
-        List<DirectorRead> complete;
+        readonly List<DirectorRead> complete = new List<DirectorRead>();
         int measurementIndex;
         public long MeasurementWorkUnits { get; private set; }
         string run;
@@ -53,8 +117,17 @@ namespace DeviceChain.Harborpulse.Model.Director
             ["membership"] = new[] { "alarms" }, ["artifact"] = new[] { "updates" }, ["signer"] = new[] { "updates" },
             ["rollout"] = new[] { "updates" }, ["targets"] = new[] { "updates" }, ["assignments"] = new[] { "updates" }
         };
+        // Each coverage stream with the reads it needs, in the order the streams are first named above.
+        static readonly KeyValuePair<string, string[]>[] StreamNames = Streams.Values.SelectMany(s => s).Distinct()
+            .Select(stream => new KeyValuePair<string, string[]>(stream, Streams.Where(p => p.Value.Contains(stream)).Select(p => p.Key).ToArray())).ToArray();
         public DirectorObserver(HarborLayout layout, Func<DirectorReadSnapshot> reads)
-        { this.layout = layout ?? throw new ArgumentNullException(nameof(layout)); this.reads = reads ?? throw new ArgumentNullException(nameof(reads)); }
+        {
+            this.layout = layout ?? throw new ArgumentNullException(nameof(layout)); this.reads = reads ?? throw new ArgumentNullException(nameof(reads));
+            bound = new string[layout.Devices.Count];
+            // each name a runner may use for a device, mapped to the first device in layout order that answers to it
+            foreach (var d in layout.Devices) foreach (var name in new[] { d.Token, d.ExternalId })
+                if (name != null && !runnerDevices.ContainsKey(name)) runnerDevices[name] = layout.Devices.First(x => x.Token == name || x.ExternalId == name).Token;
+        }
         public IReadOnlyList<string> Problems => Array.AsReadOnly(problems.Union(current).OrderBy(p => p, StringComparer.Ordinal).ToArray());
         static string S(JsonElement r, string key) { var v = DirectorProbeEvaluation.Require(r, key); if (v.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(v.GetString())) throw new FormatException("missing required string " + key); return v.GetString(); }
         static string Optional(JsonElement r, string key) => r.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
@@ -71,23 +144,89 @@ namespace DeviceChain.Harborpulse.Model.Director
         public static double RoundSim(double hours) => Math.Round(hours, 6);
         string Device(string token)
         {
-            foreach (var d in layout.Devices) if (input.Source != null && input.Source.TryToken(d.ExternalId, out var bound) && bound == token) return d.Token;
+            if (token != null && deviceByToken.TryGetValue(token, out var device)) return device;
             throw new FormatException("unbound platform device " + token);
         }
-        string RunnerDevice(string token) => layout.Devices.FirstOrDefault(d => d.Token == token || d.ExternalId == token)?.Token ?? throw new FormatException("unknown runner device " + token);
-        IEnumerable<Row> Rows(string name) => rows.Where(r => r.Name == name);
+        string RunnerDevice(string token) => token != null && runnerDevices.TryGetValue(token, out var device) && device != null ? device : throw new FormatException("unknown runner device " + token);
+        static readonly Row[] NoRows = Array.Empty<Row>();
+        IEnumerable<Row> Rows(string name) => names.TryGetValue(name, out var n) ? n.Rows : (IEnumerable<Row>)NoRows;
         void Gap(string name, double from, double to) { if (Streams.TryGetValue(name, out var streams)) foreach (var s in streams) cover(new CoverageInterval(input.Run, s, from, to, true)); }
         void Safe(string name, Action body)
         {
             try { body(); }
             catch (Exception ex) when (ex is FormatException || ex is InvalidOperationException || ex is KeyNotFoundException || ex is JsonException) {
                 problems.Add(name + ": " + ex.Message); Gap(name, lastSim, input.Sim);
+                // A join that sleeps through the next frames still owes them this gap: the record is as unreadable then as now.
+                active?.Gaps.Add(name);
             }
+        }
+        /// <summary>Whether a join must run this frame. When it need not, what its last run found wrong is restated for this frame.</summary>
+        bool Due(Section s, long stamp)
+        {
+            if (s.Stamp == stamp && input.Now < s.Wake && !rewound && !RunEveryJoin) {
+                foreach (var name in s.Gaps) Gap(name, lastSim, input.Sim);
+                foreach (var problem in s.Current) current.Add(problem);
+                return false;
+            }
+            s.Stamp = stamp; s.Wake = DateTimeOffset.MaxValue; s.Gaps.Clear(); s.Current.Clear();
+            return true;
+        }
+        /// <summary>Opens a join that is due; the caller closes it by clearing <see cref="active"/>.</summary>
+        bool Begin(Section s, long stamp) { if (!Due(s, stamp)) return false; active = s; return true; }
+        bool Reached(DateTimeOffset at) { if (at <= input.Now) return true; Await(at); return false; }
+        /// <summary>Something the running join could not use yet because its instant has not arrived: the join runs again when it has.</summary>
+        void Await(DateTimeOffset at) { if (active != null && at < active.Wake) active.Wake = at; }
+        void Trouble(string problem) { current.Add(problem); active?.Current.Add(problem); }
+        void Visit() => ReadWorkUnits++;
+        /// <summary>Which platform token each layout device is bound to this frame; the joins that map tokens to devices run again when one moves.</summary>
+        void Bind()
+        {
+            var moved = false;
+            for (var i = 0; i < bound.Length; i++) {
+                string token = null;
+                if (input.Source != null && input.Source.TryToken(layout.Devices[i].ExternalId, out var t)) token = t;
+                if (!string.Equals(token, bound[i], StringComparison.Ordinal)) { bound[i] = token; moved = true; }
+            }
+            if (!moved) return;
+            bindingVersion++; deviceByToken.Clear();
+            for (var i = 0; i < bound.Length; i++) if (bound[i] != null && !deviceByToken.ContainsKey(bound[i])) deviceByToken[bound[i]] = layout.Devices[i].Token;
+        }
+        /// <summary>The runner's status is a new object on every poll; only what the measurement join reads of it (the buffered spans) is compared.</summary>
+        void Status()
+        {
+            var status = input.Source?.Status;
+            if (ReferenceEquals(status, statusSeen)) return;
+            statusSeen = status; statusVersion++;
+            var spans = status == null ? "" : string.Join("|", status.Backfill.Select(b => b.Device + "@" + b.First.UtcTicks.ToString(CultureInfo.InvariantCulture) + "-" + b.Last.UtcTicks.ToString(CultureInfo.InvariantCulture)));
+            if (spans != backfillSeen) { backfillSeen = spans; backfillVersion++; }
+        }
+        /// <summary>The parsed rows of one polled read, parsed again only when the answer's bytes differ from the last one in its place.</summary>
+        Held Hold(Named n, int slot, string name, DirectorRead r)
+        {
+            while (n.Slots.Count <= slot) n.Slots.Add(new Held());
+            var h = n.Slots[slot];
+            if (h.Scope != r.Scope) n.Slots[slot] = h = new Held { Scope = r.Scope };
+            if (ReferenceEquals(h.Read, r)) return h;
+            var raw = r.Data.Value.GetRawText();
+            if (h.Raw == null || !string.Equals(raw, h.Raw, StringComparison.Ordinal)) {
+                h.Raw = raw; h.Revision = ++revisions;
+                try {
+                    var records = DirectorProbeEvaluation.Records(name, r.Data.Value);
+                    var parsed = new Row[records.Count];
+                    for (var i = 0; i < parsed.Length; i++) { parsed[i] = new Row { Name = name, Scope = r.Scope, Value = records[i], Owner = h }; Visit(); }
+                    h.Rows = parsed; h.Failure = null;
+                }
+                catch (Exception ex) when (ex is FormatException || ex is InvalidOperationException || ex is KeyNotFoundException || ex is JsonException) {
+                    h.Rows = NoRows; h.Failure = ex.Message;
+                }
+            }
+            h.Read = r;
+            return h;
         }
         void Emit(string kind, string identity, string device, string key, string cycle, string status, DateTimeOffset at,
             Dictionary<string, string> fields = null, Dictionary<string, string[]> sets = null, string source = EvidenceSource.Platform, string command = "", string attempt = "", double? arrivalSim = null)
         {
-            if (at > input.Now) return;
+            if (at > input.Now) { Await(at); return; }
             var o = new Observation(input.Run, kind, identity, device, key, cycle, command, attempt, status, Wall(input.Now), Wall(at), arrivalSim ?? Sim(at), source, fields, sets);
             var fingerprint = string.Join("|", o.Fields.OrderBy(p => p.Key).Select(p => p.Key + "=" + p.Value)) + string.Join("|", o.Sets.OrderBy(p => p.Key).Select(p => p.Key + "=" + string.Join(",", p.Value)));
             if (emitted.TryGetValue(o.EventKey, out var old) && old == fingerprint) return;
@@ -95,13 +234,23 @@ namespace DeviceChain.Harborpulse.Model.Director
         }
         public void Update(DirectorInputs inputs, Action<Observation> observe, Action<CoverageInterval> cover)
         {
-            input = inputs ?? throw new ArgumentNullException(nameof(inputs)); this.observe = observe; this.cover = cover;
+            input = inputs ?? throw new ArgumentNullException(nameof(inputs)); this.observe = observe; this.cover = cover; active = null;
             if (run != inputs.Run) {
                 run = inputs.Run; emitted.Clear(); alarmHistory.Clear(); previous.Clear(); trends.Clear(); wellHistory.Clear(); dueWells.Clear(); wellCycles.Clear(); pumpRunning.Clear(); pumpOffAt.Clear(); failedProbes.Clear(); commandCycles.Clear(); causeTried.Clear(); problems.Clear();
                 startSim = lastSim = input.Sim; measurementReconnects = alarmReconnects = measurementIndex = 0;
+                cycles.Clear(); cyclesByToken.Clear(); cyclesByOriginator.Clear(); chips.Clear(); changesSeen.Clear(); deviceByToken.Clear(); Array.Clear(bound, 0, bound.Length);
+                replacementsByDevice.Clear(); assignmentsByDevice.Clear(); newestReplacement.Clear(); statusSeen = null; backfillSeen = null; bindingFresh = -1;
+                wellsSeen = replacementsIndexed = assignmentsIndexed = -1; lastNow = input.Now;
+                // Versions keep growing across runs, so a stamp from the old run can never equal one from the new.
+                bindingVersion++; alarmVersion++; statusVersion++; backfillVersion++; changesVersion++; pumpOffVersion++;
+                foreach (var n in names.Values) { n.Slots.Clear(); n.Now.Clear(); n.Last.Clear(); n.Rows.Clear(); n.Content++; n.Version++; }
+                foreach (var s in new[] { alarmRows, escalations, windows, notifications, replacements, credentials, commands, rollouts, memberships, measured, runner }) { s.Stamp = -1; s.Wake = DateTimeOffset.MaxValue; s.Gaps.Clear(); s.Current.Clear(); }
             }
             if (input.Sim < lastSim) throw new InvalidOperationException("observer requires a new instance on seek");
-            current.Clear(); var snapshot = reads(); rows = new List<Row>(); complete = new List<DirectorRead>();
+            // A clock that steps back could un-arrive an instant a join was told had come; every join looks again.
+            rewound = input.Now < lastNow; lastNow = input.Now;
+            current.Clear(); var snapshot = reads(); streamRows.Clear(); complete.Clear();
+            Bind(); Status();
             if (snapshot == null) {
                 foreach (var name in Streams.Keys) Gap(name, lastSim, input.Sim);
                 if (input.Source is PreviewSource) { current.Add("OFFLINE PREVIEW: scenario stand-ins; platform-only reads unavailable"); Preview(); }
@@ -109,53 +258,89 @@ namespace DeviceChain.Harborpulse.Model.Director
             }
             else {
                 foreach (var p in snapshot.Problems) current.Add(p);
-                foreach (var r in snapshot.Reads.Where(r => r.Probe == DirectorProbe.PROBE_FAILED)) failedProbes.Add(r.Name);
+                foreach (var n in names.Values) n.Group.Clear();
+                for (var i = 0; i < snapshot.Reads.Count; i++) {
+                    var r = snapshot.Reads[i];
+                    if (r.Probe == DirectorProbe.PROBE_FAILED) failedProbes.Add(r.Name);
+                    if (r.Scope != "__probe" && names.TryGetValue(r.Name, out var named)) named.Group.Add(r);
+                }
                 foreach (var name in failedProbes) Gap(name, startSim, input.Sim);
                 foreach (var name in Streams.Keys) {
-                    var group = snapshot.Reads.Where(r => r.Name == name && r.Scope != "__probe").ToArray();
-                    bool healthy = group.Length > 0 && !failedProbes.Contains(name) && group.All(r => r.Healthy(input.Now));
+                    var n = names[name]; var failed = failedProbes.Contains(name);
+                    var healthy = n.Group.Count > 0 && !failed;
+                    for (var i = 0; healthy && i < n.Group.Count; i++) healthy = n.Group[i].Healthy(input.Now);
+                    n.Healthy = healthy;
                     if (!healthy) Gap(name, lastSim, input.Sim);
-                    foreach (var r in group) {
-                        foreach (var span in r.Coverage.Where(c => c.Gap && Sim(c.To) >= startSim && Sim(c.From) <= input.Sim)) Gap(name, Math.Max(startSim, Sim(span.From)), Math.Min(input.Sim, Sim(span.To)));
-                        if (!r.Healthy(input.Now) || failedProbes.Contains(name) || !r.Data.HasValue) continue;
-                        Safe(name, () => {
-                            var records = DirectorProbeEvaluation.Records(name, r.Data.Value);
-                            complete.Add(r);
-                            foreach (var v in records) rows.Add(new Row { Name = name, Scope = r.Scope, Value = v, Read = r });
-                        });
+                    n.Now.Clear();
+                    for (var i = 0; i < n.Group.Count; i++) {
+                        var r = n.Group[i];
+                        for (var c = 0; c < r.Coverage.Count; c++) {
+                            var span = r.Coverage[c];
+                            if (span.Gap && Sim(span.To) >= startSim && Sim(span.From) <= input.Sim) Gap(name, Math.Max(startSim, Sim(span.From)), Math.Min(input.Sim, Sim(span.To)));
+                        }
+                        if (!r.Healthy(input.Now) || failed || !r.Data.HasValue) continue;
+                        var h = Hold(n, i, name, r);
+                        if (h.Failure != null) { problems.Add(name + ": " + h.Failure); Gap(name, lastSim, input.Sim); continue; }
+                        complete.Add(r); n.Now.Add(h);
+                    }
+                    // What this name offers the joins: has any usable row changed, or only the instant a read was taken?
+                    bool content = n.Now.Count != n.Last.Count, instance = false;
+                    for (var i = 0; !content && i < n.Now.Count; i++) {
+                        var last = n.Last[i]; var h = n.Now[i];
+                        if (!ReferenceEquals(last.Held, h) || last.Revision != h.Revision) content = true;
+                        else if (!ReferenceEquals(last.Read, h.Read)) instance = true;
+                    }
+                    if (content) { n.Content++; n.Rows.Clear(); foreach (var h in n.Now) n.Rows.AddRange(h.Rows); }
+                    if (content || instance) {
+                        n.Version++; n.Last.Clear();
+                        foreach (var h in n.Now) n.Last.Add(new Seen { Held = h, Revision = h.Revision, Read = h.Read });
                     }
                 }
-                foreach (var stream in Streams.Values.SelectMany(s => s).Distinct()) {
-                    var names = Streams.Where(p => p.Value.Contains(stream)).Select(p => p.Key).ToArray();
-                    var group = snapshot.Reads.Where(r => names.Contains(r.Name) && r.Scope != "__probe").ToArray();
-                    if (names.All(n => group.Any(r => r.Name == n)) && group.All(r => r.Healthy(input.Now)) && !names.Any(failedProbes.Contains))
-                        cover(new CoverageInterval(run, stream, lastSim, input.Sim, false));
+                foreach (var stream in StreamNames) {
+                    var covered = true;
+                    foreach (var name in stream.Value) if (!names[name].Healthy) { covered = false; break; }
+                    if (covered) cover(new CoverageInterval(run, stream.Key, lastSim, input.Sim, false));
                 }
                 var alarmLive = input.Source?.AlarmObservation.Observed == true;
                 if (!alarmLive || snapshot.AlarmReconnects != alarmReconnects) { Gap("alarms", lastSim, input.Sim); }
                 if (snapshot.MeasurementsLive != true || snapshot.MeasurementReconnects != measurementReconnects) Gap("measurements", lastSim, input.Sim);
                 alarmReconnects = snapshot.AlarmReconnects; measurementReconnects = snapshot.MeasurementReconnects;
-                foreach (var r in Rows("alarms")) Safe("alarms", () => Alarm(r.Value));
-                if (!failedProbes.Contains("alarms")) foreach (var change in snapshot.AlarmChanges) Safe("alarms", () => {
-                    var a = alarmHistory.Values.Where(a => S(a, "token") == change.Token && S(a, "originatorToken") == change.DeviceToken && S(a, "alarmKey") == change.Key && T(a, "raisedTime") <= change.OccurredAt)
-                        .OrderByDescending(a => T(a, "raisedTime")).FirstOrDefault();
-                    if (a.ValueKind == JsonValueKind.Undefined) return; // the poll has not supplied this cycle's identity yet
-                    Emit("alarm", change.Token, Device(change.DeviceToken), change.Key, S(a, "raisedTime"), "ESCALATED", change.OccurredAt,
-                        new Dictionary<string, string> { ["alarmToken"] = change.Token });
-                });
-                foreach (var r in Rows("windows")) Safe("windows", () => Window(r.Value));
-                foreach (var r in Rows("notifications")) Safe("notifications", () => Notification(r.Value));
-                foreach (var r in Rows("replacements")) Safe("replacements", () => Replacement(r.Value));
-                foreach (var r in Rows("credentials")) Safe("credentials", () => Credential(r));
+                long Content(string name) => names[name].Content; long Version(string name) => names[name].Version;
+                if (Begin(alarmRows, Content("alarms") + bindingVersion)) { foreach (var r in Rows("alarms")) { Visit(); Safe("alarms", () => Alarm(r.Value)); } active = null; }
+                var changed = snapshot.AlarmChanges.Count != changesSeen.Count;
+                for (var i = 0; !changed && i < changesSeen.Count; i++) changed = !ReferenceEquals(changesSeen[i], snapshot.AlarmChanges[i]);
+                if (changed) { changesVersion++; changesSeen.Clear(); changesSeen.AddRange(snapshot.AlarmChanges); }
+                if (!failedProbes.Contains("alarms") && Begin(escalations, changesVersion + alarmVersion + bindingVersion)) {
+                    foreach (var change in snapshot.AlarmChanges) Safe("alarms", () => {
+                        var a = alarmHistory.Values.Where(a => S(a, "token") == change.Token && S(a, "originatorToken") == change.DeviceToken && S(a, "alarmKey") == change.Key && T(a, "raisedTime") <= change.OccurredAt)
+                            .OrderByDescending(a => T(a, "raisedTime")).FirstOrDefault();
+                        if (a.ValueKind == JsonValueKind.Undefined) return; // the poll has not supplied this cycle's identity yet
+                        Emit("alarm", change.Token, Device(change.DeviceToken), change.Key, S(a, "raisedTime"), "ESCALATED", change.OccurredAt,
+                            new Dictionary<string, string> { ["alarmToken"] = change.Token });
+                    });
+                    active = null;
+                }
+                if (Begin(windows, Content("windows") + bindingVersion)) { foreach (var r in Rows("windows")) { Visit(); Safe("windows", () => Window(r.Value)); } active = null; }
+                // An attempt joins its alarm's cycle only under an alarm read taken after it, so a newer alarm read is a reason to look again.
+                if (Begin(notifications, Content("notifications") + Version("alarms") + alarmVersion + Content("windows") + bindingVersion))
+                { foreach (var r in Rows("notifications")) { Visit(); Safe("notifications", () => Notification(r.Value)); } active = null; }
+                if (Begin(replacements, Content("replacements") + Content("measurements") + bindingVersion)) { foreach (var r in Rows("replacements")) { Visit(); Safe("replacements", () => Replacement(r.Value)); } active = null; }
+                // a credential is a snapshot stamped with its read's as-of, so it is restated for each newer read
+                if (Begin(credentials, Version("credentials") + Content("replacements") + bindingVersion)) { foreach (var r in Rows("credentials")) { Visit(); Safe("credentials", () => Credential(r)); } active = null; }
                 // the newest complete alarm read this frame: a cause is resolved again only when this moves
                 alarmStamp = 0; foreach (var r in complete) if (r.Name == "alarms" && r.AsOf.HasValue) alarmStamp = Math.Max(alarmStamp, r.AsOf.Value.UtcTicks);
-                foreach (var r in Rows("commands")) Safe("commands", () => Command(r.Value));
-                foreach (var r in Rows("rollout")) Safe("rollout", () => Ota(r.Value));
-                foreach (var r in complete.Where(r => r.Name == "membership")) Safe("membership", () => Membership(r.Scope, Rows("membership").Where(x => x.Read == r).Select(x => x.Value).ToArray(), r));
+                if (Begin(commands, Content("commands") + Version("alarms") + alarmVersion + bindingVersion)) { foreach (var r in Rows("commands")) { Visit(); Safe("commands", () => Command(r.Value)); } active = null; }
+                if (Begin(rollouts, Version("rollout") + Version("artifact") + Version("signer") + Version("targets") + Version("assignments") + bindingVersion))
+                { foreach (var r in Rows("rollout")) { Visit(); Safe("rollout", () => Ota(r.Value)); } active = null; }
+                if (Begin(memberships, Version("membership") + alarmVersion + bindingVersion)) {
+                    foreach (var h in names["membership"].Now) Safe("membership", () => { ReadWorkUnits += h.Rows.Length; Membership(h.Read.Scope, h.Rows.Select(x => x.Value).ToArray(), h.Read); });
+                    active = null;
+                }
                 StreamMeasurements(snapshot);
                 Measurements(); Chips(); Binding();
             }
-            Safe("runner", Runner);
+            // The runner's declarations move with its status, and its outage window is named for the sim day it falls on.
+            if (Begin(runner, statusVersion + (long)Math.Floor(input.Sim / 24))) { Safe("runner", Runner); active = null; }
             lastSim = input.Sim;
         }
         void Alarm(JsonElement a)
@@ -165,10 +350,39 @@ namespace DeviceChain.Harborpulse.Model.Director
             if (!a.TryGetProperty("raisedDuringSuppression", out stamp)) throw new FormatException("missing field raisedDuringSuppression");
             var f = new Dictionary<string, string> { ["alarmToken"] = id, ["raisedDuringSuppression"] = B(stamp.ValueKind == JsonValueKind.String) };
             if (stamp.ValueKind == JsonValueKind.String && stamp.GetString() != "restricted") f["suppressionWindowToken"] = stamp.GetString();
-            alarmHistory[id + "/" + raised] = a.Clone();
+            Remember(id + "/" + raised, a, id, S(a, "originatorToken"), key, at);
             Emit("alarm", id, device, key, raised, "RAISED", at, f);
             if (state == "CLEARED") Emit("alarm", id, device, key, raised, "CLEARED", T(a, "clearedTime"), f);
             else if (state != "ACTIVE") throw new FormatException("unknown alarm state " + state);
+        }
+        void Remember(string cycle, JsonElement a, string token, string originator, string key, DateTimeOffset raised)
+        {
+            var raw = a.GetRawText();
+            if (cycles.TryGetValue(cycle, out var c) && c.Raw == raw) return;
+            alarmVersion++; alarmHistory[cycle] = a.Clone();
+            var moved = c != null && c.Originator != originator;
+            if (c == null) {
+                cycles[cycle] = c = new Cycle { Token = token };
+                if (!cyclesByToken.TryGetValue(token, out var byToken)) cyclesByToken[token] = byToken = new List<Cycle>();
+                byToken.Add(c);
+                if (!cyclesByOriginator.TryGetValue(originator, out var byOriginator)) cyclesByOriginator[originator] = byOriginator = new List<Cycle>();
+                byOriginator.Add(c);
+            }
+            c.Row = alarmHistory[cycle]; c.Raw = raw; c.Originator = originator; c.Key = key; c.Raised = raised;
+            if (!moved) return;
+            // An alarm that changed hands: file every lifecycle again, in the order first read.
+            cyclesByOriginator.Clear();
+            foreach (var each in cycles.Values) {
+                if (!cyclesByOriginator.TryGetValue(each.Originator, out var list)) cyclesByOriginator[each.Originator] = list = new List<Cycle>();
+                list.Add(each);
+            }
+        }
+        /// <summary>The latest of these lifecycles the test admits; of two raised at the same instant, the one read first.</summary>
+        static Cycle Latest(List<Cycle> list, Func<Cycle, bool> admits)
+        {
+            Cycle best = null;
+            if (list != null) foreach (var c in list) if (admits(c) && (best == null || c.Raised > best.Raised)) best = c;
+            return best;
         }
         void Window(JsonElement w)
         {
@@ -180,6 +394,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                 foreach (var key in w.GetProperty("alarmKeys").EnumerateArray().Select(v => v.GetString())) {
                     Emit("window", id, d, key, "", "ACTIVE", start);
                     if (S(w, "status") == "ENDED" || input.Now >= end) Emit("window", id, d, key, "", "ENDED", end);
+                    else Await(end); // a window ends by the clock too, with no new read to say so
                 }
             }
         }
@@ -187,13 +402,14 @@ namespace DeviceChain.Harborpulse.Model.Director
             => attempted >= raised && (!nextRaised.HasValue || attempted < nextRaised.Value);
         JsonElement CycleAt(string token, DateTimeOffset at)
         {
-            var candidates = alarmHistory.Values.Where(a => S(a, "token") == token && T(a, "raisedTime") <= at).OrderByDescending(a => T(a, "raisedTime")).ToArray();
-            if (candidates.Length == 0) return default;
-            var device = S(candidates[0], "originatorToken");
+            cyclesByToken.TryGetValue(token, out var known);
+            var candidate = Latest(known, c => c.Raised <= at);
+            if (candidate == null) return default;
+            var device = candidate.Originator;
             // A cached lifecycle cannot exclude a newer raise until this device's complete read covers the record.
-            if (!complete.Any(r => r.Name == "alarms" && r.AsOf >= at &&
-                (r.Scope == device || Rows("alarms").Any(a => a.Read == r && S(a.Value, "token") == token)))) return default;
-            return candidates[0];
+            foreach (var h in names["alarms"].Now)
+                if (h.Read.AsOf >= at && (h.Read.Scope == device || h.Rows.Any(a => S(a.Value, "token") == token))) return candidate.Row;
+            return default;
         }
         void Notification(JsonElement n)
         {
@@ -226,7 +442,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             // The journal entry is a page trigger, and a trigger is captured once: emitted before the first reading after the swap
             // has been read, its claims could never join that reading. Hold it until the reading is known, or for a minute at most
             // (then it is emitted without one, and the claims that need the reading stay unmet).
-            if (!f.ContainsKey("afterReading") && input.Now - at < ReplacementReadingWait) return;
+            if (!f.ContainsKey("afterReading") && input.Now - at < ReplacementReadingWait) { Await(at + ReplacementReadingWait); return; }
             Emit("replacement", id, device, "", S(r, "occurredTime"), "RECORDED", at, f,
                 new Dictionary<string, string[]> { ["disabledCredentials"] = r.GetProperty("retiredCredentialTokens").EnumerateArray().Select(v => v.GetString()).ToArray() });
         }
@@ -381,7 +597,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                 Emit("target", id + "/" + token, Device(token), "", cycle, S(t, "outcome"), input.Now, SnapshotFields(targetRead, Fields()), attempt: attempt);
             }
             if (terminal) {
-                if (!countsComplete) { current.Add("rollout counts: complete child reads covering terminal state and resolved attempts required"); Gap("targets", lastSim, input.Sim); return; }
+                if (!countsComplete) { Trouble("rollout counts: complete child reads covering terminal state and resolved attempts required"); Gap("targets", lastSim, input.Sim); active?.Gaps.Add("targets"); return; }
                 f = Fields(); f["maxInFlight"] = N(rollout.GetProperty("maxInFlight").GetInt32());
                 f["updated"] = N(rollout.GetProperty("progress").GetProperty("succeeded").GetInt32()); f["refused"] = N(refused);
                 Emit("rollout", id, "", "", cycle, "COUNTS", input.Now, SnapshotFields(complete.First(r => r.Name == "targets" && r.Scope == id), f));
@@ -397,48 +613,100 @@ namespace DeviceChain.Harborpulse.Model.Director
             }
             Emit("membership", quay, "", quay, "", "SNAPSHOT", input.Now, SnapshotFields(read), sets: new Dictionary<string, string[]> { ["tokens"] = ids });
         }
+        /// <summary>A device's newest replacement in the journal read, indexed once per distinct answer.</summary>
+        JsonElement NewestReplacement(string token)
+        {
+            var content = names["replacements"].Content;
+            if (replacementsIndexed != content) {
+                replacementsIndexed = -1; replacementsByDevice.Clear(); newestReplacement.Clear();
+                foreach (var x in Rows("replacements")) {
+                    var device = S(x.Value.GetProperty("device"), "token");
+                    if (!replacementsByDevice.TryGetValue(device, out var list)) replacementsByDevice[device] = list = new List<JsonElement>();
+                    list.Add(x.Value);
+                }
+                replacementsIndexed = content;
+            }
+            if (newestReplacement.TryGetValue(token, out var newest)) return newest;
+            newest = default;
+            if (replacementsByDevice.TryGetValue(token, out var journal)) {
+                var best = DateTimeOffset.MinValue;
+                foreach (var x in journal) { var at = T(x, "occurredTime"); if (newest.ValueKind == JsonValueKind.Undefined || at > best) { best = at; newest = x; } }
+            }
+            return newestReplacement[token] = newest;
+        }
+        static readonly List<JsonElement> NoAssignments = new List<JsonElement>();
+        List<JsonElement> Assignments(string token)
+        {
+            var content = names["assignments"].Content;
+            if (assignmentsIndexed != content) {
+                assignmentsIndexed = -1; assignmentsByDevice.Clear();
+                foreach (var x in Rows("assignments")) {
+                    var device = S(x.Value, "deviceToken");
+                    if (!assignmentsByDevice.TryGetValue(device, out var list)) assignmentsByDevice[device] = list = new List<JsonElement>();
+                    list.Add(x.Value);
+                }
+                assignmentsIndexed = content;
+            }
+            return assignmentsByDevice.TryGetValue(token, out var found) ? found : NoAssignments;
+        }
         void Measurements()
         {
-            foreach (var r in rows.Where(r => r.Name == "measurements" || r.Name == "streamMeasurements").Select(r => r.Value).OrderBy(r => Optional(r, "occurredTime"))) Safe("measurements", () => {
-                MeasurementWorkUnits++;
-                var token = S(r, "deviceToken"); var device = Device(token); var key = S(r, "name"); var at = T(r, "occurredTime");
-                var value = DirectorProbeEvaluation.Require(r, "value").GetDouble(); var f = new Dictionary<string, string> { ["value"] = N(value) }; var cycle = "";
-                var pk = device + "/" + key;
-                var readingKey = S(r, "id");
-                if (trends.TryGetValue(readingKey, out var trend)) foreach (var p in trend) f[p.Key] = p.Value;
-                else if (previous.TryGetValue(pk, out var old) && at > old.OccurredAt) {
-                    f["rising"] = B(value > old.Value); f["falling"] = B(value < old.Value);
-                    trends[readingKey] = new Dictionary<string, string> { ["rising"] = f["rising"], ["falling"] = f["falling"] };
-                }
-                if (!previous.ContainsKey(pk) || at > previous[pk].OccurredAt) previous[pk] = new Reading(value, at);
-                var alarm = alarmHistory.Values.Where(a => S(a, "originatorToken") == token && T(a, "raisedTime") <= at).OrderByDescending(a => T(a, "raisedTime")).FirstOrDefault();
-                if (alarm.ValueKind != JsonValueKind.Undefined) cycle = S(alarm, "raisedTime");
-                // A filling-well interval starts with a reported off reading, before its high alarm exists.
-                // Retain those earlier readings and attach them to the subsequently observed alarm cycle;
-                // otherwise an above-float reading before the alarm could disappear from allBelow's proof.
-                if (key == Metrics.WetWell && pumpOffAt.TryGetValue(device, out var off) && at >= off) {
-                    var high = alarmHistory.Values.Where(a => S(a, "originatorToken") == token && S(a, "alarmKey") == "wet-well-high" && T(a, "raisedTime") >= off && T(a, "raisedTime") <= input.Now)
-                        .OrderByDescending(a => T(a, "raisedTime")).FirstOrDefault();
-                    if (high.ValueKind != JsonValueKind.Undefined) cycle = S(high, "raisedTime");
-                }
-                var replacement = Rows("replacements").Select(x => x.Value).Where(x => S(x.GetProperty("device"), "token") == token).OrderByDescending(x => T(x, "occurredTime")).FirstOrDefault();
-                if (replacement.ValueKind != JsonValueKind.Undefined) { cycle = S(replacement, "occurredTime"); f["replacementToken"] = S(replacement, "id"); f["afterReplacement"] = B(at > T(replacement, "occurredTime")); }
-                Emit("measure", S(r, "id"), device, key, cycle, "", at, f);
-                foreach (var assignment in Rows("assignments").Select(x => x.Value).Where(a => S(a, "deviceToken") == token)) {
-                    var p = assignment.GetProperty("attempt"); if (S(p, "state") != "FAILED" || at <= T(p, "lastReportAt") || input.Now - at > TimeSpan.FromSeconds(60)) continue;
-                    foreach (var rollout in Rows("rollout").Select(x => x.Value).Where(x => S(x.GetProperty("artifact"), "token") == S(assignment.GetProperty("artifact"), "token") &&
-                        Rows("targets").Any(t => t.Scope == S(x, "token") && Optional(t.Value, "assignmentToken") == S(assignment, "token") && S(t.Value, "deviceToken") == token))) {
-                        var af = new Dictionary<string, string>(f) { ["afterFailure"] = "true", ["artifactToken"] = S(assignment.GetProperty("artifact"), "token"), ["rolloutToken"] = S(rollout, "token") };
-                        Emit("measure", S(r, "id"), device, key, S(rollout, "startedAt"), "", at, af, attempt: S(p, "token"));
+            // The stream's new readings are joined on the frame they arrive. The history reads are joined again only when they, or
+            // something a reading is joined to (an alarm's lifecycle, the replacement journal, a failed update, a pump's last stop,
+            // the runner's buffered spans, a device's binding), have changed, or when a reading stamped after "now" has come due:
+            // otherwise every one of them would emit what it emitted before. When they are joined they are sorted in with the
+            // stream's, as they always were, so a reading's trend is still taken from the reading before it.
+            var history = Begin(measured, names["measurements"].Content + alarmVersion + names["replacements"].Content + names["assignments"].Content
+                + names["rollout"].Content + names["targets"].Content + pumpOffVersion + backfillVersion + bindingVersion);
+            active = null;
+            if (!history && streamRows.Count == 0) return;
+            foreach (var row in (history ? Rows("measurements").Concat(streamRows) : streamRows).OrderBy(x => Optional(x.Value, "occurredTime"))) {
+                var r = row.Value;
+                // only a history row is looked at again later: a stream row is offered once, on the frame it arrives
+                active = row.Owner != null ? measured : null;
+                Safe("measurements", () => {
+                    MeasurementWorkUnits++; if (row.Owner != null) Visit();
+                    var token = S(r, "deviceToken"); var device = Device(token); var key = S(r, "name"); var at = T(r, "occurredTime");
+                    var value = DirectorProbeEvaluation.Require(r, "value").GetDouble(); var f = new Dictionary<string, string> { ["value"] = N(value) }; var cycle = "";
+                    var pk = device + "/" + key;
+                    var readingKey = S(r, "id");
+                    if (trends.TryGetValue(readingKey, out var trend)) foreach (var p in trend) f[p.Key] = p.Value;
+                    else if (previous.TryGetValue(pk, out var old) && at > old.OccurredAt) {
+                        f["rising"] = B(value > old.Value); f["falling"] = B(value < old.Value);
+                        trends[readingKey] = new Dictionary<string, string> { ["rising"] = f["rising"], ["falling"] = f["falling"] };
                     }
-                }
-                foreach (var b in input.Source?.Status?.Backfill ?? Array.Empty<StoryBackfill>()) {
-                    if (RunnerDevice(b.Device) != device || at < b.First || at > b.Last || at >= input.Now) continue;
-                    // Include unexpected platform times too: filtering by the expected set would falsely prove exactness.
-                    Emit("measure", S(r, "id"), device, "backfill", "", "", at,
-                        new Dictionary<string, string> { ["value"] = N(value), ["backdated"] = "true", ["readingIdentity"] = ReadingIdentity(device, S(r, "occurredTime")) }, arrivalSim: input.Sim);
-                }
-            });
+                    if (!previous.ContainsKey(pk) || at > previous[pk].OccurredAt) previous[pk] = new Reading(value, at);
+                    cyclesByOriginator.TryGetValue(token, out var lifecycles);
+                    var alarm = Latest(lifecycles, c => c.Raised <= at);
+                    if (alarm != null) cycle = S(alarm.Row, "raisedTime");
+                    // A filling-well interval starts with a reported off reading, before its high alarm exists.
+                    // Retain those earlier readings and attach them to the subsequently observed alarm cycle;
+                    // otherwise an above-float reading before the alarm could disappear from allBelow's proof.
+                    if (key == Metrics.WetWell && pumpOffAt.TryGetValue(device, out var off) && at >= off) {
+                        var high = Latest(lifecycles, c => c.Key == "wet-well-high" && c.Raised >= off && Reached(c.Raised));
+                        if (high != null) cycle = S(high.Row, "raisedTime");
+                    }
+                    var replacement = NewestReplacement(token);
+                    if (replacement.ValueKind != JsonValueKind.Undefined) { cycle = S(replacement, "occurredTime"); f["replacementToken"] = S(replacement, "id"); f["afterReplacement"] = B(at > T(replacement, "occurredTime")); }
+                    Emit("measure", S(r, "id"), device, key, cycle, "", at, f);
+                    foreach (var assignment in Assignments(token)) {
+                        var p = assignment.GetProperty("attempt"); if (S(p, "state") != "FAILED" || at <= T(p, "lastReportAt") || input.Now - at > TimeSpan.FromSeconds(60)) continue;
+                        foreach (var rollout in Rows("rollout").Select(x => x.Value).Where(x => S(x.GetProperty("artifact"), "token") == S(assignment.GetProperty("artifact"), "token") &&
+                            Rows("targets").Any(t => t.Scope == S(x, "token") && Optional(t.Value, "assignmentToken") == S(assignment, "token") && S(t.Value, "deviceToken") == token))) {
+                            var af = new Dictionary<string, string>(f) { ["afterFailure"] = "true", ["artifactToken"] = S(assignment.GetProperty("artifact"), "token"), ["rolloutToken"] = S(rollout, "token") };
+                            Emit("measure", S(r, "id"), device, key, S(rollout, "startedAt"), "", at, af, attempt: S(p, "token"));
+                        }
+                    }
+                    foreach (var b in input.Source?.Status?.Backfill ?? Array.Empty<StoryBackfill>()) {
+                        if (RunnerDevice(b.Device) != device || at < b.First || at > b.Last) continue;
+                        if (at >= input.Now) { Await(at); continue; } // counted as backdated only once its instant is behind us
+                        // Include unexpected platform times too: filtering by the expected set would falsely prove exactness.
+                        Emit("measure", S(r, "id"), device, "backfill", "", "", at,
+                            new Dictionary<string, string> { ["value"] = N(value), ["backdated"] = "true", ["readingIdentity"] = ReadingIdentity(device, S(r, "occurredTime")) }, arrivalSim: input.Sim);
+                    }
+                });
+            }
+            active = null;
         }
         void StreamMeasurements(DirectorReadSnapshot snapshot)
         {
@@ -449,7 +717,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             foreach (var reading in fresh.OrderBy(m => m.OccurredAt)) {
                 var token = reading.DeviceToken; var metric = reading.Name; var device = Device(token);
                 if (metric == Metrics.PumpRunning && (!pumpRunning.TryGetValue(device, out var old) || reading.OccurredAt > old.OccurredAt)) {
-                    if (reading.Value <= .5 && (!pumpRunning.ContainsKey(device) || old.Value > .5)) pumpOffAt[device] = reading.OccurredAt;
+                    if (reading.Value <= .5 && (!pumpRunning.ContainsKey(device) || old.Value > .5)) { pumpOffAt[device] = reading.OccurredAt; pumpOffVersion++; }
                     pumpRunning[device] = new Reading(reading.Value, reading.OccurredAt);
                 }
                 var id = token + "/" + metric + "@" + reading.OccurredAt.ToString("O");
@@ -465,7 +733,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                         due.Add(id);
                     }
                 }
-                else rows.Add(new Row { Name = "streamMeasurements", Scope = token, Value = record });
+                else streamRows.Add(new Row { Name = "streamMeasurements", Scope = token, Value = record });
             }
             measurementIndex = snapshot.Measurements.Count;
             // Visit only the due prefix, never the retained archive on idle frames. Resolve IDs
@@ -480,10 +748,13 @@ namespace DeviceChain.Harborpulse.Model.Director
             foreach (var id in addedWells) {
                 var record = wellHistory[id];
                 if (T(record, "occurredTime") <= input.Now)
-                    rows.Add(new Row { Name = "streamMeasurements", Scope = S(record, "deviceToken"), Value = record });
+                    streamRows.Add(new Row { Name = "streamMeasurements", Scope = S(record, "deviceToken"), Value = record });
             }
             // Wells already emitted need revisiting only when their alarm/off-interval join
             // changes, so an arriving high alarm still gets ALL pre-alarm float evidence.
+            // The join is a function of the alarm lifecycles, each pump's last stop and its binding: unchanged, it names no well.
+            if (wellsSeen == alarmVersion + pumpOffVersion + bindingVersion && !RunEveryJoin) return;
+            wellsSeen = alarmVersion + pumpOffVersion + bindingVersion;
             var changed = new HashSet<string>();
             foreach (var pump in layout.Devices.Where(d => d.Kind == DeviceKind.Pump)) {
                 if (input.Source == null || !input.Source.TryToken(pump.ExternalId, out var token)) continue;
@@ -494,27 +765,42 @@ namespace DeviceChain.Harborpulse.Model.Director
             if (changed.Count > 0) foreach (var p in wellHistory) {
                 var token = S(p.Value, "deviceToken");
                 if (changed.Contains(token) && !addedWells.Contains(p.Key) && T(p.Value, "occurredTime") <= input.Now)
-                    rows.Add(new Row { Name = "streamMeasurements", Scope = token, Value = p.Value });
+                    streamRows.Add(new Row { Name = "streamMeasurements", Scope = token, Value = p.Value });
             }
         }
         void Binding()
         {
-            var fresh = layout.Devices.Count(d => HarborObservedModel.MetricsFor(d.Kind).Any(m => input.Source != null && input.Source.TryGet(d.ExternalId, m, out var r) && r.OccurredAt <= input.Now && input.Now - r.OccurredAt <= TimeSpan.FromSeconds(60)));
+            var fresh = 0;
+            foreach (var d in layout.Devices) foreach (var m in HarborObservedModel.MetricsFor(d.Kind))
+                if (input.Source != null && input.Source.TryGet(d.ExternalId, m, out var r) && r.OccurredAt <= input.Now && input.Now - r.OccurredAt <= TimeSpan.FromSeconds(60)) { fresh++; break; }
+            // The record is keyed by the run alone, so it is new only when its one field is.
+            if (fresh == bindingFresh) return;
+            bindingFresh = fresh;
             Emit("binding", input.Run, "", "", "", "READY", input.Now, new Dictionary<string, string> { ["freshDevices"] = N(fresh) });
         }
         void Chips()
         {
             if (input.Frame?.Pumps == null) return;
-            foreach (var pump in input.Frame.Pumps) Safe("pump", () => {
-                var p = pump.Value; if (!p.Running.HasValue) return;
-                var at = p.TransitionAt ?? p.Running.Value.OccurredAt;
-                var device = RunnerDevice(pump.Key);
-                var a = alarmHistory.Values.Where(a => Device(S(a, "originatorToken")) == device && S(a, "alarmKey") == "wet-well-high" && T(a, "raisedTime") <= at).OrderByDescending(a => T(a, "raisedTime")).FirstOrDefault();
-                var f = new Dictionary<string, string> { ["runningAt"] = N(Wall(at)) };
-                var cycle = "";
-                if (a.ValueKind != JsonValueKind.Undefined) { f["alarmToken"] = S(a, "token"); cycle = S(a, "raisedTime"); }
-                Emit("chip", device + "@" + at.ToString("O"), device, "", cycle, p.StartKind == PumpStartKind.Platform ? "PLATFORM" : p.StartKind == PumpStartKind.FloatConsistent ? "FLOAT-CONSISTENT" : "UNCONFIRMED", at, f);
-            });
+            foreach (var pump in input.Frame.Pumps) {
+                var p = pump.Value;
+                if (!chips.TryGetValue(pump.Key, out var chip)) chips[pump.Key] = chip = new Chip();
+                var when = p.Running.HasValue ? p.TransitionAt ?? p.Running.Value.OccurredAt : default;
+                // A pump's chip is its start as last presented, joined to its high-well alarm: the same until either moves.
+                if (!chip.Seen || chip.Has != p.Running.HasValue || chip.At != when || chip.Kind != p.StartKind)
+                { chip.Seen = true; chip.Has = p.Running.HasValue; chip.At = when; chip.Kind = p.StartKind; chip.Section.Stamp = -1; }
+                if (!Begin(chip.Section, alarmVersion + bindingVersion)) continue;
+                Safe("pump", () => {
+                    if (!p.Running.HasValue) return;
+                    var at = p.TransitionAt ?? p.Running.Value.OccurredAt;
+                    var device = RunnerDevice(pump.Key);
+                    var a = alarmHistory.Values.Where(a => Device(S(a, "originatorToken")) == device && S(a, "alarmKey") == "wet-well-high" && T(a, "raisedTime") <= at).OrderByDescending(a => T(a, "raisedTime")).FirstOrDefault();
+                    var f = new Dictionary<string, string> { ["runningAt"] = N(Wall(at)) };
+                    var cycle = "";
+                    if (a.ValueKind != JsonValueKind.Undefined) { f["alarmToken"] = S(a, "token"); cycle = S(a, "raisedTime"); }
+                    Emit("chip", device + "@" + at.ToString("O"), device, "", cycle, p.StartKind == PumpStartKind.Platform ? "PLATFORM" : p.StartKind == PumpStartKind.FloatConsistent ? "FLOAT-CONSISTENT" : "UNCONFIRMED", at, f);
+                });
+                active = null;
+            }
         }
         void Runner()
         {

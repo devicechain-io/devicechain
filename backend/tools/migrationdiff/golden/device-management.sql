@@ -63,6 +63,7 @@ ALTER SEQUENCE "device-management".profile_decoder_healths_id_seq OWNED BY "devi
 ALTER SEQUENCE "device-management".profile_decoder_samples_id_seq OWNED BY "device-management".profile_decoder_samples.id;
 ALTER SEQUENCE "device-management".provisioning_profiles_id_seq OWNED BY "device-management".provisioning_profiles.id;
 ALTER SEQUENCE "device-management".semantic_contexts_id_seq OWNED BY "device-management".semantic_contexts.id;
+ALTER SEQUENCE "device-management".static_membership_generations_id_seq OWNED BY "device-management".static_membership_generations.id;
 ALTER TABLE "device-management".entity_attributes ENABLE ALWAYS TRIGGER dc_enforce_attr_protocol;
 ALTER TABLE ONLY "device-management".agent_actuation_fences
  ADD CONSTRAINT agent_actuation_fences_pkey PRIMARY KEY (tenant_id);
@@ -342,6 +343,9 @@ ALTER TABLE ONLY "device-management".purged_tenants
 ALTER TABLE ONLY "device-management".semantic_contexts
  ADD CONSTRAINT semantic_contexts_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".semantic_contexts ALTER COLUMN id SET DEFAULT nextval('"device-management".semantic_contexts_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".static_membership_generations
+ ADD CONSTRAINT static_membership_generations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".static_membership_generations ALTER COLUMN id SET DEFAULT nextval('"device-management".static_membership_generations_id_seq'::regclass);
 BEGIN
  IF TG_TABLE_NAME = 'device_profile_versions' THEN
  IF TG_OP = 'INSERT' THEN
@@ -965,6 +969,12 @@ CREATE SEQUENCE "device-management".provisioning_profiles_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".semantic_contexts_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".static_membership_generations_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -1628,7 +1638,8 @@ CREATE TABLE "device-management".devices (
  installed_elev numeric(12,4),
  installed_accuracy numeric(12,4),
  installed_source text,
- installed_updated_at timestamp with time zone
+ installed_updated_at timestamp with time zone,
+ state_generation bigint
 );
 CREATE TABLE "device-management".entity_attribute_generations (
  id bigint NOT NULL,
@@ -1741,7 +1752,8 @@ CREATE TABLE "device-management".entity_relationships (
  target_type character varying(32) NOT NULL,
  target_id bigint NOT NULL,
  relationship_type_id bigint NOT NULL,
- target_token character varying(128)
+ target_token character varying(128),
+ membership_generation bigint
 );
 CREATE TABLE "device-management".facet_keys (
  id bigint NOT NULL,
@@ -2135,6 +2147,14 @@ CREATE TABLE "device-management".semantic_contexts (
  custom_prefixes jsonb NOT NULL,
  pack_versions jsonb NOT NULL
 );
+CREATE TABLE "device-management".static_membership_generations (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ group_id bigint NOT NULL,
+ member_type character varying(32) NOT NULL,
+ member_id bigint NOT NULL,
+ generation bigint NOT NULL
+);
 CREATE TRIGGER alarm_position_stale BEFORE UPDATE OF contributor_version ON "device-management".alarms FOR EACH ROW EXECUTE FUNCTION "device-management".alarm_position_stale();
 CREATE TRIGGER automation_review_guard_device_update BEFORE UPDATE OF device_type_id ON "device-management".devices FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
 CREATE TRIGGER automation_review_guard_profile_delete BEFORE DELETE ON "device-management".device_profiles FOR EACH ROW EXECUTE FUNCTION "device-management".automation_review_guard();
@@ -2212,6 +2232,7 @@ CREATE UNIQUE INDEX uix_profile_decoder_healths_window ON "device-management".pr
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_provision_key ON "device-management".provisioning_profiles USING btree (tenant_id, provision_key) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_token ON "device-management".provisioning_profiles USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_semantic_contexts_tenant ON "device-management".semantic_contexts USING btree (tenant_id) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_static_membership_generation ON "device-management".static_membership_generations USING btree (tenant_id, group_id, member_type, member_id);
 END
 $$;
 END

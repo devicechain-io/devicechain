@@ -17,7 +17,7 @@ namespace DeviceChain.Harborpulse.Hud
         readonly HarborpulseApp app;
         readonly GameObject root;
         readonly Font font;
-        readonly Text top, caption, banner, problem, upNext, preview;
+        readonly Text top, caption, banner, problem, upNext, preview, overlay, context;
         readonly Text[] nodes = new Text[5], tags = new Text[4];
         readonly Image bannerBackground;
         readonly GameObject[,] shapes = new GameObject[5, 3];
@@ -48,6 +48,9 @@ namespace DeviceChain.Harborpulse.Hud
             problem.color = new Color(1, .79f, .32f);
             upNext = Label("Up next", new Vector2(.035f, .27f), new Vector2(.56f, .32f), 22, true);
             preview = Label("Offline preview disclosure", new Vector2(.03f, .015f), new Vector2(.97f, .06f), 20, true);
+            context = Label("Page context", new Vector2(0, .885f), new Vector2(.5f, .93f), 24, true);
+            context.color = new Color(.78f, .84f, .90f);
+            overlay = Label("Cut disclosure", new Vector2(.055f, .40f), new Vector2(.62f, .50f), 28, true);
             for (var i = 0; i < nodes.Length; i++)
             {
                 nodes[i] = Label("Chain " + i, new Vector2(.735f, HudModel.RailRowTop - HudModel.RailRowHeight - i * HudModel.RailRowStep), new Vector2(.985f, HudModel.RailRowTop - i * HudModel.RailRowStep), 22, true);
@@ -93,7 +96,7 @@ namespace DeviceChain.Harborpulse.Hud
         public void Apply(DirectorView view, string badge, double sim, string rate, IReadOnlyList<WorldTag> worldTags, string extraProblem)
         {
             var vertical = app.TallFrame;
-            Show(top, badge + "  ·  Port Alder       " + HudModel.Clock(sim) + "  ·  " + HudModel.Beat(sim) + "       " + rate + "   [E] engineer");
+            Show(top, badge + "  ·  Port Alder       " + HudModel.Clock(sim) + "  ·  " + HudModel.Beat(sim) + "       " + rate + (badge == "RECORDED" ? "" : "   [E] engineer"));
             Show(caption, view.Caption);
             var captionRect = caption.transform.parent.GetComponent<RectTransform>();
             captionRect.anchorMin = new Vector2(.055f, vertical ? HudModel.CaptionBottomTall : HudModel.CaptionBottomWide);
@@ -102,6 +105,22 @@ namespace DeviceChain.Harborpulse.Hud
             bannerBackground.color = view.Banner.StartsWith("TEST CONTROL", StringComparison.Ordinal) ? new Color(.55f, .035f, .04f, .98f) : new Color(.04f, .06f, .09f, .98f);
             Show(problem, string.Join(" | ", new[] { view.Problem, extraProblem }.Where(s => !string.IsNullOrEmpty(s))));
             Show(upNext, view.UpNext);
+            Show(overlay, view.Overlay);
+            Show(context, view.Context);
+            if (!string.IsNullOrEmpty(view.Context))
+            {
+                // as wide as its text, under the top bar: a place name, not a banner
+                var contextRect = context.transform.parent.GetComponent<RectTransform>();
+                contextRect.anchorMin = new Vector2(0, .885f);
+                contextRect.anchorMax = new Vector2(Mathf.Min(vertical ? 1f : .7f, (HudModel.TagPadding + HudModel.TagGlyphWidth * 1.15f * view.Context.Length) / 1920f * (vertical ? 3.2f : 1f)), .93f);
+            }
+            if (!string.IsNullOrEmpty(view.Overlay))
+            {
+                // one line of the block per authored line, above the caption's box
+                var lines = view.Overlay.Split('\n').Length; var bottom = vertical ? HudModel.CaptionTopTall + .02f : HudModel.CaptionTopWide + .03f;
+                var overlayRect = overlay.transform.parent.GetComponent<RectTransform>();
+                overlayRect.anchorMin = new Vector2(.055f, bottom); overlayRect.anchorMax = new Vector2(vertical ? .945f : .62f, bottom + .012f + .034f * lines);
+            }
             Show(preview, badge == "OFFLINE PREVIEW" ? "OFFLINE PREVIEW · stand-in values, not platform data" : "");
             var rail = view.Rail.Skip(Math.Max(0, view.Rail.Count - (vertical ? HudModel.RailRowsTall : HudModel.RailRowsWide))).ToArray();
             for (var i = 0; i < nodes.Length; i++)
