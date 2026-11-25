@@ -11,6 +11,7 @@ import (
 	"github.com/devicechain-io/dcctl/bulkchange"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var bulkChangeCmd, bulkChangeReadinessCmd = newBulkChangeCommand("bulk-change")
@@ -19,8 +20,8 @@ var fleetOpCmd, fleetOpReadinessCmd = newBulkChangeCommand("fleet-op")
 func newBulkChangeCommand(name string) (*cobra.Command, *cobra.Command) {
 	parent := &cobra.Command{
 		Use:   name,
-		Short: "Preview. Inspect bulk change capabilities",
-		Long:  "Preview. Inspect this instance's bulk change capabilities using your tenant identity.\n\nIn v1.10, device fleet operations are called bulk changes. The deprecated dcctl fleet-op readiness alias keeps working and prints a one-line deprecation notice to stderr.",
+		Short: "Preview. Plan, run and inspect device bulk changes",
+		Long:  "Preview. Plan, run and inspect device bulk changes using your tenant identity.\n\nThe commands probe this instance for support. The deprecated dcctl fleet-op readiness alias keeps working and prints a one-line deprecation notice to stderr.",
 	}
 	readiness := &cobra.Command{
 		Use:   "readiness",
@@ -41,6 +42,8 @@ expected until the release that installs enforcement. Use -o json for the four f
 	}
 	if name == "fleet-op" {
 		parent.Deprecated = "Use dcctl bulk-change."
+		parent.Short = "Preview. Inspect bulk change capabilities"
+		parent.Long = "Preview. Inspect bulk change capabilities. This deprecated alias keeps readiness alone; use dcctl bulk-change for new commands."
 	}
 	flags := parent.PersistentFlags()
 	flags.StringP("tenant", "t", "", "tenant to inspect (required)")
@@ -50,8 +53,13 @@ expected until the release that installs enforcement. Use -o json for the four f
 	flags.String("email", "", "identity to authenticate as; it must be a member of the tenant (required)")
 	flags.String("password", "", "password for the identity (required)")
 	flags.String("otp", "", otpFlagHelp)
-	readiness.Flags().StringP("output", "o", "table", "output format: table or json")
+	flags.BoolP("help", "h", false, "help for bulk changes")
+	flags.VisitAll(func(f *pflag.Flag) { f.Usage = "Preview. " + f.Usage })
+	readiness.Flags().StringP("output", "o", "table", "Preview. Output format: table or json")
 	parent.AddCommand(readiness)
+	if name == "bulk-change" {
+		addBulkChangeCommands(parent)
+	}
 	return parent, readiness
 }
 
@@ -67,10 +75,10 @@ func newFleetOpSession(cmd *cobra.Command) (bulkchange.Client, string, error) {
 	email, _ := cmd.Flags().GetString("email")
 	password, _ := cmd.Flags().GetString("password")
 	if strings.TrimSpace(tenant) == "" {
-		return nil, "", fmt.Errorf("--tenant is required: readiness is per-tenant, and there is no default")
+		return nil, "", fmt.Errorf("--tenant is required: bulk changes are per-tenant, and there is no default")
 	}
 	if strings.TrimSpace(email) == "" || strings.TrimSpace(password) == "" {
-		return nil, "", fmt.Errorf("--email and --password are required: readiness is authorized as the identity that requests it")
+		return nil, "", fmt.Errorf("--email and --password are required: bulk changes are authorized as the identity that requests them")
 	}
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
 	session := userclient.NewTenantSession(nil, endpoints.UserGraphQL, email, password, tenant).
