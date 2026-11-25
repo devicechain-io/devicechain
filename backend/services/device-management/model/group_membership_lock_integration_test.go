@@ -8,218 +8,233 @@ package model
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
 type membershipRaceHolder struct{}
 
-// Each round forces an uncommitted holder and a second writer on separate
-// connections. Without the family lock both see an incomplete selector, although
-// the committed attributes satisfy it. This avoids depending on scheduler luck.
-func TestMembershipFamilyConcurrentWritesPostgres(t *testing.T) {
-	testMembershipFamilyRace(t, false)
-}
-
-func TestMembershipFamilyWriteRacingRegistrationPostgres(t *testing.T) {
-	testMembershipFamilyRace(t, true)
-}
-
-func testMembershipFamilyRace(t *testing.T, registration bool) {
+func membershipPostgres(t *testing.T) (*Api, context.Context) {
 	t.Helper()
-	for _, bypass := range []bool{false, true} {
-		t.Run(fmt.Sprintf("bypass=%t", bypass), func(t *testing.T) {
-			mgr := newPostgresRdbManager(t)
-			api := NewApi(mgr)
-			ctx, cancel := context.WithTimeout(core.WithTenant(context.Background(), fmt.Sprintf("family-%d", time.Now().UnixNano())), 90*time.Second)
-			defer cancel()
-			pool, err := mgr.Database.DB()
-			require.NoError(t, err)
-			pool.SetMaxOpenConns(8)
-			var isolation string
-			require.NoError(t, mgr.Database.WithContext(ctx).Raw("SHOW default_transaction_isolation").Scan(&isolation).Error)
-			require.Equal(t, "read committed", isolation, "family locking requires fresh snapshots after a lock wait")
-			_, err = api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: "sensor"})
-			require.NoError(t, err)
-			// Test-only seam: preserve the real attribute/registration paths, removing
-			// only the advisory locks. Never change production code for this control.
-			// Both writers address ONE device, so the per-device attribute lock
-			// (dc_entity_attr_lock) serializes them too and must be removed as well, or
-			// the control could never expose the race the family lock exists for.
-			if bypass {
-				require.NoError(t, mgr.Database.Callback().Raw().Before("gorm:raw").Register("test:bypass-family", func(db *gorm.DB) {
-					if sql := db.Statement.SQL.String(); strings.Contains(sql, "pg_advisory_xact_lock") || strings.Contains(sql, "dc_entity_attr_lock") {
-						db.Statement.SQL.Reset()
-						db.Statement.SQL.WriteString("SELECT 1")
-						db.Statement.Vars = nil
-					}
-				}))
-				defer mgr.Database.Callback().Raw().Remove("test:bypass-family")
+	mgr := newPostgresRdbManager(t)
+	ctx, cancel := context.WithTimeout(core.WithTenant(context.Background(), fmt.Sprintf("family-%d", time.Now().UnixNano())), 45*time.Second)
+	t.Cleanup(cancel)
+	pool, err := mgr.Database.DB()
+	require.NoError(t, err)
+	pool.SetMaxOpenConns(8) // two writers, a registrar and an independent observer
+	var isolation string
+	require.NoError(t, mgr.Database.WithContext(ctx).Raw("SHOW default_transaction_isolation").Scan(&isolation).Error)
+	require.Equal(t, "read committed", isolation, "membership needs fresh snapshots after a lock wait")
+	return NewApi(mgr), ctx
+}
+
+func membershipRaceEntity(t *testing.T, api *Api, ctx context.Context, family, token string) uint {
+	t.Helper()
+	switch family {
+	case "device":
+		_, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: token + "-type"})
+		require.NoError(t, err)
+		d, err := api.CreateDevice(ctx, &DeviceCreateRequest{Token: token, DeviceTypeToken: token + "-type"})
+		require.NoError(t, err)
+		return d.ID
+	case "asset":
+		_, err := api.CreateAssetType(ctx, &AssetTypeCreateRequest{Token: token + "-type"})
+		require.NoError(t, err)
+		a, err := api.CreateAsset(ctx, &AssetCreateRequest{Token: token, AssetTypeToken: token + "-type"})
+		require.NoError(t, err)
+		return a.ID
+	case "customer":
+		_, err := api.CreateCustomerType(ctx, &CustomerTypeCreateRequest{Token: token + "-type"})
+		require.NoError(t, err)
+		c, err := api.CreateCustomer(ctx, &CustomerCreateRequest{Token: token, CustomerTypeToken: token + "-type"})
+		require.NoError(t, err)
+		return c.ID
+	case "area":
+		_, err := api.CreateAreaType(ctx, &AreaTypeCreateRequest{Token: token + "-type"})
+		require.NoError(t, err)
+		a, err := api.CreateArea(ctx, &AreaCreateRequest{Token: token, AreaTypeToken: token + "-type"})
+		require.NoError(t, err)
+		return a.ID
+	default:
+		t.Fatalf("unsupported fixture family %q", family)
+		return 0
+	}
+}
+
+func membershipRaceGroup(t *testing.T, api *Api, ctx context.Context, family string) (*EntityGroup, int32) {
+	t.Helper()
+	mode, source := string(MembershipDynamic), `attr["a"] == "x" && attr["b"] == "y"`
+	g, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{Token: "group", MemberType: family, MembershipMode: &mode, Selector: &source})
+	require.NoError(t, err)
+	v, err := api.PublishEntityGroup(ctx, g.Token, nil, nil, "tester")
+	require.NoError(t, err)
+	return g, v.Version
+}
+
+func membershipRaceWrite(api *Api, ctx context.Context, family, token, key, value string) error {
+	_, err := api.SetEntityAttribute(ctx, &EntityAttributeSetRequest{EntityType: family, Entity: token,
+		Scope: "SHARED", AttrKey: key, ValueType: "STRING", Value: &value})
+	return err
+}
+
+// Park AFTER the real holder has evaluated its selector. This changes no SQL and
+// bypasses no lock: both facet writes and registration use the public API.
+func parkMembershipHolder(t *testing.T, api *Api, registration bool) (<-chan int, func()) {
+	t.Helper()
+	ready, release := make(chan int, 1), make(chan struct{})
+	var once, parked sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	park := func(db *gorm.DB) {
+		if db.Error != nil || db.Statement.Context.Value(membershipRaceHolder{}) != true {
+			return
+		}
+		if registration {
+			if _, ok := db.Statement.Dest.(*[]EntityMember); !ok {
+				return
 			}
-			diverged := 0
-			for round := 0; round < 50; round++ {
-				func() {
-					ctx, cancelRound := context.WithTimeout(ctx, 15*time.Second)
-					defer cancelRound()
-					token := fmt.Sprintf("device-%d", round)
-					device, err := api.CreateDevice(ctx, &DeviceCreateRequest{Token: token, DeviceTypeToken: "sensor"})
-					require.NoError(t, err)
-					g := createDynamicGroup(t, api, ctx, fmt.Sprintf("group-%d", round), `attr["a"] == "x" && attr["b"] == "y"`)
-					v, err := api.PublishEntityGroup(ctx, g.Token, nil, nil, "tester")
-					require.NoError(t, err)
-					if !registration {
-						require.NoError(t, api.RegisterGroupVersionForScoping(ctx, g.Token, v.Version))
-					}
-					x := "x"
-					attr := &EntityAttribute{EntityType: "device", EntityId: device.ID, Scope: "SHARED", AttrKey: "a", ValueType: "STRING", Value: rdb.NullStrOf(&x)}
-					if registration {
-						// a is already committed; the race is registration's empty
-						// backfill versus the final b write, before refs commit.
-						require.NoError(t, api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-							markAsProtocolWriter(t, tx)
-							return tx.Create(attr).Error
-						}))
-					}
-					ready, release := make(chan int, 1), make(chan struct{})
-					var once sync.Once
-					var parked sync.Once
-					unblock := func() { once.Do(func() { close(release) }) }
-					defer unblock()
-					park := func(db *gorm.DB) {
-						if db.Statement.Context.Value(membershipRaceHolder{}) != true || db.Error != nil {
-							return
-						}
-						if registration {
-							if _, ok := db.Statement.Dest.(*[]EntityMember); !ok {
-								return
-							}
-						} else if db.Statement.Table != "entity_group_memberships" {
-							return
-						}
-						parked.Do(func() {
-							var pid int
-							if err := db.Session(&gorm.Session{NewDB: true}).Raw("SELECT pg_backend_pid()").Scan(&pid).Error; err != nil {
-								db.AddError(err)
-								return
-							}
-							ready <- pid
-							select {
-							case <-release:
-							case <-ctx.Done():
-								db.AddError(ctx.Err())
-							}
-						})
-					}
-					if registration {
-						require.NoError(t, mgr.Database.Callback().Query().After("gorm:query").Register("test:park-holder", park))
-						defer mgr.Database.Callback().Query().Remove("test:park-holder")
-					} else {
-						require.NoError(t, mgr.Database.Callback().Delete().After("gorm:delete").Register("test:park-holder", park))
-						defer mgr.Database.Callback().Delete().Remove("test:park-holder")
-					}
-					holderDone := make(chan error, 1)
-					var workers sync.WaitGroup
-					defer func() {
-						unblock()
-						cancelRound()
-						workers.Wait()
-					}()
-					workers.Add(1)
-					go func() {
-						defer workers.Done()
-						holderCtx := context.WithValue(ctx, membershipRaceHolder{}, true)
-						if registration {
-							holderDone <- api.RegisterGroupVersionForScoping(holderCtx, g.Token, v.Version)
-						} else {
-							_, err := api.SetEntityAttribute(holderCtx, &EntityAttributeSetRequest{EntityType: "device", Entity: token,
-								Scope: "SHARED", AttrKey: "a", ValueType: "STRING", Value: &x})
-							holderDone <- err
-						}
-					}()
-					var pid int
-					select {
-					case pid = <-ready:
-					case err := <-holderDone:
-						t.Fatalf("holder finished before overlap: %v", err)
-					case <-ctx.Done():
-						t.Fatal(ctx.Err())
-					}
-					// The holder has evaluated false and cannot yet commit. The
-					// actual public write must either wait for it or (control)
-					// commit a stale membership before the holder is released.
-					done := make(chan error, 1)
-					writerCtx, stopWriter := context.WithTimeout(ctx, 10*time.Second)
-					defer stopWriter()
-					workers.Add(1)
-					go func() {
-						defer workers.Done()
-						y := "y"
-						_, err := api.SetEntityAttribute(writerCtx, &EntityAttributeSetRequest{EntityType: "device", Entity: token,
-							Scope: "SHARED", AttrKey: "b", ValueType: "STRING", Value: &y})
-						done <- err
-					}()
-					if bypass {
-						select {
-						case err := <-done:
-							require.NoError(t, err)
-						case <-writerCtx.Done():
-							t.Fatal("unlocked writer failed to finish while holder was open")
-						}
-					} else {
-						// Identify this schema's holder by backend PID rather than
-						// accepting an unrelated lock wait elsewhere in the server.
-						require.Eventually(t, func() bool {
-							var waiting int64
-							queryErr := mgr.Database.WithContext(writerCtx).Raw(`SELECT count(*) FROM pg_locks w JOIN pg_locks h
-								ON w.locktype = h.locktype AND w.database = h.database
-								AND w.classid = h.classid AND w.objid = h.objid AND w.objsubid = h.objsubid
-								WHERE h.pid = ? AND h.locktype = 'advisory' AND h.granted AND NOT w.granted`, pid).Scan(&waiting).Error
-							return queryErr == nil && waiting > 0
-						}, 5*time.Second, 10*time.Millisecond, "second writer must wait on holder's family lock")
-					}
-					unblock()
-					select {
-					case err := <-holderDone:
-						require.NoError(t, err)
-					case <-ctx.Done():
-						t.Fatal(ctx.Err())
-					}
-					if !bypass {
-						select {
-						case err := <-done:
-							require.NoError(t, err)
-						case <-writerCtx.Done():
-							t.Fatal("writer failed to finish after holder committed")
-						}
-					}
-					var attrs []EntityAttribute
-					require.NoError(t, api.RDB.DB(ctx).Where("entity_type = ? AND entity_id = ? AND scope = ?", "device", device.ID, "SHARED").Find(&attrs).Error)
-					values := map[string]string{}
-					for _, a := range attrs {
-						values[a.AttrKey] = a.Value.String
-					}
-					want := values["a"] == "x" && values["b"] == "y"
-					require.True(t, want, "both writes must have committed")
-					got := isMemberOf(t, api, ctx, "device", device.ID, g.ID, v.Version)
-					if got != want {
-						diverged++
-					}
-					if !bypass {
-						require.Equal(t, want, got, "round %d: membership differs from committed selector", round)
-					}
-					require.NoError(t, api.DeregisterGroupVersionForScoping(ctx, g.Token, v.Version))
-				}()
+		} else if db.Statement.Table != "entity_group_memberships" {
+			return
+		}
+		parked.Do(func() {
+			var pid int
+			if err := db.Session(&gorm.Session{NewDB: true}).Raw("SELECT pg_backend_pid()").Scan(&pid).Error; err != nil {
+				db.AddError(err)
+				return
 			}
-			if bypass {
-				require.Positive(t, diverged, "negative control must expose stale membership")
+			ready <- pid
+			select {
+			case <-release:
+			case <-db.Statement.Context.Done():
+				db.AddError(db.Statement.Context.Err())
 			}
 		})
 	}
+	if registration {
+		require.NoError(t, api.RDB.Database.Callback().Query().After("gorm:query").Register("test:membership-holder", park))
+		t.Cleanup(func() { api.RDB.Database.Callback().Query().Remove("test:membership-holder") })
+	} else {
+		require.NoError(t, api.RDB.Database.Callback().Delete().After("gorm:delete").Register("test:membership-holder", park))
+		t.Cleanup(func() { api.RDB.Database.Callback().Delete().Remove("test:membership-holder") })
+	}
+	t.Cleanup(unblock)
+	return ready, unblock
+}
+
+func membershipHolderPID(t *testing.T, ctx context.Context, ready <-chan int, done <-chan error) int {
+	t.Helper()
+	select {
+	case pid := <-ready:
+		return pid
+	case err := <-done:
+		t.Fatalf("holder finished before overlap: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	return 0
+}
+
+func membershipWriterDone(t *testing.T, ctx context.Context, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
+// Match the holder's precise advisory key and backend, so an unrelated lock wait
+// elsewhere in the server cannot satisfy the synchronization.
+func membershipWaiters(db *gorm.DB, pid int) (int64, error) {
+	var waiting int64
+	err := db.Raw(`SELECT count(*) FROM pg_locks w JOIN pg_locks h
+		ON w.locktype = h.locktype AND w.database = h.database
+		AND w.classid = h.classid AND w.objid = h.objid AND w.objsubid = h.objsubid
+		WHERE h.pid = ? AND h.locktype = 'advisory' AND h.granted AND NOT w.granted`, pid).Scan(&waiting).Error
+	return waiting, err
+}
+
+func TestMembershipFamilyConcurrentWritesPostgres(t *testing.T) {
+	for _, family := range []string{"device", "asset", "customer", "area"} {
+		t.Run(family, func(t *testing.T) { testMembershipFamilyRace(t, family, false) })
+	}
+}
+
+func TestMembershipFamilyWriteRacingRegistrationPostgres(t *testing.T) {
+	for _, family := range []string{"device", "asset", "customer", "area"} {
+		t.Run(family, func(t *testing.T) { testMembershipFamilyRace(t, family, true) })
+	}
+}
+
+// The holder sees false, then the second facet is written on another connection.
+// With a non-device shared-lock mutant, that writer commits an incomplete result
+// before the holder. We let both commit and compare membership with the committed
+// facets, so the failure proves write skew rather than just lock mode.
+func testMembershipFamilyRace(t *testing.T, family string, registration bool) {
+	t.Helper()
+	api, ctx := membershipPostgres(t)
+	id := membershipRaceEntity(t, api, ctx, family, "member")
+	g, version := membershipRaceGroup(t, api, ctx, family)
+	if registration {
+		require.NoError(t, membershipRaceWrite(api, ctx, family, "member", "a", "x"))
+	} else {
+		require.NoError(t, api.RegisterGroupVersionForScoping(ctx, g.Token, version))
+	}
+	ready, unblock := parkMembershipHolder(t, api, registration)
+	var workers sync.WaitGroup
+	defer func() { unblock(); workers.Wait() }()
+	holderDone := make(chan error, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		holderCtx := context.WithValue(ctx, membershipRaceHolder{}, true)
+		if registration {
+			holderDone <- api.RegisterGroupVersionForScoping(holderCtx, g.Token, version)
+		} else {
+			holderDone <- membershipRaceWrite(api, holderCtx, family, "member", "a", "x")
+		}
+	}()
+	pid := membershipHolderPID(t, ctx, ready, holderDone)
+	done := make(chan error, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		done <- membershipRaceWrite(api, ctx, family, "member", "b", "y")
+	}()
+	finished := false
+	var writerErr error
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-done:
+			writerErr = err
+			finished = true
+			return true
+		default:
+		}
+		n, err := membershipWaiters(api.RDB.Database.WithContext(ctx), pid)
+		return err == nil && n > 0
+	}, 10*time.Second, 10*time.Millisecond, "writer must block or expose shared-mode write skew")
+	require.NoError(t, writerErr)
+	unblock()
+	membershipWriterDone(t, ctx, holderDone)
+	if !finished {
+		membershipWriterDone(t, ctx, done)
+	}
+	var attrs []EntityAttribute
+	require.NoError(t, api.RDB.DB(ctx).Where("entity_type = ? AND entity_id = ? AND scope = ?", family, id, "SHARED").Find(&attrs).Error)
+	values := map[string]string{}
+	for _, attr := range attrs {
+		values[attr.AttrKey] = attr.Value.String
+	}
+	require.Equal(t, "x", values["a"])
+	require.Equal(t, "y", values["b"])
+	require.True(t, isMemberOf(t, api, ctx, family, id, g.ID, version), "membership must match BOTH committed facets (finished before holder: %t)", finished)
+	// A solitary writer is the counterweight: an ordinary leave still works.
+	require.NoError(t, membershipRaceWrite(api, ctx, family, "member", "b", "other"))
+	require.False(t, isMemberOf(t, api, ctx, family, id, g.ID, version))
 }
