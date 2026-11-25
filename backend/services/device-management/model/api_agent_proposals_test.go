@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,7 +34,7 @@ type fakeDecider struct {
 	actErr      error
 	exec        actiongate.ExecutionDecision
 	execErr     error
-	actCalls    int
+	actCalls    atomic.Int64 // the concurrent-proposal integration test calls Actuation from many goroutines
 	execReqs    []actiongate.ExecutionRequest
 	execBearers []string
 	second      func() (actiongate.ExecutionDecision, error)
@@ -41,7 +42,7 @@ type fakeDecider struct {
 }
 
 func (f *fakeDecider) Actuation(context.Context, actiongate.ActuationRequest) (actiongate.ActuationDecision, error) {
-	f.actCalls++
+	f.actCalls.Add(1)
 	return f.act, f.actErr
 }
 
@@ -577,7 +578,7 @@ func TestAlarmProposalRequestIsBounded(t *testing.T) {
 	_, err := r.api.ProposeAlarmAction(tenantCtx(rigTenant), rigAgent, AlarmProposalRequest{Action: AlarmProposalAck,
 		AlarmTokens: []string{"a1"}, RequestId: "r", Rationale: &long})
 	require.Error(t, err)
-	require.Zero(t, r.decider.actCalls, "nothing is asked for a malformed request")
+	require.Zero(t, r.decider.actCalls.Load(), "nothing is asked for a malformed request")
 }
 
 // A prior factor must still be fresh at completion; re-approving replaces a stale entry.
