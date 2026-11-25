@@ -77,7 +77,9 @@ type GeoFenceCapRefusalCounter interface {
 type Api struct {
 	suppressionCache suppressionCache
 	// fleetExpiryCursor is where the next expiry pass resumes its tenant discovery.
-	fleetExpiryCursor fleetExpiryCursor
+	fleetExpiryCursor             fleetExpiryCursor
+	fleetSettlementFastCursor     fleetSettlementCursor
+	fleetSettlementDeadlineCursor fleetSettlementCursor
 	// DeviceCredentialChecker shares password backoff between HTTP uplinks and MQTT connects.
 	DeviceCredentialChecker *credential.Checker
 
