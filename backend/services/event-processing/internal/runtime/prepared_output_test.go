@@ -16,6 +16,19 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
+func TestReplayAnnotationPreservesDetectionIdentity(t *testing.T) {
+	p := NewPublisher(&idWriter{}, goldenRegistry(), newFakeMetrics())
+	d := goldenDetections()[0]
+	live, liveOK := p.Prepare(d, goldenTriggeredAt, false)
+	replay, replayOK := p.Prepare(d, goldenTriggeredAt, true)
+	if !liveOK || !replayOK || live.DedupID != replay.DedupID {
+		t.Fatal("replay changed the detection's idempotency identity")
+	}
+	if !bytes.Contains(replay.Payload, []byte(`"replayed":true`)) || bytes.Contains(live.Payload, []byte(`"replayed"`)) {
+		t.Fatalf("replay annotation not carried additively: live=%s replay=%s", live.Payload, replay.Payload)
+	}
+}
+
 // idWriter records each write's tenant, bytes and dedup id.
 type idWriter struct {
 	writes []idWrite
@@ -110,7 +123,7 @@ func TestPrepareIsWhatPublishWrites(t *testing.T) {
 		if err := ps.Publish(context.Background(), d, goldenTriggeredAt); err != nil {
 			t.Fatal(err)
 		}
-		po, ok := pp.Prepare(d, goldenTriggeredAt)
+		po, ok := pp.Prepare(d, goldenTriggeredAt, false)
 		if !ok {
 			t.Fatalf("%+v: not prepared", d)
 		}
@@ -151,7 +164,7 @@ func TestPrepareRefusesWhatPublishDrops(t *testing.T) {
 		if err := NewPublisher(ws, reg, ms).Publish(context.Background(), d, time.Time{}); err != nil {
 			t.Fatalf("%s: Publish returned %v for a terminal drop", tc.rule, err)
 		}
-		if _, ok := NewPublisher(&idWriter{}, reg, mp).Prepare(d, time.Time{}); ok {
+		if _, ok := NewPublisher(&idWriter{}, reg, mp).Prepare(d, time.Time{}, false); ok {
 			t.Fatalf("%s: prepared a detection Publish drops", tc.rule)
 		}
 		if len(ws.writes) != 0 || ms.rejected[tc.reason] != 1 || mp.rejected[tc.reason] != 1 {
@@ -168,7 +181,7 @@ func TestRecheckAndSend(t *testing.T) {
 	w := &idWriter{}
 	p := NewPublisher(w, reg, m)
 	d := goldenDetections()[0]
-	po, ok := p.Prepare(d, goldenTriggeredAt)
+	po, ok := p.Prepare(d, goldenTriggeredAt, false)
 	if !ok || !p.Recheck(d, po) {
 		t.Fatal("an eligible prepared output was refused")
 	}

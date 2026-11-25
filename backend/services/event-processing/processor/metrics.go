@@ -506,6 +506,7 @@ type ReactMetrics struct {
 	dispatched          *prometheus.CounterVec
 	notEnabled          *prometheus.CounterVec
 	connectorShed       *prometheus.CounterVec
+	commandRefused      *prometheus.CounterVec
 	permanentlyRejected *prometheus.CounterVec
 	dropped             *prometheus.CounterVec
 	// causeOmitted counts commands enqueued WITHOUT their cause, by reason (commandClient).
@@ -553,6 +554,7 @@ func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 		return nil
 	}
 	return &ReactMetrics{
+		commandRefused:      ms.NewCounterVec("react_command_refused_total", "Command send attempts refused by source policy, by bounded reason and result (unwanted).", []string{"reason", "result"}),
 		shedSummaryPass:     ms.NewPeriodicTaskMetrics("shed_summary"),
 		dispatched:          ms.NewCounterVec("react_actions_dispatched_total", "REACT actions handed to their sink, by action type (includes idempotent replays).", []string{"action"}),
 		notEnabled:          ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but dropped because this deployment has no sink for them, by action type: sendCommand without command-delivery configured, or httpCall/publish without outbound connectors enabled. The alarm sink is always wired, so raiseAlarm/clearAlarm should never appear here.", []string{"action"}),
@@ -563,8 +565,8 @@ func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 		orphan:              ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched)."),
 		poisonDropped:       ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch). Now that such an event is dead-lettered (ADR-024), this counts the same events react_events_dead_lettered_total does — kept because it is what the ReactPoisonDropping alert has always fired on, and a metric an alert is built around is not renamed for tidiness."),
 		deadLettered:        ms.NewCounter("react_events_dead_lettered_total", "Derived events written to the dead-letter stream after the redelivery cap, so their actions can be inspected rather than vanishing (ADR-024)."),
-		shedDeadLettered:    precreated(ms.NewCounterVec("react_connector_shed_dead_lettered_total", "Connector actions (httpCall/publish) shed at the source and recorded as an individual dead letter with reason shed, by action type.", []string{"action"})),
-		shedUnlettered:      precreated(ms.NewCounterVec("react_connector_shed_unlettered_total", "Connector actions (httpCall/publish) shed at the source past the tenant's or the service's dead-letter budget, so counted and summarised in one letter per tenant per minute rather than recorded individually, by action type.", []string{"action"})),
+		shedDeadLettered:    precreated(ms.NewCounterVec("react_connector_shed_dead_lettered_total", "Actions refused at the source (httpCall/publish over the tenant's outbound rate, sendCommand for any react_command_refused_total reason) and recorded as an individual dead letter with reason shed, by action type.", []string{"action"})),
+		shedUnlettered:      precreated(ms.NewCounterVec("react_connector_shed_unlettered_total", "Actions refused at the source (httpCall/publish/sendCommand) past the tenant's or the service's dead-letter budget, so counted and summarised in one letter per tenant per minute rather than recorded individually, by action type.", []string{"action"})),
 		clockFallback:       core.NewRateClockFallbacks(ms),
 		workers:             ms.NewGauge("react_workers", "How many derived events REACT may dispatch at once (react.workers). Events of one device are dispatched one after another, in stream order, except that an event left for redelivery is dispatched again after the events behind it."),
 		inFlight:            ms.NewGauge("react_derived_in_flight", "Derived events REACT has taken from the stream and not yet finished with: waiting for their device's worker or being dispatched. Normally at most react_workers; more while deliveries wait past their ack deadline."),
@@ -712,6 +714,15 @@ func (m *ReactMetrics) RecordConnectorShed(action string) {
 		return
 	}
 	m.connectorShed.WithLabelValues(action).Inc()
+}
+
+// RecordCommandRefused records policy refusals, not exhausted dispatches. The
+// core vocabulary reserves result=dropped for giving up after failures.
+func (m *ReactMetrics) RecordCommandRefused(reason string) {
+	if m == nil {
+		return
+	}
+	m.commandRefused.WithLabelValues(reason, core.ResultUnwanted).Inc()
 }
 
 // RecordOrphan records one derived event whose rule was gone (react.Metrics).

@@ -347,7 +347,7 @@ func TestShedLettersOutliveTheDeliveryDeadline(t *testing.T) {
 	rule := connectorRule(httpCallAction(), sendCommandAction())
 	publish := startReactOnBroker(t, ackWait, func(ms *core.Microservice, reader messaging.MessageReader, dl *deadletter.Producer) *ReactDispatcher {
 		return NewReactDispatcher(ms, reader, 1, reactFakeResolver{rule: rule, found: true}, hungSuccessSink{}, nil,
-			&connSink{}, &meterGate{}, dl.NewSink(dead), testShedBudget, NewReactMetrics(ms))
+			&connSink{}, &meterGate{admit: false}, dl.NewSink(dead), testShedBudget, NewReactMetrics(ms))
 	})
 	publish()
 
@@ -370,7 +370,7 @@ func TestTheExhaustedLetterNamesTheShedActionsToo(t *testing.T) {
 	// The shed action's token, read off the shed letter a Done attempt of the same detection
 	// writes: tokens are content hashes, so it is the one the exhausted letter must name.
 	doneDead := &deadRecorder{}
-	done, _ := reactWithConnectors(t, rule, &reactFakeSink{}, &connSink{}, &meterGate{}, doneDead, testShedBudget)
+	done, _ := reactWithConnectors(t, rule, &reactFakeSink{}, &connSink{}, &meterGate{admit: false}, doneDead, testShedBudget)
 	done.handle(derivedMsg(t, "acme", sendCmdEvent(), 1, &fakeAck{}))
 	shedLetters := doneDead.letters(t)
 	require.Len(t, shedLetters, 1)
@@ -379,7 +379,7 @@ func TestTheExhaustedLetterNamesTheShedActionsToo(t *testing.T) {
 
 	dead := &deadRecorder{}
 	cmd := &reactFakeSink{fail: true}
-	rd, _ := reactWithConnectors(t, rule, cmd, &connSink{}, &meterGate{}, dead, testShedBudget)
+	rd, _ := reactWithConnectors(t, rule, cmd, &connSink{}, &meterGate{admit: false}, dead, testShedBudget)
 	last := &fakeAck{}
 	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), messaging.MaxDeliver, last))
 

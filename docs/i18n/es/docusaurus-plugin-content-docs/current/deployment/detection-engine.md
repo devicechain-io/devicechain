@@ -579,9 +579,9 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 | `maxRulesPerTenant` | 500 | Umbral de información del motor. La publicación y la reversión aplican un techo **solo cuando el nivel fija explícitamente `rulesPerTenant`**; un valor ausente o `null` mantiene la medición sin rechazo. |
 | `maxLiveKeysPerTenant` | 1000000 | Techo por inquilino de ventanas y temporizadores vivos. También se mide, no se aplica. |
 | `maxRetainedSamplesPerTenant` | 5000000 | Techo por inquilino de lecturas retenidas dentro de las ventanas abiertas. También se mide, no se aplica. |
-| `outboundCallsPerSecond` | 100 | Tasa por inquilino a la que se despachan las acciones de conector de salida, medida según el momento en que la telemetría que las desencadenó llegó a la plataforma. |
-| `outboundBurst` | 200 | Margen de ráfaga para lo anterior. |
-| `shedLetterPerSecond` | 1 | Tasa por inquilino a la que las acciones de salida descartadas se registran como mensajes no entregados individuales. |
+| `outboundCallsPerSecond` | 100 | Tasa de despacho por inquilino para llamadas a conectores (`httpCall` y `publish`). Los comandos tienen un presupuesto separado del mismo tamaño, con la misma configuración y los mismos límites propios del inquilino. Ambos se miden según el momento en que la telemetría que los desencadenó llegó a la plataforma. Un límite propio del inquilino tiene prioridad. |
+| `outboundBurst` | 200 | Margen de ráfaga para cada uno de los dos presupuestos separados. |
+| `shedLetterPerSecond` | 1 | Tasa por inquilino a la que los comandos rechazados y las acciones de salida descartadas se registran como mensajes no entregados individuales. |
 | `shedLetterBurst` | 60 | Margen de ráfaga para lo anterior. |
 | `shedLetterGlobalPerSecond` | 10 | Lo mismo, para todos los inquilinos. Las acciones descartadas por encima de cualquiera de los dos presupuestos se cuentan y se resumen en un mensaje no entregado por inquilino y minuto. |
 | `shedLetterGlobalBurst` | 100 | Margen de ráfaga para lo anterior. |

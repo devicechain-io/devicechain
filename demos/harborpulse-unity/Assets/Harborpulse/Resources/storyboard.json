@@ -6,7 +6,7 @@
       "priority": 1,
       "windowSim": [
         6,
-        27
+        28.4
       ],
       "plannedSim": 6,
       "preRollS": 3,
@@ -2605,7 +2605,7 @@
       "priority": 75,
       "windowSim": [
         26,
-        27
+        28.4
       ],
       "plannedSim": 26,
       "preRollS": 3,
@@ -2651,9 +2651,7 @@
           "holdMaxS": 14,
           "cueSim": 26.15,
           "until": null,
-          "captions": [
-            "few"
-          ],
+          "captions": [],
           "followDeviceFromTrigger": "none"
         },
         {
@@ -2678,10 +2676,18 @@
           "to": "pose:night-home",
           "moveS": 0,
           "holdMinS": 8,
-          "holdMaxS": 11,
+          "holdMaxS": 120,
           "cueSim": 26.6,
-          "until": null,
+          "until": {
+            "rollout": {
+              "status": "TERMINAL",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "identity": "$trigger.identity"
+            }
+          },
           "captions": [
+            "few",
             "done",
             "ota-summary"
           ],
@@ -2979,13 +2985,13 @@
       "id": "9",
       "priority": 1,
       "windowSim": [
-        26.7,
+        27.6,
         30
       ],
-      "plannedSim": 26.7,
+      "plannedSim": 27.6,
       "preRollS": 3,
       "triggerTimeoutS": 120,
-      "queueTtlS": 30,
+      "queueTtlS": 150,
       "once": false,
       "cutsOnly": false,
       "watch": null,
@@ -2999,7 +3005,7 @@
           "moveS": 0,
           "holdMinS": 10,
           "holdMaxS": 40,
-          "cueSim": 26.7,
+          "cueSim": 27.6,
           "until": null,
           "captions": [
             "bridge",

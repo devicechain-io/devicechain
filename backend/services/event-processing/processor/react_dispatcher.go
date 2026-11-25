@@ -141,11 +141,11 @@ type ReactDispatcher struct {
 // a time.
 func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader, workers int,
 	resolver react.RuleResolver, commands react.CommandSink, alarms react.AlarmSink, connectors react.ConnectorSink,
-	connectorRate react.ConnectorRateGate, dead *deadletter.Sink, sheds ShedLetterBudget, m *ReactMetrics) *ReactDispatcher {
+	connectorRate react.ConnectorRateGate, dead *deadletter.Sink, sheds ShedLetterBudget, m *ReactMetrics, opts ...react.Option) *ReactDispatcher {
 	rd := &ReactDispatcher{
 		reader:     reader,
 		workers:    workers,
-		dispatcher: react.NewDispatcher(resolver, commands, alarms, connectors, connectorRate, m),
+		dispatcher: react.NewDispatcher(resolver, commands, alarms, connectors, connectorRate, m, opts...),
 		metrics:    m,
 		dead:       dead,
 		sheds:      newShedLetterer(dead, sheds, m),
@@ -584,7 +584,7 @@ func undispatchedDetail(res react.Result) string {
 		parts = append(parts, f.Kind+"/failed/"+f.Token)
 	}
 	for _, s := range res.Shed {
-		parts = append(parts, s.Kind+"/shed/"+s.Token)
+		parts = append(parts, s.Kind+"/"+s.ReasonCode()+"/"+s.Token)
 	}
 	return strings.Join(parts, "; ")
 }

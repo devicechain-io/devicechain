@@ -298,7 +298,7 @@ func (p *publishPass) admit() {
 					// and preparing that one too would let the count creep with mixed sizes.
 					return
 				}
-				out, ok := p.pub.Prepare(d.Detection, d.triggeredAt)
+				out, ok := p.pub.Prepare(d.Detection, d.triggeredAt, d.replayed)
 				if !ok {
 					p.drop(i)
 					continue

@@ -48,6 +48,11 @@ func TestMembershipFamilyLockPrecedesMaintenance(t *testing.T) {
 					if !strings.Contains(tx.Statement.SQL.String(), "pg_advisory_xact_lock") {
 						return
 					}
+					if path == "attribute" {
+						require.Contains(t, tx.Statement.SQL.String(), "pg_advisory_xact_lock_shared(")
+					} else {
+						require.Equal(t, "SELECT pg_advisory_xact_lock(?)", tx.Statement.SQL.String())
+					}
 					locked = true
 					if refuse {
 						tx.AddError(denied)
@@ -94,14 +99,21 @@ func stubAttributeProtocolPostgresSQL(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	require.NoError(t, db.Callback().Raw().Before("gorm:raw").Register("test:attribute-protocol-functions", func(tx *gorm.DB) {
 		sql := tx.Statement.SQL.String()
-		if strings.Contains(sql, "dc_entity_attr_lock") || strings.Contains(sql, "set_config('devicechain.attr_protocol'") {
+		if strings.Contains(sql, "dc_entity_attr_lock") || strings.Contains(sql, "set_config('devicechain.attr_protocol'") ||
+			strings.Contains(sql, "set_config('devicechain.attr_device'") {
 			tx.Statement.SQL.Reset()
 			tx.Statement.SQL.WriteString("SELECT 1")
 			tx.Statement.Vars = nil
 		}
 	}))
 	require.NoError(t, db.Callback().Row().Before("gorm:row").Register("test:attribute-generation-sequence", func(tx *gorm.DB) {
-		if strings.Contains(tx.Statement.SQL.String(), "nextval(") {
+		if strings.Contains(tx.Statement.SQL.String(), "current_setting('devicechain.attr_device'") {
+			// This fixture emulates successful acquisition of K_dev above.
+			// Missing ownership and savepoint rollback have their own tests.
+			tx.Statement.SQL.Reset()
+			tx.Statement.SQL.WriteString("SELECT 1")
+			tx.Statement.Vars = nil
+		} else if strings.Contains(tx.Statement.SQL.String(), "nextval(") {
 			tx.Statement.SQL.Reset()
 			tx.Statement.SQL.WriteString("SELECT COALESCE(MAX(generation), 0) + 1 FROM entity_attribute_generations")
 			tx.Statement.Vars = nil

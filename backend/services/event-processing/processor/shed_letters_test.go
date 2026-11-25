@@ -78,13 +78,13 @@ func sendCommandAction() rules.Action {
 // with a dead-letter sink from a producer on a Microservice with its own registry — over a
 // connector sink and a source gate.
 func reactWithConnectors(t *testing.T, rule rules.Rule, commands react.CommandSink, conns react.ConnectorSink,
-	gate react.ConnectorRateGate, dead deadletter.Writer, budget ShedLetterBudget) (*ReactDispatcher, *prometheus.Registry) {
+	gate react.ConnectorRateGate, dead deadletter.Writer, budget ShedLetterBudget, opts ...react.Option) (*ReactDispatcher, *prometheus.Registry) {
 	t.Helper()
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-processing"}
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
 	rd := NewReactDispatcher(ms, nil, 1, reactFakeResolver{rule: rule, found: true}, commands, nil, conns, gate,
-		deadletter.NewProducer(ms).NewSink(dead), budget, NewReactMetrics(ms))
+		deadletter.NewProducer(ms).NewSink(dead), budget, NewReactMetrics(ms), opts...)
 	rd.procCtx = context.Background()
 	return rd, reg
 }
@@ -178,7 +178,7 @@ func TestTwoShedActionsInOneEventWriteTwoLetters(t *testing.T) {
 func TestARetriedEventWritesNoShedLetter(t *testing.T) {
 	dead := &deadRecorder{}
 	rd, _ := reactWithConnectors(t, connectorRule(httpCallAction(), sendCommandAction()),
-		&reactFakeSink{fail: true}, &connSink{}, &meterGate{}, dead, testShedBudget)
+		&reactFakeSink{fail: true}, &connSink{}, &meterGate{admit: false}, dead, testShedBudget)
 	ack := &fakeAck{}
 	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), 1, ack))
 

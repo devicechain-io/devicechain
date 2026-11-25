@@ -204,7 +204,7 @@ func TestDisarmThenMessageKeepsOrderIdentityAndNotEarly(t *testing.T) {
 	}
 	// The expected id comes from the detection alone, with an unrelated trigger time: the id must not
 	// depend on when or by which path the detection was drained.
-	pre, ok := rp.publisher.Prepare(detectcore.Detection{RuleID: absID, Series: "dev1", Kind: detectcore.Absence, At: wm, Edge: detectcore.EdgeResolved}, testBase.Add(99*time.Hour))
+	pre, ok := rp.publisher.Prepare(detectcore.Detection{RuleID: absID, Series: "dev1", Kind: detectcore.Absence, At: wm, Edge: detectcore.EdgeResolved}, testBase.Add(99*time.Hour), false)
 	if !ok {
 		t.Fatal("prepare refused the Resolved")
 	}

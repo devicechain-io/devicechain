@@ -65,8 +65,9 @@ guide page and, for each GraphQL operation, field, argument, type and enum value
 in its description. While a surface is in preview it can change
 incompatibly in a minor release; when it does, that release's section in
 [Releases & Upgrades](./releases-and-upgrades.md) says what changed and what to do. A surface stays in
-preview for at most two minor releases (except the executor kinds described below); by the end of
-the second it is promoted, and covered like everything else. An incompatible change to a preview surface is not exempt from the project's
+preview until its own stated promotion condition is met, then becomes covered. The **default**
+condition is two minors after it joined the preview tier; a surface may state a different condition
+below. Each listed surface states which condition applies. An incompatible change to a preview surface is not exempt from the project's
 compatibility checks: it is declared there as an intended break, the same way as any other, so no
 preview change ships unnoticed. A file format in the preview tier carries a version, such as
 `v1alpha1`, and a tool that does not know the version refuses the file rather than guessing.
@@ -92,22 +93,39 @@ alone does not promote the executor kinds. No executor action is executable in t
 otherwise-valid requests are refused as `NotExecutableInThisBuild` (see
 [In-cluster executor](./kubernetes-operator.md#in-cluster-executor)).
 
-Other Preview surfaces include the rule tests: the `evaluateRules` operation of the
+Rule testing and product as code are **covered from v1.10** and are no longer Preview from that release.
+Rule testing includes the `evaluateRules` operation of the
 event-processing API, the scenario and test file formats, and the `dcctl test` command that reads them
-(see [Testing your rules](../guides/testing-your-rules.md)). Product as code: `dcctl product export`,
-`plan` and `apply`, and their bundle format (see [Product as Code](../guides/product-as-code.md)). And
-agent actions: the `act:*` OAuth scopes and their derived proposal authorities; the agent policy
+(see [Testing your rules](../guides/testing-your-rules.md)).
+Product as code includes `dcctl product export`,
+`plan` and `apply`, and their bundle format (see [Product as Code](../guides/product-as-code.md));
+both surfaces joined Preview in v1.3.
+
+Other Preview surfaces include agent actions: the `act:*` OAuth scopes and their derived proposal authorities; the agent policy
 operations (`agentPolicy`, `agentPolicyVersions`, `saveAgentPolicyDraft`, `publishAgentPolicy`,
 `rollbackAgentPolicy`, `setAgentActuation`) and its document (format `v1alpha1`); the
 `agentActuationDecision` and `agentExecutionDecision` queries; the operator's per-tenant controls
 (`tenantAgentActuation`, `setTenantAgentActuationSuspended`); agent service-account creation
 (`ServiceAccountCreateRequest.agent`) and the agent-specific token authorities described by
 `ServiceAccount.roles`; and the agent proposal operations (`proposeAlarmAction`, `approveAgentProposal`,
-`rejectAgentProposal`, `agentProposals`, `agentProposal`) (see [Agent actions](../concepts/mcp.md#agent-actions)).
+`rejectAgentProposal`, `agentProposals`, `agentProposal`) and command-delivery's `proposeCommand`,
+`approveAgentProposal`, `rejectAgentProposal`, `agentProposals` and `agentProposal`
+(see [Agent actions](../concepts/mcp.md#agent-actions)); promotion: **covered from v2.0, when approvals move to a common approval model**.
+When enabled, MCP serves the Preview proposal tools `propose_alarm_action` and `propose_command`
+(which calls `proposeCommand`), plus `get_proposal` and `list_my_proposals` for reading proposals.
+Their promotion condition is **covered from v2.0, when approvals move to a common approval model**. People approve in the
+console; MCP offers no approval, rejection or execution tool. The ordinary MCP read tools remain
+in the not-covered catalog above.
+
+Automation review: device-management's `automationReviewPolicy`, `automationReviewBreakGlass`,
+`automationReview`, `automationReviews`, `setAutomationReviewPolicy`,
+`approveAutomationReviewPolicyChange`, `cancelAutomationReviewPolicyChange`, `runAutomationReview`,
+`approveAutomationReview` and `rejectAutomationReview`, and event-processing's `compareRuleVersions`
+(service-identity only; see [Automation Change Review](../concepts/automation-change-review.md));
+promotion: **covered from v2.0, when approvals move to a common approval model**.
 The GraphQL preview surfaces include their dedicated input and result types, fields, arguments and
-enum values. The `ServiceAccount.agent` field is not in preview: it is covered from the release that
-adds it. Ordinary service-account roles remain covered. No MCP action tool is served yet; the MCP
-read tools remain in the not-covered catalog above.
+enum values, under the same promotion condition as their operations. The `ServiceAccount.agent`
+field is not in preview: it is covered from the release that adds it. Ordinary service-account roles remain covered.
 
 Bulk change readiness joined the preview tier in **v1.9**, when its preview clock started.
 In **v1.10** the device-side surface is called bulk changes: the `bulkChangeReadiness` query,
@@ -115,7 +133,7 @@ In **v1.10** the device-side surface is called bulk changes: the `bulkChangeRead
 and `dcctl bulk-change readiness`. The deprecated `fleetOperationReadiness`,
 `FleetOperationReadiness`, `FleetOperationEnforcement` and `dcctl fleet-op readiness` keep
 working for compatibility, including v1.9 clients. The rename does not restart the preview
-clock. They require `fleet:operate`; scoped members are refused.
+clock. Promotion: **two minors after it joined (default)**. They require `fleet:operate`; scoped members are refused.
 
 ## Supported upgrade paths {#upgrade-paths}
 
