@@ -21,6 +21,7 @@ import (
 // from applying one line twice. It is not started by anything yet: the loops start together with the engine,
 // and must not run while nothing is served (ledger.Served).
 //
+//	0  yield to a control request for 30 seconds on the database clock
 //	1  a LEASE: a fresh, uncached answer from user-management that the grantee still holds the authorities,
 //	   good for five seconds from the moment the question was SENT (a slow answer does not stretch it)
 //	2  the thresholds: a failure or ambiguity count at its limit pauses the operation
@@ -39,6 +40,7 @@ const (
 	FleetHoldNotActivated         = "NOT_ACTIVATED"
 	FleetHoldRateLimit            = "RATE_LIMIT"
 	FleetHoldPostError            = "POST_ERROR"
+	FleetHoldControlPending       = "CONTROL_PENDING"
 
 	fleetEventAutoPause  = "AUTO_PAUSE"
 	fleetEventDispatched = "DISPATCHED"
@@ -98,6 +100,20 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 		api.touchFleetRuntime(ctx, op, &posted, &res.Hold)
 	}()
 
+	// 0. A timed-out control caller needs a chance to win the fence on retry.
+	// An abandoned marker expires; PostgreSQL never consults the process clock.
+	db := api.RDB.DB(ctx)
+	cutoff := fleetTimestampAfter(db, -30*time.Second, time.Time{})
+	var pending int64
+	if err := db.Model(&FleetOperationRuntime{}).
+		Where("operation_id = ? AND control_requested_at > ?", op.ID, cutoff).Count(&pending).Error; err != nil {
+		return nil, err
+	}
+	if pending > 0 {
+		res.Hold = FleetHoldControlPending
+		return res, nil
+	}
+
 	// 1. The lease.
 	lease, hold, err := api.fleetLease(ctx, op)
 	if err != nil {
@@ -117,7 +133,6 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	}
 
 	// 2. The thresholds.
-	db := api.RDB.DB(ctx)
 	if op.EffFailureThreshold.Valid {
 		n, err := fleetFailureCount(db, op)
 		if err != nil {
