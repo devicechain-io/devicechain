@@ -460,7 +460,10 @@ namespace DeviceChain.Harborpulse.Visuals
             var run = Offline ? "offline-preview" : source.Status?.StartedAt?.ToString("O", CultureInfo.InvariantCulture) ?? "waiting";
             if (director == null || directorRun != run)
             {
-                ResetDirector(); recordingEpoch = now; directorRun = run;
+                // Second 0 of the recording is the instant its monotonic timer starts. The frame's own "now" was read before this
+                // frame's model and views ran, so an epoch taken from it put every later "now" that much behind the system clock
+                // the polls stamp their successes with.
+                ResetDirector(); recordingEpoch = Offline || !Application.isPlaying ? now : DateTimeOffset.UtcNow; directorRun = run;
                 if (!Offline && source.Status?.StartedAt != null)
                 {
                     recording = recordingStatus.Establish(() => new RecordingFiles(recordRoot, source.Status.StartedAt.Value, now));
