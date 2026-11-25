@@ -75,7 +75,9 @@ type GeoFenceCapRefusalCounter interface {
 }
 
 type Api struct {
-	suppressionCache suppressionCache
+	// Test-only: reproduce a previous-minor pod's delete for repair coverage.
+	skipFleetErasureForOldPodTest bool
+	suppressionCache              suppressionCache
 	// fleetExpiryCursor is where the next expiry pass resumes its tenant discovery.
 	fleetExpiryCursor fleetExpiryCursor
 	// DeviceCredentialChecker shares password backoff between HTTP uplinks and MQTT connects.
