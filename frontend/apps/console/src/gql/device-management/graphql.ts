@@ -381,11 +381,17 @@ export type AuditEventSearchCriteria = {
 
 /** The door through which a rule draft was saved. The door is declared by the client that saves the rule, so it is advisory origin metadata, not proof of how the content was produced and not proof of human review. Recorded doors are only ever added to, so a later save through another door never removes one, DESCRIBE included. */
 export type AuthoredVia =
+  /** Saved through the API by a client that declared no door. This is the default. */
   | 'API'
+  /** Saved from the console's visual automation canvas. */
   | 'CANVAS'
+  /** Drafted through the natural-language Describe door, which uses AI assistance, and then saved. */
   | 'DESCRIBE'
+  /** Saved from the console's rule form. */
   | 'FORM'
+  /** Saved by dcctl product apply from a product bundle. */
   | 'PRODUCT_AS_CODE'
+  /** Saved before doors were recorded, so the door is not known. */
   | 'UNKNOWN';
 
 /** (Preview: may change in a minor release.) An activation change made outside review. */
