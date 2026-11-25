@@ -74,7 +74,8 @@
       "chain": {
         "nodes": [],
         "links": []
-      }
+      },
+      "context": "Port Alder · a simulated harbour district"
     },
     {
       "id": "1",
@@ -181,7 +182,8 @@
       "chain": {
         "nodes": [],
         "links": []
-      }
+      },
+      "context": "Morning · the whole waterfront"
     },
     {
       "id": "1b",
@@ -268,14 +270,15 @@
       "chain": {
         "nodes": [],
         "links": []
-      }
+      },
+      "context": "Ferry Terminal · its electricity meter"
     },
     {
       "id": "2",
       "priority": 50,
       "windowSim": [
         10.75,
-        12.1
+        12.45
       ],
       "plannedSim": 10.75,
       "preRollS": 3,
@@ -606,7 +609,8 @@
             "sent"
           ]
         ]
-      }
+      },
+      "context": "East Quay · a street light under maintenance"
     },
     {
       "id": "3",
@@ -941,7 +945,8 @@
             "disabled"
           ]
         ]
-      }
+      },
+      "context": "North Quay · a tide gauge gets new hardware"
     },
     {
       "id": "3c",
@@ -1188,7 +1193,8 @@
       "chain": {
         "nodes": [],
         "links": []
-      }
+      },
+      "context": "North Quay · devices that hold their own session"
     },
     {
       "id": "3b",
@@ -1356,7 +1362,8 @@
       "chain": {
         "nodes": [],
         "links": []
-      }
+      },
+      "context": "The Basin · an EV charger running hot"
     },
     {
       "id": "4",
@@ -1752,7 +1759,8 @@
             "flood"
           ]
         ]
-      }
+      },
+      "context": "North Quay · the storm drain pump and its well"
     },
     {
       "id": "5",
@@ -1832,7 +1840,8 @@
         "nodes": [],
         "links": []
       },
-      "fallbackPolicy": "skip-page"
+      "fallbackPolicy": "skip-page",
+      "context": "The flood plain · the Works truck"
     },
     {
       "id": "4b",
@@ -1898,7 +1907,8 @@
       "chain": {
         "nodes": [],
         "links": []
-      }
+      },
+      "context": "East Quay · a pump that has lost its prime"
     },
     {
       "id": "6",
@@ -2240,7 +2250,8 @@
             "escalated"
           ]
         ]
-      }
+      },
+      "context": "East Quay · a power cut"
     },
     {
       "id": "7",
@@ -2598,7 +2609,8 @@
             "clear"
           ]
         ]
-      }
+      },
+      "context": "East Quay · power returns, the chargers catch up"
     },
     {
       "id": "8",
@@ -2979,7 +2991,8 @@
             "refused"
           ]
         ]
-      }
+      },
+      "context": "Overnight · new firmware for the chargers"
     },
     {
       "id": "9",
@@ -3158,13 +3171,7 @@
           "recordedWallFromS": 135,
           "recordedWallToS": 143,
           "borrowed": "none",
-          "captions": [
-            {
-              "id": "quiet",
-              "atS": 1,
-              "holdS": 3
-            }
-          ],
+          "captions": [],
           "nodes": [],
           "seamPose": "pose:home",
           "dissolveS": 0.5,
@@ -3226,8 +3233,8 @@
           "shot": "2b",
           "durS": 9,
           "moveS": 0,
-          "recordedWallFromS": 302,
-          "recordedWallToS": 311,
+          "recordedWallFromS": 306,
+          "recordedWallToS": 315,
           "borrowed": "none",
           "captions": [],
           "nodes": [
@@ -3246,8 +3253,8 @@
           "shot": "2c",
           "durS": 9,
           "moveS": 0,
-          "recordedWallFromS": 311,
-          "recordedWallToS": 320,
+          "recordedWallFromS": 315,
+          "recordedWallToS": 324,
           "borrowed": "none",
           "captions": [
             {
@@ -3282,8 +3289,8 @@
           "shot": "2d",
           "durS": 9,
           "moveS": 0,
-          "recordedWallFromS": 355,
-          "recordedWallToS": 364,
+          "recordedWallFromS": 370,
+          "recordedWallToS": 379,
           "borrowed": "none",
           "captions": [
             {
@@ -3308,8 +3315,8 @@
           "shot": "2e",
           "durS": 4,
           "moveS": 0,
-          "recordedWallFromS": 364,
-          "recordedWallToS": 370,
+          "recordedWallFromS": 379,
+          "recordedWallToS": 385,
           "borrowed": "none",
           "captions": [],
           "nodes": [
@@ -3328,8 +3335,8 @@
           "shot": "3a",
           "durS": 7,
           "moveS": 0,
-          "recordedWallFromS": 390.0,
-          "recordedWallToS": 397.0,
+          "recordedWallFromS": 392,
+          "recordedWallToS": 399,
           "borrowed": "none",
           "captions": [
             {
@@ -3353,8 +3360,8 @@
           "shot": "3b",
           "durS": 7,
           "moveS": 0,
-          "recordedWallFromS": 397.0,
-          "recordedWallToS": 404.0,
+          "recordedWallFromS": 399,
+          "recordedWallToS": 406,
           "borrowed": "none",
           "captions": [
             {
@@ -3378,8 +3385,8 @@
           "shot": "3c",
           "durS": 6,
           "moveS": 0,
-          "recordedWallFromS": 404.0,
-          "recordedWallToS": 410.0,
+          "recordedWallFromS": 406,
+          "recordedWallToS": 412,
           "borrowed": "none",
           "captions": [
             {
@@ -3403,8 +3410,8 @@
           "shot": "3b-1",
           "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 524,
-          "recordedWallToS": 532,
+          "recordedWallFromS": 526,
+          "recordedWallToS": 534,
           "borrowed": "none",
           "captions": [
             {
@@ -3423,8 +3430,8 @@
           "shot": "3b-2",
           "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 532,
-          "recordedWallToS": 540,
+          "recordedWallFromS": 534,
+          "recordedWallToS": 542,
           "borrowed": "none",
           "captions": [
             {
@@ -3448,8 +3455,8 @@
           "shot": "3b-3",
           "durS": 6,
           "moveS": 0,
-          "recordedWallFromS": 570,
-          "recordedWallToS": 576,
+          "recordedWallFromS": 573,
+          "recordedWallToS": 579,
           "borrowed": "none",
           "captions": [
             {
@@ -3989,25 +3996,6 @@
         },
         {
           "page": "8",
-          "shot": "8b",
-          "durS": 8,
-          "moveS": 0,
-          "recordedWallFromS": 1209,
-          "recordedWallToS": 1217,
-          "borrowed": "none",
-          "captions": [],
-          "nodes": [
-            "signed",
-            "cap",
-            "updated",
-            "refused"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "8",
           "shot": "8c",
           "durS": 11,
           "moveS": 0,
@@ -4043,26 +4031,46 @@
         },
         {
           "page": "8",
-          "shot": "8d",
-          "durS": 11,
+          "shot": "8b",
+          "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 1236,
-          "recordedWallToS": 1247,
+          "recordedWallFromS": 1237,
+          "recordedWallToS": 1245,
           "borrowed": "none",
           "captions": [
             {
               "id": "few",
               "atS": 0,
               "holdS": 3
-            },
+            }
+          ],
+          "nodes": [
+            "signed",
+            "cap",
+            "updated",
+            "refused"
+          ],
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "overlays": []
+        },
+        {
+          "page": "8",
+          "shot": "8d",
+          "durS": 11,
+          "moveS": 0,
+          "recordedWallFromS": 1310,
+          "recordedWallToS": 1321,
+          "borrowed": "none",
+          "captions": [
             {
               "id": "done",
-              "atS": 3,
+              "atS": 0,
               "holdS": 3
             },
             {
               "id": "ota-summary",
-              "atS": 6,
+              "atS": 3,
               "holdS": 3
             }
           ],
@@ -4081,8 +4089,8 @@
           "shot": "9a",
           "durS": 10,
           "moveS": 0,
-          "recordedWallFromS": 1250,
-          "recordedWallToS": 1260,
+          "recordedWallFromS": 1310,
+          "recordedWallToS": 1320,
           "borrowed": "none",
           "captions": [
             {
@@ -4590,8 +4598,8 @@
           "shot": "8d",
           "durS": 4,
           "moveS": 0,
-          "recordedWallFromS": 1244,
-          "recordedWallToS": 1250,
+          "recordedWallFromS": 1315.5,
+          "recordedWallToS": 1321.5,
           "borrowed": "none",
           "captions": [
             {
@@ -4621,8 +4629,8 @@
           "shot": "9a",
           "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 1250,
-          "recordedWallToS": 1258,
+          "recordedWallFromS": 1312,
+          "recordedWallToS": 1320,
           "borrowed": "none",
           "captions": [
             {

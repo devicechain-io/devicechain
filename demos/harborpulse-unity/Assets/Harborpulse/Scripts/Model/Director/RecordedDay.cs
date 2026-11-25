@@ -43,6 +43,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         /// <summary>The wall instant of recorded second 0.</summary>
         public DateTimeOffset Epoch { get; private set; }
         public double EndS { get; private set; }
+        /// <summary>Streams whose last row was cut off mid-write and dropped (a recording ended by a crash).</summary>
+        public int TornRows { get; private set; }
         public IReadOnlyList<WorldSample> World => world;
         /// <summary>Every observation that is not a stream measurement, in observation order.</summary>
         public IReadOnlyList<Observation> Records => other;
@@ -70,7 +72,12 @@ namespace DeviceChain.Harborpulse.Model.Director
                             else if (kind != "director" && kind != "consumed") throw new FormatException("unknown recording kind " + kind);
                         }
                     }
-                    catch (JsonException ex) { throw new FormatException("recording NDJSON: " + ex.Message, ex); }
+                    catch (JsonException ex)
+                    {
+                        // A player that died mid-write leaves its last row torn. That row is dropped; a bad row anywhere else is refused.
+                        if (input.Peek() == -1) { day.TornRows++; continue; }
+                        throw new FormatException("recording NDJSON: " + ex.Message, ex);
+                    }
                 }
             }
             if (day.world.Count == 0) throw new FormatException("the recording has no /status samples");
@@ -148,12 +155,34 @@ namespace DeviceChain.Harborpulse.Model.Director
             { w.WriteStartObject(); w.WriteNumber("wallS", at); w.WriteNumber("sequence", ++sequence); w.WriteString("kind", kind); w.WritePropertyName("data"); data(w); w.WriteEndObject(); }));
             foreach (var c in Store.Coverage.OrderBy(c => c.Stream, StringComparer.Ordinal).ThenBy(c => c.Gap).ThenBy(c => c.FromSim)) Row(0, "coverage", w => DirectorWire.Coverage(w, c));
             foreach (var o in Store.Records.OrderBy(o => o.ObservedAtS).ThenBy(o => o.EventKey, StringComparer.Ordinal)) if (keep == null || keep(o)) Row(o.ObservedAtS, "observation", w => DirectorWire.Observation(w, o));
-            foreach (var s in world) Row(s.WallS, "world", w =>
+            // The day's last instant keeps the last sample's contents: a sample is "what stood from here on".
+            var last = world[world.Count - 1]; var samples = new List<WorldSample>(world);
+            if (EndS > last.WallS) samples.Add(new WorldSample { WallS = EndS, SimHour = SimAt(EndS), Beat = last.Beat, LayoutDigest = last.LayoutDigest, Defects = last.Defects, Truck = last.Truck, Alarms = last.Alarms });
+            foreach (var s in samples) Row(s.WallS, "world", w =>
             {
                 w.WriteStartObject(); w.WriteString("sample", "/status"); w.WriteNumber("simHour", s.SimHour); w.WriteString("beat", s.Beat); w.WriteString("layoutDigest", s.LayoutDigest);
-                w.WriteStartArray("defects"); foreach (var d in s.Defects) w.WriteStringValue(d); w.WriteEndArray(); w.WriteEndObject();
+                w.WriteStartArray("defects"); foreach (var d in s.Defects) w.WriteStringValue(d); w.WriteEndArray();
+                if (s.Alarms != null)
+                {
+                    w.WriteStartArray("alarms");
+                    foreach (var a in s.Alarms.OrderBy(a => a.Key, StringComparer.Ordinal))
+                    {
+                        var split = a.Key.IndexOf((char)124); w.WriteStartObject(); w.WriteString("device", a.Key.Substring(0, split)); w.WriteString("key", a.Key.Substring(split + 1));
+                        w.WriteString("severity", a.Value.Key); w.WriteBoolean("acknowledged", a.Value.Value); w.WriteEndObject();
+                    }
+                    w.WriteEndArray();
+                }
+                if (s.Truck.HasValue)
+                {
+                    var fix = s.Truck.Value; w.WriteStartObject("truck");
+                    if (fix.Latitude.HasValue) w.WriteNumber("lat", fix.Latitude.Value);
+                    if (fix.Longitude.HasValue) w.WriteNumber("lon", fix.Longitude.Value);
+                    if (fix.Heading.HasValue) w.WriteNumber("heading", fix.Heading.Value);
+                    if (fix.Speed.HasValue) w.WriteNumber("speed", fix.Speed.Value);
+                    w.WriteString("at", fix.OccurredAt.ToString("O", CultureInfo.InvariantCulture)); w.WriteEndObject();
+                }
+                w.WriteEndObject();
             });
-            Row(EndS, "world", w => { w.WriteStartObject(); w.WriteString("sample", "end"); w.WriteNumber("simHour", SimAt(EndS)); w.WriteEndObject(); });
         }
     }
 

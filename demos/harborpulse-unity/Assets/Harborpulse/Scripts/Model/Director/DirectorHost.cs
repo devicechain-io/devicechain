@@ -34,6 +34,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         public double DirectorWeight { get; internal set; }
         /// <summary>A cut's disclosure overlays (the opening and end cards' lines), shown beside the caption; empty live.</summary>
         public string Overlay { get; internal set; } = "";
+        /// <summary>The active page's context line (where the viewer is, what they are looking at); empty between pages.</summary>
+        public string Context { get; internal set; } = "";
         /// <summary>
         /// The view of one frame of a rendered cut: the same surface the live director fills, from the cut player's frame. The
         /// chip of a shot borrowed out of order takes the idle "up next" place, which a cut never uses.
@@ -42,7 +44,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         {
             Page = frame.Page.Id, Shot = frame.Shot.Id, From = frame.From, To = frame.To, MoveS = frame.Authored.MoveS, ShotAtS = frame.ShowS - frame.IntoS,
             Caption = frame.Caption, CaptionKind = frame.CaptionKind, CaptionAtS = frame.CaptionAtS, Rail = frame.Rail, Links = frame.Links,
-            Banner = "", Problem = "", UpNext = frame.BorrowedChip, Mode = DirectorMode.Active, DirectorWeight = 1, Overlay = frame.Overlay
+            Banner = "", Problem = "", UpNext = frame.BorrowedChip, Mode = DirectorMode.Active, DirectorWeight = 1, Overlay = frame.Overlay, Context = frame.Page.ContextLine
         };
     }
     /// <summary>One instance per runner run. Only IDirectorFeed may add observations.</summary>
@@ -109,6 +111,7 @@ namespace DeviceChain.Harborpulse.Model.Director
                 visibleCaption = hud.Caption; visiblePage = hud.CaptionPage; visibleAtS = hud.CaptionAtS;
             }
             view.Page = Scheduler.ActivePage;
+            view.Context = view.Page == null ? "" : story.Page(view.Page).ContextLine;
             view.Caption = hud.Caption; view.CaptionKind = hud.CaptionKind; view.CaptionAtS = hud.CaptionAtS;
             view.Rail = hud.Rail; view.Links = hud.Links;
             view.Banner = HudModel.Banner(sample.DigestMatches, sample.Stale, sample.Defects);

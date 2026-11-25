@@ -14,7 +14,7 @@ using NUnit.Framework;
 namespace DeviceChain.Harborpulse.Tests
 {
     /// <summary>
-    /// The cut renderer's model against a real day: the live walkthrough recorded on 2026-11-24 (Fixtures/day-20261124.ndjson.gz,
+    /// The cut renderer's model against a real day: the clean live day recorded on 2026-11-25 (Fixtures/day-20261125.ndjson.gz,
     /// thinned to the readings the storyboard's predicates name and to a sample of the repeating snapshots; the reduced day gives the
     /// same trace as the whole recording). HARBORPULSE_UPDATE_FIXTURES=1 rewrites the expected trace.
     /// </summary>
@@ -22,12 +22,15 @@ namespace DeviceChain.Harborpulse.Tests
     {
         static RecordedDay day; static PresentationMap map; static Storyboard story;
         static string Fixture(string name) => Path.Combine(DirectorKit.FixtureDirectory(), name);
-        static string DayText()
+        static string DayText(string name = "day-20261125.ndjson.gz")
         {
-            using (var file = File.OpenRead(Fixture("day-20261124.ndjson.gz"))) using (var gz = new GZipStream(file, CompressionMode.Decompress)) using (var reader = new StreamReader(gz))
+            using (var file = File.OpenRead(Fixture(name))) using (var gz = new GZipStream(file, CompressionMode.Decompress)) using (var reader = new StreamReader(gz))
                 return reader.ReadToEnd();
         }
         static RecordedDay Day => day ?? (day = RecordedDay.Load(new StringReader(DayText())));
+        // The first recorded day (2026-11-24) was made before a recording sampled alarm severities and the truck's fixes.
+        static RecordedDay oldDay;
+        static RecordedDay OldDay => oldDay ?? (oldDay = RecordedDay.Load(new StringReader(DayText("day-20261124.ndjson.gz"))));
         static PresentationMap Map => map ?? (map = new PresentationMap(Kit.Layout()));
         static Storyboard Story => story ?? (story = Storyboard.Parse(DirectorKit.StoryText(), Map));
         static string S(double v) => v.ToString("0.0", CultureInfo.InvariantCulture);
@@ -44,7 +47,7 @@ namespace DeviceChain.Harborpulse.Tests
         public void BothCutsOverTheRecordedDayShowExactlyTheseCaptions()
         {
             var actual = new[] { "c90", "c300" }.SelectMany(cut => { var p = new CutPlayer(Story, cut, Day, Map); Play(p, 30); return Lines(p); }).ToArray();
-            var path = Fixture("cut-trace-20261124.txt");
+            var path = Fixture("cut-trace-20261125.txt");
             if (Environment.GetEnvironmentVariable("HARBORPULSE_UPDATE_FIXTURES") == "1") File.WriteAllLines(path, actual);
             Assert.That(actual, Is.EqualTo(File.ReadAllLines(path)));
         }
@@ -122,13 +125,14 @@ namespace DeviceChain.Harborpulse.Tests
 
         // CONTROL (the storyboard's frame-check acceptance): strip the records a claim binds to, and that claim, by name, is the one that goes.
         [Test]
-        public void StrippingThePumpStartRecordsRemovesExactlyThePumpStartClaim()
+        public void StrippingThePumpStartRecordsRemovesExactlyTheClaimsThatStandOnThem()
         {
             var stripped = RecordedDay.Load(new StringReader(string.Join("\n", DayText().Split('\n').Where(l => !(l.Contains("\"kind\":\"chip\"") && l.Contains("\"status\":\"PLATFORM\""))))));
             var whole = new CutPlayer(Story, "c90", Day, Map); var control = new CutPlayer(Story, "c90", stripped, Map);
             string[] Shown(CutPlayer p) => p.Trace.Where(e => e.Shown).Select(e => e.Caption).ToArray();
             Assert.That(Shown(whole), Does.Contain("platform-start"));
-            Assert.That(Shown(whole).Except(Shown(control)), Is.EqualTo(new[] { "platform-start" }));
+            // the float claim stands on the same chip record, so it goes with it; nothing else does
+            Assert.That(Shown(whole).Except(Shown(control)).ToArray(), Is.EqualTo(new[] { "platform-start", "before-float" }));
             Assert.That(Shown(control).Except(Shown(whole)), Is.Empty, "nothing may take the place of a claim the recording does not support");
             Assert.That(control.Trace.First(e => e.Caption == "platform-start").Reason, Does.StartWith("the recording does not support it"));
         }
@@ -155,10 +159,10 @@ namespace DeviceChain.Harborpulse.Tests
         [Test]
         public void TheReplaySourceAnswersFromTheRecordingAndLeavesTheRestAbsent()
         {
-            var layout = Kit.Layout(); var source = new ReplaySource(Day, layout);
+            var layout = Kit.Layout(); var source = new ReplaySource(OldDay, layout);
             string Id(string token) => layout.Devices.First(d => d.Token == token).ExternalId;
             source.Seek(600);
-            Assert.That(source.Status.StartedAt, Is.EqualTo(Day.StartedAt)); Assert.That(source.Status.SimSeconds / 3600, Is.EqualTo(16).Within(0.05));
+            Assert.That(source.Status.StartedAt, Is.EqualTo(OldDay.StartedAt)); Assert.That(source.Status.SimSeconds / 3600, Is.EqualTo(16).Within(0.05));
             Assert.That(source.TryGet(Id("hp-pump-north"), Metrics.WetWell, out var well), Is.True);
             Assert.That(well.OccurredAt, Is.LessThanOrEqualTo(source.Now)); Assert.That(source.Now - well.OccurredAt, Is.LessThan(TimeSpan.FromSeconds(15)));
             Assert.That(source.Alarms.Any(a => a.Key == "wet-well-high" && a.Active), Is.False, "not raised yet at 16:00");
@@ -183,10 +187,10 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(source.Status.Ota.Rollout, Is.EqualTo(source.Rollout.Token));
             // and a frame from it: the observed model takes the replay like any source
             var model = new HarborObservedModel(layout);
-            var frame = model.Update(source, new ClockReading(Day.SimAt(1240) * 3600, ClockMode.Live, ""), source.Now);
+            var frame = model.Update(source, new ClockReading(OldDay.SimAt(1240) * 3600, ClockMode.Live, ""), source.Now);
             Assert.That(frame.Rollout.Token, Is.EqualTo(source.Rollout.Token));
             // an alarm whose severity the recording did not sample is drawn as the weakest alarm; another unknown word is still refused
-            source.Seek(890); var outage = new HarborObservedModel(layout).Update(source, new ClockReading(Day.SimAt(890) * 3600, ClockMode.Live, ""), source.Now);
+            source.Seek(890); var outage = new HarborObservedModel(layout).Update(source, new ClockReading(OldDay.SimAt(890) * 3600, ClockMode.Live, ""), source.Now);
             Assert.That(outage.Beacons.Count(b => !b.Cleared), Is.GreaterThanOrEqualTo(6));
             foreach (var beacon in outage.Beacons) { Assert.That(beacon.Rings, Is.EqualTo(1)); Assert.That(beacon.Pulse(source.Now), Is.InRange(0, 1)); }
             Assert.Throws<ArgumentException>(() => AlarmBeacons.Period("SEVERE"));

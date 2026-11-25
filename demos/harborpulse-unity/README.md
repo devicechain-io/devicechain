@@ -1360,6 +1360,21 @@ HARBORPULSE_RECORDING=<recording directory> HARBORPULSE_COMPACT=<day.ndjson> \
 ```
 
 It prints each caption's fate in both cuts and writes the day as one compact stream (a live recording writes about seven coverage rows
-a frame; merged they are a few thousand rows, so the compact file is the one to hand the player). The committed spans fit the day
-recorded on 2026-11-24, whose reduced copy is `Dotnet~/Tests/Fixtures/day-20261124.ndjson.gz`; `RecordedDayCutTests` pins both cuts'
-captions over it.
+a frame; merged they are a few thousand rows, so the compact file is the one to hand the player). The committed spans fit the clean day recorded on 2026-11-25, whose reduced copy is `Dotnet~/Tests/Fixtures/day-20261125.ndjson.gz`;
+`RecordedDayCutTests` pins both cuts' captions over it. (`day-20261124.ndjson.gz` is the first recorded day, made before a recording
+sampled severities and truck fixes; it keeps the "absent stays absent" path under test.) A recording whose last row was cut off by a
+crash loads without that row.
+
+### Context lines, rain and the cleared tick
+
+Each storyboard page may carry a `context` line ("North Quay · the storm drain pump and its well"), drawn under the top bar while the
+page is up, live and in a cut. It says where the viewer is and what is in frame. It is orientation, never evidence: the loader refuses
+a platform verb or a digit in it, as it does in a `pre` caption, so it cannot say what the platform did.
+
+The rain is `Model/RainField`: every drop falls through the world at its own terminal speed (8 to 10 m/s), pushed by the storm's wind,
+and is drawn as a streak one exposure long where it is inside a box around the eye. It is a pure function of the wave clock, so a
+replay at any frame rate draws the same drop in the same place; a stronger rain draws more drops and never moves one. (The first rain
+was one sheet of streaks that repeated every few metres and wrapped: in light rain it fell further per frame than its own repeat, and
+read as standing still or climbing.)
+
+A cleared alarm's green tick turns to the eye (`AlarmBeacons.TickYawDeg`), so it reads left to right from every side of its device.
