@@ -102,6 +102,7 @@ namespace DeviceChain.Harborpulse.Live
         {
             var key = name + "/" + scope;
             if (jobs.TryGetValue(key, out var old)) { old.Variables = variables; return; }
+            readsChanged = true;
             jobs.Add(key, new ReadJob { Name = name, Scope = scope, Variables = variables, Result = new DirectorRead(name, scope) });
         }
         static string Vars(string token) => DirectorWire.Json(w => { w.WriteStartObject(); w.WriteString("token", token); w.WriteEndObject(); });
@@ -116,9 +117,21 @@ namespace DeviceChain.Harborpulse.Live
             foreach (var j in jobs.Values.Where(j => j.Name == name && j.Scope != "__probe" && j.Result.Data.HasValue && j.Result.Error == null).ToArray())
                 foreach (var r in DirectorProbeEvaluation.Records(name, j.Result.Data.Value)) yield return r;
         }
+        readonly ReadPlanGate gate = new ReadPlanGate();
+        /// <summary>How often the reads were planned and dispatched (see <see cref="ReadPlanGate"/>): not once a frame.</summary>
+        public long Plans => gate.Plans;
+        public long Dispatches => gate.Dispatches;
         public void Tick(ScenarioStatus status, DateTimeOffset now)
         {
             if (stop.IsCancellationRequested) return;
+            // Planning and dispatch cost more with every alarm the day raises. Neither depends on anything that changes between
+            // frames, so each runs when its inputs changed (ReadPlanGate), not every frame.
+            if (gate.ShouldPlan(status, now)) Plan(status);
+            if (gate.ShouldDispatch(now)) Dispatch(now);
+            Publish();
+        }
+        void Plan(ScenarioStatus status)
+        {
             foreach (var d in layout.Devices) {
                 var token = boundToken(d.ExternalId); if (token == null) continue;
                 // U1 supplies current readings. History is needed for replacement and the restore burst only.
@@ -159,6 +172,9 @@ namespace DeviceChain.Harborpulse.Live
                 var token = sig.GetProperty("signer").GetProperty("token").GetString(); Add("signer", token, Vars(token));
             }
             foreach (var target in Rows("targets")) if (target.TryGetProperty("assignmentToken", out var t) && t.ValueKind == JsonValueKind.String) Add("assignments", t.GetString(), Vars(t.GetString()));
+        }
+        void Dispatch(DateTimeOffset now)
+        {
             foreach (var name in Documents.Keys) {
                 var probe = jobs[name + "/__probe"];
                 if (probe.Result.Probe == DirectorProbe.PROBE_FAILED) continue;
@@ -170,7 +186,9 @@ namespace DeviceChain.Harborpulse.Live
                 foreach (var due in jobs.Values.Where(j => j.Name == name && j.Scope != "__probe" && j.Next <= now && !j.Busy).OrderBy(j => j.Next).Take(Math.Max(0, limit - inFlight)).ToArray())
                 { due.Busy = true; _ = Poll(due); }
             }
-            Publish();
+            DateTimeOffset? idle = null;
+            foreach (var j in jobs.Values) if (!j.Busy && j.Scope != "__probe" && j.Next > now && (!idle.HasValue || j.Next < idle.Value)) idle = j.Next;
+            gate.Dispatched(now, idle);
         }
         async Task Poll(ReadJob job)
         {
@@ -194,7 +212,7 @@ namespace DeviceChain.Harborpulse.Live
             }
             catch (OperationCanceledException) { return; }
             catch (Exception ex) { error = ex.Message; if (probe == DirectorProbe.Waiting) probe = DirectorProbe.PROBE_FAILED; }
-            finally { job.Busy = false; }
+            finally { job.Busy = false; gate.Answered(); }
             if (stop.IsCancellationRequested) return;
             var now = DateTimeOffset.UtcNow; var spans = old.Coverage.ToList();
             var from = old.LastSuccess ?? now;
@@ -202,10 +220,18 @@ namespace DeviceChain.Harborpulse.Live
             if (spans.Count > 0 && spans[spans.Count - 1].Gap == gap && spans[spans.Count - 1].To == from) { from = spans[spans.Count - 1].From; spans.RemoveAt(spans.Count - 1); }
             spans.Add(new ReadSpan(from, now, gap));
             job.Result = new DirectorRead(job.Name, job.Scope, probe, error == null ? now : old.LastSuccess, error, data ?? old.Data, spans, error == null ? requestedAt : old.AsOf);
-            job.Next = now.AddSeconds(3); Publish();
+            job.Next = now.AddSeconds(3); gate.Answered(); readsChanged = true; Publish();
         }
-        void Publish() => Snapshot = new DirectorReadSnapshot(jobs.Values.Select(j => j.Result), observerStatus?.Measurements.IsLive,
-            observerStatus?.Measurements.Reconnects ?? 0, observerStatus?.Alarms.Reconnects ?? 0, alarmChanges, measurements.Records);
+        // Called every frame. Copying every read and every alarm change each time is work that grows all day; only a new read or
+        // an answer changes the reads, so every other frame reuses them (DirectorReadSnapshot.Observed).
+        bool readsChanged = true;
+        void Publish()
+        {
+            var live = observerStatus?.Measurements.IsLive; var mr = observerStatus?.Measurements.Reconnects ?? 0; var ar = observerStatus?.Alarms.Reconnects ?? 0;
+            if (Snapshot != null && !readsChanged) { Snapshot = Snapshot.Observed(live, mr, ar, alarmChanges, measurements.Records); return; }
+            readsChanged = false;
+            Snapshot = new DirectorReadSnapshot(jobs.Values.Select(j => j.Result), live, mr, ar, alarmChanges, measurements.Records);
+        }
         public void Dispose() { stop.Cancel(); foreach (var req in requests.ToArray()) req.Abort(); }
     }
 }
