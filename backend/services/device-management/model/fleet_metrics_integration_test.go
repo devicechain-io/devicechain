@@ -21,7 +21,7 @@ import (
 // instance's dispatching slots from every later test.
 func newBulkChangePG(t *testing.T) *postPG {
 	t.Helper()
-	p := newBulkChangePG(t)
+	p := newPostPG(t, "v1")
 	t.Cleanup(func() {
 		attributeBeforeCommitHook = nil
 		if _, err := p.api.AbortFleetOperation(context.WithoutCancel(p.ctx), p.op.Token, alice.Name); err != nil {
