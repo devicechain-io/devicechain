@@ -4,12 +4,11 @@
 package brand
 
 import (
-	"io"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
 )
@@ -160,11 +159,11 @@ func (s *Splash) View() string {
 	if s.art == terminal.NoArt {
 		return ""
 	}
-	r := lipgloss.NewRenderer(io.Discard)
-	r.SetColorProfile(s.opts.Caps.ColorDepth)
+	profile := s.opts.Caps.ColorDepth
 	if s.opts.Caps.NoColor {
-		r.SetColorProfile(termenv.Ascii)
+		profile = colorprofile.ASCII
 	}
+	p := newPainter(profile)
 	var lines []string
 	wordmark := true
 	switch s.art {
@@ -173,7 +172,6 @@ func (s *Splash) View() string {
 		if s.art == terminal.CompactMark {
 			m = Compact()
 		}
-		p := painter{r: r, profile: r.ColorProfile()}
 		t := time.Duration(-1)
 		if s.animating {
 			t = s.elapsed
@@ -181,13 +179,17 @@ func (s *Splash) View() string {
 		}
 		lines = append(markRows(m, p, t), "")
 	}
+	// A profile with no colour (NO_COLOR, or a terminal without it) is plain
+	// text: no bold or faint either, as the plain-text levels promise.
+	bold, dim := lipgloss.NewStyle(), lipgloss.NewStyle()
+	if profile > colorprofile.ASCII {
+		bold, dim = bold.Bold(true), dim.Faint(true)
+	}
 	if wordmark {
-		lines = append(lines,
-			r.NewStyle().Bold(true).Render("Device")+r.NewStyle().Bold(true).Foreground(lipgloss.Color(ChainColor)).Render("Chain"))
+		lines = append(lines, bold.Render("Device")+p.style(p.convert(lipgloss.Color(ChainColor)), nil).Inherit(bold).Render("Chain"))
 	} else {
 		lines = append(lines, "")
 	}
-	dim := r.NewStyle().Faint(true)
 	if s.opts.Subtitle != "" {
 		lines = append(lines, s.opts.Subtitle)
 	}

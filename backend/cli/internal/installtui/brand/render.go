@@ -5,14 +5,14 @@ package brand
 
 import (
 	"fmt"
-	"io"
+	"image/color"
 	"math"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/devicechain-io/dcctl/internal/installtui/brand/gen"
 )
@@ -89,25 +89,38 @@ func lerp(a, b rgb, t float64) rgb {
 }
 
 // painter turns colours into styled runs for one colour profile. The profile
-// is always explicit; Lip Gloss never probes the terminal.
+// is always explicit: every colour is converted to it here, so nothing ever
+// probes the terminal or depends on the process's environment.
 type painter struct {
-	r       *lipgloss.Renderer
-	profile termenv.Profile
+	profile colorprofile.Profile
 }
 
-func newPainter(p termenv.Profile) painter {
-	r := lipgloss.NewRenderer(io.Discard)
-	r.SetColorProfile(p)
-	return painter{r: r, profile: p}
-}
+func newPainter(p colorprofile.Profile) painter { return painter{profile: p} }
 
-// color is the profile's colour for c. ANSI256 uses the pinned nearest-colour
-// mapping from the generator, so the canonical facets match the manifest.
-func (p painter) color(c rgb) lipgloss.Color {
-	if p.profile == termenv.ANSI256 {
+// color is the profile's colour for c, or nil when the profile has no colour.
+// ANSI256 uses the pinned nearest-colour mapping from the generator, so the
+// canonical facets match the manifest.
+func (p painter) color(c rgb) color.Color {
+	if p.profile == colorprofile.ANSI256 {
 		return lipgloss.Color(strconv.Itoa(gen.Nearest256(c[0], c[1], c[2])))
 	}
-	return lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", c[0], c[1], c[2]))
+	return p.convert(lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", c[0], c[1], c[2])))
+}
+
+// convert is c in the painter's profile, or nil when the profile has no colour.
+func (p painter) convert(c color.Color) color.Color { return p.profile.Convert(c) }
+
+// style is a style with foreground fg and, when bg is not nil, background bg,
+// each set only when the profile has a colour for it.
+func (p painter) style(fg color.Color, bg color.Color) lipgloss.Style {
+	s := lipgloss.NewStyle()
+	if fg != nil {
+		s = s.Foreground(fg)
+	}
+	if bg != nil {
+		s = s.Background(bg)
+	}
+	return s
 }
 
 // markRows renders the mark at elapsed time t (t < 0 is the static mark).
@@ -150,16 +163,16 @@ func markRows(m Mark, p painter, t time.Duration) []string {
 			case top == nil && bottom == nil:
 			case bottom == nil:
 				glyph, key = "▀", fmt.Sprint("f", *top)
-				next = p.r.NewStyle().Foreground(p.color(*top))
+				next = p.style(p.color(*top), nil)
 			case top == nil:
 				glyph, key = "▄", fmt.Sprint("f", *bottom)
-				next = p.r.NewStyle().Foreground(p.color(*bottom))
+				next = p.style(p.color(*bottom), nil)
 			case *top == *bottom:
 				glyph, key = "█", fmt.Sprint("f", *top)
-				next = p.r.NewStyle().Foreground(p.color(*top))
+				next = p.style(p.color(*top), nil)
 			default:
 				glyph, key = "▀", fmt.Sprint("f", *top, "b", *bottom)
-				next = p.r.NewStyle().Foreground(p.color(*top)).Background(p.color(*bottom))
+				next = p.style(p.color(*top), p.color(*bottom))
 			}
 			if key != runStyle {
 				flush()
@@ -175,10 +188,10 @@ func markRows(m Mark, p painter, t time.Duration) []string {
 
 // Static renders the canonical mark for profile p, one string per cell row,
 // each exactly m.Cols cells wide.
-func Static(m Mark, p termenv.Profile) []string { return markRows(m, newPainter(p), -1) }
+func Static(m Mark, p colorprofile.Profile) []string { return markRows(m, newPainter(p), -1) }
 
 // Frame renders the animation at elapsed time t, clamped to [0, Duration].
-func Frame(m Mark, p termenv.Profile, t time.Duration) []string {
+func Frame(m Mark, p colorprofile.Profile, t time.Duration) []string {
 	return markRows(m, newPainter(p), min(max(t, 0), Duration))
 }
 

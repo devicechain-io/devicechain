@@ -7,8 +7,8 @@
 
 
 
-                                  [1mDevice[0m[1;36mChain[0m
+                                  [1mDevice[m[1;34mChain[m
                           Prepare a Kubernetes cluster
-                                 [2mdcctl v1.12.0[0m
+                                 [2mdcctl v1.12.0[m
 
-                                 [2many key: skip[0m
+                                 [2many key: skip[m

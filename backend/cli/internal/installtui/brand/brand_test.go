@@ -6,6 +6,7 @@ package brand
 import (
 	"bytes"
 	"flag"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/muesli/termenv"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/devicechain-io/dcctl/internal/installtui/brand/gen"
 )
@@ -168,12 +169,47 @@ func TestPalette(t *testing.T) {
 	}
 }
 
+// The static mark emits exactly the canonical fills in truecolor and exactly
+// the pinned indexes in 256 colours. Lip Gloss v1 truncated #52A2C9 and #7AB7D9
+// by one step on the way out; the goldens alone would only freeze such drift.
+func TestStaticMarkEmitsCanonicalColours(t *testing.T) {
+	fills, indexes := map[string]bool{}, map[string]bool{}
+	for _, f := range Facets() {
+		fills[fmt.Sprintf("%d;%d;%d", f.RGB[0], f.RGB[1], f.RGB[2])] = true
+		indexes[fmt.Sprint(f.ANSI256)] = true
+	}
+	truecolor := regexp.MustCompile(`[34]8;2;(\d+;\d+;\d+)`)
+	indexed := regexp.MustCompile(`[34]8;5;(\d+)`)
+	for _, m := range []Mark{Large(), Compact()} {
+		out := strings.Join(Static(m, colorprofile.TrueColor), "\n")
+		got := truecolor.FindAllStringSubmatch(out, -1)
+		if len(got) == 0 {
+			t.Fatalf("%s: no truecolor runs", m.Name)
+		}
+		for _, c := range got {
+			if !fills[c[1]] {
+				t.Errorf("%s: truecolor run %s is not a facet fill", m.Name, c[1])
+			}
+		}
+		out = strings.Join(Static(m, colorprofile.ANSI256), "\n")
+		got = indexed.FindAllStringSubmatch(out, -1)
+		if len(got) == 0 {
+			t.Fatalf("%s: no 256-colour runs", m.Name)
+		}
+		for _, c := range got {
+			if !indexes[c[1]] {
+				t.Errorf("%s: 256-colour run %s is not a pinned index", m.Name, c[1])
+			}
+		}
+	}
+}
+
 func TestShapeAndPaletteGoldens(t *testing.T) {
 	for _, m := range []Mark{Large(), Compact()} {
-		golden(t, m.Name+"-shape.txt", strings.Join(Static(m, termenv.Ascii), "\n")+"\n")
+		golden(t, m.Name+"-shape.txt", strings.Join(Static(m, colorprofile.ASCII), "\n")+"\n")
 		golden(t, m.Name+"-ascii.txt", strings.Join(m.ASCII, "\n")+"\n")
-		golden(t, m.Name+"-truecolor.ansi", strings.Join(Static(m, termenv.TrueColor), "\n")+"\n")
-		golden(t, m.Name+"-256.ansi", strings.Join(Static(m, termenv.ANSI256), "\n")+"\n")
+		golden(t, m.Name+"-truecolor.ansi", strings.Join(Static(m, colorprofile.TrueColor), "\n")+"\n")
+		golden(t, m.Name+"-256.ansi", strings.Join(Static(m, colorprofile.ANSI256), "\n")+"\n")
 	}
 }
 

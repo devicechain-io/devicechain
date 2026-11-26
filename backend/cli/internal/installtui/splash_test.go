@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/exp/teatest"
-	"github.com/muesli/termenv"
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/devicechain-io/dcctl/internal/installtui/brand"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
@@ -26,7 +26,7 @@ func splashCaps(width, height int) terminal.Capabilities {
 	return terminal.Evaluate(terminal.Inputs{
 		InputTTY: true, OutputTTY: true, ErrorTTY: true, GOOS: "linux",
 		Env:   map[string]string{"TERM": "xterm-256color", "LANG": "en_US.UTF-8"},
-		Width: width, Height: height, SizeKnown: true, Profile: termenv.TrueColor, UI: terminal.TUI,
+		Width: width, Height: height, SizeKnown: true, Profile: colorprofile.TrueColor, UI: terminal.TUI,
 	})
 }
 
@@ -96,10 +96,10 @@ func TestSplashSkipConsumesTheKey(t *testing.T) {
 	m, _ := manualSplash(clock)
 	m.Init()
 	clock.now = clock.now.Add(100 * time.Millisecond)
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd != nil || m.Splash().Done() {
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}); cmd != nil || m.Splash().Done() {
 		t.Fatal("Ctrl+C skipped the splash; it belongs to the cancel path")
 	}
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	msgs := messages(cmd)
 	if len(msgs) != 1 || msgs[0] != (SplashDone{Skipped: true}) {
 		t.Fatalf("a skip produced %#v; the key must be consumed and the hand-off immediate", msgs)
@@ -107,7 +107,7 @@ func TestSplashSkipConsumesTheKey(t *testing.T) {
 	if _, cmd := m.Update(splashTick{}); cmd != nil {
 		t.Error("the frame pending at the skip was drawn")
 	}
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
 		t.Error("the hand-off was sent twice")
 	}
 }
@@ -117,12 +117,12 @@ func TestSplashSkipConsumesTheKey(t *testing.T) {
 func TestSplashSkipKeyNeverReachesTheNextScreen(t *testing.T) {
 	parent := &handoff{splash: NewSplash(brand.Options{Caps: splashCaps(120, 40)}, SystemClock{})}
 	tm := teatest.NewTestModel(t, parent, teatest.WithInitialTermSize(120, 40))
-	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	tm.Send(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	teatest.WaitFor(t, tm.Output(), func(b []byte) bool { return bytes.Contains(b, []byte("next screen")) },
 		teatest.WithDuration(3*time.Second))
 	// Leave time for anything forwarded to arrive before the closing key.
 	time.Sleep(200 * time.Millisecond)
-	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	tm.Send(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	final := tm.FinalModel(t, teatest.WithFinalTimeout(3*time.Second)).(*handoff)
 	if !final.done.Skipped || strings.Join(final.keys, ",") != "q" {
 		t.Fatalf("hand-off %+v; next screen received %q", final.done, final.keys)
@@ -152,7 +152,7 @@ func (h *handoff) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_, cmd := h.splash.Update(msg)
 		return h, cmd
 	}
-	if k, ok := msg.(tea.KeyMsg); ok {
+	if k, ok := msg.(tea.KeyPressMsg); ok {
 		h.keys = append(h.keys, k.String())
 		if k.String() == "q" {
 			return h, tea.Quit
@@ -161,9 +161,9 @@ func (h *handoff) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return h, nil
 }
 
-func (h *handoff) View() string {
+func (h *handoff) View() tea.View {
 	if h.after {
-		return "next screen"
+		return tea.NewView("next screen")
 	}
 	return h.splash.View()
 }

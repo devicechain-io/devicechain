@@ -6,7 +6,7 @@ package installtui
 import (
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/devicechain-io/dcctl/internal/installtui/brand"
 )
@@ -66,9 +66,10 @@ func (m *SplashModel) next() tea.Cmd {
 	return m.tick(m.splash.NextTick())
 }
 
-// Update handles frames, sizes and keys. Any key except Ctrl+C skips the
+// Update handles frames, sizes and keys. Any key press except Ctrl+C skips the
 // splash and is consumed; Ctrl+C belongs to the program's cancel path and is
-// handled before a screen sees it.
+// handled before a screen sees it. Key releases, which a terminal reports only
+// when the program asks for them, neither skip nor reach anything.
 func (m *SplashModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case splashTick:
@@ -80,8 +81,8 @@ func (m *SplashModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.splash.Resize(msg.Width, msg.Height)
 		return m, nil
-	case tea.KeyMsg:
-		if msg.Type == tea.KeyCtrlC {
+	case tea.KeyPressMsg:
+		if msg.String() == "ctrl+c" {
 			return m, nil
 		}
 		if m.splash.Skip() {
@@ -91,5 +92,6 @@ func (m *SplashModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// View renders the current frame.
-func (m *SplashModel) View() string { return m.splash.View() }
+// View renders the current frame. The parent decides the screen mode (for
+// example the alternate screen) on the view it composes.
+func (m *SplashModel) View() tea.View { return tea.NewView(m.splash.View()) }

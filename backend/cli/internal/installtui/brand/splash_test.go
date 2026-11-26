@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/devicechain-io/dcctl/internal/installtui/brand/gen"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
@@ -23,7 +23,7 @@ func inputs(width, height int, change ...func(*terminal.Inputs)) terminal.Inputs
 	in := terminal.Inputs{
 		InputTTY: true, OutputTTY: true, ErrorTTY: true, GOOS: "linux",
 		Env:   map[string]string{"TERM": "xterm-256color", "LANG": "en_US.UTF-8"},
-		Width: width, Height: height, SizeKnown: true, Profile: termenv.TrueColor, UI: terminal.TUI,
+		Width: width, Height: height, SizeKnown: true, Profile: colorprofile.TrueColor, UI: terminal.TUI,
 	}
 	for _, c := range change {
 		c(&in)
@@ -59,7 +59,7 @@ func visible(line string) (left, right int, ok bool) {
 // axis, and the axis sits in the middle of the terminal, at odd and even
 // widths, for every profile that shows the mark.
 func TestSymmetry(t *testing.T) {
-	for _, profile := range []termenv.Profile{termenv.TrueColor, termenv.ANSI256} {
+	for _, profile := range []colorprofile.Profile{colorprofile.TrueColor, colorprofile.ANSI256} {
 		for _, size := range [][2]int{{120, 40}, {121, 40}, {100, 30}, {81, 24}, {80, 24}, {80, 22}, {99, 21}} {
 			c := caps(size[0], size[1], func(in *terminal.Inputs) { in.Profile = profile })
 			s := splashAt(c, Duration)
@@ -215,7 +215,7 @@ func TestAnimationBeats(t *testing.T) {
 		}
 	}
 	for _, at := range []time.Duration{0, 250, 600, 850, 1200} {
-		golden(t, fmt.Sprintf("frame-%04d.ansi", at), strings.Join(Frame(m, termenv.TrueColor, at*ms), "\n")+"\n")
+		golden(t, fmt.Sprintf("frame-%04d.ansi", at), strings.Join(Frame(m, colorprofile.TrueColor, at*ms), "\n")+"\n")
 	}
 	c := caps(120, 40)
 	if v := splashAt(c, SweepEnd-ms).View(); strings.Contains(v, "Device") {
@@ -387,7 +387,7 @@ func TestResize(t *testing.T) {
 }
 
 func TestArtForMatchesEvaluate(t *testing.T) {
-	for _, p := range []termenv.Profile{termenv.TrueColor, termenv.ANSI256, termenv.ANSI} {
+	for _, p := range []colorprofile.Profile{colorprofile.TrueColor, colorprofile.ANSI256, colorprofile.ANSI} {
 		for w := 50; w <= 130; w += 3 {
 			for h := 14; h <= 34; h++ {
 				c := caps(w, h, func(in *terminal.Inputs) { in.Profile = p })
@@ -406,9 +406,9 @@ func TestSplashGoldens(t *testing.T) {
 		change func(*terminal.Inputs)
 	}{
 		{"l4-120x40", 120, 40, nil},
-		{"l3-100x30", 100, 30, func(in *terminal.Inputs) { in.Profile = termenv.ANSI256 }},
+		{"l3-100x30", 100, 30, func(in *terminal.Inputs) { in.Profile = colorprofile.ANSI256 }},
 		{"l4-80x22", 80, 22, nil},
-		{"l2-80x24", 80, 24, func(in *terminal.Inputs) { in.Profile = termenv.ANSI }},
+		{"l2-80x24", 80, 24, func(in *terminal.Inputs) { in.Profile = colorprofile.ANSI }},
 		{"l1-80x24", 80, 24, func(in *terminal.Inputs) { in.Env["NO_COLOR"] = "1" }},
 		{"l4-60x20", 60, 20, nil},
 	} {
