@@ -6,12 +6,10 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/devicechain-io/dcctl/internal/installchoice"
 	"github.com/devicechain-io/dcctl/internal/installflow"
-	"github.com/devicechain-io/dcctl/internal/installplain"
 	"github.com/spf13/cobra"
 )
 
@@ -107,6 +105,9 @@ the cluster, with one exception: the connection budget may be raised.`,
 			return err
 		}
 		defer func() { err = installVerdict(stream.end(cmd.Context(), err)) }()
+		if _, err := parseInstallUI(installUI); err != nil {
+			return err
+		}
 		provider, err := bootstrap.Get(args[0])
 		if err != nil {
 			return err
@@ -145,10 +146,10 @@ the cluster, with one exception: the connection budget may be raised.`,
 // layer and the engine's own first stages print and decide. Production never reassigns it.
 var installEngine = bootstrap.Install
 
-// runInstallEngine runs an install through the plain presenter: today's output, on the
-// process's own streams, with the kind-cluster prompt answered from stdin. With
-// --output json it runs through the event stream's presenter instead, which never
-// reads stdin.
+// runInstallEngine runs an install through the presenter --ui selects. Without --ui that
+// is the plain presenter: today's output, on the process's own streams, with the
+// kind-cluster prompt answered from stdin. With --output json it runs through the event
+// stream's presenter instead, which never reads stdin.
 func runInstallEngine(ctx context.Context, e *bootstrap.InstallEngine, preflight installflow.PreflightRunner) error {
 	if ctx == nil { // RunE called directly, as tests do, rather than through Execute
 		ctx = context.Background()
@@ -156,8 +157,13 @@ func runInstallEngine(ctx context.Context, e *bootstrap.InstallEngine, preflight
 	if s := activeInstallStream; s != nil {
 		return s.run(ctx, e, preflight)
 	}
-	return installplain.Presenter{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin}.Run(ctx, e,
-		installRequest(e), preflight)
+	// A console mode the terminal probe changed and could not put back is restored on the way out.
+	defer restoreProbedConsole()
+	presenter, err := installPresenterFor(e.Options)
+	if err != nil {
+		return err
+	}
+	return presenter.Run(ctx, e, installRequest(e), preflight)
 }
 
 func init() {

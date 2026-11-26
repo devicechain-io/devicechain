@@ -135,6 +135,7 @@ var installScenarios = []installScenario{
 	{name: "refuse-dev-with-version", args: []string{"install", "local", "--dev", "--version", "v1.2.3"}},
 	{name: "refuse-unpinned-build", args: []string{"install", "local"}, unpinned: true},
 	{name: "refuse-max-connections", args: []string{"install", "local", "--max-connections", "50"}},
+	{name: "refuse-ui-unknown", args: []string{"install", "local", "--ui", "fancy"}},
 
 	// Preflight.
 	{name: "preflight-fail-undersized-docker", args: []string{"install", "local"}, host: hostSmall},
@@ -474,7 +475,7 @@ func TestInstallGoldenChild(t *testing.T) {
 		return
 	}
 	var sc *installScenario
-	for _, list := range [][]installScenario{installScenarios, installCheckScenarios, bootstrapScenarios} {
+	for _, list := range [][]installScenario{installScenarios, installCheckScenarios, bootstrapScenarios, installUIScenarios()} {
 		for i := range list {
 			if list[i].name == name {
 				sc = &list[i]
