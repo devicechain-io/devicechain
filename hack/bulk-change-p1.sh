@@ -116,6 +116,17 @@ p1_deployed_areas() {
   printf '%s' "$out"
 }
 
+# p1_enable_clause <pg_trigger.tgenabled> prints the ALTER TABLE clause that puts a trigger back in that mode:
+# A -> ENABLE ALWAYS, R -> ENABLE REPLICA, O -> ENABLE. D (disabled) or anything else fails. Pure.
+p1_enable_clause() {
+  case "$1" in
+  A) echo "ENABLE ALWAYS" ;;
+  R) echo "ENABLE REPLICA" ;;
+  O) echo "ENABLE" ;;
+  *) return 1 ;;
+  esac
+}
+
 self_test() {
   local rows out rc
   rows='{"arm":"baseline","ok":true,"interactiveP99":100}
@@ -153,6 +164,9 @@ self_test() {
   out="$(p1_deployed_areas $'device-management\noutbound-connectors\nuser-management' $'user-management\n\ndevice-management\nevent-sources')"
   [[ "$out" == "device-management,user-management" ]] || die "SELF-TEST: the deployed areas are not the probe areas that run: '$out'"
   [[ -z "$(p1_deployed_areas 'outbound-connectors' 'outbound-connectors-x')" ]] || die "SELF-TEST: an area name was matched as a prefix"
+  [[ "$(p1_enable_clause A)" == "ENABLE ALWAYS" ]] || die "SELF-TEST: an ALWAYS trigger would not be restored ALWAYS"
+  [[ "$(p1_enable_clause O)" == "ENABLE" && "$(p1_enable_clause R)" == "ENABLE REPLICA" ]] || die "SELF-TEST: the origin/replica clauses are wrong"
+  for bad in D "" x; do p1_enable_clause "$bad" >/dev/null && die "SELF-TEST: trigger mode '$bad' was given a clause"; done
   rc=0
   "$ROOT/hack/perf-ab.sh" --self-test >/dev/null 2>&1 || rc=$?
   [[ "$rc" == 0 ]] || die "SELF-TEST: hack/perf-ab.sh --self-test failed (rc=$rc), and every arm runs through it"
@@ -274,13 +288,31 @@ forward_dm
 caps_tokens=()
 sampler="" capture_loop="" capture_file=""
 
-triggers_sql() { # <ENABLE|DISABLE>
-  local names
-  names="$(psql_q "SELECT tgname FROM pg_trigger WHERE tgrelid = '\"device-management\".entity_attributes'::regclass AND NOT tgisinternal AND tgname LIKE 'dc_%attr%'")"
-  [[ -n "$names" ]] || die "found no attribute guard trigger on entity_attributes"
-  while read -r t; do
-    psql_q "ALTER TABLE \"device-management\".entity_attributes $1 TRIGGER \"$t\"" >/dev/null || die "could not $1 trigger $t"
-  done <<<"$names"
+# The guard's triggers as the instance holds them, "name|tgenabled" per line, read once before the first arm.
+# An arm turns them off and back on; "back on" means exactly the mode read here. The migration installs the
+# guard ENABLE ALWAYS ('A'), and bulk-change activation accepts nothing else: a plain ENABLE ('O') still fires
+# for ordinary sessions but reads as not enforced, so restoring with it would leave the instance unable to
+# start a bulk change after the A/B, silently.
+trigger_modes=""
+triggers_read() {
+  psql_q "SELECT tgname || '|' || tgenabled FROM pg_trigger WHERE tgrelid = '\"device-management\".entity_attributes'::regclass AND NOT tgisinternal AND tgname LIKE 'dc_%attr%' ORDER BY tgname"
+}
+
+triggers_disable() {
+  local t
+  while IFS='|' read -r t _; do
+    psql_q "ALTER TABLE \"device-management\".entity_attributes DISABLE TRIGGER \"$t\"" >/dev/null || die "could not disable trigger $t"
+  done <<<"$trigger_modes"
+}
+
+triggers_restore() {
+  local t mode clause now
+  while IFS='|' read -r t mode; do
+    clause="$(p1_enable_clause "$mode")" || die "trigger $t was in mode '$mode' before the A/B; refusing to guess how to restore it"
+    psql_q "ALTER TABLE \"device-management\".entity_attributes $clause TRIGGER \"$t\"" >/dev/null || die "could not restore trigger $t ($clause)"
+  done <<<"$trigger_modes"
+  now="$(triggers_read)" || die "could not re-read the guard's triggers"
+  [[ "$now" == "$trigger_modes" ]] || die "the guard's triggers are not as they were before the A/B: before '$trigger_modes', now '$now'"
 }
 
 arm_down() {
@@ -295,16 +327,23 @@ arm_down() {
 
 cleanup() {
   arm_down
-  [[ "$treatment" == triggers ]] && triggers_sql ENABLE
+  [[ "$treatment" == triggers && -n "$trigger_modes" ]] && triggers_restore
   kill "$fwd" 2>/dev/null || true
 }
 trap cleanup EXIT
+if [[ "$treatment" == triggers ]]; then
+  trigger_modes="$(triggers_read)" || die "could not read the guard's triggers"
+  [[ -n "$trigger_modes" ]] || die "found no attribute guard trigger on entity_attributes"
+  while IFS='|' read -r t mode; do
+    p1_enable_clause "$mode" >/dev/null || die "trigger $t is in mode '$mode' before the A/B (disabled or unknown); the treatment arm would not be the shipped guard"
+  done <<<"$trigger_modes"
+fi
 
 arm_up() { # <arm> <run>
   local arm="$1" i="$2" t
   case "$treatment:$arm" in
-  triggers:baseline) triggers_sql DISABLE ;;
-  triggers:treatment) triggers_sql ENABLE ;;
+  triggers:baseline) triggers_disable ;;
+  triggers:treatment) triggers_restore ;;
   capture:baseline | caps:baseline) ;;
   capture:treatment)
     local tls_args=()
