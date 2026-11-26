@@ -120,20 +120,15 @@ the cluster, with one exception: the connection budget may be raised.`,
 		doctorOptions := doctorOptsFor(effective.KubeContext, effective.Cluster, effective.Build)
 		doctorOptions.FullSizeInstall = !effective.Compact
 
-		plan, err := prepared.Resolve()
-		if err != nil {
-			// 🔴 THESE REFUSALS HAVE ALWAYS COME AFTER THE PREFLIGHT, and a failed
-			// preflight has always taken precedence over them. The run never starts,
-			// so the preflight is run here, printed as it always was.
-			if !effective.SkipPreflight {
-				if d := runDoctor(args[0], doctorOptions); d.fails > 0 {
-					return bootstrap.ErrPreflightFailed(d.fails)
-				}
-			}
-			return err
-		}
 		return runInstallEngine(cmd.Context(), &bootstrap.InstallEngine{
-			Provider: provider, Options: plan.Options, SkipPreflight: effective.SkipPreflight, Cluster: installEngine,
+			Provider:      provider,
+			Options:       bootstrap.InstallOptions{Options: prepared.BootstrapOptions()},
+			SkipPreflight: effective.SkipPreflight,
+			Cluster:       installEngine,
+			ResolveOptions: func() (bootstrap.InstallOptions, error) {
+				plan, err := prepared.ResolveWithReader(readAlertFile)
+				return plan.Options, err
+			},
 		}, doctorRunner(args[0], doctorOptions))
 	},
 	SilenceUsage: true,

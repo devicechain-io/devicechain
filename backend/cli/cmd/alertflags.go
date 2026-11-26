@@ -4,6 +4,8 @@
 package cmd
 
 import (
+	"os"
+
 	"github.com/spf13/cobra"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
@@ -54,6 +56,9 @@ func (f *alertFlags) register(cmd *cobra.Command) {
 	fl.BoolVar(&f.clear, "clear-alert-routing", false, alertClearUsage)
 }
 
+// readAlertFile allows tests to observe file reads relative to the preflight report.
+var readAlertFile = os.ReadFile
+
 // request reads the files the flags name and validates the whole request from argv alone,
 // before any cluster exists.
 func (f *alertFlags) request() (bootstrap.AlertRoutingRequest, error) {
@@ -67,5 +72,5 @@ func (f *alertFlags) request() (bootstrap.AlertRoutingRequest, error) {
 		SMTPPassFile: f.smtpPassFile,
 		Config:       f.config,
 		Clear:        f.clear,
-	}).Request()
+	}).RequestWithReader(readAlertFile)
 }

@@ -26,6 +26,12 @@ type Alerts struct {
 
 // Request reads protected file inputs and validates the existing routing rules.
 func (f Alerts) Request() (bootstrap.AlertRoutingRequest, error) {
+	return f.RequestWithReader(os.ReadFile)
+}
+
+// RequestWithReader uses the caller's reader for protected alert files.
+// Install calls this only after a successful or skipped preflight.
+func (f Alerts) RequestWithReader(readFile func(string) ([]byte, error)) (bootstrap.AlertRoutingRequest, error) {
 	r := bootstrap.AlertRoutingRequest{
 		Webhook:         strings.TrimSpace(f.Webhook),
 		WatchdogWebhook: strings.TrimSpace(f.Watchdog),
@@ -36,7 +42,7 @@ func (f Alerts) Request() (bootstrap.AlertRoutingRequest, error) {
 		Clear:           f.Clear,
 	}
 	if f.SMTPPassFile != "" {
-		b, err := os.ReadFile(f.SMTPPassFile)
+		b, err := readFile(f.SMTPPassFile)
 		if err != nil {
 			return r, fmt.Errorf("--alert-smtp-password-file: %w", err)
 		}
@@ -46,7 +52,7 @@ func (f Alerts) Request() (bootstrap.AlertRoutingRequest, error) {
 		}
 	}
 	if f.Config != "" {
-		b, err := os.ReadFile(f.Config)
+		b, err := readFile(f.Config)
 		if err != nil {
 			return r, fmt.Errorf("--alert-config: %w", err)
 		}

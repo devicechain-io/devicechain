@@ -7,6 +7,7 @@ package installchoice
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
 )
@@ -71,7 +72,7 @@ type Plan struct {
 func (p Plan) Choices() Choices { return p.choices.Clone() }
 
 // Prepared preserves the historical boundary: these validations happen before
-// preflight; Options performs the later validations after preflight precedence.
+// preflight; Resolve performs the later validations and alert-file reads after it.
 type Prepared struct {
 	Effective   Choices
 	choices     Choices
@@ -91,14 +92,21 @@ func (c Choices) Resolve(version string) (Plan, error) {
 }
 
 func (p Prepared) Resolve() (Plan, error) {
-	opts, err := p.Effective.Options(p.destination, p.restore, p.image, p.version)
+	return p.ResolveWithReader(os.ReadFile)
+}
+
+// ResolveWithReader resolves the late options with the caller's alert-file reader.
+// Install defers this call until its preflight succeeds or is skipped.
+func (p Prepared) ResolveWithReader(readFile func(string) ([]byte, error)) (Plan, error) {
+	opts, err := p.Effective.options(p.destination, p.restore, p.image, p.version, readFile)
 	if err != nil {
 		return Plan{}, err
 	}
 	return Plan{Options: opts, choices: p.choices}, nil
 }
 
-// Prepare settles presets and early refusals without touching a cluster. Notice
+// Prepare settles presets and early refusals, retaining alert-file paths without
+// reading them. It does not touch a cluster. Notice
 // receives the legacy plain messages at their original positions; screens use nil.
 func (c Choices) Prepare(version string, notice func(string)) (Prepared, error) {
 	c = c.Clone()
@@ -175,7 +183,7 @@ func (c Choices) Prepare(version string, notice func(string)) (Prepared, error) 
 	// Placement: the syntax, and a toleration with nothing to place, are knowable from
 	// argv. Whether the nodes can take the databases needs the cluster, and the
 	// install asks it before writing anything.
-	// installOptions reads the same flags again when it builds the engine's options;
+	// Options reads the same choices again when it builds the engine's options;
 	// this call only moves the refusal ahead of the cluster checks below.
 	if _, err := c.Placement(); err != nil {
 		return Prepared{}, err
@@ -213,9 +221,34 @@ func (c Choices) Prepare(version string, notice func(string)) (Prepared, error) 
 	return Prepared{Effective: c, choices: original, destination: backupDestination, restore: restorePlan, image: imageSource, version: version}, nil
 }
 
+// BootstrapOptions supplies the run's target and request before preflight.
+// It uses the effective presets and contains no alert-file reads.
+func (p Prepared) BootstrapOptions() bootstrap.Options {
+	return p.Effective.bootstrapOptions(p.image)
+}
+
+func (c Choices) bootstrapOptions(img bootstrap.ImageSource) bootstrap.Options {
+	return bootstrap.Options{
+		KubeContext:          c.KubeContext,
+		Cluster:              c.Cluster,
+		DryRun:               c.DryRun,
+		AssumeYes:            c.AssumeYes,
+		NoTLS:                c.NoTLS,
+		AllowLegacyDbRemoval: c.AllowLegacyDb,
+		ImageRegistry:        img.Registry,
+		ImageVersion:         img.Version,
+		BuildImages:          c.Build,
+	}
+}
+
 // Options assembles the engine input from settled early plans.
 func (c Choices) Options(dest *bootstrap.BackupDestination, restore bootstrap.RestorePlan,
 	img bootstrap.ImageSource, version string) (bootstrap.InstallOptions, error) {
+	return c.options(dest, restore, img, version, os.ReadFile)
+}
+
+func (c Choices) options(dest *bootstrap.BackupDestination, restore bootstrap.RestorePlan,
+	img bootstrap.ImageSource, version string, readFile func(string) ([]byte, error)) (bootstrap.InstallOptions, error) {
 	if err := bootstrap.ValidateAWSNLB(c.AWSNLB); err != nil {
 		return bootstrap.InstallOptions{}, err
 	}
@@ -227,7 +260,7 @@ func (c Choices) Options(dest *bootstrap.BackupDestination, restore bootstrap.Re
 	if err != nil {
 		return bootstrap.InstallOptions{}, err
 	}
-	alerts, err := c.Alerts.Request()
+	alerts, err := c.Alerts.RequestWithReader(readFile)
 	if err != nil {
 		return bootstrap.InstallOptions{}, err
 	}
@@ -236,17 +269,7 @@ func (c Choices) Options(dest *bootstrap.BackupDestination, restore bootstrap.Re
 			"runs none (--no-monitoring, or --compact, which leaves it out unless --no-monitoring=false). Drop them, or install the monitoring stack")
 	}
 	return bootstrap.InstallOptions{
-		Options: bootstrap.Options{
-			KubeContext:          c.KubeContext,
-			Cluster:              c.Cluster,
-			DryRun:               c.DryRun,
-			AssumeYes:            c.AssumeYes,
-			NoTLS:                c.NoTLS,
-			AllowLegacyDbRemoval: c.AllowLegacyDb,
-			ImageRegistry:        img.Registry,
-			ImageVersion:         img.Version,
-			BuildImages:          c.Build,
-		},
+		Options:           c.bootstrapOptions(img),
 		NoMonitoring:      c.NoMonitoring,
 		NoCNPG:            c.NoCNPG,
 		Compact:           c.Compact,
