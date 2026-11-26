@@ -192,7 +192,7 @@ func TestPassphraseFileStripsOnlyTheTrailingNewline(t *testing.T) {
 		if err := os.WriteFile(p, []byte(tc.written), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		got, err := resolveEscrowPassphrase(p, true, "test")
+		got, err := resolveEscrowPassphrase(EscrowFlags{PassphraseFile: p}, escrowQuestion{purpose: "test", confirm: true})
 		if err != nil {
 			t.Fatalf("resolveEscrowPassphrase(%q): %v", tc.written, err)
 		}
@@ -210,7 +210,7 @@ func TestEmptyPassphraseFileIsRefusedAndNamed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := resolveEscrowPassphrase(p, true, "test")
+	_, err := resolveEscrowPassphrase(EscrowFlags{PassphraseFile: p}, escrowQuestion{purpose: "test", confirm: true})
 	if err == nil {
 		t.Fatal("an empty passphrase file was accepted")
 	}
@@ -231,7 +231,7 @@ func TestEmptyPassphraseEnvIsRefusedRatherThanIgnored(t *testing.T) {
 	noTerminal(t)
 	t.Setenv(EscrowPassphraseEnv, "")
 
-	_, err := resolveEscrowPassphrase("", true, "test")
+	_, err := resolveEscrowPassphrase(EscrowFlags{}, escrowQuestion{purpose: "test", confirm: true})
 	if err == nil {
 		t.Fatal("an empty $" + EscrowPassphraseEnv + " was ignored instead of refused")
 	}
@@ -257,7 +257,7 @@ func TestPassphraseSourcesArePreferredInOrder(t *testing.T) {
 	t.Run("a file beats the environment", func(t *testing.T) {
 		noTerminal(t)
 		t.Setenv(EscrowPassphraseEnv, "from-env")
-		got, err := resolveEscrowPassphrase(p, true, "test")
+		got, err := resolveEscrowPassphrase(EscrowFlags{PassphraseFile: p}, escrowQuestion{purpose: "test", confirm: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -269,7 +269,7 @@ func TestPassphraseSourcesArePreferredInOrder(t *testing.T) {
 	t.Run("the environment beats a prompt", func(t *testing.T) {
 		calls := withPrompt(t, "from-prompt", nil)
 		t.Setenv(EscrowPassphraseEnv, "from-env")
-		got, err := resolveEscrowPassphrase("", true, "test")
+		got, err := resolveEscrowPassphrase(EscrowFlags{}, escrowQuestion{purpose: "test", confirm: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -284,7 +284,7 @@ func TestPassphraseSourcesArePreferredInOrder(t *testing.T) {
 	t.Run("a prompt is the last resort", func(t *testing.T) {
 		clearEscrowEnv(t)
 		calls := withPrompt(t, "from-prompt", nil)
-		got, err := resolveEscrowPassphrase("", true, "test")
+		got, err := resolveEscrowPassphrase(EscrowFlags{}, escrowQuestion{purpose: "test", confirm: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -307,7 +307,7 @@ func TestNoPassphraseAndNoTerminalFailsWithEveryWayOut(t *testing.T) {
 	clearEscrowEnv(t)
 	noTerminal(t)
 
-	_, err := resolveEscrowPassphrase("", true, "test")
+	_, err := resolveEscrowPassphrase(EscrowFlags{}, escrowQuestion{purpose: "test", confirm: true})
 	if err == nil {
 		t.Fatal("a non-interactive run with no passphrase was allowed to proceed")
 	}

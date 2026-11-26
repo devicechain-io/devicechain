@@ -120,18 +120,18 @@ func applyMqttFailClosed(natsVals map[string]interface{}, st *State) {
 
 // sayMqttFailClosed reports the setting in effect, and what it trades, whenever the
 // operator has made a choice. It says nothing for an instance that never chose.
-func sayMqttFailClosed(st *State) {
+func sayMqttFailClosed(c console, st *State) {
 	if st.MqttFailClosed == nil {
 		return
 	}
 	if !*st.MqttFailClosed {
-		fmt.Printf("  %s %s\n", color.WhiteString("MQTT fail-closed:"), color.GreenString("off (recorded on the instance)"))
+		c.printf("  %s %s\n", color.WhiteString("MQTT fail-closed:"), color.GreenString("off (recorded on the instance)"))
 		return
 	}
-	fmt.Printf("  %s %s\n", color.WhiteString("MQTT fail-closed:"), color.GreenString(
+	c.printf("  %s %s\n", color.WhiteString("MQTT fail-closed:"), color.GreenString(
 		"on: a QoS 1 publish is refused, not acknowledged, while the broker's MQTT message store has no leader; the ingest ceiling is lower than with it off"))
 	if !st.HA {
-		fmt.Printf("  %s\n", color.YellowString(
+		c.printf("  %s\n", color.YellowString(
 			"  this cluster was installed without --ha: with one broker replica a node crash can lose what the file store had not yet synced, so a PUBACK is not a durability promise there"))
 	}
 }
@@ -143,9 +143,9 @@ const mqttFailClosedHint = "note: with MQTT fail-closed off, sustained MQTT over
 // sayMqttFailClosedHint closes a finished bootstrap or upgrade with one informational line
 // when fail-closed is not on: never chosen (nil) or chosen off (false). Said on completion,
 // not in the plan, and never when the operator turned it on.
-func sayMqttFailClosedHint(st *State) {
+func sayMqttFailClosedHint(c console, st *State) {
 	if st.MqttFailClosed != nil && *st.MqttFailClosed {
 		return
 	}
-	fmt.Println(color.WhiteString(mqttFailClosedHint))
+	c.println(color.WhiteString(mqttFailClosedHint))
 }

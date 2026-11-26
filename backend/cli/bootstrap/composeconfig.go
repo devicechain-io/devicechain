@@ -582,7 +582,7 @@ func removeInstanceNamespace(ctx context.Context, typed kubernetes.Interface, in
 		// would be noise about somebody else's property. The instance's own namespace is
 		// the one whose foreignness is worth a sentence.
 		if namespace == InstanceNamespace(instance) {
-			fmt.Println(color.YellowString(
+			out(ctx).println(color.YellowString(
 				"  namespace %q is not labelled as this instance's, so it was left alone; "+
 					"anything dcctl wrote inside it is still there", namespace))
 		}

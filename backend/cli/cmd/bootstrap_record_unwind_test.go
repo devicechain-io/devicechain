@@ -79,7 +79,7 @@ func TestRebuildRefusalRestoresOriginalRecord(t *testing.T) {
 	}
 	refusal := fmt.Errorf("step %q: %w", "Refuse a rebuild",
 		&bootstrap.ErrRebuildRefused{Err: errors.New("instance bravo is already running")})
-	unwindLocalRecordWhenNothingWasWritten(bootstrap.Options{Instance: "bravo"}, prior, refusal)
+	unwindLocalRecordWhenNothingWasWritten(bootstrap.Console{}, bootstrap.Options{Instance: "bravo"}, prior, refusal)
 	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestTheCommandLayerClearsTheRecordAfterAHostRefusal(t *testing.T) {
 	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold", &bootstrap.ErrHostTaken{
 		Instance: "bravo", Host: "localhost", Holder: "alpha",
 	})
-	unwindLocalRecordWhenNothingWasWritten(bootstrap.Options{Instance: "bravo"}, prior, refusal)
+	unwindLocalRecordWhenNothingWasWritten(bootstrap.Console{}, bootstrap.Options{Instance: "bravo"}, prior, refusal)
 
 	if recordDirExists(t, home, "bravo") {
 		t.Fatal("`dcctl instances list` would still show an instance that was refused before " +
@@ -112,7 +112,7 @@ func TestTheCommandLayerClearsTheRecordAfterABudgetRefusal(t *testing.T) {
 	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold", &bootstrap.ErrConnectionBudget{
 		Err: errors.New("the shared relational store has no connection budget left for instance \"bravo\""),
 	})
-	unwindLocalRecordWhenNothingWasWritten(bootstrap.Options{Instance: "bravo"}, prior, refusal)
+	unwindLocalRecordWhenNothingWasWritten(bootstrap.Console{}, bootstrap.Options{Instance: "bravo"}, prior, refusal)
 	if recordDirExists(t, home, "bravo") {
 		t.Fatal("a bootstrap refused for its connection budget before anything was written left " +
 			"a record `dcctl instances list` shows")
@@ -127,7 +127,7 @@ func TestTheCommandLayerClearsTheRecordAfterANamespaceRefusal(t *testing.T) {
 	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold", &bootstrap.ErrNamespaceUnavailable{
 		Err: errors.New(`namespace "bravo" already exists and is not this instance's`),
 	})
-	unwindLocalRecordWhenNothingWasWritten(bootstrap.Options{Instance: "bravo"}, prior, refusal)
+	unwindLocalRecordWhenNothingWasWritten(bootstrap.Console{}, bootstrap.Options{Instance: "bravo"}, prior, refusal)
 	if recordDirExists(t, home, "bravo") {
 		t.Fatal("a bootstrap refused for its namespace before anything was written left a record " +
 			"`dcctl instances list` shows for an instance that exists nowhere")
@@ -170,7 +170,7 @@ func TestEveryOtherFailureKeepsTheRecord(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home, prior := refusedHome(t, "bravo")
-			unwindLocalRecordWhenNothingWasWritten(bootstrap.Options{Instance: "bravo"}, prior, tc.err)
+			unwindLocalRecordWhenNothingWasWritten(bootstrap.Console{}, bootstrap.Options{Instance: "bravo"}, prior, tc.err)
 			if !recordDirExists(t, home, "bravo") {
 				t.Fatal("the record was cleared after a failure that may have left a cluster " +
 					"behind, so nothing can name the cluster to destroy it")
@@ -187,7 +187,7 @@ func TestTheCommandLayerClearsTheRecordAfterAStoreRefusal(t *testing.T) {
 	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold", &bootstrap.ErrStoreAndKeyDisagree{
 		Err: errors.New(`the relational store already holds database "bravo"`),
 	})
-	unwindLocalRecordWhenNothingWasWritten(bootstrap.Options{Instance: "bravo"}, prior, refusal)
+	unwindLocalRecordWhenNothingWasWritten(bootstrap.Console{}, bootstrap.Options{Instance: "bravo"}, prior, refusal)
 	if recordDirExists(t, home, "bravo") {
 		t.Fatal("a bootstrap refused because its root key could not open the store it found left a " +
 			"record `dcctl instances list` shows for an instance that was never built")
@@ -210,7 +210,7 @@ func TestADryRunIsNotUnwound(t *testing.T) {
 
 	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold",
 		&bootstrap.ErrHostTaken{Instance: "bravo", Host: "localhost", Holder: "alpha"})
-	unwindLocalRecordWhenNothingWasWritten(
+	unwindLocalRecordWhenNothingWasWritten(bootstrap.Console{},
 		bootstrap.Options{Instance: "bravo", DryRun: true}, prior, refusal)
 
 	if !recordDirExists(t, home, "bravo") {
@@ -247,6 +247,13 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 			unwind = call.Pos()
 			return true
 		}
+		// The pipeline the bootstrap engine runs, handed to it as bootstrapPipeline().
+		// The engine runs its Target, then its Pipeline, then its Finish, and the
+		// command lists them in that order, so source order is run order here.
+		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "bootstrapPipeline" {
+			run = call.Pos()
+			return true
+		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return true
@@ -258,14 +265,6 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 			write = call.Pos()
 		case "ReadInstall":
 			readInstall = call.Pos()
-		case "Run":
-			// NewDefaultPipeline().Run(...), matched through its receiver rather than by
-			// a name as common as "Run".
-			if inner, ok := sel.X.(*ast.CallExpr); ok {
-				if innerSel, ok := inner.Fun.(*ast.SelectorExpr); ok && innerSel.Sel.Name == "NewDefaultPipeline" {
-					run = call.Pos()
-				}
-			}
 		}
 		return true
 	})
@@ -276,7 +275,7 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 	}{
 		{"bootstrap.CapturePriorLocalState", capture},
 		{"bootstrap.WriteInstanceRecord", write},
-		{"NewDefaultPipeline().Run", run},
+		{"bootstrapPipeline()", run},
 		{"unwindLocalRecordWhenNothingWasWritten", unwind},
 	} {
 		if c.pos == token.NoPos {

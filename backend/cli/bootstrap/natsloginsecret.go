@@ -247,11 +247,11 @@ func areaLoginsIntroduced(st *State) bool {
 // sayAreaLoginsIntroduced closes an upgrade that gave every area a broker login of its own with what
 // it did and did not change, because the shared login staying is the part a reader would otherwise
 // assume away.
-func sayAreaLoginsIntroduced(st *State) {
+func sayAreaLoginsIntroduced(c console, st *State) {
 	if !areaLoginsIntroduced(st) {
 		return
 	}
-	fmt.Println(color.WhiteString(
+	c.println(color.WhiteString(
 		"\nEvery area that uses the message broker now has a login of its own, in a Secret only that area mounts,\n" +
 			"and so does the broker administrator, which only the pre-upgrade job mounts and which alone creates\n" +
 			"and changes streams and buckets. Each area's login is held to what that area uses: its own streams,\n" +

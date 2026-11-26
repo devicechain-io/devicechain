@@ -460,9 +460,18 @@ type Pipeline struct {
 
 // Run executes each step in order, printing a numbered banner per step, and
 // returns on the first error wrapping it with the failing step's name.
+//
+// Inside a bootstrap engine run each step is also a stage of the run's event stream
+// (bootstrapStageOf), entered before the fence below so a fence that stops the run is
+// reported against the step it stopped; the banner and everything the step prints go
+// to the run's console.
 func (p Pipeline) Run(ctx context.Context, st *State) error {
 	total := len(p.Steps)
+	run, c := runFrom(ctx), out(ctx)
 	for i, step := range p.Steps {
+		if err := run.enterPipelineStep(step.Name); err != nil {
+			return err
+		}
 		// 🔴 THE FENCE LIVES IN THE LOOP, NOT IN THE STEPS, and that placement is
 		// the point. Once the claim is held, every step boundary is checked by
 		// construction — including the boundary before a step somebody adds later,
@@ -492,10 +501,11 @@ func (p Pipeline) Run(ctx context.Context, st *State) error {
 				return fmt.Errorf("stopping before %q: %w", step.Name, err)
 			}
 		}
-		fmt.Println(GreenUnderline(fmt.Sprintf("\n[%d/%d] %s", i+1, total, step.Name)))
+		c.println(GreenUnderline(fmt.Sprintf("\n[%d/%d] %s", i+1, total, step.Name)))
 		if err := step.Run(ctx, st); err != nil {
 			return fmt.Errorf("step %q: %w", step.Name, err)
 		}
+		run.pipelineStepDone(step.Name, st)
 	}
 	return nil
 }

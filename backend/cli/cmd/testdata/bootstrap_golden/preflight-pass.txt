@@ -1,0 +1,46 @@
+args: bootstrap local acme --no-escrow
+stdin: ""
+exit: 1
+-- stdout (876 bytes) --
+
+🧰 Tooling
+  ✅ docker (/fake/docker)
+  ✅ kubectl (/fake/kubectl)
+  ✅ tofu (/fake/tofu) satisfies bundled required_version
+  ✅ kind (/fake/kind)
+  ✅ cloud-provider-kind (/fake/cloud-provider-kind)
+  ✅ ko (/fake/ko)
+
+🐳 Docker engine
+  ✅ docker daemon reachable
+  ✅ docker context = default (native engine)
+  ✅ engine CPUs: 8
+  ✅ engine memory: 16Gi
+  ✅ storage driver: overlay2
+
+🔌 Ports & registry
+  ✅ port 80 free
+  ✅ port 443 free
+  ✅ port 1883 free
+  ✅ port 1884 free
+  ✅ port 1885 free
+  ✅ port 5000 free
+
+☸️ Kubernetes contexts
+  • no current-context set yet (the kind cluster dcctl creates provides one)
+  • no contexts in the kubeconfig yet (expected before the first install)
+
+🧩 Kubernetes server version
+  • no reachable cluster — skipping (requires Kubernetes 1.29 or newer)
+
+Preflight: all checks passed. ✨
+
+-- stderr (119 bytes) --
+Error: there is no kind cluster "devicechain" (context kind-devicechain). Prepare one first:
+
+    dcctl install local
+
+
+-- engine (11 bytes) --
+not called
+

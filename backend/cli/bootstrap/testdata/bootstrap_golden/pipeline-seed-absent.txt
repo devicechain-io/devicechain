@@ -1,0 +1,62 @@
+-- stdout (2695 bytes) --
+
+[1/11] Ensure local registry
+standing in for Ensure local registry... done.
+
+[2/11] Claim the cluster
+standing in for Claim the cluster... done.
+
+[3/11] Refuse a rebuild
+standing in for Refuse a rebuild... done.
+
+[4/11] Check what other instances hold
+standing in for Check what other instances hold... done.
+
+[5/11] Declare the instance
+standing in for Declare the instance... done.
+
+[6/11] Render configuration
+standing in for Render configuration... done.
+
+[7/11] Apply infrastructure
+standing in for Apply infrastructure... done.
+
+[8/11] Install instance (Helm)
+standing in for Install instance (Helm)... done.
+
+[9/11] Wait for readiness
+standing in for Wait for readiness... done.
+
+[10/11] Even out broker leadership
+standing in for Even out broker leadership... done.
+
+[11/11] Report access info
+
+DeviceChain bootstrap summary
+  Instance: acme
+  Namespace: dci-acme
+  Profile: default
+  Images: published ghcr.io/devicechain-io @ v1.9.0
+  Kube context: kind-devicechain
+  Console: https://devicechain.local/
+  GraphQL: https://devicechain.local/api/<area>/graphql
+  MQTT: node port 31883
+  Superuser: superuser@devicechain.local
+           this instance was already running and has no Secret dci-acme/dci-acme-superuser, so this run generated no password
+
+This instance's superuser (superuser@devicechain.local) was seeded before dcctl generated a password for it,
+with the password earlier releases published. Neither upgrading nor re-running bootstrap
+changes it. If it has not been changed since, change it now in the admin console — or
+recreate the instance (`dcctl destroy` then `dcctl bootstrap`) to have one generated.
+  Backups: NONE — no WAL archiving and no base backups for this instance, so no point-in-time restore is possible
+  Root-key escrow: /home/op/.devicechain/escrow/acme-rootkey.escrow
+                   copy this off the machine and store the passphrase separately — it is the ONLY copy of the key outside the cluster, and no database backup contains it
+
+DeviceChain is up. Open the web console at https://devicechain.local/ and sign in.
+  Local cluster: map the host first — add "127.0.0.1 devicechain.local" to /etc/hosts (or bootstrap with --host localhost).
+  The TLS cert is self-signed (dev-grade), so your browser will warn once (or use --no-tls).
+  A client that should verify it trusts the instance's CA instead: kubectl -n dci-acme get secret devicechain-tls -o jsonpath='{.data.ca\.crt}' | base64 -d
+note: with MQTT fail-closed off, sustained MQTT overload can drop already-acknowledged events from the capture stream. --mqtt-fail-closed prevents it (at a lower ingest ceiling): https://docs.devicechain.io/concepts/security-model#accepted-gaps
+
+-- error (5 bytes) --
+<nil>

@@ -522,9 +522,9 @@ func updateStoreNotes(st *State) []string {
 }
 
 // sayUpdateStoreMountless prints updateStoreNotes, in yellow.
-func sayUpdateStoreMountless(st *State) {
+func sayUpdateStoreMountless(c console, st *State) {
 	for _, n := range updateStoreNotes(st) {
-		fmt.Println(color.YellowString("  note: %s", n))
+		c.println(color.YellowString("  note: %s", n))
 	}
 }
 
