@@ -114,6 +114,11 @@ type installScenario struct {
 	engine     goldenEngine
 	// unpinned leaves this build without a pinned image version, as `make build` does.
 	unpinned bool
+	// env is added to the child's built-up environment.
+	env map[string]string
+	// files are written into the child's working directory, a fresh one, before it runs,
+	// so an argument can name one by a relative path that does not vary between runs.
+	files map[string]string
 }
 
 // installScenarios are the characterised runs. The names are the golden file names.
@@ -229,7 +234,7 @@ var installCheckScenarios = []installScenario{
 // installScenario returns the scenario named name, from either list.
 func findInstallScenario(t *testing.T, name string) installScenario {
 	t.Helper()
-	for _, list := range [][]installScenario{installScenarios, installCheckScenarios} {
+	for _, list := range [][]installScenario{installScenarios, installCheckScenarios, bootstrapScenarios} {
 		for _, s := range list {
 			if s.name == name {
 				return s
@@ -343,6 +348,26 @@ func runInstallChildRaw(t *testing.T, sc installScenario) childResult {
 		}
 		env = append(env, installGoldenKubeEnv+"="+kc)
 	}
+	envKeys := make([]string, 0, len(sc.env))
+	for k := range sc.env {
+		envKeys = append(envKeys, k)
+	}
+	sort.Strings(envKeys)
+	for _, k := range envKeys {
+		env = append(env, k+"="+sc.env[k])
+	}
+	if len(sc.files) > 0 {
+		work := filepath.Join(tmp, "work")
+		if err := os.MkdirAll(work, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, content := range sc.files {
+			if err := os.WriteFile(filepath.Join(work, name), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd.Dir = work
+	}
 	cmd.Env = env
 	cmd.Stdin = strings.NewReader(sc.stdin)
 	var stdout, stderr bytes.Buffer
@@ -438,7 +463,7 @@ func TestInstallGoldenChild(t *testing.T) {
 		return
 	}
 	var sc *installScenario
-	for _, list := range [][]installScenario{installScenarios, installCheckScenarios} {
+	for _, list := range [][]installScenario{installScenarios, installCheckScenarios, bootstrapScenarios} {
 		for i := range list {
 			if list[i].name == name {
 				sc = &list[i]

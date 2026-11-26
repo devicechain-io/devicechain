@@ -50,7 +50,7 @@ func RequireOperator(ctx context.Context, kubeContext, verb, installCommand stri
 	}
 	note, err := judgeOperator(have, want, verb, installCommand)
 	if note != "" {
-		fmt.Println(color.YellowString(note))
+		out(ctx).println(color.YellowString(note))
 	}
 	return err
 }
@@ -166,7 +166,7 @@ func RequireOperatorUnlessAbsent(ctx context.Context, kubeContext, verb, install
 	}
 	note, err := judgeOperatorUnlessAbsent(have, want, verb, installCommand)
 	if note != "" {
-		fmt.Println(color.YellowString(note))
+		out(ctx).println(color.YellowString(note))
 	}
 	return err
 }

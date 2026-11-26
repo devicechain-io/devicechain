@@ -1,0 +1,25 @@
+-- stdout (537 bytes) --
+
+[1/11] Ensure local registry
+standing in for Ensure local registry... done.
+
+[2/11] Claim the cluster
+standing in for Claim the cluster... done.
+
+[3/11] Refuse a rebuild
+standing in for Refuse a rebuild... done.
+
+[4/11] Check what other instances hold
+standing in for Check what other instances hold... done.
+
+[5/11] Declare the instance
+standing in for Declare the instance... done.
+
+[6/11] Render configuration
+standing in for Render configuration... done.
+
+[7/11] Apply infrastructure
+standing in for Apply infrastructure... failed.
+
+-- error (67 bytes) --
+step "Apply infrastructure": the stand-in: the stand-in step failed

@@ -38,6 +38,8 @@ type Presenter struct {
 	// Stdin answers the prompts, read a line at a time as dcctl always has, so
 	// a piped "y" still answers the kind-cluster confirmation.
 	Stdin io.Reader
+	// ReadHidden reads a secret answer with echo off. Nil reads os.Stdin's terminal.
+	ReadHidden func() ([]byte, error)
 }
 
 // errIncomplete is returned when the engine reported no error but the run did not
@@ -75,37 +77,30 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 			return p.Stdout, p.Stderr
 		}
 	}
-	broker := installflow.NewBroker(hub, Responder{Out: con.Stdout, In: p.Stdin}, req.AssumeYes)
-	sum, err := hub.Run(ctx, e, req, installflow.Runtime{Prompts: broker, Preflight: preflight, Console: con})
+	broker := installflow.NewBroker(hub, Responder{Out: con.Stdout, In: p.Stdin, ReadHidden: p.ReadHidden}, req.AssumeYes)
+	sum, err := hub.Run(ctx, e, req, installflow.Runtime{Prompts: broker, Preflight: preflight, Console: con,
+		Reveals: Reveals{W: con.Stdout}})
 	<-hub.Done()
 	if err == nil && !sum.Succeeded() {
 		err = errIncomplete
 	}
-	// Redacted, as the console is: a tool's diagnostics appended to an error must
-	// not print a value the run registered.
+	// Redacted: a tool's diagnostics appended to an error must not print a value
+	// the run registered. The console is NOT redacted: text output shows the person
+	// at the terminal credentials on purpose (a bootstrap's access summary), and
+	// what a tool prints there it always printed.
 	return hub.RedactError(err)
 }
 
 // flushingWriter writes to w once every event emitted before the write has been
-// rendered, redacted of every value the run has registered.
-//
-// The redaction is per write: a value split across two writes is not seen. A tool
-// handed the terminal itself (kind, through ChildStreams) is not redacted at all.
-// Neither was redacted before; with nothing registered the output is unchanged.
+// rendered.
 type flushingWriter struct {
-	hub interface {
-		Flush()
-		Redact(string) string
-	}
-	w io.Writer
+	hub interface{ Flush() }
+	w   io.Writer
 }
 
 func (f flushingWriter) Write(b []byte) (int, error) {
 	f.hub.Flush()
-	if _, err := io.WriteString(f.w, f.hub.Redact(string(b))); err != nil {
-		return 0, err
-	}
-	return len(b), nil
+	return f.w.Write(b)
 }
 
 // Sink renders the events today's plain output has text for, to W.
@@ -116,4 +111,21 @@ func (s Sink) Deliver(e installflow.Envelope) {
 	if o, ok := e.Payload.(installflow.PreflightObservation); ok {
 		RenderObservation(s.W, o)
 	}
+}
+
+// Reveals shows a one-time disclosure the moment it is offered, in the line and at the
+// place dcctl's output always showed it: plain output has no later screen to keep it
+// for. Showing consumes the capability, so nothing can show it a second time.
+//
+// 🔴 THE VALUE GOES TO W AND NOWHERE ELSE: not to the hub, so never into an event, the
+// log ring or the summary.
+type Reveals struct{ W io.Writer }
+
+// Offer shows the value now.
+func (r Reveals) Offer(o installflow.RevealOffer) {
+	if o.PlainLine == nil {
+		o.Reveal.Discard()
+		return
+	}
+	_ = o.Reveal.Show(func(v []byte) { o.PlainLine(r.W, v) })
 }

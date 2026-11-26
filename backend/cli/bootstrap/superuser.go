@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/fatih/color"
 	corev1 "k8s.io/api/core/v1"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 // The instance's global superuser, and the one secret it is seeded from.
@@ -112,50 +114,85 @@ const (
 // an instance that is not yet running. Never under a recovery or over a live instance,
 // where the identity table may have been seeded long before this Secret existed and
 // the value it holds would sign in as nobody.
-func printSuperuserReport(st *State) {
+//
+// 🔴 INSIDE AN ENGINE RUN THE VALUE IS NEVER PRINTED HERE. It is offered to the presenter
+// as a one-use installflow.Reveal (showSuperuserSeed), under exactly the eligibility
+// above and nowhere else: the plain presenter shows it at once, in this line, so the
+// output is what it always was; a presenter with a screen of its own shows it on an
+// explicit action; a run that shows progress only never offers it. It is never written
+// to the run's console, so it cannot reach the log ring, an event or the summary.
+func printSuperuserReport(ctx context.Context, st *State) {
+	c := out(ctx)
 	ref := superuserSecretRef(st.Instance)
-	fmt.Printf("  %s %s\n", color.WhiteString("Superuser:"), color.GreenString(auth.DefaultSuperuserEmail))
+	c.printf("  %s %s\n", color.WhiteString("Superuser:"), color.GreenString(auth.DefaultSuperuserEmail))
 
 	if st.SuperuserSeed == superuserSeedAbsent {
-		fmt.Printf("           %s\n", color.YellowString(
+		c.printf("           %s\n", color.YellowString(
 			"this instance was already running and has no Secret %s/%s, so this run generated no password",
 			ref.Namespace, ref.Name))
-		warnPreGeneratedSuperuser(st)
+		warnPreGeneratedSuperuser(c, st)
 		return
 	}
 
 	switch {
 	case st.Restore.RestoresRelationalStore():
 		// The identities came back with the relational store, and are not reseeded.
-		fmt.Printf("           %s\n", color.YellowString(
+		c.printf("           %s\n", color.YellowString(
 			"this instance's identities were RESTORED, so its superuser keeps the password it had. "+
 				"The Secret below holds a seed used only to seed an EMPTY identity table — "+
 				"it is not the restored superuser's password"))
 	case st.Escrow.RestoredFrom != "":
 		// The root key came back from escrow, but whether the identities did depends on
 		// what the relational store holds, which this run does not decide.
-		fmt.Printf("           %s\n", color.YellowString(
+		c.printf("           %s\n", color.YellowString(
 			"this instance was RECOVERED from escrow. If its identity table came back with it, its superuser "+
 				"keeps the password it had and the Secret below does not sign in; if the table was empty, "+
 				"the superuser was seeded from the Secret below"))
 	case st.DryRun && st.OverLiveInstance:
-		fmt.Printf("           %s\n", color.WhiteString(
+		c.printf("           %s\n", color.WhiteString(
 			"this instance is already running, so a real run generates no password: its superuser keeps the one it has"))
 	case st.DryRun:
-		fmt.Printf("           %s\n", color.WhiteString(
+		c.printf("           %s\n", color.WhiteString(
 			"a password is generated for this instance and shown once, at the end of the real run"))
 	case st.Credentials != nil && !st.OverLiveInstance &&
 		(st.SuperuserSeed == superuserSeedMinted || st.SuperuserSeed == superuserSeedRecovered):
-		fmt.Printf("           %s %s\n", color.WhiteString("password:"), color.GreenString(st.Credentials.SuperuserPassword))
-		fmt.Printf("           %s\n", color.YellowString(
-			"generated for this instance and shown only this once — sign in to the admin console to create your "+
-				"first tenant, and change it there"))
+		if showSuperuserSeed(ctx, c, st, ref) {
+			c.printf("           %s\n", color.YellowString(
+				"generated for this instance and shown only this once — sign in to the admin console to create your "+
+					"first tenant, and change it there"))
+		} else {
+			c.printf("           %s\n", color.YellowString(
+				"generated for this instance and not shown by this run — read it from the Secret below, sign in to "+
+					"the admin console to create your first tenant, and change it there"))
+		}
 	}
-	fmt.Printf("           %s\n", color.WhiteString(fmt.Sprintf(
+	c.printf("           %s\n", color.WhiteString(fmt.Sprintf(
 		"the superuser's seed password is kept in Secret %s/%s, key %s "+
 			"(changing the password in the console does not update it):", ref.Namespace, ref.Name, ref.Key)))
-	fmt.Printf("           %s\n", color.GreenString(
+	c.printf("           %s\n", color.GreenString(
 		"kubectl -n %s get secret %s -o jsonpath='{.data.%s}' | base64 -d", ref.Namespace, ref.Name, ref.Key))
+}
+
+// superuserSeedLine writes the seed password as the report has always shown it.
+func superuserSeedLine(w io.Writer, value []byte) {
+	fmt.Fprintf(w, "           %s %s\n", color.WhiteString("password:"), color.GreenString(string(value)))
+}
+
+// showSuperuserSeed shows the seed once, and reports whether it was shown. Outside an
+// engine run it prints the line to c, as the report always did. Inside one it is
+// offered to the presenter as a one-use Reveal, never printed to the run's console.
+func showSuperuserSeed(ctx context.Context, c console, st *State, ref mintedCredentialRef) bool {
+	run := runFrom(ctx)
+	if run == nil {
+		superuserSeedLine(c.stdout(), []byte(st.Credentials.SuperuserPassword))
+		return true
+	}
+	return run.offerReveal(installflow.RevealOffer{
+		Step:      installflow.StepBootstrapReport,
+		Subject:   installflow.RevealSuperuserSeed,
+		Where:     installflow.SecretRef{Namespace: ref.Namespace, Name: ref.Name, Key: ref.Key},
+		PlainLine: superuserSeedLine,
+	}, st.Credentials.SuperuserPassword)
 }
 
 // warnPreGeneratedSuperuser is said at the end of an upgrade — or a bootstrap re-run
@@ -165,11 +202,11 @@ func printSuperuserReport(st *State) {
 // 🔴 SAID LOUDLY BECAUSE SILENCE READS AS REMEDIATED. Neither verb changes the
 // superuser's password, and neither can: the table is already seeded, and nothing here
 // knows whether the operator has changed it since. What they can do is say so.
-func warnPreGeneratedSuperuser(st *State) {
+func warnPreGeneratedSuperuser(c console, st *State) {
 	if st.SuperuserSeed != superuserSeedAbsent {
 		return
 	}
-	fmt.Println(color.RedString(
+	c.println(color.RedString(
 		"\nThis instance's superuser (%s) was seeded before dcctl generated a password for it,\n"+
 			"with the password earlier releases published. Neither upgrading nor re-running bootstrap\n"+
 			"changes it. If it has not been changed since, change it now in the admin console — or\n"+

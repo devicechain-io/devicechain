@@ -100,7 +100,7 @@ Hay límites:
 
 - Un valor de menos de 4 bytes no puede eliminarse sin eliminar texto normal con él. No se redacta, y la ejecución indica cuántos valores así encontró en una línea de registro `warning:`.
 - Un valor de menos de 6 bytes, y todo valor de un plugin exec o de un proveedor de autenticación, se elimina del texto, pero no detiene un código de evento que casualmente lo contenga.
-- Con `--output text`, la salida propia de la instalación y su error se redactan, pero una escritura cada vez. Una herramienta a la que se le da el propio terminal, como kind al crear el clúster local, y un plugin de credenciales exec del kubeconfig escriben directamente en el terminal y no se redactan.
+- Con `--output text`, solo se redacta el error que imprime dcctl. El resto es la salida que `dcctl install` ha impreso siempre, que puede mostrarte una credencial a propósito (el resumen de acceso de un bootstrap), y las herramientas que ejecuta, entre ellas kind y un plugin de credenciales exec del kubeconfig, escriben en el terminal como siempre.
 
 Un kubeconfig que dcctl no puede leer, o con el que no puede crear un cliente para un contexto, se informa por el tipo de problema, el archivo y el nombre del contexto, nunca con el motivo del cliente de Kubernetes, que puede citar las credenciales y URL del archivo. Esto también se aplica a `--output text`.
 

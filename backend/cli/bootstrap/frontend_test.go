@@ -317,7 +317,7 @@ func TestNginxOnlyOverlayKeysAreRetiredUnderTheGateway(t *testing.T) {
 		st := compactState(false)
 		st.IngressController = frontEndGateway
 		st.ValuesOverlay, st.ValuesOverlayRecorded = overlay(), overlay()
-		if err := checkNginxOnlyOverlay(st); err != nil {
+		if err := checkNginxOnlyOverlay(stdConsole, st); err != nil {
 			t.Fatalf("a recorded overlay was refused: %v", err)
 		}
 		vals := authoringValues(st)
@@ -338,7 +338,7 @@ func TestNginxOnlyOverlayKeysAreRetiredUnderTheGateway(t *testing.T) {
 		st := compactState(false)
 		st.IngressController = frontEndGateway
 		st.ValuesOverlay = overlay() // nothing recorded: every key is new
-		err := checkNginxOnlyOverlay(st)
+		err := checkNginxOnlyOverlay(stdConsole, st)
 		if err == nil || !strings.Contains(err.Error(), "ingress.uploadMaxBodySize") {
 			t.Fatalf("a new uploadMaxBodySize under the Gateway was not refused: %v", err)
 		}
@@ -348,7 +348,7 @@ func TestNginxOnlyOverlayKeysAreRetiredUnderTheGateway(t *testing.T) {
 		st.IngressController = frontEndGateway
 		st.ValuesOverlay, st.ValuesOverlayRecorded = overlay(), overlay()
 		st.ValuesOverlay["ingress"].(map[string]interface{})["uploadMaxBodySize"] = "4g"
-		if err := checkNginxOnlyOverlay(st); err == nil {
+		if err := checkNginxOnlyOverlay(stdConsole, st); err == nil {
 			t.Error("an uploadMaxBodySize that CHANGED under the Gateway was accepted")
 		}
 	})
@@ -360,7 +360,7 @@ func TestNginxOnlyOverlayKeysAreRetiredUnderTheGateway(t *testing.T) {
 			st := compactState(false)
 			mutate(st)
 			st.ValuesOverlay = overlay()
-			if err := checkNginxOnlyOverlay(st); err != nil {
+			if err := checkNginxOnlyOverlay(stdConsole, st); err != nil {
 				t.Errorf("%s legacy=%v: %v", st.IngressController, st.LegacyIngress, err)
 			}
 			ing := authoringValues(st)["ingress"].(map[string]interface{})

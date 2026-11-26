@@ -160,11 +160,11 @@ func identityIntroduced(st *State) bool {
 
 // sayIdentityIntroduced closes an upgrade that moved the sign-in buckets into the identity account
 // with what that did to people, because it is the one visible consequence of the change.
-func sayIdentityIntroduced(st *State) {
+func sayIdentityIntroduced(c console, st *State) {
 	if !identityIntroduced(st) {
 		return
 	}
-	fmt.Println(color.YellowString(
+	c.println(color.YellowString(
 		"\nThe sign-in buckets moved into the broker's own IDENTITY account, reachable only by user-management.\n" +
 			"Sessions from before the upgrade were NOT carried over, deliberately: their tokens were readable by\n" +
 			"every service login, so they were deleted. Everyone signs in once more (console, dashboards, MCP and\n" +

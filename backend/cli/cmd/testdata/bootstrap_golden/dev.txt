@@ -1,0 +1,15 @@
+args: bootstrap local scratch --dev --skip-preflight
+stdin: ""
+exit: 1
+-- stdout (62 bytes) --
+dev mode: --build --host localhost --no-tls --yes --no-escrow
+
+-- stderr (119 bytes) --
+Error: there is no kind cluster "devicechain" (context kind-devicechain). Prepare one first:
+
+    dcctl install local
+
+
+-- engine (11 bytes) --
+not called
+

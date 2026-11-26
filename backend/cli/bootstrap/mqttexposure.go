@@ -289,7 +289,7 @@ func settleMQTTExposurePrereqs(ctx context.Context, st *State) error {
 }
 
 // sayMQTTExposure reports the exposure in effect and what the operator must do next.
-func sayMQTTExposure(st *State) {
+func sayMQTTExposure(c console, st *State) {
 	if st.MQTTExposure == "" || st.MQTTExposure == MQTTExposureNone {
 		return
 	}
@@ -297,12 +297,12 @@ func sayMQTTExposure(st *State) {
 	if st.MQTTExposure == MQTTExposureLoadBalancer {
 		how = "a LoadBalancer Service"
 	}
-	fmt.Printf("  mqtt exposure    %s on port %d (%s), host %s\n", st.MQTTExposure, mqttsPort, how, st.MQTTHost)
+	c.printf("  mqtt exposure    %s on port %d (%s), host %s\n", st.MQTTExposure, mqttsPort, how, st.MQTTHost)
 	where := "the ingress controller's load balancer"
 	if st.MQTTExposure == MQTTExposureLoadBalancer {
 		where = "the " + natsReleaseName + "-mqtt-lb Service's load balancer"
 	}
-	fmt.Println(color.YellowString("  mqtt exposure    point DNS for %s at %s, and open TCP %d in the firewall; "+
+	c.println(color.YellowString("  mqtt exposure    point DNS for %s at %s, and open TCP %d in the firewall; "+
 		"the broker's certificate carries the host", st.MQTTHost, where, mqttsPort))
 }
 

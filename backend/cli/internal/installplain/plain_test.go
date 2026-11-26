@@ -197,25 +197,27 @@ func TestPresenterReturnsTheEnginesOwnError(t *testing.T) {
 	}
 }
 
-// 🔴 A REGISTERED VALUE IS REDACTED FROM TEXT OUTPUT TOO: the console the engine
-// writes to, and the error the command prints (a tool's diagnostics appended to it).
-func TestPresenterRedactsRegisteredValues(t *testing.T) {
+// 🔴 THE ERROR IS REDACTED, AND THE CONSOLE IS NOT. A tool's diagnostics appended to
+// an error must not print a registered value; the console is text output's own, and
+// shows the person at the terminal what it always showed, credentials included (a
+// bootstrap's access summary).
+func TestPresenterRedactsTheErrorNotTheConsole(t *testing.T) {
 	const secret = "dcCanaryPlainSecret9Xk2"
 	eng := funcEngine(func(_ context.Context, _ installflow.Request, rt installflow.Runtime) (installflow.Summary, error) {
 		if err := rt.Events.AddSecret(secret); err != nil {
 			t.Fatal(err)
 		}
-		io.WriteString(rt.Console.Stdout, "tool says "+secret+"\n")
-		io.WriteString(rt.Console.Stderr, "tool warns "+secret+"\n")
+		io.WriteString(rt.Console.Stdout, "your password: "+secret+"\n")
 		return installflow.Summary{Outcome: installflow.RunFailed}, errors.New("apply failed\nError: " + secret)
 	})
 	var stdout, stderr bytes.Buffer
 	err := Presenter{Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("")}.Run(
 		context.Background(), eng, installflow.Request{}, nil)
-	for where, text := range map[string]string{"stdout": stdout.String(), "stderr": stderr.String(), "error": fmt.Sprint(err)} {
-		if strings.Contains(text, secret) || !strings.Contains(text, "[redacted]") {
-			t.Errorf("%s: %q", where, text)
-		}
+	if msg := fmt.Sprint(err); strings.Contains(msg, secret) || !strings.Contains(msg, "[redacted]") {
+		t.Errorf("error: %q", msg)
+	}
+	if !strings.Contains(stdout.String(), "your password: "+secret) {
+		t.Errorf("the console was changed: %q", stdout.String())
 	}
 }
 

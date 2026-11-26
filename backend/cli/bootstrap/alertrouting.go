@@ -577,7 +577,7 @@ func publishAlertRouting(ctx context.Context, typed kubernetes.Interface, dyn dy
 	}
 	routing, err := effectiveAlertRouting(ctx, typed, dyn)
 	if err != nil {
-		fmt.Printf("  %s not publishing the alert routing: %v\n", color.YellowString("warning:"), err)
+		out(ctx).printf("  %s not publishing the alert routing: %v\n", color.YellowString("warning:"), err)
 		return nil
 	}
 	return patchAlertRouting(ctx, dyn, st.Instance, routing)

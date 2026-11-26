@@ -100,7 +100,7 @@ There are limits:
 
 - A value shorter than 4 bytes cannot be removed without removing ordinary text with it. It is not redacted, and the run says how many such values it found in a `warning:` log line.
 - A value shorter than 6 bytes, and every exec plugin or auth provider value, is removed from text but does not stop an event code that happens to spell it.
-- With `--output text`, the install's own output and its error are redacted, but one write at a time. A tool that is given the terminal itself, such as kind creating the local cluster, and a kubeconfig exec credential plugin write to the terminal directly and are not redacted.
+- With `--output text`, only the error dcctl prints is redacted. The rest is the output `dcctl install` has always printed, which can show you a credential on purpose (a bootstrap's access summary), and the tools it runs, kind and a kubeconfig exec credential plugin among them, write to the terminal as they always have.
 
 A kubeconfig dcctl cannot read, or cannot turn into a client for a context, is reported by the kind of problem, the file and the context's name, never with the Kubernetes client's reason, which can quote the credentials and URLs in the file. This holds for `--output text` too.
 

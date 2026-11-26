@@ -94,22 +94,22 @@ func stepRefuseRebuild(ctx context.Context, st *State) error {
 		decl, _ := readInstanceDeclaration(ctx, st.KubeContext, st.Instance)
 		finishing := bootstrapUnfinished(decl)
 		if rebuildRefusalReason(st, deployed, decl) != nil {
-			wouldDo(fmt.Sprintf(
+			out(ctx).wouldDo(fmt.Sprintf(
 				"REFUSE: instance %q is already running here, so a real run would stop at this "+
 					"step and point at `dcctl upgrade`", st.Instance))
 		} else if err := bootstrapObserveRefusal(st, deployed); err != nil {
-			wouldDo("REFUSE: " + err.Error())
+			out(ctx).wouldDo("REFUSE: " + err.Error())
 		} else if finishing {
-			wouldDo(fmt.Sprintf("finish instance %q, whose first bootstrap did not complete", st.Instance))
+			out(ctx).wouldDo(fmt.Sprintf("finish instance %q, whose first bootstrap did not complete", st.Instance))
 		}
 		st.OverLiveInstance = !finishing
 		return nil
 	}
 
-	doing("checking whether this instance already exists")
+	out(ctx).doing("checking whether this instance already exists")
 	deployed, err := lookupDeployedInstance(ctx, st.KubeContext, st.Instance)
 	if err != nil {
-		return fail("checking for an existing instance", err)
+		return out(ctx).fail("checking for an existing instance", err)
 	}
 	var decl *dcv1beta1.Instance
 	if deployed != nil {
@@ -117,7 +117,7 @@ func stepRefuseRebuild(ctx context.Context, st *State) error {
 		// not tell whether its first bootstrap finished" must not resolve to "it did
 		// not", which is the direction that lets a run through over a live instance.
 		if decl, err = readInstanceDeclaration(ctx, st.KubeContext, st.Instance); err != nil {
-			return fail("checking whether this instance's first bootstrap finished", err)
+			return out(ctx).fail("checking whether this instance's first bootstrap finished", err)
 		}
 	}
 	if err := rebuildRefusalReason(st, deployed, decl); err != nil {
@@ -132,9 +132,9 @@ func stepRefuseRebuild(ctx context.Context, st *State) error {
 	// long ago. Recorded so the credential step does not generate a seed password for
 	// it (resolveCredentials), and so the declare step does not mark it unfinished.
 	st.OverLiveInstance = deployed != nil && !finishing
-	done()
+	out(ctx).done()
 	if finishing {
-		fmt.Println(color.YellowString("  instance %q exists but its first bootstrap did not finish; "+
+		out(ctx).println(color.YellowString("  instance %q exists but its first bootstrap did not finish; "+
 			"this run finishes it, reusing what the earlier run put in the cluster", st.Instance))
 	}
 	return nil

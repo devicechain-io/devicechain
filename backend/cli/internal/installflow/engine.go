@@ -46,6 +46,12 @@ type Request struct {
 	// AssumeYes is --yes: the confirmations it already answers today are
 	// answered without asking. It never supplies a secret.
 	AssumeYes bool
+	// ProgressOnly says the presenter shows progress and nothing that waits on a
+	// person: the terminal UI under --yes. Such a run never reveals a secret, even one
+	// it is otherwise eligible to show once (see Reveal); the summary points at where
+	// the value is kept instead. The plain presenter never sets it: it prints what
+	// dcctl always printed.
+	ProgressOnly bool
 }
 
 // Runtime is what an engine is handed to talk to the outside world.
@@ -76,6 +82,10 @@ type Runtime struct {
 	// admitted has settled (see Admission). Hub.Run applies it and sets
 	// Outlive; a presenter that offers a re-run in the same process sets it.
 	Admission *Admission
+	// Reveals receives the run's one-time disclosures (see Reveal). Nil means the
+	// presenter can show none, and the engine then offers none: the value stays where
+	// it is kept, and only a reference to it is reported.
+	Reveals RevealSink
 	// Outlive registers work the run is leaving behind when it returns — a
 	// tool it stopped waiting for — and returns the function that says that
 	// work has ended. Nil when nothing gates a re-run on it.

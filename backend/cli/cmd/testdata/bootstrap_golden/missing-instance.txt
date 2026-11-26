@@ -1,0 +1,11 @@
+args: bootstrap local
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (36 bytes) --
+Error: accepts 2 arg(s), received 1
+
+-- engine (11 bytes) --
+not called
+
