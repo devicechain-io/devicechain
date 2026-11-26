@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
 )
@@ -29,4 +30,13 @@ func initFleetDriver() error {
 	// Every replica runs this task; posting claims, device try-locks and the DB pacer arbitrate overlap.
 	FleetDriver = newFleetDriver(Microservice, fleetDriverInterval, Api.RunFleetDriver)
 	return FleetDriver.Initialize(context.Background())
+}
+
+// initBulkChangeMetrics registers the bulk-change series, only on a build that serves bulk changes.
+// main.go calls it before any bulk-change task or the API can write them.
+func initBulkChangeMetrics() {
+	if !ledger.Served {
+		return
+	}
+	model.UseBulkChangeMetrics(model.NewBulkChangeMetrics(Microservice))
 }

@@ -1260,6 +1260,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initAttributeOrphanSweep(); err != nil {
 				return err
 			}
+			initBulkChangeMetrics()
 			if err = initFleetExpirySweep(); err != nil {
 				return err
 			}

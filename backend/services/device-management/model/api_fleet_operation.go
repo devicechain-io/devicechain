@@ -112,6 +112,7 @@ func (api *Api) CreateFleetOperation(ctx context.Context, req *FleetOperationCre
 		}
 		existing, err = api.fleetCreateStepOne(ctx, tenant, req, n, plan, actor)
 		if err != nil {
+			bulkMetrics.refused(err) // QUOTA_EXCEEDED and ADMISSION_BUSY come from this step
 			return nil, err
 		}
 		return api.fleetCreateStepTwo(ctx, tenant, existing, plan, actor)
@@ -306,7 +307,7 @@ func (api *Api) fleetCreateStepTwo(ctx context.Context, tenant string, op *Fleet
 	var out *FleetOperation
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		// The fence, exclusive: nothing posts or controls this operation while its lines go in.
-		if err := fleetLock(tx, fleetOpKey(tenant, op.ID), false); err != nil {
+		if err := fleetFence(tx, fleetOpKey(tenant, op.ID), false, "CREATE"); err != nil {
 			return err
 		}
 		var current FleetOperation

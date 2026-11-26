@@ -182,11 +182,11 @@ func TestFleetBulkLineLockOrderOnPostgres(t *testing.T) {
 				var err error
 				switch path {
 				case "erase":
-					err = redactFleetDeviceLinesOnTx(writer, uint(low.TargetId.Int64), false)
+					err = redactFleetDeviceLinesOnTx(writer, uint(low.TargetId.Int64), false, nil)
 				case "abort":
 					_, _, err = fleetAbortChanges(writer, p.op, time.Now(), "test", "", fleetEventAbort)
 				default:
-					err = fleetPurgeEvidenceChunk(writer, p.op)
+					err = fleetPurgeEvidenceChunk(writer, p.op, nil)
 				}
 				if err == nil {
 					err = writer.Commit().Error
