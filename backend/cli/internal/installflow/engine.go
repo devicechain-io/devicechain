@@ -62,6 +62,16 @@ type Runtime struct {
 	// presenter that draws its own screen passes writers that feed the hub's
 	// log ring. The engine never writes to os.Stdout or os.Stderr itself.
 	Console Console
+	// ObserveTools asks the engine to run a tool in its machine-readable mode where
+	// that is the only way to observe its progress (OpenTofu's apply -json), and to
+	// report what it observes as measured progress.
+	//
+	// 🔴 IT CHANGES THE TOOL'S OWN TEXT ON Console. In that mode the console gets
+	// the lines the engine renders from the tool's messages, not the tool's human
+	// output, so a presenter that must reproduce today's bytes (the plain one)
+	// leaves it off. Readiness gates are reported either way: they change nothing
+	// a presenter prints.
+	ObserveTools bool
 }
 
 // Console is the pair of writers an engine's human-readable output goes to,
@@ -70,6 +80,13 @@ type Runtime struct {
 type Console struct {
 	Stdout io.Writer
 	Stderr io.Writer
+	// Flush waits for previously emitted events to be rendered, when the
+	// presenter renders asynchronously.
+	Flush func()
+	// ChildStreams optionally hands a subprocess its streams after flushing.
+	// The plain terminal presenter uses this to preserve inherited file
+	// descriptors; other consoles keep using the writers above.
+	ChildStreams func() (io.Writer, io.Writer)
 }
 
 // Reporter is the engine's side of the hub.

@@ -189,17 +189,7 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 			"runs none (--no-monitoring, or --compact, which leaves it out unless --no-monitoring=false). Drop them, or install the monitoring stack")
 	}
 	return bootstrap.InstallOptions{
-		Options: bootstrap.Options{
-			KubeContext:          installKubeContext,
-			Cluster:              installCluster,
-			DryRun:               installDryRun,
-			AssumeYes:            installAssumeYes,
-			NoTLS:                installNoTLS,
-			AllowLegacyDbRemoval: installAllowLegacyDb,
-			ImageRegistry:        img.Registry,
-			ImageVersion:         img.Version,
-			BuildImages:          installBuild,
-		},
+		Options:           installBootstrapOptions(img),
 		NoMonitoring:      installNoMonitoring,
 		NoCNPG:            installNoCNPG,
 		Compact:           installCompact,
@@ -221,6 +211,22 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 		MQTTGateway:         mqttGatewayFlag(installMQTTGatewayGiven, installMQTTGateway),
 		AlertRouting:        alerts,
 	}, nil
+}
+
+// installBootstrapOptions contains no file reads, so the engine can identify
+// its run before preflight without settling the alert files early.
+func installBootstrapOptions(img bootstrap.ImageSource) bootstrap.Options {
+	return bootstrap.Options{
+		KubeContext:          installKubeContext,
+		Cluster:              installCluster,
+		DryRun:               installDryRun,
+		AssumeYes:            installAssumeYes,
+		NoTLS:                installNoTLS,
+		AllowLegacyDbRemoval: installAllowLegacyDb,
+		ImageRegistry:        img.Registry,
+		ImageVersion:         img.Version,
+		BuildImages:          installBuild,
+	}
 }
 
 // installCmd prepares a cluster for DeviceChain instances.
@@ -386,20 +392,12 @@ the cluster, with one exception: the connection budget may be raised.`,
 		doctorOptions.FullSizeInstall = !installCompact
 
 		installMQTTGatewayGiven = cmd.Flags().Changed("mqtt-gateway")
-		opts, err := installOptions(backupDestination, restorePlan, imageSource)
-		if err != nil {
-			// 🔴 THESE REFUSALS HAVE ALWAYS COME AFTER THE PREFLIGHT, and a failed
-			// preflight has always taken precedence over them. The run never starts,
-			// so the preflight is run here, printed as it always was.
-			if !installSkipPreflight {
-				if d := runDoctor(args[0], doctorOptions); d.fails > 0 {
-					return bootstrap.ErrPreflightFailed(d.fails)
-				}
-			}
-			return err
-		}
 		return runInstallEngine(cmd.Context(), &bootstrap.InstallEngine{
-			Provider: provider, Options: opts, SkipPreflight: installSkipPreflight, Cluster: installEngine,
+			Provider: provider, Options: bootstrap.InstallOptions{Options: installBootstrapOptions(imageSource)},
+			SkipPreflight: installSkipPreflight, Cluster: installEngine,
+			ResolveOptions: func() (bootstrap.InstallOptions, error) {
+				return installOptions(backupDestination, restorePlan, imageSource)
+			},
 		}, doctorRunner(args[0], doctorOptions))
 	},
 	SilenceUsage: true,

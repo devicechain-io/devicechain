@@ -19,7 +19,7 @@ import (
 )
 
 // The posting transaction: one line, one device, one transaction. It is the ONLY code that applies a
-// config.set line, and its order is the whole protocol (a later change adds the loop that feeds it):
+// config.set line, and its order is the whole protocol:
 //
 //	 1  the operation's fence, SHARED (a control transition waits for every poster in flight)
 //	 2  re-read dispatch, epoch and grantee under the fence; anything but the lease's own state rolls back
@@ -49,8 +49,10 @@ type FleetPostOutcome string
 const (
 	// FleetPosted: the effect and the claim committed together.
 	FleetPosted FleetPostOutcome = "POSTED"
-	// FleetPostRefused: a gate refused the line (REFUSED) or its target is gone (SKIPPED), and that is recorded.
+	// FleetPostRefused: a gate refused the line (REFUSED), and that is recorded.
 	FleetPostRefused FleetPostOutcome = "REFUSED"
+	// FleetPostSkipped: the target is gone (SKIPPED), and that is recorded separately from refusals.
+	FleetPostSkipped FleetPostOutcome = "SKIPPED"
 	// FleetPostBusy: the device's lock is held by another writer. Nothing was written; back off.
 	FleetPostBusy FleetPostOutcome = "BUSY"
 	// FleetPostLostRace: another poster or a cancel got the line first. Nothing was written.
@@ -422,6 +424,9 @@ func (api *Api) recordFleetRefusal(ctx context.Context, tenant string, opID, lin
 			return nil
 		}
 		result = FleetPostResult{Outcome: FleetPostRefused, Code: d.code}
+		if d.posting == string(ledger.PostingSkipped) {
+			result.Outcome = FleetPostSkipped
+		}
 		return nil
 	})
 	if errors.Is(err, errPostAbandoned) {

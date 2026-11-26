@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
 )
@@ -64,6 +65,13 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	con := installflow.Console{
 		Stdout: flushingWriter{hub: hub, w: p.Stdout},
 		Stderr: flushingWriter{hub: hub, w: p.Stderr},
+		Flush:  hub.Flush,
+	}
+	if p.Stdout == os.Stdout && p.Stderr == os.Stderr {
+		con.ChildStreams = func() (io.Writer, io.Writer) {
+			hub.Flush()
+			return p.Stdout, p.Stderr
+		}
 	}
 	broker := installflow.NewBroker(hub, Responder{Out: con.Stdout, In: p.Stdin}, req.AssumeYes)
 	sum, err := hub.Run(ctx, e, req, installflow.Runtime{Prompts: broker, Preflight: preflight, Console: con})

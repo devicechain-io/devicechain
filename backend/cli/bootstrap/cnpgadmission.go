@@ -412,6 +412,9 @@ func applyWithCNPGAdmissionRetry(ctx context.Context, tf tofuApplier, opts []tfe
 	if !isCNPGWebhookUnavailable(err.Error()) {
 		return fmt.Errorf("%s: %w", what, err)
 	}
+	// Inside an engine run the retry is the stage's next attempt, opened before the
+	// wait so the wait belongs to it: whatever it measures is measured afresh.
+	runFrom(ctx).retry("cnpg-admission-unreachable")
 	reportCNPGAdmissionWait(out(ctx))
 	if werr := waitForAdmission(ctx); werr != nil {
 		return fmt.Errorf("%s failed because the CloudNativePG admission webhook "+

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dcctl/internal/tofujson"
 	"github.com/hashicorp/terraform-exec/tfexec"
 )
 
@@ -51,6 +52,10 @@ type tofuExec struct {
 	// planned is the identity of the cluster the last Plan was made against, so applying
 	// that saved plan can be refused if the cluster dcctl now reaches is another one.
 	planned string
+	// parked is set once a command has been abandoned (runUntilAbandoned): its
+	// goroutine is still inside terraform-exec, so nothing may hand terraform-exec a
+	// writer again. See applyObserved.
+	parked bool
 }
 
 // streamSwitch is the one writer terraform-exec is ever given for stdout. Pointing a
@@ -292,7 +297,11 @@ func (t *tofuExec) streamingTo(ctx context.Context, w io.Writer, run func() erro
 	// follows an abandoned apply still cannot print the state — and safely, because the
 	// parked command holds the same writer rather than a field this is overwriting.
 	defer t.stdout.to(io.Discard)
-	return runUntilAbandoned(ctx, t.abandonBudget, run)
+	err := runUntilAbandoned(ctx, t.abandonBudget, run)
+	if errors.Is(err, errTofuAbandoned) {
+		t.parked = true
+	}
+	return err
 }
 
 // Init initialises the root and moves its lock file onto the provider versions the
@@ -346,7 +355,51 @@ func (t *tofuExec) Apply(ctx context.Context, opts ...tfexec.ApplyOption) error 
 		path, kctx := pinVars(p)
 		opts = append(append([]tfexec.ApplyOption(nil), opts...), path, kctx)
 	}
+	if p := runFrom(ctx).tofuProgress(); p != nil && !t.parked {
+		return t.applyObserved(ctx, p, opts)
+	}
 	return t.streaming(ctx, func() error { return t.Terraform.Apply(ctx, opts...) })
+}
+
+// applyObserved is Apply in OpenTofu's -json mode, read by a tofujson.Observer that
+// counts the apply's resource actions for p and writes the messages' own lines to the
+// console. It runs only when the presenter asked for its tools to be observed
+// (installflow.Runtime.ObserveTools); otherwise Apply is what it always was.
+//
+// What does NOT change: the pin and its -var settings (applied by Apply above), the
+// streaming switch and when it points where, the version read first, the graceful
+// stop and the abandon budget, and stderr.
+//
+// 🔴 THE OBSERVER IS BUILT HERE, PER APPLY, AND NEVER KEPT. A second apply — the
+// CloudNativePG retry — plans again, and its count is against its own plan. A runner
+// that held one observer across applies would show the retry's progress against the
+// failed apply's denominator.
+//
+// 🔴 IN -json MODE OPENTOFU'S DIAGNOSTICS ARE IN THE STREAM, NOT ON STDERR, so the
+// error terraform-exec returns says only that the command exited non-zero. The
+// observer's error diagnostics are appended to it: the CNPG admission retry, and
+// anything else that reads an apply error's text, sees the words it always saw.
+//
+// 🔴 terraform-exec's ApplyJSON SETS ITS STDOUT WRITER ON EVERY CALL. It is handed
+// t.stdout, the writer it already holds, so its destination is still chosen only by
+// the switch — but the field is written, and that write is a data race against a
+// command parked by runUntilAbandoned. Hence the parked check in Apply: a runner that
+// has abandoned a command never applies in this mode again (and in practice is never
+// asked to; an abandoned command fails the run).
+func (t *tofuExec) applyObserved(ctx context.Context, p *stageProgress, opts []tfexec.ApplyOption) error {
+	c := out(ctx)
+	p.tofu(tofujson.Progress{}) // observed, total not yet known
+	o := tofujson.New(c.stdout(), c.stderr(), p.tofu)
+	err := t.streamingTo(ctx, o, func() error { return t.Terraform.ApplyJSON(ctx, t.stdout, opts...) })
+	// After streamingTo: the switch points at io.Discard again, so no command can
+	// still be writing to o.
+	o.Close()
+	if err != nil {
+		if diags := o.Errors(); diags != "" {
+			err = fmt.Errorf("%w\n%s", err, diags)
+		}
+	}
+	return err
 }
 
 // usesSavedPlan reports whether an apply is of a saved plan file.

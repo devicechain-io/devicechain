@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
 )
@@ -22,6 +23,10 @@ import (
 type InstallEngine struct {
 	Provider Provider
 	Options  InstallOptions
+	// ResolveOptions reads and validates file-backed options after a successful
+	// (or skipped) preflight. Options above already supplies the run's target,
+	// --dry-run and --yes; the resolved values must agree with that request.
+	ResolveOptions func() (InstallOptions, error)
 	// SkipPreflight is --skip-preflight. Without it the engine REQUIRES a preflight
 	// runner: a run that silently skipped the checks because nobody wired them would
 	// be the fail-open this field exists to make impossible.
@@ -53,7 +58,8 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 		return failedBeforeStart(rt, err)
 	}
 
-	// The flags were settled by the command before the run began.
+	// The command settled argv-only checks before the run began. File reads
+	// retain their historical position after preflight.
 	r.enter(installflow.StepInstallInputs)
 
 	if e.SkipPreflight {
@@ -72,11 +78,27 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 		}
 	}
 
+	opts := e.Options
+	if e.ResolveOptions != nil {
+		r.finishActive()
+		if rt.Console.Flush != nil {
+			rt.Console.Flush()
+		}
+		resolved, err := e.ResolveOptions()
+		if err != nil {
+			return r.close(ctx, err)
+		}
+		if req.DryRun != resolved.DryRun || req.AssumeYes != resolved.AssumeYes {
+			return r.close(ctx, errors.New("install engine: the request and the install options disagree about --dry-run or --yes"))
+		}
+		opts = resolved
+	}
+
 	cluster := e.Cluster
 	if cluster == nil {
 		cluster = Install
 	}
-	return r.close(ctx, cluster(withRun(ctx, r), e.Provider, e.Options))
+	return r.close(ctx, cluster(withRun(ctx, r), e.Provider, opts))
 }
 
 // failedBeforeStart closes a run that could not begin. The hub accepts a summary
@@ -152,9 +174,13 @@ type installRun struct {
 	prompts installflow.PromptBroker
 	con     console
 	dryRun  bool
+	// observeTools is Runtime.ObserveTools: run OpenTofu's apply in -json mode and
+	// report its resource actions. Off, the apply runs exactly as it always has.
+	observeTools bool
 
 	started  bool
 	step     installflow.StepID // the active stage; "" between stages
+	attempt  int                // the active stage's attempt, 1-based
 	stepMuts bool               // the active stage may change something
 	last     installflow.StepID // the last stage entered
 	changed  bool               // a stage that may change something has been entered
@@ -163,6 +189,9 @@ type installRun struct {
 	claim     installflow.ClaimState
 	readiness installflow.Readiness
 
+	// emitMu guards emitErr: progress is emitted from the goroutine terraform-exec
+	// drains a command's stdout on, while every other event comes from the run's own.
+	emitMu  sync.Mutex
 	emitErr error // the first event the hub refused
 }
 
@@ -170,7 +199,7 @@ func newInstallRun(rt installflow.Runtime, dryRun bool) *installRun {
 	return &installRun{
 		events: rt.Events, prompts: rt.Prompts, con: consoleOf(rt.Console), dryRun: dryRun,
 		record: installflow.RecordNotRead, claim: installflow.ClaimNotClaimed,
-		readiness: installflow.ReadinessNotChecked,
+		readiness: installflow.ReadinessNotChecked, observeTools: rt.ObserveTools,
 	}
 }
 
@@ -178,9 +207,19 @@ func (r *installRun) emit(ev installflow.Event) {
 	if r == nil || r.events == nil {
 		return
 	}
-	if err := r.events.Emit(ev); err != nil && r.emitErr == nil {
-		r.emitErr = err
+	if err := r.events.Emit(ev); err != nil {
+		r.emitMu.Lock()
+		if r.emitErr == nil {
+			r.emitErr = err
+		}
+		r.emitMu.Unlock()
 	}
+}
+
+func (r *installRun) firstEmitErr() error {
+	r.emitMu.Lock()
+	defer r.emitMu.Unlock()
+	return r.emitErr
 }
 
 func (r *installRun) start(t installflow.Target) error {
@@ -203,7 +242,7 @@ func (r *installRun) enter(id installflow.StepID) {
 	r.finishActive()
 	r.emit(installflow.Event{Step: id, Attempt: 1, Payload: installflow.StepStarted{
 		Message: installflow.MessageCode(id), BudgetMS: stageBudget(id)}})
-	r.step, r.last, r.stepMuts = id, id, mutatingStage(id)
+	r.step, r.attempt, r.last, r.stepMuts = id, 1, id, mutatingStage(id)
 	if r.stepMuts && !r.dryRun {
 		r.changed = true
 	}
@@ -239,7 +278,7 @@ func (r *installRun) finishActive() {
 	case r.dryRun:
 		outcome = installflow.StepPlanned
 	}
-	r.emit(installflow.Event{Step: r.step, Attempt: 1, Payload: installflow.StepFinished{Outcome: outcome}})
+	r.emit(installflow.Event{Step: r.step, Attempt: r.attempt, Payload: installflow.StepFinished{Outcome: outcome}})
 	r.step = ""
 }
 
@@ -312,8 +351,8 @@ func (r *installRun) close(ctx context.Context, err error) (installflow.Summary,
 		if r.dryRun && r.last != installflow.StepInstallSummary {
 			r.skip(installflow.StepInstallSummary)
 		}
-		if r.emitErr != nil {
-			err = fmt.Errorf("reporting the install's progress: %w", r.emitErr)
+		if emitErr := r.firstEmitErr(); emitErr != nil {
+			err = fmt.Errorf("reporting the install's progress: %w", emitErr)
 		}
 	}
 	switch {
@@ -333,7 +372,7 @@ func (r *installRun) close(ctx context.Context, err error) (installflow.Summary,
 			if r.stepMuts {
 				effect = installflow.EffectMayHaveChanged
 			}
-			r.emit(installflow.Event{Step: r.step, Attempt: 1, Payload: installflow.StepFailed{
+			r.emit(installflow.Event{Step: r.step, Attempt: r.attempt, Payload: installflow.StepFailed{
 				Code: code, Retry: installflow.RetryUnknown, Cancelled: cancelled, Effect: effect}})
 			r.step = ""
 		}
