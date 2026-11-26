@@ -14,6 +14,7 @@ import (
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	apply "github.com/devicechain-io/dc-k8s/apply"
+	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/fatih/color"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -974,6 +975,7 @@ func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []d
 	pulls := newPullWatch(imagePullGrace)
 	for {
 		pending := ""
+		confirmed := 0 // rolled out, in the order they are checked, before the first that is not
 		for _, t := range targets {
 			d, err := typed.AppsV1().Deployments(t.namespace).Get(ctx, t.name, metav1.GetOptions{})
 			if err != nil {
@@ -981,6 +983,7 @@ func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []d
 				break
 			}
 			if deploymentRolledOut(d) {
+				confirmed++
 				continue
 			}
 			if err := pulls.check(ctx, typed, d, time.Now()); err != nil {
@@ -995,6 +998,10 @@ func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []d
 				t, s.UpdatedReplicas, desired, s.AvailableReplicas)
 			break
 		}
+		// An engine run reports what this look confirmed; a pass that stops at the
+		// first pending Deployment has confirmed nothing about the ones after it.
+		runFrom(ctx).gate(metricDeployments, installflow.UnitDeployments, sourceKubernetes,
+			int64(confirmed), int64(len(targets)))
 		if pending == "" {
 			return nil
 		}

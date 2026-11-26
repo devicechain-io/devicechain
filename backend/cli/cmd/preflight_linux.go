@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/devicechain-io/dcctl/internal/installplain"
 )
 
 // cgroup2SuperMagic identifies a cgroup v2 mount (statfs f_type).
@@ -26,7 +28,7 @@ func checkSystem(d *doctor, dockerRoot string, hostsKind bool) {
 
 // checkKindNode runs the checks that exist for kind's node containers: cgroups and inotify.
 func checkKindNode(d *doctor) {
-	section("Kernel & cgroups", "🧬")
+	d.section(installplain.SectionKernel)
 	var cg syscall.Statfs_t
 	if err := syscall.Statfs("/sys/fs/cgroup", &cg); err == nil {
 		if int64(cg.Type) == cgroup2SuperMagic {
@@ -55,7 +57,7 @@ func checkKindNode(d *doctor) {
 
 // checkDockerHost runs the checks on the Docker host itself, whatever the cluster is.
 func checkDockerHost(d *doctor, dockerRoot string) {
-	section("Disk", "💾")
+	d.section(installplain.SectionDisk)
 	if dockerRoot == "" {
 		dockerRoot = "/var/lib/docker"
 	}
@@ -77,7 +79,7 @@ func checkDockerHost(d *doctor, dockerRoot string) {
 	}
 
 	if isWSL() {
-		section("WSL2", "🪟")
+		d.section(installplain.SectionWSL)
 		d.pass("running under WSL2")
 		cfg := readWSLConfig()
 		switch {

@@ -1,0 +1,11 @@
+args: install
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (36 bytes) --
+Error: accepts 1 arg(s), received 0
+
+-- engine (11 bytes) --
+not called
+

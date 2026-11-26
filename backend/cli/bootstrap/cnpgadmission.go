@@ -290,6 +290,7 @@ func waitForCNPGAdmission(ctx context.Context, kubeContext string, timeout time.
 // Returning nil means "go ahead and re-apply" — which is NOT the same as "the
 // webhook is up", and the two are printed differently on purpose.
 func awaitCNPGAdmission(ctx context.Context, dyn dynamic.Interface, timeout, poll time.Duration) error {
+	c := out(ctx)
 	deadline := time.Now().Add(timeout)
 
 	// 🔴 The deadline has to bound the CALLS, not merely the gaps between them.
@@ -316,14 +317,14 @@ func awaitCNPGAdmission(ctx context.Context, dyn dynamic.Interface, timeout, pol
 
 		switch verdict {
 		case webhookReachable:
-			fmt.Println(color.GreenString("   the API server can admit a Cluster; retrying the infrastructure apply."))
+			c.println(color.GreenString("   the API server can admit a Cluster; retrying the infrastructure apply."))
 			return nil
 		case probeInconclusive:
 			// We could not measure, so we do not claim to have. Fall back to what
 			// would have happened without this gate at all — one more apply, which
 			// atomic has made safe — and say exactly that.
-			fmt.Println(color.YellowString("   cannot tell whether the webhook is reachable from here: %v", err))
-			fmt.Println(color.YellowString("   retrying the infrastructure apply anyway; re-running bootstrap is safe."))
+			c.println(color.YellowString("   cannot tell whether the webhook is reachable from here: %v", err))
+			c.println(color.YellowString("   retrying the infrastructure apply anyway; re-running bootstrap is safe."))
 			return nil
 		}
 
@@ -331,7 +332,7 @@ func awaitCNPGAdmission(ctx context.Context, dyn dynamic.Interface, timeout, pol
 		if time.Now().After(deadline) {
 			return giveUpOnCNPGAdmission(ctx, timeout, last)
 		}
-		fmt.Println(color.YellowString("   [%d] still unreachable, waiting %s...", attempt, poll))
+		c.println(color.YellowString("   [%d] still unreachable, waiting %s...", attempt, poll))
 		select {
 		case <-ctx.Done():
 			return giveUpOnCNPGAdmission(ctx, timeout, last)
@@ -370,12 +371,12 @@ func giveUpOnCNPGAdmission(ctx context.Context, timeout time.Duration, last erro
 // them apart — and on the update path both of those claims are false. Telling an
 // operator mid-re-bootstrap that nothing was left behind, while their populated
 // production databases sit right there, would be worse than saying nothing.
-func reportCNPGAdmissionWait() {
-	fmt.Println()
-	fmt.Println(color.YellowString("⚠  The API server could not reach the CloudNativePG admission webhook, so the"))
-	fmt.Println(color.YellowString("   database cluster step was refused and rolled itself back. Waiting for the"))
-	fmt.Println(color.YellowString("   API server to be able to admit a Cluster, then retrying once."))
-	fmt.Println(color.YellowString("   If you see this on EVERY install or bootstrap it is not a race and should be reported."))
+func reportCNPGAdmissionWait(c console) {
+	c.println()
+	c.println(color.YellowString("⚠  The API server could not reach the CloudNativePG admission webhook, so the"))
+	c.println(color.YellowString("   database cluster step was refused and rolled itself back. Waiting for the"))
+	c.println(color.YellowString("   API server to be able to admit a Cluster, then retrying once."))
+	c.println(color.YellowString("   If you see this on EVERY install or bootstrap it is not a race and should be reported."))
 }
 
 // tofuApplier is the one method applyWithCNPGAdmissionRetry needs, so the retry
@@ -411,7 +412,10 @@ func applyWithCNPGAdmissionRetry(ctx context.Context, tf tofuApplier, opts []tfe
 	if !isCNPGWebhookUnavailable(err.Error()) {
 		return fmt.Errorf("%s: %w", what, err)
 	}
-	reportCNPGAdmissionWait()
+	// Inside an engine run the retry is the stage's next attempt, opened before the
+	// wait so the wait belongs to it: whatever it measures is measured afresh.
+	runFrom(ctx).retry("cnpg-admission-unreachable")
+	reportCNPGAdmissionWait(out(ctx))
 	if werr := waitForAdmission(ctx); werr != nil {
 		return fmt.Errorf("%s failed because the CloudNativePG admission webhook "+
 			"was unreachable, and it did not recover: %w (original apply error: %v)", what, werr, err)

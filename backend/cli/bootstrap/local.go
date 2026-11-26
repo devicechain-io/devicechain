@@ -31,6 +31,7 @@ func (localProvider) Name() string { return "local" }
 // creates it when it is missing, and every other command refuses and names the install
 // that would. An explicit --kube-context overrides this and is never auto-created.
 func (localProvider) EnsureCluster(ctx context.Context, opts Options) (ClusterBinding, error) {
+	c := out(ctx)
 	names, _, err := KubeContexts()
 	if err != nil {
 		return ClusterBinding{}, fmt.Errorf("loading kube contexts: %w", err)
@@ -47,7 +48,7 @@ func (localProvider) EnsureCluster(ctx context.Context, opts Options) (ClusterBi
 			return ClusterBinding{}, fmt.Errorf("kube-context %q not found; available contexts: %s",
 				opts.KubeContext, strings.Join(names, ", "))
 		}
-		fmt.Println(color.WhiteString("Using kube-context %s.", color.GreenString(opts.KubeContext)))
+		c.println(color.WhiteString("Using kube-context %s.", color.GreenString(opts.KubeContext)))
 		return ClusterBinding{
 			// Recovered only when the context follows kind's own convention. A context
 			// named `prod-eu-west` says nothing about its cluster's name, and an empty
@@ -69,7 +70,7 @@ func (localProvider) EnsureCluster(ctx context.Context, opts Options) (ClusterBi
 	kubeContext := kindContext(clusterName)
 	binding := ClusterBinding{Cluster: clusterName, KubeContext: kubeContext, Managed: true}
 	if containsString(names, kubeContext) {
-		fmt.Println(color.WhiteString("Using kind cluster %s.", color.GreenString(kubeContext)))
+		c.println(color.WhiteString("Using kind cluster %s.", color.GreenString(kubeContext)))
 		return binding, nil
 	}
 
@@ -81,16 +82,16 @@ func (localProvider) EnsureCluster(ctx context.Context, opts Options) (ClusterBi
 			"first:\n\n    %s\n", clusterName, kubeContext, InstallCommand("local", binding))
 	}
 	if opts.DryRun {
-		fmt.Println(color.YellowString("[dry-run] would create kind cluster %q (context %s)", clusterName, kubeContext))
+		c.println(color.YellowString("[dry-run] would create kind cluster %q (context %s)", clusterName, kubeContext))
 		return binding, nil
 	}
-	if !opts.AssumeYes &&
-		!confirm(fmt.Sprintf("No kind cluster %q found. Create it now?", clusterName)) {
+	if !opts.AssumeYes && !runFrom(ctx).confirmCreateCluster(ctx, clusterName) {
 		return ClusterBinding{}, fmt.Errorf(
 			"no kind cluster %q, and it was not created (the prompt was declined, or there is no "+
 				"terminal to answer it); re-run with --yes to create it, or pass --kube-context to "+
 				"install into an existing cluster", clusterName)
 	}
+	runFrom(ctx).mayChange()
 	if err := createKindCluster(ctx, clusterName); err != nil {
 		return ClusterBinding{}, err
 	}
@@ -113,9 +114,13 @@ func clusterNameFromKindContext(kubeContext string) string {
 
 const kindContextPrefix = "kind-"
 
+// runKindCommand lets tests inspect the child's descriptors without creating a cluster.
+var runKindCommand = (*exec.Cmd).Run
+
 // createKindCluster creates a kind cluster from the embedded topology (the same
 // config in deploy/local/kind-cluster.yaml). kind streams its own progress.
 func createKindCluster(ctx context.Context, name string) error {
+	c := out(ctx)
 	if _, err := exec.LookPath("kind"); err != nil {
 		return fmt.Errorf("kind not found on PATH; install it (https://kind.sigs.k8s.io) and re-run")
 	}
@@ -133,12 +138,11 @@ func createKindCluster(ctx context.Context, name string) error {
 		return err
 	}
 
-	fmt.Println(color.WhiteString("Creating kind cluster %q:", name))
+	c.println(color.WhiteString("Creating kind cluster %q:", name))
 	cmd := exec.CommandContext(ctx, "kind", "create", "cluster",
 		"--name", name, "--config", cfg.Name(), "--wait", "90s")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	cmd.Stdout, cmd.Stderr = c.commandStreams()
+	if err := runKindCommand(cmd); err != nil {
 		return fmt.Errorf("creating kind cluster %q: %w", name, err)
 	}
 	return nil

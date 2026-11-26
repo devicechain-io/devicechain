@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../../shared/io.devicechain.demo-platform/Dotnet~/DeviceChain.Demos.Core/DeviceChain.Demos.Core.csproj" />
+    <ProjectReference Include="../../../shared/io.devicechain.demo-hud/Dotnet~/DeviceChain.Demos.Hud.Model/DeviceChain.Demos.Hud.Model.csproj" />
   </ItemGroup>
 
   <ItemGroup>

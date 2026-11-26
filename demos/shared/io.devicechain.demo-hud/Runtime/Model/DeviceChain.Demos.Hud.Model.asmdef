@@ -1,0 +1,14 @@
+{
+    "name": "DeviceChain.Demos.Hud.Model",
+    "rootNamespace": "DeviceChain.Demos.Hud",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

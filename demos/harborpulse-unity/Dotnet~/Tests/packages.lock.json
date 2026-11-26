@@ -75,10 +75,14 @@
       "devicechain.demos.core": {
         "type": "Project"
       },
+      "devicechain.demos.hud.model": {
+        "type": "Project"
+      },
       "devicechain.harborpulse.model": {
         "type": "Project",
         "dependencies": {
-          "DeviceChain.Demos.Core": "[1.0.0, )"
+          "DeviceChain.Demos.Core": "[1.0.0, )",
+          "DeviceChain.Demos.Hud.Model": "[1.0.0, )"
         }
       }
     }

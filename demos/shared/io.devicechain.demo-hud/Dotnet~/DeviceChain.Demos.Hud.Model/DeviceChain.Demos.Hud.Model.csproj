@@ -1,0 +1,27 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  The engine-free half of the shared demo HUD, compiled from the package's Runtime/Model folder (the
+  same files Unity compiles through DeviceChain.Demos.Hud.Model.asmdef, which has no engine
+  references): the theme, the caption box's fade, the chain card's rows and cues, the alarm pin's
+  severity styles, screen-space size and raise/clear timeline, the top strip and the end card. The
+  uGUI views (Runtime/Ugui) are compiled only by Unity.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+    <RootNamespace>DeviceChain.Demos.Hud</RootNamespace>
+    <AssemblyName>DeviceChain.Demos.Hud.Model</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Runtime/Model/**/*.cs" />
+  </ItemGroup>
+
+</Project>

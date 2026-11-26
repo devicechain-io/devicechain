@@ -5,7 +5,8 @@
         "DeviceChain.Harborpulse.Model",
         "DeviceChain.Demos.Core",
         "UnityEngine.TestRunner",
-        "UnityEditor.TestRunner"
+        "UnityEditor.TestRunner",
+        "DeviceChain.Demos.Hud.Model"
     ],
     "includePlatforms": [
         "Editor"

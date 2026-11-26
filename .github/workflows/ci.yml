@@ -2551,6 +2551,43 @@ jobs:
         run: hack/check-unity-metas.sh demos/shared/io.devicechain.demo-platform
 
   # ---------------------------------------------------------------------------
+  # Shared demo HUD (demos/shared/io.devicechain.demo-hud): the story HUD the Unity demos share. Its
+  # rules (the caption box's fade, the chain card's rows and cues, the alarm pin's sizes, styles and
+  # timeline, the panel opacity and contrast rule) are engine-free, so the Dotnet~/ sidecar compiles the
+  # SAME .cs files Unity compiles (Runtime/Model through its asmdef, Tests/Runtime through the tests
+  # asmdef) at LangVersion 9 for netstandard2.1 and net8.0 with warnings as errors, and runs the tests
+  # under NUnit. The uGUI views (Runtime/Ugui) need the ugui package and are compiled by Unity.
+  # ---------------------------------------------------------------------------
+  demo-hud:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: demos/shared/io.devicechain.demo-hud/Dotnet~
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore --locked-mode
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Test
+        run: dotnet test --no-build -c Release --blame-hang-timeout 2m
+
+      - name: Unity .meta check self-test
+        working-directory: .
+        run: hack/check-unity-metas.sh --self-test
+
+      - name: Every package file and folder has a committed .meta
+        working-directory: .
+        run: hack/check-unity-metas.sh demos/shared/io.devicechain.demo-hud
+
+  # ---------------------------------------------------------------------------
   # Towerpulse model and device plane (demos/towerpulse-unity): the engine-free thermal, CO2 and occupancy
   # model and its scripted day, and the engine-free half of the device plane (wire vocabulary, readings,
   # command completion). Its Dotnet~/ sidecar compiles the SAME .cs files Unity compiles (Scripts/Model
@@ -3911,6 +3948,7 @@ jobs:
       - unity-compile-check
       - sim-traffic
       - demo-platform
+      - demo-hud
       - towerpulse-model
       - harborpulse-model
       - helm

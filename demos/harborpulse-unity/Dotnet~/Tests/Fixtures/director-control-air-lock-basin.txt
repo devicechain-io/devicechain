@@ -1,4 +1,12 @@
 +810|4b|caption|Running, but moving nothing. / Critical.|3:run5:alarm33:alarm:hp-pump-basin:pump-air-lock13:hp-pump-basin13:pump-air-lock32:cycle-hp-pump-basinpump-air-lock0:0:6:RAISED8:PLATFORM
 +810|4b|follow|hp-pump-basin|
++810|4b|node-label|Critical alarm: no flow|3:run5:alarm33:alarm:hp-pump-basin:pump-air-lock13:hp-pump-basin13:pump-air-lock32:cycle-hp-pump-basinpump-air-lock0:0:6:RAISED8:PLATFORM
++810|4b|node|air|3:run5:alarm33:alarm:hp-pump-basin:pump-air-lock13:hp-pump-basin13:pump-air-lock32:cycle-hp-pump-basinpump-air-lock0:0:6:RAISED8:PLATFORM
++813|4b|node-label|Notification sent|3:run7:attempt40:attempt:hp-pump-basin:pump-air-lock:SENT13:hp-pump-basin13:pump-air-lock32:cycle-hp-pump-basinpump-air-lock0:0:4:SENT8:PLATFORM
++813|4b|node|airlock-notified|3:run7:attempt40:attempt:hp-pump-basin:pump-air-lock:SENT13:hp-pump-basin13:pump-air-lock32:cycle-hp-pump-basinpump-air-lock0:0:4:SENT8:PLATFORM
 -810|4b|caption|Running, but moving nothing. / Critical.|3:run5:alarm32:alarm:hp-pump-east:pump-air-lock12:hp-pump-east13:pump-air-lock31:cycle-hp-pump-eastpump-air-lock0:0:6:RAISED8:PLATFORM
 -810|4b|follow|hp-pump-east|
+-810|4b|node-label|Critical alarm: no flow|3:run5:alarm32:alarm:hp-pump-east:pump-air-lock12:hp-pump-east13:pump-air-lock31:cycle-hp-pump-eastpump-air-lock0:0:6:RAISED8:PLATFORM
+-810|4b|node|air|3:run5:alarm32:alarm:hp-pump-east:pump-air-lock12:hp-pump-east13:pump-air-lock31:cycle-hp-pump-eastpump-air-lock0:0:6:RAISED8:PLATFORM
+-813|4b|node-label|Notification sent|3:run7:attempt39:attempt:hp-pump-east:pump-air-lock:SENT12:hp-pump-east13:pump-air-lock31:cycle-hp-pump-eastpump-air-lock0:0:4:SENT8:PLATFORM
+-813|4b|node|airlock-notified|3:run7:attempt39:attempt:hp-pump-east:pump-air-lock:SENT12:hp-pump-east13:pump-air-lock31:cycle-hp-pump-eastpump-air-lock0:0:4:SENT8:PLATFORM

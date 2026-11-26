@@ -1,0 +1,23 @@
+args: install local --skip-preflight --dry-run
+stdin: ""
+exit: 0
+-- stdout (1417 bytes) --
+[dry-run] would create kind cluster "devicechain" (context kind-devicechain)
+
+Install DeviceChain prerequisites on cluster devicechain
+  Settings: monitoring, cloudnative-pg, cert-manager, backups
+  Operator: ghcr.io/devicechain-io/operator:v1.9.0
+[dry-run] would take the cluster lock in namespace dc-k8s-system
+  could not check whether another operator holds this cluster (building kube config: context "kind-devicechain" does not exist)
+  could not identify cluster devicechain (building a client to identify the cluster: building kube config: context "kind-devicechain" does not exist); the refusals a re-install makes — an install from another machine, changed settings under running instances — were NOT rehearsed; the real run identifies the cluster first and stops if it cannot
+[dry-run] would install the operator — CRDs, RBAC and the controller Deployment at ghcr.io/devicechain-io/operator:v1.9.0 — in namespace dc-k8s-system
+[dry-run] would tofu init+apply deploy/opentofu/cluster — once per cluster, shared by every instance (CloudNativePG operator + backup plugin, ingress, cert-manager, monitoring, the relational store, the backup object store)
+[dry-run] would create the base database identity instances' logins are made with
+[dry-run] would record the install in ConfigMap dc-system/dc-install
+[dry-run] would wait until every instance of the relational store dc-system/dc-rdb has joined
+
+-- stderr (0 bytes) --
+
+-- engine (11 bytes) --
+not called
+
