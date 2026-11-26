@@ -13,8 +13,9 @@
 │ Fix         Fix the cause above, then re-run the same command: an install    │
 │             converges, so it finishes whatever this run left half done.      │
 │ Inspect     kubectl --context kind-devicechain get pods --all-namespaces     │
-│ Re-run      dcctl install local --alert-webhook='<redacted: supply           │
-│             privately>' --compact=true --yes=true                            │
+│ Re-run      dcctl install local                                              │
+│             --alert-webhook='<redacted: supply privately>' --compact=true    │
+│             --yes=true                                                       │
 │             template: supply the redacted credentials privately              │
 │                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤

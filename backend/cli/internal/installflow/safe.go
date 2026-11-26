@@ -60,6 +60,7 @@ func sanitize(s string) string {
 		csi    // ESC [ ... final byte
 		str    // OSC / DCS / SOS / PM / APC body, ends at BEL or ST
 		strEsc // ESC inside a string body
+		inter  // ESC then intermediates (0x20-0x2F), until a final byte
 	)
 	state := ground
 	for i := 0; i < len(s); {
@@ -73,8 +74,20 @@ func sanitize(s string) string {
 			case ']', 'P', 'X', '^', '_':
 				state = str
 			default:
-				// A two-byte escape (or an intermediate we do not model): drop
-				// the introducer and this byte.
+				// An intermediate (0x20-0x2F) opens a longer escape such as a
+				// character-set designation, ESC ( B; anything else is a two-byte
+				// escape: drop the introducer and this byte.
+				state = ground
+				if r >= 0x20 && r <= 0x2f {
+					state = inter
+				}
+			}
+			continue
+		case inter:
+			// More intermediates, then one final byte ends the escape. Leaving the
+			// final byte behind would drop a stray character into the text, and
+			// leave the halves of whatever the escape split side by side.
+			if r < 0x20 || r > 0x2f {
 				state = ground
 			}
 			continue

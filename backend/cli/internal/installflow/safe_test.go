@@ -24,6 +24,9 @@ func TestTextStripsTerminalControl(t *testing.T) {
 		"\x1bPdcs body\x1b\\x":                   "x",
 		"\u009b31mc1":                            "c1",
 		"a\x1bcb":                                "ab",
+		"g0\x1b(Bset":                            "g0set", // character-set designation: 3 bytes
+		"dec\x1b#8x":                             "decx",
+		"two\x1b $Bmore":                         "twomore", // several intermediates
 		"line1\nline2\r\n\tx":                    "line1 line2   x",
 		"bell\x07del\x7fnul\x00":                 "belldelnul",
 		"bidi‮evil⁦x⁩":                           "bidievilx",

@@ -88,11 +88,24 @@ func (in Input) Cause() string {
 		return "The run's progress could not be fully reported, so it is not known to have finished."
 	}
 	if in.Err != nil && in.Redact != nil {
-		if t := installflow.Text(in.Redact(in.Err.Error())); !t.IsZero() {
+		if t := redactedText(in.Redact, in.Err.Error()); !t.IsZero() {
 			return t.String()
 		}
 	}
 	return "dcctl prints the install's error when you leave this screen."
+}
+
+// redactedText is raw text made safe to draw.
+//
+// 🔴 SANITISE, THEN REDACT. Sanitising removes escape sequences and control bytes,
+// and so can JOIN what they split: "secret\x1b[31mvalue" matches no registered
+// secret, and becomes "secretvalue" once the escape is gone. So the text is
+// redacted as it came (a secret whose own form holds a line break), sanitised,
+// redacted again as it will be drawn, and sanitised once more, since a
+// replacement is text too.
+func redactedText(redact func(string) string, raw string) installflow.SafeText {
+	clean := installflow.Text(redact(raw))
+	return installflow.Text(redact(clean.String()))
 }
 
 // ErrIncomplete is returned when the engine returned no error yet the run did not

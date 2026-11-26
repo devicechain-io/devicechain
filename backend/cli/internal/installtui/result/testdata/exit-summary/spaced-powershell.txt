@@ -1,0 +1,8 @@
+dcctl install: failed
+  Target:   team  prod (existing context)
+  Stage:    Wait for the relational store (install.rdb-ready)
+  Cause:    Install recorded; replicas still joining.
+  Changes:  Changes were applied. Nothing was rolled back.
+  Claim:    Released.
+  Inspect:  kubectl --context 'team  prod' get pods --all-namespaces
+  Re-run:   & dcctl install local --ha=true '--kube-context=team  prod' --yes=true

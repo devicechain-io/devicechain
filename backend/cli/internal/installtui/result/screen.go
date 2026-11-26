@@ -350,6 +350,9 @@ func (m *Model) bodyLines(width, budget int) []string {
 		wrapped[i] = []string{""}
 		if r.value != "" {
 			wrapped[i] = wrap(r.value, vw)
+			if r.command {
+				wrapped[i] = wrapCommand(r.value, vw)
+			}
 		}
 		total += len(wrapped[i])
 	}
@@ -501,21 +504,38 @@ func (m *Model) renderFrame(w, h int, border bool) string {
 // where it stopped, the command to run next, and how to leave.
 func (m *Model) renderMinimal(w, h int) string {
 	word, style := m.statusWord()
-	inner := max(w-1, 10)
-	lines := []string{paint(style, word) + " " + paint(m.theme.bd, truncate(m.in.headline(), inner-len(word)-1))}
-	var next string
+	// One column is left free where there is one to spare; nothing here is ever
+	// wider than the terminal, or taller.
+	inner := 1
+	if w > 1 {
+		inner = w - 1
+	}
+	title := paint(style, truncate(word, inner))
+	if rest := inner - lipgloss.Width(word) - 1; rest > 0 {
+		title += " " + paint(m.theme.bd, truncate(m.in.headline(), rest))
+	}
+	if h <= 1 {
+		return title
+	}
+	var lines []string
+	var next []string
 	switch kindOf(m.in.Summary) {
 	case kindSucceeded, kindPlanned:
-		next = "Next: " + m.in.nextSteps()[0]
+		next = wrapCommand("Next: "+m.in.nextSteps()[0], inner)
 	default:
 		if at := m.in.failedAt(); at != "" {
 			lines = append(lines, wrap("At: "+at, inner)...)
 		}
-		next = "Fix the cause, then re-run the same command."
+		next = wrap("Fix the cause, then re-run the same command.", inner)
 	}
-	lines = append(lines, wrap(next, inner)...)
-	lines = clip(lines, h-1, inner, m.theme)
-	lines = append(lines, paint(m.theme.dim, truncate("q exit "+m.theme.g.dot+" a summary is printed on exit", inner)))
+	lines = append(lines, next...)
+	// The verdict and the way out always show; what is between them fits the rest.
+	if h == 2 {
+		lines = nil
+	} else {
+		lines = clip(lines, h-2, inner, m.theme)
+	}
+	lines = append(append([]string{title}, lines...), paint(m.theme.dim, truncate("q exit "+m.theme.g.dot+" a summary is printed on exit", inner)))
 	return strings.Join(lines, "\n")
 }
 
@@ -537,37 +557,79 @@ func clip(lines []string, n, width int, t theme) []string {
 }
 
 // wrap breaks plain text at spaces to width cells, hard-breaking only a word
-// longer than a line (a long command or path). A hyphen is never a break: a
-// flag split at one reads as two flags.
-func wrap(s string, width int) []string {
+// longer than a line. A hyphen is never a break, since a flag split at one reads
+// as two flags, and the spaces kept on a line are the text's own: a name with
+// two spaces in it is drawn with two.
+func wrap(s string, width int) []string { return wrapTokens(s, width, false) }
+
+// wrapCommand breaks a command line between its arguments and nowhere else,
+// keeping every byte of each argument: whitespace inside single or double quotes
+// is part of the argument, so it is never collapsed or broken at. An argument
+// longer than a line is cut across lines, still byte for byte.
+func wrapCommand(s string, width int) []string { return wrapTokens(s, width, true) }
+
+// wrapTokens splits s at runs of spaces (outside quotes, when quoted) and fills
+// lines with the tokens and the exact separators between them.
+func wrapTokens(s string, width int, quoted bool) []string {
 	if width < 1 {
 		width = 1
 	}
-	var out []string
-	cur, curW := "", 0
-	for _, word := range strings.Fields(s) {
-		ww := lipgloss.Width(word)
+	var args, seps []string // seps[i] is the separator before args[i]
+	var arg strings.Builder
+	sep := ""
+	quote := rune(0)
+	escaped := false
+	for _, r := range s {
 		switch {
-		case curW == 0:
-		case curW+1+ww <= width:
-			cur, curW = cur+" "+word, curW+1+ww
+		case escaped:
+			escaped = false
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case quoted && r == '\\':
+			escaped = true // a POSIX escape outside quotes, as in '\''
+		case quoted && (r == '\'' || r == '"'):
+			quote = r
+		case r == ' ':
+			if arg.Len() > 0 {
+				args, seps = append(args, arg.String()), append(seps, sep)
+				arg.Reset()
+				sep = ""
+			}
+			sep += " "
 			continue
+		}
+		arg.WriteRune(r)
+	}
+	if arg.Len() > 0 {
+		args, seps = append(args, arg.String()), append(seps, sep)
+	}
+	var out []string
+	cur := ""
+	for i, a := range args {
+		switch {
+		case cur == "" && len(out) == 0:
+			cur = seps[i] + a // leading separator kept on the first line
+		case cur == "":
+			cur = a
+		case lipgloss.Width(cur+seps[i]+a) <= width:
+			cur += seps[i] + a
 		default:
 			out = append(out, cur)
+			cur = a
 		}
-		for ww > width {
-			head := truncate(word, width)
+		for lipgloss.Width(cur) > width {
+			head := truncate(cur, width)
 			if head == "" {
-				_, n := utf8.DecodeRuneInString(word) // one rune wider than the line
-				head = word[:n]
+				_, n := utf8.DecodeRuneInString(cur)
+				head = cur[:n]
 			}
 			out = append(out, head)
-			word = word[len(head):]
-			ww = lipgloss.Width(word)
+			cur = cur[len(head):]
 		}
-		cur, curW = word, ww
 	}
-	if curW > 0 || len(out) == 0 {
+	if cur != "" || len(out) == 0 {
 		out = append(out, cur)
 	}
 	return out

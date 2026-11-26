@@ -14,6 +14,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/exp/teatest/v2"
 
@@ -460,13 +461,114 @@ func (r *router) View() tea.View { return r.screen.View() }
 // Under 60x16 the screen is a status block that still names the verdict, where it
 // stopped and what to run, and still fits.
 func TestTheMinimalBlockFits(t *testing.T) {
-	for _, sc := range scenarios(nil) {
-		for _, sz := range [][2]int{{50, 12}, {40, 8}, {59, 15}} {
-			m := drive(sc.in(), levelCaps(terminal.L4, sz[0], sz[1]), sc.keys...)
-			text := stripANSI(m.render())
+	for _, sc := range append(scenarios(nil), spacedScenarios()...) {
+		for _, sz := range [][2]int{{50, 12}, {40, 8}, {59, 15}, {8, 8}, {80, 1}, {1, 1}, {1, 80}, {59, 2}, {2, 2}} {
+			for _, resized := range []bool{false, true} {
+				var m *Model
+				if resized {
+					// Reached by a resize, not from the start.
+					m = drive(sc.in(), levelCaps(terminal.L4, 120, 40), sc.keys...)
+					m.Update(tea.WindowSizeMsg{Width: sz[0], Height: sz[1]})
+				} else {
+					m = drive(sc.in(), levelCaps(terminal.L4, sz[0], sz[1]), sc.keys...)
+				}
+				text := stripANSI(m.render())
+				checkFits(t, text, sz[0], sz[1])
+				if sz[0] >= 8 && !strings.Contains(text, "FAILED") && !strings.Contains(text, "STOPPED") &&
+					!strings.Contains(text, "DONE") {
+					t.Errorf("%s at %v names no verdict:\n%s", sc.name, sz, text)
+				}
+			}
+		}
+	}
+}
+
+// 🔴 A secret split by an escape sequence or a control byte is still redacted: the
+// text is sanitised before it is matched, so removing the splitter cannot rebuild
+// the secret on screen.
+func TestASecretSplitByControlBytesIsRedacted(t *testing.T) {
+	hub := canaryHub(t)
+	splitters := []string{"\x1b[31m", "\x1b[0m", "\x1b]0;title\x07", "\x1bP1$r\x1b\\", "\x07", "\x00", "\x7f",
+		"\u009b31m", "‮", "⁦", "\x1b7", "\x1b(B", "\x0e"}
+	for _, c := range testkit.Canaries() {
+		for _, core := range c.Cores {
+			for _, sp := range splitters {
+				// The registered value, split in the middle of a part that cannot
+				// occur by accident.
+				at := strings.Index(c.Value, core) + len(core)/2
+				in := scenarioFailed(hub.Redact)
+				in.Err = errors.New("applying: refused " + c.Value[:at] + sp + c.Value[at:] + " again")
+				view := drive(in, levelCaps(terminal.L1, 120, 40)).render()
+				testkit.AssertNoCanary(t, fmt.Sprintf("%s split by %q, on screen", c.Label, sp), []byte(view))
+				testkit.AssertNoCanary(t, fmt.Sprintf("%s split by %q, as the cause", c.Label, sp), []byte(in.Cause()))
+				var b bytes.Buffer
+				_ = WriteExitSummary(&b, in)
+				testkit.AssertNoCanary(t, fmt.Sprintf("%s split by %q, exit summary", c.Label, sp), b.Bytes())
+			}
+		}
+	}
+}
+
+// spacedScenarios target a context whose name holds two spaces, for each shell's
+// quoting. The quoted argument must be drawn byte for byte: one space fewer is
+// another context.
+func spacedScenarios() []scenario {
+	mk := func(shell Shell, line string) func() Input {
+		return func() Input {
+			in := scenarioReadiness()
+			in.Shell = shell
+			in.Target = installflow.Target{Mode: "existing-context", Context: installflow.Text("team  prod")}
+			in.Equivalent = Command{Line: installflow.Text(line)}
+			return in
+		}
+	}
+	return []scenario{
+		{"spaced-posix", mk(POSIX, "dcctl install local --ha=true '--kube-context=team  prod' --yes=true"), nil},
+		{"spaced-powershell", mk(PowerShell,
+			"& dcctl install local --ha=true '--kube-context=team  prod' --yes=true"), nil},
+	}
+}
+
+func TestCommandsKeepTheirArgumentsByteForByte(t *testing.T) {
+	for _, sc := range spacedScenarios() {
+		for _, sz := range [][2]int{{120, 40}, {100, 30}, {80, 24}, {60, 20}} {
+			name := fmt.Sprintf("%s/L1-%dx%d", sc.name, sz[0], sz[1])
+			text := drive(sc.in(), levelCaps(terminal.L1, sz[0], sz[1])).render()
+			if !strings.Contains(text, "'--kube-context=team  prod'") {
+				t.Errorf("%s does not draw the re-run's argument intact:\n%s", name, text)
+			}
+			// A short screen may leave the inspect row out; one it draws is intact.
+			if strings.Contains(text, "--context") && !strings.Contains(text, "--context 'team  prod'") {
+				t.Errorf("%s does not draw the inspect command's argument intact:\n%s", name, text)
+			}
 			checkFits(t, text, sz[0], sz[1])
-			if !strings.Contains(text, "FAILED") && !strings.Contains(text, "STOPPED") && !strings.Contains(text, "DONE") {
-				t.Errorf("%s at %v names no verdict:\n%s", sc.name, sz, text)
+			requireGolden(t, name+".txt", []byte(text+"\n"))
+		}
+		var b bytes.Buffer
+		if err := WriteExitSummary(&b, sc.in()); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(b.String(), "'--kube-context=team  prod'") {
+			t.Errorf("%s exit summary:\n%s", sc.name, b.String())
+		}
+		requireGolden(t, "exit-summary/"+sc.name+".txt", b.Bytes())
+	}
+}
+
+// Wrapping breaks only between arguments, and joining the lines back with the
+// separator it removed gives the command it was given.
+func TestWrapCommandBreaksOnlyBetweenArguments(t *testing.T) {
+	line := `dcctl install local '--kube-context=a  b' "--x=c   d" 'it'\''s  here' --yes=true`
+	for w := 1; w <= len(line)+1; w++ {
+		lines := wrapCommand(line, w)
+		for _, l := range lines {
+			if lipgloss.Width(l) > w {
+				t.Fatalf("width %d: line %q", w, l)
+			}
+		}
+		for _, arg := range []string{"'--kube-context=a  b'", `"--x=c   d"`, `'it'\''s  here'`} {
+			if len(arg) <= w && !strings.Contains(strings.Join(lines, "\n"), arg) {
+				t.Errorf("width %d broke or rewrote %s: %q", w, arg, lines)
 			}
 		}
 	}

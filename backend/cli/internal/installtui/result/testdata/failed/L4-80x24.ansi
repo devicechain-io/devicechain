@@ -13,8 +13,9 @@
 │ \x1b[38;2;138;166;182mFix         \x1b[mFix the cause above, then re-run the same command: an install    │
 │ \x1b[38;2;138;166;182m            \x1b[mconverges, so it finishes whatever this run left half done.      │
 │ \x1b[38;2;138;166;182mInspect     \x1b[m\x1b[38;2;36;163;214mkubectl --context kind-devicechain get pods --all-namespaces\x1b[m     │
-│ \x1b[38;2;138;166;182mRe-run      \x1b[m\x1b[38;2;36;163;214mdcctl install local --alert-webhook='<redacted: supply\x1b[m           │
-│ \x1b[38;2;138;166;182m            \x1b[m\x1b[38;2;36;163;214mprivately>' --compact=true --yes=true\x1b[m                            │
+│ \x1b[38;2;138;166;182mRe-run      \x1b[m\x1b[38;2;36;163;214mdcctl install local\x1b[m                                              │
+│ \x1b[38;2;138;166;182m            \x1b[m\x1b[38;2;36;163;214m--alert-webhook='<redacted: supply privately>' --compact=true\x1b[m    │
+│ \x1b[38;2;138;166;182m            \x1b[m\x1b[38;2;36;163;214m--yes=true\x1b[m                                                       │
 │ \x1b[38;2;138;166;182m            \x1b[m\x1b[38;2;138;166;182mtemplate: supply the redacted credentials privately\x1b[m              │
 │                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤
