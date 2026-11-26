@@ -105,6 +105,17 @@ p1_lock_summary() {
     }'
 }
 
+# p1_deployed_areas <probe areas> <running areas> prints, comma-separated and in the probe's order, the probe areas
+# that also run (each list one name per line). Pure.
+p1_deployed_areas() {
+  local area out=""
+  while read -r area; do
+    [[ -n "$area" ]] || continue
+    grep -qxF -- "$area" <<<"$2" && out+="${out:+,}$area"
+  done <<<"$1"
+  printf '%s' "$out"
+}
+
 self_test() {
   local rows out rc
   rows='{"arm":"baseline","ok":true,"interactiveP99":100}
@@ -139,6 +150,9 @@ self_test() {
   [[ "$(jq -r '"\(.samples) \(.lockWaitMax) \(.familyHoldMaxMs)"' <<<"$out")" == "3 3 250" ]] ||
     die "SELF-TEST: the lock summary is wrong: $out"
   [[ "$(printf '' | p1_lock_summary | jq -r .samples)" == 0 ]] || die "SELF-TEST: an empty sample was summarized"
+  out="$(p1_deployed_areas $'device-management\noutbound-connectors\nuser-management' $'user-management\n\ndevice-management\nevent-sources')"
+  [[ "$out" == "device-management,user-management" ]] || die "SELF-TEST: the deployed areas are not the probe areas that run: '$out'"
+  [[ -z "$(p1_deployed_areas 'outbound-connectors' 'outbound-connectors-x')" ]] || die "SELF-TEST: an area name was matched as a prefix"
   rc=0
   "$ROOT/hack/perf-ab.sh" --self-test >/dev/null 2>&1 || rc=$?
   [[ "$rc" == 0 ]] || die "SELF-TEST: hack/perf-ab.sh --self-test failed (rc=$rc), and every arm runs through it"
@@ -220,8 +234,15 @@ forward_dm() {
 
 if [[ "$cmd" == seed ]]; then
   [[ -n "${DC_ADMIN_PASSWORD:-}" ]] || usage_err "DC_ADMIN_PASSWORD (the superuser's) is required to create the P-1 tenant"
-  [[ -s "$receipt" ]] || "$apiprobe" seed --instance "$instance" --receipt "$receipt" --tenant p1 --server "$server" --scheme "$scheme" ||
-    die "could not create the P-1 tenant"
+  # The seed writes to every probe area it is not told is absent, and an instance of the default profile runs
+  # no outbound-connectors: name the areas this namespace runs, or the seed fails on the first absent one.
+  probe_areas="$("$apiprobe" areas | tr -d '\r')" || die "apiprobe could not list its areas"
+  running="$(k -n "$ns" get deployments -o jsonpath='{range .items[*]}{.metadata.labels.devicechain\.io/functional-area}{"\n"}{end}' | tr -d '\r')" ||
+    die "could not list the Deployments in $ns"
+  deployed="$(p1_deployed_areas "$probe_areas" "$running")"
+  [[ -n "$deployed" ]] || die "no probe area runs in $ns"
+  [[ -s "$receipt" ]] || "$apiprobe" seed --instance "$instance" --receipt "$receipt" --tenant p1 --server "$server" --scheme "$scheme" \
+    --deployed-areas "$deployed" || die "could not create the P-1 tenant"
   forward_dm
   trap 'kill "$fwd" 2>/dev/null || true' EXIT
   [[ -s "$bulk" ]] || "$apiprobe" bulkchange seed "${api[@]}" --url "$dm_url" --out "$bulk" --count 20200 --prefix p1 --workers 32 ||
