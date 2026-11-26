@@ -4,13 +4,12 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/devicechain-io/dcctl/internal/installchoice"
 )
 
 // alertFlags are the alert-routing flags `dcctl install` and `dcctl upgrade` share. One
@@ -63,34 +62,15 @@ var readAlertFile = os.ReadFile
 // request reads the files the flags name and validates the whole request from argv alone,
 // before any cluster exists.
 func (f *alertFlags) request() (bootstrap.AlertRoutingRequest, error) {
-	r := bootstrap.AlertRoutingRequest{
-		Webhook:         strings.TrimSpace(f.webhook),
-		WatchdogWebhook: strings.TrimSpace(f.watchdog),
-		EmailTo:         f.email,
-		SMTPHost:        f.smtpHost,
-		SMTPFrom:        f.smtpFrom,
-		SMTPUser:        f.smtpUser,
-		Clear:           f.clear,
-	}
-	if f.smtpPassFile != "" {
-		b, err := readAlertFile(f.smtpPassFile)
-		if err != nil {
-			return r, fmt.Errorf("--alert-smtp-password-file: %w", err)
-		}
-		r.SMTPPassword = strings.TrimRight(string(b), "\r\n")
-		if r.SMTPPassword == "" {
-			return r, fmt.Errorf("--alert-smtp-password-file %s is empty", f.smtpPassFile)
-		}
-	}
-	if f.config != "" {
-		b, err := readAlertFile(f.config)
-		if err != nil {
-			return r, fmt.Errorf("--alert-config: %w", err)
-		}
-		r.Config = string(b)
-		if strings.TrimSpace(r.Config) == "" {
-			return r, fmt.Errorf("--alert-config %s is empty", f.config)
-		}
-	}
-	return r, r.Validate()
+	return (installchoice.Alerts{
+		Webhook:      f.webhook,
+		Watchdog:     f.watchdog,
+		Email:        f.email,
+		SMTPHost:     f.smtpHost,
+		SMTPFrom:     f.smtpFrom,
+		SMTPUser:     f.smtpUser,
+		SMTPPassFile: f.smtpPassFile,
+		Config:       f.config,
+		Clear:        f.clear,
+	}).RequestWithReader(readAlertFile)
 }
