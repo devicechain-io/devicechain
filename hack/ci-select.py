@@ -142,6 +142,10 @@ READERS = [
         "backend/k8s/config/crd/bases/**",
         "hack/harborpulse-rig.sh",  # valuesoverlay_test.go: the rig's --values heredoc
     ], NONTEST, "bootstrap/*_test.go"),
+    # internal/installtui/audit_test.go: the dependency license audit reads the repository NOTICE
+    # (the texts it must carry), go.work and go.work.sum, and every workspace module's go.sum;
+    # dependency_policy_test.go checks the release archives ship the root LICENSE and NOTICE.
+    ("backend/cli", "internal/installtui", ["NOTICE", "LICENSE", "go.work", "go.work.sum", "**/go.sum"], [], "internal/installtui/audit_test.go, dependency_policy_test.go"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
     ("backend/cli", "bulkchange", ["backend/services/device-management/graphql/**"], [], "bulkchange/documents_test.go:16"),
     ("backend/cli", "product", [SDL], [], "product/documents_test.go:32"),
@@ -318,6 +322,7 @@ IN_MODULE = {
     ("backend/cli", "backup"): "path-traversal fixtures (\"../outside\") and in-module testdata",
     ("backend/cli", "dcdir"): "walks its own module; \"../escape\" is a refused-input fixture",
     ("backend/cli", "internal/kubeisolation"): "walks its own module",
+    ("backend/cli", "internal/installtui/_buildcheck"): "resolves its own module root for the six-target cross-build",
     ("backend/cli", "operator"): "runtime-only repo lookup for --build, not exercised by tests",
     ("backend/core", "blob"): "\"../../../etc/passwd\" is a refused-input fixture",
     ("backend/core", "httptransport"): "walks its own module",
