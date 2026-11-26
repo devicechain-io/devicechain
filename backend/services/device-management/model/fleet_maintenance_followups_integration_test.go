@@ -46,7 +46,7 @@ func TestFleetMaintenancePostgresPostedAbortSkipsHeldFence(t *testing.T) {
 func TestFleetMaintenancePostgresRetentionBacklogCannotStarveRepair(t *testing.T) {
 	api := NewApi(newPostgresRdbManager(t))
 	prefix := "000bc8-" + rand.Text()
-	// Keep the pair adjacent and before other integration fixtures' tenants.
+	// One random prefix keeps the pair adjacent in the shared tenant listing.
 	a, b := prefix+"-a", prefix+"-b"
 	t.Cleanup(func() {
 		for _, tenant := range []string{a, b} {

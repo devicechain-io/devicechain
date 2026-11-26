@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"testing"
 	"time"
 
@@ -96,6 +97,18 @@ func assertFleetMaintenanceBacklogFairness(t *testing.T, api *Api, tenantA, tena
 	require.NoError(t, api.RDB.DB(b).Model(&FleetOperationLine{}).Where("operation_id = ?", op.ID).Updates(map[string]any{
 		"posting": "POSTED", "target_id": erasedID, "target_key": "private-device", "prior": "private-value",
 	}).Error)
+	// A shared database lists other suites' tenants too, and one may sort before
+	// A. Start the first pass at A the way a resumed cursor would, so the passes
+	// below measure A's backlog against B alone; B must directly follow A.
+	tenants, err := api.RDB.TenantsWith(context.Background(), &FleetOperation{})
+	require.NoError(t, err)
+	at := slices.Index(tenants, tenantA)
+	require.GreaterOrEqual(t, at, 0)
+	require.Less(t, at+1, len(tenants))
+	require.Equal(t, tenantB, tenants[at+1], "no tenant may sort between A and B")
+	if at > 0 {
+		api.fleetMaintenanceCursor.after = tenants[at-1]
+	}
 	var cancelPass context.CancelFunc
 	var visits []string
 	const hook = "test:maintenance-budget"
