@@ -1,0 +1,11 @@
+args: install local --dev --version v1.2.3
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (126 bytes) --
+Error: --dev builds the operator image from source and tags it "dev", so --version v1.2.3 cannot also apply; drop one of them
+
+-- engine (11 bytes) --
+not called
+

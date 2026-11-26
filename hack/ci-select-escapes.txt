@@ -25,6 +25,7 @@ backend/cli/bootstrap/escrow.go
 backend/cli/bootstrap/escrow_test.go
 backend/cli/bootstrap/executor_apiserver_test.go
 backend/cli/bootstrap/fence_test.go
+backend/cli/bootstrap/install_progress_test.go
 backend/cli/bootstrap/install_test.go
 backend/cli/bootstrap/instances.go
 backend/cli/bootstrap/kube.go

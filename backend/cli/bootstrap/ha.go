@@ -212,6 +212,7 @@ func (h haTopology) summary() string {
 // when nothing will be applied. The COUNTING result is still fatal on a dry run:
 // if the cluster answers and cannot host the topology, that is the finding.
 func checkHaNodeCapacity(ctx context.Context, st *State) error {
+	c := out(ctx)
 	ha := brokerTopology(st)
 	if !ha.Replicated() {
 		return nil
@@ -222,11 +223,11 @@ func checkHaNodeCapacity(ctx context.Context, st *State) error {
 		return err
 	}
 	if unchecked != "" {
-		fmt.Println(color.YellowString("  broker requests stated by the operator were not checked against node capacity: %s", unchecked))
+		c.println(color.YellowString("  broker requests stated by the operator were not checked against node capacity: %s", unchecked))
 	}
 	unreachable := func(err error) error {
 		if st.DryRun {
-			fmt.Println(color.YellowString(
+			c.println(color.YellowString(
 				"  could not check whether this cluster can host the --ha topology (%v); the plan below assumes it can.", err))
 			return nil
 		}

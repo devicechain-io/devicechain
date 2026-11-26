@@ -164,12 +164,15 @@ namespace DeviceChain.Harborpulse.Tests
         public void TheSkyIsHeldBackFromTheDimLightLiftButTheTownIsNot()
         {
             Assert.That(Clear(12.5).SkyGain, Is.EqualTo(1).Within(.02), "a fair noon needs no hold");
-            Assert.That(Clear(0.5).SkyGain, Is.EqualTo(1).Within(1e-9), "nor does the night: its lift is the eye opening, and the sky was graded with it");
+            // the night's own lift is the eye opening, and the sky was graded with it; the story lift on top is the town's alone, so the sky is held back by exactly that
+            Assert.That(Clear(0.5).SkyGain, Is.EqualTo(Math.Pow(2, -DayLighting.NightStoryLift)).Within(1e-9));
+            Assert.That(Clear(0.5).ExposureLift + Math.Log(Clear(0.5).SkyGain, 2), Is.EqualTo(0.55).Within(1e-9), "the night sky is where it was");
             foreach (var hour in new[] { 6.4, 17.2, 18.3 })
             {
                 var s = At(hour);
                 Assert.That(s.ExposureLift, Is.GreaterThan(.8), "the town is lifted at " + hour);
-                Assert.That(s.SkyGain, Is.InRange(.45, .72), "and the sky is held back at " + hour);
+                // (the storm's story lift is the town's too, so under the storm the sky is held back a little further than the dim light alone asks)
+                Assert.That(s.SkyGain, Is.InRange(.38, .72), "and the sky is held back at " + hour);
                 // what reaches the screen: the horizon haze, through the lift and the hold, stays under white
                 Assert.That(Luma(s.FogColor) * Math.Pow(2, s.ExposureLift) * s.SkyGain, Is.LessThan(.95), "horizon not blown out at " + hour);
             }

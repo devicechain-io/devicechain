@@ -67,8 +67,11 @@
     <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Recording/**/*.cs" />
     <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Visuals/CampusView.cs" />
     <Compile Include="../../../../demos/towerpulse-unity/Assets/Towerpulse/Scripts/Visuals/ShotDirector.cs" />
-    <!-- Harborpulse: the engine-free model, the read-only platform link (shared observer over the SDK), and the visuals, which use only the
+    <!-- The shared demo HUD's engine-free model (the caption box, chain card and alarm pin rules) is compiled here because Harborpulse's
+         model builds on it. Its uGUI views (Runtime/Ugui) need the ugui package, like the two HUD renderers named below.
+         Harborpulse: the engine-free model, the read-only platform link (shared observer over the SDK), and the visuals, which use only the
          engine's own modules (meshes, lights, IMGUI). Its URP shaders and the Editor scene builder need the Editor. -->
+    <Compile Include="../../../../demos/shared/io.devicechain.demo-hud/Runtime/Model/**/*.cs" />
     <Compile Include="../../../../demos/harborpulse-unity/Assets/Harborpulse/Scripts/Model/**/*.cs" />
     <Compile Include="../../../../demos/harborpulse-unity/Assets/Harborpulse/Scripts/Live/**/*.cs" />
     <Compile Include="../../../../demos/harborpulse-unity/Assets/Harborpulse/Scripts/Visuals/**/*.cs" />

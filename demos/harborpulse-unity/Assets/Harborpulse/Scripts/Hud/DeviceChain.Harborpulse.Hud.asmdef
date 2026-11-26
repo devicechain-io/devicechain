@@ -4,7 +4,9 @@
     "references": [
         "DeviceChain.Harborpulse.Model",
         "DeviceChain.Harborpulse.Visuals",
-        "Unity.ugui"
+        "Unity.ugui",
+        "DeviceChain.Demos.Hud.Model",
+        "DeviceChain.Demos.Hud"
     ],
     "autoReferenced": true
 }

@@ -88,6 +88,7 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	if err != nil {
 		return InstallOutputs{}, err
 	}
+	tf.useConsole(out(ctx))
 	tf.SetWaitDelay(tofuGracefulStopBudget)
 
 	if err := tf.Init(ctx); err != nil {

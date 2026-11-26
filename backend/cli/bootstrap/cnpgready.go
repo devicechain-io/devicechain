@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dcctl/internal/installflow"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -126,6 +127,9 @@ func waitForCNPGClusterReady(ctx context.Context, dyn dynamic.Interface, typed k
 		read = true
 		instances, _, _ = unstructured.NestedInt64(cl.Object, "spec", "instances")
 		ready, _, _ = unstructured.NestedInt64(cl.Object, "status", "readyInstances")
+		// A snapshot, which can go down while a replica rejoins. All instances ready
+		// is not the gate: readiness must hold, and the images must be current.
+		runFrom(ctx).gate(metricStoreInstances, installflow.UnitReplicas, sourceCNPG, ready, instances)
 		images, err := cnpgInstancePodImages(ctx, typed, ns, name)
 		if err != nil {
 			return false, "", err

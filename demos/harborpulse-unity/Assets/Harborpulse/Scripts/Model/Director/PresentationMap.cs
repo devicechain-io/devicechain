@@ -329,6 +329,8 @@ namespace DeviceChain.Harborpulse.Model.Director
             // U6: the eye is lower and nearer and the look is flattened, so the horizon falls an eighth of the way down the frame: the
             // sky is in it, the sun rises in it (the camera looks a little north of east), the harbour holds the middle of the frame (U7) and the eastern uplands close the view.
             poses.Add("pose:home:portrait", Stand(-700, 235, -60, 0, -5, 44, PortraitHorizon));
+            // where the dawn shot's crane starts: higher and further out over the water, on HOME's own line of sight
+            poses.Add(StoryPoses.HomeHigh, new CameraPose(new Point3(0, 168, -535), new Point3(0, HomeLookY, 50), 35));
             poses.Add("pose:night-home", poses["pose:home"]);
             poses.Add("pose:storm-home", poses["pose:home"]);
             foreach (var pair in StoryPoses.Families)
@@ -401,6 +403,9 @@ namespace DeviceChain.Harborpulse.Model.Director
                     tall.Add(wide, tallWell);
                 }
             }
+            // A view only a cut uses. The rise: up and back over the water off East Quay from its lamp's wide view, until the whole dark quay is in the frame.
+            var east = anchors["hp-light-east-3"];
+            poses.Add(StoryPoses.EastRise, new CameraPose(new Point3(east.X - 78, 34, east.Z - 14), new Point3(east.X + 4, 3, east.Z), 46));
             // Outside the quay the eye sits just above the water and the look is flattened to put the horizon about a third of the way down.
             // from inside the harbour, over the water off the basin, looking east-south-east across the quay's devices: no breakwater or lighthouse is
             // in front of the subject, and the east light stands at the right edge in the middle distance
