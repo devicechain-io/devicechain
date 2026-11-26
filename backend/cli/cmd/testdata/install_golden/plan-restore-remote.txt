@@ -1,0 +1,80 @@
+args: install local --kube-context prod --skip-preflight --restore-rdb-from dc-rdb --restore-rdb-at 2026-01-02T03:04:05Z --database-node-selector pool=db --database-toleration dedicated=db:NoSchedule --max-connections 900 --relational-store-max-wal-mib 2048
+stdin: ""
+exit: 0
+-- stdout (0 bytes) --
+
+-- stderr (0 bytes) --
+
+-- engine (1789 bytes) --
+{
+  "Provider": "local",
+  "Options": {
+    "Instance": "",
+    "KubeContext": "prod",
+    "Cluster": "devicechain",
+    "CreateCluster": false,
+    "Profile": "",
+    "DryRun": false,
+    "AssumeYes": false,
+    "ImageRegistry": "ghcr.io/devicechain-io",
+    "ImageVersion": "v1.9.0",
+    "BuildImages": false,
+    "IngressHost": "",
+    "NoTLS": false,
+    "AllowLegacyDbRemoval": false,
+    "EnableAreas": null,
+    "MqttFailClosed": null,
+    "MqttDeviceUplinks": null,
+    "Size": "",
+    "Sharding": "",
+    "MQTTExposure": "",
+    "MQTTHost": "",
+    "DevAllowEgress": null,
+    "BrokerMaxConnections": null,
+    "EventStoreMaxWALMiB": null,
+    "EventStoreCheckpointTimeout": null,
+    "TrustedProxies": null,
+    "IngressController": "",
+    "DropLegacyIngress": false,
+    "ValuesOverlay": null,
+    "ResetValues": false,
+    "Lwm2mIdentities": null,
+    "WithdrawLwm2mIdentities": false,
+    "SparkplugSources": null,
+    "WithdrawSparkplugSources": false,
+    "NoMonitoring": false,
+    "NoCNPG": false,
+    "Compact": false,
+    "HA": false,
+    "BackupDestination": null,
+    "BackupSnapshotClass": "",
+    "DatabasePlacement": {
+      "nodeSelector": "pool=db",
+      "tolerations": "dedicated=db:NoSchedule"
+    },
+    "MaxConnections": 900,
+    "RelationalStoreMaxWALMiB": 2048,
+    "Restore": {
+      "RdbFrom": "dc-rdb",
+      "RdbTargetTime": "2026-01-02T03:04:05Z",
+      "TsdbFrom": "",
+      "TsdbTargetTime": ""
+    },
+    "DcctlVersion": "1.9.0",
+    "RemoveLegacyIngress": false,
+    "AWSNLB": "",
+    "MQTTGateway": null,
+    "AlertRouting": {
+      "Webhook": "",
+      "WatchdogWebhook": "",
+      "EmailTo": null,
+      "SMTPHost": "",
+      "SMTPFrom": "",
+      "SMTPUser": "",
+      "SMTPPassword": "",
+      "Config": "",
+      "Clear": false
+    }
+  }
+}
+

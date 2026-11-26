@@ -1,0 +1,11 @@
+args: install local --bogus
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (29 bytes) --
+Error: unknown flag: --bogus
+
+-- engine (11 bytes) --
+not called
+

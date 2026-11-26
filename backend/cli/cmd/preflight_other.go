@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/devicechain-io/dcctl/internal/installplain"
 )
 
 // checkSystem runs the host diagnostics that are meaningful off Linux. The kernel,
@@ -18,7 +20,7 @@ import (
 // Docker Desktop's VM, so the check is the host volume that holds the VM disk image
 // and dcctl's own state, plus whatever Docker itself will report.
 func checkSystem(d *doctor, _ string, _ bool) {
-	section("System", "🖥️")
+	d.section(installplain.SectionSystem)
 	d.info("kernel/cgroup/WSL diagnostics skipped on a non-Linux host (they apply to the Linux engine)")
 	checkHostDisk(d, hostStatePath(), freeBytes)
 	checkDockerDiskUsage(d)
@@ -48,7 +50,7 @@ const (
 // checkHostDisk reports free space on the volume holding path. free is a seam so a
 // test can present any amount without a disk.
 func checkHostDisk(d *doctor, path string, free func(string) (uint64, error)) {
-	section("Disk", "💾")
+	d.section(installplain.SectionDisk)
 	probe := path
 	for probe != "" {
 		if _, err := os.Stat(probe); err == nil {

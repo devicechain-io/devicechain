@@ -1,9 +1,15 @@
++1237|8|node-label|6 chargers updated|3:run7:rollout16:rollout-this-run0:0:9:ota-cycle0:11:ota-attempt6:COUNTS8:PLATFORM
 +1243|8|caption|6 updated · 0 refused / concurrency limit 2|3:run7:rollout16:rollout-this-run0:0:9:ota-cycle0:11:ota-attempt6:COUNTS8:PLATFORM
--1218|8|link|updated->refused|
+-1218|8|link|cap->refused|
 -1218|8|node-label|Refused by its own check|3:run7:attempt34:attempt:hp-charger-north-1::FAILED18:hp-charger-north-10:9:ota-cycle0:11:ota-attempt6:FAILED8:PLATFORM
 -1218|8|node|refused|3:run7:attempt34:attempt:hp-charger-north-1::FAILED18:hp-charger-north-10:9:ota-cycle0:11:ota-attempt6:FAILED8:PLATFORM
 -1221|8|caption|One download fails its check. / The charger refuses it.|3:run7:attempt34:attempt:hp-charger-north-1::FAILED18:hp-charger-north-10:9:ota-cycle0:11:ota-attempt6:FAILED8:PLATFORM
+-1221|8|link|refused->working|
+-1221|8|node-label|Still reporting|3:run7:attempt34:attempt:hp-charger-north-1::FAILED18:hp-charger-north-10:9:ota-cycle0:11:ota-attempt6:FAILED8:PLATFORM,3:run7:measure36:measure:hp-charger-north-1:power_kw:18:hp-charger-north-18:power_kw9:ota-cycle0:11:ota-attempt0:8:PLATFORM
+-1221|8|node|working|3:run7:attempt34:attempt:hp-charger-north-1::FAILED18:hp-charger-north-10:9:ota-cycle0:11:ota-attempt6:FAILED8:PLATFORM,3:run7:measure36:measure:hp-charger-north-1:power_kw:18:hp-charger-north-18:power_kw9:ota-cycle0:11:ota-attempt0:8:PLATFORM
 -1224|8|caption-end|refused|
 -1224|8|caption|It keeps working. / The failure is recorded.|3:run7:attempt34:attempt:hp-charger-north-1::FAILED18:hp-charger-north-10:9:ota-cycle0:11:ota-attempt6:FAILED8:PLATFORM,3:run7:measure36:measure:hp-charger-north-1:power_kw:18:hp-charger-north-18:power_kw9:ota-cycle0:11:ota-attempt0:8:PLATFORM
 -1236|8|caption-end|working|
+-1237|8|link|working->updated|
+-1237|8|node-label|5 chargers updated|3:run7:rollout16:rollout-this-run0:0:9:ota-cycle0:11:ota-attempt6:COUNTS8:PLATFORM
 -1243|8|caption|5 updated · 1 refused / concurrency limit 2|3:run7:rollout16:rollout-this-run0:0:9:ota-cycle0:11:ota-attempt6:COUNTS8:PLATFORM

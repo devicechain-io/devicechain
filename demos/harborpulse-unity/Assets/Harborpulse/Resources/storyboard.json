@@ -69,6 +69,30 @@
           ],
           "needs": null,
           "holdS": 3
+        },
+        {
+          "id": "baseline",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "baseline",
+          "lines": [
+            "Port Alder's waterfront.",
+            "{n} devices, one platform."
+          ],
+          "holdS": 3,
+          "needs": {
+            "binding": {
+              "fields": {
+                "freshDevices": "43"
+              },
+              "bind": {
+                "n": "freshDevices"
+              },
+              "maxAgeS": 60,
+              "status": "READY",
+              "mode": "occurred"
+            }
+          }
         }
       ],
       "chain": {
@@ -176,6 +200,17 @@
               }
             ]
           },
+          "holdS": 3
+        },
+        {
+          "id": "rules",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "rules",
+          "lines": [
+            "Operators write the rules.",
+            "The platform carries them out."
+          ],
           "holdS": 3
         }
       ],
@@ -309,7 +344,10 @@
           "captions": [
             "work"
           ],
-          "followDeviceFromTrigger": "none"
+          "followDeviceFromTrigger": "none",
+          "tags": [
+            "hp-light-east-3"
+          ]
         },
         {
           "id": "2b",
@@ -321,7 +359,10 @@
           "cueSim": 11,
           "until": null,
           "captions": [],
-          "followDeviceFromTrigger": "none"
+          "followDeviceFromTrigger": "none",
+          "tags": [
+            "hp-light-east-3"
+          ]
         },
         {
           "id": "2c",
@@ -337,7 +378,10 @@
             "fault-only",
             "none-work"
           ],
-          "followDeviceFromTrigger": "none"
+          "followDeviceFromTrigger": "none",
+          "tags": [
+            "hp-light-east-3"
+          ]
         },
         {
           "id": "2d",
@@ -351,7 +395,10 @@
           "captions": [
             "work-sent"
           ],
-          "followDeviceFromTrigger": "none"
+          "followDeviceFromTrigger": "none",
+          "tags": [
+            "hp-light-east-3"
+          ]
         },
         {
           "id": "2e",
@@ -438,7 +485,9 @@
                   "device": "hp-light-east-3",
                   "key": "lamp-flicker",
                   "status": "ACTIVE",
-                  "mode": "current"
+                  "mode": "current",
+                  "fromSim": 10.5,
+                  "toSim": 12.45
                 }
               },
               {
@@ -486,6 +535,63 @@
             }
           },
           "holdS": 3
+        },
+        {
+          "id": "window-open",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "window-open",
+          "lines": [
+            "A maintenance window is open."
+          ],
+          "holdS": 3,
+          "needs": {
+            "window": {
+              "device": "hp-light-east-3",
+              "key": "lamp-flicker",
+              "status": "ACTIVE",
+              "mode": "current",
+              "fromSim": 10.5,
+              "toSim": 12.45
+            }
+          }
+        },
+        {
+          "id": "control-lamp-notified",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "control-lamp-notified",
+          "lines": [
+            "A lamp with no window flickers too:",
+            "its notification is sent at once."
+          ],
+          "holdS": 3,
+          "needs": {
+            "all": [
+              {
+                "alarm": {
+                  "device": "hp-light-north-3",
+                  "key": "lamp-flicker",
+                  "status": "RAISED",
+                  "mode": "occurred",
+                  "as": "control"
+                }
+              },
+              {
+                "attempt": {
+                  "device": "hp-light-north-3",
+                  "key": "lamp-flicker",
+                  "status": "SENT",
+                  "mode": "occurred",
+                  "cycle": "$match.control.cycle",
+                  "fields": {
+                    "alarmToken": "$match.control.identity",
+                    "trigger": "ALARM"
+                  }
+                }
+              }
+            ]
+          }
         }
       ],
       "chain": {
@@ -499,14 +605,16 @@
               "window": {
                 "source": "SCENARIO",
                 "device": "hp-light-east-3",
-                "mode": "occurred"
+                "mode": "occurred",
+                "fromSim": 10.5,
+                "toSim": 12.45
               }
             }
           },
           {
             "id": "fault",
             "family": "other",
-            "label": "Fault detected, during maintenance",
+            "label": "Fault detected during work",
             "source": "PLATFORM",
             "needs": {
               "alarm": {
@@ -524,9 +632,41 @@
             }
           },
           {
+            "id": "control-lamp-notified",
+            "family": "other",
+            "label": "Lamp with no window: notified",
+            "source": "PLATFORM",
+            "needs": {
+              "all": [
+                {
+                  "alarm": {
+                    "device": "hp-light-north-3",
+                    "key": "lamp-flicker",
+                    "status": "RAISED",
+                    "mode": "occurred",
+                    "as": "control"
+                  }
+                },
+                {
+                  "attempt": {
+                    "device": "hp-light-north-3",
+                    "key": "lamp-flicker",
+                    "status": "SENT",
+                    "mode": "occurred",
+                    "cycle": "$match.control.cycle",
+                    "fields": {
+                      "alarmToken": "$match.control.identity",
+                      "trigger": "ALARM"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
             "id": "none",
             "family": "other",
-            "label": "No notification recorded in the window",
+            "label": "No notification recorded",
             "source": "PLATFORM",
             "needs": {
               "all": [
@@ -653,7 +793,10 @@
           "captions": [
             "new-hardware"
           ],
-          "followDeviceFromTrigger": "none"
+          "followDeviceFromTrigger": "none",
+          "tags": [
+            "hp-gauge-north-3"
+          ]
         },
         {
           "id": "3b",
@@ -667,7 +810,10 @@
           "captions": [
             "same"
           ],
-          "followDeviceFromTrigger": "none"
+          "followDeviceFromTrigger": "none",
+          "tags": [
+            "hp-gauge-north-3"
+          ]
         },
         {
           "id": "3c",
@@ -818,7 +964,9 @@
               "replacement": {
                 "source": "SCENARIO",
                 "device": "hp-gauge-north-3",
-                "mode": "occurred"
+                "mode": "occurred",
+                "fromSim": 12.25,
+                "toSim": 13
               }
             }
           },
@@ -1232,7 +1380,10 @@
           "captions": [
             "derate"
           ],
-          "followDeviceFromTrigger": "none"
+          "followDeviceFromTrigger": "none",
+          "tags": [
+            "hp-charger-basin-2"
+          ]
         },
         {
           "id": "3b-2",
@@ -1360,8 +1511,72 @@
         }
       ],
       "chain": {
-        "nodes": [],
-        "links": []
+        "nodes": [
+          {
+            "id": "hot",
+            "family": "other",
+            "label": "Connector hot: alarm raised",
+            "source": "PLATFORM",
+            "needs": {
+              "alarm": {
+                "device": "hp-charger-basin-2",
+                "key": "connector-hot",
+                "status": "RAISED",
+                "mode": "occurred",
+                "cycle": "$trigger.cycle",
+                "identity": "$trigger.identity"
+              }
+            }
+          },
+          {
+            "id": "derate",
+            "family": "other",
+            "label": "Told to derate to {kw} kW",
+            "source": "PLATFORM",
+            "needs": {
+              "command": {
+                "fields": {
+                  "max_kw": "11",
+                  "alarmToken": "$trigger.identity"
+                },
+                "device": "hp-charger-basin-2",
+                "key": "derate",
+                "status": "SUCCESSFUL",
+                "mode": "occurred",
+                "cycle": "$trigger.cycle",
+                "bind": {
+                  "kw": "max_kw"
+                }
+              }
+            }
+          },
+          {
+            "id": "cool",
+            "family": "other",
+            "label": "Alarm cleared",
+            "source": "PLATFORM",
+            "needs": {
+              "alarm": {
+                "device": "hp-charger-basin-2",
+                "key": "connector-hot",
+                "status": "CLEARED",
+                "mode": "occurred",
+                "cycle": "$trigger.cycle",
+                "identity": "$trigger.identity"
+              }
+            }
+          }
+        ],
+        "links": [
+          [
+            "hot",
+            "derate"
+          ],
+          [
+            "derate",
+            "cool"
+          ]
+        ]
       },
       "context": "The Basin · an EV charger running hot"
     },
@@ -1638,6 +1853,57 @@
             ]
           },
           "holdS": 3
+        },
+        {
+          "id": "well-rising",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "well-rising",
+          "lines": [
+            "The well is filling."
+          ],
+          "holdS": 3,
+          "needs": {
+            "measure": {
+              "fields": {
+                "rising": "true"
+              },
+              "device": "hp-pump-north",
+              "key": "wet_well_m",
+              "mode": "occurred",
+              "maxAgeS": 12
+            }
+          }
+        },
+        {
+          "id": "well-clear",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "well-clear",
+          "lines": [
+            "The well drains. The alarm clears."
+          ],
+          "holdS": 3,
+          "needs": {
+            "alarm": {
+              "device": "hp-pump-north",
+              "key": "wet-well-high",
+              "status": "CLEARED",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "identity": "$trigger.identity"
+            }
+          }
+        },
+        {
+          "id": "truck-leaves",
+          "kind": "scenario",
+          "source": "SCENARIO",
+          "slot": "truck-leaves",
+          "lines": [
+            "The works truck heads out."
+          ],
+          "holdS": 3
         }
       ],
       "chain": {
@@ -1645,21 +1911,23 @@
           {
             "id": "well",
             "family": "pump",
-            "label": "Well sensor above high level",
+            "label": "Well above alarm level",
             "source": "PLATFORM",
             "needs": {
-              "measure": {
-                "gte": 2.5,
+              "alarm": {
                 "device": "hp-pump-north",
-                "key": "wet_well_m",
-                "mode": "occurred"
+                "key": "wet-well-high",
+                "status": "RAISED",
+                "mode": "occurred",
+                "cycle": "$trigger.cycle",
+                "identity": "$trigger.identity"
               }
             }
           },
           {
             "id": "command",
             "family": "pump",
-            "label": "start-pump sent",
+            "label": "Start command sent",
             "source": "PLATFORM",
             "needs": {
               "command": {
@@ -1678,7 +1946,7 @@
           {
             "id": "running",
             "family": "pump",
-            "label": "Pump running (platform first)",
+            "label": "Pump running",
             "source": "PLATFORM",
             "needs": {
               "chip": {
@@ -1902,11 +2170,70 @@
             }
           },
           "holdS": 3
+        },
+        {
+          "id": "airlock-notified",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "airlock-notified",
+          "lines": [
+            "A notification goes out."
+          ],
+          "holdS": 3,
+          "needs": {
+            "attempt": {
+              "key": "pump-air-lock",
+              "status": "SENT",
+              "mode": "occurred",
+              "cycle": "$trigger.cycle",
+              "fields": {
+                "alarmToken": "$trigger.identity"
+              }
+            }
+          }
         }
       ],
       "chain": {
-        "nodes": [],
-        "links": []
+        "nodes": [
+          {
+            "id": "air",
+            "family": "other",
+            "label": "Critical alarm: no flow",
+            "source": "PLATFORM",
+            "needs": {
+              "alarm": {
+                "key": "pump-air-lock",
+                "status": "RAISED",
+                "mode": "occurred",
+                "cycle": "$trigger.cycle",
+                "identity": "$trigger.identity"
+              }
+            }
+          },
+          {
+            "id": "airlock-notified",
+            "family": "other",
+            "label": "Notification sent",
+            "source": "PLATFORM",
+            "needs": {
+              "attempt": {
+                "key": "pump-air-lock",
+                "status": "SENT",
+                "mode": "occurred",
+                "cycle": "$trigger.cycle",
+                "fields": {
+                  "alarmToken": "$trigger.identity"
+                }
+              }
+            }
+          }
+        ],
+        "links": [
+          [
+            "air",
+            "airlock-notified"
+          ]
+        ]
       },
       "context": "East Quay · a pump that has lost its prime"
     },
@@ -1984,7 +2311,10 @@
             "silence"
           ],
           "followDeviceFromTrigger": "none",
-          "cueRef": "outage.detected"
+          "cueRef": "outage.detected",
+          "tags": [
+            "hp-light-east-3"
+          ]
         },
         {
           "id": "6d",
@@ -2115,6 +2445,73 @@
             ]
           },
           "holdS": 3
+        },
+        {
+          "id": "quiet",
+          "kind": "pre",
+          "source": "PLATFORM",
+          "slot": "silence-pre",
+          "lines": [
+            "East Quay has gone quiet…"
+          ],
+          "holdS": 3
+        },
+        {
+          "id": "absence-count",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "absence-count",
+          "lines": [
+            "{n} silent devices, {n} alarms."
+          ],
+          "holdS": 3,
+          "needs": {
+            "tally": {
+              "of": {
+                "any": [
+                  {
+                    "alarm": {
+                      "key": "light-silent",
+                      "status": "RAISED",
+                      "mode": "occurred"
+                    }
+                  },
+                  {
+                    "alarm": {
+                      "key": "charger-offline",
+                      "status": "RAISED",
+                      "mode": "occurred"
+                    }
+                  }
+                ]
+              },
+              "field": "device",
+              "bind": "n"
+            }
+          }
+        },
+        {
+          "id": "absence-notified",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "absence-notified",
+          "lines": [
+            "{n} notifications sent."
+          ],
+          "holdS": 3,
+          "needs": {
+            "tally": {
+              "of": {
+                "attempt": {
+                  "key": "absence",
+                  "status": "SENT",
+                  "mode": "occurred"
+                }
+              },
+              "field": "alarmToken",
+              "bind": "n"
+            }
+          }
         }
       ],
       "chain": {
@@ -2129,18 +2526,20 @@
                 "source": "SCENARIO",
                 "key": "feeder-outage",
                 "status": "ACTIVE",
-                "mode": "occurred"
+                "mode": "occurred",
+                "fromSim": 19.5,
+                "toSim": 21.25
               }
             }
           },
           {
-            "id": "absence",
+            "id": "absence-count",
             "family": "other",
-            "label": "Absence alarms",
+            "label": "{n} absence alarms",
             "source": "PLATFORM",
             "needs": {
-              "set": {
-                "observed": {
+              "tally": {
+                "of": {
                   "any": [
                     {
                       "alarm": {
@@ -2158,56 +2557,34 @@
                     }
                   ]
                 },
-                "expected": {
-                  "membership": {
-                    "identity": "east-absence",
-                    "mode": "current"
-                  }
-                },
                 "field": "device",
-                "expectedField": "tokens",
-                "stream": "alarms",
-                "fromSim": 19.75,
-                "toSim": 20.55,
-                "cardinality": 6,
-                "toCue": "outage.tally"
+                "bind": "n"
               }
             }
           },
           {
-            "id": "notify",
+            "id": "absence-notified",
             "family": "other",
-            "label": "Notification sent",
+            "label": "{n} notifications sent",
             "source": "PLATFORM",
             "needs": {
-              "all": [
-                {
-                  "alarm": {
-                    "mode": "occurred",
-                    "device": "hp-light-east-1",
-                    "key": "light-silent",
-                    "status": "RAISED",
-                    "as": "absence"
-                  }
-                },
-                {
+              "tally": {
+                "of": {
                   "attempt": {
                     "key": "absence",
                     "status": "SENT",
-                    "mode": "occurred",
-                    "cycle": "$match.absence.cycle",
-                    "fields": {
-                      "alarmToken": "$match.absence.identity"
-                    }
+                    "mode": "occurred"
                   }
-                }
-              ]
+                },
+                "field": "alarmToken",
+                "bind": "n"
+              }
             }
           },
           {
             "id": "escalated",
             "family": "other",
-            "label": "still unacknowledged: re-notified",
+            "label": "Unacknowledged: notified again",
             "source": "PLATFORM",
             "needs": {
               "all": [
@@ -2239,14 +2616,14 @@
         "links": [
           [
             "outage",
-            "absence"
+            "absence-count"
           ],
           [
-            "absence",
-            "notify"
+            "absence-count",
+            "absence-notified"
           ],
           [
-            "notify",
+            "absence-notified",
             "escalated"
           ]
         ]
@@ -2434,7 +2811,8 @@
               "expectedField": "times",
               "stream": "measurements",
               "fromSim": 19.75,
-              "toSim": 21.6
+              "toSim": 22.1,
+              "atLeast": true
             }
           },
           "holdS": 3
@@ -2484,6 +2862,39 @@
             ]
           },
           "holdS": 3
+        },
+        {
+          "id": "silence-clear",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "silence-clear",
+          "lines": [
+            "The silence alarms have cleared."
+          ],
+          "holdS": 3,
+          "needs": {
+            "all": [
+              {
+                "alarm": {
+                  "key": "charger-offline",
+                  "status": "RAISED",
+                  "mode": "occurred",
+                  "as": "raised",
+                  "fromSim": 19.75,
+                  "toSim": 21.2
+                }
+              },
+              {
+                "alarm": {
+                  "key": "charger-offline",
+                  "status": "CLEARED",
+                  "mode": "occurred",
+                  "identity": "$match.raised.identity",
+                  "cycle": "$match.raised.cycle"
+                }
+              }
+            ]
+          }
         }
       ],
       "chain": {
@@ -2491,21 +2902,23 @@
           {
             "id": "power",
             "family": "other",
-            "label": "Power back",
+            "label": "Power is back",
             "source": "SCENARIO",
             "needs": {
               "window": {
                 "source": "SCENARIO",
                 "key": "feeder-outage",
                 "status": "ENDED",
-                "mode": "occurred"
+                "mode": "occurred",
+                "fromSim": 21.0,
+                "toSim": 22.1
               }
             }
           },
           {
             "id": "back",
             "family": "other",
-            "label": "Readings arriving with original times",
+            "label": "Stored at their original times",
             "source": "PLATFORM",
             "needs": {
               "measure": {
@@ -2556,7 +2969,8 @@
                 "expectedField": "times",
                 "stream": "measurements",
                 "fromSim": 19.75,
-                "toSim": 21.6
+                "toSim": 22.1,
+                "atLeast": true
               }
             }
           },
@@ -2680,7 +3094,10 @@
             "failed",
             "working"
           ],
-          "followDeviceFromTrigger": "none"
+          "followDeviceFromTrigger": "none",
+          "tags": [
+            "hp-charger-north-1"
+          ]
         },
         {
           "id": "8d",
@@ -2897,6 +3314,31 @@
             }
           },
           "holdS": 3
+        },
+        {
+          "id": "targets",
+          "kind": "claim",
+          "source": "PLATFORM",
+          "slot": "targets",
+          "lines": [
+            "{n} chargers to update."
+          ],
+          "holdS": 3,
+          "needs": {
+            "tally": {
+              "of": {
+                "target": {
+                  "mode": "current",
+                  "cycle": "$trigger.cycle",
+                  "fields": {
+                    "rolloutToken": "$trigger.identity"
+                  }
+                }
+              },
+              "field": "device",
+              "bind": "n"
+            }
+          }
         }
       ],
       "chain": {
@@ -2925,7 +3367,7 @@
           {
             "id": "cap",
             "family": "other",
-            "label": "Concurrency limit {cap}",
+            "label": "Limit: {cap} at a time",
             "source": "PLATFORM",
             "needs": {
               "rollout": {
@@ -2935,23 +3377,6 @@
                 "identity": "$trigger.identity",
                 "bind": {
                   "cap": "maxInFlight"
-                }
-              }
-            }
-          },
-          {
-            "id": "updated",
-            "family": "other",
-            "label": "Updated targets",
-            "source": "PLATFORM",
-            "needs": {
-              "target": {
-                "status": "SUCCEEDED",
-                "mode": "current",
-                "cycle": "$trigger.cycle",
-                "fields": {
-                  "rolloutToken": "$trigger.identity",
-                  "artifactToken": "$trigger.artifactToken"
                 }
               }
             }
@@ -2975,6 +3400,63 @@
                 "cycle": "$trigger.cycle"
               }
             }
+          },
+          {
+            "id": "working",
+            "family": "other",
+            "label": "Still reporting",
+            "source": "PLATFORM",
+            "needs": {
+              "all": [
+                {
+                  "attempt": {
+                    "fields": {
+                      "code": "VERIFICATION_FAILED",
+                      "platform": "false",
+                      "rolloutToken": "$trigger.identity",
+                      "artifactToken": "$trigger.artifactToken"
+                    },
+                    "device": "hp-charger-north-1",
+                    "status": "FAILED",
+                    "mode": "occurred",
+                    "cycle": "$trigger.cycle",
+                    "as": "failure"
+                  }
+                },
+                {
+                  "measure": {
+                    "fields": {
+                      "afterFailure": "true",
+                      "rolloutToken": "$trigger.identity",
+                      "artifactToken": "$trigger.artifactToken"
+                    },
+                    "maxAgeS": 60,
+                    "device": "hp-charger-north-1",
+                    "key": "power_kw",
+                    "mode": "occurred",
+                    "cycle": "$trigger.cycle",
+                    "attempt": "$match.failure.attempt"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "updated",
+            "family": "other",
+            "label": "{updated} chargers updated",
+            "source": "PLATFORM",
+            "needs": {
+              "rollout": {
+                "bind": {
+                  "updated": "updated"
+                },
+                "status": "COUNTS",
+                "mode": "occurred",
+                "cycle": "$trigger.cycle",
+                "identity": "$trigger.identity"
+              }
+            }
           }
         ],
         "links": [
@@ -2984,11 +3466,15 @@
           ],
           [
             "cap",
-            "updated"
+            "refused"
           ],
           [
-            "updated",
-            "refused"
+            "refused",
+            "working"
+          ],
+          [
+            "working",
+            "updated"
           ]
         ]
       },
@@ -3102,29 +3588,69 @@
     {
       "id": "c300",
       "targetS": 300,
+      "loopSeamS": 1.5,
+      "chapters": [
+        {
+          "id": "cold"
+        },
+        {
+          "id": "open"
+        },
+        {
+          "id": "morning",
+          "tag": "Morning · the routine"
+        },
+        {
+          "id": "evening",
+          "tag": "Evening · the storm"
+        },
+        {
+          "id": "overnight",
+          "tag": "Overnight · the update"
+        },
+        {
+          "id": "close"
+        }
+      ],
       "segments": [
         {
           "page": "0",
           "shot": "0a",
-          "durS": 3,
+          "chapter": "cold",
+          "durS": 6,
           "moveS": 0,
           "recordedWallFromS": 780,
           "recordedWallToS": 786,
-          "borrowed": "later that day",
-          "captions": [],
-          "nodes": [],
           "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "dissolveS": 0,
+          "captions": [],
+          "overlays": [],
+          "nodes": [],
+          "borrowed": "later that day",
+          "push": 0.05,
+          "vo": {
+            "id": "c300-01",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-01-line",
+                "text": "Tonight, a storm hits this harbour on a king tide. We start that morning.",
+                "durS": 4.8,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "0",
           "shot": "0b",
-          "durS": 5,
-          "moveS": 0,
+          "chapter": "open",
+          "durS": 16,
+          "moveS": 16,
           "recordedWallFromS": 0,
-          "recordedWallToS": 6,
-          "borrowed": "none",
+          "recordedWallToS": 16,
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
           "captions": [
             {
               "id": "title",
@@ -3132,84 +3658,127 @@
               "holdS": 3
             }
           ],
-          "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
           "overlays": [
             {
               "id": "disclosure",
               "atS": 0,
               "holdS": 3
             }
-          ]
-        },
-        {
-          "page": "1",
-          "shot": "1a",
-          "durS": 8,
-          "moveS": 0,
-          "recordedWallFromS": 6,
-          "recordedWallToS": 14,
-          "borrowed": "none",
-          "captions": [
-            {
-              "id": "baseline",
-              "atS": 0,
-              "holdS": 3
-            }
           ],
           "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "from": "pose:home-high",
+          "to": "pose:home",
+          "vo": {
+            "id": "c300-02",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-02-claim",
+                "text": "This is Port Alder, a simulated harbour district running against a live DeviceChain instance. Forty-three devices report to one platform: tide gauges, storm pumps, street lights, vehicle chargers, power meters and a works truck.",
+                "durS": 14.8,
+                "claims": [
+                  {
+                    "id": "baseline",
+                    "bound": {
+                      "n": "43"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "c300-02-floor",
+                "text": "This is Port Alder, a simulated harbour district running against a live DeviceChain instance. Its devices report to one platform: tide gauges, storm pumps, street lights, vehicle chargers, power meters and a works truck.",
+                "durS": 14.2,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "1",
           "shot": "1b",
-          "durS": 8,
-          "moveS": 1,
+          "chapter": "morning",
+          "durS": 10,
+          "moveS": 0,
           "recordedWallFromS": 135,
-          "recordedWallToS": 143,
-          "borrowed": "none",
-          "captions": [],
-          "nodes": [],
+          "recordedWallToS": 145,
           "seamPose": "pose:home",
           "dissolveS": 0.5,
-          "overlays": []
+          "captions": [
+            {
+              "id": "rules",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "overlays": [],
+          "nodes": [],
+          "push": 0.08,
+          "vo": {
+            "id": "c300-03",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-03-line",
+                "text": "Its operators don't watch every reading. They write rules, and the platform carries them out and keeps the record. This is one day of that.",
+                "durS": 9.0,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "1b",
           "shot": "1b-1",
-          "durS": 12,
-          "moveS": 1,
+          "chapter": "morning",
+          "durS": 13,
+          "moveS": 13,
           "recordedWallFromS": 198,
-          "recordedWallToS": 210,
-          "borrowed": "none",
+          "recordedWallToS": 211,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "peak",
-              "atS": 1,
-              "holdS": 3
-            },
-            {
-              "id": "peak-clear",
-              "atS": 4,
+              "atS": 0,
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "vo": {
+            "id": "c300-04",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-04-claim",
+                "text": "Mid-morning, the ferry terminal draws more power than its cap allows. The rule here watches a one-minute average, so a brief spike is ignored and only a sustained overdraw raises an alarm.",
+                "durS": 12.2,
+                "claims": [
+                  {
+                    "id": "peak"
+                  }
+                ]
+              },
+              {
+                "id": "c300-04-floor",
+                "text": "Mid-morning, the ferry terminal's meter climbs toward its power cap.",
+                "durS": 4.4,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "2",
           "shot": "2a",
+          "chapter": "morning",
           "durS": 7,
           "moveS": 0,
-          "recordedWallFromS": 285.0,
-          "recordedWallToS": 292.0,
-          "borrowed": "none",
+          "recordedWallFromS": 285.5,
+          "recordedWallToS": 292.5,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "work",
@@ -3217,45 +3786,80 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
-            "work",
-            "fault",
-            "none",
-            "closed",
-            "sent"
+            "work"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.06,
+          "vo": {
+            "id": "c300-05",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-05-claim",
+                "text": "On East Quay a crew is servicing one street light, under a maintenance window its operators set.",
+                "durS": 6.2,
+                "claims": [
+                  {
+                    "id": "window-open"
+                  }
+                ]
+              },
+              {
+                "id": "c300-05-floor",
+                "text": "On East Quay a crew is servicing one street light.",
+                "durS": 3.3,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "2",
           "shot": "2b",
-          "durS": 9,
+          "chapter": "morning",
+          "durS": 5,
           "moveS": 0,
           "recordedWallFromS": 306,
-          "recordedWallToS": 315,
-          "borrowed": "none",
-          "captions": [],
+          "recordedWallToS": 311,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
+          "captions": [
+            {
+              "id": "work",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "overlays": [],
           "nodes": [
             "work",
-            "fault",
-            "none",
-            "closed",
-            "sent"
+            "fault"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.08,
+          "vo": {
+            "id": "c300-06a",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-06a-line",
+                "text": "While they work, the light starts to flicker.",
+                "durS": 3.0,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "2",
           "shot": "2c",
-          "durS": 9,
+          "chapter": "morning",
+          "durS": 12,
           "moveS": 0,
-          "recordedWallFromS": 315,
-          "recordedWallToS": 324,
-          "borrowed": "none",
+          "recordedWallFromS": 311,
+          "recordedWallToS": 323,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "fault",
@@ -3266,32 +3870,71 @@
               "id": "fault-only",
               "atS": 0,
               "holdS": 3
-            },
-            {
-              "id": "none-work",
-              "atS": 3,
-              "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "work",
             "fault",
-            "none",
-            "closed",
-            "sent"
+            "control-lamp-notified"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.06,
+          "vo": {
+            "id": "c300-06b",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-06b-claim",
+                "text": "The platform still detects the fault, and marks it as raised during maintenance. A second lamp, with no window, flickers too, and its notification goes out at once.",
+                "durS": 10.6,
+                "claims": [
+                  {
+                    "id": "fault"
+                  },
+                  {
+                    "id": "control-lamp-notified"
+                  }
+                ]
+              },
+              {
+                "id": "c300-06b-fb1",
+                "text": "The platform still detects the fault, and marks it as raised during maintenance.",
+                "durS": 5.2,
+                "claims": [
+                  {
+                    "id": "fault"
+                  }
+                ]
+              },
+              {
+                "id": "c300-06b-fb2",
+                "text": "The platform detects the fault.",
+                "durS": 2.0,
+                "claims": [
+                  {
+                    "id": "fault-only"
+                  }
+                ]
+              },
+              {
+                "id": "c300-06b-floor",
+                "text": "The crew is still at the lamp.",
+                "durS": 2.0,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "2",
           "shot": "2d",
+          "chapter": "morning",
           "durS": 9,
           "moveS": 0,
-          "recordedWallFromS": 370,
-          "recordedWallToS": 379,
-          "borrowed": "none",
+          "recordedWallFromS": 379,
+          "recordedWallToS": 388,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "work-sent",
@@ -3299,45 +3942,47 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "work",
             "fault",
-            "none",
             "closed",
             "sent"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "2",
-          "shot": "2e",
-          "durS": 4,
-          "moveS": 0,
-          "recordedWallFromS": 379,
-          "recordedWallToS": 385,
-          "borrowed": "none",
-          "captions": [],
-          "nodes": [
-            "work",
-            "fault",
-            "none",
-            "closed",
-            "sent"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.06,
+          "vo": {
+            "id": "c300-07",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-07-claim",
+                "text": "The work ends and the window closes, but the fault is still there. Now the held notification goes out to the crew.",
+                "durS": 7.4,
+                "claims": [
+                  {
+                    "id": "work-sent"
+                  }
+                ]
+              },
+              {
+                "id": "c300-07-floor",
+                "text": "The work ends and the maintenance window closes.",
+                "durS": 3.1,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "3",
           "shot": "3a",
-          "durS": 7,
+          "chapter": "morning",
+          "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 392,
-          "recordedWallToS": 399,
-          "borrowed": "none",
+          "recordedWallFromS": 398,
+          "recordedWallToS": 406,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "new-hardware",
@@ -3345,24 +3990,47 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "swapped",
             "journal",
             "same",
             "disabled"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.08,
+          "vo": {
+            "id": "c300-08",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-08-claim",
+                "text": "At midday, one tide gauge gets new hardware. A crew swaps the unit, and the platform records the replacement.",
+                "durS": 7.1,
+                "claims": [
+                  {
+                    "id": "new-hardware"
+                  }
+                ]
+              },
+              {
+                "id": "c300-08-floor",
+                "text": "At midday, one tide gauge gets new hardware. A crew swaps the unit on the quay wall.",
+                "durS": 5.5,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "3",
           "shot": "3b",
+          "chapter": "morning",
           "durS": 7,
           "moveS": 0,
-          "recordedWallFromS": 399,
-          "recordedWallToS": 406,
-          "borrowed": "none",
+          "recordedWallFromS": 406,
+          "recordedWallToS": 413,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "same",
@@ -3370,24 +4038,47 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "swapped",
             "journal",
             "same",
             "disabled"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.06,
+          "vo": {
+            "id": "c300-09",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-09-claim",
+                "text": "On the platform it is still the same device: one unbroken line of tide readings.",
+                "durS": 5.2,
+                "claims": [
+                  {
+                    "id": "same"
+                  }
+                ]
+              },
+              {
+                "id": "c300-09-floor",
+                "text": "The new unit takes over the old one's place on the wall.",
+                "durS": 3.7,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "3",
           "shot": "3c",
-          "durS": 6,
+          "chapter": "morning",
+          "durS": 7,
           "moveS": 0,
-          "recordedWallFromS": 406,
-          "recordedWallToS": 412,
-          "borrowed": "none",
+          "recordedWallFromS": 413,
+          "recordedWallToS": 420,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "disabled",
@@ -3395,69 +4086,109 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "swapped",
             "journal",
             "same",
             "disabled"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.06,
+          "vo": {
+            "id": "c300-10",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-10-claim",
+                "text": "And the old unit's credentials are disabled, so the retired hardware can no longer sign in.",
+                "durS": 5.9,
+                "claims": [
+                  {
+                    "id": "disabled"
+                  }
+                ]
+              },
+              {
+                "id": "c300-10-floor",
+                "text": "The old unit is retired from the quay.",
+                "durS": 2.5,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "3b",
           "shot": "3b-1",
-          "durS": 8,
+          "chapter": "morning",
+          "durS": 10,
           "moveS": 0,
-          "recordedWallFromS": 526,
-          "recordedWallToS": 534,
-          "borrowed": "none",
+          "recordedWallFromS": 527,
+          "recordedWallToS": 537,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "derate",
               "atS": 0,
               "holdS": 3
-            }
-          ],
-          "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "3b",
-          "shot": "3b-2",
-          "durS": 8,
-          "moveS": 0,
-          "recordedWallFromS": 534,
-          "recordedWallToS": 542,
-          "borrowed": "none",
-          "captions": [
-            {
-              "id": "cool",
-              "atS": 0,
-              "holdS": 3
             },
             {
               "id": "hot-only",
-              "atS": 0,
+              "atS": 5,
               "holdS": 3
             }
           ],
-          "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "overlays": [],
+          "nodes": [
+            "hot",
+            "derate",
+            "cool"
+          ],
+          "push": 0.08,
+          "vo": {
+            "id": "c300-11",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-11-claim",
+                "text": "Mid-afternoon, a charger's connector runs hot. The platform raises an alarm and tells that charger to derate to eleven kilowatts.",
+                "durS": 8.4,
+                "claims": [
+                  {
+                    "id": "derate"
+                  }
+                ]
+              },
+              {
+                "id": "c300-11-fb1",
+                "text": "Mid-afternoon, a charger's connector runs hot, and the platform raises an alarm.",
+                "durS": 5.2,
+                "claims": [
+                  {
+                    "id": "hot-only"
+                  }
+                ]
+              },
+              {
+                "id": "c300-11-floor",
+                "text": "Mid-afternoon, a charger's connector runs hot.",
+                "durS": 3.0,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "3b",
           "shot": "3b-3",
-          "durS": 6,
+          "chapter": "morning",
+          "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 573,
-          "recordedWallToS": 579,
-          "borrowed": "none",
+          "recordedWallFromS": 572.5,
+          "recordedWallToS": 580.5,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "cool",
@@ -3470,19 +4201,46 @@
               "holdS": 3
             }
           ],
-          "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "overlays": [],
+          "nodes": [
+            "hot",
+            "derate",
+            "cool"
+          ],
+          "push": 0.05,
+          "vo": {
+            "id": "c300-12",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-12-claim",
+                "text": "The charger confirms the new limit. The connector cools, and the alarm clears.",
+                "durS": 5.1,
+                "claims": [
+                  {
+                    "id": "cool"
+                  }
+                ]
+              },
+              {
+                "id": "c300-12-floor",
+                "text": "The connector's temperature comes back down.",
+                "durS": 2.9,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "4",
           "shot": "4a",
-          "durS": 6,
+          "chapter": "evening",
+          "durS": 10,
           "moveS": 0,
           "recordedWallFromS": 600,
-          "recordedWallToS": 606,
-          "borrowed": "none",
+          "recordedWallToS": 610,
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
           "captions": [
             {
               "id": "storm",
@@ -3490,180 +4248,291 @@
               "holdS": 3
             }
           ],
-          "nodes": [
-            "well",
-            "command",
-            "running",
-            "falling",
-            "water",
-            "flood"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "overlays": [],
+          "nodes": [],
+          "push": 0.07,
+          "vo": {
+            "id": "c300-13",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-13-line",
+                "text": "Then the weather turns. By evening a storm is pushing a king tide into the harbour, and the rules written in daylight are about to be tested.",
+                "durS": 9.1,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "4",
           "shot": "4c",
-          "durS": 4,
+          "chapter": "evening",
+          "durS": 5,
           "moveS": 0,
           "recordedWallFromS": 668,
-          "recordedWallToS": 674,
-          "borrowed": "none",
-          "captions": [],
-          "nodes": [
-            "well",
-            "command",
-            "running",
-            "falling",
-            "water",
-            "flood"
-          ],
+          "recordedWallToS": 673,
           "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "dissolveS": 0,
+          "captions": [
+            {
+              "id": "truck-leaves",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "overlays": [],
+          "nodes": [],
+          "push": 0.06,
+          "vo": {
+            "id": "c300-14",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-14-line",
+                "text": "The works truck heads out from the depot.",
+                "durS": 2.7,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "4",
           "shot": "4d",
-          "durS": 6,
-          "moveS": 3,
-          "recordedWallFromS": 674,
-          "recordedWallToS": 680.0,
-          "borrowed": "none",
+          "chapter": "evening",
+          "durS": 8,
+          "moveS": 4,
+          "recordedWallFromS": 672,
+          "recordedWallToS": 680,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "well",
-              "atS": 3,
+              "atS": 0,
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "well",
             "command",
             "running",
-            "falling",
-            "water",
-            "flood"
+            "falling"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "vo": {
+            "id": "c300-15",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-15-claim",
+                "text": "Under North Quay, a storm drain is filling. The pump's own sensor reports the level in its well.",
+                "durS": 6.2,
+                "claims": [
+                  {
+                    "id": "well-rising"
+                  }
+                ]
+              },
+              {
+                "id": "c300-15-floor",
+                "text": "Under North Quay sits a storm drain, and the pump that empties it.",
+                "durS": 4.3,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "4",
           "shot": "4e",
-          "durS": 15,
+          "chapter": "evening",
+          "durS": 16,
           "moveS": 0,
-          "recordedWallFromS": 690.0,
-          "recordedWallToS": 705.0,
-          "borrowed": "none",
+          "recordedWallFromS": 688,
+          "recordedWallToS": 704,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
-              "id": "platform-start",
+              "id": "well",
               "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "platform-start",
+              "atS": 3,
               "holdS": 3
             },
             {
               "id": "float",
-              "atS": 0,
+              "atS": 3,
               "holdS": 3
             },
             {
               "id": "before-float",
-              "atS": 3,
+              "atS": 9,
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "well",
             "command",
             "running",
-            "falling",
-            "water",
-            "flood"
+            "falling"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.03,
+          "vo": {
+            "id": "c300-16",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-16-claim",
+                "text": "The water crosses the level the operators set. The platform raises an alarm and sends the pump a start command, and the pump confirms. It is running before its own float switch, the last line of defence, would have started it.",
+                "durS": 14.6,
+                "claims": [
+                  {
+                    "id": "platform-start"
+                  },
+                  {
+                    "id": "before-float"
+                  },
+                  {
+                    "id": "command"
+                  }
+                ]
+              },
+              {
+                "id": "c300-16-fb1",
+                "text": "The water crosses the level the operators set. The platform raises an alarm and sends the pump a start command, and the pump confirms.",
+                "durS": 8.7,
+                "claims": [
+                  {
+                    "id": "platform-start"
+                  },
+                  {
+                    "id": "command"
+                  }
+                ]
+              },
+              {
+                "id": "c300-16-floor",
+                "text": "The well keeps rising toward the pump's own float switch, its last line of defence.",
+                "durS": 5.4,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "4",
           "shot": "4f",
-          "durS": 5,
+          "chapter": "evening",
+          "durS": 6,
           "moveS": 0,
-          "recordedWallFromS": 705.0,
-          "recordedWallToS": 711.0,
-          "borrowed": "none",
-          "captions": [],
+          "recordedWallFromS": 704,
+          "recordedWallToS": 710,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
+          "captions": [
+            {
+              "id": "well-clear",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "overlays": [],
           "nodes": [
             "well",
             "command",
             "running",
-            "falling",
-            "water",
-            "flood"
+            "falling"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.08,
+          "vo": {
+            "id": "c300-17",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-17-claim",
+                "text": "The outfall runs, the well drains into the harbour, and the alarm clears.",
+                "durS": 4.8,
+                "claims": [
+                  {
+                    "id": "falling"
+                  },
+                  {
+                    "id": "well-clear"
+                  }
+                ]
+              },
+              {
+                "id": "c300-17-floor",
+                "text": "The pump empties the well into the harbour.",
+                "durS": 2.8,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "4",
           "shot": "4b",
-          "durS": 8,
-          "moveS": 1,
-          "recordedWallFromS": 713,
-          "recordedWallToS": 721,
-          "borrowed": "none",
+          "chapter": "evening",
+          "durS": 10,
+          "moveS": 0,
+          "recordedWallFromS": 714,
+          "recordedWallToS": 724,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "flood",
-              "atS": 1,
+              "atS": 0,
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
-            "well",
-            "command",
-            "running",
-            "falling",
             "water",
             "flood"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "4",
-          "shot": "4g",
-          "durS": 6,
-          "moveS": 1,
-          "recordedWallFromS": 721,
-          "recordedWallToS": 727,
-          "borrowed": "none",
-          "captions": [],
-          "nodes": [
-            "well",
-            "command",
-            "running",
-            "falling",
-            "water",
-            "flood"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.08,
+          "vo": {
+            "id": "c300-18",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-18-claim",
+                "text": "Along the quays, each tide gauge gets its own flood alarm, and it escalates in place as the water climbs.",
+                "durS": 6.8,
+                "claims": [
+                  {
+                    "id": "flood"
+                  }
+                ]
+              },
+              {
+                "id": "c300-18-floor",
+                "text": "Along the quays, the tide gauges follow the water as it climbs.",
+                "durS": 4.1,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "5",
           "shot": "5a",
-          "durS": 8,
+          "chapter": "evening",
+          "durS": 10,
           "moveS": 0,
-          "recordedWallFromS": 717.0,
-          "recordedWallToS": 725.0,
-          "borrowed": "none",
+          "recordedWallFromS": 712,
+          "recordedWallToS": 722,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "truck",
@@ -3671,33 +4540,42 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "5",
-          "shot": "5b",
-          "durS": 4,
-          "moveS": 0,
-          "recordedWallFromS": 725.0,
-          "recordedWallToS": 731.0,
-          "borrowed": "none",
-          "captions": [],
-          "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.06,
+          "vo": {
+            "id": "c300-19",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-19-claim",
+                "text": "The works truck drives into the flood plain. A geofence rule records the moment it crosses the line, so the operators know where the crew is.",
+                "durS": 9.1,
+                "claims": [
+                  {
+                    "id": "truck"
+                  }
+                ]
+              },
+              {
+                "id": "c300-19-floor",
+                "text": "The works truck drives into the flood plain.",
+                "durS": 2.9,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "4b",
           "shot": "4b-1",
-          "durS": 12,
+          "chapter": "evening",
+          "durS": 13,
           "moveS": 0,
-          "recordedWallFromS": 826,
-          "recordedWallToS": 838,
-          "borrowed": "none",
+          "recordedWallFromS": 824,
+          "recordedWallToS": 837,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "air",
@@ -3705,19 +4583,58 @@
               "holdS": 3
             }
           ],
-          "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "overlays": [],
+          "nodes": [
+            "air",
+            "airlock-notified"
+          ],
+          "push": 0.03,
+          "vo": {
+            "id": "c300-20",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-20-claim",
+                "text": "On East Quay, a second pump is running but moving no water. No single reading shows that. A rule that watches both, over time, raises a critical alarm, and a notification goes out.",
+                "durS": 11.7,
+                "claims": [
+                  {
+                    "id": "air"
+                  },
+                  {
+                    "id": "airlock-notified"
+                  }
+                ]
+              },
+              {
+                "id": "c300-20-fb1",
+                "text": "On East Quay, a second pump is running but moving no water. No single reading shows that. A rule that watches both, over time, raises a critical alarm.",
+                "durS": 9.8,
+                "claims": [
+                  {
+                    "id": "air"
+                  }
+                ]
+              },
+              {
+                "id": "c300-20-floor",
+                "text": "On East Quay, a second pump is running but moving no water.",
+                "durS": 3.9,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "6",
           "shot": "6a",
-          "durS": 6,
+          "chapter": "evening",
+          "durS": 9,
           "moveS": 0,
-          "recordedWallFromS": 825.0,
-          "recordedWallToS": 831.0,
-          "borrowed": "none",
+          "recordedWallFromS": 824.5,
+          "recordedWallToS": 833.5,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "outage",
@@ -3725,98 +4642,155 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
-            "outage",
-            "absence",
-            "notify",
-            "escalated"
+            "outage"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "6",
-          "shot": "6b",
-          "durS": 8,
-          "moveS": 0,
-          "recordedWallFromS": 844.8,
-          "recordedWallToS": 852.8,
-          "borrowed": "none",
-          "captions": [],
-          "nodes": [
-            "outage",
-            "absence",
-            "notify",
-            "escalated"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.05,
+          "vo": {
+            "id": "c300-21",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-21-line",
+                "text": "Then the storm cuts power to East Quay. Its street lights and chargers go dark, and they stop reporting.",
+                "durS": 6.8,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "6",
           "shot": "6c",
+          "chapter": "evening",
           "durS": 10,
           "moveS": 0,
           "recordedWallFromS": 876,
           "recordedWallToS": 886,
-          "borrowed": "none",
-          "captions": [
-            {
-              "id": "silence",
-              "atS": 0,
-              "holdS": 3
-            }
-          ],
-          "nodes": [
-            "outage",
-            "absence",
-            "notify",
-            "escalated"
-          ],
           "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "6",
-          "shot": "6d",
-          "durS": 6,
-          "moveS": 0,
-          "recordedWallFromS": 886,
-          "recordedWallToS": 892,
-          "borrowed": "none",
+          "dissolveS": 0,
           "captions": [
             {
-              "id": "exact",
+              "id": "quiet",
               "atS": 0,
               "holdS": 3
             },
             {
-              "id": "silence-only",
+              "id": "silence",
+              "atS": 3,
+              "holdS": 3
+            }
+          ],
+          "overlays": [],
+          "nodes": [
+            "outage",
+            "absence-count"
+          ],
+          "push": 0.06,
+          "vo": {
+            "id": "c300-22",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-22-claim",
+                "text": "A device that has gone quiet cannot raise its own alarm. So the platform does it for them: it notices the silence and raises the alarms.",
+                "durS": 8.8,
+                "claims": [
+                  {
+                    "id": "silence"
+                  }
+                ]
+              },
+              {
+                "id": "c300-22-floor",
+                "text": "A device that has gone quiet cannot raise its own alarm.",
+                "durS": 3.7,
+                "claims": []
+              }
+            ]
+          }
+        },
+        {
+          "page": "6",
+          "shot": "6d",
+          "chapter": "evening",
+          "durS": 6,
+          "moveS": 6,
+          "recordedWallFromS": 886,
+          "recordedWallToS": 892,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
+          "captions": [
+            {
+              "id": "absence-count",
               "atS": 0,
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "outage",
-            "absence",
-            "notify",
-            "escalated"
+            "absence-count",
+            "absence-notified"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "from": "pose:lamp-east:wide",
+          "to": "pose:east-quay:rise",
+          "vo": {
+            "id": "c300-23",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-23-claim",
+                "text": "Six silent devices, six alarms, six notifications sent.",
+                "durS": 3.6,
+                "claims": [
+                  {
+                    "id": "absence-count",
+                    "bound": {
+                      "n": "6"
+                    }
+                  },
+                  {
+                    "id": "absence-notified",
+                    "bound": {
+                      "n": "6"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "c300-23-fb1",
+                "text": "The alarms are raised, and the notifications are sent.",
+                "durS": 3.5,
+                "claims": [
+                  {
+                    "id": "silence"
+                  },
+                  {
+                    "id": "absence-notified"
+                  }
+                ]
+              },
+              {
+                "id": "c300-23-floor",
+                "text": "The quay stays dark while the storm passes over.",
+                "durS": 3.1,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "7",
           "shot": "7a",
-          "durS": 4,
+          "chapter": "evening",
+          "durS": 6,
           "moveS": 0,
-          "recordedWallFromS": 915.0,
-          "recordedWallToS": 921.0,
-          "borrowed": "none",
+          "recordedWallFromS": 914.5,
+          "recordedWallToS": 920.5,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "power-back",
@@ -3824,128 +4798,164 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
-            "power",
-            "back",
-            "paced",
-            "stored",
-            "clear"
+            "power"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.05,
+          "vo": {
+            "id": "c300-24",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-24-line",
+                "text": "When power returns, the chargers send everything they saved in the dark.",
+                "durS": 4.7,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "7",
           "shot": "7b",
-          "durS": 9,
+          "chapter": "evening",
+          "durS": 17,
           "moveS": 0,
-          "recordedWallFromS": 921.0,
-          "recordedWallToS": 930.0,
-          "borrowed": "none",
+          "recordedWallFromS": 921,
+          "recordedWallToS": 957,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "backdated",
               "atS": 0,
               "holdS": 3
-            }
-          ],
-          "nodes": [
-            "power",
-            "back",
-            "paced",
-            "stored",
-            "clear"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "7",
-          "shot": "7c",
-          "durS": 5,
-          "moveS": 0,
-          "recordedWallFromS": 930.0,
-          "recordedWallToS": 936.0,
-          "borrowed": "none",
-          "captions": [
-            {
-              "id": "pace",
-              "atS": 0,
-              "holdS": 3
-            }
-          ],
-          "nodes": [
-            "power",
-            "back",
-            "paced",
-            "stored",
-            "clear"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "7",
-          "shot": "7d",
-          "durS": 6,
-          "moveS": 0,
-          "recordedWallFromS": 936.0,
-          "recordedWallToS": 942.0,
-          "borrowed": "none",
-          "captions": [
-            {
-              "id": "all-buffered",
-              "atS": 0,
-              "holdS": 3
             },
             {
-              "id": "arriving",
-              "atS": 0,
+              "id": "all-buffered",
+              "atS": 9,
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "power",
             "back",
             "paced",
-            "stored",
-            "clear"
+            "stored"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.12,
+          "vo": {
+            "id": "c300-25",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-25-claim",
+                "text": "That is a burst, all at once. The platform asks them to slow down, and they retry. Each reading is stored at the moment it was taken, not when it arrived, so the gap in the record fills from left to right, until every buffered reading is in place.",
+                "durS": 16.0,
+                "claims": [
+                  {
+                    "id": "pace"
+                  },
+                  {
+                    "id": "backdated"
+                  },
+                  {
+                    "id": "all-buffered"
+                  }
+                ]
+              },
+              {
+                "id": "c300-25-fb1",
+                "text": "That is a burst, all at once. The platform asks them to slow down, and they retry. Each reading is stored at the moment it was taken, not when it arrived, so the gap in the record fills from left to right.",
+                "durS": 13.3,
+                "claims": [
+                  {
+                    "id": "pace"
+                  },
+                  {
+                    "id": "backdated"
+                  }
+                ]
+              },
+              {
+                "id": "c300-25-fb2",
+                "text": "Each reading is stored at the moment it was taken, not when it arrived, so the gap in the record fills from left to right.",
+                "durS": 7.9,
+                "claims": [
+                  {
+                    "id": "backdated"
+                  }
+                ]
+              },
+              {
+                "id": "c300-25-floor",
+                "text": "The chargers replay the readings they held through the outage.",
+                "durS": 4.0,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "7",
           "shot": "7e",
-          "durS": 4,
+          "chapter": "evening",
+          "durS": 5,
           "moveS": 0,
-          "recordedWallFromS": 942.0,
-          "recordedWallToS": 948.0,
-          "borrowed": "none",
-          "captions": [],
+          "recordedWallFromS": 942,
+          "recordedWallToS": 947,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
+          "captions": [
+            {
+              "id": "silence-clear",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "overlays": [],
           "nodes": [
-            "power",
             "back",
             "paced",
             "stored",
             "clear"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.05,
+          "vo": {
+            "id": "c300-26a",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-26a-claim",
+                "text": "The silence alarms clear as the devices report again.",
+                "durS": 3.5,
+                "claims": [
+                  {
+                    "id": "clear"
+                  }
+                ]
+              },
+              {
+                "id": "c300-26a-floor",
+                "text": "East Quay is lit again.",
+                "durS": 1.5,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "7",
           "shot": "7f",
-          "durS": 4,
+          "chapter": "evening",
+          "durS": 5,
           "moveS": 0,
-          "recordedWallFromS": 948.0,
-          "recordedWallToS": 954.0,
-          "borrowed": "none",
+          "recordedWallFromS": 946.5,
+          "recordedWallToS": 951.5,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "truck-out",
@@ -3953,25 +4963,42 @@
               "holdS": 3
             }
           ],
-          "nodes": [
-            "power",
-            "back",
-            "paced",
-            "stored",
-            "clear"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "overlays": [],
+          "nodes": [],
+          "push": 0.06,
+          "vo": {
+            "id": "c300-26b",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-26b-claim",
+                "text": "The truck leaves the flood plain; that alarm clears too.",
+                "durS": 3.7,
+                "claims": [
+                  {
+                    "id": "truck-out"
+                  }
+                ]
+              },
+              {
+                "id": "c300-26b-floor",
+                "text": "The truck heads back toward the depot.",
+                "durS": 2.5,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "8",
           "shot": "8a",
-          "durS": 8,
+          "chapter": "overnight",
+          "durS": 9,
           "moveS": 0,
-          "recordedWallFromS": 1200,
-          "recordedWallToS": 1208,
-          "borrowed": "none",
+          "recordedWallFromS": 1204,
+          "recordedWallToS": 1213,
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
           "captions": [
             {
               "id": "signed",
@@ -3984,24 +5011,61 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "signed",
-            "cap",
-            "updated",
-            "refused"
+            "cap"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.05,
+          "vo": {
+            "id": "c300-27",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-27-claim",
+                "text": "By two in the morning the storm has passed. A signed firmware update goes out to the harbour's six chargers.",
+                "durS": 7.0,
+                "claims": [
+                  {
+                    "id": "signed"
+                  },
+                  {
+                    "id": "targets",
+                    "bound": {
+                      "n": "6"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "c300-27-fb1",
+                "text": "By two in the morning the storm has passed. A signed firmware update goes out to the chargers.",
+                "durS": 6.1,
+                "claims": [
+                  {
+                    "id": "signed"
+                  }
+                ]
+              },
+              {
+                "id": "c300-27-floor",
+                "text": "By two in the morning the storm has passed, and the chargers are due new firmware.",
+                "durS": 5.3,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "8",
           "shot": "8c",
+          "chapter": "overnight",
           "durS": 11,
-          "moveS": 0,
-          "recordedWallFromS": 1225,
-          "recordedWallToS": 1236,
-          "borrowed": "none",
+          "moveS": 11,
+          "recordedWallFromS": 1234,
+          "recordedWallToS": 1245,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "refused",
@@ -4015,28 +5079,73 @@
             },
             {
               "id": "working",
-              "atS": 3,
+              "atS": 6,
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "signed",
             "cap",
-            "updated",
-            "refused"
+            "refused",
+            "working"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "vo": {
+            "id": "c300-28",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-28-claim",
+                "text": "One download fails its check. That charger refuses the update and reports why. It keeps working, and the failure stays on the record.",
+                "durS": 8.6,
+                "claims": [
+                  {
+                    "id": "refused"
+                  },
+                  {
+                    "id": "working"
+                  }
+                ]
+              },
+              {
+                "id": "c300-28-fb1",
+                "text": "One download fails its check. That charger refuses the update and reports why.",
+                "durS": 5.1,
+                "claims": [
+                  {
+                    "id": "refused"
+                  }
+                ]
+              },
+              {
+                "id": "c300-28-fb2",
+                "text": "One update fails.",
+                "durS": 1.1,
+                "claims": [
+                  {
+                    "id": "failed"
+                  }
+                ]
+              },
+              {
+                "id": "c300-28-floor",
+                "text": "The update reaches the chargers one after another.",
+                "durS": 3.3,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "8",
           "shot": "8b",
+          "chapter": "overnight",
           "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 1237,
-          "recordedWallToS": 1245,
-          "borrowed": "none",
+          "recordedWallFromS": 1245,
+          "recordedWallToS": 1253,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "few",
@@ -4044,55 +5153,120 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "signed",
             "cap",
-            "updated",
-            "refused"
+            "refused",
+            "working"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.08,
+          "vo": {
+            "id": "c300-29",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-29-claim",
+                "text": "The rest follow, under a limit of two at a time, so a bad update cannot reach every charger at once.",
+                "durS": 6.5,
+                "claims": [
+                  {
+                    "id": "few"
+                  },
+                  {
+                    "id": "cap",
+                    "bound": {
+                      "cap": "2"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "c300-29-floor",
+                "text": "The rest of the chargers take their turn.",
+                "durS": 2.7,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "8",
           "shot": "8d",
-          "durS": 11,
+          "chapter": "overnight",
+          "durS": 8,
           "moveS": 0,
-          "recordedWallFromS": 1310,
-          "recordedWallToS": 1321,
-          "borrowed": "none",
+          "recordedWallFromS": 1318.5,
+          "recordedWallToS": 1326.5,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
-              "id": "done",
-              "atS": 0,
-              "holdS": 3
-            },
-            {
               "id": "ota-summary",
-              "atS": 3,
+              "atS": 0,
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
-            "signed",
             "cap",
-            "updated",
-            "refused"
+            "refused",
+            "working",
+            "updated"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.04,
+          "vo": {
+            "id": "c300-30",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-30-claim",
+                "text": "By morning: five updated, one refused, and every step of the rollout on the record.",
+                "durS": 5.4,
+                "claims": [
+                  {
+                    "id": "done"
+                  },
+                  {
+                    "id": "ota-summary",
+                    "bound": {
+                      "updated": "5",
+                      "refused": "1"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "c300-30-fb1",
+                "text": "By morning the rollout is done, with every step on the record.",
+                "durS": 4.0,
+                "claims": [
+                  {
+                    "id": "done"
+                  }
+                ]
+              },
+              {
+                "id": "c300-30-floor",
+                "text": "By morning the update has run its course.",
+                "durS": 2.7,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "9",
           "shot": "9a",
+          "chapter": "close",
           "durS": 10,
           "moveS": 0,
           "recordedWallFromS": 1310,
           "recordedWallToS": 1320,
-          "borrowed": "none",
-          "captions": [
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "captions": [],
+          "overlays": [
             {
               "id": "bridge",
               "atS": 0,
@@ -4100,59 +5274,108 @@
             },
             {
               "id": "tagline",
-              "atS": 3,
+              "atS": 2.5,
               "holdS": 3
-            }
-          ],
-          "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": [
+            },
             {
               "id": "subline",
-              "atS": 0,
+              "atS": 2.5,
               "holdS": 3
             },
             {
               "id": "fiction",
-              "atS": 0,
+              "atS": 2.5,
               "holdS": 3
             },
             {
               "id": "positions",
-              "atS": 0,
+              "atS": 2.5,
               "holdS": 3
             }
-          ]
+          ],
+          "nodes": [],
+          "endCard": true,
+          "vo": {
+            "id": "c300-31",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c300-31-line",
+                "text": "Every rule you saw was written and published by a person. The platform carried them out, and kept the record.",
+                "durS": 7.1,
+                "claims": []
+              }
+            ]
+          }
         }
       ]
     },
     {
       "id": "c90",
       "targetS": 90,
+      "loopSeamS": 1.5,
+      "chapters": [
+        {
+          "id": "cold"
+        },
+        {
+          "id": "open"
+        },
+        {
+          "id": "act",
+          "tag": "1 · Act"
+        },
+        {
+          "id": "notice",
+          "tag": "2 · Notice"
+        },
+        {
+          "id": "update",
+          "tag": "3 · Update"
+        },
+        {
+          "id": "close"
+        }
+      ],
       "segments": [
         {
           "page": "0",
           "shot": "0a",
-          "durS": 2,
+          "chapter": "cold",
+          "durS": 4,
           "moveS": 0,
           "recordedWallFromS": 780,
           "recordedWallToS": 786,
-          "borrowed": "later that day",
-          "captions": [],
-          "nodes": [],
           "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "dissolveS": 0,
+          "captions": [],
+          "overlays": [],
+          "nodes": [],
+          "borrowed": "later that day",
+          "push": 0.05,
+          "vo": {
+            "id": "c90-A",
+            "atS": 0.1,
+            "takes": [
+              {
+                "id": "c90-A-line",
+                "text": "Tonight, a storm hits this harbour on a king tide.",
+                "durS": 3.3,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "0",
           "shot": "0b",
-          "durS": 3,
-          "moveS": 0,
+          "chapter": "open",
+          "durS": 6.5,
+          "moveS": 6.5,
           "recordedWallFromS": 0,
-          "recordedWallToS": 6,
-          "borrowed": "none",
+          "recordedWallToS": 8,
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
           "captions": [
             {
               "id": "title",
@@ -4160,45 +5383,52 @@
               "holdS": 3
             }
           ],
-          "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
           "overlays": [
             {
               "id": "disclosure",
               "atS": 0,
               "holdS": 3
             }
-          ]
-        },
-        {
-          "page": "1",
-          "shot": "1a",
-          "durS": 5,
-          "moveS": 0,
-          "recordedWallFromS": 6,
-          "recordedWallToS": 12,
-          "borrowed": "none",
-          "captions": [
-            {
-              "id": "baseline",
-              "atS": 0,
-              "holdS": 3
-            }
           ],
           "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "from": "pose:home-high",
+          "to": "pose:home",
+          "vo": {
+            "id": "c90-B",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c90-B-claim",
+                "text": "This is Port Alder. Forty-three devices on its waterfront report to one platform.",
+                "durS": 5.3,
+                "claims": [
+                  {
+                    "id": "baseline",
+                    "bound": {
+                      "n": "43"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "c90-B-floor",
+                "text": "This is Port Alder. The devices along its waterfront report to one platform.",
+                "durS": 5.0,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "4",
           "shot": "4a",
-          "durS": 4,
+          "chapter": "act",
+          "durS": 6,
           "moveS": 0,
           "recordedWallFromS": 600,
           "recordedWallToS": 606,
-          "borrowed": "none",
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
           "captions": [
             {
               "id": "storm",
@@ -4206,103 +5436,207 @@
               "holdS": 3
             }
           ],
-          "nodes": [
-            "well",
-            "command",
-            "running",
-            "falling"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "overlays": [],
+          "nodes": [],
+          "push": 0.07,
+          "vo": {
+            "id": "c90-C",
+            "atS": 0.1,
+            "takes": [
+              {
+                "id": "c90-C-line",
+                "text": "Its operators wrote tonight's rules in advance. Now the platform carries them out.",
+                "durS": 5.3,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "4",
           "shot": "4d",
-          "durS": 5,
-          "moveS": 2,
-          "recordedWallFromS": 672.0,
-          "recordedWallToS": 678.0,
-          "borrowed": "none",
+          "chapter": "act",
+          "durS": 5.5,
+          "moveS": 3,
+          "recordedWallFromS": 672,
+          "recordedWallToS": 678,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "well",
-              "atS": 2,
+              "atS": 0,
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "well",
             "command",
             "running",
             "falling"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "vo": {
+            "id": "c90-D",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c90-D-claim",
+                "text": "Under North Quay, a storm drain is filling. Its pump reports the level.",
+                "durS": 4.6,
+                "claims": [
+                  {
+                    "id": "well-rising"
+                  }
+                ]
+              },
+              {
+                "id": "c90-D-floor",
+                "text": "Under North Quay sits a storm drain, and the pump that empties it.",
+                "durS": 4.3,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "4",
           "shot": "4e",
-          "durS": 12,
+          "chapter": "act",
+          "durS": 11,
           "moveS": 0,
-          "recordedWallFromS": 690.0,
-          "recordedWallToS": 702.0,
-          "borrowed": "none",
+          "recordedWallFromS": 689.5,
+          "recordedWallToS": 700.5,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
-              "id": "platform-start",
+              "id": "well",
               "atS": 0,
+              "holdS": 3
+            },
+            {
+              "id": "platform-start",
+              "atS": 3,
               "holdS": 3
             },
             {
               "id": "float",
-              "atS": 0,
-              "holdS": 3
-            },
-            {
-              "id": "before-float",
               "atS": 3,
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "well",
             "command",
             "running",
             "falling"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.03,
+          "vo": {
+            "id": "c90-E",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c90-E-claim",
+                "text": "It crosses the level the operators set. The platform raises an alarm and commands the pump to start; it is running before its own float switch would act.",
+                "durS": 9.9,
+                "claims": [
+                  {
+                    "id": "platform-start"
+                  },
+                  {
+                    "id": "before-float"
+                  },
+                  {
+                    "id": "command"
+                  }
+                ]
+              },
+              {
+                "id": "c90-E-fb1",
+                "text": "It crosses the level the operators set. The platform raises an alarm and commands the pump to start, and the pump runs.",
+                "durS": 7.7,
+                "claims": [
+                  {
+                    "id": "platform-start"
+                  },
+                  {
+                    "id": "command"
+                  }
+                ]
+              },
+              {
+                "id": "c90-E-floor",
+                "text": "The well keeps rising toward the pump's own float switch, its last line of defence.",
+                "durS": 5.4,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "4",
           "shot": "4f",
-          "durS": 5,
+          "chapter": "act",
+          "durS": 4,
           "moveS": 0,
-          "recordedWallFromS": 702.0,
-          "recordedWallToS": 708.0,
-          "borrowed": "none",
-          "captions": [],
+          "recordedWallFromS": 702.5,
+          "recordedWallToS": 708.5,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
+          "captions": [
+            {
+              "id": "well-clear",
+              "atS": 0,
+              "holdS": 3
+            }
+          ],
+          "overlays": [],
           "nodes": [
             "well",
             "command",
             "running",
             "falling"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.08,
+          "vo": {
+            "id": "c90-F",
+            "atS": 0.1,
+            "takes": [
+              {
+                "id": "c90-F-claim",
+                "text": "The well drains, and the alarm clears.",
+                "durS": 2.5,
+                "claims": [
+                  {
+                    "id": "falling"
+                  },
+                  {
+                    "id": "well-clear"
+                  }
+                ]
+              },
+              {
+                "id": "c90-F-floor",
+                "text": "The pump empties the well into the harbour.",
+                "durS": 2.8,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "6",
           "shot": "6a",
-          "durS": 4,
+          "chapter": "notice",
+          "durS": 6,
           "moveS": 0,
-          "recordedWallFromS": 825.0,
-          "recordedWallToS": 831.0,
-          "borrowed": "none",
+          "recordedWallFromS": 824.5,
+          "recordedWallToS": 830.5,
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
           "captions": [
             {
               "id": "outage",
@@ -4310,98 +5644,122 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
-            "outage",
-            "absence",
-            "notify",
-            "escalated"
+            "outage"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "6",
-          "shot": "6b",
-          "durS": 3,
-          "moveS": 0,
-          "recordedWallFromS": 844.8,
-          "recordedWallToS": 850.8,
-          "borrowed": "none",
-          "captions": [],
-          "nodes": [
-            "outage",
-            "absence",
-            "notify",
-            "escalated"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.05,
+          "vo": {
+            "id": "c90-G",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c90-G-line",
+                "text": "Then the storm cuts East Quay's power. Its street lights and chargers go silent.",
+                "durS": 5.2,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "6",
           "shot": "6c",
-          "durS": 4,
-          "moveS": 0,
-          "recordedWallFromS": 879,
-          "recordedWallToS": 885,
-          "borrowed": "none",
-          "captions": [
-            {
-              "id": "silence",
-              "atS": 0,
-              "holdS": 3
-            }
-          ],
-          "nodes": [
-            "outage",
-            "absence",
-            "notify",
-            "escalated"
-          ],
+          "chapter": "notice",
+          "durS": 8.5,
+          "moveS": 8.5,
+          "recordedWallFromS": 876.5,
+          "recordedWallToS": 886,
           "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "6",
-          "shot": "6d",
-          "durS": 3,
-          "moveS": 0,
-          "recordedWallFromS": 885,
-          "recordedWallToS": 891,
-          "borrowed": "none",
+          "dissolveS": 0,
           "captions": [
             {
-              "id": "exact",
+              "id": "quiet",
               "atS": 0,
               "holdS": 3
             },
             {
-              "id": "silence-only",
-              "atS": 0,
+              "id": "silence",
+              "atS": 3,
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "outage",
-            "absence",
-            "notify",
-            "escalated"
+            "absence-count",
+            "absence-notified"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "from": "pose:lamp-east:wide",
+          "to": "pose:east-quay:rise",
+          "vo": {
+            "id": "c90-H",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c90-H-claim",
+                "text": "A device that has gone quiet cannot raise its own alarm. So the platform does: six alarms, six notifications sent.",
+                "durS": 7.4,
+                "claims": [
+                  {
+                    "id": "silence"
+                  },
+                  {
+                    "id": "absence-count",
+                    "bound": {
+                      "n": "6"
+                    }
+                  },
+                  {
+                    "id": "absence-notified",
+                    "bound": {
+                      "n": "6"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "c90-H-fb1",
+                "text": "A device gone quiet cannot raise its own alarm. So the platform raises it, and sends the notifications.",
+                "durS": 6.7,
+                "claims": [
+                  {
+                    "id": "silence"
+                  },
+                  {
+                    "id": "absence-notified"
+                  }
+                ]
+              },
+              {
+                "id": "c90-H-fb2",
+                "text": "A device gone quiet cannot raise its own alarm. So the platform raises it for them.",
+                "durS": 5.4,
+                "claims": [
+                  {
+                    "id": "silence"
+                  }
+                ]
+              },
+              {
+                "id": "c90-H-floor",
+                "text": "A device that has gone quiet cannot raise its own alarm.",
+                "durS": 3.7,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "7",
           "shot": "7a",
-          "durS": 3,
+          "chapter": "notice",
+          "durS": 4,
           "moveS": 0,
-          "recordedWallFromS": 915.0,
-          "recordedWallToS": 921.0,
-          "borrowed": "none",
+          "recordedWallFromS": 914.5,
+          "recordedWallToS": 920.5,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "power-back",
@@ -4409,25 +5767,34 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
-            "power",
-            "back",
-            "paced",
-            "stored",
-            "clear"
+            "power"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.05,
+          "vo": {
+            "id": "c90-I",
+            "atS": 0.1,
+            "takes": [
+              {
+                "id": "c90-I-line",
+                "text": "Power returns. The chargers send what they saved.",
+                "durS": 3.2,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "7",
           "shot": "7b",
-          "durS": 5,
+          "chapter": "notice",
+          "durS": 9,
           "moveS": 0,
-          "recordedWallFromS": 921.0,
-          "recordedWallToS": 927.0,
-          "borrowed": "none",
+          "recordedWallFromS": 921,
+          "recordedWallToS": 957,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "backdated",
@@ -4435,82 +5802,76 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "power",
             "back",
             "paced",
-            "stored",
-            "clear"
+            "stored"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "7",
-          "shot": "7c",
-          "durS": 3,
-          "moveS": 0,
-          "recordedWallFromS": 927.0,
-          "recordedWallToS": 933.0,
-          "borrowed": "none",
-          "captions": [
-            {
-              "id": "pace",
-              "atS": 0,
-              "holdS": 3
-            }
-          ],
-          "nodes": [
-            "power",
-            "back",
-            "paced",
-            "stored",
-            "clear"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "7",
-          "shot": "7d",
-          "durS": 3,
-          "moveS": 0,
-          "recordedWallFromS": 933.0,
-          "recordedWallToS": 939.0,
-          "borrowed": "none",
-          "captions": [
-            {
-              "id": "all-buffered",
-              "atS": 0,
-              "holdS": 3
-            },
-            {
-              "id": "arriving",
-              "atS": 0,
-              "holdS": 3
-            }
-          ],
-          "nodes": [
-            "power",
-            "back",
-            "paced",
-            "stored",
-            "clear"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.12,
+          "vo": {
+            "id": "c90-J",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c90-J-claim",
+                "text": "The platform asks them to slow down, then stores every buffered reading at the moment it was taken, so the gap fills in.",
+                "durS": 7.8,
+                "claims": [
+                  {
+                    "id": "pace"
+                  },
+                  {
+                    "id": "backdated"
+                  },
+                  {
+                    "id": "all-buffered"
+                  }
+                ]
+              },
+              {
+                "id": "c90-J-fb1",
+                "text": "The platform asks them to slow down, then stores each reading at the moment it was taken, so the gap fills in.",
+                "durS": 7.1,
+                "claims": [
+                  {
+                    "id": "pace"
+                  },
+                  {
+                    "id": "backdated"
+                  }
+                ]
+              },
+              {
+                "id": "c90-J-fb2",
+                "text": "Each reading is stored at the moment it was taken, so the gap in the record fills in.",
+                "durS": 5.5,
+                "claims": [
+                  {
+                    "id": "backdated"
+                  }
+                ]
+              },
+              {
+                "id": "c90-J-floor",
+                "text": "The chargers replay the readings they held through the outage.",
+                "durS": 4.0,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "8",
           "shot": "8a",
-          "durS": 3,
+          "chapter": "update",
+          "durS": 7,
           "moveS": 0,
-          "recordedWallFromS": 1201.4,
-          "recordedWallToS": 1207.4,
-          "borrowed": "none",
+          "recordedWallFromS": 1204,
+          "recordedWallToS": 1211,
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
           "captions": [
             {
               "id": "signed",
@@ -4523,24 +5884,51 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "signed",
-            "cap",
-            "updated",
-            "refused"
+            "cap"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "push": 0.05,
+          "vo": {
+            "id": "c90-K",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c90-K-claim",
+                "text": "Overnight, the chargers get new firmware: a signed update, rolled out at most two at a time.",
+                "durS": 6.0,
+                "claims": [
+                  {
+                    "id": "signed"
+                  },
+                  {
+                    "id": "cap",
+                    "bound": {
+                      "cap": "2"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "c90-K-floor",
+                "text": "Overnight, the chargers are due new firmware.",
+                "durS": 3.0,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "8",
           "shot": "8c",
+          "chapter": "update",
           "durS": 8,
-          "moveS": 0,
-          "recordedWallFromS": 1227,
-          "recordedWallToS": 1235,
-          "borrowed": "none",
+          "moveS": 8,
+          "recordedWallFromS": 1233.5,
+          "recordedWallToS": 1243.5,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "refused",
@@ -4551,56 +5939,71 @@
               "id": "failed",
               "atS": 0,
               "holdS": 3
-            },
-            {
-              "id": "working",
-              "atS": 3,
-              "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
             "signed",
             "cap",
-            "updated",
-            "refused"
+            "refused",
+            "working"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
-        },
-        {
-          "page": "8",
-          "shot": "8b",
-          "durS": 3,
-          "moveS": 0,
-          "recordedWallFromS": 1238,
-          "recordedWallToS": 1244,
-          "borrowed": "none",
-          "captions": [
-            {
-              "id": "few",
-              "atS": 0,
-              "holdS": 3
-            }
-          ],
-          "nodes": [
-            "signed",
-            "cap",
-            "updated",
-            "refused"
-          ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": []
+          "vo": {
+            "id": "c90-L",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c90-L-claim",
+                "text": "One download fails its check. That charger refuses the update, reports why, and keeps working.",
+                "durS": 6.1,
+                "claims": [
+                  {
+                    "id": "refused"
+                  },
+                  {
+                    "id": "working"
+                  }
+                ]
+              },
+              {
+                "id": "c90-L-fb1",
+                "text": "One download fails its check. That charger refuses the update and reports why.",
+                "durS": 5.1,
+                "claims": [
+                  {
+                    "id": "refused"
+                  }
+                ]
+              },
+              {
+                "id": "c90-L-fb2",
+                "text": "One update fails.",
+                "durS": 1.1,
+                "claims": [
+                  {
+                    "id": "failed"
+                  }
+                ]
+              },
+              {
+                "id": "c90-L-floor",
+                "text": "The update reaches the chargers one after another.",
+                "durS": 3.3,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "8",
           "shot": "8d",
+          "chapter": "update",
           "durS": 4,
           "moveS": 0,
-          "recordedWallFromS": 1315.5,
-          "recordedWallToS": 1321.5,
-          "borrowed": "none",
+          "recordedWallFromS": 1319,
+          "recordedWallToS": 1325,
+          "seamPose": "pose:home",
+          "dissolveS": 0,
           "captions": [
             {
               "id": "ota-summary",
@@ -4608,31 +6011,66 @@
               "holdS": 3
             }
           ],
+          "overlays": [],
           "nodes": [
-            "signed",
             "cap",
-            "updated",
-            "refused"
+            "refused",
+            "working",
+            "updated"
           ],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": [
-            {
-              "id": "done",
-              "atS": 0,
-              "holdS": 3
-            }
-          ]
+          "push": 0.04,
+          "vo": {
+            "id": "c90-M",
+            "atS": 0.1,
+            "takes": [
+              {
+                "id": "c90-M-claim",
+                "text": "Five updated, one refused, all on the record.",
+                "durS": 3.0,
+                "claims": [
+                  {
+                    "id": "done"
+                  },
+                  {
+                    "id": "ota-summary",
+                    "bound": {
+                      "updated": "5",
+                      "refused": "1"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "c90-M-fb1",
+                "text": "The rollout ends with every step on record.",
+                "durS": 2.8,
+                "claims": [
+                  {
+                    "id": "done"
+                  }
+                ]
+              },
+              {
+                "id": "c90-M-floor",
+                "text": "By morning the update has run its course.",
+                "durS": 2.7,
+                "claims": []
+              }
+            ]
+          }
         },
         {
           "page": "9",
           "shot": "9a",
-          "durS": 8,
+          "chapter": "close",
+          "durS": 6.5,
           "moveS": 0,
           "recordedWallFromS": 1312,
-          "recordedWallToS": 1320,
-          "borrowed": "none",
-          "captions": [
+          "recordedWallToS": 1318.5,
+          "seamPose": "pose:home",
+          "dissolveS": 0.5,
+          "captions": [],
+          "overlays": [
             {
               "id": "bridge",
               "atS": 0,
@@ -4640,30 +6078,39 @@
             },
             {
               "id": "tagline",
-              "atS": 3,
+              "atS": 2.5,
               "holdS": 3
-            }
-          ],
-          "nodes": [],
-          "seamPose": "pose:home",
-          "dissolveS": 0.5,
-          "overlays": [
+            },
             {
               "id": "subline",
-              "atS": 0,
+              "atS": 2.5,
               "holdS": 3
             },
             {
               "id": "fiction",
-              "atS": 0,
+              "atS": 2.5,
               "holdS": 3
             },
             {
               "id": "positions",
-              "atS": 0,
+              "atS": 2.5,
               "holdS": 3
             }
-          ]
+          ],
+          "nodes": [],
+          "endCard": true,
+          "vo": {
+            "id": "c90-N",
+            "atS": 0.2,
+            "takes": [
+              {
+                "id": "c90-N-line",
+                "text": "Every rule you saw was written and published by a person.",
+                "durS": 3.7,
+                "claims": []
+              }
+            ]
+          }
         }
       ]
     }

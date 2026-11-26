@@ -1,0 +1,14 @@
+{
+  "name": "io.devicechain.demo-hud",
+  "version": "0.1.0",
+  "displayName": "DeviceChain Demo HUD",
+  "description": "The story HUD the DeviceChain Unity demos share: a top strip, a top-centre caption box that fades between lines, a chain card that builds cause and effect one recorded step at a time, teardrop alarm pins sized in screen space, a cleared tick and a three-level end card. The timing and layout rules are engine-free and tested; the uGUI views draw them with no image or font assets.",
+  "unity": "6000.5",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "The DeviceChain Authors"
+  },
+  "dependencies": {
+    "com.unity.ugui": "2.5.0"
+  }
+}

@@ -362,6 +362,7 @@ func databasePlacementShortfall(p DatabasePlacement, ha bool, nodes []corev1.Nod
 // anything is written. Same shape as checkHaNodeCapacity: a dry run that cannot READ
 // the nodes says so and goes on; what the nodes SAY is fatal on both paths.
 func checkDatabasePlacement(ctx context.Context, st *State) error {
+	c := out(ctx)
 	p := databasePlacement(st)
 	if p.IsZero() {
 		return nil
@@ -369,7 +370,7 @@ func checkDatabasePlacement(ctx context.Context, st *State) error {
 	nodes, err := listNodes(ctx, st.KubeContext)
 	if err != nil {
 		if st.DryRun {
-			fmt.Println(color.YellowString(
+			c.println(color.YellowString(
 				"  could not check whether this cluster has nodes for the database placement (%v); the plan "+
 					"below assumes it does.", err))
 			return nil

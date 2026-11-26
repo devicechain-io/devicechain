@@ -1,8 +1,12 @@
++302|2|node-label|Lamp with no window: notified|3:run5:alarm35:alarm:hp-light-north-3:lamp-flicker16:hp-light-north-312:lamp-flicker34:cycle-hp-light-north-3lamp-flicker0:0:6:RAISED8:PLATFORM,3:run7:attempt42:attempt:hp-light-north-3:lamp-flicker:SENT16:hp-light-north-312:lamp-flicker34:cycle-hp-light-north-3lamp-flicker0:0:4:SENT8:PLATFORM
++302|2|node|control-lamp-notified|3:run5:alarm35:alarm:hp-light-north-3:lamp-flicker16:hp-light-north-312:lamp-flicker34:cycle-hp-light-north-3lamp-flicker0:0:6:RAISED8:PLATFORM,3:run7:attempt42:attempt:hp-light-north-3:lamp-flicker:SENT16:hp-light-north-312:lamp-flicker34:cycle-hp-light-north-3lamp-flicker0:0:4:SENT8:PLATFORM
 +310|2|caption|The fault is detected.|3:run5:alarm34:alarm:hp-light-east-3:lamp-flicker15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:6:RAISED8:PLATFORM
 +313|2|caption-end|fault-only|
 -300|2|link|work->fault|
--300|2|node-label|Fault detected, during maintenance|3:run5:alarm34:alarm:hp-light-east-3:lamp-flicker15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:6:RAISED8:PLATFORM
+-300|2|node-label|Fault detected during work|3:run5:alarm34:alarm:hp-light-east-3:lamp-flicker15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:6:RAISED8:PLATFORM
 -300|2|node|fault|3:run5:alarm34:alarm:hp-light-east-3:lamp-flicker15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:6:RAISED8:PLATFORM
+-303|2|node-label|Lamp with no window: notified|3:run5:alarm35:alarm:hp-light-north-3:lamp-flicker16:hp-light-north-312:lamp-flicker34:cycle-hp-light-north-3lamp-flicker0:0:6:RAISED8:PLATFORM,3:run7:attempt42:attempt:hp-light-north-3:lamp-flicker:SENT16:hp-light-north-312:lamp-flicker34:cycle-hp-light-north-3lamp-flicker0:0:4:SENT8:PLATFORM
+-303|2|node|control-lamp-notified|3:run5:alarm35:alarm:hp-light-north-3:lamp-flicker16:hp-light-north-312:lamp-flicker34:cycle-hp-light-north-3lamp-flicker0:0:6:RAISED8:PLATFORM,3:run7:attempt42:attempt:hp-light-north-3:lamp-flicker:SENT16:hp-light-north-312:lamp-flicker34:cycle-hp-light-north-3lamp-flicker0:0:4:SENT8:PLATFORM
 -310|2|caption|The fault is still detected.|3:run5:alarm34:alarm:hp-light-east-3:lamp-flicker15:hp-light-east-312:lamp-flicker17:maintenance-cycle0:0:6:RAISED8:PLATFORM
 -313|2|caption-end|fault|
 -330|2|link|fault->none|

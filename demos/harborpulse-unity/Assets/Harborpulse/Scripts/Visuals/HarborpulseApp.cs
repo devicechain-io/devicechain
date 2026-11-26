@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using System.Linq;
 using System.Collections.Generic;
 using DeviceChain.Harborpulse.Model.Director;
+using DeviceChain.Demos.Hud;
 using DeviceChain.Demos.Platform;
 using DeviceChain.Harborpulse.Live;
 using DeviceChain.Harborpulse.Model;
@@ -45,9 +46,20 @@ namespace DeviceChain.Harborpulse.Visuals
         /// <c>-hp-cut c90|c300</c> renders that authored cut of the storyboard over it: every frame is one step of
         /// <c>-hp-render-fps</c> (30), whatever the machine's speed, and is written as a PNG into <c>-hp-render-dir</c> beside
         /// <c>render.json</c> (the segments and their rates), <c>frame_check.json</c> (every caption, shown or not, and the records
-        /// behind each claim) and <c>ui_text.txt</c> (every string drawn). The player quits after the last frame.
+        /// behind each claim; every voice-over line, its takes and the claims that license each), <c>vo_cues.json</c> (for the audio
+        /// assembly: each line's take and start) and <c>ui_text.txt</c> (every string drawn, on the HUD and in the world). The player
+        /// quits after the last frame. <c>-hp-vo-cues FILE</c> names the takes an assembly plays (a vo_cues.json): the render refuses
+        /// to start if any of them does not match what the recording licenses. A render also stops, with a non-zero exit code, if an
+        /// engineer's label was drawn in the world (5).
         /// </summary>
-        public const string ReplayFlag = "-hp-replay", CutFlag = "-hp-cut", RenderDirFlag = "-hp-render-dir", RenderFpsFlag = "-hp-render-fps";
+        public const string ReplayFlag = "-hp-replay", CutFlag = "-hp-cut", RenderDirFlag = "-hp-render-dir", RenderFpsFlag = "-hp-render-fps", VoCuesFlag = "-hp-vo-cues";
+        /// <summary>
+        /// A labelled CONTROL for a render: the HUD is drawn in the scene, under its post-processing, instead of last. A lamp's bloom
+        /// then reaches the panels, and the render's panel check (hud_check.json) must fail: the proof that the check can.
+        /// </summary>
+        public const string HudInSceneControlFlag = "-hp-control-hud-in-scene";
+        public bool HudInSceneControl { get; private set; }
+        readonly HudPanelCheck panelCheck = new HudPanelCheck();
         RecordedDay replayDay;
         ReplaySource replaySource;
         CutPlayer cut;
@@ -55,8 +67,9 @@ namespace DeviceChain.Harborpulse.Visuals
         string renderDir;
         int renderFps = 30, renderFrame, cutSegment = -1;
         bool renderCaptured = true, renderDone;
-        Texture2D renderTexture, seamTexture;
+        Texture2D renderTexture, seamTexture, loopTexture;
         readonly SortedSet<string> uiText = new SortedSet<string>(StringComparer.Ordinal);
+        readonly SortedSet<string> internalTags = new SortedSet<string>(StringComparer.Ordinal);
         /// <summary>Whether the scene is replaying a recorded day (no runner, no platform link).</summary>
         public bool Replay => replayDay != null;
         CameraPose fixedEye;
@@ -99,6 +112,17 @@ namespace DeviceChain.Harborpulse.Visuals
         bool frameStats;
         readonly List<float> frameTimes = new List<float>();
         float frameStatsAt;
+        // What the frame's own time cannot say when something caps the frame rate (the Editor in the background runs at 20 fps):
+        // the main thread's work in the player loop, and the managed bytes a frame allocates. A cost that grows through the day
+        // shows in these whatever the cap.
+        Unity.Profiling.ProfilerRecorder loopRecorder, gcRecorder;
+        double loopMs, gcBytes, modelMs; long statsFrames;
+        readonly System.Diagnostics.Stopwatch tickWatch = new System.Diagnostics.Stopwatch();
+        // the tick's parts, in order: the platform link, the observed model, the views, the director, the HUD, the water
+        static readonly string[] PartNames = { "link", "model", "views", "director", "hud", "water" };
+        readonly double[] partMs = new double[6];
+        double lapAt;
+        void Lap(int part) { if (!frameStats) return; var now = tickWatch.Elapsed.TotalMilliseconds; partMs[part] += now - lapAt; lapAt = now; }
         bool engineer, hidden, portrait;
 
         /// <summary>
@@ -241,7 +265,12 @@ namespace DeviceChain.Harborpulse.Visuals
                 captureDir = CommandLineArgs.Get(options, "-hp-capture-dir", out _);
                 captureEvery = Number(options, "-hp-capture-every", 10, .1, 86400);
                 frameStats = Array.IndexOf(options, "-hp-frame-stats") >= 0;
-                if (frameStats && Application.isPlaying) { QualitySettings.vSyncCount = 0; Application.targetFrameRate = -1; }
+                if (frameStats && Application.isPlaying)
+                {
+                    QualitySettings.vSyncCount = 0; Application.targetFrameRate = -1;
+                    loopRecorder = Unity.Profiling.ProfilerRecorder.StartNew(Unity.Profiling.ProfilerCategory.Internal, "PlayerLoop");
+                    gcRecorder = Unity.Profiling.ProfilerRecorder.StartNew(Unity.Profiling.ProfilerCategory.Memory, "GC Allocated In Frame");
+                }
                 quitAfter = Number(options, "-hp-quit-after-sim", double.PositiveInfinity, 0, 100000);
                 var resolution = CommandLineArgs.Get(options, "-hp-resolution", out _);
                 if (resolution != null)
@@ -266,6 +295,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 sceneCamera.nearClipPlane = 0.3f;
                 rig = new HarborCameraRig(sceneCamera, map);
                 directorCamera = new DirectorCamera(sceneCamera, map, portrait);
+                HudInSceneControl = Array.IndexOf(options, HudInSceneControlFlag) >= 0;
                 Hud = HudFactory?.Invoke(this);
                 grading = new HarborGrading(transform, sceneCamera);
                 reflection = new PlanarWaterReflection(transform, sceneCamera);
@@ -312,6 +342,11 @@ namespace DeviceChain.Harborpulse.Visuals
                     replayDay = RecordedDay.Load(observed, worldSamples);
                 replaySource = new ReplaySource(replayDay, layout);
                 cut = new CutPlayer(storyboard, CommandLineArgs.Get(args, CutFlag, out _) ?? "c90", replayDay, map);
+                // The voice-over's frame check, before a frame is drawn: the takes an assembly plays (or, with none named, the cut's
+                // own) are decided again from the recording, and a take that plays while its claim is unmet stops the render.
+                var playedCues = CommandLineArgs.Get(args, VoCuesFlag, out _);
+                var voProblems = cut.VoProblems(playedCues == null ? null : CutPlayer.ReadVoCues(File.ReadAllText(playedCues)));
+                if (voProblems.Count > 0) throw new FormatException("the voice-over takes do not match the recording: " + string.Join(" | ", voProblems));
                 renderFps = (int)Number(args, RenderFpsFlag, 30, 1, 120);
                 renderDir = CommandLineArgs.Get(args, RenderDirFlag, out _);
                 recordingEpoch = replayDay.Epoch;
@@ -320,6 +355,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 {
                     Directory.CreateDirectory(renderDir);
                     File.WriteAllText(Path.Combine(renderDir, "render.json"), cut.RenderJson(renderFps, Screen.width, Screen.height));
+                    File.WriteAllText(Path.Combine(renderDir, "vo_cues.json"), cut.VoCuesJson());
                     if (Application.isPlaying) StartCoroutine(CaptureFrames());
                 }
                 PlatformLog.Info("replay · no platform · " + replayDay.Run + " · cut " + cut.Cut.Id + " · " + cut.DurationS.ToString("0.#", CultureInfo.InvariantCulture) + " s at " + renderFps + " fps");
@@ -352,6 +388,7 @@ namespace DeviceChain.Harborpulse.Visuals
                     Graphics.CopyTexture(renderTexture, seamTexture);
                 }
                 cutSegment = cutFrame.Segment; model = new HarborObservedModel(layout); fixes.Clear(); lastFix = default;
+                Hud?.Cut();
                 for (var t = Math.Max(0, cutFrame.RecordedWallS - 30); t < cutFrame.RecordedWallS; t += 0.5)
                 {
                     // the truck's fixes too: its drawn place is interpolated between the fix before and the fix after
@@ -369,8 +406,10 @@ namespace DeviceChain.Harborpulse.Visuals
                 var shift = new Vector3((float)anchor.X - toLook.x, 0, (float)anchor.Z - toLook.z);
                 fromAt += shift; fromLook += shift; toAt += shift; toLook += shift;
             }
-            var move = (float)cutFrame.Move; var at = Vector3.Lerp(fromAt, toAt, move);
-            sceneCamera.transform.SetPositionAndRotation(at, Quaternion.Slerp(Quaternion.LookRotation(fromLook - fromAt), Quaternion.LookRotation(toLook - toAt), move));
+            // one slow move a shot: along its two poses, and a push toward what it looks at
+            var move = (float)cutFrame.Move; var at = Vector3.Lerp(fromAt, toAt, move); var look = Vector3.Lerp(fromLook, toLook, move);
+            at = Vector3.Lerp(at, look, (float)cutFrame.Push);
+            sceneCamera.transform.SetPositionAndRotation(at, Quaternion.LookRotation(look - at));
             sceneCamera.fieldOfView = Mathf.Lerp((float)from.VerticalFov, (float)to.VerticalFov, move);
             return true;
         }
@@ -378,11 +417,17 @@ namespace DeviceChain.Harborpulse.Visuals
         void ApplyCut()
         {
             directorView = DirectorView.ForCut(cutFrame);
-            Hud?.Apply(directorView, "RECORDED", cutFrame.Sim, cutFrame.RateChip, HudModel.Tags(layout, frame, sceneCamera.aspect < 1 ? 2 : 4),
-                string.Join(" | ", new[] { digestProblem }.Concat(map.ReadinessWarnings).Where(p => !string.IsNullOrEmpty(p))));
-            foreach (var text in new[] { directorView.Context, directorView.Caption, directorView.Overlay, directorView.UpNext, cutFrame.RateChip, digestProblem }.Concat(directorView.Rail.Select(n => n.Label + " (" + n.Tag + ")"))
-                .Concat(HudModel.Tags(layout, frame).Select(t => t.Text)))
-                if (!string.IsNullOrEmpty(text)) uiText.Add(text.Replace("\n", " / "));
+            Hud?.Apply(new HudFrame { View = directorView, Badge = "RECORDED", Sim = cutFrame.Sim, ClockS = cutFrame.ShowS, Pins = HudModel.Pins(frame),
+                Tags = HudModel.Tags(layout, directorView.Tags, sceneCamera.aspect < 1 ? 2 : 4),
+                ExtraProblem = string.Join(" | ", new[] { digestProblem }.Concat(map.ReadinessWarnings).Where(p => !string.IsNullOrEmpty(p))) });
+            // The text audit: what the HUD drew and what the world's tags drew, as drawn (the clock's digits aside). A tag that names
+            // its source is an engineer's; one in a cut's frame fails the render when it ends.
+            if (Hud != null) foreach (var text in Hud.DrawnText) uiText.Add(Regex.Replace(text.Replace("\n", " / "), @"\b\d{2}:\d{2}\b", "hh:mm"));
+            foreach (var tag in WorldTags.Drawn(sceneCamera))
+            {
+                uiText.Add("world: " + tag.Key);
+                if (tag.Value) internalTags.Add(tag.Key);
+            }
             renderCaptured = false;
         }
 
@@ -397,6 +442,25 @@ namespace DeviceChain.Harborpulse.Visuals
                 { MeshKit.Release(renderTexture); renderTexture = new Texture2D(Screen.width, Screen.height, TextureFormat.RGB24, false); }
                 renderTexture.ReadPixels(new Rect(0, 0, Screen.width, Screen.height), 0, 0, false); renderTexture.Apply(false);
                 File.WriteAllBytes(Path.Combine(renderDir, "frame-" + renderFrame.ToString("000000", CultureInfo.InvariantCulture) + ".png"), renderTexture.EncodeToPNG());
+                // the panel check: inside every opaque panel, on its text-free margin, the frame's pixels are the panel's
+                if (Hud != null && cutFrame.Dissolve <= 0 && cutFrame.LoopSeam <= 0)
+                {
+                    foreach (var panel in Hud.Panels)
+                    {
+                        var r = panel.Value; if (r[4] < 0.99f || r[2] < 24 || r[3] < 16) continue;
+                        foreach (var at in new[] { new Vector2(r[0] + 5, r[1] + r[3] / 2), new Vector2(r[0] + r[2] - 5, r[1] + r[3] / 2), new Vector2(r[0] + r[2] / 2, r[1] + 4) })
+                        {
+                            int x = Mathf.RoundToInt(at.x), y = Mathf.RoundToInt(at.y); if (x < 0 || y < 0 || x >= renderTexture.width || y >= renderTexture.height) continue;
+                            var c = renderTexture.GetPixel(x, y); panelCheck.Sample(renderFrame, panel.Key, new HudColor(c.r, c.g, c.b).Luminance);
+                        }
+                    }
+                    panelCheck.MarkersHidden += Hud.MarkersHidden;
+                }
+                if (renderFrame == 0 && cut.Cut.LoopSeamS > 0)
+                {
+                    // the loop's seam ends on the film's own first frame
+                    loopTexture = new Texture2D(renderTexture.width, renderTexture.height, TextureFormat.RGB24, false); Graphics.CopyTexture(renderTexture, loopTexture);
+                }
                 renderFrame++; renderCaptured = true;
             }
         }
@@ -408,7 +472,20 @@ namespace DeviceChain.Harborpulse.Visuals
             {
                 File.WriteAllText(Path.Combine(renderDir, "frame_check.json"), cut.TraceJson());
                 File.WriteAllLines(Path.Combine(renderDir, "ui_text.txt"), uiText);
+                File.WriteAllText(Path.Combine(renderDir, "hud_check.json"), panelCheck.Json(HudInSceneControl));
                 PlatformLog.Info("replay · cut " + cut.Cut.Id + " rendered: " + renderFrame + " frames");
+                if (panelCheck.Violations.Count > 0)
+                {
+                    Debug.LogError(DemoIdentity.LogPrefix + "the render's HUD panels are not the last thing drawn: " + panelCheck.Violations.Count + " samples under the contrast floor, first " + panelCheck.Violations[0]);
+                    if (Application.isPlaying) Application.Quit(6);
+                    return;
+                }
+                if (internalTags.Count > 0)
+                {
+                    Debug.LogError(DemoIdentity.LogPrefix + "the render drew engineer's labels in the world: " + string.Join(", ", internalTags));
+                    if (Application.isPlaying) Application.Quit(5);
+                    return;
+                }
             }
             if (Application.isPlaying) Application.Quit();
         }
@@ -459,21 +536,31 @@ namespace DeviceChain.Harborpulse.Visuals
                 }
                 return;
             }
+            tickWatch.Restart(); lapAt = 0;
             Tick(Time.deltaTime);
+            modelMs += tickWatch.Elapsed.TotalMilliseconds;
             if (frameStats) FrameStats(Time.unscaledDeltaTime);
         }
 
         void FrameStats(float dt)
         {
-            frameTimes.Add(dt * 1000); frameStatsAt += dt;
+            frameTimes.Add(dt * 1000); frameStatsAt += dt; statsFrames++;
+            if (loopRecorder.Valid) loopMs += loopRecorder.LastValue / 1e6;
+            if (gcRecorder.Valid) gcBytes += gcRecorder.LastValue;
             if (frameStatsAt < 10) return;
             frameTimes.Sort();
             var mean = frameTimes.Average();
             var p95 = frameTimes[Math.Min(frameTimes.Count - 1, (int)(frameTimes.Count * 0.95))];
             Debug.Log(DemoIdentity.LogPrefix + "frame time over " + frameTimes.Count + " frames at " + Screen.width + "x" + Screen.height + ": mean "
                 + mean.ToString("0.00", CultureInfo.InvariantCulture) + " ms, p95 " + p95.ToString("0.00", CultureInfo.InvariantCulture) + " ms, max "
-                + frameTimes[frameTimes.Count - 1].ToString("0.00", CultureInfo.InvariantCulture) + " ms");
-            frameTimes.Clear(); frameStatsAt = 0;
+                + frameTimes[frameTimes.Count - 1].ToString("0.00", CultureInfo.InvariantCulture) + " ms"
+                + " · sim " + (clock.SimSeconds / 3600).ToString("0.00", CultureInfo.InvariantCulture)
+                + " · scene tick " + (modelMs / statsFrames).ToString("0.00", CultureInfo.InvariantCulture) + " ms"
+                + " · player loop " + (loopMs / statsFrames).ToString("0.00", CultureInfo.InvariantCulture) + " ms"
+                + " · GC " + (gcBytes / statsFrames / 1024).ToString("0", CultureInfo.InvariantCulture) + " kB/frame"
+                + " · " + string.Join(" ", PartNames.Select((name, i) => name + " " + (partMs[i] / statsFrames).ToString("0.00", CultureInfo.InvariantCulture))));
+            Array.Clear(partMs, 0, partMs.Length);
+            frameTimes.Clear(); frameStatsAt = 0; loopMs = gcBytes = modelMs = 0; statsFrames = 0;
         }
 
         public void Tick(float dt, DateTimeOffset? wallNow = null)
@@ -498,6 +585,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 source = live.Source;
             }
 
+            Lap(0);
             var started = source.Status?.StartedAt;
             if (Replay) { }
             else if (!Offline && modelRun.HasValue && modelRun != started)
@@ -513,6 +601,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 model = new HarborObservedModel(layout); modelRun = started;
             }
             frame = model.Update(source, clock, now, Offline && previewHeld);
+            Lap(1);
             if (!Offline && !Replay) ApplyMembership(source, now);
             var hour = clock.HourOfDay;
             weather = PreviewFairWeather ? new Weather(0, 0) : frame.World.Weather;
@@ -522,9 +611,15 @@ namespace DeviceChain.Harborpulse.Visuals
             mats.SetNight((float)state.Night, (float)frame.World.EastFeederOutage);
             mats.SetRain(state);
             grading.Apply(state);
+            WorldTags.Engineer = engineer;
             views.Apply(frame, state, sceneCamera.transform.position, dt, waterTime, weather, sceneCamera.transform.forward, TallFrame);
-            if (Replay) ApplyCut(); else TickDirector(source, now, dt);
+            // The truck takes its final place for the frame BEFORE the HUD is drawn. Its view eases it toward the scenario's own
+            // coordinates and the map then puts it where it is drawn; the HUD used to read it between the two, so the truck's pin
+            // stood off the truck and swung about as it drove.
             ApplyMappedTruck(source, now);
+            Lap(2);
+            if (Replay) ApplyCut(); else TickDirector(source, now, dt);
+            Lap(4);
             world.Detail.Refresh(sceneCamera.transform.position);
 
             reflection.Level = (float)frame.ReflectionLevelM;
@@ -537,6 +632,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 b.rotation = Quaternion.Euler(Mathf.Sin(waterTime * 0.9f + i) * 6 * (0.3f + (float)weather.Storm), 0, Mathf.Cos(waterTime * 0.7f + i * 1.3f) * 6 * (0.3f + (float)weather.Storm));
             }
 
+            Lap(5);
             if (Replay) renderFrame += renderDir == null ? 1 : 0;
             else if (director != null) { directorCamera.Portrait = TallFrame; directorCamera.Tick(directorView, director, directorSeconds, dt, fixes); }
             if (fixedEye != null)
@@ -641,6 +737,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 // director show second to the runner clock without changing the U2a wire format.
                 recording.Recorder.World(directorSeconds, StatusSample(source.Status, sim, source));
             }
+            Lap(3);
             RefreshHud();
         }
         public void RefreshHud()
@@ -649,11 +746,11 @@ namespace DeviceChain.Harborpulse.Visuals
             var sim = clock.SimSeconds / 3600;
             // A planted defect or a scene injection makes the whole run a control, whichever banner currently wins precedence.
             var control = controlRun || directorView.Banner.StartsWith("TEST CONTROL", StringComparison.Ordinal);
-            Hud?.Apply(directorView, Offline ? "OFFLINE PREVIEW" : control ? "TEST CONTROL" : "LIVE", sim,
-                Offline ? "x" + previewSpeed.ToString("0.#", CultureInfo.InvariantCulture) : "x1",
-                HudModel.Tags(layout, frame, sceneCamera.aspect < 1 ? 2 : 4),
-                string.Join(" | ", new[] { digestProblem, recordingStatus.Problem, recording?.Problem, membershipProblem,
-                    string.Join(" | ", map.ReadinessWarnings), Offline ? null : frame.ReadProblem }.Where(p => !string.IsNullOrEmpty(p))));
+            Hud?.Apply(new HudFrame { View = directorView, Badge = Offline ? "OFFLINE PREVIEW" : control ? "TEST CONTROL" : "LIVE", Sim = sim, ClockS = directorSeconds, Pins = HudModel.Pins(frame),
+                RateChip = Offline ? TopStrip.Rate(previewSpeed) : "",
+                Tags = HudModel.Tags(layout, directorView.Tags, sceneCamera.aspect < 1 ? 2 : 4),
+                ExtraProblem = string.Join(" | ", new[] { digestProblem, recordingStatus.Problem, recording?.Problem, membershipProblem,
+                    string.Join(" | ", map.ReadinessWarnings), Offline ? null : frame.ReadProblem }.Where(p => !string.IsNullOrEmpty(p))) });
         }
         bool controlRun;
         DateTimeOffset previewWall;
@@ -691,6 +788,13 @@ namespace DeviceChain.Harborpulse.Visuals
             w.WriteEndObject();
         });
 
+        /// <summary>Where a device's alarm pin stands (see <see cref="HarborViews.TryPinPlace"/>); false before the scene is built.</summary>
+        public bool TryPinPlace(string externalId, out Vector3 top, out Vector3 ground)
+        {
+            top = ground = default;
+            return views != null && views.TryPinPlace(externalId, out top, out ground);
+        }
+
         void OnDestroy() => Teardown();
 
         bool tornDown;
@@ -704,7 +808,9 @@ namespace DeviceChain.Harborpulse.Visuals
             if (tornDown) return;
             tornDown = true;
             Hud?.Dispose();
-            MeshKit.Release(renderTexture); MeshKit.Release(seamTexture);
+            MeshKit.Release(renderTexture); MeshKit.Release(seamTexture); MeshKit.Release(loopTexture);
+            if (loopRecorder.Valid) loopRecorder.Dispose();
+            if (gcRecorder.Valid) gcRecorder.Dispose();
             recording?.Dispose();
             reflection?.Dispose();
             grading?.Dispose();
@@ -761,6 +867,12 @@ namespace DeviceChain.Harborpulse.Visuals
                 // the seam: the last frame of the shot before, fading out over the new one
                 var tint = GUI.color; GUI.color = new Color(1, 1, 1, (float)cutFrame.Dissolve);
                 GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), seamTexture, ScaleMode.StretchToFill, false); GUI.color = tint;
+            }
+            if (Replay && cutFrame != null && cutFrame.LoopSeam > 0 && loopTexture != null && Event.current.type == EventType.Repaint)
+            {
+                // the loop's seam: the film's first frame, fading in over its last seconds
+                var tint = GUI.color; GUI.color = new Color(1, 1, 1, (float)cutFrame.LoopSeam);
+                GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), loopTexture, ScaleMode.StretchToFill, false); GUI.color = tint;
             }
             if (world == null || frame == null || !engineer || hidden) return;
             sb.Clear();

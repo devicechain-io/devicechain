@@ -177,6 +177,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         public IReadOnlyDictionary<string, string> Bind { get; private set; } = new Dictionary<string, string>();
         public IReadOnlyList<string> Present { get; private set; } = Array.Empty<string>();
         public bool ThroughNow { get; private set; }
+        /// <summary>A set that asks only that every expected member was observed (see the parser's note).</summary>
+        public bool AtLeast { get; private set; }
         public double? Gte { get; private set; }
         public double? AllBelow { get; private set; }
         public string Until { get; private set; }
@@ -189,7 +191,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         public string Stream { get; private set; }
         public string SetField { get; private set; }
         public string ExpectedField { get; private set; }
-        public IEnumerable<string> BoundNames => Bind.Keys.Concat(Kind == "any" ? Children.Select(c => c.BoundNames).Aggregate((a, b) => a.Intersect(b)) : Children.SelectMany(c => c.BoundNames));
+        public IEnumerable<string> BoundNames => Kind == "tally" ? Bind.Keys : Bind.Keys.Concat(Kind == "any" ? Children.Select(c => c.BoundNames).Aggregate((a, b) => a.Intersect(b)) : Children.SelectMany(c => c.BoundNames));
         public static Needs Parse(JsonElement e)
         {
             try { return Read(e); }
@@ -208,12 +210,30 @@ namespace DeviceChain.Harborpulse.Model.Director
             if (body.ValueKind == JsonValueKind.Object) { if (body.TryGetProperty("fromCue", out _)) n.FromCue = StrictJson.Str(body, "fromCue"); if (body.TryGetProperty("toCue", out _)) n.ToCue = StrictJson.Str(body, "toCue"); }
             if (p.Name == "set")
             {
-                StrictJson.Keys(body, "fromCue", "toCue", "observed", "expected", "field", "expectedField", "stream", "fromSim", "toSim", "cardinality");
+                StrictJson.Keys(body, "fromCue", "toCue", "observed", "expected", "field", "expectedField", "stream", "fromSim", "toSim", "cardinality", "atLeast");
+                // atLeast: the observed set holds every expected member ("every buffered reading is stored"). Each member is its own
+                // positive evidence, so a record beyond the expected ones does not refute it and no stream coverage is asked: a gap in
+                // the stream can hide a record, never invent one. Without it the two sets must be equal over a covered interval ("exactly
+                // these"), which is what a claim that nothing else happened needs.
+                if (body.TryGetProperty("atLeast", out var atLeast)) { if (atLeast.ValueKind != JsonValueKind.True && atLeast.ValueKind != JsonValueKind.False) throw new FormatException("expected boolean atLeast"); n.AtLeast = atLeast.GetBoolean(); }
+                if (n.AtLeast && body.TryGetProperty("cardinality", out _)) throw new FormatException("an atLeast set states no cardinality");
                 n.Children = new[] { Parse(body.GetProperty("observed")), Parse(body.GetProperty("expected")) };
                 n.Count = body.TryGetProperty("cardinality", out _) ? StrictJson.Num(body, "cardinality") : (double?)null;
                 if (n.Count.HasValue && (n.Count < 1 || n.Count % 1 != 0)) throw new FormatException("set cardinality must be positive integer");
                 n.SetField = StrictJson.Str(body, "field"); n.ExpectedField = StrictJson.Str(body, "expectedField");
                 n.Stream = StrictJson.Str(body, "stream"); n.FromSim = StrictJson.Num(body, "fromSim"); n.ToSim = StrictJson.Num(body, "toSim"); if (n.FromSim > n.ToSim) throw new FormatException("reversed interval"); return n;
+            }
+            if (p.Name == "tally")
+            {
+                // How many distinct values of one field the matching records carry: a count of what was recorded. It makes no
+                // "only these" statement, so it asks for no coverage; a caption or a card row binds the number it found.
+                StrictJson.Keys(body, "of", "field", "bind", "min");
+                n.Children = new[] { Parse(body.GetProperty("of")) }; n.SetField = StrictJson.Str(body, "field");
+                if (!KnownFields.Contains(n.SetField)) throw new FormatException("unknown tally field " + n.SetField);
+                n.Bind = new Dictionary<string, string>(StringComparer.Ordinal) { [StrictJson.Str(body, "bind")] = "count" };
+                n.Count = StrictJson.Num(body, "min", 1);
+                if (n.Count < 1 || n.Count % 1 != 0) throw new FormatException("tally min must be a positive integer");
+                return n;
             }
             if (p.Name == "coverage")
             {
@@ -291,7 +311,7 @@ namespace DeviceChain.Harborpulse.Model.Director
         }
         IEnumerable<Observation> Select(ObservationStore store, EvidenceContext c)
         {
-            if (Kind == "any" || Kind == "all") return Children.SelectMany(n => n.Select(store, c)).Distinct();
+            if (Kind == "any" || Kind == "all" || Kind == "tally") return Children.SelectMany(n => n.Select(store, c)).Distinct();
             string Resolve(string value, Observation candidate)
             {
                 if (value.StartsWith("$match.", StringComparison.Ordinal)) { var parts = value.Split('.'); return parts.Length == 3 && c.Named.TryGetValue(parts[1], out var row) ? row.Field(parts[2]) : null; }
@@ -317,6 +337,42 @@ namespace DeviceChain.Harborpulse.Model.Director
                 (!MaxAgeS.HasValue || c.NowS - o.ObservedAtS <= MaxAgeS) && (!Gte.HasValue || double.TryParse(o.Field("value"), NumberStyles.Float, CultureInfo.InvariantCulture, out var numeric) && numeric >= Gte.Value) && Present.All(f => !string.IsNullOrEmpty(o.Field(f))) && Match.All(m =>
                     o.Field(m.Key) != null && o.Field(m.Key) == Resolve(m.Value, o)));
         }
+        /// <summary>
+        /// Why a predicate holds or does not, for a person re-timing a cut: each part on its own line, and for a set the two sides'
+        /// sizes, what is missing, what is extra, and whether its stream is covered. It decides nothing; <see cref="Evaluate"/> does.
+        /// </summary>
+        public string Explain(ObservationStore store, EvidenceContext context, string indent = "")
+        {
+            var holds = Evaluate(store, context).Holds; var head = indent + Kind + (holds ? " HOLDS" : " unmet");
+            if (Kind == "all" || Kind == "any")
+            {
+                var named = new Dictionary<string, Observation>(context.Named); var lines = new List<string> { head };
+                foreach (var child in Children)
+                {
+                    var scoped = context.With(context.FromSim, context.ToSim, named: named);
+                    lines.Add(child.Explain(store, scoped, indent + "  "));
+                    var r = child.Evaluate(store, scoped); if (Kind == "all" && r.Holds) foreach (var pair in r.Named) named[pair.Key] = pair.Value;
+                }
+                return string.Join("\n", lines);
+            }
+            if (Kind == "set")
+            {
+                var end = ToSim.Value;
+                var scoped = context.With(FromSim.Value, end, restrictInterval: true);
+                IEnumerable<string> Values(Observation o, string field) => o.Sets.TryGetValue(field, out var set) ? set : new[] { o.Field(field) };
+                var a = new HashSet<string>(Children[0].Select(store, scoped).SelectMany(o => Values(o, SetField)).Where(v => v != null), StringComparer.Ordinal);
+                var b = new HashSet<string>(Children[1].Select(store, scoped.With(FromSim.Value, end, Children[1].Source ?? context.Source)).SelectMany(o => Values(o, ExpectedField)).Where(v => v != null), StringComparer.Ordinal);
+                string Some(IEnumerable<string> values) { var v = values.OrderBy(x => x, StringComparer.Ordinal).ToArray(); return v.Length + (v.Length == 0 ? "" : " (" + string.Join(", ", v.Take(3)) + (v.Length > 3 ? ", ..." : "") + ")"); }
+                return head + ": observed " + a.Count + ", expected " + b.Count + ", missing " + Some(b.Except(a)) + ", extra " + Some(a.Except(b))
+                    + (AtLeast ? " (at least: extras and coverage are not asked)" : ", stream " + Stream + " covered " + N(FromSim.Value) + " to " + N(end) + ": " + (store.Covers(context.Run, Stream, FromSim.Value, end) ? "yes" : "NO"));
+            }
+            if (Kind == "coverage") return head + ": stream " + Stream + " " + N(FromSim.Value) + " to " + N(ToSim.Value);
+            if (Kind == "tally") { var r = Evaluate(store, context); return head + ": " + (r.Bindings.Count > 0 ? r.Bindings.First().Value : "0") + " distinct " + SetField + "\n" + Children[0].Explain(store, context, indent + "  "); }
+            var rows = Select(store, context).ToArray();
+            return head + ": " + rows.Length + " matching record" + (rows.Length == 1 ? "" : "s") + " (" + string.Join(" ", Match.Select(m => m.Key + "=" + m.Value)) + ")"
+                + (Count.HasValue ? ", wants exactly " + N(Count.Value) + ", stream " + Stream + " covered: " + (store.Covers(context.Run, Stream, FromSim.Value, ThroughNow && context.NowSim.HasValue ? Math.Min(ToSim.Value, context.NowSim.Value) : ToSim.Value) ? "yes" : "NO") : "");
+        }
+        static string N(double v) => v.ToString("0.###", CultureInfo.InvariantCulture);
         public EvidenceResult Evaluate(ObservationStore store, EvidenceContext context)
         {
             EvidenceResult Result(bool holds, IEnumerable<Observation> records = null)
@@ -329,6 +385,17 @@ namespace DeviceChain.Harborpulse.Model.Director
                 return new EvidenceResult { Holds = holds, Records = rows, Bindings = bound, Named = named };
             }
             if (Kind == "coverage") return Result(store.Covers(context.Run, Stream, FromSim.Value, ToSim.Value));
+            if (Kind == "tally")
+            {
+                var counted = Children[0].Select(store, context).Where(o => !string.IsNullOrEmpty(o.Field(SetField))).ToArray();
+                if (counted.Any(o => o.Source != context.Source)) return Result(false);
+                var distinct = counted.Select(o => o.Field(SetField)).Distinct(StringComparer.Ordinal).Count();
+                if (distinct < Count.Value) return Result(false);
+                // one record per counted value, the first observed: the count's evidence is exactly what was counted
+                var tally = new EvidenceResult { Holds = true, Records = counted.OrderBy(o => o.ObservedAtS).ThenBy(o => o.EventKey, StringComparer.Ordinal).GroupBy(o => o.Field(SetField), StringComparer.Ordinal).Select(g => g.First()).ToArray(), Named = new Dictionary<string, Observation>(context.Named) };
+                tally.Bindings = new Dictionary<string, string>(StringComparer.Ordinal) { [Bind.Keys.First()] = distinct.ToString(CultureInfo.InvariantCulture) };
+                return tally;
+            }
             if (Kind == "all" || Kind == "any")
             {
                 var collected = new List<EvidenceResult>(); var named = new Dictionary<string, Observation>(context.Named);
@@ -351,10 +418,11 @@ namespace DeviceChain.Harborpulse.Model.Director
                 var actual = Children[0].Select(store, scoped).ToArray(); var expected = Children[1].Select(store, scoped).ToArray();
                 bool Has(Observation o, string f) => o.Sets.ContainsKey(f) || !string.IsNullOrEmpty(o.Field(f));
                 if (actual.Any(o => !Has(o, SetField)) || expected.Any(o => !Has(o, ExpectedField))) return new EvidenceResult { Error = "missing required set field: " + SetField + " / " + ExpectedField };
-                if (!observedResult.Holds || !expectedResult.Holds || actual.Length == 0 || actual.Any(o => o.Source != context.Source) || expected.Length == 0 || !store.Covers(context.Run, Stream, FromSim.Value, ToSim.Value)) return Result(false);
+                if (!observedResult.Holds || !expectedResult.Holds || actual.Length == 0 || actual.Any(o => o.Source != context.Source) || expected.Length == 0 || (!AtLeast && !store.Covers(context.Run, Stream, FromSim.Value, ToSim.Value))) return Result(false);
                 IEnumerable<string> Values(Observation o, string field) => o.Sets.TryGetValue(field, out var set) ? set : new[] { o.Field(field) };
                 var a = new HashSet<string>(actual.SelectMany(o => Values(o, SetField)), StringComparer.Ordinal);
                 var b = new HashSet<string>(expected.SelectMany(o => Values(o, ExpectedField)), StringComparer.Ordinal);
+                if (AtLeast) return Result(b.Count > 0 && b.IsSubsetOf(a), actual.Concat(expected));
                 return Result(a.Count > 0 && (!Count.HasValue || a.Count == Count.Value) && a.SetEquals(b), actual.Concat(expected));
             }
             if (Source != context.Source) return Result(false);

@@ -17,10 +17,9 @@ namespace DeviceChain.Harborpulse.Visuals
         readonly Dictionary<string, LampView> lamps = new Dictionary<string, LampView>();
         readonly Dictionary<string, LinkedChargerView> linked = new Dictionary<string, LinkedChargerView>();
         readonly Dictionary<string, PullLampView> pullLamps = new Dictionary<string, PullLampView>();
-        readonly Dictionary<string, BeaconView> beacons = new Dictionary<string, BeaconView>();
-        readonly Dictionary<string, int> slots = new Dictionary<string, int>();
         readonly List<(string Quay, Transform Spray, Transform Overtop)> sea = new List<(string, Transform, Transform)>();
         readonly HarborMaterials mats;
+        readonly DeviceChain.Demos.Hud.PinAnchors pinAnchors = new DeviceChain.Demos.Hud.PinAnchors();
         readonly Transform feeder, rain;
         readonly Mesh rainMesh;
         readonly List<Vector3> rainVertices = new List<Vector3>(), rainNormals = new List<Vector3>();
@@ -54,7 +53,7 @@ namespace DeviceChain.Harborpulse.Visuals
             var cab = AssetRig.Node("FeederCabinet", world.Root, new Vector3((float)eastLamp.At.X + 5, (float)SitePlan.DeckHeightM, (float)eastLamp.At.Z + 1));
             new MeshKit().Box(Vector3.up * 0.8f, new Vector3(1.1f, 1.6f, 0.6f)).Spawn("Cabinet", cab, mats.Steel);
             feeder = new MeshKit().Ball(Vector3.zero, 0.12f).Spawn("FeederDown", cab, mats.WorldCue, false).transform; feeder.localPosition = new Vector3(0, 1.3f, 0.36f);
-            AssetRig.Tag("feeder down (WORLD)", feeder, Vector3.up * 0.3f);
+            AssetRig.Tag(WorldText.FeederDown, feeder, Vector3.up * 0.3f, 0.12f, null, true);
             foreach (var rig in world.Rigs)
             {
                 var placement = rig.Placement;
@@ -74,6 +73,21 @@ namespace DeviceChain.Harborpulse.Visuals
                 sea.Add((placement.Device.Quay, t, over));
             }
             }
+        }
+        /// <summary>
+        /// Where a device's alarm pin stands: its tip half a metre over the device's highest point (each rig's "Beacon" node is authored
+        /// there), and the spot on the deck under it for the pin's ground glow. False for a device the scene does not draw.
+        /// </summary>
+        public bool TryPinPlace(string externalId, out Vector3 top, out Vector3 ground)
+        {
+            top = ground = default;
+            if (externalId == null || !rigs.TryGetValue(externalId, out var rig)) return false;
+            // A device that does not move has one anchor, taken once (PinAnchors): its pin cannot wander. The truck is followed, and the
+            // composition root has put it in its final place for the frame before the HUD asks.
+            var now = rig["Beacon"].position; var moving = rig.Placement.Device.Kind == DeviceKind.Truck;
+            var at = pinAnchors.Place(externalId, moving, now.x, now.y, now.z);
+            top = new Vector3((float)at[0], (float)at[1], (float)at[2]); ground = new Vector3(top.x, rig.Root.position.y + 0.05f, top.z);
+            return true;
         }
         /// <param name="weather">The weather drawn: the frame's own, unless a fair-weather look check of the preview has put the storm aside.</param>
         /// <summary>Decides every well's level tags for a camera (see <see cref="WellFootprint.TagsInView"/>).</summary>
@@ -95,7 +109,7 @@ namespace DeviceChain.Harborpulse.Visuals
                 if (!RainField.TryStreak(i, time, weather, eye.x, eye.y, eye.z, out var streak)) continue;
                 var head = new Vector3((float)streak.X, (float)streak.Y, (float)streak.Z); var tail = new Vector3((float)streak.TailX, (float)streak.TailY, (float)streak.TailZ);
                 var toEye = eye - head; var distance = toEye.magnitude;
-                var side = Vector3.Cross(tail, toEye).normalized * Mathf.Max(0.003f, 0.0006f * distance); // about a pixel wide at any range
+                var side = Vector3.Cross(tail, toEye).normalized * Mathf.Max((float)RainField.MinWidthM, (float)RainField.WidthPerMetre * distance); // under a pixel wide at any range
                 var normal = toEye / distance; var at = rainVertices.Count;
                 rainVertices.Add(head - side); rainVertices.Add(head + side); rainVertices.Add(head + tail + side); rainVertices.Add(head + tail - side);
                 for (var k = 0; k < 4; k++) rainNormals.Add(normal);
@@ -115,18 +129,9 @@ namespace DeviceChain.Harborpulse.Visuals
             foreach (var p in linked) p.Value.Apply(f.LinkedChargers[p.Key]);
             foreach (var p in pullLamps) p.Value.Apply(f.PullLamps[p.Key], sky);
             truck?.Apply(f.Truck, dt, time);
-            foreach (var b in beacons.Values) b.Hide();
-            foreach (var alarm in f.Beacons)
-            {
-                if (!rigs.TryGetValue(alarm.Device, out var rig)) continue;
-                if (!beacons.TryGetValue(alarm.Identity, out var b))
-                {
-                    slots.TryGetValue(alarm.Device, out var slot); slots[alarm.Device] = slot + 1;
-                    b = new BeaconView(rig["Beacon"], mats, slot); beacons.Add(alarm.Identity, b);
-                }
-                b.Apply(alarm, f.ObservedAt, camera);
-            }
+            // an alarm is a pin on the story HUD, placed by TryPinPlace: no beam, no rings and no count box stand in the world
             DrawRain(weather, camera, time);
+            WorldTags.Apply();
             feeder.gameObject.SetActive(f.World.EastFeederOutage > 0);
             feeder.localScale = Vector3.one * (float)f.World.EastFeederOutage;
             foreach (var s in sea)

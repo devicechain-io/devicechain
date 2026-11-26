@@ -1,8 +1,8 @@
 +937|7|caption|Readings arriving.|
 +942|7|caption-end|arriving|
--936|7|link|paced->stored|
--936|7|node-label|All buffered readings stored|3:run7:measure6:back-117:hp-charger-east-18:backfill31:cycle-hp-charger-east-1backfill0:0:0:8:PLATFORM,3:run7:measure6:back-217:hp-charger-east-28:backfill31:cycle-hp-charger-east-2backfill0:0:0:8:PLATFORM,3:run6:ledger17:ledger::backfill:0:8:backfill14:cycle-backfill0:0:0:8:SCENARIO
--936|7|node|stored|3:run7:measure6:back-117:hp-charger-east-18:backfill31:cycle-hp-charger-east-1backfill0:0:0:8:PLATFORM,3:run7:measure6:back-217:hp-charger-east-28:backfill31:cycle-hp-charger-east-2backfill0:0:0:8:PLATFORM,3:run6:ledger17:ledger::backfill:0:8:backfill14:cycle-backfill0:0:0:8:SCENARIO
+-928|7|link|paced->stored|
+-928|7|node-label|All buffered readings stored|3:run7:measure6:back-117:hp-charger-east-18:backfill31:cycle-hp-charger-east-1backfill0:0:0:8:PLATFORM,3:run7:measure6:back-217:hp-charger-east-28:backfill31:cycle-hp-charger-east-2backfill0:0:0:8:PLATFORM,3:run6:ledger17:ledger::backfill:0:8:backfill14:cycle-backfill0:0:0:8:SCENARIO
+-928|7|node|stored|3:run7:measure6:back-117:hp-charger-east-18:backfill31:cycle-hp-charger-east-1backfill0:0:0:8:PLATFORM,3:run7:measure6:back-217:hp-charger-east-28:backfill31:cycle-hp-charger-east-2backfill0:0:0:8:PLATFORM,3:run6:ledger17:ledger::backfill:0:8:backfill14:cycle-backfill0:0:0:8:SCENARIO
 -937|7|caption|Every buffered reading, / stored at the time it was taken.|3:run7:measure6:back-117:hp-charger-east-18:backfill31:cycle-hp-charger-east-1backfill0:0:0:8:PLATFORM,3:run7:measure6:back-217:hp-charger-east-28:backfill31:cycle-hp-charger-east-2backfill0:0:0:8:PLATFORM,3:run6:ledger17:ledger::backfill:0:8:backfill14:cycle-backfill0:0:0:8:SCENARIO
 -941|7|link|stored->clear|
 -942|7|caption-end|all-buffered|

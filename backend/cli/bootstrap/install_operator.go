@@ -42,17 +42,18 @@ import (
 // here is only what differs: how an install announces it, and that a rehearsal
 // takes nothing while still reporting the claim it would have met.
 func claimForInstall(ctx context.Context, st *State) error {
+	c := out(ctx)
 	if st.DryRun {
 		ns, err := operator.Namespace()
 		if err != nil {
-			return fail("reading the operator namespace", err)
+			return c.fail("reading the operator namespace", err)
 		}
 		st.OperatorNamespace = ns
-		wouldDo("take the cluster lock in namespace " + ns)
+		c.wouldDo("take the cluster lock in namespace " + ns)
 		return reportExistingClaim(ctx, st)
 	}
 
-	doing("claiming the cluster")
+	c.doing("claiming the cluster")
 	claim, ns, err := ClaimCluster(ctx, st.KubeContext, st.Instance)
 	// Recorded even when the claim was refused: the namespace is resolved before
 	// the lock is contended, and a refusal still wants to say where it was looking.
@@ -63,7 +64,8 @@ func claimForInstall(ctx context.Context, st *State) error {
 		return err
 	}
 	st.Claim = claim
-	done()
+	runFrom(ctx).claimHeld()
+	c.done()
 	return nil
 }
 
@@ -139,16 +141,17 @@ func installOperator(ctx context.Context, st *State) error {
 // alternative is a field that exists only to carry bytes between two adjacent
 // calls, which is the kind of state that outlives its reason.
 func waitForOperatorRollout(ctx context.Context, st *State) error {
+	c := out(ctx)
 	if st.DryRun {
 		return nil
 	}
 	manifests, err := operator.Render(operatorImageRef(st))
 	if err != nil {
-		return fail("rendering the operator manifests to find what to wait for", err)
+		return c.fail("rendering the operator manifests to find what to wait for", err)
 	}
 	targets, err := operatorDeployments(manifests)
 	if err != nil {
-		return fail("reading the rendered operator manifests", err)
+		return c.fail("reading the rendered operator manifests", err)
 	}
 	if len(targets) == 0 {
 		// Not a warning to print and continue past — the same refusal `dcctl
@@ -161,13 +164,13 @@ func waitForOperatorRollout(ctx context.Context, st *State) error {
 
 	_, _, typed, err := kubeClients(st.KubeContext)
 	if err != nil {
-		return fail("building kube clients", err)
+		return c.fail("building kube clients", err)
 	}
-	doing("waiting for the operator to roll out")
+	c.doing("waiting for the operator to roll out")
 	if err := waitForRollout(ctx, typed, targets, 5*time.Minute); err != nil {
-		return fail("waiting for the operator to roll out", err)
+		return c.fail("waiting for the operator to roll out", err)
 	}
-	done()
+	c.done()
 	return nil
 }
 
@@ -184,11 +187,12 @@ func waitForOperatorRollout(ctx context.Context, st *State) error {
 // ensuring it is install's business, and a later `bootstrap --build` finds it
 // already there and says so.
 func buildOperatorImageForInstall(ctx context.Context, st *State) error {
+	c := out(ctx)
 	if !st.BuildImages {
 		return nil
 	}
 	if st.DryRun {
-		wouldDo(fmt.Sprintf("provision a local registry at %s and ko-build+push the operator image at tag %q",
+		c.wouldDo(fmt.Sprintf("provision a local registry at %s and ko-build+push the operator image at tag %q",
 			st.ImageRegistry, st.ImageVersion))
 		return nil
 	}
@@ -198,17 +202,17 @@ func buildOperatorImageForInstall(ctx context.Context, st *State) error {
 		return err
 	}
 
-	doing("ensuring local image registry")
+	c.doing("ensuring local image registry")
 	if err := ensureLocalRegistry(ctx, st); err != nil {
-		return fail("provisioning local registry", err)
+		return c.fail("provisioning local registry", err)
 	}
-	done()
+	c.done()
 
-	doing("building + pushing the operator image from source (ko)")
+	c.doing("building + pushing the operator image from source (ko)")
 	if err := buildOperatorImage(ctx, root, st); err != nil {
-		return fail("building the operator image", err)
+		return c.fail("building the operator image", err)
 	}
-	done()
+	c.done()
 	return nil
 }
 
@@ -219,6 +223,6 @@ func buildOperatorImageForInstall(ctx context.Context, st *State) error {
 // operator at all until this release, so whoever reads this output has every
 // reason to expect it still does not. A cluster-scoped write that appears in no
 // heading is the one an operator finds out about afterwards.
-func reportOperatorPlan(st *State) {
-	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"), color.GreenString(operatorImageRef(st)))
+func reportOperatorPlan(c console, st *State) {
+	c.printf("  %s %s\n", color.WhiteString("Operator:"), color.GreenString(operatorImageRef(st)))
 }

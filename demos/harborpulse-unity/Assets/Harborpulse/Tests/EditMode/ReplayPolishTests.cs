@@ -61,7 +61,7 @@ namespace DeviceChain.Harborpulse.Tests
                     Assert.That(fall, Is.InRange(RainField.FallMin, RainField.FallMax));
                     Assert.That(s.TailY, Is.EqualTo(fall * RainField.ExposureS).Within(1e-9), "the tail points back up the fall");
                     Assert.That(s.TailX, Is.EqualTo(-windX * RainField.ExposureS).Within(1e-9)); Assert.That(s.TailZ, Is.EqualTo(-windZ * RainField.ExposureS).Within(1e-9));
-                    Assert.That(s.TailY, Is.InRange(0.4, 0.6), "about half a metre, in drizzle as in a storm");
+                    Assert.That(s.TailY, Is.InRange(0.3, 0.5), "about forty centimetres (shortened with the softer rain), in drizzle as in a storm");
                 }
             }
             RainField.Wind(Storm, out var stormX, out _); RainField.Wind(Drizzle, out var calmX, out _);

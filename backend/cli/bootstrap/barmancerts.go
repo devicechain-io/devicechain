@@ -78,10 +78,11 @@ func (b barmanHealingApplier) Apply(ctx context.Context, opts ...tfexec.ApplyOpt
 // withBarmanCertHealer runs apply while a healer watches the plugin's Certificates, and stops
 // it when apply returns. The healer's own problems are reported, never returned.
 func withBarmanCertHealer(ctx context.Context, kubeContext, namespace string, apply func() error) error {
+	c := out(ctx)
 	dyn, _, _, err := kubeClients(kubeContext)
 	if err != nil {
 		// Not being able to watch must not stop the apply from running.
-		fmt.Println(color.YellowString("   cannot watch the Barman Cloud plugin certificates: %v", err))
+		c.println(color.YellowString("   cannot watch the Barman Cloud plugin certificates: %v", err))
 		return apply()
 	}
 	if namespace == "" {
@@ -101,6 +102,7 @@ func withBarmanCertHealer(ctx context.Context, kubeContext, namespace string, ap
 // healBarmanCertificates polls until ctx ends or both Certificates are Ready, re-creating
 // each stuck one once.
 func healBarmanCertificates(ctx context.Context, dyn dynamic.Interface, ns string, grace, poll time.Duration) {
+	c := out(ctx)
 	recreated := map[string]bool{}
 	ready := map[string]bool{}
 	for {
@@ -121,10 +123,10 @@ func healBarmanCertificates(ctx context.Context, dyn dynamic.Interface, ns strin
 			}
 			recreated[name] = true // once, whatever happens: a second failure is not this race
 			if err := recreateCertificate(ctx, dyn, obj); err != nil {
-				fmt.Println(color.YellowString("   could not re-create the stuck Certificate %s/%s: %v", ns, name, err))
+				c.println(color.YellowString("   could not re-create the stuck Certificate %s/%s: %v", ns, name, err))
 				continue
 			}
-			fmt.Println(color.YellowString("⚠  Certificate %s/%s was not issued after %s (cert-manager is backing off "+
+			c.println(color.YellowString("⚠  Certificate %s/%s was not issued after %s (cert-manager is backing off "+
 				"a first attempt that raced the plugin's Issuer); deleted and re-created it.", ns, name, grace))
 		}
 		if len(ready) == len(barmanPluginCertificates) {
