@@ -83,6 +83,7 @@ type Api struct {
 	fleetDriver                   fleetDriverState
 	fleetSettlementFastCursor     fleetSettlementCursor
 	fleetSettlementDeadlineCursor fleetSettlementCursor
+	fleetMaintenanceCursor        fleetMaintenanceCursor
 	// DeviceCredentialChecker shares password backoff between HTTP uplinks and MQTT connects.
 	DeviceCredentialChecker *credential.Checker
 

@@ -365,12 +365,12 @@ func fleetContraRecorded(db *gorm.DB, ids []uint) (map[uint]bool, error) {
 // fleetRecordPurgedContrasOnTx runs in retention's transaction, under the reversal's own fence, just before
 // a chunk of its lines is deleted: every applied contra in the chunk becomes a REVERSED event on the line it
 // restored, in the same transaction, so there is no moment at which neither record exists.
-func fleetRecordPurgedContrasOnTx(tx *gorm.DB, op *FleetOperation, lineIDs *gorm.DB) error {
-	if !op.ReversalOf.Valid {
+func fleetRecordPurgedContrasOnTx(tx *gorm.DB, op *FleetOperation, lineIDs []uint) error {
+	if !op.ReversalOf.Valid || len(lineIDs) == 0 {
 		return nil
 	}
 	var contras []FleetOperationLine
-	if err := tx.Select("id", "reverses_line_id").Where("id IN (?) AND posting = ? AND reverses_line_id IS NOT NULL", lineIDs, FleetPostingPosted).
+	if err := tx.Select("id", "reverses_line_id").Where("id IN ? AND posting = ? AND reverses_line_id IS NOT NULL", lineIDs, FleetPostingPosted).
 		Find(&contras).Error; err != nil {
 		return err
 	}

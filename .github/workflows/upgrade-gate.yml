@@ -359,6 +359,10 @@ jobs:
             }
             echo "baseline=$baseline" >> "$GITHUB_OUTPUT"
             echo "DC_BASELINE_TAG=$baseline" >> "$GITHUB_ENV"
+            # A GIVEN baseline is a deliberate choice, and the one that needs this is the bulkchange
+            # phase's baseline control: a release from before the attribute writer protocol, two minors
+            # back, which `dcctl upgrade` refuses without its override. A derived baseline never skips.
+            echo "DC_UPGRADE_ALLOW_SKIPPED_MINOR=1" >> "$GITHUB_ENV"
             echo "Baseline (given): $baseline"
             exit 0
           fi
@@ -658,6 +662,23 @@ jobs:
       - name: The attribute guard must pass a baseline pod's writes and refuse an unmarked one
         if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh attrguard
+
+      # A 2,000-device bulk change runs through an upgraded pod while a baseline device-management
+      # pod writes the same devices, deletes two of them and restarts. Every baseline write must be
+      # accepted, every recorded prior must match the device's own configuration revisions, every line
+      # must settle on the devices' reports, and the deleted devices' lines must be redacted by the
+      # repair pass. Its controls: the repair pass held off (the redaction check must then fail), and,
+      # when the `baseline` input names a release from before the writer protocol, that pod's writes
+      # refused by the guard and an unprotected writer making a recorded prior wrong.
+      #
+      # 🔴 IT SKIPS ONLY BY NAME, AND ONLY WHEN NOTHING EXPECTS BULK CHANGES: a build that serves none
+      # (readiness lists no executable kind) and whose tree's build constant is false. When that
+      # constant is true, or DC_EXPECT_BULK_CHANGES=1, a build that does not serve them FAILS here.
+      # The expectation is read from the tree, so the release that serves bulk changes needs no input
+      # to turn this on.
+      - name: A bulk change through the upgraded pods while a baseline pod writes, deletes and restarts
+        if: env.DC_UPGRADE_MODE == 'data'
+        run: hack/upgrade-rig.sh bulkchange
 
       # -------------------------------------------------------------------
       # DRILL B -- the recreate drill. This release does not upgrade onto the
