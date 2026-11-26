@@ -98,7 +98,7 @@ Con `--output json`, eso abarca todos los eventos, el error que se imprime en st
 
 Hay límites:
 
-- Un valor de menos de 4 bytes no puede eliminarse sin eliminar texto normal con él. No se redacta, y la ejecución indica cuántos valores así encontró en una línea de registro `warning:`.
+- Un valor de menos de 4 bytes no puede eliminarse sin eliminar texto normal con él, así que no se redacta. Cuando ese valor es una credencial (un token, una contraseña, una clave de cliente, o un ajuste de un plugin exec o de un proveedor de autenticación cuyo nombre indica que contiene una), el flujo de eventos indica cuántos encontró en una línea de registro `warning:`. La salida de texto no imprime esa advertencia, y un ajuste como `AWS_PROFILE=dev` nunca se advierte.
 - Una credencial de tu kubeconfig solo se sustituye donde aparece como palabra completa, nunca dentro de una más larga, y nunca cambia lo que hace la ejecución. Con `AWS_PROFILE=prod`, `--profile prod` muestra `--profile [redacted]` y `production` queda intacto, y un usuario que la instalación no usa, con la contraseña `install`, no la detiene. Los secretos que maneja el propio dcctl se sustituyen dondequiera que aparezcan.
 - Con `--output text`, solo se redacta el error que imprime dcctl. El resto es la salida que `dcctl install` ha impreso siempre, que puede mostrarte una credencial a propósito (el resumen de acceso de un bootstrap), y las herramientas que ejecuta, entre ellas kind y un plugin de credenciales exec del kubeconfig, escriben en el terminal como siempre.
 

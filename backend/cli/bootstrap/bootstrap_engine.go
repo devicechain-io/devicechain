@@ -140,7 +140,7 @@ func (e *BootstrapEngine) Run(ctx context.Context, req installflow.Request, rt i
 		return failedBeforeStart(rt, err)
 	}
 	if uncovered.Len() > 0 {
-		_, _ = r.con.stderr().Write(uncovered.Bytes())
+		_, _ = r.warnings().Write(uncovered.Bytes())
 	}
 	// The stopping state, exactly as the install engine has it: announced the moment a
 	// cancel is asked for, and the run closed only once the stage's work has returned.
@@ -270,7 +270,7 @@ func (r *installRun) addSecrets(values ...string) {
 			creds = append(creds, credential{value: v})
 		}
 	}
-	warnUncovered(r.con.stderr(), "instance secret", registerCredentials(r.events, creds))
+	warnUncovered(r.warnings(), "instance secret", registerCredentials(r.events, creds))
 }
 
 // askPassphrase asks a person for an escrow passphrase through the run's prompt broker:

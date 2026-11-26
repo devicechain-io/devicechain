@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
@@ -259,4 +260,39 @@ func TestTokensOnlyInErrorsLeavesTheEventsAlone(t *testing.T) {
 	if got := f.hub.RedactError(errors.New("context prod")).Error(); got != "context [redacted]" {
 		t.Errorf("the error is %q", got)
 	}
+}
+
+// TestTokenRegistrationRacesNoReader: values registered while other goroutines redact
+// never change what a reader already holds. A value registered before the readers
+// started is redacted by every one of them, however many are registered alongside.
+// Run it with -race: an in-place append and sort of the forms a reader still holds is
+// a data race as well as a missed redaction.
+func TestTokenRegistrationRacesNoReader(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	const first = "firstFoundCredential01"
+	must(t, f.hub.AddRedaction(first))
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if got := f.hub.Redact("tool said " + first + " and more"); strings.Contains(got, first) {
+					t.Errorf("a reader missed a value registered before it started: %q", got)
+					return
+				}
+			}
+		}()
+	}
+	for i := 0; i < 300; i++ {
+		must(t, f.hub.AddRedaction(fmt.Sprintf("laterCredential%04dzz", i)))
+	}
+	close(stop)
+	wg.Wait()
 }

@@ -80,13 +80,19 @@ func (r *redactor) addToken(secret string) bool {
 	forms := secretForms(secret, MinRedactionBytes)
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// 🔴 COPY ON WRITE. redact reads tokenForms after letting go of the lock, so the
+	// slice it took must never change under it: an append into its spare capacity
+	// followed by a sort in place would move a credential past the length it holds.
+	// A new slice is built and swapped in; every reader keeps the snapshot it took.
+	next := append([]string(nil), r.tokenForms...)
 	for _, f := range forms {
 		if _, ok := r.tokenSet[f]; !ok {
 			r.tokenSet[f] = struct{}{}
-			r.tokenForms = append(r.tokenForms, f)
+			next = append(next, f)
 		}
 	}
-	sortLongestFirst(r.tokenForms)
+	sortLongestFirst(next)
+	r.tokenForms = next
 	return true
 }
 

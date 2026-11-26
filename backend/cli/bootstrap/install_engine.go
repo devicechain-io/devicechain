@@ -66,7 +66,7 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 		return failedBeforeStart(rt, err)
 	}
 	if uncovered.Len() > 0 {
-		_, _ = r.con.stderr().Write(uncovered.Bytes())
+		_, _ = r.warnings().Write(uncovered.Bytes())
 	}
 	// 🔴 THE STOPPING STATE. A cancel is reported the moment it is requested, naming
 	// the stage it found and whether a tool is still running — and nothing more: the

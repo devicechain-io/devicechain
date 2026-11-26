@@ -263,3 +263,26 @@ func sortedLines(b []byte) string {
 	sort.Strings(lines)
 	return strings.Join(lines, "\n")
 }
+
+// devProfileKubeconfig's exec plugin has AWS_PROFILE=dev: a three-byte setting, not a
+// credential.
+var devProfileKubeconfig = twoContextKubeconfig +
+	"    exec:\n      apiVersion: client.authentication.k8s.io/v1\n      command: dc-plugin\n" +
+	"      env:\n      - name: AWS_PROFILE\n        value: dev\n"
+
+// 🔴 AN ORDINARY EXEC SETTING NEVER CHANGES TEXT OUTPUT, AND IS NEVER WARNED ABOUT.
+// AWS_PROFILE=dev is too short to redact, but it is a setting, not a credential: text
+// output is byte for byte what the same kubeconfig without it prints (no warning on
+// stderr), and the event stream carries no warning about it either.
+func TestAnExecSettingIsNeverWarnedAbout(t *testing.T) {
+	with := runInstallChildRaw(t, findInstallScenario(t, "plain-profile-dev"))
+	without := runInstallChildRaw(t, findInstallScenario(t, "plain-profile-none"))
+	if !bytes.Equal(with.stderr, without.stderr) || sortedLines(with.stdout) != sortedLines(without.stdout) ||
+		with.exit != without.exit {
+		t.Errorf("text output changed:\nstderr with:\n%s\nstderr without:\n%s", with.stderr, without.stderr)
+	}
+	js := runInstallChildRaw(t, findInstallScenario(t, "json-profile-dev"))
+	if bytes.Contains(js.stdout, []byte("warning:")) || bytes.Contains(js.stderr, []byte("warning:")) {
+		t.Errorf("a warning about a setting:\nstdout:\n%s\nstderr:\n%s", js.stdout, js.stderr)
+	}
+}

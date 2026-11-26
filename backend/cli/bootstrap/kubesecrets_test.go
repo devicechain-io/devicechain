@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installflow/testkit"
 	"github.com/devicechain-io/dcctl/internal/installjson"
+	"github.com/devicechain-io/dcctl/internal/installplain"
 )
 
 const (
@@ -336,5 +337,52 @@ func TestKubeconfigExecArgsAndURLPasswordsAreRedacted(t *testing.T) {
 	got := hub.Redact(in)
 	if strings.Contains(got, kcValidationCanary) || strings.Contains(got, "foo+bar") || !strings.Contains(got, "get-token") {
 		t.Errorf("Redact(%q) = %q", in, got)
+	}
+}
+
+// Only a credential by type is counted as uncovered: a short token or password, and an
+// exec env value or auth-provider setting whose name says credential. AWS_PROFILE=dev
+// and an auth provider's short "mode" setting are settings: registered if they can be,
+// never counted, never warned about.
+func TestOnlyATypedCredentialIsCountedUncovered(t *testing.T) {
+	writeKubeconfig(t, validKubeconfig("", "    password: pw3\n"+
+		"    auth-provider:\n      name: oidc\n      config:\n        mode: ab\n        client-secret: cs1\n"+
+		"    exec:\n      apiVersion: client.authentication.k8s.io/v1\n      command: dc-plugin\n"+
+		"      env:\n      - name: AWS_PROFILE\n        value: dev\n      - name: API_TOKEN\n        value: t9z\n"))
+	typed := map[string]bool{}
+	for _, c := range kubeconfigSecrets(clientcmd.NewDefaultClientConfigLoadingRules()) {
+		typed[c.value] = c.typed
+	}
+	for v, want := range map[string]bool{"pw3": true, "cs1": true, "t9z": true, "dev": false, "ab": false} {
+		if got, ok := typed[v]; !ok || got != want {
+			t.Errorf("%q: typed %t (found %t), want %t", v, got, ok, want)
+		}
+	}
+	hub, err := installflow.NewHub(installflow.Options{Sink: &testkit.CaptureSink{}, Clock: testkit.NewManualClock(testkit.Epoch)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := registerCredentials(hub, kubeconfigSecrets(clientcmd.NewDefaultClientConfigLoadingRules())); n != 3 {
+		t.Errorf("%d uncovered, want 3 (pw3, cs1, t9z): a setting is never counted", n)
+	}
+}
+
+// 🔴 TEXT OUTPUT NEVER CARRIES THE WARNING. A typed credential too short to redact is
+// warned about in the event stream (TestShortKubeconfigCredentials); text output
+// renders no log event, so it prints what it always printed.
+func TestTheUncoveredWarningNeverReachesTextOutput(t *testing.T) {
+	writeKubeconfig(t, validKubeconfig("", "    token: tok-"+kcValidationCanary+"\n    password: pw3\n"))
+	e := &InstallEngine{
+		Provider: &fakeProvider{name: "local"}, Options: InstallOptions{Options: Options{AssumeYes: true}}, SkipPreflight: true,
+		Cluster: func(context.Context, Provider, InstallOptions) error { return nil },
+	}
+	var stdout, stderr bytes.Buffer
+	err := installplain.Presenter{Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("")}.Run(
+		t.Context(), e, installflow.Request{Operation: installflow.OperationInstall, AssumeYes: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout.String()+stderr.String(), "warning") {
+		t.Errorf("text output carries the warning:\nstdout %q\nstderr %q", stdout.String(), stderr.String())
 	}
 }

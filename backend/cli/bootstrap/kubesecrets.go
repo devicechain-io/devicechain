@@ -28,6 +28,13 @@ type credential struct {
 	// passphrase, a minted password, the alert and backup credentials it was given)
 	// are registered strictly.
 	found bool
+	// typed marks a found value that is a credential by what it is, not by where it
+	// sits: a token, a password, a client key, a URL's password, and an exec env
+	// value, exec argument or auth-provider setting whose NAME says it holds one.
+	// Only a typed value too short to redact is counted as uncovered; an exec
+	// plugin's AWS_PROFILE=dev is a setting, not a credential, and is never warned
+	// about.
+	typed bool
 }
 
 // kubeconfigSecrets returns the credential values in the kubeconfig files client-go
@@ -42,9 +49,9 @@ type credential struct {
 // nothing; this is the second line, not the first.
 func kubeconfigSecrets(rules *clientcmd.ClientConfigLoadingRules) []credential {
 	var out []credential
-	add := func(v string) {
+	add := func(v string, typed bool) {
 		if v != "" {
-			out = append(out, credential{value: v, found: true})
+			out = append(out, credential{value: v, found: true, typed: typed})
 		}
 	}
 	for _, path := range rules.GetLoadingPrecedence() {
@@ -57,25 +64,27 @@ func kubeconfigSecrets(rules *clientcmd.ClientConfigLoadingRules) []credential {
 			continue
 		}
 		for _, c := range cfg.Clusters {
-			add(urlPassword(c.Cluster.Server))
-			add(urlPassword(c.Cluster.ProxyURL))
+			add(urlPassword(c.Cluster.Server), true)
+			add(urlPassword(c.Cluster.ProxyURL), true)
 		}
 		for _, u := range cfg.AuthInfos {
 			a := u.AuthInfo
-			add(a.Token)
-			add(a.Password)
-			add(string(a.ClientKeyData))
+			add(a.Token, true)
+			add(a.Password, true)
+			add(string(a.ClientKeyData), true)
 			if a.AuthProvider != nil {
-				for _, v := range a.AuthProvider.Config {
-					add(v)
+				for k, v := range a.AuthProvider.Config {
+					add(v, sensitiveFlag(k))
 				}
 			}
 			if a.Exec != nil {
 				for _, env := range a.Exec.Env {
-					add(env.Value)
+					add(env.Value, sensitiveFlag(env.Name))
 				}
+				// A flag's value is there because its name says credential; a shaped
+				// argument is at least 20 bytes, never too short to redact.
 				for _, v := range execArgSecrets(a.Exec.Args) {
-					add(v)
+					add(v, true)
 				}
 			}
 		}
@@ -109,7 +118,8 @@ func execArgSecrets(args []string) []string {
 	return out
 }
 
-// sensitiveFlag reports whether a flag's name says its value is a credential.
+// sensitiveFlag reports whether a flag's, env variable's or setting's name says its
+// value is a credential.
 func sensitiveFlag(name string) bool {
 	name = strings.ToLower(name)
 	for _, w := range []string{"secret", "token", "password", "passwd", "key", "credential"} {
@@ -163,7 +173,7 @@ func registerCredentials(events installflow.Reporter, creds []credential) (uncov
 		if !c.found && events.AddSecret(c.value) == nil {
 			continue
 		}
-		if events.AddRedaction(c.value) != nil {
+		if events.AddRedaction(c.value) != nil && (!c.found || c.typed) {
 			uncovered++
 		}
 	}
@@ -174,8 +184,8 @@ func registerCredentials(events installflow.Reporter, creds []credential) (uncov
 // that echoes one (kubectl, helm or an OpenTofu provider reporting a kubeconfig it
 // could not use) has it redacted. Like registerSecrets, it is defence in depth: no
 // producer puts a kubeconfig value in an event, and a kubeconfig that cannot be
-// used is reported without client-go's reason. A value it cannot cover is warned
-// about on w.
+// used is reported without client-go's reason. A credential it cannot cover is
+// warned about on w.
 func registerKubeconfigSecrets(events installflow.Reporter, w io.Writer) {
 	warnUncovered(w, "kubeconfig credential",
 		registerCredentials(events, kubeconfigSecrets(clientcmd.NewDefaultClientConfigLoadingRules())))
@@ -198,4 +208,24 @@ func (r *installRun) refreshKubeconfigSecrets() {
 	}
 	// Nil: anything it cannot cover was warned about when the run started.
 	registerKubeconfigSecrets(r.events, nil)
+}
+
+// warnings is where the engine says what it could not redact: each line a log.line
+// event at warn level.
+//
+// 🔴 NEVER THE CONSOLE. Text output renders no log.line event, so it prints exactly
+// what it printed before redaction existed; the event stream carries the warning,
+// for the program that reads it.
+func (r *installRun) warnings() io.Writer { return runWarnings{r} }
+
+type runWarnings struct{ r *installRun }
+
+func (w runWarnings) Write(b []byte) (int, error) {
+	for _, line := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+		if line != "" {
+			w.r.emit(installflow.Event{Payload: installflow.LogLine{Level: installflow.LogWarn,
+				Source: "dcctl", Text: installflow.Text(line)}})
+		}
+	}
+	return len(b), nil
 }
