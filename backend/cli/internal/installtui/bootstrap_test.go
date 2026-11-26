@@ -538,7 +538,7 @@ func TestWithdrawnQuestionsAndCloseClearTheScreens(t *testing.T) {
 	d.typeText("half-typed")
 	form := d.f.pass
 	d.send(SecretWithdrawn{ID: "prompt-1"})
-	if d.f.pass != nil || form.input.Value() != "" {
+	if d.f.pass != nil || len(form.field.buf) != 0 {
 		t.Fatal("a withdrawn question left its input")
 	}
 	// An empty Enter answers nothing.
@@ -551,7 +551,7 @@ func TestWithdrawnQuestionsAndCloseClearTheScreens(t *testing.T) {
 	d.typeText("x")
 	form = d.f.pass
 	d.f.Close()
-	if form.input.Value() != "" {
+	if len(form.field.buf) != 0 {
 		t.Fatal("Close left the input")
 	}
 	late := installflow.NewReveal([]byte("late"))
@@ -618,5 +618,147 @@ func TestBootstrapCommandQuotes(t *testing.T) {
 	r := BootstrapCommand(in, EscrowChoice{Mode: EscrowRestore, Path: "/k/acme.escrow"}, nil)
 	if !strings.Contains(r, "--restore-root-key=/k/acme.escrow --escrow-passphrase-file=<file holding") {
 		t.Fatalf("restore: %s", r)
+	}
+}
+
+// zeroed reports whether every byte of a backing array is zero.
+func zeroed(b []byte) bool {
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// passphraseForm opens the entry form on a fresh flow and returns its reply.
+func passphraseForm(t *testing.T) (*bsDriver, *secretReply) {
+	t.Helper()
+	d := newBSDriver(t, bsSetup(bsCaps(terminal.L1, 100, 30)))
+	d.typeText("acme")
+	d.throughPlanAsIs()
+	reply := &secretReply{ch: make(chan installflow.Response, 1)}
+	d.send(SecretQuestion{Question: installflow.Question{ID: "prompt-1", Kind: installflow.PromptSecret,
+		Question: installflow.QuestionEscrowPassphrase}, reply: reply})
+	return d, reply
+}
+
+// 🔴 THE PASSPHRASE'S BYTES ARE WIPED, NOT ABANDONED. Every backing array the form
+// ever held — including the ones it outgrew while the passphrase was typed — is
+// zero after submit, Esc, withdrawal and Close.
+func TestThePassphraseBuffersAreWiped(t *testing.T) {
+	long := strings.Repeat("Zx9?Qv=7/Wb2+Lm", 12) // long enough to outgrow the first array
+	for name, end := range map[string]func(d *bsDriver){
+		"submit":   func(d *bsDriver) { d.keys("enter") },
+		"esc":      func(d *bsDriver) { d.keys("esc") },
+		"withdraw": func(d *bsDriver) { d.send(SecretWithdrawn{ID: "prompt-1"}) },
+		"close":    func(d *bsDriver) { d.f.Close() },
+	} {
+		d, reply := passphraseForm(t)
+		d.typeText(long[:5])
+		first := d.f.pass.field.buf[:cap(d.f.pass.field.buf)]
+		d.typeText(long[5:])
+		d.send(tea.PasteMsg{Content: "pasted"})
+		last := d.f.pass.field.buf[:cap(d.f.pass.field.buf)]
+		if &first[0] == &last[0] {
+			t.Fatalf("%s: the field never outgrew its first array; the test proves nothing", name)
+		}
+		if !zeroed(first) {
+			t.Errorf("%s: an outgrown array still holds the passphrase", name)
+		}
+		end(d)
+		if !zeroed(last) {
+			t.Errorf("%s: the field's array still holds the passphrase", name)
+		}
+		if name == "submit" {
+			resp := <-reply.ch
+			if got := string(resp.Secret.Expose()); got != long+"pasted" {
+				t.Errorf("submit answered %d bytes, want %d", len(got), len(long)+6)
+			}
+		}
+	}
+	// Backspace wipes the byte it removes, too.
+	d, _ := passphraseForm(t)
+	d.typeText("ab")
+	arr := d.f.pass.field.buf[:cap(d.f.pass.field.buf)]
+	d.send(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if arr[1] != 0 || string(d.f.pass.field.buf) != "a" {
+		t.Fatalf("backspace left %q in the array", arr[:2])
+	}
+}
+
+// 🔴 A SCREEN THAT IS NOT ON SCREEN TAKES NO INPUT. In a terminal too small to show
+// it, the escrow screen shows a resize message instead — and the keys that would
+// select --no-escrow and continue do nothing, so the warning cannot be skipped
+// unseen. The same holds for every screen of the flow.
+func TestATooSmallTerminalTakesNoChoice(t *testing.T) {
+	d := newBSDriver(t, bsSetup(bsCaps(terminal.L1, 100, 30)))
+	d.typeText("acme")
+	toEscrow(d)
+	if d.f.phase != phaseEscrow {
+		t.Fatal("not at the escrow screen")
+	}
+	d.send(tea.WindowSizeMsg{Width: 50, Height: 14})
+	d.keys("tab", "space", "tab", "tab", "enter")
+	if len(d.out) != 0 || d.f.esc.mode != EscrowWrite {
+		t.Fatalf("an unseen escrow screen took a choice: mode %q, sent %v", d.f.esc.mode, d.out)
+	}
+	if v := d.render(); !strings.Contains(v, "too small") {
+		t.Fatalf("no resize message:\n%s", v)
+	}
+	d.keys("f1")
+	if !d.f.help {
+		t.Fatal("help is refused while too small")
+	}
+	d.keys("esc")
+	d.send(tea.WindowSizeMsg{Width: 100, Height: 30})
+	d.keys("tab", "space")
+	if d.f.esc.mode != EscrowNone || !strings.Contains(d.render(), "PERMANENT LOSS") {
+		t.Fatal("the screen did not come back once there was room")
+	}
+
+	// The first-login acknowledgement and the reveal take no key unseen either.
+	seed := canaryValue("superuser-seed")
+	d = postRun(t, bsCaps(terminal.L1, 100, 30), seed)
+	d.keys("enter")
+	d.send(tea.WindowSizeMsg{Width: 50, Height: 14})
+	d.keys("s", "space", "enter")
+	if d.f.phase != phaseFirstLogin || d.f.login.spent {
+		t.Fatal("an unseen first-login screen revealed or was left")
+	}
+	d.send(tea.WindowSizeMsg{Width: 100, Height: 30})
+	d.keys("s")
+	d.send(tea.WindowSizeMsg{Width: 50, Height: 14})
+	d.keys("space", "enter")
+	if d.f.phase != phaseFirstLogin || d.f.login.stored {
+		t.Fatal("an unseen reveal was acknowledged")
+	}
+	if strings.Contains(d.render(), seed) {
+		t.Fatal("the resize message shows the seed")
+	}
+}
+
+// The reveal, its acknowledgement and the nudge fit every supported size, so a
+// shown password is never cut off or left on a screen that takes no keys.
+func TestTheRevealFitsEverySupportedSize(t *testing.T) {
+	for _, size := range bsSizes {
+		for _, level := range []terminal.Level{terminal.L1, terminal.L2} {
+			d := postRun(t, bsCaps(level, size[0], size[1]), canaryValue("superuser-seed"))
+			d.keys("enter", "s", "enter")
+			if !d.f.shown() || !strings.Contains(d.render(), canaryValue("superuser-seed")) {
+				t.Errorf("L%d %dx%d: the reveal does not fit:\n%s", level, size[0], size[1], d.render())
+			}
+		}
+	}
+}
+
+// A paste into a form the terminal cannot show is dropped, as a key is.
+func TestATooSmallTerminalTakesNoPaste(t *testing.T) {
+	d, _ := passphraseForm(t)
+	d.send(tea.WindowSizeMsg{Width: 50, Height: 14})
+	d.send(tea.PasteMsg{Content: "unseen"})
+	d.keys("x")
+	if len(d.f.pass.field.buf) != 0 {
+		t.Fatal("an unseen form took input")
 	}
 }

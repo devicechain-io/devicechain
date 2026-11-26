@@ -132,6 +132,9 @@ func TestBootstrapScreenGoldens(t *testing.T) {
 				d := newBSDriver(t, s)
 				sc.drive(d)
 				view := d.render() + "\n"
+				if n := strings.Count(view, "\n"); n > size[1] {
+					t.Errorf("%s at %dx%d: %d lines; part of the screen would not be seen", sc.name, size[0], size[1], n)
+				}
 				name := fmt.Sprintf("bootstrap/%s/L%d-%dx%d", sc.name, level, size[0], size[1])
 				testkit.AssertNoCanary(t, name, []byte(view))
 				text := bsStrip(view)
@@ -155,8 +158,9 @@ func TestBootstrapScreenGoldens(t *testing.T) {
 	}
 }
 
-// Too small a terminal is asked to grow before the run; nothing is cut.
-func TestBootstrapScreensAskForSpaceBeforeTheRun(t *testing.T) {
+// Too small a terminal is asked to grow, before the run and after it; no screen
+// is drawn cut. Before the run it also points at --ui=plain.
+func TestBootstrapScreensAskForSpace(t *testing.T) {
 	d := newBSDriver(t, bsSetup(bsCaps(terminal.L4, 50, 14)))
 	if v := bsStrip(d.render()); !strings.Contains(v, "too small") || !strings.Contains(v, "--ui=plain") {
 		t.Fatalf("minimal view:\n%s", v)
@@ -164,7 +168,13 @@ func TestBootstrapScreensAskForSpaceBeforeTheRun(t *testing.T) {
 	d = newBSDriver(t, bsSetup(bsCaps(terminal.L4, 100, 30)))
 	toPostRun(d)
 	d.send(tea.WindowSizeMsg{Width: 50, Height: 14})
-	if v := bsStrip(d.render()); strings.Contains(v, "too small") || !strings.Contains(v, "Escrow receipt") {
-		t.Fatalf("an after-run screen was hidden for its size:\n%s", v)
+	if v := bsStrip(d.render()); !strings.Contains(v, "too small") || strings.Contains(v, "Escrow receipt") ||
+		strings.Contains(v, "--ui=plain") {
+		t.Fatalf("an after-run screen at 50x14:\n%s", v)
+	}
+	// Taller than the terminal is as unseen as narrower: 100 columns, 12 rows.
+	d.send(tea.WindowSizeMsg{Width: 100, Height: 12})
+	if v := bsStrip(d.render()); !strings.Contains(v, "too small") {
+		t.Fatalf("a screen taller than the terminal was drawn:\n%s", v)
 	}
 }

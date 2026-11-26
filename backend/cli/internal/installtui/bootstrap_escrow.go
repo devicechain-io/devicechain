@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
@@ -383,23 +384,60 @@ func (r SecretResponder) Respond(ctx context.Context, q installflow.Question) (i
 
 // passphraseModel is the escrow entry form, shown while the run waits on a
 // secret question. Nothing typed is ever drawn: no characters, no mask, no
-// count. The value lives in the input until Enter hands it to the run as an
-// installflow.Secret, and the input is cleared at that moment.
+// count. The value lives in a secretField until Enter hands it to the run as an
+// installflow.Secret, and the field is wiped at that moment.
 type passphraseModel struct {
 	q     SecretQuestion
-	input textinput.Model
+	field secretField
 	empty bool
 	notes io.Writer
 }
 
 func newPassphraseModel(q SecretQuestion, notes io.Writer) *passphraseModel {
-	in := textinput.New()
-	in.Prompt = ""
-	in.EchoMode = textinput.EchoNone
-	in.KeyMap.Paste.SetEnabled(false)
-	in.KeyMap.AcceptSuggestion.SetEnabled(false)
-	_ = in.Focus()
-	return &passphraseModel{q: q, input: in, notes: notes}
+	return &passphraseModel{q: q, notes: notes}
+}
+
+// secretField is the passphrase's one buffer, owned here so it can be wiped. A
+// Bubbles textinput cannot hold it: its runes are unexported and Reset only drops
+// the slice, leaving the passphrase in the abandoned array. Every array this
+// field outgrows is zeroed as it is replaced, and wipe zeroes the current one.
+// The strings a terminal delivers keys and pastes in are Go strings, which no
+// one can clear; nothing here claims otherwise.
+type secretField struct{ buf []byte }
+
+// insert appends text, dropping control characters.
+func (f *secretField) insert(text string) {
+	for _, r := range text {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			continue
+		}
+		var enc [utf8.UTFMax]byte
+		n := utf8.EncodeRune(enc[:], r)
+		if len(f.buf)+n > cap(f.buf) {
+			grown := make([]byte, len(f.buf), max(64, 2*(len(f.buf)+n)))
+			copy(grown, f.buf)
+			clear(f.buf[:cap(f.buf)])
+			f.buf = grown
+		}
+		f.buf = append(f.buf, enc[:n]...)
+		clear(enc[:])
+	}
+}
+
+// backspace removes the last character and zeroes its bytes.
+func (f *secretField) backspace() {
+	if len(f.buf) == 0 {
+		return
+	}
+	_, n := utf8.DecodeLastRune(f.buf)
+	clear(f.buf[len(f.buf)-n:])
+	f.buf = f.buf[:len(f.buf)-n]
+}
+
+// wipe zeroes the whole array and empties the field.
+func (f *secretField) wipe() {
+	clear(f.buf[:cap(f.buf)])
+	f.buf = f.buf[:0]
 }
 
 var (
@@ -411,34 +449,36 @@ var (
 func (m *passphraseModel) update(msg tea.Msg) (answered bool) {
 	switch msg := msg.(type) {
 	case tea.PasteMsg:
-		m.input, _ = m.input.Update(msg)
+		m.field.insert(msg.Content)
 		m.empty = false
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "enter":
-			v := m.input.Value()
-			if v == "" {
+			if len(m.field.buf) == 0 {
 				m.empty = true
 				return false
 			}
-			secret := installflow.NewSecret([]byte(v))
-			m.input.Reset()
+			secret := installflow.NewSecret(m.field.buf)
+			m.field.wipe()
 			m.note("escrow passphrase entered; it is not shown and not kept by the screen")
 			m.q.reply.answer(installflow.Response{Secret: secret})
 			return true
-		case "esc":
+		case "esc", "ctrl+u":
 			// Esc never stops the run; here it empties the field.
-			m.input.Reset()
+			m.field.wipe()
+			return false
+		case "backspace":
+			m.field.backspace()
 			return false
 		}
-		m.input, _ = m.input.Update(msg)
+		m.field.insert(msg.Text)
 		m.empty = false
 	}
 	return false
 }
 
-// clear empties the input: on withdrawal, and when the program ends.
-func (m *passphraseModel) clear() { m.input.Reset() }
+// clear wipes the field: on withdrawal, and when the program ends.
+func (m *passphraseModel) clear() { m.field.wipe() }
 
 func (m *passphraseModel) note(s string) {
 	if m.notes != nil {

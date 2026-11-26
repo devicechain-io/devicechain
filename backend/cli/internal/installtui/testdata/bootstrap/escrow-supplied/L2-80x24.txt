@@ -1,26 +1,24 @@
-+------------------------------------------------------------------------------+
-| DeviceChain - dcctl bootstrap - instance acme - kind-devicechain - v1.11.0   |
-| ---------------------------------------------------------------------------- |
-| Root-key escrow                                                              |
-|                                                                              |
-| DeviceChain encrypts stored credentials with this instance's root key.       |
-| Database backups do not contain it. To recover after losing the cluster you  |
-| need this escrow file and its passphrase. Copy the file off this machine;    |
-| keep the passphrase separately.                                              |
-|                                                                              |
-| > (*) Write an encrypted escrow file (recommended)                           |
-|   ( ) Do not escrow the root key (--no-escrow)                               |
-|                                                                              |
-|   Location  /home/op/.devicechain/escrow/acme-rootkey.escrow                 |
-|             default for this instance, on this machine, outside what 'dcctl  |
-|             destroy' removes                                                 |
-|                                                                              |
-|   Passphrase supplied by protected file (--escrow-passphrase-file). Nothing  |
-|   will be asked.                                                             |
-|                                                                              |
-|    [Back]    [Continue]                                                      |
-|                                                                              |
-| ---------------------------------------------------------------------------- |
-| Tab next - Shift+Tab previous - Space toggle - Enter activate - Esc back -   |
-| ?/F1 help                                                                    |
-+------------------------------------------------------------------------------+
+DeviceChain - dcctl bootstrap - instance acme - kind-devicechain - v1.11.0
+----------------------------------------------------------------------------
+Root-key escrow
+
+DeviceChain encrypts stored credentials with this instance's root key.
+Database backups do not contain it. To recover after losing the cluster you
+need this escrow file and its passphrase. Copy the file off this machine;
+keep the passphrase separately.
+
+> (*) Write an encrypted escrow file (recommended)
+  ( ) Do not escrow the root key (--no-escrow)
+
+  Location  /home/op/.devicechain/escrow/acme-rootkey.escrow
+            default for this instance, on this machine, outside what 'dcctl
+            destroy' removes
+
+  Passphrase supplied by protected file (--escrow-passphrase-file). Nothing
+  will be asked.
+
+   [Back]    [Continue]
+
+----------------------------------------------------------------------------
+Tab next - Shift+Tab previous - Space toggle - Enter activate - Esc back -
+?/F1 help

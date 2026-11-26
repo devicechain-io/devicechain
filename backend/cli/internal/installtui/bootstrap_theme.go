@@ -247,7 +247,7 @@ type bsScreen struct {
 	title  string
 	body   []string
 	keys   []key.Binding
-	before bool // a screen shown before the run starts: too small a terminal asks for a resize
+	before bool // shown before the run: too small a terminal also suggests --ui=plain
 }
 
 // contentWidth is the width a screen's body is wrapped to.
@@ -261,24 +261,81 @@ func (t bsTheme) contentWidth() int {
 	return max(t.width, 20)
 }
 
-// frame draws the persistent chrome around a screen and writes it through the
-// level's profile.
-func (t bsTheme) frame(header string, s bsScreen) string {
-	w := t.contentWidth()
-	if t.layout() == terminal.Minimal && s.before {
-		return t.render(strings.Join(t.para(rolePlain, "", "This terminal is too small for the bootstrap screens "+
-			"(at least 60x16). Make it larger, or run the same command with --ui=plain.", max(t.width, 20)), "\n"))
+// compose lays a screen out inside the terminal, trying a tighter layout each
+// time one does not fit: the full chrome; no outer border; no blank lines in the
+// body; then no rules, no spacing and a one-line header. ok is false when even
+// the tightest does not fit, and always in the minimal layout.
+//
+// 🔴 A SCREEN THAT DOES NOT FIT IS NOT SHOWN, AND TAKES NO INPUT. A terminal cuts
+// what is taller than it, so a screen drawn anyway could take a choice whose
+// warning was cut off. The flow asks fits before it routes a key (BootstrapFlow.key).
+func (t bsTheme) compose(header string, s bsScreen) ([]string, bool) {
+	if t.layout() == terminal.Minimal {
+		return nil, false
 	}
+	w := t.contentWidth()
 	rule := t.paint(roleDim, strings.Repeat(t.ruleChar(), w))
-	var lines []string
-	lines = append(lines, t.para(rolePlain, "", header, w)...)
-	lines = append(lines, rule, t.paint(roleTitle, s.title), "")
-	lines = append(lines, s.body...)
-	lines = append(lines, "", rule)
-	lines = append(lines, t.footer(s.keys, w)...)
-	switch t.layout() {
-	case terminal.Full, terminal.SingleColumn:
-		lines = t.border(lines, w)
+	bordered := t.layout() == terminal.Full || t.layout() == terminal.SingleColumn
+	for tight := 0; tight < 4; tight++ {
+		var lines []string
+		body := s.body
+		if tight >= 2 {
+			body = nil
+			for _, l := range s.body {
+				if strings.TrimSpace(l) != "" {
+					body = append(body, l)
+				}
+			}
+		}
+		if tight >= 3 {
+			lines = append(lines, t.oneLine(header, w), t.paint(roleTitle, s.title))
+			lines = append(lines, body...)
+		} else {
+			lines = append(lines, t.para(rolePlain, "", header, w)...)
+			lines = append(lines, rule, t.paint(roleTitle, s.title), "")
+			lines = append(lines, body...)
+			lines = append(lines, "", rule)
+		}
+		lines = append(lines, t.footer(s.keys, w)...)
+		if tight == 0 && bordered {
+			lines = t.border(lines, w)
+		}
+		if t.height <= 0 || len(lines) <= t.height {
+			return lines, true
+		}
+	}
+	return nil, false
+}
+
+// fits reports whether the screen is shown whole: whether it may take input.
+func (t bsTheme) fits(header string, s bsScreen) bool {
+	_, ok := t.compose(header, s)
+	return ok
+}
+
+// oneLine is text cut to width cells, marked when cut.
+func (t bsTheme) oneLine(text string, width int) string {
+	if lipgloss.Width(text) <= width {
+		return text
+	}
+	mark := "…"
+	if !t.unicode {
+		mark = "..."
+	}
+	return text[:cutAt(text, max(width-lipgloss.Width(mark), 1))] + mark
+}
+
+// frame draws the persistent chrome around a screen and writes it through the
+// level's profile; a screen that does not fit is replaced by a request for room.
+func (t bsTheme) frame(header string, s bsScreen) string {
+	lines, ok := t.compose(header, s)
+	if !ok {
+		msg := "This terminal is too small to show this screen. Make it larger to continue: nothing is " +
+			"chosen or changed while it is this small. F1 shows the keys; Ctrl+C stops."
+		if s.before {
+			msg += " Or run the same command with --ui=plain."
+		}
+		return t.render(strings.Join(t.para(rolePlain, "", msg, max(t.width, 20)), "\n"))
 	}
 	return t.render(strings.Join(lines, "\n"))
 }

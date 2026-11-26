@@ -165,6 +165,9 @@ func (f *BootstrapFlow) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return f, f.key(msg)
 	case tea.PasteMsg:
+		if f.help || !f.shown() {
+			return f, nil
+		}
 		return f, f.route(msg)
 	}
 	return f, nil
@@ -185,8 +188,15 @@ func (f *BootstrapFlow) key(k tea.KeyPressMsg) tea.Cmd {
 		f.help = true
 		return nil
 	}
+	if !f.shown() {
+		return nil // a screen the terminal cannot show whole takes no input
+	}
 	return f.route(k)
 }
+
+// shown reports whether the current screen is on the terminal whole. Only then
+// may it take a key: a choice whose warning was cut off is a choice made unseen.
+func (f *BootstrapFlow) shown() bool { return f.theme.fits(f.header(), f.current()) }
 
 func (f *BootstrapFlow) route(msg tea.Msg) tea.Cmd {
 	if f.pass != nil {

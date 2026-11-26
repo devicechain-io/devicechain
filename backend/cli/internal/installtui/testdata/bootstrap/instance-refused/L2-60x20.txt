@@ -4,7 +4,6 @@ Instance
 
 Choose the instance to create on this cluster. No changes
 have been made.
-
 > Name          Acme|
                 ERROR: instance names are lower-case
                 letters, digits and hyphens
@@ -13,9 +12,7 @@ have been made.
   Extra areas   none
   TLS           [x] serve HTTPS with a self-signed certificate
   Object store  < auto >  (1 of 3)
-
   Cluster       Standard, single node  (inherited, read-only)
-
    [Back]    [Continue]
 
 ------------------------------------------------------------
