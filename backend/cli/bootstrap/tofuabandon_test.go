@@ -13,6 +13,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 // 🔴 AN INTERRUPTED COMMAND THAT NEVER COMES BACK IS GIVEN UP ON, AND SAYS SO. This is
@@ -155,6 +157,12 @@ func TestALiveCommandIsNeverAbandoned(t *testing.T) {
 // is real BEFORE the interrupt, because a fixture that stopped reproducing it would
 // leave a green test proving nothing.
 func TestAnInterruptedApplyWhoseOutputPipeIsHeldIsAbandoned(t *testing.T) {
+	t.Run("plain", func(t *testing.T) { checkInterruptedApplyWithHeldPipe(t, false) })
+	t.Run("observed", func(t *testing.T) { checkInterruptedApplyWithHeldPipe(t, true) })
+}
+
+func checkInterruptedApplyWithHeldPipe(t *testing.T, observe bool) {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("needs a POSIX fake tofu")
 	}
@@ -173,7 +181,13 @@ func TestAnInterruptedApplyWhoseOutputPipeIsHeldIsAbandoned(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	base := context.Background()
+	if observe {
+		p := newProgressRun(t, true, installflow.StepInstallPrerequisites)
+		base = p.ctx
+		defer p.finish(t)
+	}
+	ctx, cancel := context.WithCancel(base)
 	defer cancel()
 
 	var applyErr error

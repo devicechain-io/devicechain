@@ -1475,7 +1475,7 @@ type upgradeTofu interface {
 	stateLister
 	Plan(ctx context.Context, opts ...tfexec.PlanOption) (bool, error)
 	ShowPlanFile(ctx context.Context, planPath string, opts ...tfexec.ShowOption) (*tfjson.Plan, error)
-	Apply(ctx context.Context, opts ...tfexec.ApplyOption) error
+	Apply(ctx context.Context, opts ...applyOption) error
 	infraOutputReader
 }
 
@@ -1681,7 +1681,7 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 	if err := writeEventStoreVarFile(p.rootdir, st); err != nil {
 		return err
 	}
-	if err := p.tf.Apply(ctx, tfexec.DirOrPlan(p.planPath)); err != nil {
+	if err := p.tf.Apply(ctx, applyPlan(p.planPath)); err != nil {
 		if !isCNPGWebhookUnavailable(err.Error()) {
 			return fmt.Errorf("applying instance %q's infrastructure: %w", st.Instance, err)
 		}
@@ -1699,7 +1699,7 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 		again.walNotice, again.walWarnings = p.walNotice, p.walWarnings
 		*p = *again
 		p.say()
-		if rerr := p.tf.Apply(ctx, tfexec.DirOrPlan(p.planPath)); rerr != nil {
+		if rerr := p.tf.Apply(ctx, applyPlan(p.planPath)); rerr != nil {
 			return fmt.Errorf("applying instance %q's infrastructure, retried after waiting on the "+
 				"CloudNativePG admission webhook: %w (the apply that triggered the wait failed with: %v)",
 				st.Instance, rerr, err)

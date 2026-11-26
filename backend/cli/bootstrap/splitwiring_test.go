@@ -196,7 +196,7 @@ type scriptedApplier struct {
 	calls   int
 }
 
-func (s *scriptedApplier) Apply(context.Context, ...tfexec.ApplyOption) error {
+func (s *scriptedApplier) Apply(context.Context, ...applyOption) error {
 	i := s.calls
 	s.calls++
 	if i < len(s.results) {
