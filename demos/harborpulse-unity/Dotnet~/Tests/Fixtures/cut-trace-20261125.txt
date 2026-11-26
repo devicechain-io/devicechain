@@ -51,7 +51,8 @@ c300|184.3|4b|4b-1|air|claim|SHOWN|825.3|Running, but moving nothing. / Critical
 c300|196.2|6|6a|outage|scenario|SHOWN|824.7|East Quay loses power.
 c300|205.2|6|6c|quiet|pre|SHOWN|876.2|East Quay has gone quiet…
 c300|209.1|6|6c|silence|claim|SHOWN|880.1|The platform notices the silence.
-c300|215.2|6|6d|absence-count|claim|SHOWN|886.2|6 silent devices, 6 alarms.
+c300|212.1|6|6c|exact|claim|SHOWN|883.1|Exactly the six that went quiet.
+c300|215.7|6|6d|absence-count|claim|SHOWN|886.7|6 silent devices, 6 alarms.
 c300|221.2|7|7a|power-back|scenario|SHOWN|914.7|Power is back.
 c300|227.2|7|7b|backdated|claim|SHOWN|921.4|Buffered readings arrive / with their original timestamps.
 c300|240.7|7|7b|all-buffered|claim|SHOWN|950.0|Every buffered reading, / stored at the time it was taken.

@@ -57,6 +57,9 @@ func (f *alertFlags) register(cmd *cobra.Command) {
 	fl.BoolVar(&f.clear, "clear-alert-routing", false, alertClearUsage)
 }
 
+// readAlertFile allows tests to observe file reads relative to the preflight report.
+var readAlertFile = os.ReadFile
+
 // request reads the files the flags name and validates the whole request from argv alone,
 // before any cluster exists.
 func (f *alertFlags) request() (bootstrap.AlertRoutingRequest, error) {
@@ -70,7 +73,7 @@ func (f *alertFlags) request() (bootstrap.AlertRoutingRequest, error) {
 		Clear:           f.clear,
 	}
 	if f.smtpPassFile != "" {
-		b, err := os.ReadFile(f.smtpPassFile)
+		b, err := readAlertFile(f.smtpPassFile)
 		if err != nil {
 			return r, fmt.Errorf("--alert-smtp-password-file: %w", err)
 		}
@@ -80,7 +83,7 @@ func (f *alertFlags) request() (bootstrap.AlertRoutingRequest, error) {
 		}
 	}
 	if f.config != "" {
-		b, err := os.ReadFile(f.config)
+		b, err := readAlertFile(f.config)
 		if err != nil {
 			return r, fmt.Errorf("--alert-config: %w", err)
 		}

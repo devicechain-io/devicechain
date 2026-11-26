@@ -460,6 +460,105 @@ func TestRetryStartsWithAFreshDenominator(t *testing.T) {
 	}
 }
 
+func indeterminate(id installflow.StepID, attempt int, metric string, cur int64) installflow.Event {
+	return installflow.Event{Step: id, Attempt: attempt, Payload: installflow.StepProgress{
+		MetricID: metric, Mode: installflow.ProgressIndeterminate, Current: cur,
+		Unit: installflow.UnitActions, Source: "test"}}
+}
+
+type delivered struct {
+	attempt int
+	mode    installflow.ProgressMode
+	current int64
+}
+
+func progressDelivered(envs []installflow.Envelope) []delivered {
+	var out []delivered
+	for _, e := range envs {
+		if p, ok := e.Payload.(installflow.StepProgress); ok {
+			out = append(out, delivered{e.Attempt, p.Mode, p.Current})
+		}
+	}
+	return out
+}
+
+// TestCoalescingKeepsTheIndeterminateToMeasuredTransition: behind a stalled
+// presenter, a value with an unknown total is queued, then the measured values
+// that follow are held and flushed when the step ends. The flush coalesces the
+// measured values, never the unknown total before them: a presenter must see
+// that the total was unknown before it was known.
+func TestCoalescingKeepsTheIndeterminateToMeasuredTransition(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	f.sink.Hold()
+	must(t, f.hub.Emit(started(false, manifest("a"))))
+	must(t, f.hub.Emit(stepStart("a", 1)))
+	must(t, f.hub.Emit(indeterminate("a", 1, "m", 0))) // queued, undelivered
+	for i := int64(0); i <= 3; i++ {
+		must(t, f.hub.Emit(measured("a", 1, "m", i, 3))) // held: same instant
+	}
+	must(t, f.hub.Emit(stepDone("a", 1, installflow.StepSucceeded)))
+	must(t, f.hub.Finish(okSummary()))
+	f.sink.Release()
+	envs := f.wait(t)
+	if err := testkit.VerifyStream(envs); err != nil {
+		t.Fatal(err)
+	}
+	want := []delivered{{1, installflow.ProgressIndeterminate, 0}, {1, installflow.ProgressMeasured, 3}}
+	if got := progressDelivered(envs); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("progress delivered %v, want %v", got, want)
+	}
+}
+
+// TestCoalescingKeepsAHeldIndeterminateValue: the unknown total is itself
+// held back by the interval when a measured value arrives. The measured value
+// must not overwrite it in the hold.
+func TestCoalescingKeepsAHeldIndeterminateValue(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	f.sink.Hold()
+	must(t, f.hub.Emit(started(false, manifest("a"))))
+	must(t, f.hub.Emit(stepStart("a", 1)))
+	must(t, f.hub.Emit(indeterminate("a", 1, "m", 0)))
+	must(t, f.hub.Emit(indeterminate("a", 1, "m", 1))) // held
+	must(t, f.hub.Emit(measured("a", 1, "m", 2, 3)))
+	must(t, f.hub.Emit(measured("a", 1, "m", 3, 3)))
+	must(t, f.hub.Emit(stepDone("a", 1, installflow.StepSucceeded)))
+	must(t, f.hub.Finish(okSummary()))
+	f.sink.Release()
+	envs := f.wait(t)
+	if err := testkit.VerifyStream(envs); err != nil {
+		t.Fatal(err)
+	}
+	want := []delivered{{1, installflow.ProgressIndeterminate, 1}, {1, installflow.ProgressMeasured, 3}}
+	if got := progressDelivered(envs); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("progress delivered %v, want %v", got, want)
+	}
+}
+
+// TestCoalescingNeverCrossesAnAttempt: behind a stalled presenter, attempt
+// 1's last value is still queued when attempt 2 reports. Attempt 2's value
+// must not replace it: attempt 1's last value arrives, inside attempt 1.
+func TestCoalescingNeverCrossesAnAttempt(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	f.sink.Hold()
+	must(t, f.hub.Emit(started(false, manifest("a"))))
+	must(t, f.hub.Emit(stepStart("a", 1)))
+	must(t, f.hub.Emit(measured("a", 1, "m", 4, 5)))
+	must(t, f.hub.Emit(stepFail("a", 1)))
+	must(t, f.hub.Emit(stepStart("a", 2)))
+	must(t, f.hub.Emit(measured("a", 2, "m", 1, 1)))
+	must(t, f.hub.Emit(stepDone("a", 2, installflow.StepSucceeded)))
+	must(t, f.hub.Finish(okSummary()))
+	f.sink.Release()
+	envs := f.wait(t)
+	if err := testkit.VerifyStream(envs); err != nil {
+		t.Fatal(err)
+	}
+	want := []delivered{{1, installflow.ProgressMeasured, 4}, {2, installflow.ProgressMeasured, 1}}
+	if got := progressDelivered(envs); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("progress delivered %v, want %v", got, want)
+	}
+}
+
 // TestSlowSinkNeverBlocksLogsOrProgress stalls the presenter completely and
 // floods the hub: every call returns at once, and what waits is bounded.
 func TestSlowSinkNeverBlocksLogsOrProgress(t *testing.T) {

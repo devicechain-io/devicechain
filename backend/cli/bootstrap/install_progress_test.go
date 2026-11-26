@@ -181,6 +181,29 @@ func TestARetryCountsAgainstItsOwnPlan(t *testing.T) {
 	checkRetryStream(t, envs)
 }
 
+// TestARetryCountsAgainstItsOwnPlanBehindAStalledPresenter is the same retry with the
+// presenter stalled until the run closes, so every value the hub coalesces is still
+// undelivered when the next one arrives. The stream must read the same: the retry's
+// unknown total is not merged into the one action it then planned and did.
+func TestARetryCountsAgainstItsOwnPlanBehindAStalledPresenter(t *testing.T) {
+	p := newProgressRun(t, true, installflow.StepInstallPrerequisites)
+	p.sink.Hold()
+	t.Cleanup(p.sink.Release)
+	feed := func(name string) {
+		sp := p.run.tofuProgress()
+		sp.tofu(tofujson.Progress{})
+		o := tofujson.New(nil, nil, sp.tofu)
+		_, _ = o.Write(readTofuFixture(t, name))
+		o.Close()
+	}
+	feed("failed.jsonl")
+	p.run.retry("cnpg-admission-unreachable")
+	feed("retried.jsonl")
+	p.sink.Release()
+	envs := p.finish(t)
+	checkRetryStream(t, envs)
+}
+
 func checkRetryStream(t *testing.T, envs []installflow.Envelope) {
 	t.Helper()
 	ps := progressOf(envs, metricTofuActions)

@@ -161,7 +161,9 @@ func (api *Api) fleetControl(ctx context.Context, token, transition string, fn f
 	if written.RowsAffected != 1 || !request.ControlRequestedAt.Valid {
 		return nil, gorm.ErrRecordNotFound
 	}
+	var enteredRunning bool
 	err = db.Transaction(func(tx *gorm.DB) error {
+		enteredRunning = false
 		if err := fleetSetLockTimeout(tx, fleetFenceWait); err != nil {
 			return err
 		}
@@ -179,6 +181,7 @@ func (api *Api) fleetControl(ctx context.Context, token, transition string, fn f
 		if err != nil {
 			return err
 		}
+		enteredRunning = changes["dispatch"] == FleetDispatchRunning
 		now := time.Now()
 		changes["execution_epoch"] = op.ExecutionEpoch + 1
 		changes["state_changed_at"] = now
@@ -210,6 +213,14 @@ func (api *Api) fleetControl(ctx context.Context, token, transition string, fn f
 			Update("control_requested_at", nil).Error
 		if clearErr != nil {
 			err = errors.Join(err, clearErr)
+		}
+		// A start or resume begins a new execution epoch, and a hold an earlier epoch left is not
+		// this one's. Above all the POST_ERROR hold: its start is the dependency auto-pause clock,
+		// and carried across a pause it would re-pause a resumed operation on its first pass.
+		if err == nil && enteredRunning {
+			err = api.RDB.DB(clearCtx).Session(&gorm.Session{SkipDefaultTransaction: true}).Model(&FleetOperationRuntime{}).
+				Where("operation_id = ?", head.ID).
+				Updates(map[string]any{"hold_code": "", "hold_since": nil, "hold_seen_at": nil}).Error
 		}
 	}
 	if err != nil {
@@ -386,7 +397,12 @@ func (api *Api) AbortFleetOperation(ctx context.Context, token, actor string) (*
 // fleetAbortChanges cancels the PLANNED lines and returns the header changes of an abort. An
 // operation that ends with nothing applied holds no evidence, so it is closed at once.
 func fleetAbortChanges(tx *gorm.DB, op *FleetOperation, actor, reason, kind string) (map[string]any, *FleetOperationEvent, error) {
+	var ids []uint
 	if err := tx.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPlanned).
+		Scopes(fleetLineLockOrder).Pluck("id", &ids).Error; err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Model(&FleetOperationLine{}).Where("id IN ? AND operation_id = ? AND posting = ?", ids, op.ID, FleetPostingPlanned).
 		Update("posting", FleetPostingCancelled).Error; err != nil {
 		return nil, nil, err
 	}

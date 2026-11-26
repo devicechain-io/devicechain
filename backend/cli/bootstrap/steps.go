@@ -877,11 +877,12 @@ func operatorImageRef(st *State) string {
 // on the cluster shares, so it was removed from the pipeline and replaced with a
 // refusal — see RequireOperator.
 func stepInstallCore(ctx context.Context, st *State) error {
+	c := out(ctx)
 	if err := requireResolvedImages(st, "installing the operator"); err != nil {
 		return err
 	}
 	operatorImage := operatorImageRef(st)
-	doing("installing the operator (CRDs + RBAC + controller)")
+	c.doing("installing the operator (CRDs + RBAC + controller)")
 
 	// Rendered BEFORE the dry-run branch, and on both paths, because the overlay
 	// is where the operator's namespace is decided and the next step takes the
@@ -889,30 +890,33 @@ func stepInstallCore(ctx context.Context, st *State) error {
 	// run that renders here also stops reporting a plan it could not have built.
 	manifests, err := operator.Render(operatorImage)
 	if err != nil {
-		return fail("rendering operator manifests", err)
+		return c.fail("rendering operator manifests", err)
 	}
 	ns, err := operator.NamespaceOf(manifests)
 	if err != nil {
-		return fail("reading the operator namespace from the rendered overlay", err)
+		return c.fail("reading the operator namespace from the rendered overlay", err)
 	}
 	st.OperatorNamespace = ns
 
 	if st.DryRun {
-		fmt.Println()
-		wouldDo("render the operator overlay and apply CRDs/RBAC/operator (" + operatorImage + ") to " + st.KubeContext)
+		c.println()
+		c.wouldDo("render the operator overlay and apply CRDs/RBAC/operator (" + operatorImage + ") to " + st.KubeContext)
 		return nil
 	}
 
 	dyn, disco, _, err := kubeClients(st.KubeContext)
 	if err != nil {
-		return fail("building kube clients", err)
+		return c.fail("building kube clients", err)
 	}
-	if err := operator.Apply(ctx, dyn, disco, manifests); err != nil {
-		return fail("applying operator manifests", err)
+	if err := applyOperatorManifests(ctx, dyn, disco, manifests); err != nil {
+		return c.fail("applying operator manifests", err)
 	}
-	done()
+	c.done()
 	return nil
 }
+
+// applyOperatorManifests lets console tests finish the step without a live API server.
+var applyOperatorManifests = operator.Apply
 
 // stepHelmInstall installs (or upgrades) the per-instance chart via the Helm Go
 // SDK, blocking until the rendered workloads are ready.

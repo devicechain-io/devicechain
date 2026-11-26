@@ -23,6 +23,10 @@ import (
 type InstallEngine struct {
 	Provider Provider
 	Options  InstallOptions
+	// ResolveOptions reads and validates file-backed options after a successful
+	// (or skipped) preflight. Options above already supplies the run's target,
+	// --dry-run and --yes; the resolved values must agree with that request.
+	ResolveOptions func() (InstallOptions, error)
 	// SkipPreflight is --skip-preflight. Without it the engine REQUIRES a preflight
 	// runner: a run that silently skipped the checks because nobody wired them would
 	// be the fail-open this field exists to make impossible.
@@ -54,7 +58,8 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 		return failedBeforeStart(rt, err)
 	}
 
-	// The flags were settled by the command before the run began.
+	// The command settled argv-only checks before the run began. File reads
+	// retain their historical position after preflight.
 	r.enter(installflow.StepInstallInputs)
 
 	if e.SkipPreflight {
@@ -73,11 +78,27 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 		}
 	}
 
+	opts := e.Options
+	if e.ResolveOptions != nil {
+		r.finishActive()
+		if rt.Console.Flush != nil {
+			rt.Console.Flush()
+		}
+		resolved, err := e.ResolveOptions()
+		if err != nil {
+			return r.close(ctx, err)
+		}
+		if req.DryRun != resolved.DryRun || req.AssumeYes != resolved.AssumeYes {
+			return r.close(ctx, errors.New("install engine: the request and the install options disagree about --dry-run or --yes"))
+		}
+		opts = resolved
+	}
+
 	cluster := e.Cluster
 	if cluster == nil {
 		cluster = Install
 	}
-	return r.close(ctx, cluster(withRun(ctx, r), e.Provider, e.Options))
+	return r.close(ctx, cluster(withRun(ctx, r), e.Provider, opts))
 }
 
 // failedBeforeStart closes a run that could not begin. The hub accepts a summary
