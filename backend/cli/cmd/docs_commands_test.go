@@ -1361,12 +1361,16 @@ func TestDocsGateBulkChangeCommands(t *testing.T) {
 		"dcctl bulk-change pause change-1",
 		"dcctl bulk-change resume change-1 --max-posts-per-second 1",
 		"dcctl bulk-change abort change-1",
+		"dcctl bulk-change reverse change-1 --token undo-1 --ordinals 1,2 --override-ordinals 2",
+		"dcctl bulk-change reverse change-1 --token undo-1 --override-changed --create -o json",
+		"dcctl bulk-change resolve change-1 --ordinals 3 --verdict confirmed --note checked",
+		"dcctl bulk-change resolve change-1 --all-ambiguous --verdict failed --note 'no answer'",
 	}, "\n") + "\n```\n"
 	s := scanOne(t, md)
-	if len(s.findings) != 0 || s.dcctlChecked != 8 {
+	if len(s.findings) != 0 || s.dcctlChecked != 12 {
 		t.Fatalf("bulk-change guide commands: count=%d %s", s.dcctlChecked, findingTexts(s))
 	}
-	for _, bad := range []string{"dcctl fleet-op create", "dcctl bulk-change status", "dcctl bulk-change reverse t", "dcctl bulk-change resolve t"} {
+	for _, bad := range []string{"dcctl fleet-op create", "dcctl bulk-change status", "dcctl fleet-op reverse t", "dcctl bulk-change reverse", "dcctl bulk-change resolve t --undo"} {
 		if s := scanOne(t, "```bash\n"+bad+"\n```\n"); len(s.findings) == 0 {
 			t.Errorf("docs accepted unavailable command %q", bad)
 		}

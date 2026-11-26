@@ -4,6 +4,7 @@
 package bulkchange
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -119,6 +120,33 @@ func TestBulkChangeDocumentsMatchServedSchema(t *testing.T) {
 		"resume preview": resumePreviewQuery,
 	} {
 		if errs := schema.ValidateWithVariables(document, variables); len(errs) != 0 {
+			t.Errorf("%s: %v", name, errs)
+		}
+	}
+	// The variables are the exact JSON each request type sends, so a field the input type does
+	// not declare is refused here rather than by a server.
+	reversal := ReversalRequest{Original: "o", Token: "r", Name: "n", Ordinals: []int{1, 2}, OverrideOrdinals: []int{2},
+		Safety: map[string]any{"maxPostsPerSecond": 1, "failureThreshold": 1, "ambiguityThreshold": 1, "settleDeadlineSeconds": 60}}
+	resolution := Resolution{Token: "t", Ordinals: []int{1}, Verdict: "CONFIRMED", Note: "checked on site"}
+	for name, tc := range map[string]struct {
+		document string
+		request  any
+	}{
+		"reverse preview": {reversePreviewQuery, reversal},
+		"reverse":         {reverseQuery, reversal},
+		"reverse all":     {reverseQuery, ReversalRequest{Original: "o", Token: "r", Name: "n", OverrideChanged: true}},
+		"resolve":         {resolveQuery, resolution},
+		"resolve all":     {resolveQuery, Resolution{Token: "t", AllAmbiguous: true, Verdict: "FAILED", Note: "n"}},
+	} {
+		raw, err := json.Marshal(map[string]any{"request": tc.request})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var vars map[string]any
+		if err := json.Unmarshal(raw, &vars); err != nil {
+			t.Fatal(err)
+		}
+		if errs := schema.ValidateWithVariables(tc.document, vars); len(errs) != 0 {
 			t.Errorf("%s: %v", name, errs)
 		}
 	}
