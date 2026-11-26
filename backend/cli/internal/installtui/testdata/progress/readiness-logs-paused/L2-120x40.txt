@@ -1,0 +1,40 @@
++- DeviceChain - Installing - kind-devicechain ------------------------------------------------------------------------+
+| Overall  #########################.....  5/6 stages                                                                  |
+| Elapsed 11:02 - Remaining: unknown - last observation 1s ago                                                         |
+|                                                                                                                      |
+| DONE  Resolve target / cluster        ###################  done                                                      |
+| DONE  Identity, refusals and claim    ###################  done                                                      |
+| DONE  Credentials and operator        ###################  done                                                      |
+| DONE  Cluster prerequisites           ###################  done                                                      |
+| DONE  Base identity and record        ###################  done                                                      |
+| RUN   Relational store ready          ############.......  2/3 replicas                                              |
+|                                                                                                                      |
+| Now  Wait for the relational store                                                                                   |
+|      2 of 3 replicas - limit 15m - waited 3m12s                                                                      |
+| v Logs - sanitized - paused - f to follow                                                                            |
+| 10:04:29 tofu    line 0268 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:30 tofu    line 0269 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:31 tofu    line 0270 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:32 tofu    line 0271 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:33 k8s     line 0272 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:34 tofu    line 0273 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:35 tofu    line 0274 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:36 tofu    line 0275 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:37 tofu    line 0276 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:38 tofu    line 0277 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:39 tofu    line 0278 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:40 k8s     line 0279 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:41 tofu    line 0280 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:42 tofu    line 0281 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:43 tofu    line 0282 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:44 tofu    line 0283 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:45 tofu    line 0284 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:46 tofu    line 0285 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:47 k8s     line 0286 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:48 tofu    line 0287 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:49 tofu    line 0288 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| 10:04:50 tofu    line 0289 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        |
+| ... 268 earlier lines kept - 0 aged out - 22 newer                                                                   |
++----------------------------------------------------------------------------------------------------------------------+
+| l logs  PgUp/PgDn scroll  f follow  Ctrl+C stop                                                                      |
++----------------------------------------------------------------------------------------------------------------------+

@@ -130,16 +130,7 @@ func Evaluate(in Inputs) Capabilities {
 		c.Level = L4
 	}
 	if c.SizeKnown {
-		switch {
-		case c.Width < 60 || c.Height < 16:
-			c.Layout = Minimal
-		case c.Width >= 100 && c.Height >= 30:
-			c.Layout = Full
-		case c.Width >= 80:
-			c.Layout = SingleColumn
-		default:
-			c.Layout = Compact
-		}
+		c.Layout = LayoutFor(c.Width, c.Height)
 	}
 	c.TUI = (in.UI == TUI || in.UI == Auto) && !in.DryRun && !in.Informational
 	c.ProgressOnly = c.TUI && (in.Yes || in.Dev)
@@ -155,6 +146,24 @@ func Evaluate(in Inputs) Capabilities {
 	}
 	c.Animate = c.Splash == LargeMark && !c.Remote && !c.NoColor
 	return c
+}
+
+// LayoutFor is the layout ladder for a known size: at least 100x30 is the full
+// layout, 80-99 columns a single column, 60-79 columns compact, and anything under
+// 60x16 the minimal status block. A size that is not known has no layout at all.
+func LayoutFor(width, height int) Layout {
+	switch {
+	case width <= 0 || height <= 0:
+		return UnknownLayout
+	case width < 60 || height < 16:
+		return Minimal
+	case width >= 100 && height >= 30:
+		return Full
+	case width >= 80:
+		return SingleColumn
+	default:
+		return Compact
+	}
 }
 
 func utf8Locale(env map[string]string) bool {

@@ -1,0 +1,24 @@
+╭─ DeviceChain · Installing · kind-devicechain ────────────────────────────────╮
+│ Overall  \x1b[38;5;78m███████████████\x1b[m\x1b[38;5;109m░░░░░░░░░░░░░░░\x1b[m  3/6 stages                          │
+│ \x1b[38;5;109mElapsed 06:42 · Remaining: unknown · last observation 2s ago\x1b[m                 │
+│                                                                              │
+│ \x1b[38;5;78mDONE\x1b[m  Resolve target / cluster      \x1b[38;5;78m██████████\x1b[m  done                         │
+│ \x1b[38;5;78mDONE\x1b[m  Identity, refusals and claim  \x1b[38;5;78m██████████\x1b[m  done                         │
+│ \x1b[38;5;78mDONE\x1b[m  Credentials and operator      \x1b[38;5;78m██████████\x1b[m  done                         │
+│ \x1b[38;5;38mRUN \x1b[m  Cluster prerequisites         \x1b[38;5;38m██████\x1b[m\x1b[38;5;109m░░░░\x1b[m  41/63 actions                │
+│ \x1b[38;5;109mWAIT\x1b[m  Base identity and record      \x1b[38;5;109m──────────\x1b[m                               │
+│ \x1b[38;5;109mWAIT\x1b[m  Relational store ready        \x1b[38;5;109m──────────\x1b[m                               │
+│                                                                              │
+│ \x1b[38;5;109mNow\x1b[m  Apply the cluster prerequisites                                         │
+│ \x1b[38;5;109m     41 of 63 actions · waited 6m22s\x1b[m                                         │
+│ ▸ Logs \x1b[38;5;109m(collapsed · 312 lines kept · l to open)\x1b[m                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;109ml\x1b[m logs  \x1b[38;5;109mCtrl+C\x1b[m stop                                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯

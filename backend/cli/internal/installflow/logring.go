@@ -128,3 +128,43 @@ func (w *lineWriter) Close() error {
 	w.buf, w.skipping = nil, false
 	return nil
 }
+
+// LogWindow is a run of consecutive lines from the log ring, addressed by
+// absolute line number: the first line the run ever logged is 0, and a line keeps
+// its number as older lines age out. A presenter keeps a position, never a copy.
+type LogWindow struct {
+	Lines []LogEntry `json:"lines"`
+	// From is the absolute number of Lines[0] (or where it would be).
+	From uint64 `json:"from"`
+	// First is the number of the oldest line still kept: everything before it has
+	// aged out of the ring. End is one past the newest line.
+	First uint64 `json:"first"`
+	End   uint64 `json:"end"`
+}
+
+// LogWindow copies at most n lines of the ring. With tail it returns the newest
+// n; otherwise the n starting at from, moved forward to the oldest line still
+// kept and back so the window is never past the newest. It copies only the
+// window, so a presenter drawing a few rows of a full ring copies a few rows.
+func (h *Hub) LogWindow(from uint64, n int, tail bool) LogWindow {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	first := h.ring.evicted
+	end := first + uint64(len(h.ring.lines))
+	if n < 0 {
+		n = 0
+	}
+	last := first // the latest start that still fills the window
+	if end-first > uint64(n) {
+		last = end - uint64(n)
+	}
+	if tail || from > last {
+		from = last
+	}
+	if from < first {
+		from = first
+	}
+	stop := min(from+uint64(n), end)
+	lines := append([]LogEntry(nil), h.ring.lines[from-first:stop-first]...)
+	return LogWindow{Lines: lines, From: from, First: first, End: end}
+}
