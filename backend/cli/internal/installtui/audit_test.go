@@ -139,11 +139,11 @@ func resolvedLicenseGraph(t *testing.T, workspace bool) map[string]resolvedModul
 		selected[m.Path] = m
 	}
 	queue := []string{
-		"github.com/charmbracelet/bubbles",
-		"github.com/charmbracelet/bubbletea",
-		"github.com/charmbracelet/lipgloss",
-		"github.com/charmbracelet/x/exp/teatest",
-		"github.com/muesli/termenv",
+		"charm.land/bubbles/v2",
+		"charm.land/bubbletea/v2",
+		"charm.land/lipgloss/v2",
+		"github.com/charmbracelet/colorprofile",
+		"github.com/charmbracelet/x/exp/teatest/v2",
 		"golang.org/x/term",
 	}
 	closure := map[string]resolvedModule{}
@@ -266,7 +266,7 @@ func TestResolvedLicensesAndNotices(t *testing.T) {
 	for _, m := range closure {
 		path := m.Path
 		switch path {
-		case "github.com/charmbracelet/x/exp/teatest", "github.com/charmbracelet/x/exp/golden", "github.com/aymanbagabas/go-udiff":
+		case "github.com/charmbracelet/x/exp/teatest/v2", "github.com/charmbracelet/x/exp/golden", "github.com/aymanbagabas/go-udiff":
 		default:
 			continue
 		}

@@ -9,7 +9,7 @@ package terminal
 import (
 	"strings"
 
-	"github.com/muesli/termenv"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // UI is the requested presenter. The zero value deliberately preserves plain.
@@ -55,7 +55,7 @@ const (
 
 // Inputs are observations and parsed options, never live handles. Env is read
 // only. Probe all three streams with x/term before any terminal side effect;
-// obtain size with GetSize and profile with termenv on that output handle.
+// obtain size with GetSize and profile with colorprofile on that output handle.
 // WindowsVT and WindowsUnicode must come from console capability probes, not
 // WT_SESSION, TERM, locale, or the name of the terminal application. A failed
 // probe is false. This package never opens /dev/tty or CONIN$ or enables VT.
@@ -65,7 +65,7 @@ type Inputs struct {
 	Env                           map[string]string
 	Width, Height                 int
 	SizeKnown                     bool
-	Profile                       termenv.Profile
+	Profile                       colorprofile.Profile
 	WindowsVT, WindowsUnicode     bool
 	UI                            UI
 	Yes, Dev, DryRun, NoSplash    bool
@@ -81,7 +81,7 @@ type Capabilities struct {
 	Width, Height                 int
 	SizeKnown                     bool
 	VT, Unicode                   bool
-	ColorDepth                    termenv.Profile
+	ColorDepth                    colorprofile.Profile
 	Remote, NoSplash, NoColor     bool
 	Eligible, TUI, ProgressOnly   bool
 	Level                         Level
@@ -112,21 +112,21 @@ func Evaluate(in Inputs) Capabilities {
 		c.VT = term != "" && term != "dumb"
 		c.Unicode = utf8Locale(in.Env)
 	}
-	if c.NoColor || (c.ColorDepth != termenv.TrueColor && c.ColorDepth != termenv.ANSI256 && c.ColorDepth != termenv.ANSI) {
-		c.ColorDepth = termenv.Ascii
+	if c.NoColor || (c.ColorDepth != colorprofile.TrueColor && c.ColorDepth != colorprofile.ANSI256 && c.ColorDepth != colorprofile.ANSI) {
+		c.ColorDepth = colorprofile.ASCII
 	}
 	c.Eligible = c.InputTTY && c.OutputTTY && c.ErrorTTY && !c.CI && c.VT && term != "dumb"
 	if !c.Eligible {
 		return c
 	}
 	switch {
-	case c.ColorDepth == termenv.Ascii:
+	case c.ColorDepth == colorprofile.ASCII:
 		c.Level = L1
-	case !c.Unicode || c.ColorDepth == termenv.ANSI:
+	case !c.Unicode || c.ColorDepth == colorprofile.ANSI:
 		c.Level = L2
-	case c.ColorDepth == termenv.ANSI256:
+	case c.ColorDepth == colorprofile.ANSI256:
 		c.Level = L3
-	case c.ColorDepth == termenv.TrueColor:
+	case c.ColorDepth == colorprofile.TrueColor:
 		c.Level = L4
 	}
 	if c.SizeKnown {

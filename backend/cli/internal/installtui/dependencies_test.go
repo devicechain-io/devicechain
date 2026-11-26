@@ -9,15 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/progress"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/exp/teatest"
+	"charm.land/bubbles/v2/progress"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/exp/teatest/v2"
 )
 
-// Exercise the planned API surface and retain the exact v1 stack through tidy
+// Exercise the planned API surface and retain the exact v2 stack through tidy
 // before screens land. teatest is deliberately imported only in a test file.
 func TestDependencySurface(t *testing.T) {
 	input := textinput.New()
@@ -26,7 +26,7 @@ func TestDependencySurface(t *testing.T) {
 	if strings.Contains(input.View(), "dependency-secret-canary") {
 		t.Fatal("EchoNone exposed its value")
 	}
-	view := viewport.New(80, 24)
+	view := viewport.New(viewport.WithWidth(80), viewport.WithHeight(24))
 	view.SetContent("dependency viewport")
 	if !strings.Contains(view.View(), "dependency viewport") || lipgloss.Width(progress.New().ViewAs(0.5)) == 0 {
 		t.Fatal("Bubbles did not render in memory")
@@ -42,4 +42,4 @@ type dependencyModel struct{}
 
 func (dependencyModel) Init() tea.Cmd                         { return tea.Quit }
 func (m dependencyModel) Update(tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
-func (dependencyModel) View() string                          { return "dependency loop" }
+func (dependencyModel) View() tea.View                        { return tea.NewView("dependency loop") }

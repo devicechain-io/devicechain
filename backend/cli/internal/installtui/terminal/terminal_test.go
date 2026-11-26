@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/muesli/termenv"
+	"github.com/charmbracelet/colorprofile"
 )
 
 func TestDefaultRemainsPlain(t *testing.T) {
@@ -23,7 +23,7 @@ func baseline() Inputs {
 	return Inputs{
 		InputTTY: true, OutputTTY: true, ErrorTTY: true, GOOS: "linux",
 		Env:   map[string]string{"TERM": "xterm-256color", "LANG": "en_US.UTF-8"},
-		Width: 120, Height: 40, SizeKnown: true, Profile: termenv.TrueColor, UI: TUI,
+		Width: 120, Height: 40, SizeKnown: true, Profile: colorprofile.TrueColor, UI: TUI,
 	}
 }
 
@@ -67,13 +67,13 @@ func TestEligibilityTable(t *testing.T) {
 		"dry run":                      row(func(i *Inputs) { i.DryRun = true }, decision{true, false, false, L4, Full, NoArt, false}),
 		"help version parse error":     row(func(i *Inputs) { i.Informational = true }, decision{true, false, false, L4, Full, NoArt, false}),
 		"no splash":                    row(func(i *Inputs) { i.NoSplash = true }, decision{true, true, false, L4, Full, NoArt, false}),
-		"L3":                           row(func(i *Inputs) { i.Profile = termenv.ANSI256 }, decision{true, true, false, L3, Full, LargeMark, true}),
-		"L2 ANSI16":                    row(func(i *Inputs) { i.Profile = termenv.ANSI }, decision{true, true, false, L2, Full, TextHeader, false}),
+		"L3":                           row(func(i *Inputs) { i.Profile = colorprofile.ANSI256 }, decision{true, true, false, L3, Full, LargeMark, true}),
+		"L2 ANSI16":                    row(func(i *Inputs) { i.Profile = colorprofile.ANSI }, decision{true, true, false, L2, Full, TextHeader, false}),
 		"L2 uncertain Unicode":         row(func(i *Inputs) { i.Env["LANG"] = "C" }, decision{true, true, false, L2, Full, TextHeader, false}),
 		"L1 NO_COLOR beats force":      row(func(i *Inputs) { i.Env["NO_COLOR"] = "1"; i.Env["CLICOLOR_FORCE"] = "1" }, decision{true, true, false, L1, Full, TextHeader, false}),
 		"L1 NO_COLOR empty present":    row(func(i *Inputs) { i.Env["NO_COLOR"] = "" }, decision{true, true, false, L1, Full, TextHeader, false}),
-		"L1 no color profile":          row(func(i *Inputs) { i.Profile = termenv.Ascii }, decision{true, true, false, L1, Full, TextHeader, false}),
-		"unknown profile fails closed": row(func(i *Inputs) { i.Profile = termenv.Profile(100) }, decision{true, true, false, L1, Full, TextHeader, false}),
+		"L1 no color profile":          row(func(i *Inputs) { i.Profile = colorprofile.ASCII }, decision{true, true, false, L1, Full, TextHeader, false}),
+		"unknown profile fails closed": row(func(i *Inputs) { i.Profile = colorprofile.Profile(100) }, decision{true, true, false, L1, Full, TextHeader, false}),
 		"SSH connection static":        row(func(i *Inputs) { i.Env["SSH_CONNECTION"] = "remote" }, decision{true, true, false, L4, Full, LargeMark, false}),
 		"SSH client static":            row(func(i *Inputs) { i.Env["SSH_CLIENT"] = "remote" }, decision{true, true, false, L4, Full, LargeMark, false}),
 		"SSH tty static":               row(func(i *Inputs) { i.Env["SSH_TTY"] = "/dev/pts/1" }, decision{true, true, false, L4, Full, LargeMark, false}),
@@ -119,7 +119,7 @@ func TestEligibilityTable(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("got %+v, want %+v; capabilities %+v", got, tc.want, c)
 			}
-			if c.NoColor && c.ColorDepth != termenv.Ascii {
+			if c.NoColor && c.ColorDepth != colorprofile.ASCII {
 				t.Fatal("NO_COLOR did not override output profile")
 			}
 			if c.InputTTY != in.InputTTY || c.OutputTTY != in.OutputTTY || c.ErrorTTY != in.ErrorTTY || c.Width != in.Width || c.Height != in.Height || c.NoSplash != in.NoSplash {

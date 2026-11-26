@@ -185,12 +185,66 @@ behind its own APIs, which is the "value added product" use the TSL permits.
 dcctl terminal dependencies (S4)
 
 The following selected-version transitive dependency graph includes test-only
-and platform-specific requirements, as well as the six direct terminal pins.
-The audit inventory is backend/cli/internal/installtui/testdata/dependency-licenses.tsv.
+and platform-specific requirements, as well as the direct terminal pins (the
+Charm v2 family: Bubble Tea, Lip Gloss, Bubbles and teatest, with colorprofile
+and x/term). The audit inventory is
+backend/cli/internal/installtui/testdata/dependency-licenses.tsv.
 The complete upstream notices and license texts follow. Identical texts are
 reproduced once with every covered module listed. MIT, BSD-3-Clause and
 Apache-2.0 terms are compatible with this distribution's Apache-2.0 license.
 The Go patent grants are retained alongside their BSD license texts.
+
+
+charm.land/bubbles/v2@v2.2.1 (LICENSE)
+charm.land/bubbletea/v2@v2.1.1 (LICENSE)
+
+MIT License
+
+Copyright (c) 2020-2026 Charmbracelet, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+charm.land/lipgloss/v2@v2.1.0 (LICENSE)
+
+MIT License
+
+Copyright (c) 2021-2026 Charmbracelet, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 
 github.com/MakeNowJust/heredoc@v1.0.0 (LICENSE)
 
@@ -248,32 +302,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-github.com/aymanbagabas/go-osc52/v2@v2.0.1 (LICENSE)
-
-MIT License
-
-Copyright (c) 2022 Ayman Bagabas
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-github.com/aymanbagabas/go-udiff@v0.3.1 (LICENSE-BSD)
+github.com/aymanbagabas/go-udiff@v0.4.1 (LICENSE-BSD)
 
 Copyright (c) 2009 The Go Authors. All rights reserved.
 
@@ -304,7 +333,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-github.com/aymanbagabas/go-udiff@v0.3.1 (LICENSE-MIT)
+github.com/aymanbagabas/go-udiff@v0.4.1 (LICENSE-MIT)
 
 MIT License
 
@@ -329,9 +358,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-github.com/bits-and-blooms/bitset@v1.24.4 (LICENSE)
+github.com/bits-and-blooms/bitset@v1.24.6 (LICENSE)
 
-Copyright (c) 2014 Will Fitzgerald. All rights reserved.
+Copyright (c) 2014 the bitset authors. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are
@@ -360,33 +389,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-github.com/charmbracelet/bubbles@v0.21.1 (LICENSE)
-github.com/charmbracelet/bubbletea@v1.3.10 (LICENSE)
-
-MIT License
-
-Copyright (c) 2020-2025 Charmbracelet, Inc
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-github.com/charmbracelet/colorprofile@v0.4.1 (LICENSE)
+github.com/charmbracelet/colorprofile@v0.4.3 (LICENSE)
 
 MIT License
 
@@ -436,11 +439,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-github.com/charmbracelet/lipgloss@v1.1.0 (LICENSE)
+github.com/charmbracelet/ultraviolet@v0.0.0-20261008173134-6b8d4baf91b4 (LICENSE)
 
 MIT License
 
-Copyright (c) 2021-2023 Charmbracelet, Inc
+Copyright (c) 2025 Charmbracelet, Inc
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -461,11 +464,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-github.com/charmbracelet/x/ansi@v0.11.5 (LICENSE)
-github.com/charmbracelet/x/cellbuf@v0.0.15 (LICENSE)
-github.com/charmbracelet/x/exp/golden@v0.0.0-20241011142426-46044092ad91 (LICENSE)
-github.com/charmbracelet/x/exp/teatest@v0.0.0-20260713092006-0d683c34c74b (LICENSE)
+github.com/charmbracelet/x/ansi@v0.11.9 (LICENSE)
+github.com/charmbracelet/x/exp/golden@v0.0.0-20251109135125-8916d276318f (LICENSE)
+github.com/charmbracelet/x/exp/teatest/v2@v2.0.0-20260311145557-c83711a11ffa (LICENSE)
 github.com/charmbracelet/x/term@v0.2.2 (LICENSE)
+github.com/charmbracelet/x/termios@v0.1.1 (LICENSE)
+github.com/charmbracelet/x/windows@v0.2.2 (LICENSE)
 
 MIT License
 
@@ -490,7 +494,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-github.com/clipperhouse/displaywidth@v0.9.0 (LICENSE)
+github.com/clipperhouse/displaywidth@v0.11.0 (LICENSE)
 github.com/clipperhouse/stringish@v0.1.1 (LICENSE)
 
 MIT License
@@ -527,10 +531,10 @@ golang.org/x/sys@v0.50.0 (LICENSE)
 golang.org/x/telemetry@v0.0.0-20261116191925-e77a43154acb (LICENSE)
 golang.org/x/term@v0.48.0 (LICENSE)
 golang.org/x/text@v0.44.0 (LICENSE)
-golang.org/x/tools@v0.53.0 (LICENSE)
 golang.org/x/tools/go/expect@v0.1.0-deprecated (LICENSE)
 golang.org/x/tools/go/expect@v0.1.1-deprecated (LICENSE)
 golang.org/x/tools/go/packages/packagestest@v0.1.1-deprecated (LICENSE)
+golang.org/x/tools@v0.53.0 (LICENSE)
 
 Copyright 2009 The Go Authors.
 
@@ -561,7 +565,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-github.com/clipperhouse/uax29/v2@v2.5.0 (LICENSE)
+github.com/clipperhouse/uax29/v2@v2.7.0 (LICENSE)
 
 MIT License
 
@@ -611,31 +615,6 @@ SOFTWARE.
 <http://www.opensource.org/licenses/mit-license.php>
 
 
-github.com/erikgeiser/coninput@v0.0.0-20211004153227-1c3628e74d0f (LICENSE)
-
-MIT License
-
-Copyright (c) 2021 Erik G.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
 github.com/google/go-cmp@v0.7.0 (LICENSE)
 
 Copyright (c) 2017 The Go Authors. All rights reserved.
@@ -669,8 +648,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 github.com/kylelemons/godebug@v1.1.0 (LICENSE)
 
-
-                                 Apache License
+Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
 
@@ -873,7 +851,7 @@ github.com/kylelemons/godebug@v1.1.0 (LICENSE)
    limitations under the License.
 
 
-github.com/lucasb-eyer/go-colorful@v1.3.0 (LICENSE)
+github.com/lucasb-eyer/go-colorful@v1.4.1 (LICENSE)
 
 Copyright (c) 2013 Lucas Beyer
 
@@ -884,77 +862,11 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-github.com/mattn/go-isatty@v0.0.20 (LICENSE)
-github.com/mattn/go-isatty@v0.0.24 (LICENSE)
-
-Copyright (c) Yasuhiro MATSUMOTO <mattn.jp@gmail.com>
-
-MIT License (Expat)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-
-github.com/mattn/go-localereader@v0.0.1 (README.md)
-
-# go-localereader
-
-CodePage decoder for Windows
-
-## Usage
-
-```
-io.Copy(os.Stdout, localereader.NewAcpReader(bytes.Reader(bytesSjis)))
-```
-
-## Installation
-
-```
-$ go get github.com/mattn/go-localereader
-```
-
-## License
-
-MIT
-
-## Author
-
-Yasuhiro Matsumoto (a.k.a. mattn)
-
-
-github.com/mattn/go-runewidth@v0.0.19 (LICENSE)
+github.com/mattn/go-runewidth@v0.0.30 (LICENSE)
 
 The MIT License (MIT)
 
 Copyright (c) 2016 Yasuhiro Matsumoto
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-github.com/muesli/ansi@v0.0.0-20230316100256-276c6243b2f6 (LICENSE)
-
-MIT License
-
-Copyright (c) 2021 Christian Muehlhaeuser
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -1000,31 +912,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-github.com/muesli/termenv@v0.16.0 (LICENSE)
-
-MIT License
-
-Copyright (c) 2019 Christian Muehlhaeuser
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
 github.com/rivo/uniseg@v0.4.7 (LICENSE.txt)
 
 MIT License
@@ -1050,7 +937,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-github.com/sahilm/fuzzy@v0.1.1 (LICENSE)
+github.com/sahilm/fuzzy@v0.1.3 (LICENSE)
 
 The MIT License (MIT)
 
@@ -1075,7 +962,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-github.com/xo/terminfo@v0.0.0-20220910002029-abceb7e1c41e (LICENSE)
+github.com/xo/terminfo@v1.0.0 (LICENSE)
 
 The MIT License (MIT)
 
@@ -1159,29 +1046,3 @@ implementation of Go constitutes direct or contributory patent
 infringement, or inducement of patent infringement, then any patent
 rights granted to you under this License for this implementation of Go
 shall terminate as of the date such litigation is filed.
-
-
-go-localereader v0.0.1 declares MIT and names its author in README.md,
-reproduced above; it ships no separate LICENSE. The corresponding MIT terms:
-
-The MIT License (MIT)
-
-Copyright (c) Yasuhiro Matsumoto
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
