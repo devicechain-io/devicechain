@@ -419,9 +419,12 @@ func (api *Api) FleetReportCaptureComplete(ctx context.Context, op *FleetOperati
 	db := api.RDB.DB(ctx)
 	l, s := fleetSettlementTable(db, "FleetOperationLine"), fleetSettlementTable(db, "DeviceConfigurationState")
 	var count int64
+	// Without a gap marker, capture covers the device's entire report history:
+	// its first report may arrive after posting. After a gap, continuous capture
+	// must have resumed by posting and exclude any relevant missed revisions.
 	err := db.Raw(`SELECT count(*) FROM `+l+` l LEFT JOIN `+s+` s ON s.device_id=l.target_id AND s.tenant_id=l.tenant_id
  WHERE l.tenant_id=? AND l.operation_id=? AND (s.capture_complete_since IS NULL
- OR s.capture_complete_since > coalesce(l.posted_at,?)
+ OR (s.capture_gap_through IS NOT NULL AND s.capture_complete_since > coalesce(l.posted_at,?))
  OR (l.posted_revision IS NOT NULL AND s.capture_gap_through >= l.posted_revision)
  OR NOT (s.reported_revision IS NOT DISTINCT FROM s.captured_revision AND s.reported_status IS NOT DISTINCT FROM s.captured_status AND s.reported_at IS NOT DISTINCT FROM s.captured_reported_at))`, tenant, op.ID, op.CreatedAt).Scan(&count).Error
 	return count == 0, err
