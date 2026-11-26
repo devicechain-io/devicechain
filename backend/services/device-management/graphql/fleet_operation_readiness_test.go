@@ -4,6 +4,7 @@
 package graphql
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -85,5 +86,31 @@ func TestFleetOperationReadinessCountsOrphansOnce(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("the orphan count ran %d times for one resolver, want 1", calls)
+	}
+}
+
+// executableKinds answers what the caller can run now: the build's kinds only while the guard is
+// ENFORCED and the tenant's orphan count reads zero.
+func TestReadinessExecutableKindsFollowActivation(t *testing.T) {
+	kinds := []string{model.FleetKindConfigSet}
+	for _, tc := range []struct {
+		name        string
+		enforcement string
+		orphans     int64
+		err         error
+		want        []string
+	}{
+		{"activated", "ENFORCED", 0, nil, kinds},
+		{"orphans remain", "ENFORCED", 2, nil, []string{}},
+		{"orphans unreadable", "ENFORCED", 0, errors.New("scan failed"), []string{}},
+		{"not installed", "NOT_INSTALLED", 0, nil, []string{}},
+		{"disabled", "DISABLED", 0, nil, []string{}},
+		{"unreadable", "UNREADABLE", 0, nil, []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &FleetOperationReadinessResolver{enforcement: tc.enforcement, executableKinds: kinds,
+				orphans: func() (int64, error) { return tc.orphans, tc.err }}
+			require.Equal(t, tc.want, r.ExecutableKinds())
+		})
 	}
 }
