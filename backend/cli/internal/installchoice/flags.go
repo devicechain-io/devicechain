@@ -10,10 +10,18 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// PresentationFlags are the install flags that choose how a run is shown, never
+// what it does. They are not choices: no plan, option or equivalent command
+// carries them.
+func PresentationFlags() []string { return []string{"ui", "no-splash", "output"} }
+
 // FromFlags snapshots the real parsed Cobra flags, including every Changed bit.
 // No input aliases or preset expansion are lost at this boundary.
 func FromFlags(fs *pflag.FlagSet) (Choices, error) {
-	known := map[string]bool{"ui": true, "no-splash": true}
+	known := map[string]bool{}
+	for _, name := range PresentationFlags() {
+		known[name] = true
+	}
 	for _, f := range (Choices{}).flagValues() {
 		known[f.name] = true
 	}

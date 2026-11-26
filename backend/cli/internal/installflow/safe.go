@@ -40,6 +40,17 @@ func (t SafeText) IsZero() bool { return t.s == "" }
 // MarshalJSON encodes the sanitised text as a JSON string.
 func (t SafeText) MarshalJSON() ([]byte, error) { return json.Marshal(t.s) }
 
+// UnmarshalJSON reads a text back from an event stream, sanitising it exactly
+// as Text does, so a decoded text is as safe to show as a constructed one.
+func (t *SafeText) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	*t = Text(s)
+	return nil
+}
+
 func sanitize(s string) string {
 	var b strings.Builder
 	b.Grow(min(len(s), MaxTextBytes))

@@ -16,6 +16,16 @@ const (
 	// RemedyRerunSameCommand: run the same command again. An install
 	// converges, so a re-run finishes what a stopped one left half done.
 	RemedyRerunSameCommand MessageCode = "install.rerun-same-command"
+	// ErrorPromptUnavailable closes the attempt that needed an answer nobody
+	// could give: a confirmation --yes does not settle, or any confirmation
+	// without --yes, in a run with no one to ask (the JSON stream never reads
+	// stdin; plain output with no terminal answering). The engine asks before
+	// the change the question is about, so the attempt changed nothing.
+	ErrorPromptUnavailable ErrorCode = "run.prompt-unavailable"
+	// RemedyRerunWithYes: run the same command again with --yes, which answers
+	// the confirmation that was asked, or choose a target that needs no
+	// confirmation (an install into an existing cluster with --kube-context).
+	RemedyRerunWithYes MessageCode = "install.rerun-with-yes"
 )
 
 // The words a presenter shows while a run stops and after it has, shared so the
@@ -43,6 +53,10 @@ const (
 		"command once dcctl has exited; it converges whatever was left half done."
 )
 
+// WordsPromptUnavailable is ErrorPromptUnavailable.
+const WordsPromptUnavailable = "The install needed a confirmation and had no one to ask, so it changed nothing. " +
+	"Re-run it with --yes to give that confirmation."
+
 // EffectWords says what a step's or a run's effect certainty means.
 //
 // 🔴 ONLY none_observed MAY BE TOLD AS "NOTHING CHANGED". It is the one value
@@ -67,6 +81,8 @@ func ErrorWords(code ErrorCode) string {
 		return "Stopped by the interrupt."
 	case ErrorToolAbandoned:
 		return WordsToolAbandoned
+	case ErrorPromptUnavailable:
+		return WordsPromptUnavailable
 	}
 	return ""
 }

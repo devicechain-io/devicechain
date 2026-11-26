@@ -1,0 +1,96 @@
+args: install local --kube-context prod -o json
+stdin: ""
+exit: 0
+-- stdout (6437 bytes) --
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":1,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"run.started","payload":{"target":{"mode":"existing-context","context":"prod"},"dry_run":false,"manifest":[{"id":"install.inputs"},{"id":"install.preflight","optional":true},{"id":"install.cluster"},{"id":"install.claim"},{"id":"install.inspect"},{"id":"install.credentials"},{"id":"install.prepare"},{"id":"install.write-intent"},{"id":"install.operator"},{"id":"install.prerequisites"},{"id":"install.database-login"},{"id":"install.record"},{"id":"install.rdb-ready"},{"id":"install.summary","optional":true}]}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":2,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"step.started","step_id":"install.inputs","attempt":1,"payload":{"message":"install.inputs"}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":3,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"step.finished","step_id":"install.inputs","attempt":1,"payload":{"outcome":"unchanged","duration_ms":0}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":4,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"step.started","step_id":"install.preflight","attempt":1,"payload":{"message":"install.preflight"}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":5,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"section","section":"preflight.tooling","text":"","highlight":"","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":6,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"check","verdict":"pass","text":"kubectl (/fake/kubectl)","highlight":"","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":7,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"check","verdict":"pass","text":"tofu (/fake/tofu) satisfies bundled required_version","highlight":"","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":8,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"check","verdict":"pass","text":"ko (/fake/ko)","highlight":"","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":9,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"section","section":"preflight.docker-engine","text":"","highlight":"","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":10,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"check","verdict":"info","text":"not needed — installing into prod from published images","highlight":"","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":11,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"section","section":"preflight.kube-contexts","text":"","highlight":"","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":12,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"check","verdict":"info","text":"current-context: ","highlight":"prod","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":13,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"check","verdict":"info","text":"- prod","highlight":"","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":14,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"check","verdict":"pass","text":"--kube-context prod exists","highlight":"","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":15,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"section","section":"preflight.kube-server-version","text":"","highlight":"","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":16,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"check","verdict":"pass","text":"kubernetes server v1.31.4","highlight":"","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":17,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"preflight.observation","step_id":"install.preflight","attempt":1,"payload":{"observation":"summary","text":"","highlight":"","fix":""}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":18,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"step.finished","step_id":"install.preflight","attempt":1,"payload":{"outcome":"unchanged","duration_ms":0}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":19,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"run.summary","payload":{"outcome":"succeeded","install_record":"not_read","readiness":"not_checked","claim":"not_claimed","partial_state":"none_observed"}}
+
+-- stderr (0 bytes) --
+
+-- engine (1676 bytes) --
+{
+  "Provider": "local",
+  "Options": {
+    "Instance": "",
+    "KubeContext": "prod",
+    "Cluster": "devicechain",
+    "CreateCluster": false,
+    "Profile": "",
+    "DryRun": false,
+    "AssumeYes": false,
+    "ImageRegistry": "ghcr.io/devicechain-io",
+    "ImageVersion": "v1.9.0",
+    "BuildImages": false,
+    "IngressHost": "",
+    "NoTLS": false,
+    "AllowLegacyDbRemoval": false,
+    "EnableAreas": null,
+    "MqttFailClosed": null,
+    "MqttDeviceUplinks": null,
+    "Size": "",
+    "Sharding": "",
+    "MQTTExposure": "",
+    "MQTTHost": "",
+    "DevAllowEgress": null,
+    "BrokerMaxConnections": null,
+    "EventStoreMaxWALMiB": null,
+    "EventStoreCheckpointTimeout": null,
+    "TrustedProxies": null,
+    "IngressController": "",
+    "DropLegacyIngress": false,
+    "ValuesOverlay": null,
+    "ResetValues": false,
+    "Lwm2mIdentities": null,
+    "WithdrawLwm2mIdentities": false,
+    "SparkplugSources": null,
+    "WithdrawSparkplugSources": false,
+    "NoMonitoring": false,
+    "NoCNPG": false,
+    "Compact": false,
+    "HA": false,
+    "BackupDestination": null,
+    "BackupSnapshotClass": "",
+    "DatabasePlacement": {},
+    "MaxConnections": 0,
+    "RelationalStoreMaxWALMiB": null,
+    "Restore": {
+      "RdbFrom": "",
+      "RdbTargetTime": "",
+      "TsdbFrom": "",
+      "TsdbTargetTime": ""
+    },
+    "DcctlVersion": "1.9.0",
+    "RemoveLegacyIngress": false,
+    "AWSNLB": "",
+    "MQTTGateway": null,
+    "AlertRouting": {
+      "Webhook": "",
+      "WatchdogWebhook": "",
+      "EmailTo": null,
+      "SMTPHost": "",
+      "SMTPFrom": "",
+      "SMTPUser": "",
+      "SMTPPassword": "",
+      "Config": "",
+      "Clear": false
+    }
+  }
+}
+
