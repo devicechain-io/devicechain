@@ -297,7 +297,9 @@ func (t *tofuExec) streamingTo(ctx context.Context, w io.Writer, run func() erro
 	// follows an abandoned apply still cannot print the state — and safely, because the
 	// parked command holds the same writer rather than a field this is overwriting.
 	defer t.stdout.to(io.Discard)
-	err := runUntilAbandoned(ctx, t.abandonBudget, run)
+	// runTool is runUntilAbandoned plus the engine run's books on the command: see it
+	// for why an abandoned command keeps a re-run out until it really exits.
+	err := runTool(ctx, t.abandonBudget, tofuGracefulStopBudget, run)
 	if errors.Is(err, errTofuAbandoned) {
 		t.parked = true
 	}
@@ -355,10 +357,20 @@ func (t *tofuExec) Apply(ctx context.Context, opts ...tfexec.ApplyOption) error 
 		path, kctx := pinVars(p)
 		opts = append(append([]tfexec.ApplyOption(nil), opts...), path, kctx)
 	}
-	if p := runFrom(ctx).tofuProgress(); p != nil && !t.parked {
-		return t.applyObserved(ctx, p, opts)
+	// 🔴 FROM HERE THE STAGE MAY HAVE CHANGED THE CLUSTER, whatever happens next. An
+	// apply interrupted, failed or abandoned may have applied part of its plan, so a
+	// stop from now on can never be reported as having changed nothing.
+	run := runFrom(ctx)
+	run.mayChange()
+	if p := run.tofuProgress(); p != nil && !t.parked {
+		err = t.applyObserved(ctx, p, opts)
+	} else {
+		err = t.streaming(ctx, func() error { return t.Terraform.Apply(ctx, opts...) })
 	}
-	return t.streaming(ctx, func() error { return t.Terraform.Apply(ctx, opts...) })
+	if err == nil {
+		run.changeApplied()
+	}
+	return err
 }
 
 // applyObserved is Apply in OpenTofu's -json mode, read by a tofujson.Observer that
@@ -442,6 +454,8 @@ func (t *tofuExec) Import(ctx context.Context, address, id string, opts ...tfexe
 	defer p.release()
 	path, kctx := pinVars(p)
 	opts = append(append([]tfexec.ImportOption(nil), opts...), path, kctx)
+	// An import writes state: not the cluster, but not nothing.
+	runFrom(ctx).mayChange()
 	return t.Terraform.Import(ctx, address, id, opts...)
 }
 
@@ -461,6 +475,7 @@ func (t *tofuExec) Destroy(ctx context.Context, opts ...tfexec.DestroyOption) er
 	path, kctx := pinVars(p)
 	opts = append(append([]tfexec.DestroyOption(nil), opts...), path, kctx)
 	f := newOutputsBlockFilter(out(ctx).stdout())
+	runFrom(ctx).mayChange()
 	err = t.streamingTo(ctx, f, func() error { return t.Terraform.Destroy(ctx, opts...) })
 	if ferr := f.Flush(); ferr != nil && err == nil {
 		err = ferr

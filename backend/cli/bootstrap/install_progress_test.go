@@ -168,6 +168,7 @@ func TestProgressIsCoalescedAndItsLastValueArrivesBeforeTheStageEnds(t *testing.
 func TestARetryCountsAgainstItsOwnPlan(t *testing.T) {
 	p := newProgressRun(t, true, installflow.StepInstallPrerequisites)
 	feed := func(name string) {
+		p.run.mayChange() // what tofuExec.Apply marks before the command it stands in for
 		sp := p.run.tofuProgress()
 		sp.tofu(tofujson.Progress{})
 		o := tofujson.New(nil, nil, sp.tofu)
@@ -190,6 +191,7 @@ func TestARetryCountsAgainstItsOwnPlanBehindAStalledPresenter(t *testing.T) {
 	p.sink.Hold()
 	t.Cleanup(p.sink.Release)
 	feed := func(name string) {
+		p.run.mayChange() // what tofuExec.Apply marks before the command it stands in for
 		sp := p.run.tofuProgress()
 		sp.tofu(tofujson.Progress{})
 		o := tofujson.New(nil, nil, sp.tofu)
