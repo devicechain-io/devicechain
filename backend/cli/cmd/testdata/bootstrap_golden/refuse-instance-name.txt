@@ -1,0 +1,11 @@
+args: bootstrap local Acme_1 --skip-preflight --no-escrow
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (192 bytes) --
+Error: instance name "Acme_1" contains 'A'; use lowercase letters, digits and '-' (the name also names this instance's Kubernetes namespace dci-Acme_1, its database and that database's login)
+
+-- engine (11 bytes) --
+not called
+

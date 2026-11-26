@@ -1,0 +1,11 @@
+args: bootstrap local acme --skip-preflight --no-escrow --escrow-file acme.escrow
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (196 bytes) --
+Error: --escrow-file names where to write an escrow artifact and --no-escrow says not to write one. Drop one of them (note --dev implies --no-escrow, so pass --no-escrow=false to keep the escrow)
+
+-- engine (11 bytes) --
+not called
+

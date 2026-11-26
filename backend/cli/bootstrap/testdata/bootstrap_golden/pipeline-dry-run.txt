@@ -1,0 +1,55 @@
+-- stdout (2069 bytes) --
+
+[1/11] Ensure local registry
+standing in for Ensure local registry... done.
+
+[2/11] Claim the cluster
+standing in for Claim the cluster... done.
+
+[3/11] Refuse a rebuild
+standing in for Refuse a rebuild... done.
+
+[4/11] Check what other instances hold
+standing in for Check what other instances hold... done.
+
+[5/11] Declare the instance
+standing in for Declare the instance... done.
+
+[6/11] Render configuration
+standing in for Render configuration... done.
+
+[7/11] Apply infrastructure
+standing in for Apply infrastructure... done.
+
+[8/11] Install instance (Helm)
+standing in for Install instance (Helm)... done.
+
+[9/11] Wait for readiness
+standing in for Wait for readiness... done.
+
+[10/11] Even out broker leadership
+standing in for Even out broker leadership... done.
+
+[11/11] Report access info
+
+DeviceChain bootstrap summary
+  Instance: acme
+  Namespace: dci-acme
+  Profile: default
+  Images: published ghcr.io/devicechain-io @ v1.9.0
+  Kube context: kind-devicechain
+  Console: https://devicechain.local/
+  GraphQL: https://devicechain.local/api/<area>/graphql
+  MQTT: node port 31883
+  Superuser: superuser@devicechain.local
+           a password is generated for this instance and shown once, at the end of the real run
+           the superuser's seed password is kept in Secret dci-acme/dci-acme-superuser, key password (changing the password in the console does not update it):
+           kubectl -n dci-acme get secret dci-acme-superuser -o jsonpath='{.data.password}' | base64 -d
+  Backups: WAL archiving + scheduled base backups, to an object store IN THIS CLUSTER
+           this is point-in-time recovery, NOT disaster recovery — the backups share the cluster's
+           failure domain and are lost with it. Off-site backups are set by `dcctl install --backup-credentials-file`.
+  Root-key escrow: /home/op/.devicechain/escrow/acme-rootkey.escrow  (dry run — not written)
+                   copy this off the machine and store the passphrase separately — it is the ONLY copy of the key outside the cluster, and no database backup contains it
+
+-- error (5 bytes) --
+<nil>
