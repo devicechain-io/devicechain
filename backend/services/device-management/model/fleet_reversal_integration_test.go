@@ -27,6 +27,11 @@ import (
 func newReversalPG(t *testing.T) *reversalEnv {
 	t.Helper()
 	openTheEngine(t)
+	// The instance-wide dispatching budget counts every tenant in a database other tests share and
+	// leave operations running in; each test here works one fresh tenant and keeps the tenant budget.
+	previous := fleetAdmissionBudgets
+	fleetAdmissionBudgets.instanceDispatching = 1 << 20
+	t.Cleanup(func() { fleetAdmissionBudgets = previous })
 	api := NewApi(newPostgresRdbManager(t))
 	tenant := fmt.Sprintf("fleetrev%d", time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(core.WithTenant(context.Background(), tenant), 3*time.Minute)
