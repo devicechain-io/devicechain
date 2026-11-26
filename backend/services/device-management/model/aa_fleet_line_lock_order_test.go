@@ -132,7 +132,7 @@ func TestFleetBulkWritersLockBeforeMutation(t *testing.T) {
 				case "erase":
 					return redactFleetDeviceLinesOnTx(tx, e.dev.ID, false)
 				case "abort":
-					_, _, err := fleetAbortChanges(tx, e.op, "test", "", fleetEventAbort)
+					_, _, err := fleetAbortChanges(tx, e.op, fleetClock(), "test", "", fleetEventAbort)
 					return err
 				default:
 					return fleetPurgeEvidenceChunk(tx, e.op.ID)

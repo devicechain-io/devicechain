@@ -67,7 +67,10 @@ func (api *Api) SweepExpiredFleetOperations(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, fleetExpiryPassTimeout)
 	defer cancel()
 	pass := func() error {
-		now := time.Now()
+		now, err := fleetDBNow(api.RDB.DB(core.WithSystemContext(ctx)))
+		if err != nil {
+			return err
+		}
 		// Operation reads and transitions below use a fresh tenant context derived from the
 		// original non-system context.
 		tenants, err := api.fleetExpiryTenants(ctx, now)
@@ -80,7 +83,7 @@ func (api *Api) SweepExpiredFleetOperations(ctx context.Context) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if _, err := api.ExpireFleetOperations(core.WithTenant(ctx, tenant), now); err != nil {
+			if _, err := api.ExpireFleetOperations(core.WithTenant(ctx, tenant)); err != nil {
 				failed++
 				lastErr = err
 			}

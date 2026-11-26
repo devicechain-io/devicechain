@@ -146,7 +146,7 @@ func TestProtocolScopeAndExpirySkipNewerOperations(t *testing.T) {
 	now := time.Now()
 	op.ExpiresAt = sql.NullTime{Time: now.Add(-time.Hour), Valid: true}
 	op = insertProtocol2OperationForTest(t, db, *op)
-	n, err := api.ExpireFleetOperations(ctx, now)
+	n, err := api.ExpireFleetOperations(ctx)
 	require.NoError(t, err)
 	require.Zero(t, n)
 	got, err := api.FleetOperationByToken(ctx, op.Token)
