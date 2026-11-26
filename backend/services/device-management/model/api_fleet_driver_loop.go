@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const (
@@ -46,9 +44,9 @@ func (api *Api) fleetDriverCandidates(ctx context.Context) ([]fleetDriverCandida
 		Joins("LEFT JOIN fleet_operation_runtime AS runtime ON runtime.operation_id = fleet_operations.id AND runtime.tenant_id = fleet_operations.tenant_id").
 		Where("dispatch = ?", FleetDispatchRunning)
 	var candidates []fleetDriverCandidate
-	err := db.Table("(?) AS runnable", running).Select("tenant_id, token").
-		Order(clause.OrderBy{Expression: gorm.Expr("tenant_rank, CASE WHEN tenant_id > ? THEN 0 ELSE 1 END, tenant_id", state.after)}).
-		Limit(fleetDriverOperationsPerPass).Scan(&candidates).Error
+	// The outer query is literal SQL over the ranked subquery, which the model builds (and scopes).
+	err := db.Raw("SELECT tenant_id, token FROM (?) AS runnable ORDER BY tenant_rank, CASE WHEN tenant_id > ? THEN 0 ELSE 1 END, tenant_id LIMIT ?",
+		running, state.after, fleetDriverOperationsPerPass).Scan(&candidates).Error
 	if err == nil && len(candidates) > 0 {
 		state.after = candidates[len(candidates)-1].TenantID
 	}
