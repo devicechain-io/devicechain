@@ -25,12 +25,23 @@ import (
 type console struct {
 	out io.Writer // nil: os.Stdout, resolved at write time
 	err io.Writer // nil: os.Stderr, resolved at write time
+
+	children func() (io.Writer, io.Writer)
 }
 
 // stdConsole is the process's own streams.
 var stdConsole = console{}
 
-func consoleOf(c installflow.Console) console { return console{out: c.Stdout, err: c.Stderr} }
+func consoleOf(c installflow.Console) console {
+	return console{out: c.Stdout, err: c.Stderr, children: c.ChildStreams}
+}
+
+func (c console) commandStreams() (io.Writer, io.Writer) {
+	if c.children != nil {
+		return c.children()
+	}
+	return c.stdout(), c.stderr()
+}
 
 func (c console) stdout() io.Writer {
 	if c.out == nil {

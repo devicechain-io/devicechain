@@ -135,6 +135,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         void AdvanceCore(double wallS)
         {
             if (wallS < lastS || double.IsNaN(wallS) || double.IsInfinity(wallS)) throw new ArgumentException("recording time must increase");
+            // A checkpoint holds the state as of its own second, so what is still pending reaches the stream before it is written.
+            if (checkpointS + 60 <= wallS) FlushCoverage(true);
             while (checkpointS + 60 <= wallS) { checkpointS += 60; Checkpoint(checkpointS); }
             lastS = wallS;
         }
@@ -143,14 +145,52 @@ namespace DeviceChain.Harborpulse.Model.Director
             checkpoints.WriteLine(DirectorWire.Json(w => { w.WriteStartObject(); w.WriteNumber("wallS", atS); w.WriteNumber("sequence", sequence); w.WritePropertyName("state"); state.Write(w); w.WriteEndObject(); }));
             checkpoints.Flush();
         }
+        // The director reports a stream's coverage every frame, and nearly always as the interval that continues the last one. Written
+        // as it came, a day was three million rows (700 MB) that every frame allocated, serialised and parsed again, and a recording the
+        // size of the day it described. A run of contiguous intervals of one stream is one row, written when the run breaks, when any
+        // other row is written (so the order is the order things happened), when a checkpoint falls due, or CoverageFlushS after it
+        // began. A reader merges coverage by interval, so what it reads back is the same coverage.
+        public const double CoverageFlushS = 1.0;
+        sealed class PendingCoverage { public CoverageInterval Interval; public double StartedS, WallS; }
+        readonly Dictionary<(string, string, bool), PendingCoverage> pendingCoverage = new Dictionary<(string, string, bool), PendingCoverage>();
+        // A row is written at the second its run last grew, but never before the last second already written (time only moves forward),
+        // and, when a checkpoint is falling due, never after it (the checkpoint is the state as of its own second).
+        void FlushCoverage(bool beforeCheckpoint = false)
+        {
+            if (pendingCoverage.Count == 0) return;
+            var rows = pendingCoverage.Values.OrderBy(p => p.WallS).ToArray(); pendingCoverage.Clear();
+            var cap = checkpointS + 60;
+            foreach (var p in rows) AppendRaw(observed, Math.Max(lastS, beforeCheckpoint ? Math.Min(p.WallS, cap) : p.WallS), "coverage", w => DirectorWire.Coverage(w, p.Interval));
+        }
+        void CoverageCore(double wallS, CoverageInterval interval)
+        {
+            if (checkpointS + 60 <= wallS) FlushCoverage(true);
+            var key = (interval.Run, interval.Stream, interval.Gap);
+            if (pendingCoverage.TryGetValue(key, out var held))
+            {
+                if (interval.FromSim <= held.Interval.ToSim && interval.ToSim >= held.Interval.FromSim)
+                {
+                    held.Interval = new CoverageInterval(interval.Run, interval.Stream, Math.Min(held.Interval.FromSim, interval.FromSim), Math.Max(held.Interval.ToSim, interval.ToSim), interval.Gap);
+                    held.WallS = wallS;
+                    if (wallS - held.StartedS >= CoverageFlushS) FlushCoverage();
+                    return;
+                }
+                FlushCoverage(); // every pending run, oldest first: rows never go back in time
+            }
+            pendingCoverage[key] = new PendingCoverage { Interval = interval, StartedS = wallS, WallS = wallS };
+        }
         void Append(TextWriter output, double wallS, string kind, Action<Utf8JsonWriter> write)
+        {
+            FlushCoverage(); AppendRaw(output, wallS, kind, write);
+        }
+        void AppendRaw(TextWriter output, double wallS, string kind, Action<Utf8JsonWriter> write)
         {
             AdvanceCore(wallS); var payload = DirectorWire.Json(write); sequence++;
             output.WriteLine(DirectorWire.Json(w => { w.WriteStartObject(); w.WriteNumber("wallS", wallS); w.WriteNumber("sequence", sequence); w.WriteString("kind", kind); w.WritePropertyName("data"); using (var d = JsonDocument.Parse(payload)) d.RootElement.WriteTo(w); w.WriteEndObject(); }));
             output.Flush(); using (var d = JsonDocument.Parse(payload)) state.Apply(kind, d.RootElement);
         }
         public void Observe(double wallS, Observation observation) => Run(() => Append(observed, wallS, "observation", w => DirectorWire.Observation(w, observation)));
-        public void Coverage(double wallS, CoverageInterval interval) => Run(() => Append(observed, wallS, "coverage", w => DirectorWire.Coverage(w, interval)));
+        public void Coverage(double wallS, CoverageInterval interval) => Run(() => CoverageCore(wallS, interval));
         public void World(double wallS, string statusJson) => Run(() => Append(world, wallS, "world", w => { using (var d = JsonDocument.Parse(statusJson)) DirectorWire.Canonical(w, d.RootElement); }));
         public void Decision(DirectorEvent e) => Run(() => Append(director, e.ShowS, "director", w => DirectorWire.Event(w, e)));
         public void End() => Run(() => Append(director, lastS, "director", w => DirectorWire.Event(w, new DirectorEvent(lastS, "recording-end", "", ""))));

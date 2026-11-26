@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,13 +28,16 @@ import (
 // in for user-management. The decider is the ONLY source of verdicts here, so every test states
 // what the tenant's policy answered.
 
+// fakeDeciderCalls is package-level so a fakeDecider stays copyable (some tests embed a copy).
+var fakeDeciderCalls sync.Mutex
+
 type fakeDecider struct {
 	liveSids    map[string]bool
 	act         actiongate.ActuationDecision
 	actErr      error
 	exec        actiongate.ExecutionDecision
 	execErr     error
-	actCalls    int
+	actCalls    int // guarded by fakeDeciderCalls: the concurrent-proposal integration test calls Actuation from many goroutines
 	execReqs    []actiongate.ExecutionRequest
 	execBearers []string
 	second      func() (actiongate.ExecutionDecision, error)
@@ -41,7 +45,9 @@ type fakeDecider struct {
 }
 
 func (f *fakeDecider) Actuation(context.Context, actiongate.ActuationRequest) (actiongate.ActuationDecision, error) {
+	fakeDeciderCalls.Lock()
 	f.actCalls++
+	fakeDeciderCalls.Unlock()
 	return f.act, f.actErr
 }
 

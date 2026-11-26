@@ -35,12 +35,40 @@ func (c *countingRounds) Get(ctx context.Context, tenant string, seq uint64) (me
 	return c.RoundPublisher.Get(ctx, tenant, seq)
 }
 
+// gatedReader holds its pod out of the durable until open is closed, and counts what its own
+// pod has been handed: a pod that has not read is not a pod that has joined.
+type gatedReader struct {
+	messaging.MessageReader
+	open <-chan struct{}
+	read atomic.Int64
+}
+
+func (g *gatedReader) ReadMessage(ctx context.Context) (messaging.Message, error) {
+	if g.open != nil {
+		select {
+		case <-g.open:
+		case <-ctx.Done():
+			return messaging.Message{}, ctx.Err()
+		}
+	}
+	m, err := g.MessageReader.ReadMessage(ctx)
+	if err == nil {
+		g.read.Add(1)
+	}
+	return m, err
+}
+
 // Two pods read the one durable at once, so most buckets are shared and every chunk of a shared
 // bucket meets the other pod's rounds. One of them is killed between a PubAck and the ack (its
 // connection cut, every outcome after the first few swallowed) with events in flight; the
 // survivor resolves what is redelivered. The identity oracle over the whole stream is the same
 // as the single-pod test's: nothing missing, nothing stored twice. The log line reports the
 // requests the walks made per event (round publishes plus read-backs).
+//
+// Pod B is held out of the durable until pod A has been handed a message. Without that the
+// test assumed the scheduler would start both pods' fetches before the first burst landed; a
+// pod whose fetch loop started late saw an already-drained stream (B settled all 6000 while A
+// had read none) and there was no shared bucket and no kill point to prove anything about.
 //
 // Runs on one server: the protocol under test is the client's.
 func TestTwoPodsSharingTheDurableLoseAndDuplicateNothing(t *testing.T) {
@@ -69,8 +97,11 @@ func TestTwoPodsSharingTheDurableLoseAndDuplicateNothing(t *testing.T) {
 	}
 	a := startResolvePipeline(t, s)
 	readers := a.iproc.InboundEventsReaders
-	a.iproc.InboundEventsReaders = readers[:1]
-	bproc := newBenchProcessor(t, a.nmgr, readers[1:], instantApi{}, 64, 4)
+	bOpen := make(chan struct{})
+	gateA := &gatedReader{MessageReader: readers[0]}
+	gateB := &gatedReader{MessageReader: readers[1], open: bOpen}
+	a.iproc.InboundEventsReaders = []messaging.MessageReader{gateA}
+	bproc := newBenchProcessor(t, a.nmgr, []messaging.MessageReader{gateB}, instantApi{}, 64, 4)
 	bproc.AuthMode = config.AuthModeOptional
 	require.NoError(t, bproc.Initialize(context.Background()))
 	b := &resolvePipeline{nmgr: a.nmgr, iproc: bproc, js: a.js, inboundStream: a.inboundStream, resolvedStream: a.resolvedStream}
@@ -93,7 +124,20 @@ func TestTwoPodsSharingTheDurableLoseAndDuplicateNothing(t *testing.T) {
 	}
 	require.NoError(t, a.iproc.Start(context.Background()))
 	require.NoError(t, b.iproc.Start(context.Background()))
-	// Paced bursts, so both pods keep fetching from the one durable and share the buckets.
+	// B joins the moment A has been handed its first message; the paced bursts that follow are
+	// then read by both, so both keep fetching from the one durable and share the buckets.
+	stopGate := make(chan struct{})
+	t.Cleanup(func() { close(stopGate) })
+	go func() {
+		for gateA.read.Load() == 0 {
+			select {
+			case <-stopGate:
+				return
+			case <-time.After(time.Millisecond):
+			}
+		}
+		close(bOpen)
+	}()
 	go func() {
 		for lo := 0; lo < events; lo += 100 {
 			publishInbound(t, js, instance, batch[lo:lo+100])

@@ -18,7 +18,7 @@ namespace DeviceChain.Harborpulse.Tests
     /// one tick of each, minute by minute, with the managed bytes a tick of each allocates (garbage a frame makes is frame time later, and in the Editor sooner). It is skipped unless HP_FRAME_PROFILE=1, because
     /// wall time on a shared machine is no assertion (the gate is the record count in DirectorObserverChangeTests):
     /// <c>HP_FRAME_PROFILE=1 dotnet test -c Release --filter FullyQualifiedName~DirectorFrameProfile --logger "console;verbosity=detailed"</c>.
-    /// HP_FRAME_PROFILE_FPS sets the frame rate (20), HP_FRAME_PROFILE_EVERY_JOIN=1 runs every join on every frame.
+    /// HP_FRAME_PROFILE_FPS sets the frame rate (20), HP_FRAME_PROFILE_EVERY_JOIN=1 runs every join on every frame, HP_FRAME_PROFILE_RECORD=1 records the day into null streams (the player's recorder writes all day; the default measures without it).
     /// </summary>
     public class DirectorFrameProfile
     {
@@ -39,7 +39,7 @@ namespace DeviceChain.Harborpulse.Tests
             var day = new DirectorFixtureDay(); DirectorReadSnapshot snapshot = null;
             var observer = new DirectorObserver(day.Layout, () => snapshot) { RunEveryJoin = Environment.GetEnvironmentVariable("HP_FRAME_PROFILE_EVERY_JOIN") == "1" };
             var feed = new Timed(observer);
-            var host = new DirectorHost(DirectorKit.Story(), day.Layout, new PresentationMap(day.Layout), feed, new Recorder(TextWriter.Null, TextWriter.Null, TextWriter.Null, TextWriter.Null));
+            var host = new DirectorHost(DirectorKit.Story(), day.Layout, new PresentationMap(day.Layout), feed, Environment.GetEnvironmentVariable("HP_FRAME_PROFILE_RECORD") == "1" ? new Recorder(new StreamWriter(Stream.Null), new StreamWriter(Stream.Null), new StreamWriter(Stream.Null), new StreamWriter(Stream.Null)) : new Recorder(TextWriter.Null, TextWriter.Null, TextWriter.Null, TextWriter.Null));
             var model = new HarborObservedModel(day.Layout);
             var clock = new Stopwatch(); double modelMs = 0, hostMs = 0, worst = 0; var ticks = 0; var minute = 0; long modelBytes = 0, hostBytes = 0;
             var lines = new List<string> { "minute    sim  ticks  model ms  observer ms  scheduler ms  worst ms  model kB  observer kB  scheduler kB  history rows" };

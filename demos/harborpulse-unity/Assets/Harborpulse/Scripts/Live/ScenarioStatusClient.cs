@@ -83,8 +83,8 @@ namespace DeviceChain.Harborpulse.Live
 
         public void Dispose()
         {
+            // No Abort: see DirectorReads.Dispose. The poll in flight ends on its own 3 s timeout; its completion sees `disposed`.
             disposed = true;
-            inflight?.Abort();
         }
     }
 }

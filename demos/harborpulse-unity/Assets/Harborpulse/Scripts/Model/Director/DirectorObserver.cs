@@ -108,6 +108,9 @@ namespace DeviceChain.Harborpulse.Model.Director
         public long MeasurementWorkUnits { get; private set; }
         string run;
         double startSim, lastSim;
+        // Gap spans of the reads already reported whole. A read keeps every gap it ever had, so reporting each of them again every frame
+        // made a frame's work, and the rows it recorded, grow with every failed poll of the day; each is reported once (see Observe).
+        readonly HashSet<ReadSpan> gapsReported = new HashSet<ReadSpan>();
         int measurementReconnects, alarmReconnects;
         static readonly Dictionary<string, string[]> Streams = new Dictionary<string, string[]> {
             ["alarms"] = new[] { "alarms", "notifications", "pump" }, ["notifications"] = new[] { "notifications" },
@@ -237,6 +240,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             input = inputs ?? throw new ArgumentNullException(nameof(inputs)); this.observe = observe; this.cover = cover; active = null;
             if (run != inputs.Run) {
                 run = inputs.Run; emitted.Clear(); alarmHistory.Clear(); previous.Clear(); trends.Clear(); wellHistory.Clear(); dueWells.Clear(); wellCycles.Clear(); pumpRunning.Clear(); pumpOffAt.Clear(); failedProbes.Clear(); commandCycles.Clear(); causeTried.Clear(); problems.Clear();
+                gapsReported.Clear();
                 startSim = lastSim = input.Sim; measurementReconnects = alarmReconnects = measurementIndex = 0;
                 cycles.Clear(); cyclesByToken.Clear(); cyclesByOriginator.Clear(); chips.Clear(); changesSeen.Clear(); deviceByToken.Clear(); Array.Clear(bound, 0, bound.Length);
                 replacementsByDevice.Clear(); assignmentsByDevice.Clear(); newestReplacement.Clear(); statusSeen = null; backfillSeen = null; bindingFresh = -1;
@@ -276,7 +280,11 @@ namespace DeviceChain.Harborpulse.Model.Director
                         var r = n.Group[i];
                         for (var c = 0; c < r.Coverage.Count; c++) {
                             var span = r.Coverage[c];
-                            if (span.Gap && Sim(span.To) >= startSim && Sim(span.From) <= input.Sim) Gap(name, Math.Max(startSim, Sim(span.From)), Math.Min(input.Sim, Sim(span.To)));
+                            if (!span.Gap || gapsReported.Contains(span)) continue;
+                            double spanFrom = Sim(span.From), spanTo = Sim(span.To);
+                            if (spanTo >= startSim && spanFrom <= input.Sim) Gap(name, Math.Max(startSim, spanFrom), Math.Min(input.Sim, spanTo));
+                            // whole once the frame's sim has passed its end (a span a poll closed just now is finished next frame); one that ended before the run began never counts
+                            if (spanTo <= input.Sim || spanTo < startSim) gapsReported.Add(span);
                         }
                         if (!r.Healthy(input.Now) || failed || !r.Data.HasValue) continue;
                         var h = Hold(n, i, name, r);
