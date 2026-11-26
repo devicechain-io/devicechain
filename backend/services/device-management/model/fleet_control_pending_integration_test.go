@@ -18,7 +18,7 @@ func TestFleetPostgresControlRequestIsAutocommittedAndPreservesNewerRequest(t *t
 	p := newPostPG(t, "v1")
 	db := p.api.RDB.DB(p.ctx)
 	var newer sql.NullTime
-	_, err := p.api.fleetControl(p.ctx, p.op.Token, fleetEventPause, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	_, err := p.api.fleetControl(p.ctx, p.op.Token, fleetEventPause, func(tx *gorm.DB, op *FleetOperation, now time.Time) (map[string]any, *FleetOperationEvent, error) {
 		// Another connection sees the marker while the fenced transaction is still open.
 		// It must also be able to replace it: control must never lock the runtime row.
 		err := db.Transaction(func(witness *gorm.DB) error {

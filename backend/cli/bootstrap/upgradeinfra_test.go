@@ -804,7 +804,7 @@ func (f *fakeUpgradeTofu) ShowPlanFile(context.Context, string, ...tfexec.ShowOp
 	}
 	return f.plans[i], nil
 }
-func (f *fakeUpgradeTofu) Apply(context.Context, ...tfexec.ApplyOption) error {
+func (f *fakeUpgradeTofu) Apply(context.Context, ...applyOption) error {
 	f.applyCalls++
 	if f.applyCalls <= len(f.applyErrs) {
 		return f.applyErrs[f.applyCalls-1]

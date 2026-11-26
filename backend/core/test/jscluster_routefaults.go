@@ -338,7 +338,9 @@ func (e *routeBypassError) Unwrap() error { return errRoutesBypassProxies }
 //
 // dialedPair keeps the connections a proxy has closed: a server still lists a route for
 // a moment after its connection was closed, and that route was carried by the mesh.
-// Forgetting it would report a bypass that never existed.
+// Forgetting it would report a bypass that never existed. Once the mesh itself closes,
+// it attributes nothing: its released listener addresses can be reused by unrelated
+// connections.
 //
 // An empty remote, which is not an address, fails closed here; unproxiedRoutes does not
 // ask about one (see there).
@@ -353,6 +355,10 @@ func (f *RouteFaults) attribute(i int, peer, remote string, names []string) stri
 		return "which is not a TCP address the mesh can recognize"
 	}
 	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return "which this mesh cannot carry after closing"
+	}
 	byListener, isListener := f.listenerPair[remote]
 	byDial, isDial := f.dialedPair[dialKey{local: remote, to: i}]
 	f.mu.Unlock()

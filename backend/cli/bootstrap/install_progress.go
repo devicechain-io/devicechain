@@ -38,7 +38,12 @@ type stageProgress struct {
 // progress binds a reporter to the active stage attempt, or nil outside an engine
 // run or between stages. Every method of *stageProgress is safe on nil.
 func (r *installRun) progress() *stageProgress {
-	if r == nil || !r.started || r.step == "" {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.started || r.step == "" {
 		return nil
 	}
 	return &stageProgress{run: r, step: r.step, attempt: r.attempt}
@@ -84,7 +89,7 @@ func (r *installRun) gate(metric string, unit installflow.Unit, source string, r
 	}
 	total := expected
 	r.progress().report(installflow.StepProgress{MetricID: metric, Mode: installflow.ProgressMeasured,
-		Current: ready, Total: &total, Unit: unit, Source: source})
+		Current: min(ready, expected), Total: &total, Unit: unit, Source: source})
 }
 
 // retry closes the active stage's attempt as a transient failure and starts the
@@ -97,17 +102,19 @@ func (r *installRun) gate(metric string, unit installflow.Unit, source string, r
 //
 // The failed attempt's code is the stage's ID followed by reason.
 func (r *installRun) retry(reason string) {
-	if r == nil || !r.started || r.step == "" {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.started || r.step == "" {
 		return
 	}
 	code := installflow.ErrorCode(string(r.step) + "." + reason)
-	effect := installflow.EffectNoneObserved
-	if r.stepMuts {
-		effect = installflow.EffectMayHaveChanged
-	}
 	r.emit(installflow.Event{Step: r.step, Attempt: r.attempt, Payload: installflow.StepFailed{
-		Code: code, Retry: installflow.RetryTransient, Effect: effect}})
+		Code: code, Retry: installflow.RetryTransient, Effect: r.effect}})
 	r.attempt++
 	r.emit(installflow.Event{Step: r.step, Attempt: r.attempt, Payload: installflow.StepStarted{
 		Message: installflow.MessageCode(r.step), BudgetMS: stageBudget(r.step)}})
+	r.beginAttemptLocked()
 }

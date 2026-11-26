@@ -84,7 +84,8 @@ type metricKey struct {
 // every prompt requested once and resolved once. A count of actions — work a
 // tool reports done, unlike a readiness snapshot, which may go down — never
 // decreases within its attempt, never passes its total, and keeps its total
-// once one is reported. It returns every violation.
+// once one is reported. Readiness may regress or change its total, but must
+// never exceed that total. It returns every violation.
 func VerifyStream(envs []installflow.Envelope) error {
 	var errs []error
 	bad := func(i int, format string, args ...any) {
@@ -136,6 +137,9 @@ func VerifyStream(envs []installflow.Envelope) error {
 			if !active[k] {
 				bad(i, "progress for %s attempt %d outside the attempt", e.StepID, e.Attempt)
 			}
+			if p.Total != nil && p.Current > *p.Total {
+				bad(i, "%s reports %d of %d", p.MetricID, p.Current, *p.Total)
+			}
 			if p.Unit == installflow.UnitActions {
 				mk := metricKey{k, p.MetricID}
 				if prev, seen := counts[mk]; seen {
@@ -145,9 +149,6 @@ func VerifyStream(envs []installflow.Envelope) error {
 					if prev.Total != nil && (p.Total == nil || *p.Total != *prev.Total) {
 						bad(i, "%s changed its total within attempt %d", p.MetricID, e.Attempt)
 					}
-				}
-				if p.Total != nil && p.Current > *p.Total {
-					bad(i, "%s reports %d of %d", p.MetricID, p.Current, *p.Total)
 				}
 				counts[mk] = p
 			}

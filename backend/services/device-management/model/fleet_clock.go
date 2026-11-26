@@ -23,6 +23,18 @@ func fleetTimestamp(db *gorm.DB) any {
 	return fleetClock()
 }
 
+// fleetDBNow reads the database's clock once, on db (a transaction's handle reads it inside that
+// transaction). A decision that stamps a row, or compares with a stamp, takes its time from here so
+// that every replica judges on the same clock; the SQLite fixtures use the injected fixture clock.
+func fleetDBNow(db *gorm.DB) (time.Time, error) {
+	if db.Dialector.Name() != "postgres" {
+		return fleetClock(), nil
+	}
+	var now time.Time
+	err := db.Raw("SELECT clock_timestamp()").Scan(&now).Error
+	return now, err
+}
+
 func fleetTimestampAfter(db *gorm.DB, delay time.Duration, sqliteNow time.Time) any {
 	if db.Dialector.Name() == "postgres" {
 		return gorm.Expr("clock_timestamp() + ? * interval '1 second'", delay.Seconds())

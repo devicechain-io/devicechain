@@ -61,7 +61,7 @@ func assertConcurrentFleetExpiry(t *testing.T, api *Api, ctx context.Context) {
 	done := make(chan result, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
-			n, err := api.ExpireFleetOperations(ctx, now)
+			n, err := api.ExpireFleetOperations(ctx)
 			done <- result{n, err}
 		}()
 	}
@@ -101,7 +101,7 @@ func TestExpiryLeavesNewerProtocolsAlone(t *testing.T) {
 	now := time.Now()
 	op := seedExpiryOperation(t, api, ctx, "future", FleetDispatchReady, now)
 	require.NoError(t, api.RDB.DB(ctx).Model(op).Update("driver_protocol", 2).Error)
-	n, err := api.ExpireFleetOperations(ctx, now)
+	n, err := api.ExpireFleetOperations(ctx)
 	require.NoError(t, err)
 	require.Zero(t, n)
 	require.Empty(t, events(t, api, ctx, op))
@@ -231,7 +231,7 @@ func TestFleetExpiryContinuesPastAFailingOperation(t *testing.T) {
 		}
 	}))
 	t.Cleanup(func() { api.RDB.Database.Callback().Create().Remove(hook) })
-	n, err := api.ExpireFleetOperations(ctx, now)
+	n, err := api.ExpireFleetOperations(ctx)
 	require.Error(t, err)
 	require.Equal(t, 1, n)
 	got, err := api.fleetOperationByToken(ctx, next.Token)

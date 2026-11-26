@@ -41,6 +41,7 @@ func driverPGManager(t *testing.T) *rdb.RdbManager {
 		Migrations: schema.Migrations, InstanceConfig: base.InstanceConfig, MicroserviceConfig: base.MicroserviceConfig}
 	require.NoError(t, mgr.ExecuteInitialize(context.Background()))
 	t.Cleanup(func() {
+		checkFleetTestDispatching(t, mgr.Database)
 		pool, err := mgr.Database.DB()
 		require.NoError(t, err)
 		require.NoError(t, pool.Close())
@@ -69,6 +70,7 @@ func driverPGOperation(t *testing.T, api *Api, tenant string, n int) (context.Co
 		Safety:       FleetSafetyRequest{MaxPostsPerSecond: &rate},
 	}, "creator")
 	require.NoError(t, err)
+	cleanupFleetTestOperation(t, api, ctx, op.Token)
 	op, err = api.StartFleetOperation(ctx, op.Token, op.ContractDigest, alice)
 	require.NoError(t, err)
 	return ctx, op

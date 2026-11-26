@@ -22,6 +22,13 @@ const (
 	DefaultControlGrace     = 5 * time.Second
 )
 
+// maxPendingPerMetric bounds the undelivered values of one metric of one
+// attempt. Coalescing never merges values of different modes, so each change
+// of mode behind a stalled presenter adds one; only an engine that keeps
+// flipping a metric between modes can reach the bound, and past it the newest
+// value replaces the last waiting one.
+const maxPendingPerMetric = 8
+
 // Sink is a presenter's side of the hub. Deliver is called from one goroutine,
 // in seq order, and may be slow: the hub buffers within its bounds so the
 // engine is not held up.
@@ -126,7 +133,7 @@ type Hub struct {
 	control  []*entry
 	logs     []*entry
 	logBytes int
-	queued   map[progressKey]*entry
+	queued   map[progressKey][]*entry // per metric, oldest first; never empty
 	held     map[progressKey]*heldProgress
 	lastSent map[progressKey]time.Time
 	wake     chan struct{}
@@ -192,7 +199,7 @@ func NewHub(opts Options) (*Hub, error) {
 	h := &Hub{
 		op: opts.Operation, runID: opts.RunID, clock: opts.Clock, sink: opts.Sink, opts: opts,
 		red: newRedactor(), start: opts.Clock.Now(),
-		queued: map[progressKey]*entry{}, held: map[progressKey]*heldProgress{},
+		queued: map[progressKey][]*entry{}, held: map[progressKey]*heldProgress{},
 		lastSent: map[progressKey]time.Time{},
 		wake:     make(chan struct{}, 1), space: make(chan struct{}),
 		steps: map[StepID]*stepState{}, prompts: map[PromptID]bool{},
@@ -236,7 +243,9 @@ func (h *Hub) statsLocked() Stats {
 	s := h.stats
 	s.ControlPending = len(h.control)
 	s.LogsPending = len(h.logs)
-	s.ProgressPending = len(h.queued)
+	for _, q := range h.queued {
+		s.ProgressPending += len(q)
+	}
 	s.LogsEvicted = h.ring.evicted
 	return s
 }
@@ -473,8 +482,15 @@ func (h *Hub) progressLocked(ev Event, p StepProgress, now time.Time) error {
 	k := progressKey{step: ev.Step, attempt: ev.Attempt, metric: p.MetricID}
 	e := &entry{kind: KindStepProgress, step: ev.Step, parent: ev.Parent, attempt: ev.Attempt, at: now, payload: p}
 	if hp, ok := h.held[k]; ok {
-		hp.e = e
-		return nil
+		if sameMode(hp.e, e) {
+			hp.e = e
+			return nil
+		}
+		// A change of mode is never coalesced away: the held value goes now,
+		// and the new one waits out the interval behind it.
+		hp.timer.Stop()
+		delete(h.held, k)
+		h.enqueueProgressLocked(k, hp.e)
 	}
 	if last, ok := h.lastSent[k]; ok {
 		if wait := h.opts.ProgressInterval - now.Sub(last); wait > 0 {
@@ -498,14 +514,26 @@ func (h *Hub) flushHeld(k progressKey, hp *heldProgress) {
 	h.enqueueProgressLocked(k, hp.e)
 }
 
-// enqueueProgressLocked replaces any undelivered value of the same metric, so
-// at most one per metric waits for the presenter.
+// enqueueProgressLocked replaces the newest undelivered value of the same
+// metric and attempt when it has the same mode, so at most one value per mode
+// waits for the presenter. A value of another mode queues behind it instead:
+// the step of an unknown total to a measured one, or back, is always seen.
 func (h *Hub) enqueueProgressLocked(k progressKey, e *entry) {
 	h.order++
 	e.order = h.order
-	h.queued[k] = e
+	q := h.queued[k]
+	if n := len(q); n > 0 && (sameMode(q[n-1], e) || n >= maxPendingPerMetric) {
+		q[n-1] = e
+	} else {
+		q = append(q, e)
+	}
+	h.queued[k] = q
 	h.lastSent[k] = h.clock.Now()
 	h.signal()
+}
+
+func sameMode(a, b *entry) bool {
+	return a.payload.(StepProgress).Mode == b.payload.(StepProgress).Mode
 }
 
 func (h *Hub) enqueueControlLocked(e *entry) {
@@ -618,9 +646,9 @@ func (h *Hub) nextLocked() *entry {
 		best, from = h.logs[0], 2
 	}
 	var bestKey progressKey
-	for k, e := range h.queued {
-		if best == nil || e.order < best.order {
-			best, from, bestKey = e, 3, k
+	for k, q := range h.queued {
+		if best == nil || q[0].order < best.order {
+			best, from, bestKey = q[0], 3, k
 		}
 	}
 	switch from {
@@ -634,7 +662,12 @@ func (h *Hub) nextLocked() *entry {
 		h.logs[0] = nil
 		h.logs = h.logs[1:]
 	case 3:
-		delete(h.queued, bestKey)
+		if q := h.queued[bestKey]; len(q) > 1 {
+			q[0] = nil
+			h.queued[bestKey] = q[1:]
+		} else {
+			delete(h.queued, bestKey)
+		}
 	}
 	return best
 }
@@ -707,8 +740,8 @@ func (h *Hub) pendingThroughLocked(mark uint64) bool {
 	if len(h.logs) > 0 && h.logs[0].order <= mark {
 		return true
 	}
-	for _, e := range h.queued {
-		if e.order <= mark {
+	for _, q := range h.queued {
+		if q[0].order <= mark {
 			return true
 		}
 	}

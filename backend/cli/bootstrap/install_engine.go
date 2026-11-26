@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
 )
@@ -57,6 +58,21 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 	if err := r.start(installTarget(e.Options)); err != nil {
 		return failedBeforeStart(rt, err)
 	}
+	// 🔴 THE STOPPING STATE. A cancel is reported the moment it is requested, naming
+	// the stage it found and whether a tool is still running — and nothing more: the
+	// stage is left to stop on its own (an interrupted OpenTofu command gets its
+	// graceful stop, a kind child its CommandContext kill), and only when it has
+	// returned does close end it and send the summary. Reporting the run over before
+	// that would let a presenter quit, and a re-run start, while the work was still
+	// changing the cluster.
+	//
+	// A run cancelled before it began says so here, before its first stage, rather
+	// than whenever the watcher's goroutine is scheduled.
+	if ctx.Err() != nil {
+		r.stopping(installflow.CancelReasonOf(ctx))
+	}
+	watch := context.AfterFunc(ctx, func() { r.stopping(installflow.CancelReasonOf(ctx)) })
+	defer watch()
 
 	// The command settled argv-only checks before the run began. File reads
 	// retain their historical position after preflight.
@@ -150,17 +166,42 @@ func readOnlyStage(id installflow.StepID) bool {
 	return false
 }
 
-// mutatingStage reports whether a stage may change the cluster or this machine.
-// install.cluster is not one by default — adopting a context or reusing a kind
-// cluster changes nothing — and says so itself when it creates one (mayChange).
+// mutatingStage reports whether a stage may change the cluster or this machine from
+// its first call on, so an attempt of it starts at may_have_changed.
+//
+// Two stages are not on the list because they say for themselves when they start to
+// change something, and before that they have changed nothing: install.cluster, where
+// adopting a context or reusing a kind cluster changes nothing and creating one does
+// (mayChange), and install.prerequisites, whose writes are all OpenTofu's — it reads
+// and fences until a command that writes state starts (tofuExec marks it). A stage
+// whose writes are not individually marked stays on this list: an unmarked write
+// reported as none_observed is the one wrong answer an effect must never give.
 func mutatingStage(id installflow.StepID) bool {
 	switch id {
 	case installflow.StepInstallClaim, installflow.StepInstallCredentials, installflow.StepInstallPrepare,
-		installflow.StepInstallWriteIntent, installflow.StepInstallOperator, installflow.StepInstallPrerequisites,
+		installflow.StepInstallWriteIntent, installflow.StepInstallOperator,
 		installflow.StepInstallDatabaseLogin, installflow.StepInstallRecord:
 		return true
 	}
 	return false
+}
+
+// moreCertain orders effect certainty — none_observed, may_have_changed, applied —
+// and returns the higher of a and b. An attempt's effect only ever moves up.
+func moreCertain(a, b installflow.EffectCertainty) installflow.EffectCertainty {
+	rank := func(e installflow.EffectCertainty) int {
+		switch e {
+		case installflow.EffectNoneObserved:
+			return 0
+		case installflow.EffectApplied:
+			return 2
+		}
+		return 1 // may_have_changed, and anything unknown
+	}
+	if rank(b) > rank(a) {
+		return b
+	}
+	return a
 }
 
 // installRun is one engine run of the install as the code below the engine sees it:
@@ -178,12 +219,33 @@ type installRun struct {
 	// report its resource actions. Off, the apply runs exactly as it always has.
 	observeTools bool
 
-	started  bool
-	step     installflow.StepID // the active stage; "" between stages
-	attempt  int                // the active stage's attempt, 1-based
-	stepMuts bool               // the active stage may change something
-	last     installflow.StepID // the last stage entered
-	changed  bool               // a stage that may change something has been entered
+	// outlive is Runtime.Outlive: what a tool the run stops waiting for is held
+	// open on, so a re-run is not admitted while it may still be applying.
+	outlive func() (ended func())
+
+	// mu guards the stage state below. The run's own goroutine moves it; the cancel
+	// watcher and a tool's goroutine read and mark it. Events about a stage are
+	// emitted under it, so the stream says what the state was when it says it.
+	mu      sync.Mutex
+	started bool
+	step    installflow.StepID // the active stage; "" between stages
+	attempt int                // the active stage's attempt, 1-based
+	// effect is what the active attempt has done, so far as the run has seen: it
+	// starts at none_observed (may_have_changed for a mutatingStage) and only rises.
+	effect installflow.EffectCertainty
+	// abandoned: the active attempt stopped waiting for an interrupted tool.
+	abandoned bool
+	last      installflow.StepID // the last stage entered
+	changed   bool               // some attempt may have changed something
+	applied   bool               // some attempt certainly changed something
+	// tools counts the tools running, abandoned ones included; toolStop is the
+	// graceful stop the last one started was given.
+	tools    int
+	toolStop time.Duration
+
+	// stopOnce makes run.cancelling one event, sent by whichever of the cancel
+	// watcher and close gets there first — or by neither, once close has sealed it.
+	stopOnce sync.Once
 
 	record    installflow.RecordState
 	claim     installflow.ClaimState
@@ -200,6 +262,7 @@ func newInstallRun(rt installflow.Runtime, dryRun bool) *installRun {
 		events: rt.Events, prompts: rt.Prompts, con: consoleOf(rt.Console), dryRun: dryRun,
 		record: installflow.RecordNotRead, claim: installflow.ClaimNotClaimed,
 		readiness: installflow.ReadinessNotChecked, observeTools: rt.ObserveTools,
+		outlive: rt.Outlive, effect: installflow.EffectNoneObserved,
 	}
 }
 
@@ -230,44 +293,115 @@ func (r *installRun) start(t installflow.Target) error {
 		Target: t, DryRun: r.dryRun, Manifest: installManifest()}}); err != nil {
 		return fmt.Errorf("install engine: starting the run: %w", err)
 	}
+	r.mu.Lock()
 	r.started = true
+	r.mu.Unlock()
 	return nil
 }
 
 // enter closes the active stage as finished and starts id.
 func (r *installRun) enter(id installflow.StepID) {
-	if r == nil || !r.started {
+	if r == nil {
 		return
 	}
-	r.finishActive()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.started {
+		return
+	}
+	r.finishActiveLocked()
 	r.emit(installflow.Event{Step: id, Attempt: 1, Payload: installflow.StepStarted{
 		Message: installflow.MessageCode(id), BudgetMS: stageBudget(id)}})
-	r.step, r.attempt, r.last, r.stepMuts = id, 1, id, mutatingStage(id)
-	if r.stepMuts && !r.dryRun {
+	r.step, r.attempt, r.last = id, 1, id
+	r.beginAttemptLocked()
+}
+
+// beginAttemptLocked resets what the active attempt is known to have done.
+func (r *installRun) beginAttemptLocked() {
+	r.effect, r.abandoned = installflow.EffectNoneObserved, false
+	if mutatingStage(r.step) {
+		r.raiseLocked(installflow.EffectMayHaveChanged)
+	}
+}
+
+// raiseLocked records that the active attempt has done at least e. A rehearsal
+// changes nothing, whatever it reaches.
+func (r *installRun) raiseLocked(e installflow.EffectCertainty) {
+	if r.dryRun || r.step == "" {
+		return
+	}
+	r.effect = moreCertain(r.effect, e)
+	switch r.effect {
+	case installflow.EffectApplied:
+		r.applied, r.changed = true, true
+	case installflow.EffectMayHaveChanged:
 		r.changed = true
 	}
 }
 
-// skip records a stage that does not apply to this run.
-func (r *installRun) skip(id installflow.StepID) {
-	if r == nil || !r.started {
+func (r *installRun) raise(e installflow.EffectCertainty) {
+	if r == nil {
 		return
 	}
-	r.finishActive()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.raiseLocked(e)
+}
+
+// skip records a stage that does not apply to this run.
+func (r *installRun) skip(id installflow.StepID) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.skipLocked(id)
+}
+
+func (r *installRun) skipLocked(id installflow.StepID) {
+	if !r.started {
+		return
+	}
+	r.finishActiveLocked()
 	r.emit(installflow.Event{Step: id, Attempt: 1, Payload: installflow.StepStarted{Message: installflow.MessageCode(id)}})
 	r.emit(installflow.Event{Step: id, Attempt: 1, Payload: installflow.StepFinished{Outcome: installflow.StepNotApplicable}})
 }
 
 // mayChange says the active stage is about to change something it does not change
-// on every run: creating a kind cluster, as opposed to adopting one.
-func (r *installRun) mayChange() {
-	if r == nil || r.dryRun || r.step == "" {
+// on every run: creating a kind cluster, as opposed to adopting one; starting an
+// OpenTofu command that writes state.
+func (r *installRun) mayChange() { r.raise(installflow.EffectMayHaveChanged) }
+
+// changeApplied says the active stage's change has certainly been made: objects the
+// API server accepted, an OpenTofu apply that returned success.
+func (r *installRun) changeApplied() { r.raise(installflow.EffectApplied) }
+
+// stopping is the stopping state's one announcement: the run has been asked to stop,
+// this is the stage it found, and this is whether a tool is still running and how
+// long that tool was given to stop. It changes nothing else — the stage goes on until
+// its work returns, and close then ends it.
+func (r *installRun) stopping(reason installflow.CancelReason) {
+	if r == nil {
 		return
 	}
-	r.stepMuts, r.changed = true, true
+	r.stopOnce.Do(func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		c := installflow.RunCancelling{Reason: reason, ActiveStep: r.step, WaitingForTool: r.tools > 0}
+		if c.WaitingForTool {
+			c.StopBudgetMS = r.toolStop.Milliseconds()
+		}
+		r.emit(installflow.Event{Payload: c})
+	})
 }
 
 func (r *installRun) finishActive() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.finishActiveLocked()
+}
+
+func (r *installRun) finishActiveLocked() {
 	if r.step == "" {
 		return
 	}
@@ -290,25 +424,35 @@ func (r *installRun) observe(o installflow.PreflightObservation) {
 // The facts the summary reports, set where they become true.
 func (r *installRun) claimHeld() {
 	if r != nil {
+		r.mu.Lock()
 		r.claim = installflow.ClaimHeld
+		r.mu.Unlock()
 	}
 }
 
 func (r *installRun) claimReleased() {
-	if r != nil && r.claim == installflow.ClaimHeld {
-		r.claim = installflow.ClaimReleased
+	if r != nil {
+		r.mu.Lock()
+		if r.claim == installflow.ClaimHeld {
+			r.claim = installflow.ClaimReleased
+		}
+		r.mu.Unlock()
 	}
 }
 
 func (r *installRun) recordIs(s installflow.RecordState) {
 	if r != nil {
+		r.mu.Lock()
 		r.record = s
+		r.mu.Unlock()
 	}
 }
 
 func (r *installRun) readinessIs(s installflow.Readiness) {
 	if r != nil {
+		r.mu.Lock()
 		r.readiness = s
+		r.mu.Unlock()
 	}
 }
 
@@ -333,7 +477,21 @@ func (r *installRun) confirmCreateCluster(ctx context.Context, cluster string) b
 // 🔴 SUCCESS IS THE INSTALL'S RETURN VALUE AND NOTHING ELSE. A stage reached, a
 // record written or a full progress count is not success; only Install returning nil
 // — after the relational store's wait, which is its last gate — is.
+//
+// 🔴 AND IT IS REACHED ONLY ONCE THE WORK HAS SETTLED. A cancel does not end the run:
+// it is announced (stopping) and the stage's own work is left to stop. close runs
+// when that work has returned — the tool exited, or was given up on after its budget
+// — so the summary can never say the run is over while a stage is still running.
 func (r *installRun) close(ctx context.Context, err error) (installflow.Summary, error) {
+	if ctx.Err() != nil {
+		// Said before the stage it ends, if the watcher has not said it already.
+		r.stopping(installflow.CancelReasonOf(ctx))
+	} else {
+		// Sealed: a cancel that lands after the verdict is not a stop of this run.
+		r.stopOnce.Do(func() {})
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	s := installflow.Summary{
 		InstallRecord: r.record, Readiness: r.readiness, Claim: r.claim,
 		PartialState: installflow.EffectNoneObserved,
@@ -341,15 +499,15 @@ func (r *installRun) close(ctx context.Context, err error) (installflow.Summary,
 	if r.changed {
 		s.PartialState = installflow.EffectMayHaveChanged
 	}
-	if r.record == installflow.RecordInstalled {
+	if r.applied || r.record == installflow.RecordInstalled {
 		s.PartialState = installflow.EffectApplied
 	}
 	if err == nil {
 		// Close what the install left open before judging the stream, so a refused
 		// final event counts against the run like any other.
-		r.finishActive()
+		r.finishActiveLocked()
 		if r.dryRun && r.last != installflow.StepInstallSummary {
-			r.skip(installflow.StepInstallSummary)
+			r.skipLocked(installflow.StepInstallSummary)
 		}
 		if emitErr := r.firstEmitErr(); emitErr != nil {
 			err = fmt.Errorf("reporting the install's progress: %w", emitErr)
@@ -364,16 +522,18 @@ func (r *installRun) close(ctx context.Context, err error) (installflow.Summary,
 		}
 		s.FailedStep = r.step // "" when the error came between stages, so none is blamed
 		if r.step != "" {
-			code := installflow.ErrorCode(string(r.step) + ".failed")
-			if cancelled {
-				code = "run.cancelled"
+			f := installflow.StepFailed{Code: installflow.ErrorCode(string(r.step) + ".failed"),
+				Retry: installflow.RetryUnknown, Cancelled: cancelled, Effect: r.effect}
+			switch {
+			case r.abandoned:
+				// Never none_observed: the command was not seen to finish.
+				f.Code, f.Remedy = installflow.ErrorToolAbandoned, installflow.RemedyRerunSameCommand
+				f.Effect = moreCertain(f.Effect, installflow.EffectMayHaveChanged)
+			case cancelled:
+				f.Code, f.Remedy = installflow.ErrorRunCancelled, installflow.RemedyRerunSameCommand
 			}
-			effect := installflow.EffectNoneObserved
-			if r.stepMuts {
-				effect = installflow.EffectMayHaveChanged
-			}
-			r.emit(installflow.Event{Step: r.step, Attempt: r.attempt, Payload: installflow.StepFailed{
-				Code: code, Retry: installflow.RetryUnknown, Cancelled: cancelled, Effect: effect}})
+			s.PartialState = moreCertain(s.PartialState, f.Effect)
+			r.emit(installflow.Event{Step: r.step, Attempt: r.attempt, Payload: f})
 			r.step = ""
 		}
 	case r.dryRun:

@@ -4,6 +4,7 @@
 package model
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"testing"
@@ -21,6 +22,17 @@ func insertProtocol2OperationForTest(t *testing.T, db *gorm.DB, template FleetOp
 	template.Token += "-protocol2"
 	template.DriverProtocol = 2
 	require.NoError(t, db.Create(&template).Error)
+	t.Cleanup(func() {
+		// The control API deliberately cannot abort a newer protocol. This is a
+		// hand-made copy, so remove only its own journal rows and header instead.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(db.Statement.Context), 30*time.Second)
+		defer cancel()
+		cleanupDB := db.WithContext(ctx)
+		for _, model := range []any{&FleetOperationLine{}, &FleetOperationEvent{}, &FleetOperationContract{}, &FleetOperationRuntime{}} {
+			require.NoError(t, cleanupDB.Where("operation_id = ?", template.ID).Delete(model).Error)
+		}
+		require.NoError(t, cleanupDB.Where("id = ?", template.ID).Delete(&FleetOperation{}).Error)
+	})
 	require.NoError(t, db.Create(&FleetOperationRuntime{OperationId: int64(template.ID)}).Error)
 	return &template
 }
@@ -146,7 +158,7 @@ func TestProtocolScopeAndExpirySkipNewerOperations(t *testing.T) {
 	now := time.Now()
 	op.ExpiresAt = sql.NullTime{Time: now.Add(-time.Hour), Valid: true}
 	op = insertProtocol2OperationForTest(t, db, *op)
-	n, err := api.ExpireFleetOperations(ctx, now)
+	n, err := api.ExpireFleetOperations(ctx)
 	require.NoError(t, err)
 	require.Zero(t, n)
 	got, err := api.FleetOperationByToken(ctx, op.Token)

@@ -112,9 +112,9 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 		return InstallOutputs{}, err
 	}
 
-	opts := make([]tfexec.ApplyOption, 0, len(vars))
+	opts := make([]applyOption, 0, len(vars))
 	for _, v := range vars {
-		opts = append(opts, tfexec.Var(v))
+		opts = append(opts, applyVar(v))
 	}
 	// 🔴 THIS IS THE ROOT THE CNPG ADMISSION RACE LIVES IN. It installs the operator
 	// and creates the shared relational store in one graph, which is the race's exact

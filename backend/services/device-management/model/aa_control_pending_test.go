@@ -49,7 +49,7 @@ func TestFleetControlPendingExpiresAndClearsHold(t *testing.T) {
 func TestFleetFencePendingLeavesControlHoldUntilExpiry(t *testing.T) {
 	e := driveFixture(t, 2, FleetSafetyRequest{})
 	requested := e.now
-	_, err := e.api.fleetControl(e.ctx, "drv", fleetEventPause, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	_, err := e.api.fleetControl(e.ctx, "drv", fleetEventPause, func(tx *gorm.DB, op *FleetOperation, now time.Time) (map[string]any, *FleetOperationEvent, error) {
 		return nil, nil, &pgconn.PgError{Code: "55P03"}
 	})
 	requireFleetCode(t, err, FleetCodeFencePending)
@@ -80,7 +80,7 @@ func TestFleetControlPublishesAndConditionallyClearsItsRequest(t *testing.T) {
 			e := driveFixture(t, 1, FleetSafetyRequest{})
 			refusal := fleetErr(FleetCodeIllegalTransition, "control refused")
 			newer := e.now.Add(time.Second)
-			_, err := e.api.fleetControl(e.ctx, "drv", fleetEventPause, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+			_, err := e.api.fleetControl(e.ctx, "drv", fleetEventPause, func(tx *gorm.DB, op *FleetOperation, now time.Time) (map[string]any, *FleetOperationEvent, error) {
 				var rt FleetOperationRuntime
 				require.NoError(t, tx.Where("operation_id = ?", op.ID).First(&rt).Error)
 				require.Equal(t, sql.NullTime{Time: e.now, Valid: true}, rt.ControlRequestedAt,
@@ -129,7 +129,7 @@ func TestFleetControlCancellationClearsItsPublishedRequest(t *testing.T) {
 		}
 	}))
 	t.Cleanup(func() { require.NoError(t, db.Callback().Update().Remove(hook)) })
-	_, err := e.api.fleetControl(ctx, "drv", fleetEventPause, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	_, err := e.api.fleetControl(ctx, "drv", fleetEventPause, func(tx *gorm.DB, op *FleetOperation, now time.Time) (map[string]any, *FleetOperationEvent, error) {
 		t.Error("a canceled request must not enter the fenced transition")
 		return nil, nil, errors.New("unexpected transition")
 	})
