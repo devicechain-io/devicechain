@@ -18,22 +18,40 @@ import (
 // caller learns that its secret is not covered.
 const MinSecretBytes = 6
 
+// MinRedactionBytes is the shortest value AddRedaction will redact. A value of
+// one to three bytes cannot be removed from text without removing ordinary
+// characters with it, so it is refused, and the caller must say it is not covered.
+const MinRedactionBytes = 4
+
 // redactor replaces known secret values, in the encodings they commonly take
 // in tool output, with a placeholder. It is defence in depth: the primary
 // defence is that producers only put allowlisted values into payloads.
 type redactor struct {
-	mu       sync.RWMutex
-	forms    map[string]struct{}
-	replacer *strings.Replacer
+	mu sync.RWMutex
+	// forms maps every registered form to whether it also refuses an identifier:
+	// true for AddSecret values, false for AddRedaction (redact-only) values.
+	forms    map[string]bool
+	replacer *strings.Replacer // every form: what text is redacted of
+	strict   *strings.Replacer // identifier forms only: what an identifier is refused for
 }
 
-func newRedactor() *redactor { return &redactor{forms: map[string]struct{}{}} }
+func newRedactor() *redactor { return &redactor{forms: map[string]bool{}} }
 
 // add registers secret and its derived forms: raw, JSON-escaped (with and
 // without HTML escaping), URL query- and path-escaped, base64, its sanitised
 // display form, and each substantial line of a multi-line value.
-func (r *redactor) add(secret string) bool {
-	if len(secret) < MinSecretBytes {
+func (r *redactor) add(secret string) bool { return r.register(secret, MinSecretBytes, true) }
+
+// addTextOnly registers secret for redaction from text only: an identifier that
+// contains it is not refused. It is for values short or ordinary enough (a
+// four-byte password, a credential that is also a common word) that refusing
+// every code containing them would refuse ordinary runs.
+func (r *redactor) addTextOnly(secret string) bool {
+	return r.register(secret, MinRedactionBytes, false)
+}
+
+func (r *redactor) register(secret string, minimum int, identifier bool) bool {
+	if len(secret) < minimum {
 		return false
 	}
 	candidates := []string{
@@ -66,13 +84,22 @@ func (r *redactor) add(secret string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, c := range candidates {
-		if len(c) >= MinSecretBytes {
-			r.forms[c] = struct{}{}
+		if len(c) >= minimum {
+			r.forms[c] = r.forms[c] || identifier
 		}
 	}
-	forms := make([]string, 0, len(r.forms))
-	for f := range r.forms {
-		forms = append(forms, f)
+	r.replacer = buildReplacer(r.forms, false)
+	r.strict = buildReplacer(r.forms, true)
+	return true
+}
+
+// buildReplacer replaces every form, or with strictOnly only the identifier forms.
+func buildReplacer(all map[string]bool, strictOnly bool) *strings.Replacer {
+	forms := make([]string, 0, len(all))
+	for f, identifier := range all {
+		if identifier || !strictOnly {
+			forms = append(forms, f)
+		}
 	}
 	// Longest first: strings.Replacer tries pairs in argument order at each
 	// position, so a value is replaced whole before any of its lines is.
@@ -86,8 +113,7 @@ func (r *redactor) add(secret string) bool {
 	for _, f := range forms {
 		pairs = append(pairs, f, redactedMark)
 	}
-	r.replacer = strings.NewReplacer(pairs...)
-	return true
+	return strings.NewReplacer(pairs...)
 }
 
 func jsonEscaped(s string, html bool) string {
@@ -118,4 +144,9 @@ func (r *redactor) text(t SafeText) SafeText {
 
 // contains reports whether s holds a known secret form. Identifier fields use
 // it to refuse, rather than redact, an event whose code is a secret.
-func (r *redactor) contains(s string) bool { return s != "" && r.redact(s) != s }
+func (r *redactor) contains(s string) bool {
+	r.mu.RLock()
+	rep := r.strict
+	r.mu.RUnlock()
+	return s != "" && rep != nil && rep.Replace(s) != s
+}

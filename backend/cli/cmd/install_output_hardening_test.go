@@ -165,3 +165,61 @@ func TestInstallJSONPanicEndsWithTheVerdict(t *testing.T) {
 		t.Errorf("stderr does not carry the panic:\n%s", r.stderr)
 	}
 }
+
+// echoKubeconfig is a usable kubeconfig whose user carries the canary token.
+var echoKubeconfig = strings.Replace(goldenKubeconfig("prod"), "token: not-a-real-token", "token: "+kubeCanaryToken, 1)
+
+// 🔴 A CREDENTIAL THAT REACHES THE PROCESS'S OWN STREAMS OR THE ERROR IS REDACTED. With
+// --output json, a write to the process's stderr (a kubeconfig credential plugin's,
+// which client-go hands os.Stderr) and the error the command prints are both
+// redacted. With --output text the error is; a write straight to the terminal's
+// stderr is not, as the events page says.
+func TestInstallCredentialEchoedOutsideTheConsoleIsRedacted(t *testing.T) {
+	for _, name := range []string{"kubeconfig-credential-echoed", "json-kubeconfig-credential-echoed"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInstallChildRaw(t, findInstallScenario(t, name))
+			if r.exit != 1 {
+				t.Errorf("exit %d, want 1", r.exit)
+			}
+			assertNoKubeCanary(t, "stdout", r.stdout)
+			for _, line := range strings.Split(string(r.stderr), "\n") {
+				if strings.HasPrefix(line, "plugin: token ") && !strings.HasPrefix(name, "json-") {
+					continue // text mode: written to the terminal directly, documented as not redacted
+				}
+				assertNoKubeCanary(t, "stderr line", []byte(line))
+			}
+			if !strings.Contains(string(r.stderr), "provider says [redacted]") {
+				t.Errorf("the error is not there, redacted:\n%s", r.stderr)
+			}
+		})
+	}
+}
+
+const proxyCanary = "dcCanaryProxySecret5Mn2"
+
+// proxyKubeconfig parses, but its cluster's proxy-url carries a password that
+// client-go's validation quotes whole.
+var proxyKubeconfig = strings.Replace(goldenKubeconfig("prod"), "    server: https://127.0.0.1:1\n",
+	"    server: https://127.0.0.1:1\n    proxy-url: http://user:"+proxyCanary+"@proxy:bad\n", 1)
+
+// 🔴 A KUBECONFIG THAT PARSES BUT DOES NOT VALIDATE never has client-go's reason
+// printed, by install or bootstrap, in either output format, dry run or not: the
+// proxy-url's password stays out of stdout and stderr, and the refusal still says
+// what is wrong and where.
+func TestKubeconfigValidationErrorsNeverReachTheOutput(t *testing.T) {
+	for _, name := range []string{"install-proxy-url", "json-install-proxy-url", "bootstrap-proxy-url-dry-run",
+		"bootstrap-proxy-url-no-escrow"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runInstallChildRaw(t, findInstallScenario(t, name))
+			all := string(r.stdout) + string(r.stderr)
+			if strings.Contains(all, proxyCanary) {
+				t.Errorf("the proxy-url's password reached the output:\nstdout:\n%s\nstderr:\n%s", r.stdout, r.stderr)
+			}
+			if !strings.Contains(all, "has an invalid entry for the context") {
+				t.Errorf("the output does not say the kubeconfig entry is invalid:\nstdout:\n%s\nstderr:\n%s", r.stdout, r.stderr)
+			}
+		})
+	}
+}

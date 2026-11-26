@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,8 +65,8 @@ func TestKubeconfigErrorsNeverQuoteTheFile(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s accepted a kubeconfig client-go refuses", name)
 		}
-		if !IsKubeconfigUnreadable(err) || !strings.Contains(err.Error(), path) {
-			t.Errorf("%s: %v, want a KubeconfigUnreadableError naming %s", name, err, path)
+		if !IsKubeconfigError(err) || !strings.Contains(err.Error(), path) {
+			t.Errorf("%s: %v, want a KubeconfigError naming %s", name, err, path)
 		}
 		for _, c := range []string{kcToken, kcTokenDup, kcPassword, kcKeyCore, kcExecEnv, kcIDToken, "golden"} {
 			if strings.Contains(err.Error(), c) {
@@ -75,21 +76,23 @@ func TestKubeconfigErrorsNeverQuoteTheFile(t *testing.T) {
 	}
 }
 
-// The kubeconfig's credentials are found even in a file client-go refuses, and an
-// incidental setting too short to be a credential is left alone.
+// The kubeconfig's credentials are found even in a file client-go refuses. Tokens,
+// passwords and keys are registered strictly; exec-plugin environments and
+// auth-provider settings, which hold ordinary words beside credentials, redact-only.
 func TestKubeconfigSecretsFindsEveryCredential(t *testing.T) {
 	writeCanaryKubeconfig(t)
-	got := map[string]bool{}
-	for _, v := range kubeconfigSecrets(clientcmd.NewDefaultClientConfigLoadingRules()) {
-		got[v] = true
+	got := map[string]credential{}
+	for _, c := range kubeconfigSecrets(clientcmd.NewDefaultClientConfigLoadingRules()) {
+		got[c.value] = c
 	}
-	for _, want := range []string{kcToken, kcTokenDup, kcPassword, kcKeyPEM, kcExecEnv, kcIDToken} {
-		if !got[want] {
+	for want, textOnly := range map[string]bool{kcToken: false, kcTokenDup: false, kcPassword: false,
+		kcKeyPEM: false, kcExecEnv: true, kcIDToken: true, kcShortEnv: true} {
+		c, ok := got[want]
+		if !ok {
 			t.Errorf("%q was not found", want)
+		} else if c.textOnly != textOnly {
+			t.Errorf("%q: textOnly %t, want %t", want, c.textOnly, textOnly)
 		}
-	}
-	if got[kcShortEnv] {
-		t.Errorf("%q, an exec env value too short to be a credential, would be redacted from every line", kcShortEnv)
 	}
 }
 
@@ -125,5 +128,152 @@ func TestKubeconfigSecretsAreRedactedFromTheStream(t *testing.T) {
 	}
 	if n := bytes.Count(stream.Bytes(), []byte("[redacted]")); n < len(printed) {
 		t.Errorf("%d redactions for %d printed credentials", n, len(printed))
+	}
+}
+
+// writeKubeconfig writes content as the only kubeconfig and points KUBECONFIG at it.
+func writeKubeconfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", path)
+	return path
+}
+
+const kcValidationCanary = "dcCanaryKcValidation7Hn3Qe"
+
+// validKubeconfig is a well-formed kubeconfig whose cluster and user carry the
+// extra lines given, each of which client-go's validation would quote.
+func validKubeconfig(cluster, user string) string {
+	return "apiVersion: v1\nkind: Config\nclusters:\n- name: golden\n  cluster:\n    server: https://127.0.0.1:1\n" +
+		cluster + "contexts:\n- name: prod\n  context:\n    cluster: golden\n    user: golden\n" +
+		"current-context: prod\nusers:\n- name: golden\n  user:\n" + user
+}
+
+// 🔴 NOR DOES ANY OTHER CLIENT-GO ERROR REACH THE OUTPUT. A kubeconfig that parses
+// but does not validate is refused by client-go with a reason that quotes the
+// offending value: a proxy-url (password and all), a certificate or key path, an
+// exec plugin setting. Every one is reported as the kind of failure, the file and
+// the context's name, and nothing from inside the entry.
+func TestKubeconfigValidationErrorsNeverQuoteTheEntry(t *testing.T) {
+	c := kcValidationCanary
+	for name, kc := range map[string]string{
+		"proxy-url with a password": validKubeconfig("    proxy-url: http://user:"+c+"@proxy:bad\n", "    token: tok-"+c+"\n"),
+		"unreadable certificate authority": validKubeconfig("    certificate-authority: /nonexistent/"+c+"/ca.crt\n",
+			"    token: tok-"+c+"\n"),
+		"unreadable client certificate": validKubeconfig("",
+			"    client-certificate: /nonexistent/"+c+"/client.crt\n    client-key: /nonexistent/"+c+"/client.key\n"),
+		"invalid exec interactive mode": validKubeconfig("", "    exec:\n      apiVersion: client.authentication.k8s.io/v1\n"+
+			"      command: dc-plugin\n      interactiveMode: "+c+"\n      env:\n      - name: TOKEN\n        value: "+c+"\n"),
+		"two authentication methods": validKubeconfig("", "    token: tok-"+c+"\n    username: admin\n    password: pw-"+c+"\n"),
+		// Parsed only when a client is built, and then quoted with its userinfo.
+		"unparseable server URL with a password": strings.Replace(validKubeconfig("", "    token: tok-"+c+"\n"),
+			"server: https://127.0.0.1:1", "server: https://admin:"+c+"@127.0.0.1:bad", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeKubeconfig(t, kc)
+			_, rerr := RestConfig("prod")
+			_, ferr := freezeKubeTarget("prod")
+			for which, err := range map[string]error{"RestConfig": rerr, "freezeKubeTarget": ferr} {
+				if err == nil {
+					t.Fatalf("%s accepted the entry", which)
+				}
+				if !IsKubeconfigError(err) || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), `"prod"`) {
+					t.Errorf("%s: %v, want a KubeconfigError naming %s and the context", which, err, path)
+				}
+				if strings.Contains(err.Error(), c) {
+					t.Errorf("%s's error quotes the entry: %v", which, err)
+				}
+			}
+		})
+	}
+	// A context the file does not define is named; nothing else is.
+	writeKubeconfig(t, validKubeconfig("", "    token: tok-"+c+"\n"))
+	if _, err := RestConfig("staging"); err == nil || err.Error() != `context "staging" does not exist` {
+		t.Errorf("a missing context: %v", err)
+	}
+}
+
+// A server URL's userinfo never reaches the cluster identity dcctl prints when it
+// refuses to run OpenTofu against a different cluster.
+func TestClusterIdentityDropsServerUserinfo(t *testing.T) {
+	c := kcValidationCanary
+	writeKubeconfig(t, strings.Replace(validKubeconfig("", "    token: tok-"+c+"\n"),
+		"server: https://127.0.0.1:1", "server: https://admin:"+c+"@127.0.0.1:1", 1))
+	target, err := freezeKubeTarget("prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(target.Identity, c) || !strings.Contains(target.Identity, "127.0.0.1:1") {
+		t.Errorf("identity %q", target.Identity)
+	}
+	got := map[string]bool{}
+	for _, cr := range kubeconfigSecrets(clientcmd.NewDefaultClientConfigLoadingRules()) {
+		got[cr.value] = true
+	}
+	if !got[c] {
+		t.Errorf("the server URL's password is not registered for redaction")
+	}
+}
+
+// 🔴 SHORT CREDENTIALS ARE STILL REDACTED, AND THE ONES THAT CANNOT BE ARE SAID. A
+// five-byte token is under the strict minimum and is registered redact-only; an exec
+// env value that is an ordinary word is redacted from the text but never refuses a
+// code that spells it; a three-byte password cannot be redacted at all, and the run
+// warns that one value is not covered.
+func TestShortKubeconfigCredentials(t *testing.T) {
+	writeKubeconfig(t, validKubeconfig("", "    token: tk5ab\n    password: pw3\n"+
+		"    exec:\n      apiVersion: client.authentication.k8s.io/v1\n      command: dc-plugin\n"+
+		"      env:\n      - name: AWS_PROFILE\n        value: default\n"))
+	e := &InstallEngine{
+		Provider: &fakeProvider{name: "local"}, Options: InstallOptions{Options: Options{AssumeYes: true}}, SkipPreflight: true,
+		Cluster: func(ctx context.Context, _ Provider, _ InstallOptions) error {
+			out(ctx).println("kubectl says: token tk5ab, profile default")
+			return nil
+		},
+	}
+	var stream bytes.Buffer
+	err := installjson.Presenter{Stdout: &stream, RunID: "short", Clock: testkit.NewManualClock(testkit.Epoch)}.Run(
+		t.Context(), e, installflow.Request{Operation: installflow.OperationInstall, AssumeYes: true}, nil)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, stream.Bytes())
+	}
+	text := stream.String()
+	for _, v := range []string{"tk5ab", "profile default"} {
+		if strings.Contains(text, v) {
+			t.Errorf("the stream carries %q", v)
+		}
+	}
+	if !strings.Contains(text, "warning: 1 kubeconfig credential value(s) are shorter than 4 bytes") {
+		t.Errorf("no warning that the 3-byte password is not covered:\n%s", text)
+	}
+}
+
+// A text-only credential (an exec env value that is an ordinary word) is redacted
+// from text but never refuses an event code that spells it; a strict one does.
+func TestRegisterCredentialsTextOnlyNeverRefusesACode(t *testing.T) {
+	hub, err := installflow.NewHub(installflow.Options{Sink: &testkit.CaptureSink{}, Clock: testkit.NewManualClock(testkit.Epoch)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := registerCredentials(hub, []credential{{value: "default", textOnly: true}, {value: "s3cr3t-strict"}, {value: "ab"}}); n != 1 {
+		t.Errorf("%d uncovered, want 1 (the two-byte value)", n)
+	}
+	if err := hub.Emit(installflow.Event{Payload: installflow.RunStarted{Target: installflow.Target{Mode: "managed-kind"},
+		Manifest: []installflow.ManifestStep{{ID: "install.default"}}}}); err != nil {
+		t.Fatalf("a manifest naming a text-only value was refused: %v", err)
+	}
+	if err := hub.Emit(installflow.Event{Step: "install.default", Attempt: 1, Payload: installflow.StepStarted{
+		Message: "install.default"}}); err != nil {
+		t.Fatalf("a step code naming a text-only value was refused: %v", err)
+	}
+	if err := hub.Emit(installflow.Event{Step: "install.default", Attempt: 1, Payload: installflow.StepFailed{
+		Code: "install.s3cr3t-strict", Retry: installflow.RetryUnknown, Effect: installflow.EffectNoneObserved}}); !errors.Is(err, installflow.ErrInvalidEvent) {
+		t.Errorf("a code that is a strict secret: %v, want ErrInvalidEvent", err)
+	}
+	if got := hub.Redact("profile default, key s3cr3t-strict"); strings.Contains(got, "default") || strings.Contains(got, "s3cr3t") {
+		t.Errorf("Redact: %q", got)
 	}
 }

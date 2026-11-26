@@ -358,9 +358,9 @@ func (d *doctor) checkKubeContexts(selected string) {
 	if err != nil {
 		// 🔴 ONLY dcctl's OWN SENTENCE. client-go's reason for refusing a kubeconfig can
 		// quote the credentials in it, and this line reaches the terminal and the event
-		// stream alike; KubeconfigUnreadableError carries the files and nothing else.
+		// stream alike; KubeconfigError carries the files and the context name, nothing else.
 		fix := "the kubeconfig could not be read; check it for malformed YAML or a name defined twice"
-		if bootstrap.IsKubeconfigUnreadable(err) {
+		if bootstrap.IsKubeconfigError(err) {
 			fix = err.Error()
 		}
 		d.warn("unable to load kube contexts", fix)

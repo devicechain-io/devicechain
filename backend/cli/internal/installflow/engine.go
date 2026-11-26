@@ -106,6 +106,9 @@ type Reporter interface {
 	Finish(Summary) error
 	// AddSecret registers a value to redact from every text the hub carries.
 	AddSecret(value string) error
+	// AddRedaction registers a value to redact from every text the hub
+	// carries without refusing identifiers that contain it.
+	AddRedaction(value string) error
 	// LogWriter returns a writer that turns tool output into log lines. Its
 	// Write never blocks on a presenter and never fails.
 	LogWriter(step StepID, source string, level LogLevel) (io.WriteCloser, error)

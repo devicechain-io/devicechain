@@ -225,6 +225,21 @@ func (h *Hub) AddSecret(value string) error {
 	return nil
 }
 
+// AddRedaction registers value for redaction from every text the hub carries
+// from now on, like AddSecret, but never refuses an identifier for containing
+// it. It takes values down to MinRedactionBytes.
+func (h *Hub) AddRedaction(value string) error {
+	if !h.red.addTextOnly(value) {
+		return ErrSecretTooShort
+	}
+	return nil
+}
+
+// Redact returns s with every registered value replaced, for text that leaves
+// dcctl other than through an event: an error printed on stderr, a tool's
+// stderr. It does not sanitise.
+func (h *Hub) Redact(s string) string { return h.red.redact(s) }
+
 // Final returns the summary that was sent, once there is one.
 func (h *Hub) Final() (Summary, bool) {
 	h.mu.Lock()
@@ -805,4 +820,26 @@ func (h *Hub) Projection() Projection {
 		p.Summary = &s
 	}
 	return p
+}
+
+// RedactedError is an error whose text has been redacted of every value the hub
+// knows, for a presenter to return to a command that prints it. It unwraps to the
+// original, so errors.Is and errors.As still see what the engine returned; only its
+// text is what is printed.
+type RedactedError struct {
+	text string
+	err  error
+}
+
+func (e *RedactedError) Error() string { return e.text }
+func (e *RedactedError) Unwrap() error { return e.err }
+
+// RedactError wraps err so that its text is redacted of every registered value. A
+// tool's diagnostics are often appended to an engine error (an OpenTofu apply's,
+// for one), and an error is printed on stderr, outside every event.
+func (h *Hub) RedactError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &RedactedError{text: h.Redact(err.Error()), err: err}
 }

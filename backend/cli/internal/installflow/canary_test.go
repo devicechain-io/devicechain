@@ -161,3 +161,40 @@ func TestASecretIsRefusedAsAnIdentifier(t *testing.T) {
 	out = append(out, []byte(fmt.Sprint(err))...)
 	testkit.AssertNoCanary(t, "stream and error text", out)
 }
+
+// TestARedactOnlyValueIsRedactedButNeverRefusesAnIdentifier: a value registered
+// with AddRedaction (a short password, an exec-plugin setting that is also a common
+// word) is removed from text, down to MinRedactionBytes, but a code that happens to
+// spell it is accepted — refusing it would refuse ordinary runs. Below
+// MinRedactionBytes it is refused, so the caller can say it is not covered.
+func TestARedactOnlyValueIsRedactedButNeverRefusesAnIdentifier(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	must(t, f.hub.AddRedaction("default"))
+	must(t, f.hub.AddRedaction("pw4x"))
+	if err := f.hub.AddRedaction("pw3"); !errors.Is(err, installflow.ErrSecretTooShort) {
+		t.Errorf("a 3-byte value: %v, want ErrSecretTooShort", err)
+	}
+	if err := f.hub.AddSecret("pw4x"); !errors.Is(err, installflow.ErrSecretTooShort) {
+		t.Errorf("AddSecret of a 4-byte value: %v, want ErrSecretTooShort", err)
+	}
+	must(t, f.hub.Emit(started(false, manifest("a"))))
+	must(t, f.hub.Emit(stepStart("a", 1)))
+	must(t, f.hub.Emit(installflow.Event{Step: "a", Attempt: 1, Payload: installflow.StepFailed{
+		Code: "install.default-profile", Retry: installflow.RetryUnknown, Effect: installflow.EffectNoneObserved}}))
+	must(t, f.hub.Emit(installflow.Event{Step: "a", Payload: installflow.LogLine{Level: installflow.LogInfo,
+		Source: "tool", Text: installflow.Text("profile default, password pw4x")}}))
+	must(t, f.hub.Finish(installflow.Summary{Outcome: installflow.RunFailed, InstallRecord: installflow.RecordUnknown,
+		Readiness: installflow.ReadinessUnknown, Claim: installflow.ClaimUnknown, PartialState: installflow.EffectMayHaveChanged}))
+	var text string
+	for _, e := range f.wait(t) {
+		if l, ok := e.Payload.(installflow.LogLine); ok {
+			text = l.Text.String()
+		}
+	}
+	if strings.Contains(text, "default") || strings.Contains(text, "pw4x") {
+		t.Errorf("the log line kept a redact-only value: %q", text)
+	}
+	if got := f.hub.Redact("pw4x and default"); strings.Contains(got, "pw4x") || strings.Contains(got, "default") {
+		t.Errorf("Redact kept a value: %q", got)
+	}
+}

@@ -119,7 +119,7 @@ func restIdentity(cfg *rest.Config) (string, error) {
 		ca = b
 	}
 	sum := sha256.Sum256(ca)
-	return cfg.Host + " ca-sha256:" + hex.EncodeToString(sum[:]), nil
+	return withoutUserinfo(cfg.Host) + " ca-sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 // resolveKubePin resolves the frozen target's context with client-go's rules and

@@ -271,7 +271,7 @@ contexts:
 current-context: dead
 users:
 - name: dead
-  user: {token: x}
+  user: {token: dead-token}
 `
 	if err := os.WriteFile(kubeconfig, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)

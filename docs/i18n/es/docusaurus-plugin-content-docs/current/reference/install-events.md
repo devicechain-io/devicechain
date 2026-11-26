@@ -87,7 +87,22 @@ La segunda columna enumera todos los campos que puede llevar una carga útil de 
 
 ## Secretos {#secrets}
 
-El flujo nunca lleva las opciones de la instalación, sus credenciales ni el contenido de sus archivos. Los valores secretos que maneja la instalación, como la URL del webhook de alertas, la contraseña SMTP y las credenciales de copia de seguridad, y las credenciales de tu kubeconfig (tokens, contraseñas, claves de cliente y valores con longitud de credencial en la configuración de plugins exec y proveedores de autenticación), también se eliminan de cualquier texto que llegue al flujo, sustituidos por `[redacted]`, por si una herramienta repite alguno. Un kubeconfig que dcctl no puede analizar se informa por su ruta, nunca con el motivo del analizador, que puede citar el archivo; esto también se aplica a `--output text`. La resolución de una pregunta indica cómo terminó, nunca la respuesta.
+El flujo nunca lleva las opciones de la instalación, sus credenciales ni el contenido de sus archivos. La resolución de una pregunta indica cómo terminó, nunca la respuesta.
+
+Como segunda línea de defensa, por si una herramienta repite alguno, estos valores se eliminan de cualquier texto que imprime dcctl y se sustituyen por `[redacted]`:
+
+- los valores secretos que maneja la instalación, como la URL del webhook de alertas, la contraseña SMTP y las credenciales de copia de seguridad;
+- las credenciales de tu kubeconfig: tokens, contraseñas, claves de cliente, la contraseña de una URL de servidor o de proxy, y los valores del entorno de los plugins exec y de la configuración de los proveedores de autenticación.
+
+Con `--output json`, eso abarca todos los eventos, el error que se imprime en stderr (incluidos los diagnósticos de una herramienta añadidos a él) y todo lo demás que llegue a la stdout o la stderr de dcctl mientras se ejecuta la instalación, incluida la stderr de un plugin de credenciales exec del kubeconfig. Esa stderr se redacta línea a línea, así que puede llegar algo después de que el plugin la escribiera.
+
+Hay límites:
+
+- Un valor de menos de 4 bytes no puede eliminarse sin eliminar texto normal con él. No se redacta, y la ejecución indica cuántos valores así encontró en una línea de registro `warning:`.
+- Un valor de menos de 6 bytes, y todo valor de un plugin exec o de un proveedor de autenticación, se elimina del texto, pero no detiene un código de evento que casualmente lo contenga.
+- Con `--output text`, la salida propia de la instalación y su error se redactan, pero una escritura cada vez. Una herramienta a la que se le da el propio terminal, como kind al crear el clúster local, y un plugin de credenciales exec del kubeconfig escriben directamente en el terminal y no se redactan.
+
+Un kubeconfig que dcctl no puede leer, o con el que no puede crear un cliente para un contexto, se informa por el tipo de problema, el archivo y el nombre del contexto, nunca con el motivo del cliente de Kubernetes, que puede citar las credenciales y URL del archivo. Esto también se aplica a `--output text`.
 
 ## Ejemplo {#example}
 

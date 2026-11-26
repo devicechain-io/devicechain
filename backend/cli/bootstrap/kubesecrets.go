@@ -4,6 +4,8 @@
 package bootstrap
 
 import (
+	"fmt"
+	"io"
 	"os"
 
 	"k8s.io/client-go/tools/clientcmd"
@@ -13,27 +15,31 @@ import (
 	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
-// minIncidentalSecret is the shortest exec-plugin env value or auth-provider
-// setting registered for redaction. Those maps hold credentials (an id-token, a
-// client secret) beside ordinary words (a profile named "default", a region), and
-// a registered word is redacted from every log line and refused in every code the
-// run emits. Credential-shaped values are long; ordinary settings are short.
-const minIncidentalSecret = 16
+// credential is one secret value and how strictly it is registered.
+type credential struct {
+	value string
+	// textOnly registers it for redaction from text without refusing an event
+	// code that contains it. Exec-plugin environments and auth-provider settings
+	// hold credentials beside ordinary words (a profile named "default"), and a
+	// strictly registered word would refuse every code that spells it.
+	textOnly bool
+}
 
 // kubeconfigSecrets returns the credential values in the kubeconfig files client-go
-// reads: each user's token, password and client key, its auth provider's settings and
-// its exec plugin's environment.
+// reads: each user's token, password and client key, its auth provider's settings,
+// its exec plugin's environment, and the password in any cluster's server or proxy
+// URL.
 //
 // It parses each file on its own, as a plain list, rather than through client-go's
 // loader. A file client-go refuses — two users of the same name is the case that
 // matters — still has its credentials found, which is exactly when they are most
 // likely to be printed. A file that cannot be read or parsed at all contributes
 // nothing; this is the second line, not the first.
-func kubeconfigSecrets(rules *clientcmd.ClientConfigLoadingRules) []string {
-	var out []string
-	add := func(v string, min int) {
-		if len(v) >= min {
-			out = append(out, v)
+func kubeconfigSecrets(rules *clientcmd.ClientConfigLoadingRules) []credential {
+	var out []credential
+	add := func(v string, textOnly bool) {
+		if v != "" {
+			out = append(out, credential{value: v, textOnly: textOnly})
 		}
 	}
 	for _, path := range rules.GetLoadingPrecedence() {
@@ -45,19 +51,23 @@ func kubeconfigSecrets(rules *clientcmd.ClientConfigLoadingRules) []string {
 		if yaml.Unmarshal(b, &cfg) != nil {
 			continue
 		}
+		for _, c := range cfg.Clusters {
+			add(urlPassword(c.Cluster.Server), false)
+			add(urlPassword(c.Cluster.ProxyURL), false)
+		}
 		for _, u := range cfg.AuthInfos {
 			a := u.AuthInfo
-			add(a.Token, 1)
-			add(a.Password, 1)
-			add(string(a.ClientKeyData), 1)
+			add(a.Token, false)
+			add(a.Password, false)
+			add(string(a.ClientKeyData), false)
 			if a.AuthProvider != nil {
 				for _, v := range a.AuthProvider.Config {
-					add(v, minIncidentalSecret)
+					add(v, true)
 				}
 			}
 			if a.Exec != nil {
 				for _, env := range a.Exec.Env {
-					add(env.Value, minIncidentalSecret)
+					add(env.Value, true)
 				}
 			}
 		}
@@ -65,18 +75,47 @@ func kubeconfigSecrets(rules *clientcmd.ClientConfigLoadingRules) []string {
 	return out
 }
 
+// registerCredentials registers each value with the hub, and returns how many it
+// could not cover.
+//
+// 🔴 A VALUE THE HUB REFUSES IS NOT DROPPED SILENTLY. One too short for a strict
+// registration (under installflow.MinSecretBytes) is registered redact-only, which
+// takes values down to installflow.MinRedactionBytes; only a value shorter than that,
+// which cannot be removed from text without removing ordinary characters with it, is
+// left uncovered, and counted, so the run can say so.
+func registerCredentials(events installflow.Reporter, creds []credential) (uncovered int) {
+	if events == nil {
+		return 0
+	}
+	for _, c := range creds {
+		if !c.textOnly && events.AddSecret(c.value) == nil {
+			continue
+		}
+		if events.AddRedaction(c.value) != nil {
+			uncovered++
+		}
+	}
+	return uncovered
+}
+
 // registerKubeconfigSecrets tells the hub the kubeconfig's credentials, so a tool
 // that echoes one (kubectl, helm or an OpenTofu provider reporting a kubeconfig it
-// could not use) has it redacted from the stream. Like registerSecrets, it is
-// defence in depth: no producer puts a kubeconfig value in an event, and a
-// kubeconfig that cannot be read is reported without client-go's reason.
-func registerKubeconfigSecrets(events installflow.Reporter) {
-	if events == nil {
+// could not use) has it redacted. Like registerSecrets, it is defence in depth: no
+// producer puts a kubeconfig value in an event, and a kubeconfig that cannot be
+// used is reported without client-go's reason. A value it cannot cover is warned
+// about on w.
+func registerKubeconfigSecrets(events installflow.Reporter, w io.Writer) {
+	warnUncovered(w, "kubeconfig credential",
+		registerCredentials(events, kubeconfigSecrets(clientcmd.NewDefaultClientConfigLoadingRules())))
+}
+
+// warnUncovered says that n values of what could not be redacted.
+func warnUncovered(w io.Writer, what string, n int) {
+	if n == 0 || w == nil {
 		return
 	}
-	for _, v := range kubeconfigSecrets(clientcmd.NewDefaultClientConfigLoadingRules()) {
-		_ = events.AddSecret(v)
-	}
+	fmt.Fprintf(w, "warning: %d %s value(s) are shorter than %d bytes and cannot be redacted from this "+
+		"install's output\n", n, what, installflow.MinRedactionBytes)
 }
 
 // refreshKubeconfigSecrets registers the kubeconfig's credentials again: the run
@@ -85,5 +124,6 @@ func (r *installRun) refreshKubeconfigSecrets() {
 	if r == nil {
 		return
 	}
-	registerKubeconfigSecrets(r.events)
+	// Nil: anything it cannot cover was warned about when the run started.
+	registerKubeconfigSecrets(r.events, nil)
 }

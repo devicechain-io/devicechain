@@ -82,7 +82,7 @@ func beginInstallOutput(fs *pflag.FlagSet) (*installStream, error) {
 		return nil, fmt.Errorf("--output json: opening %s to stand in for stdin: %w", os.DevNull, err)
 	}
 	s := &installStream{stdout: os.Stdout, stdin: os.Stdin, null: null, presenter: installjson.Presenter{
-		Stdout: os.Stdout, RunID: installStreamRunID, Clock: installStreamClock,
+		Stdout: os.Stdout, RunID: installStreamRunID, Clock: installStreamClock, RedactProcessOutput: true,
 	}}
 	os.Stdout, os.Stdin = os.Stderr, null
 	activeInstallStream = s

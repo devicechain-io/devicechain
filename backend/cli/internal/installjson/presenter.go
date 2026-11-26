@@ -54,6 +54,12 @@ type Presenter struct {
 	RunID string
 	// Clock fixes the time source; nil is the system clock. Tests fix it.
 	Clock installflow.Clock
+	// RedactProcessOutput points os.Stdout and os.Stderr, for the run, at a pipe
+	// that writes each line to the process's stderr redacted. It is for the
+	// command, which owns the process: it catches what reaches the process's own
+	// streams rather than the console, such as a kubeconfig credential plugin,
+	// which client-go hands os.Stderr directly.
+	RedactProcessOutput bool
 }
 
 // errIncomplete: the engine reported no error, yet the run did not close as a
@@ -90,6 +96,17 @@ func (p Presenter) run(ctx context.Context, e installflow.Engine, req installflo
 	})
 	if err != nil {
 		return err, nil
+	}
+	// The engine's error is printed on stderr, outside every event, and a tool's
+	// diagnostics are often appended to it: it is redacted as an event is.
+	defer func() { err = hub.RedactError(err) }()
+	if p.RedactProcessOutput {
+		restore, rerr := redirectProcessOutput(hub.Redact)
+		if rerr != nil {
+			return rerr, nil
+		}
+		// After the summary is written: deferred calls run last-in first-out.
+		defer restore()
 	}
 	stdout, err := hub.LogWriter("", SourceConsole, installflow.LogInfo)
 	if err != nil {

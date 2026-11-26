@@ -88,6 +88,9 @@ const (
 	// engineFakeReadsStdin records the options, then fails if anything can be read
 	// from os.Stdin, as a kubeconfig exec plugin handed it would.
 	engineFakeReadsStdin
+	// engineFakeEchoesCredential records the options, prints the kubeconfig's token
+	// on the process's stderr and fails with it in its error.
+	engineFakeEchoesCredential
 )
 
 // fakeExitStatus is an error naming its own exit status, as *exec.ExitError does.
@@ -208,6 +211,19 @@ var installCheckScenarios = []installScenario{
 	// An engine panic: the stream still ends with its summary, and the exit agrees.
 	{name: "json-engine-panic", args: []string{"install", "local", "--skip-preflight", "--yes", "-o", "json"},
 		engine: engineFakePanic},
+	// A usable kubeconfig whose token reaches the process's stderr and the error.
+	{name: "kubeconfig-credential-echoed", args: []string{"install", "local", "--kube-context", "prod",
+		"--skip-preflight"}, kubeconfig: echoKubeconfig, engine: engineFakeEchoesCredential},
+	{name: "install-proxy-url", args: []string{"install", "local", "--kube-context", "prod", "--skip-preflight"},
+		kubeconfig: proxyKubeconfig},
+	{name: "json-install-proxy-url", args: []string{"install", "local", "--kube-context", "prod", "--skip-preflight",
+		"-o", "json"}, kubeconfig: proxyKubeconfig},
+	{name: "bootstrap-proxy-url-dry-run", args: []string{"bootstrap", "local", "acme", "--kube-context", "prod",
+		"--dry-run"}, kubeconfig: proxyKubeconfig},
+	{name: "bootstrap-proxy-url-no-escrow", args: []string{"bootstrap", "local", "acme", "--kube-context", "prod",
+		"--skip-preflight", "--no-escrow"}, kubeconfig: proxyKubeconfig},
+	{name: "json-kubeconfig-credential-echoed", args: []string{"install", "local", "--kube-context", "prod",
+		"--skip-preflight", "-o", "json"}, kubeconfig: echoKubeconfig, engine: engineFakeEchoesCredential},
 }
 
 // installScenario returns the scenario named name, from either list.
@@ -452,7 +468,8 @@ func TestInstallGoldenChild(t *testing.T) {
 	installStreamClock = testkit.NewManualClock(installGoldenTime)
 
 	switch sc.engine {
-	case engineFakeOK, engineFakeErr, engineFakeExitStatus, engineFakePanic, engineFakeReadsStdin:
+	case engineFakeOK, engineFakeErr, engineFakeExitStatus, engineFakePanic, engineFakeReadsStdin,
+		engineFakeEchoesCredential:
 		installEngine = func(_ context.Context, p bootstrap.Provider, opts bootstrap.InstallOptions) error {
 			recordGoldenPlan(p, opts)
 			switch sc.engine {
@@ -462,6 +479,11 @@ func TestInstallGoldenChild(t *testing.T) {
 				return fmt.Errorf("creating kind cluster %q: %w", "devicechain", fakeExitStatus{})
 			case engineFakePanic:
 				panic("the fake engine panicked")
+			case engineFakeEchoesCredential:
+				// What a kubeconfig credential plugin debugging itself does: its
+				// credential, on the process's stderr, and the same in the error.
+				fmt.Fprintln(os.Stderr, "plugin: token "+kubeCanaryToken)
+				return fmt.Errorf("apply failed\nError: provider says %s", kubeCanaryToken)
 			case engineFakeReadsStdin:
 				b := make([]byte, 16)
 				if n, err := os.Stdin.Read(b); n > 0 || err == nil {

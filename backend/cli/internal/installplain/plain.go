@@ -81,19 +81,31 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	if err == nil && !sum.Succeeded() {
 		err = errIncomplete
 	}
-	return err
+	// Redacted, as the console is: a tool's diagnostics appended to an error must
+	// not print a value the run registered.
+	return hub.RedactError(err)
 }
 
 // flushingWriter writes to w once every event emitted before the write has been
-// rendered.
+// rendered, redacted of every value the run has registered.
+//
+// The redaction is per write: a value split across two writes is not seen. A tool
+// handed the terminal itself (kind, through ChildStreams) is not redacted at all.
+// Neither was redacted before; with nothing registered the output is unchanged.
 type flushingWriter struct {
-	hub interface{ Flush() }
-	w   io.Writer
+	hub interface {
+		Flush()
+		Redact(string) string
+	}
+	w io.Writer
 }
 
 func (f flushingWriter) Write(b []byte) (int, error) {
 	f.hub.Flush()
-	return f.w.Write(b)
+	if _, err := io.WriteString(f.w, f.hub.Redact(string(b))); err != nil {
+		return 0, err
+	}
+	return len(b), nil
 }
 
 // Sink renders the events today's plain output has text for, to W.

@@ -87,7 +87,22 @@ The second column lists every field a payload of that kind can carry. A field th
 
 ## Secrets {#secrets}
 
-The stream never carries the install's options, credentials or file contents. Secret values the install holds, such as an alert webhook URL, the SMTP password and backup credentials, and the credentials in your kubeconfig (tokens, passwords, client keys, and credential-length values in exec plugin and auth provider settings), are also removed from any text that reaches the stream, replaced by `[redacted]`, in case a tool echoes one. A kubeconfig dcctl cannot parse is reported by its path, never with the parser's reason, which can quote the file; this holds for `--output text` too. A prompt's resolution carries how it ended, never the answer.
+The stream never carries the install's options, credentials or file contents. A prompt's resolution carries how it ended, never the answer.
+
+As a second line of defence, in case a tool echoes one, these values are removed from any text dcctl prints and replaced by `[redacted]`:
+
+- the secret values the install holds, such as an alert webhook URL, the SMTP password and backup credentials;
+- the credentials in your kubeconfig: tokens, passwords, client keys, the password in a server or proxy URL, and the values in exec plugin environments and auth provider settings.
+
+With `--output json`, that covers every event, the error printed on stderr (including a tool's diagnostics appended to it), and everything else that reaches dcctl's stdout or stderr while the install runs, including the stderr of a kubeconfig exec credential plugin. That stderr is redacted a line at a time, so it can arrive slightly later than the plugin wrote it.
+
+There are limits:
+
+- A value shorter than 4 bytes cannot be removed without removing ordinary text with it. It is not redacted, and the run says how many such values it found in a `warning:` log line.
+- A value shorter than 6 bytes, and every exec plugin or auth provider value, is removed from text but does not stop an event code that happens to spell it.
+- With `--output text`, the install's own output and its error are redacted, but one write at a time. A tool that is given the terminal itself, such as kind creating the local cluster, and a kubeconfig exec credential plugin write to the terminal directly and are not redacted.
+
+A kubeconfig dcctl cannot read, or cannot turn into a client for a context, is reported by the kind of problem, the file and the context's name, never with the Kubernetes client's reason, which can quote the credentials and URLs in the file. This holds for `--output text` too.
 
 ## Example {#example}
 
