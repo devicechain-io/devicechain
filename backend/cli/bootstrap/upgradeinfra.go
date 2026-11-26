@@ -1709,7 +1709,7 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 		return err
 	}
 	st.InfraApplied = true
-	recordMQTTNodePortAfterApply(st)
+	recordMQTTNodePortAfterApply(out(ctx), st)
 	if err := waits.broker(ctx); err != nil {
 		return err
 	}

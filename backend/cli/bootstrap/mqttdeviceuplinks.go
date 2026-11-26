@@ -64,7 +64,7 @@ func applyMqttDeviceUplinks(natsVals map[string]interface{}, st *State) {
 }
 
 // sayMqttDeviceUplinks reports only an explicit choice, on one line.
-func sayMqttDeviceUplinks(st *State) {
+func sayMqttDeviceUplinks(c console, st *State) {
 	if st.MqttDeviceUplinks == nil {
 		return
 	}
@@ -72,5 +72,5 @@ func sayMqttDeviceUplinks(st *State) {
 	if *st.MqttDeviceUplinks {
 		choice = "on: a device may publish its own raw payload for its profile's decoder (recorded on the instance)"
 	}
-	fmt.Printf("  %s %s\n", color.WhiteString("MQTT device uplinks:"), color.GreenString(choice))
+	c.printf("  %s %s\n", color.WhiteString("MQTT device uplinks:"), color.GreenString(choice))
 }

@@ -125,7 +125,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 			return err
 		}
 	}
-	sayMQTTExposure(st)
+	sayMQTTExposure(out(ctx), st)
 	// The development egress allowance: this run's flag over the declaration's, judged against
 	// the cluster while nothing has been written.
 	var recordedDev []string
@@ -135,7 +135,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	if err := settleDevAllowEgress(st, recordedDev, st.DevAllowEgressGiven); err != nil {
 		return err
 	}
-	sayDevAllowEgress(st)
+	sayDevAllowEgress(out(ctx), st)
 	var recordedCap int32
 	if existing != nil {
 		recordedCap = existing.Spec.BrokerMaxConnections
@@ -144,9 +144,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		return err
 	}
 	spec := InstanceSpecFrom(st, st.Binding, st.Provider)
-	sayMqttFailClosed(st)
-	sayMqttDeviceUplinks(st)
-	sayUpdateStoreMountless(st)
+	sayMqttFailClosed(out(ctx), st)
+	sayMqttDeviceUplinks(out(ctx), st)
+	sayUpdateStoreMountless(out(ctx), st)
 
 	if st.DryRun {
 		// 🔴 A dry run takes no lock and writes no declaration, because both are
@@ -154,11 +154,11 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		// REPORTS the claim it would have met — an operator asking "what would
 		// this do" is asking a question whose answer includes "refuse, because
 		// somebody else is already running".
-		doing("declaring the instance")
-		fmt.Println()
-		wouldDo(fmt.Sprintf("declare instance %q (provider %s, profile %s)",
+		out(ctx).doing("declaring the instance")
+		out(ctx).println()
+		out(ctx).wouldDo(fmt.Sprintf("declare instance %q (provider %s, profile %s)",
 			st.Instance, spec.Provider, spec.Profile))
-		sayValuesOverlay(st)
+		sayValuesOverlay(out(ctx), st)
 		return nil
 	}
 
@@ -166,7 +166,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		return err
 	}
 
-	doing(fmt.Sprintf("declaring instance %q", st.Instance))
+	out(ctx).doing(fmt.Sprintf("declaring instance %q", st.Instance))
 	// 🔴 !OverLiveInstance, NOT true. A run is BUILDING the instance when step 3 found
 	// no configuration document or found the first-bootstrap record still there, and
 	// only such a run marks the declaration unfinished. A carve-out re-run (a restore,
@@ -187,7 +187,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 			return err
 		}
 	}
-	done()
+	out(ctx).done()
 
 	// 🔴 READ IT BACK, AND USE WHAT COMES BACK. A declaration that is written and
 	// never read is a parallel copy of the flags, and copies drift: the API server

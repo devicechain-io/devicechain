@@ -209,14 +209,14 @@ func precheckUpgradeMount(ctx context.Context, st *State) error {
 
 // sayAreaChange is the opening line of an enable-area run: what was asked, and what it
 // means here.
-func sayAreaChange(st *State) {
+func sayAreaChange(con console, st *State) {
 	c := st.AreaChange
-	defer sayAreaChangeNotes(st)
+	defer sayAreaChangeNotes(stdConsole, st)
 	if len(c.Added) > 0 {
-		fmt.Printf("  %s %s\n", color.WhiteString("Adding:"), color.GreenString(strings.Join(c.Added, ", ")))
+		con.printf("  %s %s\n", color.WhiteString("Adding:"), color.GreenString(strings.Join(c.Added, ", ")))
 	}
 	if already := alreadyPresent(c); len(already) > 0 {
-		fmt.Printf("  %s %s\n", color.WhiteString("Already enabled:"), strings.Join(already, ", "))
+		con.printf("  %s %s\n", color.WhiteString("Already enabled:"), strings.Join(already, ", "))
 	}
 }
 
@@ -232,22 +232,22 @@ func alreadyPresent(c *AreaChange) []string {
 }
 
 // sayAreaChangeSettled is the whole of a run with nothing to do.
-func sayAreaChangeSettled(c *AreaChange, instance string) {
-	fmt.Println(color.HiGreenString("\nNothing to do: %s already enabled on instance %q, "+
+func sayAreaChangeSettled(con console, c *AreaChange, instance string) {
+	con.println(color.HiGreenString("\nNothing to do: %s already enabled on instance %q, "+
 		"and its last run ended Ready. Nothing was changed.", strings.Join(c.Requested, ", "), instance))
 }
 
 // sayAreaChangeDone closes a finished enable-area run with what changed.
-func sayAreaChangeDone(st *State) {
+func sayAreaChangeDone(con console, st *State) {
 	c := st.AreaChange
 	if len(c.Added) > 0 {
-		fmt.Printf("  %s %s\n", color.WhiteString("Enabled:"), color.GreenString(strings.Join(c.Added, ", ")))
+		con.printf("  %s %s\n", color.WhiteString("Enabled:"), color.GreenString(strings.Join(c.Added, ", ")))
 	} else {
-		fmt.Printf("  %s %s\n", color.WhiteString("Re-applied:"),
+		con.printf("  %s %s\n", color.WhiteString("Re-applied:"),
 			color.GreenString(strings.Join(c.Requested, ", ")+" (already declared; the previous run had not ended Ready)"))
 	}
 	if len(st.EnabledAreas) > 0 {
-		fmt.Printf("  %s %s\n", color.WhiteString("Areas now deployed:"), strings.Join(st.EnabledAreas, ", "))
+		con.printf("  %s %s\n", color.WhiteString("Areas now deployed:"), strings.Join(st.EnabledAreas, ", "))
 	}
 }
 
@@ -296,8 +296,8 @@ func areaChangeNotes(st *State) []string {
 }
 
 // sayAreaChangeNotes prints areaChangeNotes, in yellow.
-func sayAreaChangeNotes(st *State) {
+func sayAreaChangeNotes(con console, st *State) {
 	for _, n := range areaChangeNotes(st) {
-		fmt.Println(color.YellowString("  note: %s", n))
+		con.println(color.YellowString("  note: %s", n))
 	}
 }

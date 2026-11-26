@@ -1,0 +1,11 @@
+args: bootstrap local acme --skip-preflight --escrow-passphrase-file pass.txt
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (52 bytes) --
+Error: the escrow passphrase file pass.txt is empty
+
+-- engine (11 bytes) --
+not called
+

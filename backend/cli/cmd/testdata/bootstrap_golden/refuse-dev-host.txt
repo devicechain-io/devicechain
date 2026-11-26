@@ -1,0 +1,11 @@
+args: bootstrap local acme --dev --host iot.example.com
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (103 bytes) --
+Error: --dev pins --host to localhost; remove the conflicting --host "iot.example.com" (or drop --dev)
+
+-- engine (11 bytes) --
+not called
+

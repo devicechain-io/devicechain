@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -14,6 +15,8 @@ import (
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dc-k8s/functionalarea"
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/installplain"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -414,240 +417,278 @@ var bootstrapCmd = &cobra.Command{
 			return fmt.Errorf("resolving deployment areas (--profile/--enable-area): %w", err)
 		}
 
-		// Diagnose the local system up front so a run fails fast on a missing
-		// tool / low limit / unreachable docker rather than midway through.
-		if !bootstrapSkipPreflight {
-			if d := runDoctor(args[0], doctorOptsFor(bootstrapKubeContext, bootstrapCluster, bootstrapBuild)); d.fails > 0 {
-				return fmt.Errorf("%d preflight check(s) failed — fix the items above, or re-run with --skip-preflight", d.fails)
-			}
-		}
-
+		// From here the run is the bootstrap engine's: the preflight, the escrow plan and
+		// the cluster are its first stages and the pipeline's eleven steps the rest, each
+		// reported through the run's events, in the order a bootstrap always ran them.
+		//
+		// Diagnose the local system up front so a run fails fast on a missing tool / low
+		// limit / unreachable docker rather than midway through: the engine's
+		// bootstrap.preflight stage, through doctorRunner.
+		//
 		// Settle the root-key escrow LAST among the up-front checks but still before
-		// any cluster exists (ADR-059 / ADR-028). Last, because this is the only step
-		// that may stop and ask a human something, and a passphrase typed twice only
-		// to hit a typo'd --enable-area is a bad trade. Before the cluster, because
-		// both of its failure modes — no passphrase in a non-interactive run, an
-		// unopenable restore artifact — must land in the first second rather than as
-		// a prompt nobody sees behind ten minutes of spin-up.
-		escrowPlan, err := bootstrap.ResolveEscrowPlan(args[1], bootstrap.EscrowFlags{
-			File:           bootstrapEscrowFile,
-			PassphraseFile: bootstrapEscrowPassFile,
-			NoEscrow:       bootstrapNoEscrow,
-			RestoreFile:    bootstrapRestoreRootKey,
-			DryRun:         bootstrapDryRun,
-		})
-		if err != nil {
-			return err
-		}
+		// any cluster exists (ADR-059 / ADR-028): the engine's bootstrap.escrow stage.
+		// Last, because this is the only step that may stop and ask a human something,
+		// and a passphrase typed twice only to hit a typo'd --enable-area is a bad trade.
+		// Before the cluster, because both of its failure modes — no passphrase in a
+		// non-interactive run, an unopenable restore artifact — must land in the first
+		// second rather than as a prompt nobody sees behind ten minutes of spin-up. A
+		// passphrase a person types reaches the plan through the run's prompt broker, as
+		// a secret answer that no event carries.
+		var (
+			opts  bootstrap.Options
+			prior bootstrap.PriorLocalState
+		)
+		return runBootstrapEngine(cmd.Context(), &bootstrap.BootstrapEngine{
+			Instance:      args[1],
+			DryRun:        bootstrapDryRun,
+			AssumeYes:     bootstrapAssumeYes,
+			KubeContext:   bootstrapKubeContext,
+			Cluster:       bootstrapCluster,
+			SkipPreflight: bootstrapSkipPreflight,
+			Escrow: bootstrap.EscrowFlags{
+				File:           bootstrapEscrowFile,
+				PassphraseFile: bootstrapEscrowPassFile,
+				NoEscrow:       bootstrapNoEscrow,
+				RestoreFile:    bootstrapRestoreRootKey,
+				DryRun:         bootstrapDryRun,
+			},
+			Target: func(ctx context.Context, con bootstrap.Console, escrowPlan bootstrap.EscrowPlan) (*bootstrap.State, error) {
+				// The object store's shape is argv's too, but its DEFAULT is the cluster's (a cluster
+				// dcctl created gets a small filesystem store), so only the flag combinations are
+				// judged here -- against the more demanding default, so a misuse is refused before a
+				// cluster is created for it. The default itself is applied once the cluster is
+				// resolved, below.
+				if err := checkObjectStoreArgv(bootstrapObjectStore); err != nil {
+					return nil, err
+				}
 
-		// The object store's shape is argv's too, but its DEFAULT is the cluster's (a cluster
-		// dcctl created gets a small filesystem store), so only the flag combinations are
-		// judged here -- against the more demanding default, so a misuse is refused before a
-		// cluster is created for it. The default itself is applied once the cluster is
-		// resolved, below.
-		if err := checkObjectStoreArgv(bootstrapObjectStore); err != nil {
-			return err
-		}
+				// The restore's own shape is checkable from argv alone; whether the cluster
+				// archives at all is the install's answer, checked once the record is read.
+				if _, err := bootstrap.ResolveRestorePlan(restoreFlagsFromArgv(true)); err != nil {
+					return nil, err
+				}
 
-		// The restore's own shape is checkable from argv alone; whether the cluster
-		// archives at all is the install's answer, checked once the record is read.
-		if _, err := bootstrap.ResolveRestorePlan(restoreFlagsFromArgv(true)); err != nil {
-			return err
-		}
+				opts = bootstrapOptions(args[1], enableAreas, mqttFailClosed, mqttDeviceUplinksFlag(cmd.Flags().Changed, bootstrapMqttDeviceUplinks))
 
-		opts := bootstrapOptions(args[1], enableAreas, mqttFailClosed, mqttDeviceUplinksFlag(cmd.Flags().Changed, bootstrapMqttDeviceUplinks))
+				// WHAT CAN BE SETTLED FROM THE ARGUMENTS ALONE IS SETTLED HERE, BEFORE THE RUN
+				// TOUCHES ANYTHING.
+				//
+				// 🔴 WHAT THESE TWO HAVE IN COMMON IS THAT NEITHER NEEDS A CLUSTER. Below this
+				// point the command resolves an image source, creates or adopts a cluster, reads
+				// its install record and writes a local record, and the pipeline then builds
+				// images, takes the cluster lock and reads what is deployed. A refusal that can be
+				// made from a string and a stat has no business waiting for any of that.
+				//
+				// Both refuse on a --dry-run as well, and that is deliberate: a rehearsal exists to
+				// find out whether these arguments are usable, so it is the run that most needs the
+				// answer soonest. The PIPELINE's refusals rehearse instead, because by then the
+				// question needs a cluster and a rehearsal is often aimed at one that is not there
+				// yet.
 
-		// WHAT CAN BE SETTLED FROM THE ARGUMENTS ALONE IS SETTLED HERE, BEFORE THE RUN
-		// TOUCHES ANYTHING.
-		//
-		// 🔴 WHAT THESE TWO HAVE IN COMMON IS THAT NEITHER NEEDS A CLUSTER. Below this
-		// point the command resolves an image source, creates or adopts a cluster, reads
-		// its install record and writes a local record, and the pipeline then builds
-		// images, takes the cluster lock and reads what is deployed. A refusal that can be
-		// made from a string and a stat has no business waiting for any of that.
-		//
-		// Both refuse on a --dry-run as well, and that is deliberate: a rehearsal exists to
-		// find out whether these arguments are usable, so it is the run that most needs the
-		// answer soonest. The PIPELINE's refusals rehearse instead, because by then the
-		// question needs a cluster and a rehearsal is often aimed at one that is not there
-		// yet.
+				// 🔴 CHECKED WHERE A NEW NAME ENTERS, and only here. `destroy` deliberately does
+				// NOT validate: whatever is already on disk must stay destroyable, including
+				// anything created before this check existed.
+				if err := bootstrap.ValidateInstanceName(opts.Instance); err != nil {
+					return nil, err
+				}
 
-		// 🔴 CHECKED WHERE A NEW NAME ENTERS, and only here. `destroy` deliberately does
-		// NOT validate: whatever is already on disk must stay destroyable, including
-		// anything created before this check existed.
-		if err := bootstrap.ValidateInstanceName(opts.Instance); err != nil {
-			return err
-		}
+				// 🔴 AN INSTANCE WHOSE TEARDOWN DID NOT FINISH IS NOT A NAME THIS COMMAND MAY
+				// BUILD ON. `dcctl destroy` writes a marker on this machine before it deletes
+				// anything (beginDestroy), and it survives a destroy that died part-way — which
+				// is exactly the state where the cluster holds some of the old instance and no
+				// longer holds the rest. Bootstrapping over that produces a half-old, half-new
+				// instance whose failures are attributed to the new run.
+				//
+				// 🔴 HERE, NOT IN THE PIPELINE, AND THE REASON IS THE LOCAL RECORD. The record is
+				// written before the pipeline starts, and for a marked instance it is not a
+				// phantom: it is the only thing that names the cluster the destroy has to finish
+				// in. Refused here it is never touched; refused later this run would first
+				// REPLACE it with its own binding — possibly naming a different cluster — and the
+				// only way back would be a rollback. So this refusal deliberately does NOT join
+				// unwindLocalRecordWhenNothingWasWritten's list, which exists for records that
+				// describe nothing. TestTheBootstrapCommandRefusesAHalfDestroyedInstanceBeforeItTouchesAnything
+				// is what holds it in front of both EnsureCluster and WriteInstanceRecord.
+				if err := bootstrap.RefuseUnfinishedDestroy(opts.Instance); err != nil {
+					return nil, err
+				}
 
-		// 🔴 AN INSTANCE WHOSE TEARDOWN DID NOT FINISH IS NOT A NAME THIS COMMAND MAY
-		// BUILD ON. `dcctl destroy` writes a marker on this machine before it deletes
-		// anything (beginDestroy), and it survives a destroy that died part-way — which
-		// is exactly the state where the cluster holds some of the old instance and no
-		// longer holds the rest. Bootstrapping over that produces a half-old, half-new
-		// instance whose failures are attributed to the new run.
-		//
-		// 🔴 HERE, NOT IN THE PIPELINE, AND THE REASON IS THE LOCAL RECORD. The record is
-		// written before the pipeline starts, and for a marked instance it is not a
-		// phantom: it is the only thing that names the cluster the destroy has to finish
-		// in. Refused here it is never touched; refused later this run would first
-		// REPLACE it with its own binding — possibly naming a different cluster — and the
-		// only way back would be a rollback. So this refusal deliberately does NOT join
-		// unwindLocalRecordWhenNothingWasWritten's list, which exists for records that
-		// describe nothing. TestTheBootstrapCommandRefusesAHalfDestroyedInstanceBeforeItTouchesAnything
-		// is what holds it in front of both EnsureCluster and WriteInstanceRecord.
-		if err := bootstrap.RefuseUnfinishedDestroy(opts.Instance); err != nil {
-			return err
-		}
+				// Settle which images this run deploys, here and now — before EnsureCluster,
+				// for the same reason the escrow and restore plans are settled above. A dcctl
+				// with no pinned image version can never complete a published-image bootstrap,
+				// and it used to learn that after spinning up a kind cluster to hold the run.
+				// It also has to be settled before the pipeline, whose first two steps both
+				// consume it now. See bootstrap.ResolveImageSource.
+				img, err := bootstrap.ResolveImageSource(opts.ImageRegistry, opts.ImageVersion, opts.BuildImages)
+				if err != nil {
+					return nil, err
+				}
+				opts.ImageRegistry, opts.ImageVersion = img.Registry, img.Version
 
-		// Settle which images this run deploys, here and now — before EnsureCluster,
-		// for the same reason the escrow and restore plans are settled above. A dcctl
-		// with no pinned image version can never complete a published-image bootstrap,
-		// and it used to learn that after spinning up a kind cluster to hold the run.
-		// It also has to be settled before the pipeline, whose first two steps both
-		// consume it now. See bootstrap.ResolveImageSource.
-		img, err := bootstrap.ResolveImageSource(opts.ImageRegistry, opts.ImageVersion, opts.BuildImages)
-		if err != nil {
-			return err
-		}
-		opts.ImageRegistry, opts.ImageVersion = img.Registry, img.Version
+				// EnsureCluster resolves WHICH CLUSTER we should target, not merely how to reach
+				// it — see bootstrap.ClusterBinding.
+				binding, err := provider.EnsureCluster(ctx, opts)
+				if err != nil {
+					return nil, err
+				}
 
-		ctx := cmd.Context()
-		// EnsureCluster resolves WHICH CLUSTER we should target, not merely how to reach
-		// it — see bootstrap.ClusterBinding.
-		binding, err := provider.EnsureCluster(ctx, opts)
-		if err != nil {
-			return err
-		}
+				// The cluster's identity, and then its install record — both BEFORE anything of
+				// this instance is written, locally or in the cluster.
+				//
+				// 🔴 THE IDENTITY IS FATAL. It is what the install record is checked against: a
+				// record carried in from another cluster describes prerequisites this one may not
+				// have. A dry run reads both when it can and says so when it cannot, because it is
+				// often aimed at a cluster not installed yet and the rehearsal is still worth having.
+				installCommand := bootstrap.InstallCommand(provider.Name(), binding)
+				// 🔴 A CLUSTER THAT HAS NOT BEEN INSTALLED IS REFUSED HERE, naming the command
+				// that prepares it — never prepared on the way past.
+				clusterUID, installRec, err := bootstrap.ReadInstall(ctx, binding.KubeContext, installCommand)
+				switch {
+				case err == nil:
+				case !opts.DryRun && clusterUID == "":
+					return nil, fmt.Errorf("reading the identity of cluster %s: %w\n"+
+						"  The identity is the kube-system namespace's UID; a context that cannot read it "+
+						"is one dcctl cannot build an instance on", binding.Describe(), err)
+				case !opts.DryRun:
+					return nil, err
+				case clusterUID == "":
+					con.Println(color.YellowString("[dry-run] could not identify cluster %s (%v); the plan below "+
+						"assumes an installed cluster with default settings.", binding.Describe(), err))
+				default:
+					con.Println(color.YellowString("[dry-run] %v\n  The plan below assumes an installed "+
+						"cluster with default settings.", err))
+				}
+				// 🔴 AND THE OPERATOR ITSELF IS CHECKED SEPARATELY, AGAINST THE CLUSTER RATHER
+				// THAN AGAINST THE RECORD ABOVE. A record written by a dcctl from before the
+				// operator moved into `dcctl install` says "installed" perfectly truthfully
+				// while no operator is present at all — so the record cannot answer this, and a
+				// guard that asked it would wave through exactly the clusters it exists to
+				// catch. Ask for the artifact that travels WITH the thing.
+				//
+				// A dry run is softened the same way the record check above is, and for the same
+				// reason: a rehearsal is often aimed at a cluster that is not prepared yet, and
+				// it is still worth having.
+				if err := bootstrap.RequireOperator(ctx, binding.KubeContext, "a bootstrap", installCommand); err != nil {
+					if !opts.DryRun {
+						return nil, err
+					}
+					con.Println(color.YellowString("[dry-run] %v\n"+
+						"  The plan below assumes the operator this release expects.", err))
+				}
+				if !opts.DryRun {
+					if err := bootstrap.CheckPendingOperation(ctx, binding.KubeContext, opts.Instance, "a bootstrap"); err != nil {
+						return nil, err
+					}
+				} else {
+					con.Println(color.YellowString("[dry-run] skipping the pending-operation lookup; this is detection, not a lock."))
+				}
+				// Set on a dry run too: the rehearsal reads the cluster's Secrets back, and asks
+				// whether each is THIS cluster's, which needs its identity. Nothing a dry run does
+				// writes it anywhere.
+				binding.ClusterUID = clusterUID
+				// 🔴 LOCAL STATE FROM ANOTHER CLUSTER IS REFUSED BEFORE ANYTHING READS IT. See
+				// RefuseInstanceOnAnotherCluster; it runs ahead of the record write below, which
+				// would otherwise overwrite the evidence with this cluster's identity.
+				if err := bootstrap.RefuseInstanceOnAnotherCluster(opts.Instance, binding, clusterUID); err != nil {
+					return nil, err
+				}
 
-		// The cluster's identity, and then its install record — both BEFORE anything of
-		// this instance is written, locally or in the cluster.
-		//
-		// 🔴 THE IDENTITY IS FATAL. It is what the install record is checked against: a
-		// record carried in from another cluster describes prerequisites this one may not
-		// have. A dry run reads both when it can and says so when it cannot, because it is
-		// often aimed at a cluster not installed yet and the rehearsal is still worth having.
-		installCommand := bootstrap.InstallCommand(provider.Name(), binding)
-		// 🔴 A CLUSTER THAT HAS NOT BEEN INSTALLED IS REFUSED HERE, naming the command
-		// that prepares it — never prepared on the way past.
-		clusterUID, installRec, err := bootstrap.ReadInstall(ctx, binding.KubeContext, installCommand)
-		switch {
-		case err == nil:
-		case !opts.DryRun && clusterUID == "":
-			return fmt.Errorf("reading the identity of cluster %s: %w\n"+
-				"  The identity is the kube-system namespace's UID; a context that cannot read it "+
-				"is one dcctl cannot build an instance on", binding.Describe(), err)
-		case !opts.DryRun:
-			return err
-		case clusterUID == "":
-			fmt.Println(color.YellowString("[dry-run] could not identify cluster %s (%v); the plan below "+
-				"assumes an installed cluster with default settings.", binding.Describe(), err))
-		default:
-			fmt.Println(color.YellowString("[dry-run] %v\n  The plan below assumes an installed "+
-				"cluster with default settings.", err))
-		}
-		// 🔴 AND THE OPERATOR ITSELF IS CHECKED SEPARATELY, AGAINST THE CLUSTER RATHER
-		// THAN AGAINST THE RECORD ABOVE. A record written by a dcctl from before the
-		// operator moved into `dcctl install` says "installed" perfectly truthfully
-		// while no operator is present at all — so the record cannot answer this, and a
-		// guard that asked it would wave through exactly the clusters it exists to
-		// catch. Ask for the artifact that travels WITH the thing.
-		//
-		// A dry run is softened the same way the record check above is, and for the same
-		// reason: a rehearsal is often aimed at a cluster that is not prepared yet, and
-		// it is still worth having.
-		if err := bootstrap.RequireOperator(ctx, binding.KubeContext, "a bootstrap", installCommand); err != nil {
-			if !opts.DryRun {
-				return err
-			}
-			fmt.Println(color.YellowString("[dry-run] %v\n"+
-				"  The plan below assumes the operator this release expects.", err))
-		}
-		if !opts.DryRun {
-			if err := bootstrap.CheckPendingOperation(ctx, binding.KubeContext, opts.Instance, "a bootstrap"); err != nil {
-				return err
-			}
-		} else {
-			fmt.Println(color.YellowString("[dry-run] skipping the pending-operation lookup; this is detection, not a lock."))
-		}
-		// Set on a dry run too: the rehearsal reads the cluster's Secrets back, and asks
-		// whether each is THIS cluster's, which needs its identity. Nothing a dry run does
-		// writes it anywhere.
-		binding.ClusterUID = clusterUID
-		// 🔴 LOCAL STATE FROM ANOTHER CLUSTER IS REFUSED BEFORE ANYTHING READS IT. See
-		// RefuseInstanceOnAnotherCluster; it runs ahead of the record write below, which
-		// would otherwise overwrite the evidence with this cluster's identity.
-		if err := bootstrap.RefuseInstanceOnAnotherCluster(opts.Instance, binding, clusterUID); err != nil {
-			return err
-		}
+				// The object store, now that the cluster is known: an unset --object-store means a
+				// small filesystem store on a cluster dcctl created and no store on one it was
+				// pointed at. Resolved HERE and recorded on the declaration as resolved.
+				objectStore, err := bootstrap.ResolveObjectStore(bootstrapObjectStore,
+					bootstrap.DefaultsToFilesystemObjectStore(provider.Name(), binding))
+				if err != nil {
+					return nil, err
+				}
+				con.Printf("object store: %s\n", bootstrap.ObjectStoreSummary(objectStore))
 
-		// The object store, now that the cluster is known: an unset --object-store means a
-		// small filesystem store on a cluster dcctl created and no store on one it was
-		// pointed at. Resolved HERE and recorded on the declaration as resolved.
-		objectStore, err := bootstrap.ResolveObjectStore(bootstrapObjectStore,
-			bootstrap.DefaultsToFilesystemObjectStore(provider.Name(), binding))
-		if err != nil {
-			return err
-		}
-		fmt.Printf("object store: %s\n", bootstrap.ObjectStoreSummary(objectStore))
+				st := bootstrapStateFor(opts, binding, clusterUID, provider.Name(), enabledAreas, lwm2mIdentities,
+					valuesOverlay, objectStore, objectStoreFlagGiven(cmd.Flags().Changed), escrowPlan)
+				if installRec != nil {
+					bootstrap.FollowInstall(st, installRec)
+				}
+				if err := followClusterShape(cmd.Flags().Changed, st); err != nil {
+					return nil, err
+				}
+				if st.Restore, err = bootstrap.ResolveRestorePlan(restoreFlagsFromArgv(bootstrap.BackupsEnabledFor(st))); err != nil {
+					return nil, err
+				}
+				// 🔴 RECORDED HERE, AND HERE IS THE ONLY PLACE IT CAN BE. This is the one moment
+				// the instance name and the cluster it was resolved to are both in hand; every
+				// later command used to re-derive the second from the first, and that derivation
+				// is wrong for any instance bootstrapped with --kube-context. Writing it BEFORE
+				// the pipeline is deliberate: a bootstrap that dies partway through has still
+				// written into the cluster, and an instance that cannot be destroyed because its
+				// record was never written would be the same orphan this record exists to prevent.
+				//
+				// A failure to record is a WARNING, not a stop: making a bookkeeping error abort a
+				// bring-up would trade a recoverable annoyance (destroy falls back to the guess,
+				// loudly) for a broken install.
+				//
+				// 🔴 What was here first is captured before it is replaced: on the refusals that
+				// fire before this run has written anything to the cluster, the record this run
+				// writes describes an instance that was never built. See PriorLocalState and
+				// unwindLocalRecordWhenNothingWasWritten.
+				prior = bootstrap.CapturePriorLocalState(opts.Instance)
+				if !opts.DryRun {
+					rec := bootstrap.InstanceRecord{
+						Instance:     opts.Instance,
+						Provider:     provider.Name(),
+						Cluster:      binding.Cluster,
+						KubeContext:  binding.KubeContext,
+						Managed:      binding.Managed,
+						ClusterUID:   clusterUID,
+						EscrowPath:   bootstrap.EscrowPlanPathToRecord(opts.Instance, escrowPlan),
+						CreatedAt:    time.Now().UTC(),
+						DcctlVersion: Version,
+					}
+					// A re-run rewrites the record; the MQTT node port the earlier run recorded is still
+					// the instance's until this run's apply records it again.
+					if old, err := bootstrap.ReadInstanceRecord(opts.Instance); err == nil {
+						rec.MQTTNodePort = old.MQTTNodePort
+					}
+					if err := bootstrap.WriteInstanceRecord(rec); err != nil {
+						con.Println(color.YellowString(
+							"warning: could not record which cluster this instance lives in (%v).\n"+
+								"  `dcctl instances list` will show it as unrecorded and `dcctl destroy` will guess.", err))
+					}
+				}
 
-		st := bootstrapStateFor(opts, binding, clusterUID, provider.Name(), enabledAreas, lwm2mIdentities,
-			valuesOverlay, objectStore, objectStoreFlagGiven(cmd.Flags().Changed), escrowPlan)
-		if installRec != nil {
-			bootstrap.FollowInstall(st, installRec)
-		}
-		if err := followClusterShape(cmd.Flags().Changed, st); err != nil {
-			return err
-		}
-		if st.Restore, err = bootstrap.ResolveRestorePlan(restoreFlagsFromArgv(bootstrap.BackupsEnabledFor(st))); err != nil {
-			return err
-		}
-		// 🔴 RECORDED HERE, AND HERE IS THE ONLY PLACE IT CAN BE. This is the one moment
-		// the instance name and the cluster it was resolved to are both in hand; every
-		// later command used to re-derive the second from the first, and that derivation
-		// is wrong for any instance bootstrapped with --kube-context. Writing it BEFORE
-		// the pipeline is deliberate: a bootstrap that dies partway through has still
-		// written into the cluster, and an instance that cannot be destroyed because its
-		// record was never written would be the same orphan this record exists to prevent.
-		//
-		// A failure to record is a WARNING, not a stop: making a bookkeeping error abort a
-		// bring-up would trade a recoverable annoyance (destroy falls back to the guess,
-		// loudly) for a broken install.
-		//
-		// 🔴 What was here first is captured before it is replaced: on the refusals that
-		// fire before this run has written anything to the cluster, the record this run
-		// writes describes an instance that was never built. See PriorLocalState and
-		// unwindLocalRecordWhenNothingWasWritten.
-		prior := bootstrap.CapturePriorLocalState(opts.Instance)
-		if !opts.DryRun {
-			rec := bootstrap.InstanceRecord{
-				Instance:     opts.Instance,
-				Provider:     provider.Name(),
-				Cluster:      binding.Cluster,
-				KubeContext:  binding.KubeContext,
-				Managed:      binding.Managed,
-				ClusterUID:   clusterUID,
-				EscrowPath:   bootstrap.EscrowPlanPathToRecord(opts.Instance, escrowPlan),
-				CreatedAt:    time.Now().UTC(),
-				DcctlVersion: Version,
-			}
-			// A re-run rewrites the record; the MQTT node port the earlier run recorded is still
-			// the instance's until this run's apply records it again.
-			if old, err := bootstrap.ReadInstanceRecord(opts.Instance); err == nil {
-				rec.MQTTNodePort = old.MQTTNodePort
-			}
-			if err := bootstrap.WriteInstanceRecord(rec); err != nil {
-				fmt.Println(color.YellowString(
-					"warning: could not record which cluster this instance lives in (%v).\n"+
-						"  `dcctl instances list` will show it as unrecorded and `dcctl destroy` will guess.", err))
-			}
-		}
-
-		runErr := bootstrap.NewDefaultPipeline().Run(ctx, st)
-		runErr = finishClaim(ctx, st, runErr)
-		unwindLocalRecordWhenNothingWasWritten(opts, prior, runErr)
-		return runErr
+				return st, nil
+			},
+			// The pipeline runs after the cluster stage, and Finish after the pipeline
+			// whatever it returned: the engine runs them in the order they are listed here.
+			Pipeline: bootstrapPipeline(),
+			Finish: func(ctx context.Context, con bootstrap.Console, st *bootstrap.State, runErr error) error {
+				runErr = finishClaim(ctx, st, runErr)
+				unwindLocalRecordWhenNothingWasWritten(con, opts, prior, runErr)
+				return runErr
+			},
+		}, doctorRunner(args[0], doctorOptsFor(bootstrapKubeContext, bootstrapCluster, bootstrapBuild)))
 	},
 	SilenceUsage: true,
+}
+
+// bootstrapPipeline is the steps a bootstrap runs: bootstrap.NewDefaultPipeline, held in a
+// variable so a test can run the command's stages with stand-ins for the cluster work.
+// Production never reassigns it.
+var bootstrapPipeline = bootstrap.NewDefaultPipeline
+
+// runBootstrapEngine runs a bootstrap through the plain presenter: today's output, on the
+// process's own streams, with the escrow passphrase read from the terminal when no file
+// or environment variable supplies it, and the generated superuser seed shown once, where
+// the access report always showed it.
+//
+// 🔴 THE SEAM FOR --ui. When the terminal UI lands on main it selects its presenter here,
+// as runInstallEngine will; the engine, its stages and its two secret paths (the prompt
+// broker and the reveal sink) are already the presenter-neutral contract it renders.
+func runBootstrapEngine(ctx context.Context, e *bootstrap.BootstrapEngine, preflight installflow.PreflightRunner) error {
+	if ctx == nil { // RunE called directly, as tests do, rather than through Execute
+		ctx = context.Background()
+	}
+	return installplain.Presenter{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin}.Run(ctx, e,
+		installflow.Request{Operation: installflow.OperationBootstrap, DryRun: e.DryRun, AssumeYes: e.AssumeYes},
+		preflight)
 }
 
 // objectStoreFlags are every flag that chooses the object store. A run that gave none of them
@@ -764,7 +805,7 @@ func followClusterShape(changed func(string) bool, st *bootstrap.State) error {
 // It reports and moves on. The refusal is what the operator is about to read, and
 // failing differently because the cleanup failed would replace a message they can act on
 // with one they cannot.
-func unwindLocalRecordWhenNothingWasWritten(opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
+func unwindLocalRecordWhenNothingWasWritten(con bootstrap.Console, opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
 	var hostTaken *bootstrap.ErrHostTaken
 	var noBudget *bootstrap.ErrConnectionBudget
 	var noNamespace *bootstrap.ErrNamespaceUnavailable
@@ -776,14 +817,14 @@ func unwindLocalRecordWhenNothingWasWritten(opts bootstrap.Options, prior bootst
 	}
 	removed, err := prior.Restore()
 	if err != nil {
-		fmt.Println(color.YellowString(
+		con.Println(color.YellowString(
 			"warning: could not undo the local record this run wrote for %q (%v).\n"+
 				"  `dcctl instances list` will show it even though nothing was installed; "+
 				"remove ~/.devicechain/instances/%s by hand.", opts.Instance, err, opts.Instance))
 		return
 	}
 	if removed {
-		fmt.Println(color.WhiteString(
+		con.Println(color.WhiteString(
 			"Nothing was installed, so the local record for %q has been removed again.", opts.Instance))
 	}
 }

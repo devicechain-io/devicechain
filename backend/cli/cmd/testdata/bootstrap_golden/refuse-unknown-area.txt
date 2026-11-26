@@ -1,0 +1,11 @@
+args: bootstrap local acme --enable-area nope
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (92 bytes) --
+Error: resolving deployment areas (--profile/--enable-area): unknown functional area "nope"
+
+-- engine (11 bytes) --
+not called
+

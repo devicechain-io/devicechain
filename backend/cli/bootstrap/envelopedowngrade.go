@@ -146,7 +146,7 @@ func checkEnvelopeDowngrade(ctx context.Context, f envelopeFacts, probe func(con
 		target += " (not a release tag, so it cannot be shown to read envelopes)"
 	}
 	if f.Allow {
-		fmt.Println(color.RedString("  WARNING: --allow-envelope-downgrade skips the check that no event envelope remains on the "+
+		out(ctx).println(color.RedString("  WARNING: --allow-envelope-downgrade skips the check that no event envelope remains on the "+
 			"streams. A release below %s dead-letters an envelope it meets, and the events in it are lost to that service.",
 			FirstEnvelopeReaderRelease))
 		return nil

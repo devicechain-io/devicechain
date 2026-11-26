@@ -145,7 +145,7 @@ func instanceRootVarsIn(st *State, rootdir string) ([]string, error) {
 		return nil, err
 	}
 	if rootdir != "" {
-		sayOverriddenTopologyVars(st, rootdir)
+		sayOverriddenTopologyVars(stdConsole, st, rootdir)
 	}
 	vars = append(vars, st.Install.Outputs.Archive.archiveVars()...)
 	return append(vars, st.CarriedRestoreVars...), nil

@@ -427,7 +427,7 @@ func settleFrontEnd(ctx context.Context, st *State) error {
 		if !st.DryRun {
 			return err
 		}
-		fmt.Println(color.YellowString("  warning: could not read the cluster's ingress controllers (%v); "+
+		out(ctx).println(color.YellowString("  warning: could not read the cluster's ingress controllers (%v); "+
 			"this rehearsal assumes Traefik alone.", err))
 		facts = frontEndFacts{clusterFrontEnd: clusterFrontEnd{GatewayClass: true}}
 	}
@@ -449,11 +449,11 @@ func settleFrontEnd(ctx context.Context, st *State) error {
 	if st.IngressControllerOverride != "" {
 		why += "; recorded on the instance, so a later upgrade keeps it until --ingress-controller auto"
 	}
-	fmt.Printf("  front end        %s%s (%s)\n", choice.Controller, map[bool]string{true: " + legacy Ingress"}[choice.Legacy], why)
+	out(ctx).printf("  front end        %s%s (%s)\n", choice.Controller, map[bool]string{true: " + legacy Ingress"}[choice.Legacy], why)
 	if w := ingressNginxDeprecation(choice, facts.GatewayClass); w != "" {
-		fmt.Println(color.YellowString("  warning: %s", w))
+		out(ctx).println(color.YellowString("  warning: %s", w))
 	}
-	return checkNginxOnlyOverlay(st)
+	return checkNginxOnlyOverlay(out(ctx), st)
 }
 
 // ingressNginxDeprecation is the notice for an instance still served by ingress-nginx, whether
@@ -488,7 +488,7 @@ func refuseDropWithoutGatewayCertificate(ctx context.Context, st *State) error {
 	vs, err := readGatewayCertificates(ctx, st.KubeContext, st.Instance)
 	if err != nil {
 		if st.DryRun {
-			fmt.Println(color.YellowString("  warning: could not read the Gateway's certificate (%v); "+
+			out(ctx).println(color.YellowString("  warning: could not read the Gateway's certificate (%v); "+
 				"this rehearsal cannot check --drop-legacy-ingress against it.", err))
 			return nil
 		}
@@ -568,7 +568,7 @@ func effectiveOverlay(st *State) map[string]interface{} {
 // is written. A value the operator just typed is REFUSED, not dropped: they would otherwise
 // believe the edge enforces it. One the instance already recorded is dropped with a warning,
 // because the operator did not just choose it.
-func checkNginxOnlyOverlay(st *State) error {
+func checkNginxOnlyOverlay(c console, st *State) error {
 	if !retiresNginxOnlyOverlay(st) || len(st.ValuesOverlay) == 0 {
 		return nil
 	}
@@ -593,7 +593,7 @@ func checkNginxOnlyOverlay(st *State) error {
 			strings.Join(fresh, ", "))
 	}
 	if len(kept) > 0 {
-		fmt.Println(color.YellowString("  warning: the overlay recorded on this instance sets %s; the Gateway front end has "+
+		c.println(color.YellowString("  warning: the overlay recorded on this instance sets %s; the Gateway front end has "+
 			"no use for it, so it is not applied (it stays recorded, and applies again under --ingress-controller nginx).",
 			strings.Join(kept, ", ")))
 	}
@@ -846,7 +846,7 @@ func settleClusterFrontEnd(ctx context.Context, st *State, typed kubernetes.Inte
 	}
 	plan.Vars = append(plan.Vars, nlb...)
 	for _, w := range nlbWarnings {
-		fmt.Println(color.YellowString("  warning: %s", w))
+		out(ctx).println(color.YellowString("  warning: %s", w))
 	}
 	var dyn dynamic.Interface
 	if d, _, _, derr := kubeClients(st.KubeContext); derr == nil {
@@ -858,11 +858,11 @@ func settleClusterFrontEnd(ctx context.Context, st *State, typed kubernetes.Inte
 	}
 	plan.Vars = append(plan.Vars, mqttVars...)
 	for _, w := range mqttWarnings {
-		fmt.Println(color.YellowString("  warning: %s", w))
+		out(ctx).println(color.YellowString("  warning: %s", w))
 	}
 	st.ClusterFrontEndVars = plan.Vars
 	for _, n := range plan.Notes {
-		fmt.Printf("  ingress          %s\n", n)
+		out(ctx).printf("  ingress          %s\n", n)
 	}
 	return nil
 }
@@ -990,7 +990,7 @@ func waitForGatewayCertificate(ctx context.Context, dyn dynamic.Interface, st *S
 	ns := InstanceNamespace(st.Instance)
 	g, err := getGatewayAPIObject(ctx, dyn, gatewayGVR, ns, instanceGatewayName)
 	if err != nil {
-		return fail("reading the instance's Gateway", err)
+		return out(ctx).fail("reading the instance's Gateway", err)
 	}
 	if g == nil {
 		return nil
@@ -1003,7 +1003,7 @@ func waitForGatewayCertificate(ctx context.Context, dyn dynamic.Interface, st *S
 	if st.LegacyIngress {
 		timeout = gatewayCertLegacyTimeout
 	}
-	doing("waiting for the Gateway's certificate")
+	out(ctx).doing("waiting for the Gateway's certificate")
 	deadline := time.Now().Add(timeout)
 	for {
 		list, err := dyn.Resource(certificateGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
@@ -1012,37 +1012,37 @@ func waitForGatewayCertificate(ctx context.Context, dyn dynamic.Interface, st *S
 		case err != nil && (apierrors.IsNotFound(err) || meta.IsNoMatchError(err)):
 			why = "cert-manager's Certificate API is not installed on this cluster"
 		case err != nil:
-			return fail("waiting for the Gateway's certificate", err)
+			return out(ctx).fail("waiting for the Gateway's certificate", err)
 		default:
 			var ready bool
 			if ready, why = gatewayCertificateState(list.Items, secret); ready {
 				var ierr error
 				if ready, why, ierr = gatewayCertificateIssued(ctx, dyn, g, secret); ierr != nil {
-					return fail("waiting for the Gateway's certificate", ierr)
+					return out(ctx).fail("waiting for the Gateway's certificate", ierr)
 				}
 			}
 			if ready {
-				done()
+				out(ctx).done()
 				return nil
 			}
 		}
 		if time.Now().After(deadline) {
 			if st.LegacyIngress {
-				fmt.Println(color.YellowString("not ready yet."))
-				fmt.Println(color.YellowString("  warning: the Gateway has no certificate yet: %s.\n"+
+				out(ctx).println(color.YellowString("not ready yet."))
+				out(ctx).println(color.YellowString("  warning: the Gateway has no certificate yet: %s.\n"+
 					"  The host is unaffected: its Ingress objects still serve it, with their own certificate. The Gateway's "+
 					"certificate may only be issuable once DNS points at the new controller (HTTP-01 needs the host to reach it), "+
 					"so move DNS, then check `kubectl -n %s get certificate`. `dcctl upgrade --drop-legacy-ingress` refuses "+
 					"until it is Ready.", why, ns))
 				return nil
 			}
-			return fail("waiting for the Gateway's certificate", fmt.Errorf("%s. The instance's services are up, but its "+
+			return out(ctx).fail("waiting for the Gateway's certificate", fmt.Errorf("%s. The instance's services are up, but its "+
 				"Gateway has no certificate, so https answers with the controller's default one until it does; "+
 				"re-run the upgrade once it is fixed", why))
 		}
 		select {
 		case <-ctx.Done():
-			return fail("waiting for the Gateway's certificate", ctx.Err())
+			return out(ctx).fail("waiting for the Gateway's certificate", ctx.Err())
 		case <-time.After(gatewayCertPoll):
 		}
 	}

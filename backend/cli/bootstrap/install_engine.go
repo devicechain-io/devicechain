@@ -213,6 +213,29 @@ func mutatingStage(id installflow.StepID) bool {
 	return false
 }
 
+// stageProfile is what one operation's stages are, for the run that moves through
+// them: the manifest it starts with, which stages only read, which may change something
+// from their first call, the waits that bound them, and the closing report a dry run
+// skips. install and bootstrap each have one; the run's mechanics are shared.
+type stageProfile struct {
+	name     string
+	manifest func() []installflow.ManifestStep
+	readOnly func(installflow.StepID) bool
+	mutating func(installflow.StepID) bool
+	budget   func(installflow.StepID) int64
+	// preflight is the stage preflight observations belong to.
+	preflight installflow.StepID
+	// closingReport is skipped (not_applicable) by a dry run that did not reach it.
+	// Empty when a dry run reaches its report like any other stage.
+	closingReport installflow.StepID
+}
+
+var installStages = stageProfile{
+	name: "install", manifest: installManifest, readOnly: readOnlyStage, mutating: mutatingStage,
+	budget: stageBudget, preflight: installflow.StepInstallPreflight,
+	closingReport: installflow.StepInstallSummary,
+}
+
 // moreCertain orders effect certainty — none_observed, may_have_changed, applied —
 // and returns the higher of a and b. An attempt's effect only ever moves up.
 func moreCertain(a, b installflow.EffectCertainty) installflow.EffectCertainty {
@@ -242,6 +265,15 @@ type installRun struct {
 	prompts installflow.PromptBroker
 	con     console
 	dryRun  bool
+	// stages is what the operation's stages are: install's, or bootstrap's.
+	stages *stageProfile
+	// reveals is Runtime.Reveals, and progressOnly Request.ProgressOnly: where a
+	// one-time disclosure may be offered, and whether this run may offer one at all.
+	reveals      installflow.RevealSink
+	progressOnly bool
+	// credentials are the references the summary points at: where a value the run
+	// settled is kept, never the value.
+	credentials []installflow.SecretRef
 	// observeTools is Runtime.ObserveTools: run OpenTofu's apply in -json mode and
 	// report its resource actions. Off, the apply runs exactly as it always has.
 	observeTools bool
@@ -292,6 +324,7 @@ func newInstallRun(rt installflow.Runtime, dryRun bool) *installRun {
 		record: installflow.RecordNotRead, claim: installflow.ClaimNotClaimed,
 		readiness: installflow.ReadinessNotChecked, observeTools: rt.ObserveTools,
 		outlive: rt.Outlive, effect: installflow.EffectNoneObserved,
+		stages: &installStages, reveals: rt.Reveals,
 	}
 }
 
@@ -316,11 +349,11 @@ func (r *installRun) firstEmitErr() error {
 
 func (r *installRun) start(t installflow.Target) error {
 	if r.events == nil {
-		return errors.New("install engine: no event reporter")
+		return fmt.Errorf("%s engine: no event reporter", r.stages.name)
 	}
 	if err := r.events.Emit(installflow.Event{Payload: installflow.RunStarted{
-		Target: t, DryRun: r.dryRun, Manifest: installManifest()}}); err != nil {
-		return fmt.Errorf("install engine: starting the run: %w", err)
+		Target: t, DryRun: r.dryRun, Manifest: r.stages.manifest()}}); err != nil {
+		return fmt.Errorf("%s engine: starting the run: %w", r.stages.name, err)
 	}
 	r.mu.Lock()
 	r.started = true
@@ -340,7 +373,7 @@ func (r *installRun) enter(id installflow.StepID) {
 	}
 	r.finishActiveLocked()
 	r.emit(installflow.Event{Step: id, Attempt: 1, Payload: installflow.StepStarted{
-		Message: installflow.MessageCode(id), BudgetMS: stageBudget(id)}})
+		Message: installflow.MessageCode(id), BudgetMS: r.stages.budget(id)}})
 	r.step, r.attempt, r.last = id, 1, id
 	r.beginAttemptLocked()
 }
@@ -348,7 +381,7 @@ func (r *installRun) enter(id installflow.StepID) {
 // beginAttemptLocked resets what the active attempt is known to have done.
 func (r *installRun) beginAttemptLocked() {
 	r.effect, r.abandoned, r.unanswered = installflow.EffectNoneObserved, false, false
-	if mutatingStage(r.step) {
+	if r.stages.mutating(r.step) {
 		r.raiseLocked(installflow.EffectMayHaveChanged)
 	}
 }
@@ -436,7 +469,7 @@ func (r *installRun) finishActiveLocked() {
 	}
 	outcome := installflow.StepSucceeded
 	switch {
-	case readOnlyStage(r.step):
+	case r.stages.readOnly(r.step):
 		outcome = installflow.StepUnchanged
 	case r.dryRun:
 		outcome = installflow.StepPlanned
@@ -447,7 +480,7 @@ func (r *installRun) finishActiveLocked() {
 
 // observe forwards one preflight observation into the stream.
 func (r *installRun) observe(o installflow.PreflightObservation) {
-	r.emit(installflow.Event{Step: installflow.StepInstallPreflight, Attempt: 1, Payload: o})
+	r.emit(installflow.Event{Step: r.stages.preflight, Attempt: 1, Payload: o})
 }
 
 // The facts the summary reports, set where they become true.
@@ -529,6 +562,7 @@ func (r *installRun) close(ctx context.Context, err error) (installflow.Summary,
 	s := installflow.Summary{
 		InstallRecord: r.record, Readiness: r.readiness, Claim: r.claim,
 		PartialState: installflow.EffectNoneObserved,
+		Credentials:  append([]installflow.SecretRef(nil), r.credentials...),
 	}
 	if r.changed {
 		s.PartialState = installflow.EffectMayHaveChanged
@@ -540,8 +574,8 @@ func (r *installRun) close(ctx context.Context, err error) (installflow.Summary,
 		// Close what the install left open before judging the stream, so a refused
 		// final event counts against the run like any other.
 		r.finishActiveLocked()
-		if r.dryRun && r.last != installflow.StepInstallSummary {
-			r.skipLocked(installflow.StepInstallSummary)
+		if c := r.stages.closingReport; c != "" && r.dryRun && r.last != c {
+			r.skipLocked(c)
 		}
 		if emitErr := r.firstEmitErr(); emitErr != nil {
 			err = fmt.Errorf("reporting the install's progress: %w", emitErr)

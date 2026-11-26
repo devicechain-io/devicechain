@@ -321,24 +321,24 @@ func TestARetainedSharedLoginIsStillRenderedEverywhere(t *testing.T) {
 // The closing summary and the rehearsal say which phase ran.
 func TestTheSummaryAndTheRehearsalSayWhichPhaseRan(t *testing.T) {
 	retiring := newRetireFixture(t).run(t)
-	out := captureStdout(t, func() { sayAboutSharedLogin(retiring); sayDryRunSharedLogin(retiring) })
+	out := captureStdout(t, func() { sayAboutSharedLogin(stdConsole, retiring); sayDryRunSharedLogin(stdConsole, retiring) })
 	require.Contains(t, out, "retired")
 	require.Contains(t, out, "not supported")
 
 	blocked := newRetireFixture(t)
 	blocked.adminJob = false
-	out = captureStdout(t, func() { sayAboutSharedLogin(blocked.run(t)) })
+	out = captureStdout(t, func() { sayAboutSharedLogin(stdConsole, blocked.run(t)) })
 	require.Contains(t, out, "NOT retired")
 	require.Contains(t, out, "no broker administrator Job")
 
 	intro := newRetireFixture(t)
 	intro.deployedFlag = false
-	out = captureStdout(t, func() { sayDryRunSharedLogin(intro.run(t)) })
+	out = captureStdout(t, func() { sayDryRunSharedLogin(stdConsole, intro.run(t)) })
 	require.Contains(t, out, "phase 1 of 2")
 
 	// An instance that is already retired has nothing to say.
 	done := newRetireFixture(t)
 	done.sharedPw = ""
-	out = captureStdout(t, func() { sayAboutSharedLogin(done.run(t)); sayDryRunSharedLogin(done.run(t)) })
+	out = captureStdout(t, func() { sayAboutSharedLogin(stdConsole, done.run(t)); sayDryRunSharedLogin(stdConsole, done.run(t)) })
 	require.Empty(t, strings.TrimSpace(out))
 }

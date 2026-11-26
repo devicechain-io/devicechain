@@ -1,0 +1,14 @@
+args: bootstrap local acme --skip-preflight --dry-run
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (119 bytes) --
+Error: there is no kind cluster "devicechain" (context kind-devicechain). Prepare one first:
+
+    dcctl install local
+
+
+-- engine (11 bytes) --
+not called
+

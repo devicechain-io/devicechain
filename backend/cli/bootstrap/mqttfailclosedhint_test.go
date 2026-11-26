@@ -25,7 +25,7 @@ func TestTheMqttFailClosedHintPrintsUnlessItIsOn(t *testing.T) {
 			st := aWritableState()
 			st.MqttFailClosed = tc.val
 			for name, run := range map[string]func(){
-				"helper": func() { sayMqttFailClosedHint(st) },
+				"helper": func() { sayMqttFailClosedHint(stdConsole, st) },
 				"report": func() {
 					st.Values = map[string]string{"ingressHost": "localhost", "scheme": "http"}
 					if err := stepReport(t.Context(), st); err != nil {

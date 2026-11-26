@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/secrets/escrow"
 	"github.com/devicechain-io/dcctl/dcdir"
+	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/fatih/color"
 	"golang.org/x/term"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -81,6 +83,27 @@ type EscrowFlags struct {
 	// terminal was prompted (twice) for the real escrow passphrase by a run that
 	// discarded it. Training someone to type that into a no-op is its own harm.
 	DryRun bool
+
+	// ask, when set, is how the last source — a person at a terminal — is asked, in
+	// place of promptPassphrase. A bootstrap engine run sets it to its prompt broker,
+	// so the passphrase reaches the escrow plan through the run's secret channel and
+	// never through an event. It changes WHO is asked, never WHEN: the file and the
+	// environment still come first, and with no terminal nobody is asked at all.
+	ask func(escrowQuestion) (string, error)
+	// con is where the plan's notes go. The zero value is the process's stdout.
+	con console
+}
+
+// escrowQuestion is one request for a passphrase from a person: what it is for, and
+// whether it is asked twice.
+type escrowQuestion struct {
+	// purpose is the sentence the terminal prompt shows.
+	purpose string
+	// confirm asks twice: the write side, where a typo is found out years later.
+	confirm bool
+	// code and params identify the question to a prompt broker.
+	code   installflow.MessageCode
+	params []installflow.Param
 }
 
 // Validate rejects flag combinations that ask for two different things, BEFORE any
@@ -241,8 +264,12 @@ func ResolveEscrowPlan(instance string, f EscrowFlags) (EscrowPlan, error) {
 		// because nothing will be written with it. See EscrowFlags.DryRun.
 		return EscrowPlan{Path: path}, nil
 	}
-	pass, err := resolveEscrowPassphrase(f.PassphraseFile, true, fmt.Sprintf(
-		"Passphrase to protect the root-key escrow for instance %q", instance))
+	pass, err := resolveEscrowPassphrase(f, escrowQuestion{
+		purpose: fmt.Sprintf("Passphrase to protect the root-key escrow for instance %q", instance),
+		confirm: true,
+		code:    installflow.QuestionEscrowPassphrase,
+		params:  []installflow.Param{{Name: "instance", Value: installflow.Text(instance)}},
+	})
 	if err != nil {
 		return EscrowPlan{}, err
 	}
@@ -265,7 +292,7 @@ func resolveRestore(instance string, f EscrowFlags) (EscrowPlan, error) {
 	// under a new name — but it is very often the mistake of reaching for the wrong
 	// file, and it is the only chance to say so before the key is in use.
 	if art.Instance != instance {
-		fmt.Println(color.YellowString(
+		f.con.println(color.YellowString(
 			"  note: %s was escrowed for instance %q and this bootstrap is %q; continuing, but check this is the artifact you meant",
 			f.RestoreFile, art.Instance, instance))
 	}
@@ -274,8 +301,11 @@ func resolveRestore(instance string, f EscrowFlags) (EscrowPlan, error) {
 		// secret. The artifact parsed, which is what a dry run can honestly check.
 		return EscrowPlan{RestoredFrom: f.RestoreFile}, nil
 	}
-	pass, err := resolveEscrowPassphrase(f.PassphraseFile, false, fmt.Sprintf(
-		"Passphrase for the root-key escrow %s", f.RestoreFile))
+	pass, err := resolveEscrowPassphrase(f, escrowQuestion{
+		purpose: fmt.Sprintf("Passphrase for the root-key escrow %s", f.RestoreFile),
+		code:    installflow.QuestionEscrowRestorePassphrase,
+		params:  []installflow.Param{{Name: "artifact", Value: installflow.Text(f.RestoreFile)}},
+	})
 	if err != nil {
 		return EscrowPlan{}, err
 	}
@@ -378,11 +408,15 @@ func pathIsWithin(path, dir string) (bool, error) {
 }
 
 // resolveEscrowPassphrase acquires the passphrase from the first source that is
-// present: a file, the environment, then an interactive prompt. confirm asks twice
+// present: a file, the environment, then an interactive prompt. q.confirm asks twice
 // (a mistyped passphrase on the WRITE side is discovered years later, by an
 // operator who no longer has any other copy of the key).
-func resolveEscrowPassphrase(file string, confirm bool, purpose string) (string, error) {
-	if file != "" {
+//
+// 🔴 THE ORDER IS THE CONTRACT: --escrow-passphrase-file, then DCCTL_ESCROW_PASSPHRASE,
+// then a person — and a person only at a terminal. f.ask replaces how the person is
+// asked; nothing replaces the order.
+func resolveEscrowPassphrase(f EscrowFlags, q escrowQuestion) (string, error) {
+	if file := f.PassphraseFile; file != "" {
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			return "", fmt.Errorf("reading the escrow passphrase file: %w", err)
@@ -419,8 +453,18 @@ func resolveEscrowPassphrase(file string, confirm bool, purpose string) (string,
 				"  (a throwaway; losing the cluster then loses every stored secret permanently).",
 			EscrowPassphraseEnv)
 	}
-	return promptPassphrase(purpose, confirm)
+	if f.ask != nil {
+		return f.ask(q)
+	}
+	return promptPassphrase(q.purpose, q.confirm)
 }
+
+// errEmptyPassphrase and errPassphraseMismatch are what a person's answer is refused
+// with, said the same way whoever asked.
+var (
+	errEmptyPassphrase    = errors.New("the escrow passphrase is empty; the artifact would be readable by anyone holding the file")
+	errPassphraseMismatch = errors.New("the two passphrases do not match")
+)
 
 // terminalPassphrase reads a passphrase from the terminal without echoing it.
 func terminalPassphrase(purpose string, confirm bool) (string, error) {
@@ -430,7 +474,7 @@ func terminalPassphrase(purpose string, confirm bool) (string, error) {
 		return "", err
 	}
 	if first == "" {
-		return "", fmt.Errorf("the escrow passphrase is empty; the artifact would be readable by anyone holding the file")
+		return "", errEmptyPassphrase
 	}
 	if !confirm {
 		return first, nil
@@ -440,7 +484,7 @@ func terminalPassphrase(purpose string, confirm bool) (string, error) {
 		return "", err
 	}
 	if first != second {
-		return "", fmt.Errorf("the two passphrases do not match")
+		return "", errPassphraseMismatch
 	}
 	return first, nil
 }
