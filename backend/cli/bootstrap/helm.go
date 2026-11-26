@@ -154,6 +154,10 @@ func helmInstall(ctx context.Context, st *State) error {
 	// carries is an INPUT to that computation — see carryForwardFromRelease.
 	var previous map[string]interface{}
 	if st.Evolving {
+		// Before Helm's first read: see helmActionConfig.
+		if _, err := RestConfig(st.KubeContext); err != nil {
+			return err
+		}
 		if previous, err = previousReleaseValues(actionConfig, releaseName); err != nil {
 			return err
 		}
@@ -213,6 +217,10 @@ func helmInstall(ctx context.Context, st *State) error {
 	// restore and --allow-legacy-db-removal, and both of those are re-runs against exactly
 	// the instance this case is about. `dcctl upgrade` reaches here too, on an instance
 	// declared by an unreleased build that still installed under the old name.
+	// Before Helm's first read on this path, and after the offline gate above.
+	if _, err := RestConfig(st.KubeContext); err != nil {
+		return err // see helmActionConfig
+	}
 	if err := refuseLegacyNamedRelease(actionConfig, st.Instance); err != nil {
 		return err
 	}
@@ -1031,6 +1039,11 @@ func uninstallRefusalReason(owner, instance, releaseName string) error {
 // Helm's storage driver narrates every read at info level, which would interleave with
 // dcctl's own step output.
 func helmActionConfig(kubeContext string) (*action.Configuration, error) {
+	if _, err := RestConfig(kubeContext); err != nil {
+		// Helm reads the same kubeconfig with client-go and would return its reason
+		// unchanged; dcctl's own check says what is wrong without quoting the file.
+		return nil, err
+	}
 	settings := cli.New()
 	settings.KubeContext = kubeContext
 	cfg := new(action.Configuration)

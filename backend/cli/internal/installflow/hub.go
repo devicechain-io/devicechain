@@ -59,6 +59,11 @@ type Options struct {
 	// OnDeliveryFailure is called once, outside any hub lock, when delivery
 	// stalls. The caller wires it to a graceful cancel of the run.
 	OnDeliveryFailure func()
+	// TokensOnlyInErrors keeps AddRedaction values out of the events: they are
+	// redacted from Redact and RedactError only. The plain presenter sets it, so
+	// what it renders from events (the preflight report) is what text output has
+	// always printed, and only the error it returns is redacted of them.
+	TokensOnlyInErrors bool
 }
 
 // Stats are the hub's delivery counters.
@@ -122,7 +127,8 @@ type Hub struct {
 	clock Clock
 	sink  Sink
 	opts  Options
-	red   *redactor
+	red   *redactor // what the events are redacted of
+	out   *redactor // what Redact and RedactError are: everything registered
 	start time.Time
 
 	failOnce sync.Once
@@ -198,7 +204,7 @@ func NewHub(opts Options) (*Hub, error) {
 	}
 	h := &Hub{
 		op: opts.Operation, runID: opts.RunID, clock: opts.Clock, sink: opts.Sink, opts: opts,
-		red: newRedactor(), start: opts.Clock.Now(),
+		red: newRedactor(), out: newRedactor(), start: opts.Clock.Now(),
 		queued: map[progressKey][]*entry{}, held: map[progressKey]*heldProgress{},
 		lastSent: map[progressKey]time.Time{},
 		wake:     make(chan struct{}, 1), space: make(chan struct{}),
@@ -222,8 +228,30 @@ func (h *Hub) AddSecret(value string) error {
 	if !h.red.add(value) {
 		return ErrSecretTooShort
 	}
+	h.out.add(value)
 	return nil
 }
+
+// AddRedaction registers value for redaction as a whole token from every text
+// the hub carries from now on (with Options.TokensOnlyInErrors, from Redact and
+// RedactError only). Unlike AddSecret it never refuses an identifier for
+// containing it, and never redacts it inside a longer word: it is for values
+// dcctl found rather than made, which can be ordinary words. It takes values
+// down to MinRedactionBytes.
+func (h *Hub) AddRedaction(value string) error {
+	if !h.out.addToken(value) {
+		return ErrSecretTooShort
+	}
+	if !h.opts.TokensOnlyInErrors {
+		h.red.addToken(value)
+	}
+	return nil
+}
+
+// Redact returns s with every registered value replaced, for text that leaves
+// dcctl other than through an event: an error printed on stderr, a tool's
+// stderr. It does not sanitise.
+func (h *Hub) Redact(s string) string { return h.out.redact(s) }
 
 // Final returns the summary that was sent, once there is one.
 func (h *Hub) Final() (Summary, bool) {
@@ -805,4 +833,26 @@ func (h *Hub) Projection() Projection {
 		p.Summary = &s
 	}
 	return p
+}
+
+// RedactedError is an error whose text has been redacted of every value the hub
+// knows, for a presenter to return to a command that prints it. It unwraps to the
+// original, so errors.Is and errors.As still see what the engine returned; only its
+// text is what is printed.
+type RedactedError struct {
+	text string
+	err  error
+}
+
+func (e *RedactedError) Error() string { return e.text }
+func (e *RedactedError) Unwrap() error { return e.err }
+
+// RedactError wraps err so that its text is redacted of every registered value. A
+// tool's diagnostics are often appended to an engine error (an OpenTofu apply's,
+// for one), and an error is printed on stderr, outside every event.
+func (h *Hub) RedactError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &RedactedError{text: h.Redact(err.Error()), err: err}
 }

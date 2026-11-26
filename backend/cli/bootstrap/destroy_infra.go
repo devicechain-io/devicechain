@@ -231,6 +231,9 @@ var destroyUninstaller providerReleaseUninstaller = uninstallProviderRelease
 // refused every time. The name and namespace here come from the instance's own state or
 // its own namespace, which is the attribution.
 func uninstallProviderRelease(ctx context.Context, kubeContext, namespace, name string) (bool, error) {
+	if _, err := RestConfig(kubeContext); err != nil {
+		return false, err // see helmActionConfig
+	}
 	settings := cli.New()
 	settings.KubeContext = kubeContext
 	settings.SetNamespace(namespace)
