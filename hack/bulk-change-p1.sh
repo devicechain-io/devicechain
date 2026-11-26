@@ -272,7 +272,7 @@ mkdir -p "$dir"
 rows="$dir/rows.jsonl"
 forward_dm
 caps_tokens=()
-sampler="" capture_loop=""
+sampler="" capture_loop="" capture_file=""
 
 triggers_sql() { # <ENABLE|DISABLE>
   local names
@@ -307,14 +307,24 @@ arm_up() { # <arm> <run>
   triggers:treatment) triggers_sql ENABLE ;;
   capture:baseline | caps:baseline) ;;
   capture:treatment)
+    local tls_args=()
+    [[ -n "${P1_NATS_CA:-}" ]] && tls_args=(--ca "$P1_NATS_CA" --server-name "${P1_NATS_SERVER_NAME:-dc-nats}")
+    capture_file="$dir/capture-$i.rounds"
+    : >"$capture_file"
     (
       while :; do
         psql_q "SELECT d.token || E'\t' || r.revision || E'\t' || r.digest FROM \"device-management\".devices d
           JOIN LATERAL (SELECT revision, digest FROM \"device-management\".device_configuration_revisions x WHERE x.device_id = d.id
             ORDER BY x.revision DESC LIMIT 1) r ON true
           WHERE d.tenant_id = '$tenant' AND d.token BETWEEN 'p1-00001' AND 'p1-00200' AND d.deleted_at IS NULL" >"$dir/reports.tsv"
-        DC_BC_NATS_PASSWORD="$P1_NATS_PASSWORD" "$apiprobe" bulkchange report --nats "${P1_NATS_URL:?}" --user "${P1_NATS_USER:?}" \
-          --instance-id "$instance" --tenant "$tenant" --rows "$dir/reports.tsv" >/dev/null 2>&1 || true
+        # Every round is recorded: a treatment whose reports never reach the stream measures nothing, and the
+        # arm is then refused rather than counted (one_arm reads this file).
+        if DC_BC_NATS_PASSWORD="$P1_NATS_PASSWORD" "$apiprobe" bulkchange report --nats "${P1_NATS_URL:?}" --user "${P1_NATS_USER:?}" \
+          ${tls_args[@]+"${tls_args[@]}"} --instance-id "$instance" --tenant "$tenant" --rows "$dir/reports.tsv" >"$dir/capture-last.log" 2>&1; then
+          echo ok >>"$capture_file"
+        else
+          echo "fail: $(tail -n 1 "$dir/capture-last.log")" >>"$capture_file"
+        fi
         sleep 5
       done
     ) &
@@ -359,19 +369,28 @@ one_arm() { # <arm> <run>
   wait "$p_load" || load_rc=$?
   arm_down
   [[ "$ab_rc" == 0 && "$load_rc" == 0 ]] || ok=false
+  local cap_ok=null cap_fail=null
+  if [[ "$treatment:$arm" == capture:treatment ]]; then
+    cap_ok="$(grep -c '^ok$' "$capture_file" || true)"
+    cap_fail="$(grep -c '^fail' "$capture_file" || true)"
+    [[ "$cap_ok" -ge 1 && "$cap_fail" == 0 ]] || {
+      ok=false
+      say "run $i: the capture treatment's reports did not all reach the stream ($cap_ok round(s) published, $cap_fail failed): $(grep -m1 '^fail' "$capture_file")"
+    }
+  fi
   lat="$(cat "$dir/$name.latency.json" 2>/dev/null || echo '{}')"
   locks="$(p1_lock_summary <"$lockfile")"
   puback="$(jq -c '.drive.ackLatency // {}' "$dir/perf-ab/$name/raw/report-mqtt.json" 2>/dev/null || echo '{}')"
   jq -cn --arg arm "$arm" --argjson run "$i" --argjson ok "$ok" --argjson lat "$lat" --argjson locks "$locks" \
-    --argjson puback "$puback" --argjson ab "$ab_rc" --argjson load "$load_rc" '
+    --argjson puback "$puback" --argjson ab "$ab_rc" --argjson load "$load_rc" --argjson capok "$cap_ok" --argjson capfail "$cap_fail" '
     {arm: $arm, run: $run, ok: $ok, perfAbExit: $ab, loadExit: $load,
      interactiveP50: $lat.p50Ms, interactiveP99: $lat.p99Ms, interactiveErrors: $lat.errors,
-     pubackP50: $puback.p50Ms, pubackP99: $puback.p99Ms} + $locks' >>"$rows"
+     pubackP50: $puback.p50Ms, pubackP99: $puback.p99Ms, captureRounds: $capok, captureFailures: $capfail} + $locks' >>"$rows"
   tail -n 1 "$rows" >&2
 }
 
 [[ "$treatment" != capture || -n "${P1_NATS_URL:-}" ]] ||
-  usage_err "the capture treatment publishes reports: set P1_NATS_URL (a port-forward to the broker), P1_NATS_USER and P1_NATS_PASSWORD (event-sources' login)"
+  usage_err "the capture treatment publishes reports: set P1_NATS_URL (a port-forward to the broker), P1_NATS_USER and P1_NATS_PASSWORD (event-sources' login), and P1_NATS_CA (a PEM file; P1_NATS_SERVER_NAME, default dc-nats) when the broker serves TLS"
 for i in $(seq 1 "$runs"); do
   one_arm baseline "$i"
   one_arm treatment "$i"
