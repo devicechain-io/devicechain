@@ -204,18 +204,18 @@ func applyTrustedProxies(ctx context.Context, st *State, typed kubernetes.Interf
 	}
 	st.TrustedProxiesChange = got.Explicit != recordedExplicit || !slices.Equal(got.List, recorded)
 	st.TrustedProxies, st.TrustedProxiesExplicit = got.List, got.Explicit
-	sayTrustedProxies(got)
+	sayTrustedProxies(out(ctx), got)
 	return nil
 }
 
-func sayTrustedProxies(got trustedProxiesSettlement) {
+func sayTrustedProxies(c console, got trustedProxiesSettlement) {
 	if len(got.List) > 0 {
-		fmt.Printf("  trusted proxies  %s (from %s)\n", strings.Join(got.List, ", "), got.Source)
+		c.printf("  trusted proxies  %s (from %s)\n", strings.Join(got.List, ", "), got.Source)
 	}
 	if got.Warning != "" {
-		fmt.Println(color.YellowString("  warning: infrastructure.http.trustedProxies - %s.", got.Warning))
+		c.println(color.YellowString("  warning: infrastructure.http.trustedProxies - %s.", got.Warning))
 		if len(got.List) == 0 {
-			fmt.Println(color.YellowString("  Without it every device behind the ingress shares one self-registration allowance per\n" +
+			c.println(color.YellowString("  Without it every device behind the ingress shares one self-registration allowance per\n" +
 				"  ingress pod, so a stranger can exhaust it for all of them. Name the ingress controller's pod\n" +
 				"  range with --trusted-proxies (and add a fronting load balancer's ranges if there is one)."))
 		}

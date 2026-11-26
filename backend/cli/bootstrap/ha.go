@@ -548,13 +548,13 @@ func overriddenTopologyVars(rootdir string) []string {
 
 // sayOverriddenTopologyVars says so, rather than overriding the operator in silence: r33a's
 // harness exported TF_VAR_nats_cluster_replicas=3 and got one server without being told.
-func sayOverriddenTopologyVars(st *State, rootdir string) {
+func sayOverriddenTopologyVars(c console, st *State, rootdir string) {
 	names := overriddenTopologyVars(rootdir)
 	if len(names) == 0 {
 		return
 	}
 	topology := brokerTopology(st)
-	fmt.Printf("  %s %s stated for this instance, and dcctl sets %s itself (ha=%t, nats_cluster_replicas=%d, "+
+	c.printf("  %s %s stated for this instance, and dcctl sets %s itself (ha=%t, nats_cluster_replicas=%d, "+
 		"from --ha and shard groups), so the stated value is not used. The broker's server count and its "+
 		"stream replica count are kept together; see the sizing guide's \"Which value wins\".\n",
 		color.YellowString("note:"), strings.Join(names, " and "), map[bool]string{true: "them", false: "it"}[len(names) > 1],

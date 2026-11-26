@@ -324,13 +324,13 @@ func runBrokerRebalance(ctx context.Context, st *State, typed *kubernetes.Client
 // it never fails the bootstrap.
 func stepBrokerRebalance(ctx context.Context, st *State) error {
 	if st.DryRun {
-		wouldDo("even out which broker server leads which stream and consumer (never the device-ingest streams)")
+		out(ctx).wouldDo("even out which broker server leads which stream and consumer (never the device-ingest streams)")
 		return nil
 	}
 	typed, err := stepBrokerRebalanceClient(st.KubeContext)
 	if err != nil {
-		fmt.Println(color.YellowString("  Warning: could not even out broker leadership: %v", err))
-		fmt.Println(color.YellowString("  The instance is installed. `dcctl broker rebalance %s` repeats this step.", st.Instance))
+		out(ctx).println(color.YellowString("  Warning: could not even out broker leadership: %v", err))
+		out(ctx).println(color.YellowString("  The instance is installed. `dcctl broker rebalance %s` repeats this step.", st.Instance))
 		return nil
 	}
 	runBrokerRebalanceAfter(ctx, st, typed, "The instance is installed")
@@ -346,20 +346,20 @@ var stepBrokerRebalanceClient = func(kubeContext string) (*kubernetes.Clientset,
 // runBrokerRebalanceAfter runs the rebalance and turns every failure into a warning that starts
 // with done, which says what has nevertheless finished.
 func runBrokerRebalanceAfter(ctx context.Context, st *State, typed *kubernetes.Clientset, done string) {
-	fmt.Printf("%s", color.WhiteString("Evening out broker leadership... "))
+	out(ctx).printf("%s", color.WhiteString("Evening out broker leadership... "))
 	summary, err := brokerRebalance(ctx, st, typed)
 	switch {
 	case err != nil && summary == "":
-		fmt.Println(color.YellowString("skipped."))
-		fmt.Println(color.YellowString("  Warning: could not even out broker leadership: %v", err))
-		fmt.Println(color.YellowString("  " + done + ". Until leadership is even, publish latency is higher than it need be; " +
+		out(ctx).println(color.YellowString("skipped."))
+		out(ctx).println(color.YellowString("  Warning: could not even out broker leadership: %v", err))
+		out(ctx).println(color.YellowString("  " + done + ". Until leadership is even, publish latency is higher than it need be; " +
 			"`dcctl broker rebalance` repeats this step."))
 	case err != nil:
-		fmt.Println(color.YellowString("partly done."))
-		fmt.Println(color.YellowString("  Warning: %s", summary))
-		fmt.Println(color.YellowString("  %v", err))
+		out(ctx).println(color.YellowString("partly done."))
+		out(ctx).println(color.YellowString("  Warning: %s", summary))
+		out(ctx).println(color.YellowString("  %v", err))
 	default:
-		fmt.Println(color.GreenString("done (%s).", summary))
+		out(ctx).println(color.GreenString("done (%s).", summary))
 	}
 }
 
@@ -386,7 +386,7 @@ func RebalanceBroker(ctx context.Context, opts RebalanceBrokerOptions) error {
 	st := &State{Instance: opts.Instance, KubeContext: binding.KubeContext}
 	summary, err := brokerRebalance(ctx, st, typed)
 	if summary != "" {
-		fmt.Println(summary)
+		out(ctx).println(summary)
 	}
 	return err
 }

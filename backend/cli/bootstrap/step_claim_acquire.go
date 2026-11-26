@@ -5,7 +5,6 @@ package bootstrap
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/devicechain-io/dcctl/operator"
 )
@@ -44,19 +43,19 @@ func stepClaimCluster(ctx context.Context, st *State) error {
 		// plan it could not have built.
 		ns, err := operator.Namespace()
 		if err != nil {
-			return fail("reading the operator namespace", err)
+			return out(ctx).fail("reading the operator namespace", err)
 		}
 		st.OperatorNamespace = ns
 
-		doing("claiming the cluster")
-		fmt.Println()
-		wouldDo("take the cluster lock in namespace " + ns)
+		out(ctx).doing("claiming the cluster")
+		out(ctx).println()
+		out(ctx).wouldDo("take the cluster lock in namespace " + ns)
 		// "Another operator is already running" is part of the answer to "what
 		// would this do", so it is reported even though nothing is taken.
 		return reportExistingClaim(ctx, st)
 	}
 
-	doing("claiming the cluster")
+	out(ctx).doing("claiming the cluster")
 	claim, ns, err := ClaimCluster(ctx, st.KubeContext, st.Instance)
 	// The namespace is recorded even when the claim was refused: it is resolved
 	// before the lock is contended, and a refusal is one of the paths that still
@@ -68,6 +67,6 @@ func stepClaimCluster(ctx context.Context, st *State) error {
 		return err
 	}
 	st.Claim = claim
-	done()
+	out(ctx).done()
 	return nil
 }

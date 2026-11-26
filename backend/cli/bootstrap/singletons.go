@@ -289,7 +289,7 @@ var recordedMQTTNodePort = func(instance string) int32 {
 // have, never in a rehearsal, and only where a port was decided at all. A failure to write it is a
 // warning and never fails the run: the instance's own Service is what the next upgrade reads
 // first, and the record is bookkeeping, as the bootstrap's own record write treats it.
-func recordMQTTNodePortAfterApply(st *State) {
+func recordMQTTNodePortAfterApply(c console, st *State) {
 	if st.DryRun || !monitoringSlim(st) {
 		return
 	}
@@ -297,7 +297,7 @@ func recordMQTTNodePortAfterApply(st *State) {
 		return
 	}
 	if err := recordMQTTNodePort(st.Instance, mqttNodePortOf(st)); err != nil {
-		fmt.Println(color.YellowString("  warning: could not record this instance's MQTT node port (%v); "+
+		c.println(color.YellowString("  warning: could not record this instance's MQTT node port (%v); "+
 			"`dcctl sim create` falls back to %d until it is", err, localMQTTNodePort))
 	}
 }
@@ -460,10 +460,10 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 		held, err := readClusterSingletons(ctx, st.KubeContext, st.Instance, host)
 		switch {
 		case err != nil:
-			wouldDo(fmt.Sprintf("check whether another instance already serves host %q — the read "+
+			out(ctx).wouldDo(fmt.Sprintf("check whether another instance already serves host %q — the read "+
 				"failed (%v), and a real run would stop here", host, err))
 		case refuseAHostAnotherInstanceServes(held, st.Instance, host) != nil:
-			wouldDo(fmt.Sprintf("REFUSE: host %q is already served by the instance in namespace %q", host, held.HostHolder))
+			out(ctx).wouldDo(fmt.Sprintf("REFUSE: host %q is already served by the instance in namespace %q", host, held.HostHolder))
 		}
 		// The namespace half of the rehearsal, rehearsed separately because it is a second
 		// cluster read rather than a second reading of the one above: against a cluster
@@ -472,22 +472,22 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 		var refusal *ErrNamespaceUnavailable
 		switch err := precheckInstanceNamespace(ctx, st); {
 		case errors.As(err, &refusal):
-			wouldDo("REFUSE: " + refusal.Error())
+			out(ctx).wouldDo("REFUSE: " + refusal.Error())
 		case err != nil:
-			wouldDo(fmt.Sprintf("check whether namespace %q is this instance's to build in — the "+
+			out(ctx).wouldDo(fmt.Sprintf("check whether namespace %q is this instance's to build in — the "+
 				"read failed (%v), and a real run would stop here", InstanceNamespace(st.Instance), err))
 		}
 		// Best-effort, like the reads above: a refusal and a failed read both stop a real
 		// run, and the rehearsal says which it met without calling either a verdict.
 		if p := databasePlacement(st); !p.IsZero() {
 			if err := checkDatabasePlacement(ctx, st); err != nil {
-				wouldDo(fmt.Sprintf("check that the nodes labelled %s can still take this instance's event "+
+				out(ctx).wouldDo(fmt.Sprintf("check that the nodes labelled %s can still take this instance's event "+
 					"store -- the check did not pass (%v), and a real run would stop here", p.NodeSelector, err))
 			}
 		}
 		if class := backupSnapshotClass(st); class != "" {
 			if err := precheckSnapshotClass(ctx, st); err != nil {
-				wouldDo(fmt.Sprintf("check VolumeSnapshotClass %s for this instance's event store -- the "+
+				out(ctx).wouldDo(fmt.Sprintf("check VolumeSnapshotClass %s for this instance's event store -- the "+
 					"check did not pass (%v), and a real run would stop here", class, err))
 			}
 		}
@@ -498,23 +498,23 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 		// rehearsal that simply omitted the one refusal whose cost is permanent would be
 		// read as clearance for the run it cannot clear.
 		if err := precheckValuesOverlay(ctx, st); err != nil {
-			wouldDo(fmt.Sprintf("render the values overlay -- the check did not pass (%v), and "+
+			out(ctx).wouldDo(fmt.Sprintf("render the values overlay -- the check did not pass (%v), and "+
 				"a real run would stop here", err))
 		}
 		if err := precheckObjectStore(ctx, st); err != nil {
-			wouldDo(fmt.Sprintf("check the s3 credentials Secret -- the check did not pass (%v), and "+
+			out(ctx).wouldDo(fmt.Sprintf("check the s3 credentials Secret -- the check did not pass (%v), and "+
 				"a real run would stop here", err))
 		}
-		wouldDo(fmt.Sprintf("ask the relational store what it already holds for %q, and refuse to mint "+
+		out(ctx).wouldDo(fmt.Sprintf("ask the relational store what it already holds for %q, and refuse to mint "+
 			"a fresh root key over a database recovered from an archive — NOT rehearsed, because "+
 			"reading the store means signing in to it", st.Instance))
 		return nil
 	}
 
-	doing("checking what other instances on this cluster hold")
+	out(ctx).doing("checking what other instances on this cluster hold")
 	held, err := readClusterSingletons(ctx, st.KubeContext, st.Instance, host)
 	if err != nil {
-		return fail("checking what other instances on this cluster hold", err)
+		return out(ctx).fail("checking what other instances on this cluster hold", err)
 	}
 	if err := refuseAHostAnotherInstanceServes(held, st.Instance, host); err != nil {
 		return err
@@ -595,7 +595,7 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 			return err
 		}
 	}
-	done()
+	out(ctx).done()
 	if !monitoringSlim(st) {
 		return nil
 	}
@@ -604,12 +604,12 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 	st.Values[mqttNodePortKey] = strconv.Itoa(int(port))
 	switch {
 	case port == 0:
-		fmt.Printf("  %s\n", color.WhiteString(fmt.Sprintf("every MQTT node port this cluster publishes on the "+
+		out(ctx).printf("  %s\n", color.WhiteString(fmt.Sprintf("every MQTT node port this cluster publishes on the "+
 			"host is held by another instance (%s), so this instance's broker is reachable in-cluster only. "+
 			"A local cluster created by this dcctl publishes %d of them", mqttNodePortsHeldBy(held, published),
 			len(localMQTTNodePorts))))
 	case port != localMQTTNodePort:
-		fmt.Printf("  %s\n", color.WhiteString(fmt.Sprintf("MQTT node port %d is held by another instance, so "+
+		out(ctx).printf("  %s\n", color.WhiteString(fmt.Sprintf("MQTT node port %d is held by another instance, so "+
 			"this instance takes node port %d", localMQTTNodePort, port)))
 	}
 	return nil

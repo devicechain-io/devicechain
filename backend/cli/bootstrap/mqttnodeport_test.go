@@ -143,7 +143,7 @@ func TestASecondLocalInstanceIsBuiltWithTheNextMQTTNodePort(t *testing.T) {
 	if len(recorded) != 0 {
 		t.Errorf("the step recorded %v before the apply; the record follows a successful apply", recorded)
 	}
-	recordMQTTNodePortAfterApply(st)
+	recordMQTTNodePortAfterApply(stdConsole, st)
 	if !slices.Equal(recorded, []int32{31884}) {
 		t.Errorf("recorded after the apply %v, want [31884]", recorded)
 	}
@@ -165,7 +165,7 @@ func TestASecondLocalInstanceIsBuiltWithTheNextMQTTNodePort(t *testing.T) {
 	if line := mqttReportLine(st); !strings.Contains(line, "in-cluster only") {
 		t.Errorf("the report hides that the broker is in-cluster only: %q", line)
 	}
-	recordMQTTNodePortAfterApply(st)
+	recordMQTTNodePortAfterApply(stdConsole, st)
 	if !slices.Equal(recorded, []int32{0}) {
 		t.Errorf("recorded %v, want [0]", recorded)
 	}
@@ -180,16 +180,16 @@ func TestRecordingTheMQTTNodePortNeverFailsTheRun(t *testing.T) {
 	recordMQTTNodePort = func(string, int32) error { calls++; return errors.New("disk full") }
 
 	st := &State{Instance: "beta", KubeContext: "kind-dev", Values: map[string]string{mqttNodePortKey: "31884"}}
-	out := captureStdout(t, func() { recordMQTTNodePortAfterApply(st) })
+	out := captureStdout(t, func() { recordMQTTNodePortAfterApply(stdConsole, st) })
 	if calls != 1 || !strings.Contains(out, "warning") || !strings.Contains(out, "disk full") {
 		t.Errorf("calls %d, output %q: want one attempt and a warning naming the error", calls, out)
 	}
 
 	calls = 0
-	recordMQTTNodePortAfterApply(&State{Instance: "beta", KubeContext: "kind-dev", DryRun: true,
+	recordMQTTNodePortAfterApply(stdConsole, &State{Instance: "beta", KubeContext: "kind-dev", DryRun: true,
 		Values: map[string]string{mqttNodePortKey: "31884"}})
-	recordMQTTNodePortAfterApply(&State{Instance: "beta", KubeContext: "kind-dev", Values: map[string]string{}})
-	recordMQTTNodePortAfterApply(&State{Instance: "beta", KubeContext: "prod-eks", Values: map[string]string{mqttNodePortKey: "31884"}})
+	recordMQTTNodePortAfterApply(stdConsole, &State{Instance: "beta", KubeContext: "kind-dev", Values: map[string]string{}})
+	recordMQTTNodePortAfterApply(stdConsole, &State{Instance: "beta", KubeContext: "prod-eks", Values: map[string]string{mqttNodePortKey: "31884"}})
 	if calls != 0 {
 		t.Errorf("a rehearsal, an undecided run or a cloud run wrote the record %d time(s)", calls)
 	}

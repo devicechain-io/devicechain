@@ -299,7 +299,7 @@ func helmInstall(ctx context.Context, st *State) error {
 	// The SECOND phase of the credentials Secrets: only after the release has succeeded is a key or a
 	// Secret the old pods referenced removed (see ownedsecret_phased.go).
 	return finishOwnedSecrets(ctx, release(), []postReleaseStep{spPost, lwPost},
-		func(msg string) { fmt.Println(color.YellowString("warning: " + msg)) })
+		func(msg string) { out(ctx).println(color.YellowString("warning: " + msg)) })
 }
 
 // precheckTokenAudienceRelease reads historical user-supplied values before the upgrade writes.
@@ -361,7 +361,7 @@ func releaseValues(ctx context.Context, ch *chart.Chart, st *State, previous map
 		carryReleaseValues(vals, previous)
 		pointLwm2mEnvAtTheIdentitiesSecret(st.Instance, vals)
 		if msg := removedBodyCredentialStripNotice(previous); msg != "" {
-			fmt.Println(color.YellowString(msg))
+			out(ctx).println(color.YellowString(msg))
 		}
 	}
 	return vals, doc, nil
@@ -947,7 +947,7 @@ func uninstallLegacyRelease(ctx context.Context, cfg *action.Configuration, kube
 	if !present || owner != instance {
 		return false, nil
 	}
-	fmt.Println(color.YellowString(
+	out(ctx).println(color.YellowString(
 		"  Instance %q was built by a release that installed under the name %q; removing that "+
 			"release too.", instance, legacyHelmReleaseName))
 	return uninstallRelease(ctx, cfg, kubeContext, legacyHelmReleaseName, instance)

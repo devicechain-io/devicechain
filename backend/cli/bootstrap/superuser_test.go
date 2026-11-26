@@ -141,7 +141,7 @@ func TestAnUpgradeOverAnInstanceWithNoSuperuserSecretLeavesItAbsent(t *testing.T
 		t.Error("reading the credentials wrote a superuser Secret")
 	}
 
-	out := captureStdout(t, func() { warnPreGeneratedSuperuser(up) })
+	out := captureStdout(t, func() { warnPreGeneratedSuperuser(stdConsole, up) })
 	if !strings.Contains(out, "Neither upgrading nor re-running bootstrap") || !strings.Contains(out, "superuser@devicechain.local") {
 		t.Errorf("the upgrade does not say the superuser still has the old password: %q", out)
 	}
@@ -162,7 +162,7 @@ func TestAnUpgradeRecoversTheSuperuserSecretAndDoesNotWarn(t *testing.T) {
 	if got.SuperuserPassword != "superuser-pw" {
 		t.Error("the upgrade did not recover the superuser's seed password from its Secret")
 	}
-	if out := captureStdout(t, func() { warnPreGeneratedSuperuser(up) }); out != "" {
+	if out := captureStdout(t, func() { warnPreGeneratedSuperuser(stdConsole, up) }); out != "" {
 		t.Errorf("an instance with a generated superuser password was warned about the old one: %q", out)
 	}
 }
@@ -214,7 +214,7 @@ func TestTheReportShowsTheSeedPasswordOnlyWhenThisRunGeneratedIt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := aWritableState()
 			tc.mutate(st)
-			out := captureStdout(t, func() { printSuperuserReport(st) })
+			out := captureStdout(t, func() { printSuperuserReport(context.Background(), st) })
 			if got := strings.Contains(out, "superuser-pw"); got != tc.showValue {
 				t.Errorf("the report shows the password = %t, want %t:\n%s", got, tc.showValue, out)
 			}
@@ -336,7 +336,7 @@ func TestABootstrapRerunOverALiveInstanceWithNoSecretMintsNoSeed(t *testing.T) {
 			}
 
 			st.Credentials = set
-			out := captureStdout(t, func() { printSuperuserReport(st) })
+			out := captureStdout(t, func() { printSuperuserReport(context.Background(), st) })
 			if strings.Contains(out, "password:") || strings.Contains(out, "shown only this once") {
 				t.Errorf("the report presents a password over a live instance:\n%s", out)
 			}
@@ -373,7 +373,7 @@ func TestABootstrapRerunOverALiveInstanceKeepsItsSeedAndDoesNotShowIt(t *testing
 		t.Fatalf("the live instance's seed was not kept: settled %v", st.SuperuserSeed)
 	}
 	st.Credentials = set
-	if out := captureStdout(t, func() { printSuperuserReport(st) }); strings.Contains(out, "the-seed") {
+	if out := captureStdout(t, func() { printSuperuserReport(context.Background(), st) }); strings.Contains(out, "the-seed") {
 		t.Errorf("the report shows a live instance's seed again:\n%s", out)
 	}
 }
