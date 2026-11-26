@@ -294,10 +294,12 @@ func TestSettlementConcurrentTenThousandOnPostgres(t *testing.T) {
 	var wg sync.WaitGroup
 	counts := make([]int64, 3)
 	errs := make([]error, 3)
+	start := make(chan struct{})
 	for i := 0; i < 3; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
+			<-start
 			if i == 2 {
 				counts[i], errs[i] = api.DeadlineFleetLines(ctx)
 			} else {
@@ -305,6 +307,7 @@ func TestSettlementConcurrentTenThousandOnPostgres(t *testing.T) {
 			}
 		}(i)
 	}
+	close(start)
 	wg.Wait()
 	for _, err := range errs {
 		require.NoError(t, err)

@@ -155,8 +155,12 @@ func (api *Api) RetainFleetOperations(ctx context.Context, now time.Time) error 
 }
 
 func fleetPurgeEvidenceChunk(tx *gorm.DB, id uint) error {
-	lines := tx.Model(&FleetOperationLine{}).Select("id").Where("operation_id = ?", id).Order("id").Limit(fleetMaintenanceChunk)
-	if err := tx.Where("id IN (?)", lines).Delete(&FleetOperationLine{}).Error; err != nil {
+	var lines []uint
+	if err := tx.Model(&FleetOperationLine{}).Where("operation_id = ?", id).Scopes(fleetLineLockOrder).
+		Limit(fleetMaintenanceChunk).Pluck("id", &lines).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("id IN ?", lines).Delete(&FleetOperationLine{}).Error; err != nil {
 		return err
 	}
 	events := tx.Model(&FleetOperationEvent{}).Select("id").Where("operation_id = ? AND (line_id IS NOT NULL OR kind IN ('RESOLUTION','VERDICT','CONTRADICTING_EVIDENCE','OVERRIDE_CHANGED','REDACTED'))", id).Order("id").Limit(fleetMaintenanceChunk)

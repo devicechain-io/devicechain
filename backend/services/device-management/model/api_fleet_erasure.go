@@ -32,7 +32,7 @@ func redactFleetDeviceLinesOnTx(tx *gorm.DB, deviceID uint, repair bool) error {
 		if repair {
 			query = query.Where("operation_id IN (?)", fleetMaintenanceProtocol(tx.Model(&FleetOperation{}).Select("id")))
 		}
-		if err := query.Order("id").Limit(fleetMaintenanceChunk).Find(&lines).Error; err != nil {
+		if err := query.Scopes(fleetLineLockOrder).Limit(fleetMaintenanceChunk).Find(&lines).Error; err != nil {
 			return err
 		}
 		if len(lines) == 0 {

@@ -386,7 +386,12 @@ func (api *Api) AbortFleetOperation(ctx context.Context, token, actor string) (*
 // fleetAbortChanges cancels the PLANNED lines and returns the header changes of an abort. An
 // operation that ends with nothing applied holds no evidence, so it is closed at once.
 func fleetAbortChanges(tx *gorm.DB, op *FleetOperation, actor, reason, kind string) (map[string]any, *FleetOperationEvent, error) {
+	var ids []uint
 	if err := tx.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPlanned).
+		Scopes(fleetLineLockOrder).Pluck("id", &ids).Error; err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Model(&FleetOperationLine{}).Where("id IN ? AND operation_id = ? AND posting = ?", ids, op.ID, FleetPostingPlanned).
 		Update("posting", FleetPostingCancelled).Error; err != nil {
 		return nil, nil, err
 	}
