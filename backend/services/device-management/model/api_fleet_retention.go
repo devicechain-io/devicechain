@@ -174,6 +174,8 @@ func fleetPurgeEvidenceChunk(tx *gorm.DB, op *FleetOperation) error {
 		Limit(fleetMaintenanceChunk).Pluck("id", &lines).Error; err != nil {
 		return err
 	}
+	// The chunk's lines are locked, in id order; the REVERSED journal rows for its contras are new rows,
+	// inserted after the line locks as the global order requires (lines by id, then events).
 	if err := fleetRecordPurgedContrasOnTx(tx, op, lines); err != nil {
 		return err
 	}
