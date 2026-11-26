@@ -1,0 +1,112 @@
+args: install local --compact
+stdin: ""
+exit: 0
+-- stdout (1212 bytes) --
+compact mode: jetstream 3Gi, postgres 2Gi, timescale 4Gi, streams 64/16 MiB, requests 25m/64Mi
+
+🧰 Tooling
+  ✅ docker (/fake/docker)
+  ✅ kubectl (/fake/kubectl)
+  ✅ tofu (/fake/tofu) satisfies bundled required_version
+  ✅ kind (/fake/kind)
+  ✅ cloud-provider-kind (/fake/cloud-provider-kind)
+  ✅ ko (/fake/ko)
+
+🐳 Docker engine
+  ✅ docker daemon reachable
+  ✅ docker context = default (native engine)
+  ⚠️ engine CPUs: 2
+     ↳ give Docker >= 4 CPUs and >= 8Gi, or re-run install with --compact for the small-footprint preset
+  ⚠️ engine memory: 4.0Gi
+     ↳ give Docker >= 4 CPUs and >= 8Gi, or re-run install with --compact for the small-footprint preset
+  ✅ storage driver: overlay2
+
+🔌 Ports & registry
+  ✅ port 80 free
+  ✅ port 443 free
+  ✅ port 1883 free
+  ✅ port 1884 free
+  ✅ port 1885 free
+  ✅ port 5000 free
+
+☸️ Kubernetes contexts
+  • no current-context set yet (the kind cluster dcctl creates provides one)
+  • no contexts in the kubeconfig yet (expected before the first install)
+
+🧩 Kubernetes server version
+  • no reachable cluster — skipping (requires Kubernetes 1.29 or newer)
+
+Preflight: ready, with 2 warning(s) — review above.
+
+-- stderr (0 bytes) --
+
+-- engine (1669 bytes) --
+{
+  "Provider": "local",
+  "Options": {
+    "Instance": "",
+    "KubeContext": "",
+    "Cluster": "devicechain",
+    "CreateCluster": false,
+    "Profile": "",
+    "DryRun": false,
+    "AssumeYes": false,
+    "ImageRegistry": "ghcr.io/devicechain-io",
+    "ImageVersion": "v1.9.0",
+    "BuildImages": false,
+    "IngressHost": "",
+    "NoTLS": true,
+    "AllowLegacyDbRemoval": false,
+    "EnableAreas": null,
+    "MqttFailClosed": null,
+    "MqttDeviceUplinks": null,
+    "Size": "",
+    "Sharding": "",
+    "MQTTExposure": "",
+    "MQTTHost": "",
+    "DevAllowEgress": null,
+    "BrokerMaxConnections": null,
+    "EventStoreMaxWALMiB": null,
+    "EventStoreCheckpointTimeout": null,
+    "TrustedProxies": null,
+    "IngressController": "",
+    "DropLegacyIngress": false,
+    "ValuesOverlay": null,
+    "ResetValues": false,
+    "Lwm2mIdentities": null,
+    "WithdrawLwm2mIdentities": false,
+    "SparkplugSources": null,
+    "WithdrawSparkplugSources": false,
+    "NoMonitoring": true,
+    "NoCNPG": false,
+    "Compact": true,
+    "HA": false,
+    "BackupDestination": null,
+    "BackupSnapshotClass": "",
+    "DatabasePlacement": {},
+    "MaxConnections": 0,
+    "RelationalStoreMaxWALMiB": null,
+    "Restore": {
+      "RdbFrom": "",
+      "RdbTargetTime": "",
+      "TsdbFrom": "",
+      "TsdbTargetTime": ""
+    },
+    "DcctlVersion": "1.9.0",
+    "RemoveLegacyIngress": false,
+    "AWSNLB": "",
+    "MQTTGateway": null,
+    "AlertRouting": {
+      "Webhook": "",
+      "WatchdogWebhook": "",
+      "EmailTo": null,
+      "SMTPHost": "",
+      "SMTPFrom": "",
+      "SMTPUser": "",
+      "SMTPPassword": "",
+      "Config": "",
+      "Clear": false
+    }
+  }
+}
+

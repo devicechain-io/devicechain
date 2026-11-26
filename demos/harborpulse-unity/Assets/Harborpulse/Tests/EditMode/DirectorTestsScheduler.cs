@@ -30,7 +30,7 @@ namespace DeviceChain.Harborpulse.Tests
                 if (defect == "ota-cap-three" && kind == "rollout" && fields != null) fields["maxInFlight"] = "3";
                 if (defect == "ota-failure-disabled" && kind == "attempt" && status == "FAILED") return;
                 if (defect == "smtp-sink-stopped" && kind == "attempt" && status == "SENT") return;
-                if (defect == "acked-before-delay" && kind == "attempt" && fields != null && fields.ContainsKey("trigger")) return;
+                if (defect == "acked-before-delay" && kind == "attempt" && fields != null && fields.TryGetValue("trigger", out var why) && why == "ESCALATION") return;
                 if (defect == "air-lock-basin" && key == "pump-air-lock") device = "hp-pump-basin";
                 if (defect == "drop-backfill" && id == "back-2") return;
                 fields = fields == null ? new Dictionary<string, string>() : new Dictionary<string, string>(fields);
@@ -41,7 +41,7 @@ namespace DeviceChain.Harborpulse.Tests
                 string Alarm(string d, string k) => "alarm:" + d + ":" + k;
                 if (kind == "alarm") id = Alarm(device, key);
                 if (kind == "window" && device == "hp-light-east-3" && source == EvidenceSource.Platform) { key = "lamp-flicker"; id = "service-this-run"; }
-                if (kind == "attempt" && key == "lamp-flicker") fields["alarmToken"] = Alarm(device, key);
+                if (kind == "attempt" && (key == "lamp-flicker" || key == "pump-air-lock")) fields["alarmToken"] = Alarm(device, key);
                 if (kind == "command" || kind == "chip") fields["alarmToken"] = Alarm(device, device == "hp-pump-north" ? "wet-well-high" : "connector-hot");
                 // The observer's control (-hp-control-no-cause): commands are read without their recorded cause, so none names an alarm or a cycle.
                 if (defect == "command-cause-not-read" && kind == "command") { fields.Remove("alarmToken"); cycle = ""; }
@@ -69,6 +69,9 @@ namespace DeviceChain.Harborpulse.Tests
             Add("window", "hp-light-east-3", "lamp-flicker", "ACTIVE", 10.75, "service-this-run");
             Add("window", "hp-light-east-3", "", "ACTIVE", 10.75, source: EvidenceSource.Scenario);
             Add("alarm", "hp-light-east-3", "lamp-flicker", "RAISED", 11, fields: new Dictionary<string, string> { ["raisedDuringSuppression"] = "true", ["suppressionWindowToken"] = "service-this-run" });
+            // the lamp with no window (North Quay): it flickers at the same moment, and its notification is sent at once
+            Add("alarm", "hp-light-north-3", "lamp-flicker", "RAISED", 11);
+            Add("attempt", "hp-light-north-3", "lamp-flicker", "SENT", 11.02, fields: new Dictionary<string, string> { ["trigger"] = "ALARM" });
             Add("window", "hp-light-east-3", "", "ENDED", 11.5);
             Add("attempt", "hp-light-east-3", "lamp-flicker", "SENT", 11.52, fields: new Dictionary<string, string> { ["policy"] = "hp-duty-escalation", ["afterClose"] = "true", ["alarmActive"] = "true" });
             Add("measure", "hp-gauge-north-3", "water_level_m", "", 12.45);
@@ -93,6 +96,7 @@ namespace DeviceChain.Harborpulse.Tests
             Add("measure", "hp-pump-north", "wet_well_m", "", 17.58, "well-falling", fields: new Dictionary<string, string> { ["value"] = "2.2", ["falling"] = "true" });
             Add("alarm", "hp-truck-1", "truck-in-flood-plain", "RAISED", 17.75);
             Add("alarm", "hp-pump-east", "pump-air-lock", "RAISED", Scheduler.WallOffsetSim(layout.Cues.AirLockFromSim, layout.Cues.AirLockHoldS, layout.DayLengthSeconds));
+            Add("attempt", "hp-pump-east", "pump-air-lock", "SENT", Scheduler.WallOffsetSim(layout.Cues.AirLockFromSim, layout.Cues.AirLockHoldS + 2, layout.DayLengthSeconds));
             Add("window", "", "feeder-outage", "ACTIVE", 19.75, source: EvidenceSource.Scenario);
             var expected = new[] { "hp-light-east-1", "hp-light-east-2", "hp-light-east-3", "hp-light-east-4", "hp-charger-east-1", "hp-charger-east-2" };
             Add("membership", "", "", "", Scheduler.WallOffsetSim(19.75, layout.Cues.SilenceS, layout.DayLengthSeconds), "east-absence", sets: new Dictionary<string, string[]> { ["tokens"] = expected });
@@ -282,21 +286,28 @@ namespace DeviceChain.Harborpulse.Tests
             switch (control)
             {
                 case "truck-stays-home": return new[] { "5:*", "7:slot:truck-out" };
-                case "silence-north-lamp": case "stream-cut": return new[] { "6:slot:absence", "6:node:absence", "6:link:outage->absence", "6:link:absence->notify" };
+                // the row counts what was recorded, so a seventh silent device changes its number (and the caption that says "exactly the six" goes);
+                // a cut stream takes only the claims that say nothing else happened
+                case "silence-north-lamp": return new[] { "6:slot:absence", "6:node:absence-count" };
+                case "stream-cut": return new[] { "6:slot:absence" };
                 // page 3c says its last line (3c-5) when page 3b hands the camera back, so a day that keeps 3b up longer moves that one shot
-                case "refuse-derate": return new[] { "3b:slot:derate", "3b:slot:cool", "3c:shot:3c-5", "3c:slot:locked-out" };
-                case "command-cause-not-read": return new[] { "3b:slot:derate", "3b:slot:cool", "3c:shot:3c-5", "3c:slot:locked-out", "4:node:command", "4:link:well->command", "4:link:command->running" };
-                case "no-command-far-end": return new[] { "4:slot:start", "4:slot:before-float", "4:node:command", "4:node:running", "4:link:well->command", "4:link:command->running", "4:link:running->falling" };
-                case "air-lock-basin": return new[] { "4b:follow:hp-pump-east", "4b:follow:hp-pump-basin", "4b:slot:air" };
+                case "refuse-derate": return new[] { "3b:slot:derate", "3b:slot:cool", "3b:node:derate", "3b:node:cool", "3b:link:hot->derate", "3b:link:derate->cool", "3c:shot:3c-5", "3c:slot:locked-out" };
+                case "command-cause-not-read": return new[] { "3b:slot:derate", "3b:slot:cool", "3b:node:derate", "3b:node:cool", "3b:link:hot->derate", "3b:link:derate->cool", "3c:shot:3c-5", "3c:slot:locked-out", "4:node:command", "4:link:well->command", "4:link:command->running",
+                    // a card gains a row every three seconds at most, so a row that drops out lets the rows after it come that much sooner
+                    "4:node:running", "4:node:falling", "4:link:running->falling" };
+                case "no-command-far-end": return new[] { "4:slot:start", "4:slot:before-float", "4:node:command", "4:node:running", "4:node:falling", "4:link:well->command", "4:link:command->running", "4:link:running->falling" };
+                case "air-lock-basin": return new[] { "4b:follow:hp-pump-east", "4b:follow:hp-pump-basin", "4b:slot:air", "4b:node:air", "4b:node:airlock-notified" };
                 case "drop-backfill": return new[] { "7:slot:tally", "7:node:stored", "7:link:paced->stored", "7:link:stored->clear" };
-                case "suppression-wrong-device": return new[] { "2:slot:fault", "2:node:fault", "2:link:work->fault", "2:link:fault->none" };
+                case "suppression-wrong-device": return new[] { "2:slot:fault", "2:node:fault", "2:node:control-lamp-notified", "2:link:work->fault", "2:link:fault->none" };
                 case "replacement-new-device": return new[] { "3:slot:new-hardware", "3:slot:same", "3:slot:disabled", "3:node:journal", "3:node:same", "3:node:disabled", "3:link:swapped->journal", "3:link:journal->same", "3:link:same->disabled" };
                 case "replacement-old-credential-left-live": return new[] { "3:slot:disabled", "3:node:disabled", "3:link:same->disabled" };
                 case "ota-signature-omitted": return new[] { "8:slot:firmware", "8:node:signed", "8:link:signed->cap" };
                 case "ota-cap-three": return new[] { "8:node:cap", "8:slot:ota-summary" };
-                case "ota-failure-disabled": return new[] { "8:slot:failure", "8:slot:working", "8:slot:ota-summary", "8:node:refused", "8:link:updated->refused" };
-                case "smtp-sink-stopped": return new[] { "2:slot:work-sent", "2:node:sent", "2:link:closed->sent", "6:node:notify", "6:node:escalated", "6:link:absence->notify", "6:link:notify->escalated" };
-                case "acked-before-delay": return new[] { "6:node:escalated", "6:link:notify->escalated" };
+                case "ota-failure-disabled": return new[] { "8:slot:failure", "8:slot:working", "8:slot:ota-summary", "8:node:refused", "8:node:working", "8:node:updated", "8:link:cap->refused", "8:link:refused->working", "8:link:working->updated" };
+                // with no mail sent, every claim that a notification went out goes: the held one, the no-window lamp's, the air lock's and the outage's
+                case "smtp-sink-stopped": return new[] { "2:slot:work-sent", "2:node:sent", "2:link:closed->sent", "2:node:control-lamp-notified", "4b:node:airlock-notified", "4b:link:air->airlock-notified",
+                    "6:node:absence-notified", "6:node:escalated", "6:link:absence-count->absence-notified", "6:link:absence-notified->escalated" };
+                case "acked-before-delay": return new[] { "6:node:escalated", "6:link:absence-notified->escalated" };
                 default: throw new ArgumentException("control needs an explicit allow-list: " + control);
             }
         }
@@ -444,7 +455,7 @@ namespace DeviceChain.Harborpulse.Tests
             var silence = scheduler.Log.Single(e => e.Kind == "caption" && e.Value == "The platform notices the silence.");
             Assert.That(silence.ShowS - (19.75 - 6) * dayLength / 24, Is.EqualTo(layout.Cues.SilenceS).Within(1));
             Assert.That(scheduler.Log.Any(e => e.Kind == "caption" && e.Value == "A quiet morning raises nothing."), Is.True);
-            var notify = scheduler.Log.Single(e => e.Kind == "node" && e.Value == "notify");
+            var notify = scheduler.Log.Single(e => e.Kind == "node" && e.Value == "absence-notified");
             var escalation = scheduler.Log.Single(e => e.Kind == "node" && e.Value == "escalated");
             Assert.That(escalation.ShowS - notify.ShowS, Is.EqualTo(layout.Cues.EscalateAfterS).Within(3));
         }

@@ -6,6 +6,8 @@ package model
 import (
 	"context"
 	"errors"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -32,10 +34,21 @@ func (api *Api) RetainFleetOperations(ctx context.Context, now time.Time) error 
 	}
 	var failures []error
 	var after uint
+	db := api.RDB.DB(ctx)
+	operations := db.Statement.Quote(db.NamingStrategy.TableName("FleetOperation"))
+	lines := db.Statement.Quote(db.NamingStrategy.TableName("FleetOperationLine"))
+	postedLines := db.Model(&FleetOperationLine{}).Select("1").
+		Where(lines + ".operation_id = " + operations + ".id AND " + lines + ".tenant_id = " + operations + ".tenant_id").
+		Where("posting = 'POSTED'")
 	for {
 		var ops []FleetOperation
-		err := fleetMaintenanceProtocol(api.RDB.DB(ctx)).Select("id").Where("id > ?", after).
-			Where("lines_purged_at <= ? OR (lines_purged_at IS NULL AND (pause_reason = ? OR dispatch = 'ABORTED' OR (evidence = 'CLOSED' AND closed_at <= ?) OR (evidence = 'OPEN' AND created_at <= ?)))", now.Add(-fleetTombstoneRetention), fleetRetentionExpired, now.Add(-fleetClosedRetention), now.Add(-fleetOpenRetention+fleetRetentionWarning)).
+		// Old pods do not increment posted_line_count during a rolling upgrade,
+		// so even new-pod increments could not make zero prove "never posted".
+		// Check actual lines in the abort hint to avoid repeatedly taking the
+		// exclusive fence for posted aborts before their warning/expiry window.
+		// Eligibility is still re-read under that fence below.
+		err := fleetMaintenanceProtocol(db).Select("id").Where("id > ?", after).
+			Where("lines_purged_at <= ? OR (lines_purged_at IS NULL AND (pause_reason = ? OR (dispatch = 'ABORTED' AND posted_line_count = 0 AND NOT EXISTS (?)) OR (evidence = 'CLOSED' AND closed_at <= ?) OR (evidence = 'OPEN' AND created_at <= ?)))", now.Add(-fleetTombstoneRetention), fleetRetentionExpired, postedLines, now.Add(-fleetClosedRetention), now.Add(-fleetOpenRetention+fleetRetentionWarning)).
 			Order("id").Limit(100).Find(&ops).Error
 		if err != nil {
 			return errors.Join(append(failures, err)...)
@@ -212,6 +225,14 @@ func fleetDeleteTombstone(tx *gorm.DB, op *FleetOperation, counts fleetRowCounts
 	return res.Error
 }
 
+// Like the expiry sweep's cursor, this is advisory, process-local state. A new
+// replica starts at the beginning; an interrupted pass resumes after its last
+// attempted tenant, so one tenant cannot consume every pass's budget.
+type fleetMaintenanceCursor struct {
+	sync.Mutex
+	after string
+}
+
 // MaintainFleetOperations is a nonblocking singleton per pass, not a leader.
 // Discovery is the shared tenant-ID listing, so no row content crosses tenants
 // and no new isolation bypass is needed; repair and retention each run under
@@ -224,7 +245,20 @@ func (api *Api) MaintainFleetOperations(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		_, err = core.ForEachTenant(ctx, tenants, func(tctx context.Context, _ string) error {
+		api.fleetMaintenanceCursor.Lock()
+		after := api.fleetMaintenanceCursor.after
+		api.fleetMaintenanceCursor.Unlock()
+		if i := slices.Index(tenants, after); i >= 0 {
+			tenants = append(tenants[i+1:], tenants[:i+1]...)
+		}
+		// If the cursor's tenant disappeared, restart in discovery order. With
+		// a stable tenant set and budget to start at least one tenant per pass,
+		// every tenant is attempted within at most len(tenants) acquired passes.
+		_, err = core.ForEachTenant(ctx, tenants, func(tctx context.Context, tenant string) error {
+			// Advance before work: repair or retention can exhaust the deadline.
+			api.fleetMaintenanceCursor.Lock()
+			api.fleetMaintenanceCursor.after = tenant
+			api.fleetMaintenanceCursor.Unlock()
 			repairErr := api.RepairFleetErasure(tctx)
 			now, err := fleetMaintenanceNow(api.RDB.DB(tctx))
 			if err != nil {

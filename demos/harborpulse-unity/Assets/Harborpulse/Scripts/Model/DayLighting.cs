@@ -387,6 +387,9 @@ namespace DeviceChain.Harborpulse.Model
         /// <summary>How much of the dim-light and storm exposure lift the sky and the haze are held back by (see <see cref="SkyState.SkyGain"/>).</summary>
         public const double SkyExposureHold = 0.8;
 
+        /// <summary>Stops the grade adds for the town at night and under the storm, on top of the eye opening; the sky is held back by the same.</summary>
+        public const double NightStoryLift = 0.35, StormStoryLift = 0.2;
+
         /// <summary>The fraction of full key a sun 7 degrees up already gives (the plain curve gives a third of it there).</summary>
         public const double LowSunKey = 0.62;
 
@@ -537,8 +540,12 @@ namespace DeviceChain.Harborpulse.Model
             // (the key now comes up sooner after sunrise, so the lift is held a little longer into it: the first hour stays readable)
             var dim = DimLightLift * (1 - s.Night) * (1 - Smooth(0.3, 1.6, s.SunIntensity));
             // and the first and last light of a clear day get a little more, so the town reads while the sun is still on the horizon
-            s.ExposureLift = s.Night * 0.55 + storm * 0.1 + dim + 0.3 * low * (1 - storm) * (1 - night);
-            s.SkyGain = Math.Pow(2, -SkyExposureHold * (dim + storm * 0.1));
+            // The story lift: a recorded cut is watched on a phone and through a video codec, where the night and the storm were too
+            // dark to follow. The town, the quays and the water are opened up further; the sky is held back by exactly as much, so it
+            // stays the sky it was graded as.
+            var story = s.Night * NightStoryLift + storm * StormStoryLift;
+            s.ExposureLift = s.Night * 0.55 + storm * 0.1 + dim + 0.3 * low * (1 - storm) * (1 - night) + story;
+            s.SkyGain = Math.Pow(2, -SkyExposureHold * (dim + storm * 0.1) - story);
             // the low sun lights the cloud from below, rose and ember, for about an hour either side of the horizon; a closed front hides most of it
             var under = Math.Max(0, 1 - Math.Abs(sunElev) / 13.0);
             s.CloudUnderlight = UnderlightColor;

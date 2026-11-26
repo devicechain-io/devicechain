@@ -1685,7 +1685,7 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 		if !isCNPGWebhookUnavailable(err.Error()) {
 			return fmt.Errorf("applying instance %q's infrastructure: %w", st.Instance, err)
 		}
-		reportCNPGAdmissionWait()
+		reportCNPGAdmissionWait(out(ctx))
 		if werr := waits.admission(ctx); werr != nil {
 			return fmt.Errorf("applying instance %q's infrastructure failed because the CloudNativePG "+
 				"admission webhook was unreachable, and it did not recover: %w (original apply error: %v)",

@@ -15,7 +15,7 @@ namespace DeviceChain.Harborpulse.Tests
         public void CommittedStoryboardPassesTimingAndClaimLint()
         {
             var story = DirectorKit.Story(); Assert.That(story.Pages.Select(p => p.Id), Is.EqualTo(new[] { "0", "1", "1b", "2", "3", "3c", "3b", "4", "5", "4b", "6", "7", "8", "9" }));
-            Assert.That(story.Cuts.Single(c => c.Id == "c90").Segments.Select(s => s.Page).Distinct(), Is.EqualTo(new[] { "0", "1", "4", "6", "7", "8", "9" }));
+            Assert.That(story.Cuts.Single(c => c.Id == "c90").Segments.Select(s => s.Page).Distinct(), Is.EqualTo(new[] { "0", "4", "6", "7", "8", "9" }));
             foreach (var cut in story.Cuts) { Assert.That(cut.Segments.Sum(s => s.DurS), Is.EqualTo(cut.TargetS).Within(0.5)); foreach (var segment in cut.Segments) foreach (var c in segment.Captions) Assert.That(c.HoldS, Is.GreaterThanOrEqualTo(3)); }
         }
         static Dictionary<string, object> First(Dictionary<string, object> root, string key) => DirectorKit.Obj(DirectorKit.Arr(root[key])[0]);
@@ -56,7 +56,7 @@ namespace DeviceChain.Harborpulse.Tests
                 case "caption-minimum": C(r)["holdS"] = 2.99; break;
                 case "shot-hold": DirectorKit.Obj(DirectorKit.Arr(P(r)["shots"])[1])["holdMinS"] = 2; break;
                 case "cut-total": segment["durS"] = 5; break;
-                case "cut-shot-move": segment["moveS"] = 4; break;
+                case "cut-shot-move": segment["moveS"] = 100; break; // a move may last its whole shot, never longer
                 case "caption-kind": C(r)["kind"] = "uncategorized"; break;
                 case "claim-needs": C(r)["kind"] = "claim"; break;
                 case "pre-verb": C(r)["lines"] = new List<object> { "The platform started the pump." }; break;
@@ -108,9 +108,12 @@ namespace DeviceChain.Harborpulse.Tests
             var story = DirectorKit.Story();
             foreach (var cut in story.Cuts) {
                 Assert.That(cut.Segments.Where(s => s.Page == "0").SelectMany(s => s.Overlays).Select(c => c.Id), Does.Contain("disclosure"));
-                Assert.That(cut.Segments.Where(s => s.Page == "9").SelectMany(s => s.Overlays).Select(c => c.Id), Is.EquivalentTo(new[] { "subline", "fiction", "positions" }));
+                // the end card is one shot whose five lines are all overlays: they stay, in three levels, until the film ends
+                var end = cut.Segments.Single(s => s.Page == "9"); Assert.That(end.EndCard, Is.True); Assert.That(end.Captions, Is.Empty);
+                Assert.That(end.Overlays.Select(c => c.Id), Is.EquivalentTo(new[] { "bridge", "tagline", "subline", "fiction", "positions" }));
                 Assert.That(cut.Segments.Where(s => s.Page == "8").SelectMany(s => s.Captions).Select(c => c.Id), Does.Contain("ota-summary"));
-                Assert.That(cut.Segments.All(s => s.SeamPose == "pose:home" && s.DissolveS == 0.5), Is.True);
+                Assert.That(cut.Segments.All(s => s.SeamPose == "pose:home" && (s.DissolveS == 0 || s.DissolveS == 0.5)), Is.True);
+                Assert.That(cut.LoopSeamS, Is.EqualTo(1.5));
             }
             Assert.That(story.Page("4").Captions.Single(c => c.Id == "well").Lines[0], Is.EqualTo("The pump's well is filling\u2026"));
             Assert.That(DirectorKit.StoryText(), Does.Not.Contain("?"));

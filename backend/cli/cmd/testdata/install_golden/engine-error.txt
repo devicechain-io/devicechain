@@ -1,0 +1,78 @@
+args: install local --skip-preflight --yes
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (30 bytes) --
+Error: the fake engine failed
+
+-- engine (1671 bytes) --
+{
+  "Provider": "local",
+  "Options": {
+    "Instance": "",
+    "KubeContext": "",
+    "Cluster": "devicechain",
+    "CreateCluster": false,
+    "Profile": "",
+    "DryRun": false,
+    "AssumeYes": true,
+    "ImageRegistry": "ghcr.io/devicechain-io",
+    "ImageVersion": "v1.9.0",
+    "BuildImages": false,
+    "IngressHost": "",
+    "NoTLS": false,
+    "AllowLegacyDbRemoval": false,
+    "EnableAreas": null,
+    "MqttFailClosed": null,
+    "MqttDeviceUplinks": null,
+    "Size": "",
+    "Sharding": "",
+    "MQTTExposure": "",
+    "MQTTHost": "",
+    "DevAllowEgress": null,
+    "BrokerMaxConnections": null,
+    "EventStoreMaxWALMiB": null,
+    "EventStoreCheckpointTimeout": null,
+    "TrustedProxies": null,
+    "IngressController": "",
+    "DropLegacyIngress": false,
+    "ValuesOverlay": null,
+    "ResetValues": false,
+    "Lwm2mIdentities": null,
+    "WithdrawLwm2mIdentities": false,
+    "SparkplugSources": null,
+    "WithdrawSparkplugSources": false,
+    "NoMonitoring": false,
+    "NoCNPG": false,
+    "Compact": false,
+    "HA": false,
+    "BackupDestination": null,
+    "BackupSnapshotClass": "",
+    "DatabasePlacement": {},
+    "MaxConnections": 0,
+    "RelationalStoreMaxWALMiB": null,
+    "Restore": {
+      "RdbFrom": "",
+      "RdbTargetTime": "",
+      "TsdbFrom": "",
+      "TsdbTargetTime": ""
+    },
+    "DcctlVersion": "1.9.0",
+    "RemoveLegacyIngress": false,
+    "AWSNLB": "",
+    "MQTTGateway": null,
+    "AlertRouting": {
+      "Webhook": "",
+      "WatchdogWebhook": "",
+      "EmailTo": null,
+      "SMTPHost": "",
+      "SMTPFrom": "",
+      "SMTPUser": "",
+      "SMTPPassword": "",
+      "Config": "",
+      "Clear": false
+    }
+  }
+}
+

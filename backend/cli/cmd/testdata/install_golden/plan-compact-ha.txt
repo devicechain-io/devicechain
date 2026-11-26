@@ -1,0 +1,80 @@
+args: install local --compact --ha --skip-preflight
+stdin: ""
+exit: 0
+-- stdout (493 bytes) --
+compact mode: jetstream 3Gi, postgres 2Gi, timescale 4Gi, streams 64/16 MiB, requests 25m/64Mi
+ha mode: 3 NATS servers (one per node), streams and KV buckets at 3 replicas; both databases configured replicated too — relational synchronously, event store preferred — with volumes sized per instance, so their disk scales with the count
+note: --ha adds two more NATS servers per instance and their volumes; the printed compact footprint is measured single-node and is a floor, not the total
+
+-- stderr (0 bytes) --
+
+-- engine (1668 bytes) --
+{
+  "Provider": "local",
+  "Options": {
+    "Instance": "",
+    "KubeContext": "",
+    "Cluster": "devicechain",
+    "CreateCluster": false,
+    "Profile": "",
+    "DryRun": false,
+    "AssumeYes": false,
+    "ImageRegistry": "ghcr.io/devicechain-io",
+    "ImageVersion": "v1.9.0",
+    "BuildImages": false,
+    "IngressHost": "",
+    "NoTLS": true,
+    "AllowLegacyDbRemoval": false,
+    "EnableAreas": null,
+    "MqttFailClosed": null,
+    "MqttDeviceUplinks": null,
+    "Size": "",
+    "Sharding": "",
+    "MQTTExposure": "",
+    "MQTTHost": "",
+    "DevAllowEgress": null,
+    "BrokerMaxConnections": null,
+    "EventStoreMaxWALMiB": null,
+    "EventStoreCheckpointTimeout": null,
+    "TrustedProxies": null,
+    "IngressController": "",
+    "DropLegacyIngress": false,
+    "ValuesOverlay": null,
+    "ResetValues": false,
+    "Lwm2mIdentities": null,
+    "WithdrawLwm2mIdentities": false,
+    "SparkplugSources": null,
+    "WithdrawSparkplugSources": false,
+    "NoMonitoring": true,
+    "NoCNPG": false,
+    "Compact": true,
+    "HA": true,
+    "BackupDestination": null,
+    "BackupSnapshotClass": "",
+    "DatabasePlacement": {},
+    "MaxConnections": 0,
+    "RelationalStoreMaxWALMiB": null,
+    "Restore": {
+      "RdbFrom": "",
+      "RdbTargetTime": "",
+      "TsdbFrom": "",
+      "TsdbTargetTime": ""
+    },
+    "DcctlVersion": "1.9.0",
+    "RemoveLegacyIngress": false,
+    "AWSNLB": "",
+    "MQTTGateway": null,
+    "AlertRouting": {
+      "Webhook": "",
+      "WatchdogWebhook": "",
+      "EmailTo": null,
+      "SMTPHost": "",
+      "SMTPFrom": "",
+      "SMTPUser": "",
+      "SMTPPassword": "",
+      "Config": "",
+      "Clear": false
+    }
+  }
+}
+

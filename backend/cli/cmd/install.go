@@ -4,9 +4,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"os"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/installplain"
 	"github.com/spf13/cobra"
 )
 
@@ -185,17 +189,7 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 			"runs none (--no-monitoring, or --compact, which leaves it out unless --no-monitoring=false). Drop them, or install the monitoring stack")
 	}
 	return bootstrap.InstallOptions{
-		Options: bootstrap.Options{
-			KubeContext:          installKubeContext,
-			Cluster:              installCluster,
-			DryRun:               installDryRun,
-			AssumeYes:            installAssumeYes,
-			NoTLS:                installNoTLS,
-			AllowLegacyDbRemoval: installAllowLegacyDb,
-			ImageRegistry:        img.Registry,
-			ImageVersion:         img.Version,
-			BuildImages:          installBuild,
-		},
+		Options:           installBootstrapOptions(img),
 		NoMonitoring:      installNoMonitoring,
 		NoCNPG:            installNoCNPG,
 		Compact:           installCompact,
@@ -217,6 +211,22 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 		MQTTGateway:         mqttGatewayFlag(installMQTTGatewayGiven, installMQTTGateway),
 		AlertRouting:        alerts,
 	}, nil
+}
+
+// installBootstrapOptions contains no file reads, so the engine can identify
+// its run before preflight without settling the alert files early.
+func installBootstrapOptions(img bootstrap.ImageSource) bootstrap.Options {
+	return bootstrap.Options{
+		KubeContext:          installKubeContext,
+		Cluster:              installCluster,
+		DryRun:               installDryRun,
+		AssumeYes:            installAssumeYes,
+		NoTLS:                installNoTLS,
+		AllowLegacyDbRemoval: installAllowLegacyDb,
+		ImageRegistry:        img.Registry,
+		ImageVersion:         img.Version,
+		BuildImages:          installBuild,
+	}
 }
 
 // installCmd prepares a cluster for DeviceChain instances.
@@ -378,22 +388,36 @@ the cluster, with one exception: the connection budget may be raised.`,
 			}
 		}
 
-		if !installSkipPreflight {
-			doctorOptions := doctorOptsFor(installKubeContext, installCluster, installBuild)
-			doctorOptions.FullSizeInstall = !installCompact
-			if d := runDoctor(args[0], doctorOptions); d.fails > 0 {
-				return fmt.Errorf("%d preflight check(s) failed — fix the items above, or re-run with --skip-preflight", d.fails)
-			}
-		}
+		doctorOptions := doctorOptsFor(installKubeContext, installCluster, installBuild)
+		doctorOptions.FullSizeInstall = !installCompact
 
 		installMQTTGatewayGiven = cmd.Flags().Changed("mqtt-gateway")
-		opts, err := installOptions(backupDestination, restorePlan, imageSource)
-		if err != nil {
-			return err
-		}
-		return bootstrap.Install(cmd.Context(), provider, opts)
+		return runInstallEngine(cmd.Context(), &bootstrap.InstallEngine{
+			Provider: provider, Options: bootstrap.InstallOptions{Options: installBootstrapOptions(imageSource)},
+			SkipPreflight: installSkipPreflight, Cluster: installEngine,
+			ResolveOptions: func() (bootstrap.InstallOptions, error) {
+				return installOptions(backupDestination, restorePlan, imageSource)
+			},
+		}, doctorRunner(args[0], doctorOptions))
 	},
 	SilenceUsage: true,
+}
+
+// installEngine is the cluster work the install engine runs after its preflight:
+// bootstrap.Install, held in a variable so the characterisation goldens
+// (install_golden_test.go) can stand a recording fake in for it and pin what the command
+// layer and the engine's own first stages print and decide. Production never reassigns it.
+var installEngine = bootstrap.Install
+
+// runInstallEngine runs an install through the plain presenter: today's output, on the
+// process's own streams, with the kind-cluster prompt answered from stdin.
+func runInstallEngine(ctx context.Context, e *bootstrap.InstallEngine, preflight installflow.PreflightRunner) error {
+	if ctx == nil { // RunE called directly, as tests do, rather than through Execute
+		ctx = context.Background()
+	}
+	return installplain.Presenter{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin}.Run(ctx, e,
+		installflow.Request{Operation: installflow.OperationInstall, DryRun: e.Options.DryRun, AssumeYes: e.Options.AssumeYes},
+		preflight)
 }
 
 func installRelationalWALFromArgv() *int {
