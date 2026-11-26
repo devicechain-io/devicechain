@@ -1,0 +1,4 @@
+dcctl install: shared prerequisites installed
+  Target:   kind-lab (managed kind cluster)
+  Next:     dcctl bootstrap local <instance> --cluster lab
+  Command:  dcctl install local --cluster=lab --compact=true --no-tls=false --yes=true

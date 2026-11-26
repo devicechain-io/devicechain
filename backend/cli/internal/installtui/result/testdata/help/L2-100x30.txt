@@ -1,0 +1,22 @@
++--------------------------------------------------------------------------------------------------+
+| dcctl install - kind-devicechain - v1.11.0                                                       |
++--------------------------------------------------------------------------------------------------+
+| FAILED  Install failed                                                                           |
+|                                                                                                  |
+| Help                                                                                             |
+|                                                                                                  |
+| Tab         move                                                                                 |
+| Shift+Tab   move back                                                                            |
+| Enter       select                                                                               |
+| q           exit                                                                                 |
+| Esc         close help                                                                           |
+|                                                                                                  |
+| The run is over; nothing is running while this screen is open. Leaving it never changes dcctl's  |
+| exit status, and dcctl prints a short summary when it exits. Review for re-run starts a fresh    |
+| run of the same request through review, only once the last run has settled. Nothing is rolled    |
+| back.                                                                                            |
+|                                                                                                  |
++--------------------------------------------------------------------------------------------------+
+|   [ Exit ]   [ Review for re-run ]                                                               |
+| Esc close help - q exit                                                                          |
++--------------------------------------------------------------------------------------------------+

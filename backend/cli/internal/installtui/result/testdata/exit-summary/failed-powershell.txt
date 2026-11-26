@@ -1,0 +1,8 @@
+dcctl install: failed
+  Target:   kind-devicechain (managed kind cluster)
+  Stage:    Apply the cluster prerequisites (install.prerequisites)
+  Changes:  The cluster may be partly changed. Nothing was rolled back.
+  Claim:    Released.
+  Inspect:  kubectl --context kind-devicechain get pods --all-namespaces
+  Re-run:   dcctl install local --alert-webhook='<redacted: supply privately>' --compact=true --yes=true
+  (template: supply the redacted credentials privately)

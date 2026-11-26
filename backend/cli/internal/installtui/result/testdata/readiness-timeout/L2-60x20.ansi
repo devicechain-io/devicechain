@@ -1,0 +1,19 @@
+ \x1b[1mdcctl install - prod-east - v1.11.0\x1b[m
+------------------------------------------------------------
+ \x1b[1mFAILED\x1b[m  \x1b[1mInstall failed\x1b[m
+ 
+ Stage       Wait for the relational store
+             (install.rdb-ready)
+ Cause       the relational store did not become ready
+             within 15m0s: 2/3 instances ready
+ Changes     Changes were applied. Nothing was rolled back.
+ Claim       Released.
+ Fix         Install recorded; replicas still joining.
+             Re-run the same command once the cluster has
+             room for them: it converges and waits again.
+ Re-run      dcctl install local --kube-context=prod-east
+             --ha=true --yes=true
+ 
+------------------------------------------------------------
+ > \x1b[7m[ Exit ]\x1b[m   [ Review for re-run ]
+ Tab move - Enter select - ? help - q exit

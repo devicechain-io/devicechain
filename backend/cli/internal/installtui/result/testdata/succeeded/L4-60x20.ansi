@@ -1,0 +1,19 @@
+ \x1b[1mdcctl install · kind-lab · v1.11.0\x1b[m
+────────────────────────────────────────────────────────────
+ \x1b[38;2;95;211;154mDONE\x1b[m  \x1b[1mShared prerequisites installed\x1b[m
+ 
+ \x1b[38;2;138;166;182mTarget      \x1b[mkind-lab (managed kind cluster)
+ \x1b[38;2;138;166;182mShape       \x1b[mCompact footprint, not HA
+ \x1b[38;2;138;166;182mTLS         \x1b[mon
+ \x1b[38;2;138;166;182mMonitoring  \x1b[moff
+ \x1b[38;2;138;166;182mBackups     \x1b[mconfigured
+ \x1b[38;2;138;166;182mConnections \x1b[m300 (each instance reserves its own share)
+ \x1b[38;2;138;166;182mConsole     \x1b[mnone for a cluster: it comes with an instance
+ 
+ \x1b[38;2;138;166;182mNext        \x1b[m\x1b[38;2;36;163;214mdcctl bootstrap local <instance> --cluster lab\x1b[m
+ \x1b[38;2;138;166;182mCommand     \x1b[m\x1b[38;2;36;163;214mdcctl install local --cluster=lab\x1b[m
+ \x1b[38;2;138;166;182m            \x1b[m\x1b[38;2;36;163;214m--compact=true --no-tls=false --yes=true\x1b[m
+ 
+────────────────────────────────────────────────────────────
+ › \x1b[7m[ Done ]\x1b[m
+ \x1b[38;2;138;166;182mEnter select · ? help · q exit\x1b[m

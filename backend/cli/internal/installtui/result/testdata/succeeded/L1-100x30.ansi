@@ -1,0 +1,20 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ dcctl install · kind-lab · v1.11.0                                                               │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ DONE  Shared prerequisites installed                                                             │
+│                                                                                                  │
+│ Target      kind-lab (managed kind cluster)                                                      │
+│ Shape       Compact footprint, not HA                                                            │
+│ TLS         on                                                                                   │
+│ Monitoring  off                                                                                  │
+│ Backups     configured                                                                           │
+│ Connections 300 (each instance reserves its own share)                                           │
+│ Console     none for a cluster: it comes with an instance                                        │
+│                                                                                                  │
+│ Next        dcctl bootstrap local <instance> --cluster lab                                       │
+│ Command     dcctl install local --cluster=lab --compact=true --no-tls=false --yes=true           │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ › [ Done ]                                                                                       │
+│ Enter select · ? help · q exit                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

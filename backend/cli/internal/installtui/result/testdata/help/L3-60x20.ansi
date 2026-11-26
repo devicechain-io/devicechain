@@ -1,0 +1,20 @@
+ \x1b[1mdcctl install · kind-devicechain · v1.11.0\x1b[m
+────────────────────────────────────────────────────────────
+ \x1b[38;5;204mFAILED\x1b[m  \x1b[1mInstall failed\x1b[m
+ 
+ \x1b[1mHelp\x1b[m
+ 
+ \x1b[38;5;38mTab         \x1b[mmove
+ \x1b[38;5;38mShift+Tab   \x1b[mmove back
+ \x1b[38;5;38mEnter       \x1b[mselect
+ \x1b[38;5;38mq           \x1b[mexit
+ \x1b[38;5;38mEsc         \x1b[mclose help
+ 
+ The run is over; nothing is running while this screen is
+ open. Leaving it never changes dcctl's exit status, and
+ dcctl prints a short summary when it exits. Review for
+ \x1b[38;5;109m… 3 more lines; dcctl prints a summary on exit\x1b[m
+ 
+────────────────────────────────────────────────────────────
+   [ Exit ]   [ Review for re-run ]
+ \x1b[38;5;109mEsc close help · q exit\x1b[m

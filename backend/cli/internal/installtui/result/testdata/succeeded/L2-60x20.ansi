@@ -1,0 +1,19 @@
+ \x1b[1mdcctl install - kind-lab - v1.11.0\x1b[m
+------------------------------------------------------------
+ DONE  \x1b[1mShared prerequisites installed\x1b[m
+ 
+ Target      kind-lab (managed kind cluster)
+ Shape       Compact footprint, not HA
+ TLS         on
+ Monitoring  off
+ Backups     configured
+ Connections 300 (each instance reserves its own share)
+ Console     none for a cluster: it comes with an instance
+ 
+ Next        dcctl bootstrap local <instance> --cluster lab
+ Command     dcctl install local --cluster=lab
+             --compact=true --no-tls=false --yes=true
+ 
+------------------------------------------------------------
+ > \x1b[7m[ Done ]\x1b[m
+ Enter select - ? help - q exit

@@ -1,0 +1,20 @@
+ dcctl install - kind-devicechain - v1.11.0
+------------------------------------------------------------
+ STOPPED  Install stopped
+ 
+ Stage       Apply the cluster prerequisites
+             (install.prerequisites)
+ Cause       dcctl stopped waiting for the interrupted
+             OpenTofu command after its budget. It was
+             asked to stop and to write its state, but
+             dcctl did not see it finish, so treat the...
+ Changes     The cluster may be partly changed. Nothing was
+             rolled back.
+ Fix         Re-run the same command once dcctl has exited:
+             an install converges, so it finishes whatever
+             this run left half done.
+ Re-run      dcctl install local --yes=true
+ 
+------------------------------------------------------------
+ > [ Exit ]   [ Review for re-run: waiting ]
+ Tab move - Enter select - ? help - q exit

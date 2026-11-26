@@ -1,0 +1,23 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ \x1b[1mdcctl install · kind-devicechain · v1.11.0\x1b[m                                   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;204mFAILED\x1b[m  \x1b[1mInstall failed\x1b[m                                                       │
+│                                                                              │
+│ \x1b[38;5;109mStage       \x1b[mApply the cluster prerequisites (install.prerequisites)          │
+│ \x1b[38;5;109mCause       \x1b[mapplying the cluster prerequisites: exit status 1: Error:        │
+│ \x1b[38;5;109m            \x1b[mcreating the alert route: POST [redacted] refused                │
+│ \x1b[38;5;109mChanges     \x1b[mThe cluster may be partly changed. Nothing was rolled back.      │
+│ \x1b[38;5;109mClaim       \x1b[mReleased.                                                        │
+│ \x1b[38;5;109mRecord      \x1b[mMarked as applying; not recorded as installed.                   │
+│                                                                              │
+│ \x1b[38;5;109mFix         \x1b[mFix the cause above, then re-run the same command: an install    │
+│ \x1b[38;5;109m            \x1b[mconverges, so it finishes whatever this run left half done.      │
+│ \x1b[38;5;109mInspect     \x1b[m\x1b[38;5;38mkubectl --context kind-devicechain get pods --all-namespaces\x1b[m     │
+│ \x1b[38;5;109mRe-run      \x1b[m\x1b[38;5;38mdcctl install local --alert-webhook='<redacted: supply\x1b[m           │
+│ \x1b[38;5;109m            \x1b[m\x1b[38;5;38mprivately>' --compact=true --yes=true\x1b[m                            │
+│ \x1b[38;5;109m            \x1b[m\x1b[38;5;109mtemplate: supply the redacted credentials privately\x1b[m              │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ › \x1b[7m[ Exit ]\x1b[m   [ Review for re-run ]                                           │
+│ \x1b[38;5;109mTab move · Enter select · ? help · q exit\x1b[m                                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
