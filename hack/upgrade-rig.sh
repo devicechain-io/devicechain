@@ -67,6 +67,12 @@
 #                                 device's SHARED attribute made outside the writer protocol) reads ENFORCED
 #                                 after the upgrade, a BASELINE pod's attribute writes still pass under it,
 #                                 and an unmarked write is refused; the refusal is shown to be the trigger's
+#   hack/upgrade-rig.sh bulkchange a 2,000-device bulk change runs through an upgraded pod while a BASELINE pod
+#                                 writes, deletes and restarts; every baseline write is accepted, every prior
+#                                 matches the revisions, every line settles on evidence, deleted devices are
+#                                 redacted by the repair pass; the repair, baseline and trigger controls each
+#                                 fail their check. Skips BY NAME on a build that serves no bulk change and is
+#                                 not expected to; FAILS when DC_EXPECT_BULK_CHANGES=1 or the tree serves them
 #   hack/upgrade-rig.sh all      up, then whichever drill `mode` names
 #   hack/upgrade-rig.sh down      dcctl destroy the instance (with the working tree's
 #                                 dcctl), then delete the cluster, dcctl's local state
@@ -1593,9 +1599,25 @@ first and would see exactly this. Read the output above — an image that cannot
 pulled leaves the controller in ImagePullBackOff on the new tag, and a rollout timeout
 means it never became ready. Nothing was upgraded, so nothing below has run."
 
+  # 🔴 A SKIPPED MINOR IS REFUSED BY `dcctl upgrade`, AND THE RIG PASSES THE OVERRIDE ONLY WHEN TOLD TO.
+  # The one run that needs it is the bulkchange phase's baseline control: a baseline from BEFORE the
+  # attribute writer protocol (the workflow's `baseline` input set to such a release), whose pods the guard
+  # must refuse. That is an unsupported roll on purpose, and this flag is the operator's command for it. It
+  # is never inferred from the baseline: a gate that quietly allowed a skipped minor would drill a path no
+  # operator is told to take. (A build-path target carries a local tag outside the release order, which
+  # `dcctl upgrade` does not judge, so only a pull-path run needs it.)
+  local skip_minor=()
+  case "${DC_UPGRADE_ALLOW_SKIPPED_MINOR:-}" in
+  "" | 0) ;;
+  1)
+    skip_minor=(--allow-skipped-minor)
+    warn "DC_UPGRADE_ALLOW_SKIPPED_MINOR=1: dcctl upgrade gets --allow-skipped-minor, so a move from $baseline_tag that skips a minor is allowed (unsupported, on purpose)"
+    ;;
+  *) fail "DC_UPGRADE_ALLOW_SKIPPED_MINOR is '${DC_UPGRADE_ALLOW_SKIPPED_MINOR}'; it must be empty, 0 or 1" ;;
+  esac
   say "dcctl upgrade → instance configuration and services to $target_tag"
   "$target_dcctl" upgrade local "$instance" \
-    ${instance_target[@]+"${instance_target[@]}"} \
+    ${instance_target[@]+"${instance_target[@]}"} ${skip_minor[@]+"${skip_minor[@]}"} \
     --registry "$target_registry" --version "$target_tag" ||
     fail "the upgrade itself FAILED. This is a finding: an operator on $baseline_tag
 running the documented procedure would see exactly this. Read the output above — it
@@ -3642,6 +3664,691 @@ $out"
   say "ATTRIBUTE GUARD HOLDS — enforced, $baseline_tag pods' writes pass, an unmarked writer is refused, and the refusal is the trigger's"
 }
 
+# ---------------------------------------------------------------------------
+# bulkchange — a bulk change runs through the upgraded pods while baseline pods write and delete (I-17)
+# ---------------------------------------------------------------------------
+#
+# THE CLAIM: bulk changes are safe to run DURING a roll. While an instance rolls from the baseline to this
+# release, only the new pods have the engine; the baseline's pods keep writing device attributes (marked,
+# so the attribute guard passes them) and keep deleting devices (without redacting a bulk change's lines).
+# So, on the upgraded instance, with a device-management pod of the BASELINE's image running beside the
+# upgraded ones (the roll held at a mixed state):
+#
+#   1. a 2,000-device bulk change is planned, created and started through an UPGRADED pod, addressed directly;
+#   2. while it posts, ordinary attribute writes go to the target devices through the BASELINE pod, among
+#      them first writes of a key the device did not have, and every one is accepted;
+#   3. two target devices are deleted through the baseline pod, one whose line had posted and one whose
+#      line had not;
+#   4. the baseline pod is restarted after the upgrade's hook has run, and must start;
+#   5. the devices answer, and the roll finishes (the baseline copy is removed).
+#
+# and then:
+#
+#   - every baseline write was accepted;
+#   - every recorded `prior` is what the device actually held: the configuration revisions are an
+#     independent record (every write of a declared key mints one, serialised on the device's
+#     configuration row), so a line's prior must be the key as the revision just before its own post held it;
+#   - every line settles, the change reads DISPATCHED and CLOSED, and REPORT_LOG + LATEST_STATE equals the
+#     settled total (every line REPORT_LOG when the baseline already captured reports);
+#   - both deleted devices' lines are redacted within the repair bound ($bc_repair_bound s: the 60 s
+#     maintenance interval, its 45 s pass budget, and slack), though the baseline pod that deleted them
+#     redacts nothing.
+#
+# THE NEGATIVE CONTROLS, each of which must make its own check fail:
+#
+#   repair     with the maintenance pass held off (its singleton advisory lock held from a psql session, so
+#              every replica's pass is skipped), a third device deleted through the baseline pod is NOT
+#              redacted after the bound; released, it is. So the redaction assertion can fail, and it is
+#              the repair pass that makes it pass.
+#   baseline   run with a baseline from BEFORE the writer protocol (the workflow's `baseline` input, e.g.
+#              v1.8.x): the baseline pod's attribute writes on target devices are then REFUSED by the guard
+#              (DCAP1, seen in its log, and none of its values lands), its delete is refused the same way,
+#              and every prior is still correct. This run detects the baseline from its own source.
+#   trigger    in that same run, the baseline pod is restarted with the protocol marker forced onto its
+#              database sessions, so the guard no longer stops a writer that takes no device lock, and a
+#              second bulk change runs on devices that pod is setting and unsetting as fast as it can. The
+#              before-image assertion must then FAIL: at least one prior must disagree with the revisions.
+#
+# 🔴 THE TRIGGER CONTROL DOES NOT DROP THE TRIGGER, AND CANNOT. The engine re-reads the activation gate in
+# every posting transaction and refuses to post without the trigger (enabled, unmodified, no role or
+# database default marker), so a dropped trigger stops the bulk change rather than exposing it. Forcing the
+# marker onto ONE old pod's sessions (PGOPTIONS, read by its PostgreSQL driver) is what a missing trigger
+# means for that pod — an unprotected writer — while the gate still reads ENFORCED. That is the H01 case.
+#
+# 🔴 THE PHASE FAILS, NEVER SKIPS, WHEN BULK CHANGES ARE EXPECTED: when DC_EXPECT_BULK_CHANGES=1, or when the
+# working tree's build constant serves them (core/ledger: Served = true), and readiness does not list
+# config.set. Before that, a build that does not serve bulk changes skips this phase BY NAME, because
+# there is nothing for it to drive.
+#
+# WHAT THIS DOES NOT COVER, said plainly:
+#   - the mixed state is the attrlock phase's: a copy of the device-management Deployment on the baseline's
+#     image beside the upgraded pods, rather than a paused rollout. Both pod versions serve, write and
+#     consume the shared durable, which is what a paused rollout is; the order of the roll itself is the
+#     upgrade's subject, not this phase's;
+#   - the devices' answers are published on the device-reports stream through the forwarding area's
+#     broker login, not over MQTT by 2,000 sessions. From the stream onward the path is the platform's own;
+#     the transport is the transport rigs' subject;
+#   - which pod consumes which report is not controlled (a shared durable consumer); the labelling rule is
+#     proven deterministically by the settlement tests, as the spec says.
+bc_port_old=18464
+bc_port_new=18465
+bc_port_nats=18466
+bc_pids=()
+bc_dir="$work/bulkchange"
+bc_prefix="bcdrill"
+bc_maint_lock="device-management-bulk-change-maintenance"
+bc_repair_bound="${DC_BC_REPAIR_BOUND:-150}"
+bc_copy="oldpod-device-management"
+bc_hold_app="bc-drill-maintenance-hold"
+# The scale the spec names. Smaller is allowed only for developing the rig, and never when bulk changes are
+# expected: a gate that can be shrunk by an environment variable is a gate with a dial on it.
+bc_spec_count=2000
+
+bc_cleanup() {
+  local pid
+  for pid in "${bc_pids[@]}"; do
+    kill "$pid" >/dev/null 2>&1 || true
+  done
+  bc_pids=()
+  [[ -n "${bc_pg:-}" ]] && bc_release_hold "$bc_pg" >/dev/null 2>&1
+  oldpod_cleanup "$bc_copy"
+  return 0
+}
+
+# bc_tree_serves <registry.go> succeeds when the working tree's build constant serves bulk changes. Pure.
+bc_tree_serves() {
+  grep -Eq '^[[:space:]]*const[[:space:]]+Served[[:space:]]*=[[:space:]]*true\b' "$1"
+}
+
+# bc_expected <DC_EXPECT_BULK_CHANGES value> <registry.go> succeeds when this run must drive a bulk change.
+# Anything but empty, 0 or 1 is refused (exit 2): a typo must not read as "not expected".
+bc_expected() {
+  case "$1" in
+  1) return 0 ;;
+  "" | 0) bc_tree_serves "$2" ;;
+  *) return 2 ;;
+  esac
+}
+
+# bc_gate <expected 0|1> <readiness JSON> prints `run` or `skip`, or prints why and fails: exit 1 when bulk
+# changes are expected and config.set is not executable, exit 2 when the readiness answer is unreadable (in
+# either case: a readiness this release ships that cannot be read is a finding, not a reason to skip). Pure.
+bc_gate() {
+  local expected="$1" json="$2" kinds
+  kinds="$(jq -er '.executableKinds | if type == "array" then map(tostring) | join(",") else error("not a list") end' <<<"$json" 2>/dev/null | tr -d '\r')" || {
+    echo "readiness answered no executableKinds list: ${json:-nothing}"
+    return 2
+  }
+  if [[ ",$kinds," == *",config.set,"* ]]; then
+    echo run
+    return 0
+  fi
+  if [[ "$expected" == 1 ]]; then
+    echo "readiness lists executable kinds [${kinds}], and config.set is not among them"
+    return 1
+  fi
+  echo skip
+}
+
+# bc_protocol_of <source tree> prints `protocol` when that tree's code sets the attribute writer protocol
+# marker, `pre-protocol` when it does not. Test files are not code that runs. Pure.
+bc_protocol_of() {
+  local src="$1" hits
+  [[ -d "$src/backend" ]] || { echo "no source tree at $src" >&2; return 1; }
+  hits="$(grep -rl --include='*.go' --exclude='*_test.go' 'devicechain.attr_protocol' "$src/backend" 2>/dev/null)" || true
+  if [[ -n "$hits" ]]; then echo protocol; else echo pre-protocol; fi
+}
+
+# bc_captures <source tree> succeeds when that tree's device-management captures every configuration report
+# (a report log), so every line it helps settle must read REPORT_LOG. Pure.
+bc_captures() {
+  [[ -f "$1/backend/services/device-management/model/api_configuration_capture.go" ]]
+}
+
+# bc_tokens <count> <mod> <rem> [<max n>] prints the drill device tokens whose number n (1..count, at most
+# max) has n % mod == rem, one per line. Pure.
+bc_tokens() {
+  local count="$1" mod="$2" rem="$3" maxn="${4:-$1}" n
+  for ((n = 1; n <= count && n <= maxn; n++)); do
+    ((n % mod == rem)) && printf '%s-%05d\n' "$bc_prefix" "$n"
+  done
+  return 0
+}
+
+# bc_delete_choice <lines JSON> prints two ordinals to delete: one whose line has POSTED and one still
+# PLANNED, both among devices no baseline writer touches (n % 5 in 2..4: the writers own 0 and 1, and a
+# write to a deleted device would be refused for a reason that is not the guard's). Fails when the change
+# has not reached a state with both. Pure.
+bc_delete_choice() {
+  local out got=()
+  out="$(jq -r '[.[] | select(.ordinal % 5 >= 2)] as $c
+    | ([$c[] | select(.posting == "POSTED")] | first | .ordinal // empty),
+      ([$c[] | select(.posting == "PLANNED")] | last | .ordinal // empty)' <<<"$1" 2>/dev/null | tr -d '\r')" || return 1
+  mapfile -t got <<<"$out"
+  [[ ${#got[@]} -eq 2 && "${got[0]}" =~ ^[0-9]+$ && "${got[1]}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n%s\n' "${got[0]}" "${got[1]}"
+}
+
+# bc_restart_copy deletes the baseline copy's pod and waits for its replacement to be Ready: a pod of the
+# baseline starting AFTER the upgrade's hook has run, with a bulk change on the instance.
+bc_restart_copy() {
+  local ns old end
+  ns="$(instance_namespace)"
+  old="$(kubectl --context "$kube_context" -n "$ns" get pod -l "$oldpod_label=$bc_copy" -o name)" || fail "could not find the $baseline_tag pod"
+  [[ -n "$old" ]] || fail "no $baseline_tag pod is running to restart"
+  # shellcheck disable=SC2086 # one name per pod, by design
+  kubectl --context "$kube_context" -n "$ns" delete $old --wait=true --timeout=120s >/dev/null || fail "could not restart the $baseline_tag pod"
+  end=$((SECONDS + 300))
+  while ((SECONDS < end)); do
+    kubectl --context "$kube_context" -n "$ns" wait --for=condition=Ready pod -l "$oldpod_label=$bc_copy" --timeout=10s >/dev/null 2>&1 && return 0
+    sleep 2
+  done
+  kubectl --context "$kube_context" -n "$ns" logs "deployment/$bc_copy" --tail=30 >&2 2>/dev/null || true
+  fail "A $baseline_tag DEVICE-MANAGEMENT POD DID NOT START after the upgrade's hook had run, with a bulk change on the instance"
+}
+
+# bc_forward <target> <local port> <remote port> <log> port-forwards one pod and waits for the port.
+bc_forward() {
+  local target="$1" port="$2" remote="$3" log="$4" i
+  kubectl --context "$kube_context" -n "$(instance_namespace)" port-forward "$target" "${port}:${remote}" >"$log" 2>&1 &
+  bc_pids+=("$!")
+  for i in $(seq 1 30); do
+    (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && return 0
+    sleep 1
+  done
+  fail "the port-forward to $target never opened on $port: $(cat "$log")"
+}
+
+# bc_old_copy [<extra env JSON>] creates (or replaces) the baseline device-management copy, waits for it,
+# and forwards to it. The env array is added to its container, which is how the trigger control forces the
+# marker onto its sessions.
+bc_old_copy() {
+  local env="${1:-[]}" deploy json live image
+  deploy="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get deployments \
+    -l "devicechain.io/functional-area=device-management" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || deploy=""
+  [[ -n "$deploy" ]] || fail "this instance runs no device-management Deployment"
+  bc_dm_deploy="$deploy"
+  json="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get deployment "$deploy" -o json)" || fail "could not read deployment $deploy"
+  live="$(jq -r '.spec.template.spec.containers[0].image' <<<"$json")"
+  image="$(oldpod_image "$live" "$baseline_tag")" || fail "cannot derive $baseline_tag's device-management image from '$live'"
+  oldpod_manifest "$json" "$bc_copy" "$image" |
+    jq --argjson env "$env" '.spec.template.spec.containers[0].env = ((.spec.template.spec.containers[0].env // []) + $env)' |
+    kubectl --context "$kube_context" -n "$(instance_namespace)" apply -f - >/dev/null ||
+    fail "could not create the $baseline_tag device-management copy ($image)"
+  oldpod_wait "$bc_copy" 300 || {
+    kubectl --context "$kube_context" -n "$(instance_namespace)" logs "deployment/$bc_copy" --tail=30 >&2 2>/dev/null || true
+    fail "THE $baseline_tag DEVICE-MANAGEMENT COPY DID NOT START on the upgraded instance ($image)"
+  }
+}
+
+# bc_wait <token> <half-posted|dispatched|closed> <timeout> waits, through the upgraded pod and in one
+# apiprobe process (one sign-in for the whole wait), until the change reaches that point. A change that
+# PAUSES fails at once: nothing in this drill should trip a threshold or a dependency.
+bc_wait() {
+  "$apiprobe" bulkchange wait "${bc_api[@]}" --url "$bc_new_url" --token "$1" --until "$2" --timeout "$3" >/dev/null ||
+    fail "BULK CHANGE $1 DID NOT REACH '$2' within $3 (above)"
+}
+
+# bc_sql <sql> runs a query on the platform database and prints its rows, unaligned, without command tags.
+bc_sql() {
+  kubectl --context "$kube_context" -n dc-system exec -i "$bc_pg" -- psql -U postgres -d "$rdb_db" -v ON_ERROR_STOP=1 -Atq <<<"$1" | tr -d '\r'
+}
+
+# The drill devices' latest revisions, as report rows. Only live devices: a deleted one cannot answer.
+bc_report_rows_sql() {
+  printf '%s' "SELECT d.token || E'\t' || r.revision || E'\t' || r.digest FROM \"device-management\".devices d
+    JOIN LATERAL (SELECT revision, digest FROM \"device-management\".device_configuration_revisions x
+      WHERE x.device_id = d.id ORDER BY x.revision DESC LIMIT 1) r ON true
+    WHERE d.tenant_id = '$bc_tenant' AND d.token LIKE '$bc_prefix-%' AND d.deleted_at IS NULL ORDER BY d.token"
+}
+
+# How many live drill devices have not yet had their latest revision's report recorded.
+bc_unreported_sql() {
+  printf '%s' "SELECT count(*) FROM \"device-management\".devices d
+    JOIN LATERAL (SELECT revision FROM \"device-management\".device_configuration_revisions x
+      WHERE x.device_id = d.id ORDER BY x.revision DESC LIMIT 1) r ON true
+    LEFT JOIN \"device-management\".device_configuration_states s ON s.device_id = d.id
+    WHERE d.tenant_id = '$bc_tenant' AND d.token LIKE '$bc_prefix-%' AND d.deleted_at IS NULL
+      AND s.reported_revision IS DISTINCT FROM r.revision"
+}
+
+# bc_priors_sql <token>: every posted, unredacted line beside the document its own post minted and the newest
+# one before it, unit-separated (JSON cannot contain 0x1f unescaped).
+bc_priors_sql() {
+  printf '%s' "SELECT l.ordinal || E'\x1f' || l.prior || E'\x1f' || l.posted_value || E'\x1f' ||
+      COALESCE((SELECT r.document FROM \"device-management\".device_configuration_revisions r
+        WHERE r.device_id = l.target_id AND r.revision = l.posted_revision), '') || E'\x1f' ||
+      COALESCE((SELECT r.document FROM \"device-management\".device_configuration_revisions r
+        WHERE r.device_id = l.target_id AND r.revision < l.posted_revision ORDER BY r.revision DESC LIMIT 1), '')
+    FROM \"device-management\".fleet_operation_lines l
+    JOIN \"device-management\".fleet_operations o ON o.id = l.operation_id AND o.tenant_id = l.tenant_id
+    WHERE o.tenant_id = '$bc_tenant' AND o.token = '$1' AND l.posting = 'POSTED' AND l.redacted_at IS NULL
+    ORDER BY l.ordinal"
+}
+
+# bc_answer <tag> publishes every live drill device's APPLIED report for its latest revision, then waits
+# until each is recorded on the device's state.
+bc_answer() {
+  local tag="$1" rows="$bc_dir/reports-$1.tsv" n left end
+  bc_sql "$(bc_report_rows_sql)" >"$rows" || fail "could not read the drill devices' revisions"
+  n="$(grep -c . "$rows" || true)"
+  [[ "$n" -ge 1 ]] || fail "no drill device has a configuration revision to answer for"
+  DC_BC_NATS_PASSWORD="$bc_nats_pass" "$apiprobe" bulkchange report --nats "nats://127.0.0.1:$bc_port_nats" \
+    --user "$bc_nats_user" ${bc_nats_tls[@]+"${bc_nats_tls[@]}"} --instance-id "$bc_instance_id" \
+    --tenant "$bc_tenant" --rows "$rows" || fail "the drill devices' $tag reports could not be published"
+  end=$((SECONDS + 300))
+  while ((SECONDS < end)); do
+    left="$(bc_sql "$(bc_unreported_sql)")" || fail "could not count unrecorded reports"
+    [[ "$left" == 0 ]] && { note "$n drill device(s) answered APPLIED for their latest revision, and every report is recorded ($tag) ✓"; return 0; }
+    sleep 3
+  done
+  fail "$left of $n drill device report(s) were not recorded within 300s ($tag): the device-reports consumer is not keeping up, or refused them"
+}
+
+# bc_nats_setup finds the broker, the instance id and the forwarding area's login, and forwards to the broker.
+bc_nats_setup() {
+  local ns es secret doc nats ca
+  ns="$(instance_namespace)"
+  es="$(kubectl --context "$kube_context" -n "$ns" get deployments -l "devicechain.io/functional-area=event-sources" -o json)" ||
+    fail "could not read the event-sources Deployment"
+  bc_instance_id="$(jq -r '[.items[0].spec.template.spec.containers[].env[]? | select(.name == "DC_INSTANCE_ID") | .value // empty] | first // empty' <<<"$es" | tr -d '\r')"
+  [[ -n "$bc_instance_id" ]] || bc_instance_id="$instance"
+  secret="$(jq -r '[.items[0].spec.template.spec.containers[].env[]? | select(.name == "DC_NATS_USER") | .valueFrom.secretKeyRef.name // empty] | first // empty' <<<"$es" | tr -d '\r')"
+  doc="$(kubectl --context "$kube_context" -n "$ns" get secret "dci-${instance}-config" -o jsonpath='{.data.instance}' | base64 -d)" ||
+    fail "could not read the instance document"
+  if [[ -n "$secret" ]] && bc_nats_user="$(kubectl --context "$kube_context" -n "$ns" get secret "$secret" -o jsonpath='{.data.user}' 2>/dev/null | base64 -d)" && [[ -n "$bc_nats_user" ]]; then
+    bc_nats_pass="$(kubectl --context "$kube_context" -n "$ns" get secret "$secret" -o jsonpath='{.data.password}' | base64 -d)"
+  else
+    bc_nats_user="$(jq -r '[.. | objects | select(has("calloutIssuerPublic")) | .user // empty] | first // empty' <<<"$doc")"
+    bc_nats_pass="$(jq -r '[.. | objects | select(has("calloutIssuerPublic")) | .password // empty] | first // empty' <<<"$doc")"
+  fi
+  [[ -n "$bc_nats_user" && -n "$bc_nats_pass" ]] || fail "found no broker login for event-sources (Secret '${secret:-none}', and no shared login in the document)"
+  nats="$(jq -c '[.. | objects | select(has("streamReplicas") and has("hostname"))] | first // {}' <<<"$doc")"
+  bc_nats_tls=()
+  if [[ "$(jq -r '.tls.enabled // false' <<<"$nats")" == true ]]; then
+    ca="$(jq -r '.tls.ca // empty' <<<"$nats")"
+    if [[ "$ca" != *"BEGIN CERTIFICATE"* ]]; then
+      ca="$(kubectl --context "$kube_context" -n "$ns" get configmap dc-nats-ca -o jsonpath='{.data.ca\.crt}' 2>/dev/null)" || ca=""
+    fi
+    [[ "$ca" == *"BEGIN CERTIFICATE"* ]] || fail "the broker serves TLS and no CA was found for it (document tls.ca, or ConfigMap dc-nats-ca)"
+    printf '%s\n' "$ca" >"$bc_dir/nats-ca.pem"
+    bc_nats_tls=(--ca "$bc_dir/nats-ca.pem" --server-name "$(jq -r '.hostname' <<<"$nats")")
+  fi
+  bc_forward statefulset/dc-nats "$bc_port_nats" 4222 "$bc_dir/forward-nats.log"
+  note "reports go to $bc_instance_id.$bc_tenant.device-reports.<device> as $bc_nats_user (TLS: ${bc_nats_tls[*]:-off})"
+}
+
+# bc_hold_maintenance holds the bulk-change maintenance pass's singleton lock from a psql session, so every
+# replica's pass is skipped, and returns once the session holds it.
+bc_hold_maintenance() {
+  local key i held
+  key="$("$apiprobe" bulkchange lockkey --name "$bc_maint_lock" | tr -d '\r')"
+  [[ "$key" =~ ^-?[0-9]+$ ]] || fail "apiprobe printed no lock key for $bc_maint_lock ('$key')"
+  kubectl --context "$kube_context" -n dc-system exec -i "$bc_pg" -- env PGAPPNAME="$bc_hold_app" \
+    psql -U postgres -d "$rdb_db" -Atq -c "SELECT pg_advisory_lock($key)" -c "SELECT pg_sleep(900)" >/dev/null 2>&1 &
+  bc_pids+=("$!")
+  for i in $(seq 1 60); do
+    held="$(bc_sql "SELECT count(*) FROM pg_stat_activity WHERE application_name = '$bc_hold_app' AND query LIKE '%pg_sleep%'")" || held=0
+    [[ "$held" == 1 ]] && return 0
+    sleep 1
+  done
+  fail "the maintenance lock ($key) was never taken by the control's session, so the control holds nothing"
+}
+
+bc_release_hold() {
+  kubectl --context "$kube_context" -n dc-system exec -i "$1" -- psql -U postgres -d "$rdb_db" -Atq \
+    -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = '$bc_hold_app'" >/dev/null 2>&1
+}
+
+# bc_redaction <token> <ordinals> <redacted|unredacted> waits on those lines' redaction for the bound (see
+# apiprobe bulkchange redaction: `unredacted` passes only when the WHOLE bound goes by with none redacted).
+# The last lines read are left in $bc_dir/lines-redaction.json.
+bc_redaction() {
+  "$apiprobe" bulkchange redaction "${bc_api[@]}" --url "$bc_new_url" --token "$1" --ordinals "$2" --expect "$3" \
+    --within "${bc_repair_bound}s" --out "$bc_dir/lines-redaction.json"
+}
+
+cmd_bulkchange() {
+  need kubectl
+  need jq
+  resolve_baseline_tag
+  [[ -s "$receipt" ]] || fail "$receipt is missing; run 'up' and 'upgrade' first"
+  [[ -x "$apiprobe" ]] || build_apiprobe
+  [[ -x "$target_dcctl" ]] || build_target_dcctl
+  local expected=0 rc gate out email pw tls=() count protocol captures token ords del_posted del_planned
+  local del_ctl="" n mode_key started
+  say "BULK CHANGE — a 2,000-device bulk change through the upgraded pods while $baseline_tag pods write and delete"
+
+  # 0. Is a bulk change expected of this build, and does the instance serve one?
+  rc=0
+  bc_expected "${DC_EXPECT_BULK_CHANGES:-}" "$repo_root/backend/core/ledger/registry.go" || rc=$?
+  case "$rc" in
+  0) expected=1 ;;
+  1) expected=0 ;;
+  *) fail "DC_EXPECT_BULK_CHANGES is '${DC_EXPECT_BULK_CHANGES:-}'; it must be empty, 0 or 1" ;;
+  esac
+  bc_tenant="$(jq -r '.tenant' "$receipt" | tr -d '\r')"
+  [[ -n "$bc_tenant" && "$bc_tenant" != null && "$bc_tenant" =~ ^[A-Za-z0-9_-]+$ ]] || fail "the receipt names no usable tenant ('$bc_tenant')"
+  email="$(jq -r '.identity.email' "$receipt")"
+  pw="$(jq -r '.identity.password' "$receipt")"
+  [[ "$api_scheme" == https ]] && tls=(--tls)
+  # Read through the ingress BEFORE the baseline copy exists: the copy keeps the live pods' labels, and a
+  # baseline pod could answer the readiness query.
+  out="$("$target_dcctl" bulk-change readiness -o json -s "$api_server" ${tls[@]+"${tls[@]}"} -t "$bc_tenant" \
+    --email "$email" --password "$pw" 2>/dev/null)" || true
+  rc=0
+  gate="$(bc_gate "$expected" "$out")" || rc=$?
+  case "$rc:$gate" in
+  0:run) note "readiness lists config.set as executable ✓" ;;
+  0:skip)
+    say "BULK CHANGE — SKIPPED BY NAME: this build does not serve bulk changes (readiness lists no executable kind),
+and nothing expects it to (DC_EXPECT_BULK_CHANGES is unset and the tree's build constant is false). The phase
+runs, and fails rather than skips, as soon as either says otherwise."
+    return 0
+    ;;
+  1:*) fail "BULK CHANGES ARE EXPECTED AND NOT SERVED: $gate.
+Expected because $([[ "${DC_EXPECT_BULK_CHANGES:-}" == 1 ]] && echo 'DC_EXPECT_BULK_CHANGES=1' || echo 'the working tree serves them (core/ledger Served = true)').
+This phase fails rather than skips here, because a served-bulk-change gate that quietly skipped would
+report green over the release it exists to stop." ;;
+  *) fail "dcctl bulk-change readiness could not be read: $gate" ;;
+  esac
+
+  count="${DC_BC_DEVICES:-$bc_spec_count}"
+  [[ "$count" =~ ^[0-9]+$ && "$count" -ge 50 ]] || fail "DC_BC_DEVICES must be a whole number of at least 50"
+  if [[ "$count" -ne "$bc_spec_count" ]]; then
+    [[ "$expected" == 1 ]] && fail "DC_BC_DEVICES=$count, but this run must drive the specified $bc_spec_count devices"
+    warn "DC_BC_DEVICES=$count: NOT the drill's $bc_spec_count devices. A green run at this size is rig development, not evidence."
+  fi
+  protocol="$(bc_protocol_of "$baseline_src")" || fail "cannot tell whether $baseline_tag follows the writer protocol"
+  captures=false
+  bc_captures "$baseline_src" && captures=true
+  note "$baseline_tag: $protocol baseline; report capture: $captures"
+
+  mkdir -p "$bc_dir"
+  rm -f "$bc_dir"/*
+  trap bc_cleanup EXIT
+  bc_pg="$(pg_pod)"
+  rdb_db="$(rdb_database "$bc_pg" fleet_operation_lines)"
+  bc_api=(--server "$api_server" --scheme "$api_scheme" --receipt "$receipt")
+  bc_new_url="http://127.0.0.1:$bc_port_new/graphql"
+  bc_old_url="http://127.0.0.1:$bc_port_old/graphql"
+  bc_old_copy '[]'
+  # 🔴 The upgraded pods through a forward to the ORIGINAL Deployment, which only ever reaches a pod of this
+  # release; the baseline copy keeps the live labels, so the Service and the ingress can reach either.
+  bc_forward "deployment/$bc_dm_deploy" "$bc_port_new" 8080 "$bc_dir/forward-new.log"
+  bc_forward "deployment/$bc_copy" "$bc_port_old" 8080 "$bc_dir/forward-old.log"
+  bc_nats_setup
+
+  # 1. The drill fleet, on a profile of its own, written through an upgraded pod; every device answers for
+  # its current revision before the change, as a connected device would, so capture covers each from before
+  # the post.
+  "$apiprobe" bulkchange seed "${bc_api[@]}" --url "$bc_new_url" --out "$bc_dir/bulk.json" --count "$count" --prefix "$bc_prefix" ||
+    fail "could not seed the drill's $count devices"
+  mode_key="$(jq -r '.modeKey' "$bc_dir/bulk.json" | tr -d '\r')"
+  bc_answer before
+
+  bc_tokens "$count" 5 0 >"$bc_dir/mode-writers"
+  bc_tokens "$count" 5 1 >"$bc_dir/warm-writers"
+  token="$bc_prefix-$(date -u +%H%M%S)"
+  started="$("$apiprobe" bulkchange start "${bc_api[@]}" --url "$bc_new_url" --bulk "$bc_dir/bulk.json" \
+    --token "$token" --value "bulk-$token" --rate 50 --settle-deadline 3600)" ||
+    fail "the bulk change could not be planned, created and started through an upgraded pod"
+  note "bulk change $token RUNNING on $(jq -r '.targetCount' <<<"$started" | tr -d '\r') devices, started through an upgraded pod ✓"
+
+  # 2. Baseline writes on target devices for as long as it posts.
+  local expect_writes=accepted
+  [[ "$protocol" == pre-protocol ]] && expect_writes=refused
+  "$apiprobe" bulkchange oldwrite "${bc_api[@]}" --url "$bc_old_url" --bulk "$bc_dir/bulk.json" \
+    --mode-devices "$bc_dir/mode-writers" --warm-devices "$bc_dir/warm-writers" --expect "$expect_writes" \
+    --stop-file "$bc_dir/stop-writers" --out "$bc_dir/oldwrite.json" --workers 8 >"$bc_dir/oldwrite.log" 2>&1 &
+  local p_writers=$!
+  bc_pids+=("$p_writers")
+
+  # 3. Two deletes through the baseline pod, once about half the lines have posted.
+  bc_wait "$token" half-posted 15m
+  "$apiprobe" bulkchange lines "${bc_api[@]}" --url "$bc_new_url" --token "$token" --out "$bc_dir/lines-mid.json" >/dev/null ||
+    fail "could not read the lines mid-run"
+  ords="$(bc_delete_choice "$(cat "$bc_dir/lines-mid.json")")" ||
+    fail "at half-way the change has no posted and no planned line among the devices no writer touches, so the deletes cannot cover both erasure paths"
+  del_posted="$(sed -n 1p <<<"$ords")"
+  del_planned="$(sed -n 2p <<<"$ords")"
+  if [[ "$protocol" == protocol ]]; then
+    for n in "$del_posted" "$del_planned"; do
+      "$apiprobe" bulkchange delete "${bc_api[@]}" --url "$bc_old_url" --device "$(printf '%s-%05d' "$bc_prefix" "$n")" ||
+        fail "THE $baseline_tag POD COULD NOT DELETE a target device during the bulk change (line $n)"
+    done
+    note "deleted the devices of line $del_posted (posted) and line $del_planned (planned) through the $baseline_tag pod ✓"
+  else
+    # A pod from before the protocol deletes a device's SHARED attributes unmarked, and the guard refuses it.
+    local victim
+    victim="$(printf '%s-%05d' "$bc_prefix" "$del_posted")"
+    rc=0
+    "$apiprobe" bulkchange delete "${bc_api[@]}" --url "$bc_old_url" --device "$victim" >/dev/null 2>&1 || rc=$?
+    [[ "$rc" -ne 0 ]] ||
+      fail "A $baseline_tag POD DELETED A DEVICE with SHARED attributes under the guard; a pod from before the writer protocol must be refused"
+    [[ "$(bc_sql "SELECT count(*) FROM \"device-management\".devices WHERE tenant_id = '$bc_tenant' AND token = '$victim' AND deleted_at IS NULL")" == 1 ]] ||
+      fail "the refused delete left device $victim gone"
+    note "a $baseline_tag pod's delete of a target device is refused, and the device is intact ✓"
+    del_posted="" del_planned=""
+  fi
+
+  # Every line posted; the writers stop and are judged.
+  bc_wait "$token" dispatched 20m
+  : >"$bc_dir/stop-writers"
+  rc=0
+  wait "$p_writers" || rc=$?
+  cat "$bc_dir/oldwrite.log"
+  [[ "$rc" -eq 0 ]] || fail "THE $baseline_tag POD'S WRITES DID NOT ANSWER AS REQUIRED ($expect_writes) while the bulk change posted (exit $rc)"
+  if [[ "$protocol" == protocol ]]; then
+    note "every attribute write through the $baseline_tag pod during the change was accepted, first writes of an absent key among them ✓"
+  else
+    local logs dcap landed
+    logs="$(kubectl --context "$kube_context" -n "$(instance_namespace)" logs "deployment/$bc_copy" --tail=-1 2>&1)" || logs=""
+    dcap="$(grep -cE 'DCAP1|writer protocol marker' <<<"$logs" || true)"
+    [[ "$dcap" -ge 1 ]] || fail "the $baseline_tag pod's writes were refused, but its log shows no DCAP1 refusal: they were refused for some other reason"
+    landed="$(bc_sql "SELECT count(*) FROM \"device-management\".entity_attributes WHERE tenant_id = '$bc_tenant' AND entity_type = 'device' AND value LIKE 'old-%'")"
+    [[ "$landed" == 0 ]] || fail "$landed value(s) written through the $baseline_tag pod are in the database, though every write was answered as refused"
+    note "every attribute write through the $baseline_tag pod was refused by the guard (DCAP1 in its log $dcap time(s), none landed) ✓"
+  fi
+
+  # 4. Redaction within the bound, then the repair control.
+  local deleted=()
+  if [[ -n "$del_posted" ]]; then
+    deleted=("$del_posted" "$del_planned")
+    bc_redaction "$token" "$del_posted,$del_planned" redacted ||
+      fail "THE DELETED DEVICES' LINES WERE NOT REDACTED within ${bc_repair_bound}s (above). A $baseline_tag pod deletes
+without redacting, and the repair pass on the upgraded pods must catch it."
+    note "lines $del_posted and $del_planned of the devices deleted through the $baseline_tag pod were redacted within ${bc_repair_bound}s ✓"
+
+    # THE CONTROL: the same delete with the maintenance pass held off must NOT be redacted by the bound.
+    del_ctl="$(jq -r '[.[] | select(.ordinal % 5 >= 2 and .posting == "POSTED" and (.redacted | not)) | .ordinal] | .[(length / 2 | floor)] // empty' \
+      "$bc_dir/lines-redaction.json" | tr -d '\r')"
+    [[ "$del_ctl" =~ ^[0-9]+$ ]] || fail "no posted line is left for the repair control"
+    bc_hold_maintenance
+    "$apiprobe" bulkchange delete "${bc_api[@]}" --url "$bc_old_url" --device "$(printf '%s-%05d' "$bc_prefix" "$del_ctl")" >/dev/null ||
+      fail "the repair control's delete failed"
+    bc_redaction "$token" "$del_ctl" unredacted ||
+      fail "THE REPAIR CONTROL DID NOT FAIL (above): with the maintenance pass held off, line $del_ctl of a device deleted
+through the $baseline_tag pod was redacted anyway. Either something other than the repair pass redacts it, or
+the control holds a lock the pass no longer takes; either way the redaction check proves less than it says."
+    note "control: with the maintenance pass held off, line $del_ctl was NOT redacted in ${bc_repair_bound}s ✓ (the check can fail)"
+    bc_release_hold "$bc_pg"
+    bc_redaction "$token" "$del_ctl" redacted ||
+      fail "line $del_ctl was still not redacted ${bc_repair_bound}s after the maintenance pass was released"
+    note "released, the repair pass redacted line $del_ctl within ${bc_repair_bound}s ✓"
+    deleted+=("$del_ctl")
+  fi
+
+  # 5. The baseline pod restarts after the upgrade's hook, and must start.
+  bc_restart_copy
+  note "the $baseline_tag pod restarted after the hook and became Ready ✓"
+
+  # 6. The devices answer; every line settles; the roll finishes.
+  bc_answer after
+  bc_wait "$token" closed 10m
+  note "bulk change $token reads DISPATCHED and CLOSED ✓"
+  "$apiprobe" bulkchange lines "${bc_api[@]}" --url "$bc_new_url" --token "$token" --out "$bc_dir/lines-final.json" >/dev/null ||
+    fail "could not read the final lines"
+  local deleted_list judge_args=()
+  deleted_list="$(IFS=,; printf '%s' "${deleted[*]}")"
+  [[ "$captures" == true ]] && judge_args+=(--report-log)
+  "$apiprobe" bulkchange judge --lines "$bc_dir/lines-final.json" --count "$count" --deleted "$deleted_list" ${judge_args[@]+"${judge_args[@]}"} ||
+    fail "THE BULK CHANGE'S LINES DID NOT FINISH AS REQUIRED (above). Every line of a device that survived must settle from
+the device's own answer, and the evidence basis must account for every settled line."
+  note "every line settled; REPORT_LOG + LATEST_STATE == settled$([[ "$captures" == true ]] && echo ', every one REPORT_LOG') ✓"
+  bc_sql "$(bc_priors_sql "$token")" >"$bc_dir/priors-$token.rows" || fail "could not export the posted lines beside their revisions"
+  "$apiprobe" bulkchange priors --rows "$bc_dir/priors-$token.rows" --key "$mode_key" --expect correct --min-rows "$((count / 2))" ||
+    fail "A RECORDED PRIOR IS WRONG (above): a bulk change's before-image disagrees with the device's own revisions,
+which is the record a reversal would restore from."
+  note "every recorded prior matches the revision before its post ✓"
+
+  # 7. The trigger control, on a baseline from before the protocol only.
+  if [[ "$protocol" == pre-protocol ]]; then
+    bc_trigger_control "$count" "$mode_key"
+  else
+    note "the trigger control needs a baseline from before the writer protocol; this run's is $baseline_tag (the workflow's
+baseline input set to such a release runs it)"
+  fi
+
+  # The roll finishes: no baseline pod remains.
+  bc_cleanup
+  trap - EXIT
+  kubectl --context "$kube_context" -n "$(instance_namespace)" wait --for=delete pod -l "$oldpod_label=$bc_copy" --timeout=120s >/dev/null 2>&1 ||
+    fail "the $baseline_tag device-management copy did not terminate"
+  say "BULK CHANGE HOLDS ACROSS THE ROLL — $count devices changed through the upgraded pods while a $baseline_tag pod wrote,
+deleted and restarted; every line settled on evidence, every prior matched the revisions, deleted devices were
+redacted by the repair pass, and each check was shown to fail"
+}
+
+# bc_trigger_control <count> <mode key>: the baseline pod, restarted with the marker forced onto its sessions,
+# toggles the mode key on a hot set of devices while a second change posts to exactly those devices. At least
+# one prior must then be wrong, or the before-image check above proves nothing about an unprotected writer.
+bc_trigger_control() {
+  local count="$1" mode_key="$2" token res accepted
+  say "TRIGGER CONTROL — an unprotected $baseline_tag writer beside the engine must make a prior wrong"
+  oldpod_cleanup "$bc_copy"
+  kubectl --context "$kube_context" -n "$(instance_namespace)" wait --for=delete pod -l "$oldpod_label=$bc_copy" --timeout=120s >/dev/null 2>&1 || true
+  bc_old_copy '[{"name":"PGOPTIONS","value":"-c devicechain.attr_protocol=1"}]'
+  bc_forward "deployment/$bc_copy" "$((bc_port_old + 10))" 8080 "$bc_dir/forward-old-control.log"
+  bc_tokens "$count" 5 0 "$((count / 2))" >"$bc_dir/hot-devices"
+  token="$bc_prefix-h01-$(date -u +%H%M%S)"
+  rm -f "$bc_dir/stop-hot"
+  "$apiprobe" bulkchange oldwrite "${bc_api[@]}" --url "http://127.0.0.1:$((bc_port_old + 10))/graphql" --bulk "$bc_dir/bulk.json" \
+    --mode-devices "$bc_dir/hot-devices" --expect any --toggle --workers 32 \
+    --stop-file "$bc_dir/stop-hot" --out "$bc_dir/oldwrite-hot.json" >"$bc_dir/oldwrite-hot.log" 2>&1 &
+  local p_hot=$!
+  bc_pids+=("$p_hot")
+  sleep 10
+  "$apiprobe" bulkchange start "${bc_api[@]}" --url "$bc_new_url" --bulk "$bc_dir/bulk.json" --devices-file "$bc_dir/hot-devices" \
+    --token "$token" --value "h01-$token" --rate 5 --settle-deadline 3600 >/dev/null ||
+    fail "the trigger control's bulk change could not be started"
+  bc_wait "$token" dispatched 20m
+  : >"$bc_dir/stop-hot"
+  wait "$p_hot" || fail "the unprotected writer failed: $(cat "$bc_dir/oldwrite-hot.log")"
+  res="$(cat "$bc_dir/oldwrite-hot.json")"
+  accepted="$(jq -r '.accepted' <<<"$res" | tr -d '\r')"
+  [[ "$accepted" =~ ^[0-9]+$ && "$accepted" -ge 1 ]] ||
+    fail "the control's setup failed: with the marker forced, the $baseline_tag pod's writes were still refused ($res), so it is not an unprotected writer"
+  note "the $baseline_tag pod, marker forced, made $accepted unprotected write(s) on the change's devices"
+  bc_sql "$(bc_priors_sql "$token")" >"$bc_dir/priors-$token.rows" || fail "could not export the control's lines"
+  "$apiprobe" bulkchange priors --rows "$bc_dir/priors-$token.rows" --key "$mode_key" --expect wrong ||
+    fail "THE TRIGGER CONTROL DID NOT FAIL: with an unprotected writer setting and unsetting the key during every post,
+every recorded prior still matched. Either the race was never hit (a larger hot set or a slower rate makes
+it likelier; rerun), or the before-image check cannot see the hazard it exists for."
+  note "control: with an unprotected writer, at least one recorded prior is WRONG ✓ (the before-image check can fail, and the guard is what holds it)"
+}
+
+# selftest_bulkchange covers the pure halves of the bulkchange phase: the fail-never-skip gate, the
+# expectation (including the build constant it reads from the tree), the baseline's protocol and capture
+# detection, the device selections and the delete choice. Each is handed the input it must refuse as well
+# as the one it must accept. The verdicts on the lines, the priors and the redaction are apiprobe's, and
+# its unit tests hand them their states (backend/tools/apiprobe/bulkchange_test.go).
+selftest_bulkchange() {
+  say "SELF-TEST: the bulkchange phase"
+  local d out rc reg
+  d="$(mktemp -d)"
+  # The gate.
+  [[ "$(bc_gate 0 '{"executableKinds":["config.set"]}')" == run ]] || fail "SELF-TEST FAILED: a served config.set did not run the phase"
+  [[ "$(bc_gate 1 '{"executableKinds":["config.set","other"]}')" == run ]] || fail "SELF-TEST FAILED: a served config.set beside another kind did not run"
+  [[ "$(bc_gate 0 '{"executableKinds":[]}')" == skip ]] || fail "SELF-TEST FAILED: an unserved build that nothing expects did not skip"
+  rc=0; out="$(bc_gate 1 '{"executableKinds":[]}')" || rc=$?
+  [[ "$rc" == 1 && "$out" == *"config.set is not among them"* ]] ||
+    fail "SELF-TEST FAILED: an EXPECTED bulk change that is not served did not fail (rc=$rc: $out)"
+  rc=0; out="$(bc_gate 1 '{"executableKinds":["config.setx"]}')" || rc=$?
+  [[ "$rc" == 1 ]] || fail "SELF-TEST FAILED: a kind that merely contains config.set was read as config.set"
+  for bad in '' 'not json' '{"enforcement":"ENFORCED"}' '{"executableKinds":null}' '{"executableKinds":"config.set"}'; do
+    for e in 0 1; do
+      rc=0; bc_gate "$e" "$bad" >/dev/null || rc=$?
+      [[ "$rc" == 2 ]] || fail "SELF-TEST FAILED: an unreadable readiness ('$bad', expected=$e) was not refused as unreadable (rc=$rc)"
+    done
+  done
+  note "the gate runs a served build, skips an unserved one nothing expects, and FAILS an expected one ✓"
+
+  # The expectation, against planted build constants and the tree's own.
+  printf 'package ledger\n\n// Served is false.\nconst Served = false\n' >"$d/off.go"
+  printf 'package ledger\n\nconst Served = true\n' >"$d/on.go"
+  printf 'package ledger\n\n// const Served = true was the old spelling\nconst Served = false\n' >"$d/comment.go"
+  bc_expected "" "$d/off.go" && fail "SELF-TEST FAILED: an unset variable and Served = false read as expected"
+  bc_expected 0 "$d/off.go" && fail "SELF-TEST FAILED: 0 and Served = false read as expected"
+  bc_expected 1 "$d/off.go" || fail "SELF-TEST FAILED: DC_EXPECT_BULK_CHANGES=1 was not an expectation"
+  bc_expected "" "$d/on.go" || fail "SELF-TEST FAILED: a tree that serves bulk changes did not expect them"
+  bc_expected 0 "$d/on.go" || fail "SELF-TEST FAILED: DC_EXPECT_BULK_CHANGES=0 switched off the tree's own expectation"
+  bc_expected "" "$d/comment.go" && fail "SELF-TEST FAILED: a commented-out 'const Served = true' read as served"
+  for bad in yes true 2 " 1"; do
+    rc=0; bc_expected "$bad" "$d/off.go" || rc=$?
+    [[ "$rc" == 2 ]] || fail "SELF-TEST FAILED: DC_EXPECT_BULK_CHANGES='$bad' was not refused (rc=$rc)"
+  done
+  reg="$repo_root/backend/core/ledger/registry.go"
+  grep -Eq '^[[:space:]]*const[[:space:]]+Served[[:space:]]*=[[:space:]]*(true|false)\b' "$reg" ||
+    fail "SELF-TEST FAILED: $reg no longer declares 'const Served = true|false', so the tree's expectation reads nothing"
+  note "the expectation: DC_EXPECT_BULK_CHANGES=1, or a tree whose build constant serves them; a typo is refused ✓"
+
+  # The baseline's protocol and capture, from planted trees.
+  mkdir -p "$d/pre/backend/services/device-management/model" "$d/post/backend/core/rdb" "$d/testonly/backend/x"
+  printf 'package model\n' >"$d/pre/backend/services/device-management/model/api.go"
+  printf 'package rdb\nconst m = "SELECT set_config(%s, %s, true)"\n' "'devicechain.attr_protocol'" "'1'" >"$d/post/backend/core/rdb/lock.go"
+  printf 'package x\nconst m = "devicechain.attr_protocol"\n' >"$d/testonly/backend/x/a_test.go"
+  [[ "$(bc_protocol_of "$d/pre")" == pre-protocol ]] || fail "SELF-TEST FAILED: a tree with no marker read as following the protocol"
+  [[ "$(bc_protocol_of "$d/post")" == protocol ]] || fail "SELF-TEST FAILED: a tree that sets the marker read as pre-protocol"
+  [[ "$(bc_protocol_of "$d/testonly")" == pre-protocol ]] || fail "SELF-TEST FAILED: a marker in a TEST file read as the protocol"
+  bc_protocol_of "$d/nothing" >/dev/null 2>&1 && fail "SELF-TEST FAILED: a missing tree was given a protocol"
+  [[ "$(bc_protocol_of "$repo_root")" == protocol ]] || fail "SELF-TEST FAILED: this tree does not read as following the writer protocol"
+  bc_captures "$d/pre" && fail "SELF-TEST FAILED: a tree without capture read as capturing"
+  bc_captures "$repo_root" || fail "SELF-TEST FAILED: this tree's report capture was not found"
+  note "a baseline's protocol and capture are read from its own code, never a test file ✓"
+
+  # The selections.
+  local bc_prefix_saved="$bc_prefix"
+  [[ "$(bc_tokens 12 5 0 | tr '\n' ' ')" == "bcdrill-00005 bcdrill-00010 " ]] || fail "SELF-TEST FAILED: the mode writers are not n % 5 == 0"
+  [[ "$(bc_tokens 12 5 1 | tr '\n' ' ')" == "bcdrill-00001 bcdrill-00006 bcdrill-00011 " ]] || fail "SELF-TEST FAILED: the warm writers are not n % 5 == 1"
+  [[ "$(bc_tokens 20 5 0 10 | tr '\n' ' ')" == "bcdrill-00005 bcdrill-00010 " ]] || fail "SELF-TEST FAILED: the hot set does not stop at its bound"
+  [[ "$bc_prefix_saved" == bcdrill ]] || fail "SELF-TEST FAILED: the drill prefix is not the one apiprobe's seed writes"
+  local lines='[{"ordinal":1,"posting":"POSTED"},{"ordinal":2,"posting":"POSTED"},{"ordinal":3,"posting":"POSTED"},
+    {"ordinal":5,"posting":"POSTED"},{"ordinal":7,"posting":"PLANNED"},{"ordinal":9,"posting":"PLANNED"},{"ordinal":10,"posting":"PLANNED"},{"ordinal":11,"posting":"PLANNED"}]'
+  [[ "$(bc_delete_choice "$lines" | tr '\n' ' ')" == "2 9 " ]] ||
+    fail "SELF-TEST FAILED: the delete choice is not the first posted and the last planned undriven line ($(bc_delete_choice "$lines" | tr '\n' ' '))"
+  bc_delete_choice '[{"ordinal":2,"posting":"POSTED"},{"ordinal":5,"posting":"PLANNED"},{"ordinal":6,"posting":"PLANNED"}]' >/dev/null &&
+    fail "SELF-TEST FAILED: a delete choice was made with no planned line among the undriven devices"
+  bc_delete_choice '[{"ordinal":7,"posting":"PLANNED"}]' >/dev/null && fail "SELF-TEST FAILED: a delete choice was made with no posted line"
+  bc_delete_choice 'not json' >/dev/null && fail "SELF-TEST FAILED: a delete choice was made from no JSON"
+  note "writers own n % 5 in {0,1}; deletes take the first posted and last planned of the rest ✓"
+
+  # The SQL the phase reads its verdicts from, and the lock the repair control holds.
+  local sql
+  bc_tenant="tenant-x"
+  sql="$(bc_priors_sql tok)"
+  [[ "$sql" == *"l.posting = 'POSTED' AND l.redacted_at IS NULL"* && "$sql" == *"r.revision = l.posted_revision"* &&
+     "$sql" == *"r.revision < l.posted_revision ORDER BY r.revision DESC LIMIT 1"* && "$sql" == *"o.token = 'tok'"* ]] ||
+    fail "SELF-TEST FAILED: the priors export no longer pairs each posted line with its own and its preceding revision"
+  [[ "$(bc_report_rows_sql)" == *"d.deleted_at IS NULL"* && "$(bc_unreported_sql)" == *"IS DISTINCT FROM r.revision"* ]] ||
+    fail "SELF-TEST FAILED: the report export answers for deleted devices, or the recorded-report wait counts nothing"
+  [[ "$bc_maint_lock" == device-management-bulk-change-maintenance ]] || fail "SELF-TEST FAILED: the repair control holds a different lock name"
+  grep -qF "SingletonPass(ctx, \"$bc_maint_lock\"" "$repo_root/backend/services/device-management/model/api_fleet_retention.go" ||
+    fail "SELF-TEST FAILED: the bulk-change maintenance pass no longer takes '$bc_maint_lock', so the repair control would hold a lock nothing asks for"
+  note "the priors and report exports read what the verdicts need, and the repair control holds the pass's own lock ✓"
+  rm -rf "$d"
+}
+
 # selftest_v19 covers the pure halves of the two phases above: the manifest builder, the image
 # derivation and the inert verdict, each against the input it must refuse as well as the one it
 # must accept.
@@ -4477,6 +5184,7 @@ commit-ish without the chart, or this check has quietly stopped checking."
   selftest_superuser_password
   selftest_baseline_writable
   selftest_v19
+  selftest_bulkchange
 
   say "SELF-TEST PASSED"
 }
@@ -4906,6 +5614,7 @@ oldpods) cmd_oldpods ;;
 executor) cmd_executor ;;
 attrlock) cmd_attrlock ;;
 attrguard) cmd_attrguard ;;
+bulkchange) cmd_bulkchange ;;
 selftest) selftest ;;
 down) cmd_down ;;
 all)
@@ -4969,7 +5678,8 @@ and event history belongs to the DR drill, not this one."
   cmd_executor
   cmd_attrlock
   cmd_attrguard
+  cmd_bulkchange
   say "UPGRADE DRILL COMPLETE — data survived, the operator is in step, and the broker and event store carry this release's settings."
   ;;
-*) fail "unknown command ${1}; try mode | up | upgrade | logins | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | infra | oldpods | executor | attrlock | attrguard | all | selftest | down" ;;
+*) fail "unknown command ${1}; try mode | up | upgrade | logins | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | infra | oldpods | executor | attrlock | attrguard | bulkchange | all | selftest | down" ;;
 esac

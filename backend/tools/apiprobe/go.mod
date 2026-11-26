@@ -10,6 +10,7 @@ replace github.com/devicechain-io/dc-microservice => ../../core
 require (
 	github.com/devicechain-io/dc-microservice v0.0.0-00010101000000-000000000000
 	github.com/graph-gophers/graphql-go v1.11.1
+	github.com/nats-io/nats.go v1.56.0
 	github.com/stretchr/testify v1.12.1
 	gorm.io/driver/postgres v1.6.3
 	gorm.io/gorm v1.31.2
@@ -20,6 +21,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/eclipse/paho.mqtt.golang v1.5.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/friendsofgo/graphiql v0.2.2 // indirect
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7 // indirect
@@ -40,7 +42,6 @@ require (
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nats-io/nats.go v1.56.0 // indirect
 	github.com/nats-io/nkeys v0.4.17 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/prometheus/client_golang v1.25.0 // indirect
