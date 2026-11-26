@@ -130,12 +130,15 @@ func TestRestoreFlushesAPartialLineAndStopsTheReader(t *testing.T) {
 		t.Fatalf("stderr before restore: %v, %v", fi, err)
 	}
 	start := time.Now()
-	stopped := restore()
+	result := restore()
 	if took := time.Since(start); took > 3*processOutputDrain {
 		t.Errorf("restore took %s", took)
 	}
-	if !stopped {
+	if !result.stopped {
 		t.Error("the reader was left blocked on the pipe a child holds")
+	}
+	if result.dropped {
+		t.Error("the final partial line was reported dropped")
 	}
 	got, err := os.ReadFile(real)
 	if err != nil {

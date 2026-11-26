@@ -12,14 +12,19 @@ import (
 )
 
 // processOutputDrain bounds how long restoring the process's streams waits for the
-// redacting pipe to reach its end. A child that inherited the pipe (an exec plugin's
-// helper still running, say) keeps it open; the run is not held hostage to it. A
-// variable so a test can shorten it.
+// redacting pipe and its destination to drain. Neither a child holding the pipe
+// open nor a stalled stderr consumer may hold the run hostage. A variable so a
+// test can shorten it.
 var processOutputDrain = 2 * time.Second
+
+type processOutputResult struct {
+	stopped bool // the pipe reader exited (a destination Write may still be blocked)
+	dropped bool // received output was not fully delivered
+}
 
 // redirectProcessOutput points os.Stdout and os.Stderr at a pipe whose every line
 // is written to the current os.Stderr through redact, and returns what puts them
-// back. restore reports whether the reader has stopped.
+// back. restore reports whether the reader stopped and whether output was dropped.
 //
 // 🔴 THIS IS FOR WHAT dcctl DOES NOT HAND OUT ITSELF. The engine's console is
 // already events. What remains is anything that reaches the process's streams
@@ -28,56 +33,69 @@ var processOutputDrain = 2 * time.Second
 // both streams go there. Lines are redacted whole, so a value split across two
 // writes of one line is still found.
 //
-// 🔴 RESTORING NEVER LOSES WHAT WAS READ, AND NEVER LEAVES THE READER BEHIND. When the
-// pipe reaches its end, a final line with no newline is written as it is. When a
-// child keeps the pipe open past processOutputDrain, the partial line already read is
-// written, redacted, the read end is closed so the reader's blocked read returns, and
-// the reader stops. Only bytes still in the operating system's pipe, which the reader
-// never received, are not written.
-func redirectProcessOutput(redact func(string) string) (restore func() (stopped bool), err error) {
+// Every received byte is retained, in order, through the drain bound, including
+// a final line without a newline. After the first bound the read end is closed,
+// releasing a reader whose pipe a child still holds. A second bound lets the
+// destination finish; only then may pending output be dropped, recorded in the
+// result. A permanently blocked io.Writer cannot be canceled: at most its one
+// in-flight Write is left behind, holding no reader lock.
+func redirectProcessOutput(redact func(string) string) (restore func() processOutputResult, err error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
 	out, errOut := os.Stdout, os.Stderr
-	pr := &pipeReader{dest: errOut, redact: redact, done: make(chan struct{})}
+	pr := newPipeReader(errOut, redact)
 	go pr.run(r)
 	os.Stdout, os.Stderr = w, w
-	return func() bool {
+	return func() processOutputResult {
 		os.Stdout, os.Stderr = out, errOut
 		_ = w.Close()
 		select {
 		case <-pr.done:
 			_ = r.Close()
-			return true
+			return pr.result()
 		case <-time.After(processOutputDrain):
 		}
-		// A child still holds the pipe. What was read is written now; the read end
-		// is closed, which makes the reader's read return; and the reader stops.
-		pr.stop()
+		// Closing the read end releases Read, independently of the destination.
+		// The reader queues its final partial line before it exits.
 		_ = r.Close()
 		select {
 		case <-pr.done:
-			return true
+			return pr.result()
 		case <-time.After(processOutputDrain):
-			return false
+			pr.discard()
+			return pr.result()
 		}
 	}, nil
 }
 
-// pipeReader copies the pipe to dest a line at a time, redacted.
+// pipeReader queues whole lines for one writer, preserving their order. Neither
+// the reader nor stop waits on dest. Redaction and Write run outside mu.
 type pipeReader struct {
-	dest   io.Writer
-	redact func(string) string
-	done   chan struct{}
+	dest     io.Writer
+	redact   func(string) string
+	done     chan struct{}
+	readDone chan struct{}
+	wake     chan struct{}
 
-	mu      sync.Mutex
-	partial []byte // read, not yet written: the current line
-	stopped bool   // written out at restore; nothing more is written
+	mu        sync.Mutex
+	partial   []byte // read, not yet queued: the current line
+	pending   []string
+	stopped   bool // no more input; the final partial line is queued
+	writing   bool // one line has been handed to dest
+	dropped   bool
+	discarded bool // the drain bound expired; no more queued writes may start
+}
+
+func newPipeReader(dest io.Writer, redact func(string) string) *pipeReader {
+	return &pipeReader{dest: dest, redact: redact, done: make(chan struct{}),
+		readDone: make(chan struct{}), wake: make(chan struct{}, 1)}
 }
 
 func (p *pipeReader) run(r io.Reader) {
-	defer close(p.done)
+	go p.write()
+	defer func() { p.stop(); close(p.readDone) }()
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := r.Read(buf)
@@ -85,17 +103,17 @@ func (p *pipeReader) run(r io.Reader) {
 			p.take(buf[:n])
 		}
 		if err != nil {
-			p.stop() // the end: a final line with no newline still goes out
 			return
 		}
 	}
 }
 
-// take adds b to the current line and writes every complete line.
+// take retains all of b before handing any complete lines to the writer.
 func (p *pipeReader) take(b []byte) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.stopped {
+	if p.discarded {
+		p.dropped = p.dropped || len(b) > 0
 		return
 	}
 	p.partial = append(p.partial, b...)
@@ -104,12 +122,13 @@ func (p *pipeReader) take(b []byte) {
 		if i < 0 {
 			return
 		}
-		_, _ = io.WriteString(p.dest, p.redact(string(p.partial[:i+1])))
+		p.pending = append(p.pending, string(p.partial[:i+1]))
 		p.partial = p.partial[i+1:]
+		p.notify()
 	}
 }
 
-// stop writes the partial line, redacted, and ends the copying.
+// stop queues the final partial line and never waits for a destination write.
 func (p *pipeReader) stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -117,8 +136,68 @@ func (p *pipeReader) stop() {
 		return
 	}
 	p.stopped = true
-	if len(p.partial) > 0 {
-		_, _ = io.WriteString(p.dest, p.redact(string(p.partial)))
+	if len(p.partial) > 0 && !p.discarded {
+		p.pending = append(p.pending, string(p.partial))
 		p.partial = nil
 	}
+	p.notify()
+}
+
+func (p *pipeReader) notify() {
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (p *pipeReader) write() {
+	defer func() { <-p.readDone; close(p.done) }()
+	for {
+		p.mu.Lock()
+		if p.discarded || (p.stopped && len(p.pending) == 0) {
+			p.mu.Unlock()
+			return
+		}
+		if len(p.pending) == 0 {
+			p.mu.Unlock()
+			<-p.wake
+			continue
+		}
+		line := p.pending[0]
+		p.pending[0] = ""
+		p.pending = p.pending[1:]
+		p.writing = true
+		p.mu.Unlock()
+
+		line = p.redact(line)
+		n, err := io.WriteString(p.dest, line)
+
+		p.mu.Lock()
+		p.writing = false
+		p.dropped = p.dropped || err != nil || n != len(line)
+		p.mu.Unlock()
+	}
+}
+
+// discard abandons pending output only after restore's drain bound expires.
+// An arbitrary io.Writer has no cancellation API; its current Write may remain.
+func (p *pipeReader) discard() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.discarded = true
+	p.dropped = p.dropped || p.writing || len(p.pending) > 0 || len(p.partial) > 0
+	p.pending, p.partial = nil, nil
+	p.notify()
+}
+
+func (p *pipeReader) result() processOutputResult {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	result := processOutputResult{dropped: p.dropped}
+	select {
+	case <-p.readDone:
+		result.stopped = true
+	default:
+	}
+	return result
 }
