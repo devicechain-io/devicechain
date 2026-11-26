@@ -316,13 +316,28 @@ func fleetSweepPageBeforeForTest(db *gorm.DB, tenant string, after uint, limit i
 // change) and the read as it is now without its index.
 func TestSettlementSweepPageCostIsBoundedOnPostgres(t *testing.T) {
 	api := NewApi(newPostgresRdbManager(t))
+	// Two layouts of the same rows, because which plan a join-first read gets depends on them.
+	// Interleaved: the tenant's history alternates with other tenants' settled changes, four of
+	// theirs to each of its own, as ids are handed out on a shared instance. Contiguous: one
+	// tenant's changes created back to back, the others' after. Either way a plan that is not
+	// tenant-led reads far more than a page, by id or by operation.
+	for _, interleaved := range []bool{true, false} {
+		t.Run(fmt.Sprintf("interleaved=%v", interleaved), func(t *testing.T) { sweepPageCost(t, api, interleaved) })
+	}
+}
+
+func sweepPageCost(t *testing.T, api *Api, interleaved bool) {
 	f := newCostFixture(t, api)
-	// The tenant's history interleaves with other tenants' settled changes, four of theirs to
-	// each of its own, as ids are handed out on a shared instance. Whichever way a plan that is
-	// not tenant-led reads, by id or by operation, it then reads far more than a page.
 	for i := range 24 {
 		f.addOperations(t, f.active, "history", 1, 1)
-		f.addOperations(t, fmt.Sprintf("%snoise%03d", f.prefix, i), "noise", 4, 1)
+		if interleaved {
+			f.addOperations(t, fmt.Sprintf("%snoise%03d", f.prefix, i), "noise", 4, 1)
+		}
+	}
+	if !interleaved {
+		for i := range 24 {
+			f.addOperations(t, fmt.Sprintf("%snoise%03d", f.prefix, i), "noise", 4, 1)
+		}
 	}
 	f.addOperations(t, f.active, "running", 2, 1)
 	// A newer release's operation's lines are never a sweep candidate, and do not shorten a page.
@@ -354,6 +369,8 @@ func TestSettlementSweepPageCostIsBoundedOnPostgres(t *testing.T) {
 	for i, from := range starts {
 		pages[i], now[i] = page(f.db, from)
 		require.Len(t, pages[i], fleetSettlementBatch)
+		// The guarantee: a page reads the page.
+		require.LessOrEqual(t, now[i].LineRows, int64(fleetSettlementBatch), "page %d read more than a page: %+v", i, now[i])
 	}
 	// Before this change there was no tenant-led index and the page was cut after the join.
 	rollback := errors.New("roll back the dropped index")
@@ -376,7 +393,5 @@ func TestSettlementSweepPageCostIsBoundedOnPostgres(t *testing.T) {
 		// several pages' worth of lines to return one.
 		require.GreaterOrEqual(t, before[i].LineRows, int64(4*fleetSettlementBatch))
 		require.GreaterOrEqual(t, unindexed[i].LineRows, int64(4*fleetSettlementBatch))
-		// The guarantee: a page reads the page.
-		require.LessOrEqual(t, now[i].LineRows, int64(fleetSettlementBatch))
 	}
 }
