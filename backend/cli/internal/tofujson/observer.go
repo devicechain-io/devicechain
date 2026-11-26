@@ -24,10 +24,9 @@ import (
 	"strings"
 )
 
-// MaxLine is the longest line the observer reads. A longer one is skipped whole,
-// up to its newline, and counted; the lines after it are read as usual. OpenTofu's
-// messages are a few hundred bytes, so anything near this is not a message dcctl
-// needs, and holding it would let one runaway line grow the process without bound.
+// MaxLine bounds the buffer for an ordinary message. Longer lines are counted
+// and drained to their newline. Diagnostics retain bounded text and CNPG retry
+// evidence through a streaming scanner; other oversized messages are discarded.
 const MaxLine = 256 << 10
 
 // Progress is a snapshot of one apply's resource actions.
@@ -58,6 +57,7 @@ type Observer struct {
 
 	pending  []byte
 	skipping bool // inside a line longer than MaxLine, until its newline
+	large    *oversizedDiagnostic
 
 	progress Progress
 	errs     []string
@@ -96,12 +96,7 @@ func (o *Observer) Write(p []byte) (int, error) {
 		}
 		o.hold(p[:i])
 		p = p[i+1:]
-		if o.skipping {
-			o.skipping = false
-		} else {
-			o.line(o.pending)
-		}
-		o.pending = o.pending[:0]
+		o.finishLine()
 	}
 	return n, nil
 }
@@ -109,11 +104,15 @@ func (o *Observer) Write(p []byte) (int, error) {
 // hold appends part of a line, switching to skipping once it is over MaxLine.
 func (o *Observer) hold(b []byte) {
 	if o.skipping {
+		o.large.write(b)
 		return
 	}
 	if len(o.pending)+len(b) > MaxLine {
 		o.Oversized++
 		o.skipping = true
+		o.large = &oversizedDiagnostic{}
+		o.large.write(o.pending)
+		o.large.write(b)
 		o.pending = o.pending[:0]
 		return
 	}
@@ -123,10 +122,24 @@ func (o *Observer) hold(b []byte) {
 // Close reads a last line that had no newline. A stream cut off mid-message leaves
 // a fragment that is not JSON, which is counted as malformed like any other.
 func (o *Observer) Close() {
-	if !o.skipping && len(o.pending) > 0 {
+	if o.skipping || len(o.pending) > 0 {
+		o.finishLine()
+	}
+	o.pending = nil
+}
+
+func (o *Observer) finishLine() {
+	if o.skipping {
+		if text, isError := o.large.result(); text != "" {
+			_, _ = fmt.Fprintf(o.diags, "\n%s\n", text)
+			if isError {
+				o.errs = append(o.errs, text)
+			}
+		}
+	} else {
 		o.line(o.pending)
 	}
-	o.pending, o.skipping = nil, false
+	o.pending, o.skipping, o.large = o.pending[:0], false, nil
 }
 
 // Progress is the latest snapshot.

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/hashicorp/terraform-exec/tfexec"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -71,7 +70,7 @@ type barmanHealingApplier struct {
 	namespace string
 }
 
-func (b barmanHealingApplier) Apply(ctx context.Context, opts ...tfexec.ApplyOption) error {
+func (b barmanHealingApplier) Apply(ctx context.Context, opts ...applyOption) error {
 	return withBarmanCertHealer(ctx, b.kubeContext, b.namespace, func() error { return b.tf.Apply(ctx, opts...) })
 }
 
