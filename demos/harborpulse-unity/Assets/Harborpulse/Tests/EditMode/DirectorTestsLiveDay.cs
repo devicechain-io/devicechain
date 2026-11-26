@@ -82,6 +82,27 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(exact.Evaluate(early, new EvidenceContext("run", 19.75, 21.2, 900)).Holds, Is.True, "the membership read after the tally closed is the newest read of it");
         }
 
+        // The platform's alarms are read a few seconds after they are raised. "Exactly the six that went quiet" was recorded on a live day
+        // with all six alarms occurred inside its interval (sim 20.42, interval to 20.55) and first seen at sim 20.67; bounding a set's
+        // records by the poll that saw them dropped all six and the claim could never hold. A record is placed by when it happened.
+        [Test]
+        public void ASetPlacesAnAlarmByWhenItHappenedNotByWhenAPollFirstSawIt()
+        {
+            var exact = DirectorKit.Need("{\"set\":{\"observed\":{\"alarm\":{\"key\":\"light-silent\",\"status\":\"RAISED\",\"mode\":\"occurred\"}},\"expected\":{\"membership\":{\"identity\":\"east-absence\",\"mode\":\"current\"}},\"field\":\"device\",\"expectedField\":\"tokens\",\"stream\":\"alarms\",\"fromSim\":19.75,\"toSim\":20.55}}");
+            var store = new ObservationStore();
+            store.Add(DirectorKit.O("membership", id: "east-absence", sim: 20.7, wall: 882, sets: new Dictionary<string, string[]> { ["tokens"] = new[] { "lamp" } }));
+            store.Add(DirectorKit.O("alarm", "lamp", "light-silent", "RAISED", sim: 20.42, wall: 880, occurred: 864));
+            store.AddCoverage(new CoverageInterval("run", "alarms", 19, 22, false));
+            var late = new EvidenceContext("run", 19.75, 21.2, 900, nowSim: 21.0);
+            Assert.That(exact.Evaluate(store, late).Holds, Is.True, "occurred inside the interval, first read after its end");
+            // CONTROL: one that happened after the interval's end is still outside it, however it was read
+            var after = new ObservationStore();
+            after.Add(DirectorKit.O("membership", id: "east-absence", sim: 20.7, wall: 882, sets: new Dictionary<string, string[]> { ["tokens"] = new[] { "lamp" } }));
+            after.Add(DirectorKit.O("alarm", "lamp", "light-silent", "RAISED", sim: 20.62, wall: 880, occurred: 877));
+            after.AddCoverage(new CoverageInterval("run", "alarms", 19, 22, false));
+            Assert.That(exact.Evaluate(after, late).Holds, Is.False, "an alarm that happened after the interval is not in it");
+        }
+
         // The signed rollout as the live day ran it: one charger's attempt takes about 35 wall seconds, so the first target succeeds at
         // 02:38 (the scripted timeline said 02:09) and six chargers, two at a time, finish near 03:50 (scripted: 02:36).
         static Scheduler RolloutNight(string storyText)

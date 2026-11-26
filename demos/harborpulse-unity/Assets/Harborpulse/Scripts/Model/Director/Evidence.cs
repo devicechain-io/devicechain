@@ -325,6 +325,9 @@ namespace DeviceChain.Harborpulse.Model.Director
                 return value;
             }
             string StableMatch(string field) => Match.TryGetValue(field, out var value) && value != "$window.identity" ? Resolve(value, null) : null;
+            // Inside a set (RestrictInterval) a record that carries its own occurrence is placed by WHEN IT HAPPENED, not by when a poll
+            // first saw it: the platform's alarms are read a few seconds after they are raised, so bounding them by the read's instant
+            // dropped every one that landed past the interval's end and 'exactly the six that went quiet' could not hold on a live day.
             var from = Math.Max(FromSim ?? c.FromSim, c.RestrictInterval ? c.FromSim : double.NegativeInfinity);
             // A set's interval bounds what happened in it. A snapshot it is compared with is the newest read, and every poll
             // moves that read's instant on: held to the interval's end, a claim could hold only until the next poll after it
@@ -333,7 +336,7 @@ namespace DeviceChain.Harborpulse.Model.Director
             var latest = c.RestrictInterval && Mode == "current";
             var to = latest ? double.PositiveInfinity : Math.Min(ToSim ?? c.ToSim, c.RestrictInterval ? c.ToSim : double.PositiveInfinity);
             var available = store.Query(c.Run, Kind, Source, Mode == "current", c.NowS, from, to, StableMatch("device"), StableMatch("key"));
-            return available.Where(o => (!c.RestrictInterval || (o.Sim >= c.FromSim && (latest || o.Sim <= c.ToSim))) && (Before == null || (c.Trigger != null && c.Trigger.HasOccurrence && o.HasOccurrence && o.OccurredAtS < c.Trigger.OccurredAtS)) && (After == null || (c.Trigger != null && c.Trigger.HasOccurrence && o.HasOccurrence && o.OccurredAtS > c.Trigger.OccurredAtS)) && o.Sim >= (FromSim ?? c.FromSim) && (latest || o.Sim <= (ToSim ?? c.ToSim)) && c.ObservedSim(o) >= (FromSim ?? c.FromSim) && (latest || c.ObservedSim(o) <= c.ToSim) &&
+            return available.Where(o => (!c.RestrictInterval || (o.Sim >= c.FromSim && (latest || o.Sim <= c.ToSim))) && (Before == null || (c.Trigger != null && c.Trigger.HasOccurrence && o.HasOccurrence && o.OccurredAtS < c.Trigger.OccurredAtS)) && (After == null || (c.Trigger != null && c.Trigger.HasOccurrence && o.HasOccurrence && o.OccurredAtS > c.Trigger.OccurredAtS)) && o.Sim >= (FromSim ?? c.FromSim) && (latest || o.Sim <= (ToSim ?? c.ToSim)) && c.ObservedSim(o) >= (FromSim ?? c.FromSim) && (latest || (c.RestrictInterval && o.HasOccurrence) || c.ObservedSim(o) <= c.ToSim) &&
                 (!MaxAgeS.HasValue || c.NowS - o.ObservedAtS <= MaxAgeS) && (!Gte.HasValue || double.TryParse(o.Field("value"), NumberStyles.Float, CultureInfo.InvariantCulture, out var numeric) && numeric >= Gte.Value) && Present.All(f => !string.IsNullOrEmpty(o.Field(f))) && Match.All(m =>
                     o.Field(m.Key) != null && o.Field(m.Key) == Resolve(m.Value, o)));
         }

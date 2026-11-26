@@ -70,7 +70,9 @@ namespace DeviceChain.Harborpulse.Tests
                 var said = string.Join(" ", cut.Segments.SelectMany(s => s.Vo.Takes).Select(t => t.Text));
                 foreach (var never in new[] { "Exactly", "exactly", "quiet morning", "never more than", "Nothing hidden", "damaged" })
                     Assert.That(said, Does.Not.Contain(never), cut.Id + " says \"" + never + "\"");
-                Assert.That(cut.Segments.SelectMany(s => s.Captions).Select(c => c.Id), Has.No.Member("exact"));
+                // "Exactly the six that went quiet." is a set claim: the long cut offers it (it holds once the alarms are read), the short cut has no room
+                if (cut.Id == "c90") Assert.That(cut.Segments.SelectMany(s => s.Captions).Select(c => c.Id), Has.No.Member("exact"));
+                else Assert.That(cut.Segments.SelectMany(s => s.Captions).Select(c => c.Id), Has.Member("exact"));
                 Assert.That(cut.Segments.Any(s => s.Page == "3c"), Is.False, "the own-session devices tour stays out");
                 // page 1's "A quiet morning raises nothing." is not offered: it is not true of the recorded day
                 Assert.That(cut.Segments.Where(s => s.Page == "1").SelectMany(s => s.Captions).Select(c => c.Id), Has.No.Member("quiet"));
