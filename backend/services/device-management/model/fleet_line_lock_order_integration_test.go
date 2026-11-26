@@ -27,8 +27,11 @@ func TestFleetTwoDeletionsOrderSharedEventLocksOnPostgres(t *testing.T) {
 	other.ID, other.Token = 0, "shared-event-other"
 	require.NoError(t, db.Create(&other).Error)
 	t.Cleanup(func() {
-		_, err := p.api.AbortFleetOperation(p.ctx, other.Token, "test-cleanup")
-		require.NoError(t, err)
+		// other is a hand-made fixture with no runtime row, so it cannot go through
+		// AbortFleetOperation; remove its rows so nothing live is left behind.
+		require.NoError(t, db.Where("operation_id = ?", other.ID).Delete(&FleetOperationEvent{}).Error)
+		require.NoError(t, db.Where("operation_id = ?", other.ID).Delete(&FleetOperationLine{}).Error)
+		require.NoError(t, db.Unscoped().Delete(&other).Error)
 	})
 	otherLines := append([]FleetOperationLine(nil), p.lines...)
 	for i := range otherLines {
