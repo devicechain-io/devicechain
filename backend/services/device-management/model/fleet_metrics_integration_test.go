@@ -6,6 +6,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -14,6 +15,21 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+// newBulkChangePG is newPostPG for these tests, aborting the operation at the end: the
+// package shares one database, and an operation left RUNNING or PAUSED keeps one of the
+// instance's dispatching slots from every later test.
+func newBulkChangePG(t *testing.T) *postPG {
+	t.Helper()
+	p := newBulkChangePG(t)
+	t.Cleanup(func() {
+		attributeBeforeCommitHook = nil
+		if _, err := p.api.AbortFleetOperation(context.WithoutCancel(p.ctx), p.op.Token, alice.Name); err != nil {
+			t.Errorf("abort the test operation: %v", err)
+		}
+	})
+	return p
+}
 
 func pgExecutor(t *testing.T, api *Api, p *postPG) string {
 	t.Helper()
@@ -32,7 +48,7 @@ func pgRuntime(t *testing.T, p *postPG, changes map[string]any) {
 // paused at 24 h. Time passing is the stored stamps moving back on the database clock; this process's
 // clock is skewed by a day and must never be read.
 func TestBulkChangeExecutorI15OnTheDatabaseClock(t *testing.T) {
-	p := newPostPG(t, "v1")
+	p := newBulkChangePG(t)
 	standing := &fakeStanding{answer: map[string]bool{alice.Name: true}}
 	p.api.PrincipalStanding = standing
 	replica := NewApi(p.api.RDB)
@@ -128,7 +144,7 @@ func TestBulkChangeBusyDeviceAndBusyRowAreCountedApart(t *testing.T) {
 		{"ATTRIBUTE_ROW_BUSY", "retryable", FleetHoldPostError},
 	} {
 		t.Run(tc.code, func(t *testing.T) {
-			p := newPostPG(t, "v1")
+			p := newBulkChangePG(t)
 			p.api.PrincipalStanding = &fakeStanding{answer: map[string]bool{alice.Name: true}}
 			require.NoError(t, p.api.RDB.DB(p.ctx).Model(&FleetOperation{}).Where("id = ?", p.op.ID).Update("eff_posts_per_second", 1).Error)
 			if tc.code == "ATTRIBUTE_ROW_BUSY" {
@@ -162,7 +178,7 @@ func TestBulkChangeBusyDeviceAndBusyRowAreCountedApart(t *testing.T) {
 
 // A control request that cannot drain in-flight posting is counted by its action.
 func TestBulkChangeFencePendingIsCounted(t *testing.T) {
-	p := newPostPG(t, "v1")
+	p := newBulkChangePG(t)
 	poster := p.api.RDB.DB(p.ctx).Begin()
 	require.NoError(t, poster.Error)
 	defer poster.Rollback()
