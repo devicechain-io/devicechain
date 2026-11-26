@@ -311,6 +311,11 @@ func TestOverlappingTargetExecutionsDoNotDeadlock(t *testing.T) {
 	replica.KillFeed = api.KillFeed
 	apis := []*Api{api, replica}
 	for iteration := 0; iteration < 20; iteration++ {
+		// The kill consumer beats the feed on every heartbeat; without one for DefaultKillFeedTTL
+		// an execution is refused FENCE_UNAVAILABLE, as it must be. This loop's wall time grows
+		// with host load (1.5 s an iteration on a loaded host, 0.1 s on an idle one), so the beat
+		// a live consumer would give is given here, and the outcome depends on the lock order alone.
+		api.KillFeed.Beat(api.KillFeed.Now())
 		require.NoError(t, api.RDB.DB(ctx).Model(&Alarm{}).Where("token IN ?", []string{"a1", "a2"}).Update("acknowledged", false).Error)
 		outcomes := make([]*ProposalOutcome, 2)
 		for i := range outcomes {

@@ -6,6 +6,9 @@ package model
 import (
 	"context"
 	"database/sql"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 	"time"
@@ -249,6 +252,125 @@ func TestFleetLeaseStaysOnTheProcessMonotonicClock(t *testing.T) {
 			require.WithinDuration(t, time.Now().Add(FleetLeaseTTL), lease.Deadline, time.Second, "granted from the process clock")
 			e.lease = *lease
 			require.Equal(t, FleetPosted, e.post(t).Outcome, "checked at commit against the process clock")
+		})
+	}
+}
+
+// The control path stamps and judges on the fleet clock, which on PostgreSQL is the database's (the
+// integration suite proves that branch). Here the fixture clock is eight days ahead of this process:
+// the contracts created before the jump are past their seven-day expiry on that clock and nowhere
+// else, and every stamp a transition writes must be the fixture clock's, never the process clock's.
+func TestFleetControlStampsAndJudgesOnTheFleetClock(t *testing.T) {
+	armed(t)
+	api, ctx := fleetFixture(t, 2)
+	db := api.RDB.DB(ctx)
+	stale := readyOp(t, api, ctx, "stale", FleetSafetyRequest{}, "d1")
+	swept := readyOp(t, api, ctx, "swept", FleetSafetyRequest{}, "d1")
+	ahead := time.Now().Add(8 * 24 * time.Hour).Truncate(time.Second)
+	old := fleetClock
+	clock := ahead
+	fleetClock = func() time.Time { return clock }
+	t.Cleanup(func() { fleetClock = old })
+	tick := func() time.Time { clock = clock.Add(time.Minute); return clock }
+	at := func(want time.Time, got sql.NullTime, what string) {
+		t.Helper()
+		require.True(t, got.Valid, what)
+		require.True(t, want.Equal(got.Time), "%s: want %s on the fleet clock, got %s", what, want, got.Time)
+	}
+	reload := func(op *FleetOperation) *FleetOperation {
+		t.Helper()
+		var cur FleetOperation
+		require.NoError(t, db.First(&cur, op.ID).Error)
+		return &cur
+	}
+	lastEvent := func(op *FleetOperation) FleetOperationEvent {
+		t.Helper()
+		var ev FleetOperationEvent
+		require.NoError(t, db.Where("operation_id = ?", op.ID).Order("id DESC").First(&ev).Error)
+		return ev
+	}
+
+	// Expired on the fleet clock only: a start judged on process time would run it.
+	_, err := api.StartFleetOperation(ctx, "stale", stale.ContractDigest, alice)
+	requireFleetCode(t, err, FleetCodeExpired)
+
+	// A contract created on the fleet clock expires seven days after IT.
+	now := tick()
+	live := readyOp(t, api, ctx, "live", FleetSafetyRequest{}, "d1", "d2")
+	at(now.Add(7*24*time.Hour), reload(live).ExpiresAt, "expires_at")
+	at(now, reload(live).StateChangedAt, "created state_changed_at")
+
+	// The sweep finds and re-judges on the fleet clock: both contracts from before the jump are due.
+	now = tick()
+	n, err := api.ExpireFleetOperations(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	for _, op := range []*FleetOperation{stale, swept} {
+		cur := reload(op)
+		require.Equal(t, FleetDispatchAborted, cur.Dispatch)
+		at(now, cur.StateChangedAt, "expired state_changed_at")
+		at(now, cur.DispatchedAt, "expired dispatched_at")
+		at(now, cur.ClosedAt, "expired closed_at")
+		require.True(t, now.Equal(lastEvent(op).At), "EXPIRE event")
+	}
+
+	now = tick()
+	_, err = api.StartFleetOperation(ctx, "live", live.ContractDigest, alice)
+	require.NoError(t, err)
+	cur := reload(live)
+	at(now, cur.StateChangedAt, "start state_changed_at")
+	at(now, cur.StartedAt, "started_at")
+	at(now, cur.GrantBoundAt, "start grant_bound_at")
+	require.True(t, now.Equal(lastEvent(live).At), "START event")
+	var contract FleetOperationContract
+	require.NoError(t, db.Where("operation_id = ?", live.ID).First(&contract).Error)
+	at(now, contract.ApprovedAt, "approved_at")
+	at(now, contract.ActivatedAt, "activated_at")
+
+	now = tick()
+	_, err = api.PauseFleetOperation(ctx, "live", alice.Name)
+	require.NoError(t, err)
+	at(now, reload(live).StateChangedAt, "pause state_changed_at")
+	require.True(t, now.Equal(lastEvent(live).At), "PAUSE event")
+
+	now = tick()
+	bob := FleetApprover{Name: "bob@example.com", Authorities: alice.Authorities}
+	_, err = api.ResumeFleetOperation(ctx, "live", live.ContractDigest, nil, bob)
+	require.NoError(t, err)
+	cur = reload(live)
+	at(now, cur.StateChangedAt, "handover state_changed_at")
+	at(now, cur.GrantBoundAt, "handover grant_bound_at")
+	require.True(t, now.Equal(lastEvent(live).At), "HANDOVER event")
+
+	now = tick()
+	_, err = api.AbortFleetOperation(ctx, "live", bob.Name)
+	require.NoError(t, err)
+	cur = reload(live)
+	at(now, cur.StateChangedAt, "abort state_changed_at")
+	at(now, cur.DispatchedAt, "abort dispatched_at")
+	at(now, cur.ClosedAt, "abort closed_at")
+	require.True(t, now.Equal(lastEvent(live).At), "ABORT event")
+}
+
+// The database and this test process share one kernel clock, so no behavioral test can tell a
+// process-time stamp from a database-time one on PostgreSQL. The files that stamp control
+// transitions and judge expiry therefore never call time.Now: their time comes from fleetDBNow.
+func TestFleetControlNeverCallsTheProcessClock(t *testing.T) {
+	for _, name := range []string{"api_fleet_operation_control.go", "api_fleet_expiry_sweep.go", "fleet_clock.go"} {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		require.NoError(t, err)
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Now" {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "time" {
+					t.Errorf("%s calls time.Now(); control time must come from fleetDBNow", fset.Position(call.Pos()))
+				}
+			}
+			return true
 		})
 	}
 }

@@ -41,6 +41,7 @@ func TestVerifyStreamHoldsACountToItsAttempt(t *testing.T) {
 	ok := [][]installflow.Envelope{
 		{prog(installflow.UnitActions, 0), prog(installflow.UnitActions, 0, 3), prog(installflow.UnitActions, 2, 3)},
 		{prog(installflow.UnitReplicas, 3, 3), prog(installflow.UnitReplicas, 2, 3)},
+		{prog(installflow.UnitReplicas, 3, 3), prog(installflow.UnitReplicas, 1, 1)},
 	}
 	for i, p := range ok {
 		if err := VerifyStream(streamWith(p...)); err != nil {
@@ -57,6 +58,15 @@ func TestVerifyStreamHoldsACountToItsAttempt(t *testing.T) {
 		err := VerifyStream(streamWith(p...))
 		if err == nil || !strings.Contains(err.Error(), strings.TrimSpace(want)) {
 			t.Errorf("%q: got %v", want, err)
+		}
+	}
+}
+
+func TestVerifyStreamRejectsReadinessAboveTotal(t *testing.T) {
+	for _, unit := range []installflow.Unit{installflow.UnitReplicas, installflow.UnitDeployments} {
+		err := VerifyStream(streamWith(prog(unit, 3, 1)))
+		if err == nil || !strings.Contains(err.Error(), "reports 3 of 1") {
+			t.Errorf("%s: readiness above total accepted: %v", unit, err)
 		}
 	}
 }
