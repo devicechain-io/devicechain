@@ -58,8 +58,8 @@ func requireFleetCode(t *testing.T, err error, code string) {
 	require.Equal(t, code, fe.Code)
 }
 
-// openTheEngine lets create accept config.set for the length of one test; the registry keeps the
-// door shut until the engine ships.
+// openTheEngine lets create accept any kind for the length of one test, whatever the registry
+// holds.
 func openTheEngine(t *testing.T) {
 	t.Helper()
 	prev := fleetKindExecutable
@@ -192,6 +192,8 @@ func TestPlanRefusesWhatItCannotPlanAndNeverTruncates(t *testing.T) {
 
 func TestCreateIsRefusedWhileNoEngineCanExecuteTheKind(t *testing.T) {
 	api, ctx := fleetFixture(t, 1)
+	// Shut the kind, as on a build that does not register it.
+	t.Cleanup(OpenFleetKindsForTest(func(string) bool { return false }))
 	_, err := api.CreateFleetOperation(ctx, setReq("t", "d1"), "alice")
 	requireFleetCode(t, err, FleetCodeKindNotExecutable)
 	var n int64

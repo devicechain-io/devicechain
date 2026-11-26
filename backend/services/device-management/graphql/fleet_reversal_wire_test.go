@@ -159,9 +159,8 @@ func TestReverseAuthorizationOverTheWire(t *testing.T) {
 	require.Empty(t, errs)
 }
 
-func TestReversalIsNotServedUntilTheEngineIs(t *testing.T) {
+func TestReversalIsServed(t *testing.T) {
 	for _, name := range []string{"reverseBulkChange", "previewBulkChangeReversal", "BulkChangeReversalRequest", "reversedBy"} {
-		require.NotContains(t, ServedSchema(), name)
-		require.Contains(t, SchemaContentWithFleetOperations, name)
+		require.Contains(t, SchemaContent, name)
 	}
 }

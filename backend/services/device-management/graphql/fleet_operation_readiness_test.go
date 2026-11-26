@@ -46,7 +46,7 @@ func TestBulkChangeReadinessCompatibility(t *testing.T) {
 	base := profileLocationCtx(t)
 	api := (&SchemaResolver{}).GetApi(base)
 	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(base)).AutoMigrate(&model.Device{}, &model.EntityAttribute{}, &model.AttributeGeneration{}))
-	schema := gql.MustParseSchema(ServedSchema(), &SchemaResolver{})
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
 	for _, field := range []string{"bulkChangeReadiness", "fleetOperationReadiness"} {
 		query := strings.ReplaceAll(readinessQuery, "fleetOperationReadiness", field)
 		for _, claims := range []*auth.Claims{

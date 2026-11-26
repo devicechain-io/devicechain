@@ -10,17 +10,9 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
-
-func TestFleetDriverIsNotRegisteredWhileUnserved(t *testing.T) {
-	require.False(t, ledger.Served)
-	require.Equal(t, time.Second, fleetDriverInterval)
-	require.NoError(t, initFleetDriver())
-	require.Nil(t, FleetDriver)
-}
 
 func TestFleetDriverLifecycleCancelsAndWaitsForPass(t *testing.T) {
 	source, err := os.ReadFile("main.go")

@@ -134,9 +134,8 @@ const (
 	// the fleet manager or any cloud identity. Holders of "*" satisfy it. It is not
 	// seeded into any built-in role; custom roles may grant it explicitly.
 	//
-	// In this release it gates only the read-only, Preview fleetOperationReadiness query
-	// (and `dcctl fleet-op readiness`); no fleet operation exists yet. It ships ahead of
-	// those operations because role writes validate the whole authority set: a
+	// It gates the bulk-change operations (Preview from v1.10) and their readiness query. It shipped
+	// a release ahead of them because role writes validate the whole authority set: a
 	// previous-release user-management pod refuses a role containing a name it does not
 	// know, even when the edit changes something unrelated to that authority.
 	FleetOperate Authority = "fleet:operate"

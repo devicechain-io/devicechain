@@ -33,8 +33,8 @@ const (
 )
 
 // fleetKindExecutable reports whether this build can execute a kind. It is a variable only so a
-// test can open the door the engine's registry keeps shut until the engine ships: create refuses a
-// kind the build cannot execute, and never accepts one on the strength of a plan alone.
+// test can open or shut a kind regardless of the registry: create refuses a kind the build cannot
+// execute, and never accepts one on the strength of a plan alone.
 var fleetKindExecutable = ledger.Executable
 
 // fleetOpKey is the fence key of one operation (K_op): shared by posting transactions, exclusive
@@ -539,8 +539,7 @@ func (api *Api) FleetOperationRuntimeOf(ctx context.Context, op *FleetOperation)
 
 // OpenFleetKindsForTest replaces the build's "can this kind be executed" test and returns the
 // function that restores it. It exists for tests of the served surface in other packages, which
-// cannot reach the unexported variable: the engine's registry keeps every kind shut until the
-// engine ships, and create must refuse a kind the build cannot execute.
+// cannot reach the unexported variable: create must refuse a kind the build cannot execute.
 func OpenFleetKindsForTest(executable func(kind string) bool) (restore func()) {
 	prev := fleetKindExecutable
 	fleetKindExecutable = executable

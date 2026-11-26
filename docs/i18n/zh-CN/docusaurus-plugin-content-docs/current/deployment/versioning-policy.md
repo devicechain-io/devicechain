@@ -93,6 +93,14 @@ GraphQL 预览接口包括其专用的输入和结果类型、字段、参数及
 仍可使用，以兼容包括 v1.9 在内的客户端。更名不会重新计算预览期限。提升条件：**进入预览后经过两个次版本（默认）**。
 它们需要 `fleet:operate` 权限；具有受限范围的成员无法使用。
 
+在 **v1.10** 中，批量变更本身进入预览阶段：查询 `bulkChange`、`bulkChanges`、
+`bulkChangeLines`、`planBulkChange`、`previewBulkChangeResume` 和 `previewBulkChangeReversal`，
+变更操作 `createBulkChange`、`startBulkChange`、`pauseBulkChange`、`resumeBulkChange`、
+`abortBulkChange`、`reverseBulkChange` 和 `resolveAmbiguousBulkChangeLines`，以及它们专用的类型、
+输入、枚举值和错误码，还有除 `readiness` 之外的 `dcctl bulk-change` 命令。提升条件：**进入预览后经过两个次版本（默认）**。
+规划、创建、启动、恢复、撤销和裁定需要 `device:write` 和 `fleet:operate`；暂停和中止需要
+`device:write`；读取需要 `device:read`。代理和服务身份以及具有受限范围的成员会被拒绝。
+
 ## 支持的升级路径 {#upgrade-paths}
 
 - **同一次版本内**（`1.4.0` 到 `1.4.3`）以及**升级到下一个次版本**（`1.4.x` 到 `1.5.0`）是支持的路径。按[滚动升级](./releases-and-upgrades.md#rolling-upgrades)所述，先运行 `dcctl install`，再运行 `dcctl upgrade`。

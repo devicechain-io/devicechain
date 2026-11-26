@@ -545,6 +545,9 @@ var sweepTokenArgs = map[string]string{
 	// The seeded campaign's cycles: it is created switched off, so the list is empty, and the
 	// read still has to decode the campaign it names after an upgrade.
 	"command-delivery.campaignCycles.campaignToken": "campaign",
+	// The seeded bulk change's lines: its one line, frozen at create, which the change's own
+	// read-back does not select.
+	"device-management.bulkChangeLines.token": "bulk-change",
 }
 
 // sweepExemptions names the served doors this sweep will NOT call, and why.
@@ -554,6 +557,18 @@ var sweepTokenArgs = map[string]string{
 // are different facts, and collapsing them into silence is how a hole becomes invisible.
 // A reader scanning the sweep's output sees each one printed, with its sentence.
 var sweepExemptions = map[string]string{
+	"device-management.planBulkChange": "it computes what a bulk change WOULD do from a request the caller " +
+		"supplies and writes nothing, so it holds no stored row to read back; the devices and the published " +
+		"configuration declaration it reads are read back through their own entities, and the change the " +
+		"seed did create is read back through bulkChange and bulkChangeLines",
+	"device-management.previewBulkChangeResume": "it previews resuming a PAUSED bulk change, and the seeded " +
+		"change is READY and never started, because a drill must never command a device: there is no " +
+		"paused change to name, and calling it on the READY one is refused by design; the change is read " +
+		"back through bulkChange",
+	"device-management.previewBulkChangeReversal": "it previews reversing a DISPATCHED or ABORTED bulk " +
+		"change, and the seeded change is READY and never started, because a drill must never command a " +
+		"device: calling it on the READY one is refused by design (ORIGINAL_STILL_DISPATCHING); the change " +
+		"is read back through bulkChange",
 	"device-management.alarmLifecycles": "it reports an alarm's existence and lifecycle state to the " +
 		"notification alarm backstop, and is served on the service plane only (a user token is refused, a " +
 		"tenant administrator's included), so the sweep, which runs as a tenant administrator, has no standing " +

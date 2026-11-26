@@ -1303,7 +1303,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			return nil
 		},
 		GraphQL: &service.GraphQLSpec{
-			Schema:   graphql.ServedSchema(),
+			Schema:   graphql.SchemaContent,
 			Resolver: func() interface{} { return &graphql.SchemaResolver{} },
 			// Evaluated after the broker manager is built, so the live alarm subscription
 			// resolver (SubscribeLive, ADR-037) gets one that is already connected, before

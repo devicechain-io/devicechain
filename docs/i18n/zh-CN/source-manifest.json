@@ -187,8 +187,8 @@
       "translationSha256": "f41470d692e753107f909692969fd2e0e3c42bc2b42a4f4e8086d150c4666239"
     },
     "deployment/versioning-policy.md": {
-      "sourceSha256": "1cdacec7c864b3e0246b930b9ee69d1732ebf544a7adf90798b5122b4642380c",
-      "translationSha256": "883734be2ba12ab36a827d5b7482674c9003f8672077ab9fe298206b7d5840e4"
+      "sourceSha256": "2886412acda2edbc8010ca286c775b6f38d851711b8e5e02e277fa998478c721",
+      "translationSha256": "b64654ffc7e1e308f823a93b010fd3e62eba212e728f61460de3dd650dd816d6"
     },
     "getting-help.md": {
       "sourceSha256": "86f2e15e38177a3ae5d53300a5ed6d2a1705f827bc29ab820fd9756020dc78f1",
@@ -205,6 +205,10 @@
     "guides/building-an-updatable-device.md": {
       "sourceSha256": "20d1753acf2e8a59369457b53da17606719ee47385ab389aea163c3d2b7361cf",
       "translationSha256": "b9035fe6417015a3618aad1dcf84781adff8baeb729f8fdacddef911a652543b"
+    },
+    "guides/bulk-changes.md": {
+      "sourceSha256": "92bae8fe89ae02e81bebe7fa8674df9c1f45d42b50e8350280a89c310d249716",
+      "translationSha256": "3246a1a177612ecc595e0a6c9031d0877e798a5c8a51add5e1457adf24d82b3e"
     },
     "guides/chirpstack-uplinks.md": {
       "sourceSha256": "c3dbc99fdfee60ab2dc96f77af63e78f2943c3e3ad85e13eefc43550ca593189",
@@ -355,8 +359,8 @@
       "translationSha256": "4817de9403e12956f4dc4919583d6eb32e1f1f1c7368361b81c92e90aa3c4de7"
     },
     "reference/graphql-api.md": {
-      "sourceSha256": "b2d846bd25f3d9a3c83c99d3f42278faa59f02450d84930b2fdd7c152136ca40",
-      "translationSha256": "2b3147aeb26ef7b1bf9198f945a048160b978d42a54f0266a16545da35b22c5e"
+      "sourceSha256": "5251d0da6fe5ee0fc0ebda6d936c86dcd293e6f75d2469e273f5c372c7d8732c",
+      "translationSha256": "edabe63c26430f25198044857eff650a924faedc3439c31ec04a92d932b708da"
     },
     "reference/npm-packages.md": {
       "sourceSha256": "7f85fa2f5e06d3aa61b4f06b28705aec695014407aaed1f4910fb323a9952ba2",
@@ -435,8 +439,8 @@
       "translationSha256": "ab87682b3e2d482e90035a65944da1434724739360cd27db437cba0e14b06c2d"
     },
     "user-guide/members-roles-and-customer-users.md": {
-      "sourceSha256": "e8746f24efd49589505fecf5d3145e409184c4543df9445c9ce78890fadca3f4",
-      "translationSha256": "ab6077dc3b3bbe949e11aeaf3b06c0abebda20e71b685c2f79ae8c0bba0bff49"
+      "sourceSha256": "965dc402a8d7c28270abcb56d0a6dec76c51c1a7e6f6212a25817454517bd9de",
+      "translationSha256": "6bc8560577e02862925b2c57ca8f07981ed12fca10685e1a61ec7b36195caafc"
     },
     "user-guide/notification-policies.md": {
       "sourceSha256": "80857bb1447d0a7d01819d4c3f335d6ba2a78f2fe780dfa7149e576647003b9c",

@@ -1305,6 +1305,12 @@ y conserva los demás datos. Solo un trigger habilitado `ALWAYS` cuenta como `EN
 los modos ordinario, solo réplica y deshabilitado devuelven `DISABLED`. La ausencia o falta de
 coincidencia devuelve `NOT_INSTALLED`. La consulta cuenta filas, así que trátela como un diagnóstico que se ejecuta cuando se necesita la respuesta, no como algo que consultar periódicamente. El plazo de vista previa comienza en v1.9.
 
+Desde la v1.10, `executableKinds` incluye `config.set` cuando la aplicación es `ENFORCED` y el
+recuento de filas huérfanas es cero, los mismos dos hechos que comprueban `startBulkChange` y
+`resumeBulkChange`; en otro caso está vacío. Las consultas y mutaciones de cambios masivos
+(`planBulkChange`, `createBulkChange`, `startBulkChange` y las demás) son Preview desde la v1.10;
+consulta [Cambios masivos en dispositivos](../guides/bulk-changes.md).
+
 El comando Preview muestra los mismos cuatro datos y solo termina con éxito si el estado es
 `ENFORCED` y no hay filas huérfanas. En v1.9 se espera una salida distinta de cero. Utiliza
 las mismas opciones de inicio de sesión e instancia que `dcctl attr`:

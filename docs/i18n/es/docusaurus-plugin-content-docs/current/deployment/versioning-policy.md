@@ -138,6 +138,17 @@ sus campos y valores de enumeración, y `dcctl bulk-change readiness`. Los nombr
 El cambio de nombre no reinicia el plazo de vista previa. Promoción: **dos versiones menores después de entrar (predeterminada)**. Requieren `fleet:operate`; se rechazan
 los miembros con ámbito limitado.
 
+En **v1.10** los propios cambios masivos entran en vista previa: las consultas `bulkChange`,
+`bulkChanges`, `bulkChangeLines`, `planBulkChange`, `previewBulkChangeResume` y
+`previewBulkChangeReversal`, las mutaciones `createBulkChange`, `startBulkChange`,
+`pauseBulkChange`, `resumeBulkChange`, `abortBulkChange`, `reverseBulkChange` y
+`resolveAmbiguousBulkChangeLines`, con sus tipos, entradas, valores de enumeración y códigos de
+error dedicados, y los comandos `dcctl bulk-change` distintos de `readiness`. Promoción: **dos
+versiones menores después de entrar (predeterminada)**. Planificar, crear, iniciar, reanudar,
+revertir y resolver requieren `device:write` y `fleet:operate`; pausar y abortar requieren
+`device:write`; las lecturas requieren `device:read`. Se rechazan las identidades de agente y de
+servicio y los miembros con ámbito limitado.
+
 ## Rutas de actualización admitidas {#upgrade-paths}
 
 - **Dentro de una versión menor** (`1.4.0` a `1.4.3`) y **a la siguiente versión menor** (`1.4.x` a `1.5.0`) son las rutas admitidas.

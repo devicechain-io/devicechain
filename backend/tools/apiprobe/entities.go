@@ -1791,7 +1791,7 @@ func otherWrites() int {
 	return len(seen)
 }
 
-const tenantCreateMutations = 35
+const tenantCreateMutations = 36
 
 // tenantPublishMutations is the same claim for publishes, measured the same way by
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because
