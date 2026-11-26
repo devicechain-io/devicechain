@@ -189,6 +189,11 @@ func bulkChangeResolution(cmd *cobra.Command, token string) (bulkchange.Resoluti
 	resolution := bulkchange.Resolution{Token: token}
 	if flags.Changed("ordinals") {
 		resolution.Ordinals, _ = flags.GetIntSlice("ordinals")
+		// An explicitly empty --ordinals is dropped from the request (omitempty), which the
+		// server reads as "every ambiguous line": refuse it rather than widen the selection.
+		if len(resolution.Ordinals) == 0 {
+			return resolution, fmt.Errorf("--ordinals must name at least one line")
+		}
 	}
 	resolution.AllAmbiguous, _ = flags.GetBool("all-ambiguous")
 	resolution.Verdict, _ = flags.GetString("verdict")

@@ -303,6 +303,9 @@ func TestBulkChangeReverseAndResolveRejectInvalidInputBeforeAuthentication(t *te
 		{"reverse", "c", "--token", "u", "-o", "csv"},
 		{"resolve", "c", "--verdict", "confirmed", "--note", "n"},
 		{"resolve", "c", "--all-ambiguous", "--ordinals", "1", "--verdict", "confirmed", "--note", "n"},
+		// An empty --ordinals would be dropped from the request and widen to every ambiguous line.
+		{"resolve", "c", "--all-ambiguous", "--ordinals=", "--verdict", "confirmed", "--note", "n"},
+		{"resolve", "c", "--ordinals=", "--verdict", "confirmed", "--note", "n"},
 		{"resolve", "c", "--all-ambiguous", "--verdict", "maybe", "--note", "n"},
 		{"resolve", "c", "--all-ambiguous", "--verdict", "failed"},
 		{"resolve", "c", "--all-ambiguous", "--verdict", "failed", "--note", strings.Repeat("x", 1001)},
