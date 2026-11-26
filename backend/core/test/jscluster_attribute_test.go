@@ -145,22 +145,48 @@ func TestTwoDialledConnectionsSharingALocalAddressAreBothAttributed(t *testing.T
 	}
 }
 
-// A closed mesh records nothing, and says so.
+// A closed mesh records nothing, and cannot attribute a refused connection even when
+// its address reuses one the mesh recognized before closing.
 func TestAClosedMeshRecordsNoDialledConnection(t *testing.T) {
-	f, err := newRouteMesh(2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.close()
-	in, out := loopbackPair(t)
-	if f.recordDialed(in, out, 0, 1) {
-		t.Fatal("a closed mesh recorded a dialled connection")
-	}
-	if n := f.LiveRouteConnections(); n != 0 {
-		t.Fatalf("a closed mesh counts %d live connections after refusing one; want 0", n)
-	}
-	if why := f.attribute(1, "n1", out.LocalAddr().String(), []string{"n1", "n2"}); why == "" {
-		t.Fatal("a connection a closed mesh refused to record was attributed to it")
+	for _, address := range []string{"fresh", "former proxy listener", "former dialled connection"} {
+		t.Run(address, func(t *testing.T) {
+			f, err := newRouteMesh(2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reused net.Addr
+			switch address {
+			case "former proxy listener":
+				// This is the listener attribute recognizes at n2 for its route to n1.
+				// close releases its port, so a later loopback connection can reuse it.
+				reused = f.proxies[1][0].Addr()
+			case "former dialled connection":
+				in, out := loopbackPair(t)
+				if !f.recordDialed(in, out, 0, 1) {
+					f.close()
+					t.Fatal("an open mesh refused to record a dialled connection")
+				}
+				reused = out.LocalAddr()
+				f.forgetConn(in, out) // keeps the attribution history while the mesh is open
+				in.Close()
+				out.Close()
+			}
+			f.close()
+			in, out := loopbackPair(t)
+			if reused != nil {
+				// Force address reuse instead of depending on the OS's port allocation.
+				out = localAddrConn{Conn: out, local: reused}
+			}
+			if f.recordDialed(in, out, 0, 1) {
+				t.Fatal("a closed mesh recorded a dialled connection")
+			}
+			if n := f.LiveRouteConnections(); n != 0 {
+				t.Fatalf("a closed mesh counts %d live connections after refusing one; want 0", n)
+			}
+			if why := f.attribute(1, "n1", out.LocalAddr().String(), []string{"n1", "n2"}); why == "" {
+				t.Fatal("a connection a closed mesh refused to record was attributed to it")
+			}
+		})
 	}
 }
 
