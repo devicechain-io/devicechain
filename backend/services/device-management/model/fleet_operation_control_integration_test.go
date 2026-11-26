@@ -21,6 +21,7 @@ func TestFleetOperationStartsOnlyWhenTheGuardIsInPlace(t *testing.T) {
 	api, ctx, _, tokens := fleetPGFixture(t, 3)
 	op, err := api.CreateFleetOperation(ctx, setReq("go", tokens...), "alice")
 	require.NoError(t, err)
+	cleanupFleetTestOperation(t, api, ctx, op.Token)
 	started, err := api.StartFleetOperation(ctx, "go", op.ContractDigest, alice)
 	require.NoError(t, err)
 	require.Equal(t, FleetDispatchRunning, started.Dispatch)
@@ -30,6 +31,7 @@ func TestPauseWaitsForAPosterInFlightAndAnswersFencePendingWhenItCannotDrain(t *
 	api, ctx, tenant, tokens := fleetPGFixture(t, 3)
 	op, err := api.CreateFleetOperation(ctx, setReq("fence", tokens...), "alice")
 	require.NoError(t, err)
+	cleanupFleetTestOperation(t, api, ctx, op.Token)
 	op, err = api.StartFleetOperation(ctx, "fence", op.ContractDigest, alice)
 	require.NoError(t, err)
 
@@ -81,6 +83,7 @@ func TestARacingStartAndAbortLeaveOneCoherentState(t *testing.T) {
 		token := fmt.Sprintf("race%d", round)
 		op, err := api.CreateFleetOperation(ctx, setReq(token, tokens...), "alice")
 		require.NoError(t, err)
+		cleanupFleetTestOperation(t, api, ctx, op.Token)
 		var wg sync.WaitGroup
 		var startErr, abortErr error
 		wg.Add(2)
@@ -116,6 +119,7 @@ func TestConcurrentStartsAdmitExactlyTheDispatchingBudget(t *testing.T) {
 	for i := 0; i < ops; i++ {
 		op, err := api.CreateFleetOperation(ctx, setReq(fmt.Sprintf("q%d", i), tokens...), "alice")
 		require.NoError(t, err)
+		cleanupFleetTestOperation(t, api, ctx, op.Token)
 		digests[i] = op.ContractDigest
 	}
 	var wg sync.WaitGroup
@@ -143,6 +147,7 @@ func TestARacingDoublePauseAndDoubleStartTransitionOnce(t *testing.T) {
 	api, ctx, _, tokens := fleetPGFixture(t, 2)
 	op, err := api.CreateFleetOperation(ctx, setReq("twice", tokens...), "alice")
 	require.NoError(t, err)
+	cleanupFleetTestOperation(t, api, ctx, op.Token)
 	var wg sync.WaitGroup
 	errs := make([]error, 4)
 	for i := range errs {

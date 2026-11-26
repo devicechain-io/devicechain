@@ -92,6 +92,7 @@ func TestFleetPostgresControlStampsAndJudgesOnTheDatabaseClock(t *testing.T) {
 	stale, err := api.CreateFleetOperation(ctx, &FleetOperationCreateRequest{Token: "stale", Name: "n", Kind: FleetKindConfigSet,
 		DeviceTokens: []string{p.devs[0].Token}, ConfigSet: &FleetConfigSetIntent{Key: "k", ValueType: "STRING", Value: &value}}, "creator")
 	require.NoError(t, err)
+	cleanupFleetTestOperation(t, api, ctx, stale.Token)
 	to = dbNow()
 	within(from.Add(7*24*time.Hour), to.Add(7*24*time.Hour), reload(stale).ExpiresAt, "expires_at")
 	require.NoError(t, db.Model(&FleetOperation{ID: stale.ID}).Update("expires_at", gorm.Expr("clock_timestamp() - interval '1 second'")).Error)
