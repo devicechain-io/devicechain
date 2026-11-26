@@ -24,11 +24,16 @@ import (
 	"strings"
 )
 
-// MaxLine is the longest line the observer reads. A longer one is skipped whole,
-// up to its newline, and counted; the lines after it are read as usual. OpenTofu's
-// messages are a few hundred bytes, so anything near this is not a message dcctl
-// needs, and holding it would let one runaway line grow the process without bound.
+// MaxLine bounds the buffer for an ordinary message. Longer lines are counted
+// and drained to their newline. Diagnostics retain bounded text and CNPG retry
+// evidence through a streaming scanner; other oversized messages are discarded.
 const MaxLine = 256 << 10
+
+// Retry diagnostics are exempt: dropping one could suppress the CNPG retry.
+const (
+	maxErrorDiagnostics = 32
+	maxErrorBytes       = 64 << 10
+)
 
 // Progress is a snapshot of one apply's resource actions.
 type Progress struct {
@@ -58,9 +63,12 @@ type Observer struct {
 
 	pending  []byte
 	skipping bool // inside a line longer than MaxLine, until its newline
+	large    *oversizedDiagnostic
 
-	progress Progress
-	errs     []string
+	progress      Progress
+	errs          []string
+	errorBytes    int
+	omittedErrors int
 
 	// Malformed counts the lines that were not an OpenTofu message, and Oversized
 	// the lines longer than MaxLine. Neither moves the count.
@@ -96,12 +104,7 @@ func (o *Observer) Write(p []byte) (int, error) {
 		}
 		o.hold(p[:i])
 		p = p[i+1:]
-		if o.skipping {
-			o.skipping = false
-		} else {
-			o.line(o.pending)
-		}
-		o.pending = o.pending[:0]
+		o.finishLine()
 	}
 	return n, nil
 }
@@ -109,11 +112,15 @@ func (o *Observer) Write(p []byte) (int, error) {
 // hold appends part of a line, switching to skipping once it is over MaxLine.
 func (o *Observer) hold(b []byte) {
 	if o.skipping {
+		o.large.write(b)
 		return
 	}
 	if len(o.pending)+len(b) > MaxLine {
 		o.Oversized++
 		o.skipping = true
+		o.large = &oversizedDiagnostic{}
+		o.large.write(o.pending)
+		o.large.write(b)
 		o.pending = o.pending[:0]
 		return
 	}
@@ -123,22 +130,68 @@ func (o *Observer) hold(b []byte) {
 // Close reads a last line that had no newline. A stream cut off mid-message leaves
 // a fragment that is not JSON, which is counted as malformed like any other.
 func (o *Observer) Close() {
-	if !o.skipping && len(o.pending) > 0 {
+	if o.skipping || len(o.pending) > 0 {
+		o.finishLine()
+	}
+	o.pending = nil
+}
+
+func (o *Observer) finishLine() {
+	if o.skipping {
+		if text, isError := o.large.result(); text != "" {
+			_, _ = fmt.Fprintf(o.diags, "\n%s\n", text)
+			if isError {
+				o.retainError(text)
+			}
+		}
+	} else {
 		o.line(o.pending)
 	}
-	o.pending, o.skipping = nil, false
+	o.pending, o.skipping, o.large = o.pending[:0], false, nil
 }
 
 // Progress is the latest snapshot.
 func (o *Observer) Progress() Progress { return o.progress }
 
-// Errors is the text of every error diagnostic OpenTofu reported, in order, or "".
+// Errors returns retained error diagnostics in order, followed by an omission
+// count when the aggregate budget was exceeded, or "". CNPG retry diagnostics
+// are always retained, even after the budget is exhausted.
 //
 // 🔴 IN -json MODE THIS IS THE ONLY PLACE AN APPLY'S ERRORS ARE. OpenTofu writes its
 // diagnostics into the JSON stream instead of to stderr, so the error terraform-exec
 // returns carries an exit status and nothing else. Every caller that reads an apply
 // error's text (the CloudNativePG admission retry is one) needs these appended.
-func (o *Observer) Errors() string { return strings.Join(o.errs, "\n\n") }
+func (o *Observer) Errors() string {
+	text := strings.Join(o.errs, "\n\n")
+	if o.omittedErrors > 0 {
+		if text != "" {
+			text += "\n\n"
+		}
+		text += fmt.Sprintf("%d more diagnostics omitted", o.omittedErrors)
+	}
+	return text
+}
+
+func (o *Observer) retainError(text string) {
+	size := len(text)
+	if len(o.errs) > 0 {
+		size += 2 // separators in Errors
+	}
+	if len(o.errs) >= maxErrorDiagnostics || o.errorBytes+size > maxErrorBytes {
+		// Reuse the bounded, whitespace-normalising matcher used for oversized
+		// fields so wrapped webhook names still carry retry evidence past the cap.
+		var retry diagnosticText
+		for _, r := range text {
+			retry.write(r)
+		}
+		if retry.found == "" {
+			o.omittedErrors++
+			return
+		}
+	}
+	o.errs = append(o.errs, text)
+	o.errorBytes += size
+}
 
 // message is the part of an OpenTofu JSON UI message the observer reads.
 type message struct {
@@ -221,6 +274,6 @@ func (o *Observer) diagnostic(m message) {
 	}
 	_, _ = fmt.Fprintf(o.diags, "\n%s\n", text)
 	if d.Severity == "error" {
-		o.errs = append(o.errs, text)
+		o.retainError(text)
 	}
 }

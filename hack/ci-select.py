@@ -142,6 +142,10 @@ READERS = [
         "backend/k8s/config/crd/bases/**",
         "hack/harborpulse-rig.sh",  # valuesoverlay_test.go: the rig's --values heredoc
     ], NONTEST, "bootstrap/*_test.go"),
+    # internal/installtui/audit_test.go: the dependency license audit reads the repository NOTICE
+    # (the texts it must carry), go.work and go.work.sum, and every workspace module's go.sum;
+    # dependency_policy_test.go checks the release archives ship the root LICENSE and NOTICE.
+    ("backend/cli", "internal/installtui", ["NOTICE", "LICENSE", "go.work", "go.work.sum", "**/go.sum"], [], "internal/installtui/audit_test.go, dependency_policy_test.go"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
     ("backend/cli", "bulkchange", ["backend/services/device-management/graphql/**"], [], "bulkchange/documents_test.go:16"),
     ("backend/cli", "product", [SDL], [], "product/documents_test.go:32"),
@@ -287,7 +291,7 @@ READERS = [
     ("backend/sims/dc-simulator", "scenarioverify", ["hack/harborpulse-rig.sh"], [], "scenarioverify/rig_s7_test.go:17"),
     ("backend/sims/dc-simulator", "updater", ["backend/core/ota/testdata/**"], [], "updater/*_test.go"),
     # signer_baseline_test.go:24 loads ../../services as a baseline tree: each area's served graphql SDL.
-    ("backend/tools/apiprobe", ".", [SDL, "backend/services/ai-inference/**"], [], "baseline_test.go, readsweep_test.go, documents_test.go, signer_baseline_test.go:24, stringmetric_test.go, tablesweep_test.go (ai-inference secret-scope guard)"),
+    ("backend/tools/apiprobe", ".", [SDL, "backend/services/ai-inference/**", "backend/services/device-management/model/api_fleet_retention.go"], [], "baseline_test.go, readsweep_test.go, documents_test.go, signer_baseline_test.go:24, stringmetric_test.go, tablesweep_test.go (ai-inference secret-scope guard), bulkchange_test.go (the unserved bulk-change fragment under graphql/, and the maintenance pass's lock name)"),
     ("backend/tools/docsgql", ".", ["docs/**", SDL], [], "docsgql_test.go:241"),
     ("backend/tools/docsgql", "decoderfuncs", ["docs/**/decoder-functions.md"], [], "decoderfuncs/decoderfuncs_test.go:19"),
     ("backend/tools/docsgql", "sdlcompat", [SDL], [], "sdlcompat/sdlcompat_test.go:17"),
@@ -318,6 +322,7 @@ IN_MODULE = {
     ("backend/cli", "backup"): "path-traversal fixtures (\"../outside\") and in-module testdata",
     ("backend/cli", "dcdir"): "walks its own module; \"../escape\" is a refused-input fixture",
     ("backend/cli", "internal/kubeisolation"): "walks its own module",
+    ("backend/cli", "internal/installtui/_buildcheck"): "resolves its own module root for the six-target cross-build",
     ("backend/cli", "operator"): "runtime-only repo lookup for --build, not exercised by tests",
     ("backend/core", "blob"): "\"../../../etc/passwd\" is a refused-input fixture",
     ("backend/core", "httptransport"): "walks its own module",

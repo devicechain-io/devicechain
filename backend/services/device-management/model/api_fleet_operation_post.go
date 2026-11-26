@@ -306,17 +306,6 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		}
 		posted := target
 		posted.Generation = receipt.Changes[0].Generation
-		if overridden {
-			// The line was applied over a change made since the original, because a person overrode it.
-			at, err := fleetMaintenanceNow(tx)
-			if err != nil {
-				return err
-			}
-			if err := tx.Create(&FleetOperationEvent{OperationId: int64(op.ID), LineId: sql.NullInt64{Int64: int64(lineID), Valid: true},
-				Epoch: sql.NullInt64{Int64: op.ExecutionEpoch, Valid: true}, At: at, Kind: fleetEventOverrideChanged}).Error; err != nil {
-				return err
-			}
-		}
 		priorJSON, err := json.Marshal(prior)
 		if err != nil {
 			return err
@@ -341,6 +330,18 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		}
 		if res.RowsAffected != 1 {
 			return abandon(FleetPostLostRace) // the whole effect rolls back with it
+		}
+		if overridden {
+			// The line was applied over a change made since the original, because a person overrode it.
+			// The journal row comes after the claim, which locked the line: lines first, then events.
+			at, err := fleetMaintenanceNow(tx)
+			if err != nil {
+				return err
+			}
+			if err := tx.Create(&FleetOperationEvent{OperationId: int64(op.ID), LineId: sql.NullInt64{Int64: int64(lineID), Valid: true},
+				Epoch: sql.NullInt64{Int64: op.ExecutionEpoch, Valid: true}, At: at, Kind: fleetEventOverrideChanged}).Error; err != nil {
+				return err
+			}
 		}
 		if fleetPostHook != nil {
 			fleetPostHook("claimed", tx)

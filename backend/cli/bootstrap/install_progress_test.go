@@ -181,6 +181,29 @@ func TestARetryCountsAgainstItsOwnPlan(t *testing.T) {
 	checkRetryStream(t, envs)
 }
 
+// TestARetryCountsAgainstItsOwnPlanBehindAStalledPresenter is the same retry with the
+// presenter stalled until the run closes, so every value the hub coalesces is still
+// undelivered when the next one arrives. The stream must read the same: the retry's
+// unknown total is not merged into the one action it then planned and did.
+func TestARetryCountsAgainstItsOwnPlanBehindAStalledPresenter(t *testing.T) {
+	p := newProgressRun(t, true, installflow.StepInstallPrerequisites)
+	p.sink.Hold()
+	t.Cleanup(p.sink.Release)
+	feed := func(name string) {
+		sp := p.run.tofuProgress()
+		sp.tofu(tofujson.Progress{})
+		o := tofujson.New(nil, nil, sp.tofu)
+		_, _ = o.Write(readTofuFixture(t, name))
+		o.Close()
+	}
+	feed("failed.jsonl")
+	p.run.retry("cnpg-admission-unreachable")
+	feed("retried.jsonl")
+	p.sink.Release()
+	envs := p.finish(t)
+	checkRetryStream(t, envs)
+}
+
 func checkRetryStream(t *testing.T, envs []installflow.Envelope) {
 	t.Helper()
 	ps := progressOf(envs, metricTofuActions)
@@ -374,12 +397,22 @@ func cnpgRefusal(t *testing.T) []byte {
 //   - each apply was counted against its own plan, in its own attempt;
 //   - the messages' lines reached the console, and the diagnostic its stderr.
 func TestTheObservedApplyThroughTheRetry(t *testing.T) {
+	t.Run("ordinary", func(t *testing.T) { checkObservedApplyRetry(t, cnpgRefusal(t)) })
+	t.Run("oversized", func(t *testing.T) {
+		stream := strings.Replace(string(cnpgRefusal(t)), "Internal error occurred:",
+			strings.Repeat("z", tofujson.MaxLine+100)+"Internal error occurred:", 1)
+		checkObservedApplyRetry(t, []byte(stream))
+	})
+}
+
+func checkObservedApplyRetry(t *testing.T, refusal []byte) {
+	t.Helper()
 	testKube(t)
 	bin, dir := fakeTofuJSON(t,
 		struct {
 			stream []byte
 			rc     int
-		}{cnpgRefusal(t), 1},
+		}{refusal, 1},
 		struct {
 			stream []byte
 			rc     int

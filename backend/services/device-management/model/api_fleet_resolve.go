@@ -151,7 +151,7 @@ func (api *Api) ResolveAmbiguousFleetLines(ctx context.Context, req FleetAmbigui
 			q = q.Where("ordinal IN ?", req.Ordinals)
 		}
 		var lines []FleetOperationLine
-		if err := q.Order("id").Find(&lines).Error; err != nil {
+		if err := q.Scopes(fleetLineLockOrder).Find(&lines).Error; err != nil {
 			return err
 		}
 		resolution := FleetOperationEvent{OperationId: int64(op.ID), Kind: "RESOLUTION", At: now,

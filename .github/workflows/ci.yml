@@ -240,6 +240,11 @@ jobs:
       - name: upgrade-rig self-test
         run: hack/upgrade-rig.sh selftest
 
+      # The bulk-change P-1 harness only runs by hand on the kind A/B rig, so its decision rule
+      # (PASS, FAIL, INCONCLUSIVE, too few runs) would otherwise be read by nothing between uses.
+      - name: bulk-change P-1 harness self-test
+        run: hack/bulk-change-p1.sh --self-test
+
       - name: Discover services
         id: svc
         run: |

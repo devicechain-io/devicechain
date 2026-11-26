@@ -52,6 +52,9 @@ backend/cli/dcdir/dcdir_test.go
 backend/cli/failedevents/documents_test.go
 backend/cli/failedevents/failedevents_test.go
 backend/cli/internal/apitest/capabilities.go
+backend/cli/internal/installtui/_buildcheck/build_test.go
+backend/cli/internal/installtui/audit_test.go
+backend/cli/internal/installtui/dependency_policy_test.go
 backend/cli/product/bundle.go
 backend/cli/product/documents_test.go
 backend/cli/sim/handshake_lockstep_test.go
@@ -188,6 +191,7 @@ backend/sims/dc-simulator/updater/mirror_test.go
 backend/sims/dc-simulator/updater/signature_test.go
 backend/sims/dc-simulator/updater/wire_internal_test.go
 backend/tools/apiprobe/baseline_test.go
+backend/tools/apiprobe/bulkchange_test.go
 backend/tools/apiprobe/documents_test.go
 backend/tools/apiprobe/entities_test.go
 backend/tools/apiprobe/readsweep_test.go

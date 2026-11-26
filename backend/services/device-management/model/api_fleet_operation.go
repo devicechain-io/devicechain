@@ -340,10 +340,19 @@ func (api *Api) fleetCreateStepTwo(ctx context.Context, tenant string, op *Fleet
 			}
 			lines = append(lines, row)
 		}
+		// INSERTs participate in lock ordering too. These rows all have zero IDs:
+		// the sequence allocates increasing fresh IDs, and this transaction never
+		// locks an existing line afterwards. The exclusive operation fence keeps
+		// another creator out of its ordinal/target unique keys; there are no
+		// line foreign keys that could acquire locks on older journal rows.
 		if err := tx.CreateInBatches(&lines, fleetLinesPerInsert).Error; err != nil {
 			return err
 		}
-		now := time.Now()
+		// expires_at is what the expiry sweep and a start compare with the database's clock.
+		now, err := fleetDBNow(tx)
+		if err != nil {
+			return err
+		}
 		if err := tx.Create(&FleetOperationContract{
 			OperationId: int64(op.ID), Version: 1, Digest: plan.ContractDigest, Body: plan.ContractBody,
 			ApprovalKind: FleetApprovalHumanDirect, PolicyVersion: 1, ProposedBy: actor,
