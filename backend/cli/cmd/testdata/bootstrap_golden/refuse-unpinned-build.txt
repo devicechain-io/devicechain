@@ -1,0 +1,11 @@
+args: bootstrap local acme --skip-preflight --no-escrow
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (164 bytes) --
+Error: this dcctl build has no pinned image version ("dev" is not a published tag); deploy a tagged release with --version <tag>, or build from source with --build
+
+-- engine (11 bytes) --
+not called
+

@@ -6,6 +6,7 @@ package bulkchange
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,13 +16,43 @@ import (
 	graphql "github.com/graph-gophers/graphql-go"
 )
 
-type sessionClient struct{ *userclient.TenantSession }
+type sessionClient struct {
+	*userclient.TenantSession
+	// fresh builds a new, not yet signed-in session for the same person; nil when the caller
+	// cannot sign in again.
+	fresh func() *userclient.TenantSession
+}
 
 // NewClient wraps a schema-negotiating tenant session with a fresh capability
 // probe. Production disables GraphQL introspection; OPTIONS is its supported,
 // authenticated discovery contract. The session still owns authentication/MFA.
 func NewClient(session *userclient.TenantSession) Client {
-	return &sessionClient{session}
+	return &sessionClient{TenantSession: session}
+}
+
+// NewStepUpClient is NewClient that can also sign in again for a call that needs a recent
+// second factor. fresh must build a session for the same person, server and tenant, and must
+// answer its second-factor challenge with a NEW code: a refreshed token keeps the old
+// verification time, so only a new sign-in proves a fresh factor.
+func NewStepUpClient(session *userclient.TenantSession, fresh func() *userclient.TenantSession) StepUpClient {
+	return &sessionClient{TenantSession: session, fresh: fresh}
+}
+
+// StepUp signs in again now, so the one-time code is asked for here, and uses the new session
+// from then on.
+func (c *sessionClient) StepUp(ctx context.Context) error {
+	if c.fresh == nil {
+		return errors.New("this client cannot sign in again")
+	}
+	session := c.fresh()
+	if session == nil {
+		return errors.New("could not build a session to sign in again")
+	}
+	if _, err := session.AccessToken(ctx); err != nil {
+		return err
+	}
+	c.TenantSession = session
+	return nil
 }
 
 func (c *sessionClient) ServesBulkChanges(ctx context.Context, endpoint string) (bool, error) {

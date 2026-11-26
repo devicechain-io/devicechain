@@ -3357,11 +3357,39 @@ attrlock_diagnose() {
   } >&2
 }
 
+# attr_phase_gate <protocol|pre-protocol> prints `run` when the attrlock and attrguard phases apply to a baseline
+# of that protocol, `skip` when they do not; anything else fails (exit 2). Pure.
+#
+# Both phases assert that a BASELINE pod's attribute writes keep succeeding beside the upgraded pods. That holds
+# only for a baseline that follows the writer protocol (v1.9.0 on): the guard refuses a pre-protocol pod's
+# writes BY DESIGN (DCAP1), and `dcctl upgrade` refuses that skipped minor without its override. A run from such
+# a baseline is the bulkchange phase's baseline control, which requires those refusals; so these two phases
+# skip it BY NAME rather than fail on the refusal the control exists to show.
+attr_phase_gate() {
+  case "$1" in
+  protocol) echo run ;;
+  pre-protocol) echo skip ;;
+  *) return 2 ;;
+  esac
+}
+
+# attr_phase_skips <phase> succeeds (after saying so) when <phase> does not apply to this run's baseline.
+attr_phase_skips() {
+  local proto gate
+  proto="$(bc_protocol_of "$baseline_src")" || fail "cannot tell whether $baseline_tag follows the writer protocol"
+  gate="$(attr_phase_gate "$proto")" || fail "unknown writer protocol '$proto' for $baseline_tag"
+  [[ "$gate" == skip ]] || return 1
+  say "$1 — SKIPPED BY NAME: $baseline_tag predates the attribute writer protocol, so the guard refuses its pod's
+attribute writes by design. The bulkchange phase's baseline control requires exactly those refusals."
+  return 0
+}
+
 cmd_attrlock() {
   need kubectl
   need jq
   resolve_baseline_tag
   [[ -s "$receipt" ]] || fail "$receipt is missing; run 'up' and 'upgrade' first: the writes are to the device the seed made"
+  attr_phase_skips "ATTRIBUTE LOCK" && return 0
   [[ -x "$apiprobe" ]] || build_apiprobe
   local ns deploy json live image pod dev_id tenant waiters p_old p_new p_hold rc i
   ns="$(instance_namespace)"
@@ -3572,6 +3600,7 @@ cmd_attrguard() {
   resolve_baseline_tag
   [[ -s "$receipt" ]] || fail "$receipt is missing; run 'up' and 'upgrade' first: the writes are to the device the seed made"
   [[ -x "$apiprobe" ]] || build_apiprobe
+  attr_phase_skips "ATTRIBUTE GUARD" && return 0
   [[ -x "$target_dcctl" ]] || build_target_dcctl
   local ns deploy json live image pod dev_id tenant out i rc enforcement
   ns="$(instance_namespace)"
@@ -4323,6 +4352,13 @@ selftest_bulkchange() {
   bc_captures "$d/pre" && fail "SELF-TEST FAILED: a tree without capture read as capturing"
   bc_captures "$repo_root" || fail "SELF-TEST FAILED: this tree's report capture was not found"
   note "a baseline's protocol and capture are read from its own code, never a test file ✓"
+  [[ "$(attr_phase_gate protocol)" == run ]] || fail "SELF-TEST FAILED: attrlock/attrguard skip a baseline that follows the protocol"
+  [[ "$(attr_phase_gate pre-protocol)" == skip ]] || fail "SELF-TEST FAILED: attrlock/attrguard run on a pre-protocol baseline, whose writes the guard refuses by design"
+  for bad in "" Protocol unknown; do
+    rc=0; attr_phase_gate "$bad" >/dev/null || rc=$?
+    [[ "$rc" == 2 ]] || fail "SELF-TEST FAILED: attr_phase_gate accepted '$bad' (rc=$rc)"
+  done
+  note "attrlock and attrguard run on a protocol baseline and skip a pre-protocol one by name ✓"
 
   # The selections.
   local bc_prefix_saved="$bc_prefix"

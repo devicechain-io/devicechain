@@ -75,6 +75,38 @@ func InstallSteps() []StepID {
 	}
 }
 
+// The bootstrap stages, in the order `dcctl bootstrap` runs them. The first four are
+// the command's own work before the pipeline: the arguments, the preflight, the
+// root-key escrow plan (the one stage that may ask for a secret) and the cluster the
+// instance is built on. The other eleven are the pipeline's steps, one for one.
+const (
+	StepBootstrapInputs         StepID = "bootstrap.inputs"
+	StepBootstrapPreflight      StepID = "bootstrap.preflight"
+	StepBootstrapEscrow         StepID = "bootstrap.escrow"
+	StepBootstrapCluster        StepID = "bootstrap.cluster"
+	StepBootstrapRegistry       StepID = "bootstrap.registry"
+	StepBootstrapClaim          StepID = "bootstrap.claim"
+	StepBootstrapRefuseRebuild  StepID = "bootstrap.refuse-rebuild"
+	StepBootstrapSingletons     StepID = "bootstrap.singletons"
+	StepBootstrapDeclare        StepID = "bootstrap.declare"
+	StepBootstrapRender         StepID = "bootstrap.render"
+	StepBootstrapInfrastructure StepID = "bootstrap.infrastructure"
+	StepBootstrapHelm           StepID = "bootstrap.helm"
+	StepBootstrapReadiness      StepID = "bootstrap.readiness"
+	StepBootstrapBrokerBalance  StepID = "bootstrap.broker-balance"
+	StepBootstrapReport         StepID = "bootstrap.report"
+)
+
+// BootstrapSteps returns the bootstrap stage IDs in execution order, as a fresh slice.
+func BootstrapSteps() []StepID {
+	return []StepID{
+		StepBootstrapInputs, StepBootstrapPreflight, StepBootstrapEscrow, StepBootstrapCluster,
+		StepBootstrapRegistry, StepBootstrapClaim, StepBootstrapRefuseRebuild, StepBootstrapSingletons,
+		StepBootstrapDeclare, StepBootstrapRender, StepBootstrapInfrastructure, StepBootstrapHelm,
+		StepBootstrapReadiness, StepBootstrapBrokerBalance, StepBootstrapReport,
+	}
+}
+
 // MessageCode identifies a message for a presenter to render from its own
 // catalogue. Codes, step IDs, metric IDs, sources and prompt IDs share one
 // identifier grammar, checked at the hub, so free text cannot ride in them.
@@ -83,6 +115,21 @@ type MessageCode string
 // QuestionCreateKindCluster asks whether to create the managed kind cluster an
 // install found missing. Param "cluster" names it. --yes answers it.
 const QuestionCreateKindCluster MessageCode = "install.create-kind-cluster"
+
+// The root-key escrow's secret questions. Each is a PromptSecret; --yes answers none of
+// them, and the answer never travels in an event.
+const (
+	// QuestionEscrowPassphrase asks for the passphrase a new escrow artifact is written
+	// under. Param "instance" names the instance. QuestionEscrowPassphraseConfirm follows
+	// it, because a mistyped passphrase on the write side is found out years later.
+	QuestionEscrowPassphrase MessageCode = "bootstrap.escrow-passphrase"
+	// QuestionEscrowPassphraseConfirm asks for the same passphrase again.
+	QuestionEscrowPassphraseConfirm MessageCode = "bootstrap.escrow-passphrase-confirm"
+	// QuestionEscrowRestorePassphrase asks for the passphrase of the artifact a root key
+	// is restored from. Param "artifact" is its path. It is asked once: a wrong one fails
+	// to open the artifact, which says so.
+	QuestionEscrowRestorePassphrase MessageCode = "bootstrap.escrow-restore-passphrase"
+)
 
 // ErrorCode is a stable, safe identifier for a failure.
 type ErrorCode string

@@ -67,6 +67,17 @@ expected until the release that installs enforcement. Use -o json for the four f
 var fleetOpSession = newFleetOpSession
 
 func newFleetOpSession(cmd *cobra.Command) (bulkchange.Client, string, error) {
+	sessions, endpoint, err := tenantSessions(cmd)
+	if err != nil {
+		return nil, "", err
+	}
+	return sessions(otpFunc(otpFlag(cmd))), endpoint, nil
+}
+
+// tenantSessions reads the command's identity and target once and answers a builder of
+// not-yet-signed-in sessions for them, each answering a second-factor challenge with the otp it
+// is given. Sessions that must never offer the same --otp twice share one otp.
+func tenantSessions(cmd *cobra.Command) (func(userclient.OTPFunc) *userclient.TenantSession, string, error) {
 	server, tls, err := targetFlags(cmd)
 	if err != nil {
 		return nil, "", err
@@ -81,9 +92,9 @@ func newFleetOpSession(cmd *cobra.Command) (bulkchange.Client, string, error) {
 		return nil, "", fmt.Errorf("--email and --password are required: bulk changes are authorized as the identity that requests them")
 	}
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
-	session := userclient.NewTenantSession(nil, endpoints.UserGraphQL, email, password, tenant).
-		WithOTP(otpFunc(otpFlag(cmd)))
-	return session, endpoints.DeviceMgmtGraphQL, nil
+	return func(otp userclient.OTPFunc) *userclient.TenantSession {
+		return userclient.NewTenantSession(nil, endpoints.UserGraphQL, email, password, tenant).WithOTP(otp)
+	}, endpoints.DeviceMgmtGraphQL, nil
 }
 
 func runFleetOpReadiness(cmd *cobra.Command, _ []string) error {

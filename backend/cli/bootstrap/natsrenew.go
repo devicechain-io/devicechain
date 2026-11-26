@@ -292,7 +292,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 		if len(mqttBrokerNames(st)) > 0 {
 			return false, errMQTTHostNeedsACertificate("the broker has no certificate Secret")
 		}
-		fmt.Println(color.YellowString(
+		out(ctx).println(color.YellowString(
 			"  The broker has no certificate Secret, so there is nothing to renew. This instance " +
 				"predates dcctl owning it; its certificate is renewed by rebuilding the instance."))
 		return false, nil
@@ -326,7 +326,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 		// impossible for exactly that population; saying nothing would let the
 		// certificate expire on an instance whose operator was told the upgrade
 		// succeeded.
-		fmt.Println(color.YellowString(
+		out(ctx).println(color.YellowString(
 			"  ⚠️  The broker's certificate needs replacing (%s), and this instance does not\n"+
 				"     keep the authority that signed it — so it cannot be re-issued in place.\n"+
 				"     Rebuilding the instance mints a fresh authority and certificate; until then\n"+
@@ -367,7 +367,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 		// would fail the whole upgrade with "restart dc-nats by hand" before that apply runs. The
 		// new certificate is in the Secret; the recreated StatefulSet's servers pick it up when
 		// they next start.
-		fmt.Println(color.WhiteString(
+		out(ctx).println(color.WhiteString(
 			"  Broker certificate re-issued under the same authority (%s). The broker's StatefulSet is gone\n"+
 				"  (deleted to grow its volume), so no restart is made here; the servers present the new\n"+
 				"  certificate once the StatefulSet is recreated and they restart.", reason))
@@ -375,29 +375,29 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 	}
 
 	if hot {
-		fmt.Println(color.WhiteString(
+		out(ctx).println(color.WhiteString(
 			"  Broker certificate re-issued under the same authority (%s). Waiting for the brokers to\n"+
 				"  switch to it without restarting (up to %s).", reason, brokerHotRenewTimeout))
 		verr := waitForBrokersToServe(ctx, typed, ns, newLeaf.NotAfter)
 		if verr == nil {
-			fmt.Println(color.WhiteString(
+			out(ctx).println(color.WhiteString(
 				"  Every broker now serves the new certificate; no broker was restarted and no MQTT session dropped."))
 			return false, nil
 		}
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}
-		fmt.Println(color.YellowString(
+		out(ctx).println(color.YellowString(
 			"  ⚠️  The brokers did not switch to the new certificate on their own (%v).\n"+
 				"     Restarting the broker so it presents it.", verr))
 	} else {
-		fmt.Println(color.WhiteString("  Rolling the broker rather than swapping the certificate in place: %s.", whyNot))
+		out(ctx).println(color.WhiteString("  Rolling the broker rather than swapping the certificate in place: %s.", whyNot))
 	}
 
 	if err := restartBroker(ctx, typed, ns); err != nil {
 		return false, err
 	}
-	fmt.Println(color.WhiteString(
+	out(ctx).println(color.WhiteString(
 		"  Broker certificate re-issued under the same authority (%s), and the broker restarted\n"+
 			"  to present it. Nothing had to re-trust anything.", reason))
 	return true, nil

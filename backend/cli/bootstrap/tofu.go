@@ -145,7 +145,7 @@ func instanceRootVarsIn(st *State, rootdir string) ([]string, error) {
 		return nil, err
 	}
 	if rootdir != "" {
-		sayOverriddenTopologyVars(st, rootdir)
+		sayOverriddenTopologyVars(stdConsole, st, rootdir)
 	}
 	vars = append(vars, st.Install.Outputs.Archive.archiveVars()...)
 	return append(vars, st.CarriedRestoreVars...), nil
@@ -310,9 +310,9 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 // what it built.
 func applyInstanceInfra(ctx context.Context, st *State, tf *tofuExec, vars []string) error {
 
-	opts := make([]tfexec.ApplyOption, 0, len(vars))
+	opts := make([]applyOption, 0, len(vars))
 	for _, v := range vars {
-		opts = append(opts, tfexec.Var(v))
+		opts = append(opts, applyVar(v))
 	}
 	if err := applyWithCNPGAdmissionRetry(ctx, tf, opts, "tofu apply", func(ctx context.Context) error {
 		return waitForCNPGAdmission(ctx, st.KubeContext, cnpgAdmissionTimeout)

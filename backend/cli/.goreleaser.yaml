@@ -77,6 +77,17 @@ archives:
       dcctl_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     formats:
       - tar.gz
+    # The module is two levels below the repository license and notices.
+    files:
+      - src: README.md
+        dst: .
+        strip_parent: true
+      - src: ../../LICENSE
+        dst: .
+        strip_parent: true
+      - src: ../../NOTICE
+        dst: .
+        strip_parent: true
     # Windows users expect a .zip rather than a tarball.
     format_overrides:
       - goos: windows

@@ -343,11 +343,16 @@ func (p PromptResolved) validate(r *redactor) error {
 
 func (p PromptResolved) scrub(*redactor) Payload { return p }
 
-// RunCancelling says the run is stopping and what it is still waiting for.
+// RunCancelling says the run is stopping and what it is still waiting for. It
+// comes once, when the cancel is requested; the step the stop ends and the
+// summary follow only once the work in flight has settled.
 type RunCancelling struct {
 	Reason         CancelReason `json:"reason"`
 	ActiveStep     StepID       `json:"active_step,omitempty"`
 	WaitingForTool bool         `json:"waiting_for_tool"`
+	// StopBudgetMS is how long the tool being waited for was given to stop
+	// gracefully, when WaitingForTool. It bounds nothing itself.
+	StopBudgetMS int64 `json:"stop_budget_ms,omitempty"`
 }
 
 func (RunCancelling) Kind() Kind { return KindRunCancelling }
@@ -355,6 +360,9 @@ func (RunCancelling) Kind() Kind { return KindRunCancelling }
 func (p RunCancelling) validate(r *redactor) error {
 	if err := checkEnum("cancel reason", p.Reason); err != nil {
 		return err
+	}
+	if p.StopBudgetMS < 0 {
+		return fmt.Errorf("%w: negative stop budget", ErrInvalidEvent)
 	}
 	return checkOptionalID(r, "active step", string(p.ActiveStep))
 }

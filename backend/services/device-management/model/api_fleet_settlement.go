@@ -22,14 +22,10 @@ var fleetSettlementUnknown = prometheus.NewCounter(prometheus.CounterOpts{
 	Name: "device_management_bulk_change_settlement_unknown_total",
 	Help: "Bulk change lines skipped because a stored vocabulary value is unknown.",
 })
-var fleetReconcilerLag = prometheus.NewGauge(prometheus.GaugeOpts{
-	Name: "device_management_bulk_change_reconciler_lag_seconds",
-	Help: "Age of the oldest undecided report for a bulk change line.",
-})
 
 func init() {
 	if ledger.Served {
-		prometheus.MustRegister(fleetSettlementUnknown, fleetReconcilerLag)
+		prometheus.MustRegister(fleetSettlementUnknown)
 	}
 }
 
@@ -326,13 +322,17 @@ func (api *Api) settleFleetLines(ctx context.Context, fast, due bool) (int64, er
 	var lastUndecided error
 	touched := map[int64]bool{}
 	documents := make(map[fleetSettlementDocumentKey]map[string]ledger.Raw)
+	// Settlements are counted only once the transaction that wrote them commits.
+	var committed, pendingCount []fleetSettled
 	pass := func(tx *gorm.DB) error {
 		for scanned := 0; ; {
 			rows, err := fleetSettlementRead(tx, tenant, after, fleetSettlementBatch, fast, due)
 			if err != nil {
 				return err
 			}
+			var chunk []fleetSettled
 			decide := func(w *gorm.DB) error {
+				chunk = chunk[:0]
 				for i := range rows {
 					row := &rows[i]
 					after = row.ID
@@ -351,6 +351,15 @@ func (api *Api) settleFleetLines(ctx context.Context, fast, due bool) (int64, er
 						return err
 					}
 					total += n
+					if n > 0 && row.Settlement.String != string(ledger.SettlementResolvedConfirmed) &&
+						row.Settlement.String != string(ledger.SettlementResolvedFailed) {
+						// A verdict a person gave keeps its settlement: late evidence only flags it.
+						settled := fleetSettled{settlement: string(ledger.SettlementAmbiguous)}
+						if verdict.Decided {
+							settled = fleetSettled{settlement: string(verdict.Settlement), basis: string(verdict.Basis)}
+						}
+						chunk = append(chunk, settled)
+					}
 				}
 				return nil
 			}
@@ -371,6 +380,11 @@ func (api *Api) settleFleetLines(ctx context.Context, fast, due bool) (int64, er
 			if err != nil {
 				return err
 			}
+			if due {
+				pendingCount = append(pendingCount, chunk...) // the one deadline transaction has not committed yet
+			} else {
+				committed = append(committed, chunk...)
+			}
 			scanned += len(rows)
 			if len(rows) < fleetSettlementBatch || (due && scanned >= fleetSettlementDeadlineBound) || (fast && scanned >= 3000) {
 				return nil
@@ -379,9 +393,14 @@ func (api *Api) settleFleetLines(ctx context.Context, fast, due bool) (int64, er
 	}
 	var err error
 	if due {
-		err = db.Transaction(pass)
+		if err = db.Transaction(pass); err == nil {
+			committed = append(committed, pendingCount...)
+		}
 	} else {
 		err = pass(db)
+	}
+	for _, s := range committed {
+		bulkMetrics.settle(s.settlement, s.basis, 1)
 	}
 	if err != nil {
 		return total, err
@@ -419,9 +438,12 @@ func (api *Api) FleetReportCaptureComplete(ctx context.Context, op *FleetOperati
 	db := api.RDB.DB(ctx)
 	l, s := fleetSettlementTable(db, "FleetOperationLine"), fleetSettlementTable(db, "DeviceConfigurationState")
 	var count int64
+	// Without a gap marker, capture covers the device's entire report history:
+	// its first report may arrive after posting. After a gap, continuous capture
+	// must have resumed by posting and exclude any relevant missed revisions.
 	err := db.Raw(`SELECT count(*) FROM `+l+` l LEFT JOIN `+s+` s ON s.device_id=l.target_id AND s.tenant_id=l.tenant_id
  WHERE l.tenant_id=? AND l.operation_id=? AND (s.capture_complete_since IS NULL
- OR s.capture_complete_since > coalesce(l.posted_at,?)
+ OR (s.capture_gap_through IS NOT NULL AND s.capture_complete_since > coalesce(l.posted_at,?))
  OR (l.posted_revision IS NOT NULL AND s.capture_gap_through >= l.posted_revision)
  OR NOT (s.reported_revision IS NOT DISTINCT FROM s.captured_revision AND s.reported_status IS NOT DISTINCT FROM s.captured_status AND s.reported_at IS NOT DISTINCT FROM s.captured_reported_at))`, tenant, op.ID, op.CreatedAt).Scan(&count).Error
 	return count == 0, err
@@ -499,7 +521,7 @@ func (api *Api) RunFleetSettlement(ctx context.Context, fast, due bool) error {
 		}
 	}
 	if !due && failed == 0 {
-		fleetReconcilerLag.Set(lag.Seconds())
+		bulkMetrics.reconcilerLag.Set(lag.Seconds())
 	}
 	return core.PassResult(len(tenants), failed, last)
 }
@@ -564,3 +586,6 @@ func (api *Api) SweepFleetSettlement(ctx context.Context) error {
 	}
 	return api.RDB.SingletonPass(ctx, "device-management-bulk-change-settlement-sweep", pass)
 }
+
+// fleetSettled is one settlement written by a pass, counted once its transaction commits.
+type fleetSettled struct{ settlement, basis string }

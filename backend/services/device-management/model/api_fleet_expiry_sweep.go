@@ -34,14 +34,19 @@ func fleetExpiryCandidates(db *gorm.DB, now time.Time) *gorm.DB {
 }
 
 // fleetExpiryTenants discovers at most ten tenants with due operations, after the cursor first and
-// then wrapping to the beginning. Only tenant IDs cross scopes.
-func (api *Api) fleetExpiryTenants(ctx context.Context, now time.Time) ([]string, error) {
+// then wrapping to the beginning. Only tenant IDs cross scopes. Due is judged on the database's clock.
+func (api *Api) fleetExpiryTenants(ctx context.Context) ([]string, error) {
+	system := core.WithSystemContext(ctx)
+	now, err := fleetDBNow(api.RDB.DB(system))
+	if err != nil {
+		return nil, err
+	}
 	api.fleetExpiryCursor.Lock()
 	after := api.fleetExpiryCursor.after
 	api.fleetExpiryCursor.Unlock()
 	discover := func(where string, limit int) ([]string, error) {
 		var tenants []string
-		err := fleetExpiryCandidates(api.RDB.DB(core.WithSystemContext(ctx)).Model(&FleetOperation{}), now).
+		err := fleetExpiryCandidates(api.RDB.DB(system).Model(&FleetOperation{}), now).
 			Where(where, after).Distinct("tenant_id").Order("tenant_id").Limit(limit).Pluck("tenant_id", &tenants).Error
 		return tenants, err
 	}
@@ -67,10 +72,9 @@ func (api *Api) SweepExpiredFleetOperations(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, fleetExpiryPassTimeout)
 	defer cancel()
 	pass := func() error {
-		now := time.Now()
 		// Operation reads and transitions below use a fresh tenant context derived from the
 		// original non-system context.
-		tenants, err := api.fleetExpiryTenants(ctx, now)
+		tenants, err := api.fleetExpiryTenants(ctx)
 		if err != nil {
 			return err
 		}
@@ -80,7 +84,7 @@ func (api *Api) SweepExpiredFleetOperations(ctx context.Context) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if _, err := api.ExpireFleetOperations(core.WithTenant(ctx, tenant), now); err != nil {
+			if _, err := api.ExpireFleetOperations(core.WithTenant(ctx, tenant)); err != nil {
 				failed++
 				lastErr = err
 			}

@@ -340,7 +340,7 @@ func TestExpiryAbortsTheOperationsNobodyFinishedAndNoOthers(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Model(&FleetOperation{ID: stuck.ID}).Update("created_at", now.Add(-time.Hour)).Error)
 
-	count, err := api.ExpireFleetOperations(ctx, now)
+	count, err := api.ExpireFleetOperations(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 2, count)
 	get := func(token string) *FleetOperation {
@@ -359,12 +359,12 @@ func TestExpiryAbortsTheOperationsNobodyFinishedAndNoOthers(t *testing.T) {
 	_ = fresh
 	_ = recent
 	// Idempotent: nothing more is due.
-	count, err = api.ExpireFleetOperations(ctx, now)
+	count, err = api.ExpireFleetOperations(ctx)
 	require.NoError(t, err)
 	require.Zero(t, count)
 	// Another tenant's operations are never swept from this tenant's context.
 	other := core.WithTenant(context.Background(), "globex")
-	count, err = api.ExpireFleetOperations(other, now)
+	count, err = api.ExpireFleetOperations(other)
 	require.NoError(t, err)
 	require.Zero(t, count)
 }

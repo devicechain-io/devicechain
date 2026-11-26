@@ -1,0 +1,14 @@
+args: bootstrap local acme --skip-preflight
+stdin: "typed-into-a-pipe\n"
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (294 bytes) --
+Error: no escrow passphrase and no terminal to ask at.
+  Supply one with --escrow-passphrase-file <path> or DCCTL_ESCROW_PASSPHRASE,
+  or pass --no-escrow to bootstrap an instance whose root key has no second copy
+  (a throwaway; losing the cluster then loses every stored secret permanently).
+
+-- engine (11 bytes) --
+not called
+

@@ -170,19 +170,19 @@ func devAllowEgressValues(st *State) map[string]interface{} {
 }
 
 // sayDevAllowEgress prints the allowance in effect, loudly, and what this run changes.
-func sayDevAllowEgress(st *State) {
+func sayDevAllowEgress(c console, st *State) {
 	if len(st.DevAllowEgress) == 0 {
 		if st.DevAllowEgressChange {
-			fmt.Printf("  %s %s\n", color.WhiteString("Dev egress:"),
+			c.printf("  %s %s\n", color.WhiteString("Dev egress:"),
 				color.YellowString("cleared (--dev-allow-egress none); tenant egress is back to the default boundary"))
 		}
 		return
 	}
-	fmt.Printf("  %s %s\n", color.WhiteString("Dev egress:"),
+	c.printf("  %s %s\n", color.WhiteString("Dev egress:"),
 		color.YellowString("DEVELOPMENT ONLY - tenant webhooks and connectors may reach "+strings.Join(st.DevAllowEgress, ", ")+
 			" (cloud metadata, loopback and link-local stay blocked)"))
 	if st.DryRun && st.DevAllowEgressChange {
-		wouldDo("record the development egress allowance in the instance declaration")
+		c.wouldDo("record the development egress allowance in the instance declaration")
 	}
 }
 

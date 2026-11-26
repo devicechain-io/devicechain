@@ -92,10 +92,31 @@ func startMinio(t *testing.T) *minioServer {
 		Region: "us-east-1", BaseEndpoint: aws.String(endpoint), UsePathStyle: true,
 		Credentials: credentials.NewStaticCredentialsProvider(minioUser, minioPassword, ""),
 	})
-	if _, err := admin.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: aws.String(minioBucket)}); err != nil {
+	if err := createBucketWhenReady(context.Background(), admin, minioBucket, time.Now().Add(60*time.Second)); err != nil {
 		t.Fatalf("creating the bucket: %v", err)
 	}
 	return &minioServer{endpoint: endpoint, admin: admin}
+}
+
+// createBucketWhenReady creates the bucket, retrying while the server says it is not up yet.
+//
+// 🔴 WHY /minio/health/live IS NOT ENOUGH: it answers 200 as soon as the HTTP listener is up, while the
+// object layer behind it is still initialising, and every S3 call in that window is refused with
+// 503 XMinioServerNotInitialized. The SDK's own three quick retries finish inside that window on a
+// loaded runner (CI failed TestMinIOCancelledPutLeavesNoUpload this way at the bucket creation, before
+// any upload ran). Only that answer is retried: any other refusal fails at once. Same fix as the
+// update-management MinIO tests (#3178).
+func createBucketWhenReady(ctx context.Context, admin *s3.Client, bucket string, deadline time.Time) error {
+	for {
+		_, err := admin.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)})
+		if err == nil || !strings.Contains(err.Error(), "XMinioServerNotInitialized") {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("MinIO still not initialised at the deadline: %w", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // store builds the store the way production does: NewS3Store, credentials from the environment.

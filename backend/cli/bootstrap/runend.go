@@ -42,12 +42,12 @@ func finishBootstrapPhase(ctx context.Context, st *State, runErr error, connect 
 		return nil
 	}
 	if runErr != nil && !st.DeclarationWritten {
-		fmt.Println("The instance's recorded phase is unchanged: this run stopped before it wrote anything to the declaration.")
+		out(ctx).println("The instance's recorded phase is unchanged: this run stopped before it wrote anything to the declaration.")
 		return nil
 	}
 	dyn, err := connect()
 	if err != nil {
-		return runEndUnrecorded("bootstrap", st, runErr,
+		return runEndUnrecorded(out(ctx), "bootstrap", st, runErr,
 			fmt.Errorf("connecting to the cluster to record the instance phase: %w", err))
 	}
 	return recordRunEnded(ctx, dyn, "bootstrap", st.Instance, st, st.Claim, runErr)
@@ -90,7 +90,7 @@ func recordRunEnded(ctx context.Context, dyn dynamic.Interface, verb, instance s
 
 	if claim != nil {
 		if err := claim.CheckHeld(cleanup); err != nil {
-			return runEndUnrecorded(verb, st, runErr,
+			return runEndUnrecorded(out(ctx), verb, st, runErr,
 				fmt.Errorf("the cluster lock was taken over before the outcome could be recorded: %w", err))
 		}
 	}
@@ -104,7 +104,7 @@ func recordRunEnded(ctx context.Context, dyn dynamic.Interface, verb, instance s
 	current, readErr := readInstanceCR(cleanup, dyn, instance)
 	if readErr == nil && current != nil &&
 		current.Annotations[dcv1beta1.AnnotationPhase] == dcv1beta1.PhaseDestroying {
-		fmt.Println(color.YellowString(
+		out(ctx).println(color.YellowString(
 			"warning: instance %q is part-way through being DESTROYED, so this %s left the "+
 				"declaration saying so rather than recording itself as %s.\n"+
 				"  Finish the teardown with `dcctl destroy %s`, which is resumable, and build it "+
@@ -112,7 +112,7 @@ func recordRunEnded(ctx context.Context, dyn dynamic.Interface, verb, instance s
 		return nil
 	}
 	if err := setInstancePhase(cleanup, dyn, instance, phase); err != nil {
-		return runEndUnrecorded(verb, st, runErr, err)
+		return runEndUnrecorded(out(ctx), verb, st, runErr, err)
 	}
 	return nil
 }
@@ -121,9 +121,9 @@ func recordRunEnded(ctx context.Context, dyn dynamic.Interface, verb, instance s
 // FAILED run, or over an instance whose first bootstrap had already finished, it is a
 // warning and nil, which is what it always was. After a SUCCESSFUL run over an
 // unfinished one it is the run's error: see recordRunEnded.
-func runEndUnrecorded(verb string, st *State, runErr, err error) error {
+func runEndUnrecorded(c console, verb string, st *State, runErr, err error) error {
 	if runErr != nil || !st.UnfinishedBootstrap {
-		fmt.Println(color.YellowString("warning: could not record the instance phase (%v)", err))
+		c.println(color.YellowString("warning: could not record the instance phase (%v)", err))
 		return nil
 	}
 	return fmt.Errorf("instance %q is running, but dcctl could not record that its %s finished (%w). "+

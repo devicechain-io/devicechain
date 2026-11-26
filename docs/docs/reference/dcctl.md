@@ -665,7 +665,9 @@ The commands probe this instance for support. The deprecated dcctl fleet-op read
 * [dcctl bulk-change pause](#dcctl-bulk-change-pause)	 - Preview. Pause a bulk change
 * [dcctl bulk-change plan](#dcctl-bulk-change-plan)	 - Preview. Plan a device configuration bulk change
 * [dcctl bulk-change readiness](#dcctl-bulk-change-readiness)	 - Preview. Report whether this instance can run bulk changes
+* [dcctl bulk-change resolve](#dcctl-bulk-change-resolve)	 - Preview. Resolve ambiguous lines of a bulk change as confirmed or failed
 * [dcctl bulk-change resume](#dcctl-bulk-change-resume)	 - Preview. Resume a paused bulk change within its approved contract
+* [dcctl bulk-change reverse](#dcctl-bulk-change-reverse)	 - Preview. Preview or create the reversal of a DISPATCHED or ABORTED bulk change
 * [dcctl bulk-change start](#dcctl-bulk-change-start)	 - Preview. Start a reviewed READY bulk change
 * [dcctl bulk-change status](#dcctl-bulk-change-status)	 - Preview. Inspect dispatch and evidence for a bulk change
 
@@ -933,6 +935,49 @@ dcctl bulk-change readiness [flags]
 
 * [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
 
+## dcctl bulk-change resolve {#dcctl-bulk-change-resolve}
+
+Preview. Resolve ambiguous lines of a bulk change as confirmed or failed
+
+### Synopsis
+
+Preview. Resolve ambiguous lines of a bulk change as confirmed or failed.
+
+Select lines with --ordinals or every ambiguous line with --all-ambiguous. Lines that are not ambiguous are left unchanged.
+A note of 1 to 1000 characters records why. The verdict is a person's, not device evidence: a later report that contradicts it sets the line's evidence flag.
+Resolving needs a person's own sign-in with a second factor verified within the last five minutes. When the server asks for a fresher one, the command signs in again and asks for a new authenticator code (a recovery code does not count).
+
+```
+dcctl bulk-change resolve TOKEN [flags]
+```
+
+### Options
+
+```
+      --all-ambiguous    Preview. Resolve every ambiguous line instead of selecting ordinals
+      --note string      Preview. Why, from 1 to 1000 characters (required)
+      --ordinals ints    Preview. Positions of the lines to resolve, starting at 1
+  -o, --output string    Preview. Output format: table or json (default "table")
+      --verdict string   Preview. Verdict: confirmed or failed (required)
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      Preview. identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              Preview. help for bulk changes
+  -i, --instance string   Preview. instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        Preview. one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   Preview. password for the identity (required)
+  -s, --server string     Preview. instance host for platform API calls (default "localhost")
+  -t, --tenant string     Preview. tenant to inspect (required)
+      --tls               Preview. use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
+
 ## dcctl bulk-change resume {#dcctl-bulk-change-resume}
 
 Preview. Resume a paused bulk change within its approved contract
@@ -955,6 +1000,57 @@ dcctl bulk-change resume TOKEN [flags]
       --failure-threshold int      Preview. Positive failed/refused line count that pauses dispatch; omitted on create: no limit
       --max-posts-per-second int   Preview. Maximum posts per second, from 1 to 50; omitted on resume: unchanged (default 10)
   -o, --output string              Preview. Output format: table or json (default "table")
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      Preview. identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              Preview. help for bulk changes
+  -i, --instance string   Preview. instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
+      --otp string        Preview. one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   Preview. password for the identity (required)
+  -s, --server string     Preview. instance host for platform API calls (default "localhost")
+  -t, --tenant string     Preview. tenant to inspect (required)
+      --tls               Preview. use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl bulk-change](#dcctl-bulk-change)	 - Preview. Plan, run and inspect device bulk changes
+
+## dcctl bulk-change reverse {#dcctl-bulk-change-reverse}
+
+Preview. Preview or create the reversal of a DISPATCHED or ABORTED bulk change
+
+### Synopsis
+
+Preview. Preview or create the reversal of a DISPATCHED or ABORTED bulk change.
+
+A reversal is a new bulk change that puts back, line by line, the value each device held before the original.
+Without --create nothing is written: the server reports how many lines would be reversed, how many changed after the original was applied, how many were erased, already reversed or never applied, and the digests.
+With --create the reversal is created in READY; review its contract and start it like any bulk change.
+A line whose value changed after the original is refused with CHANGED_SINCE unless --override-changed (every selected line) or --override-ordinals overrides it. Creating with an override needs a second factor verified within the last five minutes: when the server asks for a fresher one, the command signs in again and asks for a new authenticator code (a recovery code does not count).
+Repeating --create with the same --token and the same request returns the first reversal.
+
+```
+dcctl bulk-change reverse TOKEN [flags]
+```
+
+### Options
+
+```
+      --ambiguity-threshold int    Preview. Positive ambiguous line count that pauses dispatch; omitted on create: no limit
+      --create                     Preview. Create the reversal in READY; without it nothing is written
+      --failure-threshold int      Preview. Positive failed/refused line count that pauses dispatch; omitted on create: no limit
+      --max-posts-per-second int   Preview. Maximum posts per second, from 1 to 50; omitted on resume: unchanged (default 10)
+      --name string                Preview. Display name; defaults to the reversal token
+      --ordinals ints              Preview. Positions of the original's lines to reverse, starting at 1; default: every applied line
+  -o, --output string              Preview. Output format: table or json (default "table")
+      --override-changed           Preview. Apply every selected line even where the value changed after the original; needs a recent second factor
+      --override-ordinals ints     Preview. Apply these lines even where the value changed after the original; needs a recent second factor
+      --settle-deadline string     Preview. Evidence deadline: duration such as 24h or integer seconds, from 60s to 168h (default "24h")
+      --token string               Preview. Token of the reversal, unique within the tenant (required)
 ```
 
 ### Options inherited from parent commands
@@ -1953,6 +2049,7 @@ dcctl install <provider> [flags]
       --no-cnpg                            skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created
       --no-monitoring                      skip the monitoring stack (Prometheus/Grafana); instances on the cluster render no ServiceMonitors or alerts
       --no-tls                             with --compact: instances serve plain HTTP, so cert-manager is not installed and database backups (whose plugin needs it) are off. --compact --no-tls=false keeps both
+  -o, --output string                      output format: text (the output dcctl has always printed) or json (the install's events, one JSON object per line on stdout and nothing else there, for automation; it never reads stdin, so a confirmation is given with --yes or the run is refused before it changes anything) (default "text")
       --registry string                    pull the operator image from this registry (default: the published registry, or the local one with --build)
       --relational-store-max-wal-mib int   relational store max_wal_size soft checkpoint target in MiB (0: stock default; positive: at least 64). Omitted keeps the recorded choice, or the root default on a first install. Recorded before apply; limited to a quarter of storage by the root
       --remove-legacy-ingress              remove ingress-nginx from a cluster that still runs it. An install otherwise leaves it serving and installs Traefik beside it. Refused while any Ingress object in the cluster still names its class (each instance must first be moved with 'dcctl upgrade --drop-legacy-ingress'); on a local cluster Traefik takes the node's ports 80 and 443 in the same apply

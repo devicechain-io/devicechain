@@ -1,0 +1,11 @@
+args: bootstrap local acme --kube-context prod --skip-preflight --no-escrow
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (59 bytes) --
+Error: kube-context "prod" not found; available contexts: 
+
+-- engine (11 bytes) --
+not called
+

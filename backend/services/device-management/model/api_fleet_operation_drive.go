@@ -128,6 +128,7 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 
 	// 1. The lease.
 	lease, hold, err := api.fleetLease(ctx, op)
+	bulkMetrics.decided(lease, hold, err)
 	if err != nil {
 		return nil, err
 	}
@@ -192,6 +193,7 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	if err != nil {
 		return nil, err
 	}
+	bulkMetrics.permitted(len(due), granted)
 	if granted == 0 {
 		if err := api.holdForUndecidedLines(db, op, res); err != nil {
 			return res, err
@@ -241,7 +243,9 @@ posting:
 				return
 			}
 			defer release()
+			started := time.Now() // a duration on this process's monotonic clock, never compared with stored time
 			r, perr := api.PostFleetLine(ctx, op.ID, lineID, *lease)
+			bulkMetrics.post(op.Kind, r, perr, time.Since(started))
 			if perr != nil {
 				// An undecided error is neither a refusal nor a reason to starve later lines. Keep it
 				// visible with its own code and backoff, and return the error after pass bookkeeping.
@@ -452,7 +456,7 @@ func (api *Api) touchFleetRuntime(ctx context.Context, op *FleetOperation, progr
 // transition. It is refused as stale (ILLEGAL_TRANSITION) when the operation is no longer in the epoch the
 // decision was made in: a decision taken under an old state is never applied to a newer one.
 func (api *Api) fleetAutoPause(ctx context.Context, token string, epoch int64, reason string) (*FleetOperation, error) {
-	return api.fleetControl(ctx, token, fleetEventAutoPause, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	return api.fleetControl(ctx, token, fleetEventAutoPause, func(tx *gorm.DB, op *FleetOperation, now time.Time) (map[string]any, *FleetOperationEvent, error) {
 		if op.Dispatch != FleetDispatchRunning || op.ExecutionEpoch != epoch {
 			return nil, nil, illegal(op, "paused by the driver")
 		}
@@ -472,7 +476,7 @@ func (api *Api) pauseDriven(ctx context.Context, res *FleetDriveResult, op *Flee
 // finishDriven moves an operation whose lines have all been decided to DISPATCHED, under the fence, after
 // re-checking under it that nothing is PLANNED (a retry bookkeeping or a cancel cannot have added one).
 func (api *Api) finishDriven(ctx context.Context, res *FleetDriveResult, op *FleetOperation) (*FleetDriveResult, error) {
-	_, err := api.fleetControl(ctx, op.Token, fleetEventDispatched, func(tx *gorm.DB, cur *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	_, err := api.fleetControl(ctx, op.Token, fleetEventDispatched, func(tx *gorm.DB, cur *FleetOperation, now time.Time) (map[string]any, *FleetOperationEvent, error) {
 		if cur.Dispatch != FleetDispatchRunning || cur.ExecutionEpoch != op.ExecutionEpoch {
 			return nil, nil, illegal(cur, "dispatched")
 		}
@@ -487,7 +491,6 @@ func (api *Api) finishDriven(ctx context.Context, res *FleetDriveResult, op *Fle
 		if err := tx.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", cur.ID, FleetPostingPosted).Count(&posted).Error; err != nil {
 			return nil, nil, err
 		}
-		now := fleetTimestamp(tx)
 		changes := map[string]any{"dispatch": FleetDispatchDispatched, "dispatched_at": now}
 		if posted == 0 {
 			changes["evidence"], changes["closed_at"] = fleetEvidenceClosedText, now

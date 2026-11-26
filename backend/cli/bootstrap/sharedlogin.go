@@ -220,16 +220,16 @@ func checkSharedLoginHasSuccessors(st *State) error {
 
 // sayAboutSharedLogin is what the closing summary says about the shared login: which phase ran,
 // and, when retirement was ready and blocked, what blocked it.
-func sayAboutSharedLogin(st *State) {
+func sayAboutSharedLogin(c console, st *State) {
 	switch st.Values[sharedLoginPhaseValue] {
 	case sharedLoginRetiring:
-		fmt.Println(color.WhiteString(
+		c.println(color.WhiteString(
 			"\nThe shared message broker login is retired. Every area was already connecting with a login of\n" +
 				"its own, so the broker no longer has the shared login and the instance document no longer names it.\n" +
 				"Rolling back across this release is not supported from here: re-run the newer `dcctl upgrade`."))
 	case sharedLoginRetained:
 		if r := st.Values[sharedLoginBlockedValue]; r != "" {
-			fmt.Println(color.YellowString(
+			c.println(color.YellowString(
 				"\nThe shared message broker login was NOT retired: %s.\n"+
 					"Run `dcctl upgrade` again once that is resolved to finish the retirement.", r))
 			return
@@ -239,16 +239,16 @@ func sayAboutSharedLogin(st *State) {
 }
 
 // sayDryRunSharedLogin is what a rehearsed upgrade says it would do about the shared login.
-func sayDryRunSharedLogin(st *State) {
+func sayDryRunSharedLogin(c console, st *State) {
 	switch st.Values[sharedLoginPhaseValue] {
 	case sharedLoginRetiring:
-		wouldDo("retire the shared message broker login: every area already connects with a login of its own, " +
+		c.wouldDo("retire the shared message broker login: every area already connects with a login of its own, " +
 			"so the broker and the instance configuration document stop carrying the shared one (one broker roll)")
 	case sharedLoginRetained:
 		if r := st.Values[sharedLoginBlockedValue]; r != "" {
-			wouldDo("keep the shared message broker login, because " + r)
+			c.wouldDo("keep the shared message broker login, because " + r)
 		} else if areaLoginsIntroduced(st) {
-			wouldDo("give every area a message broker login of its own and keep the shared login for now " +
+			c.wouldDo("give every area a message broker login of its own and keep the shared login for now " +
 				"(phase 1 of 2; the next upgrade retires it)")
 		}
 	}

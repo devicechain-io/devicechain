@@ -38,6 +38,8 @@ type Presenter struct {
 	// Stdin answers the prompts, read a line at a time as dcctl always has, so
 	// a piped "y" still answers the kind-cluster confirmation.
 	Stdin io.Reader
+	// ReadHidden reads a secret answer with echo off. Nil reads os.Stdin's terminal.
+	ReadHidden func() ([]byte, error)
 }
 
 // errIncomplete is returned when the engine reported no error but the run did not
@@ -50,14 +52,16 @@ var errIncomplete = errors.New("the run's progress could not be reported, so it 
 // reported through events. It returns only once every event has been rendered.
 func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflow.Request,
 	preflight installflow.PreflightRunner) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	hub, err := installflow.NewHub(installflow.Options{
 		Operation: req.Operation,
 		Sink:      Sink{W: p.Stdout},
-		// A presenter that cannot keep up stops the run gracefully; the hub then
-		// refuses to report it as a success.
-		OnDeliveryFailure: cancel,
+		// A presenter that cannot keep up stops the run gracefully, saying why; the
+		// hub then refuses to report it as a success.
+		OnDeliveryFailure: func() {
+			cancel(installflow.CancelRequest{Reason: installflow.CancelDeliveryFailure})
+		},
 	})
 	if err != nil {
 		return err
@@ -73,8 +77,9 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 			return p.Stdout, p.Stderr
 		}
 	}
-	broker := installflow.NewBroker(hub, Responder{Out: con.Stdout, In: p.Stdin}, req.AssumeYes)
-	sum, err := hub.Run(ctx, e, req, installflow.Runtime{Prompts: broker, Preflight: preflight, Console: con})
+	broker := installflow.NewBroker(hub, Responder{Out: con.Stdout, In: p.Stdin, ReadHidden: p.ReadHidden}, req.AssumeYes)
+	sum, err := hub.Run(ctx, e, req, installflow.Runtime{Prompts: broker, Preflight: preflight, Console: con,
+		Reveals: Reveals{W: con.Stdout}})
 	<-hub.Done()
 	if err == nil && !sum.Succeeded() {
 		err = errIncomplete
@@ -102,4 +107,21 @@ func (s Sink) Deliver(e installflow.Envelope) {
 	if o, ok := e.Payload.(installflow.PreflightObservation); ok {
 		RenderObservation(s.W, o)
 	}
+}
+
+// Reveals shows a one-time disclosure the moment it is offered, in the line and at the
+// place dcctl's output always showed it: plain output has no later screen to keep it
+// for. Showing consumes the capability, so nothing can show it a second time.
+//
+// 🔴 THE VALUE GOES TO W AND NOWHERE ELSE: not to the hub, so never into an event, the
+// log ring or the summary.
+type Reveals struct{ W io.Writer }
+
+// Offer shows the value now.
+func (r Reveals) Offer(o installflow.RevealOffer) {
+	if o.PlainLine == nil {
+		o.Reveal.Discard()
+		return
+	}
+	_ = o.Reveal.Show(func(v []byte) { o.PlainLine(r.W, v) })
 }

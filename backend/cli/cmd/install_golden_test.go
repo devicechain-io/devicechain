@@ -16,8 +16,10 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/devicechain-io/dcctl/internal/installflow/testkit"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -49,7 +51,11 @@ const (
 	installGoldenRelease  = "1.9.0"
 	installGoldenImageTag = "v1.9.0"
 	installGoldenGiB      = int64(1) << 30
+	installGoldenRunID    = "0123456789abcdef0123456789abcdef"
 )
+
+// installGoldenTime is the instant a --output json golden's clock is stopped at.
+var installGoldenTime = time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
 
 // goldenHost is the machine the preflight sees.
 type goldenHost int
@@ -88,6 +94,11 @@ type installScenario struct {
 	engine      goldenEngine
 	// unpinned leaves this build without a pinned image version, as `make build` does.
 	unpinned bool
+	// env is added to the child's built-up environment.
+	env map[string]string
+	// files are written into the child's working directory, a fresh one, before it runs,
+	// so an argument can name one by a relative path that does not vary between runs.
+	files map[string]string
 }
 
 // installScenarios are the characterised runs. The names are the golden file names.
@@ -135,6 +146,26 @@ var installScenarios = []installScenario{
 		"--max-connections", "900", "--relational-store-max-wal-mib", "2048"},
 		kubeContext: "prod", engine: engineFakeOK},
 	{name: "engine-error", args: []string{"install", "local", "--skip-preflight", "--yes"}, engine: engineFakeErr},
+
+	// --output json: the same runs as the event stream, with the run id and the clock
+	// fixed. Stdout is NDJSON and nothing else; the reason a run failed is on stderr,
+	// as it always was. install_output_test.go decodes every line of these strictly.
+	{name: "json-dry-run", args: []string{"install", "local", "--skip-preflight", "--dry-run", "-o", "json"}},
+	{name: "json-preflight-fail-undersized-docker", args: []string{"install", "local", "--output", "json"},
+		host: hostSmall},
+	{name: "json-preflight-pass-remote-context", args: []string{"install", "local", "--kube-context", "prod",
+		"-o", "json"}, kubeContext: "prod", engine: engineFakeOK},
+	// A "y" on stdin that the stream must NOT read: the run is refused at the prompt.
+	{name: "json-kind-refused", args: []string{"install", "local", "--skip-preflight", "-o", "json"},
+		stdin: "y\n"},
+	{name: "json-kind-assume-yes", args: []string{"install", "local", "--skip-preflight", "--yes", "-o", "json"}},
+	{name: "json-engine-error", args: []string{"install", "local", "--skip-preflight", "--yes", "-o", "json"},
+		engine: engineFakeErr},
+	{name: "json-refuse-no-tls-without-compact", args: []string{"install", "local", "--no-tls", "-o", "json"}},
+	// The notices the command prints before the run (compact and ha footprints) go to
+	// stderr: stdout is the stream's alone.
+	{name: "json-plan-compact-ha", args: []string{"install", "local", "--compact", "--ha", "--skip-preflight",
+		"--output=json"}, engine: engineFakeOK},
 }
 
 // TestInstallGoldens is the parent: it runs each scenario in a child and compares what
@@ -174,6 +205,27 @@ func TestInstallGoldensHaveScenarios(t *testing.T) {
 // runInstallChild re-executes this test binary as dcctl for one scenario and renders the
 // result in the golden format.
 func runInstallChild(t *testing.T, sc installScenario) []byte {
+	t.Helper()
+	r := runInstallChildRaw(t, sc)
+	var out bytes.Buffer
+	fmt.Fprintf(&out, "args: %s\n", strings.Join(sc.args, " "))
+	fmt.Fprintf(&out, "stdin: %q\n", sc.stdin)
+	fmt.Fprintf(&out, "exit: %d\n", r.exit)
+	writeGoldenSection(&out, "stdout", r.stdout)
+	writeGoldenSection(&out, "stderr", r.stderr)
+	writeGoldenSection(&out, "engine", []byte(r.engine))
+	return out.Bytes()
+}
+
+// childResult is what one child run said.
+type childResult struct {
+	exit           int
+	stdout, stderr []byte
+	engine         string
+}
+
+// runInstallChildRaw re-executes this test binary as dcctl for one scenario.
+func runInstallChildRaw(t *testing.T, sc installScenario) childResult {
 	t.Helper()
 	tmp := t.TempDir()
 	emptyPath := filepath.Join(tmp, "bin")
@@ -215,6 +267,26 @@ func runInstallChild(t *testing.T, sc installScenario) []byte {
 		}
 		env = append(env, installGoldenKubeEnv+"="+kc)
 	}
+	envKeys := make([]string, 0, len(sc.env))
+	for k := range sc.env {
+		envKeys = append(envKeys, k)
+	}
+	sort.Strings(envKeys)
+	for _, k := range envKeys {
+		env = append(env, k+"="+sc.env[k])
+	}
+	if len(sc.files) > 0 {
+		work := filepath.Join(tmp, "work")
+		if err := os.MkdirAll(work, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, content := range sc.files {
+			if err := os.WriteFile(filepath.Join(work, name), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd.Dir = work
+	}
 	cmd.Env = env
 	cmd.Stdin = strings.NewReader(sc.stdin)
 	var stdout, stderr bytes.Buffer
@@ -235,14 +307,7 @@ func runInstallChild(t *testing.T, sc installScenario) []byte {
 		t.Fatal(err)
 	}
 
-	var out bytes.Buffer
-	fmt.Fprintf(&out, "args: %s\n", strings.Join(sc.args, " "))
-	fmt.Fprintf(&out, "stdin: %q\n", sc.stdin)
-	fmt.Fprintf(&out, "exit: %d\n", exit)
-	writeGoldenSection(&out, "stdout", stdout.Bytes())
-	writeGoldenSection(&out, "stderr", stderr.Bytes())
-	writeGoldenSection(&out, "engine", []byte(engine))
-	return out.Bytes()
+	return childResult{exit: exit, stdout: stdout.Bytes(), stderr: stderr.Bytes(), engine: engine}
 }
 
 // writeGoldenSection writes one stream with its exact length, so a missing or extra
@@ -317,9 +382,11 @@ func TestInstallGoldenChild(t *testing.T) {
 		return
 	}
 	var sc *installScenario
-	for i := range installScenarios {
-		if installScenarios[i].name == name {
-			sc = &installScenarios[i]
+	for _, list := range [][]installScenario{installScenarios, bootstrapScenarios} {
+		for i := range list {
+			if list[i].name == name {
+				sc = &list[i]
+			}
 		}
 	}
 	if sc == nil {
@@ -339,6 +406,10 @@ func TestInstallGoldenChild(t *testing.T) {
 		}
 	}
 	fakeGoldenHost(*sc)
+	// --output json: a fixed run id and a clock that does not move, so a stream is
+	// reproducible byte for byte. Text output never reads either.
+	installStreamRunID = installGoldenRunID
+	installStreamClock = testkit.NewManualClock(installGoldenTime)
 
 	switch sc.engine {
 	case engineFakeOK, engineFakeErr:

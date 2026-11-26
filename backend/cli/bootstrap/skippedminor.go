@@ -158,7 +158,7 @@ func precheckSkippedMinorWith(ctx context.Context, st *State, allow bool, runnin
 	from, err := running(ctx)
 	if err != nil {
 		if allow {
-			fmt.Println(color.RedString("  WARNING: --allow-skipped-minor: the version instance %q runs could not be read (%v); "+
+			out(ctx).println(color.RedString("  WARNING: --allow-skipped-minor: the version instance %q runs could not be read (%v); "+
 				"moving to %s without knowing whether a minor is skipped (unsupported)", st.Instance, err, st.ImageVersion))
 			return nil
 		}

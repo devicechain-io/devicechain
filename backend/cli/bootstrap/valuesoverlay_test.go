@@ -342,7 +342,7 @@ func TestDryRunShowsTheOverlayDiff(t *testing.T) {
 	st := &State{Instance: "prod", DryRun: true,
 		ValuesOverlayRecorded: map[string]interface{}{"replicas": float64(2)},
 		ValuesOverlay:         map[string]interface{}{"replicas": float64(3), "gogc": float64(400)}}
-	out := captureStdout(t, func() { sayValuesOverlay(st) })
+	out := captureStdout(t, func() { sayValuesOverlay(stdConsole, st) })
 	for _, want := range []string{"~ replicas: 2 -> 3", "+ gogc: 400", "would record the values overlay"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the dry run lacks %q:\n%s", want, out)
@@ -350,12 +350,12 @@ func TestDryRunShowsTheOverlayDiff(t *testing.T) {
 	}
 	// An unchanged, carried overlay is said to be carried and records nothing.
 	st.ValuesOverlayRecorded = st.ValuesOverlay
-	out = captureStdout(t, func() { sayValuesOverlay(st) })
+	out = captureStdout(t, func() { sayValuesOverlay(stdConsole, st) })
 	if !strings.Contains(out, "carried unchanged") || strings.Contains(out, "would record") {
 		t.Errorf("a carried overlay should say so and record nothing:\n%s", out)
 	}
 	// Nothing recorded and nothing given says nothing.
-	if out := captureStdout(t, func() { sayValuesOverlay(&State{DryRun: true}) }); out != "" {
+	if out := captureStdout(t, func() { sayValuesOverlay(stdConsole, &State{DryRun: true}) }); out != "" {
 		t.Errorf("no overlay should print nothing, got %q", out)
 	}
 }

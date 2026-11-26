@@ -104,7 +104,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// st.Values["namespace"], which is where the gate and the report read it from.
 	namespace := InstanceNamespace(st.Instance)
 
-	doing(fmt.Sprintf("rendering config for instance %q (profile %q)", st.Instance, st.Profile))
+	out(ctx).doing(fmt.Sprintf("rendering config for instance %q (profile %q)", st.Instance, st.Profile))
 
 	// Collected and printed once the step's progress line is closed. See done() below.
 	var notes []string
@@ -132,7 +132,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	if !st.DryRun {
 		deployed, err = lookupDeployedInstance(ctx, st.KubeContext, st.Instance)
 		if err != nil {
-			return fail("checking for an existing instance", err)
+			return out(ctx).fail("checking for an existing instance", err)
 		}
 	}
 
@@ -163,7 +163,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	live, err = readLiveArchiveState(ctx, st.KubeContext, st.Instance)
 	switch {
 	case err != nil && !st.DryRun:
-		return fail("reading the database archive state", err)
+		return out(ctx).fail("reading the database archive state", err)
 	case err != nil:
 		live = clusterArchiveState{}
 		notes = append(notes, fmt.Sprintf(
@@ -185,7 +185,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// policy there for why that answer differs per credential.
 	st.Credentials, err = settleCredentials(ctx, st, liveArchiveState{Tsdb: live})
 	if err != nil {
-		return fail("settling this instance's credentials", err)
+		return out(ctx).fail("settling this instance's credentials", err)
 	}
 
 	// The broker's authority and leaf. The LEAF is issued on every run (renewal of an aging leaf
@@ -195,13 +195,13 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	if !st.DryRun {
 		t, kerr := natsAuthorityClient(st.KubeContext)
 		if kerr != nil {
-			return fail("reaching the cluster to look for the broker's existing authority", kerr)
+			return out(ctx).fail("reaching the cluster to look for the broker's existing authority", kerr)
 		}
 		authorityReader = t
 	}
 	st.NATSTLS, err = settleNATSTLS(ctx, authorityReader, st, time.Now().UTC())
 	if err != nil {
-		return fail("settling the broker's certificate authority", err)
+		return out(ctx).fail("settling the broker's certificate authority", err)
 	}
 	st.Values["natsCA"] = st.NATSTLS.CACertPEM
 
@@ -221,7 +221,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// loud, because from the outside "it restored" and "it declined to restore" look
 	// identical.
 	for _, name := range paths.AlreadyLive {
-		fmt.Println(color.YellowString("  %s", alreadyLiveRestoreNote(name)))
+		out(ctx).println(color.YellowString("  %s", alreadyLiveRestoreNote(name)))
 	}
 
 	// The NATS broker-auth credentials (ADR-025): the callout issuer nkey and the
@@ -261,7 +261,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			deployed.Infrastructure.Nats.Auth.Password,
 			deployed.Infrastructure.Nats.Auth.SysPassword)
 		if err != nil {
-			return fail("reusing the running instance's NATS auth credentials", err)
+			return out(ctx).fail("reusing the running instance's NATS auth credentials", err)
 		}
 		notes = append(notes, "NATS broker credentials reused from the running instance")
 	default:
@@ -301,13 +301,13 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		}
 		creds, err = mintBrokerCredentials()
 		if err != nil {
-			return fail("minting NATS auth credentials", err)
+			return out(ctx).fail("minting NATS auth credentials", err)
 		}
 	}
 	setBrokerCredentialValues(st, creds)
 	// A run without the shared login must give every area one of its own and tell them so.
 	if err := checkSharedLoginHasSuccessors(st); err != nil {
-		return fail("settling the broker logins", err)
+		return out(ctx).fail("settling the broker logins", err)
 	}
 	// A LIVE instance whose broker does not encrypt its callout yet keeps it that way for this run:
 	// the responder must be rolled onto a build that can open encrypted requests first, and the
@@ -356,7 +356,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		ServicePassword:  creds.ServicePassword,
 		SysPassword:      creds.SysPassword,
 	}); err != nil {
-		return fail("recording the broker credentials before the broker is configured", err)
+		return out(ctx).fail("recording the broker credentials before the broker is configured", err)
 	}
 
 	// The shared service secret (ADR-044 amendment) backing the synchronous
@@ -379,7 +379,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	if serviceSecret == "" {
 		serviceSecret, err = randomSecret(32)
 		if err != nil {
-			return fail("minting service auth secret", err)
+			return out(ctx).fail("minting service auth secret", err)
 		}
 	}
 	st.Values["serviceAuthSecret"] = serviceSecret
@@ -429,7 +429,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		// already running is a no-op, and that case is worth allowing: re-running a
 		// restore is exactly as ordinary as re-running a bootstrap.
 		if err := refuseRestoreOverADifferentKey(st, deployed, secretsRootKey); err != nil {
-			return fail("restoring the root key", err)
+			return out(ctx).fail("restoring the root key", err)
 		}
 		notes = append(notes, fmt.Sprintf("root key restored from %s", st.Escrow.RestoredFrom))
 
@@ -456,7 +456,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	default:
 		secretsRootKey, err = randomKeyBase64(32)
 		if err != nil {
-			return fail("minting secrets root key", err)
+			return out(ctx).fail("minting secrets root key", err)
 		}
 	}
 	st.Values["secretsRootKey"] = secretsRootKey
@@ -484,12 +484,12 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		case reused:
 			outcome, recErr := ReconcileEscrow(st.Escrow, secretsRootKey, st.Instance, time.Now().UTC())
 			if recErr != nil {
-				return fail("reconciling the root-key escrow", recErr)
+				return out(ctx).fail("reconciling the root-key escrow", recErr)
 			}
 			notes = append(notes, "root-key escrow "+outcome)
 		default:
 			if err := WriteEscrow(st.Escrow, secretsRootKey, st.Instance, time.Now().UTC()); err != nil {
-				return fail("escrowing the secret-store root key", err)
+				return out(ctx).fail("escrowing the secret-store root key", err)
 			}
 		}
 	}
@@ -502,7 +502,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// empty registry. See ResolveImageSource.
 	img, err := ResolveImageSource(st.ImageRegistry, st.ImageVersion, st.BuildImages)
 	if err != nil {
-		return fail("resolving image source", err)
+		return out(ctx).fail("resolving image source", err)
 	}
 	st.ImageRegistry, st.ImageVersion = img.Registry, img.Version
 	imageSource := img.Label
@@ -544,11 +544,11 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	st.Values["imageRegistry"] = st.ImageRegistry
 	st.Values["imageVersion"] = st.ImageVersion
 	st.Values["imageSource"] = imageSource
-	done()
+	out(ctx).done()
 	// Printed AFTER done(), because doing() leaves its line unterminated and anything
 	// written before the matching done() lands in the middle of it.
 	for _, n := range notes {
-		fmt.Printf("  %s\n", color.WhiteString(n))
+		out(ctx).printf("  %s\n", color.WhiteString(n))
 	}
 	return nil
 }
@@ -558,8 +558,8 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 // this is a no-op unless BuildImages is set.
 func stepLocalRegistry(ctx context.Context, st *State) error {
 	if !st.BuildImages {
-		doing("local image registry")
-		fmt.Println(color.GreenString("not needed (using published images)."))
+		out(ctx).doing("local image registry")
+		out(ctx).println(color.GreenString("not needed (using published images)."))
 		return nil
 	}
 	if err := requireResolvedImages(st, "building images from source"); err != nil {
@@ -567,9 +567,9 @@ func stepLocalRegistry(ctx context.Context, st *State) error {
 	}
 
 	if st.DryRun {
-		doing("ensuring local registry + building images from source")
-		fmt.Println()
-		wouldDo(fmt.Sprintf("provision a registry at %s, wire it to the kind network, and ko-build+push images at tag %q",
+		out(ctx).doing("ensuring local registry + building images from source")
+		out(ctx).println()
+		out(ctx).wouldDo(fmt.Sprintf("provision a registry at %s, wire it to the kind network, and ko-build+push images at tag %q",
 			st.ImageRegistry, st.ImageVersion))
 		return nil
 	}
@@ -579,17 +579,17 @@ func stepLocalRegistry(ctx context.Context, st *State) error {
 		return err
 	}
 
-	doing("ensuring local image registry")
+	out(ctx).doing("ensuring local image registry")
 	if err := ensureLocalRegistry(ctx, st); err != nil {
-		return fail("provisioning local registry", err)
+		return out(ctx).fail("provisioning local registry", err)
 	}
-	done()
+	out(ctx).done()
 
-	doing("building + pushing images from source (ko)")
+	out(ctx).doing("building + pushing images from source (ko)")
 	if err := buildImages(ctx, root, st); err != nil {
-		return fail("building images", err)
+		return out(ctx).fail("building images", err)
 	}
-	done()
+	out(ctx).done()
 	return nil
 }
 
@@ -830,7 +830,7 @@ func stepInfraApply(ctx context.Context, st *State) error {
 				return err
 			}
 		} else {
-			fmt.Printf("  %s JetStream reservation not checked before the infrastructure apply (%s); it is "+
+			out(ctx).printf("  %s JetStream reservation not checked before the infrastructure apply (%s); it is "+
 				"checked against the provisioned volume before the chart is installed\n", color.YellowString("note:"), unread)
 		}
 	}
@@ -843,12 +843,12 @@ func stepInfraApply(ctx context.Context, st *State) error {
 		return err
 	}
 	if st.DryRun {
-		doing("applying infrastructure stack (OpenTofu)")
-		fmt.Println()
+		out(ctx).doing("applying infrastructure stack (OpenTofu)")
+		out(ctx).println()
 		// The cluster prerequisites are named as NOT applied, because an operator
 		// reading a rehearsal is deciding whether to let dcctl touch a shared cluster.
-		wouldDo("create this instance's own login and database on the shared relational store")
-		wouldDo("tofu init+apply deploy/opentofu/instance — this instance only " +
+		out(ctx).wouldDo("create this instance's own login and database on the shared relational store")
+		out(ctx).wouldDo("tofu init+apply deploy/opentofu/instance — this instance only " +
 			"(NATS, Timescale), on the prerequisites `dcctl install` put in place")
 		return nil
 	}
@@ -856,7 +856,7 @@ func stepInfraApply(ctx context.Context, st *State) error {
 		func() error { return applyInfra(ctx, st) }); err != nil {
 		return err
 	}
-	recordMQTTNodePortAfterApply(st)
+	recordMQTTNodePortAfterApply(out(ctx), st)
 	return nil
 }
 
@@ -942,9 +942,9 @@ func stepHelmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 	if st.DryRun {
-		doing("installing instance chart (Helm)")
-		fmt.Println()
-		wouldDo("write the instance configuration to Secret " +
+		out(ctx).doing("installing instance chart (Helm)")
+		out(ctx).println()
+		out(ctx).wouldDo("write the instance configuration to Secret " +
 			instanceConfigSecretName(st.Instance) + " in namespace " + st.Values["namespace"] +
 			", then helm upgrade --install the devicechain chart pointing at it")
 		return nil
@@ -981,17 +981,17 @@ func runStreamed(heading, label string, work func() error) error {
 // (waitForInstanceReady): the areas are ready on the primary alone.
 func stepWaitReady(ctx context.Context, st *State) error {
 	if st.DryRun {
-		doing(waitReadyMessage)
-		fmt.Println()
-		wouldDo("poll each area's deployment until it has rolled over")
-		wouldDo("wait until every instance of the event store " + st.Values["namespace"] + "/" +
+		out(ctx).doing(waitReadyMessage)
+		out(ctx).println()
+		out(ctx).wouldDo("poll each area's deployment until it has rolled over")
+		out(ctx).wouldDo("wait until every instance of the event store " + st.Values["namespace"] + "/" +
 			TsdbClusterName + " has joined")
 		return nil
 	}
 	dyn, typed, err := stepWaitReadyClients(st.KubeContext)
 	if err != nil {
-		doing(waitReadyMessage)
-		return fail("building kube clients", err)
+		out(ctx).doing(waitReadyMessage)
+		return out(ctx).fail("building kube clients", err)
 	}
 	return waitForInstanceReady(ctx, typed, dyn, st.Values["namespace"], stepWaitReadyBounds)
 }
@@ -1037,12 +1037,12 @@ func waitForInstanceReady(ctx context.Context, typed kubernetes.Interface, dyn d
 	if err := waitForAreasStep(ctx, typed, ns, waitReadyMessage, w.areas, w.poll); err != nil {
 		return err
 	}
-	doing(eventStoreJoinMessage)
+	out(ctx).doing(eventStoreJoinMessage)
 	if err := waitForCNPGClusterReady(ctx, dyn, typed, ns, TsdbClusterName, w.store, w.poll); err != nil {
-		return fail(eventStoreJoinMessage, fmt.Errorf("%w. Nothing has been undone; run the same `dcctl bootstrap` "+
+		return out(ctx).fail(eventStoreJoinMessage, fmt.Errorf("%w. Nothing has been undone; run the same `dcctl bootstrap` "+
 			"command again to finish the instance", err))
 	}
-	done()
+	out(ctx).done()
 	return nil
 }
 
@@ -1061,7 +1061,7 @@ const (
 // Callers add nothing before this and nothing after it.
 func waitForAreasStep(ctx context.Context, typed kubernetes.Interface, ns, msg string,
 	timeout, poll time.Duration) error {
-	doing(msg)
+	out(ctx).doing(msg)
 	return waitForAreas(ctx, typed, ns, timeout, poll)
 }
 
@@ -1081,7 +1081,7 @@ func waitForAreas(ctx context.Context, typed kubernetes.Interface, ns string, ti
 	for {
 		deps, err := typed.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
-			return fail("listing deployments", err)
+			return out(ctx).fail("listing deployments", err)
 		}
 		ready, total := 0, len(deps.Items)
 		var pending []string
@@ -1099,7 +1099,7 @@ func waitForAreas(ctx context.Context, typed kubernetes.Interface, ns string, ti
 				d.Name, d.Status.UpdatedReplicas, want, d.Status.AvailableReplicas))
 		}
 		if total > 0 && ready == total {
-			fmt.Println(color.GreenString("done (%d/%d ready).", ready, total))
+			out(ctx).println(color.GreenString("done (%d/%d ready).", ready, total))
 			return nil
 		}
 		// ONE deadline decision, asked as "how much time is left". Asking it twice —
@@ -1109,7 +1109,7 @@ func waitForAreas(ctx context.Context, typed kubernetes.Interface, ns string, ti
 		// the two forms differ, which is exactly the kind nobody finds by reading.
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			fmt.Println(color.RedString("timed out (%d/%d ready).", ready, total))
+			out(ctx).println(color.RedString("timed out (%d/%d ready).", ready, total))
 			if total == 0 {
 				return fmt.Errorf("no area workloads exist in namespace %q after %s: "+
 					"the chart install rendered nothing to wait for", ns, timeout)
@@ -1165,26 +1165,26 @@ func printBackups(c console, subject string, enabled, offsite bool) {
 
 // stepReport prints an access-info summary from State. This step is real.
 func stepReport(ctx context.Context, st *State) error {
-	fmt.Println(color.HiGreenString("\nDeviceChain bootstrap summary"))
-	fmt.Printf("  %s %s\n", color.WhiteString("Instance:"), color.GreenString(st.Values["instance"]))
-	fmt.Printf("  %s %s\n", color.WhiteString("Namespace:"), color.GreenString(st.Values["namespace"]))
-	fmt.Printf("  %s %s\n", color.WhiteString("Profile:"), color.GreenString(st.Values["profile"]))
+	out(ctx).println(color.HiGreenString("\nDeviceChain bootstrap summary"))
+	out(ctx).printf("  %s %s\n", color.WhiteString("Instance:"), color.GreenString(st.Values["instance"]))
+	out(ctx).printf("  %s %s\n", color.WhiteString("Namespace:"), color.GreenString(st.Values["namespace"]))
+	out(ctx).printf("  %s %s\n", color.WhiteString("Profile:"), color.GreenString(st.Values["profile"]))
 	// Print the resolved footprint next to the profile, so the sizing a run applied
 	// is visible without reading the chart. Only when compact — the default sizing
 	// is the one the docs describe.
 	if st.Compact {
-		fmt.Printf("  %s %s\n", color.WhiteString("Footprint:"), color.GreenString(compact.summary()))
+		out(ctx).printf("  %s %s\n", color.WhiteString("Footprint:"), color.GreenString(compact.summary()))
 	}
 	if p := sizeFor(st); p != nil {
-		fmt.Printf("  %s %s\n", color.WhiteString("Size:"), color.GreenString(p.summary()))
+		out(ctx).printf("  %s %s\n", color.WhiteString("Size:"), color.GreenString(p.summary()))
 		for _, n := range sizeNotices(st, overlayEnvelopesOn(st.ValuesOverlay)) {
-			fmt.Printf("  %s %s\n", color.WhiteString("Note:"), color.YellowString(n))
+			out(ctx).printf("  %s %s\n", color.WhiteString("Note:"), color.YellowString(n))
 		}
 	}
 	// The sharding level, custom included (a raw shardGroups block with no level), whenever the
 	// instance is sharded at all.
 	if word, err := shardingOfRun(st); err == nil && word != ShardingOff {
-		fmt.Printf("  %s %s\n", color.WhiteString("Sharding:"), color.GreenString(word))
+		out(ctx).printf("  %s %s\n", color.WhiteString("Sharding:"), color.GreenString(word))
 	}
 	// The messaging topology, and only when it is the replicated one. Printed from
 	// the SAME haTopology both tools rendered from, so the summary cannot describe a
@@ -1192,19 +1192,19 @@ func stepReport(ctx context.Context, st *State) error {
 	// instance actually HA?" is otherwise a question answered by reading a tofu
 	// variable and a Helm value in two different places.
 	if ha := haFor(st.HA); ha.Replicated() {
-		fmt.Printf("  %s %s\n", color.WhiteString("Messaging HA:"), color.GreenString(ha.summary()))
+		out(ctx).printf("  %s %s\n", color.WhiteString("Messaging HA:"), color.GreenString(ha.summary()))
 	}
-	fmt.Printf("  %s %s\n", color.WhiteString("Images:"), color.GreenString(st.Values["imageSource"]))
-	fmt.Printf("  %s %s\n", color.WhiteString("Kube context:"), color.GreenString(st.KubeContext))
+	out(ctx).printf("  %s %s\n", color.WhiteString("Images:"), color.GreenString(st.Values["imageSource"]))
+	out(ctx).printf("  %s %s\n", color.WhiteString("Kube context:"), color.GreenString(st.KubeContext))
 	if host := st.Values["ingressHost"]; host != "" {
 		scheme := st.Values["scheme"]
-		fmt.Printf("  %s %s\n", color.WhiteString("Console:"), color.GreenString("%s", ConsoleURL(st.KubeContext, scheme, host)))
-		fmt.Printf("  %s %s\n", color.WhiteString("GraphQL:"), color.GreenString("%s/api/<area>/graphql", IngressBase(st.KubeContext, scheme, host)))
+		out(ctx).printf("  %s %s\n", color.WhiteString("Console:"), color.GreenString("%s", ConsoleURL(st.KubeContext, scheme, host)))
+		out(ctx).printf("  %s %s\n", color.WhiteString("GraphQL:"), color.GreenString("%s/api/<area>/graphql", IngressBase(st.KubeContext, scheme, host)))
 		if line := mqttReportLine(st); line != "" {
-			fmt.Printf("  %s %s\n", color.WhiteString("MQTT:"), color.GreenString("%s", line))
+			out(ctx).printf("  %s %s\n", color.WhiteString("MQTT:"), color.GreenString("%s", line))
 		}
 		if note := ssoUnavailableNote(scheme, host); note != "" {
-			fmt.Printf("  %s %s\n", color.WhiteString("Single sign-on:"), color.YellowString("%s", note))
+			out(ctx).printf("  %s %s\n", color.WhiteString("Single sign-on:"), color.YellowString("%s", note))
 		}
 	}
 	// The superuser: its email, where its seed password lives, and — once, when this
@@ -1215,7 +1215,7 @@ func stepReport(ctx context.Context, st *State) error {
 	// print a literal a step had copied into st.Values — the same password on every
 	// instance — and st.Values is a string map other steps range over. The password is
 	// kept out of it entirely.
-	printSuperuserReport(st)
+	printSuperuserReport(ctx, st)
 	if svc := st.Values["grafanaService"]; svc != "" {
 		// 🔴 THIS LINE USED TO PRINT THE PASSWORD, AND IT WAS WRONG THE MOMENT
 		// dcctl STARTED MINTING ONE. It said the login was `admin / devicechain`
@@ -1236,13 +1236,13 @@ func stepReport(ctx context.Context, st *State) error {
 		// "this instance's own" told an operator of a second instance they had a password
 		// nobody else held — and that rotating it touched only their own instance.
 		ns := st.Values["grafanaNamespace"]
-		fmt.Printf("  %s %s\n",
+		out(ctx).printf("  %s %s\n",
 			color.WhiteString("Grafana:"),
 			color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/", ns, svc))
-		fmt.Printf("           %s\n", color.WhiteString(fmt.Sprintf(
+		out(ctx).printf("           %s\n", color.WhiteString(fmt.Sprintf(
 			"sign in as %q; the cluster's Grafana admin password, shared by every instance on this cluster, is in Secret %s/%s, key %s:",
 			grafanaAdminUser, monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass)))
-		fmt.Printf("           %s\n", color.GreenString(
+		out(ctx).printf("           %s\n", color.GreenString(
 			"kubectl -n %s get secret %s -o jsonpath='{.data.%s}' | base64 -d",
 			monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass))
 	}
@@ -1280,7 +1280,7 @@ func stepReport(ctx context.Context, st *State) error {
 			{"Event archive:", st.Values["backupServerNameTsdb"]},
 		} {
 			if p.path != "" {
-				fmt.Printf("  %s %s\n", color.WhiteString(p.label), color.GreenString(p.path))
+				out(ctx).printf("  %s %s\n", color.WhiteString(p.label), color.GreenString(p.path))
 			}
 		}
 	}
@@ -1302,32 +1302,32 @@ func stepReport(ctx context.Context, st *State) error {
 		if st.DryRun {
 			what += "  (dry run — not written)"
 		}
-		fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"), color.GreenString(what))
-		fmt.Printf("                   %s\n", color.YellowString(
+		out(ctx).printf("  %s %s\n", color.WhiteString("Root-key escrow:"), color.GreenString(what))
+		out(ctx).printf("                   %s\n", color.YellowString(
 			"copy this off the machine and store the passphrase separately — it is the ONLY copy of the key outside the cluster, and no database backup contains it"))
 	case st.Escrow.RestoredFrom != "":
-		fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"),
+		out(ctx).printf("  %s %s\n", color.WhiteString("Root-key escrow:"),
 			color.GreenString("restored from %s (that artifact remains the second copy)", st.Escrow.RestoredFrom))
 	default:
-		fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"), color.RedString("none (--no-escrow)"))
-		fmt.Printf("                   %s\n", color.YellowString(
+		out(ctx).printf("  %s %s\n", color.WhiteString("Root-key escrow:"), color.RedString("none (--no-escrow)"))
+		out(ctx).printf("                   %s\n", color.YellowString(
 			"this instance's root key exists only inside the cluster; if the cluster is lost, every stored secret is permanently unreadable even with a database backup"))
 	}
 	if !st.DryRun {
 		host := st.Values["ingressHost"]
 		scheme := st.Values["scheme"]
-		fmt.Println(color.HiGreenString("\nDeviceChain is up. Open the web console at %s://%s/ and sign in.", scheme, host))
+		out(ctx).println(color.HiGreenString("\nDeviceChain is up. Open the web console at %s://%s/ and sign in.", scheme, host))
 		// A non-loopback host on a local cluster won't resolve, so a non-dev needs
 		// the one-time hosts mapping spelled out. localhost/127.0.0.1 need nothing.
 		if looksLocal(st.KubeContext) && !isLoopbackHost(host) {
-			fmt.Println(color.YellowString("  Local cluster: map the host first — add \"127.0.0.1 %s\" to /etc/hosts (or bootstrap with --host localhost).", host))
+			out(ctx).println(color.YellowString("  Local cluster: map the host first — add \"127.0.0.1 %s\" to /etc/hosts (or bootstrap with --host localhost).", host))
 		}
 		// A self-signed cert (TLS on) makes the browser warn once.
 		if scheme == "https" {
-			fmt.Println(color.YellowString("  The TLS cert is self-signed (dev-grade), so your browser will warn once (or use --no-tls)."))
-			fmt.Printf("  A client that should verify it trusts the instance's CA instead: kubectl -n %s get secret %s -o jsonpath='{.data.ca\\.crt}' | base64 -d\n", InstanceNamespace(st.Instance), servingTLSSecret(st))
+			out(ctx).println(color.YellowString("  The TLS cert is self-signed (dev-grade), so your browser will warn once (or use --no-tls)."))
+			out(ctx).printf("  A client that should verify it trusts the instance's CA instead: kubectl -n %s get secret %s -o jsonpath='{.data.ca\\.crt}' | base64 -d\n", InstanceNamespace(st.Instance), servingTLSSecret(st))
 		}
-		sayMqttFailClosedHint(st)
+		sayMqttFailClosedHint(out(ctx), st)
 	}
 	return nil
 }

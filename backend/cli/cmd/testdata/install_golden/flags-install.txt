@@ -1,5 +1,5 @@
 command: dcctl install
-flags: 37
+flags: 38
 
 --alert-config
   type: string
@@ -157,6 +157,12 @@ flags: 37
   default: "false"
   no-value default: "true"
   usage: with --compact: instances serve plain HTTP, so cert-manager is not installed and database backups (whose plugin needs it) are off. --compact --no-tls=false keeps both
+
+--output
+  shorthand: -o
+  type: string
+  default: "text"
+  usage: output format: text (the output dcctl has always printed) or json (the install's events, one JSON object per line on stdout and nothing else there, for automation; it never reads stdin, so a confirmation is given with --yes or the run is refused before it changes anything)
 
 --registry
   type: string

@@ -30,7 +30,7 @@ func judgeShardingUpgrade(ctx context.Context, st *State) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("  %s %s\n", color.WhiteString("Sharding:"), color.GreenString(word))
+	out(ctx).printf("  %s %s\n", color.WhiteString("Sharding:"), color.GreenString(word))
 	if st.Sharding == "" {
 		return nil
 	}

@@ -83,9 +83,18 @@ func bcReportPayload(row bcReportRow) ([]byte, error) {
 	return json.Marshal(rep)
 }
 
+// bcReportNatsOptions are the connection options for publishing reports as an area's broker login. A
+// JetStream publish waits for the stream's acknowledgement on a reply inbox, and an area's login may
+// subscribe only to its own inbox prefix (messaging.InboxPrefix); nats.go's default "_INBOX." is refused as a
+// permissions violation and every publish then times out.
+func bcReportNatsOptions(user, pass, area string) []nats.Option {
+	return []nats.Option{nats.UserInfo(user, pass), nats.Name("upgrade-drill-bulkchange-report"), nats.Timeout(15 * time.Second),
+		nats.CustomInboxPrefix(messaging.InboxPrefix(area))}
+}
+
 func bcReport(ctx context.Context, argv []string, stdout io.Writer) error {
 	fs := flagSetFor("bulkchange report")
-	var natsURL, user, passEnv, caFile, serverName, instanceID, tenant, rowsFile string
+	var natsURL, user, passEnv, caFile, serverName, instanceID, tenant, rowsFile, area string
 	var workers int
 	fs.StringVar(&natsURL, "nats", "", "broker URL, e.g. nats://127.0.0.1:14222 (required)")
 	fs.StringVar(&user, "user", "", "broker login (required)")
@@ -96,11 +105,12 @@ func bcReport(ctx context.Context, argv []string, stdout io.Writer) error {
 	fs.StringVar(&tenant, "tenant", "", "the tenant token (required)")
 	fs.StringVar(&rowsFile, "rows", "", "file of token<TAB>revision<TAB>digest rows (required)")
 	fs.IntVar(&workers, "workers", 8, "concurrent publishes")
+	fs.StringVar(&area, "area", "event-sources", "functional area whose broker login --user is: its connections may subscribe only to that area's reply inbox")
 	if err := fs.Parse(argv); err != nil {
 		return failWith(exitSetup, "%w", err)
 	}
 	pass := os.Getenv(passEnv)
-	if natsURL == "" || user == "" || pass == "" || instanceID == "" || tenant == "" || rowsFile == "" || workers < 1 {
+	if natsURL == "" || user == "" || pass == "" || instanceID == "" || tenant == "" || rowsFile == "" || area == "" || workers < 1 {
 		return failWith(exitSetup, "--nats, --user, a password in $%s, --instance-id, --tenant, --rows and --workers >= 1 are required", passEnv)
 	}
 	f, err := os.Open(rowsFile)
@@ -121,7 +131,7 @@ func bcReport(ctx context.Context, argv []string, stdout io.Writer) error {
 			return failWith(exitShape, "%w", err)
 		}
 	}
-	opts := []nats.Option{nats.UserInfo(user, pass), nats.Name("upgrade-drill-bulkchange-report"), nats.Timeout(15 * time.Second)}
+	opts := bcReportNatsOptions(user, pass, area)
 	if caFile != "" {
 		pem, err := os.ReadFile(caFile)
 		if err != nil {

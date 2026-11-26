@@ -58,11 +58,14 @@ func (api *Api) RetainFleetOperations(ctx context.Context, now time.Time) error 
 		}
 		for _, hint := range ops {
 			after = hint.ID
+			var counts fleetRowCounts
+			aborted := false
 			err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+				counts, aborted = fleetRowCounts{}, false
 				if err := fleetSetLockTimeout(tx, fleetFenceWait); err != nil {
 					return err
 				}
-				if err := fleetLock(tx, fleetOpKey(tenant, hint.ID), false); err != nil {
+				if err := fleetFence(tx, fleetOpKey(tenant, hint.ID), false, "RETENTION"); err != nil {
 					return err
 				}
 				var op FleetOperation
@@ -88,7 +91,7 @@ func (api *Api) RetainFleetOperations(ctx context.Context, now time.Time) error 
 					if now.Before(op.LinesPurgedAt.Time.Add(fleetTombstoneRetention)) {
 						return nil
 					}
-					return fleetDeleteTombstone(tx, &op)
+					return fleetDeleteTombstone(tx, &op, counts)
 				}
 				if op.Evidence == "OPEN" && !now.Before(op.CreatedAt.Add(fleetOpenRetention-fleetRetentionWarning)) {
 					var n int64
@@ -123,6 +126,7 @@ func (api *Api) RetainFleetOperations(ctx context.Context, now time.Time) error 
 						changes["dispatched_at"] = now
 						changes["state_changed_at"] = now
 						changes["state_changed_by"] = ""
+						aborted = true
 					}
 					if err := tx.Model(&op).Updates(changes).Error; err != nil {
 						return err
@@ -131,7 +135,7 @@ func (api *Api) RetainFleetOperations(ctx context.Context, now time.Time) error 
 						return err
 					}
 				}
-				if err := fleetPurgeEvidenceChunk(tx, &op); err != nil {
+				if err := fleetPurgeEvidenceChunk(tx, &op, counts); err != nil {
 					return err
 				}
 				var remaining int64
@@ -161,13 +165,20 @@ func (api *Api) RetainFleetOperations(ctx context.Context, now time.Time) error 
 			})
 			if err != nil {
 				failures = append(failures, err)
+				continue
+			}
+			if aborted {
+				bulkMetrics.transition(FleetDispatchAborted, fleetRetentionExpired)
+			}
+			for table, n := range counts {
+				bulkMetrics.maintained(bulkMetrics.deleted, table, n)
 			}
 		}
 	}
 	return errors.Join(failures...)
 }
 
-func fleetPurgeEvidenceChunk(tx *gorm.DB, op *FleetOperation) error {
+func fleetPurgeEvidenceChunk(tx *gorm.DB, op *FleetOperation, counts fleetRowCounts) error {
 	id := op.ID
 	var lines []uint
 	if err := tx.Model(&FleetOperationLine{}).Where("operation_id = ?", id).Scopes(fleetLineLockOrder).
@@ -179,23 +190,31 @@ func fleetPurgeEvidenceChunk(tx *gorm.DB, op *FleetOperation) error {
 	if err := fleetRecordPurgedContrasOnTx(tx, op, lines); err != nil {
 		return err
 	}
-	if err := tx.Where("id IN ?", lines).Delete(&FleetOperationLine{}).Error; err != nil {
-		return err
+	res := tx.Where("id IN ?", lines).Delete(&FleetOperationLine{})
+	if res.Error != nil {
+		return res.Error
 	}
+	counts.add("lines", res.RowsAffected)
 	var events []uint
 	if err := tx.Model(&FleetOperationEvent{}).Where("operation_id = ? AND (line_id IS NOT NULL OR kind IN ('RESOLUTION','VERDICT','CONTRADICTING_EVIDENCE','OVERRIDE_CHANGED','REDACTED'))", id).
 		Scopes(fleetEventLockOrder).Limit(fleetMaintenanceChunk).Pluck("id", &events).Error; err != nil {
 		return err
 	}
-	if err := tx.Where("id IN ?", events).Delete(&FleetOperationEvent{}).Error; err != nil {
-		return err
+	res = tx.Where("id IN ?", events).Delete(&FleetOperationEvent{})
+	if res.Error != nil {
+		return res.Error
 	}
+	counts.add("events", res.RowsAffected)
 	contracts := tx.Model(&FleetOperationContract{}).Select("id").Where("operation_id = ? AND body <> ''", id).Order("id").Limit(fleetMaintenanceChunk)
 	return tx.Model(&FleetOperationContract{}).Where("id IN (?)", contracts).Update("body", "").Error
 }
 
-func fleetDeleteTombstone(tx *gorm.DB, op *FleetOperation) error {
-	for _, model := range []any{&FleetOperationEvent{}, &FleetOperationContract{}} {
+func fleetDeleteTombstone(tx *gorm.DB, op *FleetOperation, counts fleetRowCounts) error {
+	for _, step := range []struct {
+		model any
+		table string
+	}{{&FleetOperationEvent{}, "events"}, {&FleetOperationContract{}, "contracts"}} {
+		model := step.model
 		var ids []uint
 		query := tx.Model(model).Where("operation_id = ?", op.ID).Order("id").Limit(fleetMaintenanceChunk)
 		if _, events := model.(*FleetOperationEvent); events {
@@ -204,9 +223,11 @@ func fleetDeleteTombstone(tx *gorm.DB, op *FleetOperation) error {
 		if err := query.Pluck("id", &ids).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("id IN ?", ids).Delete(model).Error; err != nil {
-			return err
+		res := tx.Where("id IN ?", ids).Delete(model)
+		if res.Error != nil {
+			return res.Error
 		}
+		counts.add(step.table, res.RowsAffected)
 		var n int64
 		if err := tx.Model(model).Where("operation_id = ?", op.ID).Count(&n).Error; err != nil {
 			return err
@@ -215,10 +236,14 @@ func fleetDeleteTombstone(tx *gorm.DB, op *FleetOperation) error {
 			return nil
 		}
 	}
-	if err := tx.Where("operation_id = ?", op.ID).Delete(&FleetOperationRuntime{}).Error; err != nil {
-		return err
+	res := tx.Where("operation_id = ?", op.ID).Delete(&FleetOperationRuntime{})
+	if res.Error != nil {
+		return res.Error
 	}
-	return tx.Delete(op).Error
+	counts.add("runtime", res.RowsAffected)
+	res = tx.Delete(op)
+	counts.add("operations", res.RowsAffected)
+	return res.Error
 }
 
 // Like the expiry sweep's cursor, this is advisory, process-local state. A new

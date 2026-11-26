@@ -71,29 +71,29 @@ func valuesOverlayChanges(st *State) bool {
 
 // sayValuesOverlay reports the overlay in effect and, under --dry-run, exactly what the
 // run would change in the recorded one.
-func sayValuesOverlay(st *State) {
+func sayValuesOverlay(c console, st *State) {
 	lines := diffOverlays(st.ValuesOverlayRecorded, st.ValuesOverlay)
 	if st.ValuesOverlayUnreadable {
-		fmt.Printf("  %s %s\n", color.WhiteString("Overlay:"),
+		c.printf("  %s %s\n", color.WhiteString("Overlay:"),
 			color.YellowString("the recorded overlay cannot be read; this run replaces it"))
 	}
 	switch {
 	case len(st.ValuesOverlay) == 0 && len(lines) == 0 && !st.ValuesOverlayUnreadable:
 		return
 	case len(st.ValuesOverlay) == 0:
-		fmt.Printf("  %s %s\n", color.WhiteString("Overlay:"),
+		c.printf("  %s %s\n", color.WhiteString("Overlay:"),
 			color.YellowString("cleared (--reset-values); the instance returns to what dcctl computes"))
 	case len(lines) == 0:
-		fmt.Printf("  %s %s\n", color.WhiteString("Overlay:"),
+		c.printf("  %s %s\n", color.WhiteString("Overlay:"),
 			color.GreenString(fmt.Sprintf("%d tuned value(s), carried unchanged", len(overlayLeaves(st.ValuesOverlay)))))
 	default:
-		fmt.Printf("  %s %s\n", color.WhiteString("Overlay:"), color.GreenString("changes to the recorded tuning:"))
+		c.printf("  %s %s\n", color.WhiteString("Overlay:"), color.GreenString("changes to the recorded tuning:"))
 	}
 	for _, l := range lines {
-		fmt.Printf("    %s\n", l)
+		c.printf("    %s\n", l)
 	}
 	if st.DryRun && valuesOverlayChanges(st) {
-		wouldDo("record the values overlay in the instance declaration")
+		c.wouldDo("record the values overlay in the instance declaration")
 	}
 }
 

@@ -112,6 +112,7 @@ func (api *Api) CreateFleetOperation(ctx context.Context, req *FleetOperationCre
 		}
 		existing, err = api.fleetCreateStepOne(ctx, tenant, req, n, plan, actor)
 		if err != nil {
+			bulkMetrics.refused(err) // QUOTA_EXCEEDED and ADMISSION_BUSY come from this step
 			return nil, err
 		}
 		return api.fleetCreateStepTwo(ctx, tenant, existing, plan, actor)
@@ -306,7 +307,7 @@ func (api *Api) fleetCreateStepTwo(ctx context.Context, tenant string, op *Fleet
 	var out *FleetOperation
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		// The fence, exclusive: nothing posts or controls this operation while its lines go in.
-		if err := fleetLock(tx, fleetOpKey(tenant, op.ID), false); err != nil {
+		if err := fleetFence(tx, fleetOpKey(tenant, op.ID), false, "CREATE"); err != nil {
 			return err
 		}
 		var current FleetOperation
@@ -348,7 +349,11 @@ func (api *Api) fleetCreateStepTwo(ctx context.Context, tenant string, op *Fleet
 		if err := tx.CreateInBatches(&lines, fleetLinesPerInsert).Error; err != nil {
 			return err
 		}
-		now := time.Now()
+		// expires_at is what the expiry sweep and a start compare with the database's clock.
+		now, err := fleetDBNow(tx)
+		if err != nil {
+			return err
+		}
 		if err := tx.Create(&FleetOperationContract{
 			OperationId: int64(op.ID), Version: 1, Digest: plan.ContractDigest, Body: plan.ContractBody,
 			ApprovalKind: FleetApprovalHumanDirect, PolicyVersion: 1, ProposedBy: actor,

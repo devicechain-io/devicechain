@@ -1,0 +1,11 @@
+args: bootstrap local acme --skip-preflight
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (100 bytes) --
+Error: DCCTL_ESCROW_PASSPHRASE is set but empty; unset it to use another source, or give it a value
+
+-- engine (11 bytes) --
+not called
+

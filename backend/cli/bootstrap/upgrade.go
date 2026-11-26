@@ -175,13 +175,13 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 			"\nEnable %s on instance %q, provider %q", strings.Join(st.AreaChange.Requested, ", "),
 			opts.Instance, provider.Name())))
 		fmt.Printf("  %s %s\n", color.WhiteString("Context:"), color.GreenString(kubeContext))
-		sayAreaChange(st)
+		sayAreaChange(out(ctx), st)
 		// 🔴 BEFORE THE FIRST WRITE, INCLUDING THE LOCK AND THE PHASE. A run with
 		// nothing to do must leave the declaration exactly as it found it: stamping
 		// Upgrading and then Ready over an instance nothing touched would bump the
 		// provenance annotations and make `last-applied-at` lie.
 		if st.AreaChange.Settled {
-			sayAreaChangeSettled(st.AreaChange, opts.Instance)
+			sayAreaChangeSettled(out(ctx), st.AreaChange, opts.Instance)
 			return nil
 		}
 		// Before the first write, like the budget and the plan below: see
@@ -207,13 +207,13 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	if err := precheckValuesOverlay(ctx, st); err != nil {
 		return err
 	}
-	sayValuesOverlay(st)
+	sayValuesOverlay(out(ctx), st)
 	if err := precheckShardGroupsUpgrade(ctx, st); err != nil {
 		return err
 	}
-	sayMqttFailClosed(st)
-	sayMqttDeviceUplinks(st)
-	sayUpdateStoreMountless(st)
+	sayMqttFailClosed(out(ctx), st)
+	sayMqttDeviceUplinks(out(ctx), st)
+	sayUpdateStoreMountless(out(ctx), st)
 	// 🔴 THE OPERATOR IS NOT LISTED AS SOMETHING THIS RUN WILL MOVE, because it is
 	// not. hydrateUpgradeState has already refused unless the cluster's operator is
 	// the one this build expects; what this verb moves is the instance.
@@ -545,7 +545,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 
 	if st.AreaChange != nil {
 		fmt.Println(color.HiGreenString("\nAreas enabled."))
-		sayAreaChangeDone(st)
+		sayAreaChangeDone(out(ctx), st)
 	} else {
 		fmt.Println(color.HiGreenString("\nInstance upgraded."))
 	}
@@ -561,10 +561,10 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	sayUpgradeInfrastructure(st, opts)
 	fmt.Printf("  %s %s\n", color.WhiteString("Front end:"), color.GreenString(sayFrontEnd(st)))
 	sayUpgradeCredentialsKept(st, opts)
-	sayIdentityIntroduced(st)
-	sayAreaLoginsIntroduced(st)
-	sayAboutSharedLogin(st)
-	sayMqttFailClosedHint(st)
+	sayIdentityIntroduced(out(ctx), st)
+	sayAreaLoginsIntroduced(out(ctx), st)
+	sayAboutSharedLogin(out(ctx), st)
+	sayMqttFailClosedHint(out(ctx), st)
 	return nil
 }
 
@@ -633,9 +633,9 @@ func sayUpgradeDryRun(st *State) {
 		wouldDo("apply the values overlay over the computed values")
 	}
 	wouldDo("upgrade the instance's Helm release")
-	sayDryRunSharedLogin(st)
+	sayDryRunSharedLogin(stdConsole, st)
 	// A rehearsal that hid this would rehearse a different run: see below.
-	warnPreGeneratedSuperuser(st)
+	warnPreGeneratedSuperuser(stdConsole, st)
 }
 
 // sayUpgradeCredentialsKept closes a finished upgrade.
@@ -655,7 +655,7 @@ func sayUpgradeCredentialsKept(st *State, opts UpgradeOptions) {
 			"yet (a new login or key), and it keeps that one from then on."))
 	// ...which, for an instance older than the generated superuser password, is also
 	// the one thing that must not be read as good news. See warnPreGeneratedSuperuser.
-	warnPreGeneratedSuperuser(st)
+	warnPreGeneratedSuperuser(stdConsole, st)
 }
 
 // resolveUpgradeImageSource settles the ONE image source both halves of this upgrade

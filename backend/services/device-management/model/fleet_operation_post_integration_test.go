@@ -42,6 +42,7 @@ func newPostPG(t *testing.T, value string) *postPG {
 	op, err := api.CreateFleetOperation(ctx, &FleetOperationCreateRequest{Token: "pp", Name: "n", Kind: FleetKindConfigSet,
 		DeviceTokens: []string{d1.Token, d2.Token}, ConfigSet: &FleetConfigSetIntent{Key: "k", ValueType: "STRING", Value: &value}}, "creator")
 	require.NoError(t, err)
+	cleanupFleetTestOperation(t, api, ctx, op.Token)
 	op, err = api.StartFleetOperation(ctx, "pp", op.ContractDigest, alice)
 	require.NoError(t, err)
 	p := &postPG{api: api, ctx: ctx, tenant: tenant, op: op, devs: []*Device{d1, d2},
@@ -277,6 +278,7 @@ func TestThreeDriversOfOneOperationApplyEveryLineOnce(t *testing.T) {
 	op, err := api.CreateFleetOperation(ctx, &FleetOperationCreateRequest{Token: "drv3", Name: "n", Kind: FleetKindConfigSet, DeviceTokens: tokens,
 		Safety: FleetSafetyRequest{MaxPostsPerSecond: &rate}, ConfigSet: &FleetConfigSetIntent{Key: "k", ValueType: "STRING", Value: &v}}, "creator")
 	require.NoError(t, err)
+	cleanupFleetTestOperation(t, api, ctx, op.Token)
 	_, err = api.StartFleetOperation(ctx, "drv3", op.ContractDigest, alice)
 	require.NoError(t, err)
 	api.PrincipalStanding = &fakeStanding{answer: map[string]bool{alice.Name: true}}

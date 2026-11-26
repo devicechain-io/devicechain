@@ -1,0 +1,12 @@
+args: install local --no-tls -o json
+stdin: ""
+exit: 1
+-- stdout (347 bytes) --
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":1,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"run.summary","payload":{"outcome":"failed","install_record":"not_read","readiness":"not_checked","claim":"not_claimed","failed_step":"install.inputs","partial_state":"none_observed"}}
+
+-- stderr (202 bytes) --
+Error: --no-tls on dcctl install only takes effect with --compact (it drops cert-manager and, with it, database backups). Without --compact, choose plain HTTP per instance with dcctl bootstrap --no-tls
+
+-- engine (11 bytes) --
+not called
+

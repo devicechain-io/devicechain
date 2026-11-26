@@ -51,5 +51,5 @@ func TestTheOverrideNoteIsSaidWhereTheVariablesAreComposed(t *testing.T) {
 	start := strings.Index(src, "func instanceRootVarsIn(")
 	require.GreaterOrEqual(t, start, 0)
 	end := strings.Index(src[start:], "\n}\n")
-	require.Contains(t, src[start:start+end], "sayOverriddenTopologyVars(st, rootdir)")
+	require.Contains(t, src[start:start+end], "sayOverriddenTopologyVars(stdConsole, st, rootdir)")
 }
