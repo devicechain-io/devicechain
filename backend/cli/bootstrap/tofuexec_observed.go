@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -118,17 +119,51 @@ func (t *tofuExec) observedApply(ctx context.Context, opts []applyOption) error 
 // Inherit provider inputs and keep terraform-exec's automation and logging
 // defaults. dcctl never configures a custom environment or log path on its runners.
 func observedApplyEnv() []string {
-	env := make([]string, 0, len(os.Environ())+6)
+	env := make(map[string]string)
 	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		switch key {
-		case "TF_WORKSPACE", "TF_LOG", "TF_LOG_CORE", "TF_LOG_PATH", "TF_LOG_PROVIDER", "TF_IN_AUTOMATION":
-			continue
-		}
-		env = append(env, entry)
+		key, value, _ := strings.Cut(entry, "=")
+		env[key] = value
 	}
-	return append(env, "TF_LOG=", "TF_LOG_CORE=", "TF_LOG_PATH=", "TF_LOG_PROVIDER=", "TF_IN_AUTOMATION=1")
+	env["CHECKPOINT_DISABLE"] = os.Getenv("CHECKPOINT_DISABLE")
+	ua := strings.TrimSpace(os.Getenv("TF_APPEND_USER_AGENT"))
+	if ua == "" || ua == terraformExecUserAgent {
+		ua = terraformExecUserAgent
+	} else {
+		ua += " " + terraformExecUserAgent
+	}
+	env["TF_APPEND_USER_AGENT"] = ua
+	for _, key := range []string{"TF_LOG", "TF_LOG_CORE", "TF_LOG_PATH", "TF_LOG_PROVIDER"} {
+		env[key] = ""
+	}
+	env["TF_IN_AUTOMATION"] = "1"
+	delete(env, "TF_WORKSPACE")
+	result := make([]string, 0, len(env))
+	for key, value := range env {
+		result = append(result, key+"="+value)
+	}
+	return result
 }
+
+var terraformExecUserAgent = func() string {
+	// terraform-exec's version accessor is internal. Normal binaries expose the
+	// dependency version through build metadata; test binaries may omit it. Keep
+	// that fallback in sync with go.mod, guarded by the execution parity test.
+	version := "0.26.0"
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, dep := range info.Deps {
+			if dep.Path == "github.com/hashicorp/terraform-exec" {
+				if dep.Replace != nil && dep.Replace.Version != "" {
+					dep = dep.Replace
+				}
+				if dep.Version != "" {
+					version = strings.TrimPrefix(dep.Version, "v")
+				}
+				break
+			}
+		}
+	}
+	return "HashiCorp-terraform-exec/" + version
+}()
 
 type boundedApplyError struct{ text []byte }
 
