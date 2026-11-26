@@ -4664,10 +4664,10 @@
           "page": "6",
           "shot": "6c",
           "chapter": "evening",
-          "durS": 10,
+          "durS": 10.5,
           "moveS": 0,
           "recordedWallFromS": 876,
-          "recordedWallToS": 886,
+          "recordedWallToS": 886.5,
           "seamPose": "pose:home",
           "dissolveS": 0,
           "captions": [
@@ -4679,6 +4679,11 @@
             {
               "id": "silence",
               "atS": 3,
+              "holdS": 3
+            },
+            {
+              "id": "exact",
+              "atS": 6.9,
               "holdS": 3
             }
           ],
@@ -4715,9 +4720,9 @@
           "page": "6",
           "shot": "6d",
           "chapter": "evening",
-          "durS": 6,
-          "moveS": 6,
-          "recordedWallFromS": 886,
+          "durS": 5.5,
+          "moveS": 5.5,
+          "recordedWallFromS": 886.5,
           "recordedWallToS": 892,
           "seamPose": "pose:home",
           "dissolveS": 0,

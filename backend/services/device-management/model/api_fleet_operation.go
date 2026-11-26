@@ -340,6 +340,11 @@ func (api *Api) fleetCreateStepTwo(ctx context.Context, tenant string, op *Fleet
 			}
 			lines = append(lines, row)
 		}
+		// INSERTs participate in lock ordering too. These rows all have zero IDs:
+		// the sequence allocates increasing fresh IDs, and this transaction never
+		// locks an existing line afterwards. The exclusive operation fence keeps
+		// another creator out of its ordinal/target unique keys; there are no
+		// line foreign keys that could acquire locks on older journal rows.
 		if err := tx.CreateInBatches(&lines, fleetLinesPerInsert).Error; err != nil {
 			return err
 		}

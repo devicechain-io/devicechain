@@ -232,6 +232,11 @@ namespace DeviceChain.Harborpulse.Live
             readsChanged = false;
             Snapshot = new DirectorReadSnapshot(jobs.Values.Select(j => j.Result), live, mr, ar, alarmChanges, measurements.Records);
         }
-        public void Dispose() { stop.Cancel(); foreach (var req in requests.ToArray()) req.Abort(); }
+        // A request is never aborted from here. Abort() on one whose native timeout or connection failure has fired but whose completion
+        // has not yet reached the main thread unlinks it twice inside the engine, and the player crashed natively (an access violation
+        // in UnityPlayer.dll, the same instruction in both recorded dumps) when a day's end tore the platform down under a dozen
+        // in-flight reads. Cancelling the token is enough: each read's own timeout (5 s) ends it, its result is dropped, and the
+        // request is disposed only by the completion that owns it.
+        public void Dispose() { stop.Cancel(); }
     }
 }

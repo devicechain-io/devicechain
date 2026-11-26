@@ -169,5 +169,31 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(observer.MeasurementWorkUnits - measured, Is.Zero);
             Assert.That(emitted, Is.Zero);
         }
+
+        /// <summary>
+        /// A read keeps every gap it ever had. The observer reported all of them on every frame, so a frame's work and the coverage rows it
+        /// recorded grew with every failed poll of the day (a recording of one day held 3.3 million coverage rows, 1.4 million of them in
+        /// the last two minutes, when the platform went away and every read failed). A gap is reported once it is whole.
+        /// </summary>
+        [Test]
+        public void AGapAReadKeepsIsReportedOnceNotOnEveryFrameAfterIt()
+        {
+            var day = new DirectorFixtureDay(40); DirectorReadSnapshot snapshot = null;
+            var observer = new DirectorObserver(day.Layout, () => snapshot);
+            var gap = new ReadSpan(DirectorFixtureDay.At(40), DirectorFixtureDay.At(50), true);
+            DirectorReadSnapshot WithGap(DirectorReadSnapshot s) => new DirectorReadSnapshot(
+                s.Reads.Select(r => new DirectorRead(r.Name, r.Scope, r.Probe, r.LastSuccess, r.Error, r.Data, r.Coverage.Concat(new[] { gap }), r.AsOf)),
+                s.MeasurementsLive, s.MeasurementReconnects, s.AlarmReconnects, s.AlarmChanges, s.Measurements);
+            int during = 0, after = 0;
+            for (var tick = 0; tick < 1600; tick++)
+            {
+                var wall = 20 + tick * 0.05; snapshot = WithGap(day.Snapshot(wall));
+                var late = wall > 60; var count = 0;
+                observer.Update(day.Inputs(wall), _ => { }, c => { if (c.Gap && c.ToSim - c.FromSim > 0.1) count++; });
+                if (late) after += count; else during += count;
+            }
+            Assert.That(during, Is.GreaterThan(0), "the gap is reported");
+            Assert.That(after, Is.Zero, "and never again once the sim has passed it");
+        }
     }
 }

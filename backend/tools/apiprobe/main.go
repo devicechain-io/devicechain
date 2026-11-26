@@ -220,6 +220,13 @@ const usage = `apiprobe — write one of every creatable entity, then prove it r
         than the ingress. The upgrade drill's attrlock phase uses it to drive a
         previous-release pod and a current one at the same device.
 
+  apiprobe bulkchange <action> ...
+        The upgrade drill's bulk-change phase: seed a drill fleet on a profile of its own, plan,
+        create and start a bulk change through ONE pod (--url), write and delete through a
+        baseline pod, publish the devices' APPLIED reports, read every line, and judge the lines,
+        the redaction of deleted devices and every recorded prior. Also attrload, the P-1
+        interactive load. Actions are listed at the top of bulkchange.go.
+
   apiprobe stringmetric --receipt <file> --schemas <dir> [--events-url <url>] [--control read-value]
         The STRING metric phase, gated on what --schemas (the DEPLOYED release's tree) serves.
         A target that serves the text producer: declare a STRING metric, post a text reading over
@@ -282,6 +289,8 @@ func main() {
 		err = runStringMetric(ctx, os.Args[2:])
 	case "attrwrite":
 		err = runAttrWrite(ctx, os.Args[2:])
+	case "bulkchange":
+		err = runBulkChange(ctx, os.Args[2:])
 	case "ssobaseline":
 		err = runSSOBaseline(os.Args[2:])
 	case "signerbaseline":
