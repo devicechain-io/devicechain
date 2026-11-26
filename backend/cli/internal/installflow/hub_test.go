@@ -152,7 +152,7 @@ func TestFullInstallStreamKeepsTheContract(t *testing.T) {
 	}()
 
 	broker := installflow.NewBroker(f.hub, nil, true)
-	sum, err := f.hub.Run(context.Background(), eng, installflow.Request{}, broker)
+	sum, err := f.hub.Run(context.Background(), eng, installflow.Request{}, installflow.Runtime{Prompts: broker})
 	must(t, err)
 	envs := f.wait(t)
 	if err := testkit.VerifyStream(envs); err != nil {
@@ -231,7 +231,7 @@ func TestRunGuaranteesOneSummary(t *testing.T) {
 		_, err := f.hub.Run(context.Background(), funcEngine(func(_ context.Context, _ installflow.Request, rt installflow.Runtime) (installflow.Summary, error) {
 			_ = rt.Events.Emit(started(false, manifest("a")))
 			return okSummary(), rt.Events.Finish(okSummary())
-		}), installflow.Request{}, nil)
+		}), installflow.Request{}, installflow.Runtime{})
 		must(t, err)
 		if n, _ := summaries(f.wait(t)); n != 1 {
 			t.Fatalf("%d summaries", n)
@@ -242,7 +242,7 @@ func TestRunGuaranteesOneSummary(t *testing.T) {
 		sum, err := f.hub.Run(context.Background(), funcEngine(func(_ context.Context, _ installflow.Request, rt installflow.Runtime) (installflow.Summary, error) {
 			_ = rt.Events.Emit(started(false, manifest("a")))
 			return okSummary(), errors.New("boom")
-		}), installflow.Request{}, nil)
+		}), installflow.Request{}, installflow.Runtime{})
 		if err == nil || sum.Outcome != installflow.RunFailed {
 			t.Fatalf("outcome %s, err %v: an error never closes as success", sum.Outcome, err)
 		}
@@ -262,7 +262,7 @@ func TestRunGuaranteesOneSummary(t *testing.T) {
 				_ = rt.Events.Emit(started(false, manifest("a")))
 				_ = rt.Events.Emit(stepStart("a", 1))
 				panic("engine bug")
-			}), installflow.Request{}, nil)
+			}), installflow.Request{}, installflow.Runtime{})
 		}()
 		envs := f.wait(t)
 		if err := testkit.VerifyStream(envs); err != nil {
@@ -596,7 +596,7 @@ func TestCancellationClosesActiveStepsAsCancelled(t *testing.T) {
 	}, Summary: okSummary()}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { <-eng.Reached("tool"); cancel() }()
-	sum, err := f.hub.Run(ctx, eng, installflow.Request{}, nil)
+	sum, err := f.hub.Run(ctx, eng, installflow.Request{}, installflow.Runtime{})
 	if !errors.Is(err, context.Canceled) || !eng.Cancelled() {
 		t.Fatalf("err %v, cancelled %v", err, eng.Cancelled())
 	}
@@ -671,5 +671,48 @@ func TestEnvelopeFields(t *testing.T) {
 	want := `{"schema":"dcctl.install.events/v1","run_id":"run-test","seq":3,"time":"2026-11-25T12:00:03.5Z","elapsed_ms":3500,"operation":"install","kind":"step.finished","step_id":"a","attempt":1,"payload":{"outcome":"unchanged","duration_ms":2000}}`
 	if string(j) != want {
 		t.Fatalf("json\n got %s\nwant %s", j, want)
+	}
+}
+
+// Flush returns only once everything emitted before it has reached the sink: a
+// presenter that writes directly between events relies on it for its ordering.
+func TestFlushWaitsForEarlierEvents(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	must(t, f.hub.Emit(started(false, manifest("a"))))
+	f.sink.Hold()
+	must(t, f.hub.Emit(stepStart("a", 1)))
+	flushed := make(chan struct{})
+	go func() { f.hub.Flush(); close(flushed) }()
+	select {
+	case <-flushed:
+		t.Fatal("Flush returned while an earlier event was undelivered")
+	case <-time.After(50 * time.Millisecond):
+	}
+	f.sink.Release()
+	select {
+	case <-flushed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Flush did not return after delivery")
+	}
+	if kinds := f.sink.Kinds(); len(kinds) != 2 {
+		t.Errorf("delivered %v", kinds)
+	}
+}
+
+// A preflight observation belongs to an active step attempt, like progress.
+func TestPreflightObservationNeedsAnActiveStep(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	must(t, f.hub.Emit(started(false, manifest("a"))))
+	o := installflow.PreflightObservation{Observation: installflow.ObserveCheck, Verdict: installflow.CheckPass,
+		Text: installflow.Text("docker")}
+	if err := f.hub.Emit(installflow.Event{Step: "a", Attempt: 1, Payload: o}); !errors.Is(err, installflow.ErrLifecycle) {
+		t.Errorf("an observation outside its step: %v", err)
+	}
+	must(t, f.hub.Emit(stepStart("a", 1)))
+	must(t, f.hub.Emit(installflow.Event{Step: "a", Attempt: 1, Payload: o}))
+	bad := o
+	bad.Verdict = "maybe"
+	if err := f.hub.Emit(installflow.Event{Step: "a", Attempt: 1, Payload: bad}); !errors.Is(err, installflow.ErrInvalidEvent) {
+		t.Errorf("an unknown verdict: %v", err)
 	}
 }

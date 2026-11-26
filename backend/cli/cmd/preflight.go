@@ -4,9 +4,11 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -14,7 +16,8 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
-	"github.com/fatih/color"
+	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/installplain"
 	"github.com/spf13/cobra"
 )
 
@@ -29,22 +32,44 @@ type doctor struct {
 	// needs it to tell its own published ports from someone else's. Empty when the
 	// run targets an existing cluster.
 	cluster string
+	// observe receives each observation as the checks make it. Nil prints it on
+	// stdout as dcctl always has, which is what `dcctl preflight` and bootstrap do;
+	// an install hands the observations to its engine, which reports them through
+	// the run's event stream to whichever presenter is drawing it.
+	observe func(installflow.PreflightObservation)
 }
 
 const dockerInstallHint = "install Docker (Docker Desktop on macOS and Windows, Docker Engine on Linux): https://docs.docker.com/get-docker/"
 
-func (d *doctor) pass(msg string) { fmt.Printf("  %s %s\n", color.GreenString("✅"), msg) }
-func (d *doctor) info(msg string) { fmt.Printf("  %s %s\n", color.HiBlackString("•"), msg) }
+// record hands one observation on. The verdicts and their thresholds are the
+// doctor's; how an observation is drawn is the presenter's.
+func (d *doctor) record(o installflow.PreflightObservation) {
+	if d.observe != nil {
+		d.observe(o)
+		return
+	}
+	installplain.RenderObservation(os.Stdout, o)
+}
+
+func (d *doctor) check(v installflow.CheckVerdict, msg, fix string) {
+	d.record(installflow.PreflightObservation{Observation: installflow.ObserveCheck, Verdict: v,
+		Text: installflow.Text(msg), Fix: installflow.Text(fix)})
+}
+
+func (d *doctor) pass(msg string) { d.check(installflow.CheckPass, msg, "") }
+func (d *doctor) info(msg string) { d.check(installflow.CheckInfo, msg, "") }
 func (d *doctor) warn(msg, fix string) {
-	fmt.Printf("  %s %s\n     %s\n", color.YellowString("⚠️"), msg, color.YellowString("↳ "+fix))
+	d.check(installflow.CheckWarn, msg, fix)
 	d.warns++
 }
 func (d *doctor) fail(msg, fix string) {
-	fmt.Printf("  %s %s\n     %s\n", color.RedString("❌"), msg, color.RedString("↳ "+fix))
+	d.check(installflow.CheckFail, msg, fix)
 	d.fails++
 }
 
-func section(title, emoji string) { fmt.Printf("\n%s\n", GreenUnderline(emoji+" "+title)) }
+func (d *doctor) section(code installflow.MessageCode) {
+	d.record(installflow.PreflightObservation{Observation: installflow.ObserveSection, Section: code})
+}
 
 // run executes a command and returns trimmed stdout (empty on error).
 func run(name string, args ...string) string {
@@ -112,7 +137,7 @@ type toolCheck struct {
 }
 
 func (d *doctor) checkTools(provider string, opts doctorOpts) {
-	section("Tooling", "🧰")
+	d.section(installplain.SectionTooling)
 	var checks []toolCheck
 	if opts.needsDocker() {
 		checks = append(checks, toolCheck{names: []string{"docker"}, required: true, guidance: dockerInstallHint})
@@ -185,7 +210,7 @@ func engineMemoryRefused(b int64) bool { return b < engineMemoryRefuseBelow }
 
 // Returns the docker data-root directory ("" if unknown) for the disk check.
 func (d *doctor) checkDockerEngine(opts doctorOpts) string {
-	section("Docker engine", "🐳")
+	d.section(installplain.SectionDockerEngine)
 	if !haveTool("docker") {
 		d.fail("docker not installed", dockerInstallHint)
 		return ""
@@ -248,7 +273,7 @@ func (d *doctor) checkDockerEngine(opts doctorOpts) string {
 // when it does not, so a skipped check is visible rather than silently absent.
 func (d *doctor) checkDocker(opts doctorOpts) string {
 	if !opts.needsDocker() {
-		section("Docker engine", "🐳")
+		d.section(installplain.SectionDockerEngine)
 		d.info("not needed — installing into " + opts.KubeContext + " from published images")
 		return ""
 	}
@@ -258,7 +283,7 @@ func (d *doctor) checkDocker(opts doctorOpts) string {
 // ---- ports -----------------------------------------------------------------
 
 func (d *doctor) checkPorts() {
-	section("Ports & registry", "🔌")
+	d.section(installplain.SectionPorts)
 	registryUp := strings.Contains(runCmd("docker", "ps", "--format", "{{.Names}}"), "kind-registry")
 	// A cluster dcctl is about to CREATE publishes 80, 443 and 1883-1885 on the host (ingress
 	// HTTP, ingress HTTPS, and one MQTT port for each of up to three local instances). If
@@ -328,7 +353,7 @@ var portInUse = func(port int) bool {
 // ---- kube contexts ---------------------------------------------------------
 
 func (d *doctor) checkKubeContexts(selected string) {
-	section("Kubernetes contexts", "☸️")
+	d.section(installplain.SectionKubeContexts)
 	names, current, err := bootstrap.KubeContexts()
 	if err != nil {
 		d.warn("unable to load kube contexts", err.Error())
@@ -338,7 +363,8 @@ func (d *doctor) checkKubeContexts(selected string) {
 		return
 	}
 	if current != "" {
-		d.info("current-context: " + color.GreenString(current))
+		d.record(installflow.PreflightObservation{Observation: installflow.ObserveCheck, Verdict: installflow.CheckInfo,
+			Text: installflow.Text("current-context: "), Highlight: installflow.Text(current)})
 	} else if selected == "" {
 		// dcctl creates its own kind cluster and context, so none yet is the normal start.
 		d.info("no current-context set yet (the kind cluster dcctl creates provides one)")
@@ -385,7 +411,7 @@ const (
 )
 
 func (d *doctor) checkKubeServerVersion(kubeContext string) {
-	section("Kubernetes server version", "🧩")
+	d.section(installplain.SectionKubeServerVersion)
 
 	out := runCmd("kubectl", kubectlVersionArgs(kubeContext)...)
 	if out == "" {
@@ -475,15 +501,7 @@ func digitsOnly(s string) string {
 // ---- summary ---------------------------------------------------------------
 
 func (d *doctor) summary() {
-	fmt.Println()
-	switch {
-	case d.fails > 0:
-		fmt.Println(color.New(color.FgRed, color.Bold).Sprintf("Preflight: %d failure(s), %d warning(s) — fix failures before bootstrap.", d.fails, d.warns))
-	case d.warns > 0:
-		fmt.Println(color.New(color.FgYellow, color.Bold).Sprintf("Preflight: ready, with %d warning(s) — review above.", d.warns))
-	default:
-		fmt.Println(color.New(color.FgGreen, color.Bold).Sprint("Preflight: all checks passed. ✨"))
-	}
+	d.record(installflow.PreflightObservation{Observation: installflow.ObserveSummary, Fails: d.fails, Warns: d.warns})
 }
 
 // runDoctor performs the full preflight and returns the accumulated result so
@@ -497,7 +515,21 @@ var (
 )
 
 func runDoctor(provider string, opts doctorOpts) *doctor {
-	d := &doctor{}
+	return runDoctorTo(provider, opts, nil)
+}
+
+// doctorRunner is the preflight an install's engine runs, as its install.preflight
+// stage: the same checks as runDoctor, observed through the run instead of printed.
+func doctorRunner(provider string, opts doctorOpts) installflow.PreflightRunner {
+	return installflow.PreflightFunc(func(_ context.Context, observe func(installflow.PreflightObservation)) (installflow.PreflightResult, error) {
+		d := runDoctorTo(provider, opts, observe)
+		return installflow.PreflightResult{Fails: d.fails, Warns: d.warns}, nil
+	})
+}
+
+// runDoctorTo is runDoctor with its observations sent to observe (nil: stdout).
+func runDoctorTo(provider string, opts doctorOpts, observe func(installflow.PreflightObservation)) *doctor {
+	d := &doctor{observe: observe}
 	if opts.hostsKind() {
 		d.cluster = strings.TrimPrefix(opts.Target, "kind-")
 	}

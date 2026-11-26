@@ -16,6 +16,7 @@ import (
 
 	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/devicechain-io/dcctl/dcdir"
+	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/fatih/color"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/dynamic"
@@ -112,10 +113,13 @@ type InstallOptions struct {
 // prerequisites that are not there. markInstallApplying brackets the apply for exactly
 // that reason.
 func Install(ctx context.Context, provider Provider, opts InstallOptions) error {
+	c := out(ctx)
 	if err := ValidateRelationalStoreWAL(opts.RelationalStoreMaxWALMiB); err != nil {
 		return err
 	}
+	run := runFrom(ctx)
 	opts.CreateCluster = true
+	run.enter(installflow.StepInstallCluster)
 	binding, err := provider.EnsureCluster(ctx, opts.Options)
 	if err != nil {
 		return err
@@ -135,9 +139,9 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		return err
 	}
 
-	fmt.Println(GreenUnderline(fmt.Sprintf("\nInstall DeviceChain prerequisites on cluster %s", binding.Describe())))
-	fmt.Printf("  %s %s\n", color.WhiteString("Settings:"), color.GreenString(describeInstallSettings(settings)))
-	reportOperatorPlan(st)
+	c.println(GreenUnderline(fmt.Sprintf("\nInstall DeviceChain prerequisites on cluster %s", binding.Describe())))
+	c.printf("  %s %s\n", color.WhiteString("Settings:"), color.GreenString(describeInstallSettings(settings)))
+	reportOperatorPlan(c, st)
 
 	// 🔴 THE LOCK IS TAKEN BEFORE THE READS THAT DECIDE, not just before the writes.
 	// Everything below — the previous install record, whether a re-install would
@@ -160,6 +164,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	// A dry run takes nothing. It still resolves the namespace and reports the claim
 	// it WOULD have met, because "another operator is already running" is part of
 	// the answer to what this command would do.
+	run.enter(installflow.StepInstallClaim)
 	if err := claimForInstall(ctx, st); err != nil {
 		return err
 	}
@@ -170,9 +175,11 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	defer func() {
 		if st.Claim != nil {
 			st.Claim.Release(ctx)
+			run.claimReleased()
 		}
 	}()
 
+	run.enter(installflow.StepInstallInspect)
 	if err := checkHaNodeCapacity(ctx, st); err != nil {
 		return err
 	}
@@ -199,30 +206,38 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		if err != nil {
 			return err
 		}
+		run.enter(installflow.StepInstallCredentials)
+		run.enter(installflow.StepInstallPrepare)
 		if err := buildOperatorImageForInstall(ctx, st); err != nil {
 			return err
 		}
+		run.enter(installflow.StepInstallWriteIntent)
 		if class := backupSnapshotClass(st); class != "" && !rehearsed {
-			wouldDo("refuse, before any write, a VolumeSnapshotClass " + class + " that does not exist, " +
+			c.wouldDo("refuse, before any write, a VolumeSnapshotClass " + class + " that does not exist, " +
 				"does not use deletionPolicy Delete, or belongs to another driver than the database volumes' " +
 				"-- NOT rehearsed, because the cluster could not be identified")
 		}
 		if p := databasePlacement(st); !p.IsZero() {
-			wouldDo("place the relational store, and every instance's event store, on " + p.describe())
+			c.wouldDo("place the relational store, and every instance's event store, on " + p.describe())
 		}
-		wouldDo("install the operator — CRDs, RBAC and the controller Deployment at " +
+		run.enter(installflow.StepInstallOperator)
+		c.wouldDo("install the operator — CRDs, RBAC and the controller Deployment at " +
 			operatorImageRef(st) + " — in namespace " + st.OperatorNamespace)
 		if !st.NoMonitoring && !monitoringSlim(st) {
-			wouldDo("look in " + controlPlaneNamespace + " for each control-plane component the monitoring chart " +
+			c.wouldDo("look in " + controlPlaneNamespace + " for each control-plane component the monitoring chart " +
 				"scrapes, and switch off the scrape of any with no pod behind the chart's selector " +
 				"(decided when the run reads the cluster)")
 		}
-		wouldDo("tofu init+apply deploy/opentofu/cluster — once per cluster, shared by every instance " +
+		run.enter(installflow.StepInstallPrerequisites)
+		c.wouldDo("tofu init+apply deploy/opentofu/cluster — once per cluster, shared by every instance " +
 			"(CloudNativePG operator + backup plugin, ingress, cert-manager, monitoring, the relational " +
 			"store, the backup object store)")
-		wouldDo("create the base database identity instances' logins are made with")
-		wouldDo(fmt.Sprintf("record the install in ConfigMap %s/%s", infraNamespace, installRecordName))
-		wouldDo(fmt.Sprintf("wait until every instance of the relational store %s/%s has joined",
+		run.enter(installflow.StepInstallDatabaseLogin)
+		c.wouldDo("create the base database identity instances' logins are made with")
+		run.enter(installflow.StepInstallRecord)
+		c.wouldDo(fmt.Sprintf("record the install in ConfigMap %s/%s", infraNamespace, installRecordName))
+		run.enter(installflow.StepInstallRDBReady)
+		c.wouldDo(fmt.Sprintf("wait until every instance of the relational store %s/%s has joined",
 			infraNamespace, RdbClusterName))
 		// 🔴 A RESTORE IS THE ONE THING A REHEARSAL MOST NEEDS TO BE TOLD ABOUT, and
 		// the reason it is rendered from the PLAN plus a READ rather than from the
@@ -234,7 +249,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		// Printed the way the real run prints it, not through wouldDo: these are
 		// sentences, and one of them says a restore will NOT happen, which "would" in
 		// front of it would turn into its own opposite.
-		printRelationalRestore(st.Restore, dryRunRdbArchiveState(ctx, st), backupSnapshotClass(st))
+		printRelationalRestore(c, st.Restore, dryRunRdbArchiveState(ctx, st), backupSnapshotClass(st))
 		return nil
 	}
 
@@ -249,33 +264,36 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	if err != nil {
 		return err
 	}
+	run.recordIs(installflow.RecordUnchanged)
+	run.enter(installflow.StepInstallCredentials)
 	// After the refusals, so a refused install (an older dcctl over a newer cluster) does not
 	// restamp this machine's record of the cluster with the dcctl it refused.
 	if err := WriteClusterRecord(ClusterRecord{
 		UID: uid, Cluster: binding.Cluster, KubeContext: binding.KubeContext, Managed: binding.Managed,
 		FirstSeenAt: time.Now().UTC(), DcctlVersion: opts.DcctlVersion,
 	}); err != nil {
-		fmt.Println(color.YellowString("warning: could not record what is known about cluster %s (%v).",
+		c.println(color.YellowString("warning: could not record what is known about cluster %s (%v).",
 			binding.Describe(), err))
 	}
 
-	doing("settling the cluster's credentials")
+	c.doing("settling the cluster's credentials")
 	live, err := clusterArchivePath(ctx, dyn, infraNamespace, RdbClusterName)
 	if err != nil {
-		return fail("reading the relational store's archive state", err)
+		return c.fail("reading the relational store's archive state", err)
 	}
 	settleRdbArchivePath(st, live, time.Now().UTC())
 	if st.Credentials, err = resolveCredentials(ctx, typed, st, liveArchiveState{Rdb: live}); err != nil {
-		return fail("settling the cluster's credentials", err)
+		return c.fail("settling the cluster's credentials", err)
 	}
-	done()
+	c.done()
 
 	// 🔴 SAID BEFORE THE APPLY, not after. "It restored" and "it declined to restore"
 	// are indistinguishable from the outside — the apply is green either way and no
 	// data moves — so an operator mid-incident has to be told which one is about to
 	// happen while they can still stop.
-	printRelationalRestore(st.Restore, live, backupSnapshotClass(st))
+	printRelationalRestore(c, st.Restore, live, backupSnapshotClass(st))
 
+	run.enter(installflow.StepInstallPrepare)
 	clusterVars, err := installClusterVars(ctx, st, typed)
 	if err != nil {
 		return err
@@ -298,6 +316,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	// Fenced here and before each irreversible write below: everything above this
 	// point is a read or a refusal, and everything below it changes a cluster that
 	// may no longer be ours. See stillHoldsTheCluster.
+	run.enter(installflow.StepInstallWriteIntent)
 	if err := stillHoldsTheCluster(ctx, st, "writing this cluster's credentials"); err != nil {
 		return err
 	}
@@ -314,6 +333,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now, st.RelationalStoreMaxWALMiB); err != nil {
 		return err
 	}
+	run.recordIs(installflow.RecordApplying)
 	// 🔴 AFTER markInstallApplying, BECAUSE THAT CALL IS THE LAST REFUSAL AND A
 	// REFUSAL MUST COME BEFORE A WRITE THAT CANNOT BE TAKEN BACK. It rejects a
 	// cluster whose install record carries a newer SCHEMA than this build writes,
@@ -329,14 +349,16 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	// can also change the controller without changing the definitions it digests.
 	// A dcctl built from source, an unparseable record version, or a hand-edited record
 	// can still leave the release ordering unknown or misrepresented.
+	run.enter(installflow.StepInstallOperator)
 	if err := installOperator(ctx, st); err != nil {
 		return err
 	}
+	run.enter(installflow.StepInstallPrerequisites)
 	if err := stillHoldsTheCluster(ctx, st, "applying the cluster prerequisites"); err != nil {
 		return err
 	}
 	var outputs InstallOutputs
-	if err := runStreamed("applying cluster prerequisites (OpenTofu)", "cluster prerequisites", func() error {
+	if err := c.runStreamed("applying cluster prerequisites (OpenTofu)", "cluster prerequisites", func() error {
 		outputs, err = applyClusterPrereqs(ctx, st, st.ClusterUID, clusterVars, infraNamespace)
 		return err
 	}); err != nil {
@@ -347,9 +369,9 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		// run can have changed the routing during this apply. Best effort: the cluster is
 		// built, and an instance not patched now is patched by its next upgrade.
 		published, perrs := publishAlertRoutingToCluster(ctx, st.KubeContext)
-		fmt.Printf("  %s %s\n", color.WhiteString("Alert routing:"), SayAlertRouting(published))
+		c.printf("  %s %s\n", color.WhiteString("Alert routing:"), SayAlertRouting(published))
 		for _, perr := range perrs {
-			fmt.Printf("  %s %v\n", color.YellowString("warning:"), perr)
+			c.printf("  %s %v\n", color.YellowString("warning:"), perr)
 		}
 	}
 
@@ -361,13 +383,14 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	// returned; recording the new budget before then would admit instances against
 	// connections the store does not have yet. Measured: the apply finished with the
 	// store still on the old value.
-	doing("creating the base database identity")
+	run.enter(installflow.StepInstallDatabaseLogin)
+	c.doing("creating the base database identity")
 	if err := withProvisionerSession(ctx, st.KubeContext, outputs.Rdb, func(q instanceDBQuerier) error {
 		return storeRunsWithBudget(ctx, q, outputs.Rdb.MaxConnections)
 	}); err != nil {
-		return fail("creating the base database identity", err)
+		return c.fail("creating the base database identity", err)
 	}
-	done()
+	c.done()
 
 	return finishInstall(ctx, st, provider.Name(), typed, dyn, InstallRecord{
 		ClusterUID:   st.ClusterUID,
@@ -389,7 +412,8 @@ func finishInstall(ctx context.Context, st *State, provider string, typed kubern
 	if err := recordInstallAndWaitForStore(ctx, st, typed, dyn, rec, timeout, poll); err != nil {
 		return err
 	}
-	reportInstall(st, provider)
+	runFrom(ctx).enter(installflow.StepInstallSummary)
+	reportInstall(out(ctx), st, provider)
 	return nil
 }
 
@@ -412,30 +436,37 @@ func finishInstall(ctx context.Context, st *State, provider string, typed kubern
 // Install's deferred release does not repeat it.
 func recordInstallAndWaitForStore(ctx context.Context, st *State, typed kubernetes.Interface,
 	dyn dynamic.Interface, rec InstallRecord, timeout, poll time.Duration) error {
+	c, run := out(ctx), runFrom(ctx)
+	run.enter(installflow.StepInstallRecord)
 	if err := stillHoldsTheCluster(ctx, st, "recording the install"); err != nil {
 		return err
 	}
 	if err := writeInstalled(ctx, typed, rec, time.Now); err != nil {
 		return err
 	}
+	run.recordIs(installflow.RecordInstalled)
 	if st.Claim != nil {
 		st.Claim.Release(ctx)
 		st.Claim = nil
+		run.claimReleased()
 	}
+	run.enter(installflow.StepInstallRDBReady)
 	const msg = "waiting for every instance of the relational store to join"
-	doing(msg)
+	c.doing(msg)
 	store := rec.Outputs.Rdb
 	if err := waitForCNPGClusterReady(ctx, dyn, typed, store.Namespace, store.ClusterName, timeout, poll); err != nil {
+		run.readinessIs(installflow.ReadinessNotReady)
 		hint := ""
 		if st.Restore.RestoresRelationalStore() {
 			hint = " A restore's replicas clone the recovered store after its primary is up, which can take longer than this on a large archive."
 		}
-		return fail(msg, fmt.Errorf("%w. The install is recorded and the cluster lock is released, so instances can "+
+		return c.fail(msg, fmt.Errorf("%w. The install is recorded and the cluster lock is released, so instances can "+
 			"be bootstrapped now.%s To follow the store, watch `kubectl -n %s get clusters.postgresql.cnpg.io %s`. "+
 			"To have dcctl keep waiting, run the same `dcctl install` command again; it re-applies the "+
 			"prerequisites and refuses bootstraps while it runs", err, hint, store.Namespace, store.ClusterName))
 	}
-	done()
+	run.readinessIs(installflow.ReadinessReady)
+	c.done()
 	return nil
 }
 
@@ -516,13 +547,13 @@ func settleRdbArchivePath(st *State, live clusterArchiveState, now time.Time) {
 // printRelationalRestore tells the operator what this run will do to the relational
 // store. One printer for the rehearsal and the real run, so the two cannot describe the
 // same plan in different words — which is the whole claim a rehearsal makes.
-func printRelationalRestore(plan RestorePlan, live clusterArchiveState, snapshotClass string) {
+func printRelationalRestore(c console, plan RestorePlan, live clusterArchiveState, snapshotClass string) {
 	lines := describeRelationalRestore(plan, live, time.Now().UTC())
 	if len(lines) > 0 && snapshotClass != "" {
 		lines = append(lines, snapshotRestoreNote("relational store"))
 	}
 	for _, line := range lines {
-		fmt.Println(color.YellowString("  %s", line))
+		c.println(color.YellowString("  %s", line))
 	}
 }
 
@@ -589,6 +620,7 @@ var identifyCluster = IdentifyCluster
 // byte-identical to the real run's.
 func rehearseInstallRefusals(ctx context.Context, st *State, settings InstallSettings,
 	stateExists func(uid string) (bool, error)) (rehearsed bool, err error) {
+	c := out(ctx)
 	uid, err := identifyCluster(ctx, st.KubeContext)
 	if err != nil {
 		var status apierrors.APIStatus
@@ -599,7 +631,7 @@ func rehearseInstallRefusals(ctx context.Context, st *State, settings InstallSet
 		if backupSnapshotClass(st) != "" {
 			notRehearsed += ", an unusable VolumeSnapshotClass"
 		}
-		fmt.Println(color.YellowString(
+		c.println(color.YellowString(
 			"  could not identify cluster %s (%v); the refusals a re-install makes — %s — were NOT "+
 				"rehearsed; the real run identifies the cluster first and stops if it cannot",
 			st.Binding.Describe(), err, notRehearsed))
@@ -623,6 +655,7 @@ func rehearseInstallRefusals(ctx context.Context, st *State, settings InstallSet
 // nothing writes.
 func connectAndRefuse(ctx context.Context, st *State, settings InstallSettings,
 	stateExists func(uid string) (bool, error)) (dynamic.Interface, kubernetes.Interface, error) {
+	c := out(ctx)
 	dyn, typed, err := installClients(st.KubeContext)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connecting to cluster %s: %w", st.Binding.Describe(), err)
@@ -653,11 +686,11 @@ func connectAndRefuse(ctx context.Context, st *State, settings InstallSettings,
 	// every one for ever. Found here, it costs a re-run; found after the apply, it
 	// costs a cluster recorded as installed with backups that do not work.
 	if class := backupSnapshotClass(st); class != "" {
-		doing("checking VolumeSnapshotClass " + class)
+		c.doing("checking VolumeSnapshotClass " + class)
 		if err := checkVolumeSnapshotClass(ctx, dyn, typed, class, infraNamespace, RdbClusterName); err != nil {
-			return nil, nil, fail("checking VolumeSnapshotClass "+class, err)
+			return nil, nil, c.fail("checking VolumeSnapshotClass "+class, err)
 		}
-		done()
+		c.done()
 	}
 	return dyn, typed, nil
 }
@@ -698,6 +731,7 @@ func localClusterStateExists(uid string) (bool, error) {
 //     so those changes are allowed.
 func refuseAReinstallThatWouldHurt(ctx context.Context, st *State, prev *InstallRecord, settings InstallSettings,
 	stateExists func(uid string) (bool, error)) error {
+	c := out(ctx)
 	last := prev.lastCompleted()
 	if last == nil {
 		return nil
@@ -726,7 +760,7 @@ func refuseAReinstallThatWouldHurt(ctx context.Context, st *State, prev *Install
 			}
 			return fmt.Sprintf("%d MiB (0: stock default)", *value)
 		}
-		fmt.Printf("  Relational store max_wal_size: %s → %s (reload-only)\n",
+		c.printf("  Relational store max_wal_size: %s → %s (reload-only)\n",
 			describeWAL(last.Settings.RelationalStoreMaxWALMiB), describeWAL(settings.RelationalStoreMaxWALMiB))
 	}
 	var changed []string
@@ -858,31 +892,31 @@ func InstallCommand(provider string, b ClusterBinding) string {
 }
 
 // reportInstall prints what the install left in place.
-func reportInstall(st *State, provider string) {
-	fmt.Println(color.HiGreenString("\nDeviceChain prerequisites installed"))
-	fmt.Printf("  %s %s\n", color.WhiteString("Cluster:"), color.GreenString(st.Binding.Describe()))
-	fmt.Printf("  %s %s\n", color.WhiteString("Kube context:"), color.GreenString(st.KubeContext))
-	fmt.Printf("  %s %s\n", color.WhiteString("Connection budget:"),
+func reportInstall(c console, st *State, provider string) {
+	c.println(color.HiGreenString("\nDeviceChain prerequisites installed"))
+	c.printf("  %s %s\n", color.WhiteString("Cluster:"), color.GreenString(st.Binding.Describe()))
+	c.printf("  %s %s\n", color.WhiteString("Kube context:"), color.GreenString(st.KubeContext))
+	c.printf("  %s %s\n", color.WhiteString("Connection budget:"),
 		color.GreenString("%d (each instance reserves its own share when it is bootstrapped)", st.MaxConnections))
-	printBackups("instances on this cluster", databaseBackupsEnabled(st), backupsAreExternal(st))
+	printBackups(c, "instances on this cluster", databaseBackupsEnabled(st), backupsAreExternal(st))
 	if class := backupSnapshotClass(st); class != "" {
-		fmt.Printf("  %s %s\n", color.WhiteString("Base backups:"), color.GreenString(
+		c.printf("  %s %s\n", color.WhiteString("Base backups:"), color.GreenString(
 			"daily volume snapshots (VolumeSnapshotClass %s), pruned by the operator to each store's window; "+
 				"a weekly one in the backup store, which is what a restore reads", class))
 	}
 	if p := databasePlacement(st); !p.IsZero() {
-		fmt.Printf("  %s %s\n", color.WhiteString("Databases on:"), color.GreenString(
+		c.printf("  %s %s\n", color.WhiteString("Databases on:"), color.GreenString(
 			"%s (the relational store, and every instance's event store)", p.describe()))
 	}
 	if p := st.Values["backupServerNameRdb"]; p != "" && databaseBackupsEnabled(st) {
-		fmt.Printf("  %s %s\n", color.WhiteString("Relational archive:"), color.GreenString(p))
+		c.printf("  %s %s\n", color.WhiteString("Relational archive:"), color.GreenString(p))
 	}
 	// 🔴 INTENT, AND LABELLED AS INTENT. The apply returning says the recovery
 	// bootstrap was rendered, not that a single row came back — nothing in an apply
 	// can say that. An operator who reads this as a verdict stops checking, which is
 	// how a restore that recovered nothing gets believed.
 	if st.Restore.RestoresRelationalStore() {
-		fmt.Printf("  %s %s\n", color.WhiteString("Relational recovery:"),
+		c.printf("  %s %s\n", color.WhiteString("Relational recovery:"),
 			color.GreenString("requested from %q — the store was waited for until healthy, which does "+
 				"not say the rows came back: check the data before believing it", st.Restore.RdbFrom))
 	}
@@ -891,22 +925,22 @@ func reportInstall(st *State, provider string) {
 		for i, r := range existing {
 			names[i] = r.Instance
 		}
-		fmt.Println(color.HiGreenString("\nThis cluster already hosts %s. Next: move it onto this operator:\n", describeInstances(names)))
+		c.println(color.HiGreenString("\nThis cluster already hosts %s. Next: move it onto this operator:\n", describeInstances(names)))
 		flags := upgradeTargetFlags(st)
 		for _, r := range existing {
 			p := r.Provider
 			if p == "" {
 				p = provider
 			}
-			fmt.Printf("    dcctl upgrade %s %s%s --dry-run\n    dcctl upgrade %s %s%s\n\n", p, r.Instance, flags, p, r.Instance, flags)
+			c.printf("    dcctl upgrade %s %s%s --dry-run\n    dcctl upgrade %s %s%s\n\n", p, r.Instance, flags, p, r.Instance, flags)
 		}
 		if st.BuildImages {
-			fmt.Println(color.YellowString("  The operator was built from source, and `dcctl upgrade` builds no images: " +
+			c.println(color.YellowString("  The operator was built from source, and `dcctl upgrade` builds no images: " +
 				"push the services' images and replace <tag> with the tag they were pushed at."))
 		}
 		return
 	}
-	fmt.Println(color.HiGreenString("\nNext: build an instance on it:\n\n    dcctl bootstrap %s <instance>%s\n",
+	c.println(color.HiGreenString("\nNext: build an instance on it:\n\n    dcctl bootstrap %s <instance>%s\n",
 		provider, clusterTargetFlag(st.Binding)))
 }
 

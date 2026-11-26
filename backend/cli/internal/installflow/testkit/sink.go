@@ -127,6 +127,10 @@ func VerifyStream(envs []installflow.Envelope) error {
 			if !active[k] {
 				bad(i, "progress for %s attempt %d outside the attempt", e.StepID, e.Attempt)
 			}
+		case installflow.PreflightObservation:
+			if !active[k] {
+				bad(i, "preflight observation for %s attempt %d outside the attempt", e.StepID, e.Attempt)
+			}
 		case installflow.StepFinished, installflow.StepFailed:
 			if !active[k] {
 				bad(i, "step %s attempt %d ended without being active", e.StepID, e.Attempt)

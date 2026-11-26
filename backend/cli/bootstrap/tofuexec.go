@@ -186,6 +186,11 @@ func newTofuExec(rootdir, tofuBin, kubeContext string) (*tofuExec, error) {
 	return &tofuExec{Terraform: tf, stdout: stdout, abandonBudget: tofuAbandonBudget, target: target}, nil
 }
 
+// useConsole sends the runner's stderr to c rather than the process's own. Called
+// once, straight after newTofuExec and before any command: terraform-exec reads the
+// writer when a command starts, so setting it afterwards would race a running one.
+func (t *tofuExec) useConsole(c console) { t.Terraform.SetStderr(c.stderr()) }
+
 // tofuAbandonBudget is how long dcctl goes on waiting for an INTERRUPTED tofu command
 // before it stops waiting and says so. It is armed only once the context is cancelled
 // and never while a run is live, so a long legitimate apply is not on a clock.
@@ -274,7 +279,7 @@ func runUntilAbandoned(ctx context.Context, budget time.Duration, run func() err
 // long enough to orphan the pipe. The version read above is outside it on purpose —
 // `version -json` starts no providers, so it has nothing to orphan the pipe TO.
 func (t *tofuExec) streaming(ctx context.Context, run func() error) error {
-	return t.streamingTo(ctx, os.Stdout, run)
+	return t.streamingTo(ctx, out(ctx).stdout(), run)
 }
 
 // streamingTo is streaming with stdout sent to w instead of straight to the terminal.
@@ -402,7 +407,7 @@ func (t *tofuExec) Destroy(ctx context.Context, opts ...tfexec.DestroyOption) er
 	defer p.release()
 	path, kctx := pinVars(p)
 	opts = append(append([]tfexec.DestroyOption(nil), opts...), path, kctx)
-	f := newOutputsBlockFilter(os.Stdout)
+	f := newOutputsBlockFilter(out(ctx).stdout())
 	err = t.streamingTo(ctx, f, func() error { return t.Terraform.Destroy(ctx, opts...) })
 	if ferr := f.Flush(); ferr != nil && err == nil {
 		err = ferr

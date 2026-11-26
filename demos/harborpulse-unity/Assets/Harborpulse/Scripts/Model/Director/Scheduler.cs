@@ -18,6 +18,8 @@ namespace DeviceChain.Harborpulse.Model.Director
         public string Page { get; }
         public string Value { get; }
         public IReadOnlyList<string> Evidence { get; }
+        /// <summary>For a chain node: when its fact happened, on the recording's clock (not serialized; the chain card's cue reads it).</summary>
+        public double? InstantS { get; internal set; }
     }
     public sealed class DirectorSample
     {
@@ -90,7 +92,11 @@ namespace DeviceChain.Harborpulse.Model.Director
         public double ExpectedAirLockSim => WallOffsetSim(layout.Cues.AirLockFromSim, layout.Cues.AirLockHoldS, layout.DayLengthSeconds);
         public double ExpectedEscalationSim(double cueSim) => WallOffsetSim(cueSim, layout.Cues.EscalateAfterS, layout.DayLengthSeconds);
         void Emit(double now, string kind, PageRun p, string value, IEnumerable<Observation> proof = null)
-        { log.Add(new DirectorEvent(now, kind, p?.Page.Id ?? "", value, proof?.Select(o => o.EventKey))); }
+        {
+            var e = new DirectorEvent(now, kind, p?.Page.Id ?? "", value, proof?.Select(o => o.EventKey));
+            if (kind == "node" && proof != null) { var rows = proof.ToArray(); if (rows.Length > 0) e.InstantS = rows.Max(o => o.HasOccurrence ? o.OccurredAtS : o.ObservedAtS); }
+            log.Add(e);
+        }
         void Transition(PageRun p, PageState state, double now)
         { p.State = state; Emit(now, "state", p, state.ToString()); }
         bool Open(PageRun p, double sim) => sim >= p.Page.FromSim && sim <= p.Page.ToSim;

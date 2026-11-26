@@ -254,11 +254,12 @@ var (
 
 // reportExistingClaim prints who holds the cluster lock, without taking it.
 func reportExistingClaim(ctx context.Context, st *State) error {
+	c := out(ctx)
 	_, _, typed, err := kubeClients(st.KubeContext)
 	if err != nil {
 		// A dry run against an unreachable cluster still has a plan worth
 		// printing; the claim is the one part of it we cannot know.
-		fmt.Println(color.YellowString("  could not check whether another operator holds this cluster (%v)", err))
+		c.println(color.YellowString("  could not check whether another operator holds this cluster (%v)", err))
 		return nil
 	}
 	if st.OperatorNamespace == "" {
@@ -266,14 +267,14 @@ func reportExistingClaim(ctx context.Context, st *State) error {
 	}
 	lease, err := PeekClaim(ctx, typed, st.OperatorNamespace)
 	if err != nil {
-		fmt.Println(color.YellowString("  could not check whether another operator holds this cluster (%v)", err))
+		c.println(color.YellowString("  could not check whether another operator holds this cluster (%v)", err))
 		return nil
 	}
 	if lease == nil {
-		fmt.Println("  the cluster lock is free")
+		c.println("  the cluster lock is free")
 		return nil
 	}
-	fmt.Println(color.YellowString("  %s", heldError(lease, st.KubeContext).Error()))
+	c.println(color.YellowString("  %s", heldError(lease, st.KubeContext).Error()))
 	return nil
 }
 

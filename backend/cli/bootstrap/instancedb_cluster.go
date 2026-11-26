@@ -129,6 +129,7 @@ var removeInstanceDatabase = func(ctx context.Context, kubeContext, instance str
 // that do not exist yet — so the role is created here instead, as the database
 // superuser over the primary's local socket, and the operator never hears of it.
 func withProvisionerSession(ctx context.Context, kubeContext string, rdb ClusterRdb, fn func(instanceDBQuerier) error) error {
+	c := out(ctx)
 	restCfg, err := RestConfig(kubeContext)
 	if err != nil {
 		return fmt.Errorf("building kube config to reach the relational store: %w", err)
@@ -187,7 +188,7 @@ func withProvisionerSession(ctx context.Context, kubeContext string, rdb Cluster
 			return err
 		}
 		if time.Since(lastSaid) > 30*time.Second {
-			fmt.Printf("\n  still waiting for the relational store: %v", err)
+			c.printf("\n  still waiting for the relational store: %v", err)
 			lastSaid = time.Now()
 		}
 		select {

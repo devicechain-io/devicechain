@@ -34,6 +34,12 @@ namespace DeviceChain.Harborpulse.Model.Director
         public const string NightSky = "pose:basin:night-sky";
         public const double NightSkyHour = 4;
 
+        /// <summary>The start of a cut's crane down to HOME (not a story pose of its own: no shot holds on it).</summary>
+        public const string HomeHigh = "pose:home-high";
+
+        /// <summary>A cut's own view: the end of the rise over the dark East Quay.</summary>
+        public const string EastRise = "pose:east-quay:rise";
+
         public static readonly string[] Home = { "pose:home", "pose:home:portrait", "pose:night-home", "pose:storm-home" };
 
         public static IEnumerable<string> GroundLevel()
