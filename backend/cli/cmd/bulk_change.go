@@ -18,19 +18,26 @@ import (
 var bulkChangeSession = newBulkChangeSession
 
 func newBulkChangeSession(cmd *cobra.Command) (bulkchange.Client, string, error) {
-	client, endpoint, err := newFleetOpSession(cmd)
+	sessions, endpoint, err := tenantSessions(cmd)
 	if err != nil {
 		return nil, "", err
 	}
-	session := client.(*userclient.TenantSession).WithSchemaNegotiation(apiclient.LegacySchema)
-	for _, version := range recordedEndpointVersions(cmd, endpoint) {
-		session.WithLegacyEndpointVersion(version.Endpoint, version.Version)
+	versions := recordedEndpointVersions(cmd, endpoint)
+	// One otp for every sign-in: a step-up never offers the --otp code a sign-in already used,
+	// it asks a terminal for a new one or stops with an error that names --otp.
+	otp := otpFunc(otpFlag(cmd))
+	session := func() *userclient.TenantSession {
+		s := sessions(otp).WithSchemaNegotiation(apiclient.LegacySchema)
+		for _, version := range versions {
+			s.WithLegacyEndpointVersion(version.Endpoint, version.Version)
+		}
+		return s
 	}
-	return bulkchange.NewClient(session), endpoint, nil
+	return bulkchange.NewStepUpClient(session(), session), endpoint, nil
 }
 
 func addBulkChangeCommands(parent *cobra.Command) {
-	for _, name := range []string{"plan", "create", "start", "status", "lines", "pause", "resume", "abort"} {
+	for _, name := range []string{"plan", "create", "start", "status", "lines", "pause", "resume", "abort", "reverse", "resolve"} {
 		c := &cobra.Command{Use: name + " TOKEN", Args: cobra.ExactArgs(1), SilenceUsage: true, RunE: runBulkChange}
 		switch name {
 		case "plan", "create":
@@ -70,6 +77,24 @@ func addBulkChangeCommands(parent *cobra.Command) {
 			c.Long = c.Short + ".\n\nOmitted limits remain unchanged. Without --contract-digest, the client asks the server for a resume preview and uses its digest. A wider contract is refused in this release."
 			addBulkChangeLimits(c)
 			c.Flags().String("contract-digest", "", "Preview. Reviewed server contract digest; default: request a server resume preview")
+		case "reverse":
+			c.Short = "Preview. Preview or create the reversal of a DISPATCHED or ABORTED bulk change"
+			c.Long = c.Short + ".\n\nA reversal is a new bulk change that puts back, line by line, the value each device held before the original.\nWithout --create nothing is written: the server reports how many lines would be reversed, how many changed after the original was applied, how many were erased, already reversed or never applied, and the digests.\nWith --create the reversal is created in READY; review its contract and start it like any bulk change.\nA line whose value changed after the original is refused with CHANGED_SINCE unless --override-changed (every selected line) or --override-ordinals overrides it. Creating with an override needs a second factor verified within the last five minutes: when the server asks for a fresher one, the command signs in again and asks for a new authenticator code (a recovery code does not count).\nRepeating --create with the same --token and the same request returns the first reversal."
+			c.Flags().String("token", "", "Preview. Token of the reversal, unique within the tenant (required)")
+			c.Flags().String("name", "", "Preview. Display name; defaults to the reversal token")
+			c.Flags().IntSlice("ordinals", nil, "Preview. Positions of the original's lines to reverse, starting at 1; default: every applied line")
+			c.Flags().Bool("override-changed", false, "Preview. Apply every selected line even where the value changed after the original; needs a recent second factor")
+			c.Flags().IntSlice("override-ordinals", nil, "Preview. Apply these lines even where the value changed after the original; needs a recent second factor")
+			c.Flags().Bool("create", false, "Preview. Create the reversal in READY; without it nothing is written")
+			addBulkChangeLimits(c)
+			c.Flags().String("settle-deadline", "24h", "Preview. Evidence deadline: duration such as 24h or integer seconds, from 60s to 168h")
+		case "resolve":
+			c.Short = "Preview. Resolve ambiguous lines of a bulk change as confirmed or failed"
+			c.Long = c.Short + ".\n\nSelect lines with --ordinals or every ambiguous line with --all-ambiguous. Lines that are not ambiguous are left unchanged.\nA note of 1 to 1000 characters records why. The verdict is a person's, not device evidence: a later report that contradicts it sets the line's evidence flag.\nResolving needs a person's own sign-in with a second factor verified within the last five minutes. When the server asks for a fresher one, the command signs in again and asks for a new authenticator code (a recovery code does not count)."
+			c.Flags().IntSlice("ordinals", nil, "Preview. Positions of the lines to resolve, starting at 1")
+			c.Flags().Bool("all-ambiguous", false, "Preview. Resolve every ambiguous line instead of selecting ordinals")
+			c.Flags().String("verdict", "", "Preview. Verdict: confirmed or failed (required)")
+			c.Flags().String("note", "", "Preview. Why, from 1 to 1000 characters (required)")
 		}
 		formats := "Preview. Output format: table or json"
 		if name == "lines" {
@@ -99,6 +124,76 @@ func bulkChangeLimits(cmd *cobra.Command) (map[string]any, error) {
 		limits[field] = n
 	}
 	return limits, nil
+}
+
+// bulkChangeCreateSafety is BulkChangeCreateSafety from the limit flags and --settle-deadline;
+// a flag left out is left out of the request.
+func bulkChangeCreateSafety(cmd *cobra.Command) (map[string]any, error) {
+	safety, err := bulkChangeLimits(cmd)
+	if err != nil {
+		return nil, err
+	}
+	if cmd.Flags().Changed("settle-deadline") {
+		deadline, _ := cmd.Flags().GetString("settle-deadline")
+		seconds, intErr := strconv.ParseInt(deadline, 10, 32)
+		if intErr != nil {
+			duration, durationErr := time.ParseDuration(deadline)
+			if durationErr != nil || duration%time.Second != 0 {
+				return nil, fmt.Errorf("--settle-deadline must be a whole number of seconds or a duration")
+			}
+			seconds = int64(duration / time.Second)
+		}
+		if seconds < 60 || seconds > 604800 {
+			return nil, fmt.Errorf("--settle-deadline must be from 60s to 168h")
+		}
+		safety["settleDeadlineSeconds"] = seconds
+	}
+	return safety, nil
+}
+
+// bulkChangeReversalRequest reads reverse's flags. Ordinal flags left out stay nil, which the
+// server reads as "every applied line" and "no override".
+func bulkChangeReversalRequest(cmd *cobra.Command, original string) (bulkchange.ReversalRequest, error) {
+	flags := cmd.Flags()
+	request := bulkchange.ReversalRequest{Original: original}
+	request.Token, _ = flags.GetString("token")
+	request.Name, _ = flags.GetString("name")
+	if request.Name == "" {
+		request.Name = request.Token
+	}
+	if flags.Changed("ordinals") {
+		request.Ordinals, _ = flags.GetIntSlice("ordinals")
+		if request.Ordinals == nil {
+			request.Ordinals = []int{}
+		}
+	}
+	request.OverrideChanged, _ = flags.GetBool("override-changed")
+	if flags.Changed("override-ordinals") {
+		request.OverrideOrdinals, _ = flags.GetIntSlice("override-ordinals")
+		if len(request.OverrideOrdinals) == 0 {
+			return request, fmt.Errorf("--override-ordinals must name at least one line")
+		}
+	}
+	var err error
+	if request.Safety, err = bulkChangeCreateSafety(cmd); err != nil {
+		return request, err
+	}
+	if len(request.Safety) == 0 {
+		request.Safety = nil
+	}
+	return request, request.Validate()
+}
+
+func bulkChangeResolution(cmd *cobra.Command, token string) (bulkchange.Resolution, error) {
+	flags := cmd.Flags()
+	resolution := bulkchange.Resolution{Token: token}
+	if flags.Changed("ordinals") {
+		resolution.Ordinals, _ = flags.GetIntSlice("ordinals")
+	}
+	resolution.AllAmbiguous, _ = flags.GetBool("all-ambiguous")
+	resolution.Verdict, _ = flags.GetString("verdict")
+	resolution.Note, _ = flags.GetString("note")
+	return resolution, resolution.Validate()
 }
 
 func bulkChangeRequest(cmd *cobra.Command) (bulkchange.Request, error) {
@@ -149,24 +244,9 @@ func bulkChangeRequest(cmd *cobra.Command) (bulkchange.Request, error) {
 		raw = bulkchange.DeviceBytes(devices)
 	}
 	request.DeviceTokens = devices
-	request.Safety, err = bulkChangeLimits(cmd)
+	request.Safety, err = bulkChangeCreateSafety(cmd)
 	if err != nil {
 		return request, err
-	}
-	if flags.Changed("settle-deadline") {
-		deadline, _ := flags.GetString("settle-deadline")
-		seconds, intErr := strconv.ParseInt(deadline, 10, 32)
-		if intErr != nil {
-			duration, durationErr := time.ParseDuration(deadline)
-			if durationErr != nil || duration%time.Second != 0 {
-				return request, fmt.Errorf("--settle-deadline must be a whole number of seconds or a duration")
-			}
-			seconds = int64(duration / time.Second)
-		}
-		if seconds < 60 || seconds > 604800 {
-			return request, fmt.Errorf("--settle-deadline must be from 60s to 168h")
-		}
-		request.Safety["settleDeadlineSeconds"] = seconds
 	}
 	request.Token, _ = flags.GetString("token")
 	if request.Token == "" {
@@ -199,6 +279,18 @@ func runBulkChange(cmd *cobra.Command, args []string) error {
 	digest, _ := cmd.Flags().GetString("contract-digest")
 	if cmd.Name() == "start" && strings.TrimSpace(digest) == "" {
 		return fmt.Errorf("--contract-digest is required: present the server digest you reviewed")
+	}
+	var reversal bulkchange.ReversalRequest
+	var resolution bulkchange.Resolution
+	switch cmd.Name() {
+	case "reverse":
+		if reversal, err = bulkChangeReversalRequest(cmd, args[0]); err != nil {
+			return err
+		}
+	case "resolve":
+		if resolution, err = bulkChangeResolution(cmd, args[0]); err != nil {
+			return err
+		}
 	}
 	var limits map[string]any
 	if cmd.Name() == "resume" {
@@ -249,6 +341,29 @@ func runBulkChange(cmd *cobra.Command, args []string) error {
 			bulkchange.JoinDevices(lines, devices)
 		}
 		return bulkchange.PrintLines(w, lines, format)
+	case "reverse":
+		if create, _ := cmd.Flags().GetBool("create"); create {
+			change, err := api.Reverse(ctx, reversal)
+			if err != nil {
+				return err
+			}
+			return bulkchange.PrintChange(w, change, format == "json")
+		}
+		preview, err := api.PreviewReversal(ctx, reversal)
+		if err != nil {
+			return err
+		}
+		if err := bulkchange.PrintReversalPreview(w, preview, format == "json"); err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.ErrOrStderr(), "Nothing was written. Add --create to create this reversal in READY.")
+		return nil
+	case "resolve":
+		change, err := api.Resolve(ctx, resolution)
+		if err != nil {
+			return err
+		}
+		return bulkchange.PrintChange(w, change, format == "json")
 	default:
 		change, err := api.Control(ctx, cmd.Name(), args[0], digest, limits)
 		if err != nil {

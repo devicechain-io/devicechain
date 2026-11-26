@@ -13,13 +13,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/userclient"
 	"github.com/devicechain-io/dcctl/bulkchange"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
 func TestBulkChangeCommandsArePreviewAndNeverLegacy(t *testing.T) {
-	for _, name := range []string{"plan", "create", "start", "status", "lines", "pause", "resume", "abort"} {
+	for _, name := range []string{"plan", "create", "start", "status", "lines", "pause", "resume", "abort", "reverse", "resolve"} {
 		c, rest, err := rootCmd.Find([]string{"bulk-change", name})
 		if err != nil || len(rest) != 0 || c.Name() != name {
 			t.Errorf("bulk-change %s missing: %v %v", name, rest, err)
@@ -39,12 +40,6 @@ func TestBulkChangeCommandsArePreviewAndNeverLegacy(t *testing.T) {
 		legacy, _, _ := rootCmd.Find([]string{"fleet-op", name})
 		if legacy != fleetOpCmd {
 			t.Errorf("%s was born under deprecated fleet-op", name)
-		}
-	}
-	for _, name := range []string{"reverse", "resolve"} {
-		c, _, _ := rootCmd.Find([]string{"bulk-change", name})
-		if c != bulkChangeCmd {
-			t.Errorf("BC-11b command %s registered early", name)
 		}
 	}
 }
@@ -205,6 +200,116 @@ func TestBulkChangeLinesCommandJoinsFileAndPreservesRedaction(t *testing.T) {
 		out, err := executeBulkCommand(t, "lines", "t", "--posting", "REFUSED", "--devices-file", path, "-o", format)
 		if err != nil || !strings.Contains(out, "missing") || strings.Contains(out, "erased") {
 			t.Fatalf("%s provenance/redaction: %v %s", format, err, out)
+		}
+	}
+}
+
+// bulkStepUpClient is a command-level fake whose StepUp is counted.
+type bulkStepUpClient struct {
+	bulkCommandClient
+	stepUps *int
+}
+
+func (c bulkStepUpClient) StepUp(context.Context) error {
+	*c.stepUps++
+	return nil
+}
+
+func TestBulkChangeReversePreviewsByDefaultAndCreatesOnlyWhenAsked(t *testing.T) {
+	previous := bulkChangeSession
+	t.Cleanup(func() { bulkChangeSession = previous })
+	var queries []string
+	var request bulkchange.ReversalRequest
+	bulkChangeSession = func(*cobra.Command) (bulkchange.Client, string, error) {
+		return bulkCommandClient(func(q string, vars map[string]any) (any, error) {
+			queries = append(queries, q)
+			request = vars["request"].(bulkchange.ReversalRequest)
+			if strings.Contains(q, "previewBulkChangeReversal(") {
+				return map[string]any{"preview": map[string]any{"reversibleCount": 2, "changedSinceCount": 1, "contractDigest": "server-digest"}}, nil
+			}
+			return map[string]any{"change": bulkchange.Change{Token: "undo-1", Dispatch: "READY", Evidence: "OPEN", ContractDigest: "server-digest"}}, nil
+		}), "test", nil
+	}
+	out, err := executeBulkCommand(t, "reverse", "change-1", "--token", "undo-1", "--ordinals", "1,2", "--override-ordinals", "2", "--max-posts-per-second", "3", "--settle-deadline", "2m", "-o", "json")
+	if err != nil || len(queries) != 1 || !strings.Contains(queries[0], "previewBulkChangeReversal(") || strings.Contains(queries[0], "reverseBulkChange(") {
+		t.Fatalf("preview: %v %v %s", err, queries, out)
+	}
+	if !strings.Contains(out, "server-digest") || !strings.Contains(out, "Nothing was written") {
+		t.Fatalf("preview output: %s", out)
+	}
+	if request.Original != "change-1" || request.Token != "undo-1" || request.Name != "undo-1" || len(request.Ordinals) != 2 ||
+		len(request.OverrideOrdinals) != 1 || request.OverrideOrdinals[0] != 2 || request.OverrideChanged ||
+		request.Safety["maxPostsPerSecond"] != 3 || request.Safety["settleDeadlineSeconds"] != int64(120) {
+		t.Fatalf("lost flags: %+v", request)
+	}
+	queries = nil
+	out, err = executeBulkCommand(t, "reverse", "change-1", "--token", "undo-1", "--name", "undo", "--override-changed", "--create", "-o", "json")
+	if err != nil || len(queries) != 1 || !strings.Contains(queries[0], "reverseBulkChange(") || !strings.Contains(out, `"dispatch":"READY"`) {
+		t.Fatalf("create: %v %v %s", err, queries, out)
+	}
+	if request.Ordinals != nil || request.OverrideOrdinals != nil || !request.OverrideChanged || request.Name != "undo" || request.Safety != nil {
+		t.Fatalf("create request: %+v", request)
+	}
+}
+
+func TestBulkChangeResolveSendsTheVerdictAndStepsUp(t *testing.T) {
+	previous := bulkChangeSession
+	t.Cleanup(func() { bulkChangeSession = previous })
+	var resolution bulkchange.Resolution
+	calls, stepUps := 0, 0
+	bulkChangeSession = func(*cobra.Command) (bulkchange.Client, string, error) {
+		return bulkStepUpClient{bulkCommandClient(func(q string, vars map[string]any) (any, error) {
+			calls++
+			if !strings.Contains(q, "resolveAmbiguousBulkChangeLines(") {
+				t.Errorf("resolve sent %s", q)
+			}
+			resolution = vars["request"].(bulkchange.Resolution)
+			if calls == 1 {
+				return nil, &userclient.GraphQLError{Messages: []string{"stale"}, Codes: []string{"STEP_UP_REQUIRED"}}
+			}
+			return map[string]any{"change": bulkchange.Change{Token: "change-1", Dispatch: "DISPATCHED", Evidence: "OPEN"}}, nil
+		}), &stepUps}, "test", nil
+	}
+	out, err := executeBulkCommand(t, "resolve", "change-1", "--ordinals", "3", "--ordinals", "5", "--verdict", "confirmed", "--note", "checked on site", "-o", "json")
+	if err != nil || calls != 2 || stepUps != 1 || !json.Valid([]byte(out)) {
+		t.Fatalf("resolve: %v calls=%d stepUps=%d %s", err, calls, stepUps, out)
+	}
+	if resolution.Token != "change-1" || len(resolution.Ordinals) != 2 || resolution.Ordinals[1] != 5 || resolution.AllAmbiguous ||
+		resolution.Verdict != "CONFIRMED" || resolution.Note != "checked on site" {
+		t.Fatalf("lost flags: %+v", resolution)
+	}
+	calls = 1 // answer the next call at once
+	if _, err := executeBulkCommand(t, "resolve", "change-1", "--all-ambiguous", "--verdict", "FAILED", "--note", "no answer"); err != nil || !resolution.AllAmbiguous || resolution.Ordinals != nil || resolution.Verdict != "FAILED" {
+		t.Fatalf("all ambiguous: %v %+v", err, resolution)
+	}
+}
+
+func TestBulkChangeReverseAndResolveRejectInvalidInputBeforeAuthentication(t *testing.T) {
+	previous := bulkChangeSession
+	t.Cleanup(func() { bulkChangeSession = previous })
+	bulkChangeSession = func(*cobra.Command) (bulkchange.Client, string, error) {
+		t.Error("invalid local input reached authentication")
+		return nil, "", fmt.Errorf("should not authenticate")
+	}
+	for _, args := range [][]string{
+		{"reverse"}, {"reverse", "c"}, {"reverse", "c", "--token", ""},
+		{"reverse", "c", "--token", "u", "--ordinals", ""},
+		{"reverse", "c", "--token", "u", "--ordinals", "0"},
+		{"reverse", "c", "--token", "u", "--override-ordinals", ""},
+		{"reverse", "c", "--token", "u", "--override-changed", "--override-ordinals", "1"},
+		{"reverse", "c", "--token", "u", "--ordinals", "1", "--override-ordinals", "2"},
+		{"reverse", "c", "--token", "u", "--max-posts-per-second", "51"},
+		{"reverse", "c", "--token", "u", "--settle-deadline", "30s"},
+		{"reverse", "c", "--token", "u", "-o", "csv"},
+		{"resolve", "c", "--verdict", "confirmed", "--note", "n"},
+		{"resolve", "c", "--all-ambiguous", "--ordinals", "1", "--verdict", "confirmed", "--note", "n"},
+		{"resolve", "c", "--all-ambiguous", "--verdict", "maybe", "--note", "n"},
+		{"resolve", "c", "--all-ambiguous", "--verdict", "failed"},
+		{"resolve", "c", "--all-ambiguous", "--verdict", "failed", "--note", strings.Repeat("x", 1001)},
+		{"resolve", "--all-ambiguous", "--verdict", "failed", "--note", "n"},
+	} {
+		if _, err := executeBulkCommand(t, args...); err == nil {
+			t.Errorf("accepted %v", args)
 		}
 	}
 }
