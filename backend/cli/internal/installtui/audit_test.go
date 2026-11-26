@@ -162,7 +162,11 @@ func resolvedLicenseGraph(t *testing.T, workspace bool) map[string]resolvedModul
 			continue
 		}
 		if m.Dir == "" || m.GoMod == "" {
-			t.Fatalf("audited dependency sources unavailable: %s@%s", path, m.Version)
+			// A fresh module cache (a CI runner) holds only what its builds needed;
+			// test-only and other-platform requirements are listed but not
+			// downloaded. Fetch the exact selected version; go verifies it against
+			// go.sum and the checksum database, so the audit stays deterministic.
+			m = downloadAuditedModule(t, path, m.Version)
 		}
 		closure[path+"@"+m.Version] = m
 		// Parse the selected module's own requirements with Go's parser.
@@ -185,6 +189,22 @@ func resolvedLicenseGraph(t *testing.T, workspace bool) map[string]resolvedModul
 		}
 	}
 	return closure
+}
+
+// downloadAuditedModule fetches path@version into the module cache and returns
+// where its sources and go.mod are.
+func downloadAuditedModule(t *testing.T, path, version string) resolvedModule {
+	t.Helper()
+	cmd := exec.Command("go", "mod", "download", "-json", path+"@"+version)
+	cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=")
+	out, err := cmd.Output()
+	var got struct {
+		Path, Version, Dir, GoMod, Sum, GoModSum, Error string
+	}
+	if jerr := json.Unmarshal(out, &got); err != nil || jerr != nil || got.Error != "" || got.Dir == "" || got.GoMod == "" {
+		t.Fatalf("audited dependency sources unavailable: %s@%s: %v %s", path, version, err, got.Error)
+	}
+	return resolvedModule{Path: got.Path, Version: got.Version, Dir: got.Dir, GoMod: got.GoMod, Sum: got.Sum, GoModSum: got.GoModSum}
 }
 
 func TestResolvedLicensesAndNotices(t *testing.T) {
