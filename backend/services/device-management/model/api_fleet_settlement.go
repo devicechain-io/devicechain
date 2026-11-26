@@ -107,11 +107,27 @@ func fleetSettlementRead(db *gorm.DB, tenant string, after uint, limit int, fast
 	// IS NOT DISTINCT FROM matches sameCapturedPair, including reported_at.
 	tail := "s.reported_revision >= c.posted_revision AND s.reported_status IN ('APPLIED','REJECTED') AND NOT (s.reported_revision IS NOT DISTINCT FROM s.captured_revision AND s.reported_status IS NOT DISTINCT FROM s.captured_status AND s.reported_at IS NOT DISTINCT FROM s.captured_reported_at)"
 	decidingRevision := "CASE WHEN r.id IS NOT NULL THEN r.revision WHEN " + tail + " THEN s.reported_revision END"
-	query := `WITH ` + recent + `candidates AS (
+	candidates := `
  SELECT l.*, o.intent FROM ` + l + ` l JOIN ` + o + ` o ON o.id=l.operation_id AND o.tenant_id=l.tenant_id` + recentJoin + `
  WHERE l.tenant_id=? AND l.id>? AND (` + fleetSettlementProtocol + `)
  AND l.posting='POSTED' AND l.evidence_revision IS NULL AND l.redacted_at IS NULL` + where + `
- ORDER BY l.id LIMIT ?)
+ ORDER BY l.id LIMIT ?`
+	if !fast && !due {
+		// The sweep's page is cut from the tenant's awaiting lines alone, in id order, so it reads
+		// ix_fleet_operation_lines_tenant_awaiting and stops at the page's last row. Joined to the
+		// operations first, the planner walks each operation's lines and sorts all of them to keep
+		// a page: every page of a sweep then read the tenant's whole awaiting set. The protocol
+		// check is per line, as a scalar subquery over the line's own operation, so the page holds
+		// only drivable lines (a short page still means the sweep is done) without that join; the
+		// operation is joined afterwards, one row per line, for its intent.
+		candidates = `
+ SELECT l.*, o.intent FROM (SELECT * FROM ` + l + ` l
+ WHERE l.tenant_id=? AND l.id>? AND (SELECT ` + fleetSettlementProtocol + ` FROM ` + o + ` p WHERE p.id=l.operation_id AND p.tenant_id=l.tenant_id)
+ AND l.posting='POSTED' AND l.evidence_revision IS NULL AND l.redacted_at IS NULL
+ ORDER BY l.id LIMIT ?) l JOIN ` + o + ` o ON o.id=l.operation_id AND o.tenant_id=l.tenant_id
+ ORDER BY l.id`
+	}
+	query := `WITH ` + recent + `candidates AS (` + candidates + `)
  SELECT c.*, ` + decidingRevision + ` AS deciding_revision,
  CASE WHEN r.id IS NOT NULL THEN r.status WHEN ` + tail + ` THEN s.reported_status END AS deciding_status,
  CASE WHEN r.id IS NOT NULL THEN r.errors ELSE s.reported_errors END AS deciding_errors,
@@ -456,16 +472,22 @@ func (api *Api) settlementTenants(ctx context.Context, cursor *fleetSettlementCu
 	cursor.Lock()
 	after := cursor.after
 	cursor.Unlock()
-	discover := func(predicate string, limit int) ([]string, error) {
+	discover := func(wrap bool, limit int) ([]string, error) {
 		var tenants []string
 		db := api.RDB.DB(core.WithSystemContext(ctx))
+		if due {
+			if wrap {
+				return fleetDueTenants(db, "", after, limit)
+			}
+			return fleetDueTenants(db, after, "", limit)
+		}
 		q := db.Model(&FleetOperation{}).Where(fleetSettlementProtocol, ledger.SupportedDriverProtocol)
 		if fast {
 			q = q.Where("dispatch IN " + fleetSettlementFastDispatch + " AND evidence='OPEN'")
 		}
-		if due {
-			l, o := fleetSettlementTable(db, "FleetOperationLine"), fleetSettlementTable(db, "FleetOperation")
-			q = q.Where("EXISTS (SELECT 1 FROM "+l+" l WHERE l.tenant_id="+o+".tenant_id AND l.operation_id="+o+".id AND l.posting='POSTED' AND l.settlement IS NULL AND l.settle_by<=?)", fleetSettlementCutoff(db, 0))
+		predicate := "tenant_id > ?"
+		if wrap {
+			predicate = "tenant_id <= ?"
 		}
 		err := q.Where(predicate, after).Distinct("tenant_id").Order("tenant_id").Limit(limit).Pluck("tenant_id", &tenants).Error
 		return tenants, err
@@ -474,12 +496,12 @@ func (api *Api) settlementTenants(ctx context.Context, cursor *fleetSettlementCu
 	if fast {
 		limit = fleetSettlementFastTenants
 	}
-	tenants, err := discover("tenant_id > ?", limit)
+	tenants, err := discover(false, limit)
 	if err != nil {
 		return nil, err
 	}
 	if after != "" && len(tenants) < limit {
-		more, err := discover("tenant_id <= ?", limit-len(tenants))
+		more, err := discover(true, limit-len(tenants))
 		if err != nil {
 			return nil, err
 		}
@@ -491,6 +513,48 @@ func (api *Api) settlementTenants(ctx context.Context, cursor *fleetSettlementCu
 		cursor.Unlock()
 	}
 	return tenants, nil
+}
+
+// fleetDueTenants lists, in order, up to limit tenants after lo (and, when hi is set, at or before
+// hi) that hold a line past its settle_by whose operation this release drives: the deadline pass's
+// discovery.
+//
+// It walks idx_fleet_operation_lines_deadline, whose partial predicate is "posted and unsettled",
+// one tenant at a time: each step is a single index probe for the next tenant id, so the walk costs
+// one probe per tenant with an unsettled line, and each tenant found costs one probe of its own due
+// range, which stops at the first due line of a drivable operation. The protocol check is a scalar
+// subquery per line so it cannot be turned around into a scan of the tenant's operations.
+//
+// 🔴 What it replaced asked the same question from the other side: every operation the instance
+// still retains, each with an EXISTS over its lines. That cost grew with the operations retained
+// (180 days of them), whether or not any line was due, and ran every 30 s on every replica.
+//
+// Like the listing it replaced, it runs under system context and returns tenant ids only.
+func fleetDueTenants(db *gorm.DB, lo, hi string, limit int) ([]string, error) {
+	l, o := fleetSettlementTable(db, "FleetOperationLine"), fleetSettlementTable(db, "FleetOperation")
+	next := func(from string) string {
+		return `(SELECT n.tenant_id FROM ` + l + ` n WHERE n.posting='POSTED' AND n.settlement IS NULL AND n.tenant_id > ` + from + ` ORDER BY n.tenant_id LIMIT 1)`
+	}
+	args := []any{lo}
+	step, bound := "", ""
+	if hi != "" {
+		// Nothing past hi is wanted, so the walk stops there.
+		step, bound = " AND walk.tenant_id < ?", " AND walk.tenant_id <= ?"
+		args = append(args, hi, hi)
+	}
+	args = append(args, fleetSettlementCutoff(db, 0), ledger.SupportedDriverProtocol, limit)
+	query := `WITH RECURSIVE walk(tenant_id) AS (
+ SELECT ` + next("?") + `
+ UNION ALL
+ SELECT ` + next("walk.tenant_id") + ` FROM walk WHERE walk.tenant_id IS NOT NULL` + step + `
+)
+SELECT walk.tenant_id FROM walk WHERE walk.tenant_id IS NOT NULL` + bound + `
+ AND EXISTS (SELECT 1 FROM ` + l + ` d WHERE d.tenant_id=walk.tenant_id AND d.posting='POSTED' AND d.settlement IS NULL AND d.settle_by <= ?
+ AND (SELECT ` + fleetSettlementProtocol + ` FROM ` + o + ` o WHERE o.id=d.operation_id AND o.tenant_id=d.tenant_id))
+ORDER BY walk.tenant_id LIMIT ?`
+	var tenants []string
+	err := db.Raw(query, args...).Scan(&tenants).Error
+	return tenants, err
 }
 
 func (api *Api) RunFleetSettlement(ctx context.Context, fast, due bool) error {
@@ -505,10 +569,11 @@ func (api *Api) RunFleetSettlement(ctx context.Context, fast, due bool) error {
 	failed := 0
 	var last error
 	var lag time.Duration
+	measureLag := !due && api.fleetReconcilerLagDue()
 	for _, tenant := range tenants {
 		tenantCtx := core.WithTenant(ctx, tenant)
 		_, err := api.settleFleetLines(tenantCtx, fast, due)
-		if err == nil && !due {
+		if err == nil && measureLag {
 			var age time.Duration
 			age, err = api.FleetReconcilerLag(tenantCtx)
 			if age > lag {
@@ -520,10 +585,29 @@ func (api *Api) RunFleetSettlement(ctx context.Context, fast, due bool) error {
 			last = err
 		}
 	}
-	if !due && failed == 0 {
+	if measureLag && failed == 0 {
 		bulkMetrics.reconcilerLag.Set(lag.Seconds())
 	}
 	return core.PassResult(len(tenants), failed, last)
+}
+
+// fleetReconcilerLagDue reports whether this pass measures the reconciler lag gauge, at most once
+// per fleetMetricsRefreshEvery on this replica: the cadence of every other bulk-change gauge.
+//
+// The settlement it gauges runs on every 5 s tick, and does not depend on this. The measurement
+// is the expensive part of a tick that settles nothing: FleetReconcilerLag joins all of a tenant's
+// retained reports (200 days of them) with all of its awaiting lines, which include every line a
+// deadline settled AMBIGUOUS, and the fast tick visits every tenant holding an open operation.
+// Its alert reads a 900 s threshold held for a minute, which a 15 s refresh does not move.
+func (api *Api) fleetReconcilerLagDue() bool {
+	state := &api.fleetReconcilerLag
+	state.Lock()
+	defer state.Unlock()
+	if !state.last.IsZero() && time.Since(state.last) < fleetMetricsRefreshEvery {
+		return false
+	}
+	state.last = time.Now()
+	return true
 }
 
 // FleetReconcilerLag measures outstanding report age within the caller's tenant.

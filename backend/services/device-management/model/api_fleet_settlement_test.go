@@ -374,3 +374,34 @@ func TestSettlementLowestRevisionDecidesNotTheLatest(t *testing.T) {
 	require.Equal(t, "CONFIRMED", line.Settlement.String)
 	require.EqualValues(t, 5, line.EvidenceRevision.Int64)
 }
+
+// The reconciler lag gauge is measured at most once per fleetMetricsRefreshEvery on a replica,
+// the cadence of every other bulk-change gauge, while settlement itself runs on every tick: a tick
+// that skips the measurement still settles what reported.
+func TestSettlementLagGaugeIsMeasuredAtTheGaugeCadence(t *testing.T) {
+	api, _, _ := settlementFixture(t)
+	ctx := core.WithTenant(context.Background(), "lagcadence")
+	const unmeasured = -1
+	tick := func() {
+		t.Helper()
+		bulkMetrics.reconcilerLag.Set(unmeasured)
+		require.NoError(t, api.RunFleetSettlement(context.Background(), true, false))
+	}
+	first := settlementRawOp(t, api, ctx, 910001, "RUNNING", settlementGoodValue)
+	tick()
+	require.NotEqual(t, float64(unmeasured), testutil.ToFloat64(bulkMetrics.reconcilerLag), "the first tick measures")
+
+	second := settlementRawOp(t, api, ctx, 910002, "RUNNING", settlementGoodValue)
+	tick()
+	require.Equal(t, float64(unmeasured), testutil.ToFloat64(bulkMetrics.reconcilerLag), "a tick inside the cadence does not measure")
+	for _, line := range []*FleetOperationLine{first, second} {
+		require.NoError(t, api.RDB.DB(ctx).First(line, line.ID).Error)
+		require.Equal(t, "CONFIRMED", line.Settlement.String, "every tick settles")
+	}
+
+	api.fleetReconcilerLag.Lock()
+	api.fleetReconcilerLag.last = api.fleetReconcilerLag.last.Add(-fleetMetricsRefreshEvery)
+	api.fleetReconcilerLag.Unlock()
+	tick()
+	require.NotEqual(t, float64(unmeasured), testutil.ToFloat64(bulkMetrics.reconcilerLag), "a tick after the cadence measures again")
+}
