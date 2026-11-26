@@ -57,19 +57,21 @@ func TestRedactionControlNeedsTheWholeBoundUnredacted(t *testing.T) {
 		_, _ = w.Write(body)
 	})
 	out := filepath.Join(t.TempDir(), "lines.json")
-	args := func(expect string) []string {
+	// A short bound where the line never changes; a long one where it does, so the redaction is always
+	// seen inside the bound however slowly the test runs (it returns the moment it is).
+	args := func(expect, within string) []string {
 		return bcArgs(url, receipt, "--token", "t", "--ordinals", "3", "--expect", expect, "--out", out,
-			"--within", "200ms", "--every", "20ms")
+			"--within", within, "--every", "20ms")
 	}
-	if err := bcRedactionCmd(context.Background(), args("unredacted"), io.Discard); err != nil {
+	if err := bcRedactionCmd(context.Background(), args("unredacted", "200ms"), io.Discard); err != nil {
 		t.Fatalf("an unredacted line through the whole bound failed the control: %v", err)
 	}
-	assertCode(t, bcRedactionCmd(context.Background(), args("redacted"), io.Discard), exitMismatch)
+	assertCode(t, bcRedactionCmd(context.Background(), args("redacted", "200ms"), io.Discard), exitMismatch)
 	polls.Store(0)
-	redactAfter.Store(3)
-	assertCode(t, bcRedactionCmd(context.Background(), args("unredacted"), io.Discard), exitMismatch)
+	redactAfter.Store(2)
+	assertCode(t, bcRedactionCmd(context.Background(), args("unredacted", "1m"), io.Discard), exitMismatch)
 	polls.Store(0)
-	if err := bcRedactionCmd(context.Background(), args("redacted"), io.Discard); err != nil {
+	if err := bcRedactionCmd(context.Background(), args("redacted", "1m"), io.Discard); err != nil {
 		t.Fatalf("a line redacted within the bound failed: %v", err)
 	}
 }
