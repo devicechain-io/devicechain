@@ -18,7 +18,8 @@ import (
 // deliberately excluded from mcp-gate; the companion file runs in the unit gate.
 func TestFleetMaintenancePostgresPostedAbortSkipsHeldFence(t *testing.T) {
 	p := newPostPG(t, "old-pod-value")
-	cleanupFleetMaintenancePost(t, p)
+	// No cleanupFleetMaintenancePost: this test aborts the operation itself, and
+	// aborting an ABORTED operation is refused.
 	result, err := p.api.PostFleetLine(p.ctx, p.op.ID, p.lines[0].ID, p.lease)
 	require.NoError(t, err)
 	require.Equal(t, FleetPosted, result.Outcome)
