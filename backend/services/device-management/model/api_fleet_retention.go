@@ -179,14 +179,22 @@ func (api *Api) RetainFleetOperations(ctx context.Context, now time.Time) error 
 }
 
 func fleetPurgeEvidenceChunk(tx *gorm.DB, id uint, counts fleetRowCounts) error {
-	lines := tx.Model(&FleetOperationLine{}).Select("id").Where("operation_id = ?", id).Order("id").Limit(fleetMaintenanceChunk)
-	res := tx.Where("id IN (?)", lines).Delete(&FleetOperationLine{})
+	var lines []uint
+	if err := tx.Model(&FleetOperationLine{}).Where("operation_id = ?", id).Scopes(fleetLineLockOrder).
+		Limit(fleetMaintenanceChunk).Pluck("id", &lines).Error; err != nil {
+		return err
+	}
+	res := tx.Where("id IN ?", lines).Delete(&FleetOperationLine{})
 	if res.Error != nil {
 		return res.Error
 	}
 	counts.add("lines", res.RowsAffected)
-	events := tx.Model(&FleetOperationEvent{}).Select("id").Where("operation_id = ? AND (line_id IS NOT NULL OR kind IN ('RESOLUTION','VERDICT','CONTRADICTING_EVIDENCE','OVERRIDE_CHANGED','REDACTED'))", id).Order("id").Limit(fleetMaintenanceChunk)
-	res = tx.Where("id IN (?)", events).Delete(&FleetOperationEvent{})
+	var events []uint
+	if err := tx.Model(&FleetOperationEvent{}).Where("operation_id = ? AND (line_id IS NOT NULL OR kind IN ('RESOLUTION','VERDICT','CONTRADICTING_EVIDENCE','OVERRIDE_CHANGED','REDACTED'))", id).
+		Scopes(fleetEventLockOrder).Limit(fleetMaintenanceChunk).Pluck("id", &events).Error; err != nil {
+		return err
+	}
+	res = tx.Where("id IN ?", events).Delete(&FleetOperationEvent{})
 	if res.Error != nil {
 		return res.Error
 	}
@@ -201,8 +209,15 @@ func fleetDeleteTombstone(tx *gorm.DB, op *FleetOperation, counts fleetRowCounts
 		table string
 	}{{&FleetOperationEvent{}, "events"}, {&FleetOperationContract{}, "contracts"}} {
 		model := step.model
-		ids := tx.Model(model).Select("id").Where("operation_id = ?", op.ID).Order("id").Limit(fleetMaintenanceChunk)
-		res := tx.Where("id IN (?)", ids).Delete(model)
+		var ids []uint
+		query := tx.Model(model).Where("operation_id = ?", op.ID).Order("id").Limit(fleetMaintenanceChunk)
+		if _, events := model.(*FleetOperationEvent); events {
+			query = query.Scopes(fleetEventLockOrder)
+		}
+		if err := query.Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		res := tx.Where("id IN ?", ids).Delete(model)
 		if res.Error != nil {
 			return res.Error
 		}

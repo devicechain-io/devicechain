@@ -287,7 +287,7 @@ READERS = [
     ("backend/sims/dc-simulator", "scenarioverify", ["hack/harborpulse-rig.sh"], [], "scenarioverify/rig_s7_test.go:17"),
     ("backend/sims/dc-simulator", "updater", ["backend/core/ota/testdata/**"], [], "updater/*_test.go"),
     # signer_baseline_test.go:24 loads ../../services as a baseline tree: each area's served graphql SDL.
-    ("backend/tools/apiprobe", ".", [SDL, "backend/services/ai-inference/**"], [], "baseline_test.go, readsweep_test.go, documents_test.go, signer_baseline_test.go:24, stringmetric_test.go, tablesweep_test.go (ai-inference secret-scope guard)"),
+    ("backend/tools/apiprobe", ".", [SDL, "backend/services/ai-inference/**", "backend/services/device-management/model/api_fleet_retention.go"], [], "baseline_test.go, readsweep_test.go, documents_test.go, signer_baseline_test.go:24, stringmetric_test.go, tablesweep_test.go (ai-inference secret-scope guard), bulkchange_test.go (the unserved bulk-change fragment under graphql/, and the maintenance pass's lock name)"),
     ("backend/tools/docsgql", ".", ["docs/**", SDL], [], "docsgql_test.go:241"),
     ("backend/tools/docsgql", "decoderfuncs", ["docs/**/decoder-functions.md"], [], "decoderfuncs/decoderfuncs_test.go:19"),
     ("backend/tools/docsgql", "sdlcompat", [SDL], [], "sdlcompat/sdlcompat_test.go:17"),

@@ -122,7 +122,8 @@ func fleetSettlementRead(db *gorm.DB, tenant string, after uint, limit int, fast
  LEFT JOIN ` + r + ` r ON r.tenant_id=c.tenant_id AND r.id=(SELECT first.id FROM ` + r + ` first
  WHERE first.tenant_id=c.tenant_id AND first.device_id=c.target_id AND first.revision>=c.posted_revision ORDER BY first.revision ASC, first.id ASC LIMIT 1)
  LEFT JOIN ` + v + ` v ON v.tenant_id=c.tenant_id AND v.device_id=c.target_id AND v.revision=(` + decidingRevision + `)
- LEFT JOIN ` + d + ` d ON d.tenant_id=c.tenant_id AND d.id=c.target_id`
+ LEFT JOIN ` + d + ` d ON d.tenant_id=c.tenant_id AND d.id=c.target_id
+ ORDER BY c.id`
 	var rows []fleetSettlementRow
 	err := db.Raw(query, args...).Scan(&rows).Error
 	return rows, err
@@ -366,6 +367,8 @@ func (api *Api) settleFleetLines(ctx context.Context, fast, due bool) (int64, er
 			// round trip and a WAL flush each and measured well under the 500
 			// decisions/s target. Each UPDATE is still its own CAS; the chunk's row
 			// locks are taken in id order, as the deadline transaction takes them.
+			// The OUTER read orders these rows: joins need not preserve the
+			// candidates CTE's ordering. Journal INSERTs follow their line CAS.
 			if due {
 				err = decide(tx)
 			} else {
