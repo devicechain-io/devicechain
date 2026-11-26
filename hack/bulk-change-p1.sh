@@ -447,6 +447,14 @@ if [[ "$treatment" == caps ]]; then
   done <<<"$open_changes"
   left="$(psql_q "SELECT count(*) FROM \"device-management\".fleet_operations WHERE tenant_id = '$tenant' AND dispatch NOT IN ('DISPATCHED', 'ABORTED')")"
   [[ "$left" == 0 ]] || die "the P-1 tenant still has $left open bulk change(s); the caps arm would be refused"
+  # Every caps arm posts up to 20,000 lines that no device answers, so each settles AMBIGUOUS at its deadline
+  # and keeps counting against the tenant's evidence-open lines (100,000) until someone resolves it. That is
+  # the admission working as designed, and it means a tenant takes about five caps arms. Refuse up front,
+  # rather than spend a baseline arm and then fail on the treatment's create, when the runs asked for cannot fit.
+  open_lines="$(psql_q "SELECT count(*) FROM \"device-management\".fleet_operation_lines WHERE tenant_id = '$tenant' AND posting = 'POSTED' AND (settlement IS NULL OR settlement = 'AMBIGUOUS') AND code <> 'TARGET_ERASED'")" ||
+    die "could not count the tenant's evidence-open lines"
+  (( open_lines + 20000 * runs <= 100000 )) ||
+    die "the P-1 tenant holds $open_lines evidence-open line(s), and $runs caps arm(s) may add $((20000 * runs)) more against its limit of 100,000; seed a fresh tenant (a new --out) for these runs"
 fi
 for i in $(seq 1 "$runs"); do
   one_arm baseline "$i"
