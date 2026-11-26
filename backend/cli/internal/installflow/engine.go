@@ -72,6 +72,14 @@ type Runtime struct {
 	// leaves it off. Readiness gates are reported either way: they change nothing
 	// a presenter prints.
 	ObserveTools bool
+	// Admission, when set, admits this run only once the previous run it
+	// admitted has settled (see Admission). Hub.Run applies it and sets
+	// Outlive; a presenter that offers a re-run in the same process sets it.
+	Admission *Admission
+	// Outlive registers work the run is leaving behind when it returns — a
+	// tool it stopped waiting for — and returns the function that says that
+	// work has ended. Nil when nothing gates a re-run on it.
+	Outlive func() (ended func())
 }
 
 // Console is the pair of writers an engine's human-readable output goes to,
@@ -134,11 +142,29 @@ func (SystemClock) AfterFunc(d time.Duration, f func()) Timer { return time.Afte
 //
 // rt supplies the presenter's parts of the runtime (prompts, console,
 // preflight); its Events and Clock are always this hub's.
+//
+// With rt.Admission set the engine runs only if the previous run has settled;
+// otherwise the run is refused with ErrNotSettled and a failed summary, before
+// anything starts. The run counts as settled once e.Run has returned and every
+// tool it outlived (rt.Outlive) has ended — not when its summary is sent.
 func (h *Hub) Run(ctx context.Context, e Engine, req Request, rt Runtime) (sum Summary, err error) {
 	if req.Operation == "" {
 		req.Operation = h.op
 	}
 	rt.Events, rt.Clock = h, h.clock
+	if rt.Admission != nil {
+		ticket, aerr := rt.Admission.Admit()
+		if aerr != nil {
+			_ = h.Finish(Summary{Outcome: RunFailed, InstallRecord: RecordNotRead,
+				Readiness: ReadinessNotChecked, Claim: ClaimNotClaimed, PartialState: EffectNoneObserved})
+			final, _ := h.Final()
+			return final, aerr
+		}
+		// Registered first, so it runs last: after the panic path below has
+		// sent its summary, and only once e.Run has returned.
+		defer ticket.Done()
+		rt.Outlive = ticket.Outlive
+	}
 	defer func() {
 		if p := recover(); p != nil {
 			_ = h.Finish(Summary{
