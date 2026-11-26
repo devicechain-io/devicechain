@@ -36,7 +36,14 @@ namespace DeviceChain.Harborpulse.Model
         /// <summary>A raindrop's terminal speed, m/s: large drops fall at about nine.</summary>
         public const double FallMin = 8, FallMax = 10;
         /// <summary>The shutter a streak is smeared over, seconds: about half a metre of fall.</summary>
-        public const double ExposureS = 0.055;
+        public const double ExposureS = 0.042;
+
+        /// <summary>
+        /// How much of a streak is there, and how wide it is drawn per metre from the eye. Rain is weather, not the subject: it is
+        /// translucent and about two thirds of a pixel wide, so it never overpowers a device, a pin or the story; how hard it
+        /// rains is said by how many streaks there are.
+        /// </summary>
+        public const double Opacity = 0.3, WidthPerMetre = 0.00042, MinWidthM = 0.002;
         /// <summary>Drops at full strength. A lighter rain draws the first share of them.</summary>
         public const int Capacity = 2600;
         /// <summary>Closer to the lens than this a streak would cross the whole frame; it is not drawn.</summary>

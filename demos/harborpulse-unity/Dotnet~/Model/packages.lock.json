@@ -66,6 +66,9 @@
       },
       "devicechain.demos.core": {
         "type": "Project"
+      },
+      "devicechain.demos.hud.model": {
+        "type": "Project"
       }
     },
     "net8.0": {
@@ -76,6 +79,9 @@
         "contentHash": "dG9SM/0/zOTIE1UvSrveD1iDyEJjThqPqSnreExgqQWSoGWvze0esDi0faRk3C44IO1kqCeEX6AeCxWmBOppfw=="
       },
       "devicechain.demos.core": {
+        "type": "Project"
+      },
+      "devicechain.demos.hud.model": {
         "type": "Project"
       }
     }

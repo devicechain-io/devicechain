@@ -34,10 +34,11 @@ namespace DeviceChain.Harborpulse.Visuals
             var blades = new MeshKit();
             for (var i = 0; i < 4; i++) blades.Box(Vector3.zero, new Vector3(1.55f, 0.10f, 0.25f), i * 45);
             blades.Spawn("Blades", impeller, m.Flow);
-            Marker(r, m, "LowCutoff", 0.8f, m.Steel, "low cut-off 0.8 m", 0, new Color(0.62f, 0.68f, 0.74f));
-            Marker(r, m, "HighMarker", 2.5f, m.Major, "wet-well-high 2.5 m (rule)", 0, new Color(1f, 0.62f, 0.2f));
-            Marker(r, m, "FloatMarker", 3.2f, m.GaugeBoard, "float start 3.2 m (pump's own)", 0, new Color(0.92f, 0.92f, 0.88f));
-            Marker(r, m, "AttributeMarker", 0, m.Minor, "well_alarm_m (platform attribute, MINOR rule)", -1.9f, new Color(1f, 0.85f, 0.35f), -AttributeTagDropM);
+            // the three fixed levels are named for a viewer; the tenant's own rule level names its source and is an engineer's tag
+            Marker(r, m, "LowCutoff", (float)PumpPresentation.LowCutoffM, m.Steel, WorldText.PumpStops, 0, new Color(0.62f, 0.68f, 0.74f));
+            Marker(r, m, "HighMarker", (float)PumpPresentation.HighMarkerM, m.Major, WorldText.AlarmLevel, 0, new Color(1f, 0.62f, 0.2f));
+            Marker(r, m, "FloatMarker", (float)PumpPresentation.FloatMarkerM, m.GaugeBoard, WorldText.FloatSwitch, 0, new Color(0.92f, 0.92f, 0.88f));
+            Marker(r, m, "AttributeMarker", 0, m.Minor, WorldText.AttributeRule, -1.9f, new Color(1f, 0.85f, 0.35f), -AttributeTagDropM, true);
             r["AttributeMarker"].gameObject.SetActive(false);
             r.Part("Float", new MeshKit().Ball(Vector3.zero, 0.18f), m.WorldCue, c + new Vector3(1.3f, 3.2f, 0));
             r.Part("FloatChain", new MeshKit().Cylinder(Vector3.zero, 0.025f, 1.2f, 6), m.Steel, c + new Vector3(1.3f, 3.2f, 0));
@@ -59,10 +60,10 @@ namespace DeviceChain.Harborpulse.Visuals
                 fittings.Beam(c+new Vector3(-1.1f,y,-1.25f),c+new Vector3(1.1f,y,-1.25f),.045f);
             plumbing.Beam(c+new Vector3(-1.9f,5.4f,-.6f),c+new Vector3(1.9f,5.4f,-.6f),.065f)
                 .Box(c+new Vector3(0,4.58f,-1.65f),new Vector3(2.4f,.13f,.8f));
-            fittings.Hoop(new Vector3(4.35f,.9f,2),Vector3.forward,.37f,.065f)
-                .Beam(new Vector3(3.98f,.9f,2),new Vector3(4.72f,.9f,2),.045f)
-                .Beam(new Vector3(4.35f,.53f,2),new Vector3(4.35f,1.27f,2),.045f);
+            // (a spoked valve handwheel stood here: a ring with a cross in it, which at any distance read as a crosshair glyph drawn on the
+            // picture. The valve keeps its stub and a plain cap.)
             plumbing.Pipe(new Vector3(4.35f,.9f,1.5f),Vector3.forward,.12f,.5f,8);
+            fittings.Box(new Vector3(4.35f,.9f,2.02f),new Vector3(.3f,.3f,.06f));
             r.Part("WellPipework",plumbing,m.Steel,Vector3.zero);
             r.Part("CabinetLouvresAndValve",fittings,m.DarkSteel,Vector3.zero);
             var outZ = wallZ - r.Root.localPosition.z;
@@ -71,7 +72,8 @@ namespace DeviceChain.Harborpulse.Visuals
             var flap = r.Add("OutfallFlap", new Vector3(0, -0.43f, outZ + 1.31f));
             new MeshKit().Pipe(new Vector3(0, -0.55f, 0), Vector3.forward, 0.52f, 0.06f, 20).Spawn("HingedFlap", flap, m.DarkSteel);
             r.Part("OutfallJet", new MeshKit().Pipe(Vector3.zero, new Vector3(0, -0.18f, 1), 0.28f, 1, 10), m.Jet, new Vector3(0, -1, outZ + 1.4f), false);
-            r["Beacon"].localPosition = new Vector3(2, 5.5f, 1);
+            // the alarm pin stands over the pump house's ridge
+            r["Beacon"].localPosition = new Vector3(-2, 6.5f, -1);
             r["CardAnchor"].localPosition = new Vector3(8, 2.2f, 6);
             r.MergeFixed("ConcreteWell", "WellFloor");
             r.MergeFixed("ControlCabinet", "Motor", "WellPipework", "Outfall");
@@ -83,10 +85,10 @@ namespace DeviceChain.Harborpulse.Visuals
         /// or near one of the three fixed levels, whose tags are written at their rings: at the same height the two tags were one smear.
         /// </summary>
         public const float AttributeTagDropM = .8f;
-        static void Marker(AssetRig r, HarborMaterials m, string name, float level, Material material, string text, float tagX, Color tagColour, float tagY = 0)
+        static void Marker(AssetRig r, HarborMaterials m, string name, float level, Material material, string text, float tagX, Color tagColour, float tagY = 0, bool engineer = false)
         {
             var t = r.Part(name, new MeshKit().Ring(Vector3.zero, 2.24f, 0.06f), material, new Vector3((float)WellFootprint.LocalX, WellFloor + level, (float)WellFootprint.LocalZ));
-            AssetRig.Tag(text, t, new Vector3(tagX, 0.08f + tagY, 2.5f), 0.10f, tagColour);
+            AssetRig.Tag(text, t, new Vector3(tagX, 0.08f + tagY, 2.5f), 0.10f, tagColour, engineer);
         }
     }
 }

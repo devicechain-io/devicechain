@@ -537,6 +537,7 @@ func describeRelationalRestore(plan RestorePlan, live clusterArchiveState, now t
 // restore the real run declines to perform. Same shape, same reason, as
 // stepRenderConfig's read.
 func dryRunRdbArchiveState(ctx context.Context, st *State) clusterArchiveState {
+	c := out(ctx)
 	// 🔴 NOTHING IS READ FOR A RUN THAT RESTORES NOTHING. An ordinary rehearsal must
 	// not start contacting an API server for an answer it has no use for — a dry run
 	// is routinely aimed at a cluster that does not exist yet, and the reachable
@@ -549,7 +550,7 @@ func dryRunRdbArchiveState(ctx context.Context, st *State) clusterArchiveState {
 	if err == nil {
 		return state
 	}
-	fmt.Println(color.YellowString(
+	c.println(color.YellowString(
 		"  could not read the relational store's archive state (%v); the rehearsal below "+
 			"assumes it is not there, which the real run will refuse to assume", err))
 	return clusterArchiveState{}
