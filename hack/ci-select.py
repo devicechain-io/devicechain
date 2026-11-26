@@ -146,6 +146,9 @@ READERS = [
     # (the texts it must carry), go.work and go.work.sum, and every workspace module's go.sum;
     # dependency_policy_test.go checks the release archives ship the root LICENSE and NOTICE.
     ("backend/cli", "internal/installtui", ["NOTICE", "LICENSE", "go.work", "go.work.sum", "**/go.sum"], [], "internal/installtui/audit_test.go, dependency_policy_test.go"),
+    # internal/installtui/brand/brand_test.go: the freshness check regenerates the committed logo
+    # cells from the mark's source SVG and fails when they are stale.
+    ("backend/cli", "internal/installtui/brand", ["branding/logos/symbol.svg"], [], "internal/installtui/brand/brand_test.go"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
     ("backend/cli", "bulkchange", ["backend/services/device-management/graphql/**"], [], "bulkchange/documents_test.go:16"),
     ("backend/cli", "product", [SDL], [], "product/documents_test.go:32"),
