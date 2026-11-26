@@ -295,7 +295,7 @@ sampler="" capture_loop="" capture_file=""
 # start a bulk change after the A/B, silently.
 trigger_modes=""
 triggers_read() {
-  psql_q "SELECT tgname || '|' || tgenabled FROM pg_trigger WHERE tgrelid = '\"device-management\".entity_attributes'::regclass AND NOT tgisinternal AND tgname LIKE 'dc_%attr%' ORDER BY tgname"
+  psql_q "SELECT tgname || '|' || tgenabled::text FROM pg_trigger WHERE tgrelid = '\"device-management\".entity_attributes'::regclass AND NOT tgisinternal AND tgname LIKE 'dc_%attr%' ORDER BY tgname"
 }
 
 triggers_disable() {
