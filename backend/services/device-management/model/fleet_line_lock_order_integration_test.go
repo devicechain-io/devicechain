@@ -144,6 +144,9 @@ func TestFleetBulkLineLockOrderOnPostgres(t *testing.T) {
 	for _, path := range []string{"erase", "abort", "purge"} {
 		t.Run(path, func(t *testing.T) {
 			p := newPostPG(t, "v1")
+			// A running operation left behind counts against the instance-wide
+			// dispatching budget every later test in this database starts under.
+			cleanupFleetMaintenancePost(t, p)
 			db := p.api.RDB.DB(p.ctx)
 			low, high := p.lines[0], p.lines[1]
 			require.Less(t, low.ID, high.ID)
@@ -152,6 +155,12 @@ func TestFleetBulkLineLockOrderOnPostgres(t *testing.T) {
 				other := *p.op
 				other.ID, other.Token = 0, "erase-other"
 				require.NoError(t, db.Create(&other).Error)
+				t.Cleanup(func() {
+					// A hand-made copy with no runtime row cannot be aborted; remove it.
+					require.NoError(t, db.Where("operation_id = ?", other.ID).Delete(&FleetOperationEvent{}).Error)
+					require.NoError(t, db.Where("operation_id = ?", other.ID).Delete(&FleetOperationLine{}).Error)
+					require.NoError(t, db.Unscoped().Delete(&other).Error)
+				})
 				require.NoError(t, db.Model(&high).Updates(map[string]any{"operation_id": other.ID, "target_id": low.TargetId}).Error)
 			}
 			require.NoError(t, db.Model(&low).Update("detail", "move lowest ID to the heap tail").Error)
