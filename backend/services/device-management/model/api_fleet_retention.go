@@ -135,7 +135,7 @@ func (api *Api) RetainFleetOperations(ctx context.Context, now time.Time) error 
 						return err
 					}
 				}
-				if err := fleetPurgeEvidenceChunk(tx, op.ID, counts); err != nil {
+				if err := fleetPurgeEvidenceChunk(tx, &op, counts); err != nil {
 					return err
 				}
 				var remaining int64
@@ -178,10 +178,16 @@ func (api *Api) RetainFleetOperations(ctx context.Context, now time.Time) error 
 	return errors.Join(failures...)
 }
 
-func fleetPurgeEvidenceChunk(tx *gorm.DB, id uint, counts fleetRowCounts) error {
+func fleetPurgeEvidenceChunk(tx *gorm.DB, op *FleetOperation, counts fleetRowCounts) error {
+	id := op.ID
 	var lines []uint
 	if err := tx.Model(&FleetOperationLine{}).Where("operation_id = ?", id).Scopes(fleetLineLockOrder).
 		Limit(fleetMaintenanceChunk).Pluck("id", &lines).Error; err != nil {
+		return err
+	}
+	// The chunk's lines are locked, in id order; the REVERSED journal rows for its contras are new rows,
+	// inserted after the line locks as the global order requires (lines by id, then events).
+	if err := fleetRecordPurgedContrasOnTx(tx, op, lines); err != nil {
 		return err
 	}
 	res := tx.Where("id IN ?", lines).Delete(&FleetOperationLine{})

@@ -223,6 +223,25 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 			decided = &fleetDecision{FleetPostingRefused, FleetLineKeyUndeclared, "the key is not declared by the device's active profile"}
 			return errPostDecided
 		}
+		// What the line writes: the operation's value, or, for a reversal, the original's before-image,
+		// read and judged here, under the device lock, so no write can slip between the check and the effect.
+		target := fleetValueImage{Present: !intent.Unset}
+		if !intent.Unset {
+			target.ValueType, target.Value = intent.ValueType, intent.Value
+		}
+		overridden := false
+		var reversing *fleetReversalPost
+		if intent.Reverse || line.ReversesLineId.Valid {
+			rev, err := fleetReversalOnTx(tx, &op, &line, devID, intent)
+			if err != nil {
+				return err
+			}
+			if rev.decided != nil {
+				decided = rev.decided
+				return errPostDecided
+			}
+			target, overridden, reversing = rev.target, rev.changed, rev
+		}
 		// 7. Before-image, effect, recompute: the primitive's own path, under the lock this transaction holds.
 		priorGen, _, err := attributeGeneration(tx, devID, string(AttributeScopeShared), intent.Key)
 		if err != nil {
@@ -232,10 +251,10 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 			fleetEffectHook()
 		}
 		patch := AttributePatch{{Scope: string(AttributeScopeShared), Key: intent.Key, LastUpdated: time.Now()}}
-		if intent.Unset {
+		if !target.Present {
 			patch[0].Unset = true
 		} else {
-			patch[0].ValueType, patch[0].Value = intent.ValueType, intent.Value
+			patch[0].ValueType, patch[0].Value = target.ValueType, target.Value
 		}
 		receipt, err := api.applyAttributePatchTx(postCtx, tx, "device", devID, patch)
 		if err != nil {
@@ -253,6 +272,18 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		}
 		if err != nil {
 			return err
+		}
+		if reversing != nil && !overridden {
+			// Changed-since, second half: the revision walk, after the effect and under the configuration lock.
+			moved, err := fleetReversalRevisionsOnTx(postCtx, tx, devID, intent.Key, reversing.original, minted)
+			if err != nil {
+				return err
+			}
+			if moved && !line.OverrideChanged {
+				decided = &fleetDecision{FleetPostingRefused, FleetLineChangedSince, fleetChangedSinceDetail}
+				return errPostDecided // the effect rolls back with the transaction
+			}
+			overridden = moved
 		}
 		revision := sql.NullInt64{}
 		if minted != nil {
@@ -273,10 +304,8 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 				prior.Value = &v
 			}
 		}
-		posted := fleetValueImage{Present: !intent.Unset, Generation: receipt.Changes[0].Generation}
-		if !intent.Unset {
-			posted.ValueType, posted.Value = intent.ValueType, intent.Value
-		}
+		posted := target
+		posted.Generation = receipt.Changes[0].Generation
 		priorJSON, err := json.Marshal(prior)
 		if err != nil {
 			return err
@@ -301,6 +330,18 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		}
 		if res.RowsAffected != 1 {
 			return abandon(FleetPostLostRace) // the whole effect rolls back with it
+		}
+		if overridden {
+			// The line was applied over a change made since the original, because a person overrode it.
+			// The journal row comes after the claim, which locked the line: lines first, then events.
+			at, err := fleetMaintenanceNow(tx)
+			if err != nil {
+				return err
+			}
+			if err := tx.Create(&FleetOperationEvent{OperationId: int64(op.ID), LineId: sql.NullInt64{Int64: int64(lineID), Valid: true},
+				Epoch: sql.NullInt64{Int64: op.ExecutionEpoch, Valid: true}, At: at, Kind: fleetEventOverrideChanged}).Error; err != nil {
+				return err
+			}
 		}
 		if fleetPostHook != nil {
 			fleetPostHook("claimed", tx)

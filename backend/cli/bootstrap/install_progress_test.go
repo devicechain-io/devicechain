@@ -397,12 +397,22 @@ func cnpgRefusal(t *testing.T) []byte {
 //   - each apply was counted against its own plan, in its own attempt;
 //   - the messages' lines reached the console, and the diagnostic its stderr.
 func TestTheObservedApplyThroughTheRetry(t *testing.T) {
+	t.Run("ordinary", func(t *testing.T) { checkObservedApplyRetry(t, cnpgRefusal(t)) })
+	t.Run("oversized", func(t *testing.T) {
+		stream := strings.Replace(string(cnpgRefusal(t)), "Internal error occurred:",
+			strings.Repeat("z", tofujson.MaxLine+100)+"Internal error occurred:", 1)
+		checkObservedApplyRetry(t, []byte(stream))
+	})
+}
+
+func checkObservedApplyRetry(t *testing.T, refusal []byte) {
+	t.Helper()
 	testKube(t)
 	bin, dir := fakeTofuJSON(t,
 		struct {
 			stream []byte
 			rc     int
-		}{cnpgRefusal(t), 1},
+		}{refusal, 1},
 		struct {
 			stream []byte
 			rc     int

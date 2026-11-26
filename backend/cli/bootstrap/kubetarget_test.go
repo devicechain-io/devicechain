@@ -343,13 +343,13 @@ func TestASavedPlanIsOnlyAppliedToTheClusterItWasMadeFor(t *testing.T) {
 	tf, _ := newTofuExec(t.TempDir(), bin, "shared")
 	ctx := context.Background()
 
-	if err := tf.Apply(ctx, tfexec.DirOrPlan("p.bin")); err == nil {
+	if err := tf.Apply(ctx, applyPlan("p.bin")); err == nil {
 		t.Fatal("applied a plan this runner never made")
 	}
 	if _, err := tf.Plan(ctx, tfexec.Out("p.bin")); err != nil {
 		t.Fatal(err)
 	}
-	if err := tf.Apply(ctx, tfexec.DirOrPlan("p.bin")); err != nil {
+	if err := tf.Apply(ctx, applyPlan("p.bin")); err != nil {
 		t.Fatalf("applying its own plan: %v", err)
 	}
 	// -var is refused beside a saved plan, so none may be added to it.
@@ -358,7 +358,7 @@ func TestASavedPlanIsOnlyAppliedToTheClusterItWasMadeFor(t *testing.T) {
 	}
 	// The cluster behind the name is rebuilt: the same name, another server.
 	t.Setenv("KUBECONFIG", kubeFixture(t, t.TempDir(), "moved", "shared", map[string]string{"shared": "third-cluster"}))
-	if err := tf.Apply(ctx, tfexec.DirOrPlan("p.bin")); err == nil || !strings.Contains(err.Error(), "refusing to run OpenTofu") {
+	if err := tf.Apply(ctx, applyPlan("p.bin")); err == nil || !strings.Contains(err.Error(), "refusing to run OpenTofu") {
 		t.Fatalf("apply after the cluster changed = %v, want a refusal", err)
 	}
 }

@@ -170,10 +170,10 @@ func (row *fleetSettlementRow) verdict(documents map[fleetSettlementDocumentKey]
 		return ledger.Verdict{}, err
 	}
 	p := ledger.PostedImage{Revision: &row.PostedRevision.Int64}
-	if image.Present {
-		if image.Value == nil {
-			return ledger.Verdict{}, fmt.Errorf("bulk change line %d: posted value missing", row.ID)
-		}
+	// A key that is present with a NULL value is not in the device's document (BuildConfigurationDocument
+	// leaves it out), so the device is expected to report it absent, exactly as for an unset. A reversal
+	// that restores such a before-image posts that image.
+	if image.Present && image.Value != nil {
 		b, err := canonicalConfigurationValue(image.ValueType, image.ValueType, *image.Value)
 		if err != nil {
 			return ledger.Verdict{}, err

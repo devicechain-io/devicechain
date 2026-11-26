@@ -388,16 +388,6 @@ func fleetLatest(times ...sql.NullTime) sql.NullTime {
 	return out
 }
 
-// fleetDBNow is the database's clock; the SQLite fixtures use the injected fixture clock.
-func fleetDBNow(db *gorm.DB) (time.Time, error) {
-	if db.Dialector.Name() != "postgres" {
-		return fleetClock(), nil
-	}
-	var now time.Time
-	err := db.Raw("SELECT clock_timestamp()").Scan(&now).Error
-	return now, err
-}
-
 // FleetExecutor reports whether the engine applying an operation is making progress. Every fact is
 // re-read from storage under the caller's tenant (the dispatch included: the header the caller holds
 // is only an identity), and time is the database's, never this process's.

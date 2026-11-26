@@ -151,6 +151,15 @@ func (api *Api) fleetCreateStepOne(ctx context.Context, tenant string, req *Flee
 		if err := fleetSetLockTimeout(tx, fleetAdmissionLockTimeout); err != nil {
 			return err
 		}
+		// A reversal first holds its original's fence, shared: it is the lower lock in the one order, and
+		// holding it until the header commits is what keeps retention and a resume off the original.
+		var reversalOf sql.NullInt64
+		if n.reversal != nil {
+			if err := fleetReversalFenceOnTx(tx, tenant, n.reversal); err != nil {
+				return err
+			}
+			reversalOf = sql.NullInt64{Int64: int64(n.reversal.original.ID), Valid: true}
+		}
 		// Tenant lock first, then instance: the one order everything takes them in.
 		for _, key := range []int64{fleetAdmissionTenantKey(tenant), fleetAdmissionInstanceKey()} {
 			if err := fleetLock(tx, key, false); err != nil {
@@ -173,7 +182,7 @@ func (api *Api) fleetCreateStepOne(ctx context.Context, tenant string, req *Flee
 			return err
 		}
 		op := &FleetOperation{
-			Token: req.Token, Name: req.Name, Kind: n.kind,
+			Token: req.Token, Name: req.Name, Kind: n.kind, ReversalOf: reversalOf,
 			Dispatch: FleetDispatchPlanning, Evidence: FleetEvidenceOpen,
 			RequestDigest: n.requestDigest, Intent: n.intentJSON, ContractVersion: 1,
 			// The protocol is decided in one place: nothing here uses a feature a protocol-2 engine defines.
@@ -312,15 +321,23 @@ func (api *Api) fleetCreateStepTwo(ctx context.Context, tenant string, op *Fleet
 		}
 		lines := make([]FleetOperationLine, 0, len(plan.Lines))
 		for _, l := range plan.Lines {
-			row := FleetOperationLine{OperationId: int64(op.ID), Ordinal: l.Ordinal, Posting: FleetPostingPlanned}
+			row := FleetOperationLine{OperationId: int64(op.ID), Ordinal: l.Ordinal, Posting: FleetPostingPlanned, OverrideChanged: l.OverrideChanged}
 			if l.TargetId != nil {
+				// A refused input of a create has no target, so it stores no identifier: the token is
+				// returned only in the plan and create responses, and the operator's own file maps the
+				// ordinal back to it. A later duplicate is refused here too, so the unique index on the
+				// device is never surfaced. A reversal's refused line names the original's device.
 				row.TargetId = sql.NullInt64{Int64: int64(*l.TargetId), Valid: true}
 				row.TargetKey = l.Token
-			} else {
-				// A refused input stores no identifier: the token is returned only in the plan and
-				// create responses, and the operator's own file maps the ordinal back to it. A later
-				// duplicate is refused here too, so the unique index on the device is never surfaced.
+			}
+			if l.ReversesLineId != nil {
+				row.ReversesLineId = sql.NullInt64{Int64: int64(*l.ReversesLineId), Valid: true}
+			}
+			if l.Code != "" {
 				row.Posting, row.Code, row.RefusedAtPlan = FleetPostingRefused, l.Code, true
+				if l.Posting != "" {
+					row.Posting = l.Posting
+				}
 			}
 			lines = append(lines, row)
 		}
@@ -332,7 +349,11 @@ func (api *Api) fleetCreateStepTwo(ctx context.Context, tenant string, op *Fleet
 		if err := tx.CreateInBatches(&lines, fleetLinesPerInsert).Error; err != nil {
 			return err
 		}
-		now := time.Now()
+		// expires_at is what the expiry sweep and a start compare with the database's clock.
+		now, err := fleetDBNow(tx)
+		if err != nil {
+			return err
+		}
 		if err := tx.Create(&FleetOperationContract{
 			OperationId: int64(op.ID), Version: 1, Digest: plan.ContractDigest, Body: plan.ContractBody,
 			ApprovalKind: FleetApprovalHumanDirect, PolicyVersion: 1, ProposedBy: actor,

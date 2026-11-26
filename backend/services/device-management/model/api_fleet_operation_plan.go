@@ -68,6 +68,13 @@ type FleetConfigSetIntent struct {
 	ValueType string  `json:"valueType,omitempty"`
 	Value     *string `json:"value,omitempty"`
 	Unset     bool    `json:"unset"`
+	// Reverse marks a reversal: each line restores the before-image of the original line it reverses,
+	// so the intent carries no value. Both flags are omitted when false, which keeps every digest of
+	// an ordinary config.set exactly what it was before reversals existed.
+	Reverse bool `json:"reverse,omitempty"`
+	// OverrideAll is a reversal's request to apply every selected line over a change made since the
+	// original, instead of naming the lines one by one.
+	OverrideAll bool `json:"overrideAll,omitempty"`
 }
 
 // FleetSafetyRequest is the safety contract a creator asks for. A nil rate or deadline takes the
@@ -95,6 +102,12 @@ type FleetPlanLine struct {
 	Token    string
 	TargetId *uint
 	Code     string
+	// Posting is the state a refused line is stored in: REFUSED when empty, or SKIPPED for a reversal
+	// line whose original was never applied.
+	Posting string
+	// ReversesLineId and OverrideChanged are set on a reversal's lines only.
+	ReversesLineId  *uint
+	OverrideChanged bool
 }
 
 // FleetPlanRefusal is one refused input, with the token the operator supplied.
@@ -128,6 +141,8 @@ type fleetNormalized struct {
 	tokens        []string
 	safety        ledger.Safety
 	requestDigest string
+	// reversal is set when the request reverses an earlier operation.
+	reversal *fleetReversalNormalized
 }
 
 // normalizeFleetRequest validates req and computes the request digest, touching no database. The
@@ -319,22 +334,31 @@ func buildFleetPlan(n *fleetNormalized, ids map[string]uint) (*FleetPlan, error)
 		digestLines = append(digestLines, dl)
 		plan.Lines = append(plan.Lines, line)
 	}
+	if err := sealFleetPlan(plan, n, digestLines, ledger.Overrides{}); err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+// sealFleetPlan computes the plan digest and the contract over a finished list of lines. A reversal
+// passes its overrides, so the selection and the override set are part of what start approves.
+func sealFleetPlan(plan *FleetPlan, n *fleetNormalized, digestLines []ledger.PlanLine, overrides ledger.Overrides) error {
 	plan.RequestDigest = n.requestDigest
 	var err error
 	if plan.PlanDigest, err = ledger.PlanDigest(ledger.PlanDigestInput{Lines: digestLines}); err != nil {
-		return nil, err
+		return err
 	}
 	contract := ledger.ContractDigestInput{V: 1, Kind: n.kind, Intent: n.intent, PlanDigest: plan.PlanDigest, Safety: n.safety,
-		Approval: ledger.Approval{Kind: FleetApprovalHumanDirect, PolicyVersion: 1}}
+		Overrides: overrides, Approval: ledger.Approval{Kind: FleetApprovalHumanDirect, PolicyVersion: 1}}
 	if plan.ContractDigest, err = ledger.ContractDigest(contract); err != nil {
-		return nil, err
+		return err
 	}
 	body, err := ledger.Canonical(contract)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	plan.ContractBody = string(body)
-	return plan, nil
+	return nil
 }
 
 // FleetApprovalHumanDirect is the only approval kind this release writes.
