@@ -235,6 +235,8 @@ func TestBulkChangeFlagsAreRunScoped(t *testing.T) {
 		"max-posts-per-second": true, "failure-threshold": true, "ambiguity-threshold": true,
 		"settle-deadline": true, "contract-digest": true, "watch": true,
 		"posting": true, "settlement": true, "output": true, "help": true,
+		"ordinals": true, "override-changed": true, "override-ordinals": true, "create": true,
+		"all-ambiguous": true, "verdict": true, "note": true,
 	}
 	for _, c := range bulkChangeCmd.Commands() {
 		c.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
