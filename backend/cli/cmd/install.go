@@ -106,7 +106,7 @@ the cluster, with one exception: the connection budget may be raised.`,
 		if err != nil {
 			return err
 		}
-		defer func() { err = stream.end(cmd.Context(), err) }()
+		defer func() { err = installVerdict(stream.end(cmd.Context(), err)) }()
 		provider, err := bootstrap.Get(args[0])
 		if err != nil {
 			return err
@@ -236,5 +236,6 @@ func init() {
 
 	installCmd.Flags().IntVar(&installRelationalMaxWALMiB, "relational-store-max-wal-mib", 0, "relational store max_wal_size soft checkpoint target in MiB (0: stock default; positive: at least 64). Omitted keeps the recorded choice, or the root default on a first install. Recorded before apply; limited to a quarter of storage by the root")
 
+	installCmd.SetHelpFunc(installHelp)
 	rootCmd.AddCommand(installCmd)
 }

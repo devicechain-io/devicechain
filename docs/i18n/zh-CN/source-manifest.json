@@ -358,6 +358,10 @@
       "sourceSha256": "b2d846bd25f3d9a3c83c99d3f42278faa59f02450d84930b2fdd7c152136ca40",
       "translationSha256": "2b3147aeb26ef7b1bf9198f945a048160b978d42a54f0266a16545da35b22c5e"
     },
+    "reference/install-events.md": {
+      "sourceSha256": "75409a7fbc5bc367a1109f43e67a03b5f204073f09dbe537bddcd5487b428f88",
+      "translationSha256": "45c0ad217f996b3bd2e73a91eaea4c3a9b1f1e9b7121ce3645da65537ee6ae45"
+    },
     "reference/npm-packages.md": {
       "sourceSha256": "7f85fa2f5e06d3aa61b4f06b28705aec695014407aaed1f4910fb323a9952ba2",
       "translationSha256": "a9d494ec7a4b6da6de7883ced843d633e07dbfe5a9e15931dde265e9540c0af3"

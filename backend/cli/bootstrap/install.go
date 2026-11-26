@@ -164,6 +164,8 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	// A dry run takes nothing. It still resolves the namespace and reports the claim
 	// it WOULD have met, because "another operator is already running" is part of
 	// the answer to what this command would do.
+	// The cluster stage may have written new credentials (kind's client key).
+	run.refreshKubeconfigSecrets()
 	run.enter(installflow.StepInstallClaim)
 	if err := claimForInstall(ctx, st); err != nil {
 		return err

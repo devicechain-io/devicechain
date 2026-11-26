@@ -60,6 +60,8 @@ type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
 
+func (r *rawReporter) AddRedaction(v string) error { return r.AddSecret(v) }
+
 func (r *rawReporter) LogWriter(installflow.StepID, string, installflow.LogLevel) (io.WriteCloser, error) {
 	return nopWriteCloser{&r.logs}, nil
 }

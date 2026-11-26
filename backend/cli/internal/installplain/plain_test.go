@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -181,7 +183,8 @@ func TestPresenterKeepsRenderedEventsAheadOfLaterConsoleOutput(t *testing.T) {
 	}
 }
 
-// The engine's error comes back exactly, for the command to print as it always has.
+// The engine's error comes back with its own words, for the command to print as it
+// always has, and unwraps to it.
 func TestPresenterReturnsTheEnginesOwnError(t *testing.T) {
 	cause := errors.New("kind not found on PATH")
 	eng := funcEngine(func(context.Context, installflow.Request, installflow.Runtime) (installflow.Summary, error) {
@@ -189,8 +192,32 @@ func TestPresenterReturnsTheEnginesOwnError(t *testing.T) {
 	})
 	err := Presenter{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Stdin: strings.NewReader("")}.Run(
 		context.Background(), eng, installflow.Request{}, nil)
-	if err != cause {
+	if !errors.Is(err, cause) || err.Error() != cause.Error() {
 		t.Errorf("err = %v, want the engine's own", err)
+	}
+}
+
+// 🔴 THE ERROR IS REDACTED, AND THE CONSOLE IS NOT. A tool's diagnostics appended to
+// an error must not print a registered value; the console is text output's own, and
+// shows the person at the terminal what it always showed, credentials included (a
+// bootstrap's access summary).
+func TestPresenterRedactsTheErrorNotTheConsole(t *testing.T) {
+	const secret = "dcCanaryPlainSecret9Xk2"
+	eng := funcEngine(func(_ context.Context, _ installflow.Request, rt installflow.Runtime) (installflow.Summary, error) {
+		if err := rt.Events.AddSecret(secret); err != nil {
+			t.Fatal(err)
+		}
+		io.WriteString(rt.Console.Stdout, "your password: "+secret+"\n")
+		return installflow.Summary{Outcome: installflow.RunFailed}, errors.New("apply failed\nError: " + secret)
+	})
+	var stdout, stderr bytes.Buffer
+	err := Presenter{Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("")}.Run(
+		context.Background(), eng, installflow.Request{}, nil)
+	if msg := fmt.Sprint(err); strings.Contains(msg, secret) || !strings.Contains(msg, "[redacted]") {
+		t.Errorf("error: %q", msg)
+	}
+	if !strings.Contains(stdout.String(), "your password: "+secret) {
+		t.Errorf("the console was changed: %q", stdout.String())
 	}
 }
 

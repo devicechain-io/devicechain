@@ -57,6 +57,9 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	hub, err := installflow.NewHub(installflow.Options{
 		Operation: req.Operation,
 		Sink:      Sink{W: p.Stdout},
+		// Text output renders what it always rendered: only its error is redacted
+		// of what the run found (a kubeconfig's credentials).
+		TokensOnlyInErrors: true,
 		// A presenter that cannot keep up stops the run gracefully, saying why; the
 		// hub then refuses to report it as a success.
 		OnDeliveryFailure: func() {
@@ -84,7 +87,11 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	if err == nil && !sum.Succeeded() {
 		err = errIncomplete
 	}
-	return err
+	// Redacted: a tool's diagnostics appended to an error must not print a value
+	// the run registered. The console is NOT redacted: text output shows the person
+	// at the terminal credentials on purpose (a bootstrap's access summary), and
+	// what a tool prints there it always printed.
+	return hub.RedactError(err)
 }
 
 // flushingWriter writes to w once every event emitted before the write has been

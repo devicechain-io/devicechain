@@ -4,9 +4,11 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -55,9 +57,16 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 		return failedBeforeStart(rt, errors.New("install engine: no provider"))
 	}
 	r := newInstallRun(rt, e.Options.DryRun)
-	registerSecrets(rt.Events, e.Options)
+	// Registered before the first event; a value that could not be covered is said
+	// once the run has started, so the warning is part of it.
+	var uncovered bytes.Buffer
+	registerSecrets(rt.Events, e.Options, &uncovered)
+	registerKubeconfigSecrets(rt.Events, &uncovered)
 	if err := r.start(installTarget(e.Options)); err != nil {
 		return failedBeforeStart(rt, err)
+	}
+	if uncovered.Len() > 0 {
+		_, _ = r.warnings().Write(uncovered.Bytes())
 	}
 	// 🔴 THE STOPPING STATE. A cancel is reported the moment it is requested, naming
 	// the stage it found and whether a tool is still running — and nothing more: the
@@ -109,7 +118,7 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 			return r.close(ctx, errors.New("install engine: the request and the install options disagree about --dry-run or --yes"))
 		}
 		// The files read here (an SMTP password, backup credentials) are new values.
-		registerSecrets(rt.Events, resolved)
+		registerSecrets(rt.Events, resolved, r.con.stderr())
 		opts = resolved
 	}
 
@@ -126,22 +135,21 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 //
 // 🔴 THIS IS DEFENCE IN DEPTH, NOT THE DEFENCE. Nothing the engine emits is meant
 // to hold these values in the first place; this is what still catches one when
-// a tool echoes it. A value too short to redact without redacting ordinary text
-// is skipped: the hub refuses it, and the producer-side rule still applies.
-func registerSecrets(events installflow.Reporter, opts InstallOptions) {
-	if events == nil {
-		return
-	}
+// a tool echoes it. A value too short for a strict registration is registered
+// redact-only, and one too short even for that is warned about on w.
+func registerSecrets(events installflow.Reporter, opts InstallOptions, w io.Writer) {
 	a := opts.AlertRouting
 	values := []string{a.Webhook, a.WatchdogWebhook, a.SMTPPassword, a.Config}
 	if b := opts.BackupDestination; b != nil {
 		values = append(values, b.AccessKeyID, b.SecretAccessKey)
 	}
+	var creds []credential
 	for _, v := range values {
 		if v != "" {
-			_ = events.AddSecret(v)
+			creds = append(creds, credential{value: v})
 		}
 	}
+	warnUncovered(w, "install secret", registerCredentials(events, creds))
 }
 
 // failedBeforeStart closes a run that could not begin. The hub accepts a summary

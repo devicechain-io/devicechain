@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -131,8 +132,15 @@ func (e *BootstrapEngine) Run(ctx context.Context, req installflow.Request, rt i
 	}
 	r := newInstallRun(rt, e.DryRun)
 	r.stages, r.progressOnly = &bootstrapStages, req.ProgressOnly
+	// The kubeconfig's credentials, as the install engine registers them; a value too
+	// short to redact is said once the run has started.
+	var uncovered bytes.Buffer
+	registerKubeconfigSecrets(rt.Events, &uncovered)
 	if err := r.start(e.target()); err != nil {
 		return failedBeforeStart(rt, err)
+	}
+	if uncovered.Len() > 0 {
+		_, _ = r.warnings().Write(uncovered.Bytes())
 	}
 	// The stopping state, exactly as the install engine has it: announced the moment a
 	// cancel is asked for, and the run closed only once the stage's work has returned.
@@ -249,16 +257,20 @@ func (r *installRun) pipelineStepDone(name string, st *State) {
 }
 
 // addSecrets registers values with the hub's redactor: defence in depth behind the rule
-// that nothing the engine emits holds them. A value too short to redact is skipped.
+// that nothing the engine emits holds them. A value too short for a strict registration
+// is registered redact-only; one too short even for that is warned about, never
+// skipped silently.
 func (r *installRun) addSecrets(values ...string) {
 	if r == nil || r.events == nil {
 		return
 	}
+	var creds []credential
 	for _, v := range values {
 		if v != "" {
-			_ = r.events.AddSecret(v)
+			creds = append(creds, credential{value: v})
 		}
 	}
+	warnUncovered(r.warnings(), "instance secret", registerCredentials(r.events, creds))
 }
 
 // askPassphrase asks a person for an escrow passphrase through the run's prompt broker:

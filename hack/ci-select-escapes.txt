@@ -52,6 +52,7 @@ backend/cli/dcdir/dcdir_test.go
 backend/cli/failedevents/documents_test.go
 backend/cli/failedevents/failedevents_test.go
 backend/cli/internal/apitest/capabilities.go
+backend/cli/internal/installjson/docs_fields_test.go
 backend/cli/internal/installtui/_buildcheck/build_test.go
 backend/cli/internal/installtui/audit_test.go
 backend/cli/internal/installtui/brand/brand_test.go

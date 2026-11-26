@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -525,7 +526,8 @@ func forwardPortCtx(ctx context.Context, restCfg *rest.Config, namespace, pod st
 	}
 	host, err := url.Parse(restCfg.Host)
 	if err != nil {
-		return 0, nil, fmt.Errorf("parsing the API server address %q: %w", restCfg.Host, err)
+		// Neither the address nor url.Parse's error, which quotes it: it can carry userinfo.
+		return 0, nil, errors.New("the kube context's API server address is not a URL")
 	}
 	target := &url.URL{
 		Scheme: "https",
