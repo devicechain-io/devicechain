@@ -98,5 +98,13 @@ func (api *Api) RunFleetDriver(ctx context.Context) error {
 		go func() { defer wg.Done(); run() }()
 	}
 	wg.Wait()
+	if ctx.Err() == nil {
+		// The pass ran to its end: a per-operation error is that operation's, not the driver's. A pass
+		// cut short by shutdown or its own timeout is not recorded, and neither is one that could not
+		// list its work (returned above). This is a per-pod liveness stamp compared with the monitoring
+		// server's clock, not a shared-state decision.
+		bulkMetrics.lastPass.Set(float64(time.Now().UnixNano()) / 1e9)
+		api.maybeRefreshFleetMetrics(ctx)
+	}
 	return errors.Join(append(errs, ctx.Err())...)
 }

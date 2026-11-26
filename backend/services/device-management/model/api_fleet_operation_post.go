@@ -147,7 +147,7 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 			return err
 		}
 		// 1-2. The fence, shared, and the state under it.
-		if err := fleetLock(tx, fleetOpKey(tenant, opID), true); err != nil {
+		if err := fleetFence(tx, fleetOpKey(tenant, opID), true, "POST"); err != nil {
 			if lockTimedOut(err) {
 				return abandon(FleetPostFenceBusy)
 			}
@@ -399,7 +399,7 @@ func (api *Api) recordFleetRefusal(ctx context.Context, tenant string, opID, lin
 		if err := fleetTxTimeouts(tx); err != nil {
 			return err
 		}
-		if err := fleetLock(tx, fleetOpKey(tenant, opID), true); err != nil {
+		if err := fleetFence(tx, fleetOpKey(tenant, opID), true, "POST"); err != nil {
 			if lockTimedOut(err) {
 				result = FleetPostResult{Outcome: FleetPostFenceBusy}
 				return nil

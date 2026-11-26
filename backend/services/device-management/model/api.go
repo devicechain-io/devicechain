@@ -81,6 +81,7 @@ type Api struct {
 	// fleetExpiryCursor is where the next expiry pass resumes its tenant discovery.
 	fleetExpiryCursor             fleetExpiryCursor
 	fleetDriver                   fleetDriverState
+	fleetMetrics                  fleetMetricsRefresh
 	fleetSettlementFastCursor     fleetSettlementCursor
 	fleetSettlementDeadlineCursor fleetSettlementCursor
 	// DeviceCredentialChecker shares password backoff between HTTP uplinks and MQTT connects.

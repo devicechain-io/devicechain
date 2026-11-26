@@ -128,6 +128,7 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 
 	// 1. The lease.
 	lease, hold, err := api.fleetLease(ctx, op)
+	bulkMetrics.decided(lease, hold, err)
 	if err != nil {
 		return nil, err
 	}
@@ -192,6 +193,7 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	if err != nil {
 		return nil, err
 	}
+	bulkMetrics.permitted(len(due), granted)
 	if granted == 0 {
 		if err := api.holdForUndecidedLines(db, op, res); err != nil {
 			return res, err
@@ -241,7 +243,9 @@ posting:
 				return
 			}
 			defer release()
+			started := time.Now() // a duration on this process's monotonic clock, never compared with stored time
 			r, perr := api.PostFleetLine(ctx, op.ID, lineID, *lease)
+			bulkMetrics.post(op.Kind, r, perr, time.Since(started))
 			if perr != nil {
 				// An undecided error is neither a refusal nor a reason to starve later lines. Keep it
 				// visible with its own code and backoff, and return the error after pass bookkeeping.

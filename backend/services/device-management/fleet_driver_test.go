@@ -6,9 +6,11 @@ package main
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/prometheus/client_golang/prometheus"
@@ -52,4 +54,33 @@ func TestFleetDriverLifecycleCancelsAndWaitsForPass(t *testing.T) {
 		t.Fatal("Stop must cancel and await the pass")
 	}
 	require.NoError(t, task.Terminate(context.Background()))
+}
+
+// The bulk-change series are registered only on a build that serves bulk changes, under the
+// service's own namespace and subsystem, before any task can write them.
+func TestBulkChangeMetricsRegisterOnlyWhenServed(t *testing.T) {
+	require.False(t, ledger.Served)
+	source, err := os.ReadFile("main.go")
+	require.NoError(t, err)
+	init, expiry := strings.Index(string(source), "initBulkChangeMetrics()"), strings.Index(string(source), "initFleetExpirySweep()")
+	require.True(t, init >= 0 && init < expiry, "metrics must be installed before the first bulk-change task is built")
+
+	previous := Microservice
+	t.Cleanup(func() { Microservice = previous })
+	ms := &core.Microservice{FunctionalArea: "device-management"}
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
+	Microservice = ms
+	initBulkChangeMetrics()
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	require.Empty(t, families, "an unserved build exports no bulk-change series")
+
+	model.NewBulkChangeMetrics(ms)
+	families, err = reg.Gather()
+	require.NoError(t, err)
+	require.Len(t, families, 18)
+	for _, f := range families {
+		require.True(t, strings.HasPrefix(f.GetName(), "devicechain_devicemanagement_bulk_change_"), f.GetName())
+	}
 }

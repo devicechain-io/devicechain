@@ -162,12 +162,13 @@ func (api *Api) fleetControl(ctx context.Context, token, transition string, fn f
 		return nil, gorm.ErrRecordNotFound
 	}
 	var enteredRunning bool
+	var enteredDispatch, reason string
 	err = db.Transaction(func(tx *gorm.DB) error {
-		enteredRunning = false
+		enteredRunning, enteredDispatch, reason = false, "", ""
 		if err := fleetSetLockTimeout(tx, fleetFenceWait); err != nil {
 			return err
 		}
-		if err := fleetLock(tx, fleetOpKey(tenant, head.ID), false); err != nil {
+		if err := fleetFence(tx, fleetOpKey(tenant, head.ID), false, transition); err != nil {
 			return err
 		}
 		var op FleetOperation
@@ -182,6 +183,10 @@ func (api *Api) fleetControl(ctx context.Context, token, transition string, fn f
 			return err
 		}
 		enteredRunning = changes["dispatch"] == FleetDispatchRunning
+		enteredDispatch, _ = changes["dispatch"].(string)
+		if event != nil {
+			reason = event.Reason
+		}
 		now := time.Now()
 		changes["execution_epoch"] = op.ExecutionEpoch + 1
 		changes["state_changed_at"] = now
@@ -198,11 +203,18 @@ func (api *Api) fleetControl(ctx context.Context, token, transition string, fn f
 		}
 		return nil
 	})
+	if err == nil && enteredDispatch != "" {
+		bulkMetrics.transition(enteredDispatch, reason)
+	}
+	bulkMetrics.refused(err)
 	if lockTimedOut(err) {
 		err = fleetErr(FleetCodeFencePending, "the operation is still draining in-flight work; retry")
 	}
 	var refusal *FleetOperationError
 	fencePending := errors.As(err, &refusal) && refusal.Code == FleetCodeFencePending
+	if fencePending {
+		bulkMetrics.pending(transition)
+	}
 	if !fencePending {
 		// A canceled caller is a non-retry outcome too. Cleanup keeps the tenant
 		// context, outlives that request, and has its own bounded database wait.

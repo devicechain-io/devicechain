@@ -22,10 +22,11 @@ const fleetMaintenanceChunk = 10000
 // would invert the posting lock order. The row UPDATE is the last line lock.
 // Erasure deliberately also covers records from newer driver protocols.
 func redactFleetDeviceOnTx(tx *gorm.DB, deviceID uint) error {
-	return redactFleetDeviceLinesOnTx(tx, deviceID, false)
+	return redactFleetDeviceLinesOnTx(tx, deviceID, false, nil)
 }
 
-func redactFleetDeviceLinesOnTx(tx *gorm.DB, deviceID uint, repair bool) error {
+// counts, when not nil, receives the rows redacted by table (the repair pass reports them).
+func redactFleetDeviceLinesOnTx(tx *gorm.DB, deviceID uint, repair bool, counts fleetRowCounts) error {
 	for {
 		var lines []FleetOperationLine
 		query := tx.Select("id").Where("target_id = ? AND redacted_at IS NULL", deviceID)
@@ -65,6 +66,7 @@ func redactFleetDeviceLinesOnTx(tx *gorm.DB, deviceID uint, repair bool) error {
 		if err := update.Updates(changes).Error; err != nil {
 			return err
 		}
+		counts.add("lines", int64(len(updated)))
 		// RETURNING captures the resolution reference after any line-lock wait.
 		// Clearing one shared note also removes it from surviving targets' views.
 		seen := map[int64]bool{}
@@ -80,10 +82,12 @@ func redactFleetDeviceLinesOnTx(tx *gorm.DB, deviceID uint, repair bool) error {
 		}
 		if len(notes) != 0 {
 			slices.Sort(notes)
-			if err := tx.Model(&FleetOperationEvent{}).Where("id IN ? AND kind = 'RESOLUTION'", notes).
-				Updates(map[string]any{"note": "", "note_redacted_at": now}).Error; err != nil {
-				return err
+			res := tx.Model(&FleetOperationEvent{}).Where("id IN ? AND kind = 'RESOLUTION'", notes).
+				Updates(map[string]any{"note": "", "note_redacted_at": now})
+			if res.Error != nil {
+				return res.Error
 			}
+			counts.add("events", res.RowsAffected)
 		}
 		if len(events) != 0 {
 			if err := tx.CreateInBatches(&events, 500).Error; err != nil {
@@ -137,7 +141,9 @@ func (api *Api) RepairFleetErasure(ctx context.Context) error {
 			continue
 		}
 		seen[line.TargetId.Int64] = true
+		var counts fleetRowCounts
 		err := api.runDeviceAttributeTx(ctx, "bulk-change-erasure-repair", func(tx *gorm.DB) error {
+			counts = fleetRowCounts{} // a retried transaction starts its count again
 			id := uint(line.TargetId.Int64)
 			if err := lockDeviceAttributes(ctx, tx, id); err != nil {
 				return err
@@ -149,10 +155,14 @@ func (api *Api) RepairFleetErasure(ctx context.Context) error {
 			if n != 0 {
 				return nil
 			}
-			return redactFleetDeviceLinesOnTx(tx, id, true)
+			return redactFleetDeviceLinesOnTx(tx, id, true, counts)
 		})
 		if err != nil {
 			failures = append(failures, err)
+			continue
+		}
+		for table, n := range counts {
+			bulkMetrics.maintained(bulkMetrics.repairs, table, n)
 		}
 	}
 	// Report rows a previous-minor delete leaves behind are not this pass's:
