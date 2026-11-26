@@ -56,6 +56,7 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 	}
 	r := newInstallRun(rt, e.Options.DryRun)
 	registerSecrets(rt.Events, e.Options)
+	registerKubeconfigSecrets(rt.Events)
 	if err := r.start(installTarget(e.Options)); err != nil {
 		return failedBeforeStart(rt, err)
 	}

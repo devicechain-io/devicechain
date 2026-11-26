@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime/debug"
 	"sync"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
@@ -104,7 +105,7 @@ func (p Presenter) run(ctx context.Context, e installflow.Engine, req installflo
 	// A nil responder: --yes settles what it settles, and every other prompt is
 	// unavailable. Nothing here holds stdin.
 	broker := installflow.NewBroker(hub, nil, req.AssumeYes)
-	sum, err := hub.Run(ctx, e, req, installflow.Runtime{
+	sum, err := runRecovering(ctx, hub, e, req, installflow.Runtime{
 		Prompts: broker, Preflight: preflight, Console: con,
 		// The console is only ever log lines here, so the tool may run in the mode
 		// that lets the engine report measured progress.
@@ -115,6 +116,36 @@ func (p Presenter) run(ctx context.Context, e installflow.Engine, req installflo
 		err = errIncomplete
 	}
 	return err, sink.failure()
+}
+
+// runRecovering is hub.Run with an engine panic returned as an error.
+//
+// 🔴 A PANIC STILL ENDS IN THE ONE VERDICT, AND THE EXIT AGREES WITH IT. hub.Run
+// queues a failed summary and panics on. Left to unwind, the panic would skip the
+// wait for that summary to be written — the stream could end without its last line
+// — and the process would exit 2, where the summary says 1. Recovered here, the
+// caller waits for the summary like any other run's and returns an error, so the
+// command exits 1. The panic's value and stack go to stderr with that error: it is
+// a bug, and the person reading stderr needs both to report it.
+func runRecovering(ctx context.Context, hub *installflow.Hub, e installflow.Engine, req installflow.Request,
+	rt installflow.Runtime) (sum installflow.Summary, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			sum, err = installflow.Summary{}, &PanicError{Value: p, Stack: debug.Stack()}
+		}
+	}()
+	return hub.Run(ctx, e, req, rt)
+}
+
+// PanicError is an engine panic, recovered so the stream could close.
+type PanicError struct {
+	Value any
+	Stack []byte
+}
+
+func (p *PanicError) Error() string {
+	return fmt.Sprintf("dcctl failed unexpectedly (a panic: %v). This is a bug in dcctl; please report it "+
+		"with the stack below.\n\n%s", p.Value, p.Stack)
 }
 
 // Refuse writes the stream of a command refused before its run could start: a

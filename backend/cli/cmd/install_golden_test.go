@@ -80,7 +80,21 @@ const (
 	engineFakeOK
 	// engineFakeErr records the options and fails.
 	engineFakeErr
+	// engineFakeExitStatus records the options and fails with an error that names an
+	// exit status of its own, as a wrapped *exec.ExitError of a killed child does.
+	engineFakeExitStatus
+	// engineFakePanic records the options and panics.
+	engineFakePanic
+	// engineFakeReadsStdin records the options, then fails if anything can be read
+	// from os.Stdin, as a kubeconfig exec plugin handed it would.
+	engineFakeReadsStdin
 )
+
+// fakeExitStatus is an error naming its own exit status, as *exec.ExitError does.
+type fakeExitStatus struct{}
+
+func (fakeExitStatus) Error() string { return "kind create cluster: signal: interrupt" }
+func (fakeExitStatus) ExitCode() int { return 255 }
 
 type installScenario struct {
 	name string
@@ -91,7 +105,10 @@ type installScenario struct {
 	// kubeContext, when set, gives the child a kubeconfig holding exactly that context
 	// (pointing at an unreachable server). Otherwise the kubeconfig is empty.
 	kubeContext string
-	engine      goldenEngine
+	// kubeconfig, when set, is the child's kubeconfig file verbatim, in place of the one
+	// kubeContext builds.
+	kubeconfig string
+	engine     goldenEngine
 	// unpinned leaves this build without a pinned image version, as `make build` does.
 	unpinned bool
 }
@@ -161,6 +178,50 @@ var installScenarios = []installScenario{
 	// stderr: stdout is the stream's alone.
 	{name: "json-plan-compact-ha", args: []string{"install", "local", "--compact", "--ha", "--skip-preflight",
 		"--output=json"}, engine: engineFakeOK},
+
+	// A failure that names an exit status of its own (a killed kind child) still exits 1,
+	// in both formats: the stream's verdict, and what text output has always exited.
+	{name: "engine-exit-status", args: []string{"install", "local", "--skip-preflight", "--yes"},
+		engine: engineFakeExitStatus},
+	{name: "json-engine-exit-status", args: []string{"install", "local", "--skip-preflight", "--yes", "-o", "json"},
+		engine: engineFakeExitStatus},
+	// --help with --output json is help, on stderr: stdout carries events or nothing.
+	{name: "json-help", args: []string{"install", "local", "--output", "json", "--help"}},
+	// A "y" on stdin that nothing in the run can read: the engine looks, and finds EOF.
+	{name: "json-stdin-unreadable", args: []string{"install", "local", "--skip-preflight", "--yes", "-o", "json"},
+		stdin: "y\n", engine: engineFakeReadsStdin},
+}
+
+// installCheckScenarios run in a child like installScenarios but have no golden: what
+// they print holds a path in a temporary directory, or a goroutine stack. The tests
+// that run them hold them to properties instead.
+var installCheckScenarios = []installScenario{
+	// A kubeconfig client-go refuses, with credentials client-go's reason would quote.
+	{name: "kubeconfig-duplicate-users", args: []string{"install", "local", "--kube-context", "prod"},
+		kubeconfig: canaryKubeconfig},
+	{name: "kubeconfig-duplicate-users-engine", args: []string{"install", "local", "--kube-context", "prod",
+		"--skip-preflight"}, kubeconfig: canaryKubeconfig},
+	{name: "json-kubeconfig-duplicate-users", args: []string{"install", "local", "--kube-context", "prod",
+		"-o", "json"}, kubeconfig: canaryKubeconfig},
+	{name: "json-kubeconfig-duplicate-users-engine", args: []string{"install", "local", "--kube-context", "prod",
+		"--skip-preflight", "-o", "json"}, kubeconfig: canaryKubeconfig},
+	// An engine panic: the stream still ends with its summary, and the exit agrees.
+	{name: "json-engine-panic", args: []string{"install", "local", "--skip-preflight", "--yes", "-o", "json"},
+		engine: engineFakePanic},
+}
+
+// installScenario returns the scenario named name, from either list.
+func findInstallScenario(t *testing.T, name string) installScenario {
+	t.Helper()
+	for _, list := range [][]installScenario{installScenarios, installCheckScenarios} {
+		for _, s := range list {
+			if s.name == name {
+				return s
+			}
+		}
+	}
+	t.Fatalf("no scenario %q", name)
+	return installScenario{}
 }
 
 // TestInstallGoldens is the parent: it runs each scenario in a child and compares what
@@ -255,9 +316,13 @@ func runInstallChildRaw(t *testing.T, sc installScenario) childResult {
 	if d := os.Getenv("GOCOVERDIR"); d != "" {
 		env = append(env, "GOCOVERDIR="+d)
 	}
-	if sc.kubeContext != "" {
+	if sc.kubeContext != "" || sc.kubeconfig != "" {
+		content := sc.kubeconfig
+		if content == "" {
+			content = goldenKubeconfig(sc.kubeContext)
+		}
 		kc := filepath.Join(tmp, "kubeconfig")
-		if err := os.WriteFile(kc, []byte(goldenKubeconfig(sc.kubeContext)), 0o600); err != nil {
+		if err := os.WriteFile(kc, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		env = append(env, installGoldenKubeEnv+"="+kc)
@@ -357,9 +422,11 @@ func TestInstallGoldenChild(t *testing.T) {
 		return
 	}
 	var sc *installScenario
-	for i := range installScenarios {
-		if installScenarios[i].name == name {
-			sc = &installScenarios[i]
+	for _, list := range [][]installScenario{installScenarios, installCheckScenarios} {
+		for i := range list {
+			if list[i].name == name {
+				sc = &list[i]
+			}
 		}
 	}
 	if sc == nil {
@@ -385,11 +452,21 @@ func TestInstallGoldenChild(t *testing.T) {
 	installStreamClock = testkit.NewManualClock(installGoldenTime)
 
 	switch sc.engine {
-	case engineFakeOK, engineFakeErr:
+	case engineFakeOK, engineFakeErr, engineFakeExitStatus, engineFakePanic, engineFakeReadsStdin:
 		installEngine = func(_ context.Context, p bootstrap.Provider, opts bootstrap.InstallOptions) error {
 			recordGoldenPlan(p, opts)
-			if sc.engine == engineFakeErr {
+			switch sc.engine {
+			case engineFakeErr:
 				return fmt.Errorf("the fake engine failed")
+			case engineFakeExitStatus:
+				return fmt.Errorf("creating kind cluster %q: %w", "devicechain", fakeExitStatus{})
+			case engineFakePanic:
+				panic("the fake engine panicked")
+			case engineFakeReadsStdin:
+				b := make([]byte, 16)
+				if n, err := os.Stdin.Read(b); n > 0 || err == nil {
+					return fmt.Errorf("the engine read %q from stdin", b[:n])
+				}
 			}
 			return nil
 		}

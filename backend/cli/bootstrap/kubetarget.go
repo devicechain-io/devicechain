@@ -80,9 +80,9 @@ type kubeTarget struct {
 // and records the identity of the cluster dcctl's own clients reach for it.
 func freezeKubeTarget(kubeContext string) (kubeTarget, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
-	raw, err := rules.Load()
+	raw, err := loadKubeconfig(rules)
 	if err != nil {
-		return kubeTarget{}, fmt.Errorf("reading the kubeconfig: %w", err)
+		return kubeTarget{}, err
 	}
 	name := kubeContext
 	if name == "" {
@@ -143,9 +143,9 @@ func resolveKubePin(target kubeTarget, mergedDir string) (kubePin, error) {
 	}
 
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
-	raw, err := rules.Load()
+	raw, err := loadKubeconfig(rules)
 	if err != nil {
-		return kubePin{}, fmt.Errorf("reading the kubeconfig: %w", err)
+		return kubePin{}, err
 	}
 	ctxName := target.Context
 	if _, ok := raw.Contexts[ctxName]; !ok {
@@ -198,9 +198,8 @@ func resolveKubePin(target kubeTarget, mergedDir string) (kubePin, error) {
 
 	// The fail-closed check, on the artifact tofu will be handed: load exactly that file
 	// and context and compare with the cluster the client reaches.
-	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		&clientcmd.ClientConfigLoadingRules{ExplicitPath: pin.Path},
-		&clientcmd.ConfigOverrides{CurrentContext: pin.Context}).ClientConfig()
+	cfg, err := clientConfig(&clientcmd.ClientConfigLoadingRules{ExplicitPath: pin.Path},
+		&clientcmd.ConfigOverrides{CurrentContext: pin.Context})
 	if err != nil {
 		pin.release()
 		return kubePin{}, fmt.Errorf("loading kubeconfig %s context %q: %w", pin.Path, pin.Context, err)

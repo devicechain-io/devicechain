@@ -149,6 +149,10 @@ READERS = [
     # internal/installtui/brand/brand_test.go: the freshness check regenerates the committed logo
     # cells from the mark's source SVG and fails when they are stale.
     ("backend/cli", "internal/installtui/brand", ["branding/logos/symbol.svg"], [], "internal/installtui/brand/brand_test.go"),
+    ("backend/cli", "internal/installjson", [
+        "docs/docs/reference/install-events.md",
+        "docs/i18n/*/docusaurus-plugin-content-docs/current/reference/install-events.md",
+    ], [], "internal/installjson/docs_fields_test.go: the event stream page's field names, every locale"),
     ("backend/cli", "attr", ["backend/services/device-management/graphql/**"], [], "attr/documents_test.go:38"),
     ("backend/cli", "bulkchange", ["backend/services/device-management/graphql/**"], [], "bulkchange/documents_test.go:16"),
     ("backend/cli", "product", [SDL], [], "product/documents_test.go:32"),
