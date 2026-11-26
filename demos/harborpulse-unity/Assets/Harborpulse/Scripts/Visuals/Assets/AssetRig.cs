@@ -74,13 +74,19 @@ namespace DeviceChain.Harborpulse.Visuals
                 }
             }
         }
-        public static void Tag(string text, Transform parent, Vector3 at, float size = 0.12f, Color? colour = null)
+        /// <summary>
+        /// Writes a tag in the world. <paramref name="engineer"/> marks one that names a source or a rule key: it is drawn only with
+        /// the engineer overlay (see <see cref="WorldTags"/>). Every tag is registered, so a render's text audit can list what a frame drew.
+        /// </summary>
+        public static MeshRenderer Tag(string text, Transform parent, Vector3 at, float size = 0.12f, Color? colour = null, bool engineer = false)
         {
             var t = Node(text, parent, at); t.localRotation = Quaternion.Euler(0, 180, 0);
             var m = t.gameObject.AddComponent<TextMesh>(); m.text = text; m.characterSize = size; m.fontSize = 36;
             m.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             t.GetComponent<MeshRenderer>().sharedMaterial = m.font.material;
             m.anchor = TextAnchor.MiddleCenter; m.color = colour ?? new Color(0.78f, 0.85f, 0.90f);
+            var renderer = t.GetComponent<MeshRenderer>(); WorldTags.Register(m, renderer, engineer);
+            return renderer;
         }
     }
 }

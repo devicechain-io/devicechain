@@ -71,26 +71,18 @@ const (
 	localRegistryImage = "registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2"
 )
 
-// doing prints a white "doing…" progress line (house style).
-func doing(msg string) {
-	fmt.Print(color.WhiteString("%s... ", msg))
-}
+// doing prints a white "doing…" progress line (house style) on the process's own
+// stdout. Code an install engine runs prints through out(ctx) instead; see console.
+func doing(msg string) { stdConsole.doing(msg) }
 
 // done prints a green "done." after a doing() line.
-func done() {
-	fmt.Println(color.GreenString("done."))
-}
+func done() { stdConsole.done() }
 
 // fail prints a red "failed." after a doing() line and wraps the error.
-func fail(what string, err error) error {
-	fmt.Println(color.RedString("failed."))
-	return fmt.Errorf("%s: %w", what, err)
-}
+func fail(what string, err error) error { return stdConsole.fail(what, err) }
 
 // wouldDo prints what a step WOULD do under --dry-run.
-func wouldDo(msg string) {
-	fmt.Println(color.YellowString("[dry-run] would %s", msg))
-}
+func wouldDo(msg string) { stdConsole.wouldDo(msg) }
 
 // stepRenderConfig generates per-instance values into State. This step actually
 // populates state (namespace, generated DB password, resolved profile) so later
@@ -961,14 +953,7 @@ func stepHelmInstall(ctx context.Context, st *State) error {
 // progress to stdout: it prints a heading, runs the work, then prints a final
 // indented status line so the noisy sub-tool output is bracketed cleanly.
 func runStreamed(heading, label string, work func() error) error {
-	fmt.Println(color.WhiteString("%s:", heading))
-	if err := work(); err != nil {
-		return fail(label, err)
-	}
-	fmt.Print("  ")
-	doing(label)
-	done()
-	return nil
+	return stdConsole.runStreamed(heading, label, work)
 }
 
 // stepWaitReady blocks until every area's Deployment has rolled onto the template
@@ -1153,23 +1138,23 @@ func waitForAreas(ctx context.Context, typed kubernetes.Interface, ns string, ti
 // is not disaster recovery, because it dies with the cluster it lives in. Those two
 // facts are easy to hold at once and almost impossible to infer, so the report says
 // both.
-func printBackups(subject string, enabled, offsite bool) {
+func printBackups(c console, subject string, enabled, offsite bool) {
 	switch {
 	case !enabled:
-		fmt.Printf("  %s %s\n",
+		c.printf("  %s %s\n",
 			color.WhiteString("Backups:"),
 			color.YellowString("NONE — no WAL archiving and no base backups for %s, so no point-in-time restore is possible", subject))
 	case offsite:
-		fmt.Printf("  %s %s\n",
+		c.printf("  %s %s\n",
 			color.WhiteString("Backups:"),
 			color.GreenString("WAL archiving + scheduled base backups, to storage outside this cluster"))
 	default:
-		fmt.Printf("  %s %s\n",
+		c.printf("  %s %s\n",
 			color.WhiteString("Backups:"),
 			color.GreenString("WAL archiving + scheduled base backups, to an object store IN THIS CLUSTER"))
-		fmt.Printf("           %s\n",
+		c.printf("           %s\n",
 			color.YellowString("this is point-in-time recovery, NOT disaster recovery — the backups share the cluster's"))
-		fmt.Printf("           %s\n",
+		c.printf("           %s\n",
 			color.YellowString("failure domain and are lost with it. Off-site backups are set by `dcctl install --backup-credentials-file`."))
 	}
 }
@@ -1278,7 +1263,7 @@ func stepReport(ctx context.Context, st *State) error {
 			st.Values[databaseBackupOffsiteKey] = strconv.FormatBool(backupsAreExternal(st))
 		}
 	}
-	printBackups("this instance", st.Values[databaseBackupsKey] == "true", st.Values[databaseBackupOffsiteKey] == "true")
+	printBackups(out(ctx), "this instance", st.Values[databaseBackupsKey] == "true", st.Values[databaseBackupOffsiteKey] == "true")
 	// The archive path each store OWNS — which is the INPUT to the next restore.
 	//
 	// Printed only when it is not the default, because that is exactly when an

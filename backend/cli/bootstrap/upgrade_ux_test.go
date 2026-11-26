@@ -193,7 +193,7 @@ func TestReportInstallOnAClusterWithInstancesPrintsTheUpgradeNextStep(t *testing
 	writeRecord(t, InstanceRecord{Instance: "other", Provider: "local", KubeContext: "elsewhere", CreatedAt: time.Now()})
 	st := &State{KubeContext: "prod-eu", ClusterUID: "u1", ImageRegistry: "localhost:5000", ImageVersion: "0.24.0-drill.1",
 		Binding: ClusterBinding{KubeContext: "prod-eu"}}
-	out := captureOutput(t, func() { reportInstall(st, "local") })
+	out := captureOutput(t, func() { reportInstall(stdConsole, st, "local") })
 	for _, want := range []string{
 		"2 instances (alpha, beta)",
 		"dcctl upgrade local alpha --kube-context prod-eu --registry localhost:5000 --version 0.24.0-drill.1 --dry-run",
@@ -220,7 +220,7 @@ func TestReportInstallNamesThePublishedReleaseAndSkipsATeardown(t *testing.T) {
 	}
 	st := &State{KubeContext: "kind-devicechain", ImageRegistry: DefaultImageRegistry, ImageVersion: "v0.23.0",
 		Binding: ClusterBinding{KubeContext: "kind-devicechain", Managed: true}}
-	out := captureOutput(t, func() { reportInstall(st, "local") })
+	out := captureOutput(t, func() { reportInstall(stdConsole, st, "local") })
 	if want := "dcctl upgrade local alpha --registry " + DefaultImageRegistry + " --version v0.23.0 --dry-run"; !strings.Contains(out, want) {
 		t.Errorf("missing %q in:\n%s", want, out)
 	}
@@ -233,7 +233,7 @@ func TestReportInstallOnAFreshClusterStillPointsAtBootstrap(t *testing.T) {
 	fakeHome(t)
 	writeRecord(t, InstanceRecord{Instance: "other", Provider: "local", KubeContext: "elsewhere", CreatedAt: time.Now()})
 	st := &State{KubeContext: "kind-devicechain", Binding: ClusterBinding{KubeContext: "kind-devicechain", Managed: true}}
-	out := captureOutput(t, func() { reportInstall(st, "local") })
+	out := captureOutput(t, func() { reportInstall(stdConsole, st, "local") })
 	if !strings.Contains(out, "Next: build an instance") || strings.Contains(out, "dcctl upgrade") {
 		t.Errorf("unexpected next step:\n%s", out)
 	}

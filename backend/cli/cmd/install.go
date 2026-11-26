@@ -4,9 +4,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"os"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/installplain"
 	"github.com/spf13/cobra"
 )
 
@@ -378,29 +382,45 @@ the cluster, with one exception: the connection budget may be raised.`,
 			}
 		}
 
-		if !installSkipPreflight {
-			doctorOptions := doctorOptsFor(installKubeContext, installCluster, installBuild)
-			doctorOptions.FullSizeInstall = !installCompact
-			if d := runDoctor(args[0], doctorOptions); d.fails > 0 {
-				return fmt.Errorf("%d preflight check(s) failed — fix the items above, or re-run with --skip-preflight", d.fails)
-			}
-		}
+		doctorOptions := doctorOptsFor(installKubeContext, installCluster, installBuild)
+		doctorOptions.FullSizeInstall = !installCompact
 
 		installMQTTGatewayGiven = cmd.Flags().Changed("mqtt-gateway")
 		opts, err := installOptions(backupDestination, restorePlan, imageSource)
 		if err != nil {
+			// 🔴 THESE REFUSALS HAVE ALWAYS COME AFTER THE PREFLIGHT, and a failed
+			// preflight has always taken precedence over them. The run never starts,
+			// so the preflight is run here, printed as it always was.
+			if !installSkipPreflight {
+				if d := runDoctor(args[0], doctorOptions); d.fails > 0 {
+					return bootstrap.ErrPreflightFailed(d.fails)
+				}
+			}
 			return err
 		}
-		return installEngine(cmd.Context(), provider, opts)
+		return runInstallEngine(cmd.Context(), &bootstrap.InstallEngine{
+			Provider: provider, Options: opts, SkipPreflight: installSkipPreflight, Cluster: installEngine,
+		}, doctorRunner(args[0], doctorOptions))
 	},
 	SilenceUsage: true,
 }
 
-// installEngine is what RunE hands the settled options to: bootstrap.Install, held in a
-// variable so the characterisation goldens (install_golden_test.go) can stand a recording
-// fake in for the cluster work and pin what the command layer prints and decides on its
-// own. Production never reassigns it.
+// installEngine is the cluster work the install engine runs after its preflight:
+// bootstrap.Install, held in a variable so the characterisation goldens
+// (install_golden_test.go) can stand a recording fake in for it and pin what the command
+// layer and the engine's own first stages print and decide. Production never reassigns it.
 var installEngine = bootstrap.Install
+
+// runInstallEngine runs an install through the plain presenter: today's output, on the
+// process's own streams, with the kind-cluster prompt answered from stdin.
+func runInstallEngine(ctx context.Context, e *bootstrap.InstallEngine, preflight installflow.PreflightRunner) error {
+	if ctx == nil { // RunE called directly, as tests do, rather than through Execute
+		ctx = context.Background()
+	}
+	return installplain.Presenter{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin}.Run(ctx, e,
+		installflow.Request{Operation: installflow.OperationInstall, DryRun: e.Options.DryRun, AssumeYes: e.Options.AssumeYes},
+		preflight)
+}
 
 func installRelationalWALFromArgv() *int {
 	if installRelationalWALGiven == nil || !*installRelationalWALGiven {

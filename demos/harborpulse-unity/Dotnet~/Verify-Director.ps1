@@ -22,6 +22,7 @@ $env:MSBUILDDISABLENODEREUSE = '1'
 <Project>
   <Import Project="$repo/demos/harborpulse-unity/Dotnet~/Directory.Build.props" Condition="'`$(MSBuildProjectName)' == 'DeviceChain.Harborpulse.Model' Or '`$(MSBuildProjectName)' == 'DeviceChain.Harborpulse.Tests'" />
   <Import Project="$repo/demos/shared/io.devicechain.demo-platform/Dotnet~/Directory.Build.props" Condition="'`$(MSBuildProjectName)' == 'DeviceChain.Demos.Core'" />
+  <Import Project="$repo/demos/shared/io.devicechain.demo-hud/Dotnet~/Directory.Build.props" Condition="'`$(MSBuildProjectName)' == 'DeviceChain.Demos.Hud.Model'" />
   <Import Project="$repo/sdks/csharp/Directory.Build.props" Condition="'`$(MSBuildProjectName)' == 'DeviceChain.Sdk'" />
   <PropertyGroup>
     <BaseIntermediateOutputPath>$build/`$(MSBuildProjectName)/obj/</BaseIntermediateOutputPath>

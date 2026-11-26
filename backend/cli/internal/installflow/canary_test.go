@@ -42,6 +42,12 @@ func leakEverywhere(t *testing.T, register bool) []byte {
 		params[i] = installflow.Param{Name: "p", Value: text(i)}
 	}
 	must(t, f.hub.Emit(installflow.Event{Step: "a", Attempt: 1, Payload: installflow.StepStarted{Message: "m", Params: params}}))
+	// A host tool's output can reach a preflight observation's text.
+	for i := range canaries {
+		must(t, f.hub.Emit(installflow.Event{Step: "a", Attempt: 1, Payload: installflow.PreflightObservation{
+			Observation: installflow.ObserveCheck, Verdict: installflow.CheckWarn,
+			Text: text(i), Highlight: text(i + 1), Fix: text(i + 2)}}))
+	}
 
 	w, err := f.hub.LogWriter("a", "tool", installflow.LogInfo)
 	must(t, err)

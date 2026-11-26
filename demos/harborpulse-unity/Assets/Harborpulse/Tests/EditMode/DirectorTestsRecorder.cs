@@ -79,7 +79,8 @@ namespace DeviceChain.Harborpulse.Tests
             var reader = new RecordingReader(new StringReader(o.ToString()), new StringReader(w.ToString()), new StringReader(d.ToString()), new StringReader(c.ToString()));
             Assert.That(reader.Seek(3).VisibleCaption("4"), Is.EqualTo("next"));
             var cut = DirectorKit.Story().Cuts.Single(x => x.Id == "c90");
-            Assert.That(reader.SeekCut(cut, 10.1).Consumed, Does.Contain(early.EventKey));
+            // the short cut's first evening shot starts 10.5 s in; the day before it is skipped, and consumed silently
+            Assert.That(reader.SeekCut(cut, 11).Consumed, Does.Contain(early.EventKey));
         }
     }
 }

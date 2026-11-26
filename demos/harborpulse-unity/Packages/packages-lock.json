@@ -178,6 +178,14 @@
         "com.unity.modules.physics": "1.0.0"
       }
     },
+    "io.devicechain.demo-hud": {
+      "version": "file:../../shared/io.devicechain.demo-hud",
+      "depth": 0,
+      "source": "local",
+      "dependencies": {
+        "com.unity.ugui": "2.5.0"
+      }
+    },
     "io.devicechain.demo-intro": {
       "version": "file:../../shared/io.devicechain.demo-intro",
       "depth": 0,

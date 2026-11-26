@@ -72,11 +72,19 @@ type attemptKey struct {
 	attempt int
 }
 
+type metricKey struct {
+	attemptKey
+	metric string
+}
+
 // VerifyStream checks a complete stream against the protocol's invariants:
 // one schema and run id; seq contiguous from 1; run.started first; exactly one
 // run.summary and it last; every step attempt started once (parent first,
 // attempts consecutive) and ended exactly once, with its progress inside it;
-// every prompt requested once and resolved once. It returns every violation.
+// every prompt requested once and resolved once. A count of actions — work a
+// tool reports done, unlike a readiness snapshot, which may go down — never
+// decreases within its attempt, never passes its total, and keeps its total
+// once one is reported. It returns every violation.
 func VerifyStream(envs []installflow.Envelope) error {
 	var errs []error
 	bad := func(i int, format string, args ...any) {
@@ -89,6 +97,7 @@ func VerifyStream(envs []installflow.Envelope) error {
 	lastAttempt := map[installflow.StepID]int{}
 	activeStep := map[installflow.StepID]bool{}
 	prompts := map[installflow.PromptID]bool{}
+	counts := map[metricKey]installflow.StepProgress{}
 	summaries := 0
 	for i, e := range envs {
 		if e.Schema != installflow.Schema {
@@ -126,6 +135,25 @@ func VerifyStream(envs []installflow.Envelope) error {
 		case installflow.StepProgress:
 			if !active[k] {
 				bad(i, "progress for %s attempt %d outside the attempt", e.StepID, e.Attempt)
+			}
+			if p.Unit == installflow.UnitActions {
+				mk := metricKey{k, p.MetricID}
+				if prev, seen := counts[mk]; seen {
+					if p.Current < prev.Current {
+						bad(i, "%s went back from %d to %d within attempt %d", p.MetricID, prev.Current, p.Current, e.Attempt)
+					}
+					if prev.Total != nil && (p.Total == nil || *p.Total != *prev.Total) {
+						bad(i, "%s changed its total within attempt %d", p.MetricID, e.Attempt)
+					}
+				}
+				if p.Total != nil && p.Current > *p.Total {
+					bad(i, "%s reports %d of %d", p.MetricID, p.Current, *p.Total)
+				}
+				counts[mk] = p
+			}
+		case installflow.PreflightObservation:
+			if !active[k] {
+				bad(i, "preflight observation for %s attempt %d outside the attempt", e.StepID, e.Attempt)
 			}
 		case installflow.StepFinished, installflow.StepFailed:
 			if !active[k] {

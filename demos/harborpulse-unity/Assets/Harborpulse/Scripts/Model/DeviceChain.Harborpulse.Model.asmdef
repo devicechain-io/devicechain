@@ -2,7 +2,8 @@
     "name": "DeviceChain.Harborpulse.Model",
     "rootNamespace": "DeviceChain.Harborpulse.Model",
     "references": [
-        "DeviceChain.Demos.Core"
+        "DeviceChain.Demos.Core",
+        "DeviceChain.Demos.Hud.Model"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

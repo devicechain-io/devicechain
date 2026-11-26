@@ -21,8 +21,9 @@ Their floor is independent of harbour datum: `wet_well_m` spans 0-4 m above the 
 
 Pump, charger, gauge, lamp and truck views apply one detached model snapshot per frame. Cards show
 observed values and ages, command states actually seen, start evidence, OTA outcome words, replacement
-readings and platform suppression evidence. Beacon identities survive severity changes; acknowledged
-alarms stay steady and a cleared alarm briefly shows a green tick. Missing readings remain missing.
+readings and platform suppression evidence. An alarm is a teardrop pin over its device on the story HUD
+(one a device, in its worst recorded severity, with a count); a severity change keeps the same pin, an
+acknowledged critical alarm stops breathing, and a cleared alarm cross-fades to a green tick. Missing readings remain missing.
 WORLD feeder, OTA and crew cues use cool white and blue-grey styling. Amber identifies platform alarms,
 coral identifies failures, green identifies confirmations and blue identifies flow.
 
@@ -35,7 +36,7 @@ coral identifies failures, green identifies confirmations and blue identifies fl
 | The water's height on each quay | the median of that quay's tide gauges' `water_level_m`, as the platform reports them, fresh readings only |
 | The waves, foam and rain | visual only, zero-mean; they follow the WORLD storm and never move the tide |
 | Pump water, current needle, impeller and outfall | observed `wet_well_m`, `pump_current_a`, `pump_running` and `flow_lps`; rotation and streak rate are visual mappings |
-| Alarm rings and counters | observed alarms, by device and alarm key, including acknowledgement and clear |
+| Alarm pins and their count badges | observed alarms, by device and alarm key, including severity, acknowledgement and clear |
 | Charger screen, cable and car | observed power/session and OTA evidence; connector glow is a visual mapping of reported temperature |
 | Truck placement and heading | observed WGS84 fixes, interpolated visually; no fix means depot placement with a "no fix" label |
 | Feeder fades, maintenance rings and crew | runner beats and declared plans, WORLD only |
@@ -103,7 +104,8 @@ Assets/Harborpulse/
   Scripts/Live/                  the read-only platform link: runner config, /status, the shared observer
   Scripts/Visuals/               composition, camera, sky, water, runtime grading and planar reflection
     Assets/                     procedural builders, shared named rigs and WORLD crew props
-    Views/                      snapshot views, persistent beacons and evidence cards
+    Views/                      snapshot views and evidence cards
+  Scripts/Hud/                   the story HUD, drawn with the shared demo HUD package (demos/HUD-DESIGN.md)
   Scripts/Editor/                Harborpulse > Build Scene, Harborpulse > Render Preview Stills
   Tests/EditMode/                the model's tests (also run by Dotnet~)
 Dotnet~/                         compiles Scripts/Model and runs Tests/EditMode with the dotnet SDK
@@ -605,6 +607,14 @@ visible: 16:9 water 43.5 %, sky 0 %, 36/37 devices (the truck is in its depot); 
   lamps go dark through the east feeder outage, a WORLD cue like `EastWindows` before.
 - **Frame stats.** `-hp-frame-stats` turns vsync off and logs the mean, 95th-percentile and worst frame time every
   10 s.
+  Each line also carries the sim hour, the scene's own tick in milliseconds (the number to read in an unfocused
+  Editor, which caps the frame itself near 50 ms), managed allocation per frame, and the tick split by part: link,
+  model, views, director, HUD, water.
+- **Per-frame work that does not grow with the day.** The director's platform reads are planned and dispatched
+  when the runner's status or a read's answer changed (`ReadPlanGate`), not every frame, and a frame in which no read
+  answered publishes a snapshot that reuses the reads and the alarm changes (`DirectorReadSnapshot.Observed`)
+  instead of copying them. Both used to cost more with every alarm the day raised. Each has a guard test in
+  `StoryPassTests`.
 
 ### Quay surfaces and prop clearance
 
@@ -1378,3 +1388,102 @@ was one sheet of streaks that repeated every few metres and wrapped: in light ra
 read as standing still or climbing.)
 
 A cleared alarm's green tick turns to the eye (`AlarmBeacons.TickYawDeg`), so it reads left to right from every side of its device.
+
+## Story pass: narrated cuts, the shared HUD and the frame check
+
+The two cuts are re-authored as one story (a storm night at Port Alder: the platform acts, notices an absence, puts the record
+back in order, then changes the fleet safely) and the HUD is rebuilt on the shared package
+[`demos/shared/io.devicechain.demo-hud`](../shared/io.devicechain.demo-hud); its design language is in
+[`demos/HUD-DESIGN.md`](../HUD-DESIGN.md).
+
+**The HUD.** A small top strip (`RECORDED · Port Alder · 17:37 · ×1.2`), a caption box at the top centre (never the bottom,
+where a video player writes its subtitles) that is as wide as its words and fades between lines, a chain card docked bottom
+right, teardrop alarm pins, and a three-level end card. It is drawn last, as a screen-space overlay after the scene's
+post-processing, on panels 94 % opaque (the end card 96 %, over a darkened frame). World markers are not drawn where a panel is.
+
+**The chain card** replaces the rail of boxes. A scenario trigger row is drawn apart; the platform's steps build under one
+`PLATFORM RECORD` header, each with the recorded seconds since the step above (`+1 s`, the platform's own latency, read from the
+records' instants and not scaled by a shot's rate); a number the sender counted keeps a `SENDER'S COUNT` mark. A row's text is
+written for a viewer and is at most 34 characters; a digit in a platform row is one its predicate bound (the loader refuses a
+literal one).
+
+**No engineer labels in a cut.** A tag written in the world is a viewer's ("Alarm level 2.5 m") or an engineer's
+("feeder down (WORLD)", "replacement (runner)", the attribute rule's key): `WorldText` holds both sets, `AssetRig.Tag` registers
+every tag, and an engineer's tag is drawn only with the engineer overlay (`E`). A render's `ui_text.txt` lists the world's tags as
+drawn (`world: ...`) beside the HUD's text, and a render that drew an engineer's tag exits 5. The spoked valve handwheel beside
+each pump house, which read as a crosshair glyph in every wide, is gone.
+
+**The cuts** (`storyboard.json`, `cuts`): 14 shots in the 90 s cut and 33 (31 beats) in the 5 min one. Each segment names its
+`chapter`; the loader's laws are a minimum shot length (4 s short, 5 s long), a dissolve only on a chapter's first shot (hard
+cuts inside a chapter), a move no longer than its shot, and a voice-over line that fits its shot with 0.6 s to spare. A segment
+may give its own `from`/`to` poses and a `push` (a slow dolly toward the look target that lasts the shot), a `cardDock`, and
+`endCard`. A chapter's `tag` takes the kicker's place for its first 2.5 s. `loopSeamS` dissolves the last seconds to the film's
+own first frame. A caption's `atS` is written from its line's start.
+
+**Voice-over** (`vo` on each segment): a line id, when it starts, and its takes, strongest first. A take names the claims it
+states (claim captions or platform chain rows of the segment's page) and, for a spoken number, the value the claim must have
+bound (`{"id": "absence-count", "bound": {"n": "6"}}`). The take that plays is the first whose every claim the recording supports
+by the recorded instant the line ends. The last take needs no claim and may not make the platform the subject of something it
+did (the loader's lint), so a line always has something true to say. The render writes `vo_cues.json` (line, take, start) for the
+audio assembly, and `frame_check.json` lists every line, every take, each claim's verdict and the records behind it.
+`-hp-vo-cues FILE` hands the renderer the takes an assembly plays; it decides every line again from the recording and refuses
+to render if a take is played while its claim is unmet, or a weaker take is played where the recording licenses a stronger one.
+`RecordedDayTool` does the same check from the command line (`HARBORPULSE_VO_CUES`), prints each line's take and why a stronger
+one failed, and explains any claim at any recorded second (`HARBORPULSE_EXPLAIN="7:all-buffered@950"`).
+
+**Claims added or repaired**, each with a control that removes or changes it (`ControlsChangeOnlyDeclaredEmittedOutputs`,
+`EachNewClaimsControlTakesItsLineToAFallback`):
+
+| Claim | What it reads | Control |
+| --- | --- | --- |
+| `absence-count`, `absence-notified` (page 6) | a `tally`: how many distinct devices have a recorded absence alarm, and how many of those alarms have a SENT notification. A count of what was recorded: no coverage is asked and no "only these" is said | `silence-north-lamp` makes the count seven; `smtp-sink-stopped` removes the notifications |
+| `all-buffered` (page 7) | an `atLeast` set: every time in the sender's ledger is read back from the platform at that time | `drop-backfill` |
+| `working` (page 8) | a fresh reading from the charger after its refusal (unchanged; the shot is now long enough for it) | `ota-failure-disabled` |
+| `airlock-notified` (page 4b) | a SENT notification for the air-lock alarm | `smtp-sink-stopped` |
+| `control-lamp-notified` (page 2) | the lamp with no maintenance window: its flicker alarm and a SENT notification triggered by that alarm | `smtp-sink-stopped` |
+| `window-open`, `well-rising`, `well-clear`, `silence-clear`, `targets` | the open window, a rising well reading in the last 12 s, the two clears, and how many chargers the rollout targets | the recorded-day controls |
+
+Why `all-buffered` never fired on a live day, and what changed: on both recorded days the platform held every buffered reading,
+plus one reading per charger taken at the outage's own first instant, which the sender's ledger does not list; and the
+measurement stream had a gap inside the outage. The claim was an exact set over a covered interval, which both refute. What the
+caption says ("Every buffered reading, stored at the time it was taken") needs only that every ledger time was read back, so the
+claim is now `atLeast`: each member is its own positive evidence, an extra record does not refute it and no coverage is asked.
+"Exactly these and nothing else" remains the exact form's, and is not said.
+
+Two things the old cuts hid are fixed with it. A claim on a page whose trigger had not yet been observed was never evaluated,
+and a trigger chosen later in the cut could license an earlier instant: a claim is now read without a trigger before any is
+observed, and a trigger is used only from the instant the recording holds it. And a scenario trigger row ("East Quay loses
+power") never drew on a live day, because its record is stamped at the instant its page's window opens and read a moment before:
+those rows now read from a little earlier.
+
+**The grade.** The town, the quays and the water are lifted by 0.35 stops at night and 0.2 under the storm
+(`DayLighting.NightStoryLift`, `StormStoryLift`); the sky is held back by exactly as much, so it is the sky it was.
+
+**The panel check.** A render samples its own frames: on the text-free margin of every opaque panel, in every frame, the pixel
+must be dark enough for the theme's text to hold 4.5:1 on it. `hud_check.json` reports the samples, the brightest background
+found and the worst contrast; a failing sample exits 6. `-hp-control-hud-in-scene` is its control: the HUD is drawn under the
+scene's post-processing, as it was, and a lamp's bloom over a panel must turn the check red.
+
+**Pins stay put.** A device that does not move has one pin anchor, taken once (`PinAnchors`), so its pin cannot drift or
+flip between places. The works truck is the one moving subject: its pin follows it, and the composition root now puts the
+truck in its final place for the frame before the HUD is drawn. (It used to be drawn between the truck view's easing toward the
+scenario's own coordinates and the map's placement, so the truck's pin stood off the truck and swung about as it drove.)
+
+**Rain is weather.** Streaks are translucent (30 %), under a pixel wide and about 40 cm long; how hard it rains is how many
+there are. The HUD is drawn after the scene, so no streak crosses a panel.
+
+**Frame statistics that see through a frame cap.** `-hp-frame-stats` now also logs, every ten seconds, the sim hour, the
+scene's own tick (model, views, director and HUD) in milliseconds, the player loop's time and the managed bytes a frame
+allocates. The Editor in the background runs at 20 frames a second whatever the scene costs, so its frame time says nothing
+there; these do. `HarborPlay.Enter` plays the scene in the Editor from a command line with the player's options:
+
+```bash
+Unity -projectPath demos/harborpulse-unity -executeMethod DeviceChain.Harborpulse.EditorTools.HarborPlay.Enter \
+  -dc-runner http://localhost:8090 -hp-frame-stats -logFile editor-play.log
+```
+
+```bash
+# both cuts over a recorded day: every caption's and line's fate (run from Dotnet~ after a Release build)
+HARBORPULSE_RECORDING=<day.ndjson or recording dir> HARBORPULSE_TRACE_DIR=<dir> \
+  dotnet test --no-build -c Release --filter "FullyQualifiedName~RecordedDayTool" --logger "console;verbosity=detailed"
+```
