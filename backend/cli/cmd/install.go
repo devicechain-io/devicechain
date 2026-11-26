@@ -101,7 +101,12 @@ the cluster, with one exception: the connection budget may be raised.`,
   dcctl install local --kube-context prod
   dcctl install local --kube-context prod --ha --dry-run`,
 	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) (err error) {
+		stream, err := beginInstallOutput(cmd.Flags())
+		if err != nil {
+			return err
+		}
+		defer func() { err = stream.end(cmd.Context(), err) }()
 		provider, err := bootstrap.Get(args[0])
 		if err != nil {
 			return err
@@ -141,14 +146,18 @@ the cluster, with one exception: the connection budget may be raised.`,
 var installEngine = bootstrap.Install
 
 // runInstallEngine runs an install through the plain presenter: today's output, on the
-// process's own streams, with the kind-cluster prompt answered from stdin.
+// process's own streams, with the kind-cluster prompt answered from stdin. With
+// --output json it runs through the event stream's presenter instead, which never
+// reads stdin.
 func runInstallEngine(ctx context.Context, e *bootstrap.InstallEngine, preflight installflow.PreflightRunner) error {
 	if ctx == nil { // RunE called directly, as tests do, rather than through Execute
 		ctx = context.Background()
 	}
+	if s := activeInstallStream; s != nil {
+		return s.run(ctx, e, preflight)
+	}
 	return installplain.Presenter{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin}.Run(ctx, e,
-		installflow.Request{Operation: installflow.OperationInstall, DryRun: e.Options.DryRun, AssumeYes: e.Options.AssumeYes},
-		preflight)
+		installRequest(e), preflight)
 }
 
 func init() {
@@ -221,6 +230,7 @@ func init() {
 			"service images are an instance's and are built by dcctl bootstrap --build")
 	installCmd.Flags().BoolVar(&installRemoveLegacy, "remove-legacy-ingress", false, "remove ingress-nginx from a cluster that still runs it. An install otherwise leaves it serving and installs Traefik beside it. Refused while any Ingress object in the cluster still names its class (each instance must first be moved with 'dcctl upgrade --drop-legacy-ingress'); on a local cluster Traefik takes the node's ports 80 and 443 in the same apply")
 	installCmd.Flags().StringVar(&installAWSNLB, "aws-nlb", "", "EKS: which ingress controllers' LoadBalancer Services get an AWS Network Load Balancer (service.beta.kubernetes.io/aws-load-balancer-type: nlb) instead of the Classic one a plain Service gets: traefik, nginx, all, or none (turns it off). Only a Network Load Balancer passes the client's address through, which the per-source rate limits and the trusted-proxy rule depend on. Left off, each controller's Service keeps what it has. A value that CHANGES an existing Service replaces its load balancer and so changes the hostname clients resolve: repoint DNS afterwards (the install says so). traefik alone leaves ingress-nginx's Service as it is, for a cluster mid-cutover")
+	installCmd.Flags().StringVarP(&installOutput, "output", "o", installOutputText, installOutputUsage)
 	installCmd.Flags().BoolVar(&installMQTTGateway, "mqtt-gateway", false, "open TCP 8883 on the ingress controller (Traefik) so an instance can serve MQTT over TLS to devices outside the cluster through its Gateway (dcctl bootstrap|upgrade --mqtt-exposure gateway). It publishes a NEW port on the controller's load balancer, so it is off unless asked for. The broker terminates TLS itself; the controller passes the connection through by SNI. Left off, the install keeps whatever the controller's Service has; --mqtt-gateway=false closes it")
 	installCmd.Flags().IntVar(&installMaxConnections, "max-connections", 0, "the relational store's connection budget (default 700 on a first install, and what the cluster has on a re-run). Each instance reserves (its relational services x 40) of it when bootstrapped; the default admits two default-profile instances")
 

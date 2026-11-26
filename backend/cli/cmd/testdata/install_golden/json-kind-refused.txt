@@ -1,0 +1,21 @@
+args: install local --skip-preflight -o json
+stdin: "y\n"
+exit: 1
+-- stdout (3343 bytes) --
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":1,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"run.started","payload":{"target":{"mode":"managed-kind","context":"kind-devicechain"},"dry_run":false,"manifest":[{"id":"install.inputs"},{"id":"install.preflight","optional":true},{"id":"install.cluster"},{"id":"install.claim"},{"id":"install.inspect"},{"id":"install.credentials"},{"id":"install.prepare"},{"id":"install.write-intent"},{"id":"install.operator"},{"id":"install.prerequisites"},{"id":"install.database-login"},{"id":"install.record"},{"id":"install.rdb-ready"},{"id":"install.summary","optional":true}]}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":2,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"step.started","step_id":"install.inputs","attempt":1,"payload":{"message":"install.inputs"}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":3,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"step.finished","step_id":"install.inputs","attempt":1,"payload":{"outcome":"unchanged","duration_ms":0}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":4,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"step.started","step_id":"install.preflight","attempt":1,"payload":{"message":"install.preflight"}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":5,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"step.finished","step_id":"install.preflight","attempt":1,"payload":{"outcome":"not_applicable","duration_ms":0}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":6,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"step.started","step_id":"install.cluster","attempt":1,"payload":{"message":"install.cluster"}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":7,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"prompt.requested","step_id":"install.cluster","payload":{"id":"prompt-1","prompt":"confirm","question":"install.create-kind-cluster","params":[{"name":"cluster","value":"devicechain"}]}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":8,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"prompt.resolved","step_id":"install.cluster","payload":{"id":"prompt-1","disposition":"unavailable"}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":9,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"step.failed","step_id":"install.cluster","attempt":1,"payload":{"code":"run.prompt-unavailable","retry":"permanent","remedy":"install.rerun-with-yes","cancelled":false,"effect":"none_observed","duration_ms":0}}
+{"schema":"dcctl.install.events/v1","run_id":"0123456789abcdef0123456789abcdef","seq":10,"time":"2026-11-26T12:00:00Z","elapsed_ms":0,"operation":"install","kind":"run.summary","payload":{"outcome":"failed","install_record":"not_read","readiness":"not_checked","claim":"not_claimed","failed_step":"install.cluster","partial_state":"none_observed"}}
+
+-- stderr (217 bytes) --
+Error: no kind cluster "devicechain", and it was not created (the prompt was declined, or there is no terminal to answer it); re-run with --yes to create it, or pass --kube-context to install into an existing cluster
+
+-- engine (11 bytes) --
+not called
+

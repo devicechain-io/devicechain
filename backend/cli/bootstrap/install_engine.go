@@ -55,6 +55,7 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 		return failedBeforeStart(rt, errors.New("install engine: no provider"))
 	}
 	r := newInstallRun(rt, e.Options.DryRun)
+	registerSecrets(rt.Events, e.Options)
 	if err := r.start(installTarget(e.Options)); err != nil {
 		return failedBeforeStart(rt, err)
 	}
@@ -107,6 +108,8 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 		if req.DryRun != resolved.DryRun || req.AssumeYes != resolved.AssumeYes {
 			return r.close(ctx, errors.New("install engine: the request and the install options disagree about --dry-run or --yes"))
 		}
+		// The files read here (an SMTP password, backup credentials) are new values.
+		registerSecrets(rt.Events, resolved)
 		opts = resolved
 	}
 
@@ -115,6 +118,30 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 		cluster = Install
 	}
 	return r.close(ctx, cluster(withRun(ctx, r), e.Provider, opts))
+}
+
+// registerSecrets tells the hub the secret values an install carries, so that
+// every text the run reports — tool output taken as log lines above all — is
+// redacted of them.
+//
+// 🔴 THIS IS DEFENCE IN DEPTH, NOT THE DEFENCE. Nothing the engine emits is meant
+// to hold these values in the first place; this is what still catches one when
+// a tool echoes it. A value too short to redact without redacting ordinary text
+// is skipped: the hub refuses it, and the producer-side rule still applies.
+func registerSecrets(events installflow.Reporter, opts InstallOptions) {
+	if events == nil {
+		return
+	}
+	a := opts.AlertRouting
+	values := []string{a.Webhook, a.WatchdogWebhook, a.SMTPPassword, a.Config}
+	if b := opts.BackupDestination; b != nil {
+		values = append(values, b.AccessKeyID, b.SecretAccessKey)
+	}
+	for _, v := range values {
+		if v != "" {
+			_ = events.AddSecret(v)
+		}
+	}
 }
 
 // failedBeforeStart closes a run that could not begin. The hub accepts a summary
@@ -235,9 +262,11 @@ type installRun struct {
 	effect installflow.EffectCertainty
 	// abandoned: the active attempt stopped waiting for an interrupted tool.
 	abandoned bool
-	last      installflow.StepID // the last stage entered
-	changed   bool               // some attempt may have changed something
-	applied   bool               // some attempt certainly changed something
+	// unanswered: the active attempt asked a question nobody could answer.
+	unanswered bool
+	last       installflow.StepID // the last stage entered
+	changed    bool               // some attempt may have changed something
+	applied    bool               // some attempt certainly changed something
 	// tools counts the tools running, abandoned ones included; toolStop is the
 	// graceful stop the last one started was given.
 	tools    int
@@ -318,7 +347,7 @@ func (r *installRun) enter(id installflow.StepID) {
 
 // beginAttemptLocked resets what the active attempt is known to have done.
 func (r *installRun) beginAttemptLocked() {
-	r.effect, r.abandoned = installflow.EffectNoneObserved, false
+	r.effect, r.abandoned, r.unanswered = installflow.EffectNoneObserved, false, false
 	if mutatingStage(r.step) {
 		r.raiseLocked(installflow.EffectMayHaveChanged)
 	}
@@ -469,6 +498,11 @@ func (r *installRun) confirmCreateCluster(ctx context.Context, cluster string) b
 		Params:        []installflow.Param{{Name: "cluster", Value: installflow.Text(cluster)}},
 		YesResolvable: true,
 	})
+	if errors.Is(err, installflow.ErrPromptUnavailable) {
+		r.mu.Lock()
+		r.unanswered = true
+		r.mu.Unlock()
+	}
 	return err == nil && ans.Confirmed
 }
 
@@ -531,6 +565,11 @@ func (r *installRun) close(ctx context.Context, err error) (installflow.Summary,
 				f.Effect = moreCertain(f.Effect, installflow.EffectMayHaveChanged)
 			case cancelled:
 				f.Code, f.Remedy = installflow.ErrorRunCancelled, installflow.RemedyRerunSameCommand
+			case r.unanswered:
+				// Asked before the change it was about, so the attempt's own effect
+				// stands: none_observed unless something before the question wrote.
+				f.Code, f.Remedy = installflow.ErrorPromptUnavailable, installflow.RemedyRerunWithYes
+				f.Retry = installflow.RetryPermanent
 			}
 			s.PartialState = moreCertain(s.PartialState, f.Effect)
 			r.emit(installflow.Event{Step: r.step, Attempt: r.attempt, Payload: f})

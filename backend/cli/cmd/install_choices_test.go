@@ -104,6 +104,10 @@ func TestInstallChoicesCobraRoundTrip(t *testing.T) {
 		{"empty repeatable", []string{"--alert-email=", "--database-node-selector=", "--database-toleration="}},
 	}
 	covered := map[string]bool{}
+	// How a run is shown is not a choice, so no plan carries it.
+	for _, name := range installchoice.PresentationFlags() {
+		covered[name] = true
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			args := append([]string{"local", "--skip-preflight"}, tc.args...)
