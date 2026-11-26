@@ -88,9 +88,30 @@ func startMinio(t *testing.T) (string, *s3.Client) {
 		Region: "us-east-1", BaseEndpoint: aws.String(endpoint), UsePathStyle: true,
 		Credentials: credentials.NewStaticCredentialsProvider(minioUser, minioPassword, ""),
 	})
-	_, err = admin.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: aws.String(minioBucket)})
-	require.NoError(t, err, "creating the bucket")
+	require.NoError(t, createBucketWhenReady(context.Background(), admin, minioBucket, time.Now().Add(60*time.Second)), "creating the bucket")
 	return endpoint, admin
+}
+
+// createBucketWhenReady creates the bucket, retrying while the server says it is not up yet.
+//
+// 🔴 WHY /minio/health/live IS NOT ENOUGH: it answers 200 as soon as the HTTP listener is up, while the
+// object layer behind it is still initialising, and every S3 call in that window is refused with
+// 503 XMinioServerNotInitialized ("Server not initialized yet, please try again"). The SDK's own
+// retries (three attempts, tens of milliseconds apart) finish inside the window on a loaded runner,
+// which failed the test in about 0.7 s at the bucket creation, before any upload ran. Only that
+// answer is retried: any other refusal (bad credentials, a bucket that cannot be created) fails at once.
+func createBucketWhenReady(ctx context.Context, admin *s3.Client, bucket string, deadline time.Time) error {
+	for {
+		_, err := admin.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)})
+		// The SDK wraps the code into its error text; the module does not import smithy-go directly.
+		if err == nil || !strings.Contains(err.Error(), "XMinioServerNotInitialized") {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("MinIO still not initialised at the deadline: %w", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // s3Env is the upload test env with its store replaced by the S3 backend against a fresh MinIO.

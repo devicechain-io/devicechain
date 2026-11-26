@@ -34,7 +34,6 @@ namespace DeviceChain.Harborpulse.Live
         DateTimeOffset otaNext, managementNext;
         bool otaBusy, managementBusy;
         string otaProblem, managementProblem, commandProblem, rolloutToken;
-        UnityWebRequest request;
         public RolloutEvidence Rollout { get; private set; }
         public IReadOnlyList<SuppressionEvidence> Suppressions { get; private set; } = Array.Empty<SuppressionEvidence>();
         public IReadOnlyList<HarborCommand> Commands { get; private set; } = Array.Empty<HarborCommand>();
@@ -146,7 +145,6 @@ namespace DeviceChain.Harborpulse.Live
                 var used = await broker.Get(ct);
                 var body = Write(w => { w.WriteString("query", query); w.WritePropertyName("variables"); using var doc = JsonDocument.Parse(variables); doc.RootElement.WriteTo(w); });
                 using var req = new UnityWebRequest(config.ApiOrigin.TrimEnd('/') + "/api/update-management/graphql", "POST");
-                request = req;
                 req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body)); req.downloadHandler = new DownloadHandlerBuffer(); req.timeout = 5;
                 req.SetRequestHeader("Content-Type", "application/json"); req.SetRequestHeader("Authorization", "Bearer " + used);
                 var done = new TaskCompletionSource<bool>();
@@ -154,7 +152,6 @@ namespace DeviceChain.Harborpulse.Live
                 op.completed += _ => done.TrySetResult(true);
                 if (op.isDone) done.TrySetResult(true);
                 await done.Task;
-                request = null;
                 ct.ThrowIfCancellationRequested();
                 if (req.responseCode == 401 && attempt == 0) { await broker.NotifyUnauthorized(used); continue; }
                 if (req.result != UnityWebRequest.Result.Success) throw new InvalidOperationException("update-management HTTP " + req.responseCode);
@@ -174,6 +171,7 @@ namespace DeviceChain.Harborpulse.Live
             using (var w = new Utf8JsonWriter(ms)) { w.WriteStartObject(); body(w); w.WriteEndObject(); }
             return Encoding.UTF8.GetString(ms.ToArray());
         }
-        public void Dispose() { stop.Cancel(); request?.Abort(); }
+        // No Abort: see DirectorReads.Dispose. The read in flight ends on its own 5 s timeout and its result is dropped.
+        public void Dispose() { stop.Cancel(); }
     }
 }

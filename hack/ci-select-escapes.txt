@@ -25,6 +25,7 @@ backend/cli/bootstrap/escrow.go
 backend/cli/bootstrap/escrow_test.go
 backend/cli/bootstrap/executor_apiserver_test.go
 backend/cli/bootstrap/fence_test.go
+backend/cli/bootstrap/install_progress_test.go
 backend/cli/bootstrap/install_test.go
 backend/cli/bootstrap/instances.go
 backend/cli/bootstrap/kube.go
@@ -187,6 +188,7 @@ backend/sims/dc-simulator/updater/mirror_test.go
 backend/sims/dc-simulator/updater/signature_test.go
 backend/sims/dc-simulator/updater/wire_internal_test.go
 backend/tools/apiprobe/baseline_test.go
+backend/tools/apiprobe/bulkchange_test.go
 backend/tools/apiprobe/documents_test.go
 backend/tools/apiprobe/entities_test.go
 backend/tools/apiprobe/readsweep_test.go

@@ -92,9 +92,9 @@ func TestFleetResolveI9I12OnPostgres(t *testing.T) {
 	}
 }
 
-// Force the resolve reader to observe AMBIGUOUS while another transaction has
-// already changed the row to CONFIRMED but not committed. PostgreSQL must
-// re-evaluate the conditional UPDATE after that transaction commits.
+// The ordered locking read waits behind uncommitted evidence. PostgreSQL must
+// re-evaluate its AMBIGUOUS candidate predicate after the evidence commits;
+// resolution must neither overwrite it nor insert a per-line verdict event.
 func TestFleetResolveLosesToEvidenceCASOnPostgres(t *testing.T) {
 	p := postedSettlementPG(t)
 	db := p.api.RDB.DB(p.ctx)
