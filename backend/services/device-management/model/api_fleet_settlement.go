@@ -568,46 +568,120 @@ func (api *Api) RunFleetSettlement(ctx context.Context, fast, due bool) error {
 	}
 	failed := 0
 	var last error
-	var lag time.Duration
-	measureLag := !due && api.fleetReconcilerLagDue()
 	for _, tenant := range tenants {
 		tenantCtx := core.WithTenant(ctx, tenant)
 		_, err := api.settleFleetLines(tenantCtx, fast, due)
-		if err == nil && measureLag {
-			var age time.Duration
-			age, err = api.FleetReconcilerLag(tenantCtx)
-			if age > lag {
-				lag = age
+		if !due {
+			now := time.Now()
+			if err == nil && api.fleetReconcilerLag.due(tenant, now) {
+				var age time.Duration
+				age, err = api.FleetReconcilerLag(tenantCtx)
+				api.fleetReconcilerLag.record(tenant, age, err == nil)
 			}
+			api.fleetReconcilerLag.seen(tenant, now)
 		}
 		if err != nil {
 			failed++
 			last = err
 		}
 	}
-	if measureLag && failed == 0 {
-		bulkMetrics.reconcilerLag.Set(lag.Seconds())
+	if !due {
+		if lag, ok := api.fleetReconcilerLag.max(time.Now()); ok {
+			bulkMetrics.reconcilerLag.Set(lag.Seconds())
+		}
 	}
 	return core.PassResult(len(tenants), failed, last)
 }
 
-// fleetReconcilerLagDue reports whether this pass measures the reconciler lag gauge, at most once
-// per fleetMetricsRefreshEvery on this replica: the cadence of every other bulk-change gauge.
+// fleetReconcilerLagForget is how long a tenant the fast tick stops visiting (its last open
+// operation closed) keeps its sample in the gauge. A tick reaches 100 tenants and a 5 s tick
+// therefore reaches 500 within 25 s, so a tenant still active is always revisited sooner.
+const fleetReconcilerLagForget = time.Minute
+
+// fleetReconcilerLagSamples is this replica's reconciler lag, sampled per tenant: each tenant is
+// measured at most once per fleetMetricsRefreshEvery, the cadence of every other bulk-change gauge,
+// and the gauge is the largest of the tenants' latest good samples.
 //
 // The settlement it gauges runs on every 5 s tick, and does not depend on this. The measurement
 // is the expensive part of a tick that settles nothing: FleetReconcilerLag joins all of a tenant's
 // retained reports (200 days of them) with all of its awaiting lines, which include every line a
 // deadline settled AMBIGUOUS, and the fast tick visits every tenant holding an open operation.
 // Its alert reads a 900 s threshold held for a minute, which a 15 s refresh does not move.
-func (api *Api) fleetReconcilerLagDue() bool {
-	state := &api.fleetReconcilerLag
-	state.Lock()
-	defer state.Unlock()
-	if !state.last.IsZero() && time.Since(state.last) < fleetMetricsRefreshEvery {
+//
+// 🔴 The gate is per tenant, not per pass. A tick visits at most 100 tenants from a rotating
+// cursor, so a single pass-wide gate could keep landing on the same batch and never measure the
+// others. And a tenant whose measurement fails keeps only its own previous sample: it does not
+// stop the gauge from moving for every other tenant. The failure still fails the pass.
+type fleetReconcilerLagSamples struct {
+	sync.Mutex
+	tenants map[string]*fleetReconcilerLagSample
+}
+
+type fleetReconcilerLagSample struct {
+	measuredAt, seenAt time.Time
+	lag                time.Duration
+	valid              bool
+}
+
+func (s *fleetReconcilerLagSamples) sample(tenant string) *fleetReconcilerLagSample {
+	if s.tenants == nil {
+		s.tenants = map[string]*fleetReconcilerLagSample{}
+	}
+	sample, ok := s.tenants[tenant]
+	if !ok {
+		sample = &fleetReconcilerLagSample{}
+		s.tenants[tenant] = sample
+	}
+	return sample
+}
+
+// due reports whether tenant is measured now, and if so stamps the attempt: a failing tenant is
+// retried at the same cadence, never on every tick.
+func (s *fleetReconcilerLagSamples) due(tenant string, now time.Time) bool {
+	s.Lock()
+	defer s.Unlock()
+	sample := s.sample(tenant)
+	if !sample.measuredAt.IsZero() && now.Sub(sample.measuredAt) < fleetMetricsRefreshEvery {
 		return false
 	}
-	state.last = time.Now()
+	sample.measuredAt = now
 	return true
+}
+
+func (s *fleetReconcilerLagSamples) record(tenant string, lag time.Duration, ok bool) {
+	s.Lock()
+	defer s.Unlock()
+	if ok {
+		sample := s.sample(tenant)
+		sample.lag, sample.valid = lag, true
+	}
+}
+
+func (s *fleetReconcilerLagSamples) seen(tenant string, now time.Time) {
+	s.Lock()
+	defer s.Unlock()
+	s.sample(tenant).seenAt = now
+}
+
+// max forgets tenants not visited for fleetReconcilerLagForget and returns the largest good
+// sample. With no tenant left it is zero; with tenants but no good sample yet it reports nothing,
+// and the gauge keeps its value.
+func (s *fleetReconcilerLagSamples) max(now time.Time) (time.Duration, bool) {
+	s.Lock()
+	defer s.Unlock()
+	var lag time.Duration
+	found := false
+	for tenant, sample := range s.tenants {
+		if now.Sub(sample.seenAt) > fleetReconcilerLagForget {
+			delete(s.tenants, tenant)
+			continue
+		}
+		if sample.valid {
+			found = true
+			lag = max(lag, sample.lag)
+		}
+	}
+	return lag, found || len(s.tenants) == 0
 }
 
 // FleetReconcilerLag measures outstanding report age within the caller's tenant.

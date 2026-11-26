@@ -82,7 +82,7 @@ type Api struct {
 	fleetExpiryCursor             fleetExpiryCursor
 	fleetDriver                   fleetDriverState
 	fleetMetrics                  fleetMetricsRefresh
-	fleetReconcilerLag            fleetMetricsRefresh
+	fleetReconcilerLag            fleetReconcilerLagSamples
 	fleetSettlementFastCursor     fleetSettlementCursor
 	fleetSettlementDeadlineCursor fleetSettlementCursor
 	fleetMaintenanceCursor        fleetMaintenanceCursor

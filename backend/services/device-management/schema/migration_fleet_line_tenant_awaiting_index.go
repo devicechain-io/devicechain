@@ -24,8 +24,12 @@ import (
 // Keyed (tenant_id, id) and partial on exactly the three conditions the read carries, so a page
 // reads the index entries it returns and the index holds only awaiting lines.
 //
-// No snapshot struct: it touches an index over named columns and no rows, and names the table
-// literally, as NewDeviceDisabledIndexSchema does. Re-runnable (IF NOT EXISTS; migrations run with
+// 🔴 NO SNAPSHOT STRUCT, deliberately, by this area's convention for index-only migrations, copied
+// from NewListOrderIndexesSchema (which states it in full) as NewDecoderHealthWindowIndexesSchema
+// and NewDeviceDisabledIndexSchema also follow it: one index over named columns, every name
+// written literally in the DDL below, which IS the snapshot, complete and frozen. A struct would
+// need a TableName() that bypasses this area's table prefix, and AutoMigrate on it would
+// re-assert columns this change has no business touching. Re-runnable (IF NOT EXISTS; migrations run with
 // UseTransaction:false and replay from the top) and not CONCURRENTLY, for the reason
 // NewListOrderIndexesSchema gives: a failed concurrent build leaves an INVALID index that the
 // replay's IF NOT EXISTS then skips forever. The plain build holds the table's write lock for its
