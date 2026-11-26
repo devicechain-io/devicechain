@@ -1,0 +1,23 @@
+DeviceChain - dcctl bootstrap - instance acme -
+kind-devicechain - v1.11.0
+\x1b[2m------------------------------------------------------------\x1b[m
+\x1b[1;34mEscrow receipt\x1b[m
+
+\x1b[32mRoot-key escrow written and checked:\x1b[m
+  \x1b[1m/home/op/.devicechain/escrow/acme-rootkey.escrow\x1b[m
+
+Copy this file off this machine now, and keep its passphrase
+somewhere else. Without both, a lost cluster cannot be
+recovered.
+
+> \x1b[7m[ ] I have stored the escrow file off this machine and its passphrase separately\x1b[m
+  \x1b[1;91mOff-site custody not confirmed.\x1b[m
+
+\x1b[2mThis is a reminder, not a backup test. To check the file\x1b[m
+\x1b[2mopens with its passphrase:\x1b[m
+  dcctl secrets escrow verify
+  /home/op/.devicechain/escrow/acme-rootkey.escrow
+  --instance acme --kube-context kind-devicechain
+
+\x1b[2m------------------------------------------------------------\x1b[m
+\x1b[2mSpace toggle - Enter continue - ?/F1 help\x1b[m

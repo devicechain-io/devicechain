@@ -1,0 +1,28 @@
+DeviceChain · dcctl bootstrap · instance acme ·
+kind-devicechain · v1.11.0
+────────────────────────────────────────────────────────────
+Instance ready
+
+Instance acme is ready.
+
+  Console       https://devicechain.local/admin/
+  Account       admin@devicechain.io
+  Password      shown once on the previous screen; also kept
+                in Secret dci-acme/dci-acme-superuser, key
+                password
+  Profile       default
+  Backups       nightly base backups, 7 days of WAL
+  Escrow        /home/op/.devicechain/escrow/acme-rootkey.es
+                crow (off-site custody confirmed)
+
+Next
+  Open the console, sign in as admin@devicechain.io, create
+  your first tenant, and change the password there.
+
+Equivalent command (template)
+  dcctl bootstrap local acme --cluster=devicechain
+  --escrow-passphrase-file=<file holding the escrow
+  passphrase> --yes
+
+────────────────────────────────────────────────────────────
+Enter/q exit · ?/F1 help
