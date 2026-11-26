@@ -433,6 +433,21 @@ one_arm() { # <arm> <run>
 
 [[ "$treatment" != capture || -n "${P1_NATS_URL:-}" ]] ||
   usage_err "the capture treatment publishes reports: set P1_NATS_URL (a port-forward to the broker), P1_NATS_USER and P1_NATS_PASSWORD (event-sources' login), and P1_NATS_CA (a PEM file; P1_NATS_SERVER_NAME, default dc-nats) when the broker serves TLS"
+# The caps arm fills the tenant's waiting-line cap exactly (2 x 10,000 against 20,000), so it needs the tenant
+# at zero waiting lines. A change the tenant seed leaves READY (the upgrade drill's never-started entity, on a
+# build that serves bulk changes) is one line too many and the second create is refused. Every non-terminal
+# change in P-1's own tenant is aborted first, by name, and the count is re-read.
+if [[ "$treatment" == caps ]]; then
+  open_changes="$(psql_q "SELECT token FROM \"device-management\".fleet_operations WHERE tenant_id = '$tenant' AND dispatch NOT IN ('DISPATCHED', 'ABORTED')")" ||
+    die "could not list the tenant's open bulk changes"
+  while read -r t; do
+    [[ -n "$t" ]] || continue
+    say "aborting $t, left open in the P-1 tenant: its lines count against the cap the caps arm fills"
+    "$apiprobe" bulkchange abort "${api[@]}" --url "$dm_url" --token "$t" >/dev/null || die "could not abort $t"
+  done <<<"$open_changes"
+  left="$(psql_q "SELECT count(*) FROM \"device-management\".fleet_operations WHERE tenant_id = '$tenant' AND dispatch NOT IN ('DISPATCHED', 'ABORTED')")"
+  [[ "$left" == 0 ]] || die "the P-1 tenant still has $left open bulk change(s); the caps arm would be refused"
+fi
 for i in $(seq 1 "$runs"); do
   one_arm baseline "$i"
   one_arm treatment "$i"
