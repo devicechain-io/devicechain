@@ -51,6 +51,37 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(reader.CheckpointTimes, Is.EqualTo(new double[] { 0, 60, 120, 180, 240 })); Assert.That(reader.Seek(120).Observed.Records.Count, Is.EqualTo(1));
             Assert.That(reader.Seek(180).Hash(), Is.EqualTo(reader.PlayTo(180).Hash())); Assert.That(reader.Seek(240).Observed.Records.Count, Is.EqualTo(2));
         }
+        // A frame reports the interval that continues the last one, every frame. Written row by row a day was 3.3 million rows (692 MB).
+        [Test]
+        public void ContiguousCoverageEveryFrameIsFewRowsAndReadsBackAsTheSameCoverage()
+        {
+            var o = new StringWriter(); var w = new StringWriter(); var d = new StringWriter(); var c = new StringWriter(); var recorder = new Recorder(o, w, d, c);
+            var reference = new ObservationStore();
+            // 20 s at 100 frames a second, two streams; the alarms stream has a gap at 13 s that ends at 14 s
+            for (var frame = 0; frame < 2000; frame++)
+            {
+                var t = frame / 100.0; var from = 6 + t / 60.0; var to = 6 + (t + 0.01) / 60.0;
+                foreach (var stream in new[] { "alarms", "measurements" })
+                {
+                    var covered = !(stream == "alarms" && t >= 13 && t < 14);
+                    var interval = new CoverageInterval("run", stream, from, to, !covered);
+                    reference.AddCoverage(interval); recorder.Coverage(t, interval);
+                    if (!covered) { /* a gap row is written beside the missing positive coverage */ }
+                }
+                recorder.Advance(t);
+            }
+            recorder.End();
+            var rows = o.ToString().Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries).Length;
+            Assert.That(rows, Is.LessThan(120), "4000 intervals are written as the few runs they make up");
+            var reader = new RecordingReader(new StringReader(o.ToString()), new StringReader(w.ToString()), new StringReader(d.ToString()), new StringReader(c.ToString()));
+            var read = reader.Seek(60).Observed;
+            foreach (var stream in new[] { "alarms", "measurements" })
+                foreach (var span in new[] { (6.0, 6.1), (6.1, 6.2), (6.21, 6.26), (6.0, 6.33), (6.0, 6.2) })
+                    Assert.That(read.Covers("run", stream, span.Item1, span.Item2), Is.EqualTo(reference.Covers("run", stream, span.Item1, span.Item2)), stream + " " + span);
+            // time never goes back: every row's wall second is at or after the one before it
+            var walls = o.ToString().Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => double.Parse(l.Split(new[] { "\"wallS\":" }, StringSplitOptions.None)[1].Split(',')[0], System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+            for (var i = 1; i < walls.Length; i++) Assert.That(walls[i], Is.GreaterThanOrEqualTo(walls[i - 1]));
+        }
         [Test]
         public void HashIgnoresInsertionFieldAndSetOrdering()
         {
