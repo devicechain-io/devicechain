@@ -4064,6 +4064,9 @@ report green over the release it exists to stop." ;;
   bc_captures "$baseline_src" && captures=true
   note "$baseline_tag: $protocol baseline; report capture: $captures"
 
+  # A prefix of this run's own, so the phase can be run again on the same instance (the trigger control may
+  # need a second try): the seed creates a profile, a type and devices under it, and tokens are unique.
+  bc_prefix="bcdrill$(date -u +%m%d%H%M%S)"
   mkdir -p "$bc_dir"
   rm -f "$bc_dir"/*
   trap bc_cleanup EXIT
@@ -4089,7 +4092,7 @@ report green over the release it exists to stop." ;;
 
   bc_tokens "$count" 5 0 >"$bc_dir/mode-writers"
   bc_tokens "$count" 5 1 >"$bc_dir/warm-writers"
-  token="$bc_prefix-$(date -u +%H%M%S)"
+  token="$bc_prefix-main"
   started="$("$apiprobe" bulkchange start "${bc_api[@]}" --url "$bc_new_url" --bulk "$bc_dir/bulk.json" \
     --token "$token" --value "bulk-$token" --rate 50 --settle-deadline 3600)" ||
     fail "the bulk change could not be planned, created and started through an upgraded pod"
@@ -4230,17 +4233,20 @@ bc_trigger_control() {
   kubectl --context "$kube_context" -n "$(instance_namespace)" wait --for=delete pod -l "$oldpod_label=$bc_copy" --timeout=120s >/dev/null 2>&1 || true
   bc_old_copy '[{"name":"PGOPTIONS","value":"-c devicechain.attr_protocol=1"}]'
   bc_forward "deployment/$bc_copy" "$((bc_port_old + 10))" 8080 "$bc_dir/forward-old-control.log"
+  local hot_rate="${DC_BC_HOT_RATE:-5}" hot_workers="${DC_BC_HOT_WORKERS:-32}"
+  [[ "$hot_rate" =~ ^[0-9]+$ && "$hot_rate" -ge 1 && "$hot_rate" -le 50 && "$hot_workers" =~ ^[0-9]+$ && "$hot_workers" -ge 1 ]] ||
+    fail "DC_BC_HOT_RATE must be 1..50 and DC_BC_HOT_WORKERS at least 1"
   bc_tokens "$count" 5 0 "$((count / 2))" >"$bc_dir/hot-devices"
-  token="$bc_prefix-h01-$(date -u +%H%M%S)"
+  token="$bc_prefix-h01"
   rm -f "$bc_dir/stop-hot"
   "$apiprobe" bulkchange oldwrite "${bc_api[@]}" --url "http://127.0.0.1:$((bc_port_old + 10))/graphql" --bulk "$bc_dir/bulk.json" \
-    --mode-devices "$bc_dir/hot-devices" --expect any --toggle --workers 32 \
+    --mode-devices "$bc_dir/hot-devices" --expect any --toggle --workers "$hot_workers" \
     --stop-file "$bc_dir/stop-hot" --out "$bc_dir/oldwrite-hot.json" >"$bc_dir/oldwrite-hot.log" 2>&1 &
   local p_hot=$!
   bc_pids+=("$p_hot")
   sleep 10
   "$apiprobe" bulkchange start "${bc_api[@]}" --url "$bc_new_url" --bulk "$bc_dir/bulk.json" --devices-file "$bc_dir/hot-devices" \
-    --token "$token" --value "h01-$token" --rate 5 --settle-deadline 3600 >/dev/null ||
+    --token "$token" --value "h01-$token" --rate "$hot_rate" --settle-deadline 3600 >/dev/null ||
     fail "the trigger control's bulk change could not be started"
   bc_wait "$token" dispatched 20m
   : >"$bc_dir/stop-hot"
@@ -4253,8 +4259,9 @@ bc_trigger_control() {
   bc_sql "$(bc_priors_sql "$token")" >"$bc_dir/priors-$token.rows" || fail "could not export the control's lines"
   "$apiprobe" bulkchange priors --rows "$bc_dir/priors-$token.rows" --key "$mode_key" --expect wrong ||
     fail "THE TRIGGER CONTROL DID NOT FAIL: with an unprotected writer setting and unsetting the key during every post,
-every recorded prior still matched. Either the race was never hit (a larger hot set or a slower rate makes
-it likelier; rerun), or the before-image check cannot see the hazard it exists for."
+every recorded prior still matched. Either the race was never hit (a slower DC_BC_HOT_RATE or more
+DC_BC_HOT_WORKERS makes it likelier; rerun the phase, it seeds afresh), or the before-image check cannot
+see the hazard it exists for."
   note "control: with an unprotected writer, at least one recorded prior is WRONG ✓ (the before-image check can fail, and the guard is what holds it)"
 }
 
