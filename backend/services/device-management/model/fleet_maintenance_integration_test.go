@@ -22,21 +22,12 @@ import (
 	"gorm.io/gorm"
 )
 
-func cleanupFleetMaintenancePost(t *testing.T, p *postPG) {
-	t.Helper()
-	t.Cleanup(func() {
-		_, err := p.api.AbortFleetOperation(p.ctx, p.op.Token, "test-cleanup")
-		require.NoError(t, err)
-	})
-}
-
 // I-19: one resolution note is shared with a surviving device. Deleting either
 // target clears the shared note while preserving both verdicts and provenance.
 func TestFleetI19PostgresErasureAndDisabledHookRepair(t *testing.T) {
 	for _, disabled := range []bool{false, true} {
 		t.Run(fmt.Sprint(disabled), func(t *testing.T) {
 			p := newPostPG(t, "secret-value")
-			cleanupFleetMaintenancePost(t, p)
 			for i := range p.lines {
 				_, err := p.api.PostFleetLine(p.ctx, p.op.ID, p.lines[i].ID, p.lease)
 				require.NoError(t, err)
@@ -83,7 +74,6 @@ func TestFleetI19PostgresErasureAndDisabledHookRepair(t *testing.T) {
 
 func TestFleetI19PostgresV19DeleteSQLRepair(t *testing.T) {
 	p := newPostPG(t, "v19")
-	cleanupFleetMaintenancePost(t, p)
 	_, err := p.api.PostFleetLine(p.ctx, p.op.ID, p.lines[0].ID, p.lease)
 	require.NoError(t, err)
 	fixture, err := os.ReadFile("testdata/v19_delete_device.sql")

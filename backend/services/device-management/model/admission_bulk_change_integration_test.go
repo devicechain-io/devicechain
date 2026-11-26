@@ -25,6 +25,7 @@ func TestFleetAdmissionConcurrentStartsAndResumeAtLastSlot(t *testing.T) {
 			var err error
 			ops[i], err = api.CreateFleetOperation(ctx, setReq(fmt.Sprintf("mixed-%d-%d", round, i), tokens...), "alice")
 			require.NoError(t, err)
+			cleanupFleetTestOperation(t, api, ctx, ops[i].Token)
 		}
 		_, err := api.StartFleetOperation(ctx, ops[0].Token, ops[0].ContractDigest, alice)
 		require.NoError(t, err)
@@ -70,6 +71,7 @@ func TestFleetAdmissionScansOutsideFenceAndCountsUnderBothLocks(t *testing.T) {
 			api, ctx, tenant, tokens := fleetPGFixture(t, 1)
 			op, err := api.CreateFleetOperation(ctx, setReq("locks", tokens...), "alice")
 			require.NoError(t, err)
+			cleanupFleetTestOperation(t, api, ctx, op.Token)
 			if resume {
 				_, err = api.StartFleetOperation(ctx, op.Token, op.ContractDigest, alice)
 				require.NoError(t, err)

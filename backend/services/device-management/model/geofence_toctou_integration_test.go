@@ -104,7 +104,17 @@ func newPostgresRdbManager(t testing.TB) *rdb.RdbManager {
 	if err := mgr.ExecuteInitialize(context.Background()); err != nil {
 		t.Fatalf("run the device-management migrations on the real server: %v", err)
 	}
+	// Only a test's FIRST manager checks for leaked bulk changes. Cleanups run last-in first-out,
+	// so a manager a test opens later (a second replica, say) closes before the fixtures that
+	// abort what the test started, and checking there reports a leak that cleanup then repairs.
+	// The first manager's cleanup runs after every fixture's. These shared-database tests must
+	// remain serial.
+	_, guarded := fleetLeakGuarded.LoadOrStore(t, true)
 	t.Cleanup(func() {
+		if !guarded {
+			fleetLeakGuarded.Delete(t)
+			checkFleetTestDispatching(t, mgr.Database)
+		}
 		if sqldb, err := mgr.Database.DB(); err == nil {
 			_ = sqldb.Close()
 		}

@@ -60,7 +60,6 @@ func TestFleetPostgresI14DatabaseClock(t *testing.T) {
 				}
 				require.NoError(t, db.Model(&FleetOperation{}).Where("id = ?", p.op.ID).
 					Updates(map[string]any{"eff_posts_per_second": 50, "target_count": targets}).Error)
-				releaseDispatchSlot(t, p)
 				if fixture == "refusing" {
 					require.NoError(t, db.Model(&FleetOperation{}).Where("id = ?", p.op.ID).
 						Update("intent", `{"key":"undeclared","valueType":"STRING","value":"v"}`).Error)
@@ -191,16 +190,6 @@ func TestFleetPostgresI14DatabaseClock(t *testing.T) {
 	}
 }
 
-// releaseDispatchSlot moves the fixture's operation to DISPATCHED when the test ends. A RUNNING operation left behind
-// counts against the instance's dispatching limit for every later fixture on the same database, so a
-// second run against one server (-count=2, or a mutant loop) failed in fixture setup, not in the code.
-func releaseDispatchSlot(t *testing.T, p *postPG) {
-	t.Helper()
-	t.Cleanup(func() {
-		_ = p.api.RDB.DB(p.ctx).Model(&FleetOperation{}).Where("id = ?", p.op.ID).Update("dispatch", FleetDispatchDispatched).Error
-	})
-}
-
 func fleetPGNow(t *testing.T, db *gorm.DB) time.Time {
 	t.Helper()
 	var now time.Time
@@ -261,7 +250,6 @@ func TestFleetPostgresDeadlineAndRuntimeIgnoreProcessSkew(t *testing.T) {
 // The PostgreSQL half of TestFleetPacerRollsAWindowThatStartsInTheFuture: the statement's own rollover.
 func TestFleetPostgresPacerRollsAWindowThatStartsInTheFuture(t *testing.T) {
 	p := newPostPG(t, "v1")
-	releaseDispatchSlot(t, p)
 	db := p.api.RDB.DB(p.ctx)
 	require.NoError(t, db.Model(&FleetOperationRuntime{}).Where("operation_id = ?", p.op.ID).
 		Updates(map[string]any{"pace_window_start": gorm.Expr("clock_timestamp() + interval '1 hour'"), "pace_issued": 50}).Error)
