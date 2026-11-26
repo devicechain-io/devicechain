@@ -65,7 +65,7 @@ func TestFleetExistingEventWritersLockBeforeMutation(t *testing.T) {
 				case "erase", "repair":
 					return redactFleetDeviceLinesOnTx(tx, e.dev.ID, path == "repair")
 				case "purge":
-					return fleetPurgeEvidenceChunk(tx, e.op.ID)
+					return fleetPurgeEvidenceChunk(tx, e.op)
 				default:
 					return fleetDeleteTombstone(tx, e.op)
 				}
@@ -132,10 +132,10 @@ func TestFleetBulkWritersLockBeforeMutation(t *testing.T) {
 				case "erase":
 					return redactFleetDeviceLinesOnTx(tx, e.dev.ID, false)
 				case "abort":
-					_, _, err := fleetAbortChanges(tx, e.op, "test", "", fleetEventAbort)
+					_, _, err := fleetAbortChanges(tx, e.op, fleetClock(), "test", "", fleetEventAbort)
 					return err
 				default:
-					return fleetPurgeEvidenceChunk(tx, e.op.ID)
+					return fleetPurgeEvidenceChunk(tx, e.op)
 				}
 			}))
 			require.True(t, locked)

@@ -300,6 +300,77 @@ func (r *SchemaResolver) ResolveAmbiguousBulkChangeLines(ctx context.Context, ar
 	return &FleetOperationResolver{M: *op, S: r, C: ctx}, nil
 }
 
+type FleetReversalRequestInput struct {
+	Original         string
+	Token            string
+	Name             string
+	Ordinals         *[]int32
+	OverrideChanged  *bool
+	OverrideOrdinals *[]int32
+	Safety           *FleetOperationCreateSafetyInput
+}
+
+func (in FleetReversalRequestInput) toModel() *model.FleetReversalRequest {
+	req := &model.FleetReversalRequest{Original: in.Original, Token: in.Token, Name: in.Name, Ordinals: in.Ordinals,
+		OverrideChanged: in.OverrideChanged != nil && *in.OverrideChanged}
+	if in.OverrideOrdinals != nil {
+		req.OverrideOrdinals = *in.OverrideOrdinals
+	}
+	if in.Safety != nil {
+		req.Safety = model.FleetSafetyRequest{MaxPostsPerSecond: in.Safety.MaxPostsPerSecond, FailureThreshold: in.Safety.FailureThreshold,
+			AmbiguityThreshold: in.Safety.AmbiguityThreshold, SettleDeadlineSeconds: in.Safety.SettleDeadlineSeconds}
+	}
+	return req
+}
+
+func (r *SchemaResolver) PreviewBulkChangeReversal(ctx context.Context, args struct {
+	Request FleetReversalRequestInput
+}) (*FleetReversalPreviewResolver, error) {
+	if _, err := fleetCaller(ctx, fleetWriteAuthorities...); err != nil {
+		return nil, err
+	}
+	p, err := r.GetApi(ctx).PreviewFleetReversal(ctx, args.Request.toModel())
+	if err != nil {
+		return nil, err
+	}
+	return &FleetReversalPreviewResolver{M: *p}, nil
+}
+
+func (r *SchemaResolver) ReverseBulkChange(ctx context.Context, args struct {
+	Request FleetReversalRequestInput
+}) (*FleetOperationResolver, error) {
+	initiator, err := fleetCaller(ctx, fleetWriteAuthorities...)
+	if err != nil {
+		return nil, err
+	}
+	op, err := r.GetApi(ctx).ReverseFleetOperation(ctx, args.Request.toModel(), initiator)
+	if err != nil {
+		return nil, err
+	}
+	return &FleetOperationResolver{M: *op, S: r, C: ctx}, nil
+}
+
+type FleetReversalPreviewResolver struct{ M model.FleetReversalPreview }
+
+func (r *FleetReversalPreviewResolver) ReversibleCount() int32 {
+	return clampInt32(int64(r.M.ReversibleCount))
+}
+func (r *FleetReversalPreviewResolver) ChangedSinceCount() int32 {
+	return clampInt32(int64(r.M.ChangedSinceCount))
+}
+func (r *FleetReversalPreviewResolver) RedactedCount() int32 {
+	return clampInt32(int64(r.M.RedactedCount))
+}
+func (r *FleetReversalPreviewResolver) AlreadyReversedCount() int32 {
+	return clampInt32(int64(r.M.AlreadyReversedCount))
+}
+func (r *FleetReversalPreviewResolver) NotPostedCount() int32 {
+	return clampInt32(int64(r.M.NotPostedCount))
+}
+func (r *FleetReversalPreviewResolver) RequestDigest() string  { return r.M.RequestDigest }
+func (r *FleetReversalPreviewResolver) PlanDigest() string     { return r.M.PlanDigest }
+func (r *FleetReversalPreviewResolver) ContractDigest() string { return r.M.ContractDigest }
+
 func (r *FleetResumePreviewResolver) WithinContract() bool         { return r.M.WithinContract }
 func (r *FleetResumePreviewResolver) ContractVersion() int32       { return r.M.ContractVersion }
 func (r *FleetResumePreviewResolver) ContractDigest() string       { return r.M.ContractDigest }
@@ -402,6 +473,29 @@ func (r *FleetOperationResolver) Grantee() *string {
 		return nil
 	}
 	return &r.M.Grantee
+}
+
+func (r *FleetOperationResolver) ReversalOf() (*FleetOperationResolver, error) {
+	if !r.M.ReversalOf.Valid {
+		return nil, nil
+	}
+	op, err := r.S.GetApi(r.C).FleetOperationByID(r.C, r.M.ReversalOf.Int64)
+	if err != nil || op == nil {
+		return nil, err
+	}
+	return &FleetOperationResolver{M: *op, S: r.S, C: r.C}, nil
+}
+
+func (r *FleetOperationResolver) Reversals() ([]*FleetOperationResolver, error) {
+	ops, err := r.S.GetApi(r.C).FleetReversalsOf(r.C, &r.M)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*FleetOperationResolver, 0, len(ops))
+	for _, op := range ops {
+		out = append(out, &FleetOperationResolver{M: op, S: r.S, C: r.C})
+	}
+	return out, nil
 }
 
 func (r *FleetOperationResolver) Contract() (string, error) {
@@ -527,6 +621,14 @@ type FleetOperationLineResolver struct {
 	M model.FleetOperationLine
 	S *SchemaResolver
 	C context.Context
+}
+
+func (r *FleetOperationLineResolver) ReversedBy() (*FleetOperationLineResolver, error) {
+	contra, err := r.S.GetApi(r.C).FleetLineReversedBy(r.C, &r.M)
+	if err != nil || contra == nil {
+		return nil, err
+	}
+	return &FleetOperationLineResolver{M: *contra, S: r.S, C: r.C}, nil
 }
 
 func (r *FleetOperationLineResolver) ResolutionNote() (*string, error) {

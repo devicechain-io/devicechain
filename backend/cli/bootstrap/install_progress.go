@@ -89,7 +89,7 @@ func (r *installRun) gate(metric string, unit installflow.Unit, source string, r
 	}
 	total := expected
 	r.progress().report(installflow.StepProgress{MetricID: metric, Mode: installflow.ProgressMeasured,
-		Current: ready, Total: &total, Unit: unit, Source: source})
+		Current: min(ready, expected), Total: &total, Unit: unit, Source: source})
 }
 
 // retry closes the active stage's attempt as a transient failure and starts the

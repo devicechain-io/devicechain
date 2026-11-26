@@ -136,7 +136,11 @@ type FleetResumeSafety struct {
 // fleetControl runs one control transition under the fence. fn runs with the operation row locked and
 // the transition not yet applied; it returns the changes and the event to append.
 // Only an explicit pause may touch a newer protocol: it changes no lines.
-func (api *Api) fleetControl(ctx context.Context, token, transition string, fn func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error)) (*FleetOperation, error) {
+//
+// now is the database's clock, read in this transaction once the row lock is held, and it is the
+// only time a transition may stamp or compare with: every replica, the driver and the executor's
+// STALLED rule read these stamps against clock_timestamp(), so this process's clock never enters.
+func (api *Api) fleetControl(ctx context.Context, token, transition string, fn func(tx *gorm.DB, op *FleetOperation, now time.Time) (map[string]any, *FleetOperationEvent, error)) (*FleetOperation, error) {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok || tenant == "" {
 		return nil, errors.New("a bulk change needs a tenant in the context")
@@ -177,12 +181,15 @@ func (api *Api) fleetControl(ctx context.Context, token, transition string, fn f
 		if transition != fleetEventPause && !ledger.Drivable(ledger.DriverProtocol(op.DriverProtocol)) {
 			return fleetErr(FleetCodeNewerThanServer, "this bulk change was created by a newer release; retry, or pause it")
 		}
-		changes, event, err := fn(tx, &op)
+		now, err := fleetDBNow(tx)
+		if err != nil {
+			return err
+		}
+		changes, event, err := fn(tx, &op, now)
 		if err != nil {
 			return err
 		}
 		enteredRunning = changes["dispatch"] == FleetDispatchRunning
-		now := time.Now()
 		changes["execution_epoch"] = op.ExecutionEpoch + 1
 		changes["state_changed_at"] = now
 		if err := tx.Model(&FleetOperation{ID: op.ID}).Updates(changes).Error; err != nil {
@@ -246,14 +253,14 @@ func (api *Api) StartFleetOperation(ctx context.Context, token, contractDigest s
 		return nil, err
 	}
 	tenant, _ := core.TenantFromContext(ctx)
-	return api.fleetControl(ctx, token, fleetEventStart, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	return api.fleetControl(ctx, token, fleetEventStart, func(tx *gorm.DB, op *FleetOperation, now time.Time) (map[string]any, *FleetOperationEvent, error) {
 		if op.Dispatch != FleetDispatchReady {
 			return nil, nil, illegal(op, "started")
 		}
 		if contractDigest != op.ContractDigest {
 			return nil, nil, fleetErr(FleetCodeContractDigestMismatch, "the contract digest presented is not the operation's current one")
 		}
-		if op.ExpiresAt.Valid && !op.ExpiresAt.Time.After(time.Now()) {
+		if op.ExpiresAt.Valid && !op.ExpiresAt.Time.After(now) {
 			return nil, nil, fleetErr(FleetCodeExpired, "the operation expired before it was started")
 		}
 		if err := fleetActivationCheck(tx); err != nil {
@@ -265,7 +272,6 @@ func (api *Api) StartFleetOperation(ctx context.Context, token, contractDigest s
 		if err := api.fleetAdmitDispatching(ctx, tx, tenant, op); err != nil {
 			return nil, nil, err
 		}
-		now := time.Now()
 		if err := api.fleetApproveContract(tx, op, by, now); err != nil {
 			return nil, nil, err
 		}
@@ -372,7 +378,7 @@ func fleetEvidenceOpenCount(tx *gorm.DB, op *FleetOperation) (int64, error) {
 // is applied or refused under the old state. Stopping never widens anything, so it needs no more
 // authority than writing a device.
 func (api *Api) PauseFleetOperation(ctx context.Context, token, actor string) (*FleetOperation, error) {
-	return api.fleetControl(ctx, token, fleetEventPause, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	return api.fleetControl(ctx, token, fleetEventPause, func(tx *gorm.DB, op *FleetOperation, now time.Time) (map[string]any, *FleetOperationEvent, error) {
 		if op.Dispatch != FleetDispatchRunning {
 			return nil, nil, illegal(op, "paused")
 		}
@@ -384,19 +390,19 @@ func (api *Api) PauseFleetOperation(ctx context.Context, token, actor string) (*
 // AbortFleetOperation stops an operation for good. Lines not yet applied are cancelled; applied lines
 // keep settling. An aborted operation can still be reversed.
 func (api *Api) AbortFleetOperation(ctx context.Context, token, actor string) (*FleetOperation, error) {
-	return api.fleetControl(ctx, token, fleetEventAbort, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	return api.fleetControl(ctx, token, fleetEventAbort, func(tx *gorm.DB, op *FleetOperation, now time.Time) (map[string]any, *FleetOperationEvent, error) {
 		switch op.Dispatch {
 		case FleetDispatchReady, FleetDispatchRunning, FleetDispatchPaused:
 		default:
 			return nil, nil, illegal(op, "aborted")
 		}
-		return fleetAbortChanges(tx, op, actor, "", fleetEventAbort)
+		return fleetAbortChanges(tx, op, now, actor, "", fleetEventAbort)
 	})
 }
 
 // fleetAbortChanges cancels the PLANNED lines and returns the header changes of an abort. An
 // operation that ends with nothing applied holds no evidence, so it is closed at once.
-func fleetAbortChanges(tx *gorm.DB, op *FleetOperation, actor, reason, kind string) (map[string]any, *FleetOperationEvent, error) {
+func fleetAbortChanges(tx *gorm.DB, op *FleetOperation, now time.Time, actor, reason, kind string) (map[string]any, *FleetOperationEvent, error) {
 	var ids []uint
 	if err := tx.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPlanned).
 		Scopes(fleetLineLockOrder).Pluck("id", &ids).Error; err != nil {
@@ -410,7 +416,6 @@ func fleetAbortChanges(tx *gorm.DB, op *FleetOperation, actor, reason, kind stri
 	if err := tx.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPosted).Count(&posted).Error; err != nil {
 		return nil, nil, err
 	}
-	now := time.Now()
 	changes := map[string]any{"dispatch": FleetDispatchAborted, "pause_reason": reason, "state_changed_by": actor,
 		"dispatched_at": sql.NullTime{Time: now, Valid: true}}
 	if posted == 0 {
@@ -558,7 +563,7 @@ func (api *Api) ResumeFleetOperation(ctx context.Context, token, contractDigest 
 		return nil, err
 	}
 	tenant, _ := core.TenantFromContext(ctx)
-	return api.fleetControl(ctx, token, fleetEventResume, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+	return api.fleetControl(ctx, token, fleetEventResume, func(tx *gorm.DB, op *FleetOperation, now time.Time) (map[string]any, *FleetOperationEvent, error) {
 		if op.Dispatch != FleetDispatchPaused {
 			return nil, nil, illegal(op, "resumed")
 		}
@@ -601,7 +606,7 @@ func (api *Api) ResumeFleetOperation(ctx context.Context, token, contractDigest 
 		if op.Grantee != by.Name {
 			// Handover: the resumer holds the authorities and becomes the person the engine runs for.
 			changes["grantee"] = by.Name
-			changes["grant_bound_at"] = sql.NullTime{Time: time.Now(), Valid: true}
+			changes["grant_bound_at"] = sql.NullTime{Time: now, Valid: true}
 			event.Kind = fleetEventHandover
 			event.FromGrantee = sql.NullString{String: op.Grantee, Valid: op.Grantee != ""}
 			event.ToGrantee = sql.NullString{String: by.Name, Valid: true}
@@ -613,15 +618,22 @@ func (api *Api) ResumeFleetOperation(ctx context.Context, token, contractDigest 
 // ExpireFleetOperations aborts, for the tenant of ctx, the operations nobody finished: a READY one past
 // its expiry (EXPIRED_UNSTARTED) and a header that has sat in PLANNING too long (PLANNING_ABANDONED),
 // each through the same fence as any other control transition. It returns how many it aborted.
-func (api *Api) ExpireFleetOperations(ctx context.Context, now time.Time) (int, error) {
+// Both the discovery and the re-judgment under the fence read the database's clock: the stamps
+// they compare with were written on it.
+func (api *Api) ExpireFleetOperations(ctx context.Context) (int, error) {
+	db := api.RDB.DB(ctx)
+	seen, err := fleetDBNow(db)
+	if err != nil {
+		return 0, err
+	}
 	var due []FleetOperation
-	if err := fleetExpiryCandidates(api.RDB.DB(ctx), now).Order("id").Limit(100).Find(&due).Error; err != nil {
+	if err := fleetExpiryCandidates(db, seen).Order("id").Limit(100).Find(&due).Error; err != nil {
 		return 0, err
 	}
 	aborted := 0
 	var lastErr error
 	for _, d := range due {
-		_, err := api.fleetControl(ctx, d.Token, fleetEventExpire, func(tx *gorm.DB, op *FleetOperation) (map[string]any, *FleetOperationEvent, error) {
+		_, err := api.fleetControl(ctx, d.Token, fleetEventExpire, func(tx *gorm.DB, op *FleetOperation, now time.Time) (map[string]any, *FleetOperationEvent, error) {
 			// Re-judged under the fence: a start or a finisher may have got here first.
 			stillReady := op.Dispatch == FleetDispatchReady && op.ExpiresAt.Valid && !op.ExpiresAt.Time.After(now)
 			stillPlanning := op.Dispatch == FleetDispatchPlanning && !op.CreatedAt.After(now.Add(-ledger.PlanningAbandonedAfter))
@@ -632,7 +644,7 @@ func (api *Api) ExpireFleetOperations(ctx context.Context, now time.Time) (int, 
 			if stillPlanning {
 				reason = FleetAbortPlanningDropped
 			}
-			return fleetAbortChanges(tx, op, "", reason, fleetEventExpire)
+			return fleetAbortChanges(tx, op, now, "", reason, fleetEventExpire)
 		})
 		if errors.Is(err, errFleetNotDue) {
 			continue
