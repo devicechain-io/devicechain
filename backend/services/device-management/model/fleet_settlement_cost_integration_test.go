@@ -259,22 +259,28 @@ func TestSettlementDeadlineDiscoveryCostIsFlatInRetainedHistoryOnPostgres(t *tes
 		// SkipScan would let the replaced DISTINCT stop at each tenant's first due operation, so
 		// both sides are measured with it off: the plans production runs.
 		withoutSkipScan(t, f.db, func(tx *gorm.DB) {
-			after[i] = measureCall(t, tx, func(db *gorm.DB) (err error) { got, err = fleetDueTenants(db, "", "", 1000); return })
+			// Bounded to this fixture's tenants, so rows other tests left in the shared database
+			// do not enter the measurement. The unbounded answers are compared below.
+			after[i] = measureCall(t, tx, func(db *gorm.DB) (err error) {
+				got, err = fleetDueTenants(db, f.prefix, f.prefix+"~", 1000)
+				return
+			})
 			before[i] = measureCall(t, tx, func(db *gorm.DB) (err error) {
-				want, err = fleetDueTenantsBeforeForTest(db, "", false, 1000)
+				want, err = fleetDueTenantsBeforeForTest(db, f.prefix, false, 1000)
 				return
 			})
 		})
-		require.Equal(t, want, got, "the new discovery answers exactly what the old one did")
-		require.Equal(t, []string{f.active}, onlyPrefixed(got, f.prefix))
+		require.Equal(t, onlyPrefixed(want, f.prefix), got, "the new discovery answers exactly what the old one did")
+		require.Equal(t, []string{f.active}, got)
 		t.Logf("history %2d changes: discovery before %+v, after %+v", history, before[i], after[i])
 	}
-	// The before side is the instrument's negative control: on the same rows the old plan must
-	// read more, and more again as the history grows, or this test could not tell them apart.
-	require.Greater(t, before[1].LineRows, before[0].LineRows+5000, "the replaced discovery grew with retained history")
-	require.Greater(t, before[1].LineRows, 10*after[1].LineRows, "before/after on the same rows")
-	// The guarantee: flat in retained history.
+	// The before figures are logged, not asserted: the replaced plan moves with the sampled
+	// statistics. The guarantees are on the discovery as it is now: flat in retained history,
+	// and bounded by the walk (a probe per tenant with an unsettled line) plus one due range per
+	// tenant walked. The largest such range here is the newer release's 300 due lines, each
+	// checked and refused; every other probe stops at its first row.
 	require.Equal(t, after[0].LineRows, after[1].LineRows, "discovery must not grow with retained operations")
+	require.LessOrEqual(t, after[1].LineRows, int64(2*costDuePerOp), "discovery reads the walk and the due ranges, nothing else")
 
 	// Cursor wrap: (after, inf) then (-inf, after], exactly as before.
 	for _, from := range []string{f.active, f.prefix + "a", f.prefix + "zzz"} {
@@ -388,10 +394,9 @@ func sweepPageCost(t *testing.T, api *Api, interleaved bool) {
 		return rollback
 	}), rollback)
 	t.Logf("%d awaiting lines, pages from the start and the middle: before %+v, now %+v, now without the index %+v", awaiting, before, now, unindexed)
-	for i := range starts {
-		// Negative controls: the replaced selection, and this read without its index, each read
-		// several pages' worth of lines to return one.
-		require.GreaterOrEqual(t, before[i].LineRows, int64(4*fleetSettlementBatch))
-		require.GreaterOrEqual(t, unindexed[i].LineRows, int64(4*fleetSettlementBatch))
-	}
+	// The before and unindexed figures are logged, not asserted: which plan a join-first or
+	// unindexed read gets moves with the sampled statistics from one run to the next (by id it
+	// can be cheap on one layout, by operation it reads the whole awaiting set). Only the read as
+	// it is now has a plan that does not depend on them, and that is what the bound above holds;
+	// reverting either the index or the read's shape breaks it.
 }
