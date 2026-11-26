@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdv1 "k8s.io/client-go/tools/clientcmd/api/v1"
@@ -15,20 +16,24 @@ import (
 	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
-// credential is one secret value and how strictly it is registered.
+// credential is one secret value and how it is registered.
 type credential struct {
 	value string
-	// textOnly registers it for redaction from text without refusing an event
-	// code that contains it. Exec-plugin environments and auth-provider settings
-	// hold credentials beside ordinary words (a profile named "default"), and a
-	// strictly registered word would refuse every code that spells it.
-	textOnly bool
+	// found marks a value dcctl found rather than made: everything in a kubeconfig.
+	// It is registered redact-only (AddRedaction), as a whole token, and never
+	// refuses an event code. A kubeconfig holds credentials of users and plugins
+	// this run never touches, and they can be ordinary words: an unused user whose
+	// password is "install" must not stop an install, and a profile named "prod"
+	// must not be cut out of "production". dcctl's own secrets (a root key, a
+	// passphrase, a minted password, the alert and backup credentials it was given)
+	// are registered strictly.
+	found bool
 }
 
 // kubeconfigSecrets returns the credential values in the kubeconfig files client-go
 // reads: each user's token, password and client key, its auth provider's settings,
-// its exec plugin's environment, and the password in any cluster's server or proxy
-// URL.
+// its exec plugin's environment and the credentials in its arguments, and the
+// password in any cluster's server or proxy URL. Every one is a found value.
 //
 // It parses each file on its own, as a plain list, rather than through client-go's
 // loader. A file client-go refuses — two users of the same name is the case that
@@ -37,9 +42,9 @@ type credential struct {
 // nothing; this is the second line, not the first.
 func kubeconfigSecrets(rules *clientcmd.ClientConfigLoadingRules) []credential {
 	var out []credential
-	add := func(v string, textOnly bool) {
+	add := func(v string) {
 		if v != "" {
-			out = append(out, credential{value: v, textOnly: textOnly})
+			out = append(out, credential{value: v, found: true})
 		}
 	}
 	for _, path := range rules.GetLoadingPrecedence() {
@@ -52,22 +57,25 @@ func kubeconfigSecrets(rules *clientcmd.ClientConfigLoadingRules) []credential {
 			continue
 		}
 		for _, c := range cfg.Clusters {
-			add(urlPassword(c.Cluster.Server), false)
-			add(urlPassword(c.Cluster.ProxyURL), false)
+			add(urlPassword(c.Cluster.Server))
+			add(urlPassword(c.Cluster.ProxyURL))
 		}
 		for _, u := range cfg.AuthInfos {
 			a := u.AuthInfo
-			add(a.Token, false)
-			add(a.Password, false)
-			add(string(a.ClientKeyData), false)
+			add(a.Token)
+			add(a.Password)
+			add(string(a.ClientKeyData))
 			if a.AuthProvider != nil {
 				for _, v := range a.AuthProvider.Config {
-					add(v, true)
+					add(v)
 				}
 			}
 			if a.Exec != nil {
 				for _, env := range a.Exec.Env {
-					add(env.Value, true)
+					add(env.Value)
+				}
+				for _, v := range execArgSecrets(a.Exec.Args) {
+					add(v)
 				}
 			}
 		}
@@ -75,20 +83,84 @@ func kubeconfigSecrets(rules *clientcmd.ClientConfigLoadingRules) []credential {
 	return out
 }
 
+// execArgSecrets is the credentials among an exec plugin's arguments: the value of
+// any flag whose name says it holds one (--client-secret X, --token=X), and any other
+// argument shaped like a credential. A plugin that echoes its command line, as many
+// do when they fail, would otherwise print them.
+func execArgSecrets(args []string) []string {
+	var out []string
+	for i, a := range args {
+		if strings.HasPrefix(a, "-") {
+			name, value, inline := strings.Cut(strings.TrimLeft(a, "-"), "=")
+			if !sensitiveFlag(name) {
+				continue
+			}
+			if inline {
+				out = append(out, value)
+			} else if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				out = append(out, args[i+1])
+			}
+			continue
+		}
+		if credentialShaped(a) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// sensitiveFlag reports whether a flag's name says its value is a credential.
+func sensitiveFlag(name string) bool {
+	name = strings.ToLower(name)
+	for _, w := range []string{"secret", "token", "password", "passwd", "key", "credential"} {
+		if strings.Contains(name, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// credentialShaped reports whether an argument no flag names looks like a
+// credential rather than a word, a name, a path or a URL: at least 20 bytes, only
+// the characters keys and tokens are written in (letters, digits, '+', '/', '=',
+// '_'), not starting with '/', and both letters and digits. "get-token",
+// "us-east-1", a cluster name with dashes and an absolute path are not; a 40-byte
+// access key is.
+func credentialShaped(a string) bool {
+	if len(a) < 20 || a[0] == '/' {
+		return false
+	}
+	letter, digit := false, false
+	for _, c := range a {
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z':
+			letter = true
+		case '0' <= c && c <= '9':
+			digit = true
+		case c == '+' || c == '/' || c == '=' || c == '_':
+		default:
+			return false
+		}
+	}
+	return letter && digit
+}
+
 // registerCredentials registers each value with the hub, and returns how many it
 // could not cover.
 //
-// 🔴 A VALUE THE HUB REFUSES IS NOT DROPPED SILENTLY. One too short for a strict
-// registration (under installflow.MinSecretBytes) is registered redact-only, which
-// takes values down to installflow.MinRedactionBytes; only a value shorter than that,
-// which cannot be removed from text without removing ordinary characters with it, is
-// left uncovered, and counted, so the run can say so.
+// A found value is registered redact-only, always; one of dcctl's own strictly.
+//
+// 🔴 A VALUE THE HUB REFUSES IS NOT DROPPED SILENTLY. One of dcctl's own too short for
+// a strict registration (under installflow.MinSecretBytes) is registered redact-only,
+// which takes values down to installflow.MinRedactionBytes; only a value shorter than
+// that, which cannot be told from ordinary text even as a whole token, is left
+// uncovered, and counted, so the run can say so.
 func registerCredentials(events installflow.Reporter, creds []credential) (uncovered int) {
 	if events == nil {
 		return 0
 	}
 	for _, c := range creds {
-		if !c.textOnly && events.AddSecret(c.value) == nil {
+		if !c.found && events.AddSecret(c.value) == nil {
 			continue
 		}
 		if events.AddRedaction(c.value) != nil {

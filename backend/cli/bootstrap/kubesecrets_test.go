@@ -76,23 +76,33 @@ func TestKubeconfigErrorsNeverQuoteTheFile(t *testing.T) {
 	}
 }
 
-// The kubeconfig's credentials are found even in a file client-go refuses. Tokens,
-// passwords and keys are registered strictly; exec-plugin environments and
-// auth-provider settings, which hold ordinary words beside credentials, redact-only.
+// The kubeconfig's credentials are found even in a file client-go refuses, and every
+// one is a found value: registered redact-only, as a whole token, never strictly.
 func TestKubeconfigSecretsFindsEveryCredential(t *testing.T) {
 	writeCanaryKubeconfig(t)
 	got := map[string]credential{}
 	for _, c := range kubeconfigSecrets(clientcmd.NewDefaultClientConfigLoadingRules()) {
 		got[c.value] = c
 	}
-	for want, textOnly := range map[string]bool{kcToken: false, kcTokenDup: false, kcPassword: false,
-		kcKeyPEM: false, kcExecEnv: true, kcIDToken: true, kcShortEnv: true} {
+	for _, want := range []string{kcToken, kcTokenDup, kcPassword, kcKeyPEM, kcExecEnv, kcIDToken, kcShortEnv} {
 		c, ok := got[want]
 		if !ok {
 			t.Errorf("%q was not found", want)
-		} else if c.textOnly != textOnly {
-			t.Errorf("%q: textOnly %t, want %t", want, c.textOnly, textOnly)
+		} else if !c.found {
+			t.Errorf("%q is registered strictly: a kubeconfig value must never refuse an event code", want)
 		}
+	}
+}
+
+// An exec plugin's arguments: the value of a flag that names a credential, inline or
+// next, and an argument shaped like one; never a word, a region or a path.
+func TestExecArgSecrets(t *testing.T) {
+	got := execArgSecrets([]string{"get-token", "--client-secret", "s3cr", "--token=tk-inline",
+		"--region", "us-east-1", "--cluster-name", "production-cluster-01", "AKIA1234567890ABCDEF",
+		"/usr/local/bin/helper-2024", "--api-key", "--verbose"})
+	want := []string{"s3cr", "tk-inline", "AKIA1234567890ABCDEF"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
@@ -258,7 +268,7 @@ func TestRegisterCredentialsTextOnlyNeverRefusesACode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := registerCredentials(hub, []credential{{value: "default", textOnly: true}, {value: "s3cr3t-strict"}, {value: "ab"}}); n != 1 {
+	if n := registerCredentials(hub, []credential{{value: "default", found: true}, {value: "s3cr3t-strict"}, {value: "ab"}}); n != 1 {
 		t.Errorf("%d uncovered, want 1 (the two-byte value)", n)
 	}
 	if err := hub.Emit(installflow.Event{Payload: installflow.RunStarted{Target: installflow.Target{Mode: "managed-kind"},
@@ -275,5 +285,56 @@ func TestRegisterCredentialsTextOnlyNeverRefusesACode(t *testing.T) {
 	}
 	if got := hub.Redact("profile default, key s3cr3t-strict"); strings.Contains(got, "default") || strings.Contains(got, "s3cr3t") {
 		t.Errorf("Redact: %q", got)
+	}
+}
+
+// 🔴 A KUBECONFIG CREDENTIAL NEVER CHANGES WHAT A RUN DOES. A user this run never uses,
+// whose password is "install", must neither refuse an event code that spells it
+// (install.inputs, the manifest) nor stop the run: kubeconfig values are registered
+// redact-only.
+func TestAnUnusedKubeconfigPasswordNeverStopsARun(t *testing.T) {
+	writeKubeconfig(t, validKubeconfig("", "    token: tok-"+kcValidationCanary+"\n")+
+		"- name: unused\n  user:\n    username: someone\n    password: install\n")
+	e := &InstallEngine{
+		Provider: &fakeProvider{name: "local"}, Options: InstallOptions{Options: Options{AssumeYes: true}}, SkipPreflight: true,
+		Cluster: func(context.Context, Provider, InstallOptions) error { return nil },
+	}
+	var stream bytes.Buffer
+	err := installjson.Presenter{Stdout: &stream, RunID: "unused", Clock: testkit.NewManualClock(testkit.Epoch)}.Run(
+		t.Context(), e, installflow.Request{Operation: installflow.OperationInstall, AssumeYes: true}, nil)
+	if err != nil {
+		t.Fatalf("the run failed: %v\n%s", err, stream.Bytes())
+	}
+	envs, derr := installjson.DecodeStream(stream.Bytes())
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	sum, ok := envs[len(envs)-1].Payload.(installflow.Summary)
+	if !ok || sum.Outcome != installflow.RunSucceeded {
+		t.Fatalf("the run ended %+v", envs[len(envs)-1].Payload)
+	}
+	if !bytes.Contains(stream.Bytes(), []byte(`"step_id":"install.inputs"`)) {
+		t.Errorf("install.inputs was not reported:\n%s", stream.Bytes())
+	}
+}
+
+// An exec plugin's credential argument in a kubeconfig is registered, so a plugin
+// that echoes its command line has it redacted, and the URL userinfo form of a proxy
+// password is too.
+func TestKubeconfigExecArgsAndURLPasswordsAreRedacted(t *testing.T) {
+	writeKubeconfig(t, validKubeconfig("    proxy-url: http://user:foo+bar:baz@proxy:3128\n",
+		"    exec:\n      apiVersion: client.authentication.k8s.io/v1\n      command: dc-plugin\n"+
+			"      args: [\"get-token\", \"--client-secret\", \"cs-"+kcValidationCanary+"\"]\n"))
+	hub, err := installflow.NewHub(installflow.Options{Sink: &testkit.CaptureSink{}, Clock: testkit.NewManualClock(testkit.Epoch)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := registerCredentials(hub, kubeconfigSecrets(clientcmd.NewDefaultClientConfigLoadingRules())); n != 0 {
+		t.Errorf("%d values not covered", n)
+	}
+	in := "exec: dc-plugin get-token --client-secret cs-" + kcValidationCanary + " via http://user:foo+bar%3Abaz@proxy:3128"
+	got := hub.Redact(in)
+	if strings.Contains(got, kcValidationCanary) || strings.Contains(got, "foo+bar") || !strings.Contains(got, "get-token") {
+		t.Errorf("Redact(%q) = %q", in, got)
 	}
 }

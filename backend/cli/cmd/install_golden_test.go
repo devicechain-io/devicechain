@@ -219,6 +219,13 @@ var installCheckScenarios = []installScenario{
 	// A usable kubeconfig whose token reaches the process's stderr and the error.
 	{name: "kubeconfig-credential-echoed", args: []string{"install", "local", "--kube-context", "prod",
 		"--skip-preflight"}, kubeconfig: echoKubeconfig, engine: engineFakeEchoesCredential},
+	// A found value (AWS_PROFILE=prod) beside a context named "production".
+	{name: "plain-profile-prod", args: []string{"install", "local", "--kube-context", "production"},
+		kubeconfig: profileKubeconfig, engine: engineFakeOK},
+	{name: "plain-profile-none", args: []string{"install", "local", "--kube-context", "production"},
+		kubeconfig: twoContextKubeconfig, engine: engineFakeOK},
+	{name: "json-profile-prod", args: []string{"install", "local", "--kube-context", "production", "-o", "json"},
+		kubeconfig: profileKubeconfig, engine: engineFakeOK},
 	{name: "install-proxy-url", args: []string{"install", "local", "--kube-context", "prod", "--skip-preflight"},
 		kubeconfig: proxyKubeconfig},
 	{name: "json-install-proxy-url", args: []string{"install", "local", "--kube-context", "prod", "--skip-preflight",

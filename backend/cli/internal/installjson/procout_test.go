@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installflow/testkit"
@@ -24,6 +25,13 @@ const procoutSecret = "dcCanaryPluginSecret4Tg8Wq"
 // prints its credential on the stderr it inherited, as a plugin debugging itself
 // does. It does nothing unless started that way.
 func TestPluginChild(t *testing.T) {
+	if v := os.Getenv("DC_PROCOUT_HOLD"); v != "" {
+		// A plugin that prints half a line, leaves a helper holding stderr, and is
+		// gone: here, one process that does the first and then never closes it.
+		fmt.Fprintf(os.Stderr, "plugin: partial %s", v)
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	}
 	if v := os.Getenv("DC_PROCOUT_CHILD"); v != "" {
 		fmt.Fprintf(os.Stderr, "plugin: using token %s\n", v)
 		os.Exit(0)
@@ -82,5 +90,58 @@ func TestProcessOutputAndTheErrorAreRedacted(t *testing.T) {
 	}
 	if bytes.Contains(stream.Bytes(), []byte(procoutSecret)) {
 		t.Errorf("the stream carries the secret")
+	}
+}
+
+// 🔴 A CHILD THAT KEEPS THE PIPE OPEN NEITHER LOSES WHAT IT WROTE NOR STRANDS THE
+// READER. The stand-in writes half a line holding the secret and keeps the pipe; on
+// restore, past the drain bound, that half line is written, redacted, and the reader
+// stops — restore says so, and returns within its bounds.
+func TestRestoreFlushesAPartialLineAndStopsTheReader(t *testing.T) {
+	prev := processOutputDrain
+	processOutputDrain = 300 * time.Millisecond
+	t.Cleanup(func() { processOutputDrain = prev })
+
+	real := filepath.Join(t.TempDir(), "stderr")
+	f, err := os.Create(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origOut, origErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = f, f
+	t.Cleanup(func() { os.Stdout, os.Stderr = origOut, origErr; _ = f.Close() })
+
+	restore, err := redirectProcessOutput(func(s string) string { return strings.ReplaceAll(s, procoutSecret, "[redacted]") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestPluginChild$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "DC_PROCOUT_HOLD="+procoutSecret)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		restore()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	// Time for the child to start and write its half line. Nothing reaches the real
+	// stderr before restore: a partial line is held until it ends or is flushed.
+	time.Sleep(time.Second)
+	if fi, err := os.Stat(real); err != nil || fi.Size() != 0 {
+		t.Fatalf("stderr before restore: %v, %v", fi, err)
+	}
+	start := time.Now()
+	stopped := restore()
+	if took := time.Since(start); took > 3*processOutputDrain {
+		t.Errorf("restore took %s", took)
+	}
+	if !stopped {
+		t.Error("the reader was left blocked on the pipe a child holds")
+	}
+	got, err := os.ReadFile(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "plugin: partial [redacted]" {
+		t.Errorf("stderr is %q, want the partial line, redacted", got)
 	}
 }

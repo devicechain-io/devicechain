@@ -92,14 +92,14 @@ echo "exit status: $?"
 作为第二道防线，为防某个工具回显它们，以下值会从 dcctl 打印的任何文本中移除并替换为 `[redacted]`：
 
 - 安装持有的机密值，例如告警 webhook URL、SMTP 密码和备份凭据；
-- kubeconfig 中的凭据：令牌、密码、客户端密钥、服务器或代理 URL 中的密码，以及 exec 插件环境变量和认证提供程序设置中的值。
+- kubeconfig 中的凭据：令牌、密码、客户端密钥、服务器或代理 URL 中的密码（原样形式和 URL 转义形式），exec 插件环境变量和认证提供程序设置中的值，以及 exec 插件参数中包含凭据的部分（如 `--client-secret` 或 `--token` 这类标志的值，以及看起来像密钥的参数）。
 
 使用 `--output json` 时，这涵盖每个事件、打印在 stderr 上的错误（包括附加在其后的工具诊断信息），以及安装运行期间到达 dcctl 的 stdout 或 stderr 的其他所有内容，包括 kubeconfig 的 exec 凭据插件的 stderr。该 stderr 按行处理，因此可能比插件写出时稍晚到达。
 
 存在以下限制：
 
 - 短于 4 字节的值无法在不连带移除普通文本的情况下移除。它不会被替换，运行会在一条 `warning:` 日志行中说明发现了多少个这样的值。
-- 短于 6 字节的值，以及 exec 插件或认证提供程序中的所有值，会从文本中移除，但不会阻止恰好包含它的事件代码。
+- 来自 kubeconfig 的凭据只在作为完整单词出现时被替换，绝不在更长的单词内部被替换，也绝不会改变运行的行为。设置 `AWS_PROFILE=prod` 时，`--profile prod` 显示为 `--profile [redacted]`，而 `production` 保持不变；安装从不使用的、密码为 `install` 的用户也不会让安装停止。dcctl 自身持有的机密则在出现的任何位置都会被替换。
 - 使用 `--output text` 时，只有 dcctl 打印的错误会被替换。其余内容就是 `dcctl install` 一直以来打印的输出，其中可能有意向你显示凭据（bootstrap 的访问摘要），而它运行的工具（包括 kind 和 kubeconfig 的 exec 凭据插件）照常直接写入终端。
 
 dcctl 无法读取、或无法为某个上下文构建客户端的 kubeconfig，只按问题类型、文件和上下文名称报告，绝不附带 Kubernetes 客户端给出的原因，因为该原因可能引用文件中的凭据和 URL。`--output text` 也是如此。

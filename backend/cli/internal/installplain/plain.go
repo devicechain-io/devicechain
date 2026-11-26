@@ -57,6 +57,9 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	hub, err := installflow.NewHub(installflow.Options{
 		Operation: req.Operation,
 		Sink:      Sink{W: p.Stdout},
+		// Text output renders what it always rendered: only its error is redacted
+		// of what the run found (a kubeconfig's credentials).
+		TokensOnlyInErrors: true,
 		// A presenter that cannot keep up stops the run gracefully, saying why; the
 		// hub then refuses to report it as a success.
 		OnDeliveryFailure: func() {

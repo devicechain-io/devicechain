@@ -92,14 +92,14 @@ The stream never carries the install's options, credentials or file contents. A 
 As a second line of defence, in case a tool echoes one, these values are removed from any text dcctl prints and replaced by `[redacted]`:
 
 - the secret values the install holds, such as an alert webhook URL, the SMTP password and backup credentials;
-- the credentials in your kubeconfig: tokens, passwords, client keys, the password in a server or proxy URL, and the values in exec plugin environments and auth provider settings.
+- the credentials in your kubeconfig: tokens, passwords, client keys, the password in a server or proxy URL (as written and URL-escaped), the values in exec plugin environments and auth provider settings, and the exec plugin arguments that hold a credential (the value of a flag such as `--client-secret` or `--token`, and an argument that looks like a key).
 
 With `--output json`, that covers every event, the error printed on stderr (including a tool's diagnostics appended to it), and everything else that reaches dcctl's stdout or stderr while the install runs, including the stderr of a kubeconfig exec credential plugin. That stderr is redacted a line at a time, so it can arrive slightly later than the plugin wrote it.
 
 There are limits:
 
 - A value shorter than 4 bytes cannot be removed without removing ordinary text with it. It is not redacted, and the run says how many such values it found in a `warning:` log line.
-- A value shorter than 6 bytes, and every exec plugin or auth provider value, is removed from text but does not stop an event code that happens to spell it.
+- A credential from your kubeconfig is replaced only where it stands as a whole word, never inside a longer one, and it never changes what the run does. With `AWS_PROFILE=prod`, `--profile prod` shows `--profile [redacted]` while `production` is left alone, and a user the install never uses, with the password `install`, does not stop it. The secrets dcctl itself holds are replaced wherever they appear.
 - With `--output text`, only the error dcctl prints is redacted. The rest is the output `dcctl install` has always printed, which can show you a credential on purpose (a bootstrap's access summary), and the tools it runs, kind and a kubeconfig exec credential plugin among them, write to the terminal as they always have.
 
 A kubeconfig dcctl cannot read, or cannot turn into a client for a context, is reported by the kind of problem, the file and the context's name, never with the Kubernetes client's reason, which can quote the credentials and URLs in the file. This holds for `--output text` too.

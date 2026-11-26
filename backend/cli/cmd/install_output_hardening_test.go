@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -222,4 +223,43 @@ func TestKubeconfigValidationErrorsNeverReachTheOutput(t *testing.T) {
 			}
 		})
 	}
+}
+
+// twoContextKubeconfig has the contexts "production" and "prod", so the preflight
+// lists "prod" as a whole token and "production" beside it.
+var twoContextKubeconfig = strings.Replace(goldenKubeconfig("production"), "current-context:",
+	"- name: prod\n  context:\n    cluster: golden\n    user: golden\ncurrent-context:", 1)
+
+// profileKubeconfig names its context "production", and its user's exec plugin has
+// AWS_PROFILE=prod: a found value that is also the start of a word the output shows.
+var profileKubeconfig = twoContextKubeconfig +
+	"    exec:\n      apiVersion: client.authentication.k8s.io/v1\n      command: dc-plugin\n" +
+	"      env:\n      - name: AWS_PROFILE\n        value: prod\n"
+
+// 🔴 A FOUND VALUE NEVER CORRUPTS THE OUTPUT. With a kubeconfig whose exec plugin has
+// AWS_PROFILE=prod, the preflight still reports "current-context: production": in
+// the event stream (prod is redacted only as a whole token), and in text output,
+// which is byte for byte what the same kubeconfig without that value prints.
+func TestAFoundValueNeverCorruptsTheOutput(t *testing.T) {
+	plainWith := runInstallChildRaw(t, findInstallScenario(t, "plain-profile-prod"))
+	plainWithout := runInstallChildRaw(t, findInstallScenario(t, "plain-profile-none"))
+	if !bytes.Contains(plainWith.stdout, []byte("current-context: production")) {
+		t.Errorf("text output lost the context name:\n%s", plainWith.stdout)
+	}
+	// The contexts are listed in map order, so the lines are compared as sets.
+	if !bytes.Contains(plainWith.stdout, []byte("- prod\n")) || sortedLines(plainWith.stdout) != sortedLines(plainWithout.stdout) ||
+		!bytes.Equal(plainWith.stderr, plainWithout.stderr) || plainWith.exit != plainWithout.exit {
+		t.Errorf("text output changed with a registered kubeconfig value:\nwith:\n%s\nwithout:\n%s",
+			plainWith.stdout, plainWithout.stdout)
+	}
+	js := runInstallChildRaw(t, findInstallScenario(t, "json-profile-prod"))
+	if !bytes.Contains(js.stdout, []byte(`"highlight":"production"`)) || bytes.Contains(js.stdout, []byte("[redacted]uction")) {
+		t.Errorf("the stream lost the context name:\n%s", js.stdout)
+	}
+}
+
+func sortedLines(b []byte) string {
+	lines := strings.Split(string(b), "\n")
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
 }

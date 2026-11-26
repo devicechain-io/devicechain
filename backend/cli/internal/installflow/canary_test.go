@@ -198,3 +198,65 @@ func TestARedactOnlyValueIsRedactedButNeverRefusesAnIdentifier(t *testing.T) {
 		t.Errorf("Redact kept a value: %q", got)
 	}
 }
+
+// TestATokenValueIsRedactedOnlyAsAWholeToken: a value registered with AddRedaction is
+// replaced where it stands as a token and nowhere inside a longer word, so a profile
+// named "prod" leaves "production" alone. A strict value is still replaced as a
+// substring.
+func TestATokenValueIsRedactedOnlyAsAWholeToken(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	must(t, f.hub.AddRedaction("prod"))
+	must(t, f.hub.AddSecret("s3cr3tXYZ"))
+	for in, want := range map[string]string{
+		"current-context: production":       "current-context: production",
+		"--profile prod":                    "--profile [redacted]",
+		"AWS_PROFILE=prod; region=x":        "AWS_PROFILE=[redacted]; region=x",
+		"prod-eu and eu_prod and prod2":     "prod-eu and eu_prod and prod2",
+		"\"prod\"":                          "\"[redacted]\"",
+		"keyAs3cr3tXYZB is strict":          "keyA[redacted]B is strict",
+		"prod prod":                         "[redacted] [redacted]",
+		"reproduce the prod issue, prodigy": "reproduce the [redacted] issue, prodigy",
+	} {
+		if got := f.hub.Redact(in); got != want {
+			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestAURLPasswordIsRedactedInItsUserinfoForm: a password in a server or proxy URL is
+// printed userinfo-escaped ("foo+bar:baz" as "foo+bar%3Abaz"), and that form is
+// redacted too.
+func TestAURLPasswordIsRedactedInItsUserinfoForm(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	must(t, f.hub.AddRedaction("foo+bar:baz"))
+	in := "proxyconnect tcp: http://user:foo+bar%3Abaz@proxy:3128 refused"
+	if got := f.hub.Redact(in); strings.Contains(got, "foo+bar") || !strings.Contains(got, "user:[redacted]@proxy") {
+		t.Errorf("Redact(%q) = %q", in, got)
+	}
+}
+
+// TestTokensOnlyInErrorsLeavesTheEventsAlone: with TokensOnlyInErrors (text
+// output), an AddRedaction value is redacted from Redact and RedactError and from
+// nothing the events carry; a strict value is redacted from both.
+func TestTokensOnlyInErrorsLeavesTheEventsAlone(t *testing.T) {
+	f := newFixture(t, installflow.Options{TokensOnlyInErrors: true})
+	must(t, f.hub.AddRedaction("prod"))
+	must(t, f.hub.AddSecret("s3cr3tXYZ"))
+	must(t, f.hub.Emit(started(false, manifest("a"))))
+	must(t, f.hub.Emit(installflow.Event{Step: "a", Payload: installflow.LogLine{Level: installflow.LogInfo,
+		Source: "tool", Text: installflow.Text("context prod, key s3cr3tXYZ")}}))
+	must(t, f.hub.Finish(installflow.Summary{Outcome: installflow.RunFailed, InstallRecord: installflow.RecordUnknown,
+		Readiness: installflow.ReadinessUnknown, Claim: installflow.ClaimUnknown, PartialState: installflow.EffectMayHaveChanged}))
+	var text string
+	for _, e := range f.wait(t) {
+		if l, ok := e.Payload.(installflow.LogLine); ok {
+			text = l.Text.String()
+		}
+	}
+	if text != "context prod, key [redacted]" {
+		t.Errorf("the event carries %q", text)
+	}
+	if got := f.hub.RedactError(errors.New("context prod")).Error(); got != "context [redacted]" {
+		t.Errorf("the error is %q", got)
+	}
+}

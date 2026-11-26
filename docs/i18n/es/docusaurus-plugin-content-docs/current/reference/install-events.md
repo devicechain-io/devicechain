@@ -92,14 +92,14 @@ El flujo nunca lleva las opciones de la instalación, sus credenciales ni el con
 Como segunda línea de defensa, por si una herramienta repite alguno, estos valores se eliminan de cualquier texto que imprime dcctl y se sustituyen por `[redacted]`:
 
 - los valores secretos que maneja la instalación, como la URL del webhook de alertas, la contraseña SMTP y las credenciales de copia de seguridad;
-- las credenciales de tu kubeconfig: tokens, contraseñas, claves de cliente, la contraseña de una URL de servidor o de proxy, y los valores del entorno de los plugins exec y de la configuración de los proveedores de autenticación.
+- las credenciales de tu kubeconfig: tokens, contraseñas, claves de cliente, la contraseña de una URL de servidor o de proxy (tal cual y con escape de URL), los valores del entorno de los plugins exec y de la configuración de los proveedores de autenticación, y los argumentos de un plugin exec que contienen una credencial (el valor de un indicador como `--client-secret` o `--token`, y un argumento con forma de clave).
 
 Con `--output json`, eso abarca todos los eventos, el error que se imprime en stderr (incluidos los diagnósticos de una herramienta añadidos a él) y todo lo demás que llegue a la stdout o la stderr de dcctl mientras se ejecuta la instalación, incluida la stderr de un plugin de credenciales exec del kubeconfig. Esa stderr se redacta línea a línea, así que puede llegar algo después de que el plugin la escribiera.
 
 Hay límites:
 
 - Un valor de menos de 4 bytes no puede eliminarse sin eliminar texto normal con él. No se redacta, y la ejecución indica cuántos valores así encontró en una línea de registro `warning:`.
-- Un valor de menos de 6 bytes, y todo valor de un plugin exec o de un proveedor de autenticación, se elimina del texto, pero no detiene un código de evento que casualmente lo contenga.
+- Una credencial de tu kubeconfig solo se sustituye donde aparece como palabra completa, nunca dentro de una más larga, y nunca cambia lo que hace la ejecución. Con `AWS_PROFILE=prod`, `--profile prod` muestra `--profile [redacted]` y `production` queda intacto, y un usuario que la instalación no usa, con la contraseña `install`, no la detiene. Los secretos que maneja el propio dcctl se sustituyen dondequiera que aparezcan.
 - Con `--output text`, solo se redacta el error que imprime dcctl. El resto es la salida que `dcctl install` ha impreso siempre, que puede mostrarte una credencial a propósito (el resumen de acceso de un bootstrap), y las herramientas que ejecuta, entre ellas kind y un plugin de credenciales exec del kubeconfig, escriben en el terminal como siempre.
 
 Un kubeconfig que dcctl no puede leer, o con el que no puede crear un cliente para un contexto, se informa por el tipo de problema, el archivo y el nombre del contexto, nunca con el motivo del cliente de Kubernetes, que puede citar las credenciales y URL del archivo. Esto también se aplica a `--output text`.
