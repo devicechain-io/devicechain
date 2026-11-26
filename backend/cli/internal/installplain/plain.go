@@ -50,14 +50,16 @@ var errIncomplete = errors.New("the run's progress could not be reported, so it 
 // reported through events. It returns only once every event has been rendered.
 func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflow.Request,
 	preflight installflow.PreflightRunner) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	hub, err := installflow.NewHub(installflow.Options{
 		Operation: req.Operation,
 		Sink:      Sink{W: p.Stdout},
-		// A presenter that cannot keep up stops the run gracefully; the hub then
-		// refuses to report it as a success.
-		OnDeliveryFailure: cancel,
+		// A presenter that cannot keep up stops the run gracefully, saying why; the
+		// hub then refuses to report it as a success.
+		OnDeliveryFailure: func() {
+			cancel(installflow.CancelRequest{Reason: installflow.CancelDeliveryFailure})
+		},
 	})
 	if err != nil {
 		return err

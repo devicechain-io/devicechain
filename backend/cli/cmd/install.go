@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/devicechain-io/dcctl/internal/installchoice"
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installplain"
 	"github.com/spf13/cobra"
@@ -36,197 +37,19 @@ var (
 	installDBTolerations       []string
 	installMaxConnections      int
 	installRelationalMaxWALMiB int
-	// Points to the registered flag's Changed bit so options can read presence
-	// without referring back to installCmd during its own initialization.
-	installRelationalWALGiven *bool
-	installRestoreRdbFrom     string
-	installRestoreRdbAt       string
-	installRegistry           string
-	installVersion            string
-	installBuild              bool
-	installRemoveLegacy       bool
-	installAWSNLB             string
-	installMQTTGateway        bool
-	// installMQTTGatewayGiven is whether --mqtt-gateway was on the command line, read off the flag set in RunE.
-	installMQTTGatewayGiven bool
+	installRestoreRdbFrom      string
+	installRestoreRdbAt        string
+	installRegistry            string
+	installVersion             string
+	installBuild               bool
+	installRemoveLegacy        bool
+	installAWSNLB              string
+	installMQTTGateway         bool
 )
 
-// installRestoreFlagsFromArgv assembles the relational-store restore inputs from the
-// parsed flags.
-//
-// Extracted from RunE for the same reason restoreFlagsFromArgv is: it is two string
-// copies and a derivation, exactly the kind of code that looks too trivial to test
-// and then copies the source into the target — a mistake with no symptom at all
-// until an operator's recovery stops at the wrong moment during an incident.
-//
-// 🔴 IT FILLS ONLY THE Rdb HALF. The event store belongs to an INSTANCE and is
-// `dcctl bootstrap`'s to recover; a value landing in the Tsdb fields here would be
-// emitted as restore_tsdb_from, routed by splitVars to the INSTANCE root, and
-// applied to a store this command does not own.
-func installRestoreFlagsFromArgv(backupsEnabled bool) bootstrap.RestoreFlags {
-	return bootstrap.RestoreFlags{
-		RdbFrom:        installRestoreRdbFrom,
-		RdbTargetTime:  installRestoreRdbAt,
-		BackupsEnabled: backupsEnabled,
-	}
-}
-
-// installPlacementFromArgv settles --database-node-selector and --database-toleration.
-// RunE calls it to refuse bad syntax before touching the cluster, and installOptions
-// calls it again to build what the install engine is handed, so both read one parser.
-func installPlacementFromArgv() (bootstrap.DatabasePlacement, error) {
-	return bootstrap.ParseDatabasePlacement(installDBNodeSelector, installDBTolerations)
-}
-
-// resolveInstallDevMode checks the --dev preset against the flags the user set
-// explicitly. It returns an error for a contradiction and nothing otherwise; the
-// preset itself is two assignments, and the caller makes them.
-//
-// 🔴 --dev IMPLIES --build, AND IT HAD TO THE MOMENT install GREW AN IMAGE SOURCE.
-// `dcctl bootstrap --dev` has always meant "build from source", and the documented
-// local bring-up is `dcctl install local --dev` followed by `dcctl bootstrap local
-// <id> --dev`. A dcctl built with `make build` deliberately carries no pinned image
-// version — see the Makefile, where that absence is the point — so without this the
-// FIRST of those two commands refuses, and the developer preset becomes the one
-// preset that cannot prepare a developer's cluster.
-//
-// Extracted from RunE for the reason installOptions is: RunE needs a provider and a
-// cluster, so nothing could otherwise exercise the one branch whose absence broke
-// the documented path and both validation rigs at once.
-func resolveInstallDevMode(changed func(string) bool, build bool, version string) (installDevResolution, error) {
-	if changed("build") && !build {
-		return installDevResolution{}, fmt.Errorf(
-			"--dev builds the operator image from source; remove --build=false (or drop --dev)")
-	}
-	if changed("version") {
-		return installDevResolution{}, fmt.Errorf(
-			"--dev builds the operator image from source and tags it \"dev\", so "+
-				"--version %s cannot also apply; drop one of them", version)
-	}
-	return installDevResolution{Build: true, Yes: true}, nil
-}
-
-// installDevResolution is what the --dev preset settles on.
-//
-// 🔴 IT IS RETURNED RATHER THAN ASSIGNED BY THE CHECKER, so that the preset's
-// VALUES are testable and not just its refusals. A checker that only validated
-// contradictions would leave "does --dev actually imply --build" asserted nowhere,
-// which is precisely how that implication came to be missing in the first place.
-type installDevResolution struct {
-	Build bool
-	Yes   bool
-}
-
-// compactModeResolution is the set of flag values the --compact preset settles on.
-type compactModeResolution struct {
-	NoTLS        bool
-	NoMonitoring bool
-}
-
-// resolveCompactMode expands the --compact small-footprint preset on top of the
-// user's explicit flags.
-//
-// Two of its levers live on flags that already exist, so they are resolved here
-// rather than buried in the pipeline: the monitoring stack (~5 pods, the single
-// largest consumer) is skipped, and TLS is off — which is what makes dropping
-// cert-manager safe, since cert-manager is what issues the ingress certificate.
-//
-// An explicit --no-tls=false is HONOURED. It is not a contradiction, it is a
-// dependency: TLS stays on, cert-manager stays installed to issue the cert, and every
-// other compact lever still applies. Erroring here would cost real functionality to
-// no benefit. Which profiles fit a compact cluster is a bootstrap's question, settled
-// by followClusterShape.
-//
-// `changed` reports whether the user set a given flag explicitly.
-func resolveCompactMode(changed func(string) bool, noTLS, noMonitoring bool) compactModeResolution {
-	res := compactModeResolution{NoTLS: true, NoMonitoring: true}
-	// An explicit --no-tls=false keeps TLS (and therefore cert-manager); an explicit
-	// --no-monitoring=false keeps the observability stack. Both cost footprint, and
-	// both are the operator's call to make.
-	if changed("no-tls") {
-		res.NoTLS = noTLS
-	}
-	if changed("no-monitoring") {
-		res.NoMonitoring = noMonitoring
-	}
-	return res
-}
-
-// installOptions assembles what the install engine is told to do, from the parsed
-// flags and the two plans RunE has already settled.
-//
-// 🔴 EXTRACTED FROM RunE BECAUSE NOTHING COULD OTHERWISE SEE IT. bootstrap.Install
-// needs a provider and a cluster, so no test reaches this struct literal through the
-// command — and a literal is precisely where a settled plan gets dropped or landed in
-// the wrong field. That failure is silent in the worst direction: `dcctl install
-// --restore-rdb-from` would report a perfectly ordinary, perfectly green install of an
-// EMPTY relational store, during the recovery it was run for.
-//
-// The placement flags are read HERE, not handed in: a parsed placement passed as an
-// argument is one more value RunE can drop between parsing it and building this
-// literal, and a dropped placement installs the databases wherever the scheduler puts
-// them, with an install record saying "none". Reading the flags where the literal is
-// built leaves no such hand-off.
-func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.RestorePlan,
-	img bootstrap.ImageSource) (bootstrap.InstallOptions, error) {
-	if err := bootstrap.ValidateAWSNLB(installAWSNLB); err != nil {
-		return bootstrap.InstallOptions{}, err
-	}
-	wal := installRelationalWALFromArgv()
-	if err := bootstrap.ValidateRelationalStoreWAL(wal); err != nil {
-		return bootstrap.InstallOptions{}, err
-	}
-	placement, err := installPlacementFromArgv()
-	if err != nil {
-		return bootstrap.InstallOptions{}, err
-	}
-	alerts, err := installAlerts.request()
-	if err != nil {
-		return bootstrap.InstallOptions{}, err
-	}
-	if alerts.Given() && installNoMonitoring {
-		return bootstrap.InstallOptions{}, fmt.Errorf("the --alert-* flags route the monitoring stack's alerts, and this install " +
-			"runs none (--no-monitoring, or --compact, which leaves it out unless --no-monitoring=false). Drop them, or install the monitoring stack")
-	}
-	return bootstrap.InstallOptions{
-		Options:           installBootstrapOptions(img),
-		NoMonitoring:      installNoMonitoring,
-		NoCNPG:            installNoCNPG,
-		Compact:           installCompact,
-		HA:                installHA,
-		BackupDestination: dest,
-		// Checked from argv by ValidateBackupSnapshotClass, and against the cluster by
-		// the install itself before anything is written.
-		BackupSnapshotClass: installBackupSnapClass,
-		// Parsed from argv above by ParseDatabasePlacement, and checked against the cluster's
-		// nodes by the install itself before anything is written.
-		DatabasePlacement:        placement,
-		MaxConnections:           installMaxConnections,
-		RelationalStoreMaxWALMiB: wal,
-		Restore:                  restore,
-		DcctlVersion:             Version,
-
-		RemoveLegacyIngress: installRemoveLegacy,
-		AWSNLB:              installAWSNLB,
-		MQTTGateway:         mqttGatewayFlag(installMQTTGatewayGiven, installMQTTGateway),
-		AlertRouting:        alerts,
-	}, nil
-}
-
-// installBootstrapOptions contains no file reads, so the engine can identify
-// its run before preflight without settling the alert files early.
-func installBootstrapOptions(img bootstrap.ImageSource) bootstrap.Options {
-	return bootstrap.Options{
-		KubeContext:          installKubeContext,
-		Cluster:              installCluster,
-		DryRun:               installDryRun,
-		AssumeYes:            installAssumeYes,
-		NoTLS:                installNoTLS,
-		AllowLegacyDbRemoval: installAllowLegacyDb,
-		ImageRegistry:        img.Registry,
-		ImageVersion:         img.Version,
-		BuildImages:          installBuild,
-	}
+func installChoices(cmd *cobra.Command) (installchoice.Choices, error) {
+	cmd.InitDefaultHelpFlag()
+	return installchoice.FromFlags(cmd.Flags())
 }
 
 // installCmd prepares a cluster for DeviceChain instances.
@@ -283,120 +106,28 @@ the cluster, with one exception: the connection budget may be raised.`,
 		if err != nil {
 			return err
 		}
-		compactOn, err := resolveInstallSize(installCompact, cmd.Flags().Changed("compact"), installSize)
+		choices, err := installChoices(cmd)
 		if err != nil {
 			return err
 		}
-		installCompact = compactOn
-		if installDev {
-			res, err := resolveInstallDevMode(cmd.Flags().Changed, installBuild, installVersion)
-			if err != nil {
-				return err
-			}
-			installAssumeYes, installBuild = res.Yes, res.Build
-			fmt.Println("dev mode: --build --yes")
-		}
-		// 🔴 --no-tls ALONE DOES NOTHING TO A CLUSTER, and accepting it would let an
-		// operator believe cert-manager was left out.
-		if cmd.Flags().Changed("no-tls") && installNoTLS && !installCompact {
-			return fmt.Errorf("--no-tls on dcctl install only takes effect with --compact (it drops " +
-				"cert-manager and, with it, database backups). Without --compact, choose plain HTTP per " +
-				"instance with dcctl bootstrap --no-tls")
-		}
-		if installCompact {
-			res := resolveCompactMode(cmd.Flags().Changed, installNoTLS, installNoMonitoring)
-			installNoTLS, installNoMonitoring = res.NoTLS, res.NoMonitoring
-			fmt.Printf("compact mode: %s\n", bootstrap.CompactSummary())
-		}
-		if installHA {
-			fmt.Printf("ha mode: %s\n", bootstrap.HaSummary(true))
-			if installCompact {
-				fmt.Println("note: --ha adds two more NATS servers per instance and their volumes; the printed compact footprint is measured single-node and is a floor, not the total")
-			}
-		}
-		if err := bootstrap.ValidateRelationalStoreWAL(installRelationalWALFromArgv()); err != nil {
-			return err
-		}
-		if installMaxConnections != 0 && installMaxConnections < 100 {
-			return fmt.Errorf("--max-connections must be at least 100 (got %d)", installMaxConnections)
-		}
-
-		// Validated before any cluster exists: a bad object-store credential crashes
-		// nothing. WAL archiving simply stops, and the first symptom is an archive-lag
-		// alert — or a restore that finds no base backup.
-		backupDestination, err := bootstrap.ParseBackupDestination(installBackupCredentials)
-		if err != nil {
-			return fmt.Errorf("--backup-credentials-file: %w", err)
-		}
-		// 🔴 AN OFF-SITE ARCHIVE IS MEANINGLESS WITHOUT THE BACKUPS IT ARCHIVES, and the
-		// flags that switch them off do so as a consequence of other choices — so this
-		// combination is reachable without ever having asked for it.
-		if backupDestination.Configured() &&
-			!bootstrap.DatabaseBackupsEnabled(installNoCNPG, installCompact, installNoTLS) {
-			return fmt.Errorf("--backup-credentials-file names an off-site archive, but this " +
-				"combination of flags leaves the cluster with no database backups to send there " +
-				"(--no-cnpg removes the operator the backup plugin extends; --compact with " +
-				"--no-tls drops the cert-manager it needs). Drop the flag, or drop whichever of " +
-				"those turned backups off")
-		}
-
-		// Volume-snapshot base backups: a name no object can have, or snapshots on a
-		// cluster whose other flags turned its backups off, are both knowable from argv.
-		// Whether the class exists, deletes what it snapshots and belongs to the right
-		// driver needs the cluster, and the install asks it before writing anything.
-		if err := bootstrap.ValidateBackupSnapshotClass(installBackupSnapClass,
-			bootstrap.DatabaseBackupsEnabled(installNoCNPG, installCompact, installNoTLS)); err != nil {
-			return err
-		}
-
-		// Placement: the syntax, and a toleration with nothing to place, are knowable from
-		// argv. Whether the nodes can take the databases needs the cluster, and the
-		// install asks it before writing anything.
-		// installOptions reads the same flags again when it builds the engine's options;
-		// this call only moves the refusal ahead of the cluster checks below.
-		if _, err := installPlacementFromArgv(); err != nil {
-			return err
-		}
-
-		// 🔴 SETTLED FROM ARGV, BEFORE ANY CLUSTER IS TOUCHED. Every way a restore's
-		// flags can be wrong — a recovery target with nothing to recover, a timestamp
-		// with no offset, an archive on a cluster that has no plugin to read it — is
-		// knowable here, and finding out ten minutes into a rebuild, during an
-		// incident, is the expensive time to find out.
-		restorePlan, err := bootstrap.ResolveRestorePlan(installRestoreFlagsFromArgv(
-			bootstrap.DatabaseBackupsEnabled(installNoCNPG, installCompact, installNoTLS)))
+		choices.Provider = args[0]
+		prepared, err := choices.Prepare(Version, func(s string) { fmt.Println(s) })
 		if err != nil {
 			return err
 		}
+		effective := prepared.Effective
 
-		// 🔴 SETTLED FROM ARGV TOO, AND FOR A REASON THIS COMMAND ONLY ACQUIRED WHEN
-		// IT TOOK OVER THE OPERATOR. `dcctl install` deploys a workload now — the
-		// controller Deployment names an image — so the failure ResolveImageSource
-		// exists to catch reaches this verb: a dcctl built from source carries the
-		// unpublished tag "dev", which names no image in any registry and manifests
-		// as an ImagePullBackOff on a controller nobody is watching, minutes after a
-		// cluster was created to hold it.
-		imageSource, err := bootstrap.ResolveImageSource(installRegistry, installVersion, installBuild)
-		if err != nil {
-			return err
-		}
-		// The recorded install is what `dcctl upgrade` trusts to say which controller the cluster
-		// runs, so it must not name this dcctl for an older one. Only an explicit --version.
-		if installVersion != "" && !installBuild {
-			if err := bootstrap.RefuseForeignRelease(imageSource.Version, imageSource.Registry); err != nil {
-				return err
-			}
-		}
+		doctorOptions := doctorOptsFor(effective.KubeContext, effective.Cluster, effective.Build)
+		doctorOptions.FullSizeInstall = !effective.Compact
 
-		doctorOptions := doctorOptsFor(installKubeContext, installCluster, installBuild)
-		doctorOptions.FullSizeInstall = !installCompact
-
-		installMQTTGatewayGiven = cmd.Flags().Changed("mqtt-gateway")
 		return runInstallEngine(cmd.Context(), &bootstrap.InstallEngine{
-			Provider: provider, Options: bootstrap.InstallOptions{Options: installBootstrapOptions(imageSource)},
-			SkipPreflight: installSkipPreflight, Cluster: installEngine,
+			Provider:      provider,
+			Options:       bootstrap.InstallOptions{Options: prepared.BootstrapOptions()},
+			SkipPreflight: effective.SkipPreflight,
+			Cluster:       installEngine,
 			ResolveOptions: func() (bootstrap.InstallOptions, error) {
-				return installOptions(backupDestination, restorePlan, imageSource)
+				plan, err := prepared.ResolveWithReader(readAlertFile)
+				return plan.Options, err
 			},
 		}, doctorRunner(args[0], doctorOptions))
 	},
@@ -418,14 +149,6 @@ func runInstallEngine(ctx context.Context, e *bootstrap.InstallEngine, preflight
 	return installplain.Presenter{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin}.Run(ctx, e,
 		installflow.Request{Operation: installflow.OperationInstall, DryRun: e.Options.DryRun, AssumeYes: e.Options.AssumeYes},
 		preflight)
-}
-
-func installRelationalWALFromArgv() *int {
-	if installRelationalWALGiven == nil || !*installRelationalWALGiven {
-		return nil
-	}
-	v := installRelationalMaxWALMiB
-	return &v
 }
 
 func init() {
@@ -502,8 +225,6 @@ func init() {
 	installCmd.Flags().IntVar(&installMaxConnections, "max-connections", 0, "the relational store's connection budget (default 700 on a first install, and what the cluster has on a re-run). Each instance reserves (its relational services x 40) of it when bootstrapped; the default admits two default-profile instances")
 
 	installCmd.Flags().IntVar(&installRelationalMaxWALMiB, "relational-store-max-wal-mib", 0, "relational store max_wal_size soft checkpoint target in MiB (0: stock default; positive: at least 64). Omitted keeps the recorded choice, or the root default on a first install. Recorded before apply; limited to a quarter of storage by the root")
-
-	installRelationalWALGiven = &installCmd.Flags().Lookup("relational-store-max-wal-mib").Changed
 
 	rootCmd.AddCommand(installCmd)
 }

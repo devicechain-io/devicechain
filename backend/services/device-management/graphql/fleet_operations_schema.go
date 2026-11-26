@@ -230,6 +230,10 @@ type BulkChange implements Model & TokenReference {
   closedAt: String
   """Preview. When a READY operation that is never started is aborted."""
   expiresAt: String
+  """Preview. The bulk change this one reverses. Null when it is not a reversal."""
+  reversalOf: BulkChange
+  """Preview. The reversals created for this bulk change, oldest first."""
+  reversals: [BulkChange!]!
 }
 
 """Preview. One device and one change within an operation."""
@@ -278,6 +282,8 @@ type BulkChangeLine {
   resolutionNote: String
   """Preview. When it was resolved."""
   resolvedAt: String
+  """Preview. The applied line of a reversal that restored this line's earlier value. Null while nothing has."""
+  reversedBy: BulkChangeLine
 }
 
 """Preview. One page of an operation's lines."""
@@ -430,6 +436,44 @@ type BulkChangeResumePreview {
   thresholdStillExceeded: Boolean!
 }
 
+"""Preview. A request to reverse a DISPATCHED or ABORTED bulk change: a new bulk change that puts back, line by line, the value each device held before."""
+input BulkChangeReversalRequest {
+  """Preview. Token of the bulk change to reverse."""
+  original: String!
+  """Preview. Identifier for the reversal, unique within the tenant. Reversing again with the same token and the same request returns the first reversal."""
+  token: String!
+  """Preview. Name shown to people."""
+  name: String!
+  """Preview. Positions of the original's lines to reverse, starting at 1. Omit to reverse every applied line."""
+  ordinals: [Int!]
+  """Preview. Apply every selected line even where the value changed after the original was applied. Needs a second factor verified within five minutes."""
+  overrideChanged: Boolean
+  """Preview. Apply only these lines even where the value changed since. Needs a second factor verified within five minutes."""
+  overrideOrdinals: [Int!]
+  """Preview. The limits to run under."""
+  safety: BulkChangeCreateSafety
+}
+
+"""Preview. What a reversal would do, computed without writing anything."""
+type BulkChangeReversalPreview {
+  """Preview. Lines that would be applied."""
+  reversibleCount: Int!
+  """Preview. Of those, lines whose value changed after the original was applied, as of this read. Each is refused with CHANGED_SINCE unless overridden."""
+  changedSinceCount: Int!
+  """Preview. Lines whose earlier value was erased with their device."""
+  redactedCount: Int!
+  """Preview. Lines another reversal already restored."""
+  alreadyReversedCount: Int!
+  """Preview. Selected lines that were never applied."""
+  notPostedCount: Int!
+  """Preview. Digest of the request."""
+  requestDigest: String!
+  """Preview. Digest of the plan."""
+  planDigest: String!
+  """Preview. Digest to present to start the reversal."""
+  contractDigest: String!
+}
+
 extend type Query {
   """Preview. One bulk change by token. Null when the tenant has none. Needs device:read."""
   bulkChange(token: String!): BulkChange
@@ -441,6 +485,8 @@ extend type Query {
   planBulkChange(request: BulkChangeCreateRequest!): BulkChangePlan!
   """Preview. What resuming a paused operation with this change would do, without writing anything. Needs device:write and fleet:operate."""
   previewBulkChangeResume(token: String!, safety: BulkChangeSafetyInput): BulkChangeResumePreview!
+  """Preview. What reversing a bulk change would do, without writing anything. Needs device:write and fleet:operate."""
+  previewBulkChangeReversal(request: BulkChangeReversalRequest!): BulkChangeReversalPreview!
 }
 
 extend type Mutation {
@@ -479,5 +525,16 @@ extend type Mutation {
   characters. Refused with SECOND_FACTOR_REQUIRED, STEP_UP_REQUIRED or NOTE_REQUIRED otherwise.
   """
   resolveAmbiguousBulkChangeLines(request: BulkChangeAmbiguityResolution!): BulkChange!
+  """
+  Preview. Creates, in READY, a bulk change that reverses a DISPATCHED or ABORTED one: each selected line puts back
+  the value its device held before the original. It is started like any other. Refused with
+  ORIGINAL_STILL_DISPATCHING while the original can still apply lines, REVERSAL_NOT_REVERSIBLE for a reversal,
+  EVIDENCE_EXPIRED once the original's lines are past retention, and NOTHING_TO_REVERSE when no selected line can be
+  reversed. When applied, a line whose value changed after the original is refused with CHANGED_SINCE unless it is
+  overridden; an override needs a second factor verified within five minutes (STEP_UP_REQUIRED,
+  SECOND_FACTOR_REQUIRED). Creating again with the same token and the same request returns the first reversal.
+  Needs device:write and fleet:operate.
+  """
+  reverseBulkChange(request: BulkChangeReversalRequest!): BulkChange!
 }
 `

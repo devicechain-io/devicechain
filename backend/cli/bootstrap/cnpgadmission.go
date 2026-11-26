@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/hashicorp/terraform-exec/tfexec"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -382,7 +381,7 @@ func reportCNPGAdmissionWait(c console) {
 // tofuApplier is the one method applyWithCNPGAdmissionRetry needs, so the retry
 // decision can be exercised without a tofu binary.
 type tofuApplier interface {
-	Apply(ctx context.Context, opts ...tfexec.ApplyOption) error
+	Apply(ctx context.Context, opts ...applyOption) error
 }
 
 // applyWithCNPGAdmissionRetry applies, and retries ONCE when the only thing wrong was
@@ -403,7 +402,7 @@ type tofuApplier interface {
 //
 // Everything else is returned untouched. A retry that hides a real error is worse than
 // the race it was written for.
-func applyWithCNPGAdmissionRetry(ctx context.Context, tf tofuApplier, opts []tfexec.ApplyOption,
+func applyWithCNPGAdmissionRetry(ctx context.Context, tf tofuApplier, opts []applyOption,
 	what string, waitForAdmission func(context.Context) error) error {
 	err := tf.Apply(ctx, opts...)
 	if err == nil {

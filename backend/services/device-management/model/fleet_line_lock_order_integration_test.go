@@ -21,7 +21,6 @@ import (
 // must wait there without owning the higher event, then both must commit.
 func TestFleetTwoDeletionsOrderSharedEventLocksOnPostgres(t *testing.T) {
 	p := newPostPG(t, "v1")
-	cleanupFleetMaintenancePost(t, p)
 	db := p.api.RDB.DB(p.ctx)
 	other := *p.op
 	other.ID, other.Token = 0, "shared-event-other"
@@ -144,9 +143,6 @@ func TestFleetBulkLineLockOrderOnPostgres(t *testing.T) {
 	for _, path := range []string{"erase", "abort", "purge"} {
 		t.Run(path, func(t *testing.T) {
 			p := newPostPG(t, "v1")
-			// A running operation left behind counts against the instance-wide
-			// dispatching budget every later test in this database starts under.
-			cleanupFleetMaintenancePost(t, p)
 			db := p.api.RDB.DB(p.ctx)
 			low, high := p.lines[0], p.lines[1]
 			require.Less(t, low.ID, high.ID)
@@ -188,9 +184,9 @@ func TestFleetBulkLineLockOrderOnPostgres(t *testing.T) {
 				case "erase":
 					err = redactFleetDeviceLinesOnTx(writer, uint(low.TargetId.Int64), false)
 				case "abort":
-					_, _, err = fleetAbortChanges(writer, p.op, "test", "", fleetEventAbort)
+					_, _, err = fleetAbortChanges(writer, p.op, time.Now(), "test", "", fleetEventAbort)
 				default:
-					err = fleetPurgeEvidenceChunk(writer, p.op.ID)
+					err = fleetPurgeEvidenceChunk(writer, p.op)
 				}
 				if err == nil {
 					err = writer.Commit().Error

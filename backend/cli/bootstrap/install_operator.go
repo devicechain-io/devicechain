@@ -116,6 +116,11 @@ func installOperator(ctx context.Context, st *State) error {
 	if err := stepInstallCore(ctx, st); err != nil {
 		return err
 	}
+	// Applied: a stop during the rollout wait below leaves the operator's objects in
+	// place, and says so.
+	if !st.DryRun {
+		runFrom(ctx).changeApplied()
+	}
 	return waitForOperatorRollout(ctx, st)
 }
 

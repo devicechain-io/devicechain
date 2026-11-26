@@ -45,6 +45,8 @@ type tofuExec struct {
 	// exercise the giving-up without waiting out a real budget; newTofuExec is the only
 	// thing that sets it in production.
 	abandonBudget time.Duration
+	waitDelay     time.Duration
+	stderr        io.Writer
 	// target is the cluster this runner acts on, frozen at construction. Every command
 	// that configures a provider re-resolves it into a kubePin and hands tofu that
 	// explicit file and context: see kubePin.
@@ -52,9 +54,9 @@ type tofuExec struct {
 	// planned is the identity of the cluster the last Plan was made against, so applying
 	// that saved plan can be refused if the cluster dcctl now reaches is another one.
 	planned string
-	// parked is set once a command has been abandoned (runUntilAbandoned): its
-	// goroutine is still inside terraform-exec, so nothing may hand terraform-exec a
-	// writer again. See applyObserved.
+	// parked is set once a command has been abandoned (runUntilAbandoned). It may
+	// still drain inherited pipes, so never attach another observer to this runner:
+	// late output could belong to the abandoned apply. See Apply.
 	parked bool
 }
 
@@ -188,13 +190,25 @@ func newTofuExec(rootdir, tofuBin, kubeContext string) (*tofuExec, error) {
 	stdout := &streamSwitch{w: io.Discard}
 	tf.SetStdout(stdout)
 	tf.SetStderr(os.Stderr)
-	return &tofuExec{Terraform: tf, stdout: stdout, abandonBudget: tofuAbandonBudget, target: target}, nil
+	return &tofuExec{Terraform: tf, stdout: stdout, abandonBudget: tofuAbandonBudget, waitDelay: time.Minute, stderr: os.Stderr, target: target}, nil
 }
 
 // useConsole sends the runner's stderr to c rather than the process's own. Called
 // once, straight after newTofuExec and before any command: terraform-exec reads the
 // writer when a command starts, so setting it afterwards would race a running one.
-func (t *tofuExec) useConsole(c console) { t.Terraform.SetStderr(c.stderr()) }
+func (t *tofuExec) useConsole(c console) {
+	t.stderr = c.stderr()
+	t.Terraform.SetStderr(t.stderr)
+}
+
+// Both apply runners use the same graceful-stop budget.
+func (t *tofuExec) SetWaitDelay(delay time.Duration) error {
+	if err := t.Terraform.SetWaitDelay(delay); err != nil {
+		return err
+	}
+	t.waitDelay = delay
+	return nil
+}
 
 // tofuAbandonBudget is how long dcctl goes on waiting for an INTERRUPTED tofu command
 // before it stops waiting and says so. It is armed only once the context is cancelled
@@ -231,8 +245,8 @@ var errTofuAbandoned = errors.New(
 // switch on every long apply, which is the opposite of what this is for: an apply that
 // nobody interrupted is waited for forever, exactly as before.
 //
-// The abandoned goroutine is LEAKED on purpose. It is blocked in terraform-exec's
-// ReadBytes on a pipe a third process holds open, so there is nothing to cancel and no
+// The abandoned goroutine is LEAKED on purpose. It is reading a pipe a third
+// process holds open, so there is nothing to cancel and no
 // way to unblock it; dcctl is a short-lived CLI on its way to exit, and one parked
 // goroutine costs it nothing. The result channel is buffered for the same reason — a
 // leaked goroutine that eventually DOES finish must be able to send and go away rather
@@ -297,7 +311,9 @@ func (t *tofuExec) streamingTo(ctx context.Context, w io.Writer, run func() erro
 	// follows an abandoned apply still cannot print the state — and safely, because the
 	// parked command holds the same writer rather than a field this is overwriting.
 	defer t.stdout.to(io.Discard)
-	err := runUntilAbandoned(ctx, t.abandonBudget, run)
+	// runTool is runUntilAbandoned plus the engine run's books on the command: see it
+	// for why an abandoned command keeps a re-run out until it really exits.
+	err := runTool(ctx, t.abandonBudget, tofuGracefulStopBudget, run)
 	if errors.Is(err, errTofuAbandoned) {
 		t.parked = true
 	}
@@ -337,7 +353,7 @@ func pinVars(p kubePin) (path, kctx *tfexec.VarOption) {
 	return tfexec.Var("kubeconfig_path=" + p.Path), tfexec.Var("kubeconfig_context=" + p.Context)
 }
 
-func (t *tofuExec) Apply(ctx context.Context, opts ...tfexec.ApplyOption) error {
+func (t *tofuExec) Apply(ctx context.Context, opts ...applyOption) error {
 	p, err := t.pin()
 	if err != nil {
 		return err
@@ -352,13 +368,23 @@ func (t *tofuExec) Apply(ctx context.Context, opts ...tfexec.ApplyOption) error 
 				"now reaches %q. Plan again", t.planned, p.identity)
 		}
 	} else {
-		path, kctx := pinVars(p)
-		opts = append(append([]tfexec.ApplyOption(nil), opts...), path, kctx)
+		opts = append(append([]applyOption(nil), opts...),
+			applyVar("kubeconfig_path="+p.Path), applyVar("kubeconfig_context="+p.Context))
 	}
-	if p := runFrom(ctx).tofuProgress(); p != nil && !t.parked {
-		return t.applyObserved(ctx, p, opts)
+	// 🔴 FROM HERE THE STAGE MAY HAVE CHANGED THE CLUSTER, whatever happens next. An
+	// apply interrupted, failed or abandoned may have applied part of its plan, so a
+	// stop from now on can never be reported as having changed nothing.
+	run := runFrom(ctx)
+	run.mayChange()
+	if p := run.tofuProgress(); p != nil && !t.parked {
+		err = t.applyObserved(ctx, p, opts)
+	} else {
+		err = t.streaming(ctx, func() error { return t.Terraform.Apply(ctx, plainApplyOptions(opts)...) })
 	}
-	return t.streaming(ctx, func() error { return t.Terraform.Apply(ctx, opts...) })
+	if err == nil {
+		run.changeApplied()
+	}
+	return err
 }
 
 // applyObserved is Apply in OpenTofu's -json mode, read by a tofujson.Observer that
@@ -376,21 +402,18 @@ func (t *tofuExec) Apply(ctx context.Context, opts ...tfexec.ApplyOption) error 
 // failed apply's denominator.
 //
 // 🔴 IN -json MODE OPENTOFU'S DIAGNOSTICS ARE IN THE STREAM, NOT ON STDERR, so the
-// error terraform-exec returns says only that the command exited non-zero. The
+// command's error says only that it exited non-zero. The
 // observer's error diagnostics are appended to it: the CNPG admission retry, and
 // anything else that reads an apply error's text, sees the words it always saw.
 //
-// 🔴 terraform-exec's ApplyJSON SETS ITS STDOUT WRITER ON EVERY CALL. It is handed
-// t.stdout, the writer it already holds, so its destination is still chosen only by
-// the switch — but the field is written, and that write is a data race against a
-// command parked by runUntilAbandoned. Hence the parked check in Apply: a runner that
-// has abandoned a command never applies in this mode again (and in practice is never
-// asked to; an abandoned command fails the run).
-func (t *tofuExec) applyObserved(ctx context.Context, p *stageProgress, opts []tfexec.ApplyOption) error {
+// The observed command drains stdout in chunks before any line is buffered.
+// terraform-exec's ApplyJSON buffers a whole line before calling its writer, so
+// handing it a capped writer cannot bound memory. See observedApply.
+func (t *tofuExec) applyObserved(ctx context.Context, p *stageProgress, opts []applyOption) error {
 	c := out(ctx)
 	p.tofu(tofujson.Progress{}) // observed, total not yet known
 	o := tofujson.New(c.stdout(), c.stderr(), p.tofu)
-	err := t.streamingTo(ctx, o, func() error { return t.Terraform.ApplyJSON(ctx, t.stdout, opts...) })
+	err := t.streamingTo(ctx, o, func() error { return t.observedApply(ctx, opts) })
 	// After streamingTo: the switch points at io.Discard again, so no command can
 	// still be writing to o.
 	o.Close()
@@ -403,9 +426,9 @@ func (t *tofuExec) applyObserved(ctx context.Context, p *stageProgress, opts []t
 }
 
 // usesSavedPlan reports whether an apply is of a saved plan file.
-func usesSavedPlan(opts []tfexec.ApplyOption) bool {
+func usesSavedPlan(opts []applyOption) bool {
 	for _, o := range opts {
-		if _, ok := o.(*tfexec.DirOrPlanOption); ok {
+		if o.plan != "" {
 			return true
 		}
 	}
@@ -442,6 +465,8 @@ func (t *tofuExec) Import(ctx context.Context, address, id string, opts ...tfexe
 	defer p.release()
 	path, kctx := pinVars(p)
 	opts = append(append([]tfexec.ImportOption(nil), opts...), path, kctx)
+	// An import writes state: not the cluster, but not nothing.
+	runFrom(ctx).mayChange()
 	return t.Terraform.Import(ctx, address, id, opts...)
 }
 
@@ -461,6 +486,7 @@ func (t *tofuExec) Destroy(ctx context.Context, opts ...tfexec.DestroyOption) er
 	path, kctx := pinVars(p)
 	opts = append(append([]tfexec.DestroyOption(nil), opts...), path, kctx)
 	f := newOutputsBlockFilter(out(ctx).stdout())
+	runFrom(ctx).mayChange()
 	err = t.streamingTo(ctx, f, func() error { return t.Terraform.Destroy(ctx, opts...) })
 	if ferr := f.Flush(); ferr != nil && err == nil {
 		err = ferr

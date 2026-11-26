@@ -200,7 +200,7 @@ func (e *ScriptedEngine) closeOpen(rt installflow.Runtime, cancelled bool) insta
 		}
 		code := installflow.ErrorCode("run.failed")
 		if cancelled {
-			code = "run.cancelled"
+			code = installflow.ErrorRunCancelled
 		}
 		_ = rt.Events.Emit(installflow.Event{Step: o.Step, Parent: o.Parent, Attempt: o.Attempt,
 			Payload: installflow.StepFailed{Code: code, Retry: installflow.RetryUnknown, Cancelled: cancelled,
@@ -217,7 +217,7 @@ func (e *ScriptedEngine) cancel(ctx context.Context, rt installflow.Runtime) (in
 		active = e.open[n-1].Step
 	}
 	e.mu.Unlock()
-	_ = rt.Events.Emit(installflow.Event{Payload: installflow.RunCancelling{Reason: installflow.CancelSignal, ActiveStep: active}})
+	_ = rt.Events.Emit(installflow.Event{Payload: installflow.RunCancelling{Reason: installflow.CancelReasonOf(ctx), ActiveStep: active}})
 	e.closeOpen(rt, true)
 	s := installflow.Summary{Outcome: installflow.RunCancelled, InstallRecord: installflow.RecordUnknown,
 		Readiness: installflow.ReadinessUnknown, Claim: installflow.ClaimUnknown,

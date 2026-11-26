@@ -168,6 +168,7 @@ func TestProgressIsCoalescedAndItsLastValueArrivesBeforeTheStageEnds(t *testing.
 func TestARetryCountsAgainstItsOwnPlan(t *testing.T) {
 	p := newProgressRun(t, true, installflow.StepInstallPrerequisites)
 	feed := func(name string) {
+		p.run.mayChange() // what tofuExec.Apply marks before the command it stands in for
 		sp := p.run.tofuProgress()
 		sp.tofu(tofujson.Progress{})
 		o := tofujson.New(nil, nil, sp.tofu)
@@ -190,6 +191,7 @@ func TestARetryCountsAgainstItsOwnPlanBehindAStalledPresenter(t *testing.T) {
 	p.sink.Hold()
 	t.Cleanup(p.sink.Release)
 	feed := func(name string) {
+		p.run.mayChange() // what tofuExec.Apply marks before the command it stands in for
 		sp := p.run.tofuProgress()
 		sp.tofu(tofujson.Progress{})
 		o := tofujson.New(nil, nil, sp.tofu)
@@ -397,12 +399,22 @@ func cnpgRefusal(t *testing.T) []byte {
 //   - each apply was counted against its own plan, in its own attempt;
 //   - the messages' lines reached the console, and the diagnostic its stderr.
 func TestTheObservedApplyThroughTheRetry(t *testing.T) {
+	t.Run("ordinary", func(t *testing.T) { checkObservedApplyRetry(t, cnpgRefusal(t)) })
+	t.Run("oversized", func(t *testing.T) {
+		stream := strings.Replace(string(cnpgRefusal(t)), "Internal error occurred:",
+			strings.Repeat("z", tofujson.MaxLine+100)+"Internal error occurred:", 1)
+		checkObservedApplyRetry(t, []byte(stream))
+	})
+}
+
+func checkObservedApplyRetry(t *testing.T, refusal []byte) {
+	t.Helper()
 	testKube(t)
 	bin, dir := fakeTofuJSON(t,
 		struct {
 			stream []byte
 			rc     int
-		}{cnpgRefusal(t), 1},
+		}{refusal, 1},
 		struct {
 			stream []byte
 			rc     int
